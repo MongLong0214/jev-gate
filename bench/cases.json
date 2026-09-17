@@ -1,0 +1,37 @@
+{
+  "version": 3,
+  "cases": [
+    {
+      "id": "search-race",
+      "group": "async-race",
+      "fixtureDir": "fixtures/search-race",
+      "request": "src/search-client.mjs에서 검색 응답이 역순으로 도착하면 옛 결과가 최신 결과를 덮어쓰는 버그를 고쳐줘.\ncreateSearchClient export 이름, search(query)가 반환하는 { query, items } 형식, 의존성은 바꾸지 마.\n늦은 응답이 최신 결과를 덮지 않는 것을 재현하는 테스트 파일을 test/ 에 추가하고, npm test(node --test)가 통과하는지 확인해.",
+      "setup": [],
+      "checkFile": "checkers/search-race.mjs"
+    },
+    {
+      "id": "quote-pricing",
+      "group": "state-condition",
+      "fixtureDir": "fixtures/quote-pricing",
+      "request": "src/quote.mjs의 quote 함수를 고쳐줘. role이 'admin'인 견적에는 쿠폰을 절대 적용하지 말고, role이 'customer'일 때만 쿠폰을 적용해야 해.\n그 외의 role이면 Error를 던져. 함수 시그니처와 반환 형식 { role, amount }는 유지해.\n기존 테스트(npm test)는 계속 통과해야 해.",
+      "setup": [],
+      "checkFile": "checkers/quote-pricing.mjs"
+    },
+    {
+      "id": "status-count",
+      "group": "aggregation-contract",
+      "fixtureDir": "fixtures/status-count",
+      "request": "src/count-by-status.mjs의 countByStatus가 입력에 실제로 등장하는 모든 status를 세도록 고쳐줘. 미리 정의되지 않은 값(예: blocked)도 포함해야 하고, status가 없는 항목은 'unknown'으로 집계해.\n등장하지 않은 status는 키를 만들지 마(빈 배열이면 빈 객체). 반환값은 지금처럼 status → 개수의 순수 객체여야 하고 의존성 추가는 금지야.\n기존 테스트가 계속 통과하는지 npm test로 확인해.",
+      "setup": [],
+      "checkFile": "checkers/status-count.mjs"
+    },
+    {
+      "id": "ttl-cache",
+      "group": "state-expiry",
+      "fixtureDir": "fixtures/ttl-cache",
+      "request": "src/ttl-cache.mjs의 createTtlCache에서 만료된 항목이 get으로 그대로 반환되는 버그를 고쳐줘.\n만료된 항목은 get 시 undefined를 반환하고 저장소에서 제거해서 size()에도 반영되게 해. now 주입 인자와 set/get/size API는 그대로 유지하고 setTimeout 같은 타이머는 쓰지 마.\n기존 테스트(npm test)가 계속 통과해야 해.",
+      "setup": [],
+      "checkFile": "checkers/ttl-cache.mjs"
+    }
+  ]
+}

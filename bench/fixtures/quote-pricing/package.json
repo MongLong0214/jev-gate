@@ -1,0 +1,6 @@
+{
+  "name": "fixture-quote-pricing",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node --test" }
+}

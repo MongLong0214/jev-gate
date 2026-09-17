@@ -1,0 +1,13 @@
+{
+  "version": 3,
+  "cases": [
+    {
+      "id": "mini",
+      "group": "mini",
+      "fixtureDir": "fixture",
+      "request": "src/answer.mjs의 answer()가 42를 반환하게 고쳐줘. export 이름은 유지해.",
+      "setup": [["node", "-e", "process.exit(0)"]],
+      "checkFile": "checker.mjs"
+    }
+  ]
+}

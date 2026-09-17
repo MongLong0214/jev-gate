@@ -1,0 +1,6 @@
+{
+  "name": "fixture-search-race",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node --test" }
+}
