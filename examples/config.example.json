@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "max_input_bytes": 65536,
+  "max_response_bytes": 2097152,
+  "jev": {
+    "endpoint": "https://api.typesafe.ai/v1/systemone",
+    "model": "jev-latest",
+    "api_key_env": "TYPESAFE_API_KEY",
+    "timeout_ms": 5000,
+    "pricing": { "kind": "unknown" }
+  },
+  "worker": {
+    "endpoint": "",
+    "model": "",
+    "api_key_env": "WORKER_API_KEY",
+    "timeout_ms": 60000,
+    "profile": "",
+    "parameters": { "max_tokens": 2048 },
+    "pricing": { "kind": "unknown" }
+  },
+  "frontier": {
+    "endpoint": "",
+    "model": "",
+    "api_key_env": "FRONTIER_API_KEY",
+    "timeout_ms": 60000,
+    "profile": "",
+    "parameters": { "max_tokens": 2048 },
+    "pricing": { "kind": "unknown" }
+  }
+}
