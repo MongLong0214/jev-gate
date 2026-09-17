@@ -8,7 +8,7 @@ You keep Claude Code on **Sonnet**. Jev interprets the request in one HTTP call,
 
 The goal: **reduce unnecessary Fable usage and total coding time without reducing task success.** That is a hypothesis this repository measures, not a result it claims.
 
-> Status (2026-09-17, `jev-gate-claude-hook-v3`, v0.1.0): **plugin implemented, offline regression green, installed-host smoke verified on Claude Code 2.1.274 with a Claude.ai subscription login, and one four-case bench run recorded in [`bench/results/run-1-2026-09-17/report.md`](bench/results/run-1-2026-09-17/report.md).** One run on four development fixtures is a descriptive result for that task set, not a general savings claim. Spec: [#1 PRD](https://github.com/MongLong0214/jev-gate/issues/1) → [#2 ADR](https://github.com/MongLong0214/jev-gate/issues/2) → [#3](https://github.com/MongLong0214/jev-gate/issues/3)–[#7](https://github.com/MongLong0214/jev-gate/issues/7).
+> Status (2026-09-17, `jev-gate-claude-hook-v3`, v0.1.0): **plugin implemented, offline regression green, installed-host smoke verified on Claude Code 2.1.274 with a Claude.ai subscription login, and one four-case bench run recorded in [`bench/results/run-1-2026-09-17/`](bench/results/run-1-2026-09-17/).** On that task set the gate cut Fable volume, cost and wall time against an always-Fable session, and lost to plain Sonnet on both cost and time. One run on four development fixtures is a descriptive result, not a savings claim. Spec: [#1 PRD](https://github.com/MongLong0214/jev-gate/issues/1) → [#2 ADR](https://github.com/MongLong0214/jev-gate/issues/2) → [#3](https://github.com/MongLong0214/jev-gate/issues/3)–[#7](https://github.com/MongLong0214/jev-gate/issues/7).
 
 ## The idea
 
@@ -138,6 +138,21 @@ elapsed change         = 1 - mean(elapsed_gated) / mean(elapsed_frontier_raw)
 ```
 
 Subscription usage is not API billing, so token counts and estimates are never presented as charges or quota. A Fable-free failure is not a saving. A gated run slower than plain Sonnet is a valid negative result. See [bench/README.md](bench/README.md) for the fixtures.
+
+### What run-1 actually measured
+
+4 cases × 4 arms, seed 42, concurrency 1, 2026-09-17, Claude Code 2.1.274, Claude.ai team subscription. Full tables in [`bench/results/run-1-2026-09-17/report.md`](bench/results/run-1-2026-09-17/report.md).
+
+| arm | pass / 4 | Fable tokens | est. cost | mean wall time | recommendation followed |
+| --- | --- | --- | --- | --- | --- |
+| `frontier_raw` | 3 | 657,473 | $2.394 | 50.9 s | – |
+| `frontier_enriched` | 3 | 770,218 | $2.495 | 51.9 s | – |
+| `sonnet_native` | 4 | 0 | $0.578 | 22.2 s | – |
+| `sonnet_gated` | 4 | 259,205 | $1.424 | 41.5 s | 4 / 4 |
+
+Against `frontier_raw` the gate cut Fable volume 60.6%, estimated cost 40.5% and wall time 18.5%. Against `sonnet_native` it cost 2.5× more and took 1.9× longer for the same four passes, because one case landed just under the confidence floor and escalated to Fable. On this task set most of the benefit comes from starting on Sonnet at all, and the gate's own value rests on whether it rescues tasks Sonnet would fail — which these four fixtures did not demonstrate. Adding the brief to an always-Fable session (`frontier_enriched`) increased Fable tokens 17% and cost 4%, a negative result.
+
+The `search-race` verdict for `sonnet_native` changed from fail to pass when the checker was corrected after the run: it had judged "add a test that reproduces the late response" by counting files in `test/`, and that candidate added the regression test inside the existing file. The checker now runs the candidate's own tests against the unfixed source and requires them to fail. Both scorings are kept, in `report.md` and `report.checker-v1.md`, and `node dist/bench/run.js --regrade` re-scores saved snapshots with no model calls.
 
 ## Development
 
