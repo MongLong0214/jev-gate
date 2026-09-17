@@ -1,0 +1,70 @@
+{
+  "version": 3,
+  "created_at": "2026-09-17T08:35:06.752Z",
+  "planned_cells": 16,
+  "order": [
+    {
+      "case": "search-race",
+      "arms": [
+        "frontier_enriched",
+        "sonnet_native",
+        "frontier_raw",
+        "sonnet_gated"
+      ]
+    },
+    {
+      "case": "quote-pricing",
+      "arms": [
+        "sonnet_gated",
+        "frontier_enriched",
+        "sonnet_native",
+        "frontier_raw"
+      ]
+    },
+    {
+      "case": "status-count",
+      "arms": [
+        "frontier_enriched",
+        "sonnet_gated",
+        "frontier_raw",
+        "sonnet_native"
+      ]
+    },
+    {
+      "case": "ttl-cache",
+      "arms": [
+        "frontier_raw",
+        "sonnet_native",
+        "sonnet_gated",
+        "frontier_enriched"
+      ]
+    }
+  ],
+  "cli": {
+    "claude": "claude",
+    "plugin_dir": "/Users/isaac/jev-gate",
+    "setting_sources": "project,local",
+    "permission_mode": "acceptEdits",
+    "allowed_tools": "Bash(node *),Bash(npm test),Bash(npm run test)",
+    "max_turns": 40,
+    "timeout_ms": 600000,
+    "seed": 42,
+    "note": "root models are CLI aliases; the actual model is read from system/init and modelUsage. User-scope settings are excluded for every arm via --setting-sources; user-level CLAUDE.md still loads equally in all arms."
+  },
+  "preflight": {
+    "claude_version": "2.1.274 (Claude Code)",
+    "auth": {
+      "authMethod": "claude.ai",
+      "apiProvider": "firstParty"
+    },
+    "env_observed": {
+      "CLAUDE_CODE_SUBAGENT_MODEL": null,
+      "CLAUDE_CODE_SUBAGENT_MODEL_FORCE": null,
+      "CLAUDE_CODE_FORK_SUBAGENT": null,
+      "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": null,
+      "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+      "JEV_GATE_CONFIG": null
+    },
+    "typesafe_key_present": true
+  }
+}

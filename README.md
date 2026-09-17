@@ -8,7 +8,7 @@ You keep Claude Code on **Sonnet**. Jev interprets the request in one HTTP call,
 
 The goal: **reduce unnecessary Fable usage and total coding time without reducing task success.** That is a hypothesis this repository measures, not a result it claims.
 
-> Status (2026-09-17, `jev-gate-claude-hook-v3`): **plugin implemented, offline regression green, installed-host smoke verified on Claude Code 2.1.274 with a Claude.ai subscription login.** Real-Jev routing and the four-arm cost/time comparison are run per account and reported in the release notes, never assumed. Spec: [#1 PRD](https://github.com/MongLong0214/jev-gate/issues/1) → [#2 ADR](https://github.com/MongLong0214/jev-gate/issues/2) → [#3](https://github.com/MongLong0214/jev-gate/issues/3)–[#7](https://github.com/MongLong0214/jev-gate/issues/7).
+> Status (2026-09-17, `jev-gate-claude-hook-v3`, v0.1.0): **plugin implemented, offline regression green, installed-host smoke verified on Claude Code 2.1.274 with a Claude.ai subscription login, and one four-case bench run recorded in [`bench/results/run-1-2026-09-17/report.md`](bench/results/run-1-2026-09-17/report.md).** One run on four development fixtures is a descriptive result for that task set, not a general savings claim. Spec: [#1 PRD](https://github.com/MongLong0214/jev-gate/issues/1) → [#2 ADR](https://github.com/MongLong0214/jev-gate/issues/2) → [#3](https://github.com/MongLong0214/jev-gate/issues/3)–[#7](https://github.com/MongLong0214/jev-gate/issues/7).
 
 ## The idea
 
