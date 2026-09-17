@@ -1,4 +1,4 @@
-import { cpSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -31,6 +31,50 @@ describe('bench fixtures and checkers', () => {
     expect(after.quality, JSON.stringify(after)).toBe('pass');
     expect(after.checks.every((c) => c.pass === true)).toBe(true);
     expect(after.required.sort()).toEqual(after.checks.map((c) => c.id).sort());
+  });
+
+  it('search-race grades by behavior, not test-file layout: a late-response test added to the existing file counts', () => {
+    const cs = cases.find((c) => c.id === 'search-race')!;
+    const dir = join(tmp, 'inline-test');
+    cpSync(cs.fixtureDir, dir, { recursive: true });
+    cpSync(join(root, 'bench', 'reference', 'search-race', 'src'), join(dir, 'src'), { recursive: true });
+    // The regression test lives inside the pre-existing test file instead of a new one.
+    const existing = join(dir, 'test', 'search-client.test.mjs');
+    writeFileSync(
+      existing,
+      readFileSync(existing, 'utf8') +
+        `
+test('late response does not overwrite newer results', async () => {
+` +
+        `  const pending = new Map();
+` +
+        `  const client = createSearchClient((q) => new Promise((resolve) => pending.set(q, resolve)));
+` +
+        `  const first = client.search('old');
+  const second = client.search('new');
+` +
+        `  pending.get('new')(['new-1']);
+  await second;
+  pending.get('old')(['old-1']);
+  await first;
+` +
+        `  assert.deepEqual(client.getState(), { query: 'new', results: ['new-1'] });
+});
+`,
+    );
+    const g = gradeDir(cs.checkFile, dir, 60_000);
+    expect(g.quality, JSON.stringify(g)).toBe('pass');
+  });
+
+  it('search-race rejects a fixed source whose tests never exercise the bug', () => {
+    const cs = cases.find((c) => c.id === 'search-race')!;
+    const dir = join(tmp, 'fixed-no-test');
+    cpSync(cs.fixtureDir, dir, { recursive: true });
+    cpSync(join(root, 'bench', 'reference', 'search-race', 'src'), join(dir, 'src'), { recursive: true });
+    const g = gradeDir(cs.checkFile, dir, 60_000);
+    expect(g.quality).toBe('fail');
+    expect(g.checks.find((c) => c.id === 'late_response_test_detects_bug')?.pass).toBe(false);
+    expect(g.checks.find((c) => c.id === 'stale_response_ignored')?.pass).toBe(true);
   });
 
   it('a candidate that does not load fails module_loads and leaves dependent checks unknown', () => {

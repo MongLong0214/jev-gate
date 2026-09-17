@@ -1,13 +1,13 @@
 # jev-gate bench report
 
 run: /Users/isaac/jev-gate-runs/run-1
-generated: 2026-09-17T10:04:13.387Z
+generated: 2026-09-17T08:46:33.074Z
 
 | arm | planned | started | pass | fail | unknown | timed out | Fable tokens | all tokens | Claude est $ | Jev est $ | total est $ | $/pass | mean elapsed s | mean gate ms | fallback cells | match/mismatch | usage complete |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | frontier_raw | 4 | 4 | 3 | 1 | 0 | 0 | 657473 | 661814 | 2.3940 | 0.000000 | 2.3940 | 0.7980 | 50.9 | null | 0 | 0/0 | true |
 | frontier_enriched | 4 | 4 | 3 | 1 | 0 | 0 | 770218 | 774552 | 2.4949 | 0.000228 | 2.4951 | 0.8317 | 51.9 | 642 | 0 | 0/0 | true |
-| sonnet_native | 4 | 4 | 4 | 0 | 0 | 0 | 0 | 856554 | 0.5781 | 0.000000 | 0.5781 | 0.1445 | 22.2 | null | 0 | 0/0 | true |
+| sonnet_native | 4 | 4 | 3 | 1 | 0 | 0 | 0 | 856554 | 0.5781 | 0.000000 | 0.5781 | 0.1927 | 22.2 | null | 0 | 0/0 | true |
 | sonnet_gated | 4 | 4 | 4 | 0 | 0 | 0 | 259205 | 1037917 | 1.4239 | 0.000290 | 1.4242 | 0.3560 | 41.5 | 667 | 0 | 4/0 | true |
 
 complete case set (4): quote-pricing, search-race, status-count, ttl-cache
@@ -34,7 +34,7 @@ complete case set (4): quote-pricing, search-race, status-count, ttl-cache
 | quote-pricing | sonnet_gated | pass | 15.6 | 0 | 0 | 0.1464 | 0.000072 | main | - | match | 0 | claude-sonnet-5 | jev-gate |
 | search-race | frontier_raw | pass | 79.0 | 0 | 230048 | 0.7669 | 0.000000 | - | - | n/a | 0 | claude-fable-5-1 | - |
 | search-race | frontier_enriched | pass | 83.0 | 0 | 333233 | 0.7977 | 0.000057 | main | - | n/a | 0 | claude-fable-5-1 | jev-gate |
-| search-race | sonnet_native | pass | 26.8 | 0 | 0 | 0.1683 | 0.000000 | - | - | n/a | 0 | claude-sonnet-5 | - |
+| search-race | sonnet_native | fail | 26.8 | 0 | 0 | 0.1683 | 0.000000 | - | - | n/a | 0 | claude-sonnet-5 | - |
 | search-race | sonnet_gated | pass | 121.5 | 0 | 259205 | 1.0066 | 0.000073 | delegate→jev-gate:frontier | jev-gate:frontier | match | 0 | claude-sonnet-5 | jev-gate |
 | status-count | frontier_raw | pass | 42.7 | 0 | 152711 | 0.5402 | 0.000000 | - | - | n/a | 0 | claude-fable-5-1 | - |
 | status-count | frontier_enriched | pass | 36.3 | 0 | 155346 | 0.5464 | 0.000058 | main | - | n/a | 0 | claude-fable-5-1 | jev-gate |

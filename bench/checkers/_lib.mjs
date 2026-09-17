@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
-import { readdirSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -31,15 +32,21 @@ export const runChecker = async (required, body) => {
       if (r.error) throw new Error(`cannot spawn node --test: ${r.error.message}`);
       return r.status === 0;
     };
-    const countTestFiles = () => {
-      try {
-        return readdirSync(join(evalDir, 'test')).filter((f) => /\.test\.(mjs|cjs|js|ts)$/.test(f)).length;
-      } catch {
-        return 0;
-      }
+    // Runs the candidate's own test/ directory against a different src/ (a pristine buggy fixture),
+    // so a "does this test actually catch the bug" check does not depend on file layout or naming.
+    const runTestsAgainst = (srcDir) => {
+      const probe = mkdtempSync(join(tmpdir(), 'checker-probe-'));
+      cpSync(srcDir, join(probe, 'src'), { recursive: true });
+      cpSync(join(evalDir, 'test'), join(probe, 'test'), { recursive: true });
+      const pkg = join(evalDir, 'package.json');
+      if (existsSync(pkg)) cpSync(pkg, join(probe, 'package.json'));
+      const r = spawnSync(process.execPath, ['--test'], { cwd: probe, encoding: 'utf8', timeout: 60_000, env: process.env });
+      rmSync(probe, { recursive: true, force: true });
+      if (r.error) throw new Error(`cannot spawn node --test: ${r.error.message}`);
+      return r.status === 0;
     };
     try {
-      await body({ evalDir, check, importModule, runTests, countTestFiles });
+      await body({ evalDir, check, importModule, runTests, runTestsAgainst });
     } catch (err) {
       out.environmentError = `checker failure: ${err?.message ?? String(err)}`;
     }

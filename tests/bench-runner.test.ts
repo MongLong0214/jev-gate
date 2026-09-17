@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -147,6 +147,30 @@ describe('bench run (fake CLI)', () => {
     expect(gated.grade?.quality).toBe('pass');
     expect(report(r.out).arms.find((a) => a.arm === 'sonnet_gated')?.mismatch).toBe(1);
   }, 120_000);
+
+  it('--regrade re-scores saved snapshots without executing anything and keeps the previous verdict', () => {
+    const r = bench(['--execute', '--max-sessions', '4', '--seed', '11']);
+    expect(r.status, r.stderr).toBe(0);
+    const before = readCell(r.out, 'sonnet_native');
+    expect(before.grade?.quality).toBe('fail');
+    const mtime = statSync(join(r.out, 'cells', 'mini', 'sonnet_native', 'stream.jsonl')).mtimeMs;
+
+    const again = spawnSync(process.execPath, [join(dist, 'bench', 'run.js'), '--regrade', '--cases', cases, '--out', r.out, '--claude', fake, '--plugin-dir', pluginDir], { encoding: 'utf8', env: baseEnv(), timeout: 120_000 });
+    expect(again.status, again.stderr).toBe(0);
+    expect(again.stdout).toMatch(/regraded 4 cells/);
+    const after = readCell(r.out, 'sonnet_native') as CellRecord & { previous_grades?: Array<{ grade: { quality: string } | null }> };
+    expect(after.grade?.quality).toBe('fail');
+    expect(after.previous_grades?.at(-1)?.grade?.quality).toBe('fail');
+    // Nothing was re-run: the transcript from the original execution is untouched.
+    expect(statSync(join(r.out, 'cells', 'mini', 'sonnet_native', 'stream.jsonl')).mtimeMs).toBe(mtime);
+    expect(report(r.out).arms.find((a) => a.arm === 'sonnet_native')?.pass).toBe(0);
+  }, 120_000);
+
+  it('refuses --regrade together with --execute', () => {
+    const r = bench(['--regrade', '--execute', '--max-sessions', '4']);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/--regrade/);
+  });
 
   it('cleans up a hung session at the timeout, marks quality unknown and keeps the planned denominator', () => {
     const r = bench(['--execute', '--max-sessions', '4', '--timeout-ms', '1500'], { FAKE_CLAUDE_HANG: '1' });

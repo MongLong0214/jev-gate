@@ -1,7 +1,7 @@
 {
   "version": 3,
   "run": "/Users/isaac/jev-gate-runs/run-1",
-  "generated_at": "2026-09-17T10:04:13.387Z",
+  "generated_at": "2026-09-17T08:46:33.074Z",
   "arms": [
     {
       "arm": "frontier_raw",
@@ -87,8 +87,8 @@
       "arm": "sonnet_native",
       "planned": 4,
       "started": 4,
-      "pass": 4,
-      "fail": 0,
+      "pass": 3,
+      "fail": 1,
       "unknown": 0,
       "timed_out": 0,
       "usage_complete": true,
@@ -114,7 +114,7 @@
       "jev_cost_usd": 0,
       "jev_cost_unknown_cells": 0,
       "total_cost_usd": 0.5780886000000001,
-      "cost_per_pass_usd": 0.14452215000000002,
+      "cost_per_pass_usd": 0.1926962,
       "elapsed_mean_ms": 22220.75,
       "gate_ms_mean": null,
       "fallback_cells": 0,
@@ -303,7 +303,7 @@
       "elapsed_ms": 26845,
       "timed_out": false,
       "exit_code": 0,
-      "quality": "pass",
+      "quality": "fail",
       "fable_tokens": 0,
       "total_cost_usd": 0.16830879999999998,
       "jev_cost_usd": 0,

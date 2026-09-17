@@ -1,6 +1,6 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { copyFileSync, createWriteStream, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, createWriteStream, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
@@ -46,6 +46,7 @@ export interface Options {
   permissionMode: string;
   allowedTools: string;
   allowEnvConflicts: boolean;
+  regrade: boolean;
 }
 
 export interface AgentCall {
@@ -169,6 +170,7 @@ export const parseArgs = (argv: string[]): Options => {
     permissionMode: 'acceptEdits',
     allowedTools: 'Bash(node *),Bash(npm test),Bash(npm run test)',
     allowEnvConflicts: false,
+    regrade: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
@@ -181,6 +183,7 @@ export const parseArgs = (argv: string[]): Options => {
     else if (a === '--out') o.out = next();
     else if (a === '--execute') o.execute = true;
     else if (a === '--allow-env-conflicts') o.allowEnvConflicts = true;
+    else if (a === '--regrade') o.regrade = true;
     else if (a === '--max-sessions') o.maxSessions = positiveInt(a, next());
     else if (a === '--timeout-ms') o.timeoutMs = positiveInt(a, next());
     else if (a === '--max-turns') o.maxTurns = positiveInt(a, next());
@@ -192,8 +195,9 @@ export const parseArgs = (argv: string[]): Options => {
     else if (a === '--allowed-tools') o.allowedTools = next();
     else throw new Error(`unknown argument ${a}`);
   }
-  if (!o.cases || !o.out) throw new Error('usage: run.js --cases <manifest> --out <new dir> [--execute --max-sessions N --timeout-ms MS --max-turns N --seed N]');
+  if (!o.cases || !o.out) throw new Error('usage: run.js --cases <manifest> --out <new dir> [--execute --max-sessions N --timeout-ms MS --max-turns N --seed N] | --regrade --out <existing run dir>');
   if (o.execute && o.maxSessions === null) throw new Error('--execute requires --max-sessions');
+  if (o.execute && o.regrade) throw new Error('--regrade re-scores an existing run and never executes; drop --execute');
   return o;
 };
 
@@ -623,8 +627,48 @@ const grade = (cs: CodingCase, cellDir: string, timeoutMs: number): Grade => {
 
 const writeJson = (path: string, value: unknown): void => writeFileSync(path, JSON.stringify(value, null, 2) + '\n', 'utf8');
 
+/**
+ * Re-scores an existing run's saved final snapshots with the current checkers. No model calls, no re-execution.
+ * The previous grade of every cell is kept in `previous_grades` so a checker change never erases the earlier verdict.
+ */
+export const regrade = (o: Options): number => {
+  const cases = loadManifest(o.cases);
+  const out = resolve(o.out);
+  const cellsDir = join(out, 'cells');
+  if (!existsSync(cellsDir)) throw new Error(`--regrade needs an existing run directory with cells/: ${out}`);
+  const stamp = new Date().toISOString();
+  const cells: CellRecord[] = [];
+  let changed = 0;
+  for (const caseId of readdirSync(cellsDir)) {
+    const cs = cases.find((c) => c.id === caseId);
+    for (const arm of readdirSync(join(cellsDir, caseId))) {
+      const cellDir = join(cellsDir, caseId, arm);
+      const cellPath = join(cellDir, 'cell.json');
+      if (!existsSync(cellPath)) continue;
+      const cell = JSON.parse(readFileSync(cellPath, 'utf8')) as CellRecord & { previous_grades?: Array<{ at: string; grade: Grade | null }> };
+      cells.push(cell);
+      if (!cell.started || !cs) continue;
+      const before = cell.grade;
+      rmSync(join(cellDir, 'eval'), { recursive: true, force: true });
+      let next = grade(cs, cellDir, o.timeoutMs);
+      if (cell.timed_out || cell.cancelled) next = { ...next, quality: 'unknown', reason: `${cell.timed_out ? 'timed out' : 'cancelled'}; snapshot may be incomplete (${next.reason ?? next.quality})` };
+      cell.previous_grades = [...(cell.previous_grades ?? []), { at: stamp, grade: before }];
+      cell.grade = next;
+      writeJson(cellPath, cell);
+      if (before?.quality !== next.quality) changed++;
+      process.stdout.write(`    ${caseId} ${arm}: ${before?.quality ?? 'none'} → ${next.quality}${next.reason ? ` (${next.reason})` : ''}\n`);
+    }
+  }
+  const summaryPath = join(out, 'summary.json');
+  const summary = existsSync(summaryPath) ? (JSON.parse(readFileSync(summaryPath, 'utf8')) as Record<string, unknown>) : { version: 3 };
+  writeJson(summaryPath, { ...summary, regraded_at: stamp, cells });
+  process.stdout.write(`regraded ${cells.length} cells, ${changed} verdict change(s). Next: node dist/bench/report.js --run ${out}\n`);
+  return 0;
+};
+
 export const main = async (argv: string[]): Promise<number> => {
   const o = parseArgs(argv);
+  if (o.regrade) return regrade(o);
   const cases = loadManifest(o.cases);
   const out = resolve(o.out);
   if (existsSync(out) && readdirSync(out).length > 0) throw new Error(`--out ${out} exists and is not empty; use a new result folder`);
