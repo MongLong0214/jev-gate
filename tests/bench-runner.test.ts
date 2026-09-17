@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -12,12 +12,13 @@ const fake = join(__dirname, 'fixtures', 'fake-claude.mjs');
 const cases = join(__dirname, 'fixtures', 'mini', 'cases.json');
 let tmp: string;
 let dist: string;
+let pluginDir: string;
 let runCount = 0;
 
 const baseEnv = (): Record<string, string> => ({ PATH: process.env['PATH'] ?? '', HOME: join(tmp, 'home'), TYPESAFE_API_KEY: 'test-key' });
 const bench = (args: string[], env: Record<string, string> = {}): { status: number | null; stdout: string; stderr: string; out: string } => {
   const out = join(tmp, `run-${runCount++}`);
-  const r = spawnSync(process.execPath, [join(dist, 'bench', 'run.js'), '--cases', cases, '--out', out, '--claude', fake, '--plugin-dir', root, ...args], { encoding: 'utf8', env: { ...baseEnv(), ...env }, timeout: 120_000 });
+  const r = spawnSync(process.execPath, [join(dist, 'bench', 'run.js'), '--cases', cases, '--out', out, '--claude', fake, '--plugin-dir', pluginDir, ...args], { encoding: 'utf8', env: { ...baseEnv(), ...env }, timeout: 120_000 });
   return { status: r.status, stdout: r.stdout, stderr: r.stderr, out };
 };
 const readCell = (out: string, arm: string): CellRecord => JSON.parse(readFileSync(join(out, 'cells', 'mini', arm, 'cell.json'), 'utf8')) as CellRecord;
@@ -33,6 +34,10 @@ beforeAll(() => {
   chmodSync(fake, 0o755);
   const r = spawnSync(process.execPath, [join(root, 'node_modules', 'typescript', 'bin', 'tsc'), '-p', join(root, 'tsconfig.json'), '--outDir', dist], { encoding: 'utf8' });
   expect(r.status, r.stdout + r.stderr).toBe(0);
+  // A built plugin dir independent of the repo's own dist/, so the test does not depend on `npm run build` having run.
+  pluginDir = join(tmp, 'plugin');
+  cpSync(dist, join(pluginDir, 'dist'), { recursive: true });
+  cpSync(join(root, 'hooks'), join(pluginDir, 'hooks'), { recursive: true });
 }, 60_000);
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
@@ -60,7 +65,7 @@ describe('bench run (fake CLI)', () => {
     const budget = bench(['--execute', '--max-sessions', '3']);
     expect(budget.status).toBe(2);
     expect(budget.stderr).toMatch(/below the 4 planned/);
-    const noKey = spawnSync(process.execPath, [join(dist, 'bench', 'run.js'), '--cases', cases, '--out', join(tmp, 'nokey'), '--claude', fake, '--plugin-dir', root, '--execute', '--max-sessions', '4'], { encoding: 'utf8', env: { PATH: process.env['PATH'] ?? '', HOME: join(tmp, 'home') } });
+    const noKey = spawnSync(process.execPath, [join(dist, 'bench', 'run.js'), '--cases', cases, '--out', join(tmp, 'nokey'), '--claude', fake, '--plugin-dir', pluginDir, '--execute', '--max-sessions', '4'], { encoding: 'utf8', env: { PATH: process.env['PATH'] ?? '', HOME: join(tmp, 'home') } });
     expect(noKey.status).toBe(2);
     expect(noKey.stderr).toMatch(/TYPESAFE_API_KEY/);
     const subagentEnv = bench(['--execute', '--max-sessions', '4'], { CLAUDE_CODE_SUBAGENT_MODEL: 'haiku' });
