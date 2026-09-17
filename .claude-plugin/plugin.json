@@ -1,0 +1,16 @@
+{
+  "name": "jev-gate",
+  "version": "0.1.0",
+  "description": "Interpret prompts and suggest native Claude Code execution tiers.",
+  "author": {
+    "name": "MongLong0214",
+    "url": "https://github.com/MongLong0214"
+  },
+  "repository": "https://github.com/MongLong0214/jev-gate",
+  "keywords": [
+    "typesafe",
+    "jev",
+    "routing",
+    "hooks"
+  ]
+}
