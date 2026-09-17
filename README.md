@@ -1,183 +1,187 @@
 # jev-gate
 
-**Use frontier intelligence only when the task actually needs it.**
+**Use frontier models where they make a difference.**
 
-`jev-gate` is an experimental Claude Code plugin that puts TypeSafe's Jev in front of every supported natural-language turn.
+An experimental Claude Code plugin for allocating models to coding work. The goal is not simply to use fewer frontier tokens. It is to complete the same work with a better balance of quality, total model consumption, and elapsed time.
 
-You keep Claude Code on **Sonnet**. Jev interprets the request in one HTTP call, the plugin renders a compact, lossless execution brief, and the brief recommends whether Sonnet should handle the turn directly or delegate once to a native **Opus** or **Fable** subagent.
+> **Status — September 18, 2026:** the runtime on `main` is still **V3**, reviewed at [`2c1236f`](https://github.com/MongLong0214/jev-gate/commit/2c1236f9e928b01b30354c8e88af7939fdf0be54). **V4 is specified but not implemented or validated.** The first V3 pilot did not beat plain Sonnet. Native integration, file/evaluation hardening, and V4 effectiveness remain tracked work—not completed claims.
 
-The goal: **reduce unnecessary Fable usage and total coding time without reducing task success.** That is a hypothesis this repository measures, not a result it claims.
+[Current results](#what-the-first-pilot-reported) · [Try V3](#try-the-current-v3-prototype) · [V4 design](#v4-route-the-next-task-not-the-entire-project) · [Implementation issues](#development)
 
-> Status (2026-09-17, `jev-gate-claude-hook-v3`, v0.1.0): **plugin implemented, offline regression green, installed-host smoke verified on Claude Code 2.1.274 with a Claude.ai subscription login, and one four-case bench run recorded in [`bench/results/run-1-2026-09-17/`](bench/results/run-1-2026-09-17/).** On that task set the gate cut Fable volume, cost and wall time against an always-Fable session, and lost to plain Sonnet on both cost and time. One run on four development fixtures is a descriptive result, not a savings claim. Spec: [#1 PRD](https://github.com/MongLong0214/jev-gate/issues/1) → [#2 ADR](https://github.com/MongLong0214/jev-gate/issues/2) → [#3](https://github.com/MongLong0214/jev-gate/issues/3)–[#7](https://github.com/MongLong0214/jev-gate/issues/7).
+## Why this exists
 
-## The idea
+“Build a space-simulation game” contains very different kinds of work: resolve the simulation architecture, implement camera controls, connect the HUD, write tests, and integrate everything. Sending the entire project to one expensive model also assigns that model every routine step.
+
+But the opposite extreme is no better: hundreds of tiny agents can repeat repository exploration, lose constraints, and spend more on handoffs than they save.
+
+`jev-gate` is testing a middle ground: keep a capable main session, delegate coherent outcomes, and evaluate the model choice at the point where a concrete task is ready to run. A cheaper model is not assumed to be sufficient, and a larger model is not assumed to be better on every task.
+
+## V4: route the next task, not the entire project
+
+**The following is the planned V4 behavior, not the current V3 runtime.**
 
 ```text
-user prompt (unchanged, stays in the conversation)
-    ↓
-Claude Code UserPromptSubmit hook   (hooks/hooks.json → dist/hook.js)
-    ↓
-Jev — one POST /v1/systemone with independent Choice questions
-    ├─ task_kind   question | debug | change | review | design | other
-    ├─ role_uN     goal | constraint | acceptance | background | mixed   (one per original block)
-    └─ route       sonnet | opus | fable | context_required | uncertain  (auto mode only)
-    ↓
-code renders a short brief: exact quotes of your own text + fixed execution directives
-    ↓
-additionalContext for this turn only
-    ├─ sonnet            → Sonnet handles it in the main session
-    ├─ opus              → Sonnet delegates once to the native agent jev-gate:opus
-    ├─ fable             → Sonnet delegates once to the native agent jev-gate:frontier
-    ├─ context_required  → Sonnet resolves it with the existing conversation
-    └─ any failure       → fixed neutral reminder; Claude continues natively
+Your original request
+        │
+        ▼
+Sonnet main session
+Understand the task, preserve constraints, coordinate and integrate
+        │
+        ├── Small self-contained work ─────────────► Finish directly
+        │                                           No Jev call
+        │
+        ├── Concrete planning uncertainty ────────► Read-only planner
+        │
+        └── Ready implementation outcome ─────────► Coding worker
+                                                        │
+                                              PreToolUse: Agent
+                                                        │
+                                              Jev: one evaluation
+                                                        │
+                                       Preserved task + selected model
+                                                        │
+                                           Sonnet / Opus / Fable
+                                                        │
+                                          Results return to the main
 ```
 
-No dispatcher model, Claude proxy, MCP server, daemon, second login, or generated "rewritten prompt". Jev returns typed decisions with probabilities and confidence; the plugin turns them into text deterministically. Your message is never replaced or shortened: quotes are `JSON.stringify` of the exact original blocks, and if the brief would exceed 8 KiB the longest quotes become `uN role; current prompt UTF-16[start,end)` references instead of truncations.
+V4 will use two native roles: a coding `worker` and a read-only `planner`. Model choice will not change a role's tools or permissions. Planning is optional; small work should not spawn an agent just to justify the gate.
 
-## Install (local plugin)
+Jev returns typed decisions, not a generated rewrite. The hook will preserve the complete Agent input and original task text, adding only a bounded annotation and a configured model identifier. It will not auto-approve the tool call.
 
-Requirements: Node.js 22+, Claude Code (tested on 2.1.274) signed in with a Claude.ai subscription, a TypeSafe API key.
+On uncertainty, invalid input, unsupported execution, or a Jev failure, V4 will preserve the original native invocation. **Low confidence will no longer automatically escalate to Fable.** An explicit model argument remains a caller pin.
+
+### What V4 will—and will not—control
+
+| Boundary | Planned behavior |
+|---|---|
+| User submits a request | Fixed coordinator guidance; no Jev request |
+| New, owned, eligible foreground Agent task | At most one Jev attempt before execution |
+| Small work handled by the main session | No forced decomposition or routing |
+| Explicit model, another plugin's agent, background/team/fork task | Leave the invocation unchanged |
+| Existing agent resumed, including through `SendMessage` | No model reallocation |
+| Worker internal reasoning and tool loops | Continue natively; no per-turn model swapping |
+| Native permissions and user restrictions | Preserve them; never approve a call to make routing work |
+
+Sequential foreground work is the initial support target, not a promise of global scheduling or file locking. The coordinator can still make poor plans, omit context, or bypass delegation. These are limitations to observe, not invisible successes.
+
+V4 will default to `off`. Its `native` mode will provide the same hierarchy without Jev; `auto` will explicitly enable external task evaluation. Setting mode off does not unload installed agent definitions. Removing the plugin is the clean absent-plugin condition.
+
+The complete contract and evidence requirements are in [the V4 ADR, #10](https://github.com/MongLong0214/jev-gate/issues/10).
+
+## Try the current V3 prototype
+
+**These commands run V3.** V3 evaluates the current user prompt through `UserPromptSubmit`, adds a brief, and recommends direct Sonnet work or an Opus/Fable subagent. It does not perform V4 task-boundary allocation.
+
+Requirements: Node.js 22+, official Claude Code with an existing Claude.ai subscription login, and a TypeSafe API key for active evaluation. Account access to the selected Claude models is required. The author's recorded V3 host checks used Claude Code 2.1.274 on macOS; broader interactive support remains unverified.
 
 ```sh
 git clone https://github.com/MongLong0214/jev-gate.git
 cd jev-gate
 npm ci
 npm run build
+PLUGIN_DIR="$PWD"
 
-# The hook reads TYPESAFE_API_KEY from the environment of the shell that starts Claude Code.
-# It never auto-loads a .env file. Never paste the value into chat, issues or Git.
-export TYPESAFE_API_KEY=...
-node dist/cli.js doctor
+# Diagnostic only: no model inference.
+JEV_GATE_MODE=off node dist/cli.js doctor
+
+# Set TYPESAFE_API_KEY in this shell using your preferred local secret workflow.
+# Do not put the value in chat, an issue, a committed file, or a shared log.
+# The hook does not automatically load a project's .env file.
 
 cd /path/to/your/project
-claude --model sonnet --plugin-dir /absolute/path/to/jev-gate
+JEV_GATE_MODE=auto \
+CLAUDE_CODE_FORK_SUBAGENT=0 \
+CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 \
+claude --model sonnet --plugin-dir "$PLUGIN_DIR"
 ```
 
-Then type requests as usual. There is no `/jev` command. Each supported natural-language turn triggers exactly one Jev request; slash commands, empty prompts, subagent turns and `mode=off` trigger none.
+Type requests normally; there is no required `/jev` command. The scoped environment settings request the non-fork foreground path. They do not prove that every possible concurrent tool batch is serialized.
 
-`doctor` performs no inference. It checks Node, the built hook, plugin files, the installed `claude` version and `claude auth status` (login method only, no e-mail or IDs), conflicting environment variables, and the effective config. It exits 1 only when the plugin itself is broken.
+V3 modes are `auto`, `enrich`, and `off`; **V4's `native` mode is not implemented in this checkout**. V3 also still defaults to `auto` and retains its original uncertainty-to-Fable policy. These defaults differ from the planned V4 configuration. See the [archived V3 contract](https://github.com/MongLong0214/jev-gate/issues/2) before changing settings.
 
-### Foreground delegation in interactive sessions
+To stop the V3 hook, launch with `JEV_GATE_MODE=off`. To remove the plugin's influence entirely, stop loading it and start a new session. The plugin does not rewrite your global settings or credentials.
 
-Claude Code runs Agent calls in the background by default in interactive sessions (fork mode). For the delegate-once-in-foreground behavior the brief asks for, start with:
+`doctor` is an inference-free diagnostic, not a certificate of model availability, OAuth configuration, native patch support, or measurement correctness. Investigate API-key, gateway, cloud-provider, or model-override warnings before interpreting a session as the supported subscription setup.
 
-```sh
-CLAUDE_CODE_FORK_SUBAGENT=0 claude --model sonnet --plugin-dir /absolute/path/to/jev-gate
-```
+## Authentication and task data
 
-`claude -p` sessions already run with fork mode off. `doctor` reports the current setting. With agent teams enabled, a *named* Agent call becomes a teammate; the plugin does not name its calls.
+Claude inference stays inside official Claude Code using its existing login. `jev-gate` does not implement OAuth, extract or refresh login tokens, or require `WORKER_API_KEY` or `FRONTIER_API_KEY`.
 
-### Modes, config, disabling
+TypeSafe is separate: active Jev evaluation uses `TYPESAFE_API_KEY` with its [System One API](https://docs.typesafe.ai/api.md). Its account charges and limits are independent of the Claude subscription.
 
-| Setting | Where | Values |
-| --- | --- | --- |
-| Mode | `JEV_GATE_MODE` env (highest) or config `mode` | `auto` (default: annotations + routing), `enrich` (annotations only, no routing question, no delegation text), `off` (hook exits silently, zero Jev calls) |
-| Config file | `JEV_GATE_CONFIG=/path.json` or `~/.config/jev-gate/config.json` | optional; defaults apply when absent |
-| Trace | `JEV_GATE_TRACE_DIR` | off by default; when set, each turn writes one JSON with input, decision, Jev usage and output. Used by the bench only |
+| Version | Text sent to TypeSafe |
+|---|---|
+| Current V3 | The current user prompt, losslessly split, plus fixed evaluation criteria |
+| Planned V4 | The delegated Agent prompt and description, plus fixed evaluation criteria |
 
-Default config (`version` must be 3; unknown keys and v1/v2 worker/frontier layouts are rejected with an explanation from `doctor`):
+A V4 delegated prompt may contain source excerpts, file paths and earlier user constraints. Neither version independently collects the entire repository or conversation for Jev, but caller-provided text can already contain sensitive information. **There is no automatic secret-scrubbing or zero-retention guarantee.** Do not enable external evaluation for data you are not authorized to send.
 
-```json
-{
-  "version": 3,
-  "mode": "auto",
-  "jevModel": "jev-1.13.0",
-  "requestDeadlineMs": 3000,
-  "routeConfidenceFloor": 0.8,
-  "uncertainTier": "fable",
-  "opusModel": "opus",
-  "frontierModel": "fable"
-}
-```
+Detailed local tracing is opt-in through `JEV_GATE_TRACE_DIR` and can contain task content. It is not automatically uploaded. Existing trace-loss and accounting defects are being corrected in [#14](https://github.com/MongLong0214/jev-gate/issues/14); a missing trace must not be interpreted as zero consumption.
 
-`requestDeadlineMs` must stay under the 5-second native hook timeout (max 4000). `routeConfidenceFloor` is an uncalibrated policy value, not an accuracy guarantee. Model fields are trusted identifiers only; nothing in a prompt or a Jev answer can change them.
+## What the first pilot reported
 
-To disable: stop passing `--plugin-dir`, or set `JEV_GATE_MODE=off`. The plugin never edits your global settings, hooks, agents or credentials.
+The V3 pilot used four development fixtures, four configurations, one run, and a scheduling seed of 42 on September 17, 2026. These are **reported exploratory observations**, not V4 results or a production benchmark.
 
-## Routing policy (code, not the model)
+| Configuration | Passed | Fable tokens | Total estimated cost | Mean runtime |
+|---|---:|---:|---:|---:|
+| Fable, original request | 3/4 | 657,473 | $2.3940 | 50.9 s |
+| Fable, Jev-enriched request | 3/4 | 770,218 | $2.4951 | 51.9 s |
+| Sonnet, plugin absent | 4/4 | 0 | $0.5781 | 22.2 s |
+| Sonnet, V3 Jev gate | 4/4 | 259,205 | $1.4242 | 41.5 s |
 
-- Route answers are validated strictly: exact option set, finite probabilities in [0,1] summing to 1, `choice` equal to the argmax, `confidence` in [0,1]. No coercion, no renormalization.
-- `context_required` at the top or tied for the top → stay in the main conversation (`main_context`). This is not a difficulty rating.
-- A unique top tier with `confidence ≥ routeConfidenceFloor` → that tier. `sonnet` runs in the main session; `opus`/`fable` render a one-time foreground delegation to `jev-gate:opus` / `jev-gate:frontier`.
-- `uncertain`, ties, or low confidence → `uncertainTier` (default `fable`), labeled as a policy fallback in the brief.
-- `task_kind` and roles degrade to `other` / `mixed` below a fixed 0.5 confidence or on ties; they never drop text.
-- A missing or invalid route answer, HTTP 401/422/429/529, timeout, oversize input/response, missing key or invalid config → the fixed reminder `Jev Gate has no recommendation for this user turn. Continue natively; do not reuse a previous turn's routing hint.` Exit code is always 0; the hook never blocks, edits or deletes a prompt, and never retries.
+The gate used less Fable volume and lower estimated cost than the always-Fable configuration. **Plain Sonnet was still the better observed option:** the gate cost about 2.46 times as much and took about 1.87 times as long for the same four passes.
 
-The hook cannot change the current model or call the Agent tool itself. Delegation is Sonnet's own tool call, so the recommendation and what actually ran can differ; the bench records both. User instructions, plan mode, permissions, and model availability take precedence over any hint.
+One search-race task accounted for much of the overhead. Jev's top option was Sonnet, but its confidence fell below the configured floor, and V3's policy escalated to Fable. The extra frontier execution did not improve that task's observed pass result.
 
-## What Jev receives
+The search-race checker was also corrected after the run: adding a regression test to an existing file must not fail a test-file-count rule. Both the original and corrected reports are preserved. Public aggregate files are available; the complete private raw execution artifacts are not all included.
 
-Only the current prompt split into lossless UTF-16 blocks (each non-blank line or code fence, merged to at most 24) plus fixed criteria text. Never the transcript, prior turns, repository files, environment, credentials, or benchmark answers. Requests over 128 KiB and prompts over 64 KiB are not sent; the turn proceeds natively.
+[Published report](bench/results/run-1-2026-09-17/report.md) · [Original checker report](bench/results/run-1-2026-09-17/report.checker-v1.md) · [Historical evaluation](https://github.com/MongLong0214/jev-gate/issues/6)
 
-## Bench: does it actually save anything?
+Costs combine Claude's API-equivalent estimate with Jev's estimated usage; they are **not subscription invoices, quota measurements, or cash saved**. Open file, grading, interruption and aggregation fixes are assigned to [#14–#16](https://github.com/MongLong0214/jev-gate/issues/14). Do not treat these aggregates as independent verification that every measurement boundary is correct.
 
-`src/bench/run.ts` runs the same coding task through four arms with the official CLI (`claude -p … --output-format stream-json`) and grades the resulting source with trusted behavior checkers; `src/bench/report.ts` reads the saved files only.
+## How V4 will be evaluated
 
-| Arm | Root model | jev-gate | Question |
-| --- | --- | --- | --- |
-| `frontier_raw` | Fable | not loaded | What does always using the strongest model cost? |
-| `frontier_enriched` | Fable | `enrich` | Does the brief alone change the work on the same root model? |
-| `sonnet_native` | Sonnet | not loaded | Is plain Sonnet already enough? |
-| `sonnet_gated` | Sonnet | `auto` | Does the product add value over native Sonnet? |
+The main question is whether Jev adds value beyond an otherwise identical native hierarchy. The planned comparisons include plain Sonnet, native hierarchy, Jev hierarchy, frontier-native, and fixed worker/planner model defaults. The fixed-role control checks whether inexpensive defaults already explain an apparent gain.
 
-```sh
-node dist/bench/run.js --cases bench/cases.json --out /outside/repo/run-1                      # plan only, 0 inference
-node dist/bench/run.js --cases bench/cases.json --out /outside/repo/run-1 \
-  --max-sessions 16 --timeout-ms 600000 --max-turns 40 --seed 42 --execute                      # 4 cases × 4 arms
-node dist/bench/report.js --run /outside/repo/run-1
-```
+The unit of evaluation is a **complete user job**, not a child-agent count. All parent, planner, worker, helper and Jev consumption counts—including failed and unfinished work. A timeout duration is not successful completion latency. Missing costs stay unknown.
 
-Before executing, the runner requires a `claude.ai`/`firstParty` login, refuses when `ANTHROPIC_API_KEY`, gateway/cloud variables or `CLAUDE_CODE_SUBAGENT_MODEL` are active, requires `TYPESAFE_API_KEY`, and fails if `--max-sessions` is below the planned cell count. Every arm gets the identical prompt on stdin, a fresh copy of the fixture, `--setting-sources project,local` (your user-scope plugins and hooks stay out of all arms equally), `--no-session-persistence`, and the same permission mode and tool allowlist. Plugin arms add `--plugin-dir` plus `JEV_GATE_MODE`/`JEV_GATE_TRACE_DIR`. Baseline arms confirm the absence of `jev-gate` from the session's `system/init` plugin list.
+Small frozen-task probes can diagnose model allocation and hint effects. New mixed end-to-end jobs must establish the product result. Neither a successful API call nor a hundred child tasks from one game constitute a hundred independent demonstrations of effectiveness.
 
-Reported per arm: planned/started/pass/fail/unknown, whole-tree per-model tokens from the final `modelUsage` (parent Sonnet, every child, and any helper model), Fable tokens, Claude's API-equivalent cost estimate, Jev list-price estimate, elapsed wall time, gate latency, fallbacks, and recommendation-versus-actual delegation. Deltas use only cases where all four arms completed with full accounting:
-
-```text
-Fable volume change   = 1 - Σ Fable_gated / Σ Fable_frontier_raw
-total est. cost change = 1 - Σ (Claude_gated + Jev_gated) / Σ Claude_frontier_raw
-elapsed change         = 1 - mean(elapsed_gated) / mean(elapsed_frontier_raw)
-```
-
-Subscription usage is not API billing, so token counts and estimates are never presented as charges or quota. A Fable-free failure is not a saving. A gated run slower than plain Sonnet is a valid negative result. See [bench/README.md](bench/README.md) for the fixtures.
-
-### What run-1 actually measured
-
-4 cases × 4 arms, seed 42, concurrency 1, 2026-09-17, Claude Code 2.1.274, Claude.ai team subscription. Full tables in [`bench/results/run-1-2026-09-17/report.md`](bench/results/run-1-2026-09-17/report.md).
-
-| arm | pass / 4 | Fable tokens | est. cost | mean wall time | recommendation followed |
-| --- | --- | --- | --- | --- | --- |
-| `frontier_raw` | 3 | 657,473 | $2.394 | 50.9 s | – |
-| `frontier_enriched` | 3 | 770,218 | $2.495 | 51.9 s | – |
-| `sonnet_native` | 4 | 0 | $0.578 | 22.2 s | – |
-| `sonnet_gated` | 4 | 259,205 | $1.424 | 41.5 s | 4 / 4 |
-
-Against `frontier_raw` the gate cut Fable volume 60.6%, estimated cost 40.5% and wall time 18.5%. Against `sonnet_native` it cost 2.5× more and took 1.9× longer for the same four passes, because one case landed just under the confidence floor and escalated to Fable. On this task set most of the benefit comes from starting on Sonnet at all, and the gate's own value rests on whether it rescues tasks Sonnet would fail — which these four fixtures did not demonstrate. Adding the brief to an always-Fable session (`frontier_enriched`) increased Fable tokens 17% and cost 4%, a negative result.
-
-The `search-race` verdict for `sonnet_native` changed from fail to pass when the checker was corrected after the run: it had judged "add a test that reproduces the late response" by counting files in `test/`, and that candidate added the regression test inside the existing file. The checker now runs the candidate's own tests against the unfixed source and requires them to fail. Both scorings are kept, in `report.md` and `report.checker-v1.md`, and `node dist/bench/run.js --regrade` re-scores saved snapshots with no model calls.
+[Evaluation specification, #17](https://github.com/MongLong0214/jev-gate/issues/17) · [Reporting contract, #16](https://github.com/MongLong0214/jev-gate/issues/16)
 
 ## Development
 
 ```sh
 npm ci
-npm run typecheck   # src + tests
-npm test            # 65 offline tests: lossless blocks, config, Jev contract, Brief, hook process, fixtures vs reference, fake-CLI bench
+npm run typecheck
+npm test
 npm run build
-claude plugin validate . --strict
 ```
 
-Tests use fake HTTP and a fake `claude` binary; they never call TypeSafe or Claude and never require a key or login. CI runs the same steps on Node 22. Passing fakes prove the code paths, not model behavior; installed-host checks are separate and documented per release.
+The existing tests use fake HTTP/native execution and local fixtures; ordinary tests do not require a TypeSafe key or a Claude login. Passing them establishes the exercised code paths, not model quality or every installed-host behavior.
 
-## Scope
+**Implement from [#9 PRD](https://github.com/MongLong0214/jev-gate/issues/9) → [#10 ADR](https://github.com/MongLong0214/jev-gate/issues/10) → [#11 native boundary](https://github.com/MongLong0214/jev-gate/issues/11).**
 
-Not included by design: automatic tier escalation or retries, multi-agent review loops, a worker model provider, Anthropic API proxying or custom OAuth, repository indexing, transcript summarization, UI, database, MCP server, daemon, automatic commit/push/deploy, marketplace publishing without `dist`.
+| Work | Issue |
+|---|---|
+| Native Agent patch and permissions | [#11](https://github.com/MongLong0214/jev-gate/issues/11) |
+| Coordinator, roles and configuration | [#12](https://github.com/MongLong0214/jev-gate/issues/12) |
+| Jev task evaluation | [#13](https://github.com/MongLong0214/jev-gate/issues/13) |
+| Actual models, OAuth and usage | [#14](https://github.com/MongLong0214/jev-gate/issues/14) |
+| Files, snapshots and grading | [#15](https://github.com/MongLong0214/jev-gate/issues/15) |
+| Complete job reporting | [#16](https://github.com/MongLong0214/jev-gate/issues/16) |
+| Comparative evaluation | [#17](https://github.com/MongLong0214/jev-gate/issues/17) |
+| Packaging, migration and host support | [#18](https://github.com/MongLong0214/jev-gate/issues/18) |
 
-## Official references
+Issues #1–#8 are historical; their closure does not certify inherited defects as fixed. Keep original evidence and user changes. Build the product and test real behavior rather than adding a new orchestration framework or document-validation system.
 
-Contracts were checked against the live documentation on 2026-09-17:
+## Research and contracts
 
-- [TypeSafe HTTP API](https://docs.typesafe.ai/api.md) · [Choice](https://docs.typesafe.ai/primitives/choice.md) · [Confidence](https://docs.typesafe.ai/confidence.md) · [Models](https://docs.typesafe.ai/models.md)
-- [Claude Code hooks](https://code.claude.com/docs/en/hooks) · [subagents](https://code.claude.com/docs/en/sub-agents) · [plugins reference](https://code.claude.com/docs/en/plugins-reference) · [headless](https://code.claude.com/docs/en/headless) · [cost tracking](https://code.claude.com/docs/en/agent-sdk/cost-tracking) · [authentication](https://code.claude.com/docs/en/authentication)
-- [frontier-simplify](https://github.com/MongLong0214/frontier-simplify/blob/96b07ad17e90fd4e69e1a7748641d7f30c06fcf0/skills/frontier-simplify/SKILL.md)
+The [ADR's research review](https://github.com/MongLong0214/jev-gate/issues/10) covers task-level routing, intermediate-state information, simple control policies, coordination overhead and evaluation failure modes. It records both what influenced V4 and what does not transfer from another paper's models or benchmarks. Published results are not forecasts for this plugin.
+
+Official references: [Claude Code hooks](https://code.claude.com/docs/en/hooks), [subagents](https://code.claude.com/docs/en/sub-agents), [cost tracking](https://code.claude.com/docs/en/agent-sdk/cost-tracking), [authentication](https://code.claude.com/docs/en/authentication), [TypeSafe API](https://docs.typesafe.ai/api.md), [confidence](https://docs.typesafe.ai/confidence.md), and [Jev limitations](https://docs.typesafe.ai/model-jaggedness/jev-1.13.md).
 
 ## License
 
-TBD until the repository license is added.
+No license file is present in the reviewed runtime revision. Licensing has not yet been specified.
