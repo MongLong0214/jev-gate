@@ -1,109 +1,118 @@
 import { describe, expect, it } from 'vitest';
 
-import { checkEligibility, EXECUTION_CONTROL_KEYS, MAX_OUTPUT_BYTES, MAX_PROMPT_BYTES, MAX_SUFFIX_BYTES, patchAgentInput, renderPreToolUseOutput, renderTaskSuffix } from '../src/brief.js';
+import {
+  checkEligibility,
+  DENIALS_BEFORE_STOP,
+  GUARD_ALLOW_TOOLS,
+  guardDecision,
+  MAX_OUTPUT_BYTES,
+  MAX_PROMPT_BYTES,
+  patchAgentInput,
+  renderAdditionalContext,
+  renderPreToolUseOutput,
+} from '../src/brief.js';
 import { DEFAULT_CONFIG } from '../src/config.js';
-import type { ConfigV4, HookInput } from '../src/types.js';
+import type { ConfigV5, HookInput } from '../src/types.js';
 
-const auto: ConfigV4 = { ...DEFAULT_CONFIG, mode: 'auto' };
-const base = (over: Partial<HookInput> = {}, input: Record<string, unknown> = {}): HookInput => ({
+const config: ConfigV5 = { ...DEFAULT_CONFIG, mode: 'auto' };
+const env = { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' };
+const hook = (input: Record<string, unknown> = {}, top: Record<string, unknown> = {}): HookInput => ({
   hook_event_name: 'PreToolUse',
-  session_id: 'test-session',
-  tool_use_id: 'test-call',
   tool_name: 'Agent',
-  tool_input: { subagent_type: 'jev-gate:worker', description: 'Implement camera controls', prompt: 'Implement pan and zoom. Preserve the camera API.', run_in_background: false, ...input },
-  ...over,
+  session_id: 's1',
+  tool_use_id: 'toolu_1',
+  tool_input: { subagent_type: 'jev-gate:worker', description: 'd', prompt: 'do the thing', run_in_background: false, ...input },
+  ...top,
 });
 
 describe('checkEligibility', () => {
-  it('accepts the #11 example for both owned roles', () => {
-    const r = checkEligibility(base(), {}, auto);
-    expect(r).toMatchObject({ eligible: true, role: 'worker', sessionId: 'test-session', toolUseId: 'test-call' });
-    expect(checkEligibility(base({}, { subagent_type: 'jev-gate:planner' }), {}, auto)).toMatchObject({ eligible: true, role: 'planner' });
+  it('accepts each owned profile with its role and tier', () => {
+    for (const [agent, expected] of [
+      ['jev-gate:worker-fast', { role: 'worker', tier: 'fast' }],
+      ['jev-gate:worker', { role: 'worker', tier: 'standard' }],
+      ['jev-gate:worker-deep', { role: 'worker', tier: 'deep' }],
+      ['jev-gate:worker-frontier', { role: 'worker', tier: 'frontier' }],
+      ['jev-gate:planner', { role: 'planner', tier: 'deep' }],
+      ['jev-gate:planner-frontier', { role: 'planner', tier: 'frontier' }],
+    ] as const) {
+      expect(checkEligibility(hook({ subagent_type: agent }), env, config), agent).toMatchObject({ eligible: true, ...expected, pinned: false });
+    }
+  });
+
+  it('reports a caller pin instead of rejecting it, because a pinned call still receives the contract', () => {
+    expect(checkEligibility(hook({ model: 'opus' }), env, config)).toMatchObject({ eligible: true, pinned: true });
+  });
+
+  it('treats an absent run_in_background as foreground only under the documented launch profile', () => {
+    const input = hook();
+    delete (input.tool_input as Record<string, unknown>)['run_in_background'];
+    expect(checkEligibility(input, env, config)).toMatchObject({ eligible: true });
+    expect(checkEligibility(input, {}, config)).toEqual({ eligible: false, code: 'not_foreground' });
   });
 
   it.each([
-    ['mode off', base(), {}, { ...auto, mode: 'off' as const }, 'mode_off'],
-    ['mode native', base(), {}, { ...auto, mode: 'native' as const }, 'mode_native'],
-    ['other tool', base({ tool_name: 'Bash' }), {}, auto, 'not_agent_tool'],
-    ['other event', base({ hook_event_name: 'PostToolUse' }), {}, auto, 'not_agent_tool'],
-    ['child caller', base({ agent_id: 'a1' }), {}, auto, 'child_caller'],
-    ['custom main agent', base({ agent_type: 'my-agent' }), {}, auto, 'custom_agent_session'],
-    ['missing session', base({ session_id: '' }), {}, auto, 'missing_ids'],
-    ['missing tool_use_id', { ...base(), tool_use_id: undefined }, {}, auto, 'missing_ids'],
-    ['non-object input', base({ tool_input: 'x' }), {}, auto, 'bad_tool_input'],
-    ['blank prompt', base({}, { prompt: '   ' }), {}, auto, 'bad_tool_input'],
-    ['missing description', base({}, { description: undefined }), {}, auto, 'bad_tool_input'],
-    ['other agent', base({}, { subagent_type: 'Explore' }), {}, auto, 'role_not_owned'],
-    ['other plugin agent', base({}, { subagent_type: 'other:worker' }), {}, auto, 'role_not_owned'],
-    ['V3 model-named agent', base({}, { subagent_type: 'jev-gate:opus' }), {}, auto, 'role_not_owned'],
-    ['background', base({}, { run_in_background: true }), {}, auto, 'not_foreground'],
-    ['background omitted without the launch profile', base({}, { run_in_background: undefined }), {}, auto, 'not_foreground'],
-    ['background omitted with fork override even under the profile', base({}, { run_in_background: undefined }), { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1', CLAUDE_CODE_FORK_SUBAGENT: '1' }, auto, 'fork_or_background_override'],
-    ['background true under the profile', base({}, { run_in_background: true }), { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' }, auto, 'not_foreground'],
-    ['model pinned', base({}, { model: 'opus' }), {}, auto, 'model_pinned'],
-    ['model null is still a pin', base({}, { model: null }), {}, auto, 'model_pinned'],
-    ['model empty is still a pin', base({}, { model: '' }), {}, auto, 'model_pinned'],
-    ['concrete subagent model override', base(), { CLAUDE_CODE_SUBAGENT_MODEL: 'haiku' }, auto, 'subagent_model_override'],
-    ['force override', base(), { CLAUDE_CODE_SUBAGENT_MODEL_FORCE: '1' }, auto, 'subagent_model_override'],
-    ['fork mode forced on', base(), { CLAUDE_CODE_FORK_SUBAGENT: '1' }, auto, 'fork_or_background_override'],
-    ['lone surrogate', base({}, { prompt: 'bad \ud800 text' }), {}, auto, 'prompt_invalid_unicode'],
-    ['oversize prompt', base({}, { prompt: 'x'.repeat(MAX_PROMPT_BYTES + 1) }), {}, auto, 'prompt_too_large'],
-  ])('%s → no-op', (_name, hook, env, config, code) => {
-    expect(checkEligibility(hook as HookInput, env as Record<string, string>, config)).toEqual({ eligible: false, code });
-  });
-
-  it.each(EXECUTION_CONTROL_KEYS.map((k) => [k]))('execution control %s → no-op', (key) => {
-    expect(checkEligibility(base({}, { [key]: 'x' }), {}, auto)).toEqual({ eligible: false, code: 'execution_control_present' });
-  });
-
-  it('host profile: an absent run_in_background is foreground when CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 (observed on 2.1.275)', () => {
-    const hook = base({}, { run_in_background: undefined });
-    expect((hook.tool_input as Record<string, unknown>)['run_in_background']).toBeUndefined();
-    expect(checkEligibility(hook, { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' }, auto)).toMatchObject({ eligible: true, role: 'worker' });
-  });
-
-  it('documented inherit override is harmless and unknown ordinary fields do not block', () => {
-    expect(checkEligibility(base({}, { mode: 'acceptEdits', custom_field: { deep: 1 } }), { CLAUDE_CODE_SUBAGENT_MODEL: 'inherit', CLAUDE_CODE_FORK_SUBAGENT: '0' }, auto).eligible).toBe(true);
+    ['mode off', hook(), {}, { ...config, mode: 'off' as const }, 'mode_off'],
+    ['another agent', hook({ subagent_type: 'Explore' }), env, config, 'role_not_owned'],
+    ['a child caller', hook({}, { agent_id: 'child' }), env, config, 'child_caller'],
+    ['a custom agent session', hook({}, { agent_type: 'custom' }), env, config, 'custom_agent_session'],
+    ['a background call', hook({ run_in_background: true }), env, config, 'not_foreground'],
+    ['an execution control field', hook({ resume: 'agent-1' }), env, config, 'execution_control_present'],
+    ['a blank prompt', hook({ prompt: '   ' }), env, config, 'bad_tool_input'],
+    ['a concrete subagent override', hook(), { ...env, CLAUDE_CODE_SUBAGENT_MODEL: 'haiku' }, config, 'subagent_model_override'],
+    ['a forced fork', hook(), { ...env, CLAUDE_CODE_FORK_SUBAGENT: '1' }, config, 'fork_or_background_override'],
+    ['an oversized prompt', hook({ prompt: 'z'.repeat(MAX_PROMPT_BYTES + 1) }), env, config, 'prompt_too_large'],
+    ['a lone surrogate', hook({ prompt: 'bad \ud800' }), env, config, 'prompt_invalid_unicode'],
+    ['a missing tool_use_id', hook({}, { tool_use_id: undefined }), env, config, 'missing_ids'],
+  ])('rejects %s', (_name, input, e, c, code) => {
+    expect(checkEligibility(input, e, c)).toEqual({ eligible: false, code });
   });
 });
 
-describe('patchAgentInput / renderTaskSuffix / renderPreToolUseOutput', () => {
-  it('produces the #11 example output exactly', () => {
-    const original = { subagent_type: 'jev-gate:worker', description: 'Implement camera controls', prompt: 'Implement pan and zoom. Preserve the camera API.', run_in_background: false };
-    const out = renderPreToolUseOutput(patchAgentInput(original, 'sonnet', renderTaskSuffix('implement')));
-    expect(JSON.parse(out!)).toEqual({
-      hookSpecificOutput: {
-        hookEventName: 'PreToolUse',
-        updatedInput: {
-          subagent_type: 'jev-gate:worker',
-          description: 'Implement camera controls',
-          prompt: 'Implement pan and zoom. Preserve the camera API.\n\n[Jev Gate task hint]\nTask kind: implement. The original request and applicable constraints remain authoritative.',
-          run_in_background: false,
-          model: 'sonnet',
-        },
-      },
+describe('guardDecision', () => {
+  it('allows the read-only and bookkeeping tools, owned agents and configured extras', () => {
+    for (const tool of GUARD_ALLOW_TOOLS) expect(guardDecision(tool, {}, config), tool).toEqual({ allow: true });
+    expect(guardDecision('Agent', { subagent_type: 'jev-gate:worker-deep' }, config)).toEqual({ allow: true });
+    expect(guardDecision('mcp__docs__search', {}, { ...config, guardAllowTools: ['mcp__docs__search'] })).toEqual({ allow: true });
+  });
+
+  it('declines writing tools, non-owned agents and unknown tools', () => {
+    for (const tool of ['Edit', 'MultiEdit', 'Write', 'NotebookEdit', 'Bash', 'PowerShell', 'Skill', 'SendMessage', 'Workflow', 'mcp__unknown__do'])
+      expect(guardDecision(tool, {}, config), tool).toEqual({ allow: false });
+    expect(guardDecision('Agent', { subagent_type: 'Explore' }, config)).toEqual({ allow: false });
+    expect(guardDecision('Agent', {}, config)).toEqual({ allow: false });
+  });
+});
+
+describe('patchAgentInput', () => {
+  it('copies the whole input and changes only the named fields', () => {
+    const original = { subagent_type: 'jev-gate:worker', description: 'd', prompt: 'p', run_in_background: false, extra: { keep: true } };
+    expect(patchAgentInput(original, { subagent_type: 'jev-gate:worker-deep', model: 'opus', prompt: 'p + contract' })).toEqual({
+      ...original,
+      subagent_type: 'jev-gate:worker-deep',
+      model: 'opus',
+      prompt: 'p + contract',
     });
-    expect(out).not.toMatch(/permissionDecision|"decision"|updatedPermissions|"continue"/);
+    expect(patchAgentInput(original, { prompt: 'p + note' })).toMatchObject({ subagent_type: 'jev-gate:worker', prompt: 'p + note' });
+    expect(patchAgentInput(original, {})).toEqual(original);
+    expect(() => patchAgentInput(original, { prompt: 'different' })).toThrow(/exact prefix/);
+  });
+});
+
+describe('rendering', () => {
+  it('emits updatedInput, a deny, and a deny with continue:false on the third denial', () => {
+    const update = JSON.parse(renderPreToolUseOutput({ kind: 'update', updatedInput: { prompt: 'p' } }) ?? '{}') as Record<string, Record<string, unknown>>;
+    expect(update['hookSpecificOutput']).toEqual({ hookEventName: 'PreToolUse', updatedInput: { prompt: 'p' } });
+    const deny = JSON.parse(renderPreToolUseOutput({ kind: 'deny', reason: 'no', stopReason: null }) ?? '{}') as Record<string, unknown>;
+    expect(deny['hookSpecificOutput']).toMatchObject({ permissionDecision: 'deny', permissionDecisionReason: 'no' });
+    expect(deny).not.toHaveProperty('continue');
+    const stopped = JSON.parse(renderPreToolUseOutput({ kind: 'deny', reason: 'no', stopReason: 'stop now' }) ?? '{}') as Record<string, unknown>;
+    expect(stopped).toMatchObject({ continue: false, stopReason: 'stop now' });
+    expect(DENIALS_BEFORE_STOP).toBe(3);
   });
 
-  it('preserves every other field, does not mutate, and keeps the original prompt as an exact prefix (CRLF/fence/Unicode/negation)', () => {
-    const prompt = 'Do NOT change the API.\r\n```js\nconst x = "😀";\n```\n  -3.5 ≠ 3';
-    const original = { subagent_type: 'jev-gate:worker', description: 'd', prompt, run_in_background: false, mode: 'default', nested: { a: [1, 2] }, marker: '[Jev Gate task hint]' };
-    const frozen = JSON.stringify(original);
-    const patched = patchAgentInput(original, 'claude-opus-5', renderTaskSuffix('investigate'));
-    expect(JSON.stringify(original)).toBe(frozen);
-    expect(patched).not.toBe(original);
-    expect(String(patched['prompt']).startsWith(prompt)).toBe(true);
-    expect(patched['model']).toBe('claude-opus-5');
-    const { model: _m, prompt: _p, ...rest } = patched;
-    const { prompt: _op, ...origRest } = original;
-    expect(rest).toEqual(origRest);
-    expect(Buffer.byteLength(renderTaskSuffix('other'), 'utf8')).toBeLessThanOrEqual(MAX_SUFFIX_BYTES);
-    expect(() => patchAgentInput(original, 'x', 'y'.repeat(MAX_SUFFIX_BYTES + 1))).toThrow();
-  });
-
-  it('discards the whole output when the serialized envelope exceeds the bound', () => {
-    const big = { subagent_type: 'jev-gate:worker', description: 'd', prompt: 'p', run_in_background: false, extra: 'z'.repeat(MAX_OUTPUT_BYTES) };
-    expect(renderPreToolUseOutput(patchAgentInput(big, 'sonnet', renderTaskSuffix('other')))).toBeNull();
+  it('returns null instead of an oversized envelope', () => {
+    expect(renderPreToolUseOutput({ kind: 'update', updatedInput: { prompt: 'z'.repeat(MAX_OUTPUT_BYTES + 1) } })).toBeNull();
+    expect(renderAdditionalContext('PostToolUse', 'ok')).toContain('"hookEventName":"PostToolUse"');
+    expect(renderAdditionalContext('UserPromptSubmit', 'z'.repeat(MAX_OUTPUT_BYTES + 1))).toBeNull();
   });
 });

@@ -21,8 +21,10 @@ if (missing.length) {
   process.exit(1);
 }
 const files = INCLUDE.flatMap((rel) => walk(join(root, rel))).map((p) => relative(root, p)).filter((p) => !p.endsWith('.tsbuildinfo'));
-if (!files.includes('dist/hook.js') || !files.includes('agents/worker.md') || !files.includes('agents/planner.md')) {
-  process.stderr.write('pack: dist/hook.js or owned agents missing\n');
+const OWNED_AGENT_FILES = ['worker-fast', 'worker', 'worker-deep', 'worker-frontier', 'planner', 'planner-frontier'].map((a) => `agents/${a}.md`);
+const missingOwned = OWNED_AGENT_FILES.filter((f) => !files.includes(f));
+if (!files.includes('dist/hook.js') || missingOwned.length) {
+  process.stderr.write(`pack: missing ${[...(files.includes('dist/hook.js') ? [] : ['dist/hook.js']), ...missingOwned].join(', ')}\n`);
   process.exit(1);
 }
 mkdirSync(outDir, { recursive: true });

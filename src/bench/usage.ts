@@ -86,6 +86,17 @@ export const familyTokens = (usage: ModelUsage, family: Family): number | null =
   return safeSum(models.filter((m) => modelFamily(m) === family).map((m) => totalTokens(usage[m]!)));
 };
 
+/** API-equivalent cost grouped by model family. A family whose entries report no cost stays null, never zero. */
+export const familyCosts = (usage: ModelUsage): Partial<Record<Family, number | null>> => {
+  const out: Partial<Record<Family, number | null>> = {};
+  for (const [model, e] of Object.entries(usage)) {
+    const family = modelFamily(model);
+    const current = family in out ? out[family] : 0;
+    out[family] = current === null || current === undefined || e.costUSD === null ? null : current + e.costUSD;
+  }
+  return out;
+};
+
 /** Jev list price frozen with model, date and primary source (#10 §7). Unknown models price as null, never zero. */
 export const JEV_PRICING: Record<string, { usdPerInputMtok: number; source: string; checked: string }> = {
   'jev-1.13.0': { usdPerInputMtok: 0.042, source: 'https://docs.typesafe.ai/models.md', checked: '2026-09-17' },

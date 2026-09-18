@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 
 import { AUTH_CONFLICT_ENV, isSubscriptionOAuth, parseAuthStatus, subagentModelOverride, type CommandResult } from './auth.js';
 import { loadConfig, MIGRATION_SAMPLE, NATIVE_HOOK_TIMEOUT_MS } from './config.js';
+import { jobsDir } from './job.js';
+import { OWNED_AGENTS } from './types.js';
 
 type Level = 'ok' | 'warn' | 'fail' | 'info';
 
@@ -45,22 +47,32 @@ export const parseFrontmatter = (text: string): Frontmatter => {
 
 const listOf = (v: string | undefined): string[] => (v ? v.split(',').map((s) => s.trim()).filter(Boolean) : []);
 
+const AGENT_EXPECTATIONS: Record<string, { model: string; effort: string | null; tools: string[] }> = {
+  'worker-fast.md': { model: 'haiku', effort: 'low', tools: ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'Bash'] },
+  'worker.md': { model: 'sonnet', effort: null, tools: ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'Bash'] },
+  'worker-deep.md': { model: 'opus', effort: 'high', tools: ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'Bash'] },
+  'worker-frontier.md': { model: 'fable', effort: 'xhigh', tools: ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'Bash'] },
+  'planner.md': { model: 'opus', effort: 'high', tools: ['Read', 'Grep', 'Glob'] },
+  'planner-frontier.md': { model: 'fable', effort: 'xhigh', tools: ['Read', 'Grep', 'Glob'] },
+};
+
 const checkPluginFiles = (): void => {
-  for (const rel of ['dist/hook.js', '.claude-plugin/plugin.json', 'hooks/hooks.json', 'agents/worker.md', 'agents/planner.md']) {
+  for (const rel of ['dist/hook.js', '.claude-plugin/plugin.json', 'hooks/hooks.json', ...Object.keys(AGENT_EXPECTATIONS).map((f) => `agents/${f}`)]) {
     say(existsSync(join(root, rel)) ? 'ok' : 'fail', `${rel} ${existsSync(join(root, rel)) ? 'present' : 'missing'}`);
   }
   try {
     const manifest = JSON.parse(readFileSync(join(root, '.claude-plugin/plugin.json'), 'utf8')) as unknown;
-    if (isRecord(manifest) && manifest['name'] !== 'jev-gate') say('fail', `plugin.json name is ${String(manifest['name'])}; roles are addressed as jev-gate:worker / jev-gate:planner`);
+    if (isRecord(manifest) && manifest['name'] !== 'jev-gate') say('fail', `plugin.json name is ${String(manifest['name'])}; agents are addressed as ${Object.keys(OWNED_AGENTS).join(' / ')}`);
     if (isRecord(manifest) && 'hooks' in manifest) say('fail', 'plugin.json declares hooks inline; hooks/hooks.json is auto-discovered, so each hook would run twice');
     const hooks = JSON.parse(readFileSync(join(root, 'hooks/hooks.json'), 'utf8')) as unknown;
     const table = isRecord(hooks) && isRecord(hooks['hooks']) ? hooks['hooks'] : {};
-    const expected: Array<[string, string | null]> = [['UserPromptSubmit', null], ['PreToolUse', '^Agent$'], ['PostToolUse', '^Agent$'], ['PostToolUseFailure', '^Agent$']];
+    // V5: PreToolUse guards every root tool, so it is registered once with no matcher; Stop records the terminal outcome.
+    const expected: Array<[string, string | null]> = [['UserPromptSubmit', null], ['PreToolUse', null], ['PostToolUse', '^Agent$'], ['PostToolUseFailure', '^Agent$'], ['Stop', null]];
     for (const [event, matcher] of expected) {
       const groups = Array.isArray(table[event]) ? (table[event] as unknown[]) : [];
       const handlers = groups.flatMap((g) => (isRecord(g) && (matcher === null ? !('matcher' in g) : g['matcher'] === matcher) && Array.isArray(g['hooks']) ? g['hooks'] : []));
       const ours = handlers.filter((h) => isRecord(h) && h['type'] === 'command' && String(h['command']).includes('dist/hook.js'));
-      say(ours.length === 1 ? 'ok' : 'fail', `hooks.json ${event}${matcher ? ` (${matcher})` : ''}: ${ours.length} command hook(s) → dist/hook.js (expect 1)`);
+      say(ours.length === 1 ? 'ok' : 'fail', `hooks.json ${event}${matcher ? ` (${matcher})` : ' (no matcher)'}: ${ours.length} command hook(s) → dist/hook.js (expect 1)`);
       const timeout = ours[0] && isRecord(ours[0]) ? ours[0]['timeout'] : undefined;
       if (ours.length === 1 && timeout !== NATIVE_HOOK_TIMEOUT_MS / 1000) say('warn', `${event} hook timeout ${String(timeout)}s (design assumes ${NATIVE_HOOK_TIMEOUT_MS / 1000}s)`);
     }
@@ -69,9 +81,9 @@ const checkPluginFiles = (): void => {
   }
   const agentsDir = join(root, 'agents');
   const files = existsSync(agentsDir) ? readdirSync(agentsDir).filter((f) => f.endsWith('.md')) : [];
-  if (files.some((f) => !['worker.md', 'planner.md'].includes(f))) say('warn', `agents/ contains extra definitions (${files.join(', ')}); only worker.md and planner.md are the V4 roles`);
-  const expectations: Record<string, { model: string; tools: string[] }> = { 'worker.md': { model: 'sonnet', tools: ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'Bash'] }, 'planner.md': { model: 'opus', tools: ['Read', 'Grep', 'Glob'] } };
-  for (const [file, exp] of Object.entries(expectations)) {
+  const extra = files.filter((f) => !(f in AGENT_EXPECTATIONS));
+  if (extra.length) say('warn', `agents/ contains extra definitions (${extra.join(', ')}); only the six owned profiles are V5 roles`);
+  for (const [file, exp] of Object.entries(AGENT_EXPECTATIONS)) {
     const p = join(agentsDir, file);
     if (!existsSync(p)) continue;
     const fm = parseFrontmatter(readFileSync(p, 'utf8'));
@@ -85,26 +97,31 @@ const checkPluginFiles = (): void => {
     const problems: string[] = [];
     if (fm.fields['name'] !== name) problems.push(`name=${fm.fields['name'] ?? 'missing'}`);
     if (fm.fields['model'] !== exp.model) problems.push(`model=${fm.fields['model'] ?? 'missing'} (expected ${exp.model})`);
+    if (exp.effort !== null && fm.fields['effort'] !== exp.effort) problems.push(`effort=${fm.fields['effort'] ?? 'missing'} (expected ${exp.effort})`);
+    if (exp.effort === null && 'effort' in fm.fields) problems.push(`effort=${String(fm.fields['effort'])} (this profile inherits the session effort)`);
     if (tools.join(',') !== exp.tools.join(',')) problems.push(`tools=${tools.join(',') || 'missing'}`);
+    if (fm.fields['background'] !== 'false') problems.push('background must be false');
     if (!disallowed.includes('Agent') || !disallowed.includes('SendMessage')) problems.push('disallowedTools must include Agent and SendMessage');
     for (const ignored of ['permissionMode', 'hooks', 'mcpServers']) if (ignored in fm.fields) problems.push(`${ignored} is ignored for plugin agents`);
-    say(problems.length ? 'fail' : 'ok', `agents/${file}: jev-gate:${name} model=${exp.model} tools=[${exp.tools.join(',')}] no Agent/SendMessage${problems.length ? ` — ${problems.join('; ')}` : ''}`);
+    say(problems.length ? 'fail' : 'ok', `agents/${file}: jev-gate:${name} model=${exp.model} effort=${exp.effort ?? 'inherited'} tools=[${exp.tools.join(',')}] no Agent/SendMessage${problems.length ? ` — ${problems.join('; ')}` : ''}`);
   }
+  say('info', 'effort support unverified for haiku: worker-fast declares effort: low, but no child-context probe has shown CLAUDE_EFFORT for that model (A8)');
 };
 
 const checkConfig = (): void => {
   const loaded = loadConfig(process.env);
   if (!loaded.ok) {
     say('fail', `config invalid (${loaded.source}): ${loaded.error.split('\n')[0]}; the hook preserves native behavior until this is fixed`);
-    if (/V3 layout/.test(loaded.error)) say('info', `V4 config sample (write a new file; the plugin never rewrites yours):\n${MIGRATION_SAMPLE}`);
+    if (/pre-V5 layout|version must be 5|unknown tiers/.test(loaded.error)) say('info', `V5 config sample (write a new file; the plugin never rewrites yours):\n${MIGRATION_SAMPLE}`);
     return;
   }
   const c = loaded.config;
-  say('ok', `config ${loaded.source}: mode=${c.mode} jevModel=${c.jevModel} deadline=${c.requestDeadlineMs}ms floor=${c.routeConfidenceFloor} models=${JSON.stringify(c.models)}`);
-  if (c.mode === 'off') say('info', 'mode=off: no coordinator guidance, no Jev, no trace writes. Loaded agent definitions still exist; remove the plugin for the absent-plugin condition');
-  if (c.mode === 'native') say('info', 'mode=native: coordinator guidance + owned roles, no Jev request');
-  if (c.mode === 'auto') say('info', 'mode=auto: eligible new jev-gate:worker/planner calls send the delegated prompt and description to TypeSafe (may include source excerpts and prior constraints)');
-  if (process.env['JEV_GATE_EXPERIMENT_ALLOCATION']) say('warn', 'JEV_GATE_EXPERIMENT_ALLOCATION is set: the benchmark fixed-role control replaces the native allocation sentence');
+  say('ok', `config ${loaded.source}: mode=${c.mode} jevModel=${c.jevModel} deadline=${c.requestDeadlineMs}ms floors={admission:${c.admissionConfidenceFloor},route:${c.routeConfidenceFloor},result:${c.resultConfidenceFloor}} plannerDefaultTier=${c.plannerDefaultTier} models=${JSON.stringify(c.models)} maxParallelWorkers=${c.maxParallelWorkers} guardAllowTools=${JSON.stringify(c.guardAllowTools)}`);
+  if (c.mode === 'off') say('info', 'mode=off: no guidance, no Jev, no job state, no trace writes. Loaded agent definitions still exist; remove the plugin for the absent-plugin condition');
+  if (c.mode === 'native') say('info', 'mode=native: guidance + owned profiles + job state and guard when orchestration starts, no Jev request');
+  if (c.mode === 'auto') say('info', 'mode=auto: admission, allocation and result gates send the request, the planned task and the worker reply to TypeSafe (may include source excerpts and prior constraints)');
+  say('info', `job state directory: ${jobsDir(process.env)} (0700, one 0600 file per session, removed after 7 days)`);
+  if (process.env['JEV_GATE_EXPERIMENT_ADMISSION'] === 'orchestrated') say('warn', `JEV_GATE_EXPERIMENT_ADMISSION=orchestrated is set: every prompt starts an orchestrated job in ${c.mode} mode without a Gate A request (recorded as forced/admission_forced); allocation and result gates are unaffected`);
 };
 
 const checkClaude = (): void => {
@@ -113,7 +130,7 @@ const checkClaude = (): void => {
     say('warn', `claude CLI not runnable (${version.error ?? `exit ${String(version.status)}`}); install/login is the user's step`);
     return;
   }
-  say('ok', `claude ${version.stdout.trim()} (V4 host checks recorded on 2.1.274/2.1.275; a version string alone is not proof of patch support)`);
+  say('ok', `claude ${version.stdout.trim()} (V5 host checks recorded on 2.1.275; a version string alone is not proof of patch support)`);
   const parsed = parseAuthStatus(runCommand('claude', ['auth', 'status']));
   if (!parsed.ok) {
     say('warn', `auth unverified: ${parsed.reason}`);
@@ -168,8 +185,8 @@ const main = (): void => {
   checkClaude();
   checkEnv();
   checkUserSettings();
-  say('info', 'in Claude Code: /hooks should list four jev-gate entries (UserPromptSubmit, PreToolUse/PostToolUse/PostToolUseFailure on ^Agent$); the @agent- typeahead should show jev-gate:worker and jev-gate:planner once each');
-  say('info', `start: JEV_GATE_MODE=auto CLAUDE_CODE_FORK_SUBAGENT=0 CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude --model sonnet --plugin-dir "${root}"  (doctor performed no inference; a passing doctor is not proof of patch support or model access)`);
+  say('info', `in Claude Code: /hooks should list five jev-gate entries (UserPromptSubmit, PreToolUse with no matcher, PostToolUse/PostToolUseFailure on ^Agent$, Stop); the @agent- typeahead should show ${Object.keys(OWNED_AGENTS).join(', ')} once each`);
+  say('info', `start: JEV_GATE_MODE=auto CLAUDE_CODE_FORK_SUBAGENT=0 CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude --model sonnet --plugin-dir "${root}"  (doctor performed no inference; a passing doctor is not proof of patch support, effort support or model access)`);
   for (const [level, text] of lines) process.stdout.write(`[${level}] ${text}\n`);
   process.exitCode = lines.some(([l]) => l === 'fail') ? 1 : 0;
 };

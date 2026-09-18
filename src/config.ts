@@ -2,41 +2,68 @@ import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import type { ConfigV4, Mode, Tier } from './types.js';
-import { MODES, TIERS } from './types.js';
+import type { ConfigV5, Mode, PlannerTier, Tier } from './types.js';
+import { MODES, PLANNER_TIERS, TIERS } from './types.js';
 
-export const DEFAULT_CONFIG: ConfigV4 = {
-  version: 4,
+export const DEFAULT_CONFIG: ConfigV5 = {
+  version: 5,
   mode: 'off',
   jevModel: 'jev-1.13.0',
   requestDeadlineMs: 3000,
+  admissionConfidenceFloor: 0.8,
   routeConfidenceFloor: 0.8,
-  models: { sonnet: 'sonnet', opus: 'opus', fable: 'fable' },
+  resultConfidenceFloor: 0.8,
+  plannerDefaultTier: 'deep',
+  models: { fast: 'haiku', standard: 'sonnet', deep: 'opus', frontier: 'fable' },
+  maxParallelWorkers: 3,
+  guardAllowTools: [],
 };
 
-/** hooks/hooks.json declares timeout 5; the internal HTTP deadline must leave headroom under it. */
+/**
+ * hooks/hooks.json declares timeout 5, and a PreToolUse killed at that timeout fails open, so the whole dispatch has to
+ * fit inside 5000 ms: node startup (~150 ms) + at most two lock acquisitions (2 x 300 ms deadline, A7) + one HTTP call
+ * + state writes. 3500 ms of HTTP leaves ~1050 ms for everything else.
+ */
 export const NATIVE_HOOK_TIMEOUT_MS = 5000;
-export const MAX_REQUEST_DEADLINE_MS = 4000;
+export const MAX_REQUEST_DEADLINE_MS = 3500;
+export const MAX_PARALLEL_WORKERS_LIMIT = 16;
 /** Trusted model identifiers only: no whitespace, shell characters or free text reach the host or the API. */
 export const MODEL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+export const TOOL_NAME_RE = /^[A-Za-z_][A-Za-z0-9_:-]{0,63}$/;
 
-const V4_KEYS = new Set<string>(['version', 'mode', 'jevModel', 'requestDeadlineMs', 'routeConfidenceFloor', 'models']);
-const V3_MARKERS = ['uncertainTier', 'opusModel', 'frontierModel'];
+const V5_KEYS = new Set<string>([
+  'version',
+  'mode',
+  'jevModel',
+  'requestDeadlineMs',
+  'admissionConfidenceFloor',
+  'routeConfidenceFloor',
+  'resultConfidenceFloor',
+  'plannerDefaultTier',
+  'models',
+  'maxParallelWorkers',
+  'guardAllowTools',
+]);
+const LEGACY_MARKERS = ['uncertainTier', 'opusModel', 'frontierModel', 'confidenceFloor'];
+const FLOOR_KEYS = ['admissionConfidenceFloor', 'routeConfidenceFloor', 'resultConfidenceFloor'] as const;
 
 export const MIGRATION_SAMPLE = `{
-  "version": 4,
+  "version": 5,
   "mode": "off",
   "jevModel": "jev-1.13.0",
   "requestDeadlineMs": 3000,
+  "admissionConfidenceFloor": 0.8,
   "routeConfidenceFloor": 0.8,
-  "models": { "sonnet": "sonnet", "opus": "opus", "fable": "fable" }
+  "resultConfidenceFloor": 0.8,
+  "plannerDefaultTier": "deep",
+  "models": { "fast": "haiku", "standard": "sonnet", "deep": "opus", "frontier": "fable" },
+  "maxParallelWorkers": 3,
+  "guardAllowTools": []
 }`;
 
 export type Env = Record<string, string | undefined>;
 
-export type ConfigResult =
-  | { ok: true; config: ConfigV4; source: string }
-  | { ok: false; error: string; source: string };
+export type ConfigResult = { ok: true; config: ConfigV5; source: string } | { ok: false; error: string; source: string };
 
 export const resolveConfigPath = (env: Env): string =>
   env['JEV_GATE_CONFIG'] && env['JEV_GATE_CONFIG'].length > 0
@@ -45,14 +72,18 @@ export const resolveConfigPath = (env: Env): string =>
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
-export const validateConfig = (raw: unknown): { ok: true; config: ConfigV4 } | { ok: false; error: string } => {
+/** V5 sends more data to TypeSafe than V4 did, so a V3/V4 file is rejected with a sample rather than reinterpreted (D11). */
+export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | { ok: false; error: string } => {
   if (!isRecord(raw)) return { ok: false, error: 'config must be a JSON object' };
-  const v3 = V3_MARKERS.filter((k) => k in raw);
-  if (raw['version'] === 3 || v3.length > 0 || raw['mode'] === 'enrich') {
-    return { ok: false, error: `config uses the V3 layout (version=${String(raw['version'])}${v3.length ? `, keys ${v3.join(',')}` : ''}${raw['mode'] === 'enrich' ? ', mode enrich' : ''}); V4 reads only {"version":4,...} and does not merge V3 fields. Sample:\n${MIGRATION_SAMPLE}` };
+  const legacy = LEGACY_MARKERS.filter((k) => k in raw);
+  if (raw['version'] === 3 || raw['version'] === 4 || legacy.length > 0 || raw['mode'] === 'enrich') {
+    return {
+      ok: false,
+      error: `config uses a pre-V5 layout (version=${String(raw['version'])}${legacy.length ? `, keys ${legacy.join(',')}` : ''}${raw['mode'] === 'enrich' ? ', mode enrich' : ''}); V5 reads only {"version":5,...} and does not merge older fields. Sample:\n${MIGRATION_SAMPLE}`,
+    };
   }
-  if (raw['version'] !== 4) return { ok: false, error: `config version must be 4 (got ${String(raw['version'])})` };
-  const unknown = Object.keys(raw).filter((k) => !V4_KEYS.has(k));
+  if (raw['version'] !== 5) return { ok: false, error: `config version must be 5 (got ${String(raw['version'])}). Sample:\n${MIGRATION_SAMPLE}` };
+  const unknown = Object.keys(raw).filter((k) => !V5_KEYS.has(k));
   if (unknown.length) return { ok: false, error: `unknown config keys: ${unknown.join(',')}` };
   const c: Record<string, unknown> = { ...DEFAULT_CONFIG, ...raw };
   const mode = c['mode'];
@@ -63,12 +94,20 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV4 } | {
   if (typeof deadline !== 'number' || !Number.isFinite(deadline) || deadline <= 0 || deadline > MAX_REQUEST_DEADLINE_MS) {
     return { ok: false, error: `requestDeadlineMs must be in (0, ${MAX_REQUEST_DEADLINE_MS}] under the ${NATIVE_HOOK_TIMEOUT_MS}ms native hook timeout` };
   }
-  const floor = c['routeConfidenceFloor'];
-  if (typeof floor !== 'number' || !Number.isFinite(floor) || floor < 0 || floor > 1) return { ok: false, error: 'routeConfidenceFloor must be a finite number in [0, 1]' };
+  const floors: Record<string, number> = {};
+  for (const key of FLOOR_KEYS) {
+    const v = c[key];
+    if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0 || v > 1) return { ok: false, error: `${key} must be a finite number in (0, 1]` };
+    floors[key] = v;
+  }
+  const plannerDefaultTier = c['plannerDefaultTier'];
+  if (typeof plannerDefaultTier !== 'string' || !PLANNER_TIERS.includes(plannerDefaultTier as PlannerTier)) {
+    return { ok: false, error: 'plannerDefaultTier must be deep|frontier' };
+  }
   const modelsRaw = c['models'];
-  if (!isRecord(modelsRaw)) return { ok: false, error: 'models must be an object with sonnet/opus/fable' };
+  if (!isRecord(modelsRaw)) return { ok: false, error: 'models must be an object with fast/standard/deep/frontier' };
   const extra = Object.keys(modelsRaw).filter((k) => !(TIERS as readonly string[]).includes(k));
-  if (extra.length) return { ok: false, error: `models has unknown tiers: ${extra.join(',')}` };
+  if (extra.length) return { ok: false, error: `models has unknown tiers: ${extra.join(',')}. Sample:\n${MIGRATION_SAMPLE}` };
   const models = { ...DEFAULT_CONFIG.models } as Record<Tier, string>;
   for (const tier of TIERS) {
     if (!(tier in modelsRaw)) continue;
@@ -76,12 +115,35 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV4 } | {
     if (typeof id !== 'string' || !MODEL_NAME_RE.test(id)) return { ok: false, error: `models.${tier} must match ${MODEL_NAME_RE.source}` };
     models[tier] = id;
   }
-  return { ok: true, config: { version: 4, mode: mode as Mode, jevModel, requestDeadlineMs: deadline, routeConfidenceFloor: floor, models } };
+  const cap = c['maxParallelWorkers'];
+  if (typeof cap !== 'number' || !Number.isInteger(cap) || cap < 1 || cap > MAX_PARALLEL_WORKERS_LIMIT) {
+    return { ok: false, error: `maxParallelWorkers must be an integer in [1, ${MAX_PARALLEL_WORKERS_LIMIT}]` };
+  }
+  const allow = c['guardAllowTools'];
+  if (!Array.isArray(allow) || allow.some((t) => typeof t !== 'string' || !TOOL_NAME_RE.test(t))) {
+    return { ok: false, error: `guardAllowTools must be an array of tool names matching ${TOOL_NAME_RE.source}` };
+  }
+  return {
+    ok: true,
+    config: {
+      version: 5,
+      mode: mode as Mode,
+      jevModel,
+      requestDeadlineMs: deadline,
+      admissionConfidenceFloor: floors['admissionConfidenceFloor'] as number,
+      routeConfidenceFloor: floors['routeConfidenceFloor'] as number,
+      resultConfidenceFloor: floors['resultConfidenceFloor'] as number,
+      plannerDefaultTier: plannerDefaultTier as PlannerTier,
+      models,
+      maxParallelWorkers: cap,
+      guardAllowTools: allow as string[],
+    },
+  };
 };
 
 /**
  * Explicit JEV_GATE_MODE=off returns before any file is read, so a broken config can never enable routing.
- * Otherwise the optional file is loaded and validated as V4 only; JEV_GATE_MODE overrides just the mode.
+ * Otherwise the optional file is loaded and validated as V5 only; JEV_GATE_MODE overrides just the mode.
  */
 export const loadConfig = (env: Env, readFile: (path: string) => string = (p) => readFileSync(p, 'utf8')): ConfigResult => {
   const modeEnv = env['JEV_GATE_MODE'];
@@ -96,7 +158,7 @@ export const loadConfig = (env: Env, readFile: (path: string) => string = (p) =>
     if (code !== 'ENOENT' && code !== 'ENOTDIR') return { ok: false, error: `cannot read config: ${code ?? 'unknown'}`, source: path };
     if (env['JEV_GATE_CONFIG']) return { ok: false, error: 'JEV_GATE_CONFIG points to a missing file', source: path };
   }
-  let base: ConfigV4 = DEFAULT_CONFIG;
+  let base: ConfigV5 = DEFAULT_CONFIG;
   let source = 'defaults';
   if (text !== null) {
     let parsed: unknown;

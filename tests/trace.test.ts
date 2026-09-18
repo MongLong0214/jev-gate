@@ -15,17 +15,17 @@ describe('openTraceDir', () => {
     expect(opened.ok).toBe(true);
     if (!opened.ok) return;
     if (process.platform !== 'win32') expect(statSync(dir).mode & 0o777).toBe(0o700);
-    const r1 = opened.writer.write('pre_intent', { session_id: 's', tool_use_id: 't', caller: { agent_id: null, agent_type: null } });
+    const r1 = opened.writer.write('admission_intent', { session_id: 's', tool_use_id: 't', caller: { agent_id: null, agent_type: null } });
     const r2 = opened.writer.write('pre_result', { session_id: 's', tool_use_id: 't', caller: { agent_id: null, agent_type: null } });
     expect(r1.ok && r2.ok).toBe(true);
     const files = readdirSync(dir).sort();
     expect(files).toHaveLength(2);
-    expect(files.every((f) => /^(pre_intent|pre_result)-[0-9a-f-]{36}\.json$/.test(f))).toBe(true);
+    expect(files.every((f) => /^(admission_intent|pre_result)-[0-9a-f-]{36}\.json$/.test(f))).toBe(true);
     expect(files.some((f) => f.endsWith('.tmp'))).toBe(false);
     for (const f of files) {
       if (process.platform !== 'win32') expect(statSync(join(dir, f)).mode & 0o777).toBe(0o600);
       const body = JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>;
-      expect(body).toMatchObject({ version: 4, session_id: 's', tool_use_id: 't' });
+      expect(body).toMatchObject({ version: 5, session_id: 's', tool_use_id: 't' });
       expect(typeof body['invocation_id']).toBe('string');
       expect(f).toContain(String(body['invocation_id']));
     }

@@ -3,14 +3,25 @@ import { lstatSync, mkdirSync, openSync, closeSync, writeSync, renameSync, fsync
 import { join } from 'node:path';
 
 /**
- * Opt-in local recorder (#14 §2). Writes one private file per phase with random names, atomically (tmp + rename).
+ * Opt-in local recorder (#14 §2, A13). Writes one private file per phase with random names, atomically (tmp + rename).
  * Records carry their own join keys (session_id, caller, tool_use_id); filenames are never identities.
  * Refuses a symlinked trace directory. Never receives keys, headers or environment dumps: callers whitelist fields.
  */
-export type TracePhase = 'prompt' | 'pre_intent' | 'pre_result' | 'post' | 'failure';
+export type TracePhase =
+  | 'admission_intent'
+  | 'admission_result'
+  | 'guard'
+  | 'pre_intent'
+  | 'pre_result'
+  | 'post'
+  | 'result_intent'
+  | 'result_result'
+  | 'failure'
+  | 'plan'
+  | 'stop';
 
 export interface TraceRecordBase {
-  version: 4;
+  version: 5;
   phase: TracePhase;
   invocation_id: string;
   written_at: string;
@@ -47,7 +58,7 @@ export const openTraceDir = (dir: string): { ok: true; writer: TraceWriter } | {
       try {
         const fd = openSync(tmpPath, 'wx', 0o600);
         try {
-          writeSync(fd, JSON.stringify({ ...body, invocation_id: id, phase, version: 4, written_at: new Date().toISOString() }, null, 2));
+          writeSync(fd, JSON.stringify({ ...body, invocation_id: id, phase, version: 5, written_at: new Date().toISOString() }, null, 2));
           fsyncSync(fd);
         } finally {
           closeSync(fd);

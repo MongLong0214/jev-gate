@@ -9,7 +9,6 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "^Agent$",
         "hooks": [
           { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/hook.js\"", "timeout": 5 }
         ]
@@ -26,6 +25,13 @@
     "PostToolUseFailure": [
       {
         "matcher": "^Agent$",
+        "hooks": [
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/hook.js\"", "timeout": 5 }
+        ]
+      }
+    ],
+    "Stop": [
+      {
         "hooks": [
           { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/hook.js\"", "timeout": 5 }
         ]

@@ -1,0 +1,180 @@
+{
+  "version": 5,
+  "purpose": "development data, not holdout",
+  "items": [
+    {
+      "id": "v4-cart-total",
+      "label": "direct",
+      "group": "v4-job",
+      "prompt": "src/cart.mjs의 cartTotal에 세 가지 문제가 있어: (1) fixed 쿠폰이 subtotal보다 크면 total이 음수가 된다 — discount는 subtotal을 넘지 않고 total은 0 아래로 내려가지 않게 해. (2) 금액은 원 단위 정수여야 하는데 percent 쿠폰과 taxRate 계산에서 소수가 나온다 — discount와 total은 정수로 반올림해. (3) quantity가 정수가 아니거나 음수면 RangeError를 던져야 한다.\ncartTotal(items, options)의 시그니처와 반환 형식 { subtotal, discount, total }, export 이름은 그대로 유지하고 의존성은 추가하지 마.\n세 문제를 각각 재현하는 회귀 테스트를 test/ 에 추가하고(기존 파일에 추가해도 됨) npm test(node --test)로 전체가 통과하는지 확인해."
+    },
+    {
+      "id": "v4-todo-priority",
+      "label": "direct",
+      "group": "v4-job",
+      "prompt": "이 todo 앱(src/model.mjs, src/serialize.mjs, src/view.mjs)에 우선순위 기능을 추가해.\n- model: 각 항목에 priority 필드('low' | 'normal' | 'high', 기본 'normal'). add(title, priority?)로 지정하고 setPriority(id, priority)로 변경. 잘못된 값은 RangeError.\n- serialize: 저장 형식을 새 버전으로 올리고 priority를 포함해. 기존 version 1 데이터는 deserialize에서 계속 읽히되 priority는 'normal'로 마이그레이션해야 한다.\n- view: renderList는 high → normal → low 순으로, 같은 우선순위 안에서는 기존 입력 순서를 유지해 출력하고, normal이 아닌 항목만 제목 앞에 \"(high) \" 또는 \"(low) \" 표시를 붙여. 기존 \"[x] \"/\"[ ] \" 표기는 유지.\nexport 이름과 기존 함수 시그니처는 호환되게 유지하고 의존성은 추가하지 마. 기존 테스트(npm test)가 계속 통과해야 하고, 마이그레이션·정렬·표시를 검증하는 테스트를 추가해."
+    },
+    {
+      "id": "v4-space-sim",
+      "label": "direct",
+      "group": "v4-job",
+      "prompt": "이 작은 브라우저 우주 시뮬레이션(index.html + src/sim.mjs)을 플레이 가능하게 확장해. 브라우저 도구 없이 node --test로 검증 가능한 순수 모듈 API가 핵심이다.\n1. src/sim.mjs: createSimulation의 기존 step(dtMs)/state() API와 기존 테스트는 유지하면서, 결정론적 시뮬레이션 시간 드라이버 advance(realDeltaMs)를 추가해. 고정 서브스텝(예: 10ms)으로 진행하고 timeScale을 곱해 적용하며, paused 상태에서는 시간이 전혀 진행되지 않아야 한다. pause()/resume()/togglePause()/setTimeScale(s) (s는 양의 유한수, 아니면 RangeError)를 제공하고 state()에 paused와 timeScale을 포함해. 같은 입력·같은 advance 호출 순서는 항상 같은 상태를 만들어야 한다.\n2. src/camera.mjs(새 파일): createCamera({ viewportWidth, viewportHeight, x?, y?, zoom? })가 pan(dxScreen, dyScreen), zoomBy(factor, anchorScreen?), worldToScreen({x,y}), screenToWorld({x,y}), state()를 제공하고 worldToScreen과 screenToWorld는 서로 역함수여야 한다.\n3. src/hud.mjs(새 파일): renderHud(simState, selectedId?)가 시뮬레이션 시간, timeScale, 일시정지 여부, 천체 수, 선택된 천체의 id와 속력을 담은 텍스트를 반환.\n4. index.html을 새 API에 연결해(키보드 space=pause, +/-=timeScale, 드래그=pan, 휠=zoom, HUD 표시). 브라우저 동작은 자동 검증 대상이 아니지만 index.html은 유효하게 유지해.\n의존성 추가 금지. 새 기능을 검증하는 테스트를 test/ 에 추가하고 npm test가 통과하는지 확인해."
+    },
+    {
+      "id": "v4-job-queue",
+      "label": "direct",
+      "group": "v4-job",
+      "prompt": "src/queue.mjs의 createQueue에 비동기 버그가 있다: 작업 함수가 실패(reject 또는 동기 throw)하면 그 오류가 어디로도 전달되지 않고 running 카운터가 줄지 않아 큐가 멈춘다. 원인을 조사하고 고쳐줘.\n요구: enqueue(fn)이 반환하는 promise는 fn의 원래 오류로 reject되어야 하고(동기 throw 포함), 실패 후에도 큐는 다음 작업을 계속 실행해야 하며, createQueue({ concurrency, onError })의 선택 인자 onError(error, jobId)가 실패마다 호출되어야 하고, drain()은 실패한 작업까지 모두 끝난 뒤 resolve되어야 하며, 동시성 제한은 유지되어야 한다.\ncreateQueue/enqueue/size/drain의 기존 시그니처는 호환되게 유지하고 의존성은 추가하지 마. 오류 전파와 계속 실행을 재현하는 회귀 테스트를 test/ 에 추가하고 npm test(node --test)가 통과하는지 확인해."
+    },
+    {
+      "id": "new-orbit-core",
+      "label": "orchestrated",
+      "group": "new-job",
+      "prompt": "2D 중력 시뮬레이션의 계산 코어를 src/ 아래 7개 ESM 모듈로 완성해. 렌더링과 입력 처리는 범위 밖이고, 전부 node --test로 검증되는 순수 모듈이어야 한다. 단위는 SI(m, kg, s, N)이고 중력 상수 G는 언제나 호출자가 인자로 넘긴다 — 모듈 안에 상수로 박아두지 마. 의존성 추가 금지.\n천체 표현은 { id: string, mass, x, y, vx, vy, r } 하나로 통일한다(질량 kg, 위치 m, 속도 m/s, 반지름 r은 m).\n\n1) src/clock.js — createClock({ stepMs = 16, maxStepsPerAdvance = 8 })가 { advance, pause, resume, setTimeScale, state }를 준다.\n- advance(elapsedMs)는 이번 호출에서 진행한 고정 스텝 수를 반환한다. 일시정지 상태면 0을 반환하고 누적기에 아무것도 더하지 않는다. 그 외에는 elapsedMs × timeScale을 누적기에 더한 뒤, 누적기가 stepMs 이상인 동안 stepMs씩 빼면서 스텝을 세되 한 번의 advance에서 maxStepsPerAdvance를 넘지 않는다. 루프가 끝난 뒤 누적기가 stepMs보다 크면 stepMs로 잘라낸다(긴 멈춤 뒤 밀린 시간이 무한정 쌓이지 않도록). 스텝 1회마다 simTimeMs += stepMs.\n- 숫자 예(stepMs=16, maxStepsPerAdvance=8, timeScale=1): advance(200) → 누적기 200, 상한인 8스텝(128 ms)만 진행하고 8을 반환, simTimeMs=128, 남은 72는 16보다 크므로 16으로 잘린다. 이어서 advance(0) → 1 반환, simTimeMs=144, 누적기 0. 이어서 advance(20) → 1 반환, simTimeMs=160, 누적기 4. 이어서 advance(0) → 0 반환(4는 한 스텝에 못 미친다).\n- setTimeScale(x)의 x는 유한하고 0보다 커야 하며 아니면 RangeError. pause()/resume()는 paused를 바꾼다. state()는 { simTimeMs, accumulatorMs, paused, timeScale }.\n- 스냅샷 복원에 쓰이도록 createClock은 초기 상태(simTimeMs, accumulatorMs, paused, timeScale)도 옵션으로 받을 수 있어야 한다.\n\n2) src/physics.js — stepBodies(bodies, dtSeconds, G), totalEnergy(bodies, G), totalMomentum(bodies).\n- stepBodies는 입력을 건드리지 않고 새 배열을 돌려주는 순수 함수이며, 속도 Verlet(kick-drift-kick)이어야 한다: 현재 위치의 가속도로 v += a·dt/2 → x += v·dt → 새 위치의 가속도로 v += a'·dt/2.\n- 가속도는 뉴턴 중력 그대로 쓰고 softening(엡실론·최소거리 clamp) 금지: a_i = Σ_{j≠i} G·m_j·(r_j − r_i) / |r_j − r_i|³.\n- totalEnergy = Σ ½·m·|v|² − Σ_{i<j} G·m_i·m_j / d_ij. totalMomentum = Σ m·v를 { x, y }로.\n- 검증에 쓰는 초기 조건: m1=1e12 kg, m2=1e3 kg, 중심간 거리 r=1000 m인 두 천체를 무게중심계에 두고 정확한 원궤도 속도를 준다(상대속도 √(G·(m1+m2)/r)를 질량비로 나눠 배분, 반지름은 각각 1 m라 충돌하지 않는다). 이 상태에서 dt=1 s로 20 000 스텝 진행했을 때 총 에너지의 상대 변화가 1e-4 미만이어야 한다. 또 20 000 스텝 진행 → 모든 속도의 부호를 뒤집고 다시 20 000 스텝 진행하면 출발 위치로 r 대비 1e-6 이내로 돌아와야 한다(시간 대칭).\n- 에너지 보존 요구는 충돌이 없는 시나리오에만 해당한다. 병합은 비탄성이라 에너지가 줄어드는 것이 정상이고, 병합에서 지켜야 하는 것은 질량과 운동량이다.\n\n3) src/collisions.js — mergeCollisions(bodies)가 새 배열을 돌려준다.\n- 두 천체의 중심 거리가 r1+r2보다 작으면 겹친 것으로 본다. 겹침 관계는 입력 시점 좌표로 한 번에 계산하고, 그 그래프의 연결 요소를 한 번의 호출에서 통째로 합친다(A-B와 B-C가 겹치면 A-C가 안 겹쳐도 셋이 하나가 된다).\n- 합쳐진 천체: mass = 질량 합, 위치 = 질량 가중 무게중심, 속도 = 운동량 합 ÷ 질량 합, r = √(Σ r_i²), id = 가장 무거운 구성원의 id(질량이 같으면 사전순으로 앞선 id).\n- 결과는 입력 배열의 순서에 의존하지 않아야 한다. 부동소수점까지 같게 하려면 합산을 항상 id 오름차순으로 수행하고, 반환 배열도 id 오름차순으로 정렬한다.\n\n4) src/snapshot.js — serialize({ clock, bodies }) → 문자열, restore(text) → { clock, bodies }.\n- 형식은 { version: 1, clock: { simTimeMs, accumulatorMs, paused, timeScale }, bodies: [{ id, mass, x, y, vx, vy, r }] } 하나뿐이다.\n- 왕복은 double 비트까지 정확해야 한다(Object.is 기준으로 같아야 하고, serialize(restore(t))는 t와 같은 문자열).\n- 스키마는 닫혀 있다: 최상위·clock·개별 천체 어디든 정의되지 않은 필드가 있거나, 필드가 빠졌거나, 타입이 틀렸거나, JSON 파싱이 실패하면 name이 'SnapshotError'인 Error를 던진다.\n\n5) src/camera.js — createCamera({ cx, cy, zoom, viewportW, viewportH }), worldToScreen(cam, p), screenToWorld(cam, p), zoomAt(cam, screenPoint, factor), pan(cam, dx, dy).\n- cx, cy는 화면 정중앙에 오는 월드 좌표다. worldToScreen(cam, p) = (p − 중심) × zoom + 뷰포트/2이고 두 축 모두 같은 방향(화면 y 뒤집기 없음).\n- screenToWorld는 worldToScreen의 역함수여야 한다: 어느 쪽으로 왕복해도 오차 1e-9 이내.\n- zoomAt은 zoom이 factor배가 된 새 카메라를 돌려주되, screenPoint 아래 있던 월드 좌표가 그대로 screenPoint에 남아야 한다(커서 고정 확대). factor는 유한하고 0보다 커야 하며 아니면 RangeError.\n- pan(cam, dx, dy)는 카메라 중심을 화면 픽셀 기준 dx, dy만큼 옮긴다 — 같은 월드 점의 화면 좌표는 (−dx, −dy)만큼 움직인다.\n- 다섯 함수 모두 받은 카메라를 변형하지 않고 새 객체를 돌려준다.\n\n6) src/hud.js — formatHud({ simTimeMs, timeScale, paused, bodyCount, energy })가 정확히 다음 한 줄을 돌려준다:\n`T+HH:MM:SS.mmm x<소수 1자리> <PAUSED|RUNNING> bodies=<개수> E=<지수표기 소수 3자리>`\n- HH는 0 패딩 두 자리 이상(일 단위로 넘기지 않고 시간이 계속 누적된다), MM·SS는 두 자리, mmm은 세 자리. timeScale은 소수점 1자리 고정. energy는 JS toExponential(3)과 같은 지수표기(1.234e+5, -1.234e+5, 6.674e-11).\n- 예: { simTimeMs: 83456, timeScale: 2, paused: true, bodyCount: 12, energy: -123400 } → `T+00:01:23.456 x2.0 PAUSED bodies=12 E=-1.234e+5`.\n\n7) src/simulation.js — createSimulation({ bodies, G, stepMs = 16, maxStepsPerAdvance = 8 })가 { advance, snapshot, restoreFrom, bodies, clock }를 준다.\n- advance(elapsedMs)는 시계에서 받은 스텝 수만큼, 한 스텝마다 stepBodies(…, stepMs/1000, G)를 적용하고 이어서 mergeCollisions를 적용한 뒤 진행한 스텝 수를 반환한다.\n- snapshot()은 serialize 문자열, restoreFrom(text)는 시계와 천체를 그 스냅샷 상태로 되돌린다. bodies()는 현재 천체 배열의 사본, clock()은 현재 시계 객체(pause/resume/setTimeScale/state를 그대로 쓴다).\n- 결정론의 뜻은 double 비트까지 같다는 것이다: 같은 초기 입력과 같은 advance 호출 순서는 10 000 스텝 뒤에도 항상 같은 결과를 낸다. 스냅샷에서 복원해 이어 돌린 결과 역시 중단 없이 돌린 결과와 비트까지 같아야 한다.\n\n기존 test/ 의 테스트는 지금 일부가 실패한다 — 고친 뒤 전부 통과해야 한다. 새 동작(시계 누적·일시정지, 에너지·시간 대칭, 병합 보존, 스냅샷 왕복, 카메라 역변환, HUD 문자열, 복원 후 이어 돌리기)을 검증하는 테스트를 test/ 에 추가하고 npm test(node --test)로 전체가 통과하는지 확인해."
+    },
+    {
+      "id": "new-mini-sql",
+      "label": "orchestrated",
+      "group": "new-job",
+      "prompt": "의존성 없는 인메모리 SQL 질의 엔진을 완성해줘. 시작 코드(src/lexer.js, src/parser.js, src/executor.js, src/db.js, src/format.js)는 아주 단순한 질의만 겨우 처리하고 그마저도 틀린 곳이 있다. Node 22 ESM으로 작성하고 의존성은 추가하지 마. 아래 문법과 의미 규칙을 그대로 구현해야 한다.\n\n## 모듈\n\n1. src/errors.js (새 파일)\n- SqlSyntaxError(message, position): Error 상속, name은 'SqlSyntaxError', position은 문제가 된 지점의 0-기준 문자 인덱스.\n- SqlSemanticError(message): Error 상속, name은 'SqlSemanticError'.\n\n2. src/lexer.js — tokenize(sql)는 토큰 배열을 돌려준다. 토큰은 { type, value, pos }이고 type은 'ident' | 'number' | 'string' | 'op' | 'keyword' | 'punct', pos는 토큰 첫 글자의 인덱스.\n- 키워드는 대소문자를 가리지 않고(select, SeLeCt 모두 keyword) value는 대문자로 정규화한다. 키워드는 SELECT FROM AS JOIN ON WHERE GROUP BY ORDER ASC DESC LIMIT AND OR NOT IS NULL 뿐이다.\n- 식별자는 [A-Za-z_][A-Za-z0-9_]* 이고 value는 원문 그대로 둔다. COUNT SUM AVG MIN MAX는 키워드가 아니라 식별자다.\n- 문자열은 작은따옴표로 감싸고, 안에서 작은따옴표 두 개는 한 개를 뜻한다('it''s' → it's). 닫히지 않으면 SqlSyntaxError이고 position은 여는 따옴표 위치.\n- 숫자는 정수와 소수를 모두 Number로 만든다(12, 1.5).\n- op는 = <> < <= > >= + - * / 이고 punct는 ( ) , . 이다.\n- 그 밖의 문자를 만나면 SqlSyntaxError이고 position은 그 문자의 인덱스.\n\n3. src/parser.js — parse(sql)는 AST를 돌려준다. 받아들이는 문법은 다음 하나뿐이다.\n  SELECT (* | 항목 (, 항목)*) FROM 테이블 [AS 별칭] (JOIN 테이블 [AS 별칭] ON 식)* [WHERE 식] [GROUP BY 컬럼 (, 컬럼)*] [ORDER BY 식 [ASC|DESC] (, 식 [ASC|DESC])*] [LIMIT 정수]\n- 항목은 '식 [AS 별칭]'. 별칭은 반드시 AS와 함께 쓴다(FROM users u 같은 표기는 구문 오류).\n- 식에 올 수 있는 것: 컬럼(name 또는 t.name), 숫자/문자열/NULL 리터럴, 산술 + - * /, 괄호, 비교 = <> < <= > >=, AND OR NOT, IS NULL / IS NOT NULL, 집계 COUNT(*) COUNT(식) SUM(식) AVG(식) MIN(식) MAX(식).\n- 우선순위는 높은 쪽부터 괄호 > 단항 - > * / > + - > 비교와 IS [NOT] NULL > NOT > AND > OR. 비교는 연쇄할 수 없어서 a = b = c는 구문 오류다.\n- LIMIT 뒤에는 0 이상의 정수 리터럴만 온다.\n- AST 모양: { type:'select', star, items:[{ expr, alias }], from:{ table, alias }, joins:[{ table, alias, on }], where, groupBy:[컬럼식], orderBy:[{ expr, dir }], limit }. star가 true면 items는 빈 배열이고, 없는 절은 alias/where/limit는 null, 나머지는 빈 배열이다. dir은 'ASC' 또는 'DESC'이며 생략하면 'ASC'.\n- 식 노드: { type:'column', table, name }(한정자가 없으면 table은 null), { type:'literal', value }, { type:'binary', op, left, right }, { type:'unary', op, expr }(op는 '-' 또는 'NOT'), { type:'isnull', expr, negated }, { type:'aggregate', fn, arg }(fn은 'COUNT'|'SUM'|'AVG'|'MIN'|'MAX', COUNT(*)의 arg는 null).\n- 모든 구문 오류는 SqlSyntaxError이고 position은 파서가 더 나아갈 수 없게 만든 토큰의 pos, 입력이 끝나버렸으면 sql.length다.\n\n4. src/analyzer.js (새 파일) — analyze(ast, schema). schema는 { 테이블명(소문자): [{ name, type }] } 모양이다. 다음은 모두 SqlSemanticError:\n- 없는 테이블, 없는 컬럼.\n- 두 개 이상의 소스에 있는 컬럼을 한정자 없이 쓴 경우(모호한 컬럼).\n- 같은 이름의 소스가 두 번 등장한 경우(AS로 구분해야 한다).\n- GROUP BY나 집계가 쓰였는데 집계 밖에 있는 컬럼이 GROUP BY 목록에 없는 경우, 그리고 그런 질의에서의 *.\n- WHERE나 ON 안의 집계.\n- ORDER BY의 한정자 없는 이름은 먼저 SELECT 별칭에서 찾고(대소문자 무시) 없으면 컬럼으로 해석한다. 둘 다 아니면 오류다. 별칭이 같은 이름의 컬럼보다 우선한다.\n\n5. src/executor.js — execute(db, ast, options)는 { columns, rows }를 돌려주고 options.explain이 true면 plan도 함께 담는다. rows는 값 배열의 배열, columns는 문자열 배열이다.\n- 컬럼 이름: AS 별칭이 있으면 그 별칭 그대로, 없으면 단순 컬럼은 소문자 컬럼명, 집계는 'count(*)' 'sum(price)' 'avg(u.age)'처럼 함수명 소문자 + 괄호 안 인자를 쓰인 그대로 소문자로(인자가 단순 컬럼이 아니면 expr), 그 밖의 식은 목록에서의 1-기준 위치를 붙여 'expr3'.\n- *는 FROM과 JOIN에 등장한 순서대로 모든 소스의 모든 컬럼으로 펼치고 이름은 컬럼명 그대로 쓴다(이름이 겹쳐도 그대로 둔다).\n- JOIN은 내부 조인만 있다. 결과 순서는 항상 왼쪽 입력 순서, 같은 왼쪽 행 안에서는 오른쪽 입력 순서다. 중복 행은 제거하지 않는다.\n- ON이 'a.x = b.y' 하나의 등가 비교면 해시 조인으로, 행 수가 적은 쪽을 해시로 만들고 많은 쪽으로 훑는다. 그 밖의 ON은 중첩 루프다. 어느 쪽을 해시로 만들었든 결과 순서는 위 규칙과 같아야 한다.\n- plan은 스캔과 조인만 담는다. 기본 스캔은 { op:'seq_scan', table }, WHERE의 최상위 AND 조각 중 'col = 리터럴'이 있고 그 컬럼에 인덱스가 있으면 { op:'index_scan', table, column }이다. 조인은 { op:'hash_join', left, right, on:[왼쪽컬럼, 오른쪽컬럼] } 또는 { op:'nested_loop_join', left, right, on:null }이고 left/right는 각각 하위 plan, on의 컬럼 이름은 'u.id'처럼 (별칭이 없으면 테이블명) + '.' + 컬럼명 소문자이며 왼쪽 입력 쪽을 먼저 적는다. 조인은 왼쪽부터 차례로 접어 올린다.\n- NULL은 3값 논리다. NULL이 낀 비교와 산술은 결과가 미지(NULL)이고, WHERE와 ON은 결과가 참인 행만 남긴다. AND는 한쪽이 거짓이면 거짓, 아니면 미지가 있으면 미지. OR는 한쪽이 참이면 참, 아니면 미지가 있으면 미지. NOT은 미지면 미지. NULL인지 확인하는 방법은 IS NULL / IS NOT NULL뿐이고 이 둘은 언제나 참이나 거짓이다. 논리 연산자에 참/거짓/NULL이 아닌 값이 오면 미지다.\n- 비교는 숫자끼리 또는 문자열끼리만 한다. 문자열은 코드 단위 순서로 비교한다(대문자 'Z'가 소문자 'a'보다 작다). 타입이 다르면 결과는 미지다.\n- 나눗셈은 정수끼리라도 실수 결과를 낸다(5 / 2는 2.5). 0으로 나누면 NULL이다.\n- GROUP BY: 그룹 순서는 첫 등장 순서다. 집계는 NULL을 무시하지만 COUNT(*)는 모든 행을 센다. 행이 하나도 없는 그룹에서 COUNT는 0, SUM/AVG/MIN/MAX는 NULL이다. AVG는 실수를 돌려준다. SUM/AVG는 숫자에만 쓰고 MIN/MAX는 숫자나 문자열에 쓴다. GROUP BY 없이 집계만 쓰면 전체가 한 그룹이고, 걸러진 행이 없어도 결과는 정확히 한 행이다.\n- ORDER BY는 안정 정렬이다. 키가 같으면 들어온 순서를 유지하고, 여러 키는 앞에서부터 차례로 비교한다. NULL은 ASC에서 맨 뒤, DESC에서 맨 앞이다.\n- LIMIT은 정렬이 끝난 뒤에 앞에서부터 자른다.\n\n6. src/db.js — createDatabase()가 다음을 제공한다.\n- createTable(name, columns): columns는 [{ name, type }]이고 type은 'int' | 'float' | 'text'.\n- insert(name, rows): rows는 객체 배열, 빠진 컬럼은 NULL. 없는 테이블/컬럼이거나 타입에 맞지 않는 값이면 SqlSemanticError.\n- createIndex(name, column): 그 컬럼의 값으로 찾을 수 있는 인덱스를 만든다. 이후의 insert도 인덱스에 반영된다.\n- query(sql, options): 파싱하고 검사한 뒤 실행해 execute와 같은 결과를 돌려준다.\n- schema(): { 테이블명(소문자): [{ name, type }] }.\n- 테이블 이름, 컬럼 이름, 별칭은 모두 대소문자를 가리지 않는다(문자열 리터럴 값은 대소문자를 가린다).\n\n7. src/format.js — formatTable({ columns, rows })가 사람이 읽는 표 문자열을 만든다.\n- 첫 줄은 열 이름, 둘째 줄은 각 열 너비만큼의 '-' 반복, 그다음이 각 행, 마지막 줄은 '(N rows)'다(N이 0이나 1이어도 'rows').\n- 열 너비는 이름과 그 열 값들의 표시 길이 중 최대값이고, 열 사이는 공백 두 칸으로 붙인다.\n- NULL이 아닌 값이 하나라도 있고 모두 숫자인 열은 오른쪽 맞춤, 나머지 열은 왼쪽 맞춤이며 머리글도 그 열과 같은 쪽으로 맞춘다.\n- NULL은 'NULL'로 적는다. 실수는 유효숫자 6자리까지만 쓰고 뒤따르는 0은 남기지 않는다(29.333333...은 29.3333, 23.0은 23).\n- 각 줄 끝의 공백은 없애고 줄은 모두 '\\n'으로 끝난다(마지막 줄 포함).\n\n## 지원하지 않는 것\n\n서브쿼리, DISTINCT, HAVING, 외부 조인(LEFT/RIGHT/FULL), LIKE, IN, BETWEEN, UNION, CASE, SQL의 INSERT/UPDATE/DELETE/CREATE, 한 번에 여러 문장, 세미콜론 여러 개. 이런 입력은 구현할 필요 없이 오류로 끝나면 된다.\n\n## 마무리\n\n기존 test/의 테스트가 모두 통과해야 하고, 새로 구현한 동작(조인, 집계, NULL, 정렬, 인덱스, 출력 형식, 오류 위치)을 확인하는 테스트를 test/에 추가해. npm test(node --test)로 전부 통과하는지 확인해."
+    },
+    {
+      "id": "trivial-rename-function",
+      "label": "direct",
+      "group": "trivial",
+      "prompt": "utils.js에 있는 calcTotal 함수 이름을 computeOrderTotal로 바꿔줘. 호출하는 곳들도 같이 바꿔줘."
+    },
+    {
+      "id": "trivial-readme-typos",
+      "label": "direct",
+      "group": "trivial",
+      "prompt": "README.md에 있는 오타/맞춤법 문제 20개를 아래 목록대로 그대로 고쳐줘. 의미나 구조는 바꾸지 말고 표기만 수정해:\n1. 오타 \"설치을\" → \"설치를\"\n2. 오타 \"되요\" → \"돼요\"\n3. 띄어쓰기 \"할수있습니다\" → \"할 수 있습니다\"\n4. 오타 \"몇일\" → \"며칠\"\n5. 오타 \"어떻해\" → \"어떡해\"\n6. 오타 \"됬습니다\" → \"됐습니다\"\n7. 오타 \"바래요\" → \"바라요\"\n8. 오타 \"설명서를를\" → \"설명서를\"\n9. 띄어쓰기 \"설치 하기\" → \"설치하기\"\n10. 오타 \"웬지\" → \"왠지\"\n11. 오타 \"역활\" → \"역할\"\n12. 오타 \"않되요\" → \"안 돼요\"\n13. 오타 \"함께할께요\" → \"함께할게요\"\n14. 띄어쓰기 \"실행할수\" → \"실행할 수\"\n15. 오타 \"무API\" → \"no-API\"\n16. 오타 \"체크박스을\" → \"체크박스를\"\n17. 오타 \"설정하실수\" → \"설정하실 수\"\n18. 오타 \"재시도할께\" → \"재시도할게\"\n19. 오타 \"안됀다\" → \"안 된다\"\n20. 오타 \"확인해주세요을\" → \"확인해주세요\""
+    },
+    {
+      "id": "trivial-null-check",
+      "label": "direct",
+      "group": "trivial",
+      "prompt": "getUserProfile 함수에서 user가 null일 때 에러 대신 기본값을 반환하도록 null 체크 하나만 추가해줘."
+    },
+    {
+      "id": "trivial-explain-stacktrace",
+      "label": "direct",
+      "group": "trivial",
+      "prompt": "이 스택 트레이스가 왜 발생했는지 설명만 해줘, 코드는 고치지 마: TypeError: Cannot read properties of undefined (reading 'id') at handler.js:42"
+    },
+    {
+      "id": "trivial-bump-version",
+      "label": "direct",
+      "group": "trivial",
+      "prompt": "package.json의 버전을 1.4.2에서 1.4.3으로 올려줘."
+    },
+    {
+      "id": "trivial-add-unit-test",
+      "label": "direct",
+      "group": "trivial",
+      "prompt": "formatCurrency 함수에 대한 단위 테스트 하나만 추가해줘, 케이스는 음수 입력."
+    },
+    {
+      "id": "trivial-format-file",
+      "label": "direct",
+      "group": "trivial",
+      "prompt": "src/legacy/report.js 파일 전체를 prettier 기본 설정으로 포맷만 해줘."
+    },
+    {
+      "id": "trivial-config-values",
+      "label": "direct",
+      "group": "trivial",
+      "prompt": ".env.example에 있는 아래 15개 값을 지정한 새 값으로 그대로 바꿔줘. 다른 로직 변경은 없어:\n1. REQUEST_TIMEOUT_MS: 3000 → 5000\n2. MAX_RETRIES: 2 → 3\n3. LOG_LEVEL: \"debug\" → \"info\"\n4. CACHE_TTL_SEC: 60 → 120\n5. DEFAULT_PAGE_SIZE: 20 → 50\n6. RATE_LIMIT_PER_MIN: 100 → 200\n7. SESSION_TIMEOUT_MIN: 30 → 60\n8. MAX_UPLOAD_MB: 5 → 10\n9. CONNECTION_POOL_SIZE: 10 → 20\n10. HEALTHCHECK_INTERVAL_SEC: 30 → 15\n11. FEATURE_FLAG_BETA: false → true\n12. MAX_CONCURRENT_JOBS: 4 → 8\n13. TOKEN_EXPIRY_HOURS: 24 → 12\n14. DEFAULT_LOCALE: \"en\" → \"ko\"\n15. ALLOWED_ORIGINS: \"*\" → \"https://app.example.com\""
+    },
+    {
+      "id": "trivial-delete-dead-code",
+      "label": "direct",
+      "group": "trivial",
+      "prompt": "auth.ts에 있는 사용하지 않는 legacyHashPassword 함수를 지워줘. 참조하는 곳 없는 거 확인했어."
+    },
+    {
+      "id": "trivial-write-commit-message",
+      "label": "direct",
+      "group": "trivial",
+      "prompt": "방금 스테이징한 변경사항 diff 보고 커밋 메시지 한 줄만 써줘."
+    },
+    {
+      "id": "compound-offline-sync",
+      "label": "orchestrated",
+      "group": "compound",
+      "prompt": "기존 결제 모듈(payments/)에 오프라인 우선 동기화 레이어를 추가해야 해. 네트워크가 끊겨도 결제 요청을 로컬 큐에 쌓아뒀다가 재연결되면 서버와 충돌을 해결하면서 동기화하는 구조를 설계하고 구현해줘. 기존 결제 API 클라이언트 인터페이스는 유지하고, 재시도 정책과 충돌 해결 규칙도 같이 정의해야 해."
+    },
+    {
+      "id": "compound-plugin-system",
+      "label": "orchestrated",
+      "group": "compound",
+      "prompt": "매니페스트 기반 플러그인 시스템을 새로 만들어줘. 플러그인 매니페스트 스키마, 로더, 격리된 샌드박스 실행 환경, 그리고 플러그인을 설치/제거/목록 조회하는 CLI까지 전부 포함해야 해. 각 부분이 서로 어떻게 연결되는지 인터페이스부터 정의하고 구현해줘."
+    },
+    {
+      "id": "compound-rest-to-rpc",
+      "label": "orchestrated",
+      "group": "compound",
+      "prompt": "현재 REST로 되어 있는 API를 타입이 있는 RPC 방식으로 옮겨야 해. 클라이언트, 서버, 기존 테스트까지 전부 새 방식에 맞게 같이 바꿔야 하고, 마이그레이션 중에도 기존 엔드포인트가 깨지지 않게 단계적으로 전환하는 계획도 필요해."
+    },
+    {
+      "id": "compound-job-scheduler",
+      "label": "orchestrated",
+      "group": "compound",
+      "prompt": "작업들 사이에 의존관계(DAG)가 있는 속도 제한 작업 스케줄러를 만들어줘. 재시도 정책, 동시성 제한, 그리고 각 작업의 성공/실패/지연 시간을 볼 수 있는 메트릭 수집까지 포함해야 해."
+    },
+    {
+      "id": "compound-multitenant-auth",
+      "label": "orchestrated",
+      "group": "compound",
+      "prompt": "여러 조직(tenant)이 같이 쓰는 서비스에 멀티테넌트 인증을 붙여야 해. 조직별 역할(role) 관리, 감사 로그(audit log), 그리고 관리자가 사용자와 권한을 관리할 수 있는 어드민 UI까지 다 필요해."
+    },
+    {
+      "id": "ambiguous-missing-ref",
+      "label": "needs_context",
+      "group": "ambiguous",
+      "prompt": "그 파일 어제처럼 고쳐줘."
+    },
+    {
+      "id": "ambiguous-contradictory",
+      "label": "needs_context",
+      "group": "ambiguous",
+      "prompt": "아무 파일도 수정하지 말고 버그 고쳐줘."
+    },
+    {
+      "id": "ambiguous-attachment",
+      "label": "needs_context",
+      "group": "ambiguous",
+      "prompt": "첨부한 스크린샷에 나온 것처럼 레이아웃 맞춰줘."
+    },
+    {
+      "id": "ambiguous-bare-ack",
+      "label": "abstain",
+      "group": "ambiguous",
+      "prompt": "ㅇㅇ"
+    },
+    {
+      "id": "ambiguous-empty-question",
+      "label": "abstain",
+      "group": "ambiguous",
+      "prompt": "?"
+    },
+    {
+      "id": "no-delegation-refactor",
+      "label": "direct",
+      "group": "no-delegation",
+      "prompt": "여러 파일에 걸친 대규모 리팩토링이 필요한데, 위임하지 말고 네가 직접 해."
+    },
+    {
+      "id": "no-delegation-auth-redesign",
+      "label": "direct",
+      "group": "no-delegation",
+      "prompt": "인증 시스템을 전체적으로 새로 설계해야 하는데 서브에이전트 쓰지 마, 너 혼자 처리해."
+    },
+    {
+      "id": "no-delegation-migration",
+      "label": "direct",
+      "group": "no-delegation",
+      "prompt": "이번 마이그레이션 작업은 복잡하지만 다른 에이전트한테 나눠서 시키지 말고 네가 끝까지 직접 처리해줘."
+    }
+  ]
+}

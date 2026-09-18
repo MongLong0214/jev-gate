@@ -1,0 +1,6 @@
+{
+  "name": "fixture-mini-sql",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node --test \"test/**/*.test.*js\"" }
+}

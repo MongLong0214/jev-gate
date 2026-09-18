@@ -28,7 +28,8 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     const archive = readdirSync(outDir).find((f) => /^jev-gate-.*\.zip$/.test(f));
     expect(archive).toBeDefined();
     const list = spawnSync('unzip', ['-Z1', join(outDir, archive!)], { encoding: 'utf8' }).stdout.trim().split('\n');
-    for (const must of ['dist/hook.js', 'dist/jev.js', 'dist/brief.js', 'dist/cli.js', 'hooks/hooks.json', 'agents/worker.md', 'agents/planner.md', '.claude-plugin/plugin.json', 'README.md']) expect(list, must).toContain(must);
+    const agents = ['worker-fast', 'worker', 'worker-deep', 'worker-frontier', 'planner', 'planner-frontier'].map((a) => `agents/${a}.md`);
+    for (const must of ['dist/hook.js', 'dist/jev.js', 'dist/brief.js', 'dist/cli.js', 'dist/job.js', 'dist/plan.js', 'hooks/hooks.json', ...agents, '.claude-plugin/plugin.json', 'README.md']) expect(list, must).toContain(must);
     expect(list.some((f) => f.startsWith('src/') || f.startsWith('tests/') || f.startsWith('node_modules/') || f.includes('.env') && !f.endsWith('.env.example'))).toBe(false);
 
     const dest = join(tmp, 'installed here', 'jev gate');
@@ -44,7 +45,8 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     expect(pre).toMatchObject({ status: 0, stdout: '', stderr: 'jev-gate: key_missing\n' });
     const doctor = spawnSync(process.execPath, [join(dest, 'dist', 'cli.js'), 'doctor'], { cwd: otherCwd, encoding: 'utf8', env: { ...env, PATH: '/nonexistent' } });
     expect(doctor.stdout).toMatch(/\[ok\] dist\/hook\.js present/);
-    expect(doctor.stdout).toMatch(/hooks\.json PreToolUse \(\^Agent\$\): 1 command hook/);
-    expect(existsSync(join(dest, 'agents', 'planner.md'))).toBe(true);
+    expect(doctor.stdout).toMatch(/hooks\.json PreToolUse \(no matcher\): 1 command hook/);
+    expect(doctor.stdout).toMatch(/hooks\.json Stop \(no matcher\): 1 command hook/);
+    for (const agent of agents) expect(existsSync(join(dest, agent)), agent).toBe(true);
   }, 60_000);
 });
