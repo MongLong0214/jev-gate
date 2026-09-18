@@ -6,7 +6,8 @@ other agents are actively changing; nothing below claims a new measurement was t
 
 ## Where the project stands
 
-`main` is at **v0.2.0** ([release](https://github.com/MongLong0214/jev-gate/releases/tag/v0.2.0)). V5 is implemented and
+`main` is at **v0.2.0** ([release](https://github.com/MongLong0214/jev-gate/releases/tag/v0.2.0)); `dev` is at
+`24e9853`, which carries the remediation described under "Do this next" and is what a new agent should check out. V5 is implemented and
 verified on a real host. **No cost, runtime or quality benefit is established.** The one completed cell that ran was
 under forced admission (no real Gate A judgment), and every worker dispatch in it landed on `standard`; why is not
 settled. See "What the measurements say" below, and "Do this next" for the fix order — it is not #33's original order.
@@ -54,8 +55,8 @@ table and the rules.
 | `src/bench/*` | 7-arm runner, schema-5 records, report with declared-criteria verdicts |
 | `agents/*.md` | six profiles: worker-fast/worker/worker-deep/worker-frontier, planner, planner-frontier |
 
-`npm run typecheck && npm test && npm run build && npm run pack` is green (279 tests, 19 files), and
-`claude plugin validate . --strict` passes.
+On `dev` at `24e9853`: `npm run typecheck && npm test && npm run build && npm run pack` are green (354 tests, 20 files)
+and `claude plugin validate . --strict` passes.
 
 ## Host facts you can rely on (Claude Code 2.1.275/2.1.276)
 
@@ -110,47 +111,69 @@ independent proof the code works.
 
 ## Do this next
 
-#33's original proposal (a required uncertainty field so `fast` becomes reachable) is **not adopted** — `fast` was
-already reachable under the shipped policy; `upgrade_basis` only gates `deep`/`frontier`. The fix order below replaces
-it; #33's body still needs a follow-up edit to match, which is not done here (no remote issue edit without the owner
-asking).
+Steps 1 to 3 of the previous revision are **done** and are on `dev` at `24e9853` (state correctness, bench observation
+and configuration accuracy, a task's own failure carried into its next dispatch with a report fix kept separate from a
+rework). `npm run typecheck`, `npm test` (354 tests, 20 files), `npm run build`, `npm run pack` and
+`claude plugin validate . --strict` all pass on that commit. Nothing about cost, quality or speed is measured.
 
-1. **State correctness in the plan/dispatch machinery.** A past `accept` must not paper over a failed or in-progress
-   rework of the same task; a stale/superseded dispatch must not be treated as still valid without a confirmed
-   terminal result; a changed plan revision must not reuse a prior completion computed under the old contract; the
-   planner must not run twice concurrently in the same generation (single-flight); parallel-dispatch scope must
-   compare normalized, alias-safe declared paths (`src/t1.ts` and `src/./t1.ts` are the same file), not raw strings.
-2. **Bench observation and configuration accuracy.** Compare the actually-requested model against the actually-observed
-   model directly, not as two independent "did it change" booleans that can both be true and hide a mismatch; treat a
-   missing trace as unknown, not as zero cost or zero tokens; confirm the frozen config a benchmark plans against is the
-   config the child process actually reads (the child's environment currently drops the path the plan read).
-3. **Carry a task's own previous failure forward, and keep a report fix separate from a rework.** When a task is
-   redispatched (for example after an `invalid` verdict), pass its own last verdict, failed/unrun checks and blockers
-   into the next Gate B/worker input. Keep a report-format correction (wrong `check_id`, a missing field) on the
-   existing bounded recovery path, distinct from a full implementation rework — a formatting fix should not escalate
-   into a rewrite.
-4. **Only then, a small approved comparison experiment.** `orchestrated_control`, `jev_forced_orchestration`,
-   `frontier_native`, `sonnet_native` on `mini-sql` and `orbit-core`, one repetition; `frontier_orchestrated` is a
-   comparison condition that uses the V5 guard and a separate planner — it is not the best unconstrained use of a
-   frontier model, so don't read it as one. Criteria in #21 §5 are frozen; report the conclusion category even when
-   negative. Close the unverified host items while sessions are running anyway: parallel dispatch, real-Jev Gate B, a
-   live root `Edit` denial. **No paid experiment, release, tag, push or remote issue edit runs without the owner
-   asking first.**
+The next task is the small comparison experiment, and **the owner has approved it**. It spends real subscription and
+TypeSafe budget, so run it once, run it to completion, and do not expand it.
 
-Commands for step 4, once approved:
+### The approved experiment
+
+One job, run to a finished result, three conditions, one repetition:
+
+| Arm | What it isolates |
+| --- | --- |
+| `sonnet_native` | the job without this product at all |
+| `orchestrated_control` | the same planner, guard and worker roles, no Jev |
+| `jev_forced_orchestration` | the same structure plus Jev allocation, with admission forced so the boundary exists |
 
 ```sh
 npm ci && npm run build
-export TYPESAFE_API_KEY="$(cat ~/.config/jev-gate/typesafe.key)"   # never echo it
-node dist/bench/run.js --cases bench/v5/cases.json --out ~/jev-gate-runs/<new> \
-  --execute --max-sessions 8 --arms orchestrated_control,jev_forced_orchestration,frontier_native,sonnet_native \
+export TYPESAFE_API_KEY="$(cat ~/.config/jev-gate/typesafe.key)"   # never echo or log it
+node dist/bench/run.js --cases bench/v5/cases.mini-sql.json --out ~/jev-gate-runs/v5-run-2 \
+  --execute --max-sessions 3 \
+  --arms sonnet_native,orchestrated_control,jev_forced_orchestration \
   --plugin-dir "$PWD" --timeout-ms 900000 --max-turns 45 --seed 20260918
-node dist/bench/report.js --run ~/jev-gate-runs/<new>
-node scripts/gate-a-calibration.mjs --set bench/v5/admission-set.json   # live Jev, ~$0.001
+node dist/bench/report.js --run ~/jev-gate-runs/v5-run-2
 ```
 
-A Sonnet whole-job cell took 4–8 minutes of model time on these fixtures; the frontier arms are the expensive ones. The
-host verification cost $2.84 in total.
+Expect roughly 20 to 35 minutes and 5 to 12 API-equivalent dollars: a Sonnet whole-job cell ran 4 to 8 minutes of model
+time on these fixtures, and the orchestrated arms pay for a planner plus per-task context. Watch the log rather than
+polling, and if a cell dies in under a minute, read its `cell.json` and `stream.jsonl` before relaunching — that is how
+the three-denial guard budget and the inherited-environment defects were both found.
+
+**Rules for this run, all of them already agreed:**
+
+- This build has no Gate C call and defaults to one worker. It is a different policy from the partial run of
+  2026-09-18, so publish it as its own run; never merge the two into one table.
+- `jev_forced_orchestration` is a diagnostic: admission is forced, so it says nothing about the natural entry judgment.
+  The product arm `jev_hierarchy` is not in this run, and its numbers must not be filled in from `sonnet_native`.
+- `frontier_native` and `frontier_orchestrated` are not in this run, so make no claim against a frontier coordinator.
+- The criteria in [#21](https://github.com/MongLong0214/jev-gate/issues/21) §5 are frozen. Report the conclusion
+  category from that list even when it is negative, and do not adjust a floor, a checker or a criterion afterwards.
+- Preserve failures, cancellations, timeouts and unknowns. Whole-job cost includes the planner, the coordinator, every
+  worker, any rework and the actual Jev calls; child token totals are not whole-job cost and include cache entries.
+- One repetition is a pilot observation. Equal pass counts are not quality equivalence.
+
+Read the result against the document's decision table: if the no-Jev orchestration is cheaper with no quality gain from
+Jev, the added value is not established in this workload; if both orchestrated arms lose to plain Sonnet, the structure
+itself is the thing to cut; if orchestration wins but Jev makes little difference, report the planner as the part that
+worked and say Jev's contribution separately.
+
+### While those sessions are running
+
+Close the host items that need a live session anyway and cost almost nothing extra: parallel dispatch (the default cap
+is now 1, so raise it deliberately for one check), a real-Jev Gate B observation, and a live root `Edit` denial.
+
+### Afterwards
+
+Three follow-ups are known and none of them is urgent: the influence counter reads only the nested `changed_default` and
+has no flat fallback; cross-generation writers are not checked for deliverable overlap; declared paths are not
+case-folded and symlinks are not resolved, so a normalized path is a planner's claim and not write isolation.
+[#33](https://github.com/MongLong0214/jev-gate/issues/33) still describes the superseded required-uncertainty plan and
+needs its body corrected to match this revision, which is a remote edit and therefore needs the owner to ask.
 
 ## Rules that are not negotiable
 
