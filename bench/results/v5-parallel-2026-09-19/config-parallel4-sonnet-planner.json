@@ -1,0 +1,4 @@
+{ "version": 5, "mode": "auto", "jevModel": "jev-1.13.0", "requestDeadlineMs": 3000,
+  "admissionConfidenceFloor": 0.8, "routeConfidenceFloor": 0.8, "resultConfidenceFloor": 0.8,
+  "plannerDefaultTier": "deep", "maxParallelWorkers": 4, "guardAllowTools": [],
+  "models": { "fast": "haiku", "standard": "haiku", "deep": "sonnet", "frontier": "fable" } }
