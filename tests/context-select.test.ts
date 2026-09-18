@@ -252,7 +252,8 @@ describe('context trace records', () => {
     expect(opened.writer.write('context_intent', intent).ok).toBe(true);
     expect(opened.writer.write('context_result', result).ok).toBe(true);
     const files = readdirSync(dir).sort();
-    expect(files.map((f) => f.split('-')[0])).toEqual(['context', 'context']);
+    // The filename is `<phase>-<uuid>.json`, and both phase names contain an underscore, not a hyphen.
+    expect(files.map((f) => f.split('-')[0])).toEqual(['context_intent', 'context_result']);
     const bodies = files.map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>);
     expect(bodies.every((b) => b['request_id'] === 'req-1' && b['version'] === 5)).toBe(true);
     expect(bodies.map((b) => b['phase']).sort()).toEqual(['context_intent', 'context_result']);

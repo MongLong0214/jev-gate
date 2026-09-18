@@ -143,7 +143,7 @@ export const decideSelection = (answers: Record<string, unknown>, blocks: readon
  * the search text, the user's requests or a provider error body. `replacement_emitted` says a replacement was returned
  * to the host, which is not a claim that the host applied it; `host_applied` is a separate observation.
  */
-export interface ContextIntentBody {
+export type ContextIntentBody = {
   session_id: string | null;
   prompt_id: string | null;
   tool_use_id: string | null;
@@ -155,9 +155,10 @@ export interface ContextIntentBody {
   before_bytes: number;
   request_bytes: number;
   jev_model: string;
-}
+};
 
-export interface ContextResultBody extends ContextIntentBody {
+/** Object types, not interfaces: the trace writer takes `Record<string, unknown>`, which an interface never satisfies. */
+export type ContextResultBody = ContextIntentBody & {
   attempted: boolean;
   http: { status: number | null; code: string | null; duration_ms: number };
   /** A missing usage after a dispatched call is unknown, not zero; a known partial is kept as reported. */
@@ -169,4 +170,4 @@ export interface ContextResultBody extends ContextIntentBody {
   decision: 'omitted' | 'preserved';
   preserve_reason: ContextCode | null;
   replacement_emitted: boolean;
-}
+};

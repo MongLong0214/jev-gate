@@ -229,27 +229,42 @@ superseded runs were overwritten, so their cost is unknown rather than zero.
 
 ### What exists in code
 
-On `dev` at `a8a8457`: `src/context/{blocks,purpose,select,archive,render,store}.ts` (about 880 lines) plus edits to
-`src/{config,types,trace}.ts` and the tests `tests/context-{blocks,purpose}.test.ts`. A `context` mode is added to
-`Mode` so that `off`, `native` and `auto` keep their exact current behaviour and `context` runs only this filter.
-`npm run typecheck` passes and `npm test` is green at 397 tests across 22 files, but that is the core in isolation: the
-hook is not wired yet, so nothing in a real session reaches this code path.
+`src/context/{blocks,purpose,select,archive,render,store}.ts` (about 880 lines) plus edits to `src/{config,types,trace}.ts`
+and the tests `tests/context-{blocks,purpose,select,fixtures,archive}.test.ts`. A `context` mode is added to `Mode` so
+that `off`, `native` and `auto` keep their exact current behaviour and `context` runs only this filter. `npm run
+typecheck`, `npm test` and `npm run build` are all clean at **449 tests across 25 files**, but that is the core in
+isolation: the hook is not wired yet, so nothing in a real session reaches this code path.
+
+An earlier revision of this section claimed "typecheck passes, 397 tests across 22 files" for `a9d1c88`. That was not
+true of the commit it was written on: `a9d1c88` added `tests/context-select.test.ts` and left `tsc` with two errors and
+one failing test, both introduced by that file. Both are fixed below. Check the three gates against the commit in hand
+rather than against this file.
 
 The probe wrote only `bench/results/v5-context-probe-2026-09-18/`; every change under `src/`, `hooks/` and `tests/` in
 that commit came from the core work, not from the probe.
 
 ### Pick it up here
 
-1. **Confirm the adapter against the probe's fixtures.** `src/context/blocks.ts` was written before the probe finished,
-   so its parse assumptions must be replaced by the three real shapes in
-   `bench/results/v5-context-probe-2026-09-18/grep-*.json`, and its eligibility check must use
-   `appliedLimit !== undefined || appliedOffset !== undefined || totalLines > numLines` for native truncation.
-2. **Finish the offline tests** listed in the document's §12 that are reachable without a host: colons in paths, Korean
-   text, CRLF, identical text at different locations staying separate, protected instruction files never omitted, short
-   and count and files-only and truncated and error results passing through with no provider call, one request carrying
-   the scope question plus per-block questions that name real block paths, low confidence and ties and malformed answers
-   keeping the block, a malformed scope keeping everything, single-attempt HTTP behaviour preserving known usage, and
-   archive failure or cap producing no omission.
+1. ~~**Confirm the adapter against the probe's fixtures.**~~ **Done.** The parse assumptions in `src/context/blocks.ts`
+   are replaced by the three recorded shapes, and native truncation is now detected as
+   `appliedLimit !== undefined || appliedOffset !== undefined || totalLines > numLines`. This was not cosmetic: run
+   against the recorded payloads, the guessed shape **accepted `grep-truncated.json` and would have rewritten a result
+   the host had already cut**. Its detectors (`truncated`/`hasMore`/`nextOffset` on the response, `head_limit`/`offset`
+   read off `tool_input`) appear on no real payload; they are kept as defence in depth behind the confirmed keys, for a
+   host that does use those names. `renderGrepResponse` now regenerates `totalLines` with `numLines`, so a filtered
+   result does not itself read as natively truncated. `tests/context-fixtures.test.ts` runs the adapter against the
+   four recorded payloads directly, so the fixtures — not a hand-written idea of them — are what the parser answers to.
+2. **Finish the offline tests** listed in the document's §12 that are reachable without a host. Most were already
+   covered; the audit against that list left one real gap, now closed: `src/context/archive.ts` had **no tests at all**,
+   so "archive failure or cap producing no omission" was unverified (`tests/context-archive.test.ts`, 8 tests). The
+   remaining §12 items — colons in paths, Korean text, CRLF, identical text at different locations, protected files,
+   short/count/files-only/truncated/error pass-through, one request with scope plus per-block questions, low confidence
+   and ties and malformed answers, malformed scope, single-attempt HTTP preserving known usage — are covered in
+   `tests/context-{blocks,select,purpose}.test.ts`; re-check them against that list rather than trusting this sentence.
+
+   Mutation-check anything added here. Removing the `totalLines > numLines` guard left the whole suite green, because
+   every test that reached it asserted only `ok: false` while the confirmed truncated fixture is caught one check
+   earlier by `appliedLimit`. A guard whose reason code is the point needs a test that asserts the reason code.
 3. **Wire the hook** (`src/hook.ts`, `hooks/hooks.json`): a `PostToolUse` matcher of exactly `^Grep$` — do not widen the
    existing `^Agent$` — plus the `SessionStart` and `UserPromptSubmit` events the purpose record needs. The context path
    must branch before any V5 routing logic, and a child caller (`agent_id` present) must pass through untouched.

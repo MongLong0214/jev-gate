@@ -4,32 +4,55 @@ import { MAX_PATH_CHARS } from '../plan.js';
 import type { ContextCode, SearchBlock } from '../types.js';
 
 /**
- * THE HOST ADAPTER BOUNDARY — UNCONFIRMED SHAPE (§3).
+ * THE HOST ADAPTER BOUNDARY — CONFIRMED against Claude Code 2.1.276.
  *
- * Everything this feature assumes about the host's Grep result lives in this file and nowhere else. The local probe
- * still has to confirm, against the installed CLI, that:
- *   1. `tool_response` for a content-mode Grep is a JSON object (not a bare string) and that `CONTENT_KEY`,
- *      `FILENAMES_KEY`, `NUM_FILES_KEY` and `NUM_LINES_KEY` are the actual key names carrying the joined match text,
- *      the file list and the two counts;
- *   2. what those counts mean (matches, lines or files) and whether `filenames` is populated in content mode at all;
- *   3. how a natively truncated or paginated result is marked (`TRUNCATION_MARKS` and the input keys in
- *      `TRUNCATION_INPUT_KEYS` are the current guesses);
- *   4. whether `updatedToolOutput` has to carry every key the native object had, which is why `meta.original` is kept
- *      and a replacement is spread over it instead of being constructed from scratch;
- *   5. how a failed, interrupted or permission-denied Grep is reported (`FAILURE_KEYS`).
+ * Everything this feature assumes about the host's Grep result lives in this file and nowhere else. The payloads
+ * recorded in `bench/results/v5-context-probe-2026-09-18/grep-{content,count,files,truncated}.json` settled the shape
+ * that §3 had to leave as a guess:
+ *   1. `tool_response` is a JSON object, and it is three different shapes keyed by `mode`, not one shape with optional
+ *      fields. Only content mode is in scope:
+ *        content             { mode, numFiles: 0, filenames: [], content, numLines, totalLines, appliedLimit? }
+ *        count               { mode, numFiles, filenames: [], content, numMatches }
+ *        files_with_matches  { mode, filenames, numFiles, totalFiles }
+ *   2. In content mode `numFiles` is hard-coded `0` and `filenames` hard-coded `[]`, so they describe nothing and the
+ *      file list can never disambiguate a line on this host. `numLines` counts rendered ripgrep output lines — context
+ *      lines and `--` separators included — not matches and not files. The fixtures hold
+ *      `numLines === content.split('\n').length`, with no trailing newline.
+ *   3. Native truncation is reported on the response, never on the input: `head_limit` (host default 250) comes back as
+ *      `appliedLimit` with `totalLines > numLines`. The earlier guesses — `truncated`/`hasMore`/`nextOffset` on the
+ *      response, `head_limit`/`offset` read off `tool_input` — match no real payload, and the recorded truncated
+ *      fixture went straight through them into selection. `appliedOffset` is checked because the host names it, though
+ *      no probe exercised `offset > 0`; the input keys stay as defence in depth, not as the detector.
+ *   4. `updatedToolOutput` need not carry every native key, but a malformed replacement is dropped silently with the
+ *      original surviving, which is why `meta.original` is kept and a replacement is spread over it instead of being
+ *      constructed from scratch. `totalLines` is regenerated alongside `numLines` so a filtered result never reads as
+ *      natively truncated to whatever parses it next.
+ *   5. A failed, interrupted or permission-denied Grep was never captured, so `FAILURE_KEYS` stays a conservative
+ *      guess and anything it matches passes through.
  *
- * Until the probe lands, anything that does not match this placeholder exactly returns `ok: false` and the caller
- * passes the original result through. A wrong guess therefore costs application opportunity, never a rewritten result.
+ * Still unsettled, and deliberately not expressed here: the host separately caps the **model-facing** result. A call
+ * carrying 27,391 characters into the hook reached the model as a 2 KB preview plus a saved-output path, with nothing
+ * in `tool_response` saying so. That threshold was never bisected — it fired somewhere in 1,298–27,391 characters — so
+ * this file has a floor and no ceiling; see MIN_CONTENT_BYTES.
+ *
+ * Anything that does not match the confirmed shape exactly returns `ok: false` and the caller passes the original
+ * result through. A wrong guess therefore costs application opportunity, never a rewritten result.
  */
 export const CONTENT_KEY = 'content';
 export const FILENAMES_KEY = 'filenames';
 export const NUM_FILES_KEY = 'numFiles';
 export const NUM_LINES_KEY = 'numLines';
+export const TOTAL_LINES_KEY = 'totalLines';
 export const MODE_KEY = 'mode';
 const FAILURE_KEYS = ['error', 'is_error', 'interrupted', 'timedOut', 'permissionDenied'] as const;
 const TRUNCATION_MARKS = ['results truncated', 'results are truncated', '[truncated]', 'showing first', 'output limit'] as const;
-const TRUNCATION_RESPONSE_KEYS = ['truncated', 'hasMore', 'nextOffset'] as const;
-/** A host-side limit or page offset means the native result is already partial, so §6 excludes it from selection. */
+/**
+ * §6: the host's own statement that it already cut the result. `appliedLimit` (`head_limit` echoed back) and
+ * `appliedOffset` are what Claude Code actually sends; the three after them were this file's original guess, kept
+ * because a key that never arrives costs nothing and another host may well use those names.
+ */
+const TRUNCATION_RESPONSE_KEYS = ['appliedLimit', 'appliedOffset', 'truncated', 'hasMore', 'nextOffset'] as const;
+/** Defence in depth, not the detector: a caller-supplied limit or offset already shows up on the response above. */
 const TRUNCATION_INPUT_KEYS = ['head_limit', 'offset'] as const;
 
 /** §6: the Grep arguments the state may carry. Nothing else from the tool input is forwarded. */
@@ -60,6 +83,8 @@ export interface GrepMeta {
   numFiles: number | null;
   /** Non-null only when the received value matched this file's own line count, so it can be regenerated consistently. */
   numLines: number | null;
+  /** The host's pre-truncation line count. Equal to `numLines` on every eligible result, and regenerated with it. */
+  totalLines: number | null;
   contentBytes: number;
   lineCount: number;
   /** The whitelisted search arguments, ready to send as `SelectionContext.searchInput`. */
@@ -97,7 +122,9 @@ interface SplitLine {
 /**
  * Splits one result line into its path and line number. A naive split on the first colon is wrong twice over: a path may
  * contain a colon and matched text certainly may. Two disambiguations are used, in order:
- *   1. the response's own file list, when it has one: the longest listed path that prefixes the line wins, which is exact;
+ *   1. the response's own file list, when it has one: the longest listed path that prefixes the line wins, which is
+ *      exact. Claude Code never populates `filenames` in content mode, so this branch is inert there and kept for a
+ *      host that does;
  *   2. otherwise the earliest `<sep><digits><sep>` run, taking whichever of `:` (match line) and `-` (context line)
  *      starts earlier, so `a.ts-40-x{k:12:v}` splits on the dash and `a.ts:40:x-9-y` splits on the colon.
  * Rule 2 still cannot separate a path that literally contains `:<digits>:` from a match; such a result is rare, and the
@@ -188,6 +215,14 @@ export const parseGrepResponse = (toolInput: unknown, toolResponse: unknown): Pa
   if (numLinesRaw !== undefined && (typeof numLinesRaw !== 'number' || !Number.isInteger(numLinesRaw) || numLinesRaw !== lines.length)) {
     return { ok: false, reason: 'context_meta_inconsistent' };
   }
+  // The confirmed content shape carries both counts and they agree exactly when nothing was cut, so a `totalLines`
+  // above the delivered line count is the host saying it dropped lines; below it, the shape has moved and is unknown.
+  const totalLinesRaw = toolResponse[TOTAL_LINES_KEY];
+  if (totalLinesRaw !== undefined) {
+    if (typeof totalLinesRaw !== 'number' || !Number.isInteger(totalLinesRaw)) return { ok: false, reason: 'context_meta_inconsistent' };
+    if (totalLinesRaw > lines.length) return { ok: false, reason: 'context_response_truncated' };
+    if (totalLinesRaw !== lines.length) return { ok: false, reason: 'context_meta_inconsistent' };
+  }
 
   // The host's own hunk separator is the most reliable statement about which lines belong together; when it is absent,
   // only consecutive line numbers in the same file are connected.
@@ -237,6 +272,7 @@ export const parseGrepResponse = (toolInput: unknown, toolResponse: unknown): Pa
       filenames: known,
       numFiles: typeof numFilesRaw === 'number' ? numFilesRaw : null,
       numLines: typeof numLinesRaw === 'number' ? numLinesRaw : null,
+      totalLines: typeof totalLinesRaw === 'number' ? totalLinesRaw : null,
       contentBytes,
       lineCount: lines.length,
       searchInput: sanitizeGrepInput(toolInput),
@@ -251,8 +287,11 @@ export const parseGrepResponse = (toolInput: unknown, toolResponse: unknown): Pa
  */
 export const renderGrepResponse = (meta: GrepMeta, kept: readonly SearchBlock[]): Record<string, unknown> => {
   const content = kept.map((b) => b.text).join('\n');
+  const lineCount = splitContent(content).length;
   const out: Record<string, unknown> = { ...meta.original, [CONTENT_KEY]: content };
-  if (meta.numLines !== null) out[NUM_LINES_KEY] = splitContent(content).length;
+  if (meta.numLines !== null) out[NUM_LINES_KEY] = lineCount;
+  // Kept equal to `numLines`: a replacement that left the original total behind would read as natively truncated.
+  if (meta.totalLines !== null) out[TOTAL_LINES_KEY] = lineCount;
   if (meta.filenames.length > 0) {
     const paths = [...new Set(kept.map((b) => b.sourcePath))];
     out[FILENAMES_KEY] = paths;

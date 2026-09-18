@@ -26,12 +26,14 @@ const run = (path: string, start: number, count: number, body = 'value'): string
 
 const input = (over: Record<string, unknown> = {}): Record<string, unknown> => ({ pattern: 'value', output_mode: 'content', '-n': true, ...over });
 
+/** The confirmed content-mode shape, key for key: `bench/results/v5-context-probe-2026-09-18/grep-content.json`. */
 const response = (content: string, over: Record<string, unknown> = {}): Record<string, unknown> => ({
   mode: 'content',
   numFiles: 0,
   filenames: [],
   [CONTENT_KEY]: content,
   numLines: countLines(content),
+  totalLines: countLines(content),
   ...over,
 });
 
@@ -131,6 +133,12 @@ describe('parseGrepResponse', () => {
     ['a paginated result', input({ offset: 20 }), response(bulk())],
     ['a natively truncated result', input(), response(`${bulk()}\n(Results are truncated. Consider a more specific path or pattern.)`)],
     ['a flagged truncated result', input(), response(bulk(), { truncated: true })],
+    // What Claude Code actually sends. The first two are the recorded markers; the third is the count they arrive with.
+    ['a head-limited result marked on the response', input(), response(bulk(), { appliedLimit: 250 })],
+    ['a paginated result marked on the response', input(), response(bulk(), { appliedOffset: 20 })],
+    ['a result whose total exceeds the lines delivered', input(), response(bulk(), { totalLines: countLines(bulk()) + 1 })],
+    ['a total below the lines delivered, whose meaning is unknown', input(), response(bulk(), { totalLines: 3 })],
+    ['a non-integer total', input(), response(bulk(), { totalLines: 'many' })],
     ['an errored result', input(), response(bulk(), { error: 'no such path' })],
     ['an interrupted result', input(), response(bulk(), { interrupted: true })],
     ['a failed status', input(), response(bulk(), { status: 'error' })],
@@ -141,6 +149,19 @@ describe('parseGrepResponse', () => {
     const parsed = parseGrepResponse(toolInput, toolResponse);
     expect(parsed.ok).toBe(false);
     if (!parsed.ok) expect(typeof parsed.reason).toBe('string');
+  });
+
+  /**
+   * The reason code matters on its own here: `totalLines > numLines` is the host saying it cut the result, and it is the
+   * only signal when `appliedLimit` is absent. Rejecting it as merely inconsistent would lose that, and asserting only
+   * `ok: false` cannot tell the two apart — the confirmed truncated fixture carries `appliedLimit`, caught earlier.
+   */
+  it('reads a total above the delivered lines as truncation, not as an inconsistent count', () => {
+    const content = bulk();
+    const lines = countLines(content);
+    expect(parseGrepResponse(input(), response(content, { totalLines: lines + 1 }))).toEqual({ ok: false, reason: 'context_response_truncated' });
+    expect(parseGrepResponse(input(), response(content, { totalLines: lines - 1 }))).toEqual({ ok: false, reason: 'context_meta_inconsistent' });
+    expect(parseGrepResponse(input(), response(content, { totalLines: lines })).ok).toBe(true);
   });
 
   it('checks the eligibility threshold in bytes, not in characters', () => {
@@ -169,7 +190,9 @@ describe('renderGrepResponse', () => {
     expect(out['extra']).toEqual({ host: 'field' });
     expect(out[CONTENT_KEY]).toBe(kept[0]?.text);
     expect(out['numLines']).toBe(1);
-    // filenames arrived empty, so its meaning in content mode is unconfirmed and it is left exactly as received.
+    // Regenerated with numLines: left at the original 121 this replacement would read as natively truncated.
+    expect(out['totalLines']).toBe(1);
+    // filenames is hard-coded empty in content mode on this host, so it is left exactly as received.
     expect(out['filenames']).toEqual([]);
     expect(out['numFiles']).toBe(0);
   });
