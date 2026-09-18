@@ -1,0 +1,22 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>space sim</title></head>
+<body style="margin:0;background:#000;color:#eee;font-family:monospace">
+<canvas id="c" width="800" height="600"></canvas>
+<pre id="hud" style="position:fixed;top:8px;left:8px"></pre>
+<script type="module">
+  import { createSimulation } from './src/sim.mjs';
+  const sim = createSimulation({ bodies: [
+    { id: 'sun', x: 400, y: 300, vx: 0, vy: 0, mass: 2000 },
+    { id: 'planet', x: 600, y: 300, vx: 0, vy: 22, mass: 1 },
+  ] });
+  const ctx = document.getElementById('c').getContext('2d');
+  let last = performance.now();
+  function frame(now) {
+    sim.step(now - last); last = now;
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 800, 600); ctx.fillStyle = '#fff';
+    for (const b of sim.state().bodies) ctx.fillRect(b.x - 2, b.y - 2, 4, 4);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+</script>
+</body></html>

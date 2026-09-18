@@ -4,11 +4,14 @@
   "private": true,
   "description": "Claude Code plugin: one Jev decision per user turn, a lossless execution brief, and native Opus/Fable delegation hints for a Sonnet main session.",
   "type": "module",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.typecheck.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "pack": "node scripts/pack.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.20.3",

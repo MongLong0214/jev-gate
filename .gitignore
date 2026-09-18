@@ -10,3 +10,4 @@ local.*.json
 artifacts/
 bench-runs/
 .DS_Store
+dist-pack/

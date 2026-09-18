@@ -1,4 +1,4 @@
-import { runChecker } from '../../../bench/checkers/_lib.mjs';
+import { runChecker } from './_lib.mjs';
 
 await runChecker(['module_loads', 'answer_is_42'], async ({ check, importModule }) => {
   let mod;

@@ -1,0 +1,6 @@
+{
+  "name": "fixture-cart-total",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node --test" }
+}

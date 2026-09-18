@@ -37,7 +37,9 @@ describe('checkEligibility', () => {
     ['other plugin agent', base({}, { subagent_type: 'other:worker' }), {}, auto, 'role_not_owned'],
     ['V3 model-named agent', base({}, { subagent_type: 'jev-gate:opus' }), {}, auto, 'role_not_owned'],
     ['background', base({}, { run_in_background: true }), {}, auto, 'not_foreground'],
-    ['background omitted', base({}, { run_in_background: undefined }), {}, auto, 'not_foreground'],
+    ['background omitted without the launch profile', base({}, { run_in_background: undefined }), {}, auto, 'not_foreground'],
+    ['background omitted with fork override even under the profile', base({}, { run_in_background: undefined }), { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1', CLAUDE_CODE_FORK_SUBAGENT: '1' }, auto, 'fork_or_background_override'],
+    ['background true under the profile', base({}, { run_in_background: true }), { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' }, auto, 'not_foreground'],
     ['model pinned', base({}, { model: 'opus' }), {}, auto, 'model_pinned'],
     ['model null is still a pin', base({}, { model: null }), {}, auto, 'model_pinned'],
     ['model empty is still a pin', base({}, { model: '' }), {}, auto, 'model_pinned'],
@@ -52,6 +54,12 @@ describe('checkEligibility', () => {
 
   it.each(EXECUTION_CONTROL_KEYS.map((k) => [k]))('execution control %s → no-op', (key) => {
     expect(checkEligibility(base({}, { [key]: 'x' }), {}, auto)).toEqual({ eligible: false, code: 'execution_control_present' });
+  });
+
+  it('host profile: an absent run_in_background is foreground when CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 (observed on 2.1.275)', () => {
+    const hook = base({}, { run_in_background: undefined });
+    expect((hook.tool_input as Record<string, unknown>)['run_in_background']).toBeUndefined();
+    expect(checkEligibility(hook, { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' }, auto)).toMatchObject({ eligible: true, role: 'worker' });
   });
 
   it('documented inherit override is harmless and unknown ordinary fields do not block', () => {

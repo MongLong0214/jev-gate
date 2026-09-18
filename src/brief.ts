@@ -37,7 +37,12 @@ export const checkEligibility = (hook: HookInput, env: Env, config: ConfigV4): E
   if (typeof description !== 'string' || typeof prompt !== 'string' || prompt.trim().length === 0) return { eligible: false, code: 'bad_tool_input' };
   const role = (Object.keys(OWNED_AGENTS) as OwnedRole[]).find((r) => OWNED_AGENTS[r] === subagent_type);
   if (!role) return { eligible: false, code: 'role_not_owned' };
-  if (input['run_in_background'] !== false) return { eligible: false, code: 'not_foreground' };
+  // Host observation (Claude Code 2.1.275, #11): with CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 the host forces every Agent call
+  // into the foreground and strips `run_in_background` from tool_input, so an explicit false is never delivered there.
+  // Explicit foreground therefore means: the field is false, or the field is absent while that documented profile is active.
+  const bg = input['run_in_background'];
+  const forcedForeground = bg === undefined && env['CLAUDE_CODE_DISABLE_BACKGROUND_TASKS'] === '1';
+  if (bg !== false && !forcedForeground) return { eligible: false, code: 'not_foreground' };
   if (Object.prototype.hasOwnProperty.call(input, 'model')) return { eligible: false, code: 'model_pinned' };
   if (EXECUTION_CONTROL_KEYS.some((k) => Object.prototype.hasOwnProperty.call(input, k))) return { eligible: false, code: 'execution_control_present' };
   const override = subagentModelOverride(env);
