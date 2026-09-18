@@ -165,6 +165,34 @@ What the measurements support is one decision, and it is the owner's:
 
 The one thing not to do is wire the `^Grep$` hook. It would fire zero times here.
 
+## 6. Where the tokens actually go, since §0 says it is not here
+
+The same transcripts carry `usage` on every assistant turn, so the question "would filtering search results make this
+operator's work cheaper" has a direct answer rather than an inferred one. Sixty-four of the transcripts are main
+interactive sessions — `repo-factory`, `logic-pro-mcp`, `commitlore` — and they hold **233,624 assistant turns** between
+them. The remaining ~19,500 are subagent and sidechain records, which carry no usage.
+
+Weighting each component by what it bills relative to base input (cache read 0.1×, one-hour cache write 2×, output 5×):
+
+| component | tokens | weighted | share |
+|---|---|---|---|
+| **cache read** | 120,716 M | 12,072 M | **82.1 %** |
+| cache write | 809 M | 1,618 M | 11.0 % |
+| output | 202 M | 1,009 M | 6.9 % |
+| input (uncached) | 1 M | 1 M | 0.0 % |
+
+**The average turn re-reads 516,711 tokens of context.** That is where the money is: not in any single tool result, but
+in a half-million-token conversation being read again on each of 233,624 turns.
+
+Against that, every search result this machine has ever produced — all 25.5 MB, about 6.4 M tokens — is **0.0044 % of
+the weighted bill**, and that figure already assumes a filter removed *all* of it and it never had to be re-read again.
+The context filter is not a small win here. It is below measurement noise.
+
+Tool results as a whole are not the problem either: 85.1 MB across ordinary sessions, 92 % of it `Bash`, at a mean of
+742 bytes per call, with only 530 of 105,610 calls exceeding 8 KiB. Context accumulates here by a thousand small
+additions, not by a few large ones, and a per-result relevance filter has nothing to bite on. Anything aimed at this
+operator's cost has to act on **how much context a turn carries**, not on how large one tool result is.
+
 ## Not settled here
 
 - Four repositories, all TypeScript-heavy and three of them the author's own. A Python or Go codebase, or a repository
