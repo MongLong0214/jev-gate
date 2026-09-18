@@ -1,0 +1,8 @@
+{
+  "n": 61,
+  "p10": 245379,
+  "median": 657393,
+  "p90": 961765,
+  "above_45k": 61,
+  "note": "context carried when each real prompt was typed; prompt text not published"
+}
