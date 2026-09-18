@@ -1,0 +1,20 @@
+{
+  "haiku": {
+    "cost_usd": 0.12019709999999999,
+    "turns": 16,
+    "duration_ms": 26023,
+    "is_error": false
+  },
+  "sonnet": {
+    "cost_usd": 0.23198979999999997,
+    "turns": 11,
+    "duration_ms": 37919,
+    "is_error": false
+  },
+  "verification": {
+    "assigned_modules_correct": "4/4 both",
+    "unassigned_module_untouched": true,
+    "test_files_added": 4,
+    "note": "task #3 of the 7 real dispatches; the full 12-module checker does not apply to a 4-module task"
+  }
+}

@@ -106,6 +106,53 @@ The 18 it declines are declined for stated reasons: 8 ask only for an answer, 2 
 enough that the toll is not repaid even at depth. Predicted saving across the 43 is $143, median $2.20 each, with the
 marginal decisions sitting at +$0.05 — exactly where a break-even rule should put them.
 
+## Gate B has the same defect, and more headroom behind it
+
+Gate A was where the investigation started, but the delegated run points somewhere else. Decomposing its cost:
+
+| | cache read | cache write | total |
+|---|---|---|---|
+| `sonnet_native` | 22,973,645 — **2.30 M** weighted | 388,625 — 0.78 M | $6.2851 |
+| `jev_forced_orchestration` | 3,257,720 — **0.33 M** weighted | 537,482 — **1.07 M** | $2.6922 |
+
+Delegation cut cache read sevenfold and cache **write went up**, because each worker writes its own prefix. Write is
+now the largest term in the delegated arm. And the workers all ran on `sonnet`, because:
+
+```
+gate: eligible=7  patched=0  preserved=6
+preserve_reasons: { route_low_confidence: 6 }
+```
+
+**Gate B fired seven times and changed nothing.** `ROUTE_QUESTION` is a single five-way `choice` carrying ~900
+characters of policy — the same monolith as Gate A, one step further along.
+
+Decomposed into six read-offs about the task contract, run against the seven dispatches that run actually made:
+
+| | result | tokens | latency |
+|---|---|---|---|
+| shipped `choice` | **1 / 6** clears the 0.8 floor — and it answered `standard`, the default, so it changes nothing | 1,189 | 303 ms |
+| fan-out + code | **3 / 6 → `fast`**, 3 → `standard`, 0 → `deep` | **879** | 347 ms |
+
+Here decomposition is **cheaper**, not just nearly free: the shipped instruction block is larger than six atomic
+questions. And the split has a reason — the three routed to `fast` are the validator fixes, where `checks_stated`
+reads 0.94 because the task names `npm test`; the three left at `standard` are the file-reading tasks, where it reads
+0.33 because nothing would catch a mistake.
+
+### What `fast` is worth, measured
+
+One of the tasks the fan-out routed to `fast`, run unchanged on both models against the same fixture:
+
+| model | assigned modules | unassigned module | tests added | cost | wall |
+|---|---|---|---|---|---|
+| `sonnet` (what shipped today does) | **4 / 4 correct** | untouched | 4 | $0.2320 | 37.9 s |
+| `haiku` (what the fan-out routes to) | **4 / 4 correct** | untouched | 4 | **$0.1202** | **26.0 s** |
+
+Same result, **−48 % cost and −31 % wall clock**, on a decision that is applied mechanically through `updatedInput`
+rather than suggested to the model.
+
+This is the one place in the design where Jev's answer cannot be ignored by anything downstream, and it has never once
+taken effect.
+
 ## Not settled here
 
 - **`T` per size level is uncalibrated.** The mapping `[1, 3, 12, 30, 60]` is a guess fitted to nothing; there are two
