@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { DEFAULT_CONFIG, loadConfig, resolveConfigPath, validateConfig } from '../src/config.js';
+import { DEFAULT_CONFIG, loadConfig, validateConfig } from '../src/config.js';
 
 const enoent = (): never => {
   const err = new Error('missing') as NodeJS.ErrnoException;
@@ -8,47 +8,52 @@ const enoent = (): never => {
   throw err;
 };
 
-describe('loadConfig', () => {
-  it('returns defaults when no config file exists', () => {
-    const r = loadConfig({}, enoent);
-    expect(r).toEqual({ ok: true, config: DEFAULT_CONFIG, source: 'defaults' });
+describe('V4 config', () => {
+  it('defaults to off with no file', () => {
+    expect(loadConfig({}, enoent)).toEqual({ ok: true, config: DEFAULT_CONFIG, source: 'defaults' });
+    expect(DEFAULT_CONFIG.mode).toBe('off');
   });
 
-  it('applies JEV_GATE_MODE override and rejects invalid values', () => {
-    expect(loadConfig({ JEV_GATE_MODE: 'enrich' }, enoent)).toMatchObject({ ok: true, config: { mode: 'enrich' } });
-    expect(loadConfig({ JEV_GATE_MODE: 'turbo' }, enoent)).toMatchObject({ ok: false });
+  it('JEV_GATE_MODE=off short-circuits before any file is read, even an invalid one', () => {
+    let reads = 0;
+    const r = loadConfig({ JEV_GATE_MODE: 'off', JEV_GATE_CONFIG: '/x.json' }, () => {
+      reads++;
+      return '{not json';
+    });
+    expect(r).toMatchObject({ ok: true, config: { mode: 'off' }, source: 'env:off' });
+    expect(reads).toBe(0);
   });
 
-  it('reads a v3 file and merges defaults', () => {
-    const r = loadConfig({ JEV_GATE_CONFIG: '/x/c.json' }, () => JSON.stringify({ version: 3, routeConfidenceFloor: 0.6, opusModel: 'claude-opus-5' }));
-    expect(r).toMatchObject({ ok: true, source: '/x/c.json', config: { routeConfidenceFloor: 0.6, opusModel: 'claude-opus-5', jevModel: 'jev-1.13.0' } });
+  it('JEV_GATE_MODE overrides only the mode; invalid values fail', () => {
+    expect(loadConfig({ JEV_GATE_MODE: 'auto' }, enoent)).toMatchObject({ ok: true, config: { mode: 'auto', routeConfidenceFloor: 0.8 } });
+    expect(loadConfig({ JEV_GATE_MODE: 'native' }, enoent)).toMatchObject({ ok: true, config: { mode: 'native' } });
+    expect(loadConfig({ JEV_GATE_MODE: 'enrich' }, enoent)).toMatchObject({ ok: false });
   });
 
-  it('fails when JEV_GATE_CONFIG points to a missing file or invalid JSON', () => {
-    expect(loadConfig({ JEV_GATE_CONFIG: '/nope.json' }, enoent)).toMatchObject({ ok: false });
-    expect(loadConfig({ JEV_GATE_CONFIG: '/x.json' }, () => '{not json')).toMatchObject({ ok: false, error: 'config is not valid JSON' });
+  it('reads a v4 file, merges defaults and validates model identifiers', () => {
+    const r = loadConfig({ JEV_GATE_CONFIG: '/c.json' }, () => JSON.stringify({ version: 4, mode: 'native', models: { opus: 'claude-opus-5' } }));
+    expect(r).toMatchObject({ ok: true, source: '/c.json', config: { mode: 'native', models: { sonnet: 'sonnet', opus: 'claude-opus-5', fable: 'fable' } } });
+    expect(validateConfig({ version: 4, models: { sonnet: 'bad model; rm' } }).ok).toBe(false);
+    expect(validateConfig({ version: 4, models: { haiku: 'haiku' } }).ok).toBe(false);
   });
 
-  it('explains v1/v2 layouts instead of mixing them', () => {
-    const r = validateConfig({ version: 1, jev: { endpoint: 'x' }, worker: {}, frontier: {} });
+  it('rejects a V3 layout instead of partially interpreting it, and names the migration', () => {
+    for (const raw of [{ version: 3, mode: 'auto' }, { version: 4, uncertainTier: 'fable' }, { version: 4, mode: 'enrich' }, { version: 4, opusModel: 'opus' }]) {
+      const r = validateConfig(raw);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.error).toMatch(/V3 layout[\s\S]*"version": 4/);
+    }
+    const r = loadConfig({ JEV_GATE_CONFIG: '/v3.json', JEV_GATE_MODE: 'auto' }, () => JSON.stringify({ version: 3, mode: 'auto' }));
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error).toMatch(/v3/);
   });
 
-  it('rejects out-of-range or unsafe values', () => {
-    expect(validateConfig({ version: 3, requestDeadlineMs: 0 }).ok).toBe(false);
-    expect(validateConfig({ version: 3, requestDeadlineMs: 4500 }).ok).toBe(false);
-    expect(validateConfig({ version: 3, requestDeadlineMs: Number.POSITIVE_INFINITY }).ok).toBe(false);
-    expect(validateConfig({ version: 3, routeConfidenceFloor: 1.5 }).ok).toBe(false);
-    expect(validateConfig({ version: 3, mode: 'off ' }).ok).toBe(false);
-    expect(validateConfig({ version: 3, jevModel: 'jev latest; rm -rf' }).ok).toBe(false);
-    expect(validateConfig({ version: 3, uncertainTier: 'sonnet' }).ok).toBe(false);
-    expect(validateConfig({ version: 3, unknownKey: 1 }).ok).toBe(false);
-    expect(validateConfig({ version: 3, uncertainTier: 'opus', requestDeadlineMs: 2500 })).toMatchObject({ ok: true, config: { uncertainTier: 'opus', requestDeadlineMs: 2500 } });
-  });
-
-  it('resolves the explicit path first', () => {
-    expect(resolveConfigPath({ JEV_GATE_CONFIG: '/tmp/a.json' })).toBe('/tmp/a.json');
-    expect(resolveConfigPath({})).toMatch(/\.config\/jev-gate\/config\.json$/);
+  it('rejects unknown keys, bad bounds and missing explicit files', () => {
+    expect(validateConfig({ version: 4, extra: 1 }).ok).toBe(false);
+    expect(validateConfig({ version: 4, requestDeadlineMs: 4001 }).ok).toBe(false);
+    expect(validateConfig({ version: 4, requestDeadlineMs: 0 }).ok).toBe(false);
+    expect(validateConfig({ version: 4, routeConfidenceFloor: 1.2 }).ok).toBe(false);
+    expect(validateConfig({ version: 5 }).ok).toBe(false);
+    expect(loadConfig({ JEV_GATE_CONFIG: '/missing.json' }, enoent)).toMatchObject({ ok: false });
+    expect(loadConfig({ JEV_GATE_CONFIG: '/x.json' }, () => 'nope')).toMatchObject({ ok: false, error: 'config is not valid JSON' });
   });
 });

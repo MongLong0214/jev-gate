@@ -1,70 +1,65 @@
-import { DEFAULT_CONFIG } from './config.js';
-import type { Config, GateDecision, PromptBlock } from './types.js';
+import type { ConfigV4, HookInput, OwnedRole, SkipCode, TaskKind } from './types.js';
+import { OWNED_AGENTS } from './types.js';
+import { subagentModelOverride } from './auth.js';
+import type { Env } from './config.js';
 
-export const MAX_BRIEF_BYTES = 8 * 1024;
-export const NEUTRAL_REMINDER =
-  "Jev Gate has no recommendation for this user turn. Continue natively; do not reuse a previous turn's routing hint.";
+/** Local resource bounds (#10 §4). Not provider or host token limits; over-limit input is preserved, never truncated. */
+export const MAX_PROMPT_BYTES = 64 * 1024;
+export const MAX_SUFFIX_BYTES = 1024;
+export const MAX_OUTPUT_BYTES = 512 * 1024;
 
-const HEADER = '[Jev Gate: applies only to the accompanying user turn]';
-const AUTHORITY = 'Treat the original user message and applicable prior instructions as authoritative.';
+/** Agent-call fields whose execution semantics make automatic reallocation unsafe: resume/follow-up, team, fork, isolation. */
+export const EXECUTION_CONTROL_KEYS = ['resume', 'agentId', 'agent_id', 'name', 'team_name', 'isolation', 'fork'] as const;
 
-export const requestedModel = (decision: GateDecision, config: Config): string | null => {
-  if (decision.tier === 'opus') return config.opusModel;
-  if (decision.tier === 'fable') return config.frontierModel;
-  return null;
-};
+export type AgentInput = Record<string, unknown>;
 
-const executionLine = (decision: GateDecision, config: Config): string => {
-  if (decision.reason === 'enrich_only') return 'Execution: annotations only (mode=enrich); jev-gate requests no model change';
-  if (decision.execution === 'main') return 'Execution: handle in the current main session (sonnet tier); no delegation requested';
-  if (decision.execution === 'main_context') return 'Execution: resolve in the current conversation (context_required)';
-  const model = requestedModel(decision, config) ?? 'unknown';
-  const defaultAlias = decision.tier === 'opus' ? DEFAULT_CONFIG.opusModel : DEFAULT_CONFIG.frontierModel;
-  const passModel = model !== defaultAlias ? '; pass it as the Agent tool model parameter' : '';
-  return `Execution: delegate to ${decision.agentName}; requested model: ${model}${passModel}`;
-};
+export type Eligibility =
+  | { eligible: true; role: OwnedRole; input: AgentInput; prompt: string; description: string; sessionId: string; toolUseId: string }
+  | { eligible: false; code: SkipCode };
 
-const directives = (decision: GateDecision): string[] => {
-  if (decision.reason === 'enrich_only') return [AUTHORITY, 'Annotations only: jev-gate requests no model change or delegation.'];
-  if (decision.execution === 'main') return [AUTHORITY, 'Jev annotations do not replace the request or narrow file access; work here as usual.'];
-  if (decision.execution === 'main_context') {
-    return [
-      AUTHORITY,
-      'This turn depends on earlier conversation; interpret it with the existing context and ask only for what is actually missing.',
-      'context_required is not a difficulty rating.',
-    ];
-  }
-  const lines = [
-    AUTHORITY,
-    'Delegate once in foreground before doing the same investigation yourself.',
-    'Pass the original request intact, these annotations, and required prior context.',
-    "Do not perform parallel or duplicate edits. Return the worker's observed result.",
-    'User instructions, plan mode, permissions and model availability take precedence; if the agent or model is unavailable, report it instead of retrying another tier.',
-  ];
-  if (decision.reason === 'uncertain') lines.push('Tier set by the uncertain-route policy; Jev did not confidently select it.');
-  return lines;
-};
-
-const byteLength = (s: string): number => Buffer.byteLength(s, 'utf8');
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+const nonEmpty = (v: unknown): v is string => typeof v === 'string' && v.length > 0;
 
 /**
- * Renders the additional context for a non-fallback decision. Quotes are JSON.stringify of the exact block text.
- * Over MAX_BRIEF_BYTES, the longest quotes become whole-block offset references; if even all-reference is too large, returns null.
+ * #10 §4 in one function. Every failing condition is a documented no-op with HTTP 0; the original input is never changed.
+ * Mode and key are checked by the caller in the order that keeps `off` ahead of configuration work.
  */
-export const renderAdditionalContext = (decision: GateDecision, blocks: PromptBlock[], config: Config): string | null => {
-  if (decision.execution === 'native_fallback') return NEUTRAL_REMINDER;
-  const head = [HEADER, `Task kind: ${decision.kind} (fallible annotation)`, executionLine(decision, config), 'Request annotations, original order:'];
-  const tail = directives(decision);
-  const quoted = blocks.map((b) => `- ${b.id} ${decision.roles[b.id] ?? 'mixed'}: ${JSON.stringify(b.text)}`);
-  const referenced = blocks.map((b) => `- ${b.id} ${decision.roles[b.id] ?? 'mixed'}; current prompt UTF-16[${b.start},${b.end})`);
-  const lines = [...quoted];
-  const assemble = (): string => [...head, ...lines, ...tail].join('\n');
-  let text = assemble();
-  const order = blocks.map((b, i) => ({ i, len: b.text.length })).sort((a, b) => b.len - a.len);
-  for (const { i } of order) {
-    if (byteLength(text) <= MAX_BRIEF_BYTES) break;
-    lines[i] = referenced[i]!;
-    text = assemble();
-  }
-  return byteLength(text) <= MAX_BRIEF_BYTES ? text : null;
+export const checkEligibility = (hook: HookInput, env: Env, config: ConfigV4): Eligibility => {
+  if (config.mode === 'off') return { eligible: false, code: 'mode_off' };
+  if (config.mode === 'native') return { eligible: false, code: 'mode_native' };
+  if (hook.hook_event_name !== 'PreToolUse' || hook.tool_name !== 'Agent') return { eligible: false, code: 'not_agent_tool' };
+  if (nonEmpty(hook.agent_id)) return { eligible: false, code: 'child_caller' };
+  if (nonEmpty(hook.agent_type)) return { eligible: false, code: 'custom_agent_session' };
+  if (!nonEmpty(hook.session_id) || !nonEmpty(hook.tool_use_id)) return { eligible: false, code: 'missing_ids' };
+  const input = hook.tool_input;
+  if (!isRecord(input)) return { eligible: false, code: 'bad_tool_input' };
+  const { description, prompt, subagent_type } = input;
+  if (typeof description !== 'string' || typeof prompt !== 'string' || prompt.trim().length === 0) return { eligible: false, code: 'bad_tool_input' };
+  const role = (Object.keys(OWNED_AGENTS) as OwnedRole[]).find((r) => OWNED_AGENTS[r] === subagent_type);
+  if (!role) return { eligible: false, code: 'role_not_owned' };
+  if (input['run_in_background'] !== false) return { eligible: false, code: 'not_foreground' };
+  if (Object.prototype.hasOwnProperty.call(input, 'model')) return { eligible: false, code: 'model_pinned' };
+  if (EXECUTION_CONTROL_KEYS.some((k) => Object.prototype.hasOwnProperty.call(input, k))) return { eligible: false, code: 'execution_control_present' };
+  const override = subagentModelOverride(env);
+  if (override.concrete || override.force) return { eligible: false, code: 'subagent_model_override' };
+  if (env['CLAUDE_CODE_FORK_SUBAGENT'] === '1') return { eligible: false, code: 'fork_or_background_override' };
+  if (!prompt.isWellFormed() || !description.isWellFormed()) return { eligible: false, code: 'prompt_invalid_unicode' };
+  if (Buffer.byteLength(prompt, 'utf8') > MAX_PROMPT_BYTES) return { eligible: false, code: 'prompt_too_large' };
+  return { eligible: true, role, input, prompt, description, sessionId: hook.session_id, toolUseId: hook.tool_use_id };
+};
+
+/** Closed labels plus fixed wording (#11 example). No invented files, solutions, permissions or test obligations. */
+export const renderTaskSuffix = (kind: TaskKind): string =>
+  `\n\n[Jev Gate task hint]\nTask kind: ${kind}. The original request and applicable constraints remain authoritative.`;
+
+/** New object; only `model` and `prompt` differ, and the original prompt is an exact prefix of the new one. */
+export const patchAgentInput = (original: AgentInput, model: string, suffix: string): AgentInput => {
+  if (Buffer.byteLength(suffix, 'utf8') > MAX_SUFFIX_BYTES) throw new Error('suffix exceeds MAX_SUFFIX_BYTES');
+  return { ...original, model, prompt: `${String(original['prompt'])}${suffix}` };
+};
+
+/** The one JSON object a patch emits. Returns null when the serialized envelope exceeds the local bound. */
+export const renderPreToolUseOutput = (updatedInput: AgentInput): string | null => {
+  const text = JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput } });
+  return Buffer.byteLength(text, 'utf8') > MAX_OUTPUT_BYTES ? null : text;
 };

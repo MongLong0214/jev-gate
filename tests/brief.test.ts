@@ -1,69 +1,101 @@
 import { describe, expect, it } from 'vitest';
 
-import { splitLossless } from '../src/blocks.js';
-import { MAX_BRIEF_BYTES, NEUTRAL_REMINDER, renderAdditionalContext } from '../src/brief.js';
+import { checkEligibility, EXECUTION_CONTROL_KEYS, MAX_OUTPUT_BYTES, MAX_PROMPT_BYTES, MAX_SUFFIX_BYTES, patchAgentInput, renderPreToolUseOutput, renderTaskSuffix } from '../src/brief.js';
 import { DEFAULT_CONFIG } from '../src/config.js';
-import type { GateDecision } from '../src/types.js';
-import { NATIVE_FALLBACK_DECISION } from '../src/types.js';
+import type { ConfigV4, HookInput } from '../src/types.js';
 
-const EXAMPLE = '검색 응답이 역순으로 오면 옛 결과가 화면을 덮는 버그를 고쳐줘.\nAPI 응답 형식과 의존성은 바꾸지 마.\n늦은 응답을 재현하는 테스트도 추가해.';
-const blocks = splitLossless(EXAMPLE);
-const roles = { u1: 'goal', u2: 'constraint', u3: 'acceptance' } as const;
-const delegateOpus: GateDecision = { kind: 'debug', roles, rawRoute: null, execution: 'delegate', tier: 'opus', agentName: 'jev-gate:opus', reason: 'selected' };
+const auto: ConfigV4 = { ...DEFAULT_CONFIG, mode: 'auto' };
+const base = (over: Partial<HookInput> = {}, input: Record<string, unknown> = {}): HookInput => ({
+  hook_event_name: 'PreToolUse',
+  session_id: 'test-session',
+  tool_use_id: 'test-call',
+  tool_name: 'Agent',
+  tool_input: { subagent_type: 'jev-gate:worker', description: 'Implement camera controls', prompt: 'Implement pan and zoom. Preserve the camera API.', run_in_background: false, ...input },
+  ...over,
+});
 
-describe('renderAdditionalContext', () => {
-  it('renders the spec example with exact quotes and delegation directives', () => {
-    const text = renderAdditionalContext(delegateOpus, blocks, DEFAULT_CONFIG);
-    expect(text).toBe(
-      [
-        '[Jev Gate: applies only to the accompanying user turn]',
-        'Task kind: debug (fallible annotation)',
-        'Execution: delegate to jev-gate:opus; requested model: opus',
-        'Request annotations, original order:',
-        '- u1 goal: "검색 응답이 역순으로 오면 옛 결과가 화면을 덮는 버그를 고쳐줘.\\n"',
-        '- u2 constraint: "API 응답 형식과 의존성은 바꾸지 마.\\n"',
-        '- u3 acceptance: "늦은 응답을 재현하는 테스트도 추가해."',
-        'Treat the original user message and applicable prior instructions as authoritative.',
-        'Delegate once in foreground before doing the same investigation yourself.',
-        'Pass the original request intact, these annotations, and required prior context.',
-        "Do not perform parallel or duplicate edits. Return the worker's observed result.",
-        'User instructions, plan mode, permissions and model availability take precedence; if the agent or model is unavailable, report it instead of retrying another tier.',
-      ].join('\n'),
-    );
+describe('checkEligibility', () => {
+  it('accepts the #11 example for both owned roles', () => {
+    const r = checkEligibility(base(), {}, auto);
+    expect(r).toMatchObject({ eligible: true, role: 'worker', sessionId: 'test-session', toolUseId: 'test-call' });
+    expect(checkEligibility(base({}, { subagent_type: 'jev-gate:planner' }), {}, auto)).toMatchObject({ eligible: true, role: 'planner' });
   });
 
-  it('names the trusted model override and the uncertain policy when they apply', () => {
-    const text = renderAdditionalContext({ ...delegateOpus, tier: 'fable', agentName: 'jev-gate:frontier', reason: 'uncertain' }, blocks, { ...DEFAULT_CONFIG, frontierModel: 'claude-fable-5-1' });
-    expect(text).toContain('Execution: delegate to jev-gate:frontier; requested model: claude-fable-5-1; pass it as the Agent tool model parameter');
-    expect(text).toContain('uncertain-route policy');
+  it.each([
+    ['mode off', base(), {}, { ...auto, mode: 'off' as const }, 'mode_off'],
+    ['mode native', base(), {}, { ...auto, mode: 'native' as const }, 'mode_native'],
+    ['other tool', base({ tool_name: 'Bash' }), {}, auto, 'not_agent_tool'],
+    ['other event', base({ hook_event_name: 'PostToolUse' }), {}, auto, 'not_agent_tool'],
+    ['child caller', base({ agent_id: 'a1' }), {}, auto, 'child_caller'],
+    ['custom main agent', base({ agent_type: 'my-agent' }), {}, auto, 'custom_agent_session'],
+    ['missing session', base({ session_id: '' }), {}, auto, 'missing_ids'],
+    ['missing tool_use_id', { ...base(), tool_use_id: undefined }, {}, auto, 'missing_ids'],
+    ['non-object input', base({ tool_input: 'x' }), {}, auto, 'bad_tool_input'],
+    ['blank prompt', base({}, { prompt: '   ' }), {}, auto, 'bad_tool_input'],
+    ['missing description', base({}, { description: undefined }), {}, auto, 'bad_tool_input'],
+    ['other agent', base({}, { subagent_type: 'Explore' }), {}, auto, 'role_not_owned'],
+    ['other plugin agent', base({}, { subagent_type: 'other:worker' }), {}, auto, 'role_not_owned'],
+    ['V3 model-named agent', base({}, { subagent_type: 'jev-gate:opus' }), {}, auto, 'role_not_owned'],
+    ['background', base({}, { run_in_background: true }), {}, auto, 'not_foreground'],
+    ['background omitted', base({}, { run_in_background: undefined }), {}, auto, 'not_foreground'],
+    ['model pinned', base({}, { model: 'opus' }), {}, auto, 'model_pinned'],
+    ['model null is still a pin', base({}, { model: null }), {}, auto, 'model_pinned'],
+    ['model empty is still a pin', base({}, { model: '' }), {}, auto, 'model_pinned'],
+    ['concrete subagent model override', base(), { CLAUDE_CODE_SUBAGENT_MODEL: 'haiku' }, auto, 'subagent_model_override'],
+    ['force override', base(), { CLAUDE_CODE_SUBAGENT_MODEL_FORCE: '1' }, auto, 'subagent_model_override'],
+    ['fork mode forced on', base(), { CLAUDE_CODE_FORK_SUBAGENT: '1' }, auto, 'fork_or_background_override'],
+    ['lone surrogate', base({}, { prompt: 'bad \ud800 text' }), {}, auto, 'prompt_invalid_unicode'],
+    ['oversize prompt', base({}, { prompt: 'x'.repeat(MAX_PROMPT_BYTES + 1) }), {}, auto, 'prompt_too_large'],
+  ])('%s → no-op', (_name, hook, env, config, code) => {
+    expect(checkEligibility(hook as HookInput, env as Record<string, string>, config)).toEqual({ eligible: false, code });
   });
 
-  it('omits delegation and model text in enrich, main and main_context', () => {
-    const enrich = renderAdditionalContext({ ...delegateOpus, execution: 'main', tier: null, agentName: null, reason: 'enrich_only' }, blocks, DEFAULT_CONFIG)!;
-    expect(enrich).toContain('mode=enrich');
-    expect(enrich).not.toMatch(/delegate|requested model|jev-gate:/);
-    const main = renderAdditionalContext({ ...delegateOpus, execution: 'main', tier: 'sonnet', agentName: null }, blocks, DEFAULT_CONFIG)!;
-    expect(main).toContain('handle in the current main session');
-    expect(main).not.toMatch(/Delegate once/);
-    const ctx = renderAdditionalContext({ ...delegateOpus, execution: 'main_context', tier: null, agentName: null, reason: 'context_required' }, blocks, DEFAULT_CONFIG)!;
-    expect(ctx).toContain('context_required is not a difficulty rating');
-    expect(ctx).not.toMatch(/jev-gate:/);
+  it.each(EXECUTION_CONTROL_KEYS.map((k) => [k]))('execution control %s → no-op', (key) => {
+    expect(checkEligibility(base({}, { [key]: 'x' }), {}, auto)).toEqual({ eligible: false, code: 'execution_control_present' });
   });
 
-  it('returns the fixed neutral reminder for native fallback', () => {
-    expect(renderAdditionalContext(NATIVE_FALLBACK_DECISION, blocks, DEFAULT_CONFIG)).toBe(NEUTRAL_REMINDER);
+  it('documented inherit override is harmless and unknown ordinary fields do not block', () => {
+    expect(checkEligibility(base({}, { mode: 'acceptEdits', custom_field: { deep: 1 } }), { CLAUDE_CODE_SUBAGENT_MODEL: 'inherit', CLAUDE_CODE_FORK_SUBAGENT: '0' }, auto).eligible).toBe(true);
+  });
+});
+
+describe('patchAgentInput / renderTaskSuffix / renderPreToolUseOutput', () => {
+  it('produces the #11 example output exactly', () => {
+    const original = { subagent_type: 'jev-gate:worker', description: 'Implement camera controls', prompt: 'Implement pan and zoom. Preserve the camera API.', run_in_background: false };
+    const out = renderPreToolUseOutput(patchAgentInput(original, 'sonnet', renderTaskSuffix('implement')));
+    expect(JSON.parse(out!)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        updatedInput: {
+          subagent_type: 'jev-gate:worker',
+          description: 'Implement camera controls',
+          prompt: 'Implement pan and zoom. Preserve the camera API.\n\n[Jev Gate task hint]\nTask kind: implement. The original request and applicable constraints remain authoritative.',
+          run_in_background: false,
+          model: 'sonnet',
+        },
+      },
+    });
+    expect(out).not.toMatch(/permissionDecision|"decision"|updatedPermissions|"continue"/);
   });
 
-  it('switches long quotes to whole-block offset references instead of truncating', () => {
-    const long = 'x'.repeat(9000);
-    const prompt = `짧은 목표\n${long}\n검증 조건`;
-    const b = splitLossless(prompt);
-    const decision: GateDecision = { ...delegateOpus, roles: { u1: 'goal', u2: 'background', u3: 'acceptance' } };
-    const text = renderAdditionalContext(decision, b, DEFAULT_CONFIG)!;
-    expect(Buffer.byteLength(text, 'utf8')).toBeLessThanOrEqual(MAX_BRIEF_BYTES);
-    expect(text).toContain(`- u2 background; current prompt UTF-16[${b[1]!.start},${b[1]!.end})`);
-    expect(text).toContain('- u1 goal: "짧은 목표\\n"');
-    expect(text).not.toContain('xxxxxxxxxx…');
-    expect(text).not.toContain(long.slice(0, 100));
+  it('preserves every other field, does not mutate, and keeps the original prompt as an exact prefix (CRLF/fence/Unicode/negation)', () => {
+    const prompt = 'Do NOT change the API.\r\n```js\nconst x = "😀";\n```\n  -3.5 ≠ 3';
+    const original = { subagent_type: 'jev-gate:worker', description: 'd', prompt, run_in_background: false, mode: 'default', nested: { a: [1, 2] }, marker: '[Jev Gate task hint]' };
+    const frozen = JSON.stringify(original);
+    const patched = patchAgentInput(original, 'claude-opus-5', renderTaskSuffix('investigate'));
+    expect(JSON.stringify(original)).toBe(frozen);
+    expect(patched).not.toBe(original);
+    expect(String(patched['prompt']).startsWith(prompt)).toBe(true);
+    expect(patched['model']).toBe('claude-opus-5');
+    const { model: _m, prompt: _p, ...rest } = patched;
+    const { prompt: _op, ...origRest } = original;
+    expect(rest).toEqual(origRest);
+    expect(Buffer.byteLength(renderTaskSuffix('other'), 'utf8')).toBeLessThanOrEqual(MAX_SUFFIX_BYTES);
+    expect(() => patchAgentInput(original, 'x', 'y'.repeat(MAX_SUFFIX_BYTES + 1))).toThrow();
+  });
+
+  it('discards the whole output when the serialized envelope exceeds the bound', () => {
+    const big = { subagent_type: 'jev-gate:worker', description: 'd', prompt: 'p', run_in_background: false, extra: 'z'.repeat(MAX_OUTPUT_BYTES) };
+    expect(renderPreToolUseOutput(patchAgentInput(big, 'sonnet', renderTaskSuffix('other')))).toBeNull();
   });
 });

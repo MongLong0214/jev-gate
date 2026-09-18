@@ -2,182 +2,137 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { splitLossless } from '../src/blocks.js';
 import { DEFAULT_CONFIG } from '../src/config.js';
-import { buildJevRequest, callJev, decide, JEV_ENDPOINT, MAX_RESPONSE_BYTES, topChoices, validateChoice } from '../src/jev.js';
-import { KINDS, NATIVE_FALLBACK_DECISION, ROLES, ROUTES } from '../src/types.js';
+import { buildTaskRequest, callJev, CONTEXT_QUESTION, decideTask, JEV_ENDPOINT, KIND_QUESTION, MAX_RESPONSE_BYTES, MODEL_PROFILES, ROUTE_QUESTION, topChoices, validateChoice } from '../src/jev.js';
+import { CONTEXT_ANSWERS, ROUTE_ANSWERS, TASK_KINDS } from '../src/types.js';
 
-const EXAMPLE = '검색 응답이 역순으로 오면 옛 결과가 화면을 덮는 버그를 고쳐줘.\nAPI 응답 형식과 의존성은 바꾸지 마.\n늦은 응답을 재현하는 테스트도 추가해.';
-const blocks = splitLossless(EXAMPLE);
+const PROMPT = 'Implement pan and zoom.\r\nPreserve the current camera API.\n```js\nconst x = 1;\n```';
+const blocks = splitLossless(PROMPT);
+const config = { ...DEFAULT_CONFIG, mode: 'auto' as const };
 
-const choice = (keys: readonly string[], winner: string, p = 0.9, confidence = p): Record<string, unknown> => {
-  const rest = (1 - p) / (keys.length - 1);
-  const probabilities = Object.fromEntries(keys.map((k) => [k, k === winner ? p : rest]));
-  return { type: 'choice', choice: winner, probabilities, confidence };
-};
-
-const goodAnswers = (route = 'opus'): Record<string, unknown> => ({
-  task_kind: choice(KINDS, 'debug'),
-  route: choice(ROUTES, route),
-  role_u1: choice(ROLES, 'goal'),
-  role_u2: choice(ROLES, 'constraint'),
-  role_u3: choice(ROLES, 'acceptance'),
+const choice = (keys: readonly string[], winner: string, p = 0.9, confidence = p): Record<string, unknown> => ({
+  type: 'choice',
+  choice: winner,
+  probabilities: Object.fromEntries(keys.map((k) => [k, k === winner ? p : (1 - p) / (keys.length - 1)])),
+  confidence,
 });
+const answers = (route = 'opus', context = 'ready', kind = 'implement'): Record<string, unknown> => ({
+  context: choice(CONTEXT_ANSWERS, context),
+  route: choice(ROUTE_ANSWERS, route),
+  kind: choice(TASK_KINDS, kind),
+});
+const json = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), { status });
 
-const jsonResponse = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
-
-describe('buildJevRequest', () => {
-  it('sends only the blocks and fixed profiles, asks route only in auto mode', () => {
-    const auto = buildJevRequest(blocks, DEFAULT_CONFIG, 'auto');
-    expect(auto.model).toBe('jev-1.13.0');
-    expect(auto.state.request_blocks).toEqual(blocks.map(({ id, text }) => ({ id, text })));
-    expect(auto.state.context_available_to_jev).toBe('current_user_text_only');
-    expect(Object.keys(auto.questions).sort()).toEqual(['role_u1', 'role_u2', 'role_u3', 'route', 'task_kind']);
-    expect(auto.questions['role_u2']?.instructions).toContain('block u2 in request_blocks');
-    expect(Object.keys(auto.questions['route']!.criteria)).toEqual(ROUTES);
-    const enrich = buildJevRequest(blocks, DEFAULT_CONFIG, 'enrich');
-    expect('route' in enrich.questions).toBe(false);
-    expect(JSON.stringify(auto)).not.toMatch(/cwd|transcript|session_id|Bearer/);
+describe('buildTaskRequest (#10 §5)', () => {
+  it('sends role, native default tier, description, lossless blocks and fixed profiles; three independent Choice questions', () => {
+    const req = buildTaskRequest('worker', 'Implement camera input', blocks, config);
+    expect(req.model).toBe('jev-1.13.0');
+    expect(req.state).toEqual({ role: 'worker', native_default_tier: 'sonnet', task: { description: 'Implement camera input', blocks: blocks.map(({ id, text }) => ({ id, text })) }, model_profiles: MODEL_PROFILES });
+    expect(req.state.task.blocks.map((b) => b.text).join('')).toBe(PROMPT);
+    expect(Object.keys(req.questions)).toEqual(['context', 'route', 'kind']);
+    expect(req.questions.context).toBe(CONTEXT_QUESTION);
+    expect(req.questions.route).toBe(ROUTE_QUESTION);
+    expect(req.questions.kind).toBe(KIND_QUESTION);
+    expect(Object.keys(ROUTE_QUESTION.criteria)).toEqual(['sonnet', 'opus', 'fable', 'abstain']);
+    expect(ROUTE_QUESTION.instructions).toContain('task.blocks');
+    expect(buildTaskRequest('planner', 'd', blocks, config).state.native_default_tier).toBe('opus');
+    expect(JSON.stringify(req)).not.toMatch(/transcript|cwd|Bearer|messages|rewritten/);
   });
 });
 
 describe('callJev', () => {
-  it('posts once to the fixed endpoint with a bearer header and no redirects', async () => {
-    const fetchImpl = vi.fn(async () => jsonResponse({ model: 'jev-1.13.0', answers: goodAnswers(), usage: { input_tokens: 321, output_tokens: 12 } }));
-    const req = buildJevRequest(blocks, DEFAULT_CONFIG, 'auto');
-    const out = await callJev(req, { apiKey: 'sk-test-secret', deadlineMs: 1000, fetchImpl: fetchImpl as unknown as typeof fetch });
+  it('posts once to the fixed endpoint with Bearer auth, redirect:error, and returns whitelisted usage', async () => {
+    const fetchImpl = vi.fn(async () => json({ model: 'jev-1.13.0', answers: answers(), usage: { input_tokens: 500, output_tokens: 30 } }));
+    const req = buildTaskRequest('worker', 'd', blocks, config);
+    const out = await callJev(req, { apiKey: 'sk-secret', deadlineMs: 1000, fetchImpl: fetchImpl as unknown as typeof fetch });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe(JEV_ENDPOINT);
     expect(init.method).toBe('POST');
     expect(init.redirect).toBe('error');
-    expect((init.headers as Record<string, string>)['authorization']).toBe('Bearer sk-test-secret');
+    expect((init.headers as Record<string, string>)['authorization']).toBe('Bearer sk-secret');
     expect(JSON.parse(init.body as string)).toEqual(req);
-    expect(out.ok).toBe(true);
-    if (out.ok) {
-      expect(out.response.model).toBe('jev-1.13.0');
-      expect(out.response.usage).toEqual({ input_tokens: 321, output_tokens: 12 });
-      expect(JSON.stringify(out)).not.toContain('sk-test-secret');
-    }
+    expect(out.ok && out.response.usage).toEqual({ input_tokens: 500, output_tokens: 30 });
+    expect(JSON.stringify(out)).not.toContain('sk-secret');
   });
 
-  it.each([
-    [401, 'http_401'],
-    [422, 'http_422'],
-    [429, 'http_429'],
-    [529, 'http_529'],
-    [500, 'http_other'],
-  ])('maps status %s to %s with zero retries', async (status, code) => {
-    const fetchImpl = vi.fn(async () => jsonResponse({ error: 'x' }, status));
-    const out = await callJev(buildJevRequest(blocks, DEFAULT_CONFIG, 'auto'), { apiKey: 'k', deadlineMs: 1000, fetchImpl: fetchImpl as unknown as typeof fetch });
+  it.each([[401, 'http_401'], [422, 'http_422'], [429, 'http_429'], [529, 'http_529'], [503, 'http_other']])('status %s → %s, zero retries', async (status, code) => {
+    const fetchImpl = vi.fn(async () => json({ error: 'reflected sk-secret', extra: { leak: 'x' } }, status));
+    const out = await callJev(buildTaskRequest('worker', 'd', blocks, config), { apiKey: 'sk-secret', deadlineMs: 1000, fetchImpl: fetchImpl as unknown as typeof fetch });
     expect(out).toMatchObject({ ok: false, code, status });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(out)).not.toMatch(/reflected|leak|sk-secret/);
   });
 
-  it('times out on the single deadline and reports timeout', async () => {
-    const fetchImpl = vi.fn((_: string, init: RequestInit) => new Promise<Response>((_resolve, reject) => init.signal?.addEventListener('abort', () => reject(new Error('aborted')))));
-    const out = await callJev(buildJevRequest(blocks, DEFAULT_CONFIG, 'auto'), { apiKey: 'k', deadlineMs: 20, fetchImpl: fetchImpl as unknown as typeof fetch });
+  it('one deadline covers headers and body; a stalled body times out and a pre-aborted signal sends nothing', async () => {
+    const stalledBody = new ReadableStream<Uint8Array>({ start() { /* never enqueue, never close */ } });
+    const stalled = vi.fn(async () => new Response(stalledBody, { status: 200 }));
+    const out = await callJev(buildTaskRequest('worker', 'd', blocks, config), { apiKey: 'k', deadlineMs: 30, fetchImpl: stalled as unknown as typeof fetch });
     expect(out).toMatchObject({ ok: false, code: 'timeout' });
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-  });
-
-  it('makes no request after the caller aborted and reports aborted mid-flight', async () => {
     const pre = new AbortController();
     pre.abort();
-    const fetchImpl = vi.fn();
-    const out = await callJev(buildJevRequest(blocks, DEFAULT_CONFIG, 'auto'), { apiKey: 'k', deadlineMs: 1000, fetchImpl: fetchImpl as unknown as typeof fetch, signal: pre.signal });
-    expect(out).toMatchObject({ ok: false, code: 'aborted' });
-    expect(fetchImpl).not.toHaveBeenCalled();
+    const never = vi.fn();
+    expect(await callJev(buildTaskRequest('worker', 'd', blocks, config), { apiKey: 'k', deadlineMs: 1000, fetchImpl: never as unknown as typeof fetch, signal: pre.signal })).toMatchObject({ ok: false, code: 'aborted' });
+    expect(never).not.toHaveBeenCalled();
+  }, 10_000);
 
-    const mid = new AbortController();
-    const hanging = vi.fn((_: string, init: RequestInit) => new Promise<Response>((_resolve, reject) => init.signal?.addEventListener('abort', () => reject(new Error('aborted')))));
-    const p = callJev(buildJevRequest(blocks, DEFAULT_CONFIG, 'auto'), { apiKey: 'k', deadlineMs: 5000, fetchImpl: hanging as unknown as typeof fetch, signal: mid.signal });
-    mid.abort();
-    expect(await p).toMatchObject({ ok: false, code: 'aborted' });
+  it('rejects invalid JSON, non-object answers, oversize bodies; keeps usage null when missing', async () => {
+    const run = (res: () => Response | Promise<Response>): Promise<unknown> => callJev(buildTaskRequest('worker', 'd', blocks, config), { apiKey: 'k', deadlineMs: 2000, fetchImpl: (async () => res()) as unknown as typeof fetch });
+    expect(await run(() => new Response('{oops', { status: 200 }))).toMatchObject({ ok: false, code: 'response_invalid' });
+    expect(await run(() => json({ model: 'jev' }))).toMatchObject({ ok: false, code: 'response_invalid' });
+    expect(await run(() => new Response('x'.repeat(MAX_RESPONSE_BYTES + 1), { status: 200 }))).toMatchObject({ ok: false, code: 'response_too_large' });
+    expect(await run(() => Promise.reject(new TypeError('fetch failed')))).toMatchObject({ ok: false, code: 'network' });
+    const noUsage = await run(() => json({ answers: answers() }));
+    expect((noUsage as { ok: true; response: { usage: unknown; model: unknown } }).response).toMatchObject({ usage: { input_tokens: null, output_tokens: null }, model: null });
   });
 
-  it('rejects invalid JSON, missing answers, oversize bodies and network errors', async () => {
-    const bad = async (res: () => Response | Promise<Response>): Promise<unknown> =>
-      callJev(buildJevRequest(blocks, DEFAULT_CONFIG, 'auto'), { apiKey: 'k', deadlineMs: 2000, fetchImpl: (async () => res()) as unknown as typeof fetch });
-    expect(await bad(() => new Response('{oops', { status: 200 }))).toMatchObject({ ok: false, code: 'response_invalid' });
-    expect(await bad(() => jsonResponse({ model: 'jev' }))).toMatchObject({ ok: false, code: 'response_invalid' });
-    expect(await bad(() => new Response('x'.repeat(MAX_RESPONSE_BYTES + 1), { status: 200 }))).toMatchObject({ ok: false, code: 'response_too_large' });
-    expect(await bad(() => Promise.reject(new TypeError('fetch failed')))).toMatchObject({ ok: false, code: 'network' });
-  });
-
-  it('keeps usage null when absent instead of inventing zero', async () => {
-    const out = await callJev(buildJevRequest(blocks, DEFAULT_CONFIG, 'auto'), { apiKey: 'k', deadlineMs: 1000, fetchImpl: (async () => jsonResponse({ answers: goodAnswers() })) as unknown as typeof fetch });
-    expect(out.ok && out.response.usage).toEqual({ input_tokens: null, output_tokens: null });
-    expect(out.ok && out.response.model).toBeNull();
-  });
-
-  it('refuses oversize requests before any HTTP call', async () => {
-    const huge = splitLossless('x'.repeat(200 * 1024));
-    const fetchImpl = vi.fn();
-    const out = await callJev(buildJevRequest(huge, DEFAULT_CONFIG, 'auto'), { apiKey: 'k', deadlineMs: 1000, fetchImpl: fetchImpl as unknown as typeof fetch });
-    expect(out).toMatchObject({ ok: false, code: 'request_too_large' });
-    expect(fetchImpl).not.toHaveBeenCalled();
+  it('usage survives an answer set that will later fail validation (consumption is known, decision is not)', async () => {
+    const out = await callJev(buildTaskRequest('worker', 'd', blocks, config), { apiKey: 'k', deadlineMs: 1000, fetchImpl: (async () => json({ model: 'jev-1.13.0', answers: { route: 'garbage' }, usage: { input_tokens: 77, output_tokens: 1 } })) as unknown as typeof fetch });
+    expect(out.ok && out.response.usage.input_tokens).toBe(77);
+    expect(decideTask((out as { response: { answers: Record<string, unknown> } }).response.answers, 0.8)).toMatchObject({ action: 'preserve', reason: 'context_invalid' });
   });
 });
 
 describe('validateChoice', () => {
-  it('accepts a well-formed answer and exposes ties', () => {
-    const ok = validateChoice(choice(ROUTES, 'opus'), ROUTES);
-    expect(ok?.choice).toBe('opus');
-    const tie = validateChoice({ type: 'choice', choice: 'opus', probabilities: { sonnet: 0, opus: 0.5, fable: 0.5, context_required: 0, uncertain: 0 }, confidence: 0.5 }, ROUTES);
-    expect(tie && topChoices(tie).sort()).toEqual(['fable', 'opus']);
-  });
-
-  it('rejects wrong key sets, coerced types, bad sums, non-argmax choices and bad confidence', () => {
-    const base = choice(ROUTES, 'opus') as { probabilities: Record<string, number> };
-    expect(validateChoice({ ...base, probabilities: { ...base.probabilities, extra: 0 } }, ROUTES)).toBeNull();
-    const { sonnet: _s, ...missing } = base.probabilities;
-    expect(validateChoice({ ...base, probabilities: missing }, ROUTES)).toBeNull();
-    expect(validateChoice({ ...base, probabilities: { ...base.probabilities, opus: '0.9' } }, ROUTES)).toBeNull();
-    expect(validateChoice({ ...base, probabilities: { ...base.probabilities, sonnet: 0.5 } }, ROUTES)).toBeNull();
-    expect(validateChoice({ ...base, choice: 'sonnet' }, ROUTES)).toBeNull();
-    expect(validateChoice({ ...base, confidence: 1.2 }, ROUTES)).toBeNull();
-    expect(validateChoice({ ...base, confidence: true }, ROUTES)).toBeNull();
-    expect(validateChoice({ ...base, type: 'noul' }, ROUTES)).toBeNull();
-    expect(validateChoice({ ...base, probabilities: { ...base.probabilities, opus: Number.NaN } }, ROUTES)).toBeNull();
+  it('rejects wrong key sets, coercible strings, bad sums, non-argmax choices and bad confidence', () => {
+    const good = choice(ROUTE_ANSWERS, 'opus') as { probabilities: Record<string, number> };
+    expect(validateChoice(good, ROUTE_ANSWERS)?.choice).toBe('opus');
+    expect(validateChoice({ ...good, probabilities: { ...good.probabilities, extra: 0 } }, ROUTE_ANSWERS)).toBeNull();
+    expect(validateChoice({ ...good, probabilities: { ...good.probabilities, opus: '0.9' } }, ROUTE_ANSWERS)).toBeNull();
+    expect(validateChoice({ ...good, probabilities: { ...good.probabilities, sonnet: 0.5 } }, ROUTE_ANSWERS)).toBeNull();
+    expect(validateChoice({ ...good, choice: 'sonnet' }, ROUTE_ANSWERS)).toBeNull();
+    expect(validateChoice({ ...good, confidence: 1.5 }, ROUTE_ANSWERS)).toBeNull();
+    expect(validateChoice({ ...good, probabilities: { ...good.probabilities, fable: Number.NaN } }, ROUTE_ANSWERS)).toBeNull();
+    const tie = { type: 'choice', choice: 'opus', probabilities: { sonnet: 0.5, opus: 0.5, fable: 0, abstain: 0 }, confidence: 0.5 };
+    expect(topChoices(validateChoice(tie, ROUTE_ANSWERS)!).sort()).toEqual(['opus', 'sonnet']);
   });
 });
 
-describe('decide', () => {
-  it('routes confident tiers to main or the scoped agents', () => {
-    expect(decide(goodAnswers('opus'), blocks, DEFAULT_CONFIG, 'auto').decision).toMatchObject({ kind: 'debug', execution: 'delegate', tier: 'opus', agentName: 'jev-gate:opus', reason: 'selected', roles: { u1: 'goal', u2: 'constraint', u3: 'acceptance' } });
-    expect(decide(goodAnswers('fable'), blocks, DEFAULT_CONFIG, 'auto').decision).toMatchObject({ execution: 'delegate', tier: 'fable', agentName: 'jev-gate:frontier' });
-    expect(decide(goodAnswers('sonnet'), blocks, DEFAULT_CONFIG, 'auto').decision).toMatchObject({ execution: 'main', tier: 'sonnet', agentName: null, reason: 'selected' });
+describe('decideTask (#10 §5 policy)', () => {
+  it('patches only when context is ready and a unique tier clears the floor', () => {
+    expect(decideTask(answers('sonnet'), 0.8)).toMatchObject({ action: 'patch', tier: 'sonnet', kind: 'implement', reason: null });
+    expect(decideTask(answers('opus'), 0.8)).toMatchObject({ action: 'patch', tier: 'opus' });
+    expect(decideTask(answers('fable', 'ready', 'design'), 0.8)).toMatchObject({ action: 'patch', tier: 'fable', kind: 'design' });
   });
 
-  it('keeps context_required in the main conversation even when tied or low confidence', () => {
-    expect(decide(goodAnswers('context_required'), blocks, DEFAULT_CONFIG, 'auto').decision).toMatchObject({ execution: 'main_context', tier: null, reason: 'context_required' });
-    const tied = { ...goodAnswers(), route: { type: 'choice', choice: 'opus', probabilities: { sonnet: 0, opus: 0.5, fable: 0, context_required: 0.5, uncertain: 0 }, confidence: 0.5 } };
-    expect(decide(tied, blocks, DEFAULT_CONFIG, 'auto').decision.execution).toBe('main_context');
-    const low = { ...goodAnswers(), route: choice(ROUTES, 'context_required', 0.4, 0.2) };
-    expect(decide(low, blocks, DEFAULT_CONFIG, 'auto').decision.execution).toBe('main_context');
+  it('V3 regression: sonnet .82 / confidence .77 / floor .8 preserves the native input and does not escalate', () => {
+    const v3 = { ...answers(), route: { type: 'choice', choice: 'sonnet', probabilities: { sonnet: 0.82, opus: 0.18, fable: 0, abstain: 0 }, confidence: 0.77 } };
+    expect(decideTask(v3, 0.8)).toMatchObject({ action: 'preserve', tier: null, reason: 'route_low_confidence' });
   });
 
-  it('uses the configured uncertain tier for uncertain, tied or low-confidence routes', () => {
-    expect(decide(goodAnswers('uncertain'), blocks, DEFAULT_CONFIG, 'auto').decision).toMatchObject({ execution: 'delegate', tier: 'fable', agentName: 'jev-gate:frontier', reason: 'uncertain' });
-    const low = { ...goodAnswers(), route: choice(ROUTES, 'opus', 0.6, 0.55) };
-    expect(decide(low, blocks, DEFAULT_CONFIG, 'auto').decision).toMatchObject({ tier: 'fable', reason: 'uncertain' });
-    expect(decide(low, blocks, { ...DEFAULT_CONFIG, uncertainTier: 'opus' }, 'auto').decision).toMatchObject({ tier: 'opus', agentName: 'jev-gate:opus', reason: 'uncertain' });
-    const tie = { ...goodAnswers(), route: { type: 'choice', choice: 'opus', probabilities: { sonnet: 0, opus: 0.5, fable: 0.5, context_required: 0, uncertain: 0 }, confidence: 0.99 } };
-    expect(decide(tie, blocks, DEFAULT_CONFIG, 'auto').decision.reason).toBe('uncertain');
+  it('context is judged first: needs_context, ties, invalid or low confidence preserve even with a confident route', () => {
+    expect(decideTask(answers('opus', 'needs_context'), 0.8)).toMatchObject({ action: 'preserve', reason: 'needs_context' });
+    expect(decideTask({ ...answers(), context: { type: 'choice', choice: 'ready', probabilities: { ready: 0.5, needs_context: 0.5 }, confidence: 0.99 } }, 0.8)).toMatchObject({ reason: 'context_tie' });
+    expect(decideTask({ ...answers(), context: choice(CONTEXT_ANSWERS, 'ready', 0.7, 0.6) }, 0.8)).toMatchObject({ reason: 'context_low_confidence' });
+    const { context: _c, ...noContext } = answers();
+    expect(decideTask(noContext, 0.8)).toMatchObject({ reason: 'context_invalid' });
   });
 
-  it('falls back natively only when the auto route answer is missing or invalid', () => {
-    const { route: _r, ...noRoute } = goodAnswers();
-    expect(decide(noRoute, blocks, DEFAULT_CONFIG, 'auto')).toEqual({ decision: NATIVE_FALLBACK_DECISION, code: 'answers_invalid' });
-    expect(decide({ ...goodAnswers(), route: { type: 'choice', choice: 'opus' } }, blocks, DEFAULT_CONFIG, 'auto').code).toBe('answers_invalid');
-    expect(decide(noRoute, blocks, DEFAULT_CONFIG, 'enrich')).toMatchObject({ code: null, decision: { execution: 'main', reason: 'enrich_only', rawRoute: null, tier: null, agentName: null, kind: 'debug' } });
-  });
-
-  it('degrades uncertain annotations to other/mixed without dropping the turn', () => {
-    const answers = { ...goodAnswers(), task_kind: { type: 'choice', choice: 'x' }, role_u2: choice(ROLES, 'constraint', 0.4, 0.3), role_u3: { type: 'choice', choice: 'goal', probabilities: { goal: 0.5, constraint: 0.5, acceptance: 0, background: 0, mixed: 0 }, confidence: 0.9 } };
-    const { decision, code } = decide(answers, blocks, DEFAULT_CONFIG, 'auto');
-    expect(code).toBeNull();
-    expect(decision.kind).toBe('other');
-    expect(decision.roles).toEqual({ u1: 'goal', u2: 'mixed', u3: 'mixed' });
-    expect(decision.execution).toBe('delegate');
+  it('route abstain, tie, invalid or missing preserve; kind degrades to other without invalidating the route', () => {
+    expect(decideTask(answers('abstain'), 0.8)).toMatchObject({ action: 'preserve', reason: 'route_abstain' });
+    expect(decideTask({ ...answers(), route: { type: 'choice', choice: 'opus', probabilities: { sonnet: 0, opus: 0.5, fable: 0.5, abstain: 0 }, confidence: 0.9 } }, 0.8)).toMatchObject({ reason: 'route_tie' });
+    const { route: _r, ...noRoute } = answers();
+    expect(decideTask(noRoute, 0.8)).toMatchObject({ reason: 'route_invalid' });
+    expect(decideTask({ ...answers('opus'), kind: { type: 'choice', choice: 'nope' } }, 0.8)).toMatchObject({ action: 'patch', tier: 'opus', kind: 'other' });
+    expect(decideTask({ ...answers('opus'), kind: { type: 'choice', choice: 'implement', probabilities: { implement: 0.5, investigate: 0.5, design: 0, verify: 0, other: 0 }, confidence: 0.5 } }, 0.8)).toMatchObject({ action: 'patch', kind: 'other' });
   });
 });
