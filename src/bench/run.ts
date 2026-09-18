@@ -14,28 +14,35 @@ import { canonicalize, copyTree, createExclusiveDir, isInside, isSafeId, overlap
 import { estimateJevCostUsd, modelFamily, parseModelUsage, safeSum, tokenCount, type ModelUsage } from './usage.js';
 
 /**
- * ADR A15: six arms. `fixed_hierarchy` (V4) is retired from the plan and from `--arms`; the report still reads runs
- * that contain it, because a retired arm is a fact about an old run, not a reason to stop reading it.
+ * ADR A15 product arms plus the A16 diagnostic arm. `fixed_hierarchy` (V4) is retired from the plan and from `--arms`;
+ * the report still reads runs that contain it, because a retired arm is a fact about an old run, not a reason to stop
+ * reading it.
  */
-export type Arm = 'sonnet_native' | 'frontier_native' | 'native_hierarchy' | 'orchestrated_control' | 'frontier_orchestrated' | 'jev_hierarchy';
-export const ALL_ARMS: readonly Arm[] = ['sonnet_native', 'frontier_native', 'native_hierarchy', 'orchestrated_control', 'frontier_orchestrated', 'jev_hierarchy'];
+export type Arm = 'sonnet_native' | 'frontier_native' | 'native_hierarchy' | 'orchestrated_control' | 'frontier_orchestrated' | 'jev_hierarchy' | 'jev_forced_orchestration';
+export const ALL_ARMS: readonly Arm[] = ['sonnet_native', 'frontier_native', 'native_hierarchy', 'orchestrated_control', 'frontier_orchestrated', 'jev_hierarchy', 'jev_forced_orchestration'];
 
 export interface ArmSpec {
   arm: Arm;
   rootModel: string;
   plugin: boolean;
   mode: 'native' | 'auto' | null;
-  /** A9/A15: forced orchestration through the same state, guard, profiles and cap, with no Jev calls. */
+  /** A9/A15/A16: forced orchestration through the same state, guard, profiles and cap. */
   experimentAdmission: 'orchestrated' | null;
+  /**
+   * A16: a diagnostic arm answers a mechanism question and carries no product claim. Gate A calibration put the pilot
+   * jobs below the admission floor, so this arm keeps Gate B and C measurable without tuning the floor on pilot data.
+   */
+  diagnostic: boolean;
 }
 
 export const armSpecs = (frontierModel: string): Record<Arm, ArmSpec> => ({
-  sonnet_native: { arm: 'sonnet_native', rootModel: 'sonnet', plugin: false, mode: null, experimentAdmission: null },
-  frontier_native: { arm: 'frontier_native', rootModel: frontierModel, plugin: false, mode: null, experimentAdmission: null },
-  native_hierarchy: { arm: 'native_hierarchy', rootModel: 'sonnet', plugin: true, mode: 'native', experimentAdmission: null },
-  orchestrated_control: { arm: 'orchestrated_control', rootModel: 'sonnet', plugin: true, mode: 'native', experimentAdmission: 'orchestrated' },
-  frontier_orchestrated: { arm: 'frontier_orchestrated', rootModel: frontierModel, plugin: true, mode: 'native', experimentAdmission: 'orchestrated' },
-  jev_hierarchy: { arm: 'jev_hierarchy', rootModel: 'sonnet', plugin: true, mode: 'auto', experimentAdmission: null },
+  sonnet_native: { arm: 'sonnet_native', rootModel: 'sonnet', plugin: false, mode: null, experimentAdmission: null, diagnostic: false },
+  frontier_native: { arm: 'frontier_native', rootModel: frontierModel, plugin: false, mode: null, experimentAdmission: null, diagnostic: false },
+  native_hierarchy: { arm: 'native_hierarchy', rootModel: 'sonnet', plugin: true, mode: 'native', experimentAdmission: null, diagnostic: false },
+  orchestrated_control: { arm: 'orchestrated_control', rootModel: 'sonnet', plugin: true, mode: 'native', experimentAdmission: 'orchestrated', diagnostic: false },
+  frontier_orchestrated: { arm: 'frontier_orchestrated', rootModel: frontierModel, plugin: true, mode: 'native', experimentAdmission: 'orchestrated', diagnostic: false },
+  jev_hierarchy: { arm: 'jev_hierarchy', rootModel: 'sonnet', plugin: true, mode: 'auto', experimentAdmission: null, diagnostic: false },
+  jev_forced_orchestration: { arm: 'jev_forced_orchestration', rootModel: 'sonnet', plugin: true, mode: 'auto', experimentAdmission: 'orchestrated', diagnostic: true },
 });
 
 export interface CodingCase {
@@ -143,6 +150,7 @@ export interface CellRecord {
   /** Retired V4 field, kept so a reader that knows only V4 cells still parses a V5 one. */
   experimental_allocation: string | null;
   experiment_admission: 'orchestrated' | null;
+  diagnostic: boolean;
   /** Per-cell job state directory, so job state never touches the real HOME or another cell. */
   state_dir: string | null;
   request_sha256: string;
@@ -461,6 +469,7 @@ const emptyCell = (cs: CodingCase, spec: ArmSpec, repetition: number): CellRecor
   mode: spec.mode,
   experimental_allocation: null,
   experiment_admission: spec.experimentAdmission,
+  diagnostic: spec.diagnostic,
   state_dir: null,
   request_sha256: sha256(cs.request),
   fixture_sha256: null,
@@ -751,7 +760,9 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
     if (call.role === 'planner') {
       g.planner_calls.requested++;
       const proposed = answer(call.pre, 'planning_tier');
+      const plannerDecision = isRecord(call.pre?.['decision']) ? (call.pre?.['decision'] as Record<string, unknown>) : null;
       if (proposed) g.planner_calls.tier_proposed = str(proposed['choice']);
+      else if (plannerDecision) g.planner_calls.tier_proposed = str(plannerDecision['tier']);
       if (call.observed_model) g.planner_calls.model_observed = call.observed_model;
       if (call.plan) {
         if (str(call.plan['status']) === 'completed') g.planner_calls.completed++;
@@ -766,7 +777,8 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
       if (call.has_model) bucket.pinned++;
       const route = answer(call.pre, 'route');
       const decision = isRecord(call.pre?.['decision']) ? (call.pre?.['decision'] as Record<string, unknown>) : null;
-      bump(bucket.proposed, str(decision?.['tier'] ?? null) ?? (route ? str(route['choice']) ?? 'invalid' : 'none'));
+      // A5: on `preserve` the recorded tier is the profile that was kept, so the proposal is read from the answer.
+      bump(bucket.proposed, route ? (str(route['choice']) ?? 'invalid') : (str(decision?.['tier'] ?? null) ?? 'none'));
       bump(bucket.observed_model, call.observed_model ?? 'unknown');
       // A8: effort is recorded only where the host exposed it; frontmatter is never treated as an observation.
       bump(bucket.root_effort, call.root_effort ?? 'unknown');
@@ -1009,7 +1021,7 @@ export const main = async (argv: string[]): Promise<number> => {
     return 0;
   }
   if (existsSync(out)) throw new Error(`--out ${out} already exists; execute creates a new result directory exclusively`);
-  const pf = preflight(o, o.arms.includes('jev_hierarchy'));
+  const pf = preflight(o, o.arms.some((a) => armSpecs(o.frontierModel)[a].mode === 'auto'));
   plan.preflight = pf;
   if (o.maxSessions !== null && o.maxSessions < plan.planned_cells) pf.errors.push(`--max-sessions ${o.maxSessions} is below the ${plan.planned_cells} planned top-level sessions`);
   if (pf.errors.length) {

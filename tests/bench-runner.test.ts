@@ -10,7 +10,9 @@ import { loadManifest, maxOverlap, type CellRecord, type Plan } from '../src/ben
 const root = join(__dirname, '..');
 const fake = join(__dirname, 'fixtures', 'fake-claude.mjs');
 const cases = join(__dirname, 'fixtures', 'mini', 'cases.json');
-const ARMS = ['sonnet_native', 'frontier_native', 'native_hierarchy', 'orchestrated_control', 'frontier_orchestrated', 'jev_hierarchy'] as const;
+const ARMS = ['sonnet_native', 'frontier_native', 'native_hierarchy', 'orchestrated_control', 'frontier_orchestrated', 'jev_hierarchy', 'jev_forced_orchestration'] as const;
+const JEV_ARMS = ['jev_hierarchy', 'jev_forced_orchestration'] as const;
+const HIERARCHY_ARMS = ['native_hierarchy', 'orchestrated_control', 'frontier_orchestrated', 'jev_hierarchy', 'jev_forced_orchestration'] as const;
 let tmp: string;
 let dist: string;
 let pluginDir: string;
@@ -48,9 +50,11 @@ describe('plan', () => {
     expect(r.status, r.stderr).toBe(0);
     const plan = JSON.parse(r.stdout) as Plan;
     expect(plan.schema).toBe(5);
-    expect(plan.planned_cells).toBe(6);
+    expect(plan.planned_cells).toBe(7);
     expect(plan.arms.map((a) => a.arm).sort()).toEqual([...ARMS].sort());
-    expect(plan.arms.filter((a) => a.experimentAdmission === 'orchestrated').map((a) => a.arm).sort()).toEqual(['frontier_orchestrated', 'orchestrated_control']);
+    expect(plan.arms.filter((a) => a.experimentAdmission === 'orchestrated').map((a) => a.arm).sort()).toEqual(['frontier_orchestrated', 'jev_forced_orchestration', 'orchestrated_control']);
+    expect(plan.arms.filter((a) => a.diagnostic).map((a) => a.arm)).toEqual(['jev_forced_orchestration']);
+    expect(plan.arms.filter((a) => a.mode === 'auto').map((a) => a.arm).sort()).toEqual(['jev_forced_orchestration', 'jev_hierarchy']);
     expect(plan.arms.filter((a) => a.rootModel === 'fable').map((a) => a.arm).sort()).toEqual(['frontier_native', 'frontier_orchestrated']);
     expect(existsSync(r.out)).toBe(false);
     expect(JSON.parse(bench(['--seed', '7']).stdout).rows).toEqual(plan.rows);
@@ -65,7 +69,7 @@ describe('plan', () => {
     expect(retired.status).toBe(1);
     expect(retired.stderr).toMatch(/--arms must be a unique subset/);
     expect(bench(['--arms', 'jev_hierarchy,jev_hierarchy']).status).toBe(1);
-    expect(bench(['--regrade', '--execute', '--max-sessions', '6']).status).toBe(1);
+    expect(bench(['--regrade', '--execute', '--max-sessions', '7']).status).toBe(1);
     expect(bench(['--execute']).stderr).toMatch(/--max-sessions/);
     const badManifest = join(tmp, 'bad.json');
     require('node:fs').writeFileSync(badManifest, JSON.stringify({ version: 5, cases: [{ id: '../../victim', group: 'g', fixtureDir: 'x', request: 'r', setup: [], checkFile: 'c.mjs' }] }));
@@ -94,17 +98,17 @@ describe('plan', () => {
 describe('execute', () => {
   it('refuses to start (writing nothing) under API-key auth, unverifiable auth, missing key with the Jev arm, or a low budget', () => {
     for (const [args, env, pattern] of [
-      [['--execute', '--max-sessions', '6'], { ANTHROPIC_API_KEY: 'sk-x' }, /ANTHROPIC_API_KEY/],
-      [['--execute', '--max-sessions', '6'], { FAKE_CLAUDE_AUTH_EXIT: '7' }, /cannot verify subscription OAuth/],
-      [['--execute', '--max-sessions', '6'], { FAKE_CLAUDE_AUTH: JSON.stringify({ loggedIn: true, authMethod: 'console', apiProvider: 'firstParty' }) }, /not claude\.ai subscription OAuth/],
-      [['--execute', '--max-sessions', '5'], {}, /below the 6 planned/],
+      [['--execute', '--max-sessions', '7'], { ANTHROPIC_API_KEY: 'sk-x' }, /ANTHROPIC_API_KEY/],
+      [['--execute', '--max-sessions', '7'], { FAKE_CLAUDE_AUTH_EXIT: '7' }, /cannot verify subscription OAuth/],
+      [['--execute', '--max-sessions', '7'], { FAKE_CLAUDE_AUTH: JSON.stringify({ loggedIn: true, authMethod: 'console', apiProvider: 'firstParty' }) }, /not claude\.ai subscription OAuth/],
+      [['--execute', '--max-sessions', '6'], {}, /below the 7 planned/],
     ] as Array<[string[], Record<string, string>, RegExp]>) {
       const r = bench(args, env);
       expect(r.status, r.stderr).toBe(2);
       expect(r.stderr).toMatch(pattern);
       expect(existsSync(r.out)).toBe(false);
     }
-    const noKey = spawnSync(process.execPath, [join(dist, 'bench', 'run.js'), '--cases', cases, '--out', join(tmp, 'nokey'), '--claude', fake, '--plugin-dir', pluginDir, '--execute', '--max-sessions', '6'], { encoding: 'utf8', env: { PATH: process.env['PATH'] ?? '', HOME: join(tmp, 'home') } });
+    const noKey = spawnSync(process.execPath, [join(dist, 'bench', 'run.js'), '--cases', cases, '--out', join(tmp, 'nokey'), '--claude', fake, '--plugin-dir', pluginDir, '--execute', '--max-sessions', '7'], { encoding: 'utf8', env: { PATH: process.env['PATH'] ?? '', HOME: join(tmp, 'home') } });
     expect(noKey.status).toBe(2);
     expect(noKey.stderr).toMatch(/TYPESAFE_API_KEY/);
     const noKeyNoJev = spawnSync(process.execPath, [join(dist, 'bench', 'run.js'), '--cases', cases, '--out', join(tmp, 'nokey-ok'), '--claude', fake, '--plugin-dir', pluginDir, '--execute', '--max-sessions', '1', '--arms', 'sonnet_native'], { encoding: 'utf8', env: { PATH: process.env['PATH'] ?? '', HOME: join(tmp, 'home') } });
@@ -114,14 +118,14 @@ describe('execute', () => {
   it('refuses an existing output directory, even an empty one', () => {
     const out = join(tmp, 'existing');
     mkdirSync(out);
-    const r = bench(['--execute', '--max-sessions', '6'], {}, out);
+    const r = bench(['--execute', '--max-sessions', '7'], {}, out);
     expect(r.status).toBe(1);
     expect(r.stderr).toMatch(/already exists/);
     expect(readdirSync(out)).toEqual([]);
   });
 
-  it('runs six arms from frozen inputs with identical prompts, a private state dir and whole-tree accounting', () => {
-    const r = bench(['--execute', '--max-sessions', '6', '--seed', '3', '--timeout-ms', '60000']);
+  it('runs seven arms from frozen inputs with identical prompts, a private state dir and whole-tree accounting', () => {
+    const r = bench(['--execute', '--max-sessions', '7', '--seed', '3', '--timeout-ms', '60000']);
     expect(r.status, r.stderr + r.stdout).toBe(0);
     const plan = JSON.parse(readFileSync(join(r.out, 'plan.json'), 'utf8')) as Plan;
     expect(plan.preflight?.errors).toEqual([]);
@@ -148,7 +152,7 @@ describe('execute', () => {
     }
     // Each hierarchy cell gets its own state root inside the cell, so job state never reaches HOME or another cell.
     const stateDirs = new Set<string>();
-    for (const a of ['native_hierarchy', 'orchestrated_control', 'frontier_orchestrated', 'jev_hierarchy'] as const) {
+    for (const a of HIERARCHY_ARMS) {
       const c = cells[a];
       expect(c.spawn!.argv).toContain(join(r.out, 'inputs', 'plugin'));
       expect(c.init!.jev_gate_loaded).toBe(true);
@@ -158,14 +162,15 @@ describe('execute', () => {
       stateDirs.add(c.state_dir!);
       expect(c.gate.prompt_injections).toBe(1);
     }
-    expect(stateDirs.size).toBe(4);
+    expect(stateDirs.size).toBe(5);
     expect(existsSync(join(tmp, 'home', '.local', 'state', 'jev-gate'))).toBe(false);
-    for (const a of ['orchestrated_control', 'frontier_orchestrated'] as const) {
-      expect(cells[a].experiment_admission).toBe('orchestrated');
-      expect(cells[a].spawn!.env_added).toContain('JEV_GATE_EXPERIMENT_ADMISSION');
+    for (const a of ['orchestrated_control', 'frontier_orchestrated', 'jev_forced_orchestration'] as const) {
+      expect(cells[a].experiment_admission, a).toBe('orchestrated');
+      expect(cells[a].spawn!.env_added, a).toContain('JEV_GATE_EXPERIMENT_ADMISSION');
     }
     expect(cells.native_hierarchy.experiment_admission).toBeNull();
     expect(cells.jev_hierarchy.spawn!.env_added).not.toContain('JEV_GATE_EXPERIMENT_ADMISSION');
+    expect(ARMS.filter((a) => cells[a].diagnostic)).toEqual(['jev_forced_orchestration']);
 
     // native: admission recorded as not sent, no Jev spend, no plan
     expect(cells.native_hierarchy.gate.admission).toMatchObject({ attempted: false, known_not_sent: true, decision: 'direct', reason: 'mode_native', choice: null });
@@ -183,59 +188,85 @@ describe('execute', () => {
       expect(g.advisory, a).toEqual({ accept: 0, rework: 0, replan: 0, abstain: 0, none: 4 });
       expect(g.outcome, a).toBe('incomplete');
       expect(g.jev_input_tokens, a).toBe(0);
-      expect(Object.fromEntries(Object.entries(g.worker_calls).map(([t, w]) => [t, w.calls])), a).toEqual({ fast: 2, standard: 1, deep: 1 });
+      expect(Object.fromEntries(Object.entries(g.worker_calls).map(([t, w]) => [t, w.calls])), a).toEqual({ fast: 3, standard: 1, deep: 1 });
       // Self-routing picks the profile, so nothing is patched and reservations are unobservable without Gate B.
       expect(Object.values(g.worker_calls).every((w) => w.patched === 0), a).toBe(true);
       expect(g.parallel, a).toEqual({ reservation_overlap_max: 0, observed_overlap_max: 2 });
     }
 
     const jev = cells.jev_hierarchy.gate;
-    expect(jev.admission).toMatchObject({ attempted: true, known_not_sent: false, choice: 'orchestrated', confidence: 0.93 });
+    expect(jev.admission).toMatchObject({ attempted: true, known_not_sent: false, choice: 'orchestrated', confidence: 0.93, decision: 'orchestrated', reason: null });
     expect(jev.guard_denials).toBe(0);
     expect(jev.planner_calls).toMatchObject({ requested: 1, completed: 1, tier_proposed: 'deep', model_observed: 'claude-opus-5', plan_status: 'ready', rev: 1 });
     expect(jev.receipts).toEqual({ accept: 2, incomplete: 1, invalid: 0, unknown: 1 });
     expect(jev.advisory).toEqual({ accept: 0, rework: 1, replan: 0, abstain: 0, none: 3 });
     expect(jev.jev_requests.admission).toMatchObject({ attempts: 1, tokens: 300 });
-    expect(jev.jev_requests.allocation).toMatchObject({ attempts: 6, tokens: 2220 });
+    expect(jev.jev_requests.allocation).toMatchObject({ attempts: 7, tokens: 2620 });
     expect(jev.jev_requests.result).toMatchObject({ attempts: 1, tokens: 200 });
-    expect(jev.jev_input_tokens).toBe(2720);
-    expect(jev.jev_cost_usd).toBeCloseTo((2720 * 0.042) / 1_000_000, 12);
+    expect(jev.jev_input_tokens).toBe(3120);
+    expect(jev.jev_cost_usd).toBeCloseTo((3120 * 0.042) / 1_000_000, 12);
     expect(jev.parallel).toEqual({ reservation_overlap_max: 2, observed_overlap_max: 2 });
     expect(jev.outcome).toBe('incomplete');
-    // A material model change on a standard call is the patch; the deep call that stayed opus is preserved.
-    expect(jev.worker_calls['standard']).toMatchObject({ calls: 2, patched: 1, preserved: 0, proposed: { deep: 1, standard: 1 } });
-    expect(jev.worker_calls['deep']).toMatchObject({ calls: 1, patched: 0, preserved: 1, root_effort: { high: 1 } });
-    expect(jev.worker_calls['fast']).toMatchObject({ calls: 2, preserved: 2, root_effort: { unknown: 2 } });
+    // The recorded Gate B decision is authoritative; `proposed` stays Jev's answer even when the call was preserved.
+    expect(jev.worker_calls['standard']).toMatchObject({ calls: 2, patched: 2, preserved: 0, proposed: { deep: 1, standard: 1 } });
+    expect(jev.worker_calls['deep']).toMatchObject({ calls: 1, patched: 1, preserved: 0, root_effort: { high: 1 } });
+    expect(jev.worker_calls['fast']).toMatchObject({ calls: 3, patched: 2, preserved: 1, proposed: { fast: 2, deep: 1 }, root_effort: { unknown: 3 } });
+    expect(jev.preserve_reasons).toEqual({ route_low_confidence: 1 });
+    expect(jev.patched).toBe(5);
+    expect(jev.preserved).toBe(1);
     // Union join: the paid record with no stream call and the late orphan result both stay visible.
     const byId = Object.fromEntries(cells.jev_hierarchy.agent_calls.map((c) => [c.tool_use_id, c]));
-    expect(cells.jev_hierarchy.agent_calls).toHaveLength(7);
+    expect(cells.jev_hierarchy.agent_calls).toHaveLength(8);
+    // PostToolUseFailure leaves only a failure record, and it still joins to its stream call.
+    expect(cells.jev_hierarchy.agent_calls.filter((c) => c.failure !== null)).toHaveLength(1);
     expect(byId['toolu_orphanpaid']).toMatchObject({ from_stream: false, from_records: true, role: 'worker', called_tier: 'standard' });
     expect(byId['toolu_lateresult']).toMatchObject({ from_stream: false, orphaned: true });
     expect(jev.orphan_records).toBe(1);
     expect(jev.missing_pre_records).toBe(0);
     expect(jev.attempt_unknown).toBe(0);
 
+    const forcedJev = cells.jev_forced_orchestration.gate;
+    expect(forcedJev.admission).toMatchObject({ attempted: false, known_not_sent: true, decision: 'orchestrated', reason: 'admission_forced', choice: null });
+    expect(forcedJev.jev_requests.admission).toMatchObject({ attempts: 0, tokens: 0 });
+    expect(forcedJev.jev_requests.allocation).toMatchObject({ attempts: 7, tokens: 2620 });
+    expect(forcedJev.jev_requests.result).toMatchObject({ attempts: 1, tokens: 200 });
+    expect(forcedJev.jev_input_tokens).toBe(2820);
+    expect(forcedJev.advisory.rework).toBe(1);
+    expect(forcedJev.patched).toBe(5);
+    expect(forcedJev.parallel.reservation_overlap_max).toBe(2);
+    expect(forcedJev.guard_denials).toBe(0);
+
     expect(cells.sonnet_native.grade?.quality).toBe('fail');
     for (const a of ARMS.filter((x) => x !== 'sonnet_native')) expect(cells[a].grade?.quality, a).toBe('pass');
 
     const rep = report(r.out);
     expect(rep.schema).toBe(5);
-    expect(rep.planned_rows).toBe(6);
+    expect(rep.planned_rows).toBe(7);
     expect(rep.per_job.map((j) => j.job)).toEqual(['mini']);
-    expect(rep.per_job[0]!.arms).toHaveLength(6);
+    expect(rep.per_job[0]!.arms).toHaveLength(7);
     const byArm = Object.fromEntries(rep.arms.map((a) => [a.arm, a]));
     expect(byArm['frontier_native']!.fable_tokens).toBe(1260);
     expect(byArm['jev_hierarchy']!.gate_v5.receipts).toEqual({ accept: 2, incomplete: 1, invalid: 0, unknown: 1 });
-    expect(byArm['jev_hierarchy']!.gate_v5.admission).toEqual({ 'choice:orchestrated': 1 });
+    expect(byArm['jev_hierarchy']!.gate_v5.admission).toEqual({ orchestrated: 1 });
+    expect(byArm['jev_forced_orchestration']!.diagnostic).toBe(true);
+    expect(byArm['jev_hierarchy']!.diagnostic).toBe(false);
     expect(byArm['orchestrated_control']!.gate_v5.admission).toEqual({ orchestrated: 1 });
     expect(byArm['orchestrated_control']!.gate_v5.guard_denials).toBe(3);
-    expect(byArm['jev_hierarchy']!.gate_v5.jev_requests.allocation.tokens).toBe(2220);
+    expect(byArm['jev_hierarchy']!.gate_v5.jev_requests.allocation.tokens).toBe(2620);
     expect(byArm['sonnet_native']!.pass).toBe(0);
-    const criteria = Object.fromEntries(rep.comparisons.filter((c) => c.criterion !== 'none').map((c) => [c.control, c]));
-    expect(Object.keys(criteria).sort()).toEqual(['frontier_native', 'frontier_orchestrated', 'orchestrated_control', 'sonnet_native']);
-    expect(criteria['sonnet_native']!.verdict).toBe('met');
-    expect(criteria['frontier_native']!.criterion).toBe('product_target');
-    expect(criteria['frontier_native']!.verdict).toBe('not_met');
+    const criteria = Object.fromEntries(rep.comparisons.filter((c) => c.criterion !== 'none').map((c) => [`${c.treatment}->${c.control}`, c]));
+    expect(Object.keys(criteria).sort()).toEqual([
+      'jev_forced_orchestration->frontier_orchestrated',
+      'jev_forced_orchestration->orchestrated_control',
+      'jev_hierarchy->frontier_native',
+      'jev_hierarchy->frontier_orchestrated',
+      'jev_hierarchy->orchestrated_control',
+      'jev_hierarchy->sonnet_native',
+    ]);
+    expect(criteria['jev_hierarchy->sonnet_native']!.verdict).toBe('met');
+    expect(criteria['jev_hierarchy->frontier_native']!.criterion).toBe('product_target');
+    expect(criteria['jev_hierarchy->frontier_native']!.verdict).toBe('not_met');
+    expect(criteria['jev_forced_orchestration->orchestrated_control']!.criterion).toBe('incremental_not_worse');
     expect(rep.conclusion.category).toBe('no added value over matched orchestration');
     expect(existsSync(join(r.out, 'reports', 'report-1.md'))).toBe(true);
     report(r.out);
@@ -246,11 +277,11 @@ describe('execute', () => {
     const missing = bench(['--execute', '--max-sessions', '1', '--arms', 'jev_hierarchy'], { FAKE_CLAUDE_MISSING_PRE: '1' });
     expect(missing.status, missing.stderr).toBe(0);
     const c1 = readCell(missing.out, 'jev_hierarchy');
-    expect(c1.gate).toMatchObject({ missing_pre_records: 4, jev_input_tokens: null, jev_cost_usd: null });
+    expect(c1.gate).toMatchObject({ missing_pre_records: 5, jev_input_tokens: null, jev_cost_usd: null });
     expect(c1.gate.jev_requests.admission.tokens).toBe(300);
     const intent = bench(['--execute', '--max-sessions', '1', '--arms', 'jev_hierarchy'], { FAKE_CLAUDE_INTENT_ONLY: '1' });
     const c2 = readCell(intent.out, 'jev_hierarchy');
-    expect(c2.gate).toMatchObject({ attempt_unknown: 4, jev_input_tokens: null });
+    expect(c2.gate).toMatchObject({ attempt_unknown: 5, jev_input_tokens: null });
     expect(c2.gate.jev_requests.allocation.tokens).toBeNull();
     expect(report(intent.out).arms[0]!.jev_cost_usd).toBeNull();
   }, 120_000);

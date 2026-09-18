@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import type { GateV5, JevPhaseUsage, Plan, WorkerTierRecord } from './run.js';
-import { addUsage, familyTokens, money, safeSum, totalTokens, type ModelUsage } from './usage.js';
+import { addUsage, familyCosts, familyTokens, money, safeSum, totalTokens, type ModelUsage } from './usage.js';
 
 /**
  * Plan-first reporting (#16). Rows come from plan.json; artifacts are joined to them. Missing files stay missing,
@@ -45,12 +45,15 @@ export interface RowView {
   target_model_mismatches: number;
   record_conflicts: number;
   api_retries: number;
+  /** A16: the cell says whether its arm was planned as a diagnostic; the report never guesses from the arm name. */
+  diagnostic: boolean;
   /** Null for a V3/V4 cell: schema-5 observation is unknown there, never zero. */
   v5: GateV5 | null;
 }
 
 export interface ArmSummary {
   arm: string;
+  diagnostic: boolean;
   planned: number;
   by_status: Record<RowStatus, number>;
   pass: number;
@@ -61,6 +64,8 @@ export interface ArmSummary {
   tokens_total: number | null;
   fable_tokens: number | null;
   claude_cost_usd: number | null;
+  /** API-equivalent Claude cost split by observed model family; empty when the arm's usage is incomplete. */
+  claude_cost_by_family: Record<string, number | null>;
   claude_cost_known_subtotal: number;
   claude_cost_unknown_rows: number;
   jev_cost_usd: number | null;
@@ -241,6 +246,7 @@ export const toRowView = (p: PlannedCell, c: Record<string, unknown> | null): Ro
     target_model_mismatches: typeof gate['target_model_mismatches'] === 'number' ? (gate['target_model_mismatches'] as number) : 0,
     record_conflicts: sum(agentCalls.map((a) => (typeof a['record_conflicts'] === 'number' ? (a['record_conflicts'] as number) : 0))),
     api_retries: c && typeof c['api_retries'] === 'number' ? (c['api_retries'] as number) : 0,
+    diagnostic: c !== null && c['diagnostic'] === true,
     v5: gateV5Of(gate),
   };
 };
@@ -410,6 +416,7 @@ export const summarizeArm = (arm: string, rows: RowView[]): ArmSummary => {
   const usageOk = usageComplete && usage !== null && spendRows.length > 0;
   return {
     arm,
+    diagnostic: mine.some((r) => r.diagnostic),
     planned: mine.length,
     by_status,
     pass,
@@ -420,6 +427,7 @@ export const summarizeArm = (arm: string, rows: RowView[]): ArmSummary => {
     tokens_total: usageOk && usage ? safeSum(Object.values(usage).map(totalTokens)) : null,
     fable_tokens: usageOk && usage ? familyTokens(usage, 'fable') : null,
     claude_cost_usd: claudeCost,
+    claude_cost_by_family: usageOk && usage ? familyCosts(usage) : {},
     claude_cost_known_subtotal: sum(claudeKnown.map((r) => r.claude_cost_usd!)),
     claude_cost_unknown_rows: spendRows.length - claudeKnown.length,
     jev_cost_usd: jevCost,
@@ -535,6 +543,9 @@ const COMPARISONS: Array<[string, string, CriterionKind]> = [
   ['jev_hierarchy', 'orchestrated_control', 'incremental_not_worse'],
   ['jev_hierarchy', 'frontier_orchestrated', 'strictly_better'],
   ['jev_hierarchy', 'sonnet_native', 'pass_not_below'],
+  ['jev_forced_orchestration', 'orchestrated_control', 'incremental_not_worse'],
+  ['jev_forced_orchestration', 'frontier_orchestrated', 'strictly_better'],
+  ['jev_forced_orchestration', 'jev_hierarchy', 'none'],
   ['jev_hierarchy', 'native_hierarchy', 'none'],
   ['jev_hierarchy', 'fixed_hierarchy', 'none'],
   ['native_hierarchy', 'sonnet_native', 'none'],
@@ -556,15 +567,17 @@ export const CONCLUSION_CATEGORIES = [
 
 export const concludeRun = (arms: ArmSummary[], comparisons: Comparison[]): { category: string; reason: string } => {
   const jev = arms.find((a) => a.arm === 'jev_hierarchy');
-  const by = (kind: CriterionKind): Comparison | undefined => comparisons.find((c) => c.criterion === kind);
+  const by = (control: string): Comparison | undefined => comparisons.find((c) => c.treatment === 'jev_hierarchy' && c.control === control);
+  const diagnostic = arms.find((a) => a.arm === 'jev_forced_orchestration');
+  const diagnosticHint = diagnostic && diagnostic.gate_v5.rows_observed > 0 ? '; the diagnostic arm jev_forced_orchestration carries the Gate B/C observation for this run' : '';
   if (!jev || jev.by_status.completed === 0) return { category: 'insufficient observation', reason: 'no completed jev_hierarchy session in this run' };
   if (jev.gate_v5.rows_observed === 0) return { category: 'insufficient observation', reason: 'no schema-5 hook records were ingested for jev_hierarchy' };
   const orchestrated = Object.entries(jev.gate_v5.admission).some(([label, n]) => n > 0 && label.includes('orchestrated'));
-  if (!orchestrated) return { category: 'no admission exposure', reason: 'Gate A never admitted a prompt as orchestrated' };
-  if (jev.gate.eligible_attempted === 0) return { category: 'no allocation exposure', reason: 'no owned call reached Gate B with an attempted request' };
-  const matched = by('strictly_better');
-  const target = by('product_target');
-  const incremental = by('incremental_not_worse');
+  if (!orchestrated) return { category: 'no admission exposure', reason: `Gate A never admitted a prompt as orchestrated${diagnosticHint}` };
+  if (jev.gate.eligible_attempted === 0) return { category: 'no allocation exposure', reason: `no owned call reached Gate B with an attempted request${diagnosticHint}` };
+  const matched = by('frontier_orchestrated');
+  const target = by('frontier_native');
+  const incremental = by('orchestrated_control');
   if (matched?.verdict === 'not_met') return { category: 'no added value over matched orchestration', reason: `${matched.verdict_reason}` };
   if (target?.verdict === 'met' && incremental?.verdict === 'met' && matched?.verdict === 'met') {
     return { category: 'repeated whole-job improvement in the tested workload', reason: `${target.verdict_reason}; matched orchestration also beaten` };
@@ -603,6 +616,7 @@ export const buildReport = (runDir: string): Report => {
     'A verdict is met only against a declared criterion at equal checker pass; different pass counts are printed as a trade-off row and zero passes in both arms never yield met.',
     'Effort is recorded where the host exposed it (root effort at PostToolUse) and is otherwise unknown; it is never inferred from agent frontmatter.',
     'Reservation overlap needs the dispatch record a Jev call writes, so arms without Gate B report observed overlap only (post timestamp minus tool_response.totalDurationMs).',
+    'An arm marked diagnostic (A16: jev_forced_orchestration, which skips Gate A and still calls Gate B and C) answers a mechanism question; it carries no product claim and the conclusion category is read from jev_hierarchy.',
   ];
   return {
     schema: 5,
@@ -636,21 +650,28 @@ const tierCounts = (w: Record<string, WorkerTierRecord>): string =>
     .map(([tier, t]) => `${tier}:${t.calls}(patched ${t.patched}, preserved ${t.preserved}, pinned ${t.pinned})`)
     .join(' ') || '-';
 
+const V5_HEADER = ['| arm | rows with records | admission | guard denials (continue false) | planner req/done | planner tier proposed | planner model | plan status | worker tiers | receipts | advisory | parallel res/obs | outcomes | orphan records |', '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|'];
+
+const v5Table = (arms: ArmSummary[]): string[] => [
+  ...V5_HEADER,
+  ...arms.map((a) => {
+    const v = a.gate_v5;
+    return `| ${a.arm} | ${v.rows_observed} | ${counts(v.admission)} | ${v.guard_denials} (${v.continue_false}) | ${v.planner_requested}/${v.planner_completed} | ${counts(v.planner_tier_proposed)} | ${counts(v.planner_model_observed)} | ${counts(v.plan_status)} | ${tierCounts(v.worker_calls)} | ${counts(v.receipts)} | ${counts(v.advisory)} | ${v.parallel.reservation_overlap_max}/${v.parallel.observed_overlap_max} | ${counts(v.outcomes)} | ${v.orphan_records} |`;
+  }),
+];
+
 export const renderMarkdown = (r: Report): string => {
   const L: string[] = [`# jev-gate bench report (schema 5)`, '', `run: ${r.run}`, `generated: ${r.generated_at}`, `plan schema: ${String(r.plan_schema)} · planned rows: ${r.planned_rows} · independent units: ${r.independent_units.jobs} jobs / ${r.independent_units.groups} groups`, '', `**conclusion: ${r.conclusion.category}** — ${r.conclusion.reason}`, ''];
   L.push('## arms (planned cohort)', '', ...ARM_HEADER);
-  for (const a of r.arms) L.push(armRow(a, a.arm));
+  for (const a of r.arms) L.push(armRow(a, a.diagnostic ? `${a.arm} (diagnostic)` : a.arm));
   for (const job of r.per_job) {
     L.push('', `## job ${job.job}`, '', ...ARM_HEADER);
-    for (const a of job.arms) L.push(armRow(a, a.arm));
+    for (const a of job.arms) L.push(armRow(a, a.diagnostic ? `${a.arm} (diagnostic)` : a.arm));
+    L.push('', `### V5 gates — ${job.job}`, '', ...v5Table(job.arms));
   }
   L.push('', '## gate activity per arm', '', '| arm | Agent calls | owned | pinned | eligible attempted | patched | preserved (reasons) | skipped (codes) | attempt unknown | missing pre records | hint delivered | target/actual mismatches | validity problems |', '|---|---|---|---|---|---|---|---|---|---|---|---|---|');
   for (const a of r.arms) L.push(`| ${a.arm} | ${a.gate.agent_calls} | ${a.gate.owned_calls} | ${a.gate.pinned} | ${a.gate.eligible_attempted} | ${a.gate.patched} | ${a.gate.preserved} (${counts(a.gate.preserve_reasons)}) | ${counts(a.gate.skipped)} | ${a.gate.attempt_unknown} | ${a.gate.missing_pre_records} | ${a.gate.hint_delivered} | ${a.gate.target_model_mismatches} | ${a.validity_problems.length ? a.validity_problems.join('; ') : '-'} |`);
-  L.push('', '## V5 gates per arm (observed)', '', '| arm | rows with records | admission | guard denials (continue false) | planner req/done | planner tier proposed | planner model | plan status | worker tiers | receipts | advisory | parallel res/obs | outcomes | orphan records |', '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|');
-  for (const a of r.arms) {
-    const v = a.gate_v5;
-    L.push(`| ${a.arm} | ${v.rows_observed} | ${counts(v.admission)} | ${v.guard_denials} (${v.continue_false}) | ${v.planner_requested}/${v.planner_completed} | ${counts(v.planner_tier_proposed)} | ${counts(v.planner_model_observed)} | ${counts(v.plan_status)} | ${tierCounts(v.worker_calls)} | ${counts(v.receipts)} | ${counts(v.advisory)} | ${v.parallel.reservation_overlap_max}/${v.parallel.observed_overlap_max} | ${counts(v.outcomes)} | ${v.orphan_records} |`);
-  }
+  L.push('', '## V5 gates per arm (observed)', '', ...v5Table(r.arms));
   L.push('', '## Jev requests per arm (attempts / input tokens / est $ at the dated price)', '', '| arm | admission | allocation | result |', '|---|---|---|---|');
   for (const a of r.arms) {
     const j = (p: JevPhaseUsage): string => `${p.attempts} / ${p.tokens === null ? `null (known ${p.tokens_known})` : p.tokens} / ${fmt(p.cost_usd, 6)}`;
@@ -664,6 +685,11 @@ export const renderMarkdown = (r: Report): string => {
   for (const c of r.comparisons) {
     const d = c.complete_case_diagnostic;
     L.push(`| ${c.treatment} vs ${c.control} | ${c.criterion} | ${c.verdict} | ${c.verdict_reason} | ${c.intended_rows} | ${c.pass_treatment}/${c.pass_control} | ${c.absolute_success_difference === null ? 'null' : (c.absolute_success_difference * 100).toFixed(1) + ' pts'} | ${c.cost_known ? pct(c.relative_cost_reduction) : 'null (unknown spend)'} | ${c.runtime_known ? pct(c.relative_runtime_reduction) : 'null (unknown runtime)'} | ${c.validity}${c.validity_reasons.length ? ` (${c.validity_reasons.join('; ')})` : ''} | ${d ? `${d.included.length}/${c.intended_rows} rows: cost ${pct(d.relative_cost_reduction)}, runtime ${pct(d.relative_runtime_reduction)}, pass ${d.pass_treatment}/${d.pass_control}${d.excluded.length ? `; excluded ${d.excluded.map((e) => `${e.row} (${e.reason})`).join(', ')}` : ''}` : '-'} |`);
+  }
+  L.push('', '## cost by model family (API-equivalent) and Jev cost', '');
+  for (const a of r.arms) {
+    const families = Object.entries(a.claude_cost_by_family).map(([f, v]) => `${f} ${fmt(v, 4)}`).join(', ') || (a.usage_complete ? 'none' : 'incomplete usage');
+    L.push(`- ${a.arm}: ${families} · Jev ${fmt(a.jev_cost_usd, 6)} · total ${fmt(a.total_cost_usd, 4)}`);
   }
   L.push('', '## per-model tokens', '');
   for (const a of r.arms) L.push(`- ${a.arm}: ${a.model_usage ? Object.entries(a.model_usage).map(([m, e]) => `${m} in=${e.inputTokens} out=${e.outputTokens} cacheRead=${e.cacheReadInputTokens} cacheCreate=${e.cacheCreationInputTokens}`).join('; ') : 'incomplete'}`);

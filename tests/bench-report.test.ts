@@ -363,3 +363,31 @@ describe('declared criteria', () => {
     expect(compare(r.rows, 'jev_hierarchy', 'fixed_hierarchy', 'product_target').verdict).toBe('not_met');
   });
 });
+
+describe('diagnostic arm (A16)', () => {
+  it('judges the diagnostic rows on their own numbers and keeps the conclusion on the product arm', () => {
+    const run = writeRun('a16', [{ job: 'A', arms: [...ARMS5, 'jev_forced_orchestration'] }], [
+      // Gate A put this workload below the admission floor, so the product arm ran direct and never reached Gate B.
+      priced('A', 'jev_hierarchy', 9, 900, 'pass', gate5({ admission: { attempted: true, known_not_sent: false, choice: 'direct', confidence: 0.61, decision: 'direct', reason: null }, eligible_attempted: 0, worker_calls: {}, planner_calls: { requested: 0, completed: 0, tier_proposed: null, model_observed: null, plan_status: null, rev: null } })),
+      { ...priced('A', 'jev_forced_orchestration', 4, 600, 'pass', gate5({ admission: { attempted: false, known_not_sent: true, choice: null, confidence: null, decision: 'orchestrated', reason: 'admission_forced' }, jev_requests: { admission: jevPhase(0, 0), allocation: jevPhase(3, 1200), result: jevPhase(1, 200) } })), diagnostic: true },
+      priced('A', 'orchestrated_control', 4, 600, 'pass'),
+      priced('A', 'frontier_orchestrated', 5, 700, 'pass'),
+      priced('A', 'frontier_native', 10, 1000, 'pass'),
+      priced('A', 'sonnet_native', 3, 500, 'pass'),
+    ]);
+    const r = buildReport(run);
+    const byPair = Object.fromEntries(r.comparisons.map((c) => [`${c.treatment}->${c.control}`, c]));
+    expect(byPair['jev_forced_orchestration->orchestrated_control']).toMatchObject({ criterion: 'incremental_not_worse', verdict: 'met' });
+    expect(byPair['jev_forced_orchestration->frontier_orchestrated']).toMatchObject({ criterion: 'strictly_better', verdict: 'met' });
+    expect(byPair['jev_forced_orchestration->jev_hierarchy']!.criterion).toBe('none');
+    // The diagnostic arm beats the matched control, but the product arm never exercised admission: that is the verdict.
+    expect(r.conclusion.category).toBe('no admission exposure');
+    expect(r.conclusion.reason).toMatch(/diagnostic arm jev_forced_orchestration/);
+    const byArm = Object.fromEntries(r.arms.map((a) => [a.arm, a]));
+    expect(byArm['jev_forced_orchestration']!.diagnostic).toBe(true);
+    expect(byArm['jev_forced_orchestration']!.gate_v5.admission).toEqual({ orchestrated: 1 });
+    expect(byArm['jev_forced_orchestration']!.gate_v5.jev_requests.admission.attempts).toBe(0);
+    expect(byArm['jev_hierarchy']!.diagnostic).toBe(false);
+    expect(renderMarkdown(r)).toContain('jev_forced_orchestration (diagnostic)');
+  });
+});

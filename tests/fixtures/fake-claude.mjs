@@ -27,9 +27,11 @@ const promptId = randomUUID();
 const modelId = model === 'fable' ? 'claude-fable-5-1' : model === 'opus' ? 'claude-opus-5' : 'claude-sonnet-5';
 const hierarchy = Boolean(pluginDir) && (mode === 'native' || mode === 'auto');
 const arm = !hierarchy ? (model === 'fable' ? 'frontier_native' : 'sonnet_native')
-  : mode === 'auto' ? 'jev_hierarchy'
+  : mode === 'auto' ? (forced ? 'jev_forced_orchestration' : 'jev_hierarchy')
   : forced ? (model === 'fable' ? 'frontier_orchestrated' : 'orchestrated_control')
   : 'native_hierarchy';
+// A16: the diagnostic arm skips Gate A and still runs Gate B and C, so Jev records exist without an admission request.
+const jevGates = mode === 'auto';
 const orchestrated = arm === 'jev_hierarchy' || forced;
 
 const T0 = Date.now();
@@ -77,15 +79,18 @@ if (process.env.FAKE_CLAUDE_HANG === '1') {
   };
 
   // ---- Gate A
-  if (arm === 'jev_hierarchy') {
+  if (forced && hierarchy) {
+    trace('admission_result', { attempted: false, known_not_sent: true, forced: true, decision: 'orchestrated', reason: mode === 'auto' ? 'admission_forced' : 'mode_native', written_at: at(0) });
+  } else if (arm === 'jev_hierarchy') {
     trace('admission_intent', { prompt_len: prompt.length, prompt_sha256: 'x'.repeat(64), request_bytes: 2000, written_at: at(0) });
     trace('admission_result', {
       prompt_len: prompt.length, prompt_sha256: 'x'.repeat(64), attempted: true,
       http: { status: 200, code: null, duration_ms: 310, request_bytes: 2000 }, jev: jevBody(300),
-      answers: { execution: choice('orchestrated', 0.93) }, written_at: at(10),
+      answers: { execution: choice('orchestrated', 0.93) },
+      decision: 'orchestrated', decided: true, reason: null, forced: false, written_at: at(10),
     });
   } else if (hierarchy) {
-    trace('admission_result', { attempted: false, known_not_sent: true, forced, decision: orchestrated ? 'orchestrated' : 'direct', reason: 'mode_native', written_at: at(0) });
+    trace('admission_result', { attempted: false, known_not_sent: true, forced: false, decision: 'direct', reason: 'mode_native', written_at: at(0) });
   }
 
   if (hierarchy && !orchestrated) {
@@ -96,19 +101,19 @@ if (process.env.FAKE_CLAUDE_HANG === '1') {
     trace('stop', { outcome: 'completed', written_at: at(1000) });
   } else if (orchestrated) {
     // ---- guard: the control arms try the tools the guard declines before they switch to delegation
-    if (arm !== 'jev_hierarchy') {
+    if (!jevGates) {
       trace('guard', { tool_name: 'Read', allow: true, denials: 0, written_at: at(100) });
       for (const [i, tool] of ['Edit', 'Bash', 'Write'].entries()) trace('guard', { tool_name: tool, allow: false, denials: i, written_at: at(150 + i) });
     }
 
     // ---- planner
     const plannerId = agentCall('jev-gate:planner', 'plan the work');
-    if (arm === 'jev_hierarchy') {
+    if (jevGates) {
       trace('pre_intent', { tool_use_id: plannerId, role: 'planner', default_tier: 'deep', request_bytes: 4000, written_at: at(200) });
       trace('pre_result', {
         tool_use_id: plannerId, role: 'planner', default_tier: 'deep', attempted: true,
         http: { status: 200, code: null, duration_ms: 280, request_bytes: 4000 }, jev: jevBody(500),
-        answers: { planning_tier: choice('deep', 0.88) }, written_at: at(210),
+        answers: { planning_tier: choice('deep', 0.88) }, decision: { action: 'patch', tier: 'deep', reason: null }, written_at: at(210),
       });
     }
     child(plannerId, 'claude-opus-5', JSON.stringify({ status: 'ready', tasks: 3 }));
@@ -121,48 +126,56 @@ if (process.env.FAKE_CLAUDE_HANG === '1') {
       { agent: 'jev-gate:worker-fast', tier: 'fast', task: 't1', base: 'claude-haiku-5', routed: 'claude-haiku-5', route: 'fast', start: 6000, end: 16000, duration: 9000, status: 'completed', verdict: 'accept', advisory: null, effort: null },
       { agent: 'jev-gate:worker', tier: 'standard', task: 't2', base: 'claude-sonnet-5', routed: 'claude-opus-5', route: 'deep', start: 7000, end: 17000, duration: 9500, status: 'completed', verdict: 'incomplete', advisory: null, effort: null },
       { agent: 'jev-gate:worker-deep', tier: 'deep', task: 't3', base: 'claude-opus-5', routed: 'claude-opus-5', route: 'deep', start: 20000, end: 30000, duration: 5000, status: 'completed', verdict: 'accept', advisory: 'rework', effort: 'high' },
-      { agent: 'jev-gate:worker-fast', tier: 'fast', task: 't4', base: 'claude-haiku-5', routed: 'claude-haiku-5', route: 'fast', start: 31000, end: 32000, duration: 500, status: 'failed', verdict: 'unknown', advisory: null, effort: null },
+      { agent: 'jev-gate:worker-fast', tier: 'fast', task: 't4', base: 'claude-haiku-5', routed: 'claude-haiku-5', route: 'deep', confidence: 0.4, preserve: true, start: 31000, end: 32000, duration: 500, status: 'failed', verdict: 'unknown', advisory: null, effort: null },
+      { agent: 'jev-gate:worker-fast', tier: 'fast', task: 't5', base: 'claude-haiku-5', routed: 'claude-haiku-5', route: 'fast', start: 33000, end: 33500, duration: 0, status: 'error', verdict: 'tool_failure', advisory: null, effort: null },
     ];
     for (const w of workers) {
       const id = agentCall(w.agent, `task ${w.task}`);
       // Only Jev moves a call off the profile the coordinator chose; the control arms self-route and stay on it.
-      const observed = arm === 'jev_hierarchy' ? w.routed : w.base;
-      const sendGate = arm === 'jev_hierarchy' && process.env.FAKE_CLAUDE_MISSING_PRE !== '1';
+      const observed = jevGates ? w.routed : w.base;
+      const sendGate = jevGates && process.env.FAKE_CLAUDE_MISSING_PRE !== '1';
       if (sendGate) {
         trace('pre_intent', { tool_use_id: id, role: 'worker', task_id: w.task, rev: 1, called_tier: w.tier, request_bytes: 3000, written_at: at(w.start) });
         if (process.env.FAKE_CLAUDE_INTENT_ONLY !== '1') {
           trace('pre_result', {
             tool_use_id: id, role: 'worker', task_id: w.task, rev: 1, called_tier: w.tier, attempted: true,
             http: { status: 200, code: null, duration_ms: 240, request_bytes: 3000 }, jev: jevBody(400),
-            answers: { route: choice(w.route, 0.9), upgrade_basis: choice('unresolved_contract_reasoning', 0.86) }, written_at: at(w.start + 10),
+            answers: { route: choice(w.route, w.confidence ?? 0.9), upgrade_basis: choice('unresolved_contract_reasoning', 0.86) },
+            decision: w.preserve ? { action: 'preserve', tier: w.tier, reason: 'route_low_confidence' } : { action: 'patch', tier: w.route, reason: null },
+            written_at: at(w.start + 10),
           });
         }
       }
       child(id, observed, w.status === 'completed' ? JSON.stringify({ status: 'done', summary: w.task }) : 'interrupted', w.status !== 'completed');
       spend(observed, COST[observed]);
-      if (arm === 'jev_hierarchy' && w.advisory) {
+      if (jevGates && w.advisory) {
         trace('result_intent', { tool_use_id: id, task_id: w.task, rev: 1, deterministic: 'accept', request_bytes: 1500, written_at: at(w.end - 5) });
         trace('result_result', {
           tool_use_id: id, task_id: w.task, rev: 1, deterministic: 'accept', attempted: true,
           http: { status: 200, code: null, duration_ms: 190, request_bytes: 1500 }, jev: jevBody(200),
-          answers: { result: choice(w.advisory, 0.91) }, written_at: at(w.end - 2),
+          answers: { result: choice(w.advisory, 0.91) }, decision: { verdict: w.advisory, reason: null, advisory_only: true }, written_at: at(w.end - 2),
         });
+      }
+      if (w.verdict === 'tool_failure') {
+        // PostToolUseFailure: the call never returned a reply, so the failure phase is the only record it leaves.
+        trace('failure', { tool_use_id: id, tool_input: { subagent_type: w.agent, has_model: false, model: null, prompt_len: prompt.length, control_keys: [] }, error_first_line: 'Agent execution failed', error_len: 22, is_interrupt: false, duration_ms: 400, written_at: at(w.end) });
+        continue;
       }
       trace('post', {
         tool_use_id: id, task_id: w.task, rev: 1, attempt: 1, verdict: w.verdict,
         verdict_reason: w.verdict === 'accept' ? null : `the call reported status ${w.status}`,
-        advisory: arm === 'jev_hierarchy' ? w.advisory : null, root_effort: w.effort,
+        advisory: jevGates ? w.advisory : null, root_effort: w.effort,
         tool_response: { status: w.status, agentId: `a-${w.task}`, resolvedModel: observed, modelsUsed: [observed], totalDurationMs: w.duration, totalToolUseCount: 3, totalTokens: 999, usage: { input_tokens: 5, output_tokens: 6, cache_creation_input_tokens: 7, cache_read_input_tokens: 8 } },
         written_at: at(w.end),
       });
     }
 
-    if (arm === 'jev_hierarchy') {
+    if (jevGates) {
       // A paid allocation whose Agent call never reaches the stream, and a late result from a superseded generation.
       trace('pre_result', {
-        tool_use_id: 'toolu_orphanpaid', role: 'worker', task_id: 't5', rev: 1, called_tier: 'standard', attempted: true,
+        tool_use_id: 'toolu_orphanpaid', role: 'worker', task_id: 't6', rev: 1, called_tier: 'standard', attempted: true,
         http: { status: 200, code: null, duration_ms: 200, request_bytes: 3000 }, jev: jevBody(120),
-        answers: { route: choice('standard', 0.84), upgrade_basis: choice('no_specific_basis', 0.8) }, written_at: at(33000),
+        answers: { route: choice('standard', 0.84), upgrade_basis: choice('no_specific_basis', 0.8) }, decision: { action: 'patch', tier: 'standard', reason: null }, written_at: at(33000),
       });
       trace('post', { tool_use_id: 'toolu_lateresult', matched: false, orphaned: true, tool_response: { status: 'completed', resolvedModel: 'claude-sonnet-5', totalDurationMs: 1000 }, written_at: at(34000) });
     }
