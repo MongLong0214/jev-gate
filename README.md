@@ -25,6 +25,8 @@ An experiment in using frontier intelligence for the hard parts—not every part
 > stopped after one cell for budget reasons, and in that cell every task routed to the same tier. See
 > [What is verified](#what-is-verified-and-what-is-not) and [Results](#results). Contract:
 > [#21 PRD](https://github.com/MongLong0214/jev-gate/issues/21) → [#22 ADR](https://github.com/MongLong0214/jev-gate/issues/22).
+> Release: [v0.2.0](https://github.com/MongLong0214/jev-gate/releases/tag/v0.2.0). Next work and current state:
+> [HANDOFF.md](HANDOFF.md).
 
 ## The idea
 
@@ -224,6 +226,17 @@ One low-confidence decision escalated to Fable and dominated the overhead. That 
 
 ### V4 evaluation
 
+<p align="center">
+  <img
+    src="./assets/readme/v4-flow.svg"
+    width="860"
+    alt="V4 flow. A Sonnet main session coordinates and integrates; a small task finishes directly with no Jev call; a delegated task goes to a worker or a read-only planner, where a PreToolUse Agent hook lets Jev evaluate that one task once and select a model. V5 keeps this task boundary and adds admission, mandatory planning and result judgment around it."
+  >
+</p>
+
+V5 keeps this task boundary and adds the admission, planning and result gates around it.
+
+
 V4 is compared on complete coding jobs under five arms: `sonnet_native` (plugin absent), `native_hierarchy` (same roles, Sonnet picks models), `jev_hierarchy` (Jev picks eligible tasks), `frontier_native` (Fable main, plugin absent), and `fixed_hierarchy` (same hierarchy, content-blind role defaults). The primary comparison is **Jev hierarchy versus native hierarchy**; beating the expensive default alone proves nothing.
 
 Four new jobs live in [`bench/v4/`](bench/v4/README.md): a localized bug fix with regression tests, a cross-file feature touching model/serialization/view, a compound simulation with deterministic time, camera and HUD, and an async error-propagation bug. Each has a broken start, a trusted behavior checker, and a reference that passes it.
@@ -286,6 +299,11 @@ first fix to try is the planner contract, not the floor. Evidence:
 Two defects the host verification caught before release: the benchmark runner inherited the launching session's
 `CLAUDE_*` environment (so a measured session could silently run at the parent's reasoning effort), and the hook dropped
 the host's effort field because it arrives as an object. Both are fixed; any earlier effort observation is invalid.
+
+**Next.** The upgrade gate answered `no_specific_basis` on every call, so the first change is the planner contract: each
+task must carry the concrete unresolved constraints that would justify a stronger tier, and the fast tier needs a task
+shaped so that a cheap model can be trusted with it. Then the comparison arms run. Details in
+[HANDOFF.md](HANDOFF.md) and [#33](https://github.com/MongLong0214/jev-gate/issues/33).
 
 <details>
 <summary><strong>What would change the picture</strong></summary>
