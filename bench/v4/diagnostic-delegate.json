@@ -1,0 +1,41 @@
+{
+  "version": 4,
+  "cases": [
+    {
+      "id": "cart-total",
+      "group": "localized-fix-api-preserving",
+      "fixtureDir": "fixtures/cart-total",
+      "request": "[진단 조건: 이 요청의 구현 작업은 네가 직접 하지 말고 jev-gate:worker 에이전트에 위임해서 수행해. 위임할 때 model 인자는 지정하지 마(자동 배정). 위임 전 저장소 파악과 위임 후 결과 통합·검증은 네가 해.]\n\nsrc/cart.mjs의 cartTotal에 세 가지 문제가 있어: (1) fixed 쿠폰이 subtotal보다 크면 total이 음수가 된다 — discount는 subtotal을 넘지 않고 total은 0 아래로 내려가지 않게 해. (2) 금액은 원 단위 정수여야 하는데 percent 쿠폰과 taxRate 계산에서 소수가 나온다 — discount와 total은 정수로 반올림해. (3) quantity가 정수가 아니거나 음수면 RangeError를 던져야 한다.\ncartTotal(items, options)의 시그니처와 반환 형식 { subtotal, discount, total }, export 이름은 그대로 유지하고 의존성은 추가하지 마.\n세 문제를 각각 재현하는 회귀 테스트를 test/ 에 추가하고(기존 파일에 추가해도 됨) npm test(node --test)로 전체가 통과하는지 확인해.",
+      "setup": [],
+      "evaluationSetup": [],
+      "checkFile": "checkers/cart-total.mjs"
+    },
+    {
+      "id": "todo-priority",
+      "group": "cross-file-feature-serialization-ui",
+      "fixtureDir": "fixtures/todo-priority",
+      "request": "[진단 조건: 이 요청의 구현 작업은 네가 직접 하지 말고 jev-gate:worker 에이전트에 위임해서 수행해. 위임할 때 model 인자는 지정하지 마(자동 배정). 위임 전 저장소 파악과 위임 후 결과 통합·검증은 네가 해.]\n\n이 todo 앱(src/model.mjs, src/serialize.mjs, src/view.mjs)에 우선순위 기능을 추가해.\n- model: 각 항목에 priority 필드('low' | 'normal' | 'high', 기본 'normal'). add(title, priority?)로 지정하고 setPriority(id, priority)로 변경. 잘못된 값은 RangeError.\n- serialize: 저장 형식을 새 버전으로 올리고 priority를 포함해. 기존 version 1 데이터는 deserialize에서 계속 읽히되 priority는 'normal'로 마이그레이션해야 한다.\n- view: renderList는 high → normal → low 순으로, 같은 우선순위 안에서는 기존 입력 순서를 유지해 출력하고, normal이 아닌 항목만 제목 앞에 \"(high) \" 또는 \"(low) \" 표시를 붙여. 기존 \"[x] \"/\"[ ] \" 표기는 유지.\nexport 이름과 기존 함수 시그니처는 호환되게 유지하고 의존성은 추가하지 마. 기존 테스트(npm test)가 계속 통과해야 하고, 마이그레이션·정렬·표시를 검증하는 테스트를 추가해.",
+      "setup": [],
+      "evaluationSetup": [],
+      "checkFile": "checkers/todo-priority.mjs"
+    },
+    {
+      "id": "space-sim",
+      "group": "compound-simulation-camera-hud",
+      "fixtureDir": "fixtures/space-sim",
+      "request": "[진단 조건: 이 요청의 구현 작업은 네가 직접 하지 말고 jev-gate:worker 에이전트에 위임해서 수행해. 위임할 때 model 인자는 지정하지 마(자동 배정). 위임 전 저장소 파악과 위임 후 결과 통합·검증은 네가 해.]\n\n이 작은 브라우저 우주 시뮬레이션(index.html + src/sim.mjs)을 플레이 가능하게 확장해. 브라우저 도구 없이 node --test로 검증 가능한 순수 모듈 API가 핵심이다.\n1. src/sim.mjs: createSimulation의 기존 step(dtMs)/state() API와 기존 테스트는 유지하면서, 결정론적 시뮬레이션 시간 드라이버 advance(realDeltaMs)를 추가해. 고정 서브스텝(예: 10ms)으로 진행하고 timeScale을 곱해 적용하며, paused 상태에서는 시간이 전혀 진행되지 않아야 한다. pause()/resume()/togglePause()/setTimeScale(s) (s는 양의 유한수, 아니면 RangeError)를 제공하고 state()에 paused와 timeScale을 포함해. 같은 입력·같은 advance 호출 순서는 항상 같은 상태를 만들어야 한다.\n2. src/camera.mjs(새 파일): createCamera({ viewportWidth, viewportHeight, x?, y?, zoom? })가 pan(dxScreen, dyScreen), zoomBy(factor, anchorScreen?), worldToScreen({x,y}), screenToWorld({x,y}), state()를 제공하고 worldToScreen과 screenToWorld는 서로 역함수여야 한다.\n3. src/hud.mjs(새 파일): renderHud(simState, selectedId?)가 시뮬레이션 시간, timeScale, 일시정지 여부, 천체 수, 선택된 천체의 id와 속력을 담은 텍스트를 반환.\n4. index.html을 새 API에 연결해(키보드 space=pause, +/-=timeScale, 드래그=pan, 휠=zoom, HUD 표시). 브라우저 동작은 자동 검증 대상이 아니지만 index.html은 유효하게 유지해.\n의존성 추가 금지. 새 기능을 검증하는 테스트를 test/ 에 추가하고 npm test가 통과하는지 확인해.",
+      "setup": [],
+      "evaluationSetup": [],
+      "checkFile": "checkers/space-sim.mjs"
+    },
+    {
+      "id": "job-queue",
+      "group": "async-error-propagation-integration",
+      "fixtureDir": "fixtures/job-queue",
+      "request": "[진단 조건: 이 요청의 구현 작업은 네가 직접 하지 말고 jev-gate:worker 에이전트에 위임해서 수행해. 위임할 때 model 인자는 지정하지 마(자동 배정). 위임 전 저장소 파악과 위임 후 결과 통합·검증은 네가 해.]\n\nsrc/queue.mjs의 createQueue에 비동기 버그가 있다: 작업 함수가 실패(reject 또는 동기 throw)하면 그 오류가 어디로도 전달되지 않고 running 카운터가 줄지 않아 큐가 멈춘다. 원인을 조사하고 고쳐줘.\n요구: enqueue(fn)이 반환하는 promise는 fn의 원래 오류로 reject되어야 하고(동기 throw 포함), 실패 후에도 큐는 다음 작업을 계속 실행해야 하며, createQueue({ concurrency, onError })의 선택 인자 onError(error, jobId)가 실패마다 호출되어야 하고, drain()은 실패한 작업까지 모두 끝난 뒤 resolve되어야 하며, 동시성 제한은 유지되어야 한다.\ncreateQueue/enqueue/size/drain의 기존 시그니처는 호환되게 유지하고 의존성은 추가하지 마. 오류 전파와 계속 실행을 재현하는 회귀 테스트를 test/ 에 추가하고 npm test(node --test)가 통과하는지 확인해.",
+      "setup": [],
+      "evaluationSetup": [],
+      "checkFile": "checkers/job-queue.mjs"
+    }
+  ]
+}

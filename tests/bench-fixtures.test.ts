@@ -62,6 +62,19 @@ describe('behavioral regression-test checks', () => {
     expect(g2.checks.find((c) => c.id === 'test_suite_passes')?.pass).toBe(false);
   });
 
+  it('job-queue: a regression test that hangs against the unfixed source counts as detecting the bug', () => {
+    const v4 = loadManifest(join(root, 'bench', 'v4', 'cases.json'));
+    const jq = v4.cases.find((c) => c.id === 'job-queue')!;
+    const dir = join(tmp, 'jq-hang');
+    cpSync(jq.fixtureDir, dir, { recursive: true });
+    cpSync(join(v4.manifestDir, 'reference', 'job-queue', 'src'), join(dir, 'src'), { recursive: true });
+    // Natural shape of such a test: await the rejection. Against the broken queue this never settles.
+    writeFileSync(join(dir, 'test', 'hang.test.mjs'), "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\nimport { createQueue } from '../src/queue.mjs';\ntest('failing job rejects', async () => { const q = createQueue({ concurrency: 1 }); await assert.rejects(q.enqueue(async () => { throw new Error('boom'); }), /boom/); });\n");
+    const g = gradeDir(jq.checkFile, dir, { ...opts, timeoutMs: 120_000 });
+    expect(g.checks.find((c) => c.id === 'regression_tests_detect_bug')?.pass).toBe(true);
+    expect(g.quality, JSON.stringify(g)).toBe('pass');
+  }, 150_000);
+
   it('a candidate that does not load fails module_loads and leaves dependent checks unknown without an environment error', () => {
     const dir = join(tmp, 'syntax-error');
     cpSync(cs.fixtureDir, dir, { recursive: true });

@@ -43,8 +43,11 @@ export const runChecker = async (required, body) => {
       cpSync(join(evalDir, 'test'), join(probe, 'test'), { recursive: true });
       const pkg = join(evalDir, 'package.json');
       if (existsSync(pkg)) cpSync(pkg, join(probe, 'package.json'));
-      const r = spawnSync(process.execPath, ['--test'], { cwd: probe, encoding: 'utf8', timeout: 60_000, env: process.env });
+      const r = spawnSync(process.execPath, ['--test'], { cwd: probe, encoding: 'utf8', timeout: 30_000, env: process.env });
       rmSync(probe, { recursive: true, force: true });
+      // A suite that never completes against the unfixed source (e.g. awaiting a rejection the bug swallows) did not pass.
+      // Only a spawn failure is an environment error; the candidate's own suite must still pass (test_suite_passes).
+      if (r.error && r.error.code === 'ETIMEDOUT') return false;
       if (r.error) throw new Error(`cannot spawn node --test: ${r.error.message}`);
       return r.status === 0;
     };

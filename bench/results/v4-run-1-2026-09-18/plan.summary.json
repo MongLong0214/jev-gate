@@ -1,0 +1,188 @@
+{
+  "schema": 4,
+  "created_at": "2026-09-18T00:41:31.931Z",
+  "manifest_version": 4,
+  "cases": [
+    {
+      "id": "cart-total",
+      "group": "localized-fix-api-preserving",
+      "request_sha256": "8007e2b40a127022af14cf1e5e3e376fd394722961111e84ffc283bd8cbef202"
+    },
+    {
+      "id": "todo-priority",
+      "group": "cross-file-feature-serialization-ui",
+      "request_sha256": "dc7ce2f202bd34d9f133ef8cc15632cc156744cd538cae07624977bec086e7ea"
+    },
+    {
+      "id": "space-sim",
+      "group": "compound-simulation-camera-hud",
+      "request_sha256": "9070de50f931a33343ce2f641aad1df2dc5fa0e1244fff099e869be316929e08"
+    },
+    {
+      "id": "job-queue",
+      "group": "async-error-propagation-integration",
+      "request_sha256": "3ab537ea42ac8988a16959918ab303d734dbcaa634321743b5d9052522e8075a"
+    }
+  ],
+  "arms": [
+    {
+      "arm": "sonnet_native",
+      "rootModel": "sonnet",
+      "plugin": false,
+      "mode": null,
+      "experimentalAllocation": null
+    },
+    {
+      "arm": "native_hierarchy",
+      "rootModel": "sonnet",
+      "plugin": true,
+      "mode": "native",
+      "experimentalAllocation": null
+    },
+    {
+      "arm": "jev_hierarchy",
+      "rootModel": "sonnet",
+      "plugin": true,
+      "mode": "auto",
+      "experimentalAllocation": null
+    },
+    {
+      "arm": "frontier_native",
+      "rootModel": "fable",
+      "plugin": false,
+      "mode": null,
+      "experimentalAllocation": null
+    },
+    {
+      "arm": "fixed_hierarchy",
+      "rootModel": "sonnet",
+      "plugin": true,
+      "mode": "native",
+      "experimentalAllocation": "Use each role's default model (worker: sonnet, planner: opus) rather than choosing a tier from task content; honor any explicit user model restriction."
+    }
+  ],
+  "repetitions": 1,
+  "rows": [
+    {
+      "job": "cart-total",
+      "group": "localized-fix-api-preserving",
+      "repetition": 1,
+      "arms": [
+        "frontier_native",
+        "sonnet_native",
+        "fixed_hierarchy",
+        "jev_hierarchy",
+        "native_hierarchy"
+      ]
+    },
+    {
+      "job": "todo-priority",
+      "group": "cross-file-feature-serialization-ui",
+      "repetition": 1,
+      "arms": [
+        "fixed_hierarchy",
+        "native_hierarchy",
+        "frontier_native",
+        "sonnet_native",
+        "jev_hierarchy"
+      ]
+    },
+    {
+      "job": "space-sim",
+      "group": "compound-simulation-camera-hud",
+      "repetition": 1,
+      "arms": [
+        "native_hierarchy",
+        "frontier_native",
+        "jev_hierarchy",
+        "sonnet_native",
+        "fixed_hierarchy"
+      ]
+    },
+    {
+      "job": "job-queue",
+      "group": "async-error-propagation-integration",
+      "repetition": 1,
+      "arms": [
+        "native_hierarchy",
+        "sonnet_native",
+        "jev_hierarchy",
+        "fixed_hierarchy",
+        "frontier_native"
+      ]
+    }
+  ],
+  "planned_cells": 20,
+  "max_sessions": 20,
+  "cli": {
+    "claude": "claude",
+    "plugin_dir": "<checkout>",
+    "setting_sources": "project,local",
+    "permission_mode": "acceptEdits",
+    "allowed_tools": "Bash(node *),Bash(npm test),Bash(npm run test),Bash(ls *)",
+    "max_turns": 60,
+    "timeout_ms": 900000,
+    "seed": 42,
+    "frontier_model": "fable",
+    "launch_env": {
+      "CLAUDE_CODE_FORK_SUBAGENT": "0",
+      "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"
+    },
+    "effective_config_nonsecret": {
+      "version": 4,
+      "mode": "auto",
+      "jevModel": "jev-1.13.0",
+      "requestDeadlineMs": 3000,
+      "routeConfidenceFloor": 0.8,
+      "models": {
+        "sonnet": "sonnet",
+        "opus": "opus",
+        "fable": "fable"
+      },
+      "source": "defaults"
+    },
+    "note": "Root models are CLI aliases; actual models come from system/init and modelUsage. User-scope settings are excluded for every arm via --setting-sources; user-level CLAUDE.md still loads equally in all arms. --max-turns bounds top-level turns, not every descendant request or subscription spend."
+  },
+  "frozen_inputs": {
+    "bench_sha256": "6526cf7e9a49f120fd9f0e9fceb1eaad92ab1a8fc1225ac08f1580406d2a5d8c",
+    "bench_files": 33,
+    "plugin_hook_sha256": "3589a7be1b43aea41b3a104ebf83f85287b0532f5c79d69f4b935f61af1dd5a6",
+    "checker_ids": {
+      "cart-total": "sha256:487af28dc30f3ebe",
+      "todo-priority": "sha256:e411a6c67f882e39",
+      "space-sim": "sha256:3e36d89cd217eb11",
+      "job-queue": "sha256:da3451b741503371"
+    }
+  },
+  "preflight": {
+    "claude_version": "2.1.275 (Claude Code)",
+    "auth": {
+      "authMethod": "claude.ai",
+      "apiProvider": "firstParty"
+    },
+    "env_conflicts": [],
+    "env_observed": {
+      "CLAUDE_CODE_SUBAGENT_MODEL": null,
+      "CLAUDE_CODE_SUBAGENT_MODEL_FORCE": null,
+      "CLAUDE_CODE_FORK_SUBAGENT": null,
+      "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": null,
+      "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+      "JEV_GATE_CONFIG": null,
+      "JEV_GATE_EXPERIMENT_ALLOCATION": null
+    },
+    "typesafe_key_present": true
+  },
+  "summary": {
+    "finished_at": "2026-09-18T01:10:06.370Z",
+    "cancelled": false,
+    "cells": 20,
+    "regraded_at": "2026-09-18T01:15:06.579Z",
+    "checker_corrections": [
+      {
+        "at": "2026-09-18T01:15:06.538Z",
+        "file": "inputs/bench/checkers/_lib.mjs",
+        "reason": "runTestsAgainst treated a suite that never completes against the unfixed source (node --test timeout) as an environment error, marking regression_tests_detect_bug=false; a hanging suite did not pass, so it now counts as detecting the bug. Original verdicts kept in grade_history and reports/report-1.*"
+      }
+    ]
+  }
+}

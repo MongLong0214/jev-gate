@@ -690,6 +690,14 @@ const runClaudeCell = (cs: CodingCase, spec: ArmSpec, o: Options, pluginDir: str
     });
   });
 
+/** Identity of a checker and its sibling support library, so a correction to either shows up in every verdict. */
+export const checkerIdentity = (checkFile: string): string => {
+  const h = createHash('sha256').update(readFileSync(checkFile));
+  const lib = join(dirname(checkFile), '_lib.mjs');
+  if (existsSync(lib)) h.update(readFileSync(lib));
+  return `sha256:${h.digest('hex').slice(0, 16)}`;
+};
+
 const grade = (cs: CodingCase, checkFile: string, cellDir: string, timeoutMs: number, checkerId: string): Grade => {
   const finalDir = join(cellDir, 'final');
   const empty: Grade = { quality: 'unknown', reason: 'no final snapshot', required: [], checks: [], environmentError: null, describe: null, run: null, evaluationSetup: [], checkerId };
@@ -711,7 +719,7 @@ const freezeInputs = (o: Options, cases: CodingCase[], manifestDir: string, out:
   mkdirSync(pluginCopy, { recursive: true });
   for (const rel of ['dist', 'hooks', 'agents', '.claude-plugin']) cpSync(join(o.pluginDir, rel), join(pluginCopy, rel), { recursive: true });
   const checkerIds: Record<string, string> = {};
-  for (const cs of cases) checkerIds[cs.id] = `sha256:${createHash('sha256').update(readFileSync(cs.checkFile)).digest('hex').slice(0, 16)}`;
+  for (const cs of cases) checkerIds[cs.id] = checkerIdentity(cs.checkFile);
   return { bench_copy: manifestCopy, bench_sha256: benchReport.sha256, bench_files: benchReport.files, bench_skipped: benchReport.skipped, plugin_copy: pluginCopy, plugin_hook_sha256: createHash('sha256').update(readFileSync(join(pluginCopy, 'dist', 'hook.js'))).digest('hex'), checker_ids: checkerIds };
 };
 
@@ -736,7 +744,7 @@ export const regrade = (o: Options): number => {
         count++;
         if (!cell.started || !cs) continue;
         const checkFile = useFrozen ? join(frozenBench, cs.checkFileRel) : cs.checkFile;
-        const checkerId = `sha256:${createHash('sha256').update(readFileSync(checkFile)).digest('hex').slice(0, 16)}${useFrozen ? '' : ' (current source, frozen copy missing)'}`;
+        const checkerId = `${checkerIdentity(checkFile)}${useFrozen ? '' : ' (current source, frozen copy missing)'}`;
         const before = cell.grade;
         let next = grade(cs, checkFile, cellDir, o.timeoutMs, checkerId);
         if (cell.timed_out || cell.cancelled) next = { ...next, quality: 'unknown', reason: `${cell.timed_out ? 'timed out' : 'cancelled'}; snapshot may be incomplete (${next.reason ?? next.quality})` };
