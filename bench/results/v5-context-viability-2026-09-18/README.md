@@ -257,12 +257,37 @@ the recorded per-turn context sizes agrees (`data/counterfactual`-derived rows: 
 `autoCompactWindow: 300000` is now set in this operator's `~/.claude/settings.json`. It takes effect for sessions
 started afterwards; a session already running keeps the window it resolved at start.
 
-### What is left, and what it is worth
+### The static prefix, itemised
 
-The static prefix is the next term and a much smaller one. The same fixture run with user settings loaded carries
-**61,374** tokens at turn 1 against **45,649** without them — about **15.7K tokens of skills, plugins, hooks and MCP
-servers on every turn of every session**. Against a post-fix mean context near 140K that is roughly 11 %, and trimming
-it costs capability, so it is a judgement rather than a defect. `ENABLE_TOOL_SEARCH=1` is already deferring tool
+The prefix is the next term. Unlike accumulated conversation it is never compacted away, so whatever is in it is paid on
+every turn of every session forever. One-turn probes, varying one thing at a time against a 64,500-token baseline:
+
+| component | tokens | |
+|---|---|---|
+| Claude Code itself | 46,475 | not changeable |
+| `~/.claude/rules/*.md` | 9,000 | `grok-blind-review.md` 4,094 + `conventions.md` 4,325 |
+| `~/.claude/CLAUDE.md` | 5,687 | |
+| skills | 4,259 | ~39 listed, 9 ever invoked across 20,080 transcripts |
+| MCP servers | 2,552 | 8 registered, 4 ever called |
+
+Two of those are waste rather than cost, and both were removed:
+
+- **`grok-blind-review.md` was in the always-loaded tier by accident.** The operator's own `CLAUDE.md` defines three
+  tiers and lists `CLAUDE.md` (0), `rules/conventions.md` (1) and `docs/*.md` (2, on-demand) — this file appears in none
+  of them, and §6 of the same document says docs are lazy-read with bulk preloading forbidden. It sat in `rules/`, so it
+  loaded on every session including the ones that never run a review. Moved to `docs/`, references updated, and added to
+  the tier table so it stays findable.
+- **CommitLore was registered as an MCP server twice**, once in `~/.claude.json` and once by its own plugin, so its
+  tools and its long instructions block were carried in the prefix in duplicate. `commitlore init` recommends scope
+  `none` here for exactly this reason — the plugin carries the server. The `~/.claude.json` entry is gone;
+  `claude mcp list` still shows `plugin:commitlore:commitlore` connected, and one of the duplicate live runtimes that
+  `commitlore doctor` was warning about went with it.
+
+**64,500 → 59,668 tokens, −4,832 on every turn**, with no capability removed.
+
+`conventions.md` was left alone. It is Tier 1 "필수 준수" in the operator's own design, and demoting it is an
+architectural decision rather than a cleanup — worth noting only that it is a Next.js/React/Convex reference costing
+4,325 tokens a turn in sessions that are mostly Node CLIs and Swift. `ENABLE_TOOL_SEARCH=1` is already deferring tool
 schemas, which is the same lever pulled once already.
 
 **None of this is a Jev result.** The cheapest and fastest change available to this operator was a configuration value,
