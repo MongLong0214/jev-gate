@@ -30,10 +30,9 @@ import type { ContextCode, SearchBlock } from '../types.js';
  *   5. A failed, interrupted or permission-denied Grep was never captured, so `FAILURE_KEYS` stays a conservative
  *      guess and anything it matches passes through.
  *
- * Still unsettled, and deliberately not expressed here: the host separately caps the **model-facing** result. A call
- * carrying 27,391 characters into the hook reached the model as a 2 KB preview plus a saved-output path, with nothing
- * in `tool_response` saying so. That threshold was never bisected — it fired somewhere in 1,298–27,391 characters — so
- * this file has a floor and no ceiling; see MIN_CONTENT_BYTES.
+ * The host also caps the **model-facing** result, invisibly: above the ceiling the model receives a `<persisted-output>`
+ * notice and a ~2 KB preview, and nothing in `tool_response` says so. That threshold is now bisected — see
+ * MAX_CONTENT_CHARS, and note that it is the one limit here counted in characters rather than bytes.
  *
  * Anything that does not match the confirmed shape exactly returns `ok: false` and the caller passes the original
  * result through. A wrong guess therefore costs application opportunity, never a rewritten result.
@@ -65,6 +64,19 @@ export const GREP_INPUT_KEYS = ['pattern', 'path', 'glob', 'type', 'output_mode'
 export const MIN_CONTENT_BYTES = 8 * 1024;
 
 /**
+ * The host's own ceiling, bisected in `bench/results/v5-context-cap-2026-09-18`: at 20,000 characters the result is
+ * delivered whole, at 20,001 the model gets a ~2 KB preview and a saved-output path instead. Above it the host has
+ * already spent its ~2 KB whatever this filter does, so a selection that fires there makes the result *larger* unless
+ * it also beats the preview — and a saving measured against what the hook saw would be fabricated. Until that case is
+ * designed and measured, an over-cap result passes through.
+ *
+ * Counted in **characters**, unlike MIN_CONTENT_BYTES above, because that is how the host counts: a Korean result of
+ * 19,974 characters and 51,894 bytes was delivered whole in the same run that capped 20,001 ASCII bytes. Denominating
+ * this in bytes would disable the filter on non-ASCII source precisely where it has the most to save.
+ */
+export const MAX_CONTENT_CHARS = 20_000;
+
+/**
  * Instruction files: their content constrains the session, so they are kept unconditionally and never asked about. The
  * list is deliberately short and conservative; a path it does not know is judged like any other block.
  */
@@ -73,7 +85,13 @@ export const PROTECTED_PATH_SEGMENTS: readonly string[] = ['.claude', '.cursor']
 
 export type GrepParseFailure = Extract<
   ContextCode,
-  'context_response_failed' | 'context_response_unparsed' | 'context_response_short' | 'context_response_truncated' | 'context_meta_inconsistent' | 'context_no_candidates'
+  | 'context_response_failed'
+  | 'context_response_unparsed'
+  | 'context_response_short'
+  | 'context_response_truncated'
+  | 'context_response_capped'
+  | 'context_meta_inconsistent'
+  | 'context_no_candidates'
 >;
 
 export interface GrepMeta {
@@ -199,6 +217,8 @@ export const parseGrepResponse = (toolInput: unknown, toolResponse: unknown): Pa
   if (TRUNCATION_MARKS.some((m) => lower.includes(m))) return { ok: false, reason: 'context_response_truncated' };
   const contentBytes = bytes(content);
   if (contentBytes < MIN_CONTENT_BYTES) return { ok: false, reason: 'context_response_short' };
+  // Characters, not bytes: the host counts this one in characters, and so must the check. See MAX_CONTENT_CHARS.
+  if (content.length > MAX_CONTENT_CHARS) return { ok: false, reason: 'context_response_capped' };
 
   const rawFilenames = toolResponse[FILENAMES_KEY];
   if (rawFilenames !== undefined && !Array.isArray(rawFilenames)) return { ok: false, reason: 'context_meta_inconsistent' };

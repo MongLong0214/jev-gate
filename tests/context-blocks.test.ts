@@ -4,6 +4,7 @@ import {
   CONTENT_KEY,
   contentBytesOf,
   isProtectedPath,
+  MAX_CONTENT_CHARS,
   MIN_CONTENT_BYTES,
   parseGrepResponse,
   renderGrepResponse,
@@ -23,6 +24,28 @@ const pad = (n: number): string => 'x'.repeat(n);
 /** A contiguous run of match lines for one file, which the parser has to read back as exactly one block. */
 const run = (path: string, start: number, count: number, body = 'value'): string =>
   Array.from({ length: count }, (_, i) => `${path}:${start + i}:${body} ${i} ${pad(80)}`).join('\n');
+
+/**
+ * Content of exactly `chars` characters, as contiguous numbered lines of one file — the same shape the cap probe's
+ * generator produced, so a boundary asserted here is the boundary that was measured.
+ */
+const padTo = (chars: number, path: string, fill = 'x'): string => {
+  const lines: string[] = [];
+  let total = 0;
+  for (;;) {
+    const index = lines.length + 1;
+    const prefix = `${path}:${index}:`;
+    const separator = index === 1 ? 0 : 1;
+    const room = chars - total - separator - prefix.length;
+    if (room <= 0) throw new Error(`cannot reach ${String(chars)} characters exactly for ${path}`);
+    // Take a bounded slice, unless what is left could not form another line — then take all of it and land exactly.
+    const width = room <= 200 + `${path}:${String(index + 1)}:`.length + 2 ? room : 200;
+    lines.push(prefix + fill.repeat(width));
+    total += separator + prefix.length + width;
+    if (total === chars) break;
+  }
+  return lines.join('\n');
+};
 
 const input = (over: Record<string, unknown> = {}): Record<string, unknown> => ({ pattern: 'value', output_mode: 'content', '-n': true, ...over });
 
@@ -162,6 +185,29 @@ describe('parseGrepResponse', () => {
     expect(parseGrepResponse(input(), response(content, { totalLines: lines + 1 }))).toEqual({ ok: false, reason: 'context_response_truncated' });
     expect(parseGrepResponse(input(), response(content, { totalLines: lines - 1 }))).toEqual({ ok: false, reason: 'context_meta_inconsistent' });
     expect(parseGrepResponse(input(), response(content, { totalLines: lines })).ok).toBe(true);
+  });
+
+  /**
+   * The two thresholds are denominated differently on purpose, and the Korean case is the one that proves it: the host
+   * delivered 19,974 characters / 51,894 bytes whole in the same run that capped 20,001 ASCII bytes
+   * (`bench/results/v5-context-cap-2026-09-18`). A byte-denominated ceiling would switch the filter off on non-ASCII
+   * source while it was still well inside what the host would have delivered.
+   */
+  it('measures the host ceiling in characters, at the boundary that was bisected', () => {
+    const atCap = padTo(MAX_CONTENT_CHARS, 'src/cap.ts');
+    expect(atCap.length).toBe(MAX_CONTENT_CHARS);
+    expect(parseGrepResponse(input(), response(atCap)).ok).toBe(true);
+
+    const overCap = padTo(MAX_CONTENT_CHARS + 1, 'src/cap.ts');
+    expect(overCap.length).toBe(MAX_CONTENT_CHARS + 1);
+    expect(parseGrepResponse(input(), response(overCap))).toEqual({ ok: false, reason: 'context_response_capped' });
+
+    // Three bytes per character, so this is far over the byte ceiling a careless reading would have imposed, and the
+    // host delivers it whole. It has to stay eligible.
+    const korean = padTo(MAX_CONTENT_CHARS, 'src/ko.ts', '한');
+    expect(korean.length).toBe(MAX_CONTENT_CHARS);
+    expect(Buffer.byteLength(korean, 'utf8')).toBeGreaterThan(MAX_CONTENT_CHARS * 2);
+    expect(parseGrepResponse(input(), response(korean)).ok).toBe(true);
   });
 
   it('checks the eligibility threshold in bytes, not in characters', () => {

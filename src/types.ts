@@ -373,6 +373,7 @@ export type ContextCode =
   | 'context_response_unparsed'
   | 'context_response_short'
   | 'context_response_truncated'
+  | 'context_response_capped'
   | 'context_response_failed'
   | 'context_meta_inconsistent'
   | 'context_no_candidates'

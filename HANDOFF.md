@@ -205,6 +205,16 @@ about three minutes of model time). The decisive results, each with evidence in 
   a 2 KB preview plus a saved-output path, with nothing in `tool_response` saying so. **The bytes a hook sees are not
   the bytes the model would have received.** The window where filtering can save anything runs from the 8 KiB floor up
   to that cap; above it a filter that fires makes things worse unless it beats the 2 KB preview.
+
+  **That cap is now bisected** (`bench/results/v5-context-cap-2026-09-18`, 35 cells, $4.5851): it is **20,000
+  characters**, and it counts *characters, not bytes*. 20,000 is delivered whole, 20,001 comes back as a preview. A
+  Korean cell of 19,974 characters and **51,894 bytes** was delivered whole in the same run, which a byte cap cannot do.
+  "26.8KB" was the size of that one output, not the threshold — the host reports what it measured, never the limit it
+  applied, so reading it as the threshold would have set the ceiling 6 KB too high. `MAX_CONTENT_CHARS` carries it, and
+  it is deliberately in different units from `MIN_CONTENT_BYTES`: on CJK source a result can be three times the byte
+  size and still be inside what the host would have delivered, and a byte ceiling would switch the filter off exactly
+  there. A nearer ceiling binds first on ordinary results — `head_limit` defaults to **250 lines**, so a result with
+  ordinary line lengths tops out near 21 KB before the character cap can matter.
 - **The recovery archive is readable by the native `Read`, but only under a narrow grant.** `--allowedTools` alone,
   `Read(...)` rules inside it, and `--add-dir` all failed, including for an ordinary directory under `$HOME`; a
   `--settings` file with `permissions.additionalDirectories: ["~/.local/state/jev-gate/context"]` (or an equivalent
@@ -221,11 +231,12 @@ Two more host facts to keep: `--setting-sources project,local` **silently discar
 several recovery attempts looked like permission failures when the settings were never loaded at all; and the fixtures
 preserve the invariant `numLines === content.split('\n').length`, so a parser can rely on it.
 
-Still unknown and listed in that README: interactive TUI behaviour, whether a subagent's Grep reaches a root hook, the
-exact size cap (it fired somewhere between 1,298 and 27,391 characters and was reported as "26.8KB", never bisected),
+Still unknown and listed in that README: interactive TUI behaviour, whether a subagent's Grep reaches a root hook,
 whether a replacement that itself exceeds the cap is persisted, `appliedOffset` (no probe used `offset > 0`), and paths
 with colons or non-ASCII characters against a real host. Seventeen sessions were launched and thirteen recorded; four
-superseded runs were overwritten, so their cost is unknown rather than zero.
+superseded runs were overwritten, so their cost is unknown rather than zero. The exact size cap was on that list and is
+now measured; the preview's own size rule (the notice says "first 2KB", and the capped cells rendered 2,115–2,117 bytes
+in ASCII against 5,338 in Korean) was not separated from the notice text and remains unknown.
 
 ### What exists in code
 
@@ -265,13 +276,26 @@ that commit came from the core work, not from the probe.
    Mutation-check anything added here. Removing the `totalLines > numLines` guard left the whole suite green, because
    every test that reached it asserted only `ok: false` while the confirmed truncated fixture is caught one check
    earlier by `appliedLimit`. A guard whose reason code is the point needs a test that asserts the reason code.
-3. **Wire the hook** (`src/hook.ts`, `hooks/hooks.json`): a `PostToolUse` matcher of exactly `^Grep$` — do not widen the
-   existing `^Agent$` — plus the `SessionStart` and `UserPromptSubmit` events the purpose record needs. The context path
-   must branch before any V5 routing logic, and a child caller (`agent_id` present) must pass through untouched.
+3. **Wire the hook** (`src/hook.ts`, `hooks/hooks.json`) — **this is where the next agent starts.** A `PostToolUse`
+   matcher of exactly `^Grep$` — do not widen the existing `^Agent$` — plus the `SessionStart` and `UserPromptSubmit`
+   events the purpose record needs. The context path must branch before any V5 routing logic, and a child caller
+   (`agent_id` present) must pass through untouched.
+
+   The eligible window is now a measured range, not an open-ended one: `MIN_CONTENT_BYTES` (8 KiB) to
+   `MAX_CONTENT_CHARS` (20,000 characters), with `head_limit`'s 250 lines usually binding before either. Before wiring
+   anything, get a feel for how often a real session's `Grep` lands inside it — the two ceilings together may leave a
+   narrower window than the feature assumes, and that is cheap to find out from a passive `PostToolUse` recorder like
+   the one in `bench/results/v5-context-cap-2026-09-18/cells/probe-plugin` before spending anything on step 4.
 4. **Then the three-condition comparison** in §11 (`native_output`, `deterministic_output`, `jev_output`), which needs
    the owner's approval because it spends real budget. Measure against what the host *would have delivered*, not against
    the bytes the hook saw — the cap above makes that distinction the difference between a real number and a fabricated
    one.
+
+   Budget the cells, not just the run. The cap bisect cost $4.5851 for 35 cells against an estimate of $0.20–0.50,
+   because the estimate counted the search payload and the money is in booting a session: a representative cell reports
+   `input_tokens: 4, output_tokens: 107` beside `cache_creation_input_tokens: 42036`. One session per measurement is
+   clean and roughly $0.13 a time whatever it measures; where per-cell payloads are small, batch the sweep into one
+   session and buy independence with a fresh working directory per call instead.
 
 ## Rules that are not negotiable
 
@@ -284,7 +308,8 @@ that commit came from the core work, not from the probe.
 - No release, npm publish, marketplace entry or marketing without the owner asking for it.
 - No paid experiment, release, tag, push, or remote issue edit — including to #33 — without the owner asking first.
 - For the context filter: never claim a byte saving measured against what the hook saw. The host caps large results
-  before the model sees them, so the only honest baseline is what the host would have delivered.
+  before the model sees them — at 20,000 characters, measured — so the only honest baseline is what the host would have
+  delivered. Above the cap the host already spends its ~2 KB whatever the filter does.
 
 ## Working conventions in this repo
 

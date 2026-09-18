@@ -3,7 +3,7 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { CONTENT_KEY, NUM_LINES_KEY, parseGrepResponse, renderGrepResponse, TOTAL_LINES_KEY } from '../src/context/blocks.js';
+import { CONTENT_KEY, MAX_CONTENT_CHARS, NUM_LINES_KEY, parseGrepResponse, renderGrepResponse, TOTAL_LINES_KEY } from '../src/context/blocks.js';
 
 /**
  * The adapter against the host payloads themselves, not against a hand-written idea of them. These four files are real
@@ -18,6 +18,49 @@ interface Fixture {
 }
 
 const fixture = (name: string): Fixture => JSON.parse(readFileSync(join(PROBE_DIR, `${name}.json`), 'utf8')) as Fixture;
+
+/**
+ * The cap constant is answerable to the run that measured it, not to a number someone remembered. This reads the
+ * recorded cells and derives the boundary from them, so editing MAX_CONTENT_CHARS without a new measurement fails here.
+ */
+describe('the bisected model-facing cap', () => {
+  interface Cell {
+    cell: string;
+    hook_content_chars: number;
+    hook_content_bytes: number;
+    model_facing_bytes: number;
+    delivered_whole: boolean;
+  }
+  const cells = JSON.parse(readFileSync(join(process.cwd(), 'bench/results/v5-context-cap-2026-09-18/measurements.json'), 'utf8')) as Cell[];
+
+  it('separates cleanly at MAX_CONTENT_CHARS, with no cell on the wrong side', () => {
+    expect(cells.length).toBeGreaterThan(30);
+    const whole = cells.filter((c) => c.delivered_whole);
+    const capped = cells.filter((c) => !c.delivered_whole);
+    expect(whole.length).toBeGreaterThan(0);
+    expect(capped.length).toBeGreaterThan(0);
+    expect(Math.max(...whole.map((c) => c.hook_content_chars))).toBe(MAX_CONTENT_CHARS);
+    expect(Math.min(...capped.map((c) => c.hook_content_chars))).toBe(MAX_CONTENT_CHARS + 1);
+  });
+
+  it('shows the cap counting characters: Korean cells far over the ceiling in bytes were delivered whole', () => {
+    const korean = cells.filter((c) => c.cell.startsWith('KOMARK') && c.delivered_whole);
+    expect(korean.length).toBeGreaterThan(0);
+    for (const c of korean) {
+      expect(c.hook_content_chars).toBeLessThanOrEqual(MAX_CONTENT_CHARS);
+      // Well past two bytes per character, so a byte-denominated ceiling would have excluded every one of these.
+      expect(c.hook_content_bytes).toBeGreaterThan(c.hook_content_chars * 2);
+      expect(c.model_facing_bytes).toBe(c.hook_content_bytes);
+    }
+  });
+
+  it('shows every capped cell reaching the model far smaller than the hook saw', () => {
+    for (const c of cells.filter((x) => !x.delivered_whole)) {
+      expect(c.model_facing_bytes).toBeLessThan(c.hook_content_bytes);
+      expect(c.model_facing_bytes).toBeLessThan(6 * 1024);
+    }
+  });
+});
 
 describe('recorded host fixtures', () => {
   it('reads all four back as the three documented shapes', () => {
@@ -69,26 +112,46 @@ describe('recorded host fixtures', () => {
     expect(parseGrepResponse(tool_input, tool_response)).toEqual({ ok: false, reason: 'context_response_short' });
   });
 
-  /** The same fixture with the host's own truncation marks cleared: real host text, real size, nothing else changed. */
-  it('parses that result once it is no longer truncated, and carries both counts into meta', () => {
+  /**
+   * The same fixture with the host's own truncation marks cleared. It is still refused, and the second reason is worth
+   * stating: at 28,891 characters this result is above the cap too, so even untruncated the model would only ever have
+   * seen a preview of it. Both of the probe's ceilings bind on the one payload it recorded.
+   */
+  it('still refuses that result once it is no longer truncated, because it is over the cap', () => {
     const { tool_input, tool_response } = fixture('grep-truncated');
-    const eligible = { ...tool_response };
-    delete eligible['appliedLimit'];
-    delete eligible['_source'];
-    delete eligible['model_facing_render'];
-    eligible[TOTAL_LINES_KEY] = eligible[NUM_LINES_KEY];
+    const untruncated = { ...tool_response };
+    delete untruncated['appliedLimit'];
+    delete untruncated['_source'];
+    delete untruncated['model_facing_render'];
+    untruncated[TOTAL_LINES_KEY] = untruncated[NUM_LINES_KEY];
+    expect((untruncated[CONTENT_KEY] as string).length).toBeGreaterThan(MAX_CONTENT_CHARS);
+    expect(parseGrepResponse(tool_input, untruncated)).toEqual({ ok: false, reason: 'context_response_capped' });
+  });
+
+  /** Trimmed under both ceilings: still the host's own line format and bytes, now in the window a filter can work in. */
+  it('parses that same text once it is inside the window, and carries both counts into meta', () => {
+    const { tool_input, tool_response } = fixture('grep-truncated');
+    const lines = (tool_response[CONTENT_KEY] as string).split('\n').slice(0, 120);
+    const eligible: Record<string, unknown> = {
+      mode: 'content',
+      numFiles: 0,
+      filenames: [],
+      [CONTENT_KEY]: lines.join('\n'),
+      [NUM_LINES_KEY]: lines.length,
+      [TOTAL_LINES_KEY]: lines.length,
+    };
 
     const parsed = parseGrepResponse(tool_input, eligible);
     expect(parsed.ok).toBe(true);
     if (!parsed.ok) return;
-    expect(parsed.meta.numLines).toBe(250);
-    expect(parsed.meta.totalLines).toBe(250);
-    expect(parsed.meta.contentBytes).toBe(Buffer.byteLength(eligible[CONTENT_KEY] as string, 'utf8'));
+    expect(parsed.meta.numLines).toBe(120);
+    expect(parsed.meta.totalLines).toBe(120);
+    expect(parsed.meta.contentBytes).toBe(Buffer.byteLength(lines.join('\n'), 'utf8'));
 
     // Rendering every block back reproduces the host's own counts rather than dropping the key it sent.
     const replacement = renderGrepResponse(parsed.meta, parsed.blocks);
-    expect(replacement[NUM_LINES_KEY]).toBe(250);
-    expect(replacement[TOTAL_LINES_KEY]).toBe(250);
-    expect(replacement[CONTENT_KEY]).toBe(eligible[CONTENT_KEY]);
+    expect(replacement[NUM_LINES_KEY]).toBe(120);
+    expect(replacement[TOTAL_LINES_KEY]).toBe(120);
+    expect(replacement[CONTENT_KEY]).toBe(lines.join('\n'));
   });
 });
