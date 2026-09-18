@@ -217,14 +217,26 @@ about three minutes of model time). The decisive results, each with evidence in 
 - `effort` is an object here too, confirming the V5 defect; `--no-session-persistence` leaves `transcript_path`
   populated but never creates the file, so transcript-based evidence needs that flag dropped.
 
+Two more host facts to keep: `--setting-sources project,local` **silently discards** a `--settings` file, which is why
+several recovery attempts looked like permission failures when the settings were never loaded at all; and the fixtures
+preserve the invariant `numLines === content.split('\n').length`, so a parser can rely on it.
+
 Still unknown and listed in that README: interactive TUI behaviour, whether a subagent's Grep reaches a root hook, the
-exact size cap, `appliedOffset`, and paths with colons or non-ASCII characters against a real host.
+exact size cap (it fired somewhere between 1,298 and 27,391 characters and was reported as "26.8KB", never bisected),
+whether a replacement that itself exceeds the cap is persisted, `appliedOffset` (no probe used `offset > 0`), and paths
+with colons or non-ASCII characters against a real host. Seventeen sessions were launched and thirteen recorded; four
+superseded runs were overwritten, so their cost is unknown rather than zero.
 
 ### What exists in code
 
-On `dev`, uncommitted at the time of writing: `src/context/{blocks,purpose,select,archive,render,store}.ts` (about 880
-lines) plus edits to `src/{config,types,trace}.ts` and `tests/context-blocks.test.ts`. A `context` mode is being added
-to `Mode` so that `off`, `native` and `auto` keep their exact current behaviour and `context` runs only this filter.
+On `dev` at `a8a8457`: `src/context/{blocks,purpose,select,archive,render,store}.ts` (about 880 lines) plus edits to
+`src/{config,types,trace}.ts` and the tests `tests/context-{blocks,purpose}.test.ts`. A `context` mode is added to
+`Mode` so that `off`, `native` and `auto` keep their exact current behaviour and `context` runs only this filter.
+`npm run typecheck` passes and `npm test` is green at 397 tests across 22 files, but that is the core in isolation: the
+hook is not wired yet, so nothing in a real session reaches this code path.
+
+The probe wrote only `bench/results/v5-context-probe-2026-09-18/`; every change under `src/`, `hooks/` and `tests/` in
+that commit came from the core work, not from the probe.
 
 ### Pick it up here
 
