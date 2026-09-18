@@ -221,7 +221,7 @@ describe('schema 5 observation', () => {
     expect(v.plan_status).toEqual({ ready: 2 });
     expect(v.worker_calls['fast']).toMatchObject({ calls: 4, preserved: 4, patched: 0 });
     expect(v.worker_calls['deep']).toMatchObject({ calls: 2, patched: 2, root_effort: { high: 2 } });
-    expect(v.receipts).toEqual({ accept: 4, incomplete: 2, invalid: 0, unknown: 0 });
+    expect(v.receipts).toEqual({ accept: 4, incomplete: 2, invalid: 0, unknown: 0, rework: 0, replan: 0 });
     expect(v.advisory.rework).toBe(2);
     // The maximum concurrency observed anywhere in the arm, not a sum.
     expect(v.parallel).toEqual({ reservation_overlap_max: 3, observed_overlap_max: 5 });

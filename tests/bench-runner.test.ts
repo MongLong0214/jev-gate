@@ -1,9 +1,10 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import type { ConfigV5 } from '../src/types.js';
 import type { Report } from '../src/bench/report.js';
 import { loadManifest, maxOverlap, type CellRecord, type Plan } from '../src/bench/run.js';
 
@@ -184,7 +185,7 @@ describe('execute', () => {
       expect(g.guard_denials, a).toBe(3);
       expect(g.continue_false, a).toBe(1);
       expect(g.planner_calls, a).toMatchObject({ requested: 1, completed: 1, plan_status: 'ready', rev: 1, model_observed: 'claude-opus-5', tier_proposed: null });
-      expect(g.receipts, a).toEqual({ accept: 2, incomplete: 1, invalid: 0, unknown: 1 });
+      expect(g.receipts, a).toEqual({ accept: 2, incomplete: 1, invalid: 0, unknown: 1, rework: 0, replan: 0 });
       expect(g.advisory, a).toEqual({ accept: 0, rework: 0, replan: 0, abstain: 0, none: 4 });
       expect(g.outcome, a).toBe('incomplete');
       expect(g.jev_input_tokens, a).toBe(0);
@@ -200,13 +201,19 @@ describe('execute', () => {
     expect(jev.admission).toMatchObject({ attempted: true, known_not_sent: false, forced: false, decided: true, choice: 'orchestrated', confidence: 0.93, decision: 'orchestrated', reason: null });
     expect(jev.guard_denials).toBe(0);
     expect(jev.planner_calls).toMatchObject({ requested: 1, completed: 1, tier_proposed: 'deep', model_observed: 'claude-opus-5', plan_status: 'ready', rev: 1 });
-    expect(jev.receipts).toEqual({ accept: 2, incomplete: 1, invalid: 0, unknown: 1 });
-    expect(jev.advisory).toEqual({ accept: 0, rework: 1, replan: 0, abstain: 0, none: 3 });
+    // T11: the current policy runs no Gate C, so a deterministic accept is the receipt that stands.
+    expect(jev.receipts).toEqual({ accept: 2, incomplete: 1, invalid: 0, unknown: 1, rework: 0, replan: 0 });
+    expect(jev.advisory).toEqual({ accept: 0, rework: 0, replan: 0, abstain: 0, none: 4 });
     expect(jev.jev_requests.admission).toMatchObject({ attempts: 1, tokens: 300 });
     expect(jev.jev_requests.allocation).toMatchObject({ attempts: 7, tokens: 2620 });
-    expect(jev.jev_requests.result).toMatchObject({ attempts: 1, tokens: 200 });
-    expect(jev.jev_input_tokens).toBe(3120);
-    expect(jev.jev_cost_usd).toBeCloseTo((3120 * 0.042) / 1_000_000, 12);
+    // T11: no Gate C and no plan-scope request on the current path; the buckets stay readable and stay at zero.
+    expect(jev.jev_requests.result).toMatchObject({ attempts: 0, tokens: 0 });
+    expect(jev.jev_requests.scope).toMatchObject({ attempts: 0, tokens: 0 });
+    expect(jev.jev_input_tokens).toBe(2920);
+    expect(jev.jev_cost_usd).toBeCloseTo((2920 * 0.042) / 1_000_000, 12);
+    // A17 item 7: judgments made, and the ones that changed what would have happened without Jev.
+    expect(jev.influence).toEqual({ judgments: 8, changed_default: 3 });
+    expect(cells.orchestrated_control.gate.influence).toEqual({ judgments: 0, changed_default: 0 });
     expect(jev.parallel).toEqual({ reservation_overlap_max: 2, observed_overlap_max: 2 });
     expect(jev.outcome).toBe('incomplete');
     // The recorded Gate B decision is authoritative; `proposed` stays Jev's answer even when the call was preserved.
@@ -233,9 +240,12 @@ describe('execute', () => {
     expect(forcedJev.admission).toMatchObject({ attempted: false, known_not_sent: true, decision: 'orchestrated', reason: 'admission_forced', choice: null });
     expect(forcedJev.jev_requests.admission).toMatchObject({ attempts: 0, tokens: 0 });
     expect(forcedJev.jev_requests.allocation).toMatchObject({ attempts: 7, tokens: 2620 });
-    expect(forcedJev.jev_requests.result).toMatchObject({ attempts: 1, tokens: 200 });
-    expect(forcedJev.jev_input_tokens).toBe(2820);
-    expect(forcedJev.advisory.rework).toBe(1);
+    expect(forcedJev.jev_requests.result).toMatchObject({ attempts: 0, tokens: 0 });
+    expect(forcedJev.jev_requests.scope).toMatchObject({ attempts: 0, tokens: 0 });
+    expect(forcedJev.jev_input_tokens).toBe(2620);
+    // A16: Gate A is not asked here, so the forced admission is never counted as a judgment or as influence.
+    expect(forcedJev.influence).toEqual({ judgments: 7, changed_default: 2 });
+    expect(forcedJev.advisory.rework).toBe(0);
     expect(forcedJev.patched).toBe(5);
     expect(forcedJev.parallel.reservation_overlap_max).toBe(2);
     expect(forcedJev.guard_denials).toBe(0);
@@ -252,7 +262,7 @@ describe('execute', () => {
     expect(rep.per_job[0]!.arms).toHaveLength(7);
     const byArm = Object.fromEntries(rep.arms.map((a) => [a.arm, a]));
     expect(byArm['frontier_native']!.fable_tokens).toBe(1260);
-    expect(byArm['jev_hierarchy']!.gate_v5.receipts).toEqual({ accept: 2, incomplete: 1, invalid: 0, unknown: 1 });
+    expect(byArm['jev_hierarchy']!.gate_v5.receipts).toEqual({ accept: 2, incomplete: 1, invalid: 0, unknown: 1, rework: 0, replan: 0 });
     expect(byArm['jev_hierarchy']!.gate_v5.admission).toEqual({ orchestrated: 1 });
     expect(byArm['jev_forced_orchestration']!.diagnostic).toBe(true);
     expect(byArm['jev_hierarchy']!.diagnostic).toBe(false);
@@ -332,5 +342,88 @@ describe('overlap arithmetic', () => {
     expect(maxOverlap([[0, 10], [10, 20]])).toBe(1);
     expect(maxOverlap([[0, 10], [5, 20], [6, 7]])).toBe(3);
     expect(maxOverlap([[0, 10], [11, 20], [12, 30]])).toBe(2);
+  });
+});
+
+describe('historical runs recorded under the earlier policy', () => {
+  it('still reads the plan-scope gate, Gate C and its advisory, and counts them in the arm totals', () => {
+    // T11 removed both gates from the live path. A run recorded before that is a fact about that run, so the reader
+    // keeps parsing it; this is the only place those records are asserted.
+    const r = bench(['--execute', '--max-sessions', '1', '--arms', 'jev_hierarchy', '--timeout-ms', '60000'], { FAKE_CLAUDE_HISTORICAL_GATES: '1' });
+    expect(r.status, r.stderr).toBe(0);
+    const g = readCell(r.out, 'jev_hierarchy').gate;
+    expect(g.jev_requests.scope).toMatchObject({ attempts: 1, tokens: 150 });
+    expect(g.jev_requests.result).toMatchObject({ attempts: 1, tokens: 200 });
+    // Gate C demoted t3, so that accepted receipt reads as a rework and the totals still cover every dispatch.
+    expect(g.receipts).toEqual({ accept: 1, incomplete: 1, invalid: 0, unknown: 1, rework: 1, replan: 0 });
+    expect(g.advisory).toEqual({ accept: 0, rework: 1, replan: 0, abstain: 0, none: 3 });
+    expect(g.influence).toEqual({ judgments: 10, changed_default: 5 });
+    expect(g.jev_input_tokens).toBe(3270);
+    expect(g.jev_cost_usd).toBeCloseTo((3270 * 0.042) / 1_000_000, 12);
+    const arm = report(r.out).arms.find((a) => a.arm === 'jev_hierarchy')!;
+    expect(arm.gate_v5.jev_requests.scope.tokens).toBe(150);
+    expect(arm.gate_v5.receipts.rework).toBe(1);
+    expect(arm.gate_v5.influence).toEqual({ judgments: 10, changed_default: 5 });
+  }, 120_000);
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// R11: the frozen configuration (document section T8). R08-R10 live in bench-ingest.test.ts, which needs no CLI.
+
+describe('R11: the frozen configuration is the one the child reads', () => {
+  const PARENT: ConfigV5['models'] = { fast: 'sonnet', standard: 'sonnet', deep: 'opus', frontier: 'fable' };
+  const writeConfig = (path: string, models: ConfigV5['models'], cap: number): void => {
+    mkdirSync(join(path, '..'), { recursive: true });
+    writeFileSync(path, JSON.stringify({ version: 5, mode: 'auto', models, maxParallelWorkers: cap, requestDeadlineMs: 2500 }, null, 2));
+  };
+
+  it('plan, execution and accounting agree, and mid-run edits to either source do not reach later cells', () => {
+    const home = join(tmp, 't8-home');
+    const parentPath = join(tmp, 't8-parent.json');
+    const homePath = join(home, '.config', 'jev-gate', 'config.json');
+    writeConfig(parentPath, PARENT, 2);
+    writeConfig(homePath, { fast: 'opus', standard: 'opus', deep: 'opus', frontier: 'opus' }, 7);
+    const env = { HOME: home, JEV_GATE_CONFIG: parentPath };
+
+    // plan-only still writes nothing, and it records the configuration the run would use.
+    const planned = bench(['--arms', 'jev_hierarchy'], env);
+    expect(planned.status, planned.stderr).toBe(0);
+    expect(existsSync(planned.out)).toBe(false);
+    expect((JSON.parse(planned.stdout) as Plan).effective_config?.models).toEqual(PARENT);
+
+    const r = bench(['--execute', '--max-sessions', '2', '--arms', 'native_hierarchy,jev_hierarchy', '--seed', '5', '--timeout-ms', '60000'], { ...env, FAKE_CLAUDE_MUTATE_CONFIG: JSON.stringify([parentPath, homePath]) });
+    expect(r.status, r.stderr + r.stdout).toBe(0);
+    const plan = JSON.parse(readFileSync(join(r.out, 'plan.json'), 'utf8')) as Plan;
+    const frozenPath = join(r.out, 'inputs', 'config.json');
+    const frozen = JSON.parse(readFileSync(frozenPath, 'utf8')) as ConfigV5;
+    expect(plan.effective_config_source).toBe(parentPath);
+    expect(plan.effective_config).toEqual(frozen);
+    expect(frozen).toMatchObject({ version: 5, models: PARENT, maxParallelWorkers: 2, requestDeadlineMs: 2500 });
+    expect(JSON.stringify(frozen)).not.toMatch(/test-key/);
+
+    // Both sources were rewritten while the run was in flight.
+    for (const p of [parentPath, homePath]) expect((JSON.parse(readFileSync(p, 'utf8')) as ConfigV5).models.deep).toBe('mutated-deep');
+
+    for (const arm of ['native_hierarchy', 'jev_hierarchy'] as const) {
+      const observed = JSON.parse(readFileSync(join(r.out, 'cells', 'mini', arm, '1', 'trace', 'config-observed.json'), 'utf8')) as { path: string; from_env: boolean; config: ConfigV5 };
+      expect(observed.path, arm).toBe(frozenPath);
+      expect(observed.from_env, arm).toBe(true);
+      expect(observed.config, arm).toEqual(frozen);
+      expect(readCell(r.out, arm).spawn!.env_added, arm).toContain('JEV_GATE_CONFIG');
+    }
+    // Accounting reads the same frozen mapping: under it the fast profile is sonnet, so the haiku children that the
+    // default mapping would have called a match are mismatches here.
+    const g = readCell(r.out, 'jev_hierarchy').gate;
+    expect(g.target_model_mismatches).toBe(3);
+    expect(g.decision_mismatch).toBe(3);
+  }, 120_000);
+
+  it('refuses to start a plugin arm when the resolved configuration does not load', () => {
+    const bad = join(tmp, 't8-bad.json');
+    writeFileSync(bad, JSON.stringify({ version: 4, models: {} }));
+    const r = bench(['--execute', '--max-sessions', '1', '--arms', 'jev_hierarchy'], { JEV_GATE_CONFIG: bad });
+    expect(r.status).toBe(2);
+    expect(r.stderr).toMatch(/config at .*t8-bad\.json does not load/);
+    expect(existsSync(r.out)).toBe(false);
   });
 });

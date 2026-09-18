@@ -17,14 +17,21 @@ export const DIRECT_MODE_SENTENCE: Record<Exclude<Mode, 'off'>, string> = {
   auto: 'Execution shape: direct. This request was admitted as one native conversation; no orchestration state is active.',
 };
 
-export const ORCHESTRATION_RULES = [
+/** T5: the dispatch sentence states the configured cap, so the guidance can never ask for more workers than will run. */
+export const renderDispatchRule = (cap: number): string =>
+  cap <= 1
+    ? 'Follow the plan: dispatch one ready task at a time and wait for its result. This build runs one worker at a time; a second concurrent dispatch is denied.'
+    : `Follow the plan: dispatch a task whose dependencies are already accepted. At most ${cap} workers run at once, so send at most ${cap} ready tasks with disjoint deliverables in one message and hold the rest.`;
+
+export const orchestrationRules = (cap: number): string[] => [
   'You do not implement this request yourself; you coordinate.',
   'Available to you now: Read, Grep, Glob, TodoWrite, and Agent calls to jev-gate:planner and the jev-gate worker roles. Edit, Write, Bash and every other agent (including Explore) are unavailable for this request and will be denied; do not probe them.',
   'Planner first: call jev-gate:planner with no model argument. Give it the exact request, the relevant earlier user constraints, and factual observations about this repository. It is read-only and returns the plan.',
-  'Follow the plan: dispatch every task whose dependencies are already accepted. Send all ready tasks with disjoint deliverables in one message so they run in parallel.',
-  'Each worker prompt starts with the marker [JEV_TASK rev=<n> id=<id>] followed by your own short brief. Do not paste the planner task block: the hook appends the canonical task contract, the global constraints and the predecessor facts.',
-  'Never pass a model argument to an owned agent call. Add attempt=<n> to the marker only when you deliberately rework a task that was already dispatched.',
-  'Replan only on a changed interface, a changed dependency, an invalidated task or a major failure, and only after active workers have finished: call the planner again with the concrete violated assumption.',
+  renderDispatchRule(cap),
+  'Each worker prompt starts with the marker [JEV_TASK rev=<n> id=<id>] followed by your own short brief. Do not paste the planner task block: the hook appends the canonical task contract, the global constraints, the required check ids and the predecessor facts.',
+  'Never pass a model argument to an owned agent call. Add attempt=<n> to the marker only when you deliberately rework a task that was already dispatched, and only with the next attempt number for that task.',
+  'A declared deliverable is the planner\'s claim about what a task writes, not an enforced write boundary; two workers that touch the same file can still collide.',
+  'Replan only on a changed interface, a changed dependency, an invalidated task or a major failure, and only after active workers have finished: call the planner again with the concrete violated assumption. A new plan revision starts every task again; results from the previous revision are kept as history, not reused.',
   'Report what was implemented, what was checked, and what was reported but not verified, separately.',
 ];
 
@@ -42,13 +49,14 @@ export interface OrchestrationGuidanceOptions {
   mode: Exclude<Mode, 'off'>;
   confidence: number | null;
   superseded: boolean;
+  maxParallelWorkers: number;
 }
 
 export const renderOrchestrationGuidance = (opts: OrchestrationGuidanceOptions): string =>
   [
     GUIDANCE_HEADER,
     opts.mode === 'auto' ? renderAdmissionLine(opts.confidence) : NATIVE_ORCHESTRATION_SENTENCE,
-    ...ORCHESTRATION_RULES,
+    ...orchestrationRules(opts.maxParallelWorkers),
     ...(opts.superseded ? [SUPERSEDED_SENTENCE] : []),
   ].join('\n');
 
@@ -74,12 +82,19 @@ const DISPATCH_DENY_TEXT: Record<DenyReason, string> = {
   stale_rev: 'The marker names an older plan revision. Re-read the current plan revision and dispatch its task ids.',
   deps_incomplete: 'This task still has dependencies without an accepted receipt for the current contract. Dispatch its predecessors first.',
   phase_not_planned: 'No valid plan is active for this request. Call jev-gate:planner and wait for a ready plan before dispatching workers.',
-  task_active: 'This task is already running. Wait for it to finish, or add attempt=<n> to the marker to deliberately supersede it.',
+  task_active:
+    'This task is already running and its worker was never observed to stop, so a second dispatch of it is refused rather than replacing a live writer. Wait for its result, or cancel it in the session first.',
   task_accepted: 'This task already has an accepted receipt for the current contract. Add attempt=<n> only to deliberately rework it.',
-  reservation_superseded: 'A previous dispatch of this task was superseded by this rework attempt.',
+  attempt_mismatch:
+    'The attempt number on the marker is not the next attempt this task actually has. attempt=<n> in the text confers nothing on its own; use the number this job has counted, or dispatch without attempt=<n>.',
+  dependent_active:
+    'A task that depends on this one is running right now, so reworking this one would change the contract underneath it. Let the dependent finish before reworking its predecessor.',
+  stale_generation:
+    'A newer user request replaced this one while this dispatch was being validated, so it belongs to a plan that is no longer in force. Nothing was run; re-read the current plan and dispatch from it.',
   deliverable_overlap: 'This task writes deliverables that a running task is already writing. Dispatch it after that task finishes.',
   parallel_cap: 'The configured parallel worker limit is already in use. Dispatch this task when one of the running workers finishes.',
   planner_pin_conflict: 'This planner call pins a model that is not one of the configured strong planning models. Remove the model argument, or pin a configured deep/frontier model.',
+  planner_active: 'A planner call for this request is already running. Wait for its plan before calling the planner again.',
   workers_active: 'Workers from the current plan are still running. Let them finish before replanning, then call the planner with the concrete violated assumption.',
   bounds_exhausted: 'This job has used its allowed attempts for that step. Report the blocker to the user instead of retrying.',
   composed_too_large: 'The composed task contract exceeds the size bound, so nothing was sent and no constraint was dropped. Ask the planner for a smaller task.',
@@ -91,8 +106,15 @@ const bounded = (detail: string): string => (detail.length > 1000 ? `${detail.sl
 export const renderDispatchDeny = (reason: DenyReason, detail: string | null = null): string =>
   `${DISPATCH_DENY_TEXT[reason]}${detail ? ` (${bounded(detail)})` : ''} Nothing was changed by this call.`;
 
-export const renderPlannedContext = (rev: number, readyIds: string[]): string =>
-  `[Jev Gate plan] Revision ${rev} accepted. Ready task ids: ${readyIds.length ? readyIds.join(', ') : 'none'}. Dispatch every ready task with disjoint deliverables in one message, each prompt starting with [JEV_TASK rev=${rev} id=<id>].`;
+/** T5: the dispatch sentence carries the real cap, so the plan context cannot ask for more workers than will be admitted. */
+export const renderPlannedContext = (rev: number, readyIds: string[], cap: number): string =>
+  `[Jev Gate plan] Revision ${rev} accepted. Ready task ids: ${readyIds.length ? readyIds.join(', ') : 'none'}. ${renderDispatchRule(cap)} Each prompt starts with [JEV_TASK rev=${rev} id=<id>].`;
+
+/** T4: what the pin asked for and what the host reported running are different facts; an unknown id settles neither. */
+export const renderPlannerModelNote = (agreement: 'mismatch' | 'unverified'): string =>
+  agreement === 'mismatch'
+    ? ' The model the host reported for this planner is not the planning profile this job requested, so this plan is not evidence that a strong planner produced it.'
+    : ' The host did not report a model this plugin recognizes for this planner, so whether the requested planning profile actually ran is unverified.';
 
 export const renderPlannerProblem = (status: string, detail: string): string =>
   `[Jev Gate plan] The planner returned ${status}; workers cannot be dispatched until a valid plan exists. ${bounded(detail)}`;
@@ -104,11 +126,21 @@ export const renderReplanProblem = (status: string, detail: string, rev: number)
 export const renderWorkerIncomplete = (taskId: string, reason: string): string =>
   `[Jev Gate result] Task ${taskId} is incomplete: ${reason}. Dependent tasks stay locked. Rework it with attempt=<n> on the marker, or replan once no worker is active.`;
 
+/**
+ * T10: a malformed report is a reporting failure, not a demonstrated implementation failure. The recovery says so, so
+ * a whole implementation is not redone because an id did not match a regular expression.
+ */
 export const renderWorkerInvalid = (taskId: string, reason: string): string =>
-  `[Jev Gate result] Task ${taskId} returned no valid WorkerReply (${reason}). Nothing was accepted; rework it with attempt=<n> on the marker.`;
+  `[Jev Gate result] Task ${taskId} returned no valid WorkerReply (${bounded(reason)}). This is a report-format failure and says nothing about the code: nothing was accepted, and nothing was shown to be wrong either. Rework it with attempt=<n> on the marker and tell the worker to read the files it already changed, re-run only the checks whose result it cannot confirm, and correct the report to the required check ids. Do not ask it to redo an implementation that was not shown to fail.`;
 
 export const renderWorkerUnknown = (taskId: string): string =>
   `[Jev Gate result] Task ${taskId} did not complete, so no receipt was recorded. Its reservation was released; dispatch it again with attempt=<n> if the work is still needed.`;
 
-export const renderWorkerAccepted = (taskId: string, readyIds: string[], advisory: string | null): string =>
-  `[Jev Gate result] Task ${taskId} accepted. Ready task ids: ${readyIds.length ? readyIds.join(', ') : 'none'}.${advisory ? ` Advisory (does not change readiness): ${advisory}.` : ''}`;
+/** T11: the worker itself reported the failed required check or the invalidated plan; no second model judged it. */
+export const renderWorkerReported = (taskId: string, verdict: 'rework' | 'replan', reason: string): string =>
+  verdict === 'rework'
+    ? `[Jev Gate result] Task ${taskId} reported a required check as failed (${bounded(reason)}), so dependent tasks stay locked. Rework it with attempt=<n> on the marker.`
+    : `[Jev Gate result] Task ${taskId} reported that the plan's assumptions no longer hold (${bounded(reason)}), so dependent tasks stay locked. Replan once no worker is active, with the concrete violated assumption.`;
+
+export const renderWorkerAccepted = (taskId: string, readyIds: string[], cap: number): string =>
+  `[Jev Gate result] Task ${taskId} accepted. Ready task ids: ${readyIds.length ? readyIds.join(', ') : 'none'}. ${renderDispatchRule(cap)}`;

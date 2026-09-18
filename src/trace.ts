@@ -6,6 +6,8 @@ import { join } from 'node:path';
  * Opt-in local recorder (#14 §2, A13). Writes one private file per phase with random names, atomically (tmp + rename).
  * Records carry their own join keys (session_id, caller, tool_use_id); filenames are never identities.
  * Refuses a symlinked trace directory. Never receives keys, headers or environment dumps: callers whitelist fields.
+ * Stored traces from earlier revisions also carry `result_intent`, `result_result`, `scope_intent` and `scope_result`;
+ * nothing writes those any more (T11), and readers of historical directories still have to handle them.
  */
 export type TracePhase =
   | 'admission_intent'
@@ -14,8 +16,6 @@ export type TracePhase =
   | 'pre_intent'
   | 'pre_result'
   | 'post'
-  | 'result_intent'
-  | 'result_result'
   | 'failure'
   | 'plan'
   | 'stop';

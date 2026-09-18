@@ -6,6 +6,8 @@ import { afterAll, describe, expect, it } from 'vitest';
 import {
   ACTIVE_GRACE_MS,
   activeDeliverables,
+  activePlanners,
+  activeTaskIds,
   activeWorkers,
   boundExhausted,
   cleanupJobs,
@@ -21,7 +23,6 @@ import {
   RETENTION_MS,
   stateRoot,
   STATE_MAX_BYTES,
-  supersedeTask,
   updateJob,
 } from '../src/job.js';
 import type { JobState } from '../src/types.js';
@@ -76,7 +77,7 @@ describe('updateJob', () => {
 
     const env3 = freshEnv();
     const big = seed(env3);
-    const oversized = updateJob(env3, 's1', (prev) => ({ ...(prev ?? big), current: { ...(prev ?? big).current, plan: { rev: 1, goal: 'z'.repeat(STATE_MAX_BYTES + 1), assumptions: [], constraints: [], tasks: [] } } }));
+    const oversized = updateJob(env3, 's1', (prev) => ({ ...(prev ?? big), current: { ...(prev ?? big).current, plan: { rev: 1, goal: 'z'.repeat(STATE_MAX_BYTES + 1), assumptions: [], constraints: [], tasks: [], chain_depth: 0, chain_depth_claimed: null } } }));
     expect(oversized).toEqual({ ok: false, code: 'state_too_large' });
     expect(readJob(env3, 's1')).toMatchObject({ ok: true, value: { current: { plan: null } } });
   });
@@ -120,17 +121,20 @@ describe('newGeneration', () => {
 });
 
 describe('reservations and bounds', () => {
-  it('tracks active workers, deliverables and supersedes a rework', () => {
+  it('tracks active workers, planners, task ids and deliverables', () => {
     let gen = emptyGeneration('p1', 'orchestrated');
     gen = reserve(gen, 'toolu_1', { role: 'worker', taskId: 't1', rev: 1, tier: 'standard', attempt: 1, deliverables: ['a.ts'] });
     gen = reserve(gen, 'toolu_2', { role: 'worker', taskId: 't2', rev: 1, tier: 'fast', attempt: 1, deliverables: ['b.ts'] });
+    gen = reserve(gen, 'toolu_p', { role: 'planner', taskId: null, rev: null, tier: null, attempt: 1, deliverables: [] });
     expect(activeWorkers(gen)).toHaveLength(2);
+    expect(activePlanners(gen)).toHaveLength(1);
+    // T1: a planner holds no task, so it never appears as a task in flight.
+    expect([...activeTaskIds(gen)].sort()).toEqual(['t1', 't2']);
     expect(activeDeliverables(gen, 't1')).toEqual(['b.ts']);
     expect(activeDeliverables(gen, null).sort()).toEqual(['a.ts', 'b.ts']);
-    const superseded = supersedeTask(gen, 't1');
-    expect(superseded.superseded).toEqual(['toolu_1']);
-    expect(activeWorkers(superseded.generation)).toHaveLength(1);
-    expect(Object.keys(release(gen, 'toolu_2').active)).toEqual(['toolu_1']);
+    expect(Object.keys(release(gen, 'toolu_2').active).sort()).toEqual(['toolu_1', 'toolu_p']);
+    // T2: releasing the last reservation removes the record, and nothing else claims the writer stopped.
+    expect(activeTaskIds(release(release(gen, 'toolu_1'), 'toolu_2'))).toEqual(new Set());
   });
 
   it('treats a prototype id as absent instead of resolving it through Object.prototype', () => {

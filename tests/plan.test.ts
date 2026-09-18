@@ -4,16 +4,32 @@ import {
   acceptedReceipt,
   composeTaskPrompt,
   contractHash,
+  currentReceipt,
+  deliverableOverlap,
   deterministicVerdict,
   extractJson,
+  chainDepth,
   MAX_FIELD_BYTES,
+  MAX_SPEC_ENTRIES,
+  MAX_UNCERTAINTY_ENTRIES,
+  normalizeDeliverable,
+  OUT_OF_ROOT,
   parsePlannerReply,
+  priorAttemptSummary,
   parseTaskMarker,
   parseWorkerReply,
   readyTaskIds,
+  reportedRecovery,
+  requiredCheckIds,
 } from '../src/plan.js';
-import type { Plan, PlannedTask, Receipt, WorkerReply } from '../src/types.js';
+import type { Plan, PlannedTask, Receipt, TaskSpec, WorkerReply } from '../src/types.js';
 
+const SPEC: TaskSpec = {
+  interfaces: ['createStore(): Store'],
+  data_shapes: ['Store = { get(key: string): string | null }'],
+  invariants: ['reads never throw'],
+  files: ['src/store.ts'],
+};
 const rawTask = (id: string, over: Partial<PlannedTask> = {}): Omit<PlannedTask, 'contract_hash'> => ({
   id,
   outcome: `deliver ${id}`,
@@ -23,6 +39,17 @@ const rawTask = (id: string, over: Partial<PlannedTask> = {}): Omit<PlannedTask,
   deliverables: [`src/${id}.ts`],
   checks: [{ id: 'c1', description: 'tests pass', required: true, command: 'npm test' }],
   replan_if: [],
+  spec: SPEC,
+  uncertainty: { unresolved: [], interacts_with: [], prior_failure: null },
+  fully_specified: false,
+  ...over,
+});
+/** Document §7: the smallest plan a planner can legally return; the optional evidence fields are simply absent. */
+const bareTask = (id: string, over: Partial<PlannedTask> = {}): Record<string, unknown> => ({
+  id,
+  outcome: `deliver ${id}`,
+  deliverables: [`src/${id}.ts`],
+  checks: [{ id: 'c1', description: 'tests pass', required: true, command: 'npm test' }],
   ...over,
 });
 const withHash = (t: Omit<PlannedTask, 'contract_hash'>): PlannedTask => ({ ...t, contract_hash: contractHash(t) });
@@ -57,9 +84,23 @@ describe('extractJson', () => {
 describe('parsePlannerReply', () => {
   it('accepts a ready plan with many tasks and no task-count cap', () => {
     const tasks = Array.from({ length: 40 }, (_v, i) => rawTask(`t${i}`));
-    const parsed = parsePlannerReply(fence({ status: 'ready', goal: 'g', assumptions: [], constraints: ['c'], tasks }));
+    const parsed = parsePlannerReply(fence({ status: 'ready', goal: 'g', assumptions: [], constraints: ['c'], tasks, chain_depth: 1 }));
     expect(parsed.ok).toBe(true);
     if (parsed.ok && parsed.value.status === 'ready') expect(parsed.value.tasks).toHaveLength(40);
+  });
+
+  it('R15/§7: accepts a plan whose tasks carry no spec, uncertainty or fully_specified, without inventing values', () => {
+    const parsed = parsePlannerReply(fence({ status: 'ready', goal: 'g', tasks: [bareTask('t1'), bareTask('t2', { depends_on: ['t1'] })] }));
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok || parsed.value.status !== 'ready') return;
+    const [t1] = parsed.value.tasks;
+    // Absent is unknown, not false and not an empty specification.
+    expect(t1).not.toHaveProperty('spec');
+    expect(t1).not.toHaveProperty('uncertainty');
+    expect(t1).not.toHaveProperty('fully_specified');
+    expect(t1?.checks).toHaveLength(1);
+    // The same fields still hold their rules when a planner does supply them.
+    expect(parsePlannerReply(fence({ status: 'ready', tasks: [bareTask('t1', { fully_specified: true })] })).ok).toBe(false);
   });
 
   it('accepts needs_context and blocked', () => {
@@ -80,6 +121,51 @@ describe('parsePlannerReply', () => {
     ['a duplicate check id', fence({ status: 'ready', tasks: [rawTask('t1', { checks: [{ id: 'c1', description: 'x', required: true }, { id: 'c1', description: 'y', required: false }] as PlannedTask['checks'] })] }), 'duplicate check id'],
     ['a check without required', fence({ status: 'ready', tasks: [rawTask('t1', { checks: [{ id: 'c1', description: 'x' }] as unknown as PlannedTask['checks'] })] }), 'required must be a boolean'],
     ['an oversized field', fence({ status: 'ready', tasks: [rawTask('t1', { outcome: 'z'.repeat(MAX_FIELD_BYTES + 1) })] }), 'exceeds'],
+    ['a non-boolean fully_specified', fence({ status: 'ready', tasks: [rawTask('t1', { fully_specified: 'yes' as unknown as boolean })] }), 'fully_specified must be a boolean when it is supplied'],
+    [
+      'fully_specified alongside unresolved work',
+      fence({ status: 'ready', tasks: [rawTask('t1', { fully_specified: true, uncertainty: { unresolved: ['which store wins'], interacts_with: [], prior_failure: null } })] }),
+      'fully_specified is true but uncertainty.unresolved is not empty',
+    ],
+    [
+      'more unresolved entries than the cap',
+      fence({ status: 'ready', tasks: [rawTask('t1', { uncertainty: { unresolved: Array.from({ length: MAX_UNCERTAINTY_ENTRIES + 1 }, (_v, i) => `open ${i}`), interacts_with: [], prior_failure: null } })] }),
+      `uncertainty.unresolved exceeds ${MAX_UNCERTAINTY_ENTRIES} entries`,
+    ],
+    ['a spec that is not an object', fence({ status: 'ready', tasks: [rawTask('t1', { spec: 'later' as unknown as TaskSpec })] }), 'spec must be an object'],
+    [
+      'a code block in the spec',
+      // No fence here: a nested code fence would break the outer one, and this rule is about the field's content.
+      JSON.stringify({ status: 'ready', tasks: [rawTask('t1', { spec: { interfaces: ['```ts\nconst x = 1\n```'], data_shapes: [], invariants: [], files: [] } })] }),
+      'spec.interfaces contains a code block',
+    ],
+    [
+      'more spec files than the cap',
+      fence({ status: 'ready', tasks: [rawTask('t1', { spec: { interfaces: [], data_shapes: [], invariants: [], files: Array.from({ length: MAX_SPEC_ENTRIES + 1 }, (_v, i) => `src/f${i}.ts`) } })] }),
+      `spec.files exceeds ${MAX_SPEC_ENTRIES} entries`,
+    ],
+    [
+      'fully_specified without any interface',
+      fence({ status: 'ready', tasks: [rawTask('t1', { fully_specified: true, spec: { interfaces: [], data_shapes: [], invariants: [], files: ['src/a.ts'] } })] }),
+      'spec.interfaces is empty',
+    ],
+    ['a non-integer chain_depth', fence({ status: 'ready', tasks: [rawTask('t1')], chain_depth: 1.5 }), 'chain_depth must be a non-negative integer'],
+    ['a tier name in the task context', fence({ status: 'ready', tasks: [rawTask('t1', { context: 'this task needs the frontier tier' })] }), 'task t1: context names frontier'],
+    ['a tier name in a task constraint', fence({ status: 'ready', tasks: [rawTask('t1', { constraints: ['run it on the fast tier'] })] }), 'constraints names fast'],
+    ['a tier name in the outcome', fence({ status: 'ready', tasks: [rawTask('t1', { outcome: 'deep reasoning about the parser' })] }), 'outcome names deep'],
+    ['a tier name in a check description', fence({ status: 'ready', tasks: [rawTask('t1', { checks: [{ id: 'c1', description: 'the deep path holds', required: true, command: null }] })] }), 'check c1 description names deep'],
+    ['a tier name in the global constraints', fence({ status: 'ready', constraints: ['prefer the frontier tier'], tasks: [rawTask('t1')] }), 'constraints names frontier'],
+    ['prose in a deliverable', fence({ status: 'ready', tasks: [rawTask('t1', { deliverables: ['this task needs the frontier tier'] })] }), 'deliverables must be a repository path'],
+    [
+      'prose in spec.files',
+      fence({ status: 'ready', tasks: [rawTask('t1', { spec: { interfaces: ['f()'], data_shapes: [], invariants: [], files: ['use the deep tier here'] } })] }),
+      'spec.files must be a repository path',
+    ],
+    [
+      'a tier name in the evidence',
+      fence({ status: 'ready', tasks: [rawTask('t1', { uncertainty: { unresolved: ['needs the frontier tier'], interacts_with: [], prior_failure: null } })] }),
+      'names frontier',
+    ],
   ])('rejects %s', (_name, text, message) => {
     const parsed = parsePlannerReply(text);
     expect(parsed.ok).toBe(false);
@@ -103,6 +189,25 @@ describe('parsePlannerReply', () => {
     const dangling = parsePlannerReply(fence({ status: 'ready', tasks: [rawTask('t1', { depends_on: [hostile] })] }));
     expect(dangling.ok).toBe(false);
     if (!dangling.ok) expect(dangling.error).not.toContain(hostile);
+  });
+
+  it('rejects routing evidence that names a configured model, and leaves ordinary prose alone (#33)', () => {
+    const models = ['haiku', 'sonnet', 'opus', 'fable'];
+    const evidence = (over: Partial<PlannedTask['uncertainty']>): string =>
+      fence({ status: 'ready', chain_depth: 1, tasks: [rawTask('t1', { uncertainty: { unresolved: [], interacts_with: [], prior_failure: null, ...over } })] });
+    const asked = parsePlannerReply(evidence({ unresolved: ['run this on opus'] }), models);
+    expect(asked.ok).toBe(false);
+    if (!asked.ok) expect(asked.error).toContain('names opus');
+    const viaFailure = parsePlannerReply(evidence({ prior_failure: 'sonnet lost the invariant' }), models);
+    expect(viaFailure.ok).toBe(false);
+    if (!viaFailure.ok) expect(viaFailure.error).toContain('names sonnet');
+    // Tier names are core, so they are rejected whatever the host configured; model ids come from config (the hook
+    // always passes them), which is why this call still rejects "frontier" with no model ids at all.
+    const noModels = parsePlannerReply(evidence({ unresolved: ['needs the deep tier'] }));
+    expect(noModels.ok).toBe(false);
+    if (!noModels.ok) expect(noModels.error).toContain('names deep');
+    // The match is a whole token, not a substring, so ordinary prose survives.
+    expect(parsePlannerReply(evidence({ unresolved: ['deepen the cache on the fastener table'], interacts_with: ['a steadfast contract'] }), models).ok).toBe(true);
   });
 
   it('rejects a reply over the byte bound before parsing', () => {
@@ -132,12 +237,179 @@ describe('parseWorkerReply', () => {
 });
 
 describe('contractHash', () => {
-  it('changes with the scheduling contract and not with context or replan_if', () => {
+  /**
+   * T3: the old expectation here was that changing `context` keeps the hash, which was read as "the same receipt is
+   * still valid". It is not: `context` is part of what a worker was told to build, and the hash does not cover it.
+   * The identity stays narrow on purpose and the reuse defect is fixed by not reusing receipts across a revision
+   * (see the hook tests), so what this checks now is that the hash really does move with the scheduling contract.
+   */
+  it('covers the scheduling contract, and does not pretend to identify the implementation context', () => {
     const a = rawTask('t1');
-    expect(contractHash(a)).toBe(contractHash({ ...a, context: 'different', replan_if: ['x'] }));
     expect(contractHash(a)).not.toBe(contractHash({ ...a, outcome: 'other' }));
     expect(contractHash(a)).not.toBe(contractHash({ ...a, deliverables: ['src/other.ts'] }));
+    expect(contractHash(a)).not.toBe(contractHash({ ...a, depends_on: [] as string[], constraints: ['new rule'] }));
     expect(contractHash(a)).not.toBe(contractHash({ ...a, checks: [{ id: 'c1', description: 'tests pass', required: false, command: 'npm test' }] }));
+    // The counterexample the narrow identity cannot catch, which is why receipts do not survive a revision.
+    expect(contractHash(a)).toBe(contractHash({ ...a, context: 'a completely different API', replan_if: ['x'] }));
+  });
+
+  it('separates an absent optional field from a supplied one, so an omission is not read as a value', () => {
+    const bare = { ...rawTask('t1') };
+    delete bare.spec;
+    delete bare.uncertainty;
+    delete bare.fully_specified;
+    expect(contractHash(bare)).not.toBe(contractHash(rawTask('t1')));
+    expect(contractHash(bare)).not.toBe(contractHash({ ...bare, fully_specified: false }));
+  });
+
+  it('changes with the specification, so a replan that respecifies a task resets it (A17)', () => {
+    const a = rawTask('t1');
+    expect(contractHash(a)).not.toBe(contractHash({ ...a, spec: { ...SPEC, interfaces: ['createStore(seed: string): Store'] } }));
+    expect(contractHash(a)).not.toBe(contractHash({ ...a, spec: { ...SPEC, invariants: [] } }));
+    expect(contractHash(a)).not.toBe(contractHash({ ...a, spec: { ...SPEC, files: ['src/other.ts'] } }));
+  });
+
+  it('changes with the routing evidence, so a replan that alters it resets that task (#33)', () => {
+    const a = rawTask('t1');
+    expect(contractHash(a)).not.toBe(contractHash({ ...a, fully_specified: true }));
+    expect(contractHash(a)).not.toBe(contractHash({ ...a, uncertainty: { unresolved: ['which store wins'], interacts_with: [], prior_failure: null } }));
+    expect(contractHash(a)).not.toBe(contractHash({ ...a, uncertainty: { unresolved: [], interacts_with: ['the cache'], prior_failure: null } }));
+    expect(contractHash(a)).not.toBe(contractHash({ ...a, uncertainty: { unresolved: [], interacts_with: [], prior_failure: 'attempt 1 mis-ordered the joins' } }));
+  });
+});
+
+describe('chainDepth (A17)', () => {
+  it('measures the longest dependency path, which is the floor on wall-clock', () => {
+    expect(chainDepth([])).toBe(0);
+    expect(chainDepth([rawTask('t1'), rawTask('t2'), rawTask('t3')])).toBe(1);
+    expect(chainDepth([rawTask('t1'), rawTask('t2', { depends_on: ['t1'] }), rawTask('t3', { depends_on: ['t2'] })])).toBe(3);
+    // A fan-in is one level deeper than its widest branch, not deeper for every branch.
+    expect(chainDepth([rawTask('t1'), rawTask('t2'), rawTask('t3', { depends_on: ['t1', 't2'] })])).toBe(2);
+  });
+
+  it('records the planner\'s claim and keeps the graph as the fact, without rejecting a valid plan', () => {
+    const tasks = [rawTask('t1'), rawTask('t2', { depends_on: ['t1'] })];
+    const claimed = parsePlannerReply(fence({ status: 'ready', tasks, chain_depth: 1 }));
+    expect(claimed.ok).toBe(true);
+    if (claimed.ok && claimed.value.status === 'ready') {
+      expect(claimed.value.chain_depth_claimed).toBe(1);
+      expect(chainDepth(claimed.value.tasks)).toBe(2);
+    }
+    const absent = parsePlannerReply(fence({ status: 'ready', tasks }));
+    expect(absent.ok).toBe(true);
+    if (absent.ok && absent.value.status === 'ready') expect(absent.value.chain_depth_claimed).toBeNull();
+  });
+});
+
+describe('priorAttemptSummary (A17, T9)', () => {
+  const task = withHash(rawTask('t1'));
+  const other = withHash(rawTask('t2'));
+  const failed: Receipt = {
+    ...receipt(task, 'incomplete'),
+    attempt: 1,
+    verdict_reason: 'required check c1 reported fail',
+    observed_model: 'claude-sonnet-5',
+    reply: {
+      status: 'done',
+      summary: 'wrote the store but the ordering test fails',
+      changed_files: ['src/t1.ts'],
+      interfaces: [],
+      checks: [{ check_id: 'c1', result: 'fail', note: 'ordering' }],
+      blockers: [],
+    },
+  };
+
+  it('R12: returns the latest unaccepted attempt of this task and nothing when it never failed', () => {
+    expect(priorAttemptSummary([], task)).toBeNull();
+    expect(priorAttemptSummary([receipt(task)], task)).toBeNull();
+    // Another task's failure is never attached to this one.
+    expect(priorAttemptSummary([failed], other)).toBeNull();
+    // A contract that is no longer the one in force is not this task's prior attempt either.
+    expect(priorAttemptSummary([{ ...failed, contract_hash: 'from-another-revision' }], task)).toBeNull();
+    // A transport failure leaves a receipt with no reply; it is not a reasoning failure and must not read as one.
+    expect(priorAttemptSummary([{ ...receipt(task, 'unknown'), reply: null }], task)).toBeNull();
+    expect(priorAttemptSummary([failed, { ...receipt(task, 'unknown'), reply: null }], task)).toMatchObject({ attempt: 1, verdict: 'incomplete' });
+    expect(priorAttemptSummary([failed], task)).toMatchObject({
+      attempt: 1,
+      verdict: 'incomplete',
+      status: 'done',
+      failed_checks: ['c1'],
+      verdict_reason: 'required check c1 reported fail',
+      observed_model_confirmed: true,
+      provenance: 'worker_reported',
+    });
+    // The host naming no model is recorded as unconfirmed rather than assumed.
+    expect(priorAttemptSummary([{ ...failed, observed_model: null }], task)).toMatchObject({ observed_model_confirmed: false });
+  });
+
+  it('appends the failed attempt to the composed contract only on a rework, and names an omission (T9)', () => {
+    const original = '[JEV_TASK rev=1 id=t1 attempt=2]\nredo';
+    const prior = priorAttemptSummary([failed], task);
+    const plain = composeTaskPrompt(original, task, [], []);
+    const reworked = composeTaskPrompt(original, task, [], [], prior);
+    expect(plain).not.toContain('Previous attempt');
+    expect(reworked.startsWith(original)).toBe(true);
+    expect(reworked.length).toBeGreaterThan(plain.length);
+    expect(reworked).toContain('Previous attempt of this task (worker_reported)');
+    expect(reworked).toContain('"failed_checks":["c1"]');
+    // A prior attempt that does not fit is stated as missing, never silently dropped.
+    const omitted = composeTaskPrompt(original, task, [], [], 'omitted');
+    expect(omitted).toContain('omitted because it did not fit the size bound');
+    expect(omitted).not.toContain('worker_reported): {');
+  });
+});
+
+describe('composeTaskPrompt required check ids (T10/R13)', () => {
+  it('states this task\'s own required ids, so the generic c1 of the reply template cannot be copied', () => {
+    const task = withHash(
+      rawTask('t1', {
+        checks: [
+          { id: 'store-unit', description: 'unit tests', required: true, command: 'npm test' },
+          { id: 'store-lint', description: 'lint', required: false, command: 'npm run lint' },
+        ],
+      }),
+    );
+    expect(requiredCheckIds(task)).toEqual(['store-unit']);
+    const composed = composeTaskPrompt('[JEV_TASK rev=1 id=t1]\nwork', task, [], []);
+    expect(composed).toContain('Required check ids (report each of these exactly once, using these ids): ["store-unit"]');
+    expect(composed).not.toContain('["c1"]');
+  });
+});
+
+describe('deliverable paths (T5/R07)', () => {
+  it('treats path aliases of one file as one file and every unresolvable path as shared', () => {
+    expect(normalizeDeliverable('src/t1.ts')).toBe('src/t1.ts');
+    expect(normalizeDeliverable('src/./t1.ts')).toBe('src/t1.ts');
+    expect(normalizeDeliverable('./src//t1.ts')).toBe('src/t1.ts');
+    expect(normalizeDeliverable('src/sub/../t1.ts')).toBe('src/t1.ts');
+    expect(normalizeDeliverable('src\\t1.ts')).toBe('src/t1.ts');
+    for (const outside of ['/etc/passwd', '../outside.ts', 'src/../../outside.ts', '~/notes.md', 'C:/win.ts', '.', '']) {
+      expect(normalizeDeliverable(outside), outside).toBe(OUT_OF_ROOT);
+    }
+    // Different files stay different; case is explicitly not folded (stated limit).
+    expect(normalizeDeliverable('src/t1.ts')).not.toBe(normalizeDeliverable('src/t2.ts'));
+    expect(normalizeDeliverable('src/T1.ts')).not.toBe(normalizeDeliverable('src/t1.ts'));
+  });
+
+  it('reports an overlap for an alias of a claimed path and for two unresolvable paths', () => {
+    const claimed = new Set(['src/t1.ts'].map(normalizeDeliverable));
+    expect(deliverableOverlap(['src/./t1.ts'], claimed)).toEqual(['src/./t1.ts']);
+    expect(deliverableOverlap(['src/t2.ts'], claimed)).toEqual([]);
+    expect(deliverableOverlap(['../b.ts'], new Set(['/tmp/a.ts'].map(normalizeDeliverable)))).toEqual(['../b.ts']);
+  });
+});
+
+describe('reportedRecovery (T11)', () => {
+  const task = withHash(rawTask('t1'));
+  const reply = (over: Partial<WorkerReply>): WorkerReply => ({ status: 'done', summary: '', changed_files: [], interfaces: [], checks: [], blockers: [], ...over });
+
+  it('reaches rework and replan from the worker\'s own report and from nothing else', () => {
+    expect(reportedRecovery(task, reply({ status: 'replan' }))).toBe('replan');
+    expect(reportedRecovery(task, reply({ checks: [{ check_id: 'c1', result: 'fail', note: '' }] }))).toBe('rework');
+    // Not run is not observed to fail, an optional check is not the contract, and a clean blocked report is neither.
+    expect(reportedRecovery(task, reply({ checks: [{ check_id: 'c1', result: 'not_run', note: '' }] }))).toBeNull();
+    expect(reportedRecovery(task, reply({ checks: [{ check_id: 'c9', result: 'fail', note: '' }] }))).toBeNull();
+    expect(reportedRecovery(task, reply({ status: 'blocked' }))).toBeNull();
   });
 });
 
@@ -171,11 +443,12 @@ describe('composeTaskPrompt', () => {
 });
 
 describe('readyTaskIds', () => {
+  const t1 = withHash(rawTask('t1'));
+  const t2 = withHash(rawTask('t2'));
+  const t3 = withHash(rawTask('t3', { depends_on: ['t1', 't2'] }));
+  const plan: Plan = { rev: 1, goal: 'g', assumptions: [], constraints: [], tasks: [t1, t2, t3], chain_depth: chainDepth([t1, t2, t3]), chain_depth_claimed: null };
+
   it('unlocks a task only when every dependency has an accepted receipt for its current contract', () => {
-    const t1 = withHash(rawTask('t1'));
-    const t2 = withHash(rawTask('t2'));
-    const t3 = withHash(rawTask('t3', { depends_on: ['t1', 't2'] }));
-    const plan: Plan = { rev: 1, goal: 'g', assumptions: [], constraints: [], tasks: [t1, t2, t3] };
     expect(readyTaskIds(plan, [])).toEqual(['t1', 't2']);
     expect(readyTaskIds(plan, [receipt(t1)])).toEqual(['t2']);
     expect(readyTaskIds(plan, [receipt(t1), receipt(t2, 'incomplete')])).toEqual(['t2']);
@@ -183,6 +456,24 @@ describe('readyTaskIds', () => {
     expect(readyTaskIds(plan, [receipt(t1), receipt(t2), receipt(t3)])).toEqual([]);
     expect(acceptedReceipt([{ ...receipt(t1), contract_hash: 'stale' }], t1)).toBeNull();
     expect(readyTaskIds(null, [])).toEqual([]);
+  });
+
+  it('R01: the attempt that decides completion is the latest one, so a later failure covers an earlier accept', () => {
+    const history = [receipt(t1), { ...receipt(t1, 'incomplete'), attempt: 2, tool_use_id: 'toolu_t1_2' }];
+    expect(currentReceipt(history, t1)).toMatchObject({ attempt: 2, verdict: 'incomplete' });
+    expect(acceptedReceipt(history, t1)).toBeNull();
+    // Both receipts are still there: history is preserved, it just no longer decides.
+    expect(history).toHaveLength(2);
+    expect(readyTaskIds(plan, [...history, receipt(t2)])).toEqual(['t1']);
+    // And an accepted rework after a failure does decide again.
+    expect(acceptedReceipt([...history, { ...receipt(t1), attempt: 3, tool_use_id: 'toolu_t1_3' }], t1)).not.toBeNull();
+  });
+
+  it('R02: a dependency that is running again has no settled result, so its dependents stay locked', () => {
+    const accepted = [receipt(t1), receipt(t2)];
+    expect(readyTaskIds(plan, accepted)).toEqual(['t3']);
+    // t1 was accepted, but a rework of it is in flight: t3 is not ready and t1 is not offered twice.
+    expect(readyTaskIds(plan, accepted, new Set(['t1']))).toEqual([]);
   });
 });
 

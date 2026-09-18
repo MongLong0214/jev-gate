@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { isSubscriptionOAuth, parseAuthStatus, subagentModelOverride, AUTH_CONFLICT_ENV, type CommandResult } from '../auth.js';
 import { DENIALS_BEFORE_STOP } from '../brief.js';
 import { DEFAULT_CONFIG, loadConfig } from '../config.js';
-import { OWNED_AGENTS, type Tier } from '../types.js';
+import { OWNED_AGENTS, type ConfigV5, type Tier } from '../types.js';
 import { gradeDir, type Grade } from './checker.js';
 import { canonicalize, copyTree, createExclusiveDir, isInside, isSafeId, overlaps, type SnapshotReport } from './paths.js';
 import { estimateJevCostUsd, modelFamily, parseModelUsage, safeSum, tokenCount, type ModelUsage } from './usage.js';
@@ -107,6 +107,12 @@ export interface AgentCall {
   root_effort: string | null;
   /** A2: a late result whose reservation belongs to a superseded generation. */
   orphaned: boolean;
+  /** T6/B1: the model the final patch/preserve/pin policy required. Null when no record determines it. */
+  target_model: string | null;
+  /** T6: that required model against the model the host actually resolved. An unknown alias is neither. */
+  target_model_match: 'match' | 'mismatch' | 'unknown';
+  /** T6: whether the final policy moved the call off the model its original profile would have used. */
+  target_model_changed: boolean | null;
   result_gate: Record<string, unknown> | null;
   plan: Record<string, unknown> | null;
 }
@@ -136,11 +142,13 @@ export interface GateV5 {
   continue_false: number;
   planner_calls: { requested: number; completed: number; tier_proposed: string | null; model_observed: string | null; plan_status: string | null; rev: number | null };
   worker_calls: Record<string, WorkerTierRecord>;
-  receipts: { accept: number; incomplete: number; invalid: number; unknown: number };
+  receipts: { accept: number; incomplete: number; invalid: number; unknown: number; rework: number; replan: number };
   advisory: { accept: number; rework: number; replan: number; abstain: number; none: number };
   parallel: { reservation_overlap_max: number; observed_overlap_max: number };
-  jev_requests: { admission: JevPhaseUsage; allocation: JevPhaseUsage; result: JevPhaseUsage };
+  jev_requests: { admission: JevPhaseUsage; allocation: JevPhaseUsage; result: JevPhaseUsage; scope: JevPhaseUsage };
   outcome: string | null;
+  /** A17: judgments made against judgments that changed the outcome; nine calls that changed nothing must read as nine. */
+  influence: { judgments: number; changed_default: number };
   orphan_records: number;
   /** Cross-check (A13): recorded Gate B decisions whose applied tier disagrees with the observed model family. */
   decision_mismatch: number;
@@ -210,6 +218,8 @@ export interface CellRecord {
     hint_delivered: number;
     target_model_matches: number;
     target_model_mismatches: number;
+    /** T6: calls whose required or observed model could not be normalized; neither a match nor a mismatch. */
+    target_model_unknown: number;
   } & GateV5;
   final_snapshot: (SnapshotReport & { path: string }) | null;
   grade: Grade | null;
@@ -362,6 +372,14 @@ export interface Plan {
   planned_cells: number;
   max_sessions: number | null;
   cli: Record<string, unknown>;
+  /**
+   * T8/B3: the configuration resolved once, before execution. `--execute` freezes exactly this object and points every
+   * plugin child at the frozen copy, so the model mappings, floors, concurrency and deadlines recorded here are the
+   * ones the run used. Null when the resolved configuration does not load; preflight then refuses to start.
+   */
+  effective_config: ConfigV5 | null;
+  effective_config_source: string;
+  effective_config_error: string | null;
   frozen_inputs: Record<string, unknown> | null;
   preflight: Preflight | null;
 }
@@ -372,6 +390,8 @@ export const buildPlan = (o: Options, cases: CodingCase[], manifestVersion: numb
   cases.forEach((cs, i) => {
     for (let rep = 1; rep <= o.repetitions; rep++) rows.push({ job: cs.id, group: cs.group, repetition: rep, arms: shuffledArms(o.arms, o.seed, i, rep) });
   });
+  // The per-arm mode is the one deliberate override, so the file is read as if mode were auto; every other field
+  // (models, floors, concurrency, deadline) is taken exactly as resolved.
   const effective = loadConfig({ ...process.env, JEV_GATE_MODE: 'auto' });
   return {
     schema: 5,
@@ -399,6 +419,9 @@ export const buildPlan = (o: Options, cases: CodingCase[], manifestVersion: numb
       effective_config_nonsecret: effective.ok ? { ...effective.config, source: effective.source } : { error: effective.error },
       note: 'Root models are CLI aliases; actual models come from system/init and modelUsage. User-scope settings are excluded for every arm via --setting-sources; user-level CLAUDE.md still loads equally in all arms. --max-turns bounds top-level turns, not every descendant request or subscription spend.',
     },
+    effective_config: effective.ok ? effective.config : null,
+    effective_config_source: effective.source,
+    effective_config_error: effective.ok ? null : effective.error,
     frozen_inputs: null,
     preflight: null,
   };
@@ -458,16 +481,18 @@ const emptyGateV5 = (): GateV5 => ({
   continue_false: 0,
   planner_calls: { requested: 0, completed: 0, tier_proposed: null, model_observed: null, plan_status: null, rev: null },
   worker_calls: {},
-  receipts: { accept: 0, incomplete: 0, invalid: 0, unknown: 0 },
+  receipts: { accept: 0, incomplete: 0, invalid: 0, unknown: 0, rework: 0, replan: 0 },
   advisory: { accept: 0, rework: 0, replan: 0, abstain: 0, none: 0 },
   parallel: { reservation_overlap_max: 0, observed_overlap_max: 0 },
-  jev_requests: { admission: emptyJevPhase(), allocation: emptyJevPhase(), result: emptyJevPhase() },
+  jev_requests: { admission: emptyJevPhase(), allocation: emptyJevPhase(), result: emptyJevPhase(), scope: emptyJevPhase() },
   outcome: null,
+  influence: { judgments: 0, changed_default: 0 },
   orphan_records: 0,
   decision_mismatch: 0,
 });
 
-const emptyCell = (cs: CodingCase, spec: ArmSpec, repetition: number): CellRecord => ({
+/** A planned cell before anything is observed. Exported so regressions can drive `observeEvent`/`ingestTraces` directly. */
+export const emptyCell = (cs: CodingCase, spec: ArmSpec, repetition: number): CellRecord => ({
   schema: 5,
   job: cs.id,
   group: cs.group,
@@ -500,7 +525,7 @@ const emptyCell = (cs: CodingCase, spec: ArmSpec, repetition: number): CellRecor
   agent_calls: [],
   api_retries: 0,
   result: null,
-  gate: { prompt_injections: 0, agent_calls: 0, owned_calls: 0, pinned: 0, eligible_attempted: 0, patched: 0, preserved: 0, preserve_reasons: {}, skipped: {}, attempt_unknown: 0, missing_pre_records: 0, jev_model: null, jev_input_tokens: null, jev_input_tokens_known: 0, jev_cost_usd: null, gate_ms_total: null, hint_delivered: 0, target_model_matches: 0, target_model_mismatches: 0, ...emptyGateV5() },
+  gate: { prompt_injections: 0, agent_calls: 0, owned_calls: 0, pinned: 0, eligible_attempted: 0, patched: 0, preserved: 0, preserve_reasons: {}, skipped: {}, attempt_unknown: 0, missing_pre_records: 0, jev_model: null, jev_input_tokens: null, jev_input_tokens_known: 0, jev_cost_usd: null, gate_ms_total: null, hint_delivered: 0, target_model_matches: 0, target_model_mismatches: 0, target_model_unknown: 0, ...emptyGateV5() },
   final_snapshot: null,
   grade: null,
   grade_history: [],
@@ -529,6 +554,9 @@ const emptyAgentCall = (toolUseId: string): AgentCall => ({
   observed_model: null,
   root_effort: null,
   orphaned: false,
+  target_model: null,
+  target_model_match: 'unknown',
+  target_model_changed: null,
   result_gate: null,
   plan: null,
 });
@@ -654,6 +682,21 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
     const answers = r && isRecord(r['answers']) ? r['answers'] : null;
     return answers && isRecord(answers[key]) ? (answers[key] as Record<string, unknown>) : null;
   };
+  /** T6: the frozen configuration's model for a tier; a tier it does not map stays unknown. */
+  const modelOfTier = (tier: string | null): string | null => (tier === null ? null : ((models[tier as Tier] as string | undefined) ?? null));
+  /** T7: the id a gate call writes into both of its records; older records only have the tool_use_id. */
+  const corrKey = (r: Record<string, unknown>): string | null => str(r['request_id']) ?? str(r['tool_use_id']);
+  /**
+   * T7: the last record by recorded event time, never by the random UUID in its filename. Missing or tied timestamps
+   * leave the order unresolved, and an unresolved order is reported as unknown rather than guessed.
+   */
+  const lastByTime = <T extends Record<string, unknown>>(rows: T[]): T | null => {
+    if (rows.length <= 1) return rows[0] ?? null;
+    const times = rows.map(timeOf);
+    if (times.some((t) => t === null)) return null;
+    const max = Math.max(...(times as number[]));
+    return times.filter((t) => t === max).length === 1 ? (rows[times.indexOf(max)] as T) : null;
+  };
   let jevKnownAll = true;
 
   /** One Jev gate group. Unknown usage on any attempt leaves the group's tokens and cost null, never zero. */
@@ -676,9 +719,30 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
       if (r['known_not_sent'] !== true) continue;
       bump(g.skipped, str(r['skip_code']) ?? str(r['reason']) ?? 'unknown');
     }
-    // An intent with no result of its own is one paid-or-not attempt whose consumption is unknown.
-    const resultKeys = new Set(rows.map((r) => str(r['tool_use_id']) ?? ''));
-    const unmatched = intents.filter((i) => !resultKeys.has(str(i['tool_use_id']) ?? '')).length;
+    // An intent with no result of its own is one paid-or-not attempt whose consumption is unknown. T7: the pairing key
+    // is the per-call `request_id`; `invocation_id` differs per record and Gate A usually has no `tool_use_id`, so two
+    // different admissions must never collapse into one. Records written before `request_id` keep the tool_use_id
+    // fallback, and keyless ones pair by count alone, which reveals a missing result instead of hiding it.
+    const pool = new Map<string, number>();
+    let keylessResults = 0;
+    for (const r of rows) {
+      const k = corrKey(r);
+      if (k === null) keylessResults++;
+      else pool.set(k, (pool.get(k) ?? 0) + 1);
+    }
+    let unmatched = 0;
+    let keylessIntents = 0;
+    for (const i of intents) {
+      const k = corrKey(i);
+      if (k === null) {
+        keylessIntents++;
+        continue;
+      }
+      const left = pool.get(k) ?? 0;
+      if (left > 0) pool.set(k, left - 1);
+      else unmatched++;
+    }
+    unmatched += Math.max(0, keylessIntents - keylessResults);
     g.attempt_unknown += unmatched;
     if (unmatched > 0) known = false;
     if (!known) jevKnownAll = false;
@@ -689,22 +753,47 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
   // ---- Gate A
   const admissions = phase('admission_result');
   g.prompt_injections = admissions.length;
-  const admission = admissions[admissions.length - 1] ?? null;
+  const admission = lastByTime(admissions);
+  if (admission === null && admissions.length > 0) {
+    // The counts below still hold; only which admission decided this prompt is unresolved.
+    g.admission = {
+      attempted: admissions.some((r) => r['attempted'] === true),
+      known_not_sent: admissions.every((r) => r['known_not_sent'] === true),
+      forced: admissions.some((r) => r['forced'] === true),
+      decided: null,
+      choice: null,
+      confidence: null,
+      decision: null,
+      reason: 'ambiguous_record_order',
+    };
+  }
   if (admission) {
     const execution = answer(admission, 'execution');
+    // A17: every gate now records its decision nested under `decision`; records written before that are flat.
+    const dec = isRecord(admission['decision']) ? admission['decision'] : admission;
     g.admission = {
       attempted: admission['attempted'] === true,
       known_not_sent: admission['known_not_sent'] === true,
       // A16: a forced generation is a bench control, not a Jev answer, and the admission table says so.
       forced: admission['forced'] === true,
-      decided: typeof admission['decided'] === 'boolean' ? admission['decided'] : null,
+      decided: typeof dec['decided'] === 'boolean' ? dec['decided'] : null,
       choice: execution ? str(execution['choice']) : null,
       confidence: execution ? num(execution['confidence']) : null,
-      decision: str(admission['decision']),
-      reason: str(admission['reason']) ?? str(admission['skip_code']),
+      decision: str(dec['shape']) ?? str(dec['decision']),
+      reason: str(dec['reason']) ?? str(admission['skip_code']),
     };
   }
-  account(admissions, phase('admission_intent'), g.jev_requests.admission);
+  const admissionIntents = phase('admission_intent');
+  account(admissions, admissionIntents, g.jev_requests.admission);
+  // T7/B2: in auto every prompt reaches Gate A unless something says otherwise. A recorded bypass (known_not_sent, a
+  // skip code, a forced admission) proves the zero; the plugin not loading proves it too. No record at all proves
+  // nothing, so the admission stays unknown instead of becoming a free call.
+  if (cell.mode === 'auto' && cell.started && cell.init?.jev_gate_loaded !== false && admissions.length === 0 && admissionIntents.length === 0) {
+    g.attempt_unknown++;
+    g.jev_requests.admission.tokens = null;
+    g.jev_requests.admission.cost_usd = null;
+    jevKnownAll = false;
+  }
 
   // ---- guard (A6): a denial that reaches the threshold is the one that also returns continue:false
   const denied = phase('guard').filter((r) => r['allow'] === false);
@@ -712,7 +801,7 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
   // The hook records the stop it actually applied; older records without the field fall back to the denial count.
   g.continue_false = denied.filter((r) => (typeof r['stopped'] === 'boolean' ? r['stopped'] : (num(r['denials']) ?? 0) >= DENIALS_BEFORE_STOP - 1)).length;
   const stops = phase('stop');
-  g.outcome = str(stops[stops.length - 1]?.['outcome'] ?? null);
+  g.outcome = str(lastByTime(stops)?.['outcome'] ?? null);
 
   // ---- union of stream calls and record-only calls
   const callPhases = ['pre_intent', 'pre_result', 'post', 'failure', 'result_intent', 'result_result', 'plan'];
@@ -755,7 +844,8 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
       call.orphaned = call.post['matched'] === false;
       if (call.orphaned) g.orphan_records++;
       const verdict = str(call.post['verdict']);
-      if (verdict === 'accept' || verdict === 'incomplete' || verdict === 'invalid' || verdict === 'unknown') g.receipts[verdict]++;
+      // A17: Gate C may demote an accept, so every receipt verdict has a bucket and the totals still add up.
+      if (verdict !== null && Object.prototype.hasOwnProperty.call(g.receipts, verdict)) g.receipts[verdict as keyof typeof g.receipts]++;
       const gateC = isRecord(call.result_gate?.['decision']) ? (call.result_gate?.['decision'] as Record<string, unknown>) : null;
       const advisory = gateC ? (str(gateC['verdict']) ?? (str(gateC['reason']) === 'result_abstain' ? 'abstain' : 'none')) : str(call.post['advisory']);
       if (advisory === 'accept' || advisory === 'rework' || advisory === 'replan' || advisory === 'abstain') g.advisory[advisory]++;
@@ -765,6 +855,27 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
       if (observedEnd !== null && duration !== null) observedIntervals.push([observedEnd - duration, observedEnd]);
     }
     call.observed_model = call.observed_model ?? call.resolved_models_stream[0] ?? null;
+
+    // T6/B1: the three facts are separate. Jev's answer lives in `answers`, the policy the hook applied lives in
+    // `decision`, and the model the host resolved lives in the post record. The comparison that matters is the model
+    // the final patch/preserve/pin policy required against the one actually observed; asking "did either differ from
+    // the original?" lets original sonnet -> patched haiku -> executed opus pass as a match. A missing step is never
+    // filled in from another, and normalization is only the alias mapping that already exists (modelFamily), so an
+    // alias it does not know is unknown rather than a verdict.
+    const gateDecision = isRecord(call.pre?.['decision']) ? (call.pre?.['decision'] as Record<string, unknown>) : null;
+    const profileTier = call.called_tier ?? str(intent?.['default_tier'] ?? null);
+    const profileModel = call.has_model ? call.model_param : modelOfTier(profileTier);
+    // An eligible call in auto whose gate result was never recorded has no known final policy: whether the hook
+    // patched it is exactly the missing step, so it is not assumed to have kept its profile.
+    const policyUnknown = cell.mode === 'auto' && !call.has_model && call.pre === null && (call.pre_intent !== null || owned !== undefined);
+    call.target_model = policyUnknown ? null : gateDecision !== null && str(gateDecision['action']) === 'patch' ? modelOfTier(str(gateDecision['tier'])) : profileModel;
+    const wantedFamily = call.target_model === null ? 'unknown' : modelFamily(call.target_model);
+    const gotFamily = call.observed_model === null ? 'unknown' : modelFamily(call.observed_model);
+    call.target_model_match = wantedFamily === 'unknown' || gotFamily === 'unknown' ? 'unknown' : wantedFamily === gotFamily ? 'match' : 'mismatch';
+    call.target_model_changed = call.target_model === null || profileModel === null ? null : wantedFamily !== modelFamily(profileModel);
+    if (call.target_model_match === 'match') g.target_model_matches++;
+    else if (call.target_model_match === 'mismatch') g.target_model_mismatches++;
+    else g.target_model_unknown++;
     if (cell.mode === 'auto' && owned && !call.has_model && !call.pre && !call.pre_intent) {
       g.missing_pre_records++;
       jevKnownAll = false;
@@ -799,8 +910,6 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
       const baseModel = models[tier as Tier] as string | undefined;
       const baseFamily = baseModel === undefined ? 'unknown' : modelFamily(baseModel);
       const observedFamily = call.observed_model === null ? null : modelFamily(call.observed_model);
-      // The recorded decision is authoritative; the observed model family (A13) only cross-checks it.
-      const materialChange = observedFamily === null || baseFamily === 'unknown' ? null : observedFamily !== baseFamily;
       if (decision) {
         const patched = decision['action'] === 'patch';
         if (patched) {
@@ -811,8 +920,8 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
           bucket.preserved++;
           bump(g.preserve_reasons, str(decision['reason']) ?? 'unknown');
         }
-        const expectedChange = patched && str(decision['tier']) !== call.called_tier;
-        if (materialChange !== null && materialChange !== expectedChange) g.decision_mismatch++;
+        // A13 cross-check, read from the T6 comparison: the model this decision required against the one observed.
+        if (call.target_model_match === 'mismatch') g.decision_mismatch++;
       } else if (observedFamily !== null && baseFamily !== 'unknown') {
         if (observedFamily === baseFamily) {
           bucket.preserved++;
@@ -831,11 +940,21 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
 
   account(records.filter((r) => r['phase'] === 'pre_result'), phase('pre_intent'), g.jev_requests.allocation);
   account(records.filter((r) => r['phase'] === 'result_result'), phase('result_intent'), g.jev_requests.result);
+  // A17: the plan scope gate is a real request per plan, so its consumption is counted like every other gate.
+  account(records.filter((r) => r['phase'] === 'scope_result'), phase('scope_intent'), g.jev_requests.scope);
+  // A17: influence is read from the records, never re-derived here; the hook is the only thing that knows the counterfactual.
+  for (const r of records) {
+    if (!['admission_result', 'pre_result', 'result_result', 'scope_result'].includes(String(r['phase'])) || r['attempted'] !== true) continue;
+    g.influence.judgments += 1;
+    const decision = isRecord(r['decision']) ? r['decision'] : {};
+    if (decision['changed_default'] === true) g.influence.changed_default += 1;
+  }
   g.parallel = { reservation_overlap_max: maxOverlap(reservationIntervals), observed_overlap_max: maxOverlap(observedIntervals) };
-  g.jev_input_tokens_known = g.jev_requests.admission.tokens_known + g.jev_requests.allocation.tokens_known + g.jev_requests.result.tokens_known;
+  g.jev_input_tokens_known =
+    g.jev_requests.admission.tokens_known + g.jev_requests.allocation.tokens_known + g.jev_requests.result.tokens_known + g.jev_requests.scope.tokens_known;
 
   const observedOk = cell.result !== null && cell.result.usage_status === 'ok' && cell.init !== null;
-  const attempts = g.jev_requests.admission.attempts + g.jev_requests.allocation.attempts + g.jev_requests.result.attempts;
+  const attempts = g.jev_requests.admission.attempts + g.jev_requests.allocation.attempts + g.jev_requests.result.attempts + g.jev_requests.scope.attempts;
   if (cell.mode !== 'auto') {
     // Native/absent arms send nothing to TypeSafe when the plugin state matches the plan and the run completed.
     const pluginStateOk = cell.init !== null && cell.init.jev_gate_loaded === cell.plugin_expected;
@@ -865,7 +984,7 @@ const writeJsonAtomic = (path: string, value: unknown): void => {
   renameSync(tmp, path);
 };
 
-const runClaudeCell = (cs: CodingCase, spec: ArmSpec, o: Options, pluginDir: string, cellDir: string, cell: CellRecord): Promise<void> =>
+const runClaudeCell = (cs: CodingCase, spec: ArmSpec, o: Options, pluginDir: string, configPath: string, cellDir: string, cell: CellRecord): Promise<void> =>
   new Promise((done) => {
     const work = join(cellDir, 'work');
     const traceDir = join(cellDir, 'trace');
@@ -881,10 +1000,13 @@ const runClaudeCell = (cs: CodingCase, spec: ArmSpec, o: Options, pluginDir: str
     const envAdded = ['CLAUDE_CODE_FORK_SUBAGENT', 'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS'];
     if (spec.plugin && spec.mode) {
       env['JEV_GATE_MODE'] = spec.mode;
+      // T8: the parent's JEV_GATE_CONFIG is stripped with the rest of the parent environment and replaced by the frozen
+      // file, so a child can never fall back to the HOME config or to defaults while the plan records something else.
+      env['JEV_GATE_CONFIG'] = configPath;
       env['JEV_GATE_TRACE_DIR'] = traceDir;
       // D7: a fresh state root per cell, so one cell's job state can never reach another cell or the real HOME.
       env['JEV_GATE_STATE_DIR'] = stateDir;
-      envAdded.push('JEV_GATE_MODE', 'JEV_GATE_TRACE_DIR', 'JEV_GATE_STATE_DIR');
+      envAdded.push('JEV_GATE_MODE', 'JEV_GATE_CONFIG', 'JEV_GATE_TRACE_DIR', 'JEV_GATE_STATE_DIR');
       cell.state_dir = stateDir;
       if (spec.experimentAdmission) {
         env['JEV_GATE_EXPERIMENT_ADMISSION'] = spec.experimentAdmission;
@@ -979,8 +1101,8 @@ const grade = (cs: CodingCase, checkFile: string, cellDir: string, timeoutMs: nu
   return gradeDir(checkFile, evalDir, { timeoutMs, evaluationSetup: cs.evaluationSetup, checkerId });
 };
 
-/** Copies the fixtures, manifest, checkers (with their support files and referenced broken sources) and the plugin build into the run. */
-const freezeInputs = (o: Options, cases: CodingCase[], manifestDir: string, out: string): Record<string, unknown> => {
+/** Copies the fixtures, manifest, checkers (with their support files and referenced broken sources), the plugin build and the resolved config into the run. */
+const freezeInputs = (o: Options, cases: CodingCase[], manifestDir: string, out: string, config: ConfigV5): Record<string, unknown> => {
   const inputs = join(out, 'inputs');
   mkdirSync(inputs, { recursive: true });
   const manifestCopy = join(inputs, 'bench');
@@ -988,9 +1110,14 @@ const freezeInputs = (o: Options, cases: CodingCase[], manifestDir: string, out:
   const pluginCopy = join(inputs, 'plugin');
   mkdirSync(pluginCopy, { recursive: true });
   for (const rel of ['dist', 'hooks', 'agents', '.claude-plugin']) cpSync(join(o.pluginDir, rel), join(pluginCopy, rel), { recursive: true });
+  // T8: the configuration every plugin child reads, written once here. ConfigV5 holds no key or secret; the API key
+  // stays in the environment. Editing the parent's file or the HOME config after this point changes nothing.
+  const configCopy = join(inputs, 'config.json');
+  const configText = JSON.stringify(config, null, 2) + '\n';
+  writeFileSync(configCopy, configText, { encoding: 'utf8', mode: 0o600 });
   const checkerIds: Record<string, string> = {};
   for (const cs of cases) checkerIds[cs.id] = checkerIdentity(cs.checkFile);
-  return { bench_copy: manifestCopy, bench_sha256: benchReport.sha256, bench_files: benchReport.files, bench_skipped: benchReport.skipped, plugin_copy: pluginCopy, plugin_hook_sha256: createHash('sha256').update(readFileSync(join(pluginCopy, 'dist', 'hook.js'))).digest('hex'), checker_ids: checkerIds };
+  return { config_copy: configCopy, config_sha256: sha256(configText), config: { ...config }, bench_copy: manifestCopy, bench_sha256: benchReport.sha256, bench_files: benchReport.files, bench_skipped: benchReport.skipped, plugin_copy: pluginCopy, plugin_hook_sha256: createHash('sha256').update(readFileSync(join(pluginCopy, 'dist', 'hook.js'))).digest('hex'), checker_ids: checkerIds };
 };
 
 export const regrade = (o: Options): number => {
@@ -1048,15 +1175,21 @@ export const main = async (argv: string[]): Promise<number> => {
   if (existsSync(out)) throw new Error(`--out ${out} already exists; execute creates a new result directory exclusively`);
   const pf = preflight(o, o.arms.some((a) => armSpecs(o.frontierModel)[a].mode === 'auto'));
   plan.preflight = pf;
+  // T8: a plugin arm without a loadable configuration would run on defaults while the plan claimed otherwise.
+  if (plan.effective_config === null && o.arms.some((a) => armSpecs(o.frontierModel)[a].plugin)) {
+    pf.errors.push(`jev-gate config at ${plan.effective_config_source} does not load: ${String(plan.effective_config_error)}`);
+  }
   if (o.maxSessions !== null && o.maxSessions < plan.planned_cells) pf.errors.push(`--max-sessions ${o.maxSessions} is below the ${plan.planned_cells} planned top-level sessions`);
   if (pf.errors.length) {
     process.stderr.write(`preflight failed; nothing executed and nothing written:\n${pf.errors.map((e) => `  - ${e}`).join('\n')}\n`);
     return 2;
   }
   createExclusiveDir(out);
-  plan.frozen_inputs = freezeInputs(o, cases, manifestDir, out);
+  const frozenConfig = plan.effective_config ?? DEFAULT_CONFIG;
+  plan.frozen_inputs = freezeInputs(o, cases, manifestDir, out, frozenConfig);
   writeJsonAtomic(join(out, 'plan.json'), plan);
   const pluginDir = String(plan.frozen_inputs['plugin_copy']);
+  const configPath = String(plan.frozen_inputs['config_copy']);
   const frozenBench = String(plan.frozen_inputs['bench_copy']);
   const specs = armSpecs(o.frontierModel);
   let sessions = 0;
@@ -1106,7 +1239,7 @@ export const main = async (argv: string[]): Promise<number> => {
       }
       sessions++;
       process.stdout.write(`[${sessions}/${plan.planned_cells}] ${cs.id} r${row.repetition} ${arm} (root=${spec.rootModel}${spec.plugin ? `, jev-gate ${spec.mode}${spec.experimentAdmission ? ' forced-orchestrated' : ''}` : ''})\n`);
-      await runClaudeCell(cs, spec, o, pluginDir, cellDir, cell);
+      await runClaudeCell(cs, spec, o, pluginDir, configPath, cellDir, cell);
       try {
         const finalReport = copyTree(work, join(cellDir, 'final'), { keepGit: true, forbiddenRoots: [] });
         cell.final_snapshot = { ...finalReport, path: join(cellDir, 'final') };
@@ -1114,7 +1247,8 @@ export const main = async (argv: string[]): Promise<number> => {
         cell.final_snapshot = null;
         cell.not_started_reason = `snapshot_failed: ${(err as Error).message}`;
       }
-      ingestTraces(cell, join(cellDir, 'trace'));
+      // T8: the accounting and the model-match comparison read the same frozen configuration the child ran on.
+      ingestTraces(cell, join(cellDir, 'trace'), frozenConfig.models);
       writeJsonAtomic(join(cellDir, 'cell.json'), cell);
       process.stdout.write(`    exit=${String(cell.exit_code)} elapsed=${String(cell.elapsed_ms)}ms timed_out=${cell.timed_out} model=${cell.init?.model ?? 'unknown'} plugins=${cell.init?.plugins.join(',') || '-'} agents=${cell.agent_calls.map((c) => `${c.subagent_type}${c.has_model ? `(pin:${c.model_param})` : ''}`).join(',') || '-'} jev: attempted=${cell.gate.eligible_attempted} patched=${cell.gate.patched} preserved=${cell.gate.preserved}\n`);
     }

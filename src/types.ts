@@ -9,6 +9,7 @@ export type AdmissionAnswer = 'direct' | 'orchestrated' | 'needs_context' | 'abs
 export type RouteAnswer = Tier | 'abstain';
 export type PlannerRouteAnswer = PlannerTier | 'abstain';
 export type UpgradeBasis = 'unresolved_contract_reasoning' | 'observed_reasoning_failure' | 'no_specific_basis' | 'unknown';
+/** Historical only (T11): Gate C no longer runs, so this union types stored advisories, never a live request. */
 export type ResultVerdict = 'accept' | 'rework' | 'replan' | 'abstain';
 
 export const TIERS: readonly Tier[] = ['fast', 'standard', 'deep', 'frontier'];
@@ -52,6 +53,7 @@ export interface ConfigV5 {
   requestDeadlineMs: number;
   admissionConfidenceFloor: number;
   routeConfidenceFloor: number;
+  /** Deprecated no-op (T11): accepted so a deployed config still loads; no gate reads it and it triggers no request. */
   resultConfidenceFloor: number;
   plannerDefaultTier: PlannerTier;
   models: Record<Tier, string>;
@@ -99,6 +101,24 @@ export interface PlannedCheck {
   command: string | null;
 }
 
+/**
+ * A17: the optional specification a planner may fix once, so a worker starts from its findings instead of re-deriving
+ * them. `files` are the repository paths the planner actually inspected.
+ */
+export interface TaskSpec {
+  interfaces: string[];
+  data_shapes: string[];
+  invariants: string[];
+  files: string[];
+}
+
+/** #33: optional routing evidence Gate B reads. An empty `unresolved` is a claim that the task is ordinary bounded work. */
+export interface TaskUncertainty {
+  unresolved: string[];
+  interacts_with: string[];
+  prior_failure: string | null;
+}
+
 export interface PlannedTask {
   id: string;
   outcome: string;
@@ -108,6 +128,11 @@ export interface PlannedTask {
   deliverables: string[];
   checks: PlannedCheck[];
   replan_if: string[];
+  /** Optional (document §7): an absent field is unknown, not "mechanical", so a plan that omits it is still valid. */
+  spec?: TaskSpec;
+  uncertainty?: TaskUncertainty;
+  /** #33/A17: every design decision is already made (a non-empty `spec.interfaces`, nothing unresolved). */
+  fully_specified?: boolean;
   /** A3: sha256 over the scheduling-relevant contract; a receipt is accepted for (task_id, contract_hash). */
   contract_hash: string;
 }
@@ -118,10 +143,22 @@ export interface Plan {
   assumptions: string[];
   constraints: string[];
   tasks: PlannedTask[];
+  /** A17: the longest dependency path, computed from the graph. Wall-clock cannot fall below it. */
+  chain_depth: number;
+  /** T11: what the planner said its chain depth was. A claim the graph does not support is recorded, never rejected. */
+  chain_depth_claimed: number | null;
 }
 
 export type PlannerReply =
-  | { status: 'ready'; goal: string; assumptions: string[]; constraints: string[]; tasks: Array<Omit<PlannedTask, 'contract_hash'>> }
+  | {
+      status: 'ready';
+      goal: string;
+      assumptions: string[];
+      constraints: string[];
+      tasks: Array<Omit<PlannedTask, 'contract_hash'>>;
+      /** A17: what the planner says its chain depth is. The code computes the authoritative value from the graph. */
+      chain_depth_claimed: number | null;
+    }
   | { status: 'needs_context'; questions: string[]; findings: string[] }
   | { status: 'blocked'; reason: string; findings: string[] };
 
@@ -140,9 +177,14 @@ export interface WorkerReply {
   blockers: string[];
 }
 
+/** T4: the pin that was requested and the model the host actually ran are different facts; an unknown id is neither. */
+export type ModelAgreement = 'match' | 'mismatch' | 'unverified';
+
 export type JobPhase = 'admitted' | 'planning' | 'planned' | 'blocked';
 export type JobOutcome = 'completed' | 'incomplete' | 'blocked' | 'superseded';
 export type DeterministicVerdict = 'accept' | 'incomplete';
+/** T11: rework and replan are reached from what the worker itself reported, never from a second model's judgement. */
+export type ReceiptVerdict = DeterministicVerdict | 'invalid' | 'unknown' | 'rework' | 'replan';
 
 /** A4: one reservation per dispatched owned call, taken before any HTTP and released at Post. */
 export interface Reservation {
@@ -164,9 +206,9 @@ export interface Receipt {
   tool_use_id: string;
   provenance: 'worker_reported';
   reply: WorkerReply | null;
-  verdict: DeterministicVerdict | 'invalid' | 'unknown';
+  verdict: ReceiptVerdict;
   verdict_reason: string | null;
-  /** Gate C is advisory (A1): recorded, never applied to readiness. */
+  /** Historical only (T11): Gate C is not called, so new receipts always record null here. */
   advisory: ResultVerdict | null;
   observed_model: string | null;
   root_effort: string | null;
@@ -186,6 +228,8 @@ export interface JobGeneration {
   shape: ExecutionShape;
   phase: JobPhase;
   planner_tier: PlannerTier | null;
+  /** T4: whether the host's resolvedModel agreed with the planner profile this job asked for. Unverified is not a match. */
+  planner_model: ModelAgreement | null;
   plan: Plan | null;
   active: Record<string, Reservation>;
   receipts: Receipt[];
@@ -260,10 +304,6 @@ export type PreserveReason =
   | 'basis_tie'
   | 'basis_absent'
   | 'basis_low_confidence'
-  | 'result_invalid'
-  | 'result_tie'
-  | 'result_abstain'
-  | 'result_low_confidence'
   | 'generation_changed'
   | 'pinned';
 
@@ -273,10 +313,13 @@ export type DenyReason =
   | 'dispatch_ineligible'
   | 'task_active'
   | 'task_accepted'
-  | 'reservation_superseded'
+  | 'attempt_mismatch'
+  | 'dependent_active'
+  | 'stale_generation'
   | 'deliverable_overlap'
   | 'parallel_cap'
   | 'planner_pin_conflict'
+  | 'planner_active'
   | 'workers_active'
   | 'bounds_exhausted'
   | 'composed_too_large'

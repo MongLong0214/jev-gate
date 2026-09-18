@@ -8,8 +8,8 @@ import { GUARD_DENY_REASON, STOP_REASON } from '../src/coordinator.js';
 import { DENIALS_BEFORE_STOP } from '../src/brief.js';
 import { runHook, type HookDeps, type HookResult } from '../src/hook.js';
 import { jobPath, newGeneration, readJob, updateJob } from '../src/job.js';
-import { composeTaskPrompt, contractHash, MAX_COMPOSED_BYTES } from '../src/plan.js';
-import { ADMISSION_ANSWERS, PLANNER_ROUTE_ANSWERS, RESULT_VERDICTS, ROUTE_ANSWERS, UPGRADE_BASES, type JobState, type PlannedTask, type WorkerReply } from '../src/types.js';
+import { chainDepth, composeTaskPrompt, contractHash, MAX_COMPOSED_BYTES } from '../src/plan.js';
+import { ADMISSION_ANSWERS, PLANNER_ROUTE_ANSWERS, ROUTE_ANSWERS, UPGRADE_BASES, type JobState, type PlannedTask, type WorkerReply } from '../src/types.js';
 
 const KEY = 'ts-secret-key-123';
 const tmp = mkdtempSync(join(tmpdir(), 'jev-hook-'));
@@ -27,21 +27,19 @@ interface FakeAnswers {
   route?: string;
   basis?: string;
   planning_tier?: string;
-  result?: string;
-  onCall?: (questions: string[]) => void;
+  onCall?: (questions: string[], state: Record<string, unknown>) => void;
 }
 
 const fakeJev = (opts: FakeAnswers = {}): ReturnType<typeof vi.fn> =>
   vi.fn(async (_url: string, init: RequestInit) => {
-    const body = JSON.parse(String(init.body)) as { questions: Record<string, unknown> };
+    const body = JSON.parse(String(init.body)) as { questions: Record<string, unknown>; state: Record<string, unknown> };
     const questions = Object.keys(body.questions);
-    opts.onCall?.(questions);
+    opts.onCall?.(questions, body.state);
     const answers: Record<string, unknown> = {};
     if (questions.includes('execution')) answers['execution'] = choice(ADMISSION_ANSWERS, opts.execution ?? 'orchestrated');
     if (questions.includes('route')) answers['route'] = choice(ROUTE_ANSWERS, opts.route ?? 'standard');
     if (questions.includes('upgrade_basis')) answers['upgrade_basis'] = choice(UPGRADE_BASES, opts.basis ?? 'no_specific_basis');
     if (questions.includes('planning_tier')) answers['planning_tier'] = choice(PLANNER_ROUTE_ANSWERS, opts.planning_tier ?? 'deep');
-    if (questions.includes('result')) answers['result'] = choice(RESULT_VERDICTS, opts.result ?? 'accept');
     return new Response(JSON.stringify({ model: 'jev-1.13.0', answers, usage: { input_tokens: 10, output_tokens: 2 } }), { status: 200 });
   });
 
@@ -52,6 +50,14 @@ const stdinOf = (value: unknown): AsyncIterable<Uint8Array> =>
 
 type Env = Record<string, string | undefined>;
 const makeEnv = (over: Env = {}): Env => ({ TYPESAFE_API_KEY: KEY, HOME: join(tmp, 'home'), JEV_GATE_MODE: 'auto', JEV_GATE_STATE_DIR: mkdtempSync(join(tmp, 'state-')), ...over });
+
+/** T5: the default is one worker, so any test that needs concurrency has to raise the cap explicitly. */
+let capSeq = 0;
+const capEnv = (cap: number, over: Env = {}): Env => {
+  const cfg = join(tmp, `cap-${cap}-${(capSeq += 1)}.json`);
+  writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', maxParallelWorkers: cap }));
+  return makeEnv({ JEV_GATE_CONFIG: cfg, ...over });
+};
 
 const run = (env: Env, event: unknown, fetchImpl?: unknown, extra: Partial<HookDeps> = {}): Promise<HookResult> =>
   runHook({ env, stdin: stdinOf(event), ...(fetchImpl ? { fetchImpl: fetchImpl as typeof fetch } : {}), ...extra });
@@ -98,11 +104,23 @@ const rawTask = (id: string, over: Partial<PlannedTask> = {}): Omit<PlannedTask,
   deliverables: [`src/${id}.ts`],
   checks: [{ id: 'c1', description: 'tests pass', required: true, command: 'npm test' }],
   replan_if: [],
+  spec: { interfaces: ['createStore(): Store'], data_shapes: ['Store = { get(key: string): string | null }'], invariants: ['reads never throw'], files: ['src/store.ts'] },
+  uncertainty: { unresolved: [], interacts_with: [], prior_failure: null },
+  fully_specified: false,
   ...over,
 });
 
 const PLAN_TASKS = [rawTask('t1'), rawTask('t2'), rawTask('t3', { depends_on: ['t1', 't2'] })];
-const PLAN_REPLY = { status: 'ready', goal: 'ship settings', assumptions: ['the store is local'], constraints: ['keep the public API'], tasks: PLAN_TASKS };
+/** A17: a ready reply states its own chain depth, and the parser rejects a claim its graph does not support. */
+const planReply = (tasks: Array<Omit<PlannedTask, 'contract_hash'>>): Record<string, unknown> => ({
+  status: 'ready',
+  goal: 'ship settings',
+  assumptions: ['the store is local'],
+  constraints: ['keep the public API'],
+  tasks,
+  chain_depth: chainDepth(tasks),
+});
+const PLAN_REPLY = planReply(PLAN_TASKS);
 
 const plannerPre = (over: Record<string, unknown> = {}): Record<string, unknown> =>
   preEvent('Agent', { subagent_type: 'jev-gate:planner', description: 'plan it', prompt: 'Plan this request.', run_in_background: false, ...over }, { tool_use_id: 'toolu_plan' });
@@ -372,13 +390,57 @@ describe('planner dispatch', () => {
     expect(state(env).current).toMatchObject({ phase: 'planned', plan: { rev: 1 }, attempts: { planner: 1, replans: 2 } });
   });
 
-  it('leaves the phase unchanged and releases the reservation when the planner does not complete', async () => {
+  it('R06: a terminal planner result that is not a plan never leaves the job idling in planning (T4)', async () => {
     const env = makeEnv();
     await run(env, promptEvent(), fakeJev());
     await run(env, plannerPre(), fakeJev());
     const r = await run(env, plannerPost(PLAN_REPLY, { tool_response: { status: 'error', content: [] } }));
-    expect(r).toMatchObject({ kind: 'skip' });
-    expect(state(env).current).toMatchObject({ phase: 'planning', active: {} });
+    // The reservation is released AND the job returns to a state the coordinator can act on, with the reason.
+    expect(context(r)).toContain('The planner returned status error');
+    expect(state(env).current).toMatchObject({ phase: 'admitted', active: {}, attempts: { planner: 1 } });
+    // The second terminal failure blocks the job instead of leaving it retryable forever.
+    await run(env, plannerPre(), fakeJev());
+    const second = await run(env, plannerPost(PLAN_REPLY, { tool_response: { status: 'cancelled', content: [] } }));
+    expect(context(second)).toContain('No planner attempts remain');
+    expect(state(env).current).toMatchObject({ phase: 'blocked', active: {} });
+  });
+
+  it('R06: refuses a second planner while one is already running (T4)', async () => {
+    const env = makeEnv();
+    const fetchImpl = fakeJev();
+    await run(env, promptEvent(), fetchImpl);
+    expect((await run(env, plannerPre(), fetchImpl)).kind).toBe('patch');
+    expect(Object.keys(state(env).current.active)).toEqual(['toolu_plan']);
+    const second = await run(env, plannerPre({}), fetchImpl);
+    expect(second).toMatchObject({ kind: 'deny', code: 'planner_active' });
+    // The refused call neither reserved nor spent an attempt.
+    expect(Object.keys(state(env).current.active)).toEqual(['toolu_plan']);
+    expect(state(env).current.attempts.planner).toBe(1);
+  });
+
+  it('R06: records whether the model the host ran was the planning profile this job asked for (T4)', async () => {
+    const matched = makeEnv();
+    await seedPlanned(matched, PLAN_REPLY, fakeJev());
+    // The fake host reports claude-opus-5 and the deep profile is configured as opus.
+    expect(state(matched).current).toMatchObject({ planner_tier: 'deep', planner_model: 'match' });
+
+    const mismatched = makeEnv();
+    const fetchImpl = fakeJev();
+    await run(mismatched, promptEvent(), fetchImpl);
+    await run(mismatched, plannerPre(), fetchImpl);
+    const wrong = await run(mismatched, plannerPost(PLAN_REPLY, { tool_response: { status: 'completed', resolvedModel: 'claude-haiku-5', content: [{ type: 'text', text: fence(PLAN_REPLY) }] } }));
+    expect(state(mismatched).current.planner_model).toBe('mismatch');
+    expect(context(wrong)).toContain('not evidence that a strong planner produced it');
+    // The plan itself is still usable: the pin being wrong is recorded, not used to throw away valid work.
+    expect(state(mismatched).current).toMatchObject({ phase: 'planned', plan: { rev: 1 } });
+
+    const unknown = makeEnv();
+    const f2 = fakeJev();
+    await run(unknown, promptEvent(), f2);
+    await run(unknown, plannerPre(), f2);
+    const unnamed = await run(unknown, plannerPost(PLAN_REPLY, { tool_response: { status: 'completed', content: [{ type: 'text', text: fence(PLAN_REPLY) }] } }));
+    expect(state(unknown).current.planner_model).toBe('unverified');
+    expect(context(unnamed)).toContain('unverified');
   });
 });
 
@@ -412,7 +474,7 @@ describe('worker dispatch', () => {
   });
 
   it('appends the contract without a model for a pinned worker and on an HTTP failure', async () => {
-    const env = makeEnv();
+    const env = capEnv(2);
     await seedPlanned(env, PLAN_REPLY, fakeJev());
     const pinned = await run(env, preEvent('Agent', agentInput({ model: 'haiku' })), fakeJev());
     expect(pinned).toMatchObject({ kind: 'patch', code: 'pinned' });
@@ -441,7 +503,7 @@ describe('worker dispatch', () => {
   });
 
   it('denies a duplicate dispatch, an accepted task, an overlapping deliverable and a full parallel cap', async () => {
-    const env = makeEnv();
+    const env = capEnv(2);
     const fetchImpl = fakeJev();
     await seedPlanned(env, PLAN_REPLY, fetchImpl);
     await run(env, preEvent('Agent', agentInput()), fetchImpl);
@@ -460,14 +522,14 @@ describe('worker dispatch', () => {
     const env = makeEnv();
     const fetchImpl = fakeJev();
     const tasks = [rawTask('t1', { deliverables: ['src/shared.ts'] }), rawTask('t2', { deliverables: ['src/shared.ts'] }), rawTask('t4'), rawTask('t5')];
-    await seedPlanned(env, { ...PLAN_REPLY, tasks }, fetchImpl);
+    await seedPlanned(env, planReply(tasks), fetchImpl);
     await run(env, preEvent('Agent', agentInput()), fetchImpl);
     const overlap = await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t2]\nwork' }), { tool_use_id: 'toolu_2' }), fetchImpl);
     expect(overlap).toMatchObject({ kind: 'deny', code: 'deliverable_overlap' });
     const cfg = join(tmp, 'cap1.json');
     writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', maxParallelWorkers: 1 }));
     const capped = makeEnv({ JEV_GATE_CONFIG: cfg });
-    await seedPlanned(capped, { ...PLAN_REPLY, tasks }, fetchImpl);
+    await seedPlanned(capped, planReply(tasks), fetchImpl);
     await run(capped, preEvent('Agent', agentInput()), fetchImpl);
     const second = await run(capped, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t4]\nwork' }), { tool_use_id: 'toolu_2' }), fetchImpl);
     expect(second).toMatchObject({ kind: 'deny', code: 'parallel_cap' });
@@ -476,7 +538,7 @@ describe('worker dispatch', () => {
   it('denies a composed prompt over the byte bound instead of dropping constraints', async () => {
     const env = makeEnv();
     const fetchImpl = fakeJev();
-    await seedPlanned(env, { ...PLAN_REPLY, tasks: [rawTask('t1', { context: 'z'.repeat(8 * 1024) })] }, fetchImpl);
+    await seedPlanned(env, planReply([rawTask('t1', { context: 'z'.repeat(8 * 1024) })]), fetchImpl);
     const r = await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t1]\n' + 'y'.repeat(60 * 1024) })), fetchImpl);
     expect(r).toMatchObject({ kind: 'deny', code: 'composed_too_large' });
   });
@@ -539,22 +601,74 @@ describe('worker dispatch', () => {
     expect(third).toMatchObject({ kind: 'deny', code: 'bounds_exhausted' });
   });
 
-  it('preserves the call when a new prompt replaced the generation during the Gate B call', async () => {
+  it('R03: denies a dispatch whose generation was replaced during the Gate B call instead of letting it run (T2)', async () => {
     const env = makeEnv();
     await seedPlanned(env, PLAN_REPLY, fakeJev());
-    // A new user prompt lands while the allocation call is in flight; the patch must be dropped, not applied late.
+    // A new user prompt lands while the allocation call is in flight. The original call must not be waved through
+    // with its own input: it belongs to a plan that is no longer in force.
     const racing = fakeJev({
       onCall: (questions) => {
         if (questions.includes('route')) updateJob(env, 's1', (prev) => newGeneration(prev, 's1', 'p2', 'orchestrated').state);
       },
     });
-    expect(await run(env, preEvent('Agent', agentInput()), racing)).toMatchObject({ kind: 'preserve', code: 'generation_changed' });
+    const r = await run(env, preEvent('Agent', agentInput()), racing);
+    expect(r).toMatchObject({ kind: 'deny', code: 'stale_generation' });
+    expect(hookOutput(r)['permissionDecision']).toBe('deny');
+    expect(String(hookOutput(r)['permissionDecisionReason'])).toContain('no longer in force');
+    // The new generation is untouched by the refused call.
+    expect(state(env).current).toMatchObject({ prompt_id: 'p2', plan: null });
+  });
+
+  it('R04: refuses a rework while the first writer is still running, rather than replacing it (T2)', async () => {
+    const env = makeEnv();
+    const fetchImpl = fakeJev();
+    await seedPlanned(env, PLAN_REPLY, fetchImpl);
+    await run(env, preEvent('Agent', agentInput()), fetchImpl);
+    expect(state(env).current.active['toolu_1']).toMatchObject({ task_id: 't1', attempt: 1 });
+    const rework = await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t1 attempt=2]\nredo' }), { tool_use_id: 'toolu_2' }), fetchImpl);
+    expect(rework).toMatchObject({ kind: 'deny', code: 'task_active' });
+    expect(String(hookOutput(rework)['permissionDecisionReason'])).toContain('never observed to stop');
+    // The live reservation is still exactly the one that was taken; nothing was deleted to make room.
+    expect(Object.keys(state(env).current.active)).toEqual(['toolu_1']);
+    expect(state(env).current.attempts.tasks['t1']).toBe(1);
+  });
+
+  it('R04: an attempt number in the text confers nothing; the counted attempts decide (T1)', async () => {
+    const env = makeEnv();
+    const fetchImpl = fakeJev();
+    await seedPlanned(env, PLAN_REPLY, fetchImpl);
+    // No attempt of t1 has been recorded, so "attempt=7" is not the attempt this task is on.
+    const lying = await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t1 attempt=7]\nredo' })), fetchImpl);
+    expect(lying).toMatchObject({ kind: 'deny', code: 'attempt_mismatch' });
+    expect(String(hookOutput(lying)['permissionDecisionReason'])).toContain('next attempt=1');
+    expect(state(env).current.active).toEqual({});
+    // The honest number for a first dispatch is no attempt marker at all.
+    expect((await run(env, preEvent('Agent', agentInput()), fetchImpl)).kind).toBe('patch');
   });
 });
 
-describe('receipts and Gate C', () => {
-  it('binds the receipt to the tool_use_id with the observed model and root effort, then unlocks dependents', async () => {
+describe('rework evidence (A17)', () => {
+  it('evaluates attempt 2 on strictly more evidence than attempt 1', async () => {
     const env = makeEnv();
+    const routeStates: Array<Record<string, unknown>> = [];
+    const fetchImpl = fakeJev({ onCall: (q, st) => void (q.includes('route') && routeStates.push(st)) });
+    await seedPlanned(env, PLAN_REPLY, fetchImpl);
+    await run(env, preEvent('Agent', agentInput()), fetchImpl);
+    await run(env, workerPost('toolu_1', workerReply({ checks: [{ check_id: 'c1', result: 'fail', note: 'ordering' }] })), fetchImpl);
+    const second = await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t1 attempt=2]\nredo' }), { tool_use_id: 'toolu_2' }), fetchImpl);
+    expect(routeStates).toHaveLength(2);
+    expect(routeStates[0]?.['prior_attempt']).toBeNull();
+    // T11: a required check the worker itself reported as failed is a rework, decided by code and no second model.
+    expect(routeStates[1]?.['prior_attempt']).toMatchObject({ attempt: 1, verdict: 'rework', failed_checks: ['c1'], provenance: 'worker_reported', observed_model_confirmed: true });
+    expect(JSON.stringify(routeStates[1]).length).toBeGreaterThan(JSON.stringify(routeStates[0]).length);
+    // The worker sees the same failure the gate saw.
+    expect(String(updatedInput(second)['prompt'])).toContain('Previous attempt of this task (worker_reported)');
+  });
+});
+
+describe('receipts', () => {
+  it('binds the receipt to the tool_use_id with the observed model and root effort, then unlocks dependents', async () => {
+    const env = capEnv(2);
     const fetchImpl = fakeJev();
     await seedPlanned(env, PLAN_REPLY, fetchImpl);
     await run(env, preEvent('Agent', agentInput()), fetchImpl);
@@ -576,8 +690,9 @@ describe('receipts and Gate C', () => {
     await seedPlanned(env, PLAN_REPLY, fetchImpl);
     await run(env, preEvent('Agent', agentInput()), fetchImpl);
     const r = await run(env, workerPost('toolu_1', workerReply({ checks: [{ check_id: 'c1', result: 'fail', note: '' }] })), fetchImpl);
-    expect(context(r)).toContain('Task t1 is incomplete');
-    expect(state(env).current.receipts[0]).toMatchObject({ verdict: 'incomplete' });
+    // T11: the worker's own report of a failed required check is the verdict; no request was made to reach it.
+    expect(context(r)).toContain('reported a required check as failed');
+    expect(state(env).current.receipts[0]).toMatchObject({ verdict: 'rework', advisory: null });
     expect(await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t3]\nwork' }), { tool_use_id: 'toolu_3' }), fetchImpl)).toMatchObject({ code: 'deps_incomplete' });
   });
 
@@ -595,24 +710,59 @@ describe('receipts and Gate C', () => {
     expect(state(env).current.receipts.some((r) => r.verdict === 'unknown')).toBe(true);
   });
 
-  it('asks Gate C only on a deterministic accept and records the advisory without changing readiness', async () => {
+  /** T11: the result gate is gone from the normal path. No result verdict is ever requested, whatever the outcome. */
+  it('R14: makes no Gate C request on accept, incomplete, invalid or unknown, and still enforces the checks', async () => {
     const env = makeEnv();
-    const questionSets: string[][] = [];
-    const fetchImpl = fakeJev({ result: 'rework', onCall: (q) => questionSets.push(q) });
+    const sets: string[][] = [];
+    const fetchImpl = fakeJev({ onCall: (q) => sets.push(q) });
     await seedPlanned(env, PLAN_REPLY, fetchImpl);
+
+    // accept
     await run(env, preEvent('Agent', agentInput()), fetchImpl);
     const accepted = await run(env, workerPost('toolu_1', workerReply()), fetchImpl);
-    expect(questionSets.some((q) => q.includes('result'))).toBe(true);
     expect(context(accepted)).toContain('Task t1 accepted');
-    expect(context(accepted)).toContain('Advisory (does not change readiness): rework');
-    expect(state(env).current.receipts[0]).toMatchObject({ verdict: 'accept', advisory: 'rework' });
+    expect(state(env).current.receipts[0]).toMatchObject({ verdict: 'accept', advisory: null });
 
-    const noGate = makeEnv();
+    // incomplete: a required check reported not_run is still refused, exactly as before.
+    await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t2]\nwork' }), { tool_use_id: 'toolu_2' }), fetchImpl);
+    const incomplete = await run(env, workerPost('toolu_2', workerReply({ checks: [{ check_id: 'c1', result: 'not_run', note: '' }] })), fetchImpl);
+    expect(context(incomplete)).toContain('Task t2 is incomplete');
+    expect(state(env).current.receipts[1]).toMatchObject({ verdict: 'incomplete', advisory: null });
+
+    // invalid
+    await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t2 attempt=2]\nredo' }), { tool_use_id: 'toolu_3' }), fetchImpl);
+    const invalid = await run(env, workerPost('toolu_3', 'x', { tool_response: { status: 'completed', content: [{ type: 'text', text: 'all done, trust me' }] } }), fetchImpl);
+    expect(context(invalid)).toContain('report-format failure');
+
+    // unknown
+    await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t3]\nwork' }), { tool_use_id: 'toolu_4' }), fetchImpl);
+    const unknown = await run(env, workerPost('toolu_4', workerReply(), { tool_response: { status: 'cancelled', content: [] } }), fetchImpl);
+    expect(unknown.kind === 'context' || unknown.kind === 'skip').toBe(true);
+
+    // Not one request in the whole walk asked for a result verdict, and t3 never opened on a failed t2.
+    expect(sets.some((q) => q.includes('result'))).toBe(false);
+    expect(sets.every((q) => q.every((k) => !k.startsWith('scope_')))).toBe(true);
+    expect(context(accepted)).toContain('Ready task ids: t2');
+  });
+
+  it('R14: reaches rework and replan from the worker\'s own report, never by promoting a refused result', async () => {
+    const env = makeEnv();
     const sets: string[][] = [];
-    const fetch2 = fakeJev({ onCall: (q) => sets.push(q) });
-    await seedPlanned(noGate, PLAN_REPLY, fetch2);
-    await run(noGate, preEvent('Agent', agentInput()), fetch2);
-    await run(noGate, workerPost('toolu_1', workerReply({ status: 'blocked' })), fetch2);
+    const fetchImpl = fakeJev({ onCall: (q) => sets.push(q) });
+    await seedPlanned(env, PLAN_REPLY, fetchImpl);
+    await run(env, preEvent('Agent', agentInput()), fetchImpl);
+    const reworked = await run(env, workerPost('toolu_1', workerReply({ checks: [{ check_id: 'c1', result: 'fail', note: 'ordering' }] })), fetchImpl);
+    expect(context(reworked)).toContain('reported a required check as failed');
+    expect(state(env).current.receipts[0]).toMatchObject({ verdict: 'rework', advisory: null });
+
+    await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t2]\nwork' }), { tool_use_id: 'toolu_2' }), fetchImpl);
+    const replanned = await run(env, workerPost('toolu_2', workerReply({ status: 'replan', checks: [] })), fetchImpl);
+    expect(context(replanned)).toContain("plan's assumptions no longer hold");
+    expect(state(env).current.receipts[1]).toMatchObject({ verdict: 'replan' });
+
+    // t3 depends on both, so neither recovery verdict opens it.
+    const blocked = await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t3]\nwork' }), { tool_use_id: 'toolu_3' }), fetchImpl);
+    expect(blocked).toMatchObject({ code: 'deps_incomplete' });
     expect(sets.some((q) => q.includes('result'))).toBe(false);
   });
 
@@ -628,8 +778,8 @@ describe('receipts and Gate C', () => {
   });
 });
 
-describe('replan (A3)', () => {
-  it('carries an accepted receipt forward for an identical contract and resets a changed task with its dependents', async () => {
+describe('replan and contract reuse (A3, T3)', () => {
+  it('R05: does not reuse a completion receipt across a plan revision, and keeps it as history', async () => {
     const env = makeEnv();
     const fetchImpl = fakeJev();
     await seedPlanned(env, PLAN_REPLY, fetchImpl);
@@ -638,19 +788,50 @@ describe('replan (A3)', () => {
     expect(state(env).current.receipts).toHaveLength(1);
 
     await run(env, plannerPre(), fetchImpl);
-    const same = await run(env, plannerPost(PLAN_REPLY));
-    expect(context(same)).toContain('Revision 2');
-    expect(state(env).current.receipts).toHaveLength(1);
+    const again = await run(env, plannerPost(PLAN_REPLY));
+    expect(context(again)).toContain('Revision 2');
+    // Byte-identical tasks: the previous accept still does not carry into the new revision.
+    const after = state(env);
+    expect(after.current.receipts).toEqual([]);
+    expect(context(again)).toContain('Ready task ids: t1, t2');
+    // A3: the receipt is retired to history, never deleted; the work it records still happened.
+    expect(after.history[0]?.receipts).toMatchObject([{ task_id: 't1', verdict: 'accept' }]);
+    expect(after.history[0]?.outcome).toBe('superseded');
+  });
 
+  it('R05: a changed global constraint or implementation context does not auto-complete the new plan', async () => {
+    const env = makeEnv();
+    const fetchImpl = fakeJev();
+    await seedPlanned(env, PLAN_REPLY, fetchImpl);
+    await run(env, preEvent('Agent', agentInput()), fetchImpl);
+    await run(env, workerPost('toolu_1', workerReply()), fetchImpl);
+
+    // Only the plan-level constraints change: the task hashes are identical, which is exactly the case the old
+    // carry-forward rule accepted as "the same contract".
     await run(env, plannerPre(), fetchImpl);
-    const changed = [rawTask('t1', { outcome: 'deliver t1 differently' }), rawTask('t2'), rawTask('t3', { depends_on: ['t1', 't2'] })];
-    const after = await run(env, plannerPost({ ...PLAN_REPLY, tasks: changed }));
-    expect(context(after)).toContain('Revision 3');
-    const reset = state(env);
-    expect(reset.current.receipts).toHaveLength(0);
-    // A3: a reset receipt is moved to history, never deleted.
-    expect(reset.history[0]?.receipts).toMatchObject([{ task_id: 't1', verdict: 'accept' }]);
-    expect(reset.history[0]?.outcome).toBe('superseded');
+    const v2 = { ...planReply(PLAN_TASKS), constraints: ['drop the public API and start from the new one'] };
+    const changed = await run(env, plannerPost(v2));
+    expect(context(changed)).toContain('Ready task ids: t1, t2');
+    expect(state(env).current.receipts).toEqual([]);
+    // t1 must be dispatchable again rather than refused as already accepted.
+    const redispatch = await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=2 id=t1]\nwork' }), { tool_use_id: 'toolu_v2' }), fetchImpl);
+    expect(redispatch.kind).toBe('patch');
+    expect(String(updatedInput(redispatch)['prompt'])).toContain('drop the public API');
+  });
+
+  it('R05: a task whose implementation context changed is not treated as already satisfied', async () => {
+    const env = makeEnv();
+    const fetchImpl = fakeJev();
+    await seedPlanned(env, PLAN_REPLY, fetchImpl);
+    await run(env, preEvent('Agent', agentInput()), fetchImpl);
+    await run(env, workerPost('toolu_1', workerReply()), fetchImpl);
+    await run(env, plannerPre(), fetchImpl);
+    // `context` is deliberately outside contract_hash, so this revision's t1 hashes identically to the accepted one.
+    const respecified = [rawTask('t1', { context: 'the store API is now keyed by tenant, not by user' }), rawTask('t2'), rawTask('t3', { depends_on: ['t1', 't2'] })];
+    expect(contractHash(respecified[0] as Omit<PlannedTask, 'contract_hash'>)).toBe(contractHash(PLAN_TASKS[0] as Omit<PlannedTask, 'contract_hash'>));
+    const r = await run(env, plannerPost(planReply(respecified)));
+    expect(context(r)).toContain('Ready task ids: t1, t2');
+    expect(state(env).current.receipts).toEqual([]);
   });
 });
 
@@ -742,19 +923,40 @@ describe('traces', () => {
     await run(env, preEvent('Agent', agentInput()), fetchImpl);
     await run(env, workerPost('toolu_1', workerReply()), fetchImpl);
     const phases = readdirSync(dir).map((f) => f.split('-')[0]);
-    for (const phase of ['admission', 'guard', 'pre', 'plan', 'post', 'result']) expect(phases.join(' '), phase).toContain(phase);
+    for (const phase of ['admission', 'guard', 'pre', 'plan', 'post']) expect(phases.join(' '), phase).toContain(phase);
+    // T11: nothing writes a result or scope phase any more, because neither gate is called.
+    for (const gone of ['result_intent', 'result_result', 'scope_intent', 'scope_result']) expect(readdirSync(dir).some((f) => f.startsWith(gone)), gone).toBe(false);
     // JG5-06: every attempted gate records the decision it applied, so accounting never re-derives policy.
     const records = readdirSync(dir).map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>);
     const attempted = (phase: string, role?: string): Record<string, unknown> | undefined =>
       records.find((r) => r['phase'] === phase && r['attempted'] === true && (role === undefined || r['role'] === role));
-    expect(attempted('admission_result')).toMatchObject({ decision: 'orchestrated', decided: true, reason: null, forced: false });
+    // A17 item 6: every gate records its decision in the same place, nested under `decision`.
+    expect(attempted('admission_result')).toMatchObject({ forced: false, decision: { shape: 'orchestrated', decided: true, reason: null, changed_default: true } });
     expect(attempted('pre_result', 'planner')).toMatchObject({ decision: { action: 'patch', tier: 'deep', reason: null } });
     expect(attempted('pre_result', 'worker')).toMatchObject({ decision: { action: 'patch', tier: 'standard', reason: null } });
-    expect(attempted('result_result')).toMatchObject({ decision: { verdict: 'accept', reason: null, advisory_only: true } });
+    // A17 item 7: every gate records whether it changed what would have happened without it.
+    expect(attempted('pre_result', 'worker')).toMatchObject({ decision: { changed_default: false } });
+    // T4/T11: the plan record carries the computed depth, the planner's own claim and the model agreement.
+    const plan = records.find((r) => r['phase'] === 'plan');
+    expect(plan).toMatchObject({ outcome: 'ready', chain_depth: 2, chain_depth_claimed: 2, planner_model: { agreement: 'match' } });
     const all = readdirSync(dir).map((f) => readFileSync(join(dir, f), 'utf8')).join('');
     expect(all).not.toContain(KEY);
     expect(all).not.toContain('settings page');
     expect(all).toContain('"version": 5');
+  });
+
+  it('records changed_default true only when the applied outcome differs from the no-Jev outcome (A17)', async () => {
+    const dir = join(tmp, 'trace-changed');
+    const env = makeEnv({ JEV_GATE_TRACE_DIR: dir });
+    const fetchImpl = fakeJev({ planning_tier: 'frontier', route: 'deep', basis: 'unresolved_contract_reasoning' });
+    await seedPlanned(env, PLAN_REPLY, fetchImpl);
+    await run(env, preEvent('Agent', agentInput()), fetchImpl);
+    const records = readdirSync(dir).map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>);
+    const decision = (role: string): Record<string, unknown> =>
+      (records.find((r) => r['phase'] === 'pre_result' && r['attempted'] === true && r['role'] === role)?.['decision'] ?? {}) as Record<string, unknown>;
+    // Planner: frontier instead of the configured deep default. Worker: deep instead of the called standard profile.
+    expect(decision('planner')).toMatchObject({ tier: 'frontier', changed_default: true });
+    expect(decision('worker')).toMatchObject({ tier: 'deep', changed_default: true });
   });
 
   it('blocks the request when the intent record cannot be written', async () => {
@@ -896,5 +1098,299 @@ describe('host-observed input shapes', () => {
     await run(env, preEvent('Agent', agentInput()), fetchImpl);
     await run(env, workerPost('toolu_1', workerReply(), { effort: { level: 'xhigh' } }), fetchImpl);
     expect(state(env).current.receipts[0]).toMatchObject({ task_id: 't1', root_effort: 'xhigh' });
+  });
+});
+
+describe('current attempt versus history (T1)', () => {
+  /** Drives the plan to "t1 and t2 accepted", which is the state the old `acceptedReceipt` could not let go of. */
+  const seedAccepted = async (env: Env, fetchImpl: unknown): Promise<void> => {
+    await seedPlanned(env, PLAN_REPLY, fetchImpl);
+    await run(env, preEvent('Agent', agentInput()), fetchImpl);
+    await run(env, workerPost('toolu_1', workerReply()), fetchImpl);
+    await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t2]\nwork' }), { tool_use_id: 'toolu_2' }), fetchImpl);
+    await run(env, workerPost('toolu_2', workerReply({ changed_files: ['src/t2.ts'] })), fetchImpl);
+  };
+
+  it('R01: a failed rework is not covered by the accept it replaced, and Stop does not call the job completed', async () => {
+    const env = makeEnv();
+    const fetchImpl = fakeJev();
+    await seedAccepted(env, fetchImpl);
+    // Both predecessors are accepted, so t3 is the ready task at this point.
+    expect(state(env).current.receipts.map((r) => r.verdict)).toEqual(['accept', 'accept']);
+
+    // A deliberate rework of an accepted t1, which then fails.
+    const rework = await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t1 attempt=2]\nredo' }), { tool_use_id: 'toolu_r' }), fetchImpl);
+    expect(rework.kind).toBe('patch');
+    await run(env, workerPost('toolu_r', workerReply({ status: 'blocked', blockers: ['the store cannot be keyed that way'] })), fetchImpl);
+
+    const after = state(env);
+    // Both receipts survive; the later one is the one that decides.
+    const t1Receipts = after.current.receipts.filter((r) => r.task_id === 't1');
+    expect(t1Receipts.map((r) => r.verdict)).toEqual(['accept', 'incomplete']);
+    // t3 depends on t1: the old accept must not reopen it.
+    const blocked = await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t3]\nwork' }), { tool_use_id: 'toolu_3b' }), fetchImpl);
+    expect(blocked).toMatchObject({ kind: 'deny', code: 'deps_incomplete' });
+    await run(env, { hook_event_name: 'Stop', session_id: 's1' });
+    expect(state(env).current.outcome).toBe('incomplete');
+  });
+
+  it('R02: a predecessor under rework locks its dependents and blocks completion while it runs', async () => {
+    const env = makeEnv();
+    const fetchImpl = fakeJev();
+    await seedAccepted(env, fetchImpl);
+    // t3 was ready on the strength of the two accepts.
+    await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t1 attempt=2]\nredo' }), { tool_use_id: 'toolu_r' }), fetchImpl);
+    expect(state(env).current.active['toolu_r']).toMatchObject({ task_id: 't1', attempt: 2 });
+
+    // While that rework is in flight, nothing downstream opens and nothing reports the job finished.
+    const blocked = await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t3]\nwork' }), { tool_use_id: 'toolu_3' }), fetchImpl);
+    expect(blocked).toMatchObject({ kind: 'deny', code: 'deps_incomplete' });
+    await run(env, { hook_event_name: 'Stop', session_id: 's1' });
+    expect(state(env).current.outcome).toBe('incomplete');
+  });
+
+  it('R02: a predecessor is not reworked underneath a dependent that is already running', async () => {
+    const env = capEnv(2);
+    const fetchImpl = fakeJev();
+    await seedAccepted(env, fetchImpl);
+    const dependent = await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t3]\nwork' }), { tool_use_id: 'toolu_3' }), fetchImpl);
+    expect(dependent.kind).toBe('patch');
+    const rework = await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t1 attempt=2]\nredo' }), { tool_use_id: 'toolu_r' }), fetchImpl);
+    expect(rework).toMatchObject({ kind: 'deny', code: 'dependent_active' });
+    expect(String(hookOutput(rework)['permissionDecisionReason'])).toContain('Let the dependent finish');
+  });
+
+  it('R01: a late result from an earlier attempt does not re-accept the task', async () => {
+    const env = makeEnv();
+    const fetchImpl = fakeJev();
+    await seedPlanned(env, PLAN_REPLY, fetchImpl);
+    await run(env, preEvent('Agent', agentInput()), fetchImpl);
+    await run(env, workerPost('toolu_1', workerReply({ checks: [{ check_id: 'c1', result: 'fail', note: '' }] })), fetchImpl);
+    expect(state(env).current.receipts[0]).toMatchObject({ verdict: 'rework' });
+    // The first attempt's tool_use_id arrives again after its reservation is long gone: it is not reserved, so it
+    // records nothing and cannot turn the task back into an accepted one.
+    const late = await run(env, workerPost('toolu_1', workerReply()), fetchImpl);
+    expect(late).toMatchObject({ kind: 'skip' });
+    expect(state(env).current.receipts).toHaveLength(1);
+    expect(state(env).current.receipts[0]).toMatchObject({ verdict: 'rework' });
+  });
+});
+
+describe('parallel write scope (T5)', () => {
+  it('R07: two spellings of one deliverable collide, and the configured cap is what actually runs', async () => {
+    const aliased = [rawTask('t1', { deliverables: ['src/shared.ts'] }), rawTask('t2', { deliverables: ['src/./shared.ts'] }), rawTask('t4', { deliverables: ['src/other.ts'] })];
+    const env = capEnv(3);
+    const fetchImpl = fakeJev();
+    await seedPlanned(env, planReply(aliased), fetchImpl);
+    expect((await run(env, preEvent('Agent', agentInput()), fetchImpl)).kind).toBe('patch');
+    const alias = await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t2]\nwork' }), { tool_use_id: 'toolu_2' }), fetchImpl);
+    expect(alias).toMatchObject({ kind: 'deny', code: 'deliverable_overlap' });
+    // A genuinely different file still runs alongside it.
+    expect((await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t4]\nwork' }), { tool_use_id: 'toolu_4' }), fetchImpl)).kind).toBe('patch');
+  });
+
+  it('R07: an out-of-root deliverable is treated as shared scope, not as a distinct file', async () => {
+    const outside = [rawTask('t1', { deliverables: ['../sibling/a.ts'] }), rawTask('t2', { deliverables: ['/tmp/b.ts'] })];
+    const env = capEnv(3);
+    const fetchImpl = fakeJev();
+    await seedPlanned(env, planReply(outside), fetchImpl);
+    expect((await run(env, preEvent('Agent', agentInput()), fetchImpl)).kind).toBe('patch');
+    const second = await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t2]\nwork' }), { tool_use_id: 'toolu_2' }), fetchImpl);
+    expect(second).toMatchObject({ kind: 'deny', code: 'deliverable_overlap' });
+  });
+
+  it('R07: the default build runs one worker and tells the coordinator exactly that', async () => {
+    const env = makeEnv();
+    const fetchImpl = fakeJev();
+    const guidance = await run(env, promptEvent(), fetchImpl);
+    expect(context(guidance)).toContain('dispatch one ready task at a time');
+    expect(context(guidance)).not.toContain('in one message so they run in parallel');
+    await run(env, plannerPre(), fetchImpl);
+    const planned = await run(env, plannerPost(PLAN_REPLY));
+    expect(context(planned)).toContain('dispatch one ready task at a time');
+    await run(env, preEvent('Agent', agentInput()), fetchImpl);
+    const second = await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t2]\nwork' }), { tool_use_id: 'toolu_2' }), fetchImpl);
+    expect(second).toMatchObject({ kind: 'deny', code: 'parallel_cap' });
+  });
+});
+
+describe('failure evidence and report repair (T9, T10)', () => {
+  const NAMED_CHECKS = [
+    { id: 'store-unit', description: 'unit tests', required: true, command: 'npm test' },
+    { id: 'store-types', description: 'typecheck', required: true, command: 'npm run typecheck' },
+  ];
+  const namedPlan = (): Record<string, unknown> => planReply([rawTask('t1', { checks: NAMED_CHECKS }), rawTask('t2', { checks: NAMED_CHECKS })]);
+
+  it('R12: the rework of a task carries its own previous failure, and no failure from another task', async () => {
+    const env = capEnv(2);
+    const routeStates: Array<Record<string, unknown>> = [];
+    const fetchImpl = fakeJev({ onCall: (q, st) => void (q.includes('route') && routeStates.push(st)) });
+    await seedPlanned(env, PLAN_REPLY, fetchImpl);
+    await run(env, preEvent('Agent', agentInput()), fetchImpl);
+    await run(env, workerPost('toolu_1', workerReply({ status: 'blocked', blockers: ['the cache contract is ambiguous'] })), fetchImpl);
+
+    // A different task dispatched after that failure must not inherit it.
+    await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t2]\nwork' }), { tool_use_id: 'toolu_2' }), fetchImpl);
+    expect(routeStates[1]?.['prior_attempt']).toBeNull();
+
+    // The rework of t1 does carry it, to the gate and to the worker.
+    const rework = await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t1 attempt=2]\nredo' }), { tool_use_id: 'toolu_r' }), fetchImpl);
+    expect(routeStates[2]?.['prior_attempt']).toMatchObject({ attempt: 1, status: 'blocked', blockers: ['the cache contract is ambiguous'], provenance: 'worker_reported' });
+    const prompt = String(updatedInput(rework)['prompt']);
+    expect(prompt).toContain('Previous attempt of this task (worker_reported)');
+    expect(prompt).toContain('the cache contract is ambiguous');
+  });
+
+  it('R12: a transport failure is not promoted to a reasoning failure', async () => {
+    const env = makeEnv();
+    const routeStates: Array<Record<string, unknown>> = [];
+    const fetchImpl = fakeJev({ onCall: (q, st) => void (q.includes('route') && routeStates.push(st)) });
+    await seedPlanned(env, PLAN_REPLY, fetchImpl);
+    await run(env, preEvent('Agent', agentInput()), fetchImpl);
+    await run(env, { ...workerPost('toolu_1', workerReply()), hook_event_name: 'PostToolUseFailure', error: 'Agent terminated early' });
+    expect(state(env).current.receipts[0]).toMatchObject({ verdict: 'unknown', reply: null });
+    await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t1 attempt=2]\nredo' }), { tool_use_id: 'toolu_r' }), fetchImpl);
+    expect(routeStates[1]?.['prior_attempt']).toBeNull();
+  });
+
+  it('R12: names the previous attempt as omitted when it does not fit, instead of sending a short input silently', async () => {
+    const env = makeEnv();
+    const fetchImpl = fakeJev();
+    await seedPlanned(env, PLAN_REPLY, fetchImpl);
+    const plan = state(env).current.plan;
+    const task = plan?.tasks.find((t) => t.id === 't1');
+    if (!plan || !task) throw new Error('no planned task');
+    // Sized so the contract and the route note fit with room to spare, and only the prior attempt overflows.
+    const head = '[JEV_TASK rev=1 id=t1]\n';
+    const overhead = Buffer.byteLength(composeTaskPrompt(head, task, plan.constraints, []), 'utf8');
+    const long = head + 'y'.repeat(MAX_COMPOSED_BYTES - overhead - 4096);
+    expect((await run(env, preEvent('Agent', agentInput({ prompt: long })), fetchImpl)).kind).toBe('patch');
+    await run(env, workerPost('toolu_1', workerReply({ status: 'blocked', summary: 'z'.repeat(6 * 1024), checks: [] })), fetchImpl);
+
+    const rework = await run(env, preEvent('Agent', agentInput({ prompt: long.replace('id=t1]', 'id=t1 attempt=2]') }), { tool_use_id: 'toolu_2' }), fetchImpl);
+    expect(rework.kind).toBe('patch');
+    const prompt = String(updatedInput(rework)['prompt']);
+    expect(prompt).toContain('omitted because it did not fit the size bound');
+    expect(prompt).not.toContain('zzzzzzzzzz');
+    expect(Buffer.byteLength(prompt, 'utf8')).toBeLessThanOrEqual(MAX_COMPOSED_BYTES);
+  });
+
+  it('R13: a format-invalid reply is answered with the real check ids of this task and a report-first instruction', async () => {
+    const env = makeEnv();
+    const fetchImpl = fakeJev();
+    await seedPlanned(env, namedPlan(), fetchImpl);
+    const first = await run(env, preEvent('Agent', agentInput()), fetchImpl);
+    // T10: the contract states the ids this task is accepted on, so the generic c1 cannot be copied from the template.
+    expect(String(updatedInput(first)['prompt'])).toContain('Required check ids (report each of these exactly once, using these ids): ["store-unit","store-types"]');
+
+    const invalid = await run(env, workerPost('toolu_1', 'x', { tool_response: { status: 'completed', content: [{ type: 'text', text: '```json\n{"status":"done","checks":[{"check_id":"","result":"pass"}]}\n```' }] } }), fetchImpl);
+    expect(context(invalid)).toContain('check_id must match');
+    expect(context(invalid)).toContain('report-format failure');
+    expect(context(invalid)).toContain('Do not ask it to redo an implementation that was not shown to fail');
+    expect(state(env).current.receipts[0]).toMatchObject({ verdict: 'invalid', reply: null });
+
+    // The repair dispatch gets the exact ids again, and the parser still refuses a near-miss id rather than matching it.
+    const repair = await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t1 attempt=2]\nfix the report' }), { tool_use_id: 'toolu_2' }), fetchImpl);
+    expect(String(updatedInput(repair)['prompt'])).toContain('["store-unit","store-types"]');
+    const fuzzy = await run(env, workerPost('toolu_2', workerReply({ checks: [{ check_id: 'store_unit', result: 'pass', note: '' }, { check_id: 'store-types', result: 'pass', note: '' }] })), fetchImpl);
+    expect(context(fuzzy)).toContain('unknown check id store_unit');
+    expect(state(env).current.receipts[1]).toMatchObject({ verdict: 'incomplete' });
+  });
+
+  it('R13: a report-only repair is accepted without the parser filling anything in', async () => {
+    const env = makeEnv();
+    const fetchImpl = fakeJev();
+    await seedPlanned(env, namedPlan(), fetchImpl);
+    await run(env, preEvent('Agent', agentInput()), fetchImpl);
+    await run(env, workerPost('toolu_1', 'x', { tool_response: { status: 'completed', content: [{ type: 'text', text: 'I finished it, honestly' }] } }), fetchImpl);
+    await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t1 attempt=2]\nfix the report' }), { tool_use_id: 'toolu_2' }), fetchImpl);
+    // A corrected report with no new code is accepted, and both attempts stay on the record with their cost.
+    const fixed = await run(env, workerPost('toolu_2', workerReply({ changed_files: [], checks: [{ check_id: 'store-unit', result: 'pass', note: 'npm test' }, { check_id: 'store-types', result: 'pass', note: 'tsc' }] })), fetchImpl);
+    expect(context(fixed)).toContain('Task t1 accepted');
+    expect(state(env).current.receipts.map((r) => r.verdict)).toEqual(['invalid', 'accept']);
+    expect(state(env).current.attempts.tasks['t1']).toBe(2);
+    // A reply that simply omits a required check is still refused; nothing is inferred to fill the gap.
+    const other = await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t2]\nwork' }), { tool_use_id: 'toolu_3' }), fetchImpl);
+    expect(other.kind).toBe('patch');
+    const partial = await run(env, workerPost('toolu_3', workerReply({ checks: [{ check_id: 'store-unit', result: 'pass', note: '' }] })), fetchImpl);
+    expect(context(partial)).toContain('required check store-types was not reported');
+  });
+});
+
+describe('R15: the simple paths this change must not break', () => {
+  it('leaves off, native, pins, permissions and cancellation exactly as they were', async () => {
+    // off: no request, no state, no output.
+    const off = makeEnv({ JEV_GATE_MODE: 'off' });
+    const offFetch = fakeJev();
+    expect(await run(off, promptEvent(), offFetch)).toMatchObject({ kind: 'skip', code: 'mode_off' });
+    expect(offFetch).not.toHaveBeenCalled();
+    expect(existsSync(jobPath(off, 's1'))).toBe(false);
+
+    // native: the full orchestration shape with no Jev request at all.
+    const native = makeEnv({ JEV_GATE_MODE: 'native' });
+    const nativeFetch = fakeJev();
+    await run(native, promptEvent(), nativeFetch);
+    await run(native, plannerPre(), nativeFetch);
+    await run(native, plannerPost(PLAN_REPLY));
+    const worker = await run(native, preEvent('Agent', agentInput()), nativeFetch);
+    expect(worker).toMatchObject({ kind: 'patch', code: 'mode_native' });
+    expect(updatedInput(worker)).not.toHaveProperty('model');
+    expect(nativeFetch).not.toHaveBeenCalled();
+
+    // a user pin keeps its model and still receives the contract; the guard still denies a root mutation tool.
+    const pinned = makeEnv();
+    const fetchImpl = fakeJev();
+    await seedPlanned(pinned, PLAN_REPLY, fetchImpl);
+    const pin = await run(pinned, preEvent('Agent', agentInput({ model: 'haiku' })), fetchImpl);
+    expect(pin).toMatchObject({ kind: 'patch', code: 'pinned' });
+    expect(updatedInput(pin)).toMatchObject({ model: 'haiku' });
+    expect(await run(pinned, preEvent('Edit', {}), fetchImpl)).toMatchObject({ kind: 'deny', code: 'guard_denied' });
+    // A cancelled call is recorded as unknown and releases its reservation, as before.
+    const cancelled = await run(pinned, workerPost('toolu_1', workerReply(), { tool_response: { status: 'cancelled', content: [] } }), fetchImpl);
+    expect(context(cancelled)).toContain('did not complete');
+    expect(state(pinned).current.active).toEqual({});
+  });
+
+  it('still reads a stored job written before this change, advisory and all', async () => {
+    const env = makeEnv();
+    await seedPlanned(env, PLAN_REPLY, fakeJev());
+    const current = state(env).current;
+    const t1 = current.plan?.tasks.find((t) => t.id === 't1');
+    if (!t1) throw new Error('no planned task');
+    // A generation in the shape earlier revisions wrote: a Gate C advisory on the receipt and no planner_model field.
+    const legacy = {
+      version: 5,
+      session_id: 's1',
+      updated_at: new Date().toISOString(),
+      current: {
+        ...current,
+        planner_model: undefined,
+        receipts: [
+          {
+            task_id: 't1',
+            contract_hash: t1.contract_hash,
+            rev: 1,
+            attempt: 1,
+            tool_use_id: 'toolu_old',
+            provenance: 'worker_reported',
+            reply: { status: 'done', summary: 'built earlier', changed_files: ['src/t1.ts'], interfaces: [], checks: [{ check_id: 'c1', result: 'pass', note: '' }], blockers: [] },
+            verdict: 'accept',
+            verdict_reason: null,
+            advisory: 'accept',
+            observed_model: 'claude-sonnet-5',
+            root_effort: 'high',
+            recorded_at: new Date().toISOString(),
+          },
+        ],
+      },
+      history: [],
+    };
+    writeFileSync(jobPath(env, 's1'), JSON.stringify(legacy));
+    const fetchImpl = fakeJev();
+    // The stored accept still counts: t1 is refused as already accepted and t2 is still dispatchable.
+    expect(await run(env, preEvent('Agent', agentInput()), fetchImpl)).toMatchObject({ kind: 'deny', code: 'task_accepted' });
+    expect((await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t2]\nwork' }), { tool_use_id: 'toolu_2' }), fetchImpl)).kind).toBe('patch');
+    // The historical advisory is preserved as it was recorded, not rewritten.
+    expect(state(env).current.receipts[0]).toMatchObject({ advisory: 'accept', verdict: 'accept' });
   });
 });

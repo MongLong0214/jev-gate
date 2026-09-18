@@ -1,12 +1,15 @@
 # Handoff — jev-gate, 2026-09-18
 
-Read this first, then `gh issue view 33`. Everything below is what was actually observed, with the file that proves it.
+Everything below is what was actually observed, with the file that proves it. This revision corrects overstated claims
+from the original write-up (see "What the measurements say" and "Do this next") and describes the current design, which
+other agents are actively changing; nothing below claims a new measurement was taken.
 
 ## Where the project stands
 
 `main` is at **v0.2.0** ([release](https://github.com/MongLong0214/jev-gate/releases/tag/v0.2.0)). V5 is implemented and
-verified on a real host. **No cost, runtime or quality benefit is established**, and the one measurement that ran says
-routing did not change any model. That is the open problem, and it has a concrete first fix in **#33**.
+verified on a real host. **No cost, runtime or quality benefit is established.** The one completed cell that ran was
+under forced admission (no real Gate A judgment), and every worker dispatch in it landed on `standard`; why is not
+settled. See "What the measurements say" below, and "Do this next" for the fix order — it is not #33's original order.
 
 | Version | State |
 | --- | --- |
@@ -23,13 +26,16 @@ returns in 0.6–0.9 s (measured).
 ```text
 Gate A (UserPromptSubmit)  direct | orchestrated | needs_context | abstain
   orchestrated → planner (deep=opus, frontier=fable, read-only) returns tasks + interfaces + required checks
+                 (optional per-task `spec`/`uncertainty` context — neither is required by the schema)
                  Sonnet coordinates behind an allow-list root guard and cannot implement the job itself
                  Gate B (PreToolUse:Agent)  fast | standard | deep | frontier, with an upgrade basis required above standard
-                 Gate C (PostToolUse:Agent) accept | rework | replan | abstain — advisory only
+                 acceptance: a deterministic check — does the reply report every required check as passed?
+                 (no Gate C HTTP call in the normal path; historical `result_*` Gate C records are still read as history)
 ```
 
-Acceptance is owned by code, not by Gate C: a task unlocks its dependents only when the worker reports every required
-check as passed. Uncertainty anywhere preserves the call that was already going to happen.
+Acceptance is owned by that deterministic check, not by a Jev call: a task unlocks its dependents only when the worker
+reports every required check as passed. A `worker_reported` accept is not independent proof the code works. Uncertainty
+anywhere preserves the call that was already going to happen.
 
 ## Code map
 
@@ -39,7 +45,7 @@ table and the rules.
 | File | What it owns |
 | --- | --- |
 | `src/admission.ts` | Gate A question and decision |
-| `src/allocation.ts` | Gate B (planner tier, worker tier + upgrade basis), Gate C |
+| `src/allocation.ts` | Gate B only (planner tier, worker tier + upgrade basis). The Gate C question, request builder and decision function are gone; `ResultVerdict` stays as the type of the `advisory` field on stored receipts |
 | `src/plan.ts` | plan/reply JSON parsing, `contract_hash`, `[JEV_TASK …]` marker, contract composition, deterministic acceptance |
 | `src/job.ts` | per-(session, prompt) state file, reservations, bounds, history |
 | `src/coordinator.ts` | every fixed text: guidance, deny reasons, context messages |
@@ -66,8 +72,10 @@ Evidence: `bench/results/v5-host-2026-09-18/`, raw logs in `~/jev-gate-runs/v5-h
 - A session launched from inside Claude Code exports `CLAUDE_*`; the bench runner now strips them, and any effort
   measurement taken before `1680ac7` is invalid.
 
-Unverified and worth doing: parallel dispatch (every planner we saw produced a serial chain), real-Jev Gate B/C in a host
-smoke (that session's admission returned `direct`), a live root `Edit` denial and the terminal stop.
+Unverified and worth doing: parallel dispatch (every planner we saw produced a serial chain; the default is now one
+worker at a time and parallelism is not offered as a speed feature), real-Jev Gate B in a host smoke (that session's
+admission returned `direct`; Gate C's HTTP call has since been removed from the normal path, so it is no longer part of
+this to-do), a live root `Edit` denial and the terminal stop.
 
 ## What the measurements say
 
@@ -76,9 +84,12 @@ smoke (that session's admission returned `direct`), a live root `Edit` denial an
 jobs were chosen `orchestrated` but at 0.61 and 0.72**, below the 0.8 floor, so the product arm would run them direct.
 The floor was deliberately not tuned on pilot data (ADR A10); a forced-orchestration diagnostic arm exists instead (A16).
 
-**Whole-job comparison** (`bench/results/v5-run-1-partial-2026-09-18/`): stopped after one cell for budget. That cell
-exercised the whole mechanism on a real job — plan, four dispatches, one reply judged invalid and reworked as
-`attempt=2`, three advisory verdicts — and produced the finding that matters:
+**Whole-job comparison** (`bench/results/v5-run-1-partial-2026-09-18/`): one condition, stopped mid-execution for budget
+— not a completed comparison. That arm forced orchestration (`JEV_GATE_EXPERIMENT_ADMISSION=orchestrated`), so **no
+real Gate A judgment ran**; admission is recorded as forced, not decided. The completed part exercised the rest of the
+mechanism on a real job — a plan, five worker dispatches (`t1`, `t2`, `t2` attempt 2, `t3`, `t4`), of which four have a
+published completed result (`t4`/analyzer's does not), one reply judged invalid and reworked as `attempt=2`, three
+advisory verdicts, all `accept` — and produced the finding that matters:
 
 | Dispatch | Route | Confidence | Upgrade basis | Applied |
 | --- | --- | ---: | --- | --- |
@@ -88,22 +99,45 @@ exercised the whole mechanism on a real job — plan, four dispatches, one reply
 | t3 parser | standard | 0.94 | `no_specific_basis` | patch → standard |
 | t4 analyzer | standard | 0.99 | `no_specific_basis` | patch → standard |
 
-Every task went to the same tier. The upgrade gate is behaving as specified; the planner's task blocks simply contain no
-evidence that a harder tier is warranted, so `no_specific_basis` is the only honest answer available to it.
+Every task went to the same tier (`standard`). `upgrade_basis` gates only `deep` and `frontier` in the shipped policy,
+so `no_specific_basis` did not block `fast` — it does not explain why nothing went down. Why everything landed on
+`standard` is open: the strong planner may already have resolved the design decisions that made `standard` appropriate,
+or the router may have been missing information it needed; this one cell cannot separate the two. The one input gap it
+actually confirms: `t2`'s own previous `invalid` verdict was not carried into its `attempt=2` dispatch. That verdict was
+a report-format failure (`check_id` didn't match the required pattern), not a demonstrated implementation bug — whether
+the first attempt's implementation was correct is unknown. The three Gate C `accept` verdicts are `worker_reported`, not
+independent proof the code works.
 
 ## Do this next
 
-1. **#33 — give the router something to read.** Add a required uncertainty field to `PlannedTask` and both planner
-   bodies (what is unresolved, what it interacts with, what a prior attempt got wrong), let the planner mark a task as
-   fully specified so `fast` becomes reachable, and keep the upgrade gate exactly as strict as it is. Regression cases
-   are listed in the issue, including the frozen V4 case (top .82, confidence .77, floor .8 still preserves).
-2. **Finish the comparison.** `orchestrated_control`, `jev_forced_orchestration`, `frontier_native`, `sonnet_native` on
-   `mini-sql` and `orbit-core`, one repetition; add `frontier_orchestrated` if budget allows. Criteria in #21 §5 are
-   frozen; report the conclusion category even when negative.
-3. **Close the unverified host items** while you are running sessions anyway: parallel dispatch, real-Jev Gate B/C, a
-   live root `Edit` denial.
+#33's original proposal (a required uncertainty field so `fast` becomes reachable) is **not adopted** — `fast` was
+already reachable under the shipped policy; `upgrade_basis` only gates `deep`/`frontier`. The fix order below replaces
+it; #33's body still needs a follow-up edit to match, which is not done here (no remote issue edit without the owner
+asking).
 
-Commands:
+1. **State correctness in the plan/dispatch machinery.** A past `accept` must not paper over a failed or in-progress
+   rework of the same task; a stale/superseded dispatch must not be treated as still valid without a confirmed
+   terminal result; a changed plan revision must not reuse a prior completion computed under the old contract; the
+   planner must not run twice concurrently in the same generation (single-flight); parallel-dispatch scope must
+   compare normalized, alias-safe declared paths (`src/t1.ts` and `src/./t1.ts` are the same file), not raw strings.
+2. **Bench observation and configuration accuracy.** Compare the actually-requested model against the actually-observed
+   model directly, not as two independent "did it change" booleans that can both be true and hide a mismatch; treat a
+   missing trace as unknown, not as zero cost or zero tokens; confirm the frozen config a benchmark plans against is the
+   config the child process actually reads (the child's environment currently drops the path the plan read).
+3. **Carry a task's own previous failure forward, and keep a report fix separate from a rework.** When a task is
+   redispatched (for example after an `invalid` verdict), pass its own last verdict, failed/unrun checks and blockers
+   into the next Gate B/worker input. Keep a report-format correction (wrong `check_id`, a missing field) on the
+   existing bounded recovery path, distinct from a full implementation rework — a formatting fix should not escalate
+   into a rewrite.
+4. **Only then, a small approved comparison experiment.** `orchestrated_control`, `jev_forced_orchestration`,
+   `frontier_native`, `sonnet_native` on `mini-sql` and `orbit-core`, one repetition; `frontier_orchestrated` is a
+   comparison condition that uses the V5 guard and a separate planner — it is not the best unconstrained use of a
+   frontier model, so don't read it as one. Criteria in #21 §5 are frozen; report the conclusion category even when
+   negative. Close the unverified host items while sessions are running anyway: parallel dispatch, real-Jev Gate B, a
+   live root `Edit` denial. **No paid experiment, release, tag, push or remote issue edit runs without the owner
+   asking first.**
+
+Commands for step 4, once approved:
 
 ```sh
 npm ci && npm run build
@@ -127,6 +161,7 @@ host verification cost $2.84 in total.
 - Distinguish three different kinds of done: implemented, observed on a host, and measured as a product benefit.
 - Negative results are deliverables. V3 and V4 both published theirs; do not quietly replace them.
 - No release, npm publish, marketplace entry or marketing without the owner asking for it.
+- No paid experiment, release, tag, push, or remote issue edit — including to #33 — without the owner asking first.
 
 ## Working conventions in this repo
 

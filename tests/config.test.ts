@@ -38,9 +38,14 @@ describe('validateConfig', () => {
       mode: 'native',
       plannerDefaultTier: 'frontier',
       models: { fast: 'haiku', standard: 'sonnet', deep: 'claude-opus-5', frontier: 'fable' },
-      maxParallelWorkers: 3,
+      // T5: the default is one worker; parallel dispatch is opt-in until write isolation is actually verified.
+      maxParallelWorkers: 1,
       guardAllowTools: [],
     });
+    expect(DEFAULT_CONFIG.maxParallelWorkers).toBe(1);
+    // T11: a deployed file that still sets resultConfidenceFloor keeps loading; nothing reads it any more.
+    const deprecated = validateConfig({ version: 5, mode: 'auto', resultConfidenceFloor: 0.95 });
+    expect(deprecated).toMatchObject({ ok: true, config: { resultConfidenceFloor: 0.95 } });
   });
 
   it.each([

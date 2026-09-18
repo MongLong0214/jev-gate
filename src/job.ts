@@ -182,6 +182,7 @@ export const emptyGeneration = (promptId: string | null, shape: ExecutionShape, 
   shape,
   phase: 'admitted',
   planner_tier: null,
+  planner_model: null,
   plan: null,
   active: emptyMap(),
   receipts: [],
@@ -243,17 +244,16 @@ export const release = (gen: JobGeneration, toolUseId: string): JobGeneration =>
   return { ...gen, active };
 };
 
-/** A4: an explicit rework supersedes the stale reservation of the same task instead of running two copies. */
-export const supersedeTask = (gen: JobGeneration, taskId: string): { generation: JobGeneration; superseded: string[] } => {
-  const superseded = Object.entries(gen.active)
-    .filter(([, r]) => r.task_id === taskId)
-    .map(([id]) => id);
-  const active = Object.assign(emptyMap<Reservation>(), gen.active);
-  for (const id of superseded) delete active[id];
-  return { generation: { ...gen, active }, superseded };
-};
-
 export const activeWorkers = (gen: JobGeneration): Reservation[] => Object.values(gen.active).filter((r) => r.role === 'worker');
+
+/**
+ * T1/T2: the tasks a writer is running right now. Deleting a reservation is not observing a termination, so this is
+ * the only thing that says a task is in flight; a task in it has no settled result, whatever its last receipt says.
+ */
+export const activeTaskIds = (gen: JobGeneration): Set<string> =>
+  new Set(activeWorkers(gen).flatMap((r) => (r.task_id === null ? [] : [r.task_id])));
+
+export const activePlanners = (gen: JobGeneration): Reservation[] => Object.values(gen.active).filter((r) => r.role === 'planner');
 
 export const activeDeliverables = (gen: JobGeneration, exceptTaskId: string | null): string[] =>
   activeWorkers(gen)

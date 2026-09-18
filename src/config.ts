@@ -15,7 +15,9 @@ export const DEFAULT_CONFIG: ConfigV5 = {
   resultConfidenceFloor: 0.8,
   plannerDefaultTier: 'deep',
   models: { fast: 'haiku', standard: 'sonnet', deep: 'opus', frontier: 'fable' },
-  maxParallelWorkers: 3,
+  // T5: one worker by default. A declared deliverable is a planner's claim, not an enforced write boundary, and no
+  // measurement yet shows parallel dispatch is faster here, so concurrency is opt-in rather than advertised.
+  maxParallelWorkers: 1,
   guardAllowTools: [],
 };
 
@@ -45,6 +47,7 @@ const V5_KEYS = new Set<string>([
   'guardAllowTools',
 ]);
 const LEGACY_MARKERS = ['uncertainTier', 'opusModel', 'frontierModel', 'confidenceFloor'];
+/** `resultConfidenceFloor` is a deprecated no-op (T11): it is still validated so a deployed file loads, and read by nothing. */
 const FLOOR_KEYS = ['admissionConfidenceFloor', 'routeConfidenceFloor', 'resultConfidenceFloor'] as const;
 
 export const MIGRATION_SAMPLE = `{
@@ -57,7 +60,7 @@ export const MIGRATION_SAMPLE = `{
   "resultConfidenceFloor": 0.8,
   "plannerDefaultTier": "deep",
   "models": { "fast": "haiku", "standard": "sonnet", "deep": "opus", "frontier": "fable" },
-  "maxParallelWorkers": 3,
+  "maxParallelWorkers": 1,
   "guardAllowTools": []
 }`;
 

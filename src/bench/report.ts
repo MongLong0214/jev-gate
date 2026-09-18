@@ -94,11 +94,12 @@ export interface GateV5Summary {
   planner_model_observed: Record<string, number>;
   plan_status: Record<string, number>;
   worker_calls: Record<string, WorkerTierRecord>;
-  receipts: { accept: number; incomplete: number; invalid: number; unknown: number };
+  receipts: { accept: number; incomplete: number; invalid: number; unknown: number; rework: number; replan: number };
   advisory: { accept: number; rework: number; replan: number; abstain: number; none: number };
   parallel: { reservation_overlap_max: number; observed_overlap_max: number };
-  jev_requests: { admission: JevPhaseUsage; allocation: JevPhaseUsage; result: JevPhaseUsage };
+  jev_requests: { admission: JevPhaseUsage; allocation: JevPhaseUsage; result: JevPhaseUsage; scope: JevPhaseUsage };
   outcomes: Record<string, number>;
+  influence: { judgments: number; changed_default: number };
   orphan_records: number;
   decision_mismatch: number;
 }
@@ -267,7 +268,7 @@ const jevPhase = (v: unknown): JevPhaseUsage => {
   return { attempts: int(src['attempts']), tokens: money(src['tokens']), tokens_known: int(src['tokens_known']), cost_usd: money(src['cost_usd']) };
 };
 
-const RECEIPT_KEYS = ['accept', 'incomplete', 'invalid', 'unknown'] as const;
+const RECEIPT_KEYS = ['accept', 'incomplete', 'invalid', 'unknown', 'rework', 'replan'] as const;
 const ADVISORY_KEYS = ['accept', 'rework', 'replan', 'abstain', 'none'] as const;
 
 /** Reads the schema-5 gate block defensively; a V3/V4 cell returns null so its observation stays unknown, not zero. */
@@ -277,6 +278,7 @@ export const gateV5Of = (gate: Record<string, unknown>): GateV5 | null => {
   const planner = isRecord(gate['planner_calls']) ? gate['planner_calls'] : {};
   const parallel = isRecord(gate['parallel']) ? gate['parallel'] : {};
   const jev = gate['jev_requests'];
+  const influence = isRecord(gate['influence']) ? gate['influence'] : {};
   const workers: Record<string, WorkerTierRecord> = {};
   if (isRecord(gate['worker_calls'])) {
     for (const [tier, raw] of Object.entries(gate['worker_calls'])) {
@@ -303,7 +305,8 @@ export const gateV5Of = (gate: Record<string, unknown>): GateV5 | null => {
     receipts: counters(gate['receipts'], RECEIPT_KEYS) as GateV5['receipts'],
     advisory: counters(gate['advisory'], ADVISORY_KEYS) as GateV5['advisory'],
     parallel: { reservation_overlap_max: int(parallel['reservation_overlap_max']), observed_overlap_max: int(parallel['observed_overlap_max']) },
-    jev_requests: { admission: jevPhase(jev['admission']), allocation: jevPhase(jev['allocation']), result: jevPhase(jev['result']) },
+    jev_requests: { admission: jevPhase(jev['admission']), allocation: jevPhase(jev['allocation']), result: jevPhase(jev['result']), scope: jevPhase(jev['scope']) },
+    influence: { judgments: int(influence['judgments']), changed_default: int(influence['changed_default']) },
     outcome: text(gate['outcome']),
     orphan_records: int(gate['orphan_records']),
     decision_mismatch: int(gate['decision_mismatch']),
@@ -328,11 +331,17 @@ const emptyGateV5Summary = (): GateV5Summary => ({
   planner_model_observed: {},
   plan_status: {},
   worker_calls: {},
-  receipts: { accept: 0, incomplete: 0, invalid: 0, unknown: 0 },
+  receipts: { accept: 0, incomplete: 0, invalid: 0, unknown: 0, rework: 0, replan: 0 },
   advisory: { accept: 0, rework: 0, replan: 0, abstain: 0, none: 0 },
   parallel: { reservation_overlap_max: 0, observed_overlap_max: 0 },
-  jev_requests: { admission: { attempts: 0, tokens: 0, tokens_known: 0, cost_usd: 0 }, allocation: { attempts: 0, tokens: 0, tokens_known: 0, cost_usd: 0 }, result: { attempts: 0, tokens: 0, tokens_known: 0, cost_usd: 0 } },
+  jev_requests: {
+    admission: { attempts: 0, tokens: 0, tokens_known: 0, cost_usd: 0 },
+    allocation: { attempts: 0, tokens: 0, tokens_known: 0, cost_usd: 0 },
+    result: { attempts: 0, tokens: 0, tokens_known: 0, cost_usd: 0 },
+    scope: { attempts: 0, tokens: 0, tokens_known: 0, cost_usd: 0 },
+  },
   outcomes: {},
+  influence: { judgments: 0, changed_default: 0 },
   orphan_records: 0,
   decision_mismatch: 0,
 });
@@ -376,7 +385,10 @@ export const summarizeGateV5 = (rows: RowView[]): GateV5Summary => {
     addJevPhase(out.jev_requests.admission, v.jev_requests.admission);
     addJevPhase(out.jev_requests.allocation, v.jev_requests.allocation);
     addJevPhase(out.jev_requests.result, v.jev_requests.result);
+    addJevPhase(out.jev_requests.scope, v.jev_requests.scope);
     if (v.outcome) addCounts(out.outcomes, { [v.outcome]: 1 });
+    out.influence.judgments += v.influence.judgments;
+    out.influence.changed_default += v.influence.changed_default;
     out.orphan_records += v.orphan_records;
     out.decision_mismatch += v.decision_mismatch;
   }
@@ -683,10 +695,13 @@ export const renderMarkdown = (r: Report): string => {
   L.push('', '## gate activity per arm', '', '| arm | Agent calls | owned | pinned | eligible attempted | patched | preserved (reasons) | skipped (codes) | attempt unknown | missing pre records | hint delivered | target/actual mismatches | validity problems |', '|---|---|---|---|---|---|---|---|---|---|---|---|---|');
   for (const a of r.arms) L.push(`| ${a.arm} | ${a.gate.agent_calls} | ${a.gate.owned_calls} | ${a.gate.pinned} | ${a.gate.eligible_attempted} | ${a.gate.patched} | ${a.gate.preserved} (${counts(a.gate.preserve_reasons)}) | ${counts(a.gate.skipped)} | ${a.gate.attempt_unknown} | ${a.gate.missing_pre_records} | ${a.gate.hint_delivered} | ${a.gate.target_model_mismatches} | ${a.validity_problems.length ? a.validity_problems.join('; ') : '-'} |`);
   L.push('', '## V5 gates per arm (observed)', '', ...v5Table(r.arms));
-  L.push('', '## Jev requests per arm (attempts / input tokens / est $ at the dated price)', '', '| arm | admission | allocation | result |', '|---|---|---|---|');
+  L.push('', '## Jev requests per arm (attempts / input tokens / est $ at the dated price)', '', '| arm | admission | allocation | result | scope | influence (changed/judged) |', '|---|---|---|---|---|---|');
   for (const a of r.arms) {
     const j = (p: JevPhaseUsage): string => `${p.attempts} / ${p.tokens === null ? `null (known ${p.tokens_known})` : p.tokens} / ${fmt(p.cost_usd, 6)}`;
-    L.push(`| ${a.arm} | ${j(a.gate_v5.jev_requests.admission)} | ${j(a.gate_v5.jev_requests.allocation)} | ${j(a.gate_v5.jev_requests.result)} |`);
+    const inf = a.gate_v5.influence;
+    L.push(
+      `| ${a.arm} | ${j(a.gate_v5.jev_requests.admission)} | ${j(a.gate_v5.jev_requests.allocation)} | ${j(a.gate_v5.jev_requests.result)} | ${j(a.gate_v5.jev_requests.scope)} | ${inf.changed_default}/${inf.judgments} |`,
+    );
   }
   L.push('', '## worker tier distribution (observed models and root effort)', '');
   for (const a of r.arms) {

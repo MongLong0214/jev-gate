@@ -15,8 +15,9 @@ node dist/bench/run.js --cases bench/v5/cases.mini-sql.json --out ~/jev-gate-run
 Host: Claude Code 2.1.276, macOS, Claude.ai subscription, headless, sequential. Job: `mini-sql` (an in-memory SQL query
 engine: lexer, parser, analyzer, executor with hash join and aggregates, index selection, formatter). Arm:
 `jev_forced_orchestration` — Sonnet main, plugin in `auto`, `JEV_GATE_EXPERIMENT_ADMISSION=orchestrated`, so Gate A is
-skipped and recorded as forced while Gate B and Gate C make real Jev calls. The run was stopped during this cell for
-budget reasons; the remaining three arms never executed.
+skipped and recorded as forced — **no real Gate A judgment ran in this cell** — while Gate B and Gate C (as they existed
+at the time of this run) made real Jev calls. The run was stopped during this cell for budget reasons; the remaining
+three arms never executed.
 
 ## Gate decisions (`gate-decisions.json`)
 
@@ -29,7 +30,11 @@ budget reasons; the remaining three arms never executed.
 | 5 | worker `t3` parser | standard | standard | 0.94 | `no_specific_basis` | patch → standard |
 | 6 | worker `t4` analyzer | standard | standard | 0.99 | `no_specific_basis` | patch → standard |
 
-Gate C produced three advisory verdicts, all `accept`.
+Worker dispatches: five (`t1`, `t2`, `t2` attempt 2, `t3`, `t4`). Four have a published completed result below;
+`t4`/analyzer's dispatch has none in this directory.
+
+Gate C produced three advisory verdicts, all `accept`; these are `worker_reported` and are not independent proof the
+code works.
 
 ## Receipts
 
@@ -40,16 +45,24 @@ Gate C produced three advisory verdicts, all `accept`.
 | t2 (attempt 2) | accept | `claude-sonnet-5` | 29.3 s | 25,925 |
 | t3 | accept | `claude-sonnet-5` | 239.6 s | 54,175 |
 
+`t2`'s `invalid` verdict was a report-format failure — `check_id` didn't match the required pattern — not a
+demonstrated implementation bug; whether the first attempt's implementation was actually correct is unknown. These
+durations and token counts are per dispatch, not whole-job time or cost; child token counts include cache-related
+entries and must not be read as output tokens or priced at one rate.
+
 ## What this shows
 
-Working: admission state, a strong planner returning a multi-task plan, marker-validated dispatch, the canonical contract
-reaching workers, code-owned acceptance rejecting one reply as invalid, the coordinator reworking it as `attempt=2`, and
-advisory result judgments — all on a real job on a real host.
+Working: forced-admission state (no real Gate A judgment ran), a strong planner returning a multi-task plan,
+marker-validated dispatch, the canonical contract reaching workers, code-owned acceptance rejecting one reply as
+invalid, the coordinator reworking it as `attempt=2`, and advisory result judgments — all on a real job on a real host.
 
-Not working as hoped: **every task routed to the same tier**. Nothing went down to `fast` and nothing went up, so routing
-changed no model in this cell. The upgrade gate reported `no_specific_basis` on all five worker calls, which is the
-policy behaving as specified and also evidence that the planner's task descriptions carried no concrete reason for a
-stronger tier. Two dispatches fell below the confidence floor and preserved the default.
+Not working as hoped: **every task routed to the same tier**. Nothing went down to `fast` and nothing went up. In the
+shipped policy `upgrade_basis` gates only `deep` and `frontier`, so `no_specific_basis` on all five worker calls does
+not explain why nothing went down to `fast` — the policy never required a basis to reach it. Why everything landed on
+`standard` has two explanations this cell cannot separate: the strong planner may already have resolved the design
+decisions that made `standard` appropriate, or the router may have been missing information it needed. The one input
+gap this run actually confirms: the formatter task's own previous `invalid` verdict was not carried into its
+`attempt=2` dispatch. Two dispatches fell below the confidence floor and preserved the default.
 
 Dispatch was serial, so the four worker durations add up rather than overlap; the parallel path remains unexercised.
 

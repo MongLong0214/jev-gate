@@ -62,23 +62,27 @@ your request
   └─ Gate A  Jev: one direct conversation, or a decomposed job?
        ├─ direct        → Sonnet works normally, no plan, no guard
        └─ orchestrated  → strong planner (Opus, or Fable when Jev says the uncertainty warrants it)
-                            reads the repository and returns tasks, interfaces, dependencies and required checks
+                            reads the repository and returns a specification per task: interfaces, data shapes,
+                            invariants, the files it inspected, and what it could not resolve
                           Sonnet coordinates: it dispatches ready tasks and integrates results, but cannot
                             implement the job itself while orchestration is active
                             └─ Gate B  Jev: which tier runs this task? fast · standard · deep · frontier
-                            └─ Gate C  Jev: does this result satisfy its contract? (advisory)
+                            └─ a deterministic check: does the reply report every required check as passed?
                           a broken planning assumption returns to the planner, not to improvisation
 ```
 
 **Sonnet runs the plan; it does not invent the important parts of it.** V4 left decomposition to the coordinator, and on
-four small jobs it never delegated at all ([results](#results)). V5 moves that decision to Jev and the planner.
+four small jobs it never delegated at all ([results](#results)). V5 moves that decision to Jev and the planner. The
+planner may add optional `spec`/`uncertainty` context per task; neither field is required by the schema.
 
 **Code owns acceptance.** A worker's result unlocks its dependents only when the reply reports every required check of
-its task contract as passed. Gate C can advise rework or replanning, but it can never turn an incomplete result into an
-accepted one.
+its task contract as passed. That is a deterministic check, not a Jev call — the normal path no longer makes a Gate C
+HTTP request. A `worker_reported` accept is not independent proof that the code works; historical Gate C `result_*`
+records from before this change are still read as history.
 
 **Uncertainty preserves the default.** A tie, a low confidence, an abstention or any HTTP failure keeps the call that was
-already going to happen. A tier above standard additionally requires a concrete upgrade basis in the task itself.
+already going to happen. A tier above standard additionally requires a concrete upgrade basis in the task itself —
+`fast` is below `standard` and is not gated by it.
 
 | Tier | Model | Reasoning effort | Used for |
 |---|---|---|---|
@@ -107,10 +111,16 @@ of the current plan revision whose dependencies are accepted, deliverables disjo
 contract within 64 KiB. The patch returns the complete original input with `subagent_type`, `model` and the appended
 contract changed; permissions, role and every other field survive.
 
-**Gate C** runs after a worker completes, in `auto`, only when the deterministic check already accepted the reply. Its
-verdict is recorded and delivered as context; it never changes readiness.
+**Gate C** (the Jev HTTP call that could tighten an already-accepted reply to `rework`/`replan`) is **removed from the
+normal path**. Acceptance is the deterministic required-check completeness judgment described above; it is the only
+thing that runs after a worker completes. Historical `result_intent`/`result_result`/advisory records written by Gate C
+before this change remain readable as history.
 
-Bounds per job: two planning attempts, two replans, two attempts per task, three parallel workers. Job state lives in one
+**The plan-time scope gate is removed.** Earlier revisions asked Jev one `one_task | split | under_specified` question
+per parsed plan before any worker ran; that call no longer happens.
+
+Bounds per job: two planning attempts, two replans, two attempts per task, one parallel worker by default
+(`maxParallelWorkers`, configurable — parallelism is not offered as a speed feature). Job state lives in one
 private file per session under `$XDG_STATE_HOME/jev-gate/jobs/` (0700/0600, atomic writes, superseded generations kept as
 history). Any failure — missing key, timeout (one deadline covering headers and body), HTTP 401/422/429/529, invalid
 response, oversized input — preserves the native call with a fixed stderr code. There are no retries.
@@ -148,7 +158,7 @@ the plugin is verified against; they are scoped to this command and are not writ
 |---|---|---|
 | `off` (default) | nothing: no admission, no guidance, no guard, no state or trace writes. Loaded agent definitions still exist — remove `--plugin-dir` and start a new session for the absent-plugin condition | 0 |
 | `native` | the same roles, guard and contracts; the main session decides whether to start planning and picks tiers by choosing a worker profile | 0 |
-| `auto` | Gate A on your request, Gate B on every planner and worker dispatch, Gate C on every worker result | ≤ 1 request per gate event |
+| `auto` | Gate A on your request, Gate B on every planner and worker dispatch; acceptance is a deterministic check, not a Jev call | ≤ 1 request per gate event |
 
 Optional config at `~/.config/jev-gate/config.json` (or `JEV_GATE_CONFIG`), `JEV_GATE_MODE` overrides the mode only, and
 `JEV_GATE_MODE=off` returns before any file is read:
@@ -156,14 +166,15 @@ Optional config at `~/.config/jev-gate/config.json` (or `JEV_GATE_CONFIG`), `JEV
 ```json
 { "version": 5, "mode": "off", "jevModel": "jev-1.13.0", "requestDeadlineMs": 3000,
   "admissionConfidenceFloor": 0.8, "routeConfidenceFloor": 0.8, "resultConfidenceFloor": 0.8,
-  "plannerDefaultTier": "deep", "maxParallelWorkers": 3, "guardAllowTools": [],
+  "plannerDefaultTier": "deep", "maxParallelWorkers": 1, "guardAllowTools": [],
   "models": { "fast": "haiku", "standard": "sonnet", "deep": "opus", "frontier": "fable" } }
 ```
 
 A V3 or V4 file is rejected with this sample and the plugin never rewrites yours — V5 sends more of your text to
 TypeSafe, so an old `auto` setting is not carried over silently. Model mappings choose what a patch proposes; they grant
-no account access. The three floors are uncalibrated policy values. `guardAllowTools` adds read-only tools your project
-needs during orchestration, for example an MCP reader.
+no account access. The three floors are uncalibrated policy values; `resultConfidenceFloor` is now a deprecated no-op
+kept only for config compatibility, since the normal path no longer makes the Gate C call it used to gate.
+`guardAllowTools` adds read-only tools your project needs during orchestration, for example an MCP reader.
 
 Job state lives in `$XDG_STATE_HOME/jev-gate/jobs/` (`~/.local/state/jev-gate/jobs/` by default), one file per session,
 containing your plan and task text. Delete the directory to remove it; a superseded job is kept as history inside its own
@@ -193,10 +204,13 @@ Recorded observations are in [`bench/results/v5-host-2026-09-18/`](bench/results
 | Not verified | Why it matters |
 |---|---|
 | **`haiku` ignores the requested `low` effort** | the child receives no effort value at all, so the fast tier's saving is the model price only |
-| Parallel dispatch of independent tasks | the planners we observed produced serial chains, so the wall-clock lever is untested |
+| Parallel dispatch of independent tasks | the planners we observed produced serial chains; the default is now one worker at a time and parallelism is not offered as a speed feature, so multi-worker behavior stays untested |
 | Real-Jev Gate B and Gate C in the host smoke | that session's admission returned `direct`, leaving no owned call; the partial run exercised them instead |
 | A root `Edit` denial and the terminal stop in a live session | verified at hook level only |
 | Any cost, runtime or quality benefit | see [Results](#results) |
+
+Gate C's HTTP call has since been removed from the normal path (see [How V5 works](#how-v5-works)); the Gate C row
+above describes the host-smoke session as recorded at the time, not the current design.
 
 `doctor` reports configuration and environment issues (auth method, model overrides, launch profile, key presence, the
 six role definitions and their effort fields). It is not proof that patching, effort or model access works on your host.
@@ -277,10 +291,14 @@ comparison were chosen `orchestrated` but at confidence **0.61 and 0.72**, below
 product policy would run them as one direct conversation. The floor was **not** lowered to change that; a diagnostic arm
 with forced orchestration was added instead. Data: [`bench/results/gate-a-calibration-2026-09-18.json`](bench/results/gate-a-calibration-2026-09-18.json).
 
-**Whole-job comparison: started, then stopped after one cell.** The run was cut for budget before any comparison arm
-executed, so **there is no V5 cost, runtime or quality result**. What the one completed cell shows is the mechanism
-working on a real job — admission, a planner producing a multi-task plan, four worker dispatches, one rework, three
-advisory result judgments — and one uncomfortable observation:
+**One condition, stopped mid-execution — not a completed comparison.** The run planned four arms on `mini-sql`; it was
+stopped for budget reasons partway through the first, `jev_forced_orchestration`, and the other three never started.
+That arm forces orchestration and skips Gate A (`JEV_GATE_EXPERIMENT_ADMISSION=orchestrated`), so **no real Gate A
+judgment ran in this cell** — admission is recorded as forced, not decided. So **there is no V5 cost, runtime or
+quality result.** What the completed part of the cell shows is the rest of the mechanism working on a real job: a
+planner producing a multi-task plan, five worker dispatches (`t1`, `t2`, `t2` attempt 2, `t3`, `t4`), of which four have
+a published completed result (`t4`/analyzer's dispatch has none in this directory), one reply reworked, and three
+advisory result judgments — plus one open question:
 
 | Worker task | Jev route | Confidence | Upgrade basis | Applied |
 |---|---|---:|---|---|
@@ -290,20 +308,25 @@ advisory result judgments — and one uncomfortable observation:
 | parser | standard | 0.94 | `no_specific_basis` | patch → standard |
 | analyzer | standard | 0.99 | `no_specific_basis` | patch → standard |
 
-**Every task routed to the same tier.** No task was sent down to `fast` and none was sent up, so in that cell routing
-changed nothing that could show up as a saving. `no_specific_basis` on every call is the upgrade gate working as
-specified, and it also says the planner's task descriptions carried no evidence that a harder tier was warranted. The
-first fix to try is the planner contract, not the floor. Evidence:
+**Every task routed to the same tier.** No task was sent down to `fast` and none was sent up. In the shipped policy
+`upgrade_basis` gates only `deep` and `frontier` — `fast` was already reachable, and `no_specific_basis` does not
+explain why nothing went down to it. Why everything landed on `standard` has two explanations this one cell cannot
+separate: the strong planner may already have resolved the design decisions that made `standard` appropriate, or the
+router may have been missing information it needed. The one input gap this run actually confirms: the formatter task's
+own previous `invalid` verdict was not carried into its `attempt=2` dispatch. That verdict itself was a report-format
+failure (`check_id` didn't match the required pattern) — not a demonstrated implementation bug; whether the first
+attempt's implementation was actually correct is unknown. The three Gate C verdicts recorded `accept`, but a
+`worker_reported` accept is not independent proof the code works. Evidence:
 [`bench/results/v5-run-1-partial-2026-09-18/`](bench/results/v5-run-1-partial-2026-09-18/).
 
 Two defects the host verification caught before release: the benchmark runner inherited the launching session's
 `CLAUDE_*` environment (so a measured session could silently run at the parent's reasoning effort), and the hook dropped
 the host's effort field because it arrives as an object. Both are fixed; any earlier effort observation is invalid.
 
-**Next.** The upgrade gate answered `no_specific_basis` on every call, so the first change is the planner contract: each
-task must carry the concrete unresolved constraints that would justify a stronger tier, and the fast tier needs a task
-shaped so that a cheap model can be trusted with it. Then the comparison arms run. Details in
-[HANDOFF.md](HANDOFF.md) and [#33](https://github.com/MongLong0214/jev-gate/issues/33).
+**Next.** [HANDOFF.md](HANDOFF.md) has the fix order — state correctness in the plan/dispatch machinery first, then the
+bench's own observation and configuration accuracy, then carrying a task's own previous failure forward and keeping a
+report-format fix separate from an implementation rework. Comparison arms run only after that, as a small experiment the
+owner explicitly approves.
 
 <details>
 <summary><strong>What would change the picture</strong></summary>
@@ -332,10 +355,14 @@ Execute refuses to start without a verified Claude.ai subscription login, with A
 
 Claude runs through its existing official login. `jev-gate` does not implement OAuth, extract or refresh tokens, or require `WORKER_API_KEY`, `FRONTIER_API_KEY`, or an Anthropic API connection. Jev is a separate hosted service and needs **`TYPESAFE_API_KEY`**; its charges and limits are separate from your Claude subscription.
 
-**In `auto` mode V5 sends three kinds of text to TypeSafe**: your request at admission, the composed task contract with
-the relevant predecessor summaries at each planner or worker dispatch, and the worker's structured reply at the result
-judgment, each with fixed evaluation criteria. That text can include source excerpts, file names, and earlier user
-constraints — more than V4 sent, which is why a V4 configuration is rejected rather than reused. The hook does not independently upload your repository, transcript or environment, but text supplied by the caller can contain sensitive information. **Only enable `auto` for data you are authorized to send.** There is no automatic secret-scrubbing or zero-retention guarantee. `native` and `off` send nothing.
+**In `auto` mode V5 sends two kinds of text to TypeSafe in the normal path**: your request at admission, and the
+composed task contract with the relevant predecessor summaries at each planner or worker dispatch, each with fixed
+evaluation criteria. (Earlier revisions also sent the worker's structured reply for a Gate C result judgment; that
+HTTP call has been removed from the normal path — see [How V5 works](#how-v5-works).) That text can include source
+excerpts, file names, and earlier user constraints — more than V4 sent, which is why a V4 configuration is rejected
+rather than reused. The hook does not independently upload your repository, transcript or environment, but text
+supplied by the caller can contain sensitive information. **Only enable `auto` for data you are authorized to send.**
+There is no automatic secret-scrubbing or zero-retention guarantee. `native` and `off` send nothing.
 
 Optional local traces (`JEV_GATE_TRACE_DIR`) hold per-phase JSON with prompt lengths and hashes, decisions, Jev usage and the child's reported model; they never contain the key or the prompt body, are written 0700/0600, and are not uploaded. Delete the directory to remove them.
 

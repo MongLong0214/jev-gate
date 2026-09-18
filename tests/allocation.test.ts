@@ -1,31 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  buildPlannerRouteRequest,
-  buildResultRequest,
-  buildWorkerRouteRequest,
-  decidePlannerRoute,
-  decideResult,
-  decideWorkerRoute,
-  PLANNER_TIER_QUESTION,
-  RESULT_QUESTION,
-  ROUTE_QUESTION,
-  UPGRADE_BASIS_QUESTION,
-} from '../src/allocation.js';
+import { buildPlannerRouteRequest, buildWorkerRouteRequest, decidePlannerRoute, decideWorkerRoute, PLANNER_TIER_QUESTION, ROUTE_QUESTION, UPGRADE_BASIS_QUESTION } from '../src/allocation.js';
 import { DEFAULT_CONFIG } from '../src/config.js';
-import { contractHash } from '../src/plan.js';
-import {
-  PLANNER_ROUTE_ANSWERS,
-  RESULT_VERDICTS,
-  ROUTE_ANSWERS,
-  UPGRADE_BASES,
-  type PlannedTask,
-  type PlannerRouteAnswer,
-  type ResultVerdict,
-  type RouteAnswer,
-  type UpgradeBasis,
-  type WorkerReply,
-} from '../src/types.js';
+import { contractHash, type PriorAttemptSummary } from '../src/plan.js';
+import { PLANNER_ROUTE_ANSWERS, ROUTE_ANSWERS, UPGRADE_BASES, type PlannedTask, type PlannerRouteAnswer, type RouteAnswer, type UpgradeBasis } from '../src/types.js';
 
 const pick = <K extends string>(keys: readonly K[], winner: K, p = 0.9, confidence = p): Record<string, unknown> => ({
   type: 'choice',
@@ -36,7 +14,6 @@ const pick = <K extends string>(keys: readonly K[], winner: K, p = 0.9, confiden
 const route = (winner: RouteAnswer, p?: number, c?: number): Record<string, unknown> => pick(ROUTE_ANSWERS, winner, p, c);
 const basis = (winner: UpgradeBasis, p?: number, c?: number): Record<string, unknown> => pick(UPGRADE_BASES, winner, p, c);
 const planning = (winner: PlannerRouteAnswer, p?: number, c?: number): Record<string, unknown> => pick(PLANNER_ROUTE_ANSWERS, winner, p, c);
-const result = (winner: ResultVerdict, p?: number, c?: number): Record<string, unknown> => pick(RESULT_VERDICTS, winner, p, c);
 
 const bare = {
   id: 't1',
@@ -47,16 +24,33 @@ const bare = {
   deliverables: ['src/store.ts'],
   checks: [{ id: 'c1', description: 'unit tests pass', required: true, command: 'npm test' }],
   replan_if: [],
+  spec: { interfaces: ['createStore(): Store'], data_shapes: ['Store = { get(key: string): string | null }'], invariants: ['reads never throw'], files: ['src/store-types.ts'] },
+  uncertainty: { unresolved: [], interacts_with: [], prior_failure: null },
+  fully_specified: false,
 };
 const task: PlannedTask = { ...bare, contract_hash: contractHash(bare) };
-const reply: WorkerReply = { status: 'done', summary: 's', changed_files: ['src/store.ts'], interfaces: [], checks: [{ check_id: 'c1', result: 'pass', note: '' }], blockers: [] };
+const withEvidence = (over: Partial<PlannedTask>): PlannedTask => {
+  const raw = { ...bare, ...over };
+  return { ...raw, contract_hash: contractHash(raw) };
+};
 
 describe('requests', () => {
   it('builds the worker request from fields, sending the contract content once rather than twice', () => {
     const original = '[JEV_TASK rev=1 id=t1]\nStart from the existing module and keep the tests green.';
     const request = buildWorkerRouteRequest(task, ['global'], [{ task_id: 't0', summary: 'done', interfaces: ['f()'] }], original, 'deep', DEFAULT_CONFIG);
     expect(Object.keys(request.questions)).toEqual(['route', 'upgrade_basis']);
-    expect(Object.keys(request.state)).toEqual(['role', 'default_tier', 'called_tier', 'task', 'global_constraints', 'predecessor_results', 'original_prompt', 'tier_profiles']);
+    expect(Object.keys(request.state)).toEqual([
+      'role',
+      'default_tier',
+      'called_tier',
+      'task',
+      'global_constraints',
+      'predecessor_results',
+      'prior_attempt',
+      'original_prompt',
+      'tier_profiles',
+    ]);
+    expect(request.state.prior_attempt).toBeNull();
     expect(request.state).toMatchObject({ role: 'worker', default_tier: 'standard', called_tier: 'deep', original_prompt: original, global_constraints: ['global'] });
     // The canonical block is built from the fields, so it must not also be inside original_prompt.
     expect(request.state.original_prompt).not.toContain('[Jev Gate task contract]');
@@ -70,15 +64,19 @@ describe('requests', () => {
     expect(UPGRADE_BASIS_QUESTION.instructions).toContain('network, authentication, permission or missing-dependency failure');
   });
 
-  it('builds the planner request with the configured default tier and the result request with the reply', () => {
+  it('builds the planner request with the configured default tier', () => {
     const planner = buildPlannerRouteRequest('plan this', { ...DEFAULT_CONFIG, plannerDefaultTier: 'frontier' });
     expect(planner.state).toMatchObject({ role: 'planner', default_tier: 'frontier', request: 'plan this' });
     expect(Object.keys(planner.questions)).toEqual(['planning_tier']);
     expect(Object.keys(PLANNER_TIER_QUESTION.criteria)).toEqual([...PLANNER_ROUTE_ANSWERS]);
-    const judged = buildResultRequest(task, reply, DEFAULT_CONFIG);
-    expect(Object.keys(judged.questions)).toEqual(['result']);
-    expect(judged.state).toEqual({ task, reply });
-    expect(Object.keys(RESULT_QUESTION.criteria)).toEqual([...RESULT_VERDICTS]);
+  });
+
+  /** T11: the result gate is gone from the module, so nothing here can build a Gate C request at all. */
+  it('R14: exports no result-gate question, request or decision', async () => {
+    const allocation = (await import('../src/allocation.js')) as Record<string, unknown>;
+    for (const name of ['RESULT_QUESTION', 'buildResultRequest', 'decideResult', 'SCOPE_QUESTION', 'buildPlanScopeRequest', 'decidePlanScope']) {
+      expect(allocation[name], name).toBeUndefined();
+    }
   });
 });
 
@@ -115,6 +113,72 @@ describe('decideWorkerRoute', () => {
   });
 });
 
+describe('routing evidence reaches the route question (#33)', () => {
+  const unresolvedTask = withEvidence({
+    uncertainty: { unresolved: ['whether writes go through the cache'], interacts_with: ['the persistence layer', 'the public API'], prior_failure: 'attempt 1 lost the ordering invariant' },
+  });
+  const mechanicalTask = withEvidence({ fully_specified: true, uncertainty: { unresolved: [], interacts_with: [], prior_failure: null } });
+
+  it('sends uncertainty and fully_specified inside the task, once', () => {
+    const request = buildWorkerRouteRequest(unresolvedTask, [], [], 'p', 'standard', DEFAULT_CONFIG);
+    expect(request.state.task.uncertainty).toEqual(unresolvedTask.uncertainty);
+    expect(request.state.task.fully_specified).toBe(false);
+    expect(JSON.stringify(request).split('the ordering invariant')).toHaveLength(2);
+    expect(ROUTE_QUESTION.criteria.fast).toContain('fully specified');
+    expect(ROUTE_QUESTION.criteria.deep).toContain('residual uncertainty');
+    expect(ROUTE_QUESTION.criteria.frontier).toContain('previous attempt');
+  });
+
+  it('upgrades an evidence-bearing task when Jev answers deep or frontier on a supported basis', () => {
+    expect(decideWorkerRoute({ route: route('deep'), upgrade_basis: basis('unresolved_contract_reasoning') }, 0.8, 'standard')).toMatchObject({ action: 'patch', tier: 'deep' });
+    expect(decideWorkerRoute({ route: route('frontier'), upgrade_basis: basis('observed_reasoning_failure') }, 0.8, 'standard')).toMatchObject({ action: 'patch', tier: 'frontier' });
+  });
+
+  it('routes a fully specified task to fast when Jev answers fast with sufficient confidence', () => {
+    expect(buildWorkerRouteRequest(mechanicalTask, [], [], 'p', 'standard', DEFAULT_CONFIG).state.task.fully_specified).toBe(true);
+    expect(decideWorkerRoute({ route: route('fast'), upgrade_basis: basis('no_specific_basis') }, 0.8, 'standard')).toMatchObject({ action: 'patch', tier: 'fast', reason: null });
+    expect(decideWorkerRoute({ route: route('fast', 0.9, 0.79), upgrade_basis: basis('no_specific_basis') }, 0.8, 'standard')).toMatchObject({ action: 'preserve', reason: 'route_low_confidence' });
+  });
+
+  it('carries a failed attempt of the same task into its rework, so an observed failure is reachable', () => {
+    const prior: PriorAttemptSummary = {
+      attempt: 1,
+      verdict: 'incomplete',
+      verdict_reason: 'required check c1 reported fail',
+      status: 'done',
+      summary: 'ordering wrong',
+      blockers: [],
+      failed_checks: ['c1'],
+      observed_model_confirmed: true,
+      provenance: 'worker_reported',
+    };
+    const first = buildWorkerRouteRequest(mechanicalTask, [], [], 'p', 'standard', DEFAULT_CONFIG);
+    const second = buildWorkerRouteRequest(mechanicalTask, [], [], 'p', 'standard', DEFAULT_CONFIG, prior);
+    expect(first.state.prior_attempt).toBeNull();
+    expect(second.state.prior_attempt).toMatchObject({ attempt: 1, failed_checks: ['c1'] });
+    expect(JSON.stringify(second).length).toBeGreaterThan(JSON.stringify(first).length);
+  });
+
+  it('does not weaken the gate: evidence present, deep still needs a basis', () => {
+    expect(decideWorkerRoute({ route: route('deep'), upgrade_basis: basis('no_specific_basis') }, 0.8, 'standard')).toMatchObject({ action: 'preserve', tier: 'standard', reason: 'basis_absent' });
+  });
+
+  /** Document §7: an absent field is unknown, not a claim that the work is mechanical. */
+  it('sends a task with no evidence fields as it is, and says so in the question text', () => {
+    const bare: PlannedTask = { ...task };
+    delete bare.spec;
+    delete bare.uncertainty;
+    delete bare.fully_specified;
+    const request = buildWorkerRouteRequest(bare, [], [], 'p', 'standard', DEFAULT_CONFIG);
+    expect(request.state.task).not.toHaveProperty('spec');
+    expect(request.state.task).not.toHaveProperty('uncertainty');
+    expect(request.state.task).not.toHaveProperty('fully_specified');
+    expect(ROUTE_QUESTION.instructions).toContain('absent evidence is unknown, not a claim that the work is mechanical');
+    // T9/T10: a malformed report is not evidence that a stronger model is needed.
+    expect(UPGRADE_BASIS_QUESTION.instructions).toContain('the format of its report');
+  });
+});
+
 describe('decidePlannerRoute', () => {
   it('upgrades to frontier only on a confident unique answer, and otherwise patches the configured default', () => {
     expect(decidePlannerRoute({ planning_tier: planning('frontier') }, 0.8, 'deep')).toMatchObject({ action: 'patch', tier: 'frontier', reason: null });
@@ -122,14 +186,5 @@ describe('decidePlannerRoute', () => {
     expect(decidePlannerRoute({ planning_tier: planning('abstain') }, 0.8, 'frontier')).toMatchObject({ action: 'patch', tier: 'frontier', reason: 'route_abstain' });
     expect(decidePlannerRoute({ planning_tier: planning('frontier', 0.82, 0.77) }, 0.8, 'deep')).toMatchObject({ tier: 'deep', reason: 'route_low_confidence' });
     expect(decidePlannerRoute({}, 0.8, 'deep')).toMatchObject({ tier: 'deep', reason: 'route_invalid' });
-  });
-});
-
-describe('decideResult', () => {
-  it('returns a verdict only when it is valid, unique and confident', () => {
-    expect(decideResult({ result: result('rework') }, 0.8)).toMatchObject({ verdict: 'rework', reason: null });
-    expect(decideResult({ result: result('abstain') }, 0.8)).toMatchObject({ verdict: null, reason: 'result_abstain' });
-    expect(decideResult({ result: result('replan', 0.82, 0.77) }, 0.8)).toMatchObject({ verdict: null, reason: 'result_low_confidence' });
-    expect(decideResult({}, 0.8)).toMatchObject({ verdict: null, reason: 'result_invalid' });
   });
 });
