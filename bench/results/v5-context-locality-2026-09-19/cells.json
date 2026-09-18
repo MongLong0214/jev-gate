@@ -1,0 +1,116 @@
+[
+  {
+    "job": "wide-validators",
+    "arm": "sonnet_native",
+    "turns": 40,
+    "cost": 0.3147926,
+    "peak_ctx": 55718,
+    "agent_calls": 0,
+    "admission": {
+      "attempted": false,
+      "known_not_sent": false,
+      "forced": false,
+      "decided": null,
+      "choice": null,
+      "confidence": null,
+      "decision": null,
+      "reason": null
+    },
+    "jev_cost": 0
+  },
+  {
+    "job": "wide-validators",
+    "arm": "jev_hierarchy",
+    "turns": 42,
+    "cost": 0.32854279999999997,
+    "peak_ctx": 57838,
+    "agent_calls": 0,
+    "admission": {
+      "attempted": true,
+      "known_not_sent": false,
+      "forced": false,
+      "decided": false,
+      "choice": "direct",
+      "confidence": 0.39,
+      "decision": "direct",
+      "reason": "admission_low_confidence"
+    },
+    "jev_cost": 3.0786000000000006e-05
+  },
+  {
+    "job": "wide-validators",
+    "arm": "jev_forced_orchestration",
+    "turns": 6,
+    "cost": 0.8888281,
+    "peak_ctx": 49434,
+    "agent_calls": 2,
+    "admission": {
+      "attempted": false,
+      "known_not_sent": true,
+      "forced": true,
+      "decided": false,
+      "choice": null,
+      "confidence": null,
+      "decision": "orchestrated",
+      "reason": "admission_forced"
+    },
+    "jev_cost": 0.000176946
+  },
+  {
+    "job": "wide-validators-loaded",
+    "arm": "sonnet_native",
+    "turns": 74,
+    "cost": 6.2851420000000005,
+    "peak_ctx": 406218,
+    "agent_calls": 0,
+    "admission": {
+      "attempted": false,
+      "known_not_sent": false,
+      "forced": false,
+      "decided": null,
+      "choice": null,
+      "confidence": null,
+      "decision": null,
+      "reason": null
+    },
+    "jev_cost": 0
+  },
+  {
+    "job": "wide-validators-loaded",
+    "arm": "jev_hierarchy",
+    "turns": 71,
+    "cost": 5.144449999999999,
+    "peak_ctx": 407718,
+    "agent_calls": 0,
+    "admission": {
+      "attempted": true,
+      "known_not_sent": false,
+      "forced": false,
+      "decided": false,
+      "choice": "direct",
+      "confidence": 0.5,
+      "decision": "direct",
+      "reason": "admission_low_confidence"
+    },
+    "jev_cost": 3.5154e-05
+  },
+  {
+    "job": "wide-validators-loaded",
+    "arm": "jev_forced_orchestration",
+    "turns": 8,
+    "cost": 2.6921986999999996,
+    "peak_ctx": 127216,
+    "agent_calls": 7,
+    "admission": {
+      "attempted": false,
+      "known_not_sent": true,
+      "forced": true,
+      "decided": false,
+      "choice": null,
+      "confidence": null,
+      "decision": "orchestrated",
+      "reason": "admission_forced"
+    },
+    "jev_cost": 0.000670236
+  }
+]
