@@ -19,6 +19,12 @@ import { estimateJevCostUsd, modelFamily, parseModelUsage, safeSum, tokenCount, 
  * reading it.
  */
 export type Arm = 'sonnet_native' | 'frontier_native' | 'native_hierarchy' | 'orchestrated_control' | 'frontier_orchestrated' | 'jev_hierarchy' | 'jev_forced_orchestration';
+/** The only variables a measured session inherits; everything else, including the parent's CLAUDE_* settings, is dropped. */
+export const KEEP_ENV: readonly string[] = ['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'LC_ALL', 'TMPDIR', 'TERM', 'TZ', 'SSL_CERT_FILE', 'NODE_EXTRA_CA_CERTS', 'TYPESAFE_API_KEY'];
+/** FAKE_CLAUDE_* is the test double's control channel; a real session has none, so passing it through changes nothing. */
+const KEEP_ENV_PREFIX = 'FAKE_CLAUDE_';
+const keepEnvVar = (key: string): boolean => KEEP_ENV.includes(key) || key.startsWith(KEEP_ENV_PREFIX);
+
 export const ALL_ARMS: readonly Arm[] = ['sonnet_native', 'frontier_native', 'native_hierarchy', 'orchestrated_control', 'frontier_orchestrated', 'jev_hierarchy', 'jev_forced_orchestration'];
 
 export interface ArmSpec {
@@ -161,7 +167,7 @@ export interface CellRecord {
   started: boolean;
   not_started_reason: string | null;
   setup: Array<{ argv: string[]; exit: number | null; ms: number; error: string | null }>;
-  spawn: { argv: string[]; cwd: string; env_added: string[] } | null;
+  spawn: { argv: string[]; cwd: string; env_added: string[]; env_stripped: string[] } | null;
   elapsed_ms: number | null;
   exit_code: number | null;
   signal: string | null;
@@ -864,8 +870,14 @@ const runClaudeCell = (cs: CodingCase, spec: ArmSpec, o: Options, pluginDir: str
     const work = join(cellDir, 'work');
     const traceDir = join(cellDir, 'trace');
     const stateDir = join(cellDir, 'state');
-    const env: NodeJS.ProcessEnv = { ...process.env, CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' };
-    for (const k of ['JEV_GATE_MODE', 'JEV_GATE_TRACE_DIR', 'JEV_GATE_STATE_DIR', 'JEV_GATE_EXPERIMENT_ALLOCATION', 'JEV_GATE_EXPERIMENT_ADMISSION']) delete env[k];
+    // Host finding (v5-host-1, 2026-09-18): the launching Claude Code session exports CLAUDE_* variables — effort,
+    // output-token limits, agent teams, messaging sockets — and inheriting them would silently change every measured
+    // session. Only the variables this runner sets, plus the keys a session genuinely needs, reach the child.
+    const env: NodeJS.ProcessEnv = {};
+    for (const [k, v] of Object.entries(process.env)) if (keepEnvVar(k) && v !== undefined) env[k] = v;
+    const strippedEnv = Object.keys(process.env).filter((k) => !keepEnvVar(k) && (k.startsWith('CLAUDE') || k.startsWith('JEV_GATE_'))).sort();
+    env['CLAUDE_CODE_FORK_SUBAGENT'] = '0';
+    env['CLAUDE_CODE_DISABLE_BACKGROUND_TASKS'] = '1';
     const envAdded = ['CLAUDE_CODE_FORK_SUBAGENT', 'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS'];
     if (spec.plugin && spec.mode) {
       env['JEV_GATE_MODE'] = spec.mode;
@@ -886,7 +898,7 @@ const runClaudeCell = (cs: CodingCase, spec: ArmSpec, o: Options, pluginDir: str
     }
     const argv = [o.claude, '-p', '--model', spec.rootModel, '--input-format', 'text', '--output-format', 'stream-json', '--verbose', '--max-turns', String(o.maxTurns), '--permission-mode', o.permissionMode, '--allowedTools', o.allowedTools, '--setting-sources', o.settingSources, '--no-session-persistence'];
     if (spec.plugin) argv.push('--plugin-dir', pluginDir);
-    cell.spawn = { argv, cwd: work, env_added: envAdded };
+    cell.spawn = { argv, cwd: work, env_added: envAdded, env_stripped: strippedEnv };
     cell.dispatch.intent_at = new Date().toISOString();
     writeJsonAtomic(join(cellDir, 'cell.json'), cell);
     const streamOut = createWriteStream(join(cellDir, 'stream.jsonl'));

@@ -887,3 +887,14 @@ describe('state recovery', () => {
     expect(state(env).current).toMatchObject({ prompt_id: null, shape: 'direct' });
   });
 });
+
+describe('host-observed input shapes', () => {
+  it('reads the object-shaped effort the host actually sends, so the receipt records a root effort', async () => {
+    const env = makeEnv();
+    const fetchImpl = fakeJev();
+    await seedPlanned(env, PLAN_REPLY, fetchImpl);
+    await run(env, preEvent('Agent', agentInput()), fetchImpl);
+    await run(env, workerPost('toolu_1', workerReply(), { effort: { level: 'xhigh' } }), fetchImpl);
+    expect(state(env).current.receipts[0]).toMatchObject({ task_id: 't1', root_effort: 'xhigh' });
+  });
+});

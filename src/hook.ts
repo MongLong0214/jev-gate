@@ -132,12 +132,16 @@ const parseInput = (text: string): HookInput | { code: ErrorCode } => {
   }
   if (!isRecord(parsed) || typeof parsed['hook_event_name'] !== 'string') return { code: 'stdin_invalid_json' };
   const out: HookInput = { hook_event_name: parsed['hook_event_name'] as string };
-  for (const k of ['session_id', 'prompt_id', 'cwd', 'permission_mode', 'agent_id', 'agent_type', 'effort', 'prompt', 'tool_name', 'tool_use_id', 'error'] as const) {
+  for (const k of ['session_id', 'prompt_id', 'cwd', 'permission_mode', 'agent_id', 'agent_type', 'prompt', 'tool_name', 'tool_use_id', 'error'] as const) {
     const v = str(parsed[k]);
     if (v !== null) out[k] = v;
   }
   if ('tool_input' in parsed) out.tool_input = parsed['tool_input'];
   if ('tool_response' in parsed) out.tool_response = parsed['tool_response'];
+  // Host finding (v5-host-1): effort arrives as { level: "high" }, not a string; a string form is accepted too.
+  const effort = parsed['effort'];
+  if (typeof effort === 'string') out.effort = effort;
+  else if (isRecord(effort) && typeof effort['level'] === 'string') out.effort = effort['level'];
   if (typeof parsed['is_interrupt'] === 'boolean') out.is_interrupt = parsed['is_interrupt'];
   const d = num(parsed['duration_ms']);
   if (d !== null) out.duration_ms = d;
