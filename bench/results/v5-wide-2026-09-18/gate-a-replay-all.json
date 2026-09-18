@@ -1,0 +1,1649 @@
+[
+  {
+    "project": "-Users-isaac",
+    "len": 197,
+    "choice": "needs_context",
+    "confidence": 0.33,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac",
+    "len": 28,
+    "choice": "direct",
+    "confidence": 0.5,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac",
+    "len": 29,
+    "choice": "direct",
+    "confidence": 0.34,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-agent-operator-score",
+    "len": 234,
+    "choice": "direct",
+    "confidence": 0.94,
+    "shape": "direct",
+    "decided": true,
+    "reason": null
+  },
+  {
+    "project": "-Users-isaac-projects-agent-operator-score",
+    "len": 2124,
+    "choice": "needs_context",
+    "confidence": 0.26,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-agent-operator-score",
+    "len": 54,
+    "choice": "orchestrated",
+    "confidence": 0.22,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-agent-operator-score",
+    "len": 690,
+    "choice": "needs_context",
+    "confidence": 0.36,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-agent-operator-score",
+    "len": 491,
+    "choice": "direct",
+    "confidence": 0.62,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-agent-operator-score",
+    "len": 290,
+    "choice": "orchestrated",
+    "confidence": 0.45,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-agent-operator-score",
+    "len": 418,
+    "choice": "orchestrated",
+    "confidence": 0.21,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-agent-operator-score",
+    "len": 469,
+    "choice": "orchestrated",
+    "confidence": 0.36,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-agent-operator-score",
+    "len": 599,
+    "choice": "orchestrated",
+    "confidence": 0.57,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-agent-operator-score",
+    "len": 810,
+    "choice": "orchestrated",
+    "confidence": 0.29,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-agent-operator-score",
+    "len": 1522,
+    "choice": "needs_context",
+    "confidence": 0.21,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-agent-operator-score",
+    "len": 711,
+    "choice": "needs_context",
+    "confidence": 0.34,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-agent-operator-score",
+    "len": 987,
+    "choice": "needs_context",
+    "confidence": 0.34,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-agent-operator-score",
+    "len": 504,
+    "choice": "needs_context",
+    "confidence": 0.69,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-agent-operator-score",
+    "len": 515,
+    "choice": "needs_context",
+    "confidence": 0.14,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-agent-operator-score",
+    "len": 49,
+    "choice": "direct",
+    "confidence": 0.23,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-agent-operator-score",
+    "len": 19,
+    "choice": "needs_context",
+    "confidence": 0.4,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-agent-operator-score",
+    "len": 178,
+    "choice": "direct",
+    "confidence": 0.86,
+    "shape": "direct",
+    "decided": true,
+    "reason": null
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 291,
+    "choice": "orchestrated",
+    "confidence": 0.38,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 97,
+    "choice": "orchestrated",
+    "confidence": 0.26,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 33,
+    "choice": "needs_context",
+    "confidence": 0.75,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 41,
+    "choice": "direct",
+    "confidence": 0.33,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 20,
+    "choice": "needs_context",
+    "confidence": 0.49,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 22,
+    "choice": "direct",
+    "confidence": 0.7,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 28,
+    "choice": "direct",
+    "confidence": 0.39,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 35,
+    "choice": "needs_context",
+    "confidence": 0.39,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_invalid"
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 23,
+    "choice": "needs_context",
+    "confidence": 0.33,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 33,
+    "choice": "needs_context",
+    "confidence": 0.52,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 274,
+    "choice": "direct",
+    "confidence": 0.64,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 1282,
+    "choice": "direct",
+    "confidence": 0.39,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 82,
+    "choice": "direct",
+    "confidence": 0.2,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 764,
+    "choice": "orchestrated",
+    "confidence": 0.09,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 2445,
+    "choice": "needs_context",
+    "confidence": 0.18,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 24,
+    "choice": "needs_context",
+    "confidence": 0.58,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 20,
+    "choice": "needs_context",
+    "confidence": 0.37,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 34,
+    "choice": "needs_context",
+    "confidence": 0.62,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 57,
+    "choice": "orchestrated",
+    "confidence": 0.68,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 176,
+    "choice": "direct",
+    "confidence": 0.63,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 58,
+    "choice": "direct",
+    "confidence": 0.49,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 353,
+    "choice": "needs_context",
+    "confidence": 0.61,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 594,
+    "choice": "direct",
+    "confidence": 0.57,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 532,
+    "choice": "direct",
+    "confidence": 0.84,
+    "shape": "direct",
+    "decided": true,
+    "reason": null
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 78,
+    "choice": "needs_context",
+    "confidence": 0.49,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 15,
+    "choice": "direct",
+    "confidence": 0.95,
+    "shape": "direct",
+    "decided": true,
+    "reason": null
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 19,
+    "choice": "direct",
+    "confidence": 0.62,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 142,
+    "choice": "abstain",
+    "confidence": 0.17,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_abstain"
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 37,
+    "choice": "needs_context",
+    "confidence": 0.46,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 27,
+    "choice": "needs_context",
+    "confidence": 0.54,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 30,
+    "choice": "direct",
+    "confidence": 0.86,
+    "shape": "direct",
+    "decided": true,
+    "reason": null
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 104,
+    "choice": "direct",
+    "confidence": 0.42,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 126,
+    "choice": "orchestrated",
+    "confidence": 0.47,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 444,
+    "choice": "direct",
+    "confidence": 0.26,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 344,
+    "choice": "orchestrated",
+    "confidence": 0.17,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 34,
+    "choice": "needs_context",
+    "confidence": 0.56,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 744,
+    "choice": "direct",
+    "confidence": 0.24,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 942,
+    "choice": "direct",
+    "confidence": 0.3,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 515,
+    "choice": "direct",
+    "confidence": 0.28,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 18,
+    "choice": "needs_context",
+    "confidence": 0.31,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 356,
+    "choice": "orchestrated",
+    "confidence": 0.23,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 207,
+    "choice": "needs_context",
+    "confidence": 0.36,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 71,
+    "choice": "direct",
+    "confidence": 0.31,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 887,
+    "choice": "direct",
+    "confidence": 0.54,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 684,
+    "choice": "needs_context",
+    "confidence": 0.24,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 1262,
+    "choice": "direct",
+    "confidence": 0.28,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 30,
+    "choice": "needs_context",
+    "confidence": 0.55,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 30,
+    "choice": "direct",
+    "confidence": 0.65,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 59,
+    "choice": "needs_context",
+    "confidence": 0.28,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 655,
+    "choice": "orchestrated",
+    "confidence": 0.18,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 1862,
+    "choice": "direct",
+    "confidence": 0.39,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 341,
+    "choice": "direct",
+    "confidence": 0.22,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 42,
+    "choice": "abstain",
+    "confidence": 0.43,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_abstain"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 55,
+    "choice": "needs_context",
+    "confidence": 0.23,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 159,
+    "choice": "direct",
+    "confidence": 0.33,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 24,
+    "choice": "direct",
+    "confidence": 0.32,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 17,
+    "choice": "direct",
+    "confidence": 0.64,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 107,
+    "choice": "direct",
+    "confidence": 0.36,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 706,
+    "choice": "needs_context",
+    "confidence": 0.31,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 323,
+    "choice": "direct",
+    "confidence": 0.44,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 905,
+    "choice": "direct",
+    "confidence": 0.17,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 388,
+    "choice": "direct",
+    "confidence": 0.32,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 278,
+    "choice": "direct",
+    "confidence": 0.21,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 673,
+    "choice": "orchestrated",
+    "confidence": 0.53,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 1104,
+    "choice": "orchestrated",
+    "confidence": 0.3,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 719,
+    "choice": "orchestrated",
+    "confidence": 0.38,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 1422,
+    "choice": "needs_context",
+    "confidence": 0.65,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 1316,
+    "choice": "direct",
+    "confidence": 0.5,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 598,
+    "choice": "direct",
+    "confidence": 0.33,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 801,
+    "choice": "direct",
+    "confidence": 0.17,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 569,
+    "choice": "direct",
+    "confidence": 0.23,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 894,
+    "choice": "orchestrated",
+    "confidence": 0.15,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 1218,
+    "choice": "direct",
+    "confidence": 0.15,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 1297,
+    "choice": "direct",
+    "confidence": 0.25,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 579,
+    "choice": "needs_context",
+    "confidence": 0.14,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 1585,
+    "choice": "direct",
+    "confidence": 0.3,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 1220,
+    "choice": "direct",
+    "confidence": 0.38,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 636,
+    "choice": "direct",
+    "confidence": 0.81,
+    "shape": "direct",
+    "decided": true,
+    "reason": null
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 1007,
+    "choice": "needs_context",
+    "confidence": 0.2,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 107,
+    "choice": "direct",
+    "confidence": 0.52,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 867,
+    "choice": "orchestrated",
+    "confidence": 0.53,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 1106,
+    "choice": "orchestrated",
+    "confidence": 0.61,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 987,
+    "choice": "orchestrated",
+    "confidence": 0.46,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 466,
+    "choice": "direct",
+    "confidence": 0.63,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 57,
+    "choice": "needs_context",
+    "confidence": 0.46,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 28,
+    "choice": "direct",
+    "confidence": 0.31,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 442,
+    "choice": "needs_context",
+    "confidence": 0.23,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 92,
+    "choice": "direct",
+    "confidence": 0.25,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 25,
+    "choice": "needs_context",
+    "confidence": 0.53,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 423,
+    "choice": "direct",
+    "confidence": 0.66,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 180,
+    "choice": "needs_context",
+    "confidence": 0.44,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 50,
+    "choice": "direct",
+    "confidence": 0.73,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 27,
+    "choice": "direct",
+    "confidence": 0.21,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 26,
+    "choice": "direct",
+    "confidence": 0.17,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 1692,
+    "choice": "direct",
+    "confidence": 0.54,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 252,
+    "choice": "needs_context",
+    "confidence": 0.29,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 19,
+    "choice": "abstain",
+    "confidence": 0.17,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_abstain"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 17,
+    "choice": "needs_context",
+    "confidence": 0.51,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 528,
+    "choice": "needs_context",
+    "confidence": 0.3,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 1136,
+    "choice": "direct",
+    "confidence": 0.34,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 611,
+    "choice": "orchestrated",
+    "confidence": 0.22,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 17,
+    "choice": "needs_context",
+    "confidence": 0.52,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 29,
+    "choice": "abstain",
+    "confidence": 0.6,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_abstain"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 438,
+    "choice": "direct",
+    "confidence": 0.81,
+    "shape": "direct",
+    "decided": true,
+    "reason": null
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 849,
+    "choice": "needs_context",
+    "confidence": 0.28,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 415,
+    "choice": "needs_context",
+    "confidence": 0.63,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 1419,
+    "choice": "needs_context",
+    "confidence": 0.12,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 877,
+    "choice": "orchestrated",
+    "confidence": 0.18,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 1020,
+    "choice": "needs_context",
+    "confidence": 0.26,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 1331,
+    "choice": "needs_context",
+    "confidence": 0.26,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 1384,
+    "choice": "needs_context",
+    "confidence": 0.19,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 1018,
+    "choice": "direct",
+    "confidence": 0.38,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 479,
+    "choice": "direct",
+    "confidence": 0.2,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 701,
+    "choice": "direct",
+    "confidence": 0.13,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 927,
+    "choice": "needs_context",
+    "confidence": 0.25,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 735,
+    "choice": "direct",
+    "confidence": 0.17,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 726,
+    "choice": "direct",
+    "confidence": 0.19,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 768,
+    "choice": "direct",
+    "confidence": 0.21,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 916,
+    "choice": "direct",
+    "confidence": 0.19,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 915,
+    "choice": "direct",
+    "confidence": 0.17,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 271,
+    "choice": "direct",
+    "confidence": 0.44,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 720,
+    "choice": "orchestrated",
+    "confidence": 0.41,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 845,
+    "choice": "needs_context",
+    "confidence": 0.3,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 19,
+    "choice": "direct",
+    "confidence": 0.41,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 42,
+    "choice": "direct",
+    "confidence": 0.26,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 107,
+    "choice": "direct",
+    "confidence": 0.45,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 706,
+    "choice": "direct",
+    "confidence": 0.84,
+    "shape": "direct",
+    "decided": true,
+    "reason": null
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 212,
+    "choice": "orchestrated",
+    "confidence": 0.21,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 2319,
+    "choice": "orchestrated",
+    "confidence": 0.27,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 76,
+    "choice": "direct",
+    "confidence": 0.44,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 538,
+    "choice": "direct",
+    "confidence": 0.74,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 365,
+    "choice": "needs_context",
+    "confidence": 0.41,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 25,
+    "choice": "direct",
+    "confidence": 0.32,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 49,
+    "choice": "direct",
+    "confidence": 0.41,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 21,
+    "choice": "direct",
+    "confidence": 0.4,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 68,
+    "choice": "needs_context",
+    "confidence": 0.37,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 30,
+    "choice": "direct",
+    "confidence": 0.6,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 49,
+    "choice": "direct",
+    "confidence": 0.4,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 32,
+    "choice": "direct",
+    "confidence": 0.59,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 16,
+    "choice": "direct",
+    "confidence": 0.25,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 85,
+    "choice": "needs_context",
+    "confidence": 0.66,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 28,
+    "choice": "needs_context",
+    "confidence": 0.43,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 145,
+    "choice": "direct",
+    "confidence": 0.79,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 148,
+    "choice": "needs_context",
+    "confidence": 0.3,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 19,
+    "choice": "direct",
+    "confidence": 0.7,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 63,
+    "choice": "needs_context",
+    "confidence": 0.57,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 28,
+    "choice": "direct",
+    "confidence": 0.56,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 34,
+    "choice": "direct",
+    "confidence": 0.61,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 16,
+    "choice": "direct",
+    "confidence": 0.33,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 52,
+    "choice": "needs_context",
+    "confidence": 0.3,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 45,
+    "choice": "direct",
+    "confidence": 0.34,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 44,
+    "choice": "direct",
+    "confidence": 0.55,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_invalid"
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 41,
+    "choice": "direct",
+    "confidence": 0.47,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 46,
+    "choice": "direct",
+    "confidence": 0.59,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 138,
+    "choice": "direct",
+    "confidence": 0.36,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 47,
+    "choice": "orchestrated",
+    "confidence": 0.15,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 19,
+    "choice": "needs_context",
+    "confidence": 0.3,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 46,
+    "choice": "needs_context",
+    "confidence": 0.25,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 25,
+    "choice": "orchestrated",
+    "confidence": 0.27,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 65,
+    "choice": "direct",
+    "confidence": 0.42,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_low_confidence"
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 28,
+    "choice": "needs_context",
+    "confidence": 0.66,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 15,
+    "choice": "needs_context",
+    "confidence": 0.33,
+    "shape": "direct",
+    "decided": false,
+    "reason": "admission_needs_context"
+  }
+]

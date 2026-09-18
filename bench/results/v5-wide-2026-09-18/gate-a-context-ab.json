@@ -1,0 +1,1583 @@
+[
+  {
+    "project": "-Users-isaac",
+    "len": 25,
+    "prior_len": 700,
+    "bare": {
+      "choice": "orchestrated",
+      "confidence": 0.58,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 585,
+      "ms": 603
+    },
+    "with_prior": {
+      "choice": "orchestrated",
+      "confidence": 0.83,
+      "shape": "orchestrated",
+      "decided": true,
+      "reason": null,
+      "in": 798,
+      "ms": 519
+    }
+  },
+  {
+    "project": "-Users-isaac",
+    "len": 284,
+    "prior_len": 680,
+    "bare": {
+      "choice": "orchestrated",
+      "confidence": 0.6,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 637,
+      "ms": 239
+    },
+    "with_prior": {
+      "choice": "orchestrated",
+      "confidence": 0.65,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 1083,
+      "ms": 249
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-agent-operator-score",
+    "len": 45,
+    "prior_len": 602,
+    "bare": {
+      "choice": "needs_context",
+      "confidence": 0.35,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_needs_context",
+      "in": 604,
+      "ms": 248
+    },
+    "with_prior": {
+      "choice": "direct",
+      "confidence": 0.47,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 996,
+      "ms": 319
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-agent-operator-score",
+    "len": 650,
+    "prior_len": 580,
+    "bare": {
+      "choice": "orchestrated",
+      "confidence": 0.34,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 785,
+      "ms": 328
+    },
+    "with_prior": {
+      "choice": "orchestrated",
+      "confidence": 0.64,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 1104,
+      "ms": 301
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-agent-operator-score",
+    "len": 43,
+    "prior_len": 700,
+    "bare": {
+      "choice": "needs_context",
+      "confidence": 0.34,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_needs_context",
+      "in": 594,
+      "ms": 252
+    },
+    "with_prior": {
+      "choice": "direct",
+      "confidence": 0.62,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 1085,
+      "ms": 527
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-agent-operator-score",
+    "len": 23,
+    "prior_len": 700,
+    "bare": {
+      "choice": "direct",
+      "confidence": 0.52,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 583,
+      "ms": 275
+    },
+    "with_prior": {
+      "choice": "direct",
+      "confidence": 0.82,
+      "shape": "direct",
+      "decided": true,
+      "reason": null,
+      "in": 985,
+      "ms": 286
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 1121,
+    "prior_len": 0,
+    "bare": {
+      "choice": "orchestrated",
+      "confidence": 0.41,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 906,
+      "ms": 258
+    },
+    "with_prior": {
+      "choice": "orchestrated",
+      "confidence": 0.52,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 914,
+      "ms": 306
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 57,
+    "prior_len": 700,
+    "bare": {
+      "choice": "direct",
+      "confidence": 0.74,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 603,
+      "ms": 208
+    },
+    "with_prior": {
+      "choice": "direct",
+      "confidence": 0.82,
+      "shape": "direct",
+      "decided": true,
+      "reason": null,
+      "in": 1076,
+      "ms": 273
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 15,
+    "prior_len": 700,
+    "bare": {
+      "choice": "direct",
+      "confidence": 0.32,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 581,
+      "ms": 386
+    },
+    "with_prior": {
+      "choice": "direct",
+      "confidence": 0.5,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 1009,
+      "ms": 456
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 689,
+    "prior_len": 700,
+    "bare": {
+      "choice": "direct",
+      "confidence": 0.28,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 816,
+      "ms": 426
+    },
+    "with_prior": {
+      "choice": "direct",
+      "confidence": 0.3,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 1268,
+      "ms": 276
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 20,
+    "prior_len": 700,
+    "bare": {
+      "choice": "needs_context",
+      "confidence": 0.27,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_tie",
+      "in": 577,
+      "ms": 278
+    },
+    "with_prior": {
+      "choice": "needs_context",
+      "confidence": 0.33,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_needs_context",
+      "in": 1067,
+      "ms": 200
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 31,
+    "prior_len": 700,
+    "bare": {
+      "choice": "direct",
+      "confidence": 0.28,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 588,
+      "ms": 271
+    },
+    "with_prior": {
+      "choice": "direct",
+      "confidence": 0.3,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 1017,
+      "ms": 266
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 15,
+    "prior_len": 700,
+    "bare": {
+      "choice": "needs_context",
+      "confidence": 0.39,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_needs_context",
+      "in": 568,
+      "ms": 332
+    },
+    "with_prior": {
+      "choice": "needs_context",
+      "confidence": 0.31,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_needs_context",
+      "in": 1046,
+      "ms": 259
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 1071,
+    "prior_len": 700,
+    "bare": {
+      "choice": "orchestrated",
+      "confidence": 0.18,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_tie",
+      "in": 1216,
+      "ms": 261
+    },
+    "with_prior": {
+      "choice": "direct",
+      "confidence": 0.39,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 1704,
+      "ms": 319
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 82,
+    "prior_len": 700,
+    "bare": {
+      "choice": "direct",
+      "confidence": 0.19,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 615,
+      "ms": 207
+    },
+    "with_prior": {
+      "choice": "direct",
+      "confidence": 0.45,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 1055,
+      "ms": 328
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 58,
+    "prior_len": 700,
+    "bare": {
+      "choice": "direct",
+      "confidence": 0.43,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 605,
+      "ms": 256
+    },
+    "with_prior": {
+      "choice": "direct",
+      "confidence": 0.88,
+      "shape": "direct",
+      "decided": true,
+      "reason": null,
+      "in": 1057,
+      "ms": 486
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 625,
+    "prior_len": 700,
+    "bare": {
+      "choice": "direct",
+      "confidence": 0.94,
+      "shape": "direct",
+      "decided": true,
+      "reason": null,
+      "in": 774,
+      "ms": 339
+    },
+    "with_prior": {
+      "choice": "direct",
+      "confidence": 0.9,
+      "shape": "direct",
+      "decided": true,
+      "reason": null,
+      "in": 1228,
+      "ms": 593
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 515,
+    "prior_len": 700,
+    "bare": {
+      "choice": "direct",
+      "confidence": 0.14,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 708,
+      "ms": 224
+    },
+    "with_prior": {
+      "choice": "direct",
+      "confidence": 0.7,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 1150,
+      "ms": 304
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 584,
+    "prior_len": 700,
+    "bare": {
+      "choice": "direct",
+      "confidence": 0.79,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 754,
+      "ms": 297
+    },
+    "with_prior": {
+      "choice": "direct",
+      "confidence": 0.77,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 1161,
+      "ms": 256
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 33,
+    "prior_len": 700,
+    "bare": {
+      "choice": "needs_context",
+      "confidence": 0.34,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_needs_context",
+      "in": 588,
+      "ms": 244
+    },
+    "with_prior": {
+      "choice": "orchestrated",
+      "confidence": 0.33,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 1072,
+      "ms": 257
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 285,
+    "prior_len": 700,
+    "bare": {
+      "choice": "direct",
+      "confidence": 0.18,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 628,
+      "ms": 236
+    },
+    "with_prior": {
+      "choice": "direct",
+      "confidence": 0.48,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 1075,
+      "ms": 227
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 126,
+    "prior_len": 700,
+    "bare": {
+      "choice": "orchestrated",
+      "confidence": 0.46,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 648,
+      "ms": 215
+    },
+    "with_prior": {
+      "choice": "orchestrated",
+      "confidence": 0.73,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 1134,
+      "ms": 213
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 28,
+    "prior_len": 700,
+    "bare": {
+      "choice": "direct",
+      "confidence": 0.61,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 577,
+      "ms": 282
+    },
+    "with_prior": {
+      "choice": "direct",
+      "confidence": 0.79,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 1029,
+      "ms": 297
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 665,
+    "prior_len": 700,
+    "bare": {
+      "choice": "direct",
+      "confidence": 0.89,
+      "shape": "direct",
+      "decided": true,
+      "reason": null,
+      "in": 772,
+      "ms": 276
+    },
+    "with_prior": {
+      "choice": "direct",
+      "confidence": 0.78,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 1250,
+      "ms": 407
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 21,
+    "prior_len": 700,
+    "bare": {
+      "choice": "direct",
+      "confidence": 0.15,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 581,
+      "ms": 249
+    },
+    "with_prior": {
+      "choice": "orchestrated",
+      "confidence": 0.37,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 999,
+      "ms": 272
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 49,
+    "prior_len": 700,
+    "bare": {
+      "choice": "orchestrated",
+      "confidence": 0.3,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 602,
+      "ms": 355
+    },
+    "with_prior": {
+      "choice": "orchestrated",
+      "confidence": 0.21,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 1064,
+      "ms": 223
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 627,
+    "prior_len": 700,
+    "bare": {
+      "choice": "needs_context",
+      "confidence": 0.15,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_needs_context",
+      "in": 869,
+      "ms": 229
+    },
+    "with_prior": {
+      "choice": "direct",
+      "confidence": 0.31,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 1222,
+      "ms": 210
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 107,
+    "prior_len": 125,
+    "bare": {
+      "choice": "direct",
+      "confidence": 0.43,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 605,
+      "ms": 286
+    },
+    "with_prior": {
+      "choice": "direct",
+      "confidence": 0.4,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 697,
+      "ms": 310
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 45,
+    "prior_len": 700,
+    "bare": {
+      "choice": "direct",
+      "confidence": 0.37,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 595,
+      "ms": 270
+    },
+    "with_prior": {
+      "choice": "direct",
+      "confidence": 0.63,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 1084,
+      "ms": 267
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 20,
+    "prior_len": 700,
+    "bare": {
+      "choice": "orchestrated",
+      "confidence": 0.28,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 584,
+      "ms": 200
+    },
+    "with_prior": {
+      "choice": "needs_context",
+      "confidence": 0.32,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_needs_context",
+      "in": 1022,
+      "ms": 297
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 32,
+    "prior_len": 700,
+    "bare": {
+      "choice": "direct",
+      "confidence": 0.62,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 591,
+      "ms": 557
+    },
+    "with_prior": {
+      "choice": "direct",
+      "confidence": 0.6,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 1070,
+      "ms": 294
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 480,
+    "prior_len": 700,
+    "bare": {
+      "choice": "direct",
+      "confidence": 0.86,
+      "shape": "direct",
+      "decided": true,
+      "reason": null,
+      "in": 715,
+      "ms": 275
+    },
+    "with_prior": {
+      "choice": "direct",
+      "confidence": 0.85,
+      "shape": "direct",
+      "decided": true,
+      "reason": null,
+      "in": 876,
+      "ms": 220
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 18,
+    "prior_len": 700,
+    "bare": {
+      "choice": "direct",
+      "confidence": 0.78,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 571,
+      "ms": 698
+    },
+    "with_prior": {
+      "choice": "direct",
+      "confidence": 0.79,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 1055,
+      "ms": 268
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 20,
+    "prior_len": 700,
+    "bare": {
+      "choice": "direct",
+      "confidence": 0.38,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 578,
+      "ms": 242
+    },
+    "with_prior": {
+      "choice": "needs_context",
+      "confidence": 0.28,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_tie",
+      "in": 1011,
+      "ms": 595
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 37,
+    "prior_len": 700,
+    "bare": {
+      "choice": "direct",
+      "confidence": 0.54,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 587,
+      "ms": 229
+    },
+    "with_prior": {
+      "choice": "needs_context",
+      "confidence": 0.36,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_needs_context",
+      "in": 1000,
+      "ms": 279
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 573,
+    "prior_len": 562,
+    "bare": {
+      "choice": "direct",
+      "confidence": 0.62,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 748,
+      "ms": 369
+    },
+    "with_prior": {
+      "choice": "direct",
+      "confidence": 0.57,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 1139,
+      "ms": 219
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 36,
+    "prior_len": 700,
+    "bare": {
+      "choice": "needs_context",
+      "confidence": 0.23,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_needs_context",
+      "in": 595,
+      "ms": 269
+    },
+    "with_prior": {
+      "choice": "direct",
+      "confidence": 0.21,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 976,
+      "ms": 269
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 92,
+    "prior_len": 550,
+    "bare": {
+      "choice": "direct",
+      "confidence": 0.21,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 627,
+      "ms": 339
+    },
+    "with_prior": {
+      "choice": "direct",
+      "confidence": 0.35,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 1008,
+      "ms": 271
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 16,
+    "prior_len": 700,
+    "bare": {
+      "choice": "needs_context",
+      "confidence": 0.21,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_needs_context",
+      "in": 578,
+      "ms": 257
+    },
+    "with_prior": {
+      "choice": "direct",
+      "confidence": 0.23,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 1047,
+      "ms": 218
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 180,
+    "prior_len": 700,
+    "bare": {
+      "choice": "needs_context",
+      "confidence": 0.42,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_needs_context",
+      "in": 680,
+      "ms": 331
+    },
+    "with_prior": {
+      "choice": "direct",
+      "confidence": 0.31,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 896,
+      "ms": 451
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 21,
+    "prior_len": 700,
+    "bare": {
+      "choice": "needs_context",
+      "confidence": 0.18,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_needs_context",
+      "in": 588,
+      "ms": 371
+    },
+    "with_prior": {
+      "choice": "needs_context",
+      "confidence": 0.32,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_needs_context",
+      "in": 1012,
+      "ms": 205
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 15,
+    "prior_len": 700,
+    "bare": {
+      "choice": "direct",
+      "confidence": 0.59,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 571,
+      "ms": 252
+    },
+    "with_prior": {
+      "choice": "direct",
+      "confidence": 0.67,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 1005,
+      "ms": 338
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 66,
+    "prior_len": 29,
+    "bare": {
+      "choice": "direct",
+      "confidence": 0.3,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 577,
+      "ms": 265
+    },
+    "with_prior": {
+      "choice": "direct",
+      "confidence": 0.21,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 592,
+      "ms": 224
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 37,
+    "prior_len": 700,
+    "bare": {
+      "choice": "direct",
+      "confidence": 0.45,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 594,
+      "ms": 261
+    },
+    "with_prior": {
+      "choice": "direct",
+      "confidence": 0.4,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 1077,
+      "ms": 258
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 438,
+    "prior_len": 644,
+    "bare": {
+      "choice": "direct",
+      "confidence": 0.81,
+      "shape": "direct",
+      "decided": true,
+      "reason": null,
+      "in": 822,
+      "ms": 251
+    },
+    "with_prior": {
+      "choice": "direct",
+      "confidence": 0.93,
+      "shape": "direct",
+      "decided": true,
+      "reason": null,
+      "in": 1271,
+      "ms": 610
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 22,
+    "prior_len": 700,
+    "bare": {
+      "choice": "direct",
+      "confidence": 0.68,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 580,
+      "ms": 237
+    },
+    "with_prior": {
+      "choice": "direct",
+      "confidence": 0.68,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 983,
+      "ms": 284
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 107,
+    "prior_len": 19,
+    "bare": {
+      "choice": "direct",
+      "confidence": 0.36,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 605,
+      "ms": 286
+    },
+    "with_prior": {
+      "choice": "needs_context",
+      "confidence": 0.25,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_needs_context",
+      "in": 618,
+      "ms": 357
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 18,
+    "prior_len": 505,
+    "bare": {
+      "choice": "direct",
+      "confidence": 0.92,
+      "shape": "direct",
+      "decided": true,
+      "reason": null,
+      "in": 571,
+      "ms": 225
+    },
+    "with_prior": {
+      "choice": "direct",
+      "confidence": 0.77,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 889,
+      "ms": 454
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 2319,
+    "prior_len": 700,
+    "bare": {
+      "choice": "orchestrated",
+      "confidence": 0.28,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 1863,
+      "ms": 273
+    },
+    "with_prior": {
+      "choice": "orchestrated",
+      "confidence": 0.21,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 2230,
+      "ms": 316
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 123,
+    "prior_len": 700,
+    "bare": {
+      "choice": "needs_context",
+      "confidence": 0.46,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_needs_context",
+      "in": 644,
+      "ms": 361
+    },
+    "with_prior": {
+      "choice": "needs_context",
+      "confidence": 0.55,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_needs_context",
+      "in": 1073,
+      "ms": 322
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 276,
+    "prior_len": 16,
+    "bare": {
+      "choice": "needs_context",
+      "confidence": 0.37,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_needs_context",
+      "in": 699,
+      "ms": 711
+    },
+    "with_prior": {
+      "choice": "needs_context",
+      "confidence": 0.37,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_needs_context",
+      "in": 719,
+      "ms": 237
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 67,
+    "prior_len": 700,
+    "bare": {
+      "choice": "orchestrated",
+      "confidence": 0.31,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 609,
+      "ms": 317
+    },
+    "with_prior": {
+      "choice": "orchestrated",
+      "confidence": 0.37,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 1039,
+      "ms": 234
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 42,
+    "prior_len": 70,
+    "bare": {
+      "choice": "abstain",
+      "confidence": 0.49,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_abstain",
+      "in": 572,
+      "ms": 300
+    },
+    "with_prior": {
+      "choice": "direct",
+      "confidence": 0.34,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 632,
+      "ms": 262
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 68,
+    "prior_len": 700,
+    "bare": {
+      "choice": "direct",
+      "confidence": 0.41,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 607,
+      "ms": 317
+    },
+    "with_prior": {
+      "choice": "direct",
+      "confidence": 0.69,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 1057,
+      "ms": 229
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 30,
+    "prior_len": 700,
+    "bare": {
+      "choice": "direct",
+      "confidence": 0.57,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 578,
+      "ms": 283
+    },
+    "with_prior": {
+      "choice": "direct",
+      "confidence": 0.6,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 1053,
+      "ms": 299
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 211,
+    "prior_len": 700,
+    "bare": {
+      "choice": "direct",
+      "confidence": 0.32,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 670,
+      "ms": 413
+    },
+    "with_prior": {
+      "choice": "needs_context",
+      "confidence": 0.59,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_needs_context",
+      "in": 1039,
+      "ms": 279
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 71,
+    "prior_len": 700,
+    "bare": {
+      "error": "http_other"
+    },
+    "with_prior": {
+      "choice": "needs_context",
+      "confidence": 0.16,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_needs_context",
+      "in": 1027,
+      "ms": 319
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 18,
+    "prior_len": 700,
+    "bare": {
+      "choice": "needs_context",
+      "confidence": 0.7,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_needs_context",
+      "in": 580,
+      "ms": 207
+    },
+    "with_prior": {
+      "choice": "direct",
+      "confidence": 0.69,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 1027,
+      "ms": 264
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 29,
+    "prior_len": 499,
+    "bare": {
+      "choice": "abstain",
+      "confidence": 0.62,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_abstain",
+      "in": 569,
+      "ms": 276
+    },
+    "with_prior": {
+      "choice": "abstain",
+      "confidence": 0.29,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_abstain",
+      "in": 895,
+      "ms": 224
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 64,
+    "prior_len": 270,
+    "bare": {
+      "choice": "needs_context",
+      "confidence": 0.24,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_needs_context",
+      "in": 608,
+      "ms": 223
+    },
+    "with_prior": {
+      "choice": "orchestrated",
+      "confidence": 0.39,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 790,
+      "ms": 316
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 1684,
+    "prior_len": 700,
+    "bare": {
+      "choice": "direct",
+      "confidence": 0.7,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 1658,
+      "ms": 270
+    },
+    "with_prior": {
+      "choice": "direct",
+      "confidence": 0.76,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 2076,
+      "ms": 245
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 60,
+    "prior_len": 87,
+    "bare": {
+      "choice": "needs_context",
+      "confidence": 0.28,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_needs_context",
+      "in": 600,
+      "ms": 295
+    },
+    "with_prior": {
+      "choice": "needs_context",
+      "confidence": 0.17,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_needs_context",
+      "in": 665,
+      "ms": 281
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 15,
+    "prior_len": 700,
+    "bare": {
+      "choice": "direct",
+      "confidence": 0.57,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 576,
+      "ms": 290
+    },
+    "with_prior": {
+      "choice": "direct",
+      "confidence": 0.72,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 1059,
+      "ms": 298
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 28,
+    "prior_len": 700,
+    "bare": {
+      "choice": "needs_context",
+      "confidence": 0.38,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_needs_context",
+      "in": 583,
+      "ms": 289
+    },
+    "with_prior": {
+      "choice": "needs_context",
+      "confidence": 0.23,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_needs_context",
+      "in": 1046,
+      "ms": 230
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 22,
+    "prior_len": 700,
+    "bare": {
+      "choice": "needs_context",
+      "confidence": 0.35,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_needs_context",
+      "in": 582,
+      "ms": 274
+    },
+    "with_prior": {
+      "choice": "direct",
+      "confidence": 0.32,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 1062,
+      "ms": 238
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 19,
+    "prior_len": 700,
+    "bare": {
+      "choice": "direct",
+      "confidence": 0.28,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 572,
+      "ms": 275
+    },
+    "with_prior": {
+      "choice": "direct",
+      "confidence": 0.45,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 1028,
+      "ms": 269
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 30,
+    "prior_len": 700,
+    "bare": {
+      "choice": "direct",
+      "confidence": 0.59,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 584,
+      "ms": 358
+    },
+    "with_prior": {
+      "choice": "direct",
+      "confidence": 0.52,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 992,
+      "ms": 219
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 240,
+    "prior_len": 700,
+    "bare": {
+      "choice": "direct",
+      "confidence": 0.18,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 618,
+      "ms": 233
+    },
+    "with_prior": {
+      "choice": "needs_context",
+      "confidence": 0.28,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_needs_context",
+      "in": 1097,
+      "ms": 230
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 16,
+    "prior_len": 700,
+    "bare": {
+      "choice": "direct",
+      "confidence": 0.29,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 574,
+      "ms": 268
+    },
+    "with_prior": {
+      "choice": "direct",
+      "confidence": 0.52,
+      "shape": "direct",
+      "decided": false,
+      "reason": "admission_low_confidence",
+      "in": 1007,
+      "ms": 469
+    }
+  }
+]
