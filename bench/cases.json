@@ -32,6 +32,14 @@
       "request": "src/ttl-cache.mjs의 createTtlCache에서 만료된 항목이 get으로 그대로 반환되는 버그를 고쳐줘.\n만료된 항목은 get 시 undefined를 반환하고 저장소에서 제거해서 size()에도 반영되게 해. now 주입 인자와 set/get/size API는 그대로 유지하고 setTimeout 같은 타이머는 쓰지 마.\n기존 테스트(npm test)가 계속 통과해야 해.",
       "setup": [],
       "checkFile": "checkers/ttl-cache.mjs"
+    },
+    {
+      "id": "wide-validators",
+      "group": "wide-independent",
+      "fixtureDir": "fixtures/wide-validators",
+      "request": "src/ 에 있는 검증 모듈 12개(email, phone, postcode, country, currency, locale, timezone, vat, iban, swift, tax, duns)를 모두 고쳐줘.\n지금은 빈 배열이 통과되는데, 항목이 하나도 없으면 실패해야 해. 반환값에 field 는 그대로 두고 ok:false 로.\n이미 맞는 동작(항목이 있으면 통과, 빈 문자열이면 blank, 키가 없으면 missing)은 바꾸지 마.\n모듈마다 빈 배열을 거부하는지 확인하는 테스트를 test/ 에 추가하고, npm test(node --test)가 통과하는지 확인해.",
+      "setup": [],
+      "checkFile": "checkers/wide-validators.mjs"
     }
   ]
 }
