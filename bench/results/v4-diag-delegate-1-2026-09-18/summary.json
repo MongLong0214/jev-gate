@@ -1,0 +1,353 @@
+{
+  "purpose": "Mechanism diagnostic (#17 §1), not a product-policy result: every request carried an explicit user instruction to delegate the implementation to jev-gate:worker without a model argument, so the gate is exercised on every job. Costs/times measure the gate path under forced delegation.",
+  "schema": 4,
+  "created_at": "2026-09-18T01:17:31.599Z",
+  "manifest": "bench/v4/diagnostic-delegate.json",
+  "arms": [
+    "jev_hierarchy",
+    "native_hierarchy"
+  ],
+  "rows": [
+    {
+      "job": "cart-total",
+      "group": "localized-fix-api-preserving",
+      "repetition": 1,
+      "arms": [
+        "jev_hierarchy",
+        "native_hierarchy"
+      ]
+    },
+    {
+      "job": "todo-priority",
+      "group": "cross-file-feature-serialization-ui",
+      "repetition": 1,
+      "arms": [
+        "jev_hierarchy",
+        "native_hierarchy"
+      ]
+    },
+    {
+      "job": "space-sim",
+      "group": "compound-simulation-camera-hud",
+      "repetition": 1,
+      "arms": [
+        "native_hierarchy",
+        "jev_hierarchy"
+      ]
+    },
+    {
+      "job": "job-queue",
+      "group": "async-error-propagation-integration",
+      "repetition": 1,
+      "arms": [
+        "jev_hierarchy",
+        "native_hierarchy"
+      ]
+    }
+  ],
+  "cli": {
+    "claude": "claude",
+    "plugin_dir": "<checkout>",
+    "setting_sources": "project,local",
+    "permission_mode": "acceptEdits",
+    "allowed_tools": "Bash(node *),Bash(npm test),Bash(npm run test),Bash(ls *)",
+    "max_turns": 60,
+    "timeout_ms": 900000,
+    "seed": 7,
+    "frontier_model": "fable",
+    "launch_env": {
+      "CLAUDE_CODE_FORK_SUBAGENT": "0",
+      "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"
+    },
+    "effective_config_nonsecret": {
+      "version": 4,
+      "mode": "auto",
+      "jevModel": "jev-1.13.0",
+      "requestDeadlineMs": 3000,
+      "routeConfidenceFloor": 0.8,
+      "models": {
+        "sonnet": "sonnet",
+        "opus": "opus",
+        "fable": "fable"
+      },
+      "source": "defaults"
+    },
+    "note": "Root models are CLI aliases; actual models come from system/init and modelUsage. User-scope settings are excluded for every arm via --setting-sources; user-level CLAUDE.md still loads equally in all arms. --max-turns bounds top-level turns, not every descendant request or subscription spend."
+  },
+  "preflight": {
+    "claude_version": "2.1.275 (Claude Code)",
+    "auth": {
+      "authMethod": "claude.ai",
+      "apiProvider": "firstParty"
+    },
+    "env_observed": {
+      "CLAUDE_CODE_SUBAGENT_MODEL": null,
+      "CLAUDE_CODE_SUBAGENT_MODEL_FORCE": null,
+      "CLAUDE_CODE_FORK_SUBAGENT": null,
+      "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": null,
+      "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+      "JEV_GATE_CONFIG": null,
+      "JEV_GATE_EXPERIMENT_ALLOCATION": null
+    }
+  },
+  "finished_at": "2026-09-18T01:36:07.732Z",
+  "cells": {
+    "cart-total/jev_hierarchy": {
+      "quality": "pass",
+      "elapsed_s": 75.2,
+      "claude_usd": 0.3047,
+      "jev_usd": 0.000096768,
+      "models": [
+        "claude-haiku-4-5-20251001",
+        "claude-sonnet-5"
+      ],
+      "agent_calls": 1,
+      "worker_pinned": false,
+      "jev": {
+        "http_ms": 861,
+        "input_tokens": 2304,
+        "context": {
+          "choice": "ready",
+          "confidence": 1
+        },
+        "route": {
+          "choice": "sonnet",
+          "confidence": 0.99,
+          "probabilities": {
+            "sonnet": 1,
+            "abstain": 0,
+            "fable": 0,
+            "opus": 0
+          }
+        },
+        "kind": "implement",
+        "decision": {
+          "action": "patch",
+          "tier": "sonnet",
+          "kind": "implement",
+          "reason": null
+        }
+      },
+      "child": {
+        "requested_model": "sonnet",
+        "hint": true,
+        "resolvedModel": "claude-sonnet-5",
+        "status": "completed",
+        "duration_ms": 38936
+      }
+    },
+    "cart-total/native_hierarchy": {
+      "quality": "pass",
+      "elapsed_s": 80.3,
+      "claude_usd": 0.3104,
+      "jev_usd": 0,
+      "models": [
+        "claude-haiku-4-5-20251001",
+        "claude-sonnet-5"
+      ],
+      "agent_calls": 1,
+      "worker_pinned": false,
+      "jev": null,
+      "child": {
+        "requested_model": null,
+        "hint": false,
+        "resolvedModel": "claude-sonnet-5",
+        "status": "completed",
+        "duration_ms": 33419
+      }
+    },
+    "job-queue/jev_hierarchy": {
+      "quality": "pass",
+      "elapsed_s": 82.1,
+      "claude_usd": 0.3454,
+      "jev_usd": 0.00011394600000000001,
+      "models": [
+        "claude-haiku-4-5-20251001",
+        "claude-sonnet-5"
+      ],
+      "agent_calls": 1,
+      "worker_pinned": false,
+      "jev": {
+        "http_ms": 784,
+        "input_tokens": 2713,
+        "context": {
+          "choice": "ready",
+          "confidence": 0.98
+        },
+        "route": {
+          "choice": "sonnet",
+          "confidence": 0.58,
+          "probabilities": {
+            "opus": 0.31,
+            "sonnet": 0.6900000000000001,
+            "abstain": 0,
+            "fable": 0
+          }
+        },
+        "kind": "implement",
+        "decision": {
+          "action": "preserve",
+          "tier": null,
+          "kind": "implement",
+          "reason": "route_low_confidence"
+        }
+      },
+      "child": {
+        "requested_model": null,
+        "hint": false,
+        "resolvedModel": "claude-sonnet-5",
+        "status": "completed",
+        "duration_ms": 32601
+      }
+    },
+    "job-queue/native_hierarchy": {
+      "quality": "pass",
+      "elapsed_s": 107.3,
+      "claude_usd": 0.3787,
+      "jev_usd": 0,
+      "models": [
+        "claude-haiku-4-5-20251001",
+        "claude-sonnet-5"
+      ],
+      "agent_calls": 1,
+      "worker_pinned": false,
+      "jev": null,
+      "child": {
+        "requested_model": null,
+        "hint": false,
+        "resolvedModel": "claude-sonnet-5",
+        "status": "completed",
+        "duration_ms": 52694
+      }
+    },
+    "space-sim/jev_hierarchy": {
+      "quality": "pass",
+      "elapsed_s": 282.5,
+      "claude_usd": 1.346,
+      "jev_usd": 0.00019387200000000002,
+      "models": [
+        "claude-haiku-4-5-20251001",
+        "claude-sonnet-5",
+        "claude-opus-5[1m]"
+      ],
+      "agent_calls": 1,
+      "worker_pinned": false,
+      "jev": {
+        "http_ms": 634,
+        "input_tokens": 4616,
+        "context": {
+          "choice": "ready",
+          "confidence": 0.92
+        },
+        "route": {
+          "choice": "opus",
+          "confidence": 0.9,
+          "probabilities": {
+            "sonnet": 0.07,
+            "abstain": 0,
+            "fable": 0,
+            "opus": 0.93
+          }
+        },
+        "kind": "implement",
+        "decision": {
+          "action": "patch",
+          "tier": "opus",
+          "kind": "implement",
+          "reason": null
+        }
+      },
+      "child": {
+        "requested_model": "opus",
+        "hint": true,
+        "resolvedModel": "claude-opus-5[1m]",
+        "status": "completed",
+        "duration_ms": 171528
+      }
+    },
+    "space-sim/native_hierarchy": {
+      "quality": "pass",
+      "elapsed_s": 232.8,
+      "claude_usd": 0.6937,
+      "jev_usd": 0,
+      "models": [
+        "claude-haiku-4-5-20251001",
+        "claude-sonnet-5"
+      ],
+      "agent_calls": 1,
+      "worker_pinned": false,
+      "jev": null,
+      "child": {
+        "requested_model": null,
+        "hint": false,
+        "resolvedModel": "claude-sonnet-5",
+        "status": "completed",
+        "duration_ms": 133326
+      }
+    },
+    "todo-priority/jev_hierarchy": {
+      "quality": "pass",
+      "elapsed_s": 101.6,
+      "claude_usd": 0.3774,
+      "jev_usd": 0.000126462,
+      "models": [
+        "claude-haiku-4-5-20251001",
+        "claude-sonnet-5"
+      ],
+      "agent_calls": 1,
+      "worker_pinned": false,
+      "jev": {
+        "http_ms": 666,
+        "input_tokens": 3011,
+        "context": {
+          "choice": "ready",
+          "confidence": 0.99
+        },
+        "route": {
+          "choice": "opus",
+          "confidence": 0.35,
+          "probabilities": {
+            "sonnet": 0.48,
+            "fable": 0,
+            "opus": 0.52,
+            "abstain": 0
+          }
+        },
+        "kind": "implement",
+        "decision": {
+          "action": "preserve",
+          "tier": null,
+          "kind": "implement",
+          "reason": "route_low_confidence"
+        }
+      },
+      "child": {
+        "requested_model": null,
+        "hint": false,
+        "resolvedModel": "claude-sonnet-5",
+        "status": "completed",
+        "duration_ms": 49133
+      }
+    },
+    "todo-priority/native_hierarchy": {
+      "quality": "pass",
+      "elapsed_s": 92.5,
+      "claude_usd": 0.3407,
+      "jev_usd": 0,
+      "models": [
+        "claude-haiku-4-5-20251001",
+        "claude-sonnet-5"
+      ],
+      "agent_calls": 1,
+      "worker_pinned": false,
+      "jev": null,
+      "child": {
+        "requested_model": null,
+        "hint": false,
+        "resolvedModel": "claude-sonnet-5",
+        "status": "completed",
+        "duration_ms": 41996
+      }
+    }
+  }
+}

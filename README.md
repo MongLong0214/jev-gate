@@ -21,7 +21,7 @@ An experiment in using frontier intelligence for the hard parts—not every part
 > **Status · September 18, 2026.** V4 task-boundary routing is **implemented on `main` as a local plugin** and its native
 > integration was **observed on Claude Code 2.1.275 (headless `-p`, Claude.ai subscription login)**. Interactive-session
 > behavior, Opus/Fable routing branches and any cost or quality benefit are **not established**; see
-> [What is verified](#what-is-verified-and-what-is-not) and [Results](#results). Contract: [#9 PRD](https://github.com/MongLong0214/jev-gate/issues/9) → [#10 ADR](https://github.com/MongLong0214/jev-gate/issues/10).
+> [What is verified](#what-is-verified-and-what-is-not) and [Results](#results); the first V4 run found that the gate **did not engage** on four small jobs, and forced delegation cost more. Contract: [#9 PRD](https://github.com/MongLong0214/jev-gate/issues/9) → [#10 ADR](https://github.com/MongLong0214/jev-gate/issues/10).
 
 ## The idea
 
@@ -134,7 +134,7 @@ Recorded observations are in [`bench/results/v4-host-2026-09-18/`](bench/results
 | Not verified here | Why it matters |
 |---|---|
 | Interactive TUI sessions | fork mode and agent-teams behave differently; `-p` was the only exercised host mode |
-| A Jev decision selecting Opus or Fable, and the resulting child actually running on it | the observed routing chose Sonnet; higher tiers were only shown via the deterministic patch (haiku) |
+| A Jev decision selecting Fable, and a child actually running on Fable | the diagnostic run produced one Opus selection that ran on `claude-opus-5[1m]`; no Fable selection occurred |
 | A user “do not delegate” instruction against a contrary recommendation | the classifier agreed with the main session in the exercised runs |
 | Resumes, `SendMessage`, other plugins' agents, `--agent` sessions | handled by code paths and offline tests only |
 | Any cost, runtime or quality benefit | see [Results](#results) |
@@ -170,7 +170,39 @@ V4 is compared on complete coding jobs under five arms: `sonnet_native` (plugin 
 
 Four new jobs live in [`bench/v4/`](bench/v4/README.md): a localized bug fix with regression tests, a cross-file feature touching model/serialization/view, a compound simulation with deterministic time, camera and HUD, and an async error-propagation bug. Each has a broken start, a trusted behavior checker, and a reference that passes it.
 
-<!-- V4_RESULTS -->
+**Run 1 — product policy as shipped (September 18, 2026).** 4 jobs × 5 arms, one repetition, seed 42, Claude Code 2.1.275, Claude.ai team subscription, headless. All 20 cells completed; every arm passed 4/4 after a checker correction (below). Tables: [`bench/results/v4-run-1-2026-09-18/`](bench/results/v4-run-1-2026-09-18/).
+
+| Arm | Passed | Fable tokens | Claude est. | Jev est. | Runtime (4 jobs) |
+|---|---:|---:|---:|---:|---:|
+| `frontier_native` | 4/4 | 1,228,003 | $4.448 | $0 | 449 s |
+| `sonnet_native` | 4/4 | 0 | $1.116 | $0 | 301 s |
+| `native_hierarchy` | 4/4 | 0 | $1.059 | $0 | 274 s |
+| `fixed_hierarchy` | 4/4 | 0 | $1.046 | $0 | 250 s |
+| `jev_hierarchy` | 4/4 | 0 | $1.063 | **$0** | 252 s |
+
+**The gate never engaged.** In all twelve hierarchy cells the plugin loaded, both roles were discovered and the coordinator guidance was injected, but the Sonnet coordinator delegated **zero** tasks: it did every job directly. The three hierarchy arms are therefore the same execution, and their differences from each other (−2 % to +8 %) and from plain Sonnet (≈5 % cost, 9–17 % runtime) are run-to-run variance plus one injected guidance block. The 76 % cost reduction against `frontier_native` comes from starting on Sonnet, not from Jev. On jobs of this size and in headless mode, **V4 adds nothing beyond native Sonnet because it is never asked to decide.** Primary comparison `jev_hierarchy` vs `native_hierarchy`: 4/4 vs 4/4, cost −0.4 %, runtime +8.2 %, validity ok.
+
+The original checker had mis-scored three `job-queue` candidates whose regression tests *hang* (rather than fail) against the unfixed source; hanging is not passing, so the checker was corrected, every candidate was re-scored, and both report revisions are kept.
+
+**Diagnostic — forced delegation (same day).** To observe the gate path at all, the same four jobs were re-run with an explicit user instruction to delegate the implementation to `jev-gate:worker` without a model argument (`bench/v4/diagnostic-delegate.json`), `jev_hierarchy` vs `native_hierarchy` only. This measures the mechanism, not the product policy. Tables: [`bench/results/v4-diag-delegate-1-2026-09-18/`](bench/results/v4-diag-delegate-1-2026-09-18/).
+
+| Job | Jev route (confidence) | Decision | Worker ran on | jev / native cost | jev / native time |
+|---|---|---|---|---:|---:|
+| cart-total | sonnet (.99) | patch → sonnet | claude-sonnet-5 | $0.31 / $0.31 | 75 s / 80 s |
+| todo-priority | opus (.35; p .52/.48) | preserve (below floor) | claude-sonnet-5 (default) | $0.38 / $0.34 | 102 s / 93 s |
+| space-sim | opus (.90) | patch → opus | **claude-opus-5[1m]** | $1.35 / $0.69 | 282 s / 233 s |
+| job-queue | sonnet (.58) | preserve (below floor) | claude-sonnet-5 (default) | $0.35 / $0.38 | 82 s / 107 s |
+
+All eight cells passed. Four eligible calls, four Jev requests (634–861 ms, 12,644 input tokens ≈ $0.0005 total), two patches, two abstentions, zero target/actual model mismatches, hints delivered on both patched calls. Totals: `jev_hierarchy` $2.374 and 541 s versus `native_hierarchy` $1.724 and 513 s — **the Jev arm cost 38 % more for the same four passes**, entirely from the one Opus escalation on `space-sim`, which the Sonnet worker also solved. Two of four routing decisions abstained at the .8 floor.
+
+**Reading.** The native boundary and the routing mechanism work as specified and were observed end to end, including an actual Opus child. The product hypothesis is **not supported by this evidence**: under the shipped policy the gate did not engage, and when forced to engage it selected a more expensive model once without a quality gain. This is one repetition on four small development jobs, so it is exploratory; it does not show that Jev cannot help on larger jobs where Sonnet would fail or delegate on its own.
+
+<details>
+<summary><strong>What would change the picture</strong></summary>
+
+Jobs large enough that the coordinator delegates on its own (or that Sonnet fails), repetitions to separate policy from variance, and a frozen-boundary probe of `space-sim` comparing Opus and Sonnet workers from the same state. Changing the coordinator guidance to delegate more, or lowering the floor, would be policy tuning and must be developed on separate data and declared before the next held-out run.
+
+</details>
 
 <details>
 <summary><strong>Measurement rules</strong></summary>

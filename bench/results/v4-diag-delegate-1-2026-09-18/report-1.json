@@ -1,0 +1,600 @@
+{
+  "schema": 4,
+  "run": "/Users/isaac/jev-gate-runs/v4-diag-delegate-1",
+  "generated_at": "2026-09-18T01:36:14.507Z",
+  "plan_schema": 4,
+  "planned_rows": 8,
+  "independent_units": {
+    "jobs": 4,
+    "groups": 4
+  },
+  "arms": [
+    {
+      "arm": "jev_hierarchy",
+      "planned": 4,
+      "by_status": {
+        "missing_record": 0,
+        "not_started": 0,
+        "intent_only": 0,
+        "started_no_result": 0,
+        "completed": 4,
+        "timed_out": 0,
+        "cancelled": 0
+      },
+      "pass": 4,
+      "fail": 0,
+      "unknown": 0,
+      "model_usage": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 5777,
+          "outputTokens": 100,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "costUSD": 0.006277
+        },
+        "claude-sonnet-5": {
+          "inputTokens": 86,
+          "outputTokens": 35412,
+          "cacheReadInputTokens": 1319070,
+          "cacheCreationInputTokens": 178360,
+          "costUSD": 1.3315460000000001
+        },
+        "claude-opus-5[1m]": {
+          "inputTokens": 34,
+          "outputTokens": 16471,
+          "cacheReadInputTokens": 476993,
+          "cacheCreationInputTokens": 38531,
+          "costUSD": 1.0357515
+        }
+      },
+      "usage_complete": true,
+      "tokens_total": 2070834,
+      "fable_tokens": 0,
+      "claude_cost_usd": 2.3735744999999997,
+      "claude_cost_known_subtotal": 2.3735744999999997,
+      "claude_cost_unknown_rows": 0,
+      "jev_cost_usd": 0.000531048,
+      "jev_cost_known_subtotal": 0.000531048,
+      "jev_cost_unknown_rows": 0,
+      "total_cost_usd": 2.3741055479999997,
+      "cost_per_pass_usd": 0.5935263869999999,
+      "runtime_total_ms": 541380,
+      "runtime_known_subtotal_ms": 541380,
+      "completed_pass_latency_mean_ms": 135345,
+      "completed_pass_count": 4,
+      "gate": {
+        "agent_calls": 4,
+        "owned_calls": 4,
+        "pinned": 0,
+        "eligible_attempted": 4,
+        "patched": 2,
+        "preserved": 2,
+        "preserve_reasons": {
+          "route_low_confidence": 2
+        },
+        "skipped": {},
+        "attempt_unknown": 0,
+        "missing_pre_records": 0,
+        "hint_delivered": 2,
+        "target_model_mismatches": 0
+      },
+      "validity_problems": []
+    },
+    {
+      "arm": "native_hierarchy",
+      "planned": 4,
+      "by_status": {
+        "missing_record": 0,
+        "not_started": 0,
+        "intent_only": 0,
+        "started_no_result": 0,
+        "completed": 4,
+        "timed_out": 0,
+        "cancelled": 0
+      },
+      "pass": 4,
+      "fail": 0,
+      "unknown": 0,
+      "model_usage": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 5777,
+          "outputTokens": 78,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "costUSD": 0.006167000000000001
+        },
+        "claude-sonnet-5": {
+          "inputTokens": 112,
+          "outputTokens": 51392,
+          "cacheReadInputTokens": 1672452,
+          "cacheCreationInputTokens": 217179,
+          "costUSD": 1.7173503999999997
+        }
+      },
+      "usage_complete": true,
+      "tokens_total": 1946990,
+      "fable_tokens": 0,
+      "claude_cost_usd": 1.7235174,
+      "claude_cost_known_subtotal": 1.7235174,
+      "claude_cost_unknown_rows": 0,
+      "jev_cost_usd": 0,
+      "jev_cost_known_subtotal": 0,
+      "jev_cost_unknown_rows": 0,
+      "total_cost_usd": 1.7235174,
+      "cost_per_pass_usd": 0.43087935,
+      "runtime_total_ms": 512839,
+      "runtime_known_subtotal_ms": 512839,
+      "completed_pass_latency_mean_ms": 128209.75,
+      "completed_pass_count": 4,
+      "gate": {
+        "agent_calls": 4,
+        "owned_calls": 4,
+        "pinned": 0,
+        "eligible_attempted": 0,
+        "patched": 0,
+        "preserved": 0,
+        "preserve_reasons": {},
+        "skipped": {
+          "mode_native": 4
+        },
+        "attempt_unknown": 0,
+        "missing_pre_records": 0,
+        "hint_delivered": 0,
+        "target_model_mismatches": 0
+      },
+      "validity_problems": []
+    }
+  ],
+  "comparisons": [
+    {
+      "treatment": "jev_hierarchy",
+      "control": "native_hierarchy",
+      "intended_rows": 4,
+      "cohort": "planned",
+      "pass_treatment": 4,
+      "pass_control": 4,
+      "absolute_success_difference": 0,
+      "relative_cost_reduction": -0.3774769828259348,
+      "relative_runtime_reduction": -0.0556529437113793,
+      "cost_known": true,
+      "runtime_known": true,
+      "validity": "ok",
+      "validity_reasons": [],
+      "complete_case_diagnostic": {
+        "included": [
+          "cart-total#1",
+          "job-queue#1",
+          "space-sim#1",
+          "todo-priority#1"
+        ],
+        "excluded": [],
+        "relative_cost_reduction": -0.3774769828259348,
+        "relative_runtime_reduction": -0.0556529437113793,
+        "pass_treatment": 4,
+        "pass_control": 4
+      }
+    }
+  ],
+  "rows": [
+    {
+      "job": "cart-total",
+      "group": "localized-fix-api-preserving",
+      "repetition": 1,
+      "arm": "jev_hierarchy",
+      "status": "completed",
+      "not_started_reason": null,
+      "quality": "pass",
+      "grade_reason": null,
+      "elapsed_ms": 75196,
+      "claude_cost_usd": 0.3047003999999999,
+      "jev_cost_usd": 0.000096768,
+      "total_cost_usd": 0.30479716799999995,
+      "model_usage": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 1320,
+          "outputTokens": 22,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "costUSD": 0.00143
+        },
+        "claude-sonnet-5": {
+          "inputTokens": 22,
+          "outputTokens": 6987,
+          "cacheReadInputTokens": 309362,
+          "cacheCreationInputTokens": 42871,
+          "costUSD": 0.30327039999999994
+        }
+      },
+      "usage_status": "ok",
+      "fable_tokens": 0,
+      "init_model": "claude-sonnet-5",
+      "root_model_consistent": true,
+      "plugin_state_ok": true,
+      "agent_calls": 1,
+      "owned_calls": 1,
+      "pinned": 0,
+      "eligible_attempted": 1,
+      "patched": 1,
+      "preserved": 0,
+      "skipped": {},
+      "preserve_reasons": {},
+      "attempt_unknown": 0,
+      "missing_pre_records": 0,
+      "hint_delivered": 1,
+      "target_model_mismatches": 0,
+      "record_conflicts": 0,
+      "api_retries": 0
+    },
+    {
+      "job": "cart-total",
+      "group": "localized-fix-api-preserving",
+      "repetition": 1,
+      "arm": "native_hierarchy",
+      "status": "completed",
+      "not_started_reason": null,
+      "quality": "pass",
+      "grade_reason": null,
+      "elapsed_ms": 80273,
+      "claude_cost_usd": 0.3103998,
+      "jev_cost_usd": 0,
+      "total_cost_usd": 0.3103998,
+      "model_usage": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 1320,
+          "outputTokens": 22,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "costUSD": 0.00143
+        },
+        "claude-sonnet-5": {
+          "inputTokens": 20,
+          "outputTokens": 8000,
+          "cacheReadInputTokens": 265389,
+          "cacheCreationInputTokens": 43963,
+          "costUSD": 0.30896979999999996
+        }
+      },
+      "usage_status": "ok",
+      "fable_tokens": 0,
+      "init_model": "claude-sonnet-5",
+      "root_model_consistent": true,
+      "plugin_state_ok": true,
+      "agent_calls": 1,
+      "owned_calls": 1,
+      "pinned": 0,
+      "eligible_attempted": 0,
+      "patched": 0,
+      "preserved": 0,
+      "skipped": {
+        "mode_native": 1
+      },
+      "preserve_reasons": {},
+      "attempt_unknown": 0,
+      "missing_pre_records": 0,
+      "hint_delivered": 0,
+      "target_model_mismatches": 0,
+      "record_conflicts": 0,
+      "api_retries": 0
+    },
+    {
+      "job": "todo-priority",
+      "group": "cross-file-feature-serialization-ui",
+      "repetition": 1,
+      "arm": "jev_hierarchy",
+      "status": "completed",
+      "not_started_reason": null,
+      "quality": "pass",
+      "grade_reason": null,
+      "elapsed_ms": 101591,
+      "claude_cost_usd": 0.37744060000000007,
+      "jev_cost_usd": 0.000126462,
+      "total_cost_usd": 0.37756706200000006,
+      "model_usage": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 1408,
+          "outputTokens": 20,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "costUSD": 0.001508
+        },
+        "claude-sonnet-5": {
+          "inputTokens": 28,
+          "outputTokens": 10041,
+          "cacheReadInputTokens": 392393,
+          "cacheCreationInputTokens": 49247,
+          "costUSD": 0.37593260000000006
+        }
+      },
+      "usage_status": "ok",
+      "fable_tokens": 0,
+      "init_model": "claude-sonnet-5",
+      "root_model_consistent": true,
+      "plugin_state_ok": true,
+      "agent_calls": 1,
+      "owned_calls": 1,
+      "pinned": 0,
+      "eligible_attempted": 1,
+      "patched": 0,
+      "preserved": 1,
+      "skipped": {},
+      "preserve_reasons": {
+        "route_low_confidence": 1
+      },
+      "attempt_unknown": 0,
+      "missing_pre_records": 0,
+      "hint_delivered": 0,
+      "target_model_mismatches": 0,
+      "record_conflicts": 0,
+      "api_retries": 0
+    },
+    {
+      "job": "todo-priority",
+      "group": "cross-file-feature-serialization-ui",
+      "repetition": 1,
+      "arm": "native_hierarchy",
+      "status": "completed",
+      "not_started_reason": null,
+      "quality": "pass",
+      "grade_reason": null,
+      "elapsed_ms": 92536,
+      "claude_cost_usd": 0.3407316,
+      "jev_cost_usd": 0,
+      "total_cost_usd": 0.3407316,
+      "model_usage": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 1408,
+          "outputTokens": 20,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "costUSD": 0.001508
+        },
+        "claude-sonnet-5": {
+          "inputTokens": 20,
+          "outputTokens": 9431,
+          "cacheReadInputTokens": 275628,
+          "cacheCreationInputTokens": 47437,
+          "costUSD": 0.33922359999999996
+        }
+      },
+      "usage_status": "ok",
+      "fable_tokens": 0,
+      "init_model": "claude-sonnet-5",
+      "root_model_consistent": true,
+      "plugin_state_ok": true,
+      "agent_calls": 1,
+      "owned_calls": 1,
+      "pinned": 0,
+      "eligible_attempted": 0,
+      "patched": 0,
+      "preserved": 0,
+      "skipped": {
+        "mode_native": 1
+      },
+      "preserve_reasons": {},
+      "attempt_unknown": 0,
+      "missing_pre_records": 0,
+      "hint_delivered": 0,
+      "target_model_mismatches": 0,
+      "record_conflicts": 0,
+      "api_retries": 0
+    },
+    {
+      "job": "space-sim",
+      "group": "compound-simulation-camera-hud",
+      "repetition": 1,
+      "arm": "native_hierarchy",
+      "status": "completed",
+      "not_started_reason": null,
+      "quality": "pass",
+      "grade_reason": null,
+      "elapsed_ms": 232777,
+      "claude_cost_usd": 0.6937023999999999,
+      "jev_cost_usd": 0,
+      "total_cost_usd": 0.6937023999999999,
+      "model_usage": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 1667,
+          "outputTokens": 13,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "costUSD": 0.001732
+        },
+        "claude-sonnet-5": {
+          "inputTokens": 42,
+          "outputTokens": 23960,
+          "cacheReadInputTokens": 719252,
+          "cacheCreationInputTokens": 77109,
+          "costUSD": 0.6919703999999999
+        }
+      },
+      "usage_status": "ok",
+      "fable_tokens": 0,
+      "init_model": "claude-sonnet-5",
+      "root_model_consistent": true,
+      "plugin_state_ok": true,
+      "agent_calls": 1,
+      "owned_calls": 1,
+      "pinned": 0,
+      "eligible_attempted": 0,
+      "patched": 0,
+      "preserved": 0,
+      "skipped": {
+        "mode_native": 1
+      },
+      "preserve_reasons": {},
+      "attempt_unknown": 0,
+      "missing_pre_records": 0,
+      "hint_delivered": 0,
+      "target_model_mismatches": 0,
+      "record_conflicts": 0,
+      "api_retries": 0
+    },
+    {
+      "job": "space-sim",
+      "group": "compound-simulation-camera-hud",
+      "repetition": 1,
+      "arm": "jev_hierarchy",
+      "status": "completed",
+      "not_started_reason": null,
+      "quality": "pass",
+      "grade_reason": null,
+      "elapsed_ms": 282475,
+      "claude_cost_usd": 1.3459918999999996,
+      "jev_cost_usd": 0.00019387200000000002,
+      "total_cost_usd": 1.3461857719999997,
+      "model_usage": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 1667,
+          "outputTokens": 32,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "costUSD": 0.001827
+        },
+        "claude-sonnet-5": {
+          "inputTokens": 14,
+          "outputTokens": 9313,
+          "cacheReadInputTokens": 298717,
+          "cacheCreationInputTokens": 38878,
+          "costUSD": 0.3084134
+        },
+        "claude-opus-5[1m]": {
+          "inputTokens": 34,
+          "outputTokens": 16471,
+          "cacheReadInputTokens": 476993,
+          "cacheCreationInputTokens": 38531,
+          "costUSD": 1.0357515
+        }
+      },
+      "usage_status": "ok",
+      "fable_tokens": 0,
+      "init_model": "claude-sonnet-5",
+      "root_model_consistent": true,
+      "plugin_state_ok": true,
+      "agent_calls": 1,
+      "owned_calls": 1,
+      "pinned": 0,
+      "eligible_attempted": 1,
+      "patched": 1,
+      "preserved": 0,
+      "skipped": {},
+      "preserve_reasons": {},
+      "attempt_unknown": 0,
+      "missing_pre_records": 0,
+      "hint_delivered": 1,
+      "target_model_mismatches": 0,
+      "record_conflicts": 0,
+      "api_retries": 0
+    },
+    {
+      "job": "job-queue",
+      "group": "async-error-propagation-integration",
+      "repetition": 1,
+      "arm": "jev_hierarchy",
+      "status": "completed",
+      "not_started_reason": null,
+      "quality": "pass",
+      "grade_reason": null,
+      "elapsed_ms": 82118,
+      "claude_cost_usd": 0.3454416,
+      "jev_cost_usd": 0.00011394600000000001,
+      "total_cost_usd": 0.345555546,
+      "model_usage": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 1382,
+          "outputTokens": 26,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "costUSD": 0.0015119999999999999
+        },
+        "claude-sonnet-5": {
+          "inputTokens": 22,
+          "outputTokens": 9071,
+          "cacheReadInputTokens": 318598,
+          "cacheCreationInputTokens": 47364,
+          "costUSD": 0.3439296
+        }
+      },
+      "usage_status": "ok",
+      "fable_tokens": 0,
+      "init_model": "claude-sonnet-5",
+      "root_model_consistent": true,
+      "plugin_state_ok": true,
+      "agent_calls": 1,
+      "owned_calls": 1,
+      "pinned": 0,
+      "eligible_attempted": 1,
+      "patched": 0,
+      "preserved": 1,
+      "skipped": {},
+      "preserve_reasons": {
+        "route_low_confidence": 1
+      },
+      "attempt_unknown": 0,
+      "missing_pre_records": 0,
+      "hint_delivered": 0,
+      "target_model_mismatches": 0,
+      "record_conflicts": 0,
+      "api_retries": 0
+    },
+    {
+      "job": "job-queue",
+      "group": "async-error-propagation-integration",
+      "repetition": 1,
+      "arm": "native_hierarchy",
+      "status": "completed",
+      "not_started_reason": null,
+      "quality": "pass",
+      "grade_reason": null,
+      "elapsed_ms": 107253,
+      "claude_cost_usd": 0.3786836,
+      "jev_cost_usd": 0,
+      "total_cost_usd": 0.3786836,
+      "model_usage": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 1382,
+          "outputTokens": 23,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "costUSD": 0.001497
+        },
+        "claude-sonnet-5": {
+          "inputTokens": 30,
+          "outputTokens": 10001,
+          "cacheReadInputTokens": 412183,
+          "cacheCreationInputTokens": 48670,
+          "costUSD": 0.3771865999999999
+        }
+      },
+      "usage_status": "ok",
+      "fable_tokens": 0,
+      "init_model": "claude-sonnet-5",
+      "root_model_consistent": true,
+      "plugin_state_ok": true,
+      "agent_calls": 1,
+      "owned_calls": 1,
+      "pinned": 0,
+      "eligible_attempted": 0,
+      "patched": 0,
+      "preserved": 0,
+      "skipped": {
+        "mode_native": 1
+      },
+      "preserve_reasons": {},
+      "attempt_unknown": 0,
+      "missing_pre_records": 0,
+      "hint_delivered": 0,
+      "target_model_mismatches": 0,
+      "record_conflicts": 0,
+      "api_retries": 0
+    }
+  ],
+  "notes": [
+    "Rows come from plan.json. missing_record means the planned cell has no saved file; it is not \"not started\" and never cost zero.",
+    "Claude total_cost_usd is an API-equivalent estimate (whole tree incl. children), not subscription billing or quota; Jev cost is list price × input tokens, null when any attempt has unknown usage.",
+    "Totals are over the planned cohort including failures and timeouts; a null total means some consumption is unknown and the known subtotal is shown beside it.",
+    "The complete-case diagnostic is labeled and lists exclusions; it never replaces the planned-cohort headline. Per-row percentages are not averaged.",
+    "A timeout duration is not time-to-success; completed_pass_latency is reported separately with its count.",
+    "Whole jobs are the unit; repetitions and child tasks of one job are clustered observations. Same pass counts are not evidence of equivalence.",
+    "Historical V3 runs lack V4 gate fields; those stay unknown rather than being inferred."
+  ]
+}
