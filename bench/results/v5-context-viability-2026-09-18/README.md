@@ -12,6 +12,49 @@ Corpus: `jev-gate`, `commitlore`, `logic-pro-mcp`, `agent-operator-score` (2,900
 results are produced the way the host produces them — ripgrep, `-n`, no heading, `head_limit` 250 — and scored against
 the adapter's own window: not natively truncated, `>= MIN_CONTENT_BYTES` (8 KiB), `<= MAX_CONTENT_CHARS` (20,000).
 
+**Read §0 first.** Sections 1–5 were written before the real sessions on this machine were read, and they measure a
+tool this operator's sessions never call. §0 supersedes their conclusion without changing their numbers.
+
+## 0. On this machine, the tool this feature hooks is never used
+
+The feature registers `PostToolUse` on `^Grep$`. Across **20,080 session transcripts already on disk** — every Claude
+Code session this machine has recorded — there are **120,756 tool calls and not one of them is `Grep`**:
+
+| tool | calls | share |
+|---|---|---|
+| `Bash` | 110,130 | 91.2 % |
+| `Edit` | 2,006 | 1.7 % |
+| `Write` | 1,983 | 1.6 % |
+| `Read` | 1,739 | 1.4 % |
+| **`Grep`** | **0** | **0 %** |
+
+Segmenting benchmark and subagent runs away from ordinary work does not change it: 19,590 ordinary transcripts,
+115,681 calls, zero `Grep`. The reason is not a mystery and is not a defect — this operator runs in bypass-permissions
+mode, whose standing guidance is to *"do your work through the Bash tool wherever it can accomplish the job … search
+with grep and find … rather than using the dedicated Read, Edit, or Write tools."* The `Read` share, 1.4 %, is the same
+effect on a different tool.
+
+Searching still happens: **37,462 Bash search results** (`rg`, `grep`, `egrep`, `fgrep`) in ordinary sessions, 25.5 MB
+of output. But they are small, because an agent writing its own search pipes it through `head`, scopes it to a path, or
+asks for counts:
+
+| | median | p90 | p99 |
+|---|---|---|---|
+| Bash search result | **373 B** | 1,566 B | 4,641 B |
+
+**The 8 KiB floor sits above the 99th percentile.** 98.3 % of real searches fall below it; 88 results (0.2 %) land in
+the window, and 53 of those are `-n` numbered, which is the only shape the block parser can read.
+
+That fixes a ceiling on the whole feature, independent of every gate discussed below. Give it everything it asks for —
+move the hook to Bash, teach the parser `grep -n` output, and settle the scope gate so the measured 40–54 % omission
+rate is actually applied:
+
+> **0.25–0.34 MB saved in total, across 19,590 sessions. About four tokens per session.**
+
+Sections 1–5 measured the gates on the assumption that eligible searches exist to gate. They do, at 4 %, in a corpus
+built by emulating `Grep` over repositories. What the real sessions say is that the searches themselves are already
+small — and that the gates were never the binding constraint.
+
 ## 1. Eligibility: about 4 %
 
 | corpus | samples | ELIGIBLE | below 8 KiB floor | truncated at 250 lines | above the 20,000-char cap |
@@ -106,15 +149,21 @@ why the change is described here and not made in `src/`.
 
 ## What this means for the next step
 
-Wiring the hook now would add a Jev call of 17,000–27,000 input tokens to about 4 % of searches and save nothing on any
-of them. The order that follows from the measurements is:
+Not the order §1–§5 implied. With §0 in hand, the scope floor, the 250-line truncation and the request-size work are
+all optimisations of a path whose total headroom is about four tokens a session on this operator's machine. None of
+them is worth doing for that.
 
-1. **Decide the scope floor** (owner). Everything else is downstream of it; behind it sits 40–54 %.
-2. **Decide what to do about the 250-line truncation**, which removes 88 % of exactly the searches the filter suits.
-   §6 excludes a truncated result because the filter cannot claim to have seen everything — that reasoning is sound and
-   it is also what makes the feature's best case unreachable.
-3. **Then** the request-size work, which is real but is an efficiency gain on a path that does not yet fire.
-4. **Then** wire the hook, and only then the three-condition comparison.
+What the measurements support is one decision, and it is the owner's:
+
+1. **Stop this track, and publish the negative result** — which is what this directory is. It sits beside V3's and
+   V4's, and it cost no Claude sessions and about 38 Jev requests to establish.
+2. **Or re-aim it at a surface that is actually large.** Nothing here says Jev judges context badly; the block-level
+   answers were confident and sensible, and `keep_all` at 0.99 on an exhaustive request is exactly right. What it says
+   is that *search output on this machine is already small*. 25.5 MB across 19,590 sessions is not where a session's
+   tokens go. Before any further work on relevance filtering, measure where they do go — the same transcripts that
+   produced §0 carry every tool result, and the scan costs nothing.
+
+The one thing not to do is wire the `^Grep$` hook. It would fire zero times here.
 
 ## Not settled here
 
@@ -123,6 +172,11 @@ of them. The order that follows from the measurements is:
 - The user requests driving the Jev calls were written for this run, one per search. A real session's phrasing is the
   actual input and was not sampled.
 - Jev cost was not measured: the API reports token usage, not price, and no per-token figure was applied.
-- The eligibility scan emulates the host's Grep rather than observing it. A passive `PostToolUse` recorder on real
-  sessions would measure the real distribution, including how often the model passes `head_limit` itself, and costs
-  nothing to run.
+- §0 is one operator's machine. It is a large sample of that operator — 20,080 transcripts — and a sample of one
+  configuration. A session run without bypass-permissions mode would call `Grep`, and the §1–§5 figures would be the
+  ones that apply. Nothing here measures how common either configuration is among other users.
+- §0 reads the transcript's `tool_result`, which is what the model received. A result the host capped shows its own
+  `<persisted-output>` notice and is counted above the cap, but its pre-cap size is not recoverable from the
+  transcript, so the 25.5 MB total is a floor on the bytes produced, not on the bytes delivered.
+- Whether a Bash search result is subject to the same 20,000-character cap was assumed from the notice text appearing
+  in Bash results, not bisected the way `Grep`'s was.

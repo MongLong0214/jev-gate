@@ -1,0 +1,16 @@
+{
+  "benchmark/recent": {
+    "files": 490,
+    "calls": 5076,
+    "grep_tool": 0,
+    "bash": 4535,
+    "bash_search": 1688
+  },
+  "ordinary/recent": {
+    "files": 19590,
+    "calls": 115681,
+    "grep_tool": 0,
+    "bash": 105596,
+    "bash_search": 46589
+  }
+}

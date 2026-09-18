@@ -276,10 +276,16 @@ that commit came from the core work, not from the probe.
    Mutation-check anything added here. Removing the `totalLines > numLines` guard left the whole suite green, because
    every test that reached it asserted only `ok: false` while the confirmed truncated fixture is caught one check
    earlier by `appliedLimit`. A guard whose reason code is the point needs a test that asserts the reason code.
-3. ~~**Wire the hook.**~~ **Do not, yet — measured 2026-09-18, `bench/results/v5-context-viability-2026-09-18`.**
-   Wiring it now adds a Jev call of 17,000–27,000 input tokens to about **4 %** of a real session's searches and saves
-   nothing on any of them. Over 300 real search results across four repositories, **zero** produced an omission: eight
-   of ten eligible ones stopped at the scope gate and two never reached Jev because the request exceeded 128 KiB.
+3. ~~**Wire the hook.**~~ **Do not — measured 2026-09-18, `bench/results/v5-context-viability-2026-09-18` §0.**
+   On this machine the `^Grep$` matcher would fire **zero times**. Across 20,080 session transcripts already on disk,
+   120,756 tool calls contain **no `Grep` at all**: bypass-permissions mode tells the session to search through `Bash`
+   instead, and 91.2 % of calls are `Bash`. Searching still happens — 37,462 Bash searches, 25.5 MB — but **98.3 % of
+   those results are below the 8 KiB floor**, whose p99 is 4,641 B. Granting the feature everything it asks for (hook
+   moved to `Bash`, parser taught `grep -n`, scope gate settled) caps the total benefit at **0.25–0.34 MB across 19,590
+   sessions — about four tokens per session.**
+
+   §1–§5 of that README measured the gates before the real sessions were read, on a corpus built by emulating `Grep`.
+   Their numbers stand and their conclusion does not: the gates were never the binding constraint.
 
    The upside is real and sits behind one decision. Held against the same 95-block result, the scope question answers
    `keep_all` at **0.99** when the user's request is exhaustive and `selectable` at **0.13** when it is not — so the
