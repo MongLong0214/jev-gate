@@ -2,8 +2,8 @@ import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import type { ConfigV5, Mode, PlannerTier, Tier } from './types.js';
-import { MODES, PLANNER_TIERS, TIERS } from './types.js';
+import type { ConfigV5, Mode, PlannerTier, RouteQuestionShape, Tier } from './types.js';
+import { MODES, PLANNER_TIERS, ROUTE_QUESTION_SHAPES, TIERS } from './types.js';
 
 export const DEFAULT_CONFIG: ConfigV5 = {
   version: 5,
@@ -19,6 +19,8 @@ export const DEFAULT_CONFIG: ConfigV5 = {
   // measurement yet shows parallel dispatch is faster here, so concurrency is opt-in rather than advertised.
   maxParallelWorkers: 1,
   guardAllowTools: [],
+  // Optional in a config file: absent keeps the shipped composite Gate B question.
+  routeQuestionShape: 'composite',
 };
 
 /**
@@ -45,6 +47,7 @@ const V5_KEYS = new Set<string>([
   'models',
   'maxParallelWorkers',
   'guardAllowTools',
+  'routeQuestionShape',
 ]);
 const LEGACY_MARKERS = ['uncertainTier', 'opusModel', 'frontierModel', 'confidenceFloor'];
 /** `resultConfidenceFloor` is a deprecated no-op (T11): it is still validated so a deployed file loads, and read by nothing. */
@@ -122,6 +125,13 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
   if (typeof cap !== 'number' || !Number.isInteger(cap) || cap < 1 || cap > MAX_PARALLEL_WORKERS_LIMIT) {
     return { ok: false, error: `maxParallelWorkers must be an integer in [1, ${MAX_PARALLEL_WORKERS_LIMIT}]` };
   }
+  // Absent means composite, so a deployed V5 file keeps its behaviour without being edited (§4).
+  // Absence defaults; an explicit wrong value is an error. `??` would have turned a null in the file into composite.
+  const shape = 'routeQuestionShape' in c ? c['routeQuestionShape'] : 'composite';
+  if (typeof shape !== 'string' || !ROUTE_QUESTION_SHAPES.includes(shape as RouteQuestionShape)) {
+    return { ok: false, error: `routeQuestionShape must be one of ${ROUTE_QUESTION_SHAPES.join(', ')}` };
+  }
+
   const allow = c['guardAllowTools'];
   if (!Array.isArray(allow) || allow.some((t) => typeof t !== 'string' || !TOOL_NAME_RE.test(t))) {
     return { ok: false, error: `guardAllowTools must be an array of tool names matching ${TOOL_NAME_RE.source}` };
@@ -140,6 +150,7 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
       models,
       maxParallelWorkers: cap,
       guardAllowTools: allow as string[],
+      routeQuestionShape: shape as RouteQuestionShape,
     },
   };
 };

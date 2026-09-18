@@ -8,6 +8,9 @@ export type Mode = 'off' | 'native' | 'auto' | 'context';
 export type RoutingMode = 'native' | 'auto';
 export type OwnedRole = 'worker' | 'planner';
 export type ExecutionShape = 'direct' | 'orchestrated';
+export type RouteQuestionShape = 'composite' | 'atomic';
+export const ROUTE_QUESTION_SHAPES: readonly RouteQuestionShape[] = ['composite', 'atomic'];
+
 export type AdmissionAnswer = 'direct' | 'orchestrated' | 'needs_context' | 'abstain';
 export type RouteAnswer = Tier | 'abstain';
 export type PlannerRouteAnswer = PlannerTier | 'abstain';
@@ -86,6 +89,12 @@ export interface ConfigV5 {
   models: Record<Tier, string>;
   maxParallelWorkers: number;
   guardAllowTools: string[];
+  /**
+   * How Gate B asks. `composite` is the shipped five-way choice; `atomic` fans the same judgement out into read-off
+   * questions and composes them in code. Optional in a config file and defaulted to `composite`, so a deployed file
+   * keeps its current behaviour without being edited.
+   */
+  routeQuestionShape: RouteQuestionShape;
 }
 
 export interface ChoiceAnswer<K extends string> {

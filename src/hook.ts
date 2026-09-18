@@ -3,7 +3,18 @@ import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { buildAdmissionRequest, decideAdmission, type AdmissionDecision } from './admission.js';
-import { buildPlannerRouteRequest, buildWorkerRouteRequest, decidePlannerRoute, decideWorkerRoute, type PlannerRouteDecision, type WorkerRouteDecision } from './allocation.js';
+import {
+  buildAtomicWorkerRouteRequest,
+  buildPlannerRouteRequest,
+  buildWorkerRouteRequest,
+  decidePlannerRoute,
+  decideWorkerRoute,
+  decideWorkerRouteAtomic,
+  WORKER_FACT_QUESTIONS,
+  type PlannerRouteDecision,
+  type WorkerRouteDecision,
+  type WorkerRouteState,
+} from './allocation.js';
 import {
   checkEligibility,
   DENIALS_BEFORE_STOP,
@@ -634,7 +645,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     }
     let routed: WorkerRouteDecision | null = null;
     const gate = await callGate(
-      buildWorkerRouteRequest(task, plan.constraints, predecessors, eligibility.prompt, eligibility.tier, config, priorAttempt),
+      routeRequest(task, plan.constraints, predecessors, eligibility.prompt, eligibility.tier, priorAttempt),
       'pre_intent',
       'pre_result',
       {
@@ -647,10 +658,10 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         prior_attempt_omitted: carried === 'omitted',
         tool_input: summarizeToolInput(eligibility.input),
       },
-      ['route', 'upgrade_basis'],
+      routeAnswerKeys,
       (outcome) => {
         if (!outcome.ok) return { decision: { action: 'preserve', tier: eligibility.tier, reason: outcome.code, changed_default: false } };
-        routed = decideWorkerRoute(outcome.response.answers, config.routeConfidenceFloor, eligibility.tier);
+        routed = routeDecision(outcome.response.answers, eligibility.tier);
         // A17 item 7: without Jev this dispatch would have run on the profile the coordinator called.
         return { decision: { action: routed.action, tier: routed.tier, reason: routed.reason, changed_default: routed.action === 'patch' && routed.tier !== eligibility.tier } };
       },
@@ -671,6 +682,28 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     );
   };
 
+  /**
+   * Gate B in whichever shape the config selects. `composite` is the shipped five-way choice; `atomic` fans the same
+   * judgement into read-off questions and composes them in code. The answer keys the trace records differ with the
+   * shape, so an observation says which questions were actually asked.
+   */
+  const atomicRoute = config.routeQuestionShape === 'atomic';
+  const routeAnswerKeys: string[] = atomicRoute ? Object.keys(WORKER_FACT_QUESTIONS) : ['route', 'upgrade_basis'];
+  const routeRequest = (
+    task: PlannedTask,
+    constraints: string[],
+    predecessors: Parameters<typeof buildWorkerRouteRequest>[2],
+    prompt: string,
+    tier: Tier,
+    prior: Parameters<typeof buildWorkerRouteRequest>[6] = null,
+    // Widened on purpose: the two shapes carry different question sets, and callGate is indifferent to which.
+  ): JevRequest<WorkerRouteState, Record<string, unknown>> =>
+    atomicRoute
+      ? buildAtomicWorkerRouteRequest(task, constraints, predecessors, prompt, tier, config, prior)
+      : buildWorkerRouteRequest(task, constraints, predecessors, prompt, tier, config, prior);
+  const routeDecision = (answers: Record<string, unknown>, tier: Tier): WorkerRouteDecision =>
+    atomicRoute ? decideWorkerRouteAtomic(answers, tier) : decideWorkerRoute(answers, config.routeConfidenceFloor, tier);
+
   /** A direct-shape owned worker call is an ad-hoc task: routed V4-style in auto, untouched in native. */
   const handleAdhocWorker = async (eligibility: Extract<Eligibility, { eligible: true }>): Promise<HookResult> => {
     if (mode === 'native') return preserve('mode_native');
@@ -690,14 +723,14 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     };
     let routed: WorkerRouteDecision | null = null;
     const gate = await callGate(
-      buildWorkerRouteRequest(task, [], [], eligibility.prompt, eligibility.tier, config),
+      routeRequest(task, [], [], eligibility.prompt, eligibility.tier),
       'pre_intent',
       'pre_result',
       { role: 'worker', task_id: 'adhoc', called_tier: eligibility.tier, tool_input: summarizeToolInput(eligibility.input) },
-      ['route', 'upgrade_basis'],
+      routeAnswerKeys,
       (outcome) => {
         if (!outcome.ok) return { decision: { action: 'preserve', tier: eligibility.tier, reason: outcome.code, changed_default: false } };
-        routed = decideWorkerRoute(outcome.response.answers, config.routeConfidenceFloor, eligibility.tier);
+        routed = routeDecision(outcome.response.answers, eligibility.tier);
         return { decision: { action: routed.action, tier: routed.tier, reason: routed.reason, changed_default: routed.action === 'patch' && routed.tier !== eligibility.tier } };
       },
     );

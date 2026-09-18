@@ -30,7 +30,8 @@ const write = (name: string, value: unknown): string => {
 
 describe('validateConfig', () => {
   it('accepts a full V5 file and a partial file over the defaults', () => {
-    expect(validateConfig(V5)).toEqual({ ok: true, config: { ...V5, mode: 'auto' } });
+    // routeQuestionShape is optional in a file and defaulted, so a deployed V5 config keeps composite Gate B.
+    expect(validateConfig(V5)).toEqual({ ok: true, config: { ...V5, mode: 'auto', routeQuestionShape: 'composite' } });
     const partial = validateConfig({ version: 5, mode: 'native', plannerDefaultTier: 'frontier', models: { deep: 'claude-opus-5' } });
     expect(partial.ok).toBe(true);
     if (!partial.ok) return;
