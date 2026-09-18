@@ -1,4 +1,4 @@
-import type { DenyReason, Mode, Tier } from './types.js';
+import type { DenyReason, RoutingMode, Tier } from './types.js';
 
 /** All coordinator text is fixed (D10): it never contains the user's prompt, repository content or a Jev answer's text. */
 export const GUIDANCE_HEADER = '[Jev Gate coordinator guidance for this session]';
@@ -12,7 +12,7 @@ export const DIRECT_GUIDANCE = [
   'Respect explicit models, no-delegation requests, plan mode, permissions and cancellation.',
 ];
 
-export const DIRECT_MODE_SENTENCE: Record<Exclude<Mode, 'off'>, string> = {
+export const DIRECT_MODE_SENTENCE: Record<RoutingMode, string> = {
   native: 'Execution shape: you decide whether this request needs planning or delegation. Jev is not involved.',
   auto: 'Execution shape: direct. This request was admitted as one native conversation; no orchestration state is active.',
 };
@@ -43,10 +43,10 @@ export const NATIVE_ORCHESTRATION_SENTENCE = 'You decide whether to start planni
 export const renderAdmissionLine = (confidence: number | null): string =>
   `Execution shape: orchestrated${confidence === null ? '' : ` (admission confidence ${confidence.toFixed(2)})`}.`;
 
-export const renderDirectGuidance = (mode: Exclude<Mode, 'off'>): string => [GUIDANCE_HEADER, ...DIRECT_GUIDANCE, DIRECT_MODE_SENTENCE[mode]].join('\n');
+export const renderDirectGuidance = (mode: RoutingMode): string => [GUIDANCE_HEADER, ...DIRECT_GUIDANCE, DIRECT_MODE_SENTENCE[mode]].join('\n');
 
 export interface OrchestrationGuidanceOptions {
-  mode: Exclude<Mode, 'off'>;
+  mode: RoutingMode;
   confidence: number | null;
   superseded: boolean;
   maxParallelWorkers: number;

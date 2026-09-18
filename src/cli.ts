@@ -67,7 +67,15 @@ const checkPluginFiles = (): void => {
     const hooks = JSON.parse(readFileSync(join(root, 'hooks/hooks.json'), 'utf8')) as unknown;
     const table = isRecord(hooks) && isRecord(hooks['hooks']) ? hooks['hooks'] : {};
     // V5: PreToolUse guards every root tool, so it is registered once with no matcher; Stop records the terminal outcome.
-    const expected: Array<[string, string | null]> = [['UserPromptSubmit', null], ['PreToolUse', null], ['PostToolUse', '^Agent$'], ['PostToolUseFailure', '^Agent$'], ['Stop', null]];
+    const expected: Array<[string, string | null]> = [
+      ['SessionStart', null],
+      ['UserPromptSubmit', null],
+      ['PreToolUse', null],
+      ['PostToolUse', '^Agent$'],
+      ['PostToolUse', '^Grep$'],
+      ['PostToolUseFailure', '^Agent$'],
+      ['Stop', null],
+    ];
     for (const [event, matcher] of expected) {
       const groups = Array.isArray(table[event]) ? (table[event] as unknown[]) : [];
       const handlers = groups.flatMap((g) => (isRecord(g) && (matcher === null ? !('matcher' in g) : g['matcher'] === matcher) && Array.isArray(g['hooks']) ? g['hooks'] : []));
@@ -185,7 +193,7 @@ const main = (): void => {
   checkClaude();
   checkEnv();
   checkUserSettings();
-  say('info', `in Claude Code: /hooks should list five jev-gate entries (UserPromptSubmit, PreToolUse with no matcher, PostToolUse/PostToolUseFailure on ^Agent$, Stop); the @agent- typeahead should show ${Object.keys(OWNED_AGENTS).join(', ')} once each`);
+  say('info', `in Claude Code: /hooks should list seven jev-gate entries (SessionStart, UserPromptSubmit, PreToolUse with no matcher, PostToolUse on ^Agent$ and on ^Grep$, PostToolUseFailure on ^Agent$, Stop); the @agent- typeahead should show ${Object.keys(OWNED_AGENTS).join(', ')} once each`);
   say('info', `start: JEV_GATE_MODE=auto CLAUDE_CODE_FORK_SUBAGENT=0 CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude --model sonnet --plugin-dir "${root}"  (doctor performed no inference; a passing doctor is not proof of patch support, effort support or model access)`);
   for (const [level, text] of lines) process.stdout.write(`[${level}] ${text}\n`);
   process.exitCode = lines.some(([l]) => l === 'fail') ? 1 : 0;

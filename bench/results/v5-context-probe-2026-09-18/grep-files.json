@@ -1,0 +1,29 @@
+{
+  "_source": {
+    "host": "Claude Code 2.1.276, macOS 26.2 (Darwin 25.2.0)",
+    "captured": "2026-09-18",
+    "cell": "c1-capture",
+    "note": "Real PostToolUse payload from an installed host. Paths and line text are placeholders; key names, key order, value types and every numeric relationship are exactly as observed. model_facing_render is the string the host actually delivered to the model, taken from the PostToolBatch event that followed (PostToolBatch carries the rendered text, not this object).",
+    "call_index": 1
+  },
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Grep",
+  "tool_input": {
+    "pattern": "TOKEN_",
+    "path": ".",
+    "output_mode": "files_with_matches"
+  },
+  "tool_response": {
+    "mode": "files_with_matches",
+    "filenames": [
+      "src/module-a.ts",
+      "src/module-d.ts",
+      "src/module-c.ts",
+      "src/module-e.ts",
+      "src/module-b.ts"
+    ],
+    "numFiles": 5,
+    "totalFiles": 5
+  },
+  "model_facing_render": "Found 5 files\nsrc/module-a.ts\nsrc/module-d.ts\nsrc/module-c.ts\nsrc/module-e.ts\nsrc/module-b.ts"
+}

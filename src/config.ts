@@ -90,7 +90,7 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
   if (unknown.length) return { ok: false, error: `unknown config keys: ${unknown.join(',')}` };
   const c: Record<string, unknown> = { ...DEFAULT_CONFIG, ...raw };
   const mode = c['mode'];
-  if (typeof mode !== 'string' || !MODES.includes(mode as Mode)) return { ok: false, error: 'mode must be off|native|auto' };
+  if (typeof mode !== 'string' || !MODES.includes(mode as Mode)) return { ok: false, error: 'mode must be off|native|auto|context' };
   const jevModel = c['jevModel'];
   if (typeof jevModel !== 'string' || !MODEL_NAME_RE.test(jevModel)) return { ok: false, error: `jevModel must match ${MODEL_NAME_RE.source}` };
   const deadline = c['requestDeadlineMs'];
@@ -147,11 +147,12 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
 /**
  * Explicit JEV_GATE_MODE=off returns before any file is read, so a broken config can never enable routing.
  * Otherwise the optional file is loaded and validated as V5 only; JEV_GATE_MODE overrides just the mode.
+ * `context` is a mode value, not a new config version: version stays 5 and every deployed V5 file keeps loading (§4).
  */
 export const loadConfig = (env: Env, readFile: (path: string) => string = (p) => readFileSync(p, 'utf8')): ConfigResult => {
   const modeEnv = env['JEV_GATE_MODE'];
   if (modeEnv === 'off') return { ok: true, config: { ...DEFAULT_CONFIG, mode: 'off' }, source: 'env:off' };
-  if (modeEnv !== undefined && modeEnv !== '' && !MODES.includes(modeEnv as Mode)) return { ok: false, error: 'JEV_GATE_MODE must be off|native|auto', source: 'env' };
+  if (modeEnv !== undefined && modeEnv !== '' && !MODES.includes(modeEnv as Mode)) return { ok: false, error: 'JEV_GATE_MODE must be off|native|auto|context', source: 'env' };
   const path = resolveConfigPath(env);
   let text: string | null = null;
   try {
@@ -175,6 +176,6 @@ export const loadConfig = (env: Env, readFile: (path: string) => string = (p) =>
     base = v.config;
     source = path;
   }
-  if (modeEnv === 'native' || modeEnv === 'auto') return { ok: true, config: { ...base, mode: modeEnv }, source };
+  if (modeEnv === 'native' || modeEnv === 'auto' || modeEnv === 'context') return { ok: true, config: { ...base, mode: modeEnv }, source };
   return { ok: true, config: base, source };
 };

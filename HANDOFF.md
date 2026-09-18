@@ -175,6 +175,77 @@ case-folded and symlinks are not resolved, so a normalized path is a planner's c
 [#33](https://github.com/MongLong0214/jev-gate/issues/33) still describes the superseded required-uncertainty plan and
 needs its body corrected to match this revision, which is a remote edit and therefore needs the owner to ask.
 
+## Second track: the search-result context filter (started 2026-09-18, in progress)
+
+A separate feature from the routing work, specified in `jev-context-filter-mvp-r1` (the owner's document, kept locally at
+`~/Downloads/jev-gate-context-filter-agent-handoff.md` — read it in full before continuing). The idea: keep the user's
+own coding model, and before a long `Grep` result reaches it, let Jev judge which result blocks are relevant and have the
+code deliver only the selected **original** text. No model routing, no planner, no guard, no V5 job state.
+
+### The probe answered the question the feature depends on: yes
+
+`bench/results/v5-context-probe-2026-09-18/` holds thirteen recorded headless sessions on Claude Code 2.1.276 ($1.58,
+about three minutes of model time). The decisive results, each with evidence in that directory:
+
+- **`PostToolUse.hookSpecificOutput.updatedToolOutput` really replaces what the model receives**, and the original is
+  not also delivered. A hook that kept 2 of 5 markers produced a 506-character `tool_result` where the original was
+  1298; the model listed exactly those two markers.
+- **A malformed replacement is silently ignored** and the original survives, with no error reaching the model or the
+  hook. A rejected replacement is therefore indistinguishable from an applied one from inside the hook, which is why the
+  observation states `replacement_emitted` and `host_applied` separately and never infers one from the other.
+- **`additionalContext` is additive, never a substitute**, and it appears in no log, no transcript and no
+  `PostToolBatch` payload. Its tokens are real but unmeasurable after the fact, so count the disclosure from the string
+  the hook emitted.
+- **Grep's `tool_response` is three different shapes, not one with optional fields**, keyed by `output_mode`. In content
+  mode `numFiles` is always `0` and `filenames` always `[]`; `numLines` counts rendered ripgrep output lines including
+  context and `--` separators, not matches and not files. Fixtures for all three modes plus a truncated result are saved
+  beside the README.
+- **Two truncations exist and only one is visible.** `head_limit` shows up as `appliedLimit`/`totalLines`, but the host
+  also caps the result the model receives: a call carrying 27,391 characters into the hook was delivered to the model as
+  a 2 KB preview plus a saved-output path, with nothing in `tool_response` saying so. **The bytes a hook sees are not
+  the bytes the model would have received.** The window where filtering can save anything runs from the 8 KiB floor up
+  to that cap; above it a filter that fires makes things worse unless it beats the 2 KB preview.
+- **The recovery archive is readable by the native `Read`, but only under a narrow grant.** `--allowedTools` alone,
+  `Read(...)` rules inside it, and `--add-dir` all failed, including for an ordinary directory under `$HOME`; a
+  `--settings` file with `permissions.additionalDirectories: ["~/.local/state/jev-gate/context"]` (or an equivalent
+  `permissions.allow` entry) worked. A user launching with a restricted `--allowedTools` cannot recover, and the plugin
+  cannot detect that in advance. Also: a recovery notice written as "read this path and report field X" got refused by
+  the model as an exfiltration probe, so the disclosure must stay a plain factual sentence.
+- **`PostToolBatch`** fires once per call after `PostToolUse`, nests everything under `tool_calls[]`, and carries
+  `tool_response` as the **rendered string**. It is a useful read-only check of what the model actually received and it
+  must never be fed to the Grep response parser.
+- `effort` is an object here too, confirming the V5 defect; `--no-session-persistence` leaves `transcript_path`
+  populated but never creates the file, so transcript-based evidence needs that flag dropped.
+
+Still unknown and listed in that README: interactive TUI behaviour, whether a subagent's Grep reaches a root hook, the
+exact size cap, `appliedOffset`, and paths with colons or non-ASCII characters against a real host.
+
+### What exists in code
+
+On `dev`, uncommitted at the time of writing: `src/context/{blocks,purpose,select,archive,render,store}.ts` (about 880
+lines) plus edits to `src/{config,types,trace}.ts` and `tests/context-blocks.test.ts`. A `context` mode is being added
+to `Mode` so that `off`, `native` and `auto` keep their exact current behaviour and `context` runs only this filter.
+
+### Pick it up here
+
+1. **Confirm the adapter against the probe's fixtures.** `src/context/blocks.ts` was written before the probe finished,
+   so its parse assumptions must be replaced by the three real shapes in
+   `bench/results/v5-context-probe-2026-09-18/grep-*.json`, and its eligibility check must use
+   `appliedLimit !== undefined || appliedOffset !== undefined || totalLines > numLines` for native truncation.
+2. **Finish the offline tests** listed in the document's §12 that are reachable without a host: colons in paths, Korean
+   text, CRLF, identical text at different locations staying separate, protected instruction files never omitted, short
+   and count and files-only and truncated and error results passing through with no provider call, one request carrying
+   the scope question plus per-block questions that name real block paths, low confidence and ties and malformed answers
+   keeping the block, a malformed scope keeping everything, single-attempt HTTP behaviour preserving known usage, and
+   archive failure or cap producing no omission.
+3. **Wire the hook** (`src/hook.ts`, `hooks/hooks.json`): a `PostToolUse` matcher of exactly `^Grep$` — do not widen the
+   existing `^Agent$` — plus the `SessionStart` and `UserPromptSubmit` events the purpose record needs. The context path
+   must branch before any V5 routing logic, and a child caller (`agent_id` present) must pass through untouched.
+4. **Then the three-condition comparison** in §11 (`native_output`, `deterministic_output`, `jev_output`), which needs
+   the owner's approval because it spends real budget. Measure against what the host *would have delivered*, not against
+   the bytes the hook saw — the cap above makes that distinction the difference between a real number and a fabricated
+   one.
+
 ## Rules that are not negotiable
 
 - The TypeSafe key lives only in `~/.config/jev-gate/typesafe.key`. Never in git, an issue, a log or a chat message.
@@ -185,6 +256,8 @@ needs its body corrected to match this revision, which is a remote edit and ther
 - Negative results are deliverables. V3 and V4 both published theirs; do not quietly replace them.
 - No release, npm publish, marketplace entry or marketing without the owner asking for it.
 - No paid experiment, release, tag, push, or remote issue edit — including to #33 — without the owner asking first.
+- For the context filter: never claim a byte saving measured against what the hook saw. The host caps large results
+  before the model sees them, so the only honest baseline is what the host would have delivered.
 
 ## Working conventions in this repo
 

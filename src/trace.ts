@@ -18,7 +18,10 @@ export type TracePhase =
   | 'post'
   | 'failure'
   | 'plan'
-  | 'stop';
+  | 'stop'
+  /** jev-context-filter-mvp-r1 §10: the search filter's own pair, joined by a shared `request_id`. */
+  | 'context_intent'
+  | 'context_result';
 
 export interface TraceRecordBase {
   version: 5;
