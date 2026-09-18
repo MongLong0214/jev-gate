@@ -1,0 +1,1527 @@
+[
+  {
+    "project": "-Users-isaac",
+    "len": 25,
+    "context_tokens": 290292,
+    "fan": {
+      "ms": 586,
+      "in": 652,
+      "multiple_deliverables": 0.29,
+      "separable": 0.69,
+      "forbids_delegation": 0.05,
+      "mechanical": 0.27,
+      "missing_reference": 0.71,
+      "answer_only": 0.12,
+      "size": 2.57,
+      "size_conf": 0.29
+    },
+    "shipped": {
+      "choice": "orchestrated",
+      "confidence": 0.5,
+      "decided": false,
+      "shape": "direct",
+      "ms": 524,
+      "in": 585
+    }
+  },
+  {
+    "project": "-Users-isaac",
+    "len": 64,
+    "context_tokens": 514887,
+    "fan": {
+      "ms": 466,
+      "in": 672,
+      "multiple_deliverables": 0.55,
+      "separable": 0.79,
+      "forbids_delegation": 0.21,
+      "mechanical": 0.13,
+      "missing_reference": 0.78,
+      "answer_only": 0.12,
+      "size": 2.26,
+      "size_conf": 0.19
+    },
+    "shipped": {
+      "choice": "orchestrated",
+      "confidence": 0.17,
+      "decided": false,
+      "shape": "direct",
+      "ms": 244,
+      "in": 605
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-agent-operator-score",
+    "len": 18,
+    "context_tokens": 842101,
+    "fan": {
+      "ms": 243,
+      "in": 645,
+      "multiple_deliverables": 0.13,
+      "separable": 0.56,
+      "forbids_delegation": 0.11,
+      "mechanical": 0.31,
+      "missing_reference": 0.79,
+      "answer_only": 0.17,
+      "size": 0.77,
+      "size_conf": 0.36
+    },
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.46,
+      "decided": false,
+      "shape": "direct",
+      "ms": 345,
+      "in": 578
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-agent-operator-score",
+    "len": 719,
+    "context_tokens": 918746,
+    "fan": {
+      "ms": 218,
+      "in": 921,
+      "multiple_deliverables": 0.68,
+      "separable": 0.66,
+      "forbids_delegation": 0.12,
+      "mechanical": 0.23,
+      "missing_reference": 0.81,
+      "answer_only": 0.1,
+      "size": 2.81,
+      "size_conf": 0.54
+    },
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.42,
+      "decided": false,
+      "shape": "direct",
+      "ms": 297,
+      "in": 854
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-agent-operator-score",
+    "len": 515,
+    "context_tokens": 501052,
+    "fan": {
+      "ms": 256,
+      "in": 775,
+      "multiple_deliverables": 0.63,
+      "separable": 0.4,
+      "forbids_delegation": 0.13,
+      "mechanical": 0.19,
+      "missing_reference": 0.68,
+      "answer_only": 0.07,
+      "size": 2.33,
+      "size_conf": 0.2
+    },
+    "shipped": {
+      "choice": "needs_context",
+      "confidence": 0.18,
+      "decided": false,
+      "shape": "direct",
+      "ms": 255,
+      "in": 708
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-agent-operator-score",
+    "len": 57,
+    "context_tokens": 498672,
+    "fan": {
+      "ms": 230,
+      "in": 676,
+      "multiple_deliverables": 0.27,
+      "separable": 0.7,
+      "forbids_delegation": 0.09,
+      "mechanical": 0.17,
+      "missing_reference": 0.89,
+      "answer_only": 0.21,
+      "size": 2.02,
+      "size_conf": 0.5
+    },
+    "shipped": {
+      "choice": "needs_context",
+      "confidence": 0.87,
+      "decided": false,
+      "shape": "direct",
+      "ms": 283,
+      "in": 609
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 21,
+    "context_tokens": 661785,
+    "fan": {
+      "ms": 459,
+      "in": 648,
+      "multiple_deliverables": 0.22,
+      "separable": 0.53,
+      "forbids_delegation": 0.17,
+      "mechanical": 0.29,
+      "missing_reference": 0.79,
+      "answer_only": 0.21,
+      "size": 1.19,
+      "size_conf": 0.51
+    },
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.32,
+      "decided": false,
+      "shape": "direct",
+      "ms": 324,
+      "in": 581
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 25,
+    "context_tokens": 259792,
+    "fan": {
+      "ms": 255,
+      "in": 650,
+      "multiple_deliverables": 0.13,
+      "separable": 0.54,
+      "forbids_delegation": 0.14,
+      "mechanical": 0.21,
+      "missing_reference": 0.8,
+      "answer_only": 0.12,
+      "size": 1.85,
+      "size_conf": 0
+    },
+    "shipped": {
+      "choice": "needs_context",
+      "confidence": 0.27,
+      "decided": false,
+      "shape": "direct",
+      "ms": 262,
+      "in": 583
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 21,
+    "context_tokens": 832738,
+    "fan": {
+      "ms": 269,
+      "in": 647,
+      "multiple_deliverables": 0.08,
+      "separable": 0.55,
+      "forbids_delegation": 0.13,
+      "mechanical": 0.19,
+      "missing_reference": 0.63,
+      "answer_only": 0.81,
+      "size": 0.08,
+      "size_conf": 0.93
+    },
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.99,
+      "decided": true,
+      "shape": "direct",
+      "ms": 269,
+      "in": 580
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 37,
+    "context_tokens": 488872,
+    "fan": {
+      "ms": 263,
+      "in": 656,
+      "multiple_deliverables": 0.43,
+      "separable": 0.65,
+      "forbids_delegation": 0.11,
+      "mechanical": 0.22,
+      "missing_reference": 0.83,
+      "answer_only": 0.11,
+      "size": 2.23,
+      "size_conf": 0.76
+    },
+    "shipped": {
+      "choice": "needs_context",
+      "confidence": 0.6,
+      "decided": false,
+      "shape": "direct",
+      "ms": 345,
+      "in": 589
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 30,
+    "context_tokens": 428196,
+    "fan": {
+      "ms": 315,
+      "in": 649,
+      "multiple_deliverables": 0.48,
+      "separable": 0.61,
+      "forbids_delegation": 0.21,
+      "mechanical": 0.42,
+      "missing_reference": 0.75,
+      "answer_only": 0.16,
+      "size": 1.96,
+      "size_conf": 0
+    },
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.45,
+      "decided": false,
+      "shape": "direct",
+      "ms": 298,
+      "in": 582
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 1610,
+    "context_tokens": 962877,
+    "fan": {
+      "ms": 209,
+      "in": 1514,
+      "multiple_deliverables": 0.57,
+      "separable": 0.66,
+      "forbids_delegation": 0.17,
+      "mechanical": 0.08,
+      "missing_reference": 0.79,
+      "answer_only": 0.28,
+      "size": 2.87,
+      "size_conf": 0.5
+    },
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.52,
+      "decided": false,
+      "shape": "direct",
+      "ms": 207,
+      "in": 1447
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 1609,
+    "context_tokens": 657393,
+    "fan": {
+      "ms": 279,
+      "in": 1656,
+      "multiple_deliverables": 0.91,
+      "separable": 0.74,
+      "forbids_delegation": 0.11,
+      "mechanical": 0.1,
+      "missing_reference": 0.77,
+      "answer_only": 0.05,
+      "size": 3.98,
+      "size_conf": 0.99
+    },
+    "shipped": {
+      "choice": "orchestrated",
+      "confidence": 0.65,
+      "decided": false,
+      "shape": "direct",
+      "ms": 228,
+      "in": 1589
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 82,
+    "context_tokens": 989072,
+    "fan": {
+      "ms": 212,
+      "in": 682,
+      "multiple_deliverables": 0.78,
+      "separable": 0.67,
+      "forbids_delegation": 0.15,
+      "mechanical": 0.28,
+      "missing_reference": 0.84,
+      "answer_only": 0.24,
+      "size": 2.07,
+      "size_conf": 0.12
+    },
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.19,
+      "decided": false,
+      "shape": "direct",
+      "ms": 291,
+      "in": 615
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 38,
+    "context_tokens": 961765,
+    "fan": {
+      "ms": 258,
+      "in": 661,
+      "multiple_deliverables": 0.4,
+      "separable": 0.59,
+      "forbids_delegation": 0.31,
+      "mechanical": 0.16,
+      "missing_reference": 0.77,
+      "answer_only": 0.17,
+      "size": 3.18,
+      "size_conf": 0.5
+    },
+    "shipped": {
+      "choice": "orchestrated",
+      "confidence": 0.17,
+      "decided": false,
+      "shape": "direct",
+      "ms": 226,
+      "in": 594
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 58,
+    "context_tokens": 785855,
+    "fan": {
+      "ms": 255,
+      "in": 672,
+      "multiple_deliverables": 0.72,
+      "separable": 0.65,
+      "forbids_delegation": 0.13,
+      "mechanical": 0.25,
+      "missing_reference": 0.86,
+      "answer_only": 0.35,
+      "size": 1.92,
+      "size_conf": 0.31
+    },
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.5,
+      "decided": false,
+      "shape": "direct",
+      "ms": 240,
+      "in": 605
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 513,
+    "context_tokens": 111582,
+    "fan": {
+      "ms": 241,
+      "in": 775,
+      "multiple_deliverables": 0.27,
+      "separable": 0.33,
+      "forbids_delegation": 0.18,
+      "mechanical": 0.2,
+      "missing_reference": 0.72,
+      "answer_only": 0.08,
+      "size": 2.3,
+      "size_conf": 0
+    },
+    "shipped": {
+      "choice": "needs_context",
+      "confidence": 0.36,
+      "decided": false,
+      "shape": "direct",
+      "ms": 227,
+      "in": 708
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 78,
+    "context_tokens": 659117,
+    "fan": {
+      "ms": 286,
+      "in": 683,
+      "multiple_deliverables": 0.57,
+      "separable": 0.56,
+      "forbids_delegation": 0.11,
+      "mechanical": 0.23,
+      "missing_reference": 0.87,
+      "answer_only": 0.18,
+      "size": 3.25,
+      "size_conf": 0.38
+    },
+    "shipped": {
+      "choice": "needs_context",
+      "confidence": 0.47,
+      "decided": false,
+      "shape": "direct",
+      "ms": 234,
+      "in": 616
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 607,
+    "context_tokens": 950388,
+    "fan": {
+      "ms": 251,
+      "in": 818,
+      "multiple_deliverables": 0.56,
+      "separable": 0.67,
+      "forbids_delegation": 0.19,
+      "mechanical": 0.24,
+      "missing_reference": 0.81,
+      "answer_only": 0.1,
+      "size": 1.73,
+      "size_conf": 0
+    },
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.61,
+      "decided": false,
+      "shape": "direct",
+      "ms": 249,
+      "in": 751
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 568,
+    "context_tokens": 239650,
+    "fan": {
+      "ms": 272,
+      "in": 801,
+      "multiple_deliverables": 0.26,
+      "separable": 0.58,
+      "forbids_delegation": 0.2,
+      "mechanical": 0.23,
+      "missing_reference": 0.52,
+      "answer_only": 0.54,
+      "size": 2.21,
+      "size_conf": 0.32
+    },
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.78,
+      "decided": false,
+      "shape": "direct",
+      "ms": 243,
+      "in": 734
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 30,
+    "context_tokens": 808370,
+    "fan": {
+      "ms": 220,
+      "in": 650,
+      "multiple_deliverables": 0.06,
+      "separable": 0.57,
+      "forbids_delegation": 0.14,
+      "mechanical": 0.37,
+      "missing_reference": 0.82,
+      "answer_only": 0.78,
+      "size": 0.1,
+      "size_conf": 0.92
+    },
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.89,
+      "decided": true,
+      "shape": "direct",
+      "ms": 320,
+      "in": 583
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 107,
+    "context_tokens": 160999,
+    "fan": {
+      "ms": 224,
+      "in": 672,
+      "multiple_deliverables": 0.13,
+      "separable": 0.62,
+      "forbids_delegation": 0.11,
+      "mechanical": 0.38,
+      "missing_reference": 0.87,
+      "answer_only": 0.33,
+      "size": 1.05,
+      "size_conf": 0.63
+    },
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.38,
+      "decided": false,
+      "shape": "direct",
+      "ms": 257,
+      "in": 605
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 30,
+    "context_tokens": 866951,
+    "fan": {
+      "ms": 242,
+      "in": 651,
+      "multiple_deliverables": 0.45,
+      "separable": 0.65,
+      "forbids_delegation": 0.1,
+      "mechanical": 0.27,
+      "missing_reference": 0.72,
+      "answer_only": 0.05,
+      "size": 2.43,
+      "size_conf": 0.41
+    },
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.33,
+      "decided": false,
+      "shape": "direct",
+      "ms": 238,
+      "in": 584
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 382,
+    "context_tokens": 764029,
+    "fan": {
+      "ms": 293,
+      "in": 736,
+      "multiple_deliverables": 0.41,
+      "separable": 0.61,
+      "forbids_delegation": 0.2,
+      "mechanical": 0.25,
+      "missing_reference": 0.8,
+      "answer_only": 0.09,
+      "size": 2,
+      "size_conf": 0
+    },
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.71,
+      "decided": false,
+      "shape": "direct",
+      "ms": 230,
+      "in": 669
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 26,
+    "context_tokens": 553583,
+    "fan": {
+      "ms": 340,
+      "in": 652,
+      "multiple_deliverables": 0.92,
+      "separable": 0.75,
+      "forbids_delegation": 0.1,
+      "mechanical": 0.21,
+      "missing_reference": 0.9,
+      "answer_only": 0.08,
+      "size": 3.98,
+      "size_conf": 0.98
+    },
+    "shipped": {
+      "choice": "orchestrated",
+      "confidence": 0.41,
+      "decided": false,
+      "shape": "direct",
+      "ms": 258,
+      "in": 585
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 38,
+    "context_tokens": 638349,
+    "fan": {
+      "ms": 246,
+      "in": 656,
+      "multiple_deliverables": 0.43,
+      "separable": 0.65,
+      "forbids_delegation": 0.51,
+      "mechanical": 0.22,
+      "missing_reference": 0.79,
+      "answer_only": 0.07,
+      "size": 2.19,
+      "size_conf": 0.63
+    },
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.63,
+      "decided": false,
+      "shape": "direct",
+      "ms": 228,
+      "in": 589
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 22,
+    "context_tokens": 927327,
+    "fan": {
+      "ms": 233,
+      "in": 648,
+      "multiple_deliverables": 0.19,
+      "separable": 0.5,
+      "forbids_delegation": 0.13,
+      "mechanical": 0.21,
+      "missing_reference": 0.8,
+      "answer_only": 0.1,
+      "size": 1.6,
+      "size_conf": 0
+    },
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.37,
+      "decided": false,
+      "shape": "direct",
+      "ms": 235,
+      "in": 581
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 29,
+    "context_tokens": 774003,
+    "fan": {
+      "ms": 425,
+      "in": 636,
+      "multiple_deliverables": 0.13,
+      "separable": 0.46,
+      "forbids_delegation": 0.14,
+      "mechanical": 0.27,
+      "missing_reference": 0.77,
+      "answer_only": 0.35,
+      "size": 0.05,
+      "size_conf": 0.96
+    },
+    "shipped": {
+      "choice": "abstain",
+      "confidence": 0.61,
+      "decided": false,
+      "shape": "direct",
+      "ms": 233,
+      "in": 569
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 34,
+    "context_tokens": 986085,
+    "fan": {
+      "ms": 208,
+      "in": 657,
+      "multiple_deliverables": 0.75,
+      "separable": 0.55,
+      "forbids_delegation": 0.14,
+      "mechanical": 0.17,
+      "missing_reference": 0.82,
+      "answer_only": 0.1,
+      "size": 3.31,
+      "size_conf": 0.57
+    },
+    "shipped": {
+      "choice": "orchestrated",
+      "confidence": 0.35,
+      "decided": false,
+      "shape": "direct",
+      "ms": 239,
+      "in": 590
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 19,
+    "context_tokens": 974787,
+    "fan": {
+      "ms": 415,
+      "in": 651,
+      "multiple_deliverables": 0.39,
+      "separable": 0.51,
+      "forbids_delegation": 0.08,
+      "mechanical": 0.37,
+      "missing_reference": 0.8,
+      "answer_only": 0.17,
+      "size": 1.78,
+      "size_conf": 0
+    },
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.32,
+      "decided": false,
+      "shape": "direct",
+      "ms": 247,
+      "in": 584
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 1025,
+    "context_tokens": 623831,
+    "fan": {
+      "ms": 210,
+      "in": 1015,
+      "multiple_deliverables": 0.31,
+      "separable": 0.65,
+      "forbids_delegation": 0.22,
+      "mechanical": 0.53,
+      "missing_reference": 0.68,
+      "answer_only": 0.1,
+      "size": 1.3,
+      "size_conf": 0
+    },
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.9,
+      "decided": true,
+      "shape": "direct",
+      "ms": 245,
+      "in": 948
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 19,
+    "context_tokens": 938233,
+    "fan": {
+      "ms": 235,
+      "in": 636,
+      "multiple_deliverables": 0.1,
+      "separable": 0.58,
+      "forbids_delegation": 0.16,
+      "mechanical": 0.34,
+      "missing_reference": 0.65,
+      "answer_only": 0.18,
+      "size": 0.94,
+      "size_conf": 0.8
+    },
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.44,
+      "decided": false,
+      "shape": "direct",
+      "ms": 325,
+      "in": 569
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 16,
+    "context_tokens": 348307,
+    "fan": {
+      "ms": 361,
+      "in": 643,
+      "multiple_deliverables": 0.16,
+      "separable": 0.63,
+      "forbids_delegation": 0.2,
+      "mechanical": 0.35,
+      "missing_reference": 0.78,
+      "answer_only": 0.49,
+      "size": 0.82,
+      "size_conf": 0.6
+    },
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.48,
+      "decided": false,
+      "shape": "direct",
+      "ms": 268,
+      "in": 576
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 28,
+    "context_tokens": 225807,
+    "fan": {
+      "ms": 247,
+      "in": 651,
+      "multiple_deliverables": 0.26,
+      "separable": 0.61,
+      "forbids_delegation": 0.12,
+      "mechanical": 0.43,
+      "missing_reference": 0.79,
+      "answer_only": 0.15,
+      "size": 2.47,
+      "size_conf": 0
+    },
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.38,
+      "decided": false,
+      "shape": "direct",
+      "ms": 231,
+      "in": 584
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 17,
+    "context_tokens": 905218,
+    "fan": {
+      "ms": 257,
+      "in": 642,
+      "multiple_deliverables": 0.11,
+      "separable": 0.53,
+      "forbids_delegation": 0.1,
+      "mechanical": 0.25,
+      "missing_reference": 0.76,
+      "answer_only": 0.67,
+      "size": 0.26,
+      "size_conf": 0.78
+    },
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.35,
+      "decided": false,
+      "shape": "direct",
+      "ms": 268,
+      "in": 575
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 457,
+    "context_tokens": 605655,
+    "fan": {
+      "ms": 313,
+      "in": 794,
+      "multiple_deliverables": 0.46,
+      "separable": 0.64,
+      "forbids_delegation": 0.18,
+      "mechanical": 0.26,
+      "missing_reference": 0.77,
+      "answer_only": 0.09,
+      "size": 2.02,
+      "size_conf": 0
+    },
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.71,
+      "decided": false,
+      "shape": "direct",
+      "ms": 222,
+      "in": 727
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 179,
+    "context_tokens": 202286,
+    "fan": {
+      "ms": 214,
+      "in": 764,
+      "multiple_deliverables": 0.83,
+      "separable": 0.68,
+      "forbids_delegation": 0.1,
+      "mechanical": 0.14,
+      "missing_reference": 0.77,
+      "answer_only": 0.22,
+      "size": 3.92,
+      "size_conf": 0.94
+    },
+    "shipped": {
+      "choice": "orchestrated",
+      "confidence": 0.35,
+      "decided": false,
+      "shape": "direct",
+      "ms": 300,
+      "in": 697
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 228,
+    "context_tokens": 948406,
+    "fan": {
+      "ms": 322,
+      "in": 799,
+      "multiple_deliverables": 0.58,
+      "separable": 0.42,
+      "forbids_delegation": 0.13,
+      "mechanical": 0.22,
+      "missing_reference": 0.63,
+      "answer_only": 0.34,
+      "size": 2.39,
+      "size_conf": 0.05
+    },
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.32,
+      "decided": false,
+      "shape": "direct",
+      "ms": 263,
+      "in": 732
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 53,
+    "context_tokens": 678286,
+    "fan": {
+      "ms": 279,
+      "in": 665,
+      "multiple_deliverables": 0.4,
+      "separable": 0.65,
+      "forbids_delegation": 0.23,
+      "mechanical": 0.22,
+      "missing_reference": 0.82,
+      "answer_only": 0.11,
+      "size": 2.59,
+      "size_conf": 0
+    },
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.29,
+      "decided": false,
+      "shape": "direct",
+      "ms": 287,
+      "in": 598
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 20,
+    "context_tokens": 250620,
+    "fan": {
+      "ms": 276,
+      "in": 648,
+      "multiple_deliverables": 0.41,
+      "separable": 0.58,
+      "forbids_delegation": 0.1,
+      "mechanical": 0.32,
+      "missing_reference": 0.85,
+      "answer_only": 0.12,
+      "size": 2.1,
+      "size_conf": 0.02
+    },
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.15,
+      "decided": false,
+      "shape": "direct",
+      "ms": 238,
+      "in": 581
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 438,
+    "context_tokens": 582278,
+    "fan": {
+      "ms": 251,
+      "in": 889,
+      "multiple_deliverables": 0.78,
+      "separable": 0.64,
+      "forbids_delegation": 0.12,
+      "mechanical": 0.37,
+      "missing_reference": 0.81,
+      "answer_only": 0.05,
+      "size": 1.89,
+      "size_conf": 0.07
+    },
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.84,
+      "decided": true,
+      "shape": "direct",
+      "ms": 258,
+      "in": 822
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 29,
+    "context_tokens": 312301,
+    "fan": {
+      "ms": 215,
+      "in": 652,
+      "multiple_deliverables": 0.13,
+      "separable": 0.7,
+      "forbids_delegation": 0.11,
+      "mechanical": 0.22,
+      "missing_reference": 0.73,
+      "answer_only": 0.46,
+      "size": 0.58,
+      "size_conf": 0.52
+    },
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.84,
+      "decided": true,
+      "shape": "direct",
+      "ms": 242,
+      "in": 585
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 37,
+    "context_tokens": 871945,
+    "fan": {
+      "ms": 234,
+      "in": 655,
+      "multiple_deliverables": 0.12,
+      "separable": 0.59,
+      "forbids_delegation": 0.1,
+      "mechanical": 0.2,
+      "missing_reference": 0.73,
+      "answer_only": 0.12,
+      "size": 0.22,
+      "size_conf": 0.81
+    },
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.37,
+      "decided": false,
+      "shape": "direct",
+      "ms": 276,
+      "in": 588
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 2319,
+    "context_tokens": 153617,
+    "fan": {
+      "ms": 295,
+      "in": 1930,
+      "multiple_deliverables": 0.84,
+      "separable": 0.57,
+      "forbids_delegation": 0.09,
+      "mechanical": 0.18,
+      "missing_reference": 0.82,
+      "answer_only": 0.05,
+      "size": 3.68,
+      "size_conf": 0.73
+    },
+    "shipped": {
+      "choice": "orchestrated",
+      "confidence": 0.29,
+      "decided": false,
+      "shape": "direct",
+      "ms": 266,
+      "in": 1863
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 312,
+    "context_tokens": 839825,
+    "fan": {
+      "ms": 258,
+      "in": 787,
+      "multiple_deliverables": 0.89,
+      "separable": 0.65,
+      "forbids_delegation": 0.14,
+      "mechanical": 0.19,
+      "missing_reference": 0.91,
+      "answer_only": 0.05,
+      "size": 2.79,
+      "size_conf": 0.81
+    },
+    "shipped": {
+      "choice": "needs_context",
+      "confidence": 0.3,
+      "decided": false,
+      "shape": "direct",
+      "ms": 232,
+      "in": 720
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 15,
+    "context_tokens": 663815,
+    "fan": {
+      "ms": 221,
+      "in": 639,
+      "multiple_deliverables": 0.21,
+      "separable": 0.52,
+      "forbids_delegation": 0.22,
+      "mechanical": 0.36,
+      "missing_reference": 0.72,
+      "answer_only": 0.33,
+      "size": 0.68,
+      "size_conf": 0.43
+    },
+    "shipped": {
+      "choice": "needs_context",
+      "confidence": 0.18,
+      "decided": false,
+      "shape": "direct",
+      "ms": 229,
+      "in": 572
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 66,
+    "context_tokens": 512835,
+    "fan": {
+      "ms": 215,
+      "in": 675,
+      "multiple_deliverables": 0.83,
+      "separable": 0.64,
+      "forbids_delegation": 0.12,
+      "mechanical": 0.21,
+      "missing_reference": 0.86,
+      "answer_only": 0.26,
+      "size": 3.06,
+      "size_conf": 0.84
+    },
+    "shipped": {
+      "choice": "orchestrated",
+      "confidence": 0.22,
+      "decided": false,
+      "shape": "direct",
+      "ms": 253,
+      "in": 608
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 28,
+    "context_tokens": 905702,
+    "fan": {
+      "ms": 237,
+      "in": 643,
+      "multiple_deliverables": 0.1,
+      "separable": 0.61,
+      "forbids_delegation": 0.13,
+      "mechanical": 0.25,
+      "missing_reference": 0.78,
+      "answer_only": 0.53,
+      "size": 1.22,
+      "size_conf": 0
+    },
+    "shipped": {
+      "choice": "needs_context",
+      "confidence": 0.49,
+      "decided": false,
+      "shape": "direct",
+      "ms": 227,
+      "in": 576
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 49,
+    "context_tokens": 447304,
+    "fan": {
+      "ms": 265,
+      "in": 665,
+      "multiple_deliverables": 0.17,
+      "separable": 0.58,
+      "forbids_delegation": 0.09,
+      "mechanical": 0.14,
+      "missing_reference": 0.81,
+      "answer_only": 0.81,
+      "size": 0.16,
+      "size_conf": 0.87
+    },
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.51,
+      "decided": false,
+      "shape": "direct",
+      "ms": 292,
+      "in": 598
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 34,
+    "context_tokens": 412787,
+    "fan": {
+      "ms": 236,
+      "in": 657,
+      "multiple_deliverables": 0.9,
+      "separable": 0.72,
+      "forbids_delegation": 0.13,
+      "mechanical": 0.19,
+      "missing_reference": 0.84,
+      "answer_only": 0.05,
+      "size": 2.9,
+      "size_conf": 0.89
+    },
+    "shipped": {
+      "choice": "orchestrated",
+      "confidence": 0.27,
+      "decided": false,
+      "shape": "direct",
+      "ms": 233,
+      "in": 590
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 248,
+    "context_tokens": 245379,
+    "fan": {
+      "ms": 253,
+      "in": 709,
+      "multiple_deliverables": 0.15,
+      "separable": 0.68,
+      "forbids_delegation": 0.15,
+      "mechanical": 0.22,
+      "missing_reference": 0.73,
+      "answer_only": 0.04,
+      "size": 0.69,
+      "size_conf": 0.43
+    },
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.73,
+      "decided": false,
+      "shape": "direct",
+      "ms": 289,
+      "in": 642
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 25,
+    "context_tokens": 373511,
+    "fan": {
+      "ms": 236,
+      "in": 638,
+      "multiple_deliverables": 0.86,
+      "separable": 0.65,
+      "forbids_delegation": 0.11,
+      "mechanical": 0.51,
+      "missing_reference": 0.83,
+      "answer_only": 0.1,
+      "size": 2.69,
+      "size_conf": 0.67
+    },
+    "shipped": {
+      "choice": "orchestrated",
+      "confidence": 0.22,
+      "decided": false,
+      "shape": "direct",
+      "ms": 225,
+      "in": 571
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 16,
+    "context_tokens": 687086,
+    "fan": {
+      "ms": 323,
+      "in": 643,
+      "multiple_deliverables": 0.18,
+      "separable": 0.61,
+      "forbids_delegation": 0.52,
+      "mechanical": 0.24,
+      "missing_reference": 0.78,
+      "answer_only": 0.23,
+      "size": 0.89,
+      "size_conf": 0.26
+    },
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.45,
+      "decided": false,
+      "shape": "direct",
+      "ms": 307,
+      "in": 576
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 93,
+    "context_tokens": 380093,
+    "fan": {
+      "ms": 220,
+      "in": 691,
+      "multiple_deliverables": 0.82,
+      "separable": 0.74,
+      "forbids_delegation": 0.12,
+      "mechanical": 0.2,
+      "missing_reference": 0.75,
+      "answer_only": 0.15,
+      "size": 3.75,
+      "size_conf": 0.79
+    },
+    "shipped": {
+      "choice": "orchestrated",
+      "confidence": 0.35,
+      "decided": false,
+      "shape": "direct",
+      "ms": 287,
+      "in": 624
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 24,
+    "context_tokens": 981051,
+    "fan": {
+      "ms": 248,
+      "in": 649,
+      "multiple_deliverables": 0.22,
+      "separable": 0.58,
+      "forbids_delegation": 0.1,
+      "mechanical": 0.4,
+      "missing_reference": 0.78,
+      "answer_only": 0.1,
+      "size": 2.18,
+      "size_conf": 0.2
+    },
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.37,
+      "decided": false,
+      "shape": "direct",
+      "ms": 245,
+      "in": 582
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 43,
+    "context_tokens": 791912,
+    "fan": {
+      "ms": 246,
+      "in": 651,
+      "multiple_deliverables": 0.4,
+      "separable": 0.69,
+      "forbids_delegation": 0.12,
+      "mechanical": 0.31,
+      "missing_reference": 0.77,
+      "answer_only": 0.12,
+      "size": 2.14,
+      "size_conf": 0.6
+    },
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.23,
+      "decided": false,
+      "shape": "direct",
+      "ms": 247,
+      "in": 584
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 35,
+    "context_tokens": 429662,
+    "fan": {
+      "ms": 305,
+      "in": 660,
+      "multiple_deliverables": 0.28,
+      "separable": 0.59,
+      "forbids_delegation": 0.11,
+      "mechanical": 0.2,
+      "missing_reference": 0.84,
+      "answer_only": 0.31,
+      "size": 0.75,
+      "size_conf": 0.73
+    },
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.58,
+      "decided": false,
+      "shape": "direct",
+      "ms": 254,
+      "in": 593
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 43,
+    "context_tokens": 946924,
+    "fan": {
+      "ms": 243,
+      "in": 663,
+      "multiple_deliverables": 0.49,
+      "separable": 0.59,
+      "forbids_delegation": 0.11,
+      "mechanical": 0.17,
+      "missing_reference": 0.82,
+      "answer_only": 0.79,
+      "size": 0.51,
+      "size_conf": 0.57
+    },
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.53,
+      "decided": false,
+      "shape": "direct",
+      "ms": 275,
+      "in": 596
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 26,
+    "context_tokens": 254351,
+    "fan": {
+      "ms": 247,
+      "in": 648,
+      "multiple_deliverables": 0.65,
+      "separable": 0.45,
+      "forbids_delegation": 0.14,
+      "mechanical": 0.21,
+      "missing_reference": 0.83,
+      "answer_only": 0.31,
+      "size": 2.07,
+      "size_conf": 0
+    },
+    "shipped": {
+      "choice": "needs_context",
+      "confidence": 0.29,
+      "decided": false,
+      "shape": "direct",
+      "ms": 240,
+      "in": 581
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 28,
+    "context_tokens": 577606,
+    "fan": {
+      "ms": 208,
+      "in": 650,
+      "multiple_deliverables": 0.56,
+      "separable": 0.64,
+      "forbids_delegation": 0.09,
+      "mechanical": 0.29,
+      "missing_reference": 0.84,
+      "answer_only": 0.68,
+      "size": 3.75,
+      "size_conf": 0.79
+    },
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.34,
+      "decided": false,
+      "shape": "direct",
+      "ms": 250,
+      "in": 583
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 76,
+    "context_tokens": 984598,
+    "fan": {
+      "ms": 241,
+      "in": 690,
+      "multiple_deliverables": 0.9,
+      "separable": 0.76,
+      "forbids_delegation": 0.09,
+      "mechanical": 0.24,
+      "missing_reference": 0.9,
+      "answer_only": 0.04,
+      "size": 3.31,
+      "size_conf": 0.72
+    },
+    "shipped": {
+      "choice": "needs_context",
+      "confidence": 0.39,
+      "decided": false,
+      "shape": "direct",
+      "ms": 240,
+      "in": 623
+    }
+  }
+]
