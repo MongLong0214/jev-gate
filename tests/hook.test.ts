@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { GUARD_DENY_REASON, STOP_REASON } from '../src/coordinator.js';
+import { DENIALS_BEFORE_STOP } from '../src/brief.js';
 import { runHook, type HookDeps, type HookResult } from '../src/hook.js';
 import { jobPath, newGeneration, readJob, updateJob } from '../src/job.js';
 import { composeTaskPrompt, contractHash, MAX_COMPOSED_BYTES } from '../src/plan.js';
@@ -262,15 +263,15 @@ describe('root guard (A6 allow-list)', () => {
     expect(other.kind).toBe('deny');
   });
 
-  it('adds continue:false on the third denial of one prompt', async () => {
+  it('adds continue:false once the denial budget of one prompt is spent', async () => {
     const env = await orchestrate();
-    const first = await run(env, preEvent('Bash', { command: 'ls' }));
-    const second = await run(env, preEvent('Bash', { command: 'ls' }));
-    expect(parse(first.stdout as string)).not.toHaveProperty('continue');
-    expect(parse(second.stdout as string)).not.toHaveProperty('continue');
-    const third = await run(env, preEvent('Bash', { command: 'ls' }));
-    expect(parse(third.stdout as string)).toMatchObject({ continue: false, stopReason: STOP_REASON });
-    expect(state(env).current.denials).toBe(3);
+    for (let i = 1; i < DENIALS_BEFORE_STOP; i += 1) {
+      const denial = await run(env, preEvent('Bash', { command: 'ls' }));
+      expect(parse(denial.stdout as string)).not.toHaveProperty('continue');
+    }
+    const last = await run(env, preEvent('Bash', { command: 'ls' }));
+    expect(parse(last.stdout as string)).toMatchObject({ continue: false, stopReason: STOP_REASON });
+    expect(state(env).current.denials).toBe(DENIALS_BEFORE_STOP);
   });
 
   it('never guards a child caller, a direct job or a session without state', async () => {

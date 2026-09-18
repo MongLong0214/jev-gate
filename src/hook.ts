@@ -646,8 +646,10 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     const generation = gen as JobGeneration;
     if (!ownedCall) {
       const decision = guardDecision(toolName, input.tool_input, config);
-      trace?.write('guard', { ...base, tool_name: toolName, allow: decision.allow, denials: generation.denials });
-      if (decision.allow) return skip();
+      if (decision.allow) {
+        trace?.write('guard', { ...base, tool_name: toolName, allow: true, denials: generation.denials, stopped: false });
+        return skip();
+      }
       let denials = generation.denials + 1;
       const counted = updateJob(deps.env, sessionId, (prev) => {
         if (!prev) return null;
@@ -655,7 +657,9 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         return { ...prev, current: { ...prev.current, denials } };
       });
       if (!counted.ok) denials = generation.denials + 1;
-      return emitDeny('guard_denied', GUARD_DENY_REASON, denials >= DENIALS_BEFORE_STOP ? STOP_REASON : null);
+      const stopped = denials >= DENIALS_BEFORE_STOP;
+      trace?.write('guard', { ...base, tool_name: toolName, allow: false, denials, stopped });
+      return emitDeny('guard_denied', GUARD_DENY_REASON, stopped ? STOP_REASON : null);
     }
 
     const eligibility = checkEligibility(input, deps.env, config);

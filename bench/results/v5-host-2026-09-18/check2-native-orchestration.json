@@ -1,0 +1,381 @@
+{
+  "check": "2. guarded orchestration in native mode (no Jev)",
+  "kind": "real product plugin, JEV_GATE_MODE=native JEV_GATE_EXPERIMENT_ADMISSION=orchestrated; the dump-only test plugin was loaded alongside for hook-input evidence",
+  "host": "Claude Code 2.1.276 (macOS 26.2, node v24.18.0), claude.ai team subscription login, headless `claude -p` (check 6: interactive TUI via tmux), CLAUDE_CODE_FORK_SUBAGENT=0 CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1, --setting-sources project,local, --permission-mode acceptEdits, --no-session-persistence, disposable project",
+  "product_build": {
+    "dist_hook_sha256": "fa0f7351a66ed2ee010b9071ca94d717fa8251c492c3b65165854ce8ee61a510",
+    "built_at_local": "2026-09-18T15:06:49",
+    "source": "working tree before commit 134df5f"
+  },
+  "request": "compound: two small modules a.js and b.js behind one shared interface plus tests that pass under `node --test` (text withheld; sha256 below)",
+  "cli": {
+    "cli_version": "2.1.276",
+    "root_model": "claude-sonnet-5",
+    "max_turns": 40,
+    "allowed_tools": "Bash(node *),Bash(npm test),Bash(npm run test),Bash(ls *)",
+    "plugins_loaded": [
+      "jev-gate",
+      "jev-hostproof-v5"
+    ]
+  },
+  "traces": [
+    {
+      "caller": {
+        "agent_id": null,
+        "agent_type": null
+      },
+      "tool_use_id": null,
+      "mode": "native",
+      "attempted": false,
+      "known_not_sent": true,
+      "forced": true,
+      "decision": "orchestrated",
+      "reason": "mode_native",
+      "phase": "admission_result",
+      "version": 5,
+      "written_at": "2026-09-18T06:13:38.145Z"
+    },
+    {
+      "caller": {
+        "agent_id": null,
+        "agent_type": null
+      },
+      "tool_use_id": "toolu_01AZxdPbVJhNoEScimdkpjUB",
+      "mode": "native",
+      "tool_name": "Bash",
+      "allow": false,
+      "denials": 0,
+      "phase": "guard",
+      "version": 5,
+      "written_at": "2026-09-18T06:13:46.511Z"
+    },
+    {
+      "caller": {
+        "agent_id": null,
+        "agent_type": null
+      },
+      "tool_use_id": "toolu_012sSNND69v4dQ381fKEUNqT",
+      "mode": "native",
+      "status": "completed",
+      "outcome": "ready",
+      "rev": 1,
+      "tasks": 2,
+      "carried_receipts": 0,
+      "phase": "plan",
+      "version": 5,
+      "written_at": "2026-09-18T06:14:52.547Z"
+    },
+    {
+      "caller": {
+        "agent_id": null,
+        "agent_type": null
+      },
+      "tool_use_id": "toolu_01Ka3iD8DRXxiuN4VdQeHhtE",
+      "mode": "native",
+      "task_id": "t1",
+      "rev": 1,
+      "attempt": 1,
+      "verdict": "accept",
+      "verdict_reason": null,
+      "advisory": null,
+      "tool_response": {
+        "status": "completed",
+        "agentId": "afe4d84d14c1dbec5",
+        "resolvedModel": "claude-sonnet-5",
+        "modelsUsed": null,
+        "totalDurationMs": 15162,
+        "totalToolUseCount": 4,
+        "totalTokens": 20319,
+        "usage": {
+          "input_tokens": 2,
+          "output_tokens": 476,
+          "cache_creation_input_tokens": 350,
+          "cache_read_input_tokens": 19491
+        }
+      },
+      "root_effort": null,
+      "phase": "post",
+      "version": 5,
+      "written_at": "2026-09-18T06:15:11.300Z"
+    },
+    {
+      "caller": {
+        "agent_id": null,
+        "agent_type": null
+      },
+      "tool_use_id": "toolu_01YGYP3susQMsA1Be5qokmCL",
+      "mode": "native",
+      "task_id": "t2",
+      "rev": 1,
+      "attempt": 1,
+      "verdict": "accept",
+      "verdict_reason": null,
+      "advisory": null,
+      "tool_response": {
+        "status": "completed",
+        "agentId": "a7a397280fe98d073",
+        "resolvedModel": "claude-sonnet-5",
+        "modelsUsed": null,
+        "totalDurationMs": 24932,
+        "totalToolUseCount": 8,
+        "totalTokens": 21655,
+        "usage": {
+          "input_tokens": 2,
+          "output_tokens": 528,
+          "cache_creation_input_tokens": 156,
+          "cache_read_input_tokens": 20969
+        }
+      },
+      "root_effort": null,
+      "phase": "post",
+      "version": 5,
+      "written_at": "2026-09-18T06:15:39.600Z"
+    },
+    {
+      "caller": {
+        "agent_id": null,
+        "agent_type": null
+      },
+      "tool_use_id": null,
+      "mode": "native",
+      "outcome": "completed",
+      "phase": "stop",
+      "version": 5,
+      "written_at": "2026-09-18T06:15:43.445Z"
+    }
+  ],
+  "trace_phase_counts": {
+    "admission_result": 1,
+    "guard": 1,
+    "plan": 1,
+    "post": 2,
+    "stop": 1
+  },
+  "state": {
+    "shape": "orchestrated",
+    "phase": "planned",
+    "planner_tier": null,
+    "denials": 1,
+    "outcome": "completed",
+    "attempts": {
+      "planner": 1,
+      "replans": 0,
+      "tasks": {
+        "t1": 1,
+        "t2": 1
+      }
+    },
+    "plan": {
+      "rev": 1,
+      "tasks": [
+        {
+          "id": "t1",
+          "depends_on": [],
+          "deliverable_basenames": [
+            "a.js",
+            "b.js"
+          ],
+          "check_ids": [
+            "c1",
+            "c2"
+          ],
+          "required_check_ids": [
+            "c1",
+            "c2"
+          ],
+          "contract_hash": "8a6ed34d4db0ef444c0f362140a32e2360d90279775445f92a2c05fce690ddc5"
+        },
+        {
+          "id": "t2",
+          "depends_on": [
+            "t1"
+          ],
+          "deliverable_basenames": [
+            "transform.test.js"
+          ],
+          "check_ids": [
+            "c1",
+            "c2",
+            "c3",
+            "c4"
+          ],
+          "required_check_ids": [
+            "c1",
+            "c2",
+            "c3",
+            "c4"
+          ],
+          "contract_hash": "612ace8b68e272f01a63e77e14dad6b3c6b3cc32fd6bf317d1f3d763ccc710ac"
+        }
+      ]
+    },
+    "receipts": [
+      {
+        "task_id": "t1",
+        "rev": 1,
+        "attempt": 1,
+        "verdict": "accept",
+        "advisory": null,
+        "observed_model": "claude-sonnet-5",
+        "root_effort": null,
+        "reported_check_ids": [
+          "c1",
+          "c2"
+        ],
+        "reported_results": [
+          "pass",
+          "pass"
+        ]
+      },
+      {
+        "task_id": "t2",
+        "rev": 1,
+        "attempt": 1,
+        "verdict": "accept",
+        "advisory": null,
+        "observed_model": "claude-sonnet-5",
+        "root_effort": null,
+        "reported_check_ids": [
+          "c1",
+          "c2",
+          "c3",
+          "c4"
+        ],
+        "reported_results": [
+          "pass",
+          "pass",
+          "pass",
+          "pass"
+        ]
+      }
+    ],
+    "active_at_end": {}
+  },
+  "root_agent_calls": [
+    {
+      "called_subagent_type": "jev-gate:planner",
+      "model_param_present": false,
+      "root_prompt_len": 1077,
+      "root_prompt_sha256": "e2f768c593e018877a711e585bcc10deeb532a3e30f2bd71138d4b0c049a1c1f",
+      "root_prompt_first_token": null,
+      "contract_block_in_recorded_input": false,
+      "route_note_in_recorded_input": false
+    },
+    {
+      "called_subagent_type": "jev-gate:worker",
+      "model_param_present": false,
+      "root_prompt_len": 337,
+      "root_prompt_sha256": "b4dd8209a594343b0ce73848db0b53aa6d39c1d051d9fd9f1043943f992c2674",
+      "root_prompt_first_token": "[JEV_TASK rev=1 id=t1]",
+      "contract_block_in_recorded_input": false,
+      "route_note_in_recorded_input": false
+    },
+    {
+      "called_subagent_type": "jev-gate:worker",
+      "model_param_present": false,
+      "root_prompt_len": 349,
+      "root_prompt_sha256": "2f076ec24f5e9afbe1d168ca62a6f09630dcc3989a74ef377d238e837d74a9b8",
+      "root_prompt_first_token": "[JEV_TASK rev=1 id=t2]",
+      "contract_block_in_recorded_input": false,
+      "route_note_in_recorded_input": false
+    }
+  ],
+  "tool_calls": {
+    "root_tool_calls": {
+      "Bash": 1,
+      "Agent": 3
+    },
+    "child_tool_calls": {
+      "Glob": 2,
+      "Read": 2,
+      "Bash": 9,
+      "Write": 3
+    }
+  },
+  "permission_denials": [
+    {
+      "tool_name": "Bash",
+      "caller": "root"
+    },
+    {
+      "tool_name": "Glob",
+      "caller": "child"
+    },
+    {
+      "tool_name": "Bash",
+      "caller": "child"
+    },
+    {
+      "tool_name": "Bash",
+      "caller": "child"
+    }
+  ],
+  "host_visibility": {
+    "coordinator_guidance_text_in_stream_json": false,
+    "posttooluse_additional_context_in_stream_json": false,
+    "guard_deny_reason_in_stream_json": true
+  },
+  "accounting": {
+    "total_cost_usd": 0.6516617000000002,
+    "num_turns": 5,
+    "duration_ms": 125472,
+    "modelUsage": {
+      "claude-haiku-4-5-20251001": {
+        "inputTokens": 937,
+        "outputTokens": 19,
+        "cacheReadInputTokens": 0,
+        "cacheCreationInputTokens": 0,
+        "costUSD": 0.001032,
+        "canonicalModel": "claude-haiku-4-5",
+        "provider": "firstParty",
+        "costBasis": "list"
+      },
+      "claude-sonnet-5": {
+        "inputTokens": 36,
+        "outputTokens": 5023,
+        "cacheReadInputTokens": 406556,
+        "cacheCreationInputTokens": 61856,
+        "costUSD": 0.37903719999999996,
+        "canonicalModel": "claude-sonnet-5",
+        "provider": "firstParty",
+        "costBasis": "list"
+      },
+      "claude-opus-5[1m]": {
+        "inputTokens": 6,
+        "outputTokens": 4554,
+        "cacheReadInputTokens": 26765,
+        "cacheCreationInputTokens": 14433,
+        "costUSD": 0.2715925,
+        "canonicalModel": "claude-opus-5",
+        "provider": "firstParty",
+        "costBasis": "list"
+      }
+    }
+  },
+  "findings": {
+    "orchestration_guidance_injected": "observed indirectly - the guidance text never appears in --output-format stream-json, but the root session, whose request never mentions jev-gate, called jev-gate:planner and then dispatched workers with the exact [JEV_TASK rev=1 id=t1] marker syntax that only the injected ORCHESTRATION_RULES define",
+    "planner_called_and_plan_parsed": "observed - one jev-gate:planner call with no model argument, plan trace outcome ready rev 1 (2 tasks), phase planned; modelUsage shows claude-opus-5[1m], i.e. the planner profile model",
+    "planner_tier_left_native": "observed - planner_tier is null and no pre_intent/pre_result trace exists: in native mode no tier patch is made",
+    "canonical_composition": "observed - the root worker prompts contain no check ids, yet both workers reported the contract check ids c1/c2 and c1..c4 and the deterministic verdict accepted them; the ids exist only in the hook-appended [Jev Gate task contract] block",
+    "stream_json_records_pre_patch_input": "host fact - the Agent tool_use recorded in stream-json is the input BEFORE updatedInput, so prompt composition cannot be verified from the transcript, only from hook-side evidence",
+    "root_guard": "observed for Bash - the single root Bash attempt was denied with the fixed GUARD_DENY_REASON and counted (denials=1); the root never attempted Edit/Write afterwards, so root Edit denial and the third-denial continue:false were NOT exercised by the model (see hook_level_probes)",
+    "child_bash_not_guarded": "observed - workers ran Bash (node --test, npm test, ls) freely; only their non-matching compound commands were refused by --allowedTools, not by the guard",
+    "parallel_dispatch": "NOT exercised - the planner produced a serial 2-task chain (t2 depends_on t1), so two ready tasks never existed at the same time",
+    "gate_c_replan_context": "NOT exercised - both workers returned status done with every required check passing; no rework/replan path was taken",
+    "receipts_and_verdicts": "observed - two receipts, deterministic verdict accept, advisory null (native mode makes no Gate C call)",
+    "stop_outcome": "observed - stop trace outcome completed, all planned tasks accepted",
+    "root_effort_null": "observed defect - both post traces record root_effort null although the host sent effort {\"level\":\"high\"} (string-only parse in src/hook.ts)"
+  },
+  "hook_level_probes": {
+    "note": "deterministic hook-level probes run by piping synthetic hook input into dist/hook.js; these are NOT host-model observations",
+    "build": {
+      "dist_hook_sha256": "b5db1035d9ab5223ba338b125ddf99918f26cda1623a12ce80589903590894f2",
+      "built_at_local": "2026-09-18T15:22:39",
+      "source": "working tree at commit 134df5f (rebuilt by another session mid-verification)"
+    },
+    "userpromptsubmit_native_orchestrated": "additionalContext returned with the full [Jev Gate coordinator guidance for this session] block",
+    "root_edit_denied": "attempt 1 and 2: permissionDecision deny with GUARD_DENY_REASON; attempt 3: same deny plus continue:false and the fixed STOP_REASON",
+    "allow_list_tool": "Read during orchestration produced no stdout at all (no permission decision), so native permissions still apply",
+    "worker_without_marker": "deny with the phase_not_planned reason when no plan is active"
+  }
+}

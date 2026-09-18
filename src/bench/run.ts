@@ -125,7 +125,7 @@ export interface WorkerTierRecord {
 
 /** Schema 5 additions (#28, ADR A13). Every field is observed; nothing is inferred from agent frontmatter. */
 export interface GateV5 {
-  admission: { attempted: boolean; known_not_sent: boolean; choice: string | null; confidence: number | null; decision: string | null; reason: string | null };
+  admission: { attempted: boolean; known_not_sent: boolean; forced: boolean; decided: boolean | null; choice: string | null; confidence: number | null; decision: string | null; reason: string | null };
   guard_denials: number;
   continue_false: number;
   planner_calls: { requested: number; completed: number; tier_proposed: string | null; model_observed: string | null; plan_status: string | null; rev: number | null };
@@ -136,6 +136,8 @@ export interface GateV5 {
   jev_requests: { admission: JevPhaseUsage; allocation: JevPhaseUsage; result: JevPhaseUsage };
   outcome: string | null;
   orphan_records: number;
+  /** Cross-check (A13): recorded Gate B decisions whose applied tier disagrees with the observed model family. */
+  decision_mismatch: number;
 }
 
 export interface CellRecord {
@@ -445,7 +447,7 @@ export const preflight = (o: Options, needsJev: boolean): Preflight => {
 const emptyJevPhase = (): JevPhaseUsage => ({ attempts: 0, tokens: null, tokens_known: 0, cost_usd: null });
 
 const emptyGateV5 = (): GateV5 => ({
-  admission: { attempted: false, known_not_sent: false, choice: null, confidence: null, decision: null, reason: null },
+  admission: { attempted: false, known_not_sent: false, forced: false, decided: null, choice: null, confidence: null, decision: null, reason: null },
   guard_denials: 0,
   continue_false: 0,
   planner_calls: { requested: 0, completed: 0, tier_proposed: null, model_observed: null, plan_status: null, rev: null },
@@ -456,6 +458,7 @@ const emptyGateV5 = (): GateV5 => ({
   jev_requests: { admission: emptyJevPhase(), allocation: emptyJevPhase(), result: emptyJevPhase() },
   outcome: null,
   orphan_records: 0,
+  decision_mismatch: 0,
 });
 
 const emptyCell = (cs: CodingCase, spec: ArmSpec, repetition: number): CellRecord => ({
@@ -686,6 +689,9 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
     g.admission = {
       attempted: admission['attempted'] === true,
       known_not_sent: admission['known_not_sent'] === true,
+      // A16: a forced generation is a bench control, not a Jev answer, and the admission table says so.
+      forced: admission['forced'] === true,
+      decided: typeof admission['decided'] === 'boolean' ? admission['decided'] : null,
       choice: execution ? str(execution['choice']) : null,
       confidence: execution ? num(execution['confidence']) : null,
       decision: str(admission['decision']),
@@ -697,7 +703,8 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
   // ---- guard (A6): a denial that reaches the threshold is the one that also returns continue:false
   const denied = phase('guard').filter((r) => r['allow'] === false);
   g.guard_denials = denied.length;
-  g.continue_false = denied.filter((r) => (num(r['denials']) ?? 0) >= DENIALS_BEFORE_STOP - 1).length;
+  // The hook records the stop it actually applied; older records without the field fall back to the denial count.
+  g.continue_false = denied.filter((r) => (typeof r['stopped'] === 'boolean' ? r['stopped'] : (num(r['denials']) ?? 0) >= DENIALS_BEFORE_STOP - 1)).length;
   const stops = phase('stop');
   g.outcome = str(stops[stops.length - 1]?.['outcome'] ?? null);
 
@@ -743,7 +750,8 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
       if (call.orphaned) g.orphan_records++;
       const verdict = str(call.post['verdict']);
       if (verdict === 'accept' || verdict === 'incomplete' || verdict === 'invalid' || verdict === 'unknown') g.receipts[verdict]++;
-      const advisory = str(call.post['advisory']);
+      const gateC = isRecord(call.result_gate?.['decision']) ? (call.result_gate?.['decision'] as Record<string, unknown>) : null;
+      const advisory = gateC ? (str(gateC['verdict']) ?? (str(gateC['reason']) === 'result_abstain' ? 'abstain' : 'none')) : str(call.post['advisory']);
       if (advisory === 'accept' || advisory === 'rework' || advisory === 'replan' || advisory === 'abstain') g.advisory[advisory]++;
       else if (verdict !== null) g.advisory.none++;
       const observedEnd = timeOf(call.post);
@@ -785,15 +793,20 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
       const baseModel = models[tier as Tier] as string | undefined;
       const baseFamily = baseModel === undefined ? 'unknown' : modelFamily(baseModel);
       const observedFamily = call.observed_model === null ? null : modelFamily(call.observed_model);
-      // A13: a material model change is the observation; a recorded decision, when the hook writes one, wins over it.
+      // The recorded decision is authoritative; the observed model family (A13) only cross-checks it.
+      const materialChange = observedFamily === null || baseFamily === 'unknown' ? null : observedFamily !== baseFamily;
       if (decision) {
-        if (decision['action'] === 'patch') g.patched++;
-        else {
+        const patched = decision['action'] === 'patch';
+        if (patched) {
+          g.patched++;
+          bucket.patched++;
+        } else {
           g.preserved++;
           bucket.preserved++;
           bump(g.preserve_reasons, str(decision['reason']) ?? 'unknown');
         }
-        if (decision['action'] === 'patch') bucket.patched++;
+        const expectedChange = patched && str(decision['tier']) !== call.called_tier;
+        if (materialChange !== null && materialChange !== expectedChange) g.decision_mismatch++;
       } else if (observedFamily !== null && baseFamily !== 'unknown') {
         if (observedFamily === baseFamily) {
           bucket.preserved++;

@@ -100,6 +100,7 @@ export interface GateV5Summary {
   jev_requests: { admission: JevPhaseUsage; allocation: JevPhaseUsage; result: JevPhaseUsage };
   outcomes: Record<string, number>;
   orphan_records: number;
+  decision_mismatch: number;
 }
 
 /** The declared criteria (PRD §5, ADR A9/A15). `none` is a descriptive row that carries no pass/fail claim. */
@@ -288,6 +289,8 @@ export const gateV5Of = (gate: Record<string, unknown>): GateV5 | null => {
     admission: {
       attempted: admission['attempted'] === true,
       known_not_sent: admission['known_not_sent'] === true,
+      forced: admission['forced'] === true,
+      decided: typeof admission['decided'] === 'boolean' ? admission['decided'] : null,
       choice: text(admission['choice']),
       confidence: money(admission['confidence']),
       decision: text(admission['decision']),
@@ -303,11 +306,16 @@ export const gateV5Of = (gate: Record<string, unknown>): GateV5 | null => {
     jev_requests: { admission: jevPhase(jev['admission']), allocation: jevPhase(jev['allocation']), result: jevPhase(jev['result']) },
     outcome: text(gate['outcome']),
     orphan_records: int(gate['orphan_records']),
+    decision_mismatch: int(gate['decision_mismatch']),
   };
 };
 
-/** The label an admission record contributes: the applied decision when the hook recorded one, else Jev's raw choice. */
-export const admissionLabel = (a: GateV5['admission']): string => a.decision ?? (a.choice === null ? 'unknown' : `choice:${a.choice}`);
+/**
+ * The label an admission record contributes: a forced generation (A16) is named `forced:<shape>` so it is never read as
+ * a Jev answer; otherwise the applied decision, falling back to Jev's raw choice when no decision was recorded.
+ */
+export const admissionLabel = (a: GateV5['admission']): string =>
+  a.forced ? `forced:${a.decision ?? 'orchestrated'}` : (a.decision ?? (a.choice === null ? 'unknown' : `choice:${a.choice}`));
 
 const emptyGateV5Summary = (): GateV5Summary => ({
   rows_observed: 0,
@@ -326,6 +334,7 @@ const emptyGateV5Summary = (): GateV5Summary => ({
   jev_requests: { admission: { attempts: 0, tokens: 0, tokens_known: 0, cost_usd: 0 }, allocation: { attempts: 0, tokens: 0, tokens_known: 0, cost_usd: 0 }, result: { attempts: 0, tokens: 0, tokens_known: 0, cost_usd: 0 } },
   outcomes: {},
   orphan_records: 0,
+  decision_mismatch: 0,
 });
 
 const addJevPhase = (into: JevPhaseUsage, more: JevPhaseUsage): void => {
@@ -369,6 +378,7 @@ export const summarizeGateV5 = (rows: RowView[]): GateV5Summary => {
     addJevPhase(out.jev_requests.result, v.jev_requests.result);
     if (v.outcome) addCounts(out.outcomes, { [v.outcome]: 1 });
     out.orphan_records += v.orphan_records;
+    out.decision_mismatch += v.decision_mismatch;
   }
   return out;
 };
@@ -616,6 +626,7 @@ export const buildReport = (runDir: string): Report => {
     'A verdict is met only against a declared criterion at equal checker pass; different pass counts are printed as a trade-off row and zero passes in both arms never yield met.',
     'Effort is recorded where the host exposed it (root effort at PostToolUse) and is otherwise unknown; it is never inferred from agent frontmatter.',
     'Reservation overlap needs the dispatch record a Jev call writes, so arms without Gate B report observed overlap only (post timestamp minus tool_response.totalDurationMs).',
+    'A recorded Gate B decision is authoritative; decision mismatch counts the calls whose observed model family contradicts it, as a cross-check rather than a correction.',
     'An arm marked diagnostic (A16: jev_forced_orchestration, which skips Gate A and still calls Gate B and C) answers a mechanism question; it carries no product claim and the conclusion category is read from jev_hierarchy.',
   ];
   return {
@@ -650,13 +661,13 @@ const tierCounts = (w: Record<string, WorkerTierRecord>): string =>
     .map(([tier, t]) => `${tier}:${t.calls}(patched ${t.patched}, preserved ${t.preserved}, pinned ${t.pinned})`)
     .join(' ') || '-';
 
-const V5_HEADER = ['| arm | rows with records | admission | guard denials (continue false) | planner req/done | planner tier proposed | planner model | plan status | worker tiers | receipts | advisory | parallel res/obs | outcomes | orphan records |', '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|'];
+const V5_HEADER = ['| arm | rows with records | admission | guard denials (continue false) | planner req/done | planner tier proposed | planner model | plan status | worker tiers | receipts | advisory | parallel res/obs | outcomes | orphan records | decision mismatch |', '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|'];
 
 const v5Table = (arms: ArmSummary[]): string[] => [
   ...V5_HEADER,
   ...arms.map((a) => {
     const v = a.gate_v5;
-    return `| ${a.arm} | ${v.rows_observed} | ${counts(v.admission)} | ${v.guard_denials} (${v.continue_false}) | ${v.planner_requested}/${v.planner_completed} | ${counts(v.planner_tier_proposed)} | ${counts(v.planner_model_observed)} | ${counts(v.plan_status)} | ${tierCounts(v.worker_calls)} | ${counts(v.receipts)} | ${counts(v.advisory)} | ${v.parallel.reservation_overlap_max}/${v.parallel.observed_overlap_max} | ${counts(v.outcomes)} | ${v.orphan_records} |`;
+    return `| ${a.arm} | ${v.rows_observed} | ${counts(v.admission)} | ${v.guard_denials} (${v.continue_false}) | ${v.planner_requested}/${v.planner_completed} | ${counts(v.planner_tier_proposed)} | ${counts(v.planner_model_observed)} | ${counts(v.plan_status)} | ${tierCounts(v.worker_calls)} | ${counts(v.receipts)} | ${counts(v.advisory)} | ${v.parallel.reservation_overlap_max}/${v.parallel.observed_overlap_max} | ${counts(v.outcomes)} | ${v.orphan_records} | ${v.decision_mismatch} |`;
   }),
 ];
 

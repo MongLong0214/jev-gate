@@ -1,0 +1,153 @@
+{
+  "check": "4. real Jev smoke (JEV_GATE_MODE=auto, real TypeSafe key)",
+  "kind": "real product plugin + real TypeSafe HTTP call; the key was exported into the child process environment only and never appears in any artifact",
+  "host": "Claude Code 2.1.276 (macOS 26.2, node v24.18.0), claude.ai team subscription login, headless `claude -p` (check 6: interactive TUI via tmux), CLAUDE_CODE_FORK_SUBAGENT=0 CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1, --setting-sources project,local, --permission-mode acceptEdits, --no-session-persistence, disposable project",
+  "product_build": {
+    "dist_hook_sha256": "fa0f7351a66ed2ee010b9071ca94d717fa8251c492c3b65165854ce8ee61a510",
+    "built_at_local": "2026-09-18T15:06:49",
+    "source": "working tree before commit 134df5f"
+  },
+  "request": "the same compound two-module request as check 2 (text withheld; sha256 in the trace below)",
+  "cli": {
+    "cli_version": null,
+    "root_model": null,
+    "max_turns": 40,
+    "plugins_loaded": []
+  },
+  "traces": [
+    {
+      "caller": {
+        "agent_id": null,
+        "agent_type": null
+      },
+      "tool_use_id": null,
+      "mode": "auto",
+      "prompt_len": 196,
+      "prompt_sha256": "5a0ba0a8c8c8e38821d63e23956b825f55b5feb879bdc830d09d44cad7b231b1",
+      "request_bytes": 1666,
+      "phase": "admission_intent",
+      "version": 5,
+      "written_at": "2026-09-18T06:18:00.817Z"
+    },
+    {
+      "caller": {
+        "agent_id": null,
+        "agent_type": null
+      },
+      "tool_use_id": null,
+      "mode": "auto",
+      "prompt_len": 196,
+      "prompt_sha256": "5a0ba0a8c8c8e38821d63e23956b825f55b5feb879bdc830d09d44cad7b231b1",
+      "attempted": true,
+      "http": {
+        "status": 200,
+        "code": null,
+        "duration_ms": 698,
+        "request_bytes": 1666
+      },
+      "jev": {
+        "model": "jev-1.13.0",
+        "usage": {
+          "input_tokens": 605,
+          "output_tokens": 50
+        },
+        "response_bytes": 234
+      },
+      "answers": {
+        "execution": {
+          "type": "choice",
+          "choice": "direct",
+          "probabilities": {
+            "direct": 0.99,
+            "needs_context": 0,
+            "abstain": 0,
+            "orchestrated": 0.01
+          },
+          "confidence": 0.98
+        }
+      },
+      "forced": false,
+      "decision": "direct",
+      "decided": true,
+      "reason": null,
+      "phase": "admission_result",
+      "version": 5,
+      "written_at": "2026-09-18T06:18:01.522Z"
+    },
+    {
+      "caller": {
+        "agent_id": null,
+        "agent_type": null
+      },
+      "tool_use_id": null,
+      "mode": "auto",
+      "outcome": "completed",
+      "phase": "stop",
+      "version": 5,
+      "written_at": "2026-09-18T06:18:24.665Z"
+    }
+  ],
+  "jev_totals": {
+    "gate_events": 1,
+    "http_attempts": 1,
+    "http_status": 200,
+    "http_duration_ms": 698,
+    "jev_model": "jev-1.13.0",
+    "input_tokens": 605,
+    "output_tokens": 50,
+    "response_bytes": 234,
+    "request_bytes": 1666
+  },
+  "state": {
+    "shape": "direct",
+    "phase": "admitted",
+    "denials": 0,
+    "outcome": "completed",
+    "plan_present": false,
+    "receipts": 0
+  },
+  "root_agent_calls": [],
+  "tool_calls": {
+    "root_tool_calls": {
+      "Bash": 3,
+      "Write": 4
+    },
+    "child_tool_calls": {}
+  },
+  "accounting": {
+    "total_cost_usd": 0.16920359999999998,
+    "num_turns": 8,
+    "duration_ms": 24304,
+    "modelUsage": {
+      "claude-haiku-4-5-20251001": {
+        "inputTokens": 937,
+        "outputTokens": 19,
+        "cacheReadInputTokens": 0,
+        "cacheCreationInputTokens": 0,
+        "costUSD": 0.001032,
+        "canonicalModel": "claude-haiku-4-5",
+        "provider": "firstParty",
+        "costBasis": "list"
+      },
+      "claude-sonnet-5": {
+        "inputTokens": 16,
+        "outputTokens": 1546,
+        "cacheReadInputTokens": 297858,
+        "cacheCreationInputTokens": 23277,
+        "costUSD": 0.16817159999999998,
+        "canonicalModel": "claude-sonnet-5",
+        "provider": "firstParty",
+        "costBasis": "list"
+      }
+    }
+  },
+  "findings": {
+    "admission_intent_and_result": "observed - exactly one intent trace and one result trace for the single gate event; exactly one HTTP attempt",
+    "admission_answer": "observed - execution choice direct, probabilities {direct 0.99, orchestrated 0.01, needs_context 0, abstain 0}, confidence 0.98, above the 0.8 floor, decided true",
+    "real_judgment_recorded": "Jev judged this request direct, so the run took the direct path: no planner, no owned Agent call, no guard. Per the ticket this is recorded as the real judgment and was NOT rerun to force orchestration",
+    "gate_b_planner_tier": "NOT exercised (no owned call was made)",
+    "gate_b_worker_route": "NOT exercised (no owned call was made)",
+    "gate_c_advisory": "NOT exercised (no receipt was produced)",
+    "stop_outcome": "observed - completed"
+  }
+}

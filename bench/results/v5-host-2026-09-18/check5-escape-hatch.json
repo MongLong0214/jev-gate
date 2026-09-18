@@ -1,0 +1,70 @@
+{
+  "check": "5. escape hatch (JEV_GATE_MODE=off)",
+  "kind": "real product plugin loaded, mode forced off by environment",
+  "host": "Claude Code 2.1.276 (macOS 26.2, node v24.18.0), claude.ai team subscription login, headless `claude -p` (check 6: interactive TUI via tmux), CLAUDE_CODE_FORK_SUBAGENT=0 CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1, --setting-sources project,local, --permission-mode acceptEdits, --no-session-persistence, disposable project",
+  "product_build": {
+    "dist_hook_sha256": "fa0f7351a66ed2ee010b9071ca94d717fa8251c492c3b65165854ce8ee61a510",
+    "built_at_local": "2026-09-18T15:06:49",
+    "source": "working tree before commit 134df5f"
+  },
+  "request": "the same one-line rename request as check 3 (text withheld)",
+  "cli": {
+    "cli_version": "2.1.276",
+    "root_model": "claude-sonnet-5",
+    "max_turns": 8,
+    "plugins_loaded": [
+      "jev-gate"
+    ],
+    "env_added": [
+      "JEV_GATE_MODE=off",
+      "JEV_GATE_TRACE_DIR=<set>",
+      "JEV_GATE_STATE_DIR=<set>"
+    ]
+  },
+  "observations": {
+    "trace_dir_created": false,
+    "trace_files": 0,
+    "state_dir_created": false,
+    "state_files": 0,
+    "guidance_text_in_stream": {
+      "coordinator_guidance_text_in_stream_json": false,
+      "posttooluse_additional_context_in_stream_json": false,
+      "guard_deny_reason_in_stream_json": false
+    },
+    "agent_calls": [],
+    "permission_denials": []
+  },
+  "accounting": {
+    "total_cost_usd": 0.11437599999999999,
+    "num_turns": 5,
+    "duration_ms": 15556,
+    "modelUsage": {
+      "claude-haiku-4-5-20251001": {
+        "inputTokens": 901,
+        "outputTokens": 17,
+        "cacheReadInputTokens": 0,
+        "cacheCreationInputTokens": 0,
+        "costUSD": 0.000986,
+        "canonicalModel": "claude-haiku-4-5",
+        "provider": "firstParty",
+        "costBasis": "list"
+      },
+      "claude-sonnet-5": {
+        "inputTokens": 10,
+        "outputTokens": 1014,
+        "cacheReadInputTokens": 179070,
+        "cacheCreationInputTokens": 16854,
+        "costUSD": 0.11339,
+        "canonicalModel": "claude-sonnet-5",
+        "provider": "firstParty",
+        "costBasis": "list"
+      }
+    }
+  },
+  "findings": {
+    "no_state": "observed - JEV_GATE_STATE_DIR was set but no directory and no job file were created",
+    "no_traces": "observed - JEV_GATE_TRACE_DIR was set but no directory and no trace file were created (mode off returns before the trace directory is opened)",
+    "no_guidance": "observed - no coordinator guidance, no guard decision, no permission denial; the task completed natively",
+    "first_attempt_voided": "the first c5 attempt ran without --plugin-dir and was rerun with the plugin loaded"
+  }
+}

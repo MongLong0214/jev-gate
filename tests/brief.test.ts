@@ -99,7 +99,7 @@ describe('patchAgentInput', () => {
 });
 
 describe('rendering', () => {
-  it('emits updatedInput, a deny, and a deny with continue:false on the third denial', () => {
+  it('emits updatedInput, a deny, and a deny with continue:false once the denial budget is spent', () => {
     const update = JSON.parse(renderPreToolUseOutput({ kind: 'update', updatedInput: { prompt: 'p' } }) ?? '{}') as Record<string, Record<string, unknown>>;
     expect(update['hookSpecificOutput']).toEqual({ hookEventName: 'PreToolUse', updatedInput: { prompt: 'p' } });
     const deny = JSON.parse(renderPreToolUseOutput({ kind: 'deny', reason: 'no', stopReason: null }) ?? '{}') as Record<string, unknown>;
@@ -107,7 +107,7 @@ describe('rendering', () => {
     expect(deny).not.toHaveProperty('continue');
     const stopped = JSON.parse(renderPreToolUseOutput({ kind: 'deny', reason: 'no', stopReason: 'stop now' }) ?? '{}') as Record<string, unknown>;
     expect(stopped).toMatchObject({ continue: false, stopReason: 'stop now' });
-    expect(DENIALS_BEFORE_STOP).toBe(3);
+    expect(DENIALS_BEFORE_STOP).toBe(12);
   });
 
   it('returns null instead of an oversized envelope', () => {

@@ -192,10 +192,12 @@ describe('execute', () => {
       // Self-routing picks the profile, so nothing is patched and reservations are unobservable without Gate B.
       expect(Object.values(g.worker_calls).every((w) => w.patched === 0), a).toBe(true);
       expect(g.parallel, a).toEqual({ reservation_overlap_max: 0, observed_overlap_max: 2 });
+    expect(g.decision_mismatch, a).toBe(0);
+    expect(g.admission.forced, a).toBe(true);
     }
 
     const jev = cells.jev_hierarchy.gate;
-    expect(jev.admission).toMatchObject({ attempted: true, known_not_sent: false, choice: 'orchestrated', confidence: 0.93, decision: 'orchestrated', reason: null });
+    expect(jev.admission).toMatchObject({ attempted: true, known_not_sent: false, forced: false, decided: true, choice: 'orchestrated', confidence: 0.93, decision: 'orchestrated', reason: null });
     expect(jev.guard_denials).toBe(0);
     expect(jev.planner_calls).toMatchObject({ requested: 1, completed: 1, tier_proposed: 'deep', model_observed: 'claude-opus-5', plan_status: 'ready', rev: 1 });
     expect(jev.receipts).toEqual({ accept: 2, incomplete: 1, invalid: 0, unknown: 1 });
@@ -210,8 +212,10 @@ describe('execute', () => {
     // The recorded Gate B decision is authoritative; `proposed` stays Jev's answer even when the call was preserved.
     expect(jev.worker_calls['standard']).toMatchObject({ calls: 2, patched: 2, preserved: 0, proposed: { deep: 1, standard: 1 } });
     expect(jev.worker_calls['deep']).toMatchObject({ calls: 1, patched: 1, preserved: 0, root_effort: { high: 1 } });
-    expect(jev.worker_calls['fast']).toMatchObject({ calls: 3, patched: 2, preserved: 1, proposed: { fast: 2, deep: 1 }, root_effort: { unknown: 3 } });
+    expect(jev.worker_calls['fast']).toMatchObject({ calls: 3, patched: 2, preserved: 1, proposed: { fast: 1, deep: 2 }, root_effort: { unknown: 3 } });
     expect(jev.preserve_reasons).toEqual({ route_low_confidence: 1 });
+    // Cross-check: Gate B recorded a patch to deep on t5, but the host resolved the fast profile's model.
+    expect(jev.decision_mismatch).toBe(1);
     expect(jev.patched).toBe(5);
     expect(jev.preserved).toBe(1);
     // Union join: the paid record with no stream call and the late orphan result both stay visible.
@@ -235,6 +239,8 @@ describe('execute', () => {
     expect(forcedJev.patched).toBe(5);
     expect(forcedJev.parallel.reservation_overlap_max).toBe(2);
     expect(forcedJev.guard_denials).toBe(0);
+    expect(forcedJev.admission.forced).toBe(true);
+    expect(forcedJev.decision_mismatch).toBe(1);
 
     expect(cells.sonnet_native.grade?.quality).toBe('fail');
     for (const a of ARMS.filter((x) => x !== 'sonnet_native')) expect(cells[a].grade?.quality, a).toBe('pass');
@@ -250,7 +256,8 @@ describe('execute', () => {
     expect(byArm['jev_hierarchy']!.gate_v5.admission).toEqual({ orchestrated: 1 });
     expect(byArm['jev_forced_orchestration']!.diagnostic).toBe(true);
     expect(byArm['jev_hierarchy']!.diagnostic).toBe(false);
-    expect(byArm['orchestrated_control']!.gate_v5.admission).toEqual({ orchestrated: 1 });
+    expect(byArm['orchestrated_control']!.gate_v5.admission).toEqual({ 'forced:orchestrated': 1 });
+    expect(byArm['jev_forced_orchestration']!.gate_v5.admission).toEqual({ 'forced:orchestrated': 1 });
     expect(byArm['orchestrated_control']!.gate_v5.guard_denials).toBe(3);
     expect(byArm['jev_hierarchy']!.gate_v5.jev_requests.allocation.tokens).toBe(2620);
     expect(byArm['sonnet_native']!.pass).toBe(0);

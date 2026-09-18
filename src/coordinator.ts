@@ -19,6 +19,7 @@ export const DIRECT_MODE_SENTENCE: Record<Exclude<Mode, 'off'>, string> = {
 
 export const ORCHESTRATION_RULES = [
   'You do not implement this request yourself; you coordinate.',
+  'Available to you now: Read, Grep, Glob, TodoWrite, and Agent calls to jev-gate:planner and the jev-gate worker roles. Edit, Write, Bash and every other agent (including Explore) are unavailable for this request and will be denied; do not probe them.',
   'Planner first: call jev-gate:planner with no model argument. Give it the exact request, the relevant earlier user constraints, and factual observations about this repository. It is read-only and returns the plan.',
   'Follow the plan: dispatch every task whose dependencies are already accepted. Send all ready tasks with disjoint deliverables in one message so they run in parallel.',
   'Each worker prompt starts with the marker [JEV_TASK rev=<n> id=<id>] followed by your own short brief. Do not paste the planner task block: the hook appends the canonical task contract, the global constraints and the predecessor facts.',
@@ -62,7 +63,7 @@ export const GUARD_DENY_REASON =
   'Jev Gate orchestration is active for this request. The main session coordinates; send implementation, shell checks and integration to a planned jev-gate worker task ([JEV_TASK ...]). Nothing was changed by this call.';
 
 export const STOP_REASON =
-  'Jev Gate: orchestration blocked. The main session repeatedly tried to implement an admitted compound job directly. Cancel and relaunch with JEV_GATE_MODE=off to work without orchestration.';
+  'Jev Gate: orchestration blocked. The main session repeatedly tried to implement an admitted compound job directly instead of dispatching planned worker tasks. Nothing further will run for this request. Relaunch with JEV_GATE_MODE=off to work without orchestration.';
 
 const DISPATCH_DENY_TEXT: Record<DenyReason, string> = {
   guard_denied: GUARD_DENY_REASON,

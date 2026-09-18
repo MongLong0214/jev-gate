@@ -103,7 +103,7 @@ if (process.env.FAKE_CLAUDE_HANG === '1') {
     // ---- guard: the control arms try the tools the guard declines before they switch to delegation
     if (!jevGates) {
       trace('guard', { tool_name: 'Read', allow: true, denials: 0, written_at: at(100) });
-      for (const [i, tool] of ['Edit', 'Bash', 'Write'].entries()) trace('guard', { tool_name: tool, allow: false, denials: i, written_at: at(150 + i) });
+      for (const [i, tool] of ['Edit', 'Bash', 'Write'].entries()) trace('guard', { tool_name: tool, allow: false, denials: i + 1, stopped: i === 2, written_at: at(150 + i) });
     }
 
     // ---- planner
@@ -127,7 +127,7 @@ if (process.env.FAKE_CLAUDE_HANG === '1') {
       { agent: 'jev-gate:worker', tier: 'standard', task: 't2', base: 'claude-sonnet-5', routed: 'claude-opus-5', route: 'deep', start: 7000, end: 17000, duration: 9500, status: 'completed', verdict: 'incomplete', advisory: null, effort: null },
       { agent: 'jev-gate:worker-deep', tier: 'deep', task: 't3', base: 'claude-opus-5', routed: 'claude-opus-5', route: 'deep', start: 20000, end: 30000, duration: 5000, status: 'completed', verdict: 'accept', advisory: 'rework', effort: 'high' },
       { agent: 'jev-gate:worker-fast', tier: 'fast', task: 't4', base: 'claude-haiku-5', routed: 'claude-haiku-5', route: 'deep', confidence: 0.4, preserve: true, start: 31000, end: 32000, duration: 500, status: 'failed', verdict: 'unknown', advisory: null, effort: null },
-      { agent: 'jev-gate:worker-fast', tier: 'fast', task: 't5', base: 'claude-haiku-5', routed: 'claude-haiku-5', route: 'fast', start: 33000, end: 33500, duration: 0, status: 'error', verdict: 'tool_failure', advisory: null, effort: null },
+      { agent: 'jev-gate:worker-fast', tier: 'fast', task: 't5', base: 'claude-haiku-5', routed: 'claude-haiku-5', route: 'deep', start: 33000, end: 33500, duration: 0, status: 'error', verdict: 'tool_failure', advisory: null, effort: null },
     ];
     for (const w of workers) {
       const id = agentCall(w.agent, `task ${w.task}`);

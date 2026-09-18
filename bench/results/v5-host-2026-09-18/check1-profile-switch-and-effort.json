@@ -1,0 +1,461 @@
+{
+  "check": "1. deterministic profile switch via updatedInput + child effort probe (no Jev)",
+  "kind": "deterministic-hook proof (test-only plugin), product plugin loaded with JEV_GATE_MODE=off for its agent definitions",
+  "host": "Claude Code 2.1.276 (macOS 26.2, node v24.18.0), claude.ai team subscription login, headless `claude -p` (check 6: interactive TUI via tmux), CLAUDE_CODE_FORK_SUBAGENT=0 CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1, --setting-sources project,local, --permission-mode acceptEdits, --no-session-persistence, disposable project",
+  "product_build": {
+    "dist_hook_sha256": "fa0f7351a66ed2ee010b9071ca94d717fa8251c492c3b65165854ce8ee61a510",
+    "built_at_local": "2026-09-18T15:06:49",
+    "source": "working tree before commit 134df5f"
+  },
+  "test_plugin": "jev-hostproof-v5 (scratch, not shipped): rewrites an eligible root `jev-gate:worker` Agent call to {subagent_type: jev-gate:<profile>, model: <id>} via PreToolUse updatedInput, and dumps hook-input key names only",
+  "cells": {
+    "c1-fast": {
+      "rebind_target": "jev-gate:worker-fast + model haiku",
+      "cli_version": "2.1.276",
+      "root_model": "claude-sonnet-5",
+      "plugins_loaded": [
+        "jev-gate",
+        "jev-hostproof-v5"
+      ],
+      "owned_agents_scoped": [
+        "jev-gate:planner",
+        "jev-gate:planner-frontier",
+        "jev-gate:worker",
+        "jev-gate:worker-deep",
+        "jev-gate:worker-fast",
+        "jev-gate:worker-frontier"
+      ],
+      "rebind_decisions": [
+        {
+          "tool_use_id": "toolu_019StW6n1dsMGqSsLZRkg1UB",
+          "called": "jev-gate:worker",
+          "eligible": true,
+          "target": "worker-fast:haiku"
+        }
+      ],
+      "post_tool_input_after_patch": [
+        {
+          "subagent_type": "jev-gate:worker-fast",
+          "model": "haiku"
+        }
+      ],
+      "post_tool_response": [
+        {
+          "status": "completed",
+          "resolvedModel": "claude-haiku-4-5-20251001",
+          "totalDurationMs": 20039,
+          "totalTokens": 16117,
+          "totalToolUseCount": 9
+        }
+      ],
+      "child_agent_types_observed": [
+        "jev-gate:worker-fast"
+      ],
+      "child_tools_used": [
+        "Bash",
+        "Edit",
+        "Read",
+        "Write"
+      ],
+      "accounting": {
+        "total_cost_usd": 0.2217009,
+        "num_turns": 2,
+        "duration_ms": 27143,
+        "modelUsage": {
+          "claude-haiku-4-5-20251001": {
+            "inputTokens": 1099,
+            "outputTokens": 1370,
+            "cacheReadInputTokens": 117887,
+            "cacheCreationInputTokens": 16040,
+            "costUSD": 0.0518177,
+            "canonicalModel": "claude-haiku-4-5",
+            "provider": "firstParty",
+            "costBasis": "list"
+          },
+          "claude-sonnet-5": {
+            "inputTokens": 4,
+            "outputTokens": 417,
+            "cacheReadInputTokens": 36186,
+            "cacheCreationInputTokens": 39617,
+            "costUSD": 0.1698832,
+            "canonicalModel": "claude-sonnet-5",
+            "provider": "firstParty",
+            "costBasis": "list"
+          }
+        }
+      }
+    },
+    "c1-frontier": {
+      "rebind_target": "jev-gate:worker-frontier + model fable",
+      "cli_version": "2.1.276",
+      "root_model": "claude-sonnet-5",
+      "plugins_loaded": [
+        "jev-gate",
+        "jev-hostproof-v5"
+      ],
+      "owned_agents_scoped": [
+        "jev-gate:planner",
+        "jev-gate:planner-frontier",
+        "jev-gate:worker",
+        "jev-gate:worker-deep",
+        "jev-gate:worker-fast",
+        "jev-gate:worker-frontier"
+      ],
+      "rebind_decisions": [
+        {
+          "tool_use_id": "toolu_01JEhNrsJacSjnXAUoDutTzp",
+          "called": "jev-gate:worker",
+          "eligible": true,
+          "target": "worker-frontier:fable"
+        }
+      ],
+      "post_tool_input_after_patch": [
+        {
+          "subagent_type": "jev-gate:worker-frontier",
+          "model": "fable"
+        }
+      ],
+      "post_tool_response": [
+        {
+          "status": "completed",
+          "resolvedModel": "claude-fable-5-1",
+          "totalDurationMs": 60331,
+          "totalTokens": 17575,
+          "totalToolUseCount": 6
+        }
+      ],
+      "child_agent_types_observed": [
+        "jev-gate:worker-frontier"
+      ],
+      "child_tools_used": [
+        "Bash",
+        "Edit",
+        "Read",
+        "Write"
+      ],
+      "accounting": {
+        "total_cost_usd": 0.70765735,
+        "num_turns": 2,
+        "duration_ms": 74265,
+        "modelUsage": {
+          "claude-haiku-4-5-20251001": {
+            "inputTokens": 1025,
+            "outputTokens": 16,
+            "cacheReadInputTokens": 0,
+            "cacheCreationInputTokens": 0,
+            "costUSD": 0.001105,
+            "canonicalModel": "claude-haiku-4-5",
+            "provider": "firstParty",
+            "costBasis": "list"
+          },
+          "claude-sonnet-5": {
+            "inputTokens": 4,
+            "outputTokens": 1232,
+            "cacheReadInputTokens": 36188,
+            "cacheCreationInputTokens": 40434,
+            "costUSD": 0.18130159999999998,
+            "canonicalModel": "claude-sonnet-5",
+            "provider": "firstParty",
+            "costBasis": "list"
+          },
+          "claude-fable-5-1": {
+            "inputTokens": 130,
+            "outputTokens": 3505,
+            "cacheReadInputTokens": 56483,
+            "cacheCreationInputTokens": 16729,
+            "costUSD": 0.52525075,
+            "canonicalModel": "claude-fable-5-1",
+            "provider": "firstParty",
+            "costBasis": "list"
+          }
+        }
+      }
+    },
+    "c1b2-effort": {
+      "rebind_target": "both profiles in one session (sanitized env)",
+      "cli_version": "2.1.276",
+      "root_model": "claude-sonnet-5",
+      "plugins_loaded": [
+        "jev-gate",
+        "jev-hostproof-v5"
+      ],
+      "owned_agents_scoped": [
+        "jev-gate:planner",
+        "jev-gate:planner-frontier",
+        "jev-gate:worker",
+        "jev-gate:worker-deep",
+        "jev-gate:worker-fast",
+        "jev-gate:worker-frontier"
+      ],
+      "rebind_decisions": [
+        {
+          "tool_use_id": "toolu_01X4vWzwqB5uRFtK7mD47sbT",
+          "called": "jev-gate:worker",
+          "eligible": true,
+          "target": "worker-fast:haiku"
+        },
+        {
+          "tool_use_id": "toolu_0196QE2UBw3ggHxRgN3RqRb5",
+          "called": "jev-gate:worker",
+          "eligible": true,
+          "target": "worker-frontier:fable"
+        }
+      ],
+      "post_tool_input_after_patch": [
+        {
+          "subagent_type": "jev-gate:worker-fast",
+          "model": "haiku"
+        },
+        {
+          "subagent_type": "jev-gate:worker-frontier",
+          "model": "fable"
+        }
+      ],
+      "post_tool_response": [
+        {
+          "status": "completed",
+          "resolvedModel": "claude-haiku-4-5-20251001",
+          "totalDurationMs": 4370,
+          "totalTokens": 14353,
+          "totalToolUseCount": 1
+        },
+        {
+          "status": "completed",
+          "resolvedModel": "claude-fable-5-1",
+          "totalDurationMs": 11156,
+          "totalTokens": 13938,
+          "totalToolUseCount": 1
+        }
+      ],
+      "child_agent_types_observed": [
+        "jev-gate:worker-fast",
+        "jev-gate:worker-frontier"
+      ],
+      "child_tools_used": [
+        "Bash"
+      ],
+      "accounting": {
+        "total_cost_usd": 0.37959015,
+        "num_turns": 4,
+        "duration_ms": 47676,
+        "modelUsage": {
+          "claude-haiku-4-5-20251001": {
+            "inputTokens": 1051,
+            "outputTokens": 201,
+            "cacheReadInputTokens": 18446,
+            "cacheCreationInputTokens": 9174,
+            "costUSD": 0.0222486,
+            "canonicalModel": "claude-haiku-4-5",
+            "provider": "firstParty",
+            "costBasis": "list"
+          },
+          "claude-sonnet-5": {
+            "inputTokens": 8,
+            "outputTokens": 1341,
+            "cacheReadInputTokens": 134324,
+            "cacheCreationInputTokens": 22788,
+            "costUSD": 0.1314428,
+            "canonicalModel": "claude-sonnet-5",
+            "provider": "firstParty",
+            "costBasis": "list"
+          },
+          "claude-fable-5-1": {
+            "inputTokens": 34,
+            "outputTokens": 312,
+            "cacheReadInputTokens": 15995,
+            "cacheCreationInputTokens": 10298,
+            "costUSD": 0.22589875,
+            "canonicalModel": "claude-fable-5-1",
+            "provider": "firstParty",
+            "costBasis": "list"
+          }
+        }
+      }
+    }
+  },
+  "findings": {
+    "profile_switch_via_updatedInput": "observed - patching subagent_type + model together spawns the target profile; the child hook input reports agent_type jev-gate:worker-fast / jev-gate:worker-frontier and tool_response.resolvedModel is claude-haiku-4-5-20251001 / claude-fable-5-1",
+    "permissions_and_tools_preserved": "observed - the rebound worker used Read, Bash, Write and Edit under native acceptEdits permissions; effort.txt was created and README.md edited in the c1-fast and c1-frontier cells",
+    "child_effort_haiku": "observed NOT applied - worker-fast declares effort: low, yet the child hook input has no `effort` key at all and `echo CLAUDE_EFFORT=$CLAUDE_EFFORT` in the child shell printed an empty value (cell c1b2-effort, first delegation)",
+    "child_effort_fable": "observed applied - worker-frontier declares effort: xhigh; the child hook input carries effort {\"level\":\"xhigh\"} and the child shell printed CLAUDE_EFFORT=xhigh (cell c1b2-effort, second delegation)",
+    "root_effort_shape": "observed - root PreToolUse/PostToolUse/Stop carry effort as an OBJECT {\"level\":\"high\"} (root effort, not the child tier); UserPromptSubmit carries no effort key",
+    "prompt_id_presence": "observed on UserPromptSubmit, PreToolUse, PostToolUse and Stop, at the root and in children",
+    "run_in_background_absent": "confirmed for 2.1.276 - Agent tool_input keys are description/prompt/subagent_type only under CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1",
+    "env_leakage_caveat": "the first effort cell (c1b-effort, superseded) inherited CLAUDE_EFFORT=xhigh from the launching Claude Code session and therefore reported xhigh for BOTH children; every later cell strips CLAUDE_EFFORT and the other CLAUDE_* session variables before spawning",
+    "product_defect_found": "src/hook.ts parseInput accepts `effort` only when typeof === \"string\", but the host sends an object, so HookInput.effort is always dropped and Receipt.root_effort / trace root_effort are null in every run below (see check 2 and 6 traces)"
+  },
+  "hook_input_key_inventory": {
+    "UserPromptSubmit/-/root": {
+      "top_keys": [
+        "cwd",
+        "hook_event_name",
+        "permission_mode",
+        "prompt",
+        "prompt_id",
+        "session_id",
+        "transcript_path"
+      ],
+      "has_prompt_id": true,
+      "has_effort": false,
+      "effort_raw": "null",
+      "tool_input_keys": null,
+      "tool_response_keys": null,
+      "count": 1
+    },
+    "PreToolUse/Agent/root": {
+      "top_keys": [
+        "cwd",
+        "effort",
+        "hook_event_name",
+        "permission_mode",
+        "prompt_id",
+        "session_id",
+        "tool_input",
+        "tool_name",
+        "tool_use_id",
+        "transcript_path"
+      ],
+      "has_prompt_id": true,
+      "has_effort": true,
+      "effort_raw": "{\"level\":\"high\"}",
+      "tool_input_keys": [
+        "description",
+        "prompt",
+        "subagent_type"
+      ],
+      "tool_response_keys": null,
+      "count": 2
+    },
+    "PreToolUse/Bash/child:jev-gate:worker-fast": {
+      "top_keys": [
+        "agent_id",
+        "agent_type",
+        "cwd",
+        "hook_event_name",
+        "permission_mode",
+        "prompt_id",
+        "session_id",
+        "tool_input",
+        "tool_name",
+        "tool_use_id",
+        "transcript_path"
+      ],
+      "has_prompt_id": true,
+      "has_effort": false,
+      "effort_raw": "null",
+      "tool_input_keys": [
+        "command"
+      ],
+      "tool_response_keys": null,
+      "count": 1
+    },
+    "PostToolUse/Agent/root": {
+      "top_keys": [
+        "cwd",
+        "duration_ms",
+        "effort",
+        "hook_event_name",
+        "permission_mode",
+        "prompt_id",
+        "session_id",
+        "tool_input",
+        "tool_name",
+        "tool_response",
+        "tool_use_id",
+        "transcript_path"
+      ],
+      "has_prompt_id": true,
+      "has_effort": true,
+      "effort_raw": "{\"level\":\"high\"}",
+      "tool_input_keys": [
+        "description",
+        "model",
+        "prompt",
+        "subagent_type"
+      ],
+      "tool_response_keys": [
+        "agentId",
+        "agentType",
+        "content",
+        "harnessNoteCount",
+        "harnessSectionHash",
+        "harnessTailCount",
+        "prompt",
+        "resolvedModel",
+        "status",
+        "toolStats",
+        "totalDurationMs",
+        "totalTokens",
+        "totalToolUseCount",
+        "usage"
+      ],
+      "count": 2
+    },
+    "PreToolUse/ListAgents/root": {
+      "top_keys": [
+        "cwd",
+        "effort",
+        "hook_event_name",
+        "permission_mode",
+        "prompt_id",
+        "session_id",
+        "tool_input",
+        "tool_name",
+        "tool_use_id",
+        "transcript_path"
+      ],
+      "has_prompt_id": true,
+      "has_effort": true,
+      "effort_raw": "{\"level\":\"high\"}",
+      "tool_input_keys": [],
+      "tool_response_keys": null,
+      "count": 1
+    },
+    "PreToolUse/Bash/child:jev-gate:worker-frontier": {
+      "top_keys": [
+        "agent_id",
+        "agent_type",
+        "cwd",
+        "effort",
+        "hook_event_name",
+        "permission_mode",
+        "prompt_id",
+        "session_id",
+        "tool_input",
+        "tool_name",
+        "tool_use_id",
+        "transcript_path"
+      ],
+      "has_prompt_id": true,
+      "has_effort": true,
+      "effort_raw": "{\"level\":\"xhigh\"}",
+      "tool_input_keys": [
+        "command",
+        "description"
+      ],
+      "tool_response_keys": null,
+      "count": 1
+    },
+    "Stop/-/root": {
+      "top_keys": [
+        "background_tasks",
+        "cwd",
+        "effort",
+        "hook_event_name",
+        "last_assistant_message",
+        "permission_mode",
+        "prompt_id",
+        "session_crons",
+        "session_id",
+        "stop_hook_active",
+        "transcript_path"
+      ],
+      "has_prompt_id": true,
+      "has_effort": true,
+      "effort_raw": "{\"level\":\"high\"}",
+      "tool_input_keys": null,
+      "tool_response_keys": null,
+      "count": 1
+    }
+  }
+}

@@ -1,0 +1,164 @@
+{
+  "check": "6. interactive TUI",
+  "kind": "real product plugin in the interactive terminal, driven through tmux (not `-p`); JEV_GATE_MODE=native JEV_GATE_EXPERIMENT_ADMISSION=orchestrated",
+  "host": "Claude Code 2.1.276 (macOS 26.2, node v24.18.0), claude.ai team subscription login, headless `claude -p` (check 6: interactive TUI via tmux), CLAUDE_CODE_FORK_SUBAGENT=0 CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1, --setting-sources project,local, --permission-mode acceptEdits, --no-session-persistence, disposable project",
+  "product_build": {
+    "dist_hook_sha256": "b5db1035d9ab5223ba338b125ddf99918f26cda1623a12ce80589903590894f2",
+    "built_at_local": "2026-09-18T15:22:39",
+    "source": "working tree at commit 134df5f (rebuilt by another session mid-verification)"
+  },
+  "request": "one line: list the files in this directory (text withheld). Forced orchestration turns even this into a planner + worker job",
+  "cli": {
+    "cli_version": "2.1.276 (from the TUI banner)",
+    "root_model": "Sonnet 5",
+    "permission_mode": "acceptEdits",
+    "allowed_tools": "Bash(ls *)",
+    "plugin_dir": "the product repository only"
+  },
+  "driving": {
+    "tmux": "3.6a",
+    "folder_trust_dialog": "appeared once and was answered \"Yes, I trust this folder\"; a piped stdout makes the CLI switch to --print mode, so the TUI must be driven through the pane, not a pipe",
+    "pane_snapshots": [
+      "pane-00-start.txt",
+      "pane-01-trusted.txt",
+      "pane-11.txt",
+      "pane-12.txt",
+      "pane-13.txt",
+      "pane-14.txt",
+      "pane-15.txt",
+      "pane-16.txt",
+      "pane-99-end.txt"
+    ]
+  },
+  "traces": [
+    {
+      "caller": {
+        "agent_id": null,
+        "agent_type": null
+      },
+      "tool_use_id": null,
+      "mode": "native",
+      "attempted": false,
+      "known_not_sent": true,
+      "forced": true,
+      "decision": "orchestrated",
+      "reason": "mode_native",
+      "phase": "admission_result",
+      "version": 5,
+      "written_at": "2026-09-18T06:23:15.175Z"
+    },
+    {
+      "caller": {
+        "agent_id": null,
+        "agent_type": null
+      },
+      "tool_use_id": "toolu_01WHnChf6YBj8gPpQAS1gj6p",
+      "mode": "native",
+      "tool_name": "Bash",
+      "allow": false,
+      "denials": 0,
+      "phase": "guard",
+      "version": 5,
+      "written_at": "2026-09-18T06:23:18.535Z"
+    },
+    {
+      "caller": {
+        "agent_id": null,
+        "agent_type": null
+      },
+      "tool_use_id": "toolu_01Uo9fYWKW5x9ikC3y57HDd1",
+      "mode": "native",
+      "status": "completed",
+      "outcome": "ready",
+      "rev": 1,
+      "tasks": 1,
+      "carried_receipts": 0,
+      "reset_receipts": 0,
+      "phase": "plan",
+      "version": 5,
+      "written_at": "2026-09-18T06:23:55.694Z"
+    },
+    {
+      "caller": {
+        "agent_id": null,
+        "agent_type": null
+      },
+      "tool_use_id": "toolu_01K9D3PWGjDzstu2ahWxyf7C",
+      "mode": "native",
+      "task_id": "t1",
+      "rev": 1,
+      "attempt": 1,
+      "verdict": "accept",
+      "verdict_reason": null,
+      "advisory": null,
+      "tool_response": {
+        "status": "completed",
+        "agentId": "a507302c0f848d4dc",
+        "resolvedModel": "claude-sonnet-5",
+        "modelsUsed": null,
+        "totalDurationMs": 17458,
+        "totalToolUseCount": 2,
+        "totalTokens": 20696,
+        "usage": {
+          "input_tokens": 2,
+          "output_tokens": 929,
+          "cache_creation_input_tokens": 673,
+          "cache_read_input_tokens": 19092
+        }
+      },
+      "root_effort": null,
+      "phase": "post",
+      "version": 5,
+      "written_at": "2026-09-18T06:24:16.286Z"
+    },
+    {
+      "caller": {
+        "agent_id": null,
+        "agent_type": null
+      },
+      "tool_use_id": null,
+      "mode": "native",
+      "outcome": "completed",
+      "phase": "stop",
+      "version": 5,
+      "written_at": "2026-09-18T06:24:19.774Z"
+    }
+  ],
+  "state": {
+    "shape": "orchestrated",
+    "phase": "planned",
+    "planner_tier": null,
+    "denials": 1,
+    "outcome": "completed",
+    "attempts": {
+      "planner": 1,
+      "replans": 0,
+      "tasks": {
+        "t1": 1
+      }
+    },
+    "plan_rev": 1,
+    "plan_tasks": [
+      "t1"
+    ],
+    "receipts": [
+      {
+        "task_id": "t1",
+        "verdict": "accept",
+        "observed_model": "claude-sonnet-5",
+        "root_effort": null
+      }
+    ]
+  },
+  "accounting": {
+    "total_cost_usd": null,
+    "note": "an interactive session emits no result event, so no total_cost_usd or modelUsage was captured; the root transcript recorded claude-sonnet-5 usage of 14 input / 1841 output / 286881 cache-read / 120225 cache-creation tokens plus separate planner and worker sidechains"
+  },
+  "findings": {
+    "hooks_fire_identically": "observed - UserPromptSubmit admission (forced orchestrated), guard, plan, post and stop traces all appear, with prompt_id present, exactly as in headless mode",
+    "guard_in_tui": "observed - the root Bash attempt was denied and counted (denials=1); the TUI then routed through jev-gate:planner and jev-gate:worker",
+    "plan_and_receipt": "observed - plan rev 1 (1 task), receipt accepted, observed_model claude-sonnet-5, stop outcome completed",
+    "difference_from_headless": "none observed in hook behavior. Operational differences only: a folder-trust prompt on first use, no stream-json and therefore no cost/usage accounting, and the injected guidance is not shown in the transcript view",
+    "root_effort_null": "observed defect - the post trace again records root_effort null"
+  }
+}

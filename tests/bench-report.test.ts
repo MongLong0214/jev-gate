@@ -182,7 +182,7 @@ const jevPhase = (attempts: number, tokens: number | null): Record<string, unkno
 const gate5 = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
   ...V4_GATE,
   eligible_attempted: 3,
-  admission: { attempted: true, known_not_sent: false, choice: 'orchestrated', confidence: 0.91, decision: 'orchestrated', reason: null },
+  admission: { attempted: true, known_not_sent: false, forced: false, decided: true, choice: 'orchestrated', confidence: 0.91, decision: 'orchestrated', reason: null },
   guard_denials: 2,
   continue_false: 0,
   planner_calls: { requested: 1, completed: 1, tier_proposed: 'deep', model_observed: 'claude-opus-5', plan_status: 'ready', rev: 1 },
@@ -193,6 +193,7 @@ const gate5 = (over: Record<string, unknown> = {}): Record<string, unknown> => (
   jev_requests: { admission: jevPhase(1, 300), allocation: jevPhase(3, 1200), result: jevPhase(1, 200) },
   outcome: 'completed',
   orphan_records: 1,
+  decision_mismatch: 0,
   ...over,
 });
 const priced = (job: string, arm: string, cost: number, ms: number, quality: 'pass' | 'fail', gate?: Record<string, unknown>): Record<string, unknown> =>
@@ -239,7 +240,7 @@ describe('schema 5 observation', () => {
 
   it('records the raw Jev choice when the hook did not record an applied decision', () => {
     const run = writeRun('v5-choice', [{ job: 'A', arms: ['jev_hierarchy'] }], [
-      cell('A', 'jev_hierarchy', { gate: gate5({ admission: { attempted: true, known_not_sent: false, choice: 'orchestrated', confidence: 0.9, decision: null, reason: null } }) }),
+      cell('A', 'jev_hierarchy', { gate: gate5({ admission: { attempted: true, known_not_sent: false, forced: false, decided: false, choice: 'orchestrated', confidence: 0.9, decision: null, reason: null } }) }),
     ]);
     expect(buildReport(run).arms[0]!.gate_v5.admission).toEqual({ 'choice:orchestrated': 1 });
   });
@@ -368,8 +369,8 @@ describe('diagnostic arm (A16)', () => {
   it('judges the diagnostic rows on their own numbers and keeps the conclusion on the product arm', () => {
     const run = writeRun('a16', [{ job: 'A', arms: [...ARMS5, 'jev_forced_orchestration'] }], [
       // Gate A put this workload below the admission floor, so the product arm ran direct and never reached Gate B.
-      priced('A', 'jev_hierarchy', 9, 900, 'pass', gate5({ admission: { attempted: true, known_not_sent: false, choice: 'direct', confidence: 0.61, decision: 'direct', reason: null }, eligible_attempted: 0, worker_calls: {}, planner_calls: { requested: 0, completed: 0, tier_proposed: null, model_observed: null, plan_status: null, rev: null } })),
-      { ...priced('A', 'jev_forced_orchestration', 4, 600, 'pass', gate5({ admission: { attempted: false, known_not_sent: true, choice: null, confidence: null, decision: 'orchestrated', reason: 'admission_forced' }, jev_requests: { admission: jevPhase(0, 0), allocation: jevPhase(3, 1200), result: jevPhase(1, 200) } })), diagnostic: true },
+      priced('A', 'jev_hierarchy', 9, 900, 'pass', gate5({ admission: { attempted: true, known_not_sent: false, forced: false, decided: true, choice: 'direct', confidence: 0.61, decision: 'direct', reason: null }, eligible_attempted: 0, worker_calls: {}, planner_calls: { requested: 0, completed: 0, tier_proposed: null, model_observed: null, plan_status: null, rev: null } })),
+      { ...priced('A', 'jev_forced_orchestration', 4, 600, 'pass', gate5({ admission: { attempted: false, known_not_sent: true, forced: true, decided: null, choice: null, confidence: null, decision: 'orchestrated', reason: 'admission_forced' }, jev_requests: { admission: jevPhase(0, 0), allocation: jevPhase(3, 1200), result: jevPhase(1, 200) } })), diagnostic: true },
       priced('A', 'orchestrated_control', 4, 600, 'pass'),
       priced('A', 'frontier_orchestrated', 5, 700, 'pass'),
       priced('A', 'frontier_native', 10, 1000, 'pass'),
@@ -385,7 +386,7 @@ describe('diagnostic arm (A16)', () => {
     expect(r.conclusion.reason).toMatch(/diagnostic arm jev_forced_orchestration/);
     const byArm = Object.fromEntries(r.arms.map((a) => [a.arm, a]));
     expect(byArm['jev_forced_orchestration']!.diagnostic).toBe(true);
-    expect(byArm['jev_forced_orchestration']!.gate_v5.admission).toEqual({ orchestrated: 1 });
+    expect(byArm['jev_forced_orchestration']!.gate_v5.admission).toEqual({ 'forced:orchestrated': 1 });
     expect(byArm['jev_forced_orchestration']!.gate_v5.jev_requests.admission.attempts).toBe(0);
     expect(byArm['jev_hierarchy']!.diagnostic).toBe(false);
     expect(renderMarkdown(r)).toContain('jev_forced_orchestration (diagnostic)');

@@ -6,7 +6,12 @@ import { OWNED_AGENTS } from './types.js';
 /** Local resource bounds. Not provider or host token limits; over-limit input is preserved, never truncated. */
 export const MAX_PROMPT_BYTES = 64 * 1024;
 export const MAX_OUTPUT_BYTES = 512 * 1024;
-export const DENIALS_BEFORE_STOP = 3;
+/**
+ * A6/A7: the guard denies root mutation tools, and a job that keeps probing them instead of dispatching is stopped.
+ * Observed on the host (v5-host-1, 2026-09-18): a coordinator probes two or three unavailable tools before its first
+ * planner call, so a budget of 3 killed otherwise healthy jobs. The budget bounds a loop, not a few early probes.
+ */
+export const DENIALS_BEFORE_STOP = 12;
 
 /** Agent-call fields whose execution semantics make automatic reallocation unsafe: resume/follow-up, team, fork, isolation. */
 export const EXECUTION_CONTROL_KEYS = ['resume', 'agentId', 'agent_id', 'name', 'team_name', 'isolation', 'fork'] as const;
