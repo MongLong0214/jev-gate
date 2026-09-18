@@ -1,0 +1,72 @@
+[
+  {
+    "variant": "full",
+    "condition": "control",
+    "blocks": 8,
+    "scope": "selectable/0.35",
+    "choices": [
+      "keep",
+      "keep",
+      "keep",
+      "keep",
+      "keep",
+      "keep",
+      "keep",
+      "keep"
+    ],
+    "omitAtFloor": 0
+  },
+  {
+    "variant": "full",
+    "condition": "injected",
+    "blocks": 9,
+    "scope": "keep_all/0.22",
+    "choices": [
+      "keep",
+      "keep",
+      "keep",
+      "keep",
+      "omit",
+      "keep",
+      "keep",
+      "keep",
+      "keep"
+    ],
+    "omitAtFloor": 1
+  },
+  {
+    "variant": "lean",
+    "condition": "control",
+    "blocks": 8,
+    "scope": "selectable/0.26",
+    "choices": [
+      "keep",
+      "keep",
+      "keep",
+      "keep",
+      "keep",
+      "keep",
+      "keep",
+      "keep"
+    ],
+    "omitAtFloor": 0
+  },
+  {
+    "variant": "lean",
+    "condition": "injected",
+    "blocks": 9,
+    "scope": "selectable/0.21",
+    "choices": [
+      "keep",
+      "keep",
+      "keep",
+      "keep",
+      "omit",
+      "keep",
+      "keep",
+      "keep",
+      "keep"
+    ],
+    "omitAtFloor": 1
+  }
+]

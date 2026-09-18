@@ -276,16 +276,30 @@ that commit came from the core work, not from the probe.
    Mutation-check anything added here. Removing the `totalLines > numLines` guard left the whole suite green, because
    every test that reached it asserted only `ok: false` while the confirmed truncated fixture is caught one check
    earlier by `appliedLimit`. A guard whose reason code is the point needs a test that asserts the reason code.
-3. **Wire the hook** (`src/hook.ts`, `hooks/hooks.json`) — **this is where the next agent starts.** A `PostToolUse`
-   matcher of exactly `^Grep$` — do not widen the existing `^Agent$` — plus the `SessionStart` and `UserPromptSubmit`
-   events the purpose record needs. The context path must branch before any V5 routing logic, and a child caller
-   (`agent_id` present) must pass through untouched.
+3. ~~**Wire the hook.**~~ **Do not, yet — measured 2026-09-18, `bench/results/v5-context-viability-2026-09-18`.**
+   Wiring it now adds a Jev call of 17,000–27,000 input tokens to about **4 %** of a real session's searches and saves
+   nothing on any of them. Over 300 real search results across four repositories, **zero** produced an omission: eight
+   of ten eligible ones stopped at the scope gate and two never reached Jev because the request exceeded 128 KiB.
 
-   The eligible window is now a measured range, not an open-ended one: `MIN_CONTENT_BYTES` (8 KiB) to
-   `MAX_CONTENT_CHARS` (20,000 characters), with `head_limit`'s 250 lines usually binding before either. Before wiring
-   anything, get a feel for how often a real session's `Grep` lands inside it — the two ceilings together may leave a
-   narrower window than the feature assumes, and that is cheap to find out from a passive `PostToolUse` recorder like
-   the one in `bench/results/v5-context-cap-2026-09-18/cells/probe-plugin` before spending anything on step 4.
+   The upside is real and sits behind one decision. Held against the same 95-block result, the scope question answers
+   `keep_all` at **0.99** when the user's request is exhaustive and `selectable` at **0.13** when it is not — so the
+   protection `OMIT_CONFIDENCE_FLOOR` exists to give is already coming from `keep_all` itself, while the floor discards
+   a **40–54 %** byte reduction that the block-level answers would have delivered. **That floor is a declared criterion
+   and this repository does not move one after seeing results: it is the owner's call, not the next agent's.**
+
+   Two things to settle with it, both in that README: the 250-line `head_limit` truncation removes **88 %** of broad
+   searches, which are exactly the ones a relevance filter suits; and Jev agrees with itself on only **67–89 %** of
+   block classifications across identical requests, so if the floor moves, the same search filters differently between
+   runs. Today the floor hides that.
+
+   When it is time, the wiring itself is unchanged: a `PostToolUse` matcher of exactly `^Grep$` — do not widen the
+   existing `^Agent$` — plus the `SessionStart` and `UserPromptSubmit` events the purpose record needs. The context path
+   must branch before any V5 routing logic, and a child caller (`agent_id` present) must pass through untouched.
+
+   The cheapest thing still unmeasured is free: the eligibility scan emulates the host's `Grep` rather than observing
+   it. A passive `PostToolUse` recorder on real sessions — the one in
+   `bench/results/v5-context-cap-2026-09-18/cells/probe-plugin` does exactly this and emits nothing back to the host —
+   would give the real distribution, including how often the model sets `head_limit` itself.
 4. **Then the three-condition comparison** in §11 (`native_output`, `deterministic_output`, `jev_output`), which needs
    the owner's approval because it spends real budget. Measure against what the host *would have delivered*, not against
    the bytes the hook saw — the cap above makes that distinction the difference between a real number and a fabricated
