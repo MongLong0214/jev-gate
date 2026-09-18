@@ -193,6 +193,82 @@ Tool results as a whole are not the problem either: 85.1 MB across ordinary sess
 additions, not by a few large ones, and a per-result relevance filter has nothing to bite on. Anything aimed at this
 operator's cost has to act on **how much context a turn carries**, not on how large one tool result is.
 
+## 7. The root cause behind §6, and the change that fixes it
+
+§6 ends by saying the money is in how much context a turn carries. It is, and the reason turned out to be one setting.
+
+**Sessions ride at the top of a 1M context window and never come down.** The largest transcript — 220 MB, 36,540 turns —
+compacts 24 times, regularly, about every 1,150 turns, in a clean sawtooth from a floor back up to the ceiling:
+
+```
+▅█▆█▅█▄▆█▄▇█▅██▆█▅█▄▇█▆█▄▅▅█▅▇█▄▇█▆█▅█▃▆█▃▆██▇█▅██▆█▅██▆█▄▆█
+```
+
+Auto-compact is working. It is simply configured to let the window fill first. Measured over 222 compactions in the
+eleven largest transcripts:
+
+| | median |
+|---|---|
+| peak before compaction | 966,799 |
+| floor after compaction | 72,731 |
+| turns per cycle | 1,149 |
+| context added per turn | 916 |
+
+32.8 % of turns run above 700K and 91.6 % above 150K. That is the 516,711-token average from §6, and it is also why
+turns are slow: with output held roughly constant (676–885 tokens), the median turn takes **2.7 s under 100K and 5.3 s
+at 800K–1M**, p90 10.0 s against 15.8 s.
+
+### The setting
+
+Claude Code exposes the window directly — `autoCompactWindow` in settings, `CLAUDE_CODE_AUTO_COMPACT_WINDOW` in the
+environment (the environment wins), or `--autocompact`. Its own help says *"the actual threshold is the minimum of this
+setting and your model's maximum context window"*, and warns that *"overriding auto may result in high token usage."*
+
+That warning is real, and an experiment found its shape before arithmetic could mislead. A first cost model said the
+optimum was 100–150K. **At 100,000 the host killed the session:**
+
+```
+Autocompact is thrashing: the context refilled to the limit within 3 turns
+of the previous compact, 3 times in a row.
+```
+
+The floor is why. Compaction leaves ~72.7K behind, so a 100K window has almost no headroom and two tool results refill
+it. The window has to clear the floor by enough turns to be worth having, which puts the usable range far above where
+the arithmetic pointed.
+
+### Measured, on identical work
+
+Sixty `cat` calls over 60 fixture files, three arms, each completing all sixty:
+
+| arm | peak context | compactions | weighted tokens | cost | per file read |
+|---|---|---|---|---|---|
+| `auto` (as configured) | 526,502 | 0 | 5,364,875 | $5.469 | $0.0912 |
+| 300K via environment | 262,301 | 2 | 3,917,953 | $4.097 | $0.0683 |
+| 300K via `settings.json` | 262,608 | 2 | 4,181,770 | $4.402 | **$0.0734** |
+
+**−19.5 % to −25.1 % on the host's own cost figure, with no thrash.** Both routes produce the same 262K peak and the
+same two compactions; the gap between them is run-to-run variance.
+
+This is a **lower bound**. Sixty-three turns only gets two teeth of the sawtooth. In the sessions that carry 96 % of the
+bill the control never comes down from ~966K at all, while a 300K window would cycle at ~210K. Applying the measured
+floor, growth and re-cache figures to that regime puts the steady-state saving near **60 %**, and a counterfactual over
+the recorded per-turn context sizes agrees (`data/counterfactual`-derived rows: 61.2 % at 300K, 65.7 % at 250K).
+
+`autoCompactWindow: 300000` is now set in this operator's `~/.claude/settings.json`. It takes effect for sessions
+started afterwards; a session already running keeps the window it resolved at start.
+
+### What is left, and what it is worth
+
+The static prefix is the next term and a much smaller one. The same fixture run with user settings loaded carries
+**61,374** tokens at turn 1 against **45,649** without them — about **15.7K tokens of skills, plugins, hooks and MCP
+servers on every turn of every session**. Against a post-fix mean context near 140K that is roughly 11 %, and trimming
+it costs capability, so it is a judgement rather than a defect. `ENABLE_TOOL_SEARCH=1` is already deferring tool
+schemas, which is the same lever pulled once already.
+
+**None of this is a Jev result.** The cheapest and fastest change available to this operator was a configuration value,
+not a model-routing or context-filtering feature, and it is worth saying plainly beside a directory full of Jev
+measurements.
+
 ## Not settled here
 
 - Four repositories, all TypeScript-heavy and three of them the author's own. A Python or Go codebase, or a repository

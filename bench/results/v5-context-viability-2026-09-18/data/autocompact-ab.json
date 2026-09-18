@@ -1,0 +1,32 @@
+{
+  "ctrl-auto": {
+    "reads": 60,
+    "peak": 526502,
+    "compactions": 0,
+    "cr": 33506009,
+    "cw": 1007137,
+    "weighted": 5364874.9,
+    "cost": 5.4691377999999995,
+    "done": true
+  },
+  "treat-300k": {
+    "reads": 60,
+    "peak": 262301,
+    "compactions": 2,
+    "cr": 16985092,
+    "cw": 1109722,
+    "weighted": 3917953.2,
+    "cost": 4.096998600000001,
+    "done": true
+  },
+  "verify-settings": {
+    "reads": 60,
+    "peak": 262608,
+    "compactions": 2,
+    "cr": 17425660,
+    "cw": 1219602,
+    "weighted": 4181770.0,
+    "cost": 4.4017318,
+    "done": true
+  }
+}
