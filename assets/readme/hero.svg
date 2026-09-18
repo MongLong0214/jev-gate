@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="420" viewBox="0 0 760 420"
+     role="img" aria-labelledby="jg-hero-title jg-hero-desc">
+  <title id="jg-hero-title">One job contains different kinds of work</title>
+  <desc id="jg-hero-desc">A single user job breaks into four pieces of work: simulation architecture, camera controls, HUD wiring and regression tests. Each one is evaluated separately at the gate. The architecture work is routed to a frontier model; camera controls, HUD wiring and regression tests are routed to the cheaper model. The expensive model runs only where it changes the outcome.</desc>
+
+  <style>
+    .sans { font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .kicker { font-size: 17px; font-weight: 700; letter-spacing: 1.2px; fill: #8B949E; }
+    .chip   { font-size: 18px; font-weight: 600; fill: #F0F6FC; }
+    .lane   { font-size: 20px; font-weight: 700; }
+    .note   { font-size: 15px; font-weight: 600; fill: #8B949E; }
+    .foot   { font-size: 18px; font-weight: 600; fill: #C9D1D9; }
+  </style>
+
+  <rect width="760" height="420" fill="#0D1117"/>
+
+  <text class="sans kicker" x="28" y="42">ONE USER JOB</text>
+  <text class="sans kicker" x="316" y="42">GATE</text>
+  <text class="sans kicker" x="536" y="42">WHERE IT RUNS</text>
+
+  <!-- the work inside one job -->
+  <g>
+    <rect x="28" y="66"  width="248" height="46" rx="7" fill="#161B22" stroke="#A371F7" stroke-width="2"/>
+    <text class="sans chip" x="48" y="95">Simulation architecture</text>
+
+    <rect x="28" y="132" width="248" height="46" rx="7" fill="#161B22" stroke="#30363D" stroke-width="2"/>
+    <text class="sans chip" x="48" y="161">Camera controls</text>
+
+    <rect x="28" y="198" width="248" height="46" rx="7" fill="#161B22" stroke="#30363D" stroke-width="2"/>
+    <text class="sans chip" x="48" y="227">HUD wiring</text>
+
+    <rect x="28" y="264" width="248" height="46" rx="7" fill="#161B22" stroke="#30363D" stroke-width="2"/>
+    <text class="sans chip" x="48" y="293">Regression tests</text>
+  </g>
+
+  <!-- one evaluation per task, at the task boundary -->
+  <g fill="none" stroke-linecap="round">
+    <path d="M276 89  H322" stroke="#A371F7" stroke-width="3"/>
+    <path d="M276 155 H322" stroke="#8B949E" stroke-width="3"/>
+    <path d="M276 221 H322" stroke="#8B949E" stroke-width="3"/>
+    <path d="M276 287 H322" stroke="#8B949E" stroke-width="3"/>
+  </g>
+
+  <rect x="322" y="60" width="86" height="256" rx="10" fill="#161B22" stroke="#58A6FF" stroke-width="2.5"/>
+  <text class="sans lane" x="365" y="178" fill="#58A6FF" text-anchor="middle">JEV</text>
+  <text class="sans note" x="365" y="204" text-anchor="middle">one call</text>
+  <text class="sans note" x="365" y="224" text-anchor="middle">per task</text>
+
+  <!-- selected lanes -->
+  <g fill="none" stroke-linecap="round">
+    <path d="M408 89 H512" stroke="#A371F7" stroke-width="3.5"/>
+    <path d="M510 82 L524 89 L510 96 Z" fill="#A371F7" stroke="none"/>
+
+    <path d="M408 155 Q470 155 470 250 H520" stroke="#3FB950" stroke-width="3"/>
+    <path d="M408 221 Q470 221 470 250 H520" stroke="#3FB950" stroke-width="3"/>
+    <path d="M408 287 Q470 287 470 250 H520" stroke="#3FB950" stroke-width="3"/>
+    <path d="M510 243 L522 250 L510 257 Z" fill="#3FB950" stroke="none"/>
+  </g>
+
+  <rect x="524" y="66" width="208" height="46" rx="7" fill="#161B22" stroke="#A371F7" stroke-width="2"/>
+  <text class="sans lane" x="548" y="96" fill="#A371F7">Frontier model</text>
+  <text class="sans note" x="548" y="134">1 of 4 pieces of work</text>
+
+  <rect x="524" y="226" width="208" height="46" rx="7" fill="#161B22" stroke="#3FB950" stroke-width="2"/>
+  <text class="sans lane" x="548" y="256" fill="#3FB950">Cheaper model</text>
+  <text class="sans note" x="548" y="294">3 of 4 pieces of work</text>
+
+  <path d="M28 348 H732" stroke="#21262D" stroke-width="2"/>
+  <text class="sans foot" x="28" y="384">The expensive model runs where it changes the outcome — not on every step.</text>
+</svg>
