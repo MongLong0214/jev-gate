@@ -1,0 +1,136 @@
+{
+  "host": "Claude Code 2.1.275 (macOS), claude.ai team subscription OAuth, -p, CLAUDE_CODE_FORK_SUBAGENT=0 CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1, --setting-sources project,local",
+  "sessions": {
+    "A": {
+      "pre_top_level_keys": [
+        "session_id",
+        "transcript_path",
+        "cwd",
+        "prompt_id",
+        "permission_mode",
+        "effort",
+        "hook_event_name",
+        "tool_name",
+        "tool_input",
+        "tool_use_id"
+      ],
+      "pre_tool_input_keys": [
+        "description",
+        "prompt",
+        "subagent_type"
+      ],
+      "root_has_agent_id": false,
+      "run_in_background_present": false,
+      "test_hook_patched_model": "haiku",
+      "canary_in_child_prompt": true,
+      "post_response_keys": [
+        "status",
+        "prompt",
+        "agentId",
+        "agentType",
+        "harnessNoteCount",
+        "harnessTailCount",
+        "harnessSectionHash",
+        "content",
+        "resolvedModel",
+        "totalDurationMs",
+        "totalTokens",
+        "totalToolUseCount",
+        "usage",
+        "toolStats"
+      ],
+      "status": "completed",
+      "resolvedModel": "claude-haiku-4-5-20251001",
+      "modelsUsed": null,
+      "child_models_in_stream": [
+        "claude-haiku-4-5-20251001"
+      ],
+      "canary_repeated_by_child": true,
+      "permission_denials": [],
+      "posttooluse_failure_for_agent": false,
+      "plugins_loaded": [
+        "jev-gate",
+        "jev-hostproof"
+      ],
+      "agents_scoped": [
+        "jev-gate:planner",
+        "jev-gate:worker"
+      ],
+      "modelUsage_models": [
+        "claude-haiku-4-5-20251001",
+        "claude-sonnet-5"
+      ],
+      "total_cost_usd": 0.04990750000000001,
+      "num_turns": 2,
+      "hello_txt": "hello from worker"
+    },
+    "B": {
+      "pre_top_level_keys": [
+        "session_id",
+        "transcript_path",
+        "cwd",
+        "prompt_id",
+        "permission_mode",
+        "effort",
+        "hook_event_name",
+        "tool_name",
+        "tool_input",
+        "tool_use_id"
+      ],
+      "pre_tool_input_keys": [
+        "description",
+        "prompt",
+        "subagent_type"
+      ],
+      "root_has_agent_id": false,
+      "run_in_background_present": false,
+      "test_hook_patched_model": "haiku",
+      "canary_in_child_prompt": true,
+      "post_response_keys": [
+        "status",
+        "prompt",
+        "agentId",
+        "agentType",
+        "harnessNoteCount",
+        "harnessTailCount",
+        "harnessSectionHash",
+        "content",
+        "resolvedModel",
+        "totalDurationMs",
+        "totalTokens",
+        "totalToolUseCount",
+        "usage",
+        "toolStats"
+      ],
+      "status": "completed",
+      "resolvedModel": "claude-haiku-4-5-20251001",
+      "modelsUsed": null,
+      "child_models_in_stream": [
+        "claude-haiku-4-5-20251001"
+      ],
+      "canary_repeated_by_child": true,
+      "permission_denials": [
+        {
+          "tool": "Write",
+          "file": "forbidden/blocked.txt"
+        }
+      ],
+      "posttooluse_failure_for_agent": false,
+      "plugins_loaded": [
+        "jev-gate",
+        "jev-hostproof"
+      ],
+      "agents_scoped": [
+        "jev-gate:planner",
+        "jev-gate:worker"
+      ],
+      "modelUsage_models": [
+        "claude-haiku-4-5-20251001",
+        "claude-sonnet-5"
+      ],
+      "total_cost_usd": 0.0385949,
+      "num_turns": 2,
+      "forbidden_dir_exists": false
+    }
+  }
+}

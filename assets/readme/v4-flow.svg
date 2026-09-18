@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="860" height="706" viewBox="0 0 860 706"
      role="img" aria-labelledby="jg-v4-title jg-v4-desc">
-  <title id="jg-v4-title">Planned V4: Sonnet coordinates, Jev evaluates the next delegated task</title>
-  <desc id="jg-v4-desc">Planned V4 behavior; the current prototype is V3. The request "Build a space-simulation game" goes to a Sonnet main session that understands, coordinates and integrates. A small task finishes directly with no Jev call. A delegated task goes to a coding worker or a read-only planner, where a PreToolUse Agent hook lets Jev evaluate that one task once and select Sonnet, Opus or Fable. The result returns to Sonnet, which integrates it and continues. The selected model is illustrative, not a fixed assignment.</desc>
+  <title id="jg-v4-title">V4: Sonnet coordinates, Jev evaluates the next delegated task</title>
+  <desc id="jg-v4-desc">V4 behavior as implemented; savings are not established. The request "Build a space-simulation game" goes to a Sonnet main session that understands, coordinates and integrates. A small task finishes directly with no Jev call. A delegated task goes to a coding worker or a read-only planner, where a PreToolUse Agent hook lets Jev evaluate that one task once and select Sonnet, Opus or Fable. The result returns to Sonnet, which integrates it and continues. The selected model is illustrative, not a fixed assignment.</desc>
 
   <style>
     .sans { font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
@@ -17,7 +17,7 @@
 
   <rect width="860" height="706" fill="#0D1117"/>
 
-  <text class="sans kicker" x="430" y="34" text-anchor="middle">PLANNED V4 BEHAVIOR — THE CURRENT PROTOTYPE IS V3</text>
+  <text class="sans kicker" x="430" y="34" text-anchor="middle">V4 TASK-BOUNDARY FLOW — IMPLEMENTED; HOST CHECKS RECORDED ON CLAUDE CODE 2.1.275 (HEADLESS)</text>
   <text class="mono ask"    x="430" y="70" text-anchor="middle">You: “Build a space-simulation game.”</text>
 
   <g fill="none" stroke-linecap="round">

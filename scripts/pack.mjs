@@ -5,9 +5,13 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } fr
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const root = dirname(dirname(fileURLToPath(import.meta.url)));
+// Usage: node scripts/pack.mjs [outDir] [--root <pluginRoot>]
+const args = process.argv.slice(2);
+const rootIdx = args.indexOf('--root');
+const root = rootIdx >= 0 ? resolve(args[rootIdx + 1]) : dirname(dirname(fileURLToPath(import.meta.url)));
+const positional = args.filter((a, i) => a !== '--root' && i !== rootIdx + 1);
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
-const outDir = resolve(process.argv[2] ?? join(root, 'dist-pack'));
+const outDir = resolve(positional[0] ?? join(root, 'dist-pack'));
 const INCLUDE = ['.claude-plugin/plugin.json', 'hooks/hooks.json', 'agents', 'dist', 'README.md', 'AGENTS.md', '.env.example', 'package.json'];
 
 const walk = (p) => (statSync(p).isDirectory() ? readdirSync(p).flatMap((n) => walk(join(p, n))) : [p]);
