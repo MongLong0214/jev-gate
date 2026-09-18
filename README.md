@@ -1,11 +1,18 @@
 <div align="center">
 
+<img src="./assets/readme/jev-gate-logo.svg" width="460" alt="jev-gate">
+
 # jev-gate
 
 ### Not every coding task needs your best model.
 
 Jev-powered model routing for Claude Code.<br>
 An experiment in using frontier intelligence for the hard parts—not every part.
+
+[![CI](https://github.com/MongLong0214/jev-gate/actions/workflows/ci.yml/badge.svg)](https://github.com/MongLong0214/jev-gate/actions/workflows/ci.yml)
+[![Prototype V3](https://img.shields.io/badge/prototype-V3-58A6FF)](#try-the-prototype)
+[![V4 specified, not shipped](https://img.shields.io/badge/V4-specified%2C%20not%20shipped-D29922)](https://github.com/MongLong0214/jev-gate/issues/10)
+[![Node 22+](https://img.shields.io/badge/node-22%2B-3FB950)](#try-the-prototype)
 
 [The idea](#the-idea) · [How V4 will work](#how-v4-will-work) · [Try the prototype](#try-the-prototype) · [Results](#the-first-benchmark-changed-the-design) · [Build with us](#build-with-us)
 
@@ -21,6 +28,14 @@ You ask your coding agent:
 
 That is one request, but many different jobs: work out the physics, design the state model, implement camera controls, connect the HUD, and test the result.
 
+<p align="center">
+  <img
+    src="./assets/readme/hero.svg"
+    width="760"
+    alt="One user job breaks into four pieces of work — simulation architecture, camera controls, HUD wiring and regression tests. Each is evaluated at the gate on its own. The architecture work goes to a frontier model; the other three go to the cheaper model."
+  >
+</p>
+
 **Why give all of those jobs the same model?**
 
 `jev-gate` explores a different default: **Sonnet coordinates. Jev evaluates the next delegated task. A suitable Claude model does the work.**
@@ -33,32 +48,13 @@ We are not aiming for hundreds of tiny agents. The useful unit is a coherent out
 
 **Planned behavior; the current prototype below is V3.**
 
-```text
-You: “Build a space-simulation game.”
-                    │
-                    ▼
-             Sonnet main session
-          Understand · coordinate · integrate
-                    │
-       ┌────────────┴─────────────┐
-       │                          │
-   Small task                Delegated task
-   Finish directly       Coding worker or read-only planner
-   No Jev call                    │
-                                  ▼
-                         PreToolUse: Agent
-                                  │
-                           Jev evaluates
-                           this task once
-                                  │
-                       ┌──────────┼──────────┐
-                       ▼          ▼          ▼
-                    Sonnet      Opus       Fable
-                       └──────────┼──────────┘
-                                  ▼
-                       Result back to Sonnet
-                       Integrate, then continue
-```
+<p align="center">
+  <img
+    src="./assets/readme/v4-flow.svg"
+    width="860"
+    alt="Planned V4 flow. The request goes to a Sonnet main session that understands, coordinates and integrates. A small task finishes directly with no Jev call. A delegated task goes to a coding worker or a read-only planner, where a PreToolUse Agent hook lets Jev evaluate that one task once and select Sonnet, Opus or Fable. The result returns to Sonnet, which integrates it and continues."
+  >
+</p>
 
 The selected model is illustrative, not a fixed assignment for any particular game feature. Account access and actual model resolution still matter.
 
@@ -119,6 +115,14 @@ To disable the hook, launch with `JEV_GATE_MODE=off`. To remove the plugin entir
 **Our first gate lost to plain Sonnet. We kept the result.**
 
 The V3 pilot ran four development fixtures under four configurations on September 17, 2026. These are the published exploratory results, not V4 performance:
+
+<p align="center">
+  <img
+    src="./assets/readme/pilot.svg"
+    width="760"
+    alt="Estimated cost per run across four configurations. Always-Fable on the original request cost $2.39 and passed 3 of 4; always-Fable on the Jev-enriched request cost $2.50 and passed 3 of 4; plain Sonnet with the plugin absent cost $0.58 and passed 4 of 4; Sonnet behind the V3 Jev gate cost $1.42 and passed 4 of 4."
+  >
+</p>
 
 | Configuration | Passed | Estimated total cost | Mean runtime |
 |---|---:|---:|---:|

@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="706" viewBox="0 0 860 706"
+     role="img" aria-labelledby="jg-v4-title jg-v4-desc">
+  <title id="jg-v4-title">Planned V4: Sonnet coordinates, Jev evaluates the next delegated task</title>
+  <desc id="jg-v4-desc">Planned V4 behavior; the current prototype is V3. The request "Build a space-simulation game" goes to a Sonnet main session that understands, coordinates and integrates. A small task finishes directly with no Jev call. A delegated task goes to a coding worker or a read-only planner, where a PreToolUse Agent hook lets Jev evaluate that one task once and select Sonnet, Opus or Fable. The result returns to Sonnet, which integrates it and continues. The selected model is illustrative, not a fixed assignment.</desc>
+
+  <style>
+    .sans { font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .kicker { font-size: 15px; font-weight: 700; letter-spacing: 1.1px; fill: #D29922; }
+    .ask    { font-size: 19px; font-weight: 600; fill: #C9D1D9; }
+    .head   { font-size: 22px; font-weight: 700; fill: #F0F6FC; }
+    .sub    { font-size: 16px; font-weight: 500; fill: #8B949E; }
+    .btit   { font-size: 19px; font-weight: 700; }
+    .pill   { font-size: 18px; font-weight: 700; }
+    .foot   { font-size: 16px; font-weight: 600; fill: #8B949E; }
+  </style>
+
+  <rect width="860" height="706" fill="#0D1117"/>
+
+  <text class="sans kicker" x="430" y="34" text-anchor="middle">PLANNED V4 BEHAVIOR — THE CURRENT PROTOTYPE IS V3</text>
+  <text class="mono ask"    x="430" y="70" text-anchor="middle">You: “Build a space-simulation game.”</text>
+
+  <g fill="none" stroke-linecap="round">
+    <path d="M430 82 V102" stroke="#8B949E" stroke-width="3"/>
+    <path d="M423 96 L430 108 L437 96 Z" fill="#8B949E" stroke="none"/>
+  </g>
+
+  <rect x="170" y="112" width="520" height="76" rx="9" fill="#161B22" stroke="#58A6FF" stroke-width="2.5"/>
+  <text class="sans head" x="430" y="146" text-anchor="middle">Sonnet main session</text>
+  <text class="sans sub"  x="430" y="172" text-anchor="middle">Understand · coordinate · integrate</text>
+
+  <!-- split -->
+  <g fill="none" stroke-linecap="round">
+    <path d="M430 188 V208" stroke="#30363D" stroke-width="3"/>
+    <path d="M230 208 H630" stroke="#30363D" stroke-width="3"/>
+    <path d="M230 208 V232" stroke="#30363D" stroke-width="3"/>
+    <path d="M223 220 L230 232 L237 220 Z" fill="#30363D" stroke="none"/>
+    <path d="M630 208 V232" stroke="#58A6FF" stroke-width="3"/>
+    <path d="M623 220 L630 232 L637 220 Z" fill="#58A6FF" stroke="none"/>
+  </g>
+
+  <!-- ungated branch -->
+  <rect x="90" y="238" width="280" height="100" rx="9" fill="#161B22" stroke="#30363D" stroke-width="2"/>
+  <text class="sans btit" x="230" y="272" fill="#C9D1D9" text-anchor="middle">Small task</text>
+  <text class="sans sub"  x="230" y="298" text-anchor="middle">Finish directly</text>
+  <text class="sans sub"  x="230" y="320" fill="#6E7781" text-anchor="middle">No Jev call</text>
+
+  <!-- gated branch -->
+  <rect x="482" y="238" width="296" height="100" rx="9" fill="#161B22" stroke="#58A6FF" stroke-width="2.5"/>
+  <text class="sans btit" x="630" y="272" fill="#F0F6FC" text-anchor="middle">Delegated task</text>
+  <text class="sans sub"  x="630" y="298" text-anchor="middle">Coding worker or</text>
+  <text class="sans sub"  x="630" y="320" text-anchor="middle">read-only planner</text>
+
+  <g fill="none" stroke-linecap="round">
+    <path d="M630 338 V360" stroke="#58A6FF" stroke-width="3"/>
+    <path d="M623 352 L630 364 L637 352 Z" fill="#58A6FF" stroke="none"/>
+  </g>
+
+  <rect x="482" y="370" width="296" height="46" rx="8" fill="#161B22" stroke="#58A6FF" stroke-width="2"/>
+  <text class="mono" x="630" y="399" font-size="16" font-weight="700" fill="#58A6FF" text-anchor="middle">PreToolUse: Agent</text>
+
+  <g fill="none" stroke-linecap="round">
+    <path d="M630 416 V438" stroke="#58A6FF" stroke-width="3"/>
+    <path d="M623 430 L630 442 L637 430 Z" fill="#58A6FF" stroke="none"/>
+  </g>
+
+  <rect x="482" y="448" width="296" height="62" rx="9" fill="#0B2A4A" stroke="#58A6FF" stroke-width="2.5"/>
+  <text class="sans btit" x="630" y="476" fill="#58A6FF" text-anchor="middle">Jev evaluates</text>
+  <text class="sans sub"  x="630" y="498" fill="#8B949E" text-anchor="middle">this task once</text>
+
+  <!-- model lanes -->
+  <g fill="none" stroke-linecap="round">
+    <path d="M630 510 V528" stroke="#58A6FF" stroke-width="3"/>
+    <path d="M530 528 H730" stroke="#58A6FF" stroke-width="3"/>
+    <path d="M530 528 V546" stroke="#3FB950" stroke-width="3"/>
+    <path d="M630 528 V546" stroke="#D29922" stroke-width="3"/>
+    <path d="M730 528 V546" stroke="#A371F7" stroke-width="3"/>
+  </g>
+
+  <rect x="482" y="548" width="96" height="42" rx="7" fill="#161B22" stroke="#3FB950" stroke-width="2"/>
+  <text class="sans pill" x="530" y="576" fill="#3FB950" text-anchor="middle">Sonnet</text>
+
+  <rect x="582" y="548" width="96" height="42" rx="7" fill="#161B22" stroke="#D29922" stroke-width="2"/>
+  <text class="sans pill" x="630" y="576" fill="#D29922" text-anchor="middle">Opus</text>
+
+  <rect x="682" y="548" width="96" height="42" rx="7" fill="#161B22" stroke="#A371F7" stroke-width="2"/>
+  <text class="sans pill" x="730" y="576" fill="#A371F7" text-anchor="middle">Fable</text>
+
+  <!-- back to the main session -->
+  <g fill="none" stroke-linecap="round">
+    <path d="M530 590 V604" stroke="#8B949E" stroke-width="3"/>
+    <path d="M630 590 V604" stroke="#8B949E" stroke-width="3"/>
+    <path d="M730 590 V604" stroke="#8B949E" stroke-width="3"/>
+    <path d="M530 604 H730" stroke="#8B949E" stroke-width="3"/>
+    <path d="M630 604 V616" stroke="#8B949E" stroke-width="3"/>
+    <path d="M482 639 H40 V150 H158" stroke="#8B949E" stroke-width="2.5" stroke-dasharray="7 8"/>
+    <path d="M148 143 L160 150 L148 157 Z" fill="#8B949E" stroke="none"/>
+  </g>
+
+  <rect x="482" y="616" width="296" height="46" rx="8" fill="#161B22" stroke="#30363D" stroke-width="2"/>
+  <text class="sans btit" x="630" y="645" fill="#C9D1D9" text-anchor="middle">Result back to Sonnet</text>
+
+  <text class="sans foot" x="430" y="692" text-anchor="middle">The selected model is illustrative, not a fixed assignment for any particular feature.</text>
+</svg>

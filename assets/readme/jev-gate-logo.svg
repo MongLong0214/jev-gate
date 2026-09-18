@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 120" width="720" height="120"
+     role="img" aria-labelledby="jg-logo-title jg-logo-desc">
+  <title id="jg-logo-title">jev-gate</title>
+  <desc id="jg-logo-desc">One task arrives at a gate and leaves on exactly one of three model lanes; the two lanes that were not selected stay dim.</desc>
+
+  <style>
+    /* Motion states the model: one task, one evaluation, one selected lane. */
+    @keyframes jg-flow { from { stroke-dashoffset: 0 } to { stroke-dashoffset: -48 } }
+    @keyframes jg-pulse { 0%, 100% { opacity: .35 } 50% { opacity: .9 } }
+    .jg-flow  { animation: jg-flow 2.6s linear infinite }
+    .jg-pulse { animation: jg-pulse 2.6s ease-in-out infinite }
+    @media (prefers-reduced-motion: reduce) {
+      .jg-flow  { animation: none !important; opacity: 0 }
+      .jg-pulse { animation: none !important; opacity: .6 }
+    }
+    .wm { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+          font-size: 58px; font-weight: 700; letter-spacing: -1px; }
+  </style>
+
+  <g fill="none" stroke-linecap="round">
+    <!-- the incoming task -->
+    <path d="M 24 60 H 92" stroke="#8B949E" stroke-width="7"/>
+
+    <!-- the gate: one evaluation, not a rewrite -->
+    <path d="M 116 36 L 140 60 L 116 84 L 92 60 Z" fill="none" stroke="#388BFD" stroke-width="5"/>
+    <circle class="jg-pulse" cx="116" cy="60" r="26" stroke="#388BFD" stroke-width="2"/>
+
+    <!-- not selected: drawn, then left alone -->
+    <path d="M 140 60 Q 168 60 176 30 H 206" stroke="#8B949E" stroke-width="5"
+          stroke-dasharray="6 7" opacity=".55"/>
+    <path d="M 140 60 Q 168 60 176 90 H 206" stroke="#8B949E" stroke-width="5"
+          stroke-dasharray="6 7" opacity=".55"/>
+    <circle cx="214" cy="30" r="6" stroke="#8B949E" stroke-width="4" opacity=".55"/>
+    <circle cx="214" cy="90" r="6" stroke="#8B949E" stroke-width="4" opacity=".55"/>
+
+    <!-- selected: the only lane that carries the task forward -->
+    <path d="M 140 60 H 214" stroke="#2EA043" stroke-width="8"/>
+    <path class="jg-flow" d="M 140 60 H 214" stroke="#3FB950" stroke-width="8.5"
+          stroke-dasharray="15 33"/>
+    <circle cx="214" cy="60" r="9" fill="#3FB950" stroke="none"/>
+  </g>
+
+  <text class="wm" x="258" y="80">
+    <tspan fill="#388BFD">jev</tspan><tspan fill="#6E7781">-gate</tspan>
+  </text>
+</svg>
