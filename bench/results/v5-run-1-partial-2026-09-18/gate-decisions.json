@@ -1,0 +1,71 @@
+{
+ "note": "partial run, one cell, stopped for budget",
+ "decisions": [
+  {
+   "at": "2026-09-18T06:51:25.505Z",
+   "role": "planner",
+   "called_tier": null,
+   "action": "patch",
+   "tier": "deep",
+   "reason": null,
+   "route_choice": null,
+   "route_confidence": null,
+   "upgrade_basis": null
+  },
+  {
+   "at": "2026-09-18T06:54:38.607Z",
+   "role": "worker",
+   "called_tier": "standard",
+   "action": "patch",
+   "tier": "standard",
+   "reason": null,
+   "route_choice": "standard",
+   "route_confidence": 0.96,
+   "upgrade_basis": "no_specific_basis"
+  },
+  {
+   "at": "2026-09-18T06:54:43.184Z",
+   "role": "worker",
+   "called_tier": "standard",
+   "action": "preserve",
+   "tier": "standard",
+   "reason": "route_low_confidence",
+   "route_choice": "standard",
+   "route_confidence": 0.41,
+   "upgrade_basis": "no_specific_basis"
+  },
+  {
+   "at": "2026-09-18T06:56:16.362Z",
+   "role": "worker",
+   "called_tier": "standard",
+   "action": "preserve",
+   "tier": "standard",
+   "reason": "route_low_confidence",
+   "route_choice": "standard",
+   "route_confidence": 0.38,
+   "upgrade_basis": "no_specific_basis"
+  },
+  {
+   "at": "2026-09-18T06:56:26.266Z",
+   "role": "worker",
+   "called_tier": "standard",
+   "action": "patch",
+   "tier": "standard",
+   "reason": null,
+   "route_choice": "standard",
+   "route_confidence": 0.94,
+   "upgrade_basis": "no_specific_basis"
+  },
+  {
+   "at": "2026-09-18T07:00:40.512Z",
+   "role": "worker",
+   "called_tier": "standard",
+   "action": "patch",
+   "tier": "standard",
+   "reason": null,
+   "route_choice": "standard",
+   "route_confidence": 0.99,
+   "upgrade_basis": "no_specific_basis"
+  }
+ ]
+}

@@ -1,0 +1,18 @@
+{
+  "session_id": "d039fa00-30c8-43b8-8517-34e2b221bafa",
+  "prompt_id": "01c74e02-35e5-4536-816c-60190f301966",
+  "caller": {
+    "agent_id": null,
+    "agent_type": null
+  },
+  "tool_use_id": "toolu_017mn1gbtwGsN1Nb6NMeaMBy",
+  "mode": "auto",
+  "tool_name": "Bash",
+  "allow": false,
+  "denials": 1,
+  "stopped": false,
+  "invocation_id": "3db202ca-ec5b-41e1-847e-b4cc500c84b7",
+  "phase": "guard",
+  "version": 5,
+  "written_at": "2026-09-18T06:50:10.637Z"
+}

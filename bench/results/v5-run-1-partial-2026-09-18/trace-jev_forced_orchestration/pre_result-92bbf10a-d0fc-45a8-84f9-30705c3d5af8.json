@@ -1,0 +1,57 @@
+{
+  "session_id": "d039fa00-30c8-43b8-8517-34e2b221bafa",
+  "prompt_id": "01c74e02-35e5-4536-816c-60190f301966",
+  "caller": {
+    "agent_id": null,
+    "agent_type": null
+  },
+  "tool_use_id": "toolu_01EwLLqzbW3UvzxEA8N8RAXP",
+  "mode": "auto",
+  "role": "planner",
+  "tool_input": {
+    "subagent_type": "jev-gate:planner",
+    "has_model": false,
+    "model": null,
+    "run_in_background": null,
+    "prompt_len": 7440,
+    "prompt_sha256": "bbbc5a925f9bf5963457b0c74162563368b539be72fee5c0eaf04c86bc030f64",
+    "control_keys": []
+  },
+  "default_tier": "deep",
+  "attempted": true,
+  "http": {
+    "status": 200,
+    "code": null,
+    "duration_ms": 627,
+    "request_bytes": 12659
+  },
+  "jev": {
+    "model": "jev-1.13.0",
+    "usage": {
+      "input_tokens": 3990,
+      "output_tokens": 46
+    },
+    "response_bytes": 208
+  },
+  "answers": {
+    "planning_tier": {
+      "type": "choice",
+      "choice": "deep",
+      "probabilities": {
+        "frontier": 0,
+        "deep": 1,
+        "abstain": 0
+      },
+      "confidence": 1
+    }
+  },
+  "decision": {
+    "action": "patch",
+    "tier": "deep",
+    "reason": null
+  },
+  "invocation_id": "92bbf10a-d0fc-45a8-84f9-30705c3d5af8",
+  "phase": "pre_result",
+  "version": 5,
+  "written_at": "2026-09-18T06:51:25.505Z"
+}

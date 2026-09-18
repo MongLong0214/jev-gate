@@ -1,0 +1,26 @@
+{
+  "session_id": "d039fa00-30c8-43b8-8517-34e2b221bafa",
+  "prompt_id": "01c74e02-35e5-4536-816c-60190f301966",
+  "caller": {
+    "agent_id": null,
+    "agent_type": null
+  },
+  "tool_use_id": "toolu_01EwLLqzbW3UvzxEA8N8RAXP",
+  "mode": "auto",
+  "role": "planner",
+  "tool_input": {
+    "subagent_type": "jev-gate:planner",
+    "has_model": false,
+    "model": null,
+    "run_in_background": null,
+    "prompt_len": 7440,
+    "prompt_sha256": "bbbc5a925f9bf5963457b0c74162563368b539be72fee5c0eaf04c86bc030f64",
+    "control_keys": []
+  },
+  "default_tier": "deep",
+  "request_bytes": 12659,
+  "invocation_id": "a2f9cbc0-935d-4385-aab0-1050ca559229",
+  "phase": "pre_intent",
+  "version": 5,
+  "written_at": "2026-09-18T06:51:24.871Z"
+}

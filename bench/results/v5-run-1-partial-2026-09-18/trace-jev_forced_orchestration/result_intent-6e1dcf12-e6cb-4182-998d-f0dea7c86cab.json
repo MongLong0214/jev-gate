@@ -1,0 +1,18 @@
+{
+  "session_id": "d039fa00-30c8-43b8-8517-34e2b221bafa",
+  "prompt_id": "01c74e02-35e5-4536-816c-60190f301966",
+  "caller": {
+    "agent_id": null,
+    "agent_type": null
+  },
+  "tool_use_id": "toolu_017jmGxSfpu3hooWoFL4dcM7",
+  "mode": "auto",
+  "task_id": "t2",
+  "rev": 1,
+  "deterministic": "accept",
+  "request_bytes": 4833,
+  "invocation_id": "6e1dcf12-e6cb-4182-998d-f0dea7c86cab",
+  "phase": "result_intent",
+  "version": 5,
+  "written_at": "2026-09-18T06:56:45.766Z"
+}

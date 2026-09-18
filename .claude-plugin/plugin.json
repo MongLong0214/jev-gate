@@ -1,6 +1,6 @@
 {
   "name": "jev-gate",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Interpret prompts and suggest native Claude Code execution tiers.",
   "author": {
     "name": "MongLong0214",

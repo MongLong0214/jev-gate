@@ -1,0 +1,50 @@
+{
+  "session_id": "d039fa00-30c8-43b8-8517-34e2b221bafa",
+  "prompt_id": "01c74e02-35e5-4536-816c-60190f301966",
+  "caller": {
+    "agent_id": null,
+    "agent_type": null
+  },
+  "tool_use_id": "toolu_01HfELpB8FmMoMsYhvqKJiiy",
+  "mode": "auto",
+  "task_id": "t1",
+  "rev": 1,
+  "deterministic": "accept",
+  "attempted": true,
+  "http": {
+    "status": 200,
+    "code": null,
+    "duration_ms": 785,
+    "request_bytes": 5777
+  },
+  "jev": {
+    "model": "jev-1.13.0",
+    "usage": {
+      "input_tokens": 1882,
+      "output_tokens": 49
+    },
+    "response_bytes": 220
+  },
+  "answers": {
+    "result": {
+      "type": "choice",
+      "choice": "accept",
+      "probabilities": {
+        "rework": 0,
+        "replan": 0.03,
+        "abstain": 0.02,
+        "accept": 0.95
+      },
+      "confidence": 0.92
+    }
+  },
+  "decision": {
+    "verdict": "accept",
+    "reason": null,
+    "advisory_only": true
+  },
+  "invocation_id": "ae71b9e0-d85f-4d5c-a6ee-62ba472e7d03",
+  "phase": "result_result",
+  "version": 5,
+  "written_at": "2026-09-18T06:56:05.488Z"
+}

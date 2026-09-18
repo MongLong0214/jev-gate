@@ -1,8 +1,8 @@
 {
   "name": "jev-gate",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "Claude Code plugin: one Jev decision per user turn, a lossless execution brief, and native Opus/Fable delegation hints for a Sonnet main session.",
+  "description": "Claude Code plugin: Jev judges the execution shape, a strong read-only planner decomposes the job, and every worker dispatch is routed to a tier.",
   "type": "module",
   "engines": {
     "node": ">=22"

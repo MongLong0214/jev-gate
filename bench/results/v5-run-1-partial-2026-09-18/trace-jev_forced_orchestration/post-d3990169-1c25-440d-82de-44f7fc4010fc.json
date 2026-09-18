@@ -1,0 +1,36 @@
+{
+  "session_id": "d039fa00-30c8-43b8-8517-34e2b221bafa",
+  "prompt_id": "01c74e02-35e5-4536-816c-60190f301966",
+  "caller": {
+    "agent_id": null,
+    "agent_type": null
+  },
+  "tool_use_id": "toolu_017jmGxSfpu3hooWoFL4dcM7",
+  "mode": "auto",
+  "task_id": "t2",
+  "rev": 1,
+  "attempt": 2,
+  "verdict": "accept",
+  "verdict_reason": null,
+  "advisory": null,
+  "tool_response": {
+    "status": "completed",
+    "agentId": "ad7fb9ffd00bd00b1",
+    "resolvedModel": "claude-sonnet-5",
+    "modelsUsed": null,
+    "totalDurationMs": 29325,
+    "totalToolUseCount": 6,
+    "totalTokens": 25925,
+    "usage": {
+      "input_tokens": 2,
+      "output_tokens": 511,
+      "cache_creation_input_tokens": 465,
+      "cache_read_input_tokens": 24947
+    }
+  },
+  "root_effort": "high",
+  "invocation_id": "d3990169-1c25-440d-82de-44f7fc4010fc",
+  "phase": "post",
+  "version": 5,
+  "written_at": "2026-09-18T06:56:46.471Z"
+}

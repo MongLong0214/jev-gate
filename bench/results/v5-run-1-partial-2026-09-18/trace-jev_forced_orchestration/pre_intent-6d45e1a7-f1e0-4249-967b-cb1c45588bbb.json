@@ -1,0 +1,28 @@
+{
+  "session_id": "d039fa00-30c8-43b8-8517-34e2b221bafa",
+  "prompt_id": "01c74e02-35e5-4536-816c-60190f301966",
+  "caller": {
+    "agent_id": null,
+    "agent_type": null
+  },
+  "tool_use_id": "toolu_017jmGxSfpu3hooWoFL4dcM7",
+  "mode": "auto",
+  "role": "worker",
+  "task_id": "t2",
+  "rev": 1,
+  "called_tier": "standard",
+  "tool_input": {
+    "subagent_type": "jev-gate:worker",
+    "has_model": false,
+    "model": null,
+    "run_in_background": null,
+    "prompt_len": 716,
+    "prompt_sha256": "650f778cf7f6aca8e31e5ba1970098772560059f1b708b7b41afc75f88e787fc",
+    "control_keys": []
+  },
+  "request_bytes": 7047,
+  "invocation_id": "6d45e1a7-f1e0-4249-967b-cb1c45588bbb",
+  "phase": "pre_intent",
+  "version": 5,
+  "written_at": "2026-09-18T06:56:15.703Z"
+}

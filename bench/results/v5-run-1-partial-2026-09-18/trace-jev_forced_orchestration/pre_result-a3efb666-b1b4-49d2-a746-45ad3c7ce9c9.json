@@ -1,0 +1,72 @@
+{
+  "session_id": "d039fa00-30c8-43b8-8517-34e2b221bafa",
+  "prompt_id": "01c74e02-35e5-4536-816c-60190f301966",
+  "caller": {
+    "agent_id": null,
+    "agent_type": null
+  },
+  "tool_use_id": "toolu_01J72pp7hTjrogyiL5Ro7swR",
+  "mode": "auto",
+  "role": "worker",
+  "task_id": "t4",
+  "rev": 1,
+  "called_tier": "standard",
+  "tool_input": {
+    "subagent_type": "jev-gate:worker",
+    "has_model": false,
+    "model": null,
+    "run_in_background": null,
+    "prompt_len": 2940,
+    "prompt_sha256": "0ce869592e8226eae028ce5c1be64a3799a91c6d26e40ea28f74cda4caa27c60",
+    "control_keys": []
+  },
+  "attempted": true,
+  "http": {
+    "status": 200,
+    "code": null,
+    "duration_ms": 668,
+    "request_bytes": 11648
+  },
+  "jev": {
+    "model": "jev-1.13.0",
+    "usage": {
+      "input_tokens": 3154,
+      "output_tokens": 116
+    },
+    "response_bytes": 442
+  },
+  "answers": {
+    "route": {
+      "type": "choice",
+      "choice": "standard",
+      "probabilities": {
+        "deep": 0.01,
+        "frontier": 0,
+        "standard": 0.99,
+        "abstain": 0,
+        "fast": 0
+      },
+      "confidence": 0.99
+    },
+    "upgrade_basis": {
+      "type": "choice",
+      "choice": "no_specific_basis",
+      "probabilities": {
+        "unknown": 0,
+        "unresolved_contract_reasoning": 0.09,
+        "observed_reasoning_failure": 0,
+        "no_specific_basis": 0.91
+      },
+      "confidence": 0.87
+    }
+  },
+  "decision": {
+    "action": "patch",
+    "tier": "standard",
+    "reason": null
+  },
+  "invocation_id": "a3efb666-b1b4-49d2-a746-45ad3c7ce9c9",
+  "phase": "pre_result",
+  "version": 5,
+  "written_at": "2026-09-18T07:00:40.512Z"
+}

@@ -1,0 +1,18 @@
+{
+  "session_id": "d039fa00-30c8-43b8-8517-34e2b221bafa",
+  "prompt_id": "01c74e02-35e5-4536-816c-60190f301966",
+  "caller": {
+    "agent_id": null,
+    "agent_type": null
+  },
+  "tool_use_id": "toolu_016hyE5pDX8FQ8neSWZ4H5eX",
+  "mode": "auto",
+  "tool_name": "Read",
+  "allow": true,
+  "denials": 1,
+  "stopped": false,
+  "invocation_id": "fa5ed1d9-6d4f-4800-90fd-a2f7b110ee96",
+  "phase": "guard",
+  "version": 5,
+  "written_at": "2026-09-18T06:50:21.651Z"
+}

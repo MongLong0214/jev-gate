@@ -1,0 +1,19 @@
+{
+  "session_id": "d039fa00-30c8-43b8-8517-34e2b221bafa",
+  "prompt_id": "01c74e02-35e5-4536-816c-60190f301966",
+  "caller": {
+    "agent_id": null,
+    "agent_type": null
+  },
+  "tool_use_id": null,
+  "mode": "auto",
+  "attempted": false,
+  "known_not_sent": true,
+  "forced": true,
+  "decision": "orchestrated",
+  "reason": "admission_forced",
+  "invocation_id": "3cb83347-cc0c-40e4-86e7-60bbdf60654b",
+  "phase": "admission_result",
+  "version": 5,
+  "written_at": "2026-09-18T06:50:07.438Z"
+}
