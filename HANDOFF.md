@@ -9,25 +9,23 @@ figures below and are marked where they do.
 `main` is at **v0.2.0** ([release](https://github.com/MongLong0214/jev-gate/releases/tag/v0.2.0)); `dev` carries
 everything below and is what a new agent should check out.
 
-**A cost benefit is established, and in the one condition measured it is no longer slower.** Gate A now admits a job
-on its own — the first time in this repository — and on that path the job turn costs **−64.2 %** against native, the
-session **−31.8 %**, at **+3.8 %** wall, two repetitions, all checks passing
-(`bench/results/v5-gate-a-live-2026-09-19/`). Below the floor the gate refuses exactly, sending **no request at all**,
-but whether that refusal is free is **unmeasured**: the shallow case's native arm varies 26.9 % between its own two
-cells.
+**The product works in its shipped configuration, and it saves tokens without costing time.** With `mode: auto` and
+no config file, Gate A reads how deep the session is, asks its read-off questions, and admits real work at depth.
+Measured end to end, same finished work, all checks passing:
 
-Two things stay true and bound every number here. The largest uncontrolled variable is **worker count**, which has
-moved this job's cost by a factor of 2.4 (counts seen: 13, 4, 4, 3, 3). And everything rests on **one case at two
-depths**.
+| | |
+|---|---|
+| job turn at ~376K, against no plugin | **−59 % to −69 %** (the range is plan size, not noise) |
+| session total at ~376K | **−31.8 %** |
+| wall clock, admitted path | **+3.6 %** — inside the baseline's own spread |
+| below the floor | refused with **zero requests and zero workers** |
+
+**What is not established.** This is one job on one fixture. Plan size varies freely (2 to 12 tasks for the same
+request) and it is what sets the size of the saving, so this bench resolves ~10 % at constant plan size and ~47 %
+otherwise — **quote nothing under 15 % from it**. Gate B's atomic shape has one end-to-end observation and stays
+off. Nothing here makes work finish *faster* than doing it directly; parity is the best case.
 
 Read the 2026-09-19 section of "What the measurements say" before trusting any older number in this file.
-
-| Version | State |
-| --- | --- |
-| V3 | historical, negative result published (`bench/results/run-1-2026-09-17/`) |
-| V4 | historical, negative result published: the coordinator never delegated; forced delegation cost 37.7 % more |
-| V5 | shipped as v0.2.0; mechanism verified, product effect unknown |
-| V6 (Codex adapter) | deferred, epic #32, no code |
 
 ## What V5 does
 
@@ -141,28 +139,28 @@ independent proof the code works.
 
 ## Do this next
 
-### 2026-09-19 — the order that supersedes everything in this section
+### 2026-09-19 — everything in the previous order is now done or settled
 
-The approved experiment below **has been run**, several times over, and the 2026-09-19 section of "What the
-measurements say" is its outcome. What is worth doing next, in order:
+| was | outcome |
+|---|---|
+| Control worker count | **Measured.** Plan size is a free variable (4, 2, 2, 3, 2, 3 for the same job). Bench precision is ~10 % at constant plan size, ~47 % otherwise. `v5-plan-variance-2026-09-19/` |
+| Get Gate A to admit end to end | **Done, and it now ships.** `admissionQuestionShape` defaults to `atomic`; the composite question admitted 0 of 61 offline. `v5-gate-a-live-2026-09-19/`, `DECISION-defaults-2026-09-19.md` |
+| Measure the crossing point | **Done.** Between 180K and 281K. The floor stays at 300,000 because lowering it admits 11 % more prompts in exactly the band the bench cannot resolve. `v5-crossing-2026-09-19/` |
+| The speed axis | **Settled.** Parity when admitted (+3.6 %, inside the baseline spread). Slower only with many workers, which the task ceiling bounds. `v5-speed-2026-09-19/` |
 
-1. ~~**Control worker count.**~~ **Measured** (`v5-plan-variance-2026-09-19/`): the same job plans 4, 2, 2, 3, 2, 3
-   over six repetitions with nothing changed. The bench resolves **~10 %** when plan size is constant and **~47 %**
-   when it is not. What remains is to make the comparison immune to it — compare cells of equal plan size, or fix a
-   plan and replay it — not to run more unmatched pairs.
+**What is left, in the order it is worth doing:**
 
-   Quote nothing under 15 % from this bench. The −64.2 % at depth survives with roughly ±20 %; the +14.1 % in the
-   shallow condition does not survive at all.
-2. ~~**Get Gate A to admit a job end to end.**~~ **Done** (`v5-gate-a-live-2026-09-19/`). What remains from it: the
-   default still does not flip, because the shallow half is undecidable on a bench whose native arm varies 26.9 %
-   there. Either raise repetitions in that condition or find a case whose native arm is stabler.
-3. **Measure the crossing point.** `bench/cases-depth.json` has 13-note and 21-note cases that have never been run, so
-   the `delegationDepthFloor` default of 300,000 is derived from two points rather than measured.
-4. **The speed axis has no plan.** Wall time is worse in every condition measured so far (+196 %, +47.8 %), because
-   `maxParallelWorkers` is 1 and workers run in series — and raising it measured +32.7 % in cost. Nothing here yet
-   turns the second of the owner's two axes in the right direction.
+1. **A second job.** Every number here comes from `wide-validators`. Nothing is known about whether the saving holds
+   for work of a different shape, and that is now the largest gap by a wide margin.
+2. **Make comparisons immune to plan size**, by comparing cells of equal plan size or by fixing a plan and replaying
+   it. Without this the bench stays at ~47 % resolution whenever plan size is free.
+3. **Gate B's atomic shape**, which has one observation (−50.5 % deep, +92.5 % shallow) and needs a two-repetition
+   result at depth before its default moves.
+4. **Parallelism**, only if speed becomes the goal. `maxParallelWorkers: 1 → 4` measured +32.7 % in cost, but that
+   observation is confounded with plan size 2 → 6. Hold plan size fixed and vary only the cap.
 
-Do not flip either question shape to `atomic` by default before (1) and (2). Do not raise `maxParallelWorkers`.
+Do not prime a session inside `jev_forced_orchestration`: it orchestrates its own priming turn, and that produced two
+different failures today.
 
 ### The previous revision's order, kept for context
 
