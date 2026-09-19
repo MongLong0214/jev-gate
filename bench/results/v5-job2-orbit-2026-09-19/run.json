@@ -1,0 +1,133 @@
+{
+  "question": "Does the job-turn saving measured on wide-validators hold on a job of a different shape?",
+  "preregistration": "bench/results/v5-job2-orbit-2026-09-19/PREREGISTRATION.md",
+  "case": "orbit-core-primed-30",
+  "arms": [
+    "sonnet_native",
+    "jev_hierarchy"
+  ],
+  "repetitions": 2,
+  "conclusion_category": "no cost comparison reported (pre-registration rule 3: the arms differ in pass count)",
+  "runner_verdict": {
+    "overall": "mechanism only",
+    "pass_not_below": "not_met",
+    "delta_success_points": -50.0
+  },
+  "gate_a": {
+    "both_jev_cells": "orchestrated, decided true",
+    "priming_prompt": "depth_unknown, no request sent",
+    "confirmation_prompt": "admission_answer_only, refused on its own content at full depth"
+  },
+  "validity": {
+    "all_cells_valid": true,
+    "depth_floor_for_validity": 250000,
+    "depths": [
+      387700,
+      387637,
+      388391,
+      388294
+    ],
+    "truncated_cells": 0,
+    "environment_errors": 0
+  },
+  "cells": [
+    {
+      "arm": "sonnet_native",
+      "repetition": 1,
+      "context_at_job_prompt": 387700,
+      "job_turn_usd": 2.5642,
+      "session_usd": 5.4094,
+      "wall_s": 494,
+      "num_turns": 24,
+      "agent_calls": 0,
+      "agents": [],
+      "quality": "pass",
+      "checks_passed": 16,
+      "checks_total": 16,
+      "environment_error": null,
+      "truncated": false
+    },
+    {
+      "arm": "sonnet_native",
+      "repetition": 2,
+      "context_at_job_prompt": 387637,
+      "job_turn_usd": 2.7411,
+      "session_usd": 5.585,
+      "wall_s": 594,
+      "num_turns": 24,
+      "agent_calls": 0,
+      "agents": [],
+      "quality": "pass",
+      "checks_passed": 16,
+      "checks_total": 16,
+      "environment_error": null,
+      "truncated": false
+    },
+    {
+      "arm": "jev_hierarchy",
+      "repetition": 1,
+      "context_at_job_prompt": 388391,
+      "job_turn_usd": 3.5165,
+      "session_usd": 6.3649,
+      "wall_s": 834,
+      "num_turns": 26,
+      "agent_calls": 5,
+      "agents": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "quality": "fail",
+      "checks_passed": 0,
+      "checks_total": 16,
+      "environment_error": null,
+      "truncated": false
+    },
+    {
+      "arm": "jev_hierarchy",
+      "repetition": 2,
+      "context_at_job_prompt": 388294,
+      "job_turn_usd": 3.6644,
+      "session_usd": 6.511,
+      "wall_s": 982,
+      "num_turns": 28,
+      "agent_calls": 6,
+      "agents": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "quality": "pass",
+      "checks_passed": 16,
+      "checks_total": 16,
+      "environment_error": null,
+      "truncated": false
+    }
+  ],
+  "raw_job_turn_usd_recorded_not_compared": {
+    "sonnet_native": [
+      2.5642,
+      2.7411
+    ],
+    "jev_hierarchy": [
+      3.5165,
+      3.6644
+    ],
+    "note": "Preserved under pre-registration rule 8. Rule 3 forbids deriving a cost comparison from them because the arms differ in pass count."
+  },
+  "within_arm_spread_pct": {
+    "sonnet_native": 6.9,
+    "jev_hierarchy": 4.2
+  },
+  "new_failure_mode": {
+    "cell": "jev_hierarchy r1",
+    "shape": "plan-validation churn",
+    "detail": "five planner dispatches, zero workers; two planner replies invalid, one replan failed; the accepted 4-task plan was never acted on; the turn ended 'incomplete' with the fixture byte-identical to its starting state",
+    "cost": "the failing cell cost 96% of the succeeding one on the job turn"
+  }
+}

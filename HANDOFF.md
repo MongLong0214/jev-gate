@@ -20,10 +20,13 @@ Measured end to end, same finished work, all checks passing:
 | wall clock, admitted path | **+3.6 %** — inside the baseline's own spread |
 | below the floor | refused with **zero requests and zero workers** |
 
-**What is not established.** This is one job on one fixture. Plan size varies freely (2 to 12 tasks for the same
-request) and it is what sets the size of the saving, so this bench resolves ~10 % at constant plan size and ~47 %
-otherwise — **quote nothing under 15 % from it**. Gate B's atomic shape has one end-to-end observation and stays
-off. Nothing here makes work finish *faster* than doing it directly; parity is the best case.
+**What is not established.** Every figure above is `wide-validators`. **A second job, `orbit-core`, was run on
+2026-09-19 and did not reproduce the saving — it could not be measured there at all, because the orchestrated arm
+finished the job in only one of its two cells** (`bench/results/v5-job2-orbit-2026-09-19/`). Plan size varies freely
+(2 to 12 tasks for the same request) and it is what sets the size of the saving, so this bench resolves ~10 % at
+constant plan size and ~47 % otherwise — **quote nothing under 15 % from it**. Gate B's atomic shape has one
+end-to-end observation and stays off. Nothing here makes work finish *faster* than doing it directly; parity is the
+best case.
 
 Read the 2026-09-19 section of "What the measurements say" before trusting any older number in this file.
 
@@ -104,6 +107,10 @@ this to-do), a live root `Edit` denial and the terminal stop.
 | **`agent_calls` counts the planner too.** Earlier "13 workers" and "4 workers" were 12 and 3 workers plus the planner | same |
 | **Atomic Gate A is implemented and does not admit on `missing_reference`.** That question reads median 0.77 on real prompts — a constant, not a signal — and was dropped on a criterion fixed before the variants were measured. Shipped composition admits 41/65 | `v5-gate-a-atomic-2026-09-19/` |
 | **A task ceiling of 10 ships** as a backstop against a runaway split. It has never fired in a run | `7de339b` |
+| **The second job does not reproduce the saving, and the run cannot say by how much.** `orbit-core` at the same depth, two repetitions: `sonnet_native` passed 2/2, `jev_hierarchy` passed **1/2**. Pre-registration rule 3 gates cost on quality, so **no cost comparison is reported** and no percentage from that run may be quoted. The runner's own verdict is `pass_not_below: not_met`, Δ success −50.0 pts, overall "mechanism only" | `v5-job2-orbit-2026-09-19/` |
+| **A failure mode `wide-validators` never exposed: plan-validation churn.** In the failing cell the coordinator spent the entire job turn on five planner dispatches and **zero workers** — two invalid replies, one failed replan, a 4-task plan accepted and never acted on, turn ended `incomplete` with the fixture byte-identical to its start. 26 turns of a 120-turn budget, so nothing was truncated, and the guard denied nothing (18 `Read` records, all `allow: true`) | same |
+| **That failure costs full price.** $3.5165 against the succeeding cell's $3.6644 — 96 % of the cost for none of the work. Within-arm job-turn spread is 4.2 %, so cost cannot distinguish the two cells; only the checker can | same |
+| **Gate A was correct on this job too**, all three prompts in both cells: priming `depth_unknown` with no request, confirmation `admission_answer_only`, job **`orchestrated`, decided: true** at 388,294/388,391. Entry judgement is not what failed | same |
 
 Both question shapes still default to `composite`, and `maxParallelWorkers` is still 1.
 
@@ -150,8 +157,12 @@ independent proof the code works.
 
 **What is left, in the order it is worth doing:**
 
-1. **A second job.** Every number here comes from `wide-validators`. Nothing is known about whether the saving holds
-   for work of a different shape, and that is now the largest gap by a wide margin.
+1. **Why the planner fails on `orbit-core`, and how often.** The second job was run (`v5-job2-orbit-2026-09-19/`)
+   and the answer it returned is that the orchestrated path does not reliably finish this shape of work: one cell in
+   two dispatched no workers at all. Until that is understood, the saving cannot be measured on this job, and a third
+   job would only add another unexplained cell. **This is now the largest gap.** The one observation does not separate
+   module count, the 4,676-character spec, the contract-composition rules, and ordinary planner variance; start by
+   replaying the failing cell's request against the planner offline, which costs a planner call rather than a cell.
 2. **Make comparisons immune to plan size**, by comparing cells of equal plan size or by fixing a plan and replaying
    it. Without this the bench stays at ~47 % resolution whenever plan size is free.
 3. **Gate B's atomic shape**, which has one observation (−50.5 % deep, +92.5 % shallow) and needs a two-repetition
