@@ -9,12 +9,16 @@ figures below and are marked where they do.
 `main` is at **v0.2.0** ([release](https://github.com/MongLong0214/jev-gate/releases/tag/v0.2.0)); `dev` carries
 everything below and is what a new agent should check out.
 
-**A cost benefit is now established and a speed benefit is not.** At a real prompt-time context depth, forced
-orchestration costs **−53.5 % on the job turn** and **−23.8 % on the session**, over two repetitions with all checks
-passing, and takes **+47.8 % longer**
-(`bench/results/v5-depth-primed-2026-09-19/`). Everything else below still holds: **Gate A has never admitted a job
-end to end**, so every cost figure in this repository rests on the forced diagnostic arm, and the largest uncontrolled
-variable is **worker count**, whose spread is bigger than the effect being measured.
+**A cost benefit is established, and in the one condition measured it is no longer slower.** Gate A now admits a job
+on its own — the first time in this repository — and on that path the job turn costs **−64.2 %** against native, the
+session **−31.8 %**, at **+3.8 %** wall, two repetitions, all checks passing
+(`bench/results/v5-gate-a-live-2026-09-19/`). Below the floor the gate refuses exactly, sending **no request at all**,
+but whether that refusal is free is **unmeasured**: the shallow case's native arm varies 26.9 % between its own two
+cells.
+
+Two things stay true and bound every number here. The largest uncontrolled variable is **worker count**, which has
+moved this job's cost by a factor of 2.4 (counts seen: 13, 4, 4, 3, 3). And everything rests on **one case at two
+depths**.
 
 Read the 2026-09-19 section of "What the measurements say" before trusting any older number in this file.
 
@@ -95,6 +99,9 @@ this to-do), a live root `Edit` denial and the terminal stop.
 | **The bench can now present a job prompt at real depth.** Two host facts had to be found first: `--no-session-persistence` writes no transcript, and closing stdin with every prompt in it merges them into the running turn | `v5-depth-primed-2026-09-19/` |
 | **At real depth: job turn −53.5 %, session −23.8 %, wall +47.8 %**, two repetitions, four valid cells, all checks passing | `v5-depth-primed-2026-09-19/` |
 | **Worker count dominates.** The same job at the same depth cost $3.0022 with 13 workers and $1.2338–$1.2766 with 4. The spread is larger than the effect | same |
+| **Gate A admits on its own.** `jev_hierarchy` + `admissionQuestionShape: atomic`: job turn **−64.2 %**, session **−31.8 %**, wall **+3.8 %** against native, two repetitions, all passing. The priming prompt costs nothing (`depth_unknown`, no request); the confirmation turn is refused on its own content | `v5-gate-a-live-2026-09-19/` |
+| **Below the floor it refuses exactly** — every prompt `depth_below_floor`/`depth_unknown`, `attempted: false`, zero requests and zero workers — **but the cost of refusing is undecidable**: native varies 26.9 % between its own cells there | same |
+| **The 13-note case sits at 179–181K.** First point toward measuring the crossing that `delegationDepthFloor` guesses at | same |
 | **Atomic Gate A is implemented and does not admit on `missing_reference`.** That question reads median 0.77 on real prompts — a constant, not a signal — and was dropped on a criterion fixed before the variants were measured. Shipped composition admits 41/65 | `v5-gate-a-atomic-2026-09-19/` |
 | **A task ceiling of 10 ships** as a backstop against a runaway split. It has never fired in a run | `7de339b` |
 
@@ -141,9 +148,9 @@ measurements say" is its outcome. What is worth doing next, in order:
    is more than the effect any of these runs is trying to measure. Until a run repeats planning, or fixes a plan and
    replays it, a single cell's cost is as much a statement about planner variance as about the gate. Everything below
    this line is worth less until this is done.
-2. **Get Gate A to admit a job end to end.** Every cost figure in this repository still rests on the forced arm.
-   `admissionQuestionShape: atomic` plus the depth floor is the path; the offline replay admits 41 of 65 real prompts
-   and both ground-truth cases decide correctly.
+2. ~~**Get Gate A to admit a job end to end.**~~ **Done** (`v5-gate-a-live-2026-09-19/`). What remains from it: the
+   default still does not flip, because the shallow half is undecidable on a bench whose native arm varies 26.9 %
+   there. Either raise repetitions in that condition or find a case whose native arm is stabler.
 3. **Measure the crossing point.** `bench/cases-depth.json` has 13-note and 21-note cases that have never been run, so
    the `delegationDepthFloor` default of 300,000 is derived from two points rather than measured.
 4. **The speed axis has no plan.** Wall time is worse in every condition measured so far (+196 %, +47.8 %), because
