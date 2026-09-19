@@ -68,11 +68,39 @@ const context = (r: HookResult): string => String(hookOutput(r)['additionalConte
 const updatedInput = (r: HookResult): Record<string, unknown> => hookOutput(r)['updatedInput'] as Record<string, unknown>;
 const fence = (value: unknown): string => 'summary prose\n```json\n' + JSON.stringify(value) + '\n```';
 
+/**
+ * Gate A is asked only when the session is already deep (depth-gate decision 1), so every prompt event carries a
+ * transcript whose last usage line is past the shipped floor. The sidechain line is deliberately enormous: a subagent's
+ * context is not this session's, and reading it instead would admit jobs on a number that describes another turn.
+ */
+let transcriptSeq = 0;
+const transcriptAt = (tokens: number): string => {
+  const p = join(tmp, `transcript-${(transcriptSeq += 1)}.jsonl`);
+  writeFileSync(
+    p,
+    [
+      JSON.stringify({ type: 'user', message: { role: 'user', content: 'an earlier turn' } }),
+      JSON.stringify({ type: 'assistant', isSidechain: true, message: { usage: { cache_read_input_tokens: 9_000_000 } } }),
+      JSON.stringify({ type: 'assistant', message: { usage: { cache_read_input_tokens: tokens - 1000, cache_creation_input_tokens: 600, input_tokens: 400 } } }),
+      '',
+    ].join('\n'),
+  );
+  return p;
+};
+const DEEP_TRANSCRIPT = transcriptAt(406_000);
+/** A transcript the host wrote but that carries no usage yet: real at the very start of a session. */
+const write_no_usage = (): string => {
+  const p = join(tmp, `transcript-nousage-${(transcriptSeq += 1)}.jsonl`);
+  writeFileSync(p, JSON.stringify({ type: 'user', message: { role: 'user', content: 'the first prompt' } }) + '\n');
+  return p;
+};
+
 const promptEvent = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
   hook_event_name: 'UserPromptSubmit',
   session_id: 's1',
   prompt_id: 'p1',
   cwd: '/w',
+  transcript_path: DEEP_TRANSCRIPT,
   prompt: 'Build a settings page, migrate the store and wire the two together.',
   ...over,
 });
@@ -207,6 +235,58 @@ describe('Gate A admission', () => {
     expect(r.code).toBe(code);
     expect(context(r)).toContain('Execution shape: direct');
     expect(state(env).current.shape).toBe(shape);
+  });
+
+  it('sends no request at all when the session is not yet deep enough to be worth delegating', async () => {
+    const dir = join(tmp, 'trace-shallow');
+    const env = makeEnv({ JEV_GATE_TRACE_DIR: dir });
+    const fetchImpl = fakeJev({ execution: 'orchestrated' });
+    const r = await run(env, promptEvent({ transcript_path: transcriptAt(55_000) }), fetchImpl);
+    // The saving is the whole point: at 55K the measured forced arm was +182%, so the cheapest gate is no gate.
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(r.code).toBe('depth_below_floor');
+    expect(context(r)).toContain('Execution shape: direct');
+    expect(state(env).current.shape).toBe('direct');
+    const record = readdirSync(dir).map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>).find((x) => x['phase'] === 'admission_result');
+    expect(record).toMatchObject({ attempted: false, context_tokens: 55_000, depth_floor: 300_000, decision: { reason: 'depth_below_floor', changed_default: false } });
+  });
+
+  it.each([
+    ['no transcript path', {}],
+    ['a transcript that is not there', { transcript_path: join(tmp, 'gone.jsonl') }],
+    ['a transcript with no usage line', { transcript_path: write_no_usage() }],
+  ])('treats %s as too shallow rather than guessing', async (_name, over) => {
+    const env = makeEnv();
+    const fetchImpl = fakeJev({ execution: 'orchestrated' });
+    const r = await run(env, { ...promptEvent(), transcript_path: undefined, ...over }, fetchImpl);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(r.code).toBe('depth_unknown');
+    expect(state(env).current.shape).toBe('direct');
+  });
+
+  it('carries the depth into the record of an admitted job, so a bench case can prove it primed the session', async () => {
+    const dir = join(tmp, 'trace-deep');
+    const env = makeEnv({ JEV_GATE_TRACE_DIR: dir });
+    await run(env, promptEvent(), fakeJev({ execution: 'orchestrated' }));
+    const record = readdirSync(dir).map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>).find((x) => x['phase'] === 'admission_result');
+    expect(record).toMatchObject({ attempted: true, context_tokens: 406_000, depth_floor: 300_000, decision: { shape: 'orchestrated' } });
+  });
+
+  it('does not floor the forced arm: it is the only measurement of what orchestration costs when shallow', async () => {
+    const env = makeEnv({ JEV_GATE_EXPERIMENT_ADMISSION: 'orchestrated' });
+    const fetchImpl = fakeJev();
+    const r = await run(env, promptEvent({ transcript_path: transcriptAt(55_000) }), fetchImpl);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(context(r)).toContain('Execution shape: orchestrated');
+  });
+
+  it('asks on every prompt when the floor is turned off', async () => {
+    const cfg = join(tmp, 'floor-off.json');
+    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', delegationDepthFloor: 0 }));
+    const env = makeEnv({ JEV_GATE_CONFIG: cfg });
+    const fetchImpl = fakeJev({ execution: 'orchestrated' });
+    await run(env, { ...promptEvent(), transcript_path: undefined }, fetchImpl);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it('records prompt_id_absent and creates no orchestrated state', async () => {
@@ -1034,7 +1114,9 @@ describe('sources', () => {
     for (const f of ['hook.ts', 'jev.ts', 'brief.ts', 'config.ts', 'coordinator.ts', 'trace.ts', 'admission.ts', 'allocation.ts', 'plan.ts', 'job.ts']) {
       const src = readFileSync(join(__dirname, '..', 'src', f), 'utf8');
       expect(src, f).not.toMatch(/child_process|execSync|spawn\(/);
-      expect(src, f).not.toMatch(/\.credentials|keychain|transcript_path/);
+      expect(src, f).not.toMatch(/\.credentials|keychain/);
+      // Only the hook names the transcript, and only to hand the path to the depth reader; no gate module sees it.
+      if (f !== 'hook.ts') expect(src, f).not.toMatch(/transcript_path/);
     }
     for (const f of ['jev.ts', 'admission.ts', 'allocation.ts', 'plan.ts', 'job.ts', 'trace.ts']) {
       const src = readFileSync(join(__dirname, '..', 'src', f), 'utf8');

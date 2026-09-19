@@ -95,6 +95,12 @@ export interface ConfigV5 {
    * keeps its current behaviour without being edited.
    */
   routeQuestionShape: RouteQuestionShape;
+  /**
+   * Context tokens the main session must already be carrying before Gate A is asked anything. Below it the turn is
+   * direct and no request is sent: delegation measured +182 % at 55K and -57 % at 406K, so depth, not the prompt, is
+   * what decides. 0 disables the floor. Optional in a config file, like `routeQuestionShape`.
+   */
+  delegationDepthFloor: number;
 }
 
 export interface ChoiceAnswer<K extends string> {
@@ -116,6 +122,8 @@ export interface HookInput {
   /** SessionStart only: `startup` is the one fresh start the purpose record can anchor to; resume/compact/clear cannot (§5). */
   source?: string;
   prompt_id?: string;
+  /** Every hook event carries it; only Gate A reads it, to measure how deep the session already is (`src/depth.ts`). */
+  transcript_path?: string;
   cwd?: string;
   permission_mode?: string;
   agent_id?: string;
@@ -334,6 +342,8 @@ export type PreserveReason =
   | 'admission_low_confidence'
   | 'prompt_id_absent'
   | 'admission_forced'
+  | 'depth_unknown'
+  | 'depth_below_floor'
   | 'route_invalid'
   | 'route_tie'
   | 'route_abstain'

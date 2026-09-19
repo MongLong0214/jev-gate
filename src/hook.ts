@@ -26,6 +26,7 @@ import {
   type Eligibility,
 } from './brief.js';
 import { loadConfig, type Env } from './config.js';
+import { readSessionDepth, type DepthReading } from './depth.js';
 import {
   GUARD_DENY_REASON,
   renderDirectGuidance,
@@ -133,7 +134,7 @@ const parseInput = (text: string): HookInput | { code: ErrorCode } => {
   }
   if (!isRecord(parsed) || typeof parsed['hook_event_name'] !== 'string') return { code: 'stdin_invalid_json' };
   const out: HookInput = { hook_event_name: parsed['hook_event_name'] as string };
-  for (const k of ['session_id', 'prompt_id', 'cwd', 'permission_mode', 'agent_id', 'agent_type', 'prompt', 'tool_name', 'tool_use_id', 'error'] as const) {
+  for (const k of ['session_id', 'prompt_id', 'transcript_path', 'cwd', 'permission_mode', 'agent_id', 'agent_type', 'prompt', 'tool_name', 'tool_use_id', 'error'] as const) {
     const v = str(parsed[k]);
     if (v !== null) out[k] = v;
   }
@@ -381,11 +382,26 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     // Without durable state there is no guard and no plan, so the turn falls back to native behavior.
     if (!registered.ok) return emitContext('UserPromptSubmit', renderDirectGuidance(mode), registered.code);
 
+    /**
+     * Decision 1 of the depth gate: how deep the session already is is read from the host's transcript, never asked of
+     * Jev, and it is read before Gate A rather than after, so a shallow prompt costs no request at all. The same
+     * number is written to every admission_result record below, which is how a bench case proves it primed the
+     * session before the job prompt.
+     */
+    const depth: DepthReading = readSessionDepth(input.transcript_path);
+    const contextTokens = depth.ok ? depth.tokens : null;
+    const depthFacts = { context_tokens: contextTokens, context_depth_read: { bytes: depth.bytesRead, duration_ms: depth.durationMs } };
+    // The forced arm is the bench control variable and is deliberately not floored: it is the only evidence that
+    // exists for what orchestration costs at a given depth, and flooring it would erase the shallow half.
+    const belowFloor = !forced && config.delegationDepthFloor > 0 && depth.ok && depth.tokens < config.delegationDepthFloor;
+    const depthUnreadable = !forced && config.delegationDepthFloor > 0 && !depth.ok;
+
     if (forced) {
       shape = 'orchestrated';
       reason = mode === 'auto' ? 'admission_forced' : null;
       trace?.write('admission_result', {
         ...base,
+        ...depthFacts,
         attempted: false,
         known_not_sent: true,
         forced: true,
@@ -394,17 +410,29 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       });
     } else if (mode === 'native') {
       // A9: the control arm initializes the same state and guard as auto; only the Jev calls differ.
-      trace?.write('admission_result', { ...base, attempted: false, known_not_sent: true, forced: false, decision: { shape, decided: false, reason: 'mode_native', changed_default: false } });
+      trace?.write('admission_result', { ...base, ...depthFacts, attempted: false, known_not_sent: true, forced: false, decision: { shape, decided: false, reason: 'mode_native', changed_default: false } });
     } else if (!apiKey) {
       reason = 'key_missing';
-      trace?.write('admission_result', { ...base, attempted: false, known_not_sent: true, decision: { shape: 'direct', decided: false, reason, changed_default: false } });
+      trace?.write('admission_result', { ...base, ...depthFacts, attempted: false, known_not_sent: true, decision: { shape: 'direct', decided: false, reason, changed_default: false } });
+    } else if (depthUnreadable || belowFloor) {
+      // Not knowing the depth is treated as being below it: without the number, the cheaper shape is the native one.
+      reason = belowFloor ? 'depth_below_floor' : 'depth_unknown';
+      trace?.write('admission_result', {
+        ...base,
+        ...depthFacts,
+        attempted: false,
+        known_not_sent: true,
+        forced: false,
+        depth_floor: config.delegationDepthFloor,
+        decision: { shape: 'direct', decided: false, reason, changed_default: false },
+      });
     } else {
       let admitted: AdmissionDecision | null = null;
       const gate = await callGate(
         buildAdmissionRequest(prompt, config),
         'admission_intent',
         'admission_result',
-        { prompt_len: prompt.length, prompt_sha256: sha256(prompt) },
+        { prompt_len: prompt.length, prompt_sha256: sha256(prompt), ...depthFacts, depth_floor: config.delegationDepthFloor },
         ['execution'],
         (outcome) => {
           if (!outcome.ok) return { forced: false, decision: { shape: 'direct', decided: false, reason: outcome.code, changed_default: false } };

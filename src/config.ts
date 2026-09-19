@@ -21,6 +21,9 @@ export const DEFAULT_CONFIG: ConfigV5 = {
   guardAllowTools: [],
   // Optional in a config file: absent keeps the shipped composite Gate B question.
   routeQuestionShape: 'composite',
+  // Derived, not measured: the two end-to-end points are 55K (delegation loses) and 406K (delegation wins), and this
+  // sits between them nearer the measured win. Step 2 of the depth-gate guide is what moves it.
+  delegationDepthFloor: 300_000,
 };
 
 /**
@@ -48,6 +51,7 @@ const V5_KEYS = new Set<string>([
   'maxParallelWorkers',
   'guardAllowTools',
   'routeQuestionShape',
+  'delegationDepthFloor',
 ]);
 const LEGACY_MARKERS = ['uncertainTier', 'opusModel', 'frontierModel', 'confidenceFloor'];
 /** `resultConfidenceFloor` is a deprecated no-op (T11): it is still validated so a deployed file loads, and read by nothing. */
@@ -132,6 +136,12 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
     return { ok: false, error: `routeQuestionShape must be one of ${ROUTE_QUESTION_SHAPES.join(', ')}` };
   }
 
+  // Absence defaults, like routeQuestionShape. 0 is a real value -- it turns the floor off -- so it is not rejected.
+  const floor = c['delegationDepthFloor'];
+  if (typeof floor !== 'number' || !Number.isInteger(floor) || floor < 0) {
+    return { ok: false, error: 'delegationDepthFloor must be a non-negative integer number of context tokens (0 disables the floor)' };
+  }
+
   const allow = c['guardAllowTools'];
   if (!Array.isArray(allow) || allow.some((t) => typeof t !== 'string' || !TOOL_NAME_RE.test(t))) {
     return { ok: false, error: `guardAllowTools must be an array of tool names matching ${TOOL_NAME_RE.source}` };
@@ -151,6 +161,7 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
       maxParallelWorkers: cap,
       guardAllowTools: allow as string[],
       routeQuestionShape: shape as RouteQuestionShape,
+      delegationDepthFloor: floor,
     },
   };
 };

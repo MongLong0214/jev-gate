@@ -31,7 +31,7 @@ const write = (name: string, value: unknown): string => {
 describe('validateConfig', () => {
   it('accepts a full V5 file and a partial file over the defaults', () => {
     // routeQuestionShape is optional in a file and defaulted, so a deployed V5 config keeps composite Gate B.
-    expect(validateConfig(V5)).toEqual({ ok: true, config: { ...V5, mode: 'auto', routeQuestionShape: 'composite' } });
+    expect(validateConfig(V5)).toEqual({ ok: true, config: { ...V5, mode: 'auto', routeQuestionShape: 'composite', delegationDepthFloor: 300_000 } });
     const partial = validateConfig({ version: 5, mode: 'native', plannerDefaultTier: 'frontier', models: { deep: 'claude-opus-5' } });
     expect(partial.ok).toBe(true);
     if (!partial.ok) return;
@@ -44,6 +44,9 @@ describe('validateConfig', () => {
       guardAllowTools: [],
     });
     expect(DEFAULT_CONFIG.maxParallelWorkers).toBe(1);
+    // Absent in a deployed file, so the floor arrives without anyone editing their config; 0 is accepted and turns it off.
+    expect(DEFAULT_CONFIG.delegationDepthFloor).toBe(300_000);
+    expect(validateConfig({ version: 5, delegationDepthFloor: 0 })).toMatchObject({ ok: true, config: { delegationDepthFloor: 0 } });
     // T11: a deployed file that still sets resultConfidenceFloor keeps loading; nothing reads it any more.
     const deprecated = validateConfig({ version: 5, mode: 'auto', resultConfidenceFloor: 0.95 });
     expect(deprecated).toMatchObject({ ok: true, config: { resultConfidenceFloor: 0.95 } });
@@ -75,6 +78,9 @@ describe('validateConfig', () => {
     ['parallel cap', { version: 5, maxParallelWorkers: 0 }, 'maxParallelWorkers must be'],
     ['parallel cap type', { version: 5, maxParallelWorkers: 2.5 }, 'maxParallelWorkers must be'],
     ['guard allow-list', { version: 5, guardAllowTools: ['rm -rf'] }, 'guardAllowTools must be'],
+    ['depth floor type', { version: 5, delegationDepthFloor: '300k' }, 'delegationDepthFloor must be'],
+    ['negative depth floor', { version: 5, delegationDepthFloor: -1 }, 'delegationDepthFloor must be'],
+    ['fractional depth floor', { version: 5, delegationDepthFloor: 300_000.5 }, 'delegationDepthFloor must be'],
   ])('rejects an invalid %s', (_name, raw, message) => {
     const r = validateConfig(raw);
     expect(r.ok).toBe(false);

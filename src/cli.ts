@@ -124,7 +124,9 @@ const checkConfig = (): void => {
     return;
   }
   const c = loaded.config;
-  say('ok', `config ${loaded.source}: mode=${c.mode} jevModel=${c.jevModel} deadline=${c.requestDeadlineMs}ms floors={admission:${c.admissionConfidenceFloor},route:${c.routeConfidenceFloor},result:${c.resultConfidenceFloor}} plannerDefaultTier=${c.plannerDefaultTier} models=${JSON.stringify(c.models)} maxParallelWorkers=${c.maxParallelWorkers} guardAllowTools=${JSON.stringify(c.guardAllowTools)}`);
+  say('ok', `config ${loaded.source}: mode=${c.mode} jevModel=${c.jevModel} deadline=${c.requestDeadlineMs}ms floors={admission:${c.admissionConfidenceFloor},route:${c.routeConfidenceFloor},result:${c.resultConfidenceFloor}} plannerDefaultTier=${c.plannerDefaultTier} models=${JSON.stringify(c.models)} maxParallelWorkers=${c.maxParallelWorkers} guardAllowTools=${JSON.stringify(c.guardAllowTools)} routeQuestionShape=${c.routeQuestionShape} delegationDepthFloor=${c.delegationDepthFloor}`);
+  if (c.delegationDepthFloor === 0) say('warn', 'delegationDepthFloor=0: Gate A is asked on every prompt regardless of how deep the session is. Forced orchestration measured +182% on a fresh session and -57% on a loaded one');
+  else say('info', `delegationDepthFloor=${c.delegationDepthFloor}: a prompt arriving with less context than this stays direct and sends no Gate A request (recorded as depth_below_floor); an unreadable transcript is depth_unknown and also stays direct`);
   if (c.mode === 'off') say('info', 'mode=off: no guidance, no Jev, no job state, no trace writes. Loaded agent definitions still exist; remove the plugin for the absent-plugin condition');
   if (c.mode === 'native') say('info', 'mode=native: guidance + owned profiles + job state and guard when orchestration starts, no Jev request');
   if (c.mode === 'auto') say('info', 'mode=auto: admission, allocation and result gates send the request, the planned task and the worker reply to TypeSafe (may include source excerpts and prior constraints)');
