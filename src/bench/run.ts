@@ -1121,16 +1121,31 @@ const runClaudeCell = (cs: CodingCase, spec: ArmSpec, o: Options, pluginDir: str
     });
     child.stdin.on('error', () => undefined);
     const userMessage = (text: string): string => JSON.stringify({ type: 'user', message: { role: 'user', content: text } }) + '\n';
-    child.stdin.end(primed ? cs.prime.map(userMessage).join('') + userMessage(cs.request) : cs.request);
+    /**
+     * Prompts are written one turn at a time, on the `result` event that ends the previous turn -- never all at once.
+     * Measured 2026-09-19: closing stdin with every prompt in it makes the host append the waiting input to the turn
+     * already running, so a thirty-file priming turn and the job prompt become ONE turn and the job prompt is
+     * submitted at a fresh session's depth. That run recorded context_at_job_prompt 27-28K for a case built to reach
+     * 406K, and its arms disagreed on whether the job was even in scope.
+     */
+    const queued = primed ? [...cs.prime.slice(1), cs.request] : [];
+    if (primed) child.stdin.write(userMessage(cs.prime[0] as string));
+    else child.stdin.end(cs.request);
     const rl = createInterface({ input: child.stdout });
     rl.on('line', (line) => {
       streamOut.write(line + '\n');
       cell.stdout_lines++;
+      let parsed: unknown = null;
       try {
-        observeEvent(cell, JSON.parse(line));
+        parsed = JSON.parse(line);
+        observeEvent(cell, parsed);
       } catch {
         cell.unparsed_lines++;
       }
+      if (!primed || !isRecord(parsed) || parsed['type'] !== 'result') return;
+      const next = queued.shift();
+      if (next === undefined) child.stdin.end();
+      else child.stdin.write(userMessage(next));
     });
     child.stderr.pipe(streamErr);
     const escalate = (why: 'timeout' | 'cancel'): void => {

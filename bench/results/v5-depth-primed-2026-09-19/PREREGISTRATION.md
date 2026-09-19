@@ -16,3 +16,14 @@ Recorded before the run, and not to be changed after seeing results:
 4. The depth floor is not consulted by the forced arm by design, so the forced arm here measures what orchestration
    costs at this depth, not what the gate decides. Gate A's own decision is step 3.
 5. A sign that does not reproduce falsifies the claim that the -57 % was about depth.
+
+## Amendment, written before the second run (2026-09-19)
+
+The first run was invalid under rule 1: `context_at_job_prompt` was 27-28K in all four cells. Cause, found in the
+stream: closing stdin with every prompt in it makes the host append the waiting prompts to the turn already running,
+so priming and job became one turn -- the same condition the loaded case already had. Prompts are now written one at a
+time, on the `result` event that ends the previous turn. Verified on a three-prompt session: three separate turns, and
+the third prompt's echo stood at 61,809 context after four files were read.
+
+Rules 1-5 above are unchanged and still govern. The invalid run is recorded in `invalid-run-2026-09-19.json` and its
+numbers are not used as a result.
