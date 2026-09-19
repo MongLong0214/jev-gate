@@ -4,6 +4,12 @@ Pre-registration: `PREREGISTRATION.md` (`7c67c66`), **unamended**. Conditions an
 written before it started: `RERUN-2026-09-20.md` (`3d1141a`). Run: `~/jev-gate-runs/v5-depth-ladder-2`.
 Rules applied mechanically by the same unedited `apply-rules.cjs`; its output is `rules-applied-2.txt`.
 
+> **Both figures below are provisional (added 2026-09-20).** The 13-note rung was later re-run with
+> byte-identical inputs and reversed sign, because the native arm's per-turn cache re-read fell ~2.5× between
+> 09-19 and 09-20. These two rungs were measured once, on 09-19, in the high-re-read regime, and have not been
+> repeated on another day. The two-repetition design does not detect this — see
+> `RESULTS-13NOTE-RERUN-2026-09-20.md`.
+
 The 21-note and 30-note rungs were re-run **whole** — 8 cells, both arms, 2 repetitions. Yesterday's two
 surviving 21-note `jev_single` cells were not reused: a rung whose arms ran on different builds is not a rung.
 

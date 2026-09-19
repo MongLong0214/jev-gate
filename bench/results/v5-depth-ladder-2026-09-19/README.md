@@ -6,9 +6,15 @@ Run: `~/jev-gate-runs/v5-depth-ladder`. Rules applied mechanically by `apply-rul
 `v5-single-vs-native` it reproduces that run's published 71.0 % and 20.4 % and, with no hand intervention, sorts
 `wide` into a separation and `orbit` into direction-only — the caveat that run had to add after the fact.
 
-> **Follow-up (2026-09-20):** the two rungs this run lost to the session limit were re-run whole under this
-> same unamended pre-registration. **Both separated: 21-note −43.1 %, 30-note −56.6 %.** See
-> `RESULTS-RERUN-2026-09-20.md`. The table below is this run's own result and is left as it was measured.
+> **Follow-up (2026-09-20), two parts:**
+> 1. The two rungs this run lost to the session limit were re-run whole: 21-note −43.1 %, 30-note −56.6 %
+>    (`RESULTS-RERUN-2026-09-20.md`).
+> 2. **This run's own headline did not reproduce.** The 13-note rung was re-run with byte-identical inputs and
+>    came back with the sign reversed — `single` 72.5 % *more* expensive. The cause is in the metric, not the
+>    arms: the native root re-read its whole context every turn on 09-19 and about 40 % of it on 09-20. See
+>    `RESULTS-13NOTE-RERUN-2026-09-20.md`. **Read that before quoting anything below.**
+>
+> The table below is this run's own result and is left as it was measured.
 
 ## What was asked
 

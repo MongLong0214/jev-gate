@@ -1,0 +1,57 @@
+{
+  "run": "v5-depth-ladder-3",
+  "date": "2026-09-20",
+  "preregistration_commit": "7c67c66",
+  "preregistration_amended": false,
+  "conditions_commit": "40fe616",
+  "build": "b2c4548 (unchanged: src/, package.json, plugin/ identical at HEAD)",
+  "frozen_config": {
+    "delegationDepthFloor": 50000,
+    "source": "bench/results/v5-depth-ladder-2026-09-19/config-floor-50000.json",
+    "product_floor_unchanged": 300000
+  },
+  "spend_usd": 6.6944,
+  "planned_cells": 4,
+  "cells_that_ran": 4,
+  "cells_valid": 4,
+  "checker_pass": "4/4",
+  "rung": {
+    "13-note": {
+      "depth": [192759, 193429],
+      "native_job_turn": [0.4775, 0.4404],
+      "single_job_turn": [0.8469, 0.7362],
+      "native_mean": 0.4590,
+      "single_mean": 0.7916,
+      "native_spread_pct": 8.4,
+      "single_spread_pct": 15.0,
+      "direction": "single is 72.5% MORE expensive than native",
+      "rule5": "no separation in the single-cheaper direction; the sign is reversed",
+      "analyzer_verdict_string": "not quotable: under the 15% floor",
+      "analyzer_verdict_note": "one-directional defect: apply-rules.cjs tests a signed difference against the floor, not a magnitude. Arithmetic is correct; the verdict string is not. Left unedited under rule 11.",
+      "wall_native_s": 119,
+      "wall_single_s": 195,
+      "single_admitted": "2/2"
+    }
+  },
+  "reproducibility": {
+    "inputs_identical_across_runs": ["request_sha256", "prime_sha256[0]", "prime_sha256[1]", "fixture_sha256"],
+    "native_turns": { "run1": [42, 41], "run3": [40, 41] },
+    "native_output_tokens": { "run1": [11166, 10718], "run3": [10985, 10886] },
+    "native_cache_reads": { "run1": [7922071, 7895272], "run3": [3249327, 3052250] },
+    "native_cache_reads_per_turn": { "run1": "~193K at ~193K depth", "run3": "~78K at ~193K depth" },
+    "single_cache_reads_per_turn": { "run1": "~123K", "run3": "115K-167K" },
+    "cause": "not established; host-side cache behaviour is outside what this bench records"
+  },
+  "withdrawn": {
+    "three_point_ladder": "withdrawn to what survives",
+    "193K": "not established - two measurements with identical inputs disagree in sign",
+    "285K": "-43.1%, provisional - measured once, 2026-09-19, high-re-read regime",
+    "389K": "-56.6%, provisional - same run, same regime"
+  },
+  "unchanged": {
+    "delegationDepthFloor": 300000,
+    "admittedShape_default": "hierarchy",
+    "planner": "untouched",
+    "release": "none"
+  }
+}

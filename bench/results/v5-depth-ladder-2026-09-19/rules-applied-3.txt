@@ -1,0 +1,15 @@
+| job | arm | rep | context | valid | quality | admitted | job turn $ | session $ | wall s | agents | receipts | outcome |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| wide-validators-primed-13 | jev_single | 1 | 193429 | ok | pass | true | 0.8469 | 1.8955 | 183.1 | 1 | accept:1 | completed |
+| wide-validators-primed-13 | jev_single | 2 | 193169 | ok | pass | true | 0.7362 | 1.7837 | 206.8 | 1 | accept:1 | completed |
+| wide-validators-primed-13 | sonnet_native | 1 | 192949 | ok | pass | false | 0.4775 | 1.5277 | 100.9 | 0 | - | - |
+| wide-validators-primed-13 | sonnet_native | 2 | 192759 | ok | pass | false | 0.4404 | 1.4875 | 136.1 | 0 | - | - |
+
+## rungs (pre-registered rules applied)
+
+### wide-validators-primed-13 (13-note) — 4/4 valid, jev_single admitted 2/2
+- native mean $0.4590 [0.4775, 0.4404], spread 8.4%
+- single mean $0.7916 [0.8469, 0.7362], spread 15.0%
+- difference **-72.5%**, widest arm spread 15.0%
+- **not quotable: under the 15% floor**
+- wall: native 119s vs single 195s (64.5%)

@@ -87,14 +87,31 @@ in it was discarding the entire reply — 86.6 seconds and 43 tool calls thrown 
 showed the `single` path counting dispatch attempts without ever reading the bound it counted toward; it now reads
 the per-job task bound that already existed.
 
-**2026-09-20: the two missing rungs were re-run whole, and both separated.** Same pre-registration, unamended;
-8 cells, 8 checker passes, no invalid cell (`RESULTS-RERUN-2026-09-20.md`). At **285K, `jev_single` is 43.1 %
-cheaper**; at **389K, 56.6 % cheaper**. Reading the three rungs together — 193K −41.8 %, 285K −43.1 %, 389K
-−56.6 % — the saving **rises with depth and does not vanish at the shallow end**, which is what the
-root-turns-at-depth mechanism predicts. The shipped floor of 300,000 therefore sits just above a depth measured
-at 43.1 %. Two things bound that reading: the 13-note rung ran on an earlier build (the 21/30 pair share one),
-and wall clock is **uniformly worse** for `single` — +55.0 % and +54.1 % here, +26.9 % at 13-note. The floor is
-still unchanged at 300,000, and no default follows from this.
+**2026-09-20: the two missing rungs were re-run whole and both separated — 285K −43.1 %, 389K −56.6 %**
+(`RESULTS-RERUN-2026-09-20.md`; 8 cells, 8 checker passes, no invalid cell). Wall clock was uniformly worse for
+`single`, +55.0 % and +54.1 %.
+
+**Then the 13-note rung was re-run to close a build gap, and it reversed.** Byte-identical inputs — same
+`request_sha256`, same both `prime_sha256`, same `fixture_sha256` — and `jev_single` came back **72.5 % more
+expensive** than native, against −41.8 % the day before. The arms did not change: same turn counts, same output
+tokens, all four checkers passing. **The metric moved.** On 09-19 the native root re-read its whole context every
+turn (≈193K per turn at a 193K depth); on 09-20 it re-read about 40 % of it, and the job-turn dollar figure fell
+with it. Why the cache behaviour differed is not established — it is outside what this bench records.
+
+**So the ladder is withdrawn to what survives** (`RESULTS-13NOTE-RERUN-2026-09-20.md`):
+
+| depth | status |
+|---|---|
+| 193K | **not established** — two measurements, identical inputs, opposite signs |
+| 285K | −43.1 %, **provisional** — measured once, 09-19, high-re-read regime |
+| 389K | −56.6 %, **provisional** — same run, same regime |
+
+**The two-repetition design does not detect this.** Both runs were internally tight (0.6 % and 8.4 % native
+spread) while the between-run gap was 3×. Rule 5 tests a difference against an arm's own *within-run* spread, and
+that spread badly understates what varies. **Every job-turn dollar figure in this bench measures the regime its
+run happened in, and only this rung has ever been repeated on a different day.** Treat older figures accordingly.
+
+The floor stays at 300,000 and no default follows. The case for a flip is weaker than it was that morning.
 
 Read the 2026-09-19 section of "What the measurements say" before trusting any older number in this file.
 
