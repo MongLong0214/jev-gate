@@ -47,6 +47,30 @@ constant plan size and ~47 % otherwise — **quote nothing under 15 % from it**.
 end-to-end observation and stays off. Nothing here makes work finish *faster* than doing it directly; parity is the
 best case.
 
+**2026-09-19, later the same day: the mechanism behind the saving has a name, and it is not "orchestration".** Eight
+cells, two jobs, one build, all eight passing their checker
+(`bench/results/v5-single-vs-native-2026-09-19/`): an admitted turn dispatched **whole into one fresh worker, with no
+planner, no plan and no contract**, cost **−71.0 %** against no plugin on `wide-validators` and **−20.4 %** on
+`orbit-core` — the second of those smaller than either arm's own cell-to-cell spread, so `wide` carries it and
+`orbit` only agrees with it.
+
+What collapses is **root turns taken at depth** — 42/43 → 11 on wide, 27/22 → 13/17 on orbit — not tool calls: Bash
+counts match, and on `wide` all four cells made the same 11 writes and 13 edits. A turn taken in a ~390K session is
+the expensive thing; a fresh worker taking it instead is what this product sells. **It is paid for in wall clock:
+the single-worker shape was slower on every cell of both jobs, about 40–48 % on the means.**
+
+This also narrows what the `−59 % to −69 %` row above is evidence for. That row is `hierarchy` on one job, and the
+split between "moved to a fresh context" and "split into tasks" was confounded in it. The move alone now has its own
+two-job number; **the split has no isolated number at all** — stage 1 put all three arms on one build and rule 3
+withheld the cost comparison because the arms' pass counts differed
+(`bench/results/v5-context-vs-decomposition-s1-2026-09-19/`).
+
+**Quality, all cells this repository has recorded:** `jev_single` 6/6, `sonnet_native` 6/6, `jev_hierarchy` 4/6 —
+its two failures being a plan that froze what the request left open (and reported `completed` over it) and a cell
+that spent a whole job turn repairing a plan and dispatched no worker at all. Whether that should change the shipped
+default is written up as a recommendation for the owner in `DECISION-admitted-shape-2026-09-19.md`; **the default is
+unchanged** (`admittedShape: hierarchy`).
+
 Read the 2026-09-19 section of "What the measurements say" before trusting any older number in this file.
 
 ## What V5 does
