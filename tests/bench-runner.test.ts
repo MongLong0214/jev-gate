@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -172,6 +173,20 @@ describe('execute', () => {
     expect(cells.native_hierarchy.experiment_admission).toBeNull();
     expect(cells.jev_hierarchy.spawn!.env_added).not.toContain('JEV_GATE_EXPERIMENT_ADMISSION');
     expect(ARMS.filter((a) => cells[a].diagnostic)).toEqual(['jev_forced_orchestration']);
+
+    // A19: the single arm loads a config derived from the frozen one inside its own cell, and the cell records which
+    // file that was with its hash. Every other arm loads the frozen file itself, so the override is visible per cell
+    // rather than asserted for the run.
+    const frozen = JSON.parse(readFileSync(String(plan.frozen_inputs!['config_copy']), 'utf8')) as Record<string, unknown>;
+    const override = cells.jev_single.config_override!;
+    expect(override.path).toBe(join(r.out, 'cells', 'mini', 'jev_single', '1', 'config.json'));
+    const overrideText = readFileSync(override.path, 'utf8');
+    expect(createHash('sha256').update(overrideText).digest('hex')).toBe(override.sha256);
+    expect(override.admittedShape).toBe('single');
+    // Only the one key differs, so the two plugin arms are the same run in every other respect.
+    expect(JSON.parse(overrideText)).toEqual({ ...frozen, admittedShape: 'single' });
+    expect(cells.jev_single.spawn!.env_added).toContain('JEV_GATE_CONFIG');
+    for (const a of ARMS.filter((x) => x !== 'jev_single')) expect(cells[a].config_override, a).toBeNull();
 
     // native: admission recorded as not sent, no Jev spend, no plan
     expect(cells.native_hierarchy.gate.admission).toMatchObject({ attempted: false, known_not_sent: true, decision: 'direct', reason: 'mode_native', choice: null });

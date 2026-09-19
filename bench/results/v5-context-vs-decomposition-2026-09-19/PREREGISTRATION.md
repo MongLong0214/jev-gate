@@ -48,20 +48,24 @@ at once. Stage 2 runs only if stage 1 earns it.
 
 ### Stage 1 — `wide-validators-primed-30`, the job the saving was found on
 
-The new arm, two repetitions. This is the job where the effect is largest and therefore the job where a null result
-for `jev_single` is most informative.
+**All three arms, two repetitions, 6 cells, one build.** This is the job where the effect is largest and therefore
+the job where a null result for `jev_single` is most informative. Running native alongside the two plugin arms on the
+current build costs two cells more than reusing it, and buys a stage 1 in which every number comes from one build and
+no reuse argument has to hold — see the reuse section for what the existing cells can and cannot do.
 
 ### Stage 2 — `orbit-core-primed-30`, all three arms, 6 cells
 
 Run **only if** stage 1 places `jev_single` at or below `jev_hierarchy` on `wide-validators`, i.e. only if the
-single-executor shape is a live hypothesis rather than a refuted one. If stage 1 refutes it (see falsification below),
-stage 2 is not run and the negative result is the deliverable.
+single-executor shape is a live hypothesis rather than a refuted one, **and only on a separate approval of its own**:
+stage 1 being funded is not stage 2 being funded. If stage 1 refutes it (see falsification below), stage 2 is not run
+and the negative result is the deliverable.
 
 This condition is fixed now, before the stage 1 numbers exist.
 
 ## Reuse of existing cells — what is accepted and what is refused
 
-Stage 1 compares against cells that already exist for this exact case, priming prompt and depth band:
+Cells already exist for this exact case, priming prompt and depth band. Stage 1 as designed above does **not** rely
+on them — it re-measures all three arms — so what follows is what they can still be used for, and what they cannot:
 
 | arm | source | job turn | decision |
 |---|---|---|---|
@@ -78,13 +82,16 @@ carries its plan) and `2042170`. All three change what the hierarchy path compos
 Comparing a new `jev_single` cell against them is comparing across builds, which is the comparison this harness exists
 to avoid. So:
 
-- **Funded design (4 cells, ~$15):** stage 1 runs `jev_single` ×2 **and** `jev_hierarchy` ×2 on the current build, and
-  reuses native. Both plugin arms then come from one build and the S-vs-H comparison is a comparison.
-- **Cheaper variant (2 cells, ~$7.5):** stage 1 runs `jev_single` ×2 only. The old hierarchy cells are then a **prior,
-  not an arm**: no S-vs-H percentage may be quoted from that pairing, and the only cost comparison stage 1 can report
-  is `jev_single` against native.
+The consequence is the stage 1 above: **6 cells, ~$22–$28**, all three arms re-measured on the current build. The
+cheaper shapes, and what each forfeits, are recorded so the trade is visible rather than assumed:
 
-Which of the two runs is the owner's call, because it is the owner's money. Nothing here starts without it.
+| stage 1 shape | cells | what it forfeits |
+|---|---|---|
+| all three arms (**chosen**) | 6 | nothing; every number is from one build |
+| `jev_single` + `jev_hierarchy`, native reused | 4 | nothing measurable — native carries — but the native cells are from another run |
+| `jev_single` only | 2 | the S-vs-H comparison: the old hierarchy cells are a **prior, not an arm**, and no S-vs-H percentage may be quoted from that pairing |
+
+Which shape runs is the owner's call, because it is the owner's money. Nothing here starts without it.
 
 ## Predictions, fixed before the run
 
@@ -162,25 +169,30 @@ Fixed now, so that no result is read as support for the arm that produced it.
 
 1. **The arm exists.** `2042170`: `admittedShape` in the config schema, the single path in the hook and the
    coordinator, the `jev_single` arm, and the per-cell config override recorded with its sha256. Done.
-2. **Unit coverage, including that a cell records which config it ran under.** `npm run typecheck` 0, `npm run build`
-   0, `npx vitest run` 534/534. Done.
-3. **The owner's own word on the spend, and on which of the two stage 1 designs to fund.** Recorded `wide-validators`
-   primed cells ran about $3.7 per cell all-in. This is a paid experiment and is not started on a peer's instruction.
-   **Outstanding — nothing runs until this is given.**
+2. **Unit coverage, including that a cell records which config it ran under.** `tests/bench-runner.test.ts` runs all
+   eight arms and asserts that the `jev_single` cell loaded a file inside its own cell whose sha256 the cell records,
+   that the file differs from the frozen config in `admittedShape` and nothing else, and that every other arm records
+   no override. `npm run typecheck` 0, `npm run build` 0, `npx vitest run` 534/534. Done.
+3. **The owner's own word on the spend.** Recorded `wide-validators` primed cells ran about $3.7 per cell all-in, so
+   stage 1 is of the order of $22–$28. A peer session has relayed an approval for exactly this shape (6 cells, wide
+   only, orbit re-decided afterwards), and the design above is written to it — but a relayed approval is not the
+   owner's own word, and this repository has already held a push for that reason. **Outstanding — nothing runs until
+   the owner says it here.**
 
 ## Command (for the record; not run)
 
-Stage 1, funded design:
+Stage 1, as designed — all three arms, one job, 6 cells:
 
 ```sh
 node dist/bench/run.js --cases bench/cases-depth.json \
   --only wide-validators-primed-30 \
-  --out ~/jev-gate-runs/v5-context-vs-decomposition-s1 --execute --max-sessions 4 \
-  --arms jev_single,jev_hierarchy --repetitions 2 \
+  --out ~/jev-gate-runs/v5-context-vs-decomposition-s1 --execute --max-sessions 6 \
+  --arms sonnet_native,jev_single,jev_hierarchy --repetitions 2 \
   --plugin-dir "$PWD" --timeout-ms 2400000 --max-turns 120 --seed 20260919
 ```
 
-Stage 1, cheaper variant: `--arms jev_single --max-sessions 2`.
+Cheaper shapes, if funded instead: `--arms jev_single,jev_hierarchy --max-sessions 4`, or
+`--arms jev_single --max-sessions 2` with the forfeit named in the reuse table.
 
 Stage 2 (only if stage 1 earns it):
 
