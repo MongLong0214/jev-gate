@@ -102,6 +102,8 @@ this to-do), a live root `Edit` denial and the terminal stop.
 | **Gate A admits on its own.** `jev_hierarchy` + `admissionQuestionShape: atomic`: job turn **−64.2 %**, session **−31.8 %**, wall **+3.8 %** against native, two repetitions, all passing. The priming prompt costs nothing (`depth_unknown`, no request); the confirmation turn is refused on its own content | `v5-gate-a-live-2026-09-19/` |
 | **Below the floor it refuses exactly** — every prompt `depth_below_floor`/`depth_unknown`, `attempted: false`, zero requests and zero workers — **but the cost of refusing is undecidable**: native varies 26.9 % between its own cells there | same |
 | **The 13-note case sits at 179–181K.** First point toward measuring the crossing that `delegationDepthFloor` guesses at | same |
+| **Plan size is a free variable.** Same job, six repetitions, nothing changed: 4, 2, 2, 3, 2, 3 tasks. Bench precision is ~10 % at constant plan size and ~47 % otherwise | `v5-plan-variance-2026-09-19/` |
+| **`agent_calls` counts the planner too.** Earlier "13 workers" and "4 workers" were 12 and 3 workers plus the planner | same |
 | **Atomic Gate A is implemented and does not admit on `missing_reference`.** That question reads median 0.77 on real prompts — a constant, not a signal — and was dropped on a criterion fixed before the variants were measured. Shipped composition admits 41/65 | `v5-gate-a-atomic-2026-09-19/` |
 | **A task ceiling of 10 ships** as a backstop against a runaway split. It has never fired in a run | `7de339b` |
 
@@ -144,10 +146,13 @@ independent proof the code works.
 The approved experiment below **has been run**, several times over, and the 2026-09-19 section of "What the
 measurements say" is its outcome. What is worth doing next, in order:
 
-1. **Control worker count.** It moved the same job's cost by a factor of 2.4 on the same case at the same depth, which
-   is more than the effect any of these runs is trying to measure. Until a run repeats planning, or fixes a plan and
-   replays it, a single cell's cost is as much a statement about planner variance as about the gate. Everything below
-   this line is worth less until this is done.
+1. ~~**Control worker count.**~~ **Measured** (`v5-plan-variance-2026-09-19/`): the same job plans 4, 2, 2, 3, 2, 3
+   over six repetitions with nothing changed. The bench resolves **~10 %** when plan size is constant and **~47 %**
+   when it is not. What remains is to make the comparison immune to it — compare cells of equal plan size, or fix a
+   plan and replay it — not to run more unmatched pairs.
+
+   Quote nothing under 15 % from this bench. The −64.2 % at depth survives with roughly ±20 %; the +14.1 % in the
+   shallow condition does not survive at all.
 2. ~~**Get Gate A to admit a job end to end.**~~ **Done** (`v5-gate-a-live-2026-09-19/`). What remains from it: the
    default still does not flip, because the shallow half is undecidable on a bench whose native arm varies 26.9 %
    there. Either raise repetitions in that condition or find a case whose native arm is stabler.
