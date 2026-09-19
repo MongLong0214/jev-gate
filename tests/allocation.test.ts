@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { buildPlannerRouteRequest, buildWorkerRouteRequest, decidePlannerRoute, decideWorkerRoute, PLANNER_TIER_QUESTION, ROUTE_QUESTION, UPGRADE_BASIS_QUESTION } from '../src/allocation.js';
 import { DEFAULT_CONFIG } from '../src/config.js';
-import { contractHash, type PriorAttemptSummary } from '../src/plan.js';
+import { contractHash, ROUTING_TARGET_MARK, type PriorAttemptSummary } from '../src/plan.js';
 import { PLANNER_ROUTE_ANSWERS, ROUTE_ANSWERS, UPGRADE_BASES, type PlannedTask, type PlannerRouteAnswer, type RouteAnswer, type UpgradeBasis } from '../src/types.js';
 
 const pick = <K extends string>(keys: readonly K[], winner: K, p = 0.9, confidence = p): Record<string, unknown> => ({
@@ -62,6 +62,28 @@ describe('requests', () => {
     expect(Object.keys(UPGRADE_BASIS_QUESTION.criteria)).toEqual([...UPGRADE_BASES]);
     expect(ROUTE_QUESTION.instructions).toContain('File count, subject name, prompt length and general complexity alone');
     expect(UPGRADE_BASIS_QUESTION.instructions).toContain('network, authentication, permission or missing-dependency failure');
+  });
+
+  /**
+   * #33/A18: the tier gate reads the plan with routing targets removed, so planner text cannot read as a route
+   * request. `ROUTE_QUESTION` also instructs the model to ignore such text; this does not depend on it obeying.
+   * Before A18 the same text was rejected at parse time, which rejected the whole plan.
+   */
+  it('removes tier and model names from the plan text the gate reads, and only from that copy (#33/A18)', () => {
+    const asking = withEvidence({
+      constraints: ['serialize must deep-copy the state', 'run this on opus'],
+      uncertainty: { unresolved: ['needs the frontier tier'], interacts_with: [], prior_failure: null },
+    });
+    const request = buildWorkerRouteRequest(asking, ['prefer the deep tier'], [], 'p', 'standard', DEFAULT_CONFIG);
+    expect(request.state.task.constraints).toEqual(['serialize must deep-copy the state', `run this on ${ROUTING_TARGET_MARK}`]);
+    expect(request.state.task.uncertainty?.unresolved).toEqual([`needs the ${ROUTING_TARGET_MARK} tier`]);
+    expect(request.state.global_constraints).toEqual([`prefer the ${ROUTING_TARGET_MARK} tier`]);
+    // The contract the worker implements is untouched, and the hash the receipt is matched on does not move.
+    expect(asking.constraints).toEqual(['serialize must deep-copy the state', 'run this on opus']);
+    expect(request.state.task.contract_hash).toBe(asking.contract_hash);
+    // Not a rule about the word "opus": it is a configured model id, and a host that configures another gets that one.
+    const renamed = { ...DEFAULT_CONFIG, models: { ...DEFAULT_CONFIG.models, deep: 'some-other-model' } };
+    expect(buildWorkerRouteRequest(asking, [], [], 'p', 'standard', renamed).state.task.constraints[1]).toBe('run this on opus');
   });
 
   it('builds the planner request with the configured default tier', () => {

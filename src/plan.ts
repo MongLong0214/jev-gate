@@ -94,26 +94,61 @@ const strArray = (v: unknown, name: string): ParseResult<string[]> => {
   return { ok: true, value: v as string[] };
 };
 
-/** Non-alphanumeric runs collapse to spaces so a whole token matches: "deepen the cache" does not name the deep tier. */
-const tokenized = (s: string): string => ` ${s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()} `;
+/**
+ * A18: a hyphen or underscore joins a token rather than splitting it, so "deep-copy" is one word and does not name the
+ * deep tier -- which is what the original rule ("a whole token matches", so "deepen the cache" is not the deep tier)
+ * always said, and not what splitting on every non-alphanumeric run did. Configured model ids are hyphenated, so
+ * preserving the join is also what lets one of them match as a single token.
+ */
+const normalizeToken = (t: string): string => t.toLowerCase().replace(/^[-_]+|[-_]+$/g, '');
+const routingTargets = (modelIds: readonly string[]): Set<string> =>
+  new Set([...TIERS, ...modelIds].map((w) => normalizeToken(w)).filter((w) => w.length > 0));
+
+/** #33/A18: what the tier gate reads in place of a routing target the planner wrote. */
+export const ROUTING_TARGET_MARK = '[tier name removed]';
 
 /**
- * #33: routing evidence is read by the tier gate, so a planner naming a tier or a configured model in it would be
- * asking for a route rather than reporting a fact. The planner does not get to ask.
+ * #33/A18: the planner still does not get to ask for a route -- the word is removed from what the gate reads, so it
+ * cannot be read as a request. It is removed there rather than rejected here because rejecting rejects the whole plan,
+ * and the words are ordinary engineering English. Observed 2026-09-19 (`v5-job2-orbit` r1, stream.jsonl:312): a
+ * four-task plan covering all seven modules was rejected for the constraint "serialize must deep-copy so later
+ * mutation ...", and the constraint did not survive the revision that replaced it. "read from standard input" and "a
+ * deep clone of the array" reject a plan the same way.
  */
-const namesRoutingTarget = (value: string, modelIds: readonly string[]): string | null => {
-  const haystack = tokenized(value);
-  for (const word of [...TIERS, ...modelIds]) {
-    const needle = tokenized(word);
-    if (needle !== ' ' && haystack.includes(needle)) return word;
-  }
-  return null;
+export const redactRoutingTargets = (value: string, modelIds: readonly string[]): string => {
+  const targets = routingTargets(modelIds);
+  return value.replace(/[A-Za-z0-9_-]+/g, (token) => (targets.has(normalizeToken(token)) ? ROUTING_TARGET_MARK : token));
 };
 
-const inertEvidence = (value: string, name: string, modelIds: readonly string[]): ParseResult<string> => {
-  const named = namesRoutingTarget(value, modelIds);
-  if (named !== null) return { ok: false, error: `${name} names ${named}; report what is unresolved, not which model or tier should run it` };
-  return { ok: true, value };
+/**
+ * #33/A18: the plan-authored text the tier gate reads, with routing targets removed. It is a copy made for the gate:
+ * the contract the worker implements keeps its words, so a redaction can never change what gets built, and
+ * `contract_hash` is carried unchanged for the same reason. Paths and ids are left alone -- `src/fast-path.ts` is a
+ * file, not a request. Coverage matches what the parser used to reject: the fields the planner writes. Worker-authored
+ * text (`prior_attempt`, `predecessor_results`) and the user's own prompt reach the gate unredacted, as before.
+ */
+export const redactTaskRoutingTargets = (task: PlannedTask, modelIds: readonly string[]): PlannedTask => {
+  const r = (v: string): string => redactRoutingTargets(v, modelIds);
+  return {
+    ...task,
+    outcome: r(task.outcome),
+    context: r(task.context),
+    constraints: task.constraints.map(r),
+    replan_if: task.replan_if.map(r),
+    checks: task.checks.map((c) => ({ ...c, description: r(c.description), command: c.command === null ? null : r(c.command) })),
+    ...(task.spec === undefined
+      ? {}
+      : { spec: { ...task.spec, interfaces: task.spec.interfaces.map(r), data_shapes: task.spec.data_shapes.map(r), invariants: task.spec.invariants.map(r) } }),
+    ...(task.uncertainty === undefined
+      ? {}
+      : {
+          uncertainty: {
+            unresolved: task.uncertainty.unresolved.map(r),
+            interacts_with: task.uncertainty.interacts_with.map(r),
+            prior_failure: task.uncertainty.prior_failure === null ? null : r(task.uncertainty.prior_failure),
+          },
+        }),
+  };
 };
 
 /** A path field is structural: a repository path has no whitespace, so prose cannot hide in one. */
@@ -130,50 +165,28 @@ const pathArray = (v: unknown, name: string): ParseResult<string[]> => {
   return list;
 };
 
-const proseField = (v: unknown, name: string, modelIds: readonly string[]): ParseResult<string> => {
-  const field = strField(v, name);
-  if (!field.ok) return field;
-  return inertEvidence(field.value, name, modelIds);
-};
-
-const proseArray = (v: unknown, name: string, modelIds: readonly string[]): ParseResult<string[]> => {
-  const list = strArray(v, name);
-  if (!list.ok) return list;
-  for (const item of list.value) {
-    const inert = inertEvidence(item, name, modelIds);
-    if (!inert.ok) return inert;
-  }
-  return list;
-};
-
-const evidenceArray = (v: unknown, name: string, modelIds: readonly string[]): ParseResult<string[]> => {
+const evidenceArray = (v: unknown, name: string): ParseResult<string[]> => {
   const list = strArray(v, name);
   if (!list.ok) return list;
   if (list.value.length > MAX_UNCERTAINTY_ENTRIES) return { ok: false, error: `${name} exceeds ${MAX_UNCERTAINTY_ENTRIES} entries` };
-  for (const item of list.value) {
-    const inert = inertEvidence(item, name, modelIds);
-    if (!inert.ok) return inert;
-  }
   return list;
 };
 
-const parseUncertainty = (v: unknown, taskId: string, modelIds: readonly string[]): ParseResult<TaskUncertainty> => {
+const parseUncertainty = (v: unknown, taskId: string): ParseResult<TaskUncertainty> => {
   if (!isRecord(v)) return { ok: false, error: `task ${taskId}: uncertainty must be an object with unresolved, interacts_with and prior_failure` };
-  const unresolved = evidenceArray(v['unresolved'] ?? [], `task ${taskId}: uncertainty.unresolved`, modelIds);
+  const unresolved = evidenceArray(v['unresolved'] ?? [], `task ${taskId}: uncertainty.unresolved`);
   if (!unresolved.ok) return unresolved;
-  const interacts = evidenceArray(v['interacts_with'] ?? [], `task ${taskId}: uncertainty.interacts_with`, modelIds);
+  const interacts = evidenceArray(v['interacts_with'] ?? [], `task ${taskId}: uncertainty.interacts_with`);
   if (!interacts.ok) return interacts;
   const rawFailure = v['prior_failure'] ?? null;
   if (rawFailure === null) return { ok: true, value: { unresolved: unresolved.value, interacts_with: interacts.value, prior_failure: null } };
   const failure = strField(rawFailure, `task ${taskId}: uncertainty.prior_failure`);
   if (!failure.ok) return failure;
-  const inert = inertEvidence(failure.value, `task ${taskId}: uncertainty.prior_failure`, modelIds);
-  if (!inert.ok) return inert;
-  return { ok: true, value: { unresolved: unresolved.value, interacts_with: interacts.value, prior_failure: inert.value } };
+  return { ok: true, value: { unresolved: unresolved.value, interacts_with: interacts.value, prior_failure: failure.value } };
 };
 
 /** A17: a spec states signatures and invariants, never a code block; the worker reads the repository for the body. */
-const specArray = (v: unknown, name: string, modelIds: readonly string[]): ParseResult<string[]> => {
+const specArray = (v: unknown, name: string): ParseResult<string[]> => {
   const list = strArray(v, name);
   if (!list.ok) return list;
   // A17: the bound is one-sided -- too many entries rejects the plan, while omitting them entirely is free -- so the
@@ -188,19 +201,17 @@ const specArray = (v: unknown, name: string, modelIds: readonly string[]): Parse
   }
   for (const item of list.value) {
     if (item.includes('```')) return { ok: false, error: `${name} contains a code block; state the signature or invariant, not an implementation` };
-    const inert = inertEvidence(item, name, modelIds);
-    if (!inert.ok) return inert;
   }
   return list;
 };
 
-const parseSpec = (v: unknown, taskId: string, modelIds: readonly string[]): ParseResult<TaskSpec> => {
+const parseSpec = (v: unknown, taskId: string): ParseResult<TaskSpec> => {
   if (!isRecord(v)) return { ok: false, error: `task ${taskId}: spec must be an object with interfaces, data_shapes, invariants and files` };
-  const interfaces = specArray(v['interfaces'] ?? [], `task ${taskId}: spec.interfaces`, modelIds);
+  const interfaces = specArray(v['interfaces'] ?? [], `task ${taskId}: spec.interfaces`);
   if (!interfaces.ok) return interfaces;
-  const shapes = specArray(v['data_shapes'] ?? [], `task ${taskId}: spec.data_shapes`, modelIds);
+  const shapes = specArray(v['data_shapes'] ?? [], `task ${taskId}: spec.data_shapes`);
   if (!shapes.ok) return shapes;
-  const invariants = specArray(v['invariants'] ?? [], `task ${taskId}: spec.invariants`, modelIds);
+  const invariants = specArray(v['invariants'] ?? [], `task ${taskId}: spec.invariants`);
   if (!invariants.ok) return invariants;
   // Paths carry no prose, so they are shape-checked instead of name-filtered: src/fast-path.ts is a file, not a request.
   const files = pathArray(v['files'] ?? [], `task ${taskId}: spec.files`);
@@ -209,7 +220,7 @@ const parseSpec = (v: unknown, taskId: string, modelIds: readonly string[]): Par
   return { ok: true, value: { interfaces: interfaces.value, data_shapes: shapes.value, invariants: invariants.value, files: files.value } };
 };
 
-const parseChecks = (v: unknown, taskId: string, modelIds: readonly string[]): ParseResult<PlannedCheck[]> => {
+const parseChecks = (v: unknown, taskId: string): ParseResult<PlannedCheck[]> => {
   if (!Array.isArray(v)) return { ok: false, error: `task ${taskId}: checks must be an array` };
   const out: PlannedCheck[] = [];
   const seen = new Set<string>();
@@ -221,15 +232,11 @@ const parseChecks = (v: unknown, taskId: string, modelIds: readonly string[]): P
     seen.add(id);
     const description = strField(raw['description'], `task ${taskId}: check ${id} description`);
     if (!description.ok) return description;
-    const descriptionInert = inertEvidence(description.value, `task ${taskId}: check ${id} description`, modelIds);
-    if (!descriptionInert.ok) return descriptionInert;
     if (typeof raw['required'] !== 'boolean') return { ok: false, error: `task ${taskId}: check ${id} required must be a boolean` };
     const commandRaw = raw['command'];
     if (commandRaw !== undefined && commandRaw !== null) {
       const command = strField(commandRaw, `task ${taskId}: check ${id} command`);
       if (!command.ok) return command;
-      const commandInert = inertEvidence(command.value, `task ${taskId}: check ${id} command`, modelIds);
-      if (!commandInert.ok) return commandInert;
     }
     out.push({ id, description: description.value, required: raw['required'], command: typeof commandRaw === 'string' ? commandRaw : null });
   }
@@ -261,7 +268,7 @@ export const contractHash = (task: Omit<PlannedTask, 'contract_hash'>): string =
     )
     .digest('hex');
 
-const parseTasks = (raw: unknown, modelIds: readonly string[], maxTasks: number): ParseResult<Array<Omit<PlannedTask, 'contract_hash'>>> => {
+const parseTasks = (raw: unknown, maxTasks: number): ParseResult<Array<Omit<PlannedTask, 'contract_hash'>>> => {
   if (!Array.isArray(raw) || raw.length === 0) return { ok: false, error: 'tasks must be a non-empty array' };
   /**
    * A backstop against a runaway split, not a budget for the planner to spend. Worker count is the hidden cost axis
@@ -279,21 +286,21 @@ const parseTasks = (raw: unknown, modelIds: readonly string[], maxTasks: number)
     if (typeof id !== 'string' || !ID_RE.test(id)) return { ok: false, error: `task id must match ${ID_RE.source}` };
     if (ids.has(id)) return { ok: false, error: `duplicate task id ${id}` };
     ids.add(id);
-    // Every planner string below reaches Gate B as state, so the tier/model filter covers all of them, not only the
-    // evidence fields: a tier named in `context` would otherwise be read by the router it is addressed to.
-    const outcome = proseField(item['outcome'], `task ${id}: outcome`, modelIds);
+    // A18: every planner string below reaches Gate B as state, so all of them -- not only the evidence fields -- are
+    // redacted at that boundary by `redactTaskRoutingTargets`. They are parsed here as written.
+    const outcome = strField(item['outcome'], `task ${id}: outcome`);
     if (!outcome.ok) return outcome;
-    const context = proseField(item['context'] ?? '', `task ${id}: context`, modelIds);
+    const context = strField(item['context'] ?? '', `task ${id}: context`);
     if (!context.ok) return context;
     const depends = strArray(item['depends_on'] ?? [], `task ${id}: depends_on`);
     if (!depends.ok) return depends;
-    const constraints = proseArray(item['constraints'] ?? [], `task ${id}: constraints`, modelIds);
+    const constraints = strArray(item['constraints'] ?? [], `task ${id}: constraints`);
     if (!constraints.ok) return constraints;
     const deliverables = pathArray(item['deliverables'] ?? [], `task ${id}: deliverables`);
     if (!deliverables.ok) return deliverables;
-    const replanIf = proseArray(item['replan_if'] ?? [], `task ${id}: replan_if`, modelIds);
+    const replanIf = strArray(item['replan_if'] ?? [], `task ${id}: replan_if`);
     if (!replanIf.ok) return replanIf;
-    const checks = parseChecks(item['checks'] ?? [], id, modelIds);
+    const checks = parseChecks(item['checks'] ?? [], id);
     if (!checks.ok) return checks;
     // A1: acceptance is decided by required checks, so a task without one could never be verified.
     if (!checks.value.some((c) => c.required)) return { ok: false, error: `task ${id}: at least one check must be marked required` };
@@ -302,14 +309,14 @@ const parseTasks = (raw: unknown, modelIds: readonly string[], maxTasks: number)
     const rawSpec = item['spec'];
     let spec: TaskSpec | undefined;
     if (rawSpec !== undefined && rawSpec !== null) {
-      const parsedSpec = parseSpec(rawSpec, id, modelIds);
+      const parsedSpec = parseSpec(rawSpec, id);
       if (!parsedSpec.ok) return parsedSpec;
       spec = parsedSpec.value;
     }
     const rawUncertainty = item['uncertainty'];
     let uncertainty: TaskUncertainty | undefined;
     if (rawUncertainty !== undefined && rawUncertainty !== null) {
-      const parsedUncertainty = parseUncertainty(rawUncertainty, id, modelIds);
+      const parsedUncertainty = parseUncertainty(rawUncertainty, id);
       if (!parsedUncertainty.ok) return parsedUncertainty;
       uncertainty = parsedUncertainty.value;
     }
@@ -380,7 +387,7 @@ export const chainDepth = (tasks: Array<Pick<PlannedTask, 'id' | 'depends_on'>>)
 };
 
 /** Structural validation only (D8): no repair, no defaulting of a missing status, no second model call. */
-export const parsePlannerReply = (text: string, modelIds: readonly string[] = [], maxTasks: number = DEFAULT_MAX_TASKS_PER_PLAN): ParseResult<PlannerReply> => {
+export const parsePlannerReply = (text: string, maxTasks: number = DEFAULT_MAX_TASKS_PER_PLAN): ParseResult<PlannerReply> => {
   if (bytes(text) > MAX_REPLY_BYTES) return { ok: false, error: `reply exceeds ${MAX_REPLY_BYTES} bytes` };
   const json = extractJson(text);
   if (json === null) return { ok: false, error: 'no JSON object found in the reply' };
@@ -393,13 +400,13 @@ export const parsePlannerReply = (text: string, modelIds: readonly string[] = []
   if (!isRecord(parsed)) return { ok: false, error: 'the final JSON value is not an object' };
   const status = parsed['status'];
   if (status === 'ready') {
-    const goal = proseField(parsed['goal'] ?? '', 'goal', modelIds);
+    const goal = strField(parsed['goal'] ?? '', 'goal');
     if (!goal.ok) return goal;
-    const assumptions = proseArray(parsed['assumptions'] ?? [], 'assumptions', modelIds);
+    const assumptions = strArray(parsed['assumptions'] ?? [], 'assumptions');
     if (!assumptions.ok) return assumptions;
-    const constraints = proseArray(parsed['constraints'] ?? [], 'constraints', modelIds);
+    const constraints = strArray(parsed['constraints'] ?? [], 'constraints');
     if (!constraints.ok) return constraints;
-    const tasks = parseTasks(parsed['tasks'], modelIds, maxTasks);
+    const tasks = parseTasks(parsed['tasks'], maxTasks);
     if (!tasks.ok) return tasks;
     // A17: the graph is the fact and `chainDepth` computes it; the planner's own number is recorded as a claim, so a
     // planner that miscounts does not lose an otherwise valid plan.
@@ -545,6 +552,66 @@ export const composeTaskPrompt = (
       : priorAttempt === 'omitted'
         ? ['Previous attempt of this task: omitted because it did not fit the size bound; ask the coordinator for it.']
         : [`Previous attempt of this task (worker_reported): ${JSON.stringify(priorAttempt)}`]),
+  ].join('\n');
+
+/** A18: what a replan is revising. The planner is a fresh session, so the revision in force is not something it recalls. */
+export const PLAN_IN_FORCE_HEADER = '[Jev Gate plan in force]';
+export const PLAN_IN_FORCE_NOTE =
+  'This is the plan revision currently in force, and what the coordinator is asking you to revise. Keep every task the request still needs: a revision that drops a deliverable or an interface the request names is a regression, not a smaller plan. Change what the stated problem requires and say what you changed.';
+export const PLAN_IN_FORCE_OMITTED =
+  'A plan revision is in force but did not fit the size bound, so it is not shown. Ask the coordinator for it rather than planning as though none existed: this call is a revision, not a first plan.';
+
+/** A18: the scheduling-and-contract face of a task. The bodies a worker needs are not what a revising planner reads. */
+export interface PlanInForceTask {
+  id: string;
+  outcome: string;
+  depends_on: string[];
+  deliverables: string[];
+  interfaces: string[];
+}
+
+export interface PlanInForceSummary {
+  rev: number;
+  goal: string;
+  chain_depth: number;
+  tasks: PlanInForceTask[];
+}
+
+export const planInForceSummary = (plan: Plan): PlanInForceSummary => ({
+  rev: plan.rev,
+  goal: plan.goal,
+  chain_depth: plan.chain_depth,
+  tasks: plan.tasks.map((t) => ({
+    id: t.id,
+    outcome: t.outcome,
+    depends_on: t.depends_on,
+    deliverables: t.deliverables,
+    interfaces: t.spec?.interfaces ?? [],
+  })),
+});
+
+/**
+ * A18: the planner call gets the same treatment as a worker dispatch -- the coordinator's brief, then one canonical
+ * block the hook owns. Observed 2026-09-19 (`v5-job2-orbit` r1): a replan was called with 771 characters of fix
+ * instruction and nothing else, so a fresh planner took the repository's existing tests for the specification and
+ * returned a revision missing three modules the request had asked for. The brief is what the coordinator noticed; it
+ * was never the job.
+ */
+export const composePlannerPrompt = (
+  originalPrompt: string,
+  /** A17: the admitted request, `omitted` when it did not fit, `null` when the job never carried one. */
+  request: string | 'omitted' | null = null,
+  /** A18: present only on a replan; `omitted` when the revision in force did not fit the byte bound. */
+  planInForce: PlanInForceSummary | 'omitted' | null = null,
+): string =>
+  [
+    originalPrompt,
+    ...(request === null ? [] : ['', REQUEST_HEADER, request === 'omitted' ? REQUEST_OMITTED : request, REQUEST_PRECEDENCE]),
+    ...(planInForce === null
+      ? []
+      : planInForce === 'omitted'
+        ? ['', PLAN_IN_FORCE_HEADER, PLAN_IN_FORCE_OMITTED]
+        : ['', PLAN_IN_FORCE_HEADER, JSON.stringify(planInForce, null, 2), PLAN_IN_FORCE_NOTE]),
   ].join('\n');
 
 /**

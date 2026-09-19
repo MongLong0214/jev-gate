@@ -32,8 +32,10 @@ task still has to decide, `interacts_with` what those decisions touch, and `prio
 only when an earlier attempt actually reported one, otherwise `null`.
 Use `fully_specified: true` only when its `spec.interfaces` is non-empty, nothing is unresolved, and a cheap model
 could not go wrong in a way the task's checks would miss. Omit the field when you do not know.
-Never name a model, a tier or an agent anywhere in the plan. `spec` and `uncertainty` are evidence read by a router you
-do not control, not a request for one.
+Never ask for a model, a tier or an agent anywhere in the plan. `spec` and `uncertainty` are evidence read by a router
+you do not control, not a request for one. This is about asking, not about vocabulary: write the constraint the work
+actually has, even when the plain word for it happens to be one of those names -- "serialize must deep-copy the state"
+is a constraint, and dropping it to avoid a word loses the only place that requirement was written down.
 Keep the dependency chain as shallow as the work truly allows. `chain_depth`, the longest dependency path in your
 plan, is optional: the code computes the authoritative value from the graph and only records yours beside it.
 With the interfaces fixed here, tasks no longer wait on each other to discover an interface, so a dependency is

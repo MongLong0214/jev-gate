@@ -76,6 +76,7 @@ import {
 import {
   acceptedReceipt,
   chainDepth,
+  composePlannerPrompt,
   composeTaskPrompt,
   contractHash,
   deliverableOverlap,
@@ -85,9 +86,11 @@ import {
   parsePlannerReply,
   parseTaskMarker,
   parseWorkerReply,
+  planInForceSummary,
   priorAttemptSummary,
   readyTaskIds,
   reportedRecovery,
+  type PlanInForceSummary,
   type PredecessorSummary,
   type PriorAttemptSummary,
 } from './plan.js';
@@ -517,6 +520,21 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
 
   const plannerPatch = async (gen: JobGeneration, sessionId: string, eligibility: Extract<Eligibility, { eligible: true }>): Promise<HookResult> => {
     const composed = eligibility.prompt;
+    // A18: the planner call gets the request the plan is written from, and on a replan the revision it is revising.
+    // Observed 2026-09-19 (`v5-job2-orbit` r1): the coordinator's replan brief was 771 characters of fix instruction,
+    // and the fresh planner read the repository's existing tests as the specification. The drop order is A17's: the
+    // plan in force goes first, the request last, and each leaves a visible marker rather than reading as absent.
+    let carriedRequest: string | 'omitted' | null = gen.request ?? (gen.shape === 'orchestrated' ? 'omitted' : null);
+    let carriedPlan: PlanInForceSummary | 'omitted' | null = gen.plan === null || gen.plan === undefined ? null : planInForceSummary(gen.plan);
+    let plannerPrompt = composePlannerPrompt(composed, carriedRequest, carriedPlan);
+    if (Buffer.byteLength(plannerPrompt, 'utf8') > MAX_COMPOSED_BYTES && carriedPlan !== null) {
+      carriedPlan = 'omitted';
+      plannerPrompt = composePlannerPrompt(composed, carriedRequest, carriedPlan);
+    }
+    if (Buffer.byteLength(plannerPrompt, 'utf8') > MAX_COMPOSED_BYTES && carriedRequest !== null && carriedRequest !== 'omitted') {
+      carriedRequest = 'omitted';
+      plannerPrompt = composePlannerPrompt(composed, carriedRequest, carriedPlan);
+    }
     let tier = config.plannerDefaultTier;
     let code: ErrorCode | null = null;
     if (apiKey) {
@@ -549,7 +567,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       return emitDeny('stale_generation', renderDispatchDeny('stale_generation'), null);
     }
     updateJob(deps.env, sessionId, (prev) => (prev && prev.current.prompt_id === gen.prompt_id ? { ...prev, current: { ...prev.current, planner_tier: tier } } : null));
-    return emitPatch(eligibility.input, { subagent_type: agentForTier('planner', tier), model: config.models[tier] }, code);
+    return emitPatch(eligibility.input, { subagent_type: agentForTier('planner', tier), model: config.models[tier], prompt: plannerPrompt }, code);
   };
 
   /** A4/T4: every reason a planner call may not start now. Run on the pre-lock read and again under the reservation lock. */
@@ -887,7 +905,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
   const handlePlannerResult = async (sessionId: string, gen: JobGeneration, toolUseId: string): Promise<HookResult> => {
     const status = responseStatus(input.tool_response);
     const text = replyText(input.tool_response);
-    const parsed = status === 'completed' ? parsePlannerReply(text, Object.values(config.models), config.maxTasksPerPlan) : null;
+    const parsed = status === 'completed' ? parsePlannerReply(text, config.maxTasksPerPlan) : null;
     const agreement = plannerModelAgreement(gen.planner_tier, observedModel(input.tool_response));
     let context: string | null = null;
     const written = updateJob(deps.env, sessionId, (prev) => {

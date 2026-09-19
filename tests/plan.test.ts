@@ -22,7 +22,10 @@ import {
   parseTaskMarker,
   parseWorkerReply,
   readyTaskIds,
+  redactRoutingTargets,
+  redactTaskRoutingTargets,
   reportedRecovery,
+  ROUTING_TARGET_MARK,
   requiredCheckIds,
 } from '../src/plan.js';
 import type { Plan, PlannedTask, Receipt, TaskSpec, WorkerReply } from '../src/types.js';
@@ -92,7 +95,7 @@ describe('parsePlannerReply', () => {
    */
   it('accepts a plan up to the ceiling and rejects one above it, with a reason that names the number', () => {
     const plan = (n: number, max?: number) =>
-      parsePlannerReply(fence({ status: 'ready', goal: 'g', assumptions: [], constraints: ['c'], tasks: Array.from({ length: n }, (_v, i) => rawTask(`t${i}`)), chain_depth: 1 }), [], max);
+      parsePlannerReply(fence({ status: 'ready', goal: 'g', assumptions: [], constraints: ['c'], tasks: Array.from({ length: n }, (_v, i) => rawTask(`t${i}`)), chain_depth: 1 }), max);
     const atCeiling = plan(DEFAULT_MAX_TASKS_PER_PLAN);
     expect(atCeiling.ok).toBe(true);
     if (atCeiling.ok && atCeiling.value.status === 'ready') expect(atCeiling.value.tasks).toHaveLength(DEFAULT_MAX_TASKS_PER_PLAN);
@@ -172,21 +175,11 @@ describe('parsePlannerReply', () => {
       'spec.interfaces is empty',
     ],
     ['a non-integer chain_depth', fence({ status: 'ready', tasks: [rawTask('t1')], chain_depth: 1.5 }), 'chain_depth must be a non-negative integer'],
-    ['a tier name in the task context', fence({ status: 'ready', tasks: [rawTask('t1', { context: 'this task needs the frontier tier' })] }), 'task t1: context names frontier'],
-    ['a tier name in a task constraint', fence({ status: 'ready', tasks: [rawTask('t1', { constraints: ['run it on the fast tier'] })] }), 'constraints names fast'],
-    ['a tier name in the outcome', fence({ status: 'ready', tasks: [rawTask('t1', { outcome: 'deep reasoning about the parser' })] }), 'outcome names deep'],
-    ['a tier name in a check description', fence({ status: 'ready', tasks: [rawTask('t1', { checks: [{ id: 'c1', description: 'the deep path holds', required: true, command: null }] })] }), 'check c1 description names deep'],
-    ['a tier name in the global constraints', fence({ status: 'ready', constraints: ['prefer the frontier tier'], tasks: [rawTask('t1')] }), 'constraints names frontier'],
     ['prose in a deliverable', fence({ status: 'ready', tasks: [rawTask('t1', { deliverables: ['this task needs the frontier tier'] })] }), 'deliverables must be a repository path'],
     [
       'prose in spec.files',
       fence({ status: 'ready', tasks: [rawTask('t1', { spec: { interfaces: ['f()'], data_shapes: [], invariants: [], files: ['use the deep tier here'] } })] }),
       'spec.files must be a repository path',
-    ],
-    [
-      'a tier name in the evidence',
-      fence({ status: 'ready', tasks: [rawTask('t1', { uncertainty: { unresolved: ['needs the frontier tier'], interacts_with: [], prior_failure: null } })] }),
-      'names frontier',
     ],
   ])('rejects %s', (_name, text, message) => {
     const parsed = parsePlannerReply(text);
@@ -213,23 +206,73 @@ describe('parsePlannerReply', () => {
     if (!dangling.ok) expect(dangling.error).not.toContain(hostile);
   });
 
-  it('rejects routing evidence that names a configured model, and leaves ordinary prose alone (#33)', () => {
-    const models = ['haiku', 'sonnet', 'opus', 'fable'];
-    const evidence = (over: Partial<PlannedTask['uncertainty']>): string =>
+  /**
+   * A18: the same text used to reject the whole plan. Observed 2026-09-19 (`v5-job2-orbit` r1): a four-task plan
+   * covering all seven modules was rejected for the constraint "serialize must deep-copy so later mutation ...", and
+   * the constraint was gone from the revision that replaced it. The plan is now parsed as written; the routing target
+   * is removed where the tier gate reads it, which is `buildWorkerRouteRequest`.
+   */
+  it('parses plan text that names a tier or model, and does not alter it (#33/A18)', () => {
+    const evidence = (over: Partial<NonNullable<PlannedTask['uncertainty']>>): string =>
       fence({ status: 'ready', chain_depth: 1, tasks: [rawTask('t1', { uncertainty: { unresolved: [], interacts_with: [], prior_failure: null, ...over } })] });
-    const asked = parsePlannerReply(evidence({ unresolved: ['run this on opus'] }), models);
-    expect(asked.ok).toBe(false);
-    if (!asked.ok) expect(asked.error).toContain('names opus');
-    const viaFailure = parsePlannerReply(evidence({ prior_failure: 'sonnet lost the invariant' }), models);
-    expect(viaFailure.ok).toBe(false);
-    if (!viaFailure.ok) expect(viaFailure.error).toContain('names sonnet');
-    // Tier names are core, so they are rejected whatever the host configured; model ids come from config (the hook
-    // always passes them), which is why this call still rejects "frontier" with no model ids at all.
-    const noModels = parsePlannerReply(evidence({ unresolved: ['needs the deep tier'] }));
-    expect(noModels.ok).toBe(false);
-    if (!noModels.ok) expect(noModels.error).toContain('names deep');
-    // The match is a whole token, not a substring, so ordinary prose survives.
-    expect(parsePlannerReply(evidence({ unresolved: ['deepen the cache on the fastener table'], interacts_with: ['a steadfast contract'] }), models).ok).toBe(true);
+    for (const text of [
+      evidence({ unresolved: ['run this on opus'] }),
+      evidence({ prior_failure: 'sonnet lost the invariant' }),
+      evidence({ unresolved: ['needs the deep tier'] }),
+    ]) {
+      expect(parsePlannerReply(text).ok).toBe(true);
+    }
+    const kept = parsePlannerReply(fence({ status: 'ready', chain_depth: 1, tasks: [rawTask('t1', { constraints: ['serialize must deep-copy the state'] })] }));
+    expect(kept.ok).toBe(true);
+    if (kept.ok && kept.value.status === 'ready') expect(kept.value.tasks[0]?.constraints).toEqual(['serialize must deep-copy the state']);
+  });
+
+  it('removes a routing target as a whole token and leaves engineering prose intact (#33/A18)', () => {
+    const models = ['haiku', 'sonnet', 'opus', 'fable'];
+    expect(redactRoutingTargets('run this on opus', models)).toBe(`run this on ${ROUTING_TARGET_MARK}`);
+    expect(redactRoutingTargets('needs the deep tier', [])).toBe(`needs the ${ROUTING_TARGET_MARK} tier`);
+    expect(redactRoutingTargets('Sonnet lost the invariant', models)).toBe(`${ROUTING_TARGET_MARK} lost the invariant`);
+    // Tier names are core, so they are removed whatever the host configured; model ids come from config.
+    expect(redactRoutingTargets('run this on opus', [])).toBe('run this on opus');
+    // A18: a hyphen or underscore joins a token. Each of these rejected an entire plan before this change.
+    for (const prose of ['serialize must deep-copy the state', 'fast-path the lookup', 'a standard-issue error', 'deepen the cache on the fastener table', 'a steadfast contract']) {
+      expect(redactRoutingTargets(prose, models)).toBe(prose);
+    }
+    // A bare word still is the word, wherever it sits in a sentence.
+    expect(redactRoutingTargets('a deep clone of the array', [])).toBe(`a ${ROUTING_TARGET_MARK} clone of the array`);
+  });
+
+  it('redacts the plan-authored fields of a task and leaves paths, ids and the contract hash alone (#33/A18)', () => {
+    const raw = {
+      id: 'deep',
+      outcome: 'run it on opus',
+      depends_on: ['fast'],
+      context: 'the deep path holds',
+      constraints: ['serialize must deep-copy the state', 'prefer the frontier tier'],
+      deliverables: ['src/fast-path.ts'],
+      checks: [{ id: 'c1', description: 'the deep path holds', required: true, command: 'npm run test:fast' }],
+      replan_if: ['the standard tier fails'],
+      spec: { interfaces: ['deepCopy(): void'], data_shapes: [], invariants: ['the deep tier is not needed'], files: ['src/deep.ts'] },
+      uncertainty: { unresolved: ['needs the frontier tier'], interacts_with: [], prior_failure: 'sonnet lost the invariant' },
+    };
+    const task: PlannedTask = { ...raw, contract_hash: contractHash(raw) };
+    const red = redactTaskRoutingTargets(task, ['sonnet']);
+    expect(red.outcome).toBe('run it on opus');
+    expect(red.context).toBe(`the ${ROUTING_TARGET_MARK} path holds`);
+    expect(red.constraints).toEqual(['serialize must deep-copy the state', `prefer the ${ROUTING_TARGET_MARK} tier`]);
+    expect(red.replan_if).toEqual([`the ${ROUTING_TARGET_MARK} tier fails`]);
+    expect(red.checks[0]?.description).toBe(`the ${ROUTING_TARGET_MARK} path holds`);
+    expect(red.spec?.invariants).toEqual([`the ${ROUTING_TARGET_MARK} tier is not needed`]);
+    expect(red.uncertainty?.unresolved).toEqual([`needs the ${ROUTING_TARGET_MARK} tier`]);
+    expect(red.uncertainty?.prior_failure).toBe(`${ROUTING_TARGET_MARK} lost the invariant`);
+    // Identity, structure and paths are untouched: the gate matches receipts on these.
+    expect(red.id).toBe('deep');
+    expect(red.depends_on).toEqual(['fast']);
+    expect(red.deliverables).toEqual(['src/fast-path.ts']);
+    expect(red.spec?.files).toEqual(['src/deep.ts']);
+    expect(red.contract_hash).toBe(task.contract_hash);
+    // The original is not mutated: the worker's contract keeps its words.
+    expect(task.context).toBe('the deep path holds');
   });
 
   it('rejects a reply over the byte bound before parsing', () => {

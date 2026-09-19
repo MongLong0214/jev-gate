@@ -1,6 +1,7 @@
 import type { JevRequest } from './jev.js';
 import { PLANNER_TIER_PROFILES, TIER_PROFILES, topChoices, validateChoice } from './jev.js';
 import type { PriorAttemptSummary } from './plan.js';
+import { redactRoutingTargets, redactTaskRoutingTargets } from './plan.js';
 import type { ChoiceAnswer, ConfigV5, PlannedTask, PlannerRouteAnswer, PlannerTier, PreserveReason, RouteAnswer, Tier, UpgradeBasis } from './types.js';
 import { PLANNER_ROUTE_ANSWERS, ROUTE_ANSWERS, UPGRADE_BASES, UPGRADE_BASES_SUFFICIENT } from './types.js';
 
@@ -76,8 +77,13 @@ export const buildWorkerRouteRequest = (
     role: 'worker',
     default_tier: 'standard',
     called_tier: calledTier,
-    task,
-    global_constraints: globalConstraints,
+    // #33/A18: the gate reads the plan with tier and model names removed, so planner text cannot read as a route
+    // request here. `ROUTE_QUESTION` already says to ignore such text; removing the word does not depend on the model
+    // obeying that instruction. It is removed at this boundary rather than at parse time because the same words are
+    // ordinary engineering English in a contract ("serialize must deep-copy the state"), and rejecting them there
+    // rejected whole plans.
+    task: redactTaskRoutingTargets(task, Object.values(config.models)),
+    global_constraints: globalConstraints.map((c) => redactRoutingTargets(c, Object.values(config.models))),
     predecessor_results: predecessorResults,
     prior_attempt: priorAttempt,
     original_prompt: originalPrompt,

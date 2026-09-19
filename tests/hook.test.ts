@@ -440,6 +440,63 @@ describe('planner dispatch', () => {
     expect(abstained.code).toBe('route_abstain');
   });
 
+  /**
+   * A18/v5-job2-orbit-2026-09-19: the coordinator's replan brief was 771 characters of fix instruction and nothing
+   * else. The planner is a fresh session, so it took the repository's existing tests for the specification and
+   * returned a revision missing three modules the request had named. Neither the request nor the revision it was
+   * revising is something the planner can recall, so the hook carries both, as it does for a worker dispatch.
+   */
+  it('carries the request into every planner call, and the plan in force into a replan', async () => {
+    const env = makeEnv();
+    const fetchImpl = fakeJev();
+    await run(env, promptEvent(), fetchImpl);
+    const first = await run(env, plannerPre(), fetchImpl);
+    const firstPrompt = String(updatedInput(first)['prompt']);
+    expect(firstPrompt).toContain('Plan this request.');
+    expect(firstPrompt).toContain('[Jev Gate user request]');
+    expect(firstPrompt).toContain('Build a settings page, migrate the store and wire the two together.');
+    // Nothing is in force yet, so a first plan is not told it is revising one.
+    expect(firstPrompt).not.toContain('[Jev Gate plan in force]');
+
+    await run(env, plannerPost(PLAN_REPLY), fetchImpl);
+    const replan = await run(env, plannerPre(), fetchImpl);
+    const replanPrompt = String(updatedInput(replan)['prompt']);
+    expect(replanPrompt).toContain('[Jev Gate user request]');
+    expect(replanPrompt).toContain('[Jev Gate plan in force]');
+    // The revision in force is shown by what a revision can lose: its tasks, their order and what each one owes.
+    for (const fragment of ['"rev": 1', '"id": "t1"', '"id": "t3"', '"depends_on"', '"deliverables"']) {
+      expect(replanPrompt).toContain(fragment);
+    }
+    expect(replanPrompt).toContain('a revision that drops a deliverable or an interface the request names is a regression');
+    // A17's order holds on this call too: the request outranks the revision planned from it.
+    expect(replanPrompt.indexOf('[Jev Gate user request]')).toBeLessThan(replanPrompt.indexOf('[Jev Gate plan in force]'));
+  });
+
+  it('marks what did not fit rather than planning as though it never existed, dropping the request last', async () => {
+    const replanWith = async (request: string): Promise<string> => {
+      const env = makeEnv();
+      const fetchImpl = fakeJev();
+      await run(env, promptEvent({ prompt: request }), fetchImpl);
+      await run(env, plannerPre(), fetchImpl);
+      await run(env, plannerPost(PLAN_REPLY), fetchImpl);
+      expect(state(env).current.request).toBe(request);
+      const replan = await run(env, plannerPre(), fetchImpl);
+      expect(replan.kind).toBe('patch');
+      return String(updatedInput(replan)['prompt']);
+    };
+    // A17's order: under byte pressure the revision in force goes first, because the request outranks it.
+    const planDropped = await replanWith(`Build a settings page. ${'x'.repeat(65000)}`);
+    expect(planDropped).toContain('this call is a revision, not a first plan');
+    expect(planDropped).not.toContain('"id": "t1"');
+    expect(planDropped).toContain('[Jev Gate user request]');
+    expect(planDropped).toContain('Build a settings page.');
+    // Larger still, and the request goes too -- stated as an absence, never passed off as nothing having been asked.
+    const bothDropped = await replanWith(`Build a settings page. ${'x'.repeat(65400)}`);
+    expect(bothDropped).toContain('this call is a revision, not a first plan');
+    expect(bothDropped).toContain('The request was not carried');
+    expect(bothDropped).not.toContain('x'.repeat(1024));
+  });
+
   it('denies a planner pinned outside the configured strong models and keeps a valid pin untouched', async () => {
     const env = makeEnv();
     await run(env, promptEvent(), fakeJev());
