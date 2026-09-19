@@ -27,3 +27,18 @@ Fixed before the run:
    the refusal names, not another run of the same shape.
 6. Worker count is recorded per cell as a covariate, because its spread has been larger than the effect being
    measured. It is not controlled here and no claim is made that it is.
+
+## Amendment, written before the shallow run (2026-09-19)
+
+The deep half is done: both cells admitted and passed. The other half of the condition for flipping the default is
+that the gate **refuses** a session that is not deep enough, and costs nothing when it does.
+
+`wide-validators-primed-13` primes with thirteen notes instead of thirty, so it is expected to arrive under the
+300,000 floor. Same arm, same config, two repetitions. Fixed now:
+
+1. The outcome is again binary: the job prompt's `admission_result` must record `depth_below_floor`. `depth_unknown`
+   does not count as a pass here — it would mean the transcript was unreadable, not that the floor did its work.
+2. The job turn cost must be within 10 % of `sonnet_native` on the same case, because a refused turn is a native turn.
+   No `sonnet_native` cell exists for this case, so one repetition of it runs alongside.
+3. The achieved depth is recorded whatever it is. If thirteen notes land above 300,000 the case does not test the
+   floor and the run is reported as not having tested it, rather than reinterpreted.

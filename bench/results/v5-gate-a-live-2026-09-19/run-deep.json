@@ -1,0 +1,138 @@
+{
+  "arm_under_test": "jev_hierarchy with admissionQuestionShape=atomic (no forcing)",
+  "baseline_run": "run-primed-30c (same case, same priming prompt, same build, same day)",
+  "means": {
+    "sonnet_native": {
+      "job": 2.6993,
+      "session": 5.4165,
+      "wall": 278
+    },
+    "jev_forced_orchestration": {
+      "job": 1.2552,
+      "session": 4.1265,
+      "wall": 411
+    },
+    "jev_hierarchy": {
+      "job": 0.9658,
+      "session": 3.6926,
+      "wall": 288.5
+    }
+  },
+  "gate_decisions": {
+    "r1": [
+      {
+        "context_tokens": null,
+        "attempted": false,
+        "shape": "direct",
+        "decided": false,
+        "reason": "depth_unknown"
+      },
+      {
+        "context_tokens": 376066,
+        "attempted": true,
+        "shape": "direct",
+        "decided": false,
+        "reason": "admission_answer_only"
+      },
+      {
+        "context_tokens": 376413,
+        "attempted": true,
+        "shape": "orchestrated",
+        "decided": true,
+        "reason": null
+      }
+    ],
+    "r2": [
+      {
+        "context_tokens": null,
+        "attempted": false,
+        "shape": "direct",
+        "decided": false,
+        "reason": "depth_unknown"
+      },
+      {
+        "context_tokens": 375728,
+        "attempted": true,
+        "shape": "direct",
+        "decided": false,
+        "reason": "admission_too_small"
+      },
+      {
+        "context_tokens": 376075,
+        "attempted": true,
+        "shape": "orchestrated",
+        "decided": true,
+        "reason": null
+      }
+    ]
+  },
+  "cells": [
+    {
+      "arm": "jev_hierarchy",
+      "rep": 1,
+      "context_at_job_prompt": 376413,
+      "job_cost_usd": 0.9475,
+      "session_cost_usd": 3.6776,
+      "agent_calls": 3,
+      "quality": "pass",
+      "wall_s": 274
+    },
+    {
+      "arm": "jev_hierarchy",
+      "rep": 2,
+      "context_at_job_prompt": 376075,
+      "job_cost_usd": 0.9842,
+      "session_cost_usd": 3.7077,
+      "agent_calls": 3,
+      "quality": "pass",
+      "wall_s": 303
+    }
+  ],
+  "baseline_cells": [
+    {
+      "arm": "jev_forced_orchestration",
+      "rep": 1,
+      "context_at_job_prompt": 390141,
+      "job_cost_usd": 1.2338,
+      "session_cost_usd": 4.0872,
+      "agent_calls": 4,
+      "quality": "pass",
+      "wall_s": 495
+    },
+    {
+      "arm": "jev_forced_orchestration",
+      "rep": 2,
+      "context_at_job_prompt": 392089,
+      "job_cost_usd": 1.2766,
+      "session_cost_usd": 4.1657,
+      "agent_calls": 4,
+      "quality": "pass",
+      "wall_s": 327
+    },
+    {
+      "arm": "sonnet_native",
+      "rep": 1,
+      "context_at_job_prompt": 375219,
+      "job_cost_usd": 2.7401,
+      "session_cost_usd": 5.457,
+      "agent_calls": 0,
+      "quality": "pass",
+      "wall_s": 284
+    },
+    {
+      "arm": "sonnet_native",
+      "rep": 2,
+      "context_at_job_prompt": 375263,
+      "job_cost_usd": 2.6585,
+      "session_cost_usd": 5.3761,
+      "agent_calls": 0,
+      "quality": "pass",
+      "wall_s": 272
+    }
+  ],
+  "vs_native": {
+    "job_pct": -64.2,
+    "session_pct": -31.8,
+    "wall_pct": 3.8
+  }
+}
