@@ -1,0 +1,97 @@
+{
+  "question": "how much does plan size vary for the same job, changing nothing else?",
+  "task_counts": [
+    4,
+    2,
+    2,
+    3,
+    2,
+    3
+  ],
+  "ratio": 2.0,
+  "verdict": "max/min = 2.0, which meets the pre-registered threshold: plan size is a genuine free variable",
+  "by_task_count": {
+    "2": {
+      "cells": [
+        0.6987,
+        0.6844,
+        0.7572
+      ],
+      "mean": 0.7134,
+      "spread_pct": 10.6
+    },
+    "3": {
+      "cells": [
+        0.7838,
+        0.7346
+      ],
+      "mean": 0.7592,
+      "spread_pct": 6.7
+    },
+    "4": {
+      "cells": [
+        1.0035
+      ],
+      "mean": 1.0035,
+      "spread_pct": 0.0
+    }
+  },
+  "overall_spread_pct": 46.6,
+  "ceiling_fired": false,
+  "cells": [
+    {
+      "rep": 1,
+      "tasks": 4,
+      "chain_depth": 2,
+      "agent_calls": 5,
+      "cost_usd": 1.0035,
+      "quality": "pass",
+      "wall_s": 313
+    },
+    {
+      "rep": 2,
+      "tasks": 2,
+      "chain_depth": 1,
+      "agent_calls": 3,
+      "cost_usd": 0.6987,
+      "quality": "pass",
+      "wall_s": 262
+    },
+    {
+      "rep": 3,
+      "tasks": 2,
+      "chain_depth": 1,
+      "agent_calls": 3,
+      "cost_usd": 0.6844,
+      "quality": "pass",
+      "wall_s": 226
+    },
+    {
+      "rep": 4,
+      "tasks": 3,
+      "chain_depth": 2,
+      "agent_calls": 4,
+      "cost_usd": 0.7838,
+      "quality": "pass",
+      "wall_s": 259
+    },
+    {
+      "rep": 5,
+      "tasks": 2,
+      "chain_depth": 1,
+      "agent_calls": 3,
+      "cost_usd": 0.7572,
+      "quality": "pass",
+      "wall_s": 289
+    },
+    {
+      "rep": 6,
+      "tasks": 3,
+      "chain_depth": 1,
+      "agent_calls": 4,
+      "cost_usd": 0.7346,
+      "quality": "pass",
+      "wall_s": 233
+    }
+  ]
+}
