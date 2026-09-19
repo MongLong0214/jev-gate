@@ -25,7 +25,7 @@ const traceDir = (name: string, records: Array<Record<string, unknown>>): string
   return dir;
 };
 const cellFor = (arm: Arm): CellRecord =>
-  emptyCell({ id: 'mini', group: 'g', fixtureDir: '', request: 'r', setup: [], evaluationSetup: [], checkFile: '', checkFileRel: '' }, armSpecs('fable')[arm], 1);
+  emptyCell({ id: 'mini', group: 'g', fixtureDir: '', request: 'r', prime: [], setup: [], evaluationSetup: [], checkFile: '', checkFileRel: '' }, armSpecs('fable')[arm], 1);
 /** A started session whose host init and final usage were both observed, so only the gate records are in question. */
 const ranCleanly = (cell: CellRecord): CellRecord => {
   cell.started = true;
@@ -220,3 +220,68 @@ describe('R10: several admissions and late traces join to the right request', ()
   });
 });
 
+
+describe('primed cases: the depth the job prompt actually arrived at', () => {
+  const usageMsg = (ctx: number, parent: string | null = null): Record<string, unknown> => ({
+    type: 'assistant',
+    parent_tool_use_id: parent,
+    message: { model: 'claude-sonnet-5', role: 'assistant', content: [], usage: { cache_read_input_tokens: ctx - 1000, cache_creation_input_tokens: 600, input_tokens: 400 } },
+  });
+  const prompt = (text: string): Record<string, unknown> => ({ type: 'user', message: { role: 'user', content: text } });
+
+  /** A cell whose case declared one priming prompt: the job prompt is then the second echo. */
+  const primedCell = (arm: Arm, primes = 1): CellRecord => {
+    const cell = cellFor(arm);
+    cell.prime_sha256 = Array.from({ length: primes }, (_, i) => `sha-${i}`);
+    return cell;
+  };
+
+  it('records the context standing when the job prompt was submitted, not the deepest the session ever got', () => {
+    const cell = primedCell('jev_hierarchy');
+    observeEvent(cell, prompt('read the reference files'));
+    observeEvent(cell, usageMsg(60_000));
+    observeEvent(cell, usageMsg(406_000));
+    observeEvent(cell, prompt('now fix the twelve validators'));
+    observeEvent(cell, usageMsg(520_000));
+    expect(cell.context_at_job_prompt).toBe(406_000);
+  });
+
+  it('ignores a subagent’s usage and a tool result, which are not this session’s context or its prompts', () => {
+    const cell = primedCell('jev_hierarchy');
+    observeEvent(cell, prompt('prime'));
+    observeEvent(cell, usageMsg(300_000));
+    observeEvent(cell, usageMsg(900_000, 'toolu_worker'));
+    observeEvent(cell, { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_worker' }] } });
+    observeEvent(cell, prompt('job'));
+    expect(cell.context_at_job_prompt).toBe(300_000);
+  });
+
+  it('counts the job prompt as the one after every priming prompt, however many there are', () => {
+    const cell = primedCell('jev_hierarchy', 2);
+    observeEvent(cell, prompt('read the reference files'));
+    observeEvent(cell, usageMsg(390_000));
+    observeEvent(cell, prompt('confirm you are ready'));
+    observeEvent(cell, usageMsg(406_000));
+    observeEvent(cell, prompt('now fix the twelve validators'));
+    observeEvent(cell, usageMsg(520_000));
+    // The confirming turn exists to give the host time to flush the priming turn's usage line to the transcript.
+    expect(cell.context_at_job_prompt).toBe(406_000);
+  });
+
+  it('leaves the depth null for an unprimed run, where the only prompt is the job itself', () => {
+    const cell = cellFor('sonnet_native');
+    observeEvent(cell, prompt('fix the twelve validators'));
+    observeEvent(cell, usageMsg(55_000));
+    expect(cell.context_at_job_prompt).toBeNull();
+  });
+
+  it('keeps every turn’s cumulative total, because each result reports the session total and not that turn’s cost', () => {
+    const cell = cellFor('sonnet_native');
+    const result = (total: number): Record<string, unknown> => ({ type: 'result', subtype: 'success', is_error: false, duration_ms: 1, num_turns: 1, total_cost_usd: total, modelUsage: {}, permission_denials: [] });
+    observeEvent(cell, result(1.25));
+    observeEvent(cell, result(4.5));
+    expect(cell.turn_totals_usd).toEqual([1.25, 4.5]);
+    // The last one is the session total, which is what cell.result carries; the job's own cost is the difference.
+    expect(cell.result?.total_cost_usd).toBe(4.5);
+  });
+});

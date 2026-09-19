@@ -56,6 +56,20 @@ export interface CodingCase {
   group: string;
   fixtureDir: string;
   request: string;
+  /**
+   * Prompts sent in the same session before `request`. Their purpose is depth: a gate that reads how much context the
+   * session is carrying (`src/depth.ts`) sees a fresh session when the priming happens inside the job turn, which is
+   * what every earlier loaded case did. A primed case sends its prompts over stream-json input and keeps session
+   * persistence on, because without the transcript on disk the depth is unreadable -- measured: every prompt reads
+   * depth_unknown with --no-session-persistence, and a real depth without it.
+   *
+   * More than one prompt is allowed for a measured reason: the host flushes a turn's usage line to the transcript
+   * after the turn ends, and a job prompt submitted immediately behind the priming turn can read depth_unknown from a
+   * file that does not have the line yet (observed 2026-09-19: the line carried timestamp 01:55:13.762 and the hook
+   * two seconds later still saw none). A short confirming turn between the two costs almost nothing and gives the
+   * write time to land.
+   */
+  prime: string[];
   setup: string[][];
   evaluationSetup: string[][];
   checkFile: string;
@@ -170,6 +184,16 @@ export interface CellRecord {
   /** Per-cell job state directory, so job state never touches the real HOME or another cell. */
   state_dir: string | null;
   request_sha256: string;
+  /** Set only for a primed case: the priming prompts sent before the job prompt in the same session. */
+  prime_sha256: string[];
+  /**
+   * Primed cases only. `context_at_job_prompt` is the main session's context when the job prompt was submitted --
+   * the number the depth gate reads, observed from the stream rather than claimed. `turn_totals_usd` is each turn's
+   * cumulative `total_cost_usd`, so the priming turn can be subtracted from the job: the host reports the session
+   * total on every result event, not that turn's own cost.
+   */
+  context_at_job_prompt: number | null;
+  turn_totals_usd: number[];
   fixture_sha256: string | null;
   dispatch: { intent_at: string | null; spawn_observed_at: string | null; pid: number | null };
   started: boolean;
@@ -326,7 +350,10 @@ export const loadManifest = (path: string): { cases: CodingCase[]; manifestDir: 
     if (!isInside(base, fixtureDir) || !isInside(base, checkFile)) throw new Error(`case ${id}: fixtureDir and checkFile must live under the manifest directory`);
     if (!existsSync(fixtureDir) || !statSync(fixtureDir).isDirectory()) throw new Error(`case ${id}: fixtureDir missing`);
     if (!existsSync(checkFile)) throw new Error(`case ${id}: checkFile missing`);
-    return { id, group: s('group'), fixtureDir, request: s('request'), setup: cmds('setup'), evaluationSetup: cmds('evaluationSetup'), checkFile, checkFileRel: relative(base, checkFile) };
+    const primeRaw = raw['prime'] ?? [];
+    if (!Array.isArray(primeRaw) || primeRaw.some((x) => typeof x !== 'string' || x.length === 0)) throw new Error(`case ${id}: prime must be an array of non-empty strings`);
+    const prime = primeRaw as string[];
+    return { id, group: s('group'), fixtureDir, request: s('request'), prime, setup: cmds('setup'), evaluationSetup: cmds('evaluationSetup'), checkFile, checkFileRel: relative(base, checkFile) };
   });
   return { cases, manifestDir: base, version: parsed['version'] as number };
 };
@@ -365,7 +392,7 @@ export interface Plan {
   execute: boolean;
   manifest: string;
   manifest_version: number;
-  cases: Array<{ id: string; group: string; fixtureDir: string; checkFile: string; setup: string[][]; evaluationSetup: string[][]; request: string; request_sha256: string }>;
+  cases: Array<{ id: string; group: string; fixtureDir: string; checkFile: string; setup: string[][]; evaluationSetup: string[][]; request: string; request_sha256: string; prime: string[]; prime_sha256: string[] }>;
   arms: ArmSpec[];
   repetitions: number;
   rows: PlanRow[];
@@ -399,7 +426,7 @@ export const buildPlan = (o: Options, cases: CodingCase[], manifestVersion: numb
     execute: o.execute,
     manifest: resolve(o.cases),
     manifest_version: manifestVersion,
-    cases: cases.map((c) => ({ id: c.id, group: c.group, fixtureDir: c.fixtureDir, checkFile: c.checkFile, setup: c.setup, evaluationSetup: c.evaluationSetup, request: c.request, request_sha256: sha256(c.request) })),
+    cases: cases.map((c) => ({ id: c.id, group: c.group, fixtureDir: c.fixtureDir, checkFile: c.checkFile, setup: c.setup, evaluationSetup: c.evaluationSetup, request: c.request, request_sha256: sha256(c.request), prime: c.prime, prime_sha256: c.prime.map((t) => sha256(t)) })),
     arms: o.arms.map((a) => specs[a]),
     repetitions: o.repetitions,
     rows,
@@ -506,6 +533,9 @@ export const emptyCell = (cs: CodingCase, spec: ArmSpec, repetition: number): Ce
   diagnostic: spec.diagnostic,
   state_dir: null,
   request_sha256: sha256(cs.request),
+  prime_sha256: cs.prime.map((t) => sha256(t)),
+  context_at_job_prompt: null,
+  turn_totals_usd: [],
   fixture_sha256: null,
   dispatch: { intent_at: null, spawn_observed_at: null, pid: null },
   started: false,
@@ -561,6 +591,27 @@ const emptyAgentCall = (toolUseId: string): AgentCall => ({
   plan: null,
 });
 
+/**
+ * The main session's context at the moment an event was produced, by the same definition `src/depth.ts` reads from the
+ * transcript: cache reads + cache writes + fresh input. Only top-level turns count; a subagent's usage describes its
+ * own context, not this session's.
+ */
+const contextOf = (message: Record<string, unknown>): number | null => {
+  const usage = message['usage'];
+  if (!isRecord(usage)) return null;
+  let total = 0;
+  let seen = false;
+  for (const k of ['cache_read_input_tokens', 'cache_creation_input_tokens', 'input_tokens'] as const) {
+    const v = usage[k];
+    if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) continue;
+    total += v;
+    seen = true;
+  }
+  return seen ? total : null;
+};
+const lastMainContext = new WeakMap<CellRecord, number>();
+const promptsSeen = new WeakMap<CellRecord, number>();
+
 /** Folds one stream-json event into the record. Unknown shapes are ignored, never guessed. */
 export const observeEvent = (cell: CellRecord, ev: unknown): void => {
   if (!isRecord(ev)) return;
@@ -589,6 +640,8 @@ export const observeEvent = (cell: CellRecord, ev: unknown): void => {
     const model = str(message['model']);
     const parent = str(ev['parent_tool_use_id']);
     if (parent === null) {
+      const ctx = contextOf(message);
+      if (ctx !== null) lastMainContext.set(cell, ctx);
       if (model && !cell.models_seen_main.includes(model)) cell.models_seen_main.push(model);
       for (const block of Array.isArray(message['content']) ? message['content'] : []) {
         if (!isRecord(block) || block['type'] !== 'tool_use' || block['name'] !== 'Agent') continue;
@@ -611,6 +664,17 @@ export const observeEvent = (cell: CellRecord, ev: unknown): void => {
   }
   if (type === 'user') {
     const message = ev['message'];
+    /**
+     * With --replay-user-messages the host echoes each prompt read from stdin as a user event whose content is a
+     * plain string; a tool result is an array of blocks. The second such echo is the job prompt of a primed case, and
+     * the context standing at the echo that follows the priming prompts is what the depth gate saw at the job prompt.
+     */
+    if (isRecord(message) && typeof message['content'] === 'string') {
+      const n = (promptsSeen.get(cell) ?? 0) + 1;
+      promptsSeen.set(cell, n);
+      if (n === cell.prime_sha256.length + 1) cell.context_at_job_prompt = lastMainContext.get(cell) ?? null;
+      return;
+    }
     for (const block of isRecord(message) && Array.isArray(message['content']) ? message['content'] : []) {
       if (!isRecord(block) || block['type'] !== 'tool_result') continue;
       const call = cell.agent_calls.find((c) => c.tool_use_id === block['tool_use_id']);
@@ -619,6 +683,9 @@ export const observeEvent = (cell: CellRecord, ev: unknown): void => {
     return;
   }
   if (type === 'result') {
+    const turnTotal = num(ev['total_cost_usd']);
+    // Every turn reports the session total so far, so the list is cumulative and the job's own cost is a difference.
+    if (turnTotal !== null) cell.turn_totals_usd.push(turnTotal);
     const inferenceObserved = cell.models_seen_main.length > 0 || cell.agent_calls.length > 0;
     const usage = parseModelUsage(ev, inferenceObserved);
     cell.result = {
@@ -1018,7 +1085,17 @@ const runClaudeCell = (cs: CodingCase, spec: ArmSpec, o: Options, pluginDir: str
       env['JEV_GATE_MODE'] = 'off';
       envAdded.push('JEV_GATE_MODE');
     }
-    const argv = [o.claude, '-p', '--model', spec.rootModel, '--input-format', 'text', '--output-format', 'stream-json', '--verbose', '--max-turns', String(o.maxTurns), '--permission-mode', o.permissionMode, '--allowedTools', o.allowedTools, '--setting-sources', o.settingSources, '--no-session-persistence'];
+    /**
+     * A primed case needs two things an unprimed one does not: stream-json input, to send the priming prompt and the
+     * job prompt as two turns of one session, and the session transcript on disk, because that file is where the depth
+     * gate reads how deep the session already is. Measured on 2026-09-19: with --no-session-persistence both prompts
+     * read depth_unknown and 0 bytes; without it the second prompt reads a real depth. Every arm of a given case gets
+     * the same profile, so the comparison inside a case never mixes the two.
+     */
+    const primed = cs.prime.length > 0;
+    const argv = [o.claude, '-p', '--model', spec.rootModel, '--input-format', primed ? 'stream-json' : 'text', '--output-format', 'stream-json', '--verbose', '--max-turns', String(o.maxTurns), '--permission-mode', o.permissionMode, '--allowedTools', o.allowedTools, '--setting-sources', o.settingSources];
+    if (primed) argv.push('--replay-user-messages');
+    else argv.push('--no-session-persistence');
     if (spec.plugin) argv.push('--plugin-dir', pluginDir);
     cell.spawn = { argv, cwd: work, env_added: envAdded, env_stripped: strippedEnv };
     cell.dispatch.intent_at = new Date().toISOString();
@@ -1036,7 +1113,8 @@ const runClaudeCell = (cs: CodingCase, spec: ArmSpec, o: Options, pluginDir: str
       writeJsonAtomic(join(cellDir, 'cell.json'), cell);
     });
     child.stdin.on('error', () => undefined);
-    child.stdin.end(cs.request);
+    const userMessage = (text: string): string => JSON.stringify({ type: 'user', message: { role: 'user', content: text } }) + '\n';
+    child.stdin.end(primed ? cs.prime.map(userMessage).join('') + userMessage(cs.request) : cs.request);
     const rl = createInterface({ input: child.stdout });
     rl.on('line', (line) => {
       streamOut.write(line + '\n');
