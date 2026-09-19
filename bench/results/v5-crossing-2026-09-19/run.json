@@ -1,0 +1,163 @@
+{
+  "question": "where does delegation start paying?",
+  "points": {
+    "~180K": {
+      "native": [
+        1.454,
+        1.4336
+      ],
+      "delegated": [
+        1.1385,
+        1.4449
+      ],
+      "delta_pct": -10.5,
+      "verdict": "indistinguishable: under the 15% this bench can claim"
+    },
+    "~281K": {
+      "native": [
+        2.0558,
+        2.6121
+      ],
+      "delegated": [
+        1.3293
+      ],
+      "delta_pct": -43.0,
+      "verdict": "clearly cheaper, but one valid delegated cell"
+    },
+    "~376K": {
+      "native": [
+        2.7401,
+        2.6585,
+        3.3389,
+        3.6171
+      ],
+      "delegated_by_plan_size": {
+        "2": [
+          0.9475,
+          0.9842
+        ],
+        "3": [
+          1.2338,
+          1.2766
+        ],
+        "12": [
+          3.0022
+        ]
+      },
+      "delta_pct": "-59 to -69 (plan size 2-3)",
+      "verdict": "settled"
+    }
+  },
+  "invalid_cells": [
+    {
+      "case": "21-note",
+      "arm": "jev_forced_orchestration",
+      "rep": 1,
+      "context_at_job_prompt": 33216,
+      "job_cost_usd": 0.745,
+      "tasks": null,
+      "quality": "fail",
+      "valid": false,
+      "wall_s": 284
+    }
+  ],
+  "floor_decision": "delegationDepthFloor stays at 300,000",
+  "floor_reasoning": "the crossing lies between 180K and 281K, so 300,000 is inside the region where the gain is certain. Lowering it would admit 7 of 63 real prompts (11%) whose measured effect is -10.5% and indistinguishable from noise. The conservative choice costs 11% of prompts and buys certainty on the rest.",
+  "real_prompt_distribution": {
+    "n": 63,
+    "p10": 296514,
+    "p50": 657393,
+    "p90": 924584,
+    "below_300k": 8
+  },
+  "cells": [
+    {
+      "case": "13-note",
+      "arm": "jev_forced_orchestration",
+      "rep": 1,
+      "context_at_job_prompt": 188478,
+      "job_cost_usd": 1.1385,
+      "tasks": 4,
+      "quality": "pass",
+      "valid": true,
+      "wall_s": 342
+    },
+    {
+      "case": "13-note",
+      "arm": "jev_forced_orchestration",
+      "rep": 2,
+      "context_at_job_prompt": 188596,
+      "job_cost_usd": 1.4449,
+      "tasks": 3,
+      "quality": "pass",
+      "valid": true,
+      "wall_s": 459
+    },
+    {
+      "case": "13-note",
+      "arm": "sonnet_native",
+      "rep": 1,
+      "context_at_job_prompt": 179578,
+      "job_cost_usd": 1.454,
+      "tasks": null,
+      "quality": "pass",
+      "valid": true,
+      "wall_s": 199
+    },
+    {
+      "case": "13-note",
+      "arm": "sonnet_native",
+      "rep": 2,
+      "context_at_job_prompt": 179656,
+      "job_cost_usd": 1.4336,
+      "tasks": null,
+      "quality": "pass",
+      "valid": true,
+      "wall_s": 212
+    },
+    {
+      "case": "21-note",
+      "arm": "jev_forced_orchestration",
+      "rep": 1,
+      "context_at_job_prompt": 33216,
+      "job_cost_usd": 0.745,
+      "tasks": null,
+      "quality": "fail",
+      "valid": false,
+      "wall_s": 284
+    },
+    {
+      "case": "21-note",
+      "arm": "jev_forced_orchestration",
+      "rep": 2,
+      "context_at_job_prompt": 281340,
+      "job_cost_usd": 1.3293,
+      "tasks": 2,
+      "quality": "pass",
+      "valid": true,
+      "wall_s": 261
+    },
+    {
+      "case": "21-note",
+      "arm": "sonnet_native",
+      "rep": 1,
+      "context_at_job_prompt": 271672,
+      "job_cost_usd": 2.0558,
+      "tasks": null,
+      "quality": "pass",
+      "valid": true,
+      "wall_s": 302
+    },
+    {
+      "case": "21-note",
+      "arm": "sonnet_native",
+      "rep": 2,
+      "context_at_job_prompt": 271696,
+      "job_cost_usd": 2.6121,
+      "tasks": null,
+      "quality": "pass",
+      "valid": true,
+      "wall_s": 285
+    }
+  ]
+}
