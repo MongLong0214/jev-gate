@@ -71,6 +71,22 @@ that spent a whole job turn repairing a plan and dispatched no worker at all. Wh
 default is written up as a recommendation for the owner in `DECISION-admitted-shape-2026-09-19.md`; **the default is
 unchanged** (`admittedShape: hierarchy`).
 
+**2026-09-19, that evening: the saving is not confined to the depths the product will act at.** A three-rung depth
+ladder — one fixture, one byte-identical request, three priming lengths — was pre-registered and run
+(`bench/results/v5-depth-ladder-2026-09-19/`). At **193K context, below the shipped `delegationDepthFloor` of
+300,000**, `jev_single` came in **41.8 % cheaper** on the job turn than `sonnet_native`, with the native arm's own
+two cells 0.6 % apart. Smaller than the 71.0 % at ~390K and clearly not gone. The floor's 300,000 was derived from
+**hierarchy** numbers, where this same fixture measured −10.5 % at ~180K, so the floor does not describe the shape
+now proposed as the default. **The floor is unchanged at 300,000** — one rung is not what a floor moves on, and it
+is a decision about which errors to prefer against the real-prompt depth distribution.
+
+That run is **incomplete and says so**: the account hit its session limit partway through, which killed the 30-note
+rung entirely and one cell of the 21-note rung, so only one rung carries a quotable number. It also found a defect,
+now fixed in `f2b3256`: on the contractless `single` path the worker names its own checks, and a name with a space
+in it was discarding the entire reply — 86.6 seconds and 43 tool calls thrown away and re-dispatched. The same cell
+showed the `single` path counting dispatch attempts without ever reading the bound it counted toward; it now reads
+the per-job task bound that already existed.
+
 Read the 2026-09-19 section of "What the measurements say" before trusting any older number in this file.
 
 ## What V5 does

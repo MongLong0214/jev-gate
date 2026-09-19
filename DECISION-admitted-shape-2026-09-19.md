@@ -92,6 +92,29 @@ Two things must go with it, or the recommendation is worse than doing nothing:
 - Evidence that the weaker acceptance lets a wrong result through where the deterministic one would have caught it —
   which is the exact converse of the wide r1 failure, and equally worth looking for.
 
+## Added after this file was written: the depth ladder, and a second defect of the same class
+
+`bench/results/v5-depth-ladder-2026-09-19/` (pre-registered, run the same evening) adds two facts that belong to
+this decision, one on each side.
+
+**For the recommendation:** the `single` shape is **41.8 % cheaper than native at 193K context**, below the floor
+the product will act at, on a rung where the native arm's own cells sit 0.6 % apart. The saving is not confined to
+~390K sessions. It also makes explicit that `delegationDepthFloor: 300000` was derived from **hierarchy**
+measurements and has never described this shape — a flip does not change the floor, but it does mean the floor is
+now a number set for the path that would no longer be the default.
+
+**Against it, or at least as a condition on it:** the same run found the second defect of the same class on this
+path, after the missing receipt in `ed2a419`. A worker's entire reply was discarded because a check id it named
+itself contained a space, throwing away 86.6 seconds and 43 tool calls, and the path was counting dispatch
+attempts without reading the bound it counted toward. Both are fixed in `f2b3256` with tests. The pattern is what
+matters for this decision: **the contractless path keeps inheriting machinery that assumes a contract**, and each
+instance was found by running it rather than by review. The shape proposed as the default has less running time
+behind it than the one it would replace.
+
+That does not reverse the recommendation — the quality record and the failure-surface argument are unchanged, and
+both defects were in the bookkeeping around the work rather than in the work. It does say the flip should carry the
+expectation that a third one exists.
+
 ## Evidence
 
 - `bench/results/v5-single-vs-native-2026-09-19/` — this run: 8 cells, 8 passes, both jobs.
@@ -100,3 +123,5 @@ Two things must go with it, or the recommendation is worse than doing nothing:
 - `bench/results/v5-job2-orbit-2026-09-19/` — orbit r1: five planner calls, zero workers, nothing written.
 - `bench/results/v5-replan-bound-2026-09-19/DIAGNOSIS.md` — duplication scales with coupling, which is the argument
   for keeping `hierarchy` available.
+- `bench/results/v5-depth-ladder-2026-09-19/` — the depth ladder: 41.8 % at 193K, the session limit that cut it
+  short, and the check-id defect it found.
