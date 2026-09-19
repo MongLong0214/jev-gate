@@ -167,6 +167,8 @@ Optional config at `~/.config/jev-gate/config.json` (or `JEV_GATE_CONFIG`), `JEV
 { "version": 5, "mode": "off", "jevModel": "jev-1.13.0", "requestDeadlineMs": 3000,
   "admissionConfidenceFloor": 0.8, "routeConfidenceFloor": 0.8, "resultConfidenceFloor": 0.8,
   "plannerDefaultTier": "deep", "maxParallelWorkers": 1, "guardAllowTools": [],
+  "delegationDepthFloor": 300000, "maxTasksPerPlan": 10,
+  "admissionQuestionShape": "composite", "routeQuestionShape": "composite",
   "models": { "fast": "haiku", "standard": "sonnet", "deep": "opus", "frontier": "fable" } }
 ```
 
@@ -175,6 +177,24 @@ TypeSafe, so an old `auto` setting is not carried over silently. Model mappings 
 no account access. The three floors are uncalibrated policy values; `resultConfidenceFloor` is now a deprecated no-op
 kept only for config compatibility, since the normal path no longer makes the Gate C call it used to gate.
 `guardAllowTools` adds read-only tools your project needs during orchestration, for example an MCP reader.
+
+The last four keys are optional and default to the values shown, so an existing V5 file keeps its behaviour unedited.
+
+`delegationDepthFloor` is how much context your session must already be carrying before Gate A is asked anything at
+all. Below it the turn is direct and no request is sent. It exists because depth, not the request, is what decides
+whether delegating is cheaper: the same job measured +182 % on a fresh session and -57 % on a loaded one. The number is
+read from the session transcript the host passes to the hook, and a transcript that cannot be read counts as below the
+floor. `0` turns the floor off. The 300,000 default is derived from two end-to-end points, not measured at the
+crossing.
+
+`maxTasksPerPlan` rejects an accepted plan above that many tasks. It is a backstop against a runaway split rather than
+a budget: every worker pays to be started, a 13-task plan measured +92.5 %, and plans that worked ran 2 to 7.
+
+`admissionQuestionShape` and `routeQuestionShape` choose how each gate asks. `composite` is the shipped single choice
+question. `atomic` fans the same judgement out into read-off questions and composes them in this plugin's code, which
+is how the vendor documents the model being used; neither atomic path consults its confidence floor, because the
+composition is done here rather than by the model. Both default to `composite` until an end-to-end run justifies the
+flip.
 
 Job state lives in `$XDG_STATE_HOME/jev-gate/jobs/` (`~/.local/state/jev-gate/jobs/` by default), one file per session,
 containing your plan and task text. Delete the directory to remove it; a superseded job is kept as history inside its own
