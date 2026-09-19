@@ -20,9 +20,24 @@ Measured end to end, same finished work, all checks passing:
 | wall clock, admitted path | **+3.6 %** — inside the baseline's own spread |
 | below the floor | refused with **zero requests and zero workers** |
 
-**What is not established.** Every figure above is `wide-validators`. **A second job, `orbit-core`, was run on
-2026-09-19 and did not reproduce the saving — it could not be measured there at all, because the orchestrated arm
-finished the job in only one of its two cells** (`bench/results/v5-job2-orbit-2026-09-19/`). Plan size varies freely
+**The saving is conditional on the shape of the job, and that is a property, not a defect.** `wide-validators` is
+twelve disjoint modules taking the same edit: every plan of it is `chain_depth 1`, nothing is shared, and delegation
+buys twelve parallel units for nothing. `orbit-core` is one artifact cut five ways over a shared specification:
+`chain_depth 3`, two of five tasks strictly serial, and in the one clean cell — nothing broken, all 16 checks passing
+— the orchestrated arm made **49 file reads against native's 6** and ran the test suite **15 times against native's
+1**. Duplication scales with coupling; the saving scales with independence. **No percentage is quoted for that job:
+its pre-registration forbids a cost comparison from that run, and the counts above are mechanism, not cost.** What
+those counts cost is the thing a new pre-registered run has to measure. Evidence and its limits (n = 2 job shapes,
+single cells):
+`bench/results/v5-replan-bound-2026-09-19/DIAGNOSIS.md`. **Gate A cannot see this** — it reads the prompt and decides
+compound vs direct, and both jobs are compound. The discriminator (`chain_depth`, task file overlap) exists only
+after the planner replies — and the planner is about a fifth of the orchestrated arm's own spend ($2.4654 of
+$19.8628 across the three `v5-replan-bound` cells, a within-arm split). Buying the plan, measuring its shape and
+declining to execute it is an unmeasured design option, not a result.
+
+**What is not established.** Every figure in the table above is `wide-validators`. **A second job, `orbit-core`, was
+run on 2026-09-19 and did not reproduce the saving — it could not be measured there at all, because the orchestrated
+arm finished the job in only one of its two cells** (`bench/results/v5-job2-orbit-2026-09-19/`). Plan size varies freely
 (2 to 12 tasks for the same request) and it is what sets the size of the saving, so this bench resolves ~10 % at
 constant plan size and ~47 % otherwise — **quote nothing under 15 % from it**. Gate B's atomic shape has one
 end-to-end observation and stays off. Nothing here makes work finish *faster* than doing it directly; parity is the

@@ -1,0 +1,98 @@
+{
+  "question": "Does a coordinator that reads the fixed replan-bound text dispatch the plan it already holds?",
+  "preregistration": "bench/results/v5-replan-bound-2026-09-19/PREREGISTRATION.md",
+  "plugin_under_test": "b82f717",
+  "run_dir": "/Users/isaac/jev-gate-runs/v5-replan-bound",
+  "case": "orbit-core-primed-30",
+  "arms": ["jev_hierarchy"],
+  "repetitions": 3,
+  "conclusion_category": "did not test the fix (pre-registration rule 3: no cell reached the bound)",
+  "mechanism_outcome": {
+    "cells_reaching_bounds_exhausted": 0,
+    "cells_total": 3,
+    "note": "rule 2 makes this binary per cell and first; a cell that never reaches the bound tests nothing about b82f717"
+  },
+  "runner_verdict": {
+    "overall": "mechanism only",
+    "plan_status": "ready:3",
+    "receipts": "accept:14",
+    "replans": 0,
+    "decision_mismatch": 0,
+    "orphan_records": 0
+  },
+  "validity": {
+    "all_cells_valid": true,
+    "depth_floor_for_validity": 250000,
+    "depths": [388478, 388234, 388380],
+    "truncated_cells": 0,
+    "environment_errors": 0
+  },
+  "cost_comparison": "not reported (rule 6): one-armed run, native arm not re-run, no percentage quoted",
+  "cells": [
+    {
+      "arm": "jev_hierarchy",
+      "repetition": 1,
+      "context_at_job_prompt": 388478,
+      "job_turn_usd": 3.8146,
+      "session_usd": 6.7322,
+      "wall_s": 893,
+      "planner_calls": 1,
+      "invalid_planner_replies": 0,
+      "accepted_rev": 1,
+      "tasks": 5,
+      "chain_depth": 2,
+      "replans": 0,
+      "bounds_exhausted_reached": false,
+      "workers_dispatched": 5,
+      "quality": "pass",
+      "checks_passed": 16,
+      "checks_total": 16
+    },
+    {
+      "arm": "jev_hierarchy",
+      "repetition": 2,
+      "context_at_job_prompt": 388234,
+      "job_turn_usd": 4.1756,
+      "session_usd": 7.021,
+      "wall_s": 1107,
+      "planner_calls": 1,
+      "invalid_planner_replies": 0,
+      "accepted_rev": 1,
+      "tasks": 4,
+      "chain_depth": 2,
+      "replans": 0,
+      "bounds_exhausted_reached": false,
+      "workers_dispatched": 4,
+      "quality": "pass",
+      "checks_passed": 16,
+      "checks_total": 16
+    },
+    {
+      "arm": "jev_hierarchy",
+      "repetition": 3,
+      "context_at_job_prompt": 388380,
+      "job_turn_usd": 3.2583,
+      "session_usd": 6.1065,
+      "wall_s": 1278,
+      "planner_calls": 1,
+      "invalid_planner_replies": 0,
+      "accepted_rev": 1,
+      "tasks": 5,
+      "chain_depth": 2,
+      "replans": 0,
+      "bounds_exhausted_reached": false,
+      "workers_dispatched": 5,
+      "quality": "pass",
+      "checks_passed": 16,
+      "checks_total": 16
+    }
+  ],
+  "pass_rate_observations": {
+    "scope": "rule 3 allows these three cells to count only as pass-rate observations",
+    "orbit_core_jev_cells_to_date": "4 of 5 pass (2 from v5-job2-orbit, 3 from this run)"
+  },
+  "untested": [
+    "b82f717 has still never been read by a coordinator at the bound",
+    "c2c9bd1 (r-reqcarry) is not in this run at all: the plugin was copied before it was written"
+  ]
+}
