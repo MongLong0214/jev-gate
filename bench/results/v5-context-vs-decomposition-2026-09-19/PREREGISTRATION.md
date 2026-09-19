@@ -174,10 +174,11 @@ Fixed now, so that no result is read as support for the arm that produced it.
    that the file differs from the frozen config in `admittedShape` and nothing else, and that every other arm records
    no override. `npm run typecheck` 0, `npm run build` 0, `npx vitest run` 534/534. Done.
 3. **The owner's own word on the spend.** Recorded `wide-validators` primed cells ran about $3.7 per cell all-in, so
-   stage 1 is of the order of $22–$28. A peer session has relayed an approval for exactly this shape (6 cells, wide
-   only, orbit re-decided afterwards), and the design above is written to it — but a relayed approval is not the
-   owner's own word, and this repository has already held a push for that reason. **Outstanding — nothing runs until
-   the owner says it here.**
+   stage 1 is of the order of $22–$28. A peer session relayed an approval for exactly this shape first; a relayed
+   approval is not the owner's own word, and the run was held for it. **Given directly by the owner on 2026-09-19
+   ("승인한다고"), for stage 1 as written: `wide-validators-primed-30`, three arms, two repetitions, 6 cells.** It
+   covers this run and nothing else — stage 2 is a separate approval, and this one is not retroactive cover for any
+   rule below being relaxed.
 
 ## Command (for the record; not run)
 
