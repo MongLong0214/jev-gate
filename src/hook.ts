@@ -863,7 +863,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
   const handlePlannerResult = async (sessionId: string, gen: JobGeneration, toolUseId: string): Promise<HookResult> => {
     const status = responseStatus(input.tool_response);
     const text = replyText(input.tool_response);
-    const parsed = status === 'completed' ? parsePlannerReply(text, Object.values(config.models)) : null;
+    const parsed = status === 'completed' ? parsePlannerReply(text, Object.values(config.models), config.maxTasksPerPlan) : null;
     const agreement = plannerModelAgreement(gen.planner_tier, observedModel(input.tool_response));
     let context: string | null = null;
     const written = updateJob(deps.env, sessionId, (prev) => {

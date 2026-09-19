@@ -3,8 +3,14 @@ import { createHash } from 'node:crypto';
 import type { DeterministicVerdict, Plan, PlannedCheck, PlannedTask, PlannerReply, Receipt, TaskSpec, TaskUncertainty, WorkerCheckResult, WorkerReply } from './types.js';
 import { TIERS } from './types.js';
 
-/** A12: bounds are bytes, not task counts. A plan may have as many tasks as fits. */
+/**
+ * A12 said bounds are bytes, not task counts, and that a plan may have as many tasks as fits. Bytes are still the
+ * bound on what a task carries, but the count now has a ceiling too: worker count turned out to be the cost axis
+ * this design was not watching, and a plan of 13 cost +92.5 % against plans of 2 to 7 that worked.
+ */
 export const MAX_REPLY_BYTES = 64 * 1024;
+/** Mirrors `DEFAULT_CONFIG.maxTasksPerPlan`; the parser takes the configured value and falls back to this. */
+export const DEFAULT_MAX_TASKS_PER_PLAN = 10;
 export const MAX_COMPOSED_BYTES = 64 * 1024;
 export const MAX_FIELD_BYTES = 8 * 1024;
 /** #33: routing evidence is a short list of facts, not a report; a planner with more than this is not being specific. */
@@ -240,8 +246,16 @@ export const contractHash = (task: Omit<PlannedTask, 'contract_hash'>): string =
     )
     .digest('hex');
 
-const parseTasks = (raw: unknown, modelIds: readonly string[]): ParseResult<Array<Omit<PlannedTask, 'contract_hash'>>> => {
+const parseTasks = (raw: unknown, modelIds: readonly string[], maxTasks: number): ParseResult<Array<Omit<PlannedTask, 'contract_hash'>>> => {
   if (!Array.isArray(raw) || raw.length === 0) return { ok: false, error: 'tasks must be a non-empty array' };
+  /**
+   * A backstop against a runaway split, not a budget for the planner to spend. Worker count is the hidden cost axis
+   * of this design and it has surprised three measurements in a row: parallelism 2 -> 6 workers cost +32.7 %, and an
+   * atomic Gate B that produced 13 workers on a shallow job cost +92.5 %. Plans that were fine ran 2 to 7 tasks, so a
+   * ceiling above that band stops the runaway without shaping an ordinary plan. The reason text is fixed, so a
+   * rejected planner is told the number rather than invited to argue about it.
+   */
+  if (raw.length > maxTasks) return { ok: false, error: `tasks must contain at most ${maxTasks} entries (got ${raw.length}); split the work into fewer, larger outcomes` };
   const tasks: Array<Omit<PlannedTask, 'contract_hash'>> = [];
   const ids = new Set<string>();
   for (const item of raw) {
@@ -351,7 +365,7 @@ export const chainDepth = (tasks: Array<Pick<PlannedTask, 'id' | 'depends_on'>>)
 };
 
 /** Structural validation only (D8): no repair, no defaulting of a missing status, no second model call. */
-export const parsePlannerReply = (text: string, modelIds: readonly string[] = []): ParseResult<PlannerReply> => {
+export const parsePlannerReply = (text: string, modelIds: readonly string[] = [], maxTasks: number = DEFAULT_MAX_TASKS_PER_PLAN): ParseResult<PlannerReply> => {
   if (bytes(text) > MAX_REPLY_BYTES) return { ok: false, error: `reply exceeds ${MAX_REPLY_BYTES} bytes` };
   const json = extractJson(text);
   if (json === null) return { ok: false, error: 'no JSON object found in the reply' };
@@ -370,7 +384,7 @@ export const parsePlannerReply = (text: string, modelIds: readonly string[] = []
     if (!assumptions.ok) return assumptions;
     const constraints = proseArray(parsed['constraints'] ?? [], 'constraints', modelIds);
     if (!constraints.ok) return constraints;
-    const tasks = parseTasks(parsed['tasks'], modelIds);
+    const tasks = parseTasks(parsed['tasks'], modelIds, maxTasks);
     if (!tasks.ok) return tasks;
     // A17: the graph is the fact and `chainDepth` computes it; the planner's own number is recorded as a claim, so a
     // planner that miscounts does not lose an otherwise valid plan.

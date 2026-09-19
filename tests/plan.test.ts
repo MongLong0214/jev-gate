@@ -14,6 +14,7 @@ import {
   MAX_UNCERTAINTY_ENTRIES,
   normalizeDeliverable,
   OUT_OF_ROOT,
+  DEFAULT_MAX_TASKS_PER_PLAN,
   parsePlannerReply,
   priorAttemptSummary,
   parseTaskMarker,
@@ -82,11 +83,23 @@ describe('extractJson', () => {
 });
 
 describe('parsePlannerReply', () => {
-  it('accepts a ready plan with many tasks and no task-count cap', () => {
-    const tasks = Array.from({ length: 40 }, (_v, i) => rawTask(`t${i}`));
-    const parsed = parsePlannerReply(fence({ status: 'ready', goal: 'g', assumptions: [], constraints: ['c'], tasks, chain_depth: 1 }));
-    expect(parsed.ok).toBe(true);
-    if (parsed.ok && parsed.value.status === 'ready') expect(parsed.value.tasks).toHaveLength(40);
+  /**
+   * A12 used to say a plan may have as many tasks as fits in bytes. It now has a ceiling as well, because worker
+   * count turned out to be the cost axis this design was not watching: a 13-task plan cost +92.5 % where the plans
+   * that worked ran 2 to 7. The ceiling is a backstop, so it sits above that band rather than inside it.
+   */
+  it('accepts a plan up to the ceiling and rejects one above it, with a reason that names the number', () => {
+    const plan = (n: number, max?: number) =>
+      parsePlannerReply(fence({ status: 'ready', goal: 'g', assumptions: [], constraints: ['c'], tasks: Array.from({ length: n }, (_v, i) => rawTask(`t${i}`)), chain_depth: 1 }), [], max);
+    const atCeiling = plan(DEFAULT_MAX_TASKS_PER_PLAN);
+    expect(atCeiling.ok).toBe(true);
+    if (atCeiling.ok && atCeiling.value.status === 'ready') expect(atCeiling.value.tasks).toHaveLength(DEFAULT_MAX_TASKS_PER_PLAN);
+    const over = plan(DEFAULT_MAX_TASKS_PER_PLAN + 1);
+    expect(over.ok).toBe(false);
+    if (!over.ok) expect(over.error).toContain(`at most ${DEFAULT_MAX_TASKS_PER_PLAN} entries (got ${DEFAULT_MAX_TASKS_PER_PLAN + 1})`);
+    // Bytes still bound what a task carries; this is only a count, and the configured value is what applies.
+    expect(plan(40, 64).ok).toBe(true);
+    expect(plan(3, 2).ok).toBe(false);
   });
 
   it('R15/§7: accepts a plan whose tasks carry no spec, uncertainty or fully_specified, without inventing values', () => {

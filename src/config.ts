@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import type { AdmissionQuestionShape, ConfigV5, Mode, PlannerTier, RouteQuestionShape, Tier } from './types.js';
+import { DEFAULT_MAX_TASKS_PER_PLAN } from './plan.js';
 import { MODES, PLANNER_TIERS, ROUTE_QUESTION_SHAPES, TIERS } from './types.js';
 
 export const DEFAULT_CONFIG: ConfigV5 = {
@@ -26,6 +27,8 @@ export const DEFAULT_CONFIG: ConfigV5 = {
   delegationDepthFloor: 300_000,
   // Optional in a config file: absent keeps the shipped composite Gate A question.
   admissionQuestionShape: 'composite',
+  // Above the 2-7 band that ordinary plans ran in, below the 13 that cost +92.5 %: it stops a runaway, not a plan.
+  maxTasksPerPlan: DEFAULT_MAX_TASKS_PER_PLAN,
 };
 
 /**
@@ -36,6 +39,8 @@ export const DEFAULT_CONFIG: ConfigV5 = {
 export const NATIVE_HOOK_TIMEOUT_MS = 5000;
 export const MAX_REQUEST_DEADLINE_MS = 3500;
 export const MAX_PARALLEL_WORKERS_LIMIT = 16;
+/** A plan larger than this is a runaway whatever the config says; MAX_COMPOSED_BYTES bounds each task, this bounds the count. */
+export const MAX_TASKS_PER_PLAN_LIMIT = 64;
 /** Trusted model identifiers only: no whitespace, shell characters or free text reach the host or the API. */
 export const MODEL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 export const TOOL_NAME_RE = /^[A-Za-z_][A-Za-z0-9_:-]{0,63}$/;
@@ -55,6 +60,7 @@ const V5_KEYS = new Set<string>([
   'routeQuestionShape',
   'delegationDepthFloor',
   'admissionQuestionShape',
+  'maxTasksPerPlan',
 ]);
 const LEGACY_MARKERS = ['uncertainTier', 'opusModel', 'frontierModel', 'confidenceFloor'];
 /** `resultConfidenceFloor` is a deprecated no-op (T11): it is still validated so a deployed file loads, and read by nothing. */
@@ -151,6 +157,11 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
     return { ok: false, error: `admissionQuestionShape must be one of ${ROUTE_QUESTION_SHAPES.join(', ')}` };
   }
 
+  const maxTasks = c['maxTasksPerPlan'];
+  if (typeof maxTasks !== 'number' || !Number.isInteger(maxTasks) || maxTasks < 1 || maxTasks > MAX_TASKS_PER_PLAN_LIMIT) {
+    return { ok: false, error: `maxTasksPerPlan must be an integer in [1, ${MAX_TASKS_PER_PLAN_LIMIT}]` };
+  }
+
   const allow = c['guardAllowTools'];
   if (!Array.isArray(allow) || allow.some((t) => typeof t !== 'string' || !TOOL_NAME_RE.test(t))) {
     return { ok: false, error: `guardAllowTools must be an array of tool names matching ${TOOL_NAME_RE.source}` };
@@ -172,6 +183,7 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
       routeQuestionShape: shape as RouteQuestionShape,
       delegationDepthFloor: floor,
       admissionQuestionShape: admissionShape as AdmissionQuestionShape,
+      maxTasksPerPlan: maxTasks,
     },
   };
 };

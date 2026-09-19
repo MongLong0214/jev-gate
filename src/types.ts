@@ -109,6 +109,11 @@ export interface ConfigV5 {
    * config file and defaulted to `composite`, mirroring `routeQuestionShape`.
    */
   admissionQuestionShape: AdmissionQuestionShape;
+  /**
+   * The most tasks an accepted plan may contain. A backstop against a runaway split, not a budget: worker count is
+   * the hidden cost axis here, and a plan of 13 cost +92.5 % where plans that worked ran 2 to 7.
+   */
+  maxTasksPerPlan: number;
 }
 
 export interface ChoiceAnswer<K extends string> {
