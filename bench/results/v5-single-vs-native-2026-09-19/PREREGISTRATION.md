@@ -51,10 +51,14 @@ mechanism question, and it gets its own pre-registration. It is deferred, not ex
 
 **8 cells, ~$45**, one build, one frozen config, no reuse.
 
+`--max-sessions` is a cap on planned cells, not on concurrency: it must be at least the 8 this plan contains, or
+preflight refuses to run. Corrected here after preflight refused `4`; **nothing had executed and nothing was
+written**, and no arm, job, repetition, rule or threshold changed with it.
+
 ```sh
 node dist/bench/run.js --cases bench/cases-depth.json \
   --only wide-validators-primed-30,orbit-core-primed-30 \
-  --out ~/jev-gate-runs/v5-single-vs-native --execute --max-sessions 4 \
+  --out ~/jev-gate-runs/v5-single-vs-native --execute --max-sessions 8 \
   --arms sonnet_native,jev_single --repetitions 2 \
   --plugin-dir "$PWD" --timeout-ms 2400000 --max-turns 120 --seed 20260919
 ```
