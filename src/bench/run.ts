@@ -95,6 +95,8 @@ export interface Options {
   allowedTools: string;
   frontierModel: string;
   allowEnvConflicts: boolean;
+  /** Case ids to run from the manifest; empty means every case. Staging a run costs less than one big one. */
+  only: string[];
 }
 
 export interface AgentCall {
@@ -281,6 +283,7 @@ export const parseArgs = (argv: string[]): Options => {
     allowedTools: 'Bash(node *),Bash(npm test),Bash(npm run test),Bash(ls *)',
     frontierModel: 'fable',
     allowEnvConflicts: false,
+    only: [],
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
@@ -299,6 +302,10 @@ export const parseArgs = (argv: string[]): Options => {
       const bad = arms.filter((x) => !(ALL_ARMS as readonly string[]).includes(x));
       if (bad.length || arms.length === 0 || new Set(arms).size !== arms.length) throw new Error(`--arms must be a unique subset of ${ALL_ARMS.join(',')}`);
       o.arms = arms as Arm[];
+    } else if (a === '--only') {
+      const ids = next().split(',').map((x) => x.trim()).filter(Boolean);
+      if (ids.length === 0 || new Set(ids).size !== ids.length) throw new Error('--only must be a unique, non-empty list of case ids');
+      o.only = ids;
     } else if (a === '--repetitions') o.repetitions = positiveInt(a, next());
     else if (a === '--max-sessions') o.maxSessions = positiveInt(a, next());
     else if (a === '--timeout-ms') o.timeoutMs = positiveInt(a, next());
@@ -1241,7 +1248,11 @@ export const regrade = (o: Options): number => {
 export const main = async (argv: string[]): Promise<number> => {
   const o = parseArgs(argv);
   if (o.regrade) return regrade(o);
-  const { cases, manifestDir, version } = loadManifest(o.cases);
+  const { cases: allCases, manifestDir, version } = loadManifest(o.cases);
+  // Staging a run is cheaper than one big one, and a case named here but absent is a typo, never a silent no-op.
+  const missing = o.only.filter((id) => !allCases.some((c) => c.id === id));
+  if (missing.length) throw new Error(`--only names cases that are not in the manifest: ${missing.join(',')}`);
+  const cases = o.only.length ? allCases.filter((c) => o.only.includes(c.id)) : allCases;
   const out = resolve(o.out);
   if (overlaps(manifestDir, out)) throw new Error(`--out ${out} overlaps the manifest directory ${manifestDir}`);
   const plan = buildPlan(o, cases, version);
