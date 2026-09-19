@@ -7,6 +7,8 @@ import {
   currentReceipt,
   deliverableOverlap,
   deterministicVerdict,
+  reportedSingleVerdict,
+  SINGLE_TASK_ID,
   extractJson,
   chainDepth,
   MAX_FIELD_BYTES,
@@ -569,6 +571,38 @@ describe('readyTaskIds', () => {
     expect(readyTaskIds(plan, accepted)).toEqual(['t3']);
     // t1 was accepted, but a rework of it is in flight: t3 is not ready and t1 is not offered twice.
     expect(readyTaskIds(plan, accepted, new Set(['t1']))).toEqual([]);
+  });
+});
+
+/**
+ * A19: the single shape has no contract, so acceptance here cannot be the deterministic judgement. What it is instead
+ * is stated rather than implied: the worker's own report, and the checks it names are kept without being judged --
+ * under a contract the very same reply would be refused for naming a check nobody declared.
+ */
+describe('reportedSingleVerdict (A19)', () => {
+  const reply = (over: Partial<WorkerReply>): WorkerReply => ({ status: 'done', summary: 's', changed_files: [], interfaces: [], checks: [], blockers: [], ...over });
+  const contractless = withHash(rawTask('t1', { checks: [] }));
+
+  it('accepts a reply that reports done with no blockers, whatever checks it names', () => {
+    expect(reportedSingleVerdict(reply({}))).toEqual({ verdict: 'accept', reason: null });
+    const named = reply({ checks: [{ check_id: 'npm-test', result: 'pass', note: '' }] });
+    expect(reportedSingleVerdict(named)).toEqual({ verdict: 'accept', reason: null });
+    // The same reply under a contract that declares no such check is refused; that gap is the shape, not a bug.
+    expect(deterministicVerdict(contractless, named)).toMatchObject({ verdict: 'incomplete' });
+  });
+
+  it.each([
+    ['status blocked', reply({ status: 'blocked' }), 'status blocked'],
+    ['status replan', reply({ status: 'replan' }), 'status replan'],
+    ['blockers with status done', reply({ blockers: ['db missing'] }), 'blockers with status done'],
+  ])('reports incomplete for %s', (_name, value, reason) => {
+    const verdict = reportedSingleVerdict(value);
+    expect(verdict.verdict).toBe('incomplete');
+    expect(verdict.reason).toContain(reason);
+  });
+
+  it('files under one fixed task id, because no plan can name this work', () => {
+    expect(SINGLE_TASK_ID).toBe('single');
   });
 });
 

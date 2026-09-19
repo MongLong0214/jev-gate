@@ -434,6 +434,50 @@ describe('single executor (A19)', () => {
     expect(denied).toMatchObject({ kind: 'deny', code: 'guard_denied' });
   });
 
+  /**
+   * A19 defect found in the stage 1 run: the shape dispatched a worker nobody had reserved, so a passing job recorded
+   * no receipt, stayed `incomplete` at Stop, and its worker records read as orphans in the report. The work is the
+   * same; only the bookkeeping was missing.
+   */
+  it('reserves its one dispatch, so the result has a reservation to land on', async () => {
+    const env = singleEnv();
+    const fetchImpl = fakeJev({ execution: 'orchestrated' });
+    await run(env, promptEvent(), fetchImpl);
+    await run(env, preEvent('Agent', agentInput({ prompt: 'Do what the request asks.' })), fetchImpl);
+    expect(state(env).current.active['toolu_1']).toMatchObject({ role: 'worker', task_id: 'single', rev: null, attempt: 1, deliverables: [] });
+  });
+
+  it('records the receipt as the worker\'s own report, and completes the job on it', async () => {
+    const env = singleEnv();
+    const fetchImpl = fakeJev({ execution: 'orchestrated' });
+    await run(env, promptEvent(), fetchImpl);
+    await run(env, preEvent('Agent', agentInput({ prompt: 'Do what the request asks.' })), fetchImpl);
+    const post = await run(env, workerPost('toolu_1', workerReply()), fetchImpl);
+    // The accept is stated as reported rather than verified: this shape has no contract for code to check.
+    expect(context(post)).toContain('recorded as reported rather than verified');
+    expect(context(post)).not.toContain('Ready task ids');
+    const gen = state(env).current;
+    expect(gen.active).toEqual({});
+    expect(gen.receipts).toHaveLength(1);
+    // The contract hash is empty because there is no contract, and the checks the worker reported are kept unjudged.
+    expect(gen.receipts[0]).toMatchObject({ task_id: 'single', contract_hash: '', verdict: 'accept', provenance: 'worker_reported' });
+    expect(gen.receipts[0]?.reply?.checks).toEqual([{ check_id: 'c1', result: 'pass', note: 'npm test' }]);
+    await run(env, { hook_event_name: 'Stop', session_id: 's1' });
+    expect(state(env).current.outcome).toBe('completed');
+  });
+
+  it('does not complete the job when the one worker says it did not finish', async () => {
+    const env = singleEnv();
+    const fetchImpl = fakeJev({ execution: 'orchestrated' });
+    await run(env, promptEvent(), fetchImpl);
+    await run(env, preEvent('Agent', agentInput({ prompt: 'Do what the request asks.' })), fetchImpl);
+    const post = await run(env, workerPost('toolu_1', workerReply({ status: 'blocked', blockers: ['the store is missing'] })), fetchImpl);
+    expect(context(post)).toContain('There is no replan path on this shape');
+    expect(state(env).current.receipts[0]).toMatchObject({ task_id: 'single', verdict: 'incomplete' });
+    await run(env, { hook_event_name: 'Stop', session_id: 's1' });
+    expect(state(env).current.outcome).toBe('incomplete');
+  });
+
   it('is off unless the config asks for it', async () => {
     const env = makeEnv();
     const r = await run(env, promptEvent(), fakeJev({ execution: 'orchestrated' }));

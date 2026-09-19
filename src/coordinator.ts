@@ -192,5 +192,19 @@ export const renderWorkerReported = (taskId: string, verdict: 'rework' | 'replan
     ? `[Jev Gate result] Task ${taskId} reported a required check as failed (${bounded(reason)}), so dependent tasks stay locked. Rework it with attempt=<n> on the marker.`
     : `[Jev Gate result] Task ${taskId} reported that the plan's assumptions no longer hold (${bounded(reason)}), so dependent tasks stay locked. Replan once no worker is active, with the concrete violated assumption.`;
 
+/**
+ * A19: the single shape has no contract, so its result line says what was and was not established. An accept here is
+ * the worker's own report; nothing in this plugin checked it, and the coordinator is told so rather than left to read
+ * an accept as the hierarchy's deterministic one.
+ */
+export const renderSingleResult = (verdict: 'accept' | 'incomplete' | 'unknown' | 'invalid', reason: string): string =>
+  verdict === 'accept'
+    ? '[Jev Gate result] The single-executor dispatch reported done with no blockers, and its receipt is recorded as reported rather than verified: this shape has no contract, so no check of it was owned by code. Confirm the work yourself before reporting it finished, and report what was checked separately from what was only reported.'
+    : verdict === 'unknown'
+      ? `[Jev Gate result] The single-executor dispatch returned no usable reply (${bounded(reason)}). Its reservation was released; dispatch the request again if the work is still needed.`
+      : verdict === 'invalid'
+        ? `[Jev Gate result] The single-executor dispatch replied in a shape this plugin could not read (${bounded(reason)}). Nothing about the work is settled; dispatch it again or finish it another way.`
+        : `[Jev Gate result] The single-executor dispatch reported that it did not finish (${bounded(reason)}). There is no replan path on this shape: dispatch it again with what was wrong.`;
+
 export const renderWorkerAccepted = (taskId: string, readyIds: string[], cap: number): string =>
   `[Jev Gate result] Task ${taskId} accepted. Ready task ids: ${readyIds.length ? readyIds.join(', ') : 'none'}. ${renderDispatchRule(cap)}`;

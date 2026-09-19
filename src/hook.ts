@@ -42,6 +42,7 @@ import {
   renderReplanBoundExhausted,
   renderOrchestrationGuidance,
   renderSingleGuidance,
+  renderSingleResult,
   renderSingleRouteNote,
   renderPlannedContext,
   renderPlannerModelNote,
@@ -93,6 +94,8 @@ import {
   priorAttemptSummary,
   readyTaskIds,
   reportedRecovery,
+  reportedSingleVerdict,
+  SINGLE_TASK_ID,
   type PlanInForceSummary,
   type PredecessorSummary,
   type PriorAttemptSummary,
@@ -806,7 +809,35 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     eligibility: Extract<Eligibility, { eligible: true }>,
     // A19: set only on the single-executor path, where the request is the task rather than the source of a contract.
     carriedRequest: string | 'omitted' | null = null,
+    // A19: present on that same path, so the one dispatch this shape makes is reserved and leaves a receipt behind it.
+    single: { sessionId: string; gen: JobGeneration } | null = null,
   ): Promise<HookResult> => {
+    if (single !== null) {
+      // A4: reserved before any HTTP call, and before the routing outcome, so every single dispatch is recorded --
+      // reserving only the patched dispatches was rejected: a preserved call still runs a worker, and would leave
+      // the same gap this repairs for every preserve reason (native mode, a pinned call, a missing key, a failed gate).
+      let stale = false;
+      const reserved = updateJob(deps.env, single.sessionId, (prev) => {
+        if (!prev || prev.current.prompt_id !== single.gen.prompt_id || prev.current.execution !== 'single') {
+          stale = true;
+          return null;
+        }
+        const counted = countAttempt(prev.current, 'task', SINGLE_TASK_ID);
+        return {
+          ...prev,
+          current: reserve(counted, eligibility.toolUseId, {
+            role: 'worker',
+            taskId: SINGLE_TASK_ID,
+            rev: null,
+            tier: eligibility.tier,
+            attempt: (own(prev.current.attempts.tasks, SINGLE_TASK_ID) ?? 0) + 1,
+            deliverables: [],
+          }),
+        };
+      });
+      if (!reserved.ok) return preserve(reserved.code);
+      if (stale) return emitDeny('stale_generation', renderDispatchDeny('stale_generation'), null);
+    }
     if (mode === 'native') return preserve('mode_native');
     if (eligibility.pinned) return preserve('pinned');
     if (!apiKey) return preserve('key_missing');
@@ -908,7 +939,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     // ad-hoc dispatch carrying the request this turn was admitted with.
     if (generation.execution === 'single') {
       if (eligibility.role === 'planner') return emitDeny('single_shape', renderDispatchDeny('single_shape'), null);
-      return handleAdhocWorker(eligibility, generation.request ?? 'omitted');
+      return handleAdhocWorker(eligibility, generation.request ?? 'omitted', { sessionId, gen: generation });
     }
     return eligibility.role === 'planner' ? handlePlanner(generation, sessionId, eligibility) : handleWorker(generation, sessionId, eligibility);
   };
@@ -1018,6 +1049,8 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
 
   const handleWorkerResult = (sessionId: string, gen: JobGeneration, toolUseId: string, taskId: string, rev: number, attempt: number): HookResult => {
     const task = gen.plan?.tasks.find((t) => t.id === taskId) ?? null;
+    // A19: the single shape has no plan, so a missing task is what this path expects rather than a stale reference.
+    const isSingle = gen.execution === 'single';
     const status = responseStatus(input.tool_response);
     const parsed = status === 'completed' ? parseWorkerReply(replyText(input.tool_response)) : null;
     let finalVerdict: Receipt['verdict'] = 'unknown';
@@ -1026,6 +1059,10 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     else if (!parsed.ok) {
       finalVerdict = 'invalid';
       reason = parsed.error;
+    } else if (isSingle) {
+      const reported = reportedSingleVerdict(parsed.value);
+      finalVerdict = reported.verdict;
+      reason = reported.reason;
     } else if (!task) {
       finalVerdict = 'invalid';
       reason = 'the task is no longer in the current plan';
@@ -1060,7 +1097,11 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       };
       // T1: the receipt is appended, so the latest attempt is the one that decides; earlier ones stay in the array.
       next = { ...next, receipts: [...next.receipts.filter((r) => r.tool_use_id !== toolUseId), receipt] };
-      if (finalVerdict === 'accept') context = renderWorkerAccepted(taskId, readyForDispatch(next), config.maxParallelWorkers);
+      if (isSingle) {
+        // A19: rework and replan are hierarchy verdicts; this path only ever produces the four below.
+        const shown = finalVerdict === 'accept' || finalVerdict === 'invalid' || finalVerdict === 'unknown' ? finalVerdict : 'incomplete';
+        context = renderSingleResult(shown, reason ?? '');
+      } else if (finalVerdict === 'accept') context = renderWorkerAccepted(taskId, readyForDispatch(next), config.maxParallelWorkers);
       else if (finalVerdict === 'rework' || finalVerdict === 'replan') context = renderWorkerReported(taskId, finalVerdict, reason ?? '');
       else if (finalVerdict === 'unknown') context = renderWorkerUnknown(taskId);
       else if (finalVerdict === 'invalid') context = renderWorkerInvalid(taskId, reason ?? 'unparsable reply');
@@ -1155,7 +1196,14 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       // T1: completion needs every task accepted by its current attempt AND nothing still running. A worker that was
       // never observed to finish is not a finished job, whatever the receipt of an earlier attempt says.
       const allAccepted = gen.plan !== null && activeWorkers(gen).length === 0 && gen.plan.tasks.every((t) => acceptedReceipt(gen.receipts, t) !== null);
-      outcome = gen.phase === 'blocked' ? 'blocked' : gen.shape === 'direct' || allAccepted ? 'completed' : 'incomplete';
+      // A19: the single shape has no plan to complete, so its completion is the latest receipt of the one dispatch it
+      // makes. That receipt is the worker's own report (reportedSingleVerdict), so `completed` is a weaker statement
+      // here than under a plan -- the difference lives in the receipt, which records what it was decided from.
+      const singleDone =
+        gen.execution === 'single' &&
+        activeWorkers(gen).length === 0 &&
+        (gen.receipts.filter((r) => r.task_id === SINGLE_TASK_ID).at(-1)?.verdict ?? null) === 'accept';
+      outcome = gen.phase === 'blocked' ? 'blocked' : gen.shape === 'direct' || allAccepted || singleDone ? 'completed' : 'incomplete';
       return { ...prev, current: { ...gen, outcome } };
     });
     trace?.write('stop', { ...base, outcome });

@@ -737,6 +737,26 @@ export const deterministicVerdict = (task: PlannedTask, reply: WorkerReply): Det
   return { verdict: 'accept', reason: null };
 };
 
+/** A19: the task id a single-executor receipt is filed under. There is no plan, so nothing else can name this work. */
+export const SINGLE_TASK_ID = 'single';
+
+/**
+ * A19: the single-executor shape dispatches with no contract, so there is nothing for code to check the reply
+ * against: the verdict is the worker's own report and no more than that. It is deliberately weaker than
+ * `deterministicVerdict`, and it is recorded rather than hidden -- a receipt filed here means the worker said it
+ * finished, not that a declared check was observed to pass. Reported checks are kept in the receipt and judged by
+ * nobody, because no contract declared them.
+ *
+ * `deterministicVerdict` was rejected for this path rather than reused: a single worker reports the checks it chose
+ * to run, and with an empty contract every one of them is an undeclared check id, so reusing it would have recorded
+ * `incomplete` for work that finished.
+ */
+export const reportedSingleVerdict = (reply: WorkerReply): DeterministicResult => {
+  if (reply.status !== 'done') return { verdict: 'incomplete', reason: `worker reported status ${reply.status}` };
+  if (reply.blockers.length > 0) return { verdict: 'incomplete', reason: 'worker reported blockers with status done' };
+  return { verdict: 'accept', reason: null };
+};
+
 /**
  * T11: Gate C no longer runs, so a verdict past plain incompleteness comes from the worker's own report. `replan` is
  * the status the worker itself returned; `rework` is a required check it says it ran and observed fail. Neither can
