@@ -113,6 +113,9 @@ worker's model cost is inside the arm's total; there is no correction for it.
 2. The single-shape receipt repair is in that build (below), with its unit tests.
 3. **The owner's own approval for these 8 cells (~$45), given directly.** A relayed approval from a peer session is
    not the owner's word; this repository has already held a run for exactly that reason, and did so correctly.
+   **Given directly by the owner on 2026-09-19 ("승인"), for this run as written above.** It covers these 8 cells
+   and nothing else: it is not cover for a rule below being relaxed, for a third arm, for a second attempt after a
+   bad result, or for any default change, release or tag. Recorded here before the first cell ran.
 
 ## Repaired before this run, on purpose
 
