@@ -6,7 +6,7 @@
       "group": "wide-primed-shallow",
       "fixtureDir": "fixtures/wide-validators-loaded",
       "prime": [
-        "reference/ 디렉토리의 파일 13개를 note-01.md 부터 note-13.md 까지 순서대로 하나씩 `cat reference/note-NN.md` 로 전부 읽어라. 루프, 글롭, head, tail, 파이프, 세미콜론이나 && 로 여러 cat 을 한 줄에 잇는 것 전부 금지 — Bash 호출 하나당 cat 하나다.\n각 파일을 읽은 뒤에는 그 번호만 답하고 다음 파일로 넘어가라. 13개를 다 읽으면 마지막에 준비됨 이라고만 답하고 멈춰라. src/ 는 아직 건드리지 마라.",
+        "reference/ 디렉토리의 파일 13개를 note-01.md 부터 note-13.md 까지 순서대로 하나씩 `cat reference/note-NN.md` 로 전부 읽어라. 루프, 글롭, head, tail, 파이프, 세미콜론이나 && 로 여러 cat 을 한 줄에 잇는 것 전부 금지 — Bash 호출 하나당 cat 하나다.\n각 파일을 읽은 뒤에는 그 번호만 답하고 다음 파일로 넘어가라. 13개를 다 읽으면 마지막에 준비됨 이라고만 답하고 멈춰라. src/ 는 아직 건드리지 마라. 이 읽기는 네가 직접 해라. 서브에이전트나 다른 워커에게 넘기지 마라 — 파일 내용이 이 세션에 남아야 한다.",
         "앞의 파일을 모두 읽었으면 준비됨 이라고만 답하고 멈춰라. 다른 말은 하지 마라."
       ],
       "request": "src/ 에 있는 검증 모듈 12개(email, phone, postcode, country, currency, locale, timezone, vat, iban, swift, tax, duns)를 모두 고쳐줘.\n지금은 빈 배열이 통과되는데, 항목이 하나도 없으면 실패해야 해. 반환값에 field 는 그대로 두고 ok:false 로.\n이미 맞는 동작(항목이 있으면 통과, 빈 문자열이면 blank, 키가 없으면 missing)은 바꾸지 마.\n모듈마다 빈 배열을 거부하는지 확인하는 테스트를 test/ 에 추가하고, npm test(node --test)가 통과하는지 확인해.",
@@ -23,7 +23,7 @@
       "group": "wide-primed-middle",
       "fixtureDir": "fixtures/wide-validators-loaded",
       "prime": [
-        "reference/ 디렉토리의 파일 21개를 note-01.md 부터 note-21.md 까지 순서대로 하나씩 `cat reference/note-NN.md` 로 전부 읽어라. 루프, 글롭, head, tail, 파이프, 세미콜론이나 && 로 여러 cat 을 한 줄에 잇는 것 전부 금지 — Bash 호출 하나당 cat 하나다.\n각 파일을 읽은 뒤에는 그 번호만 답하고 다음 파일로 넘어가라. 21개를 다 읽으면 마지막에 준비됨 이라고만 답하고 멈춰라. src/ 는 아직 건드리지 마라.",
+        "reference/ 디렉토리의 파일 21개를 note-01.md 부터 note-21.md 까지 순서대로 하나씩 `cat reference/note-NN.md` 로 전부 읽어라. 루프, 글롭, head, tail, 파이프, 세미콜론이나 && 로 여러 cat 을 한 줄에 잇는 것 전부 금지 — Bash 호출 하나당 cat 하나다.\n각 파일을 읽은 뒤에는 그 번호만 답하고 다음 파일로 넘어가라. 21개를 다 읽으면 마지막에 준비됨 이라고만 답하고 멈춰라. src/ 는 아직 건드리지 마라. 이 읽기는 네가 직접 해라. 서브에이전트나 다른 워커에게 넘기지 마라 — 파일 내용이 이 세션에 남아야 한다.",
         "앞의 파일을 모두 읽었으면 준비됨 이라고만 답하고 멈춰라. 다른 말은 하지 마라."
       ],
       "request": "src/ 에 있는 검증 모듈 12개(email, phone, postcode, country, currency, locale, timezone, vat, iban, swift, tax, duns)를 모두 고쳐줘.\n지금은 빈 배열이 통과되는데, 항목이 하나도 없으면 실패해야 해. 반환값에 field 는 그대로 두고 ok:false 로.\n이미 맞는 동작(항목이 있으면 통과, 빈 문자열이면 blank, 키가 없으면 missing)은 바꾸지 마.\n모듈마다 빈 배열을 거부하는지 확인하는 테스트를 test/ 에 추가하고, npm test(node --test)가 통과하는지 확인해.",
@@ -40,7 +40,7 @@
       "group": "wide-primed-deep",
       "fixtureDir": "fixtures/wide-validators-loaded",
       "prime": [
-        "reference/ 디렉토리의 파일 30개를 note-01.md 부터 note-30.md 까지 순서대로 하나씩 `cat reference/note-NN.md` 로 전부 읽어라. 루프, 글롭, head, tail, 파이프, 세미콜론이나 && 로 여러 cat 을 한 줄에 잇는 것 전부 금지 — Bash 호출 하나당 cat 하나다.\n각 파일을 읽은 뒤에는 그 번호만 답하고 다음 파일로 넘어가라. 30개를 다 읽으면 마지막에 준비됨 이라고만 답하고 멈춰라. src/ 는 아직 건드리지 마라.",
+        "reference/ 디렉토리의 파일 30개를 note-01.md 부터 note-30.md 까지 순서대로 하나씩 `cat reference/note-NN.md` 로 전부 읽어라. 루프, 글롭, head, tail, 파이프, 세미콜론이나 && 로 여러 cat 을 한 줄에 잇는 것 전부 금지 — Bash 호출 하나당 cat 하나다.\n각 파일을 읽은 뒤에는 그 번호만 답하고 다음 파일로 넘어가라. 30개를 다 읽으면 마지막에 준비됨 이라고만 답하고 멈춰라. src/ 는 아직 건드리지 마라. 이 읽기는 네가 직접 해라. 서브에이전트나 다른 워커에게 넘기지 마라 — 파일 내용이 이 세션에 남아야 한다.",
         "앞의 파일을 모두 읽었으면 준비됨 이라고만 답하고 멈춰라. 다른 말은 하지 마라."
       ],
       "request": "src/ 에 있는 검증 모듈 12개(email, phone, postcode, country, currency, locale, timezone, vat, iban, swift, tax, duns)를 모두 고쳐줘.\n지금은 빈 배열이 통과되는데, 항목이 하나도 없으면 실패해야 해. 반환값에 field 는 그대로 두고 ok:false 로.\n이미 맞는 동작(항목이 있으면 통과, 빈 문자열이면 blank, 키가 없으면 missing)은 바꾸지 마.\n모듈마다 빈 배열을 거부하는지 확인하는 테스트를 test/ 에 추가하고, npm test(node --test)가 통과하는지 확인해.",

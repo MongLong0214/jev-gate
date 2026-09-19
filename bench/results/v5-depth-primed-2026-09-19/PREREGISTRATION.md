@@ -27,3 +27,18 @@ the third prompt's echo stood at 61,809 context after four files were read.
 
 Rules 1-5 above are unchanged and still govern. The invalid run is recorded in `invalid-run-2026-09-19.json` and its
 numbers are not used as a result.
+
+## Amendment, written before the third run (2026-09-19)
+
+The second run produced three valid cells and one invalid: `jev_forced_orchestration` r2 read the thirty files inside
+subagents, so the content landed in a worker's context and the main session stood at 38,905 when the job prompt
+arrived. The forced arm orchestrates *every* prompt, priming included, so the two arms were not under the same
+condition during priming — native always reads in the main session, forced may delegate. The r1 cell read them in the
+main session, which was luck rather than design.
+
+The priming prompt now says the reading must be done by the session itself and not handed to a worker. The same text
+goes to both arms, so the condition is equalised rather than tilted; native already read in the main session in both
+of its cells. All four cells are re-run because the prompt changed, and the earlier cells are kept as a recorded run
+rather than merged with the new ones.
+
+Rules 1-5 are unchanged. This removes the cause of an invalidity rule 1 already defined; it does not relax the rule.
