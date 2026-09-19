@@ -25,8 +25,12 @@ export const DEFAULT_CONFIG: ConfigV5 = {
   // Derived, not measured: the two end-to-end points are 55K (delegation loses) and 406K (delegation wins), and this
   // sits between them nearer the measured win. Step 2 of the depth-gate guide is what moves it.
   delegationDepthFloor: 300_000,
-  // Optional in a config file: absent keeps the shipped composite Gate A question.
-  admissionQuestionShape: 'composite',
+  /**
+   * Atomic since 2026-09-19 (DECISION-defaults-2026-09-19.md): the composite question admitted 0 of 61 real prompts
+   * offline, so the shipped gate never ran. The atomic path admits 41 of 65 and its admissions measured -59 % to
+   * -69 % on the job turn at depth, with refusals sending no request at all.
+   */
+  admissionQuestionShape: 'atomic',
   // Above the 2-7 band that ordinary plans ran in, below the 13 that cost +92.5 %: it stops a runaway, not a plan.
   maxTasksPerPlan: DEFAULT_MAX_TASKS_PER_PLAN,
 };

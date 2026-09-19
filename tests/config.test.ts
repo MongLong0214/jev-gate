@@ -31,7 +31,7 @@ const write = (name: string, value: unknown): string => {
 describe('validateConfig', () => {
   it('accepts a full V5 file and a partial file over the defaults', () => {
     // routeQuestionShape is optional in a file and defaulted, so a deployed V5 config keeps composite Gate B.
-    expect(validateConfig(V5)).toEqual({ ok: true, config: { ...V5, mode: 'auto', routeQuestionShape: 'composite', delegationDepthFloor: 300_000, admissionQuestionShape: 'composite', maxTasksPerPlan: 10 } });
+    expect(validateConfig(V5)).toEqual({ ok: true, config: { ...V5, mode: 'auto', routeQuestionShape: 'composite', delegationDepthFloor: 300_000, admissionQuestionShape: 'atomic', maxTasksPerPlan: 10 } });
     const partial = validateConfig({ version: 5, mode: 'native', plannerDefaultTier: 'frontier', models: { deep: 'claude-opus-5' } });
     expect(partial.ok).toBe(true);
     if (!partial.ok) return;
@@ -47,9 +47,11 @@ describe('validateConfig', () => {
     // Absent in a deployed file, so the floor arrives without anyone editing their config; 0 is accepted and turns it off.
     expect(DEFAULT_CONFIG.delegationDepthFloor).toBe(300_000);
     expect(validateConfig({ version: 5, delegationDepthFloor: 0 })).toMatchObject({ ok: true, config: { delegationDepthFloor: 0 } });
-    // Gate A's shape is configured independently of Gate B's, and both default to the shipped composite question.
-    expect(DEFAULT_CONFIG.admissionQuestionShape).toBe('composite');
-    expect(validateConfig({ version: 5, admissionQuestionShape: 'atomic' })).toMatchObject({ ok: true, config: { admissionQuestionShape: 'atomic', routeQuestionShape: 'composite' } });
+    // The two shapes are configured independently and no longer agree: Gate A ships atomic because the composite
+    // question admitted 0 of 61 real prompts offline, while Gate B's atomic shape has one end-to-end observation.
+    expect(DEFAULT_CONFIG.admissionQuestionShape).toBe('atomic');
+    expect(DEFAULT_CONFIG.routeQuestionShape).toBe('composite');
+    expect(validateConfig({ version: 5, admissionQuestionShape: 'composite' })).toMatchObject({ ok: true, config: { admissionQuestionShape: 'composite', routeQuestionShape: 'composite' } });
     // T11: a deployed file that still sets resultConfidenceFloor keeps loading; nothing reads it any more.
     const deprecated = validateConfig({ version: 5, mode: 'auto', resultConfidenceFloor: 0.95 });
     expect(deprecated).toMatchObject({ ok: true, config: { resultConfidenceFloor: 0.95 } });

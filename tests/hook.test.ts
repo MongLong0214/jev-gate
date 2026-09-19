@@ -24,6 +24,9 @@ const choice = (keys: readonly string[], winner: string, p = 0.95, confidence = 
 
 interface FakeAnswers {
   execution?: string;
+  forbidsDelegation?: number;
+  answerOnly?: number;
+  size?: number;
   route?: string;
   basis?: string;
   planning_tier?: string;
@@ -37,6 +40,12 @@ const fakeJev = (opts: FakeAnswers = {}): ReturnType<typeof vi.fn> =>
     opts.onCall?.(questions, body.state);
     const answers: Record<string, unknown> = {};
     if (questions.includes('execution')) answers['execution'] = choice(ADMISSION_ANSWERS, opts.execution ?? 'orchestrated');
+    // Gate A is atomic by default since 2026-09-19, so the double answers its read-offs the way an admitted job reads.
+    if (questions.includes('forbids_delegation')) {
+      answers['forbids_delegation'] = { type: 'noul', noul: opts.forbidsDelegation ?? 0.05 };
+      answers['answer_only'] = { type: 'noul', noul: opts.answerOnly ?? 0.05 };
+      answers['size'] = { type: 'score', score: opts.size ?? 3, confidence: 0.9 };
+    }
     if (questions.includes('route')) answers['route'] = choice(ROUTE_ANSWERS, opts.route ?? 'standard');
     if (questions.includes('upgrade_basis')) answers['upgrade_basis'] = choice(UPGRADE_BASES, opts.basis ?? 'no_specific_basis');
     if (questions.includes('planning_tier')) answers['planning_tier'] = choice(PLANNER_ROUTE_ANSWERS, opts.planning_tier ?? 'deep');
@@ -50,6 +59,14 @@ const stdinOf = (value: unknown): AsyncIterable<Uint8Array> =>
 
 type Env = Record<string, string | undefined>;
 const makeEnv = (over: Env = {}): Env => ({ TYPESAFE_API_KEY: KEY, HOME: join(tmp, 'home'), JEV_GATE_MODE: 'auto', JEV_GATE_STATE_DIR: mkdtempSync(join(tmp, 'state-')), ...over });
+
+/** Gate A ships atomic; the four-way choice is still supported and its own tests select it explicitly. */
+let compositeSeq = 0;
+const compositeGateAEnv = (over: Env = {}): Env => {
+  const cfg = join(tmp, `composite-gate-a-${(compositeSeq += 1)}.json`);
+  writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', admissionQuestionShape: 'composite' }));
+  return makeEnv({ JEV_GATE_CONFIG: cfg, ...over });
+};
 
 /** T5: the default is one worker, so any test that needs concurrency has to raise the cap explicitly. */
 let capSeq = 0;
@@ -229,8 +246,8 @@ describe('Gate A admission', () => {
     ['direct', 'direct', null],
     ['needs_context', 'direct', 'admission_needs_context'],
     ['abstain', 'direct', 'admission_abstain'],
-  ])('answer %s produces the direct shape', async (answer, shape, code) => {
-    const env = makeEnv();
+  ])('composite answer %s produces the direct shape', async (answer, shape, code) => {
+    const env = compositeGateAEnv();
     const r = await run(env, promptEvent(), fakeJev({ execution: answer }));
     expect(r.code).toBe(code);
     expect(context(r)).toContain('Execution shape: direct');
@@ -393,8 +410,9 @@ describe('root guard (A6 allow-list)', () => {
   it('never guards a child caller, a direct job or a session without state', async () => {
     const env = await orchestrate();
     expect(await run(env, preEvent('Bash', {}, { agent_id: 'child' }))).toMatchObject({ kind: 'skip', code: 'child_caller' });
+    // A direct turn under the atomic gate: the request only wants an answer, so the veto fires and nothing is guarded.
     const direct = makeEnv();
-    await run(direct, promptEvent(), fakeJev({ execution: 'direct' }));
+    await run(direct, promptEvent(), fakeJev({ answerOnly: 0.9 }));
     expect(await run(direct, preEvent('Bash', {}))).toMatchObject({ kind: 'skip', code: 'shape_direct' });
     expect(await run(makeEnv(), preEvent('Bash', {}))).toMatchObject({ kind: 'skip', code: 'no_state' });
   });
@@ -991,7 +1009,7 @@ describe('Stop', () => {
   it('records completed, incomplete and blocked outcomes without output', async () => {
     const done = makeEnv();
     const fetchImpl = fakeJev();
-    await run(done, promptEvent(), fakeJev({ execution: 'direct' }));
+    await run(done, promptEvent(), fakeJev({ answerOnly: 0.9 }));
     expect(await run(done, { hook_event_name: 'Stop', session_id: 's1' })).toMatchObject({ kind: 'skip', stdout: null });
     expect(state(done).current.outcome).toBe('completed');
 

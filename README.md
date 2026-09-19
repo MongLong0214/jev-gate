@@ -168,7 +168,7 @@ Optional config at `~/.config/jev-gate/config.json` (or `JEV_GATE_CONFIG`), `JEV
   "admissionConfidenceFloor": 0.8, "routeConfidenceFloor": 0.8, "resultConfidenceFloor": 0.8,
   "plannerDefaultTier": "deep", "maxParallelWorkers": 1, "guardAllowTools": [],
   "delegationDepthFloor": 300000, "maxTasksPerPlan": 10,
-  "admissionQuestionShape": "composite", "routeQuestionShape": "composite",
+  "admissionQuestionShape": "atomic", "routeQuestionShape": "composite",
   "models": { "fast": "haiku", "standard": "sonnet", "deep": "opus", "frontier": "fable" } }
 ```
 
@@ -190,11 +190,16 @@ crossing.
 `maxTasksPerPlan` rejects an accepted plan above that many tasks. It is a backstop against a runaway split rather than
 a budget: every worker pays to be started, a 13-task plan measured +92.5 %, and plans that worked ran 2 to 7.
 
-`admissionQuestionShape` and `routeQuestionShape` choose how each gate asks. `composite` is the shipped single choice
-question. `atomic` fans the same judgement out into read-off questions and composes them in this plugin's code, which
-is how the vendor documents the model being used; neither atomic path consults its confidence floor, because the
-composition is done here rather than by the model. Both default to `composite` until an end-to-end run justifies the
-flip.
+`admissionQuestionShape` and `routeQuestionShape` choose how each gate asks. `composite` is a single choice question.
+`atomic` fans the same judgement out into read-off questions and composes them in this plugin's code, which is how the
+vendor documents the model being used; neither atomic path consults its confidence floor, because the composition is
+done here rather than by the model.
+
+**Gate A ships `atomic`** (DECISION-defaults-2026-09-19.md): the composite question admitted 0 of 61 real prompts in
+an offline replay even with depth supplied, so the gate never ran. The atomic path admits 41 of 65, and at depth its
+admissions measured −59 % to −69 % on the job turn against no plugin at all, depending on how many tasks the planner
+returned. **Gate B stays `composite`**, because its atomic shape has one end-to-end observation and every figure above
+was measured with the composite one.
 
 Job state lives in `$XDG_STATE_HOME/jev-gate/jobs/` (`~/.local/state/jev-gate/jobs/` by default), one file per session,
 containing your plan and task text. Delete the directory to remove it; a superseded job is kept as history inside its own
