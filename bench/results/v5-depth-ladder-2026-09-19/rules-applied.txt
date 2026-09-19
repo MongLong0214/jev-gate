@@ -1,0 +1,32 @@
+| job | arm | rep | context | valid | quality | admitted | job turn $ | session $ | wall s | agents | receipts | outcome |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| wide-validators-primed-13 | jev_single | 1 | 193553 | ok | pass | true | 0.7374 | 1.7881 | 163.7 | 1 | accept:1 | completed |
+| wide-validators-primed-13 | jev_single | 2 | 193281 | ok | pass | true | 0.9119 | 1.9596 | 229.4 | 1 | accept:1 | completed |
+| wide-validators-primed-13 | sonnet_native | 1 | 192799 | ok | pass | false | 1.4204 | 2.4682 | 113.2 | 0 | - | - |
+| wide-validators-primed-13 | sonnet_native | 2 | 192332 | ok | pass | false | 1.4118 | 2.4550 | 196.6 | 0 | - | - |
+| wide-validators-primed-21 | jev_single | 1 | 285516 | ok | pass | true | 0.9142 | 2.7306 | 269.9 | 1 | accept:1 | completed |
+| wide-validators-primed-21 | jev_single | 2 | 285509 | ok | pass | true | 0.9392 | 2.7554 | 275.6 | 2 | accept:1,invalid:1 | completed |
+| wide-validators-primed-21 | sonnet_native | 1 | 284780 | ok | pass | false | 2.0684 | 3.8813 | 254.5 | 0 | - | - |
+| wide-validators-primed-21 | sonnet_native | 2 | 0 | INVALID: context 0 outside band 200000-340000 | fail | false | 0.0000 | 0.8438 | 37.7 | 0 | - | - |
+| wide-validators-primed-30 | jev_single | 1 | 0 | INVALID: context 0 outside band 330000-450000 | fail | false | 0.0000 | 0.0000 | 2.9 | 0 | - | - |
+| wide-validators-primed-30 | jev_single | 2 | 0 | INVALID: context 0 outside band 330000-450000 | fail | false | 0.0000 | 0.0000 | 2.8 | 0 | - | - |
+| wide-validators-primed-30 | sonnet_native | 1 | 0 | INVALID: context 0 outside band 330000-450000 | fail | false | 0.0000 | 0.0000 | 2.7 | 0 | - | - |
+| wide-validators-primed-30 | sonnet_native | 2 | 0 | INVALID: context 0 outside band 330000-450000 | fail | false | 0.0000 | 0.0000 | 3.2 | 0 | - | - |
+
+## rungs (pre-registered rules applied)
+
+### wide-validators-primed-13 (13-note) — 4/4 valid, jev_single admitted 2/2
+- native mean $1.4161 [1.4204, 1.4118], spread 0.6%
+- single mean $0.8246 [0.7374, 0.9119], spread 23.7%
+- difference **41.8%**, widest arm spread 23.7%
+- **SEPARATION (rule 5 met)**
+- wall: native 155s vs single 197s (26.9%)
+### wide-validators-primed-21 (21-note) — 3/4 valid, jev_single admitted 2/2
+- invalid: sonnet_native r2 — context 0 outside band 200000-340000
+- fewer than 2 valid native cells — no percentage quoted.
+### wide-validators-primed-30 (30-note) — 0/4 valid, jev_single admitted 0/0
+- invalid: jev_single r1 — context 0 outside band 330000-450000
+- invalid: jev_single r2 — context 0 outside band 330000-450000
+- invalid: sonnet_native r1 — context 0 outside band 330000-450000
+- invalid: sonnet_native r2 — context 0 outside band 330000-450000
+- **rule 4: fewer than 2 admitted jev_single cells — no percentage is quoted for this rung.**

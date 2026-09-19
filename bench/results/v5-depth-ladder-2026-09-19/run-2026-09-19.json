@@ -1,0 +1,100 @@
+{
+  "run": "v5-depth-ladder",
+  "date": "2026-09-19",
+  "preregistration_commit": "7c67c66",
+  "frozen_config": {
+    "delegationDepthFloor": 50000,
+    "source": "bench/results/v5-depth-ladder-2026-09-19/config-floor-50000.json",
+    "product_floor_unchanged": 300000
+  },
+  "spend_usd": 18.8821,
+  "planned_cells": 12,
+  "cells_that_ran": 7,
+  "rungs": {
+    "13-note": {
+      "depth": [
+        192332,
+        193553
+      ],
+      "native_job_turn": [
+        1.4204,
+        1.4118
+      ],
+      "single_job_turn": [
+        0.7374,
+        0.9119
+      ],
+      "native_spread_pct": 0.6,
+      "single_spread_pct": 23.7,
+      "difference_pct": 41.8,
+      "rule5": "separation",
+      "wall_pct": 26.9,
+      "quality": "4/4 pass"
+    },
+    "21-note": {
+      "depth": [
+        284780,
+        285516
+      ],
+      "native_job_turn": [
+        2.0684
+      ],
+      "single_job_turn": [
+        0.9142,
+        0.9392
+      ],
+      "difference_pct": null,
+      "rule5": "not evaluable: one valid native cell",
+      "quality": "3/3 pass"
+    },
+    "30-note": {
+      "depth": null,
+      "note": "no cell ran"
+    }
+  },
+  "invalid_cells": [
+    {
+      "cell": "wide-validators-primed-21/sonnet_native/2",
+      "reason": "HTTP 429 session limit",
+      "context": 0
+    },
+    {
+      "cell": "wide-validators-primed-30/jev_single/1",
+      "reason": "HTTP 429 session limit",
+      "context": 0
+    },
+    {
+      "cell": "wide-validators-primed-30/jev_single/2",
+      "reason": "HTTP 429 session limit",
+      "context": 0
+    },
+    {
+      "cell": "wide-validators-primed-30/sonnet_native/1",
+      "reason": "HTTP 429 session limit",
+      "context": 0
+    },
+    {
+      "cell": "wide-validators-primed-30/sonnet_native/2",
+      "reason": "HTTP 429 session limit",
+      "context": 0
+    }
+  ],
+  "rule2_priming_integrity": "held in every cell: prompt 1 depth_unknown, prompt 2 admission_answer_only, only the job prompt orchestrated",
+  "defect": {
+    "cell": "wide-validators-primed-21/jev_single/2",
+    "workers": 2,
+    "attempt1": {
+      "verdict": "invalid",
+      "reason": "check_id grammar",
+      "duration_ms": 86639,
+      "tool_calls": 43
+    },
+    "attempt2": {
+      "verdict": "accept",
+      "duration_ms": 48741,
+      "tool_calls": 21
+    },
+    "scope": "only single-arm cell with more than one dispatch across all runs to date",
+    "direction": "inflates the single arm"
+  }
+}
