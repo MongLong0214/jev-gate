@@ -44,8 +44,51 @@ moved this job's cost by a factor of 2.4 before. Worker counts observed on this 
 does not separate "the gate chose better" from "the planner split smaller this time", and nothing here should be read
 as the former.
 
-**One case, one depth, two repetitions.** The shallow half — that the gate refuses a session below the floor, and
-costs native when it does — is measured separately (`wide-validators-primed-13`), and the default does not flip until
-that result exists.
+**One case, one depth, two repetitions.** The shallow half is below.
 
 **`routeQuestionShape` is still `composite`** in these cells. Gate B's atomic shape was not exercised here.
+
+
+## The shallow half — the refusal is exact, and its cost is not measurable here
+
+`wide-validators-primed-13` primes with thirteen notes and arrives at **179,171–180,778**, comfortably under the
+300,000 floor, so the case does test the floor. Same arm, same config, two repetitions each against `sonnet_native`,
+all four cells passing.
+
+**The refusal is exactly what it should be.** Every prompt in both jev cells recorded `depth_below_floor` or
+`depth_unknown` with `attempted: false` — **zero Jev requests, zero workers, zero orchestration**. The gate did not
+ask a question it had already decided.
+
+**Whether refusing costs what native costs cannot be answered from this run:**
+
+| arm | cells | mean | spread within the arm |
+|---|---|---|---|
+| `sonnet_native` | $1.3697 / $1.7378 | $1.5537 | **26.9 %** |
+| `jev_hierarchy` | $1.7605 / $1.7848 | $1.7727 | 1.4 % |
+
+`jev_hierarchy` is 14.1 % above the native mean, and the native arm's own two cells differ by 26.9 %. The baseline
+moves more than the thing being measured. Pre-registration rule 2 (a 10 % band) is not met, and rule 5 therefore
+applies: **no cost claim is made from these cells**, and the default does not flip — not because refusing is
+expensive, but because this run cannot tell.
+
+### A wrong diagnosis, recorded because it was nearly published
+
+With three of the four cells in hand, the jev arm read 26 % more `cache_read` than the single native cell
+(9,275,140 against 7,360,698) while every stream-visible quantity matched — 41 turns, 53 tool calls, 53 tool results,
+79 main-turn requests, zero retries, zero denials. That looked like a real per-session cost the plugin imposes on
+turns it refuses, and it was written up as one. The fourth cell, `sonnet_native` r2, then read **9,185,753** — the jev
+figure. The low cell was the native one, not the high ones.
+
+The lesson is the ordinary one, and it cost nothing this time only because the run had not finished: **a difference
+against a single baseline cell is not a difference.** The deep case's 3 % native spread made 26 % look impossible;
+the shallow case's native spread is 27 %.
+
+## What the two halves together do and do not license
+
+- The gate admits at depth and refuses below the floor, both for the right recorded reason, with no request sent on a
+  refusal. That part is settled.
+- At depth the admitted path costs **−64.2 %** on the job turn against native, at **+3.8 %** wall. That part is
+  measured, on one case, twice.
+- Below the floor the refusal's cost is **unmeasured**, and this bench cannot measure a 10 % effect there without more
+  repetitions or a case whose native arm is stabler.
+- `admissionQuestionShape` therefore stays `composite` by default.
