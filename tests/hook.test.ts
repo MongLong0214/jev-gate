@@ -488,7 +488,10 @@ describe('planner dispatch', () => {
     const second = await run(env, plannerPost('not json at all'));
     expect(context(second)).toContain('No planner attempts remain');
     expect(state(env).current).toMatchObject({ phase: 'blocked', attempts: { planner: 2, replans: 0 } });
-    expect(await run(env, plannerPre(), fakeJev())).toMatchObject({ kind: 'deny', code: 'bounds_exhausted' });
+    const noPlan = await run(env, plannerPre(), fakeJev());
+    expect(noPlan).toMatchObject({ kind: 'deny', code: 'bounds_exhausted' });
+    // No plan ever became ready here, so there is nothing to dispatch and reporting the blocker is all that is left.
+    expect(String(hookOutput(noPlan)['permissionDecisionReason'])).toContain('Report the blocker to the user instead of retrying');
   });
 
   it('counts planning attempts and replans separately, so replanning never spends an initial planning attempt', async () => {
@@ -502,7 +505,14 @@ describe('planner dispatch', () => {
       expect(state(env).current).toMatchObject({ phase: 'planned', attempts: { planner: 1, replans: attempt } });
     }
     // The replan bound is used up while the planning bound still shows a single attempt.
-    expect(await run(env, plannerPre(), fetchImpl)).toMatchObject({ kind: 'deny', code: 'bounds_exhausted' });
+    const denied = await run(env, plannerPre(), fetchImpl);
+    expect(denied).toMatchObject({ kind: 'deny', code: 'bounds_exhausted' });
+    // v5-job2-orbit-2026-09-19: the refusal must not read as nothing left to do. Revision 1 is accepted and dispatchable,
+    // and a coordinator told only to report the blocker dispatched no worker at all and shipped nothing at full price.
+    const text = String(hookOutput(denied)['permissionDecisionReason']);
+    expect(text).toContain('revision 1 cannot be revised again');
+    expect(text).toContain('Ready task ids: t1, t2');
+    expect(text).not.toContain('Report the blocker to the user instead of retrying');
     expect(state(env).current).toMatchObject({ phase: 'planned', plan: { rev: 1 }, attempts: { planner: 1, replans: 2 } });
   });
 

@@ -11,6 +11,7 @@ import {
   renderOrchestrationGuidance,
   renderPlannedContext,
   renderPlannerModelNote,
+  renderReplanBoundExhausted,
   renderRouteNote,
   renderWorkerAccepted,
   renderWorkerIncomplete,
@@ -82,6 +83,22 @@ describe('fixed reasons', () => {
     expect(renderDispatchDeny('planner_active')).toContain('already running');
     expect(GUARD_DENY_REASON).toContain('Nothing was changed by this call.');
     expect(STOP_REASON).toContain('JEV_GATE_MODE=off');
+  });
+
+  /**
+   * v5-job2-orbit-2026-09-19: the old text said only "Report the blocker to the user instead of retrying", and a
+   * coordinator holding an accepted four-task revision reported instead of dispatching, shipping nothing at full price.
+   */
+  it('names the revision still in force when the replan bound is used up, rather than only asking for a report', () => {
+    const text = renderReplanBoundExhausted(2, ['t1', 't2'], 1);
+    expect(text).toContain('revision 2');
+    expect(text).toContain('stays in force and its ready tasks can still be dispatched');
+    expect(text).toContain('Ready task ids: t1, t2');
+    expect(text).toContain('dispatch one ready task at a time');
+    expect(text).toContain('Nothing was changed by this call.');
+    // Reporting with nothing dispatched is the last resort here, not the instruction.
+    expect(text).toContain('only when no ready task is left');
+    expect(renderReplanBoundExhausted(1, [], 1)).toContain('Ready task ids: none');
   });
 
   it('lists ready ids for the coordinator and reports a worker-reported recovery as locking (T11)', () => {

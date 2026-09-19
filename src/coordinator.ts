@@ -123,6 +123,15 @@ export const renderPlannerProblem = (status: string, detail: string): string =>
 export const renderReplanProblem = (status: string, detail: string, rev: number): string =>
   `[Jev Gate plan] The replan returned ${status}; plan revision ${rev} stays in force and its ready tasks can still be dispatched. ${bounded(detail)}`;
 
+/**
+ * A7: the replan bound bounds revising the plan, not the job. The revision in force was accepted and its ready tasks
+ * are still dispatchable, so the exhaustion text names them the way a failed replan does. Observed 2026-09-19
+ * (`v5-job2-orbit`): told only to report the blocker, a coordinator holding an accepted four-task revision dispatched
+ * no worker at all and the turn ended with the working tree untouched, at 96 % of a successful cell's cost.
+ */
+export const renderReplanBoundExhausted = (rev: number, readyIds: string[], cap: number): string =>
+  `This job has used its allowed replans, so plan revision ${rev} cannot be revised again. It stays in force and its ready tasks can still be dispatched. Ready task ids: ${readyIds.length ? readyIds.join(', ') : 'none'}. ${renderDispatchRule(cap)} Dispatch what the plan covers and report separately what it does not. Report a blocker with nothing dispatched only when no ready task is left. Nothing was changed by this call.`;
+
 export const renderWorkerIncomplete = (taskId: string, reason: string): string =>
   `[Jev Gate result] Task ${taskId} is incomplete: ${reason}. Dependent tasks stay locked. Rework it with attempt=<n> on the marker, or replan once no worker is active.`;
 

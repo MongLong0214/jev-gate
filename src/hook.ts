@@ -39,6 +39,7 @@ import {
   GUARD_DENY_REASON,
   renderDirectGuidance,
   renderDispatchDeny,
+  renderReplanBoundExhausted,
   renderOrchestrationGuidance,
   renderPlannedContext,
   renderPlannerModelNote,
@@ -547,14 +548,19 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
   };
 
   /** A4/T4: every reason a planner call may not start now. Run on the pre-lock read and again under the reservation lock. */
-  const plannerConflict = (g: JobGeneration): { reason: DenyReason; detail: string | null } | null => {
+  const plannerConflict = (g: JobGeneration): { reason: DenyReason; text: string } | null => {
     // T4: one planner per generation. A second one would race the first over the same plan revision.
-    if (activePlanners(g).length > 0) return { reason: 'planner_active', detail: null };
+    if (activePlanners(g).length > 0) return { reason: 'planner_active', text: renderDispatchDeny('planner_active') };
     // A3: draining first keeps a replan from racing the workers whose receipts it would invalidate.
-    if (activeWorkers(g).length > 0) return { reason: 'workers_active', detail: null };
+    if (activeWorkers(g).length > 0) return { reason: 'workers_active', text: renderDispatchDeny('workers_active') };
     const kind: BoundKind = g.plan ? 'replan' : 'planner';
-    if (boundExhausted(g, kind, null)) return { reason: 'bounds_exhausted', detail: kind };
-    return null;
+    if (!boundExhausted(g, kind, null)) return null;
+    // A7: an exhausted replan bound leaves an accepted revision in force, so the text says what can still be dispatched.
+    // Only an exhausted planner bound leaves nothing to dispatch, and there reporting the blocker is all that is left.
+    const text = g.plan
+      ? renderReplanBoundExhausted(g.plan.rev, readyForDispatch(g), config.maxParallelWorkers)
+      : renderDispatchDeny('bounds_exhausted', kind);
+    return { reason: 'bounds_exhausted', text };
   };
 
   const handlePlanner = async (gen: JobGeneration, sessionId: string, eligibility: Extract<Eligibility, { eligible: true }>): Promise<HookResult> => {
@@ -566,8 +572,10 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       }
     }
     const conflict = plannerConflict(gen);
-    if (conflict) return emitDeny(conflict.reason, renderDispatchDeny(conflict.reason, conflict.detail), null);
+    if (conflict) return emitDeny(conflict.reason, conflict.text, null);
+    // Narrowing sees only the initial null, so the reason and its text are held apart rather than read off one object.
     let raced: DenyReason | null = null;
+    let racedText = '';
     const reserved = updateJob(deps.env, sessionId, (prev) => {
       // A planner dispatch is also the recovery path from missing or unreadable state, and the point where a
       // coordinator-initiated job becomes orchestrated. A2: a generation without a prompt identity is never guarded.
@@ -576,6 +584,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       const again = plannerConflict(current);
       if (again) {
         raced = again.reason;
+        racedText = again.text;
         return null;
       }
       const boundKind: BoundKind = current.plan ? 'replan' : 'planner';
@@ -592,7 +601,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       return { version: 5, session_id: sessionId, updated_at: '', current: next, history: prev?.history ?? [] };
     });
     if (!reserved.ok) return preserve(reserved.code);
-    if (raced !== null) return emitDeny(raced, renderDispatchDeny(raced), null);
+    if (raced !== null) return emitDeny(raced, racedText, null);
     // A5: a pin bypasses tier selection, so the call is left exactly as the coordinator made it.
     if (eligibility.pinned) return preserve('pinned');
     if (mode === 'native') return preserve('mode_native');
