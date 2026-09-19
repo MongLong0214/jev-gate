@@ -87,6 +87,15 @@ in it was discarding the entire reply — 86.6 seconds and 43 tool calls thrown 
 showed the `single` path counting dispatch attempts without ever reading the bound it counted toward; it now reads
 the per-job task bound that already existed.
 
+**2026-09-20: the two missing rungs were re-run whole, and both separated.** Same pre-registration, unamended;
+8 cells, 8 checker passes, no invalid cell (`RESULTS-RERUN-2026-09-20.md`). At **285K, `jev_single` is 43.1 %
+cheaper**; at **389K, 56.6 % cheaper**. Reading the three rungs together — 193K −41.8 %, 285K −43.1 %, 389K
+−56.6 % — the saving **rises with depth and does not vanish at the shallow end**, which is what the
+root-turns-at-depth mechanism predicts. The shipped floor of 300,000 therefore sits just above a depth measured
+at 43.1 %. Two things bound that reading: the 13-note rung ran on an earlier build (the 21/30 pair share one),
+and wall clock is **uniformly worse** for `single` — +55.0 % and +54.1 % here, +26.9 % at 13-note. The floor is
+still unchanged at 300,000, and no default follows from this.
+
 Read the 2026-09-19 section of "What the measurements say" before trusting any older number in this file.
 
 ## What V5 does

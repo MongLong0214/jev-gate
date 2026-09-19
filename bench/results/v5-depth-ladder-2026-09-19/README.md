@@ -6,6 +6,10 @@ Run: `~/jev-gate-runs/v5-depth-ladder`. Rules applied mechanically by `apply-rul
 `v5-single-vs-native` it reproduces that run's published 71.0 % and 20.4 % and, with no hand intervention, sorts
 `wide` into a separation and `orbit` into direction-only — the caveat that run had to add after the fact.
 
+> **Follow-up (2026-09-20):** the two rungs this run lost to the session limit were re-run whole under this
+> same unamended pre-registration. **Both separated: 21-note −43.1 %, 30-note −56.6 %.** See
+> `RESULTS-RERUN-2026-09-20.md`. The table below is this run's own result and is left as it was measured.
+
 ## What was asked
 
 Is the `single` shape's saving **bound to depth**? The 71.0 % came from sessions at ~390K, and the mechanism that

@@ -103,6 +103,11 @@ the product will act at, on a rung where the native arm's own cells sit 0.6 % ap
 measurements and has never described this shape — a flip does not change the floor, but it does mean the floor is
 now a number set for the path that would no longer be the default.
 
+*(Completed 2026-09-20: the rungs the session limit cut were re-run under the same unamended pre-registration and
+both separated — **43.1 % at 285K, 56.6 % at 389K**. The saving rises with depth across all three rungs and is
+still 41.8 % at the shallow end. It does not change the argument above; it removes the "one rung" caveat from it.
+Wall clock stayed worse for `single` at every rung, +54 % to +55 % here.)*
+
 **Against it, or at least as a condition on it:** the same run found the second defect of the same class on this
 path, after the missing receipt in `ed2a419`. A worker's entire reply was discarded because a check id it named
 itself contained a space, throwing away 86.6 seconds and 43 tool calls, and the path was counting dispatch
@@ -124,4 +129,5 @@ expectation that a third one exists.
 - `bench/results/v5-replan-bound-2026-09-19/DIAGNOSIS.md` — duplication scales with coupling, which is the argument
   for keeping `hierarchy` available.
 - `bench/results/v5-depth-ladder-2026-09-19/` — the depth ladder: 41.8 % at 193K, the session limit that cut it
-  short, and the check-id defect it found.
+  short, and the check-id defect it found; `RESULTS-RERUN-2026-09-20.md` completes it at 43.1 % (285K) and
+  56.6 % (389K).

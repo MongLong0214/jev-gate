@@ -1,0 +1,25 @@
+| job | arm | rep | context | valid | quality | admitted | job turn $ | session $ | wall s | agents | receipts | outcome |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| wide-validators-primed-21 | jev_single | 1 | 285444 | ok | pass | true | 0.9656 | 2.7806 | 211.3 | 1 | accept:1 | completed |
+| wide-validators-primed-21 | jev_single | 2 | 285764 | ok | pass | true | 1.2681 | 3.0890 | 201.2 | 1 | accept:1 | completed |
+| wide-validators-primed-21 | sonnet_native | 1 | 284661 | ok | pass | false | 1.9915 | 3.8022 | 139.7 | 0 | - | - |
+| wide-validators-primed-21 | sonnet_native | 2 | 284824 | ok | pass | false | 1.9319 | 3.7470 | 126.5 | 0 | - | - |
+| wide-validators-primed-30 | jev_single | 1 | 389026 | ok | pass | true | 1.1899 | 4.0443 | 202.6 | 1 | accept:1 | completed |
+| wide-validators-primed-30 | jev_single | 2 | 389183 | ok | pass | true | 1.1656 | 4.0232 | 221.6 | 1 | accept:1 | completed |
+| wide-validators-primed-30 | sonnet_native | 1 | 388347 | ok | pass | false | 2.6296 | 5.4809 | 134.4 | 0 | - | - |
+| wide-validators-primed-30 | sonnet_native | 2 | 388315 | ok | pass | false | 2.7995 | 5.6502 | 140.8 | 0 | - | - |
+
+## rungs (pre-registered rules applied)
+
+### wide-validators-primed-21 (21-note) — 4/4 valid, jev_single admitted 2/2
+- native mean $1.9617 [1.9915, 1.9319], spread 3.1%
+- single mean $1.1169 [0.9656, 1.2681], spread 31.3%
+- difference **43.1%**, widest arm spread 31.3%
+- **SEPARATION (rule 5 met)**
+- wall: native 133s vs single 206s (55.0%)
+### wide-validators-primed-30 (30-note) — 4/4 valid, jev_single admitted 2/2
+- native mean $2.7146 [2.6296, 2.7995], spread 6.5%
+- single mean $1.1778 [1.1899, 1.1656], spread 2.1%
+- difference **56.6%**, widest arm spread 6.5%
+- **SEPARATION (rule 5 met)**
+- wall: native 138s vs single 212s (54.1%)
