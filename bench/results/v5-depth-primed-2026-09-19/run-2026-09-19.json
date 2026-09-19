@@ -1,21 +1,70 @@
 {
-  "preregistration": "bench/results/v5-depth-primed-2026-09-19/PREREGISTRATION.md",
-  "invalid": [
+  "run": "third (priming told to read in the session itself); all four cells valid and passing, two repetitions",
+  "native": {
+    "job": 2.6993,
+    "session": 5.4165,
+    "wall": 278
+  },
+  "forced": {
+    "job": 1.2552,
+    "session": 4.1265,
+    "wall": 411
+  },
+  "cells_third": [
+    {
+      "arm": "jev_forced_orchestration",
+      "rep": 1,
+      "context_at_job_prompt": 390141,
+      "valid": true,
+      "prime_cost_usd": 2.8535,
+      "job_cost_usd": 1.2338,
+      "session_cost_usd": 4.0872,
+      "agent_calls": 4,
+      "quality": "pass",
+      "num_turns": 5,
+      "wall_s": 495
+    },
     {
       "arm": "jev_forced_orchestration",
       "rep": 2,
-      "context_at_job_prompt": 38905,
-      "valid": false,
-      "prime_cost_usd": 2.4462,
-      "job_cost_usd": 0.7094,
-      "session_cost_usd": 3.1556,
+      "context_at_job_prompt": 392089,
+      "valid": true,
+      "prime_cost_usd": 2.8891,
+      "job_cost_usd": 1.2766,
+      "session_cost_usd": 4.1657,
+      "agent_calls": 4,
       "quality": "pass",
-      "agent_calls": 6,
-      "num_turns": 5,
-      "wall_s": 425
+      "num_turns": 8,
+      "wall_s": 327
+    },
+    {
+      "arm": "sonnet_native",
+      "rep": 1,
+      "context_at_job_prompt": 375219,
+      "valid": true,
+      "prime_cost_usd": 2.7169,
+      "job_cost_usd": 2.7401,
+      "session_cost_usd": 5.457,
+      "agent_calls": 0,
+      "quality": "pass",
+      "num_turns": 43,
+      "wall_s": 284
+    },
+    {
+      "arm": "sonnet_native",
+      "rep": 2,
+      "context_at_job_prompt": 375263,
+      "valid": true,
+      "prime_cost_usd": 2.7176,
+      "job_cost_usd": 2.6585,
+      "session_cost_usd": 5.3761,
+      "agent_calls": 0,
+      "quality": "pass",
+      "num_turns": 42,
+      "wall_s": 272
     }
   ],
-  "valid": [
+  "cells_second_recorded": [
     {
       "arm": "jev_forced_orchestration",
       "rep": 1,
@@ -24,10 +73,23 @@
       "prime_cost_usd": 2.8698,
       "job_cost_usd": 3.0022,
       "session_cost_usd": 5.8719,
-      "quality": "pass",
       "agent_calls": 13,
+      "quality": "pass",
       "num_turns": 33,
       "wall_s": 548
+    },
+    {
+      "arm": "jev_forced_orchestration",
+      "rep": 2,
+      "context_at_job_prompt": 38905,
+      "valid": false,
+      "prime_cost_usd": 2.4462,
+      "job_cost_usd": 0.7094,
+      "session_cost_usd": 3.1556,
+      "agent_calls": 6,
+      "quality": "pass",
+      "num_turns": 5,
+      "wall_s": 425
     },
     {
       "arm": "sonnet_native",
@@ -37,8 +99,8 @@
       "prime_cost_usd": 2.7002,
       "job_cost_usd": 3.3389,
       "session_cost_usd": 6.0391,
-      "quality": "pass",
       "agent_calls": 0,
+      "quality": "pass",
       "num_turns": 41,
       "wall_s": 185
     },
@@ -50,65 +112,15 @@
       "prime_cost_usd": 2.7162,
       "job_cost_usd": 3.6171,
       "session_cost_usd": 6.3333,
-      "quality": "pass",
       "agent_calls": 0,
+      "quality": "pass",
       "num_turns": 44,
       "wall_s": 215
     }
   ],
-  "note": "A cell is invalid under rule 1 when context_at_job_prompt is below 250,000. The forced r2 cell delegated its own priming turn to subagents, so the files were read into a subagent's context and not the main session's.",
-  "cells": [
-    {
-      "arm": "jev_forced_orchestration",
-      "rep": 1,
-      "context_at_job_prompt": 391341,
-      "valid": true,
-      "prime_cost_usd": 2.8698,
-      "job_cost_usd": 3.0022,
-      "session_cost_usd": 5.8719,
-      "quality": "pass",
-      "agent_calls": 13,
-      "num_turns": 33,
-      "wall_s": 548
-    },
-    {
-      "arm": "jev_forced_orchestration",
-      "rep": 2,
-      "context_at_job_prompt": 38905,
-      "valid": false,
-      "prime_cost_usd": 2.4462,
-      "job_cost_usd": 0.7094,
-      "session_cost_usd": 3.1556,
-      "quality": "pass",
-      "agent_calls": 6,
-      "num_turns": 5,
-      "wall_s": 425
-    },
-    {
-      "arm": "sonnet_native",
-      "rep": 1,
-      "context_at_job_prompt": 374257,
-      "valid": true,
-      "prime_cost_usd": 2.7002,
-      "job_cost_usd": 3.3389,
-      "session_cost_usd": 6.0391,
-      "quality": "pass",
-      "agent_calls": 0,
-      "num_turns": 41,
-      "wall_s": 185
-    },
-    {
-      "arm": "sonnet_native",
-      "rep": 2,
-      "context_at_job_prompt": 375162,
-      "valid": true,
-      "prime_cost_usd": 2.7162,
-      "job_cost_usd": 3.6171,
-      "session_cost_usd": 6.3333,
-      "quality": "pass",
-      "agent_calls": 0,
-      "num_turns": 44,
-      "wall_s": 215
-    }
-  ]
+  "delta": {
+    "job_pct": -53.5,
+    "session_pct": -23.8,
+    "wall_pct": 47.8
+  }
 }

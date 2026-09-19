@@ -77,3 +77,13 @@ finished and passed. A process check whose pattern appears in its own command li
 - `FACT_TRUE` 0.6 and `FACT_NOT_AGAINST` 0.5 remain uncalibrated, now with one end-to-end run behind them instead of
   none.
 - Gate A still admits nothing on its own; every row here sits on the forced arm.
+
+
+## Update — 2026-09-19, after the primed run
+
+Both rows above are single observations on a case that primed inside the job turn. The primed run
+(`bench/results/v5-depth-primed-2026-09-19`) since measured the same job at a real prompt-time depth and found the job
+turn **−53.5 %** over two repetitions, and it also found what dominates the spread: **worker count**. The same case
+cost $3.0022 with 13 workers and $1.2338–$1.2766 with 4. The −50.5 % and +92.5 % here each came from a cell whose
+worker count was not controlled, so they are a direction, not a size — which is what the worker-count limit recorded
+in this file's own trailers was already saying.

@@ -70,3 +70,19 @@ number, not content.
   fire before the job finished, but a longer job would have crossed it, and that interaction is untested.
 - Whether Gate A given the depth would answer differently is the next experiment and is replayable offline against the
   recorded sessions.
+
+
+## Update — 2026-09-19, after the primed run
+
+The −57 % row above is a whole-session comparison where priming and work happened in **one turn**, so at
+`UserPromptSubmit` the session still looked fresh. `bench/results/v5-depth-primed-2026-09-19` re-ran the same job with
+the priming in its own turns, charged to both arms, and compared the job turn alone: **−53.5 %, two repetitions, four
+valid cells, all checks passing**. The direction and roughly the size hold, and this time the depth is real at the
+moment the gate would be asked.
+
+One reading that turned out to be wrong is worth recording, because it was made here and corrected there: the −57 %
+was *not* an artefact of priming cost landing on the native arm. The one run that measured only −10.1 % differed in
+worker count (13 against 4), not in how priming was charged. Worker count is what moves this number.
+
+The runtime warning above still holds, and got worse before it got better: +196 % wall in the run with 13 workers,
++47.8 % in the two-repetition run with 4.
