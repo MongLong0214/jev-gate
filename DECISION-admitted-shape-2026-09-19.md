@@ -105,9 +105,10 @@ now a number set for the path that would no longer be the default.
 
 > **Withdrawn 2026-09-20.** The paragraph above rests on the 41.8 % at 193K, and **that measurement did not
 > reproduce.** Re-run with byte-identical inputs, the same rung came back with `single` **72.5 % more expensive**.
-> The arms did not change; the metric did — the native root re-read its whole context per turn on 09-19 and about
-> 40 % of it on 09-20. The two deeper rungs were re-run and did separate (−43.1 % at 285K, −56.6 % at 389K), but
-> they were measured once, on 09-19, in that same high-re-read regime, so they are **provisional**.
+> The arms did not change; the metric did. Summed from the stream, `single` did 10.1 % less work than native at
+> that rung **in both runs, identical to the decimal** — what moved was the fraction of the same traffic the host
+> reported. The two deeper rungs did separate in dollars (−43.1 % at 285K, −56.6 % at 389K), but they were
+> measured once, under that regime, and **in work terms they read 12.4 % against `single` and 27.1 % for it**.
 >
 > What this decision can still use: the quality record, the failure-surface argument, and the fact that
 > `delegationDepthFloor: 300000` was derived from **hierarchy** measurements and has never described this shape.

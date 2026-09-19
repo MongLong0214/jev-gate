@@ -11,8 +11,9 @@ Run: `~/jev-gate-runs/v5-depth-ladder`. Rules applied mechanically by `apply-rul
 >    (`RESULTS-RERUN-2026-09-20.md`).
 > 2. **This run's own headline did not reproduce.** The 13-note rung was re-run with byte-identical inputs and
 >    came back with the sign reversed — `single` 72.5 % *more* expensive. The cause is in the metric, not the
->    arms: the native root re-read its whole context every turn on 09-19 and about 40 % of it on 09-20. See
->    `RESULTS-13NOTE-RERUN-2026-09-20.md`. **Read that before quoting anything below.**
+>    arms: the stream shows both arms doing the same work on both days, and the host reporting a different
+>    fraction of it. See `RESULTS-13NOTE-RERUN-2026-09-20.md` and `METRIC-DEFECT-2026-09-20.md`.
+>    **Read those before quoting anything below.**
 >
 > The table below is this run's own result and is left as it was measured.
 

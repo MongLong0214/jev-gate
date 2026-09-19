@@ -36,13 +36,20 @@ The cost moved because **cache reads** moved:
 | native 21-note | 2 (09-19) | ~285K | 42, 42 | 12.72M, 12.45M | ~300K | $1.96 |
 | native 30-note | 2 (09-19) | ~388K | 42, 42 | 19.02M, 19.81M | ~460K | $2.71 |
 
-On 2026-09-19 the native root re-read **its whole context every turn** — 193K per turn at a 193K depth, and more
-at the deeper rungs. On 2026-09-20 it re-read **about 40 % of it**. Same request, same turns, same output, 2.5×
-less cache read, and the job-turn dollar figure fell with it.
+> **Corrected 2026-09-20, later the same day.** The paragraph below read the `modelUsage` aggregate and concluded
+> the native root had *re-read less context*. The stream itself says otherwise: per-message usage shows the same
+> traffic on both days (9.98M vs 9.26M cache reads in the job turn, −7 %). What fell 2.5× is the figure the host
+> **reported**, not the context actually re-read. See `METRIC-DEFECT-2026-09-20.md`. The conclusion of this file —
+> that the arms did not change and the metric did — survives; this sentence about *why* did not. The `Limit:` on
+> record `r-depth13reverse` carries the same superseded wording; `r-metricdefect` follows it with the correction.
+
+~~On 2026-09-19 the native root re-read its whole context every turn — 193K per turn at a 193K depth, and more at
+the deeper rungs. On 2026-09-20 it re-read about 40 % of it.~~ Same request, same turns, same output, 2.5× less
+**reported** cache read, and the job-turn dollar figure fell with it.
 
 `jev_single` moved far less (123K per turn in run 1, 115–167K in run 3) because its root takes fewer turns and
-the work happens in a worker with its own smaller context. So when the root's per-turn re-read halves, the
-`single` shape's advantage halves with it — and at this rung it went past zero.
+the work happens in a worker with its own smaller context. So when the fraction of the root's traffic that is
+reported halves, the `single` shape's measured advantage halves with it — and at this rung it went past zero.
 
 **Why the caching behaviour differed between the two days is not established here.** Host-side cache behaviour,
 TTL, load, and anything else that decides how much of a prompt is served from cache are outside what this bench
@@ -55,8 +62,8 @@ Per the conditions file, the three-point ladder claim is **withdrawn to what sur
 | depth | status |
 |---|---|
 | 193K | **not established.** Measured twice with identical inputs; the two measurements disagree in sign. |
-| 285K | −43.1 %, **provisional** — measured once, on 09-19, in the high-re-read regime. |
-| 389K | −56.6 %, **provisional** — same run, same regime. |
+| 285K | −43.1 %, **provisional** — measured once, on 09-19, under that run's reporting regime. |
+| 389K | −56.6 %, **provisional** — same run, same regime. In work terms it is 27.1 %. |
 
 Rule 6 bars differencing savings across runs and that is not what the table above does: it records that one
 pre-registered cell, repeated with byte-identical inputs, did not reproduce. A rule against confounded

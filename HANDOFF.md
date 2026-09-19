@@ -94,22 +94,36 @@ the per-job task bound that already existed.
 **Then the 13-note rung was re-run to close a build gap, and it reversed.** Byte-identical inputs — same
 `request_sha256`, same both `prime_sha256`, same `fixture_sha256` — and `jev_single` came back **72.5 % more
 expensive** than native, against −41.8 % the day before. The arms did not change: same turn counts, same output
-tokens, all four checkers passing. **The metric moved.** On 09-19 the native root re-read its whole context every
-turn (≈193K per turn at a 193K depth); on 09-20 it re-read about 40 % of it, and the job-turn dollar figure fell
-with it. Why the cache behaviour differed is not established — it is outside what this bench records.
+tokens, all four checkers passing. **The metric moved.** Summed from the stream, both arms did the same work on
+both days — at 193K the native arm read 9.97M cached tokens against `single`'s 8.96M in run 1 and 9.35M against
+8.40M in run 3, i.e. **`single` 10.1 % less in both, identical to the decimal**. What changed is the fraction of
+that traffic the host reported: ~62 % of the native arm's cache reads on 09-19, 15–17 % on 09-20, with `single`
+at 16–37 % throughout. Reported cost follows the report. **Why the attribution changed is not established** and
+is not guessed here.
 
 **So the ladder is withdrawn to what survives** (`RESULTS-13NOTE-RERUN-2026-09-20.md`):
 
-| depth | status |
-|---|---|
-| 193K | **not established** — two measurements, identical inputs, opposite signs |
-| 285K | −43.1 %, **provisional** — measured once, 09-19, high-re-read regime |
-| 389K | −56.6 %, **provisional** — same run, same regime |
+| depth | dollars (pre-registered unit) | cache reads (post-hoc) |
+|---|---|---|
+| 193K | **not established** — two measurements, identical inputs, opposite signs | `single` 10.1 % less, both runs |
+| 285K | −43.1 %, **provisional** | `single` **12.4 % more** |
+| 389K | −56.6 %, **provisional** | `single` 27.1 % less |
+
+The work column is post-hoc re-analysis and replaces no rule (rule 11 bars swapping a unit after results); it is
+published because refusing to compute it would hide what the same cells say. In work terms the shape's advantage
+is small at 193K, **absent at 285K**, and about half the advertised size at 389K.
 
 **The two-repetition design does not detect this.** Both runs were internally tight (0.6 % and 8.4 % native
 spread) while the between-run gap was 3×. Rule 5 tests a difference against an arm's own *within-run* spread, and
-that spread badly understates what varies. **Every job-turn dollar figure in this bench measures the regime its
-run happened in, and only this rung has ever been repeated on a different day.** Treat older figures accordingly.
+that spread badly understates what varies. **Every job-turn dollar figure in this bench measures the host's
+attribution on the day it ran, and only this rung has ever been repeated on a different day.** Treat older
+figures accordingly.
+
+**Both defects are fixed** (`146d295`, `METRIC-DEFECT-2026-09-20.md`). `apply-rules.cjs` compares magnitude and
+names direction — verified to move no number over all three runs. The runner now records `turn_totals_stream`
+beside `turn_totals_usd`: per turn, cumulative, the summed cache reads, cache writes, input, output and message
+count over every message including subagents. `stream-usage.cjs` does the same for runs already on disk.
+Gates: typecheck 0, build 0, vitest **548**.
 
 The floor stays at 300,000 and no default follows. The case for a flip is weaker than it was that morning.
 

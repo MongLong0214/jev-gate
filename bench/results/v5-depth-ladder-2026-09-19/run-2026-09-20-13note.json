@@ -17,10 +17,19 @@
   "checker_pass": "4/4",
   "rung": {
     "13-note": {
-      "depth": [192759, 193429],
-      "native_job_turn": [0.4775, 0.4404],
-      "single_job_turn": [0.8469, 0.7362],
-      "native_mean": 0.4590,
+      "depth": [
+        192759,
+        193429
+      ],
+      "native_job_turn": [
+        0.4775,
+        0.4404
+      ],
+      "single_job_turn": [
+        0.8469,
+        0.7362
+      ],
+      "native_mean": 0.459,
       "single_mean": 0.7916,
       "native_spread_pct": 8.4,
       "single_spread_pct": 15.0,
@@ -34,13 +43,84 @@
     }
   },
   "reproducibility": {
-    "inputs_identical_across_runs": ["request_sha256", "prime_sha256[0]", "prime_sha256[1]", "fixture_sha256"],
-    "native_turns": { "run1": [42, 41], "run3": [40, 41] },
-    "native_output_tokens": { "run1": [11166, 10718], "run3": [10985, 10886] },
-    "native_cache_reads": { "run1": [7922071, 7895272], "run3": [3249327, 3052250] },
-    "native_cache_reads_per_turn": { "run1": "~193K at ~193K depth", "run3": "~78K at ~193K depth" },
-    "single_cache_reads_per_turn": { "run1": "~123K", "run3": "115K-167K" },
-    "cause": "not established; host-side cache behaviour is outside what this bench records"
+    "inputs_identical_across_runs": [
+      "request_sha256",
+      "prime_sha256[0]",
+      "prime_sha256[1]",
+      "fixture_sha256"
+    ],
+    "native_turns": {
+      "run1": [
+        42,
+        41
+      ],
+      "run3": [
+        40,
+        41
+      ]
+    },
+    "native_output_tokens": {
+      "run1": [
+        11166,
+        10718
+      ],
+      "run3": [
+        10985,
+        10886
+      ]
+    },
+    "native_cache_reads": {
+      "note": "these are the HOST-REPORTED figures; see stream_job_turn_cache_reads for the traffic",
+      "run1": [
+        7922071,
+        7895272
+      ],
+      "run3": [
+        3249327,
+        3052250
+      ]
+    },
+    "native_cache_reads_per_turn": {
+      "corrected": "superseded 2026-09-20: computed from the reported aggregate and wrongly read as context actually re-read"
+    },
+    "single_cache_reads_per_turn": {
+      "corrected": "same supersession"
+    },
+    "cause": "the host reported a different fraction of the same traffic on the two days; why is not established",
+    "stream_job_turn_cache_reads": {
+      "note": "summed per-message usage in the job turn, subagents included - what the transcript says happened",
+      "native": {
+        "run1": [
+          9980000,
+          9950000
+        ],
+        "run3": [
+          9260000,
+          9430000
+        ]
+      },
+      "single": {
+        "run1": [
+          8900000,
+          9030000
+        ],
+        "run3": [
+          8200000,
+          8610000
+        ]
+      },
+      "single_less_than_native_pct": {
+        "run1": 10.1,
+        "run3": 10.1
+      }
+    },
+    "host_reported_fraction_of_stream": {
+      "native": {
+        "run1": "63%, 63%",
+        "run3": "17%, 15%"
+      },
+      "single": "16-37% throughout"
+    }
   },
   "withdrawn": {
     "three_point_ladder": "withdrawn to what survives",
@@ -53,5 +133,16 @@
     "admittedShape_default": "hierarchy",
     "planner": "untouched",
     "release": "none"
-  }
+  },
+  "work_terms_post_hoc": {
+    "note": "post-hoc re-analysis, replaces no rule (rule 11)",
+    "193K": "single 10.1% less, both runs",
+    "285K": "single 12.4% MORE",
+    "389K": "single 27.1% less"
+  },
+  "defects_fixed": [
+    "apply-rules.cjs compared a signed difference to the 15% floor; now magnitude plus direction, verified to move no number",
+    "the runner recorded cost with nothing to contradict it; now records turn_totals_stream (2 tests, vitest 546 -> 548)",
+    "stream-usage.cjs averaged session-limit-killed cells in as zero work; fixed before any number was taken from it"
+  ]
 }
