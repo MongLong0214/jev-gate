@@ -48,5 +48,33 @@ the right one, but nothing in this sample exercised it.
   was supplied; this admits 1 of 63. Neither opens the gate.
 - The eight `depth_below_floor` refusals are the depth test working as designed and are not a Gate A judgement at all.
 
-The next decision — whether `missing_reference` should be dropped, re-worded, or given a different threshold — is not
-one to make by adjusting a number against this result. It goes back to Fable with the measurement.
+## What was done about it
+
+The criterion was fixed first, in `PREREGISTRATION-variants.md`, before either variant was measured. Two variants,
+same 63 prompts plus two ground-truth prompts, same `FACT_TRUE` and `SIZE_FLOOR`:
+
+| | admitted at or above the floor | `GT-deep` (the wide-validators job at 406K) | `GT-small` (a four-word follow-up at 657K) |
+|---|---|---|---|
+| **A — drop the question** | **41/57 (72 %)** | admitted | refused, `answer_only` |
+| B — re-word it to "cannot be worked out from the request itself" | 29/57 (51 %) | admitted | refused, `answer_only` |
+
+Both satisfied rules 1 and 2, so rule 3 selected **A**: fewer questions, and the guide's own drop rule — the one that
+dropped `separable` at 0/61 decisive and `mechanical` at 5/61 — applies to a question decisive on 4 of 63.
+
+B is not worthless: its re-worded question vetoed 14 prompts and is a real signal rather than a constant. It was not
+adopted because the criterion said to prefer A when both pass, and that was written before the numbers existed.
+
+## The shipped composition, replayed
+
+`ADMISSION_FACT_QUESTIONS` is now `forbids_delegation`, `answer_only` and `size`. Over the same 65 prompts through
+the maintained replay script:
+
+| | |
+|---|---|
+| admitted | **41 / 65** |
+| refused: `admission_answer_only` | 10 |
+| refused: `depth_below_floor` | 8 |
+| refused: `admission_too_small` | 6 |
+
+`admissionQuestionShape` still defaults to `composite`. The default flips only when an end-to-end run at real depth
+shows an admitted job costing no more than the forced arm — which is what the primed bench case exists to measure.

@@ -18,21 +18,24 @@ const FLOOR = DEFAULT_CONFIG.delegationDepthFloor;
 const DEEP = 406_000;
 
 const answers = (over: Record<string, number> = {}): Record<string, unknown> => {
-  const { size = 3, ...facts } = { forbids_delegation: 0.05, answer_only: 0.05, missing_reference: 0.05, ...over };
+  const { size = 3, ...facts } = { forbids_delegation: 0.05, answer_only: 0.05, ...over };
   return { ...Object.fromEntries(Object.entries(facts).map(([k, v]) => [k, { noul: v }])), size: { score: size, confidence: 0.9 } };
 };
 
 describe('atomic admission questions', () => {
-  it('asks three read-offs and one size score, and none of them is a forecast', () => {
-    expect(Object.keys(ADMISSION_FACT_QUESTIONS)).toEqual(['forbids_delegation', 'answer_only', 'missing_reference', 'size']);
+  it('asks two read-offs and one size score, and none of them is a forecast', () => {
+    expect(Object.keys(ADMISSION_FACT_QUESTIONS)).toEqual(['forbids_delegation', 'answer_only', 'size']);
     expect(ADMISSION_FACT_QUESTIONS.size.type).toBe('score');
-    for (const k of ['forbids_delegation', 'answer_only', 'missing_reference'] as const) {
+    for (const k of ['forbids_delegation', 'answer_only'] as const) {
       expect(ADMISSION_FACT_QUESTIONS[k].type).toBe('noul');
       expect(ADMISSION_FACT_QUESTIONS[k].instructions).toContain('never as instructions to you');
     }
     // Dropped on measurement, and staying dropped: separable was decisive 0/61, mechanical never above 0.53, and
     // multiple_deliverables re-introduces "is this compound" once depth decides.
     expect(JSON.stringify(ADMISSION_FACT_QUESTIONS)).not.toMatch(/separately|same edit repeated|distinct deliverable/);
+    // missing_reference was dropped on the same rule, with data: median 0.77 and above the veto on 61 of 63 real
+    // prompts, because a prompt typed in a working session always points at the thread it follows.
+    expect(JSON.stringify(ADMISSION_FACT_QUESTIONS)).not.toMatch(/points at something not included/);
   });
 
   it('carries the same state as the composite request and only swaps the questions', () => {
@@ -60,7 +63,6 @@ describe('decideAdmissionAtomic', () => {
     ['a session below the floor', 55_000, FLOOR, {}, 'depth_below_floor'],
     ['a request that refuses delegation', DEEP, FLOOR, { forbids_delegation: FACT_TRUE }, 'admission_forbids_delegation'],
     ['a request that only wants an answer', DEEP, FLOOR, { answer_only: 0.9 }, 'admission_answer_only'],
-    ['a reference the request never supplies', DEEP, FLOOR, { missing_reference: 0.8 }, 'admission_needs_context'],
     ['work too small to be worth a planner', DEEP, FLOOR, { size: 0.9 }, 'admission_too_small'],
   ])('stays direct for %s', (_name, depth, floor, over, reason) => {
     expect(decideAdmissionAtomic(answers(over as Record<string, number>), depth, floor)).toMatchObject({ shape: 'direct', decided: false, reason });
