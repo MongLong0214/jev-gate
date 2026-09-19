@@ -817,9 +817,19 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       // reserving only the patched dispatches was rejected: a preserved call still runs a worker, and would leave
       // the same gap this repairs for every preserve reason (native mode, a pinned call, a missing key, a failed gate).
       let stale = false;
+      // A7/A19: the per-job task bound already governs how many times one task may be dispatched; the single path
+      // counted its attempts without ever consulting it, so a reply this shape could not parse could be retried
+      // without end. Reading the existing bound here applies the cap the hierarchy path already has rather than
+      // introducing a second one, and the attempt that repaired a discarded reply on 2026-09-19 is still the
+      // second, which this admits.
+      let exhausted = false;
       const reserved = updateJob(deps.env, single.sessionId, (prev) => {
         if (!prev || prev.current.prompt_id !== single.gen.prompt_id || prev.current.execution !== 'single') {
           stale = true;
+          return null;
+        }
+        if (boundExhausted(prev.current, 'task', SINGLE_TASK_ID)) {
+          exhausted = true;
           return null;
         }
         const counted = countAttempt(prev.current, 'task', SINGLE_TASK_ID);
@@ -837,6 +847,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       });
       if (!reserved.ok) return preserve(reserved.code);
       if (stale) return emitDeny('stale_generation', renderDispatchDeny('stale_generation'), null);
+      if (exhausted) return emitDeny('bounds_exhausted', renderDispatchDeny('bounds_exhausted', SINGLE_TASK_ID), null);
     }
     if (mode === 'native') return preserve('mode_native');
     if (eligibility.pinned) return preserve('pinned');
@@ -1052,7 +1063,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     // A19: the single shape has no plan, so a missing task is what this path expects rather than a stale reference.
     const isSingle = gen.execution === 'single';
     const status = responseStatus(input.tool_response);
-    const parsed = status === 'completed' ? parseWorkerReply(replyText(input.tool_response)) : null;
+    const parsed = status === 'completed' ? parseWorkerReply(replyText(input.tool_response), { freeCheckIds: isSingle }) : null;
     let finalVerdict: Receipt['verdict'] = 'unknown';
     let reason: string | null = null;
     if (parsed === null) reason = `the call reported status ${String(status)}`;

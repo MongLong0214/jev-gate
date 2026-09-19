@@ -478,6 +478,42 @@ describe('single executor (A19)', () => {
     expect(state(env).current.outcome).toBe('incomplete');
   });
 
+  /**
+   * A19 defect found in the depth-ladder run: one worker's 86.6 seconds and 43 tool calls were thrown away because a
+   * check id it named itself contained a space. The id grammar belongs to a contract this shape does not have.
+   */
+  it("keeps a reply whose check ids the worker named itself, because there is no contract to name them", async () => {
+    const env = singleEnv();
+    const fetchImpl = fakeJev({ execution: 'orchestrated' });
+    await run(env, promptEvent(), fetchImpl);
+    await run(env, preEvent('Agent', agentInput({ prompt: 'Do what the request asks.' })), fetchImpl);
+    const reply = workerReply({ checks: [{ check_id: 'empty array rejected', result: 'pass', note: 'node --test' }] });
+    await run(env, workerPost('toolu_1', reply), fetchImpl);
+    const receipt = state(env).current.receipts[0];
+    expect(receipt).toMatchObject({ task_id: 'single', verdict: 'accept' });
+    // The name is kept as the worker wrote it, so the record says which check ran.
+    expect(receipt?.reply?.checks).toEqual([{ check_id: 'empty array rejected', result: 'pass', note: 'node --test' }]);
+    await run(env, { hook_event_name: 'Stop', session_id: 's1' });
+    expect(state(env).current.outcome).toBe('completed');
+  });
+
+  it('allows the second dispatch that repairs a discarded reply, and denies a third under the existing task bound', async () => {
+    const env = singleEnv();
+    const fetchImpl = fakeJev({ execution: 'orchestrated' });
+    await run(env, promptEvent(), fetchImpl);
+    const first = await run(env, preEvent('Agent', agentInput({ prompt: 'Do what the request asks.' }), { tool_use_id: 'toolu_1' }), fetchImpl);
+    expect(first.kind).toBe('patch');
+    await run(env, workerPost('toolu_1', 'no fenced json here at all'), fetchImpl);
+    const second = await run(env, preEvent('Agent', agentInput({ prompt: 'Do what the request asks.' }), { tool_use_id: 'toolu_2' }), fetchImpl);
+    expect(second.kind).toBe('patch');
+    expect(state(env).current.active['toolu_2']).toMatchObject({ task_id: 'single', attempt: 2 });
+    await run(env, workerPost('toolu_2', 'still nothing parseable'), fetchImpl);
+    const third = await run(env, preEvent('Agent', agentInput({ prompt: 'Do what the request asks.' }), { tool_use_id: 'toolu_3' }), fetchImpl);
+    expect(third).toMatchObject({ kind: 'deny', code: 'bounds_exhausted' });
+    expect(String(hookOutput(third)['permissionDecisionReason'])).toContain('allowed attempts');
+    expect(state(env).current.active['toolu_3']).toBeUndefined();
+  });
+
   it('is off unless the config asks for it', async () => {
     const env = makeEnv();
     const r = await run(env, promptEvent(), fakeJev({ execution: 'orchestrated' }));

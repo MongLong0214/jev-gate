@@ -284,6 +284,28 @@ describe('parsePlannerReply', () => {
   });
 });
 
+describe('parseWorkerReply free check ids (A19)', () => {
+  const spaced = { status: 'done', summary: 's', checks: [{ check_id: 'empty array rejected', result: 'pass', note: 'ok' }] };
+
+  it('rejects an id with a space under the contract grammar and keeps it verbatim when ids are free', () => {
+    const strict = parseWorkerReply(fence(spaced));
+    expect(strict.ok).toBe(false);
+    if (!strict.ok) expect(strict.error).toContain('check_id must match');
+
+    const free = parseWorkerReply(fence(spaced), { freeCheckIds: true });
+    expect(free.ok).toBe(true);
+    if (free.ok) expect(free.value.checks).toEqual([{ check_id: 'empty array rejected', result: 'pass', note: 'ok' }]);
+  });
+
+  it('still rejects a check id that is empty or not a string when ids are free', () => {
+    const empty = parseWorkerReply(fence({ status: 'done', summary: 's', checks: [{ check_id: '', result: 'pass' }] }), { freeCheckIds: true });
+    expect(empty.ok).toBe(false);
+    const wrongType = parseWorkerReply(fence({ status: 'done', summary: 's', checks: [{ check_id: 7, result: 'pass' }] }), { freeCheckIds: true });
+    expect(wrongType.ok).toBe(false);
+    if (!wrongType.ok) expect(wrongType.error).toContain('must be a string');
+  });
+});
+
 describe('parseWorkerReply', () => {
   it('accepts a reply with check_id results and defaults the optional arrays', () => {
     const parsed = parseWorkerReply('done.\n' + fence({ status: 'done', summary: 's', checks: [{ check_id: 'c1', result: 'pass', note: 'ok' }] }));

@@ -452,7 +452,17 @@ export const parsePlannerReply = (text: string, maxTasks: number = DEFAULT_MAX_T
   return { ok: false, error: `status must be ready|needs_context|blocked (got ${describeValue(status)})` };
 };
 
-export const parseWorkerReply = (text: string): ParseResult<WorkerReply> => {
+/**
+ * `freeCheckIds` is set on the single path (A19), where the worker names its own checks because there is no
+ * contract to take ids from. The id grammar exists so a reported id can be matched against a declared one; with
+ * nothing declared there is nothing to match, and rejecting the reply throws away finished work over the spelling
+ * of a label. Measured on 2026-09-19: one worker's 86.6 seconds and 43 tool calls were discarded and re-dispatched
+ * because an id it chose contained a space.
+ *
+ * Relaxing ID_RE for both paths was considered and rejected rather than taken: on the hierarchy path an id that
+ * cannot be a declared id is a reply that does not answer its contract, and failing it there is the point.
+ */
+export const parseWorkerReply = (text: string, opts: { freeCheckIds?: boolean } = {}): ParseResult<WorkerReply> => {
   if (bytes(text) > MAX_REPLY_BYTES) return { ok: false, error: `reply exceeds ${MAX_REPLY_BYTES} bytes` };
   const json = extractJson(text);
   if (json === null) return { ok: false, error: 'no JSON object found in the reply' };
@@ -479,7 +489,10 @@ export const parseWorkerReply = (text: string): ParseResult<WorkerReply> => {
   for (const raw of rawChecks) {
     if (!isRecord(raw)) return { ok: false, error: 'each check result must be an object with check_id and result' };
     const id = raw['check_id'];
-    if (typeof id !== 'string' || !ID_RE.test(id)) return { ok: false, error: `check_id must match ${ID_RE.source}` };
+    if (typeof id !== 'string') return { ok: false, error: 'check_id must be a string' };
+    // A free id is kept verbatim, so a check the worker ran is recorded under the name it used rather than a rewrite.
+    if (opts.freeCheckIds ? id.length === 0 || bytes(id) > MAX_FIELD_BYTES : !ID_RE.test(id))
+      return { ok: false, error: opts.freeCheckIds ? `check_id must be a non-empty string of at most ${MAX_FIELD_BYTES} bytes` : `check_id must match ${ID_RE.source}` };
     const result = raw['result'];
     if (result !== 'pass' && result !== 'fail' && result !== 'not_run') return { ok: false, error: `check ${id}: result must be pass|fail|not_run` };
     const note = strField(raw['note'] ?? '', `check ${id}: note`);
