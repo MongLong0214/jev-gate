@@ -1,111 +1,193 @@
 # Pre-registration — is the saving the fresh context or the decomposition? (2026-09-19)
 
-Written before any cell runs. **Nothing has been executed for this document.**
+Written before any cell runs. **Nothing has been executed for this document.** Revised the same day, after the arm it
+depends on was built (`2042170`), to the design that arm actually implements and to a staged spend.
 
 ## The question
 
-Two jobs have been measured. `wide-validators` returned a large saving; `orbit-core` did not reproduce it and the
-run could not say by how much. The offline diagnosis
-(`bench/results/v5-replan-bound-2026-09-19/DIAGNOSIS.md`) proposes a mechanism: delegation costs one full
-rediscovery per worker and buys one parallel unit of work, so the duplication scales with coupling and the saving
-with independence. That is a mechanism with two data points and no arm that can separate its two halves.
+Two jobs have been measured. `wide-validators` returned a large saving; `orbit-core` did not reproduce it and the run
+could not say by how much. The offline diagnosis (`bench/results/v5-replan-bound-2026-09-19/DIAGNOSIS.md`) proposes a
+mechanism: delegation costs one full rediscovery per worker and buys one parallel unit of work, so the duplication
+scales with coupling and the saving with independence. That is a mechanism with two data points and no arm that can
+separate its two halves.
 
-The product does two things at once to a job:
+The product does two things at once to an admitted job:
 
 1. it moves the work **out of the loaded session into a fresh context**, and
 2. it **splits** that work across several workers.
 
-Every figure in this repository confounds the two. This run separates them with a third arm that does (1) and not
-(2): one worker, fresh context, the whole job, no decomposition.
+Every figure in this repository confounds the two. This run separates them with a third arm that does (1) and not (2).
 
-**This is the first design in this repository that can attribute the saving rather than observe it.** If the saving
-is (1), the product's value does not depend on job shape and the shape-conditionality is a cost of (2) that could be
+**This is the first design in this repository that can attribute the saving rather than observe it.** If the saving is
+(1), the product's value does not depend on job shape and the shape-conditionality is a cost of (2) that could be
 removed. If the saving is (2), the shape-conditionality is intrinsic and the `DIAGNOSIS.md` mechanism stands.
 
 ## Arms
 
-| arm | plugin | plan | what it isolates |
+| arm | plugin | planner | plan | what it isolates |
+|---|---|---|---|---|
+| `sonnet_native` | none | — | — | the loaded session doing the job itself |
+| `jev_single` | `mode: auto`, `admittedShape: single` | **none — denied** | **none** | fresh context **without** decomposition |
+| `jev_hierarchy` | `mode: auto`, shipped defaults | yes | free (2–12 observed) | the shipped product |
+
+`jev_single` is **not** a one-task plan. `admittedShape: single` (`2042170`) removes the planner, the plan, the task
+contract and the replan path from an admitted turn; the coordinator dispatches the request once, whole, to one worker,
+and the hook appends the user's own request as the task. A `maxTasksPerPlan: 1` arm was rejected for this role: it
+still pays for a planner call, still carries a contract and still has a replan path, so it would measure a small
+hierarchy rather than the absence of one.
+
+`jev_single` keeps everything the other plugin arm keeps: the depth reader, Gate A, the root guard, Gate B's tier
+choice, and the same frozen config with this one key overridden. The override is written per cell, and the file the
+cell loaded is on disk beside its trace with its sha256 in the cell record, so what each cell ran under is checkable
+rather than asserted.
+
+## Jobs, in two stages
+
+Both jobs matter — shape-dependence is the thing under test and one job cannot show it — but they are **not** funded
+at once. Stage 2 runs only if stage 1 earns it.
+
+### Stage 1 — `wide-validators-primed-30`, the job the saving was found on
+
+The new arm, two repetitions. This is the job where the effect is largest and therefore the job where a null result
+for `jev_single` is most informative.
+
+### Stage 2 — `orbit-core-primed-30`, all three arms, 6 cells
+
+Run **only if** stage 1 places `jev_single` at or below `jev_hierarchy` on `wide-validators`, i.e. only if the
+single-executor shape is a live hypothesis rather than a refuted one. If stage 1 refutes it (see falsification below),
+stage 2 is not run and the negative result is the deliverable.
+
+This condition is fixed now, before the stage 1 numbers exist.
+
+## Reuse of existing cells — what is accepted and what is refused
+
+Stage 1 compares against cells that already exist for this exact case, priming prompt and depth band:
+
+| arm | source | job turn | decision |
 |---|---|---|---|
-| `sonnet_native` | none | — | the loaded session doing the job itself |
-| `jev_single_worker` **(does not exist yet — see Preconditions)** | `mode: auto`, `maxTasksPerPlan: 1` | one task | fresh context **without** decomposition |
-| `jev_hierarchy` | `mode: auto`, shipped defaults | free (2–12 observed) | the shipped product |
+| `sonnet_native` | `v5-depth-primed-2026-09-19/run-2026-09-19.json` (third run, 2 valid cells) | $2.7401, $2.6585 | **reuse accepted** |
+| `jev_hierarchy` | `v5-gate-a-live-2026-09-19/run-deep.json` (2 valid cells, gate admitted on its own) | $0.9475, $0.9842 | **reuse refused for a cost comparison** |
 
-`jev_single_worker` pays for a planner call that `sonnet_native` does not. That is not corrected for: the primary
-outcome is the whole job turn, which is what a user pays. The planner's share is recorded per cell as a covariate
-(it was $2.4654 of $19.8628, about a fifth, across the three `v5-replan-bound` cells — a within-arm split, not a
-comparison against anything).
+**Why native reuse is accepted.** That arm loads no plugin, so no commit since changes what it does; the case id, the
+priming prompt, the depth band (375.2K / 375.3K) and the checker are the same, and both cells passed. The conditions a
+reused native cell must still satisfy are the validity rules below, checked against the recorded cell and not assumed.
 
-## Jobs
+**Why hierarchy reuse is refused.** Those cells were run on a plugin build from before `c2c9bd1` (the worker now reads
+the request the plan was written from), `be679ab` (tier names are redacted at the routing boundary, and a replan
+carries its plan) and `2042170`. All three change what the hierarchy path composes and what the planner is shown.
+Comparing a new `jev_single` cell against them is comparing across builds, which is the comparison this harness exists
+to avoid. So:
 
-**Both**, because shape-dependence is the thing under test and one job cannot show it:
+- **Funded design (4 cells, ~$15):** stage 1 runs `jev_single` ×2 **and** `jev_hierarchy` ×2 on the current build, and
+  reuses native. Both plugin arms then come from one build and the S-vs-H comparison is a comparison.
+- **Cheaper variant (2 cells, ~$7.5):** stage 1 runs `jev_single` ×2 only. The old hierarchy cells are then a **prior,
+  not an arm**: no S-vs-H percentage may be quoted from that pairing, and the only cost comparison stage 1 can report
+  is `jev_single` against native.
 
-- `wide-validators-primed-30` — 12 independent modules, `chain_depth 1`, nothing shared.
-- `orbit-core-primed-30` — 5 tasks, `chain_depth 3`, a shared specification (`test/core.test.js` read 5× by the
-  orchestrated arm in the one clean cell, against native's 1×).
-
-2 jobs × 3 arms × 2 repetitions = **12 cells**.
+Which of the two runs is the owner's call, because it is the owner's money. Nothing here starts without it.
 
 ## Predictions, fixed before the run
 
-Written as a table so the result cannot be read to fit afterwards. `S` = single worker, `H` = hierarchy, `N` =
-native, each the job-turn cost.
+`S` = `jev_single`, `H` = `jev_hierarchy`, `N` = `sonnet_native`, each the job-turn cost.
 
 | if the saving is | `wide-validators` | `orbit-core` | reading |
 |---|---|---|---|
-| **the fresh context** | S ≈ H, both ≪ N | S ≪ N, S < H | decomposition is what `orbit-core` loses to; a one-task plan would be the better default for coupled work |
+| **the fresh context** | S ≈ H, both ≪ N | S ≪ N, S < H | decomposition is what `orbit-core` loses to; the single shape would be the better default for coupled work |
 | **the decomposition** | H ≪ S, S ≈ N | S ≈ H ≈ N | the parallel units are the whole product; `DIAGNOSIS.md` stands as written |
 | **both, additively** | H < S < N | S < H, both < N | the two effects are separable and trade against each other by shape |
 | **neither (depth artefact)** | S ≈ H ≈ N | S ≈ H ≈ N | the `wide-validators` figure does not survive a third arm and everything downstream of it is in question |
 
 "≈" means the difference is under 15 %, which this bench cannot resolve. "≪" means at least 15 % below.
 
+## What would falsify each arm
+
+Fixed now, so that no result is read as support for the arm that produced it.
+
+- **`jev_single` is refuted** if its job turn is **above `sonnet_native`** by 15 % or more, or if it fails the checker
+  where native and hierarchy pass. Either says the fresh context is not what buys the saving — a worker starting empty
+  pays a rediscovery the loaded session does not, and one worker has no parallelism to pay it back. That outcome ends
+  stage 2 and is published as the result.
+- **`jev_single` is refuted as a *product* direction**, separately, if it matches hierarchy on cost but loses on
+  quality: a shape that is cheap because it does less is not cheaper.
+- **`jev_hierarchy` is refuted as the explanation** if `S ≈ H` on `wide-validators`: the planner, the plan, the
+  contract and the replan path would then be cost with no measured return on the job this repository's headline came
+  from.
+- **The `DIAGNOSIS.md` mechanism is refuted** if `S ≪ H` on `orbit-core` *and* the mechanism counts show `jev_single`
+  reading the shared specification once where the hierarchy read it five times — the duplication, not the coupling,
+  would be doing the work.
+- **The whole line of inquiry is refuted** by the fourth row: three arms within 15 % of each other on both jobs.
+
+## Covariates recorded per cell
+
+- **Plan size** (`jev_hierarchy` only): the largest uncontrolled variable in every earlier result — 13 workers cost
+  +92.5 % where 4 cost −53.5 % on the same job. `jev_single` has **no plan at all**; that absence is not a missing
+  value, it is the observation the arm exists to make, and it is recorded as `admittedShape: single` with the plan
+  field null rather than as a plan of size 1.
+- Planner dollars (`jev_hierarchy` only; about a fifth of that arm's spend across the three `v5-replan-bound` cells —
+  a within-arm split, not a comparison against anything). `jev_single` pays none: that is part of the effect, not a
+  correction to apply.
+- `Read` calls and distinct paths read, `Bash` calls, test-suite runs, worker count, `chain_depth`, wall clock,
+  `context_at_job_prompt`, and the gate's decision and reason on every prompt.
+
 ## Fixed before the run
 
 1. A cell is **invalid** if `context_at_job_prompt` is below 250,000, read from the cell and never from the case name.
 2. A cell is **invalid** if it is truncated by `--max-turns` or `--timeout-ms`.
-3. **Quality gates cost, per job.** A cost comparison for a job requires every cell of that job, in all three arms, to
-   pass its checker. If the arms differ in pass count on a job, that difference is the result for that job and **no
-   cost comparison is reported for it**. The other job is reported on its own terms.
+3. **Quality gates cost, per job.** A cost comparison for a job requires every cell of that job, in every arm being
+   compared, to pass its checker. If the arms differ in pass count on a job, that difference is the result for that
+   job and **no cost comparison is reported for it**.
 4. **The primary outcome is which row of the predictions table the job-turn costs fall in**, stated per job. A result
    that fits no row is reported as fitting no row; the table is not extended after the fact.
-5. **Nothing under 15 % is quoted.** Plan size is free in `jev_hierarchy` and fixed at 1 in `jev_single_worker`, so
-   the two arms differ in variance by construction: the hierarchy arm's own two cells bound what can be claimed, and
-   a delta smaller than that spread is `undecidable`, not a finding.
+5. **Nothing under 15 % is quoted.** Plan size is free in `jev_hierarchy` and absent in `jev_single`, so the two arms
+   differ in variance by construction: the hierarchy arm's own cells bound what can be claimed, and a delta smaller
+   than that spread is `undecidable`, not a finding.
 6. **Mechanism counts are recorded per cell whatever the cost shows**, and are not gated by rule 3, because they are
-   not cost: `Read` calls and distinct paths read, `Bash` calls, test-suite runs, worker count, plan size,
-   `chain_depth`, planner dollars. These are the quantities `DIAGNOSIS.md` predicts, and the only ones this run can
-   report if rule 3 withholds the cost.
+   not cost. They are the quantities `DIAGNOSIS.md` predicts, and the only ones this run can report if rule 3
+   withholds the cost.
 7. The gate's decision on each prompt is recorded whatever it is. The two priming prompts are expected to be refused.
    If a **job** prompt is refused in a plugin arm, the recorded reason is that cell's result and no cost claim is made
    from it.
 8. Failures, cancellations, timeouts and unknown cells are published with their cause. **A negative result is the
-   deliverable.** Rule 4's fourth row is a real possible outcome of this run and is published if it happens.
+   deliverable.** Rule 4's fourth row, and every falsification above, are real possible outcomes and are published if
+   they happen.
 9. **No floor, checker, criterion, default or threshold is adjusted after seeing these results.** If something here
    needs changing, it is a new pre-registration and a new measurement.
-10. `be679ab` (the tier-name redaction and the replan carrying its plan) is in the plugin these cells copy. It is
-    **not** what this run measures, and the run is not evidence that either fix works: neither has an end-to-end
-    observation, and a fix plus a re-run is not a demonstration of a saving.
+10. `c2c9bd1`, `be679ab` and `2042170` are in the plugin these cells copy. They are **not** what this run measures, and
+    the run is not evidence that any of them works: none has an end-to-end observation, and a fix plus a re-run is not
+    a demonstration of a saving.
+11. `admittedShape: single` stays off by default whatever this run shows. Changing the shipped default is a separate
+    decision on more than one job, not a consequence of stage 1.
 
-## Preconditions — none of this can run yet
+## Preconditions
 
-1. **`jev_single_worker` does not exist.** `ArmSpec` (`src/bench/run.ts:31-51`) has no per-arm config, and the runner
-   freezes exactly one config for the whole run (`plan.frozen_inputs['config_copy']`), so a `maxTasksPerPlan: 1` arm
-   cannot sit in the same run as a default-config arm today. It needs a per-arm config override that freezes one file
-   per distinct config and records each one's sha256 in `plan.json`. Splitting it into a separate run instead is
-   rejected here: the frozen inputs would differ, and a cross-run cost comparison is the thing this harness exists to
-   avoid.
-2. Unit coverage for that override in `tests/bench-runner.test.ts`, including that a cell records which config it ran
-   under. No paid cell runs before those pass.
-3. **The owner's own word on the spend.** Recorded `orbit-core` job turns ran $3.26–$4.18 per cell; six orbit cells
-   are of that order before the six `wide-validators` cells are counted. This is a paid experiment and is not started
-   on a peer's instruction.
+1. **The arm exists.** `2042170`: `admittedShape` in the config schema, the single path in the hook and the
+   coordinator, the `jev_single` arm, and the per-cell config override recorded with its sha256. Done.
+2. **Unit coverage, including that a cell records which config it ran under.** `npm run typecheck` 0, `npm run build`
+   0, `npx vitest run` 534/534. Done.
+3. **The owner's own word on the spend, and on which of the two stage 1 designs to fund.** Recorded `wide-validators`
+   primed cells ran about $3.7 per cell all-in. This is a paid experiment and is not started on a peer's instruction.
+   **Outstanding — nothing runs until this is given.**
 
 ## Command (for the record; not run)
 
+Stage 1, funded design:
+
 ```sh
 node dist/bench/run.js --cases bench/cases-depth.json \
-  --only wide-validators-primed-30,orbit-core-primed-30 \
-  --out ~/jev-gate-runs/v5-context-vs-decomposition --execute --max-sessions 12 \
-  --arms sonnet_native,jev_single_worker,jev_hierarchy --repetitions 2 \
+  --only wide-validators-primed-30 \
+  --out ~/jev-gate-runs/v5-context-vs-decomposition-s1 --execute --max-sessions 4 \
+  --arms jev_single,jev_hierarchy --repetitions 2 \
+  --plugin-dir "$PWD" --timeout-ms 2400000 --max-turns 120 --seed 20260919
+```
+
+Stage 1, cheaper variant: `--arms jev_single --max-sessions 2`.
+
+Stage 2 (only if stage 1 earns it):
+
+```sh
+node dist/bench/run.js --cases bench/cases-depth.json \
+  --only orbit-core-primed-30 \
+  --out ~/jev-gate-runs/v5-context-vs-decomposition-s2 --execute --max-sessions 6 \
+  --arms sonnet_native,jev_single,jev_hierarchy --repetitions 2 \
   --plugin-dir "$PWD" --timeout-ms 2400000 --max-turns 120 --seed 20260919
 ```
