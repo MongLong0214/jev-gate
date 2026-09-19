@@ -10,6 +10,6 @@
 ### wide-validators-primed-13 (13-note) — 4/4 valid, jev_single admitted 2/2
 - native mean $0.4590 [0.4775, 0.4404], spread 8.4%
 - single mean $0.7916 [0.8469, 0.7362], spread 15.0%
-- difference **-72.5%**, widest arm spread 15.0%
-- **not quotable: under the 15% floor**
+- difference **72.5%** (single MORE EXPENSIVE), widest arm spread 15.0%
+- **SEPARATION (rule 5 met) — single MORE EXPENSIVE**
 - wall: native 119s vs single 195s (64.5%)

@@ -208,6 +208,17 @@ export interface CellRecord {
    */
   context_at_job_prompt: number | null;
   turn_totals_usd: number[];
+  /**
+   * The same turn boundaries measured in tokens, summed from every message in the stream that carries a usage block --
+   * subagent messages included, because they are work this cell did. Cumulative like `turn_totals_usd`, so a job turn
+   * is the same subtraction.
+   *
+   * It exists because the dollar figure alone could not be trusted: on 2026-09-20 the 13-note ladder rung reversed
+   * sign in dollars while the stream showed the arms doing the same work to within 0.0 points, the host having
+   * reported a different fraction of the same traffic on the two days. Cost is a host-reported aggregate; this is
+   * what the transcript itself says happened.
+   */
+  turn_totals_stream: Array<{ cache_read: number; cache_creation: number; input: number; output: number; messages: number }>;
   fixture_sha256: string | null;
   dispatch: { intent_at: string | null; spawn_observed_at: string | null; pid: number | null };
   started: boolean;
@@ -556,6 +567,7 @@ export const emptyCell = (cs: CodingCase, spec: ArmSpec, repetition: number): Ce
   prime_sha256: cs.prime.map((t) => sha256(t)),
   context_at_job_prompt: null,
   turn_totals_usd: [],
+  turn_totals_stream: [],
   fixture_sha256: null,
   dispatch: { intent_at: null, spawn_observed_at: null, pid: null },
   started: false,
@@ -632,9 +644,31 @@ const contextOf = (message: Record<string, unknown>): number | null => {
 const lastMainContext = new WeakMap<CellRecord, number>();
 const promptsSeen = new WeakMap<CellRecord, number>();
 
+type StreamTotals = { cache_read: number; cache_creation: number; input: number; output: number; messages: number };
+const streamTotals = new WeakMap<CellRecord, StreamTotals>();
+
+/** Adds one message's usage to the cell's running stream totals. A message without a usable usage block is not counted. */
+const addStreamUsage = (cell: CellRecord, message: unknown): void => {
+  if (!isRecord(message)) return;
+  const usage = message['usage'];
+  if (!isRecord(usage)) return;
+  const read = (k: string): number => {
+    const v = usage[k];
+    return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 0;
+  };
+  const acc = streamTotals.get(cell) ?? { cache_read: 0, cache_creation: 0, input: 0, output: 0, messages: 0 };
+  acc.cache_read += read('cache_read_input_tokens');
+  acc.cache_creation += read('cache_creation_input_tokens');
+  acc.input += read('input_tokens');
+  acc.output += read('output_tokens');
+  acc.messages += 1;
+  streamTotals.set(cell, acc);
+};
+
 /** Folds one stream-json event into the record. Unknown shapes are ignored, never guessed. */
 export const observeEvent = (cell: CellRecord, ev: unknown): void => {
   if (!isRecord(ev)) return;
+  addStreamUsage(cell, ev['message']);
   const type = ev['type'];
   if (type === 'system' && ev['subtype'] === 'init') {
     const plugins = Array.isArray(ev['plugins']) ? ev['plugins'].map((p) => (isRecord(p) ? (str(p['name']) ?? '') : String(p))) : [];
@@ -706,6 +740,7 @@ export const observeEvent = (cell: CellRecord, ev: unknown): void => {
     const turnTotal = num(ev['total_cost_usd']);
     // Every turn reports the session total so far, so the list is cumulative and the job's own cost is a difference.
     if (turnTotal !== null) cell.turn_totals_usd.push(turnTotal);
+    cell.turn_totals_stream.push({ ...(streamTotals.get(cell) ?? { cache_read: 0, cache_creation: 0, input: 0, output: 0, messages: 0 }) });
     const inferenceObserved = cell.models_seen_main.length > 0 || cell.agent_calls.length > 0;
     const usage = parseModelUsage(ev, inferenceObserved);
     cell.result = {

@@ -14,12 +14,12 @@
 ### wide-validators-primed-21 (21-note) — 4/4 valid, jev_single admitted 2/2
 - native mean $1.9617 [1.9915, 1.9319], spread 3.1%
 - single mean $1.1169 [0.9656, 1.2681], spread 31.3%
-- difference **43.1%**, widest arm spread 31.3%
-- **SEPARATION (rule 5 met)**
+- difference **43.1%** (single cheaper), widest arm spread 31.3%
+- **SEPARATION (rule 5 met) — single cheaper**
 - wall: native 133s vs single 206s (55.0%)
 ### wide-validators-primed-30 (30-note) — 4/4 valid, jev_single admitted 2/2
 - native mean $2.7146 [2.6296, 2.7995], spread 6.5%
 - single mean $1.1778 [1.1899, 1.1656], spread 2.1%
-- difference **56.6%**, widest arm spread 6.5%
-- **SEPARATION (rule 5 met)**
+- difference **56.6%** (single cheaper), widest arm spread 6.5%
+- **SEPARATION (rule 5 met) — single cheaper**
 - wall: native 138s vs single 212s (54.1%)

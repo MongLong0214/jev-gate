@@ -18,8 +18,8 @@
 ### wide-validators-primed-13 (13-note) — 4/4 valid, jev_single admitted 2/2
 - native mean $1.4161 [1.4204, 1.4118], spread 0.6%
 - single mean $0.8246 [0.7374, 0.9119], spread 23.7%
-- difference **41.8%**, widest arm spread 23.7%
-- **SEPARATION (rule 5 met)**
+- difference **41.8%** (single cheaper), widest arm spread 23.7%
+- **SEPARATION (rule 5 met) — single cheaper**
 - wall: native 155s vs single 197s (26.9%)
 ### wide-validators-primed-21 (21-note) — 3/4 valid, jev_single admitted 2/2
 - invalid: sonnet_native r2 — context 0 outside band 200000-340000

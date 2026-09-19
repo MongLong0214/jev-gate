@@ -73,11 +73,16 @@ for (const j of [...new Set(cells.map((c) => c.job))].sort((a, b) => rung(a) - r
   const n = nat.map((c) => c.job_turn_usd), s = admitted.map((c) => c.job_turn_usd);
   const diff = (mean(n) - mean(s)) / mean(n) * 100;
   const widest = Math.max(spread(n), spread(s));
-  const sep = diff >= FLOOR_PCT && diff > widest;
+  // The floor and the separation test are about whether a difference is real, which is a magnitude question.
+  // Testing the signed difference silently reported a reversed rung as "under the floor" (found 2026-09-20,
+  // when the 13-note rung came back with single 72.5% more expensive and printed as not quotable).
+  const mag = Math.abs(diff);
+  const dir = diff >= 0 ? 'single cheaper' : 'single MORE EXPENSIVE';
+  const sep = mag >= FLOOR_PCT && mag > widest;
   console.log(`- native mean $${mean(n).toFixed(4)} [${n.map((x) => x.toFixed(4)).join(', ')}], spread ${spread(n).toFixed(1)}%`);
   console.log(`- single mean $${mean(s).toFixed(4)} [${s.map((x) => x.toFixed(4)).join(', ')}], spread ${spread(s).toFixed(1)}%`);
-  console.log(`- difference **${diff.toFixed(1)}%**, widest arm spread ${widest.toFixed(1)}%`);
-  console.log(`- **${sep ? 'SEPARATION (rule 5 met)' : diff < FLOOR_PCT ? 'not quotable: under the 15% floor' : 'direction only: does not beat the arms\' own spread (rule 5)'}**`);
+  console.log(`- difference **${mag.toFixed(1)}%** (${dir}), widest arm spread ${widest.toFixed(1)}%`);
+  console.log(`- **${sep ? `SEPARATION (rule 5 met) — ${dir}` : mag < FLOOR_PCT ? 'not quotable: under the 15% floor' : `direction only: does not beat the arms' own spread (rule 5) — ${dir}`}**`);
   const wn = mean(nat.map((c) => c.elapsed_s)), ws = mean(admitted.map((c) => c.elapsed_s));
   console.log(`- wall: native ${wn.toFixed(0)}s vs single ${ws.toFixed(0)}s (${((ws - wn) / wn * 100).toFixed(1)}%)`);
 }

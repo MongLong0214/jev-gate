@@ -285,3 +285,38 @@ describe('primed cases: the depth the job prompt actually arrived at', () => {
     expect(cell.result?.total_cost_usd).toBe(4.5);
   });
 });
+
+// 2026-09-20: the dollar figure alone could not be trusted -- the 13-note ladder rung reversed sign in dollars while
+// the stream showed the arms doing the same work. The runner now records the same turn boundaries in tokens.
+describe('turn_totals_stream (2026-09-20 metric defect)', () => {
+  const usageMsg = (u: Record<string, number>): Record<string, unknown> => ({ type: 'assistant', message: { usage: u } });
+  const result = (cost: number): Record<string, unknown> => ({ type: 'result', subtype: 'success', total_cost_usd: cost, num_turns: 1 });
+
+  it('accumulates every message carrying usage and snapshots cumulatively at each result', () => {
+    const cell = emptyCell({ id: 'job', group: 'g', fixtureDir: '', request: 'r', prime: [], setup: [], evaluationSetup: [], checkFile: '', checkFileRel: '' }, armSpecs('fable')['sonnet_native'], 1);
+    observeEvent(cell, usageMsg({ cache_read_input_tokens: 100, cache_creation_input_tokens: 10, input_tokens: 1, output_tokens: 5 }));
+    observeEvent(cell, result(1));
+    observeEvent(cell, usageMsg({ cache_read_input_tokens: 400, output_tokens: 20 }));
+    observeEvent(cell, result(3));
+
+    expect(cell.turn_totals_stream).toHaveLength(2);
+    expect(cell.turn_totals_stream[0]).toEqual({ cache_read: 100, cache_creation: 10, input: 1, output: 5, messages: 1 });
+    // Cumulative, like turn_totals_usd, so a job turn is the same subtraction in both units.
+    const [priming, job] = cell.turn_totals_stream;
+    expect(job).toEqual({ cache_read: 500, cache_creation: 10, input: 1, output: 25, messages: 2 });
+    expect((job?.cache_read ?? 0) - (priming?.cache_read ?? 0)).toBe(400);
+  });
+
+  it('counts subagent messages as work and ignores messages with no usable usage', () => {
+    const cell = emptyCell({ id: 'job', group: 'g', fixtureDir: '', request: 'r', prime: [], setup: [], evaluationSetup: [], checkFile: '', checkFileRel: '' }, armSpecs('fable')['jev_single'], 1);
+    observeEvent(cell, { type: 'assistant', parent_tool_use_id: 'toolu_1', message: { usage: { cache_read_input_tokens: 70, output_tokens: 3 } } });
+    observeEvent(cell, { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_1' }] } });
+    observeEvent(cell, usageMsg({ cache_read_input_tokens: -5, output_tokens: 2 }));
+    observeEvent(cell, result(1));
+
+    const [only] = cell.turn_totals_stream;
+    expect(only?.messages).toBe(2);
+    expect(only?.cache_read).toBe(70);
+    expect(only?.output).toBe(5);
+  });
+});
