@@ -16,6 +16,11 @@ export const MAX_PLANNER_ATTEMPTS = 2;
 export const MAX_REPLANS = 2;
 export const MAX_TASK_ATTEMPTS = 2;
 export const MAX_HISTORY = 8;
+/**
+ * A17: the request is stored whole or not at all. A prompt past this bound is recorded as absent, because a worker
+ * that reads half a specification as if it were the whole one is worse off than one told the text did not fit.
+ */
+export const REQUEST_MAX_BYTES = 64 * 1024;
 
 export type JobResult<T> = { ok: true; value: T } | { ok: false; code: StateCode };
 
@@ -178,6 +183,7 @@ export const updateJob = (env: Env, sessionId: string, fn: (prev: JobState | nul
 
 export const emptyGeneration = (promptId: string | null, shape: ExecutionShape, now = new Date()): JobGeneration => ({
   prompt_id: promptId,
+  request: null,
   created_at: now.toISOString(),
   shape,
   phase: 'admitted',

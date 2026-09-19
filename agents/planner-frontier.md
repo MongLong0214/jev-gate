@@ -25,7 +25,8 @@ omitted field is read as unknown, never as a claim that the work is mechanical.
 When you do supply `spec`: `interfaces` are the exact signatures the task must produce or consume, `data_shapes` the
 shapes and error types it passes, `invariants` what must stay true afterwards, and `files` the repository paths you
 actually inspected. State signatures and invariants, never a code block, and keep each list to the entries that
-matter (at most eight).
+matter (at most eight). When a task's interfaces do not fit in eight, split the task: do not drop the ones the request
+names. A task with fewer interfaces is not a smaller task, and a signature the request fixed is not yours to leave out.
 When you could not pin something down, say so instead of leaving it implicit: `uncertainty.unresolved` is what this
 task still has to decide, `interacts_with` what those decisions touch, and `prior_failure` names a reasoning failure
 only when an earlier attempt actually reported one, otherwise `null`.

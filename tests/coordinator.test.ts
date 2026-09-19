@@ -70,6 +70,8 @@ describe('fixed reasons', () => {
     const note = renderRouteNote('deep');
     expect(note).toContain('Tier: deep');
     expect(note).toContain(PRECEDENCE_SENTENCE);
+    // A17: the request block outranks the contract it was planned into, so the note's ordering names it.
+    expect(PRECEDENCE_SENTENCE.indexOf('[Jev Gate user request]')).toBeLessThan(PRECEDENCE_SENTENCE.indexOf('task contract'));
     expect(note.startsWith('\n\n')).toBe(true);
     expect(renderDispatchDeny('no_marker')).toContain('[JEV_TASK rev=<n> id=<id>]');
     expect(renderDispatchDeny('stale_rev', 'marker rev=1, current rev=2')).toContain('(marker rev=1, current rev=2)');

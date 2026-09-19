@@ -60,11 +60,16 @@ export const renderOrchestrationGuidance = (opts: OrchestrationGuidanceOptions):
     ...(opts.superseded ? [SUPERSEDED_SENTENCE] : []),
   ].join('\n');
 
-/** A12: the precedence the worker must apply when the sources disagree. */
+/**
+ * A12: the precedence the worker must apply when the sources disagree. A17: the request block, when one is carried, sits
+ * between the two -- a contract is planned from the request, so the request outranks it on what was asked for, while the
+ * contract still fixes this task's boundary.
+ */
 export const PRECEDENCE_SENTENCE =
-  'Precedence: the user restrictions and your native permissions first, then the task contract above, then the predecessor facts reported by earlier workers, then this note.';
+  'Precedence: the user restrictions and your native permissions first, then the "[Jev Gate user request]" block if one is above, then the task contract, then the predecessor facts reported by earlier workers, then this note.';
 
-export const renderRouteNote = (tier: Tier): string => `\n\n[Jev Gate route note] Tier: ${tier}. The task contract above is authoritative. ${PRECEDENCE_SENTENCE}`;
+export const renderRouteNote = (tier: Tier): string =>
+  `\n\n[Jev Gate route note] Tier: ${tier}. The task contract above is authoritative for this task's boundary. ${PRECEDENCE_SENTENCE}`;
 
 /** A6: the fixed reason for a root tool that is not on the orchestration allow-list. */
 export const GUARD_DENY_REASON =

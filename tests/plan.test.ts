@@ -11,6 +11,8 @@ import {
   chainDepth,
   MAX_FIELD_BYTES,
   MAX_SPEC_ENTRIES,
+  CONTRACT_HEADER,
+  REQUEST_HEADER,
   MAX_UNCERTAINTY_ENTRIES,
   normalizeDeliverable,
   OUT_OF_ROOT,
@@ -151,6 +153,13 @@ describe('parsePlannerReply', () => {
       // No fence here: a nested code fence would break the outer one, and this rule is about the field's content.
       JSON.stringify({ status: 'ready', tasks: [rawTask('t1', { spec: { interfaces: ['```ts\nconst x = 1\n```'], data_shapes: [], invariants: [], files: [] } })] }),
       'spec.interfaces contains a code block',
+    ],
+    [
+      // A17: the planner that met this rule by dropping interfaces is what v5-job2-orbit recorded, so the error says
+      // which repairs keep the information.
+      'more interfaces than the cap, answered with the repairs that keep them',
+      fence({ status: 'ready', tasks: [rawTask('t1', { spec: { interfaces: Array.from({ length: MAX_SPEC_ENTRIES + 1 }, (_v, i) => `export const f${i} = (x) => x`), data_shapes: [], invariants: [], files: [] } })] }),
+      'split the task so each part names at most 8, or move what is not a signature to data_shapes or invariants. Do not drop entries the request names',
     ],
     [
       'more spec files than the cap',
@@ -369,6 +378,36 @@ describe('priorAttemptSummary (A17, T9)', () => {
     const omitted = composeTaskPrompt(original, task, [], [], 'omitted');
     expect(omitted).toContain('omitted because it did not fit the size bound');
     expect(omitted).not.toContain('worker_reported): {');
+  });
+});
+
+describe('composeTaskPrompt user request (A17)', () => {
+  const task = rawTask('t1') as unknown as PlannedTask;
+
+  /**
+   * v5-job2-orbit-2026-09-19: the accepted plan had renamed four of the request's exports and dropped a fifth, and no
+   * worker could have caught it, because the request never reached one. The worker is told the user's words come
+   * first; this is what makes that true.
+   */
+  it('puts the request ahead of the contract, and says so, when the job carries one', () => {
+    const original = '[JEV_TASK rev=1 id=t1]\nwork';
+    const request = 'Expose mergeCollisions(bodies) from src/collisions.js.';
+    const carried = composeTaskPrompt(original, task, [], [], null, request);
+    expect(carried.startsWith(original)).toBe(true);
+    expect(carried).toContain(REQUEST_HEADER);
+    expect(carried).toContain(request);
+    expect(carried.indexOf(REQUEST_HEADER)).toBeLessThan(carried.indexOf(CONTRACT_HEADER));
+    expect(carried).toContain('It outranks the contract below on what was asked for');
+    // Nothing changes for a job that carries no request: the block is absent, not empty.
+    const plain = composeTaskPrompt(original, task, [], [], null, null);
+    expect(plain).not.toContain(REQUEST_HEADER);
+  });
+
+  it('states that a request was not carried rather than leaving the contract to read as complete', () => {
+    const omitted = composeTaskPrompt('[JEV_TASK rev=1 id=t1]\nwork', task, [], [], null, 'omitted');
+    expect(omitted).toContain(REQUEST_HEADER);
+    expect(omitted).toContain('The request was not carried');
+    expect(omitted).toContain('rather than reading the contract as a complete statement of what was asked');
   });
 });
 

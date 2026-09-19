@@ -61,6 +61,7 @@ import {
   activeTaskIds,
   activeWorkers,
   boundExhausted,
+  REQUEST_MAX_BYTES,
   cleanupJobs,
   countAttempt,
   emptyGeneration,
@@ -476,13 +477,17 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     }
 
     if (shape === 'direct') return emitContext('UserPromptSubmit', renderDirectGuidance(mode), reason);
+    // A17: an orchestrated turn keeps its request, because every worker contract downstream is a paraphrase of it and
+    // the worker is told the user's own words come first. Stored whole or not at all -- never truncated into a
+    // half-specification that reads as complete.
+    const carriedRequest = Buffer.byteLength(prompt, 'utf8') <= REQUEST_MAX_BYTES ? prompt : null;
     let stale = false;
     const applied = updateJob(deps.env, sessionId, (prev) => {
       if (!prev || prev.current.prompt_id !== promptId) {
         stale = true;
         return null;
       }
-      return { ...prev, current: { ...prev.current, shape } };
+      return { ...prev, current: { ...prev.current, shape, request: carriedRequest } };
     });
     // A newer prompt owns the session now; this turn does not get to turn orchestration on behind it.
     if (stale) return emitContext('UserPromptSubmit', renderDirectGuidance(mode), 'generation_changed');
@@ -657,11 +662,21 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     // The route note is part of what the worker receives, so it counts against the same bound.
     const totalBytes = (text: string): number => Buffer.byteLength(text, 'utf8') + ROUTE_NOTE_MAX_BYTES;
     let carried: PriorAttemptSummary | 'omitted' | null = priorAttempt;
-    let composed = composeTaskPrompt(eligibility.prompt, task, plan.constraints, predecessors, carried);
+    // A17: the request outranks the contract, so it is the last thing dropped -- this task's own failed attempt goes
+    // first. Both leave a visible marker; neither is passed off as absent.
+    // An orchestrated generation was started by a request, so a missing one was not carried rather than absent: it is
+    // marked, not left to read as though the contract were the whole of what was asked. State written before A17 lands
+    // here too, and says the same true thing.
+    let carriedRequest: string | 'omitted' | null = gen.request ?? (gen.shape === 'orchestrated' ? 'omitted' : null);
+    let composed = composeTaskPrompt(eligibility.prompt, task, plan.constraints, predecessors, carried, carriedRequest);
     if (totalBytes(composed) > MAX_COMPOSED_BYTES && priorAttempt !== null) {
       // T9: evidence that does not fit is dropped with a visible marker, never passed off as a complete input.
       carried = 'omitted';
-      composed = composeTaskPrompt(eligibility.prompt, task, plan.constraints, predecessors, carried);
+      composed = composeTaskPrompt(eligibility.prompt, task, plan.constraints, predecessors, carried, carriedRequest);
+    }
+    if (totalBytes(composed) > MAX_COMPOSED_BYTES && carriedRequest !== null && carriedRequest !== 'omitted') {
+      carriedRequest = 'omitted';
+      composed = composeTaskPrompt(eligibility.prompt, task, plan.constraints, predecessors, carried, carriedRequest);
     }
     if (totalBytes(composed) > MAX_COMPOSED_BYTES) {
       return emitDeny('composed_too_large', renderDispatchDeny('composed_too_large', `${totalBytes(composed)} bytes`), null);

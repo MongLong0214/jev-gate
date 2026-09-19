@@ -21,6 +21,12 @@ export const MAX_SPEC_ENTRIES = 8;
 export const ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 export const TASK_MARKER_RE = /^\[JEV_TASK rev=(\d{1,9}) id=([A-Za-z0-9][A-Za-z0-9_-]{0,63})(?: attempt=(\d{1,3}))?\]/;
 export const CONTRACT_HEADER = '[Jev Gate task contract]';
+/** A17: the user's own request, carried to the worker because the contract it is planned into is a paraphrase of it. */
+export const REQUEST_HEADER = '[Jev Gate user request]';
+export const REQUEST_PRECEDENCE =
+  "The block above is the user's own request for this job, carried verbatim. It outranks the contract below on what was asked for; the contract fixes this task's boundary -- its deliverables and the checks it is accepted on.";
+export const REQUEST_OMITTED =
+  'The request was not carried: it did not fit the size bound. Ask the coordinator for it rather than reading the contract as a complete statement of what was asked.';
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const bytes = (s: string): number => Buffer.byteLength(s, 'utf8');
@@ -170,7 +176,16 @@ const parseUncertainty = (v: unknown, taskId: string, modelIds: readonly string[
 const specArray = (v: unknown, name: string, modelIds: readonly string[]): ParseResult<string[]> => {
   const list = strArray(v, name);
   if (!list.ok) return list;
-  if (list.value.length > MAX_SPEC_ENTRIES) return { ok: false, error: `${name} exceeds ${MAX_SPEC_ENTRIES} entries` };
+  // A17: the bound is one-sided -- too many entries rejects the plan, while omitting them entirely is free -- so the
+  // rejection names the repairs that keep the information. Observed 2026-09-19 (`v5-job2-orbit`): told only that the
+  // list was too long, the planner dropped the interfaces instead of splitting the task, and the exact names the
+  // request had fixed were gone from every later revision.
+  if (list.value.length > MAX_SPEC_ENTRIES) {
+    return {
+      ok: false,
+      error: `${name} exceeds ${MAX_SPEC_ENTRIES} entries; split the task so each part names at most ${MAX_SPEC_ENTRIES}, or move what is not a signature to data_shapes or invariants. Do not drop entries the request names: a task with fewer interfaces is not a smaller task`,
+    };
+  }
   for (const item of list.value) {
     if (item.includes('```')) return { ok: false, error: `${name} contains a code block; state the signature or invariant, not an implementation` };
     const inert = inertEvidence(item, name, modelIds);
@@ -512,9 +527,12 @@ export const composeTaskPrompt = (
   predecessors: PredecessorSummary[],
   /** T9: `omitted` when a real prior attempt did not fit the byte bound; the gap is stated, never passed off as absent. */
   priorAttempt: PriorAttemptSummary | 'omitted' | null = null,
+  /** A17: the admitted request, `omitted` when it did not fit, `null` when the job never carried one. */
+  request: string | 'omitted' | null = null,
 ): string =>
   [
     originalPrompt,
+    ...(request === null ? [] : ['', REQUEST_HEADER, request === 'omitted' ? REQUEST_OMITTED : request, REQUEST_PRECEDENCE]),
     '',
     CONTRACT_HEADER,
     JSON.stringify(task, null, 2),

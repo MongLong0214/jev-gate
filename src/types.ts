@@ -283,6 +283,12 @@ export interface JobAttempts {
 /** One generation = one (session_id, prompt_id) pair (A2). A new prompt supersedes the previous one into history. */
 export interface JobGeneration {
   prompt_id: string | null;
+  /**
+   * A17: the admitted request, verbatim. A plan is a paraphrase of it, and the worker is told the user's own words
+   * outrank the contract -- which is only true if they reach the worker at all. Null when the turn carried none, or
+   * when it was larger than REQUEST_MAX_BYTES: the absence is stated in the prompt, never truncated into a half-spec.
+   */
+  request: string | null;
   created_at: string;
   shape: ExecutionShape;
   phase: JobPhase;

@@ -588,6 +588,40 @@ describe('worker dispatch', () => {
     expect(state(env).current.active['toolu_1']).toMatchObject({ role: 'worker', task_id: 't1', rev: 1, deliverables: ['src/t1.ts'] });
   });
 
+  /**
+   * A17/v5-job2-orbit-2026-09-19: the accepted plan had renamed four of the request's exports and dropped a fifth.
+   * No worker could have caught that, because until now nothing carried the request past the planner.
+   */
+  it('carries the admitted request into the worker contract, ahead of the plan that paraphrased it', async () => {
+    const env = makeEnv();
+    const fetchImpl = fakeJev();
+    await seedPlanned(env, PLAN_REPLY, fetchImpl);
+    expect(state(env).current.request).toBe('Build a settings page, migrate the store and wire the two together.');
+    const r = await run(env, preEvent('Agent', agentInput()), fetchImpl);
+    const prompt = String(updatedInput(r)['prompt']);
+    expect(prompt).toContain('[Jev Gate user request]');
+    expect(prompt).toContain('Build a settings page, migrate the store and wire the two together.');
+    expect(prompt.indexOf('[Jev Gate user request]')).toBeLessThan(prompt.indexOf('[Jev Gate task contract]'));
+    expect(prompt).toContain('It outranks the contract below on what was asked for');
+  });
+
+  it('says the request was not carried when it does not fit, and still dispatches', async () => {
+    const env = makeEnv();
+    const fetchImpl = fakeJev();
+    // Stored whole (under REQUEST_MAX_BYTES) but too large to compose into the contract, which is the case that has to
+    // be visible: the worker must not read the contract as the whole of what was asked.
+    const huge = `Build a settings page. ${'x'.repeat(65000)}`;
+    await run(env, promptEvent({ prompt: huge }), fetchImpl);
+    await run(env, plannerPre(), fetchImpl);
+    await run(env, plannerPost(PLAN_REPLY), fetchImpl);
+    expect(state(env).current.request).toBe(huge);
+    const r = await run(env, preEvent('Agent', agentInput()), fetchImpl);
+    expect(r.kind).toBe('patch');
+    const prompt = String(updatedInput(r)['prompt']);
+    expect(prompt).toContain('The request was not carried');
+    expect(prompt).not.toContain('x'.repeat(1024));
+  });
+
   it('preserves the called profile when Jev abstains but still appends the contract', async () => {
     const env = makeEnv();
     const fetchImpl = fakeJev({ route: 'abstain' });
