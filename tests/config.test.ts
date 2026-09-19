@@ -31,7 +31,7 @@ const write = (name: string, value: unknown): string => {
 describe('validateConfig', () => {
   it('accepts a full V5 file and a partial file over the defaults', () => {
     // routeQuestionShape is optional in a file and defaulted, so a deployed V5 config keeps composite Gate B.
-    expect(validateConfig(V5)).toEqual({ ok: true, config: { ...V5, mode: 'auto', routeQuestionShape: 'composite', delegationDepthFloor: 300_000, admissionQuestionShape: 'atomic', maxTasksPerPlan: 10 } });
+    expect(validateConfig(V5)).toEqual({ ok: true, config: { ...V5, mode: 'auto', routeQuestionShape: 'composite', delegationDepthFloor: 300_000, admissionQuestionShape: 'atomic', maxTasksPerPlan: 10, admittedShape: 'hierarchy' } });
     const partial = validateConfig({ version: 5, mode: 'native', plannerDefaultTier: 'frontier', models: { deep: 'claude-opus-5' } });
     expect(partial.ok).toBe(true);
     if (!partial.ok) return;
@@ -88,6 +88,9 @@ describe('validateConfig', () => {
     ['fractional depth floor', { version: 5, delegationDepthFloor: 300_000.5 }, 'delegationDepthFloor must be'],
     ['admission shape', { version: 5, admissionQuestionShape: 'fanout' }, 'admissionQuestionShape must be'],
     ['admission shape null', { version: 5, admissionQuestionShape: null }, 'admissionQuestionShape must be'],
+    // A19: absence defaults to hierarchy, an explicit wrong value is an error -- the same rule as the two shapes above.
+    ['admitted shape', { version: 5, admittedShape: 'solo' }, 'admittedShape must be'],
+    ['admitted shape null', { version: 5, admittedShape: null }, 'admittedShape must be'],
     ['task ceiling of zero', { version: 5, maxTasksPerPlan: 0 }, 'maxTasksPerPlan must be'],
     ['task ceiling above the hard limit', { version: 5, maxTasksPerPlan: 65 }, 'maxTasksPerPlan must be'],
   ])('rejects an invalid %s', (_name, raw, message) => {

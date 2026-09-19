@@ -375,6 +375,73 @@ describe('Gate A admission', () => {
   });
 });
 
+/**
+ * A19: the single-executor shape. The product does two things to an admitted turn at once -- it moves the work into a
+ * fresh context and it splits the work -- and every cost figure in this repository confounds them. This shape does the
+ * first and not the second, so a pre-registered run can attribute the saving instead of observing it.
+ */
+describe('single executor (A19)', () => {
+  const singleEnv = (): Env => {
+    const cfg = join(tmp, `single-${Math.random().toString(36).slice(2)}.json`);
+    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', admittedShape: 'single' }));
+    return makeEnv({ JEV_GATE_CONFIG: cfg });
+  };
+
+  it('admits the turn, and tells the coordinator to dispatch it once rather than plan it', async () => {
+    const env = singleEnv();
+    const r = await run(env, promptEvent(), fakeJev({ execution: 'orchestrated' }));
+    expect(r.kind).toBe('guidance');
+    expect(context(r)).toContain('Execution shape: orchestrated');
+    expect(context(r)).toContain('Dispatch this request once, whole, to jev-gate:worker');
+    // None of the hierarchy machinery is offered, because none of it runs on this shape.
+    expect(context(r)).not.toContain('[JEV_TASK rev=<n> id=<id>]');
+    expect(context(r)).not.toContain('Planner first');
+    expect(state(env).current).toMatchObject({ shape: 'orchestrated', execution: 'single', request: 'Build a settings page, migrate the store and wire the two together.' });
+  });
+
+  it('denies the planner, and says what to do instead', async () => {
+    const env = singleEnv();
+    const fetchImpl = fakeJev({ execution: 'orchestrated' });
+    await run(env, promptEvent(), fetchImpl);
+    const denied = await run(env, plannerPre(), fetchImpl);
+    expect(denied).toMatchObject({ kind: 'deny', code: 'single_shape' });
+    expect(String(hookOutput(denied)['permissionDecisionReason'])).toContain('Dispatch the whole request once to jev-gate:worker');
+    expect(state(env).current.plan).toBeNull();
+  });
+
+  it('dispatches one worker carrying the request itself, with no contract and no marker', async () => {
+    const env = singleEnv();
+    const fetchImpl = fakeJev({ execution: 'orchestrated' });
+    await run(env, promptEvent(), fetchImpl);
+    const r = await run(env, preEvent('Agent', agentInput({ prompt: 'Do what the request asks.' })), fetchImpl);
+    expect(r.kind).toBe('patch');
+    const prompt = String(updatedInput(r)['prompt']);
+    expect(prompt).toContain('Do what the request asks.');
+    expect(prompt).toContain('[Jev Gate user request]');
+    expect(prompt).toContain('Build a settings page, migrate the store and wire the two together.');
+    expect(prompt).toContain('It is the task: there is no plan and no task contract for this dispatch.');
+    expect(prompt).not.toContain('[Jev Gate task contract]');
+    expect(prompt).toContain('[Jev Gate route note]');
+    // The route note cannot point at a contract that does not exist.
+    expect(prompt).not.toContain('The task contract above is authoritative');
+  });
+
+  it('keeps the root guard on, so the coordinator still cannot implement the job itself', async () => {
+    const env = singleEnv();
+    const fetchImpl = fakeJev({ execution: 'orchestrated' });
+    await run(env, promptEvent(), fetchImpl);
+    const denied = await run(env, preEvent('Edit', { file_path: '/w/src/a.ts', old_string: 'a', new_string: 'b' }), fetchImpl);
+    expect(denied).toMatchObject({ kind: 'deny', code: 'guard_denied' });
+  });
+
+  it('is off unless the config asks for it', async () => {
+    const env = makeEnv();
+    const r = await run(env, promptEvent(), fakeJev({ execution: 'orchestrated' }));
+    expect(context(r)).toContain('[JEV_TASK rev=<n> id=<id>]');
+    expect(state(env).current.execution).toBeUndefined();
+  });
+});
+
 describe('root guard (A6 allow-list)', () => {
   const orchestrate = async (): Promise<Env> => {
     const env = makeEnv();

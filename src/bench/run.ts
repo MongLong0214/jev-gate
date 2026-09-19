@@ -18,14 +18,14 @@ import { estimateJevCostUsd, modelFamily, parseModelUsage, safeSum, tokenCount, 
  * the report still reads runs that contain it, because a retired arm is a fact about an old run, not a reason to stop
  * reading it.
  */
-export type Arm = 'sonnet_native' | 'frontier_native' | 'native_hierarchy' | 'orchestrated_control' | 'frontier_orchestrated' | 'jev_hierarchy' | 'jev_forced_orchestration';
+export type Arm = 'sonnet_native' | 'frontier_native' | 'native_hierarchy' | 'orchestrated_control' | 'frontier_orchestrated' | 'jev_hierarchy' | 'jev_single' | 'jev_forced_orchestration';
 /** The only variables a measured session inherits; everything else, including the parent's CLAUDE_* settings, is dropped. */
 export const KEEP_ENV: readonly string[] = ['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'LC_ALL', 'TMPDIR', 'TERM', 'TZ', 'SSL_CERT_FILE', 'NODE_EXTRA_CA_CERTS', 'TYPESAFE_API_KEY'];
 /** FAKE_CLAUDE_* is the test double's control channel; a real session has none, so passing it through changes nothing. */
 const KEEP_ENV_PREFIX = 'FAKE_CLAUDE_';
 const keepEnvVar = (key: string): boolean => KEEP_ENV.includes(key) || key.startsWith(KEEP_ENV_PREFIX);
 
-export const ALL_ARMS: readonly Arm[] = ['sonnet_native', 'frontier_native', 'native_hierarchy', 'orchestrated_control', 'frontier_orchestrated', 'jev_hierarchy', 'jev_forced_orchestration'];
+export const ALL_ARMS: readonly Arm[] = ['sonnet_native', 'frontier_native', 'native_hierarchy', 'orchestrated_control', 'frontier_orchestrated', 'jev_hierarchy', 'jev_single', 'jev_forced_orchestration'];
 
 export interface ArmSpec {
   arm: Arm;
@@ -39,6 +39,15 @@ export interface ArmSpec {
    * jobs below the admission floor, so this arm keeps Gate B and C measurable without tuning the floor on pilot data.
    */
   diagnostic: boolean;
+  /**
+   * A19: the arm runs the same frozen config with `admittedShape` overridden, written per cell so the file the cell
+   * actually loaded is on disk beside its trace and its sha256 is recorded in the cell. Every other key is the frozen
+   * one, so the two plugin arms differ in this key and nothing else.
+   *
+   * An override rather than a second run: a run freezes one config, so measuring this shape separately would compare
+   * two runs with different frozen inputs, which is the comparison this harness exists to avoid.
+   */
+  admittedShape?: 'single';
 }
 
 export const armSpecs = (frontierModel: string): Record<Arm, ArmSpec> => ({
@@ -48,6 +57,7 @@ export const armSpecs = (frontierModel: string): Record<Arm, ArmSpec> => ({
   orchestrated_control: { arm: 'orchestrated_control', rootModel: 'sonnet', plugin: true, mode: 'native', experimentAdmission: 'orchestrated', diagnostic: false },
   frontier_orchestrated: { arm: 'frontier_orchestrated', rootModel: frontierModel, plugin: true, mode: 'native', experimentAdmission: 'orchestrated', diagnostic: false },
   jev_hierarchy: { arm: 'jev_hierarchy', rootModel: 'sonnet', plugin: true, mode: 'auto', experimentAdmission: null, diagnostic: false },
+  jev_single: { arm: 'jev_single', rootModel: 'sonnet', plugin: true, mode: 'auto', experimentAdmission: null, diagnostic: false, admittedShape: 'single' },
   jev_forced_orchestration: { arm: 'jev_forced_orchestration', rootModel: 'sonnet', plugin: true, mode: 'auto', experimentAdmission: 'orchestrated', diagnostic: true },
 });
 
@@ -185,6 +195,8 @@ export interface CellRecord {
   diagnostic: boolean;
   /** Per-cell job state directory, so job state never touches the real HOME or another cell. */
   state_dir: string | null;
+  /** A19: set when the arm overrode a config key; the path and hash of the file this cell actually loaded. */
+  config_override: { path: string; sha256: string; admittedShape: string } | null;
   request_sha256: string;
   /** Set only for a primed case: the priming prompts sent before the job prompt in the same session. */
   prime_sha256: string[];
@@ -534,6 +546,7 @@ export const emptyCell = (cs: CodingCase, spec: ArmSpec, repetition: number): Ce
   repetition,
   root_model_requested: spec.rootModel,
   plugin_expected: spec.plugin,
+  config_override: null,
   mode: spec.mode,
   experimental_allocation: null,
   experiment_admission: spec.experimentAdmission,
@@ -1076,7 +1089,19 @@ const runClaudeCell = (cs: CodingCase, spec: ArmSpec, o: Options, pluginDir: str
       env['JEV_GATE_MODE'] = spec.mode;
       // T8: the parent's JEV_GATE_CONFIG is stripped with the rest of the parent environment and replaced by the frozen
       // file, so a child can never fall back to the HOME config or to defaults while the plan records something else.
-      env['JEV_GATE_CONFIG'] = configPath;
+      // A19: an arm that overrides a config key gets its own file, derived from the frozen one so every other key is
+      // identical, written inside the cell and hashed there. The plan's frozen config stays the record of what the
+      // run was planned with; this records what this cell actually loaded.
+      if (spec.admittedShape) {
+        const base = JSON.parse(readFileSync(configPath, 'utf8')) as Record<string, unknown>;
+        const text = JSON.stringify({ ...base, admittedShape: spec.admittedShape }, null, 2) + '\n';
+        const overridePath = join(cellDir, 'config.json');
+        writeFileSync(overridePath, text, 'utf8');
+        cell.config_override = { path: overridePath, sha256: sha256(text), admittedShape: spec.admittedShape };
+        env['JEV_GATE_CONFIG'] = overridePath;
+      } else {
+        env['JEV_GATE_CONFIG'] = configPath;
+      }
       env['JEV_GATE_TRACE_DIR'] = traceDir;
       // D7: a fresh state root per cell, so one cell's job state can never reach another cell or the real HOME.
       env['JEV_GATE_STATE_DIR'] = stateDir;

@@ -13,6 +13,18 @@ export type RouteQuestionShape = 'composite' | 'atomic';
 export type AdmissionQuestionShape = RouteQuestionShape;
 export const ROUTE_QUESTION_SHAPES: readonly RouteQuestionShape[] = ['composite', 'atomic'];
 
+/**
+ * A19: what an admitted turn is executed as. `hierarchy` is the shipped product -- planner, plan, several workers.
+ * `single` dispatches one worker with the user's own request and no plan at all, to test whether the saving measured
+ * at depth comes from starting in a fresh context or from splitting the work. It is a hypothesis under measurement,
+ * not a recommendation.
+ *
+ * It is a separate shape rather than `maxTasksPerPlan: 1`: a one-task plan still pays for the planner, still carries a
+ * contract and still has a replan path, so it would measure a small hierarchy rather than the absence of one.
+ */
+export type AdmittedShape = 'hierarchy' | 'single';
+export const ADMITTED_SHAPES: readonly AdmittedShape[] = ['hierarchy', 'single'];
+
 export type AdmissionAnswer = 'direct' | 'orchestrated' | 'needs_context' | 'abstain';
 export type RouteAnswer = Tier | 'abstain';
 export type PlannerRouteAnswer = PlannerTier | 'abstain';
@@ -114,6 +126,11 @@ export interface ConfigV5 {
    * the hidden cost axis here, and a plan of 13 cost +92.5 % where plans that worked ran 2 to 7.
    */
   maxTasksPerPlan: number;
+  /**
+   * A19: how an admitted turn is executed. Optional in a config file and defaulted to `hierarchy`, so a deployed file
+   * keeps its behaviour. `single` removes the planner, the plan, Gate B's contract and the replan path from the turn.
+   */
+  admittedShape: AdmittedShape;
 }
 
 export interface ChoiceAnswer<K extends string> {
@@ -303,6 +320,8 @@ export interface JobGeneration {
   outcome: JobOutcome | null;
   /** A16: the generation was started by the bench control variable, not by a Gate A answer. */
   forced?: true;
+  /** A19: present only when the turn was admitted under `admittedShape: single`. Absent reads as `hierarchy`. */
+  execution?: 'single';
 }
 
 export interface JobState {
@@ -397,7 +416,9 @@ export type DenyReason =
   | 'unknown_task'
   | 'stale_rev'
   | 'deps_incomplete'
-  | 'phase_not_planned';
+  | 'phase_not_planned'
+  /** A19: the planner was called on a turn admitted as a single executor, which has no plan to make. */
+  | 'single_shape';
 
 export type StateCode = 'state_corrupt' | 'state_too_large' | 'state_locked' | 'state_symlink' | 'state_write_failed';
 

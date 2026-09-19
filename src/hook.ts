@@ -41,6 +41,8 @@ import {
   renderDispatchDeny,
   renderReplanBoundExhausted,
   renderOrchestrationGuidance,
+  renderSingleGuidance,
+  renderSingleRouteNote,
   renderPlannedContext,
   renderPlannerModelNote,
   renderPlannerProblem,
@@ -77,6 +79,7 @@ import {
   acceptedReceipt,
   chainDepth,
   composePlannerPrompt,
+  composeSingleWorkerPrompt,
   composeTaskPrompt,
   contractHash,
   deliverableOverlap,
@@ -490,11 +493,15 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         stale = true;
         return null;
       }
-      return { ...prev, current: { ...prev.current, shape, request: carriedRequest } };
+      // A19: the execution shape is fixed at admission from the config this turn loaded, so a config edit mid-job
+      // cannot change what a running generation is.
+      const next = { ...prev.current, shape, request: carriedRequest };
+      return { ...prev, current: config.admittedShape === 'single' ? { ...next, execution: 'single' as const } : next };
     });
     // A newer prompt owns the session now; this turn does not get to turn orchestration on behind it.
     if (stale) return emitContext('UserPromptSubmit', renderDirectGuidance(mode), 'generation_changed');
     if (!applied.ok) return emitContext('UserPromptSubmit', renderDirectGuidance(mode), applied.code);
+    if (config.admittedShape === 'single') return emitContext('UserPromptSubmit', renderSingleGuidance({ mode, confidence, superseded }), reason);
     return emitContext('UserPromptSubmit', renderOrchestrationGuidance({ mode, confidence, superseded, maxParallelWorkers: config.maxParallelWorkers }), reason);
   };
 
@@ -795,7 +802,11 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     atomicRoute ? decideWorkerRouteAtomic(answers, tier) : decideWorkerRoute(answers, config.routeConfidenceFloor, tier);
 
   /** A direct-shape owned worker call is an ad-hoc task: routed V4-style in auto, untouched in native. */
-  const handleAdhocWorker = async (eligibility: Extract<Eligibility, { eligible: true }>): Promise<HookResult> => {
+  const handleAdhocWorker = async (
+    eligibility: Extract<Eligibility, { eligible: true }>,
+    // A19: set only on the single-executor path, where the request is the task rather than the source of a contract.
+    carriedRequest: string | 'omitted' | null = null,
+  ): Promise<HookResult> => {
     if (mode === 'native') return preserve('mode_native');
     if (eligibility.pinned) return preserve('pinned');
     if (!apiKey) return preserve('key_missing');
@@ -829,9 +840,18 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     if (routed === null) return preserve('route_invalid');
     const decision: WorkerRouteDecision = routed;
     if (decision.action === 'preserve') return preserve(decision.reason ?? 'route_invalid');
+    // T9: the request is dropped with a visible marker if it does not fit, never truncated into a half-specification.
+    let carried = carriedRequest;
+    let composed = composeSingleWorkerPrompt(eligibility.prompt, carried);
+    const noteBytes = ROUTE_NOTE_MAX_BYTES;
+    if (Buffer.byteLength(composed, 'utf8') + noteBytes > MAX_COMPOSED_BYTES && carried !== null && carried !== 'omitted') {
+      carried = 'omitted';
+      composed = composeSingleWorkerPrompt(eligibility.prompt, carried);
+    }
+    const note = carriedRequest === null ? renderRouteNote(decision.tier) : renderSingleRouteNote(decision.tier);
     return emitPatch(
       eligibility.input,
-      { subagent_type: agentForTier('worker', decision.tier), model: config.models[decision.tier], prompt: eligibility.prompt + renderRouteNote(decision.tier) },
+      { subagent_type: agentForTier('worker', decision.tier), model: config.models[decision.tier], prompt: composed + note },
       null,
     );
   };
@@ -884,6 +904,12 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     const eligibility = checkEligibility(input, deps.env, config);
     // Inside an orchestrated job an owned call that cannot be validated is denied, never waved through unvalidated.
     if (!eligibility.eligible) return emitDeny('dispatch_ineligible', renderDispatchDeny('dispatch_ineligible', eligibility.code), null);
+    // A19: the single-executor shape has no planner and no plan, so the planner is refused and the worker call is an
+    // ad-hoc dispatch carrying the request this turn was admitted with.
+    if (generation.execution === 'single') {
+      if (eligibility.role === 'planner') return emitDeny('single_shape', renderDispatchDeny('single_shape'), null);
+      return handleAdhocWorker(eligibility, generation.request ?? 'omitted');
+    }
     return eligibility.role === 'planner' ? handlePlanner(generation, sessionId, eligibility) : handleWorker(generation, sessionId, eligibility);
   };
 

@@ -11,7 +11,7 @@ import { loadManifest, maxOverlap, type CellRecord, type Plan } from '../src/ben
 const root = join(__dirname, '..');
 const fake = join(__dirname, 'fixtures', 'fake-claude.mjs');
 const cases = join(__dirname, 'fixtures', 'mini', 'cases.json');
-const ARMS = ['sonnet_native', 'frontier_native', 'native_hierarchy', 'orchestrated_control', 'frontier_orchestrated', 'jev_hierarchy', 'jev_forced_orchestration'] as const;
+const ARMS = ['sonnet_native', 'frontier_native', 'native_hierarchy', 'orchestrated_control', 'frontier_orchestrated', 'jev_hierarchy', 'jev_single', 'jev_forced_orchestration'] as const;
 const JEV_ARMS = ['jev_hierarchy', 'jev_forced_orchestration'] as const;
 const HIERARCHY_ARMS = ['native_hierarchy', 'orchestrated_control', 'frontier_orchestrated', 'jev_hierarchy', 'jev_forced_orchestration'] as const;
 let tmp: string;
@@ -51,11 +51,11 @@ describe('plan', () => {
     expect(r.status, r.stderr).toBe(0);
     const plan = JSON.parse(r.stdout) as Plan;
     expect(plan.schema).toBe(5);
-    expect(plan.planned_cells).toBe(7);
+    expect(plan.planned_cells).toBe(8);
     expect(plan.arms.map((a) => a.arm).sort()).toEqual([...ARMS].sort());
     expect(plan.arms.filter((a) => a.experimentAdmission === 'orchestrated').map((a) => a.arm).sort()).toEqual(['frontier_orchestrated', 'jev_forced_orchestration', 'orchestrated_control']);
     expect(plan.arms.filter((a) => a.diagnostic).map((a) => a.arm)).toEqual(['jev_forced_orchestration']);
-    expect(plan.arms.filter((a) => a.mode === 'auto').map((a) => a.arm).sort()).toEqual(['jev_forced_orchestration', 'jev_hierarchy']);
+    expect(plan.arms.filter((a) => a.mode === 'auto').map((a) => a.arm).sort()).toEqual(['jev_forced_orchestration', 'jev_hierarchy', 'jev_single']);
     expect(plan.arms.filter((a) => a.rootModel === 'fable').map((a) => a.arm).sort()).toEqual(['frontier_native', 'frontier_orchestrated']);
     expect(existsSync(r.out)).toBe(false);
     expect(JSON.parse(bench(['--seed', '7']).stdout).rows).toEqual(plan.rows);
@@ -70,7 +70,7 @@ describe('plan', () => {
     expect(retired.status).toBe(1);
     expect(retired.stderr).toMatch(/--arms must be a unique subset/);
     expect(bench(['--arms', 'jev_hierarchy,jev_hierarchy']).status).toBe(1);
-    expect(bench(['--regrade', '--execute', '--max-sessions', '7']).status).toBe(1);
+    expect(bench(['--regrade', '--execute', '--max-sessions', '8']).status).toBe(1);
     expect(bench(['--execute']).stderr).toMatch(/--max-sessions/);
     const badManifest = join(tmp, 'bad.json');
     require('node:fs').writeFileSync(badManifest, JSON.stringify({ version: 5, cases: [{ id: '../../victim', group: 'g', fixtureDir: 'x', request: 'r', setup: [], checkFile: 'c.mjs' }] }));
@@ -99,17 +99,17 @@ describe('plan', () => {
 describe('execute', () => {
   it('refuses to start (writing nothing) under API-key auth, unverifiable auth, missing key with the Jev arm, or a low budget', () => {
     for (const [args, env, pattern] of [
-      [['--execute', '--max-sessions', '7'], { ANTHROPIC_API_KEY: 'sk-x' }, /ANTHROPIC_API_KEY/],
-      [['--execute', '--max-sessions', '7'], { FAKE_CLAUDE_AUTH_EXIT: '7' }, /cannot verify subscription OAuth/],
-      [['--execute', '--max-sessions', '7'], { FAKE_CLAUDE_AUTH: JSON.stringify({ loggedIn: true, authMethod: 'console', apiProvider: 'firstParty' }) }, /not claude\.ai subscription OAuth/],
-      [['--execute', '--max-sessions', '6'], {}, /below the 7 planned/],
+      [['--execute', '--max-sessions', '8'], { ANTHROPIC_API_KEY: 'sk-x' }, /ANTHROPIC_API_KEY/],
+      [['--execute', '--max-sessions', '8'], { FAKE_CLAUDE_AUTH_EXIT: '7' }, /cannot verify subscription OAuth/],
+      [['--execute', '--max-sessions', '8'], { FAKE_CLAUDE_AUTH: JSON.stringify({ loggedIn: true, authMethod: 'console', apiProvider: 'firstParty' }) }, /not claude\.ai subscription OAuth/],
+      [['--execute', '--max-sessions', '7'], {}, /below the 8 planned/],
     ] as Array<[string[], Record<string, string>, RegExp]>) {
       const r = bench(args, env);
       expect(r.status, r.stderr).toBe(2);
       expect(r.stderr).toMatch(pattern);
       expect(existsSync(r.out)).toBe(false);
     }
-    const noKey = spawnSync(process.execPath, [join(dist, 'bench', 'run.js'), '--cases', cases, '--out', join(tmp, 'nokey'), '--claude', fake, '--plugin-dir', pluginDir, '--execute', '--max-sessions', '7'], { encoding: 'utf8', env: { PATH: process.env['PATH'] ?? '', HOME: join(tmp, 'home') } });
+    const noKey = spawnSync(process.execPath, [join(dist, 'bench', 'run.js'), '--cases', cases, '--out', join(tmp, 'nokey'), '--claude', fake, '--plugin-dir', pluginDir, '--execute', '--max-sessions', '8'], { encoding: 'utf8', env: { PATH: process.env['PATH'] ?? '', HOME: join(tmp, 'home') } });
     expect(noKey.status).toBe(2);
     expect(noKey.stderr).toMatch(/TYPESAFE_API_KEY/);
     const noKeyNoJev = spawnSync(process.execPath, [join(dist, 'bench', 'run.js'), '--cases', cases, '--out', join(tmp, 'nokey-ok'), '--claude', fake, '--plugin-dir', pluginDir, '--execute', '--max-sessions', '1', '--arms', 'sonnet_native'], { encoding: 'utf8', env: { PATH: process.env['PATH'] ?? '', HOME: join(tmp, 'home') } });
@@ -119,14 +119,14 @@ describe('execute', () => {
   it('refuses an existing output directory, even an empty one', () => {
     const out = join(tmp, 'existing');
     mkdirSync(out);
-    const r = bench(['--execute', '--max-sessions', '7'], {}, out);
+    const r = bench(['--execute', '--max-sessions', '8'], {}, out);
     expect(r.status).toBe(1);
     expect(r.stderr).toMatch(/already exists/);
     expect(readdirSync(out)).toEqual([]);
   });
 
-  it('runs seven arms from frozen inputs with identical prompts, a private state dir and whole-tree accounting', () => {
-    const r = bench(['--execute', '--max-sessions', '7', '--seed', '3', '--timeout-ms', '60000']);
+  it('runs eight arms from frozen inputs with identical prompts, a private state dir and whole-tree accounting', () => {
+    const r = bench(['--execute', '--max-sessions', '8', '--seed', '3', '--timeout-ms', '60000']);
     expect(r.status, r.stderr + r.stdout).toBe(0);
     const plan = JSON.parse(readFileSync(join(r.out, 'plan.json'), 'utf8')) as Plan;
     expect(plan.preflight?.errors).toEqual([]);
@@ -257,9 +257,9 @@ describe('execute', () => {
 
     const rep = report(r.out);
     expect(rep.schema).toBe(5);
-    expect(rep.planned_rows).toBe(7);
+    expect(rep.planned_rows).toBe(8);
     expect(rep.per_job.map((j) => j.job)).toEqual(['mini']);
-    expect(rep.per_job[0]!.arms).toHaveLength(7);
+    expect(rep.per_job[0]!.arms).toHaveLength(8);
     const byArm = Object.fromEntries(rep.arms.map((a) => [a.arm, a]));
     expect(byArm['frontier_native']!.fable_tokens).toBe(1260);
     expect(byArm['jev_hierarchy']!.gate_v5.receipts).toEqual({ accept: 2, incomplete: 1, invalid: 0, unknown: 1, rework: 0, replan: 0 });

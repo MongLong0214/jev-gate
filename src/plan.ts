@@ -28,6 +28,15 @@ export const REQUEST_PRECEDENCE =
 export const REQUEST_OMITTED =
   'The request was not carried: it did not fit the size bound. Ask the coordinator for it rather than reading the contract as a complete statement of what was asked.';
 
+/**
+ * A19: a single-executor dispatch has no contract, so the request is not outranking one -- it is the whole task.
+ */
+export const REQUEST_ONLY_NOTE =
+  "The block above is the user's own request for this job, carried verbatim. It is the task: there is no plan and no task contract for this dispatch. Implement what it asks, run the checks it implies, and report separately anything you could not do.";
+
+export const composeSingleWorkerPrompt = (coordinatorBrief: string, request: string | 'omitted' | null): string =>
+  [coordinatorBrief, ...(request === null ? [] : ['', REQUEST_HEADER, request === 'omitted' ? REQUEST_OMITTED : request, REQUEST_ONLY_NOTE])].join('\n');
+
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const bytes = (s: string): number => Buffer.byteLength(s, 'utf8');
 

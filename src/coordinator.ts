@@ -35,6 +35,36 @@ export const orchestrationRules = (cap: number): string[] => [
   'Report what was implemented, what was checked, and what was reported but not verified, separately.',
 ];
 
+/**
+ * A19: the single-executor shape. It removes the planner, the plan, the task contract and the replan path from an
+ * admitted turn, leaving the depth reader, Gate A, Gate B's tier choice and one worker. It exists to test whether the
+ * saving measured at depth comes from starting in a fresh context or from splitting the work, which every figure in
+ * this repository so far confounds.
+ */
+export const singleRules = (): string[] => [
+  'You do not implement this request yourself; you coordinate.',
+  'Available to you now: Read, Grep, Glob, TodoWrite, and one Agent call to the jev-gate worker role. Edit, Write, Bash and every other agent (including Explore) are unavailable for this request and will be denied; do not probe them.',
+  'Dispatch this request once, whole, to jev-gate:worker. There is no plan for this request: jev-gate:planner is denied, and splitting the work across several workers is not what this shape does.',
+  'Your brief does not have to restate the request: the hook appends the user\'s own request verbatim, and the worker is told it is the task.',
+  'Never pass a model argument to an owned agent call.',
+  'If the worker comes back incomplete or wrong, say so and dispatch it again with what was wrong; there is no replan path here.',
+  'Report what was implemented, what was checked, and what was reported but not verified, separately.',
+];
+
+export interface SingleGuidanceOptions {
+  mode: RoutingMode;
+  confidence: number | null;
+  superseded: boolean;
+}
+
+export const renderSingleGuidance = (opts: SingleGuidanceOptions): string =>
+  [
+    GUIDANCE_HEADER,
+    opts.mode === 'auto' ? renderAdmissionLine(opts.confidence) : NATIVE_ORCHESTRATION_SENTENCE,
+    ...singleRules(),
+    ...(opts.superseded ? [SUPERSEDED_SENTENCE] : []),
+  ].join('\n');
+
 export const SUPERSEDED_SENTENCE =
   'A previous Jev Gate job for this session was still unfinished and has been superseded by this request; results from it are not counted toward this plan.';
 
@@ -68,6 +98,10 @@ export const renderOrchestrationGuidance = (opts: OrchestrationGuidanceOptions):
 export const PRECEDENCE_SENTENCE =
   'Precedence: the user restrictions and your native permissions first, then the "[Jev Gate user request]" block if one is above, then the task contract, then the predecessor facts reported by earlier workers, then this note.';
 
+/** A19: the same note without the contract, because a single-executor dispatch has none to be authoritative. */
+export const renderSingleRouteNote = (tier: Tier): string =>
+  `\n\n[Jev Gate route note] Tier: ${tier}. Precedence: the user restrictions and your native permissions first, then the "[Jev Gate user request]" block above, then this note.`;
+
 export const renderRouteNote = (tier: Tier): string =>
   `\n\n[Jev Gate route note] Tier: ${tier}. The task contract above is authoritative for this task's boundary. ${PRECEDENCE_SENTENCE}`;
 
@@ -87,6 +121,8 @@ const DISPATCH_DENY_TEXT: Record<DenyReason, string> = {
   stale_rev: 'The marker names an older plan revision. Re-read the current plan revision and dispatch its task ids.',
   deps_incomplete: 'This task still has dependencies without an accepted receipt for the current contract. Dispatch its predecessors first.',
   phase_not_planned: 'No valid plan is active for this request. Call jev-gate:planner and wait for a ready plan before dispatching workers.',
+  single_shape:
+    'This request was admitted as a single executor, so there is no plan to make and the planner is not available for it. Dispatch the whole request once to jev-gate:worker; the hook appends the user\'s own request to your brief.',
   task_active:
     'This task is already running and its worker was never observed to stop, so a second dispatch of it is refused rather than replacing a live writer. Wait for its result, or cancel it in the session first.',
   task_accepted: 'This task already has an accepted receipt for the current contract. Add attempt=<n> only to deliberately rework it.',

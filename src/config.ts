@@ -2,9 +2,9 @@ import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import type { AdmissionQuestionShape, ConfigV5, Mode, PlannerTier, RouteQuestionShape, Tier } from './types.js';
+import type { AdmissionQuestionShape, AdmittedShape, ConfigV5, Mode, PlannerTier, RouteQuestionShape, Tier } from './types.js';
 import { DEFAULT_MAX_TASKS_PER_PLAN } from './plan.js';
-import { MODES, PLANNER_TIERS, ROUTE_QUESTION_SHAPES, TIERS } from './types.js';
+import { ADMITTED_SHAPES, MODES, PLANNER_TIERS, ROUTE_QUESTION_SHAPES, TIERS } from './types.js';
 
 export const DEFAULT_CONFIG: ConfigV5 = {
   version: 5,
@@ -33,6 +33,8 @@ export const DEFAULT_CONFIG: ConfigV5 = {
   admissionQuestionShape: 'atomic',
   // Above the 2-7 band that ordinary plans ran in, below the 13 that cost +92.5 %: it stops a runaway, not a plan.
   maxTasksPerPlan: DEFAULT_MAX_TASKS_PER_PLAN,
+  // A19: the shipped product. `single` is an arm under measurement, not a default anything is moving toward yet.
+  admittedShape: 'hierarchy',
 };
 
 /**
@@ -65,6 +67,7 @@ const V5_KEYS = new Set<string>([
   'delegationDepthFloor',
   'admissionQuestionShape',
   'maxTasksPerPlan',
+  'admittedShape',
 ]);
 const LEGACY_MARKERS = ['uncertainTier', 'opusModel', 'frontierModel', 'confidenceFloor'];
 /** `resultConfidenceFloor` is a deprecated no-op (T11): it is still validated so a deployed file loads, and read by nothing. */
@@ -166,6 +169,12 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
     return { ok: false, error: `maxTasksPerPlan must be an integer in [1, ${MAX_TASKS_PER_PLAN_LIMIT}]` };
   }
 
+  // Same rule again: absence defaults, an explicit wrong value is an error.
+  const admittedShape = 'admittedShape' in c ? c['admittedShape'] : 'hierarchy';
+  if (typeof admittedShape !== 'string' || !ADMITTED_SHAPES.includes(admittedShape as AdmittedShape)) {
+    return { ok: false, error: `admittedShape must be one of ${ADMITTED_SHAPES.join(', ')}` };
+  }
+
   const allow = c['guardAllowTools'];
   if (!Array.isArray(allow) || allow.some((t) => typeof t !== 'string' || !TOOL_NAME_RE.test(t))) {
     return { ok: false, error: `guardAllowTools must be an array of tool names matching ${TOOL_NAME_RE.source}` };
@@ -188,6 +197,7 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
       delegationDepthFloor: floor,
       admissionQuestionShape: admissionShape as AdmissionQuestionShape,
       maxTasksPerPlan: maxTasks,
+      admittedShape: admittedShape as AdmittedShape,
     },
   };
 };
