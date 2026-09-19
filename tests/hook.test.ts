@@ -289,6 +289,24 @@ describe('Gate A admission', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
+  it('asks the atomic Gate A questions and admits on them when the shape is atomic', async () => {
+    const cfg = join(tmp, 'gate-a-atomic.json');
+    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', admissionQuestionShape: 'atomic' }));
+    const env = makeEnv({ JEV_GATE_CONFIG: cfg });
+    let asked: string[] = [];
+    const fetchImpl = vi.fn(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)) as { questions: Record<string, unknown> };
+      asked = Object.keys(body.questions);
+      const answers: Record<string, unknown> = { size: { type: 'score', score: 3, confidence: 0.9 } };
+      for (const k of ['forbids_delegation', 'answer_only', 'missing_reference']) answers[k] = { type: 'noul', noul: 0.05 };
+      return new Response(JSON.stringify({ model: 'jev-1.13.0', answers, usage: { input_tokens: 10, output_tokens: 2 } }), { status: 200 });
+    });
+    const r = await run(env, promptEvent(), fetchImpl);
+    expect(asked).toEqual(['forbids_delegation', 'answer_only', 'missing_reference', 'size']);
+    expect(context(r)).toContain('Execution shape: orchestrated');
+    expect(state(env).current.shape).toBe('orchestrated');
+  });
+
   it('records prompt_id_absent and creates no orchestrated state', async () => {
     const env = makeEnv();
     const fetchImpl = fakeJev();

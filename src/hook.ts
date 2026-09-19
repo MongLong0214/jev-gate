@@ -2,7 +2,15 @@ import { createHash, randomUUID } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-import { buildAdmissionRequest, decideAdmission, type AdmissionDecision } from './admission.js';
+import {
+  ADMISSION_FACT_QUESTIONS,
+  buildAdmissionRequest,
+  buildAtomicAdmissionRequest,
+  decideAdmission,
+  decideAdmissionAtomic,
+  type AdmissionDecision,
+  type AdmissionState,
+} from './admission.js';
 import {
   buildAtomicWorkerRouteRequest,
   buildPlannerRouteRequest,
@@ -427,16 +435,28 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         decision: { shape: 'direct', decided: false, reason, changed_default: false },
       });
     } else {
+      /**
+       * Decision 2: the atomic shape asks read-offs and composes them here as vetoes. It never consults
+       * `admissionConfidenceFloor`, as atomic Gate B never consults `routeConfidenceFloor`; the depth test it applies
+       * is the same one the branch above already passed, so on this path it can only agree.
+       */
+      const atomicAdmission = config.admissionQuestionShape === 'atomic';
+      const admissionKeys: string[] = atomicAdmission ? Object.keys(ADMISSION_FACT_QUESTIONS) : ['execution'];
+      // The explicit return type is what lets one call site carry both shapes: callGate cannot infer Q from a union.
+      const admissionRequest = (): JevRequest<AdmissionState, Record<string, unknown>> =>
+        atomicAdmission ? buildAtomicAdmissionRequest(prompt, config) : buildAdmissionRequest(prompt, config);
       let admitted: AdmissionDecision | null = null;
       const gate = await callGate(
-        buildAdmissionRequest(prompt, config),
+        admissionRequest(),
         'admission_intent',
         'admission_result',
         { prompt_len: prompt.length, prompt_sha256: sha256(prompt), ...depthFacts, depth_floor: config.delegationDepthFloor },
-        ['execution'],
+        admissionKeys,
         (outcome) => {
           if (!outcome.ok) return { forced: false, decision: { shape: 'direct', decided: false, reason: outcome.code, changed_default: false } };
-          admitted = decideAdmission(outcome.response.answers, config.admissionConfidenceFloor);
+          admitted = atomicAdmission
+            ? decideAdmissionAtomic(outcome.response.answers, contextTokens, config.delegationDepthFloor)
+            : decideAdmission(outcome.response.answers, config.admissionConfidenceFloor);
           // A17 item 7: without Jev this turn would have been one native conversation.
           return {
             forced: false,

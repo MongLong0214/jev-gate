@@ -9,6 +9,8 @@ export type RoutingMode = 'native' | 'auto';
 export type OwnedRole = 'worker' | 'planner';
 export type ExecutionShape = 'direct' | 'orchestrated';
 export type RouteQuestionShape = 'composite' | 'atomic';
+/** Gate A asks the same way Gate B does, and the two are configured independently. */
+export type AdmissionQuestionShape = RouteQuestionShape;
 export const ROUTE_QUESTION_SHAPES: readonly RouteQuestionShape[] = ['composite', 'atomic'];
 
 export type AdmissionAnswer = 'direct' | 'orchestrated' | 'needs_context' | 'abstain';
@@ -101,6 +103,12 @@ export interface ConfigV5 {
    * what decides. 0 disables the floor. Optional in a config file, like `routeQuestionShape`.
    */
   delegationDepthFloor: number;
+  /**
+   * How Gate A asks. `composite` is the shipped four-way choice; `atomic` fans the same judgement out into read-off
+   * questions composed in code as vetoes, and does not consult `admissionConfidenceFloor` at all. Optional in a
+   * config file and defaulted to `composite`, mirroring `routeQuestionShape`.
+   */
+  admissionQuestionShape: AdmissionQuestionShape;
 }
 
 export interface ChoiceAnswer<K extends string> {
@@ -344,6 +352,9 @@ export type PreserveReason =
   | 'admission_forced'
   | 'depth_unknown'
   | 'depth_below_floor'
+  | 'admission_forbids_delegation'
+  | 'admission_answer_only'
+  | 'admission_too_small'
   | 'route_invalid'
   | 'route_tie'
   | 'route_abstain'

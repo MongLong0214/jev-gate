@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import type { ConfigV5, Mode, PlannerTier, RouteQuestionShape, Tier } from './types.js';
+import type { AdmissionQuestionShape, ConfigV5, Mode, PlannerTier, RouteQuestionShape, Tier } from './types.js';
 import { MODES, PLANNER_TIERS, ROUTE_QUESTION_SHAPES, TIERS } from './types.js';
 
 export const DEFAULT_CONFIG: ConfigV5 = {
@@ -24,6 +24,8 @@ export const DEFAULT_CONFIG: ConfigV5 = {
   // Derived, not measured: the two end-to-end points are 55K (delegation loses) and 406K (delegation wins), and this
   // sits between them nearer the measured win. Step 2 of the depth-gate guide is what moves it.
   delegationDepthFloor: 300_000,
+  // Optional in a config file: absent keeps the shipped composite Gate A question.
+  admissionQuestionShape: 'composite',
 };
 
 /**
@@ -52,6 +54,7 @@ const V5_KEYS = new Set<string>([
   'guardAllowTools',
   'routeQuestionShape',
   'delegationDepthFloor',
+  'admissionQuestionShape',
 ]);
 const LEGACY_MARKERS = ['uncertainTier', 'opusModel', 'frontierModel', 'confidenceFloor'];
 /** `resultConfidenceFloor` is a deprecated no-op (T11): it is still validated so a deployed file loads, and read by nothing. */
@@ -142,6 +145,12 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
     return { ok: false, error: 'delegationDepthFloor must be a non-negative integer number of context tokens (0 disables the floor)' };
   }
 
+  // Same rule as routeQuestionShape: absence defaults, an explicit wrong value is an error.
+  const admissionShape = c['admissionQuestionShape'];
+  if (typeof admissionShape !== 'string' || !ROUTE_QUESTION_SHAPES.includes(admissionShape as RouteQuestionShape)) {
+    return { ok: false, error: `admissionQuestionShape must be one of ${ROUTE_QUESTION_SHAPES.join(', ')}` };
+  }
+
   const allow = c['guardAllowTools'];
   if (!Array.isArray(allow) || allow.some((t) => typeof t !== 'string' || !TOOL_NAME_RE.test(t))) {
     return { ok: false, error: `guardAllowTools must be an array of tool names matching ${TOOL_NAME_RE.source}` };
@@ -162,6 +171,7 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
       guardAllowTools: allow as string[],
       routeQuestionShape: shape as RouteQuestionShape,
       delegationDepthFloor: floor,
+      admissionQuestionShape: admissionShape as AdmissionQuestionShape,
     },
   };
 };
