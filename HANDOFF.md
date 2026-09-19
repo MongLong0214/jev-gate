@@ -1,16 +1,22 @@
-# Handoff — jev-gate, 2026-09-18
+# Handoff — jev-gate, 2026-09-19
 
-Everything below is what was actually observed, with the file that proves it. This revision corrects overstated claims
-from the original write-up (see "What the measurements say" and "Do this next") and describes the current design, which
-other agents are actively changing; nothing below claims a new measurement was taken.
+Everything below is what was actually observed, with the file that proves it. The 2026-09-18 revision corrected
+overstated claims from the original write-up; this one adds the 2026-09-19 measurements, which override several
+figures below and are marked where they do.
 
 ## Where the project stands
 
-`main` is at **v0.2.0** ([release](https://github.com/MongLong0214/jev-gate/releases/tag/v0.2.0)); `dev` is at
-`24e9853`, which carries the remediation described under "Do this next" and is what a new agent should check out. V5 is implemented and
-verified on a real host. **No cost, runtime or quality benefit is established.** The one completed cell that ran was
-under forced admission (no real Gate A judgment), and every worker dispatch in it landed on `standard`; why is not
-settled. See "What the measurements say" below, and "Do this next" for the fix order — it is not #33's original order.
+`main` is at **v0.2.0** ([release](https://github.com/MongLong0214/jev-gate/releases/tag/v0.2.0)); `dev` carries
+everything below and is what a new agent should check out.
+
+**A cost benefit is now established and a speed benefit is not.** At a real prompt-time context depth, forced
+orchestration costs **−53.5 % on the job turn** and **−23.8 % on the session**, over two repetitions with all checks
+passing, and takes **+47.8 % longer**
+(`bench/results/v5-depth-primed-2026-09-19/`). Everything else below still holds: **Gate A has never admitted a job
+end to end**, so every cost figure in this repository rests on the forced diagnostic arm, and the largest uncontrolled
+variable is **worker count**, whose spread is bigger than the effect being measured.
+
+Read the 2026-09-19 section of "What the measurements say" before trusting any older number in this file.
 
 | Version | State |
 | --- | --- |
@@ -80,6 +86,21 @@ this to-do), a live root `Edit` denial and the terminal stop.
 
 ## What the measurements say
 
+### 2026-09-19 — what changed, and what it overrides
+
+| | |
+|---|---|
+| **Depth decides.** Forced orchestration measured +182 % on a fresh session (~55K) and −57 % on a loaded one (~406K) | `v5-context-locality-2026-09-19/` |
+| **Depth is now read in code, never asked of Jev.** The hook reads the session transcript at `UserPromptSubmit`; below `delegationDepthFloor` (300,000) no Gate A request is sent at all. Reproduces the replay's number 11/11 at EOF and 44/44 at real prompt positions, worst read 0.7 ms | `v5-depth-reader-2026-09-19/` |
+| **The bench can now present a job prompt at real depth.** Two host facts had to be found first: `--no-session-persistence` writes no transcript, and closing stdin with every prompt in it merges them into the running turn | `v5-depth-primed-2026-09-19/` |
+| **At real depth: job turn −53.5 %, session −23.8 %, wall +47.8 %**, two repetitions, four valid cells, all checks passing | `v5-depth-primed-2026-09-19/` |
+| **Worker count dominates.** The same job at the same depth cost $3.0022 with 13 workers and $1.2338–$1.2766 with 4. The spread is larger than the effect | same |
+| **Atomic Gate A is implemented and does not admit on `missing_reference`.** That question reads median 0.77 on real prompts — a constant, not a signal — and was dropped on a criterion fixed before the variants were measured. Shipped composition admits 41/65 | `v5-gate-a-atomic-2026-09-19/` |
+| **A task ceiling of 10 ships** as a backstop against a runaway split. It has never fired in a run | `7de339b` |
+
+Both question shapes still default to `composite`, and `maxParallelWorkers` is still 1.
+
+
 **Gate A calibration** (`bench/results/gate-a-calibration-2026-09-18.json`, 29 prompts, live Jev, $0.001): raw agreement
 28/29. Compound development requests admitted at 0.81–0.96; ambiguous and contradictory prompts preserved. **Both pilot
 jobs were chosen `orchestrated` but at 0.61 and 0.72**, below the 0.8 floor, so the product arm would run them direct.
@@ -110,6 +131,28 @@ the first attempt's implementation was correct is unknown. The three Gate C `acc
 independent proof the code works.
 
 ## Do this next
+
+### 2026-09-19 — the order that supersedes everything in this section
+
+The approved experiment below **has been run**, several times over, and the 2026-09-19 section of "What the
+measurements say" is its outcome. What is worth doing next, in order:
+
+1. **Control worker count.** It moved the same job's cost by a factor of 2.4 on the same case at the same depth, which
+   is more than the effect any of these runs is trying to measure. Until a run repeats planning, or fixes a plan and
+   replays it, a single cell's cost is as much a statement about planner variance as about the gate. Everything below
+   this line is worth less until this is done.
+2. **Get Gate A to admit a job end to end.** Every cost figure in this repository still rests on the forced arm.
+   `admissionQuestionShape: atomic` plus the depth floor is the path; the offline replay admits 41 of 65 real prompts
+   and both ground-truth cases decide correctly.
+3. **Measure the crossing point.** `bench/cases-depth.json` has 13-note and 21-note cases that have never been run, so
+   the `delegationDepthFloor` default of 300,000 is derived from two points rather than measured.
+4. **The speed axis has no plan.** Wall time is worse in every condition measured so far (+196 %, +47.8 %), because
+   `maxParallelWorkers` is 1 and workers run in series — and raising it measured +32.7 % in cost. Nothing here yet
+   turns the second of the owner's two axes in the right direction.
+
+Do not flip either question shape to `atomic` by default before (1) and (2). Do not raise `maxParallelWorkers`.
+
+### The previous revision's order, kept for context
 
 Steps 1 to 3 of the previous revision are **done** and are on `dev` at `24e9853` (state correctness, bench observation
 and configuration accuracy, a task's own failure carried into its next dispatch with a report fix kept separate from a
