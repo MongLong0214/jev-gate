@@ -108,7 +108,7 @@ describe('updateJob', () => {
 describe('newGeneration', () => {
   it('supersedes an unfinished generation, keeps it as history and orphans its actives', () => {
     const first = newGeneration(null, 's1', 'p1', 'orchestrated').state;
-    first.current = reserve({ ...first.current, phase: 'planned' }, 'toolu_1', { role: 'worker', taskId: 't1', rev: 1, tier: 'standard', attempt: 1, deliverables: ['a.ts'] });
+    first.current = reserve({ ...first.current, phase: 'planned' }, 'toolu_1', { role: 'worker', taskId: 't1', contractHash: 'h-t1', rev: 1, tier: 'standard', attempt: 1, deliverables: ['a.ts'] });
     const second = newGeneration(first, 's1', 'p2', 'direct');
     expect(second.superseded).toBe(true);
     expect(second.state.current).toMatchObject({ prompt_id: 'p2', shape: 'direct', phase: 'admitted', plan: null, receipts: [] });
@@ -123,9 +123,9 @@ describe('newGeneration', () => {
 describe('reservations and bounds', () => {
   it('tracks active workers, planners, task ids and deliverables', () => {
     let gen = emptyGeneration('p1', 'orchestrated');
-    gen = reserve(gen, 'toolu_1', { role: 'worker', taskId: 't1', rev: 1, tier: 'standard', attempt: 1, deliverables: ['a.ts'] });
-    gen = reserve(gen, 'toolu_2', { role: 'worker', taskId: 't2', rev: 1, tier: 'fast', attempt: 1, deliverables: ['b.ts'] });
-    gen = reserve(gen, 'toolu_p', { role: 'planner', taskId: null, rev: null, tier: null, attempt: 1, deliverables: [] });
+    gen = reserve(gen, 'toolu_1', { role: 'worker', taskId: 't1', contractHash: 'h-t1', rev: 1, tier: 'standard', attempt: 1, deliverables: ['a.ts'] });
+    gen = reserve(gen, 'toolu_2', { role: 'worker', taskId: 't2', contractHash: 'h-t2', rev: 1, tier: 'fast', attempt: 1, deliverables: ['b.ts'] });
+    gen = reserve(gen, 'toolu_p', { role: 'planner', taskId: null, contractHash: null, rev: null, tier: null, attempt: 1, deliverables: [] });
     expect(activeWorkers(gen)).toHaveLength(2);
     expect(activePlanners(gen)).toHaveLength(1);
     // T1: a planner holds no task, so it never appears as a task in flight.
@@ -176,7 +176,7 @@ describe('cleanupJobs', () => {
     seed(env, 'old');
     const withActive = updateJob(env, 'old-but-busy', (prev) => {
       const state = newGeneration(prev, 'old-but-busy', 'p1', 'orchestrated').state;
-      return { ...state, current: reserve(state.current, 'toolu_1', { role: 'worker', taskId: 't1', rev: 1, tier: 'standard', attempt: 1, deliverables: [] }, new Date(now - ACTIVE_GRACE_MS / 2)) };
+      return { ...state, current: reserve(state.current, 'toolu_1', { role: 'worker', taskId: 't1', contractHash: 'h-t1', rev: 1, tier: 'standard', attempt: 1, deliverables: [] }, new Date(now - ACTIVE_GRACE_MS / 2)) };
     });
     expect(withActive.ok).toBe(true);
     const past = (now - RETENTION_MS - 60_000) / 1000;

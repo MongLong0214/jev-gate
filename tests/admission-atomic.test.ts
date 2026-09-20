@@ -6,6 +6,7 @@ import {
   buildAtomicAdmissionRequest,
   decideAdmissionAtomic,
   SIZE_FLOOR,
+  SIZE_MAX_SCORE,
 } from '../src/admission.js';
 import { FACT_TRUE } from '../src/allocation.js';
 import { DEFAULT_CONFIG } from '../src/config.js';
@@ -44,6 +45,11 @@ describe('atomic admission questions', () => {
     expect(atomic.state).toEqual(composite.state);
     expect(atomic.model).toBe(composite.model);
     expect(Object.keys(atomic.questions)).toEqual(Object.keys(ADMISSION_FACT_QUESTIONS));
+  });
+
+  it('bounds the size score by the criteria the question itself ships', () => {
+    expect(SIZE_MAX_SCORE).toBe(ADMISSION_FACT_QUESTIONS.size.criteria.length - 1);
+    expect(decideAdmissionAtomic(answers({ size: SIZE_MAX_SCORE }), DEEP, FLOOR).shape).toBe('orchestrated');
   });
 
   it('keeps the sharpened forbids_delegation wording, which moved decisive answers from 7 to 42 of 61', () => {
@@ -90,6 +96,10 @@ describe('decideAdmissionAtomic', () => {
     ['a choice answer where a noul belongs', { ...answers(), answer_only: { choice: 'yes', confidence: 0.99 } }],
     ['a missing size', (() => { const a = answers(); delete a['size']; return a; })()],
     ['a noul where the size score belongs', { ...answers(), size: { noul: 0.9 } }],
+    // A score is an index into the criteria the question shipped, so anything off that scale is an answer this gate
+    // cannot read. Unbounded, `size: 999` cleared SIZE_FLOOR and admitted -- an unreadable answer counted as evidence.
+    ['a size score above the question\'s own scale', { ...answers(), size: { score: 999, confidence: 0.9 } }],
+    ['a size score below the question\'s own scale', { ...answers(), size: { score: -1, confidence: 0.9 } }],
   ])('leaves the turn direct for %s', (_name, a) => {
     expect(decideAdmissionAtomic(a as Record<string, unknown>, DEEP, FLOOR)).toEqual({ shape: 'direct', decided: false, reason: 'admission_invalid', answer: null });
   });

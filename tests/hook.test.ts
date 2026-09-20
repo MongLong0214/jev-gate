@@ -52,6 +52,16 @@ const fakeJev = (opts: FakeAnswers = {}): ReturnType<typeof vi.fn> =>
     return new Response(JSON.stringify({ model: 'jev-1.13.0', answers, usage: { input_tokens: 10, output_tokens: 2 } }), { status: 200 });
   });
 
+/** A Jev double that answers Gate A and then fails Gate B, so a dispatch reaches the preserve paths with a reason. */
+const jevFailingRoute = (): ReturnType<typeof vi.fn> => {
+  const answering = fakeJev({ execution: 'orchestrated' });
+  return vi.fn(async (url: string, init: RequestInit) => {
+    const body = JSON.parse(String(init.body)) as { questions: Record<string, unknown> };
+    if ('route' in body.questions) return new Response('upstream is down', { status: 500 });
+    return await (answering as unknown as typeof fetch)(url, init);
+  });
+};
+
 const stdinOf = (value: unknown): AsyncIterable<Uint8Array> =>
   (async function* () {
     yield Buffer.from(typeof value === 'string' ? value : JSON.stringify(value), 'utf8');
@@ -512,6 +522,47 @@ describe('single executor (A19)', () => {
     expect(third).toMatchObject({ kind: 'deny', code: 'bounds_exhausted' });
     expect(String(hookOutput(third)['permissionDecisionReason'])).toContain('allowed attempts');
     expect(state(env).current.active['toolu_3']).toBeUndefined();
+  });
+
+  /**
+   * A19 defect found in the 2026-09-20 review: every preserve reason on this path returned before the request was
+   * composed in, while `renderSingleBrief` tells the coordinator the hook appends the request verbatim. A brief
+   * written against that promise is not a statement of the work on its own, so a preserved dispatch sent a worker
+   * off with the brief alone. One published cell ran this path and only passed because the coordinator happened to
+   * restate the whole task itself.
+   */
+  it('carries the request on a preserved dispatch too, because the brief was written expecting it', async () => {
+    const env = singleEnv();
+    const fetchImpl = jevFailingRoute();
+    await run(env, promptEvent(), fetchImpl);
+    const r = await run(env, preEvent('Agent', agentInput({ prompt: 'Do what the request asks.' })), fetchImpl);
+    expect(r).toMatchObject({ kind: 'patch', code: 'http_other' });
+    const patched = updatedInput(r);
+    // A preserve leaves the model alone. That is all it leaves alone: the task still has to reach the worker.
+    expect(patched['model']).toBeUndefined();
+    expect(patched['subagent_type']).toBe('jev-gate:worker');
+    const prompt = String(patched['prompt']);
+    expect(prompt).toContain('Do what the request asks.');
+    expect(prompt).toContain('[Jev Gate user request]');
+    expect(prompt).toContain('Build a settings page, migrate the store and wire the two together.');
+    expect(prompt).toContain('It is the task: there is no plan and no task contract for this dispatch.');
+  });
+
+  /**
+   * A4/T2 defect found in the same review: the hierarchy re-runs every dispatch conflict under the lock, and this
+   * path ran none of them, so two Agent calls in one assistant message both reserved and both dispatched the job.
+   */
+  it('refuses a second dispatch while the first is still running, and counts no attempt for it', async () => {
+    const env = singleEnv();
+    const fetchImpl = fakeJev({ execution: 'orchestrated' });
+    await run(env, promptEvent(), fetchImpl);
+    const first = await run(env, preEvent('Agent', agentInput({ prompt: 'Do what the request asks.' }), { tool_use_id: 'toolu_1' }), fetchImpl);
+    expect(first.kind).toBe('patch');
+    const second = await run(env, preEvent('Agent', agentInput({ prompt: 'Do what the request asks.' }), { tool_use_id: 'toolu_2' }), fetchImpl);
+    expect(second).toMatchObject({ kind: 'deny', code: 'task_active' });
+    expect(state(env).current.active['toolu_2']).toBeUndefined();
+    // T2: deleting a reservation is bookkeeping, not a stopped process, so the denial costs the job no attempt.
+    expect(state(env).current.attempts.tasks['single']).toBe(1);
   });
 
   it('is off unless the config asks for it', async () => {
@@ -1760,5 +1811,48 @@ describe('R15: the simple paths this change must not break', () => {
     expect((await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t2]\nwork' }), { tool_use_id: 'toolu_2' }), fetchImpl)).kind).toBe('patch');
     // The historical advisory is preserved as it was recorded, not rewritten.
     expect(state(env).current.receipts[0]).toMatchObject({ advisory: 'accept', verdict: 'accept' });
+  });
+});
+
+/**
+ * Three defects found reading the code on 2026-09-20, each with the test that would have caught it. All of them are
+ * the same shape: a path that closes or records a decision chose its own key instead of reading the one the decision
+ * was made under.
+ */
+describe('receipt selection and observation keys (2026-09-20)', () => {
+  it('T1: a rework whose call fails covers the accept it replaced, so its dependent is not ready', async () => {
+    const env = makeEnv();
+    const fetchImpl = fakeJev();
+    await seedPlanned(env, PLAN_REPLY, fetchImpl);
+    await run(env, preEvent('Agent', agentInput()), fetchImpl);
+    await run(env, workerPost('toolu_1', workerReply()), fetchImpl);
+    await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t2]\nwork' }), { tool_use_id: 'toolu_2' }), fetchImpl);
+    await run(env, workerPost('toolu_2', workerReply()), fetchImpl);
+    // t3 depends on both and is ready at this point; the rework of t1 is what takes that away.
+    await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t1 attempt=2]\nredo' }), { tool_use_id: 'toolu_r' }), fetchImpl);
+    await run(env, { ...workerPost('toolu_r', workerReply()), hook_event_name: 'PostToolUseFailure', error: 'Agent terminated early' });
+
+    // The failure is recorded under the contract it was dispatched on. Written with an empty hash it was invisible to
+    // `currentReceipt`, so the superseded accept still read as t1's result and a dependent dispatched on nothing.
+    const gen = state(env).current;
+    const t1 = gen.plan?.tasks.find((t) => t.id === 't1');
+    expect(gen.receipts[gen.receipts.length - 1]).toMatchObject({ task_id: 't1', verdict: 'unknown', contract_hash: t1?.contract_hash });
+    const denied = await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t3]\nwork' }), { tool_use_id: 'toolu_3' }), fetchImpl);
+    expect(denied).toMatchObject({ kind: 'deny', code: 'deps_incomplete' });
+  });
+
+  it('records the numbers the atomic gates decide on, not only the fields a choice answer has', async () => {
+    const dir = join(tmp, 'trace-atomic-answers');
+    const env = makeEnv({ JEV_GATE_TRACE_DIR: dir });
+    await run(env, promptEvent(), fakeJev({ execution: 'orchestrated', size: 3, forbidsDelegation: 0.07, answerOnly: 0.02 }));
+    const record = readdirSync(dir)
+      .map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>)
+      .find((x) => x['phase'] === 'admission_result');
+    const answers = (record?.['answers'] ?? {}) as Record<string, Record<string, unknown>>;
+    // The shipped Gate A decides on these three numbers and on nothing else, so a trace without them says which
+    // questions were asked and not what was answered -- the observation cannot reproduce its own decision.
+    expect(answers['size']).toMatchObject({ type: 'score', score: 3, choice: null });
+    expect(answers['forbids_delegation']).toMatchObject({ type: 'noul', noul: 0.07 });
+    expect(answers['answer_only']).toMatchObject({ type: 'noul', noul: 0.02 });
   });
 });

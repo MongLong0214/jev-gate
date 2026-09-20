@@ -266,6 +266,12 @@ export type ReceiptVerdict = DeterministicVerdict | 'invalid' | 'unknown' | 'rew
 export interface Reservation {
   role: OwnedRole;
   task_id: string | null;
+  /**
+   * A4/T1: the contract this dispatch was reserved under, so the receipt that closes it is selectable by the same key
+   * it was dispatched on. `null` on a planner and `''` on a single-executor dispatch, neither of which has a contract.
+   * State written before this field existed carries none, so read it through `reservedContractHash`, never directly.
+   */
+  contract_hash: string | null;
   rev: number | null;
   tier: Tier | null;
   attempt: number;

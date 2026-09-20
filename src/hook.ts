@@ -101,7 +101,7 @@ import {
   type PriorAttemptSummary,
 } from './plan.js';
 import { openTraceDir, type TraceWriter } from './trace.js';
-import type { ConfigV5, DenyReason, ErrorCode, ExecutionShape, HookInput, JobGeneration, JobState, ModelAgreement, Plan, PlannedTask, Receipt, RoutingMode, Tier } from './types.js';
+import type { ConfigV5, DenyReason, ErrorCode, ExecutionShape, HookInput, JobGeneration, JobState, ModelAgreement, Plan, PlannedTask, Receipt, Reservation, RoutingMode, Tier } from './types.js';
 import { agentForTier, OWNED_AGENTS, TIERS } from './types.js';
 
 export const MAX_STDIN_BYTES = 256 * 1024;
@@ -181,7 +181,9 @@ const whitelistAnswers = (answers: Record<string, unknown>, keys: readonly strin
     const probs = isRecord(a['probabilities'])
       ? Object.fromEntries(Object.entries(a['probabilities']).filter(([, v]) => typeof v === 'number').slice(0, 8))
       : null;
-    out[q] = { type: str(a['type']), choice: str(a['choice']), probabilities: probs, confidence: num(a['confidence']) };
+    // Both atomic gates decide on `noul` and `score`, and neither is a choice, so a trace carrying only the choice
+    // fields recorded the question and not the answer: the shipped Gate A was unauditable from its own observations.
+    out[q] = { type: str(a['type']), choice: str(a['choice']), noul: num(a['noul']), score: num(a['score']), probabilities: probs, confidence: num(a['confidence']) };
   }
   return out;
 };
@@ -626,6 +628,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       const next = reserve({ ...counted, phase: 'planning', shape }, eligibility.toolUseId, {
         role: 'planner',
         taskId: null,
+        contractHash: null,
         rev: null,
         tier: null,
         attempt: 1,
@@ -728,6 +731,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       const next = reserve(counted, eligibility.toolUseId, {
         role: 'worker',
         taskId: task.id,
+        contractHash: task.contract_hash,
         rev: plan.rev,
         tier: eligibility.tier,
         attempt,
@@ -812,6 +816,25 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     // A19: present on that same path, so the one dispatch this shape makes is reserved and leaves a receipt behind it.
     single: { sessionId: string; gen: JobGeneration } | null = null,
   ): Promise<HookResult> => {
+    /**
+     * A19/T9: the worker packet is prepared before anything on this path can return, so a routing outcome decides the
+     * model and nothing else. `carriedRequest` is set exactly on the single-executor path, where the request is the
+     * task rather than the source of a contract, and the coordinator is told the hook appends it verbatim. Composing
+     * after the routing checks meant every preserve reason -- native mode, a pin, a missing key, a blocked or failed
+     * gate, an unreadable answer -- dispatched a worker with the brief alone and no statement of the work.
+     */
+    let carried: string | 'omitted' | null = carriedRequest;
+    let composed = composeSingleWorkerPrompt(eligibility.prompt, carried);
+    if (Buffer.byteLength(composed, 'utf8') + ROUTE_NOTE_MAX_BYTES > MAX_COMPOSED_BYTES && carried !== null && carried !== 'omitted') {
+      // T9: a request that does not fit is dropped with a visible marker, never truncated into a half-specification.
+      carried = 'omitted';
+      composed = composeSingleWorkerPrompt(eligibility.prompt, carried);
+    }
+    // The note cannot point at a contract on a shape that has none, and the ad-hoc shape keeps the contract wording.
+    const note = (tier: Tier): string => (carriedRequest === null ? renderRouteNote(tier) : renderSingleRouteNote(tier));
+    /** A preserve leaves the model exactly as the coordinator called it. That is all it leaves alone. */
+    const preserveAdhoc = (code: ErrorCode, tier: Tier = eligibility.tier): HookResult =>
+      carriedRequest === null ? preserve(code) : emitPatch(eligibility.input, { prompt: composed + note(tier) }, code);
     if (single !== null) {
       // A4: reserved before any HTTP call, and before the routing outcome, so every single dispatch is recorded --
       // reserving only the patched dispatches was rejected: a preserved call still runs a worker, and would leave
@@ -823,6 +846,10 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       // introducing a second one, and the attempt that repaired a discarded reply on 2026-09-19 is still the
       // second, which this admits.
       let exhausted = false;
+      // A4/T2: the hierarchy re-runs every dispatch conflict under the lock; this path ran none, so two Agent calls
+      // in one assistant message both reserved and both dispatched. The single shape has one task, so the two that
+      // can apply to it are the ones below: a writer already running it, and the configured worker cap.
+      let conflict: { reason: DenyReason; detail: string } | null = null;
       const reserved = updateJob(deps.env, single.sessionId, (prev) => {
         if (!prev || prev.current.prompt_id !== single.gen.prompt_id || prev.current.execution !== 'single') {
           stale = true;
@@ -832,12 +859,24 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
           exhausted = true;
           return null;
         }
+        // T2: deleting a reservation is bookkeeping, not a stopped process, so an unobserved writer blocks a second.
+        const running = activeWorkers(prev.current);
+        if (running.some((r) => r.task_id === SINGLE_TASK_ID)) {
+          conflict = { reason: 'task_active', detail: SINGLE_TASK_ID };
+          return null;
+        }
+        if (running.length >= config.maxParallelWorkers) {
+          conflict = { reason: 'parallel_cap', detail: `${running.length}/${config.maxParallelWorkers}` };
+          return null;
+        }
         const counted = countAttempt(prev.current, 'task', SINGLE_TASK_ID);
         return {
           ...prev,
           current: reserve(counted, eligibility.toolUseId, {
             role: 'worker',
             taskId: SINGLE_TASK_ID,
+            // A19: this shape has no contract, so the key its receipt closes on is the empty one, fixed at dispatch.
+            contractHash: '',
             rev: null,
             tier: eligibility.tier,
             attempt: (own(prev.current.attempts.tasks, SINGLE_TASK_ID) ?? 0) + 1,
@@ -845,13 +884,17 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
           }),
         };
       });
-      if (!reserved.ok) return preserve(reserved.code);
+      if (!reserved.ok) return preserveAdhoc(reserved.code);
       if (stale) return emitDeny('stale_generation', renderDispatchDeny('stale_generation'), null);
       if (exhausted) return emitDeny('bounds_exhausted', renderDispatchDeny('bounds_exhausted', SINGLE_TASK_ID), null);
+      if (conflict !== null) {
+        const c: { reason: DenyReason; detail: string } = conflict;
+        return emitDeny(c.reason, renderDispatchDeny(c.reason, c.detail), null);
+      }
     }
-    if (mode === 'native') return preserve('mode_native');
-    if (eligibility.pinned) return preserve('pinned');
-    if (!apiKey) return preserve('key_missing');
+    if (mode === 'native') return preserveAdhoc('mode_native');
+    if (eligibility.pinned) return preserveAdhoc('pinned');
+    if (!apiKey) return preserveAdhoc('key_missing');
     // Document §7: an ad-hoc call has no plan, so spec, uncertainty and fully_specified are absent, which is unknown.
     const task: PlannedTask = {
       id: 'adhoc',
@@ -865,8 +908,11 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       contract_hash: '',
     };
     let routed: WorkerRouteDecision | null = null;
+    // A19: `original_prompt` is what Gate B reads the work off. On this shape the brief is not the work -- the request
+    // is -- and there is no contract in the state to make up the difference, so the request is what is classified.
+    const routedPrompt = carried !== null && carried !== 'omitted' ? carried : eligibility.prompt;
     const gate = await callGate(
-      routeRequest(task, [], [], eligibility.prompt, eligibility.tier),
+      routeRequest(task, [], [], routedPrompt, eligibility.tier),
       'pre_intent',
       'pre_result',
       { role: 'worker', task_id: 'adhoc', called_tier: eligibility.tier, tool_input: summarizeToolInput(eligibility.input) },
@@ -877,23 +923,19 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         return { decision: { action: routed.action, tier: routed.tier, reason: routed.reason, changed_default: routed.action === 'patch' && routed.tier !== eligibility.tier } };
       },
     );
-    if ('blocked' in gate) return preserve(gate.blocked);
-    if (!gate.outcome.ok) return preserve(gate.outcome.code);
-    if (routed === null) return preserve('route_invalid');
-    const decision: WorkerRouteDecision = routed;
-    if (decision.action === 'preserve') return preserve(decision.reason ?? 'route_invalid');
-    // T9: the request is dropped with a visible marker if it does not fit, never truncated into a half-specification.
-    let carried = carriedRequest;
-    let composed = composeSingleWorkerPrompt(eligibility.prompt, carried);
-    const noteBytes = ROUTE_NOTE_MAX_BYTES;
-    if (Buffer.byteLength(composed, 'utf8') + noteBytes > MAX_COMPOSED_BYTES && carried !== null && carried !== 'omitted') {
-      carried = 'omitted';
-      composed = composeSingleWorkerPrompt(eligibility.prompt, carried);
+    // T2: the router failing is a valid call that keeps its profile; the turn moving on is a call that must not run.
+    // The lock is not held across the HTTP call, so the generation this dispatch belongs to is re-confirmed here.
+    if (single !== null && !confirmOwnership(single.sessionId, single.gen, null, eligibility.toolUseId)) {
+      return emitDeny('stale_generation', renderDispatchDeny('stale_generation'), null);
     }
-    const note = carriedRequest === null ? renderRouteNote(decision.tier) : renderSingleRouteNote(decision.tier);
+    if ('blocked' in gate) return preserveAdhoc(gate.blocked);
+    if (!gate.outcome.ok) return preserveAdhoc(gate.outcome.code);
+    if (routed === null) return preserveAdhoc('route_invalid');
+    const decision: WorkerRouteDecision = routed;
+    if (decision.action === 'preserve') return preserveAdhoc(decision.reason ?? 'route_invalid', decision.tier);
     return emitPatch(
       eligibility.input,
-      { subagent_type: agentForTier('worker', decision.tier), model: config.models[decision.tier], prompt: composed + note },
+      { subagent_type: agentForTier('worker', decision.tier), model: config.models[decision.tier], prompt: composed + note(decision.tier) },
       null,
     );
   };
@@ -1058,7 +1100,19 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     return context === null ? skip() : emitContext('PostToolUse', context, null);
   };
 
-  const handleWorkerResult = (sessionId: string, gen: JobGeneration, toolUseId: string, taskId: string, rev: number, attempt: number): HookResult => {
+  /**
+   * A4/T1: a receipt is selected by the task id *and* the contract hash of the dispatch it closes, so the hash must be
+   * the one the dispatch was reserved under rather than one the closing path picks. A reservation written before
+   * `contract_hash` existed carries none; the plan in force is then the fallback, because an empty string there would
+   * leave an in-flight hierarchy dispatch unclosable across an upgrade.
+   */
+  const closingHash = (reservation: Reservation, task: PlannedTask | null): string =>
+    reservation.contract_hash ?? task?.contract_hash ?? '';
+
+  const handleWorkerResult = (sessionId: string, gen: JobGeneration, toolUseId: string, reservation: Reservation): HookResult => {
+    const taskId = reservation.task_id ?? '';
+    const rev = reservation.rev ?? 0;
+    const attempt = reservation.attempt;
     const task = gen.plan?.tasks.find((t) => t.id === taskId) ?? null;
     // A19: the single shape has no plan, so a missing task is what this path expects rather than a stale reference.
     const isSingle = gen.execution === 'single';
@@ -1092,7 +1146,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       let next = release(prev.current, toolUseId);
       const receipt: Receipt = {
         task_id: taskId,
-        contract_hash: task?.contract_hash ?? '',
+        contract_hash: closingHash(reservation, task),
         rev,
         attempt,
         tool_use_id: toolUseId,
@@ -1152,7 +1206,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       return skip(orphaned ? 'generation_changed' : null);
     }
     if (reservation.role === 'planner') return await handlePlannerResult(sessionId, job.current, toolUseId);
-    return handleWorkerResult(sessionId, job.current, toolUseId, reservation.task_id ?? '', reservation.rev ?? 0, reservation.attempt);
+    return handleWorkerResult(sessionId, job.current, toolUseId, reservation);
   };
 
   const handlePostToolUseFailure = (): HookResult => {
@@ -1166,9 +1220,12 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         const reservation = prev ? own(prev.current.active, toolUseId) : undefined;
         if (!prev || !reservation) return null;
         const next = release(prev.current, toolUseId);
+        const task = prev.current.plan?.tasks.find((t) => t.id === reservation.task_id) ?? null;
         const receipt: Receipt = {
           task_id: reservation.task_id ?? '',
-          contract_hash: '',
+          // T1: a rework that failed has to cover the accept it replaced, and `currentReceipt` matches on this hash.
+          // Writing '' here left the failed attempt unselectable, so the old accept still read as the task's result.
+          contract_hash: closingHash(reservation, task),
           rev: reservation.rev ?? 0,
           attempt: reservation.attempt,
           tool_use_id: toolUseId,

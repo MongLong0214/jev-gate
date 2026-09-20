@@ -223,6 +223,8 @@ export const newGeneration = (prev: JobState | null, sessionId: string, promptId
 export interface ReservationInput {
   role: OwnedRole;
   taskId: string | null;
+  /** A4/T1: the contract hash the dispatch is made under; `null` for a planner, `''` where there is no contract. */
+  contractHash: string | null;
   rev: number | null;
   tier: Tier | null;
   attempt: number;
@@ -235,6 +237,7 @@ export const reserve = (gen: JobGeneration, toolUseId: string, input: Reservatio
     [toolUseId]: {
       role: input.role,
       task_id: input.taskId,
+      contract_hash: input.contractHash,
       rev: input.rev,
       tier: input.tier,
       attempt: input.attempt,

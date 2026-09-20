@@ -120,10 +120,17 @@ const noulValue = (v: unknown): number | null => {
   return typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 1 ? n : null;
 };
 
-const scoreValue = (v: unknown): number | null => {
+/**
+ * A score is a read-off on the criteria list the question shipped, so the only numbers that mean anything are indices
+ * into it. An unbounded read made `size: 999` admit past a floor it never satisfied, which is an answer this gate
+ * cannot read being treated as evidence for orchestrating -- the opposite of what the composition rule says.
+ */
+export const SIZE_MAX_SCORE = ADMISSION_FACT_QUESTIONS.size.criteria.length - 1;
+
+const scoreValue = (v: unknown, max: number): number | null => {
   if (typeof v !== 'object' || v === null) return null;
   const n = (v as { score?: unknown }).score;
-  return typeof n === 'number' && Number.isFinite(n) ? n : null;
+  return typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= max ? n : null;
 };
 
 /**
@@ -144,7 +151,7 @@ export const decideAdmissionAtomic = (answers: Record<string, unknown>, depth: n
     if (n === null) return fallback('admission_invalid');
     facts[key] = n;
   }
-  const size = scoreValue(answers['size']);
+  const size = scoreValue(answers['size'], SIZE_MAX_SCORE);
   if (size === null) return fallback('admission_invalid');
   if ((facts['forbids_delegation'] as number) >= FACT_TRUE) return fallback('admission_forbids_delegation');
   if ((facts['answer_only'] as number) >= FACT_TRUE) return fallback('admission_answer_only');
