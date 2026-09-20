@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 import { AUTH_CONFLICT_ENV, isSubscriptionOAuth, parseAuthStatus, subagentModelOverride, type CommandResult } from './auth.js';
 import { loadConfig, MIGRATION_SAMPLE, NATIVE_HOOK_TIMEOUT_MS } from './config.js';
+import { explainDir } from './explain.js';
 import { jobsDir } from './job.js';
 import { OWNED_AGENTS } from './types.js';
 
@@ -212,11 +213,26 @@ const isMainModule = (): boolean => {
   }
 };
 
+/**
+ * `doctor` answers whether the gate is installed; `explain` answers what it then did. The second was the missing half:
+ * every decision was already recorded, and reading it meant opening benchmark JSON by hand.
+ */
+const explain = (dir: string | undefined): void => {
+  const target = dir ?? process.env['JEV_GATE_TRACE_DIR'];
+  if (!target) {
+    process.stdout.write('explain: pass a trace directory, or set JEV_GATE_TRACE_DIR\n');
+    process.exitCode = 2;
+    return;
+  }
+  for (const line of explainDir(target)) process.stdout.write(`${line}\n`);
+};
+
 if (isMainModule()) {
   const argv = process.argv.slice(2);
   if (argv[0] === 'doctor') main();
+  else if (argv[0] === 'explain') explain(argv[1]);
   else {
-    process.stdout.write('usage: node dist/cli.js doctor\n');
+    process.stdout.write('usage: node dist/cli.js doctor\n       node dist/cli.js explain [trace-dir]   (default: $JEV_GATE_TRACE_DIR)\n');
     process.exitCode = 2;
   }
 }

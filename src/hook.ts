@@ -563,9 +563,11 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         { role: 'planner', tool_input: summarizeToolInput(eligibility.input), default_tier: config.plannerDefaultTier },
         ['planning_tier'],
         (outcome) => {
-          if (!outcome.ok) return { decision: { action: 'patch', tier: config.plannerDefaultTier, reason: outcome.code, changed_default: false } };
+          // The model is recorded, not left to be reconstructed from the tier: a reader of a stored trace has no way
+          // to know which `models` map was in force when it was written, and the hook knows exactly what it asked for.
+          if (!outcome.ok) return { decision: { action: 'patch', tier: config.plannerDefaultTier, reason: outcome.code, changed_default: false, model: config.models[config.plannerDefaultTier] } };
           routed = decidePlannerRoute(outcome.response.answers, config.routeConfidenceFloor, config.plannerDefaultTier);
-          return { decision: { action: routed.action, tier: routed.tier, reason: routed.reason, changed_default: routed.tier !== config.plannerDefaultTier } };
+          return { decision: { action: routed.action, tier: routed.tier, reason: routed.reason, changed_default: routed.tier !== config.plannerDefaultTier, model: config.models[routed.tier] } };
         },
       );
       if ('blocked' in gate) code = gate.blocked;
@@ -769,10 +771,12 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       },
       routeAnswerKeys,
       (outcome) => {
-        if (!outcome.ok) return { decision: { action: 'preserve', tier: eligibility.tier, reason: outcome.code, changed_default: false } };
+        // A preserve keeps the model the coordinator called, which the hook never names, so the recorded model is
+        // null there rather than the tier's model -- the two are not the same claim.
+        if (!outcome.ok) return { decision: { action: 'preserve', tier: eligibility.tier, reason: outcome.code, changed_default: false, model: null } };
         routed = routeDecision(outcome.response.answers, eligibility.tier);
         // A17 item 7: without Jev this dispatch would have run on the profile the coordinator called.
-        return { decision: { action: routed.action, tier: routed.tier, reason: routed.reason, changed_default: routed.action === 'patch' && routed.tier !== eligibility.tier } };
+        return { decision: { action: routed.action, tier: routed.tier, reason: routed.reason, changed_default: routed.action === 'patch' && routed.tier !== eligibility.tier, model: routed.action === 'patch' ? config.models[routed.tier] : null } };
       },
     );
     // T2: the router failing is a valid call that keeps its profile; the turn moving on is a call that must not run.
@@ -923,9 +927,11 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       { role: 'worker', task_id: 'adhoc', called_tier: eligibility.tier, tool_input: summarizeToolInput(eligibility.input) },
       routeAnswerKeys,
       (outcome) => {
-        if (!outcome.ok) return { decision: { action: 'preserve', tier: eligibility.tier, reason: outcome.code, changed_default: false } };
+        // A preserve keeps the model the coordinator called, which the hook never names, so the recorded model is
+        // null there rather than the tier's model -- the two are not the same claim.
+        if (!outcome.ok) return { decision: { action: 'preserve', tier: eligibility.tier, reason: outcome.code, changed_default: false, model: null } };
         routed = routeDecision(outcome.response.answers, eligibility.tier);
-        return { decision: { action: routed.action, tier: routed.tier, reason: routed.reason, changed_default: routed.action === 'patch' && routed.tier !== eligibility.tier } };
+        return { decision: { action: routed.action, tier: routed.tier, reason: routed.reason, changed_default: routed.action === 'patch' && routed.tier !== eligibility.tier, model: routed.action === 'patch' ? config.models[routed.tier] : null } };
       },
     );
     // T2: the router failing is a valid call that keeps its profile; the turn moving on is a call that must not run.

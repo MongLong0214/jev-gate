@@ -242,6 +242,42 @@ above describes the host-smoke session as recorded at the time, not the current 
 `doctor` reports configuration and environment issues (auth method, model overrides, launch profile, key presence, the
 six role definitions and their effort fields). It is not proof that patching, effort or model access works on your host.
 
+`explain` answers the other question -- what the gate then did with a turn:
+
+```bash
+JEV_GATE_TRACE_DIR=~/.jev-gate/trace claude ...   # records are written only while this is set
+node dist/cli.js explain ~/.jev-gate/trace
+```
+
+```
+session ea4f96a2… (mode auto)
+  gate A   direct  context unread (floor 300,000)  not asked  reason: depth_unknown
+  stop     completed
+
+  gate A   direct  context 388,131 tokens (floor 300,000)  jev http 200 685ms  reason: admission_answer_only
+  stop     completed
+
+  gate A   orchestrated  context 388,478 tokens (floor 300,000)  jev http 200 545ms
+  denied   Bash  (1 so far this generation)
+  dispatch planner  called deep → patch deep (opus)  jev http 200 585ms  → ran claude-opus-5[1m]
+  plan     completed → ready rev 1, 5 task(s)  planner ran on claude-opus-5[1m]
+  dispatch task t1 attempt 1  called standard → preserve standard (the model the coordinator called)  jev http 200 565ms  reason: route_low_confidence  → ran claude-sonnet-5
+  result   task t1 attempt 1  worker-reported accept  (86s, 23 tool calls)
+  dispatch task t2 attempt 1  called standard → patch standard (sonnet)  jev http 200 595ms  → ran claude-sonnet-5
+  result   task t2 attempt 1  worker-reported accept  (68s, 10 tool calls)
+  …
+  stop     completed
+```
+
+That block is one recorded session from the `v5-replan-bound` run of 2026-09-19, abridged; those records predate the
+`model` field, so the two model names in parentheses are the ones today's records would carry and the stored ones read
+`(model not recorded)`. It is also a fair example of what the surface is for: the two turns that stayed native say why,
+and Gate B preserved four of the five dispatches at low confidence rather than routing them.
+
+It reads the same records the benchmark reads, and states three things it cannot answer: a verdict is what the worker
+reported about its own work, a model after `ran` is what the host reported resolving rather than a check that the
+patch took, and a phase with no record means nothing was recorded, not that nothing happened.
+
 ## Results
 
 ### The first benchmark changed the design (V3, September 17)

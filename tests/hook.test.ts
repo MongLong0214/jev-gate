@@ -1927,6 +1927,40 @@ describe('receipt selection and observation keys (2026-09-20)', () => {
     expect(denied).toMatchObject({ kind: 'deny', code: 'deps_incomplete' });
   });
 
+  it('records the model each decision asked for, and records none where it asked for none', async () => {
+    const dir = join(tmp, 'trace-model');
+    const env = makeEnv({ JEV_GATE_TRACE_DIR: dir });
+    const fetchImpl = fakeJev({ planning_tier: 'frontier', route: 'deep', basis: 'unresolved_contract_reasoning' });
+    await seedPlanned(env, PLAN_REPLY, fetchImpl);
+    const patched = await run(env, preEvent('Agent', agentInput()), fetchImpl);
+    const decision = (role: string): Record<string, unknown> =>
+      (readdirSync(dir)
+        .map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>)
+        .find((r) => r['phase'] === 'pre_result' && r['attempted'] === true && r['role'] === role)?.['decision'] ?? {}) as Record<string, unknown>;
+    // A reader of a stored trace cannot know which `models` map was in force when it was written, and deriving the
+    // model from the tier through today's map would answer a question about yesterday with today's configuration.
+    expect(decision('planner')).toMatchObject({ tier: 'frontier', model: 'fable' });
+    expect(decision('worker')).toMatchObject({ tier: 'deep', model: 'opus' });
+    // The recorded model is the one the patch actually carried; a record that drifts from the emitted call is worse
+    // than no record, because it reads as evidence.
+    const emitted = JSON.parse(patched.stdout ?? '{}') as { hookSpecificOutput?: { updatedInput?: { model?: string } } };
+    expect(emitted.hookSpecificOutput?.updatedInput?.model).toBe(decision('worker')['model']);
+  });
+
+  it('records no model on a preserve, because the call keeps the one the coordinator named', async () => {
+    const dir = join(tmp, 'trace-preserve-model');
+    const env = makeEnv({ JEV_GATE_TRACE_DIR: dir });
+    const fetchImpl = jevFailingRoute();
+    await seedPlanned(env, PLAN_REPLY, fetchImpl);
+    await run(env, preEvent('Agent', agentInput()), fetchImpl);
+    const decision = readdirSync(dir)
+      .map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>)
+      .find((r) => r['phase'] === 'pre_result' && r['role'] === 'worker' && r['attempted'] === true)?.['decision'] as Record<string, unknown>;
+    expect(decision).toMatchObject({ action: 'preserve', reason: 'http_other' });
+    // Naming the tier's model here would claim the gate asked for a model it deliberately did not ask for.
+    expect(decision['model']).toBeNull();
+  });
+
   it('records the numbers the atomic gates decide on, not only the fields a choice answer has', async () => {
     const dir = join(tmp, 'trace-atomic-answers');
     const env = makeEnv({ JEV_GATE_TRACE_DIR: dir });
