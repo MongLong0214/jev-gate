@@ -9,6 +9,22 @@ figures below and are marked where they do.
 `main` is at **v0.2.0** ([release](https://github.com/MongLong0214/jev-gate/releases/tag/v0.2.0)); `dev` carries
 everything below and is what a new agent should check out.
 
+> **Read this first (2026-09-20).** Two things changed after everything below was written.
+>
+> 1. **Every cost percentage in this document is withdrawn or under caveat.** The depth ladder that was built to
+>    establish the crossing re-measured the same depths under a pre-registration written before its cells existed.
+>    Across four runs and six comparisons **not one reproduced**, and the deepest rung reversed sign on a separation:
+>    −56.6 % against native became +67.2 % against the single arm on a repeat. The `−59 % to −69 %` row below comes
+>    from the run those rungs re-measured. See `bench/results/v5-depth-ladder-2026-09-19/RESULTS-WORK-RERUN-2026-09-20.md`
+>    and the withdrawal banner on `bench/results/v5-crossing-2026-09-19/README.md`. The floor stays at 300,000 for
+>    compatibility; the economic certainty it was given does not.
+> 2. **Six dispatch-integrity defects were found and repaired** (`1adc9a1` and the commit that follows it). A failed
+>    rework was reviving the accept it replaced; a preserved single dispatch was sending a worker off without the
+>    user's request; the single path ran none of the conflict checks the hierarchy re-runs under the lock and never
+>    re-confirmed ownership after its Jev call; `size: 999` admitted; the trace recorded the questions and not the
+>    answers; and Gate A2 was choosing the planning tier from the coordinator's brief instead of the request. Twelve
+>    witnesses, all failing before and passing after: `bench/results/v5-dispatch-integrity-2026-09-20/WITNESSES.md`.
+
 **On `wide-validators`, the product works in its shipped configuration and saves tokens without costing time.** With
 `mode: auto` and no config file, Gate A reads how deep the session is, asks its read-off questions, and admits real
 work at depth. Measured end to end, same finished work, all checks passing. **Every row below is one job shape —
@@ -17,7 +33,7 @@ as the product's:
 
 | measured on `wide-validators` | |
 |---|---|
-| job turn at ~376K, against no plugin | **−59 % to −69 %** (the range is plan size, not noise) |
+| job turn at ~376K, against no plugin | ~~**−59 % to −69 %**~~ **withdrawn 2026-09-20** — the ladder that re-measured these depths reproduced none of its six comparisons |
 | session total at ~376K | **−31.8 %** |
 | wall clock, admitted path | **+3.6 %** — inside the baseline's own spread |
 

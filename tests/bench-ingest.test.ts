@@ -300,11 +300,33 @@ describe('turn_totals_stream (2026-09-20 metric defect)', () => {
     observeEvent(cell, result(3));
 
     expect(cell.turn_totals_stream).toHaveLength(2);
-    expect(cell.turn_totals_stream[0]).toEqual({ cache_read: 100, cache_creation: 10, input: 1, output: 5, messages: 1 });
+    expect(cell.turn_totals_stream[0]).toEqual({ cache_read: 100, cache_creation: 10, input: 1, output: 5, messages: 1, duplicates: 0, incomplete: 0 });
     // Cumulative, like turn_totals_usd, so a job turn is the same subtraction in both units.
     const [priming, job] = cell.turn_totals_stream;
-    expect(job).toEqual({ cache_read: 500, cache_creation: 10, input: 1, output: 25, messages: 2 });
+    // The second message omits two counters. They are still added as zero -- changing the sum would change a
+    // published unit after its results were seen -- but the omission is counted, so the run says what it is.
+    expect(job).toEqual({ cache_read: 500, cache_creation: 10, input: 1, output: 25, messages: 2, duplicates: 0, incomplete: 1 });
     expect((job?.cache_read ?? 0) - (priming?.cache_read ?? 0)).toBe(400);
+  });
+
+  /**
+   * The sum is reported stream usage, not verified provider computation. Two things could make it neither: a message
+   * whose usage the host emits twice, and a counter that is absent and is added as zero. Until a run says both are
+   * zero, nothing quoted from it can claim to be de-duplicated -- so the run counts them and the sums do not move.
+   */
+  it('counts a repeated message id and an unreadable counter without changing the totals', () => {
+    const cell = emptyCell({ id: 'job', group: 'g', fixtureDir: '', request: 'r', prime: [], setup: [], evaluationSetup: [], checkFile: '', checkFileRel: '' }, armSpecs('fable')['sonnet_native'], 1);
+    const withId = (id: string, u: Record<string, number>): Record<string, unknown> => ({ type: 'assistant', message: { id, usage: u } });
+    const full = { cache_read_input_tokens: 10, cache_creation_input_tokens: 2, input_tokens: 1, output_tokens: 3 };
+    observeEvent(cell, withId('msg_1', full));
+    observeEvent(cell, withId('msg_1', full));
+    observeEvent(cell, withId('msg_2', { cache_read_input_tokens: 10, cache_creation_input_tokens: 2, input_tokens: 1, output_tokens: 'nine' } as unknown as Record<string, number>));
+    observeEvent(cell, result(1));
+    const [turn] = cell.turn_totals_stream;
+    expect(turn).toMatchObject({ messages: 3, duplicates: 1, incomplete: 1 });
+    // The repeat is still in the sum: this observes the risk, it does not silently correct the unit.
+    expect(turn?.cache_read).toBe(30);
+    expect(turn?.output).toBe(6);
   });
 
   it('counts subagent messages as work and ignores messages with no usable usage', () => {

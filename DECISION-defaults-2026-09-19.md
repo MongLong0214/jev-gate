@@ -9,10 +9,18 @@ numbers that prompted it.
 even when depth was supplied. A gate that never admits is not a conservative default; it is a product that does not
 run. Every cost result in this repository was obtained either by forcing admission or by setting this key by hand.
 
-**The atomic path admits, and what it admits is cheaper.** Offline it admits 41 of 65 real prompts and decides both
-ground-truth cases correctly. End to end at ~376K it admitted twice, both passing, and the job turn cost **−59 % to
-−69 %** against native depending on the plan size the planner returned
+**The atomic path admits.** ~~and what it admits is cheaper~~ Offline it admits 41 of 65 real prompts and decides
+both ground-truth cases correctly. End to end at ~376K it admitted twice, both passing, and the job turn cost
+~~**−59 % to −69 %**~~ against native depending on the plan size the planner returned
 (`v5-gate-a-live-2026-09-19/`, `v5-plan-variance-2026-09-19/`).
+
+> **Correction (2026-09-20).** The struck figures do not survive. The depth ladder built to establish that crossing
+> re-measured the same depths under a pre-registration written before its cells existed, and across four runs and six
+> comparisons **not one reproduced**; the deepest rung reversed sign on a separation
+> (`bench/results/v5-depth-ladder-2026-09-19/RESULTS-WORK-RERUN-2026-09-20.md`). The decision recorded here still
+> stands on its **first** reason and only that one: the composite gate admitted 0 of 61, so the shipped default never
+> ran, and a gate that never runs is the worse error. That reason is a property of the gate and is unaffected. What is
+> withdrawn is the claim that the admissions it makes are cheaper by a known amount.
 
 **Refusing is mechanically free, though not measurably so.** Below the floor the gate sends **no request at all** —
 `attempted: false` on every prompt, zero workers, zero orchestration, observed in four cells. What the refused turn

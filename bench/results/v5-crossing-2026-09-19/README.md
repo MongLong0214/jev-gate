@@ -1,5 +1,18 @@
 # Where delegation starts paying, and why the floor stays at 300,000 — 2026-09-19
 
+> **Withdrawal (2026-09-20). The percentages in this run's headline table were not reproduced, and are not to be
+> quoted.** The depth ladder that followed re-measured the same three depths (193K, 285K, 389K against this run's
+> 180K, 281K, 376K) with a pre-registration written before its cells existed. Across four runs, six comparisons, not
+> one reproduced its verdict class, and the deepest rung *reversed sign on a separation*: -56.6 % against native
+> became +67.2 % against the single arm on a repeat. See `../v5-depth-ladder-2026-09-19/RESULTS-WORK-RERUN-2026-09-20.md`.
+>
+> What survives here is the **shape of the question** and the cells themselves -- the checks all passed, the raw data
+> is intact, and the mechanism paragraph is still worth reading as a hypothesis. What does not survive is
+> **-43.0 %**, **-59 % to -69 %**, and the word *settled*. A two-cell arm in one run is not a measured property, and
+> within a single later run the host reported between 17 % and 63 % of the cache reads its own stream carried, so the
+> dollar figures below track the report rather than the traffic. The floor stays at 300,000 for compatibility; the
+> economic certainty that number was given is withdrawn.
+
 `delegationDepthFloor` shipped at 300,000 derived from two points. This run adds two more depths between them, and
 then answers a different question than the one it was built for.
 

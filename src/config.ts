@@ -22,13 +22,17 @@ export const DEFAULT_CONFIG: ConfigV5 = {
   guardAllowTools: [],
   // Optional in a config file: absent keeps the shipped composite Gate B question.
   routeQuestionShape: 'composite',
-  // Derived, not measured: the two end-to-end points are 55K (delegation loses) and 406K (delegation wins), and this
-  // sits between them nearer the measured win. Step 2 of the depth-gate guide is what moves it.
+  // Derived, not measured, and now less than that. The two end-to-end points were 55K (delegation loses) and 406K
+  // (delegation wins) and this sat between them nearer the win -- but the ladder built to establish that crossing was
+  // withdrawn on 2026-09-20: six comparisons, none reproduced, and the deepest rung reversed sign on a separation.
+  // The number stays for compatibility. It is a configured default, not a break-even point anyone has measured.
   delegationDepthFloor: 300_000,
   /**
    * Atomic since 2026-09-19 (DECISION-defaults-2026-09-19.md): the composite question admitted 0 of 61 real prompts
-   * offline, so the shipped gate never ran. The atomic path admits 41 of 65 and its admissions measured -59 % to
-   * -69 % on the job turn at depth, with refusals sending no request at all.
+   * offline, so the shipped gate never ran. The atomic path admits 41 of 65, and refusals send no request at all.
+   * The -59 % to -69 % this comment used to quote is withdrawn (2026-09-20): the ladder that re-measured those
+   * depths reproduced none of its six comparisons. The reason to ship atomic is that the composite gate never fires,
+   * which is a property of the gate; it was never that the admissions it makes are cheaper by a known amount.
    */
   admissionQuestionShape: 'atomic',
   // Above the 2-7 band that ordinary plans ran in, below the 13 that cost +92.5 %: it stops a runaway, not a plan.

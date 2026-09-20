@@ -196,10 +196,12 @@ vendor documents the model being used; neither atomic path consults its confiden
 done here rather than by the model.
 
 **Gate A ships `atomic`** (DECISION-defaults-2026-09-19.md): the composite question admitted 0 of 61 real prompts in
-an offline replay even with depth supplied, so the gate never ran. The atomic path admits 41 of 65, and at depth its
-admissions measured −59 % to −69 % on the job turn against no plugin at all, depending on how many tasks the planner
-returned. **Gate B stays `composite`**, because its atomic shape has one end-to-end observation and every figure above
-was measured with the composite one.
+an offline replay even with depth supplied, so the gate never ran. The atomic path admits 41 of 65. That — a gate that
+never fires against one that does — is the whole reason it ships; ~~at depth its admissions measured −59 % to −69 % on
+the job turn~~ is **withdrawn (2026-09-20)**: the ladder built to establish that crossing reproduced none of its six
+comparisons and the deepest rung reversed sign
+(`bench/results/v5-depth-ladder-2026-09-19/RESULTS-WORK-RERUN-2026-09-20.md`). **Gate B stays `composite`**, because
+its atomic shape has one end-to-end observation and every figure above was measured with the composite one.
 
 Job state lives in `$XDG_STATE_HOME/jev-gate/jobs/` (`~/.local/state/jev-gate/jobs/` by default), one file per session,
 containing your plan and task text. Delete the directory to remove it; a superseded job is kept as history inside its own

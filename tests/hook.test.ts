@@ -565,6 +565,65 @@ describe('single executor (A19)', () => {
     expect(state(env).current.attempts.tasks['single']).toBe(1);
   });
 
+  /**
+   * Every reason this path can preserve on, in one table. A preserve leaves the model as the coordinator called it;
+   * it must never also leave the worker without the task. The environment is mutated after admission so the turn is
+   * admitted as `single` and then meets the condition, which is exactly the order these arise in a real session.
+   */
+  it.each([
+    ['a failed Gate B', (_env: Env): unknown => jevFailingRoute(), 'http_other'],
+    ['native mode', (env: Env): unknown => { env['JEV_GATE_MODE'] = 'native'; return fakeJev({ execution: 'orchestrated' }); }, 'mode_native'],
+    ['a missing key', (env: Env): unknown => { delete env['TYPESAFE_API_KEY']; return fakeJev({ execution: 'orchestrated' }); }, 'key_missing'],
+  ])('carries the request through %s, because the brief was written expecting it', async (_name, after, code) => {
+    const env = singleEnv();
+    const admit = fakeJev({ execution: 'orchestrated' });
+    await run(env, promptEvent(), admit);
+    const fetchImpl = after(env);
+    const r = await run(env, preEvent('Agent', agentInput({ prompt: 'Do what the request asks.' })), fetchImpl);
+    expect(r).toMatchObject({ kind: 'patch', code });
+    const patched = updatedInput(r);
+    // A preserve leaves the model alone. That is all it leaves alone: the task still has to reach the worker.
+    expect(patched['model']).toBeUndefined();
+    expect(patched['subagent_type']).toBe('jev-gate:worker');
+    const prompt = String(patched['prompt']);
+    expect(prompt).toContain('Do what the request asks.');
+    expect(prompt).toContain('[Jev Gate user request]');
+    expect(prompt).toContain('Build a settings page, migrate the store and wire the two together.');
+    expect(prompt).toContain('It is the task: there is no plan and no task contract for this dispatch.');
+  });
+
+  it('carries the request on a pinned dispatch, and leaves the pin exactly as called', async () => {
+    const env = singleEnv();
+    const fetchImpl = fakeJev({ execution: 'orchestrated' });
+    await run(env, promptEvent(), fetchImpl);
+    const r = await run(env, preEvent('Agent', agentInput({ prompt: 'Do what the request asks.', model: 'claude-opus-5' })), fetchImpl);
+    expect(r).toMatchObject({ kind: 'patch', code: 'pinned' });
+    expect(updatedInput(r)['model']).toBe('claude-opus-5');
+    expect(String(updatedInput(r)['prompt'])).toContain('Build a settings page, migrate the store and wire the two together.');
+  });
+
+  /**
+   * T2: the lock is not held across the Jev call, so a turn that moves on while the router is thinking leaves a
+   * dispatch whose generation no longer exists. The hierarchy re-confirms ownership after its call; this path did not.
+   */
+  it('refuses a dispatch whose generation was superseded while Jev was still answering', async () => {
+    const env = singleEnv();
+    const admit = fakeJev({ execution: 'orchestrated' });
+    await run(env, promptEvent(), admit);
+    let superseded = false;
+    const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)) as { questions: Record<string, unknown> };
+      // The user sends the next prompt while this dispatch is waiting on its route answer.
+      if ('route' in body.questions && !superseded) {
+        superseded = true;
+        await run(env, promptEvent({ prompt_id: 'p2', prompt: 'actually, do something else' }), admit);
+      }
+      return await (admit as unknown as typeof fetch)(url, init);
+    });
+    const r = await run(env, preEvent('Agent', agentInput({ prompt: 'Do what the request asks.' })), fetchImpl);
+    expect(r).toMatchObject({ kind: 'deny', code: 'stale_generation' });
+  });
+
   it('is off unless the config asks for it', async () => {
     const env = makeEnv();
     const r = await run(env, promptEvent(), fakeJev({ execution: 'orchestrated' }));
@@ -1819,6 +1878,33 @@ describe('R15: the simple paths this change must not break', () => {
  * the same shape: a path that closes or records a decision chose its own key instead of reading the one the decision
  * was made under.
  */
+describe('planner routing input (2026-09-20)', () => {
+  /**
+   * The state field Gate A2 fills is named `request`, and it was being given the coordinator's brief. What decides a
+   * planning tier is how hard the job is, and the job is the request the plan is written from. Observed on
+   * 2026-09-19 (`v5-job2-orbit` r1): the replan brief was 771 characters of fix instruction, so the tier for
+   * replanning a whole job was chosen from a patch note.
+   */
+  it('routes the planner on the request the plan is written from, not on the coordinator brief', async () => {
+    const env = makeEnv();
+    const states: Array<Record<string, unknown>> = [];
+    const fetchImpl = fakeJev({ onCall: (q, st) => void (q.includes('planning_tier') && states.push(st)) });
+    await run(env, promptEvent(), fetchImpl);
+    await run(env, plannerPre({ prompt: 'Plan this. Keep it small.' }), fetchImpl);
+    expect(states).toHaveLength(1);
+    expect(states[0]?.['request']).toBe('Build a settings page, migrate the store and wire the two together.');
+  });
+
+  it('falls back to the brief when no request was carried, rather than sending nothing', async () => {
+    const env = makeEnv();
+    const states: Array<Record<string, unknown>> = [];
+    const fetchImpl = fakeJev({ onCall: (q, st) => void (q.includes('planning_tier') && states.push(st)) });
+    // A direct-shape generation recovered at the planner dispatch has no stored request to carry.
+    await run(env, plannerPre({ prompt: 'Plan this. Keep it small.' }), fetchImpl);
+    expect(states[0]?.['request']).toBe('Plan this. Keep it small.');
+  });
+});
+
 describe('receipt selection and observation keys (2026-09-20)', () => {
   it('T1: a rework whose call fails covers the accept it replaced, so its dependent is not ready', async () => {
     const env = makeEnv();

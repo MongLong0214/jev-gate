@@ -218,7 +218,7 @@ export interface CellRecord {
    * reported a different fraction of the same traffic on the two days. Cost is a host-reported aggregate; this is
    * what the transcript itself says happened.
    */
-  turn_totals_stream: Array<{ cache_read: number; cache_creation: number; input: number; output: number; messages: number }>;
+  turn_totals_stream: Array<{ cache_read: number; cache_creation: number; input: number; output: number; messages: number; duplicates: number; incomplete: number }>;
   fixture_sha256: string | null;
   dispatch: { intent_at: string | null; spawn_observed_at: string | null; pid: number | null };
   started: boolean;
@@ -644,24 +644,50 @@ const contextOf = (message: Record<string, unknown>): number | null => {
 const lastMainContext = new WeakMap<CellRecord, number>();
 const promptsSeen = new WeakMap<CellRecord, number>();
 
-type StreamTotals = { cache_read: number; cache_creation: number; input: number; output: number; messages: number };
+type StreamTotals = { cache_read: number; cache_creation: number; input: number; output: number; messages: number; duplicates: number; incomplete: number };
 const streamTotals = new WeakMap<CellRecord, StreamTotals>();
+const streamIds = new WeakMap<CellRecord, Set<string>>();
+const emptyStreamTotals = (): StreamTotals => ({ cache_read: 0, cache_creation: 0, input: 0, output: 0, messages: 0, duplicates: 0, incomplete: 0 });
 
-/** Adds one message's usage to the cell's running stream totals. A message without a usable usage block is not counted. */
+/**
+ * Adds one message's usage to the cell's running stream totals. A message without a usable usage block is not counted.
+ *
+ * This sum is *reported* stream usage, not verified provider computation, and two things could make it neither. The
+ * host could emit one message's usage twice, and a counter could be absent or unreadable and be added as zero. Both
+ * are counted here and neither changes the sums: a run whose `duplicates` and `incomplete` are zero has earned the
+ * stronger description, and one whose are not has said so before anything is quoted from it. Silently de-duplicating
+ * instead would change a published unit after its results were seen, which the pre-registration rules forbid.
+ */
 const addStreamUsage = (cell: CellRecord, message: unknown): void => {
   if (!isRecord(message)) return;
   const usage = message['usage'];
   if (!isRecord(usage)) return;
+  const acc = streamTotals.get(cell) ?? emptyStreamTotals();
+  let incomplete = false;
   const read = (k: string): number => {
     const v = usage[k];
-    return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 0;
+    if (typeof v === 'number' && Number.isFinite(v) && v >= 0) return v;
+    // An absent counter and a zero counter are different facts, and adding both as zero makes them one number.
+    incomplete = true;
+    return 0;
   };
-  const acc = streamTotals.get(cell) ?? { cache_read: 0, cache_creation: 0, input: 0, output: 0, messages: 0 };
-  acc.cache_read += read('cache_read_input_tokens');
-  acc.cache_creation += read('cache_creation_input_tokens');
-  acc.input += read('input_tokens');
-  acc.output += read('output_tokens');
+  const cacheRead = read('cache_read_input_tokens');
+  const cacheCreation = read('cache_creation_input_tokens');
+  const inputTokens = read('input_tokens');
+  const outputTokens = read('output_tokens');
+  const id = str(message['id']);
+  if (id !== null && id.length > 0) {
+    const seen = streamIds.get(cell) ?? new Set<string>();
+    if (seen.has(id)) acc.duplicates += 1;
+    seen.add(id);
+    streamIds.set(cell, seen);
+  }
+  acc.cache_read += cacheRead;
+  acc.cache_creation += cacheCreation;
+  acc.input += inputTokens;
+  acc.output += outputTokens;
   acc.messages += 1;
+  if (incomplete) acc.incomplete += 1;
   streamTotals.set(cell, acc);
 };
 
@@ -740,7 +766,7 @@ export const observeEvent = (cell: CellRecord, ev: unknown): void => {
     const turnTotal = num(ev['total_cost_usd']);
     // Every turn reports the session total so far, so the list is cumulative and the job's own cost is a difference.
     if (turnTotal !== null) cell.turn_totals_usd.push(turnTotal);
-    cell.turn_totals_stream.push({ ...(streamTotals.get(cell) ?? { cache_read: 0, cache_creation: 0, input: 0, output: 0, messages: 0 }) });
+    cell.turn_totals_stream.push({ ...(streamTotals.get(cell) ?? emptyStreamTotals()) });
     const inferenceObserved = cell.models_seen_main.length > 0 || cell.agent_calls.length > 0;
     const usage = parseModelUsage(ev, inferenceObserved);
     cell.result = {

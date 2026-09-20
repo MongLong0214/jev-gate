@@ -551,8 +551,13 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     let code: ErrorCode | null = null;
     if (apiKey) {
       let routed: PlannerRouteDecision | null = null;
+      // A18: the state field this fills is named `request`, and it was being given the coordinator's brief. What
+      // decides a planning tier is how hard the job is, and the job is the request the plan is written from -- the
+      // same correction the single path needed. Observed 2026-09-19 (`v5-job2-orbit` r1): the replan brief was 771
+      // characters of fix instruction, so the tier for replanning a whole job was chosen from a patch note.
+      const routedRequest = carriedRequest !== null && carriedRequest !== 'omitted' ? carriedRequest : composed;
       const gate = await callGate(
-        buildPlannerRouteRequest(composed, config),
+        buildPlannerRouteRequest(routedRequest, config),
         'pre_intent',
         'pre_result',
         { role: 'planner', tool_input: summarizeToolInput(eligibility.input), default_tier: config.plannerDefaultTier },
