@@ -24,6 +24,10 @@ everything below and is what a new agent should check out.
 >    re-confirmed ownership after its Jev call; `size: 999` admitted; the trace recorded the questions and not the
 >    answers; and Gate A2 was choosing the planning tier from the coordinator's brief instead of the request. Twelve
 >    witnesses, all failing before and passing after: `bench/results/v5-dispatch-integrity-2026-09-20/WITNESSES.md`.
+> 3. **The gate can now say what it did.** `node dist/cli.js explain <trace-dir>` renders the records the hook was
+>    already writing: why a turn stayed native and at what confidence, the tier each dispatch was routed to, the model
+>    asked for against the one the host resolved, and the worker-reported verdict. Nothing about the pipeline changed;
+>    reading it no longer means opening benchmark JSON by hand (`fbf0b59`).
 
 **On `wide-validators`, the product works in its shipped configuration and saves tokens without costing time.** With
 `mode: auto` and no config file, Gate A reads how deep the session is, asks its read-off questions, and admits real
