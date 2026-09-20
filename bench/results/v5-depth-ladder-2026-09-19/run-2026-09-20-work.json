@@ -1,0 +1,174 @@
+{
+  "run": "v5-depth-ladder-4",
+  "date": "2026-09-20",
+  "preregistration": "PREREGISTRATION-WORK-2026-09-20.md (d5eae34, committed before the first cell)",
+  "analyzers": [
+    "apply-rules.cjs",
+    "apply-rules-work.cjs (committed with the pre-registration)"
+  ],
+  "frozen_config": "config-floor-50000.json (delegationDepthFloor 50000); live config untouched, product floor 300000",
+  "plugin_build": "unchanged since b2c4548; only src/bench/run.ts gained turn_totals_stream (146d295)",
+  "cells_valid": "8/8",
+  "checker": "8/8 pass",
+  "admitted_single": "2/2 at both rungs",
+  "spend_usd": 29.64,
+  "spend_quoted_to_owner_usd": 25,
+  "spend_corrected_estimate_usd": "13-33",
+  "reproduction_rule": "verdict class AND direction must both match run 2; no percentage differenced across runs",
+  "verdicts": {
+    "wide-validators-primed-21": {
+      "dollars": {
+        "run2": "43.1% single LESS, SEPARATION",
+        "run4": "46.4% single LESS, direction only",
+        "reproduced": false
+      },
+      "cache_reads": {
+        "run2": "12.4% single MORE, under floor",
+        "run4": "10.5% single LESS, under floor",
+        "reproduced": false
+      },
+      "output_tokens": {
+        "run2": "29.6% single MORE, SEPARATION",
+        "run4": "24.3% single MORE, direction only",
+        "reproduced": false
+      }
+    },
+    "wide-validators-primed-30": {
+      "dollars": {
+        "run2": "56.6% single LESS, SEPARATION",
+        "run4": "67.2% single MORE, SEPARATION",
+        "reproduced": false
+      },
+      "cache_reads": {
+        "run2": "27.1% single LESS, SEPARATION",
+        "run4": "15.5% single LESS, direction only",
+        "reproduced": false
+      },
+      "output_tokens": {
+        "run2": "11.3% single MORE, under floor",
+        "run4": "49.6% single MORE, direction only",
+        "reproduced": false
+      }
+    }
+  },
+  "within_run_attribution_split": {
+    "note": "same run, one hour apart, native arm",
+    "primed-21": {
+      "host_over_stream": "60-62%",
+      "cache_reads": "13.73M, 15.77M",
+      "job_turn_usd": [
+        1.8753,
+        2.0783
+      ]
+    },
+    "primed-30": {
+      "host_over_stream": "17-20%",
+      "cache_reads": "19.23M, 20.44M",
+      "job_turn_usd": [
+        0.9387,
+        0.891
+      ]
+    },
+    "reading": "more work, about half the money, inside one run"
+  },
+  "conclusion": "pre-registered outcome row: work does not reproduce. The depth ladder is withdrawn entirely, not restated in work terms. No percentage from it is quotable.",
+  "not_established": "why host attribution differs between sessions; outside what this bench records and not guessed",
+  "cells": [
+    {
+      "job": "wide-validators-primed-21",
+      "arm": "jev_single",
+      "rep": 1,
+      "context_at_job_prompt": 285492,
+      "quality": "pass",
+      "job_turn_usd": 0.8077,
+      "stream_cache_reads": 8948634,
+      "stream_output_tokens": 423,
+      "elapsed_s": 256.6,
+      "exit_code": 0
+    },
+    {
+      "job": "wide-validators-primed-21",
+      "arm": "jev_single",
+      "rep": 2,
+      "context_at_job_prompt": 285484,
+      "quality": "pass",
+      "job_turn_usd": 1.3109,
+      "stream_cache_reads": 17463007,
+      "stream_output_tokens": 728,
+      "elapsed_s": 215.4,
+      "exit_code": 0
+    },
+    {
+      "job": "wide-validators-primed-21",
+      "arm": "sonnet_native",
+      "rep": 1,
+      "context_at_job_prompt": 285066,
+      "quality": "pass",
+      "job_turn_usd": 1.8753,
+      "stream_cache_reads": 13730288,
+      "stream_output_tokens": 441,
+      "elapsed_s": 217.8,
+      "exit_code": 0
+    },
+    {
+      "job": "wide-validators-primed-21",
+      "arm": "sonnet_native",
+      "rep": 2,
+      "context_at_job_prompt": 284718,
+      "quality": "pass",
+      "job_turn_usd": 2.0783,
+      "stream_cache_reads": 15769034,
+      "stream_output_tokens": 485,
+      "elapsed_s": 260.5,
+      "exit_code": 0
+    },
+    {
+      "job": "wide-validators-primed-30",
+      "arm": "jev_single",
+      "rep": 1,
+      "context_at_job_prompt": 389013,
+      "quality": "pass",
+      "job_turn_usd": 1.3828,
+      "stream_cache_reads": 14660816,
+      "stream_output_tokens": 215,
+      "elapsed_s": 309.2,
+      "exit_code": 0
+    },
+    {
+      "job": "wide-validators-primed-30",
+      "arm": "jev_single",
+      "rep": 2,
+      "context_at_job_prompt": 389226,
+      "quality": "pass",
+      "job_turn_usd": 1.6771,
+      "stream_cache_reads": 18845848,
+      "stream_output_tokens": 632,
+      "elapsed_s": 367.6,
+      "exit_code": 0
+    },
+    {
+      "job": "wide-validators-primed-30",
+      "arm": "sonnet_native",
+      "rep": 1,
+      "context_at_job_prompt": 388349,
+      "quality": "pass",
+      "job_turn_usd": 0.9387,
+      "stream_cache_reads": 19228073,
+      "stream_output_tokens": 229,
+      "elapsed_s": 242.9,
+      "exit_code": 0
+    },
+    {
+      "job": "wide-validators-primed-30",
+      "arm": "sonnet_native",
+      "rep": 2,
+      "context_at_job_prompt": 388422,
+      "quality": "pass",
+      "job_turn_usd": 0.891,
+      "stream_cache_reads": 20441859,
+      "stream_output_tokens": 337,
+      "elapsed_s": 122,
+      "exit_code": 0
+    }
+  ]
+}

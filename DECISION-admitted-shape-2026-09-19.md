@@ -110,6 +110,14 @@ now a number set for the path that would no longer be the default.
 > reported. The two deeper rungs did separate in dollars (−43.1 % at 285K, −56.6 % at 389K), but they were
 > measured once, under that regime, and **in work terms they read 12.4 % against `single` and 27.1 % for it**.
 >
+> **Withdrawn further, later the same day.** The 285K and 389K rungs were re-run too, under a new
+> pre-registration with the work unit co-primary. **Neither reproduced in any unit, and 389K reversed to
+> `single` 67.2 % MORE expensive.** Six comparisons, zero reproductions. And the attribution regime turned out
+> to change *within* one run — the 389K native cells did ~35 % more work than the 285K ones and were billed
+> about half as much — so no "it was a different day" reading survives either.
+> **No measurement in this repository now establishes that this shape saves money at any depth.**
+> See `bench/results/v5-depth-ladder-2026-09-19/RESULTS-WORK-RERUN-2026-09-20.md`.
+>
 > What this decision can still use: the quality record, the failure-surface argument, and the fact that
 > `delegationDepthFloor: 300000` was derived from **hierarchy** measurements and has never described this shape.
 > What it can no longer use: any specific saving figure as settled. See

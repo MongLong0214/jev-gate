@@ -101,13 +101,30 @@ that traffic the host reported: ~62 % of the native arm's cache reads on 09-19, 
 at 16–37 % throughout. Reported cost follows the report. **Why the attribution changed is not established** and
 is not guessed here.
 
-**So the ladder is withdrawn to what survives** (`RESULTS-13NOTE-RERUN-2026-09-20.md`):
+**2026-09-20, run 4: the ladder is withdrawn whole** (`RESULTS-WORK-RERUN-2026-09-20.md`). The 285K and 389K
+rungs were re-run under a new pre-registration (`PREREGISTRATION-WORK-2026-09-20.md`, `d5eae34`) with the work
+unit promoted to co-primary **before** the cells ran. Reproduction was defined in advance as verdict class and
+direction both matching. **Two rungs × three units = six comparisons, zero reproductions.**
 
-| depth | dollars (pre-registered unit) | cache reads (post-hoc) |
+| depth | dollars, first measurement → repeat | cache reads, first → repeat |
 |---|---|---|
-| 193K | **not established** — two measurements, identical inputs, opposite signs | `single` 10.1 % less, both runs |
-| 285K | −43.1 %, **provisional** | `single` **12.4 % more** |
-| 389K | −56.6 %, **provisional** | `single` 27.1 % less |
+| 193K | −41.8 % → **+72.5 % against `single`** (identical inputs) | 10.1 % less → 10.1 % less |
+| 285K | −43.1 % SEPARATION → −46.4 % **direction only** (single spread 62.3 %) | 12.4 % **more** → 10.5 % **less** |
+| 389K | −56.6 % SEPARATION → **+67.2 % against `single`, SEPARATION** | 27.1 % less → 15.5 % less, direction only |
+
+**No percentage from this ladder is quotable.** 8/8 cells passed their checkers and `jev_single` was admitted
+2/2 at both rungs, so the withdrawal is about the measurement, not the work.
+
+**And the regime is not a day, it is a session.** Inside run 4 the two rungs sat in different attribution bands
+an hour apart: 21-note native at 60–62 % host/stream billed $1.88–2.08 on 13.7–15.8M cache reads, while 30-note
+native at 17–20 % billed $0.89–0.94 on 19.2–20.4M. **More work, half the money, same run.** That is the whole
+30-note reversal, and it removes "it was a different day" as an explanation.
+
+The `single` arm is also far noisier than native — 95.1 % cache-read spread at 285K against native's 14.8 %.
+Run 2 caught it tight (2.1 % dollar spread at 389K) and that was luck. **Two repetitions cannot clear this arm's
+own variance**, which is what rule 5 exists to stop us ignoring.
+
+Older reading, left for the record:
 
 The work column is post-hoc re-analysis and replaces no rule (rule 11 bars swapping a unit after results); it is
 published because refusing to compute it would hide what the same cells say. In work terms the shape's advantage
@@ -125,7 +142,13 @@ beside `turn_totals_usd`: per turn, cumulative, the summed cache reads, cache wr
 count over every message including subagents. `stream-usage.cjs` does the same for runs already on disk.
 Gates: typecheck 0, build 0, vitest **548**.
 
-The floor stays at 300,000 and no default follows. The case for a flip is weaker than it was that morning.
+The floor stays at 300,000 and no default follows. The case for a flip is weaker than it was that morning, and
+run 4 weakened it further: **no measurement in this repository now establishes that the `single` shape saves
+money at any depth.** What still stands is the quality record (every `jev_single` cell of four runs passed its
+checker), Gate A's refusal below the floor, and the fact that the 300,000 floor was derived from `hierarchy`
+measurements and has never described this shape.
+
+Ladder spend, cumulative: **$87.83** (run 4 was $29.64 against ≈ $25 quoted and a $13–$33 corrected estimate).
 
 Read the 2026-09-19 section of "What the measurements say" before trusting any older number in this file.
 

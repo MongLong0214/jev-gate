@@ -9,6 +9,13 @@ Rules applied mechanically by the same unedited `apply-rules.cjs`; its output is
 > different fraction of the same traffic on the two days. These two rungs were measured once, on 09-19, under
 > that regime, and have not been repeated. **In work terms the 21-note rung is 12.4 % against `single` and the
 > 30-note rung is 27.1 % for it**, not 43.1 % and 56.6 %. See `METRIC-DEFECT-2026-09-20.md`.
+>
+> **Superseded 2026-09-20, later the same day: neither of these two rungs reproduced.** Re-run whole under
+> `PREREGISTRATION-WORK-2026-09-20.md`, the 21-note rung no longer separates in any unit and the 30-note rung
+> **reversed to `single` 67.2 % MORE expensive**. The 30-note native cells of that run did ~35 % more work than
+> its 21-note native cells and were billed about half as much, **inside one run** — so the dollar unit is not
+> measuring the arms. Both figures below are withdrawn as claims about the shapes.
+> See `RESULTS-WORK-RERUN-2026-09-20.md`.
 
 The 21-note and 30-note rungs were re-run **whole** — 8 cells, both arms, 2 repetitions. Yesterday's two
 surviving 21-note `jev_single` cells were not reused: a rung whose arms ran on different builds is not a rung.

@@ -15,7 +15,14 @@ Run: `~/jev-gate-runs/v5-depth-ladder`. Rules applied mechanically by `apply-rul
 >    fraction of it. See `RESULTS-13NOTE-RERUN-2026-09-20.md` and `METRIC-DEFECT-2026-09-20.md`.
 >    **Read those before quoting anything below.**
 >
-> The table below is this run's own result and is left as it was measured.
+> 3. **Withdrawn whole, 2026-09-20 (run 4).** The 21-note and 30-note rungs were re-run under a new
+>    pre-registration with the work unit co-primary. **Neither reproduced in any unit, and the 30-note rung
+>    reversed sign: `single` 67.2 % MORE expensive, a separation.** Two rungs x three units = six comparisons,
+>    zero reproductions. **No percentage from this ladder is quotable.** See
+>    `RESULTS-WORK-RERUN-2026-09-20.md`.
+>
+> The table below is this run's own result and is left as it was measured. It is a record of what was measured,
+> not a claim about the shapes.
 
 ## What was asked
 
