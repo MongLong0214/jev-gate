@@ -58,6 +58,14 @@ export interface WorkerRouteState {
   /** A17: present only on a rework, and the only way an observed reasoning failure can be reported at all. */
   prior_attempt: PriorAttemptSummary | null;
   original_prompt: string;
+  /**
+   * A20: the admitted request, carrying the same three states `composeTaskPrompt` gives it -- the text, `omitted`
+   * when it did not fit the worker's byte bound, `null` when the job never carried one. Without it the gate read the
+   * coordinator's brief and the contract and never the thing the work is for, which is the field that says how hard
+   * the job is. It is a field of its own rather than folded into `original_prompt` because the worker receives the
+   * two separately, and the state exists to mirror that packet rather than to paraphrase it.
+   */
+  request: string | 'omitted' | null;
   tier_profiles: Record<Tier, string>;
 }
 
@@ -71,6 +79,7 @@ export const buildWorkerRouteRequest = (
   calledTier: Tier,
   config: ConfigV5,
   priorAttempt: PriorAttemptSummary | null = null,
+  request: string | 'omitted' | null = null,
 ): WorkerRouteRequest => ({
   model: config.jevModel,
   state: {
@@ -87,6 +96,7 @@ export const buildWorkerRouteRequest = (
     predecessor_results: predecessorResults,
     prior_attempt: priorAttempt,
     original_prompt: originalPrompt,
+    request,
     tier_profiles: TIER_PROFILES,
   },
   questions: { route: ROUTE_QUESTION, upgrade_basis: UPGRADE_BASIS_QUESTION },
@@ -181,7 +191,25 @@ export const WORKER_FACT_QUESTIONS = {
 };
 
 export type WorkerFactQuestions = typeof WORKER_FACT_QUESTIONS;
-export type AtomicWorkerRouteRequest = JevRequest<WorkerRouteState, WorkerFactQuestions>;
+
+/**
+ * A22: what kind of failure the previous attempt reported, asked only when a prior attempt is actually supplied.
+ *
+ * `prior_reasoning_failure` above already decides upgrades, and it collapses everything that is not reasoning into
+ * one false. These four separate what that false was made of, because the decisions they would inform are different:
+ * an environment or permission failure is not a reason to spend a stronger model, and missing information is a reason
+ * to replan rather than to retry harder. **None of them is read by any policy yet.** A worker's account of why it
+ * failed is the worker's account; treating it as established cause is the error this records rather than commits.
+ */
+export const PRIOR_FAILURE_FACT_QUESTIONS = {
+  prior_environment_failure: taskFact('The reported failure of the earlier attempt was the environment: a missing dependency, a broken build, a network or service error.'),
+  prior_permission_failure: taskFact('The reported failure of the earlier attempt was a permission or access refusal rather than an inability to do the work.'),
+  prior_missing_information: taskFact('The earlier attempt reported that it lacked information it needed, such as an unavailable file, interface or decision.'),
+  prior_report_format: taskFact('The earlier attempt did the work but its report was rejected for its shape or format rather than its content.'),
+};
+
+export type PriorFailureFactQuestions = typeof PRIOR_FAILURE_FACT_QUESTIONS;
+export type AtomicWorkerRouteRequest = JevRequest<WorkerRouteState, WorkerFactQuestions | (WorkerFactQuestions & PriorFailureFactQuestions)>;
 
 export const buildAtomicWorkerRouteRequest = (
   task: PlannedTask,
@@ -191,10 +219,33 @@ export const buildAtomicWorkerRouteRequest = (
   calledTier: Tier,
   config: ConfigV5,
   priorAttempt: PriorAttemptSummary | null = null,
+  request: string | 'omitted' | null = null,
 ): AtomicWorkerRouteRequest => ({
-  ...buildWorkerRouteRequest(task, globalConstraints, predecessorResults, originalPrompt, calledTier, config, priorAttempt),
-  questions: WORKER_FACT_QUESTIONS,
+  ...buildWorkerRouteRequest(task, globalConstraints, predecessorResults, originalPrompt, calledTier, config, priorAttempt, request),
+  // A22: asked only on a rework. Asking what an earlier attempt reported when there was no earlier attempt is a
+  // question about nothing, and it is paid for on every first dispatch.
+  questions: priorAttempt === null ? WORKER_FACT_QUESTIONS : { ...WORKER_FACT_QUESTIONS, ...PRIOR_FAILURE_FACT_QUESTIONS },
 });
+
+/** A22: the classification, recorded beside the route decision. `applied: false` is the field that matters. */
+export interface PriorFailureClassification {
+  kinds: string[];
+  unreadable: string[];
+  applied: false;
+}
+
+export const priorFailureClassification = (answers: Record<string, unknown>): PriorFailureClassification => {
+  const kinds: string[] = [];
+  const unreadable: string[] = [];
+  // `prior_reasoning_failure` is listed because the classification is only honest as a whole: leaving out the one
+  // kind a policy already reads would make the record look like the failure had no cause the product acted on.
+  for (const key of ['prior_reasoning_failure', ...Object.keys(PRIOR_FAILURE_FACT_QUESTIONS)]) {
+    const n = noulValue(answers[key]);
+    if (n === null) unreadable.push(key);
+    else if (n >= FACT_TRUE) kinds.push(key);
+  }
+  return { kinds, unreadable, applied: false };
+};
 
 /**
  * Uncalibrated policy values, fixed before the measurement that produced them and not moved afterwards. They are not

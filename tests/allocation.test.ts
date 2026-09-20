@@ -48,12 +48,21 @@ describe('requests', () => {
       'predecessor_results',
       'prior_attempt',
       'original_prompt',
+      'request',
       'tier_profiles',
     ]);
     expect(request.state.prior_attempt).toBeNull();
+    // A20: absent by default, because a dispatch the job carried no request for has none to send.
+    expect(request.state.request).toBeNull();
     expect(request.state).toMatchObject({ role: 'worker', default_tier: 'standard', called_tier: 'deep', original_prompt: original, global_constraints: ['global'] });
     // The canonical block is built from the fields, so it must not also be inside original_prompt.
     expect(request.state.original_prompt).not.toContain('[Jev Gate task contract]');
+    // A20: the request the worker will read is its own field, sent once and not folded into the brief.
+    const carried = buildWorkerRouteRequest(task, ['global'], [], original, 'deep', DEFAULT_CONFIG, null, 'Build a settings page.');
+    expect(carried.state).toMatchObject({ original_prompt: original, request: 'Build a settings page.' });
+    expect(JSON.stringify(carried).split('Build a settings page.')).toHaveLength(2);
+    // T9: a request that did not fit the worker's bound is marked, never passed off as absent.
+    expect(buildWorkerRouteRequest(task, [], [], original, 'deep', DEFAULT_CONFIG, null, 'omitted').state.request).toBe('omitted');
     const body = JSON.stringify(request);
     expect(body.split(task.contract_hash)).toHaveLength(2);
     expect(body.split('src/store.ts')).toHaveLength(2);

@@ -86,6 +86,15 @@ const requestFact = (statement: string): { type: 'noul'; instructions: string } 
 export const ADMISSION_FACT_QUESTIONS = {
   forbids_delegation: requestFact('The request says this work must not be handed to a subagent, assistant or other worker. Restrictions on how to do the work, or on what not to change, are not this.'),
   answer_only: requestFact('The request asks only for an answer or an explanation, with nothing to change.'),
+  /**
+   * A21: two read-offs the gate records and does not act on. They are what the request *says*, which is the kind of
+   * question the fan-out answered at 0.98-1.00; `separable` was dropped from that same fan-out for being a forecast
+   * about whether work *could* be split, and neither of these asks that. Nothing in the product reads them yet,
+   * because an explicit textual preference is not evidence that the shape it names is cheaper or better here --
+   * that is what a measurement would have to establish, and none has.
+   */
+  plan_only: requestFact('The request asks for a plan, design or approach and explicitly does not ask for the work itself to be carried out now.'),
+  parallel_outcomes: requestFact('The request explicitly names separate outcomes it wants produced independently of one another, rather than one outcome.'),
   size: {
     type: 'score' as const,
     instructions: `${REQUEST_FACT_GUARD}\n\nHow much work does this request imply?`,
@@ -146,6 +155,8 @@ export const decideAdmissionAtomic = (answers: Record<string, unknown>, depth: n
   if (depth === null) return fallback('depth_unknown');
   if (floor > 0 && depth < floor) return fallback('depth_below_floor');
   const facts: Record<string, number> = {};
+  // A21: `plan_only` and `parallel_outcomes` are deliberately absent from this list. A fact the gate records is not a
+  // fact the gate acts on, and a missing answer to one of them must not be able to veto a turn.
   for (const key of ['forbids_delegation', 'answer_only'] as const) {
     const n = noulValue(answers[key]);
     if (n === null) return fallback('admission_invalid');
@@ -157,4 +168,28 @@ export const decideAdmissionAtomic = (answers: Record<string, unknown>, depth: n
   if ((facts['answer_only'] as number) >= FACT_TRUE) return fallback('admission_answer_only');
   if (size < SIZE_FLOOR) return fallback('admission_too_small');
   return { shape: 'orchestrated', decided: true, reason: null, answer: null };
+};
+
+/**
+ * A21: what the request said about shape, recorded beside the decision and applied to nothing.
+ *
+ * `admitted_shape` is what `admittedShape` would be set to if the request's own words decided it, and `applied` is
+ * false because they do not: the configured value still decides. It is recorded so that a later run can ask whether
+ * following the request would have been better, against a record of what the gate read at the time rather than a
+ * re-reading of the prompts afterwards.
+ */
+export interface ShapeRecommendation {
+  admitted_shape: 'hierarchy' | 'single' | null;
+  plan_only: boolean | null;
+  applied: false;
+}
+
+export const shapeRecommendation = (answers: Record<string, unknown>): ShapeRecommendation => {
+  const parallel = noulValue(answers['parallel_outcomes']);
+  const planOnly = noulValue(answers['plan_only']);
+  return {
+    admitted_shape: parallel === null ? null : parallel >= FACT_TRUE ? 'hierarchy' : 'single',
+    plan_only: planOnly === null ? null : planOnly >= FACT_TRUE,
+    applied: false,
+  };
 };

@@ -325,13 +325,36 @@ describe('Gate A admission', () => {
       const body = JSON.parse(String(init.body)) as { questions: Record<string, unknown> };
       asked = Object.keys(body.questions);
       const answers: Record<string, unknown> = { size: { type: 'score', score: 3, confidence: 0.9 } };
-      for (const k of ['forbids_delegation', 'answer_only']) answers[k] = { type: 'noul', noul: 0.05 };
+      for (const k of ['forbids_delegation', 'answer_only', 'plan_only', 'parallel_outcomes']) answers[k] = { type: 'noul', noul: 0.05 };
       return new Response(JSON.stringify({ model: 'jev-1.13.0', answers, usage: { input_tokens: 10, output_tokens: 2 } }), { status: 200 });
     });
     const r = await run(env, promptEvent(), fetchImpl);
-    expect(asked).toEqual(['forbids_delegation', 'answer_only', 'size']);
+    expect(asked).toEqual(['forbids_delegation', 'answer_only', 'plan_only', 'parallel_outcomes', 'size']);
     expect(context(r)).toContain('Execution shape: orchestrated');
     expect(state(env).current.shape).toBe('orchestrated');
+  });
+
+  it('A21: records the shape the request asked for, and applies the configured one', async () => {
+    const cfg = join(tmp, 'gate-a-recommend.json');
+    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', admissionQuestionShape: 'atomic' }));
+    const dir = join(tmp, 'trace-recommend');
+    const env = makeEnv({ JEV_GATE_CONFIG: cfg, JEV_GATE_TRACE_DIR: dir });
+    const fetchImpl = vi.fn(async () => {
+      const answers: Record<string, unknown> = { size: { type: 'score', score: 3, confidence: 0.9 } };
+      for (const k of ['forbids_delegation', 'answer_only']) answers[k] = { type: 'noul', noul: 0.05 };
+      // The request says, loudly, that it wants separate outcomes and only a plan.
+      for (const k of ['plan_only', 'parallel_outcomes']) answers[k] = { type: 'noul', noul: 0.95 };
+      return new Response(JSON.stringify({ model: 'jev-1.13.0', answers, usage: { input_tokens: 10, output_tokens: 2 } }), { status: 200 });
+    });
+    await run(env, promptEvent(), fetchImpl);
+    const record = readdirSync(dir)
+      .map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>)
+      .find((x) => x['phase'] === 'admission_result');
+    expect(record?.['recommendation']).toEqual({ admitted_shape: 'hierarchy', plan_only: true, applied: false });
+    // The generation keeps the configured shape. `execution` is set only where `admittedShape` is `single`, so the
+    // default leaves it unset -- and a recommendation of `hierarchy` must not start writing it either. Following the
+    // request's own words is what a measurement would have to justify; `applied: false` records that it was not.
+    expect(state(env).current.execution).toBeUndefined();
   });
 
   it('records prompt_id_absent and creates no orchestrated state', async () => {
@@ -1902,6 +1925,117 @@ describe('planner routing input (2026-09-20)', () => {
     // A direct-shape generation recovered at the planner dispatch has no stored request to carry.
     await run(env, plannerPre({ prompt: 'Plan this. Keep it small.' }), fetchImpl);
     expect(states[0]?.['request']).toBe('Plan this. Keep it small.');
+  });
+});
+
+describe('prior failure classification (A22)', () => {
+  const atomicEnv = (name: string, extra: Record<string, string> = {}): ReturnType<typeof makeEnv> => {
+    const cfg = join(tmp, `${name}.json`);
+    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', routeQuestionShape: 'atomic' }));
+    return makeEnv({ JEV_GATE_CONFIG: cfg, ...extra });
+  };
+  const atomicJev = (asked: string[][]): ReturnType<typeof vi.fn> =>
+    vi.fn(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)) as { questions: Record<string, unknown> };
+      const keys = Object.keys(body.questions);
+      const answers: Record<string, unknown> = {};
+      if (keys.includes('execution')) answers['execution'] = { type: 'choice', choice: 'orchestrated', probabilities: { orchestrated: 0.95, direct: 0.02, needs_context: 0.02, abstain: 0.01 }, confidence: 0.95 };
+      if (keys.includes('planning_tier')) answers['planning_tier'] = { type: 'choice', choice: 'deep', probabilities: { deep: 0.9, frontier: 0.05, abstain: 0.05 }, confidence: 0.9 };
+      if (keys.includes('fully_specified')) {
+        asked.push(keys);
+        for (const k of keys) answers[k] = { type: 'noul', noul: k === 'prior_environment_failure' || k === 'prior_missing_information' ? 0.9 : 0.05 };
+      }
+      return new Response(JSON.stringify({ model: 'jev-1.13.0', answers, usage: { input_tokens: 10, output_tokens: 2 } }), { status: 200 });
+    });
+
+  it('asks what an earlier attempt reported only when there was one', async () => {
+    const asked: string[][] = [];
+    const env = atomicEnv('atomic-prior');
+    const fetchImpl = atomicJev(asked);
+    await seedPlanned(env, PLAN_REPLY, fetchImpl);
+    await run(env, preEvent('Agent', agentInput()), fetchImpl);
+    await run(env, workerPost('toolu_1', workerReply({ checks: [{ check_id: 'c1', result: 'fail', note: 'ordering' }] })), fetchImpl);
+    await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t1 attempt=2]\nredo' }), { tool_use_id: 'toolu_2' }), fetchImpl);
+    expect(asked).toHaveLength(2);
+    // A question about what an earlier attempt reported, asked where there was no earlier attempt, is a question
+    // about nothing that every first dispatch pays for.
+    expect(asked[0]).not.toContain('prior_environment_failure');
+    expect(asked[1]).toContain('prior_environment_failure');
+    expect(asked[1]).toContain('prior_report_format');
+  });
+
+  it('records the kinds the rework reported and applies none of them', async () => {
+    const asked: string[][] = [];
+    const dir = join(tmp, 'trace-prior-failure');
+    const env = atomicEnv('atomic-prior-trace', { JEV_GATE_TRACE_DIR: dir });
+    const fetchImpl = atomicJev(asked);
+    await seedPlanned(env, PLAN_REPLY, fetchImpl);
+    await run(env, preEvent('Agent', agentInput()), fetchImpl);
+    await run(env, workerPost('toolu_1', workerReply({ checks: [{ check_id: 'c1', result: 'fail', note: 'ordering' }] })), fetchImpl);
+    const rework = await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t1 attempt=2]\nredo' }), { tool_use_id: 'toolu_2' }), fetchImpl);
+    // Trace file names are random by design, so the read order is not the write order; `written_at` is.
+    const records = readdirSync(dir)
+      .map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>)
+      .filter((r) => r['phase'] === 'pre_result' && r['role'] === 'worker' && r['attempted'] === true)
+      .sort((a, b) => String(a['written_at']).localeCompare(String(b['written_at'])));
+    expect(records[0]?.['prior_failure']).toBeUndefined();
+    expect(records[1]?.['prior_failure']).toEqual({ kinds: ['prior_environment_failure', 'prior_missing_information'], unreadable: [], applied: false });
+    // Two kinds that would argue against spending a stronger model are recorded, and the tier is still whatever the
+    // acted-on facts decided. Reading a worker's account of its own failure as established cause is the error.
+    expect(rework.kind).toBe('patch');
+    expect((records[1]?.['decision'] as Record<string, unknown>)['tier']).toBe('standard');
+  });
+});
+
+describe('worker routing input (2026-09-20)', () => {
+  /**
+   * A20: the worker receives the brief, the admitted request, the contract, the constraints, the predecessors and any
+   * prior attempt. Every one of those was a field of the Gate B state except the request -- the one that says what the
+   * work is for -- so the tier for a task was chosen from a covering note and a contract hash.
+   */
+  const routeStates = (states: Array<Record<string, unknown>>): ReturnType<typeof fakeJev> =>
+    fakeJev({ onCall: (q, st) => void ((q.includes('route') || q.includes('fully_specified')) && states.push(st)) });
+
+  it('sends the admitted request to Gate B as the field the worker receives it as', async () => {
+    const env = makeEnv();
+    const states: Array<Record<string, unknown>> = [];
+    const fetchImpl = routeStates(states);
+    await seedPlanned(env, PLAN_REPLY, fetchImpl);
+    await run(env, preEvent('Agent', agentInput()), fetchImpl);
+    expect(states).toHaveLength(1);
+    expect(states[0]?.['request']).toBe('Build a settings page, migrate the store and wire the two together.');
+    // The brief keeps its own field: substituting one for the other hides half the packet either way.
+    expect(states[0]?.['original_prompt']).toContain('[JEV_TASK');
+  });
+
+  it('says a request was not carried rather than that there was none', async () => {
+    const env = makeEnv();
+    const states: Array<Record<string, unknown>> = [];
+    const fetchImpl = routeStates(states);
+    // A17: a generation the coordinator started at the planner is orchestrated, so it was started by a request even
+    // though this hook never saw one. Sending null there would tell the gate the work has no statement of purpose,
+    // which is a different and false claim; the marker says the gate is reading a packet with a hole in it.
+    await run(env, plannerPre({ prompt: 'Plan this.' }), fetchImpl);
+    await run(env, plannerPost(PLAN_REPLY), fetchImpl);
+    await run(env, preEvent('Agent', agentInput()), fetchImpl);
+    expect(states.at(-1)?.['request']).toBe('omitted');
+  });
+
+  it('drops the request with its marker rather than losing the gate call to the byte bound', async () => {
+    const env = makeEnv();
+    const states: Array<Record<string, unknown>> = [];
+    const fetchImpl = routeStates(states);
+    // Quotes double under JSON escaping, so this fits the worker's composed bound (65,536) and not the gate
+    // request's (131,072). Measured: the state without a request is 3,958 bytes, so the window is narrow and real.
+    const big = '"'.repeat(64_000);
+    await run(env, promptEvent({ prompt: big }), fetchImpl);
+    await run(env, plannerPre(), fetchImpl);
+    await run(env, plannerPost(PLAN_REPLY), fetchImpl);
+    const dispatch = await run(env, preEvent('Agent', agentInput()), fetchImpl);
+    // The dispatch still happens and the gate still ran: without the drop it would have been refused outright and the
+    // call would have kept the coordinator's tier with no routing at all.
+    expect(dispatch.kind).toBe('patch');
+    expect(states.at(-1)?.['request']).toBe('omitted');
   });
 });
 

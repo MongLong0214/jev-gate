@@ -8,6 +8,7 @@ import {
   buildAtomicAdmissionRequest,
   decideAdmission,
   decideAdmissionAtomic,
+  shapeRecommendation,
   type AdmissionDecision,
   type AdmissionState,
 } from './admission.js';
@@ -18,6 +19,8 @@ import {
   decidePlannerRoute,
   decideWorkerRoute,
   decideWorkerRouteAtomic,
+  PRIOR_FAILURE_FACT_QUESTIONS,
+  priorFailureClassification,
   WORKER_FACT_QUESTIONS,
   type PlannerRouteDecision,
   type WorkerRouteDecision,
@@ -474,6 +477,10 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
           return {
             forced: false,
             decision: { shape: admitted.shape, decided: admitted.decided, reason: admitted.reason, changed_default: admitted.decided && admitted.shape === 'orchestrated' },
+            // A21: recorded beside the decision, never inside it. `applied: false` is the whole point of the field:
+            // the configured `admittedShape` still decides, and this says what the request asked for so that a later
+            // run can ask whether following it would have been better.
+            ...(atomicAdmission ? { recommendation: shapeRecommendation(outcome.response.answers) } : {}),
           };
         },
       );
@@ -756,7 +763,9 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     }
     let routed: WorkerRouteDecision | null = null;
     const gate = await callGate(
-      routeRequest(task, plan.constraints, predecessors, eligibility.prompt, eligibility.tier, priorAttempt),
+      // A20: the worker will read the brief, the request, the contract and any prior attempt. Every one of those is a
+      // field of this state except the request, which was the one that says what the work is for.
+      routeRequest(task, plan.constraints, predecessors, eligibility.prompt, eligibility.tier, priorAttempt, carriedRequest),
       'pre_intent',
       'pre_result',
       {
@@ -769,14 +778,19 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         prior_attempt_omitted: carried === 'omitted',
         tool_input: summarizeToolInput(eligibility.input),
       },
-      routeAnswerKeys,
+      routeAnswerKeys(priorAttempt !== null),
       (outcome) => {
         // A preserve keeps the model the coordinator called, which the hook never names, so the recorded model is
         // null there rather than the tier's model -- the two are not the same claim.
         if (!outcome.ok) return { decision: { action: 'preserve', tier: eligibility.tier, reason: outcome.code, changed_default: false, model: null } };
         routed = routeDecision(outcome.response.answers, eligibility.tier);
         // A17 item 7: without Jev this dispatch would have run on the profile the coordinator called.
-        return { decision: { action: routed.action, tier: routed.tier, reason: routed.reason, changed_default: routed.action === 'patch' && routed.tier !== eligibility.tier, model: routed.action === 'patch' ? config.models[routed.tier] : null } };
+        return {
+          decision: { action: routed.action, tier: routed.tier, reason: routed.reason, changed_default: routed.action === 'patch' && routed.tier !== eligibility.tier, model: routed.action === 'patch' ? config.models[routed.tier] : null },
+          // A22: recorded on a rework only, and read by no policy. The tier this dispatch got was decided by the
+          // facts above; this says what the previous attempt reported was wrong with it.
+          ...(atomicRoute && priorAttempt !== null ? { prior_failure: priorFailureClassification(outcome.response.answers) } : {}),
+        };
       },
     );
     // T2: the router failing is a valid call that keeps its profile; the turn moving on is a call that must not run.
@@ -801,7 +815,9 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
    * shape, so an observation says which questions were actually asked.
    */
   const atomicRoute = config.routeQuestionShape === 'atomic';
-  const routeAnswerKeys: string[] = atomicRoute ? Object.keys(WORKER_FACT_QUESTIONS) : ['route', 'upgrade_basis'];
+  /** A22: the prior-failure facts exist only on a rework, so the whitelist that records answers has to follow. */
+  const routeAnswerKeys = (hasPrior: boolean): string[] =>
+    atomicRoute ? [...Object.keys(WORKER_FACT_QUESTIONS), ...(hasPrior ? Object.keys(PRIOR_FAILURE_FACT_QUESTIONS) : [])] : ['route', 'upgrade_basis'];
   const routeRequest = (
     task: PlannedTask,
     constraints: string[],
@@ -809,11 +825,24 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     prompt: string,
     tier: Tier,
     prior: Parameters<typeof buildWorkerRouteRequest>[6] = null,
+    request: string | 'omitted' | null = null,
     // Widened on purpose: the two shapes carry different question sets, and callGate is indifferent to which.
-  ): JevRequest<WorkerRouteState, Record<string, unknown>> =>
-    atomicRoute
-      ? buildAtomicWorkerRouteRequest(task, constraints, predecessors, prompt, tier, config, prior)
-      : buildWorkerRouteRequest(task, constraints, predecessors, prompt, tier, config, prior);
+  ): JevRequest<WorkerRouteState, Record<string, unknown>> => {
+    const build = (req: string | 'omitted' | null): JevRequest<WorkerRouteState, Record<string, unknown>> =>
+      atomicRoute
+        ? buildAtomicWorkerRouteRequest(task, constraints, predecessors, prompt, tier, config, prior, req)
+        : buildWorkerRouteRequest(task, constraints, predecessors, prompt, tier, config, prior, req);
+    const built = build(request);
+    /**
+     * A20/T9: carrying the request can push a dispatch over the gate's own bound, where `callGate` would refuse the
+     * call outright and the dispatch would keep the coordinator's tier. Dropping the request with its marker leaves a
+     * gate that still routes on the contract, which is what it had before this field existed, and says that it is
+     * reading a packet the worker is not. The size that decides this is the gate's, not the worker's: the worker's
+     * copy has already been composed under its own bound.
+     */
+    if (typeof request !== 'string' || Buffer.byteLength(JSON.stringify(built), 'utf8') <= MAX_REQUEST_BYTES) return built;
+    return build('omitted');
+  };
   const routeDecision = (answers: Record<string, unknown>, tier: Tier): WorkerRouteDecision =>
     atomicRoute ? decideWorkerRouteAtomic(answers, tier) : decideWorkerRoute(answers, config.routeConfidenceFloor, tier);
 
@@ -917,15 +946,15 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       contract_hash: '',
     };
     let routed: WorkerRouteDecision | null = null;
-    // A19: `original_prompt` is what Gate B reads the work off. On this shape the brief is not the work -- the request
-    // is -- and there is no contract in the state to make up the difference, so the request is what is classified.
-    const routedPrompt = carried !== null && carried !== 'omitted' ? carried : eligibility.prompt;
+    // A19/A20: the brief is not the work on this shape -- the request is -- and the adhoc contract above is empty, so
+    // without the request the gate classifies a covering note. It is sent as the field the worker receives it as
+    // rather than in place of the brief: substituting one for the other hid half of the packet either way.
     const gate = await callGate(
-      routeRequest(task, [], [], routedPrompt, eligibility.tier),
+      routeRequest(task, [], [], eligibility.prompt, eligibility.tier, null, carried),
       'pre_intent',
       'pre_result',
       { role: 'worker', task_id: 'adhoc', called_tier: eligibility.tier, tool_input: summarizeToolInput(eligibility.input) },
-      routeAnswerKeys,
+      routeAnswerKeys(false),
       (outcome) => {
         // A preserve keeps the model the coordinator called, which the hook never names, so the recorded model is
         // null there rather than the tier's model -- the two are not the same claim.

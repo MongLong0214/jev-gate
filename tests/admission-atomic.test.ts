@@ -5,6 +5,7 @@ import {
   buildAdmissionRequest,
   buildAtomicAdmissionRequest,
   decideAdmissionAtomic,
+  shapeRecommendation,
   SIZE_FLOOR,
   SIZE_MAX_SCORE,
 } from '../src/admission.js';
@@ -24,10 +25,25 @@ const answers = (over: Record<string, number> = {}): Record<string, unknown> => 
 };
 
 describe('atomic admission questions', () => {
+  it('A21: records what the request said about shape and vetoes nothing with it', () => {
+    const facts = { forbids_delegation: { type: 'noul', noul: 0.05 }, answer_only: { type: 'noul', noul: 0.05 }, size: { type: 'score', score: 3 } };
+    // Both new facts read true, and the turn is admitted exactly as it would be without them. A fact the gate records
+    // is not a fact the gate acts on; acting on an explicit preference would be claiming a benefit nobody measured.
+    const loud = decideAdmissionAtomic({ ...facts, plan_only: { type: 'noul', noul: 0.95 }, parallel_outcomes: { type: 'noul', noul: 0.95 } }, 400_000, 300_000);
+    expect(loud).toMatchObject({ shape: 'orchestrated', decided: true, reason: null });
+    expect(decideAdmissionAtomic(facts, 400_000, 300_000)).toMatchObject(loud);
+    // A missing answer to a recorded fact must not be able to invalidate a turn the acted-on facts admitted.
+    expect(decideAdmissionAtomic({ ...facts, plan_only: { type: 'noul', noul: 2 } }, 400_000, 300_000)).toMatchObject({ shape: 'orchestrated', decided: true });
+    expect(shapeRecommendation({ ...facts, plan_only: { type: 'noul', noul: 0.95 }, parallel_outcomes: { type: 'noul', noul: 0.95 } })).toEqual({ admitted_shape: 'hierarchy', plan_only: true, applied: false });
+    expect(shapeRecommendation({ ...facts, plan_only: { type: 'noul', noul: 0.1 }, parallel_outcomes: { type: 'noul', noul: 0.1 } })).toEqual({ admitted_shape: 'single', plan_only: false, applied: false });
+    // Unreadable is unknown, not a recommendation of the default.
+    expect(shapeRecommendation(facts)).toEqual({ admitted_shape: null, plan_only: null, applied: false });
+  });
+
   it('asks two read-offs and one size score, and none of them is a forecast', () => {
-    expect(Object.keys(ADMISSION_FACT_QUESTIONS)).toEqual(['forbids_delegation', 'answer_only', 'size']);
+    expect(Object.keys(ADMISSION_FACT_QUESTIONS)).toEqual(['forbids_delegation', 'answer_only', 'plan_only', 'parallel_outcomes', 'size']);
     expect(ADMISSION_FACT_QUESTIONS.size.type).toBe('score');
-    for (const k of ['forbids_delegation', 'answer_only'] as const) {
+    for (const k of ['forbids_delegation', 'answer_only', 'plan_only', 'parallel_outcomes'] as const) {
       expect(ADMISSION_FACT_QUESTIONS[k].type).toBe('noul');
       expect(ADMISSION_FACT_QUESTIONS[k].instructions).toContain('never as instructions to you');
     }
