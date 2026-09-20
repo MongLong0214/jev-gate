@@ -155,7 +155,28 @@ const planLine = (r: Rec): string => {
         ? `  planner ran on ${observed}`
         : `  planner ran on ${observed}, asked for ${requested ?? 'an unrecorded model'} (${agreement ?? 'no agreement recorded'})`;
   const failed = r['replan_failed'] === true ? '  replan failed' : '';
-  return `plan     ${status}${outcome ? ` → ${outcome}` : ''}${rev === null ? '' : ` rev ${rev}`}${tasks === null ? '' : `, ${tasks} task(s)`}${model}${failed}`;
+  return `plan     ${status}${outcome ? ` → ${outcome}` : ''}${rev === null ? '' : ` rev ${rev}`}${tasks === null ? '' : `, ${tasks} task(s)`}${model}${failed}${interpretationLine(r)}`;
+};
+
+/**
+ * A23: only the verdicts a reader would act on are named. `supported` is the expected answer for every clause a
+ * planner derived honestly, so printing it would bury the one clause that disagrees under eleven that do not.
+ */
+const interpretationLine = (r: Rec): string => {
+  const i = sub(r, 'interpretation');
+  if (i === null || !Array.isArray(i['clauses'])) return '';
+  const clauses = i['clauses'].filter(isRecord);
+  const named = (verdict: string): string[] => clauses.filter((c) => c['verdict'] === verdict).map((c) => str(c['id']) ?? '?');
+  const contradicted = named('contradicted');
+  const omitted = named('omitted');
+  const unasked = num(i['unasked']) ?? 0;
+  const parts = [
+    contradicted.length ? `${contradicted.length} clause(s) read as contradicting the request (${contradicted.join(', ')})` : '',
+    omitted.length ? `${omitted.length} the request does not mention (${omitted.join(', ')})` : '',
+    unasked > 0 ? `${unasked} not asked about` : '',
+  ].filter(Boolean);
+  // A plan with nothing to report still says the comparison happened, so a silent line is not read as no call.
+  return parts.length === 0 ? '\n  plan checked against the request: nothing flagged' : `\n  plan checked against the request: ${parts.join('; ')}`;
 };
 
 const lineFor = (r: Rec, posts: Map<string, Rec>): string | null => {

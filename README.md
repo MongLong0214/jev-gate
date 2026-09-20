@@ -169,6 +169,7 @@ Optional config at `~/.config/jev-gate/config.json` (or `JEV_GATE_CONFIG`), `JEV
   "plannerDefaultTier": "deep", "maxParallelWorkers": 1, "guardAllowTools": [],
   "delegationDepthFloor": 300000, "maxTasksPerPlan": 10,
   "admissionQuestionShape": "atomic", "routeQuestionShape": "composite",
+  "planInterpretation": false,
   "models": { "fast": "haiku", "standard": "sonnet", "deep": "opus", "frontier": "fable" } }
 ```
 
@@ -178,7 +179,7 @@ no account access. The three floors are uncalibrated policy values; `resultConfi
 kept only for config compatibility, since the normal path no longer makes the Gate C call it used to gate.
 `guardAllowTools` adds read-only tools your project needs during orchestration, for example an MCP reader.
 
-The last four keys are optional and default to the values shown, so an existing V5 file keeps its behaviour unedited.
+The last five keys are optional and default to the values shown, so an existing V5 file keeps its behaviour unedited.
 
 `delegationDepthFloor` is how much context your session must already be carrying before Gate A is asked anything at
 all. Below it the turn is direct and no request is sent. It exists because depth, not the request, is what decides
@@ -202,6 +203,23 @@ the job turn~~ is **withdrawn (2026-09-20)**: the ladder built to establish that
 comparisons and the deepest rung reversed sign
 (`bench/results/v5-depth-ladder-2026-09-19/RESULTS-WORK-RERUN-2026-09-20.md`). **Gate B stays `composite`**, because
 its atomic shape has one end-to-end observation and every figure above was measured with the composite one.
+
+`planInterpretation` turns on one extra request, made after the planner replies and before its plan is adopted. It
+compares each constraint the plan wrote down against your own request and the interfaces the plan proposes, and answers
+per clause: `supported`, `contradicted`, `omitted` or `unknown`. **It rejects nothing.** The classification is written
+to the trace beside the adopted plan, carrying `applied: false`, and the plan goes ahead exactly as it would have
+without the call — including when a clause comes back `contradicted`, and including when the call fails.
+
+It exists because a plan is the last place a discrepancy is still visible: the task contract, the checks and the
+receipt are all derived from the plan, so a plan that quietly answers a different question than you asked is confirmed
+by every stage after it. That was the observed hierarchy failure in
+[`bench/results/v5-context-vs-decomposition-s1-2026-09-19/`](bench/results/v5-context-vs-decomposition-s1-2026-09-19/):
+workers implemented an incorrect output shape, wrote tests that agreed with it, and produced accepted receipts.
+
+It is off by default for two reasons. It costs a request per candidate plan and decides nothing, and nobody has shown
+that this classifier is better than reading the plan yourself — a false objection on a correct plan would cost more
+than the missed one it replaced. At most 12 clauses are asked about; a plan carrying more says how many went unasked
+rather than dropping them silently.
 
 Job state lives in `$XDG_STATE_HOME/jev-gate/jobs/` (`~/.local/state/jev-gate/jobs/` by default), one file per session,
 containing your plan and task text. Delete the directory to remove it; a superseded job is kept as history inside its own

@@ -131,6 +131,13 @@ export interface ConfigV5 {
    * keeps its behaviour. `single` removes the planner, the plan, Gate B's contract and the replan path from the turn.
    */
   admittedShape: AdmittedShape;
+  /**
+   * A23: whether a candidate plan is compared against the request before it is adopted. One extra HTTP call per
+   * candidate plan, and it changes nothing: the classification is recorded and no plan is ever rejected by it.
+   * Off by default and optional in a config file, because a call that costs money and decides nothing is not
+   * something a deployed file should start making without being edited.
+   */
+  planInterpretation: boolean;
 }
 
 export interface ChoiceAnswer<K extends string> {

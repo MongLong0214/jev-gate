@@ -31,7 +31,7 @@ const write = (name: string, value: unknown): string => {
 describe('validateConfig', () => {
   it('accepts a full V5 file and a partial file over the defaults', () => {
     // routeQuestionShape is optional in a file and defaulted, so a deployed V5 config keeps composite Gate B.
-    expect(validateConfig(V5)).toEqual({ ok: true, config: { ...V5, mode: 'auto', routeQuestionShape: 'composite', delegationDepthFloor: 300_000, admissionQuestionShape: 'atomic', maxTasksPerPlan: 10, admittedShape: 'hierarchy' } });
+    expect(validateConfig(V5)).toEqual({ ok: true, config: { ...V5, mode: 'auto', routeQuestionShape: 'composite', delegationDepthFloor: 300_000, admissionQuestionShape: 'atomic', maxTasksPerPlan: 10, admittedShape: 'hierarchy', planInterpretation: false } });
     const partial = validateConfig({ version: 5, mode: 'native', plannerDefaultTier: 'frontier', models: { deep: 'claude-opus-5' } });
     expect(partial.ok).toBe(true);
     if (!partial.ok) return;
@@ -91,6 +91,9 @@ describe('validateConfig', () => {
     // A19: absence defaults to hierarchy, an explicit wrong value is an error -- the same rule as the two shapes above.
     ['admitted shape', { version: 5, admittedShape: 'solo' }, 'admittedShape must be'],
     ['admitted shape null', { version: 5, admittedShape: null }, 'admittedShape must be'],
+    // A23: a call that costs money and decides nothing does not start being made because a key was mistyped.
+    ['plan interpretation', { version: 5, planInterpretation: 'on' }, 'planInterpretation must be'],
+    ['plan interpretation null', { version: 5, planInterpretation: null }, 'planInterpretation must be'],
     ['task ceiling of zero', { version: 5, maxTasksPerPlan: 0 }, 'maxTasksPerPlan must be'],
     ['task ceiling above the hard limit', { version: 5, maxTasksPerPlan: 65 }, 'maxTasksPerPlan must be'],
   ])('rejects an invalid %s', (_name, raw, message) => {

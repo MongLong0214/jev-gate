@@ -28,6 +28,14 @@ everything below and is what a new agent should check out.
 >    already writing: why a turn stayed native and at what confidence, the tier each dispatch was routed to, the model
 >    asked for against the one the host resolved, and the worker-reported verdict. Nothing about the pipeline changed;
 >    reading it no longer means opening benchmark JSON by hand (`fbf0b59`).
+> 4. **Four facts the gate now reads and acts on none of.** An external review named four Jev sites; all four are
+>    implemented and every one carries `applied: false`. The worker route gate now gets the request itself, not only
+>    the coordinator's brief (`08fe8fb`). Gate A records what the request said about shape. A rework records what the
+>    earlier attempt reported was wrong with it. And `planInterpretation` (off by default) compares each constraint a
+>    candidate plan wrote down against the request before the plan is adopted, per clause — the one place a plan that
+>    answers a different question than you asked is still visible, since the contract, the checks and the receipt are
+>    all derived from it afterwards. **None of the four rejects, vetoes or upgrades anything.** The same review said
+>    the evidence does not establish that these classifiers beat the coordinator, and nothing here claims otherwise.
 
 **On `wide-validators`, the product works in its shipped configuration and saves tokens without costing time.** With
 `mode: auto` and no config file, Gate A reads how deep the session is, asks its read-off questions, and admits real

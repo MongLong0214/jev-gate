@@ -59,6 +59,7 @@ import {
   renderWorkerUnknown,
   STOP_REASON,
 } from './coordinator.js';
+import { buildPlanInterpretationRequest, classifyInterpretation, type PlanInterpretation } from './interpretation.js';
 import { callJev, MAX_REQUEST_BYTES, type JevOutcome, type JevRequest } from './jev.js';
 import type { BoundKind } from './job.js';
 import {
@@ -330,8 +331,8 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
   /** One attempt, intent before the request, result after it. A trace directory that cannot be written blocks the call. */
   const callGate = async <S, Q>(
     request: JevRequest<S, Q>,
-    intentPhase: 'admission_intent' | 'pre_intent',
-    resultPhase: 'admission_result' | 'pre_result',
+    intentPhase: 'admission_intent' | 'pre_intent' | 'interpretation_intent',
+    resultPhase: 'admission_result' | 'pre_result' | 'interpretation_result',
     intent: Record<string, unknown>,
     questionKeys: readonly string[],
     /** Applies the gate's policy and returns the closed decision fields to record (JG5-06 accounting). */
@@ -1057,9 +1058,42 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     const text = replyText(input.tool_response);
     const parsed = status === 'completed' ? parsePlannerReply(text, config.maxTasksPerPlan) : null;
     const agreement = plannerModelAgreement(gen.planner_tier, observedModel(input.tool_response));
+    /**
+     * A23: the one place a semantic discrepancy is still visible. Everything downstream -- the contract, the checks,
+     * the receipt -- is derived from this plan, so a plan that quietly answers a different request than the user's is
+     * confirmed by every later stage. The comparison happens here, between the reply parsing and the plan being
+     * adopted, and it rejects nothing: a false objection that blocks a correct plan costs more than a missed one.
+     *
+     * It is the only extra HTTP call in the product, and it is in the one hook that made none. The plugin's hook
+     * declarations give PostToolUse the same 5 s as PreToolUse, which is why the review's "two serial full-budget
+     * calls do not fit one hook" does not apply here: this hook's budget is otherwise entirely unspent.
+     */
+    const candidate = parsed && parsed.ok && parsed.value.status === 'ready' ? parsed.value : null;
+    let interpretation: PlanInterpretation | null = null;
+    let interpreted = false;
+    if (config.planInterpretation && candidate !== null && candidate.constraints.length > 0 && gen.request !== null && mode !== 'native' && apiKey) {
+      interpreted = true;
+      const built = buildPlanInterpretationRequest(gen.request, candidate.goal, candidate.constraints, candidate.tasks, config);
+      await callGate(
+        built.request,
+        'interpretation_intent',
+        'interpretation_result',
+        { role: 'planner', planner_tier: gen.planner_tier, clauses: built.clauses.length, constraints: candidate.constraints.length, tasks: candidate.tasks.length },
+        built.clauses.map((c) => c.id),
+        (outcome) => {
+          // A failed call leaves the plan unexamined, which is what every plan before this option existed had.
+          if (!outcome.ok) return { interpretation: null, skip_code: outcome.code };
+          interpretation = classifyInterpretation(outcome.response.answers, built.clauses, candidate.constraints.length);
+          return { interpretation };
+        },
+      );
+    }
     let context: string | null = null;
     const written = updateJob(deps.env, sessionId, (prev) => {
       if (!prev || prev.current.prompt_id !== gen.prompt_id) return null;
+      // T2/A23: an await happened before this lock only when the plan was interpreted, so the reservation this result
+      // closes is re-confirmed on that path alone. Without the call there is no window, and no recheck to pay for.
+      if (interpreted && own(prev.current.active, toolUseId) === undefined) return null;
       let next = release(prev.current, toolUseId);
       next = { ...next, planner_model: agreement };
       const reply = parsed && parsed.ok ? parsed.value : null;
@@ -1100,6 +1134,8 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
           planner_tier: gen.planner_tier,
           planner_model: { requested: gen.planner_tier === null ? null : config.models[gen.planner_tier], observed: observedModel(input.tool_response), agreement },
           retired_receipts: retired.length,
+          // A23: recorded beside the adopted plan, and read by nothing. `applied: false` is inside the value.
+          ...(interpretation === null ? {} : { interpretation }),
         });
         const history = retired.length ? [{ ...prev.current, plan: null, active: {}, receipts: retired, outcome: 'superseded' as const }, ...prev.history].slice(0, MAX_HISTORY) : prev.history;
         return { ...prev, current: next, history };

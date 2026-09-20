@@ -52,6 +52,46 @@ describe('explain (2026-09-20)', () => {
     expect(out).toContain('ran claude-sonnet-5, which is not the opus it asked for');
   });
 
+  it('names only the plan clauses a reader would act on', () => {
+    const out = render([
+      base('plan', 1, {
+        tool_use_id: 'toolu_p',
+        status: 'completed',
+        outcome: 'ready',
+        rev: 1,
+        tasks: 3,
+        interpretation: {
+          clauses: [
+            { id: 'c0', verdict: 'supported' },
+            { id: 'c1', verdict: 'contradicted' },
+            { id: 'c2', verdict: 'omitted' },
+            { id: 'c3', verdict: 'unknown' },
+          ],
+          unasked: 2,
+          applied: false,
+        },
+      }),
+    ]);
+    expect(out).toContain('1 clause(s) read as contradicting the request (c1)');
+    expect(out).toContain('1 the request does not mention (c2)');
+    expect(out).toContain('2 not asked about');
+    // `supported` is the expected answer, and an `unknown` asks for nothing; printing either buries the one clause
+    // that disagrees under the ones that do not.
+    expect(out).not.toContain('c0');
+    expect(out).not.toContain('c3');
+  });
+
+  it('says the comparison happened even when it flagged nothing', () => {
+    const out = render([base('plan', 1, { status: 'completed', outcome: 'ready', rev: 1, tasks: 1, interpretation: { clauses: [{ id: 'c0', verdict: 'supported' }], unasked: 0, applied: false } })]);
+    expect(out).toContain('plan checked against the request: nothing flagged');
+  });
+
+  it('says nothing about a plan recorded before the comparison existed', () => {
+    const out = render([base('plan', 1, { status: 'completed', outcome: 'ready', rev: 1, tasks: 1 })]);
+    // A record with no `interpretation` is a plan nothing checked, which is not the same claim as one checked clean.
+    expect(out).not.toContain('plan checked against the request');
+  });
+
   it('leaves a dispatch with no result unanswered rather than borrowing another dispatch result', () => {
     const out = render([
       dispatch(1, 'toolu_a', { decision: { action: 'patch', tier: 'deep', reason: null, changed_default: true, model: 'opus' } }),

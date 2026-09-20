@@ -21,7 +21,10 @@ export type TracePhase =
   | 'stop'
   /** jev-context-filter-mvp-r1 §10: the search filter's own pair, joined by a shared `request_id`. */
   | 'context_intent'
-  | 'context_result';
+  | 'context_result'
+  /** A23: the plan-interpretation pair, joined by a shared `request_id` like every other gate call. */
+  | 'interpretation_intent'
+  | 'interpretation_result';
 
 export interface TraceRecordBase {
   version: 5;

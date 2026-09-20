@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { GUARD_DENY_REASON, STOP_REASON } from '../src/coordinator.js';
 import { DENIALS_BEFORE_STOP } from '../src/brief.js';
 import { runHook, type HookDeps, type HookResult } from '../src/hook.js';
+import { CLAUSE_VERDICTS, MAX_INTERPRETATION_CLAUSES } from '../src/interpretation.js';
 import { jobPath, newGeneration, readJob, updateJob } from '../src/job.js';
 import { chainDepth, composeTaskPrompt, contractHash, MAX_COMPOSED_BYTES } from '../src/plan.js';
 import { ADMISSION_ANSWERS, PLANNER_ROUTE_ANSWERS, ROUTE_ANSWERS, UPGRADE_BASES, type JobState, type PlannedTask, type WorkerReply } from '../src/types.js';
@@ -2108,5 +2109,117 @@ describe('receipt selection and observation keys (2026-09-20)', () => {
     expect(answers['size']).toMatchObject({ type: 'score', score: 3, choice: null });
     expect(answers['forbids_delegation']).toMatchObject({ type: 'noul', noul: 0.07 });
     expect(answers['answer_only']).toMatchObject({ type: 'noul', noul: 0.02 });
+  });
+});
+
+// -----------------------------------------------------------------------------------------------------------------
+// A23: the plan is compared against the request before it is adopted, and the comparison decides nothing.
+// -----------------------------------------------------------------------------------------------------------------
+describe('plan interpretation (A23)', () => {
+  let a23Seq = 0;
+  const a23Env = (on: boolean, extra: Record<string, string> = {}): ReturnType<typeof makeEnv> => {
+    const cfg = join(tmp, `a23-${(a23Seq += 1)}.json`);
+    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', ...(on ? { planInterpretation: true } : {}) }));
+    return makeEnv({ JEV_GATE_CONFIG: cfg, ...extra });
+  };
+
+  /** Answers the clause questions by id; anything it does not recognise falls through to the ordinary double. */
+  const clauseJev = (verdict: (id: string) => string, seen: { keys: string[]; state: Record<string, unknown> }[] = []): ReturnType<typeof vi.fn> => {
+    const base = fakeJev();
+    return vi.fn(async (url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)) as { questions: Record<string, unknown>; state: Record<string, unknown> };
+      const keys = Object.keys(body.questions);
+      if (!keys.some((k) => /^c\d+$/.test(k))) return await (base as unknown as typeof fetch)(url, init);
+      seen.push({ keys, state: body.state });
+      const answers: Record<string, unknown> = {};
+      for (const k of keys) {
+        const winner = verdict(k);
+        answers[k] = { type: 'choice', choice: winner, probabilities: Object.fromEntries(CLAUSE_VERDICTS.map((v) => [v, v === winner ? 0.91 : 0.03])), confidence: 0.91 };
+      }
+      return new Response(JSON.stringify({ model: 'jev-1.13.0', answers, usage: { input_tokens: 10, output_tokens: 2 } }), { status: 200 });
+    });
+  };
+
+  const planRecords = (dir: string): Record<string, unknown>[] =>
+    readdirSync(dir)
+      .map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>)
+      .filter((r) => r['phase'] === 'plan')
+      .sort((a, b) => String(a['written_at']).localeCompare(String(b['written_at'])));
+
+  it('asks nothing extra unless the option is on', async () => {
+    const seen: { keys: string[]; state: Record<string, unknown> }[] = [];
+    const env = a23Env(false);
+    const fetchImpl = clauseJev(() => 'supported', seen);
+    await seedPlanned(env, PLAN_REPLY, fetchImpl);
+    // Two calls, both pre-existing: Gate A on the prompt and the planner route on the dispatch. The planner's
+    // PostToolUse made none before this option existed and still makes none.
+    expect(seen).toHaveLength(0);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(state(env).current.phase).toBe('planned');
+  });
+
+  it('compares each plan clause against the request and adopts the plan whatever it finds', async () => {
+    const seen: { keys: string[]; state: Record<string, unknown> }[] = [];
+    const dir = join(tmp, 'trace-a23-contradicted');
+    const env = a23Env(true, { JEV_GATE_TRACE_DIR: dir });
+    const fetchImpl = clauseJev(() => 'contradicted', seen);
+    await seedPlanned(env, PLAN_REPLY, fetchImpl);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.keys).toEqual(['c0']);
+    // The clause, the request it is compared against and the interfaces it is compared to are all in the state.
+    expect(seen[0]?.state['clauses']).toEqual([{ id: 'c0', constraint: 'keep the public API' }]);
+    expect(String(seen[0]?.state['request'])).toContain('Build a settings page');
+    expect((seen[0]?.state['proposed'] as { interfaces: string[] }[])[0]?.interfaces).toEqual(['createStore(): Store']);
+    // A contradiction is a finding for a reader, never a veto: the plan is adopted exactly as it would have been.
+    expect(state(env).current.phase).toBe('planned');
+    expect(state(env).current.plan?.rev).toBe(1);
+    const plan = planRecords(dir).at(-1);
+    expect(plan?.['interpretation']).toEqual({ clauses: [{ id: 'c0', verdict: 'contradicted' }], unasked: 0, applied: false });
+  });
+
+  it('bounds the clauses it asks about and says how many it did not ask', async () => {
+    const seen: { keys: string[]; state: Record<string, unknown> }[] = [];
+    const dir = join(tmp, 'trace-a23-bounded');
+    const env = a23Env(true, { JEV_GATE_TRACE_DIR: dir });
+    const fetchImpl = clauseJev((id) => (id === 'c0' ? 'omitted' : 'supported'), seen);
+    const constraints = Array.from({ length: MAX_INTERPRETATION_CLAUSES + 3 }, (_, i) => `constraint ${i}`);
+    await seedPlanned(env, { ...PLAN_REPLY, constraints }, fetchImpl);
+    expect(seen[0]?.keys).toHaveLength(MAX_INTERPRETATION_CLAUSES);
+    const interpretation = planRecords(dir).at(-1)?.['interpretation'] as { clauses: unknown[]; unasked: number };
+    expect(interpretation.clauses).toHaveLength(MAX_INTERPRETATION_CLAUSES);
+    // A clause dropped for size is named as unasked rather than silently absent, which is why the cap is on the
+    // clause count and not on the serialized bytes.
+    expect(interpretation.unasked).toBe(3);
+  });
+
+  it('adopts the plan when the comparison call fails', async () => {
+    const dir = join(tmp, 'trace-a23-failed');
+    const env = a23Env(true, { JEV_GATE_TRACE_DIR: dir });
+    const base = fakeJev();
+    const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)) as { questions: Record<string, unknown> };
+      if (Object.keys(body.questions).some((k) => /^c\d+$/.test(k))) return new Response('upstream is down', { status: 500 });
+      return await (base as unknown as typeof fetch)(url, init);
+    });
+    await seedPlanned(env, PLAN_REPLY, fetchImpl);
+    // A failed call leaves the plan unexamined, which is the state every plan was in before this option existed.
+    expect(state(env).current.phase).toBe('planned');
+    expect(state(env).current.plan?.rev).toBe(1);
+    expect(planRecords(dir).at(-1)?.['interpretation']).toBeUndefined();
+  });
+
+  it('does not adopt a plan whose reservation was released while the comparison was in flight', async () => {
+    const env = a23Env(true);
+    const base = fakeJev();
+    const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)) as { questions: Record<string, unknown> };
+      if (!Object.keys(body.questions).some((k) => /^c\d+$/.test(k))) return await (base as unknown as typeof fetch)(url, init);
+      // The window this call opens is real: nothing holds the job lock across it.
+      updateJob(env, 's1', (prev) => (prev === null ? null : { ...prev, current: { ...prev.current, active: {} } }));
+      return new Response(JSON.stringify({ model: 'jev-1.13.0', answers: { c0: { type: 'choice', choice: 'supported', probabilities: { supported: 0.9, contradicted: 0.04, omitted: 0.03, unknown: 0.03 }, confidence: 0.9 } }, usage: { input_tokens: 1, output_tokens: 1 } }), { status: 200 });
+    });
+    await seedPlanned(env, PLAN_REPLY, fetchImpl);
+    expect(state(env).current.plan).toBeNull();
+    expect(state(env).current.phase).toBe('planning');
   });
 });

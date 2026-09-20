@@ -39,6 +39,8 @@ export const DEFAULT_CONFIG: ConfigV5 = {
   maxTasksPerPlan: DEFAULT_MAX_TASKS_PER_PLAN,
   // A19: the shipped product. `single` is an arm under measurement, not a default anything is moving toward yet.
   admittedShape: 'hierarchy',
+  // A23: off. The call decides nothing, so its whole cost is the call, and nobody should pay it without asking.
+  planInterpretation: false,
 };
 
 /**
@@ -72,6 +74,7 @@ const V5_KEYS = new Set<string>([
   'admissionQuestionShape',
   'maxTasksPerPlan',
   'admittedShape',
+  'planInterpretation',
 ]);
 const LEGACY_MARKERS = ['uncertainTier', 'opusModel', 'frontierModel', 'confidenceFloor'];
 /** `resultConfidenceFloor` is a deprecated no-op (T11): it is still validated so a deployed file loads, and read by nothing. */
@@ -179,6 +182,10 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
     return { ok: false, error: `admittedShape must be one of ${ADMITTED_SHAPES.join(', ')}` };
   }
 
+  // A23: absence defaults to false; an explicit non-boolean is an error, like every other optional key here.
+  const planInterpretation = 'planInterpretation' in c ? c['planInterpretation'] : false;
+  if (typeof planInterpretation !== 'boolean') return { ok: false, error: 'planInterpretation must be a boolean' };
+
   const allow = c['guardAllowTools'];
   if (!Array.isArray(allow) || allow.some((t) => typeof t !== 'string' || !TOOL_NAME_RE.test(t))) {
     return { ok: false, error: `guardAllowTools must be an array of tool names matching ${TOOL_NAME_RE.source}` };
@@ -202,6 +209,7 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
       admissionQuestionShape: admissionShape as AdmissionQuestionShape,
       maxTasksPerPlan: maxTasks,
       admittedShape: admittedShape as AdmittedShape,
+      planInterpretation,
     },
   };
 };
