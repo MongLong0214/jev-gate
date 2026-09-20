@@ -1,0 +1,1466 @@
+{
+  "preregistration": "bench/results/v5-plan-silence-2026-09-20/PREREGISTRATION.md",
+  "generated_at": "2026-09-20T07:14:01.862Z",
+  "corpus": "/Users/isaac/projects/jev-gate/bench/results/v5-plan-silence-2026-09-20/corpus.json",
+  "verdicts": [
+    "stated",
+    "derived",
+    "filled",
+    "unknown"
+  ],
+  "max_entries_per_plan": 12,
+  "deadline_ms": 30000,
+  "cells": {
+    "located": 17,
+    "wanted": 17,
+    "ok": 17,
+    "invalid": 0,
+    "not_applicable": 0
+  },
+  "usage_totals": {
+    "requests": 17,
+    "input_tokens": 68144,
+    "output_tokens": 7537
+  },
+  "false_positive": {
+    "passing_cells": 15,
+    "passing_with_any_filled": 11
+  },
+  "results": [
+    {
+      "run": "v5-atomic",
+      "job": "wide-validators",
+      "arm": "jev_forced_orchestration",
+      "rep": 1,
+      "grade": "pass",
+      "grade_reason": null,
+      "request_verified": true,
+      "tasks": 12,
+      "chain_depth": 1,
+      "constraints": 5,
+      "clauses_asked": 5,
+      "clauses_unasked": 0,
+      "spec_interfaces_sent_unasked": 12,
+      "spec_data_shapes_absent": 48,
+      "spec_invariants_absent": 28,
+      "status": "ok",
+      "entries_total": 48,
+      "entries_asked": 12,
+      "entries_unasked": 36,
+      "filled": 1,
+      "counts": {
+        "stated": 2,
+        "derived": 9,
+        "filled": 1,
+        "unknown": 0
+      },
+      "verdicts": [
+        {
+          "id": "e0",
+          "task_id": "t-email",
+          "verdict": "stated"
+        },
+        {
+          "id": "e1",
+          "task_id": "t-email",
+          "verdict": "derived"
+        },
+        {
+          "id": "e2",
+          "task_id": "t-email",
+          "verdict": "stated"
+        },
+        {
+          "id": "e3",
+          "task_id": "t-email",
+          "verdict": "derived"
+        },
+        {
+          "id": "e4",
+          "task_id": "t-phone",
+          "verdict": "derived"
+        },
+        {
+          "id": "e5",
+          "task_id": "t-phone",
+          "verdict": "derived"
+        },
+        {
+          "id": "e6",
+          "task_id": "t-phone",
+          "verdict": "derived"
+        },
+        {
+          "id": "e7",
+          "task_id": "t-phone",
+          "verdict": "derived"
+        },
+        {
+          "id": "e8",
+          "task_id": "t-postcode",
+          "verdict": "derived"
+        },
+        {
+          "id": "e9",
+          "task_id": "t-postcode",
+          "verdict": "derived"
+        },
+        {
+          "id": "e10",
+          "task_id": "t-postcode",
+          "verdict": "derived"
+        },
+        {
+          "id": "e11",
+          "task_id": "t-postcode",
+          "verdict": "filled"
+        }
+      ],
+      "usage": {
+        "input_tokens": 3927,
+        "output_tokens": 535
+      },
+      "duration_ms": 563
+    },
+    {
+      "run": "v5-atomic",
+      "job": "wide-validators-loaded",
+      "arm": "jev_forced_orchestration",
+      "rep": 1,
+      "grade": "pass",
+      "grade_reason": null,
+      "request_verified": true,
+      "tasks": 4,
+      "chain_depth": 2,
+      "constraints": 5,
+      "clauses_asked": 5,
+      "clauses_unasked": 0,
+      "spec_interfaces_sent_unasked": 13,
+      "spec_data_shapes_absent": 9,
+      "spec_invariants_absent": 15,
+      "status": "ok",
+      "entries_total": 9,
+      "entries_asked": 9,
+      "entries_unasked": 0,
+      "filled": 3,
+      "counts": {
+        "stated": 0,
+        "derived": 6,
+        "filled": 3,
+        "unknown": 0
+      },
+      "verdicts": [
+        {
+          "id": "e0",
+          "task_id": "t1",
+          "verdict": "derived"
+        },
+        {
+          "id": "e1",
+          "task_id": "t1",
+          "verdict": "filled"
+        },
+        {
+          "id": "e2",
+          "task_id": "t1",
+          "verdict": "derived"
+        },
+        {
+          "id": "e3",
+          "task_id": "t2",
+          "verdict": "derived"
+        },
+        {
+          "id": "e4",
+          "task_id": "t2",
+          "verdict": "filled"
+        },
+        {
+          "id": "e5",
+          "task_id": "t2",
+          "verdict": "derived"
+        },
+        {
+          "id": "e6",
+          "task_id": "t3",
+          "verdict": "derived"
+        },
+        {
+          "id": "e7",
+          "task_id": "t3",
+          "verdict": "filled"
+        },
+        {
+          "id": "e8",
+          "task_id": "t3",
+          "verdict": "derived"
+        }
+      ],
+      "usage": {
+        "input_tokens": 3031,
+        "output_tokens": 399
+      },
+      "duration_ms": 640
+    },
+    {
+      "run": "v5-context-vs-decomposition-s1",
+      "job": "wide-validators-primed-30",
+      "arm": "jev_hierarchy",
+      "rep": 1,
+      "grade": "fail",
+      "grade_reason": "failed: empty_rejected_everywhere",
+      "request_verified": true,
+      "tasks": 3,
+      "chain_depth": 2,
+      "constraints": 5,
+      "clauses_asked": 5,
+      "clauses_unasked": 0,
+      "spec_interfaces_sent_unasked": 12,
+      "spec_data_shapes_absent": 8,
+      "spec_invariants_absent": 7,
+      "status": "ok",
+      "entries_total": 8,
+      "entries_asked": 8,
+      "entries_unasked": 0,
+      "filled": 0,
+      "counts": {
+        "stated": 4,
+        "derived": 4,
+        "filled": 0,
+        "unknown": 0
+      },
+      "verdicts": [
+        {
+          "id": "e0",
+          "task_id": "t1",
+          "verdict": "stated"
+        },
+        {
+          "id": "e1",
+          "task_id": "t1",
+          "verdict": "derived"
+        },
+        {
+          "id": "e2",
+          "task_id": "t1",
+          "verdict": "derived"
+        },
+        {
+          "id": "e3",
+          "task_id": "t1",
+          "verdict": "stated"
+        },
+        {
+          "id": "e4",
+          "task_id": "t2",
+          "verdict": "stated"
+        },
+        {
+          "id": "e5",
+          "task_id": "t2",
+          "verdict": "derived"
+        },
+        {
+          "id": "e6",
+          "task_id": "t2",
+          "verdict": "derived"
+        },
+        {
+          "id": "e7",
+          "task_id": "t2",
+          "verdict": "stated"
+        }
+      ],
+      "usage": {
+        "input_tokens": 2667,
+        "output_tokens": 359
+      },
+      "duration_ms": 229
+    },
+    {
+      "run": "v5-context-vs-decomposition-s1",
+      "job": "wide-validators-primed-30",
+      "arm": "jev_hierarchy",
+      "rep": 2,
+      "grade": "pass",
+      "grade_reason": null,
+      "request_verified": true,
+      "tasks": 2,
+      "chain_depth": 1,
+      "constraints": 4,
+      "clauses_asked": 4,
+      "clauses_unasked": 0,
+      "spec_interfaces_sent_unasked": 12,
+      "spec_data_shapes_absent": 8,
+      "spec_invariants_absent": 8,
+      "status": "ok",
+      "entries_total": 8,
+      "entries_asked": 8,
+      "entries_unasked": 0,
+      "filled": 4,
+      "counts": {
+        "stated": 0,
+        "derived": 4,
+        "filled": 4,
+        "unknown": 0
+      },
+      "verdicts": [
+        {
+          "id": "e0",
+          "task_id": "t1",
+          "verdict": "derived"
+        },
+        {
+          "id": "e1",
+          "task_id": "t1",
+          "verdict": "filled"
+        },
+        {
+          "id": "e2",
+          "task_id": "t1",
+          "verdict": "derived"
+        },
+        {
+          "id": "e3",
+          "task_id": "t1",
+          "verdict": "filled"
+        },
+        {
+          "id": "e4",
+          "task_id": "t2",
+          "verdict": "derived"
+        },
+        {
+          "id": "e5",
+          "task_id": "t2",
+          "verdict": "filled"
+        },
+        {
+          "id": "e6",
+          "task_id": "t2",
+          "verdict": "derived"
+        },
+        {
+          "id": "e7",
+          "task_id": "t2",
+          "verdict": "filled"
+        }
+      ],
+      "usage": {
+        "input_tokens": 2628,
+        "output_tokens": 355
+      },
+      "duration_ms": 215
+    },
+    {
+      "run": "v5-ctx-0919",
+      "job": "wide-validators",
+      "arm": "jev_forced_orchestration",
+      "rep": 1,
+      "grade": "pass",
+      "grade_reason": null,
+      "request_verified": true,
+      "tasks": 1,
+      "chain_depth": 1,
+      "constraints": 4,
+      "clauses_asked": 4,
+      "clauses_unasked": 0,
+      "spec_interfaces_sent_unasked": 8,
+      "spec_data_shapes_absent": 4,
+      "spec_invariants_absent": 5,
+      "status": "ok",
+      "entries_total": 4,
+      "entries_asked": 4,
+      "entries_unasked": 0,
+      "filled": 2,
+      "counts": {
+        "stated": 0,
+        "derived": 2,
+        "filled": 2,
+        "unknown": 0
+      },
+      "verdicts": [
+        {
+          "id": "e0",
+          "task_id": "t1",
+          "verdict": "derived"
+        },
+        {
+          "id": "e1",
+          "task_id": "t1",
+          "verdict": "filled"
+        },
+        {
+          "id": "e2",
+          "task_id": "t1",
+          "verdict": "derived"
+        },
+        {
+          "id": "e3",
+          "task_id": "t1",
+          "verdict": "filled"
+        }
+      ],
+      "usage": {
+        "input_tokens": 1561,
+        "output_tokens": 179
+      },
+      "duration_ms": 299
+    },
+    {
+      "run": "v5-ctx-0919",
+      "job": "wide-validators-loaded",
+      "arm": "jev_forced_orchestration",
+      "rep": 1,
+      "grade": "pass",
+      "grade_reason": null,
+      "request_verified": true,
+      "tasks": 6,
+      "chain_depth": 2,
+      "constraints": 6,
+      "clauses_asked": 6,
+      "clauses_unasked": 0,
+      "spec_interfaces_sent_unasked": 12,
+      "spec_data_shapes_absent": 12,
+      "spec_invariants_absent": 15,
+      "status": "ok",
+      "entries_total": 12,
+      "entries_asked": 12,
+      "entries_unasked": 0,
+      "filled": 3,
+      "counts": {
+        "stated": 6,
+        "derived": 3,
+        "filled": 3,
+        "unknown": 0
+      },
+      "verdicts": [
+        {
+          "id": "e0",
+          "task_id": "t1",
+          "verdict": "filled"
+        },
+        {
+          "id": "e1",
+          "task_id": "t1",
+          "verdict": "stated"
+        },
+        {
+          "id": "e2",
+          "task_id": "t1",
+          "verdict": "stated"
+        },
+        {
+          "id": "e3",
+          "task_id": "t1",
+          "verdict": "derived"
+        },
+        {
+          "id": "e4",
+          "task_id": "t2",
+          "verdict": "filled"
+        },
+        {
+          "id": "e5",
+          "task_id": "t2",
+          "verdict": "stated"
+        },
+        {
+          "id": "e6",
+          "task_id": "t2",
+          "verdict": "stated"
+        },
+        {
+          "id": "e7",
+          "task_id": "t2",
+          "verdict": "derived"
+        },
+        {
+          "id": "e8",
+          "task_id": "t3",
+          "verdict": "filled"
+        },
+        {
+          "id": "e9",
+          "task_id": "t3",
+          "verdict": "stated"
+        },
+        {
+          "id": "e10",
+          "task_id": "t3",
+          "verdict": "stated"
+        },
+        {
+          "id": "e11",
+          "task_id": "t3",
+          "verdict": "derived"
+        }
+      ],
+      "usage": {
+        "input_tokens": 3817,
+        "output_tokens": 539
+      },
+      "duration_ms": 264
+    },
+    {
+      "run": "v5-job2-orbit",
+      "job": "orbit-core-primed-30",
+      "arm": "jev_hierarchy",
+      "rep": 1,
+      "grade": "fail",
+      "grade_reason": "failed: modules_load,clock_steps_and_accumulator,clock_pause_and_time_scale,physics_energy_drift_bounded,physics_reversible,camera_transforms_invertible,camera_zoom_at_keeps_anchor,camera_pan_shifts_view,hud_formats_exact_strings,test_suite_passes; not evaluated: collisions_conserve_mass_and_momentum,collisions_transitive_and_order_independent,snapshot_round_trip_exact,snapshot_rejects_unknown_fields,simulation_replay_bit_identical,simulation_restore_continues_run",
+      "request_verified": true,
+      "tasks": 4,
+      "chain_depth": 2,
+      "constraints": 7,
+      "clauses_asked": 7,
+      "clauses_unasked": 0,
+      "spec_interfaces_sent_unasked": 22,
+      "spec_data_shapes_absent": 13,
+      "spec_invariants_absent": 17,
+      "status": "ok",
+      "entries_total": 13,
+      "entries_asked": 12,
+      "entries_unasked": 1,
+      "filled": 3,
+      "counts": {
+        "stated": 6,
+        "derived": 2,
+        "filled": 3,
+        "unknown": 1
+      },
+      "verdicts": [
+        {
+          "id": "e0",
+          "task_id": "t1",
+          "verdict": "stated"
+        },
+        {
+          "id": "e1",
+          "task_id": "t1",
+          "verdict": "derived"
+        },
+        {
+          "id": "e2",
+          "task_id": "t1",
+          "verdict": "stated"
+        },
+        {
+          "id": "e3",
+          "task_id": "t2",
+          "verdict": "stated"
+        },
+        {
+          "id": "e4",
+          "task_id": "t2",
+          "verdict": "unknown"
+        },
+        {
+          "id": "e5",
+          "task_id": "t2",
+          "verdict": "stated"
+        },
+        {
+          "id": "e6",
+          "task_id": "t3",
+          "verdict": "filled"
+        },
+        {
+          "id": "e7",
+          "task_id": "t3",
+          "verdict": "filled"
+        },
+        {
+          "id": "e8",
+          "task_id": "t3",
+          "verdict": "stated"
+        },
+        {
+          "id": "e9",
+          "task_id": "t3",
+          "verdict": "derived"
+        },
+        {
+          "id": "e10",
+          "task_id": "t4",
+          "verdict": "filled"
+        },
+        {
+          "id": "e11",
+          "task_id": "t4",
+          "verdict": "stated"
+        }
+      ],
+      "usage": {
+        "input_tokens": 6462,
+        "output_tokens": 539
+      },
+      "duration_ms": 365
+    },
+    {
+      "run": "v5-job2-orbit",
+      "job": "orbit-core-primed-30",
+      "arm": "jev_hierarchy",
+      "rep": 2,
+      "grade": "pass",
+      "grade_reason": null,
+      "request_verified": true,
+      "tasks": 5,
+      "chain_depth": 3,
+      "constraints": 6,
+      "clauses_asked": 6,
+      "clauses_unasked": 0,
+      "spec_interfaces_sent_unasked": 16,
+      "spec_data_shapes_absent": 11,
+      "spec_invariants_absent": 21,
+      "status": "ok",
+      "entries_total": 11,
+      "entries_asked": 11,
+      "entries_unasked": 0,
+      "filled": 0,
+      "counts": {
+        "stated": 9,
+        "derived": 2,
+        "filled": 0,
+        "unknown": 0
+      },
+      "verdicts": [
+        {
+          "id": "e0",
+          "task_id": "t1",
+          "verdict": "stated"
+        },
+        {
+          "id": "e1",
+          "task_id": "t1",
+          "verdict": "stated"
+        },
+        {
+          "id": "e2",
+          "task_id": "t1",
+          "verdict": "stated"
+        },
+        {
+          "id": "e3",
+          "task_id": "t2",
+          "verdict": "stated"
+        },
+        {
+          "id": "e4",
+          "task_id": "t2",
+          "verdict": "stated"
+        },
+        {
+          "id": "e5",
+          "task_id": "t3",
+          "verdict": "stated"
+        },
+        {
+          "id": "e6",
+          "task_id": "t3",
+          "verdict": "stated"
+        },
+        {
+          "id": "e7",
+          "task_id": "t3",
+          "verdict": "stated"
+        },
+        {
+          "id": "e8",
+          "task_id": "t4",
+          "verdict": "derived"
+        },
+        {
+          "id": "e9",
+          "task_id": "t4",
+          "verdict": "stated"
+        },
+        {
+          "id": "e10",
+          "task_id": "t5",
+          "verdict": "derived"
+        }
+      ],
+      "usage": {
+        "input_tokens": 6173,
+        "output_tokens": 497
+      },
+      "duration_ms": 254
+    },
+    {
+      "run": "v5-par-A",
+      "job": "wide-validators",
+      "arm": "jev_forced_orchestration",
+      "rep": 1,
+      "grade": "pass",
+      "grade_reason": null,
+      "request_verified": true,
+      "tasks": 5,
+      "chain_depth": 2,
+      "constraints": 5,
+      "clauses_asked": 5,
+      "clauses_unasked": 0,
+      "spec_interfaces_sent_unasked": 13,
+      "spec_data_shapes_absent": 13,
+      "spec_invariants_absent": 18,
+      "status": "ok",
+      "entries_total": 13,
+      "entries_asked": 12,
+      "entries_unasked": 1,
+      "filled": 7,
+      "counts": {
+        "stated": 0,
+        "derived": 5,
+        "filled": 7,
+        "unknown": 0
+      },
+      "verdicts": [
+        {
+          "id": "e0",
+          "task_id": "t1",
+          "verdict": "filled"
+        },
+        {
+          "id": "e1",
+          "task_id": "t1",
+          "verdict": "derived"
+        },
+        {
+          "id": "e2",
+          "task_id": "t1",
+          "verdict": "filled"
+        },
+        {
+          "id": "e3",
+          "task_id": "t2",
+          "verdict": "filled"
+        },
+        {
+          "id": "e4",
+          "task_id": "t2",
+          "verdict": "derived"
+        },
+        {
+          "id": "e5",
+          "task_id": "t2",
+          "verdict": "filled"
+        },
+        {
+          "id": "e6",
+          "task_id": "t3",
+          "verdict": "filled"
+        },
+        {
+          "id": "e7",
+          "task_id": "t3",
+          "verdict": "derived"
+        },
+        {
+          "id": "e8",
+          "task_id": "t3",
+          "verdict": "derived"
+        },
+        {
+          "id": "e9",
+          "task_id": "t4",
+          "verdict": "filled"
+        },
+        {
+          "id": "e10",
+          "task_id": "t4",
+          "verdict": "derived"
+        },
+        {
+          "id": "e11",
+          "task_id": "t4",
+          "verdict": "filled"
+        }
+      ],
+      "usage": {
+        "input_tokens": 3706,
+        "output_tokens": 533
+      },
+      "duration_ms": 262
+    },
+    {
+      "run": "v5-par-A",
+      "job": "wide-validators-loaded",
+      "arm": "jev_forced_orchestration",
+      "rep": 1,
+      "grade": "pass",
+      "grade_reason": null,
+      "request_verified": true,
+      "tasks": 5,
+      "chain_depth": 2,
+      "constraints": 4,
+      "clauses_asked": 4,
+      "clauses_unasked": 0,
+      "spec_interfaces_sent_unasked": 13,
+      "spec_data_shapes_absent": 17,
+      "spec_invariants_absent": 16,
+      "status": "ok",
+      "entries_total": 17,
+      "entries_asked": 12,
+      "entries_unasked": 5,
+      "filled": 3,
+      "counts": {
+        "stated": 3,
+        "derived": 6,
+        "filled": 3,
+        "unknown": 0
+      },
+      "verdicts": [
+        {
+          "id": "e0",
+          "task_id": "t1",
+          "verdict": "derived"
+        },
+        {
+          "id": "e1",
+          "task_id": "t1",
+          "verdict": "stated"
+        },
+        {
+          "id": "e2",
+          "task_id": "t1",
+          "verdict": "derived"
+        },
+        {
+          "id": "e3",
+          "task_id": "t1",
+          "verdict": "filled"
+        },
+        {
+          "id": "e4",
+          "task_id": "t2",
+          "verdict": "derived"
+        },
+        {
+          "id": "e5",
+          "task_id": "t2",
+          "verdict": "stated"
+        },
+        {
+          "id": "e6",
+          "task_id": "t2",
+          "verdict": "derived"
+        },
+        {
+          "id": "e7",
+          "task_id": "t2",
+          "verdict": "filled"
+        },
+        {
+          "id": "e8",
+          "task_id": "t3",
+          "verdict": "derived"
+        },
+        {
+          "id": "e9",
+          "task_id": "t3",
+          "verdict": "stated"
+        },
+        {
+          "id": "e10",
+          "task_id": "t3",
+          "verdict": "derived"
+        },
+        {
+          "id": "e11",
+          "task_id": "t3",
+          "verdict": "filled"
+        }
+      ],
+      "usage": {
+        "input_tokens": 3909,
+        "output_tokens": 536
+      },
+      "duration_ms": 291
+    },
+    {
+      "run": "v5-par-B",
+      "job": "wide-validators",
+      "arm": "jev_forced_orchestration",
+      "rep": 1,
+      "grade": "pass",
+      "grade_reason": null,
+      "request_verified": true,
+      "tasks": 5,
+      "chain_depth": 2,
+      "constraints": 5,
+      "clauses_asked": 5,
+      "clauses_unasked": 0,
+      "spec_interfaces_sent_unasked": 12,
+      "spec_data_shapes_absent": 16,
+      "spec_invariants_absent": 8,
+      "status": "ok",
+      "entries_total": 16,
+      "entries_asked": 12,
+      "entries_unasked": 4,
+      "filled": 0,
+      "counts": {
+        "stated": 9,
+        "derived": 3,
+        "filled": 0,
+        "unknown": 0
+      },
+      "verdicts": [
+        {
+          "id": "e0",
+          "task_id": "t_group_a",
+          "verdict": "derived"
+        },
+        {
+          "id": "e1",
+          "task_id": "t_group_a",
+          "verdict": "stated"
+        },
+        {
+          "id": "e2",
+          "task_id": "t_group_a",
+          "verdict": "stated"
+        },
+        {
+          "id": "e3",
+          "task_id": "t_group_a",
+          "verdict": "stated"
+        },
+        {
+          "id": "e4",
+          "task_id": "t_group_b",
+          "verdict": "derived"
+        },
+        {
+          "id": "e5",
+          "task_id": "t_group_b",
+          "verdict": "stated"
+        },
+        {
+          "id": "e6",
+          "task_id": "t_group_b",
+          "verdict": "stated"
+        },
+        {
+          "id": "e7",
+          "task_id": "t_group_b",
+          "verdict": "stated"
+        },
+        {
+          "id": "e8",
+          "task_id": "t_group_c",
+          "verdict": "derived"
+        },
+        {
+          "id": "e9",
+          "task_id": "t_group_c",
+          "verdict": "stated"
+        },
+        {
+          "id": "e10",
+          "task_id": "t_group_c",
+          "verdict": "stated"
+        },
+        {
+          "id": "e11",
+          "task_id": "t_group_c",
+          "verdict": "stated"
+        }
+      ],
+      "usage": {
+        "input_tokens": 3609,
+        "output_tokens": 542
+      },
+      "duration_ms": 262
+    },
+    {
+      "run": "v5-par-B",
+      "job": "wide-validators-loaded",
+      "arm": "jev_forced_orchestration",
+      "rep": 1,
+      "grade": "pass",
+      "grade_reason": null,
+      "request_verified": true,
+      "tasks": 5,
+      "chain_depth": 1,
+      "constraints": 7,
+      "clauses_asked": 7,
+      "clauses_unasked": 0,
+      "spec_interfaces_sent_unasked": 12,
+      "spec_data_shapes_absent": 4,
+      "spec_invariants_absent": 17,
+      "status": "ok",
+      "entries_total": 4,
+      "entries_asked": 4,
+      "entries_unasked": 0,
+      "filled": 0,
+      "counts": {
+        "stated": 0,
+        "derived": 4,
+        "filled": 0,
+        "unknown": 0
+      },
+      "verdicts": [
+        {
+          "id": "e0",
+          "task_id": "t_validators_group_a",
+          "verdict": "derived"
+        },
+        {
+          "id": "e1",
+          "task_id": "t_validators_group_b",
+          "verdict": "derived"
+        },
+        {
+          "id": "e2",
+          "task_id": "t_validators_group_c",
+          "verdict": "derived"
+        },
+        {
+          "id": "e3",
+          "task_id": "t_validators_group_d",
+          "verdict": "derived"
+        }
+      ],
+      "usage": {
+        "input_tokens": 1745,
+        "output_tokens": 179
+      },
+      "duration_ms": 239
+    },
+    {
+      "run": "v5-replan-bound",
+      "job": "orbit-core-primed-30",
+      "arm": "jev_hierarchy",
+      "rep": 1,
+      "grade": "pass",
+      "grade_reason": null,
+      "request_verified": true,
+      "tasks": 5,
+      "chain_depth": 2,
+      "constraints": 8,
+      "clauses_asked": 8,
+      "clauses_unasked": 0,
+      "spec_interfaces_sent_unasked": 16,
+      "spec_data_shapes_absent": 13,
+      "spec_invariants_absent": 21,
+      "status": "ok",
+      "entries_total": 13,
+      "entries_asked": 12,
+      "entries_unasked": 1,
+      "filled": 2,
+      "counts": {
+        "stated": 9,
+        "derived": 1,
+        "filled": 2,
+        "unknown": 0
+      },
+      "verdicts": [
+        {
+          "id": "e0",
+          "task_id": "t1",
+          "verdict": "stated"
+        },
+        {
+          "id": "e1",
+          "task_id": "t1",
+          "verdict": "stated"
+        },
+        {
+          "id": "e2",
+          "task_id": "t1",
+          "verdict": "filled"
+        },
+        {
+          "id": "e3",
+          "task_id": "t2",
+          "verdict": "stated"
+        },
+        {
+          "id": "e4",
+          "task_id": "t2",
+          "verdict": "filled"
+        },
+        {
+          "id": "e5",
+          "task_id": "t3",
+          "verdict": "stated"
+        },
+        {
+          "id": "e6",
+          "task_id": "t3",
+          "verdict": "stated"
+        },
+        {
+          "id": "e7",
+          "task_id": "t4",
+          "verdict": "derived"
+        },
+        {
+          "id": "e8",
+          "task_id": "t4",
+          "verdict": "stated"
+        },
+        {
+          "id": "e9",
+          "task_id": "t4",
+          "verdict": "stated"
+        },
+        {
+          "id": "e10",
+          "task_id": "t5",
+          "verdict": "stated"
+        },
+        {
+          "id": "e11",
+          "task_id": "t5",
+          "verdict": "stated"
+        }
+      ],
+      "usage": {
+        "input_tokens": 6315,
+        "output_tokens": 542
+      },
+      "duration_ms": 291
+    },
+    {
+      "run": "v5-replan-bound",
+      "job": "orbit-core-primed-30",
+      "arm": "jev_hierarchy",
+      "rep": 2,
+      "grade": "pass",
+      "grade_reason": null,
+      "request_verified": true,
+      "tasks": 4,
+      "chain_depth": 2,
+      "constraints": 6,
+      "clauses_asked": 6,
+      "clauses_unasked": 0,
+      "spec_interfaces_sent_unasked": 22,
+      "spec_data_shapes_absent": 11,
+      "spec_invariants_absent": 18,
+      "status": "ok",
+      "entries_total": 11,
+      "entries_asked": 11,
+      "entries_unasked": 0,
+      "filled": 0,
+      "counts": {
+        "stated": 9,
+        "derived": 1,
+        "filled": 0,
+        "unknown": 1
+      },
+      "verdicts": [
+        {
+          "id": "e0",
+          "task_id": "t1",
+          "verdict": "stated"
+        },
+        {
+          "id": "e1",
+          "task_id": "t1",
+          "verdict": "stated"
+        },
+        {
+          "id": "e2",
+          "task_id": "t2",
+          "verdict": "stated"
+        },
+        {
+          "id": "e3",
+          "task_id": "t2",
+          "verdict": "stated"
+        },
+        {
+          "id": "e4",
+          "task_id": "t2",
+          "verdict": "stated"
+        },
+        {
+          "id": "e5",
+          "task_id": "t2",
+          "verdict": "stated"
+        },
+        {
+          "id": "e6",
+          "task_id": "t3",
+          "verdict": "derived"
+        },
+        {
+          "id": "e7",
+          "task_id": "t3",
+          "verdict": "stated"
+        },
+        {
+          "id": "e8",
+          "task_id": "t3",
+          "verdict": "stated"
+        },
+        {
+          "id": "e9",
+          "task_id": "t4",
+          "verdict": "stated"
+        },
+        {
+          "id": "e10",
+          "task_id": "t4",
+          "verdict": "unknown"
+        }
+      ],
+      "usage": {
+        "input_tokens": 6349,
+        "output_tokens": 497
+      },
+      "duration_ms": 247
+    },
+    {
+      "run": "v5-replan-bound",
+      "job": "orbit-core-primed-30",
+      "arm": "jev_hierarchy",
+      "rep": 3,
+      "grade": "pass",
+      "grade_reason": null,
+      "request_verified": true,
+      "tasks": 5,
+      "chain_depth": 2,
+      "constraints": 7,
+      "clauses_asked": 7,
+      "clauses_unasked": 0,
+      "spec_interfaces_sent_unasked": 24,
+      "spec_data_shapes_absent": 13,
+      "spec_invariants_absent": 21,
+      "status": "ok",
+      "entries_total": 13,
+      "entries_asked": 12,
+      "entries_unasked": 1,
+      "filled": 1,
+      "counts": {
+        "stated": 11,
+        "derived": 0,
+        "filled": 1,
+        "unknown": 0
+      },
+      "verdicts": [
+        {
+          "id": "e0",
+          "task_id": "t1",
+          "verdict": "stated"
+        },
+        {
+          "id": "e1",
+          "task_id": "t1",
+          "verdict": "stated"
+        },
+        {
+          "id": "e2",
+          "task_id": "t2",
+          "verdict": "stated"
+        },
+        {
+          "id": "e3",
+          "task_id": "t2",
+          "verdict": "stated"
+        },
+        {
+          "id": "e4",
+          "task_id": "t3",
+          "verdict": "stated"
+        },
+        {
+          "id": "e5",
+          "task_id": "t3",
+          "verdict": "stated"
+        },
+        {
+          "id": "e6",
+          "task_id": "t3",
+          "verdict": "stated"
+        },
+        {
+          "id": "e7",
+          "task_id": "t4",
+          "verdict": "stated"
+        },
+        {
+          "id": "e8",
+          "task_id": "t4",
+          "verdict": "filled"
+        },
+        {
+          "id": "e9",
+          "task_id": "t4",
+          "verdict": "stated"
+        },
+        {
+          "id": "e10",
+          "task_id": "t5",
+          "verdict": "stated"
+        },
+        {
+          "id": "e11",
+          "task_id": "t5",
+          "verdict": "stated"
+        }
+      ],
+      "usage": {
+        "input_tokens": 6441,
+        "output_tokens": 544
+      },
+      "duration_ms": 278
+    },
+    {
+      "run": "v5-tier-e2e",
+      "job": "wide-validators",
+      "arm": "jev_forced_orchestration",
+      "rep": 1,
+      "grade": "pass",
+      "grade_reason": null,
+      "request_verified": true,
+      "tasks": 3,
+      "chain_depth": 1,
+      "constraints": 5,
+      "clauses_asked": 5,
+      "clauses_unasked": 0,
+      "spec_interfaces_sent_unasked": 12,
+      "spec_data_shapes_absent": 12,
+      "spec_invariants_absent": 12,
+      "status": "ok",
+      "entries_total": 12,
+      "entries_asked": 12,
+      "entries_unasked": 0,
+      "filled": 3,
+      "counts": {
+        "stated": 6,
+        "derived": 3,
+        "filled": 3,
+        "unknown": 0
+      },
+      "verdicts": [
+        {
+          "id": "e0",
+          "task_id": "t1",
+          "verdict": "derived"
+        },
+        {
+          "id": "e1",
+          "task_id": "t1",
+          "verdict": "stated"
+        },
+        {
+          "id": "e2",
+          "task_id": "t1",
+          "verdict": "stated"
+        },
+        {
+          "id": "e3",
+          "task_id": "t1",
+          "verdict": "filled"
+        },
+        {
+          "id": "e4",
+          "task_id": "t2",
+          "verdict": "derived"
+        },
+        {
+          "id": "e5",
+          "task_id": "t2",
+          "verdict": "stated"
+        },
+        {
+          "id": "e6",
+          "task_id": "t2",
+          "verdict": "stated"
+        },
+        {
+          "id": "e7",
+          "task_id": "t2",
+          "verdict": "filled"
+        },
+        {
+          "id": "e8",
+          "task_id": "t3",
+          "verdict": "derived"
+        },
+        {
+          "id": "e9",
+          "task_id": "t3",
+          "verdict": "stated"
+        },
+        {
+          "id": "e10",
+          "task_id": "t3",
+          "verdict": "stated"
+        },
+        {
+          "id": "e11",
+          "task_id": "t3",
+          "verdict": "filled"
+        }
+      ],
+      "usage": {
+        "input_tokens": 3777,
+        "output_tokens": 539
+      },
+      "duration_ms": 305
+    },
+    {
+      "run": "v5-tier-e2e",
+      "job": "wide-validators-loaded",
+      "arm": "jev_forced_orchestration",
+      "rep": 1,
+      "grade": "pass",
+      "grade_reason": null,
+      "request_verified": true,
+      "tasks": 1,
+      "chain_depth": 1,
+      "constraints": 4,
+      "clauses_asked": 4,
+      "clauses_unasked": 0,
+      "spec_interfaces_sent_unasked": 2,
+      "spec_data_shapes_absent": 5,
+      "spec_invariants_absent": 4,
+      "status": "ok",
+      "entries_total": 5,
+      "entries_asked": 5,
+      "entries_unasked": 0,
+      "filled": 1,
+      "counts": {
+        "stated": 0,
+        "derived": 4,
+        "filled": 1,
+        "unknown": 0
+      },
+      "verdicts": [
+        {
+          "id": "e0",
+          "task_id": "t1",
+          "verdict": "derived"
+        },
+        {
+          "id": "e1",
+          "task_id": "t1",
+          "verdict": "derived"
+        },
+        {
+          "id": "e2",
+          "task_id": "t1",
+          "verdict": "derived"
+        },
+        {
+          "id": "e3",
+          "task_id": "t1",
+          "verdict": "derived"
+        },
+        {
+          "id": "e4",
+          "task_id": "t1",
+          "verdict": "filled"
+        }
+      ],
+      "usage": {
+        "input_tokens": 2027,
+        "output_tokens": 223
+      },
+      "duration_ms": 248
+    }
+  ]
+}
