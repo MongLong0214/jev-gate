@@ -1,0 +1,63 @@
+{
+ "all_transcripts": {
+  "files": 20869,
+  "sessions_with_usage": 461,
+  "turns": 268322,
+  "turns_at_or_above_300K": 183861,
+  "sessions_at_or_above_300K": 69,
+  "peak_turn_anywhere": 999947,
+  "bands": {
+   "<100K": 18278,
+   "100-200K": 35079,
+   "200-250K": 16105,
+   "250-300K": 14999,
+   ">=300K": 183861
+  },
+  "compaction_events": 295,
+  "compaction_height": {
+   "min": 164878,
+   "p50": 964841,
+   "p90": 999434,
+   "max": 999947
+  }
+ },
+ "since_plugin_live_2026_09_19": {
+  "transcripts": 174,
+  "reaching_300K": 53,
+  "turns": 70872,
+  "turns_at_or_above_floor": 45309,
+  "top_real_sessions": [
+   {
+    "project": "repo-factory",
+    "sid": "41439a5d",
+    "turns": 28932,
+    "deep": 22106,
+    "peak": 967028
+   },
+   {
+    "project": "commitlore",
+    "sid": "8db38ace",
+    "turns": 12550,
+    "deep": 9449,
+    "peak": 966614
+   },
+   {
+    "project": "logic-pro-mcp",
+    "sid": "60ecf478",
+    "turns": 11206,
+    "deep": 8765,
+    "peak": 969353
+   },
+   {
+    "project": "agent-operator-score",
+    "sid": "48bdee6b",
+    "turns": 2178,
+    "deep": 1437,
+    "peak": 965622
+   }
+  ]
+ },
+ "definition": "cache_read_input_tokens + cache_creation_input_tokens + input_tokens, sidechain lines skipped (src/depth.ts)",
+ "floor": 300000,
+ "measured_at": "2026-09-20T07:35Z"
+}
