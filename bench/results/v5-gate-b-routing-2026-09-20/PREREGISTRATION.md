@@ -1,6 +1,21 @@
 # Pre-registration: does Gate B routing help at a fixed dispatch boundary? — 2026-09-20
 
-**Status: registered, not run.** Running it spends money and needs the owner's approval.
+**Status: superseded before it ran, 2026-09-20.** The owner approved the spend the same day. It was
+not run, and it can no longer be run as written, for two separate reasons:
+
+1. **The arms do not exist.** `fixed_standard` and `jev_atomic` are not in `ALL_ARMS`
+   (`src/bench/run.ts:21,28`), and every arm that does exist drives a full `claude -p` session with
+   the coordinator in the loop — the one thing §Design excludes by construction. Building them needs
+   a fidelity decision this registration never made: how a worker is dispatched without the host's
+   Agent tool.
+2. **The code changed under it.** A21 and A22 (`08fe8fb`) added questions to the atomic admission and
+   worker-route sets, so `jev_atomic` no longer names the question set this document was written
+   against. Rule 8 below forbids moving a rule after seeing results; it says nothing about a
+   registration whose subject moved, and the honest reading is the same — **this document is a record
+   of a question asked on 2026-09-20, not a description of the current code.**
+
+Anything measured here needs a new pre-registration written against the arms and question sets that
+exist when it is written. Nothing below is edited; it stands as it was registered.
 
 ## Why this question and not the last one
 
