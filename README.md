@@ -151,8 +151,15 @@ CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 \
 claude --model sonnet --plugin-dir "$PLUGIN_DIR"
 ```
 
-Type normally. There is no `/jev` command. The two environment settings request the foreground, non-fork launch profile
-the plugin is verified against; they are scoped to this command and are not written into your settings.
+Type normally. There is no `/jev` command.
+
+**`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` is required, not advisory.** A worker brief is eligible only when the Agent
+call is in the foreground, and an interactive session defaults to fork mode where the host omits `run_in_background`
+entirely — so without this variable every brief is refused as `not_foreground` and an admitted job never reaches a
+worker. `CLAUDE_CODE_FORK_SUBAGENT=1` is refused for the same reason. Both settings are scoped to this command and are
+not written into your settings; the cost is real, because forcing the foreground means subagents in that session no
+longer run in the background. `doctor` reports the profile, and a session started without it looks identical from the
+outside to one where the gate simply declined.
 
 **Put the key where the launcher reads it, not only where you type.** The hook reads the environment of the `claude`
 process, and an interactive-only rc file (`~/.zshrc`, `~/.bashrc`) is not read by a non-interactive shell, so a session
