@@ -140,8 +140,8 @@ npm ci
 npm run build
 PLUGIN_DIR="$PWD"
 
-# Set TYPESAFE_API_KEY in this shell with your local secret workflow — never in chat, an issue or a committed file.
-# The hook does not load a project's .env.
+# Set TYPESAFE_API_KEY with your local secret workflow — never in chat, an issue or a committed file.
+# The hook does not load a project's .env, and an interactive-only rc file is not enough — see below.
 JEV_GATE_MODE=auto node dist/cli.js doctor      # diagnostics only, no inference
 
 cd /path/to/your/project
@@ -153,6 +153,13 @@ claude --model sonnet --plugin-dir "$PLUGIN_DIR"
 
 Type normally. There is no `/jev` command. The two environment settings request the foreground, non-fork launch profile
 the plugin is verified against; they are scoped to this command and are not written into your settings.
+
+**Put the key where the launcher reads it, not only where you type.** The hook reads the environment of the `claude`
+process, and an interactive-only rc file (`~/.zshrc`, `~/.bashrc`) is not read by a non-interactive shell, so a session
+started by a launcher, an IDE, or a `tmux new-session` command string comes up without the key. For zsh the file always
+read is `~/.zshenv`; confirm with `zsh -c 'echo ${TYPESAFE_API_KEY:+set}'`. This failure is silent by design — a missing
+key is `key_missing` and `auto` preserves every eligible call — so `doctor` passing in your terminal is not evidence
+that the hook has the key.
 
 | Mode | What runs | Jev |
 |---|---|---|
