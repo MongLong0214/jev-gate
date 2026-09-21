@@ -25,14 +25,31 @@ transcripts. The packed-entrypoint test earned its keep immediately: `dist/hook.
 into `runHook`, so `--lean` never reached the profile check and only the in-process tests could see the mismatch
 path at all.
 
+**What live execution then established (2026-09-21, ~$7.2 of an authorized $25):**
+
+- The installed host does what the design assumed: `model: inherit` resolves to the root's own
+  `claude-sonnet-5`, the worker starts in a fresh context rather than a fork, project `CLAUDE.md` reaches it, the
+  9280-byte packet arrives intact, and a marker with no packet produces `handoff_unavailable` with no tool call and
+  no file. A controlled A/B settled the economically important one: an 8737-byte difference in the worker's prompt
+  moved root context by 318 tokens, so **the packet is not charged to the root's context window**.
+  `bench/results/v5-lean-host-2026-09-21/`.
+- **Two defects that no offline test could have caught**, because every offline test answers 200 from a double.
+  Requests were bounded by bytes when the provider bounds tokens, and the first token estimate was calibrated on
+  prose when real transcript content bills 1.7 bytes per token. Until both were fixed, every realistic session
+  400'd and the feature could not fire at all outside a test.
+- **The depth fixtures cannot measure this feature.** Their priming turn ends "이 읽기는 네가 직접 해라.
+  서브에이전트나 다른 워커에게 넘기지 마라", so `handoff_scope: forbidden` is the correct answer and `jev_lean`
+  can never dispatch in them. A measurement needs new cases that build removable history without prohibiting
+  delegation. `bench/results/v5-lean-measure-2026-09-21/`.
+
 **What is not:**
 
-- **No installed-host observation.** Nobody has watched `model: inherit` resolve, checked whether the patched prompt
-  echoes back into root history, confirmed which project instructions the executor actually loads, or run the
-  hook-disabled marker-only case against a real executor. Those need paid sessions and none were authorized.
-- **No efficacy measurement at all.** The three #29 arms (`native_auto`, `recent_packet`, `jev_lean`) exist in the
-  runner under `--arms lean` and have never been executed. No token, cost, quality or time figure for `lean` exists.
-  A smaller packet is a byte diagnostic, not a saving.
+- **Host observation is n=1 per question.** One host version, one model alias, one call shape. The executor's tool
+  list is its own self-report and disagrees with its frontmatter, unexplained. Root compliance was seen as ignore
+  once and comply once under an explicit instruction; that is not a compliance rate.
+- **No efficacy measurement.** Three runs were started and all three were stopped without a result; the first two
+  on the defects above, the third because the fixture forbids delegation. No token, cost, quality or time figure
+  for `lean` exists. A smaller packet is a byte diagnostic, not a saving.
 - **Policy constants are uncalibrated.** Action confidence `.8` and omission confidence `.9` are the initial v1.1
   values, not measured accuracies.
 
