@@ -573,6 +573,13 @@ const COMPARISONS: Array<[string, string, CriterionKind]> = [
   ['native_hierarchy', 'sonnet_native', 'none'],
   ['sonnet_gated', 'sonnet_native', 'none'],
   ['sonnet_gated', 'frontier_raw', 'none'],
+  /**
+   * JGL-05: both comparisons are reported, and neither carries a pass/fail criterion. A win over native_auto alone
+   * is not value over a simple recency handoff, and a win over recent_packet alone is not value over ordinary Claude.
+   */
+  ['jev_lean', 'native_auto', 'none'],
+  ['jev_lean', 'recent_packet', 'none'],
+  ['recent_packet', 'native_auto', 'none'],
 ];
 
 

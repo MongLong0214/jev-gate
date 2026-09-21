@@ -18,20 +18,36 @@ import { estimateJevCostUsd, modelFamily, parseModelUsage, safeSum, tokenCount, 
  * the report still reads runs that contain it, because a retired arm is a fact about an old run, not a reason to stop
  * reading it.
  */
-export type Arm = 'sonnet_native' | 'frontier_native' | 'native_hierarchy' | 'orchestrated_control' | 'frontier_orchestrated' | 'jev_hierarchy' | 'jev_single' | 'jev_forced_orchestration';
+export type Arm =
+  | 'sonnet_native'
+  | 'frontier_native'
+  | 'native_hierarchy'
+  | 'orchestrated_control'
+  | 'frontier_orchestrated'
+  | 'jev_hierarchy'
+  | 'jev_single'
+  | 'jev_forced_orchestration'
+  /** JGL-05: the three lean arms. Same model, same normal auto-compact, one packet budget shared by the last two. */
+  | 'native_auto'
+  | 'recent_packet'
+  | 'jev_lean';
 /** The only variables a measured session inherits; everything else, including the parent's CLAUDE_* settings, is dropped. */
 export const KEEP_ENV: readonly string[] = ['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'LC_ALL', 'TMPDIR', 'TERM', 'TZ', 'SSL_CERT_FILE', 'NODE_EXTRA_CA_CERTS', 'TYPESAFE_API_KEY'];
 /** FAKE_CLAUDE_* is the test double's control channel; a real session has none, so passing it through changes nothing. */
 const KEEP_ENV_PREFIX = 'FAKE_CLAUDE_';
 const keepEnvVar = (key: string): boolean => KEEP_ENV.includes(key) || key.startsWith(KEEP_ENV_PREFIX);
 
+/** The legacy default. A lean run selects its own three arms with `--arms lean`; it is not mixed into this set. */
 export const ALL_ARMS: readonly Arm[] = ['sonnet_native', 'frontier_native', 'native_hierarchy', 'orchestrated_control', 'frontier_orchestrated', 'jev_hierarchy', 'jev_single', 'jev_forced_orchestration'];
+/** JGL-05: the three arms of the lean comparison. `--arms lean` is shorthand for exactly these. */
+export const LEAN_ARMS: readonly Arm[] = ['native_auto', 'recent_packet', 'jev_lean'];
+export const KNOWN_ARMS: readonly Arm[] = [...ALL_ARMS, ...LEAN_ARMS];
 
 export interface ArmSpec {
   arm: Arm;
   rootModel: string;
   plugin: boolean;
-  mode: 'native' | 'auto' | null;
+  mode: 'native' | 'auto' | 'lean' | null;
   /** A9/A15/A16: forced orchestration through the same state, guard, profiles and cap. */
   experimentAdmission: 'orchestrated' | null;
   /**
@@ -48,6 +64,12 @@ export interface ArmSpec {
    * two runs with different frozen inputs, which is the comparison this harness exists to avoid.
    */
   admittedShape?: 'single';
+  /**
+   * JGL-05: the deterministic recency comparison. It is an explicitly enabled research dependency of this runner,
+   * not a product mode: the cell runs with no provider key at all, so the arm cannot make a Jev request even by
+   * accident, and nothing but this flag selects it.
+   */
+  benchRecent?: true;
 }
 
 export const armSpecs = (frontierModel: string): Record<Arm, ArmSpec> => ({
@@ -59,6 +81,10 @@ export const armSpecs = (frontierModel: string): Record<Arm, ArmSpec> => ({
   jev_hierarchy: { arm: 'jev_hierarchy', rootModel: 'sonnet', plugin: true, mode: 'auto', experimentAdmission: null, diagnostic: false },
   jev_single: { arm: 'jev_single', rootModel: 'sonnet', plugin: true, mode: 'auto', experimentAdmission: null, diagnostic: false, admittedShape: 'single' },
   jev_forced_orchestration: { arm: 'jev_forced_orchestration', rootModel: 'sonnet', plugin: true, mode: 'auto', experimentAdmission: 'orchestrated', diagnostic: true },
+  // JGL-05. The baseline keeps its own native delegation and helpers: crippling it would not be ordinary Claude.
+  native_auto: { arm: 'native_auto', rootModel: 'sonnet', plugin: false, mode: null, experimentAdmission: null, diagnostic: false },
+  recent_packet: { arm: 'recent_packet', rootModel: 'sonnet', plugin: true, mode: 'lean', experimentAdmission: null, diagnostic: false, benchRecent: true },
+  jev_lean: { arm: 'jev_lean', rootModel: 'sonnet', plugin: true, mode: 'lean', experimentAdmission: null, diagnostic: false },
 });
 
 export interface CodingCase {
@@ -188,7 +214,7 @@ export interface CellRecord {
   repetition: number;
   root_model_requested: string;
   plugin_expected: boolean;
-  mode: 'native' | 'auto' | null;
+  mode: 'native' | 'auto' | 'lean' | null;
   /** Retired V4 field, kept so a reader that knows only V4 cells still parses a V5 one. */
   experimental_allocation: string | null;
   experiment_admission: 'orchestrated' | null;
@@ -321,9 +347,11 @@ export const parseArgs = (argv: string[]): Options => {
     else if (a === '--regrade') o.regrade = true;
     else if (a === '--allow-env-conflicts') o.allowEnvConflicts = true;
     else if (a === '--arms') {
-      const arms = next().split(',').map((s) => s.trim()).filter(Boolean);
-      const bad = arms.filter((x) => !(ALL_ARMS as readonly string[]).includes(x));
-      if (bad.length || arms.length === 0 || new Set(arms).size !== arms.length) throw new Error(`--arms must be a unique subset of ${ALL_ARMS.join(',')}`);
+      const raw = next().trim();
+      // `--arms lean` is the JGL-05 profile: the three arms of that comparison and nothing else.
+      const arms = raw === 'lean' ? [...LEAN_ARMS] : raw.split(',').map((s) => s.trim()).filter(Boolean);
+      const bad = arms.filter((x) => !(KNOWN_ARMS as readonly string[]).includes(x));
+      if (bad.length || arms.length === 0 || new Set(arms).size !== arms.length) throw new Error(`--arms must be \`lean\` or a unique subset of ${KNOWN_ARMS.join(',')}`);
       o.arms = arms as Arm[];
     } else if (a === '--only') {
       const ids = next().split(',').map((x) => x.trim()).filter(Boolean);
@@ -524,9 +552,13 @@ export const preflight = (o: Options, needsJev: boolean): Preflight => {
   const env_observed: Record<string, string | null> = {};
   for (const k of observed) env_observed[k] = process.env[k] ?? null;
   const typesafe_key_present = Boolean(process.env['TYPESAFE_API_KEY']);
-  if (needsJev && !typesafe_key_present) errors.push('TYPESAFE_API_KEY not set: the jev_hierarchy arm would only exercise key_missing preservation');
-  const plugin_hook_present = existsSync(join(o.pluginDir, 'dist', 'hook.js')) && existsSync(join(o.pluginDir, 'hooks', 'hooks.json')) && existsSync(join(o.pluginDir, 'agents', 'worker.md'));
-  if (!plugin_hook_present) errors.push(`plugin dir ${o.pluginDir} lacks dist/hook.js, hooks/hooks.json or agents/worker.md; run npm run build`);
+  if (needsJev && !typesafe_key_present) errors.push('TYPESAFE_API_KEY not set: the Jev treatment arms would only exercise key_missing preservation');
+  // The agent definition each selected arm actually needs: the lean arms ship one executor and none of the six roles.
+  const specs = armSpecs(o.frontierModel);
+  const needed = [...new Set(o.arms.filter((a) => specs[a].plugin).map((a) => (specs[a].mode === 'lean' ? 'executor.md' : 'worker.md')))];
+  const plugin_hook_present =
+    existsSync(join(o.pluginDir, 'dist', 'hook.js')) && existsSync(join(o.pluginDir, 'hooks', 'hooks.json')) && needed.every((f) => existsSync(join(o.pluginDir, 'agents', f)));
+  if (!plugin_hook_present) errors.push(`plugin dir ${o.pluginDir} lacks dist/hook.js, hooks/hooks.json or agents/{${needed.join(',')}}; run npm run build`);
   return { claude_version: version.status === 0 ? version.stdout.trim() : null, auth, auth_reason, env_conflicts: [...authEnv, ...(override.concrete || override.force ? ['CLAUDE_CODE_SUBAGENT_MODEL'] : [])], env_observed, typesafe_key_present, plugin_hook_present, errors };
 };
 
@@ -1172,6 +1204,12 @@ const runClaudeCell = (cs: CodingCase, spec: ArmSpec, o: Options, pluginDir: str
         env['JEV_GATE_EXPERIMENT_ADMISSION'] = spec.experimentAdmission;
         envAdded.push('JEV_GATE_EXPERIMENT_ADMISSION');
       }
+      if (spec.benchRecent) {
+        env['JEV_GATE_BENCH_RECENT'] = '1';
+        // No credential reaches this cell, so "this arm made no Jev request" is a property of the process, not a policy.
+        delete env['TYPESAFE_API_KEY'];
+        envAdded.push('JEV_GATE_BENCH_RECENT');
+      }
       mkdirSync(traceDir, { recursive: true, mode: 0o700 });
       mkdirSync(stateDir, { recursive: true, mode: 0o700 });
     } else {
@@ -1363,7 +1401,10 @@ export const main = async (argv: string[]): Promise<number> => {
     return 0;
   }
   if (existsSync(out)) throw new Error(`--out ${out} already exists; execute creates a new result directory exclusively`);
-  const pf = preflight(o, o.arms.some((a) => armSpecs(o.frontierModel)[a].mode === 'auto'));
+  const pf = preflight(o, o.arms.some((a) => {
+    const spec = armSpecs(o.frontierModel)[a];
+    return spec.mode === 'auto' || (spec.mode === 'lean' && spec.benchRecent !== true);
+  }));
   plan.preflight = pf;
   // T8: a plugin arm without a loadable configuration would run on defaults while the plan claimed otherwise.
   if (plan.effective_config === null && o.arms.some((a) => armSpecs(o.frontierModel)[a].plugin)) {

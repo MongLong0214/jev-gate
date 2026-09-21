@@ -69,8 +69,15 @@ describe('plan', () => {
     expect(bench(['--arms', 'jev_hierarchy,bogus']).status).toBe(1);
     const retired = bench(['--arms', 'jev_hierarchy,fixed_hierarchy']);
     expect(retired.status).toBe(1);
-    expect(retired.stderr).toMatch(/--arms must be a unique subset/);
+    expect(retired.stderr).toMatch(/--arms must be `lean` or a unique subset/);
     expect(bench(['--arms', 'jev_hierarchy,jev_hierarchy']).status).toBe(1);
+    // JGL-05: `lean` is a profile name, and it selects exactly the three arms of that comparison.
+    const leanPlan = JSON.parse(bench(['--arms', 'lean']).stdout) as Plan;
+    expect(leanPlan.arms.map((a) => a.arm)).toEqual(['native_auto', 'recent_packet', 'jev_lean']);
+    expect(leanPlan.arms.filter((a) => a.mode === 'lean').map((a) => a.arm)).toEqual(['recent_packet', 'jev_lean']);
+    // Only the research arm enables the no-Jev dependency.
+    expect(leanPlan.arms.filter((a) => a.benchRecent === true).map((a) => a.arm)).toEqual(['recent_packet']);
+    expect(leanPlan.arms.map((a) => a.rootModel)).toEqual(['sonnet', 'sonnet', 'sonnet']);
     expect(bench(['--regrade', '--execute', '--max-sessions', '8']).status).toBe(1);
     expect(bench(['--execute']).stderr).toMatch(/--max-sessions/);
     const badManifest = join(tmp, 'bad.json');
