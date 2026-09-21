@@ -4,6 +4,8 @@ import { DEFAULT_CONFIG } from '../src/config.js';
 import { MAX_REQUEST_BYTES } from '../src/jev.js';
 import {
   buildLeanRequest,
+  estimateTokens,
+  MAX_REQUEST_TOKENS,
   composeFullPacket,
   composeLeanPacket,
   decideLean,
@@ -94,6 +96,27 @@ describe('lean request', () => {
     expect(packed.unassessed).toBe(3 - packed.askedIds.length);
     // No group was sliced to make it fit.
     for (const id of packed.askedIds) expect(packed.request.state.groups[id]).toBe(big);
+  });
+
+  it('bounds the request by estimated tokens, not only by bytes', () => {
+    // Observed live 2026-09-21: 123 KB of ASCII was accepted and 121 KB of Korean was refused with
+    // max_tokens_exceeded. The same byte budget is three times the tokens, so bytes alone cannot bound this.
+    const korean = '이 함수는 반올림 버그가 있어서 값이 틀리게 나온다. 예외 조건을 반드시 유지해야 한다. '.repeat(700);
+    const packed = buildLeanRequest(source({ groups: [group('m1', 'rule', true), group('g1', korean), group('g2', korean), group('g3', korean)] }), DEFAULT_CONFIG);
+    if (!packed.ok) throw new Error(packed.reason);
+    const body = JSON.stringify(packed.request);
+    expect(estimateTokens(body)).toBeLessThanOrEqual(MAX_REQUEST_TOKENS);
+    // The byte cap alone would have admitted all three; the token cap is what stops it.
+    expect(Buffer.byteLength(body, 'utf8')).toBeLessThan(MAX_REQUEST_BYTES);
+    expect(packed.askedIds.length).toBeLessThan(3);
+    expect(packed.unassessed).toBe(3 - packed.askedIds.length);
+  });
+
+  it('over-counts rather than under-counts, so the estimate never lets an oversized request through', () => {
+    // Measured against real provider usage on 2026-09-21: 25,600 estimated against 22,351 actually billed.
+    expect(estimateTokens('abcd')).toBe(1);
+    expect(estimateTokens('한글')).toBe(2);
+    expect(estimateTokens('')).toBe(0);
   });
 
   it('reports no room rather than sending a request with no candidate in it', () => {

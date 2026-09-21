@@ -21,6 +21,29 @@ export const LEAN_COORDINATOR_RESERVE_BYTES = 4 * 1024;
 export const LEAN_PACKET_BUDGET_BYTES = LEAN_PACKET_MAX_BYTES - LEAN_COORDINATOR_RESERVE_BYTES;
 
 /**
+ * The provider's limit is a TOKEN limit, and a byte cap is not proof of it (ADR D6). Observed against the live API
+ * on 2026-09-21: a 123 KB ASCII request was accepted and a 121 KB Korean one was refused with
+ * `{"detail":{"error_type":"max_tokens_exceeded"}}` -- the same bytes, three times the tokens. The documented bound
+ * is 32K tokens for state plus the longest question, and the refusal sits where that predicts.
+ *
+ * So requests are bounded by an estimate as well as by bytes. The estimate deliberately over-counts: ASCII packs at
+ * roughly four characters per token, and every non-ASCII character is charged a whole one. Measured on the two
+ * accepted payloads it read 29,343 and 28,482, and on the refused one 37,898, so the cap sits below the refusal and
+ * above both acceptances with room to spare. It is a guard against a wasted round trip, not a tokenizer.
+ */
+export const MAX_REQUEST_TOKENS = 30_000;
+
+export const estimateTokens = (text: string): number => {
+  let ascii = 0;
+  let wide = 0;
+  for (const ch of text) {
+    if ((ch.codePointAt(0) ?? 0) < 128) ascii += 1;
+    else wide += 1;
+  }
+  return Math.ceil(ascii / 4) + wide;
+};
+
+/**
  * Uncalibrated development constants (ADR D5). `.8` to act on the work/scope pair, `.9` to omit a group. They are
  * the initial v1.1 policy values, not measured accuracies and not economic guarantees.
  */
@@ -82,6 +105,11 @@ export type LeanPacking =
   | { ok: false; reason: Extract<SkipCode, 'mandatory_overflow' | 'no_room_for_candidates'> };
 
 const bytes = (v: unknown): number => Buffer.byteLength(JSON.stringify(v), 'utf8');
+/** Both bounds, measured on the serialized request: the provider enforces tokens, this process enforces bytes. */
+const overCap = (v: unknown): boolean => {
+  const text = JSON.stringify(v);
+  return Buffer.byteLength(text, 'utf8') > MAX_REQUEST_BYTES || estimateTokens(text) > MAX_REQUEST_TOKENS;
+};
 
 /** Actual source bytes, which is what decides whether the mandatory layer fits -- never a post-compact token total. */
 export const groupBytes = (groups: readonly LeanGroup[]): number => groups.reduce((n, g) => n + Buffer.byteLength(g.text, 'utf8'), 0);
@@ -95,7 +123,7 @@ export const buildLeanRequest = (source: LeanSource, config: ConfigV5): LeanPack
   const state: LeanRequestState = { request: source.request, mandatory, groups: {} };
   const questions: LeanQuestions = { work_shape: WORK_SHAPE_QUESTION, handoff_scope: HANDOFF_SCOPE_QUESTION };
   const base = { model: config.jevModel, state, questions };
-  if (bytes(base) > MAX_REQUEST_BYTES) return { ok: false, reason: 'mandatory_overflow' };
+  if (overCap(base)) return { ok: false, reason: 'mandatory_overflow' };
 
   // Newest first, so the cap costs the oldest evidence rather than the most recent.
   const candidates = [...optionalGroups(source)].reverse();
@@ -104,7 +132,7 @@ export const buildLeanRequest = (source: LeanSource, config: ConfigV5): LeanPack
   for (const g of candidates) {
     const nextState = { ...state, groups: { ...state.groups, [g.id]: g.text } };
     const nextQuestions = { ...questions, [`relation_${g.id}`]: relationQuestion(g.id) };
-    if (bytes({ model: config.jevModel, state: nextState, questions: nextQuestions }) > MAX_REQUEST_BYTES) {
+    if (overCap({ model: config.jevModel, state: nextState, questions: nextQuestions })) {
       // The group's source range is unassessed, which is not the same as irrelevant.
       unassessed += 1;
       continue;
