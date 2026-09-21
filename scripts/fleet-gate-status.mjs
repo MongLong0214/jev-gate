@@ -10,13 +10,15 @@
  * `$0` and read-only: it opens no socket and writes nothing. It is a status report, not a gate.
  */
 import { execFileSync } from 'node:child_process';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 
 const HOME = homedir();
-const { readSessionDepth } = createRequire(import.meta.url)(join(HOME, 'projects/jev-gate/dist/depth.js'));
+// Resolve the built reader from this script's own checkout, so the tool works wherever the repo lives.
+const { readSessionDepth } = createRequire(import.meta.url)(join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'depth.js'));
 
 const sh = (cmd, args) => {
   try {
@@ -40,7 +42,9 @@ const MODE = config.mode ?? 'off';
 /** session_id -> the job state the hook last wrote for it. */
 const jobs = new Map();
 const jobDir = join(HOME, '.local/state/jev-gate/jobs');
-for (const f of readdirSync(jobDir).filter((f) => f.endsWith('.json'))) {
+// No directory means the gate has never written a job on this machine, which is a finding, not a crash.
+const jobFiles = existsSync(jobDir) ? readdirSync(jobDir).filter((f) => f.endsWith('.json')) : [];
+for (const f of jobFiles) {
   try {
     const d = JSON.parse(readFileSync(join(jobDir, f), 'utf8'));
     if (d.session_id) jobs.set(d.session_id, d);

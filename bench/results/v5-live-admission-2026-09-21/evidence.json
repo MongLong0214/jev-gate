@@ -1,0 +1,786 @@
+{
+ "schema": 1,
+ "what": "One live session grown past delegationDepthFloor, then given a compound request. Records which Gate A branch fired.",
+ "cli": {
+  "version": "2.1.278",
+  "argv_without_paths": [
+   "claude",
+   "-p",
+   "--model",
+   "sonnet[1m]",
+   "--input-format",
+   "stream-json",
+   "--output-format",
+   "stream-json",
+   "--verbose",
+   "--max-turns",
+   "150",
+   "--permission-mode",
+   "acceptEdits",
+   "--allowedTools",
+   "Bash(node *),Bash(npm test),Bash(npm run test),Bash(ls *)",
+   "--setting-sources",
+   "project,local",
+   "--replay-user-messages",
+   "--plugin-dir",
+   "<plugin-dir>"
+  ],
+  "model_resolved": "claude-sonnet-5[1m]",
+  "plugins": [
+   {
+    "name": "jev-gate",
+    "version": "0.2.0",
+    "source": "jev-gate@inline"
+   },
+   {
+    "name": "agents-md",
+    "source": "agents-md@builtin"
+   }
+  ],
+  "env_added": [
+   "CLAUDE_CODE_FORK_SUBAGENT",
+   "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS",
+   "JEV_GATE_MODE",
+   "JEV_GATE_TRACE_DIR",
+   "JEV_GATE_STATE_DIR",
+   "TYPESAFE_API_KEY"
+  ],
+  "env_stripped_count": 22
+ },
+ "turns": [
+  {
+   "turn": 1,
+   "subtype": "success",
+   "num_turns": 8,
+   "duration_ms": 20476,
+   "cost_usd": 0.782162,
+   "is_error": false,
+   "depth": 211957,
+   "depth_reason": null,
+   "transcript_found": true
+  },
+  {
+   "turn": 2,
+   "subtype": "success",
+   "num_turns": 11,
+   "duration_ms": 30737,
+   "cost_usd": 1.8395506,
+   "is_error": false,
+   "depth": 448908,
+   "depth_reason": null,
+   "transcript_found": true
+  },
+  {
+   "turn": 3,
+   "subtype": "success",
+   "num_turns": 4,
+   "duration_ms": 285136,
+   "cost_usd": 3.3832921,
+   "is_error": false,
+   "depth": 462136,
+   "depth_reason": null,
+   "transcript_found": true
+  }
+ ],
+ "compound_depth_before": 448908,
+ "preflight": [
+  {
+   "turn": 1,
+   "subtype": "success",
+   "num_turns": 1,
+   "duration_ms": 1387,
+   "cost_usd": 0.0762658,
+   "is_error": false,
+   "depth": 36318,
+   "depth_reason": null,
+   "transcript_found": true
+  }
+ ],
+ "preflight_traces": [
+  {
+   "mode": "auto",
+   "context_tokens": null,
+   "context_depth_read": {
+    "bytes": 0,
+    "duration_ms": 0
+   },
+   "attempted": false,
+   "known_not_sent": true,
+   "forced": false,
+   "depth_floor": 300000,
+   "decision": {
+    "shape": "direct",
+    "decided": false,
+    "reason": "depth_unknown",
+    "changed_default": false
+   },
+   "phase": "admission_result",
+   "written_at": "2026-09-21T02:13:30.318Z",
+   "caller_is_child": false
+  },
+  {
+   "mode": "auto",
+   "outcome": "completed",
+   "phase": "stop",
+   "written_at": "2026-09-21T02:13:31.625Z",
+   "caller_is_child": false
+  }
+ ],
+ "traces": [
+  {
+   "mode": "auto",
+   "context_tokens": null,
+   "context_depth_read": {
+    "bytes": 0,
+    "duration_ms": 0
+   },
+   "attempted": false,
+   "known_not_sent": true,
+   "forced": false,
+   "depth_floor": 300000,
+   "decision": {
+    "shape": "direct",
+    "decided": false,
+    "reason": "depth_unknown",
+    "changed_default": false
+   },
+   "phase": "admission_result",
+   "written_at": "2026-09-21T02:14:07.702Z",
+   "caller_is_child": false
+  },
+  {
+   "mode": "auto",
+   "outcome": "completed",
+   "phase": "stop",
+   "written_at": "2026-09-21T02:14:28.106Z",
+   "caller_is_child": false
+  },
+  {
+   "mode": "auto",
+   "context_tokens": 211957,
+   "context_depth_read": {
+    "bytes": 262144,
+    "duration_ms": 1
+   },
+   "attempted": false,
+   "known_not_sent": true,
+   "forced": false,
+   "depth_floor": 300000,
+   "decision": {
+    "shape": "direct",
+    "decided": false,
+    "reason": "depth_below_floor",
+    "changed_default": false
+   },
+   "phase": "admission_result",
+   "written_at": "2026-09-21T02:14:28.169Z",
+   "caller_is_child": false
+  },
+  {
+   "mode": "auto",
+   "outcome": "completed",
+   "phase": "stop",
+   "written_at": "2026-09-21T02:14:58.849Z",
+   "caller_is_child": false
+  },
+  {
+   "mode": "auto",
+   "prompt_len": 522,
+   "prompt_sha256": "8ea519ed6cfae4f2c82ade5147eb0631ff0fb3c7805a6eeb15b1c165dd44abb4",
+   "context_tokens": 448908,
+   "context_depth_read": {
+    "bytes": 262144,
+    "duration_ms": 1
+   },
+   "depth_floor": 300000,
+   "request_bytes": 2134,
+   "phase": "admission_intent",
+   "written_at": "2026-09-21T02:14:58.913Z",
+   "caller_is_child": false
+  },
+  {
+   "mode": "auto",
+   "prompt_len": 522,
+   "prompt_sha256": "8ea519ed6cfae4f2c82ade5147eb0631ff0fb3c7805a6eeb15b1c165dd44abb4",
+   "context_tokens": 448908,
+   "context_depth_read": {
+    "bytes": 262144,
+    "duration_ms": 1
+   },
+   "depth_floor": 300000,
+   "attempted": true,
+   "http": {
+    "status": 200,
+    "code": null,
+    "duration_ms": 703,
+    "request_bytes": 2134
+   },
+   "jev": {
+    "model": "jev-1.13.0",
+    "usage": {
+     "input_tokens": 722,
+     "output_tokens": 91
+    },
+    "response_bytes": 638
+   },
+   "answers": {
+    "forbids_delegation": {
+     "type": "noul",
+     "choice": null,
+     "noul": 0.12,
+     "score": null,
+     "probabilities": null,
+     "confidence": null
+    },
+    "answer_only": {
+     "type": "noul",
+     "choice": null,
+     "noul": 0.04,
+     "score": null,
+     "probabilities": null,
+     "confidence": null
+    },
+    "plan_only": {
+     "type": "noul",
+     "choice": null,
+     "noul": 0.05,
+     "score": null,
+     "probabilities": null,
+     "confidence": null
+    },
+    "parallel_outcomes": {
+     "type": "noul",
+     "choice": null,
+     "noul": 0.84,
+     "score": null,
+     "probabilities": null,
+     "confidence": null
+    },
+    "size": {
+     "type": "score",
+     "choice": null,
+     "noul": null,
+     "score": 2.94,
+     "probabilities": {
+      "0": 0,
+      "1": 0,
+      "2": 0.06,
+      "3": 0.94,
+      "4": 0
+     },
+     "confidence": 0.95
+    }
+   },
+   "forced": false,
+   "decision": {
+    "shape": "orchestrated",
+    "decided": true,
+    "reason": null,
+    "changed_default": true
+   },
+   "recommendation": {
+    "admitted_shape": "hierarchy",
+    "plan_only": false,
+    "applied": false
+   },
+   "phase": "admission_result",
+   "written_at": "2026-09-21T02:14:59.621Z",
+   "caller_is_child": false
+  },
+  {
+   "mode": "auto",
+   "role": "planner",
+   "tool_input": {
+    "subagent_type": "jev-gate:planner",
+    "has_model": false,
+    "model": null,
+    "run_in_background": null,
+    "prompt_len": 2910,
+    "prompt_sha256": "ec5557b865c3882db2d510aca78f11b91fc6d1a632040216394317106aaef414",
+    "control_keys": []
+   },
+   "default_tier": "deep",
+   "request_bytes": 1842,
+   "phase": "pre_intent",
+   "written_at": "2026-09-21T02:15:12.507Z",
+   "caller_is_child": false
+  },
+  {
+   "mode": "auto",
+   "role": "planner",
+   "tool_input": {
+    "subagent_type": "jev-gate:planner",
+    "has_model": false,
+    "model": null,
+    "run_in_background": null,
+    "prompt_len": 2910,
+    "prompt_sha256": "ec5557b865c3882db2d510aca78f11b91fc6d1a632040216394317106aaef414",
+    "control_keys": []
+   },
+   "default_tier": "deep",
+   "attempted": true,
+   "http": {
+    "status": 200,
+    "code": null,
+    "duration_ms": 576,
+    "request_bytes": 1842
+   },
+   "jev": {
+    "model": "jev-1.13.0",
+    "usage": {
+     "input_tokens": 643,
+     "output_tokens": 46
+    },
+    "response_bytes": 207
+   },
+   "answers": {
+    "planning_tier": {
+     "type": "choice",
+     "choice": "deep",
+     "noul": null,
+     "score": null,
+     "probabilities": {
+      "deep": 1,
+      "abstain": 0,
+      "frontier": 0
+     },
+     "confidence": 1
+    }
+   },
+   "decision": {
+    "action": "patch",
+    "tier": "deep",
+    "reason": null,
+    "changed_default": false,
+    "model": "opus"
+   },
+   "phase": "pre_result",
+   "written_at": "2026-09-21T02:15:13.089Z",
+   "caller_is_child": false
+  },
+  {
+   "mode": "auto",
+   "status": "completed",
+   "outcome": "ready",
+   "rev": 1,
+   "tasks": 2,
+   "chain_depth": 2,
+   "chain_depth_claimed": 2,
+   "planner_tier": "deep",
+   "planner_model": {
+    "requested": "opus",
+    "observed": "claude-opus-5[1m]",
+    "agreement": "match"
+   },
+   "phase": "plan",
+   "written_at": "2026-09-21T02:17:16.258Z",
+   "caller_is_child": false
+  },
+  {
+   "mode": "auto",
+   "role": "worker",
+   "task_id": "t1",
+   "rev": 1,
+   "attempt": 1,
+   "tool_input": {
+    "subagent_type": "jev-gate:worker",
+    "has_model": false,
+    "model": null,
+    "run_in_background": null,
+    "prompt_len": 590,
+    "prompt_sha256": "a09ba74d2f2cfc50ce3ada4cb6b14ebc6fb3f37dd35a3211256682e785ac75ce",
+    "control_keys": []
+   },
+   "request_bytes": 8936,
+   "phase": "pre_intent",
+   "written_at": "2026-09-21T02:17:22.037Z",
+   "caller_is_child": false
+  },
+  {
+   "mode": "auto",
+   "role": "worker",
+   "task_id": "t1",
+   "rev": 1,
+   "attempt": 1,
+   "tool_input": {
+    "subagent_type": "jev-gate:worker",
+    "has_model": false,
+    "model": null,
+    "run_in_background": null,
+    "prompt_len": 590,
+    "prompt_sha256": "a09ba74d2f2cfc50ce3ada4cb6b14ebc6fb3f37dd35a3211256682e785ac75ce",
+    "control_keys": []
+   },
+   "attempted": true,
+   "http": {
+    "status": 200,
+    "code": null,
+    "duration_ms": 698,
+    "request_bytes": 8936
+   },
+   "jev": {
+    "model": "jev-1.13.0",
+    "usage": {
+     "input_tokens": 2515,
+     "output_tokens": 116
+    },
+    "response_bytes": 439
+   },
+   "answers": {
+    "route": {
+     "type": "choice",
+     "choice": "fast",
+     "noul": null,
+     "score": null,
+     "probabilities": {
+      "deep": 0,
+      "standard": 0.45,
+      "fast": 0.54,
+      "frontier": 0,
+      "abstain": 0.01
+     },
+     "confidence": 0.43
+    },
+    "upgrade_basis": {
+     "type": "choice",
+     "choice": "no_specific_basis",
+     "noul": null,
+     "score": null,
+     "probabilities": {
+      "unresolved_contract_reasoning": 0.02,
+      "no_specific_basis": 0.98,
+      "unknown": 0,
+      "observed_reasoning_failure": 0
+     },
+     "confidence": 0.96
+    }
+   },
+   "decision": {
+    "action": "preserve",
+    "tier": "standard",
+    "reason": "route_low_confidence",
+    "changed_default": false,
+    "model": null
+   },
+   "phase": "pre_result",
+   "written_at": "2026-09-21T02:17:22.742Z",
+   "caller_is_child": false
+  },
+  {
+   "mode": "auto",
+   "task_id": "t1",
+   "rev": 1,
+   "attempt": 1,
+   "verdict": "accept",
+   "verdict_reason": null,
+   "advisory": null,
+   "tool_response": {
+    "status": "completed",
+    "agentId": "a727914e596cd12ed",
+    "resolvedModel": "claude-sonnet-5[1m]",
+    "modelsUsed": null,
+    "totalDurationMs": 36477,
+    "totalToolUseCount": 13,
+    "totalTokens": 40700,
+    "usage": {
+     "input_tokens": 2,
+     "output_tokens": 607,
+     "cache_creation_input_tokens": 493,
+     "cache_read_input_tokens": 39598
+    }
+   },
+   "root_effort": "high",
+   "phase": "post",
+   "written_at": "2026-09-21T02:17:59.302Z",
+   "caller_is_child": false
+  },
+  {
+   "mode": "auto",
+   "role": "worker",
+   "task_id": "t2",
+   "rev": 1,
+   "attempt": 1,
+   "tool_input": {
+    "subagent_type": "jev-gate:worker",
+    "has_model": false,
+    "model": null,
+    "run_in_background": null,
+    "prompt_len": 1500,
+    "prompt_sha256": "9b2e4646697c652b30af1de3a3800067e55c90e8f4f05ab15751f4c4d94159bc",
+    "control_keys": []
+   },
+   "request_bytes": 13344,
+   "phase": "pre_intent",
+   "written_at": "2026-09-21T02:18:08.308Z",
+   "caller_is_child": false
+  },
+  {
+   "mode": "auto",
+   "role": "worker",
+   "task_id": "t2",
+   "rev": 1,
+   "attempt": 1,
+   "tool_input": {
+    "subagent_type": "jev-gate:worker",
+    "has_model": false,
+    "model": null,
+    "run_in_background": null,
+    "prompt_len": 1500,
+    "prompt_sha256": "9b2e4646697c652b30af1de3a3800067e55c90e8f4f05ab15751f4c4d94159bc",
+    "control_keys": []
+   },
+   "attempted": true,
+   "http": {
+    "status": 200,
+    "code": null,
+    "duration_ms": 598,
+    "request_bytes": 13344
+   },
+   "jev": {
+    "model": "jev-1.13.0",
+    "usage": {
+     "input_tokens": 3662,
+     "output_tokens": 121
+    },
+    "response_bytes": 455
+   },
+   "answers": {
+    "route": {
+     "type": "choice",
+     "choice": "standard",
+     "noul": null,
+     "score": null,
+     "probabilities": {
+      "fast": 0.06,
+      "abstain": 0.01,
+      "standard": 0.7,
+      "frontier": 0,
+      "deep": 0.23
+     },
+     "confidence": 0.62
+    },
+    "upgrade_basis": {
+     "type": "choice",
+     "choice": "unresolved_contract_reasoning",
+     "noul": null,
+     "score": null,
+     "probabilities": {
+      "observed_reasoning_failure": 0,
+      "no_specific_basis": 0.46,
+      "unresolved_contract_reasoning": 0.54,
+      "unknown": 0
+     },
+     "confidence": 0.39
+    }
+   },
+   "decision": {
+    "action": "preserve",
+    "tier": "standard",
+    "reason": "route_low_confidence",
+    "changed_default": false,
+    "model": null
+   },
+   "phase": "pre_result",
+   "written_at": "2026-09-21T02:18:08.915Z",
+   "caller_is_child": false
+  },
+  {
+   "mode": "auto",
+   "task_id": "t2",
+   "rev": 1,
+   "attempt": 1,
+   "verdict": "accept",
+   "verdict_reason": null,
+   "advisory": null,
+   "tool_response": {
+    "status": "completed",
+    "agentId": "a258f5d2b03229da8",
+    "resolvedModel": "claude-sonnet-5[1m]",
+    "modelsUsed": null,
+    "totalDurationMs": 85693,
+    "totalToolUseCount": 21,
+    "totalTokens": 41572,
+    "usage": {
+     "input_tokens": 2,
+     "output_tokens": 1534,
+     "cache_creation_input_tokens": 619,
+     "cache_read_input_tokens": 39417
+    }
+   },
+   "root_effort": "high",
+   "phase": "post",
+   "written_at": "2026-09-21T02:19:34.682Z",
+   "caller_is_child": false
+  },
+  {
+   "mode": "auto",
+   "outcome": "completed",
+   "phase": "stop",
+   "written_at": "2026-09-21T02:19:43.990Z",
+   "caller_is_child": false
+  }
+ ],
+ "agent_calls": [
+  {
+   "tool_use_id": "toolu_01TyJvKu15aqfU7Zd9rgx35H",
+   "parent": null,
+   "subagent_type": "jev-gate:planner",
+   "has_model": false,
+   "model": null,
+   "prompt_len": 2910,
+   "input_keys": [
+    "description",
+    "prompt",
+    "subagent_type"
+   ]
+  },
+  {
+   "tool_use_id": "toolu_01CX7rkncWK165H9CPhTdfiF",
+   "parent": null,
+   "subagent_type": "jev-gate:worker",
+   "has_model": false,
+   "model": null,
+   "prompt_len": 590,
+   "input_keys": [
+    "description",
+    "prompt",
+    "subagent_type"
+   ]
+  },
+  {
+   "tool_use_id": "toolu_019QP54NiCFTFPMfb7weMfdU",
+   "parent": null,
+   "subagent_type": "jev-gate:worker",
+   "has_model": false,
+   "model": null,
+   "prompt_len": 1500,
+   "input_keys": [
+    "description",
+    "prompt",
+    "subagent_type"
+   ]
+  }
+ ],
+ "results": [
+  {
+   "subtype": "success",
+   "num_turns": 8,
+   "duration_ms": 20476,
+   "total_cost_usd": 0.782162,
+   "is_error": false,
+   "usage_models": [
+    "claude-sonnet-5[1m]"
+   ]
+  },
+  {
+   "subtype": "success",
+   "num_turns": 11,
+   "duration_ms": 30737,
+   "total_cost_usd": 1.8395506,
+   "is_error": false,
+   "usage_models": [
+    "claude-sonnet-5[1m]"
+   ]
+  },
+  {
+   "subtype": "success",
+   "num_turns": 4,
+   "duration_ms": 285136,
+   "total_cost_usd": 3.3832921,
+   "is_error": false,
+   "usage_models": [
+    "claude-sonnet-5[1m]",
+    "claude-opus-5[1m]"
+   ]
+  }
+ ],
+ "job_state": [
+  {
+   "current": {
+    "shape": "orchestrated",
+    "phase": "planned",
+    "planner_tier": "deep",
+    "planner_model": "match",
+    "plan_rev": 1,
+    "plan_tasks": [
+     {
+      "id": "t1",
+      "depends_on": [],
+      "checks": 2
+     },
+     {
+      "id": "t2",
+      "depends_on": [
+       "t1"
+      ],
+      "checks": 4
+     }
+    ],
+    "active": [],
+    "receipts": [
+     {
+      "task_id": "t1",
+      "verdict": "accept",
+      "reason": null,
+      "attempt": 1
+     },
+     {
+      "task_id": "t2",
+      "verdict": "accept",
+      "reason": null,
+      "attempt": 1
+     }
+    ],
+    "denials": 0,
+    "attempts": {
+     "planner": 1,
+     "replans": 0,
+     "tasks": {
+      "t1": 1,
+      "t2": 1
+     }
+    },
+    "outcome": "completed",
+    "request_present": true
+   },
+   "history": [
+    {
+     "shape": "direct",
+     "phase": "admitted",
+     "planner_tier": null,
+     "planner_model": null,
+     "plan_rev": null,
+     "plan_tasks": [],
+     "active": [],
+     "receipts": [],
+     "denials": 0,
+     "attempts": {
+      "planner": 0,
+      "replans": 0,
+      "tasks": {}
+     },
+     "outcome": "completed",
+     "request_present": false
+    },
+    {
+     "shape": "direct",
+     "phase": "admitted",
+     "planner_tier": null,
+     "planner_model": null,
+     "plan_rev": null,
+     "plan_tasks": [],
+     "active": [],
+     "receipts": [],
+     "denials": 0,
+     "attempts": {
+      "planner": 0,
+      "replans": 0,
+      "tasks": {}
+     },
+     "outcome": "completed",
+     "request_present": false
+    }
+   ]
+  }
+ ]
+}
