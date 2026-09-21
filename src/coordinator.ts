@@ -139,7 +139,19 @@ const DISPATCH_DENY_TEXT: Record<DenyReason, string> = {
   workers_active: 'Workers from the current plan are still running. Let them finish before replanning, then call the planner with the concrete violated assumption.',
   bounds_exhausted: 'This job has used its allowed attempts for that step. Report the blocker to the user instead of retrying.',
   composed_too_large: 'The composed task contract exceeds the size bound, so nothing was sent and no constraint was dropped. Ask the planner for a smaller task.',
+  // JGL-01: lean supplies its own sentence at the call site; these are the fallbacks if one ever reaches this table.
+  marker_unresolved: 'This lean executor call carries no packet that resolves, so there is no task to give it. Do the work in this conversation instead.',
+  marker_stale: 'The lean packet for this marker no longer matches the current request, working tree or conversation. Do the work in this conversation instead.',
+  executor_active: 'A lean executor from this session has not been observed to finish, so a second one is not dispatched automatically.',
 };
+
+/**
+ * JGL-01 step 2: ONE short line to the root, carrying an opaque marker and nothing else. The packet itself is never
+ * pasted into additionalContext -- that would pay for it twice. The root is free to ignore this, and nothing here
+ * blocks its own tools if it does.
+ */
+export const renderLeanRecommendation = (marker: string, omitted: number): string =>
+  `Jev Gate (lean): this request can run in one fresh jev-gate:executor that starts with the current request plus the earlier conversation it still needs; ${omitted} earlier interaction group${omitted === 1 ? '' : 's'} would be left out. To use it, make one foreground Agent call with subagent_type "jev-gate:executor", no model argument, and this marker on its own line in the prompt: ${marker}\nThe plugin attaches the conversation source to that call. Ignoring this and working here is fine; nothing is blocked either way.`;
 
 /** Planner-reported text is bounded before it reaches the coordinator; the plugin never forwards unbounded child output. */
 const bounded = (detail: string): string => (detail.length > 1000 ? `${detail.slice(0, 1000)}…` : detail);

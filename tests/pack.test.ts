@@ -49,4 +49,31 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     expect(doctor.stdout).toMatch(/hooks\.json Stop \(no matcher\): 1 command hook/);
     for (const agent of agents) expect(existsSync(join(dest, agent)), agent).toBe(true);
   }, 60_000);
+
+  it('packs a lean profile with one executor, the lean hook set and no stale compiled modules', () => {
+    const outDir = join(tmp, 'pack lean out');
+    const pack = spawnSync(process.execPath, [join(root, 'scripts', 'pack.mjs'), outDir, '--root', pluginRoot, '--profile', 'lean'], { encoding: 'utf8' });
+    expect(pack.status, pack.stderr).toBe(0);
+    const archive = readdirSync(outDir).find((f) => /^jev-gate-lean-.*\.zip$/.test(f));
+    expect(archive).toBeDefined();
+    const list = spawnSync('unzip', ['-Z1', join(outDir, archive!)], { encoding: 'utf8' }).stdout.trim().split('\n');
+    expect(list.filter((f) => f.startsWith('agents/') && f.endsWith('.md'))).toEqual(['agents/executor.md']);
+    for (const must of ['dist/hook.js', 'dist/lean.js', 'dist/lean-source.js', 'hooks/hooks.json', '.claude-plugin/plugin.json']) expect(list, must).toContain(must);
+    // The build clears dist, so a module deleted from src cannot reappear in an archive.
+    expect(list).not.toContain('dist/context.js');
+    expect(list.some((f) => f.startsWith('src/') || f.startsWith('tests/'))).toBe(false);
+
+    const dest = join(tmp, 'lean installed', 'jev gate');
+    mkdirSync(dest, { recursive: true });
+    expect(spawnSync('unzip', ['-q', join(outDir, archive!), '-d', dest], { encoding: 'utf8' }).status).toBe(0);
+    const otherCwd = join(tmp, 'other lean cwd');
+    mkdirSync(otherCwd);
+    const env = { PATH: process.env['PATH'] ?? '', HOME: join(tmp, 'lean home'), JEV_GATE_MODE: 'lean' };
+    // No key: the installed lean entrypoint reads no source, sends nothing and prints nothing.
+    const quiet = spawnSync(process.execPath, [join(dest, 'dist', 'hook.js'), '--lean'], { cwd: otherCwd, encoding: 'utf8', env, input: JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 's', prompt_id: 'p', prompt: 'add a test' }) });
+    expect(quiet).toMatchObject({ status: 0, stdout: '', stderr: 'jev-gate: key_missing\n' });
+    // A legacy mode under the lean artifact is diagnosed, not turned into a guard for roles it does not ship.
+    const mismatch = spawnSync(process.execPath, [join(dest, 'dist', 'hook.js'), '--lean'], { cwd: otherCwd, encoding: 'utf8', env: { ...env, JEV_GATE_MODE: 'auto' }, input: JSON.stringify({ hook_event_name: 'PreToolUse', session_id: 's', tool_use_id: 't', tool_name: 'Bash', tool_input: { command: 'ls' } }) });
+    expect(mismatch).toMatchObject({ status: 0, stdout: '', stderr: 'jev-gate: profile_mode_mismatch\n' });
+  }, 60_000);
 });

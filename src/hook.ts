@@ -37,11 +37,23 @@ import {
   type Eligibility,
 } from './brief.js';
 import { loadConfig, type Env } from './config.js';
+import {
+  buildLeanRequest,
+  composeFullPacket,
+  composeLeanPacket,
+  decideLean,
+  LEAN_PACKET_BUDGET_BYTES,
+  LEAN_PACKET_MAX_BYTES,
+  selectRecent,
+  type LeanDecision,
+} from './lean.js';
+import { looksSecret, mandatoryGroups, optionalGroups, readLeanSource } from './lean-source.js';
 import { readSessionDepth, type DepthReading } from './depth.js';
 import {
   GUARD_DENY_REASON,
   renderDirectGuidance,
   renderDispatchDeny,
+  renderLeanRecommendation,
   renderReplanBoundExhausted,
   renderOrchestrationGuidance,
   renderSingleGuidance,
@@ -105,14 +117,18 @@ import {
   type PriorAttemptSummary,
 } from './plan.js';
 import { openTraceDir, type TraceWriter } from './trace.js';
-import type { ConfigV5, DenyReason, ErrorCode, ExecutionShape, HookInput, JobGeneration, JobState, ModelAgreement, Plan, PlannedTask, Receipt, Reservation, RoutingMode, Tier } from './types.js';
-import { agentForTier, OWNED_AGENTS, TIERS } from './types.js';
+import type { ConfigV5, DenyReason, ErrorCode, ExecutionShape, HookInput, JobGeneration, JobState, LeanPending, ModelAgreement, Plan, PlannedTask, Receipt, Reservation, RoutingMode, Tier } from './types.js';
+import { agentForTier, LEAN_EXECUTOR_AGENT, OWNED_AGENTS, TIERS } from './types.js';
+import { EXECUTION_CONTROL_KEYS, MAX_PROMPT_BYTES } from './brief.js';
+import { subagentModelOverride } from './auth.js';
 
 export const MAX_STDIN_BYTES = 256 * 1024;
 
 export interface HookDeps {
   stdin: AsyncIterable<Uint8Array | string>;
   env: Env;
+  /** JGL-04: the lean artifact installs its hook command with `--lean`, so a legacy mode there is diagnosed, not run. */
+  argv?: readonly string[];
   fetchImpl?: typeof fetch;
   signal?: AbortSignal;
   openTrace?: typeof openTraceDir;
@@ -284,8 +300,14 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
   const loaded = loadConfig(deps.env);
   if (!loaded.ok) return isAgentPre ? preserve('config_invalid') : skip('config_invalid');
   const config: ConfigV5 = loaded.config;
-  if (config.mode === 'off') return isAgentPre ? preserve('mode_off') : skip('mode_off');
-  const mode: RoutingMode = config.mode;
+  const rawMode = config.mode;
+  if (rawMode === 'off') return isAgentPre ? preserve('mode_off') : skip('mode_off');
+  /**
+   * JGL-04: the lean artifact ships one executor and none of the six legacy roles, so a legacy mode selected there
+   * would start a guard referring to agents that are not installed. Diagnose it and leave native operation alone.
+   */
+  const leanProfile = (deps.argv ?? []).includes('--lean');
+  if (leanProfile && rawMode !== 'lean') return isAgentPre ? preserve('profile_mode_mismatch') : skip('profile_mode_mismatch');
 
   let trace: TraceWriter | null = null;
   let traceError: string | null = null;
@@ -303,7 +325,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     prompt_id: input.prompt_id ?? null,
     caller,
     tool_use_id: input.tool_use_id ?? null,
-    mode,
+    mode: rawMode,
   };
   const apiKey = deps.env['TYPESAFE_API_KEY'];
 
@@ -328,8 +350,8 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
   /** One attempt, intent before the request, result after it. A trace directory that cannot be written blocks the call. */
   const callGate = async <S, Q>(
     request: JevRequest<S, Q>,
-    intentPhase: 'admission_intent' | 'pre_intent' | 'interpretation_intent',
-    resultPhase: 'admission_result' | 'pre_result' | 'interpretation_result',
+    intentPhase: 'admission_intent' | 'pre_intent' | 'interpretation_intent' | 'lean_intent',
+    resultPhase: 'admission_result' | 'pre_result' | 'interpretation_result' | 'lean_result',
     intent: Record<string, unknown>,
     questionKeys: readonly string[],
     /** Applies the gate's policy and returns the closed decision fields to record (JG5-06 accounting). */
@@ -362,12 +384,309 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       request_id: requestId,
       attempted: true,
       http: { status: outcome.status, code: outcome.ok ? null : outcome.code, duration_ms: outcome.durationMs, request_bytes: requestBytes },
-      jev: outcome.ok ? { model: outcome.response.model, usage: outcome.response.usage, response_bytes: outcome.response.bytes } : { model: null, usage: null, response_bytes: null },
+      // JGL-05: a rejected or unusable answer does not erase the usage that parsed beside it. Absent stays unknown.
+      jev: outcome.ok
+        ? { model: outcome.response.model, usage: outcome.response.usage, response_bytes: outcome.response.bytes }
+        : { model: outcome.model ?? null, usage: outcome.usage ?? null, response_bytes: null },
       answers: outcome.ok ? whitelistAnswers(outcome.response.answers, questionKeys) : null,
       ...decided,
     });
     return { outcome };
   };
+
+  // ---------------------------------------------------------------- lean (JGL-01/02/03)
+  //
+  // A separate path. It shares the dispatcher, the state file, the lock, the trace and the TypeSafe client with the
+  // legacy modes, and none of their decisions: no Gate A/B/C, no depth reading, no planner, no task graph, no tier
+  // routing, no root guard and no plan interpretation runs here.
+
+  const MARKER_RE = /jev-lean-[0-9a-f]{16}/;
+
+  /** JGL-03: one private record per session, and a new request replaces the pending packet without erasing actives. */
+  const leanWrite = (sessionId: string, promptId: string | null, fn: (gen: JobGeneration) => JobGeneration): JobState | null => {
+    const written = updateJob(deps.env, sessionId, (prev) => {
+      const current = prev?.current ?? emptyGeneration(promptId, 'direct');
+      return { version: 5, session_id: sessionId, updated_at: '', current: fn(current), history: prev?.history ?? [] };
+    });
+    return written.ok ? (written.value ?? null) : null;
+  };
+
+  const leanActive = (gen: JobGeneration | null | undefined): Reservation[] =>
+    Object.values(gen?.active ?? {}).filter((r) => r.role === 'executor' && r.orphaned !== true);
+
+  const leanPrompt = async (): Promise<HookResult> => {
+    const prompt = input.prompt;
+    if (typeof prompt !== 'string' || prompt.trim().length === 0 || isSlashCommand(prompt) || caller.agent_id || caller.agent_type) return skip();
+    const sessionId = input.session_id;
+    const promptId = input.prompt_id ?? null;
+    if (!sessionId || promptId === null) return skip('missing_ids');
+    /**
+     * JGL-05: the no-Jev comparison arm. An explicitly enabled benchmark dependency, never a user-facing mode and
+     * never a fake key: it reads the same authorized source and fills the same budget by recency, with no classifier
+     * and no requirement to omit anything. Without this variable the product guarantee below is what runs.
+     */
+    const benchRecent = deps.env['JEV_GATE_BENCH_RECENT'] === '1';
+    // D2: no key returns before any optional source read, state write or HTTP.
+    if (!apiKey && !benchRecent) return skip('key_missing');
+    cleanupJobs(deps.env);
+
+    const existing = readJob(deps.env, sessionId);
+    const prior = existing.ok ? (existing.value?.current ?? null) : null;
+    /**
+     * Repeated delivery of the same request reuses its decision. An in-flight duplicate cannot spend a second time,
+     * and a decided one is not re-decided; only a genuinely new request is a new identity.
+     */
+    if (prior && prior.prompt_id === promptId && prior.lean) {
+      const seen = prior.lean;
+      if (seen.outcome === 'proposed') return emitContext('UserPromptSubmit', renderLeanRecommendation(seen.marker, seen.omitted_groups), 'duplicate_request');
+      return skip('duplicate_request');
+    }
+    /**
+     * JGL-01 step 3: a recommendation the root did not act on is a real outcome and stays in the denominator. It is
+     * recorded here, at the next request, because that is where it becomes observable without forcing anything.
+     */
+    if (prior && prior.prompt_id !== promptId && prior.lean?.outcome === 'proposed') {
+      trace?.write('lean_dispatch', { ...base, applied: false, reason: 'recommendation_not_taken', marker: prior.lean.marker, omitted_groups: prior.lean.omitted_groups, retained_groups: prior.lean.retained_groups });
+    }
+    // A new prompt cannot certify an old worker canceled; until its terminal event is observed there is no second one.
+    if (existing.ok && leanActive(prior).length > 0) return skip('lean_executor_active');
+
+    const read = readLeanSource(input.transcript_path, prompt);
+    if (!read.ok) return skip(read.reason);
+    const source = read.source;
+    // An unsafe mandatory block is native before HTTP; masking it and calling the meaning unchanged would be a lie.
+    if (mandatoryGroups(source).some((g) => looksSecret(g.text))) return skip('mandatory_unsafe');
+    // Nothing selectable means zero requests. A fresh session with no history lands here, and so does a shallow one.
+    if (optionalGroups(source).length === 0) return skip('no_optional_groups');
+    // The mandatory layer has to fit the FINAL packet, wrapper and attribution included, before anything is sent.
+    if (Buffer.byteLength(composeLeanPacket(source, [], optionalGroups(source).length), 'utf8') > LEAN_PACKET_BUDGET_BYTES) return skip('mandatory_overflow');
+
+    const marker = `jev-lean-${randomUUID().replace(/-/g, '').slice(0, 16)}`;
+    const carriedRequest = Buffer.byteLength(prompt, 'utf8') <= REQUEST_MAX_BYTES ? prompt : null;
+    if (carriedRequest === null) return skip('mandatory_overflow');
+    /**
+     * Register this request's identity before the await. A pending record with an empty packet is not dispatchable,
+     * so a call that never comes back leaves nothing that could be applied to a worker.
+     */
+    const identity: LeanPending = {
+      outcome: 'pending',
+      marker,
+      packet: '',
+      packet_sha256: '',
+      request_sha256: sha256(prompt),
+      epoch: source.epoch,
+      prefix_digest: source.prefixDigest,
+      cwd: input.cwd ?? null,
+      omitted_groups: 0,
+      retained_groups: 0,
+      created_at: new Date().toISOString(),
+    };
+    if (leanWrite(sessionId, promptId, (gen) => ({ ...gen, prompt_id: promptId, request: carriedRequest, shape: 'direct', lean: identity })) === null) return skip('state_write_failed');
+
+    /** Store the composed packet against this request, or fall back to native and leave nothing dispatchable. */
+    const publish = (packet: string, retained: number, omitted: number): HookResult => {
+      const recheck = readLeanSource(input.transcript_path, prompt);
+      if (!recheck.ok || recheck.source.epoch !== source.epoch || recheck.source.prefixDigest !== source.prefixDigest || recheck.source.newerHumanText) return native('source_changed');
+      let stale = false;
+      const saved = leanWrite(sessionId, promptId, (gen) => {
+        if (gen.prompt_id !== promptId || gen.lean?.marker !== marker) {
+          stale = true;
+          return gen;
+        }
+        return { ...gen, lean: { ...identity, outcome: 'proposed', packet, packet_sha256: sha256(packet), omitted_groups: omitted, retained_groups: retained } };
+      });
+      if (stale || saved === null) return skip('generation_changed');
+      return emitContext('UserPromptSubmit', renderLeanRecommendation(marker, omitted), null);
+    };
+
+    /** Native, and the attempt's cost stands: a paid call that selected nothing is overhead, not a zero. */
+    const native = (code: ErrorCode | null): HookResult => {
+      // Recorded rather than deleted, so a duplicate delivery of this same request reads the decision instead of
+      // paying for it again. An empty packet is not dispatchable.
+      leanWrite(sessionId, promptId, (gen) => (gen.prompt_id === promptId && gen.lean?.marker === marker ? { ...gen, lean: { ...identity, outcome: 'native' } } : gen));
+      return skip(code);
+    };
+
+    if (benchRecent) {
+      const recent = selectRecent(source);
+      trace?.write('lean_result', {
+        ...base,
+        attempted: false,
+        known_not_sent: true,
+        policy: 'recent_packet',
+        request_sha256: sha256(prompt),
+        source: { epoch: source.epoch, coverage: source.coverage, unassessed: source.unassessed, bytes_read: source.bytesRead },
+        decision: { action: recent ? 'handoff' : 'direct', retained: recent?.retainedGroupIds.length ?? null, omitted: recent?.omittedGroupIds.length ?? null },
+      });
+      if (recent === null) return native('mandatory_overflow');
+      const packet = composeLeanPacket(source, recent.retainedGroupIds, recent.omittedGroupIds.length);
+      if (Buffer.byteLength(packet, 'utf8') > LEAN_PACKET_BUDGET_BYTES) return native('packet_overflow');
+      return publish(packet, recent.retainedGroupIds.length, recent.omittedGroupIds.length);
+    }
+
+    const packing = buildLeanRequest(source, config);
+    if (!packing.ok) return native(packing.reason);
+
+    const held: { decision: LeanDecision | null } = { decision: null };
+    const gate = await callGate(
+      packing.request,
+      'lean_intent',
+      'lean_result',
+      {
+        request_len: prompt.length,
+        request_sha256: sha256(prompt),
+        source: { epoch: source.epoch, coverage: source.coverage, unassessed: packing.unassessed, bytes_read: source.bytesRead, duration_ms: source.durationMs },
+        groups: { mandatory: mandatoryGroups(source).length, optional_asked: packing.askedIds.length },
+      },
+      ['work_shape', 'handoff_scope', ...packing.askedIds.map((id) => `relation_${id}`)],
+      (outcome) => {
+        if (!outcome.ok) return { decision: { action: 'direct', reason: outcome.code, retained: null, omitted: null } };
+        const d = decideLean(outcome.response.answers, packing.askedIds);
+        held.decision = d;
+        return { decision: { action: d.action, reason: d.reason, retained: d.retainedGroupIds.length, omitted: d.omittedGroupIds.length } };
+      },
+    );
+
+    if ('blocked' in gate) return native(gate.blocked);
+    if (!gate.outcome.ok) return native(gate.outcome.code);
+    const decided = held.decision;
+    if (decided === null || decided.action !== 'handoff') return native(decided?.reason ?? 'response_invalid');
+    // A returned model that is missing or not the pinned one cannot authorize a selection.
+    if (gate.outcome.response.model !== config.jevModel) return native('response_invalid');
+
+    const packet = composeLeanPacket(source, decided.retainedGroupIds, decided.omittedGroupIds.length);
+    // Byte-only diagnostic (#34): a packet no smaller than the all-groups rendering is no_effect, not a saving.
+    if (Buffer.byteLength(packet, 'utf8') >= Buffer.byteLength(composeFullPacket(source), 'utf8')) return native('no_effect');
+    if (Buffer.byteLength(packet, 'utf8') > LEAN_PACKET_BUDGET_BYTES) return native('packet_overflow');
+    // The source is re-read inside publish(): a compaction, a new human instruction or a rewritten prefix during the
+    // call means this packet describes a conversation that no longer exists.
+    return publish(packet, decided.retainedGroupIds.length, decided.omittedGroupIds.length);
+  };
+
+  /** JGL-01 step 4: only a matching owned call with a resolvable marker is touched. Everything else is left alone. */
+  const leanPre = (): HookResult => {
+    if (caller.agent_id || caller.agent_type) return skip('child_caller');
+    if (input.tool_name !== 'Agent') return skip('not_agent_tool');
+    const toolInput = input.tool_input;
+    if (!isRecord(toolInput) || toolInput['subagent_type'] !== LEAN_EXECUTOR_AGENT) return skip('role_not_owned');
+    const sessionId = input.session_id;
+    const toolUseId = input.tool_use_id;
+    if (!sessionId || !toolUseId) return skip('missing_ids');
+    const coordinatorPrompt = str(toolInput['prompt']) ?? '';
+    const deny = (reason: DenyReason, detail: string): HookResult => {
+      trace?.write('lean_dispatch', { ...base, applied: false, reason, detail, tool_input: summarizeToolInput(toolInput) });
+      return emitDeny(reason, `jev-gate lean: ${detail}`, null);
+    };
+
+    const marker = MARKER_RE.exec(coordinatorPrompt)?.[0] ?? null;
+    // An unresolved marker is not an executable task, and an executor called without one is somebody else's call.
+    if (marker === null) return deny('marker_unresolved', 'this call carries no lean packet marker, so there is no task to apply. Do the work in this conversation instead.');
+
+    const job = readJob(deps.env, sessionId);
+    const gen = job.ok ? (job.value?.current ?? null) : null;
+    const pending = gen?.lean ?? null;
+    if (!pending || pending.outcome !== 'proposed' || pending.marker !== marker || pending.packet.length === 0) {
+      return deny('marker_unresolved', 'that marker resolves to no current packet. Do the work in this conversation instead.');
+    }
+    if (pending.cwd !== null && typeof input.cwd === 'string' && input.cwd !== pending.cwd) return deny('marker_stale', 'the packet was built in a different working tree.');
+    if (leanActive(gen).length > 0) return deny('executor_active', 'a lean executor from this session has not been observed to finish.');
+
+    // Unsupported ordinary calls are refused outright rather than half-patched: pins, background, resume, fork,
+    // team and isolation all change execution semantics this packet was not built for. None of them is overwritten,
+    // and a call-shape problem is reported as one -- it is not the same fact as a packet that went stale.
+    if (!coordinatorPrompt.isWellFormed()) return deny('dispatch_ineligible', 'this call’s prompt is not well-formed Unicode.');
+    if (Object.prototype.hasOwnProperty.call(toolInput, 'model')) return deny('dispatch_ineligible', 'the call pins a model; lean uses the executor profile’s inherited model.');
+    const bg = toolInput['run_in_background'];
+    if (bg !== false && !(bg === undefined && deps.env['CLAUDE_CODE_DISABLE_BACKGROUND_TASKS'] === '1')) return deny('dispatch_ineligible', 'the call is not in the foreground.');
+    if (EXECUTION_CONTROL_KEYS.some((k) => Object.prototype.hasOwnProperty.call(toolInput, k))) return deny('dispatch_ineligible', 'the call carries resume/fork/team/isolation controls.');
+    const override = subagentModelOverride(deps.env);
+    if (override.concrete || override.force) return deny('dispatch_ineligible', 'a subagent model override is in force.');
+    if (deps.env['CLAUDE_CODE_FORK_SUBAGENT'] === '1') return deny('dispatch_ineligible', 'subagent forking is on, so the worker would not start fresh.');
+
+    // The source is checked again here, inside the dispatch, not only after the call.
+    const request = gen?.request ?? null;
+    if (request === null || sha256(request) !== pending.request_sha256) return deny('marker_stale', 'the request this packet was built for is no longer the current one.');
+    const recheck = readLeanSource(input.transcript_path, request);
+    if (!recheck.ok || recheck.source.epoch !== pending.epoch || recheck.source.prefixDigest !== pending.prefix_digest || recheck.source.newerHumanText) {
+      return deny('marker_stale', 'the conversation this packet was built from has changed.');
+    }
+
+    // The coordinator's own text stays, as lower-authority notes, and the final serialized prompt is what is measured.
+    const composed = `${coordinatorPrompt}\n\n${pending.packet}`;
+    if (Buffer.byteLength(composed, 'utf8') > Math.min(LEAN_PACKET_MAX_BYTES, MAX_PROMPT_BYTES)) {
+      return deny('composed_too_large', 'the packet plus this call’s own notes exceeds the prompt bound; a partial task is not dispatched.');
+    }
+
+    let raced: string | null = null;
+    const reserved = leanWrite(sessionId, gen?.prompt_id ?? null, (current) => {
+      if (current.lean?.marker !== marker || current.lean.packet_sha256 !== pending.packet_sha256) {
+        raced = 'the packet changed while this dispatch was being reserved.';
+        return current;
+      }
+      if (leanActive(current).length > 0) {
+        raced = 'a lean executor from this session has not been observed to finish.';
+        return current;
+      }
+      const next = reserve(current, toolUseId, { role: 'executor', taskId: null, contractHash: pending.packet_sha256, rev: null, tier: null, attempt: 1, deliverables: [] });
+      // Applied at most once: the pending packet is consumed by the dispatch that reserves it.
+      return { ...next, lean: null };
+    });
+    if (raced !== null) return deny('executor_active', raced);
+    if (reserved === null) return preserve('state_write_failed');
+
+    trace?.write('lean_dispatch', {
+      ...base,
+      applied: true,
+      marker,
+      packet_sha256: pending.packet_sha256,
+      retained_groups: pending.retained_groups,
+      omitted_groups: pending.omitted_groups,
+      composed_bytes: Buffer.byteLength(composed, 'utf8'),
+      tool_input: summarizeToolInput(toolInput),
+    });
+    return emitPatch(toolInput, { prompt: composed }, null);
+  };
+
+  /** Only an observed terminal event releases the owner. A deleted reservation is not a stopped process. */
+  const leanPost = (): HookResult => {
+    if (caller.agent_id) return skip('child_caller');
+    if (input.tool_name !== 'Agent') return skip('not_agent_tool');
+    const sessionId = input.session_id;
+    const toolUseId = input.tool_use_id;
+    if (!sessionId || !toolUseId) return skip('missing_ids');
+    let released = false;
+    // Read first: an Agent result that owns nothing here must not create a state file for an unrelated session.
+    const job = readJob(deps.env, sessionId);
+    const owner = job.ok ? own(job.value?.current.active ?? {}, toolUseId) : undefined;
+    if (owner?.role === 'executor') {
+      leanWrite(sessionId, job.ok ? (job.value?.current.prompt_id ?? null) : null, (gen) => {
+        const reservation = own(gen.active, toolUseId);
+        if (!reservation || reservation.role !== 'executor') return gen;
+        released = true;
+        return release(gen, toolUseId);
+      });
+    }
+    trace?.write('lean_post', {
+      ...base,
+      released,
+      status: responseStatus(input.tool_response),
+      observed_model: observedModel(input.tool_response),
+      tool_response: whitelistToolResponse(input.tool_response),
+      error_first_line: (input.error ?? '').split('\n')[0]?.slice(0, 200) ?? null,
+      is_interrupt: input.is_interrupt ?? null,
+      duration_ms: input.duration_ms ?? null,
+    });
+    return skip();
+  };
+
+  if (rawMode === 'lean') {
+    if (input.hook_event_name === 'UserPromptSubmit') return leanPrompt();
+    if (input.hook_event_name === 'PreToolUse') return leanPre();
+    if (input.hook_event_name === 'PostToolUse' || input.hook_event_name === 'PostToolUseFailure') return leanPost();
+    return skip();
+  }
+
+  const mode: RoutingMode = rawMode;
 
   // ---------------------------------------------------------------- UserPromptSubmit (Gate A)
 
@@ -1370,7 +1689,7 @@ const isMainModule = (): boolean => {
 };
 
 if (isMainModule()) {
-  runHook({ stdin: process.stdin, env: process.env })
+  runHook({ stdin: process.stdin, env: process.env, argv: process.argv })
     .then((result) => {
       if (result.stdout !== null) process.stdout.write(result.stdout + '\n');
       if (result.code) process.stderr.write(`jev-gate: ${result.code}\n`);
