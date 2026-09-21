@@ -21,17 +21,26 @@ export const LEAN_COORDINATOR_RESERVE_BYTES = 4 * 1024;
 export const LEAN_PACKET_BUDGET_BYTES = LEAN_PACKET_MAX_BYTES - LEAN_COORDINATOR_RESERVE_BYTES;
 
 /**
- * The provider's limit is a TOKEN limit, and a byte cap is not proof of it (ADR D6). Observed against the live API
- * on 2026-09-21: a 123 KB ASCII request was accepted and a 121 KB Korean one was refused with
- * `{"detail":{"error_type":"max_tokens_exceeded"}}` -- the same bytes, three times the tokens. The documented bound
- * is 32K tokens for state plus the longest question, and the refusal sits where that predicts.
+ * The provider's limit is a TOKEN limit, and a byte cap is not proof of it (ADR D6). Calibrated against the live
+ * API on 2026-09-21, twice, because the first calibration was wrong.
  *
- * So requests are bounded by an estimate as well as by bytes. The estimate deliberately over-counts: ASCII packs at
- * roughly four characters per token, and every non-ASCII character is charged a whole one. Measured on the two
- * accepted payloads it read 29,343 and 28,482, and on the refused one 37,898, so the cap sits below the refusal and
- * above both acceptances with room to spare. It is a guard against a wasted round trip, not a tokenizer.
+ * The first attempt assumed ASCII packs at four characters per token. That is true of prose and false of what a
+ * coding session actually accumulates: on a real 940 KB transcript, a 43 KB request the provider accepted was
+ * billed **25,604** input tokens — about 1.7 bytes per token — because `cat` output, JSON escaping, paths and
+ * punctuation tokenize far worse than prose. A 63 KB request from the same source was refused with
+ * `{"detail":{"error_type":"max_tokens_exceeded"}}`, which puts the binding limit near the documented 32K for
+ * state plus the longest question.
+ *
+ * So ASCII is charged at 1 token per 1.5 characters and every non-ASCII character at a whole token, and the cap
+ * sits below the observed refusal with margin. This deliberately under-uses the budget on prose-like source: a
+ * request that is smaller than it had to be still works, and one that is larger is a wasted round trip that leaves
+ * the feature dead. There is no retry and no chunking (D6), so the estimate is the only thing standing between a
+ * realistic session and a 400.
+ *
+ * The consequence is a real product limit, not a tuning knob: on token-dense history the provider's own bound lets
+ * Jev see only a few of the available groups, and the rest are recorded unassessed.
  */
-export const MAX_REQUEST_TOKENS = 30_000;
+export const MAX_REQUEST_TOKENS = 25_000;
 
 export const estimateTokens = (text: string): number => {
   let ascii = 0;
@@ -40,7 +49,7 @@ export const estimateTokens = (text: string): number => {
     if ((ch.codePointAt(0) ?? 0) < 128) ascii += 1;
     else wide += 1;
   }
-  return Math.ceil(ascii / 4) + wide;
+  return Math.ceil(ascii / 1.5) + wide;
 };
 
 /**

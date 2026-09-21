@@ -87,7 +87,7 @@ describe('lean request', () => {
   });
 
   it('packs each whole group with its own question and records the ones that did not fit as unassessed', () => {
-    const big = 'y'.repeat(60 * 1024);
+    const big = 'y'.repeat(20 * 1024);
     const packed = buildLeanRequest(source({ groups: [group('m1', 'rule', true), group('g1', big), group('g2', big), group('g3', big)] }), DEFAULT_CONFIG);
     if (!packed.ok) throw new Error(packed.reason);
     expect(Buffer.byteLength(JSON.stringify(packed.request), 'utf8')).toBeLessThanOrEqual(MAX_REQUEST_BYTES);
@@ -101,7 +101,8 @@ describe('lean request', () => {
   it('bounds the request by estimated tokens, not only by bytes', () => {
     // Observed live 2026-09-21: 123 KB of ASCII was accepted and 121 KB of Korean was refused with
     // max_tokens_exceeded. The same byte budget is three times the tokens, so bytes alone cannot bound this.
-    const korean = '이 함수는 반올림 버그가 있어서 값이 틀리게 나온다. 예외 조건을 반드시 유지해야 한다. '.repeat(700);
+    // Each Hangul character costs a whole token, so this is far over the token cap and far under the byte cap.
+    const korean = '이 함수는 반올림 버그가 있어서 값이 틀리게 나온다. 예외 조건을 반드시 유지해야 한다. '.repeat(250);
     const packed = buildLeanRequest(source({ groups: [group('m1', 'rule', true), group('g1', korean), group('g2', korean), group('g3', korean)] }), DEFAULT_CONFIG);
     if (!packed.ok) throw new Error(packed.reason);
     const body = JSON.stringify(packed.request);
@@ -113,14 +114,22 @@ describe('lean request', () => {
   });
 
   it('over-counts rather than under-counts, so the estimate never lets an oversized request through', () => {
-    // Measured against real provider usage on 2026-09-21: 25,600 estimated against 22,351 actually billed.
-    expect(estimateTokens('abcd')).toBe(1);
+    /**
+     * Calibrated twice against the live API. The first version charged ASCII at four characters per token, which is
+     * prose; real transcript content billed 1.7 bytes per token and still 400'd. ASCII is now 1.5 chars per token.
+     * Verified on the real 940 KB transcript afterwards: estimate 20,875, provider billed 15,560, request accepted.
+     */
+    expect(estimateTokens('abcdef')).toBe(4);
     expect(estimateTokens('한글')).toBe(2);
     expect(estimateTokens('')).toBe(0);
+    // Every estimate is at least as large as a 4-chars-per-token reading of the same text.
+    const sample = 'const x = compute(a, b); // note\n'.repeat(50);
+    expect(estimateTokens(sample)).toBeGreaterThan(Math.ceil(sample.length / 4));
   });
 
   it('reports no room rather than sending a request with no candidate in it', () => {
-    const packed = buildLeanRequest(source({ groups: [group('m1', 'z'.repeat(100 * 1024), true), group('g1', 'y'.repeat(60 * 1024))] }), DEFAULT_CONFIG);
+    // The mandatory layer fits on its own; no candidate can be added beside it without crossing the cap.
+    const packed = buildLeanRequest(source({ groups: [group('m1', 'z'.repeat(30 * 1024), true), group('g1', 'y'.repeat(20 * 1024))] }), DEFAULT_CONFIG);
     expect(packed.ok === false && packed.reason).toBe('no_room_for_candidates');
   });
 });

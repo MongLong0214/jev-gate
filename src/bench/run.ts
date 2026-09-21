@@ -189,6 +189,38 @@ export interface WorkerTierRecord {
   pinned: number;
 }
 
+/**
+ * JGL-05: what lean actually did in this cell, read from the hook's own records. Every field is an observation.
+ * `selections` counts admission events that got as far as a decision; `jev_attempts` counts requests actually sent,
+ * which is not the same number and never becomes zero because a request failed.
+ */
+export interface LeanV5 {
+  selections: number;
+  policy: Record<string, number>;
+  jev_attempts: number;
+  jev_input_tokens: number;
+  jev_input_tokens_known: number;
+  jev_cost_usd: number | null;
+  http_codes: Record<string, number>;
+  action: Record<string, number>;
+  reasons: Record<string, number>;
+  packets_proposed: number;
+  packets_dispatched: number;
+  dispatch_denied: Record<string, number>;
+  recommendation_not_taken: number;
+  retained_groups: number;
+  omitted_groups: number;
+  unassessed: number;
+  mandatory_bytes: number | null;
+  optional_bytes: number | null;
+  source_bytes_read: number | null;
+  coverage: Record<string, number>;
+  packet_bytes_max: number | null;
+  composed_bytes_max: number | null;
+  observed_model: Record<string, number>;
+  terminal_status: Record<string, number>;
+}
+
 /** Schema 5 additions (#28, ADR A13). Every field is observed; nothing is inferred from agent frontmatter. */
 export interface GateV5 {
   admission: { attempted: boolean; known_not_sent: boolean; forced: boolean; decided: boolean | null; choice: string | null; confidence: number | null; decision: string | null; reason: string | null };
@@ -298,6 +330,8 @@ export interface CellRecord {
     /** T6: calls whose required or observed model could not be normalized; neither a match nor a mismatch. */
     target_model_unknown: number;
   } & GateV5;
+  /** JGL-05: the lean path's own observations. Empty on an arm that never ran lean. */
+  lean: LeanV5;
   final_snapshot: (SnapshotReport & { path: string }) | null;
   grade: Grade | null;
   grade_history: Array<{ at: string; grade: Grade | null }>;
@@ -582,6 +616,33 @@ export const preflight = (o: Options, needsJev: boolean): Preflight => {
 
 const emptyJevPhase = (): JevPhaseUsage => ({ attempts: 0, tokens: null, tokens_known: 0, cost_usd: null });
 
+export const emptyLeanV5 = (): LeanV5 => ({
+  selections: 0,
+  policy: {},
+  jev_attempts: 0,
+  jev_input_tokens: 0,
+  jev_input_tokens_known: 0,
+  jev_cost_usd: 0,
+  http_codes: {},
+  action: {},
+  reasons: {},
+  packets_proposed: 0,
+  packets_dispatched: 0,
+  dispatch_denied: {},
+  recommendation_not_taken: 0,
+  retained_groups: 0,
+  omitted_groups: 0,
+  unassessed: 0,
+  mandatory_bytes: null,
+  optional_bytes: null,
+  source_bytes_read: null,
+  coverage: {},
+  packet_bytes_max: null,
+  composed_bytes_max: null,
+  observed_model: {},
+  terminal_status: {},
+});
+
 const emptyGateV5 = (): GateV5 => ({
   admission: { attempted: false, known_not_sent: false, forced: false, decided: null, choice: null, confidence: null, decision: null, reason: null },
   guard_denials: 0,
@@ -638,6 +699,7 @@ export const emptyCell = (cs: CodingCase, spec: ArmSpec, repetition: number): Ce
   api_retries: 0,
   result: null,
   gate: { prompt_injections: 0, agent_calls: 0, owned_calls: 0, pinned: 0, eligible_attempted: 0, patched: 0, preserved: 0, preserve_reasons: {}, skipped: {}, attempt_unknown: 0, missing_pre_records: 0, jev_model: null, jev_input_tokens: null, jev_input_tokens_known: 0, jev_cost_usd: null, gate_ms_total: null, hint_delivered: 0, target_model_matches: 0, target_model_mismatches: 0, target_model_unknown: 0, ...emptyGateV5() },
+  lean: emptyLeanV5(),
   final_snapshot: null,
   grade: null,
   grade_history: [],
@@ -919,6 +981,73 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
   }
   const g = cell.gate;
   const phase = (p: string): Array<Record<string, unknown>> => records.filter((r) => r['phase'] === p);
+
+  /**
+   * JGL-05: lean writes its own phases and shares none of the gate ones, so it is read separately. Nothing here is
+   * inferred: an attempt with no usage stays unknown, a proposed packet is not a dispatch, and a dispatched packet
+   * is not a checked task.
+   */
+  const L = cell.lean;
+  const maxOf = (cur: number | null, v: number | null): number | null => (v === null ? cur : cur === null ? v : Math.max(cur, v));
+  for (const r of phase('lean_result')) {
+    L.selections += 1;
+    bump(L.policy, str(r['policy']) ?? 'jev');
+    const src = isRecord(r['source']) ? r['source'] : null;
+    const groups = isRecord(r['groups']) ? r['groups'] : null;
+    if (src) {
+      bump(L.coverage, str(src['coverage']) ?? 'unknown');
+      L.unassessed += num(src['unassessed']) ?? 0;
+      L.source_bytes_read = maxOf(L.source_bytes_read, num(src['bytes_read']));
+    }
+    if (groups) {
+      L.mandatory_bytes = maxOf(L.mandatory_bytes, num(groups['mandatory_bytes']));
+      L.optional_bytes = maxOf(L.optional_bytes, num(groups['optional_bytes']));
+    }
+    const d = isRecord(r['decision']) ? r['decision'] : null;
+    if (d) {
+      bump(L.action, str(d['action']) ?? 'unknown');
+      const reason = str(d['reason']);
+      if (reason) bump(L.reasons, reason);
+    }
+    if (r['attempted'] === true) {
+      L.jev_attempts += 1;
+      const http = isRecord(r['http']) ? r['http'] : null;
+      bump(L.http_codes, http ? (str(http['code']) ?? `http_${String(num(http['status']) ?? 'none')}`) : 'unrecorded');
+      const jev = isRecord(r['jev']) ? r['jev'] : null;
+      const usage = jev && isRecord(jev['usage']) ? jev['usage'] : null;
+      const input = usage ? tokenCount(usage['input_tokens']) : null;
+      // A paid attempt whose usage never came back is unknown, not zero, so the cost total becomes unknown too.
+      if (input === null) L.jev_cost_usd = null;
+      else {
+        L.jev_input_tokens += input;
+        L.jev_input_tokens_known += 1;
+        const cost = estimateJevCostUsd(jev ? str(jev['model']) : null, input);
+        L.jev_cost_usd = cost === null || L.jev_cost_usd === null ? null : L.jev_cost_usd + cost;
+      }
+    }
+  }
+  for (const r of phase('lean_dispatch')) {
+    const reason = str(r['reason']);
+    if (r['applied'] === true) {
+      L.packets_dispatched += 1;
+      L.retained_groups += num(r['retained_groups']) ?? 0;
+      L.omitted_groups += num(r['omitted_groups']) ?? 0;
+      L.composed_bytes_max = maxOf(L.composed_bytes_max, num(r['composed_bytes']));
+    } else if (reason === 'packet_proposed') {
+      L.packets_proposed += 1;
+      L.packet_bytes_max = maxOf(L.packet_bytes_max, num(r['packet_bytes']));
+    } else if (reason === 'recommendation_not_taken') {
+      L.recommendation_not_taken += 1;
+    } else if (reason) {
+      bump(L.dispatch_denied, reason);
+    }
+  }
+  for (const r of phase('lean_post')) {
+    bump(L.terminal_status, str(r['status']) ?? 'unrecorded');
+    const m = str(r['observed_model']);
+    if (m) bump(L.observed_model, m);
+  }
+
   const byId = (p: string, id: string): Array<Record<string, unknown>> => records.filter((r) => r['phase'] === p && r['tool_use_id'] === id);
   const answer = (r: Record<string, unknown> | null, key: string): Record<string, unknown> | null => {
     const answers = r && isRecord(r['answers']) ? r['answers'] : null;

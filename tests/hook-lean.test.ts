@@ -444,7 +444,7 @@ describe('lean — applying the packet to the owned call', () => {
 
   it('refuses when the packet plus this call’s own notes exceeds the prompt bound', async () => {
     const env = makeEnv();
-    const path = writeTranscript([human('u1', 'x'.repeat(20 * 1024)), ...interaction(1, 'a.ts', 'y'.repeat(20 * 1024)), ...interaction(2, 'b.ts', 'z'.repeat(1024))]);
+    const path = writeTranscript([human('u1', 'x'.repeat(20 * 1024)), ...interaction(1, 'a.ts', 'y'.repeat(8 * 1024)), ...interaction(2, 'b.ts', 'z'.repeat(1024))]);
     const rec = await run(env, promptEvent(path), fakeJev());
     expect(rec.kind).toBe('guidance');
     const notes = `${'n'.repeat(40 * 1024)}\n${markerOf(rec)}\n`;
