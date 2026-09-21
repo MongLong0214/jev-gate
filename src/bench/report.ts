@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import type { GateV5, JevPhaseUsage, Plan, WorkerTierRecord } from './run.js';
+import type { GateV5, JevPhaseUsage, LeanV5, Plan, WorkerTierRecord } from './run.js';
 import { addUsage, familyCosts, familyTokens, money, safeSum, totalTokens, type ModelUsage } from './usage.js';
 
 /**
@@ -49,6 +49,8 @@ export interface RowView {
   diagnostic: boolean;
   /** Null for a V3/V4 cell: schema-5 observation is unknown there, never zero. */
   v5: GateV5 | null;
+  /** JGL-05: the lean observations of this row, or null for a row that carried none. */
+  lean: LeanV5 | null;
 }
 
 export interface ArmSummary {
@@ -79,7 +81,38 @@ export interface ArmSummary {
   completed_pass_count: number;
   gate: { agent_calls: number; owned_calls: number; pinned: number; eligible_attempted: number; patched: number; preserved: number; preserve_reasons: Record<string, number>; skipped: Record<string, number>; attempt_unknown: number; missing_pre_records: number; hint_delivered: number; target_model_mismatches: number };
   gate_v5: GateV5Summary;
+  /** JGL-05: what lean actually did. Zeroed on an arm that never ran it. */
+  lean: LeanSummary;
   validity_problems: string[];
+}
+
+/**
+ * JGL-05. `packets_proposed` is what the root was offered, `packets_dispatched` is what it actually used, and
+ * `recommendation_not_taken` is the gap it chose. They are three different facts and are never collapsed.
+ */
+export interface LeanSummary {
+  selections: number;
+  policy: Record<string, number>;
+  jev_attempts: number;
+  jev_input_tokens: number;
+  jev_input_tokens_known: number;
+  http_codes: Record<string, number>;
+  action: Record<string, number>;
+  reasons: Record<string, number>;
+  packets_proposed: number;
+  packets_dispatched: number;
+  recommendation_not_taken: number;
+  dispatch_denied: Record<string, number>;
+  retained_groups: number;
+  omitted_groups: number;
+  unassessed: number;
+  mandatory_bytes_max: number | null;
+  optional_bytes_max: number | null;
+  packet_bytes_max: number | null;
+  composed_bytes_max: number | null;
+  coverage: Record<string, number>;
+  observed_model: Record<string, number>;
+  terminal_status: Record<string, number>;
 }
 
 /** Schema-5 observation aggregated over an arm's rows. `rows_observed` says how many rows carried it at all. */
@@ -250,6 +283,7 @@ export const toRowView = (p: PlannedCell, c: Record<string, unknown> | null): Ro
     api_retries: c && typeof c['api_retries'] === 'number' ? (c['api_retries'] as number) : 0,
     diagnostic: c !== null && c['diagnostic'] === true,
     v5: gateV5Of(gate),
+    lean: c && isRecord(c['lean']) ? (c['lean'] as unknown as LeanV5) : null,
   };
 };
 
@@ -351,6 +385,60 @@ const addJevPhase = (into: JevPhaseUsage, more: JevPhaseUsage): void => {
   into.tokens_known += more.tokens_known;
   into.tokens = into.tokens === null || more.tokens === null ? null : into.tokens + more.tokens;
   into.cost_usd = into.cost_usd === null || more.cost_usd === null ? null : into.cost_usd + more.cost_usd;
+};
+
+const emptyLeanSummary = (): LeanSummary => ({
+  selections: 0,
+  policy: {},
+  jev_attempts: 0,
+  jev_input_tokens: 0,
+  jev_input_tokens_known: 0,
+  http_codes: {},
+  action: {},
+  reasons: {},
+  packets_proposed: 0,
+  packets_dispatched: 0,
+  recommendation_not_taken: 0,
+  dispatch_denied: {},
+  retained_groups: 0,
+  omitted_groups: 0,
+  unassessed: 0,
+  mandatory_bytes_max: null,
+  optional_bytes_max: null,
+  packet_bytes_max: null,
+  composed_bytes_max: null,
+  coverage: {},
+  observed_model: {},
+  terminal_status: {},
+});
+
+/** Sums the lean observations of an arm's rows. Sizes are reported as the largest seen, never averaged into one. */
+export const summarizeLean = (rows: RowView[]): LeanSummary => {
+  const out = emptyLeanSummary();
+  const big = (cur: number | null, v: number | null | undefined): number | null =>
+    typeof v !== 'number' || !Number.isFinite(v) ? cur : cur === null ? v : Math.max(cur, v);
+  for (const r of rows) {
+    const l = r.lean;
+    if (!l) continue;
+    out.selections += l.selections ?? 0;
+    out.jev_attempts += l.jev_attempts ?? 0;
+    out.jev_input_tokens += l.jev_input_tokens ?? 0;
+    out.jev_input_tokens_known += l.jev_input_tokens_known ?? 0;
+    out.packets_proposed += l.packets_proposed ?? 0;
+    out.packets_dispatched += l.packets_dispatched ?? 0;
+    out.recommendation_not_taken += l.recommendation_not_taken ?? 0;
+    out.retained_groups += l.retained_groups ?? 0;
+    out.omitted_groups += l.omitted_groups ?? 0;
+    out.unassessed += l.unassessed ?? 0;
+    for (const k of ['policy', 'http_codes', 'action', 'reasons', 'dispatch_denied', 'coverage', 'observed_model', 'terminal_status'] as const) {
+      addCounts(out[k], (l[k] ?? {}) as Record<string, number>);
+    }
+    out.mandatory_bytes_max = big(out.mandatory_bytes_max, l.mandatory_bytes);
+    out.optional_bytes_max = big(out.optional_bytes_max, l.optional_bytes);
+    out.packet_bytes_max = big(out.packet_bytes_max, l.packet_bytes_max);
+    out.composed_bytes_max = big(out.composed_bytes_max, l.composed_bytes_max);
+  }
+  return out;
 };
 
 export const summarizeGateV5 = (rows: RowView[]): GateV5Summary => {
@@ -463,6 +551,7 @@ export const summarizeArm = (arm: string, rows: RowView[]): ArmSummary => {
     completed_pass_count: completedPass.length,
     gate,
     gate_v5: summarizeGateV5(mine),
+    lean: summarizeLean(mine),
     validity_problems: problems,
   };
 };
@@ -584,6 +673,38 @@ const COMPARISONS: Array<[string, string, CriterionKind]> = [
 
 
 export const concludeRun = (arms: ArmSummary[], comparisons: Comparison[]): { category: string; reason: string } => {
+  /**
+   * JGL-05: a lean run plans none of the hierarchy arms, so the hierarchy conclusion would report on an arm that was
+   * never scheduled. This run's own question is answered from its own arms, and it never returns a verdict: three
+   * arms over a handful of jobs is an exploratory reading, not a demonstration.
+   */
+  const leanArm = arms.find((a) => a.arm === 'jev_lean');
+  if (leanArm && !arms.some((a) => a.arm === 'jev_hierarchy')) {
+    const l = leanArm.lean;
+    if (leanArm.by_status.completed === 0) return { category: 'insufficient observation', reason: 'no completed jev_lean session in this run' };
+    if (l.jev_attempts === 0 && l.selections === 0) return { category: 'insufficient observation', reason: 'no lean selection was recorded for jev_lean' };
+    // A successful call records no error code, and the ingest labels it by status: `http_200` is the success bucket.
+    const failed = Object.entries(l.http_codes).filter(([code]) => code !== 'http_200').reduce((n, [, v]) => n + v, 0);
+    if (l.jev_attempts > 0 && failed === l.jev_attempts) {
+      return { category: 'no selection exposure', reason: `every one of jev_lean's ${l.jev_attempts} Jev attempts failed (${counts(l.http_codes)}), so the arm ran as native and no selection was measured` };
+    }
+    if (l.packets_dispatched === 0) {
+      const offered = l.packets_proposed;
+      if (offered > 0) {
+        return { category: 'no dispatch exposure', reason: `lean proposed ${offered} packet(s) and the root dispatched none (${l.recommendation_not_taken} recommendation(s) not taken)` };
+      }
+      // Selection ran and declined. That is the policy working, not an absence of observation, so say which reason.
+      const why = Object.keys(l.reasons).length ? counts(l.reasons) : 'no reason recorded';
+      return {
+        category: 'no dispatch exposure',
+        reason: `lean selected ${l.selections} time(s) over ${l.jev_attempts} answered request(s) and proposed no packet (${why}); the arm ran as native and no handoff was measured`,
+      };
+    }
+    return {
+      category: 'exploratory lean reading',
+      reason: `${l.packets_dispatched} dispatched packet(s) over ${leanArm.by_status.completed} completed session(s); read the paired jev_lean vs native_auto and jev_lean vs recent_packet rows together, and treat neither alone as value`,
+    };
+  }
   const jev = arms.find((a) => a.arm === 'jev_hierarchy');
   const by = (control: string): Comparison | undefined => comparisons.find((c) => c.treatment === 'jev_hierarchy' && c.control === control);
   const diagnostic = arms.find((a) => a.arm === 'jev_forced_orchestration');
@@ -691,6 +812,28 @@ export const renderMarkdown = (r: Report): string => {
   L.push('', '## gate activity per arm', '', '| arm | Agent calls | owned | pinned | eligible attempted | patched | preserved (reasons) | skipped (codes) | attempt unknown | missing pre records | hint delivered | target/actual mismatches | validity problems |', '|---|---|---|---|---|---|---|---|---|---|---|---|---|');
   for (const a of r.arms) L.push(`| ${a.arm} | ${a.gate.agent_calls} | ${a.gate.owned_calls} | ${a.gate.pinned} | ${a.gate.eligible_attempted} | ${a.gate.patched} | ${a.gate.preserved} (${counts(a.gate.preserve_reasons)}) | ${counts(a.gate.skipped)} | ${a.gate.attempt_unknown} | ${a.gate.missing_pre_records} | ${a.gate.hint_delivered} | ${a.gate.target_model_mismatches} | ${a.validity_problems.length ? a.validity_problems.join('; ') : '-'} |`);
   L.push('', '## V5 gates per arm (observed)', '', ...v5Table(r.arms));
+  if (r.arms.some((a) => a.lean.selections > 0 || a.lean.packets_proposed > 0 || a.lean.packets_dispatched > 0)) {
+    L.push(
+      '',
+      '## lean selection and dispatch (observed)',
+      '',
+      '| arm | selections | policy | Jev attempts (HTTP) | Jev input tokens (known rows) | action | reasons | packets proposed | dispatched | not taken | denied | groups retained/omitted/unassessed | mandatory B | optional B | packet B | composed B | coverage | observed model | terminal |',
+      '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|',
+    );
+    for (const a of r.arms) {
+      const l = a.lean;
+      L.push(
+        `| ${a.arm} | ${l.selections} | ${counts(l.policy)} | ${l.jev_attempts} (${counts(l.http_codes)}) | ${l.jev_input_tokens} (${l.jev_input_tokens_known}) | ${counts(l.action)} | ${counts(l.reasons)} | ${l.packets_proposed} | ${l.packets_dispatched} | ${l.recommendation_not_taken} | ${counts(l.dispatch_denied)} | ${l.retained_groups}/${l.omitted_groups}/${l.unassessed} | ${l.mandatory_bytes_max ?? 'null'} | ${l.optional_bytes_max ?? 'null'} | ${l.packet_bytes_max ?? 'null'} | ${l.composed_bytes_max ?? 'null'} | ${counts(l.coverage)} | ${counts(l.observed_model)} | ${counts(l.terminal_status)} |`,
+      );
+    }
+    L.push(
+      '',
+      '- A proposed packet is what the root was offered; a dispatched one is what it actually used; "not taken" is the gap it chose. They are not the same number and are never collapsed.',
+      '- Byte columns are the largest observed in the arm, not an average, and a packet byte difference is a diagnostic — never a token count or a saving.',
+      '- An attempt whose usage never came back is unknown, not zero: the known-rows count beside the token total says how many contributed.',
+      '- Unassessed groups are source the provider\u2019s own token bound kept out of the request. They were not judged irrelevant.',
+    );
+  }
   L.push('', '## Jev requests per arm (attempts / input tokens / est $ at the dated price)', '', '| arm | admission | allocation | result | scope | influence (changed/judged) |', '|---|---|---|---|---|---|');
   for (const a of r.arms) {
     const j = (p: JevPhaseUsage): string => `${p.attempts} / ${p.tokens === null ? `null (known ${p.tokens_known})` : p.tokens} / ${fmt(p.cost_usd, 6)}`;
