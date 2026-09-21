@@ -42,6 +42,7 @@ import {
   composeFullPacket,
   composeLeanPacket,
   decideLean,
+  groupBytes,
   LEAN_PACKET_BUDGET_BYTES,
   LEAN_PACKET_MAX_BYTES,
   selectRecent,
@@ -428,6 +429,13 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     const benchRecent = deps.env['JEV_GATE_BENCH_RECENT'] === '1';
     // D2: no key returns before any optional source read, state write or HTTP.
     if (!apiKey && !benchRecent) return skip('key_missing');
+    /**
+     * Host controls are read locally, before the call. An override that pins every subagent's model, or forced
+     * forking, means the dispatch could only ever be denied -- and paying for a selection this session cannot use
+     * is the one cost with no possible return.
+     */
+    const hostOverride = subagentModelOverride(deps.env);
+    if (hostOverride.concrete || hostOverride.force || deps.env['CLAUDE_CODE_FORK_SUBAGENT'] === '1') return skip('host_unsupported');
     cleanupJobs(deps.env);
 
     const existing = readJob(deps.env, sessionId);
@@ -496,6 +504,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         return { ...gen, lean: { ...identity, outcome: 'proposed', packet, packet_sha256: sha256(packet), omitted_groups: omitted, retained_groups: retained } };
       });
       if (stale || saved === null) return skip('generation_changed');
+      trace?.write('lean_dispatch', { ...base, applied: false, reason: 'packet_proposed', marker, retained_groups: retained, omitted_groups: omitted, packet_bytes: Buffer.byteLength(packet, 'utf8') });
       return emitContext('UserPromptSubmit', renderLeanRecommendation(marker, omitted), null);
     };
 
@@ -516,6 +525,13 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         policy: 'recent_packet',
         request_sha256: sha256(prompt),
         source: { epoch: source.epoch, coverage: source.coverage, unassessed: source.unassessed, bytes_read: source.bytesRead },
+        groups: {
+          mandatory: mandatoryGroups(source).length,
+          mandatory_bytes: groupBytes(mandatoryGroups(source)),
+          optional_asked: optionalGroups(source).length,
+          optional_bytes: groupBytes(optionalGroups(source)),
+          request_bytes: Buffer.byteLength(prompt, 'utf8'),
+        },
         decision: { action: recent ? 'handoff' : 'direct', retained: recent?.retainedGroupIds.length ?? null, omitted: recent?.omittedGroupIds.length ?? null },
       });
       if (recent === null) return native('mandatory_overflow');
@@ -536,7 +552,13 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         request_len: prompt.length,
         request_sha256: sha256(prompt),
         source: { epoch: source.epoch, coverage: source.coverage, unassessed: packing.unassessed, bytes_read: source.bytesRead, duration_ms: source.durationMs },
-        groups: { mandatory: mandatoryGroups(source).length, optional_asked: packing.askedIds.length },
+        groups: {
+          mandatory: mandatoryGroups(source).length,
+          mandatory_bytes: groupBytes(mandatoryGroups(source)),
+          optional_asked: packing.askedIds.length,
+          optional_bytes: groupBytes(optionalGroups(source)),
+          request_bytes: Buffer.byteLength(prompt, 'utf8'),
+        },
       },
       ['work_shape', 'handoff_scope', ...packing.askedIds.map((id) => `relation_${id}`)],
       (outcome) => {

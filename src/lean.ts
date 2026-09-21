@@ -83,6 +83,9 @@ export type LeanPacking =
 
 const bytes = (v: unknown): number => Buffer.byteLength(JSON.stringify(v), 'utf8');
 
+/** Actual source bytes, which is what decides whether the mandatory layer fits -- never a post-compact token total. */
+export const groupBytes = (groups: readonly LeanGroup[]): number => groups.reduce((n, g) => n + Buffer.byteLength(g.text, 'utf8'), 0);
+
 /**
  * Build one batched request, measuring the SERIALIZED bytes of each whole candidate plus its own question as it is
  * packed. Nothing unbounded is built and then truncated, and no required group is ever sliced to fit.

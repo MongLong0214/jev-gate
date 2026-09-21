@@ -382,6 +382,7 @@ export type SkipCode =
   | 'source_bounded'
   | 'mandatory_overflow'
   | 'mandatory_unsafe'
+  | 'host_unsupported'
   | 'no_optional_groups'
   | 'no_room_for_candidates'
   | 'lean_executor_active'

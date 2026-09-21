@@ -8,6 +8,8 @@ import { fileURLToPath } from 'node:url';
 import { isSubscriptionOAuth, parseAuthStatus, subagentModelOverride, AUTH_CONFLICT_ENV, type CommandResult } from '../auth.js';
 import { DENIALS_BEFORE_STOP } from '../brief.js';
 import { DEFAULT_CONFIG, loadConfig } from '../config.js';
+import { LEAN_ACTION_CONFIDENCE, LEAN_COORDINATOR_RESERVE_BYTES, LEAN_OMISSION_CONFIDENCE, LEAN_PACKET_BUDGET_BYTES, LEAN_PACKET_MAX_BYTES } from '../lean.js';
+import { MAX_OPTIONAL_GROUPS, SOURCE_MAX_BYTES, SOURCE_MAX_MS } from '../lean-source.js';
 import { OWNED_AGENTS, type ConfigV5, type Tier } from '../types.js';
 import { gradeDir, type Grade } from './checker.js';
 import { canonicalize, copyTree, createExclusiveDir, isInside, isSafeId, overlaps, type SnapshotReport } from './paths.js';
@@ -244,7 +246,7 @@ export interface CellRecord {
    * reported a different fraction of the same traffic on the two days. Cost is a host-reported aggregate; this is
    * what the transcript itself says happened.
    */
-  turn_totals_stream: Array<{ cache_read: number; cache_creation: number; input: number; output: number; messages: number; duplicates: number; incomplete: number }>;
+  turn_totals_stream: StreamTotals[];
   fixture_sha256: string | null;
   dispatch: { intent_at: string | null; spawn_observed_at: string | null; pid: number | null };
   started: boolean;
@@ -502,6 +504,22 @@ export const buildPlan = (o: Options, cases: CodingCase[], manifestVersion: numb
       frontier_model: o.frontierModel,
       launch_env: { CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' },
       effective_config_nonsecret: effective.ok ? { ...effective.config, source: effective.source } : { error: effective.error },
+      /**
+       * JGL-05: the packet policy, frozen in the plan before anything is executed. `recent_packet` and `jev_lean`
+       * fill the SAME budget, and recording it here is what stops it being adjusted after Jev's retained size is
+       * known. These are code constants, not configuration, so the plan records the values actually compiled in.
+       */
+      lean_packet_policy: {
+        packet_budget_bytes: LEAN_PACKET_BUDGET_BYTES,
+        packet_max_bytes: LEAN_PACKET_MAX_BYTES,
+        coordinator_reserve_bytes: LEAN_COORDINATOR_RESERVE_BYTES,
+        max_optional_groups: MAX_OPTIONAL_GROUPS,
+        source_max_bytes: SOURCE_MAX_BYTES,
+        source_max_ms: SOURCE_MAX_MS,
+        action_confidence: LEAN_ACTION_CONFIDENCE,
+        omission_confidence: LEAN_OMISSION_CONFIDENCE,
+        note: 'Uncalibrated development constants, identical for recent_packet and jev_lean. Recency fills this budget newest-first with no requirement to omit anything.',
+      },
       note: 'Root models are CLI aliases; actual models come from system/init and modelUsage. User-scope settings are excluded for every arm via --setting-sources; user-level CLAUDE.md still loads equally in all arms. --max-turns bounds top-level turns, not every descendant request or subscription spend.',
     },
     effective_config: effective.ok ? effective.config : null,
@@ -676,10 +694,42 @@ const contextOf = (message: Record<string, unknown>): number | null => {
 const lastMainContext = new WeakMap<CellRecord, number>();
 const promptsSeen = new WeakMap<CellRecord, number>();
 
-type StreamTotals = { cache_read: number; cache_creation: number; input: number; output: number; messages: number; duplicates: number; incomplete: number };
+/**
+ * Two views of the same stream, kept side by side (JGL-05). The plain counters are the published unit and are not
+ * changed retroactively. The `deduped_*` counters drop a repeat of the same message within the same agent scope,
+ * which is the identity the host actually reuses -- a root message and a child's carry the same id space, so keying
+ * on the id alone would have conflated them. Neither view is chosen for producing the larger saving.
+ */
+type StreamTotals = {
+  cache_read: number;
+  cache_creation: number;
+  input: number;
+  output: number;
+  messages: number;
+  duplicates: number;
+  incomplete: number;
+  deduped_cache_read: number;
+  deduped_cache_creation: number;
+  deduped_input: number;
+  deduped_output: number;
+  deduped_messages: number;
+};
 const streamTotals = new WeakMap<CellRecord, StreamTotals>();
 const streamIds = new WeakMap<CellRecord, Set<string>>();
-const emptyStreamTotals = (): StreamTotals => ({ cache_read: 0, cache_creation: 0, input: 0, output: 0, messages: 0, duplicates: 0, incomplete: 0 });
+const emptyStreamTotals = (): StreamTotals => ({
+  cache_read: 0,
+  cache_creation: 0,
+  input: 0,
+  output: 0,
+  messages: 0,
+  duplicates: 0,
+  incomplete: 0,
+  deduped_cache_read: 0,
+  deduped_cache_creation: 0,
+  deduped_input: 0,
+  deduped_output: 0,
+  deduped_messages: 0,
+});
 
 /**
  * Adds one message's usage to the cell's running stream totals. A message without a usable usage block is not counted.
@@ -690,7 +740,7 @@ const emptyStreamTotals = (): StreamTotals => ({ cache_read: 0, cache_creation: 
  * stronger description, and one whose are not has said so before anything is quoted from it. Silently de-duplicating
  * instead would change a published unit after its results were seen, which the pre-registration rules forbid.
  */
-const addStreamUsage = (cell: CellRecord, message: unknown): void => {
+const addStreamUsage = (cell: CellRecord, message: unknown, scope: string): void => {
   if (!isRecord(message)) return;
   const usage = message['usage'];
   if (!isRecord(usage)) return;
@@ -698,7 +748,8 @@ const addStreamUsage = (cell: CellRecord, message: unknown): void => {
   let incomplete = false;
   const read = (k: string): number => {
     const v = usage[k];
-    if (typeof v === 'number' && Number.isFinite(v) && v >= 0) return v;
+    // Non-negative safe integers only: a fractional or unrepresentable counter is unknown, not a value.
+    if (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0) return v;
     // An absent counter and a zero counter are different facts, and adding both as zero makes them one number.
     incomplete = true;
     return 0;
@@ -707,11 +758,15 @@ const addStreamUsage = (cell: CellRecord, message: unknown): void => {
   const cacheCreation = read('cache_creation_input_tokens');
   const inputTokens = read('input_tokens');
   const outputTokens = read('output_tokens');
+  // Identity is the agent scope plus the message id: the same id under root and under a child is two reports.
   const id = str(message['id']);
+  let repeat = false;
   if (id !== null && id.length > 0) {
+    const key = `${scope}\u0000${id}`;
     const seen = streamIds.get(cell) ?? new Set<string>();
-    if (seen.has(id)) acc.duplicates += 1;
-    seen.add(id);
+    repeat = seen.has(key);
+    if (repeat) acc.duplicates += 1;
+    seen.add(key);
     streamIds.set(cell, seen);
   }
   acc.cache_read += cacheRead;
@@ -719,6 +774,13 @@ const addStreamUsage = (cell: CellRecord, message: unknown): void => {
   acc.input += inputTokens;
   acc.output += outputTokens;
   acc.messages += 1;
+  if (!repeat) {
+    acc.deduped_cache_read += cacheRead;
+    acc.deduped_cache_creation += cacheCreation;
+    acc.deduped_input += inputTokens;
+    acc.deduped_output += outputTokens;
+    acc.deduped_messages += 1;
+  }
   if (incomplete) acc.incomplete += 1;
   streamTotals.set(cell, acc);
 };
@@ -726,7 +788,7 @@ const addStreamUsage = (cell: CellRecord, message: unknown): void => {
 /** Folds one stream-json event into the record. Unknown shapes are ignored, never guessed. */
 export const observeEvent = (cell: CellRecord, ev: unknown): void => {
   if (!isRecord(ev)) return;
-  addStreamUsage(cell, ev['message']);
+  addStreamUsage(cell, ev['message'], str(ev['parent_tool_use_id']) ?? 'root');
   const type = ev['type'];
   if (type === 'system' && ev['subtype'] === 'init') {
     const plugins = Array.isArray(ev['plugins']) ? ev['plugins'].map((p) => (isRecord(p) ? (str(p['name']) ?? '') : String(p))) : [];

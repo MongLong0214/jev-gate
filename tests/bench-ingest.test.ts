@@ -300,12 +300,12 @@ describe('turn_totals_stream (2026-09-20 metric defect)', () => {
     observeEvent(cell, result(3));
 
     expect(cell.turn_totals_stream).toHaveLength(2);
-    expect(cell.turn_totals_stream[0]).toEqual({ cache_read: 100, cache_creation: 10, input: 1, output: 5, messages: 1, duplicates: 0, incomplete: 0 });
+    expect(cell.turn_totals_stream[0]).toMatchObject({ cache_read: 100, cache_creation: 10, input: 1, output: 5, messages: 1, duplicates: 0, incomplete: 0 });
     // Cumulative, like turn_totals_usd, so a job turn is the same subtraction in both units.
     const [priming, job] = cell.turn_totals_stream;
     // The second message omits two counters. They are still added as zero -- changing the sum would change a
     // published unit after its results were seen -- but the omission is counted, so the run says what it is.
-    expect(job).toEqual({ cache_read: 500, cache_creation: 10, input: 1, output: 25, messages: 2, duplicates: 0, incomplete: 1 });
+    expect(job).toMatchObject({ cache_read: 500, cache_creation: 10, input: 1, output: 25, messages: 2, duplicates: 0, incomplete: 1 });
     expect((job?.cache_read ?? 0) - (priming?.cache_read ?? 0)).toBe(400);
   });
 
@@ -327,6 +327,28 @@ describe('turn_totals_stream (2026-09-20 metric defect)', () => {
     // The repeat is still in the sum: this observes the risk, it does not silently correct the unit.
     expect(turn?.cache_read).toBe(30);
     expect(turn?.output).toBe(6);
+    // JGL-05 keeps the de-duplicated view beside it rather than replacing the published one.
+    expect(turn?.deduped_messages).toBe(2);
+    expect(turn?.deduped_cache_read).toBe(20);
+    expect(turn?.deduped_output).toBe(3);
+  });
+
+  it('scopes message identity by agent, so a root message and a child message are two reports', () => {
+    const cell = emptyCell({ id: 'job', group: 'g', fixtureDir: '', request: 'r', prime: [], setup: [], evaluationSetup: [], checkFile: '', checkFileRel: '' }, armSpecs('fable')['jev_lean'], 1);
+    const u = { cache_read_input_tokens: 10, cache_creation_input_tokens: 0, input_tokens: 1, output_tokens: 2 };
+    observeEvent(cell, { type: 'assistant', message: { id: 'msg_1', usage: u } });
+    observeEvent(cell, { type: 'assistant', parent_tool_use_id: 'toolu_1', message: { id: 'msg_1', usage: u } });
+    observeEvent(cell, result(1));
+    const [turn] = cell.turn_totals_stream;
+    // Same id, different scope: neither is a repeat of the other, so the de-duplicated view keeps both.
+    expect(turn).toMatchObject({ messages: 2, duplicates: 0, deduped_messages: 2, deduped_cache_read: 20 });
+  });
+
+  it('treats a fractional or unrepresentable counter as unknown rather than as a value', () => {
+    const cell = emptyCell({ id: 'job', group: 'g', fixtureDir: '', request: 'r', prime: [], setup: [], evaluationSetup: [], checkFile: '', checkFileRel: '' }, armSpecs('fable')['jev_lean'], 1);
+    observeEvent(cell, usageMsg({ cache_read_input_tokens: 10.5, output_tokens: Number.MAX_SAFE_INTEGER + 2 }));
+    observeEvent(cell, result(1));
+    expect(cell.turn_totals_stream[0]).toMatchObject({ cache_read: 0, output: 0, messages: 1, incomplete: 1 });
   });
 
   it('counts subagent messages as work and ignores messages with no usable usage', () => {

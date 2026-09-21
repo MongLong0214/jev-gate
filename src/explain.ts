@@ -193,8 +193,12 @@ const leanSelectionLine = (r: Rec): string => {
   const coverage = src ? str(src['coverage']) : null;
   const unassessed = src ? num(src['unassessed']) : null;
   const bytes = src ? num(src['bytes_read']) : null;
+  const b = (k: string): string => {
+    const v = groups ? num(groups[k]) : null;
+    return v === null ? '' : ` (${thousands(v)} B)`;
+  };
   const counts = groups
-    ? `  ${num(groups['mandatory']) ?? '?'} mandatory, ${num(groups['optional_asked']) ?? '?'} optional asked`
+    ? `  ${num(groups['mandatory']) ?? '?'} mandatory${b('mandatory_bytes')}, ${num(groups['optional_asked']) ?? '?'} optional${b('optional_bytes')}`
     : d
       ? `  ${num(d['retained']) ?? '?'} retained, ${num(d['omitted']) ?? '?'} omitted`
       : '';
@@ -206,7 +210,14 @@ const leanSelectionLine = (r: Rec): string => {
 };
 
 const leanDispatchLine = (r: Rec): string => {
-  if (r['applied'] !== true) return `dispatch executor  denied: ${str(r['reason']) ?? 'no reason recorded'}${because(str(r['detail']))}`;
+  const reason = str(r['reason']);
+  // An emitted marker is not a dispatch, and a recommendation nobody acted on is an outcome worth reading.
+  if (reason === 'packet_proposed') {
+    const pb = num(r['packet_bytes']);
+    return `packet   proposed  ${num(r['retained_groups']) ?? '?'} retained, ${num(r['omitted_groups']) ?? '?'} omitted${pb === null ? '' : `, ${thousands(pb)} B`}  — emitted to the root, not yet dispatched`;
+  }
+  if (reason === 'recommendation_not_taken') return `packet   not taken  the root made no owned executor call for that request`;
+  if (r['applied'] !== true) return `dispatch executor  denied: ${reason ?? 'no reason recorded'}${because(str(r['detail']))}`;
   const bytes = num(r['composed_bytes']);
   return `dispatch executor  packet applied  ${num(r['retained_groups']) ?? '?'} retained, ${num(r['omitted_groups']) ?? '?'} omitted${bytes === null ? '' : `, ${thousands(bytes)} prompt bytes`}`;
 };

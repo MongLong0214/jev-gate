@@ -83,6 +83,46 @@ const SECRET_PATTERNS: readonly RegExp[] = [
 
 export const looksSecret = (text: string): boolean => SECRET_PATTERNS.some((re) => re.test(text));
 
+/**
+ * Exact references a human turn makes to something the conversation already contains: a backticked or quoted span,
+ * or a path/filename. Code only, no model: this finds the literal strings a request names, and nothing else.
+ */
+const REFERENCE_PATTERNS: readonly RegExp[] = [
+  /`([^`\n]{3,200})`/g,
+  /"([^"\n]{3,200})"/g,
+  /'([^'\n]{3,200})'/g,
+  /\u2018([^\u2019\n]{3,200})\u2019/g,
+  /\u201c([^\u201d\n]{3,200})\u201d/g,
+  // A path or a filename: at least one dot-extension, optionally with directories.
+  /\b([\w@.~-]*(?:\/[\w@.~-]+)*\/?[\w@~-]+\.[A-Za-z][\w]{0,9})\b/g,
+];
+
+export const referencesIn = (text: string): string[] => {
+  const out = new Set<string>();
+  for (const re of REFERENCE_PATTERNS) {
+    for (const m of text.matchAll(re)) {
+      const token = (m[1] ?? '').trim();
+      if (token.length >= 3) out.add(token);
+    }
+  }
+  return [...out];
+};
+
+/**
+ * A reference resolves only when it appears verbatim in EXACTLY ONE candidate group. Two matches is an ambiguous
+ * reference, not two answers, and zero is a dangling one -- neither is guessed at here. A dangling essential
+ * referent is caught downstream by handoff_scope, which sees only the request and the mandatory layer.
+ */
+export const resolveReferences = (texts: readonly string[], candidates: readonly LeanGroup[]): Set<string> => {
+  const resolved = new Set<string>();
+  const tokens = new Set(texts.flatMap((t) => referencesIn(t)));
+  for (const token of tokens) {
+    const hits = candidates.filter((g) => g.text.includes(token));
+    if (hits.length === 1 && hits[0]) resolved.add(hits[0].id);
+  }
+  return resolved;
+};
+
 interface Entry {
   raw: Record<string, unknown>;
   uuid: string | null;
@@ -286,12 +326,12 @@ export const readLeanSource = (path: string | null | undefined, request: string,
 
   // Group: one assistant action with the results and qualification that belong to it. Breaking at the next assistant
   // turn keeps an action, its result and its failure note in one unit, which is what Jev classifies as a whole.
-  const mandatory: LeanGroup[] = [];
-  const optional: LeanGroup[] = [];
+  // Grouped in one chronological sequence: a constraint stated after an observation must still read after it.
+  const sequence: LeanGroup[] = [];
   let open: { texts: string[]; refs: string[] } | null = null;
   const closeOpen = (): void => {
     if (open === null) return;
-    optional.push({ id: '', origin: 'assistant_tool', text: open.texts.join('\n'), sourceRefs: open.refs, mandatory: false });
+    sequence.push({ id: '', origin: 'assistant_tool', text: open.texts.join('\n'), sourceRefs: open.refs, mandatory: false });
     open = null;
   };
   for (const v of prefix) {
@@ -308,13 +348,14 @@ export const readLeanSource = (path: string | null | undefined, request: string,
       continue;
     }
     closeOpen();
-    mandatory.push({ id: '', origin: v.kind, text: v.text, sourceRefs: v.uuid ? [v.uuid] : [], mandatory: true });
+    sequence.push({ id: '', origin: v.kind, text: v.text, sourceRefs: v.uuid ? [v.uuid] : [], mandatory: true });
   }
   closeOpen();
 
   // Only identical event identity collapses. Identical text observed at a different record is a different observation.
   const seenRefs = new Set<string>();
-  const deduped = optional.filter((g) => {
+  const deduped = sequence.filter((g) => {
+    if (g.mandatory) return true;
     const key = g.sourceRefs.join(',');
     if (key.length === 0) return true;
     if (seenRefs.has(key)) return false;
@@ -324,18 +365,32 @@ export const readLeanSource = (path: string | null | undefined, request: string,
 
   // Withheld and unenumerated groups are counted, never reclassified as irrelevant.
   let unassessed = 0;
-  const safeOptional = deduped.filter((g) => {
-    if (!looksSecret(g.text)) return true;
+  const safe = deduped.filter((g) => {
+    if (g.mandatory || !looksSecret(g.text)) return true;
     unassessed += 1;
     return false;
   });
-  const enumerated = safeOptional.slice(-MAX_OPTIONAL_GROUPS);
-  unassessed += safeOptional.length - enumerated.length;
+  const optionalCount = safe.filter((g) => !g.mandatory).length;
+  const keepFrom = Math.max(0, optionalCount - MAX_OPTIONAL_GROUPS);
+  let seenOptional = 0;
+  const enumerated = safe.filter((g) => {
+    if (g.mandatory) return true;
+    return seenOptional++ >= keepFrom;
+  });
+  unassessed += keepFrom;
 
-  const groups: LeanGroup[] = [
-    ...mandatory.map((g, i) => ({ ...g, id: `m${i + 1}` })),
-    ...enumerated.map((g, i) => ({ ...g, id: `g${i + 1}` })),
-  ];
+  let mandatorySeq = 0;
+  let optionalSeq = 0;
+  const identified: LeanGroup[] = enumerated.map((g) => ({ ...g, id: g.mandatory ? `m${++mandatorySeq}` : `g${++optionalSeq}` }));
+
+  /**
+   * An exact reference in the request or in an active human turn -- a backticked span, a quoted string, a path --
+   * that resolves to exactly one candidate makes that whole group mandatory. It cannot then be omitted, and
+   * `handoff_scope` may rely on it. An ambiguous or dangling reference promotes nothing.
+   */
+  const humanTexts = [request, ...identified.filter((g) => g.origin === 'human').map((g) => g.text)];
+  const referenced = resolveReferences(humanTexts, identified.filter((g) => !g.mandatory));
+  const groups: LeanGroup[] = identified.map((g) => (referenced.has(g.id) ? { ...g, mandatory: true } : g));
 
   return {
     ok: true,

@@ -61,11 +61,28 @@ describe('lean source — what counts as a human instruction', () => {
     ]);
     const s = ok(p, request);
     expect(mandatoryGroups(s)[0]?.text).toBe('예외: `as any`는 절대 추가하지 마');
-    expect(optionalGroups(s)[0]?.text).toContain('toast.error(e)');
-    expect(optionalGroups(s)[0]?.text).toContain('src/a.ts');
+    // The request names `handleMutateError`, and exactly one group contains it, so that whole group is mandatory.
+    const edit = s.groups.find((g) => g.origin === 'assistant_tool');
+    expect(edit?.mandatory).toBe(true);
+    expect(edit?.text).toContain('toast.error(e)');
+    expect(edit?.text).toContain('src/a.ts');
     // The current request is carried once, from the hook event, and not repeated as a group.
     expect(s.groups.filter((g) => g.text === request)).toHaveLength(0);
     expect(s.request).toBe(request);
+  });
+
+  it('keeps human turns and the interactions that followed them in one chronological sequence', () => {
+    const p = transcript([
+      human('u1', 'first instruction'),
+      assistant('a1', 'doing it', { id: 'tu1', name: 'Bash', input: { command: 'npm test' } }),
+      toolResult('r1', 'tu1', 'ok'),
+      human('u2', 'now also never touch the config'),
+      assistant('a2', 'understood', { id: 'tu2', name: 'Read', input: { file_path: 'b.ts' } }),
+      toolResult('r2', 'tu2', 'body'),
+      human('u3', 'go'),
+    ]);
+    // A constraint stated after an observation must still read after it in the packet.
+    expect(ok(p, 'go').groups.map((g) => g.origin)).toEqual(['human', 'assistant_tool', 'human', 'assistant_tool']);
   });
 
   it('keeps a failure qualifier in the same group as the action it qualifies', () => {
@@ -102,6 +119,48 @@ describe('lean source — what counts as a human instruction', () => {
       human('u2', 'second'),
     ]);
     expect(JSON.stringify(ok(p, 'second').groups)).not.toContain('subagent chatter');
+  });
+});
+
+describe('lean source — exact references', () => {
+  const base = (...extra: unknown[]): unknown[] => [
+    human('u1', 'earlier'),
+    ...interactionOf(1, 'src/quote.ts', 'export const parseQuote = (s) => Math.round(Number(s));'),
+    ...interactionOf(2, 'docs/old.md', 'a changelog from last year'),
+    ...extra,
+  ];
+  const interactionOf = (n: number, file: string, body: string): unknown[] => [
+    assistant(`a${n}`, `reading ${file}`, { id: `tu${n}`, name: 'Read', input: { file_path: file } }),
+    toolResult(`r${n}`, `tu${n}`, body),
+  ];
+
+  it('makes the one group an exact reference resolves to mandatory', () => {
+    const s = ok(transcript(base()), '`parseQuote` 반올림 고쳐줘');
+    const quote = s.groups.find((g) => g.text.includes('parseQuote'));
+    expect(quote?.mandatory).toBe(true);
+    expect(optionalGroups(s).map((g) => g.text).join('')).toContain('changelog');
+  });
+
+  it('resolves a path reference the same way', () => {
+    const s = ok(transcript(base()), 'docs/old.md 를 갱신해줘');
+    expect(s.groups.find((g) => g.text.includes('docs/old.md'))?.mandatory).toBe(true);
+  });
+
+  it('promotes nothing for an ambiguous reference', () => {
+    // `Read` appears in both groups, so it names neither of them.
+    const s = ok(transcript(base()), 'that `Read` call was wrong');
+    expect(optionalGroups(s)).toHaveLength(2);
+  });
+
+  it('promotes nothing for a dangling reference, and does not guess at one', () => {
+    const s = ok(transcript(base()), 'do the second option above');
+    expect(optionalGroups(s)).toHaveLength(2);
+    expect(mandatoryGroups(s).map((g) => g.origin)).toEqual(['human']);
+  });
+
+  it('resolves a reference made in an earlier human turn, not only in the current request', () => {
+    const s = ok(transcript(base(human('u9', 'remember `parseQuote` rounds down'))), 'carry on');
+    expect(s.groups.find((g) => g.text.includes('export const parseQuote'))?.mandatory).toBe(true);
   });
 });
 

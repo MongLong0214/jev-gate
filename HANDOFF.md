@@ -18,11 +18,12 @@ that one prompt with the packet. The user's model, permissions and auto-compact 
 
 Specification: current bodies of #21, #22, #33, #34, #35, #36, #29 (revision `jev-lean-handoff-v1.1`).
 
-**What is established:** the offline path, through the real entrypoint and the packed hook command. 52 behaviour
-tests in `tests/hook-lean.test.ts`, 18 adapter tests in `tests/lean-source.test.ts`, 22 selection tests in
-`tests/lean.test.ts`, all with fake HTTP and temporary transcripts. The packed-entrypoint test earned its keep
-immediately: `dist/hook.js` was not passing `process.argv` into `runHook`, so `--lean` never reached the profile
-check and only the in-process tests could see the mismatch path at all.
+**What is established:** the offline path, through the real entrypoint and the packed hook command. 60 behaviour
+tests in `tests/hook-lean.test.ts`, 24 adapter tests in `tests/lean-source.test.ts`, 22 selection tests in
+`tests/lean.test.ts`, plus the lean bench arms and the packed lean profile, all with fake HTTP and temporary
+transcripts. The packed-entrypoint test earned its keep immediately: `dist/hook.js` was not passing `process.argv`
+into `runHook`, so `--lean` never reached the profile check and only the in-process tests could see the mismatch
+path at all.
 
 **What is not:**
 
@@ -34,6 +35,11 @@ check and only the in-process tests could see the mismatch path at all.
   A smaller packet is a byte diagnostic, not a saving.
 - **Policy constants are uncalibrated.** Action confidence `.8` and omission confidence `.9` are the initial v1.1
   values, not measured accuracies.
+
+An exact reference in the request or in an active human turn — a backticked span, a quoted string, a path — that
+resolves to **exactly one** candidate group makes that whole group mandatory, so it cannot be omitted and
+`handoff_scope` may rely on it. Two matches is ambiguous and one match of nothing is dangling; neither is guessed at,
+and a dangling essential referent is caught by `handoff_scope`, which sees only the request and the mandatory layer.
 
 Source adapter notes worth keeping: the active history after a compaction is the host's own
 `compactMetadata.preservedSegment` — and `headUuid` sits *before* the `compact_boundary` record in the file, because

@@ -78,7 +78,8 @@ What that does and does not mean:
   summary, your CLAUDE.md and your permissions are untouched.
 - **Your current words, every active human turn and the whole supported compact summary are always carried.** Whether
   they fit is decided from their actual bytes, not from a post-compact token total (that number includes the static
-  prefix).
+  prefix). An exact reference you make — a backticked name, a quoted string, a path — that matches exactly one earlier
+  interaction makes that whole interaction mandatory too; an ambiguous or dangling one is never guessed at.
 - **Model inheritance is not free context.** A custom subagent has its own system prompt and may not have the parent's
   auto-memory, already-invoked skills or root-only tools. The first root turn and the final integration still happen,
   and the worker loads its own prefix.
