@@ -35,7 +35,20 @@ export interface JevResponse {
 
 export type JevOutcome =
   | { ok: true; response: JevResponse; status: number; durationMs: number; requestBytes: number }
-  | { ok: false; code: HttpCode; status: number | null; durationMs: number; requestBytes: number };
+  | {
+      ok: false;
+      code: HttpCode;
+      status: number | null;
+      durationMs: number;
+      requestBytes: number;
+      /**
+       * Additive (JGL-02): usage and model that parsed on their own even though the answers did not. A call that
+       * was answered unusably still cost tokens, and reporting it as zero would understate what the policy spent.
+       * Absent means nothing was parseable, which is unknown -- not zero.
+       */
+      usage?: JevUsage;
+      model?: string | null;
+    };
 
 export interface JevCallDeps {
   apiKey: string;
@@ -54,19 +67,30 @@ const statusToCode = (status: number): HttpCode => {
   return 'http_other';
 };
 
+/** Counters are nonnegative safe integers. A fractional, negative or unrepresentable count is unknown, not a value. */
 const parseUsage = (v: unknown): JevUsage => {
-  const num = (x: unknown): number | null => (typeof x === 'number' && Number.isFinite(x) && x >= 0 ? x : null);
+  const num = (x: unknown): number | null => (typeof x === 'number' && Number.isSafeInteger(x) && x >= 0 ? x : null);
   if (!isRecord(v)) return { input_tokens: null, output_tokens: null };
   return { input_tokens: num(v['input_tokens']), output_tokens: num(v['output_tokens']) };
 };
 
 /** Reads the body under the same abort signal as the headers, so one deadline covers the whole exchange. */
-const readCapped = async (res: Response, cap: number, signal: AbortSignal): Promise<{ text: string; bytes: number } | null> => {
+const decodeStrict = (buf: Buffer): string | null => {
+  try {
+    // Invalid UTF-8 is rejected, never repaired into source: a replacement character is a different byte sequence.
+    return new TextDecoder('utf-8', { fatal: true }).decode(buf);
+  } catch {
+    return null;
+  }
+};
+
+const readCapped = async (res: Response, cap: number, signal: AbortSignal): Promise<{ text: string; bytes: number } | null | 'invalid_utf8'> => {
   const body = res.body;
   if (!body) {
-    const text = await res.text();
-    const bytes = Buffer.byteLength(text, 'utf8');
-    return bytes > cap ? null : { text, bytes };
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.byteLength > cap) return null;
+    const text = decodeStrict(buf);
+    return text === null ? 'invalid_utf8' : { text, bytes: buf.byteLength };
   }
   const reader = body.getReader();
   const onAbort = (): void => {
@@ -90,7 +114,8 @@ const readCapped = async (res: Response, cap: number, signal: AbortSignal): Prom
   } finally {
     signal.removeEventListener('abort', onAbort);
   }
-  return { text: Buffer.concat(chunks).toString('utf8'), bytes };
+  const text = decodeStrict(Buffer.concat(chunks));
+  return text === null ? 'invalid_utf8' : { text, bytes };
 };
 
 /** One POST, one deadline covering headers and body, zero retries. The key never leaves this function except as the header. */
@@ -125,6 +150,7 @@ export const callJev = async <S, Q>(request: JevRequest<S, Q>, deps: JevCallDeps
     }
     const read = await readCapped(res, MAX_RESPONSE_BYTES, controller.signal);
     if (read === null) return { ok: false, code: 'response_too_large', status: 200, durationMs: elapsed(), requestBytes };
+    if (read === 'invalid_utf8') return { ok: false, code: 'response_invalid', status: 200, durationMs: elapsed(), requestBytes };
     let parsed: unknown;
     try {
       parsed = JSON.parse(read.text);
@@ -132,7 +158,16 @@ export const callJev = async <S, Q>(request: JevRequest<S, Q>, deps: JevCallDeps
       return { ok: false, code: 'response_invalid', status: 200, durationMs: elapsed(), requestBytes };
     }
     if (!isRecord(parsed) || !isRecord(parsed['answers'])) {
-      return { ok: false, code: 'response_invalid', status: 200, durationMs: elapsed(), requestBytes };
+      // The answers are unusable; the usage beside them is not, and the call was billed either way.
+      return {
+        ok: false,
+        code: 'response_invalid',
+        status: 200,
+        durationMs: elapsed(),
+        requestBytes,
+        usage: parseUsage(isRecord(parsed) ? parsed['usage'] : undefined),
+        model: isRecord(parsed) && typeof parsed['model'] === 'string' ? parsed['model'] : null,
+      };
     }
     return {
       ok: true,
