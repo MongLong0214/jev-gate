@@ -2,9 +2,8 @@
 
 export type Tier = 'fast' | 'standard' | 'deep' | 'frontier';
 export type PlannerTier = 'deep' | 'frontier';
-/** `context` is the search-result filter (jev-context-filter-mvp-r1 §4); it shares no state machine with native/auto. */
-export type Mode = 'off' | 'native' | 'auto' | 'context';
-/** The two modes that reach V5 routing. `context` never does, so routing-only types name these instead of excluding 'off'. */
+export type Mode = 'off' | 'native' | 'auto';
+/** The two modes that reach V5 routing; routing-only types name these instead of excluding 'off'. */
 export type RoutingMode = 'native' | 'auto';
 export type OwnedRole = 'worker' | 'planner';
 export type ExecutionShape = 'direct' | 'orchestrated';
@@ -34,38 +33,13 @@ export type ResultVerdict = 'accept' | 'rework' | 'replan' | 'abstain';
 
 export const TIERS: readonly Tier[] = ['fast', 'standard', 'deep', 'frontier'];
 export const PLANNER_TIERS: readonly PlannerTier[] = ['deep', 'frontier'];
-export const MODES: readonly Mode[] = ['off', 'native', 'auto', 'context'];
+export const MODES: readonly Mode[] = ['off', 'native', 'auto'];
 export const ADMISSION_ANSWERS: readonly AdmissionAnswer[] = ['direct', 'orchestrated', 'needs_context', 'abstain'];
 export const ROUTE_ANSWERS: readonly RouteAnswer[] = ['fast', 'standard', 'deep', 'frontier', 'abstain'];
 export const PLANNER_ROUTE_ANSWERS: readonly PlannerRouteAnswer[] = ['deep', 'frontier', 'abstain'];
 export const UPGRADE_BASES: readonly UpgradeBasis[] = ['unresolved_contract_reasoning', 'observed_reasoning_failure', 'no_specific_basis', 'unknown'];
-export const RESULT_VERDICTS: readonly ResultVerdict[] = ['accept', 'rework', 'replan', 'abstain'];
 /** The two bases that can justify an above-default worker (#27); the other two never can. */
 export const UPGRADE_BASES_SUFFICIENT: readonly UpgradeBasis[] = ['unresolved_contract_reasoning', 'observed_reasoning_failure'];
-
-export type BlockRelation = 'keep' | 'omit' | 'uncertain';
-export type SelectionScope = 'selectable' | 'keep_all' | 'uncertain';
-export const BLOCK_RELATIONS: readonly BlockRelation[] = ['keep', 'omit', 'uncertain'];
-export const SELECTION_SCOPES: readonly SelectionScope[] = ['selectable', 'keep_all', 'uncertain'];
-
-/** §6: one contiguous search hunk, kept as the host returned it. `text` is original bytes; nothing summarises or rewrites it. */
-export interface SearchBlock {
-  /** Opaque id local to this one tool result; it is never a path, an offset or a stored key. */
-  id: string;
-  sourcePath: string;
-  startLine: number | null;
-  endLine: number | null;
-  text: string;
-  /** Instruction files and anything else fixed by policy: never asked about, never omitted. */
-  protected: boolean;
-}
-
-/** The whole state one selection request sends. Nothing from the environment, the transcript or extra file reads is added. */
-export interface SelectionContext {
-  userRequests: string[];
-  searchInput: unknown;
-  blocks: SearchBlock[];
-}
 
 export interface OwnedAgent {
   role: OwnedRole;
@@ -156,8 +130,6 @@ export interface JevUsage {
 export interface HookInput {
   hook_event_name: string;
   session_id?: string;
-  /** SessionStart only: `startup` is the one fresh start the purpose record can anchor to; resume/compact/clear cannot (§5). */
-  source?: string;
   prompt_id?: string;
   /** Every hook event carries it; only Gate A reads it, to measure how deep the session already is (`src/depth.ts`). */
   transcript_path?: string;
@@ -437,40 +409,4 @@ export type StateCode = 'state_corrupt' | 'state_too_large' | 'state_locked' | '
 
 export type InputCode = 'stdin_too_large' | 'stdin_invalid_json' | 'stdin_invalid_utf8' | 'stdin_read_failed' | 'internal';
 
-/**
- * Context-filter outcomes (§9). Every one of them means the same thing at the hook boundary: the original tool result is
- * passed through untouched. They are separate from `SkipCode`/`PreserveReason` because the V5 state machine never sees them.
- */
-export type ContextCode =
-  | 'mode_context'
-  | 'context_not_grep'
-  | 'context_child_caller'
-  | 'context_response_unparsed'
-  | 'context_response_short'
-  | 'context_response_truncated'
-  | 'context_response_capped'
-  | 'context_response_failed'
-  | 'context_meta_inconsistent'
-  | 'context_no_candidates'
-  | 'purpose_missing'
-  | 'purpose_not_anchored'
-  | 'purpose_unusable'
-  | 'purpose_prompt_changed'
-  | 'purpose_cwd_changed'
-  | 'purpose_cancelled'
-  | 'purpose_over_bound'
-  | 'purpose_state_error'
-  | 'scope_invalid'
-  | 'scope_tie'
-  | 'scope_keep_all'
-  | 'scope_uncertain'
-  | 'scope_low_confidence'
-  | 'nothing_omitted'
-  | 'not_materially_smaller'
-  | 'archive_dir_failed'
-  | 'archive_write_failed'
-  | 'archive_cap_reached'
-  | 'replacement_not_smaller'
-  | 'replacement_too_large';
-
-export type ErrorCode = SkipCode | HttpCode | PreserveReason | DenyReason | StateCode | InputCode | ContextCode;
+export type ErrorCode = SkipCode | HttpCode | PreserveReason | DenyReason | StateCode | InputCode;

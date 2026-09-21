@@ -1,12 +1,5 @@
 {
   "hooks": {
-    "SessionStart": [
-      {
-        "hooks": [
-          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/hook.js\"", "timeout": 5 }
-        ]
-      }
-    ],
     "UserPromptSubmit": [
       {
         "hooks": [
@@ -24,12 +17,6 @@
     "PostToolUse": [
       {
         "matcher": "^Agent$",
-        "hooks": [
-          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/hook.js\"", "timeout": 5 }
-        ]
-      },
-      {
-        "matcher": "^Grep$",
         "hooks": [
           { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/hook.js\"", "timeout": 5 }
         ]

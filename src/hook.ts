@@ -285,9 +285,6 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
   if (!loaded.ok) return isAgentPre ? preserve('config_invalid') : skip('config_invalid');
   const config: ConfigV5 = loaded.config;
   if (config.mode === 'off') return isAgentPre ? preserve('mode_off') : skip('mode_off');
-  // §4: `context` runs only the search filter, so it creates no job, asks no gate and guards no root tool. The V5
-  // dispatch below is not reached; the context handler is wired separately.
-  if (config.mode === 'context') return isAgentPre ? preserve('mode_context') : skip('mode_context');
   const mode: RoutingMode = config.mode;
 
   let trace: TraceWriter | null = null;

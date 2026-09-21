@@ -1506,15 +1506,17 @@ describe('dist/hook.js (process)', () => {
     const hooks = JSON.parse(readFileSync(join(dist, 'hooks', 'hooks.json'), 'utf8')) as {
       hooks: Record<string, Array<{ matcher?: string; hooks: Array<{ type: string; command: string; timeout: number }> }>>;
     };
-    // The context filter adds SessionStart and a second PostToolUse group; the V5 Agent registration is unchanged.
-    for (const event of ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'Stop']) {
-      expect(hooks.hooks[event], event).toHaveLength(event === 'PostToolUse' ? 2 : 1);
+    // Exactly the five events the V5 gate dispatches. SessionStart and the `^Grep$` group were the withdrawn search
+    // filter's, and nothing registers them any more; adding one back would run this hook on every search result.
+    expect(Object.keys(hooks.hooks).sort()).toEqual(['PostToolUse', 'PostToolUseFailure', 'PreToolUse', 'Stop', 'UserPromptSubmit']);
+    for (const event of ['UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'Stop']) {
+      expect(hooks.hooks[event], event).toHaveLength(1);
       for (const group of hooks.hooks[event]!) expect(group.hooks).toEqual([{ type: 'command', command: 'node "${CLAUDE_PLUGIN_ROOT}/dist/hook.js"', timeout: 5 }]);
     }
-    expect(hooks.hooks['SessionStart']![0]!.matcher).toBeUndefined();
+    expect(hooks.hooks['UserPromptSubmit']![0]!.matcher).toBeUndefined();
     expect(hooks.hooks['PreToolUse']![0]!.matcher).toBeUndefined();
     expect(hooks.hooks['Stop']![0]!.matcher).toBeUndefined();
-    expect(hooks.hooks['PostToolUse']!.map((g) => g.matcher)).toEqual(['^Agent$', '^Grep$']);
+    expect(hooks.hooks['PostToolUse']!.map((g) => g.matcher)).toEqual(['^Agent$']);
     const resolved = hooks.hooks['PreToolUse']![0]!.hooks[0]!.command.replace('${CLAUDE_PLUGIN_ROOT}', dist);
     const r = spawnSync(resolved, {
       shell: true,

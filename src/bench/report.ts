@@ -575,17 +575,6 @@ const COMPARISONS: Array<[string, string, CriterionKind]> = [
   ['sonnet_gated', 'frontier_raw', 'none'],
 ];
 
-/** The PRD conclusion categories (ADR A13), chosen in order: the first one the observation supports is the answer. */
-export const CONCLUSION_CATEGORIES = [
-  'insufficient observation',
-  'no admission exposure',
-  'no allocation exposure',
-  'no added value over matched orchestration',
-  'lower cost with quality loss',
-  'lower cost with slower completion',
-  'repeated whole-job improvement in the tested workload',
-  'mechanism only',
-] as const;
 
 export const concludeRun = (arms: ArmSummary[], comparisons: Comparison[]): { category: string; reason: string } => {
   const jev = arms.find((a) => a.arm === 'jev_hierarchy');

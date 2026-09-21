@@ -216,8 +216,9 @@ table and the rules.
 | `src/bench/*` | 7-arm runner, schema-5 records, report with declared-criteria verdicts |
 | `agents/*.md` | six profiles: worker-fast/worker/worker-deep/worker-frontier, planner, planner-frontier |
 
-On `dev` at `24e9853`: `npm run typecheck && npm test && npm run build && npm run pack` are green (354 tests, 20 files)
-and `claude plugin validate . --strict` passes.
+On `dev` at the commit that removed the search filter: `npm run typecheck && npm test && npm run build && npm run pack`
+are green (503 tests, 25 files) and `claude plugin validate . --strict` passes. `npm run build` does not clean `dist/`,
+so remove it by hand after deleting a module or the stale `.js` still packs.
 
 ## Host facts you can rely on (Claude Code 2.1.275/2.1.276)
 
@@ -390,147 +391,42 @@ case-folded and symlinks are not resolved, so a normalized path is a planner's c
 [#33](https://github.com/MongLong0214/jev-gate/issues/33) still describes the superseded required-uncertainty plan and
 needs its body corrected to match this revision, which is a remote edit and therefore needs the owner to ask.
 
-## Second track: the search-result context filter (started 2026-09-18, in progress)
+## Closed track: the search-result context filter (2026-09-18 → 2026-09-21, withdrawn)
 
-A separate feature from the routing work, specified in `jev-context-filter-mvp-r1` (the owner's document, kept locally at
-`~/Downloads/jev-gate-context-filter-agent-handoff.md` — read it in full before continuing). The idea: keep the user's
-own coding model, and before a long `Grep` result reaches it, let Jev judge which result blocks are relevant and have the
-code deliver only the selected **original** text. No model routing, no planner, no guard, no V5 job state.
+**Closed. The code was removed on this commit** (`src/context/`, `tests/context-*.test.ts`, the `^Grep$` and
+`SessionStart` hook registrations, the `context` mode and its codes). The hook was never wired, so nothing in a real
+session ever reached it and no stored record carries a `context_intent` / `context_result` phase.
 
-### The probe answered the question the feature depends on: yes
+The idea was to let Jev judge which blocks of a long `Grep` result are relevant and deliver only the selected
+**original** text, keeping the user's own coding model. Two measurements closed it:
 
-`bench/results/v5-context-probe-2026-09-18/` holds thirteen recorded headless sessions on Claude Code 2.1.276 ($1.58,
-about three minutes of model time). The decisive results, each with evidence in that directory:
+- **It would never fire.** `bench/results/v5-context-viability-2026-09-18` §0: across 20,080 session transcripts on
+  disk, 120,756 tool calls contain **no `Grep` at all** — bypass-permissions mode routes search through `Bash`, which
+  is 91.2 % of calls. Searching still happens (37,462 Bash searches, 25.5 MB), but **98.3 % of those results are below
+  the 8 KiB floor**, p99 4,641 B.
+- **Granting it everything caps the benefit at about four tokens per session.** Hook moved to `Bash`, parser taught
+  `grep -n`, scope gate settled: **0.25–0.34 MB across 19,590 sessions**. §1–§5 of that README measured the gates on a
+  corpus built by emulating `Grep`, before the real sessions were read; their numbers stand and their conclusion does
+  not — the gates were never the binding constraint.
 
-- **`PostToolUse.hookSpecificOutput.updatedToolOutput` really replaces what the model receives**, and the original is
-  not also delivered. A hook that kept 2 of 5 markers produced a 506-character `tool_result` where the original was
-  1298; the model listed exactly those two markers.
-- **A malformed replacement is silently ignored** and the original survives, with no error reaching the model or the
-  hook. A rejected replacement is therefore indistinguishable from an applied one from inside the hook, which is why the
-  observation states `replacement_emitted` and `host_applied` separately and never infers one from the other.
-- **`additionalContext` is additive, never a substitute**, and it appears in no log, no transcript and no
-  `PostToolBatch` payload. Its tokens are real but unmeasurable after the fact, so count the disclosure from the string
-  the hook emitted.
-- **Grep's `tool_response` is three different shapes, not one with optional fields**, keyed by `output_mode`. In content
-  mode `numFiles` is always `0` and `filenames` always `[]`; `numLines` counts rendered ripgrep output lines including
-  context and `--` separators, not matches and not files. Fixtures for all three modes plus a truncated result are saved
-  beside the README.
-- **Two truncations exist and only one is visible.** `head_limit` shows up as `appliedLimit`/`totalLines`, but the host
-  also caps the result the model receives: a call carrying 27,391 characters into the hook was delivered to the model as
-  a 2 KB preview plus a saved-output path, with nothing in `tool_response` saying so. **The bytes a hook sees are not
-  the bytes the model would have received.** The window where filtering can save anything runs from the 8 KiB floor up
-  to that cap; above it a filter that fires makes things worse unless it beats the 2 KB preview.
+Two host facts from the probe are worth keeping whatever happens to this idea, and both are evidence for the routing
+work as well:
 
-  **That cap is now bisected** (`bench/results/v5-context-cap-2026-09-18`, 35 cells, $4.5851): it is **20,000
-  characters**, and it counts *characters, not bytes*. 20,000 is delivered whole, 20,001 comes back as a preview. A
-  Korean cell of 19,974 characters and **51,894 bytes** was delivered whole in the same run, which a byte cap cannot do.
-  "26.8KB" was the size of that one output, not the threshold — the host reports what it measured, never the limit it
-  applied, so reading it as the threshold would have set the ceiling 6 KB too high. `MAX_CONTENT_CHARS` carries it, and
-  it is deliberately in different units from `MIN_CONTENT_BYTES`: on CJK source a result can be three times the byte
-  size and still be inside what the host would have delivered, and a byte ceiling would switch the filter off exactly
-  there. A nearer ceiling binds first on ordinary results — `head_limit` defaults to **250 lines**, so a result with
-  ordinary line lengths tops out near 21 KB before the character cap can matter.
-- **The recovery archive is readable by the native `Read`, but only under a narrow grant.** `--allowedTools` alone,
-  `Read(...)` rules inside it, and `--add-dir` all failed, including for an ordinary directory under `$HOME`; a
-  `--settings` file with `permissions.additionalDirectories: ["~/.local/state/jev-gate/context"]` (or an equivalent
-  `permissions.allow` entry) worked. A user launching with a restricted `--allowedTools` cannot recover, and the plugin
-  cannot detect that in advance. Also: a recovery notice written as "read this path and report field X" got refused by
-  the model as an exfiltration probe, so the disclosure must stay a plain factual sentence.
-- **`PostToolBatch`** fires once per call after `PostToolUse`, nests everything under `tool_calls[]`, and carries
-  `tool_response` as the **rendered string**. It is a useful read-only check of what the model actually received and it
-  must never be fed to the Grep response parser.
-- `effort` is an object here too, confirming the V5 defect; `--no-session-persistence` leaves `transcript_path`
-  populated but never creates the file, so transcript-based evidence needs that flag dropped.
+- **The host caps what the model receives at 20,000 characters — characters, not bytes** (bisected in
+  `bench/results/v5-context-cap-2026-09-18`, 35 cells, $4.5851). 20,000 is delivered whole; 20,001 comes back as a
+  ~2 KB preview plus a saved-output path, with nothing in `tool_response` saying so. A Korean cell of 19,974
+  characters and 51,894 bytes was delivered whole, which a byte cap cannot do. **The bytes a hook sees are not the
+  bytes the model would have received.**
+- **`PostToolUse.hookSpecificOutput.updatedToolOutput` really replaces what the model receives**, and a malformed
+  replacement is silently ignored with no error reaching the model or the hook — so a rejected replacement is
+  indistinguishable from an applied one from inside the hook.
 
-Two more host facts to keep: `--setting-sources project,local` **silently discards** a `--settings` file, which is why
-several recovery attempts looked like permission failures when the settings were never loaded at all; and the fixtures
-preserve the invariant `numLines === content.split('\n').length`, so a parser can rely on it.
-
-Still unknown and listed in that README: interactive TUI behaviour, whether a subagent's Grep reaches a root hook,
-whether a replacement that itself exceeds the cap is persisted, `appliedOffset` (no probe used `offset > 0`), and paths
-with colons or non-ASCII characters against a real host. Seventeen sessions were launched and thirteen recorded; four
-superseded runs were overwritten, so their cost is unknown rather than zero. The exact size cap was on that list and is
-now measured; the preview's own size rule (the notice says "first 2KB", and the capped cells rendered 2,115–2,117 bytes
-in ASCII against 5,338 in Korean) was not separated from the notice text and remains unknown.
-
-### What exists in code
-
-`src/context/{blocks,purpose,select,archive,render,store}.ts` (about 880 lines) plus edits to `src/{config,types,trace}.ts`
-and the tests `tests/context-{blocks,purpose,select,fixtures,archive}.test.ts`. A `context` mode is added to `Mode` so
-that `off`, `native` and `auto` keep their exact current behaviour and `context` runs only this filter. `npm run
-typecheck`, `npm test` and `npm run build` are all clean at **449 tests across 25 files**, but that is the core in
-isolation: the hook is not wired yet, so nothing in a real session reaches this code path.
-
-An earlier revision of this section claimed "typecheck passes, 397 tests across 22 files" for `a9d1c88`. That was not
-true of the commit it was written on: `a9d1c88` added `tests/context-select.test.ts` and left `tsc` with two errors and
-one failing test, both introduced by that file. Both are fixed below. Check the three gates against the commit in hand
-rather than against this file.
-
-The probe wrote only `bench/results/v5-context-probe-2026-09-18/`; every change under `src/`, `hooks/` and `tests/` in
-that commit came from the core work, not from the probe.
-
-### Pick it up here
-
-1. ~~**Confirm the adapter against the probe's fixtures.**~~ **Done.** The parse assumptions in `src/context/blocks.ts`
-   are replaced by the three recorded shapes, and native truncation is now detected as
-   `appliedLimit !== undefined || appliedOffset !== undefined || totalLines > numLines`. This was not cosmetic: run
-   against the recorded payloads, the guessed shape **accepted `grep-truncated.json` and would have rewritten a result
-   the host had already cut**. Its detectors (`truncated`/`hasMore`/`nextOffset` on the response, `head_limit`/`offset`
-   read off `tool_input`) appear on no real payload; they are kept as defence in depth behind the confirmed keys, for a
-   host that does use those names. `renderGrepResponse` now regenerates `totalLines` with `numLines`, so a filtered
-   result does not itself read as natively truncated. `tests/context-fixtures.test.ts` runs the adapter against the
-   four recorded payloads directly, so the fixtures — not a hand-written idea of them — are what the parser answers to.
-2. **Finish the offline tests** listed in the document's §12 that are reachable without a host. Most were already
-   covered; the audit against that list left one real gap, now closed: `src/context/archive.ts` had **no tests at all**,
-   so "archive failure or cap producing no omission" was unverified (`tests/context-archive.test.ts`, 8 tests). The
-   remaining §12 items — colons in paths, Korean text, CRLF, identical text at different locations, protected files,
-   short/count/files-only/truncated/error pass-through, one request with scope plus per-block questions, low confidence
-   and ties and malformed answers, malformed scope, single-attempt HTTP preserving known usage — are covered in
-   `tests/context-{blocks,select,purpose}.test.ts`; re-check them against that list rather than trusting this sentence.
-
-   Mutation-check anything added here. Removing the `totalLines > numLines` guard left the whole suite green, because
-   every test that reached it asserted only `ok: false` while the confirmed truncated fixture is caught one check
-   earlier by `appliedLimit`. A guard whose reason code is the point needs a test that asserts the reason code.
-3. ~~**Wire the hook.**~~ **Do not — measured 2026-09-18, `bench/results/v5-context-viability-2026-09-18` §0.**
-   On this machine the `^Grep$` matcher would fire **zero times**. Across 20,080 session transcripts already on disk,
-   120,756 tool calls contain **no `Grep` at all**: bypass-permissions mode tells the session to search through `Bash`
-   instead, and 91.2 % of calls are `Bash`. Searching still happens — 37,462 Bash searches, 25.5 MB — but **98.3 % of
-   those results are below the 8 KiB floor**, whose p99 is 4,641 B. Granting the feature everything it asks for (hook
-   moved to `Bash`, parser taught `grep -n`, scope gate settled) caps the total benefit at **0.25–0.34 MB across 19,590
-   sessions — about four tokens per session.**
-
-   §1–§5 of that README measured the gates before the real sessions were read, on a corpus built by emulating `Grep`.
-   Their numbers stand and their conclusion does not: the gates were never the binding constraint.
-
-   The upside is real and sits behind one decision. Held against the same 95-block result, the scope question answers
-   `keep_all` at **0.99** when the user's request is exhaustive and `selectable` at **0.13** when it is not — so the
-   protection `OMIT_CONFIDENCE_FLOOR` exists to give is already coming from `keep_all` itself, while the floor discards
-   a **40–54 %** byte reduction that the block-level answers would have delivered. **That floor is a declared criterion
-   and this repository does not move one after seeing results: it is the owner's call, not the next agent's.**
-
-   Two things to settle with it, both in that README: the 250-line `head_limit` truncation removes **88 %** of broad
-   searches, which are exactly the ones a relevance filter suits; and Jev agrees with itself on only **67–89 %** of
-   block classifications across identical requests, so if the floor moves, the same search filters differently between
-   runs. Today the floor hides that.
-
-   When it is time, the wiring itself is unchanged: a `PostToolUse` matcher of exactly `^Grep$` — do not widen the
-   existing `^Agent$` — plus the `SessionStart` and `UserPromptSubmit` events the purpose record needs. The context path
-   must branch before any V5 routing logic, and a child caller (`agent_id` present) must pass through untouched.
-
-   The cheapest thing still unmeasured is free: the eligibility scan emulates the host's `Grep` rather than observing
-   it. A passive `PostToolUse` recorder on real sessions — the one in
-   `bench/results/v5-context-cap-2026-09-18/cells/probe-plugin` does exactly this and emits nothing back to the host —
-   would give the real distribution, including how often the model sets `head_limit` itself.
-4. **Then the three-condition comparison** in §11 (`native_output`, `deterministic_output`, `jev_output`), which needs
-   the owner's approval because it spends real budget. Measure against what the host *would have delivered*, not against
-   the bytes the hook saw — the cap above makes that distinction the difference between a real number and a fabricated
-   one.
-
-   Budget the cells, not just the run. The cap bisect cost $4.5851 for 35 cells against an estimate of $0.20–0.50,
-   because the estimate counted the search payload and the money is in booting a session: a representative cell reports
-   `input_tokens: 4, output_tokens: 107` beside `cache_creation_input_tokens: 42036`. One session per measurement is
-   clean and roughly $0.13 a time whatever it measures; where per-cell payloads are small, batch the sweep into one
-   session and buy independence with a fresh working directory per call instead.
+Full evidence, including the recorded `Grep` payload shapes, the `additionalContext` behaviour, the archive-permission
+findings and what stayed unknown: `bench/results/v5-context-probe-2026-09-18/`, `v5-context-cap-2026-09-18/`,
+`v5-context-viability-2026-09-18/`, `v5-context-locality-2026-09-19/`. The owner's specification
+(`jev-context-filter-mvp-r1`) and the unsettled `OMIT_CONFIDENCE_FLOOR` decision described in the viability README are
+where to start if this is ever revived; reviving it means writing the code again, on purpose, against a measurement
+that says it is worth it.
 
 ## Rules that are not negotiable
 
@@ -542,9 +438,9 @@ that commit came from the core work, not from the probe.
 - Negative results are deliverables. V3 and V4 both published theirs; do not quietly replace them.
 - No release, npm publish, marketplace entry or marketing without the owner asking for it.
 - No paid experiment, release, tag, push, or remote issue edit — including to #33 — without the owner asking first.
-- For the context filter: never claim a byte saving measured against what the hook saw. The host caps large results
-  before the model sees them — at 20,000 characters, measured — so the only honest baseline is what the host would have
-  delivered. Above the cap the host already spends its ~2 KB whatever the filter does.
+- If the withdrawn search filter is ever revived: never claim a byte saving measured against what the hook saw. The
+  host caps large results before the model sees them — at 20,000 characters, measured — so the only honest baseline is
+  what the host would have delivered. Above the cap the host already spends its ~2 KB whatever the filter does.
 
 ## Working conventions in this repo
 

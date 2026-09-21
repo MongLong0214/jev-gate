@@ -73,6 +73,8 @@ describe('validateConfig', () => {
   it.each([
     ['unknown key', { version: 5, nope: 1 }, 'unknown config keys'],
     ['mode', { version: 5, mode: 'enrich2' }, 'mode must be'],
+    // The withdrawn search filter's mode: a deployed file that still sets it is refused with the reason, not crashed.
+    ['withdrawn context mode', { version: 5, mode: 'context' }, 'the `context` search filter was withdrawn'],
     ['jevModel', { version: 5, jevModel: 'jev 1;rm -rf' }, 'jevModel must match'],
     ['deadline over the hook timeout', { version: 5, requestDeadlineMs: 9000 }, 'requestDeadlineMs must be'],
     ['floor of zero', { version: 5, routeConfidenceFloor: 0 }, 'routeConfidenceFloor must be'],
