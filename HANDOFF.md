@@ -298,6 +298,31 @@ independent proof the code works.
 
 ## Do this next
 
+### 2026-09-21 — the gate orchestrates, and what stopped it is now known
+
+`bench/results/v5-live-admission-2026-09-21/` (`9d1639b`) closes the question that sat above everything else. One
+session shows all three outcomes in order: no transcript yet on the first turn, so `depth_unknown`; 211,957 on the
+second, so `depth_below_floor`; 448,908 on the third, which sent the run's only admission request and got
+`orchestrated` back at confidence 0.95, then ran a deep planner and two accepted workers to `Stop: completed`. $3.46,
+six minutes. For that session the other three candidates are ruled out: the key answered, the profile was foreground,
+and Gate A never said direct because it was never asked until the depth passed.
+
+Two conditions came with it. **A fresh session is always direct on its first prompt**, since the transcript the reader
+measures does not exist yet. And **a 200K-context root cannot reach the operating region at all** — the diagnostic
+needed `--model sonnet[1m]`, which is a requirement rather than a preference while the floor is 300,000.
+
+The fleet answer is different from the session answer, and both are true. `scripts/fleet-gate-status.mjs` (repaired in
+the same commit: it hard-coded `~/projects/jev-gate` and crashed when no job state existed) reports `mode=off`, no key
+in the environment and the plugin not installed. The fleet's 45,309 above-floor turns with zero orchestrations are
+therefore explained before the floor is consulted at all.
+
+**The decision this leaves is the owner's, and it should be made before the next spend.** While the floor is 300,000,
+this product only exists for 1M-context sessions that have already grown past a third of their window, with the plugin
+installed and a key exported. Either that is the intended audience and the README should say so plainly, or the floor
+needs re-deriving against what sessions actually reach — and the crossing measurement that set it at 300,000 is one of
+the figures the depth ladder withdrew. Do not move the floor to make a number look better; declare the change and the
+reason first, as the non-negotiable rules below require.
+
 ### 2026-09-19 — everything in the previous order is now done or settled
 
 | was | outcome |
