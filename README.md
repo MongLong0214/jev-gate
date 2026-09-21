@@ -14,7 +14,7 @@ An experiment in using frontier intelligence for the hard parts—not every part
 [![Savings not established](https://img.shields.io/badge/savings-not%20established-D29922)](#results)
 [![Node 22+](https://img.shields.io/badge/node-22%2B-3FB950)](#try-v5)
 
-[The idea](#the-idea) · [How V5 works](#how-v5-works) · [Try V5](#try-v5) · [What is verified](#what-is-verified-and-what-is-not) · [Results](#results) · [Build with us](#build-with-us)
+[The idea](#the-idea) · [lean (new)](#lean--a-second-separate-mode-in-development) · [How V5 works](#how-v5-works-legacy-routing-modes) · [Try V5](#try-v5) · [What is verified](#what-is-verified-and-what-is-not) · [Results](#results) · [Build with us](#build-with-us)
 
 </div>
 
@@ -52,7 +52,65 @@ The question is not just *“Is this project hard?”* It is *“Does this next 
 
 We are not aiming for hundreds of tiny agents. The useful unit is a coherent outcome—camera controls and their tests, for example—not each file read. Handoffs, repeated exploration, and integration all have costs. The gate only helps if it saves more than it adds.
 
-## How V5 works
+## `lean` — a second, separate mode (in development)
+
+`off`, `native` and `auto` below are the **legacy routing modes**: Gate A, a planner, a task graph, tier routing and a
+root guard. `lean` shares none of that machinery. It is additive, off by default, and implemented but **not measured**.
+
+The hypothesis it tests is narrow: on an ordinary request in a session that already has history, Jev picks which
+complete prior interaction groups a fresh worker still needs, and the hook hands that packet to **one**
+`jev-gate:executor` running on your own inherited model, with your auto-compact untouched.
+
+```text
+your request (normal auto-compact ON)
+ -> local checks: mode, key, readable host transcript, mandatory layer fits, optional groups exist
+ -> no optional evidence, no key, unknown source: native, and zero requests
+ -> ONE batched Jev request: work shape, handoff scope, keep/omit per group
+ -> short/unclear/needs-context/forbidden/nothing-actually-omitted: native, and the call still cost what it cost
+ -> otherwise: one short recommendation carrying an opaque marker (never the packet itself)
+ -> you may ignore it; if the root does call the executor, PreToolUse patches that one call's prompt
+ -> the executor implements and checks normally and reports in prose; the root integrates as usual
+```
+
+What that does and does not mean:
+
+- **Jev selects existing history. It does not summarise, delete or rewrite anything.** Your transcript, your compact
+  summary, your CLAUDE.md and your permissions are untouched.
+- **Your current words, every active human turn and the whole supported compact summary are always carried.** Whether
+  they fit is decided from their actual bytes, not from a post-compact token total (that number includes the static
+  prefix).
+- **Model inheritance is not free context.** A custom subagent has its own system prompt and may not have the parent's
+  auto-memory, already-invoked skills or root-only tools. The first root turn and the final integration still happen,
+  and the worker loads its own prefix.
+- **A smaller packet is not a saving.** Fewer packet bytes, more Jev calls or fewer root turns establish nothing.
+  Missing history can cause rereads and repairs that cost more than was saved. No number here is measured yet.
+- **The comparisons are ordinary Claude with normal auto-compact (`native_auto`) and a deterministic recency packet
+  (`recent_packet`), not a strawman.** See [#29](https://github.com/MongLong0214/jev-gate/issues/29).
+- **Explicit `lean` is consent to the documented export.** The current request, the mandatory layer and the enumerated
+  groups go to TypeSafe. Credential screening is a conventional local pattern check, best effort — not universal
+  protection and not a zero-retention guarantee.
+- **The recommendation can be ignored, and nothing blocks the root if it is.** There is no guard and no deny-list in
+  `lean`.
+
+```sh
+npm run build
+node scripts/pack.mjs dist-pack --profile lean     # one executor, the lean hook set
+JEV_GATE_MODE=lean node dist/cli.js doctor
+
+cd /path/to/your/project
+JEV_GATE_MODE=lean CLAUDE_CODE_FORK_SUBAGENT=0 CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 \
+claude --model sonnet --plugin-dir "$PLUGIN_DIR"
+```
+
+Load one profile at a time: the lean artifact ships only `agents/executor.md`, and selecting a legacy mode there is
+diagnosed (`profile_mode_mismatch`) rather than starting a guard for roles it does not install.
+
+Specification: [#21 PRD](https://github.com/MongLong0214/jev-gate/issues/21),
+[#22 ADR](https://github.com/MongLong0214/jev-gate/issues/22),
+[#33](https://github.com/MongLong0214/jev-gate/issues/33)–[#36](https://github.com/MongLong0214/jev-gate/issues/36),
+[#29 measurement](https://github.com/MongLong0214/jev-gate/issues/29).
+
+## How V5 works (legacy routing modes)
 
 One request becomes a judged workflow. Jev is asked at every decision point, because a judgment costs about $0.0001 and
 returns in under a second; the expensive models are asked only where a decision is hard.
@@ -268,7 +326,7 @@ Recorded observations are in [`bench/results/v5-host-2026-09-18/`](bench/results
 | A root `Edit` denial and the terminal stop in a live session | verified at hook level only |
 | Any cost, runtime or quality benefit | see [Results](#results) |
 
-Gate C's HTTP call has since been removed from the normal path (see [How V5 works](#how-v5-works)); the Gate C row
+Gate C's HTTP call has since been removed from the normal path (see [How V5 works](#how-v5-works-legacy-routing-modes)); the Gate C row
 above describes the host-smoke session as recorded at the time, not the current design.
 
 `doctor` reports configuration and environment issues (auth method, model overrides, launch profile, key presence, the
@@ -453,7 +511,7 @@ Claude runs through its existing official login. `jev-gate` does not implement O
 **In `auto` mode V5 sends two kinds of text to TypeSafe in the normal path**: your request at admission, and the
 composed task contract with the relevant predecessor summaries at each planner or worker dispatch, each with fixed
 evaluation criteria. (Earlier revisions also sent the worker's structured reply for a Gate C result judgment; that
-HTTP call has been removed from the normal path — see [How V5 works](#how-v5-works).) That text can include source
+HTTP call has been removed from the normal path — see [How V5 works](#how-v5-works-legacy-routing-modes).) That text can include source
 excerpts, file names, and earlier user constraints — more than V4 sent, which is why a V4 configuration is rejected
 rather than reused. The hook does not independently upload your repository, transcript or environment, but text
 supplied by the caller can contain sensitive information. **Only enable `auto` for data you are authorized to send.**

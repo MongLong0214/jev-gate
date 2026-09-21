@@ -4,6 +4,44 @@ Everything below is what was actually observed, with the file that proves it. Th
 overstated claims from the original write-up; this one adds the 2026-09-19 measurements, which override several
 figures below and are marked where they do.
 
+## 2026-09-21 — `lean` is implemented and unmeasured
+
+A second mode landed on `dev`. It shares the dispatcher, the state file, the lock, the trace and the TypeSafe client
+with everything below, and none of its decisions: no Gate A/B/C, no planner, no task graph, no tier routing, no depth
+floor, no root guard, no plan interpretation. Everything below this section describes the **legacy** `native`/`auto`
+routing modes and their experiments, which are unchanged.
+
+What `lean` does: on an ordinary request, it reads the host's own transcript, groups it, asks Jev in one batched
+request which complete prior interaction groups a fresh worker still needs, and — only when something is actually
+omitted — recommends one `jev-gate:executor` with an opaque marker. If the root makes that call, PreToolUse replaces
+that one prompt with the packet. The user's model, permissions and auto-compact are untouched.
+
+Specification: current bodies of #21, #22, #33, #34, #35, #36, #29 (revision `jev-lean-handoff-v1.1`).
+
+**What is established:** the offline path, through the real entrypoint and the packed hook command. 52 behaviour
+tests in `tests/hook-lean.test.ts`, 18 adapter tests in `tests/lean-source.test.ts`, 22 selection tests in
+`tests/lean.test.ts`, all with fake HTTP and temporary transcripts. The packed-entrypoint test earned its keep
+immediately: `dist/hook.js` was not passing `process.argv` into `runHook`, so `--lean` never reached the profile
+check and only the in-process tests could see the mismatch path at all.
+
+**What is not:**
+
+- **No installed-host observation.** Nobody has watched `model: inherit` resolve, checked whether the patched prompt
+  echoes back into root history, confirmed which project instructions the executor actually loads, or run the
+  hook-disabled marker-only case against a real executor. Those need paid sessions and none were authorized.
+- **No efficacy measurement at all.** The three #29 arms (`native_auto`, `recent_packet`, `jev_lean`) exist in the
+  runner under `--arms lean` and have never been executed. No token, cost, quality or time figure for `lean` exists.
+  A smaller packet is a byte diagnostic, not a saving.
+- **Policy constants are uncalibrated.** Action confidence `.8` and omission confidence `.9` are the initial v1.1
+  values, not measured accuracies.
+
+Source adapter notes worth keeping: the active history after a compaction is the host's own
+`compactMetadata.preservedSegment` — and `headUuid` sits *before* the `compact_boundary` record in the file, because
+partial compaction retains earlier records, so "every line after the boundary" would have been wrong. A `tool_result`
+arrives inside a `type: "user"` event and is never treated as a human instruction. A packet is bound to the records
+*before* the current request, so this turn's own assistant/tool appends do not invalidate it while a new human turn,
+a compaction or a rewritten prefix does.
+
 ## Where the project stands
 
 `main` is at **v0.2.0** ([release](https://github.com/MongLong0214/jev-gate/releases/tag/v0.2.0)); `dev` carries
