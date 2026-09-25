@@ -771,6 +771,15 @@ describe('lean source — bounds, safety and what "unknown" means', () => {
   it('screens a wrapped header call and a percent-encoded URL password, but not a printf or %NAME% placeholder', () => {
     expect(looksSecret('headers.set("Authorization",\n  "Basic dTpw");')).toBe(true);
     expect(looksSecret('const headers = {\r\n  Authorization:\r\n    "Bearer abc" };')).toBe(true);
+    // Whitespace has its own bound, so ordinary call indentation and column alignment still screen.
+    expect(looksSecret(`      headers.set("Authorization",\n${' '.repeat(10)}"Basic dTpw");`)).toBe(true);
+    expect(looksSecret(`req.headers.set(\n\t\t\t\t"Authorization",\n\t\t\t\t\t"Bearer abc");`)).toBe(true);
+    expect(looksSecret(`proxy_set_header Authorization${' '.repeat(20)}"Basic dTpw";`)).toBe(true);
+    expect(looksSecret('Authorization:\u00a0Basic dTpw')).toBe(true);
+    expect(looksSecret(`headers.set("Authorization",\n${' '.repeat(10)}\`Bearer \${token}\`);`)).toBe(false);
+    // Past the bounds a gap is not one header: two line breaks, or more than 64 spaces in one run.
+    expect(looksSecret('Authorization is described below.\n\nBasic dTpw')).toBe(false);
+    expect(looksSecret(`Authorization:${' '.repeat(65)}Basic dTpw`)).toBe(false);
     expect(looksSecret('postgres://u:%40secret@host/app')).toBe(true);
     expect(looksSecret('postgres://u:%ABsecret@host/app')).toBe(true);
     expect(looksSecret('headers.set("Authorization",\n  `Bearer ${token}`);')).toBe(false);

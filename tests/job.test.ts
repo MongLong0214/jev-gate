@@ -206,19 +206,26 @@ describe('cleanupJobs', () => {
     expect(cleanupJobs({ JEV_GATE_STATE_DIR: join(tmp, 'never-created') }, now)).toBe(0);
   });
 
-  it('removes a file only under its own lock, and never one it cannot read or that records lost identities', () => {
+  it('removes a file only under its own lock, and never one readJob would refuse or that records lost identities', () => {
     const env = freshEnv();
     const now = Date.now();
     seed(env, 'in-use');
     seed(env, 'lost');
     updateJob(env, 'lost', (prev) => (prev ? { ...prev, lean_seen_lost: true } : null));
     writeFileSync(jobPath(env, 'unreadable'), '{"version":5,');
+    // Valid JSON that readJob still refuses: no active map, or another session's state under this session's name.
+    writeFileSync(jobPath(env, 'no-active'), JSON.stringify({ version: 5, session_id: 'no-active', current: {} }));
+    seed(env, 'donor');
+    writeFileSync(jobPath(env, 'misnamed'), readFileSync(jobPath(env, 'donor'), 'utf8'));
+    expect(readJob(env, 'no-active').ok).toBe(false);
+    expect(readJob(env, 'misnamed').ok).toBe(false);
     // A live holder: no owner file, so the lock is not stale and cleanup does not wait for it.
     mkdirSync(`${jobPath(env, 'in-use')}.lock`);
     const past = (now - RETENTION_MS - 60_000) / 1000;
-    for (const id of ['in-use', 'lost', 'unreadable']) utimesSync(jobPath(env, id), past, past);
+    const kept = ['in-use', 'lost', 'unreadable', 'no-active', 'misnamed'];
+    for (const id of kept) utimesSync(jobPath(env, id), past, past);
     expect(cleanupJobs(env, now)).toBe(0);
-    for (const id of ['in-use', 'lost', 'unreadable']) expect(existsSync(jobPath(env, id))).toBe(true);
+    for (const id of kept) expect(existsSync(jobPath(env, id))).toBe(true);
     rmSync(`${jobPath(env, 'in-use')}.lock`, { recursive: true });
     expect(cleanupJobs(env, now)).toBe(1);
     expect(existsSync(jobPath(env, 'in-use'))).toBe(false);

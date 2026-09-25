@@ -89,6 +89,18 @@ A fourth review, of `651556e` (same settings, FIX-FIRST), found four more, all c
   single linear regex scan, measured at 16 ms for an 8 MiB text with no match, the source cap. The scan is not
   chunked, because a quote-delimited match cannot be split at a safe offset.
 
+A fifth review, of `5a23a6b` (same settings, FIX-FIRST), confirmed three of those closed and found two gaps in the
+other two, both confirmed:
+
+- The wrapped header allowed eight characters after the line break, indentation included, so ten spaces of ordinary
+  call indentation missed. Whitespace no longer counts toward the eight punctuation characters. Each gap has its own
+  bound of 64, on the header line and after one line break, which also covers column alignment
+  (`proxy_set_header Authorization<20 spaces>"Basic …"`). The two classes are disjoint, so the repetition cannot
+  backtrack. An 8 MiB input built to make it try took 32 ms.
+- Cleanup's "cannot read" meant "not JSON", so an old file such as `{"version":5,"session_id":"s","current":{}}`,
+  which `readJob` refuses, was deleted, and the next lean request in that session saw an empty ledger. Cleanup now
+  requires the state `readJob` would accept for the session the file is named after.
+
 One finding was rejected: requiring a preserved list to be a parent chain, or to be in write order. Of 97 real
 lists in local transcripts, 92 were not parent chains and 89 were not in write order. None repeated an identity. The
 host relinks the list as written, so either check would decline valid sessions. Only the repeat check was added.
@@ -115,7 +127,7 @@ HTTP.
   `lean_seen_full` and runs natively. Forgetting an identity instead would let its redelivery be charged again.
 - **A lean session's state file is kept indefinitely.** It holds the admitted identities that stop a replay, and a
   session can be resumed at any time, so the seven-day cleanup skips it. Deleting it by hand re-opens that replay.
-  An unreadable state file is kept too.
+  An unreadable state file is kept too, including valid JSON that `readJob` refuses.
 - **A session whose state could not be read stays native for lean.** Its identities are unknown, so a replay cannot
   be recognised. Lean declines (`lean_ledger_unknown`) for the rest of that session, even after an orchestration
   turn rewrites the file.

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 import type { Env } from './config.js';
 import type { ExecutionShape, JobGeneration, JobState, OwnedRole, Reservation, StateCode, Tier } from './types.js';
@@ -56,7 +56,8 @@ export const stateRoot = (env: Env): string => {
 };
 
 export const jobsDir = (env: Env): string => join(stateRoot(env), 'jev-gate', 'jobs');
-export const jobPath = (env: Env, sessionId: string): string => join(jobsDir(env), `${createHash('sha256').update(sessionId, 'utf8').digest('hex')}.json`);
+const jobFileName = (sessionId: string): string => `${createHash('sha256').update(sessionId, 'utf8').digest('hex')}.json`;
+export const jobPath = (env: Env, sessionId: string): string => join(jobsDir(env), jobFileName(sessionId));
 
 const isSymlink = (p: string): boolean => {
   try {
@@ -320,16 +321,22 @@ export const countAttempt = (gen: JobGeneration, kind: BoundKind, taskId: string
 
 /**
  * Whether a state file may be aged out: older than retention, readable, no active younger than 24 h, and no lean
- * identities (or record of having lost some) in it. A file that cannot be read is never a candidate.
+ * identities (or record of having lost some) in it. A file that cannot be read is never a candidate, and "read" means
+ * what `readJob` accepts for the session the file is named after, not merely JSON: lean refuses to admit over a state
+ * it cannot read, and deleting that state would turn the refusal into an empty ledger.
  */
 const agedOut = (file: string, now: number): boolean => {
   try {
     const st = lstatSync(file);
     if (st.isSymbolicLink() || now - st.mtimeMs <= RETENTION_MS) return false;
-    const parsed = JSON.parse(readFileSync(file, 'utf8')) as unknown;
+    const text = readFileSync(file, 'utf8');
+    const parsed = JSON.parse(text) as unknown;
     if (!isRecord(parsed)) return false;
-    const current = isRecord(parsed['current']) ? (parsed['current'] as unknown as JobGeneration) : null;
-    if (Object.values(current?.active ?? {}).some((r) => now - Date.parse(r.started_at) < ACTIVE_GRACE_MS)) return false;
+    const sessionId = parsed['session_id'];
+    if (typeof sessionId !== 'string' || jobFileName(sessionId) !== basename(file)) return false;
+    const state = parseState(text, sessionId);
+    if (!state) return false;
+    if (Object.values(state.current.active).some((r) => now - Date.parse(r.started_at) < ACTIVE_GRACE_MS)) return false;
     /**
      * A session can be resumed after any length of time, and its admitted lean identities are what stop an old
      * request's redelivery from being charged again once compaction has removed its record. So a file that holds
