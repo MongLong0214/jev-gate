@@ -99,3 +99,34 @@ describe('tier profiles', () => {
     expect(Object.keys(TIER_PROFILES)).toEqual([...TIERS]);
   });
 });
+
+describe('usage and response boundaries (JGL-02)', () => {
+  const post = async (body: string | Buffer, status = 200): Promise<Awaited<ReturnType<typeof callJev>>> =>
+    await callJev({ model: 'jev-1.13.0', state: {}, questions: {} }, { apiKey: 'k', deadlineMs: 1000, fetchImpl: async () => new Response(body, { status }) });
+
+  it('rejects fractional, negative and unsafe counters as unknown rather than reading them as values', async () => {
+    const r = await post(JSON.stringify({ model: 'jev-1.13.0', answers: {}, usage: { input_tokens: 10.5, output_tokens: -1 } }));
+    expect(r.ok && r.response.usage).toEqual({ input_tokens: null, output_tokens: null });
+    const big = await post(JSON.stringify({ model: 'jev-1.13.0', answers: {}, usage: { input_tokens: Number.MAX_SAFE_INTEGER + 2, output_tokens: 3 } }));
+    expect(big.ok && big.response.usage).toEqual({ input_tokens: null, output_tokens: 3 });
+  });
+
+  it('keeps usage that parsed independently of answers it cannot use', async () => {
+    const r = await post(JSON.stringify({ model: 'jev-1.13.0', usage: { input_tokens: 40, output_tokens: 5 }, answers: 'not an object' }));
+    expect(r.ok).toBe(false);
+    expect(r.ok === false && r.code).toBe('response_invalid');
+    expect(r.ok === false && r.usage).toEqual({ input_tokens: 40, output_tokens: 5 });
+    expect(r.ok === false && r.model).toBe('jev-1.13.0');
+  });
+
+  it('rejects invalid UTF-8 instead of repairing it into source', async () => {
+    const r = await post(Buffer.from([0x7b, 0x22, 0x61, 0x22, 0x3a, 0x22, 0xff, 0xfe, 0x22, 0x7d]));
+    expect(r.ok).toBe(false);
+    expect(r.ok === false && r.code).toBe('response_invalid');
+  });
+
+  it('reports a missing model as null so a caller cannot read an unknown model as the pinned one', async () => {
+    const r = await post(JSON.stringify({ answers: {}, usage: { input_tokens: 1, output_tokens: 1 } }));
+    expect(r.ok && r.response.model).toBeNull();
+  });
+});

@@ -1545,7 +1545,10 @@ describe('sources', () => {
   });
 
   it('keeps every agent definition in step with OWNED_AGENTS', () => {
-    const files = readdirSync(join(__dirname, '..', 'agents')).filter((f) => f.endsWith('.md'));
+    const all = readdirSync(join(__dirname, '..', 'agents')).filter((f) => f.endsWith('.md'));
+    // JGL-04: `executor.md` belongs to lean, which shares no role, tier or reply format with these six.
+    const files = all.filter((f) => f !== 'executor.md');
+    expect(all.sort()).toEqual(['executor.md', 'planner-frontier.md', 'planner.md', 'worker-deep.md', 'worker-fast.md', 'worker-frontier.md', 'worker.md']);
     expect(files.sort()).toEqual(['planner-frontier.md', 'planner.md', 'worker-deep.md', 'worker-fast.md', 'worker-frontier.md', 'worker.md']);
     const workerBodies = new Set<string>();
     for (const f of files) {
@@ -1557,6 +1560,17 @@ describe('sources', () => {
       expect(body.match(/```json\n/g), f).toHaveLength(1);
     }
     expect(workerBodies.size).toBe(1);
+  });
+
+  it('keeps the lean executor out of the legacy contract: inherited model, no reply format, a fail-safe', () => {
+    const text = readFileSync(join(__dirname, '..', 'agents', 'executor.md'), 'utf8');
+    expect(text).toContain('model: inherit');
+    expect(text).toContain('disallowedTools: Agent, SendMessage');
+    expect(text).toContain('background: false');
+    // No WorkerReply JSON, no check_id list, no length quota: the executor reports in prose.
+    expect(text).not.toContain('```json');
+    expect(text).not.toContain('check_id');
+    expect(text).toContain('handoff_unavailable');
   });
 });
 

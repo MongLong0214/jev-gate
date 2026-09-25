@@ -4,6 +4,213 @@ Everything below is what was actually observed, with the file that proves it. Th
 overstated claims from the original write-up; this one adds the 2026-09-19 measurements, which override several
 figures below and are marked where they do.
 
+## 2026-09-25 — the PR #37 review (L1–L7) is fixed in code; `lean` is still unmeasured
+
+The consolidated review of `e444a4d` asked for seven changes before recommending `lean`. All seven are now in code
+and offline tests (`eac9bb9`, `5ec0d05`). That makes the code and tests complete. It is not a new host observation,
+and it is not a saving.
+
+- **L1 privacy.** The request and every required group are screened before any request is built; a hit stays native
+  (`mandatory_unsafe`). Optional credential-shaped groups are never exported and are counted as unassessed. The
+  failure trace keeps a closed reason and a length, never the host's error text.
+- **L2 / L4 source.** These are in the same commit's adapter changes. The following decline rather than guess: a
+  corrupt complete record, invalid UTF-8, a mixed user envelope, unseen media, attachment or provenance types, and
+  non-regular files. Calls and results pair by their real ids, whatever order they arrive in. Required references
+  are resolved against the whole inventory before the optional cap.
+- **L3 binding.** A packet binds to the request's prompt identity, its session and its canonical working tree. A
+  later turn, another tree, or no cwd makes it `marker_stale`.
+- **L5 one attempt.** Admission is compare-and-register under the job lock. A redelivered or concurrent hook
+  process spends at most once (three packed processes → one fetch). A reservation that cannot be written is
+  `reservation_failed`, never a bare marker passed through.
+- **L6 accounting (#45 A).** Every charged producer reaches the final report once. Lean spend is joined per request
+  over the union of intents and results. An intent with no result leaves the complete total unknown, but the known
+  subtotal survives. Reports now say `accounting: 2`, and old lean blocks are read as revision 1.
+- **L7.** The provider gets what is left of the 5 s hook timeout after a post-call reserve. With less than 250 ms
+  left, nothing is sent and the trace says so. With no key, nothing is written. Withheld groups are reported by
+  reason. The dispatch note is framed below the user's own words.
+- **Scoped instructions.** The `handoff_scope` criteria distinguish four kinds of restriction: one on the current
+  request, a session-wide one, a completed earlier task's local one, and quoted tool text.
+  `tests/lean.test.ts` builds all four from a host-shaped transcript through the real adapter. The earlier claim that
+  the depth fixtures carry a valid global ban was wrong. `bench/results/v5-lean-scope-probe-2026-09-25/` has the
+  original text and a 15-call probe (≈ $0.0012). On that text Jev now leans `self_contained`, still below the
+  floor.
+
+A second review of `299855f` (gpt-6-sol, xhigh, read-only, verdict FIX-FIRST) found nine defects in that code.
+Each was checked against the source before it was fixed:
+
+- A credential behind `Authorization: Bearer` or `Basic`, or a bearer token with no conventional prefix, now screens.
+- An older request delivered again after a newer one registered no longer spends a second time. The state keeps
+  every admitted lean identity (`lean_seen`), and a request whose transcript already shows a later human turn is
+  `source_changed` before any call.
+- A failed executor call no longer releases ownership, interrupted or not (see the limits below).
+- At the prompt, a transcript that ends inside a record still being written is `source_incomplete`. At dispatch the
+  unfinished record is this turn's own output and is still left out.
+- Required context that holds an image the packet cannot carry is `source_unsupported`.
+- A preserved compaction list that repeats an identity is `source_lineage_unknown`.
+- Reference resolution checks the source time bound per token.
+
+A re-review of `b71d227` (gpt-6-sol, xhigh, read-only, verdict FIX-FIRST) confirmed six of those closed and one
+rejection adequate, and found the rest incomplete:
+
+- A literal header credential of any length now screens: `Authorization: Basic dTpw` is a whole credential, and the
+  backtick form is covered. A name, a placeholder or a concatenation (`$TOKEN`, `${token}`, `<token>`, `'Bearer ' +
+  token`) still does not.
+- `lean_seen` evicted after 32 admissions, so an evicted request redelivered after compaction could spend again. It
+  now never evicts: at 512 identities the session declines further lean requests (`lean_seen_full`).
+- The reference time bound now reaches each text, each searched path run and each candidate, not only each token.
+- The host A/B sentence now says the pair is consistent with the packet staying out of root context, which is all one
+  unequal pair shows.
+
+A third review, of `19284cc` (same settings, FIX-FIRST), found two more ways through, both confirmed:
+
+- Header credentials in subscript, call, constant-template and literal-concatenation forms
+  (`headers["Authorization"] = "Basic dTpw"`, `headers.set("Authorization", …)`, `` `Basic ${'dTpw'}` ``,
+  `'Basic ' + 'dTpw'`) now screen, as do `btoa`/`Buffer.from` of a literal `user:password` and a password in a URL's
+  userinfo. Names and placeholders still pass.
+- The seven-day state cleanup deleted the lean ledger with the rest of an idle session's state, so a session resumed
+  after a week could pay again for a redelivered old request. A state file that holds admitted lean identities is now
+  never aged out.
+- Reference extraction also reads the clock every 16 matches or runs inside a text, not only between texts.
+- Bench: a lean record with no `request_id` is never paired by count. It is unknown and stays out of the known
+  subtotal. A row's known subtotal keeps the known legacy spend when the legacy total is incomplete.
+
+A fourth review, of `651556e` (same settings, FIX-FIRST), found four more, all confirmed:
+
+- A header call wrapped across one line (`headers.set("Authorization",⏎ "Basic dTpw")`) and a percent-encoded URL
+  password (`postgres://u:%40secret@host`) now screen. `%NAME%`, `%s` and `%(pw)s` are still placeholders.
+- Cleanup read and deleted without the job lock, so it could unlink a file a writer had just replaced with a newly
+  admitted lean identity, and it deleted files it could not read. It now removes a file only under that file's lock
+  after a second look, never waits for a held lock, and leaves an unreadable file alone.
+- An unreadable state file reached a writer as "no state", so a lean admission could write a fresh ledger over one
+  that held identities. Lean admission now refuses an unreadable state (`lean_ledger_unknown`). An orchestration
+  turn still recovers the file, and the state it writes carries `lean_seen_lost`, which keeps lean off in that
+  session.
+- Reference extraction also reads the clock before each of its six passes over a text. Within one pass the gap is a
+  single linear regex scan, measured at 16 ms for an 8 MiB text with no match, the source cap. The scan is not
+  chunked, because a quote-delimited match cannot be split at a safe offset.
+
+A fifth review, of `5a23a6b` (same settings, FIX-FIRST), confirmed three of those closed and found two gaps in the
+other two, both confirmed:
+
+- The wrapped header allowed eight characters after the line break, indentation included, so ten spaces of ordinary
+  call indentation missed. Whitespace no longer counts toward the eight punctuation characters. Each gap has its own
+  bound of 64, on the header line and after one line break, which also covers column alignment
+  (`proxy_set_header Authorization<20 spaces>"Basic …"`). The two classes are disjoint, so the repetition cannot
+  backtrack. An 8 MiB input built to make it try took 32 ms.
+- Cleanup's "cannot read" meant "not JSON", so an old file such as `{"version":5,"session_id":"s","current":{}}`,
+  which `readJob` refuses, was deleted, and the next lean request in that session saw an empty ledger. Cleanup now
+  requires the state `readJob` would accept for the session the file is named after.
+
+A sixth review, of `4e6cc47` (same settings, FIX-FIRST), confirmed the header gap closed and found the cleanup copy
+still short: it missed `readJob`'s size bound, so an old valid state over 1 MiB was deleted, and it read `lean_seen`
+raw, so an entry lean ignores (`[null]`) kept a file forever. Both were confirmed. Cleanup now calls the same reader lean
+uses instead of copying its checks, so a rule added there reaches cleanup too.
+
+One finding was rejected: requiring a preserved list to be a parent chain, or to be in write order. Of 97 real
+lists in local transcripts, 92 were not parent chains and 89 were not in write order. None repeated an identity. The
+host relinks the list as written, so either check would decline valid sessions. Only the repeat check was added.
+
+Tests: 724 across 28 files. That includes 83 hook, 68 adapter, 38 selection and 34 ingestion tests, all with fake
+HTTP.
+
+**Limits that ship with this, and are not bugs to fix quietly:**
+
+- **Weak scope discrimination.** A ban lifts P(forbidden) from ≈ 0.01 to 0.34–0.60, but an explicit ban in the
+  request itself scored no higher than a scoped or quoted one. It lost to `self_contained` once, at 0.36
+  confidence. Lean honours explicit bans today because every such answer fell below the 0.8 action floor, with a
+  highest observed confidence of 0.47. That is n = 3 per phrasing, so it is not a bound. Changing the criteria text
+  to move these numbers is the tuning the 2026-09-21 report warned against.
+- **A reservation leaked by another hook's denial cannot be seen.** If a different PreToolUse hook denies the
+  executor call after this one reserved it, no failure event reaches this plugin. The reservation stays as an active
+  executor, and lean is off for the rest of that session (`lean_executor_active`).
+- **`async_launched` keeps ownership.** A background executor is never declared dead by a timer, so lean stays off
+  for that session until a terminal result arrives.
+- **A failed executor call keeps ownership.** `PostToolUseFailure` says the parent's call ended. It does not say
+  whether a child started or stopped, so lean stays off for the rest of that session after any executor failure.
+  Only a foreground `completed` result releases.
+- **A long lean session stops admitting.** After 512 admitted lean requests in one session, every further one is
+  `lean_seen_full` and runs natively. Forgetting an identity instead would let its redelivery be charged again.
+- **A lean session's state file is kept indefinitely.** It holds the admitted identities that stop a replay, and a
+  session can be resumed at any time, so the seven-day cleanup skips it. Deleting it by hand re-opens that replay.
+  An unreadable state file is kept too: anything `readJob` refuses, whether for its structure or its size.
+- **A session whose state could not be read stays native for lean.** Its identities are unknown, so a replay cannot
+  be recognised. Lean declines (`lean_ledger_unknown`) for the rest of that session, even after an orchestration
+  turn rewrites the file.
+- **Prose about auth headers screens as a credential.** "Authorization: Bearer header" has a literal where the value
+  goes, so that group is withheld or the source declines. A false positive costs coverage; a miss sends a credential.
+- **A record still being written at the prompt declines.** If the host is mid-write when the prompt hook reads, that
+  turn stays native (`source_incomplete`) rather than dropping a record it cannot see.
+- **Router composition is not tested.** L1's re-screening at composition and L6's "Router + Lean without double
+  counting" wait for the Router (#38–#44). No Router code exists on this branch.
+- **No 402 circuit breaker.** An exhausted TypeSafe balance surfaces as `http_other`, once per request, and lean
+  falls back natively each time. A breaker belongs in the bounded direct adapter (#40), not in lean.
+
+## 2026-09-21 — `lean` is implemented and unmeasured
+
+A second mode landed on `dev`. It shares the dispatcher, the state file, the lock, the trace and the TypeSafe client
+with everything below, and none of its decisions: no Gate A/B/C, no planner, no task graph, no tier routing, no depth
+floor, no root guard, no plan interpretation. Everything below this section describes the **legacy** `native`/`auto`
+routing modes and their experiments, which are unchanged.
+
+What `lean` does: on an ordinary request, it reads the host's own transcript, groups it, asks Jev in one batched
+request which complete prior interaction groups a fresh worker still needs, and — only when something is actually
+omitted — recommends one `jev-gate:executor` with an opaque marker. If the root makes that call, PreToolUse replaces
+that one prompt with the packet. The user's model, permissions and auto-compact are untouched.
+
+Specification: current bodies of #21, #22, #33, #34, #35, #36, #29 (revision `jev-lean-handoff-v1.1`).
+
+**What is established:** the offline path, through the real entrypoint and the packed hook command. 60 behaviour
+tests in `tests/hook-lean.test.ts`, 24 adapter tests in `tests/lean-source.test.ts`, 22 selection tests in
+`tests/lean.test.ts`, plus the lean bench arms and the packed lean profile, all with fake HTTP and temporary
+transcripts. The packed-entrypoint test earned its keep immediately: `dist/hook.js` was not passing `process.argv`
+into `runHook`, so `--lean` never reached the profile check and only the in-process tests could see the mismatch
+path at all.
+
+**What live execution then established (2026-09-21, ~$7.2 of an authorized $25):**
+
+- The installed host does what the design assumed: `model: inherit` resolves to the root's own
+  `claude-sonnet-5`, the worker starts in a fresh context rather than a fork, project `CLAUDE.md` reaches it, the
+  9280-byte packet arrives intact, and a marker with no packet produces `handoff_unavailable` with no tool call and
+  no file. A controlled A/B settled the economically important one: an 8737-byte difference in the worker's prompt
+  moved root context by 318 tokens, **consistent with the packet not being charged to the root's context window**.
+  `bench/results/v5-lean-host-2026-09-21/`. *(Scoped 2026-09-25: these ran on the deterministic `recent_packet` path
+  with no Jev key, so they say nothing about selection. The echo A/B is one pair on host 2.1.278 with unequal starting
+  context, 45,792 against 47,560, and different replies. It is consistent with the packet not reaching root context;
+  it is not a wire guarantee.)*
+- **Two defects that no offline test could have caught**, because every offline test answers 200 from a double.
+  Requests were bounded by bytes when the provider bounds tokens, and the first token estimate was calibrated on
+  prose when real transcript content bills 1.7 bytes per token. Until both were fixed, every realistic session
+  400'd and the feature could not fire at all outside a test.
+- **The depth fixtures cannot measure this feature.** Their priming turn ends "이 읽기는 네가 직접 해라.
+  서브에이전트나 다른 워커에게 넘기지 마라", so `handoff_scope: forbidden` is the correct answer and `jev_lean`
+  can never dispatch in them. A measurement needs new cases that build removable history without prohibiting
+  delegation. `bench/results/v5-lean-measure-2026-09-21/`. *(Corrected 2026-09-25: the ban names the earlier
+  reading, so `forbidden` is arguable, not correct, and "never" was by ambiguity, not construction. See the section
+  above.)*
+
+**What is not:**
+
+- **Host observation is n=1 per question.** One host version, one model alias, one call shape. The executor's tool
+  list is its own self-report and disagrees with its frontmatter, unexplained. Root compliance was seen as ignore
+  once and comply once under an explicit instruction; that is not a compliance rate.
+- **No efficacy measurement.** Three runs were started and all three were stopped without a result; the first two
+  on the defects above, the third because the fixture forbids delegation. No token, cost, quality or time figure
+  for `lean` exists. A smaller packet is a byte diagnostic, not a saving.
+- **Policy constants are uncalibrated.** Action confidence `.8` and omission confidence `.9` are the initial v1.1
+  values, not measured accuracies.
+
+An exact reference in the request or in an active human turn — a backticked span, a quoted string, a path — that
+resolves to **exactly one** candidate group makes that whole group mandatory, so it cannot be omitted and
+`handoff_scope` may rely on it. Two matches is ambiguous and one match of nothing is dangling; neither is guessed at,
+and a dangling essential referent is caught by `handoff_scope`, which sees only the request and the mandatory layer.
+
+Source adapter notes worth keeping: the active history after a compaction is the host's own
+`compactMetadata.preservedSegment` — and `headUuid` sits *before* the `compact_boundary` record in the file, because
+partial compaction retains earlier records, so "every line after the boundary" would have been wrong. A `tool_result`
+arrives inside a `type: "user"` event and is never treated as a human instruction. A packet is bound to the records
+*before* the current request, so this turn's own assistant/tool appends do not invalidate it while a new human turn,
+a compaction or a rewritten prefix does.
+
 ## Where the project stands
 
 `main` is at **v0.2.0** ([release](https://github.com/MongLong0214/jev-gate/releases/tag/v0.2.0)); `dev` carries

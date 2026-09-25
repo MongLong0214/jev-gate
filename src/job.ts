@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 import type { Env } from './config.js';
 import type { ExecutionShape, JobGeneration, JobState, OwnedRole, Reservation, StateCode, Tier } from './types.js';
@@ -16,6 +16,17 @@ export const MAX_PLANNER_ATTEMPTS = 2;
 export const MAX_REPLANS = 2;
 export const MAX_TASK_ATTEMPTS = 2;
 export const MAX_HISTORY = 8;
+/**
+ * Every lean prompt identity a session admitted, never evicted: an identity that fell out of this list could be
+ * redelivered after compaction removed its record and be admitted, and charged, a second time. A session that fills
+ * it admits no further lean requests (`lean_seen_full`) and runs natively instead.
+ */
+export const LEAN_SEEN_MAX = 512;
+/** Every rewrite of the state keeps the lean identities it read, and that it lost some; only a lean registration adds. */
+export const leanSeenOf = (prev: JobState | null | undefined): Pick<JobState, 'lean_seen' | 'lean_seen_lost'> => ({
+  ...(prev?.lean_seen ? { lean_seen: prev.lean_seen } : {}),
+  ...(prev?.lean_seen_lost ? { lean_seen_lost: true as const } : {}),
+});
 /**
  * A17: the request is stored whole or not at all. A prompt past this bound is recorded as absent, because a worker
  * that reads half a specification as if it were the whole one is worse off than one told the text did not fit.
@@ -45,7 +56,8 @@ export const stateRoot = (env: Env): string => {
 };
 
 export const jobsDir = (env: Env): string => join(stateRoot(env), 'jev-gate', 'jobs');
-export const jobPath = (env: Env, sessionId: string): string => join(jobsDir(env), `${createHash('sha256').update(sessionId, 'utf8').digest('hex')}.json`);
+const jobFileName = (sessionId: string): string => `${createHash('sha256').update(sessionId, 'utf8').digest('hex')}.json`;
+export const jobPath = (env: Env, sessionId: string): string => join(jobsDir(env), jobFileName(sessionId));
 
 const isSymlink = (p: string): boolean => {
   try {
@@ -114,7 +126,17 @@ const parseState = (text: string, sessionId: string): JobState | null => {
   const current = parsed['current'] as unknown as JobGeneration;
   if (!isRecord(current['active']) || !Array.isArray(current['receipts'])) return null;
   const history = Array.isArray(parsed['history']) ? (parsed['history'] as JobGeneration[]) : [];
-  return { version: 5, session_id: sessionId, updated_at: typeof parsed['updated_at'] === 'string' ? parsed['updated_at'] : '', current, history };
+  const seen = parsed['lean_seen'];
+  const leanSeen = Array.isArray(seen) ? seen.filter((p): p is string => typeof p === 'string').slice(0, LEAN_SEEN_MAX) : null;
+  return {
+    version: 5,
+    session_id: sessionId,
+    updated_at: typeof parsed['updated_at'] === 'string' ? parsed['updated_at'] : '',
+    current,
+    history,
+    ...(leanSeen ? { lean_seen: leanSeen } : {}),
+    ...(parsed['lean_seen_lost'] === true ? { lean_seen_lost: true as const } : {}),
+  };
 };
 
 const readRaw = (file: string, sessionId: string): JobResult<JobState | null> => {
@@ -160,8 +182,17 @@ const writeAtomic = (file: string, state: JobState): JobResult<JobState> => {
 
 export const readJob = (env: Env, sessionId: string): JobResult<JobState | null> => readRaw(jobPath(env, sessionId), sessionId);
 
-/** Read-modify-write under the lock; the lock is never held across an HTTP call. A null return leaves the file untouched. */
-export const updateJob = (env: Env, sessionId: string, fn: (prev: JobState | null) => JobState | null): JobResult<JobState | null> => {
+/**
+ * Read-modify-write under the lock; the lock is never held across an HTTP call. A null return leaves the file untouched.
+ * An unreadable file reaches `fn` as null, so an orchestration turn can recover it, unless `refuseUnreadable` is set.
+ * Refusing it for every writer was rejected: the orchestration guard is required to recover a corrupt state.
+ */
+export const updateJob = (
+  env: Env,
+  sessionId: string,
+  fn: (prev: JobState | null) => JobState | null,
+  opts: { refuseUnreadable?: boolean } = {},
+): JobResult<JobState | null> => {
   const dir = jobsDir(env);
   try {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -173,9 +204,11 @@ export const updateJob = (env: Env, sessionId: string, fn: (prev: JobState | nul
   if (!locked.ok) return { ok: false, code: locked.code };
   try {
     const prev = readRaw(file, sessionId);
+    if (!prev.ok && opts.refuseUnreadable) return { ok: false, code: prev.code };
     const next = fn(prev.ok ? prev.value : null);
     if (next === null) return prev.ok ? { ok: true, value: prev.value } : { ok: false, code: prev.code };
-    return writeAtomic(file, next);
+    // Replacing a file that could not be read forgets any lean identities in it, and the new state has to say so.
+    return writeAtomic(file, prev.ok ? next : { ...next, lean_seen_lost: true });
   } finally {
     releaseLock(locked.lock);
   }
@@ -215,7 +248,7 @@ export const newGeneration = (prev: JobState | null, sessionId: string, promptId
     active: Object.fromEntries(Object.entries(old.active).map(([id, r]) => [id, { ...r, orphaned: true as const }])),
   };
   return {
-    state: { version: 5, session_id: sessionId, updated_at: now.toISOString(), current, history: [retired, ...prev.history].slice(0, MAX_HISTORY) },
+    state: { version: 5, session_id: sessionId, updated_at: now.toISOString(), current, history: [retired, ...prev.history].slice(0, MAX_HISTORY), ...leanSeenOf(prev) },
     superseded: unfinished,
   };
 };
@@ -286,7 +319,39 @@ export const countAttempt = (gen: JobGeneration, kind: BoundKind, taskId: string
   return { ...gen, attempts: { ...gen.attempts, tasks } };
 };
 
-/** Opportunistic retention: never removes a file whose actives are younger than 24 h, even past the 7-day cutoff. */
+/**
+ * Whether a state file may be aged out: older than retention, readable, no active younger than 24 h, and no lean
+ * identities (or record of having lost some) in it. A file that cannot be read is never a candidate, and "read" is
+ * `readRaw` itself for the session the file is named after, not a copy of its checks: lean refuses to admit over a
+ * state it cannot read, and deleting that state would turn the refusal into an empty ledger. Two reviews in a row
+ * found a check the copy had missed, the structure and then the size.
+ */
+const agedOut = (file: string, now: number): boolean => {
+  try {
+    const st = lstatSync(file);
+    if (st.isSymbolicLink() || st.size > STATE_MAX_BYTES || now - st.mtimeMs <= RETENTION_MS) return false;
+    const claimed = (JSON.parse(readFileSync(file, 'utf8')) as { session_id?: unknown } | null)?.session_id;
+    if (typeof claimed !== 'string' || jobFileName(claimed) !== basename(file)) return false;
+    const read = readRaw(file, claimed);
+    if (!read.ok || read.value === null) return false;
+    const state = read.value;
+    if (Object.values(state.current.active).some((r) => now - Date.parse(r.started_at) < ACTIVE_GRACE_MS)) return false;
+    /**
+     * A session can be resumed after any length of time, and its admitted lean identities are what stop an old
+     * request's redelivery from being charged again once compaction has removed its record. So a file that holds
+     * them is never aged out, and neither is one that records having lost them. Both are read as lean reads them.
+     */
+    return !(state.lean_seen !== undefined && state.lean_seen.length > 0) && state.lean_seen_lost !== true;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Opportunistic retention. The unlocked look only rules files out; a file is removed only under its own lock and after
+ * a second look, because a writer may have atomically replaced it in between, and that replacement can be the first
+ * record of a lean identity. A held lock means the session is in use, and the file is left for a later pass.
+ */
 export const cleanupJobs = (env: Env, now = Date.now()): number => {
   const dir = jobsDir(env);
   let removed = 0;
@@ -299,22 +364,18 @@ export const cleanupJobs = (env: Env, now = Date.now()): number => {
   for (const name of names) {
     if (!name.endsWith('.json')) continue;
     const file = join(dir, name);
+    if (!agedOut(file, now)) continue;
+    const locked = acquireLock(file, 0);
+    if (!locked.ok) continue;
     try {
-      const st = lstatSync(file);
-      if (st.isSymbolicLink() || now - st.mtimeMs <= RETENTION_MS) continue;
-      const parsed = JSON.parse(readFileSync(file, 'utf8')) as unknown;
-      const current = isRecord(parsed) && isRecord(parsed['current']) ? (parsed['current'] as unknown as JobGeneration) : null;
-      const freshActive = Object.values(current?.active ?? {}).some((r) => now - Date.parse(r.started_at) < ACTIVE_GRACE_MS);
-      if (freshActive) continue;
-      unlinkSync(file);
-      removed += 1;
-    } catch {
-      try {
+      if (agedOut(file, now)) {
         unlinkSync(file);
         removed += 1;
-      } catch {
-        // A file that cannot be read or removed is left alone; cleanup is opportunistic, never required.
       }
+    } catch {
+      // A file that cannot be removed is left alone; cleanup is opportunistic, never required.
+    } finally {
+      releaseLock(locked.lock);
     }
   }
   return removed;

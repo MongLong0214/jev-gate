@@ -55,6 +55,8 @@ const AGENT_EXPECTATIONS: Record<string, { model: string; effort: string | null;
   'worker-frontier.md': { model: 'fable', effort: 'xhigh', tools: ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'Bash'] },
   'planner.md': { model: 'opus', effort: 'high', tools: ['Read', 'Grep', 'Glob'] },
   'planner-frontier.md': { model: 'fable', effort: 'xhigh', tools: ['Read', 'Grep', 'Glob'] },
+  // JGL-01: lean's one agent. `inherit` is the point of it: a saving from a cheaper model would not be this feature's.
+  'executor.md': { model: 'inherit', effort: null, tools: ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'Bash'] },
 };
 
 const checkPluginFiles = (): void => {
@@ -130,6 +132,11 @@ const checkConfig = (): void => {
   if (c.mode === 'off') say('info', 'mode=off: no guidance, no Jev, no job state, no trace writes. Loaded agent definitions still exist; remove the plugin for the absent-plugin condition');
   if (c.mode === 'native') say('info', 'mode=native: guidance + owned profiles + job state and guard when orchestration starts, no Jev request');
   if (c.mode === 'auto') say('info', 'mode=auto: admission, allocation and result gates send the request, the planned task and the worker reply to TypeSafe (may include source excerpts and prior constraints)');
+  if (c.mode === 'lean') {
+    say('info', 'mode=lean: no Gate A/B/C, no planner, no task graph, no depth floor and no root guard. One request may send the current prompt, the mandatory conversation layer and complete prior interaction groups to TypeSafe, and one jev-gate:executor may be recommended for it');
+    say('info', 'lean needs a readable host transcript for this session; without one it stays native (source_unavailable), which is not the same as an empty history');
+    if (process.env['JEV_GATE_BENCH_RECENT'] === '1') say('warn', 'JEV_GATE_BENCH_RECENT=1 is set: the deterministic no-Jev comparison arm is active. This is a benchmark dependency, not a product mode');
+  }
   say('info', `job state directory: ${jobsDir(process.env)} (0700, one 0600 file per session, removed after 7 days)`);
   if (process.env['JEV_GATE_EXPERIMENT_ADMISSION'] === 'orchestrated') say('warn', `JEV_GATE_EXPERIMENT_ADMISSION=orchestrated is set: every prompt starts an orchestrated job in ${c.mode} mode without a Gate A request (recorded as forced/admission_forced); allocation and result gates are unaffected`);
 };
@@ -169,7 +176,7 @@ const checkEnv = (): void => {
   else if (fork === '1') say('warn', 'CLAUDE_CODE_FORK_SUBAGENT=1: Agent calls run in the background and lack run_in_background; eligible calls are preserved');
   else say('info', `launch profile not set (fork=${fork ?? 'unset'}, disable_background=${bg ?? 'unset'}): interactive sessions default to fork mode, where Agent calls omit run_in_background and V4 preserves them. Start with CLAUDE_CODE_FORK_SUBAGENT=0 CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`);
   if (env['CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS'] === '1') say('info', 'agent teams enabled: a named Agent call becomes a teammate; the coordinator guidance asks for no teammate name');
-  say(env['TYPESAFE_API_KEY'] ? 'ok' : 'warn', env['TYPESAFE_API_KEY'] ? 'TYPESAFE_API_KEY is set (value not shown)' : 'TYPESAFE_API_KEY not set: auto mode preserves every eligible call (key_missing)');
+  say(env['TYPESAFE_API_KEY'] ? 'ok' : 'warn', env['TYPESAFE_API_KEY'] ? 'TYPESAFE_API_KEY is set (value not shown)' : 'TYPESAFE_API_KEY not set: auto mode preserves every eligible call, and lean reads no source and sends nothing (key_missing)');
   if (existsSync(join(process.cwd(), '.env'))) say('info', '.env in cwd is NOT auto-loaded by the hook; export the variable in the shell that starts Claude Code');
 };
 

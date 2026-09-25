@@ -22,7 +22,12 @@ export type TracePhase =
   | 'stop'
   /** A23: the plan-interpretation pair, joined by a shared `request_id` like every other gate call. */
   | 'interpretation_intent'
-  | 'interpretation_result';
+  | 'interpretation_result'
+  /** JGL: the lean selection pair, the local decision that needed no call, and the owned dispatch and its result. */
+  | 'lean_intent'
+  | 'lean_result'
+  | 'lean_dispatch'
+  | 'lean_post';
 
 
 /**

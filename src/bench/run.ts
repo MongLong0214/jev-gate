@@ -8,6 +8,8 @@ import { fileURLToPath } from 'node:url';
 import { isSubscriptionOAuth, parseAuthStatus, subagentModelOverride, AUTH_CONFLICT_ENV, type CommandResult } from '../auth.js';
 import { DENIALS_BEFORE_STOP } from '../brief.js';
 import { DEFAULT_CONFIG, loadConfig } from '../config.js';
+import { LEAN_ACTION_CONFIDENCE, LEAN_COORDINATOR_RESERVE_BYTES, LEAN_OMISSION_CONFIDENCE, LEAN_PACKET_BUDGET_BYTES, LEAN_PACKET_MAX_BYTES } from '../lean.js';
+import { MAX_OPTIONAL_GROUPS, SOURCE_MAX_BYTES, SOURCE_MAX_MS } from '../lean-source.js';
 import { OWNED_AGENTS, type ConfigV5, type Tier } from '../types.js';
 import { gradeDir, type Grade } from './checker.js';
 import { canonicalize, copyTree, createExclusiveDir, isInside, isSafeId, overlaps, type SnapshotReport } from './paths.js';
@@ -18,20 +20,36 @@ import { estimateJevCostUsd, modelFamily, parseModelUsage, safeSum, tokenCount, 
  * the report still reads runs that contain it, because a retired arm is a fact about an old run, not a reason to stop
  * reading it.
  */
-export type Arm = 'sonnet_native' | 'frontier_native' | 'native_hierarchy' | 'orchestrated_control' | 'frontier_orchestrated' | 'jev_hierarchy' | 'jev_single' | 'jev_forced_orchestration';
+export type Arm =
+  | 'sonnet_native'
+  | 'frontier_native'
+  | 'native_hierarchy'
+  | 'orchestrated_control'
+  | 'frontier_orchestrated'
+  | 'jev_hierarchy'
+  | 'jev_single'
+  | 'jev_forced_orchestration'
+  /** JGL-05: the three lean arms. Same model, same normal auto-compact, one packet budget shared by the last two. */
+  | 'native_auto'
+  | 'recent_packet'
+  | 'jev_lean';
 /** The only variables a measured session inherits; everything else, including the parent's CLAUDE_* settings, is dropped. */
 export const KEEP_ENV: readonly string[] = ['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'LC_ALL', 'TMPDIR', 'TERM', 'TZ', 'SSL_CERT_FILE', 'NODE_EXTRA_CA_CERTS', 'TYPESAFE_API_KEY'];
 /** FAKE_CLAUDE_* is the test double's control channel; a real session has none, so passing it through changes nothing. */
 const KEEP_ENV_PREFIX = 'FAKE_CLAUDE_';
 const keepEnvVar = (key: string): boolean => KEEP_ENV.includes(key) || key.startsWith(KEEP_ENV_PREFIX);
 
+/** The legacy default. A lean run selects its own three arms with `--arms lean`; it is not mixed into this set. */
 export const ALL_ARMS: readonly Arm[] = ['sonnet_native', 'frontier_native', 'native_hierarchy', 'orchestrated_control', 'frontier_orchestrated', 'jev_hierarchy', 'jev_single', 'jev_forced_orchestration'];
+/** JGL-05: the three arms of the lean comparison. `--arms lean` is shorthand for exactly these. */
+export const LEAN_ARMS: readonly Arm[] = ['native_auto', 'recent_packet', 'jev_lean'];
+export const KNOWN_ARMS: readonly Arm[] = [...ALL_ARMS, ...LEAN_ARMS];
 
 export interface ArmSpec {
   arm: Arm;
   rootModel: string;
   plugin: boolean;
-  mode: 'native' | 'auto' | null;
+  mode: 'native' | 'auto' | 'lean' | null;
   /** A9/A15/A16: forced orchestration through the same state, guard, profiles and cap. */
   experimentAdmission: 'orchestrated' | null;
   /**
@@ -48,6 +66,12 @@ export interface ArmSpec {
    * two runs with different frozen inputs, which is the comparison this harness exists to avoid.
    */
   admittedShape?: 'single';
+  /**
+   * JGL-05: the deterministic recency comparison. It is an explicitly enabled research dependency of this runner,
+   * not a product mode: the cell runs with no provider key at all, so the arm cannot make a Jev request even by
+   * accident, and nothing but this flag selects it.
+   */
+  benchRecent?: true;
 }
 
 export const armSpecs = (frontierModel: string): Record<Arm, ArmSpec> => ({
@@ -59,6 +83,10 @@ export const armSpecs = (frontierModel: string): Record<Arm, ArmSpec> => ({
   jev_hierarchy: { arm: 'jev_hierarchy', rootModel: 'sonnet', plugin: true, mode: 'auto', experimentAdmission: null, diagnostic: false },
   jev_single: { arm: 'jev_single', rootModel: 'sonnet', plugin: true, mode: 'auto', experimentAdmission: null, diagnostic: false, admittedShape: 'single' },
   jev_forced_orchestration: { arm: 'jev_forced_orchestration', rootModel: 'sonnet', plugin: true, mode: 'auto', experimentAdmission: 'orchestrated', diagnostic: true },
+  // JGL-05. The baseline keeps its own native delegation and helpers: crippling it would not be ordinary Claude.
+  native_auto: { arm: 'native_auto', rootModel: 'sonnet', plugin: false, mode: null, experimentAdmission: null, diagnostic: false },
+  recent_packet: { arm: 'recent_packet', rootModel: 'sonnet', plugin: true, mode: 'lean', experimentAdmission: null, diagnostic: false, benchRecent: true },
+  jev_lean: { arm: 'jev_lean', rootModel: 'sonnet', plugin: true, mode: 'lean', experimentAdmission: null, diagnostic: false },
 });
 
 export interface CodingCase {
@@ -161,6 +189,58 @@ export interface WorkerTierRecord {
   pinned: number;
 }
 
+/**
+ * JGL-05: what lean actually did in this cell, read from the hook's own records. Every field is an observation.
+ * `selections` counts admission events that got as far as a decision; `jev_attempts` counts requests actually sent,
+ * which is not the same number and never becomes zero because a request failed.
+ */
+export interface LeanV5 {
+  /**
+   * L6 accounting revision. Cells ingested before it carry no field, and their token fields meant something else:
+   * `jev_input_tokens` was the known subtotal and `jev_input_tokens_known` counted responses. The report reads such
+   * a block as revision 1: its known subtotal relabelled, its complete totals unknown.
+   */
+  accounting: 1 | 2;
+  selections: number;
+  policy: Record<string, number>;
+  /** Requests actually sent, one per request identity however many records repeat it. */
+  jev_attempts: number;
+  /**
+   * An intent with no result, possibly sent and billed, plus every record with no request identity, which can be
+   * neither joined nor de-duplicated. Any of them leaves the complete totals unknown.
+   */
+  jev_attempt_unknown: number;
+  /** Responses whose charged input count came back -- a count of responses, not of tokens. */
+  jev_responses_known: number;
+  /** The input tokens of those responses; null only when the safe sum overflowed. */
+  jev_input_tokens_known: number | null;
+  /** Every request's input tokens, or null when any is unknown. Never replaced by the subtotal. */
+  jev_input_tokens: number | null;
+  /** Every request's cost, or null when any charged count, model price or possibly sent request is unknown. */
+  jev_cost_usd: number | null;
+  jev_cost_known_subtotal: number;
+  /** Repeated records of one request, collapsed into it rather than counted as more requests. */
+  duplicate_records: number;
+  http_codes: Record<string, number>;
+  action: Record<string, number>;
+  reasons: Record<string, number>;
+  packets_proposed: number;
+  packets_dispatched: number;
+  dispatch_denied: Record<string, number>;
+  recommendation_not_taken: number;
+  retained_groups: number;
+  omitted_groups: number;
+  unassessed: number;
+  mandatory_bytes: number | null;
+  optional_bytes: number | null;
+  source_bytes_read: number | null;
+  coverage: Record<string, number>;
+  packet_bytes_max: number | null;
+  composed_bytes_max: number | null;
+  observed_model: Record<string, number>;
+  terminal_status: Record<string, number>;
+}
+
 /** Schema 5 additions (#28, ADR A13). Every field is observed; nothing is inferred from agent frontmatter. */
 export interface GateV5 {
   admission: { attempted: boolean; known_not_sent: boolean; forced: boolean; decided: boolean | null; choice: string | null; confidence: number | null; decision: string | null; reason: string | null };
@@ -188,7 +268,7 @@ export interface CellRecord {
   repetition: number;
   root_model_requested: string;
   plugin_expected: boolean;
-  mode: 'native' | 'auto' | null;
+  mode: 'native' | 'auto' | 'lean' | null;
   /** Retired V4 field, kept so a reader that knows only V4 cells still parses a V5 one. */
   experimental_allocation: string | null;
   experiment_admission: 'orchestrated' | null;
@@ -218,7 +298,7 @@ export interface CellRecord {
    * reported a different fraction of the same traffic on the two days. Cost is a host-reported aggregate; this is
    * what the transcript itself says happened.
    */
-  turn_totals_stream: Array<{ cache_read: number; cache_creation: number; input: number; output: number; messages: number; duplicates: number; incomplete: number }>;
+  turn_totals_stream: StreamTotals[];
   fixture_sha256: string | null;
   dispatch: { intent_at: string | null; spawn_observed_at: string | null; pid: number | null };
   started: boolean;
@@ -270,6 +350,8 @@ export interface CellRecord {
     /** T6: calls whose required or observed model could not be normalized; neither a match nor a mismatch. */
     target_model_unknown: number;
   } & GateV5;
+  /** JGL-05: the lean path's own observations. Empty on an arm that never ran lean. */
+  lean: LeanV5;
   final_snapshot: (SnapshotReport & { path: string }) | null;
   grade: Grade | null;
   grade_history: Array<{ at: string; grade: Grade | null }>;
@@ -321,9 +403,11 @@ export const parseArgs = (argv: string[]): Options => {
     else if (a === '--regrade') o.regrade = true;
     else if (a === '--allow-env-conflicts') o.allowEnvConflicts = true;
     else if (a === '--arms') {
-      const arms = next().split(',').map((s) => s.trim()).filter(Boolean);
-      const bad = arms.filter((x) => !(ALL_ARMS as readonly string[]).includes(x));
-      if (bad.length || arms.length === 0 || new Set(arms).size !== arms.length) throw new Error(`--arms must be a unique subset of ${ALL_ARMS.join(',')}`);
+      const raw = next().trim();
+      // `--arms lean` is the JGL-05 profile: the three arms of that comparison and nothing else.
+      const arms = raw === 'lean' ? [...LEAN_ARMS] : raw.split(',').map((s) => s.trim()).filter(Boolean);
+      const bad = arms.filter((x) => !(KNOWN_ARMS as readonly string[]).includes(x));
+      if (bad.length || arms.length === 0 || new Set(arms).size !== arms.length) throw new Error(`--arms must be \`lean\` or a unique subset of ${KNOWN_ARMS.join(',')}`);
       o.arms = arms as Arm[];
     } else if (a === '--only') {
       const ids = next().split(',').map((x) => x.trim()).filter(Boolean);
@@ -474,6 +558,22 @@ export const buildPlan = (o: Options, cases: CodingCase[], manifestVersion: numb
       frontier_model: o.frontierModel,
       launch_env: { CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' },
       effective_config_nonsecret: effective.ok ? { ...effective.config, source: effective.source } : { error: effective.error },
+      /**
+       * JGL-05: the packet policy, frozen in the plan before anything is executed. `recent_packet` and `jev_lean`
+       * fill the SAME budget, and recording it here is what stops it being adjusted after Jev's retained size is
+       * known. These are code constants, not configuration, so the plan records the values actually compiled in.
+       */
+      lean_packet_policy: {
+        packet_budget_bytes: LEAN_PACKET_BUDGET_BYTES,
+        packet_max_bytes: LEAN_PACKET_MAX_BYTES,
+        coordinator_reserve_bytes: LEAN_COORDINATOR_RESERVE_BYTES,
+        max_optional_groups: MAX_OPTIONAL_GROUPS,
+        source_max_bytes: SOURCE_MAX_BYTES,
+        source_max_ms: SOURCE_MAX_MS,
+        action_confidence: LEAN_ACTION_CONFIDENCE,
+        omission_confidence: LEAN_OMISSION_CONFIDENCE,
+        note: 'Uncalibrated development constants, identical for recent_packet and jev_lean. Recency fills this budget newest-first with no requirement to omit anything.',
+      },
       note: 'Root models are CLI aliases; actual models come from system/init and modelUsage. User-scope settings are excluded for every arm via --setting-sources; user-level CLAUDE.md still loads equally in all arms. --max-turns bounds top-level turns, not every descendant request or subscription spend.',
     },
     effective_config: effective.ok ? effective.config : null,
@@ -524,13 +624,49 @@ export const preflight = (o: Options, needsJev: boolean): Preflight => {
   const env_observed: Record<string, string | null> = {};
   for (const k of observed) env_observed[k] = process.env[k] ?? null;
   const typesafe_key_present = Boolean(process.env['TYPESAFE_API_KEY']);
-  if (needsJev && !typesafe_key_present) errors.push('TYPESAFE_API_KEY not set: the jev_hierarchy arm would only exercise key_missing preservation');
-  const plugin_hook_present = existsSync(join(o.pluginDir, 'dist', 'hook.js')) && existsSync(join(o.pluginDir, 'hooks', 'hooks.json')) && existsSync(join(o.pluginDir, 'agents', 'worker.md'));
-  if (!plugin_hook_present) errors.push(`plugin dir ${o.pluginDir} lacks dist/hook.js, hooks/hooks.json or agents/worker.md; run npm run build`);
+  if (needsJev && !typesafe_key_present) errors.push('TYPESAFE_API_KEY not set: the Jev treatment arms would only exercise key_missing preservation');
+  // The agent definition each selected arm actually needs: the lean arms ship one executor and none of the six roles.
+  const specs = armSpecs(o.frontierModel);
+  const needed = [...new Set(o.arms.filter((a) => specs[a].plugin).map((a) => (specs[a].mode === 'lean' ? 'executor.md' : 'worker.md')))];
+  const plugin_hook_present =
+    existsSync(join(o.pluginDir, 'dist', 'hook.js')) && existsSync(join(o.pluginDir, 'hooks', 'hooks.json')) && needed.every((f) => existsSync(join(o.pluginDir, 'agents', f)));
+  if (!plugin_hook_present) errors.push(`plugin dir ${o.pluginDir} lacks dist/hook.js, hooks/hooks.json or agents/{${needed.join(',')}}; run npm run build`);
   return { claude_version: version.status === 0 ? version.stdout.trim() : null, auth, auth_reason, env_conflicts: [...authEnv, ...(override.concrete || override.force ? ['CLAUDE_CODE_SUBAGENT_MODEL'] : [])], env_observed, typesafe_key_present, plugin_hook_present, errors };
 };
 
 const emptyJevPhase = (): JevPhaseUsage => ({ attempts: 0, tokens: null, tokens_known: 0, cost_usd: null });
+
+export const emptyLeanV5 = (): LeanV5 => ({
+  accounting: 2,
+  selections: 0,
+  policy: {},
+  jev_attempts: 0,
+  jev_attempt_unknown: 0,
+  jev_responses_known: 0,
+  jev_input_tokens_known: 0,
+  jev_input_tokens: 0,
+  jev_cost_usd: 0,
+  jev_cost_known_subtotal: 0,
+  duplicate_records: 0,
+  http_codes: {},
+  action: {},
+  reasons: {},
+  packets_proposed: 0,
+  packets_dispatched: 0,
+  dispatch_denied: {},
+  recommendation_not_taken: 0,
+  retained_groups: 0,
+  omitted_groups: 0,
+  unassessed: 0,
+  mandatory_bytes: null,
+  optional_bytes: null,
+  source_bytes_read: null,
+  coverage: {},
+  packet_bytes_max: null,
+  composed_bytes_max: null,
+  observed_model: {},
+  terminal_status: {},
+});
 
 const emptyGateV5 = (): GateV5 => ({
   admission: { attempted: false, known_not_sent: false, forced: false, decided: null, choice: null, confidence: null, decision: null, reason: null },
@@ -588,6 +724,7 @@ export const emptyCell = (cs: CodingCase, spec: ArmSpec, repetition: number): Ce
   api_retries: 0,
   result: null,
   gate: { prompt_injections: 0, agent_calls: 0, owned_calls: 0, pinned: 0, eligible_attempted: 0, patched: 0, preserved: 0, preserve_reasons: {}, skipped: {}, attempt_unknown: 0, missing_pre_records: 0, jev_model: null, jev_input_tokens: null, jev_input_tokens_known: 0, jev_cost_usd: null, gate_ms_total: null, hint_delivered: 0, target_model_matches: 0, target_model_mismatches: 0, target_model_unknown: 0, ...emptyGateV5() },
+  lean: emptyLeanV5(),
   final_snapshot: null,
   grade: null,
   grade_history: [],
@@ -644,10 +781,47 @@ const contextOf = (message: Record<string, unknown>): number | null => {
 const lastMainContext = new WeakMap<CellRecord, number>();
 const promptsSeen = new WeakMap<CellRecord, number>();
 
-type StreamTotals = { cache_read: number; cache_creation: number; input: number; output: number; messages: number; duplicates: number; incomplete: number };
+/**
+ * Two views of the same stream, kept side by side (JGL-05). The plain counters are the published unit and are not
+ * changed retroactively. The `deduped_*` counters drop a repeat of the same message within the same agent scope,
+ * which is the identity the host actually reuses -- a root message and a child's carry the same id space, so keying
+ * on the id alone would have conflated them. Neither view is chosen for producing the larger saving.
+ */
+type StreamTotals = {
+  cache_read: number;
+  cache_creation: number;
+  input: number;
+  output: number;
+  messages: number;
+  duplicates: number;
+  incomplete: number;
+  deduped_cache_read: number;
+  deduped_cache_creation: number;
+  deduped_input: number;
+  deduped_output: number;
+  deduped_messages: number;
+  /** A repeat whose counters went down: not a cumulative update of the same message, so the view is incomplete. */
+  deduped_incompatible: number;
+};
+/** The last observation the de-duplicated view holds for one message, and whether every counter in it was readable. */
+type MessageUsage = { cacheRead: number; cacheCreation: number; input: number; output: number; complete: boolean };
 const streamTotals = new WeakMap<CellRecord, StreamTotals>();
-const streamIds = new WeakMap<CellRecord, Set<string>>();
-const emptyStreamTotals = (): StreamTotals => ({ cache_read: 0, cache_creation: 0, input: 0, output: 0, messages: 0, duplicates: 0, incomplete: 0 });
+const streamIds = new WeakMap<CellRecord, Map<string, MessageUsage>>();
+const emptyStreamTotals = (): StreamTotals => ({
+  cache_read: 0,
+  cache_creation: 0,
+  input: 0,
+  output: 0,
+  messages: 0,
+  duplicates: 0,
+  incomplete: 0,
+  deduped_cache_read: 0,
+  deduped_cache_creation: 0,
+  deduped_input: 0,
+  deduped_output: 0,
+  deduped_messages: 0,
+  deduped_incompatible: 0,
+});
 
 /**
  * Adds one message's usage to the cell's running stream totals. A message without a usable usage block is not counted.
@@ -658,7 +832,7 @@ const emptyStreamTotals = (): StreamTotals => ({ cache_read: 0, cache_creation: 
  * stronger description, and one whose are not has said so before anything is quoted from it. Silently de-duplicating
  * instead would change a published unit after its results were seen, which the pre-registration rules forbid.
  */
-const addStreamUsage = (cell: CellRecord, message: unknown): void => {
+const addStreamUsage = (cell: CellRecord, message: unknown, scope: string): void => {
   if (!isRecord(message)) return;
   const usage = message['usage'];
   if (!isRecord(usage)) return;
@@ -666,7 +840,8 @@ const addStreamUsage = (cell: CellRecord, message: unknown): void => {
   let incomplete = false;
   const read = (k: string): number => {
     const v = usage[k];
-    if (typeof v === 'number' && Number.isFinite(v) && v >= 0) return v;
+    // Non-negative safe integers only: a fractional or unrepresentable counter is unknown, not a value.
+    if (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0) return v;
     // An absent counter and a zero counter are different facts, and adding both as zero makes them one number.
     incomplete = true;
     return 0;
@@ -675,18 +850,40 @@ const addStreamUsage = (cell: CellRecord, message: unknown): void => {
   const cacheCreation = read('cache_creation_input_tokens');
   const inputTokens = read('input_tokens');
   const outputTokens = read('output_tokens');
-  const id = str(message['id']);
-  if (id !== null && id.length > 0) {
-    const seen = streamIds.get(cell) ?? new Set<string>();
-    if (seen.has(id)) acc.duplicates += 1;
-    seen.add(id);
-    streamIds.set(cell, seen);
-  }
   acc.cache_read += cacheRead;
   acc.cache_creation += cacheCreation;
   acc.input += inputTokens;
   acc.output += outputTokens;
   acc.messages += 1;
+
+  // L6: the de-duplicated view holds one value per message -- the last complete cumulative observation of it, never
+  // the first one seen and never the sum of every update. Identity is the agent scope plus the message id: the same
+  // id under root and under a child is two reports. The installed host (checked over 26,514 multi-record messages in
+  // real transcripts, 2026-09-25) repeats identical usage, so on it the first and the last observation agree.
+  const now: MessageUsage = { cacheRead, cacheCreation, input: inputTokens, output: outputTokens, complete: !incomplete };
+  const id = str(message['id']);
+  const seen = streamIds.get(cell) ?? new Map<string, MessageUsage>();
+  streamIds.set(cell, seen);
+  const key = id !== null && id.length > 0 ? `${scope}\u0000${id}` : null;
+  const prev = key === null ? undefined : seen.get(key);
+  let held: MessageUsage | null = now;
+  if (prev) {
+    acc.duplicates += 1;
+    const cumulative = now.cacheRead >= prev.cacheRead && now.cacheCreation >= prev.cacheCreation && now.input >= prev.input && now.output >= prev.output;
+    if (!now.complete) held = null;
+    else if (prev.complete && !cumulative) {
+      acc.deduped_incompatible += 1;
+      held = null;
+    }
+  }
+  if (held) {
+    acc.deduped_cache_read += held.cacheRead - (prev?.cacheRead ?? 0);
+    acc.deduped_cache_creation += held.cacheCreation - (prev?.cacheCreation ?? 0);
+    acc.deduped_input += held.input - (prev?.input ?? 0);
+    acc.deduped_output += held.output - (prev?.output ?? 0);
+    if (!prev) acc.deduped_messages += 1;
+    if (key !== null) seen.set(key, held);
+  }
   if (incomplete) acc.incomplete += 1;
   streamTotals.set(cell, acc);
 };
@@ -694,7 +891,7 @@ const addStreamUsage = (cell: CellRecord, message: unknown): void => {
 /** Folds one stream-json event into the record. Unknown shapes are ignored, never guessed. */
 export const observeEvent = (cell: CellRecord, ev: unknown): void => {
   if (!isRecord(ev)) return;
-  addStreamUsage(cell, ev['message']);
+  addStreamUsage(cell, ev['message'], str(ev['parent_tool_use_id']) ?? 'root');
   const type = ev['type'];
   if (type === 'system' && ev['subtype'] === 'init') {
     const plugins = Array.isArray(ev['plugins']) ? ev['plugins'].map((p) => (isRecord(p) ? (str(p['name']) ?? '') : String(p))) : [];
@@ -813,6 +1010,8 @@ const emptyTier = (): WorkerTierRecord => ({ calls: 0, proposed: {}, observed_mo
  */
 export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<Tier, string> = DEFAULT_CONFIG.models): void => {
   const records: Array<Record<string, unknown>> = [];
+  // A record that cannot be read could belong to any producer, so it leaves every producer's complete total unknown.
+  let unreadable = 0;
   if (existsSync(traceDir)) {
     for (const f of readdirSync(traceDir).filter((x) => x.endsWith('.json')).sort()) {
       try {
@@ -820,11 +1019,120 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
         if (isRecord(r) && r['version'] === 5 && typeof r['phase'] === 'string') records.push(r);
       } catch {
         cell.gate.attempt_unknown++;
+        unreadable++;
       }
     }
   }
   const g = cell.gate;
   const phase = (p: string): Array<Record<string, unknown>> => records.filter((r) => r['phase'] === p);
+
+  /**
+   * JGL-05: lean writes its own phases and shares none of the gate ones, so it is read separately. Nothing here is
+   * inferred: an attempt with no usage stays unknown, a proposed packet is not a dispatch, and a dispatched packet
+   * is not a checked task.
+   */
+  const L = cell.lean;
+  const maxOf = (cur: number | null, v: number | null): number | null => (v === null ? cur : cur === null ? v : Math.max(cur, v));
+  for (const r of phase('lean_result')) {
+    L.selections += 1;
+    bump(L.policy, str(r['policy']) ?? 'jev');
+    const src = isRecord(r['source']) ? r['source'] : null;
+    const groups = isRecord(r['groups']) ? r['groups'] : null;
+    if (src) {
+      bump(L.coverage, str(src['coverage']) ?? 'unknown');
+      L.unassessed += num(src['unassessed']) ?? 0;
+      L.source_bytes_read = maxOf(L.source_bytes_read, num(src['bytes_read']));
+    }
+    if (groups) {
+      L.mandatory_bytes = maxOf(L.mandatory_bytes, num(groups['mandatory_bytes']));
+      L.optional_bytes = maxOf(L.optional_bytes, num(groups['optional_bytes']));
+    }
+    const d = isRecord(r['decision']) ? r['decision'] : null;
+    if (d) {
+      bump(L.action, str(d['action']) ?? 'unknown');
+      const reason = str(d['reason']);
+      if (reason) bump(L.reasons, reason);
+    }
+  }
+
+  /**
+   * L6: Jev spend is joined per actual request over the union of intents and results, by the `request_id` the hook
+   * writes into both. A result alone still counts. An intent with no result may have been sent and billed, so it
+   * leaves the complete totals unknown. A confirmed local no-send is zero. A repeated record of one request is one
+   * request. The hook writes its intent before sending and does not send when it cannot, so with this cell's trace
+   * directory set, a request with no intent was not sent. Money needs only the charged input count and a known
+   * price: output is free, so an unknown output count never makes a known cost unknown.
+   *
+   * A record with no `request_id` can be neither joined nor de-duplicated: pairing keyless intents and results by
+   * count would let a lost result and a repeated one cancel out. Each is counted unknown and kept out of the known
+   * subtotal, so the subtotal stays a lower bound and the complete totals are null.
+   */
+  const leanRequests = new Map<string, { intent: boolean; result: Record<string, unknown> | null }>();
+  let keylessRecords = 0;
+  for (const r of records) {
+    if (r['phase'] !== 'lean_intent' && r['phase'] !== 'lean_result') continue;
+    const k = str(r['request_id']);
+    if (k === null) {
+      if (r['phase'] === 'lean_intent' || r['attempted'] === true) keylessRecords += 1;
+      continue;
+    }
+    const entry = leanRequests.get(k) ?? { intent: false, result: null };
+    if (r['phase'] === 'lean_intent') {
+      if (entry.intent) L.duplicate_records += 1;
+      entry.intent = true;
+    } else if (entry.result === null) entry.result = r;
+    else L.duplicate_records += 1;
+    leanRequests.set(k, entry);
+  }
+  const sent: Array<Record<string, unknown>> = [];
+  let possiblySent = keylessRecords;
+  for (const { result } of leanRequests.values()) {
+    if (result === null) possiblySent += 1;
+    else if (result['attempted'] === true) sent.push(result);
+  }
+  const tokens: Array<number | null> = [];
+  const costs: Array<number | null> = [];
+  for (const r of sent) {
+    const http = isRecord(r['http']) ? r['http'] : null;
+    bump(L.http_codes, http ? (str(http['code']) ?? `http_${String(num(http['status']) ?? 'none')}`) : 'unrecorded');
+    const jev = isRecord(r['jev']) ? r['jev'] : null;
+    const usage = jev && isRecord(jev['usage']) ? jev['usage'] : null;
+    const input = usage ? tokenCount(usage['input_tokens']) : null;
+    tokens.push(input);
+    costs.push(estimateJevCostUsd(jev ? str(jev['model']) : null, input));
+  }
+  const knownTokens = tokens.filter((t): t is number => t !== null);
+  const knownCosts = costs.filter((c): c is number => c !== null);
+  const complete = possiblySent === 0 && unreadable === 0;
+  L.jev_attempts = sent.length;
+  L.jev_attempt_unknown = possiblySent;
+  L.jev_responses_known = knownTokens.length;
+  L.jev_input_tokens_known = safeSum(knownTokens);
+  L.jev_input_tokens = complete ? safeSum(tokens) : null;
+  L.jev_cost_known_subtotal = knownCosts.reduce((a, b) => a + b, 0);
+  L.jev_cost_usd = complete && knownCosts.length === costs.length ? L.jev_cost_known_subtotal : null;
+  for (const r of phase('lean_dispatch')) {
+    const reason = str(r['reason']);
+    if (r['applied'] === true) {
+      L.packets_dispatched += 1;
+      L.retained_groups += num(r['retained_groups']) ?? 0;
+      L.omitted_groups += num(r['omitted_groups']) ?? 0;
+      L.composed_bytes_max = maxOf(L.composed_bytes_max, num(r['composed_bytes']));
+    } else if (reason === 'packet_proposed') {
+      L.packets_proposed += 1;
+      L.packet_bytes_max = maxOf(L.packet_bytes_max, num(r['packet_bytes']));
+    } else if (reason === 'recommendation_not_taken') {
+      L.recommendation_not_taken += 1;
+    } else if (reason) {
+      bump(L.dispatch_denied, reason);
+    }
+  }
+  for (const r of phase('lean_post')) {
+    bump(L.terminal_status, str(r['status']) ?? 'unrecorded');
+    const m = str(r['observed_model']);
+    if (m) bump(L.observed_model, m);
+  }
+
   const byId = (p: string, id: string): Array<Record<string, unknown>> => records.filter((r) => r['phase'] === p && r['tool_use_id'] === id);
   const answer = (r: Record<string, unknown> | null, key: string): Record<string, unknown> | null => {
     const answers = r && isRecord(r['answers']) ? r['answers'] : null;
@@ -1104,9 +1412,11 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
   const observedOk = cell.result !== null && cell.result.usage_status === 'ok' && cell.init !== null;
   const attempts = g.jev_requests.admission.attempts + g.jev_requests.allocation.attempts + g.jev_requests.result.attempts + g.jev_requests.scope.attempts;
   if (cell.mode !== 'auto') {
-    // Native/absent arms send nothing to TypeSafe when the plugin state matches the plan and the run completed.
+    // L6: the legacy gate runs only in auto, so in any other mode it is a producer known disabled and contributes
+    // zero -- also when the run timed out, since its own records would show a call. It stays unknown when the plugin
+    // state differs from the plan, or when a record could not be read and might have been one of its calls.
     const pluginStateOk = cell.init !== null && cell.init.jev_gate_loaded === cell.plugin_expected;
-    g.jev_input_tokens = observedOk && pluginStateOk && attempts === 0 && !cell.timed_out && !cell.cancelled ? 0 : null;
+    g.jev_input_tokens = pluginStateOk && attempts === 0 && g.attempt_unknown === 0 ? 0 : null;
   } else if (attempts === 0 && g.attempt_unknown === 0 && g.missing_pre_records === 0 && observedOk && !cell.timed_out && !cell.cancelled) {
     g.jev_input_tokens = 0;
   } else {
@@ -1171,6 +1481,12 @@ const runClaudeCell = (cs: CodingCase, spec: ArmSpec, o: Options, pluginDir: str
       if (spec.experimentAdmission) {
         env['JEV_GATE_EXPERIMENT_ADMISSION'] = spec.experimentAdmission;
         envAdded.push('JEV_GATE_EXPERIMENT_ADMISSION');
+      }
+      if (spec.benchRecent) {
+        env['JEV_GATE_BENCH_RECENT'] = '1';
+        // No credential reaches this cell, so "this arm made no Jev request" is a property of the process, not a policy.
+        delete env['TYPESAFE_API_KEY'];
+        envAdded.push('JEV_GATE_BENCH_RECENT');
       }
       mkdirSync(traceDir, { recursive: true, mode: 0o700 });
       mkdirSync(stateDir, { recursive: true, mode: 0o700 });
@@ -1363,7 +1679,10 @@ export const main = async (argv: string[]): Promise<number> => {
     return 0;
   }
   if (existsSync(out)) throw new Error(`--out ${out} already exists; execute creates a new result directory exclusively`);
-  const pf = preflight(o, o.arms.some((a) => armSpecs(o.frontierModel)[a].mode === 'auto'));
+  const pf = preflight(o, o.arms.some((a) => {
+    const spec = armSpecs(o.frontierModel)[a];
+    return spec.mode === 'auto' || (spec.mode === 'lean' && spec.benchRecent !== true);
+  }));
   plan.preflight = pf;
   // T8: a plugin arm without a loadable configuration would run on defaults while the plan claimed otherwise.
   if (plan.effective_config === null && o.arms.some((a) => armSpecs(o.frontierModel)[a].plugin)) {

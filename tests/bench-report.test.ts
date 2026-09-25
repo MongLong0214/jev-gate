@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 
-import { buildReport, compare, FRONTIER_PREFERRED, gateV5Of, plannedCells, renderMarkdown, summarizeArm, toRowView } from '../src/bench/report.js';
+import { buildReport, compare, concludeRun, FRONTIER_PREFERRED, gateV5Of, plannedCells, renderMarkdown, summarizeArm, summarizeLean, toRowView, type ArmSummary } from '../src/bench/report.js';
 import { parseModelUsage, safeSum, tokenCount, familyTokens } from '../src/bench/usage.js';
 
 const tmp = mkdtempSync(join(tmpdir(), 'jev-report-'));
@@ -390,5 +390,40 @@ describe('diagnostic arm (A16)', () => {
     expect(byArm['jev_forced_orchestration']!.gate_v5.jev_requests.admission.attempts).toBe(0);
     expect(byArm['jev_hierarchy']!.diagnostic).toBe(false);
     expect(renderMarkdown(r)).toContain('jev_forced_orchestration (diagnostic)');
+  });
+});
+
+
+describe('lean conclusion (JGL-05)', () => {
+  const leanArm = (over: Record<string, unknown> = {}): ArmSummary =>
+    ({
+      arm: 'jev_lean',
+      diagnostic: false,
+      planned: 2,
+      by_status: { completed: 2, timed_out: 0, cancelled: 0, not_started: 0, intent_only: 0, missing_record: 0 },
+      pass: 0,
+      fail: 0,
+      unknown: 2,
+      gate_v5: { rows_observed: 2 },
+      lean: { ...summarizeLean([]), selections: 2, jev_attempts: 2, http_codes: { http_200: 2 }, reasons: { scope_unusable: 2 }, ...over },
+    }) as unknown as ArmSummary;
+
+  it('does not read a successful call as a failed one', () => {
+    // The client records no error code on success, so the ingest labels it by status. Reading anything that is not
+    // `null` as a failure turned a fully answered run into "every attempt failed", which is the opposite of true.
+    const c = concludeRun([leanArm()], []);
+    expect(c.reason).not.toMatch(/failed/);
+    expect(c.category).toBe('no dispatch exposure');
+    expect(c.reason).toContain('scope_unusable');
+  });
+
+  it('does report a run whose calls really did fail', () => {
+    const c = concludeRun([leanArm({ http_codes: { http_400: 2 }, reasons: { http_other: 2 } })], []);
+    expect(c.category).toBe('no selection exposure');
+    expect(c.reason).toContain('failed');
+  });
+
+  it('never reports on jev_hierarchy when a lean run never planned it', () => {
+    expect(concludeRun([leanArm()], []).reason).not.toContain('jev_hierarchy');
   });
 });

@@ -2,10 +2,11 @@
 
 export type Tier = 'fast' | 'standard' | 'deep' | 'frontier';
 export type PlannerTier = 'deep' | 'frontier';
-export type Mode = 'off' | 'native' | 'auto';
+/** `lean` (JGL v1.1) is a separate additive mode: it shares no gate, guard or plan with native/auto. */
+export type Mode = 'off' | 'native' | 'auto' | 'lean';
 /** The two modes that reach V5 routing; routing-only types name these instead of excluding 'off'. */
 export type RoutingMode = 'native' | 'auto';
-export type OwnedRole = 'worker' | 'planner';
+export type OwnedRole = 'worker' | 'planner' | 'executor';
 export type ExecutionShape = 'direct' | 'orchestrated';
 export type RouteQuestionShape = 'composite' | 'atomic';
 /** Gate A asks the same way Gate B does, and the two are configured independently. */
@@ -33,7 +34,7 @@ export type ResultVerdict = 'accept' | 'rework' | 'replan' | 'abstain';
 
 export const TIERS: readonly Tier[] = ['fast', 'standard', 'deep', 'frontier'];
 export const PLANNER_TIERS: readonly PlannerTier[] = ['deep', 'frontier'];
-export const MODES: readonly Mode[] = ['off', 'native', 'auto'];
+export const MODES: readonly Mode[] = ['off', 'native', 'auto', 'lean'];
 export const ADMISSION_ANSWERS: readonly AdmissionAnswer[] = ['direct', 'orchestrated', 'needs_context', 'abstain'];
 export const ROUTE_ANSWERS: readonly RouteAnswer[] = ['fast', 'standard', 'deep', 'frontier', 'abstain'];
 export const PLANNER_ROUTE_ANSWERS: readonly PlannerRouteAnswer[] = ['deep', 'frontier', 'abstain'];
@@ -57,6 +58,12 @@ export const OWNED_AGENTS: Record<string, OwnedAgent> = {
 };
 
 export const OWNED_AGENT_NAMES: readonly string[] = Object.keys(OWNED_AGENTS);
+
+/**
+ * JGL-01: the one agent lean owns. Deliberately NOT in OWNED_AGENTS -- the legacy guard, eligibility check and tier
+ * router all key off that map, and lean shares none of them. Nothing but the lean PreToolUse branch matches this name.
+ */
+export const LEAN_EXECUTOR_AGENT = 'jev-gate:executor';
 
 export const agentForTier = (role: OwnedRole, tier: Tier): string => {
   const found = OWNED_AGENT_NAMES.find((name) => OWNED_AGENTS[name]?.role === role && OWNED_AGENTS[name]?.tier === tier);
@@ -307,6 +314,39 @@ export interface JobGeneration {
   forced?: true;
   /** A19: present only when the turn was admitted under `admittedShape: single`. Absent reads as `hierarchy`. */
   execution?: 'single';
+  /** JGL-03: at most one pending lean packet per generation. Null once consumed, superseded or never produced. */
+  lean?: LeanPending | null;
+}
+
+/**
+ * JGL-03: the short-lived packet one root request may apply to one owned executor. Bound to the request, the source
+ * lineage and the observed source prefix, so an ordinary assistant/tool append does not invalidate it but a new human
+ * instruction, a compaction or a destructive rewrite does. Never a transcript archive: only what dispatch needs.
+ */
+export interface LeanPending {
+  /**
+   * `pending` was registered before the call and never answered; `native` was decided and is not dispatchable;
+   * `proposed` carries a packet; `dispatched` is a packet one executor call consumed, kept with its packet emptied
+   * so the same request cannot be admitted or applied again (L5). Repeated delivery of the same request reads this
+   * instead of spending again, and a later request reads it to record whether a recommendation was taken.
+   */
+  outcome: 'pending' | 'native' | 'proposed' | 'dispatched';
+  marker: string;
+  packet: string;
+  packet_sha256: string;
+  request_sha256: string;
+  epoch: string;
+  prefix_digest: string;
+  cwd: string | null;
+  /**
+   * The canonical working tree the packet was built in: the real path of the nearest directory holding `.git`. A
+   * dispatch from another tree is stale; one from a subdirectory of the same tree is not. Absent on state written
+   * before the field existed; such a packet is treated as stale rather than bound on `cwd` alone.
+   */
+  worktree?: string | null;
+  omitted_groups: number;
+  retained_groups: number;
+  created_at: string;
 }
 
 export interface JobState {
@@ -315,6 +355,17 @@ export interface JobState {
   updated_at: string;
   current: JobGeneration;
   history: JobGeneration[];
+  /**
+   * Lean request identities this session has admitted, newest first and never evicted (LEAN_SEEN_MAX, then
+   * `lean_seen_full`). A lean registration overwrites `current`, so without this an older request redelivered after a
+   * newer one would look new and be paid for again.
+   */
+  lean_seen?: string[];
+  /**
+   * Set when a writer replaced a state file it could not read. Whatever identities that file held are unknown, so this
+   * session admits no further lean request (`lean_ledger_unknown`); an orchestration turn can still recover the file.
+   */
+  lean_seen_lost?: true;
 }
 
 /** Fixed diagnostic codes: the only text the hook writes to stderr, and the only reason strings a trace stores. */
@@ -341,7 +392,41 @@ export type SkipCode =
   | 'output_too_large'
   | 'no_state'
   | 'shape_direct'
-  | 'aborted';
+  | 'aborted'
+  /** JGL: lean-only local skips. Every one of them leaves ordinary native execution untouched. */
+  | 'profile_mode_mismatch'
+  | 'source_unavailable'
+  | 'source_lineage_unknown'
+  | 'source_bounded'
+  /** A complete record that does not decode or parse, or one identity with two contents: corruption, not noise. */
+  | 'source_corrupt'
+  /** At the prompt, the transcript ends inside a record the host is still writing, which may be context this turn needs. */
+  | 'source_incomplete'
+  /** A record form or provenance the source adapter has not seen, or content it cannot carry (an image, a document). */
+  | 'source_unsupported'
+  /** The transcript, a record in it, or the request's own record belongs to a different session or request. */
+  | 'source_identity_mismatch'
+  /** Local work left too little of the hook's own time for the provider call; nothing was sent. */
+  | 'deadline_exhausted'
+  | 'mandatory_overflow'
+  | 'mandatory_unsafe'
+  | 'host_unsupported'
+  | 'no_optional_groups'
+  | 'no_room_for_candidates'
+  | 'lean_executor_active'
+  | 'work_shape_unusable'
+  | 'work_shape_short_step'
+  | 'scope_unusable'
+  | 'scope_needs_context'
+  | 'scope_forbidden'
+  | 'no_effect'
+  | 'duplicate_request'
+  /** The session already holds LEAN_SEEN_MAX lean prompt identities; admitting another would mean forgetting one. */
+  | 'lean_seen_full'
+  /** The session's state could not be read, or replaced one that could not be: an identity it held may be charged again. */
+  | 'lean_ledger_unknown'
+  | 'packet_overflow'
+  | 'source_changed';
 
 export type HttpCode =
   | 'http_401'
@@ -403,7 +488,13 @@ export type DenyReason =
   | 'deps_incomplete'
   | 'phase_not_planned'
   /** A19: the planner was called on a turn admitted as a single executor, which has no plan to make. */
-  | 'single_shape';
+  | 'single_shape'
+  /** JGL-01: an owned executor call whose marker resolves to no current packet is not an executable task. */
+  | 'marker_unresolved'
+  | 'marker_stale'
+  | 'executor_active'
+  /** JGL-01 (L5): an owned marker whose dispatch could not be recorded is declined, never passed through half-applied. */
+  | 'reservation_failed';
 
 export type StateCode = 'state_corrupt' | 'state_too_large' | 'state_locked' | 'state_symlink' | 'state_write_failed';
 

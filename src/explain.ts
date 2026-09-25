@@ -179,8 +179,79 @@ const interpretationLine = (r: Rec): string => {
   return parts.length === 0 ? '\n  plan checked against the request: nothing flagged' : `\n  plan checked against the request: ${parts.join('; ')}`;
 };
 
+/**
+ * JGL-04 diagnostics. Missing source and empty source are different answers; an emitted marker and an actual owned
+ * dispatch are different facts; and a worker that reported completion is not a task anyone checked.
+ */
+const leanSelectionLine = (r: Rec): string => {
+  const d = sub(r, 'decision');
+  const src = sub(r, 'source');
+  const groups = sub(r, 'groups');
+  const action = d ? (str(d['action']) ?? '?') : '?';
+  const reason = d ? str(d['reason']) : null;
+  const policy = str(r['policy']) ?? 'jev';
+  const coverage = src ? str(src['coverage']) : null;
+  const unassessed = src ? num(src['unassessed']) : null;
+  const bytes = src ? num(src['bytes_read']) : null;
+  const b = (k: string): string => {
+    const v = groups ? num(groups[k]) : null;
+    return v === null ? '' : ` (${thousands(v)} B)`;
+  };
+  const counts = groups
+    ? `  ${num(groups['mandatory']) ?? '?'} mandatory${b('mandatory_bytes')}, ${num(groups['optional_asked']) ?? '?'} optional${b('optional_bytes')}`
+    : d
+      ? `  ${num(d['retained']) ?? '?'} retained, ${num(d['omitted']) ?? '?'} omitted`
+      : '';
+  // L7: each reason a group went unassessed is shown apart; a local cap is not a judgment about the group.
+  const excluded = src ? sub(src, 'excluded') : null;
+  const why = [
+    ['window', excluded ? num(excluded['window']) : null],
+    ['possible secret', excluded ? num(excluded['secret']) : null],
+    ['unattributed', excluded ? num(excluded['unattributed']) : null],
+    ['over the request bound', src ? num(src['unasked']) : null],
+  ]
+    .filter((e): e is [string, number] => typeof e[1] === 'number' && e[1] > 0)
+    .map(([label, n]) => `${label} ${n}`);
+  const src_text =
+    src === null
+      ? '  source not recorded'
+      : `  source ${coverage ?? 'unknown'}${unassessed ? `, ${unassessed} unassessed${why.length > 0 ? ` (${why.join(', ')})` : ''}` : ''}${bytes === null ? '' : `, ${thousands(bytes)} bytes read`}`;
+  const usage = sub(r, 'jev');
+  const u = usage ? sub(usage, 'usage') : null;
+  const spent = r['attempted'] === true ? `  jev usage ${u ? `${num(u['input_tokens']) ?? '?'} in / ${num(u['output_tokens']) ?? '?'} out` : 'unknown (not zero)'}` : '';
+  return `lean     ${action} (${policy})${counts}${src_text}  ${jevCall(r)}${spent}${because(reason)}`;
+};
+
+const leanDispatchLine = (r: Rec): string => {
+  const reason = str(r['reason']);
+  // An emitted marker is not a dispatch, and a recommendation nobody acted on is an outcome worth reading.
+  if (reason === 'packet_proposed') {
+    const pb = num(r['packet_bytes']);
+    return `packet   proposed  ${num(r['retained_groups']) ?? '?'} retained, ${num(r['omitted_groups']) ?? '?'} omitted${pb === null ? '' : `, ${thousands(pb)} B`}  — emitted to the root, not yet dispatched`;
+  }
+  if (reason === 'recommendation_not_taken') return `packet   not taken  the root made no owned executor call for that request`;
+  if (r['applied'] !== true) return `dispatch executor  denied: ${reason ?? 'no reason recorded'}${because(str(r['detail']))}`;
+  const bytes = num(r['composed_bytes']);
+  return `dispatch executor  packet applied  ${num(r['retained_groups']) ?? '?'} retained, ${num(r['omitted_groups']) ?? '?'} omitted${bytes === null ? '' : `, ${thousands(bytes)} prompt bytes`}`;
+};
+
+const leanPostLine = (r: Rec): string => {
+  const model = str(r['observed_model']);
+  const status = str(r['status']) ?? 'no status recorded';
+  // L5: an owned executor whose stop the host did not establish keeps its reservation, and says so.
+  const ownership = r['released'] === true ? '' : r['release_unconfirmed'] === true ? '  (ownership kept: the host did not establish that the child stopped)' : '  (no matching reservation released)';
+  const failure = str(r['failure']);
+  return `result   executor ${failure === null ? status : `failed (${failure})`}${model ? `  ran ${model}` : '  (no model in the result)'}${ownership}  — the worker's own report, not an external check`;
+};
+
 const lineFor = (r: Rec, posts: Map<string, Rec>): string | null => {
   switch (str(r['phase'])) {
+    case 'lean_result':
+      return leanSelectionLine(r);
+    case 'lean_dispatch':
+      return leanDispatchLine(r);
+    case 'lean_post':
+      return leanPostLine(r);
     case 'admission_result':
       return admissionLine(r);
     case 'pre_result':

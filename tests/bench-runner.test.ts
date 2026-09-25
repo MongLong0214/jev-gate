@@ -14,6 +14,7 @@ const fake = join(__dirname, 'fixtures', 'fake-claude.mjs');
 const cases = join(__dirname, 'fixtures', 'mini', 'cases.json');
 const ARMS = ['sonnet_native', 'frontier_native', 'native_hierarchy', 'orchestrated_control', 'frontier_orchestrated', 'jev_hierarchy', 'jev_single', 'jev_forced_orchestration'] as const;
 const JEV_ARMS = ['jev_hierarchy', 'jev_forced_orchestration'] as const;
+const LEAN_ARMS = ['native_auto', 'recent_packet', 'jev_lean'] as const;
 const HIERARCHY_ARMS = ['native_hierarchy', 'orchestrated_control', 'frontier_orchestrated', 'jev_hierarchy', 'jev_forced_orchestration'] as const;
 let tmp: string;
 let dist: string;
@@ -69,8 +70,20 @@ describe('plan', () => {
     expect(bench(['--arms', 'jev_hierarchy,bogus']).status).toBe(1);
     const retired = bench(['--arms', 'jev_hierarchy,fixed_hierarchy']);
     expect(retired.status).toBe(1);
-    expect(retired.stderr).toMatch(/--arms must be a unique subset/);
+    expect(retired.stderr).toMatch(/--arms must be `lean` or a unique subset/);
     expect(bench(['--arms', 'jev_hierarchy,jev_hierarchy']).status).toBe(1);
+    // JGL-05: `lean` is a profile name, and it selects exactly the three arms of that comparison.
+    const leanPlan = JSON.parse(bench(['--arms', 'lean']).stdout) as Plan;
+    expect(leanPlan.arms.map((a) => a.arm)).toEqual(['native_auto', 'recent_packet', 'jev_lean']);
+    expect(leanPlan.arms.filter((a) => a.mode === 'lean').map((a) => a.arm)).toEqual(['recent_packet', 'jev_lean']);
+    // Only the research arm enables the no-Jev dependency.
+    expect(leanPlan.arms.filter((a) => a.benchRecent === true).map((a) => a.arm)).toEqual(['recent_packet']);
+    expect(leanPlan.arms.map((a) => a.rootModel)).toEqual(['sonnet', 'sonnet', 'sonnet']);
+    // The packet budget both handoff arms fill is frozen in the plan, before anything runs.
+    const policy = (leanPlan.cli as Record<string, unknown>)['lean_packet_policy'] as Record<string, number>;
+    expect(policy['packet_budget_bytes']).toBe(60 * 1024);
+    expect(policy['action_confidence']).toBe(0.8);
+    expect(policy['omission_confidence']).toBe(0.9);
     expect(bench(['--regrade', '--execute', '--max-sessions', '8']).status).toBe(1);
     expect(bench(['--execute']).stderr).toMatch(/--max-sessions/);
     const badManifest = join(tmp, 'bad.json');
@@ -116,6 +129,31 @@ describe('execute', () => {
     const noKeyNoJev = spawnSync(process.execPath, [join(dist, 'bench', 'run.js'), '--cases', cases, '--out', join(tmp, 'nokey-ok'), '--claude', fake, '--plugin-dir', pluginDir, '--execute', '--max-sessions', '1', '--arms', 'sonnet_native'], { encoding: 'utf8', env: { PATH: process.env['PATH'] ?? '', HOME: join(tmp, 'home') } });
     expect(noKeyNoJev.status, noKeyNoJev.stderr).toBe(0);
   });
+
+  it('runs the three lean arms, and only the research arm gets the no-Jev dependency and no key', () => {
+    const r = bench(['--execute', '--arms', 'lean', '--max-sessions', '3', '--seed', '5', '--timeout-ms', '60000']);
+    expect(r.status, r.stderr + r.stdout).toBe(0);
+    const cells = Object.fromEntries(LEAN_ARMS.map((a) => [a, readCell(r.out, a)])) as Record<(typeof LEAN_ARMS)[number], CellRecord>;
+    expect(new Set(LEAN_ARMS.map((a) => cells[a].request_sha256)).size).toBe(1);
+    for (const a of LEAN_ARMS) expect(cells[a].started, a).toBe(true);
+
+    // The baseline runs without the plugin at all and keeps its own native delegation.
+    expect(cells.native_auto.spawn!.argv).not.toContain('--plugin-dir');
+    expect(cells.native_auto.state_dir).toBeNull();
+
+    for (const a of ['recent_packet', 'jev_lean'] as const) {
+      expect(cells[a].spawn!.argv).toContain(join(r.out, 'inputs', 'plugin'));
+      expect(cells[a].spawn!.env_added).toContain('JEV_GATE_MODE');
+      expect(cells[a].spawn!.env_added).toContain('JEV_GATE_STATE_DIR');
+    }
+    // Only the research arm selects the no-Jev dependency, and it runs with no provider key in the cell at all.
+    expect(cells.recent_packet.spawn!.env_added).toContain('JEV_GATE_BENCH_RECENT');
+    expect(cells.jev_lean.spawn!.env_added).not.toContain('JEV_GATE_BENCH_RECENT');
+    expect(cells.native_auto.spawn!.env_added).not.toContain('JEV_GATE_BENCH_RECENT');
+
+    // No legacy machinery is configured for these arms.
+    for (const a of LEAN_ARMS) expect(cells[a].spawn!.env_added).not.toContain('JEV_GATE_EXPERIMENT_ADMISSION');
+  }, 180_000);
 
   it('refuses an existing output directory, even an empty one', () => {
     const out = join(tmp, 'existing');
