@@ -321,29 +321,27 @@ export const countAttempt = (gen: JobGeneration, kind: BoundKind, taskId: string
 
 /**
  * Whether a state file may be aged out: older than retention, readable, no active younger than 24 h, and no lean
- * identities (or record of having lost some) in it. A file that cannot be read is never a candidate, and "read" means
- * what `readJob` accepts for the session the file is named after, not merely JSON: lean refuses to admit over a state
- * it cannot read, and deleting that state would turn the refusal into an empty ledger.
+ * identities (or record of having lost some) in it. A file that cannot be read is never a candidate, and "read" is
+ * `readRaw` itself for the session the file is named after, not a copy of its checks: lean refuses to admit over a
+ * state it cannot read, and deleting that state would turn the refusal into an empty ledger. Two reviews in a row
+ * found a check the copy had missed, the structure and then the size.
  */
 const agedOut = (file: string, now: number): boolean => {
   try {
     const st = lstatSync(file);
-    if (st.isSymbolicLink() || now - st.mtimeMs <= RETENTION_MS) return false;
-    const text = readFileSync(file, 'utf8');
-    const parsed = JSON.parse(text) as unknown;
-    if (!isRecord(parsed)) return false;
-    const sessionId = parsed['session_id'];
-    if (typeof sessionId !== 'string' || jobFileName(sessionId) !== basename(file)) return false;
-    const state = parseState(text, sessionId);
-    if (!state) return false;
+    if (st.isSymbolicLink() || st.size > STATE_MAX_BYTES || now - st.mtimeMs <= RETENTION_MS) return false;
+    const claimed = (JSON.parse(readFileSync(file, 'utf8')) as { session_id?: unknown } | null)?.session_id;
+    if (typeof claimed !== 'string' || jobFileName(claimed) !== basename(file)) return false;
+    const read = readRaw(file, claimed);
+    if (!read.ok || read.value === null) return false;
+    const state = read.value;
     if (Object.values(state.current.active).some((r) => now - Date.parse(r.started_at) < ACTIVE_GRACE_MS)) return false;
     /**
      * A session can be resumed after any length of time, and its admitted lean identities are what stop an old
      * request's redelivery from being charged again once compaction has removed its record. So a file that holds
-     * them is never aged out, and neither is one that records having lost them.
+     * them is never aged out, and neither is one that records having lost them. Both are read as lean reads them.
      */
-    const seen = parsed['lean_seen'];
-    return !(Array.isArray(seen) && seen.length > 0) && parsed['lean_seen_lost'] !== true;
+    return !(state.lean_seen !== undefined && state.lean_seen.length > 0) && state.lean_seen_lost !== true;
   } catch {
     return false;
   }

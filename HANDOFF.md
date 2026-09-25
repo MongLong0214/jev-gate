@@ -101,6 +101,11 @@ other two, both confirmed:
   which `readJob` refuses, was deleted, and the next lean request in that session saw an empty ledger. Cleanup now
   requires the state `readJob` would accept for the session the file is named after.
 
+A sixth review, of `4e6cc47` (same settings, FIX-FIRST), confirmed the header gap closed and found the cleanup copy
+still short: it missed `readJob`'s size bound, so an old valid state over 1 MiB was deleted, and it read `lean_seen`
+raw, so an entry lean ignores (`[null]`) kept a file forever. Both were confirmed. Cleanup now calls the same reader lean
+uses instead of copying its checks, so a rule added there reaches cleanup too.
+
 One finding was rejected: requiring a preserved list to be a parent chain, or to be in write order. Of 97 real
 lists in local transcripts, 92 were not parent chains and 89 were not in write order. None repeated an identity. The
 host relinks the list as written, so either check would decline valid sessions. Only the repeat check was added.
@@ -127,7 +132,7 @@ HTTP.
   `lean_seen_full` and runs natively. Forgetting an identity instead would let its redelivery be charged again.
 - **A lean session's state file is kept indefinitely.** It holds the admitted identities that stop a replay, and a
   session can be resumed at any time, so the seven-day cleanup skips it. Deleting it by hand re-opens that replay.
-  An unreadable state file is kept too, including valid JSON that `readJob` refuses.
+  An unreadable state file is kept too: anything `readJob` refuses, whether for its structure or its size.
 - **A session whose state could not be read stays native for lean.** Its identities are unknown, so a replay cannot
   be recognised. Lean declines (`lean_ledger_unknown`) for the rest of that session, even after an orchestration
   turn rewrites the file.

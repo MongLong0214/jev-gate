@@ -217,12 +217,17 @@ describe('cleanupJobs', () => {
     writeFileSync(jobPath(env, 'no-active'), JSON.stringify({ version: 5, session_id: 'no-active', current: {} }));
     seed(env, 'donor');
     writeFileSync(jobPath(env, 'misnamed'), readFileSync(jobPath(env, 'donor'), 'utf8'));
+    // Valid state over the size bound: readJob refuses it as state_too_large, so cleanup keeps it.
+    seed(env, 'oversize');
+    const padded = { ...JSON.parse(readFileSync(jobPath(env, 'oversize'), 'utf8')), pad: 'x'.repeat(STATE_MAX_BYTES) };
+    writeFileSync(jobPath(env, 'oversize'), JSON.stringify(padded));
     expect(readJob(env, 'no-active').ok).toBe(false);
     expect(readJob(env, 'misnamed').ok).toBe(false);
+    expect(readJob(env, 'oversize')).toEqual({ ok: false, code: 'state_too_large' });
     // A live holder: no owner file, so the lock is not stale and cleanup does not wait for it.
     mkdirSync(`${jobPath(env, 'in-use')}.lock`);
     const past = (now - RETENTION_MS - 60_000) / 1000;
-    const kept = ['in-use', 'lost', 'unreadable', 'no-active', 'misnamed'];
+    const kept = ['in-use', 'lost', 'unreadable', 'no-active', 'misnamed', 'oversize'];
     for (const id of kept) utimesSync(jobPath(env, id), past, past);
     expect(cleanupJobs(env, now)).toBe(0);
     for (const id of kept) expect(existsSync(jobPath(env, id))).toBe(true);
@@ -241,8 +246,14 @@ describe('cleanupJobs', () => {
     const past = (now - RETENTION_MS - 60_000) / 1000;
     utimesSync(jobPath(env, 'lean-session'), past, past);
     utimesSync(jobPath(env, 'plain-session'), past, past);
-    expect(cleanupJobs(env, now)).toBe(1);
+    // An entry lean does not read as an identity does not hold the file either.
+    seed(env, 'null-seen');
+    writeFileSync(jobPath(env, 'null-seen'), JSON.stringify({ ...JSON.parse(readFileSync(jobPath(env, 'null-seen'), 'utf8')), lean_seen: [null] }));
+    expect(readJob(env, 'null-seen')).toMatchObject({ ok: true, value: { lean_seen: [] } });
+    utimesSync(jobPath(env, 'null-seen'), past, past);
+    expect(cleanupJobs(env, now)).toBe(2);
     expect(existsSync(jobPath(env, 'plain-session'))).toBe(false);
+    expect(existsSync(jobPath(env, 'null-seen'))).toBe(false);
     const kept = readJob(env, 'lean-session');
     expect(kept.ok && kept.value?.lean_seen).toEqual(['p1']);
   });
