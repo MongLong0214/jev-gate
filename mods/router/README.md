@@ -56,6 +56,9 @@ Every gate below leaves the call exactly as it was and logs why.
   `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL` makes an alias mean something else (`alias_remapped`). An environment
   it cannot read counts as pinned everywhere. Pins are read again at every step, since another plugin can set one
   mid-session: a pin set after a decision ends that override from the next step (`model_pinned`, `effort_pinned`).
+  Pins and the allowlist are read again once Jev has answered, too: a spawn is left native if either now excludes its
+  target (`{"event":"spawn_stop",…}`), and a stored root model override stops once the allowlist drops it
+  (`model_not_allowed`).
 - **Spawns it cannot vouch for.** A fork (`fork`), an explicit model (`explicit_model`), a type other than the
   inheriting built-ins `general-purpose`, `claude`, `Plan` and `Explore` (`type_unverified`), a built-in's name that the
   engine's own core listing did not offer (`definition_unverified`), a host whose release base is not 2.1.282
@@ -65,8 +68,8 @@ Every gate below leaves the call exactly as it was and logs why.
   `availableModels` allows nothing. An entry allows a variant only by naming it: `claude-opus-5-5` does not allow
   `claude-opus-5-5[1m]`, and an alias allows only the unsuffixed model. A suffix the host does not list for that model
   (anything but `[1m]` on Opus 5.5 and Sonnet 5) makes the profile `unknown_model`.
-- **Nothing it could apply.** A model question is asked only when some other profile could actually be applied;
-  otherwise the dimension is withheld (`no_applicable_target`, or `rank_unknown` when the current model has no
+- **Nothing it could apply.** A model question is asked only when some other profile could actually be applied, with
+  an effort it would be sent with (the current one, or one offered alongside) that the profile takes; otherwise the dimension is withheld (`no_applicable_target`, or `rank_unknown` when the current model has no
   profile), and with nothing else to ask no request is sent. At the root a model change also needs its exact
   `from → to` pair in `VERIFIED_ROOT_SWITCHES` (`controls_unverified`). The hook sees none of the controls the
   retained request carries — thinking, `max_tokens`, tools, media, beta headers, the window — and the 2.1.282
@@ -85,14 +88,20 @@ Every gate below leaves the call exactly as it was and logs why.
 A root turn is judged once, at its first step, and its patch is reapplied to each later step of that turn. A turn with
 no user text (`no_task_text`) is not judged. If a step reports another model than the one requested, or reports none,
 the model override stops for the rest of the turn, and so does an effort the observed model cannot take; this holds
-for an effort-only patch too, since the host can answer from a fallback. The id a response reports need not carry the
-host's `[1m]`, so an unsuffixed answer is compared by model alone. If a step's incoming model or effort differs from the
+for an effort-only patch too, since the host can answer from a fallback. A model override needs its own variant
+reported back: a bare `claude-opus-5-5` does not confirm a requested `claude-opus-5-5[1m]`, and ends that override.
+An effort-only patch compares by model alone, since effort does not depend on the variant. If a step's incoming model or effort differs from the
 baseline, something else changed it, and the Router stops for the rest of the turn (`root_stop`). So it does if the
 host dispatched a step without waiting for the hook (`step_abandoned`): a later step never switches away from what that
 one ran on.
 
 A spawn is judged per dispatch, on its own prompt, even when a `tool_use_id` repeats; its wait ends with that dispatch
 or the session.
+
+Each routed result is logged with what the host reported: `root_result` carries the applied patch, the model the step
+reports and the four token counts of its usage (nothing else of it), and `spawn_result` the requested and resolved
+model and the agent id, or the denial. These are per-step records, not a saving: overlapping totals are for #45 to
+normalize.
 
 ## Limits
 

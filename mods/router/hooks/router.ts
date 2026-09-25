@@ -5,7 +5,7 @@ import { validKey } from './config.ts';
 import type { RootSwitch, SymbolicEffort } from './models.ts';
 import { answeredBy, factsOf, sameModel, VERIFIED_ROOT_SWITCHES } from './models.ts';
 import type { Baseline, DimensionReason, MutableDimensions, PolicyOptions, RoutingPatch, RoutingTask } from './policy.ts';
-import { buildQuestions, buildState, choosePatch, offerableEfforts, offerableTiers, validateAnswers } from './policy.ts';
+import { allowedBy, buildQuestions, buildState, choosePatch, offerableEfforts, offerableTiers, validateAnswers } from './policy.ts';
 
 /**
  * The Router's handlers over a structural engine. register.ts adapts the host's `$` to RouterEngine (the environment
@@ -67,7 +67,7 @@ export interface SpawnEvent {
   parentModel: string;
   fork: boolean;
 }
-export type SpawnOutcome = { model: string; deny?: undefined } | { deny: string; model?: undefined };
+export type SpawnOutcome = { model: string; agentId?: string; deny?: undefined } | { deny: string; model?: undefined };
 
 type StreamNextLike<E, C, R> = ((e: E) => AsyncGenerator<C, R>) & { readonly signal: AbortSignal };
 type NextLike<E, R> = ((e: E) => Promise<R>) & { readonly signal: AbortSignal };
@@ -84,6 +84,14 @@ const EXPLORE_FAMILIES = new Set(['haiku', 'sonnet', 'opus']);
 const LEAN_MARKER = /jev-lean-[0-9a-f]{16}/;
 const MAX_TURNS = 16;
 const MAX_OFFERS = 64;
+
+/** The four counts a response reports, and nothing else of it. Per step; overlapping totals are #45's to normalize. */
+const COUNTS = ['input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'] as const;
+const countsOf = (usage: unknown): Record<string, number> | null => {
+  if (typeof usage !== 'object' || usage === null) return null;
+  const u = usage as Record<string, unknown>;
+  return Object.fromEntries(COUNTS.flatMap((k) => (typeof u[k] === 'number' && Number.isFinite(u[k]) ? [[k, u[k]]] : [])));
+};
 
 const ABORTED = Symbol('aborted');
 /** Waits for `p` unless `signal` ends the wait first. `p` itself is never cancelled by this. */
@@ -255,12 +263,10 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
       const routeModel = config.routeMainModel && !pins.mainModel;
       const available = routeModel ? await engine.availableModels().catch(() => []) : undefined;
       const opts = policy('root', available);
-      const offer = routeModel ? offerableTiers(t.baseline, opts) : null;
+      const efforts = config.routeMainEffort && !pins.mainEffort ? offerableEfforts(t.baseline, 'root') : null;
+      const offer = routeModel ? offerableTiers(t.baseline, opts, efforts) : null;
       if (offer && 'reason' in offer) withheld = offer.reason;
-      const dims: MutableDimensions = {
-        tiers: offer && 'tiers' in offer ? offer.tiers : null,
-        efforts: config.routeMainEffort && !pins.mainEffort ? offerableEfforts(t.baseline, 'root') : null,
-      };
+      const dims: MutableDimensions = { tiers: offer && 'tiers' in offer ? offer.tiers : null, efforts };
       outcome = await assess(engine, { scope: 'root', text }, t.baseline, dims, opts, t.controller.signal, { scope: 'root', turn: turnId });
     } catch {
       outcome = { kind: 'skipped', reason: 'internal_error' };
@@ -300,6 +306,11 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
       t.effortStopped = true;
       log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: 'effort_pinned' });
     }
+    if (!t.modelStopped && t.patch.model !== undefined && !allowedBy(t.patch.model, await engine.availableModels().catch(() => []))) {
+      t.modelStopped = true;
+      log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: 'model_not_allowed' });
+    }
+    if (t.stopped) return null;
     const model = !t.modelStopped ? t.patch.model : undefined;
     const finalModel = model ?? e.model;
     const effort = !t.effortStopped && t.patch.effort !== undefined && factsOf(finalModel)?.unconditionalEffort.includes(t.patch.effort) ? t.patch.effort : undefined;
@@ -358,11 +369,14 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
       if (!patch) return;
       const t = turns.get(e.turnId);
       if (!t) return;
-      // An effort-only patch is checked too: the host can answer from a fallback model the effort does not fit.
       const requested = patch.model ?? e.model;
       const seen = result && typeof result.usage?.model === 'string' ? result.usage.model : null;
-      // Missing is unknown, not confirmation: the override is not reapplied on a guess.
-      if (seen === null || !answeredBy(requested, seen)) {
+      log(engine, { event: 'root_result', turn: e.turnId, index: e.index, applied: patch, observed: seen, usage: result ? countsOf(result.usage) : null });
+      // Missing is unknown, not confirmation: the override is not reapplied on a guess. A model override needs its own
+      // variant reported back, so a bare id does not confirm a requested [1m]. An effort-only patch is checked too, since
+      // the host can answer from a fallback; effort depends only on the model, so there the variant is not asked for.
+      const confirmed = seen !== null && (patch.model !== undefined ? sameModel(patch.model, seen) : answeredBy(e.model, seen));
+      if (!confirmed) {
         if (patch.model !== undefined) t.modelStopped = true;
         const facts = seen === null ? null : factsOf(seen);
         if (patch.effort !== undefined && !facts?.unconditionalEffort.includes(patch.effort)) t.effortStopped = true;
@@ -448,13 +462,30 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     // that id can carry another prompt, which would then run on a tier earned by different text. The wait ends with
     // this dispatch or the session.
     const wait = linked(signal, session.signal);
+    let target: string | null;
     try {
-      return await spawnAssessment(engine, e, baseline, opts, offer.tiers, wait.signal);
+      target = await spawnAssessment(engine, e, baseline, opts, offer.tiers, wait.signal);
     } catch {
-      return null;
+      target = null;
     } finally {
       wait.dispose();
     }
+    if (target === null) return null;
+    // A pin or a narrower allowlist can arrive while Jev answers, so they are read again here rather than trusted from
+    // before the request: what applies is what holds when the spawn is made.
+    const now = await pinsOf(engine);
+    const stop = now.subagentModel
+      ? 'subagent_model_pinned'
+      : now.aliasRemap
+        ? 'alias_remapped'
+        : !allowedBy(target, await engine.availableModels().catch(() => []))
+          ? 'target_not_allowed'
+          : null;
+    if (stop) {
+      log(engine, { event: 'spawn_stop', tool_use_id: e.tool_use_id, reason: stop, requested: target });
+      return null;
+    }
+    return target;
   };
 
   const agentSpawn = async <E extends SpawnEvent, R extends SpawnOutcome>(engine: RouterEngine, e: E, next: NextLike<E, R>): Promise<R> => {
@@ -469,8 +500,17 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     const result = await next(target !== null ? { ...e, model: target } : e);
     try {
       if (target !== null) {
-        if (result.deny !== undefined) log(engine, { event: 'spawn_result', tool_use_id: e.tool_use_id, denied: true });
-        else if (!sameModel(target, result.model)) log(engine, { event: 'spawn_result', tool_use_id: e.tool_use_id, reason: 'model_mismatch', requested: target, observed: result.model });
+        if (result.deny !== undefined) log(engine, { event: 'spawn_result', tool_use_id: e.tool_use_id, requested: target, denied: true });
+        else {
+          log(engine, {
+            event: 'spawn_result',
+            tool_use_id: e.tool_use_id,
+            requested: target,
+            observed: result.model,
+            agent_id: result.agentId ?? null,
+            ...(sameModel(target, result.model) ? {} : { reason: 'model_mismatch' }),
+          });
+        }
       }
     } catch {
       // Observation only.

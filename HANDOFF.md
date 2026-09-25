@@ -23,6 +23,13 @@ until a `from → to` switch is verified on a host (`VERIFIED_ROOT_SWITCHES` is 
 whether the retained request's controls remain valid on another model. So `routeMainModel` asks nothing today. #41
 and #42 need that host observation.
 
+The second review (`252f5b4`) was FIX-FIRST with one major and three minor findings, fixed with tests. Pins and the
+allowlist are read again after Jev answers, so a spawn or a stored root override that no longer holds stays native.
+A model override to a `[1m]` id stops unless the response reports that variant; whether the host ever reports it is
+unobserved, so a routed `[1m]` switch may stop after its first step. A model question is offered only when some
+effort it would be sent with pairs with the target. Routed results are logged (`root_result`, `spawn_result`) with
+the reported model and the four token counts only.
+
 ## 2026-09-25 — the PR #37 review (L1–L7) is fixed in code; `lean` is still unmeasured
 
 The consolidated review of `e444a4d` asked for seven changes before recommending `lean`. All seven are now in code

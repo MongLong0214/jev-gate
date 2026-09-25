@@ -48,6 +48,7 @@ export const fakeEngine = (o: FakeEngineOptions = {}) => {
   const timers: Array<{ ms: number; resolve: () => void }> = [];
   // Read on every call, so a test can set a pin between steps as another Mod could.
   const pins: Partial<HostPins> = { ...o.pins };
+  const allowed: { models: readonly string[] | undefined } = { models: o.availableModels };
   const engine: RouterEngine = {
     fetch: async (url, init) => {
       const body = JSON.parse(init.body) as { model: string; state: unknown; questions: SentRequest['questions'] };
@@ -68,7 +69,7 @@ export const fakeEngine = (o: FakeEngineOptions = {}) => {
       }),
     envKey: async () => ('envKey' in o ? o.envKey : FAKE_KEY),
     pins: async () => ({ mainModel: false, mainEffort: false, subagentModel: false, aliasRemap: false, ...pins }),
-    availableModels: async () => o.availableModels,
+    availableModels: async () => allowed.models,
     hostBase: async () => ('hostBase' in o ? o.hostBase : '2.1.282'),
     log: (line) => {
       if (!line.startsWith('jev-router ')) throw new Error(`unprefixed log line: ${line}`);
@@ -80,6 +81,7 @@ export const fakeEngine = (o: FakeEngineOptions = {}) => {
     sent,
     logs,
     pins,
+    allowed,
     expire: (): void => {
       for (const t of timers.splice(0)) t.resolve();
     },
@@ -117,7 +119,7 @@ export const answering =
 export const CLEAR: Partial<Record<'control' | 'action_risk', Pick>> = { control: ['task_clear', 0.97], action_risk: ['ordinary', 0.97] };
 
 /** A `next` for a streaming hook: records what it was called with, yields one chunk, returns a result. */
-export const streamNext = <E extends { model: string }>(usageModel: ((e: E) => string | null) | null = (e) => e.model) => {
+export const streamNext = <E extends { model: string }>(usageModel: ((e: E) => string | null) | null = (e) => e.model, counts: Record<string, unknown> = {}) => {
   const calls: E[] = [];
   const controller = new AbortController();
   const fn = Object.assign(
@@ -125,7 +127,7 @@ export const streamNext = <E extends { model: string }>(usageModel: ((e: E) => s
       calls.push(e);
       yield 'chunk';
       const model = usageModel ? usageModel(e) : null;
-      return { usage: model === null ? null : { model } };
+      return { usage: model === null ? null : { ...counts, model } };
     },
     { signal: controller.signal },
   );

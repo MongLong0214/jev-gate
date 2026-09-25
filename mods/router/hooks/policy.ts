@@ -237,7 +237,7 @@ export const rankOf = (model: string, tiers: PolicyOptions['tiers']): ModelTier 
 export const usableTarget = (value: string, scope: 'root' | 'spawn'): boolean =>
   scope === 'root' ? factsOf(value) !== null && aliasFamily(value) === null : factsOf(value) !== null || aliasFamily(value) !== null;
 
-const allowedBy = (target: string, list: readonly string[] | undefined): boolean => {
+export const allowedBy = (target: string, list: readonly string[] | undefined): boolean => {
   if (!list) return true;
   const facts = factsOf(target);
   return list.some((entry) => {
@@ -265,15 +265,17 @@ export type TierOffer = { tiers: ModelTier[] } | { reason: 'rank_unknown' | 'no_
 
 /**
  * Profiles worth asking about: a known current rank and at least one other profile that could actually be applied.
- * A question whose every change would be refused afterwards is a paid request for nothing.
+ * A question whose every change would be refused afterwards is a paid request for nothing. `efforts` are the levels
+ * asked about in the same batch: a target that cannot keep the retained effort is still reachable through one of them.
  */
-export const offerableTiers = (baseline: Baseline, opts: PolicyOptions): TierOffer => {
+export const offerableTiers = (baseline: Baseline, opts: PolicyOptions, efforts: readonly RoutedEffort[] | null = null): TierOffer => {
   const current = rankOf(baseline.model, opts.tiers);
   if (current === null) return { reason: 'rank_unknown' };
+  const pairable = (v: string): boolean => pairValid(v, baseline.effort) || (efforts ?? []).some((e) => pairValid(v, e));
   const tiers = TIER_ORDER.filter((t) => {
     const v = opts.tiers[t];
     if (v === undefined || !usableTarget(v, opts.scope)) return false;
-    return t === current || targetRefusal(v, baseline, opts) === null;
+    return t === current || (targetRefusal(v, baseline, opts) === null && pairable(v));
   });
   return tiers.some((t) => t !== current) ? { tiers } : { reason: 'no_applicable_target' };
 };

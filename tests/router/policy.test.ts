@@ -94,6 +94,16 @@ describe('what is offered', () => {
     expect(offerableTiers({ model: 'claude-unknown-1' }, opts())).toEqual({ reason: 'rank_unknown' });
   });
 
+  it('offers a target only when some effort it would be sent with pairs with it', () => {
+    const opusMax = { model: 'claude-opus-5-5', effort: 'max' as const };
+    const toSonnet = opts(switches(['claude-opus-5-5', 'claude-sonnet-5']));
+    // Sonnet takes no max; with the effort kept, every answer that moves would be refused.
+    expect(offerableTiers(opusMax, toSonnet)).toEqual({ reason: 'no_applicable_target' });
+    expect(offerableTiers(opusMax, toSonnet, [])).toEqual({ reason: 'no_applicable_target' });
+    // An effort offered alongside that Sonnet takes makes it reachable.
+    expect(offerableTiers(opusMax, toSonnet, ['low', 'medium', 'high', 'xhigh'])).toEqual({ tiers: ['standard', 'deep'] });
+  });
+
   it('knows only the variants the host lists for each model', () => {
     expect(rankOf('claude-opus-5-5[bogus]', FULL)).toBeNull();
     expect(rankOf('claude-fable-5-1[1m]', FULL)).toBeNull();
