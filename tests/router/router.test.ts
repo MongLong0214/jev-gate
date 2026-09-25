@@ -29,6 +29,11 @@ const TEXT = 'Rename the helper parseRow to parseRecord in src/rows.ts and updat
 const step = (over: Partial<TurnStepEvent> = {}): TurnStepEvent => ({ turnId: 't1', index: 0, model: 'claude-opus-5-5', effort: 'high', ...over });
 
 const settle = () => new Promise((r) => setTimeout(r, 0));
+/** Runs `f` after `hops` microtask turns, to land between two awaits of the code under test. */
+const later = (hops: number, f: () => void): void => {
+  if (hops === 0) f();
+  else queueMicrotask(() => later(hops - 1, f));
+};
 
 describe('root effort', () => {
   it('applies a confident, ordinary downgrade to the first step and every later step of the turn, with one request', async () => {
@@ -307,6 +312,31 @@ describe('root effort', () => {
       await drain(router.turnStep(f.engine, { ...e, index: 1 }, second.next));
       expect(second.calls, observed).toEqual([{ ...e, index: 1, effort }]);
       expect(f.logs.some((l) => l['event'] === 'root_stop'), observed).toBe(mismatch);
+    }
+  });
+
+  it('never gives a root step its patch once the session has ended, wherever the end lands after the last read', async () => {
+    for (let hops = 0; hops <= 12; hops++) {
+      const router = createRouter(configOf(EFFORT_ONLY));
+      const f = fakeEngine({ respond: answering({ ...CLEAR, effort: ['low', 0.95] }) });
+      router.turnStart({ turnId: 't1', text: TEXT });
+      const n = streamNext<TurnStepEvent>();
+      let endedBeforeNext: boolean | null = null;
+      const pins = f.engine.pins;
+      let reads = 0;
+      f.engine.pins = async () => {
+        const r = await pins();
+        // The second pins read, in applyStored, is the last one before next.
+        if (++reads === 2) later(hops, () => {
+          endedBeforeNext = n.calls.length === 0;
+          router.sessionEnd();
+        });
+        return r;
+      };
+      await drain(router.turnStep(f.engine, step(), n.next));
+      await settle();
+      expect(n.calls, `hops ${hops}`).toHaveLength(1);
+      if (endedBeforeNext === true) expect(n.calls[0], `hops ${hops}`).toEqual(step());
     }
   });
 
@@ -702,6 +732,31 @@ describe('spawn model', () => {
       expect(n.calls, during).toEqual([spawn()]);
       expect(f.sent, during).toHaveLength(during === 'first' ? 0 : 1);
       expect(f.logs, during).toContainEqual({ event: 'spawn_stop', tool_use_id: 'tu1', reason: 'session_ended' });
+    }
+  });
+
+  it('never routes a spawn to next once its session has ended, wherever the end lands after the last read', async () => {
+    for (let hops = 0; hops <= 12; hops++) {
+      const router = createRouter(configOf(SPAWN_ONLY));
+      const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['fast', 0.95] }) });
+      router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+      const n = spawnNext();
+      let endedBeforeNext: boolean | null = null;
+      const pins = f.engine.pins;
+      let reads = 0;
+      f.engine.pins = async () => {
+        const r = await pins();
+        // The second pins read is the last one before next.
+        if (++reads === 2) later(hops, () => {
+          endedBeforeNext = n.calls.length === 0;
+          router.sessionEnd();
+        });
+        return r;
+      };
+      await router.agentSpawn(f.engine, spawn(), n.next);
+      await settle();
+      expect(n.calls, `hops ${hops}`).toHaveLength(1);
+      if (endedBeforeNext === true) expect(n.calls[0], `hops ${hops}`).toEqual(spawn());
     }
   });
 

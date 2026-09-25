@@ -114,6 +114,9 @@ normalize.
 - **One verified host.** Spawn routing depends on how 2.1.282 resolves an inheriting built-in's model. Any other
   release base leaves spawns native until it is verified.
 - **A hook never calls `next` after its signal aborts.** By then the host has gone on without it, and a `next` would
-  start a second request. A root step returns nothing, and a spawn throws.
+  start a second request. A root step returns nothing, and a spawn throws. While the signal is live, the handler
+  checks, with nothing awaited before `next`, that the session it began in has not ended (and, at the root, that the
+  turn is still live); otherwise the step or spawn goes on native (`session_ended`, `turn_stopped`). A failing
+  diagnostic or bookkeeping call never keeps an event from being forwarded.
 - **The credential screen is copied, not imported,** because a Function Hooks module cannot import the Node side of
   the repository. A parity test keeps the two lists identical.

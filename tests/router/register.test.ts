@@ -102,6 +102,13 @@ describe('register', () => {
     const out = await hooks.get('session.start')?.(host.$, e, withSignal(async (x: unknown) => ({ passed: x })));
     expect(out).toEqual({ passed: e });
     expect(host.logs).toEqual(['jev-router {"event":"router","disabled":"invalid_option","field":"timeoutMs"}']);
+
+    // A logger that throws changes nothing: the event still goes on.
+    const broken = fakeHost();
+    broken.$.ui.log = () => {
+      throw new Error('log unavailable');
+    };
+    expect(await hooks.get('session.start')?.(broken.$, e, withSignal(async (x: unknown) => ({ passed: x })))).toEqual({ passed: e });
   });
 
   it('registers the root hooks and the spawn hooks their switches ask for', async () => {

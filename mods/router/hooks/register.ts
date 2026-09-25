@@ -41,6 +41,15 @@ const engineOf = ($: EngineInterface): RouterEngine => ({
   log: (line) => $.ui.log(line, { to: 'debug' }),
 });
 
+/** Bookkeeping and diagnostics never stand between the host and its own event: a failure here leaves it native. */
+const quietly = (f: () => void): void => {
+  try {
+    f();
+  } catch {
+    // The event goes on unchanged.
+  }
+};
+
 /**
  * #40: off by default, and off means no hook at all. An option the Router cannot read turns it off too, with one
  * debug line naming the field when a session starts.
@@ -49,7 +58,7 @@ export const register: Register = (on, options) => {
   const resolved = resolveConfig(options);
   if (!resolved.ok) {
     on('session.start', ($, e, next) => {
-      $.ui.log(`jev-router ${JSON.stringify({ event: 'router', disabled: 'invalid_option', field: resolved.field })}`, { to: 'debug' });
+      quietly(() => $.ui.log(`jev-router ${JSON.stringify({ event: 'router', disabled: 'invalid_option', field: resolved.field })}`, { to: 'debug' }));
       return next(e);
     });
     return;
@@ -60,26 +69,26 @@ export const register: Register = (on, options) => {
 
   if (router.rootEnabled) {
     on('turn.start', ($, e, next) => {
-      router.turnStart(e);
+      quietly(() => router.turnStart(e));
       return next(e);
     });
     on('turn.step', async function* ($, e, next) {
       return yield* router.turnStep(engineOf($), e, next);
     });
     on('turn.complete', ($, e, next) => {
-      router.turnComplete(e);
+      quietly(() => router.turnComplete(e));
       return next(e);
     });
   }
   if (router.spawnEnabled) {
     on('agent.offer', ($, e, next) => {
-      router.agentOffer(e);
+      quietly(() => router.agentOffer(e));
       return next(e);
     });
     on('agent.spawn', ($, e, next) => router.agentSpawn(engineOf($), e, next));
   }
   on('session.end', ($, e, next) => {
-    router.sessionEnd();
+    quietly(() => router.sessionEnd());
     return next(e);
   });
 };

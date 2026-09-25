@@ -39,6 +39,11 @@ ran outside the session link, and that an effort-only patch read a bare request 
 Every wait of a spawn now ends with its dispatch or the session it began in, and effort-only observation compares the
 model in both directions.
 
+The fifth review (`638d154`) found the session could still end in the last gap before `next`, for spawns and root
+steps, and that the invalid-option diagnostic could keep `session.start` from being forwarded if logging threw. Both
+handlers now check the session they began in (and the root turn's identity) with nothing awaited before `next`, and
+every bookkeeping call in `register.ts` is guarded.
+
 ## 2026-09-25 — the PR #37 review (L1–L7) is fixed in code; `lean` is still unmeasured
 
 The consolidated review of `e444a4d` asked for seven changes before recommending `lean`. All seven are now in code

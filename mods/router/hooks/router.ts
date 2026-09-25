@@ -329,13 +329,21 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     return Object.keys(patch).length > 0 ? patch : null;
   };
 
-  const prepareStep = async (engine: RouterEngine, e: TurnStepEvent, signal: AbortSignal): Promise<RoutingPatch | null> => {
+  /** A patch, with the turn it was stored on: next is given it only while that turn is still the live one. */
+  type Prepared = { patch: RoutingPatch; turn: TurnRouting };
+  const stored = async (engine: RouterEngine, t: TurnRouting, e: TurnStepEvent): Promise<Prepared | null> => {
+    if (turns.get(e.turnId) !== t) return null;
+    const patch = await applyStored(engine, t, e);
+    return patch ? { patch, turn: t } : null;
+  };
+
+  const prepareStep = async (engine: RouterEngine, e: TurnStepEvent, signal: AbortSignal): Promise<Prepared | null> => {
     if (!rootEnabled || e.agentId !== undefined) return null;
     const known = turns.get(e.turnId);
     if (known) {
       // A later step of this turn, or the same first step dispatched again while its assessment is pending.
       if (known.pending && (await until(known.pending, signal)) === ABORTED) return null;
-      return turns.get(e.turnId) === known ? await applyStored(engine, known, e) : null;
+      return await stored(engine, known, e);
     }
     // Routing never starts halfway through a turn.
     if (e.index !== 0) return null;
@@ -359,7 +367,7 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     }
     t.pending = rootAssessment(engine, e.turnId, t, text);
     if ((await until(t.pending, signal)) === ABORTED) return null;
-    return turns.get(e.turnId) === t ? await applyStored(engine, t, e) : null;
+    return await stored(engine, t, e);
   };
 
   /**
@@ -399,16 +407,24 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
   };
 
   async function* turnStep<E extends TurnStepEvent, C, R extends TurnStepOutcome | void>(engine: RouterEngine, e: E, next: StreamNextLike<E, C, R>): AsyncGenerator<C, R | void> {
-    let patch: RoutingPatch | null = null;
+    const own = session.signal;
+    let prepared: Prepared | null = null;
     try {
-      patch = await prepareStep(engine, e, next.signal);
+      prepared = await prepareStep(engine, e, next.signal);
     } catch {
-      patch = null;
+      prepared = null;
     }
     // An aborted signal means the dispatch already went on without this hook; a next() now would open a second request.
     if (next.signal.aborted) {
       abandon(engine, e);
       return;
+    }
+    // Checked here, in the handler, rather than where the patch was made: nothing is awaited between this and next, so
+    // a session that ended or a turn retired or stopped while the step was prepared gives it no patch.
+    let patch = prepared?.patch ?? null;
+    if (prepared && (own.aborted || prepared.turn.stopped || turns.get(e.turnId) !== prepared.turn)) {
+      patch = null;
+      log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: own.aborted ? 'session_ended' : 'turn_stopped' });
     }
     // Once next starts, every chunk, the return, a refusal or an error belongs to the host: nothing here retries it.
     const result = yield* next(patch ? { ...e, ...patch } : e);
@@ -506,35 +522,37 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
   };
 
   /**
-   * Every wait of a dispatch ends with it or with the session it began in, rather than the one current when a wait
-   * ends: a session that ends meanwhile gets nothing from this dispatch, and no request is sent for it.
+   * Every wait of a dispatch ends with it or with `own`, the session it began in, rather than the one current when a
+   * wait ends: a session that ends meanwhile gets nothing from this dispatch, and no request is sent for it.
    */
-  const spawnTarget = async (engine: RouterEngine, e: SpawnEvent, signal: AbortSignal): Promise<string | null> => {
-    const own = session.signal;
+  const spawnTarget = async (engine: RouterEngine, e: SpawnEvent, signal: AbortSignal, own: AbortSignal): Promise<string | null> => {
     const live = linked(signal, own);
     try {
-      const target = await spawnDecision(engine, e, live.signal);
-      // Nothing is awaited between this check and next.
-      if (target !== null && own.aborted) throw ENDED;
-      return target;
+      return await spawnDecision(engine, e, live.signal);
     } catch (err) {
-      if (err === ENDED && own.aborted && !signal.aborted) log(engine, { event: 'spawn_stop', tool_use_id: e.tool_use_id, reason: 'session_ended' });
-      if (err === ENDED) return null;
-      throw err;
+      if (err !== ENDED) throw err;
+      if (own.aborted && !signal.aborted) log(engine, { event: 'spawn_stop', tool_use_id: e.tool_use_id, reason: 'session_ended' });
+      return null;
     } finally {
       live.dispose();
     }
   };
 
   const agentSpawn = async <E extends SpawnEvent, R extends SpawnOutcome>(engine: RouterEngine, e: E, next: NextLike<E, R>): Promise<R> => {
+    const own = session.signal;
     let target: string | null = null;
     try {
-      target = await spawnTarget(engine, e, next.signal);
+      target = await spawnTarget(engine, e, next.signal, own);
     } catch {
       target = null;
     }
     // As on turn.step: the host has already spawned natively, so nothing here may spawn again.
     if (next.signal.aborted) throw new Error('jev-router: spawn dispatch abandoned before next');
+    // Nothing is awaited between this check and next: a session that ended meanwhile gets nothing from this dispatch.
+    if (target !== null && own.aborted) {
+      log(engine, { event: 'spawn_stop', tool_use_id: e.tool_use_id, reason: 'session_ended', requested: target });
+      target = null;
+    }
     const result = await next(target !== null ? { ...e, model: target } : e);
     try {
       if (target !== null) {
