@@ -188,4 +188,19 @@ describe('cleanupJobs', () => {
     expect(existsSync(jobPath(env, 'fresh'))).toBe(true);
     expect(cleanupJobs({ JEV_GATE_STATE_DIR: join(tmp, 'never-created') }, now)).toBe(0);
   });
+
+  it('never ages out a file holding admitted lean identities: a resumed session still recognises an old request', () => {
+    const env = freshEnv();
+    const now = Date.now();
+    seed(env, 'lean-session');
+    updateJob(env, 'lean-session', (prev) => (prev ? { ...prev, lean_seen: ['p1'] } : null));
+    seed(env, 'plain-session');
+    const past = (now - RETENTION_MS - 60_000) / 1000;
+    utimesSync(jobPath(env, 'lean-session'), past, past);
+    utimesSync(jobPath(env, 'plain-session'), past, past);
+    expect(cleanupJobs(env, now)).toBe(1);
+    expect(existsSync(jobPath(env, 'plain-session'))).toBe(false);
+    const kept = readJob(env, 'lean-session');
+    expect(kept.ok && kept.value?.lean_seen).toEqual(['p1']);
+  });
 });

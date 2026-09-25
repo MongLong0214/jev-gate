@@ -60,6 +60,17 @@ rejection adequate, and found the rest incomplete:
 - The reference time bound now reaches each text, each searched path run and each candidate, not only each token.
 - The host A/B sentence now says the pair is consistent with the packet staying out of root context, which is all one
   unequal pair shows.
+
+A third review, of `19284cc` (same settings, FIX-FIRST), found two more ways through, both confirmed:
+
+- Header credentials in subscript, call, constant-template and literal-concatenation forms
+  (`headers["Authorization"] = "Basic dTpw"`, `headers.set("Authorization", …)`, `` `Basic ${'dTpw'}` ``,
+  `'Basic ' + 'dTpw'`) now screen, as do `btoa`/`Buffer.from` of a literal `user:password` and a password in a URL's
+  userinfo. Names and placeholders still pass.
+- The seven-day state cleanup deleted the lean ledger with the rest of an idle session's state, so a session resumed
+  after a week could pay again for a redelivered old request. A state file that holds admitted lean identities is now
+  never aged out.
+- Reference extraction also reads the clock every 16 matches or runs inside a text, not only between texts.
 - Bench: a lean record with no `request_id` is never paired by count. It is unknown and stays out of the known
   subtotal. A row's known subtotal keeps the known legacy spend when the legacy total is incomplete.
 
@@ -67,7 +78,7 @@ One finding was rejected: requiring a preserved list to be a parent chain, or to
 lists in local transcripts, 92 were not parent chains and 89 were not in write order. None repeated an identity. The
 host relinks the list as written, so either check would decline valid sessions. Only the repeat check was added.
 
-Tests: 716 across 28 files. That includes 82 hook, 66 adapter, 38 selection and 34 ingestion tests, all with fake
+Tests: 719 across 28 files. That includes 82 hook, 68 adapter, 38 selection and 34 ingestion tests, all with fake
 HTTP.
 
 **Limits that ship with this, and are not bugs to fix quietly:**
@@ -87,6 +98,8 @@ HTTP.
   Only a foreground `completed` result releases.
 - **A long lean session stops admitting.** After 512 admitted lean requests in one session, every further one is
   `lean_seen_full` and runs natively. Forgetting an identity instead would let its redelivery be charged again.
+- **A lean session's state file is kept indefinitely.** It holds the admitted identities that stop a replay, and a
+  session can be resumed at any time, so the seven-day cleanup skips it. Deleting it by hand re-opens that replay.
 - **Prose about auth headers screens as a credential.** "Authorization: Bearer header" has a literal where the value
   goes, so that group is withheld or the source declines. A false positive costs coverage; a miss sends a credential.
 - **A record still being written at the prompt declines.** If the host is mid-write when the prompt hook reads, that

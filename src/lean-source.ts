@@ -130,11 +130,17 @@ const SECRET_PATTERNS: readonly RegExp[] = [
   /\bey[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/,
   // A quoted value, or a long unbroken token. `password = readPassword();` is a call, not a credential.
   /\b(?:authorization|api[_-]?key|access[_-]?token|client[_-]?secret|password|passwd)\b\s*[:=]\s*(?:["'`][^"'`\s]{12,}["'`]|[A-Za-z0-9_\-./+=]{16,})/i,
-  // `Authorization: Bearer <value>`: the scheme word sits between the separator and the value, so the line above never
-  // reaches it. Any literal value counts, however short: `Basic dTpw` is a whole credential. What is excluded is a
-  // name or a placeholder (`$TOKEN`, `${token}`, `<token>`, `{{token}}`, `%TOKEN%`) and a concatenation, since none
-  // starts with a token character. Prose that puts a word there ("Authorization: Bearer header") is screened too.
-  /\bauthorization\b["'`]?\s*[:=]\s*["'`]?(?:bearer|basic|token)\s+[A-Za-z0-9_\-.~+/]+/i,
+  // `Authorization: Bearer <value>` in any header syntax -- `: `, `=`, an object key, a subscript assignment, a call
+  // argument -- so up to eight punctuation characters sit between the word and the scheme. Any literal value counts,
+  // however short (`Basic dTpw` is a whole credential), including one reached through a constant template expression
+  // (`${'dTpw'}`) or a literal concatenation (`'Basic ' + 'dTpw'`). A name or a placeholder does not (`$TOKEN`,
+  // `${token}`, `'Bearer ' + token`, `<token>`, `{{token}}`, `%TOKEN%`): none starts with a token character or a quote.
+  // Prose that puts a word there ("Authorization: Bearer header") is screened too.
+  /\bauthorization\b[^\w\n]{0,8}(?:bearer|basic|token)\s+(?:["'`]\s*\+\s*["'`]|\$\{\s*["'`])?[A-Za-z0-9_\-.~+/]+/i,
+  // A Basic credential encoded at run time from a literal `user:password`; a template with a `${...}` in it is names.
+  /\b(?:btoa|Buffer\.from)\(\s*["'`][^"'`\n:${]{0,256}:[^"'`\n${]{1,256}["'`]/,
+  // A password in a URL's userinfo (`postgres://user:secret@host`). A placeholder password (`${PASS}`) is a name.
+  /\b[a-z][a-z0-9+.-]{1,15}:\/\/[^\s/?#@:"'`]{1,64}:(?![$<{%])[^\s/?#@"'`]{1,128}@/i,
   // A bearer token outside a header line, whatever its prefix. The digit keeps "bearer" in prose from matching.
   /\b[Bb]earer\s+(?=[A-Za-z0-9_\-.~+/]*\d)[A-Za-z0-9_\-.~+/]{16,}/,
 ];
@@ -164,15 +170,29 @@ const PATH_RUN = /[\w@.~/-]+/g;
  */
 const PATH_RUN_MAX = 512;
 
+/** Matches and runs between two reads of the caller's clock: each is at most one bounded scan, so this bounds the gap. */
+const CLOCK_EVERY = 16;
+
 export const referencesIn = (text: string, tick?: () => void): string[] => {
   const out = new Set<string>();
+  let units = 0;
+  const unit = (): void => {
+    if (tick && ++units % CLOCK_EVERY === 0) tick();
+  };
   const add = (m: RegExpMatchArray): void => {
     const token = (m[1] ?? '').trim();
     if (token.length >= 3) out.add(token);
   };
-  for (const re of REFERENCE_PATTERNS) for (const m of text.matchAll(re)) add(m);
+  for (const re of REFERENCE_PATTERNS) {
+    for (const m of text.matchAll(re)) {
+      unit();
+      add(m);
+    }
+  }
   for (const [run] of text.matchAll(PATH_RUN)) {
+    unit();
     if (run.length <= PATH_RUN_MAX && run.includes('.')) {
+      // The one scan that can be quadratic in its run, so the clock is read before every one.
       tick?.();
       for (const m of run.matchAll(PATH_REFERENCE)) add(m);
     }
@@ -192,8 +212,8 @@ export const resolveReferences = <G extends { text: string }>(
   texts: readonly string[],
   candidates: readonly G[],
   /**
-   * The caller's bound has to reach every unit of work in here: it is called before each text is read, before each
-   * path run is matched and before each candidate is searched, so no whole text or whole candidate scan runs unchecked.
+   * The caller's bound has to reach every unit of work in here: it is called before each text is read, every
+   * CLOCK_EVERY matches or runs within it, before each path run is matched and before each candidate is searched.
    */
   tick?: () => void,
 ): Set<G> => {

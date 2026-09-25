@@ -681,6 +681,16 @@ describe('lean source — bounds, safety and what "unknown" means', () => {
     expect(() => resolveReferences(['no references at all'], candidates, stop)).toThrow('bound');
   });
 
+  it('reads the clock inside a long text with no path in it, not only between texts', () => {
+    let ticks = 0;
+    const words = Array.from({ length: 160 }, (_, i) => `word${i}`).join(' ');
+    resolveReferences([words], [], () => {
+      ticks += 1;
+    });
+    // 1 before the text, then one per 16 runs of its 160.
+    expect(ticks).toBe(11);
+  });
+
   it('a history cut by the read bound is bounded, not an empty or a guessed conversation', () => {
     const c = session();
     c.human('first', 'p1');
@@ -732,6 +742,21 @@ describe('lean source — bounds, safety and what "unknown" means', () => {
     expect(looksSecret('Authorization: Bearer <token>')).toBe(false);
     expect(looksSecret('Authorization: Basic {{credentials}}')).toBe(false);
     expect(looksSecret('set Authorization: Bearer %API_TOKEN% in the script')).toBe(false);
+  });
+
+  it('screens a literal header credential in subscript, call, template and concatenation forms', () => {
+    expect(looksSecret('headers["Authorization"] = "Basic dTpw";')).toBe(true);
+    expect(looksSecret('headers.set("Authorization", "Basic dTpw");')).toBe(true);
+    expect(looksSecret("req.setRequestHeader('Proxy-Authorization', 'Bearer abc');")).toBe(true);
+    expect(looksSecret("headers: { Authorization: `Basic ${'dTpw'}` }")).toBe(true);
+    expect(looksSecret("headers: { Authorization: 'Basic ' + 'dTpw' }")).toBe(true);
+    expect(looksSecret("const auth = btoa('u:p');")).toBe(true);
+    expect(looksSecret("Buffer.from('testonly:notakey').toString('base64')")).toBe(true);
+    expect(looksSecret('DATABASE_URL=postgres://app:testonlynotakey@db.internal:5432/app')).toBe(true);
+    expect(looksSecret('headers.set("Authorization", `Bearer ${token}`);')).toBe(false);
+    expect(looksSecret("headers['Authorization'] = 'Basic ' + encoded;")).toBe(false);
+    expect(looksSecret('const auth = btoa(`${user}:${pass}`);')).toBe(false);
+    expect(looksSecret('postgres://${USER}:${PASS}@db.internal/app and https://user@example.test/')).toBe(false);
   });
 
   it('enumerates the newest groups under the cap and counts the rest rather than calling them irrelevant', () => {

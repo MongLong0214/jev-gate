@@ -303,7 +303,10 @@ export const countAttempt = (gen: JobGeneration, kind: BoundKind, taskId: string
   return { ...gen, attempts: { ...gen.attempts, tasks } };
 };
 
-/** Opportunistic retention: never removes a file whose actives are younger than 24 h, even past the 7-day cutoff. */
+/**
+ * Opportunistic retention: never removes a file whose actives are younger than 24 h, even past the 7-day cutoff, nor one
+ * that holds admitted lean identities.
+ */
 export const cleanupJobs = (env: Env, now = Date.now()): number => {
   const dir = jobsDir(env);
   let removed = 0;
@@ -323,6 +326,13 @@ export const cleanupJobs = (env: Env, now = Date.now()): number => {
       const current = isRecord(parsed) && isRecord(parsed['current']) ? (parsed['current'] as unknown as JobGeneration) : null;
       const freshActive = Object.values(current?.active ?? {}).some((r) => now - Date.parse(r.started_at) < ACTIVE_GRACE_MS);
       if (freshActive) continue;
+      /**
+       * A session can be resumed after any length of time, and its admitted lean identities are what stop an old
+       * request's redelivery from being charged again once compaction has removed its record. So a file that holds
+       * them is never aged out.
+       */
+      const seen = isRecord(parsed) ? parsed['lean_seen'] : undefined;
+      if (Array.isArray(seen) && seen.length > 0) continue;
       unlinkSync(file);
       removed += 1;
     } catch {
