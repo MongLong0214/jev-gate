@@ -6,9 +6,12 @@ import {
   buildLeanRequest,
   estimateTokens,
   MAX_REQUEST_TOKENS,
+  composeDispatchPrompt,
   composeFullPacket,
   composeLeanPacket,
+  COORDINATOR_FRAME,
   decideLean,
+  HANDOFF_SCOPE_QUESTION,
   HANDOFF_SCOPE_ANSWERS,
   LEAN_OMISSION_CONFIDENCE,
   RELATION_ANSWERS,
@@ -37,8 +40,12 @@ const source = (over: Partial<LeanSource> = {}): LeanSource => ({
   epoch: 'uncompacted',
   prefixDigest: 'd',
   newerHumanText: false,
+  requestRecorded: false,
   coverage: 'complete',
   unassessed: 0,
+  excluded: { secret: 0, window: 0, unattributed: 0 },
+  hostContext: 0,
+  abandoned: 0,
   bytesRead: 100,
   durationMs: 1,
   ...over,
@@ -93,7 +100,7 @@ describe('lean request', () => {
     expect(Buffer.byteLength(JSON.stringify(packed.request), 'utf8')).toBeLessThanOrEqual(MAX_REQUEST_BYTES);
     // Newest first under the cap, then restored to chronological order for the answer map.
     expect(packed.askedIds.length).toBeLessThan(3);
-    expect(packed.unassessed).toBe(3 - packed.askedIds.length);
+    expect(packed.unasked).toBe(3 - packed.askedIds.length);
     // No group was sliced to make it fit.
     for (const id of packed.askedIds) expect(packed.request.state.groups[id]).toBe(big);
   });
@@ -110,7 +117,7 @@ describe('lean request', () => {
     // The byte cap alone would have admitted all three; the token cap is what stops it.
     expect(Buffer.byteLength(body, 'utf8')).toBeLessThan(MAX_REQUEST_BYTES);
     expect(packed.askedIds.length).toBeLessThan(3);
-    expect(packed.unassessed).toBe(3 - packed.askedIds.length);
+    expect(packed.unasked).toBe(3 - packed.askedIds.length);
   });
 
   it('over-counts rather than under-counts, so the estimate never lets an oversized request through', () => {
@@ -187,7 +194,7 @@ describe('lean decision', () => {
 describe('lean packet', () => {
   it('carries the exact request once, every mandatory group and the retained groups in original order', () => {
     const s = source();
-    const packet = composeLeanPacket(s, ['g1'], 1);
+    const packet = composeLeanPacket(s, ['g1'], { omitted: 1, unasked: 0 });
     expect(packet.split('파서를 고쳐줘').length - 1).toBe(1);
     expect(packet).toContain('예외: `as any` 금지');
     expect(packet).toContain('export const x = 1;');
@@ -197,19 +204,86 @@ describe('lean packet', () => {
 
   it('attributes the compact summary as a fallible summary without rewriting it', () => {
     const s = source({ groups: [{ id: 'm1', origin: 'compact_summary', text: 'Summary: the user chose option 2.', sourceRefs: ['s1'], mandatory: true }, group('g1', 'x')] });
-    const packet = composeLeanPacket(s, [], 1);
+    const packet = composeLeanPacket(s, [], { omitted: 1, unasked: 0 });
     expect(packet).toContain('fallible summary');
     expect(packet).toContain('Summary: the user chose option 2.');
   });
 
-  it('says how much was left out, including source that was never assessed', () => {
-    expect(composeLeanPacket(source({ unassessed: 3 }), ['g1'], 1)).toContain('4 earlier interaction groups were not carried');
-    expect(composeLeanPacket(source(), ['g1', 'g2'], 0)).not.toContain('were not carried');
+  it('says how much was left out, keeping a judgment apart from each local cap', () => {
+    const s = source({ unassessed: 3, excluded: { secret: 1, window: 2, unattributed: 0 } });
+    const packet = composeLeanPacket(s, ['g1'], { omitted: 1, unasked: 2 });
+    expect(packet).toContain('6 earlier interaction groups were not carried');
+    expect(packet).toContain('1 left out as unrelated to this request');
+    expect(packet).toContain('2 never assessed: older than the enumeration window');
+    expect(packet).toContain('1 never assessed: withheld as possibly credential-bearing');
+    expect(packet).toContain('2 never assessed: did not fit the selection request');
+    expect(composeLeanPacket(source(), ['g1', 'g2'], { omitted: 0, unasked: 0 })).not.toContain('were not carried');
+  });
+
+  it('never calls a group dropped by a local cap unrelated (L7)', () => {
+    const packet = composeLeanPacket(source({ unassessed: 1, excluded: { secret: 0, window: 1, unattributed: 0 } }), ['g1', 'g2'], { omitted: 0, unasked: 0 });
+    expect(packet).toContain('1 earlier interaction group was not carried');
+    expect(packet).not.toContain('unrelated');
   });
 
   it('is measurably smaller than the all-groups rendering only when something was actually omitted', () => {
     const s = source();
-    expect(Buffer.byteLength(composeLeanPacket(s, ['g1'], 1), 'utf8')).toBeLessThan(Buffer.byteLength(composeFullPacket(s), 'utf8'));
-    expect(Buffer.byteLength(composeLeanPacket(s, ['g1', 'g2'], 0), 'utf8')).toBe(Buffer.byteLength(composeFullPacket(s), 'utf8'));
+    expect(Buffer.byteLength(composeLeanPacket(s, ['g1'], { omitted: 1, unasked: 0 }), 'utf8')).toBeLessThan(Buffer.byteLength(composeFullPacket(s), 'utf8'));
+    expect(Buffer.byteLength(composeLeanPacket(s, ['g1', 'g2'], { omitted: 0, unasked: 0 }), 'utf8')).toBe(Buffer.byteLength(composeFullPacket(s), 'utf8'));
+  });
+});
+
+/** Shaped like a key and matched by the screen; not a credential. */
+const FAKE_KEY = `sk-${'testonlynotakey'.repeat(2)}`;
+
+describe('lean outbound privacy boundary (L1)', () => {
+  it('stays native when a credential appears only in the current request', () => {
+    const packed = buildLeanRequest(source({ request: `이 키로 호출해줘 ${FAKE_KEY}` }), DEFAULT_CONFIG);
+    expect(packed).toEqual({ ok: false, reason: 'mandatory_unsafe' });
+  });
+
+  it('stays native when a credential appears in required context', () => {
+    const packed = buildLeanRequest(source({ groups: [group('m1', `earlier: use ${FAKE_KEY}`, true), group('g1', 'x')] }), DEFAULT_CONFIG);
+    expect(packed).toEqual({ ok: false, reason: 'mandatory_unsafe' });
+  });
+
+  it('never exports an optional group that screens as a credential, and counts it as never asked', () => {
+    const packed = buildLeanRequest(source({ groups: [group('m1', 'rule', true), group('g1', `[tool_result] ${FAKE_KEY}`), group('g2', 'plain')] }), DEFAULT_CONFIG);
+    if (!packed.ok) throw new Error(packed.reason);
+    expect(packed.askedIds).toEqual(['g2']);
+    expect(packed.unasked).toBe(1);
+    expect(JSON.stringify(packed.request)).not.toContain(FAKE_KEY);
+  });
+});
+
+describe('lean dispatch composition (L7)', () => {
+  it("keeps the calling agent's text as the exact prefix and frames it below the user's words", () => {
+    const coordinator = 'Implement the parser fix. [jev-lean-0123456789abcdef]';
+    const composed = composeDispatchPrompt(coordinator, 'PACKET');
+    expect(composed.startsWith(coordinator)).toBe(true);
+    expect(composed.indexOf(COORDINATOR_FRAME)).toBeGreaterThan(coordinator.length - 1);
+    expect(composed.indexOf(COORDINATOR_FRAME)).toBeLessThan(composed.indexOf('PACKET'));
+    expect(COORDINATOR_FRAME).toContain("the user's words govern");
+  });
+});
+
+describe('scoped instructions (handoff_scope criteria)', () => {
+  it('asks whether an earlier restriction still covers this request, instead of treating every retained ban as global', () => {
+    const forbidden = HANDOFF_SCOPE_QUESTION.criteria.forbidden;
+    expect(forbidden).toContain('still covers this request');
+    expect(forbidden).toContain('different, earlier task does not cover this request');
+    expect(forbidden).toContain('not a user restriction');
+    // Unknown scope stays conservative: it is not self_contained.
+    expect(HANDOFF_SCOPE_QUESTION.criteria.unclear).toContain('whether it still covers this request cannot be told');
+  });
+
+  it('carries an earlier scoped instruction as required human context, so the scope can be judged at all', () => {
+    const s = source({
+      request: '이제 파서 버그를 고쳐줘',
+      groups: [group('m1', '이 읽기는 네가 직접 해라', true), group('g1', '[tool_use Read] {"file_path":"src/p.ts"}\n[tool_result] ...')],
+    });
+    const packed = buildLeanRequest(s, DEFAULT_CONFIG);
+    if (!packed.ok) throw new Error(packed.reason);
+    expect(JSON.stringify(packed.request.state)).toContain('이 읽기는 네가 직접 해라');
   });
 });

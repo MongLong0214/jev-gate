@@ -1,282 +1,636 @@
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 
-import { looksSecret, MAX_OPTIONAL_GROUPS, mandatoryGroups, optionalGroups, readLeanSource, type LeanSource } from '../src/lean-source.js';
+import {
+  looksSecret,
+  MAX_OPTIONAL_GROUPS,
+  mandatoryGroups,
+  optionalGroups,
+  readLeanSource,
+  SOURCE_MAX_BYTES,
+  type LeanSource,
+  type LeanSourceBinding,
+} from '../src/lean-source.js';
+import { conversation, type Conversation } from './transcript-fixture.js';
 
 const tmp = mkdtempSync(join(tmpdir(), 'jev-lean-src-'));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
-let seq = 0;
-const transcript = (entries: unknown[]): string => {
-  const p = join(tmp, `t-${(seq += 1)}.jsonl`);
-  writeFileSync(p, entries.map((e) => JSON.stringify(e)).join('\n') + '\n');
-  return p;
-};
+const SID = '3f1c2a9e-5b7d-4e21-9c3a-0d8e6f4b2a17';
+const NOW = 'prompt-now';
+const dir = (): string => mkdtempSync(join(tmp, 'c-'));
+const session = (): Conversation => conversation(SID);
 
-const human = (uuid: string, content: string): unknown => ({ type: 'user', uuid, message: { role: 'user', content } });
-const assistant = (uuid: string, text: string, tool?: { id: string; name: string; input: unknown }): unknown => ({
-  type: 'assistant',
-  uuid,
-  message: { role: 'assistant', content: [{ type: 'thinking', thinking: 'hidden reasoning' }, { type: 'text', text }, ...(tool ? [{ type: 'tool_use', id: tool.id, name: tool.name, input: tool.input }] : [])] },
-});
-const toolResult = (uuid: string, id: string, content: string, isError = false): unknown => ({
-  type: 'user',
-  uuid,
-  message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content, is_error: isError }] },
-});
-
-const ok = (path: string, request: string): LeanSource => {
-  const r = readLeanSource(path, request);
-  if (!r.ok) throw new Error(`expected a source, got ${r.reason}`);
+const bind = (request: string, over: Partial<LeanSourceBinding> = {}): LeanSourceBinding => ({ request, promptId: NOW, sessionId: SID, phase: 'prompt', ...over });
+const ok = (path: string, request: string, over: Partial<LeanSourceBinding> = {}): LeanSource => {
+  const r = readLeanSource(path, bind(request, over));
+  if (!r.ok) throw new Error(`expected a source, got ${r.reason}: ${r.detail}`);
   return r.source;
 };
+const reason = (path: string, request: string, over: Partial<LeanSourceBinding> = {}): string => {
+  const r = readLeanSource(path, bind(request, over));
+  if (r.ok) throw new Error('expected the source to be declined');
+  return r.reason;
+};
+const texts = (s: LeanSource): string => JSON.stringify(s.groups);
 
-describe('lean source — what counts as a human instruction', () => {
-  it('reads a user-type event carrying a tool_result as an observation, never as human text', () => {
-    const p = transcript([
-      human('u1', '이 파일의 버그를 고쳐줘'),
-      assistant('a1', 'checking', { id: 'tu1', name: 'Bash', input: { command: 'npm test' } }),
-      toolResult('r1', 'tu1', '1 failing'),
-      human('u2', 'now the second one'),
-    ]);
-    const s = ok(p, 'now the second one');
-    const mandatory = mandatoryGroups(s);
-    expect(mandatory.map((g) => g.text)).toEqual(['이 파일의 버그를 고쳐줘']);
-    expect(mandatory.every((g) => g.origin === 'human')).toBe(true);
-    // The tool call and its result are one optional group, not two, and not a human turn.
+describe('lean source — the host transcript shape', () => {
+  it('reads human turns as mandatory, and one response with its call and result as one optional group', () => {
+    const c = session();
+    c.human('이 파일의 버그를 고쳐줘', 'p1');
+    const m = c.newMessageId();
+    c.say('checking', m);
+    c.call('Bash', { command: 'npm test' }, '1 failing', { messageId: m });
+    const s = ok(c.write(dir()), 'now the second one');
+    expect(mandatoryGroups(s).map((g) => [g.origin, g.text])).toEqual([['human', '이 파일의 버그를 고쳐줘']]);
     expect(optionalGroups(s)).toHaveLength(1);
+    expect(optionalGroups(s)[0]?.text).toContain('checking');
     expect(optionalGroups(s)[0]?.text).toContain('npm test');
     expect(optionalGroups(s)[0]?.text).toContain('1 failing');
+    // At UserPromptSubmit the host has usually not written the request yet; the request comes from the hook event.
+    expect(s.requestRecorded).toBe(false);
+    expect(s.request).toBe('now the second one');
   });
 
   it('keeps the exact Korean request, its negation and code anchors intact', () => {
     const request = 'sonner는 쓰지 말고 `handleMutateError`로 고쳐';
-    const p = transcript([
-      human('u1', '예외: `as any`는 절대 추가하지 마'),
-      assistant('a1', 'editing', { id: 'tu1', name: 'Edit', input: { file_path: 'src/a.ts', old_string: 'toast.error(e)', new_string: 'handleMutateError(e)' } }),
-      toolResult('r1', 'tu1', 'ok'),
-      human('u2', request),
-    ]);
-    const s = ok(p, request);
+    const c = session();
+    c.human('예외: `as any`는 절대 추가하지 마', 'p1');
+    c.call('Edit', { file_path: 'src/a.ts', old_string: 'toast.error(e)', new_string: 'handleMutateError(e)' }, 'ok');
+    const s = ok(c.write(dir()), request);
     expect(mandatoryGroups(s)[0]?.text).toBe('예외: `as any`는 절대 추가하지 마');
     // The request names `handleMutateError`, and exactly one group contains it, so that whole group is mandatory.
     const edit = s.groups.find((g) => g.origin === 'assistant_tool');
     expect(edit?.mandatory).toBe(true);
     expect(edit?.text).toContain('toast.error(e)');
     expect(edit?.text).toContain('src/a.ts');
-    // The current request is carried once, from the hook event, and not repeated as a group.
     expect(s.groups.filter((g) => g.text === request)).toHaveLength(0);
-    expect(s.request).toBe(request);
   });
 
   it('keeps human turns and the interactions that followed them in one chronological sequence', () => {
-    const p = transcript([
-      human('u1', 'first instruction'),
-      assistant('a1', 'doing it', { id: 'tu1', name: 'Bash', input: { command: 'npm test' } }),
-      toolResult('r1', 'tu1', 'ok'),
-      human('u2', 'now also never touch the config'),
-      assistant('a2', 'understood', { id: 'tu2', name: 'Read', input: { file_path: 'b.ts' } }),
-      toolResult('r2', 'tu2', 'body'),
-      human('u3', 'go'),
-    ]);
-    // A constraint stated after an observation must still read after it in the packet.
-    expect(ok(p, 'go').groups.map((g) => g.origin)).toEqual(['human', 'assistant_tool', 'human', 'assistant_tool']);
+    const c = session();
+    c.human('first instruction', 'p1');
+    c.call('Bash', { command: 'npm test' }, 'ok');
+    c.human('now also never touch the config', 'p2');
+    c.call('Read', { file_path: 'b.ts' }, 'body');
+    expect(ok(c.write(dir()), 'go').groups.map((g) => g.origin)).toEqual(['human', 'assistant_tool', 'human', 'assistant_tool']);
   });
 
   it('keeps a failure qualifier in the same group as the action it qualifies', () => {
-    const p = transcript([
-      human('u1', 'run the build'),
-      assistant('a1', 'building', { id: 'tu1', name: 'Bash', input: { command: 'npm run build' } }),
-      toolResult('r1', 'tu1', 'TS2322: Type error in src/x.ts', true),
-      human('u2', 'next'),
-    ]);
-    const group = optionalGroups(ok(p, 'next'))[0];
+    const c = session();
+    c.human('run the build', 'p1');
+    c.call('Bash', { command: 'npm run build' }, 'TS2322: Type error in src/x.ts', { isError: true });
+    const group = optionalGroups(ok(c.write(dir()), 'next'))[0];
     expect(group?.text).toContain('npm run build');
     expect(group?.text).toContain('status=error');
     expect(group?.text).toContain('TS2322');
   });
 
-  it('drops hidden reasoning and host bookkeeping records', () => {
-    const p = transcript([
-      { type: 'mode', mode: 'normal' },
-      { type: 'attachment', uuid: 'x1', attachment: { type: 'hook_success', content: 'PONYTAIL MODE ACTIVE' } },
-      human('u1', 'first'),
-      assistant('a1', 'visible answer'),
-      human('u2', 'second'),
-    ]);
-    const s = ok(p, 'second');
-    expect(JSON.stringify(s.groups)).not.toContain('hidden reasoning');
-    expect(JSON.stringify(s.groups)).not.toContain('PONYTAIL');
+  it('drops hidden reasoning and host context, and counts the host context it did not carry', () => {
+    const c = session();
+    c.records.push({ type: 'file-history-snapshot', messageId: 'x', snapshot: {} }, { type: 'mode', mode: 'normal' });
+    c.attachment({ type: 'hook_success', content: 'PONYTAIL MODE ACTIVE', hookName: 'SessionStart:startup', hookEvent: 'SessionStart' });
+    c.human('first', 'p1');
+    c.attachment({ type: 'date_change', newDate: '2026-09-25' });
+    const m = c.newMessageId();
+    c.think('hidden reasoning', m);
+    c.say('visible answer', m);
+    const s = ok(c.write(dir()), 'second');
+    expect(texts(s)).not.toContain('hidden reasoning');
+    expect(texts(s)).not.toContain('PONYTAIL');
+    expect(texts(s)).toContain('visible answer');
+    expect(s.hostContext).toBe(2);
   });
 
-  it('skips sidechain turns: a subagent context is not this conversation', () => {
-    const p = transcript([
-      human('u1', 'first'),
-      { type: 'assistant', uuid: 'a0', isSidechain: true, message: { role: 'assistant', content: [{ type: 'text', text: 'subagent chatter' }] } },
-      assistant('a1', 'root answer'),
-      human('u2', 'second'),
-    ]);
-    expect(JSON.stringify(ok(p, 'second').groups)).not.toContain('subagent chatter');
+  it('never sends a synthetic API error back, and keeps local command output as an observation', () => {
+    const c = session();
+    c.human('first', 'p1');
+    c.append({ type: 'assistant', isApiErrorMessage: true, message: { id: c.newMessageId(), role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text: 'API Error: 529 overloaded' }] } });
+    c.append({ type: 'system', subtype: 'turn_duration', durationMs: 1200 });
+    c.localCommand('<local-command-stdout>Set model to opus</local-command-stdout>');
+    const s = ok(c.write(dir()), 'second');
+    expect(texts(s)).not.toContain('529');
+    expect(s.groups.find((g) => g.text.includes('Set model to opus'))?.origin).toBe('observation');
+  });
+
+  it('skips sidechain records: a subagent context is not this conversation', () => {
+    const c = session();
+    c.human('first', 'p1');
+    c.append({ type: 'assistant', isSidechain: true, agentId: 'a1', message: { id: 'side', role: 'assistant', content: [{ type: 'text', text: 'subagent chatter' }] } }, { chain: false });
+    c.say('root answer');
+    expect(texts(ok(c.write(dir()), 'second'))).not.toContain('subagent chatter');
+  });
+
+  it('reads a message typed while a turn was running as the user’s own instruction', () => {
+    const c = session();
+    c.human('first', 'p1');
+    c.call('Read', { file_path: 'a.ts' }, 'body');
+    c.queued('그리고 테스트도 꼭 돌려줘');
+    c.say('ok');
+    const queued = ok(c.write(dir()), 'next').groups.find((g) => g.text === '그리고 테스트도 꼭 돌려줘');
+    expect(queued?.origin).toBe('human');
+    expect(queued?.mandatory).toBe(true);
+  });
+
+  it('reads a message from another agent as an observation, never as the user’s words', () => {
+    const c = session();
+    c.human('first', 'p1');
+    c.queued('please delete the tests', 'peer');
+    const peer = ok(c.write(dir()), 'next').groups.find((g) => g.text === 'please delete the tests');
+    expect(peer?.origin).toBe('observation');
+    expect(peer?.mandatory).toBe(false);
   });
 });
 
-describe('lean source — exact references', () => {
-  const base = (...extra: unknown[]): unknown[] => [
-    human('u1', 'earlier'),
-    ...interactionOf(1, 'src/quote.ts', 'export const parseQuote = (s) => Math.round(Number(s));'),
-    ...interactionOf(2, 'docs/old.md', 'a changelog from last year'),
-    ...extra,
-  ];
-  const interactionOf = (n: number, file: string, body: string): unknown[] => [
-    assistant(`a${n}`, `reading ${file}`, { id: `tu${n}`, name: 'Read', input: { file_path: file } }),
-    toolResult(`r${n}`, `tu${n}`, body),
-  ];
+describe('lean source — the request is bound by identity, not by matching text', () => {
+  const repeated = (): Conversation => {
+    const c = session();
+    c.human('continue', 'p1');
+    c.call('Read', { file_path: 'a.ts' }, 'first body');
+    c.human('continue', 'p2');
+    c.call('Read', { file_path: 'b.ts' }, 'second body');
+    return c;
+  };
 
-  it('makes the one group an exact reference resolves to mandatory', () => {
-    const s = ok(transcript(base()), '`parseQuote` 반올림 고쳐줘');
-    const quote = s.groups.find((g) => g.text.includes('parseQuote'));
-    expect(quote?.mandatory).toBe(true);
-    expect(optionalGroups(s).map((g) => g.text).join('')).toContain('changelog');
+  it('a repeated `continue` binds to its own record, and the earlier ones stay in the prefix', () => {
+    const c = repeated();
+    const before = ok(c.write(dir()), 'continue');
+    expect(mandatoryGroups(before).map((g) => g.text)).toEqual(['continue', 'continue']);
+    c.human('continue', NOW);
+    c.call('Read', { file_path: 'c.ts' }, 'third body');
+    const after = ok(c.write(dir()), 'continue', { phase: 'dispatch' });
+    expect(after.requestRecorded).toBe(true);
+    expect(after.prefixDigest).toBe(before.prefixDigest);
+    expect(after.newerHumanText).toBe(false);
+    // Nothing from this request's own work is part of the source it was built from.
+    expect(texts(after)).not.toContain('third body');
   });
 
-  it('resolves a path reference the same way', () => {
-    const s = ok(transcript(base()), 'docs/old.md 를 갱신해줘');
-    expect(s.groups.find((g) => g.text.includes('docs/old.md'))?.mandatory).toBe(true);
+  it('a record carrying this prompt identity with other text is not this request', () => {
+    const c = repeated();
+    c.human('something else', NOW);
+    expect(reason(c.write(dir()), 'continue')).toBe('source_identity_mismatch');
   });
 
-  it('promotes nothing for an ambiguous reference', () => {
-    // `Read` appears in both groups, so it names neither of them.
-    const s = ok(transcript(base()), 'that `Read` call was wrong');
-    expect(optionalGroups(s)).toHaveLength(2);
+  it('a compaction during this turn that dropped the request’s own record leaves a source that is not this request', () => {
+    const c = session();
+    c.human('earlier', 'p1');
+    c.human('continue', NOW);
+    c.call('Read', { file_path: 'a.ts' }, 'body');
+    c.compact('Summary: the user said continue.');
+    c.call('Read', { file_path: 'b.ts' }, 'more');
+    const r = readLeanSource(c.write(dir()), bind('continue', { phase: 'dispatch' }));
+    expect(r.ok === false && [r.reason, r.detail]).toEqual(['source_identity_mismatch', 'the request’s own record is no longer in the active source']);
   });
 
-  it('promotes nothing for a dangling reference, and does not guess at one', () => {
-    const s = ok(transcript(base()), 'do the second option above');
-    expect(optionalGroups(s)).toHaveLength(2);
-    expect(mandatoryGroups(s).map((g) => g.origin)).toEqual(['human']);
+  it('at dispatch, a source that does not contain the request is not the conversation the packet was built for', () => {
+    expect(reason(repeated().write(dir()), 'continue', { phase: 'dispatch' })).toBe('source_identity_mismatch');
   });
 
-  it('resolves a reference made in an earlier human turn, not only in the current request', () => {
-    const s = ok(transcript(base(human('u9', 'remember `parseQuote` rounds down'))), 'carry on');
-    expect(s.groups.find((g) => g.text.includes('export const parseQuote'))?.mandatory).toBe(true);
+  it('a transcript of another session is refused, by its name and by its records', () => {
+    const c = repeated();
+    const path = c.write(dir());
+    expect(reason(path, 'continue', { sessionId: 'another-session' })).toBe('source_identity_mismatch');
+    const other = session();
+    other.human('first', 'p1');
+    other.append({ type: 'user', promptId: 'p2', origin: { kind: 'human' }, sessionId: 'another-session', message: { role: 'user', content: 'x' } });
+    expect(reason(other.write(dir()), 'go')).toBe('source_identity_mismatch');
+  });
+});
+
+describe('lean source — declining what cannot be established', () => {
+  const base = (): Conversation => {
+    const c = session();
+    c.human('first', 'p1');
+    c.call('Read', { file_path: 'a.ts' }, 'body');
+    return c;
+  };
+
+  it('a complete record that does not parse is corruption, not noise', () => {
+    const c = base();
+    const lines = c.lines();
+    lines.splice(1, 0, '{"type":"user","uuid":"broken", "message":');
+    expect(reason(c.write(dir(), lines), 'go')).toBe('source_corrupt');
+  });
+
+  it('an unterminated last line is a record still being written, and is left out', () => {
+    const c = base();
+    const path = c.write(dir());
+    writeFileSync(path, c.lines().join('\n') + '\n' + '{"type":"assistant","uuid":"half-written","message":{"content":[{"type":"te');
+    expect(optionalGroups(ok(path, 'go'))).toHaveLength(1);
+  });
+
+  it('a complete record that is not valid UTF-8 is corruption', () => {
+    const c = base();
+    const path = c.write(dir());
+    const lines = c.lines();
+    writeFileSync(path, Buffer.concat([Buffer.from(`${lines[0]}\n`), Buffer.from([0x7b, 0x22, 0xff, 0xfe, 0x22, 0x7d, 0x0a]), Buffer.from(lines.slice(1).join('\n') + '\n')]));
+    expect(reason(path, 'go')).toBe('source_corrupt');
+  });
+
+  it('a user envelope that mixes a tool result with other content is declined', () => {
+    const c = session();
+    c.human('first', 'p1');
+    const call = c.use('Read', { file_path: 'a.ts' }, c.newMessageId());
+    c.append({ type: 'user', promptId: 'p1', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: call.id, content: 'body' }, { type: 'text', text: 'and also do X' }] } });
+    expect(reason(c.write(dir()), 'go')).toBe('source_unsupported');
+  });
+
+  it('an image the user sent cannot be carried, so the source is declined rather than silently changed', () => {
+    const c = session();
+    c.human([{ type: 'text', text: 'match this screenshot' }, { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' } }], 'p1');
+    c.say('looking');
+    expect(reason(c.write(dir()), 'go')).toBe('source_unsupported');
+  });
+
+  it('an attachment type it has not seen is declined', () => {
+    const c = base();
+    c.attachment({ type: 'a_brand_new_host_record', content: 'must not be dropped silently' });
+    expect(reason(c.write(dir()), 'go')).toBe('source_unsupported');
+  });
+
+  it('a user record with a provenance it has not seen is declined', () => {
+    const c = base();
+    c.append({ type: 'user', promptId: 'p1', message: { role: 'user', content: 'who wrote this?' } });
+    expect(reason(c.write(dir()), 'go')).toBe('source_unsupported');
+  });
+
+  it('refuses a FIFO without blocking on it', () => {
+    const d = dir();
+    const fifo = join(d, `${SID}.jsonl`);
+    expect(spawnSync('mkfifo', [fifo]).status).toBe(0);
+    const started = Date.now();
+    expect(reason(fifo, 'go')).toBe('source_unavailable');
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  it('collapses an identical repeat of a record, and refuses one identity with two contents', () => {
+    const c = base();
+    const same = c.lines();
+    same.push(same[1] as string);
+    expect(optionalGroups(ok(c.write(dir(), same), 'go'))).toHaveLength(1);
+    const differs = c.lines();
+    const edited = JSON.parse(differs[0] as string) as Record<string, unknown>;
+    differs.push(JSON.stringify({ ...edited, message: { role: 'user', content: 'first, but edited' } }));
+    expect(reason(c.write(dir(), differs), 'go')).toBe('source_corrupt');
+  });
+
+  it('a parent chain with a cycle is unknown lineage', () => {
+    const c = session();
+    c.append({ type: 'user', uuid: 'u-a', promptId: 'p1', origin: { kind: 'human' }, message: { role: 'user', content: 'a' } }, { parent: 'u-b' });
+    c.append({ type: 'user', uuid: 'u-b', promptId: 'p2', origin: { kind: 'human' }, message: { role: 'user', content: 'b' } }, { parent: 'u-a' });
+    expect(reason(c.write(dir()), 'go')).toBe('source_lineage_unknown');
   });
 });
 
 describe('lean source — compaction lineage', () => {
-  const compacted = (summary: string, retained: unknown[], after: unknown[]): string =>
-    transcript([
-      human('old1', 'a turn that was dropped by the compaction'),
-      assistant('olda', 'dropped too'),
-      ...retained,
-      { type: 'system', uuid: 'b1', subtype: 'compact_boundary', compactMetadata: { trigger: 'auto', preservedSegment: { headUuid: 'h1', anchorUuid: 's1', tailUuid: 't1' } } },
-      { type: 'user', uuid: 's1', isCompactSummary: true, message: { role: 'user', content: summary } },
-      ...after,
-    ]);
+  const partial = (form: 'both' | 'list' | 'segment'): { c: Conversation; ids: { boundary: string; summary: string } } => {
+    const c = session();
+    c.human('a turn that was dropped by the compaction', 'p1');
+    c.say('dropped too');
+    c.human('the retained turn', 'p2');
+    const kept = c.call('Read', { file_path: 'src/keep.ts' }, 'file body');
+    const ids = c.compact('Summary: the user asked for X, then Y failed.', [kept.use, kept.result], form);
+    c.human('after the compaction', 'p3');
+    c.call('Bash', { command: 'npm test' }, 'passed');
+    return { c, ids };
+  };
 
-  it('takes the host preserved segment: the summary plus the retained pre-compact suffix', () => {
-    const p = compacted('Summary: the user asked for X, then Y failed.', [assistant('h1', 'kept action', { id: 'tu1', name: 'Read', input: { file_path: 'src/keep.ts' } }), toolResult('t1', 'tu1', 'file body')], [human('u9', 'carry on')]);
-    const s = ok(p, 'carry on');
-    expect(s.epoch).toBe('1:s1');
-    const mandatoryText = mandatoryGroups(s).map((g) => g.text);
-    expect(mandatoryText).toContain('Summary: the user asked for X, then Y failed.');
-    expect(mandatoryText.join('\n')).not.toContain('a turn that was dropped');
-    expect(mandatoryGroups(s).find((g) => g.origin === 'compact_summary')).toBeDefined();
-    // Partial compaction retained an earlier record; it is optional evidence, still in view.
+  it.each(['both', 'list', 'segment'] as const)('takes the host preserved lineage (%s form): the summary plus the retained suffix', (form) => {
+    const { c, ids } = partial(form);
+    const s = ok(c.write(dir()), 'carry on');
+    expect(s.epoch).toBe(`compact:${ids.boundary}:${ids.summary}`);
+    const mandatory = mandatoryGroups(s);
+    expect(mandatory.map((g) => g.origin)).toEqual(['compact_summary', 'human']);
+    expect(mandatory[0]?.text).toBe('Summary: the user asked for X, then Y failed.');
+    expect(texts(s)).not.toContain('a turn that was dropped');
+    expect(texts(s)).not.toContain('the retained turn');
+    // Partial compaction retained an earlier interaction; it is optional evidence, still in view.
     expect(optionalGroups(s).map((g) => g.text).join('\n')).toContain('src/keep.ts');
+    expect(optionalGroups(s).map((g) => g.text).join('\n')).toContain('npm test');
   });
 
-  it('stays native when a boundary exists whose preserved segment cannot be resolved', () => {
-    const p = transcript([
-      human('u1', 'first'),
-      { type: 'system', uuid: 'b1', subtype: 'compact_boundary', compactMetadata: { trigger: 'auto', preservedSegment: { headUuid: 'missing', anchorUuid: 'also-missing' } } },
-      human('u2', 'second'),
-    ]);
-    const r = readLeanSource(p, 'second');
-    expect(r.ok).toBe(false);
-    expect(r.ok === false && r.reason).toBe('source_lineage_unknown');
+  it('a compaction that kept nothing leaves only the summary and what came after', () => {
+    const c = session();
+    c.human('dropped', 'p1');
+    c.call('Read', { file_path: 'gone.ts' }, 'gone');
+    c.compact('Summary: nothing kept.');
+    c.human('after', 'p2');
+    const s = ok(c.write(dir()), 'go');
+    expect(texts(s)).not.toContain('gone.ts');
+    expect(mandatoryGroups(s).map((g) => g.origin)).toEqual(['compact_summary', 'human']);
+  });
+
+  it('a malformed preserved list or segment is unknown lineage', () => {
+    const { c } = partial('both');
+    const lines = c.lines().map((l) => {
+      const r = JSON.parse(l) as Record<string, unknown>;
+      if (r['subtype'] !== 'compact_boundary') return l;
+      return JSON.stringify({ ...r, compactMetadata: { trigger: 'auto', preservedSegment: { headUuid: 'h', anchorUuid: 'a' } } });
+    });
+    expect(reason(c.write(dir(), lines), 'go')).toBe('source_lineage_unknown');
+    const listBroken = c.lines().map((l) => {
+      const r = JSON.parse(l) as Record<string, unknown>;
+      if (r['subtype'] !== 'compact_boundary') return l;
+      return JSON.stringify({ ...r, compactMetadata: { trigger: 'auto', preservedMessages: { anchorUuid: 'a', uuids: 'not-a-list' } } });
+    });
+    expect(reason(c.write(dir(), listBroken), 'go')).toBe('source_lineage_unknown');
+  });
+
+  it('an anchor that is not the compaction summary is unknown lineage', () => {
+    const { c, ids } = partial('list');
+    const lines = c.lines().map((l) => {
+      const r = JSON.parse(l) as Record<string, unknown>;
+      return r['uuid'] === ids.summary ? JSON.stringify({ ...r, isCompactSummary: false, origin: { kind: 'human' } }) : l;
+    });
+    expect(reason(c.write(dir(), lines), 'go')).toBe('source_lineage_unknown');
+  });
+
+  it('a preserved record missing from a complete file is unknown lineage', () => {
+    const { c, ids } = partial('list');
+    const lines = c.lines().filter((l) => {
+      const r = JSON.parse(l) as Record<string, unknown>;
+      const meta = (c.records.find((x) => x['uuid'] === ids.boundary)?.['compactMetadata'] ?? {}) as { preservedMessages: { uuids: string[] } };
+      return r['uuid'] !== meta.preservedMessages.uuids[1];
+    });
+    expect(reason(c.write(dir(), lines), 'go')).toBe('source_lineage_unknown');
+  });
+
+  it('a summary on the chain that is not the anchor of the last compaction is declined', () => {
+    const { c } = partial('both');
+    c.append({ type: 'user', promptId: 'p3', isCompactSummary: true, message: { role: 'user', content: 'a stray summary' } });
+    expect(reason(c.write(dir()), 'go')).toBe('source_unsupported');
   });
 
   it('a compaction after the packet was built changes the epoch', () => {
-    const before = ok(transcript([human('u1', 'first'), assistant('a1', 'x'), human('u2', 'go')]), 'go');
-    const after = ok(
-      transcript([
-        human('u1', 'first'),
-        assistant('h1', 'x'),
-        { type: 'system', uuid: 'b1', subtype: 'compact_boundary', compactMetadata: { preservedSegment: { headUuid: 'h1', anchorUuid: 's1', tailUuid: 'h1' } } },
-        { type: 'user', uuid: 's1', isCompactSummary: true, message: { role: 'user', content: 'Summary: ...' } },
-        human('u2', 'go'),
-      ]),
-      'go',
-    );
+    const c = session();
+    c.human('first', 'p1');
+    const kept = c.call('Read', { file_path: 'a.ts' }, 'x');
+    const before = ok(c.write(dir()), 'go');
+    c.compact('Summary: ...', [kept.use, kept.result]);
+    const after = ok(c.write(dir()), 'go');
+    expect(before.epoch).toBe('uncompacted');
     expect(after.epoch).not.toBe(before.epoch);
   });
 });
 
+describe('lean source — real interaction identity', () => {
+  it('groups parallel calls by their response and pairs results by call id, whatever order they arrive in', () => {
+    const c = session();
+    c.human('read both', 'p1');
+    const m = c.newMessageId();
+    c.say('reading both', m);
+    const a = c.use('Read', { file_path: 'a.ts' }, m);
+    const b = c.use('Read', { file_path: 'b.ts' }, m);
+    c.result(b.id, 'body of b');
+    c.result(a.id, 'body of a');
+    c.say('both read', c.newMessageId());
+    const groups = optionalGroups(ok(c.write(dir()), 'go'));
+    expect(groups).toHaveLength(2);
+    for (const t of ['a.ts', 'b.ts', 'body of a', 'body of b']) expect(groups[0]?.text).toContain(t);
+    expect(groups[1]?.text).toBe('both read');
+  });
+
+  it('restores a parallel call and its result that sit beside the chain, as the host does', () => {
+    const c = session();
+    c.human('read both', 'p1');
+    const m = c.newMessageId();
+    const a = c.use('Read', { file_path: 'a.ts' }, m);
+    c.result(a.id, 'body of a', { parent: a.use });
+    const b = c.use('Read', { file_path: 'b.ts' }, m, { parent: a.use, chain: false });
+    c.result(b.id, 'body of b', { parent: b.use, chain: false });
+    c.say('done', c.newMessageId());
+    const s = ok(c.write(dir()), 'go');
+    expect(optionalGroups(s)[0]?.text).toContain('body of b');
+    expect(s.abandoned).toBe(0);
+  });
+
+  it('leaves an abandoned branch out, and counts it', () => {
+    const c = session();
+    c.human('first', 'p1');
+    const fork = c.last;
+    c.say('an answer the user rewound');
+    c.human('an instruction that was edited away', 'p2');
+    c.branchFrom(fork);
+    c.say('the answer that stayed');
+    const s = ok(c.write(dir()), 'go');
+    expect(texts(s)).not.toContain('edited away');
+    expect(texts(s)).not.toContain('rewound');
+    expect(texts(s)).toContain('the answer that stayed');
+    expect(s.abandoned).toBe(2);
+  });
+
+  it('keeps an interruption with the response it cut short', () => {
+    const c = session();
+    c.human('run it', 'p1');
+    c.call('Bash', { command: 'npm run e2e' }, 'The user doesn’t want to proceed with this tool use.', { isError: true });
+    c.interrupt();
+    const g = optionalGroups(ok(c.write(dir()), 'go'));
+    expect(g).toHaveLength(1);
+    expect(g[0]?.text).toContain('npm run e2e');
+    expect(g[0]?.text).toContain('[Request interrupted by user for tool use]');
+  });
+
+  it('pairs a notification with the call it names, counts one naming an unknown call, and keeps one naming none', () => {
+    const c = session();
+    c.human('start it in the background', 'p1');
+    const t = c.use('Agent', { subagent_type: 'general-purpose', prompt: 'long job', run_in_background: true }, c.newMessageId());
+    c.result(t.id, 'Async agent launched successfully.');
+    c.notification(t.id, 'completed', 'Agent "long job" completed');
+    c.notification('toolu_not_in_view', 'completed', 'something older');
+    c.notification(null, 'completed', 'a background shell finished');
+    const s = ok(c.write(dir()), 'go');
+    const agent = optionalGroups(s).find((g) => g.text.includes('long job'));
+    expect(agent?.text).toContain('Async agent launched successfully.');
+    expect(agent?.text).toContain('completed');
+    expect(texts(s)).not.toContain('something older');
+    expect(s.excluded.unattributed).toBe(1);
+    expect(optionalGroups(s).find((g) => g.text.includes('a background shell finished'))?.origin).toBe('observation');
+  });
+
+  it('one call with two different results is corruption', () => {
+    const c = session();
+    c.human('go', 'p1');
+    const a = c.use('Read', { file_path: 'a.ts' }, c.newMessageId());
+    c.result(a.id, 'one body');
+    c.result(a.id, 'another body');
+    expect(reason(c.write(dir()), 'next')).toBe('source_corrupt');
+  });
+
+  it('names media in a result instead of dropping it, and declines a result form it has not seen', () => {
+    const c = session();
+    c.human('look', 'p1');
+    c.call('Read', { file_path: 'shot.png' }, '', { content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AA==' } }] });
+    c.call('ToolSearch', { query: 'select:Edit' }, '', { content: [{ type: 'tool_reference', tool_name: 'Edit' }] });
+    const s = ok(c.write(dir()), 'go');
+    expect(texts(s)).toContain('[image not carried]');
+    expect(texts(s)).toContain('[tool_reference Edit]');
+    c.call('Read', { file_path: 'x.pdf' }, '', { content: [{ type: 'document', source: {} }] });
+    expect(reason(c.write(dir()), 'go')).toBe('source_unsupported');
+  });
+});
+
+describe('lean source — exact references, resolved before anything is evicted', () => {
+  const base = (): Conversation => {
+    const c = session();
+    c.human('earlier', 'p1');
+    c.call('Read', { file_path: 'src/quote.ts' }, 'export const parseQuote = (s) => Math.round(Number(s));');
+    c.call('Read', { file_path: 'docs/old.md' }, 'a changelog from last year');
+    return c;
+  };
+
+  it('makes the one group an exact reference resolves to mandatory', () => {
+    const s = ok(base().write(dir()), '`parseQuote` 반올림 고쳐줘');
+    expect(s.groups.find((g) => g.text.includes('parseQuote'))?.mandatory).toBe(true);
+    expect(optionalGroups(s).map((g) => g.text).join('')).toContain('changelog');
+  });
+
+  it('resolves a path reference the same way', () => {
+    const s = ok(base().write(dir()), 'docs/old.md 를 갱신해줘');
+    expect(s.groups.find((g) => g.text.includes('docs/old.md'))?.mandatory).toBe(true);
+  });
+
+  it('finds a path beside a long unbroken paste in linear time, instead of running out the source bound', () => {
+    const c = base();
+    c.human(`this log line: ${'x'.repeat(70 * 1024)}`, 'p2');
+    const started = Date.now();
+    const s = ok(c.write(dir()), 'docs/old.md 를 갱신해줘');
+    expect(Date.now() - started).toBeLessThan(200);
+    expect(s.groups.find((g) => g.text.includes('docs/old.md'))?.mandatory).toBe(true);
+  });
+
+  it('promotes nothing for an ambiguous or a dangling reference, and does not guess', () => {
+    expect(optionalGroups(ok(base().write(dir()), 'that `Read` call was wrong'))).toHaveLength(2);
+    const dangling = ok(base().write(dir()), 'do the second option above');
+    expect(optionalGroups(dangling)).toHaveLength(2);
+    expect(mandatoryGroups(dangling).map((g) => g.origin)).toEqual(['human']);
+  });
+
+  it('resolves a reference made in an earlier human turn, not only in the current request', () => {
+    const c = base();
+    c.human('remember `parseQuote` rounds down', 'p2');
+    expect(ok(c.write(dir()), 'carry on').groups.find((g) => g.text.includes('export const parseQuote'))?.mandatory).toBe(true);
+  });
+
+  const many = (first: string, extra = 0): Conversation => {
+    const c = session();
+    c.human('earlier', 'p1');
+    c.call('Read', { file_path: 'src/legacy.ts' }, first);
+    for (let i = 0; i < MAX_OPTIONAL_GROUPS + extra; i++) c.call('Read', { file_path: `f${i}.ts` }, `body ${i}`);
+    return c;
+  };
+
+  it('keeps a required group that is older than the enumeration window', () => {
+    const s = ok(many('export const parseLegacyQuote = 1;', 2).write(dir()), '`parseLegacyQuote`를 고쳐줘');
+    expect(mandatoryGroups(s).some((g) => g.text.includes('parseLegacyQuote'))).toBe(true);
+    // The promoted group is required, so it is not one of the optional groups the window counted out.
+    expect(s.excluded.window).toBe(2);
+  });
+
+  it('two matches are ambiguous even when one of them would have been evicted', () => {
+    const c = many('const sharedToken = "old";', 1);
+    c.call('Read', { file_path: 'src/new.ts' }, 'const sharedToken = "new";');
+    const s = ok(c.write(dir()), '`sharedToken` 값을 바꿔줘');
+    // Resolving against what survived the window would have found one match and promoted the wrong group.
+    expect(mandatoryGroups(s).some((g) => g.text.includes('sharedToken'))).toBe(false);
+  });
+
+  it('a referenced group that screens as a credential becomes required, so the caller declines instead of dropping it', () => {
+    const c = session();
+    c.human('earlier', 'p1');
+    c.call('Bash', { command: 'cat .env.local' }, 'OPENAI_API_KEY=sk-thisisonlyatestnotarealkey123');
+    c.call('Read', { file_path: 'a.ts' }, 'plain');
+    const s = ok(c.write(dir()), '.env.local 을 정리해줘');
+    expect(mandatoryGroups(s).some((g) => looksSecret(g.text))).toBe(true);
+    expect(s.excluded.secret).toBe(0);
+  });
+});
+
 describe('lean source — validity across this request’s own appends', () => {
-  const base = [human('u1', 'earlier'), assistant('a1', 'did a thing', { id: 'tu1', name: 'Read', input: { file_path: 'a.ts' } }), toolResult('r1', 'tu1', 'body')];
+  const base = (): Conversation => {
+    const c = session();
+    c.human('earlier', 'p1');
+    c.call('Read', { file_path: 'a.ts' }, 'body');
+    return c;
+  };
+  const request = 'implement the parser';
 
   it('an ordinary assistant/tool append for the same request does not move the prefix digest', () => {
-    const request = 'implement the parser';
-    const before = ok(transcript([...base]), request);
-    const after = ok(
-      transcript([
-        ...base,
-        human('u2', request),
-        assistant('a2', 'working', { id: 'tu2', name: 'Bash', input: { command: 'ls' } }),
-        toolResult('r2', 'tu2', 'files'),
-      ]),
-      request,
-    );
+    const c = base();
+    const before = ok(c.write(dir()), request);
+    c.human(request, NOW);
+    c.call('Bash', { command: 'ls' }, 'files');
+    c.attachment({ type: 'hook_additional_context', content: ['note'], hookName: 'PostToolUse' });
+    const after = ok(c.write(dir()), request, { phase: 'dispatch' });
     expect(after.prefixDigest).toBe(before.prefixDigest);
     expect(after.newerHumanText).toBe(false);
   });
 
-  it('a new human instruction after the request invalidates it', () => {
-    const request = 'implement the parser';
-    const after = ok(transcript([...base, human('u2', request), assistant('a2', 'working'), human('u3', 'stop, do the other thing')]), request);
-    expect(after.newerHumanText).toBe(true);
+  it('a new human instruction after the request invalidates it, including one typed while the turn ran', () => {
+    const typed = base();
+    typed.human(request, NOW);
+    typed.say('working');
+    typed.human('stop, do the other thing', 'p-later');
+    expect(ok(typed.write(dir()), request, { phase: 'dispatch' }).newerHumanText).toBe(true);
+
+    const queued = base();
+    queued.human(request, NOW);
+    queued.call('Bash', { command: 'npm test' }, 'ok');
+    queued.queued('actually, leave the tests alone');
+    expect(ok(queued.write(dir()), request, { phase: 'dispatch' }).newerHumanText).toBe(true);
   });
 
   it('a destructive rewrite of an earlier record moves the digest', () => {
-    const request = 'go';
-    const before = ok(transcript([...base, human('u2', request)]), request);
-    const rewritten = ok(transcript([human('u1', 'earlier, but edited'), base[1], base[2], human('u2', request)]), request);
-    expect(rewritten.prefixDigest).not.toBe(before.prefixDigest);
+    const c = base();
+    const before = ok(c.write(dir()), 'go');
+    const lines = c.lines();
+    const first = JSON.parse(lines[0] as string) as Record<string, unknown>;
+    lines[0] = JSON.stringify({ ...first, message: { role: 'user', content: 'earlier, but edited' } });
+    expect(ok(c.write(dir(), lines), 'go').prefixDigest).not.toBe(before.prefixDigest);
   });
 });
 
 describe('lean source — bounds, safety and what "unknown" means', () => {
   it('an absent transcript is unavailable, never an empty new session', () => {
-    const r = readLeanSource(join(tmp, 'does-not-exist.jsonl'), 'go');
-    expect(r.ok === false && r.reason).toBe('source_unavailable');
-    expect(readLeanSource(null, 'go').ok).toBe(false);
+    expect(reason(join(dir(), `${SID}.jsonl`), 'go')).toBe('source_unavailable');
+    expect(readLeanSource(null, bind('go')).ok).toBe(false);
   });
 
-  it('a real startup transcript with no prior turns yields zero optional groups, not a failure', () => {
-    const p = transcript([{ type: 'mode', mode: 'normal' }, human('u1', 'first thing I have said')]);
-    const s = ok(p, 'first thing I have said');
-    expect(optionalGroups(s)).toHaveLength(0);
+  it('a startup transcript with no prior turns yields zero optional groups, not a failure', () => {
+    const c = session();
+    c.records.push({ type: 'mode', mode: 'normal' });
+    c.attachment({ type: 'hook_success', content: 'ok', hookName: 'SessionStart:startup', hookEvent: 'SessionStart' });
+    expect(optionalGroups(ok(c.write(dir()), 'first thing I have said'))).toHaveLength(0);
   });
 
-  it('gives up rather than guessing when the read bound cuts an uncompacted history', () => {
-    const r = readLeanSource(transcript([human('u1', 'first'), human('u2', 'go')]), 'go', { now: (() => { let n = 0; return () => (n += 1000); })() });
-    expect(r.ok).toBe(false);
+  it('gives up rather than guessing when the time bound runs out', () => {
+    const c = session();
+    c.human('first', 'p1');
+    const r = readLeanSource(c.write(dir()), bind('go'), { now: (() => { let n = 0; return () => (n += 1000); })() });
+    expect(r.ok === false && r.reason).toBe('source_bounded');
   });
 
-  it('excludes a credential-bearing optional group whole and counts it unassessed', () => {
-    const p = transcript([
-      human('u1', 'earlier'),
-      assistant('a1', 'exported the token', { id: 'tu1', name: 'Bash', input: { command: 'export TYPESAFE_API_KEY=sk-abcdefghijklmnopqrstuvwx' } }),
-      toolResult('r1', 'tu1', 'ok'),
-      assistant('a2', 'ordinary work', { id: 'tu2', name: 'Read', input: { file_path: 'a.ts' } }),
-      toolResult('r2', 'tu2', 'body'),
-      human('u2', 'go'),
-    ]);
-    const s = ok(p, 'go');
+  it('a history cut by the read bound is bounded, not an empty or a guessed conversation', () => {
+    const c = session();
+    c.human('first', 'p1');
+    c.call('Read', { file_path: 'huge.log' }, 'x'.repeat(SOURCE_MAX_BYTES + 1024));
+    c.human('second', 'p2');
+    c.say('answer');
+    expect(reason(c.write(dir()), 'go')).toBe('source_bounded');
+  });
+
+  it('withholds a credential-bearing optional group whole and counts it unassessed', () => {
+    const c = session();
+    c.human('earlier', 'p1');
+    c.call('Bash', { command: 'export TYPESAFE_API_KEY=sk-abcdefghijklmnopqrstuvwx' }, 'ok');
+    c.call('Read', { file_path: 'a.ts' }, 'body');
+    const s = ok(c.write(dir()), 'go');
     expect(optionalGroups(s)).toHaveLength(1);
-    expect(JSON.stringify(s.groups)).not.toContain('sk-abcdefghijklmnopqrstuvwx');
+    expect(texts(s)).not.toContain('sk-abcdefghijklmnopqrstuvwx');
+    expect(s.excluded.secret).toBe(1);
     expect(s.unassessed).toBe(1);
     expect(s.coverage).toBe('partial');
   });
@@ -291,26 +645,21 @@ describe('lean source — bounds, safety and what "unknown" means', () => {
   });
 
   it('enumerates the newest groups under the cap and counts the rest rather than calling them irrelevant', () => {
-    const many: unknown[] = [human('u1', 'earlier')];
-    for (let i = 0; i < MAX_OPTIONAL_GROUPS + 5; i++) {
-      many.push(assistant(`a${i}`, `step ${i}`, { id: `tu${i}`, name: 'Read', input: { file_path: `f${i}.ts` } }), toolResult(`r${i}`, `tu${i}`, `body ${i}`));
-    }
-    many.push(human('u2', 'go'));
-    const s = ok(transcript(many), 'go');
+    const c = session();
+    c.human('earlier', 'p1');
+    for (let i = 0; i < MAX_OPTIONAL_GROUPS + 5; i++) c.call('Read', { file_path: `f${i}.ts` }, `body ${i}`);
+    const s = ok(c.write(dir()), 'go');
     expect(optionalGroups(s)).toHaveLength(MAX_OPTIONAL_GROUPS);
+    expect(s.excluded.window).toBe(5);
     expect(s.unassessed).toBe(5);
-    expect(optionalGroups(s).at(-1)?.text).toContain(`step ${MAX_OPTIONAL_GROUPS + 4}`);
+    expect(optionalGroups(s).at(-1)?.text).toContain(`body ${MAX_OPTIONAL_GROUPS + 4}`);
   });
 
   it('does not collapse identical text observed at two different records', () => {
-    const p = transcript([
-      human('u1', 'earlier'),
-      assistant('a1', 'read', { id: 'tu1', name: 'Read', input: { file_path: 'src/a.ts' } }),
-      toolResult('r1', 'tu1', 'export const x = 1;'),
-      assistant('a2', 'read', { id: 'tu2', name: 'Read', input: { file_path: 'src/b.ts' } }),
-      toolResult('r2', 'tu2', 'export const x = 1;'),
-      human('u2', 'go'),
-    ]);
-    expect(optionalGroups(ok(p, 'go'))).toHaveLength(2);
+    const c = session();
+    c.human('earlier', 'p1');
+    c.call('Read', { file_path: 'src/a.ts' }, 'export const x = 1;');
+    c.call('Read', { file_path: 'src/b.ts' }, 'export const x = 1;');
+    expect(optionalGroups(ok(c.write(dir()), 'go'))).toHaveLength(2);
   });
 });

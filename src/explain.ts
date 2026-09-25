@@ -202,7 +202,20 @@ const leanSelectionLine = (r: Rec): string => {
     : d
       ? `  ${num(d['retained']) ?? '?'} retained, ${num(d['omitted']) ?? '?'} omitted`
       : '';
-  const src_text = src === null ? '  source not recorded' : `  source ${coverage ?? 'unknown'}${unassessed ? `, ${unassessed} unassessed` : ''}${bytes === null ? '' : `, ${thousands(bytes)} bytes read`}`;
+  // L7: each reason a group went unassessed is shown apart; a local cap is not a judgment about the group.
+  const excluded = src ? sub(src, 'excluded') : null;
+  const why = [
+    ['window', excluded ? num(excluded['window']) : null],
+    ['possible secret', excluded ? num(excluded['secret']) : null],
+    ['unattributed', excluded ? num(excluded['unattributed']) : null],
+    ['over the request bound', src ? num(src['unasked']) : null],
+  ]
+    .filter((e): e is [string, number] => typeof e[1] === 'number' && e[1] > 0)
+    .map(([label, n]) => `${label} ${n}`);
+  const src_text =
+    src === null
+      ? '  source not recorded'
+      : `  source ${coverage ?? 'unknown'}${unassessed ? `, ${unassessed} unassessed${why.length > 0 ? ` (${why.join(', ')})` : ''}` : ''}${bytes === null ? '' : `, ${thousands(bytes)} bytes read`}`;
   const usage = sub(r, 'jev');
   const u = usage ? sub(usage, 'usage') : null;
   const spent = r['attempted'] === true ? `  jev usage ${u ? `${num(u['input_tokens']) ?? '?'} in / ${num(u['output_tokens']) ?? '?'} out` : 'unknown (not zero)'}` : '';
@@ -225,7 +238,10 @@ const leanDispatchLine = (r: Rec): string => {
 const leanPostLine = (r: Rec): string => {
   const model = str(r['observed_model']);
   const status = str(r['status']) ?? 'no status recorded';
-  return `result   executor ${status}${model ? `  ran ${model}` : '  (no model in the result)'}${r['released'] === true ? '' : '  (no matching reservation released)'}  — the worker's own report, not an external check`;
+  // L5: an owned executor whose stop the host did not establish keeps its reservation, and says so.
+  const ownership = r['released'] === true ? '' : r['release_unconfirmed'] === true ? '  (ownership kept: the host did not establish that the child stopped)' : '  (no matching reservation released)';
+  const failure = str(r['failure']);
+  return `result   executor ${failure === null ? status : `failed (${failure})`}${model ? `  ran ${model}` : '  (no model in the result)'}${ownership}  — the worker's own report, not an external check`;
 };
 
 const lineFor = (r: Rec, posts: Map<string, Rec>): string | null => {

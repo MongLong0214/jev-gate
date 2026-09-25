@@ -143,6 +143,7 @@ const DISPATCH_DENY_TEXT: Record<DenyReason, string> = {
   marker_unresolved: 'This lean executor call carries no packet that resolves, so there is no task to give it. Do the work in this conversation instead.',
   marker_stale: 'The lean packet for this marker no longer matches the current request, working tree or conversation. Do the work in this conversation instead.',
   executor_active: 'A lean executor from this session has not been observed to finish, so a second one is not dispatched automatically.',
+  reservation_failed: 'This lean dispatch could not be recorded, so its packet is not applied and the marker alone is not a task. Do the work in this conversation instead.',
 };
 
 /**

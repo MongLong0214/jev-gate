@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { realpathSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
@@ -36,10 +37,11 @@ import {
   type AgentInput,
   type Eligibility,
 } from './brief.js';
-import { loadConfig, type Env } from './config.js';
+import { loadConfig, NATIVE_HOOK_TIMEOUT_MS, type Env } from './config.js';
 import {
   buildLeanRequest,
   composeFullPacket,
+  composeDispatchPrompt,
   composeLeanPacket,
   decideLean,
   groupBytes,
@@ -48,7 +50,7 @@ import {
   selectRecent,
   type LeanDecision,
 } from './lean.js';
-import { looksSecret, mandatoryGroups, optionalGroups, readLeanSource } from './lean-source.js';
+import { looksSecret, mandatoryGroups, optionalGroups, readLeanSource, SOURCE_MAX_MS, type LeanSource } from './lean-source.js';
 import { readSessionDepth, type DepthReading } from './depth.js';
 import {
   GUARD_DENY_REASON,
@@ -85,6 +87,7 @@ import {
   cleanupJobs,
   countAttempt,
   emptyGeneration,
+  LOCK_DEADLINE_MS,
   MAX_HISTORY,
   newGeneration,
   own,
@@ -133,6 +136,8 @@ export interface HookDeps {
   fetchImpl?: typeof fetch;
   signal?: AbortSignal;
   openTrace?: typeof openTraceDir;
+  /** When this hook process started, in epoch ms. The provider gets what is left of the host's hook timeout (L7). */
+  startedAt?: number;
 }
 
 /** skip: nothing to do; preserve: a call was seen and left untouched; guidance/patch/deny/context: one JSON object on stdout. */
@@ -282,12 +287,56 @@ const predecessorSummaries = (task: PlannedTask, gen: JobGeneration): Predecesso
     return receipt?.reply ? [{ task_id: dep, summary: receipt.reply.summary, interfaces: receipt.reply.interfaces }] : [];
   });
 
+/** L7: below this, a provider call cannot plausibly finish, so it is not started. */
+const MIN_NETWORK_MS = 250;
+
+/**
+ * L7: what a lean prompt still has to do after its call returns -- one source re-read, one lock and write, and the
+ * output -- is reserved from the host's hook timeout. The provider gets the rest, never a fresh full budget.
+ */
+const LEAN_POST_CALL_RESERVE_MS = SOURCE_MAX_MS + LOCK_DEADLINE_MS + 300;
+
+/**
+ * L3: the real path of the nearest directory at or above `cwd` holding `.git`, else of `cwd` itself. A dispatch
+ * from a subdirectory of the tree a packet was built in is the same tree; one from a different tree is not.
+ */
+const canonicalWorktree = (cwd: string | undefined): string | null => {
+  if (typeof cwd !== 'string' || cwd.length === 0) return null;
+  let start: string;
+  try {
+    start = realpathSync(cwd);
+  } catch {
+    return null;
+  }
+  for (let at = start; ; ) {
+    if (existsSync(join(at, '.git'))) return at;
+    const up = dirname(at);
+    if (up === at) return start;
+    at = up;
+  }
+};
+
+/** L7: the trace keeps every reason a group in view was not carried apart; none of them is Jev's judgment. */
+const leanSourceTrace = (source: LeanSource, unasked: number | null): Record<string, unknown> => ({
+  epoch: source.epoch,
+  coverage: source.coverage,
+  unassessed: source.unassessed + (unasked ?? 0),
+  excluded: source.excluded,
+  unasked,
+  host_context: source.hostContext,
+  abandoned: source.abandoned,
+  request_recorded: source.requestRecorded,
+  bytes_read: source.bytesRead,
+  duration_ms: source.durationMs,
+});
+
 /**
  * Event dispatch (V5). UserPromptSubmit: Gate A and the job generation. PreToolUse: root guard plus owned dispatch
  * validation, reservation and Gate B. PostToolUse: receipts and readiness, decided by code alone (T11). Stop: terminal outcome.
  * Exit code is always 0; a failure anywhere leaves the host's native behavior untouched.
  */
 export const runHook = async (deps: HookDeps): Promise<HookResult> => {
+  const startedAt = deps.startedAt ?? Date.now();
   const skip = (code: ErrorCode | null = null): HookResult => ({ kind: 'skip', code, stdout: null });
   const preserve = (code: ErrorCode): HookResult => ({ kind: 'preserve', code, stdout: null });
 
@@ -309,6 +358,13 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
    */
   const leanProfile = (deps.argv ?? []).includes('--lean');
   if (leanProfile && rawMode !== 'lean') return isAgentPre ? preserve('profile_mode_mismatch') : skip('profile_mode_mismatch');
+  /**
+   * L7: a lean prompt with no key does no optional work at all -- no trace directory, no source read, no state. The
+   * comparison arm is the one exception, because it is explicitly enabled and spends nothing.
+   */
+  if (rawMode === 'lean' && input.hook_event_name === 'UserPromptSubmit' && !deps.env['TYPESAFE_API_KEY'] && deps.env['JEV_GATE_BENCH_RECENT'] !== '1') {
+    return skip('key_missing');
+  }
 
   let trace: TraceWriter | null = null;
   let traceError: string | null = null;
@@ -357,6 +413,8 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     questionKeys: readonly string[],
     /** Applies the gate's policy and returns the closed decision fields to record (JG5-06 accounting). */
     decide: (outcome: JevOutcome) => Record<string, unknown>,
+    /** L7: the epoch ms by which the call must have returned. The deadline is what is left then, not a fresh budget. */
+    mustReturnBy?: number,
   ): Promise<{ outcome: JevOutcome } | { blocked: ErrorCode }> => {
     const requestBytes = Buffer.byteLength(JSON.stringify(request), 'utf8');
     // B2/T7: one id per gate call, written to both records, so accounting joins an intent to its own result. Gate A
@@ -367,14 +425,26 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       return { blocked: 'request_too_large' };
     }
     if (deps.signal?.aborted) return { blocked: 'aborted' };
+    // The floor guards only what the hook timeout leaves. A configured deadline passed validation and is the
+    // operator's to set, however short.
+    const hookLeft = (): number => (mustReturnBy === undefined ? Infinity : mustReturnBy - Date.now());
+    const exhausted = (): { blocked: ErrorCode } => {
+      trace?.write(resultPhase, { ...base, ...intent, request_id: requestId, attempted: false, known_not_sent: true, skip_code: 'deadline_exhausted', request_bytes: requestBytes });
+      return { blocked: 'deadline_exhausted' };
+    };
+    if (hookLeft() < MIN_NETWORK_MS) return exhausted();
     if (traceDir) {
       if (!trace) return { blocked: 'trace_intent_failed' };
       const written = trace.write(intentPhase, { ...base, ...intent, request_id: requestId, request_bytes: requestBytes });
       if (!written.ok) return { blocked: 'trace_intent_failed' };
     }
+    // Measured again after the intent write: that write is local work the budget has already paid for.
+    const left = hookLeft();
+    if (left < MIN_NETWORK_MS) return exhausted();
+    const deadlineMs = Math.min(config.requestDeadlineMs, left);
     const outcome = await callJev(request, {
       apiKey: apiKey as string,
-      deadlineMs: config.requestDeadlineMs,
+      deadlineMs,
       ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
       ...(deps.signal ? { signal: deps.signal } : {}),
     });
@@ -438,43 +508,43 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     if (hostOverride.concrete || hostOverride.force || deps.env['CLAUDE_CODE_FORK_SUBAGENT'] === '1') return skip('host_unsupported');
     cleanupJobs(deps.env);
 
-    const existing = readJob(deps.env, sessionId);
-    const prior = existing.ok ? (existing.value?.current ?? null) : null;
     /**
      * Repeated delivery of the same request reuses its decision. An in-flight duplicate cannot spend a second time,
-     * and a decided one is not re-decided; only a genuinely new request is a new identity.
+     * and a decided or consumed one is not re-decided; only a genuinely new request is a new identity. This unlocked
+     * read is only the fast path -- the authoritative comparison happens again under the lock, at registration.
      */
+    const existing = readJob(deps.env, sessionId);
+    const prior = existing.ok ? (existing.value?.current ?? null) : null;
     if (prior && prior.prompt_id === promptId && prior.lean) {
       const seen = prior.lean;
       if (seen.outcome === 'proposed') return emitContext('UserPromptSubmit', renderLeanRecommendation(seen.marker, seen.omitted_groups), 'duplicate_request');
       return skip('duplicate_request');
     }
-    /**
-     * JGL-01 step 3: a recommendation the root did not act on is a real outcome and stays in the denominator. It is
-     * recorded here, at the next request, because that is where it becomes observable without forcing anything.
-     */
-    if (prior && prior.prompt_id !== promptId && prior.lean?.outcome === 'proposed') {
-      trace?.write('lean_dispatch', { ...base, applied: false, reason: 'recommendation_not_taken', marker: prior.lean.marker, omitted_groups: prior.lean.omitted_groups, retained_groups: prior.lean.retained_groups });
-    }
-    // A new prompt cannot certify an old worker canceled; until its terminal event is observed there is no second one.
     if (existing.ok && leanActive(prior).length > 0) return skip('lean_executor_active');
 
-    const read = readLeanSource(input.transcript_path, prompt);
+    const binding = { request: prompt, promptId, sessionId, phase: 'prompt' } as const;
+    const read = readLeanSource(input.transcript_path, binding);
     if (!read.ok) return skip(read.reason);
     const source = read.source;
-    // An unsafe mandatory block is native before HTTP; masking it and calling the meaning unchanged would be a lie.
-    if (mandatoryGroups(source).some((g) => looksSecret(g.text))) return skip('mandatory_unsafe');
+    /**
+     * L1: every original string this request would export is screened -- the request itself as well as the required
+     * context. An unsafe one is native before HTTP; masking it and calling the meaning unchanged would be a lie.
+     */
+    if (looksSecret(prompt) || mandatoryGroups(source).some((g) => looksSecret(g.text))) return skip('mandatory_unsafe');
     // Nothing selectable means zero requests. A fresh session with no history lands here, and so does a shallow one.
     if (optionalGroups(source).length === 0) return skip('no_optional_groups');
     // The mandatory layer has to fit the FINAL packet, wrapper and attribution included, before anything is sent.
-    if (Buffer.byteLength(composeLeanPacket(source, [], optionalGroups(source).length), 'utf8') > LEAN_PACKET_BUDGET_BYTES) return skip('mandatory_overflow');
+    if (Buffer.byteLength(composeLeanPacket(source, [], { omitted: optionalGroups(source).length, unasked: 0 }), 'utf8') > LEAN_PACKET_BUDGET_BYTES) return skip('mandatory_overflow');
+    const worktree = canonicalWorktree(input.cwd);
+    if (worktree === null) return skip('missing_ids');
 
     const marker = `jev-lean-${randomUUID().replace(/-/g, '').slice(0, 16)}`;
     const carriedRequest = Buffer.byteLength(prompt, 'utf8') <= REQUEST_MAX_BYTES ? prompt : null;
     if (carriedRequest === null) return skip('mandatory_overflow');
     /**
      * Register this request's identity before the await. A pending record with an empty packet is not dispatchable,
-     * so a call that never comes back leaves nothing that could be applied to a worker.
+     * so a call that never comes back leaves nothing that could be applied to a worker -- and nothing that a
+     * redelivery of the same event could spend on again.
      */
     const identity: LeanPending = {
       outcome: 'pending',
@@ -485,19 +555,50 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       epoch: source.epoch,
       prefix_digest: source.prefixDigest,
       cwd: input.cwd ?? null,
+      worktree,
       omitted_groups: 0,
       retained_groups: 0,
       created_at: new Date().toISOString(),
     };
-    if (leanWrite(sessionId, promptId, (gen) => ({ ...gen, prompt_id: promptId, request: carriedRequest, shape: 'direct', lean: identity })) === null) return skip('state_write_failed');
+    /**
+     * L5: compare and register under one short lock. Two hook processes for the same request, or an old and a new
+     * request arriving together, cannot both pass the checks above and then both spend: only the one that registers
+     * here calls out, and the other reads what it registered.
+     */
+    const admission: { refused: ErrorCode | null; notTaken: LeanPending | null } = { refused: null, notTaken: null };
+    const admitted = updateJob(deps.env, sessionId, (prev) => {
+      const current = prev?.current ?? null;
+      if (current && current.prompt_id === promptId && current.lean) {
+        admission.refused = 'duplicate_request';
+        return null;
+      }
+      // A new prompt cannot certify an old worker canceled; until its terminal event is observed there is no second one.
+      if (leanActive(current).length > 0) {
+        admission.refused = 'lean_executor_active';
+        return null;
+      }
+      if (current && current.lean?.outcome === 'proposed') admission.notTaken = current.lean;
+      const gen = current ?? emptyGeneration(promptId, 'direct');
+      return { version: 5, session_id: sessionId, updated_at: '', current: { ...gen, prompt_id: promptId, request: carriedRequest, shape: 'direct', lean: identity }, history: prev?.history ?? [] };
+    });
+    if (admission.refused !== null) return skip(admission.refused);
+    if (!admitted.ok) return skip('state_write_failed');
+    /**
+     * JGL-01 step 3: a recommendation the root did not act on is a real outcome and stays in the denominator. It is
+     * recorded here, at the next admitted request, because that is where it becomes observable without forcing anything.
+     */
+    const notTaken = admission.notTaken;
+    if (notTaken) {
+      trace?.write('lean_dispatch', { ...base, applied: false, reason: 'recommendation_not_taken', marker: notTaken.marker, omitted_groups: notTaken.omitted_groups, retained_groups: notTaken.retained_groups });
+    }
 
     /** Store the composed packet against this request, or fall back to native and leave nothing dispatchable. */
     const publish = (packet: string, retained: number, omitted: number): HookResult => {
-      const recheck = readLeanSource(input.transcript_path, prompt);
+      const recheck = readLeanSource(input.transcript_path, binding);
       if (!recheck.ok || recheck.source.epoch !== source.epoch || recheck.source.prefixDigest !== source.prefixDigest || recheck.source.newerHumanText) return native('source_changed');
       let stale = false;
       const saved = leanWrite(sessionId, promptId, (gen) => {
-        if (gen.prompt_id !== promptId || gen.lean?.marker !== marker) {
+        if (gen.prompt_id !== promptId || gen.lean?.marker !== marker || gen.lean.outcome !== 'pending') {
           stale = true;
           return gen;
         }
@@ -524,7 +625,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         known_not_sent: true,
         policy: 'recent_packet',
         request_sha256: sha256(prompt),
-        source: { epoch: source.epoch, coverage: source.coverage, unassessed: source.unassessed, bytes_read: source.bytesRead },
+        source: leanSourceTrace(source, null),
         groups: {
           mandatory: mandatoryGroups(source).length,
           mandatory_bytes: groupBytes(mandatoryGroups(source)),
@@ -535,7 +636,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         decision: { action: recent ? 'handoff' : 'direct', retained: recent?.retainedGroupIds.length ?? null, omitted: recent?.omittedGroupIds.length ?? null },
       });
       if (recent === null) return native('mandatory_overflow');
-      const packet = composeLeanPacket(source, recent.retainedGroupIds, recent.omittedGroupIds.length);
+      const packet = composeLeanPacket(source, recent.retainedGroupIds, { omitted: recent.omittedGroupIds.length, unasked: 0 });
       if (Buffer.byteLength(packet, 'utf8') > LEAN_PACKET_BUDGET_BYTES) return native('packet_overflow');
       return publish(packet, recent.retainedGroupIds.length, recent.omittedGroupIds.length);
     }
@@ -551,7 +652,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       {
         request_len: prompt.length,
         request_sha256: sha256(prompt),
-        source: { epoch: source.epoch, coverage: source.coverage, unassessed: packing.unassessed, bytes_read: source.bytesRead, duration_ms: source.durationMs },
+        source: leanSourceTrace(source, packing.unasked),
         groups: {
           mandatory: mandatoryGroups(source).length,
           mandatory_bytes: groupBytes(mandatoryGroups(source)),
@@ -567,6 +668,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         held.decision = d;
         return { decision: { action: d.action, reason: d.reason, retained: d.retainedGroupIds.length, omitted: d.omittedGroupIds.length } };
       },
+      startedAt + NATIVE_HOOK_TIMEOUT_MS - LEAN_POST_CALL_RESERVE_MS,
     );
 
     if ('blocked' in gate) return native(gate.blocked);
@@ -576,7 +678,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     // A returned model that is missing or not the pinned one cannot authorize a selection.
     if (gate.outcome.response.model !== config.jevModel) return native('response_invalid');
 
-    const packet = composeLeanPacket(source, decided.retainedGroupIds, decided.omittedGroupIds.length);
+    const packet = composeLeanPacket(source, decided.retainedGroupIds, { omitted: decided.omittedGroupIds.length, unasked: packing.unasked });
     // Byte-only diagnostic (#34): a packet no smaller than the all-groups rendering is no_effect, not a saving.
     if (Buffer.byteLength(packet, 'utf8') >= Buffer.byteLength(composeFullPacket(source), 'utf8')) return native('no_effect');
     if (Buffer.byteLength(packet, 'utf8') > LEAN_PACKET_BUDGET_BYTES) return native('packet_overflow');
@@ -607,10 +709,15 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     const job = readJob(deps.env, sessionId);
     const gen = job.ok ? (job.value?.current ?? null) : null;
     const pending = gen?.lean ?? null;
-    if (!pending || pending.outcome !== 'proposed' || pending.marker !== marker || pending.packet.length === 0) {
+    if (!gen || !pending || pending.outcome !== 'proposed' || pending.marker !== marker || pending.packet.length === 0) {
       return deny('marker_unresolved', 'that marker resolves to no current packet. Do the work in this conversation instead.');
     }
-    if (pending.cwd !== null && typeof input.cwd === 'string' && input.cwd !== pending.cwd) return deny('marker_stale', 'the packet was built in a different working tree.');
+    /**
+     * L3: the packet is bound to the request, session and tree it was built for by identity, not by matching text. A
+     * call from a later turn, from another tree, or with no tree to compare is stale, whatever its text says.
+     */
+    if (gen.prompt_id === null || (input.prompt_id !== undefined && input.prompt_id !== gen.prompt_id)) return deny('marker_stale', 'the packet belongs to an earlier request.');
+    if (!pending.worktree || canonicalWorktree(input.cwd) !== pending.worktree) return deny('marker_stale', 'the packet was built in a different working tree.');
     if (leanActive(gen).length > 0) return deny('executor_active', 'a lean executor from this session has not been observed to finish.');
 
     // Unsupported ordinary calls are refused outright rather than half-patched: pins, background, resume, fork,
@@ -626,35 +733,42 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     if (deps.env['CLAUDE_CODE_FORK_SUBAGENT'] === '1') return deny('dispatch_ineligible', 'subagent forking is on, so the worker would not start fresh.');
 
     // The source is checked again here, inside the dispatch, not only after the call.
-    const request = gen?.request ?? null;
+    const request = gen.request;
     if (request === null || sha256(request) !== pending.request_sha256) return deny('marker_stale', 'the request this packet was built for is no longer the current one.');
-    const recheck = readLeanSource(input.transcript_path, request);
+    const recheck = readLeanSource(input.transcript_path, { request, promptId: gen.prompt_id, sessionId, phase: 'dispatch' });
     if (!recheck.ok || recheck.source.epoch !== pending.epoch || recheck.source.prefixDigest !== pending.prefix_digest || recheck.source.newerHumanText) {
       return deny('marker_stale', 'the conversation this packet was built from has changed.');
     }
 
-    // The coordinator's own text stays, as lower-authority notes, and the final serialized prompt is what is measured.
-    const composed = `${coordinatorPrompt}\n\n${pending.packet}`;
+    // The coordinator's own text stays first and unchanged, framed as a lower-authority note (L7), and the final
+    // serialized prompt is what is measured.
+    const composed = composeDispatchPrompt(coordinatorPrompt, pending.packet);
     if (Buffer.byteLength(composed, 'utf8') > Math.min(LEAN_PACKET_MAX_BYTES, MAX_PROMPT_BYTES)) {
       return deny('composed_too_large', 'the packet plus this call’s own notes exceeds the prompt bound; a partial task is not dispatched.');
     }
+    // L5: the output is rendered before anything is reserved, so a reservation always has a patch to go with it.
+    const stdout = renderPreToolUseOutput({ kind: 'update', updatedInput: patchAgentInput(toolInput, { prompt: composed }) });
+    if (stdout === null) return deny('composed_too_large', 'the patched call does not fit the hook output bound; a partial task is not dispatched.');
 
-    let raced: string | null = null;
-    const reserved = leanWrite(sessionId, gen?.prompt_id ?? null, (current) => {
-      if (current.lean?.marker !== marker || current.lean.packet_sha256 !== pending.packet_sha256) {
-        raced = 'the packet changed while this dispatch was being reserved.';
+    const reservation: { raced: string | null } = { raced: null };
+    const reserved = leanWrite(sessionId, gen.prompt_id, (current) => {
+      const lean = current.lean;
+      if (!lean || lean.outcome !== 'proposed' || lean.marker !== marker || lean.packet_sha256 !== pending.packet_sha256) {
+        reservation.raced = 'the packet changed or was already used while this dispatch was being reserved.';
         return current;
       }
       if (leanActive(current).length > 0) {
-        raced = 'a lean executor from this session has not been observed to finish.';
+        reservation.raced = 'a lean executor from this session has not been observed to finish.';
         return current;
       }
       const next = reserve(current, toolUseId, { role: 'executor', taskId: null, contractHash: pending.packet_sha256, rev: null, tier: null, attempt: 1, deliverables: [] });
-      // Applied at most once: the pending packet is consumed by the dispatch that reserves it.
-      return { ...next, lean: null };
+      // Applied at most once. The packet is emptied, and the request's identity stays as the one bounded fact that a
+      // redelivery of the same request, or a second dispatch of this marker, reads instead of acting again (L5).
+      return { ...next, lean: { ...lean, outcome: 'dispatched', packet: '' } };
     });
-    if (raced !== null) return deny('executor_active', raced);
-    if (reserved === null) return preserve('state_write_failed');
+    if (reservation.raced !== null) return deny('executor_active', reservation.raced);
+    // An owned marker that cannot be recorded is declined, never passed through with the marker as the whole task.
+    if (reserved === null) return deny('reservation_failed', 'this dispatch could not be recorded, so its packet is not applied. Do the work in this conversation instead.');
 
     trace?.write('lean_dispatch', {
       ...base,
@@ -666,21 +780,31 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       composed_bytes: Buffer.byteLength(composed, 'utf8'),
       tool_input: summarizeToolInput(toolInput),
     });
-    return emitPatch(toolInput, { prompt: composed }, null);
+    return { kind: 'patch', code: null, stdout };
   };
 
-  /** Only an observed terminal event releases the owner. A deleted reservation is not a stopped process. */
+  /**
+   * Only an observed terminal event releases the owner. A deleted reservation is not a stopped process.
+   *
+   * L5: what counts as terminal is what the host establishes. A foreground result with status `completed` means the
+   * child returned; a failure that is not an interrupt means the call threw -- the child failed, or never started.
+   * `async_launched`, an unknown status, and an interrupted wait establish only that the parent stopped waiting, so
+   * ownership stays: native work continues, and nothing here declares the child dead on a timer.
+   */
   const leanPost = (): HookResult => {
     if (caller.agent_id) return skip('child_caller');
     if (input.tool_name !== 'Agent') return skip('not_agent_tool');
     const sessionId = input.session_id;
     const toolUseId = input.tool_use_id;
     if (!sessionId || !toolUseId) return skip('missing_ids');
+    const failed = input.hook_event_name === 'PostToolUseFailure';
+    const status = responseStatus(input.tool_response);
+    const terminal = failed ? input.is_interrupt === false : status === 'completed';
     let released = false;
     // Read first: an Agent result that owns nothing here must not create a state file for an unrelated session.
     const job = readJob(deps.env, sessionId);
     const owner = job.ok ? own(job.value?.current.active ?? {}, toolUseId) : undefined;
-    if (owner?.role === 'executor') {
+    if (owner?.role === 'executor' && terminal) {
       leanWrite(sessionId, job.ok ? (job.value?.current.prompt_id ?? null) : null, (gen) => {
         const reservation = own(gen.active, toolUseId);
         if (!reservation || reservation.role !== 'executor') return gen;
@@ -691,10 +815,14 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     trace?.write('lean_post', {
       ...base,
       released,
-      status: responseStatus(input.tool_response),
+      // An owned executor whose stop the host did not establish: ownership stays, and this says why.
+      release_unconfirmed: owner?.role === 'executor' && !terminal,
+      status,
       observed_model: observedModel(input.tool_response),
       tool_response: whitelistToolResponse(input.tool_response),
-      error_first_line: (input.error ?? '').split('\n')[0]?.slice(0, 200) ?? null,
+      // L1: a closed reason, never the error text. Truncating a message is not redacting it.
+      failure: failed ? (input.is_interrupt === true ? 'interrupted' : input.is_interrupt === false ? 'error' : 'unknown') : null,
+      error_len: failed ? (input.error ?? '').length : null,
       is_interrupt: input.is_interrupt ?? null,
       duration_ms: input.duration_ms ?? null,
     });
@@ -1711,7 +1839,7 @@ const isMainModule = (): boolean => {
 };
 
 if (isMainModule()) {
-  runHook({ stdin: process.stdin, env: process.env, argv: process.argv })
+  runHook({ stdin: process.stdin, env: process.env, argv: process.argv, startedAt: performance.timeOrigin })
     .then((result) => {
       if (result.stdout !== null) process.stdout.write(result.stdout + '\n');
       if (result.code) process.stderr.write(`jev-gate: ${result.code}\n`);

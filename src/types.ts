@@ -326,10 +326,11 @@ export interface JobGeneration {
 export interface LeanPending {
   /**
    * `pending` was registered before the call and never answered; `native` was decided and is not dispatchable;
-   * `proposed` carries a packet. Repeated delivery of the same request reads this instead of spending again, and a
-   * later request reads it to record whether a recommendation was taken.
+   * `proposed` carries a packet; `dispatched` is a packet one executor call consumed, kept with its packet emptied
+   * so the same request cannot be admitted or applied again (L5). Repeated delivery of the same request reads this
+   * instead of spending again, and a later request reads it to record whether a recommendation was taken.
    */
-  outcome: 'pending' | 'native' | 'proposed';
+  outcome: 'pending' | 'native' | 'proposed' | 'dispatched';
   marker: string;
   packet: string;
   packet_sha256: string;
@@ -337,6 +338,12 @@ export interface LeanPending {
   epoch: string;
   prefix_digest: string;
   cwd: string | null;
+  /**
+   * The canonical working tree the packet was built in: the real path of the nearest directory holding `.git`. A
+   * dispatch from another tree is stale; one from a subdirectory of the same tree is not. Absent on state written
+   * before the field existed; such a packet is treated as stale rather than bound on `cwd` alone.
+   */
+  worktree?: string | null;
   omitted_groups: number;
   retained_groups: number;
   created_at: string;
@@ -380,6 +387,14 @@ export type SkipCode =
   | 'source_unavailable'
   | 'source_lineage_unknown'
   | 'source_bounded'
+  /** A complete record that does not decode or parse, or one identity with two contents: corruption, not noise. */
+  | 'source_corrupt'
+  /** A record form or provenance the source adapter has not seen, or content it cannot carry (an image, a document). */
+  | 'source_unsupported'
+  /** The transcript, a record in it, or the request's own record belongs to a different session or request. */
+  | 'source_identity_mismatch'
+  /** Local work left too little of the hook's own time for the provider call; nothing was sent. */
+  | 'deadline_exhausted'
   | 'mandatory_overflow'
   | 'mandatory_unsafe'
   | 'host_unsupported'
@@ -460,7 +475,9 @@ export type DenyReason =
   /** JGL-01: an owned executor call whose marker resolves to no current packet is not an executable task. */
   | 'marker_unresolved'
   | 'marker_stale'
-  | 'executor_active';
+  | 'executor_active'
+  /** JGL-01 (L5): an owned marker whose dispatch could not be recorded is declined, never passed through half-applied. */
+  | 'reservation_failed';
 
 export type StateCode = 'state_corrupt' | 'state_too_large' | 'state_locked' | 'state_symlink' | 'state_write_failed';
 
