@@ -167,6 +167,41 @@ describe('root effort', () => {
     expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root', skipped: 'key_missing' }));
   });
 
+  it('forwards a step that could never be routed without waiting for the key', async () => {
+    const router = createRouter(configOf(EFFORT_ONLY));
+    const f = fakeEngine();
+    f.engine.envKey = () => new Promise(() => {});
+    router.turnStart({ turnId: 't1', text: TEXT });
+    const n = streamNext<TurnStepEvent>();
+    await drain(router.turnStep(f.engine, step({ effort: 12_000 }), n.next));
+    expect(n.calls).toEqual([step({ effort: 12_000 })]);
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root', skipped: 'nothing_to_change' }));
+  });
+
+  it('ends a stalled pins or allowlist read when its turn is retired, at the first step or a later one', async () => {
+    const stall = (): Promise<never> => new Promise(() => {});
+    const cases: Array<[string, (f: ReturnType<typeof fakeEngine>) => void, number]> = [
+      ['pins, assessing', (f) => void (f.engine.pins = stall), 0],
+      ['allowlist, assessing', (f) => void (f.engine.availableModels = stall), 0],
+      ['pins, applying', (f) => void (f.engine.pins = stall), 1],
+      ['allowlist, applying', (f) => void (f.engine.availableModels = stall), 1],
+    ];
+    for (const [label, stalled, index] of cases) {
+      const router = createRouter(configOf({ ...MODEL_ONLY, routeMainEffort: true }), SWITCHES);
+      const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', 0.95], effort: ['low', 0.95] }) });
+      router.turnStart({ turnId: 't1', text: TEXT });
+      if (index === 1) await drain(router.turnStep(f.engine, step({ model: 'claude-sonnet-5' }), streamNext<TurnStepEvent>().next));
+      stalled(f);
+      const e = step({ model: 'claude-sonnet-5', index });
+      const n = streamNext<TurnStepEvent>();
+      const run = drain(router.turnStep(f.engine, e, n.next));
+      await settle();
+      router.turnComplete({ turnId: 't1' });
+      await run;
+      expect(n.calls, label).toEqual([e]);
+    }
+  });
+
   it('stops waiting for a pending key once its turn is retired, and sends nothing for it', async () => {
     const router = createRouter(configOf(EFFORT_ONLY));
     const key = deferred<string | undefined>();
@@ -833,6 +868,16 @@ describe('spawn model', () => {
     await bare.agentSpawn(g.engine, spawn(), m.next);
     expect(m.calls).toEqual([spawn()]);
     expect(g.logs).toContainEqual(expect.objectContaining({ event: 'spawn', skipped: 'key_missing' }));
+  });
+
+  it('forwards a spawn that could never be routed without waiting for the key', async () => {
+    const router = createRouter(configOf(SPAWN_ONLY));
+    const f = fakeEngine();
+    f.engine.envKey = () => new Promise(() => {});
+    const n = spawnNext();
+    await router.agentSpawn(f.engine, spawn({ subagentType: 'code-reviewer' }), n.next);
+    expect(n.calls).toEqual([spawn({ subagentType: 'code-reviewer' })]);
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn', skipped: 'type_unverified' }));
   });
 
   it('never logs a spawn type it does not route, which is caller text', async () => {

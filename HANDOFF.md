@@ -48,6 +48,10 @@ The sixth review (`009ab1d`) found that an unrouted spawn type, which is caller 
 pending key read held an abandoned spawn and was read only after the optional reads. Unrouted types are logged as
 `other`. The key is read first, once per session, and each caller waits on it only as long as its turn or dispatch.
 
+The seventh review (`6810ead`) found the key wait delayed calls that could never be routed, and that a retired root
+turn still waited on its pins and allowlist reads. Checks the event and configuration decide alone now come before the
+key rather than after it, and every root read ends with its turn or dispatch.
+
 ## 2026-09-25 — the PR #37 review (L1–L7) is fixed in code; `lean` is still unmeasured
 
 The consolidated review of `e444a4d` asked for seven changes before recommending `lean`. All seven are now in code

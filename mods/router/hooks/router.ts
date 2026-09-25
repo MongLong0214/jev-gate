@@ -125,6 +125,11 @@ const sharedRead = <T>(p: Promise<T>): ((signal: AbortSignal) => Promise<T | typ
   };
 };
 
+/** Thrown when a wait ends with its turn, dispatch or session; the call then stays native. */
+const ENDED = Symbol('ended');
+
+const NO_ROOT_PINS = { mainModel: false, mainEffort: false } as const;
+
 const until = <T>(p: Promise<T>, signal: AbortSignal): Promise<T | typeof ABORTED> => {
   if (signal.aborted) return Promise.resolve(ABORTED);
   return new Promise((resolve) => {
@@ -141,6 +146,12 @@ const until = <T>(p: Promise<T>, signal: AbortSignal): Promise<T | typeof ABORTE
       },
     );
   });
+};
+
+const within = async <T>(p: Promise<T>, live: AbortSignal): Promise<T> => {
+  const r = await until(p, live);
+  if (r === ABORTED) throw ENDED;
+  return r;
 };
 
 /** A signal that aborts when any of `signals` does. `dispose` detaches it once the wait it served is over. */
@@ -288,27 +299,45 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     turnTexts.delete(turnId);
   };
 
+  /** What a root turn could be asked, under these pins and allowlist. */
+  const rootDims = (
+    baseline: Baseline,
+    pins: { mainModel: boolean; mainEffort: boolean },
+    available: readonly string[] | undefined,
+  ): { dims: MutableDimensions; opts: PolicyOptions; withheld?: string } => {
+    const opts = policy('root', available);
+    const efforts = config.routeMainEffort && !pins.mainEffort ? offerableEfforts(baseline, 'root') : null;
+    const offer = config.routeMainModel && !pins.mainModel ? offerableTiers(baseline, opts, efforts) : null;
+    return { dims: { tiers: offer && 'tiers' in offer ? offer.tiers : null, efforts }, opts, ...(offer && 'reason' in offer ? { withheld: offer.reason } : {}) };
+  };
+
   const rootAssessment = async (engine: RouterEngine, turnId: string, t: TurnRouting, text: string): Promise<void> => {
     let outcome: Assessed;
     let withheld: string | undefined;
+    // Every wait here ends when the turn is retired.
+    const live = t.controller.signal;
     try {
-      // The key comes first: without one nothing optional is read, and a retired turn stops waiting for it.
-      const key = await keyFor(engine, t.controller.signal);
-      if (key === ABORTED) outcome = { kind: 'skipped', reason: 'turn_retired' };
-      else if (!('key' in key)) outcome = { kind: 'skipped', reason: key.reason };
-      else {
-        const pins = await pinsOf(engine);
-        const routeModel = config.routeMainModel && !pins.mainModel;
-        const available = routeModel ? await engine.availableModels().catch(() => []) : undefined;
-        const opts = policy('root', available);
-        const efforts = config.routeMainEffort && !pins.mainEffort ? offerableEfforts(t.baseline, 'root') : null;
-        const offer = routeModel ? offerableTiers(t.baseline, opts, efforts) : null;
-        if (offer && 'reason' in offer) withheld = offer.reason;
-        const dims: MutableDimensions = { tiers: offer && 'tiers' in offer ? offer.tiers : null, efforts };
-        outcome = await assess(engine, key.key, { scope: 'root', text }, t.baseline, dims, opts, t.controller.signal, { scope: 'root', turn: turnId });
+      // Pins and the allowlist can only narrow what the event and configuration allow, so a turn with nothing to ask
+      // even without them never waits for the key or a read.
+      const ceiling = rootDims(t.baseline, NO_ROOT_PINS, undefined);
+      if (!buildQuestions(ceiling.dims)) {
+        withheld = ceiling.withheld;
+        outcome = { kind: 'skipped', reason: 'nothing_to_change' };
+      } else {
+        // The key comes next: without one nothing optional is read.
+        const key = await keyFor(engine, live);
+        if (key === ABORTED) throw ENDED;
+        if (!('key' in key)) outcome = { kind: 'skipped', reason: key.reason };
+        else {
+          const pins = await within(pinsOf(engine), live);
+          const available = config.routeMainModel && !pins.mainModel ? await within(engine.availableModels().catch(() => []), live) : undefined;
+          const r = rootDims(t.baseline, pins, available);
+          withheld = r.withheld;
+          outcome = await assess(engine, key.key, { scope: 'root', text }, t.baseline, r.dims, r.opts, live, { scope: 'root', turn: turnId });
+        }
       }
-    } catch {
-      outcome = { kind: 'skipped', reason: 'internal_error' };
+    } catch (err) {
+      outcome = { kind: 'skipped', reason: err === ENDED ? 'turn_retired' : 'internal_error' };
     }
     // A turn retired while this was in flight keeps its native parameters; a late answer reaches no other turn.
     if (!t.stopped && outcome.kind === 'assessed') t.patch = outcome.patch;
@@ -328,7 +357,7 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
    * The stored patch for this step, or null. Incoming values that differ from the baseline win for the rest of the
    * turn, and so does a pin set since the decision.
    */
-  const applyStored = async (engine: RouterEngine, t: TurnRouting, e: TurnStepEvent): Promise<RoutingPatch | null> => {
+  const applyStored = async (engine: RouterEngine, t: TurnRouting, e: TurnStepEvent, live: AbortSignal): Promise<RoutingPatch | null> => {
     if (t.stopped) return null;
     if (e.model !== t.baseline.model || e.effort !== t.baseline.effort) {
       t.stopped = true;
@@ -337,9 +366,9 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     }
     // The allowlist is read before the pins, so a pin is the last thing read before next: one set during an earlier
     // await still takes effect.
-    const stored = !t.modelStopped ? t.patch.model : undefined;
-    const allowed = stored !== undefined ? await engine.availableModels().catch(() => []) : undefined;
-    const pins = await pinsOf(engine);
+    const storedModel = !t.modelStopped ? t.patch.model : undefined;
+    const allowed = storedModel !== undefined ? await within(engine.availableModels().catch(() => []), live) : undefined;
+    const pins = await within(pinsOf(engine), live);
     if (t.stopped) return null;
     if (pins.mainModel && !t.modelStopped && t.patch.model !== undefined) {
       t.modelStopped = true;
@@ -349,7 +378,7 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
       t.effortStopped = true;
       log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: 'effort_pinned' });
     }
-    if (!t.modelStopped && stored !== undefined && !allowedBy(stored, allowed)) {
+    if (!t.modelStopped && storedModel !== undefined && !allowedBy(storedModel, allowed)) {
       t.modelStopped = true;
       log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: 'model_not_allowed' });
     }
@@ -370,10 +399,19 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
 
   /** A patch, with the turn it was stored on: next is given it only while that turn is still the live one. */
   type Prepared = { patch: RoutingPatch; turn: TurnRouting };
-  const stored = async (engine: RouterEngine, t: TurnRouting, e: TurnStepEvent): Promise<Prepared | null> => {
+  /** Its reads end with the turn or the dispatch, and then the step goes on native. */
+  const stored = async (engine: RouterEngine, t: TurnRouting, e: TurnStepEvent, signal: AbortSignal): Promise<Prepared | null> => {
     if (turns.get(e.turnId) !== t) return null;
-    const patch = await applyStored(engine, t, e);
-    return patch ? { patch, turn: t } : null;
+    const live = linked(signal, t.controller.signal);
+    try {
+      const patch = await applyStored(engine, t, e, live.signal);
+      return patch ? { patch, turn: t } : null;
+    } catch (err) {
+      if (err === ENDED) return null;
+      throw err;
+    } finally {
+      live.dispose();
+    }
   };
 
   const prepareStep = async (engine: RouterEngine, e: TurnStepEvent, signal: AbortSignal): Promise<Prepared | null> => {
@@ -382,7 +420,7 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     if (known) {
       // A later step of this turn, or the same first step dispatched again while its assessment is pending.
       if (known.pending && (await until(known.pending, signal)) === ABORTED) return null;
-      return await stored(engine, known, e);
+      return await stored(engine, known, e, signal);
     }
     // Routing never starts halfway through a turn.
     if (e.index !== 0) return null;
@@ -406,7 +444,7 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     }
     t.pending = rootAssessment(engine, e.turnId, t, text);
     if ((await until(t.pending, signal)) === ABORTED) return null;
-    return await stored(engine, t, e);
+    return await stored(engine, t, e, signal);
   };
 
   /**
@@ -507,35 +545,31 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     return outcome.patch.model ?? null;
   };
 
-  /** Thrown when a wait ends with its dispatch or session; the spawn then stays native. */
-  const ENDED = Symbol('ended');
-  const within = async <T>(p: Promise<T>, live: AbortSignal): Promise<T> => {
-    const r = await until(p, live);
-    if (r === ABORTED) throw ENDED;
-    return r;
-  };
-
   const spawnDecision = async (engine: RouterEngine, e: SpawnEvent, live: AbortSignal): Promise<string | null> => {
     if (!spawnEnabled) return null;
     // Native ignores a fork's model and inherits the parent's context and model.
     if (e.fork) return spawnSkip(engine, e, 'fork');
     if (e.model !== undefined && e.model.trim() !== '') return spawnSkip(engine, e, 'explicit_model');
     void diagnose(engine);
-    // The key comes first: without one nothing optional is read.
+    // What the event, configuration and offer cache decide comes before any wait.
+    if (!INHERITING_BUILT_INS.has(e.subagentType)) return spawnSkip(engine, e, 'type_unverified');
+    // A user's or a plugin's agent can carry a built-in's name; only the listing's own source says which one runs.
+    if (offers.get(e.subagentType) !== true || e.provider.plugin !== 'engine' || e.provider.tier !== 'core') return spawnSkip(engine, e, 'definition_unverified');
+    const family = factsOf(e.parentModel)?.family;
+    if (e.subagentType === 'Explore' && (family === undefined || !EXPLORE_FAMILIES.has(family))) return spawnSkip(engine, e, 'baseline_unknown');
+    if (LEAN_MARKER.test(e.prompt) || LEAN_MARKER.test(e.description)) return spawnSkip(engine, e, 'lean_marker');
+    const baseline: Baseline = { model: e.parentModel };
+    // The allowlist can only narrow this.
+    const ceiling = offerableTiers(baseline, policy('spawn', undefined));
+    if ('reason' in ceiling) return spawnSkip(engine, e, ceiling.reason);
+    // The key comes next: without one nothing optional is read.
     const key = await keyFor(engine, live);
     if (key === ABORTED) throw ENDED;
     if (!('key' in key)) return spawnSkip(engine, e, key.reason);
     const pins = await within(pinsOf(engine), live);
     if (pins.subagentModel) return spawnSkip(engine, e, 'subagent_model_pinned');
     if (pins.aliasRemap) return spawnSkip(engine, e, 'alias_remapped');
-    if (!INHERITING_BUILT_INS.has(e.subagentType)) return spawnSkip(engine, e, 'type_unverified');
-    // A user's or a plugin's agent can carry a built-in's name; only the listing's own source says which one runs.
-    if (offers.get(e.subagentType) !== true || e.provider.plugin !== 'engine' || e.provider.tier !== 'core') return spawnSkip(engine, e, 'definition_unverified');
     if ((await within(engine.hostBase().catch(() => undefined), live)) !== VERIFIED_HOST) return spawnSkip(engine, e, 'host_unverified');
-    const family = factsOf(e.parentModel)?.family;
-    if (e.subagentType === 'Explore' && (family === undefined || !EXPLORE_FAMILIES.has(family))) return spawnSkip(engine, e, 'baseline_unknown');
-    if (LEAN_MARKER.test(e.prompt) || LEAN_MARKER.test(e.description)) return spawnSkip(engine, e, 'lean_marker');
-    const baseline: Baseline = { model: e.parentModel };
     const opts = policy('spawn', await within(engine.availableModels().catch(() => []), live));
     const offer = offerableTiers(baseline, opts);
     if ('reason' in offer) return spawnSkip(engine, e, offer.reason);
