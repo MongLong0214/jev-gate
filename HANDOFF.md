@@ -4,6 +4,16 @@ Everything below is what was actually observed, with the file that proves it. Th
 overstated claims from the original write-up; this one adds the 2026-09-19 measurements, which override several
 figures below and are marked where they do.
 
+## 2026-09-25 — the standalone Router (#40–#43) is in `mods/router`; nothing is observed on a host
+
+`mods/router` is a Function Hooks plugin, `jev-gate-router`, off by default. When enabled, it asks Jev once per root
+turn about effort (and, if allowed, model), and once per inheriting built-in spawn about its model. Everything it
+leaves native, and why, is in `mods/router/README.md`. The offline tests drive every path through the real modules
+with fake HTTP, including `register.ts` with a fake `$`. The host's own kit only confirms the default is off, because
+it cannot set plugin options. `pack --profile router` builds the archive, and `claude plugin validate --strict`
+accepts it unpacked. No routed turn or spawn has been observed on an installed host, and no saving is claimed.
+Composing it with Lean is #44 part B.
+
 ## 2026-09-25 — the PR #37 review (L1–L7) is fixed in code; `lean` is still unmeasured
 
 The consolidated review of `e444a4d` asked for seven changes before recommending `lean`. All seven are now in code
@@ -141,7 +151,8 @@ HTTP.
 - **A record still being written at the prompt declines.** If the host is mid-write when the prompt hook reads, that
   turn stays native (`source_incomplete`) rather than dropping a record it cannot see.
 - **Router composition is not tested.** L1's re-screening at composition and L6's "Router + Lean without double
-  counting" wait for the Router (#38–#44). No Router code exists on this branch.
+  counting" wait for #44 part B. The standalone Router (#40–#43) is in `mods/router`, and it leaves every spawn that
+  carries a Lean marker native (`lean_marker`) until composition is built.
 - **No 402 circuit breaker.** An exhausted TypeSafe balance surfaces as `http_other`, once per request, and lean
   falls back natively each time. A breaker belongs in the bounded direct adapter (#40), not in lean.
 

@@ -121,7 +121,7 @@ const sha256 = (s: string): string => createHash('sha256').update(s, 'utf8').dig
  * escaping. This is a guard against the obvious, not a privacy guarantee and not universal detection: private
  * non-secret source still leaves the machine when lean is explicitly enabled.
  */
-const SECRET_PATTERNS: readonly RegExp[] = [
+export const SECRET_PATTERNS: readonly RegExp[] = [
   /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
   /\bsk-[A-Za-z0-9_-]{16,}/,
   /\bgh[pousr]_[A-Za-z0-9]{20,}/,

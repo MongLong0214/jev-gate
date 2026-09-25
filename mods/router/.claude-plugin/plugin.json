@@ -1,0 +1,91 @@
+{
+  "name": "jev-gate-router",
+  "version": "0.1.0",
+  "description": "Routes each request's Claude model and effort with one TypeSafe Jev assessment; off by default, native on any doubt.",
+  "author": {
+    "name": "MongLong0214",
+    "url": "https://github.com/MongLong0214"
+  },
+  "repository": "https://github.com/MongLong0214/jev-gate",
+  "keywords": ["typesafe", "jev", "routing", "function-hooks"],
+  "userConfig": {
+    "enabled": {
+      "title": "Enable the Router",
+      "description": "Off registers no hook at all. Every request keeps its native model and effort.",
+      "type": "boolean",
+      "default": false
+    },
+    "routeSubagentModel": {
+      "title": "Route subagent models",
+      "description": "Choose the model of an inheriting built-in subagent (general-purpose, claude, Plan, Explore) that names none.",
+      "type": "boolean",
+      "default": true
+    },
+    "routeMainEffort": {
+      "title": "Route main-thread effort",
+      "description": "Choose the effort of the main thread's requests, per turn.",
+      "type": "boolean",
+      "default": true
+    },
+    "routeMainModel": {
+      "title": "Route main-thread model",
+      "description": "Choose the model of the main thread's requests, per turn. Off by default.",
+      "type": "boolean",
+      "default": false
+    },
+    "typesafeApiKey": {
+      "title": "TypeSafe API key",
+      "description": "Used only in the Authorization header of the assessment request. Blank reads TYPESAFE_API_KEY from the environment.",
+      "type": "string",
+      "sensitive": true
+    },
+    "fastModel": {
+      "title": "Fast profile model",
+      "description": "Alias or exact model ID for the fast profile.",
+      "type": "string",
+      "default": "haiku"
+    },
+    "standardModel": {
+      "title": "Standard profile model",
+      "description": "Alias or exact model ID for the standard profile.",
+      "type": "string",
+      "default": "sonnet"
+    },
+    "deepModel": {
+      "title": "Deep profile model",
+      "description": "Alias or exact model ID for the deep profile.",
+      "type": "string",
+      "default": "opus"
+    },
+    "frontierModel": {
+      "title": "Frontier profile model",
+      "description": "Exact model ID for the frontier profile. Blank leaves the profile unconfigured.",
+      "type": "string",
+      "default": ""
+    },
+    "minUpgradeConfidence": {
+      "title": "Upgrade confidence floor",
+      "description": "Least confidence, 0.5 to 1, for a move to a stronger model or a higher effort.",
+      "type": "number",
+      "default": 0.8
+    },
+    "minDowngradeConfidence": {
+      "title": "Downgrade confidence floor",
+      "description": "Least confidence, 0.5 to 1, for a move to a weaker model or a lower effort.",
+      "type": "number",
+      "default": 0.9
+    },
+    "timeoutMs": {
+      "title": "Assessment wait (ms)",
+      "description": "How long a request waits for the assessment, 50 to 30000. Past it the request runs natively.",
+      "type": "number",
+      "default": 800
+    },
+    "logDecisions": {
+      "title": "Log decisions",
+      "description": "Write one metadata-only line per decision to the debug log. Never task text or the key.",
+      "type": "boolean",
+      "default": true
+    }
+  }
+}
