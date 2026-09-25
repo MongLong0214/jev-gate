@@ -356,8 +356,9 @@ export interface JobState {
   current: JobGeneration;
   history: JobGeneration[];
   /**
-   * Lean request identities this session has admitted, newest first and bounded. A lean registration overwrites
-   * `current`, so without this an older request redelivered after a newer one would look new and be paid for again.
+   * Lean request identities this session has admitted, newest first and never evicted (LEAN_SEEN_MAX, then
+   * `lean_seen_full`). A lean registration overwrites `current`, so without this an older request redelivered after a
+   * newer one would look new and be paid for again.
    */
   lean_seen?: string[];
 }
@@ -415,6 +416,8 @@ export type SkipCode =
   | 'scope_forbidden'
   | 'no_effect'
   | 'duplicate_request'
+  /** The session already holds LEAN_SEEN_MAX lean prompt identities; admitting another would mean forgetting one. */
+  | 'lean_seen_full'
   | 'packet_overflow'
   | 'source_changed';
 

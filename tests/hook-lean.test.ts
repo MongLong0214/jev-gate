@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 
 import { runHook, type HookDeps, type HookResult } from '../src/hook.js';
-import { jobsDir, readJob, updateJob } from '../src/job.js';
+import { jobsDir, LEAN_SEEN_MAX, readJob, updateJob } from '../src/job.js';
 import { COORDINATOR_FRAME, HANDOFF_SCOPE_ANSWERS, RELATION_ANSWERS, WORK_SHAPE_ANSWERS } from '../src/lean.js';
 import { LEAN_EXECUTOR_AGENT } from '../src/types.js';
 import { conversation, type Conversation } from './transcript-fixture.js';
@@ -515,6 +515,26 @@ describe('lean — one request, one attempt (L5)', () => {
     const job = readJob(env, 's1');
     expect(job.ok && job.value?.current.prompt_id).toBe('p2');
     expect(job.ok && job.value?.lean_seen).toEqual(['p2', 'p1']);
+  });
+
+  it('never forgets an admitted identity: a full list declines new lean requests rather than evicting the oldest', async () => {
+    const env = makeEnv();
+    const t = base();
+    const fetchImpl = fakeJev();
+    await run(env, promptEvent(t.path), fetchImpl);
+    const older = Array.from({ length: LEAN_SEEN_MAX - 2 }, (_, i) => `older-${i}`);
+    updateJob(env, 's1', (prev) => (prev ? { ...prev, lean_seen: [...(prev.lean_seen ?? []), ...older] } : null));
+    await run(env, promptEvent(t.path, { prompt_id: 'p2', prompt: 'a different request entirely' }), fetchImpl);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const job = readJob(env, 's1');
+    expect(job.ok && job.value?.lean_seen?.length).toBe(LEAN_SEEN_MAX);
+    // The oldest admitted identity is still there, so its redelivery is still recognised.
+    const replay = await run(env, promptEvent(t.path, { prompt_id: `older-${LEAN_SEEN_MAX - 3}` }), fetchImpl);
+    expect(replay.code).toBe('duplicate_request');
+    const full = await run(env, promptEvent(t.path, { prompt_id: 'p3', prompt: 'a third request' }), fetchImpl);
+    expect(full.code).toBe('lean_seen_full');
+    expect(full.stdout).toBeNull();
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
   it('does not decide a request the transcript already shows a later human turn after', async () => {

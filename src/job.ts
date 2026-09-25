@@ -16,7 +16,12 @@ export const MAX_PLANNER_ATTEMPTS = 2;
 export const MAX_REPLANS = 2;
 export const MAX_TASK_ATTEMPTS = 2;
 export const MAX_HISTORY = 8;
-export const LEAN_SEEN_MAX = 32;
+/**
+ * Every lean prompt identity a session admitted, never evicted: an identity that fell out of this list could be
+ * redelivered after compaction removed its record and be admitted, and charged, a second time. A session that fills
+ * it admits no further lean requests (`lean_seen_full`) and runs natively instead.
+ */
+export const LEAN_SEEN_MAX = 512;
 /** Every rewrite of the state keeps the lean identities it read; only a lean registration adds to them. */
 export const leanSeenOf = (prev: JobState | null | undefined): Pick<JobState, 'lean_seen'> => (prev?.lean_seen ? { lean_seen: prev.lean_seen } : {});
 /**

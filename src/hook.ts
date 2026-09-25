@@ -578,6 +578,11 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         admission.refused = 'duplicate_request';
         return null;
       }
+      // Registering past the bound would have to forget an identity, and a forgotten one can be charged again.
+      if ((prev?.lean_seen?.length ?? 0) >= LEAN_SEEN_MAX) {
+        admission.refused = 'lean_seen_full';
+        return null;
+      }
       // A new prompt cannot certify an old worker canceled; until its terminal event is observed there is no second one.
       if (leanActive(current).length > 0) {
         admission.refused = 'lean_executor_active';
@@ -591,7 +596,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         updated_at: '',
         current: { ...gen, prompt_id: promptId, request: carriedRequest, shape: 'direct', lean: identity },
         history: prev?.history ?? [],
-        lean_seen: [promptId, ...(prev?.lean_seen ?? [])].slice(0, LEAN_SEEN_MAX),
+        lean_seen: [promptId, ...(prev?.lean_seen ?? [])],
       };
     });
     if (admission.refused !== null) return skip(admission.refused);

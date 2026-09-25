@@ -39,8 +39,8 @@ A second review of `299855f` (gpt-6-sol, xhigh, read-only, verdict FIX-FIRST) fo
 Each was checked against the source before it was fixed:
 
 - A credential behind `Authorization: Bearer` or `Basic`, or a bearer token with no conventional prefix, now screens.
-- An older request delivered again after a newer one registered no longer spends a second time. The state keeps the
-  last 32 admitted lean identities (`lean_seen`), and a request whose transcript already shows a later human turn is
+- An older request delivered again after a newer one registered no longer spends a second time. The state keeps
+  every admitted lean identity (`lean_seen`), and a request whose transcript already shows a later human turn is
   `source_changed` before any call.
 - A failed executor call no longer releases ownership, interrupted or not (see the limits below).
 - At the prompt, a transcript that ends inside a record still being written is `source_incomplete`. At dispatch the
@@ -48,6 +48,18 @@ Each was checked against the source before it was fixed:
 - Required context that holds an image the packet cannot carry is `source_unsupported`.
 - A preserved compaction list that repeats an identity is `source_lineage_unknown`.
 - Reference resolution checks the source time bound per token.
+
+A re-review of `b71d227` (gpt-6-sol, xhigh, read-only, verdict FIX-FIRST) confirmed six of those closed and one
+rejection adequate, and found the rest incomplete:
+
+- A literal header credential of any length now screens: `Authorization: Basic dTpw` is a whole credential, and the
+  backtick form is covered. A name, a placeholder or a concatenation (`$TOKEN`, `${token}`, `<token>`, `'Bearer ' +
+  token`) still does not.
+- `lean_seen` evicted after 32 admissions, so an evicted request redelivered after compaction could spend again. It
+  now never evicts: at 512 identities the session declines further lean requests (`lean_seen_full`).
+- The reference time bound now reaches each text, each searched path run and each candidate, not only each token.
+- The host A/B sentence now says the pair is consistent with the packet staying out of root context, which is all one
+  unequal pair shows.
 - Bench: a lean record with no `request_id` is never paired by count. It is unknown and stays out of the known
   subtotal. A row's known subtotal keeps the known legacy spend when the legacy total is incomplete.
 
@@ -55,7 +67,7 @@ One finding was rejected: requiring a preserved list to be a parent chain, or to
 lists in local transcripts, 92 were not parent chains and 89 were not in write order. None repeated an identity. The
 host relinks the list as written, so either check would decline valid sessions. Only the repeat check was added.
 
-Tests: 713 across 28 files. That includes 81 hook, 64 adapter, 38 selection and 34 ingestion tests, all with fake
+Tests: 716 across 28 files. That includes 82 hook, 66 adapter, 38 selection and 34 ingestion tests, all with fake
 HTTP.
 
 **Limits that ship with this, and are not bugs to fix quietly:**
@@ -73,6 +85,10 @@ HTTP.
 - **A failed executor call keeps ownership.** `PostToolUseFailure` says the parent's call ended. It does not say
   whether a child started or stopped, so lean stays off for the rest of that session after any executor failure.
   Only a foreground `completed` result releases.
+- **A long lean session stops admitting.** After 512 admitted lean requests in one session, every further one is
+  `lean_seen_full` and runs natively. Forgetting an identity instead would let its redelivery be charged again.
+- **Prose about auth headers screens as a credential.** "Authorization: Bearer header" has a literal where the value
+  goes, so that group is withheld or the source declines. A false positive costs coverage; a miss sends a credential.
 - **A record still being written at the prompt declines.** If the host is mid-write when the prompt hook reads, that
   turn stays native (`source_incomplete`) rather than dropping a record it cannot see.
 - **Router composition is not tested.** L1's re-screening at composition and L6's "Router + Lean without double
@@ -107,7 +123,7 @@ path at all.
   `claude-sonnet-5`, the worker starts in a fresh context rather than a fork, project `CLAUDE.md` reaches it, the
   9280-byte packet arrives intact, and a marker with no packet produces `handoff_unavailable` with no tool call and
   no file. A controlled A/B settled the economically important one: an 8737-byte difference in the worker's prompt
-  moved root context by 318 tokens, so **the packet is not charged to the root's context window**.
+  moved root context by 318 tokens, **consistent with the packet not being charged to the root's context window**.
   `bench/results/v5-lean-host-2026-09-21/`. *(Scoped 2026-09-25: these ran on the deterministic `recent_packet` path
   with no Jev key, so they say nothing about selection. The echo A/B is one pair on host 2.1.278 with unequal starting
   context, 45,792 against 47,560, and different replies. It is consistent with the packet not reaching root context;

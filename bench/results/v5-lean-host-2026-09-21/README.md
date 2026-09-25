@@ -41,12 +41,13 @@ identical prompts, identical turns; the only difference is whether the hook patc
 | no patch (control) | **543 B** | 47,560 | 48,521 | **961 tok** | 1485 B |
 
 An **8737-byte** difference in what the worker received produced a **318-token** difference in root context — while the
-packet arm's reply was 304 bytes *shorter*. The packet is not charged to the root's context window *(in this one pair on
-one host — scoped below)*.
+packet arm's reply was 304 bytes *shorter*. That is consistent with the packet not being charged to the root's context
+window; one unequal pair does not establish it (scoped below).
 
-> **Scoped, 2026-09-25.** The paragraph above is kept as written. Read it as one pair on one host: the arms started
-> 1,768 tokens apart and the replies differed. That is consistent with the packet not reaching root context on
-> 2.1.278. It does not establish a guarantee for other hosts, call shapes or reply sizes.
+> **Scoped, 2026-09-25.** The sentence above first read "The packet is not charged to the root's context window". Read
+> the pair as one observation on one host: the arms started 1,768 tokens apart and the replies differed. It is
+> consistent with the packet not reaching root context on 2.1.278, and establishes nothing for other hosts, call
+> shapes or reply sizes.
 
 **Caveat that belongs with it:** the full packet *is* written to the root transcript twice, in an `attachment` record
 and in the `toolUseResult.prompt` metadata of the tool-result event. That is disk, not model context. The

@@ -10,6 +10,7 @@ import {
   mandatoryGroups,
   optionalGroups,
   readLeanSource,
+  resolveReferences,
   SOURCE_MAX_BYTES,
   type LeanSource,
   type LeanSourceBinding,
@@ -665,6 +666,21 @@ describe('lean source — bounds, safety and what "unknown" means', () => {
     expect(r.ok === false && r.reason).toBe('source_bounded');
   });
 
+  it('reads the clock before each text, each searched path run and each candidate, not only once per token', () => {
+    let ticks = 0;
+    const candidates = [{ text: 'x.ts here' }, { text: 'y.ts there' }, { text: 'neither' }];
+    const resolved = resolveReferences(['edit x.ts and y.ts', 'no references at all'], candidates, () => {
+      ticks += 1;
+    });
+    expect([...resolved].map((g) => g.text).sort()).toEqual(['x.ts here', 'y.ts there']);
+    // 2 texts + 2 path runs + 2 tokens x 3 candidates. Per token alone would be 2.
+    expect(ticks).toBe(10);
+    const stop = (): void => {
+      throw new Error('bound');
+    };
+    expect(() => resolveReferences(['no references at all'], candidates, stop)).toThrow('bound');
+  });
+
   it('a history cut by the read bound is bounded, not an empty or a guessed conversation', () => {
     const c = session();
     c.human('first', 'p1');
@@ -704,6 +720,18 @@ describe('lean source — bounds, safety and what "unknown" means', () => {
     expect(looksSecret('export TOKEN=1; fetch(url, { headers: { Bearer q7Zt2mVx9LpR4wKs8NcY } })')).toBe(true);
     expect(looksSecret('curl -H "Authorization: Bearer $TOKEN" https://example.test')).toBe(false);
     expect(looksSecret('the bearer of this message carries basic internationalization notes')).toBe(false);
+  });
+
+  it('screens a short literal header credential and the backtick form, but not a name, placeholder or concatenation', () => {
+    // `dTpw` is base64 of `u:p`: short, and still a whole credential.
+    expect(looksSecret('curl -H "Authorization: Basic dTpw" https://example.test')).toBe(true);
+    expect(looksSecret('headers: { Authorization: `Bearer abcdefghijklmnopqrstuvwx` }')).toBe(true);
+    expect(looksSecret("const password = `hunter2hunter2hunter2`;")).toBe(true);
+    expect(looksSecret('headers: { Authorization: `Bearer ${token}` }')).toBe(false);
+    expect(looksSecret("headers: { Authorization: 'Bearer ' + token }")).toBe(false);
+    expect(looksSecret('Authorization: Bearer <token>')).toBe(false);
+    expect(looksSecret('Authorization: Basic {{credentials}}')).toBe(false);
+    expect(looksSecret('set Authorization: Bearer %API_TOKEN% in the script')).toBe(false);
   });
 
   it('enumerates the newest groups under the cap and counts the rest rather than calling them irrelevant', () => {

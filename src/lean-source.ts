@@ -129,10 +129,12 @@ const SECRET_PATTERNS: readonly RegExp[] = [
   /\bxox[baprs]-[A-Za-z0-9-]{10,}/,
   /\bey[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/,
   // A quoted value, or a long unbroken token. `password = readPassword();` is a call, not a credential.
-  /\b(?:authorization|api[_-]?key|access[_-]?token|client[_-]?secret|password|passwd)\b\s*[:=]\s*(?:["'][^"'\s]{12,}["']|[A-Za-z0-9_\-./+=]{16,})/i,
-  // `Authorization: Bearer <token>`: the scheme word sits between the separator and the value, so the line above
-  // never reaches the token. A shell variable (`$TOKEN`) is a name, not a credential.
-  /\bauthorization\b["']?\s*[:=]\s*["']?(?:bearer|basic|token)\s+[^\s"'$]{12,}/i,
+  /\b(?:authorization|api[_-]?key|access[_-]?token|client[_-]?secret|password|passwd)\b\s*[:=]\s*(?:["'`][^"'`\s]{12,}["'`]|[A-Za-z0-9_\-./+=]{16,})/i,
+  // `Authorization: Bearer <value>`: the scheme word sits between the separator and the value, so the line above never
+  // reaches it. Any literal value counts, however short: `Basic dTpw` is a whole credential. What is excluded is a
+  // name or a placeholder (`$TOKEN`, `${token}`, `<token>`, `{{token}}`, `%TOKEN%`) and a concatenation, since none
+  // starts with a token character. Prose that puts a word there ("Authorization: Bearer header") is screened too.
+  /\bauthorization\b["'`]?\s*[:=]\s*["'`]?(?:bearer|basic|token)\s+[A-Za-z0-9_\-.~+/]+/i,
   // A bearer token outside a header line, whatever its prefix. The digit keeps "bearer" in prose from matching.
   /\b[Bb]earer\s+(?=[A-Za-z0-9_\-.~+/]*\d)[A-Za-z0-9_\-.~+/]{16,}/,
 ];
@@ -162,7 +164,7 @@ const PATH_RUN = /[\w@.~/-]+/g;
  */
 const PATH_RUN_MAX = 512;
 
-export const referencesIn = (text: string): string[] => {
+export const referencesIn = (text: string, tick?: () => void): string[] => {
   const out = new Set<string>();
   const add = (m: RegExpMatchArray): void => {
     const token = (m[1] ?? '').trim();
@@ -170,7 +172,10 @@ export const referencesIn = (text: string): string[] => {
   };
   for (const re of REFERENCE_PATTERNS) for (const m of text.matchAll(re)) add(m);
   for (const [run] of text.matchAll(PATH_RUN)) {
-    if (run.length <= PATH_RUN_MAX && run.includes('.')) for (const m of run.matchAll(PATH_REFERENCE)) add(m);
+    if (run.length <= PATH_RUN_MAX && run.includes('.')) {
+      tick?.();
+      for (const m of run.matchAll(PATH_REFERENCE)) add(m);
+    }
   }
   return [...out];
 };
@@ -186,15 +191,28 @@ export const referencesIn = (text: string): string[] => {
 export const resolveReferences = <G extends { text: string }>(
   texts: readonly string[],
   candidates: readonly G[],
-  /** Called before each token is searched for: every token scans every candidate, so the caller's bound has to reach in here. */
+  /**
+   * The caller's bound has to reach every unit of work in here: it is called before each text is read, before each
+   * path run is matched and before each candidate is searched, so no whole text or whole candidate scan runs unchecked.
+   */
   tick?: () => void,
 ): Set<G> => {
   const resolved = new Set<G>();
-  const tokens = new Set(texts.flatMap((t) => referencesIn(t)));
-  for (const token of tokens) {
+  const tokens = new Set<string>();
+  for (const t of texts) {
     tick?.();
-    const hits = candidates.filter((g) => g.text.includes(token));
-    if (hits.length === 1 && hits[0]) resolved.add(hits[0]);
+    for (const r of referencesIn(t, tick)) tokens.add(r);
+  }
+  for (const token of tokens) {
+    let hit: G | null = null;
+    let hits = 0;
+    for (const g of candidates) {
+      tick?.();
+      if (!g.text.includes(token)) continue;
+      hit = g;
+      if (++hits > 1) break;
+    }
+    if (hits === 1 && hit) resolved.add(hit);
   }
   return resolved;
 };
