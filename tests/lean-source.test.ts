@@ -216,11 +216,21 @@ describe('lean source — declining what cannot be established', () => {
     expect(reason(c.write(dir(), lines), 'go')).toBe('source_corrupt');
   });
 
-  it('an unterminated last line is a record still being written, and is left out', () => {
+  it('at the prompt, an unterminated last line may be context this turn needs, so the source is declined', () => {
     const c = base();
     const path = c.write(dir());
+    writeFileSync(path, c.lines().join('\n') + '\n' + '{"type":"user","uuid":"half-written","message":{"content":"예외: 공용 컴포');
+    expect(reason(path, 'go')).toBe('source_incomplete');
+  });
+
+  it('at dispatch, an unterminated last line is this turn’s own output still being written, and is left out', () => {
+    const c = base();
+    c.human('go', NOW);
+    const path = c.write(dir());
     writeFileSync(path, c.lines().join('\n') + '\n' + '{"type":"assistant","uuid":"half-written","message":{"content":[{"type":"te');
-    expect(optionalGroups(ok(path, 'go'))).toHaveLength(1);
+    const s = ok(path, 'go', { phase: 'dispatch' });
+    expect(s.requestRecorded).toBe(true);
+    expect(optionalGroups(s)).toHaveLength(1);
   });
 
   it('a complete record that is not valid UTF-8 is corruption', () => {
@@ -338,6 +348,21 @@ describe('lean source — compaction lineage', () => {
       return JSON.stringify({ ...r, compactMetadata: { trigger: 'auto', preservedMessages: { anchorUuid: 'a', uuids: 'not-a-list' } } });
     });
     expect(reason(c.write(dir(), listBroken), 'go')).toBe('source_lineage_unknown');
+  });
+
+  it('a preserved list that repeats an identity is unknown lineage, and one out of write order is not', () => {
+    const { c } = partial('list');
+    const rewrite = (fn: (uuids: string[]) => string[]): string[] =>
+      c.lines().map((l) => {
+        const r = JSON.parse(l) as Record<string, unknown>;
+        if (r['subtype'] !== 'compact_boundary') return l;
+        const meta = r['compactMetadata'] as { preservedMessages: { anchorUuid: string; uuids: string[] } };
+        return JSON.stringify({ ...r, compactMetadata: { ...meta, preservedMessages: { ...meta.preservedMessages, uuids: fn(meta.preservedMessages.uuids) } } });
+      });
+    const r = readLeanSource(c.write(dir(), rewrite((u) => [...u, u[0] as string])), bind('go'));
+    expect(r.ok === false && [r.reason, r.detail]).toEqual(['source_lineage_unknown', 'the preserved message list repeats an identity']);
+    // Measured: real lists are mostly neither parent chains nor in write order, and the host relinks them as listed.
+    expect(ok(c.write(dir(), rewrite((u) => [...u].reverse())), 'go').epoch).toMatch(/^compact:/);
   });
 
   it('an anchor that is not the compaction summary is unknown lineage', () => {
@@ -470,6 +495,17 @@ describe('lean source — real interaction identity', () => {
     expect(texts(s)).toContain('[tool_reference Edit]');
     c.call('Read', { file_path: 'x.pdf' }, '', { content: [{ type: 'document', source: {} }] });
     expect(reason(c.write(dir()), 'go')).toBe('source_unsupported');
+  });
+
+  it('declines when the request makes a result carrying an image required context', () => {
+    const c = session();
+    c.human('look', 'p1');
+    c.call('Read', { file_path: 'shot.png' }, '', { content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AA==' } }] });
+    c.call('Read', { file_path: 'notes.md' }, 'unrelated notes');
+    const path = c.write(dir());
+    expect(optionalGroups(ok(path, 'go'))).toHaveLength(2);
+    const r = readLeanSource(path, bind('`shot.png` 처럼 맞춰줘'));
+    expect(r.ok === false && [r.reason, r.detail]).toEqual(['source_unsupported', 'required context carries an image that is not carried']);
   });
 });
 
@@ -613,6 +649,22 @@ describe('lean source — bounds, safety and what "unknown" means', () => {
     expect(r.ok === false && r.reason).toBe('source_bounded');
   });
 
+  it('the time bound reaches reference resolution: a request naming many things cannot run past it', () => {
+    const c = session();
+    c.human('first', 'p1');
+    c.call('Read', { file_path: 'a.ts' }, 'body');
+    const path = c.write(dir());
+    // Each clock read costs 3 ms, so only work that reads the clock per step can exhaust 400 ms.
+    const slow = (): (() => number) => {
+      let n = 0;
+      return () => (n += 3);
+    };
+    expect(readLeanSource(path, bind('go'), { now: slow() }).ok).toBe(true);
+    const many = Array.from({ length: 200 }, (_, i) => `\`symbol${i}\``).join(' ');
+    const r = readLeanSource(path, bind(many), { now: slow() });
+    expect(r.ok === false && r.reason).toBe('source_bounded');
+  });
+
   it('a history cut by the read bound is bounded, not an empty or a guessed conversation', () => {
     const c = session();
     c.human('first', 'p1');
@@ -642,6 +694,16 @@ describe('lean source — bounds, safety and what "unknown" means', () => {
     expect(looksSecret('password = "hunter2hunter2hunter2"')).toBe(true);
     expect(looksSecret('const password = readPassword();')).toBe(false);
     expect(looksSecret('the sk- prefix is how those keys start')).toBe(false);
+  });
+
+  it('screens a bearer or basic credential whose token has no conventional prefix', () => {
+    // Fake values: neither is a credential anywhere.
+    expect(looksSecret('curl -H "Authorization: Bearer q7Zt2mVx9LpR4wKs8NcY" https://example.test')).toBe(true);
+    expect(looksSecret('{"Authorization": "Basic dGVzdG9ubHk6bm90YWtleQ=="}')).toBe(true);
+    expect(looksSecret('authorization=token Xk3pQ9rT5vW2yZ8m')).toBe(true);
+    expect(looksSecret('export TOKEN=1; fetch(url, { headers: { Bearer q7Zt2mVx9LpR4wKs8NcY } })')).toBe(true);
+    expect(looksSecret('curl -H "Authorization: Bearer $TOKEN" https://example.test')).toBe(false);
+    expect(looksSecret('the bearer of this message carries basic internationalization notes')).toBe(false);
   });
 
   it('enumerates the newest groups under the cap and counts the rest rather than calling them irrelevant', () => {

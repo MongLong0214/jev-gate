@@ -423,9 +423,29 @@ describe('L6: every charged producer reaches the final report, once', () => {
     expect(summarizeArm('jev_lean', [row]).jev_cost_known_subtotal).toBeCloseTo(0.125, 6);
   });
 
+  it('keeps the known legacy spend in the row subtotal when the legacy total is incomplete', () => {
+    const cell = JSON.parse(JSON.stringify(leanCell([leanIntent('q1'), leanResult('q1')], 'l6-legacy-known'))) as Record<string, unknown>;
+    cell['gate'] = { ...(cell['gate'] as Record<string, unknown>), jev_cost_usd: null, jev_input_tokens: null, jev_input_tokens_known: LEAN_TOKENS, jev_model: 'jev-1.13.0' };
+    const row = toRowView(planned, cell);
+    expect(row.jev_cost_usd).toBeNull();
+    expect(row.jev_cost_by_producer.legacy).toBeNull();
+    expect(row.jev_cost_known_subtotal).toBeCloseTo(0.25, 6);
+  });
+
   it('counts a result with no intent of its own, and collapses a repeated record of one request', () => {
     const cell = leanCell([leanResult('q1'), leanResult('q1'), leanIntent('q2'), leanIntent('q2'), leanResult('q2')], 'l6-dup');
     expect(cell.lean).toMatchObject({ jev_attempts: 2, jev_attempt_unknown: 0, duplicate_records: 2, jev_input_tokens: 2 * LEAN_TOKENS });
+  });
+
+  it('never pairs records without a request identity by count: each is unknown and outside the known subtotal', () => {
+    const keyless = (r: Record<string, unknown>): Record<string, unknown> => {
+      const { request_id: _drop, ...rest } = r;
+      return rest;
+    };
+    // One lost result and one repeated result: paired by count, these two intents and two results would balance.
+    const cell = leanCell([leanIntent('q1'), leanResult('q1'), keyless(leanIntent('x')), keyless(leanIntent('y')), keyless(leanResult('y')), keyless(leanResult('y'))], 'l6-keyless');
+    expect(cell.lean).toMatchObject({ jev_attempts: 1, jev_attempt_unknown: 4, jev_input_tokens: null, jev_cost_usd: null, jev_input_tokens_known: LEAN_TOKENS });
+    expect(cell.lean.jev_cost_known_subtotal).toBeCloseTo(0.125, 6);
   });
 
   it('a confirmed local no-send is zero, and a timeout without usage keeps the total unknown', () => {

@@ -89,7 +89,13 @@ export interface LeanSource {
 
 export type LeanSourceReason = Extract<
   SkipCode,
-  'source_unavailable' | 'source_lineage_unknown' | 'source_bounded' | 'source_corrupt' | 'source_unsupported' | 'source_identity_mismatch'
+  | 'source_unavailable'
+  | 'source_lineage_unknown'
+  | 'source_bounded'
+  | 'source_corrupt'
+  | 'source_incomplete'
+  | 'source_unsupported'
+  | 'source_identity_mismatch'
 >;
 
 export type LeanSourceOutcome =
@@ -124,6 +130,11 @@ const SECRET_PATTERNS: readonly RegExp[] = [
   /\bey[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/,
   // A quoted value, or a long unbroken token. `password = readPassword();` is a call, not a credential.
   /\b(?:authorization|api[_-]?key|access[_-]?token|client[_-]?secret|password|passwd)\b\s*[:=]\s*(?:["'][^"'\s]{12,}["']|[A-Za-z0-9_\-./+=]{16,})/i,
+  // `Authorization: Bearer <token>`: the scheme word sits between the separator and the value, so the line above
+  // never reaches the token. A shell variable (`$TOKEN`) is a name, not a credential.
+  /\bauthorization\b["']?\s*[:=]\s*["']?(?:bearer|basic|token)\s+[^\s"'$]{12,}/i,
+  // A bearer token outside a header line, whatever its prefix. The digit keeps "bearer" in prose from matching.
+  /\b[Bb]earer\s+(?=[A-Za-z0-9_\-.~+/]*\d)[A-Za-z0-9_\-.~+/]{16,}/,
 ];
 
 export const looksSecret = (text: string): boolean => SECRET_PATTERNS.some((re) => re.test(text));
@@ -172,10 +183,16 @@ export const referencesIn = (text: string): string[] => {
  * The candidates must be the whole inventory in view, before any group is withheld or cut by the window (L4): a
  * reference resolved against what survived eviction can look unique when it was not, or miss what it named.
  */
-export const resolveReferences = <G extends { text: string }>(texts: readonly string[], candidates: readonly G[]): Set<G> => {
+export const resolveReferences = <G extends { text: string }>(
+  texts: readonly string[],
+  candidates: readonly G[],
+  /** Called before each token is searched for: every token scans every candidate, so the caller's bound has to reach in here. */
+  tick?: () => void,
+): Set<G> => {
   const resolved = new Set<G>();
   const tokens = new Set(texts.flatMap((t) => referencesIn(t)));
   for (const token of tokens) {
+    tick?.();
     const hits = candidates.filter((g) => g.text.includes(token));
     if (hits.length === 1 && hits[0]) resolved.add(hits[0]);
   }
@@ -245,19 +262,25 @@ const DECODER = new TextDecoder('utf-8', { fatal: true });
 
 /**
  * Complete records only. A tail read starts inside a record, so everything up to the first newline is dropped; an
- * unterminated last line is a record the host is still writing, so it is left out rather than parsed. Anything
- * between those two edges is a complete record, and one that does not decode or parse is corruption, not noise:
- * silently skipping it could delete a user constraint.
+ * unterminated last line is a record the host is still writing, so it is left out rather than parsed, and reported
+ * as `partialTail` so a caller that cannot tell what it held can decline. Anything between those two edges is a
+ * complete record, and one that does not decode or parse is corruption, not noise: silently skipping it could
+ * delete a user constraint.
  */
-const parseRecords = (buf: Buffer, complete: boolean, clock: Clock): { records: Record<string, unknown>[]; truncatedHead: boolean } => {
+const parseRecords = (
+  buf: Buffer,
+  complete: boolean,
+  clock: Clock,
+): { records: Record<string, unknown>[]; truncatedHead: boolean; partialTail: boolean } => {
   let start = 0;
   if (!complete) {
     const first = buf.indexOf(0x0a);
-    if (first === -1) return { records: [], truncatedHead: true };
+    if (first === -1) return { records: [], truncatedHead: true, partialTail: buf.length > 0 };
     start = first + 1;
   }
   const last = buf.lastIndexOf(0x0a);
-  if (last < start) return { records: [], truncatedHead: !complete };
+  const partialTail = buf.length > 0 && buf[buf.length - 1] !== 0x0a;
+  if (last < start) return { records: [], truncatedHead: !complete, partialTail };
   let text = '';
   try {
     text = DECODER.decode(buf.subarray(start, last));
@@ -278,7 +301,7 @@ const parseRecords = (buf: Buffer, complete: boolean, clock: Clock): { records: 
     if (!isRecord(parsed)) return fail('source_corrupt', 'a complete record is not an object');
     records.push(parsed);
   }
-  return { records, truncatedHead: !complete };
+  return { records, truncatedHead: !complete, partialTail };
 };
 
 // ------------------------------------------------------------------------------------------------ lineage
@@ -336,6 +359,12 @@ const preservedOf = (boundary: Node, nodes: Map<string, Node>, truncatedHead: bo
     if (typeof anchor !== 'string' || !Array.isArray(uuids) || !uuids.every((u): u is string => typeof u === 'string')) {
       return fail('source_lineage_unknown', 'the preserved message list is malformed');
     }
+    /**
+     * The list is taken as the host writes it: neither a parent chain nor write order. Of 97 real lists read on
+     * 2026-09-25, 92 were not parent chains and 89 were not in write order, so checking either would decline valid
+     * sessions. None repeated an identity; a repeat has no single position to relink, so it is not guessed at.
+     */
+    if (new Set(uuids).size !== uuids.length) return fail('source_lineage_unknown', 'the preserved message list repeats an identity');
     return { anchor, uuids };
   }
   const segment = meta['preservedSegment'];
@@ -582,7 +611,10 @@ const textOnly = (content: unknown): string | null => {
   return parts.join('\n');
 };
 
-/** A result body, exact. Media is named, never silently dropped: `[image not carried]` says the gap is there. */
+/** What stands in a result body for an image the packet cannot carry. */
+const MEDIA_PLACEHOLDER = '[image not carried]';
+
+/** A result body, exact. Media is named, never silently dropped: MEDIA_PLACEHOLDER says the gap is there. */
 const resultBody = (content: unknown): string => {
   if (typeof content === 'string') return content;
   if (content === undefined || content === null) return '';
@@ -591,7 +623,7 @@ const resultBody = (content: unknown): string => {
     .map((c): string => {
       if (!isRecord(c)) return fail('source_unsupported', 'a tool result has a content form this file has not seen');
       if (c['type'] === 'text' && typeof c['text'] === 'string') return c['text'];
-      if (c['type'] === 'image') return '[image not carried]';
+      if (c['type'] === 'image') return MEDIA_PLACEHOLDER;
       if (c['type'] === 'tool_reference' && typeof c['tool_name'] === 'string') return `[tool_reference ${c['tool_name']}]`;
       return fail('source_unsupported', 'a tool result has a content block this file has not seen');
     })
@@ -810,6 +842,12 @@ export const readLeanSource = (path: string | null | undefined, binding: LeanSou
     const tail = readTail(path, clock);
     bytesRead = tail.buf.length;
     const parsed = parseRecords(tail.buf, tail.complete, clock);
+    /**
+     * At the prompt nothing of this turn has been written yet except, possibly, the request itself, so a record still
+     * being written could be a queued message or a constraint this turn needs; leaving it out would drop it unseen.
+     * At dispatch the request's record is in place and the unfinished one is this turn's own later output.
+     */
+    if (parsed.partialTail && binding.phase === 'prompt') return fail('source_incomplete', 'the transcript ends inside a record still being written');
     const lineage = resolveLineage(parsed.records, binding.sessionId, parsed.truncatedHead, clock);
 
     const counters = { hostContext: 0 };
@@ -843,8 +881,12 @@ export const readLeanSource = (path: string | null | undefined, binding: LeanSou
      * silently dropped referent.
      */
     const humanTexts = [binding.request, ...sequence.filter((g) => g.origin === 'human').map((g) => g.text)];
-    const referenced = resolveReferences(humanTexts, sequence.filter((g) => !g.mandatory));
+    const referenced = resolveReferences(humanTexts, sequence.filter((g) => !g.mandatory), () => checkClock(clock));
     const promoted = sequence.map((g) => (referenced.has(g) ? { ...g, mandatory: true } : g));
+    // An optional group may name the gap and still be omitted; required context that is missing its image is not whole.
+    if (promoted.some((g) => g.mandatory && g.text.includes(MEDIA_PLACEHOLDER))) {
+      return fail('source_unsupported', 'required context carries an image that is not carried');
+    }
 
     // Withheld and unenumerated groups are counted, never reclassified as irrelevant.
     let secret = 0;

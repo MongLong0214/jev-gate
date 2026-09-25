@@ -87,6 +87,8 @@ import {
   cleanupJobs,
   countAttempt,
   emptyGeneration,
+  LEAN_SEEN_MAX,
+  leanSeenOf,
   LOCK_DEADLINE_MS,
   MAX_HISTORY,
   newGeneration,
@@ -477,7 +479,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
   const leanWrite = (sessionId: string, promptId: string | null, fn: (gen: JobGeneration) => JobGeneration): JobState | null => {
     const written = updateJob(deps.env, sessionId, (prev) => {
       const current = prev?.current ?? emptyGeneration(promptId, 'direct');
-      return { version: 5, session_id: sessionId, updated_at: '', current: fn(current), history: prev?.history ?? [] };
+      return { version: 5, session_id: sessionId, updated_at: '', current: fn(current), history: prev?.history ?? [], ...leanSeenOf(prev) };
     });
     return written.ok ? (written.value ?? null) : null;
   };
@@ -520,12 +522,16 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       if (seen.outcome === 'proposed') return emitContext('UserPromptSubmit', renderLeanRecommendation(seen.marker, seen.omitted_groups), 'duplicate_request');
       return skip('duplicate_request');
     }
+    // An older request delivered again after a newer one registered: its identity is no longer `current`, but it is known.
+    if (existing.ok && existing.value?.lean_seen?.includes(promptId)) return skip('duplicate_request');
     if (existing.ok && leanActive(prior).length > 0) return skip('lean_executor_active');
 
     const binding = { request: prompt, promptId, sessionId, phase: 'prompt' } as const;
     const read = readLeanSource(input.transcript_path, binding);
     if (!read.ok) return skip(read.reason);
     const source = read.source;
+    // A human turn after this request means it is no longer the latest one; deciding it now would spend on a stale turn.
+    if (source.newerHumanText) return skip('source_changed');
     /**
      * L1: every original string this request would export is screened -- the request itself as well as the required
      * context. An unsafe one is native before HTTP; masking it and calling the meaning unchanged would be a lie.
@@ -568,7 +574,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     const admission: { refused: ErrorCode | null; notTaken: LeanPending | null } = { refused: null, notTaken: null };
     const admitted = updateJob(deps.env, sessionId, (prev) => {
       const current = prev?.current ?? null;
-      if (current && current.prompt_id === promptId && current.lean) {
+      if ((current && current.prompt_id === promptId && current.lean) || prev?.lean_seen?.includes(promptId)) {
         admission.refused = 'duplicate_request';
         return null;
       }
@@ -579,7 +585,14 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       }
       if (current && current.lean?.outcome === 'proposed') admission.notTaken = current.lean;
       const gen = current ?? emptyGeneration(promptId, 'direct');
-      return { version: 5, session_id: sessionId, updated_at: '', current: { ...gen, prompt_id: promptId, request: carriedRequest, shape: 'direct', lean: identity }, history: prev?.history ?? [] };
+      return {
+        version: 5,
+        session_id: sessionId,
+        updated_at: '',
+        current: { ...gen, prompt_id: promptId, request: carriedRequest, shape: 'direct', lean: identity },
+        history: prev?.history ?? [],
+        lean_seen: [promptId, ...(prev?.lean_seen ?? [])].slice(0, LEAN_SEEN_MAX),
+      };
     });
     if (admission.refused !== null) return skip(admission.refused);
     if (!admitted.ok) return skip('state_write_failed');
@@ -787,9 +800,10 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
    * Only an observed terminal event releases the owner. A deleted reservation is not a stopped process.
    *
    * L5: what counts as terminal is what the host establishes. A foreground result with status `completed` means the
-   * child returned; a failure that is not an interrupt means the call threw -- the child failed, or never started.
-   * `async_launched`, an unknown status, and an interrupted wait establish only that the parent stopped waiting, so
-   * ownership stays: native work continues, and nothing here declares the child dead on a timer.
+   * child returned. A failure -- interrupted or not -- establishes only that the parent's call ended: the event does
+   * not say whether a child started, and a thrown call is not evidence that one stopped. `async_launched`, an unknown
+   * status and every failure therefore keep ownership: native work continues, lean stays off for the rest of the
+   * session, and nothing here declares the child dead on a timer.
    */
   const leanPost = (): HookResult => {
     if (caller.agent_id) return skip('child_caller');
@@ -799,7 +813,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     if (!sessionId || !toolUseId) return skip('missing_ids');
     const failed = input.hook_event_name === 'PostToolUseFailure';
     const status = responseStatus(input.tool_response);
-    const terminal = failed ? input.is_interrupt === false : status === 'completed';
+    const terminal = !failed && status === 'completed';
     let released = false;
     // Read first: an Agent result that owns nothing here must not create a state file for an unrelated session.
     const job = readJob(deps.env, sessionId);
@@ -1115,7 +1129,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         attempt: 1,
         deliverables: [],
       });
-      return { version: 5, session_id: sessionId, updated_at: '', current: next, history: prev?.history ?? [] };
+      return { version: 5, session_id: sessionId, updated_at: '', current: next, history: prev?.history ?? [], ...leanSeenOf(prev) };
     });
     if (!reserved.ok) return preserve(reserved.code);
     if (raced !== null) return emitDeny(raced, racedText, null);

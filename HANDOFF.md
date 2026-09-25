@@ -35,7 +35,27 @@ and it is not a saving.
   original text and a 15-call probe (≈ $0.0012). On that text Jev now leans `self_contained`, still below the
   floor.
 
-Tests: 704 across 28 files. That includes 79 hook, 59 adapter, 38 selection and 32 ingestion tests, all with fake
+A second review of `299855f` (gpt-6-sol, xhigh, read-only, verdict FIX-FIRST) found nine defects in that code.
+Each was checked against the source before it was fixed:
+
+- A credential behind `Authorization: Bearer` or `Basic`, or a bearer token with no conventional prefix, now screens.
+- An older request delivered again after a newer one registered no longer spends a second time. The state keeps the
+  last 32 admitted lean identities (`lean_seen`), and a request whose transcript already shows a later human turn is
+  `source_changed` before any call.
+- A failed executor call no longer releases ownership, interrupted or not (see the limits below).
+- At the prompt, a transcript that ends inside a record still being written is `source_incomplete`. At dispatch the
+  unfinished record is this turn's own output and is still left out.
+- Required context that holds an image the packet cannot carry is `source_unsupported`.
+- A preserved compaction list that repeats an identity is `source_lineage_unknown`.
+- Reference resolution checks the source time bound per token.
+- Bench: a lean record with no `request_id` is never paired by count. It is unknown and stays out of the known
+  subtotal. A row's known subtotal keeps the known legacy spend when the legacy total is incomplete.
+
+One finding was rejected: requiring a preserved list to be a parent chain, or to be in write order. Of 97 real
+lists in local transcripts, 92 were not parent chains and 89 were not in write order. None repeated an identity. The
+host relinks the list as written, so either check would decline valid sessions. Only the repeat check was added.
+
+Tests: 713 across 28 files. That includes 81 hook, 64 adapter, 38 selection and 34 ingestion tests, all with fake
 HTTP.
 
 **Limits that ship with this, and are not bugs to fix quietly:**
@@ -50,6 +70,11 @@ HTTP.
   executor, and lean is off for the rest of that session (`lean_executor_active`).
 - **`async_launched` keeps ownership.** A background executor is never declared dead by a timer, so lean stays off
   for that session until a terminal result arrives.
+- **A failed executor call keeps ownership.** `PostToolUseFailure` says the parent's call ended. It does not say
+  whether a child started or stopped, so lean stays off for the rest of that session after any executor failure.
+  Only a foreground `completed` result releases.
+- **A record still being written at the prompt declines.** If the host is mid-write when the prompt hook reads, that
+  turn stays native (`source_incomplete`) rather than dropping a record it cannot see.
 - **Router composition is not tested.** L1's re-screening at composition and L6's "Router + Lean without double
   counting" wait for the Router (#38–#44). No Router code exists on this branch.
 - **No 402 circuit breaker.** An exhausted TypeSafe balance surfaces as `http_other`, once per request, and lean

@@ -16,6 +16,9 @@ export const MAX_PLANNER_ATTEMPTS = 2;
 export const MAX_REPLANS = 2;
 export const MAX_TASK_ATTEMPTS = 2;
 export const MAX_HISTORY = 8;
+export const LEAN_SEEN_MAX = 32;
+/** Every rewrite of the state keeps the lean identities it read; only a lean registration adds to them. */
+export const leanSeenOf = (prev: JobState | null | undefined): Pick<JobState, 'lean_seen'> => (prev?.lean_seen ? { lean_seen: prev.lean_seen } : {});
 /**
  * A17: the request is stored whole or not at all. A prompt past this bound is recorded as absent, because a worker
  * that reads half a specification as if it were the whole one is worse off than one told the text did not fit.
@@ -114,7 +117,16 @@ const parseState = (text: string, sessionId: string): JobState | null => {
   const current = parsed['current'] as unknown as JobGeneration;
   if (!isRecord(current['active']) || !Array.isArray(current['receipts'])) return null;
   const history = Array.isArray(parsed['history']) ? (parsed['history'] as JobGeneration[]) : [];
-  return { version: 5, session_id: sessionId, updated_at: typeof parsed['updated_at'] === 'string' ? parsed['updated_at'] : '', current, history };
+  const seen = parsed['lean_seen'];
+  const leanSeen = Array.isArray(seen) ? seen.filter((p): p is string => typeof p === 'string').slice(0, LEAN_SEEN_MAX) : null;
+  return {
+    version: 5,
+    session_id: sessionId,
+    updated_at: typeof parsed['updated_at'] === 'string' ? parsed['updated_at'] : '',
+    current,
+    history,
+    ...(leanSeen ? { lean_seen: leanSeen } : {}),
+  };
 };
 
 const readRaw = (file: string, sessionId: string): JobResult<JobState | null> => {
@@ -215,7 +227,7 @@ export const newGeneration = (prev: JobState | null, sessionId: string, promptId
     active: Object.fromEntries(Object.entries(old.active).map(([id, r]) => [id, { ...r, orphaned: true as const }])),
   };
   return {
-    state: { version: 5, session_id: sessionId, updated_at: now.toISOString(), current, history: [retired, ...prev.history].slice(0, MAX_HISTORY) },
+    state: { version: 5, session_id: sessionId, updated_at: now.toISOString(), current, history: [retired, ...prev.history].slice(0, MAX_HISTORY), ...leanSeenOf(prev) },
     superseded: unfinished,
   };
 };

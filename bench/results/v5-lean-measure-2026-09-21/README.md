@@ -63,7 +63,8 @@ actually read. **Tuning the wording would have made a correct judgement wrong.**
 
 ## What a real measurement needs
 
-The depth fixtures cannot measure this feature: `jev_lean` can never dispatch in them, by construction. A run needs
+The depth fixtures cannot measure this feature: `jev_lean` can never dispatch in them, by construction *(corrected
+2026-09-25: it does not dispatch because the scope is ambiguous, not by construction — see the correction above)*. A run needs
 new cases whose priming builds genuine removable history **without** prohibiting delegation. Editing the existing
 cases is not an option — their prohibition is load-bearing for the depth work they were built for, and changing a
 fixture to make a treatment fire is changing what is being measured.

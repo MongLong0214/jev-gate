@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import type { GateV5, JevPhaseUsage, LeanV5, Plan, WorkerTierRecord } from './run.js';
-import { addUsage, familyCosts, familyTokens, money, safeSum, totalTokens, type ModelUsage } from './usage.js';
+import { addUsage, estimateJevCostUsd, familyCosts, familyTokens, money, safeSum, totalTokens, type ModelUsage } from './usage.js';
 
 /**
  * Plan-first reporting (#16). Rows come from plan.json; artifacts are joined to them. Missing files stay missing,
@@ -292,6 +292,13 @@ export const toRowView = (p: PlannedCell, c: Record<string, unknown> | null): Ro
   const legacyCost = money(gate['jev_cost_usd']);
   const leanCost = lean ? lean.jev_cost_usd : c && c['mode'] === 'lean' ? null : 0;
   const jev = legacyCost !== null && leanCost !== null ? legacyCost + leanCost : null;
+  // An incomplete legacy total still has a known part; the known subtotal keeps it, priced as the total would be.
+  const legacyKnownTokens = money(gate['jev_input_tokens_known']);
+  const legacyKnownCost =
+    legacyCost ??
+    (legacyKnownTokens !== null && legacyKnownTokens > 0
+      ? (estimateJevCostUsd(typeof gate['jev_model'] === 'string' ? gate['jev_model'] : 'jev-1.13.0', legacyKnownTokens) ?? 0)
+      : 0);
   const init = c && isRecord(c['init']) ? c['init'] : null;
   const pluginExpected = c ? c['plugin_expected'] : null;
   const rec = (v: unknown): Record<string, number> => (isRecord(v) ? Object.fromEntries(Object.entries(v).filter(([, n]) => typeof n === 'number')) as Record<string, number> : {});
@@ -308,7 +315,7 @@ export const toRowView = (p: PlannedCell, c: Record<string, unknown> | null): Ro
     elapsed_ms: c ? money(c['elapsed_ms']) : null,
     claude_cost_usd: claude,
     jev_cost_usd: jev,
-    jev_cost_known_subtotal: (legacyCost ?? 0) + (lean ? lean.jev_cost_known_subtotal : 0),
+    jev_cost_known_subtotal: legacyKnownCost + (lean ? lean.jev_cost_known_subtotal : 0),
     jev_cost_by_producer: { legacy: legacyCost, lean: leanCost },
     total_cost_usd: claude !== null && jev !== null ? claude + jev : null,
     model_usage: usage,
@@ -893,7 +900,7 @@ export const renderMarkdown = (r: Report): string => {
       '- A proposed packet is what the root was offered; a dispatched one is what it actually used; "not taken" is the gap it chose. They are not the same number and are never collapsed.',
       '- Byte columns are the largest observed in the arm, not an average, and a packet byte difference is a diagnostic — never a token count or a saving.',
       '- An attempt whose usage never came back is unknown, not zero: the known-rows count beside the token total says how many contributed.',
-      '- Unassessed groups are source the provider\u2019s own token bound kept out of the request. They were not judged irrelevant.',
+      '- Unassessed groups are source Jev never judged: groups past the enumeration window, groups withheld as credentials, tool results that could not be attributed to a call, and groups the provider\u2019s token bound kept out of the request. None of them was judged irrelevant.',
     );
   }
   L.push('', '## Jev requests per arm (attempts / input tokens / est $ at the dated price)', '', '| arm | admission | allocation | result | scope | influence (changed/judged) |', '|---|---|---|---|---|---|');

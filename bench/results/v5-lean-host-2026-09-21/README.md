@@ -41,7 +41,8 @@ identical prompts, identical turns; the only difference is whether the hook patc
 | no patch (control) | **543 B** | 47,560 | 48,521 | **961 tok** | 1485 B |
 
 An **8737-byte** difference in what the worker received produced a **318-token** difference in root context — while the
-packet arm's reply was 304 bytes *shorter*. The packet is not charged to the root's context window.
+packet arm's reply was 304 bytes *shorter*. The packet is not charged to the root's context window *(in this one pair on
+one host — scoped below)*.
 
 > **Scoped, 2026-09-25.** The paragraph above is kept as written. Read it as one pair on one host: the arms started
 > 1,768 tokens apart and the replies differed. That is consistent with the packet not reaching root context on

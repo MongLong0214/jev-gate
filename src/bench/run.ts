@@ -205,7 +205,10 @@ export interface LeanV5 {
   policy: Record<string, number>;
   /** Requests actually sent, one per request identity however many records repeat it. */
   jev_attempts: number;
-  /** An intent with no result: possibly sent and billed, so the complete totals are unknown. */
+  /**
+   * An intent with no result, possibly sent and billed, plus every record with no request identity, which can be
+   * neither joined nor de-duplicated. Any of them leaves the complete totals unknown.
+   */
   jev_attempt_unknown: number;
   /** Responses whose charged input count came back -- a count of responses, not of tokens. */
   jev_responses_known: number;
@@ -1059,16 +1062,18 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
    * request. The hook writes its intent before sending and does not send when it cannot, so with this cell's trace
    * directory set, a request with no intent was not sent. Money needs only the charged input count and a known
    * price: output is free, so an unknown output count never makes a known cost unknown.
+   *
+   * A record with no `request_id` can be neither joined nor de-duplicated: pairing keyless intents and results by
+   * count would let a lost result and a repeated one cancel out. Each is counted unknown and kept out of the known
+   * subtotal, so the subtotal stays a lower bound and the complete totals are null.
    */
   const leanRequests = new Map<string, { intent: boolean; result: Record<string, unknown> | null }>();
-  const keylessSent: Array<Record<string, unknown>> = [];
-  let keylessIntents = 0;
+  let keylessRecords = 0;
   for (const r of records) {
     if (r['phase'] !== 'lean_intent' && r['phase'] !== 'lean_result') continue;
     const k = str(r['request_id']);
     if (k === null) {
-      if (r['phase'] === 'lean_intent') keylessIntents += 1;
-      else if (r['attempted'] === true) keylessSent.push(r);
+      if (r['phase'] === 'lean_intent' || r['attempted'] === true) keylessRecords += 1;
       continue;
     }
     const entry = leanRequests.get(k) ?? { intent: false, result: null };
@@ -1079,8 +1084,8 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
     else L.duplicate_records += 1;
     leanRequests.set(k, entry);
   }
-  const sent = [...keylessSent];
-  let possiblySent = Math.max(0, keylessIntents - keylessSent.length);
+  const sent: Array<Record<string, unknown>> = [];
+  let possiblySent = keylessRecords;
   for (const { result } of leanRequests.values()) {
     if (result === null) possiblySent += 1;
     else if (result['attempted'] === true) sent.push(result);

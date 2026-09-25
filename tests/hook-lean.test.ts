@@ -501,6 +501,34 @@ describe('lean — one request, one attempt (L5)', () => {
     expect(again.code).toBe('duplicate_request');
   });
 
+  it('does not spend again on an older request redelivered after a newer one registered, before either is written', async () => {
+    const env = makeEnv();
+    const t = base();
+    const fetchImpl = fakeJev();
+    await run(env, promptEvent(t.path), fetchImpl);
+    await run(env, promptEvent(t.path, { prompt_id: 'p2', prompt: 'a different request entirely' }), fetchImpl);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const replay = await run(env, promptEvent(t.path), fetchImpl);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(replay.code).toBe('duplicate_request');
+    expect(replay.stdout).toBeNull();
+    const job = readJob(env, 's1');
+    expect(job.ok && job.value?.current.prompt_id).toBe('p2');
+    expect(job.ok && job.value?.lean_seen).toEqual(['p2', 'p1']);
+  });
+
+  it('does not decide a request the transcript already shows a later human turn after', async () => {
+    const t = base();
+    recordRequest(t);
+    t.c.human('a later request', 'p2');
+    t.save();
+    const fetchImpl = fakeJev();
+    const r = await run(makeEnv(), promptEvent(t.path), fetchImpl);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(r.code).toBe('source_changed');
+    expect(r.stdout).toBeNull();
+  });
+
   it('a dispatched packet is not offered again to a repeat of its own request, before or after it completes', async () => {
     const env = makeEnv();
     const { transcript } = await recommendAndDispatch(env);
@@ -687,14 +715,8 @@ describe('lean — ownership ends only on what the host establishes (L5)', () =>
     expect(activeIds(env)).toEqual([]);
   });
 
-  it('releases on a failure that is not an interrupt: the call threw, so no child is running', async () => {
-    const env = makeEnv();
-    await recommendAndDispatch(env);
-    await run(env, failureEvent({ is_interrupt: false }));
-    expect(activeIds(env)).toEqual([]);
-  });
-
   it.each([
+    ['a failure that is not an interrupt', failureEvent({ is_interrupt: false })],
     ['an async launch', postEvent({ tool_response: { status: 'async_launched', agentId: 'a1', description: 'x', prompt: 'x' } })],
     ['an unknown status', postEvent({ tool_response: { status: 'something_new' } })],
     ['no status at all', postEvent({ tool_response: { content: [] } })],

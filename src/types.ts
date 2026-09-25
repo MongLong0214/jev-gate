@@ -355,6 +355,11 @@ export interface JobState {
   updated_at: string;
   current: JobGeneration;
   history: JobGeneration[];
+  /**
+   * Lean request identities this session has admitted, newest first and bounded. A lean registration overwrites
+   * `current`, so without this an older request redelivered after a newer one would look new and be paid for again.
+   */
+  lean_seen?: string[];
 }
 
 /** Fixed diagnostic codes: the only text the hook writes to stderr, and the only reason strings a trace stores. */
@@ -389,6 +394,8 @@ export type SkipCode =
   | 'source_bounded'
   /** A complete record that does not decode or parse, or one identity with two contents: corruption, not noise. */
   | 'source_corrupt'
+  /** At the prompt, the transcript ends inside a record the host is still writing, which may be context this turn needs. */
+  | 'source_incomplete'
   /** A record form or provenance the source adapter has not seen, or content it cannot carry (an image, a document). */
   | 'source_unsupported'
   /** The transcript, a record in it, or the request's own record belongs to a different session or request. */
