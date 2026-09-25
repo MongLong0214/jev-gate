@@ -105,6 +105,23 @@ describe('updateJob', () => {
   });
 });
 
+describe('updateJob over an unreadable file', () => {
+  it('refuses when asked to, and otherwise records on the new state that any lean identities were lost', () => {
+    const env = freshEnv();
+    mkdirSync(jobsDir(env), { recursive: true });
+    writeFileSync(jobPath(env, 's1'), '{"version":5,');
+    const fresh = (prev: JobState | null): JobState => newGeneration(prev, 's1', 'p1', 'direct').state;
+    expect(updateJob(env, 's1', fresh, { refuseUnreadable: true })).toEqual({ ok: false, code: 'state_corrupt' });
+    expect(readFileSync(jobPath(env, 's1'), 'utf8')).toBe('{"version":5,');
+    const recovered = updateJob(env, 's1', fresh);
+    expect(recovered.ok && recovered.value?.lean_seen_lost).toBe(true);
+    updateJob(env, 's1', (prev) => (prev ? newGeneration(prev, 's1', 'p2', 'direct').state : null));
+    const later = readJob(env, 's1');
+    expect(later.ok && later.value?.lean_seen_lost).toBe(true);
+    expect(later.ok && later.value?.current.prompt_id).toBe('p2');
+  });
+});
+
 describe('newGeneration', () => {
   it('supersedes an unfinished generation, keeps it as history and orphans its actives', () => {
     const first = newGeneration(null, 's1', 'p1', 'orchestrated').state;
@@ -187,6 +204,25 @@ describe('cleanupJobs', () => {
     expect(existsSync(jobPath(env, 'old-but-busy'))).toBe(true);
     expect(existsSync(jobPath(env, 'fresh'))).toBe(true);
     expect(cleanupJobs({ JEV_GATE_STATE_DIR: join(tmp, 'never-created') }, now)).toBe(0);
+  });
+
+  it('removes a file only under its own lock, and never one it cannot read or that records lost identities', () => {
+    const env = freshEnv();
+    const now = Date.now();
+    seed(env, 'in-use');
+    seed(env, 'lost');
+    updateJob(env, 'lost', (prev) => (prev ? { ...prev, lean_seen_lost: true } : null));
+    writeFileSync(jobPath(env, 'unreadable'), '{"version":5,');
+    // A live holder: no owner file, so the lock is not stale and cleanup does not wait for it.
+    mkdirSync(`${jobPath(env, 'in-use')}.lock`);
+    const past = (now - RETENTION_MS - 60_000) / 1000;
+    for (const id of ['in-use', 'lost', 'unreadable']) utimesSync(jobPath(env, id), past, past);
+    expect(cleanupJobs(env, now)).toBe(0);
+    for (const id of ['in-use', 'lost', 'unreadable']) expect(existsSync(jobPath(env, id))).toBe(true);
+    rmSync(`${jobPath(env, 'in-use')}.lock`, { recursive: true });
+    expect(cleanupJobs(env, now)).toBe(1);
+    expect(existsSync(jobPath(env, 'in-use'))).toBe(false);
+    expect(existsSync(`${jobPath(env, 'in-use')}.lock`)).toBe(false);
   });
 
   it('never ages out a file holding admitted lean identities: a resumed session still recognises an old request', () => {

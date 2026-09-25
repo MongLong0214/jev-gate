@@ -74,11 +74,26 @@ A third review, of `19284cc` (same settings, FIX-FIRST), found two more ways thr
 - Bench: a lean record with no `request_id` is never paired by count. It is unknown and stays out of the known
   subtotal. A row's known subtotal keeps the known legacy spend when the legacy total is incomplete.
 
+A fourth review, of `651556e` (same settings, FIX-FIRST), found four more, all confirmed:
+
+- A header call wrapped across one line (`headers.set("Authorization",⏎ "Basic dTpw")`) and a percent-encoded URL
+  password (`postgres://u:%40secret@host`) now screen. `%NAME%`, `%s` and `%(pw)s` are still placeholders.
+- Cleanup read and deleted without the job lock, so it could unlink a file a writer had just replaced with a newly
+  admitted lean identity, and it deleted files it could not read. It now removes a file only under that file's lock
+  after a second look, never waits for a held lock, and leaves an unreadable file alone.
+- An unreadable state file reached a writer as "no state", so a lean admission could write a fresh ledger over one
+  that held identities. Lean admission now refuses an unreadable state (`lean_ledger_unknown`). An orchestration
+  turn still recovers the file, and the state it writes carries `lean_seen_lost`, which keeps lean off in that
+  session.
+- Reference extraction also reads the clock before each of its six passes over a text. Within one pass the gap is a
+  single linear regex scan, measured at 16 ms for an 8 MiB text with no match, the source cap. The scan is not
+  chunked, because a quote-delimited match cannot be split at a safe offset.
+
 One finding was rejected: requiring a preserved list to be a parent chain, or to be in write order. Of 97 real
 lists in local transcripts, 92 were not parent chains and 89 were not in write order. None repeated an identity. The
 host relinks the list as written, so either check would decline valid sessions. Only the repeat check was added.
 
-Tests: 719 across 28 files. That includes 82 hook, 68 adapter, 38 selection and 34 ingestion tests, all with fake
+Tests: 724 across 28 files. That includes 83 hook, 68 adapter, 38 selection and 34 ingestion tests, all with fake
 HTTP.
 
 **Limits that ship with this, and are not bugs to fix quietly:**
@@ -100,6 +115,10 @@ HTTP.
   `lean_seen_full` and runs natively. Forgetting an identity instead would let its redelivery be charged again.
 - **A lean session's state file is kept indefinitely.** It holds the admitted identities that stop a replay, and a
   session can be resumed at any time, so the seven-day cleanup skips it. Deleting it by hand re-opens that replay.
+  An unreadable state file is kept too.
+- **A session whose state could not be read stays native for lean.** Its identities are unknown, so a replay cannot
+  be recognised. Lean declines (`lean_ledger_unknown`) for the rest of that session, even after an orchestration
+  turn rewrites the file.
 - **Prose about auth headers screens as a credential.** "Authorization: Bearer header" has a literal where the value
   goes, so that group is withheld or the source declines. A false positive costs coverage; a miss sends a credential.
 - **A record still being written at the prompt declines.** If the host is mid-write when the prompt hook reads, that

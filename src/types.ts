@@ -361,6 +361,11 @@ export interface JobState {
    * newer one would look new and be paid for again.
    */
   lean_seen?: string[];
+  /**
+   * Set when a writer replaced a state file it could not read. Whatever identities that file held are unknown, so this
+   * session admits no further lean request (`lean_ledger_unknown`); an orchestration turn can still recover the file.
+   */
+  lean_seen_lost?: true;
 }
 
 /** Fixed diagnostic codes: the only text the hook writes to stderr, and the only reason strings a trace stores. */
@@ -418,6 +423,8 @@ export type SkipCode =
   | 'duplicate_request'
   /** The session already holds LEAN_SEEN_MAX lean prompt identities; admitting another would mean forgetting one. */
   | 'lean_seen_full'
+  /** The session's state could not be read, or replaced one that could not be: an identity it held may be charged again. */
+  | 'lean_ledger_unknown'
   | 'packet_overflow'
   | 'source_changed';
 

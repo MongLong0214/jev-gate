@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 
 import { runHook, type HookDeps, type HookResult } from '../src/hook.js';
-import { jobsDir, LEAN_SEEN_MAX, readJob, updateJob } from '../src/job.js';
+import { jobPath, jobsDir, LEAN_SEEN_MAX, newGeneration, readJob, updateJob } from '../src/job.js';
 import { COORDINATOR_FRAME, HANDOFF_SCOPE_ANSWERS, RELATION_ANSWERS, WORK_SHAPE_ANSWERS } from '../src/lean.js';
 import { LEAN_EXECUTOR_AGENT } from '../src/types.js';
 import { conversation, type Conversation } from './transcript-fixture.js';
@@ -535,6 +535,22 @@ describe('lean — one request, one attempt (L5)', () => {
     expect(full.code).toBe('lean_seen_full');
     expect(full.stdout).toBeNull();
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('admits nothing over a state it cannot read, or over one written in place of such a state', async () => {
+    const env = makeEnv();
+    const t = base();
+    const fetchImpl = fakeJev();
+    mkdirSync(jobsDir(env), { recursive: true });
+    writeFileSync(jobPath(env, 's1'), '{"version":5,"session_id":"s1","curren');
+    const unreadable = await run(env, promptEvent(t.path), fetchImpl);
+    expect(unreadable.code).toBe('lean_ledger_unknown');
+    expect(readFileSync(jobPath(env, 's1'), 'utf8')).toBe('{"version":5,"session_id":"s1","curren');
+    // An orchestration turn may recover the file; what it wrote says the old identities are gone.
+    updateJob(env, 's1', (prev) => newGeneration(prev, 's1', 'p0', 'direct').state);
+    const recovered = await run(env, promptEvent(t.path, { prompt_id: 'p2', prompt: 'a different request entirely' }), fetchImpl);
+    expect(recovered.code).toBe('lean_ledger_unknown');
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it('does not decide a request the transcript already shows a later human turn after', async () => {

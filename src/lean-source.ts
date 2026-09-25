@@ -135,12 +135,14 @@ const SECRET_PATTERNS: readonly RegExp[] = [
   // however short (`Basic dTpw` is a whole credential), including one reached through a constant template expression
   // (`${'dTpw'}`) or a literal concatenation (`'Basic ' + 'dTpw'`). A name or a placeholder does not (`$TOKEN`,
   // `${token}`, `'Bearer ' + token`, `<token>`, `{{token}}`, `%TOKEN%`): none starts with a token character or a quote.
-  // Prose that puts a word there ("Authorization: Bearer header") is screened too.
-  /\bauthorization\b[^\w\n]{0,8}(?:bearer|basic|token)\s+(?:["'`]\s*\+\s*["'`]|\$\{\s*["'`])?[A-Za-z0-9_\-.~+/]+/i,
+  // Prose that puts a word there ("Authorization: Bearer header") is screened too. One line break may sit in that
+  // punctuation, because a call's arguments are often wrapped (`headers.set("Authorization",\n  "Basic dTpw")`).
+  /\bauthorization\b[^\w\n]{0,8}(?:\r?\n[^\w\n]{0,8})?(?:bearer|basic|token)\s+(?:["'`]\s*\+\s*["'`]|\$\{\s*["'`])?[A-Za-z0-9_\-.~+/]+/i,
   // A Basic credential encoded at run time from a literal `user:password`; a template with a `${...}` in it is names.
   /\b(?:btoa|Buffer\.from)\(\s*["'`][^"'`\n:${]{0,256}:[^"'`\n${]{1,256}["'`]/,
-  // A password in a URL's userinfo (`postgres://user:secret@host`). A placeholder password (`${PASS}`) is a name.
-  /\b[a-z][a-z0-9+.-]{1,15}:\/\/[^\s/?#@:"'`]{1,64}:(?![$<{%])[^\s/?#@"'`]{1,128}@/i,
+  // A password in a URL's userinfo (`postgres://user:secret@host`), percent-encoded or not (`%40secret`). A
+  // placeholder is a name: `${PASS}`, `<pass>`, `{pass}`, `%PASS%`, and a `%` that starts no escape (`%s`, `%(pw)s`).
+  /\b[a-z][a-z0-9+.-]{1,15}:\/\/[^\s/?#@:"'`]{1,64}:(?![$<{]|%(?![0-9A-Fa-f]{2})|%[A-Za-z_]\w*%@)[^\s/?#@"'`]{1,128}@/i,
   // A bearer token outside a header line, whatever its prefix. The digit keeps "bearer" in prose from matching.
   /\b[Bb]earer\s+(?=[A-Za-z0-9_\-.~+/]*\d)[A-Za-z0-9_\-.~+/]{16,}/,
 ];
@@ -170,7 +172,10 @@ const PATH_RUN = /[\w@.~/-]+/g;
  */
 const PATH_RUN_MAX = 512;
 
-/** Matches and runs between two reads of the caller's clock: each is at most one bounded scan, so this bounds the gap. */
+/**
+ * Matches and runs between two reads of the caller's clock. The clock is also read before every pass, so the longest
+ * unread stretch is one linear pass over one text: 16 ms at SOURCE_MAX_BYTES (8 MiB with no match, 2026-09-25).
+ */
 const CLOCK_EVERY = 16;
 
 export const referencesIn = (text: string, tick?: () => void): string[] => {
@@ -184,11 +189,13 @@ export const referencesIn = (text: string, tick?: () => void): string[] => {
     if (token.length >= 3) out.add(token);
   };
   for (const re of REFERENCE_PATTERNS) {
+    tick?.();
     for (const m of text.matchAll(re)) {
       unit();
       add(m);
     }
   }
+  tick?.();
   for (const [run] of text.matchAll(PATH_RUN)) {
     unit();
     if (run.length <= PATH_RUN_MAX && run.includes('.')) {

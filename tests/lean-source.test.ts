@@ -673,8 +673,8 @@ describe('lean source — bounds, safety and what "unknown" means', () => {
       ticks += 1;
     });
     expect([...resolved].map((g) => g.text).sort()).toEqual(['x.ts here', 'y.ts there']);
-    // 2 texts + 2 path runs + 2 tokens x 3 candidates. Per token alone would be 2.
-    expect(ticks).toBe(10);
+    // 2 texts + 2 x 6 passes + 2 path runs + 2 tokens x 3 candidates. Per token alone would be 2.
+    expect(ticks).toBe(22);
     const stop = (): void => {
       throw new Error('bound');
     };
@@ -687,8 +687,17 @@ describe('lean source — bounds, safety and what "unknown" means', () => {
     resolveReferences([words], [], () => {
       ticks += 1;
     });
-    // 1 before the text, then one per 16 runs of its 160.
-    expect(ticks).toBe(11);
+    // 1 before the text, 1 before each of its 6 passes, then one per 16 runs of its 160.
+    expect(ticks).toBe(17);
+  });
+
+  it('reads the clock before every pass, so one long run with no match is not an unread stretch', () => {
+    let ticks = 0;
+    resolveReferences(['a'.repeat(1 << 20)], [], () => {
+      ticks += 1;
+    });
+    // 1 before the text and 1 before each pass: the run is too long to search, and there is nothing else to count.
+    expect(ticks).toBe(7);
   });
 
   it('a history cut by the read bound is bounded, not an empty or a guessed conversation', () => {
@@ -757,6 +766,17 @@ describe('lean source — bounds, safety and what "unknown" means', () => {
     expect(looksSecret("headers['Authorization'] = 'Basic ' + encoded;")).toBe(false);
     expect(looksSecret('const auth = btoa(`${user}:${pass}`);')).toBe(false);
     expect(looksSecret('postgres://${USER}:${PASS}@db.internal/app and https://user@example.test/')).toBe(false);
+  });
+
+  it('screens a wrapped header call and a percent-encoded URL password, but not a printf or %NAME% placeholder', () => {
+    expect(looksSecret('headers.set("Authorization",\n  "Basic dTpw");')).toBe(true);
+    expect(looksSecret('const headers = {\r\n  Authorization:\r\n    "Bearer abc" };')).toBe(true);
+    expect(looksSecret('postgres://u:%40secret@host/app')).toBe(true);
+    expect(looksSecret('postgres://u:%ABsecret@host/app')).toBe(true);
+    expect(looksSecret('headers.set("Authorization",\n  `Bearer ${token}`);')).toBe(false);
+    expect(looksSecret('postgres://u:%DB_PASS%@host/app')).toBe(false);
+    expect(looksSecret('sprintf("postgres://%s:%s@%s/app", user, pass, host)')).toBe(false);
+    expect(looksSecret("'postgres://%(user)s:%(pw)s@%(host)s/app' % cfg")).toBe(false);
   });
 
   it('enumerates the newest groups under the cap and counts the rest rather than calling them irrelevant', () => {

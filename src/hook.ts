@@ -516,15 +516,17 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
      * read is only the fast path -- the authoritative comparison happens again under the lock, at registration.
      */
     const existing = readJob(deps.env, sessionId);
-    const prior = existing.ok ? (existing.value?.current ?? null) : null;
+    // A state that cannot be read may hold identities already charged, and one written over such a file has lost them.
+    if (!existing.ok || existing.value?.lean_seen_lost) return skip('lean_ledger_unknown');
+    const prior = existing.value?.current ?? null;
     if (prior && prior.prompt_id === promptId && prior.lean) {
       const seen = prior.lean;
       if (seen.outcome === 'proposed') return emitContext('UserPromptSubmit', renderLeanRecommendation(seen.marker, seen.omitted_groups), 'duplicate_request');
       return skip('duplicate_request');
     }
     // An older request delivered again after a newer one registered: its identity is no longer `current`, but it is known.
-    if (existing.ok && existing.value?.lean_seen?.includes(promptId)) return skip('duplicate_request');
-    if (existing.ok && leanActive(prior).length > 0) return skip('lean_executor_active');
+    if (existing.value?.lean_seen?.includes(promptId)) return skip('duplicate_request');
+    if (leanActive(prior).length > 0) return skip('lean_executor_active');
 
     const binding = { request: prompt, promptId, sessionId, phase: 'prompt' } as const;
     const read = readLeanSource(input.transcript_path, binding);
@@ -572,35 +574,45 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
      * here calls out, and the other reads what it registered.
      */
     const admission: { refused: ErrorCode | null; notTaken: LeanPending | null } = { refused: null, notTaken: null };
-    const admitted = updateJob(deps.env, sessionId, (prev) => {
-      const current = prev?.current ?? null;
-      if ((current && current.prompt_id === promptId && current.lean) || prev?.lean_seen?.includes(promptId)) {
-        admission.refused = 'duplicate_request';
-        return null;
-      }
-      // Registering past the bound would have to forget an identity, and a forgotten one can be charged again.
-      if ((prev?.lean_seen?.length ?? 0) >= LEAN_SEEN_MAX) {
-        admission.refused = 'lean_seen_full';
-        return null;
-      }
-      // A new prompt cannot certify an old worker canceled; until its terminal event is observed there is no second one.
-      if (leanActive(current).length > 0) {
-        admission.refused = 'lean_executor_active';
-        return null;
-      }
-      if (current && current.lean?.outcome === 'proposed') admission.notTaken = current.lean;
-      const gen = current ?? emptyGeneration(promptId, 'direct');
-      return {
-        version: 5,
-        session_id: sessionId,
-        updated_at: '',
-        current: { ...gen, prompt_id: promptId, request: carriedRequest, shape: 'direct', lean: identity },
-        history: prev?.history ?? [],
-        lean_seen: [promptId, ...(prev?.lean_seen ?? [])],
-      };
-    });
+    const admitted = updateJob(
+      deps.env,
+      sessionId,
+      (prev) => {
+        const current = prev?.current ?? null;
+        if (prev?.lean_seen_lost) {
+          admission.refused = 'lean_ledger_unknown';
+          return null;
+        }
+        if ((current && current.prompt_id === promptId && current.lean) || prev?.lean_seen?.includes(promptId)) {
+          admission.refused = 'duplicate_request';
+          return null;
+        }
+        // Registering past the bound would have to forget an identity, and a forgotten one can be charged again.
+        if ((prev?.lean_seen?.length ?? 0) >= LEAN_SEEN_MAX) {
+          admission.refused = 'lean_seen_full';
+          return null;
+        }
+        // A new prompt cannot certify an old worker canceled; until its terminal event is observed there is no second one.
+        if (leanActive(current).length > 0) {
+          admission.refused = 'lean_executor_active';
+          return null;
+        }
+        if (current && current.lean?.outcome === 'proposed') admission.notTaken = current.lean;
+        const gen = current ?? emptyGeneration(promptId, 'direct');
+        return {
+          version: 5,
+          session_id: sessionId,
+          updated_at: '',
+          current: { ...gen, prompt_id: promptId, request: carriedRequest, shape: 'direct', lean: identity },
+          history: prev?.history ?? [],
+          lean_seen: [promptId, ...(prev?.lean_seen ?? [])],
+        };
+      },
+      // Writing a fresh ledger over a file that could not be read would forget every identity in it.
+      { refuseUnreadable: true },
+    );
     if (admission.refused !== null) return skip(admission.refused);
-    if (!admitted.ok) return skip('state_write_failed');
+    if (!admitted.ok) return skip(admitted.code === 'state_write_failed' || admitted.code === 'state_locked' ? 'state_write_failed' : 'lean_ledger_unknown');
     /**
      * JGL-01 step 3: a recommendation the root did not act on is a real outcome and stays in the denominator. It is
      * recorded here, at the next admitted request, because that is where it becomes observable without forcing anything.
