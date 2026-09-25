@@ -143,7 +143,9 @@ describe('register', () => {
   it('reads a malformed availableModels as allowing nothing, and a development build or one without a release base as unverified', async () => {
     const malformed = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY }, settings: { availableModels: 'haiku' } });
     expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false }), malformed)).toBeUndefined();
-    expect(malformed.logs.join('\n')).toContain('"target_not_allowed"');
+    // Nothing the list allows could be applied, so nothing is asked.
+    expect(malformed.logs.join('\n')).toContain('"no_applicable_target"');
+    expect(malformed.requests).toHaveLength(0);
 
     const allowed = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY }, settings: { availableModels: ['haiku', 'sonnet', 'opus'] } });
     expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false }), allowed)).toBe('haiku');

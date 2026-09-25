@@ -2,8 +2,8 @@ import type { ClientReason, Transport, Usage } from './client.ts';
 import { createClient } from './client.ts';
 import type { RouterConfig } from './config.ts';
 import { validKey } from './config.ts';
-import type { SymbolicEffort } from './models.ts';
-import { factsOf, sameModel } from './models.ts';
+import type { RootSwitch, SymbolicEffort } from './models.ts';
+import { answeredBy, factsOf, sameModel, VERIFIED_ROOT_SWITCHES } from './models.ts';
 import type { Baseline, DimensionReason, MutableDimensions, PolicyOptions, RoutingPatch, RoutingTask } from './policy.ts';
 import { buildQuestions, buildState, choosePatch, offerableEfforts, offerableTiers, validateAnswers } from './policy.ts';
 
@@ -105,6 +105,17 @@ const until = <T>(p: Promise<T>, signal: AbortSignal): Promise<T | typeof ABORTE
   });
 };
 
+/** A signal that aborts when any of `signals` does. `dispose` detaches it once the wait it served is over. */
+const linked = (...signals: AbortSignal[]): { signal: AbortSignal; dispose: () => void } => {
+  const c = new AbortController();
+  const onAbort = (): void => c.abort();
+  for (const s of signals) {
+    if (s.aborted) c.abort();
+    else s.addEventListener('abort', onAbort, { once: true });
+  }
+  return { signal: c.signal, dispose: () => signals.forEach((s) => s.removeEventListener('abort', onAbort)) };
+};
+
 /** Insertion-ordered and bounded: past `max` the oldest entry goes, through `onEvict`. */
 const bounded = <K, V>(max: number, onEvict?: (v: V) => void): Map<K, V> & { put: (k: K, v: V) => void } => {
   const m = new Map<K, V>();
@@ -140,16 +151,15 @@ type Assessed =
   | { kind: 'skipped'; reason: string }
   | { kind: 'assessed'; assessment: 'ok' | ClientReason; usage: Usage | null; sent: boolean; patch: RoutingPatch; model: DimensionReason; effort: DimensionReason };
 
-export const createRouter = (config: RouterConfig) => {
+/** `rootSwitches` is the verified list; tests pass their own to reach the root-model path. */
+export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSwitch[] = VERIFIED_ROOT_SWITCHES) => {
   const rootEnabled = config.enabled && (config.routeMainEffort || config.routeMainModel);
   const spawnEnabled = config.enabled && config.routeSubagentModel;
   const turnTexts = bounded<string, string>(MAX_TURNS);
   const turns = bounded<string, TurnRouting>(MAX_TURNS, (t) => t.controller.abort());
   const offers = bounded<string, boolean>(MAX_OFFERS);
-  const spawnsPending = new Map<string, Promise<string | null>>();
   let session = new AbortController();
   let keyState: Promise<KeyState> | null = null;
-  let pinState: Promise<HostPins> | null = null;
   let diagnosed = false;
 
   const log = (engine: RouterEngine, record: Record<string, unknown>): void => {
@@ -175,11 +185,10 @@ export const createRouter = (config: RouterConfig) => {
     return keyState;
   };
 
-  const pinsOf = (engine: RouterEngine): Promise<HostPins> => {
+  /** Read on every use: another Mod can set a pin mid-session, and a pin set after a decision still wins. */
+  const pinsOf = (engine: RouterEngine): Promise<HostPins> =>
     // An unreadable environment is treated as pinned everywhere: nothing is changed on a guess.
-    pinState ??= engine.pins().catch(() => ({ mainModel: true, mainEffort: true, subagentModel: true, aliasRemap: true }));
-    return pinState;
-  };
+    engine.pins().catch(() => ({ mainModel: true, mainEffort: true, subagentModel: true, aliasRemap: true }));
 
   const diagnose = async (engine: RouterEngine): Promise<void> => {
     if (diagnosed) return;
@@ -202,15 +211,25 @@ export const createRouter = (config: RouterConfig) => {
     minUpgradeConfidence: config.minUpgradeConfidence,
     minDowngradeConfidence: config.minDowngradeConfidence,
     availableModels,
+    ...(scope === 'root' ? { rootSwitches } : {}),
   });
 
-  /** One request for one task. Never throws. */
-  const assess = async (engine: RouterEngine, task: RoutingTask, baseline: Baseline, dims: MutableDimensions, opts: PolicyOptions, signal: AbortSignal): Promise<Assessed> => {
+  /** One request for one task. Never throws. A reply after the wait ended is logged against `late`, never applied. */
+  const assess = async (
+    engine: RouterEngine,
+    task: RoutingTask,
+    baseline: Baseline,
+    dims: MutableDimensions,
+    opts: PolicyOptions,
+    signal: AbortSignal,
+    late: Record<string, unknown>,
+  ): Promise<Assessed> => {
     const questions = buildQuestions(dims);
     if (!questions) return { kind: 'skipped', reason: 'nothing_to_change' };
     const key = await resolveKey(engine);
     if (!('key' in key)) return { kind: 'skipped', reason: key.reason };
-    const res = await client.assess(engine, key.key, buildState(task), questions, signal);
+    const onLate = (usage: Usage | null): void => log(engine, { event: 'late', ...late, usage });
+    const res = await client.assess(engine, key.key, buildState(task), questions, signal, onLate);
     if (!res.ok) return { kind: 'assessed', assessment: res.reason, usage: res.usage, sent: res.sent, patch: {}, model: 'not_asked', effort: 'not_asked' };
     const decision = choosePatch(validateAnswers(res.answers, questions), baseline, dims, opts);
     return { kind: 'assessed', assessment: 'ok', usage: res.usage, sent: true, ...decision };
@@ -230,15 +249,19 @@ export const createRouter = (config: RouterConfig) => {
 
   const rootAssessment = async (engine: RouterEngine, turnId: string, t: TurnRouting, text: string): Promise<void> => {
     let outcome: Assessed;
+    let withheld: string | undefined;
     try {
       const pins = await pinsOf(engine);
-      const available = config.routeMainModel && !pins.mainModel ? await engine.availableModels().catch(() => []) : undefined;
+      const routeModel = config.routeMainModel && !pins.mainModel;
+      const available = routeModel ? await engine.availableModels().catch(() => []) : undefined;
       const opts = policy('root', available);
+      const offer = routeModel ? offerableTiers(t.baseline, opts) : null;
+      if (offer && 'reason' in offer) withheld = offer.reason;
       const dims: MutableDimensions = {
-        tiers: config.routeMainModel && !pins.mainModel ? offerableTiers(t.baseline, opts) : null,
+        tiers: offer && 'tiers' in offer ? offer.tiers : null,
         efforts: config.routeMainEffort && !pins.mainEffort ? offerableEfforts(t.baseline, 'root') : null,
       };
-      outcome = await assess(engine, { scope: 'root', text }, t.baseline, dims, opts, t.controller.signal);
+      outcome = await assess(engine, { scope: 'root', text }, t.baseline, dims, opts, t.controller.signal, { scope: 'root', turn: turnId });
     } catch {
       outcome = { kind: 'skipped', reason: 'internal_error' };
     }
@@ -249,19 +272,33 @@ export const createRouter = (config: RouterConfig) => {
       event: 'root',
       turn: turnId,
       from: { model: t.baseline.model, effort: t.baseline.effort ?? null },
+      ...(withheld !== undefined ? { model_withheld: withheld } : {}),
       ...(outcome.kind === 'skipped'
         ? { skipped: outcome.reason }
         : { assessment: outcome.assessment, sent: outcome.sent, usage: outcome.usage, patch: outcome.patch, reasons: { model: outcome.model, effort: outcome.effort } }),
     });
   };
 
-  /** The stored patch for this step, or null. Incoming values that differ from the baseline win for the rest of the turn. */
-  const applyStored = (engine: RouterEngine, t: TurnRouting, e: TurnStepEvent): RoutingPatch | null => {
+  /**
+   * The stored patch for this step, or null. Incoming values that differ from the baseline win for the rest of the
+   * turn, and so does a pin set since the decision.
+   */
+  const applyStored = async (engine: RouterEngine, t: TurnRouting, e: TurnStepEvent): Promise<RoutingPatch | null> => {
     if (t.stopped) return null;
     if (e.model !== t.baseline.model || e.effort !== t.baseline.effort) {
       t.stopped = true;
       log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: 'incoming_divergence' });
       return null;
+    }
+    const pins = await pinsOf(engine);
+    if (t.stopped) return null;
+    if (pins.mainModel && !t.modelStopped && t.patch.model !== undefined) {
+      t.modelStopped = true;
+      log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: 'model_pinned' });
+    }
+    if (pins.mainEffort && !t.effortStopped && t.patch.effort !== undefined) {
+      t.effortStopped = true;
+      log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: 'effort_pinned' });
     }
     const model = !t.modelStopped ? t.patch.model : undefined;
     const finalModel = model ?? e.model;
@@ -276,7 +313,7 @@ export const createRouter = (config: RouterConfig) => {
     if (known) {
       // A later step of this turn, or the same first step dispatched again while its assessment is pending.
       if (known.pending && (await until(known.pending, signal)) === ABORTED) return null;
-      return turns.get(e.turnId) === known ? applyStored(engine, known, e) : null;
+      return turns.get(e.turnId) === known ? await applyStored(engine, known, e) : null;
     }
     // Routing never starts halfway through a turn.
     if (e.index !== 0) return null;
@@ -290,32 +327,46 @@ export const createRouter = (config: RouterConfig) => {
       modelStopped: false,
       effortStopped: false,
     };
+    // sessionEnd retires every turn, which aborts its controller: no session listener is needed here.
     turns.put(e.turnId, t);
-    const onSessionEnd = (): void => t.controller.abort();
-    session.signal.addEventListener('abort', onSessionEnd, { once: true });
     const text = turnTexts.get(e.turnId);
     if (text === undefined || text.trim() === '') {
       t.stopped = true;
       log(engine, { event: 'root', turn: e.turnId, skipped: 'no_task_text' });
       return null;
     }
-    t.pending = rootAssessment(engine, e.turnId, t, text).finally(() => session.signal.removeEventListener('abort', onSessionEnd));
+    t.pending = rootAssessment(engine, e.turnId, t, text);
     if ((await until(t.pending, signal)) === ABORTED) return null;
-    return turns.get(e.turnId) === t ? applyStored(engine, t, e) : null;
+    return turns.get(e.turnId) === t ? await applyStored(engine, t, e) : null;
+  };
+
+  /**
+   * The host dispatched this step natively without waiting for the hook. The turn stays native from here, so a later
+   * step never switches away from what the abandoned one ran on.
+   */
+  const abandon = (engine: RouterEngine, e: TurnStepEvent): void => {
+    if (!rootEnabled || e.agentId !== undefined) return;
+    const t = turns.get(e.turnId);
+    if (!t || t.stopped) return;
+    t.stopped = true;
+    t.controller.abort();
+    log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: 'step_abandoned' });
   };
 
   const observeStep = (engine: RouterEngine, e: TurnStepEvent, patch: RoutingPatch | null, result: TurnStepOutcome | void): void => {
     try {
-      if (!patch?.model) return;
+      if (!patch) return;
       const t = turns.get(e.turnId);
       if (!t) return;
+      // An effort-only patch is checked too: the host can answer from a fallback model the effort does not fit.
+      const requested = patch.model ?? e.model;
       const seen = result && typeof result.usage?.model === 'string' ? result.usage.model : null;
       // Missing is unknown, not confirmation: the override is not reapplied on a guess.
-      if (seen === null || !sameModel(patch.model, seen)) {
-        t.modelStopped = true;
+      if (seen === null || !answeredBy(requested, seen)) {
+        if (patch.model !== undefined) t.modelStopped = true;
         const facts = seen === null ? null : factsOf(seen);
         if (patch.effort !== undefined && !facts?.unconditionalEffort.includes(patch.effort)) t.effortStopped = true;
-        log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: seen === null ? 'model_unobserved' : 'model_mismatch', requested: patch.model, observed: seen });
+        log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: seen === null ? 'model_unobserved' : 'model_mismatch', requested, observed: seen });
       }
     } catch {
       // Observation only.
@@ -330,7 +381,10 @@ export const createRouter = (config: RouterConfig) => {
       patch = null;
     }
     // An aborted signal means the dispatch already went on without this hook; a next() now would open a second request.
-    if (next.signal.aborted) return;
+    if (next.signal.aborted) {
+      abandon(engine, e);
+      return;
+    }
     // Once next starts, every chunk, the return, a refusal or an error belongs to the host: nothing here retries it.
     const result = yield* next(patch ? { ...e, ...patch } : e);
     observeStep(engine, e, patch, result);
@@ -344,9 +398,16 @@ export const createRouter = (config: RouterConfig) => {
     return null;
   };
 
-  const spawnAssessment = async (engine: RouterEngine, e: SpawnEvent, baseline: Baseline, opts: PolicyOptions, tiers: MutableDimensions['tiers']): Promise<string | null> => {
+  const spawnAssessment = async (
+    engine: RouterEngine,
+    e: SpawnEvent,
+    baseline: Baseline,
+    opts: PolicyOptions,
+    tiers: MutableDimensions['tiers'],
+    signal: AbortSignal,
+  ): Promise<string | null> => {
     const task: RoutingTask = { scope: 'spawn', text: e.prompt, description: e.description, subagentType: e.subagentType };
-    const outcome = await assess(engine, task, baseline, { tiers, efforts: null }, opts, session.signal);
+    const outcome = await assess(engine, task, baseline, { tiers, efforts: null }, opts, signal, { scope: 'spawn', tool_use_id: e.tool_use_id });
     if (outcome.kind === 'skipped') return spawnSkip(engine, e, outcome.reason);
     log(engine, {
       event: 'spawn',
@@ -380,21 +441,20 @@ export const createRouter = (config: RouterConfig) => {
     if (LEAN_MARKER.test(e.prompt) || LEAN_MARKER.test(e.description)) return spawnSkip(engine, e, 'lean_marker');
     const baseline: Baseline = { model: e.parentModel };
     const opts = policy('spawn', await engine.availableModels().catch(() => []));
-    const tiers = offerableTiers(baseline, opts);
-    if (!tiers) return spawnSkip(engine, e, 'rank_unknown');
+    const offer = offerableTiers(baseline, opts);
+    if ('reason' in offer) return spawnSkip(engine, e, offer.reason);
 
-    // Only the engine's own identity for this dispatch shares a pending answer; equal text never does.
-    let pending = spawnsPending.get(e.tool_use_id);
-    if (!pending) {
-      pending = spawnAssessment(engine, e, baseline, opts, tiers).catch(() => null);
-      spawnsPending.set(e.tool_use_id, pending);
-      const settled = pending;
-      void settled.finally(() => {
-        if (spawnsPending.get(e.tool_use_id) === settled) spawnsPending.delete(e.tool_use_id);
-      });
+    // Each dispatch is assessed on its own text rather than sharing one answer per tool_use_id: a redispatch under
+    // that id can carry another prompt, which would then run on a tier earned by different text. The wait ends with
+    // this dispatch or the session.
+    const wait = linked(signal, session.signal);
+    try {
+      return await spawnAssessment(engine, e, baseline, opts, offer.tiers, wait.signal);
+    } catch {
+      return null;
+    } finally {
+      wait.dispose();
     }
-    const target = await until(pending, signal);
-    return target === ABORTED ? null : target;
   };
 
   const agentSpawn = async <E extends SpawnEvent, R extends SpawnOutcome>(engine: RouterEngine, e: E, next: NextLike<E, R>): Promise<R> => {
@@ -441,9 +501,7 @@ export const createRouter = (config: RouterConfig) => {
       for (const id of [...turns.keys()]) retire(id);
       turnTexts.clear();
       offers.clear();
-      spawnsPending.clear();
       keyState = null;
-      pinState = null;
       diagnosed = false;
     },
     inFlight: client.inFlight,

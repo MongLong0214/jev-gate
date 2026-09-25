@@ -33,7 +33,7 @@ const TIER_FIELDS: Record<ModelTier, string> = { fast: 'fastModel', standard: 's
 
 /** Visible ASCII only: anything else cannot ride in a header, and is not echoed to say so. */
 const HEADER_SAFE_KEY = /^[\x21-\x7e]{8,1024}$/;
-/** A model identifier as the host spells one, with an optional bracketed suffix such as `[1m]`. */
+/** A model identifier as the host spells one, with an optional bracketed suffix; models.ts decides whether it is known. */
 const MODEL_VALUE = /^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,127}(?:\[[A-Za-z0-9._-]{1,16}\])?$/;
 
 export const validKey = (value: string): boolean => HEADER_SAFE_KEY.test(value);

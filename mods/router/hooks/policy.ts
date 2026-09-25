@@ -1,5 +1,5 @@
-import type { SymbolicEffort } from './models.ts';
-import { aliasFamily, effortIndex, factsOf, isSymbolicEffort, sameModel } from './models.ts';
+import type { RootSwitch, SymbolicEffort } from './models.ts';
+import { aliasFamily, effortIndex, factsOf, isSymbolicEffort, sameIdentity, sameModel, splitModelId } from './models.ts';
 
 /**
  * Pure task-to-parameter policy (#41): the questions, the strict answer check and the deterministic rule. No I/O,
@@ -187,6 +187,7 @@ export type DimensionReason =
   | 'target_unavailable'
   | 'target_not_allowed'
   | 'capacity_smaller'
+  | 'controls_unverified'
   | 'pair_invalid';
 
 export interface Decision {
@@ -210,6 +211,8 @@ export interface PolicyOptions {
   minDowngradeConfidence: number;
   /** The settings allowlist, when one is set. A target outside it is not used. */
   availableModels?: readonly string[] | undefined;
+  /** Root only: the model changes known to keep the retained request valid. Absent: none. */
+  rootSwitches?: readonly RootSwitch[];
 }
 
 type Identity = string;
@@ -239,21 +242,40 @@ const allowedBy = (target: string, list: readonly string[] | undefined): boolean
   const facts = factsOf(target);
   return list.some((entry) => {
     if (entry === target) return true;
-    // A full identifier is allowed by an entry naming the same model, or by its family's alias; an alias only by itself.
+    // A full identifier is allowed by an entry naming the same model and variant, or, without a suffix, by its
+    // family's alias. An alias is allowed only by itself.
     if (!facts || aliasFamily(target) !== null) return false;
-    return factsOf(entry) === facts || aliasFamily(entry) === facts.family;
+    return sameIdentity(entry, target) || (splitModelId(target).suffix === '' && aliasFamily(entry) === facts.family);
   });
 };
 
-/** Profiles worth offering: a known current rank and at least one other usable target. */
-export const offerableTiers = (baseline: Baseline, opts: PolicyOptions): ModelTier[] | null => {
-  if (rankOf(baseline.model, opts.tiers) === null) return null;
-  const usable = TIER_ORDER.filter((t) => {
-    const v = opts.tiers[t];
-    return v !== undefined && usableTarget(v, opts.scope);
-  });
+/** Why a configured profile cannot replace this baseline, known before anything is asked. Null: it can. */
+const targetRefusal = (value: string | undefined, baseline: Baseline, opts: PolicyOptions): DimensionReason | null => {
+  if (value === undefined || !usableTarget(value, opts.scope)) return 'target_unavailable';
+  if (!allowedBy(value, opts.availableModels)) return 'target_not_allowed';
+  if (opts.scope === 'root') {
+    // Message counts and character counts cannot prove the conversation fits a smaller window.
+    if ((factsOf(value)?.contextTokens ?? 0) < (factsOf(baseline.model)?.contextTokens ?? Infinity)) return 'capacity_smaller';
+    if (!(opts.rootSwitches ?? []).some((s) => s.from === baseline.model && s.to === value)) return 'controls_unverified';
+  }
+  return null;
+};
+
+export type TierOffer = { tiers: ModelTier[] } | { reason: 'rank_unknown' | 'no_applicable_target' };
+
+/**
+ * Profiles worth asking about: a known current rank and at least one other profile that could actually be applied.
+ * A question whose every change would be refused afterwards is a paid request for nothing.
+ */
+export const offerableTiers = (baseline: Baseline, opts: PolicyOptions): TierOffer => {
   const current = rankOf(baseline.model, opts.tiers);
-  return usable.some((t) => t !== current) ? usable : null;
+  if (current === null) return { reason: 'rank_unknown' };
+  const tiers = TIER_ORDER.filter((t) => {
+    const v = opts.tiers[t];
+    if (v === undefined || !usableTarget(v, opts.scope)) return false;
+    return t === current || targetRefusal(v, baseline, opts) === null;
+  });
+  return tiers.some((t) => t !== current) ? { tiers } : { reason: 'no_applicable_target' };
 };
 
 /** Effort levels valid for this exact model under every thinking mode it accepts, never max. Null: effort is unknown. */
@@ -315,13 +337,10 @@ export const choosePatch = (answers: Answers, baseline: Baseline, asked: Mutable
       const tier = a.choice as ModelTier;
       const value = opts.tiers[tier];
       const direction = Math.sign(TIER_ORDER.indexOf(tier) - TIER_ORDER.indexOf(current));
+      const refusal = targetRefusal(value, baseline, opts);
       if (direction === 0 || (value !== undefined && sameModel(value, baseline.model))) model = 'same_value';
-      else if (value === undefined || !usableTarget(value, opts.scope)) model = 'target_unavailable';
-      else if (!allowedBy(value, opts.availableModels)) model = 'target_not_allowed';
-      else if (opts.scope === 'root' && (factsOf(value)?.contextTokens ?? 0) < (factsOf(baseline.model)?.contextTokens ?? Infinity)) {
-        // Message counts and character counts cannot prove the conversation fits a smaller window.
-        model = 'capacity_smaller';
-      } else {
+      else if (refusal) model = refusal;
+      else {
         const blocked = gate(a, direction as 1 | -1, answers, opts);
         if (blocked) model = blocked;
         else {

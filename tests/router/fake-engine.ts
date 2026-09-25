@@ -46,6 +46,8 @@ export const fakeEngine = (o: FakeEngineOptions = {}) => {
   const sent: SentRequest[] = [];
   const logs: Array<Record<string, unknown>> = [];
   const timers: Array<{ ms: number; resolve: () => void }> = [];
+  // Read on every call, so a test can set a pin between steps as another Mod could.
+  const pins: Partial<HostPins> = { ...o.pins };
   const engine: RouterEngine = {
     fetch: async (url, init) => {
       const body = JSON.parse(init.body) as { model: string; state: unknown; questions: SentRequest['questions'] };
@@ -65,7 +67,7 @@ export const fakeEngine = (o: FakeEngineOptions = {}) => {
         signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
       }),
     envKey: async () => ('envKey' in o ? o.envKey : FAKE_KEY),
-    pins: async () => ({ mainModel: false, mainEffort: false, subagentModel: false, aliasRemap: false, ...o.pins }),
+    pins: async () => ({ mainModel: false, mainEffort: false, subagentModel: false, aliasRemap: false, ...pins }),
     availableModels: async () => o.availableModels,
     hostBase: async () => ('hostBase' in o ? o.hostBase : '2.1.282'),
     log: (line) => {
@@ -77,6 +79,7 @@ export const fakeEngine = (o: FakeEngineOptions = {}) => {
     engine,
     sent,
     logs,
+    pins,
     expire: (): void => {
       for (const t of timers.splice(0)) t.resolve();
     },

@@ -66,6 +66,10 @@ describe('resolveConfig', () => {
     expect(ok({ frontierModel: 'claude-fable-5-1' }).tiers.frontier).toBe('claude-fable-5-1');
     expect(ok({ frontierModel: '' }).tiers.frontier).toBeUndefined();
     expect(ok({ deepModel: 'claude-opus-5-5[1m]' }).tiers.deep).toBe('claude-opus-5-5[1m]');
+    // Only a suffix the host lists for that model names a known variant.
+    for (const deepModel of ['claude-opus-5-5[bogus]', 'claude-fable-5-1[1m]']) {
+      expect(ok({ deepModel }).tierIssues, deepModel).toEqual([{ tier: 'deep', reason: 'unknown_model' }]);
+    }
   });
 
   it('keeps no profile at all when two name one family, since every rank lookup would be a guess', () => {

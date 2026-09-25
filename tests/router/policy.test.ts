@@ -67,6 +67,8 @@ describe('questions and state', () => {
 const FULL: PolicyOptions['tiers'] = { fast: 'claude-haiku-4-5', standard: 'claude-sonnet-5', deep: 'claude-opus-5-5', frontier: 'claude-fable-5-1' };
 const ALIASES: PolicyOptions['tiers'] = { fast: 'haiku', standard: 'sonnet', deep: 'opus' };
 const opts = (over: Partial<PolicyOptions> = {}): PolicyOptions => ({ scope: 'root', tiers: FULL, minUpgradeConfidence: 0.8, minDowngradeConfidence: 0.9, ...over });
+/** Root switches a test declares verified; the shipped list is empty. */
+const switches = (...pairs: Array<[string, string]>): Pick<PolicyOptions, 'rootSwitches'> => ({ rootSwitches: pairs.map(([from, to]) => ({ from, to })) });
 const a = (choice: string, confidence = 0.95): ChoiceAnswer => ({ choice, confidence });
 const CLEAR: Answers = { control: a('task_clear', 0.97), action_risk: a('ordinary', 0.97) };
 
@@ -77,12 +79,26 @@ describe('what is offered', () => {
     expect(rankOf('claude-unknown-1', FULL)).toBeNull();
   });
 
-  it('offers profiles only with a known rank and another usable target for the scope', () => {
-    expect(offerableTiers({ model: 'claude-opus-5-5' }, opts())).toEqual(['fast', 'standard', 'deep', 'frontier']);
+  it('offers profiles only with a known rank and another target that could be applied', () => {
+    const opus = { model: 'claude-opus-5-5' };
+    // With no verified root switch, a root model question could only be refused: it is not asked.
+    expect(offerableTiers(opus, opts())).toEqual({ reason: 'no_applicable_target' });
+    // A verified switch makes its target offerable; a smaller window never is.
+    expect(offerableTiers(opus, opts(switches(['claude-opus-5-5', 'claude-sonnet-5'], ['claude-opus-5-5', 'claude-haiku-4-5'])))).toEqual({ tiers: ['standard', 'deep'] });
     // A root request takes exact identifiers only.
-    expect(offerableTiers({ model: 'claude-opus-5-5' }, opts({ tiers: ALIASES }))).toBeNull();
-    expect(offerableTiers({ model: 'claude-opus-5-5' }, opts({ scope: 'spawn', tiers: ALIASES }))).toEqual(['fast', 'standard', 'deep']);
-    expect(offerableTiers({ model: 'claude-unknown-1' }, opts())).toBeNull();
+    expect(offerableTiers(opus, opts({ tiers: ALIASES }))).toEqual({ reason: 'no_applicable_target' });
+    expect(offerableTiers(opus, opts({ scope: 'spawn', tiers: ALIASES }))).toEqual({ tiers: ['fast', 'standard', 'deep'] });
+    // Every other profile outside the allowlist: nothing to ask about.
+    expect(offerableTiers(opus, opts({ scope: 'spawn', tiers: ALIASES, availableModels: ['opus'] }))).toEqual({ reason: 'no_applicable_target' });
+    expect(offerableTiers(opus, opts({ scope: 'spawn', tiers: ALIASES, availableModels: [] }))).toEqual({ reason: 'no_applicable_target' });
+    expect(offerableTiers({ model: 'claude-unknown-1' }, opts())).toEqual({ reason: 'rank_unknown' });
+  });
+
+  it('knows only the variants the host lists for each model', () => {
+    expect(rankOf('claude-opus-5-5[bogus]', FULL)).toBeNull();
+    expect(rankOf('claude-fable-5-1[1m]', FULL)).toBeNull();
+    expect(rankOf('claude-sonnet-5[1m]', FULL)).toBe('standard');
+    expect(offerableTiers({ model: 'claude-opus-5-5[bogus]' }, opts({ scope: 'spawn' }))).toEqual({ reason: 'rank_unknown' });
   });
 
   it('offers only the unconditional levels of the exact model, never max, and only for a symbolic root effort', () => {
@@ -130,10 +146,34 @@ describe('choosePatch', () => {
     const up = { ...CLEAR, tier: a('frontier') };
     const sonnet: Baseline = { model: 'claude-sonnet-5', effort: 'high' };
     expect(choosePatch(up, sonnet, modelOnly, opts({ availableModels: ['claude-sonnet-5'] })).model).toBe('target_not_allowed');
-    expect(choosePatch({ ...CLEAR, tier: a('deep') }, sonnet, modelOnly, opts({ availableModels: ['opus'] })).patch).toEqual({ model: 'claude-opus-5-5' });
+    const toOpus = switches(['claude-sonnet-5', 'claude-opus-5-5']);
+    expect(choosePatch({ ...CLEAR, tier: a('deep') }, sonnet, modelOnly, opts({ availableModels: ['opus'], ...toOpus })).patch).toEqual({ model: 'claude-opus-5-5' });
     // An alias target is allowed only by the alias itself.
     const spawn = opts({ scope: 'spawn', tiers: ALIASES, availableModels: ['claude-haiku-4-5'] });
     expect(choosePatch({ ...CLEAR, tier: a('fast') }, { model: 'claude-opus-5-5' }, { tiers: ['fast', 'standard', 'deep'], efforts: null }, spawn).model).toBe('target_not_allowed');
+  });
+
+  it('allows a variant only by an entry naming that variant, and never by an unknown suffix', () => {
+    const deep = { ...CLEAR, tier: a('deep') };
+    const sonnet: Baseline = { model: 'claude-sonnet-5' };
+    const spawnTo = (target: string, availableModels: string[]) =>
+      choosePatch(deep, sonnet, modelOnly, opts({ scope: 'spawn', tiers: { ...FULL, deep: target }, availableModels })).model;
+    expect(spawnTo('claude-opus-5-5[1m]', ['claude-opus-5-5[1m]'])).toBe('applied');
+    expect(spawnTo('claude-opus-5-5[1m]', ['claude-opus-5-5'])).toBe('target_not_allowed');
+    expect(spawnTo('claude-opus-5-5[1m]', ['opus'])).toBe('target_not_allowed');
+    expect(spawnTo('claude-opus-5-5', ['claude-opus-5-5[1m]'])).toBe('target_not_allowed');
+    expect(spawnTo('claude-opus-5-5[bogus]', ['claude-opus-5-5[bogus]'])).toBe('target_unavailable');
+  });
+
+  it('keeps every root model native until the exact switch is verified', () => {
+    const up = { ...CLEAR, tier: a('frontier') };
+    const sonnet: Baseline = { model: 'claude-sonnet-5' };
+    expect(choosePatch(up, sonnet, modelOnly, opts()).model).toBe('controls_unverified');
+    expect(choosePatch(up, sonnet, modelOnly, opts(switches(['claude-sonnet-5', 'claude-fable-5-1']))).patch).toEqual({ model: 'claude-fable-5-1' });
+    // A verified pair is exact: another variant of the same baseline is a different request.
+    expect(choosePatch(up, { model: 'claude-sonnet-5[1m]' }, modelOnly, opts(switches(['claude-sonnet-5', 'claude-fable-5-1']))).model).toBe('controls_unverified');
+    // A spawn starts a fresh request: the retained controls are not carried over.
+    expect(choosePatch(up, sonnet, modelOnly, opts({ scope: 'spawn' })).patch).toEqual({ model: 'claude-fable-5-1' });
   });
 
   it('refuses a smaller context window at the root, but not for a spawn', () => {
@@ -144,14 +184,15 @@ describe('choosePatch', () => {
   });
 
   it('drops a model that cannot take the effort it would run with, and keeps an effort the original model takes', () => {
-    const d = choosePatch({ ...CLEAR, tier: a('standard'), effort: a('xhigh') }, base, { tiers: modelOnly.tiers, efforts: effortOnly.efforts }, opts());
+    const toSonnet = opts(switches(['claude-opus-5-5', 'claude-sonnet-5']));
+    const d = choosePatch({ ...CLEAR, tier: a('standard'), effort: a('xhigh') }, base, { tiers: modelOnly.tiers, efforts: effortOnly.efforts }, toSonnet);
     expect(d).toEqual({ patch: { effort: 'xhigh' }, model: 'pair_invalid', effort: 'applied' });
-    const kept = choosePatch({ ...CLEAR, tier: a('standard'), effort: a('low') }, base, { tiers: modelOnly.tiers, efforts: effortOnly.efforts }, opts());
+    const kept = choosePatch({ ...CLEAR, tier: a('standard'), effort: a('low') }, base, { tiers: modelOnly.tiers, efforts: effortOnly.efforts }, toSonnet);
     expect(kept).toEqual({ patch: { model: 'claude-sonnet-5', effort: 'low' }, model: 'applied', effort: 'applied' });
-    expect(choosePatch({ ...CLEAR, tier: a('standard') }, { model: 'claude-opus-5-5', effort: 'max' }, modelOnly, opts()).model).toBe('pair_invalid');
+    expect(choosePatch({ ...CLEAR, tier: a('standard') }, { model: 'claude-opus-5-5', effort: 'max' }, modelOnly, toSonnet).model).toBe('pair_invalid');
   });
 
-  it('treats the same model under another spelling as no change', () => {
+  it('treats the same rank as no change, whatever the variant', () => {
     const d = choosePatch({ ...CLEAR, tier: a('deep') }, { model: 'claude-opus-5-5[1m]' }, modelOnly, opts());
     expect(d.model).toBe('same_value');
   });

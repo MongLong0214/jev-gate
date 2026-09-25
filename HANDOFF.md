@@ -14,6 +14,15 @@ it cannot set plugin options. `pack --profile router` builds the archive, and `c
 accepts it unpacked. No routed turn or spawn has been observed on an installed host, and no saving is claimed.
 Composing it with Lean is #44 part B.
 
+The first gpt-6-sol review of `a416a01` was FIX-FIRST with two blockers and seven other findings, all fixed with a test
+each. A model suffix now counts only where the host lists it (`[1m]` on Opus 5.5 and Sonnet 5), and the bare and
+`[1m]` forms are different identities. Pins are re-read at every step. An abandoned first step keeps the turn
+native. An effort-only patch is observed too. Each spawn dispatch is assessed on its own. A question is not sent when
+nothing it could answer would apply. Late replies are logged for their usage. And **every root model stays native**
+until a `from → to` switch is verified on a host (`VERIFIED_ROOT_SWITCHES` is empty), because the hook cannot see
+whether the retained request's controls remain valid on another model. So `routeMainModel` asks nothing today. #41
+and #42 need that host observation.
+
 ## 2026-09-25 — the PR #37 review (L1–L7) is fixed in code; `lean` is still unmeasured
 
 The consolidated review of `e444a4d` asked for seven changes before recommending `lean`. All seven are now in code

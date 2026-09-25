@@ -113,6 +113,31 @@ describe('the one request', () => {
     expect(await client.assess(x.t, FAKE_KEY, STATE, QUESTIONS)).toMatchObject({ reason: 'credential_refused', sent: false });
   });
 
+  it('reports a late reply to the call that sent it as well, and a throwing observer changes nothing', async () => {
+    const shared: Array<Usage | null> = [];
+    const client = createClient({
+      timeoutMs: 800,
+      onLate: (u) => {
+        shared.push(u);
+        throw new Error('observer down');
+      },
+    });
+    const replies = [deferred<HttpReply>(), deferred<HttpReply>()];
+    let i = 0;
+    const x = transport(() => replies[i++]!.promise);
+    const own: Array<Usage | null> = [];
+    const first = client.assess(x.t, FAKE_KEY, STATE, QUESTIONS, undefined, (u) => own.push(u));
+    const second = client.assess(x.t, FAKE_KEY, STATE, QUESTIONS);
+    await vi.waitFor(() => expect(x.fetch).toHaveBeenCalledTimes(2));
+    x.expire();
+    await Promise.all([first, second]);
+    replies[0]!.resolve({ status: 200, text: JSON.stringify({ usage: { input_tokens: 700, output_tokens: 30 } }) });
+    replies[1]!.resolve({ status: 200, text: JSON.stringify({ usage: { input_tokens: 500, output_tokens: 20 } }) });
+    await vi.waitFor(() => expect(shared).toHaveLength(2));
+    // Each call hears only its own reply; the client-wide observer hears both, and its throw reaches neither.
+    expect(own).toEqual([{ input_tokens: 700, output_tokens: 30 }]);
+  });
+
   it('ends the wait when the caller aborts, and sends nothing when already aborted', async () => {
     const client = createClient({ timeoutMs: 800 });
     const x = transport(() => new Promise<HttpReply>(() => undefined));
