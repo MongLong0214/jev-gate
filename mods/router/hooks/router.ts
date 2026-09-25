@@ -448,45 +448,49 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     return outcome.patch.model ?? null;
   };
 
-  const spawnTarget = async (engine: RouterEngine, e: SpawnEvent, signal: AbortSignal): Promise<string | null> => {
+  /** Thrown when a wait ends with its dispatch or session; the spawn then stays native. */
+  const ENDED = Symbol('ended');
+  const within = async <T>(p: Promise<T>, live: AbortSignal): Promise<T> => {
+    const r = await until(p, live);
+    if (r === ABORTED) throw ENDED;
+    return r;
+  };
+
+  const spawnDecision = async (engine: RouterEngine, e: SpawnEvent, live: AbortSignal): Promise<string | null> => {
     if (!spawnEnabled) return null;
     // Native ignores a fork's model and inherits the parent's context and model.
     if (e.fork) return spawnSkip(engine, e, 'fork');
     if (e.model !== undefined && e.model.trim() !== '') return spawnSkip(engine, e, 'explicit_model');
     void diagnose(engine);
-    const pins = await pinsOf(engine);
+    const pins = await within(pinsOf(engine), live);
     if (pins.subagentModel) return spawnSkip(engine, e, 'subagent_model_pinned');
     if (pins.aliasRemap) return spawnSkip(engine, e, 'alias_remapped');
     if (!INHERITING_BUILT_INS.has(e.subagentType)) return spawnSkip(engine, e, 'type_unverified');
     // A user's or a plugin's agent can carry a built-in's name; only the listing's own source says which one runs.
     if (offers.get(e.subagentType) !== true || e.provider.plugin !== 'engine' || e.provider.tier !== 'core') return spawnSkip(engine, e, 'definition_unverified');
-    if ((await engine.hostBase().catch(() => undefined)) !== VERIFIED_HOST) return spawnSkip(engine, e, 'host_unverified');
+    if ((await within(engine.hostBase().catch(() => undefined), live)) !== VERIFIED_HOST) return spawnSkip(engine, e, 'host_unverified');
     const family = factsOf(e.parentModel)?.family;
     if (e.subagentType === 'Explore' && (family === undefined || !EXPLORE_FAMILIES.has(family))) return spawnSkip(engine, e, 'baseline_unknown');
     if (LEAN_MARKER.test(e.prompt) || LEAN_MARKER.test(e.description)) return spawnSkip(engine, e, 'lean_marker');
     const baseline: Baseline = { model: e.parentModel };
-    const opts = policy('spawn', await engine.availableModels().catch(() => []));
+    const opts = policy('spawn', await within(engine.availableModels().catch(() => []), live));
     const offer = offerableTiers(baseline, opts);
     if ('reason' in offer) return spawnSkip(engine, e, offer.reason);
 
     // Each dispatch is assessed on its own text rather than sharing one answer per tool_use_id: a redispatch under
-    // that id can carry another prompt, which would then run on a tier earned by different text. The wait ends with
-    // this dispatch or the session.
-    const wait = linked(signal, session.signal);
+    // that id can carry another prompt, which would then run on a tier earned by different text.
     let target: string | null;
     try {
-      target = await spawnAssessment(engine, e, baseline, opts, offer.tiers, wait.signal);
+      target = await spawnAssessment(engine, e, baseline, opts, offer.tiers, live);
     } catch {
       target = null;
-    } finally {
-      wait.dispose();
     }
     if (target === null) return null;
     // A pin or a narrower allowlist can arrive while Jev answers, so they are read again here rather than trusted from
     // before the request: what applies is what holds when the spawn is made. The pins are read last, after the
     // allowlist, so no await separates them from next.
-    const allowed = await engine.availableModels().catch(() => []);
-    const now = await pinsOf(engine);
+    const allowed = await within(engine.availableModels().catch(() => []), live);
+    const now = await within(pinsOf(engine), live);
     const stop = now.subagentModel
       ? 'subagent_model_pinned'
       : now.aliasRemap
@@ -499,6 +503,27 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
       return null;
     }
     return target;
+  };
+
+  /**
+   * Every wait of a dispatch ends with it or with the session it began in, rather than the one current when a wait
+   * ends: a session that ends meanwhile gets nothing from this dispatch, and no request is sent for it.
+   */
+  const spawnTarget = async (engine: RouterEngine, e: SpawnEvent, signal: AbortSignal): Promise<string | null> => {
+    const own = session.signal;
+    const live = linked(signal, own);
+    try {
+      const target = await spawnDecision(engine, e, live.signal);
+      // Nothing is awaited between this check and next.
+      if (target !== null && own.aborted) throw ENDED;
+      return target;
+    } catch (err) {
+      if (err === ENDED && own.aborted && !signal.aborted) log(engine, { event: 'spawn_stop', tool_use_id: e.tool_use_id, reason: 'session_ended' });
+      if (err === ENDED) return null;
+      throw err;
+    } finally {
+      live.dispose();
+    }
   };
 
   const agentSpawn = async <E extends SpawnEvent, R extends SpawnOutcome>(engine: RouterEngine, e: E, next: NextLike<E, R>): Promise<R> => {

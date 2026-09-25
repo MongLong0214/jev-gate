@@ -92,13 +92,15 @@ no user text (`no_task_text`) is not judged. If a step reports another model tha
 the model override stops for the rest of the turn, and so does an effort the observed model cannot take; this holds
 for an effort-only patch too, since the host can answer from a fallback. A model override needs its own variant
 reported back: a bare `claude-opus-5-5` does not confirm a requested `claude-opus-5-5[1m]`, and ends that override.
-An effort-only patch compares by model alone, since effort does not depend on the variant. If a step's incoming model or effort differs from the
+An effort-only patch compares by model alone, in both directions (bare against `[1m]` and back), since effort does
+not depend on the variant. If a step's incoming model or effort differs from the
 baseline, something else changed it, and the Router stops for the rest of the turn (`root_stop`). So it does if the
 host dispatched a step without waiting for the hook (`step_abandoned`): a later step never switches away from what that
 one ran on.
 
-A spawn is judged per dispatch, on its own prompt, even when a `tool_use_id` repeats; its wait ends with that dispatch
-or the session.
+A spawn is judged per dispatch, on its own prompt, even when a `tool_use_id` repeats. Every wait it makes (the pins,
+the host release, the allowlist, Jev) ends with that dispatch or with the session it began in. A spawn whose session
+ended meanwhile sends nothing more and stays native (`session_ended`).
 
 Each routed result is logged with what the host reported: `root_result` carries the applied patch, the model the step
 reports and the four token counts of its usage (nothing else of it), and `spawn_result` the requested and resolved

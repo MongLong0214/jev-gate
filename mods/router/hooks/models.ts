@@ -77,13 +77,14 @@ export const sameModel = (requested: string, observed: string): boolean => {
 };
 
 /**
- * Whether the id a response reports (TurnUsage.model, "by the id the API reports") is the model that was requested.
- * That id need not carry the host's variant suffix, so an unsuffixed answer is compared by model alone: it neither
- * confirms nor refutes a requested `[1m]`. A suffixed answer is held to sameModel.
+ * Whether the id a response reports (TurnUsage.model, "by the id the API reports") names the requested model, in
+ * either variant: a bare id and its listed `[1m]` form count as the same model, in both directions. That is what an
+ * effort-only patch needs, since the efforts a model takes do not depend on its variant. A model override is held to
+ * sameModel instead, which keeps the variant.
  */
 export const answeredBy = (requested: string, observed: string): boolean => {
   if (sameModel(requested, observed)) return true;
-  if (splitModelId(observed).suffix !== '' || aliasFamily(requested) !== null) return false;
+  if (aliasFamily(requested) !== null) return false;
   const seen = factsOf(observed);
   return seen !== null && factsOf(requested) === seen;
 };

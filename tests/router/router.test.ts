@@ -287,22 +287,26 @@ describe('root effort', () => {
     }
   });
 
-  it('keeps an effort the answering model takes, and reads an unsuffixed answer as the requested variant', async () => {
-    const cases: Array<[TurnStepEvent, string, boolean]> = [
+  it('keeps an effort the answering model takes, and reads either variant of the requested model as no mismatch', async () => {
+    const cases: Array<[TurnStepEvent, string, boolean, string]> = [
       // A fallback that takes low: the effort stays, the mismatch is still logged.
-      [step(), 'claude-sonnet-5', true],
+      [step(), 'claude-sonnet-5', true, 'low'],
       // The reported id has no [1m]: it neither confirms nor refutes the variant, and is no mismatch.
-      [step({ model: 'claude-opus-5-5[1m]' }), 'claude-opus-5-5', false],
+      [step({ model: 'claude-opus-5-5[1m]' }), 'claude-opus-5-5', false, 'low'],
+      // And the other way: a bare request answered with the listed [1m] form is the same model.
+      [step(), 'claude-opus-5-5[1m]', false, 'low'],
+      // A suffix the host does not list is not a known model, so nothing says it takes low.
+      [step(), 'claude-opus-5-5[bogus]', true, 'high'],
     ];
-    for (const [e, observed, mismatch] of cases) {
+    for (const [e, observed, mismatch, effort] of cases) {
       const router = createRouter(configOf(EFFORT_ONLY));
       const f = fakeEngine({ respond: answering({ ...CLEAR, effort: ['low', 0.95] }) });
       router.turnStart({ turnId: 't1', text: TEXT });
       await drain(router.turnStep(f.engine, e, streamNext<TurnStepEvent>(() => observed).next));
       const second = streamNext<TurnStepEvent>();
       await drain(router.turnStep(f.engine, { ...e, index: 1 }, second.next));
-      expect(second.calls, e.model).toEqual([{ ...e, index: 1, effort: 'low' }]);
-      expect(f.logs.some((l) => l['event'] === 'root_stop'), e.model).toBe(mismatch);
+      expect(second.calls, observed).toEqual([{ ...e, index: 1, effort }]);
+      expect(f.logs.some((l) => l['event'] === 'root_stop'), observed).toBe(mismatch);
     }
   });
 
@@ -674,6 +678,31 @@ describe('spawn model', () => {
     await run;
     expect(n.calls).toEqual([spawn()]);
     expect(f.logs).toContainEqual({ event: 'spawn_stop', tool_use_id: 'tu1', reason: 'subagent_model_pinned', requested: 'haiku' });
+  });
+
+  it('sends nothing and routes nothing for a dispatch whose session ended during a read', async () => {
+    for (const during of ['first', 'final'] as const) {
+      const router = createRouter(configOf(SPAWN_ONLY));
+      const reply = deferred<HttpReply>();
+      const f = fakeEngine({ respond: () => reply.promise });
+      router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+      const gate = deferred<void>();
+      if (during === 'first') f.allowed.wait = gate.promise;
+      const n = spawnNext();
+      const run = router.agentSpawn(f.engine, spawn(), n.next);
+      if (during === 'final') {
+        await vi.waitFor(() => expect(f.sent).toHaveLength(1));
+        f.allowed.wait = gate.promise;
+        reply.resolve(answering({ ...CLEAR, tier: ['fast', 0.95] })(f.sent[0]!) as HttpReply);
+      }
+      await vi.waitFor(() => expect(f.allowed.reads).toBe(during === 'first' ? 1 : 2));
+      router.sessionEnd();
+      gate.resolve();
+      await run;
+      expect(n.calls, during).toEqual([spawn()]);
+      expect(f.sent, during).toHaveLength(during === 'first' ? 0 : 1);
+      expect(f.logs, during).toContainEqual({ event: 'spawn_stop', tool_use_id: 'tu1', reason: 'session_ended' });
+    }
   });
 
   it('records the model and agent a routed spawn resolved to', async () => {

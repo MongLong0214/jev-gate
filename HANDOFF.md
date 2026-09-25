@@ -34,6 +34,11 @@ The third review (`ebf709d`) found a pin could still land while the allowlist wa
 leave a stored model paired with an effort it cannot take. The pins are now read last, and a model override is
 dropped when the effort actually sent does not pair with it.
 
+The fourth review (`0979050`) found that a spawn could still be routed after its session ended, because its reads
+ran outside the session link, and that an effort-only patch read a bare request answered with `[1m]` as a mismatch.
+Every wait of a spawn now ends with its dispatch or the session it began in, and effort-only observation compares the
+model in both directions.
+
 ## 2026-09-25 — the PR #37 review (L1–L7) is fixed in code; `lean` is still unmeasured
 
 The consolidated review of `e444a4d` asked for seven changes before recommending `lean`. All seven are now in code
