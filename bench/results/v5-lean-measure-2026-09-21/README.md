@@ -36,6 +36,13 @@ not `null` as a failure, so a fully answered run read as "every one of jev_lean'
 
 ## Why `lean-3` still measured nothing, and it is not a defect
 
+> **Correction, 2026-09-25** (`../v5-lean-scope-probe-2026-09-25/`). The section below is kept as written. Its
+> conclusion that `forbidden` is *the* correct answer overreads the input. The quoted ban names 이 읽기 — the reading,
+> an earlier task that finished — and the later request restates no restriction, so whether it still covers that
+> request is arguable, not established. Staying native was right; calling the fixture a valid global ban was not.
+> Under the criteria clarified in `eac9bb9`, Jev leans `self_contained` on this text at 0.38–0.44 confidence (n = 3),
+> still below the floor, so the fixtures still cannot exercise a handoff — for ambiguity, not by construction.
+
 With the token bound fixed, Jev answered both requests (200, 15,165 and 15,560 input tokens) and its relation
 answers were usable — 11 of 13 groups marked omit on the second call. But `handoff_scope` came back **`forbidden`**
 at 0.54 and 0.67, below the 0.8 action floor, so both turns recorded `scope_unusable` and stayed native.

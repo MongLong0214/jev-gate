@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, describe, expect, it } from 'vitest';
 
 import { DEFAULT_CONFIG } from '../src/config.js';
 import { MAX_REQUEST_BYTES } from '../src/jev.js';
@@ -16,8 +19,14 @@ import {
   LEAN_OMISSION_CONFIDENCE,
   RELATION_ANSWERS,
   WORK_SHAPE_ANSWERS,
+  type LeanRequestState,
 } from '../src/lean.js';
-import type { LeanGroup, LeanSource } from '../src/lean-source.js';
+import { readLeanSource, type LeanGroup, type LeanSource } from '../src/lean-source.js';
+import { conversation, type Conversation } from './transcript-fixture.js';
+
+const scopeTmp = mkdtempSync(join(tmpdir(), 'jev-lean-scope-'));
+afterAll(() => rmSync(scopeTmp, { recursive: true, force: true }));
+const SCOPE_SID = '7a2e9c41-0b3d-4f58-8e16-5c9d2b7f3a04';
 
 const choice = (keys: readonly string[], winner: string, confidence = 0.95): Record<string, unknown> => ({
   type: 'choice',
@@ -285,5 +294,81 @@ describe('scoped instructions (handoff_scope criteria)', () => {
     const packed = buildLeanRequest(s, DEFAULT_CONFIG);
     if (!packed.ok) throw new Error(packed.reason);
     expect(JSON.stringify(packed.request.state)).toContain('이 읽기는 네가 직접 해라');
+  });
+
+  // Four kinds of restriction, read from a host-shaped transcript by the real source adapter. What these establish is
+  // where each one reaches Jev and with what attribution -- the input a scope judgement needs -- not how Jev judges it.
+  const BAN = '서브에이전트나 다른 워커에게 넘기지 마라';
+  const scoped = (build: (c: Conversation) => void, request: string): LeanRequestState => {
+    const c = conversation(SCOPE_SID);
+    build(c);
+    const r = readLeanSource(c.write(mkdtempSync(join(scopeTmp, 'c-'))), { request, promptId: 'now', sessionId: SCOPE_SID, phase: 'prompt' });
+    if (!r.ok) throw new Error(`${r.reason}: ${r.detail}`);
+    const packed = buildLeanRequest(r.source, DEFAULT_CONFIG);
+    if (!packed.ok) throw new Error(packed.reason);
+    return packed.request.state;
+  };
+  const reading = (c: Conversation): void => {
+    c.call('Bash', { command: 'cat reference/note-01.md' }, '# note-01\nsym0001 sym0002');
+    c.say('준비됨');
+  };
+
+  it('a prohibition on the current task is in the request itself', () => {
+    const state = scoped((c) => {
+      c.human('reference/ 를 읽어라', 'p1');
+      reading(c);
+    }, `검증 모듈을 고쳐줘. ${BAN}`);
+    expect(state.request).toContain(BAN);
+    expect(JSON.stringify(state.mandatory)).not.toContain(BAN);
+  });
+
+  it('a session-wide prohibition in an earlier message reaches Jev as the user\'s own words, before the request', () => {
+    const state = scoped((c) => {
+      c.human(`이 세션이 끝날 때까지 어떤 작업도 ${BAN}`, 'p1');
+      reading(c);
+    }, '검증 모듈을 고쳐줘');
+    expect(state.mandatory.map((m) => [m.origin, m.text])).toEqual([['human', `이 세션이 끝날 때까지 어떤 작업도 ${BAN}`]]);
+    expect(state.request).not.toContain(BAN);
+  });
+
+  it('a completed earlier task\'s local restriction is carried with the words that scope it, not widened or dropped', () => {
+    // The depth fixtures' priming shape: the restriction names "이 읽기" -- this reading -- which then finished.
+    const prime = `reference/ 를 읽어라. 이 읽기는 네가 직접 해라. ${BAN}`;
+    const state = scoped((c) => {
+      c.human(prime, 'p1');
+      reading(c);
+    }, '검증 모듈을 고쳐줘');
+    expect(state.mandatory.map((m) => [m.origin, m.text])).toEqual([['human', prime]]);
+    expect(state.request).toBe('검증 모듈을 고쳐줘');
+  });
+
+  it('quoted tool content is never the user\'s restriction: optional, or labelled with its tool origin when referenced', () => {
+    const build = (c: Conversation): void => {
+      c.human('설정 문서를 읽어봐', 'p1');
+      c.call('Read', { file_path: 'docs/guide.md' }, `규칙: ${BAN}`);
+      // Something left to select once the quoted read is itself required.
+      c.call('Bash', { command: 'git log -1' }, 'abc123');
+    };
+    const unreferenced = scoped(build, '검증 모듈을 고쳐줘');
+    expect(JSON.stringify(unreferenced.mandatory)).not.toContain(BAN);
+    expect(Object.values(unreferenced.groups).join('\n')).toContain(BAN);
+    // The scope question reads only request and mandatory, so an optional group cannot supply a ban.
+    expect(HANDOFF_SCOPE_QUESTION.instructions).toContain('Ignore state.groups entirely');
+
+    const referenced = scoped(build, 'docs/guide.md 대로 검증 모듈을 고쳐줘');
+    const quoted = referenced.mandatory.filter((m) => m.text.includes(BAN));
+    expect(quoted.map((m) => m.origin)).toEqual(['assistant_tool']);
+  });
+
+  it.each([
+    // lean-3's answers on the depth fixtures: forbidden, below the action floor.
+    ['forbidden at 0.54', 'forbidden', 0.54],
+    ['forbidden at 0.67', 'forbidden', 0.67],
+    ['self_contained below the floor', 'self_contained', 0.79],
+  ])('stays native without calling it a ban on %s', (_name, winner, confidence) => {
+    const d = decideLean(answers({ handoff_scope: choice(HANDOFF_SCOPE_ANSWERS, winner, confidence) }), ['g1', 'g2']);
+    expect(d.action).toBe('direct');
+    expect(d.reason).toBe('scope_unusable');
+    expect(d.retainedGroupIds).toEqual(['g1', 'g2']);
   });
 });

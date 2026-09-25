@@ -89,7 +89,12 @@ What that does and does not mean:
   (`recent_packet`), not a strawman.** See [#29](https://github.com/MongLong0214/jev-gate/issues/29).
 - **Explicit `lean` is consent to the documented export.** The current request, the mandatory layer and the enumerated
   groups go to TypeSafe. Credential screening is a conventional local pattern check, best effort — not universal
-  protection and not a zero-retention guarantee.
+  protection and not a zero-retention guarantee. If your request or a required turn screens as a credential, nothing
+  is sent and the turn stays native; an optional group that screens is withheld and counted.
+- **A ban on delegation is respected through the confidence floor, not reliably recognised.** In a small probe, an
+  explicit "do not hand this to another worker" in the request scored `forbidden` at 0.59 at most, and lost to
+  `self_contained` once. It stayed native only because no answer reached the 0.8 action floor
+  ([probe](bench/results/v5-lean-scope-probe-2026-09-25/)). For work that must not be delegated, leave `lean` off.
 - **The recommendation can be ignored, and nothing blocks the root if it is.** There is no guard and no deny-list in
   `lean`.
 
