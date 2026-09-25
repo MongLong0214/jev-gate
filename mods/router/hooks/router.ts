@@ -95,6 +95,36 @@ const countsOf = (usage: unknown): Record<string, number> | null => {
 
 const ABORTED = Symbol('aborted');
 /** Waits for `p` unless `signal` ends the wait first. `p` itself is never cancelled by this. */
+/**
+ * One read that any number of callers wait on, each until its own signal aborts. `p` must not reject. An aborted
+ * waiter is dropped at once rather than held until a read that may never end.
+ */
+const sharedRead = <T>(p: Promise<T>): ((signal: AbortSignal) => Promise<T | typeof ABORTED>) => {
+  const waiters = new Set<(v: T) => void>();
+  let done: { v: T } | null = null;
+  void p.then((v) => {
+    done = { v };
+    for (const w of waiters) w(v);
+    waiters.clear();
+  });
+  return (signal) => {
+    if (done) return Promise.resolve(done.v);
+    if (signal.aborted) return Promise.resolve(ABORTED);
+    return new Promise((resolve) => {
+      const onAbort = (): void => {
+        waiters.delete(settle);
+        resolve(ABORTED);
+      };
+      const settle = (v: T): void => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(v);
+      };
+      waiters.add(settle);
+      signal.addEventListener('abort', onAbort, { once: true });
+    });
+  };
+};
+
 const until = <T>(p: Promise<T>, signal: AbortSignal): Promise<T | typeof ABORTED> => {
   if (signal.aborted) return Promise.resolve(ABORTED);
   return new Promise((resolve) => {
@@ -167,7 +197,7 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
   const turns = bounded<string, TurnRouting>(MAX_TURNS, (t) => t.controller.abort());
   const offers = bounded<string, boolean>(MAX_OFFERS);
   let session = new AbortController();
-  let keyState: Promise<KeyState> | null = null;
+  let keyWait: ((signal: AbortSignal) => Promise<KeyState | typeof ABORTED>) | null = null;
   let diagnosed = false;
 
   const log = (engine: RouterEngine, record: Record<string, unknown>): void => {
@@ -181,16 +211,19 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
 
   const client = createClient({ timeoutMs: config.timeoutMs });
 
-  const resolveKey = (engine: RouterEngine): Promise<KeyState> => {
-    keyState ??= (async (): Promise<KeyState> => {
-      if (config.explicitKey.kind === 'valid') return { key: config.explicitKey.value };
-      // An explicit value that cannot be sent never quietly selects a different account's key.
-      if (config.explicitKey.kind === 'invalid') return { reason: 'key_invalid' };
-      const v = await engine.envKey();
-      if (v === undefined || v.trim() === '') return { reason: 'key_missing' };
-      return validKey(v) ? { key: v } : { reason: 'key_invalid' };
-    })().catch((): KeyState => ({ reason: 'key_missing' }));
-    return keyState;
+  /** Read once per session; each caller waits only as long as its own signal allows. */
+  const keyFor = (engine: RouterEngine, signal: AbortSignal): Promise<KeyState | typeof ABORTED> => {
+    keyWait ??= sharedRead(
+      (async (): Promise<KeyState> => {
+        if (config.explicitKey.kind === 'valid') return { key: config.explicitKey.value };
+        // An explicit value that cannot be sent never quietly selects a different account's key.
+        if (config.explicitKey.kind === 'invalid') return { reason: 'key_invalid' };
+        const v = await engine.envKey();
+        if (v === undefined || v.trim() === '') return { reason: 'key_missing' };
+        return validKey(v) ? { key: v } : { reason: 'key_invalid' };
+      })().catch((): KeyState => ({ reason: 'key_missing' })),
+    );
+    return keyWait(signal);
   };
 
   /** Read on every use: another Mod can set a pin mid-session, and a pin set after a decision still wins. */
@@ -201,7 +234,8 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
   const diagnose = async (engine: RouterEngine): Promise<void> => {
     if (diagnosed) return;
     diagnosed = true;
-    const key = await resolveKey(engine);
+    const key = await keyFor(engine, session.signal);
+    if (key === ABORTED) return;
     log(engine, {
       event: 'router',
       root_effort: config.routeMainEffort,
@@ -225,6 +259,7 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
   /** One request for one task. Never throws. A reply after the wait ended is logged against `late`, never applied. */
   const assess = async (
     engine: RouterEngine,
+    key: string,
     task: RoutingTask,
     baseline: Baseline,
     dims: MutableDimensions,
@@ -234,10 +269,8 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
   ): Promise<Assessed> => {
     const questions = buildQuestions(dims);
     if (!questions) return { kind: 'skipped', reason: 'nothing_to_change' };
-    const key = await resolveKey(engine);
-    if (!('key' in key)) return { kind: 'skipped', reason: key.reason };
     const onLate = (usage: Usage | null): void => log(engine, { event: 'late', ...late, usage });
-    const res = await client.assess(engine, key.key, buildState(task), questions, signal, onLate);
+    const res = await client.assess(engine, key, buildState(task), questions, signal, onLate);
     if (!res.ok) return { kind: 'assessed', assessment: res.reason, usage: res.usage, sent: res.sent, patch: {}, model: 'not_asked', effort: 'not_asked' };
     const decision = choosePatch(validateAnswers(res.answers, questions), baseline, dims, opts);
     return { kind: 'assessed', assessment: 'ok', usage: res.usage, sent: true, ...decision };
@@ -259,15 +292,21 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     let outcome: Assessed;
     let withheld: string | undefined;
     try {
-      const pins = await pinsOf(engine);
-      const routeModel = config.routeMainModel && !pins.mainModel;
-      const available = routeModel ? await engine.availableModels().catch(() => []) : undefined;
-      const opts = policy('root', available);
-      const efforts = config.routeMainEffort && !pins.mainEffort ? offerableEfforts(t.baseline, 'root') : null;
-      const offer = routeModel ? offerableTiers(t.baseline, opts, efforts) : null;
-      if (offer && 'reason' in offer) withheld = offer.reason;
-      const dims: MutableDimensions = { tiers: offer && 'tiers' in offer ? offer.tiers : null, efforts };
-      outcome = await assess(engine, { scope: 'root', text }, t.baseline, dims, opts, t.controller.signal, { scope: 'root', turn: turnId });
+      // The key comes first: without one nothing optional is read, and a retired turn stops waiting for it.
+      const key = await keyFor(engine, t.controller.signal);
+      if (key === ABORTED) outcome = { kind: 'skipped', reason: 'turn_retired' };
+      else if (!('key' in key)) outcome = { kind: 'skipped', reason: key.reason };
+      else {
+        const pins = await pinsOf(engine);
+        const routeModel = config.routeMainModel && !pins.mainModel;
+        const available = routeModel ? await engine.availableModels().catch(() => []) : undefined;
+        const opts = policy('root', available);
+        const efforts = config.routeMainEffort && !pins.mainEffort ? offerableEfforts(t.baseline, 'root') : null;
+        const offer = routeModel ? offerableTiers(t.baseline, opts, efforts) : null;
+        if (offer && 'reason' in offer) withheld = offer.reason;
+        const dims: MutableDimensions = { tiers: offer && 'tiers' in offer ? offer.tiers : null, efforts };
+        outcome = await assess(engine, key.key, { scope: 'root', text }, t.baseline, dims, opts, t.controller.signal, { scope: 'root', turn: turnId });
+      }
     } catch {
       outcome = { kind: 'skipped', reason: 'internal_error' };
     }
@@ -434,13 +473,17 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
 
   // ---------------------------------------------------------------------------------------------- spawn
 
+  /** A type the Router does not route is caller text: it is never logged, only named as other. */
+  const typeLabel = (e: SpawnEvent): string => (INHERITING_BUILT_INS.has(e.subagentType) ? e.subagentType : 'other');
+
   const spawnSkip = (engine: RouterEngine, e: SpawnEvent, reason: string): null => {
-    log(engine, { event: 'spawn', tool_use_id: e.tool_use_id, type: e.subagentType, skipped: reason });
+    log(engine, { event: 'spawn', tool_use_id: e.tool_use_id, type: typeLabel(e), skipped: reason });
     return null;
   };
 
   const spawnAssessment = async (
     engine: RouterEngine,
+    key: string,
     e: SpawnEvent,
     baseline: Baseline,
     opts: PolicyOptions,
@@ -448,12 +491,12 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     signal: AbortSignal,
   ): Promise<string | null> => {
     const task: RoutingTask = { scope: 'spawn', text: e.prompt, description: e.description, subagentType: e.subagentType };
-    const outcome = await assess(engine, task, baseline, { tiers, efforts: null }, opts, signal, { scope: 'spawn', tool_use_id: e.tool_use_id });
+    const outcome = await assess(engine, key, task, baseline, { tiers, efforts: null }, opts, signal, { scope: 'spawn', tool_use_id: e.tool_use_id });
     if (outcome.kind === 'skipped') return spawnSkip(engine, e, outcome.reason);
     log(engine, {
       event: 'spawn',
       tool_use_id: e.tool_use_id,
-      type: e.subagentType,
+      type: typeLabel(e),
       from: baseline.model,
       assessment: outcome.assessment,
       sent: outcome.sent,
@@ -478,6 +521,10 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     if (e.fork) return spawnSkip(engine, e, 'fork');
     if (e.model !== undefined && e.model.trim() !== '') return spawnSkip(engine, e, 'explicit_model');
     void diagnose(engine);
+    // The key comes first: without one nothing optional is read.
+    const key = await keyFor(engine, live);
+    if (key === ABORTED) throw ENDED;
+    if (!('key' in key)) return spawnSkip(engine, e, key.reason);
     const pins = await within(pinsOf(engine), live);
     if (pins.subagentModel) return spawnSkip(engine, e, 'subagent_model_pinned');
     if (pins.aliasRemap) return spawnSkip(engine, e, 'alias_remapped');
@@ -497,7 +544,7 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     // that id can carry another prompt, which would then run on a tier earned by different text.
     let target: string | null;
     try {
-      target = await spawnAssessment(engine, e, baseline, opts, offer.tiers, live);
+      target = await spawnAssessment(engine, key.key, e, baseline, opts, offer.tiers, live);
     } catch {
       target = null;
     }
@@ -597,7 +644,7 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
       for (const id of [...turns.keys()]) retire(id);
       turnTexts.clear();
       offers.clear();
-      keyState = null;
+      keyWait = null;
       diagnosed = false;
     },
     inFlight: client.inFlight,

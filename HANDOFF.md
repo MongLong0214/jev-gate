@@ -44,6 +44,10 @@ steps, and that the invalid-option diagnostic could keep `session.start` from be
 handlers now check the session they began in (and the root turn's identity) with nothing awaited before `next`, and
 every bookkeeping call in `register.ts` is guarded.
 
+The sixth review (`009ab1d`) found that an unrouted spawn type, which is caller text, was logged by name, and that a
+pending key read held an abandoned spawn and was read only after the optional reads. Unrouted types are logged as
+`other`. The key is read first, once per session, and each caller waits on it only as long as its turn or dispatch.
+
 ## 2026-09-25 — the PR #37 review (L1–L7) is fixed in code; `lean` is still unmeasured
 
 The consolidated review of `e444a4d` asked for seven changes before recommending `lean`. All seven are now in code

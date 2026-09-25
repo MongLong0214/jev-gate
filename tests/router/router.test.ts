@@ -147,6 +147,44 @@ describe('root effort', () => {
     expect(f2.logs).toContainEqual(expect.objectContaining({ assessment: 'input_secret', sent: false }));
   });
 
+  it('reads the key before anything optional, so a missing key never waits on a stalled read', async () => {
+    const router = createRouter(configOf({ ...EFFORT_ONLY, routeMainModel: true, ...FULL_IDS }), SWITCHES);
+    const f = fakeEngine({ envKey: undefined });
+    let reads = 0;
+    f.engine.pins = () => {
+      reads++;
+      return new Promise(() => {});
+    };
+    f.engine.availableModels = () => {
+      reads++;
+      return new Promise(() => {});
+    };
+    router.turnStart({ turnId: 't1', text: TEXT });
+    const n = streamNext<TurnStepEvent>();
+    await drain(router.turnStep(f.engine, step(), n.next));
+    expect(n.calls).toEqual([step()]);
+    expect(reads).toBe(0);
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root', skipped: 'key_missing' }));
+  });
+
+  it('stops waiting for a pending key once its turn is retired, and sends nothing for it', async () => {
+    const router = createRouter(configOf(EFFORT_ONLY));
+    const key = deferred<string | undefined>();
+    const f = fakeEngine({ respond: answering({ ...CLEAR, effort: ['low', 0.95] }) });
+    f.engine.envKey = () => key.promise;
+    router.turnStart({ turnId: 't1', text: TEXT });
+    const n = streamNext<TurnStepEvent>();
+    const run = drain(router.turnStep(f.engine, step(), n.next));
+    await settle();
+    router.turnComplete({ turnId: 't1' });
+    await run;
+    expect(n.calls).toEqual([step()]);
+    key.resolve(FAKE_KEY);
+    await settle();
+    expect(f.sent).toHaveLength(0);
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root', skipped: 'turn_retired' }));
+  });
+
   it('runs natively on timeout, and a late reply changes nothing', async () => {
     const router = createRouter(configOf(EFFORT_ONLY));
     const reply = deferred<HttpReply>();
@@ -758,6 +796,54 @@ describe('spawn model', () => {
       expect(n.calls, `hops ${hops}`).toHaveLength(1);
       if (endedBeforeNext === true) expect(n.calls[0], `hops ${hops}`).toEqual(spawn());
     }
+  });
+
+  it('ends a pending key read with its dispatch, reading nothing else, and a missing key never waits on a stalled read', async () => {
+    const router = createRouter(configOf(SPAWN_ONLY));
+    const key = deferred<string | undefined>();
+    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['fast', 0.95] }) });
+    f.engine.envKey = () => key.promise;
+    let reads = 0;
+    const pins = f.engine.pins;
+    f.engine.pins = () => {
+      reads++;
+      return pins();
+    };
+    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    for (const id of ['tu1', 'tu2', 'tu3']) {
+      const n = spawnNext();
+      const run = router.agentSpawn(f.engine, spawn({ tool_use_id: id }), n.next);
+      await settle();
+      n.controller.abort();
+      await expect(run).rejects.toThrow('abandoned');
+      expect(n.calls).toHaveLength(0);
+    }
+    key.resolve(FAKE_KEY);
+    await settle();
+    expect(reads).toBe(0);
+    expect(f.sent).toHaveLength(0);
+
+    const bare = createRouter(configOf(SPAWN_ONLY));
+    const g = fakeEngine({ envKey: undefined });
+    g.engine.pins = () => new Promise(() => {});
+    g.engine.hostBase = () => new Promise(() => {});
+    g.engine.availableModels = () => new Promise(() => {});
+    bare.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    const m = spawnNext();
+    await bare.agentSpawn(g.engine, spawn(), m.next);
+    expect(m.calls).toEqual([spawn()]);
+    expect(g.logs).toContainEqual(expect.objectContaining({ event: 'spawn', skipped: 'key_missing' }));
+  });
+
+  it('never logs a spawn type it does not route, which is caller text', async () => {
+    const router = createRouter(configOf(SPAWN_ONLY));
+    const f = fakeEngine();
+    const type = `sk-${'b'.repeat(24)}testonlynotakey`;
+    const n = spawnNext();
+    await router.agentSpawn(f.engine, spawn({ subagentType: type }), n.next);
+    expect(n.calls).toEqual([spawn({ subagentType: type })]);
+    expect(f.logs).toContainEqual({ event: 'spawn', tool_use_id: 'tu1', type: 'other', skipped: 'type_unverified' });
+    expect(JSON.stringify(f.logs)).not.toContain(type);
   });
 
   it('records the model and agent a routed spawn resolved to', async () => {

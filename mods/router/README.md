@@ -24,7 +24,10 @@ Set the options in `/config`. They are stored in settings.json under `pluginConf
 
 The key comes from `typesafeApiKey` (a sensitive option) or, when that is empty, from `TYPESAFE_API_KEY` in the
 environment. An explicit key that cannot ride in a header is refused and the environment is **not** consulted, so a
-typo never silently switches credentials. The key is sent only in the `Authorization` header and never logged.
+typo never silently switches credentials. The key is sent only in the `Authorization` header and never logged. It is
+read once per session and before anything optional: without one (`key_missing`, `key_invalid`) no pin, setting or
+host version is read for the call, and a turn or dispatch that ends while the key is still being read stops waiting
+for it.
 
 ## Options
 
@@ -49,7 +52,8 @@ profile, since each rank lookup would then be a guess.
 
 ## When it leaves a call native
 
-Every gate below leaves the call exactly as it was and logs why.
+Every gate below leaves the call exactly as it was and logs why. A spawn type the Router does not route is caller
+text, so it is logged as `other`, never by name.
 
 - **Environment pins.** `ANTHROPIC_MODEL` pins the root model and `CLAUDE_CODE_EFFORT_LEVEL` its effort.
   `CLAUDE_CODE_SUBAGENT_MODEL` or `…_FORCE` pins spawns (`subagent_model_pinned`), and any
