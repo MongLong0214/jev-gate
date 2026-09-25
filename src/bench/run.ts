@@ -195,12 +195,29 @@ export interface WorkerTierRecord {
  * which is not the same number and never becomes zero because a request failed.
  */
 export interface LeanV5 {
+  /**
+   * L6 accounting revision. Cells ingested before it carry no field, and their token fields meant something else:
+   * `jev_input_tokens` was the known subtotal and `jev_input_tokens_known` counted responses. The report reads such
+   * a block as revision 1: its known subtotal relabelled, its complete totals unknown.
+   */
+  accounting: 1 | 2;
   selections: number;
   policy: Record<string, number>;
+  /** Requests actually sent, one per request identity however many records repeat it. */
   jev_attempts: number;
-  jev_input_tokens: number;
-  jev_input_tokens_known: number;
+  /** An intent with no result: possibly sent and billed, so the complete totals are unknown. */
+  jev_attempt_unknown: number;
+  /** Responses whose charged input count came back -- a count of responses, not of tokens. */
+  jev_responses_known: number;
+  /** The input tokens of those responses; null only when the safe sum overflowed. */
+  jev_input_tokens_known: number | null;
+  /** Every request's input tokens, or null when any is unknown. Never replaced by the subtotal. */
+  jev_input_tokens: number | null;
+  /** Every request's cost, or null when any charged count, model price or possibly sent request is unknown. */
   jev_cost_usd: number | null;
+  jev_cost_known_subtotal: number;
+  /** Repeated records of one request, collapsed into it rather than counted as more requests. */
+  duplicate_records: number;
   http_codes: Record<string, number>;
   action: Record<string, number>;
   reasons: Record<string, number>;
@@ -617,12 +634,17 @@ export const preflight = (o: Options, needsJev: boolean): Preflight => {
 const emptyJevPhase = (): JevPhaseUsage => ({ attempts: 0, tokens: null, tokens_known: 0, cost_usd: null });
 
 export const emptyLeanV5 = (): LeanV5 => ({
+  accounting: 2,
   selections: 0,
   policy: {},
   jev_attempts: 0,
-  jev_input_tokens: 0,
+  jev_attempt_unknown: 0,
+  jev_responses_known: 0,
   jev_input_tokens_known: 0,
+  jev_input_tokens: 0,
   jev_cost_usd: 0,
+  jev_cost_known_subtotal: 0,
+  duplicate_records: 0,
   http_codes: {},
   action: {},
   reasons: {},
@@ -775,9 +797,13 @@ type StreamTotals = {
   deduped_input: number;
   deduped_output: number;
   deduped_messages: number;
+  /** A repeat whose counters went down: not a cumulative update of the same message, so the view is incomplete. */
+  deduped_incompatible: number;
 };
+/** The last observation the de-duplicated view holds for one message, and whether every counter in it was readable. */
+type MessageUsage = { cacheRead: number; cacheCreation: number; input: number; output: number; complete: boolean };
 const streamTotals = new WeakMap<CellRecord, StreamTotals>();
-const streamIds = new WeakMap<CellRecord, Set<string>>();
+const streamIds = new WeakMap<CellRecord, Map<string, MessageUsage>>();
 const emptyStreamTotals = (): StreamTotals => ({
   cache_read: 0,
   cache_creation: 0,
@@ -791,6 +817,7 @@ const emptyStreamTotals = (): StreamTotals => ({
   deduped_input: 0,
   deduped_output: 0,
   deduped_messages: 0,
+  deduped_incompatible: 0,
 });
 
 /**
@@ -820,28 +847,39 @@ const addStreamUsage = (cell: CellRecord, message: unknown, scope: string): void
   const cacheCreation = read('cache_creation_input_tokens');
   const inputTokens = read('input_tokens');
   const outputTokens = read('output_tokens');
-  // Identity is the agent scope plus the message id: the same id under root and under a child is two reports.
-  const id = str(message['id']);
-  let repeat = false;
-  if (id !== null && id.length > 0) {
-    const key = `${scope}\u0000${id}`;
-    const seen = streamIds.get(cell) ?? new Set<string>();
-    repeat = seen.has(key);
-    if (repeat) acc.duplicates += 1;
-    seen.add(key);
-    streamIds.set(cell, seen);
-  }
   acc.cache_read += cacheRead;
   acc.cache_creation += cacheCreation;
   acc.input += inputTokens;
   acc.output += outputTokens;
   acc.messages += 1;
-  if (!repeat) {
-    acc.deduped_cache_read += cacheRead;
-    acc.deduped_cache_creation += cacheCreation;
-    acc.deduped_input += inputTokens;
-    acc.deduped_output += outputTokens;
-    acc.deduped_messages += 1;
+
+  // L6: the de-duplicated view holds one value per message -- the last complete cumulative observation of it, never
+  // the first one seen and never the sum of every update. Identity is the agent scope plus the message id: the same
+  // id under root and under a child is two reports. The installed host (checked over 26,514 multi-record messages in
+  // real transcripts, 2026-09-25) repeats identical usage, so on it the first and the last observation agree.
+  const now: MessageUsage = { cacheRead, cacheCreation, input: inputTokens, output: outputTokens, complete: !incomplete };
+  const id = str(message['id']);
+  const seen = streamIds.get(cell) ?? new Map<string, MessageUsage>();
+  streamIds.set(cell, seen);
+  const key = id !== null && id.length > 0 ? `${scope}\u0000${id}` : null;
+  const prev = key === null ? undefined : seen.get(key);
+  let held: MessageUsage | null = now;
+  if (prev) {
+    acc.duplicates += 1;
+    const cumulative = now.cacheRead >= prev.cacheRead && now.cacheCreation >= prev.cacheCreation && now.input >= prev.input && now.output >= prev.output;
+    if (!now.complete) held = null;
+    else if (prev.complete && !cumulative) {
+      acc.deduped_incompatible += 1;
+      held = null;
+    }
+  }
+  if (held) {
+    acc.deduped_cache_read += held.cacheRead - (prev?.cacheRead ?? 0);
+    acc.deduped_cache_creation += held.cacheCreation - (prev?.cacheCreation ?? 0);
+    acc.deduped_input += held.input - (prev?.input ?? 0);
+    acc.deduped_output += held.output - (prev?.output ?? 0);
+    if (!prev) acc.deduped_messages += 1;
+    if (key !== null) seen.set(key, held);
   }
   if (incomplete) acc.incomplete += 1;
   streamTotals.set(cell, acc);
@@ -969,6 +1007,8 @@ const emptyTier = (): WorkerTierRecord => ({ calls: 0, proposed: {}, observed_mo
  */
 export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<Tier, string> = DEFAULT_CONFIG.models): void => {
   const records: Array<Record<string, unknown>> = [];
+  // A record that cannot be read could belong to any producer, so it leaves every producer's complete total unknown.
+  let unreadable = 0;
   if (existsSync(traceDir)) {
     for (const f of readdirSync(traceDir).filter((x) => x.endsWith('.json')).sort()) {
       try {
@@ -976,6 +1016,7 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
         if (isRecord(r) && r['version'] === 5 && typeof r['phase'] === 'string') records.push(r);
       } catch {
         cell.gate.attempt_unknown++;
+        unreadable++;
       }
     }
   }
@@ -1009,23 +1050,62 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
       const reason = str(d['reason']);
       if (reason) bump(L.reasons, reason);
     }
-    if (r['attempted'] === true) {
-      L.jev_attempts += 1;
-      const http = isRecord(r['http']) ? r['http'] : null;
-      bump(L.http_codes, http ? (str(http['code']) ?? `http_${String(num(http['status']) ?? 'none')}`) : 'unrecorded');
-      const jev = isRecord(r['jev']) ? r['jev'] : null;
-      const usage = jev && isRecord(jev['usage']) ? jev['usage'] : null;
-      const input = usage ? tokenCount(usage['input_tokens']) : null;
-      // A paid attempt whose usage never came back is unknown, not zero, so the cost total becomes unknown too.
-      if (input === null) L.jev_cost_usd = null;
-      else {
-        L.jev_input_tokens += input;
-        L.jev_input_tokens_known += 1;
-        const cost = estimateJevCostUsd(jev ? str(jev['model']) : null, input);
-        L.jev_cost_usd = cost === null || L.jev_cost_usd === null ? null : L.jev_cost_usd + cost;
-      }
-    }
   }
+
+  /**
+   * L6: Jev spend is joined per actual request over the union of intents and results, by the `request_id` the hook
+   * writes into both. A result alone still counts. An intent with no result may have been sent and billed, so it
+   * leaves the complete totals unknown. A confirmed local no-send is zero. A repeated record of one request is one
+   * request. The hook writes its intent before sending and does not send when it cannot, so with this cell's trace
+   * directory set, a request with no intent was not sent. Money needs only the charged input count and a known
+   * price: output is free, so an unknown output count never makes a known cost unknown.
+   */
+  const leanRequests = new Map<string, { intent: boolean; result: Record<string, unknown> | null }>();
+  const keylessSent: Array<Record<string, unknown>> = [];
+  let keylessIntents = 0;
+  for (const r of records) {
+    if (r['phase'] !== 'lean_intent' && r['phase'] !== 'lean_result') continue;
+    const k = str(r['request_id']);
+    if (k === null) {
+      if (r['phase'] === 'lean_intent') keylessIntents += 1;
+      else if (r['attempted'] === true) keylessSent.push(r);
+      continue;
+    }
+    const entry = leanRequests.get(k) ?? { intent: false, result: null };
+    if (r['phase'] === 'lean_intent') {
+      if (entry.intent) L.duplicate_records += 1;
+      entry.intent = true;
+    } else if (entry.result === null) entry.result = r;
+    else L.duplicate_records += 1;
+    leanRequests.set(k, entry);
+  }
+  const sent = [...keylessSent];
+  let possiblySent = Math.max(0, keylessIntents - keylessSent.length);
+  for (const { result } of leanRequests.values()) {
+    if (result === null) possiblySent += 1;
+    else if (result['attempted'] === true) sent.push(result);
+  }
+  const tokens: Array<number | null> = [];
+  const costs: Array<number | null> = [];
+  for (const r of sent) {
+    const http = isRecord(r['http']) ? r['http'] : null;
+    bump(L.http_codes, http ? (str(http['code']) ?? `http_${String(num(http['status']) ?? 'none')}`) : 'unrecorded');
+    const jev = isRecord(r['jev']) ? r['jev'] : null;
+    const usage = jev && isRecord(jev['usage']) ? jev['usage'] : null;
+    const input = usage ? tokenCount(usage['input_tokens']) : null;
+    tokens.push(input);
+    costs.push(estimateJevCostUsd(jev ? str(jev['model']) : null, input));
+  }
+  const knownTokens = tokens.filter((t): t is number => t !== null);
+  const knownCosts = costs.filter((c): c is number => c !== null);
+  const complete = possiblySent === 0 && unreadable === 0;
+  L.jev_attempts = sent.length;
+  L.jev_attempt_unknown = possiblySent;
+  L.jev_responses_known = knownTokens.length;
+  L.jev_input_tokens_known = safeSum(knownTokens);
+  L.jev_input_tokens = complete ? safeSum(tokens) : null;
+  L.jev_cost_known_subtotal = knownCosts.reduce((a, b) => a + b, 0);
+  L.jev_cost_usd = complete && knownCosts.length === costs.length ? L.jev_cost_known_subtotal : null;
   for (const r of phase('lean_dispatch')) {
     const reason = str(r['reason']);
     if (r['applied'] === true) {
@@ -1327,9 +1407,11 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
   const observedOk = cell.result !== null && cell.result.usage_status === 'ok' && cell.init !== null;
   const attempts = g.jev_requests.admission.attempts + g.jev_requests.allocation.attempts + g.jev_requests.result.attempts + g.jev_requests.scope.attempts;
   if (cell.mode !== 'auto') {
-    // Native/absent arms send nothing to TypeSafe when the plugin state matches the plan and the run completed.
+    // L6: the legacy gate runs only in auto, so in any other mode it is a producer known disabled and contributes
+    // zero -- also when the run timed out, since its own records would show a call. It stays unknown when the plugin
+    // state differs from the plan, or when a record could not be read and might have been one of its calls.
     const pluginStateOk = cell.init !== null && cell.init.jev_gate_loaded === cell.plugin_expected;
-    g.jev_input_tokens = observedOk && pluginStateOk && attempts === 0 && !cell.timed_out && !cell.cancelled ? 0 : null;
+    g.jev_input_tokens = pluginStateOk && attempts === 0 && g.attempt_unknown === 0 ? 0 : null;
   } else if (attempts === 0 && g.attempt_unknown === 0 && g.missing_pre_records === 0 && observedOk && !cell.timed_out && !cell.cancelled) {
     g.jev_input_tokens = 0;
   } else {

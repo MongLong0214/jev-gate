@@ -23,7 +23,15 @@ export interface RowView {
   grade_reason: string | null;
   elapsed_ms: number | null;
   claude_cost_usd: number | null;
+  /** L6: every producer's Jev cost for this row, or null when any enabled producer's is unknown. */
   jev_cost_usd: number | null;
+  /** L6: the part of it that is known, so an unknown total is never read as zero or replaced by this. */
+  jev_cost_known_subtotal: number;
+  /**
+   * L6: Jev cost by the producer that made the calls. The two record disjoint phases, so they add; a producer known
+   * disabled for the row's mode is zero, and an enabled one with no observation is null.
+   */
+  jev_cost_by_producer: { legacy: number | null; lean: number | null };
   total_cost_usd: number | null;
   model_usage: ModelUsage | null;
   usage_status: string | null;
@@ -94,8 +102,16 @@ export interface LeanSummary {
   selections: number;
   policy: Record<string, number>;
   jev_attempts: number;
-  jev_input_tokens: number;
-  jev_input_tokens_known: number;
+  jev_attempt_unknown: number;
+  jev_responses_known: number;
+  /** Known input tokens; null when a sum overflowed or a row's own subtotal was unknown. */
+  jev_input_tokens_known: number | null;
+  /** Every row's complete input tokens, or null. */
+  jev_input_tokens: number | null;
+  jev_cost_usd: number | null;
+  jev_cost_known_subtotal: number;
+  /** Rows whose lean block predates the L6 accounting and so carry no complete total. */
+  rows_uncorrected: number;
   http_codes: Record<string, number>;
   action: Record<string, number>;
   reasons: Record<string, number>;
@@ -163,6 +179,8 @@ export interface Comparison {
 
 export interface Report {
   schema: 5;
+  /** L6: 2 prices every Jev producer a row used, joined per request; reports without it priced the legacy gate only. */
+  accounting: 2;
   run: string;
   generated_at: string;
   plan_schema: number | null;
@@ -236,6 +254,31 @@ const usageOf = (c: Record<string, unknown>): { usage: ModelUsage | null; status
   return { usage: isRecord(mu) ? (mu as ModelUsage) : null, status };
 };
 
+/**
+ * L6: a cell's lean block in the current accounting. A block ingested before it (no `accounting: 2`) used
+ * `jev_input_tokens` for the known subtotal and `jev_input_tokens_known` for a response count, and never joined
+ * intents to results -- so its subtotal is kept, relabelled, and its complete totals are unknown rather than trusted.
+ */
+export const leanOf = (v: unknown): LeanV5 | null => {
+  if (!isRecord(v)) return null;
+  const l = v as unknown as LeanV5 & { accounting?: number };
+  if (l.accounting === 2) return l;
+  const oldTokens = typeof v['jev_input_tokens'] === 'number' ? v['jev_input_tokens'] : null;
+  const oldResponses = typeof v['jev_input_tokens_known'] === 'number' ? v['jev_input_tokens_known'] : 0;
+  const oldCost = money(v['jev_cost_usd']);
+  return {
+    ...l,
+    accounting: 1,
+    jev_attempt_unknown: 0,
+    jev_responses_known: oldResponses,
+    jev_input_tokens_known: oldTokens,
+    jev_input_tokens: null,
+    jev_cost_usd: null,
+    jev_cost_known_subtotal: oldCost ?? 0,
+    duplicate_records: 0,
+  };
+};
+
 export const toRowView = (p: PlannedCell, c: Record<string, unknown> | null): RowView => {
   const status = rowStatus(c);
   const grade = c && isRecord(c['grade']) ? c['grade'] : null;
@@ -243,7 +286,12 @@ export const toRowView = (p: PlannedCell, c: Record<string, unknown> | null): Ro
   const { usage, status: usageStatus } = c ? usageOf(c) : { usage: null, status: null };
   const result = c && isRecord(c['result']) ? c['result'] : null;
   const claude = result ? money(result['total_cost_usd']) : null;
-  const jev = money(gate['jev_cost_usd']);
+  const lean = c ? leanOf(c['lean']) : null;
+  // L6: each producer once. The legacy aggregate is built from the gate phases only, so it never already holds a
+  // lean request. Lean is known disabled outside lean mode; in lean mode a missing block is an unobserved producer.
+  const legacyCost = money(gate['jev_cost_usd']);
+  const leanCost = lean ? lean.jev_cost_usd : c && c['mode'] === 'lean' ? null : 0;
+  const jev = legacyCost !== null && leanCost !== null ? legacyCost + leanCost : null;
   const init = c && isRecord(c['init']) ? c['init'] : null;
   const pluginExpected = c ? c['plugin_expected'] : null;
   const rec = (v: unknown): Record<string, number> => (isRecord(v) ? Object.fromEntries(Object.entries(v).filter(([, n]) => typeof n === 'number')) as Record<string, number> : {});
@@ -260,6 +308,8 @@ export const toRowView = (p: PlannedCell, c: Record<string, unknown> | null): Ro
     elapsed_ms: c ? money(c['elapsed_ms']) : null,
     claude_cost_usd: claude,
     jev_cost_usd: jev,
+    jev_cost_known_subtotal: (legacyCost ?? 0) + (lean ? lean.jev_cost_known_subtotal : 0),
+    jev_cost_by_producer: { legacy: legacyCost, lean: leanCost },
     total_cost_usd: claude !== null && jev !== null ? claude + jev : null,
     model_usage: usage,
     usage_status: usageStatus,
@@ -283,7 +333,7 @@ export const toRowView = (p: PlannedCell, c: Record<string, unknown> | null): Ro
     api_retries: c && typeof c['api_retries'] === 'number' ? (c['api_retries'] as number) : 0,
     diagnostic: c !== null && c['diagnostic'] === true,
     v5: gateV5Of(gate),
-    lean: c && isRecord(c['lean']) ? (c['lean'] as unknown as LeanV5) : null,
+    lean,
   };
 };
 
@@ -391,8 +441,13 @@ const emptyLeanSummary = (): LeanSummary => ({
   selections: 0,
   policy: {},
   jev_attempts: 0,
-  jev_input_tokens: 0,
+  jev_attempt_unknown: 0,
+  jev_responses_known: 0,
   jev_input_tokens_known: 0,
+  jev_input_tokens: 0,
+  jev_cost_usd: 0,
+  jev_cost_known_subtotal: 0,
+  rows_uncorrected: 0,
   http_codes: {},
   action: {},
   reasons: {},
@@ -422,8 +477,13 @@ export const summarizeLean = (rows: RowView[]): LeanSummary => {
     if (!l) continue;
     out.selections += l.selections ?? 0;
     out.jev_attempts += l.jev_attempts ?? 0;
-    out.jev_input_tokens += l.jev_input_tokens ?? 0;
-    out.jev_input_tokens_known += l.jev_input_tokens_known ?? 0;
+    out.jev_attempt_unknown += l.jev_attempt_unknown ?? 0;
+    out.jev_responses_known += l.jev_responses_known ?? 0;
+    out.jev_input_tokens_known = safeSum([out.jev_input_tokens_known, l.jev_input_tokens_known]);
+    out.jev_input_tokens = safeSum([out.jev_input_tokens, l.jev_input_tokens]);
+    out.jev_cost_usd = out.jev_cost_usd === null || l.jev_cost_usd === null ? null : out.jev_cost_usd + l.jev_cost_usd;
+    out.jev_cost_known_subtotal += l.jev_cost_known_subtotal ?? 0;
+    if (l.accounting !== 2) out.rows_uncorrected += 1;
     out.packets_proposed += l.packets_proposed ?? 0;
     out.packets_dispatched += l.packets_dispatched ?? 0;
     out.recommendation_not_taken += l.recommendation_not_taken ?? 0;
@@ -541,7 +601,7 @@ export const summarizeArm = (arm: string, rows: RowView[]): ArmSummary => {
     claude_cost_known_subtotal: sum(claudeKnown.map((r) => r.claude_cost_usd!)),
     claude_cost_unknown_rows: spendRows.length - claudeKnown.length,
     jev_cost_usd: jevCost,
-    jev_cost_known_subtotal: sum(jevKnown.map((r) => r.jev_cost_usd!)),
+    jev_cost_known_subtotal: sum(spendRows.map((r) => r.jev_cost_known_subtotal)),
     jev_cost_unknown_rows: spendRows.length - jevKnown.length,
     total_cost_usd: total,
     cost_per_pass_usd: total !== null && pass > 0 ? total / pass : null,
@@ -747,6 +807,7 @@ export const buildReport = (runDir: string): Report => {
   const notes = [
     'Rows come from plan.json. missing_record means the planned cell has no saved file; it is not "not started" and never cost zero.',
     'Claude total_cost_usd is an API-equivalent estimate (whole tree incl. children), not subscription billing or quota; Jev cost is list price × input tokens, null when any attempt has unknown usage.',
+    'Accounting 2 (L6): Jev cost adds every producer a row used -- the legacy gate and lean, whose records are disjoint -- joining intents to results per request. An intent without a result leaves the total unknown; a lean block from an older ingestion keeps only its known subtotal.',
     'Totals are over the planned cohort including failures and timeouts; a null total means some consumption is unknown and the known subtotal is shown beside it.',
     'The complete-case diagnostic is labeled and lists exclusions; it never replaces the planned-cohort headline. Per-row percentages are not averaged.',
     'A timeout duration is not time-to-success; completed_pass_latency is reported separately with its count.',
@@ -760,6 +821,7 @@ export const buildReport = (runDir: string): Report => {
   ];
   return {
     schema: 5,
+    accounting: 2,
     run: runDir,
     generated_at: new Date().toISOString(),
     plan_schema: schema,
@@ -817,13 +879,13 @@ export const renderMarkdown = (r: Report): string => {
       '',
       '## lean selection and dispatch (observed)',
       '',
-      '| arm | selections | policy | Jev attempts (HTTP) | Jev input tokens (known rows) | action | reasons | packets proposed | dispatched | not taken | denied | groups retained/omitted/unassessed | mandatory B | optional B | packet B | composed B | coverage | observed model | terminal |',
-      '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|',
+      '| arm | selections | policy | Jev attempts (HTTP) | Jev input tokens: complete (known subtotal / responses, possibly sent) | Jev cost: complete (known) | action | reasons | packets proposed | dispatched | not taken | denied | groups retained/omitted/unassessed | mandatory B | optional B | packet B | composed B | coverage | observed model | terminal |',
+      '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|',
     );
     for (const a of r.arms) {
       const l = a.lean;
       L.push(
-        `| ${a.arm} | ${l.selections} | ${counts(l.policy)} | ${l.jev_attempts} (${counts(l.http_codes)}) | ${l.jev_input_tokens} (${l.jev_input_tokens_known}) | ${counts(l.action)} | ${counts(l.reasons)} | ${l.packets_proposed} | ${l.packets_dispatched} | ${l.recommendation_not_taken} | ${counts(l.dispatch_denied)} | ${l.retained_groups}/${l.omitted_groups}/${l.unassessed} | ${l.mandatory_bytes_max ?? 'null'} | ${l.optional_bytes_max ?? 'null'} | ${l.packet_bytes_max ?? 'null'} | ${l.composed_bytes_max ?? 'null'} | ${counts(l.coverage)} | ${counts(l.observed_model)} | ${counts(l.terminal_status)} |`,
+        `| ${a.arm} | ${l.selections} | ${counts(l.policy)} | ${l.jev_attempts} (${counts(l.http_codes)}) | ${l.jev_input_tokens ?? 'null'} (${l.jev_input_tokens_known ?? 'null'} / ${l.jev_responses_known}, ${l.jev_attempt_unknown}) | ${fmt(l.jev_cost_usd, 6)} (${fmt(l.jev_cost_known_subtotal, 6)}) | ${counts(l.action)} | ${counts(l.reasons)} | ${l.packets_proposed} | ${l.packets_dispatched} | ${l.recommendation_not_taken} | ${counts(l.dispatch_denied)} | ${l.retained_groups}/${l.omitted_groups}/${l.unassessed} | ${l.mandatory_bytes_max ?? 'null'} | ${l.optional_bytes_max ?? 'null'} | ${l.packet_bytes_max ?? 'null'} | ${l.composed_bytes_max ?? 'null'} | ${counts(l.coverage)} | ${counts(l.observed_model)} | ${counts(l.terminal_status)} |`,
       );
     }
     L.push(

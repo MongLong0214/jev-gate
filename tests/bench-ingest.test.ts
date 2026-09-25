@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 
 import { armSpecs, emptyCell, ingestTraces, observeEvent, type Arm, type CellRecord } from '../src/bench/run.js';
+import { leanOf, summarizeArm, summarizeLean, toRowView, type RowView } from '../src/bench/report.js';
 import type { ConfigV5 } from '../src/types.js';
 
 // R08-R10: the observation and accounting defects (document sections T6 and T7), driven through the real
@@ -362,5 +363,136 @@ describe('turn_totals_stream (2026-09-20 metric defect)', () => {
     expect(only?.messages).toBe(2);
     expect(only?.cache_read).toBe(70);
     expect(only?.output).toBe(5);
+  });
+});
+
+describe('L6: every charged producer reaches the final report, once', () => {
+  // Chosen so the lean call prices at 0.125 USD to within a rounding of the list price.
+  const LEAN_TOKENS = 2_976_190;
+  const leanIntent = (id: string): Record<string, unknown> => ({ phase: 'lean_intent', request_id: id, request_bytes: 100, written_at: iso(1) });
+  const leanResult = (id: string, over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    phase: 'lean_result', request_id: id, attempted: true, ...jevOk(LEAN_TOKENS), decision: { action: 'handoff' }, written_at: iso(2), ...over,
+  });
+  const leanCell = (records: Array<Record<string, unknown>>, name: string, claudeUsd = 2): CellRecord => {
+    const cell = cellFor('jev_lean');
+    cell.started = true;
+    observeEvent(cell, { type: 'system', subtype: 'init', model: 'claude-sonnet-5', plugins: [{ name: 'jev-gate' }], agents: [], permissionMode: 'default' });
+    observeEvent(cell, {
+      type: 'result', subtype: 'success', is_error: false, duration_ms: 10, num_turns: 1, total_cost_usd: claudeUsd,
+      modelUsage: { 'claude-sonnet-5': { inputTokens: 1000, outputTokens: 20, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: claudeUsd } }, permission_denials: [],
+    });
+    ingestTraces(cell, traceDir(name, records), MODELS);
+    return cell;
+  };
+  const planned = { job: 'mini', group: 'g', repetition: 1, arm: 'jev_lean', file: '' };
+  const rowOf = (cell: CellRecord): RowView => toRowView(planned, JSON.parse(JSON.stringify(cell)) as Record<string, unknown>);
+
+  it('reports Claude 2 + legacy gate 0 + Lean Jev 0.125 as 2.125, not 2', () => {
+    const cell = leanCell([leanIntent('q1'), leanResult('q1')], 'l6-total');
+    expect(cell.gate.jev_cost_usd).toBe(0);
+    expect(cell.lean.jev_cost_usd).toBeCloseTo(0.125, 6);
+    const row = rowOf(cell);
+    expect(row.jev_cost_by_producer.legacy).toBe(0);
+    expect(row.jev_cost_by_producer.lean).toBeCloseTo(0.125, 6);
+    expect(row.total_cost_usd).toBeCloseTo(2.125, 6);
+    const arm = summarizeArm('jev_lean', [row]);
+    expect(arm.jev_cost_usd).toBeCloseTo(0.125, 6);
+    expect(arm.total_cost_usd).toBeCloseTo(2.125, 6);
+  });
+
+  it('keeps a lean call the legacy producer stays zero for, even when the run timed out', () => {
+    const cell = leanCell([leanIntent('q1'), leanResult('q1')], 'l6-timeout');
+    cell.timed_out = true;
+    ingestTraces(cell, join(tmp, 'traces', 'l6-timeout'), MODELS);
+    expect(cell.gate.jev_cost_usd).toBe(0);
+  });
+
+  it('separates responses, the known token subtotal and the complete total', () => {
+    const cell = leanCell([leanIntent('q1'), leanResult('q1'), leanIntent('q2'), leanResult('q2', { jev: { model: 'jev-1.13.0', usage: { input_tokens: 40, output_tokens: 1 } } })], 'l6-split');
+    expect(cell.lean).toMatchObject({ jev_attempts: 2, jev_responses_known: 2, jev_input_tokens_known: LEAN_TOKENS + 40, jev_input_tokens: LEAN_TOKENS + 40, jev_attempt_unknown: 0 });
+  });
+
+  it('an intent with no result may have been billed: complete totals unknown, the known part kept beside them', () => {
+    const cell = leanCell([leanIntent('q1'), leanResult('q1'), leanIntent('q2')], 'l6-orphan');
+    expect(cell.lean).toMatchObject({ jev_attempts: 1, jev_attempt_unknown: 1, jev_input_tokens: null, jev_cost_usd: null, jev_input_tokens_known: LEAN_TOKENS });
+    expect(cell.lean.jev_cost_known_subtotal).toBeCloseTo(0.125, 6);
+    const row = rowOf(cell);
+    expect(row.jev_cost_usd).toBeNull();
+    expect(row.total_cost_usd).toBeNull();
+    expect(row.jev_cost_known_subtotal).toBeCloseTo(0.125, 6);
+    expect(summarizeArm('jev_lean', [row]).jev_cost_known_subtotal).toBeCloseTo(0.125, 6);
+  });
+
+  it('counts a result with no intent of its own, and collapses a repeated record of one request', () => {
+    const cell = leanCell([leanResult('q1'), leanResult('q1'), leanIntent('q2'), leanIntent('q2'), leanResult('q2')], 'l6-dup');
+    expect(cell.lean).toMatchObject({ jev_attempts: 2, jev_attempt_unknown: 0, duplicate_records: 2, jev_input_tokens: 2 * LEAN_TOKENS });
+  });
+
+  it('a confirmed local no-send is zero, and a timeout without usage keeps the total unknown', () => {
+    const noSend = leanCell([leanResult('q1', { attempted: false, known_not_sent: true, skip_code: 'deadline_exhausted', jev: undefined, http: undefined })], 'l6-nosend');
+    expect(noSend.lean).toMatchObject({ jev_attempts: 0, jev_input_tokens: 0, jev_cost_usd: 0 });
+    const timeout = leanCell([leanIntent('q1'), leanResult('q1', { http: { status: null, code: 'timeout' }, jev: null })], 'l6-timeout-call');
+    expect(timeout.lean).toMatchObject({ jev_attempts: 1, jev_responses_known: 0, jev_input_tokens: null, jev_cost_usd: null });
+  });
+
+  it('prices known input without a free output count, and leaves an unpriced model unknown', () => {
+    const noOutput = leanCell([leanIntent('q1'), leanResult('q1', { jev: { model: 'jev-1.13.0', usage: { input_tokens: LEAN_TOKENS } } })], 'l6-no-output');
+    expect(noOutput.lean.jev_cost_usd).toBeCloseTo(0.125, 6);
+    const unpriced = leanCell([leanIntent('q1'), leanResult('q1', { jev: { model: 'jev-9.9.9', usage: { input_tokens: 10, output_tokens: 1 } } })], 'l6-unpriced');
+    expect(unpriced.lean).toMatchObject({ jev_input_tokens: 10, jev_cost_usd: null, jev_cost_known_subtotal: 0 });
+  });
+
+  it('an unreadable record could be any producer’s call, so neither total is complete', () => {
+    const dir = traceDir('l6-corrupt', [leanIntent('q1'), leanResult('q1')]);
+    writeFileSync(join(dir, 'broken.json'), '{"version":5,"phase":"lean_int');
+    const cell = cellFor('jev_lean');
+    cell.started = true;
+    observeEvent(cell, { type: 'system', subtype: 'init', model: 'claude-sonnet-5', plugins: [{ name: 'jev-gate' }], agents: [], permissionMode: 'default' });
+    ingestTraces(cell, dir, MODELS);
+    expect(cell.lean.jev_cost_usd).toBeNull();
+    expect(cell.gate.jev_cost_usd).toBeNull();
+  });
+
+  it('reads a lean block from before this accounting as a relabelled subtotal with no complete total', () => {
+    const old = { selections: 1, jev_attempts: 2, jev_input_tokens: 500, jev_input_tokens_known: 2, jev_cost_usd: 0.000021 };
+    const l = leanOf(old);
+    expect(l).toMatchObject({ accounting: 1, jev_responses_known: 2, jev_input_tokens_known: 500, jev_input_tokens: null, jev_cost_usd: null, jev_cost_known_subtotal: 0.000021 });
+    expect(summarizeLean([{ lean: l } as RowView]).rows_uncorrected).toBe(1);
+  });
+
+  it('a lean-mode row with no lean block at all is an unobserved producer, not a free one', () => {
+    const cell = JSON.parse(JSON.stringify(leanCell([], 'l6-absent'))) as Record<string, unknown>;
+    delete cell['lean'];
+    expect(toRowView(planned, cell).jev_cost_usd).toBeNull();
+    const native = JSON.parse(JSON.stringify(ranCleanly(cellFor('sonnet_native')))) as Record<string, unknown>;
+    delete native['lean'];
+    ingestTraces(cellFor('sonnet_native'), join(tmp, 'traces', 'none'), MODELS);
+    expect(toRowView({ ...planned, arm: 'sonnet_native' }, native).jev_cost_by_producer.lean).toBe(0);
+  });
+});
+
+describe('L6: a repeated stream message keeps its last complete cumulative usage', () => {
+  const withId = (id: string, u: Record<string, unknown>): Record<string, unknown> => ({ type: 'assistant', message: { id, usage: u } });
+  const u = (output: unknown): Record<string, unknown> => ({ cache_read_input_tokens: 10, cache_creation_input_tokens: 2, input_tokens: 1, output_tokens: output });
+  const turn = (events: Array<Record<string, unknown>>): Record<string, number> => {
+    const cell = cellFor('sonnet_native');
+    for (const e of events) observeEvent(cell, e);
+    observeEvent(cell, { type: 'result', subtype: 'success', total_cost_usd: 1, num_turns: 1 });
+    return cell.turn_totals_stream[0] as unknown as Record<string, number>;
+  };
+
+  it('replaces a partial observation by the later cumulative one, rather than freezing the first or adding both', () => {
+    const t = turn([withId('msg_1', u(3)), withId('msg_1', u(40))]);
+    expect(t).toMatchObject({ deduped_messages: 1, deduped_output: 40, deduped_cache_read: 10, deduped_incompatible: 0 });
+    // The published sum is not changed retroactively.
+    expect(t['output']).toBe(43);
+  });
+
+  it('does not let an unreadable later observation replace a complete one', () => {
+    expect(turn([withId('msg_1', u(40)), withId('msg_1', u('forty'))])).toMatchObject({ deduped_output: 40, incomplete: 1 });
+  });
+
+  it('marks a repeat whose counters went down as incompatible and keeps the view it had', () => {
+    expect(turn([withId('msg_1', u(40)), withId('msg_1', u(3))])).toMatchObject({ deduped_output: 40, deduped_incompatible: 1 });
   });
 });
