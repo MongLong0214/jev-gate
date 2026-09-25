@@ -4,6 +4,54 @@ Everything below is what was actually observed, with the file that proves it. Th
 overstated claims from the original write-up; this one adds the 2026-09-19 measurements, which override several
 figures below and are marked where they do.
 
+## 2026-09-25 — the standalone Router (#40–#43) is in `mods/router`; nothing is observed on a host
+
+`mods/router` is a Function Hooks plugin, `jev-gate-router`, off by default. When enabled, it asks Jev once per root
+turn about effort (and, if allowed, model), and once per inheriting built-in spawn about its model. Everything it
+leaves native, and why, is in `mods/router/README.md`. The offline tests drive every path through the real modules
+with fake HTTP, including `register.ts` with a fake `$`. The host's own kit only confirms the default is off, because
+it cannot set plugin options. `pack --profile router` builds the archive, and `claude plugin validate --strict`
+accepts it unpacked. No routed turn or spawn has been observed on an installed host, and no saving is claimed.
+Composing it with Lean is #44 part B.
+
+The first gpt-6-sol review of `a416a01` was FIX-FIRST with two blockers and seven other findings, all fixed with a test
+each. A model suffix now counts only where the host lists it (`[1m]` on Opus 5.5 and Sonnet 5), and the bare and
+`[1m]` forms are different identities. Pins are re-read at every step. An abandoned first step keeps the turn
+native. An effort-only patch is observed too. Each spawn dispatch is assessed on its own. A question is not sent when
+nothing it could answer would apply. Late replies are logged for their usage. And **every root model stays native**
+until a `from → to` switch is verified on a host (`VERIFIED_ROOT_SWITCHES` is empty), because the hook cannot see
+whether the retained request's controls remain valid on another model. So `routeMainModel` asks nothing today. #41
+and #42 need that host observation.
+
+The second review (`252f5b4`) was FIX-FIRST with one major and three minor findings, fixed with tests. Pins and the
+allowlist are read again after Jev answers, so a spawn or a stored root override that no longer holds stays native.
+A model override to a `[1m]` id stops unless the response reports that variant; whether the host ever reports it is
+unobserved, so a routed `[1m]` switch may stop after its first step. A model question is offered only when some
+effort it would be sent with pairs with the target. Routed results are logged (`root_result`, `spawn_result`) with
+the reported model and the four token counts only.
+
+The third review (`ebf709d`) found a pin could still land while the allowlist was read, and that an effort pin could
+leave a stored model paired with an effort it cannot take. The pins are now read last, and a model override is
+dropped when the effort actually sent does not pair with it.
+
+The fourth review (`0979050`) found that a spawn could still be routed after its session ended, because its reads
+ran outside the session link, and that an effort-only patch read a bare request answered with `[1m]` as a mismatch.
+Every wait of a spawn now ends with its dispatch or the session it began in, and effort-only observation compares the
+model in both directions.
+
+The fifth review (`638d154`) found the session could still end in the last gap before `next`, for spawns and root
+steps, and that the invalid-option diagnostic could keep `session.start` from being forwarded if logging threw. Both
+handlers now check the session they began in (and the root turn's identity) with nothing awaited before `next`, and
+every bookkeeping call in `register.ts` is guarded.
+
+The sixth review (`009ab1d`) found that an unrouted spawn type, which is caller text, was logged by name, and that a
+pending key read held an abandoned spawn and was read only after the optional reads. Unrouted types are logged as
+`other`. The key is read first, once per session, and each caller waits on it only as long as its turn or dispatch.
+
+The seventh review (`6810ead`) found the key wait delayed calls that could never be routed, and that a retired root
+turn still waited on its pins and allowlist reads. Checks the event and configuration decide alone now come before the
+key rather than after it, and every root read ends with its turn or dispatch.
+
 ## 2026-09-25 — the PR #37 review (L1–L7) is fixed in code; `lean` is still unmeasured
 
 The consolidated review of `e444a4d` asked for seven changes before recommending `lean`. All seven are now in code
@@ -141,7 +189,8 @@ HTTP.
 - **A record still being written at the prompt declines.** If the host is mid-write when the prompt hook reads, that
   turn stays native (`source_incomplete`) rather than dropping a record it cannot see.
 - **Router composition is not tested.** L1's re-screening at composition and L6's "Router + Lean without double
-  counting" wait for the Router (#38–#44). No Router code exists on this branch.
+  counting" wait for #44 part B. The standalone Router (#40–#43) is in `mods/router`, and it leaves every spawn that
+  carries a Lean marker native (`lean_marker`) until composition is built.
 - **No 402 circuit breaker.** An exhausted TypeSafe balance surfaces as `http_other`, once per request, and lean
   falls back natively each time. A breaker belongs in the bounded direct adapter (#40), not in lean.
 

@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -76,4 +76,19 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     const mismatch = spawnSync(process.execPath, [join(dest, 'dist', 'hook.js'), '--lean'], { cwd: otherCwd, encoding: 'utf8', env: { ...env, JEV_GATE_MODE: 'auto' }, input: JSON.stringify({ hook_event_name: 'PreToolUse', session_id: 's', tool_use_id: 't', tool_name: 'Bash', tool_input: { command: 'ls' } }) });
     expect(mismatch).toMatchObject({ status: 0, stdout: '', stderr: 'jev-gate: profile_mode_mismatch\n' });
   }, 60_000);
+
+  it('packs the router Mod from its source, at its own version, with nothing of Lean or legacy', () => {
+    const outDir = join(tmp, 'pack router out');
+    const pack = spawnSync(process.execPath, [join(root, 'scripts', 'pack.mjs'), outDir, '--profile', 'router'], { encoding: 'utf8' });
+    expect(pack.status, pack.stderr).toBe(0);
+    const manifest = JSON.parse(readFileSync(join(root, 'mods', 'router', '.claude-plugin', 'plugin.json'), 'utf8')) as { name: string; version: string };
+    expect(manifest.name).toBe('jev-gate-router');
+    expect(readdirSync(outDir)).toContain(`jev-gate-router-${manifest.version}.zip`);
+    const list = spawnSync('unzip', ['-Z1', join(outDir, `jev-gate-router-${manifest.version}.zip`)], { encoding: 'utf8' }).stdout.trim().split('\n');
+    const modules = readdirSync(join(root, 'mods', 'router', 'hooks')).filter((n) => n.endsWith('.ts'));
+    const files = list.filter((f) => !f.endsWith('/')).sort();
+    expect(files).toEqual(['.claude-plugin/plugin.json', 'README.md', 'hooks/hooks.json', ...modules.map((n) => `hooks/${n}`)].sort());
+    // Declarations, host tests, compiled Lean and the executor stay out: Router-only exposes no Lean executor or history reader.
+    expect(list.some((f) => /^(types|tests|dist|agents|src)\//.test(f))).toBe(false);
+  });
 });
