@@ -433,6 +433,40 @@ describe('root model', () => {
     );
   });
 
+  it('reads the pins last, so a pin set while the allowlist is read still stops a stored override', async () => {
+    const router = createRouter(configOf(MODEL_ONLY), SWITCHES);
+    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', 0.95] }) });
+    router.turnStart({ turnId: 't1', text: TEXT });
+    await drain(router.turnStep(f.engine, step({ model: 'claude-sonnet-5' }), streamNext<TurnStepEvent>().next));
+    const gate = deferred<void>();
+    f.allowed.wait = gate.promise;
+    const before = f.allowed.reads;
+    const second = streamNext<TurnStepEvent>();
+    const run = drain(router.turnStep(f.engine, step({ model: 'claude-sonnet-5', index: 1 }), second.next));
+    await vi.waitFor(() => expect(f.allowed.reads).toBe(before + 1));
+    f.pins.mainModel = true;
+    gate.resolve();
+    await run;
+    expect(second.calls).toEqual([step({ model: 'claude-sonnet-5', index: 1 })]);
+    expect(f.logs).toContainEqual({ event: 'root_stop', turn: 't1', index: 1, reason: 'model_pinned' });
+  });
+
+  it('drops a stored model whose pair fails once a pin suppresses its effort', async () => {
+    const router = createRouter(configOf({ ...MODEL_ONLY, routeMainEffort: true }), SWITCHES);
+    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['standard', 0.95], effort: ['high', 0.95] }) });
+    router.turnStart({ turnId: 't1', text: TEXT });
+    const first = streamNext<TurnStepEvent>();
+    await drain(router.turnStep(f.engine, step({ effort: 'max' }), first.next));
+    expect(first.calls).toEqual([step({ model: 'claude-sonnet-5', effort: 'high' })]);
+    // Sonnet takes no max: without the effort patch the request would keep max on a model that cannot run it.
+    f.pins.mainEffort = true;
+    const second = streamNext<TurnStepEvent>();
+    await drain(router.turnStep(f.engine, step({ effort: 'max', index: 1 }), second.next));
+    expect(second.calls).toEqual([step({ effort: 'max', index: 1 })]);
+    expect(f.logs).toContainEqual({ event: 'root_stop', turn: 't1', index: 1, reason: 'effort_pinned' });
+    expect(f.logs).toContainEqual({ event: 'root_stop', turn: 't1', index: 1, reason: 'pair_invalid' });
+  });
+
   it('stops a stored model override the allowlist no longer holds', async () => {
     const router = createRouter(configOf(MODEL_ONLY), SWITCHES);
     const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', 0.95] }) });
@@ -620,6 +654,26 @@ describe('spawn model', () => {
       expect(n.calls, reason).toEqual([spawn()]);
       expect(f.logs, reason).toContainEqual({ event: 'spawn_stop', tool_use_id: 'tu1', reason, requested: 'haiku' });
     }
+  });
+
+  it('reads the pins last, so a pin set while the allowlist is read still leaves the spawn native', async () => {
+    const router = createRouter(configOf(SPAWN_ONLY));
+    const reply = deferred<HttpReply>();
+    const f = fakeEngine({ respond: () => reply.promise });
+    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    const n = spawnNext();
+    const run = router.agentSpawn(f.engine, spawn(), n.next);
+    await vi.waitFor(() => expect(f.sent).toHaveLength(1));
+    const gate = deferred<void>();
+    f.allowed.wait = gate.promise;
+    const before = f.allowed.reads;
+    reply.resolve(answering({ ...CLEAR, tier: ['fast', 0.95] })(f.sent[0]!) as HttpReply);
+    await vi.waitFor(() => expect(f.allowed.reads).toBe(before + 1));
+    f.pins.subagentModel = true;
+    gate.resolve();
+    await run;
+    expect(n.calls).toEqual([spawn()]);
+    expect(f.logs).toContainEqual({ event: 'spawn_stop', tool_use_id: 'tu1', reason: 'subagent_model_pinned', requested: 'haiku' });
   });
 
   it('records the model and agent a routed spawn resolved to', async () => {

@@ -58,7 +58,9 @@ Every gate below leaves the call exactly as it was and logs why.
   mid-session: a pin set after a decision ends that override from the next step (`model_pinned`, `effort_pinned`).
   Pins and the allowlist are read again once Jev has answered, too: a spawn is left native if either now excludes its
   target (`{"event":"spawn_stop",…}`), and a stored root model override stops once the allowlist drops it
-  (`model_not_allowed`).
+  (`model_not_allowed`). The pins are read last, after the allowlist, so no wait separates them from `next`. When a
+  pin ends a root effort override, a model override whose target cannot take the effort the request keeps ends too
+  (`pair_invalid`).
 - **Spawns it cannot vouch for.** A fork (`fork`), an explicit model (`explicit_model`), a type other than the
   inheriting built-ins `general-purpose`, `claude`, `Plan` and `Explore` (`type_unverified`), a built-in's name that the
   engine's own core listing did not offer (`definition_unverified`), a host whose release base is not 2.1.282

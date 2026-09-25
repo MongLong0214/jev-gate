@@ -290,7 +290,7 @@ export const offerableEfforts = (baseline: Baseline, scope: 'root' | 'spawn'): R
 };
 
 /** Whether a model accepts a retained effort. Absent is always acceptable; a number or an unknown model is not. */
-const pairValid = (model: string, effort: SymbolicEffort | number | undefined): boolean => {
+export const pairValid = (model: string, effort: SymbolicEffort | number | undefined): boolean => {
   if (effort === undefined) return true;
   if (typeof effort === 'number') return false;
   const facts = factsOf(model);

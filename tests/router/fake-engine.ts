@@ -48,7 +48,8 @@ export const fakeEngine = (o: FakeEngineOptions = {}) => {
   const timers: Array<{ ms: number; resolve: () => void }> = [];
   // Read on every call, so a test can set a pin between steps as another Mod could.
   const pins: Partial<HostPins> = { ...o.pins };
-  const allowed: { models: readonly string[] | undefined } = { models: o.availableModels };
+  // A test can hold a read open with `wait`, to change something while the Router is between reads.
+  const allowed: { models: readonly string[] | undefined; reads: number; wait: Promise<unknown> | null } = { models: o.availableModels, reads: 0, wait: null };
   const engine: RouterEngine = {
     fetch: async (url, init) => {
       const body = JSON.parse(init.body) as { model: string; state: unknown; questions: SentRequest['questions'] };
@@ -69,7 +70,11 @@ export const fakeEngine = (o: FakeEngineOptions = {}) => {
       }),
     envKey: async () => ('envKey' in o ? o.envKey : FAKE_KEY),
     pins: async () => ({ mainModel: false, mainEffort: false, subagentModel: false, aliasRemap: false, ...pins }),
-    availableModels: async () => allowed.models,
+    availableModels: async () => {
+      allowed.reads++;
+      if (allowed.wait) await allowed.wait;
+      return allowed.models;
+    },
     hostBase: async () => ('hostBase' in o ? o.hostBase : '2.1.282'),
     log: (line) => {
       if (!line.startsWith('jev-router ')) throw new Error(`unprefixed log line: ${line}`);

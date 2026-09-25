@@ -4,8 +4,8 @@ import type { RouterConfig } from './config.ts';
 import { validKey } from './config.ts';
 import type { RootSwitch, SymbolicEffort } from './models.ts';
 import { answeredBy, factsOf, sameModel, VERIFIED_ROOT_SWITCHES } from './models.ts';
-import type { Baseline, DimensionReason, MutableDimensions, PolicyOptions, RoutingPatch, RoutingTask } from './policy.ts';
-import { allowedBy, buildQuestions, buildState, choosePatch, offerableEfforts, offerableTiers, validateAnswers } from './policy.ts';
+import type { Baseline, DimensionReason, MutableDimensions, PolicyOptions, RoutedEffort, RoutingPatch, RoutingTask } from './policy.ts';
+import { allowedBy, buildQuestions, buildState, choosePatch, offerableEfforts, offerableTiers, pairValid, validateAnswers } from './policy.ts';
 
 /**
  * The Router's handlers over a structural engine. register.ts adapts the host's `$` to RouterEngine (the environment
@@ -296,6 +296,10 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
       log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: 'incoming_divergence' });
       return null;
     }
+    // The allowlist is read before the pins, so a pin is the last thing read before next: one set during an earlier
+    // await still takes effect.
+    const stored = !t.modelStopped ? t.patch.model : undefined;
+    const allowed = stored !== undefined ? await engine.availableModels().catch(() => []) : undefined;
     const pins = await pinsOf(engine);
     if (t.stopped) return null;
     if (pins.mainModel && !t.modelStopped && t.patch.model !== undefined) {
@@ -306,14 +310,21 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
       t.effortStopped = true;
       log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: 'effort_pinned' });
     }
-    if (!t.modelStopped && t.patch.model !== undefined && !allowedBy(t.patch.model, await engine.availableModels().catch(() => []))) {
+    if (!t.modelStopped && stored !== undefined && !allowedBy(stored, allowed)) {
       t.modelStopped = true;
       log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: 'model_not_allowed' });
     }
-    if (t.stopped) return null;
-    const model = !t.modelStopped ? t.patch.model : undefined;
-    const finalModel = model ?? e.model;
-    const effort = !t.effortStopped && t.patch.effort !== undefined && factsOf(finalModel)?.unconditionalEffort.includes(t.patch.effort) ? t.patch.effort : undefined;
+    const effortOn = (m: string): RoutedEffort | undefined =>
+      !t.effortStopped && t.patch.effort !== undefined && factsOf(m)?.unconditionalEffort.includes(t.patch.effort) ? t.patch.effort : undefined;
+    let model = !t.modelStopped ? t.patch.model : undefined;
+    // The pair was checked when it was chosen. Once its effort is suppressed the request keeps its own, and the model
+    // goes only if it takes that one too, rather than sending a pair nothing approved.
+    if (model !== undefined && !pairValid(model, effortOn(model) ?? e.effort)) {
+      t.modelStopped = true;
+      model = undefined;
+      log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: 'pair_invalid' });
+    }
+    const effort = effortOn(model ?? e.model);
     const patch: RoutingPatch = { ...(model !== undefined ? { model } : {}), ...(effort !== undefined ? { effort } : {}) };
     return Object.keys(patch).length > 0 ? patch : null;
   };
@@ -472,13 +483,15 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     }
     if (target === null) return null;
     // A pin or a narrower allowlist can arrive while Jev answers, so they are read again here rather than trusted from
-    // before the request: what applies is what holds when the spawn is made.
+    // before the request: what applies is what holds when the spawn is made. The pins are read last, after the
+    // allowlist, so no await separates them from next.
+    const allowed = await engine.availableModels().catch(() => []);
     const now = await pinsOf(engine);
     const stop = now.subagentModel
       ? 'subagent_model_pinned'
       : now.aliasRemap
         ? 'alias_remapped'
-        : !allowedBy(target, await engine.availableModels().catch(() => []))
+        : !allowedBy(target, allowed)
           ? 'target_not_allowed'
           : null;
     if (stop) {

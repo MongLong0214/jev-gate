@@ -30,6 +30,10 @@ unobserved, so a routed `[1m]` switch may stop after its first step. A model que
 effort it would be sent with pairs with the target. Routed results are logged (`root_result`, `spawn_result`) with
 the reported model and the four token counts only.
 
+The third review (`ebf709d`) found a pin could still land while the allowlist was read, and that an effort pin could
+leave a stored model paired with an effort it cannot take. The pins are now read last, and a model override is
+dropped when the effort actually sent does not pair with it.
+
 ## 2026-09-25 — the PR #37 review (L1–L7) is fixed in code; `lean` is still unmeasured
 
 The consolidated review of `e444a4d` asked for seven changes before recommending `lean`. All seven are now in code
