@@ -11,6 +11,8 @@ export interface DigestToolUse {
   readonly tool: string;
   readonly input: Readonly<Record<string, unknown>>;
   readonly text?: string;
+  /** The tool's record of an answered call, when the transcript holds one (the host's `ToolUseSummary.result`). */
+  readonly result?: unknown;
 }
 
 export interface DigestMessage {
@@ -176,6 +178,10 @@ export const messageChars = (m: DigestMessage): number =>
  * A digest this module wrote: the whole header, and a last line carrying a checksum of everything before it, rather than
  * the mark or the header alone, which a request can start with too. A pasted digest with anything added no longer
  * matches its checksum, so it is read as a request.
+ *
+ * The checksum is public, so the body is also held to the shape written: the header line, then straight away a section
+ * heading. Taking a digest apart keeps only what its sections hold, and this leaves no text outside them; a request
+ * written to pass the checksum with text between the header and the first heading is read as a request, not emptied.
  */
 const ownDigestBody = (text: string): string | null => {
   const t = text.trim();
@@ -183,6 +189,7 @@ const ownDigestBody = (text: string): string | null => {
   const at = t.lastIndexOf(`\n\n${END_OPEN}`);
   if (at < 0) return null;
   const body = t.slice(0, at);
+  if (body !== HEADER && !FIRST_SECTION.test(body.slice(HEADER.length))) return null;
   return t.slice(at + 2) === END(checksum(body)) ? body : null;
 };
 const isOwnDigest = (text: string): boolean => ownDigestBody(text) !== null;
@@ -294,6 +301,8 @@ const SECTION = {
   steps: '## Earlier steps (oldest first)',
 } as const;
 const REQUEST_PREFIX = '▸ ';
+/** The start a digest body has after its header: a blank line, then one of the headings as a whole line. */
+const FIRST_SECTION = new RegExp(`^\\n\\n(${Object.values(SECTION).map((h) => h.replace(/[()]/g, '\\$&')).join('|')})[ \\t]*(\\n|$)`);
 
 /**
  * A content line that could read as a section heading or a request marker is indented by one space, so a digest parses
@@ -353,7 +362,9 @@ type BuiltMessage = {
 /**
  * The tools whose results hold text alone, so a result rebuilt from its text is the result the model read. A Read is
  * one unless its path is an image, a PDF or a notebook, which come back as image or document blocks, beside text or
- * alone. Any other tool, an MCP tool among them, may return media, and a last result from one is left to the engine.
+ * alone: the host picks a Read's kind by the path's extension (2.1.283: png, jpg, jpeg, gif, webp and pdf; notebooks
+ * by ipynb), and when the call's record is at hand its type must say text as well. Any other tool, an MCP tool among
+ * them, may return media, and a last result from one is left to the engine.
  */
 const TEXT_TOOLS = new Set([
   'Agent', 'AskUserQuestion', 'Bash', 'BashOutput', 'Edit', 'EnterPlanMode', 'ExitPlanMode', 'Glob', 'Grep', 'KillShell',
@@ -361,7 +372,13 @@ const TEXT_TOOLS = new Set([
   'TaskOutput', 'TaskStop', 'TodoWrite', 'ToolSearch', 'WebFetch', 'WebSearch', 'Write',
 ]);
 const MEDIA_PATH = /\.(png|jpe?g|gif|webp|bmp|ico|tiff?|heic|avif|svg|pdf|ipynb)$/i;
-const textOnly = (u: DigestToolUse): boolean => TEXT_TOOLS.has(u.tool) && !(u.tool === 'Read' && MEDIA_PATH.test(String(u.input.file_path ?? '')));
+const READ_TEXT = new Set(['text', 'file_unchanged']);
+const textOnly = (u: DigestToolUse): boolean => {
+  if (!TEXT_TOOLS.has(u.tool)) return false;
+  if (u.tool !== 'Read') return true;
+  const type = typeof u.result === 'object' && u.result !== null ? (u.result as { type?: unknown }).type : undefined;
+  return !MEDIA_PATH.test(String(u.input.file_path ?? '')) && (type === undefined || READ_TEXT.has(String(type)));
+};
 
 /** The last message when it answers calls: those results, carried whole as text, and then the closing line. */
 const closesWithResults = (m: DigestMessage | undefined): boolean => m?.role === 'user' && (m.toolResults ?? []).length > 0;

@@ -67,8 +67,10 @@ engine's time and usage.
   as its own text blocks do, and the caveat it puts before command output. A message the engine wrote alone is not a
   request; one it added a reminder to still is, and a tag quoted inside a sentence stays part of it. The host does not
   say who wrote a message, so this is read from the text and can be wrong at the edges.
-- **A digest it wrote earlier** (recognized by its whole header line and a last line carrying a checksum of the rest,
-  exact but for whitespace around the whole message; one changed inside, even by a space, is read as a request,
+- **A digest it wrote earlier** (recognized by its whole header line, a section heading straight after it, and a last
+  line carrying a checksum of the rest, exact but for whitespace around the whole message; one changed inside, even by
+  a space, is read as a request, as is one with text outside its sections, since the checksum is public and a request
+  can carry one it computed,
   and only where a summary opens the conversation, before the first assistant message, so a request that starts with,
   quotes or pastes a digest and adds to it stays a request) is taken apart at the next
   compaction: its previous summary stays the summary, its
