@@ -532,3 +532,28 @@ describe('R11: the frozen configuration is the one the child reads', () => {
     expect(existsSync(r.out)).toBe(false);
   });
 });
+
+describe('#45: Router execution inputs', () => {
+  it('a Router-only run needs no legacy plugin, and every Router cell loads one frozen copy of mods/router', () => {
+    const r = bench(['--arms', 'router_native,router', '--base-effort', 'xhigh', '--frontier-model', 'opus', '--execute', '--max-sessions', '2', '--plugin-dir', join(tmp, 'no-such-plugin')]);
+    expect(r.status, r.stderr).toBe(0);
+    const plan = JSON.parse(readFileSync(join(r.out, 'plan.json'), 'utf8')) as Plan;
+    const frozen = plan.frozen_inputs as Record<string, unknown>;
+    expect(frozen['plugin_copy']).toBeNull();
+    expect(frozen['plugin_hook_sha256']).toBeNull();
+    expect(existsSync(join(r.out, 'inputs', 'plugin'))).toBe(false);
+    const routerCopy = join(r.out, 'inputs', 'router-plugin');
+    expect(frozen['router_copy']).toBe(routerCopy);
+    expect(frozen['router_sha256']).toMatch(/^[0-9a-f]{64}$/);
+    expect(existsSync(join(routerCopy, 'hooks', 'register.ts'))).toBe(true);
+    expect(existsSync(join(routerCopy, '.claude-plugin', 'plugin.json'))).toBe(true);
+
+    const routed = readCell(r.out, 'router').spawn!.argv;
+    expect(routed[routed.indexOf('--plugin-dir') + 1]).toBe(routerCopy);
+    expect(routed.slice(routed.indexOf('--model'), routed.indexOf('--model') + 2)).toEqual(['--model', 'opus']);
+    expect(routed.slice(routed.indexOf('--effort'), routed.indexOf('--effort') + 2)).toEqual(['--effort', 'xhigh']);
+    const native = readCell(r.out, 'router_native').spawn!.argv;
+    expect(native).not.toContain('--plugin-dir');
+    expect(native.slice(native.indexOf('--effort'), native.indexOf('--effort') + 2)).toEqual(['--effort', 'xhigh']);
+  });
+});

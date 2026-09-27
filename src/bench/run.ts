@@ -345,6 +345,8 @@ export interface RouterV5 {
   accounting: 1;
   /** `jev-router `-prefixed lines whose JSON payload failed to parse (truncated tail, corruption, noise). */
   unparsable_lines: number;
+  /** The cell's debug log: `read`, `missing` or `unreadable`; null before ingestion. */
+  log: 'read' | 'missing' | 'unreadable' | null;
   diagnostic: { root_effort: boolean; root_model: boolean; spawn_model: boolean; key: string | null } | null;
   root_assessed: number;
   root_proposed: number;
@@ -713,6 +715,7 @@ export const buildPlan = (o: Options, cases: CodingCase[], manifestVersion: numb
        * policy above. router_native carries no options: it is the plain host at base_effort.
        */
       router_policy: {
+        // The source copied to inputs/router-plugin at execution; frozen_inputs.router_sha256 is what ran.
         plugin_dir: join(root, 'mods', 'router'),
         settings_key: ROUTER_SETTINGS_KEY,
         options: ROUTER_OPTIONS,
@@ -777,8 +780,10 @@ export const preflight = (o: Options, needsJev: boolean): Preflight => {
   // The agent definition each selected arm actually needs: the lean arms ship one executor and none of the six roles.
   const specs = armSpecs(o.frontierModel, o.fixedEffort, o.baseEffort);
   const needed = [...new Set(o.arms.filter((a) => specs[a].plugin).map((a) => (specs[a].mode === 'lean' ? 'executor.md' : 'worker.md')))];
+  // #45: a run of Router arms alone loads no legacy plugin, so it neither needs nor checks one.
   const plugin_hook_present =
-    existsSync(join(o.pluginDir, 'dist', 'hook.js')) && existsSync(join(o.pluginDir, 'hooks', 'hooks.json')) && needed.every((f) => existsSync(join(o.pluginDir, 'agents', f)));
+    needed.length === 0 ||
+    (existsSync(join(o.pluginDir, 'dist', 'hook.js')) && existsSync(join(o.pluginDir, 'hooks', 'hooks.json')) && needed.every((f) => existsSync(join(o.pluginDir, 'agents', f))));
   if (!plugin_hook_present) errors.push(`plugin dir ${o.pluginDir} lacks dist/hook.js, hooks/hooks.json or agents/{${needed.join(',')}}; run npm run build`);
   // #45: the Router is its own plugin, loaded from source (mods/router/hooks/hooks.json points at register.ts
   // directly, no dist step) -- checked only when a selected arm actually loads it.
@@ -836,6 +841,7 @@ export const emptyLeanV5 = (): LeanV5 => ({
 export const emptyRouterV5 = (): RouterV5 => ({
   accounting: 1,
   unparsable_lines: 0,
+  log: null,
   diagnostic: null,
   root_assessed: 0,
   root_proposed: 0,
@@ -1647,14 +1653,20 @@ const ROUTER_JEV_MODEL = 'jev-1.13.0';
  * costs nothing to keep for an older cached log or a hand-built fixture).
  */
 export const ingestRouterLog = (cell: CellRecord, logPath: string): void => {
-  if (!existsSync(logPath)) return;
+  const r = cell.router;
   let raw: string;
   try {
-    raw = readFileSync(logPath, 'utf8');
+    if (!existsSync(logPath)) {
+      r.log = 'missing';
+      raw = '';
+    } else raw = readFileSync(logPath, 'utf8');
   } catch {
-    return;
+    r.log = 'unreadable';
+    raw = '';
   }
-  const r = cell.router;
+  // Outside a Router arm the file is not expected and the Router is a producer known disabled: zero, as initialised.
+  if (r.log !== null && !cell.router_expected) return;
+  if (r.log === null) r.log = 'read';
   const lines = raw.split('\n');
   // The final split element from a trailing newline is not a line; a genuinely truncated last write is real content
   // that fails JSON.parse below and is counted, never silently dropped.
@@ -1752,7 +1764,11 @@ export const ingestRouterLog = (cell: CellRecord, logPath: string): void => {
   const known = sent.filter((s) => s.tokens !== null);
   r.jev_responses_known = known.length;
   r.jev_input_tokens_known = safeSum(known.map((s) => s.tokens));
-  r.jev_input_tokens = sent.length === 0 ? 0 : known.length === sent.length ? r.jev_input_tokens_known : null;
+  // The log is the only record of the Router's Jev calls, so the total is unknown, never zero, whenever it may be
+  // missing one: no readable log, a Router line that did not parse (it may have been a sent call), or a session ended
+  // by the timeout or a cancel while a request may still have been waiting for its line. The known part is kept.
+  const complete = r.log === 'read' && r.unparsable_lines === 0 && !cell.timed_out && !cell.cancelled;
+  r.jev_input_tokens = !complete ? null : sent.length === 0 ? 0 : known.length === sent.length ? r.jev_input_tokens_known : null;
   r.jev_cost_known_subtotal = r.jev_input_tokens_known !== null ? (estimateJevCostUsd(ROUTER_JEV_MODEL, r.jev_input_tokens_known) ?? 0) : 0;
   r.jev_cost_usd = r.jev_input_tokens === null ? null : r.jev_input_tokens === 0 ? 0 : estimateJevCostUsd(ROUTER_JEV_MODEL, r.jev_input_tokens);
 };
@@ -1774,7 +1790,7 @@ const writeJsonAtomic = (path: string, value: unknown): void => {
   renameSync(tmp, path);
 };
 
-const runClaudeCell = (cs: CodingCase, spec: ArmSpec, o: Options, pluginDir: string, configPath: string, cellDir: string, cell: CellRecord): Promise<void> =>
+const runClaudeCell = (cs: CodingCase, spec: ArmSpec, o: Options, pluginDir: string, routerDir: string | null, configPath: string, cellDir: string, cell: CellRecord): Promise<void> =>
   new Promise((done) => {
     const work = join(cellDir, 'work');
     const traceDir = join(cellDir, 'trace');
@@ -1848,9 +1864,10 @@ const runClaudeCell = (cs: CodingCase, spec: ArmSpec, o: Options, pluginDir: str
      * env var, already in KEEP_ENV.
      */
     if (spec.routerEnabled) {
+      if (routerDir === null) throw new Error('a Router arm ran without a frozen Router copy');
       env['CLAUDE_CODE_ENABLE_FUNCTION_HOOKS'] = '1';
       envAdded.push('CLAUDE_CODE_ENABLE_FUNCTION_HOOKS');
-      argv.push('--plugin-dir', join(root, 'mods', 'router'));
+      argv.push('--plugin-dir', routerDir);
       const settingsPath = join(cellDir, 'router-settings.json');
       writeFileSync(settingsPath, JSON.stringify({ pluginConfigs: { [ROUTER_SETTINGS_KEY]: { options: ROUTER_OPTIONS } } }, null, 2) + '\n', 'utf8');
       argv.push('--settings', settingsPath);
@@ -1962,9 +1979,22 @@ const freezeInputs = (o: Options, cases: CodingCase[], manifestDir: string, out:
   mkdirSync(inputs, { recursive: true });
   const manifestCopy = join(inputs, 'bench');
   const benchReport = copyTree(manifestDir, manifestCopy, { forbiddenRoots: [out], strictSymlinks: true });
-  const pluginCopy = join(inputs, 'plugin');
-  mkdirSync(pluginCopy, { recursive: true });
-  for (const rel of ['dist', 'hooks', 'agents', '.claude-plugin']) cpSync(join(o.pluginDir, rel), join(pluginCopy, rel), { recursive: true });
+  const specs = armSpecs(o.frontierModel, o.fixedEffort, o.baseEffort);
+  // #45: the legacy plugin is copied only when a selected arm loads it.
+  let pluginCopy: string | null = null;
+  if (o.arms.some((a) => specs[a].plugin)) {
+    pluginCopy = join(inputs, 'plugin');
+    mkdirSync(pluginCopy, { recursive: true });
+    for (const rel of ['dist', 'hooks', 'agents', '.claude-plugin']) cpSync(join(o.pluginDir, rel), join(pluginCopy, rel), { recursive: true });
+  }
+  // #45: the Router runs from source, so the source is what gets frozen. Every Router cell loads this copy, rather
+  // than the repository's mods/router, and a change to the checkout mid-run cannot reach a later cell.
+  let routerCopy: string | null = null;
+  let routerReport: SnapshotReport | null = null;
+  if (o.arms.some((a) => specs[a].routerEnabled === true)) {
+    routerCopy = join(inputs, 'router-plugin');
+    routerReport = copyTree(join(root, 'mods', 'router'), routerCopy, { forbiddenRoots: [out], strictSymlinks: true });
+  }
   // T8: the configuration every plugin child reads, written once here. ConfigV5 holds no key or secret; the API key
   // stays in the environment. Editing the parent's file or the HOME config after this point changes nothing.
   const configCopy = join(inputs, 'config.json');
@@ -1972,7 +2002,7 @@ const freezeInputs = (o: Options, cases: CodingCase[], manifestDir: string, out:
   writeFileSync(configCopy, configText, { encoding: 'utf8', mode: 0o600 });
   const checkerIds: Record<string, string> = {};
   for (const cs of cases) checkerIds[cs.id] = checkerIdentity(cs.checkFile);
-  return { config_copy: configCopy, config_sha256: sha256(configText), config: { ...config }, bench_copy: manifestCopy, bench_sha256: benchReport.sha256, bench_files: benchReport.files, bench_skipped: benchReport.skipped, plugin_copy: pluginCopy, plugin_hook_sha256: createHash('sha256').update(readFileSync(join(pluginCopy, 'dist', 'hook.js'))).digest('hex'), checker_ids: checkerIds };
+  return { config_copy: configCopy, config_sha256: sha256(configText), config: { ...config }, bench_copy: manifestCopy, bench_sha256: benchReport.sha256, bench_files: benchReport.files, bench_skipped: benchReport.skipped, plugin_copy: pluginCopy, plugin_hook_sha256: pluginCopy === null ? null : createHash('sha256').update(readFileSync(join(pluginCopy, 'dist', 'hook.js'))).digest('hex'), router_copy: routerCopy, router_sha256: routerReport?.sha256 ?? null, router_files: routerReport?.files ?? null, checker_ids: checkerIds };
 };
 
 export const regrade = (o: Options): number => {
@@ -2050,7 +2080,8 @@ export const main = async (argv: string[]): Promise<number> => {
   const frozenConfig = plan.effective_config ?? DEFAULT_CONFIG;
   plan.frozen_inputs = freezeInputs(o, cases, manifestDir, out, frozenConfig);
   writeJsonAtomic(join(out, 'plan.json'), plan);
-  const pluginDir = String(plan.frozen_inputs['plugin_copy']);
+  const pluginDir = plan.frozen_inputs['plugin_copy'] === null ? '' : String(plan.frozen_inputs['plugin_copy']);
+  const routerDir = plan.frozen_inputs['router_copy'] === null ? null : String(plan.frozen_inputs['router_copy']);
   const configPath = String(plan.frozen_inputs['config_copy']);
   const frozenBench = String(plan.frozen_inputs['bench_copy']);
   const specs = armSpecs(o.frontierModel, o.fixedEffort, o.baseEffort);
@@ -2101,7 +2132,7 @@ export const main = async (argv: string[]): Promise<number> => {
       }
       sessions++;
       process.stdout.write(`[${sessions}/${plan.planned_cells}] ${cs.id} r${row.repetition} ${arm} (root=${spec.rootModel}${spec.plugin ? `, jev-gate ${spec.mode}${spec.experimentAdmission ? ' forced-orchestrated' : ''}` : ''})\n`);
-      await runClaudeCell(cs, spec, o, pluginDir, configPath, cellDir, cell);
+      await runClaudeCell(cs, spec, o, pluginDir, routerDir, configPath, cellDir, cell);
       try {
         const finalReport = copyTree(work, join(cellDir, 'final'), { keepGit: true, forbiddenRoots: [] });
         cell.final_snapshot = { ...finalReport, path: join(cellDir, 'final') };

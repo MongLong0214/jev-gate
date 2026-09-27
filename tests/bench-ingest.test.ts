@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 
 import { armSpecs, emptyCell, ingestRouterLog, ingestTraces, observeEvent, type Arm, type CellRecord } from '../src/bench/run.js';
@@ -575,9 +575,11 @@ describe('#45: Router producer ingestion (jev-router debug log)', () => {
     // total is complete, priced at the dated list price, never conflated with root_result's routed-Claude usage.
     expect(r.jev_attempts).toBe(3);
     expect(r.jev_responses_known).toBe(3);
-    expect(r.jev_input_tokens).toBe(255);
-    expect(r.jev_cost_usd).toBeCloseTo((255 / 1_000_000) * 0.042, 10);
-    expect(r.jev_cost_known_subtotal).toBeCloseTo(r.jev_cost_usd!, 10);
+    // A Router line that did not parse may have been a sent call, so the total is unknown; the known part is kept.
+    expect(r.jev_input_tokens_known).toBe(255);
+    expect(r.jev_input_tokens).toBeNull();
+    expect(r.jev_cost_usd).toBeNull();
+    expect(r.jev_cost_known_subtotal).toBeCloseTo((255 / 1_000_000) * 0.042, 10);
   });
 
   it('PR #49: reads the redaction-safe usage keys (input/output/cache_read/cache_creation), never the old _tokens names, for pricing and for the routed call’s own per-step usage', () => {
@@ -614,7 +616,8 @@ describe('#45: Router producer ingestion (jev-router debug log)', () => {
     // an entry. Only the one valid line after it counts.
     expect(r.spawn_assessed).toBe(0);
     expect(r.jev_attempts).toBe(1);
-    expect(r.jev_input_tokens).toBe(77);
+    expect(r.jev_input_tokens_known).toBe(77);
+    expect(r.jev_input_tokens).toBeNull();
   });
 
   it('a sent attempt whose usage never comes back leaves the Router total unknown, not zero', () => {
@@ -624,10 +627,32 @@ describe('#45: Router producer ingestion (jev-router debug log)', () => {
     expect(cell.router).toMatchObject({ jev_attempts: 1, jev_responses_known: 0, jev_input_tokens: null, jev_cost_usd: null, jev_cost_known_subtotal: 0 });
   });
 
-  it('a missing debug log file (never written) leaves the Router block at its pre-observation zero, not an error', () => {
+  it('a Router arm with no debug log has an unknown Jev cost, not zero; an arm without the Router stays at zero', () => {
+    const missing = join(tmp, 'router-logs', 'does-not-exist.log');
     const cell = cellFor('router');
-    ingestRouterLog(cell, join(tmp, 'router-logs', 'does-not-exist.log'));
-    expect(cell.router).toMatchObject({ unparsable_lines: 0, jev_attempts: 0, jev_input_tokens: 0, jev_cost_usd: 0 });
+    ingestRouterLog(cell, missing);
+    expect(cell.router).toMatchObject({ log: 'missing', jev_attempts: 0, jev_input_tokens: null, jev_cost_usd: null, jev_cost_known_subtotal: 0 });
+    for (const arm of ['router_native', 'router_fixed', 'native_auto'] as const) {
+      const other = cellFor(arm);
+      ingestRouterLog(other, missing);
+      expect(other.router).toMatchObject({ jev_attempts: 0, jev_input_tokens: 0, jev_cost_usd: 0 });
+    }
+  });
+
+  it('a Router session ended by the timeout or a cancel has an unknown Jev cost, whatever its log shows', () => {
+    const logPath = join(tmp, 'router-logs', 'clean.log');
+    mkdirSync(dirname(logPath), { recursive: true });
+    writeFileSync(logPath, `jev-router ${JSON.stringify({ event: 'root', turn: 't1', sent: true, patch: {}, usage: { input: 40 } })}\n`);
+    const clean = cellFor('router');
+    ingestRouterLog(clean, logPath);
+    expect(clean.router).toMatchObject({ log: 'read', jev_input_tokens: 40 });
+    for (const end of ['timed_out', 'cancelled'] as const) {
+      const cell = cellFor('router');
+      cell[end] = true;
+      ingestRouterLog(cell, logPath);
+      expect(cell.router).toMatchObject({ jev_input_tokens_known: 40, jev_input_tokens: null, jev_cost_usd: null });
+      expect(cell.router.jev_cost_known_subtotal).toBeGreaterThan(0);
+    }
   });
 
   describe('#45: producer accounting -- legacy + Lean + Router summed once, disjoint', () => {
