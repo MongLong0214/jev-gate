@@ -51,7 +51,10 @@ agreement }`, so a trace reader, and `explain`, can tell which agent and model r
 round: a pinned or native planner call is never patched and has no tier, so its `requested` is now its own pin or
 its frontmatter model rather than null, and an orchestrated worker's `post` record carries `requested_model` too. Sixth round: the planner tier is
 reset when a planner call is reserved, so a pinned retry after a patched attempt no longer reports the earlier tier's
-model as requested, or a false mismatch.
+model as requested, or a false mismatch. Seventh round: the coordinator is told to merge every accepted worker's
+branch before reporting the work done, not only before a dependent, since a one-task plan never has one; a
+single-executor or ad-hoc dispatch is no longer isolated, because nothing tells its coordinator to merge; and the
+main-session steps come back only once every task is accepted, the fact Stop reads, not when nothing else is ready.
 
 **Capability-aware plan steps (P2-1).** `PlannerReply` (the `ready` variant) gains an optional
 `main_session_steps: Array<{ step: string; needs: Capability }>`, `Capability` a closed union of `os_permission`,

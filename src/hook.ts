@@ -299,6 +299,14 @@ const isolatedWorkerPatch = (input: AgentInput, patch: AgentPatch): AgentPatch =
 
 const isSlashCommand = (prompt: string): boolean => prompt.trimStart().startsWith('/');
 
+/**
+ * T1: a plan is complete when every task is accepted by its current attempt AND nothing is still running. A worker that
+ * was never observed to finish is not a finished job, whatever the receipt of an earlier attempt says. Stop and the
+ * last-task note read the same fact, so the note never announces an end that Stop would not record.
+ */
+const planComplete = (gen: JobGeneration): boolean =>
+  gen.plan !== null && activeWorkers(gen).length === 0 && gen.plan.tasks.every((t) => acceptedReceipt(gen.receipts, t) !== null);
+
 /** T1: the tasks that would be built on this one's result, directly or through a chain of dependencies. */
 const dependentsOf = (plan: Plan, taskId: string): Set<string> => {
   const out = new Set<string>();
@@ -1454,12 +1462,13 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     // The note cannot point at a contract on a shape that has none, and the ad-hoc shape keeps the contract wording.
     const note = (tier: Tier): string => (carriedRequest === null ? renderRouteNote(tier) : renderSingleRouteNote(tier));
     /**
-     * #48 P1-2: every patched WORKER dispatch below carries `isolation: "worktree"` under that setting. A `preserve()`
-     * return (the `carriedRequest === null` branch of `preserveAdhoc`, and the ordinary ad-hoc shape's non-single
-     * preserve reasons) cannot carry it: that path emits no patch at all, so the call proceeds completely unmodified.
+     * #53 review: an ad-hoc or single-executor dispatch is never isolated. Isolation is the write boundary between
+     * parallel planned workers, and this path runs one worker with no plan; its coordinator is never told to merge a
+     * branch back, so an isolated worker's accepted edits would stay on a branch rather than in this checkout. Keeping
+     * the isolation and adding a merge note to the single guidance was the other fix; one worker has no sibling to
+     * collide with, so this path drops the isolation instead of adding a merge step it gains nothing from.
      */
-    const emitWorkerPatch = (patch: Parameters<typeof patchAgentInput>[1], code: ErrorCode | null): HookResult =>
-      emitPatch(eligibility.input, config.workerIsolation === 'worktree' ? isolatedWorkerPatch(eligibility.input, patch) : patch, code);
+    const emitWorkerPatch = (patch: Parameters<typeof patchAgentInput>[1], code: ErrorCode | null): HookResult => emitPatch(eligibility.input, patch, code);
     /** A preserve leaves the model exactly as the coordinator called it. That is all it leaves alone. */
     const preserveAdhoc = (code: ErrorCode, tier: Tier = eligibility.tier): HookResult =>
       carriedRequest === null ? preserve(code) : emitWorkerPatch({ prompt: composed + note(tier) }, code);
@@ -1852,13 +1861,12 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         context = renderSingleResult(shown, reason ?? '');
       } else if (finalVerdict === 'accept') {
         const ready = readyForDispatch(next);
-        // #48 P2-1: "the last task is accepted" has no explicit signal here, so nothing else being ready to dispatch
-        // is used as the proxy -- an approximation, since a task can still be blocked-but-not-ready rather than the
-        // plan truly being done.
+        // #53 review: "nothing else is ready" was the proxy here, and it is true while an independent sibling is still
+        // running, so the main-session steps came before the work they follow. The note now reads Stop's own fact.
         context = renderWorkerAccepted(taskId, ready, config.maxParallelWorkers, {
           workerIsolation: config.workerIsolation,
           mainSessionSteps: next.plan?.main_session_steps ?? [],
-          isLastTask: ready.length === 0,
+          isLastTask: planComplete(next),
         });
       } else if (finalVerdict === 'rework' || finalVerdict === 'replan') context = renderWorkerReported(taskId, finalVerdict, reason ?? '');
       else if (finalVerdict === 'unknown') context = renderWorkerUnknown(taskId);
@@ -2008,9 +2016,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     updateJob(deps.env, sessionId, (prev) => {
       if (!prev || prev.current.outcome !== null) return null;
       const gen = prev.current;
-      // T1: completion needs every task accepted by its current attempt AND nothing still running. A worker that was
-      // never observed to finish is not a finished job, whatever the receipt of an earlier attempt says.
-      const allAccepted = gen.plan !== null && activeWorkers(gen).length === 0 && gen.plan.tasks.every((t) => acceptedReceipt(gen.receipts, t) !== null);
+      const allAccepted = planComplete(gen);
       // A19: the single shape has no plan to complete, so its completion is the latest receipt of the one dispatch it
       // makes. That receipt is the worker's own report (reportedSingleVerdict), so `completed` is a weaker statement
       // here than under a plan -- the difference lives in the receipt, which records what it was decided from.

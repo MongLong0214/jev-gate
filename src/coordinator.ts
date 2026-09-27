@@ -26,10 +26,12 @@ export const renderDispatchRule = (cap: number): string =>
 /**
  * #48 P1-2: shown once in orchestration guidance and again after every accepted worker while `workerIsolation` is
  * `"worktree"` -- the write boundary is per-worker there, so a dependent task must not start until the predecessor's
- * worktree is merged back into the branch the next worker will read from.
+ * worktree is merged back into the branch the next worker will read from. #53 review: a one-task plan or an
+ * independent final task has no dependent dispatch to trigger that merge, yet Stop records the plan completed, so the
+ * merge is owed for every accepted worker, not only for one that has a dependent.
  */
 export const WORKTREE_ISOLATION_SENTENCE =
-  'workerIsolation is "worktree": each dispatched worker runs in its own git worktree branched from this checkout\'s last commit, not from uncommitted changes in this working tree, so commit what a worker has to read before dispatching it. Merge a worker\'s branch back before dispatching a task that depends on it.';
+  'workerIsolation is "worktree": each dispatched worker runs in its own git worktree branched from this checkout\'s last commit, not from uncommitted changes in this working tree, so commit what a worker has to read before dispatching it. Merge every accepted worker\'s branch back into this checkout before dispatching a task that depends on it and before reporting the work done: until it is merged, an accepted task has changed nothing here.';
 
 /**
  * #53 review: appended to every patched worker prompt under worktree isolation. The worker profiles say not to commit

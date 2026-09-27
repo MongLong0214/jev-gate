@@ -1299,7 +1299,7 @@ describe('worker isolation (#48 P1-2)', () => {
     expect(updatedInput(pinned)).toMatchObject({ isolation: 'worktree', model: 'haiku' });
   });
 
-  it('patches isolation onto an ad-hoc single-executor worker dispatch (#48 P1-2 + A19)', async () => {
+  it('#53 review: does not isolate a single-executor worker dispatch, which nothing tells the coordinator to merge', async () => {
     const cfg = join(tmp, `single-isolated-${Math.random().toString(36).slice(2)}.json`);
     writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', admittedShape: 'single', workerIsolation: 'worktree', guardAllowTools: ['Bash'] }));
     const env = makeEnv({ JEV_GATE_CONFIG: cfg, CLAUDE_CONFIG_DIR: headBaseRefConfigDir(), CLAUDE_PROJECT_DIR: mkdtempSync(join(tmp, 'project-')) });
@@ -1307,8 +1307,18 @@ describe('worker isolation (#48 P1-2)', () => {
     await run(env, promptEvent(), fetchImpl);
     const r = await run(env, preEvent('Agent', agentInput({ prompt: 'Do what the request asks.' })), fetchImpl);
     expect(r.kind).toBe('patch');
-    expect(updatedInput(r)).toMatchObject({ isolation: 'worktree' });
-    expect(String(updatedInput(r)['prompt'])).toContain(WORKTREE_WORKER_SENTENCE);
+    expect(updatedInput(r)).not.toHaveProperty('isolation');
+    expect(String(updatedInput(r)['prompt'])).not.toContain('[Jev Gate isolation]');
+  });
+
+  it('#53 review: an accepted worker is told to merge its branch before the work is reported done, not only before a dependent', async () => {
+    const env = capEnv(1);
+    const fetchImpl = fakeJev();
+    await seedPlanned(env, planReply([rawTask('t1')]), fetchImpl);
+    await run(env, preEvent('Agent', agentInput()), fetchImpl);
+    const post = await run(env, workerPost('toolu_1', workerReply()), fetchImpl);
+    expect(context(post)).toContain('Task t1 accepted');
+    expect(context(post)).toContain('before reporting the work done');
   });
 
   /**
@@ -1386,6 +1396,20 @@ describe('receipts', () => {
     const second = await run(env, workerPost('toolu_2', workerReply({ changed_files: ['src/t2.ts'] })), fetchImpl);
     expect(context(second)).toContain('Ready task ids: t3');
     expect(state(env).current.active).toEqual({});
+  });
+
+  it('#53 review: repeats the main-session steps only once every task is accepted, not while an independent sibling runs', async () => {
+    const env = capEnv(2);
+    const fetchImpl = fakeJev();
+    const steps = [{ step: 'grant the screen-recording permission', needs: 'os_permission' }];
+    await seedPlanned(env, { ...planReply([rawTask('t1'), rawTask('t2')]), main_session_steps: steps }, fetchImpl);
+    await run(env, preEvent('Agent', agentInput()), fetchImpl);
+    await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t2]\nwork' }), { tool_use_id: 'toolu_2' }), fetchImpl);
+    const first = await run(env, workerPost('toolu_1', workerReply()), fetchImpl);
+    expect(context(first)).toContain('Ready task ids: none');
+    expect(context(first)).not.toContain('grant the screen-recording permission');
+    const second = await run(env, workerPost('toolu_2', workerReply({ changed_files: ['src/t2.ts'] })), fetchImpl);
+    expect(context(second)).toContain('grant the screen-recording permission');
   });
 
   it('keeps an incomplete receipt from unlocking dependents', async () => {

@@ -277,8 +277,9 @@ no account access. The three floors are uncalibrated policy values; `resultConfi
 kept only for config compatibility, since the normal path no longer makes the Gate C call it used to gate.
 `guardAllowTools` adds read-only tools your project needs during orchestration, for example an MCP reader.
 
-`workerIsolation` is `"none"` by default, and can be set to `"worktree"`: every planned or ad-hoc worker dispatch the
-hook patches then also carries `isolation: "worktree"` in the patched call (a planner dispatch never does). It is
+`workerIsolation` is `"none"` by default, and can be set to `"worktree"`: every planned worker dispatch the hook
+patches then also carries `isolation: "worktree"` in the patched call (a planner, ad-hoc or single-executor dispatch
+never does: those run one worker with no plan, and nothing would tell the coordinator to merge its branch back). It is
 required once `maxParallelWorkers > 1` — a declared deliverable is the planner's claim about what a task writes, not
 an enforced write boundary, and a worktree is the boundary rather than the claim — and it itself requires `"Bash"` in
 `guardAllowTools`, because the root has to merge each worker's branch back while the guard is active. Whether the host
@@ -293,7 +294,9 @@ through the same scopes as the compaction window (managed, project-local, projec
 Even with `"head"` a worker sees the last commit, not uncommitted changes, so the coordinator is told to commit what
 a worker needs before dispatching it; under isolation its tool line names Bash as available for that and for merging.
 Each isolated worker's prompt also asks it to commit its own changes on its worktree branch, without pushing, because
-uncommitted edits in a worktree never reach the branch the coordinator merges. The hook reads project scopes only
+uncommitted edits in a worktree never reach the branch the coordinator merges. The coordinator is told to merge every
+accepted worker's branch back, before dispatching a task that depends on it and before reporting the work done, so
+a one-task plan or an independent last task is merged too. The hook reads project scopes only
 from `CLAUDE_PROJECT_DIR`, which the host exports to hooks, since its own `cwd` moves with `cd`; without it the base
 ref is unknown and the turn runs serially.
 
