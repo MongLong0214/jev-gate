@@ -82,6 +82,18 @@ ring reaching 50 entries, no live `SessionStart` notice. All of it is exercised 
 `tests/hook.test.ts`/`tests/pack.test.ts`. `npm run typecheck && npm test && npm run build && claude plugin
 validate . --strict` all pass.
 
+## 2026-09-27 — #45 offline part: Router arms + producer ingestion in the runner; nothing executed or measured
+
+`src/bench/run.ts`/`report.ts` now know three Router arms (`router_native`, `router`, `router_fixed`, selectable via
+`--arms router`, all on the frontier root, the first two at `--base-effort` and the last at `--fixed-effort`) and ingest
+the Router's `jev-router {...}` debug-log lines as a third, disjoint cost producer alongside the legacy gate and Lean.
+`ingestRouterLog` reads the redaction-safe usage keys PR #49 introduced (`input`/`output`/`cache_read`/`cache_creation`,
+with the old `_tokens` keys read only as a fallback for lines that still parse as JSON under them) and treats a line
+with a bare `[REDACTED]` token value as unparsable JSON, never as zero usage. This is code and offline tests only (fake
+CLIs, fake debug logs) — no `--execute` run, no real `claude -p` call, no Jev HTTP call. Nothing here is a host
+observation or a measurement of its own. What was run is in the two entries below: the offline A/B against live Jev, and
+the installed-host observation.
+
 ## 2026-09-27 — the Router asks for described levels, and moves more work without moving deep work
 
 Tier and effort are now Jev Score questions over described levels (`TIER_LEVELS`), not choices over labels, and
