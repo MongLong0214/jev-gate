@@ -1650,6 +1650,12 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     const text = replyText(input.tool_response);
     const parsed = status === 'completed' ? parsePlannerReply(text, config.maxTasksPerPlan) : null;
     const agreement = plannerModelAgreement(gen.planner_tier, observedModel(input.tool_response));
+    // #53 review: every plan record, whatever the outcome, names the agent that ran and both models, as the post
+    // records do for unmatched calls; an agreement label alone does not say which agent or model ran.
+    const plannerFacts = {
+      subagent_type: str(isRecord(input.tool_input) ? input.tool_input['subagent_type'] : null),
+      planner_model: { requested: gen.planner_tier === null ? null : config.models[gen.planner_tier], observed: observedModel(input.tool_response), agreement },
+    };
     /**
      * A23: the one place a semantic discrepancy is still visible. Everything downstream -- the contract, the checks,
      * the receipt -- is derived from this plan, so a plan that quietly answers a different request than the user's is
@@ -1726,7 +1732,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
           chain_depth: plan.chain_depth,
           chain_depth_claimed: plan.chain_depth_claimed,
           planner_tier: gen.planner_tier,
-          planner_model: { requested: gen.planner_tier === null ? null : config.models[gen.planner_tier], observed: observedModel(input.tool_response), agreement },
+          ...plannerFacts,
           retired_receipts: retired.length,
           // A23: recorded beside the adopted plan, and read by nothing. `applied: false` is inside the value.
           ...(interpretation === null ? {} : { interpretation }),
@@ -1755,7 +1761,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       if (inForce !== null) {
         next = { ...next, phase: 'planned' };
         context = renderReplanProblem(label, detail, inForce.rev);
-        trace?.write('plan', { ...base, status, outcome: label, phase: next.phase, replan_failed: true, planner_model: agreement });
+        trace?.write('plan', { ...base, status, outcome: label, phase: next.phase, replan_failed: true, ...plannerFacts });
         return { ...prev, current: next };
       }
       // A7: the first planner failure returns the job to admitted so the coordinator can retry once; the second blocks it.
@@ -1763,7 +1769,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       const exhausted = boundExhausted(next, 'planner', null);
       next = { ...next, phase: exhausted ? 'blocked' : 'admitted' };
       context = renderPlannerProblem(label, exhausted ? `${detail} No planner attempts remain; report this to the user.` : detail);
-      trace?.write('plan', { ...base, status, outcome: label, phase: next.phase, planner_model: agreement });
+      trace?.write('plan', { ...base, status, outcome: label, phase: next.phase, ...plannerFacts });
       return { ...prev, current: next };
     });
     if (!written.ok) return skip(written.code);

@@ -1649,6 +1649,25 @@ describe('traces', () => {
     expect(all).toContain('"version": 5');
   });
 
+  it('#53 review: names the planner agent and both models on a failed plan too, not only an agreement label', async () => {
+    const dir = join(tmp, 'trace-plan-failed');
+    const env = makeEnv({ JEV_GATE_TRACE_DIR: dir });
+    await run(env, promptEvent(), fakeJev());
+    await run(env, plannerPre(), fakeJev());
+    await run(env, plannerPost({ status: 'blocked', reason: 'the repository has no store', findings: [] }));
+    await run(env, plannerPre(), fakeJev());
+    await run(env, plannerPost('not json at all'));
+    const plans = readdirSync(dir)
+      .map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>)
+      .filter((r) => r['phase'] === 'plan');
+    expect(plans.map((r) => r['outcome']).sort()).toEqual(['an invalid reply', 'blocked']);
+    for (const r of plans) {
+      expect(r).toMatchObject({ subagent_type: 'jev-gate:planner', planner_model: { observed: 'claude-opus-5' } });
+      expect(r['planner_model']).toHaveProperty('requested');
+      expect(r['planner_model']).toHaveProperty('agreement');
+    }
+  });
+
   it('records changed_default true only when the applied outcome differs from the no-Jev outcome (A17)', async () => {
     const dir = join(tmp, 'trace-changed');
     const env = makeEnv({ JEV_GATE_TRACE_DIR: dir });

@@ -45,6 +45,9 @@ unless the contract asks, and without one nothing reaches the merged branch. Thi
 now name the `[Jev Gate isolation]` note as that request, since it sits outside the contract. With #52's `/cd` fix
 merged in, the base ref follows a moved session the way the window does (`settingsDirCandidates`), and reads as
 unknown, so isolation is off, when the candidate directories disagree or the transcript folder names none of them.
+Fourth round: a native planner call's failed-plan records (blocked, invalid reply, failed replan) wrote only an
+agreement label; every `plan` record now carries `subagent_type` and `planner_model: { requested, observed,
+agreement }`, so a trace reader, and `explain`, can tell which agent and model ran whatever the outcome.
 
 **Capability-aware plan steps (P2-1).** `PlannerReply` (the `ready` variant) gains an optional
 `main_session_steps: Array<{ step: string; needs: Capability }>`, `Capability` a closed union of `os_permission`,
