@@ -1,10 +1,10 @@
 **The run stopped at 16 of 45 cells under rule 7, and no pair is adjudicated: no claim in the pre-registration is
 supported or refuted by it.** The stop came from a Jev server error. One Router request was answered after 22.9 s
 with HTTP 520 and no usage, long after the Router's 800 ms wait had ended. A row whose cost is unknown stops the run.
-Of six Router assessments, one lowered the effort. The Router's own validator discarded another's effort answer
-(`answer_invalid`). Its raw reply was not logged. The likely cause, shown by replaying the request but not recorded
-for that cell, is a validator defect fixed in #62: it rejected correct answers whose two-decimal probabilities sum to
-0.99. Such an answer would have lowered the effort.
+Of six Router assessments, one lowered the effort. Another logged no validated effort value (`answer_invalid`). Its
+raw reply was not saved, so whether the effort answer was missing or rejected is not recorded. One possible cause, seen
+when replaying the request, is a validator defect fixed in #62: it rejected correct answers whose two-decimal
+probabilities sum to 0.99. Such an answer would have lowered the effort.
 
 # Router vs native `xhigh` vs fixed `high`, 2026-09-28 — results
 
@@ -77,27 +77,27 @@ answer's mass at or below the target to reach `minDowngradeConfidence` 0.9 and t
 | case | rep | effort answer | task_clear | patch | reason | steps at `medium` |
 |---|---|---|---|---|---|---|
 | `search-race` | 1, 2, 3 | `[0, .73, .27]`, `[0, .70, .30]`, `[0, .69, .31]` | .97, .98, .97 | none | `low_confidence` | 0 |
-| `quote-pricing` | 1 | rejected by the Router (below) | .94 | none | `answer_invalid` | 0 |
+| `quote-pricing` | 1 | no validated value logged (below) | .94 | none | `answer_invalid` | 0 |
 | `quote-pricing` | 2 | `[.06, .93, .01]` | .95 | `medium` | `applied` | 6 |
 | `quote-pricing` | 3 | no answer (HTTP 520 after 22.9 s) | — | none | `timeout` | 0 |
 
 The Router lowered the effort in **1 of 6** sessions. In the other five the session ran at the baseline `xhigh` with
 one Jev request added. The `search-race` answers repeat 2026-09-27's almost exactly. In `quote-pricing`, 2026-09-27
-applied `medium` in both reps from answers like rep 2's. Here, the Router discarded rep 1's answer and rep 3's never
-came. No spawn was assessed (`spawn_assessed` 0), so subagent-model routing is untested here as
+applied `medium` in both reps from answers like rep 2's. Here, rep 1 logged no validated effort value and rep 3's
+answer never came. No spawn was assessed (`spawn_assessed` 0), so subagent-model routing is untested here as
 there.
 
 ## Observations this run did not register
 
 These are not claims under the pre-registration. They are written down so the next design can use them.
 
-- **`answer_invalid` in `quote-pricing` rep 1 most likely came from a Router defect, not a Jev failure.** The
-  Router's validators rejected any answer whose probabilities summed more than 1e-3 away from 1. Jev rounds each probability to two
+- **`answer_invalid` in `quote-pricing` rep 1 may have come from a Router defect.** The Router's validators rejected any answer whose probabilities summed more than 1e-3 away from 1. Jev rounds each probability to two
   decimals, so a correct answer can sum to 0.99 or 1.01. The raw reply was not logged. Replaying the same root request
   40 times through the shipped question builder (`~/jev-gate-runs/router-replay-2026-09-28/`) returned HTTP 200 every
   time, median 207 ms. Three of the 40 effort answers were `[0.05, 0.93, 0.01]`, which the Router marks
-  `answer_invalid`. They were the only invalid answers in the replay, which is why this is the likely cause for rep 1,
-  though it is not a recorded one. With rep 1's task_clear of 0.94, such an answer lowers `xhigh` to `medium`. #62 fixes the validators; with
+  `answer_invalid`. They were the only invalid answers in the replay. That makes the defect a possible cause for
+  rep 1, not a recorded one: the Router logs `answer_invalid` both when the effort answer is missing and when the
+  validator rejects it. With rep 1's task_clear of 0.94, such an answer lowers `xhigh` to `medium`. #62 fixes the validators; with
   the fix, all 40 replies validate. The main gate's `validateChoice` had the same tolerance and is fixed there too.
 - **The Router's 800 ms wait is not a bound on its cost.** A request that outlives the wait still runs and may bill.
   A late event without usage leaves the session's complete cost unknown. A longer `timeoutMs` would not have kept this
@@ -106,8 +106,8 @@ These are not claims under the pre-registration. They are written down so the ne
   and either is a new pre-registration.
 - One server error in 16 Router requests across both runs. That is too few to call it a rate.
 - Across both runs the Router has now lowered the effort in 5 of 16 sessions, all on `quote-pricing` and
-  `wide-validators`, and never on `search-race`, `status-count` or `ttl-cache`. Without the validator defect it would
-  most likely have been 6: rep 1's raw answer is not on record.
+  `wide-validators`, and never on `search-race`, `status-count` or `ttl-cache`. Had rep 1's reply been one of the
+  rounded answers, it would have been 6; rep 1's raw answer is not on record, so that stays a possibility.
 
 ## Standing of the question
 
