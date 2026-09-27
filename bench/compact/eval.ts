@@ -70,7 +70,8 @@ const toMessages = (recs: Rec[]): DigestMessage[] => {
 const render = (ms: readonly DigestMessage[]): string =>
   ms.map((m) => [m.text, ...m.toolUses.map((u) => `${u.tool} ${JSON.stringify(u.input)}`), ...(m.toolResults ?? []).map((r) => r.text)].join('\n')).join('\n');
 
-const isSummaryRec = (r: Rec): boolean => r.isCompactSummary === true || blocks(r).some((b) => (b.text ?? '').trimStart().startsWith('This session is being continued'));
+/** By the engine's own flag rather than by text: every summary in a week of transcripts carried it (187 of 187). */
+const isSummaryRec = (r: Rec): boolean => r.isCompactSummary === true;
 /** The summary that opens a stretch after a boundary: before its first assistant record, as the module looks for it. */
 const openingSummaryRec = (seg: Rec[]): number => {
   const first = seg.findIndex((r) => r.type === 'assistant');

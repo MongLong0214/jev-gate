@@ -38,7 +38,8 @@ engine's time and usage.
   what follows (often the large result that crossed the threshold) and every call still in flight (a tool_use no result
   answers yet), and grows back within 40% of the budget.
 - **The ceiling.** Sizes are characters of text, tool inputs and results, plus each call's and result's id and 40
-  characters of structure, and 16 per message, so a stretch of many small calls is not counted as nearly free. Because
+  characters of structure, and 16 per message (the digest's own message included), so a stretch of many small calls is
+  not counted as nearly free. Because
   the last exchange is kept whole, the total can pass `budgetChars`: up to twice it for the
   tail plus 30% for the digest, 2.3 times in all. Past twice for the tail, or when the digest and tail would come to more
   than half of the conversation they replace, the engine compacts instead, so an answered compaction always at least
@@ -50,11 +51,14 @@ engine's time and usage.
   summary (up to 30% of the budget and half of what is left, so a long summary cannot crowd out the newest request),
   earlier requests (400 each), then for each earlier assistant message, newest first, its narration (400) and
   tool inputs (240 each), then result excerpts (1,200 each), newest first. Pieces are chosen by that priority and
-  printed oldest first. Engine-injected user text (`<system-reminder>`, task notifications, command echoes) is not a
-  request.
-- **A digest it wrote earlier** (recognized by its whole header line followed by nothing or one of its own section
-  headings, and only where a summary opens the conversation, before the first assistant message, so a request that
-  starts with or quotes the header stays a request) is taken apart at the next
+  printed oldest first. A long request or previous summary is cut in the middle, so its end survives: the last line of
+  a request is often the instruction, and the engine's summary ends with the current work and the next step.
+- **Requests** are what a user message says once the engine's own additions are cut out: blocks in its tags
+  (`<system-reminder>`, task notifications, command echoes and output) and the caveat it puts before command output. A
+  message the engine wrote alone is not a request; one it added a reminder to still is.
+- **A digest it wrote earlier** (recognized by its whole header line and a last line carrying a checksum of the rest,
+  and only where a summary opens the conversation, before the first assistant message, so a request that starts with,
+  quotes or pastes a digest and adds to it stays a request) is taken apart at the next
   compaction: its previous summary stays the summary, its
   requests and steps join the new ones as the oldest, so the newest survive the cut rather than the oldest. A content
   line that starts like a section heading (`## `) or a request marker (`▸ `) is written indented by one space, so a
@@ -71,21 +75,22 @@ kept and the files it re-attached.
 
 | | recall | ≥ host | text (chars) |
 |---|---|---|---|
-| host: summary + kept messages | 0.751 | — | 36,400 |
-| host: the same + re-attached files | 0.792 | — | 49,400 |
-| digest, 30,000 | 0.791 | 28/40 | 30,200 |
-| digest, 40,000 (default) | 0.839 | 30/40 | 39,700 |
-| digest, 50,000 | 0.865 | 34/40 | 49,200 |
+| host: summary + kept messages | 0.732 | — | 29,300 |
+| host: the same + re-attached files | 0.766 | — | 43,400 |
+| digest, 30,000 | 0.765 | 24/40 | 30,800 |
+| digest, 40,000 (default) | 0.818 | 28/40 | 40,200 |
+| digest, 50,000 | 0.845 | 34/40 | 49,500 |
 
-"≥ host" is against the host with its re-attached files. At the default the digest recalled less at 10 of 40 points,
-by 0.04 to 0.40. Both sides' sizes are the rendered text the model holds (the budget's own count, with ids and
-structure, runs higher). The sample is the week before the run (2026-09-27), so a rerun on a later day draws different
-points: an earlier run the same day, on a slightly different week, had host 0.732 and digest 0.803 at the default.
+"≥ host" is against the host with its re-attached files. At the default the digest recalled less at 12 of 40 points,
+by 0.08 to 0.19. Both sides' sizes are the rendered text the model holds (the budget's own count, with ids and
+structure, runs higher). The sample is the week before the run, so it moves as new transcripts arrive: three runs on
+2026-09-27 drew host 0.732, 0.792 and 0.766 and digest 0.803, 0.839 and 0.818 at the default, the digest ahead each
+time. Changes to the module are compared on one sample (the last change: 0.819 before, 0.818 after).
 
 Chained, as if active through whole sessions (each digest built over the previous digest, its tail and the messages
-since): 179 later compactions in 12 sessions, host 0.715, digest 0.761 (≥ host at 123). The gap narrows but holds with
-depth: at the 8th–15th compaction 0.731 vs 0.733, the 16th–31st 0.700 vs 0.726, the 32nd–63rd 0.713 vs 0.789. No
-compaction fell back.
+since): 179 later compactions in 12 sessions, host 0.715, digest 0.759 (≥ host at 123). By depth it is even at the
+8th–15th compaction (0.731 vs 0.730) and ahead at the 16th–31st (0.700 vs 0.726) and the 32nd–63rd (0.713 vs 0.789).
+No compaction fell back.
 
 The same 7-day transcripts put the host's own compactions at a 95-second median wait each.
 
