@@ -210,19 +210,25 @@ const toolUseIds = (m: DigestMessage): string[] => (m.role === 'assistant' ? m.t
 /**
  * The start moved back until every tool_result from `start` on answers a tool_use from `start` on, or null when a result
  * answers no earlier use at all. Parallel calls can sit in separate assistant rows ahead of one row of results.
+ *
+ * One pass down from the end rather than a rescan of the tail per move: results that arrive a few calls late each pull
+ * the start back by one, and a rescan per move is quadratic in a long run of them.
  */
 const paired = (messages: readonly DigestMessage[], start: number): number | null => {
+  const useAt = new Map<string, number>();
+  messages.forEach((m, i) => {
+    for (const id of toolUseIds(m)) if (!useAt.has(id)) useAt.set(id, i);
+  });
   let s = start;
-  for (;;) {
-    const tail = messages.slice(s);
-    const uses = new Set(tail.flatMap(toolUseIds));
-    const missing = new Set(tail.flatMap((m) => (m.toolResults ?? []).flatMap((r) => (r.tool_use_id && !uses.has(r.tool_use_id) ? [r.tool_use_id] : []))));
-    if (missing.size === 0) return s;
-    let at = -1;
-    for (let i = s - 1; i >= 0; i--) if (toolUseIds(messages[i]!).some((id) => missing.has(id))) at = i;
-    if (at < 0) return null;
-    s = at;
+  for (let i = messages.length - 1; i >= s; i--) {
+    for (const r of messages[i]!.toolResults ?? []) {
+      if (!r.tool_use_id) continue;
+      const at = useAt.get(r.tool_use_id);
+      if (at === undefined) return null;
+      if (at < s) s = at;
+    }
   }
+  return s;
 };
 
 /** Index of the first message holding a tool_use that no result anywhere answers yet (a call still in flight), or -1. */

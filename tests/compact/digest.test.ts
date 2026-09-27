@@ -199,6 +199,27 @@ describe('buildDigest', () => {
     }
   });
 
+  it('pairs results that arrive a call late, keeping the whole chain, in linear time', () => {
+    // Each result lands after the next call, and the last call is still in flight.
+    const staggered = (k: number, from = 0): Row[] => {
+      const rows: Row[] = [];
+      for (let i = from; i <= from + k; i++) {
+        rows.push({ role: 'assistant', text: '', toolUses: [{ tool: 'T', input: {}, tool_use_id: `st${i}` }], handle: `sa${i}` });
+        if (i > from) rows.push({ role: 'user', text: '', toolUses: [], toolResults: [{ text: 'ok', tool_use_id: `st${i - 1}` }], handle: `sr${i}` });
+      }
+      return rows;
+    };
+    const chain = staggered(3);
+    const rows = [user('go'), ...work(40), ...chain];
+    const d = buildDigest(rows, { budgetChars: 8000 });
+    if (!d.ok) throw new Error(d.reason);
+    expect(d.result.start).toBeLessThanOrEqual(rows.indexOf(chain[0]!));
+    expect(pairedIn(assemble(rows, d.result).slice(1) as Row[])).toBe(true);
+    const t0 = performance.now();
+    expect(buildDigest([user('go'), ...staggered(4000)], { budgetChars: 40000 }).ok).toBe(false);
+    expect(performance.now() - t0).toBeLessThan(1000);
+  });
+
   it('grows the tail in linear time', () => {
     const rows = [user('go'), ...Array.from({ length: 16000 }, (_, i) => call('', 'T', {}, String(i % 10))).flat(), say('done')];
     const t0 = performance.now();
