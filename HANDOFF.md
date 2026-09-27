@@ -12,6 +12,10 @@ cell's `cell.json` back through the report's `toRowView` and starts nothing once
 or once any finished cell's complete cost is unknown. Held cells keep their rows (`max_cost_reached` /
 `cost_unknown`), and `summary.json` carries `spend`. The check is between cells, so the run can end above the cap by
 the one cell that was running. Offline tests through real rows only (fake CLI); no `--execute` against a real host.
+Review round (gpt-6-sol, PR #55): a primed session reports its cumulative total after each turn, so one cut off
+before its last turn's result kept an earlier turn's total, and `toRowView` read that subtotal as the row's complete
+Claude cost. It now reads such a row's cost and usage as unknown (`partial_session`), in the report and so in the
+stop. A historical primed cell that timed out part-way now reports an unknown cost where it showed a subtotal.
 That clears one precondition of each pre-registration. The others (the lean episode cases and follow-up turn, a
 plan-only run on the frozen build, and the owner's own approval) are unchanged.
 

@@ -167,6 +167,17 @@ describe('numeric validation and historical compatibility', () => {
     expect(existsSync(join(run, 'report.checker-v1.md'))).toBe(true);
   });
 
+  it('reads a session that stopped before its last turn as an unknown cost, not as the earlier turn\'s total', () => {
+    const at = { job: 'A', group: 'g', repetition: 1, arm: 'sonnet_native', file: '' };
+    // One priming prompt and the request: two turns sent, each reporting the session total so far.
+    const partial = toRowView(at, cell('A', 'sonnet_native', { prime_sha256: ['p'], turn_totals_usd: [4], timed_out: true, result: { ...cell('A', 'x')['result'] as object, total_cost_usd: 4 } }));
+    expect(partial).toMatchObject({ claude_cost_usd: null, total_cost_usd: null, usage_status: 'partial_session', model_usage: null });
+    const whole = toRowView(at, cell('A', 'sonnet_native', { prime_sha256: ['p'], turn_totals_usd: [4, 10] }));
+    expect(whole).toMatchObject({ claude_cost_usd: 10, total_cost_usd: 10, usage_status: 'ok' });
+    // A cell recorded before turn totals existed reads as it always did.
+    expect(toRowView(at, cell('A', 'sonnet_native')).total_cost_usd).toBe(10);
+  });
+
   it('compare handles an unrelated missing arm without discarding a usable pair', () => {
     const rows = [cell('A', 'native_hierarchy'), cell('A', 'jev_hierarchy')].map((c, i) => toRowView({ job: 'A', group: 'g', repetition: 1, arm: String(c['arm']), file: '' }, c));
     const cmp = compare(rows, 'jev_hierarchy', 'native_hierarchy');

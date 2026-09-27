@@ -21,7 +21,8 @@ const mode = process.env.JEV_GATE_MODE;
 const traceDir = process.env.JEV_GATE_TRACE_DIR;
 const forced = process.env.JEV_GATE_EXPERIMENT_ADMISSION === 'orchestrated';
 const cwd = process.cwd();
-const prompt = readFileSync(0, 'utf8');
+// A primed session keeps stdin open for its next prompt, so reading it to the end would never return.
+const prompt = process.env.FAKE_CLAUDE_PRIMED_HANG === '1' ? '' : readFileSync(0, 'utf8');
 const sid = randomUUID();
 const promptId = randomUUID();
 const modelId = model === 'fable' ? 'claude-fable-5-1' : model === 'opus' ? 'claude-opus-5' : 'claude-sonnet-5';
@@ -70,7 +71,15 @@ if (process.env.FAKE_CLAUDE_MUTATE_CONFIG) {
 
 out({ type: 'system', subtype: 'init', session_id: sid, cwd, model: modelId, tools: ['Read', 'Edit', 'Write', 'Bash', 'Agent'], permissionMode: opt('--permission-mode') ?? 'default', plugins: pluginDir ? [{ name: 'jev-gate', path: pluginDir }] : [], agents: pluginDir ? ['Explore', 'jev-gate:planner', 'jev-gate:worker', 'jev-gate:worker-fast', 'jev-gate:worker-deep'] : ['Explore'] });
 
-if (process.env.FAKE_CLAUDE_HANG === '1') {
+if (process.env.FAKE_CLAUDE_PRIMED_HANG === '1') {
+  // A primed session that answers its first turn with a cumulative total, then never reports the next one.
+  process.on('SIGINT', () => process.exit(130));
+  process.on('SIGTERM', () => process.exit(143));
+  const usage = { [modelId]: { inputTokens: 1000, outputTokens: 200, cacheReadInputTokens: 50, cacheCreationInputTokens: 10, costUSD: 0.02, contextWindow: 200000 } };
+  out({ type: 'assistant', parent_tool_use_id: null, session_id: sid, message: { id: `msg_${randomUUID()}`, model: modelId, role: 'assistant', content: [{ type: 'text', text: 'Read it.' }], usage: { input_tokens: 1000, output_tokens: 0 } } });
+  out({ type: 'result', subtype: 'success', is_error: false, duration_ms: 500, duration_api_ms: 400, num_turns: 1, result: 'Read it.', session_id: sid, total_cost_usd: 0.02, usage: { input_tokens: 1000, output_tokens: 200, cache_read_input_tokens: 50, cache_creation_input_tokens: 10 }, modelUsage: usage, permission_denials: [] });
+  setInterval(() => undefined, 1000);
+} else if (process.env.FAKE_CLAUDE_HANG === '1') {
   process.on('SIGINT', () => process.exit(130));
   process.on('SIGTERM', () => process.exit(143));
   setInterval(() => undefined, 1000);

@@ -611,6 +611,24 @@ describe('the spend stop (--max-cost-usd)', () => {
     expect(r.stdout).toMatch(/stop: the complete cost of cells\/mini\/frontier_native\/\d is unknown/);
   }, 120_000);
 
+  it('counts a primed session that stopped before its last turn as unknown, not as the earlier turn\'s total', () => {
+    // Each turn reports the session total so far, so a primed cell cut off after its priming turn holds a subtotal.
+    const dir = join(tmp, 'primed-mini');
+    cpSync(join(__dirname, 'fixtures', 'mini'), dir, { recursive: true });
+    const manifest = JSON.parse(readFileSync(join(dir, 'cases.json'), 'utf8')) as { cases: Array<Record<string, unknown>> };
+    manifest.cases[0]!['prime'] = ['먼저 src/answer.mjs를 읽어줘.'];
+    writeFileSync(join(dir, 'cases.json'), JSON.stringify(manifest));
+    const out = join(tmp, `run-${n++}`);
+    const r = spawnSync(process.execPath, [join(dist, 'bench', 'run.js'), '--cases', join(dir, 'cases.json'), '--out', out, '--claude', fake, '--plugin-dir', pluginDir, '--execute', '--arms', 'sonnet_native', '--repetitions', '2', '--max-sessions', '2', '--max-cost-usd', '100', '--timeout-ms', '2500'], { encoding: 'utf8', env: { ...baseEnv(), FAKE_CLAUDE_PRIMED_HANG: '1' }, timeout: 120_000 });
+    expect(r.status, r.stderr).toBe(0);
+    const [a, b] = cells(out, 'sonnet_native');
+    const ran = [a!, b!].find((c) => c.started)!;
+    const held = [a!, b!].find((c) => !c.started)!;
+    expect(ran).toMatchObject({ timed_out: true, turn_totals_usd: [0.02], result: expect.objectContaining({ total_cost_usd: 0.02 }) });
+    expect(held.not_started_reason).toBe('cost_unknown');
+    expect(summary(out).spend).toMatchObject({ stopped: 'cost_unknown', known_usd: 0 });
+  }, 120_000);
+
   it('changes nothing without the flag: an unknown row does not stop a run that set no cap', () => {
     const r = bench(['--execute', '--arms', 'frontier_native', '--repetitions', '2', '--max-sessions', '2', '--timeout-ms', '1500'], { FAKE_CLAUDE_HANG: '1' });
     expect(r.status, r.stderr).toBe(0);

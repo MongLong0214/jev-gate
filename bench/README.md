@@ -22,7 +22,9 @@ through the report's own row view (Claude plus every Jev producer), and starts n
 the cap. A cell whose complete cost is unknown (no result, a timeout, an unread Router log) stops the run too: an
 unknown is not a zero, and the cap may already be passed. Cells that do not start keep their rows, with
 `not_started_reason` `max_cost_reached` or `cost_unknown`, and `summary.json` records `spend: {max_cost_usd, known_usd,
-unknown_cell, stopped}`. The cap is checked between cells, so the cell running when it is reached still finishes and
+unknown_cell, stopped}`. A primed session that stopped before its last turn reported a result counts as unknown too:
+each turn reports the session total so far, so what it kept is an earlier turn's subtotal, and the report shows that
+row's Claude cost and usage as unknown (`usage_status: partial_session`) for the same reason. The cap is checked between cells, so the cell running when it is reached still finishes and
 the total can end above the cap by that one cell. Without the flag nothing changes.
 
 ## Router arms (#45)
