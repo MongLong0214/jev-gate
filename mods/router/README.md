@@ -8,8 +8,9 @@ of V5 orchestration; composing them is #44.
 (`types/claude-code.d.ts`); the 2.1.283 declarations differ only in UI and cost documentation. Every path is exercised
 with a fake engine and fake HTTP (`tests/router/*.test.ts`), and the host's own test kit loads the plugin and confirms
 the default is off (`tests/register.test.ts`). On an installed 2.1.283 host (2026-09-27, one session per condition,
-`bench/results/host-obs-2026-09-27/`), a root turn ran on the effort the Router patched in, and an `Explore` and a
-`general-purpose` spawn under Opus ran on the Sonnet the Router asked for. **Those are single observations that the
+`bench/results/host-obs-2026-09-27/`), the host passed on a root turn's steps at the effort the Router patched in (seen
+at the hook boundary, not on the wire), and an `Explore` and a `general-purpose` spawn under Opus ran on the Sonnet
+the Router asked for. **Those are single observations that the
 patches take effect, not a saving; no saving is claimed.**
 
 ## Enable

@@ -27,7 +27,8 @@ move").
 
 Observed once each on 2.1.283, Opus at xhigh, fixture repo (`bench/results/host-obs-2026-09-27/`): an `Explore` spawn
 and a `general-purpose` spawn were patched to `sonnet` and reported `claude-sonnet-5`; a root turn was patched from
-xhigh to medium and its steps ran at medium; the routed and native general-purpose sessions both passed the fixture's
+xhigh to medium, and a probe inside the Router saw its steps passed on at medium (the hook boundary, not the wire
+request); the routed and native general-purpose sessions both passed the fixture's
 tests. These show the patches take effect. One session per condition is not a saving, and none is claimed. A spawn
 still runs at its parent's effort, because the spawn event has no effort field.
 
