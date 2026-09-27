@@ -191,3 +191,44 @@ describe('#48 review: the window the host actually compacts at', () => {
     expect(readHostCompactWindow({ HOME: dir() }, cwd, { managedDirs: none }).tokens).toBe(330_000);
   });
 });
+
+describe('#48 re-review: windows reported as known that were not', () => {
+  const none: string[] = [];
+
+  it('budgets Sonnet 5 at 200K behind an LLM gateway, and leaves Opus and Fable unknown there', () => {
+    const gateway = { ANTHROPIC_BASE_URL: 'https://llm-gateway.example.com', HOME: dir() };
+    expect(modelContextWindow(gateway, 'claude-sonnet-5')).toEqual({ tokens: 200_000, source: 'model:claude-sonnet-5 behind ANTHROPIC_BASE_URL' });
+    expect(modelContextWindow(gateway, 'claude-sonnet-5[1m]')).toMatchObject({ tokens: 1_000_000 });
+    expect(modelContextWindow(gateway, 'claude-opus-5-5')).toBeNull();
+    expect(modelContextWindow(gateway, 'claude-haiku-4-5-20251001')).toMatchObject({ tokens: 200_000 });
+    // Anthropic's own API under ANTHROPIC_BASE_URL is not a gateway.
+    expect(modelContextWindow({ ANTHROPIC_BASE_URL: 'https://api.anthropic.com' }, 'claude-sonnet-5')).toMatchObject({ tokens: 1_000_000 });
+    // A configured 1M is capped to the gateway's 200K rather than read as healthy.
+    expect(readHostCompactWindow({ ...gateway, CLAUDE_CODE_AUTO_COMPACT_WINDOW: '1000000' }, null, { model: 'claude-sonnet-5', managedDirs: none }).tokens).toBe(200_000);
+  });
+
+  it('reads every managed drop-in, not the first 64', () => {
+    const managed = dir();
+    for (let i = 0; i < 70; i++) writeSettings(managed, `managed-settings.d/${String(i).padStart(3, '0')}.json`, i === 69 ? { autoCompactWindow: 150_000 } : {});
+    writeSettings(managed, 'managed-settings.d/000.json', { autoCompactWindow: 800_000 });
+    expect(readHostCompactWindow({ HOME: dir() }, dir(), { managedDirs: [managed] })).toEqual({ tokens: 150_000, source: `managed:${join(managed, 'managed-settings.d', '069.json')}` });
+  });
+
+  it('keeps local settings beside project settings on Windows, even in a linked worktree', () => {
+    const main = dir();
+    mkdirSync(join(main, '.git', 'worktrees', 'wt'), { recursive: true });
+    writeFileSync(join(main, '.git', 'worktrees', 'wt', 'commondir'), '../..\n');
+    const wt = dir();
+    writeFileSync(join(wt, '.git'), `gitdir: ${join(main, '.git', 'worktrees', 'wt')}\n`);
+    writeSettings(main, '.claude/settings.local.json', { autoCompactWindow: 350_000 });
+    writeSettings(wt, '.claude/settings.local.json', { autoCompactWindow: 250_000 });
+    expect(readHostCompactWindow({ HOME: dir() }, wt, { managedDirs: none }).tokens).toBe(350_000);
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    try {
+      expect(readHostCompactWindow({ HOME: dir() }, wt, { managedDirs: none }).tokens).toBe(250_000);
+    } finally {
+      if (platform) Object.defineProperty(process, 'platform', platform);
+    }
+  });
+});

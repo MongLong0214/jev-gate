@@ -24,8 +24,6 @@ export const HOST_WINDOW_MIN = 100_000;
 export const HOST_WINDOW_MAX = 1_000_000;
 /** The context window of a model without a native 1M window, and of every model under CLAUDE_CODE_DISABLE_1M_CONTEXT. */
 export const STANDARD_CONTEXT_WINDOW = 200_000;
-/** Bounds the managed drop-in directory scan; a policy directory holding more files than this is not read further. */
-const MANAGED_DROP_INS_MAX = 64;
 /** Bounds the walk up from the session directory to its repository root. */
 const REPO_ROOT_MAX_DEPTH = 64;
 
@@ -82,8 +80,7 @@ const readManagedWindow = (dirs: readonly string[]): Known | null => {
     try {
       names = readdirSync(join(dir, 'managed-settings.d'))
         .filter((n) => n.endsWith('.json') && !n.startsWith('.'))
-        .sort()
-        .slice(0, MANAGED_DROP_INS_MAX);
+        .sort();
     } catch {
       /* no drop-in directory is the common case */
     }
@@ -96,11 +93,28 @@ const readManagedWindow = (dirs: readonly string[]): Known | null => {
   return found;
 };
 
+/** The host keeps local settings beside project settings when the root, or its `.git` or `.claude`, is not the user's own. */
+const ownedByUser = (root: string): boolean => {
+  const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+  if (uid === null) return true;
+  for (const path of [root, join(root, '.git'), join(root, '.claude')]) {
+    try {
+      if (statSync(path).uid !== uid) return false;
+    } catch {
+      /* an absent `.claude` owns nothing */
+    }
+  }
+  return true;
+};
+
 /**
- * The directory the host keeps `settings.local.json` in: the repository root, and for a linked worktree the main
- * checkout's root; the session directory itself outside a repository or when the root is the home directory.
+ * The directory the host keeps `settings.local.json` in (settings docs, 2026-09-27): the repository root, and for a
+ * linked worktree the main checkout's root; the session directory itself outside a repository, when the root is the
+ * home directory, on Windows, or when the root or its `.git` or `.claude` entry is not owned by this user.
  */
 const localSettingsDir = (primary: string, home: string): string => {
+  if (process.platform === 'win32') return primary;
+  const atRoot = (root: string): string => (root === resolve(home) || !ownedByUser(root) ? primary : root);
   let dir = resolve(primary);
   for (let i = 0; i < REPO_ROOT_MAX_DEPTH; i++) {
     const dotGit = join(dir, '.git');
@@ -110,7 +124,7 @@ const localSettingsDir = (primary: string, home: string): string => {
     } catch {
       st = null;
     }
-    if (st?.isDirectory()) return dir === resolve(home) ? primary : dir;
+    if (st?.isDirectory()) return atRoot(dir);
     if (st?.isFile()) {
       // A linked worktree: `.git` names its own git dir, whose `commondir` names the main repository's `.git`.
       try {
@@ -119,8 +133,7 @@ const localSettingsDir = (primary: string, home: string): string => {
         const gitDir = isAbsolute(m[1]) ? m[1] : resolve(dir, m[1]);
         const common = readFileSync(join(gitDir, 'commondir'), 'utf8').trim();
         const commonDir = isAbsolute(common) ? common : resolve(gitDir, common);
-        const main = dirname(commonDir);
-        return main === resolve(home) ? primary : main;
+        return atRoot(dirname(commonDir));
       } catch {
         return dir;
       }
@@ -158,12 +171,24 @@ const readConfiguredWindow = (env: Env, cwd: string | null | undefined, managedD
   return null;
 };
 
+/** ANTHROPIC_BASE_URL naming anything but Anthropic's own API, which the host treats as an LLM gateway. */
+const behindGateway = (env: Env): boolean => {
+  const raw = env['ANTHROPIC_BASE_URL'];
+  if (typeof raw !== 'string' || raw.trim() === '') return false;
+  try {
+    return new URL(raw).hostname !== 'api.anthropic.com';
+  } catch {
+    return true;
+  }
+};
+
 /**
  * The model's own context window, which caps any configured window and is the window when none is configured. From
  * the host's model-config page (2026-09-27): Fable, Sonnet 5 and Opus 4.7+ run a native 1M window on the Anthropic
  * API; earlier Opus and Sonnet (without an explicit `[1m]` variant) and Haiku run 200K; CLAUDE_CODE_DISABLE_1M_CONTEXT
  * treats every model as 200K. On Bedrock, Vertex and Foundry the host pins native-1M models per deployment, so their
- * window is not established here. An ID this does not recognise, such as a gateway alias, is null.
+ * window is not established here; behind an LLM gateway (ANTHROPIC_BASE_URL) Sonnet 5 is 200K unless `[1m]` was
+ * picked. An ID this does not recognise, such as a gateway alias, is null.
  */
 export const modelContextWindow = (env: Env, model: string | null | undefined): Known | null => {
   if (isTruthyEnv(env['CLAUDE_CODE_DISABLE_1M_CONTEXT'])) return { tokens: STANDARD_CONTEXT_WINDOW, source: 'CLAUDE_CODE_DISABLE_1M_CONTEXT' };
@@ -179,7 +204,11 @@ export const modelContextWindow = (env: Env, model: string | null | undefined): 
   const native1M = family === 'fable' || (family === 'sonnet' && major >= 5) || (family === 'opus' && (major > 4 || (major === 4 && minor >= 7)));
   if (!native1M) return { tokens: STANDARD_CONTEXT_WINDOW, source: `model:${model}` };
   const thirdParty = ['CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY'].some((k) => isTruthyEnv(env[k]));
-  return thirdParty ? null : { tokens: HOST_WINDOW_MAX, source: `model:${model}` };
+  if (thirdParty) return null;
+  // Behind an LLM gateway the host cannot verify 1M support and budgets Sonnet 5 at 200K unless `sonnet[1m]` was
+  // picked, which the `[1m]` check above already caught; the page says nothing of Opus or Fable there, so unknown.
+  if (behindGateway(env)) return family === 'sonnet' ? { tokens: STANDARD_CONTEXT_WINDOW, source: `model:${model} behind ANTHROPIC_BASE_URL` } : null;
+  return { tokens: HOST_WINDOW_MAX, source: `model:${model}` };
 };
 
 /**

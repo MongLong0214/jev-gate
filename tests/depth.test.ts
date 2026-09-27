@@ -78,7 +78,26 @@ describe('readSessionDepth', () => {
     const r = readSessionDepth(p);
     for (const v of Object.values(r)) expect(v === null || ['number', 'boolean', 'string'].includes(typeof v)).toBe(true);
     expect(JSON.stringify(r)).not.toMatch(/secret/);
-    expect(Object.keys(r).sort()).toEqual(['bytesRead', 'durationMs', 'model', 'ok', 'tokens']);
+    expect(Object.keys(r).sort()).toEqual(['bytesRead', 'durationMs', 'model', 'modelSwitched', 'ok', 'tokens']);
+  });
+
+  /**
+   * #48 review: a `/model` switch writes only a display name, and the next reply is the first line with the new ID;
+   * until then the previous reply's model would give the next prompt the wrong window in either direction.
+   */
+  it('reads the model as unknown after a /model command that follows the last usage line', () => {
+    const opus = usageLine({ message: { role: 'assistant', model: 'claude-opus-5-5', usage: { input_tokens: 10 } } });
+    const command = JSON.stringify({ type: 'user', isSidechain: false, message: { role: 'user', content: '<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args></command-args>' } });
+    const stdout = JSON.stringify({ type: 'user', message: { role: 'user', content: '<local-command-stdout>Set model to `Haiku 4.5`</local-command-stdout>' } });
+    expect(readSessionDepth(write([opus, command, stdout]))).toMatchObject({ ok: true, tokens: 10, model: null, modelSwitched: true });
+    // Before the last reply, the reply already carries the model that the switch chose.
+    expect(readSessionDepth(write([command, stdout, opus]))).toMatchObject({ model: 'claude-opus-5-5', modelSwitched: false });
+    // A subagent does not switch the session's model.
+    const sidechain = JSON.stringify({ type: 'user', isSidechain: true, message: { role: 'user', content: '<command-name>/model</command-name>' } });
+    expect(readSessionDepth(write([opus, sidechain]))).toMatchObject({ model: 'claude-opus-5-5', modelSwitched: false });
+    // The command and the usage line in different read chunks: the mark carries across them.
+    const filler = userLine('x'.repeat(300 * 1024));
+    expect(readSessionDepth(write([opus, filler, command, filler]))).toMatchObject({ ok: true, model: null, modelSwitched: true });
   });
 
   it('carries the usage line\'s model ID for the host-window default, and nothing that is not shaped like one', () => {

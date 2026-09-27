@@ -288,8 +288,10 @@ model the session transcript records: 1M for Opus 4.7 and later, Sonnet 5 and Fa
 earlier and smaller models.
 
 **Where this can still be wrong.** A launch's `--autocompact` or `--settings` flag, MDM policies and server-managed
-settings are invisible to a hook. A native-1M model on Bedrock, Vertex or Foundry, or a gateway model alias, leaves the
-window unknown. In those sessions the floor stays at 300,000, which a 200K session never reaches: the gate then costs
+settings are invisible to a hook. A native-1M model on Bedrock, Vertex or Foundry, Opus or Fable behind an LLM
+gateway (`ANTHROPIC_BASE_URL`), a gateway model alias, or the first prompt after a `/model` switch (the host records
+only the new model's display name until the next reply) leaves the window unknown. Behind a gateway, Sonnet 5 is
+read as the 200K the host budgets it at unless `[1m]` was picked. In those sessions the floor stays at 300,000, which a 200K session never reaches: the gate then costs
 nothing and saves nothing. That is deliberate — guessing low would admit shallow prompts on a 1M session, where forced
 orchestration measured +182 %. It is not silent: after 50 auto-mode decisions with no Gate A attempt, the SessionStart
 liveness notice tells you to run doctor. Run `node dist/cli.js doctor` to see the window, its source and the effective

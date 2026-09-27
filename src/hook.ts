@@ -922,7 +922,11 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
      */
     const depth: DepthReading = readSessionDepth(input.transcript_path);
     const contextTokens = depth.ok ? depth.tokens : null;
-    const depthFacts = { context_tokens: contextTokens, context_depth_read: { bytes: depth.bytesRead, duration_ms: depth.durationMs } };
+    const depthFacts = {
+      context_tokens: contextTokens,
+      context_depth_read: { bytes: depth.bytesRead, duration_ms: depth.durationMs },
+      ...(depth.ok && depth.modelSwitched ? { model_switched: true } : {}),
+    };
     const nowIso = (): string => new Date().toISOString();
 
     if (forced) {
