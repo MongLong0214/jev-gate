@@ -1073,9 +1073,10 @@ describe('lifecycle', () => {
 });
 
 describe('#42 and #43: handler cases the issues list', () => {
-  it('moves an inheriting built-in up from a verified lower baseline', async () => {
+  it('moves an inheriting built-in up from a verified lower baseline on the upgrade floor, below the downgrade floor', async () => {
     const router = createRouter(configOf(SPAWN_ONLY));
-    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', 0.95] }) });
+    // 0.85 clears the upgrade floor (0.8) and not the downgrade floor (0.9), so only the upgrade floor can move it.
+    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', 0.85] }) });
     router.agentOffer(OFFER_BUILT_IN('general-purpose'));
     const n = spawnNext();
     const e = spawn({ parentModel: 'claude-haiku-4-5' });
@@ -1087,7 +1088,8 @@ describe('#42 and #43: handler cases the issues list', () => {
   it('forwards a spawn once, natively, when its assessment times out, and a late reply changes nothing', async () => {
     const router = createRouter(configOf(SPAWN_ONLY));
     const reply = deferred<HttpReply>();
-    const f = fakeEngine({ respond: () => reply.promise });
+    // The first assessment hangs; the next dispatch gets its own, which keeps the parent's model.
+    const f = fakeEngine({ respond: (req) => (f.sent.length === 1 ? reply.promise : answering({ ...CLEAR, tier: ['deep', 0.95] })(req)) });
     router.agentOffer(OFFER_BUILT_IN('general-purpose'));
     const n = spawnNext();
     const run = router.agentSpawn(f.engine, spawn(), n.next);
@@ -1096,10 +1098,15 @@ describe('#42 and #43: handler cases the issues list', () => {
     await run;
     expect(n.calls).toEqual([spawn()]);
     expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn', assessment: 'timeout', sent: true }));
+    expect(f.logs.some((l) => l['event'] === 'late')).toBe(false);
     reply.resolve(answering({ ...CLEAR, tier: ['fast', 0.95] })(f.sent[0]!) as HttpReply);
-    await settle();
-    expect(n.calls).toHaveLength(1);
     await vi.waitFor(() => expect(f.logs).toContainEqual(expect.objectContaining({ event: 'late', scope: 'spawn', tool_use_id: 'tu1' })));
+    expect(n.calls).toHaveLength(1);
+    // The late 'fast' answer is not carried into the next dispatch: it is assessed on its own and stays on its parent's model.
+    const second = spawn({ tool_use_id: 'tu2' });
+    await router.agentSpawn(f.engine, second, n.next);
+    expect(f.sent).toHaveLength(2);
+    expect(n.calls).toEqual([spawn(), second]);
   });
 
   it('sends nothing for a spawn whose prompt or description carries a credential, and leaves it native', async () => {
@@ -1138,8 +1145,11 @@ describe('#42 and #43: handler cases the issues list', () => {
     const root = f.logs.find((l) => l['event'] === 'root');
     expect(root).toMatchObject({ turn: 't1', sent: true, patch: { effort: 'low' } });
     expect(JSON.stringify(root)).toContain('high');
-    expect(root?.['usage']).toMatchObject({ input: expect.any(Number) });
-    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root_result', turn: 't1', index: 0, applied: { effort: 'low' }, observed: 'claude-opus-5-5' }));
+    // Jev's own usage, as the fake response reported it (answering's default), and the step's usage, as the stream did.
+    expect(root?.['usage']).toMatchObject({ input: 900, output: 40 });
+    expect(f.logs).toContainEqual(
+      expect.objectContaining({ event: 'root_result', turn: 't1', index: 0, applied: { effort: 'low' }, observed: 'claude-opus-5-5', usage: expect.objectContaining({ input: 700, output: 30 }) }),
+    );
   });
 
   it('#42: a known model that no profile names routes its effort and withholds only the model question', async () => {
@@ -1166,5 +1176,22 @@ describe('#42 and #43: handler cases the issues list', () => {
     expect(f.sent).toHaveLength(1);
     expect(n.calls).toEqual([{ ...sonnet, effort: 'low' }]);
     expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root', sent: true, patch: { effort: 'low' } }));
+
+    // The conditional level is what excludes a candidate: Opus at xhigh cannot move to Sonnet and keep xhigh, but can
+    // with the lower level Sonnet takes unconditionally, answered in the same request.
+    const both = createRouter(configOf({ ...MODEL_ONLY, routeMainEffort: true }), SWITCHES);
+    const keep = fakeEngine({ respond: answering({ ...CLEAR, tier: ['standard', 0.95], effort: ['preserve', 0.95] }) });
+    both.turnStart({ turnId: 't1', text: TEXT });
+    const k = streamNext<TurnStepEvent>();
+    await drain(both.turnStep(keep.engine, step({ effort: 'xhigh' }), k.next));
+    expect(k.calls).toEqual([step({ effort: 'xhigh' })]);
+    expect(keep.logs.find((l) => l['event'] === 'root')).toMatchObject({ reasons: { model: 'pair_invalid' } });
+
+    const lower = createRouter(configOf({ ...MODEL_ONLY, routeMainEffort: true }), SWITCHES);
+    const low = fakeEngine({ respond: answering({ ...CLEAR, tier: ['standard', 0.95], effort: ['low', 0.95] }) });
+    lower.turnStart({ turnId: 't1', text: TEXT });
+    const l = streamNext<TurnStepEvent>();
+    await drain(lower.turnStep(low.engine, step({ effort: 'xhigh' }), l.next));
+    expect(l.calls).toEqual([step({ model: 'claude-sonnet-5', effort: 'low' })]);
   });
 });
