@@ -70,7 +70,7 @@ const stdinOf = (value: unknown): AsyncIterable<Uint8Array> =>
   })();
 
 type Env = Record<string, string | undefined>;
-const makeEnv = (over: Env = {}): Env => ({ TYPESAFE_API_KEY: KEY, HOME: join(tmp, 'home'), JEV_GATE_MODE: 'auto', JEV_GATE_STATE_DIR: mkdtempSync(join(tmp, 'state-')), ...over });
+const makeEnv = (over: Env = {}): Env => ({ TYPESAFE_API_KEY: KEY, HOME: join(tmp, 'home'), JEV_GATE_MODE: 'auto', JEV_GATE_STATE_DIR: mkdtempSync(join(tmp, 'state-')), CLAUDE_CODE_FORK_SUBAGENT: '0', ...over });
 
 /** Gate A ships atomic; the four-way choice is still supported and its own tests select it explicitly. */
 let compositeSeq = 0;
@@ -480,6 +480,63 @@ describe('liveness ring (#48 P2)', () => {
     const env = makeEnv({ JEV_GATE_MODE: 'native' });
     await run(env, promptEvent(), fakeJev());
     expect(readLiveness(env)).toBeNull();
+  });
+});
+
+describe('#48: a session whose Agent calls can only run in the background', () => {
+  // An interactive session's default: fork mode, no run_in_background field, no forced foreground.
+  const backgroundOnly: Env = { CLAUDE_CODE_FORK_SUBAGENT: undefined, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: undefined };
+  const admission = (dir: string): Record<string, unknown> | undefined =>
+    readdirSync(dir).map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>).find((x) => x['phase'] === 'admission_result');
+
+  it('stays direct before Gate A at a depth that would be asked, sends nothing, and says why', async () => {
+    const dir = join(tmp, 'trace-background-only');
+    const env = makeEnv({ ...backgroundOnly, JEV_GATE_TRACE_DIR: dir });
+    const fetchImpl = fakeJev({ execution: 'orchestrated' });
+    const r = await run(env, promptEvent(), fetchImpl);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(r.code).toBe('host_unsupported');
+    expect(state(env).current.shape).toBe('direct');
+    expect(admission(dir)).toMatchObject({ attempted: false, known_not_sent: true, decision: { shape: 'direct', reason: 'host_unsupported', changed_default: false } });
+    expect(readLiveness(env)?.recent).toEqual([{ at: expect.any(String), attempted: false, reason: 'host_unsupported' }]);
+  });
+
+  it('never guards the main session: a direct turn lets its own edits through', async () => {
+    const env = makeEnv(backgroundOnly);
+    await run(env, promptEvent(), fakeJev({ execution: 'orchestrated' }));
+    expect(await run(env, preEvent('Edit', {}))).toMatchObject({ kind: 'skip', code: 'shape_direct', stdout: null });
+  });
+
+  it.each([
+    ['forced foreground', { CLAUDE_CODE_FORK_SUBAGENT: undefined, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' }],
+    ['fork mode off, where the call can say run_in_background: false', { CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: undefined }],
+  ])('still asks Gate A with %s', async (_label, launch) => {
+    const fetchImpl = fakeJev({ execution: 'orchestrated' });
+    await run(makeEnv(launch), promptEvent(), fetchImpl);
+    expect(fetchImpl).toHaveBeenCalled();
+  });
+
+  it('stays direct under forced forking even with the foreground forced', async () => {
+    const env = makeEnv({ CLAUDE_CODE_FORK_SUBAGENT: '1', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' });
+    const fetchImpl = fakeJev({ execution: 'orchestrated' });
+    const r = await run(env, promptEvent(), fetchImpl);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(r.code).toBe('host_unsupported');
+  });
+
+  it('says so at SessionStart at once, to the user and not the model, without waiting for the liveness window', async () => {
+    const r = await run(makeEnv(backgroundOnly), { hook_event_name: 'SessionStart', session_id: 's1' });
+    expect(r).toMatchObject({ kind: 'notice', code: 'host_unsupported' });
+    const body = JSON.parse(r.stdout as string) as Record<string, unknown>;
+    expect(String(body['systemMessage'])).toContain('can only run in the background');
+    expect(String(body['systemMessage'])).toContain('CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1');
+    expect(body).not.toHaveProperty('hookSpecificOutput');
+  });
+
+  it('says nothing at SessionStart when the gate is off or native', async () => {
+    for (const mode of ['off', 'native']) {
+      expect(await run(makeEnv({ ...backgroundOnly, JEV_GATE_MODE: mode }), { hook_event_name: 'SessionStart', session_id: 's1' })).toMatchObject({ stdout: null });
+    }
   });
 });
 

@@ -6,12 +6,13 @@ import { fileURLToPath } from 'node:url';
 
 import { AUTH_CONFLICT_ENV, isSubscriptionOAuth, parseAuthStatus, subagentModelOverride, type CommandResult } from './auth.js';
 import { OWNED_AGENT_PROFILES } from './agents.js';
+import { foregroundDispatchPossible } from './brief.js';
 import { DEFAULT_CONFIG, effectiveDepthFloor, LEGACY_DEPTH_FLOOR, loadConfig, MIGRATION_SAMPLE, NATIVE_HOOK_TIMEOUT_MS, type ConfigResult } from './config.js';
 import { explainDir } from './explain.js';
 import { HOST_WINDOW_MAX, readHostCompactWindow, readHostWorktreeBaseRef, STANDARD_CONTEXT_WINDOW } from './host-window.js';
 import { jobsDir } from './job.js';
 import { LIVENESS_WINDOW, livenessPath, readLiveness } from './liveness.js';
-import { OWNED_AGENTS, type Tier } from './types.js';
+import { OWNED_AGENTS, type Mode, type Tier } from './types.js';
 
 type Level = 'ok' | 'warn' | 'fail' | 'info';
 
@@ -254,7 +255,21 @@ const checkClaude = (): void => {
   say(isSubscriptionOAuth(s) ? 'ok' : 'warn', `auth: method=${String(s.authMethod)} provider=${String(s.apiProvider)} subscription=${String(s.subscriptionType ?? 'unknown')}${isSubscriptionOAuth(s) ? '' : ' (supported condition is claude.ai subscription OAuth; other methods are unverified)'}`);
 };
 
-const checkEnv = (): void => {
+/**
+ * `env` from the user settings file (under CLAUDE_CONFIG_DIR when set, as host-window reads it), which the host applies
+ * over the shell's environment in every session; {} when unreadable. Project and managed settings are not read here.
+ */
+const userSettingsEnv = (): Record<string, unknown> => {
+  const dir = process.env['CLAUDE_CONFIG_DIR'] || join(homedir(), '.claude');
+  try {
+    const s = JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf8')) as unknown;
+    return isRecord(s) && isRecord(s['env']) ? s['env'] : {};
+  } catch {
+    return {};
+  }
+};
+
+const checkEnv = (mode: Mode | null): void => {
   const env = process.env;
   const conflicts = AUTH_CONFLICT_ENV.filter((k) => env[k]);
   say(conflicts.length ? 'warn' : 'ok', conflicts.length ? `auth-related env set: ${conflicts.join(', ')} (may replace subscription OAuth; jev-gate does not change it)` : 'no API-key/gateway/cloud env overrides detected');
@@ -263,10 +278,18 @@ const checkEnv = (): void => {
   else if (o.concrete) say('warn', `CLAUDE_CODE_SUBAGENT_MODEL is a concrete override; eligible calls are preserved (no routing)`);
   else if (o.value === 'inherit') say('info', 'CLAUDE_CODE_SUBAGENT_MODEL=inherit is treated as unset on v2.1.196+ (harmless)');
   else say('ok', 'no CLAUDE_CODE_SUBAGENT_MODEL override');
-  const fork = env['CLAUDE_CODE_FORK_SUBAGENT'];
-  const bg = env['CLAUDE_CODE_DISABLE_BACKGROUND_TASKS'];
+  const settingsEnv = userSettingsEnv();
+  const launch = (k: string): string | undefined => {
+    const v = settingsEnv[k];
+    return typeof v === 'string' ? v : env[k];
+  };
+  const fork = launch('CLAUDE_CODE_FORK_SUBAGENT');
+  const bg = launch('CLAUDE_CODE_DISABLE_BACKGROUND_TASKS');
   if (fork === '0' && bg === '1') say('ok', 'launch profile: CLAUDE_CODE_FORK_SUBAGENT=0 and CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 (foreground Agent calls; not a global scheduler)');
-  else if (fork === '1') say('warn', 'CLAUDE_CODE_FORK_SUBAGENT=1: Agent calls run in the background and lack run_in_background; eligible calls are preserved');
+  // #48: the hook skips auto and lean admission as host_unsupported under the same test, so the gate can never act.
+  else if ((mode === 'auto' || mode === 'lean') && !foregroundDispatchPossible({ CLAUDE_CODE_FORK_SUBAGENT: fork, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: bg })) {
+    say('fail', `mode=${mode} but Agent calls can only run in the background (fork=${fork ?? 'unset'}, disable_background=${bg ?? 'unset'}, read from this shell and the user settings env): every prompt stays native as host_unsupported and sends no Jev request. Start Claude Code with CLAUDE_CODE_FORK_SUBAGENT=0 CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1, or set mode to off. A variable only the launcher sets is not visible here.`);
+  } else if (fork === '1') say('warn', 'CLAUDE_CODE_FORK_SUBAGENT=1: Agent calls run in the background and lack run_in_background; eligible calls are preserved');
   else say('info', `launch profile not set (fork=${fork ?? 'unset'}, disable_background=${bg ?? 'unset'}): interactive sessions default to fork mode, where Agent calls omit run_in_background and V4 preserves them. Start with CLAUDE_CODE_FORK_SUBAGENT=0 CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`);
   if (env['CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS'] === '1') say('info', 'agent teams enabled: a named Agent call becomes a teammate; the coordinator guidance asks for no teammate name');
   say(env['TYPESAFE_API_KEY'] ? 'ok' : 'warn', env['TYPESAFE_API_KEY'] ? 'TYPESAFE_API_KEY is set (value not shown)' : 'TYPESAFE_API_KEY not set: auto mode preserves every eligible call, and lean reads no source and sends nothing (key_missing)');
@@ -312,7 +335,7 @@ const main = (): void => {
   checkConfig(loaded);
   if (loaded.ok) checkModelAuthority(loaded.config.models, installedModels);
   checkClaude();
-  checkEnv();
+  checkEnv(loaded.ok ? loaded.config.mode : null);
   checkUserSettings();
   checkLiveness();
   say('info', `in Claude Code: /hooks should list six jev-gate entries (UserPromptSubmit, PreToolUse with no matcher, PostToolUse on ^Agent$, PostToolUseFailure on ^Agent$, Stop, SessionStart); the @agent- typeahead should show ${Object.keys(OWNED_AGENTS).join(', ')} once each`);

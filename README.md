@@ -238,11 +238,15 @@ Type normally. There is no `/jev` command.
 
 **`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` is required, not advisory.** A worker brief is eligible only when the Agent
 call is in the foreground, and an interactive session defaults to fork mode where the host omits `run_in_background`
-entirely — so without this variable every brief is refused as `not_foreground` and an admitted job never reaches a
-worker. `CLAUDE_CODE_FORK_SUBAGENT=1` is refused for the same reason. Both settings are scoped to this command and are
-not written into your settings; the cost is real, because forcing the foreground means subagents in that session no
-longer run in the background. `doctor` reports the profile, and a session started without it looks identical from the
-outside to one where the gate simply declined.
+entirely — so without this variable every brief would be refused as `not_foreground` and an admitted job would never
+reach a worker, while its guard refused the main session's own edits. `CLAUDE_CODE_FORK_SUBAGENT=1` is refused for the
+same reason. Both settings are scoped to this command and are not written into your settings; the cost is real,
+because forcing the foreground means subagents in that session no longer run in the background.
+
+In a session without a foreground profile (neither variable above, nor `CLAUDE_CODE_FORK_SUBAGENT=0`), `auto` and `lean`
+stay native on every prompt as `host_unsupported` and send no Jev request (#48), since an admission there could only be
+paid for. `auto` says so once at SessionStart, and `doctor` fails on it, reading this shell and the user settings
+`env`.
 
 **Put the key where the launcher reads it, not only where you type.** The hook reads the environment of the `claude`
 process, and an interactive-only rc file (`~/.zshrc`, `~/.bashrc`) is not read by a non-interactive shell, so a session

@@ -30,6 +30,7 @@ import {
 import {
   checkEligibility,
   DENIALS_BEFORE_STOP,
+  foregroundDispatchPossible,
   guardDecision,
   patchAgentInput,
   renderAdditionalContext,
@@ -557,7 +558,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
      * is the one cost with no possible return.
      */
     const hostOverride = subagentModelOverride(deps.env);
-    if (hostOverride.concrete || hostOverride.force || deps.env['CLAUDE_CODE_FORK_SUBAGENT'] === '1') return skip('host_unsupported');
+    if (hostOverride.concrete || hostOverride.force || !foregroundDispatchPossible(deps.env)) return skip('host_unsupported');
     cleanupJobs(deps.env);
 
     /**
@@ -994,6 +995,15 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       // Native is a deliberate configuration choice, not an auto-mode admission decision, so it is excluded too.
     } else if (!apiKey) {
       reason = 'key_missing';
+      trace?.write('admission_result', { ...base, ...depthFacts, attempted: false, known_not_sent: true, decision: { shape: 'direct', decided: false, reason, changed_default: false } });
+      appendLiveness(deps.env, { at: nowIso(), attempted: false, reason });
+    } else if (!foregroundDispatchPossible(deps.env)) {
+      /**
+       * #48: in a session whose Agent calls can only run in the background, every planned brief is refused as
+       * `not_foreground`, so an admitted job reaches no worker while its guard refuses the main session's own edits.
+       * Gate A is not asked; the liveness ring records why, so SessionStart and doctor say the gate cannot fire here.
+       */
+      reason = 'host_unsupported';
       trace?.write('admission_result', { ...base, ...depthFacts, attempted: false, known_not_sent: true, decision: { shape: 'direct', decided: false, reason, changed_default: false } });
       appendLiveness(deps.env, { at: nowIso(), attempted: false, reason });
     } else {
@@ -1997,9 +2007,17 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
    * auto-mode admission decision, and says something only when a full window of 50 decisions never once attempted a
    * Gate A call, which is a stronger claim than a single unlucky run and worth a `doctor` visit. Off, native and lean
    * modes never populate the ring with auto-mode decisions in the first place, so there is nothing to check there.
+   * One condition needs no window: a session whose Agent calls can only run in the background, where auto mode stays
+   * native on every prompt (`host_unsupported`). That is read from this session's own environment and said at once,
+   * since the ring would otherwise take 50 prompts to reach the same conclusion.
    */
   const handleSessionStart = (): HookResult => {
     if (mode !== 'auto') return skip();
+    if (!foregroundDispatchPossible(deps.env)) {
+      const text = 'jev-gate: mode=auto, but this session\'s Agent calls can only run in the background, so no admitted job could reach a worker. Every prompt stays native and sends no Jev request. To use the gate, start Claude Code with CLAUDE_CODE_FORK_SUBAGENT=0 CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1; otherwise set mode to off.';
+      const stdout = renderSystemMessage(text);
+      return stdout === null ? skip('host_unsupported') : { kind: 'notice', code: 'host_unsupported', stdout };
+    }
     const recent = readLiveness(deps.env)?.recent ?? [];
     if (recent.length < LIVENESS_WINDOW || recent.some((e) => e.attempted)) return skip();
     const text = `jev-gate: the last ${recent.length} auto-mode admission decisions never attempted a Gate A call. Run \`jev-gate doctor\` to check the key, the depth floor and the host window.`;

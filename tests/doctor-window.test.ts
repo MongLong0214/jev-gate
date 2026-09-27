@@ -176,3 +176,52 @@ describe('doctor: worker isolation base (#48 P1-2 review)', () => {
     expect(stdout).not.toMatch(/is not in effect/);
   });
 });
+
+describe('doctor: a launch profile that lets an admitted job reach a worker (#48)', () => {
+  const failLine = (out: string): string | undefined => out.split('\n').find((l) => l.startsWith('[fail] mode='));
+  const withSettingsEnv = (env: Record<string, string>): string => {
+    const home = mktemp();
+    mkdirSync(join(home, '.claude'), { recursive: true });
+    writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({ env }));
+    return home;
+  };
+
+  it('fails in auto mode when Agent calls could only run in the background, and says the hook sends nothing', () => {
+    const line = failLine(doctor({ JEV_GATE_CONFIG: configFile({ version: 5, mode: 'auto' }) }));
+    expect(line).toContain('mode=auto but Agent calls can only run in the background (fork=unset, disable_background=unset');
+    expect(line).toContain('host_unsupported and sends no Jev request');
+  });
+
+  it('fails in lean mode for the same reason', () => {
+    expect(failLine(doctor({ JEV_GATE_CONFIG: configFile({ version: 5, mode: 'lean' }) }))).toContain('mode=lean but');
+  });
+
+  it.each([
+    ['the full profile', { CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' }],
+    ['forced foreground alone', { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' }],
+    ['fork mode off alone', { CLAUDE_CODE_FORK_SUBAGENT: '0' }],
+  ])('does not fail with %s in this shell', (_label, launch) => {
+    expect(failLine(doctor({ JEV_GATE_CONFIG: configFile({ version: 5, mode: 'auto' }), ...launch }))).toBeUndefined();
+  });
+
+  it('reads the profile from the user settings env too, and lets it win over the shell', () => {
+    const cfg = configFile({ version: 5, mode: 'auto' });
+    const profile = withSettingsEnv({ CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' });
+    expect(failLine(doctor({ JEV_GATE_CONFIG: cfg, HOME: profile }))).toBeUndefined();
+    const forking = withSettingsEnv({ CLAUDE_CODE_FORK_SUBAGENT: '1' });
+    expect(failLine(doctor({ JEV_GATE_CONFIG: cfg, HOME: forking, CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' }))).toContain('fork=1');
+  });
+
+  it('reads the settings file under CLAUDE_CONFIG_DIR when that is set', () => {
+    const dir = join(withSettingsEnv({ CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' }), '.claude');
+    expect(failLine(doctor({ JEV_GATE_CONFIG: configFile({ version: 5, mode: 'auto' }), CLAUDE_CONFIG_DIR: dir }))).toBeUndefined();
+  });
+
+  it('does not fail when the gate is off or native, and keeps the informational line', () => {
+    for (const mode of ['off', 'native']) {
+      const out = doctor({ JEV_GATE_CONFIG: configFile({ version: 5, mode }) });
+      expect(failLine(out), mode).toBeUndefined();
+      expect(out, mode).toContain('[info] launch profile not set');
+    }
+  });
+});
