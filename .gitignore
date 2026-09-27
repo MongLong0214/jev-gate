@@ -11,3 +11,7 @@ artifacts/
 bench-runs/
 .DS_Store
 dist-pack/
+
+# What the host writes into a mod on a --plugin-dir load
+mods/*/tsconfig.json
+mods/*/.claude-plugin/types/
