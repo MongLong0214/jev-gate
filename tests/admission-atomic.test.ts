@@ -10,13 +10,17 @@ import {
   SIZE_MAX_SCORE,
 } from '../src/admission.js';
 import { FACT_TRUE } from '../src/allocation.js';
-import { DEFAULT_CONFIG } from '../src/config.js';
+import { DEFAULT_CONFIG, LEGACY_DEPTH_FLOOR } from '../src/config.js';
 
 /**
  * Gate A decomposed: read-offs from the request, composed here as vetoes, with depth deciding first. The composite
  * path is untouched and remains the default, which the config tests cover.
+ *
+ * decideAdmissionAtomic takes an already-resolved floor (a plain number), never the raw config field. #48 P0-1 made
+ * DEFAULT_CONFIG.delegationDepthFloor null (derive from the host window), so this file -- which does not exercise
+ * host-window derivation at all -- uses LEGACY_DEPTH_FLOOR directly, the same 300,000 this constant always was here.
  */
-const FLOOR = DEFAULT_CONFIG.delegationDepthFloor;
+const FLOOR = LEGACY_DEPTH_FLOOR;
 const DEEP = 406_000;
 
 const answers = (over: Record<string, number> = {}): Record<string, unknown> => {

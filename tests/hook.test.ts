@@ -9,6 +9,7 @@ import { DENIALS_BEFORE_STOP } from '../src/brief.js';
 import { runHook, type HookDeps, type HookResult } from '../src/hook.js';
 import { CLAUSE_VERDICTS, MAX_INTERPRETATION_CLAUSES } from '../src/interpretation.js';
 import { jobPath, newGeneration, readJob, updateJob } from '../src/job.js';
+import { appendLiveness, LIVENESS_WINDOW, readLiveness } from '../src/liveness.js';
 import { chainDepth, composeTaskPrompt, contractHash, MAX_COMPOSED_BYTES } from '../src/plan.js';
 import { ADMISSION_ANSWERS, PLANNER_ROUTE_ANSWERS, ROUTE_ANSWERS, UPGRADE_BASES, type JobState, type PlannedTask, type WorkerReply } from '../src/types.js';
 
@@ -102,14 +103,14 @@ const fence = (value: unknown): string => 'summary prose\n```json\n' + JSON.stri
  * context is not this session's, and reading it instead would admit jobs on a number that describes another turn.
  */
 let transcriptSeq = 0;
-const transcriptAt = (tokens: number): string => {
+const transcriptAt = (tokens: number, model?: string): string => {
   const p = join(tmp, `transcript-${(transcriptSeq += 1)}.jsonl`);
   writeFileSync(
     p,
     [
       JSON.stringify({ type: 'user', message: { role: 'user', content: 'an earlier turn' } }),
       JSON.stringify({ type: 'assistant', isSidechain: true, message: { usage: { cache_read_input_tokens: 9_000_000 } } }),
-      JSON.stringify({ type: 'assistant', message: { usage: { cache_read_input_tokens: tokens - 1000, cache_creation_input_tokens: 600, input_tokens: 400 } } }),
+      JSON.stringify({ type: 'assistant', message: { ...(model !== undefined ? { model } : {}), usage: { cache_read_input_tokens: tokens - 1000, cache_creation_input_tokens: 600, input_tokens: 400 } } }),
       '',
     ].join('\n'),
   );
@@ -280,6 +281,21 @@ describe('Gate A admission', () => {
   });
 
   it.each([
+    // A 200K model with nothing configured: the host compacts at 200K, so the floor is 0.6 x 200K and 150K is admitted.
+    ['claude-haiku-4-5', 200_000, 120_000, true],
+    // A native-1M model with nothing configured: the floor stays at 300K, and 150K is not deep enough.
+    ['claude-opus-5-5', 1_000_000, 300_000, false],
+  ])('with no window configured, takes the window from the session model %s', async (model, window, floor, asked) => {
+    const dir = join(tmp, `trace-model-${model}`);
+    const env = makeEnv({ JEV_GATE_TRACE_DIR: dir });
+    const fetchImpl = fakeJev({ execution: 'orchestrated' });
+    await run(env, promptEvent({ transcript_path: transcriptAt(150_000, model) }), fetchImpl);
+    expect(fetchImpl.mock.calls.length > 0).toBe(asked);
+    const record = readdirSync(dir).map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>).find((x) => x['phase'] === 'admission_result');
+    expect(record).toMatchObject({ context_tokens: 150_000, host_window: window, host_window_source: `default:model:${model}`, depth_floor: floor });
+  });
+
+  it.each([
     ['no transcript path', {}],
     ['a transcript that is not there', { transcript_path: join(tmp, 'gone.jsonl') }],
     ['a transcript with no usage line', { transcript_path: write_no_usage() }],
@@ -406,6 +422,103 @@ describe('Gate A admission', () => {
     const late = await run(env, workerPost('toolu_1', workerReply()), fetchImpl);
     expect(late).toMatchObject({ kind: 'skip', code: 'generation_changed' });
     expect(state(env).current.receipts).toEqual([]);
+  });
+});
+
+describe('liveness ring (#48 P2)', () => {
+  it('records a below-floor decision as not attempted, with the reason', async () => {
+    const env = makeEnv();
+    await run(env, promptEvent({ transcript_path: transcriptAt(55_000) }), fakeJev({ execution: 'orchestrated' }));
+    expect(readLiveness(env)?.recent).toEqual([{ at: expect.any(String), attempted: false, reason: 'depth_below_floor' }]);
+  });
+
+  it('records an unreadable depth as not attempted, with the reason', async () => {
+    const env = makeEnv();
+    await run(env, { ...promptEvent(), transcript_path: undefined }, fakeJev({ execution: 'orchestrated' }));
+    expect(readLiveness(env)?.recent).toEqual([{ at: expect.any(String), attempted: false, reason: 'depth_unknown' }]);
+  });
+
+  it('records a real Gate A call as attempted, whatever it decides', async () => {
+    const env = makeEnv();
+    await run(env, promptEvent(), fakeJev({ execution: 'orchestrated' }));
+    expect(readLiveness(env)?.recent).toEqual([{ at: expect.any(String), attempted: true, reason: null }]);
+  });
+
+  it('records key_missing as not attempted', async () => {
+    const env = makeEnv({ TYPESAFE_API_KEY: undefined });
+    await run(env, promptEvent());
+    expect(readLiveness(env)?.recent).toEqual([{ at: expect.any(String), attempted: false, reason: 'key_missing' }]);
+  });
+
+  it('records a host that never sends a prompt id as not attempted', async () => {
+    const env = makeEnv();
+    await run(env, promptEvent({ prompt_id: undefined }));
+    expect(readLiveness(env)?.recent).toEqual([{ at: expect.any(String), attempted: false, reason: 'prompt_id_absent' }]);
+  });
+
+  it('never records the forced bench control arm -- it never asks Gate A on purpose', async () => {
+    const env = makeEnv({ JEV_GATE_EXPERIMENT_ADMISSION: 'orchestrated' });
+    await run(env, promptEvent({ transcript_path: transcriptAt(55_000) }), fakeJev());
+    expect(readLiveness(env)).toBeNull();
+  });
+
+  it('never records mode=native -- it is a deliberate configuration, not an admission decision', async () => {
+    const env = makeEnv({ JEV_GATE_MODE: 'native' });
+    await run(env, promptEvent(), fakeJev());
+    expect(readLiveness(env)).toBeNull();
+  });
+});
+
+describe('SessionStart liveness warning (#48 P2)', () => {
+  const sessionStart = (): Record<string, unknown> => ({ hook_event_name: 'SessionStart', session_id: 's1' });
+  const fillRing = (env: Env, n: number, attempted: boolean): void => {
+    for (let i = 0; i < n; i++) appendLiveness(env, { at: `t${i}`, attempted, reason: attempted ? null : 'depth_below_floor' });
+  };
+
+  it('says nothing before the ring has a full window of decisions, even if none of them attempted', async () => {
+    const env = makeEnv();
+    fillRing(env, LIVENESS_WINDOW - 1, false);
+    expect(await run(env, sessionStart())).toMatchObject({ kind: 'skip', stdout: null });
+  });
+
+  it('warns, via a systemMessage and not model context, once a full window never attempted a call', async () => {
+    const env = makeEnv();
+    fillRing(env, LIVENESS_WINDOW, false);
+    const r = await run(env, sessionStart());
+    expect(r.kind).toBe('notice');
+    const body = JSON.parse(r.stdout as string) as Record<string, unknown>;
+    expect(typeof body['systemMessage']).toBe('string');
+    expect(String(body['systemMessage'])).toContain(String(LIVENESS_WINDOW));
+    expect(body).not.toHaveProperty('hookSpecificOutput');
+  });
+
+  it('says nothing when even one of the last window attempted a call', async () => {
+    const env = makeEnv();
+    fillRing(env, LIVENESS_WINDOW - 1, false);
+    appendLiveness(env, { at: 'last', attempted: true, reason: null });
+    expect(await run(env, sessionStart())).toMatchObject({ kind: 'skip', stdout: null });
+  });
+
+  it('says nothing with no liveness history at all', async () => {
+    expect(await run(makeEnv(), sessionStart())).toMatchObject({ kind: 'skip', stdout: null });
+  });
+
+  it('never checks in native mode, whatever the ring says', async () => {
+    const env = makeEnv({ JEV_GATE_MODE: 'native' });
+    fillRing(env, LIVENESS_WINDOW, false);
+    expect(await run(env, sessionStart())).toMatchObject({ kind: 'skip', stdout: null });
+  });
+
+  it('never checks in lean mode', async () => {
+    const env = makeEnv({ JEV_GATE_MODE: 'lean' });
+    fillRing(env, LIVENESS_WINDOW, false);
+    expect(await run(env, sessionStart())).toMatchObject({ kind: 'skip', stdout: null });
+  });
+
+  it('never checks when the gate is off', async () => {
+    const env = makeEnv({ JEV_GATE_MODE: 'off' });
+    fillRing(env, LIVENESS_WINDOW, false);
+    expect(await run(env, sessionStart())).toMatchObject({ kind: 'skip', code: 'mode_off', stdout: null });
   });
 });
 
@@ -1506,16 +1619,19 @@ describe('dist/hook.js (process)', () => {
     const hooks = JSON.parse(readFileSync(join(dist, 'hooks', 'hooks.json'), 'utf8')) as {
       hooks: Record<string, Array<{ matcher?: string; hooks: Array<{ type: string; command: string; timeout: number }> }>>;
     };
-    // Exactly the five events the V5 gate dispatches. SessionStart and the `^Grep$` group were the withdrawn search
-    // filter's, and nothing registers them any more; adding one back would run this hook on every search result.
-    expect(Object.keys(hooks.hooks).sort()).toEqual(['PostToolUse', 'PostToolUseFailure', 'PreToolUse', 'Stop', 'UserPromptSubmit']);
-    for (const event of ['UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'Stop']) {
+    // Exactly the six events the V5 gate dispatches, all commanding dist/entry.js (#48 P2), which dynamically
+    // imports dist/hook.js only once it knows the gate might be on (src/entry.ts). SessionStart (#48 P2) is the
+    // liveness warning; the `^Grep$` group was the withdrawn search filter's, and nothing registers it any more --
+    // adding one back would run this hook on every search result.
+    expect(Object.keys(hooks.hooks).sort()).toEqual(['PostToolUse', 'PostToolUseFailure', 'PreToolUse', 'SessionStart', 'Stop', 'UserPromptSubmit']);
+    for (const event of ['UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'Stop', 'SessionStart']) {
       expect(hooks.hooks[event], event).toHaveLength(1);
-      for (const group of hooks.hooks[event]!) expect(group.hooks).toEqual([{ type: 'command', command: 'node "${CLAUDE_PLUGIN_ROOT}/dist/hook.js"', timeout: 5 }]);
+      for (const group of hooks.hooks[event]!) expect(group.hooks).toEqual([{ type: 'command', command: 'node "${CLAUDE_PLUGIN_ROOT}/dist/entry.js"', timeout: 5 }]);
     }
     expect(hooks.hooks['UserPromptSubmit']![0]!.matcher).toBeUndefined();
     expect(hooks.hooks['PreToolUse']![0]!.matcher).toBeUndefined();
     expect(hooks.hooks['Stop']![0]!.matcher).toBeUndefined();
+    expect(hooks.hooks['SessionStart']![0]!.matcher).toBeUndefined();
     expect(hooks.hooks['PostToolUse']!.map((g) => g.matcher)).toEqual(['^Agent$']);
     const resolved = hooks.hooks['PreToolUse']![0]!.hooks[0]!.command.replace('${CLAUDE_PLUGIN_ROOT}', dist);
     const r = spawnSync(resolved, {

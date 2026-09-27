@@ -245,7 +245,7 @@ Optional config at `~/.config/jev-gate/config.json` (or `JEV_GATE_CONFIG`), `JEV
 { "version": 5, "mode": "off", "jevModel": "jev-1.13.0", "requestDeadlineMs": 3000,
   "admissionConfidenceFloor": 0.8, "routeConfidenceFloor": 0.8, "resultConfidenceFloor": 0.8,
   "plannerDefaultTier": "deep", "maxParallelWorkers": 1, "guardAllowTools": [],
-  "delegationDepthFloor": 300000, "maxTasksPerPlan": 10,
+  "delegationDepthFloor": null, "delegationDepthFraction": 0.6, "maxTasksPerPlan": 10,
   "admissionQuestionShape": "atomic", "routeQuestionShape": "composite",
   "planInterpretation": false,
   "models": { "fast": "haiku", "standard": "sonnet", "deep": "opus", "frontier": "fable" } }
@@ -257,14 +257,56 @@ no account access. The three floors are uncalibrated policy values; `resultConfi
 kept only for config compatibility, since the normal path no longer makes the Gate C call it used to gate.
 `guardAllowTools` adds read-only tools your project needs during orchestration, for example an MCP reader.
 
-The last five keys are optional and default to the values shown, so an existing V5 file keeps its behaviour unedited.
+The last six keys are optional and default to the values shown, so an existing V5 file keeps its behaviour unedited.
 
 `delegationDepthFloor` is how much context your session must already be carrying before Gate A is asked anything at
 all. Below it the turn is direct and no request is sent. It exists because depth, not the request, is what decides
 whether delegating is cheaper: the same job measured +182 % on a fresh session and -57 % on a loaded one. The number is
 read from the session transcript the host passes to the hook, and a transcript that cannot be read counts as below the
-floor. `0` turns the floor off. The 300,000 default is derived from two end-to-end points, not measured at the
-crossing.
+floor. `0` turns the floor off.
+
+The default is `null`, not a fixed number (#48): a floor is only reachable if the host's own auto-compaction window is
+above it, and that window varies by host and session (a 300,000-token window compacts a session before a fixed
+300,000-token floor is ever reached — 1,014 admission decisions measured on this project's own dogfood session were 0
+attempted). With `delegationDepthFloor: null`, the effective floor is derived from whatever window is known:
+`min(300000, floor(delegationDepthFraction × window))` when the window is known, or the historical fixed 300,000 when
+it is not. `delegationDepthFraction` (default `0.6`, accepted from `0.25` to `0.95`) is a policy choice, not a measured
+crossing — say so if you change it. Setting `delegationDepthFloor` to an explicit non-negative integer keeps the old
+absolute behavior exactly, including `0` to disable the floor.
+
+**How the gate finds the host's compaction window** (`src/host-window.ts`, following Claude Code's own settings,
+model-config and managed-settings pages). The first valid configured value wins: the
+`CLAUDE_CODE_AUTO_COMPACT_WINDOW` environment variable; then managed settings (`managed-settings.json` and
+`managed-settings.d/*.json` in the system directory); then `.claude/settings.local.json` at the repository root (the
+main checkout's root when you work in a linked worktree); then `.claude/settings.json` in the session's project
+directory; then `$CLAUDE_CONFIG_DIR/settings.json` (or
+`~/.claude/settings.json`). A file only counts if it parses as a JSON object with a positive `autoCompactWindow`;
+anything unreadable, oversized (over 1 MiB) or invalid is skipped, never thrown. The value is clamped to the host's
+100K–1M range and capped at the model's own context window, which is 200K under `CLAUDE_CODE_DISABLE_1M_CONTEXT`.
+When nothing is configured, the host compacts at the model's context limit, so the gate takes the window from the
+model the session transcript records: 1M for Opus 4.7 and later, Sonnet 5 and Fable on the Anthropic API, 200K for
+earlier and smaller models.
+
+The session's project directory starts at `CLAUDE_PROJECT_DIR`. `/cd` moves it, and the hook's `cwd` with it, but
+leaves `CLAUDE_PROJECT_DIR` naming the start; a `cd` in Bash moves only the `cwd`. So neither names it once the
+session has moved. The host keeps the session transcript in a folder named after that directory and moves it on
+`/cd`, so the gate reads settings from whichever candidate (`CLAUDE_PROJECT_DIR`, the `cwd` and its parents) that
+folder names. If it names none of them, the window is unknown rather than guessed. Without a transcript in that
+layout, `CLAUDE_PROJECT_DIR` stands, and where the `cwd` differs from it every candidate must give the same window.
+A launch with `--project-config-root` reads settings from that root, which a transcript folder does not name, so the
+window there reads as unknown.
+
+**Where this can still be wrong.** A launch's `--autocompact` or `--settings` flag, MDM policies and server-managed
+settings are invisible to a hook. A native-1M model on Bedrock, Vertex or Foundry, Opus or Fable behind an LLM
+gateway (`ANTHROPIC_BASE_URL`), a gateway model alias, or the first prompt after a `/model` switch (the host records
+only the new model's display name until the next reply) leaves the window unknown. Behind a gateway, Sonnet 5 is
+read as the 200K the host budgets it at unless `[1m]` was picked. In those sessions the floor stays at 300,000, which a 200K session never reaches: the gate then costs
+nothing and saves nothing. That is deliberate — guessing low would admit shallow prompts on a 1M session, where forced
+orchestration measured +182 %. It is not silent: after 50 auto-mode decisions with no Gate A attempt, the SessionStart
+liveness notice tells you to run doctor. Run `node dist/cli.js doctor` to see the window, its source and the effective
+floor. Doctor has no session model, so it reports the configured half and spells out the per-model defaults the hook
+will apply. It **FAILs** when the floor is at or above a known window, **WARNs** when it is within 15% of one or when
+no window is configured, and otherwise reports `info`.
 
 `maxTasksPerPlan` rejects an accepted plan above that many tasks. It is a backstop against a runaway split rather than
 a budget: every worker pays to be started, a 13-task plan measured +92.5 %, and plans that worked ran 2 to 7.
@@ -337,6 +379,14 @@ above describes the host-smoke session as recorded at the time, not the current 
 
 `doctor` reports configuration and environment issues (auth method, model overrides, launch profile, key presence, the
 six role definitions and their effort fields). It is not proof that patching, effort or model access works on your host.
+It also reports the host compaction window and the effective depth floor derived from it (FAIL/WARN as described
+[above](#try-v5) when the floor cannot realistically be reached), and a liveness check: `<stateRoot>/jev-gate/liveness.json`
+keeps the last 50 auto-mode admission decisions, and doctor WARNs — the same condition a new `SessionStart` hook warns
+about directly in the transcript, via `systemMessage`, so you do not have to run doctor to notice — when all 50 never
+attempted a Gate A call, which is exactly the #48 failure mode this floor change addresses. In `mode: "off"`, doctor
+also WARNs that a hook process still starts per matched event even though the gate itself does nothing once running
+(`src/entry.ts` short-circuits before importing the rest of the gate, but the host still spawns node); disable the
+plugin entirely with `claude plugin disable jev-gate@<marketplace>` to remove that cost too.
 
 `explain` answers the other question -- what the gate then did with a turn:
 

@@ -93,9 +93,20 @@ export interface ConfigV5 {
   /**
    * Context tokens the main session must already be carrying before Gate A is asked anything. Below it the turn is
    * direct and no request is sent: delegation measured +182 % at 55K and -57 % at 406K, so depth, not the prompt, is
-   * what decides. 0 disables the floor. Optional in a config file, like `routeQuestionShape`.
+   * what decides. 0 disables the floor.
+   *
+   * #48 P0-1: `null` (the default) means derive the floor from the host's own auto-compaction window instead of
+   * this absolute number -- see `effectiveDepthFloor` in config.ts. An explicit non-negative integer keeps today's
+   * absolute meaning exactly, including 0 to disable it. Optional in a config file, like `routeQuestionShape`; an
+   * explicit `null` in a file is accepted and means the same as leaving the key out.
    */
-  delegationDepthFloor: number;
+  delegationDepthFloor: number | null;
+  /**
+   * #48 P0-1: the fraction of the host's compaction window that `effectiveDepthFloor` uses when `delegationDepthFloor`
+   * is not set explicitly. 0.6 is a policy choice made so a smaller window still admits some prompts before the host
+   * compacts; it is not a measured crossing point. Must be strictly between 0 and 1. Optional in a config file.
+   */
+  delegationDepthFraction: number;
   /**
    * How Gate A asks. `composite` is the shipped four-way choice; `atomic` fans the same judgement out into read-off
    * questions composed in code as vetoes, and does not consult `admissionConfidenceFloor` at all. Optional in a

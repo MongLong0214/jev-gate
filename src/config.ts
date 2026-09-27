@@ -22,11 +22,19 @@ export const DEFAULT_CONFIG: ConfigV5 = {
   guardAllowTools: [],
   // Optional in a config file: absent keeps the shipped composite Gate B question.
   routeQuestionShape: 'composite',
-  // Derived, not measured, and now less than that. The two end-to-end points were 55K (delegation loses) and 406K
-  // (delegation wins) and this sat between them nearer the win -- but the ladder built to establish that crossing was
-  // withdrawn on 2026-09-20: six comparisons, none reproduced, and the deepest rung reversed sign on a separation.
-  // The number stays for compatibility. It is a configured default, not a break-even point anyone has measured.
-  delegationDepthFloor: 300_000,
+  // #48 P0-1: null derives the floor from the host's own auto-compaction window (effectiveDepthFloor) instead of a
+  // fixed absolute number. The prior default of the fixed 300,000 was itself derived, not measured -- the two
+  // end-to-end points were 55K (delegation loses) and 406K (delegation wins) and it sat between them nearer the win
+  // -- and the ladder built to establish that crossing was withdrawn on 2026-09-20: six comparisons, none reproduced,
+  // and the deepest rung reversed sign on a separation. It is superseded, not merely stale: on this host, 1,014
+  // admission decisions (2026-09-20->27) were 997 depth_below_floor and 17 depth_unknown, 0 attempted, because the
+  // host's own autoCompactWindow of 300,000 compacts the session before the fixed floor of 300,000 can ever be
+  // reached. LEGACY_DEPTH_FLOOR keeps the old number as the fallback for a host whose window cannot be read at all.
+  delegationDepthFloor: null,
+  // #48 P0-1: 0.6 is a policy number chosen so a smaller compaction window still admits some prompts before the host
+  // compacts it away; it is not a measured crossing point, and effectiveDepthFloor never lets it push the floor above
+  // LEGACY_DEPTH_FLOOR.
+  delegationDepthFraction: 0.6,
   /**
    * Atomic since 2026-09-19 (DECISION-defaults-2026-09-19.md): the composite question admitted 0 of 61 real prompts
    * offline, so the shipped gate never ran. The atomic path admits 41 of 65, and refusals send no request at all.
@@ -50,6 +58,20 @@ export const DEFAULT_CONFIG: ConfigV5 = {
  */
 export const NATIVE_HOOK_TIMEOUT_MS = 5000;
 export const MAX_REQUEST_DEADLINE_MS = 3500;
+/**
+ * #48 P0-1: the fixed floor this plugin shipped before the depth gate was made relative to the host's own
+ * auto-compaction window. Kept as the fallback for a host whose window cannot be read at all (`effectiveDepthFloor`),
+ * and as the value an operator gets back by setting `delegationDepthFloor` explicitly to today's number.
+ */
+export const LEGACY_DEPTH_FLOOR = 300_000;
+/**
+ * #48 P0-1: bounds on delegationDepthFraction. With the host window clamped to at least 100K (`host-window.ts`), the
+ * lower bound keeps a derived floor at 25K or above, so no valid fraction can quietly turn the floor into 0 and send
+ * shallow prompts to Gate A; an operator who wants no floor sets `delegationDepthFloor: 0`, which says so. The upper
+ * bound leaves a margin below the window itself, where the host compacts.
+ */
+export const MIN_DEPTH_FRACTION = 0.25;
+export const MAX_DEPTH_FRACTION = 0.95;
 export const MAX_PARALLEL_WORKERS_LIMIT = 16;
 /** A plan larger than this is a runaway whatever the config says; MAX_COMPOSED_BYTES bounds each task, this bounds the count. */
 export const MAX_TASKS_PER_PLAN_LIMIT = 64;
@@ -71,6 +93,7 @@ const V5_KEYS = new Set<string>([
   'guardAllowTools',
   'routeQuestionShape',
   'delegationDepthFloor',
+  'delegationDepthFraction',
   'admissionQuestionShape',
   'maxTasksPerPlan',
   'admittedShape',
@@ -159,10 +182,19 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
     return { ok: false, error: `routeQuestionShape must be one of ${ROUTE_QUESTION_SHAPES.join(', ')}` };
   }
 
-  // Absence defaults, like routeQuestionShape. 0 is a real value -- it turns the floor off -- so it is not rejected.
-  const floor = c['delegationDepthFloor'];
-  if (typeof floor !== 'number' || !Number.isInteger(floor) || floor < 0) {
-    return { ok: false, error: 'delegationDepthFloor must be a non-negative integer number of context tokens (0 disables the floor)' };
+  // #48 P0-1: absence and an explicit null both mean "derive from the host window" (effectiveDepthFloor). 0 is a real
+  // value -- it turns the floor off -- so it is not rejected; neither is any other non-negative integer.
+  const floorRaw = 'delegationDepthFloor' in c ? c['delegationDepthFloor'] : null;
+  if (floorRaw !== null && (typeof floorRaw !== 'number' || !Number.isInteger(floorRaw) || floorRaw < 0)) {
+    return { ok: false, error: 'delegationDepthFloor must be null (derive from the host window) or a non-negative integer number of context tokens (0 disables the floor)' };
+  }
+  const floor = floorRaw as number | null;
+
+  // #48 P0-1: same optional-key rule as the rest of this file; 0.6 is DEFAULT_CONFIG's policy choice, not a bound
+  // anyone is meant to read as a crossing point.
+  const fraction = 'delegationDepthFraction' in c ? c['delegationDepthFraction'] : DEFAULT_CONFIG.delegationDepthFraction;
+  if (typeof fraction !== 'number' || !Number.isFinite(fraction) || fraction < MIN_DEPTH_FRACTION || fraction > MAX_DEPTH_FRACTION) {
+    return { ok: false, error: `delegationDepthFraction must be a finite number from ${MIN_DEPTH_FRACTION} to ${MAX_DEPTH_FRACTION}` };
   }
 
   // Same rule as routeQuestionShape: absence defaults, an explicit wrong value is an error.
@@ -206,6 +238,7 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
       guardAllowTools: allow as string[],
       routeQuestionShape: shape as RouteQuestionShape,
       delegationDepthFloor: floor,
+      delegationDepthFraction: fraction,
       admissionQuestionShape: admissionShape as AdmissionQuestionShape,
       maxTasksPerPlan: maxTasks,
       admittedShape: admittedShape as AdmittedShape,
@@ -247,4 +280,28 @@ export const loadConfig = (env: Env, readFile: (path: string) => string = (p) =>
   }
   if (modeEnv === 'native' || modeEnv === 'auto' || modeEnv === 'lean') return { ok: true, config: { ...base, mode: modeEnv }, source };
   return { ok: true, config: base, source };
+};
+
+export interface EffectiveDepthFloor {
+  floor: number;
+  source: 'config' | 'window_fraction' | 'fallback_absolute';
+}
+
+/**
+ * #48 P0-1: what `delegationDepthFloor` actually is for this turn. An explicit config value wins outright, exactly as
+ * the floor behaved before this feature existed. Otherwise it is derived from the host's own compaction window
+ * (`host-window.ts`): `min(LEGACY_DEPTH_FLOOR, floor(fraction * window))` when the window is known, so a 1M-window
+ * host keeps exactly the old 300K behaviour and a smaller window gets a floor it can actually reach; and
+ * `LEGACY_DEPTH_FLOOR` when the window is unknown. Unknown means neither a setting nor the session's model settled it
+ * (a gateway alias, a native-1M model on Bedrock/Vertex/Foundry, a `--autocompact` launch): such a session may run a
+ * 200K window that never reaches this floor. Keeping 300K there rather than guessing low is deliberate: too high
+ * costs the saving and the liveness ring then says so at SessionStart, while too low on a 1M session admits shallow
+ * prompts, where forced orchestration measured +182% (see LEGACY_DEPTH_FLOOR's history above). `fraction` (0.6 by
+ * default) is a policy number chosen for this purpose, not a measured crossing point -- see
+ * DEFAULT_CONFIG.delegationDepthFraction.
+ */
+export const effectiveDepthFloor = (config: ConfigV5, window: number | null): EffectiveDepthFloor => {
+  if (config.delegationDepthFloor !== null) return { floor: config.delegationDepthFloor, source: 'config' };
+  if (window !== null) return { floor: Math.min(LEGACY_DEPTH_FLOOR, Math.floor(config.delegationDepthFraction * window)), source: 'window_fraction' };
+  return { floor: LEGACY_DEPTH_FLOOR, source: 'fallback_absolute' };
 };

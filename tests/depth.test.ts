@@ -76,9 +76,40 @@ describe('readSessionDepth', () => {
   it('reports only numbers: no line of the transcript can leave through this reading', () => {
     const p = write([usageLine(), userLine('a secret the hook must never carry anywhere')]);
     const r = readSessionDepth(p);
-    for (const v of Object.values(r)) expect(['number', 'boolean', 'string']).toContain(typeof v);
+    for (const v of Object.values(r)) expect(v === null || ['number', 'boolean', 'string'].includes(typeof v)).toBe(true);
     expect(JSON.stringify(r)).not.toMatch(/secret/);
-    expect(Object.keys(r).sort()).toEqual(['bytesRead', 'durationMs', 'ok', 'tokens']);
+    expect(Object.keys(r).sort()).toEqual(['bytesRead', 'durationMs', 'model', 'modelSwitched', 'ok', 'tokens']);
+  });
+
+  /**
+   * #48 review: a `/model` switch writes only a display name, and the next reply is the first line with the new ID;
+   * until then the previous reply's model would give the next prompt the wrong window in either direction.
+   */
+  it('reads the model as unknown after a /model command that follows the last usage line', () => {
+    const opus = usageLine({ message: { role: 'assistant', model: 'claude-opus-5-5', usage: { input_tokens: 10 } } });
+    const command = JSON.stringify({ type: 'user', isSidechain: false, message: { role: 'user', content: '<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args></command-args>' } });
+    const stdout = JSON.stringify({ type: 'user', message: { role: 'user', content: '<local-command-stdout>Set model to `Haiku 4.5`</local-command-stdout>' } });
+    expect(readSessionDepth(write([opus, command, stdout]))).toMatchObject({ ok: true, tokens: 10, model: null, modelSwitched: true });
+    // Before the last reply, the reply already carries the model that the switch chose.
+    expect(readSessionDepth(write([command, stdout, opus]))).toMatchObject({ model: 'claude-opus-5-5', modelSwitched: false });
+    // A subagent does not switch the session's model.
+    const sidechain = JSON.stringify({ type: 'user', isSidechain: true, message: { role: 'user', content: '<command-name>/model</command-name>' } });
+    expect(readSessionDepth(write([opus, sidechain]))).toMatchObject({ model: 'claude-opus-5-5', modelSwitched: false });
+    // The command and the usage line in different read chunks: the mark carries across them.
+    const filler = userLine('x'.repeat(300 * 1024));
+    expect(readSessionDepth(write([opus, filler, command, filler]))).toMatchObject({ ok: true, model: null, modelSwitched: true });
+  });
+
+  it('carries the usage line\'s model ID for the host-window default, and nothing that is not shaped like one', () => {
+    const withModel = (model: unknown): string => JSON.stringify({ type: 'assistant', message: { model, usage: { input_tokens: 10, cache_read_input_tokens: 400_000 } } });
+    expect(readSessionDepth(write([withModel('claude-opus-5-5')]))).toMatchObject({ ok: true, tokens: 400_010, model: 'claude-opus-5-5' });
+    expect(readSessionDepth(write([withModel('claude-opus-4-6[1m]')]))).toMatchObject({ model: 'claude-opus-4-6[1m]' });
+    for (const bad of ['a secret, with spaces', '', 42, null, 'x'.repeat(200)]) {
+      expect(readSessionDepth(write([withModel(bad)]))).toMatchObject({ ok: true, tokens: 400_010, model: null });
+    }
+    // A sidechain turn is skipped whole, so its model never stands in for the root's.
+    const side = JSON.stringify({ type: 'assistant', isSidechain: true, message: { model: 'claude-haiku-4-5', usage: { input_tokens: 1 } } });
+    expect(readSessionDepth(write([withModel('claude-opus-5-5'), side]))).toMatchObject({ tokens: 400_010, model: 'claude-opus-5-5' });
   });
 
   it('ignores a usage object with no readable term, and a usage that is not an object', () => {

@@ -23,14 +23,17 @@ interpretation 중 어느 것도 lean에서 실행되지 않는다. 공유하는
 | `src/allocation.ts` | 코어 | Gate B(planner tier, worker tier + upgrade_basis), Gate C(result, advisory) 질문과 판정 |
 | `src/plan.ts` | 코어 | JSON 추출·검증, `contract_hash`, `[JEV_TASK rev=<n> id=<id> attempt=<n>]` 마커, 계약 합성, 결정적 수락 판정 |
 | `src/job.ts` | 코어 | `(session_id, prompt_id)` 세대별 상태 파일, 예약, 상한, 히스토리. 0700/0600, 원자적 쓰기, symlink 거부, pid 기반 stale lock |
+| `src/liveness.ts` | 코어 | (#48) `<stateRoot>/jev-gate/liveness.json` 링버퍼(cap 50), auto 모드 admission 판정마다 1건. job.ts와 같은 파일 쓰기 패턴(0700/0600, tmp+rename, symlink 거부). 락 없음(동시 세션은 갱신 유실 가능, 의도적) |
 | `src/coordinator.ts` | 코어 | 고정 지침·거부 사유·컨텍스트 문구. `JEV_GATE_EXPERIMENT_ADMISSION`은 벤치 강제 오케스트레이션 전용 |
-| `src/hook.ts` | 어댑터 | 이벤트 디스패치. `JEV_GATE_MODE=off`는 상태·config 읽기 전에 종료 |
-| `src/brief.ts` | 어댑터 | 적격성, allow-list 가드, 입력 패치(원문이 정확한 prefix), 출력 ≤512 KiB |
+| `src/host-window.ts` | 어댑터 | (#48) 호스트 auto-compaction window 판독: env `CLAUDE_CODE_AUTO_COMPACT_WINDOW` → cwd `.claude/settings.local.json`/`settings.json` → 사용자 settings.json. `effectiveDepthFloor`(src/config.ts)가 이 값을 소비 |
+| `src/entry.ts` | 어댑터 | (#48) `dist/entry.js`. gate 모듈 static import 0개. `JEV_GATE_MODE=off` 또는 config 파일 `mode:"off"`면 stdin 소비 후 즉시 종료, 아니면 `./hook.js`를 동적 import해 `main()` 호출. hooks.json·lean.json이 가리키는 실제 진입점 |
+| `src/hook.ts` | 어댑터 | 이벤트 디스패치. `JEV_GATE_MODE=off`는 상태·config 읽기 전에 종료. `main()` export를 자기 main-module 블록과 entry.ts 양쪽에서 호출 |
+| `src/brief.ts` | 어댑터 | 적격성, allow-list 가드, 입력 패치(원문이 정확한 prefix), 출력 ≤512 KiB. `renderSystemMessage`(#48)는 모델 컨텍스트로 가지 않는 SessionStart 알림 전용 |
 | `src/lean-source.ts` | 어댑터 | (lean) 호스트 transcript 어댑터. compact lineage(`compactMetadata.preservedSegment`), human/tool_result 구분, 그룹화, prefix digest, 비밀정보 선별 |
 | `src/lean.ts` | 코어 | (lean) work_shape·handoff_scope·relation_<id> 한 배치 구성, 판정, packet 합성, `recent_packet` 결정적 recency 규칙 |
-| `src/cli.ts` | 어댑터 | `doctor` + `explain`. 추론 0 |
-| `hooks/hooks.json`, `agents/*.md` | 어댑터 | (legacy) UserPromptSubmit·PreToolUse(matcher 없음)·PostToolUse/Failure(`^Agent$`)·Stop; worker 4종 + planner 2종, 모두 Agent·SendMessage 금지 |
-| `hooks/lean.json`, `agents/executor.md` | 어댑터 | (lean) UserPromptSubmit + Agent 전용 Pre/Post/Failure, entrypoint `dist/hook.js --lean`; executor 1종, `model: inherit`, Agent·SendMessage 금지 |
+| `src/cli.ts` | 어댑터 | `doctor` + `explain`. 추론 0. (#48) doctor는 host window·effective floor·liveness도 같은 FAIL/WARN 기준으로 보고 |
+| `hooks/hooks.json`, `agents/*.md` | 어댑터 | (legacy) UserPromptSubmit·PreToolUse(matcher 없음)·PostToolUse/Failure(`^Agent$`)·Stop·SessionStart(#48, matcher 없음); worker 4종 + planner 2종, 모두 Agent·SendMessage 금지. 커맨드는 `dist/entry.js`(#48) |
+| `hooks/lean.json`, `agents/executor.md` | 어댑터 | (lean) UserPromptSubmit + Agent 전용 Pre/Post/Failure, entrypoint `dist/entry.js --lean`(#48, 이전 `dist/hook.js --lean`); executor 1종, `model: inherit`, Agent·SendMessage 금지. SessionStart 없음(lean은 필요 없음) |
 | `src/bench/{run,report,paths,checker,usage}.ts` | 도구 | legacy 8 arm + `--arms lean`(native_auto/recent_packet/jev_lean) 실행기(계획=stdout만, 실행=배타적 새 out + 입력 동결 + 셀별 state dir + 부모 환경 차단), 계획 우선 보고, checker 프로토콜 |
 | `mods/router/` | Mod | (router, #40–#43) Function Hooks 플러그인 `jev-gate-router`. 기본 off. root turn의 effort(선택적으로 model)와 상속형 built-in subagent의 model만 바꾼다. 비밀정보 패턴은 `src/lean-source.ts`의 사본이고 `tests/router/secret-parity.test.ts`가 일치를 강제한다. 타입은 `mods/tsconfig.json`, 테스트는 `tests/router/`(vitest)와 `mods/router/tests/`(호스트 키트), 패키지는 `pack --profile router` |
 | `bench/v5/`, `bench/v4/` | 도구 | 평가 job·checker·reference. V4는 개발 데이터로 보존 |

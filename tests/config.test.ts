@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 
-import { DEFAULT_CONFIG, loadConfig, MIGRATION_SAMPLE, resolveConfigPath, validateConfig } from '../src/config.js';
+import { DEFAULT_CONFIG, effectiveDepthFloor, LEGACY_DEPTH_FLOOR, loadConfig, MIGRATION_SAMPLE, resolveConfigPath, validateConfig } from '../src/config.js';
 
 const tmp = mkdtempSync(join(tmpdir(), 'jev-config-'));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
@@ -31,7 +31,10 @@ const write = (name: string, value: unknown): string => {
 describe('validateConfig', () => {
   it('accepts a full V5 file and a partial file over the defaults', () => {
     // routeQuestionShape is optional in a file and defaulted, so a deployed V5 config keeps composite Gate B.
-    expect(validateConfig(V5)).toEqual({ ok: true, config: { ...V5, mode: 'auto', routeQuestionShape: 'composite', delegationDepthFloor: 300_000, admissionQuestionShape: 'atomic', maxTasksPerPlan: 10, admittedShape: 'hierarchy', planInterpretation: false } });
+    expect(validateConfig(V5)).toEqual({
+      ok: true,
+      config: { ...V5, mode: 'auto', routeQuestionShape: 'composite', delegationDepthFloor: null, delegationDepthFraction: 0.6, admissionQuestionShape: 'atomic', maxTasksPerPlan: 10, admittedShape: 'hierarchy', planInterpretation: false },
+    });
     const partial = validateConfig({ version: 5, mode: 'native', plannerDefaultTier: 'frontier', models: { deep: 'claude-opus-5' } });
     expect(partial.ok).toBe(true);
     if (!partial.ok) return;
@@ -44,9 +47,15 @@ describe('validateConfig', () => {
       guardAllowTools: [],
     });
     expect(DEFAULT_CONFIG.maxParallelWorkers).toBe(1);
-    // Absent in a deployed file, so the floor arrives without anyone editing their config; 0 is accepted and turns it off.
-    expect(DEFAULT_CONFIG.delegationDepthFloor).toBe(300_000);
+    // #48 P0-1: absent (and an explicit null) derive the floor from the host's own compaction window instead of a
+    // fixed absolute number; 0 is still accepted and still turns the floor off outright.
+    expect(DEFAULT_CONFIG.delegationDepthFloor).toBe(null);
+    expect(DEFAULT_CONFIG.delegationDepthFraction).toBe(0.6);
+    expect(validateConfig({ version: 5, delegationDepthFloor: null })).toMatchObject({ ok: true, config: { delegationDepthFloor: null } });
     expect(validateConfig({ version: 5, delegationDepthFloor: 0 })).toMatchObject({ ok: true, config: { delegationDepthFloor: 0 } });
+    expect(validateConfig({ version: 5, delegationDepthFloor: 300_000 })).toMatchObject({ ok: true, config: { delegationDepthFloor: 300_000 } });
+    expect(validateConfig({ version: 5, delegationDepthFraction: 0.3 })).toMatchObject({ ok: true, config: { delegationDepthFraction: 0.3 } });
+    for (const edge of [0.25, 0.95]) expect(validateConfig({ version: 5, delegationDepthFraction: edge })).toMatchObject({ ok: true, config: { delegationDepthFraction: edge } });
     // The two shapes are configured independently and no longer agree: Gate A ships atomic because the composite
     // question admitted 0 of 61 real prompts offline, while Gate B's atomic shape has one end-to-end observation.
     expect(DEFAULT_CONFIG.admissionQuestionShape).toBe('atomic');
@@ -88,6 +97,13 @@ describe('validateConfig', () => {
     ['depth floor type', { version: 5, delegationDepthFloor: '300k' }, 'delegationDepthFloor must be'],
     ['negative depth floor', { version: 5, delegationDepthFloor: -1 }, 'delegationDepthFloor must be'],
     ['fractional depth floor', { version: 5, delegationDepthFloor: 300_000.5 }, 'delegationDepthFloor must be'],
+    ['depth fraction type', { version: 5, delegationDepthFraction: '0.6' }, 'delegationDepthFraction must be'],
+    ['depth fraction zero', { version: 5, delegationDepthFraction: 0 }, 'delegationDepthFraction must be'],
+    // #48 review: small enough to turn the derived floor into (nearly) nothing on a 100K window.
+    ['depth fraction below 0.25', { version: 5, delegationDepthFraction: 0.001 }, 'delegationDepthFraction must be'],
+    ['depth fraction above 0.95', { version: 5, delegationDepthFraction: 0.99 }, 'delegationDepthFraction must be'],
+    ['depth fraction one', { version: 5, delegationDepthFraction: 1 }, 'delegationDepthFraction must be'],
+    ['depth fraction above one', { version: 5, delegationDepthFraction: 1.5 }, 'delegationDepthFraction must be'],
     ['admission shape', { version: 5, admissionQuestionShape: 'fanout' }, 'admissionQuestionShape must be'],
     ['admission shape null', { version: 5, admissionQuestionShape: null }, 'admissionQuestionShape must be'],
     // A19: absence defaults to hierarchy, an explicit wrong value is an error -- the same rule as the two shapes above.
@@ -134,5 +150,26 @@ describe('loadConfig', () => {
     expect(loadConfig({ HOME: join(tmp, 'nonexistent') })).toEqual({ ok: true, config: DEFAULT_CONFIG, source: 'defaults' });
     expect(resolveConfigPath({ HOME: '/h' })).toBe(join('/h', '.config', 'jev-gate', 'config.json'));
     expect(resolveConfigPath({ HOME: '/h', JEV_GATE_CONFIG: '/x/y.json' })).toBe('/x/y.json');
+  });
+});
+
+describe('effectiveDepthFloor (#48 P0-1)', () => {
+  it('an explicit config value always wins, whatever the window is', () => {
+    const config = { ...DEFAULT_CONFIG, delegationDepthFloor: 300_000 };
+    expect(effectiveDepthFloor(config, null)).toEqual({ floor: 300_000, source: 'config' });
+    expect(effectiveDepthFloor(config, 1_000_000)).toEqual({ floor: 300_000, source: 'config' });
+    // 0 is a real, explicit value: it disables the floor outright, it is not "absent".
+    expect(effectiveDepthFloor({ ...DEFAULT_CONFIG, delegationDepthFloor: 0 }, 1_000_000)).toEqual({ floor: 0, source: 'config' });
+  });
+
+  it('derives from the window at the configured fraction, capped at the legacy absolute floor', () => {
+    // default fraction 0.6 x a 300K host window: a smaller window still admits some prompts before it compacts.
+    expect(effectiveDepthFloor(DEFAULT_CONFIG, 300_000)).toEqual({ floor: 180_000, source: 'window_fraction' });
+    // A 1M-window host keeps exactly the old 300K behaviour: min(LEGACY_DEPTH_FLOOR, 0.6 x 1,000,000) = 300,000.
+    expect(effectiveDepthFloor(DEFAULT_CONFIG, 1_000_000)).toEqual({ floor: LEGACY_DEPTH_FLOOR, source: 'window_fraction' });
+  });
+
+  it('falls back to the legacy absolute floor when the window is unknown', () => {
+    expect(effectiveDepthFloor(DEFAULT_CONFIG, null)).toEqual({ floor: LEGACY_DEPTH_FLOOR, source: 'fallback_absolute' });
   });
 });

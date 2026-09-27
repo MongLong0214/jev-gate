@@ -34,10 +34,12 @@ import {
   patchAgentInput,
   renderAdditionalContext,
   renderPreToolUseOutput,
+  renderSystemMessage,
   type AgentInput,
   type Eligibility,
 } from './brief.js';
-import { loadConfig, NATIVE_HOOK_TIMEOUT_MS, type Env } from './config.js';
+import { effectiveDepthFloor, loadConfig, NATIVE_HOOK_TIMEOUT_MS, type Env } from './config.js';
+import { readHostCompactWindow } from './host-window.js';
 import {
   buildLeanRequest,
   composeFullPacket,
@@ -123,6 +125,7 @@ import {
   type PriorAttemptSummary,
 } from './plan.js';
 import { openTraceDir, type TraceWriter } from './trace.js';
+import { appendLiveness, LIVENESS_WINDOW, readLiveness } from './liveness.js';
 import type { ConfigV5, DenyReason, ErrorCode, ExecutionShape, HookInput, JobGeneration, JobState, LeanPending, ModelAgreement, Plan, PlannedTask, Receipt, Reservation, RoutingMode, Tier } from './types.js';
 import { agentForTier, LEAN_EXECUTOR_AGENT, OWNED_AGENTS, TIERS } from './types.js';
 import { EXECUTION_CONTROL_KEYS, MAX_PROMPT_BYTES } from './brief.js';
@@ -142,10 +145,14 @@ export interface HookDeps {
   startedAt?: number;
 }
 
-/** skip: nothing to do; preserve: a call was seen and left untouched; guidance/patch/deny/context: one JSON object on stdout. */
+/**
+ * skip: nothing to do; preserve: a call was seen and left untouched; guidance/patch/deny/context: one JSON object on
+ * stdout, read by the model. notice (#48 P2): one JSON object on stdout too, but a `systemMessage` the host shows the
+ * user directly and never feeds into model context -- SessionStart's liveness warning is the only source of it.
+ */
 export type HookResult =
   | { kind: 'skip' | 'preserve'; code: ErrorCode | null; stdout: null }
-  | { kind: 'guidance' | 'patch' | 'deny' | 'context'; code: ErrorCode | null; stdout: string };
+  | { kind: 'guidance' | 'patch' | 'deny' | 'context' | 'notice'; code: ErrorCode | null; stdout: string };
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const sha256 = (s: string): string => createHash('sha256').update(s, 'utf8').digest('hex');
@@ -881,6 +888,9 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     // A2: without a prompt identity there is no generation to guard, so the turn stays native.
     if (promptId === null) {
       trace?.write('admission_result', { ...base, attempted: false, known_not_sent: true, decision: { shape: 'direct', decided: false, reason: 'prompt_id_absent', changed_default: false } });
+      // #48 P2: a host that never sends a prompt id would make Gate A unreachable on every turn, which is exactly
+      // what liveness exists to catch, so this counts even though it is not the depth/admission branch below.
+      if (mode === 'auto') appendLiveness(deps.env, { at: new Date().toISOString(), attempted: false, reason: 'prompt_id_absent' });
       return emitContext('UserPromptSubmit', renderDirectGuidance(mode), 'prompt_id_absent');
     }
 
@@ -912,13 +922,16 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
      */
     const depth: DepthReading = readSessionDepth(input.transcript_path);
     const contextTokens = depth.ok ? depth.tokens : null;
-    const depthFacts = { context_tokens: contextTokens, context_depth_read: { bytes: depth.bytesRead, duration_ms: depth.durationMs } };
-    // The forced arm is the bench control variable and is deliberately not floored: it is the only evidence that
-    // exists for what orchestration costs at a given depth, and flooring it would erase the shallow half.
-    const belowFloor = !forced && config.delegationDepthFloor > 0 && depth.ok && depth.tokens < config.delegationDepthFloor;
-    const depthUnreadable = !forced && config.delegationDepthFloor > 0 && !depth.ok;
+    const depthFacts = {
+      context_tokens: contextTokens,
+      context_depth_read: { bytes: depth.bytesRead, duration_ms: depth.durationMs },
+      ...(depth.ok && depth.modelSwitched ? { model_switched: true } : {}),
+    };
+    const nowIso = (): string => new Date().toISOString();
 
     if (forced) {
+      // The forced arm is the bench control variable and is deliberately not floored: it is the only evidence that
+      // exists for what orchestration costs at a given depth, and flooring it would erase the shallow half.
       shape = 'orchestrated';
       reason = mode === 'auto' ? 'admission_forced' : null;
       trace?.write('admission_result', {
@@ -930,65 +943,89 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         // A16: a forced generation is the bench control variable, not a Jev decision, so it never counts as influence.
         decision: { shape, decided: false, reason: mode === 'auto' ? 'admission_forced' : 'mode_native', changed_default: false },
       });
+      // #48 P2: forced never asks Gate A on purpose (A16), so it must not count toward liveness -- that would flag a
+      // running bench control arm as an outage.
     } else if (mode === 'native') {
       // A9: the control arm initializes the same state and guard as auto; only the Jev calls differ.
       trace?.write('admission_result', { ...base, ...depthFacts, attempted: false, known_not_sent: true, forced: false, decision: { shape, decided: false, reason: 'mode_native', changed_default: false } });
+      // Native is a deliberate configuration choice, not an auto-mode admission decision, so it is excluded too.
     } else if (!apiKey) {
       reason = 'key_missing';
       trace?.write('admission_result', { ...base, ...depthFacts, attempted: false, known_not_sent: true, decision: { shape: 'direct', decided: false, reason, changed_default: false } });
-    } else if (depthUnreadable || belowFloor) {
-      // Not knowing the depth is treated as being below it: without the number, the cheaper shape is the native one.
-      reason = belowFloor ? 'depth_below_floor' : 'depth_unknown';
-      trace?.write('admission_result', {
-        ...base,
-        ...depthFacts,
-        attempted: false,
-        known_not_sent: true,
-        forced: false,
-        depth_floor: config.delegationDepthFloor,
-        decision: { shape: 'direct', decided: false, reason, changed_default: false },
-      });
+      appendLiveness(deps.env, { at: nowIso(), attempted: false, reason });
     } else {
       /**
-       * Decision 2: the atomic shape asks read-offs and composes them here as vetoes. It never consults
-       * `admissionConfidenceFloor`, as atomic Gate B never consults `routeConfidenceFloor`; the depth test it applies
-       * is the same one the branch above already passed, so on this path it can only agree.
+       * #48 P0-1: the host's own auto-compaction window is read only here -- the one path (not forced, not native, key
+       * present) that actually applies the depth test at all, so every other branch above pays nothing for it.
        */
-      const atomicAdmission = config.admissionQuestionShape === 'atomic';
-      const admissionKeys: string[] = atomicAdmission ? Object.keys(ADMISSION_FACT_QUESTIONS) : ['execution'];
-      // The explicit return type is what lets one call site carry both shapes: callGate cannot infer Q from a union.
-      const admissionRequest = (): JevRequest<AdmissionState, Record<string, unknown>> =>
-        atomicAdmission ? buildAtomicAdmissionRequest(prompt, config) : buildAdmissionRequest(prompt, config);
-      let admitted: AdmissionDecision | null = null;
-      const gate = await callGate(
-        admissionRequest(),
-        'admission_intent',
-        'admission_result',
-        { prompt_len: prompt.length, prompt_sha256: sha256(prompt), ...depthFacts, depth_floor: config.delegationDepthFloor },
-        admissionKeys,
-        (outcome) => {
-          if (!outcome.ok) return { forced: false, decision: { shape: 'direct', decided: false, reason: outcome.code, changed_default: false } };
-          admitted = atomicAdmission
-            ? decideAdmissionAtomic(outcome.response.answers, contextTokens, config.delegationDepthFloor)
-            : decideAdmission(outcome.response.answers, config.admissionConfidenceFloor);
-          // A17 item 7: without Jev this turn would have been one native conversation.
-          return {
-            forced: false,
-            decision: { shape: admitted.shape, decided: admitted.decided, reason: admitted.reason, changed_default: admitted.decided && admitted.shape === 'orchestrated' },
-            // A21: recorded beside the decision, never inside it. `applied: false` is the whole point of the field:
-            // the configured `admittedShape` still decides, and this says what the request asked for so that a later
-            // run can ask whether following it would have been better.
-            ...(atomicAdmission ? { recommendation: shapeRecommendation(outcome.response.answers) } : {}),
-          };
-        },
-      );
-      if ('blocked' in gate) reason = gate.blocked;
-      else if (!gate.outcome.ok) reason = gate.outcome.code;
-      else if (admitted !== null) {
-        const decision: AdmissionDecision = admitted;
-        shape = decision.shape;
-        reason = decision.reason;
-        confidence = decision.answer?.confidence ?? null;
+      // The session's own model, from the same transcript line the depth came from: with no window configured, the
+      // host compacts at the model's context limit, so a 200K model and a 1M model get different floors.
+      const window = readHostCompactWindow(deps.env, input.cwd ?? null, { model: depth.ok ? depth.model : null, transcriptPath: input.transcript_path ?? null });
+      const { floor, source: floorSource } = effectiveDepthFloor(config, window.tokens);
+      const floorFacts = { depth_floor: floor, depth_floor_source: floorSource, host_window: window.tokens, host_window_source: window.source };
+      // The forced arm never reaches this branch at all (see above), so unlike before, no `!forced` guard is needed.
+      const belowFloor = floor > 0 && depth.ok && depth.tokens < floor;
+      const depthUnreadable = floor > 0 && !depth.ok;
+
+      if (depthUnreadable || belowFloor) {
+        // Not knowing the depth is treated as being below it: without the number, the cheaper shape is the native one.
+        reason = belowFloor ? 'depth_below_floor' : 'depth_unknown';
+        trace?.write('admission_result', {
+          ...base,
+          ...depthFacts,
+          attempted: false,
+          known_not_sent: true,
+          forced: false,
+          ...floorFacts,
+          decision: { shape: 'direct', decided: false, reason, changed_default: false },
+        });
+        appendLiveness(deps.env, { at: nowIso(), attempted: false, reason });
+      } else {
+        /**
+         * Decision 2: the atomic shape asks read-offs and composes them here as vetoes. It never consults
+         * `admissionConfidenceFloor`, as atomic Gate B never consults `routeConfidenceFloor`; the depth test it applies
+         * is the same one the branch above already passed, so on this path it can only agree.
+         */
+        const atomicAdmission = config.admissionQuestionShape === 'atomic';
+        const admissionKeys: string[] = atomicAdmission ? Object.keys(ADMISSION_FACT_QUESTIONS) : ['execution'];
+        // The explicit return type is what lets one call site carry both shapes: callGate cannot infer Q from a union.
+        const admissionRequest = (): JevRequest<AdmissionState, Record<string, unknown>> =>
+          atomicAdmission ? buildAtomicAdmissionRequest(prompt, config) : buildAdmissionRequest(prompt, config);
+        let admitted: AdmissionDecision | null = null;
+        const gate = await callGate(
+          admissionRequest(),
+          'admission_intent',
+          'admission_result',
+          { prompt_len: prompt.length, prompt_sha256: sha256(prompt), ...depthFacts, ...floorFacts },
+          admissionKeys,
+          (outcome) => {
+            if (!outcome.ok) return { forced: false, decision: { shape: 'direct', decided: false, reason: outcome.code, changed_default: false } };
+            admitted = atomicAdmission
+              ? decideAdmissionAtomic(outcome.response.answers, contextTokens, floor)
+              : decideAdmission(outcome.response.answers, config.admissionConfidenceFloor);
+            // A17 item 7: without Jev this turn would have been one native conversation.
+            return {
+              forced: false,
+              decision: { shape: admitted.shape, decided: admitted.decided, reason: admitted.reason, changed_default: admitted.decided && admitted.shape === 'orchestrated' },
+              // A21: recorded beside the decision, never inside it. `applied: false` is the whole point of the field:
+              // the configured `admittedShape` still decides, and this says what the request asked for so that a later
+              // run can ask whether following it would have been better.
+              ...(atomicAdmission ? { recommendation: shapeRecommendation(outcome.response.answers) } : {}),
+            };
+          },
+        );
+        // #48 P2: `'outcome' in gate` is the one place that tells whether a Gate A request was actually attempted --
+        // `'blocked' in gate` means callGate itself declined to send it (bad request, byte cap, etc).
+        const attempted = 'outcome' in gate;
+        if ('blocked' in gate) reason = gate.blocked;
+        else if (!gate.outcome.ok) reason = gate.outcome.code;
+        else if (admitted !== null) {
+          const decision: AdmissionDecision = admitted;
+          shape = decision.shape;
+          reason = decision.reason;
+          confidence = decision.answer?.confidence ?? null;
+        }
+        appendLiveness(deps.env, { at: nowIso(), attempted, reason });
       }
     }
 
@@ -1825,6 +1862,22 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     return skip();
   };
 
+  /**
+   * #48 P2: SessionStart is the one moment the gate gets to speak to the user directly and not to the model. It never
+   * blocks and never touches job state -- it only reads the liveness ring (`src/liveness.ts`) written by every
+   * auto-mode admission decision, and says something only when a full window of 50 decisions never once attempted a
+   * Gate A call, which is a stronger claim than a single unlucky run and worth a `doctor` visit. Off, native and lean
+   * modes never populate the ring with auto-mode decisions in the first place, so there is nothing to check there.
+   */
+  const handleSessionStart = (): HookResult => {
+    if (mode !== 'auto') return skip();
+    const recent = readLiveness(deps.env)?.recent ?? [];
+    if (recent.length < LIVENESS_WINDOW || recent.some((e) => e.attempted)) return skip();
+    const text = `jev-gate: the last ${recent.length} auto-mode admission decisions never attempted a Gate A call. Run \`jev-gate doctor\` to check the key, the depth floor and the host window.`;
+    const stdout = renderSystemMessage(text);
+    return stdout === null ? skip() : { kind: 'notice', code: null, stdout };
+  };
+
   /** A6/A7: Stop is observational. It records the terminal outcome and blocks nothing, so it cannot loop. */
   const handleStop = (): HookResult => {
     if (caller.agent_id) return skip('child_caller');
@@ -1856,6 +1909,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
   if (input.hook_event_name === 'PostToolUse') return handlePostToolUse();
   if (input.hook_event_name === 'PostToolUseFailure') return handlePostToolUseFailure();
   if (input.hook_event_name === 'Stop') return handleStop();
+  if (input.hook_event_name === 'SessionStart') return handleSessionStart();
   return skip();
 };
 
@@ -1869,15 +1923,23 @@ const isMainModule = (): boolean => {
   }
 };
 
-if (isMainModule()) {
-  runHook({ stdin: process.stdin, env: process.env, argv: process.argv, startedAt: performance.timeOrigin })
-    .then((result) => {
-      if (result.stdout !== null) process.stdout.write(result.stdout + '\n');
-      if (result.code) process.stderr.write(`jev-gate: ${result.code}\n`);
-      process.exitCode = 0;
-    })
-    .catch(() => {
-      process.stderr.write('jev-gate: internal\n');
-      process.exitCode = 0;
-    });
-}
+/**
+ * #48 P2: the process entrypoint, factored out so `entry.ts` can dynamically import this module and call it, instead
+ * of every hook process paying this file's full static import graph (admission, allocation, plan, coordinator, ...)
+ * on every invocation, including the vast majority that turn out to be `JEV_GATE_MODE=off` and do nothing at all.
+ * Behavior is unchanged from the inline promise chain this replaces: a rejection from `runHook` itself (not a field
+ * inside its result) is the one case treated as internal, everything else is a normal result.
+ */
+export const main = async (): Promise<void> => {
+  const result = await runHook({ stdin: process.stdin, env: process.env, argv: process.argv, startedAt: performance.timeOrigin }).catch(() => null);
+  if (result === null) {
+    process.stderr.write('jev-gate: internal\n');
+    process.exitCode = 0;
+    return;
+  }
+  if (result.stdout !== null) process.stdout.write(result.stdout + '\n');
+  if (result.code) process.stderr.write(`jev-gate: ${result.code}\n`);
+  process.exitCode = 0;
+};
+
+if (isMainModule()) void main();

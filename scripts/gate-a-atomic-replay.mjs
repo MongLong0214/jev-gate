@@ -16,9 +16,13 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..');
 const { callJev } = await import(join(ROOT, 'dist/jev.js'));
 const { buildAtomicAdmissionRequest, decideAdmissionAtomic } = await import(join(ROOT, 'dist/admission.js'));
-const { DEFAULT_CONFIG } = await import(join(ROOT, 'dist/config.js'));
+const { DEFAULT_CONFIG, LEGACY_DEPTH_FLOOR } = await import(join(ROOT, 'dist/config.js'));
 
-const args = { prompts: null, floor: DEFAULT_CONFIG.delegationDepthFloor, out: null };
+// #48 P0-1: DEFAULT_CONFIG.delegationDepthFloor is now null (derive from the host window, see config.ts), so it can
+// no longer seed a numeric CLI default -- this script has no host transcript/window to derive from anyway, only the
+// prompts file's own recorded context_tokens, so LEGACY_DEPTH_FLOOR (the same 300,000 this default always was) is
+// the closest like-for-like number when --floor is not passed explicitly.
+const args = { prompts: null, floor: LEGACY_DEPTH_FLOOR, out: null };
 for (let i = 2; i < process.argv.length; i++) {
   const a = process.argv[i];
   if (a === '--prompts') args.prompts = process.argv[++i];

@@ -35,7 +35,15 @@ const config = (() => {
     return {};
   }
 })();
-/** The shipped default; the file only overrides what it names. */
+/**
+ * The shipped default; the file only overrides what it names. #48 P0-1 made `delegationDepthFloor: null` the actual
+ * shipped default (derive from the host's own compaction window, `effectiveDepthFloor` in src/config.ts), which this
+ * already falls through to 300000 for (`typeof null !== 'number'`). It deliberately does not also derive from the
+ * host window the way the hook and `doctor` do: that derivation is per-session (it depends on each session's own
+ * cwd), while this one FLOOR is printed once across every session in the fleet, so a single derived number here
+ * would not be uniformly comparable across sessions with different windows -- reporting the same legacy constant for
+ * all of them, instead, is the correct simplification for a fleet-wide summary, not a gap.
+ */
 const FLOOR = typeof config.delegationDepthFloor === 'number' ? config.delegationDepthFloor : 300000;
 const MODE = config.mode ?? 'off';
 

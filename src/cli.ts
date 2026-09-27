@@ -5,9 +5,11 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { AUTH_CONFLICT_ENV, isSubscriptionOAuth, parseAuthStatus, subagentModelOverride, type CommandResult } from './auth.js';
-import { loadConfig, MIGRATION_SAMPLE, NATIVE_HOOK_TIMEOUT_MS } from './config.js';
+import { effectiveDepthFloor, LEGACY_DEPTH_FLOOR, loadConfig, MIGRATION_SAMPLE, NATIVE_HOOK_TIMEOUT_MS } from './config.js';
 import { explainDir } from './explain.js';
+import { HOST_WINDOW_MAX, readHostCompactWindow, STANDARD_CONTEXT_WINDOW } from './host-window.js';
 import { jobsDir } from './job.js';
+import { LIVENESS_WINDOW, livenessPath, readLiveness } from './liveness.js';
 import { OWNED_AGENTS } from './types.js';
 
 type Level = 'ok' | 'warn' | 'fail' | 'info';
@@ -60,7 +62,9 @@ const AGENT_EXPECTATIONS: Record<string, { model: string; effort: string | null;
 };
 
 const checkPluginFiles = (): void => {
-  for (const rel of ['dist/hook.js', '.claude-plugin/plugin.json', 'hooks/hooks.json', ...Object.keys(AGENT_EXPECTATIONS).map((f) => `agents/${f}`)]) {
+  // #48 P2: hooks.json/lean.json now command dist/entry.js, which dynamically imports dist/hook.js only when the
+  // gate might be on (src/entry.ts) -- both files have to exist for that indirection to work.
+  for (const rel of ['dist/entry.js', 'dist/hook.js', '.claude-plugin/plugin.json', 'hooks/hooks.json', ...Object.keys(AGENT_EXPECTATIONS).map((f) => `agents/${f}`)]) {
     say(existsSync(join(root, rel)) ? 'ok' : 'fail', `${rel} ${existsSync(join(root, rel)) ? 'present' : 'missing'}`);
   }
   try {
@@ -69,19 +73,22 @@ const checkPluginFiles = (): void => {
     if (isRecord(manifest) && 'hooks' in manifest) say('fail', 'plugin.json declares hooks inline; hooks/hooks.json is auto-discovered, so each hook would run twice');
     const hooks = JSON.parse(readFileSync(join(root, 'hooks/hooks.json'), 'utf8')) as unknown;
     const table = isRecord(hooks) && isRecord(hooks['hooks']) ? hooks['hooks'] : {};
-    // V5: PreToolUse guards every root tool, so it is registered once with no matcher; Stop records the terminal outcome.
+    // V5: PreToolUse guards every root tool, so it is registered once with no matcher; Stop records the terminal
+    // outcome. SessionStart (#48 P2) is the liveness warning -- also no matcher, and also native/auto only in
+    // practice, but hooks.json registers it unconditionally the same as the others; the hook itself no-ops in lean.
     const expected: Array<[string, string | null]> = [
       ['UserPromptSubmit', null],
       ['PreToolUse', null],
       ['PostToolUse', '^Agent$'],
       ['PostToolUseFailure', '^Agent$'],
       ['Stop', null],
+      ['SessionStart', null],
     ];
     for (const [event, matcher] of expected) {
       const groups = Array.isArray(table[event]) ? (table[event] as unknown[]) : [];
       const handlers = groups.flatMap((g) => (isRecord(g) && (matcher === null ? !('matcher' in g) : g['matcher'] === matcher) && Array.isArray(g['hooks']) ? g['hooks'] : []));
-      const ours = handlers.filter((h) => isRecord(h) && h['type'] === 'command' && String(h['command']).includes('dist/hook.js'));
-      say(ours.length === 1 ? 'ok' : 'fail', `hooks.json ${event}${matcher ? ` (${matcher})` : ' (no matcher)'}: ${ours.length} command hook(s) → dist/hook.js (expect 1)`);
+      const ours = handlers.filter((h) => isRecord(h) && h['type'] === 'command' && String(h['command']).includes('dist/entry.js'));
+      say(ours.length === 1 ? 'ok' : 'fail', `hooks.json ${event}${matcher ? ` (${matcher})` : ' (no matcher)'}: ${ours.length} command hook(s) → dist/entry.js (expect 1)`);
       const timeout = ours[0] && isRecord(ours[0]) ? ours[0]['timeout'] : undefined;
       if (ours.length === 1 && timeout !== NATIVE_HOOK_TIMEOUT_MS / 1000) say('warn', `${event} hook timeout ${String(timeout)}s (design assumes ${NATIVE_HOOK_TIMEOUT_MS / 1000}s)`);
     }
@@ -125,11 +132,45 @@ const checkConfig = (): void => {
     return;
   }
   const c = loaded.config;
-  say('ok', `config ${loaded.source}: mode=${c.mode} jevModel=${c.jevModel} deadline=${c.requestDeadlineMs}ms floors={admission:${c.admissionConfidenceFloor},route:${c.routeConfidenceFloor},result:${c.resultConfidenceFloor}} plannerDefaultTier=${c.plannerDefaultTier} models=${JSON.stringify(c.models)} maxParallelWorkers=${c.maxParallelWorkers} guardAllowTools=${JSON.stringify(c.guardAllowTools)} routeQuestionShape=${c.routeQuestionShape} admissionQuestionShape=${c.admissionQuestionShape} delegationDepthFloor=${c.delegationDepthFloor} maxTasksPerPlan=${c.maxTasksPerPlan}`);
+  say('ok', `config ${loaded.source}: mode=${c.mode} jevModel=${c.jevModel} deadline=${c.requestDeadlineMs}ms floors={admission:${c.admissionConfidenceFloor},route:${c.routeConfidenceFloor},result:${c.resultConfidenceFloor}} plannerDefaultTier=${c.plannerDefaultTier} models=${JSON.stringify(c.models)} maxParallelWorkers=${c.maxParallelWorkers} guardAllowTools=${JSON.stringify(c.guardAllowTools)} routeQuestionShape=${c.routeQuestionShape} admissionQuestionShape=${c.admissionQuestionShape} delegationDepthFloor=${c.delegationDepthFloor === null ? 'null (derive from host window)' : c.delegationDepthFloor} delegationDepthFraction=${c.delegationDepthFraction} maxTasksPerPlan=${c.maxTasksPerPlan}`);
   if (c.admissionQuestionShape === 'atomic') say('info', 'admissionQuestionShape=atomic: Gate A asks read-off questions composed in code as vetoes and does not consult admissionConfidenceFloor at all');
-  if (c.delegationDepthFloor === 0) say('warn', 'delegationDepthFloor=0: Gate A is asked on every prompt regardless of how deep the session is. Forced orchestration measured +182% on a fresh session and -57% on a loaded one');
-  else say('info', `delegationDepthFloor=${c.delegationDepthFloor}: a prompt arriving with less context than this stays direct and sends no Gate A request (recorded as depth_below_floor); an unreadable transcript is depth_unknown and also stays direct`);
-  if (c.mode === 'off') say('info', 'mode=off: no guidance, no Jev, no job state, no trace writes. Loaded agent definitions still exist; remove the plugin for the absent-plugin condition');
+  /**
+   * #48 P0-1: doctor resolves the same host window and effective floor the hook resolves on the auto path
+   * (`effectiveDepthFloor` in src/config.ts), so what is printed here is the number that would actually gate the
+   * next real prompt, not the raw config field alone -- `delegationDepthFloor: null` on its own says nothing about
+   * whether the derived floor is usable on this host.
+   */
+  const window = readHostCompactWindow(process.env, process.cwd());
+  const { floor, source: floorSource } = effectiveDepthFloor(c, window.tokens);
+  say('info', `host compaction window: ${window.tokens === null ? `unknown (${window.source})` : `${window.tokens} tokens (${window.source})`}; a launch's --autocompact or --settings flag, MDM policy and server-managed settings are not visible to a hook and can override this`);
+  if (floor === 0) {
+    say('warn', 'effective depth floor is 0: Gate A is asked on every prompt regardless of how deep the session is. Forced orchestration measured +182% on a fresh session and -57% on a loaded one');
+  } else if (window.tokens !== null && floor >= window.tokens) {
+    say(
+      'fail',
+      `effective depth floor ${floor} (${floorSource}) is at or above the host's own compaction window ${window.tokens}: the host compacts the session before this floor can ever be reached, so Gate A is never asked (this is the #48 failure mode)`,
+    );
+  } else if (window.tokens !== null && floor >= Math.floor(0.85 * window.tokens)) {
+    say('warn', `effective depth floor ${floor} (${floorSource}) is within 15% of the host's compaction window ${window.tokens}: most sessions will compact before reaching it`);
+  } else if (window.tokens === null && floorSource === 'fallback_absolute') {
+    // Doctor has no session, so no model: this is the configured half only. At runtime the hook also reads the
+    // session's model from the transcript, which settles most unconfigured sessions (host-window.ts).
+    say(
+      'warn',
+      `no autoCompactWindow is configured where a hook can read it (env, managed, project-local, project, user settings). At runtime the window then comes from the session's model: 1M for Opus 4.7+, Sonnet 5 and Fable on the Anthropic API (floor ${Math.min(LEGACY_DEPTH_FLOOR, Math.floor(c.delegationDepthFraction * HOST_WINDOW_MAX))}), 200K for other models or with CLAUDE_CODE_DISABLE_1M_CONTEXT (floor ${Math.min(LEGACY_DEPTH_FLOOR, Math.floor(c.delegationDepthFraction * STANDARD_CONTEXT_WINDOW))}). When the model does not settle it either (a gateway alias, a native-1M model on Bedrock/Vertex/Foundry), the floor is the fixed ${floor} (${floorSource}), which a 200K session never reaches: set autoCompactWindow, or delegationDepthFloor, to make it explicit`,
+    );
+  } else {
+    say(
+      'info',
+      `effective depth floor: ${floor} (${floorSource}): a prompt arriving with less context than this stays direct and sends no Gate A request (recorded as depth_below_floor); an unreadable transcript is depth_unknown and also stays direct`,
+    );
+  }
+  if (c.mode === 'off') {
+    say('info', 'mode=off: no guidance, no Jev, no job state, no trace writes. Loaded agent definitions still exist; remove the plugin for the absent-plugin condition');
+    // #48 P2 Task 4.4: dist/entry.js's short-circuit removes the gate's *own* import/admission cost, not the host's
+    // per-hook-event process spawn -- that cost is the plugin being registered at all, and only disabling it removes it.
+    say('warn', 'mode=off still starts a node process for every matched hook event (hooks.json/lean.json registration is unconditional): to remove that cost too, disable the plugin with `claude plugin disable jev-gate@<marketplace>`');
+  }
   if (c.mode === 'native') say('info', 'mode=native: guidance + owned profiles + job state and guard when orchestration starts, no Jev request');
   if (c.mode === 'auto') say('info', 'mode=auto: admission, allocation and result gates send the request, the planned task and the worker reply to TypeSafe (may include source excerpts and prior constraints)');
   if (c.mode === 'lean') {
@@ -195,6 +236,23 @@ const checkUserSettings = (): void => {
   }
 };
 
+/**
+ * #48 P2: the same ring SessionStart reads, surfaced in doctor so `jev-gate doctor` alone answers "is Gate A ever
+ * firing" without waiting for a session to start (or for the warning's own 50-decision window to fill first).
+ */
+const checkLiveness = (): void => {
+  const state = readLiveness(process.env);
+  if (state === null) {
+    say('info', `liveness: no record yet at ${livenessPath(process.env)} (written by the first auto-mode admission decision)`);
+    return;
+  }
+  const attempted = state.recent.filter((e) => e.attempted).length;
+  say('info', `liveness: ${state.recent.length}/${LIVENESS_WINDOW} recent auto-mode decisions recorded, ${attempted} attempted a Gate A call`);
+  if (state.recent.length >= LIVENESS_WINDOW && attempted === 0) {
+    say('warn', `liveness: the last ${state.recent.length} auto-mode admission decisions never attempted a Gate A call -- same condition SessionStart's systemMessage warns about`);
+  }
+};
+
 const main = (): void => {
   checkNode();
   checkPluginFiles();
@@ -202,7 +260,8 @@ const main = (): void => {
   checkClaude();
   checkEnv();
   checkUserSettings();
-  say('info', `in Claude Code: /hooks should list five jev-gate entries (UserPromptSubmit, PreToolUse with no matcher, PostToolUse on ^Agent$, PostToolUseFailure on ^Agent$, Stop); the @agent- typeahead should show ${Object.keys(OWNED_AGENTS).join(', ')} once each`);
+  checkLiveness();
+  say('info', `in Claude Code: /hooks should list six jev-gate entries (UserPromptSubmit, PreToolUse with no matcher, PostToolUse on ^Agent$, PostToolUseFailure on ^Agent$, Stop, SessionStart); the @agent- typeahead should show ${Object.keys(OWNED_AGENTS).join(', ')} once each`);
   say('info', `start: JEV_GATE_MODE=auto CLAUDE_CODE_FORK_SUBAGENT=0 CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude --model sonnet --plugin-dir "${root}"  (doctor performed no inference; a passing doctor is not proof of patch support, effort support or model access)`);
   for (const [level, text] of lines) process.stdout.write(`[${level}] ${text}\n`);
   process.exitCode = lines.some(([l]) => l === 'fail') ? 1 : 0;
