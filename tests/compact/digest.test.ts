@@ -183,6 +183,22 @@ describe('buildDigest', () => {
     }
   });
 
+  it('reads a long message of open tags with no close, or of blank lines after its header, in linear time', () => {
+    const names = Array.from({ length: 20000 }, (_, i) => `command-${i.toString(26).replace(/[0-9]/g, (c) => 'qrstuvwxyz'[Number(c)]!)}`);
+    const tags = [...Array.from({ length: 80000 }, () => '<system-reminder>'), ...names.map((n) => `<${n}>`)].join('\n');
+    const header = (() => {
+      const d = buildDigest([user('x'), ...work(30), say('ok')], { budgetChars: 30000 });
+      if (!d.ok) throw new Error(d.reason);
+      return d.result.digest.split('\n')[0]!;
+    })();
+    for (const text of [tags, `${header}${'\n'.repeat(200000)}x`]) {
+      const t0 = performance.now();
+      const d = buildDigest([user(text), ...work(30), say('ok')], { budgetChars: 30000 });
+      expect(performance.now() - t0).toBeLessThan(1000);
+      expect(d.ok).toBe(true);
+    }
+  });
+
   it('grows the tail in linear time', () => {
     const rows = [user('go'), ...Array.from({ length: 16000 }, (_, i) => call('', 'T', {}, String(i % 10))).flat(), say('done')];
     const t0 = performance.now();
@@ -272,18 +288,22 @@ describe('buildDigest', () => {
     expect(asked).not.toContain('▸ ls');
   });
 
-  it('reads a pasted digest with an added instruction as a request, and its own digest back with whitespace around it', () => {
+  it('reads a pasted or altered digest as a request, and its own digest back with only whitespace around it', () => {
     const rows1 = [user('Rename parseRow.'), ...work(30), say('ok')];
     const d1 = buildDigest(rows1, { budgetChars: 30000 });
     if (!d1.ok) throw new Error(d1.reason);
     const pasted = buildDigest([user(`${d1.result.digest}\n\nNow also keep APPENDED_NEEDLE.`), ...work(30), say('ok')], { budgetChars: 30000 });
     if (!pasted.ok) throw new Error(pasted.reason);
     expect(requestsOf(pasted.result.digest)).toContain('APPENDED_NEEDLE');
-    for (const stored of [`\n${d1.result.digest}\n  `, d1.result.digest.replace(/\n\n/g, '\n \n')]) {
-      const again = buildDigest([user(stored), ...work(30), say('ok')], { budgetChars: 30000 });
-      if (!again.ok) throw new Error(again.reason);
-      expect(requestsOf(again.result.digest)).toContain('▸ Rename parseRow.');
-      expect(requestsOf(again.result.digest)).not.toContain('[jev-gate compact]');
+    const again = buildDigest([user(`\n${d1.result.digest}\n  `), ...work(30), say('ok')], { budgetChars: 30000 });
+    if (!again.ok) throw new Error(again.reason);
+    expect(requestsOf(again.result.digest)).toContain('▸ Rename parseRow.');
+    expect(requestsOf(again.result.digest)).not.toContain('[jev-gate compact]');
+    // Changed inside, even by whitespace, it is not taken apart as a digest of this module's: it is read as a request.
+    for (const altered of [d1.result.digest.replace(/\n\n/g, '\n \n'), d1.result.digest.replace('## User requests', '##  User requests')]) {
+      const d = buildDigest([user(altered), ...work(30), say('ok')], { budgetChars: 30000 });
+      if (!d.ok) throw new Error(d.reason);
+      expect(requestsOf(d.result.digest)).toContain('▸ [jev-gate compact]');
     }
   });
 

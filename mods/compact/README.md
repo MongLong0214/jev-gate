@@ -59,7 +59,7 @@ engine's time and usage.
   request; one it added a reminder to still is, and a tag quoted inside a sentence stays part of it. The host does not
   say who wrote a message, so this is read from the text and can be wrong at the edges.
 - **A digest it wrote earlier** (recognized by its whole header line and a last line carrying a checksum of the rest,
-  whitespace aside,
+  exact but for whitespace around the whole message; one changed inside, even by a space, is read as a request,
   and only where a summary opens the conversation, before the first assistant message, so a request that starts with,
   quotes or pastes a digest and adds to it stays a request) is taken apart at the next
   compaction: its previous summary stays the summary, its
@@ -87,8 +87,8 @@ kept and the files it re-attached.
 "≥ host" is against the host with its re-attached files. One of the 40 points, a subagent's, fell back
 (`tail_too_large`). At the default the digest recalled less at 11 of 39 points, by 0.03 to 0.31. Both sides' sizes are
 the rendered text the model holds (the budget's own count, with ids and structure, runs higher). The sample is the week
-before the run and moves as new transcripts arrive, so changes to the module are compared on one sample (the last
-change left every figure here unchanged). Earlier runs on 2026-09-27 counted 12 transcript records rather than 12
+before the run and moves as new transcripts arrive, so changes to the module are compared on one sample (the last two
+changes left every figure unchanged on theirs). Earlier runs on 2026-09-27 counted 12 transcript records rather than 12
 messages, a shorter horizon, and drew higher recall on both sides; they are not comparable with these.
 
 Chained, as if active through whole sessions (each digest built over the previous digest, its tail and the messages
@@ -106,6 +106,8 @@ The same 7-day transcripts put the host's own compactions at a 95-second median 
   answered in 2 to 3 ms (the boundary's `durationMs`), each from 67–69K tokens down to 7.3–9.4K (`preTokens`,
   `postTokens`); at the end the model listed all twelve secret words without re-reading, the early ones from chained
   digests.
+- The host stored each digest byte for byte: the transcript's text had exactly the length the hook logged (5,096,
+  9,322 and 13,554 characters), which the exact checksum relies on.
 - The same twelve files read in one turn of parallel calls make a single exchange over twice the budget: the hook
   defers, and the engine's own path declines as well ("no assistant messages in summarize set"), so that request goes
   out uncompacted, as it would without the hook.
