@@ -1668,9 +1668,12 @@ export const ingestRouterLog = (cell: CellRecord, logPath: string): void => {
   if (r.log !== null && !cell.router_expected) return;
   if (r.log === null) r.log = 'read';
   const lines = raw.split('\n');
-  // The final split element from a trailing newline is not a line; a genuinely truncated last write is real content
-  // that fails JSON.parse below and is counted, never silently dropped.
-  if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+  // The host ends every debug line with a newline (all eight host-obs-2026-09-27 logs do), so a last element that is
+  // not empty is a write the session never finished. It is counted as unparsable without being read, rather than
+  // tested for the `jev-router ` prefix: cut short, it can lack even the full prefix (`jev-ro`), and a prefix-only
+  // test would pass it over as host chatter and let a sent request's missing line read as a known zero.
+  const tail = lines.pop();
+  if (tail !== undefined && tail !== '') r.unparsable_lines++;
   // A `late` reply's usage belongs to the sent attempt that asked it, joined by (scope, id) -- the same identity the
   // hook logs under, never by count: two attempts under one key are two entries, and only the most recent of them
   // still missing usage is filled in, so a lost reply and a late one can never be swapped for each other.

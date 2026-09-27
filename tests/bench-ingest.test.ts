@@ -519,12 +519,12 @@ describe('L6: a repeated stream message keeps its last complete cumulative usage
 
 describe('#45: Router producer ingestion (jev-router debug log)', () => {
   let n45 = 0;
-  const routerLog = (name: string, lines: string[]): string => {
+  // The host ends every debug line with a newline; `truncated` leaves the last one unterminated, as a session cut
+  // short mid-write does.
+  const routerLog = (name: string, lines: string[], truncated = false): string => {
     const file = join(tmp, 'router-logs', `${name}.log`);
     mkdirSync(join(tmp, 'router-logs'), { recursive: true });
-    // No trailing newline: the final element of the split is real content, not an artifact of a closing "\n", so a
-    // genuinely truncated last write must still be counted rather than silently dropped as an empty trailing line.
-    writeFileSync(file, lines.join('\n'));
+    writeFileSync(file, lines.join('\n') + (truncated ? '' : '\n'));
     return file;
   };
 
@@ -547,7 +547,7 @@ describe('#45: Router producer ingestion (jev-router debug log)', () => {
       'jev-router {this line has the prefix but is not valid JSON',
       // Deliberately truncated: real content that fails to parse, at the very end of the file with no closing brace.
       'jev-router {"event":"root","turn":"t5","sent":true,"usage":{"in',
-    ]);
+    ], true);
     ingestRouterLog(cell, log);
     const r = cell.router;
     expect(r.diagnostic).toEqual({ root_effort: true, root_model: false, spawn_model: true, key: 'k1' });
@@ -639,6 +639,18 @@ describe('#45: Router producer ingestion (jev-router debug log)', () => {
     }
   });
 
+  it('an unterminated last line is a cut-short write and leaves the cost unknown, even when it is too short to carry the prefix', () => {
+    for (const [name, tail] of [['cut-prefix', 'jev-ro'], ['cut-noise', 'plain host debug out']] as const) {
+      const cell = cellFor('router');
+      ingestRouterLog(cell, routerLog(name, ['plain host debug output', tail], true));
+      expect(cell.router).toMatchObject({ log: 'read', unparsable_lines: 1, jev_attempts: 0, jev_input_tokens: null, jev_cost_usd: null, jev_cost_known_subtotal: 0 });
+    }
+    const whole = cellFor('router');
+    ingestRouterLog(whole, routerLog('whole-noise', ['plain host debug output', 'jev-ro']));
+    // Terminated, the same short line is ordinary host output: a complete log with no Router request is a known zero.
+    expect(whole.router).toMatchObject({ unparsable_lines: 0, jev_input_tokens: 0, jev_cost_usd: 0 });
+  });
+
   it('a Router session ended by the timeout or a cancel has an unknown Jev cost, whatever its log shows', () => {
     const logPath = join(tmp, 'router-logs', 'clean.log');
     mkdirSync(dirname(logPath), { recursive: true });
@@ -706,6 +718,16 @@ describe('#45: Router producer ingestion (jev-router debug log)', () => {
       expect(row.total_cost_usd).toBeCloseTo(2, 10);
     });
 
+    it('a Router row the runner never ingested (its block still at the initial zeros) is unobserved, not free', () => {
+      const row = routerRow(ranRouterCell(2));
+      expect(row.router).toMatchObject({ log: null, jev_cost_usd: 0 });
+      expect(row.jev_cost_by_producer.router).toBeNull();
+      expect(row.total_cost_usd).toBeNull();
+      const arm = summarizeArm('router', [row]);
+      expect(arm.router).toMatchObject({ rows_cost_unknown: 1, jev_cost_usd: null, jev_input_tokens: null });
+      expect(arm.total_cost_usd).toBeNull();
+    });
+
     it('a router-expected row with no router block at all (pre-#45 cell) is unobserved, not free', () => {
       const raw = JSON.parse(JSON.stringify(ranRouterCell(2))) as Record<string, unknown>;
       delete raw['router'];
@@ -739,5 +761,24 @@ describe('#45: Router producer ingestion (jev-router debug log)', () => {
     expect(md).toContain('no savings headline');
     expect(md).toContain('opus');
     expect(md).toContain('sonnet');
+  });
+
+  it('renders the Router table for a sole Router cell whose log is missing, with its cost as unknown', () => {
+    const cell = cellFor('router');
+    cell.started = true;
+    ingestRouterLog(cell, join(tmp, 'router-logs', 'never-written.log'));
+    const row = toRowView({ job: 'mini', group: 'g', repetition: 1, arm: 'router', file: '' }, JSON.parse(JSON.stringify(cell)) as Record<string, unknown>);
+    const arm = summarizeArm('router', [row]);
+    expect(arm.router).toMatchObject({ jev_attempts: 0, rows_cost_unknown: 1, jev_cost_usd: null });
+    const report: Report = {
+      schema: 5, accounting: 2, run: 'test-run', generated_at: new Date().toISOString(), plan_schema: 5, planned_rows: 1,
+      independent_units: { jobs: 1, groups: 1 }, arms: [arm], per_job: [{ job: 'mini', arms: [arm] }], comparisons: [],
+      conclusion: { category: 'exploratory router reading', reason: 'test' }, rows: [row], notes: [],
+    };
+    const md = renderMarkdown(report);
+    expect(md).toContain('Router decisions and Jev usage');
+    const routerRowLine = md.split('\n').find((l) => l.startsWith('| router | 0/0/0/0'));
+    expect(routerRowLine).toBeDefined();
+    expect(routerRowLine).toContain('| null (0.000000) |');
   });
 });

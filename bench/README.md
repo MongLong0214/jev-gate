@@ -63,7 +63,10 @@ never double-counted.
 Jev HTTP response body itself included a `usage` object (`mods/router/hooks/client.ts`'s `parseUsage`) — it is never
 invented when absent. A Router cell whose complete log shows no Jev request reports a **known** zero. Its total is
 **unknown**, not zero, when a sent request's usage never arrived, when the log is missing or unreadable, when a Router
-line did not parse, or when the session ended by the timeout or a cancel. The known part is kept as a subtotal.
+line did not parse, when the log's last line has no closing newline (a write cut short, which may be too short even
+to carry the `jev-router ` prefix), when the session ended by the timeout or a cancel, or when the report reads a
+Router cell the runner never ingested. The known part is kept as a subtotal, and any such cell shows the Router table
+on its own, with no activity to count.
 `root_result`'s own `usage` field is the *routed Claude call's* token counts (never priced as Jev cost) — kept only as a
 raw per-step observation, distinct from the Jev request usage above. As of PR #49 (`mods/router/hooks/router.ts`
 `hostSupported`), any `2.1.N` with `N >= 282` is accepted, so on this machine's Claude Code 2.1.283 spawn routing is

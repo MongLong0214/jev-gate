@@ -171,6 +171,8 @@ export interface RouterSummary {
   jev_cost_usd: number | null;
   jev_cost_known_subtotal: number;
   late_events: number;
+  /** Rows whose Router Jev cost is unknown (log missing, unreadable, damaged or never ingested). */
+  rows_cost_unknown: number;
 }
 
 /** Schema-5 observation aggregated over an arm's rows. `rows_observed` says how many rows carried it at all. */
@@ -341,7 +343,9 @@ export const toRowView = (p: PlannedCell, c: Record<string, unknown> | null): Ro
   // (routerOf/leanOf returning null on a raw record that carries no such key at all) is an unobserved producer.
   const legacyCost = money(gate['jev_cost_usd']);
   const leanCost = lean ? lean.jev_cost_usd : c && c['mode'] === 'lean' ? null : 0;
-  const routerCost = router ? router.jev_cost_usd : c && c['router_expected'] === true ? null : 0;
+  // A Router arm's cost is known only from a log the runner read: a block still at its initial zero (a partial run
+  // reported before ingestion, `log: null`) is unobserved, not free.
+  const routerCost = c && c['router_expected'] === true ? (router && router.log === 'read' ? router.jev_cost_usd : null) : router ? router.jev_cost_usd : 0;
   const jev = legacyCost !== null && leanCost !== null && routerCost !== null ? legacyCost + leanCost + routerCost : null;
   // An incomplete legacy total still has a known part; the known subtotal keeps it, priced as the total would be.
   const legacyKnownTokens = money(gate['jev_input_tokens_known']);
@@ -590,6 +594,7 @@ const emptyRouterSummary = (): RouterSummary => ({
   jev_cost_usd: 0,
   jev_cost_known_subtotal: 0,
   late_events: 0,
+  rows_cost_unknown: 0,
 });
 
 /**
@@ -632,8 +637,12 @@ export const summarizeRouter = (rows: RowView[]): RouterSummary => {
     out.jev_attempts += v.jev_attempts;
     out.jev_responses_known += v.jev_responses_known;
     out.jev_input_tokens_known = safeSum([out.jev_input_tokens_known, v.jev_input_tokens_known]);
-    out.jev_input_tokens = safeSum([out.jev_input_tokens, v.jev_input_tokens]);
-    out.jev_cost_usd = out.jev_cost_usd === null || v.jev_cost_usd === null ? null : out.jev_cost_usd + v.jev_cost_usd;
+    // The row's own verdict (`toRowView`), not the block's raw number: a Router block the runner never read still
+    // holds its initial zeros, which are not observations.
+    const rowCost = r.jev_cost_by_producer.router;
+    if (rowCost === null) out.rows_cost_unknown += 1;
+    out.jev_input_tokens = safeSum([out.jev_input_tokens, rowCost === null ? null : v.jev_input_tokens]);
+    out.jev_cost_usd = out.jev_cost_usd === null || rowCost === null ? null : out.jev_cost_usd + rowCost;
     out.jev_cost_known_subtotal += v.jev_cost_known_subtotal;
     out.late_events += v.late_events;
   }
@@ -1063,7 +1072,9 @@ export const renderMarkdown = (r: Report): string => {
       '- Unassessed groups are source Jev never judged: groups past the enumeration window, groups withheld as credentials, tool results that could not be attributed to a call, and groups the provider\u2019s token bound kept out of the request. None of them was judged irrelevant.',
     );
   }
-  if (r.arms.some((a) => a.router.root_assessed > 0 || a.router.spawn_assessed > 0 || a.router.jev_attempts > 0 || a.router.unparsable_lines > 0 || a.router.late_events > 0)) {
+  // An unknown cost shows the table on its own: a Router cell whose log never arrived has no activity to count, and
+  // hiding the table then would hide exactly the row that makes the arm's Jev spend unknown.
+  if (r.arms.some((a) => a.router.root_assessed > 0 || a.router.spawn_assessed > 0 || a.router.jev_attempts > 0 || a.router.unparsable_lines > 0 || a.router.late_events > 0 || a.router.rows_cost_unknown > 0)) {
     L.push(
       '',
       '## Router decisions and Jev usage (observed) -- no savings headline; no criterion is declared for these arms',
