@@ -902,7 +902,9 @@ globalThis.fetch = async (_url, init) => {
     for (const [event, matchers] of Object.entries(hooks.hooks)) {
       for (const m of matchers) {
         for (const h of m.hooks) {
-          expect(h.command).toContain('dist/hook.js');
+          // #48 P2: lean.json commands dist/entry.js now, which dynamically imports dist/hook.js (src/entry.ts) --
+          // the packed hook.js itself is exercised directly by runPacked/runPackedAsync below, over dist/hook.js.
+          expect(h.command).toContain('dist/entry.js');
           expect(h.command).toContain('--lean');
           expect(h.timeout).toBeLessThanOrEqual(5);
         }

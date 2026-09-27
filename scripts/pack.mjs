@@ -65,6 +65,8 @@ const entries =
       ];
 const missing = entries.map(([src]) => src).filter((rel) => !existsSync(join(root, rel)));
 if (profile !== 'router' && !existsSync(join(root, 'dist/hook.js'))) missing.push('dist/hook.js');
+// #48 P2: hooks.json/lean.json now command dist/entry.js, which dynamically imports dist/hook.js -- both must ship.
+if (profile !== 'router' && !existsSync(join(root, 'dist/entry.js'))) missing.push('dist/entry.js');
 if (missing.length) {
   process.stderr.write(`pack: missing ${missing.join(', ')}${profile === 'router' ? '' : ' — run npm run build first'}\n`);
   process.exit(1);

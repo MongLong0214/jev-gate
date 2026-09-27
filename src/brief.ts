@@ -149,3 +149,13 @@ export const renderAdditionalContext = (event: 'UserPromptSubmit' | 'PostToolUse
   const text = JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext } });
   return Buffer.byteLength(text, 'utf8') > MAX_OUTPUT_BYTES ? null : text;
 };
+
+/**
+ * #48 P2: a SessionStart-only notice the host shows the user directly and never feeds back into model context --
+ * contrast `renderAdditionalContext`, whose whole point is the opposite. Used for the liveness warning, which is
+ * about the gate's own health and has no business spending the session's own context budget to report on itself.
+ */
+export const renderSystemMessage = (text: string): string | null => {
+  const out = JSON.stringify({ systemMessage: text });
+  return Buffer.byteLength(out, 'utf8') > MAX_OUTPUT_BYTES ? null : out;
+};

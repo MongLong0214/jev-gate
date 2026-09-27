@@ -245,7 +245,7 @@ Optional config at `~/.config/jev-gate/config.json` (or `JEV_GATE_CONFIG`), `JEV
 { "version": 5, "mode": "off", "jevModel": "jev-1.13.0", "requestDeadlineMs": 3000,
   "admissionConfidenceFloor": 0.8, "routeConfidenceFloor": 0.8, "resultConfidenceFloor": 0.8,
   "plannerDefaultTier": "deep", "maxParallelWorkers": 1, "guardAllowTools": [],
-  "delegationDepthFloor": 300000, "maxTasksPerPlan": 10,
+  "delegationDepthFloor": null, "delegationDepthFraction": 0.6, "maxTasksPerPlan": 10,
   "admissionQuestionShape": "atomic", "routeQuestionShape": "composite",
   "planInterpretation": false,
   "models": { "fast": "haiku", "standard": "sonnet", "deep": "opus", "frontier": "fable" } }
@@ -257,14 +257,31 @@ no account access. The three floors are uncalibrated policy values; `resultConfi
 kept only for config compatibility, since the normal path no longer makes the Gate C call it used to gate.
 `guardAllowTools` adds read-only tools your project needs during orchestration, for example an MCP reader.
 
-The last five keys are optional and default to the values shown, so an existing V5 file keeps its behaviour unedited.
+The last six keys are optional and default to the values shown, so an existing V5 file keeps its behaviour unedited.
 
 `delegationDepthFloor` is how much context your session must already be carrying before Gate A is asked anything at
 all. Below it the turn is direct and no request is sent. It exists because depth, not the request, is what decides
 whether delegating is cheaper: the same job measured +182 % on a fresh session and -57 % on a loaded one. The number is
 read from the session transcript the host passes to the hook, and a transcript that cannot be read counts as below the
-floor. `0` turns the floor off. The 300,000 default is derived from two end-to-end points, not measured at the
-crossing.
+floor. `0` turns the floor off.
+
+The default is `null`, not a fixed number (#48): a floor is only reachable if the host's own auto-compaction window is
+above it, and that window varies by host and session (a 300,000-token window compacts a session before a fixed
+300,000-token floor is ever reached — 1,014 admission decisions measured on this project's own dogfood session were 0
+attempted). With `delegationDepthFloor: null`, the effective floor is derived from whatever window is known:
+`min(300000, floor(delegationDepthFraction × window))` when the window can be read, or the historical fixed 300,000
+when it cannot. `delegationDepthFraction` (default `0.6`) is a policy choice, not a measured crossing — say so if you
+change it. Setting `delegationDepthFloor` to an explicit non-negative integer keeps the old absolute behavior exactly,
+including `0` to disable the floor.
+
+**What the gate reads to find the host's compaction window** (`src/host-window.ts`), in order, first valid value wins:
+the `CLAUDE_CODE_AUTO_COMPACT_WINDOW` environment variable; then `.claude/settings.local.json` and `.claude/settings.json`
+in your project's working directory; then `$CLAUDE_CONFIG_DIR/settings.json` (or `~/.claude/settings.json` if
+`CLAUDE_CONFIG_DIR` is unset). A file only counts if it parses as a JSON object with a positive `autoCompactWindow`;
+anything unreadable, oversized (over 1 MiB) or invalid is skipped, never thrown. Run `node dist/cli.js doctor` to see
+which source it found (or `unknown` if none did) and the effective floor that follows from it — doctor **FAILs** when
+the floor is at or above a known window (Gate A can never be reached), **WARNs** when it is within 15% of a known
+window or when the window is unknown and the fixed fallback applies, and otherwise reports it as `info`.
 
 `maxTasksPerPlan` rejects an accepted plan above that many tasks. It is a backstop against a runaway split rather than
 a budget: every worker pays to be started, a 13-task plan measured +92.5 %, and plans that worked ran 2 to 7.
@@ -337,6 +354,14 @@ above describes the host-smoke session as recorded at the time, not the current 
 
 `doctor` reports configuration and environment issues (auth method, model overrides, launch profile, key presence, the
 six role definitions and their effort fields). It is not proof that patching, effort or model access works on your host.
+It also reports the host compaction window and the effective depth floor derived from it (FAIL/WARN as described
+[above](#try-v5) when the floor cannot realistically be reached), and a liveness check: `<stateRoot>/jev-gate/liveness.json`
+keeps the last 50 auto-mode admission decisions, and doctor WARNs — the same condition a new `SessionStart` hook warns
+about directly in the transcript, via `systemMessage`, so you do not have to run doctor to notice — when all 50 never
+attempted a Gate A call, which is exactly the #48 failure mode this floor change addresses. In `mode: "off"`, doctor
+also WARNs that a hook process still starts per matched event even though the gate itself does nothing once running
+(`src/entry.ts` short-circuits before importing the rest of the gate, but the host still spawns node); disable the
+plugin entirely with `claude plugin disable jev-gate@<marketplace>` to remove that cost too.
 
 `explain` answers the other question -- what the gate then did with a turn:
 

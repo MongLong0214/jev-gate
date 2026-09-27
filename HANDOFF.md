@@ -4,6 +4,57 @@ Everything below is what was actually observed, with the file that proves it. Th
 overstated claims from the original write-up; this one adds the 2026-09-19 measurements, which override several
 figures below and are marked where they do.
 
+## 2026-09-27 — #48 P0-1/P2: depth floor relative to the host window, a liveness alarm, and a thinner idle hook; admission on a real host is still not observed
+
+The fact to fix is in #48: 1,014 admission decisions, 0 attempted, because a fixed 300,000
+`delegationDepthFloor` sits at the same 300,000 value as this host's own `autoCompactWindow`, so the session compacts
+before the floor is ever reached.
+
+**Floor relative to the window (Task 1/2).** `src/host-window.ts` reads `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (env beats
+settings files, observed), then `.claude/settings.local.json`/`settings.json` in the cwd, then user settings.
+`delegationDepthFloor` is now `number | null` (`null` = derive from the window); a new `delegationDepthFraction`
+(default `0.6`) and `effectiveDepthFloor` in `src/config.ts` compute `min(300000, floor(fraction × window))` when the
+window is known, or the historical fixed 300,000 when it is not — the `min` keeps a 1M-window host at exactly the old
+behavior. `handleUserPrompt` resolves the window lazily, only on the path that actually applies the depth test (not
+forced, not native, key present), and every `admission_result` trace record now carries `depth_floor_source`,
+`host_window`, `host_window_source` alongside `depth_floor`. `doctor` prints the same window/floor and FAILs when the
+floor is at or above a known window, WARNs within 15% of it or when the window is unknown and the fixed fallback
+applies.
+
+**Liveness alarm (Task 3).** `src/liveness.ts` keeps a 50-entry ring at `<stateRoot>/jev-gate/liveness.json`
+(job.ts's own write pattern: 0700/0600, tmp+rename, symlink refusal, no lock — a concurrent session may lose an
+update, which is accepted, not fixed), one entry per auto-mode admission decision. A new `SessionStart` hook entry
+warns, via a new `systemMessage` helper in `src/brief.ts` that deliberately never reaches model context, when the
+last 50 decisions never attempted a Gate A call — the exact condition this whole packet exists to fix. `doctor` reports
+the same count.
+
+**Thinner idle hook (Task 4).** `src/entry.ts` (`dist/entry.js`) has no static imports of any gate module; it checks
+`JEV_GATE_MODE=off` or a config file's `mode:"off"` and, only when neither applies, dynamically imports `./hook.js`
+and calls its new exported `main()`. `hooks/hooks.json` and `hooks/lean.json` now point at `dist/entry.js`;
+`dist/hook.js` still runs standalone (its own main-module block still calls the same `main()`).
+
+What was measured (30 runs each, this machine, 2026-09-27; `node -e 0` floor ≈ 20.3ms):
+
+| Path | mean | vs. floor |
+|---|---|---|
+| before: `JEV_GATE_MODE=off node dist/hook.js` | ≈ 33ms | +12–13ms |
+| before: config-file-off, no env, `node dist/hook.js` | ≈ 34ms | +13–14ms |
+| after: same `dist/hook.js` invocations, unchanged | ≈ 33–34ms | +13–14ms |
+| after: `JEV_GATE_MODE=off node dist/entry.js` (the real installed path) | ≈ 28ms | +7.5–8ms |
+| after: config-file-off, no env, `node dist/entry.js` | ≈ 28ms | +8ms |
+
+The entry indirection cuts the gate's own added overhead when off by roughly 40% (≈13ms → ≈7.5ms), about 5–6ms off
+each hook invocation's total wall time. `dist/hook.js` itself was not touched and shows no change — the saving is
+entirely from skipping its import graph. Doctor's `mode:"off"` output now also WARNs that a hook process still starts
+per matched event regardless (registering the plugin at all is the remaining cost) and names
+`claude plugin disable jev-gate@<marketplace>` as the way to remove that too.
+
+**Not observed**: none of this has run on a real host session yet — no live `autoCompactWindow`, no live liveness
+ring reaching 50 entries, no live `SessionStart` notice. All of it is exercised by fakes and temp dirs in
+`tests/host-window.test.ts`, `tests/liveness.test.ts`, `tests/entry.test.ts`, `tests/cli.test.ts`, and the extended
+`tests/hook.test.ts`/`tests/pack.test.ts`. `npm run typecheck && npm test && npm run build && claude plugin
+validate . --strict` all pass.
+
 ## 2026-09-27 — the Router asks for described levels, and moves more work without moving deep work
 
 Tier and effort are now Jev Score questions over described levels (`TIER_LEVELS`), not choices over labels, and
