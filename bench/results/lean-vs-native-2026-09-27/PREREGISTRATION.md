@@ -92,8 +92,10 @@ recency-omitted), packet bytes, whether the root used the suggestion, and execut
    still counts, and its row is kept.
 2. **Quality gates cost, per episode and per pair.** A pair's comparison on an episode is reported only if every
    cell of both arms passes **both** checkers (the measured request and the follow-up).
-3. **Unknown is not zero.** A `jev_lean` cell whose Jev cost is unknown makes that episode's `jev_lean` comparison
-   unreportable. A known subtotal is not substituted for it.
+3. **Unknown is not zero.** A cell counts in a cost comparison only if its complete cost is known: Claude's cost
+   for every request of the episode, and for `jev_lean` also its Jev cost. A cell of any arm whose cost is unknown
+   makes that episode's comparison unreportable for every pair that includes its arm. A known subtotal is never
+   substituted.
 4. **Headline needs two of three episodes** passing rules 2 and 3 for that pair. Otherwise the pair is "not
    adjudicated", and what was measured is still published.
 5. **Nothing under 15 % is quoted**, in either direction.
@@ -108,7 +110,9 @@ recency-omitted), packet bytes, whether the root used the suggestion, and execut
    - If `jev_lean` is not more than 15 % cheaper than `native_auto`, the README's first line says lean did not save
      more than 15 % on these episodes. Under rule 5 no smaller difference is quoted.
    - If it is not more than 15 % cheaper than `recent_packet`, the README says Jev's selection showed no value over
-     recency that this bench can resolve. The recommendation is then the recency handoff, with no Jev request.
+     recency that this bench can resolve. The recommendation is then the recency handoff, with no Jev request, but
+     only if no `recent_packet` cell failed a checker on an episode where every `native_auto` cell passed both.
+     Otherwise the README reports those failures and recommends neither.
 10. **This run changes no default** and is not a release.
 11. **The build is frozen and recorded** (commit sha, case and checker hashes, packet cap).
 

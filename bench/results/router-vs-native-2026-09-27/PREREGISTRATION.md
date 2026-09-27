@@ -79,9 +79,10 @@ assessed/proposed/applied/observed model and effort, skip and stop reasons, spaw
 2. **Quality gates cost, per case and per pair.** A pair's cost comparison on a case is reported only if **every**
    cell of both arms on that case passes its checker. Otherwise that pair on that case reports no cost comparison,
    and its per-cell numbers stay in the record.
-3. **Unknown is not zero.** A `router` cell whose Router cost is unknown (a missing or damaged log, a request whose
-   usage never arrived, `bench/README.md` "What stays unknown") makes that case's comparison for `router`
-   unreportable. It is not filled in with the known subtotal.
+3. **Unknown is not zero.** A cell counts in a cost comparison only if its complete cost is known: Claude's cost
+   from its result, and for `router` also the Router's Jev cost (unknown on a missing or damaged log or a request
+   whose usage never arrived, `bench/README.md` "What stays unknown"). A cell of any arm whose cost is unknown makes
+   that case's comparison unreportable for every pair that includes its arm. A known subtotal is never substituted.
 4. **Headline needs three cases.** A headline for a pair is adjudicated only if at least 3 of the 5 cases pass rules
    2 and 3 for that pair. Otherwise the pair is "not adjudicated" and what was measured is still published.
 5. **Nothing under 15 % is quoted**, in either direction. A median paired difference smaller than that is "no
@@ -101,7 +102,9 @@ assessed/proposed/applied/observed model and effort, skip and stop reasons, spaw
      configuration. Under rule 5 no smaller difference is quoted.
    - If `router` is not more than 15 % cheaper than `router_fixed`, it says that choosing an effort per step showed
      no value over running at `medium` without Jev that this bench can resolve. The recommendation is then the fixed
-     setting, which costs no Jev request and no plugin.
+     setting, which costs no Jev request and no plugin, but only if no `router_fixed` cell failed its checker on a
+     case where every `router_native` cell passed. Otherwise the README reports those failures and recommends
+     neither.
 10. **This run changes no default.** Enabling the Router on the owner's real host, or by default, is a separate
     decision by the owner, recorded separately. A bench result is not a release.
 11. **The build is frozen and recorded.** The commit sha and `frozen_inputs.router_sha256` go in the results README.
