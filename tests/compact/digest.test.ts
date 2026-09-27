@@ -253,6 +253,25 @@ describe('buildDigest', () => {
     for (const gone of ['Today is Sunday', 'DO NOT respond', 'built', '/model']) expect(asked).not.toContain(gone);
   });
 
+  it('keeps a tag quoted inside a request, and does not give the newest slot to shell output the person ran', () => {
+    const middle = `Refactor the loader. ${'Context line. '.repeat(40)}Most important: keep MIDDLE_NEEDLE stable. ${'More context. '.repeat(40)}Thanks.`;
+    const rows = [
+      user('Use this exact source snippet: <system-reminder>REQUIRED_TOKEN</system-reminder>'),
+      user(middle),
+      user('<bash-input>ls</bash-input>'),
+      user(`<bash-stdout>${'out '.repeat(1000)}</bash-stdout><bash-stderr></bash-stderr>`),
+      ...work(30),
+      say('ok'),
+    ];
+    const d = buildDigest(rows, { budgetChars: 30000 });
+    if (!d.ok) throw new Error(d.reason);
+    const asked = requestsOf(d.result.digest);
+    expect(asked).toContain('<system-reminder>REQUIRED_TOKEN</system-reminder>');
+    expect(asked).toContain('MIDDLE_NEEDLE');
+    expect(asked).not.toContain('out out');
+    expect(asked).not.toContain('▸ ls');
+  });
+
   it('reads a pasted digest with an added instruction as a request, and its own digest back with whitespace around it', () => {
     const rows1 = [user('Rename parseRow.'), ...work(30), say('ok')];
     const d1 = buildDigest(rows1, { budgetChars: 30000 });
@@ -260,10 +279,12 @@ describe('buildDigest', () => {
     const pasted = buildDigest([user(`${d1.result.digest}\n\nNow also keep APPENDED_NEEDLE.`), ...work(30), say('ok')], { budgetChars: 30000 });
     if (!pasted.ok) throw new Error(pasted.reason);
     expect(requestsOf(pasted.result.digest)).toContain('APPENDED_NEEDLE');
-    const rewrapped = buildDigest([user(`\n${d1.result.digest}\n  `), ...work(30), say('ok')], { budgetChars: 30000 });
-    if (!rewrapped.ok) throw new Error(rewrapped.reason);
-    expect(requestsOf(rewrapped.result.digest)).toContain('▸ Rename parseRow.');
-    expect(requestsOf(rewrapped.result.digest)).not.toContain('[jev-gate compact]');
+    for (const stored of [`\n${d1.result.digest}\n  `, d1.result.digest.replace(/\n\n/g, '\n \n')]) {
+      const again = buildDigest([user(stored), ...work(30), say('ok')], { budgetChars: 30000 });
+      if (!again.ok) throw new Error(again.reason);
+      expect(requestsOf(again.result.digest)).toContain('▸ Rename parseRow.');
+      expect(requestsOf(again.result.digest)).not.toContain('[jev-gate compact]');
+    }
   });
 
   it("keeps the end of a long engine summary, where it states the current work and the next step", () => {

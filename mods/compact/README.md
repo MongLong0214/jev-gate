@@ -54,9 +54,12 @@ engine's time and usage.
   printed oldest first. A long request or previous summary is cut in the middle, so its end survives: the last line of
   a request is often the instruction, and the engine's summary ends with the current work and the next step.
 - **Requests** are what a user message says once the engine's own additions are cut out: blocks in its tags
-  (`<system-reminder>`, task notifications, command echoes and output) and the caveat it puts before command output. A
-  message the engine wrote alone is not a request; one it added a reminder to still is.
+  (`<system-reminder>`, task notifications, command echoes and output, `!` shell input and output) that start a line,
+  as its own text blocks do, and the caveat it puts before command output. A message the engine wrote alone is not a
+  request; one it added a reminder to still is, and a tag quoted inside a sentence stays part of it. The host does not
+  say who wrote a message, so this is read from the text and can be wrong at the edges.
 - **A digest it wrote earlier** (recognized by its whole header line and a last line carrying a checksum of the rest,
+  whitespace aside,
   and only where a summary opens the conversation, before the first assistant message, so a request that starts with,
   quotes or pastes a digest and adds to it stays a request) is taken apart at the next
   compaction: its previous summary stays the summary, its
@@ -69,28 +72,32 @@ engine's time and usage.
 **Offline, the shipped function over real compactions** (`bench/compact/eval.ts`, 40 seeded auto compactions from the
 past week's local transcripts, main and subagent). Each digest is built from what the engine held at that boundary: the
 records since the previous boundary, with the messages that boundary preserved placed after its summary. The metric is
-the share of referents (paths, SHAs, `#N`, identifiers) that the next 12 assistant turns used in tool inputs and that
+the share of referents (paths, SHAs, `#N`, identifiers) that the next 12 assistant messages used in tool inputs and that
 existed in that input, found in what the model holds afterwards. The host's side counts its summary, the messages it
 kept and the files it re-attached.
 
 | | recall | ≥ host | text (chars) |
 |---|---|---|---|
-| host: summary + kept messages | 0.732 | — | 29,300 |
-| host: the same + re-attached files | 0.766 | — | 43,400 |
-| digest, 30,000 | 0.765 | 24/40 | 30,800 |
-| digest, 40,000 (default) | 0.818 | 28/40 | 40,200 |
-| digest, 50,000 | 0.845 | 34/40 | 49,500 |
+| host: summary + kept messages | 0.721 | — | 32,900 |
+| host: the same + re-attached files | 0.753 | — | 45,800 |
+| digest, 30,000 | 0.712 | 23/39 | 29,300 |
+| digest, 40,000 (default) | 0.767 | 28/39 | 39,000 |
+| digest, 50,000 | 0.816 | 31/39 | 48,700 |
 
-"≥ host" is against the host with its re-attached files. At the default the digest recalled less at 12 of 40 points,
-by 0.08 to 0.19. Both sides' sizes are the rendered text the model holds (the budget's own count, with ids and
-structure, runs higher). The sample is the week before the run, so it moves as new transcripts arrive: three runs on
-2026-09-27 drew host 0.732, 0.792 and 0.766 and digest 0.803, 0.839 and 0.818 at the default, the digest ahead each
-time. Changes to the module are compared on one sample (the last change: 0.819 before, 0.818 after).
+"≥ host" is against the host with its re-attached files. One of the 40 points, a subagent's, fell back
+(`tail_too_large`). At the default the digest recalled less at 11 of 39 points, by 0.03 to 0.31. Both sides' sizes are
+the rendered text the model holds (the budget's own count, with ids and structure, runs higher). The sample is the week
+before the run and moves as new transcripts arrive, so changes to the module are compared on one sample (the last
+change left every figure here unchanged). Earlier runs on 2026-09-27 counted 12 transcript records rather than 12
+messages, a shorter horizon, and drew higher recall on both sides; they are not comparable with these.
 
 Chained, as if active through whole sessions (each digest built over the previous digest, its tail and the messages
-since): 179 later compactions in 12 sessions, host 0.715, digest 0.759 (≥ host at 123). By depth it is even at the
-8th–15th compaction (0.731 vs 0.730) and ahead at the 16th–31st (0.700 vs 0.726) and the 32nd–63rd (0.713 vs 0.789).
-No compaction fell back.
+since): 189 later compactions in 12 sessions, host 0.655, digest 0.665 (≥ host at 115). **The digest does not stay
+ahead with depth:** it is ahead at the 1st–7th compaction (host 0.664–0.680, digest 0.708–0.726), behind at the
+8th–15th (0.654 vs 0.617) and the 16th–31st (0.641 vs 0.614), and ahead again at the 32nd–63rd (0.638 vs 0.687).
+No chained compaction fell back. A larger budget closes the gap: over the same chains the digest came to 0.695 at
+50,000 (even at the 8th–31st), 0.725 at 60,000 (ahead at every depth, 0.682 to 0.776 against 0.638 to 0.680) and
+0.765 at 80,000. At 60,000 a single digest holds about 58,300 characters against the host's 45,800.
 
 The same 7-day transcripts put the host's own compactions at a 95-second median wait each.
 

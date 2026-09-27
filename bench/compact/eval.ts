@@ -1,7 +1,7 @@
 /**
  * Offline check of mods/compact against the host's own compactions: at each real auto compaction in the local
  * transcripts, build the digest from the messages before it and ask how many of the referents (paths, SHAs, #N,
- * identifiers) that the next 12 assistant turns used in tool inputs survive, next to the host's summary and kept
+ * identifiers) that the next 12 assistant messages used in tool inputs survive, next to the host's summary and kept
  * messages. Usage: node bench/compact/eval.ts <outDir> [points] [budget...]
  */
 import { readdirSync, readFileSync, statSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
@@ -72,6 +72,23 @@ const render = (ms: readonly DigestMessage[]): string =>
 
 /** By the engine's own flag rather than by text: every summary in a week of transcripts carried it (187 of 187). */
 const isSummaryRec = (r: Rec): boolean => r.isCompactSummary === true;
+/** The records of the next `n` assistant messages from `from` on: one API message is written as several records. */
+const nextAssistant = (recs: Rec[], from: number, n: number): Rec[] => {
+  const out: Rec[] = [];
+  let last: string | undefined;
+  let count = 0;
+  for (const r of recs.slice(from)) {
+    if (r.type !== 'assistant') continue;
+    const id = r.message?.id ?? r.uuid;
+    if (id !== last) {
+      if (count === n) break;
+      count++;
+      last = id;
+    }
+    out.push(r);
+  }
+  return out;
+};
 /** The summary that opens a stretch after a boundary: before its first assistant record, as the module looks for it. */
 const openingSummaryRec = (seg: Rec[]): number => {
   const first = seg.findIndex((r) => r.type === 'assistant');
@@ -143,10 +160,10 @@ for (const [f, lo, hi] of points) {
   const before = toMessages(heldAt(recs, lo, hi));
   const keep = new Set<string>(recs[hi].compactMetadata?.preservedMessages?.uuids ?? []);
   const post: string[] = recs.filter((r) => keep.has(r.uuid)).flatMap((r) => blocks(r).map((b) => b.text ?? (b.type === 'tool_result' ? resultText(b) : b.type === 'tool_use' ? `${b.name} ${JSON.stringify(b.input)}` : '')));
-  for (const r of recs.slice(hi + 1, hi + 6)) {
-    const s = blocks(r).filter((b) => b.type === 'text').map((b) => b.text).join(' ');
-    if (s.trimStart().startsWith('This session is being continued')) {
-      post.unshift(s);
+  for (const r of recs.slice(hi + 1)) {
+    if (r.type === 'assistant') break;
+    if (isSummaryRec(r)) {
+      post.unshift(blocks(r).filter((b) => b.type === 'text').map((b) => b.text).join(' '));
       break;
     }
   }
@@ -159,11 +176,8 @@ for (const [f, lo, hi] of points) {
   }
   const hostAttached = hostText + '\n' + attached.join('\n');
   const used = new Set<string>();
-  let turns = 0;
-  for (const r of recs.slice(hi + 1)) {
-    if (r.type !== 'assistant') continue;
+  for (const r of nextAssistant(recs, hi + 1, 12)) {
     for (const b of blocks(r)) if (b.type === 'tool_use') for (const x of refs(JSON.stringify(b.input ?? {}))) used.add(x);
-    if (++turns >= 12) break;
   }
   const pre = refs(render(before));
   const want = [...used].filter((x) => pre.has(x));
@@ -217,11 +231,8 @@ for (const [f, spans] of [...byFile].filter(([, h]) => h.length >= 3).sort((a, b
     held = d.ok ? assemble(before, d.result) : before;
     if (k === 0) return;
     const used = new Set<string>();
-    let turns = 0;
-    for (const r of recs.slice(hi + 1)) {
-      if (r.type !== 'assistant') continue;
+    for (const r of nextAssistant(recs, hi + 1, 12)) {
       for (const b of blocks(r)) if (b.type === 'tool_use') for (const x of refs(JSON.stringify(b.input ?? {}))) used.add(x);
-      if (++turns >= 12) break;
     }
     // Referents the whole session had seen by then, so both sides are asked about the same set.
     const seen = refs(recs.slice(0, hi).flatMap((r) => blocks(r).map((b) => (b.type === 'tool_use' ? JSON.stringify(b.input) : b.type === 'tool_result' ? resultText(b) : (b.text ?? '')))).join('\n'));
@@ -231,7 +242,7 @@ for (const [f, spans] of [...byFile].filter(([, h]) => h.length >= 3).sort((a, b
     const host = recs.filter((r) => keep.has(r.uuid)).flatMap((r) => blocks(r).map((b) => b.text ?? (b.type === 'tool_result' ? resultText(b) : JSON.stringify(b.input ?? ''))));
     for (const r of recs.slice(hi + 1)) {
       if (r.type === 'assistant') break;
-      if (r.isCompactSummary || blocks(r).some((b) => (b.text ?? '').startsWith('This session is being continued'))) host.push(blocks(r).map((b) => b.text ?? '').join(' '));
+      if (isSummaryRec(r)) host.push(blocks(r).map((b) => b.text ?? '').join(' '));
       if (r.type === 'attachment' && ['file', 'compact_file_reference'].includes(r.attachment?.type)) host.push(JSON.stringify(r.attachment));
     }
     const recall = (s: string) => want.filter((x) => s.includes(x)).length / want.length;
