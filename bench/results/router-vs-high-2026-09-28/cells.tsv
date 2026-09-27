@@ -1,0 +1,17 @@
+case	arm	rep	checker	total_cost_usd	jev_cost_usd	wall_s	input	cache_creation	cache_read	output	tool_uses	router_effort_answer	router_task_clear	router_patch	router_reason	steps_applied
+quote-pricing	router_native	1	pass	0.220143	0.000000	30.6	14	16498	153913	2866	10	-	-	-	-	-
+quote-pricing	router_native	2	pass	0.192607	0.000000	25.0	12	15823	128973	2009	9	-	-	-	-	-
+quote-pricing	router	1	pass	0.216150	0.000040	33.2	14	16357	154289	2717	9	-	0.94	none	answer_invalid	0
+quote-pricing	router	2	pass	0.178947	0.000040	23.5	12	15069	127437	1641	7	[0.06, 0.93, 0.01]	0.95	medium	applied	6
+quote-pricing	router	3	pass	unknown	unknown	30.4	12	16216	129746	2496	9	-	-	none	timeout	0
+quote-pricing	router_fixed	1	pass	0.183448	0.000000	22.0	12	15365	125598	1768	8	-	-	-	-	-
+quote-pricing	router_fixed	2	pass	0.177199	0.000000	22.2	12	15066	127915	1552	7	-	-	-	-	-
+search-race	router_native	1	pass	0.244196	0.000000	37.5	12	18063	131320	3669	10	-	-	-	-	-
+search-race	router_native	2	pass	0.302459	0.000000	49.2	22	19103	266835	4809	15	-	-	-	-	-
+search-race	router_native	3	pass	0.326372	0.000000	53.3	24	19967	297002	5357	17	-	-	-	-	-
+search-race	router	1	pass	0.319827	0.000041	52.7	24	19453	290733	5296	15	[0, 0.73, 0.27]	0.97	none	low_confidence	0
+search-race	router	2	pass	0.272298	0.000041	44.2	16	18377	183687	4422	13	[0, 0.7, 0.3]	0.98	none	low_confidence	0
+search-race	router	3	pass	0.345308	0.000041	57.8	28	20479	355316	5513	17	[0, 0.69, 0.31]	0.97	none	low_confidence	0
+search-race	router_fixed	1	pass	0.302828	0.000000	48.0	22	19304	266241	4753	16	-	-	-	-	-
+search-race	router_fixed	2	pass	0.251563	0.000000	36.2	16	17770	183694	3630	11	-	-	-	-	-
+search-race	router_fixed	3	pass	0.244114	0.000000	35.4	16	17588	180131	3366	9	-	-	-	-	-
