@@ -227,6 +227,28 @@ describe('buildDigest', () => {
     expect(performance.now() - t0).toBeLessThan(3000);
   });
 
+  it('says the context re-attached after the kept messages is the session own, and still carries a digest under the earlier header', () => {
+    const d = buildDigest([user('go'), ...work(20), say('ok')], { budgetChars: 8000 });
+    if (!d.ok) throw new Error(d.reason);
+    expect(d.result.digest.split('\n')[0]).toContain('not part of any tool result');
+    // The header 622bbdf wrote, before its last sentence; the checksum line is unchanged.
+    const legacyHeader =
+      '[jev-gate compact] This conversation was compacted without a model summary. Below is an extract of the earlier part: the previous summary, the user\'s requests, and a log of earlier steps (oldest first) with each tool call\'s input and, where room allowed, an excerpt of its output. Text cut to fit is marked "[…]"; re-read the source if you need it whole. The conversation continues verbatim after this message.';
+    const fnv = (text: string): string => {
+      let h = 0x811c9dc5;
+      for (const ch of text) {
+        h ^= ch.codePointAt(0)!;
+        h = Math.imul(h, 0x01000193) >>> 0;
+      }
+      return h.toString(16).padStart(8, '0');
+    };
+    const body = `${legacyHeader}\n\n## User requests (oldest first)\n▸ Rename parseRow to readRow in src/a.ts.`;
+    const next = buildDigest([user(`${body}\n\n[jev-gate compact end ${fnv(body)}]`), ...work(20), say('ok')], { budgetChars: 8000 });
+    if (!next.ok) throw new Error(next.reason);
+    expect(requestsOf(next.result.digest)).toContain('\n▸ Rename parseRow to readRow in src/a.ts.');
+    expect(requestsOf(next.result.digest)).not.toContain('▸ [jev-gate compact');
+  });
+
   it('takes a summary only where one opens the conversation, so a later request quoting one stays a request', () => {
     const rows1 = [user('Rename parseRow.'), ...work(30), say('ok')];
     const d1 = buildDigest(rows1, { budgetChars: 30000 });

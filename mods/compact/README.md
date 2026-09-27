@@ -137,3 +137,17 @@ When a `/compact` in a resumed headless session was answered by this hook, the h
 its pre-compaction parent: the next `--resume` followed that link and sent the whole old conversation (43.7K tokens,
 all of it read from cache). Auto compactions, in a fresh or a resumed process, linked correctly in every probe. The
 cause is in the host's transcript writer, not in what the hook returns.
+
+## Host placement: the session's own context lands after the kept messages
+
+For its own compaction the engine re-attaches the session's instructions and context (CLAUDE.md files, date,
+reminders) ahead of its summary. For messages a hook hands up it appends them after the last one, so behind the kept
+tail they arrive inside the turn that carries the last tool result. The result type has no field to place them.
+
+On the installed host (2.1.283, Sonnet, the owner's full settings, `CLAUDE_CODE_AUTO_COMPACT_WINDOW=120000`, the
+twelve-file probe): under the earlier header, after the first auto compaction the model said the tool output "carried a
+large injected system-reminder block presenting itself as global CLAUDE.md orchestration rules", set it aside and ended
+its turn after 6 turns and 3 of the 12 files. The header's last sentence now says what that context is. Two runs with
+it read all twelve files over 21 turns, with 4 auto compactions answered by the hook each, and listed the twelve
+secret words in order; neither called the re-attached context injected. Digests written under the earlier header are
+still recognized by the header's first sentence and the checksum, so a session that crosses an upgrade keeps chaining.

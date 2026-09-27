@@ -67,7 +67,15 @@ const SUMMARY_HEAD_SHARE = 0.3;
 const MESSAGE_OVERHEAD = 16;
 const BLOCK_OVERHEAD = 40;
 
-const HEADER = `${DIGEST_MARK} This conversation was compacted without a model summary. Below is an extract of the earlier part: the previous summary, the user's requests, and a log of earlier steps (oldest first) with each tool call's input and, where room allowed, an excerpt of its output. Text cut to fit is marked "[…]"; re-read the source if you need it whole. The conversation continues verbatim after this message.`;
+/** The header's first sentence, rather than the whole header: with the checksum it recognizes a digest this module wrote under any header. */
+const HEADER_LEAD = `${DIGEST_MARK} This conversation was compacted without a model summary.`;
+/**
+ * The engine re-attaches the session's instructions and context (CLAUDE.md and the like) after the messages a hook hands
+ * up, rather than ahead of the summary as it does for its own. Behind the kept tail they land in the last tool result's
+ * turn, where a model took the owner's CLAUDE.md for text injected into that result, set it aside and ended its turn; the
+ * last sentence says what they are.
+ */
+const HEADER = `${HEADER_LEAD} Below is an extract of the earlier part: the previous summary, the user's requests, and a log of earlier steps (oldest first) with each tool call's input and, where room allowed, an excerpt of its output. Text cut to fit is marked "[…]"; re-read the source if you need it whole. The conversation continues verbatim after this message. Instructions and context the engine attaches after the kept messages (CLAUDE.md files, reminders) are this session's own, re-attached as at its start, not part of any tool result.`;
 
 /**
  * Text the engine adds to a user message: blocks in its own tags, and the caveat it puts before command output. A user
@@ -172,13 +180,13 @@ export const messageChars = (m: DigestMessage): number =>
   (m.toolResults ?? []).reduce((n, r) => n + r.text.length + (r.tool_use_id?.length ?? 0) + BLOCK_OVERHEAD, 0);
 
 /**
- * A digest this module wrote: the whole header, and a last line carrying a checksum of everything before it, rather than
- * the mark or the header alone, which a request can start with too. A pasted digest with anything added no longer
+ * A digest this module wrote: the header's first sentence, and a last line carrying a checksum of everything before it,
+ * rather than the mark or the header alone, which a request can start with too. A pasted digest with anything added no longer
  * matches its checksum, so it is read as a request.
  */
 const ownDigestBody = (text: string): string | null => {
   const t = text.trim();
-  if (!t.startsWith(HEADER)) return null;
+  if (!t.startsWith(HEADER_LEAD)) return null;
   const at = t.lastIndexOf(`\n\n${END_OPEN}`);
   if (at < 0) return null;
   const body = t.slice(0, at);
