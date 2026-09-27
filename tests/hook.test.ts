@@ -1668,6 +1668,32 @@ describe('traces', () => {
     }
   });
 
+  it('#53 review: a pinned retry after a patched planner attempt reports its own pin, not the earlier tier', async () => {
+    const dir = join(tmp, 'trace-plan-retry-pinned');
+    // Deep and frontier must differ for a retry to pin another allowed planner model.
+    const cfg = join(tmp, 'retry-pinned-config.json');
+    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', models: { fast: 'haiku', standard: 'sonnet', deep: 'opus', frontier: 'sonnet' } }));
+    const env = makeEnv({ JEV_GATE_TRACE_DIR: dir, JEV_GATE_CONFIG: cfg });
+    await run(env, promptEvent(), fakeJev());
+    const first = await run(env, plannerPre(), fakeJev());
+    expect(first).toMatchObject({ kind: 'patch' });
+    expect(state(env).current.planner_tier).not.toBeNull();
+    await run(env, plannerPost({ status: 'blocked', reason: 'no store', findings: [] }));
+    const retry = await run(env, plannerPre({ model: 'sonnet' }), fakeJev());
+    expect(retry).toMatchObject({ code: 'pinned' });
+    expect(state(env).current.planner_tier).toBeNull();
+    await run(env, plannerPost({ status: 'blocked', reason: 'still no store', findings: [] }, {
+      tool_input: { subagent_type: 'jev-gate:planner', model: 'sonnet' },
+      tool_response: { status: 'completed', resolvedModel: 'claude-sonnet-5', content: [{ type: 'text', text: fence({ status: 'blocked', reason: 'still no store', findings: [] }) }] },
+    }));
+    const plans = readdirSync(dir)
+      .map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>)
+      .filter((r) => r['phase'] === 'plan');
+    expect(plans).toHaveLength(2);
+    const retried = plans.find((r) => (r['planner_model'] as Record<string, unknown>)['observed'] === 'claude-sonnet-5');
+    expect(retried).toMatchObject({ planner_model: { requested: 'sonnet', agreement: 'unverified' } });
+  });
+
   it('#53 review: a pinned planner call that is never patched records its own pin as the requested model', async () => {
     const dir = join(tmp, 'trace-plan-pinned');
     const env = makeEnv({ JEV_GATE_TRACE_DIR: dir });

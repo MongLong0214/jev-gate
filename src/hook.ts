@@ -1213,7 +1213,9 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       const boundKind: BoundKind = current.plan ? 'replan' : 'planner';
       const counted = countAttempt(current, boundKind, null);
       const shape: ExecutionShape = current.prompt_id === null ? 'direct' : 'orchestrated';
-      const next = reserve({ ...counted, phase: 'planning', shape }, eligibility.toolUseId, {
+      // #53 review: the tier belongs to this attempt. plannerPatch sets it again on every patched path, so a pinned or
+      // native retry after a patched attempt must not report the earlier tier's model as its own.
+      const next = reserve({ ...counted, phase: 'planning', shape, planner_tier: null }, eligibility.toolUseId, {
         role: 'planner',
         taskId: null,
         contractHash: null,
