@@ -1,6 +1,7 @@
 /**
  * The extractive compaction: the conversation before a recent tail becomes one built user message (the digest), and
- * the tail stays as the engine has it (by handle). No model is asked, so a compaction costs no request and no wait.
+ * the tail stays as the engine has it (by handle), its last message rebuilt when it answers calls (CLOSING). No model
+ * is asked, so a compaction costs no request and no wait.
  *
  * The shape is structural so the Node tests and the offline evaluation drive the same function the host runs; the
  * host's `SessionMessage` satisfies it.
@@ -10,13 +11,15 @@ export interface DigestToolUse {
   readonly tool: string;
   readonly input: Readonly<Record<string, unknown>>;
   readonly text?: string;
+  /** The tool's record of an answered call, when the transcript holds one (the host's `ToolUseSummary.result`). */
+  readonly result?: unknown;
 }
 
 export interface DigestMessage {
   readonly role: 'user' | 'assistant';
   readonly text: string;
   readonly toolUses: readonly DigestToolUse[];
-  readonly toolResults?: ReadonlyArray<{ readonly text: string; readonly tool_use_id?: string }>;
+  readonly toolResults?: ReadonlyArray<{ readonly text: string; readonly tool_use_id?: string; readonly isError?: boolean }>;
   readonly handle?: string;
 }
 
@@ -40,7 +43,7 @@ export interface DigestResult {
   readonly headMessages: number;
 }
 
-export type DigestFallback = 'nothing_to_compact' | 'tail_too_large' | 'pending_call' | 'unpaired_result' | 'no_relief';
+export type DigestFallback = 'nothing_to_compact' | 'tail_too_large' | 'pending_call' | 'unpaired_result' | 'opaque_result' | 'no_relief';
 export type DigestOutcome = { ok: true; result: DigestResult } | { ok: false; reason: DigestFallback };
 
 /** Marks a digest this module wrote, so the next compaction carries it forward as the previous summary. */
@@ -175,6 +178,10 @@ export const messageChars = (m: DigestMessage): number =>
  * A digest this module wrote: the whole header, and a last line carrying a checksum of everything before it, rather than
  * the mark or the header alone, which a request can start with too. A pasted digest with anything added no longer
  * matches its checksum, so it is read as a request.
+ *
+ * The checksum is public, so the body is also held to the shape written: the header line, then straight away a section
+ * heading. Taking a digest apart keeps only what its sections hold, and this leaves no text outside them; a request
+ * written to pass the checksum with text between the header and the first heading is read as a request, not emptied.
  */
 const ownDigestBody = (text: string): string | null => {
   const t = text.trim();
@@ -182,6 +189,7 @@ const ownDigestBody = (text: string): string | null => {
   const at = t.lastIndexOf(`\n\n${END_OPEN}`);
   if (at < 0) return null;
   const body = t.slice(0, at);
+  if (body !== HEADER && !FIRST_SECTION.test(body.slice(HEADER.length))) return null;
   return t.slice(at + 2) === END(checksum(body)) ? body : null;
 };
 const isOwnDigest = (text: string): boolean => ownDigestBody(text) !== null;
@@ -293,6 +301,8 @@ const SECTION = {
   steps: '## Earlier steps (oldest first)',
 } as const;
 const REQUEST_PREFIX = '▸ ';
+/** The start a digest body has after its header: a blank line, then one of the headings as a whole line. */
+const FIRST_SECTION = new RegExp(`^\\n\\n(${Object.values(SECTION).map((h) => h.replace(/[()]/g, '\\$&')).join('|')})[ \\t]*(\\n|$)`);
 
 /**
  * A content line that could read as a section heading or a request marker is indented by one space, so a digest parses
@@ -333,20 +343,84 @@ const carried = (text: string): Carried => {
   };
 };
 
-/** The conversation after the compaction: the digest as a built user message, then the kept tail as it came. */
-export const assemble = <M extends DigestMessage>(messages: readonly M[], r: DigestResult): Array<M | { role: 'user'; text: string; toolUses: [] }> => [
-  { role: 'user', text: r.digest, toolUses: [] },
-  ...messages.slice(r.start),
-];
+/**
+ * The line a kept tail that ends in tool results closes with. The engine appends the session's re-attached instructions
+ * and context (CLAUDE.md files, reminders) after the last message a hook hands up, and joins text that follows a tool
+ * result into that result (host 2.1.283), so behind such a tail they read as the tool's output: a model took the
+ * owner's CLAUDE.md there for injected text and stopped. A built message puts its text after its tool results, and the
+ * engine appends after a closing text block rather than into it, so they arrive after this line, outside the results.
+ */
+export const CLOSING = `${DIGEST_MARK} End of the kept messages. What the engine attaches after this line (CLAUDE.md files, reminders) is this session's own context, re-attached as at its start, not part of the tool results above.`;
+
+type BuiltMessage = {
+  role: 'user';
+  text: string;
+  toolUses: [];
+  toolResults?: Array<{ tool_use_id: string; text: string; isError: boolean }>;
+};
+
+/**
+ * The tools whose results hold text alone, so a result rebuilt from its text is the result the model read. A Read is
+ * one unless its path is an image, a PDF or a notebook, which come back as image or document blocks, beside text or
+ * alone: the host picks a Read's kind by the path's extension (2.1.283: png, jpg, jpeg, gif, webp and pdf; notebooks
+ * by ipynb), and when the call's record is at hand its type must say text as well. Any other tool, an MCP tool among
+ * them, may return media, and a last result from one is left to the engine.
+ */
+const TEXT_TOOLS = new Set([
+  'Agent', 'AskUserQuestion', 'Bash', 'BashOutput', 'Edit', 'EnterPlanMode', 'ExitPlanMode', 'Glob', 'Grep', 'KillShell',
+  'ListAgents', 'Monitor', 'MultiEdit', 'NotebookEdit', 'Read', 'SendMessage', 'Skill', 'SubagentHandback', 'Task',
+  'TaskOutput', 'TaskStop', 'TodoWrite', 'ToolSearch', 'WebFetch', 'WebSearch', 'Write',
+]);
+const MEDIA_PATH = /\.(png|jpe?g|gif|webp|bmp|ico|tiff?|heic|avif|svg|pdf|ipynb)$/i;
+const READ_TEXT = new Set(['text', 'file_unchanged']);
+const textOnly = (u: DigestToolUse): boolean => {
+  if (!TEXT_TOOLS.has(u.tool)) return false;
+  if (u.tool !== 'Read') return true;
+  const type = typeof u.result === 'object' && u.result !== null ? (u.result as { type?: unknown }).type : undefined;
+  return !MEDIA_PATH.test(String(u.input.file_path ?? '')) && (type === undefined || READ_TEXT.has(String(type)));
+};
+
+/** The last message when it answers calls: those results, carried whole as text, and then the closing line. */
+const closesWithResults = (m: DigestMessage | undefined): boolean => m?.role === 'user' && (m.toolResults ?? []).length > 0;
+const closed = (m: DigestMessage): BuiltMessage => ({
+  role: 'user',
+  text: m.text.trim() ? `${m.text}\n\n${CLOSING}` : CLOSING,
+  toolUses: [],
+  toolResults: (m.toolResults ?? []).map((r) => ({ tool_use_id: r.tool_use_id!, text: r.text, isError: r.isError === true })),
+});
+
+/**
+ * The conversation after the compaction: the digest as a built user message, then the kept tail as it came, except a
+ * last message that answers calls, which is handed up rebuilt with the closing line after its results.
+ */
+export const assemble = <M extends DigestMessage>(messages: readonly M[], r: DigestResult): Array<M | BuiltMessage> => {
+  const tail: Array<M | BuiltMessage> = messages.slice(r.start);
+  const last = messages[messages.length - 1];
+  if (closesWithResults(last) && tail.length > 0) tail[tail.length - 1] = closed(last!);
+  return [{ role: 'user', text: r.digest, toolUses: [] }, ...tail];
+};
 
 export const buildDigest = (messages: readonly DigestMessage[], options: DigestOptions): DigestOutcome => {
   const budget = options.budgetChars;
+  // The last results are rebuilt from their text, which holds no image or document: one that has no text or no id to
+  // answer, or that answers a call to a tool that may return media, is left to the engine rather than handed up without
+  // it. A result that answers no call at all is the pairing's to refuse (unpaired_result).
+  const last = messages[messages.length - 1];
+  const closes = closesWithResults(last);
+  if (closes) {
+    const uses = new Map(messages.flatMap((m) => (m.role === 'assistant' ? m.toolUses.map((u) => [u.tool_use_id, u] as const) : [])));
+    const opaque = (r: { text: string; tool_use_id?: string }): boolean => {
+      const u = r.tool_use_id ? uses.get(r.tool_use_id) : undefined;
+      return !r.text || !r.tool_use_id || (u !== undefined && !textOnly(u));
+    };
+    if (last!.toolResults!.some(opaque)) return { ok: false, reason: 'opaque_result' };
+  }
   const boundary = tailStart(messages, Math.floor(budget * TAIL_SHARE), budget);
   if (!boundary.ok) return boundary;
   const start = boundary.start;
   const head = messages.slice(0, start);
   const tail = messages.slice(start);
-  const tailChars = tail.reduce((n, m) => n + messageChars(m), 0);
+  const tailChars = tail.reduce((n, m) => n + messageChars(m), 0) + (closes ? CLOSING.length + 2 : 0);
 
   // The message itself, headings, separators and the checksum line are paid for up front; each piece pays for its own
   // prefix and line break.
