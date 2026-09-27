@@ -32,7 +32,16 @@ export type Arm =
   /** JGL-05: the three lean arms. Same model, same normal auto-compact, one packet budget shared by the last two. */
   | 'native_auto'
   | 'recent_packet'
-  | 'jev_lean';
+  | 'jev_lean'
+  /**
+   * #45 offline part: the Router comparison. `router_native` is plain host with nothing enabled (identical to
+   * `native_auto`'s spec, kept as a separate name so a Router run reads as its own three-arm group); `router` loads
+   * the jev-gate-router plugin through Function Hooks; `router_fixed` is the no-Jev alternative, a fixed effort
+   * chosen up front with `--fixed-effort`, so a Router win is not just "effort changed".
+   */
+  | 'router_native'
+  | 'router'
+  | 'router_fixed';
 /** The only variables a measured session inherits; everything else, including the parent's CLAUDE_* settings, is dropped. */
 export const KEEP_ENV: readonly string[] = ['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'LC_ALL', 'TMPDIR', 'TERM', 'TZ', 'SSL_CERT_FILE', 'NODE_EXTRA_CA_CERTS', 'TYPESAFE_API_KEY'];
 /** FAKE_CLAUDE_* is the test double's control channel; a real session has none, so passing it through changes nothing. */
@@ -43,7 +52,19 @@ const keepEnvVar = (key: string): boolean => KEEP_ENV.includes(key) || key.start
 export const ALL_ARMS: readonly Arm[] = ['sonnet_native', 'frontier_native', 'native_hierarchy', 'orchestrated_control', 'frontier_orchestrated', 'jev_hierarchy', 'jev_single', 'jev_forced_orchestration'];
 /** JGL-05: the three arms of the lean comparison. `--arms lean` is shorthand for exactly these. */
 export const LEAN_ARMS: readonly Arm[] = ['native_auto', 'recent_packet', 'jev_lean'];
-export const KNOWN_ARMS: readonly Arm[] = [...ALL_ARMS, ...LEAN_ARMS];
+/** #45: the three arms of the Router comparison. `--arms router` is shorthand for exactly these; not in ALL_ARMS/LEAN_ARMS. */
+export const ROUTER_ARMS: readonly Arm[] = ['router_native', 'router', 'router_fixed'];
+export const KNOWN_ARMS: readonly Arm[] = [...ALL_ARMS, ...LEAN_ARMS, ...ROUTER_ARMS];
+
+/**
+ * #45: the Router plugin options this runner turns on for the `router` arm, frozen here so the plan (buildPlan's
+ * `cli.router_policy`) and the actual per-cell `--settings` file (runClaudeCell) can never drift apart. Everything
+ * else is left at the plugin's own default (mods/router/hooks/config.ts resolveConfig) -- this runner tunes nothing,
+ * it only turns the Router on. The key itself is never here: it stays in the TYPESAFE_API_KEY env var (KEEP_ENV).
+ */
+export const ROUTER_OPTIONS: Readonly<Record<string, boolean>> = { enabled: true, logDecisions: true };
+/** The inline plugin config key `--plugin-dir` loads a settings file under (mods/router/README.md). */
+export const ROUTER_SETTINGS_KEY = 'jev-gate-router@inline';
 
 export interface ArmSpec {
   arm: Arm;
@@ -72,9 +93,21 @@ export interface ArmSpec {
    * accident, and nothing but this flag selects it.
    */
   benchRecent?: true;
+  /**
+   * #45: this arm loads the jev-gate-router plugin through Function Hooks (env `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`,
+   * `--plugin-dir mods/router`, options via a per-cell `--settings` file, `--debug-file` for the decision log). It is
+   * a separate plugin from the legacy jev-gate one, so `plugin`/`mode` stay `false`/`null` for this arm.
+   */
+  routerEnabled?: true;
+  /**
+   * #45: the host's own `--effort` for the root. `router_native` and `router` start at `--base-effort`, the session
+   * the Router is meant to make cheaper; `router_fixed` runs at `--fixed-effort` throughout. There is no default: a
+   * run that selects one of these arms without its level is refused at plan time (see parseArgs).
+   */
+  effort?: string;
 }
 
-export const armSpecs = (frontierModel: string): Record<Arm, ArmSpec> => ({
+export const armSpecs = (frontierModel: string, fixedEffort: string | null = null, baseEffort: string | null = null): Record<Arm, ArmSpec> => ({
   sonnet_native: { arm: 'sonnet_native', rootModel: 'sonnet', plugin: false, mode: null, experimentAdmission: null, diagnostic: false },
   frontier_native: { arm: 'frontier_native', rootModel: frontierModel, plugin: false, mode: null, experimentAdmission: null, diagnostic: false },
   native_hierarchy: { arm: 'native_hierarchy', rootModel: 'sonnet', plugin: true, mode: 'native', experimentAdmission: null, diagnostic: false },
@@ -87,6 +120,13 @@ export const armSpecs = (frontierModel: string): Record<Arm, ArmSpec> => ({
   native_auto: { arm: 'native_auto', rootModel: 'sonnet', plugin: false, mode: null, experimentAdmission: null, diagnostic: false },
   recent_packet: { arm: 'recent_packet', rootModel: 'sonnet', plugin: true, mode: 'lean', experimentAdmission: null, diagnostic: false, benchRecent: true },
   jev_lean: { arm: 'jev_lean', rootModel: 'sonnet', plugin: true, mode: 'lean', experimentAdmission: null, diagnostic: false },
+  // #45. The frontier root at the owner's effort, with nothing else added: the native side of the Router comparison is
+  // the session the Router is meant to make cheaper, rather than a Sonnet one it has little to lower from.
+  router_native: { arm: 'router_native', rootModel: frontierModel, plugin: false, mode: null, experimentAdmission: null, diagnostic: false, ...(baseEffort !== null ? { effort: baseEffort } : {}) },
+  router: { arm: 'router', rootModel: frontierModel, plugin: false, mode: null, experimentAdmission: null, diagnostic: false, routerEnabled: true, ...(baseEffort !== null ? { effort: baseEffort } : {}) },
+  // The effort is filled in by the caller (parseArgs refuses these arms without it); undefined here would read as "the
+  // host's default", which is never true once the arm is actually selected.
+  router_fixed: { arm: 'router_fixed', rootModel: frontierModel, plugin: false, mode: null, experimentAdmission: null, diagnostic: false, ...(fixedEffort !== null ? { effort: fixedEffort } : {}) },
 });
 
 export interface CodingCase {
@@ -135,7 +175,14 @@ export interface Options {
   allowEnvConflicts: boolean;
   /** Case ids to run from the manifest; empty means every case. Staging a run costs less than one big one. */
   only: string[];
+  /** #45: router_fixed's frozen baseline, a level for the host's own `--effort` flag. Null means none was chosen. */
+  fixedEffort: string | null;
+  /** #45: the effort router_native and router start at. Null means none was chosen. */
+  baseEffort: string | null;
 }
+
+/** #45: the closed set `claude --help` documents for `--effort` (Claude Code 2.1.283). */
+export const FIXED_EFFORT_LEVELS: readonly string[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 
 export interface AgentCall {
   tool_use_id: string;
@@ -260,6 +307,73 @@ export interface GateV5 {
   decision_mismatch: number;
 }
 
+/** One decided root step, read from a `root_result` line (mods/router/hooks/router.ts). Not a saving: per-step only. */
+export interface RouterRootStep {
+  turn: string;
+  index: number;
+  /** The patch actually applied to the step (model and/or effort), `{}` when the step ran with nothing changed. */
+  applied: { model?: string; effort?: string | number };
+  observed_model: string | null;
+  /** The routed call's own four token counts (`root_result.usage`) -- never Router's Jev usage. Null when unobserved. */
+  usage: Record<string, number> | null;
+}
+
+/** One decided spawn, read from a `spawn_result` line. `model_mismatch` is the host's own reason code, not inferred. */
+export interface RouterSpawnResult {
+  tool_use_id: string;
+  requested: string;
+  observed: string | null;
+  agent_id: string | null;
+  denied: boolean;
+  model_mismatch: boolean;
+}
+
+/**
+ * #45: what the Router actually did in this cell, read from `jev-router {json}` lines in the cell's debug log
+ * (`ingestRouterLog`). `root_assessed`/`spawn_assessed` count every non-skipped decision attempt (Jev was consulted,
+ * whatever it answered); `root_applied`/`spawn_applied` are the ones that ever reached the host as a step-changing
+ * request -- a step can be assessed and proposed and still never applied (`root_stop`/`spawn_stop`).
+ *
+ * `jev_attempts` is Router's own Jev assessment usage (the HTTP call this Mod makes to decide), never the routed
+ * Claude call's usage (that is `root_applied[].usage`/`spawn`'s ModelUsage, already priced elsewhere as ordinary
+ * Claude spend). No routed turn or spawn has been observed on an installed host (mods/router/README.md), so on a
+ * real run this block's `jev_attempts` is expected to be 0 -- that is a fact about the host verification gate, not
+ * an ingestion bug.
+ */
+export interface RouterV5 {
+  /** Accounting revision, mirroring LeanV5's pattern for a future migration; this bench has produced only 1. */
+  accounting: 1;
+  /** `jev-router `-prefixed lines whose JSON payload failed to parse (truncated tail, corruption, noise). */
+  unparsable_lines: number;
+  diagnostic: { root_effort: boolean; root_model: boolean; spawn_model: boolean; key: string | null } | null;
+  root_assessed: number;
+  root_proposed: number;
+  root_skip_reasons: Record<string, number>;
+  root_stop_reasons: Record<string, number>;
+  root_applied: RouterRootStep[];
+  root_observed: number;
+  root_model_mismatches: number;
+  spawn_assessed: number;
+  spawn_proposed: number;
+  spawn_skip_reasons: Record<string, number>;
+  spawn_stop_reasons: Record<string, number>;
+  spawn_applied: RouterSpawnResult[];
+  spawn_denied: number;
+  spawn_observed: number;
+  spawn_model_mismatches: number;
+  /** Requests actually sent to Jev (an assessment whose `sent` was true), whatever answer came back. */
+  jev_attempts: number;
+  /** Of those, the ones whose input token count came back known -- a count of responses, not of tokens. */
+  jev_responses_known: number;
+  jev_input_tokens_known: number | null;
+  /** Every attempt's input tokens, or null when any sent attempt's usage never came back (enabled, unobserved). */
+  jev_input_tokens: number | null;
+  jev_cost_usd: number | null;
+  jev_cost_known_subtotal: number;
+  /** `late` events: a reply that arrived after the wait ended. Counted so a late answer is visible as a fact. */
+  late_events: number;
+}
+
 export interface CellRecord {
   schema: 5;
   job: string;
@@ -268,6 +382,8 @@ export interface CellRecord {
   repetition: number;
   root_model_requested: string;
   plugin_expected: boolean;
+  /** #45: whether this arm's spec turned the Router on. Read by the report to tell "disabled" from "unobserved". */
+  router_expected: boolean;
   mode: 'native' | 'auto' | 'lean' | null;
   /** Retired V4 field, kept so a reader that knows only V4 cells still parses a V5 one. */
   experimental_allocation: string | null;
@@ -352,6 +468,8 @@ export interface CellRecord {
   } & GateV5;
   /** JGL-05: the lean path's own observations. Empty on an arm that never ran lean. */
   lean: LeanV5;
+  /** #45: the Router path's own observations, read from the cell's debug log. Empty on an arm that never ran it. */
+  router: RouterV5;
   final_snapshot: (SnapshotReport & { path: string }) | null;
   grade: Grade | null;
   grade_history: Array<{ at: string; grade: Grade | null }>;
@@ -389,6 +507,8 @@ export const parseArgs = (argv: string[]): Options => {
     frontierModel: 'fable',
     allowEnvConflicts: false,
     only: [],
+    fixedEffort: null,
+    baseEffort: null,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
@@ -404,11 +524,20 @@ export const parseArgs = (argv: string[]): Options => {
     else if (a === '--allow-env-conflicts') o.allowEnvConflicts = true;
     else if (a === '--arms') {
       const raw = next().trim();
-      // `--arms lean` is the JGL-05 profile: the three arms of that comparison and nothing else.
-      const arms = raw === 'lean' ? [...LEAN_ARMS] : raw.split(',').map((s) => s.trim()).filter(Boolean);
+      // `--arms lean`/`--arms router` are profile shorthands: the three arms of that comparison and nothing else.
+      // `router` is also a single arm's own name, but the profile wins here, exactly as `lean` does for JGL-05.
+      const arms = raw === 'lean' ? [...LEAN_ARMS] : raw === 'router' ? [...ROUTER_ARMS] : raw.split(',').map((s) => s.trim()).filter(Boolean);
       const bad = arms.filter((x) => !(KNOWN_ARMS as readonly string[]).includes(x));
-      if (bad.length || arms.length === 0 || new Set(arms).size !== arms.length) throw new Error(`--arms must be \`lean\` or a unique subset of ${KNOWN_ARMS.join(',')}`);
+      if (bad.length || arms.length === 0 || new Set(arms).size !== arms.length) throw new Error(`--arms must be \`lean\`, \`router\`, or a unique subset of ${KNOWN_ARMS.join(',')}`);
       o.arms = arms as Arm[];
+    } else if (a === '--fixed-effort') {
+      const level = next().trim();
+      if (!FIXED_EFFORT_LEVELS.includes(level)) throw new Error(`--fixed-effort must be one of ${FIXED_EFFORT_LEVELS.join(',')}`);
+      o.fixedEffort = level;
+    } else if (a === '--base-effort') {
+      const level = next().trim();
+      if (!FIXED_EFFORT_LEVELS.includes(level)) throw new Error(`--base-effort must be one of ${FIXED_EFFORT_LEVELS.join(',')}`);
+      o.baseEffort = level;
     } else if (a === '--only') {
       const ids = next().split(',').map((x) => x.trim()).filter(Boolean);
       if (ids.length === 0 || new Set(ids).size !== ids.length) throw new Error('--only must be a unique, non-empty list of case ids');
@@ -432,6 +561,11 @@ export const parseArgs = (argv: string[]): Options => {
   if (!o.cases || !o.out) throw new Error('usage: run.js --cases <manifest> --out <new dir> [--arms a,b] [--repetitions N] [--execute --max-sessions N] | --regrade --cases <manifest> --out <existing run>');
   if (o.execute && o.maxSessions === null) throw new Error('--execute requires --max-sessions');
   if (o.execute && o.regrade) throw new Error('--regrade re-scores an existing run and never executes; drop --execute');
+  // #45: router_fixed with no chosen level would otherwise silently run the host's own default effort, which is
+  // exactly the "just an effort change" confound the arm exists to rule out. Refused here, before anything is planned.
+  if (o.arms.includes('router_fixed') && o.fixedEffort === null) throw new Error('--arms includes router_fixed but no --fixed-effort was given; a fixed baseline is never silently defaulted');
+  // The Router lowers from wherever the session starts, so that start is part of the comparison and never the host's.
+  if ((o.arms.includes('router') || o.arms.includes('router_native')) && o.baseEffort === null) throw new Error('--arms includes router or router_native but no --base-effort was given; the starting effort is never silently defaulted');
   return o;
 };
 
@@ -526,7 +660,7 @@ export interface Plan {
 }
 
 export const buildPlan = (o: Options, cases: CodingCase[], manifestVersion: number): Plan => {
-  const specs = armSpecs(o.frontierModel);
+  const specs = armSpecs(o.frontierModel, o.fixedEffort, o.baseEffort);
   const rows: PlanRow[] = [];
   cases.forEach((cs, i) => {
     for (let rep = 1; rep <= o.repetitions; rep++) rows.push({ job: cs.id, group: cs.group, repetition: rep, arms: shuffledArms(o.arms, o.seed, i, rep) });
@@ -574,6 +708,19 @@ export const buildPlan = (o: Options, cases: CodingCase[], manifestVersion: numb
         omission_confidence: LEAN_OMISSION_CONFIDENCE,
         note: 'Uncalibrated development constants, identical for recent_packet and jev_lean. Recency fills this budget newest-first with no requirement to omit anything.',
       },
+      /**
+       * #45: the Router options and the two efforts, frozen before anything is executed, exactly like the lean packet
+       * policy above. router_native carries no options: it is the plain host at base_effort.
+       */
+      router_policy: {
+        plugin_dir: join(root, 'mods', 'router'),
+        settings_key: ROUTER_SETTINGS_KEY,
+        options: ROUTER_OPTIONS,
+        env: { CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: '1' },
+        fixed_effort: o.fixedEffort,
+        base_effort: o.baseEffort,
+        note: 'Options are the plugin default plus enabled/logDecisions; this runner tunes nothing else. The TypeSafe key is never written here -- it stays in the TYPESAFE_API_KEY env var. base_effort is the --effort router_native and router start at; fixed_effort is router_fixed’s throughout. Each is null when no arm using it was selected.',
+      },
       note: 'Root models are CLI aliases; actual models come from system/init and modelUsage. User-scope settings are excluded for every arm via --setting-sources; user-level CLAUDE.md still loads equally in all arms. --max-turns bounds top-level turns, not every descendant request or subscription spend.',
     },
     effective_config: effective.ok ? effective.config : null,
@@ -592,6 +739,8 @@ interface Preflight {
   env_observed: Record<string, string | null>;
   typesafe_key_present: boolean;
   plugin_hook_present: boolean;
+  /** #45: the Router plugin's own manifest and entry module, checked only when a selected arm actually needs it. */
+  router_plugin_present: boolean;
   errors: string[];
 }
 
@@ -626,12 +775,28 @@ export const preflight = (o: Options, needsJev: boolean): Preflight => {
   const typesafe_key_present = Boolean(process.env['TYPESAFE_API_KEY']);
   if (needsJev && !typesafe_key_present) errors.push('TYPESAFE_API_KEY not set: the Jev treatment arms would only exercise key_missing preservation');
   // The agent definition each selected arm actually needs: the lean arms ship one executor and none of the six roles.
-  const specs = armSpecs(o.frontierModel);
+  const specs = armSpecs(o.frontierModel, o.fixedEffort, o.baseEffort);
   const needed = [...new Set(o.arms.filter((a) => specs[a].plugin).map((a) => (specs[a].mode === 'lean' ? 'executor.md' : 'worker.md')))];
   const plugin_hook_present =
     existsSync(join(o.pluginDir, 'dist', 'hook.js')) && existsSync(join(o.pluginDir, 'hooks', 'hooks.json')) && needed.every((f) => existsSync(join(o.pluginDir, 'agents', f)));
   if (!plugin_hook_present) errors.push(`plugin dir ${o.pluginDir} lacks dist/hook.js, hooks/hooks.json or agents/{${needed.join(',')}}; run npm run build`);
-  return { claude_version: version.status === 0 ? version.stdout.trim() : null, auth, auth_reason, env_conflicts: [...authEnv, ...(override.concrete || override.force ? ['CLAUDE_CODE_SUBAGENT_MODEL'] : [])], env_observed, typesafe_key_present, plugin_hook_present, errors };
+  // #45: the Router is its own plugin, loaded from source (mods/router/hooks/hooks.json points at register.ts
+  // directly, no dist step) -- checked only when a selected arm actually loads it.
+  const routerPluginDir = join(root, 'mods', 'router');
+  const routerNeeded = o.arms.some((a) => specs[a].routerEnabled === true);
+  const router_plugin_present = !routerNeeded || (existsSync(join(routerPluginDir, 'hooks', 'hooks.json')) && existsSync(join(routerPluginDir, 'hooks', 'register.ts')));
+  if (!router_plugin_present) errors.push(`router plugin dir ${routerPluginDir} lacks hooks/hooks.json or hooks/register.ts`);
+  return {
+    claude_version: version.status === 0 ? version.stdout.trim() : null,
+    auth,
+    auth_reason,
+    env_conflicts: [...authEnv, ...(override.concrete || override.force ? ['CLAUDE_CODE_SUBAGENT_MODEL'] : [])],
+    env_observed,
+    typesafe_key_present,
+    plugin_hook_present,
+    router_plugin_present,
+    errors,
+  };
 };
 
 const emptyJevPhase = (): JevPhaseUsage => ({ attempts: 0, tokens: null, tokens_known: 0, cost_usd: null });
@@ -668,6 +833,34 @@ export const emptyLeanV5 = (): LeanV5 => ({
   terminal_status: {},
 });
 
+export const emptyRouterV5 = (): RouterV5 => ({
+  accounting: 1,
+  unparsable_lines: 0,
+  diagnostic: null,
+  root_assessed: 0,
+  root_proposed: 0,
+  root_skip_reasons: {},
+  root_stop_reasons: {},
+  root_applied: [],
+  root_observed: 0,
+  root_model_mismatches: 0,
+  spawn_assessed: 0,
+  spawn_proposed: 0,
+  spawn_skip_reasons: {},
+  spawn_stop_reasons: {},
+  spawn_applied: [],
+  spawn_denied: 0,
+  spawn_observed: 0,
+  spawn_model_mismatches: 0,
+  jev_attempts: 0,
+  jev_responses_known: 0,
+  jev_input_tokens_known: 0,
+  jev_input_tokens: 0,
+  jev_cost_usd: 0,
+  jev_cost_known_subtotal: 0,
+  late_events: 0,
+});
+
 const emptyGateV5 = (): GateV5 => ({
   admission: { attempted: false, known_not_sent: false, forced: false, decided: null, choice: null, confidence: null, decision: null, reason: null },
   guard_denials: 0,
@@ -693,6 +886,7 @@ export const emptyCell = (cs: CodingCase, spec: ArmSpec, repetition: number): Ce
   repetition,
   root_model_requested: spec.rootModel,
   plugin_expected: spec.plugin,
+  router_expected: spec.routerEnabled === true,
   config_override: null,
   mode: spec.mode,
   experimental_allocation: null,
@@ -725,6 +919,7 @@ export const emptyCell = (cs: CodingCase, spec: ArmSpec, repetition: number): Ce
   result: null,
   gate: { prompt_injections: 0, agent_calls: 0, owned_calls: 0, pinned: 0, eligible_attempted: 0, patched: 0, preserved: 0, preserve_reasons: {}, skipped: {}, attempt_unknown: 0, missing_pre_records: 0, jev_model: null, jev_input_tokens: null, jev_input_tokens_known: 0, jev_cost_usd: null, gate_ms_total: null, hint_delivered: 0, target_model_matches: 0, target_model_mismatches: 0, target_model_unknown: 0, ...emptyGateV5() },
   lean: emptyLeanV5(),
+  router: emptyRouterV5(),
   final_snapshot: null,
   grade: null,
   grade_history: [],
@@ -1425,6 +1620,143 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
   g.jev_cost_usd = g.jev_input_tokens === null ? null : g.jev_input_tokens === 0 ? 0 : estimateJevCostUsd(g.jev_model ?? 'jev-1.13.0', g.jev_input_tokens);
 };
 
+const ROUTER_LOG_PREFIX = 'jev-router ';
+/** The Jev model the Router calls (mods/router/hooks/client.ts JEV_MODEL) -- fixed, never per-record. */
+const ROUTER_JEV_MODEL = 'jev-1.13.0';
+
+/**
+ * #45: reads a cell's `--debug-file` output and folds every `jev-router {json}` line into `cell.router`. The debug
+ * log is plain host debug text, not the `trace/*.json` records `ingestTraces` reads, so this is a separate ingestion
+ * over a separate file. Every other debug line -- another category's output, blank lines, a truncated final write --
+ * is tolerated and simply skipped; a line that carries the Router's own prefix but fails to parse as JSON is counted
+ * in `unparsable_lines` rather than silently dropped, so a corrupt log is visible as a fact rather than read as zero
+ * activity.
+ *
+ * Two different `usage` fields exist in these records and this function never conflates them: `root`/`spawn`/`late`
+ * events carry Router's OWN Jev assessment usage (parsed from the Jev HTTP response body in client.ts) and are the
+ * only source for `jev_attempts`/`jev_input_tokens`/`jev_cost_usd` here; `root_result`'s `usage` is the four token
+ * counts of the ROUTED Claude call (already priced as ordinary Claude spend elsewhere) and is kept only as a raw
+ * per-step observation in `root_applied`, per mods/router/README.md: "these are per-step records, not a saving."
+ *
+ * PR #49 (`mods/router/hooks/router.ts` `loggable()`): the host's debug log redacts the value of any key containing
+ * "token" to a bare, unquoted `[REDACTED]`, which is not valid JSON -- so on 2.1.283 every old-format usage line
+ * failed `JSON.parse` outright and was already being counted in `unparsable_lines`, never misread as zero. The
+ * Router now logs `input`/`output`/`cache_read`/`cache_creation` instead of `input_tokens`/`output_tokens`/
+ * `cache_read_input_tokens`/`cache_creation_input_tokens`. `readUsage` below reads the new key first and falls back
+ * to the old one only for a line that still parses as JSON under it (never true for a real redacted log line, but
+ * costs nothing to keep for an older cached log or a hand-built fixture).
+ */
+export const ingestRouterLog = (cell: CellRecord, logPath: string): void => {
+  if (!existsSync(logPath)) return;
+  let raw: string;
+  try {
+    raw = readFileSync(logPath, 'utf8');
+  } catch {
+    return;
+  }
+  const r = cell.router;
+  const lines = raw.split('\n');
+  // The final split element from a trailing newline is not a line; a genuinely truncated last write is real content
+  // that fails JSON.parse below and is counted, never silently dropped.
+  if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+  // A `late` reply's usage belongs to the sent attempt that asked it, joined by (scope, id) -- the same identity the
+  // hook logs under, never by count: two attempts under one key are two entries, and only the most recent of them
+  // still missing usage is filled in, so a lost reply and a late one can never be swapped for each other.
+  const sent: Array<{ key: string; tokens: number | null }> = [];
+  // `input` is PR #49's key; `input_tokens` is read only as a fallback for a line that still parses as JSON under
+  // the pre-#49 name (never true for a genuinely redacted log line -- that fails JSON.parse above and is already
+  // counted in `unparsable_lines`, not read here as zero).
+  const readUsage = (v: unknown): { input_tokens: number | null } | null => (isRecord(v) ? { input_tokens: tokenCount(v['input']) ?? tokenCount(v['input_tokens']) } : null);
+  for (const line of lines) {
+    const idx = line.indexOf(ROUTER_LOG_PREFIX);
+    if (idx === -1) continue; // Not a Router line -- other debug output, blank lines, host chatter.
+    let rec: unknown;
+    try {
+      rec = JSON.parse(line.slice(idx + ROUTER_LOG_PREFIX.length));
+    } catch {
+      r.unparsable_lines++;
+      continue;
+    }
+    if (!isRecord(rec)) {
+      r.unparsable_lines++;
+      continue;
+    }
+    const event = str(rec['event']);
+    // PR #49 adds `answers` (Jev's decision receipt: control/task_clear/ordinary/tier/effort) to `root` and `spawn`
+    // records. It is deliberately ignored here -- never priced, and out of #45's scope, which is cost and mechanism
+    // counts, not decision content. A future ticket that wants it can read `rec['answers']` at these same branches.
+    if (event === 'router') {
+      r.diagnostic = { root_effort: rec['root_effort'] === true, root_model: rec['root_model'] === true, spawn_model: rec['spawn_model'] === true, key: str(rec['key']) };
+    } else if (event === 'root') {
+      const skipped = str(rec['skipped']);
+      if (skipped !== null) {
+        bump(r.root_skip_reasons, skipped);
+        continue;
+      }
+      r.root_assessed++;
+      const patch = isRecord(rec['patch']) ? rec['patch'] : {};
+      if (Object.keys(patch).length > 0) r.root_proposed++;
+      const usage = readUsage(rec['usage']);
+      if (rec['sent'] === true) sent.push({ key: `root:${str(rec['turn']) ?? ''}`, tokens: usage?.input_tokens ?? null });
+    } else if (event === 'root_stop') {
+      const reason = str(rec['reason']) ?? 'unknown';
+      bump(r.root_stop_reasons, reason);
+      if (reason === 'model_mismatch') r.root_model_mismatches++;
+    } else if (event === 'root_result') {
+      const applied = isRecord(rec['applied']) ? (rec['applied'] as { model?: string; effort?: string | number }) : {};
+      const observed = str(rec['observed']);
+      const usage = isRecord(rec['usage']) ? (rec['usage'] as Record<string, number>) : null;
+      r.root_applied.push({ turn: str(rec['turn']) ?? '', index: num(rec['index']) ?? -1, applied, observed_model: observed, usage });
+      if (observed !== null) r.root_observed++;
+    } else if (event === 'spawn') {
+      const skipped = str(rec['skipped']);
+      if (skipped !== null) {
+        bump(r.spawn_skip_reasons, skipped);
+        continue;
+      }
+      r.spawn_assessed++;
+      const patch = isRecord(rec['patch']) ? rec['patch'] : {};
+      if (typeof patch['model'] === 'string') r.spawn_proposed++;
+      const usage = readUsage(rec['usage']);
+      if (rec['sent'] === true) sent.push({ key: `spawn:${str(rec['tool_use_id']) ?? ''}`, tokens: usage?.input_tokens ?? null });
+    } else if (event === 'spawn_stop') {
+      bump(r.spawn_stop_reasons, str(rec['reason']) ?? 'unknown');
+    } else if (event === 'spawn_result') {
+      const requested = str(rec['requested']) ?? '';
+      const denied = rec['denied'] === true;
+      const observed = str(rec['observed']);
+      const mismatch = str(rec['reason']) === 'model_mismatch';
+      r.spawn_applied.push({ tool_use_id: str(rec['tool_use_id']) ?? '', requested, observed, agent_id: str(rec['agent_id']), denied, model_mismatch: mismatch });
+      if (denied) r.spawn_denied++;
+      else r.spawn_observed++;
+      if (mismatch) r.spawn_model_mismatches++;
+    } else if (event === 'late') {
+      r.late_events++;
+      const scope = str(rec['scope']);
+      const key = scope === 'root' ? `root:${str(rec['turn']) ?? ''}` : scope === 'spawn' ? `spawn:${str(rec['tool_use_id']) ?? ''}` : null;
+      const usage = readUsage(rec['usage']);
+      if (key !== null && usage !== null && usage.input_tokens !== null) {
+        for (let i = sent.length - 1; i >= 0; i--) {
+          if (sent[i]!.key === key && sent[i]!.tokens === null) {
+            sent[i]!.tokens = usage.input_tokens;
+            break;
+          }
+        }
+      }
+    }
+    // An event name this ingestion does not recognize (a newer Router build) is neither dropped as noise nor guessed
+    // at: it simply contributes to none of the counts above, which is the same "unknown, not zero" discipline as the
+    // rest of this bench.
+  }
+  r.jev_attempts = sent.length;
+  const known = sent.filter((s) => s.tokens !== null);
+  r.jev_responses_known = known.length;
+  r.jev_input_tokens_known = safeSum(known.map((s) => s.tokens));
+  r.jev_input_tokens = sent.length === 0 ? 0 : known.length === sent.length ? r.jev_input_tokens_known : null;
+  r.jev_cost_known_subtotal = r.jev_input_tokens_known !== null ? (estimateJevCostUsd(ROUTER_JEV_MODEL, r.jev_input_tokens_known) ?? 0) : 0;
+  r.jev_cost_usd = r.jev_input_tokens === null ? null : r.jev_input_tokens === 0 ? 0 : estimateJevCostUsd(ROUTER_JEV_MODEL, r.jev_input_tokens);
+};
+
 const killTree = (child: ChildProcess, signal: NodeJS.Signals): void => {
   try {
     if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, signal);
@@ -1506,6 +1838,27 @@ const runClaudeCell = (cs: CodingCase, spec: ArmSpec, o: Options, pluginDir: str
     if (primed) argv.push('--replay-user-messages');
     else argv.push('--no-session-persistence');
     if (spec.plugin) argv.push('--plugin-dir', pluginDir);
+    /**
+     * #45: the `router` arm loads jev-gate-router -- its own plugin, separate from the legacy jev-gate one above, so
+     * `spec.plugin` stays false and none of the JEV_GATE_* branch above runs for it. Every flag here is verified
+     * against `claude --help` on Claude Code 2.1.283 (see bench/README.md): `--plugin-dir`, `--settings` and
+     * `--debug-file` all exist as documented. The options are ROUTER_OPTIONS, frozen in the plan's
+     * `cli.router_policy` before anything is executed, so this file can never disagree with what the plan recorded.
+     * The TypeSafe key is never written into this file -- it reaches the plugin only through the TYPESAFE_API_KEY
+     * env var, already in KEEP_ENV.
+     */
+    if (spec.routerEnabled) {
+      env['CLAUDE_CODE_ENABLE_FUNCTION_HOOKS'] = '1';
+      envAdded.push('CLAUDE_CODE_ENABLE_FUNCTION_HOOKS');
+      argv.push('--plugin-dir', join(root, 'mods', 'router'));
+      const settingsPath = join(cellDir, 'router-settings.json');
+      writeFileSync(settingsPath, JSON.stringify({ pluginConfigs: { [ROUTER_SETTINGS_KEY]: { options: ROUTER_OPTIONS } } }, null, 2) + '\n', 'utf8');
+      argv.push('--settings', settingsPath);
+      argv.push('--debug-file', join(cellDir, 'router-debug.log'));
+    }
+    // #45: router_fixed's frozen no-Jev alternative -- the host's own --effort flag, chosen up front (parseArgs
+    // refuses this arm without one) so the comparison is not just "effort changed" relative to router_native.
+    if (spec.effort) argv.push('--effort', spec.effort);
     cell.spawn = { argv, cwd: work, env_added: envAdded, env_stripped: strippedEnv };
     cell.dispatch.intent_at = new Date().toISOString();
     writeJsonAtomic(join(cellDir, 'cell.json'), cell);
@@ -1680,12 +2033,12 @@ export const main = async (argv: string[]): Promise<number> => {
   }
   if (existsSync(out)) throw new Error(`--out ${out} already exists; execute creates a new result directory exclusively`);
   const pf = preflight(o, o.arms.some((a) => {
-    const spec = armSpecs(o.frontierModel)[a];
-    return spec.mode === 'auto' || (spec.mode === 'lean' && spec.benchRecent !== true);
+    const spec = armSpecs(o.frontierModel, o.fixedEffort, o.baseEffort)[a];
+    return spec.mode === 'auto' || (spec.mode === 'lean' && spec.benchRecent !== true) || spec.routerEnabled === true;
   }));
   plan.preflight = pf;
   // T8: a plugin arm without a loadable configuration would run on defaults while the plan claimed otherwise.
-  if (plan.effective_config === null && o.arms.some((a) => armSpecs(o.frontierModel)[a].plugin)) {
+  if (plan.effective_config === null && o.arms.some((a) => armSpecs(o.frontierModel, o.fixedEffort, o.baseEffort)[a].plugin)) {
     pf.errors.push(`jev-gate config at ${plan.effective_config_source} does not load: ${String(plan.effective_config_error)}`);
   }
   if (o.maxSessions !== null && o.maxSessions < plan.planned_cells) pf.errors.push(`--max-sessions ${o.maxSessions} is below the ${plan.planned_cells} planned top-level sessions`);
@@ -1700,7 +2053,7 @@ export const main = async (argv: string[]): Promise<number> => {
   const pluginDir = String(plan.frozen_inputs['plugin_copy']);
   const configPath = String(plan.frozen_inputs['config_copy']);
   const frozenBench = String(plan.frozen_inputs['bench_copy']);
-  const specs = armSpecs(o.frontierModel);
+  const specs = armSpecs(o.frontierModel, o.fixedEffort, o.baseEffort);
   let sessions = 0;
   const written: string[] = [];
   for (const row of plan.rows) {
@@ -1758,6 +2111,9 @@ export const main = async (argv: string[]): Promise<number> => {
       }
       // T8: the accounting and the model-match comparison read the same frozen configuration the child ran on.
       ingestTraces(cell, join(cellDir, 'trace'), frozenConfig.models);
+      // #45: a separate file, a separate parser -- the Router's decision log is host debug text, not a trace/*.json
+      // record. Called unconditionally like ingestTraces above; on an arm that never wrote this file it is a no-op.
+      ingestRouterLog(cell, join(cellDir, 'router-debug.log'));
       writeJsonAtomic(join(cellDir, 'cell.json'), cell);
       process.stdout.write(`    exit=${String(cell.exit_code)} elapsed=${String(cell.elapsed_ms)}ms timed_out=${cell.timed_out} model=${cell.init?.model ?? 'unknown'} plugins=${cell.init?.plugins.join(',') || '-'} agents=${cell.agent_calls.map((c) => `${c.subagent_type}${c.has_model ? `(pin:${c.model_param})` : ''}`).join(',') || '-'} jev: attempted=${cell.gate.eligible_attempted} patched=${cell.gate.patched} preserved=${cell.gate.preserved}\n`);
     }

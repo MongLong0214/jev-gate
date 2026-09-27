@@ -1,13 +1,13 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import type { ConfigV5 } from '../src/types.js';
 import type { Report } from '../src/bench/report.js';
-import { loadManifest, maxOverlap, type CellRecord, type Plan } from '../src/bench/run.js';
+import { armSpecs, loadManifest, maxOverlap, type CellRecord, type Plan } from '../src/bench/run.js';
 
 const root = join(__dirname, '..');
 const fake = join(__dirname, 'fixtures', 'fake-claude.mjs');
@@ -44,6 +44,11 @@ beforeAll(() => {
   pluginDir = join(tmp, 'plugin');
   cpSync(dist, join(pluginDir, 'dist'), { recursive: true });
   for (const rel of ['hooks', 'agents', '.claude-plugin']) cpSync(join(root, rel), join(pluginDir, rel), { recursive: true });
+  // #45: run.ts resolves the Router plugin dir as `<root>/mods/router` where `root` is three levels above the
+  // running run.js file. Under this harness that file is compiled into `tmp/dist/bench/run.js`, so `root` here is
+  // `tmp`, not the real repo -- the real mods/router has to be copied alongside the compiled dist for a router-arm
+  // execute test (or preflight's router_plugin_present) to find it at all.
+  cpSync(join(root, 'mods', 'router'), join(tmp, 'mods', 'router'), { recursive: true });
 }, 60_000);
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
@@ -70,7 +75,7 @@ describe('plan', () => {
     expect(bench(['--arms', 'jev_hierarchy,bogus']).status).toBe(1);
     const retired = bench(['--arms', 'jev_hierarchy,fixed_hierarchy']);
     expect(retired.status).toBe(1);
-    expect(retired.stderr).toMatch(/--arms must be `lean` or a unique subset/);
+    expect(retired.stderr).toMatch(/--arms must be `lean`, `router`, or a unique subset/);
     expect(bench(['--arms', 'jev_hierarchy,jev_hierarchy']).status).toBe(1);
     // JGL-05: `lean` is a profile name, and it selects exactly the three arms of that comparison.
     const leanPlan = JSON.parse(bench(['--arms', 'lean']).stdout) as Plan;
@@ -107,6 +112,53 @@ describe('plan', () => {
     const v2 = join(tmp, 'v2.json');
     require('node:fs').writeFileSync(v2, JSON.stringify({ version: 2, cases: [] }));
     expect(() => loadManifest(v2)).toThrow(/version:3\|4\|5/);
+  });
+
+  it('#45: plans `--arms router` -- all three on the frontier root, router at base effort with the policy frozen, each effort refused when missing', () => {
+    // The native side is the session the Router is meant to make cheaper: the frontier root at the owner's effort.
+    const specs = armSpecs('opus', 'high', 'xhigh');
+    expect(specs['router_native']).toEqual({ ...specs['frontier_native'], arm: 'router_native', effort: 'xhigh' });
+    expect(specs['router']).toEqual({ ...specs['router_native'], arm: 'router', routerEnabled: true });
+    expect(specs['router_fixed']).toEqual({ ...specs['router_native'], arm: 'router_fixed', effort: 'high' });
+
+    const refused = bench(['--arms', 'router', '--base-effort', 'xhigh']);
+    expect(refused.status).toBe(1);
+    expect(refused.stderr).toMatch(/--arms includes router_fixed but no --fixed-effort was given/);
+    const noBase = bench(['--arms', 'router', '--fixed-effort', 'high']);
+    expect(noBase.status).toBe(1);
+    expect(noBase.stderr).toMatch(/--arms includes router or router_native but no --base-effort was given/);
+
+    const invalid = bench(['--arms', 'router', '--fixed-effort', 'bogus']);
+    expect(invalid.status).toBe(1);
+    expect(invalid.stderr).toMatch(/--fixed-effort must be one of low,medium,high,xhigh,max/);
+    expect(bench(['--arms', 'router', '--base-effort', 'ultra']).stderr).toMatch(/--base-effort must be one of low,medium,high,xhigh,max/);
+
+    const plan = JSON.parse(bench(['--arms', 'router', '--fixed-effort', 'high', '--base-effort', 'xhigh', '--frontier-model', 'opus']).stdout) as Plan;
+    expect(plan.arms.map((a) => a.arm)).toEqual(['router_native', 'router', 'router_fixed']);
+    expect(plan.arms.map((a) => a.rootModel)).toEqual(['opus', 'opus', 'opus']);
+    expect(plan.arms.map((a) => a.effort)).toEqual(['xhigh', 'xhigh', 'high']);
+    expect(plan.arms.find((a) => a.arm === 'router')?.routerEnabled).toBe(true);
+    expect(plan.arms.find((a) => a.arm === 'router_native')?.routerEnabled).toBeUndefined();
+
+    // The Router options, plugin dir, env and both efforts are frozen in the plan before anything runs -- the same
+    // policy-freeze convention as lean_packet_policy above.
+    const policy = (plan.cli as Record<string, unknown>)['router_policy'] as Record<string, unknown>;
+    // Same three-levels-up resolution quirk as the beforeAll mods/router copy above: under this harness the
+    // compiled run.js lives at `tmp/dist/bench/run.js`, so its own notion of `root` is `tmp`, not this test file's --
+    // and macOS resolves `/var` to `/private/var` by the time Node reports the running module's own path, so the
+    // expected value has to go through the same realpath as run.ts's `import.meta.url` does.
+    expect(policy['plugin_dir']).toBe(join(realpathSync(tmp), 'mods', 'router'));
+    expect(policy['settings_key']).toBe('jev-gate-router@inline');
+    expect(policy['options']).toEqual({ enabled: true, logDecisions: true });
+    expect(policy['env']).toEqual({ CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: '1' });
+    expect(policy['fixed_effort']).toBe('high');
+    expect(policy['base_effort']).toBe('xhigh');
+
+    // router_native and router alone (no router_fixed) never need --fixed-effort, and that baseline is null.
+    const noFixed = bench(['--arms', 'router_native,router', '--base-effort', 'xhigh']);
+    expect(noFixed.status, noFixed.stderr).toBe(0);
+    const noFixedPlan = JSON.parse(noFixed.stdout) as Plan;
+    expect((noFixedPlan.cli as Record<string, unknown>)['router_policy']).toMatchObject({ fixed_effort: null, base_effort: 'xhigh' });
   });
 });
 
