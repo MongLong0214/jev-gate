@@ -569,6 +569,10 @@ describe('the spend stop (--max-cost-usd)', () => {
     expect(rows.reduce((a, c) => a + c, 0)).toBeLessThan(30);
     expect(capReached(rows.reduce((a, c) => a + toNanoUsd(c), 0), 30)).toBe(true);
     expect(capReached(toNanoUsd(29.99), 30)).toBe(false);
+    // Rounded up, never down: a sub-nanodollar cap still lets the first cell start, and rows a fraction of a
+    // nanodollar over each whole value still reach a cap they pass together.
+    expect(capReached(0, 4e-10)).toBe(false);
+    expect(capReached([1.00000000049, 1.00000000049, 1.00000000049].reduce((a, c) => a + toNanoUsd(c), 0), 3.0000000012)).toBe(true);
   });
 
   it('#55 review: counts the plan-interpretation request in the complete cost the stop reads', () => {

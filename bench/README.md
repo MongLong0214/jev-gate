@@ -25,8 +25,9 @@ unknown is not a zero, and the cap may already be passed. Cells that do not star
 unknown_cell, stopped}`. A primed session that stopped before its last turn reported a result counts as unknown too:
 each turn reports the session total so far, so what it kept is an earlier turn's subtotal, and the report shows that
 row's Claude cost and usage as unknown (`usage_status: partial_session`) for the same reason. The cap is checked between cells, so the cell running when it is reached still finishes and
-the total can end above the cap by that one cell. The sum is kept in whole nanodollars, so rows that add up to the
-cap reach it rather than falling a float rounding short. Without the flag nothing changes.
+the total can end above the cap by that one cell. The sum is kept in whole nanodollars, each row and the cap rounded
+up, so rows that add up to the cap reach it rather than falling a float rounding short, and the stop is never late
+(it can be early by at most a nanodollar per row). Without the flag nothing changes.
 
 ## Router arms (#45)
 

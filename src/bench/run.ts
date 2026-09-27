@@ -820,10 +820,13 @@ export const preflight = (o: Options, needsJev: boolean): Preflight => {
 /**
  * #55 review: the spend stop sums dollars as whole nanodollars. Binary floating point adds $1.13, $8.04 and $20.83 to
  * 29.999999999999996, which would start one more cell under a $30 cap; the integer sum reaches the cap exactly,
- * rather than through an epsilon comparison, which would pick a tolerance by hand.
+ * rather than through an epsilon comparison, which would pick a tolerance by hand. Both a row and the cap round up:
+ * a sum of rounded-up rows is never below the real spend, and a whole number at or above the real cap is at or above
+ * its ceiling, so the stop is never late. It can be early by at most a nanodollar per row. A cap under a nanodollar
+ * still rounds up to one, so no cap stops the run before its first cell.
  */
 const NANO_PER_USD = 1_000_000_000;
-export const toNanoUsd = (usd: number): number => Math.round(usd * NANO_PER_USD);
+export const toNanoUsd = (usd: number): number => Math.ceil(usd * NANO_PER_USD);
 export const capReached = (knownNanoUsd: number, capUsd: number): boolean => knownNanoUsd >= toNanoUsd(capUsd);
 
 const emptyJevPhase = (): JevPhaseUsage => ({ attempts: 0, tokens: null, tokens_known: 0, cost_usd: null });

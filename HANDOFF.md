@@ -19,6 +19,8 @@ stop. A historical primed cell that timed out part-way now reports an unknown co
 Second round: the sum is kept in whole nanodollars, since a float sum of rows that add up to the cap fell just short
 of it and started one more cell; and the A23 plan-interpretation request, which is billed, is now counted in the
 plan-level Jev group (with the historical scope gate), so a legacy auto cell's complete cost no longer omits it.
+Third round: rows and the cap both round up to a nanodollar, so the stop is never late and a sub-nanodollar cap
+does not stop the run before its first cell.
 That clears one precondition of each pre-registration. The others (the lean episode cases and follow-up turn, a
 plan-only run on the frozen build, and the owner's own approval) are unchanged.
 
