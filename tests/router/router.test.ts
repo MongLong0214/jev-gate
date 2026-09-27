@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { HttpReply } from '../../mods/router/hooks/client.ts';
 import { JEV_ENDPOINT, JEV_MODEL } from '../../mods/router/hooks/client.ts';
 import { resolveConfig } from '../../mods/router/hooks/config.ts';
-import { TIER_LEVELS } from '../../mods/router/hooks/policy.ts';
+import { offerableEfforts, TIER_LEVELS } from '../../mods/router/hooks/policy.ts';
 import type { SpawnEvent, SpawnOutcome, TurnStepEvent } from '../../mods/router/hooks/router.ts';
 import { createRouter, hostSupported, VERIFIED_HOST } from '../../mods/router/hooks/router.ts';
 import { answering, CLEAR, deferred, drain, FAKE_KEY, fakeEngine, streamNext } from './fake-engine.ts';
@@ -1143,8 +1143,7 @@ describe('#42 and #43: handler cases the issues list', () => {
     const counts = { input_tokens: 700, output_tokens: 30, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
     await drain(router.turnStep(f.engine, step(), streamNext<TurnStepEvent>(() => 'claude-opus-5-5', counts).next));
     const root = f.logs.find((l) => l['event'] === 'root');
-    expect(root).toMatchObject({ turn: 't1', sent: true, patch: { effort: 'low' } });
-    expect(JSON.stringify(root)).toContain('high');
+    expect(root).toMatchObject({ turn: 't1', sent: true, from: { model: 'claude-opus-5-5', effort: 'high' }, patch: { effort: 'low' } });
     // Jev's own usage, as the fake response reported it (answering's default), and the step's usage, as the stream did.
     expect(root?.['usage']).toMatchObject({ input: 900, output: 40 });
     expect(f.logs).toContainEqual(
@@ -1167,6 +1166,8 @@ describe('#42 and #43: handler cases the issues list', () => {
 
   it('#42: a conditional level the model cannot take is not offered, and a lower unconditional one still applies', async () => {
     // Sonnet takes xhigh only conditionally; the step starts there, and the unconditional levels below it stay routable.
+    // The handler asks about three described levels and maps them locally, so the offered set is read where it is made.
+    expect(offerableEfforts({ model: 'claude-sonnet-5', effort: 'xhigh' }, 'root')).toEqual(['low', 'medium', 'high']);
     const router = createRouter(configOf(EFFORT_ONLY));
     const f = fakeEngine({ respond: answering({ ...CLEAR, effort: ['low', 0.95] }) });
     router.turnStart({ turnId: 't1', text: TEXT });
