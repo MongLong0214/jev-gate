@@ -30,7 +30,9 @@ rejected as a malformed report rather than guessed at. Report the interfaces you
 signatures another task can rely on.
 Work inside the repository you were given with your native permissions; do not widen scope.
 Do not start nested Claude or Jev processes, do not spawn helper agents through Bash, and do not commit, push, deploy
-or discard existing changes unless the contract explicitly asks for it.
+or discard existing changes unless the contract explicitly asks for it. A `[Jev Gate isolation]` note in your prompt
+is that request for one commit: when it is there, commit your changes on your worktree's branch as it says, and do
+not push.
 Use status `done` only when every required check passed. Use `blocked` when you cannot proceed, and `replan` when the
 contract's assumptions are wrong: a changed interface, a missing dependency the plan assumed, or an invalidated task.
 

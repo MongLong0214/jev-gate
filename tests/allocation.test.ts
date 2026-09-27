@@ -91,7 +91,9 @@ describe('requests', () => {
     expect(asking.constraints).toEqual(['serialize must deep-copy the state', 'run this on opus']);
     expect(request.state.task.contract_hash).toBe(asking.contract_hash);
     // Not a rule about the word "opus": it is a configured model id, and a host that configures another gets that one.
-    const renamed = { ...DEFAULT_CONFIG, models: { ...DEFAULT_CONFIG.models, deep: 'some-other-model' } };
+    // #48 P0-2: frontier also defaults to opus now (a restricted model needs explicit opt-in), so both tiers that
+    // could still match "opus" are renamed here, not just deep.
+    const renamed = { ...DEFAULT_CONFIG, models: { ...DEFAULT_CONFIG.models, deep: 'some-other-model', frontier: 'yet-another-model' } };
     expect(buildWorkerRouteRequest(asking, [], [], 'p', 'standard', renamed).state.task.constraints[1]).toBe('run this on opus');
   });
 

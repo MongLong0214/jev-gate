@@ -5,12 +5,13 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { AUTH_CONFLICT_ENV, isSubscriptionOAuth, parseAuthStatus, subagentModelOverride, type CommandResult } from './auth.js';
-import { effectiveDepthFloor, LEGACY_DEPTH_FLOOR, loadConfig, MIGRATION_SAMPLE, NATIVE_HOOK_TIMEOUT_MS } from './config.js';
+import { OWNED_AGENT_PROFILES } from './agents.js';
+import { DEFAULT_CONFIG, effectiveDepthFloor, LEGACY_DEPTH_FLOOR, loadConfig, MIGRATION_SAMPLE, NATIVE_HOOK_TIMEOUT_MS, type ConfigResult } from './config.js';
 import { explainDir } from './explain.js';
-import { HOST_WINDOW_MAX, readHostCompactWindow, STANDARD_CONTEXT_WINDOW } from './host-window.js';
+import { HOST_WINDOW_MAX, readHostCompactWindow, readHostWorktreeBaseRef, STANDARD_CONTEXT_WINDOW } from './host-window.js';
 import { jobsDir } from './job.js';
 import { LIVENESS_WINDOW, livenessPath, readLiveness } from './liveness.js';
-import { OWNED_AGENTS } from './types.js';
+import { OWNED_AGENTS, type Tier } from './types.js';
 
 type Level = 'ok' | 'warn' | 'fail' | 'info';
 
@@ -50,18 +51,42 @@ export const parseFrontmatter = (text: string): Frontmatter => {
 
 const listOf = (v: string | undefined): string[] => (v ? v.split(',').map((s) => s.trim()).filter(Boolean) : []);
 
+/**
+ * #48 P0-2: derived, not hand-copied. The six owned rows come from `OWNED_AGENT_PROFILES` (src/agents.ts) with
+ * `model` read off `DEFAULT_CONFIG.models[tier]` -- the same table `gen-agents.mjs` writes frontmatter from -- so
+ * this expectation and the packaged frontmatter can only agree or both be visibly wrong, never quietly disagree.
+ * `executor.md` is added by hand because it is lean's one untiered agent and is deliberately not in that table.
+ */
 const AGENT_EXPECTATIONS: Record<string, { model: string; effort: string | null; tools: string[] }> = {
-  'worker-fast.md': { model: 'haiku', effort: 'low', tools: ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'Bash'] },
-  'worker.md': { model: 'sonnet', effort: null, tools: ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'Bash'] },
-  'worker-deep.md': { model: 'opus', effort: 'high', tools: ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'Bash'] },
-  'worker-frontier.md': { model: 'fable', effort: 'xhigh', tools: ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'Bash'] },
-  'planner.md': { model: 'opus', effort: 'high', tools: ['Read', 'Grep', 'Glob'] },
-  'planner-frontier.md': { model: 'fable', effort: 'xhigh', tools: ['Read', 'Grep', 'Glob'] },
+  ...Object.fromEntries(
+    OWNED_AGENT_PROFILES.map((p) => [p.file, { model: DEFAULT_CONFIG.models[p.tier], effort: p.effort, tools: [...p.tools] }]),
+  ),
   // JGL-01: lean's one agent. `inherit` is the point of it: a saving from a cheaper model would not be this feature's.
   'executor.md': { model: 'inherit', effort: null, tools: ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'Bash'] },
 };
 
-const checkPluginFiles = (): void => {
+/** haiku|sonnet|opus|fable, case-insensitive substring match; `null` when the string names none of them. */
+const MODEL_FAMILIES = ['haiku', 'sonnet', 'opus', 'fable'] as const;
+export const modelFamilyOf = (model: string): (typeof MODEL_FAMILIES)[number] | null => {
+  const lower = model.toLowerCase();
+  return MODEL_FAMILIES.find((f) => lower.includes(f)) ?? null;
+};
+
+/**
+ * #48 P0-2: family comparison when both sides name a recognized family (so `claude-opus-4-6` agrees with `opus`),
+ * exact string otherwise -- a model neither side's table recognizes should not silently compare equal to itself
+ * under a family that was never matched.
+ */
+export const modelsAgree = (a: string, b: string): boolean => {
+  const fa = modelFamilyOf(a);
+  const fb = modelFamilyOf(b);
+  if (fa !== null && fb !== null) return fa === fb;
+  return a === b;
+};
+
+/** Maps an owned agent's file (e.g. `worker-frontier.md`) to the `model:` frontmatter it actually has installed. */
+const checkPluginFiles = (): Map<string, string> => {
+  const installedModels = new Map<string, string>();
   // #48 P2: hooks.json/lean.json now command dist/entry.js, which dynamically imports dist/hook.js only when the
   // gate might be on (src/entry.ts) -- both files have to exist for that indirection to work.
   for (const rel of ['dist/entry.js', 'dist/hook.js', '.claude-plugin/plugin.json', 'hooks/hooks.json', ...Object.keys(AGENT_EXPECTATIONS).map((f) => `agents/${f}`)]) {
@@ -110,6 +135,7 @@ const checkPluginFiles = (): void => {
     const name = file.replace('.md', '');
     const tools = listOf(fm.fields['tools']);
     const disallowed = listOf(fm.fields['disallowedTools']);
+    if (fm.fields['model'] !== undefined) installedModels.set(file, fm.fields['model']);
     const problems: string[] = [];
     if (fm.fields['name'] !== name) problems.push(`name=${fm.fields['name'] ?? 'missing'}`);
     if (fm.fields['model'] !== exp.model) problems.push(`model=${fm.fields['model'] ?? 'missing'} (expected ${exp.model})`);
@@ -122,10 +148,31 @@ const checkPluginFiles = (): void => {
     say(problems.length ? 'fail' : 'ok', `agents/${file}: jev-gate:${name} model=${exp.model} effort=${exp.effort ?? 'inherited'} tools=[${exp.tools.join(',')}] no Agent/SendMessage${problems.length ? ` — ${problems.join('; ')}` : ''}`);
   }
   say('info', 'effort support unverified for haiku: worker-fast declares effort: low, but no child-context probe has shown CLAUDE_EFFORT for that model (A8)');
+  return installedModels;
 };
 
-const checkConfig = (): void => {
-  const loaded = loadConfig(process.env);
+/**
+ * #48 P0-2: the packaging check above catches installed frontmatter that drifts from this repo's own table. This
+ * catches the other disagreement: an effective user config whose `models[tier]` names a different model family than
+ * the frontmatter of an owned agent of that tier actually runs. The two can diverge because a gated dispatch (one
+ * the hook picks a tier and patches a call for) is not the same code path as a direct or ungated `@agent-` call,
+ * which reads the model straight off frontmatter and never consults `models` at all.
+ */
+const checkModelAuthority = (models: Record<Tier, string>, installedModels: ReadonlyMap<string, string>): void => {
+  for (const profile of OWNED_AGENT_PROFILES) {
+    const frontmatterModel = installedModels.get(profile.file);
+    if (frontmatterModel === undefined) continue; // already reported missing/unparsable by checkPluginFiles
+    const configModel = models[profile.tier];
+    if (!modelsAgree(configModel, frontmatterModel)) {
+      say(
+        'fail',
+        `a gated dispatch of ${profile.name} runs ${configModel} (config models.${profile.tier}), a direct or ungated one runs ${frontmatterModel} (frontmatter)`,
+      );
+    }
+  }
+};
+
+const checkConfig = (loaded: ConfigResult): void => {
   if (!loaded.ok) {
     say('fail', `config invalid (${loaded.source}): ${loaded.error.split('\n')[0]}; the hook preserves native behavior until this is fixed`);
     if (/pre-V5 layout|version must be 5|unknown tiers/.test(loaded.error)) say('info', `V5 config sample (write a new file; the plugin never rewrites yours):\n${MIGRATION_SAMPLE}`);
@@ -180,6 +227,11 @@ const checkConfig = (): void => {
   }
   say('info', `job state directory: ${jobsDir(process.env)} (0700, one 0600 file per session, removed after 7 days)`);
   if (process.env['JEV_GATE_EXPERIMENT_ADMISSION'] === 'orchestrated') say('warn', `JEV_GATE_EXPERIMENT_ADMISSION=orchestrated is set: every prompt starts an orchestrated job in ${c.mode} mode without a Gate A request (recorded as forced/admission_forced); allocation and result gates are unaffected`);
+  if (c.workerIsolation === 'worktree') {
+    const baseRef = readHostWorktreeBaseRef(process.env, process.cwd());
+    if (baseRef.value === 'head') say('info', `workerIsolation=worktree with worktree.baseRef="head" (${baseRef.source}): every planned worker dispatch the hook patches also carries isolation: "worktree" (an ad-hoc or single-executor dispatch never does); whether the host actually gives that worker its own git worktree for a patched call is not yet observed`);
+    else say('warn', `workerIsolation=worktree is not in effect: host worktree.baseRef is ${baseRef.value === null ? (baseRef.source === 'unset' ? 'unset' : `unknown (${baseRef.source})`) : `"${baseRef.value}" (${baseRef.source})`}, so an isolated worker would start from origin/<default-branch> instead of this branch. The hook runs such turns as workerIsolation=none with one worker at a time; set "worktree": {"baseRef": "head"} in Claude Code settings to use it`);
+  } else say('info', `workerIsolation=${c.workerIsolation}: workers share the caller's working tree; maxParallelWorkers stays 1 under this setting`);
 };
 
 const checkClaude = (): void => {
@@ -255,8 +307,10 @@ const checkLiveness = (): void => {
 
 const main = (): void => {
   checkNode();
-  checkPluginFiles();
-  checkConfig();
+  const installedModels = checkPluginFiles();
+  const loaded = loadConfig(process.env);
+  checkConfig(loaded);
+  if (loaded.ok) checkModelAuthority(loaded.config.models, installedModels);
   checkClaude();
   checkEnv();
   checkUserSettings();

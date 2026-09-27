@@ -2,9 +2,9 @@ import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import type { AdmissionQuestionShape, AdmittedShape, ConfigV5, Mode, PlannerTier, RouteQuestionShape, Tier } from './types.js';
+import type { AdmissionQuestionShape, AdmittedShape, ConfigV5, Mode, PlannerTier, RouteQuestionShape, Tier, WorkerIsolation } from './types.js';
 import { DEFAULT_MAX_TASKS_PER_PLAN } from './plan.js';
-import { ADMITTED_SHAPES, MODES, PLANNER_TIERS, ROUTE_QUESTION_SHAPES, TIERS } from './types.js';
+import { ADMITTED_SHAPES, MODES, PLANNER_TIERS, ROUTE_QUESTION_SHAPES, TIERS, WORKER_ISOLATIONS } from './types.js';
 
 export const DEFAULT_CONFIG: ConfigV5 = {
   version: 5,
@@ -15,11 +15,19 @@ export const DEFAULT_CONFIG: ConfigV5 = {
   routeConfidenceFloor: 0.8,
   resultConfidenceFloor: 0.8,
   plannerDefaultTier: 'deep',
-  models: { fast: 'haiku', standard: 'sonnet', deep: 'opus', frontier: 'fable' },
+  // #48 P0-2: frontier defaults to the strongest generally-allowed model. A restricted or premium model (Fable) now
+  // runs only when the owner writes it into their own config file -- never inherited from this default -- because the
+  // frontmatter is what the host actually uses whenever the hook does not patch the call (mode off, or a direct or
+  // ungated dispatch), and 22 subagent runs went to Fable that way on 2026-09-20 though the owner never chose it.
+  models: { fast: 'haiku', standard: 'sonnet', deep: 'opus', frontier: 'opus' },
   // T5: one worker by default. A declared deliverable is a planner's claim, not an enforced write boundary, and no
   // measurement yet shows parallel dispatch is faster here, so concurrency is opt-in rather than advertised.
   maxParallelWorkers: 1,
   guardAllowTools: [],
+  // #48 P1-2: absent means none, so a deployed file keeps its behaviour. `worktree` is required once
+  // maxParallelWorkers > 1 (see validateConfig): a declared deliverable is the planner's claim, a worktree is a
+  // boundary, and the write-boundary concern is solved by the worktree rather than by trusting the planner's claim.
+  workerIsolation: 'none',
   // Optional in a config file: absent keeps the shipped composite Gate B question.
   routeQuestionShape: 'composite',
   // #48 P0-1: null derives the floor from the host's own auto-compaction window (effectiveDepthFloor) instead of a
@@ -91,6 +99,7 @@ const V5_KEYS = new Set<string>([
   'models',
   'maxParallelWorkers',
   'guardAllowTools',
+  'workerIsolation',
   'routeQuestionShape',
   'delegationDepthFloor',
   'delegationDepthFraction',
@@ -112,7 +121,7 @@ export const MIGRATION_SAMPLE = `{
   "routeConfidenceFloor": 0.8,
   "resultConfidenceFloor": 0.8,
   "plannerDefaultTier": "deep",
-  "models": { "fast": "haiku", "standard": "sonnet", "deep": "opus", "frontier": "fable" },
+  "models": { "fast": "haiku", "standard": "sonnet", "deep": "opus", "frontier": "opus" },
   "maxParallelWorkers": 1,
   "guardAllowTools": []
 }`;
@@ -222,6 +231,18 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
   if (!Array.isArray(allow) || allow.some((t) => typeof t !== 'string' || !TOOL_NAME_RE.test(t))) {
     return { ok: false, error: `guardAllowTools must be an array of tool names matching ${TOOL_NAME_RE.source}` };
   }
+
+  // #48 P1-2: absence defaults to none, like the other optional keys; an explicit wrong value is an error.
+  const isolation = 'workerIsolation' in c ? c['workerIsolation'] : 'none';
+  if (typeof isolation !== 'string' || !WORKER_ISOLATIONS.includes(isolation as WorkerIsolation)) {
+    return { ok: false, error: `workerIsolation must be one of ${WORKER_ISOLATIONS.join(', ')}` };
+  }
+  if (cap > 1 && isolation !== 'worktree') {
+    return { ok: false, error: 'maxParallelWorkers > 1 requires workerIsolation: "worktree": a declared deliverable is the planner\'s claim, a worktree is a boundary' };
+  }
+  if (isolation === 'worktree' && !(allow as string[]).includes('Bash')) {
+    return { ok: false, error: 'workerIsolation: "worktree" requires "Bash" in guardAllowTools: the root must merge each worker\'s branch while the guard is active' };
+  }
   return {
     ok: true,
     config: {
@@ -236,6 +257,7 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
       models,
       maxParallelWorkers: cap,
       guardAllowTools: allow as string[],
+      workerIsolation: isolation as WorkerIsolation,
       routeQuestionShape: shape as RouteQuestionShape,
       delegationDepthFloor: floor,
       delegationDepthFraction: fraction,

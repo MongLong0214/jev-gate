@@ -59,27 +59,33 @@ const fromEnv = (env: Env): number | null => {
   return isPositiveSafeInteger(n) ? n : null;
 };
 
-/** One candidate file. Never throws: missing, oversized, unreadable, non-JSON and non-object all read as "no window here". */
-const readSettingsWindow = (path: string): number | null => {
+type Found<T> = { value: T; source: string };
+type SettingsPick<T> = (settings: Record<string, unknown>) => T | null;
+
+const pickWindow: SettingsPick<number> = (settings) => {
+  const w = settings['autoCompactWindow'];
+  return isPositiveSafeInteger(w) ? w : null;
+};
+
+/** One candidate file. Never throws: missing, oversized, unreadable, non-JSON and non-object all read as "not set here". */
+const readSettingsKey = <T>(path: string, pick: SettingsPick<T>): T | null => {
   try {
     const st = statSync(path);
     if (!st.isFile() || st.size > HOST_WINDOW_MAX_BYTES) return null;
     const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
-    if (!isRecord(parsed)) return null;
-    const w = parsed['autoCompactWindow'];
-    return isPositiveSafeInteger(w) ? w : null;
+    return isRecord(parsed) ? pick(parsed) : null;
   } catch {
     return null;
   }
 };
 
 /** The host merges managed-settings.json first, then every non-hidden `managed-settings.d/*.json` alphabetically; the last to set the key wins. */
-const readManagedWindow = (dirs: readonly string[]): Known | null => {
-  let found: Known | null = null;
+const readManaged = <T>(dirs: readonly string[], pick: SettingsPick<T>): Found<T> | null => {
+  let found: Found<T> | null = null;
   for (const dir of dirs) {
     const file = join(dir, 'managed-settings.json');
-    const own = readSettingsWindow(file);
-    if (own !== null) found = { tokens: own, source: `managed:${file}` };
+    const own = readSettingsKey(file, pick);
+    if (own !== null) found = { value: own, source: `managed:${file}` };
     let names: string[] = [];
     try {
       names = readdirSync(join(dir, 'managed-settings.d'))
@@ -90,8 +96,8 @@ const readManagedWindow = (dirs: readonly string[]): Known | null => {
     }
     for (const name of names) {
       const path = join(dir, 'managed-settings.d', name);
-      const w = readSettingsWindow(path);
-      if (w !== null) found = { tokens: w, source: `managed:${path}` };
+      const v = readSettingsKey(path, pick);
+      if (v !== null) found = { value: v, source: `managed:${path}` };
     }
   }
   return found;
@@ -213,7 +219,9 @@ const withParents = (dir: string): string[] => {
  * CLAUDE_PROJECT_DIR or the `cwd`: the candidates (CLAUDE_PROJECT_DIR, the `cwd` and its parents) it names, or none.
  * Only without it do CLAUDE_PROJECT_DIR and the `cwd` stand in, and where they differ every candidate must agree.
  */
-const settingsDirCandidates = (env: Env, cwd: string | null | undefined, transcriptPath: string | null | undefined): { dirs: string[] } | { unknown: string } => {
+type SettingsDirs = { dirs: string[] } | { unknown: string };
+
+const settingsDirCandidates = (env: Env, cwd: string | null | undefined, transcriptPath: string | null | undefined): SettingsDirs => {
   const envDir = env['CLAUDE_PROJECT_DIR'];
   const started = typeof envDir === 'string' && envDir.length > 0 ? envDir : null;
   const here = typeof cwd === 'string' && cwd.length > 0 ? cwd : null;
@@ -230,33 +238,40 @@ const settingsDirCandidates = (env: Env, cwd: string | null | undefined, transcr
 
 type Ambiguous = { ambiguous: string };
 
-const readConfiguredWindow = (env: Env, cwd: string | null | undefined, managedDirs: readonly string[], transcriptPath: string | null | undefined): Known | Ambiguous | null => {
-  const envWindow = fromEnv(env);
-  if (envWindow !== null) return { tokens: envWindow, source: 'env' };
-
-  const managed = readManagedWindow(managedDirs);
+/**
+ * Settings scopes a hook can read, first valid wins: managed, project-local, project-shared, user, with the project
+ * scopes read from each directory in `where`. Several stand only once the session has moved; the value is known if
+ * every one of them gives it.
+ */
+const readSettingsChain = <T>(env: Env, where: SettingsDirs, managedDirs: readonly string[], pick: SettingsPick<T>): Found<T> | Ambiguous | null => {
+  const managed = readManaged(managedDirs, pick);
   if (managed !== null) return managed;
 
   const home = env['HOME'] && env['HOME'].length > 0 ? env['HOME'] : homedir();
   const configDir = env['CLAUDE_CONFIG_DIR'] && env['CLAUDE_CONFIG_DIR'].length > 0 ? env['CLAUDE_CONFIG_DIR'] : join(home, '.claude');
   const userFile = join(configDir, 'settings.json');
-  const chain = (files: string[]): Known | null => {
+  const chain = (files: string[]): Found<T> | null => {
     for (const path of files) {
-      const tokens = readSettingsWindow(path);
-      if (tokens !== null) return { tokens, source: `settings:${path}` };
+      const value = readSettingsKey(path, pick);
+      if (value !== null) return { value, source: `settings:${path}` };
     }
     return null;
   };
 
-  const where = settingsDirCandidates(env, cwd, transcriptPath);
   if ('unknown' in where) return { ambiguous: where.unknown };
   const dirs = where.dirs;
   if (dirs.length === 0) return chain([userFile]);
   const found = dirs.map((d) => chain([...projectSettingsFiles(d, home), userFile]));
   const first = found[0] ?? null;
-  // Several candidates stand only once the session has moved; the window is known if every one of them gives it.
-  if (found.every((f) => (f?.tokens ?? null) === (first?.tokens ?? null))) return first;
+  if (found.every((f) => (f?.value ?? null) === (first?.value ?? null))) return first;
   return { ambiguous: `the session moved from CLAUDE_PROJECT_DIR and its settings directories disagree (${dirs.length} candidates)` };
+};
+
+const readConfiguredWindow = (env: Env, cwd: string | null | undefined, managedDirs: readonly string[], transcriptPath: string | null | undefined): Known | Ambiguous | null => {
+  const envWindow = fromEnv(env);
+  if (envWindow !== null) return { tokens: envWindow, source: 'env' };
+  const found = readSettingsChain(env, settingsDirCandidates(env, cwd, transcriptPath), managedDirs, pickWindow);
+  return found === null || 'ambiguous' in found ? found : { tokens: found.value, source: found.source };
 };
 
 /** ANTHROPIC_BASE_URL naming anything but Anthropic's own API, which the host treats as an LLM gateway. */
@@ -313,4 +328,35 @@ export const readHostCompactWindow = (env: Env, cwd: string | null | undefined, 
   const source = clamped === configured.tokens ? configured.source : `${configured.source} (clamped from ${configured.tokens})`;
   if (model !== null && model.tokens < clamped) return { tokens: model.tokens, source: `${source} capped by ${model.source}` };
   return { tokens: clamped, source };
+};
+
+export type WorktreeBaseRef = 'fresh' | 'head';
+export type WorktreeBaseRefResult = { value: WorktreeBaseRef; source: string } | { value: null; source: string };
+
+const pickBaseRef: SettingsPick<WorktreeBaseRef> = (settings) => {
+  const worktree = settings['worktree'];
+  if (!isRecord(worktree)) return null;
+  const ref = worktree['baseRef'];
+  return ref === 'fresh' || ref === 'head' ? ref : null;
+};
+
+/**
+ * #48 P1-2 review: the ref a subagent's `isolation: "worktree"` branches from. Claude Code 2.1.283's settings schema
+ * describes `worktree.baseRef` as applying to "--worktree, EnterWorktree, and agent isolation": `"fresh"`, the
+ * default, branches from origin/<default-branch>; `"head"` from the session's local HEAD. Unset reads as `null`, which
+ * the host treats as "fresh". Read through the same scopes as the window, with the same blind spots (`--settings`,
+ * MDM, server-managed settings).
+ */
+export const readHostWorktreeBaseRef = (env: Env, projectDir: string | null | undefined, opts: Pick<HostWindowOptions, 'managedDirs' | 'transcriptPath'> & { cwd?: string | null } = {}): WorktreeBaseRefResult => {
+  // #53 review: project scopes live in the session's directory. A hook's own `cwd` moves with `cd`, so reading them
+  // from it alone could miss a "fresh" at the real project root and fall through to a user-level "head"; without
+  // CLAUDE_PROJECT_DIR (or a caller that knows the directory, like doctor) the answer is unknown rather than guessed.
+  // Once the `cwd` has moved away from it, the directory is chosen as for the window (`settingsDirCandidates`).
+  const envDir = env['CLAUDE_PROJECT_DIR'];
+  const dir = typeof envDir === 'string' && envDir.length > 0 ? envDir : projectDir;
+  if (typeof dir !== 'string' || dir.length === 0) return { value: null, source: 'project dir unknown' };
+  const where = settingsDirCandidates({ ...env, CLAUDE_PROJECT_DIR: dir }, opts.cwd ?? null, opts.transcriptPath ?? null);
+  const found = readSettingsChain(env, where, opts.managedDirs ?? defaultManagedDirs(), pickBaseRef);
+  if (found === null) return { value: null, source: 'unset' };
+  return 'ambiguous' in found ? { value: null, source: `unknown: ${found.ambiguous}` } : found;
 };

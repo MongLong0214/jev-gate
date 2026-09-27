@@ -38,6 +38,12 @@ actually has, even when the plain word for it happens to be one of those names -
 is a constraint, and dropping it to avoid a word loses the only place that requirement was written down.
 Keep the dependency chain as shallow as the work truly allows. `chain_depth`, the longest dependency path in your
 plan, is optional: the code computes the authoritative value from the graph and only records yours beside it.
+Some steps a request needs are not things any worker can do at all: granting an OS permission, driving a live GUI
+app, an interactive login flow, or operating a physical device. When reading the repository turns one of these up,
+do not fold it into a task's checks and do not invent a worker step that only pretends to do it -- list it in the
+optional top-level `main_session_steps` instead, each with the one capability it needs: `os_permission`, `live_app`,
+`interactive_login`, or `device`. This never gates the plan or any task's readiness; it only tells the main session,
+once, what to keep for itself. Absent means none, and most plans have none.
 With the interfaces fixed here, tasks no longer wait on each other to discover an interface, so a dependency is
 justified only when a task genuinely cannot start before another finishes. Mark independent tasks with disjoint
 deliverables so they can run concurrently; `deliverables` and `spec.files` are repository paths with no whitespace,
@@ -60,6 +66,7 @@ No code inside the JSON.
   "assumptions": ["assumption the plan depends on"],
   "constraints": ["constraint every task must carry"],
   "chain_depth": 2,
+  "main_session_steps": [{ "step": "keep only for the main session, worded exactly as it should be done", "needs": "os_permission" }],
   "tasks": [
     {
       "id": "t1",

@@ -1,152 +1,193 @@
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { LIVENESS_WINDOW, appendLiveness } from '../src/liveness.js';
+import { OWNED_AGENT_PROFILES } from '../src/agents.js';
+import { DEFAULT_CONFIG } from '../src/config.js';
+import { modelFamilyOf, modelsAgree, parseFrontmatter } from '../src/cli.js';
 
-/**
- * #48 P0-1/P2: doctor's own resolution of the effective depth floor and the liveness ring, exercised as a real
- * process against the compiled CLI -- the same way tests/hook.test.ts's "dist/hook.js (process)" block treats
- * hook.ts, and for the same reason: `checkConfig`/`checkLiveness` are not exported, so the only way to see their
- * FAIL/WARN output is to run `doctor` itself.
- */
-let out: string;
-const tmp = mkdtempSync(join(tmpdir(), 'jev-cli-'));
-afterAll(() => rmSync(tmp, { recursive: true, force: true }));
+const root = join(__dirname, '..');
 
-beforeAll(() => {
-  out = mkdtempSync(join(tmp, 'dist-'));
-  const r = spawnSync(process.execPath, [join(__dirname, '..', 'node_modules', 'typescript', 'bin', 'tsc'), '-p', join(__dirname, '..', 'tsconfig.json'), '--outDir', out], { encoding: 'utf8' });
-  expect(r.status, r.stdout + r.stderr).toBe(0);
-}, 60_000);
+// #48 P0-2: the packet's explicit requirement -- the committed agents/*.md files must already match the table doctor
+// and gen-agents.mjs both read (OWNED_AGENT_PROFILES + DEFAULT_CONFIG.models), so this is a live check on the
+// checked-in files, not a fixture. If someone hand-edits an agent's frontmatter without running gen:agents, this fails.
+describe('committed agents/*.md match OWNED_AGENT_PROFILES + DEFAULT_CONFIG.models (#48 P0-2)', () => {
+  for (const profile of OWNED_AGENT_PROFILES) {
+    it(`agents/${profile.file}`, () => {
+      const text = readFileSync(join(root, 'agents', profile.file), 'utf8');
+      const fm = parseFrontmatter(text);
+      expect(fm.error).toBeNull();
+      expect(fm.fields['model']).toBe(DEFAULT_CONFIG.models[profile.tier]);
+      if (profile.effort === null) expect(fm.fields['effort']).toBeUndefined();
+      else expect(fm.fields['effort']).toBe(profile.effort);
+      expect((fm.fields['tools'] ?? '').split(',').map((s) => s.trim())).toEqual([...profile.tools]);
+    });
+  }
 
-let seq = 0;
-const doctor = (env: Record<string, string | undefined>): string => {
-  const cwd = mktemp();
-  const r = spawnSync(process.execPath, [join(out, 'cli.js'), 'doctor'], {
-    cwd,
-    encoding: 'utf8',
-    // PATH: /nonexistent keeps checkClaude from finding a real `claude` binary on this machine.
-    env: { PATH: '/nonexistent', HOME: mktemp(), ...env },
-  });
-  return r.stdout;
-};
-// spawnSync's cwd/HOME must actually exist on disk (unlike liveness.ts's own state dir, which mkdirs itself).
-const mktemp = (): string => {
-  const p = join(tmp, `d${(seq += 1)}`);
-  mkdirSync(p, { recursive: true });
-  return p;
-};
-const configFile = (body: unknown): string => {
-  const p = join(tmp, `config-${(seq += 1)}.json`);
-  writeFileSync(p, JSON.stringify(body));
-  return p;
-};
-
-describe('doctor: effective depth floor (#48 P0-1)', () => {
-  it('warns when the host window is unknown and the floor falls back to the legacy absolute default', () => {
-    const stdout = doctor({});
-    expect(stdout).toMatch(/host compaction window: unknown/);
-    expect(stdout).toMatch(/\[warn\] no autoCompactWindow is configured/);
-    // The runtime default by model is spelled out, and so is the fallback a 200K session would never reach.
-    expect(stdout).toMatch(/1M for Opus 4\.7\+, Sonnet 5 and Fable on the Anthropic API \(floor 300000\), 200K for other models or with CLAUDE_CODE_DISABLE_1M_CONTEXT \(floor 120000\)/);
-    expect(stdout).toMatch(/the floor is the fixed 300000 \(fallback_absolute\), which a 200K session never reaches/);
-    expect(stdout).toMatch(/--autocompact or --settings flag, MDM policy and server-managed settings are not visible to a hook/);
-  });
-
-  it('caps the window at 200K under CLAUDE_CODE_DISABLE_1M_CONTEXT, so a configured 1M no longer passes as healthy', () => {
-    const stdout = doctor({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '1000000', CLAUDE_CODE_DISABLE_1M_CONTEXT: '1' });
-    expect(stdout).toMatch(/host compaction window: 200000 tokens \(env capped by CLAUDE_CODE_DISABLE_1M_CONTEXT\)/);
-    expect(stdout).toMatch(/effective depth floor: 120000 \(window_fraction\)/);
-  });
-
-  it('reports an info line, not a warning, for a floor comfortably under a known window', () => {
-    const stdout = doctor({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '300000' });
-    expect(stdout).toMatch(/host compaction window: 300000 tokens \(env\)/);
-    // DEFAULT_CONFIG.delegationDepthFloor is null, so this is window_fraction: min(300000, floor(0.6*300000))=180000.
-    expect(stdout).toMatch(/\[info\].*effective depth floor: 180000 \(window_fraction\)/);
-    expect(stdout).not.toMatch(/effective depth floor.*\[warn\]/);
-  });
-
-  it('fails when an explicit config floor is at or above the host window -- the #48 failure mode itself', () => {
-    const cfg = configFile({ version: 5, mode: 'auto', delegationDepthFloor: 300000 });
-    const stdout = doctor({ JEV_GATE_CONFIG: cfg, CLAUDE_CODE_AUTO_COMPACT_WINDOW: '300000' });
-    expect(stdout).toMatch(/\[fail\].*effective depth floor 300000 \(config\) is at or above the host's own compaction window 300000/);
-  });
-
-  it('warns when an explicit config floor is within 15% of the host window, without failing', () => {
-    const cfg = configFile({ version: 5, mode: 'auto', delegationDepthFloor: 260000 });
-    const stdout = doctor({ JEV_GATE_CONFIG: cfg, CLAUDE_CODE_AUTO_COMPACT_WINDOW: '300000' });
-    expect(stdout).toMatch(/\[warn\].*effective depth floor 260000 \(config\) is within 15% of the host's compaction window 300000/);
-    // This fixture has no plugin.json/hooks/agents, so unrelated [fail] lines for those are expected here -- only the
-    // floor line itself must not have escalated to fail.
-    expect(stdout).not.toMatch(/\[fail\].*effective depth floor/);
-  });
-
-  it('keeps the floor=0 warning for an explicit zero, independent of the window', () => {
-    const cfg = configFile({ version: 5, mode: 'auto', delegationDepthFloor: 0 });
-    const stdout = doctor({ JEV_GATE_CONFIG: cfg, CLAUDE_CODE_AUTO_COMPACT_WINDOW: '300000' });
-    expect(stdout).toMatch(/\[warn\] effective depth floor is 0: Gate A is asked on every prompt/);
-  });
-
-  it('prints delegationDepthFraction alongside the raw config summary', () => {
-    const stdout = doctor({});
-    expect(stdout).toMatch(/delegationDepthFloor=null \(derive from host window\) delegationDepthFraction=0\.6/);
+  it('frontier defaults to opus, not fable (#48 P0-2: a restricted model now requires explicit owner opt-in)', () => {
+    expect(DEFAULT_CONFIG.models.frontier).toBe('opus');
   });
 });
 
-describe('doctor: liveness (#48 P2)', () => {
-  it('reports no record yet on a fresh install', () => {
-    const stateDir = mktemp();
-    const stdout = doctor({ JEV_GATE_STATE_DIR: stateDir });
-    expect(stdout).toMatch(/\[info\] liveness: no record yet at .*liveness\.json/);
+describe('modelFamilyOf / modelsAgree (#48 P0-2)', () => {
+  it('recognizes each family case-insensitively as a substring', () => {
+    expect(modelFamilyOf('opus')).toBe('opus');
+    expect(modelFamilyOf('claude-opus-4-6-20260301')).toBe('opus');
+    expect(modelFamilyOf('CLAUDE-OPUS-4-6')).toBe('opus');
+    expect(modelFamilyOf('fable')).toBe('fable');
+    expect(modelFamilyOf('haiku')).toBe('haiku');
+    expect(modelFamilyOf('sonnet')).toBe('sonnet');
   });
 
-  it('reports counts without warning below a full window', () => {
-    const stateDir = mktemp();
-    for (let i = 0; i < LIVENESS_WINDOW - 1; i++) appendLiveness({ JEV_GATE_STATE_DIR: stateDir }, { at: `t${i}`, attempted: false, reason: 'depth_below_floor' });
-    const stdout = doctor({ JEV_GATE_STATE_DIR: stateDir });
-    expect(stdout).toMatch(new RegExp(`\\[info\\] liveness: ${LIVENESS_WINDOW - 1}/${LIVENESS_WINDOW} recent auto-mode decisions recorded, 0 attempted`));
-    expect(stdout).not.toMatch(/liveness:.*\[warn\]/);
+  it('returns null for a string naming no known family', () => {
+    expect(modelFamilyOf('some-other-model')).toBeNull();
   });
 
-  it('warns when a full window never attempted a call, matching SessionStart', () => {
-    const stateDir = mktemp();
-    for (let i = 0; i < LIVENESS_WINDOW; i++) appendLiveness({ JEV_GATE_STATE_DIR: stateDir }, { at: `t${i}`, attempted: false, reason: 'depth_below_floor' });
-    const stdout = doctor({ JEV_GATE_STATE_DIR: stateDir });
-    expect(stdout).toMatch(/\[warn\] liveness: the last 50 auto-mode admission decisions never attempted a Gate A call/);
+  it('agrees by family when both sides name one, even with different exact strings', () => {
+    expect(modelsAgree('opus', 'claude-opus-4-6-20260301')).toBe(true);
+    expect(modelsAgree('claude-opus-4-6-20260301', 'opus')).toBe(true);
   });
 
-  it('does not warn when at least one of a full window attempted a call', () => {
-    const stateDir = mktemp();
-    for (let i = 0; i < LIVENESS_WINDOW - 1; i++) appendLiveness({ JEV_GATE_STATE_DIR: stateDir }, { at: `t${i}`, attempted: false, reason: 'depth_below_floor' });
-    appendLiveness({ JEV_GATE_STATE_DIR: stateDir }, { at: 'last', attempted: true, reason: null });
-    const stdout = doctor({ JEV_GATE_STATE_DIR: stateDir });
-    expect(stdout).toMatch(new RegExp(`liveness: ${LIVENESS_WINDOW}/${LIVENESS_WINDOW} recent auto-mode decisions recorded, 1 attempted`));
-    expect(stdout).not.toMatch(/liveness:.*never attempted/);
-  });
-});
-
-describe('doctor: mode=off idle-cost warning (#48 P2 Task 4.4)', () => {
-  it('warns that mode=off still starts a process per hook event and names the disable command', () => {
-    const cfg = configFile({ version: 5, mode: 'off' });
-    const stdout = doctor({ JEV_GATE_CONFIG: cfg });
-    expect(stdout).toMatch(/\[warn\] mode=off still starts a node process for every matched hook event.*claude plugin disable jev-gate@<marketplace>/);
+  it('disagrees across different families', () => {
+    expect(modelsAgree('opus', 'sonnet')).toBe(false);
+    expect(modelsAgree('fable', 'opus')).toBe(false);
   });
 
-  it('does not print the mode=off idle-cost warning in auto mode', () => {
-    // DEFAULT_CONFIG.mode is 'off', so this needs an explicit override to actually exercise the auto path.
-    const cfg = configFile({ version: 5, mode: 'auto' });
-    const stdout = doctor({ JEV_GATE_CONFIG: cfg });
-    expect(stdout).not.toMatch(/still starts a node process for every matched hook event/);
+  it('falls back to exact string comparison when either side names no known family', () => {
+    expect(modelsAgree('some-other-model', 'some-other-model')).toBe(true);
+    expect(modelsAgree('some-other-model', 'some-other-model-2')).toBe(false);
+    expect(modelsAgree('some-other-model', 'opus')).toBe(false);
   });
 });
 
-describe('doctor: mentions SessionStart as a sixth registered event', () => {
-  it('names all six events in the closing /hooks line', () => {
-    const stdout = doctor({});
-    expect(stdout).toMatch(/\/hooks should list six jev-gate entries \(UserPromptSubmit, PreToolUse with no matcher, PostToolUse on \^Agent\$, PostToolUseFailure on \^Agent\$, Stop, SessionStart\)/);
+describe('parseFrontmatter', () => {
+  it('parses fields from a well-formed block', () => {
+    const fm = parseFrontmatter('---\nname: x\nmodel: opus\n---\nbody\n');
+    expect(fm.error).toBeNull();
+    expect(fm.fields).toMatchObject({ name: 'x', model: 'opus' });
+  });
+
+  it('errors when the file does not start with a frontmatter block', () => {
+    expect(parseFrontmatter('body only\n').error).toBe('no frontmatter on line 1');
+  });
+
+  it('errors when the frontmatter block is unterminated', () => {
+    expect(parseFrontmatter('---\nname: x\nbody\n').error).toBe('unterminated frontmatter');
+  });
+});
+
+// `doctor` is not exported (it accumulates into module-level state and reads real dist/agents/hooks files relative to
+// its own compiled location), so its FAIL/OK behavior is exercised the same way scripts/pack.mjs's install output is
+// in tests/pack.test.ts: build once, then run the compiled dist/cli.js as a real subprocess against a prepared root.
+describe('doctor: checkModelAuthority (#48 P0-2)', () => {
+  let tmp: string;
+  let sharedDist: string;
+
+  beforeAll(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'jev-cli-doctor-'));
+    sharedDist = join(tmp, 'shared-dist');
+    const r = spawnSync(process.execPath, [join(root, 'node_modules', 'typescript', 'bin', 'tsc'), '-p', join(root, 'tsconfig.json'), '--outDir', sharedDist], { encoding: 'utf8' });
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+  }, 60_000);
+  afterAll(() => rmSync(tmp, { recursive: true, force: true }));
+
+  let caseNum = 0;
+  /** A fresh plugin root sharing the one compiled dist, with its own copy of agents/ so a test can mutate one file. */
+  const preparePluginRoot = (mutate?: { file: string; content: string }): string => {
+    const pluginRoot = join(tmp, `case-${String(caseNum++)}`);
+    mkdirSync(pluginRoot, { recursive: true });
+    cpSync(sharedDist, join(pluginRoot, 'dist'), { recursive: true });
+    for (const rel of ['.claude-plugin', 'hooks', 'agents']) cpSync(join(root, rel), join(pluginRoot, rel), { recursive: true });
+    if (mutate) writeFileSync(join(pluginRoot, 'agents', mutate.file), mutate.content);
+    return pluginRoot;
+  };
+
+  const runDoctor = (pluginRoot: string, extraEnv: Record<string, string> = {}): { status: number | null; stdout: string } => {
+    const home = mkdtempSync(join(tmpdir(), 'jev-cli-doctor-home-'));
+    // PATH=/nonexistent (as tests/pack.test.ts also does): `claude` is not found, so checkClaude() warns cleanly
+    // instead of running a real CLI, and no network or auth call happens.
+    const r = spawnSync(process.execPath, [join(pluginRoot, 'dist', 'cli.js'), 'doctor'], { encoding: 'utf8', env: { PATH: '/nonexistent', HOME: home, ...extraEnv } });
+    return { status: r.status, stdout: r.stdout };
+  };
+
+  it('OK: unmodified plugin, default config -- no model-authority disagreement for any owned agent', () => {
+    const pluginRoot = preparePluginRoot();
+    const { stdout } = runDoctor(pluginRoot);
+    expect(stdout).not.toMatch(/a gated dispatch of .* runs .* \(config models\./);
+  });
+
+  it('FAIL: packaging drift -- installed frontmatter model differs from the table (existing check, now derived)', () => {
+    const original = readFileSync(join(root, 'agents', 'worker-frontier.md'), 'utf8');
+    const mutated = original.replace(/^model:.*$/m, 'model: haiku');
+    expect(mutated).not.toBe(original);
+    const pluginRoot = preparePluginRoot({ file: 'worker-frontier.md', content: mutated });
+    const { status, stdout } = runDoctor(pluginRoot);
+    expect(status).toBe(1);
+    expect(stdout).toMatch(/\[fail\] agents\/worker-frontier\.md:.*model=haiku \(expected opus\)/);
+  });
+
+  it('FAIL: effective config models.frontier disagrees by family with installed frontmatter', () => {
+    const pluginRoot = preparePluginRoot();
+    const home = mkdtempSync(join(tmpdir(), 'jev-cli-doctor-home-'));
+    const configPath = join(home, 'config.json');
+    writeFileSync(configPath, JSON.stringify({ version: 5, mode: 'native', models: { frontier: 'sonnet' } }));
+    const { status, stdout } = runDoctor(pluginRoot, { JEV_GATE_CONFIG: configPath, HOME: home });
+    expect(status).toBe(1);
+    expect(stdout).toContain('a gated dispatch of jev-gate:worker-frontier runs sonnet (config models.frontier), a direct or ungated one runs opus (frontmatter)');
+  });
+
+  it('OK: effective config models.frontier equals installed frontmatter exactly', () => {
+    const pluginRoot = preparePluginRoot();
+    const home = mkdtempSync(join(tmpdir(), 'jev-cli-doctor-home-'));
+    const configPath = join(home, 'config.json');
+    writeFileSync(configPath, JSON.stringify({ version: 5, mode: 'native', models: { frontier: 'opus' } }));
+    const { stdout } = runDoctor(pluginRoot, { JEV_GATE_CONFIG: configPath, HOME: home });
+    expect(stdout).not.toMatch(/a gated dispatch of jev-gate:worker-frontier runs/);
+  });
+
+  it('OK: config names an alias of the same family as frontmatter, not the identical string', () => {
+    const pluginRoot = preparePluginRoot();
+    const home = mkdtempSync(join(tmpdir(), 'jev-cli-doctor-home-'));
+    const configPath = join(home, 'config.json');
+    // Frontmatter says the bare family name "opus"; config names a concrete dated alias of the same family.
+    writeFileSync(configPath, JSON.stringify({ version: 5, mode: 'native', models: { frontier: 'claude-opus-4-6-20260301' } }));
+    const { stdout } = runDoctor(pluginRoot, { JEV_GATE_CONFIG: configPath, HOME: home });
+    expect(stdout).not.toMatch(/a gated dispatch of jev-gate:worker-frontier runs/);
+  });
+
+  /**
+   * gen-agents.mjs resolves its own root from its file location, not cwd, and reads that root's dist/agents.js and
+   * dist/config.js. #53 review: it runs from a copy inside a prepared plugin root, against the throwaway build above,
+   * so the test neither needs this checkout's own `npm run build` (CI runs the tests first) nor rewrites its agents/.
+   */
+  describe('scripts/gen-agents.mjs --check (#48 P0-2)', () => {
+    const genAgents = (pluginRoot: string, args: string[] = []) => {
+      mkdirSync(join(pluginRoot, 'scripts'), { recursive: true });
+      cpSync(join(root, 'scripts', 'gen-agents.mjs'), join(pluginRoot, 'scripts', 'gen-agents.mjs'));
+      return spawnSync(process.execPath, [join(pluginRoot, 'scripts', 'gen-agents.mjs'), ...args], { encoding: 'utf8' });
+    };
+
+    it('reports no drift on the repository as checked in', () => {
+      const r = genAgents(preparePluginRoot(), ['--check']);
+      expect(r.status, r.stdout + r.stderr).toBe(0);
+      expect(r.stdout).not.toContain('drifts from the table');
+    });
+
+    it('detects a hand-edited model line, exits 1, and leaves the file untouched; without --check it writes the fix back', () => {
+      const original = readFileSync(join(root, 'agents', 'worker-frontier.md'), 'utf8');
+      const pluginRoot = preparePluginRoot({ file: 'worker-frontier.md', content: original.replace(/^model:.*$/m, 'model: haiku') });
+      const path = join(pluginRoot, 'agents', 'worker-frontier.md');
+      const check = genAgents(pluginRoot, ['--check']);
+      expect(check.status).toBe(1);
+      expect(check.stdout).toContain('worker-frontier.md drifts from the table (model: opus, effort: xhigh)');
+      expect(readFileSync(path, 'utf8')).not.toBe(original); // --check must not write
+
+      const write = genAgents(pluginRoot);
+      expect(write.status).toBe(0);
+      expect(write.stdout).toContain('wrote worker-frontier.md');
+      expect(readFileSync(path, 'utf8')).toBe(original); // byte-for-byte restored: only the model line moved
+    });
   });
 });

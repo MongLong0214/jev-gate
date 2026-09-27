@@ -1,6 +1,11 @@
+import { readFileSync } from 'node:fs';
+
 import { describe, expect, it } from 'vitest';
 
 import {
+  renderToolRule,
+  WORKTREE_WORKER_SENTENCE,
+  singleRules,
   DIRECT_MODE_SENTENCE,
   GUARD_DENY_REASON,
   GUIDANCE_HEADER,
@@ -8,6 +13,7 @@ import {
   PRECEDENCE_SENTENCE,
   renderDirectGuidance,
   renderDispatchDeny,
+  renderMainSessionSteps,
   renderOrchestrationGuidance,
   renderPlannedContext,
   renderPlannerModelNote,
@@ -19,7 +25,9 @@ import {
   renderWorkerReported,
   STOP_REASON,
   SUPERSEDED_SENTENCE,
+  WORKTREE_ISOLATION_SENTENCE,
 } from '../src/coordinator.js';
+import type { MainSessionStep } from '../src/types.js';
 
 describe('guidance', () => {
   it('renders direct guidance per mode without any orchestration rule', () => {
@@ -62,6 +70,72 @@ describe('guidance', () => {
     expect(three).toContain('send at most 3 ready tasks');
     expect(renderPlannedContext(2, ['t1', 't2', 't3', 't4'], 2)).toContain('send at most 2 ready tasks');
     expect(renderWorkerAccepted('t1', ['t2', 't3'], 1)).toContain('dispatch one ready task at a time');
+  });
+
+  /** #48 P1-2: the reminder only appears under worktree isolation, and only once per rendered guidance block. */
+  it('adds the worktree-isolation reminder only when workerIsolation is "worktree"', () => {
+    const none = renderOrchestrationGuidance({ mode: 'auto', confidence: 0.9, superseded: false, maxParallelWorkers: 3 });
+    expect(none).not.toContain(WORKTREE_ISOLATION_SENTENCE);
+    const worktree = renderOrchestrationGuidance({ mode: 'auto', confidence: 0.9, superseded: false, maxParallelWorkers: 3, workerIsolation: 'worktree' });
+    expect(worktree).toContain(WORKTREE_ISOLATION_SENTENCE);
+    expect(orchestrationRules(3)).not.toContain(WORKTREE_ISOLATION_SENTENCE);
+    expect(orchestrationRules(3, 'worktree')).toContain(WORKTREE_ISOLATION_SENTENCE);
+    // A call site that predates isolation (no workerIsolation key at all) still compiles and behaves as before.
+    expect(renderOrchestrationGuidance({ mode: 'auto', confidence: 0.9, superseded: false, maxParallelWorkers: 3 })).not.toContain('git worktree');
+  });
+
+  /** #48 P1-2 review: the tool line follows the guard's allow-list, so Bash is never both required and forbidden. */
+  it('names the tools the guard allows, keeping the default line unchanged', () => {
+    const agents = 'Agent calls to jev-gate:planner and the jev-gate worker roles';
+    expect(renderToolRule(agents)).toBe(
+      'Available to you now: Read, Grep, Glob, TodoWrite, and Agent calls to jev-gate:planner and the jev-gate worker roles. Edit, Write, Bash and every other agent (including Explore) are unavailable for this request and will be denied; do not probe them.',
+    );
+    const withBash = orchestrationRules(2, 'worktree', ['Bash']).join('\n');
+    expect(withBash).toContain('Available to you now: Read, Grep, Glob, TodoWrite, Bash, and Agent calls');
+    expect(withBash).toContain('Edit, Write and every other agent (including Explore) are unavailable');
+    expect(withBash).not.toMatch(/Bash and every other agent/);
+    expect(renderToolRule(agents, ['Edit', 'Write', 'Bash', 'Read'])).toContain('TodoWrite, Edit, Write, Bash, and Agent calls');
+    expect(renderToolRule(agents, ['Edit', 'Write', 'Bash'])).toContain('Every other agent (including Explore) is unavailable');
+    expect(singleRules(['Bash']).join('\n')).toContain('TodoWrite, Bash, and one Agent call');
+  });
+});
+
+/** #48 P2-1: main_session_steps is rendered, not dispatched -- these tests are about the text, not readiness. */
+describe('main_session_steps rendering (#48 P2-1)', () => {
+  const steps: MainSessionStep[] = [
+    { step: 'grant the TCC screen-recording permission', needs: 'os_permission' },
+    { step: 'click through the vendor console login', needs: 'interactive_login' },
+  ];
+
+  it('renders nothing for an empty list', () => {
+    expect(renderMainSessionSteps([])).toBe('');
+  });
+
+  it('lists each step with what it needs, framed as the main session\'s own work', () => {
+    const text = renderMainSessionSteps(steps);
+    expect(text).toContain('a worker cannot do these');
+    expect(text).toContain('grant the TCC screen-recording permission (needs os_permission)');
+    expect(text).toContain('click through the vendor console login (needs interactive_login)');
+  });
+
+  it('renderPlannedContext lists the steps when a plan is accepted', () => {
+    const text = renderPlannedContext(1, ['t1'], 1, steps);
+    expect(text).toContain('a worker cannot do these');
+    expect(text).toContain('needs os_permission');
+    // Absent steps behave exactly as before isolation/steps existed: no trailing note at all.
+    expect(renderPlannedContext(1, ['t1'], 1)).not.toContain('a worker cannot do these');
+  });
+
+  it('renderWorkerAccepted repeats the steps only when the last task is accepted, and adds the isolation note independently', () => {
+    const notLast = renderWorkerAccepted('t1', ['t2'], 1, { mainSessionSteps: steps, isLastTask: false });
+    expect(notLast).not.toContain('a worker cannot do these');
+    const last = renderWorkerAccepted('t1', [], 1, { mainSessionSteps: steps, isLastTask: true });
+    expect(last).toContain('a worker cannot do these');
+    const lastNoSteps = renderWorkerAccepted('t1', [], 1, { isLastTask: true });
+    expect(lastNoSteps).not.toContain('a worker cannot do these');
+    const isolated = renderWorkerAccepted('t1', ['t2'], 1, { workerIsolation: 'worktree' });
+    expect(isolated).toContain(WORKTREE_ISOLATION_SENTENCE);
+    expect(renderWorkerAccepted('t1', ['t2'], 1)).not.toContain(WORKTREE_ISOLATION_SENTENCE);
   });
 });
 
@@ -140,5 +214,15 @@ describe('renderDispatchDeny (review P2: bounded detail)', () => {
     expect(text).toContain('…');
     expect(text).not.toContain(huge);
     expect(renderDispatchDeny('deliverable_overlap', 'src/a.js')).toContain('(src/a.js)');
+  });
+});
+
+describe('#48 third review: an isolated worker is allowed the commit its note asks for', () => {
+  it('names the note in every worker profile, whose commit ban otherwise needs the contract to ask', () => {
+    expect(WORKTREE_WORKER_SENTENCE).toContain('[Jev Gate isolation]');
+    for (const name of ['worker', 'worker-fast', 'worker-deep', 'worker-frontier']) {
+      const profile = readFileSync(new URL(`../agents/${name}.md`, import.meta.url), 'utf8').replace(/\s+/g, ' ');
+      expect(profile, name).toContain('A `[Jev Gate isolation]` note in your prompt is that request for one commit');
+    }
   });
 });

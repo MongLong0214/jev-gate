@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
-import type { DeterministicVerdict, Plan, PlannedCheck, PlannedTask, PlannerReply, Receipt, TaskSpec, TaskUncertainty, WorkerCheckResult, WorkerReply } from './types.js';
-import { TIERS } from './types.js';
+import type { Capability, DeterministicVerdict, MainSessionStep, Plan, PlannedCheck, PlannedTask, PlannerReply, Receipt, TaskSpec, TaskUncertainty, WorkerCheckResult, WorkerReply } from './types.js';
+import { CAPABILITIES, TIERS } from './types.js';
 
 /**
  * A12 said bounds are bytes, not task counts, and that a plan may have as many tasks as fits. Bytes are still the
@@ -17,6 +17,8 @@ export const MAX_FIELD_BYTES = 8 * 1024;
 export const MAX_UNCERTAINTY_ENTRIES = 8;
 /** A17: a specification names the interfaces of one task; beyond this the task is too large, not better specified. */
 export const MAX_SPEC_ENTRIES = 8;
+/** #48 P2-1: a list of what to keep for the main session, not a report; beyond this the planner is not being specific. */
+export const MAX_MAIN_SESSION_STEPS = 16;
 /** Bounded on purpose: ids appear in deny reasons and coordinator context, so they must stay short and inert. */
 export const ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 export const TASK_MARKER_RE = /^\[JEV_TASK rev=(\d{1,9}) id=([A-Za-z0-9][A-Za-z0-9_-]{0,63})(?: attempt=(\d{1,3}))?\]/;
@@ -192,6 +194,29 @@ const parseUncertainty = (v: unknown, taskId: string): ParseResult<TaskUncertain
   const failure = strField(rawFailure, `task ${taskId}: uncertainty.prior_failure`);
   if (!failure.ok) return failure;
   return { ok: true, value: { unresolved: unresolved.value, interacts_with: interacts.value, prior_failure: failure.value } };
+};
+
+/**
+ * #48 P2-1: absent reads as none, like `spec`/`uncertainty`. Unlike those, an invalid entry fails the whole reply
+ * rather than being read as a lower-confidence claim: `needs` is a closed union a router elsewhere keys off, so a
+ * value it does not recognize is a malformed reply, not evidence.
+ */
+const parseMainSessionSteps = (v: unknown): ParseResult<MainSessionStep[]> => {
+  if (v === undefined) return { ok: true, value: [] };
+  if (!Array.isArray(v)) return { ok: false, error: 'main_session_steps must be an array' };
+  if (v.length > MAX_MAIN_SESSION_STEPS) return { ok: false, error: `main_session_steps exceeds ${MAX_MAIN_SESSION_STEPS} entries` };
+  const out: MainSessionStep[] = [];
+  for (const item of v) {
+    if (!isRecord(item)) return { ok: false, error: 'main_session_steps[] must be an object with step and needs' };
+    const step = strField(item['step'], 'main_session_steps[].step');
+    if (!step.ok) return step;
+    const needs = item['needs'];
+    if (typeof needs !== 'string' || !CAPABILITIES.includes(needs as Capability)) {
+      return { ok: false, error: `main_session_steps[].needs must be one of ${CAPABILITIES.join(', ')}` };
+    }
+    out.push({ step: step.value, needs: needs as Capability });
+  }
+  return { ok: true, value: out };
 };
 
 /** A17: a spec states signatures and invariants, never a code block; the worker reads the repository for the body. */
@@ -423,6 +448,8 @@ export const parsePlannerReply = (text: string, maxTasks: number = DEFAULT_MAX_T
     if (claimed !== undefined && (typeof claimed !== 'number' || !Number.isInteger(claimed) || claimed < 0)) {
       return { ok: false, error: 'chain_depth must be a non-negative integer' };
     }
+    const mainSessionSteps = parseMainSessionSteps(parsed['main_session_steps']);
+    if (!mainSessionSteps.ok) return mainSessionSteps;
     return {
       ok: true,
       value: {
@@ -432,6 +459,7 @@ export const parsePlannerReply = (text: string, maxTasks: number = DEFAULT_MAX_T
         constraints: constraints.value,
         tasks: tasks.value,
         chain_depth_claimed: typeof claimed === 'number' ? claimed : null,
+        main_session_steps: mainSessionSteps.value,
       },
     };
   }

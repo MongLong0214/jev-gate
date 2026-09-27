@@ -139,6 +139,29 @@ describe('explain (2026-09-20)', () => {
     for (const caveat of EXPLAIN_CAVEATS) expect(out).toContain(caveat);
   });
 
+  /**
+   * #48 P0-2: this is the record shape a native call with no job state now writes -- 22 Fable runs went unrecorded
+   * this way in issue #48. `explain` shows what was asked for and what actually ran, side by side.
+   */
+  it('names the subagent, the no-job note and the requested → resolved models on an unmatched dispatch', () => {
+    const out = render([base('post', 1, { matched: false, job_state: 'absent', subagent_type: 'jev-gate:worker-frontier', requested_model: 'opus', resolved_model: 'fable' })]);
+    expect(out).toContain('result   unmatched dispatch (jev-gate:worker-frontier)');
+    expect(out).toContain('no job state for this session');
+    expect(out).toContain('opus → fable');
+  });
+
+  it('renders no arrow at all for a record from before requested_model/resolved_model existed', () => {
+    const out = render([base('post', 1, { matched: false, job_state: 'absent', subagent_type: 'jev-gate:worker' })]);
+    expect(out).not.toContain('→');
+    expect(out).toContain('result   unmatched dispatch (jev-gate:worker)');
+  });
+
+  it('names the subagent and the requested → resolved models on a PostToolUseFailure', () => {
+    const out = render([base('failure', 1, { subagent_type: 'jev-gate:worker-frontier', requested_model: 'opus', resolved_model: null, error_first_line: 'boom', duration_ms: 40 })]);
+    expect(out).toContain('failure  boom  after 40ms  (jev-gate:worker-frontier)');
+    expect(out).toContain('opus → unrecorded');
+  });
+
   it('separates turns on the prompt id every phase carries, and keeps sessions apart', () => {
     const out = render([
       { ...admission(1, { attempted: true, decision: { shape: 'direct', decided: true, reason: 'first', changed_default: false } }), prompt_id: 'p-1' },

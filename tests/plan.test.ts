@@ -12,6 +12,7 @@ import {
   extractJson,
   chainDepth,
   MAX_FIELD_BYTES,
+  MAX_MAIN_SESSION_STEPS,
   MAX_SPEC_ENTRIES,
   CONTRACT_HEADER,
   REQUEST_HEADER,
@@ -126,6 +127,41 @@ describe('parsePlannerReply', () => {
   it('accepts needs_context and blocked', () => {
     expect(parsePlannerReply(fence({ status: 'needs_context', questions: ['which store?'], findings: [] }))).toMatchObject({ ok: true });
     expect(parsePlannerReply(fence({ status: 'blocked', reason: 'no repository', findings: [] }))).toMatchObject({ ok: true });
+  });
+
+  describe('main_session_steps (#48 P2-1)', () => {
+    it('reads absent as none, not an omitted field', () => {
+      const parsed = parsePlannerReply(fence({ status: 'ready', tasks: [bareTask('t1')] }));
+      expect(parsed.ok).toBe(true);
+      if (parsed.ok && parsed.value.status === 'ready') expect(parsed.value.main_session_steps).toEqual([]);
+    });
+
+    it('parses valid steps naming a closed-union capability', () => {
+      const steps = [
+        { step: 'grant the TCC screen-recording permission', needs: 'os_permission' },
+        { step: 'click through the interactive login for the vendor console', needs: 'interactive_login' },
+      ];
+      const parsed = parsePlannerReply(fence({ status: 'ready', tasks: [bareTask('t1')], main_session_steps: steps }));
+      expect(parsed.ok).toBe(true);
+      if (parsed.ok && parsed.value.status === 'ready') expect(parsed.value.main_session_steps).toEqual(steps);
+    });
+
+    it.each([
+      ['not an array', { status: 'ready', tasks: [bareTask('t1')], main_session_steps: 'do it yourself' }, 'main_session_steps must be an array'],
+      [
+        'over the entry ceiling',
+        { status: 'ready', tasks: [bareTask('t1')], main_session_steps: Array.from({ length: MAX_MAIN_SESSION_STEPS + 1 }, () => ({ step: 's', needs: 'device' })) },
+        `main_session_steps exceeds ${MAX_MAIN_SESSION_STEPS} entries`,
+      ],
+      ['a bare string entry', { status: 'ready', tasks: [bareTask('t1')], main_session_steps: ['do it yourself'] }, 'main_session_steps[] must be an object with step and needs'],
+      ['a missing needs', { status: 'ready', tasks: [bareTask('t1')], main_session_steps: [{ step: 'do it' }] }, 'main_session_steps[].needs must be one of'],
+      ['an unknown capability', { status: 'ready', tasks: [bareTask('t1')], main_session_steps: [{ step: 'do it', needs: 'telepathy' }] }, 'main_session_steps[].needs must be one of'],
+      ['a missing step', { status: 'ready', tasks: [bareTask('t1')], main_session_steps: [{ needs: 'device' }] }, 'main_session_steps[].step'],
+    ])('rejects the whole reply on %s', (_name, raw, message) => {
+      const parsed = parsePlannerReply(fence(raw));
+      expect(parsed.ok).toBe(false);
+      if (!parsed.ok) expect(parsed.error).toContain(message);
+    });
   });
 
   it.each([
@@ -565,7 +601,7 @@ describe('readyTaskIds', () => {
   const t1 = withHash(rawTask('t1'));
   const t2 = withHash(rawTask('t2'));
   const t3 = withHash(rawTask('t3', { depends_on: ['t1', 't2'] }));
-  const plan: Plan = { rev: 1, goal: 'g', assumptions: [], constraints: [], tasks: [t1, t2, t3], chain_depth: chainDepth([t1, t2, t3]), chain_depth_claimed: null };
+  const plan: Plan = { rev: 1, goal: 'g', assumptions: [], constraints: [], tasks: [t1, t2, t3], chain_depth: chainDepth([t1, t2, t3]), chain_depth_claimed: null, main_session_steps: [] };
 
   it('unlocks a task only when every dependency has an accepted receipt for its current contract', () => {
     expect(readyTaskIds(plan, [])).toEqual(['t1', 't2']);
