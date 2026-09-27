@@ -1663,9 +1663,22 @@ describe('traces', () => {
     expect(plans.map((r) => r['outcome']).sort()).toEqual(['an invalid reply', 'blocked']);
     for (const r of plans) {
       expect(r).toMatchObject({ subagent_type: 'jev-gate:planner', planner_model: { observed: 'claude-opus-5' } });
-      expect(r['planner_model']).toHaveProperty('requested');
+      expect(typeof (r['planner_model'] as Record<string, unknown>)['requested']).toBe('string');
       expect(r['planner_model']).toHaveProperty('agreement');
     }
+  });
+
+  it('#53 review: a pinned planner call that is never patched records its own pin as the requested model', async () => {
+    const dir = join(tmp, 'trace-plan-pinned');
+    const env = makeEnv({ JEV_GATE_TRACE_DIR: dir });
+    await run(env, promptEvent(), fakeJev());
+    const pre = await run(env, plannerPre({ model: 'opus' }), fakeJev());
+    expect(pre).toMatchObject({ code: 'pinned' });
+    await run(env, plannerPost({ status: 'blocked', reason: 'no store', findings: [] }, { tool_input: { subagent_type: 'jev-gate:planner', model: 'opus' } }));
+    const plan = readdirSync(dir)
+      .map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>)
+      .find((r) => r['phase'] === 'plan');
+    expect(plan).toMatchObject({ outcome: 'blocked', planner_model: { requested: 'opus', observed: 'claude-opus-5' } });
   });
 
   it('records changed_default true only when the applied outcome differs from the no-Jev outcome (A17)', async () => {
@@ -1743,7 +1756,18 @@ describe('traces', () => {
     await run(env, workerPost('toolu_1', workerReply()), fetchImpl);
     const records = readdirSync(dir).map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>);
     const post = records.find((rec) => rec['phase'] === 'post' && rec['task_id'] === 't1');
-    expect(post).toMatchObject({ subagent_type: 'jev-gate:worker', resolved_model: 'claude-sonnet-5', verdict: 'accept' });
+    expect(post).toMatchObject({ subagent_type: 'jev-gate:worker', requested_model: 'sonnet', resolved_model: 'claude-sonnet-5', verdict: 'accept' });
+  });
+
+  it('#53 review: an orchestrated worker post record keeps an explicit model pin as requested_model', async () => {
+    const dir = join(tmp, 'trace-orchestrated-pin');
+    const env = makeEnv({ JEV_GATE_TRACE_DIR: dir });
+    const fetchImpl = fakeJev();
+    await seedPlanned(env, PLAN_REPLY, fetchImpl);
+    await run(env, preEvent('Agent', agentInput({ model: 'haiku' })), fetchImpl);
+    await run(env, workerPost('toolu_1', workerReply(), { tool_input: { subagent_type: 'jev-gate:worker', model: 'haiku' } }), fetchImpl);
+    const records = readdirSync(dir).map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>);
+    expect(records.find((rec) => rec['phase'] === 'post' && rec['task_id'] === 't1')).toMatchObject({ requested_model: 'haiku' });
   });
 
   it('writes no trace record at all in mode off, even with JEV_GATE_TRACE_DIR set', async () => {

@@ -47,7 +47,9 @@ merged in, the base ref follows a moved session the way the window does (`settin
 unknown, so isolation is off, when the candidate directories disagree or the transcript folder names none of them.
 Fourth round: a native planner call's failed-plan records (blocked, invalid reply, failed replan) wrote only an
 agreement label; every `plan` record now carries `subagent_type` and `planner_model: { requested, observed,
-agreement }`, so a trace reader, and `explain`, can tell which agent and model ran whatever the outcome.
+agreement }`, so a trace reader, and `explain`, can tell which agent and model ran whatever the outcome. Fifth
+round: a pinned or native planner call is never patched and has no tier, so its `requested` is now its own pin or
+its frontmatter model rather than null, and an orchestrated worker's `post` record carries `requested_model` too.
 
 **Capability-aware plan steps (P2-1).** `PlannerReply` (the `ready` variant) gains an optional
 `main_session_steps: Array<{ step: string; needs: Capability }>`, `Capability` a closed union of `os_permission`,

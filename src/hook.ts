@@ -1652,9 +1652,15 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     const agreement = plannerModelAgreement(gen.planner_tier, observedModel(input.tool_response));
     // #53 review: every plan record, whatever the outcome, names the agent that ran and both models, as the post
     // records do for unmatched calls; an agreement label alone does not say which agent or model ran.
+    // A pinned or native planner call is never patched, so it has no tier; what it asked for is its own pin or its
+    // frontmatter model, read the same way as every other Agent record.
     const plannerFacts = {
       subagent_type: str(isRecord(input.tool_input) ? input.tool_input['subagent_type'] : null),
-      planner_model: { requested: gen.planner_tier === null ? null : config.models[gen.planner_tier], observed: observedModel(input.tool_response), agreement },
+      planner_model: {
+        requested: gen.planner_tier === null ? requestedModelFor(input.tool_input) : config.models[gen.planner_tier],
+        observed: observedModel(input.tool_response),
+        agreement,
+      },
     };
     /**
      * A23: the one place a semantic discrepancy is still visible. Everything downstream -- the contract, the checks,
@@ -1869,6 +1875,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         // to. `subagent_type` here is the dispatched one (tool_input reflects the patched call), not the tier the
         // coordinator originally called.
         subagent_type: str(isRecord(input.tool_input) ? input.tool_input['subagent_type'] : null),
+        requested_model: requestedModelFor(input.tool_input),
         resolved_model: observedModel(input.tool_response),
         tool_response: whitelistToolResponse(input.tool_response),
         root_effort: input.effort ?? null,
