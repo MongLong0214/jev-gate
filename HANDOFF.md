@@ -25,6 +25,10 @@ last reply, the model is unknown until the next reply carries the new ID (`depth
 `.git`/`.claude` is not the user's own, and every managed drop-in is read (the 64-file cap is gone). Third round:
 a `settings.local.json` that a pre-2.1.211 host left in the starting directory is read after the root's, as the host
 still does.
+Fourth round: `/cd` moves the host's settings directory and the transcript folder but not `CLAUDE_PROJECT_DIR`
+(2.1.283: the move sets `originalCwd` and relocates the transcript; `CLAUDE_PROJECT_DIR` is `projectRoot`). Once the
+`cwd` differs from `CLAUDE_PROJECT_DIR`, the transcript folder picks the directory, and without a match the window is
+known only if every candidate agrees (`settingsDirCandidates`, `src/host-window.ts`).
 
 The fact to fix is in #48: 1,014 admission decisions, 0 attempted, because a fixed 300,000
 `delegationDepthFloor` sits at the same 300,000 value as this host's own `autoCompactWindow`, so the session compacts

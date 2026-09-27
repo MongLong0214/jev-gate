@@ -1,6 +1,6 @@
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 
 import type { Env } from './config.js';
 
@@ -26,8 +26,10 @@ export const HOST_WINDOW_MAX = 1_000_000;
 export const STANDARD_CONTEXT_WINDOW = 200_000;
 /** Bounds the walk up from the session directory to its repository root. */
 const REPO_ROOT_MAX_DEPTH = 64;
+/** The host names a folder under its projects directory after the session's directory, hashing names past this. */
+const PROJECTS_FOLDER_NAME_MAX = 200;
 
-export type HostWindowResult = { tokens: number; source: string } | { tokens: null; source: 'unknown' };
+export type HostWindowResult = { tokens: number; source: string } | { tokens: null; source: string };
 type Known = { tokens: number; source: string };
 
 export interface HostWindowOptions {
@@ -35,6 +37,8 @@ export interface HostWindowOptions {
   model?: string | null;
   /** Directories holding managed-settings.json and managed-settings.d/; defaults to this platform's system directory. */
   managedDirs?: readonly string[];
+  /** The hook's `transcript_path`; its folder names the session's directory once `/cd` has moved it. */
+  transcriptPath?: string | null;
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -145,7 +149,67 @@ const localSettingsDir = (primary: string, home: string): string => {
   return primary;
 };
 
-const readConfiguredWindow = (env: Env, cwd: string | null | undefined, managedDirs: readonly string[]): Known | null => {
+/** The session's project settings, local then shared, as the host reads them when the session's directory is `dir`. */
+const projectSettingsFiles = (dir: string, home: string): string[] => {
+  const rootLocal = join(localSettingsDir(dir, home), '.claude', 'settings.local.json');
+  // Before 2.1.211 the host kept the local file in the starting directory, and it still reads one left there; the
+  // root file's value wins where both set the key, so the legacy file is the next candidate rather than ignored.
+  const legacyLocal = join(dir, '.claude', 'settings.local.json');
+  return legacyLocal === rootLocal ? [rootLocal, join(dir, '.claude', 'settings.json')] : [rootLocal, legacyLocal, join(dir, '.claude', 'settings.json')];
+};
+
+const sameDir = (a: string, b: string): boolean => {
+  if (resolve(a) === resolve(b)) return true;
+  try {
+    return realpathSync(a) === realpathSync(b);
+  } catch {
+    return false;
+  }
+};
+
+/** The name the host gives a directory's folder under its projects directory; null past the length the host hashes. */
+const projectsFolderName = (dir: string): string | null => {
+  const name = dir.replace(/[^a-zA-Z0-9]/g, '-');
+  return name.length <= PROJECTS_FOLDER_NAME_MAX ? name : null;
+};
+
+const withParents = (dir: string): string[] => {
+  const out: string[] = [];
+  for (let d = resolve(dir), i = 0; i < REPO_ROOT_MAX_DEPTH; i += 1) {
+    out.push(d);
+    const parent = dirname(d);
+    if (parent === d) break;
+    d = parent;
+  }
+  return out;
+};
+
+/**
+ * The directories whose project settings the host may be reading. The host reads them from the session's directory,
+ * which starts at CLAUDE_PROJECT_DIR; `/cd` moves it and the hook's `cwd` with it but leaves CLAUDE_PROJECT_DIR at the
+ * start, and a `cd` in Bash moves only the `cwd`. So where the two agree, that is the directory. Where they differ it
+ * is CLAUDE_PROJECT_DIR, the `cwd`, or a parent of the `cwd`; the host keeps the transcript in a folder named after
+ * the session's directory and moves it on `/cd`, so the candidates whose name matches that folder are the ones left,
+ * instead of CLAUDE_PROJECT_DIR alone.
+ */
+const settingsDirCandidates = (env: Env, cwd: string | null | undefined, transcriptPath: string | null | undefined): string[] => {
+  const envDir = env['CLAUDE_PROJECT_DIR'];
+  const started = typeof envDir === 'string' && envDir.length > 0 ? envDir : null;
+  const here = typeof cwd === 'string' && cwd.length > 0 ? cwd : null;
+  if (started === null) return here === null ? [] : [here];
+  if (here === null || sameDir(here, started)) return [started];
+  const candidates = [...new Set([resolve(started), ...withParents(here)])];
+  if (typeof transcriptPath === 'string' && transcriptPath.length > 0) {
+    const folder = basename(dirname(transcriptPath));
+    const named = candidates.filter((d) => projectsFolderName(d) === folder);
+    if (named.length > 0) return named;
+  }
+  return candidates;
+};
+
+type Ambiguous = { ambiguous: string };
+
+const readConfiguredWindow = (env: Env, cwd: string | null | undefined, managedDirs: readonly string[], transcriptPath: string | null | undefined): Known | Ambiguous | null => {
   const envWindow = fromEnv(env);
   if (envWindow !== null) return { tokens: envWindow, source: 'env' };
 
@@ -153,27 +217,23 @@ const readConfiguredWindow = (env: Env, cwd: string | null | undefined, managedD
   if (managed !== null) return managed;
 
   const home = env['HOME'] && env['HOME'].length > 0 ? env['HOME'] : homedir();
-  const candidates: string[] = [];
-  // The host reads project settings from the session's primary directory, which `cd` does not move; the hook's own
-  // `cwd` does move with it, so it is only the fallback when the host did not export CLAUDE_PROJECT_DIR.
-  const projectDir = env['CLAUDE_PROJECT_DIR'] && env['CLAUDE_PROJECT_DIR'].length > 0 ? env['CLAUDE_PROJECT_DIR'] : cwd;
-  if (typeof projectDir === 'string' && projectDir.length > 0) {
-    const rootLocal = join(localSettingsDir(projectDir, home), '.claude', 'settings.local.json');
-    candidates.push(rootLocal);
-    // Before 2.1.211 the host kept the local file in the starting directory, and it still reads one left there; the
-    // root file's value wins where both set the key, so the legacy file is the next candidate rather than ignored.
-    const legacyLocal = join(projectDir, '.claude', 'settings.local.json');
-    if (legacyLocal !== rootLocal) candidates.push(legacyLocal);
-    candidates.push(join(projectDir, '.claude', 'settings.json'));
-  }
   const configDir = env['CLAUDE_CONFIG_DIR'] && env['CLAUDE_CONFIG_DIR'].length > 0 ? env['CLAUDE_CONFIG_DIR'] : join(home, '.claude');
-  candidates.push(join(configDir, 'settings.json'));
+  const userFile = join(configDir, 'settings.json');
+  const chain = (files: string[]): Known | null => {
+    for (const path of files) {
+      const tokens = readSettingsWindow(path);
+      if (tokens !== null) return { tokens, source: `settings:${path}` };
+    }
+    return null;
+  };
 
-  for (const path of candidates) {
-    const tokens = readSettingsWindow(path);
-    if (tokens !== null) return { tokens, source: `settings:${path}` };
-  }
-  return null;
+  const dirs = settingsDirCandidates(env, cwd, transcriptPath);
+  if (dirs.length === 0) return chain([userFile]);
+  const found = dirs.map((d) => chain([...projectSettingsFiles(d, home), userFile]));
+  const first = found[0] ?? null;
+  // Several candidates stand only once the session has moved; the window is known if every one of them gives it.
+  if (found.every((f) => (f?.tokens ?? null) === (first?.tokens ?? null))) return first;
+  return { ambiguous: `the session moved from CLAUDE_PROJECT_DIR and its settings directories disagree (${dirs.length} candidates)` };
 };
 
 /** ANTHROPIC_BASE_URL naming anything but Anthropic's own API, which the host treats as an LLM gateway. */
@@ -222,7 +282,8 @@ export const modelContextWindow = (env: Env, model: string | null | undefined): 
  * `cwd` is the tool call's own `cwd`, not `process.cwd()` -- the hook runs as a child of the host.
  */
 export const readHostCompactWindow = (env: Env, cwd: string | null | undefined, opts: HostWindowOptions = {}): HostWindowResult => {
-  const configured = readConfiguredWindow(env, cwd, opts.managedDirs ?? defaultManagedDirs());
+  const configured = readConfiguredWindow(env, cwd, opts.managedDirs ?? defaultManagedDirs(), opts.transcriptPath ?? null);
+  if (configured !== null && 'ambiguous' in configured) return { tokens: null, source: `unknown: ${configured.ambiguous}` };
   const model = modelContextWindow(env, opts.model ?? null);
   if (configured === null) return model === null ? { tokens: null, source: 'unknown' } : { tokens: model.tokens, source: `default:${model.source}` };
   const clamped = clampWindow(configured.tokens);

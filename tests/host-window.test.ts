@@ -147,12 +147,52 @@ describe('#48 review: the window the host actually compacts at', () => {
     expect(readHostCompactWindow({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '300000', HOME: dir() }, cwd, { managedDirs: [managed] }).source).toBe('env');
   });
 
-  it('reads project settings from CLAUDE_PROJECT_DIR, which a `cd` does not move, before the hook cwd', () => {
+  it('reads project settings from CLAUDE_PROJECT_DIR while the hook cwd is the same directory', () => {
     const project = dir();
-    const moved = dir();
     writeSettings(project, '.claude/settings.json', { autoCompactWindow: 450_000 });
-    writeSettings(moved, '.claude/settings.json', { autoCompactWindow: 150_000 });
-    expect(readHostCompactWindow({ CLAUDE_PROJECT_DIR: project, HOME: dir() }, moved, { managedDirs: none }).tokens).toBe(450_000);
+    expect(readHostCompactWindow({ CLAUDE_PROJECT_DIR: project, HOME: dir() }, project, { managedDirs: none }).tokens).toBe(450_000);
+  });
+
+  describe('#48 fourth review: a session that moved', () => {
+    // The host keeps a session's transcript under a folder named after the session's directory and moves it on `/cd`.
+    const transcriptFor = (sessionDir: string): string => join(dir(), sessionDir.replace(/[^a-zA-Z0-9]/g, '-'), 'session.jsonl');
+
+    it('reads the directory `/cd` moved to, which CLAUDE_PROJECT_DIR still names as the start', () => {
+      const project = dir();
+      const moved = dir();
+      writeSettings(project, '.claude/settings.json', { autoCompactWindow: 400_000 });
+      writeSettings(moved, '.claude/settings.json', { autoCompactWindow: 150_000 });
+      const window = readHostCompactWindow({ CLAUDE_PROJECT_DIR: project, HOME: dir() }, moved, { managedDirs: none, transcriptPath: transcriptFor(moved) });
+      expect(window).toEqual({ tokens: 150_000, source: `settings:${join(moved, '.claude', 'settings.json')}` });
+    });
+
+    it('keeps CLAUDE_PROJECT_DIR after a Bash `cd` into a subdirectory, which moves only the cwd', () => {
+      const project = dir();
+      const sub = join(project, 'pkg');
+      mkdirSync(sub, { recursive: true });
+      writeSettings(project, '.claude/settings.json', { autoCompactWindow: 400_000 });
+      const window = readHostCompactWindow({ CLAUDE_PROJECT_DIR: project, HOME: dir() }, sub, { managedDirs: none, transcriptPath: transcriptFor(project) });
+      expect(window.tokens).toBe(400_000);
+    });
+
+    it('reads a window as unknown when nothing says which directory the settings come from and they disagree', () => {
+      const project = dir();
+      const moved = dir();
+      writeSettings(project, '.claude/settings.json', { autoCompactWindow: 400_000 });
+      writeSettings(moved, '.claude/settings.json', { autoCompactWindow: 150_000 });
+      for (const transcriptPath of [null, join(dir(), 'elsewhere', 'session.jsonl')]) {
+        const window = readHostCompactWindow({ CLAUDE_PROJECT_DIR: project, HOME: dir() }, moved, { managedDirs: none, transcriptPath });
+        expect(window.tokens).toBeNull();
+        expect(window.source).toMatch(/^unknown: the session moved/);
+      }
+    });
+
+    it('still knows the window when every candidate directory gives the same one', () => {
+      const home = dir();
+      writeSettings(home, '.claude/settings.json', { autoCompactWindow: 300_000 });
+      const window = readHostCompactWindow({ CLAUDE_PROJECT_DIR: dir(), HOME: home }, dir(), { managedDirs: none });
+      expect(window).toEqual({ tokens: 300_000, source: `settings:${join(home, '.claude', 'settings.json')}` });
+    });
   });
 
   it('reads settings.local.json at the repository root, and at the main checkout root from a linked worktree', () => {

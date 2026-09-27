@@ -960,7 +960,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
        */
       // The session's own model, from the same transcript line the depth came from: with no window configured, the
       // host compacts at the model's context limit, so a 200K model and a 1M model get different floors.
-      const window = readHostCompactWindow(deps.env, input.cwd ?? null, { model: depth.ok ? depth.model : null });
+      const window = readHostCompactWindow(deps.env, input.cwd ?? null, { model: depth.ok ? depth.model : null, transcriptPath: input.transcript_path ?? null });
       const { floor, source: floorSource } = effectiveDepthFloor(config, window.tokens);
       const floorFacts = { depth_floor: floor, depth_floor_source: floorSource, host_window: window.tokens, host_window_source: window.source };
       // The forced arm never reaches this branch at all (see above), so unlike before, no `!forced` guard is needed.
