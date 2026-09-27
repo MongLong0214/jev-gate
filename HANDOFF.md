@@ -44,7 +44,7 @@ carries `WORKTREE_WORKER_SENTENCE`, asking it to commit on its worktree branch; 
 unless the contract asks, and without one nothing reaches the merged branch. Third round: the four worker profiles
 now name the `[Jev Gate isolation]` note as that request, since it sits outside the contract. With #52's `/cd` fix
 merged in, the base ref follows a moved session the way the window does (`settingsDirCandidates`), and reads as
-unknown, so isolation is off, when the candidate directories disagree.
+unknown, so isolation is off, when the candidate directories disagree or the transcript folder names none of them.
 
 **Capability-aware plan steps (P2-1).** `PlannerReply` (the `ready` variant) gains an optional
 `main_session_steps: Array<{ step: string; needs: Capability }>`, `Capability` a closed union of `os_permission`,
@@ -86,7 +86,10 @@ still does.
 Fourth round: `/cd` moves the host's settings directory and the transcript folder but not `CLAUDE_PROJECT_DIR`
 (2.1.283: the move sets `originalCwd` and relocates the transcript; `CLAUDE_PROJECT_DIR` is `projectRoot`). Once the
 `cwd` differs from `CLAUDE_PROJECT_DIR`, the transcript folder picks the directory, and without a match the window is
-known only if every candidate agrees (`settingsDirCandidates`, `src/host-window.ts`).
+known only if every candidate agrees (`settingsDirCandidates`, `src/host-window.ts`). Fifth round: a Bash `cd` back to
+the start after `/cd`, or out of the `/cd` target, left the wrong directory standing; the transcript folder now
+decides whenever the transcript is in the host's `projects/<folder>/` layout, and a folder naming no candidate
+reads as unknown.
 
 The fact to fix is in #48: 1,014 admission decisions, 0 attempted, because a fixed 300,000
 `delegationDepthFloor` sits at the same 300,000 value as this host's own `autoCompactWindow`, so the session compacts

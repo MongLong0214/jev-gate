@@ -329,10 +329,13 @@ model the session transcript records: 1M for Opus 4.7 and later, Sonnet 5 and Fa
 earlier and smaller models.
 
 The session's project directory starts at `CLAUDE_PROJECT_DIR`. `/cd` moves it, and the hook's `cwd` with it, but
-leaves `CLAUDE_PROJECT_DIR` naming the start; a `cd` in Bash moves only the `cwd`. So when the two differ, the gate
-takes the directory whose name matches the folder the host keeps the session transcript in, which `/cd` moves. If
-nothing matches and the candidates (`CLAUDE_PROJECT_DIR`, the `cwd` and its parents) give different windows, the
-window is unknown rather than guessed.
+leaves `CLAUDE_PROJECT_DIR` naming the start; a `cd` in Bash moves only the `cwd`. So neither names it once the
+session has moved. The host keeps the session transcript in a folder named after that directory and moves it on
+`/cd`, so the gate reads settings from whichever candidate (`CLAUDE_PROJECT_DIR`, the `cwd` and its parents) that
+folder names. If it names none of them, the window is unknown rather than guessed. Without a transcript in that
+layout, `CLAUDE_PROJECT_DIR` stands, and where the `cwd` differs from it every candidate must give the same window.
+A launch with `--project-config-root` reads settings from that root, which a transcript folder does not name, so the
+window there reads as unknown.
 
 **Where this can still be wrong.** A launch's `--autocompact` or `--settings` flag, MDM policies and server-managed
 settings are invisible to a hook. A native-1M model on Bedrock, Vertex or Foundry, Opus or Fable behind an LLM

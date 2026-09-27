@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 
 import type { Env } from './config.js';
 
@@ -173,10 +173,30 @@ const sameDir = (a: string, b: string): boolean => {
   }
 };
 
-/** The name the host gives a directory's folder under its projects directory; null past the length the host hashes. */
-const projectsFolderName = (dir: string): string | null => {
-  const name = dir.replace(/[^a-zA-Z0-9]/g, '-');
-  return name.length <= PROJECTS_FOLDER_NAME_MAX ? name : null;
+/**
+ * Whether `folder` is the name the host gives `dir`'s folder under its projects directory: every character but ASCII
+ * letters and digits becomes `-`. Past 200 characters the host appends a hash of the path, which is not reproduced
+ * here, so only the prefix is compared there.
+ */
+const namesDir = (folder: string, dir: string): boolean => {
+  let real = dir;
+  try {
+    real = realpathSync(dir);
+  } catch {
+    // An unreadable directory is compared by its given path alone.
+  }
+  return [dir, real].some((d) => {
+    const name = d.replace(/[^a-zA-Z0-9]/g, '-');
+    return name.length <= PROJECTS_FOLDER_NAME_MAX ? folder === name : folder.startsWith(`${name.slice(0, PROJECTS_FOLDER_NAME_MAX)}-`);
+  });
+};
+
+/** The session's folder under the host's projects directory (`<config>/projects/<folder>/…`), or null elsewhere. */
+const transcriptFolder = (transcriptPath: string | null | undefined): string | null => {
+  if (typeof transcriptPath !== 'string' || transcriptPath.length === 0) return null;
+  const parts = resolve(transcriptPath).split(sep);
+  const i = parts.lastIndexOf('projects');
+  return i >= 0 && i + 2 < parts.length ? (parts[i + 1] ?? null) : null;
 };
 
 const withParents = (dir: string): string[] => {
@@ -191,36 +211,39 @@ const withParents = (dir: string): string[] => {
 };
 
 /**
- * The directories whose project settings the host may be reading. The host reads them from the session's directory,
- * which starts at CLAUDE_PROJECT_DIR; `/cd` moves it and the hook's `cwd` with it but leaves CLAUDE_PROJECT_DIR at the
- * start, and a `cd` in Bash moves only the `cwd`. So where the two agree, that is the directory. Where they differ it
- * is CLAUDE_PROJECT_DIR, the `cwd`, or a parent of the `cwd`; the host keeps the transcript in a folder named after
- * the session's directory and moves it on `/cd`, so the candidates whose name matches that folder are the ones left,
- * instead of CLAUDE_PROJECT_DIR alone.
+ * The directories whose project settings the host may be reading, or why none can be named. The host reads them from
+ * the session's directory, which starts at CLAUDE_PROJECT_DIR; `/cd` moves it, and the hook's `cwd` with it, but
+ * leaves CLAUDE_PROJECT_DIR at the start, and a `cd` in Bash moves only the `cwd`, back to the start included. So
+ * neither names it once the session has moved. The host keeps the transcript in a folder named after the session's
+ * directory and moves it on `/cd`, so where the transcript is in that layout its folder decides, rather than
+ * CLAUDE_PROJECT_DIR or the `cwd`: the candidates (CLAUDE_PROJECT_DIR, the `cwd` and its parents) it names, or none.
+ * Only without it do CLAUDE_PROJECT_DIR and the `cwd` stand in, and where they differ every candidate must agree.
  */
-const settingsDirCandidates = (env: Env, cwd: string | null | undefined, transcriptPath: string | null | undefined): string[] => {
+type SettingsDirs = { dirs: string[] } | { unknown: string };
+
+const settingsDirCandidates = (env: Env, cwd: string | null | undefined, transcriptPath: string | null | undefined): SettingsDirs => {
   const envDir = env['CLAUDE_PROJECT_DIR'];
   const started = typeof envDir === 'string' && envDir.length > 0 ? envDir : null;
   const here = typeof cwd === 'string' && cwd.length > 0 ? cwd : null;
-  if (started === null) return here === null ? [] : [here];
-  if (here === null || sameDir(here, started)) return [started];
-  const candidates = [...new Set([resolve(started), ...withParents(here)])];
-  if (typeof transcriptPath === 'string' && transcriptPath.length > 0) {
-    const folder = basename(dirname(transcriptPath));
-    const named = candidates.filter((d) => projectsFolderName(d) === folder);
-    if (named.length > 0) return named;
+  const candidates = [...new Set([...(started === null ? [] : [resolve(started)]), ...(here === null ? [] : withParents(here))])];
+  const folder = transcriptFolder(transcriptPath);
+  if (folder !== null && candidates.length > 0) {
+    const named = candidates.filter((d) => namesDir(folder, d));
+    return named.length > 0 ? { dirs: named } : { unknown: `the transcript folder ${folder} names none of CLAUDE_PROJECT_DIR, the cwd or its parents` };
   }
-  return candidates;
+  if (started === null) return { dirs: here === null ? [] : [here] };
+  if (here === null || sameDir(here, started)) return { dirs: [started] };
+  return { dirs: candidates };
 };
 
 type Ambiguous = { ambiguous: string };
 
 /**
  * Settings scopes a hook can read, first valid wins: managed, project-local, project-shared, user, with the project
- * scopes read from each of `dirs`. Several directories stand only once the session has moved; the value is known if
+ * scopes read from each directory in `where`. Several stand only once the session has moved; the value is known if
  * every one of them gives it.
  */
-const readSettingsChain = <T>(env: Env, dirs: readonly string[], managedDirs: readonly string[], pick: SettingsPick<T>): Found<T> | Ambiguous | null => {
+const readSettingsChain = <T>(env: Env, where: SettingsDirs, managedDirs: readonly string[], pick: SettingsPick<T>): Found<T> | Ambiguous | null => {
   const managed = readManaged(managedDirs, pick);
   if (managed !== null) return managed;
 
@@ -235,6 +258,8 @@ const readSettingsChain = <T>(env: Env, dirs: readonly string[], managedDirs: re
     return null;
   };
 
+  if ('unknown' in where) return { ambiguous: where.unknown };
+  const dirs = where.dirs;
   if (dirs.length === 0) return chain([userFile]);
   const found = dirs.map((d) => chain([...projectSettingsFiles(d, home), userFile]));
   const first = found[0] ?? null;
@@ -330,8 +355,8 @@ export const readHostWorktreeBaseRef = (env: Env, projectDir: string | null | un
   const envDir = env['CLAUDE_PROJECT_DIR'];
   const dir = typeof envDir === 'string' && envDir.length > 0 ? envDir : projectDir;
   if (typeof dir !== 'string' || dir.length === 0) return { value: null, source: 'project dir unknown' };
-  const dirs = settingsDirCandidates({ ...env, CLAUDE_PROJECT_DIR: dir }, opts.cwd ?? null, opts.transcriptPath ?? null);
-  const found = readSettingsChain(env, dirs, opts.managedDirs ?? defaultManagedDirs(), pickBaseRef);
+  const where = settingsDirCandidates({ ...env, CLAUDE_PROJECT_DIR: dir }, opts.cwd ?? null, opts.transcriptPath ?? null);
+  const found = readSettingsChain(env, where, opts.managedDirs ?? defaultManagedDirs(), pickBaseRef);
   if (found === null) return { value: null, source: 'unset' };
   return 'ambiguous' in found ? { value: null, source: `unknown: ${found.ambiguous}` } : found;
 };
