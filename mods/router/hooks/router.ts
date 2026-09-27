@@ -73,11 +73,22 @@ type StreamNextLike<E, C, R> = ((e: E) => AsyncGenerator<C, R>) & { readonly sig
 type NextLike<E, R> = ((e: E) => Promise<R>) & { readonly signal: AbortSignal };
 
 /**
- * The host release whose built-in agent definitions were read for this contract: general-purpose and claude carry no
- * model, Plan is `inherit`, Explore is `inherit` capped at opus outside haiku..opus. Another release may differ, so
- * its spawns stay native until someone reads its definitions again.
+ * The first host release whose built-in agent definitions were read for this contract: general-purpose and claude
+ * carry no model, Plan is `inherit`, Explore is `inherit` capped at opus outside haiku..opus.
  */
 export const VERIFIED_HOST = '2.1.282';
+
+/**
+ * Later 2.1 releases are accepted too. Pinned to one release, spawn routing went native after every host update: the
+ * owner's 2.1.283 was `host_unverified` the day it shipped, though its agent.spawn, agent.offer and turn.step
+ * declarations are unchanged from 2.1.282 and its Explore was observed inheriting the parent's Opus. A later release
+ * that resolves a spawn differently is caught where it shows, in the spawn's own result, and ends spawn routing for
+ * the activation (`suspended`). A development build is still refused: its base names no release.
+ */
+export const hostSupported = (base: string | undefined): boolean => {
+  const m = /^2\.1\.(\d+)$/.exec(base ?? '');
+  return m !== null && Number(m[1]) >= 282;
+};
 const INHERITING_BUILT_INS = new Set(['general-purpose', 'claude', 'Plan', 'Explore']);
 const EXPLORE_FAMILIES = new Set(['haiku', 'sonnet', 'opus']);
 /** A Lean executor prompt: its packet is not visible here, so its model is Lean's and native's to decide (#44). */
@@ -210,6 +221,15 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
   let session = new AbortController();
   let keyWait: ((signal: AbortSignal) => Promise<KeyState | typeof ABORTED>) | null = null;
   let diagnosed = false;
+  /**
+   * Why spawn routing stopped for this activation, once a spawn's own result contradicted the contract: a routed
+   * spawn that ran on another model than requested, or an unrouted one that did not run on the baseline this Router
+   * assumed. Either means the host resolves spawns differently from what every other decision here relies on. It
+   * outlives a session end, because a host's resolution does not change within one process.
+   */
+  let suspended: string | null = null;
+  /** The baseline each eligible dispatch was judged against, so its result can be checked whether or not it moved. */
+  const assumed = new WeakMap<object, string>();
 
   const log = (engine: RouterEngine, record: Record<string, unknown>): void => {
     if (!config.logDecisions) return;
@@ -514,6 +534,12 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
   /** A type the Router does not route is caller text: it is never logged, only named as other. */
   const typeLabel = (e: SpawnEvent): string => (INHERITING_BUILT_INS.has(e.subagentType) ? e.subagentType : 'other');
 
+  const suspend = (engine: RouterEngine, reason: string): void => {
+    if (suspended !== null) return;
+    suspended = reason;
+    log(engine, { event: 'spawn_suspended', reason });
+  };
+
   const spawnSkip = (engine: RouterEngine, e: SpawnEvent, reason: string): null => {
     log(engine, { event: 'spawn', tool_use_id: e.tool_use_id, type: typeLabel(e), skipped: reason });
     return null;
@@ -550,6 +576,7 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     // Native ignores a fork's model and inherits the parent's context and model.
     if (e.fork) return spawnSkip(engine, e, 'fork');
     if (e.model !== undefined && e.model.trim() !== '') return spawnSkip(engine, e, 'explicit_model');
+    if (suspended !== null) return spawnSkip(engine, e, 'spawn_suspended');
     void diagnose(engine);
     // What the event, configuration and offer cache decide comes before any wait.
     if (!INHERITING_BUILT_INS.has(e.subagentType)) return spawnSkip(engine, e, 'type_unverified');
@@ -569,10 +596,13 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     const pins = await within(pinsOf(engine), live);
     if (pins.subagentModel) return spawnSkip(engine, e, 'subagent_model_pinned');
     if (pins.aliasRemap) return spawnSkip(engine, e, 'alias_remapped');
-    if ((await within(engine.hostBase().catch(() => undefined), live)) !== VERIFIED_HOST) return spawnSkip(engine, e, 'host_unverified');
+    if (!hostSupported(await within(engine.hostBase().catch(() => undefined), live))) return spawnSkip(engine, e, 'host_unverified');
     const opts = policy('spawn', await within(engine.availableModels().catch(() => []), live));
     const offer = offerableTiers(baseline, opts);
     if ('reason' in offer) return spawnSkip(engine, e, offer.reason);
+    // Recorded only once every gate passed: a spawn left native by a pin runs on the pinned model, which says nothing
+    // about how the host resolves an inheriting one.
+    assumed.set(e, baseline.model);
 
     // Each dispatch is assessed on its own text rather than sharing one answer per tool_use_id: a redispatch under
     // that id can carry another prompt, which would then run on a tier earned by different text.
@@ -636,18 +666,24 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     }
     const result = await next(target !== null ? { ...e, model: target } : e);
     try {
+      const baseline = assumed.get(e);
       if (target !== null) {
         if (result.deny !== undefined) log(engine, { event: 'spawn_result', tool_use_id: e.tool_use_id, requested: target, denied: true });
         else {
+          const matched = sameModel(target, result.model);
           log(engine, {
             event: 'spawn_result',
             tool_use_id: e.tool_use_id,
             requested: target,
             observed: result.model,
             agent_id: result.agentId ?? null,
-            ...(sameModel(target, result.model) ? {} : { reason: 'model_mismatch' }),
+            ...(matched ? {} : { reason: 'model_mismatch' }),
           });
+          if (!matched) suspend(engine, 'model_mismatch');
         }
+      } else if (baseline !== undefined && result.deny === undefined && !answeredBy(baseline, result.model)) {
+        log(engine, { event: 'spawn_native_result', tool_use_id: e.tool_use_id, assumed: baseline, observed: result.model, reason: 'baseline_mismatch' });
+        suspend(engine, 'baseline_mismatch');
       }
     } catch {
       // Observation only.

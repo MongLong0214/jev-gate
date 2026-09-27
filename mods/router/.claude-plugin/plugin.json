@@ -65,13 +65,13 @@
     },
     "minUpgradeConfidence": {
       "title": "Upgrade confidence floor",
-      "description": "Least confidence, 0.5 to 1, for a move to a stronger model or a higher effort.",
+      "description": "Least probability, 0.5 to 1, that the work needs at least the stronger model or higher effort: Jev's answer mass at or above it.",
       "type": "number",
       "default": 0.8
     },
     "minDowngradeConfidence": {
       "title": "Downgrade confidence floor",
-      "description": "Least confidence, 0.5 to 1, for a move to a weaker model or a lower effort.",
+      "description": "Least probability, 0.5 to 1, that the weaker model or lower effort is enough: Jev's answer mass at or below it.",
       "type": "number",
       "default": 0.9
     },

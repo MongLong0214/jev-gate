@@ -5,9 +5,12 @@ model) or a built-in subagent's model should change. It is independent of the Le
 of V5 orchestration; composing them is #44.
 
 **Status.** Written against the Function Hooks declarations shipped with Claude Code 2.1.282
-(`types/claude-code.d.ts`). Every path is exercised with a fake engine and fake HTTP (`tests/router/*.test.ts`), and
-the host's own test kit loads the plugin and confirms the default is off (`tests/register.test.ts`). **No routed turn
-has been observed on a real host, and no saving is claimed.**
+(`types/claude-code.d.ts`); the 2.1.283 declarations differ only in UI and cost documentation. Every path is exercised
+with a fake engine and fake HTTP (`tests/router/*.test.ts`), and the host's own test kit loads the plugin and confirms
+the default is off (`tests/register.test.ts`). On an installed 2.1.283 host (2026-09-27, one session per condition,
+`bench/results/host-obs-2026-09-27/`), a root turn ran on the effort the Router patched in, and an `Explore` and a
+`general-purpose` spawn under Opus ran on the Sonnet the Router asked for. **Those are single observations that the
+patches take effect, not a saving; no saving is claimed.**
 
 ## Enable
 
@@ -41,8 +44,8 @@ Every wait, for the key or a read, ends when its turn is retired or its dispatch
 | `typesafeApiKey` | — | Explicit key; overrides `TYPESAFE_API_KEY`. |
 | `fastModel` / `standardModel` / `deepModel` | `haiku` / `sonnet` / `opus` | Profiles. A spawn takes aliases; the root takes exact identifiers only. |
 | `frontierModel` | empty | An exact identifier only (`claude-fable-5-1`); an alias cannot authorize it. |
-| `minUpgradeConfidence` | `0.8` | Floor for moving up. |
-| `minDowngradeConfidence` | `0.9` | Floor for moving down, which also needs an `ordinary` risk answer at this floor. |
+| `minUpgradeConfidence` | `0.8` | Floor for moving up: Jev's probability mass at or above the target. |
+| `minDowngradeConfidence` | `0.9` | Floor for moving down: Jev's probability mass at or below the target. A downgrade also needs `ordinary` risk at this probability. |
 | `timeoutMs` | `800` | Wait for Jev, 50–30000. The request is still observed for its usage after the wait ends. |
 | `logDecisions` | `true` | One `jev-router {...}` line per decision in the debug log. |
 
@@ -68,8 +71,9 @@ text, so it is logged as `other`, never by name.
   (`pair_invalid`).
 - **Spawns it cannot vouch for.** A fork (`fork`), an explicit model (`explicit_model`), a type other than the
   inheriting built-ins `general-purpose`, `claude`, `Plan` and `Explore` (`type_unverified`), a built-in's name that the
-  engine's own core listing did not offer (`definition_unverified`), a host whose release base is not 2.1.282
-  (`host_unverified`, including development builds), an `Explore` under a parent of unknown family
+  engine's own core listing did not offer (`definition_unverified`), a host whose release base is not 2.1.N with N at
+  least 282 (`host_unverified`, including development builds), any spawn after this session's routing was suspended
+  (`spawn_suspended`, below), an `Explore` under a parent of unknown family
   (`baseline_unknown`), and a prompt that carries a Lean marker (`lean_marker`).
 - **The settings allowlist.** A target outside `availableModels` is `target_not_allowed`. A malformed
   `availableModels` allows nothing. An entry allows a variant only by naming it: `claude-opus-5-5` does not allow
@@ -82,15 +86,28 @@ text, so it is logged as `other`, never by name.
   retained request carries — thinking, `max_tokens`, tools, media, beta headers, the window — and the 2.1.282
   declarations do not say the engine re-derives them for a model named in `next`. The list is empty until a host
   observation establishes a pair, so every root model stays native.
-- **The answer.** Missing, malformed or `preserve` answers, the same model under another spelling, confidence under the
-  floor, a `control` answer other than a confident `task_clear`, a downgrade without a confident `ordinary` risk, a
-  model that cannot run the effort it would get (`pair_invalid`), and a root model with a smaller context window
-  (`capacity_smaller`, which is also why such a profile is never offered).
+- **The answer.** Missing or malformed answers, a `preserve` choice, the same model under another spelling, too
+  little probability mass on either side (below), a `control` answer whose `task_clear` probability is under the
+  floor, a downgrade whose `ordinary` risk probability is under the downgrade floor, a model that cannot run the
+  effort it would get (`pair_invalid`), and a root model with a smaller context window (`capacity_smaller`, which is
+  also why such a profile is never offered).
 - **The request.** Nothing is sent for text that looks like a credential (`input_secret`, the same patterns as Lean's
   screen), for a body over 128 KiB or about 25,000 tokens (`input_too_large`, never trimmed to fit), or with eight
   requests already unresolved (`saturated`). After a 401 or 402 nothing more is sent in that activation
   (`credential_refused`). No request is retried. A reply that arrives after its wait ended is never applied; what it
   cost is logged against the turn or tool use that asked (`{"event":"late",…}`).
+
+**How an answer becomes a move.** Jev returns a probability for every label it was offered, not just a choice. The
+offered levels (tiers `fast < standard < deep < frontier`, or efforts `low < … < max`) are ordered together with the
+current one, even if the current one was not offered (an Opus `max` baseline). The Router moves down to the lowest
+level whose mass at or below it reaches `minDowngradeConfidence`, else up to the highest level whose mass at or above
+it reaches `minUpgradeConfidence`, else nowhere (`low_confidence`, or `same_value` when Jev chose the current level).
+`preserve` counts for neither side. So `{fast: 0.42, standard: 0.57, preserve: 0.01}` under a `deep` parent moves to
+`standard`: 0.99 says the work needs no more than it, while neither label alone reaches 0.9. A single top-choice floor
+was dropped because Jev spreads its answer across adjacent levels: on a 13-task spawn panel (2026-09-27, one call per
+task) the top choice cleared 0.9 on two of the ten tasks that are not deep work, the cumulative rule moves eight of
+them, and it moves none of the three deep ones.
+The floors are policy numbers, not a calibration.
 
 A root turn is judged once, at its first step, and its patch is reapplied to each later step of that turn. A turn with
 no user text (`no_task_text`) is not judged. If a step reports another model than the one requested, or reports none,
@@ -116,8 +133,15 @@ normalize.
 
 - **The host's test kit cannot set plugin options**, so `claude plugin test` only covers the default (off) path. The
   enabled paths run through `register.ts` in vitest with a fake `$` (`tests/router/register.test.ts`).
-- **One verified host.** Spawn routing depends on how 2.1.282 resolves an inheriting built-in's model. Any other
-  release base leaves spawns native until it is verified.
+- **Hosts are checked at run time, not pinned.** Spawn routing depends on how the host resolves an inheriting
+  built-in's model: 2.1.282 was read from its declarations, and 2.1.283 was observed. A pin to one exact release left
+  every spawn native after each host update, so any 2.1.N with N at least 282 is accepted, and the session checks
+  what the host reports instead. If a routed spawn reports another model than the one requested
+  (`model_mismatch`), or an unrouted inheriting spawn does not run on its parent's model (`baseline_mismatch`, which
+  means the baseline the Router ranks from is wrong), every later spawn in that activation stays native
+  (`spawn_suspended`, logged once). The suspension outlives a session end, so a host that broke it once is not
+  trusted again until the plugin reloads. The check comes after the fact: the spawn that reveals the mismatch has
+  already run.
 - **A hook never calls `next` after its signal aborts.** By then the host has gone on without it, and a `next` would
   start a second request. A root step returns nothing, and a spawn throws. While the signal is live, the handler
   checks, with nothing awaited before `next`, that the session it began in has not ended (and, at the root, that the

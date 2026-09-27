@@ -4,6 +4,22 @@ Everything below is what was actually observed, with the file that proves it. Th
 overstated claims from the original write-up; this one adds the 2026-09-19 measurements, which override several
 figures below and are marked where they do.
 
+## 2026-09-27 — the Router's patches take effect on an installed 2.1.283 host; no saving is claimed
+
+Two things kept the Router native on the owner's real host. It pinned spawns to release base 2.1.282 while the host
+was 2.1.283, so every spawn was `host_unverified`. And its floors compared Jev's top-label `confidence`, which tracks
+the margin between adjacent labels: a lookup that Jev put at `fast 0.42, standard 0.57` came back `fast@0.41`, so
+nothing moved. Now any 2.1.N with N ≥ 282 is accepted and the session suspends spawn routing the first time the host
+answers with another model than expected (`model_mismatch`, `baseline_mismatch` → `spawn_suspended`). The floors
+now read probability mass on each side of the current level (`mods/router/README.md`, "How an answer becomes a
+move").
+
+Observed once each on 2.1.283, Opus at xhigh, fixture repo (`bench/results/host-obs-2026-09-27/`): an `Explore` spawn
+and a `general-purpose` spawn were patched to `sonnet` and reported `claude-sonnet-5`; a root turn was patched from
+xhigh to medium and its steps ran at medium; the routed and native general-purpose sessions both passed the fixture's
+tests. These show the patches take effect. One session per condition is not a saving, and none is claimed. A spawn
+still runs at its parent's effort, because the spawn event has no effort field.
+
 ## 2026-09-25 — the standalone Router (#40–#43) is in `mods/router`; nothing is observed on a host
 
 `mods/router` is a Function Hooks plugin, `jev-gate-router`, off by default. When enabled, it asks Jev once per root

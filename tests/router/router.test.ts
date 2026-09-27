@@ -4,7 +4,7 @@ import type { HttpReply } from '../../mods/router/hooks/client.ts';
 import { JEV_ENDPOINT, JEV_MODEL } from '../../mods/router/hooks/client.ts';
 import { resolveConfig } from '../../mods/router/hooks/config.ts';
 import type { SpawnEvent, SpawnOutcome, TurnStepEvent } from '../../mods/router/hooks/router.ts';
-import { createRouter, VERIFIED_HOST } from '../../mods/router/hooks/router.ts';
+import { createRouter, hostSupported, VERIFIED_HOST } from '../../mods/router/hooks/router.ts';
 import { answering, CLEAR, deferred, drain, FAKE_KEY, fakeEngine, streamNext } from './fake-engine.ts';
 
 const configOf = (options: Record<string, string | number | boolean>) => {
@@ -661,7 +661,9 @@ describe('spawn model', () => {
       ['type_unverified', spawn({ subagentType: 'code-reviewer' }), {}, true],
       ['definition_unverified', spawn(), {}, false],
       ['definition_unverified', spawn({ provider: { plugin: 'someone', tier: 'append' } }), {}, true],
-      ['host_unverified', spawn(), { hostBase: '2.1.283' }, true],
+      ['host_unverified', spawn(), { hostBase: '2.1.281' }, true],
+      ['host_unverified', spawn(), { hostBase: '2.2.0' }, true],
+      ['host_unverified', spawn(), { hostBase: '2.1.283-dev' }, true],
       ['host_unverified', spawn(), { hostBase: undefined }, true],
       ['baseline_unknown', spawn({ subagentType: 'Explore', parentModel: 'claude-fable-5-1' }), {}, true],
       ['lean_marker', spawn({ prompt: 'Execute packet jev-lean-0123456789abcdef now.' }), {}, true],
@@ -913,8 +915,67 @@ describe('spawn model', () => {
     expect(n.calls).toHaveLength(0);
   });
 
-  it('verifies against the host release it was read from', () => {
+  it('verifies against the host release it was read from, and accepts later 2.1 releases', () => {
     expect(VERIFIED_HOST).toBe('2.1.282');
+    expect(['2.1.282', '2.1.283', '2.1.300'].map(hostSupported)).toEqual([true, true, true]);
+    expect(['2.1.281', '2.2.0', '2.1.283-dev', 'local', undefined].map(hostSupported)).toEqual([false, false, false, false, false]);
+  });
+
+  it('routes on a later 2.1 release', async () => {
+    const router = createRouter(configOf(SPAWN_ONLY));
+    const f = fakeEngine({ hostBase: '2.1.283', respond: answering({ ...CLEAR, tier: ['fast', 0.95] }) });
+    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    const n = spawnNext();
+    expect(await router.agentSpawn(f.engine, spawn(), n.next)).toEqual({ model: 'haiku' });
+  });
+
+  it('stops routing spawns for the activation once a routed spawn runs on another model', async () => {
+    const router = createRouter(configOf(SPAWN_ONLY));
+    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['fast', 0.95] }) });
+    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    const first = spawnNext(() => ({ model: 'claude-opus-5-5' }));
+    expect(await router.agentSpawn(f.engine, spawn(), first.next)).toEqual({ model: 'claude-opus-5-5' });
+    expect(f.logs).toContainEqual({ event: 'spawn_suspended', reason: 'model_mismatch' });
+    const second = spawnNext();
+    await router.agentSpawn(f.engine, spawn({ tool_use_id: 'tu2' }), second.next);
+    expect(second.calls).toEqual([spawn({ tool_use_id: 'tu2' })]);
+    expect(f.sent).toHaveLength(1);
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn', tool_use_id: 'tu2', skipped: 'spawn_suspended' }));
+    // A session end does not lift it: the host's resolution has not changed.
+    router.sessionEnd();
+    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    await router.agentSpawn(f.engine, spawn({ tool_use_id: 'tu3' }), spawnNext().next);
+    expect(f.sent).toHaveLength(1);
+  });
+
+  it('stops routing spawns once an unrouted one does not run on the baseline it was judged against', async () => {
+    const router = createRouter(configOf(SPAWN_ONLY));
+    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', 0.95] }) });
+    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    const n = spawnNext(() => ({ model: 'claude-sonnet-5' }));
+    await router.agentSpawn(f.engine, spawn(), n.next);
+    expect(n.calls).toEqual([spawn()]);
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn_native_result', assumed: 'claude-opus-5-5', observed: 'claude-sonnet-5', reason: 'baseline_mismatch' }));
+    expect(f.logs).toContainEqual({ event: 'spawn_suspended', reason: 'baseline_mismatch' });
+    // The same model in its 1M variant is the baseline, not a contradiction.
+    const other = createRouter(configOf(SPAWN_ONLY));
+    const g = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', 0.95] }) });
+    other.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    await other.agentSpawn(g.engine, spawn({ parentModel: 'claude-opus-5-5[1m]' }), spawnNext().next);
+    expect(g.logs.some((l) => l['event'] === 'spawn_suspended')).toBe(false);
+  });
+
+  it('does not suspend for a spawn a pin kept native, which runs on the pinned model', async () => {
+    const router = createRouter(configOf(SPAWN_ONLY));
+    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['fast', 0.95] }), pins: { subagentModel: true } });
+    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    await router.agentSpawn(f.engine, spawn(), spawnNext(() => ({ model: 'claude-haiku-4-5' })).next);
+    expect(f.logs.some((l) => l['event'] === 'spawn_native_result' || l['event'] === 'spawn_suspended')).toBe(false);
+    f.pins.subagentModel = false;
+    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    const n = spawnNext(() => ({ model: 'claude-haiku-4-5' }));
+    await router.agentSpawn(f.engine, spawn({ tool_use_id: 'tu2' }), n.next);
+    expect(n.calls).toEqual([spawn({ tool_use_id: 'tu2', model: 'haiku' })]);
   });
 });
 

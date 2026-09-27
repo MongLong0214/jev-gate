@@ -99,7 +99,9 @@ type Pick = [choice: string, confidence: number];
 export const choice = (keys: readonly string[], [pick, confidence]: Pick): Record<string, unknown> => ({
   type: 'choice',
   choice: pick,
-  probabilities: Object.fromEntries(keys.map((k) => [k, k === pick ? 0.9 : 0.1 / (keys.length - 1)])),
+  // The pick carries its stated confidence as its probability and the rest is spread evenly, so a low confidence is a
+  // low mass on every side, as the decision reads it.
+  probabilities: Object.fromEntries(keys.map((k) => [k, k === pick ? confidence : (1 - confidence) / (keys.length - 1)])),
   confidence,
 });
 

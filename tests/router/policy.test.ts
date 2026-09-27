@@ -17,7 +17,10 @@ const KEYS = ['a', 'b', 'c'];
 
 describe('validateChoice', () => {
   it('accepts exactly the declared labels, a normalized distribution and a unique maximum that is the choice', () => {
-    expect(validateChoice(choice(KEYS, ['a', 0.9]), KEYS)).toEqual({ choice: 'a', confidence: 0.9 });
+    const valid = validateChoice(choice(KEYS, ['a', 0.9]), KEYS);
+    expect(valid).toMatchObject({ choice: 'a', confidence: 0.9 });
+    expect(Object.keys(valid?.probabilities ?? {})).toEqual(KEYS);
+    expect(valid?.probabilities['a']).toBe(0.9);
     const bad: unknown[] = [
       null,
       { ...choice(KEYS, ['a', 0.9]), type: 'text' },
@@ -38,7 +41,7 @@ describe('validateChoice', () => {
     const questions = buildQuestions({ tiers: ['fast', 'standard'], efforts: null });
     if (!questions) throw new Error('expected questions');
     const answers = validateAnswers({ control: choice(['task_clear', 'explicit_lock', 'needs_context', 'unclear'], ['task_clear', 0.9]), tier: choice(['fast', 'deep', 'preserve'], ['fast', 0.9]) }, questions);
-    expect(answers.control).toEqual({ choice: 'task_clear', confidence: 0.9 });
+    expect(answers.control).toMatchObject({ choice: 'task_clear', confidence: 0.9 });
     expect(answers.tier).toBeNull();
     expect(answers.action_risk).toBeNull();
     expect(validateAnswers('nope', questions)).toEqual({ control: null, tier: null, action_risk: null });
@@ -69,7 +72,8 @@ const ALIASES: PolicyOptions['tiers'] = { fast: 'haiku', standard: 'sonnet', dee
 const opts = (over: Partial<PolicyOptions> = {}): PolicyOptions => ({ scope: 'root', tiers: FULL, minUpgradeConfidence: 0.8, minDowngradeConfidence: 0.9, ...over });
 /** Root switches a test declares verified; the shipped list is empty. */
 const switches = (...pairs: Array<[string, string]>): Pick<PolicyOptions, 'rootSwitches'> => ({ rootSwitches: pairs.map(([from, to]) => ({ from, to })) });
-const a = (choice: string, confidence = 0.95): ChoiceAnswer => ({ choice, confidence });
+/** All of the answer's mass on its choice: `confidence` is that probability, the one the decision reads. */
+const a = (choice: string, confidence = 0.95): ChoiceAnswer => ({ choice, confidence, probabilities: { [choice]: confidence } });
 const CLEAR: Answers = { control: a('task_clear', 0.97), action_risk: a('ordinary', 0.97) };
 
 describe('what is offered', () => {
@@ -200,6 +204,50 @@ describe('choosePatch', () => {
     const kept = choosePatch({ ...CLEAR, tier: a('standard'), effort: a('low') }, base, { tiers: modelOnly.tiers, efforts: effortOnly.efforts }, toSonnet);
     expect(kept).toEqual({ patch: { model: 'claude-sonnet-5', effort: 'low' }, model: 'applied', effort: 'applied' });
     expect(choosePatch({ ...CLEAR, tier: a('standard') }, { model: 'claude-opus-5-5', effort: 'max' }, modelOnly, toSonnet).model).toBe('pair_invalid');
+  });
+
+  // Distributions Jev returned for real development tasks on 2026-09-27 (bench/results/host-obs-2026-09-27).
+  const dist = (choice: string, probabilities: Record<string, number>, confidence = 0.4): ChoiceAnswer => ({ choice, confidence, probabilities });
+  const spawnTiers = { tiers: ['fast', 'standard', 'deep'] as const, efforts: null };
+  const spawnOpts = opts({ scope: 'spawn', tiers: ALIASES });
+  const opus: Baseline = { model: 'claude-opus-5-5' };
+
+  it('moves down to the least profile whose mass at or below it reaches the floor, whatever the top label says', () => {
+    // "Find which file defines parseConfig": top label standard, confidence 0.46, but 0.98 of the mass is standard or less.
+    const lookup = dist('standard', { fast: 0.38, standard: 0.6, deep: 0, preserve: 0.02 }, 0.46);
+    expect(choosePatch({ ...CLEAR, tier: lookup }, opus, spawnTiers, spawnOpts)).toEqual({ patch: { model: 'sonnet' }, model: 'applied', effort: 'not_asked' });
+    // "Search for TODO comments": fast carries the floor by itself.
+    const todo = dist('fast', { fast: 0.95, standard: 0.04, deep: 0, preserve: 0.01 }, 0.94);
+    expect(choosePatch({ ...CLEAR, tier: todo }, opus, spawnTiers, spawnOpts).patch).toEqual({ model: 'haiku' });
+  });
+
+  it('keeps the baseline when the mass below it does not reach the floor, and preserve holds it', () => {
+    // A latency regression: deep 0.49, standard 0.42 -- 0.43 at or below standard.
+    const regression = dist('deep', { fast: 0.01, standard: 0.42, deep: 0.49, preserve: 0.08 }, 0.32);
+    expect(choosePatch({ ...CLEAR, tier: regression }, opus, spawnTiers, spawnOpts).model).toBe('same_value');
+    // Standard on top but 0.87 at or below it, with 0.04 preserve and 0.09 deep: not enough to leave Opus.
+    const auth = dist('standard', { fast: 0.02, standard: 0.85, deep: 0.09, preserve: 0.04 }, 0.81);
+    expect(choosePatch({ ...CLEAR, tier: auth }, opus, spawnTiers, spawnOpts).model).toBe('low_confidence');
+    expect(choosePatch({ ...CLEAR, tier: dist('preserve', { fast: 0.3, standard: 0.3, deep: 0, preserve: 0.4 }) }, opus, spawnTiers, spawnOpts).model).toBe('answer_preserve');
+  });
+
+  it('reads effort the same way, with an unoffered baseline placed in the order', () => {
+    const pagination = dist('medium', { low: 0.13, medium: 0.84, high: 0.01, xhigh: 0, preserve: 0.02 }, 0.81);
+    const xhigh: Baseline = { model: 'claude-opus-5-5', effort: 'xhigh' };
+    expect(choosePatch({ ...CLEAR, effort: pagination }, xhigh, effortOnly, opts()).patch).toEqual({ effort: 'medium' });
+    // From max, which is never offered, every offered level is below it.
+    expect(choosePatch({ ...CLEAR, effort: pagination }, { model: 'claude-opus-5-5', effort: 'max' }, effortOnly, opts()).patch).toEqual({ effort: 'medium' });
+    // Most of the mass on high and xhigh: an xhigh baseline stays.
+    const deadlock = dist('high', { low: 0, medium: 0.01, high: 0.59, xhigh: 0.32, preserve: 0.08 }, 0.49);
+    expect(choosePatch({ ...CLEAR, effort: deadlock }, xhigh, effortOnly, opts()).effort).toBe('low_confidence');
+  });
+
+  it('moves up to the greatest level whose mass at or above it reaches the upgrade floor', () => {
+    const sonnet: Baseline = { model: 'claude-sonnet-5' };
+    const up = dist('deep', { fast: 0, standard: 0.1, deep: 0.85, preserve: 0.05 });
+    expect(choosePatch({ ...CLEAR, tier: up }, sonnet, spawnTiers, spawnOpts).patch).toEqual({ model: 'opus' });
+    const split = dist('deep', { fast: 0, standard: 0.3, deep: 0.6, preserve: 0.1 });
+    expect(choosePatch({ ...CLEAR, tier: split }, sonnet, spawnTiers, spawnOpts).model).toBe('low_confidence');
   });
 
   it('treats the same rank as no change, whatever the variant', () => {

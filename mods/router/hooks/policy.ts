@@ -32,6 +32,8 @@ export interface ChoiceQuestion {
 export interface ChoiceAnswer<K extends string = string> {
   choice: K;
   confidence: number;
+  /** Every label's probability, as validated: the decision reads these, not `confidence`. */
+  probabilities: Readonly<Record<string, number>>;
 }
 
 // ------------------------------------------------------------------------------------------------ questions
@@ -154,7 +156,7 @@ export const validateChoice = (value: unknown, keys: readonly string[]): ChoiceA
   if (top.length !== 1 || top[0] !== choice) return null;
   const confidence = value['confidence'];
   if (typeof confidence !== 'number' || !Number.isFinite(confidence) || confidence < 0 || confidence > 1) return null;
-  return { choice, confidence };
+  return { choice, confidence, probabilities: Object.fromEntries(keys.map((k) => [k, probs[k] as number])) };
 };
 
 export type Answers = Partial<Record<keyof Questions, ChoiceAnswer | null>>;
@@ -299,26 +301,58 @@ export const pairValid = (model: string, effort: SymbolicEffort | number | undef
   return false;
 };
 
+const probOf = (answer: ChoiceAnswer, label: string): number => answer.probabilities[label] ?? 0;
+
 const controlGate = (control: ChoiceAnswer | null | undefined, floor: number): DimensionReason | null => {
   if (!control) return 'control_invalid';
   if (control.choice === 'explicit_lock') return 'control_lock';
   if (control.choice === 'needs_context') return 'control_needs_context';
   if (control.choice === 'unclear') return 'control_unclear';
-  return control.confidence >= floor ? null : 'control_low_confidence';
+  return probOf(control, 'task_clear') >= floor ? null : 'control_low_confidence';
 };
 
 /**
- * One dimension's movement: its own answer and task_clear control at the direction's floor, and a confident
- * ordinary action_risk for any downward move. Missing or unclear risk blocks only a downward move.
+ * A move's other conditions: task_clear control at the direction's floor, and a probable ordinary action_risk for
+ * any downward move. Missing or unclear risk blocks only a downward move.
  */
-const gate = (answer: ChoiceAnswer, direction: 1 | -1, answers: Answers, opts: PolicyOptions): DimensionReason | null => {
+const gate = (direction: 1 | -1, answers: Answers, opts: PolicyOptions): DimensionReason | null => {
   const floor = direction > 0 ? opts.minUpgradeConfidence : opts.minDowngradeConfidence;
-  if (answer.confidence < floor) return 'low_confidence';
   const control = controlGate(answers.control, floor);
   if (control) return control;
   if (direction < 0) {
     const risk = answers.action_risk;
-    if (!risk || risk.choice !== 'ordinary' || risk.confidence < opts.minDowngradeConfidence) return 'risk_blocks_downgrade';
+    if (!risk || risk.choice !== 'ordinary' || probOf(risk, 'ordinary') < opts.minDowngradeConfidence) return 'risk_blocks_downgrade';
+  }
+  return null;
+};
+
+/**
+ * Where an ordered answer moves from `current`, read from the whole distribution rather than the top label: down to
+ * the least level whose probability mass at or below it reaches the downgrade floor, else up to the greatest level
+ * whose mass at or above it reaches the upgrade floor. `preserve` belongs to neither side, so its mass holds the
+ * current value in both directions.
+ *
+ * Why not the top label's confidence: on 13 development tasks (2026-09-27, bench/results/host-obs-2026-09-27) Jev
+ * ranked every deep task deep and every standard task standard, yet a trivial lookup came back "standard 0.60,
+ * fast 0.38" with confidence 0.46. Its confidence tracks the margin between labels, so a 0.9 floor on it held almost
+ * every task, including ones whose mass at or below a cheaper level was 0.98. The floors are policy numbers, not a
+ * measured calibration.
+ */
+export const orderedMove = (
+  answer: ChoiceAnswer,
+  order: readonly string[],
+  current: number,
+  opts: Pick<PolicyOptions, 'minUpgradeConfidence' | 'minDowngradeConfidence'>,
+): { index: number; direction: 1 | -1 } | null => {
+  let below = 0;
+  for (let i = 0; i < current; i++) {
+    below += probOf(answer, order[i] as string);
+    if (below >= opts.minDowngradeConfidence) return { index: i, direction: -1 };
+  }
+  let above = 0;
+  for (let i = order.length - 1; i > current; i--) {
+    above += probOf(answer, order[i] as string);
+    if (above >= opts.minUpgradeConfidence) return { index: i, direction: 1 };
   }
   return null;
 };
@@ -336,18 +370,21 @@ export const choosePatch = (answers: Answers, baseline: Baseline, asked: Mutable
     else if (a.choice === 'preserve') model = 'answer_preserve';
     else if (current === null) model = 'target_unavailable';
     else {
-      const tier = a.choice as ModelTier;
-      const value = opts.tiers[tier];
-      const direction = Math.sign(TIER_ORDER.indexOf(tier) - TIER_ORDER.indexOf(current));
-      const refusal = targetRefusal(value, baseline, opts);
-      if (direction === 0 || (value !== undefined && sameModel(value, baseline.model))) model = 'same_value';
-      else if (refusal) model = refusal;
+      const order = TIER_ORDER.filter((t) => asked.tiers?.includes(t) || t === current);
+      const move = orderedMove(a, order, order.indexOf(current), opts);
+      if (!move) model = a.choice === current ? 'same_value' : 'low_confidence';
       else {
-        const blocked = gate(a, direction as 1 | -1, answers, opts);
-        if (blocked) model = blocked;
+        const value = opts.tiers[order[move.index] as ModelTier];
+        const refusal = targetRefusal(value, baseline, opts);
+        if (value !== undefined && sameModel(value, baseline.model)) model = 'same_value';
+        else if (refusal) model = refusal;
         else {
-          model = 'applied';
-          targetModel = value;
+          const blocked = gate(move.direction, answers, opts);
+          if (blocked) model = blocked;
+          else {
+            model = 'applied';
+            targetModel = value;
+          }
         }
       }
     }
@@ -355,18 +392,20 @@ export const choosePatch = (answers: Answers, baseline: Baseline, asked: Mutable
 
   if (asked.efforts && asked.efforts.length > 0 && isSymbolicEffort(baseline.effort)) {
     const a = answers.effort;
+    const from = baseline.effort;
     if (!a) effort = 'answer_invalid';
     else if (a.choice === 'preserve') effort = 'answer_preserve';
     else {
-      const level = a.choice as RoutedEffort;
-      const direction = Math.sign(effortIndex(level) - effortIndex(baseline.effort));
-      if (direction === 0) effort = 'same_value';
+      // The baseline is placed in the order even when it was not offered (max), so every offered level is on one side.
+      const order = [...new Set<SymbolicEffort>([...asked.efforts, from])].sort((x, y) => effortIndex(x) - effortIndex(y));
+      const move = orderedMove(a, order, order.indexOf(from), opts);
+      if (!move) effort = a.choice === from ? 'same_value' : 'low_confidence';
       else {
-        const blocked = gate(a, direction as 1 | -1, answers, opts);
+        const blocked = gate(move.direction, answers, opts);
         if (blocked) effort = blocked;
         else {
           effort = 'applied';
-          targetEffort = level;
+          targetEffort = order[move.index] as RoutedEffort;
         }
       }
     }
