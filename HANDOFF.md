@@ -4,6 +4,17 @@ Everything below is what was actually observed, with the file that proves it. Th
 overstated claims from the original write-up; this one adds the 2026-09-19 measurements, which override several
 figures below and are marked where they do.
 
+## 2026-09-27 — the bench runner has a spend stop (`--max-cost-usd`); nothing was executed
+
+Both pre-registrations in #54 (`router-vs-native-2026-09-27`, `lean-vs-native-2026-09-27`) require the runner to stop
+on spend before any paid cell. It now takes `--max-cost-usd <dollars>`: before each cell it reads every finished
+cell's `cell.json` back through the report's `toRowView` and starts nothing once the complete cost reaches the cap,
+or once any finished cell's complete cost is unknown. Held cells keep their rows (`max_cost_reached` /
+`cost_unknown`), and `summary.json` carries `spend`. The check is between cells, so the run can end above the cap by
+the one cell that was running. Offline tests through real rows only (fake CLI); no `--execute` against a real host.
+That clears one precondition of each pre-registration. The others (the lean episode cases and follow-up turn, a
+plan-only run on the frozen build, and the owner's own approval) are unchanged.
+
 ## 2026-09-27 — #48 P0-1/P2: depth floor relative to the host window, a liveness alarm, and a thinner idle hook; admission on a real host is still not observed
 
 **Review round (gpt-6-sol, PR #52).** Four blockers, all fixed. (1) The window is now resolved the way the host resolves

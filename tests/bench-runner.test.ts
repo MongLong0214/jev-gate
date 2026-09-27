@@ -557,3 +557,64 @@ describe('#45: Router execution inputs', () => {
     expect(native.slice(native.indexOf('--effort'), native.indexOf('--effort') + 2)).toEqual(['--effort', 'xhigh']);
   });
 });
+
+describe('the spend stop (--max-cost-usd)', () => {
+  const cells = (out: string, arm: string): CellRecord[] => [readCell(out, arm, 1), readCell(out, arm, 2)];
+  const summary = (out: string): { spend: { max_cost_usd: number | null; known_usd: number; unknown_cell: string | null; stopped: string | null } } =>
+    JSON.parse(readFileSync(join(out, 'summary.json'), 'utf8')) as ReturnType<typeof summary>;
+
+  it('rejects a cap that is not a positive number of dollars', () => {
+    for (const v of ['0', '-1', 'abc', '']) {
+      const r = bench(['--max-cost-usd', v]);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toMatch(/--max-cost-usd must be a positive number of US dollars/);
+    }
+  });
+
+  it('starts no cell once the complete cost of the rows written so far reaches the cap, and keeps every row', () => {
+    const r = bench(['--execute', '--arms', 'sonnet_native', '--repetitions', '2', '--max-sessions', '2', '--max-cost-usd', '0.001', '--timeout-ms', '60000']);
+    expect(r.status, r.stderr).toBe(0);
+    const [a, b] = cells(r.out, 'sonnet_native');
+    const ran = [a!, b!].filter((c) => c.started);
+    const held = [a!, b!].filter((c) => !c.started);
+    expect(ran).toHaveLength(1);
+    expect(held.map((c) => c.not_started_reason)).toEqual(['max_cost_reached']);
+    expect(r.stdout).toMatch(/stop: the complete cost so far, \$0\.\d{4}, reached --max-cost-usd 0\.001/);
+    const plan = JSON.parse(readFileSync(join(r.out, 'plan.json'), 'utf8')) as Plan;
+    expect(plan.max_cost_usd).toBe(0.001);
+    const s = summary(r.out).spend;
+    expect(s).toMatchObject({ max_cost_usd: 0.001, unknown_cell: null, stopped: 'max_cost_reached' });
+    // The stop reads the same complete cost the report shows for that row.
+    const rep = report(r.out);
+    expect(s.known_usd).toBeCloseTo(rep.arms[0]!.total_cost_usd!, 10);
+    expect(rep.arms[0]).toMatchObject({ planned: 2, by_status: expect.objectContaining({ completed: 1, not_started: 1 }) });
+  }, 120_000);
+
+  it('runs every planned cell while the complete cost stays below the cap', () => {
+    const r = bench(['--execute', '--arms', 'sonnet_native', '--repetitions', '2', '--max-sessions', '2', '--max-cost-usd', '100', '--timeout-ms', '60000']);
+    expect(r.status, r.stderr).toBe(0);
+    expect(cells(r.out, 'sonnet_native').every((c) => c.started)).toBe(true);
+    const s = summary(r.out).spend;
+    expect(s.stopped).toBeNull();
+    expect(s.known_usd).toBeCloseTo(report(r.out).arms[0]!.total_cost_usd!, 10);
+  }, 120_000);
+
+  it('stops on a row whose complete cost is unknown, since an unknown is not a zero', () => {
+    const r = bench(['--execute', '--arms', 'frontier_native', '--repetitions', '2', '--max-sessions', '2', '--max-cost-usd', '100', '--timeout-ms', '1500'], { FAKE_CLAUDE_HANG: '1' });
+    expect(r.status, r.stderr).toBe(0);
+    const [a, b] = cells(r.out, 'frontier_native');
+    const ran = [a!, b!].find((c) => c.started)!;
+    const held = [a!, b!].find((c) => !c.started)!;
+    expect(ran.timed_out).toBe(true);
+    expect(held.not_started_reason).toBe('cost_unknown');
+    expect(summary(r.out).spend).toMatchObject({ stopped: 'cost_unknown', known_usd: 0, unknown_cell: join('cells', 'mini', 'frontier_native', String(ran.repetition)) });
+    expect(r.stdout).toMatch(/stop: the complete cost of cells\/mini\/frontier_native\/\d is unknown/);
+  }, 120_000);
+
+  it('changes nothing without the flag: an unknown row does not stop a run that set no cap', () => {
+    const r = bench(['--execute', '--arms', 'frontier_native', '--repetitions', '2', '--max-sessions', '2', '--timeout-ms', '1500'], { FAKE_CLAUDE_HANG: '1' });
+    expect(r.status, r.stderr).toBe(0);
+    expect(cells(r.out, 'frontier_native').every((c) => c.started)).toBe(true);
+    expect(summary(r.out).spend).toMatchObject({ max_cost_usd: null, stopped: null });
+  }, 120_000);
+});

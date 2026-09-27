@@ -12,6 +12,7 @@ import { LEAN_ACTION_CONFIDENCE, LEAN_COORDINATOR_RESERVE_BYTES, LEAN_OMISSION_C
 import { MAX_OPTIONAL_GROUPS, SOURCE_MAX_BYTES, SOURCE_MAX_MS } from '../lean-source.js';
 import { OWNED_AGENTS, type ConfigV5, type Tier } from '../types.js';
 import { gradeDir, type Grade } from './checker.js';
+import { toRowView } from './report.js';
 import { canonicalize, copyTree, createExclusiveDir, isInside, isSafeId, overlaps, type SnapshotReport } from './paths.js';
 import { estimateJevCostUsd, modelFamily, parseModelUsage, safeSum, tokenCount, type ModelUsage } from './usage.js';
 
@@ -163,6 +164,8 @@ export interface Options {
   arms: Arm[];
   repetitions: number;
   maxSessions: number | null;
+  /** Pre-registered spend stop: no cell starts once the complete cost of the cells run so far reaches it. */
+  maxCostUsd: number | null;
   timeoutMs: number;
   maxTurns: number;
   seed: number;
@@ -488,6 +491,11 @@ const positiveInt = (name: string, v: string | undefined): number => {
   if (!Number.isInteger(n) || n <= 0) throw new Error(`${name} must be a positive integer`);
   return n;
 };
+const positiveUsd = (name: string, v: string | undefined): number => {
+  const n = v === undefined || v.trim() === '' ? NaN : Number(v);
+  if (!Number.isFinite(n) || n <= 0) throw new Error(`${name} must be a positive number of US dollars`);
+  return n;
+};
 
 export const parseArgs = (argv: string[]): Options => {
   const o: Options = {
@@ -498,6 +506,7 @@ export const parseArgs = (argv: string[]): Options => {
     arms: [...ALL_ARMS],
     repetitions: 1,
     maxSessions: null,
+    maxCostUsd: null,
     timeoutMs: 900_000,
     maxTurns: 60,
     seed: 42,
@@ -546,6 +555,7 @@ export const parseArgs = (argv: string[]): Options => {
       o.only = ids;
     } else if (a === '--repetitions') o.repetitions = positiveInt(a, next());
     else if (a === '--max-sessions') o.maxSessions = positiveInt(a, next());
+    else if (a === '--max-cost-usd') o.maxCostUsd = positiveUsd(a, next());
     else if (a === '--timeout-ms') o.timeoutMs = positiveInt(a, next());
     else if (a === '--max-turns') o.maxTurns = positiveInt(a, next());
     else if (a === '--seed') o.seed = positiveInt(a, next());
@@ -648,6 +658,8 @@ export interface Plan {
   rows: PlanRow[];
   planned_cells: number;
   max_sessions: number | null;
+  /** Absent in a plan written before the spend stop existed. */
+  max_cost_usd?: number | null;
   cli: Record<string, unknown>;
   /**
    * T8/B3: the configuration resolved once, before execution. `--execute` freezes exactly this object and points every
@@ -682,6 +694,7 @@ export const buildPlan = (o: Options, cases: CodingCase[], manifestVersion: numb
     rows,
     planned_cells: rows.length * o.arms.length,
     max_sessions: o.maxSessions,
+    max_cost_usd: o.maxCostUsd,
     cli: {
       claude: o.claude,
       plugin_dir: o.pluginDir,
@@ -2090,6 +2103,17 @@ export const main = async (argv: string[]): Promise<number> => {
   const specs = armSpecs(o.frontierModel, o.fixedEffort, o.baseEffort);
   let sessions = 0;
   const written: string[] = [];
+  // The spend stop reads each finished cell back from its cell.json through the report's own row view rather than a
+  // second sum of its own, so the total it stops on is the complete cost the report will show: Claude plus every Jev
+  // producer. A cell whose complete cost is unknown stops the run as well, since an unknown is not a zero and the cap
+  // could already be passed.
+  const spend = { known_usd: 0, unknown_cell: null as string | null, stopped: null as 'max_cost_reached' | 'cost_unknown' | null };
+  const addSpend = (row: Plan['rows'][number], arm: string, cellDir: string): void => {
+    const cellFile = join(cellDir, 'cell.json');
+    const view = toRowView({ job: row.job, group: row.group, repetition: row.repetition, arm, file: cellFile }, JSON.parse(readFileSync(cellFile, 'utf8')) as Record<string, unknown>);
+    if (view.total_cost_usd === null) spend.unknown_cell ??= relative(out, cellDir);
+    else spend.known_usd += view.total_cost_usd;
+  };
   for (const row of plan.rows) {
     const cs = cases.find((c) => c.id === row.job)!;
     for (const arm of row.arms) {
@@ -2105,6 +2129,20 @@ export const main = async (argv: string[]): Promise<number> => {
       }
       if (o.maxSessions !== null && sessions >= o.maxSessions) {
         cell.not_started_reason = 'max_sessions_reached';
+        writeJsonAtomic(join(cellDir, 'cell.json'), cell);
+        continue;
+      }
+      if (o.maxCostUsd !== null && (spend.unknown_cell !== null || spend.known_usd >= o.maxCostUsd)) {
+        const reason = spend.unknown_cell !== null ? 'cost_unknown' : 'max_cost_reached';
+        if (spend.stopped === null) {
+          process.stdout.write(
+            reason === 'cost_unknown'
+              ? `stop: the complete cost of ${spend.unknown_cell} is unknown, so --max-cost-usd ${o.maxCostUsd} cannot be checked; no further cell starts\n`
+              : `stop: the complete cost so far, $${spend.known_usd.toFixed(4)}, reached --max-cost-usd ${o.maxCostUsd}; no further cell starts\n`,
+          );
+        }
+        spend.stopped = reason;
+        cell.not_started_reason = reason;
         writeJsonAtomic(join(cellDir, 'cell.json'), cell);
         continue;
       }
@@ -2149,6 +2187,7 @@ export const main = async (argv: string[]): Promise<number> => {
       // record. Called unconditionally like ingestTraces above; on an arm that never wrote this file it is a no-op.
       ingestRouterLog(cell, join(cellDir, 'router-debug.log'));
       writeJsonAtomic(join(cellDir, 'cell.json'), cell);
+      addSpend(row, arm, cellDir);
       process.stdout.write(`    exit=${String(cell.exit_code)} elapsed=${String(cell.elapsed_ms)}ms timed_out=${cell.timed_out} model=${cell.init?.model ?? 'unknown'} plugins=${cell.init?.plugins.join(',') || '-'} agents=${cell.agent_calls.map((c) => `${c.subagent_type}${c.has_model ? `(pin:${c.model_param})` : ''}`).join(',') || '-'} jev: attempted=${cell.gate.eligible_attempted} patched=${cell.gate.patched} preserved=${cell.gate.preserved}\n`);
     }
   }
@@ -2165,7 +2204,13 @@ export const main = async (argv: string[]): Promise<number> => {
     writeJsonAtomic(cellPath, cell);
     process.stdout.write(`    ${cell.job} r${cell.repetition} ${cell.arm}: ${cell.grade.quality}${cell.grade.reason ? ` (${cell.grade.reason})` : ''}\n`);
   }
-  writeJsonAtomic(join(out, 'summary.json'), { schema: 5, finished_at: new Date().toISOString(), cancelled, cells: written.length });
+  writeJsonAtomic(join(out, 'summary.json'), {
+    schema: 5,
+    finished_at: new Date().toISOString(),
+    cancelled,
+    cells: written.length,
+    spend: { max_cost_usd: o.maxCostUsd, known_usd: spend.known_usd, unknown_cell: spend.unknown_cell, stopped: spend.stopped },
+  });
   process.stdout.write(`done: ${out}. Next: node dist/bench/report.js --run ${out}\n`);
   return cancelled ? 130 : 0;
 };

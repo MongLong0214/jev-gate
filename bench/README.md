@@ -16,6 +16,15 @@ node dist/bench/run.js --cases bench/cases.json --out /outside/repo/run-1 \
 node dist/bench/report.js --run /outside/repo/run-1                                    # reads files only
 ```
 
+**Spend stop.** `--max-cost-usd <dollars>` stops a run on its spend, not only on its session count. Before each cell
+starts, the runner sums the complete cost of every cell it has already run, read back from that cell's `cell.json`
+through the report's own row view (Claude plus every Jev producer), and starts no further cell once the sum reaches
+the cap. A cell whose complete cost is unknown (no result, a timeout, an unread Router log) stops the run too: an
+unknown is not a zero, and the cap may already be passed. Cells that do not start keep their rows, with
+`not_started_reason` `max_cost_reached` or `cost_unknown`, and `summary.json` records `spend: {max_cost_usd, known_usd,
+unknown_cell, stopped}`. The cap is checked between cells, so the cell running when it is reached still finishes and
+the total can end above the cap by that one cell. Without the flag nothing changes.
+
 ## Router arms (#45)
 
 `--arms router` selects exactly three arms, not mixed into the default set or `lean`:
