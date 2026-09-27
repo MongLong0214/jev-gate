@@ -35,7 +35,8 @@ engine's time and usage.
 - **The tail** starts at an assistant message and holds both halves of every tool exchange in it, matched by
   `tool_use_id`: parallel calls in separate rows ahead of one row of results move the start back to the first call,
   and a result whose call is nowhere leaves the compaction to the engine. It always holds the last assistant message and
-  what follows (often the large result that crossed the threshold), and grows back within 40% of the budget.
+  what follows (often the large result that crossed the threshold) and every call still in flight (a tool_use no result
+  answers yet), and grows back within 40% of the budget.
 - **The ceiling.** Because the last exchange is kept whole, the total can pass `budgetChars`: up to twice it for the
   tail plus 30% for the digest, 2.3 times in all. Past twice for the tail, or when the digest and tail would come to more
   than half of the conversation they replace, the engine compacts instead, so an answered compaction always at least
@@ -45,7 +46,8 @@ engine's time and usage.
   tool inputs (240 each), then result excerpts (1,200 each), newest first. Pieces are chosen by that priority and
   printed oldest first. Engine-injected user text (`<system-reminder>`, task notifications, command echoes) is not a
   request.
-- **A digest it wrote earlier** is taken apart at the next compaction: its previous summary stays the summary, its
+- **A digest it wrote earlier** (recognized by its whole header line, so a request that only starts with the mark stays
+  a request) is taken apart at the next compaction: its previous summary stays the summary, its
   requests and steps join the new ones as the oldest, so the newest survive the cut rather than the oldest. A content
   line that starts like a section heading (`## `) or a request marker (`▸ `) is written indented by one space, so a
   request or result that quotes them cannot move the parse.

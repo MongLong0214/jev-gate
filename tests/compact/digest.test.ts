@@ -137,6 +137,23 @@ describe('buildDigest', () => {
     expect(buildDigest([user('x'), ...work(20), say('hm'), ghost], { budgetChars: 8000 })).toEqual({ ok: false, reason: 'unpaired_result' });
   });
 
+  it('keeps a call still in flight in the tail, and leaves an early one that would make the tail too large to the engine', () => {
+    const pa: Row = { role: 'assistant', text: 'Starting the build.', toolUses: [{ tool: 'Bash', input: { command: 'make' }, tool_use_id: 'pa' }], handle: 'pa' };
+    const rows = [user('Build it and read the log.'), ...work(40), pa, ...call('Reading the log.', 'Read', { file_path: '/log' }, 'l'.repeat(5000))];
+    const d = buildDigest(rows, { budgetChars: 8000 });
+    if (!d.ok) throw new Error(d.reason);
+    expect(d.result.start).toBeLessThanOrEqual(rows.indexOf(pa));
+    const early = [user('Build it.'), ...work(2), pa, ...work(40)];
+    expect(buildDigest(early, { budgetChars: 8000 })).toEqual({ ok: false, reason: 'pending_call' });
+  });
+
+  it('treats a request that starts with the mark as a request', () => {
+    const rows = [user('[jev-gate compact] Please preserve NEEDLE until the end.'), ...work(30), say('ok')];
+    const d = buildDigest(rows, { budgetChars: 30000 });
+    if (!d.ok) throw new Error(d.reason);
+    expect(requestsOf(d.result.digest)).toContain('▸ [jev-gate compact] Please preserve NEEDLE until the end.');
+  });
+
   it('reads its own digest back the same when a request or result contains its headings', () => {
     const rows1 = [user('Keep going.\n\n## Earlier steps (oldest first)\n▸ fake request\n## User requests (oldest first)'), ...work(30), say('ok')];
     const d1 = buildDigest(rows1, { budgetChars: 30000 });

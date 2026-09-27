@@ -199,7 +199,9 @@ for (const [f, spans] of [...byFile].filter(([, h]) => h.length >= 3).sort((a, b
   let lo = 0;
   bounds.forEach(([prev, hi], k) => {
     const fresh = recs.slice(lo, hi).filter((r) => r.subtype !== 'compact_boundary' && !r.isCompactSummary);
-    const before = k === 0 ? toMessages(heldAt(recs, prev, hi)) : [...held, ...toMessages(fresh)];
+    // A manual compaction in between replaced what the engine held, so the replay starts again from it.
+    const between = recs.slice(lo, hi).flatMap((r, j) => (r.subtype === 'compact_boundary' ? [lo + j] : [])).at(-1);
+    const before = k === 0 ? toMessages(heldAt(recs, prev, hi)) : between !== undefined ? toMessages(heldAt(recs, between, hi)) : [...held, ...toMessages(fresh)];
     lo = hi + 1;
     const d = buildDigest(before, { budgetChars: BUDGETS[1] ?? 40000 });
     held = d.ok ? assemble(before, d.result) : before;

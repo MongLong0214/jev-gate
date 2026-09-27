@@ -40,7 +40,7 @@ export interface DigestResult {
   readonly headMessages: number;
 }
 
-export type DigestFallback = 'nothing_to_compact' | 'tail_too_large' | 'unpaired_result' | 'no_relief';
+export type DigestFallback = 'nothing_to_compact' | 'tail_too_large' | 'pending_call' | 'unpaired_result' | 'no_relief';
 export type DigestOutcome = { ok: true; result: DigestResult } | { ok: false; reason: DigestFallback };
 
 /** Marks a digest this module wrote, so the next compaction carries it forward as the previous summary. */
@@ -85,8 +85,9 @@ export const messageChars = (m: DigestMessage): number =>
   (m.role === 'assistant' ? m.toolUses.reduce((n, u) => n + inputText(u).length, 0) : 0) +
   (m.toolResults ?? []).reduce((n, r) => n + r.text.length, 0);
 
+/** A digest this module wrote is recognized by its whole header rather than the mark alone: a request can start with the mark. */
 const isSummary = (m: DigestMessage): boolean =>
-  m.role === 'user' && (m.text.trimStart().startsWith(CORE_SUMMARY) || m.text.trimStart().startsWith(DIGEST_MARK));
+  m.role === 'user' && (m.text.trimStart().startsWith(CORE_SUMMARY) || m.text.trimStart().startsWith(HEADER));
 
 const isRequest = (m: DigestMessage): boolean =>
   m.role === 'user' && (m.toolResults ?? []).length === 0 && m.text.trim() !== '' && !isSummary(m) && !NOT_A_REQUEST.test(m.text);
@@ -111,13 +112,20 @@ const paired = (messages: readonly DigestMessage[], start: number): number | nul
   }
 };
 
+/** Index of the first message holding a tool_use that no result anywhere answers yet (a call still in flight), or -1. */
+const firstPending = (messages: readonly DigestMessage[]): number => {
+  const answered = new Set(messages.flatMap((m) => (m.toolResults ?? []).flatMap((r) => (r.tool_use_id ? [r.tool_use_id] : []))));
+  return messages.findIndex((m) => toolUseIds(m).some((id) => !answered.has(id)));
+};
+
 type Boundary = { ok: true; start: number } | { ok: false; reason: DigestFallback };
 
 /**
  * The tail starts at an assistant message and holds both halves of every tool exchange in it, so the digest (a user
  * message) is followed by an assistant one and no tool_result is orphaned. It always holds the last assistant message
- * and what follows it (often the large result that crossed the threshold), up to twice the budget, and grows back
- * within its share; past that, or when a result's call cannot be found, the compaction is left to the engine.
+ * and what follows it (often the large result that crossed the threshold) and every call still in flight, up to twice
+ * the budget, and grows back within its share; past that, or when a result's call cannot be found, the compaction is
+ * left to the engine.
  */
 const tailStart = (messages: readonly DigestMessage[], tailBudget: number, budget: number): Boundary => {
   let lastAssistant = -1;
@@ -128,11 +136,13 @@ const tailStart = (messages: readonly DigestMessage[], tailBudget: number, budge
     }
   }
   if (lastAssistant <= 0) return { ok: false, reason: 'nothing_to_compact' };
-  const floor = paired(messages, lastAssistant);
+  // A call still in flight stays in the tail, so the result that arrives later has its call.
+  const pending = firstPending(messages);
+  const floor = paired(messages, pending >= 0 ? Math.min(pending, lastAssistant) : lastAssistant);
   if (floor === null) return { ok: false, reason: 'unpaired_result' };
   if (floor === 0) return { ok: false, reason: 'nothing_to_compact' };
   let used = messages.slice(floor).reduce((n, m) => n + messageChars(m), 0);
-  if (used > MINIMAL_TAIL_BUDGETS * budget) return { ok: false, reason: 'tail_too_large' };
+  if (used > MINIMAL_TAIL_BUDGETS * budget) return { ok: false, reason: pending >= 0 && pending < lastAssistant ? 'pending_call' : 'tail_too_large' };
   let start = floor;
   for (let i = floor - 1; i >= 1; i--) {
     used += messageChars(messages[i]!);
@@ -175,7 +185,7 @@ interface Carried {
  */
 const carried = (text: string): Carried => {
   const t = text.trim();
-  if (!t.startsWith(DIGEST_MARK)) return { summary: t, requests: [], steps: [] };
+  if (!t.startsWith(HEADER)) return { summary: t, requests: [], steps: [] };
   const at = (h: string): number => t.indexOf(`\n\n${h}\n`);
   const bounds = [SECTION.summary, SECTION.requests, SECTION.steps].map(at);
   const part = (k: number): string => {
