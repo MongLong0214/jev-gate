@@ -22,7 +22,9 @@ Second round, three windows that were reported as known and were not: Sonnet 5 b
 gateway) is 200K unless `[1m]` was picked, and Opus/Fable there are unknown; after a `/model` command later than the
 last reply, the model is unknown until the next reply carries the new ID (`depth.ts` `modelSwitched`, traced as
 `model_switched`); `settings.local.json` stays beside project settings on Windows and when the repository root or its
-`.git`/`.claude` is not the user's own, and every managed drop-in is read (the 64-file cap is gone).
+`.git`/`.claude` is not the user's own, and every managed drop-in is read (the 64-file cap is gone). Third round:
+a `settings.local.json` that a pre-2.1.211 host left in the starting directory is read after the root's, as the host
+still does.
 
 The fact to fix is in #48: 1,014 admission decisions, 0 attempted, because a fixed 300,000
 `delegationDepthFloor` sits at the same 300,000 value as this host's own `autoCompactWindow`, so the session compacts

@@ -158,7 +158,12 @@ const readConfiguredWindow = (env: Env, cwd: string | null | undefined, managedD
   // `cwd` does move with it, so it is only the fallback when the host did not export CLAUDE_PROJECT_DIR.
   const projectDir = env['CLAUDE_PROJECT_DIR'] && env['CLAUDE_PROJECT_DIR'].length > 0 ? env['CLAUDE_PROJECT_DIR'] : cwd;
   if (typeof projectDir === 'string' && projectDir.length > 0) {
-    candidates.push(join(localSettingsDir(projectDir, home), '.claude', 'settings.local.json'));
+    const rootLocal = join(localSettingsDir(projectDir, home), '.claude', 'settings.local.json');
+    candidates.push(rootLocal);
+    // Before 2.1.211 the host kept the local file in the starting directory, and it still reads one left there; the
+    // root file's value wins where both set the key, so the legacy file is the next candidate rather than ignored.
+    const legacyLocal = join(projectDir, '.claude', 'settings.local.json');
+    if (legacyLocal !== rootLocal) candidates.push(legacyLocal);
     candidates.push(join(projectDir, '.claude', 'settings.json'));
   }
   const configDir = env['CLAUDE_CONFIG_DIR'] && env['CLAUDE_CONFIG_DIR'].length > 0 ? env['CLAUDE_CONFIG_DIR'] : join(home, '.claude');

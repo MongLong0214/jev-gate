@@ -232,3 +232,19 @@ describe('#48 re-review: windows reported as known that were not', () => {
     }
   });
 });
+
+describe('#48 third review: the legacy local file in the starting directory', () => {
+  it('reads a starting-directory settings.local.json an older host left, below the root file', () => {
+    const root = dir();
+    mkdirSync(join(root, '.git'));
+    const sub = join(root, 'pkg');
+    mkdirSync(sub);
+    writeSettings(sub, '.claude/settings.local.json', { autoCompactWindow: 150_000 });
+    expect(readHostCompactWindow({ HOME: dir() }, sub, { managedDirs: [], model: 'claude-opus-5-5' })).toEqual({ tokens: 150_000, source: `settings:${join(sub, '.claude', 'settings.local.json')}` });
+    writeSettings(root, '.claude/settings.local.json', { autoCompactWindow: 400_000 });
+    expect(readHostCompactWindow({ HOME: dir() }, sub, { managedDirs: [], model: 'claude-opus-5-5' }).tokens).toBe(400_000);
+    // Below both local files: the shared project file only applies when neither local file sets the key.
+    writeSettings(sub, '.claude/settings.json', { autoCompactWindow: 700_000 });
+    expect(readHostCompactWindow({ HOME: dir() }, sub, { managedDirs: [], model: 'claude-opus-5-5' }).tokens).toBe(400_000);
+  });
+});
