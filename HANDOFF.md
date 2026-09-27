@@ -75,6 +75,26 @@ those phases defensively, and a new phase would have needed a new render path fo
 tests kept passing; 51 tests were added across `tests/cli.test.ts` (new), `tests/config.test.ts`, `tests/plan.test.ts`,
 `tests/coordinator.test.ts`, `tests/hook.test.ts` and `tests/explain.test.ts`.
 
+## 2026-09-27 — the bench runner has a spend stop (`--max-cost-usd`); nothing was executed
+
+Both pre-registrations in #54 (`router-vs-native-2026-09-27`, `lean-vs-native-2026-09-27`) require the runner to stop
+on spend before any paid cell. It now takes `--max-cost-usd <dollars>`: before each cell it reads every finished
+cell's `cell.json` back through the report's `toRowView` and starts nothing once the complete cost reaches the cap,
+or once any finished cell's complete cost is unknown. Held cells keep their rows (`max_cost_reached` /
+`cost_unknown`), and `summary.json` carries `spend`. The check is between cells, so the run can end above the cap by
+the one cell that was running. Offline tests through real rows only (fake CLI); no `--execute` against a real host.
+Review round (gpt-6-sol, PR #55): a primed session reports its cumulative total after each turn, so one cut off
+before its last turn's result kept an earlier turn's total, and `toRowView` read that subtotal as the row's complete
+Claude cost. It now reads such a row's cost and usage as unknown (`partial_session`), in the report and so in the
+stop. A historical primed cell that timed out part-way now reports an unknown cost where it showed a subtotal.
+Second round: the sum is kept in whole nanodollars, since a float sum of rows that add up to the cap fell just short
+of it and started one more cell; and the A23 plan-interpretation request, which is billed, is now counted in the
+plan-level Jev group (with the historical scope gate), so a legacy auto cell's complete cost no longer omits it.
+Third round: rows and the cap both round up to a nanodollar, so the stop is never late and a sub-nanodollar cap
+does not stop the run before its first cell.
+That clears one precondition of each pre-registration. The others (the lean episode cases and follow-up turn, a
+plan-only run on the frozen build, and the owner's own approval) are unchanged.
+
 ## 2026-09-27 — #48 P0-1/P2: depth floor relative to the host window, a liveness alarm, and a thinner idle hook; admission on a real host is still not observed
 
 **Review round (gpt-6-sol, PR #52).** Four blockers, all fixed. (1) The window is now resolved the way the host resolves

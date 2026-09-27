@@ -333,9 +333,15 @@ export const toRowView = (p: PlannedCell, c: Record<string, unknown> | null): Ro
   const status = rowStatus(c);
   const grade = c && isRecord(c['grade']) ? c['grade'] : null;
   const gate = c && isRecord(c['gate']) ? c['gate'] : {};
-  const { usage, status: usageStatus } = c ? usageOf(c) : { usage: null, status: null };
+  // A session reports its cumulative total after each of its turns (the priming prompts, then the request). One that
+  // stopped before its last turn's result, by a timeout, a cancel or a crash, keeps an earlier turn's total, which
+  // leaves out what the unreported turn spent: that is a subtotal, so the cost and usage are unknown rather than it.
+  const turnsReported = c && Array.isArray(c['turn_totals_usd']) ? c['turn_totals_usd'].length : null;
+  const turnsSent = c && Array.isArray(c['prime_sha256']) ? c['prime_sha256'].length + 1 : null;
+  const partialSession = turnsReported !== null && turnsSent !== null && turnsReported > 0 && turnsReported < turnsSent;
+  const { usage, status: usageStatus } = !c ? { usage: null, status: null } : partialSession ? { usage: null, status: 'partial_session' } : usageOf(c);
   const result = c && isRecord(c['result']) ? c['result'] : null;
-  const claude = result ? money(result['total_cost_usd']) : null;
+  const claude = result && !partialSession ? money(result['total_cost_usd']) : null;
   const lean = c ? leanOf(c['lean']) : null;
   const router = c ? routerOf(c['router']) : null;
   // L6/#45: each producer once. The legacy aggregate is built from the gate phases only, so it never already holds a
@@ -1095,7 +1101,7 @@ export const renderMarkdown = (r: Report): string => {
       '- A model-mismatch count is the host’s own `model_mismatch` reason code on a stop/spawn_result line, never inferred from the requested/observed pair by this ingestion.',
     );
   }
-  L.push('', '## Jev requests per arm (attempts / input tokens / est $ at the dated price)', '', '| arm | admission | allocation | result | scope | influence (changed/judged) |', '|---|---|---|---|---|---|');
+  L.push('', '## Jev requests per arm (attempts / input tokens / est $ at the dated price)', '', '| arm | admission | allocation | result | plan (scope or interpretation) | influence (changed/judged) |', '|---|---|---|---|---|---|');
   for (const a of r.arms) {
     const j = (p: JevPhaseUsage): string => `${p.attempts} / ${p.tokens === null ? `null (known ${p.tokens_known})` : p.tokens} / ${fmt(p.cost_usd, 6)}`;
     const inf = a.gate_v5.influence;

@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import type { ConfigV5 } from '../src/types.js';
 import type { Report } from '../src/bench/report.js';
-import { armSpecs, loadManifest, maxOverlap, type CellRecord, type Plan } from '../src/bench/run.js';
+import { armSpecs, capReached, loadManifest, maxOverlap, toNanoUsd, type CellRecord, type Plan } from '../src/bench/run.js';
 
 const root = join(__dirname, '..');
 const fake = join(__dirname, 'fixtures', 'fake-claude.mjs');
@@ -558,4 +558,115 @@ describe('#45: Router execution inputs', () => {
     expect(native).not.toContain('--plugin-dir');
     expect(native.slice(native.indexOf('--effort'), native.indexOf('--effort') + 2)).toEqual(['--effort', 'xhigh']);
   });
+});
+
+describe('the spend stop (--max-cost-usd)', () => {
+  const cells = (out: string, arm: string): CellRecord[] => [readCell(out, arm, 1), readCell(out, arm, 2)];
+  const summary = (out: string): { spend: { max_cost_usd: number | null; known_usd: number; unknown_cell: string | null; stopped: string | null } } =>
+    JSON.parse(readFileSync(join(out, 'summary.json'), 'utf8')) as ReturnType<typeof summary>;
+
+  it('#55 review: sums dollars as whole nanodollars, so rows that add up to the cap reach it', () => {
+    const rows = [1.13, 8.04, 20.83];
+    // The float sum falls short of 30 and would start one more cell under a $30 cap.
+    expect(rows.reduce((a, c) => a + c, 0)).toBeLessThan(30);
+    expect(capReached(rows.reduce((a, c) => a + toNanoUsd(c), 0), 30)).toBe(true);
+    expect(capReached(toNanoUsd(29.99), 30)).toBe(false);
+    // Rounded up, never down: a sub-nanodollar cap still lets the first cell start, and rows a fraction of a
+    // nanodollar over each whole value still reach a cap they pass together.
+    expect(capReached(0, 4e-10)).toBe(false);
+    expect(capReached([1.00000000049, 1.00000000049, 1.00000000049].reduce((a, c) => a + toNanoUsd(c), 0), 3.0000000012)).toBe(true);
+  });
+
+  it('#55 review: counts the plan-interpretation request in the complete cost the stop reads', () => {
+    const r = bench(['--execute', '--max-sessions', '1', '--arms', 'jev_hierarchy', '--timeout-ms', '60000'], { FAKE_CLAUDE_INTERPRETATION: '1' });
+    expect(r.status, r.stderr).toBe(0);
+    const g = readCell(r.out, 'jev_hierarchy').gate;
+    expect(g.jev_requests.scope).toMatchObject({ attempts: 1, tokens: 170 });
+    const { admission, allocation, result, scope } = g.jev_requests;
+    expect(g.jev_input_tokens).toBe(admission.tokens! + allocation.tokens! + result.tokens! + scope.tokens!);
+  }, 120_000);
+
+  it('#55 review: stops on a plan-interpretation request whose usage never came back', () => {
+    const r = bench(['--execute', '--arms', 'jev_hierarchy', '--repetitions', '2', '--max-sessions', '2', '--max-cost-usd', '100', '--timeout-ms', '60000'], { FAKE_CLAUDE_INTERPRETATION: 'lost' });
+    expect(r.status, r.stderr).toBe(0);
+    const [a, b] = cells(r.out, 'jev_hierarchy');
+    const ran = [a!, b!].find((c) => c.started)!;
+    const held = [a!, b!].find((c) => !c.started)!;
+    expect(ran.gate.jev_input_tokens).toBeNull();
+    expect(held.not_started_reason).toBe('cost_unknown');
+    expect(summary(r.out).spend).toMatchObject({ stopped: 'cost_unknown' });
+  }, 120_000);
+
+  it('rejects a cap that is not a positive number of dollars', () => {
+    for (const v of ['0', '-1', 'abc', '']) {
+      const r = bench(['--max-cost-usd', v]);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toMatch(/--max-cost-usd must be a positive number of US dollars/);
+    }
+  });
+
+  it('starts no cell once the complete cost of the rows written so far reaches the cap, and keeps every row', () => {
+    const r = bench(['--execute', '--arms', 'sonnet_native', '--repetitions', '2', '--max-sessions', '2', '--max-cost-usd', '0.001', '--timeout-ms', '60000']);
+    expect(r.status, r.stderr).toBe(0);
+    const [a, b] = cells(r.out, 'sonnet_native');
+    const ran = [a!, b!].filter((c) => c.started);
+    const held = [a!, b!].filter((c) => !c.started);
+    expect(ran).toHaveLength(1);
+    expect(held.map((c) => c.not_started_reason)).toEqual(['max_cost_reached']);
+    expect(r.stdout).toMatch(/stop: the complete cost so far, \$0\.\d{4}, reached --max-cost-usd 0\.001/);
+    const plan = JSON.parse(readFileSync(join(r.out, 'plan.json'), 'utf8')) as Plan;
+    expect(plan.max_cost_usd).toBe(0.001);
+    const s = summary(r.out).spend;
+    expect(s).toMatchObject({ max_cost_usd: 0.001, unknown_cell: null, stopped: 'max_cost_reached' });
+    // The stop reads the same complete cost the report shows for that row.
+    const rep = report(r.out);
+    expect(s.known_usd).toBeCloseTo(rep.arms[0]!.total_cost_usd!, 10);
+    expect(rep.arms[0]).toMatchObject({ planned: 2, by_status: expect.objectContaining({ completed: 1, not_started: 1 }) });
+  }, 120_000);
+
+  it('runs every planned cell while the complete cost stays below the cap', () => {
+    const r = bench(['--execute', '--arms', 'sonnet_native', '--repetitions', '2', '--max-sessions', '2', '--max-cost-usd', '100', '--timeout-ms', '60000']);
+    expect(r.status, r.stderr).toBe(0);
+    expect(cells(r.out, 'sonnet_native').every((c) => c.started)).toBe(true);
+    const s = summary(r.out).spend;
+    expect(s.stopped).toBeNull();
+    expect(s.known_usd).toBeCloseTo(report(r.out).arms[0]!.total_cost_usd!, 10);
+  }, 120_000);
+
+  it('stops on a row whose complete cost is unknown, since an unknown is not a zero', () => {
+    const r = bench(['--execute', '--arms', 'frontier_native', '--repetitions', '2', '--max-sessions', '2', '--max-cost-usd', '100', '--timeout-ms', '1500'], { FAKE_CLAUDE_HANG: '1' });
+    expect(r.status, r.stderr).toBe(0);
+    const [a, b] = cells(r.out, 'frontier_native');
+    const ran = [a!, b!].find((c) => c.started)!;
+    const held = [a!, b!].find((c) => !c.started)!;
+    expect(ran.timed_out).toBe(true);
+    expect(held.not_started_reason).toBe('cost_unknown');
+    expect(summary(r.out).spend).toMatchObject({ stopped: 'cost_unknown', known_usd: 0, unknown_cell: join('cells', 'mini', 'frontier_native', String(ran.repetition)) });
+    expect(r.stdout).toMatch(/stop: the complete cost of cells\/mini\/frontier_native\/\d is unknown/);
+  }, 120_000);
+
+  it('counts a primed session that stopped before its last turn as unknown, not as the earlier turn\'s total', () => {
+    // Each turn reports the session total so far, so a primed cell cut off after its priming turn holds a subtotal.
+    const dir = join(tmp, 'primed-mini');
+    cpSync(join(__dirname, 'fixtures', 'mini'), dir, { recursive: true });
+    const manifest = JSON.parse(readFileSync(join(dir, 'cases.json'), 'utf8')) as { cases: Array<Record<string, unknown>> };
+    manifest.cases[0]!['prime'] = ['먼저 src/answer.mjs를 읽어줘.'];
+    writeFileSync(join(dir, 'cases.json'), JSON.stringify(manifest));
+    const out = join(tmp, `run-${n++}`);
+    const r = spawnSync(process.execPath, [join(dist, 'bench', 'run.js'), '--cases', join(dir, 'cases.json'), '--out', out, '--claude', fake, '--plugin-dir', pluginDir, '--execute', '--arms', 'sonnet_native', '--repetitions', '2', '--max-sessions', '2', '--max-cost-usd', '100', '--timeout-ms', '2500'], { encoding: 'utf8', env: { ...baseEnv(), FAKE_CLAUDE_PRIMED_HANG: '1' }, timeout: 120_000 });
+    expect(r.status, r.stderr).toBe(0);
+    const [a, b] = cells(out, 'sonnet_native');
+    const ran = [a!, b!].find((c) => c.started)!;
+    const held = [a!, b!].find((c) => !c.started)!;
+    expect(ran).toMatchObject({ timed_out: true, turn_totals_usd: [0.02], result: expect.objectContaining({ total_cost_usd: 0.02 }) });
+    expect(held.not_started_reason).toBe('cost_unknown');
+    expect(summary(out).spend).toMatchObject({ stopped: 'cost_unknown', known_usd: 0 });
+  }, 120_000);
+
+  it('changes nothing without the flag: an unknown row does not stop a run that set no cap', () => {
+    const r = bench(['--execute', '--arms', 'frontier_native', '--repetitions', '2', '--max-sessions', '2', '--timeout-ms', '1500'], { FAKE_CLAUDE_HANG: '1' });
+    expect(r.status, r.stderr).toBe(0);
+    expect(cells(r.out, 'frontier_native').every((c) => c.started)).toBe(true);
+    expect(summary(r.out).spend).toMatchObject({ max_cost_usd: null, stopped: null });
+  }, 120_000);
 });
