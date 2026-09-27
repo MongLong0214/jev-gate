@@ -204,7 +204,7 @@ describe('buildDigest', () => {
     const staggered = (k: number, from = 0): Row[] => {
       const rows: Row[] = [];
       for (let i = from; i <= from + k; i++) {
-        rows.push({ role: 'assistant', text: '', toolUses: [{ tool: 'T', input: {}, tool_use_id: `st${i}` }], handle: `sa${i}` });
+        rows.push({ role: 'assistant', text: '', toolUses: [{ tool: 'Bash', input: {}, tool_use_id: `st${i}` }], handle: `sa${i}` });
         if (i > from) rows.push({ role: 'user', text: '', toolUses: [], toolResults: [{ text: 'ok', tool_use_id: `st${i - 1}` }], handle: `sr${i}` });
       }
       return rows;
@@ -398,6 +398,22 @@ describe('buildDigest', () => {
     // An image or a document has no text to carry; rebuilt it would reach the model empty.
     const [shot, picture] = call('Taking a screenshot.', 'screenshot', {}, '');
     expect(buildDigest([user('Look at the page.'), ...work(30), shot!, picture!], { budgetChars: 30000 })).toEqual({ ok: false, reason: 'opaque_result' });
+    // Text beside media: a PDF's pages or an MCP tool's screenshot would be dropped by a rebuild from the text.
+    const mixed = [
+      call('Reading the report.', 'Read', { file_path: '/w/report.PDF' }, 'Page 1 of 3'),
+      call('Capturing the page.', 'mcp__chrome-devtools__take_screenshot', {}, 'Took a screenshot of the page.'),
+      call('Running it.', 'SomeFutureTool', {}, 'done'),
+    ];
+    for (const [ask, answer] of mixed) {
+      expect(buildDigest([user('Check it.'), ...work(30), ask!, answer!], { budgetChars: 30000 })).toEqual({ ok: false, reason: 'opaque_result' });
+    }
+    // One such result among text-only ones is enough to leave the message to the engine.
+    const [both, bothAnswer] = call('Reading two.', 'Read', { file_path: '/w/a.ts' }, 'a');
+    both!.toolUses.push({ tool: 'Read', input: { file_path: '/w/shot.png' }, text: 'x', tool_use_id: 'tP' });
+    bothAnswer!.toolResults!.push({ text: 'x', tool_use_id: 'tP' });
+    expect(buildDigest([user('Check it.'), ...work(30), both!, bothAnswer!], { budgetChars: 30000 })).toEqual({ ok: false, reason: 'opaque_result' });
+    const [run, output] = call('Running the tests.', 'Bash', { command: 'npm test' }, 'passed');
+    expect(buildDigest([user('Check it.'), ...work(30), run!, output!], { budgetChars: 30000 }).ok).toBe(true);
   });
 
   it('leaves a conversation with nothing before its last assistant message to the engine', () => {

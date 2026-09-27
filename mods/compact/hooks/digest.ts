@@ -350,6 +350,19 @@ type BuiltMessage = {
   toolResults?: Array<{ tool_use_id: string; text: string; isError: boolean }>;
 };
 
+/**
+ * The tools whose results hold text alone, so a result rebuilt from its text is the result the model read. A Read is
+ * one unless its path is an image, a PDF or a notebook, which come back as image or document blocks, beside text or
+ * alone. Any other tool, an MCP tool among them, may return media, and a last result from one is left to the engine.
+ */
+const TEXT_TOOLS = new Set([
+  'Agent', 'AskUserQuestion', 'Bash', 'BashOutput', 'Edit', 'EnterPlanMode', 'ExitPlanMode', 'Glob', 'Grep', 'KillShell',
+  'ListAgents', 'Monitor', 'MultiEdit', 'NotebookEdit', 'Read', 'SendMessage', 'Skill', 'SubagentHandback', 'Task',
+  'TaskOutput', 'TaskStop', 'TodoWrite', 'ToolSearch', 'WebFetch', 'WebSearch', 'Write',
+]);
+const MEDIA_PATH = /\.(png|jpe?g|gif|webp|bmp|ico|tiff?|heic|avif|svg|pdf|ipynb)$/i;
+const textOnly = (u: DigestToolUse): boolean => TEXT_TOOLS.has(u.tool) && !(u.tool === 'Read' && MEDIA_PATH.test(String(u.input.file_path ?? '')));
+
 /** The last message when it answers calls: those results, carried whole as text, and then the closing line. */
 const closesWithResults = (m: DigestMessage | undefined): boolean => m?.role === 'user' && (m.toolResults ?? []).length > 0;
 const closed = (m: DigestMessage): BuiltMessage => ({
@@ -372,11 +385,19 @@ export const assemble = <M extends DigestMessage>(messages: readonly M[], r: Dig
 
 export const buildDigest = (messages: readonly DigestMessage[], options: DigestOptions): DigestOutcome => {
   const budget = options.budgetChars;
-  // The last results are rebuilt from their text, which holds no image or document: one with no text (or no id to
-  // answer) is left to the engine rather than handed up emptied.
+  // The last results are rebuilt from their text, which holds no image or document: one that has no text or no id to
+  // answer, or that answers a call to a tool that may return media, is left to the engine rather than handed up without
+  // it. A result that answers no call at all is the pairing's to refuse (unpaired_result).
   const last = messages[messages.length - 1];
   const closes = closesWithResults(last);
-  if (closes && last!.toolResults!.some((r) => !r.text || !r.tool_use_id)) return { ok: false, reason: 'opaque_result' };
+  if (closes) {
+    const uses = new Map(messages.flatMap((m) => (m.role === 'assistant' ? m.toolUses.map((u) => [u.tool_use_id, u] as const) : [])));
+    const opaque = (r: { text: string; tool_use_id?: string }): boolean => {
+      const u = r.tool_use_id ? uses.get(r.tool_use_id) : undefined;
+      return !r.text || !r.tool_use_id || (u !== undefined && !textOnly(u));
+    };
+    if (last!.toolResults!.some(opaque)) return { ok: false, reason: 'opaque_result' };
+  }
   const boundary = tailStart(messages, Math.floor(budget * TAIL_SHARE), budget);
   if (!boundary.ok) return boundary;
   const start = boundary.start;

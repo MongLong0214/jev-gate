@@ -40,9 +40,12 @@ engine's time and usage.
   answers yet), and grows back within 40% of the budget.
 - **The closing line.** When the tail ends in tool results (555 of 581 auto compactions in a week of transcripts), that
   last message is handed up built rather than by its handle: the same results, as text, with their ids and error flags,
-  then one line saying the kept messages end there. A result with no text (an image or a document, 3 of the 581) has
-  nothing to rebuild it from, so that compaction is left to the engine (`opaque_result`); a result that mixes text with
-  an image would reach the model as its text alone (none of the 581 did).
+  then one line saying the kept messages end there. The text is all a rebuild can carry, so it is done only when every
+  result answers a built-in tool that returns text alone (Bash, Edit, Write, Grep, Agent, …; a Read unless its path is
+  an image, a PDF or a notebook). A result with no text, or from any other tool (an MCP tool may send a screenshot
+  beside its text), leaves that compaction to the engine (`opaque_result`). In a later week of transcripts that was 1
+  of 376 compactions ending in results (an image Read); the other 375 came from Bash (290), Write, Edit, Read,
+  SubagentHandback, Agent, SendMessage, AskUserQuestion, Glob and Grep.
 - **The ceiling.** Sizes are characters of text, tool inputs and results, plus each call's and result's id and 40
   characters of structure, and 16 per message (the digest's own message included), so a stretch of many small calls is
   not counted as nearly free. Because
