@@ -230,7 +230,7 @@ const checkConfig = (loaded: ConfigResult): void => {
   if (c.workerIsolation === 'worktree') {
     const baseRef = readHostWorktreeBaseRef(process.env, process.cwd());
     if (baseRef.value === 'head') say('info', `workerIsolation=worktree with worktree.baseRef="head" (${baseRef.source}): every planned or ad-hoc worker dispatch the hook patches also carries isolation: "worktree"; whether the host actually gives that worker its own git worktree for a patched call is not yet observed`);
-    else say('warn', `workerIsolation=worktree is not in effect: host worktree.baseRef is ${baseRef.value === null ? 'unset' : `"${baseRef.value}" (${baseRef.source})`}, so an isolated worker would start from origin/<default-branch> instead of this branch. The hook runs such turns as workerIsolation=none with one worker at a time; set "worktree": {"baseRef": "head"} in Claude Code settings to use it`);
+    else say('warn', `workerIsolation=worktree is not in effect: host worktree.baseRef is ${baseRef.value === null ? (baseRef.source === 'unset' ? 'unset' : `unknown (${baseRef.source})`) : `"${baseRef.value}" (${baseRef.source})`}, so an isolated worker would start from origin/<default-branch> instead of this branch. The hook runs such turns as workerIsolation=none with one worker at a time; set "worktree": {"baseRef": "head"} in Claude Code settings to use it`);
   } else say('info', `workerIsolation=${c.workerIsolation}: workers share the caller's working tree; maxParallelWorkers stays 1 under this setting`);
 };
 

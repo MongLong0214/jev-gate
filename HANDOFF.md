@@ -41,7 +41,10 @@ An unpinned call the hook did not patch now records the frontmatter model as `re
 configured tier model. Second round: the base ref is read only from `CLAUDE_PROJECT_DIR`'s scopes (a hook's `cwd`
 could miss a project-level `"fresh"` and fall through to a user-level `"head"`), and every isolated worker prompt
 carries `WORKTREE_WORKER_SENTENCE`, asking it to commit on its worktree branch; the worker profiles forbid commits
-unless the contract asks, and without one nothing reaches the merged branch.
+unless the contract asks, and without one nothing reaches the merged branch. Third round: the four worker profiles
+now name the `[Jev Gate isolation]` note as that request, since it sits outside the contract. With #52's `/cd` fix
+merged in, the base ref follows a moved session the way the window does (`settingsDirCandidates`), and reads as
+unknown, so isolation is off, when the candidate directories disagree.
 
 **Capability-aware plan steps (P2-1).** `PlannerReply` (the `ready` variant) gains an optional
 `main_session_steps: Array<{ step: string; needs: Capability }>`, `Capability` a closed union of `os_permission`,
@@ -80,6 +83,10 @@ last reply, the model is unknown until the next reply carries the new ID (`depth
 `.git`/`.claude` is not the user's own, and every managed drop-in is read (the 64-file cap is gone). Third round:
 a `settings.local.json` that a pre-2.1.211 host left in the starting directory is read after the root's, as the host
 still does.
+Fourth round: `/cd` moves the host's settings directory and the transcript folder but not `CLAUDE_PROJECT_DIR`
+(2.1.283: the move sets `originalCwd` and relocates the transcript; `CLAUDE_PROJECT_DIR` is `projectRoot`). Once the
+`cwd` differs from `CLAUDE_PROJECT_DIR`, the transcript folder picks the directory, and without a match the window is
+known only if every candidate agrees (`settingsDirCandidates`, `src/host-window.ts`).
 
 The fact to fix is in #48: 1,014 admission decisions, 0 attempted, because a fixed 300,000
 `delegationDepthFloor` sits at the same 300,000 value as this host's own `autoCompactWindow`, so the session compacts

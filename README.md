@@ -320,13 +320,19 @@ model-config and managed-settings pages). The first valid configured value wins:
 `CLAUDE_CODE_AUTO_COMPACT_WINDOW` environment variable; then managed settings (`managed-settings.json` and
 `managed-settings.d/*.json` in the system directory); then `.claude/settings.local.json` at the repository root (the
 main checkout's root when you work in a linked worktree); then `.claude/settings.json` in the session's project
-directory (`CLAUDE_PROJECT_DIR`, falling back to the hook's `cwd`); then `$CLAUDE_CONFIG_DIR/settings.json` (or
+directory; then `$CLAUDE_CONFIG_DIR/settings.json` (or
 `~/.claude/settings.json`). A file only counts if it parses as a JSON object with a positive `autoCompactWindow`;
 anything unreadable, oversized (over 1 MiB) or invalid is skipped, never thrown. The value is clamped to the host's
 100K–1M range and capped at the model's own context window, which is 200K under `CLAUDE_CODE_DISABLE_1M_CONTEXT`.
 When nothing is configured, the host compacts at the model's context limit, so the gate takes the window from the
 model the session transcript records: 1M for Opus 4.7 and later, Sonnet 5 and Fable on the Anthropic API, 200K for
 earlier and smaller models.
+
+The session's project directory starts at `CLAUDE_PROJECT_DIR`. `/cd` moves it, and the hook's `cwd` with it, but
+leaves `CLAUDE_PROJECT_DIR` naming the start; a `cd` in Bash moves only the `cwd`. So when the two differ, the gate
+takes the directory whose name matches the folder the host keeps the session transcript in, which `/cd` moves. If
+nothing matches and the candidates (`CLAUDE_PROJECT_DIR`, the `cwd` and its parents) give different windows, the
+window is unknown rather than guessed.
 
 **Where this can still be wrong.** A launch's `--autocompact` or `--settings` flag, MDM policies and server-managed
 settings are invisible to a hook. A native-1M model on Bedrock, Vertex or Foundry, Opus or Fable behind an LLM
