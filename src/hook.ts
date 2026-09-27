@@ -30,6 +30,7 @@ import {
 import {
   checkEligibility,
   DENIALS_BEFORE_STOP,
+  dispatchBlocker,
   guardDecision,
   patchAgentInput,
   renderAdditionalContext,
@@ -556,8 +557,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
      * forking, means the dispatch could only ever be denied -- and paying for a selection this session cannot use
      * is the one cost with no possible return.
      */
-    const hostOverride = subagentModelOverride(deps.env);
-    if (hostOverride.concrete || hostOverride.force || deps.env['CLAUDE_CODE_FORK_SUBAGENT'] === '1') return skip('host_unsupported');
+    if (dispatchBlocker(deps.env) !== null) return skip('host_unsupported');
     cleanupJobs(deps.env);
 
     /**
@@ -940,8 +940,15 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     let shape: ExecutionShape = 'direct';
     let reason: ErrorCode | null = null;
     let confidence: number | null = null;
+    /**
+     * #48: fixed at launch and read before anything that costs. Where no owned Agent call could reach a worker, an
+     * orchestrated job only locks the main session out -- its guard refuses the root's edits while every brief is
+     * declined -- so neither Gate A nor the forced arm may start one there.
+     */
+    const blocker = dispatchBlocker(deps.env);
+    const forcedRequested = deps.env['JEV_GATE_EXPERIMENT_ADMISSION'] === 'orchestrated';
     // A16: the forced control arm starts an orchestrated job in either mode without asking Gate A; B still runs.
-    const forced = deps.env['JEV_GATE_EXPERIMENT_ADMISSION'] === 'orchestrated';
+    const forced = forcedRequested && blocker === null;
 
     /**
      * T2: this turn's identity is registered before any network call, and the shape is written back afterwards only
@@ -956,6 +963,31 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     });
     // Without durable state there is no guard and no plan, so the turn falls back to native behavior.
     if (!registered.ok) return emitContext('UserPromptSubmit', renderDirectGuidance(mode), registered.code);
+    const nowIso = (): string => new Date().toISOString();
+
+    /**
+     * The refusals that need no depth come before the transcript read, so a turn that can never be admitted pays no
+     * scan for it. Native without the forced arm is the control arm and keeps its depth record, so it is not refused.
+     */
+    if (blocker !== null && (mode === 'auto' || forcedRequested)) {
+      trace?.write('admission_result', {
+        ...base,
+        attempted: false,
+        known_not_sent: true,
+        forced: false,
+        ...(forcedRequested ? { forced_requested: true } : {}),
+        blocker,
+        decision: { shape: 'direct', decided: false, reason: 'host_unsupported', changed_default: false },
+      });
+      // Like the forced arm itself, a refused forced request is a bench configuration, not an admission outage.
+      if (!forcedRequested) appendLiveness(deps.env, { at: nowIso(), attempted: false, reason: 'host_unsupported' });
+      return emitContext('UserPromptSubmit', renderDirectGuidance(mode), 'host_unsupported');
+    }
+    if (mode === 'auto' && !forced && !apiKey) {
+      trace?.write('admission_result', { ...base, attempted: false, known_not_sent: true, decision: { shape: 'direct', decided: false, reason: 'key_missing', changed_default: false } });
+      appendLiveness(deps.env, { at: nowIso(), attempted: false, reason: 'key_missing' });
+      return emitContext('UserPromptSubmit', renderDirectGuidance(mode), 'key_missing');
+    }
 
     /**
      * Decision 1 of the depth gate: how deep the session already is is read from the host's transcript, never asked of
@@ -970,7 +1002,6 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       context_depth_read: { bytes: depth.bytesRead, duration_ms: depth.durationMs },
       ...(depth.ok && depth.modelSwitched ? { model_switched: true } : {}),
     };
-    const nowIso = (): string => new Date().toISOString();
 
     if (forced) {
       // The forced arm is the bench control variable and is deliberately not floored: it is the only evidence that
@@ -992,14 +1023,10 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       // A9: the control arm initializes the same state and guard as auto; only the Jev calls differ.
       trace?.write('admission_result', { ...base, ...depthFacts, attempted: false, known_not_sent: true, forced: false, decision: { shape, decided: false, reason: 'mode_native', changed_default: false } });
       // Native is a deliberate configuration choice, not an auto-mode admission decision, so it is excluded too.
-    } else if (!apiKey) {
-      reason = 'key_missing';
-      trace?.write('admission_result', { ...base, ...depthFacts, attempted: false, known_not_sent: true, decision: { shape: 'direct', decided: false, reason, changed_default: false } });
-      appendLiveness(deps.env, { at: nowIso(), attempted: false, reason });
     } else {
       /**
        * #48 P0-1: the host's own auto-compaction window is read only here -- the one path (not forced, not native, key
-       * present) that actually applies the depth test at all, so every other branch above pays nothing for it.
+       * present, dispatch possible) that actually applies the depth test at all, so every other branch pays nothing for it.
        */
       // The session's own model, from the same transcript line the depth came from: with no window configured, the
       // host compacts at the model's context limit, so a 200K model and a 1M model get different floors.
@@ -1997,9 +2024,21 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
    * auto-mode admission decision, and says something only when a full window of 50 decisions never once attempted a
    * Gate A call, which is a stronger claim than a single unlucky run and worth a `doctor` visit. Off, native and lean
    * modes never populate the ring with auto-mode decisions in the first place, so there is nothing to check there.
+   * One condition needs no window: a session whose Agent calls can only run in the background, where auto mode stays
+   * native on every prompt (`host_unsupported`). That is read from this session's own environment and said at once,
+   * since the ring would otherwise take 50 prompts to reach the same conclusion.
    */
   const handleSessionStart = (): HookResult => {
     if (mode !== 'auto') return skip();
+    const blocker = dispatchBlocker(deps.env);
+    if (blocker !== null) {
+      const text =
+        blocker === 'background_only'
+          ? 'jev-gate: mode=auto, but this session\'s Agent calls can only run in the background, so no admitted job could reach a worker. Every prompt stays native and sends no Jev request. To use the gate, start Claude Code with CLAUDE_CODE_FORK_SUBAGENT=0 CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1; otherwise set mode to off.'
+          : 'jev-gate: mode=auto, but CLAUDE_CODE_SUBAGENT_MODEL pins every subagent\'s model, which each owned Agent call refuses, so no admitted job could reach a worker. Every prompt stays native and sends no Jev request. To use the gate, start Claude Code without that override; otherwise set mode to off.';
+      const stdout = renderSystemMessage(text);
+      return stdout === null ? skip('host_unsupported') : { kind: 'notice', code: 'host_unsupported', stdout };
+    }
     const recent = readLiveness(deps.env)?.recent ?? [];
     if (recent.length < LIVENESS_WINDOW || recent.some((e) => e.attempted)) return skip();
     const text = `jev-gate: the last ${recent.length} auto-mode admission decisions never attempted a Gate A call. Run \`jev-gate doctor\` to check the key, the depth floor and the host window.`;

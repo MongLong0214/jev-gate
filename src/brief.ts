@@ -59,6 +59,31 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 const nonEmpty = (v: unknown): v is string => typeof v === 'string' && v.length > 0;
 
 /**
+ * Whether any Agent call this session makes can pass checkEligibility's foreground test, read from the launch
+ * environment alone. Unless CLAUDE_CODE_FORK_SUBAGENT=0, an interactive session runs in the host's fork mode, whose
+ * Agent tool has no `run_in_background` field at all; without CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 every brief there
+ * is `not_foreground`, and forced forking is refused outright. #48: on such a host an admitted job never reaches a
+ * worker, while its guard still refuses the main session's own edits, so admission must not be paid for at all.
+ * The gate stays native there rather than asking for the variable to be set globally: forcing the foreground in every
+ * session would end the background subagents that #48 P1-2 names as what sped delivery up.
+ */
+export const foregroundDispatchPossible = (env: Env): boolean =>
+  env['CLAUDE_CODE_FORK_SUBAGENT'] !== '1' &&
+  (env['CLAUDE_CODE_DISABLE_BACKGROUND_TASKS'] === '1' || env['CLAUDE_CODE_FORK_SUBAGENT'] === '0');
+
+/**
+ * Why no owned Agent call this session makes could reach a worker, or null when one could. A subagent model override
+ * is refused by checkEligibility just as a background-only call is, so an orchestrated job is locked out either way:
+ * its guard refuses the main session's edits while every brief is declined. Both are fixed at launch, so admission,
+ * the forced arm, lean and the SessionStart notice all read this one answer.
+ */
+export const dispatchBlocker = (env: Env): 'background_only' | 'subagent_model_override' | null => {
+  if (!foregroundDispatchPossible(env)) return 'background_only';
+  const override = subagentModelOverride(env);
+  return override.concrete || override.force ? 'subagent_model_override' : null;
+};
+
+/**
  * V4 §4 conditions kept for V5. A caller pin is reported rather than fatal: a pinned call still receives the canonical
  * task contract (A5), it just keeps its model. Every other failing condition is a documented no-op with HTTP 0.
  */

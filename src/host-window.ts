@@ -267,6 +267,18 @@ const readSettingsChain = <T>(env: Env, where: SettingsDirs, managedDirs: readon
   return { ambiguous: `the session moved from CLAUDE_PROJECT_DIR and its settings directories disagree (${dirs.length} candidates)` };
 };
 
+/**
+ * #48: a variable a settings `env` block sets, resolved through the same scopes as the window -- managed, project-local,
+ * project-shared, user -- for doctor, which runs outside any session and has only its own cwd. The host applies
+ * settings env over the shell's, so a value found here is the one a session started from `cwd` would see.
+ */
+export const readSettingsEnvVar = (env: Env, cwd: string | null, key: string, managedDirs: readonly string[] = defaultManagedDirs()): Found<string> | Ambiguous | null =>
+  readSettingsChain(env, settingsDirCandidates(env, cwd, null), managedDirs, (settings) => {
+    const block = settings['env'];
+    const value = isRecord(block) ? block[key] : undefined;
+    return typeof value === 'string' ? value : null;
+  });
+
 const readConfiguredWindow = (env: Env, cwd: string | null | undefined, managedDirs: readonly string[], transcriptPath: string | null | undefined): Known | Ambiguous | null => {
   const envWindow = fromEnv(env);
   if (envWindow !== null) return { tokens: envWindow, source: 'env' };

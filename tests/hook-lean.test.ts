@@ -213,6 +213,8 @@ describe('lean — local checks before anything is sent', () => {
   it.each([
     ['a forced subagent model override', { CLAUDE_CODE_SUBAGENT_MODEL: 'haiku' }],
     ['forced subagent forking', { CLAUDE_CODE_FORK_SUBAGENT: '1' }],
+    // #48: an interactive session's default, where the executor call could only run in the background.
+    ['background-only Agent calls', { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: undefined }],
   ])('spends nothing when %s makes a dispatch impossible in this session', async (_name, over) => {
     const fetchImpl = fakeJev();
     const r = await run(makeEnv(over), promptEvent(base().path), fetchImpl);
