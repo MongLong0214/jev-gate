@@ -1101,7 +1101,7 @@ export const renderMarkdown = (r: Report): string => {
       '- A model-mismatch count is the host’s own `model_mismatch` reason code on a stop/spawn_result line, never inferred from the requested/observed pair by this ingestion.',
     );
   }
-  L.push('', '## Jev requests per arm (attempts / input tokens / est $ at the dated price)', '', '| arm | admission | allocation | result | scope | influence (changed/judged) |', '|---|---|---|---|---|---|');
+  L.push('', '## Jev requests per arm (attempts / input tokens / est $ at the dated price)', '', '| arm | admission | allocation | result | plan (scope or interpretation) | influence (changed/judged) |', '|---|---|---|---|---|---|');
   for (const a of r.arms) {
     const j = (p: JevPhaseUsage): string => `${p.attempts} / ${p.tokens === null ? `null (known ${p.tokens_known})` : p.tokens} / ${fmt(p.cost_usd, 6)}`;
     const inf = a.gate_v5.influence;

@@ -166,6 +166,20 @@ if (process.env.FAKE_CLAUDE_PRIMED_HANG === '1') {
       });
     }
 
+    if (jevGates && process.env.FAKE_CLAUDE_INTERPRETATION) {
+      // A23: the live plan-interpretation request, one per ready plan with constraints. `lost` writes its intent only,
+      // the shape a request leaves when its usage never came back.
+      const interpReq = rid();
+      trace('interpretation_intent', { request_id: interpReq, role: 'planner', planner_tier: 'deep', clauses: 2, constraints: 1, tasks: 3, request_bytes: 2200, written_at: at(5300) });
+      if (process.env.FAKE_CLAUDE_INTERPRETATION !== 'lost') {
+        trace('interpretation_result', {
+          request_id: interpReq, role: 'planner', planner_tier: 'deep', clauses: 2, constraints: 1, tasks: 3, attempted: true,
+          http: { status: 200, code: null, duration_ms: 190, request_bytes: 2200 }, jev: jevBody(170),
+          interpretation: { status: 'consistent', divergent: [] }, written_at: at(5400),
+        });
+      }
+    }
+
     // ---- workers: mixed tiers, one incomplete receipt, one advisory rework, one unknown status
     const COST = { 'claude-haiku-5': 0.004, 'claude-sonnet-5': 0.02, 'claude-opus-5': 0.05 };
     const workers = [

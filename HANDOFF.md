@@ -16,6 +16,9 @@ Review round (gpt-6-sol, PR #55): a primed session reports its cumulative total 
 before its last turn's result kept an earlier turn's total, and `toRowView` read that subtotal as the row's complete
 Claude cost. It now reads such a row's cost and usage as unknown (`partial_session`), in the report and so in the
 stop. A historical primed cell that timed out part-way now reports an unknown cost where it showed a subtotal.
+Second round: the sum is kept in whole nanodollars, since a float sum of rows that add up to the cap fell just short
+of it and started one more cell; and the A23 plan-interpretation request, which is billed, is now counted in the
+plan-level Jev group (with the historical scope gate), so a legacy auto cell's complete cost no longer omits it.
 That clears one precondition of each pre-registration. The others (the lean episode cases and follow-up turn, a
 plan-only run on the frozen build, and the owner's own approval) are unchanged.
 

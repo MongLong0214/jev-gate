@@ -817,6 +817,15 @@ export const preflight = (o: Options, needsJev: boolean): Preflight => {
   };
 };
 
+/**
+ * #55 review: the spend stop sums dollars as whole nanodollars. Binary floating point adds $1.13, $8.04 and $20.83 to
+ * 29.999999999999996, which would start one more cell under a $30 cap; the integer sum reaches the cap exactly,
+ * rather than through an epsilon comparison, which would pick a tolerance by hand.
+ */
+const NANO_PER_USD = 1_000_000_000;
+export const toNanoUsd = (usd: number): number => Math.round(usd * NANO_PER_USD);
+export const capReached = (knownNanoUsd: number, capUsd: number): boolean => knownNanoUsd >= toNanoUsd(capUsd);
+
 const emptyJevPhase = (): JevPhaseUsage => ({ attempts: 0, tokens: null, tokens_known: 0, cost_usd: null });
 
 export const emptyLeanV5 = (): LeanV5 => ({
@@ -1610,8 +1619,14 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
 
   account(records.filter((r) => r['phase'] === 'pre_result'), phase('pre_intent'), g.jev_requests.allocation);
   account(records.filter((r) => r['phase'] === 'result_result'), phase('result_intent'), g.jev_requests.result);
-  // A17: the plan scope gate is a real request per plan, so its consumption is counted like every other gate.
-  account(records.filter((r) => r['phase'] === 'scope_result'), phase('scope_intent'), g.jev_requests.scope);
+  // A17: the plan scope gate is a real request per plan, so its consumption is counted like every other gate. #55 review:
+  // A23's plan interpretation is the live plan-level request that replaced it, and it is billed too, so it is counted
+  // in the same group; left out, a cell's complete cost read below its real spend and the spend stop read the same.
+  account(
+    records.filter((r) => r['phase'] === 'scope_result' || r['phase'] === 'interpretation_result'),
+    [...phase('scope_intent'), ...phase('interpretation_intent')],
+    g.jev_requests.scope,
+  );
   // A17: influence is read from the records, never re-derived here; the hook is the only thing that knows the counterfactual.
   for (const r of records) {
     if (!['admission_result', 'pre_result', 'result_result', 'scope_result'].includes(String(r['phase'])) || r['attempted'] !== true) continue;
@@ -2107,12 +2122,12 @@ export const main = async (argv: string[]): Promise<number> => {
   // second sum of its own, so the total it stops on is the complete cost the report will show: Claude plus every Jev
   // producer. A cell whose complete cost is unknown stops the run as well, since an unknown is not a zero and the cap
   // could already be passed.
-  const spend = { known_usd: 0, unknown_cell: null as string | null, stopped: null as 'max_cost_reached' | 'cost_unknown' | null };
+  const spend = { known_nano_usd: 0, unknown_cell: null as string | null, stopped: null as 'max_cost_reached' | 'cost_unknown' | null };
   const addSpend = (row: Plan['rows'][number], arm: string, cellDir: string): void => {
     const cellFile = join(cellDir, 'cell.json');
     const view = toRowView({ job: row.job, group: row.group, repetition: row.repetition, arm, file: cellFile }, JSON.parse(readFileSync(cellFile, 'utf8')) as Record<string, unknown>);
     if (view.total_cost_usd === null) spend.unknown_cell ??= relative(out, cellDir);
-    else spend.known_usd += view.total_cost_usd;
+    else spend.known_nano_usd += toNanoUsd(view.total_cost_usd);
   };
   for (const row of plan.rows) {
     const cs = cases.find((c) => c.id === row.job)!;
@@ -2132,13 +2147,13 @@ export const main = async (argv: string[]): Promise<number> => {
         writeJsonAtomic(join(cellDir, 'cell.json'), cell);
         continue;
       }
-      if (o.maxCostUsd !== null && (spend.unknown_cell !== null || spend.known_usd >= o.maxCostUsd)) {
+      if (o.maxCostUsd !== null && (spend.unknown_cell !== null || capReached(spend.known_nano_usd, o.maxCostUsd))) {
         const reason = spend.unknown_cell !== null ? 'cost_unknown' : 'max_cost_reached';
         if (spend.stopped === null) {
           process.stdout.write(
             reason === 'cost_unknown'
               ? `stop: the complete cost of ${spend.unknown_cell} is unknown, so --max-cost-usd ${o.maxCostUsd} cannot be checked; no further cell starts\n`
-              : `stop: the complete cost so far, $${spend.known_usd.toFixed(4)}, reached --max-cost-usd ${o.maxCostUsd}; no further cell starts\n`,
+              : `stop: the complete cost so far, $${(spend.known_nano_usd / NANO_PER_USD).toFixed(4)}, reached --max-cost-usd ${o.maxCostUsd}; no further cell starts\n`,
           );
         }
         spend.stopped = reason;
@@ -2209,7 +2224,7 @@ export const main = async (argv: string[]): Promise<number> => {
     finished_at: new Date().toISOString(),
     cancelled,
     cells: written.length,
-    spend: { max_cost_usd: o.maxCostUsd, known_usd: spend.known_usd, unknown_cell: spend.unknown_cell, stopped: spend.stopped },
+    spend: { max_cost_usd: o.maxCostUsd, known_usd: spend.known_nano_usd / NANO_PER_USD, unknown_cell: spend.unknown_cell, stopped: spend.stopped },
   });
   process.stdout.write(`done: ${out}. Next: node dist/bench/report.js --run ${out}\n`);
   return cancelled ? 130 : 0;
