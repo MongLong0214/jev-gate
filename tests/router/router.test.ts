@@ -1071,3 +1071,100 @@ describe('lifecycle', () => {
     expect(f.logs).toContainEqual(expect.objectContaining({ assessment: 'model_mismatch' }));
   });
 });
+
+describe('#42 and #43: handler cases the issues list', () => {
+  it('moves an inheriting built-in up from a verified lower baseline', async () => {
+    const router = createRouter(configOf(SPAWN_ONLY));
+    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', 0.95] }) });
+    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    const n = spawnNext();
+    const e = spawn({ parentModel: 'claude-haiku-4-5' });
+    await router.agentSpawn(f.engine, e, n.next);
+    expect(n.calls).toEqual([{ ...e, model: 'opus' }]);
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn', from: 'claude-haiku-4-5', patch: { model: 'opus' } }));
+  });
+
+  it('forwards a spawn once, natively, when its assessment times out, and a late reply changes nothing', async () => {
+    const router = createRouter(configOf(SPAWN_ONLY));
+    const reply = deferred<HttpReply>();
+    const f = fakeEngine({ respond: () => reply.promise });
+    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    const n = spawnNext();
+    const run = router.agentSpawn(f.engine, spawn(), n.next);
+    await vi.waitFor(() => expect(f.sent).toHaveLength(1));
+    f.expire();
+    await run;
+    expect(n.calls).toEqual([spawn()]);
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn', assessment: 'timeout', sent: true }));
+    reply.resolve(answering({ ...CLEAR, tier: ['fast', 0.95] })(f.sent[0]!) as HttpReply);
+    await settle();
+    expect(n.calls).toHaveLength(1);
+    await vi.waitFor(() => expect(f.logs).toContainEqual(expect.objectContaining({ event: 'late', scope: 'spawn', tool_use_id: 'tu1' })));
+  });
+
+  it('sends nothing for a spawn whose prompt or description carries a credential, and leaves it native', async () => {
+    const secret = `sk-${'c'.repeat(24)}testonlynotakey`;
+    for (const e of [spawn({ prompt: `Call the API with ${secret} and list the results.` }), spawn({ description: `use ${secret}` })]) {
+      const router = createRouter(configOf(SPAWN_ONLY));
+      const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['fast', 0.95] }) });
+      router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+      const n = spawnNext();
+      await router.agentSpawn(f.engine, e, n.next);
+      expect(n.calls).toEqual([e]);
+      expect(f.sent).toHaveLength(0);
+      expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn', assessment: 'input_secret', sent: false }));
+      expect(JSON.stringify(f.logs)).not.toContain(secret);
+    }
+  });
+
+  it('leaves a spawn native when only its description carries a Lean marker', async () => {
+    const router = createRouter(configOf(SPAWN_ONLY));
+    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['fast', 0.95] }) });
+    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    const n = spawnNext();
+    const e = spawn({ description: 'execute jev-lean-0123456789abcdef' });
+    await router.agentSpawn(f.engine, e, n.next);
+    expect(n.calls).toEqual([e]);
+    expect(f.sent).toHaveLength(0);
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn', skipped: 'lean_marker' }));
+  });
+
+  it('records an effort-only root decision with the step it came from, its Jev usage and its result', async () => {
+    const router = createRouter(configOf(EFFORT_ONLY));
+    const f = fakeEngine({ respond: answering({ ...CLEAR, effort: ['low', 0.95] }) });
+    router.turnStart({ turnId: 't1', text: TEXT });
+    const counts = { input_tokens: 700, output_tokens: 30, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+    await drain(router.turnStep(f.engine, step(), streamNext<TurnStepEvent>(() => 'claude-opus-5-5', counts).next));
+    const root = f.logs.find((l) => l['event'] === 'root');
+    expect(root).toMatchObject({ turn: 't1', sent: true, patch: { effort: 'low' } });
+    expect(JSON.stringify(root)).toContain('high');
+    expect(root?.['usage']).toMatchObject({ input: expect.any(Number) });
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root_result', turn: 't1', index: 0, applied: { effort: 'low' }, observed: 'claude-opus-5-5' }));
+  });
+
+  it('#42: a known model that no profile names routes its effort and withholds only the model question', async () => {
+    // Opus is an exact model the table knows, so its efforts are known; no configured profile is Opus, so its rank is not.
+    const router = createRouter(configOf({ routeMainEffort: true, routeMainModel: true, routeSubagentModel: false, fastModel: 'claude-haiku-4-5', standardModel: 'claude-sonnet-5', deepModel: 'claude-fable-5-1' }), SWITCHES);
+    const f = fakeEngine({ respond: answering({ ...CLEAR, effort: ['low', 0.95], tier: ['fast', 0.99] }) });
+    router.turnStart({ turnId: 't1', text: TEXT });
+    const n = streamNext<TurnStepEvent>();
+    await drain(router.turnStep(f.engine, step(), n.next));
+    expect(n.calls).toEqual([{ ...step(), effort: 'low' }]);
+    expect(f.sent).toHaveLength(1);
+    expect(Object.keys(f.sent[0]?.questions ?? {})).toEqual(['control', 'effort', 'action_risk']);
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root', model_withheld: 'rank_unknown', patch: { effort: 'low' } }));
+  });
+
+  it('#42: a conditional level the model cannot take is not offered, and a lower unconditional one still applies', async () => {
+    // Sonnet takes xhigh only conditionally; the step starts there, and the unconditional levels below it stay routable.
+    const router = createRouter(configOf(EFFORT_ONLY));
+    const f = fakeEngine({ respond: answering({ ...CLEAR, effort: ['low', 0.95] }) });
+    router.turnStart({ turnId: 't1', text: TEXT });
+    const n = streamNext<TurnStepEvent>();
+    const sonnet = step({ model: 'claude-sonnet-5', effort: 'xhigh' });
+    await drain(router.turnStep(f.engine, sonnet, n.next));
+    expect(f.sent).toHaveLength(1);
+    expect(n.calls).toEqual([{ ...sonnet, effort: 'low' }]);
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root', sent: true, patch: { effort: 'low' } }));
+  });
+});
