@@ -6,6 +6,7 @@
  * host's `SessionMessage` satisfies it.
  */
 export interface DigestToolUse {
+  readonly tool_use_id?: string;
   readonly tool: string;
   readonly input: Readonly<Record<string, unknown>>;
   readonly text?: string;
@@ -15,12 +16,16 @@ export interface DigestMessage {
   readonly role: 'user' | 'assistant';
   readonly text: string;
   readonly toolUses: readonly DigestToolUse[];
-  readonly toolResults?: ReadonlyArray<{ readonly text: string }>;
+  readonly toolResults?: ReadonlyArray<{ readonly text: string; readonly tool_use_id?: string }>;
   readonly handle?: string;
 }
 
 export interface DigestOptions {
-  /** Characters for the digest and the kept tail together. */
+  /**
+   * Target characters for the digest and the kept tail together. The last exchange is kept whole, so when it alone is
+   * over the tail's share the total can reach 2.3 times this (twice for the tail, 30% for the digest); past twice, the
+   * engine compacts. Either way the result must come to at most half of what it replaces.
+   */
   readonly budgetChars: number;
 }
 
@@ -35,7 +40,8 @@ export interface DigestResult {
   readonly headMessages: number;
 }
 
-export type DigestOutcome = { ok: true; result: DigestResult } | { ok: false; reason: 'nothing_to_compact' | 'tail_too_large' };
+export type DigestFallback = 'nothing_to_compact' | 'tail_too_large' | 'unpaired_result' | 'no_relief';
+export type DigestOutcome = { ok: true; result: DigestResult } | { ok: false; reason: DigestFallback };
 
 /** Marks a digest this module wrote, so the next compaction carries it forward as the previous summary. */
 export const DIGEST_MARK = '[jev-gate compact]';
@@ -46,6 +52,8 @@ const TAIL_SHARE = 0.4;
 /** The digest keeps this share even when the tail's minimum takes more than its own. */
 const DIGEST_FLOOR = 0.3;
 const MINIMAL_TAIL_BUDGETS = 2;
+/** A compaction whose digest and tail would not come to at most this share of what it replaces is left to the engine. */
+const RELIEF = 0.5;
 const SUMMARY_SHARE = 0.3;
 const LAST_REQUEST_CHARS = 2000;
 const REQUEST_CHARS = 400;
@@ -83,13 +91,35 @@ const isSummary = (m: DigestMessage): boolean =>
 const isRequest = (m: DigestMessage): boolean =>
   m.role === 'user' && (m.toolResults ?? []).length === 0 && m.text.trim() !== '' && !isSummary(m) && !NOT_A_REQUEST.test(m.text);
 
+const toolUseIds = (m: DigestMessage): string[] => (m.role === 'assistant' ? m.toolUses.flatMap((u) => (u.tool_use_id ? [u.tool_use_id] : [])) : []);
+
 /**
- * The tail starts at an assistant message, so every tool_result in it answers a tool_use in it and the digest (a
- * user message) is followed by an assistant one. It grows back from the end within its share, and always holds the
- * last assistant message and what follows it (often the large result that crossed the threshold) up to twice the
- * budget; past that the compaction is left to the engine.
+ * The start moved back until every tool_result from `start` on answers a tool_use from `start` on, or null when a result
+ * answers no earlier use at all. Parallel calls can sit in separate assistant rows ahead of one row of results.
  */
-const tailStart = (messages: readonly DigestMessage[], tailBudget: number, budget: number): number | null => {
+const paired = (messages: readonly DigestMessage[], start: number): number | null => {
+  let s = start;
+  for (;;) {
+    const tail = messages.slice(s);
+    const uses = new Set(tail.flatMap(toolUseIds));
+    const missing = new Set(tail.flatMap((m) => (m.toolResults ?? []).flatMap((r) => (r.tool_use_id && !uses.has(r.tool_use_id) ? [r.tool_use_id] : []))));
+    if (missing.size === 0) return s;
+    let at = -1;
+    for (let i = s - 1; i >= 0; i--) if (toolUseIds(messages[i]!).some((id) => missing.has(id))) at = i;
+    if (at < 0) return null;
+    s = at;
+  }
+};
+
+type Boundary = { ok: true; start: number } | { ok: false; reason: DigestFallback };
+
+/**
+ * The tail starts at an assistant message and holds both halves of every tool exchange in it, so the digest (a user
+ * message) is followed by an assistant one and no tool_result is orphaned. It always holds the last assistant message
+ * and what follows it (often the large result that crossed the threshold), up to twice the budget, and grows back
+ * within its share; past that, or when a result's call cannot be found, the compaction is left to the engine.
+ */
+const tailStart = (messages: readonly DigestMessage[], tailBudget: number, budget: number): Boundary => {
   let lastAssistant = -1;
   for (let i = messages.length - 1; i >= 0; i--) {
     if (messages[i]!.role === 'assistant') {
@@ -97,17 +127,19 @@ const tailStart = (messages: readonly DigestMessage[], tailBudget: number, budge
       break;
     }
   }
-  if (lastAssistant <= 0) return null;
-  const minimal = messages.slice(lastAssistant).reduce((n, m) => n + messageChars(m), 0);
-  if (minimal > MINIMAL_TAIL_BUDGETS * budget) return null;
-  let used = 0;
-  let start = lastAssistant;
-  for (let i = messages.length - 1; i >= 0; i--) {
+  if (lastAssistant <= 0) return { ok: false, reason: 'nothing_to_compact' };
+  const floor = paired(messages, lastAssistant);
+  if (floor === null) return { ok: false, reason: 'unpaired_result' };
+  if (floor === 0) return { ok: false, reason: 'nothing_to_compact' };
+  let used = messages.slice(floor).reduce((n, m) => n + messageChars(m), 0);
+  if (used > MINIMAL_TAIL_BUDGETS * budget) return { ok: false, reason: 'tail_too_large' };
+  let start = floor;
+  for (let i = floor - 1; i >= 1; i--) {
     used += messageChars(messages[i]!);
     if (used > tailBudget) break;
-    if (messages[i]!.role === 'assistant') start = Math.min(start, i);
+    if (messages[i]!.role === 'assistant' && paired(messages, i) === i) start = i;
   }
-  return start;
+  return { ok: true, start };
 };
 
 interface Piece {
@@ -122,6 +154,13 @@ const SECTION = {
   steps: '## Earlier steps (oldest first)',
 } as const;
 const REQUEST_PREFIX = '▸ ';
+
+/**
+ * A content line that could read as a section heading or a request marker is indented by one space, so a digest parses
+ * back into the parts it was built from whatever the requests and results say. Idempotent: an indented line no longer
+ * matches.
+ */
+const escapeLines = (s: string): string => s.replace(/^(?=## |▸ )/gm, ' ');
 
 interface Carried {
   summary: string;
@@ -161,11 +200,11 @@ export const assemble = <M extends DigestMessage>(messages: readonly M[], r: Dig
 
 export const buildDigest = (messages: readonly DigestMessage[], options: DigestOptions): DigestOutcome => {
   const budget = options.budgetChars;
-  const start = tailStart(messages, Math.floor(budget * TAIL_SHARE), budget);
-  if (start === null) return { ok: false, reason: messages.some((m) => m.role === 'assistant') ? 'tail_too_large' : 'nothing_to_compact' };
+  const boundary = tailStart(messages, Math.floor(budget * TAIL_SHARE), budget);
+  if (!boundary.ok) return boundary;
+  const start = boundary.start;
   const head = messages.slice(0, start);
   const tail = messages.slice(start);
-  if (head.length === 0) return { ok: false, reason: 'nothing_to_compact' };
   const tailChars = tail.reduce((n, m) => n + messageChars(m), 0);
 
   // Headings and separators are paid for up front; each piece pays for its own prefix and line break.
@@ -174,7 +213,7 @@ export const buildDigest = (messages: readonly DigestMessage[], options: DigestO
   const take = (text: string, cap: number, overhead: number): string => {
     const room = Math.min(cap, left - overhead);
     if (room <= 0) return '';
-    const t = clip(text, room);
+    const t = clip(escapeLines(text), room);
     left -= t.length + overhead;
     return t;
   };
@@ -235,6 +274,8 @@ export const buildDigest = (messages: readonly DigestMessage[], options: DigestO
   if (requests.length) sections.push(`${SECTION.requests}\n${requests.sort(order).map((p) => REQUEST_PREFIX + p.text).join('\n')}`);
   if (log.length) sections.push(`${SECTION.steps}\n${log.sort(order).map((p) => p.text).join('\n')}`);
   const digest = sections.join('\n\n');
+  const replaced = messages.reduce((n, m) => n + messageChars(m), 0);
+  if (digest.length + tailChars > RELIEF * replaced) return { ok: false, reason: 'no_relief' };
 
   return {
     ok: true,

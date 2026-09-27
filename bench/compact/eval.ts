@@ -33,7 +33,7 @@ const resultText = (b: Rec): string => {
 
 /** Transcript records → the engine's message rows, near enough: one assistant row per API message id. */
 const toMessages = (recs: Rec[]): DigestMessage[] => {
-  const out: Array<{ role: 'user' | 'assistant'; text: string; toolUses: Array<DigestToolUse & { id: string; text?: string }>; toolResults?: Array<{ text: string }> }> = [];
+  const out: Array<{ role: 'user' | 'assistant'; text: string; toolUses: Array<DigestToolUse & { text?: string }>; toolResults?: Array<{ text: string; tool_use_id?: string }> }> = [];
   const byUse = new Map<string, { text?: string }>();
   let lastId: string | undefined;
   for (const r of recs) {
@@ -48,7 +48,7 @@ const toMessages = (recs: Rec[]): DigestMessage[] => {
       for (const b of blocks(r)) {
         if (b.type === 'text' && b.text) m.text += (m.text ? '\n' : '') + b.text;
         if (b.type === 'tool_use') {
-          const u = { id: b.id, tool: b.name, input: b.input ?? {} };
+          const u = { tool_use_id: b.id, tool: b.name, input: b.input ?? {} };
           m.toolUses.push(u);
           byUse.set(b.id, u);
         }
@@ -61,7 +61,7 @@ const toMessages = (recs: Rec[]): DigestMessage[] => {
         const u = byUse.get(b.tool_use_id);
         if (u) u.text = resultText(b);
       }
-      out.push({ role: 'user', text: bs.filter((b) => b.type === 'text').map((b) => b.text).join('\n'), toolUses: [], toolResults: results.map((b) => ({ text: resultText(b) })) });
+      out.push({ role: 'user', text: bs.filter((b) => b.type === 'text').map((b) => b.text).join('\n'), toolUses: [], toolResults: results.map((b) => ({ text: resultText(b), tool_use_id: b.tool_use_id })) });
     }
   }
   return out;
@@ -69,6 +69,22 @@ const toMessages = (recs: Rec[]): DigestMessage[] => {
 
 const render = (ms: readonly DigestMessage[]): string =>
   ms.map((m) => [m.text, ...m.toolUses.map((u) => `${u.tool} ${JSON.stringify(u.input)}`), ...(m.toolResults ?? []).map((r) => r.text)].join('\n')).join('\n');
+
+const isSummaryRec = (r: Rec): boolean => r.isCompactSummary === true || blocks(r).some((b) => (b.text ?? '').trimStart().startsWith('This session is being continued'));
+
+/**
+ * What the engine held at the boundary `hi`: the records since the preceding boundary `lo`, with the messages that
+ * boundary preserved from before it placed after its summary, as the host keeps them.
+ */
+const heldAt = (recs: Rec[], lo: number, hi: number): Rec[] => {
+  const seg = recs.slice(lo, hi).filter((r) => r.subtype !== 'compact_boundary');
+  if (recs[lo]?.subtype !== 'compact_boundary') return seg;
+  const kept = new Set<string>(recs[lo].compactMetadata?.preservedMessages?.uuids ?? []);
+  const inSeg = new Set(seg.map((r) => r.uuid));
+  const preserved = recs.slice(0, lo).filter((r) => kept.has(r.uuid) && !inSeg.has(r.uuid));
+  const at = seg.findIndex(isSummaryRec);
+  return [...seg.slice(0, at + 1), ...preserved, ...seg.slice(at + 1)];
+};
 
 const load = (f: string): Rec[] =>
   readFileSync(f, 'utf8').split('\n').flatMap((l) => {
@@ -98,11 +114,11 @@ for (const f of files.filter((f) => Date.now() - statSync(f).mtimeMs < WEEK).sor
   if (!raw.includes('"compact_boundary"')) continue;
   const recs = load(f);
   let prev = 0;
+  // Every boundary starts what the engine holds next; only the auto ones are points.
   recs.forEach((r, i) => {
-    if (r.subtype === 'compact_boundary' && r.compactMetadata?.trigger === 'auto') {
-      points.push([f, prev, i]);
-      prev = i;
-    }
+    if (r.subtype !== 'compact_boundary') return;
+    if (r.compactMetadata?.trigger === 'auto') points.push([f, prev, i]);
+    prev = i;
   });
 }
 // A fixed shuffle, so reruns and budget sweeps see the same points.
@@ -117,8 +133,7 @@ const rows: Rec[] = [];
 for (const [f, lo, hi] of points) {
   if (rows.length >= N) break;
   const recs = load(f);
-  const seg = recs.slice(lo, hi).filter((r) => r.subtype !== 'compact_boundary');
-  const before = toMessages(seg);
+  const before = toMessages(heldAt(recs, lo, hi));
   const keep = new Set<string>(recs[hi].compactMetadata?.preservedMessages?.uuids ?? []);
   const post: string[] = recs.filter((r) => keep.has(r.uuid)).flatMap((r) => blocks(r).map((b) => b.text ?? (b.type === 'tool_result' ? resultText(b) : b.type === 'tool_use' ? `${b.name} ${JSON.stringify(b.input)}` : '')));
   for (const r of recs.slice(hi + 1, hi + 6)) {
@@ -147,7 +162,7 @@ for (const [f, lo, hi] of points) {
   const want = [...used].filter((x) => pre.has(x));
   if (want.length < 5 || hostText.length < 2000) continue;
   const recall = (s: string) => Math.round((1000 * want.filter((x) => s.includes(x)).length) / want.length) / 1000;
-  const row: Rec = { file: basename(f).slice(0, 12), kind: f.includes('/subagents/') ? 'sub' : 'main', want: want.length, hostChars: hostText.length, host: recall(hostText), hostA: recall(hostAttached), attachChars: attached.join('').length };
+  const row: Rec = { file: basename(f).slice(0, 12), kind: f.includes('/subagents/') ? 'sub' : 'main', want: want.length, hostChars: hostText.length, hostAChars: hostAttached.length, host: recall(hostText), hostA: recall(hostAttached), attachChars: attached.join('').length };
   for (const b of BUDGETS) {
     const d = buildDigest(before, { budgetChars: b });
     row[`d${b / 1000}k`] = d.ok ? recall(render(assemble(before, d.result))) : null;
@@ -162,7 +177,7 @@ const mean = (k: string) => {
   const v = rows.map((r) => r[k]).filter((x) => typeof x === 'number');
   return `${(v.reduce((a, b) => a + b, 0) / v.length).toFixed(3)} (n ${v.length})`;
 };
-console.log(`points ${rows.length} (main ${rows.filter((r) => r.kind === 'main').length}); host mean chars ${Math.round(rows.reduce((a, r) => a + r.hostChars, 0) / rows.length)}`);
+console.log(`points ${rows.length} (main ${rows.filter((r) => r.kind === 'main').length}); host mean chars ${Math.round(rows.reduce((a, r) => a + r.hostChars, 0) / rows.length)}, with attachments ${Math.round(rows.reduce((a, r) => a + r.hostAChars, 0) / rows.length)}`);
 console.log(`host recall ${mean('host')}; with its attachments ${mean('hostA')} (mean attachment chars ${Math.round(rows.reduce((a, r) => a + r.attachChars, 0) / rows.length)})`);
 for (const b of BUDGETS) {
   const k = `d${b / 1000}k`;
@@ -175,16 +190,16 @@ for (const b of BUDGETS) {
 // Chained: in sessions with several auto compactions, each digest is built over the previous digest, its kept tail
 // and the messages since (without the host's summary), as the engine would hold them had the module been active.
 const chain: Rec[] = [];
-const byFile = new Map<string, number[]>();
-for (const [f, , hi] of points) byFile.set(f, [...(byFile.get(f) ?? []), hi]);
-for (const [f, his] of [...byFile].filter(([, h]) => h.length >= 3).sort((a, b) => b[1].length - a[1].length).slice(0, 12)) {
+const byFile = new Map<string, Array<[number, number]>>();
+for (const [f, prev, hi] of points) byFile.set(f, [...(byFile.get(f) ?? []), [prev, hi]]);
+for (const [f, spans] of [...byFile].filter(([, h]) => h.length >= 3).sort((a, b) => b[1].length - a[1].length).slice(0, 12)) {
   const recs = load(f);
-  const bounds = [...his].sort((a, b) => a - b);
+  const bounds = [...spans].sort((a, b) => a[1] - b[1]);
   let held: DigestMessage[] = [];
   let lo = 0;
-  bounds.forEach((hi, k) => {
+  bounds.forEach(([prev, hi], k) => {
     const fresh = recs.slice(lo, hi).filter((r) => r.subtype !== 'compact_boundary' && !r.isCompactSummary);
-    const before = k === 0 ? toMessages(recs.slice(lo, hi).filter((r) => r.subtype !== 'compact_boundary')) : [...held, ...toMessages(fresh)];
+    const before = k === 0 ? toMessages(heldAt(recs, prev, hi)) : [...held, ...toMessages(fresh)];
     lo = hi + 1;
     const d = buildDigest(before, { budgetChars: BUDGETS[1] ?? 40000 });
     held = d.ok ? assemble(before, d.result) : before;
@@ -217,7 +232,7 @@ const cm = (k: string) => {
   return (v.reduce((a, b) => a + b, 0) / v.length).toFixed(3);
 };
 console.log(`chained: ${chain.length} later compactions in ${new Set(chain.map((r) => r.file)).size} sessions; host+attachments ${cm('hostA')} digest ${cm('digest')} (>= host ${chain.filter((r) => r.digest >= r.hostA).length}); by depth:`);
-for (const k of [1, 2, 4, 8]) {
+for (const k of [1, 2, 4, 8, 16, 32]) {
   const rs = chain.filter((r) => r.k >= k && r.k < k * 2);
   if (rs.length) console.log(`  k ${k}-${k * 2 - 1}: n ${rs.length} host ${(rs.reduce((a, r) => a + r.hostA, 0) / rs.length).toFixed(3)} digest ${(rs.reduce((a, r) => a + (r.digest ?? 0), 0) / rs.length).toFixed(3)}`);
 }

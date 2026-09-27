@@ -34,7 +34,11 @@ export const register: Register = (on, options) => {
     const log = (fields: Record<string, unknown>): void =>
       quietly(() => $.ui.log(`jev-compact ${JSON.stringify({ event: 'compact', mode: config.mode, trigger: e.trigger, subagent: e.agentId !== undefined, ...fields })}`, { to: 'debug' }));
     const handled = e.trigger === 'auto' || (e.trigger === 'manual' && config.manual);
-    if (!handled || (e.agentId !== undefined && !config.subagents) || (e.trigger === 'manual' && e.instructions)) return next(e);
+    const deferred = !handled ? 'trigger' : e.agentId !== undefined && !config.subagents ? 'subagent' : e.trigger === 'manual' && e.instructions ? 'instructions' : null;
+    if (deferred) {
+      log({ deferred });
+      return next(e);
+    }
 
     const t0 = Date.now();
     let outcome: ReturnType<typeof buildDigest> | null = null;

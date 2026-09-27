@@ -22,43 +22,57 @@ Off by default; off registers no hook at all. Options live under `pluginConfigs[
 |---|---|---|
 | `enabled` | `false` | Master switch. |
 | `mode` | `shadow` | `shadow` builds and logs the digest and lets the engine compact, logging how long that took and what its summarizer used. `active` answers the compaction with the digest. |
-| `budgetChars` | `40000` | Characters for the digest and the kept tail together, 8000–400000. |
+| `budgetChars` | `40000` | Target characters for the digest and the kept tail together, 8000–400000. See the ceiling below. |
 | `compactSubagents` | `true` | Also answer a subagent's own auto compactions. |
 | `compactManual` | `false` | Also answer `/compact` typed without instructions. Keep it off: see the host defect below. |
 
-An option it cannot use turns it off and logs the field name once per session. Every decision logs one
-`jev-compact {...}` debug line (sizes, the fallback reason, and in shadow the engine's time and usage).
+An option it cannot use turns it off and logs the field name once per session. Every compaction it is asked about logs
+one `jev-compact {...}` debug line: why it deferred to the engine, or the sizes, the fallback reason, and in shadow the
+engine's time and usage.
 
 ## What it keeps
 
-- **The tail** starts at an assistant message, so every tool_result in it answers a tool_use in it, and it always
-  holds the last assistant message and what follows (often the large result that crossed the threshold). It grows back
-  within 40% of the budget. When the last exchange alone is over twice the budget, the engine compacts instead.
+- **The tail** starts at an assistant message and holds both halves of every tool exchange in it, matched by
+  `tool_use_id`: parallel calls in separate rows ahead of one row of results move the start back to the first call,
+  and a result whose call is nowhere leaves the compaction to the engine. It always holds the last assistant message and
+  what follows (often the large result that crossed the threshold), and grows back within 40% of the budget.
+- **The ceiling.** Because the last exchange is kept whole, the total can pass `budgetChars`: up to twice it for the
+  tail plus 30% for the digest, 2.3 times in all. Past twice for the tail, or when the digest and tail would come to more
+  than half of the conversation they replace, the engine compacts instead, so an answered compaction always at least
+  halves what it was given.
 - **The digest** gets the rest, and never less than 30%: the previous summary (up to 30%), the requests (the newest up
   to 2,000 characters, earlier ones 400), then for each earlier assistant message, newest first, its narration (400) and
   tool inputs (240 each), then result excerpts (1,200 each), newest first. Pieces are chosen by that priority and
   printed oldest first. Engine-injected user text (`<system-reminder>`, task notifications, command echoes) is not a
   request.
 - **A digest it wrote earlier** is taken apart at the next compaction: its previous summary stays the summary, its
-  requests and steps join the new ones as the oldest, so the newest survive the cut rather than the oldest.
+  requests and steps join the new ones as the oldest, so the newest survive the cut rather than the oldest. A content
+  line that starts like a section heading (`## `) or a request marker (`▸ `) is written indented by one space, so a
+  request or result that quotes them cannot move the parse.
 
 ## Evidence (2026-09-27)
 
 **Offline, the shipped function over real compactions** (`bench/compact/eval.ts`, 40 seeded auto compactions from the
-past week's local transcripts, main and subagent). The metric is the share of referents (paths, SHAs, `#N`,
-identifiers) that the next 12 assistant turns used in tool inputs and that existed before the compaction, found in
-what the model holds afterwards. The host's side counts its summary, the messages it kept and the files it re-attached.
+past week's local transcripts, main and subagent). Each digest is built from what the engine held at that boundary: the
+records since the previous boundary, with the messages that boundary preserved placed after its summary. The metric is
+the share of referents (paths, SHAs, `#N`, identifiers) that the next 12 assistant turns used in tool inputs and that
+existed in that input, found in what the model holds afterwards. The host's side counts its summary, the messages it
+kept and the files it re-attached.
 
 | | recall | ≥ host | size (chars) |
 |---|---|---|---|
-| host: summary + kept messages + re-attached files | 0.742 | — | 38,600 |
-| digest, 30,000 | 0.800 | 27/40 | 30,000 |
-| digest, 40,000 (default) | 0.850 | 30/40 | 40,000 |
-| digest, 50,000 | 0.878 | 32/40 | 50,000 |
+| host: summary + kept messages | 0.743 | — | 24,200 |
+| host: the same + re-attached files | 0.781 | — | 38,500 |
+| digest, 30,000 | 0.793 | 31/40 | 30,000 |
+| digest, 40,000 (default) | 0.816 | 34/40 | 40,000 |
+| digest, 50,000 | 0.849 | 36/40 | 50,000 |
+
+"≥ host" is against the host with its re-attached files. At the default the digest recalled less at 6 of 40 points,
+by 0.07 to 0.27.
 
 Chained, as if active through whole sessions (each digest built over the previous digest, its tail and the messages
-since): 191 later compactions in 12 sessions, host 0.699, digest 0.742 (≥ host at 133). The gap holds with depth: at
-the 16th–31st compaction 0.682 vs 0.712, at the 32nd–63rd 0.727 vs 0.801. No compaction fell back.
+since): 176 later compactions in 12 sessions, host 0.717, digest 0.761 (≥ host at 122). The gap holds with depth: at
+the 16th–31st compaction 0.700 vs 0.723, at the 32nd–63rd 0.727 vs 0.801. No compaction fell back.
 
 The same 7-day transcripts put the host's own compactions at a 95-second median wait each.
 

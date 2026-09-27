@@ -23,8 +23,8 @@ const $ = { ui: { log: (t: string) => logs.push(t) } };
 const conversation = () => [
   { role: 'user', text: 'Rename parseRow.', toolUses: [], handle: 'h0' },
   ...Array.from({ length: 30 }, (_, i) => [
-    { role: 'assistant', text: `step ${i}`, toolUses: [{ tool: 'Read', input: { file_path: `/r/f${i}.ts` }, text: 'y'.repeat(2000), tool_use_id: `t${i}` }], handle: `a${i}` },
-    { role: 'user', text: '', toolUses: [], toolResults: [{ tool_use_id: `t${i}`, text: 'y'.repeat(2000), isError: false }], handle: `u${i}` },
+    { role: 'assistant', text: `step ${i}`, toolUses: [{ tool: 'Read', input: { file_path: `/r/f${i}.ts` }, text: 'y'.repeat(6000), tool_use_id: `t${i}` }], handle: `a${i}` },
+    { role: 'user', text: '', toolUses: [], toolResults: [{ tool_use_id: `t${i}`, text: 'y'.repeat(6000), isError: false }], handle: `u${i}` },
   ]).flat(),
   { role: 'assistant', text: 'done', toolUses: [], handle: 'end' },
 ];
@@ -92,11 +92,14 @@ describe('register', () => {
   it('active: /compact, a subagent when excluded, and a digest it cannot build all go to the engine', async () => {
     const { next, calls } = nextSpy();
     const on = (await hooksFor({ enabled: true, mode: 'active', compactSubagents: false })).get('session.compact')!;
+    logs.length = 0;
     await on($, { trigger: 'manual', messages: conversation() }, next);
     await on($, { trigger: 'precompute', messages: conversation() }, next);
     await on($, { trigger: 'auto', agentId: 'a1', messages: conversation() }, next);
     await on($, { trigger: 'auto', messages: [{ role: 'user', text: 'hi', toolUses: [] }] }, next);
     expect(calls).toHaveLength(4);
+    const why = logs.map((l) => JSON.parse(l.replace(/^jev-compact /, '')) as Record<string, unknown>).map((x) => x['deferred'] ?? x['fallback']);
+    expect(why).toEqual(['trigger', 'trigger', 'subagent', 'nothing_to_compact']);
     const manual = (await hooksFor({ enabled: true, mode: 'active', compactManual: true })).get('session.compact')!;
     await manual($, { trigger: 'manual', instructions: 'keep the plan', messages: conversation() }, next);
     expect(calls).toHaveLength(5);
