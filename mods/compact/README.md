@@ -77,9 +77,13 @@ the 16th–31st compaction 0.700 vs 0.723, at the 32nd–63rd 0.727 vs 0.801. No
 The same 7-day transcripts put the host's own compactions at a 95-second median wait each.
 
 **On an installed host** (2.1.283, Sonnet, `bench`-style probes in `~/jev-gate-runs/compact-probe-2026-09-27/`):
-- One process, `CLAUDE_CODE_AUTO_COMPACT_WINDOW=80000`, twelve 22 KB files read in order: three auto compactions
-  answered in 6, 2 and 21 ms (the boundary's `durationMs`), each taking the context from about 67K to about 37K
-  tokens; at the end the model listed all twelve secret words without re-reading, the early ones from chained digests.
+- One process, `CLAUDE_CODE_AUTO_COMPACT_WINDOW=80000`, twelve 22 KB files read one per turn: three auto compactions
+  answered in 2 to 3 ms (the boundary's `durationMs`), each from 67–69K tokens down to 7.3–9.4K (`preTokens`,
+  `postTokens`); at the end the model listed all twelve secret words without re-reading, the early ones from chained
+  digests.
+- The same twelve files read in one turn of parallel calls make a single exchange over twice the budget: the hook
+  defers, and the engine's own path declines as well ("no assistant messages in summarize set"), so that request goes
+  out uncompacted, as it would without the hook.
 - A resumed session after those auto compactions reloaded only the post-compaction state (about 67K, not the whole
   history), and an auto compaction inside a resumed process linked every record correctly.
 

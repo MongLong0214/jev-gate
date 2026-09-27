@@ -106,6 +106,18 @@ describe('register', () => {
     expect(await manual($, { trigger: 'manual', messages: conversation() }, next)).not.toBe(CORE);
   });
 
+  it('when the engine refuses a compaction it was handed, the line is still written and the refusal passes up', async () => {
+    const hook = (await hooksFor({ enabled: true, mode: 'active' })).get('session.compact')!;
+    const huge = [
+      { role: 'user', text: 'Read it.', toolUses: [] },
+      { role: 'assistant', text: 'Reading.', toolUses: [{ tool: 'Read', input: { file_path: '/big' }, tool_use_id: 'tx' }] },
+      { role: 'user', text: '', toolUses: [], toolResults: [{ tool_use_id: 'tx', text: 'z'.repeat(100000), isError: false }] },
+    ];
+    logs.length = 0;
+    await expect(hook($, { trigger: 'auto', messages: huge }, async () => Promise.reject(new Error('no assistant messages')))).rejects.toThrow('no assistant messages');
+    expect(JSON.parse(logs[0]!.replace(/^jev-compact /, ''))).toMatchObject({ applied: false, fallback: 'tail_too_large', coreError: true });
+  });
+
   it('a throwing log does not stand between the host and its compaction', async () => {
     const hook = (await hooksFor({ enabled: true, mode: 'active' })).get('session.compact')!;
     const bad = { ui: { log: () => { throw new Error('log down'); } } };

@@ -56,7 +56,11 @@ export const register: Register = (on, options) => {
       return { messages: assemble(e.messages, outcome.result) };
     }
     const t1 = Date.now();
-    const result = await next(e);
+    // The engine can refuse too (a lone exchange it cannot summarize); the line is still written, the rejection passes up.
+    const result = await next(e).catch((err: unknown) => {
+      log({ applied: false, messages: e.messages.length, ...built, coreMs: Date.now() - t1, coreError: true });
+      throw err;
+    });
     quietly(() => {
       const core = result.skip === undefined ? { coreMs: Date.now() - t1, tokensBefore: result.tokensBefore, tokensAfter: result.tokensAfter, usage: result.usage } : { coreSkip: true };
       log({ applied: false, messages: e.messages.length, ...built, ...core });
