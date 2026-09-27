@@ -6,6 +6,18 @@ figures below and are marked where they do.
 
 ## 2026-09-27 — #48 P0-1/P2: depth floor relative to the host window, a liveness alarm, and a thinner idle hook; admission on a real host is still not observed
 
+**Review round (gpt-6-sol, PR #52).** Four blockers, all fixed. (1) The window is now resolved the way the host resolves
+it: env, managed settings (file and drop-ins), `settings.local.json` at the repository root or the main checkout of a
+worktree, project settings from `CLAUDE_PROJECT_DIR`, user settings. (2) The window is clamped to 100K–1M and capped at
+the model's window, which is 200K under `CLAUDE_CODE_DISABLE_1M_CONTEXT`. (3) With nothing configured, the host
+default is the model's, so `depth.ts` now returns the model from the same usage line it reads the depth from (only a
+string shaped like a model ID leaves the reading). (4) `delegationDepthFraction` is bounded to 0.25–0.95, so no valid
+value derives a zero floor, and the liveness writer refuses a symlinked `jev-gate` directory and writes its temp file
+under a random name opened with `wx`. Still invisible to a hook: `--autocompact`, `--settings`, MDM and server-managed
+settings. An unknown window keeps the 300,000 fallback on purpose: too high costs the saving and the liveness notice
+reports it, while too low risks shallow admissions. Doctor now says that plainly instead of calling the fallback a
+1M default.
+
 The fact to fix is in #48: 1,014 admission decisions, 0 attempted, because a fixed 300,000
 `delegationDepthFloor` sits at the same 300,000 value as this host's own `autoCompactWindow`, so the session compacts
 before the floor is ever reached.

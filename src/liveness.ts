@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -61,7 +62,7 @@ export const livenessPath = (env: Env): string => join(stateRoot(env), 'jev-gate
 export const readLiveness = (env: Env): LivenessState | null => {
   const file = livenessPath(env);
   try {
-    if (isSymlink(file)) return null;
+    if (isSymlink(join(stateRoot(env), 'jev-gate')) || isSymlink(file)) return null;
     const st = statSync(file);
     if (!st.isFile() || st.size > LIVENESS_MAX_BYTES) return null;
     return parseLiveness(readFileSync(file, 'utf8'));
@@ -78,15 +79,22 @@ export const readLiveness = (env: Env): LivenessState | null => {
 export const appendLiveness = (env: Env, entry: LivenessEntry): void => {
   const dir = join(stateRoot(env), 'jev-gate');
   const file = livenessPath(env);
-  const tmp = `${file}.${process.pid}.tmp`;
+  // A random name opened with 'wx', rather than a predictable pid name opened with 'w': 'wx' fails on anything
+  // already at the path, a planted symlink included, so the write can never follow one out of the directory and
+  // truncate its target.
+  const tmp = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+  let created = false;
   try {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
-    if (isSymlink(file)) return;
+    // The directory is checked as well as the file: a `jev-gate` that is itself a symlink would put both the ring and
+    // its temp file wherever it points.
+    if (isSymlink(dir) || isSymlink(file)) return;
     const prev = readLiveness(env);
     const recent = [...(prev?.recent ?? []), entry].slice(-LIVENESS_WINDOW);
     const body = JSON.stringify({ version: 1, recent });
     if (Buffer.byteLength(body, 'utf8') > LIVENESS_MAX_BYTES) return;
-    const fd = openSync(tmp, 'w', 0o600);
+    const fd = openSync(tmp, 'wx', 0o600);
+    created = true;
     try {
       writeSync(fd, body);
       fsyncSync(fd);
@@ -95,6 +103,8 @@ export const appendLiveness = (env: Env, entry: LivenessEntry): void => {
     }
     renameSync(tmp, file);
   } catch {
+    // Only a temp file this call created is removed; whatever else sits at the name is not ours to delete.
+    if (!created) return;
     try {
       unlinkSync(tmp);
     } catch {

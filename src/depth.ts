@@ -21,15 +21,23 @@ const CHUNK_BYTES = 256 * 1024;
 const NEWLINE = 0x0a;
 
 export type DepthReading =
-  | { ok: true; tokens: number; bytesRead: number; durationMs: number }
+  | { ok: true; tokens: number; model: string | null; bytesRead: number; durationMs: number }
   | { ok: false; reason: 'depth_unknown'; bytesRead: number; durationMs: number };
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 const USAGE_MARKER = Buffer.from('"usage"');
+/** Only something shaped like a model ID leaves this reading; any other text in that field stays in the transcript. */
+const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:@/[\]-]{0,127}$/;
 
-/** One transcript line: the usage total, or null when the line has none, is a sidechain turn, or does not parse. */
-const readUsageLine = (line: Buffer): number | null => {
+type UsageLine = { tokens: number; model: string | null };
+
+/**
+ * One transcript line: the usage total and the model that produced it, or null when the line has no usage, is a
+ * sidechain turn, or does not parse. The model rides along because the host's default compaction window is the
+ * model's own (`host-window.ts`), and this line is already parsed.
+ */
+const readUsageLine = (line: Buffer): UsageLine | null => {
   if (line.length === 0 || line.indexOf(USAGE_MARKER) === -1) return null;
   let entry: unknown;
   try {
@@ -51,21 +59,22 @@ const readUsageLine = (line: Buffer): number | null => {
     total += v;
     seen = true;
   }
-  return seen ? total : null;
+  const model = message['model'];
+  return seen ? { tokens: total, model: typeof model === 'string' && MODEL_ID.test(model) ? model : null } : null;
 };
 
 /**
  * Scan the complete lines held in `tail` from the end backwards. `from` is the first index known to start a line:
  * bytes before it are the front half of a line whose start has not been read yet.
  */
-const scanBackwards = (tail: Buffer, from: number): number | null => {
+const scanBackwards = (tail: Buffer, from: number): UsageLine | null => {
   let end = tail.length;
   for (let i = tail.length - 1; i >= from - 1; i--) {
     if (i !== from - 1 && tail[i] !== NEWLINE) continue;
     const start = i + 1;
     if (start < end) {
-      const tokens = readUsageLine(tail.subarray(start, end));
-      if (tokens !== null) return tokens;
+      const found = readUsageLine(tail.subarray(start, end));
+      if (found !== null) return found;
     }
     end = i;
   }
@@ -106,8 +115,8 @@ export const readSessionDepth = (path: string | null | undefined, now: () => num
       const firstNewline = tail.indexOf(NEWLINE);
       // With no newline in hand yet, every byte held is the tail of one line whose start is further back.
       if (firstNewline === -1 && pos > 0) continue;
-      const tokens = scanBackwards(tail, pos === 0 ? 0 : firstNewline + 1);
-      if (tokens !== null) return { ok: true, tokens, bytesRead, durationMs: now() - started };
+      const found = scanBackwards(tail, pos === 0 ? 0 : firstNewline + 1);
+      if (found !== null) return { ok: true, tokens: found.tokens, model: found.model, bytesRead, durationMs: now() - started };
       if (pos === 0) return unknown(bytesRead);
       // Keep only the partial line; the lines after it have been scanned and cannot become interesting later.
       tail = tail.subarray(0, firstNewline);

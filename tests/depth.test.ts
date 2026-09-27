@@ -76,9 +76,21 @@ describe('readSessionDepth', () => {
   it('reports only numbers: no line of the transcript can leave through this reading', () => {
     const p = write([usageLine(), userLine('a secret the hook must never carry anywhere')]);
     const r = readSessionDepth(p);
-    for (const v of Object.values(r)) expect(['number', 'boolean', 'string']).toContain(typeof v);
+    for (const v of Object.values(r)) expect(v === null || ['number', 'boolean', 'string'].includes(typeof v)).toBe(true);
     expect(JSON.stringify(r)).not.toMatch(/secret/);
-    expect(Object.keys(r).sort()).toEqual(['bytesRead', 'durationMs', 'ok', 'tokens']);
+    expect(Object.keys(r).sort()).toEqual(['bytesRead', 'durationMs', 'model', 'ok', 'tokens']);
+  });
+
+  it('carries the usage line\'s model ID for the host-window default, and nothing that is not shaped like one', () => {
+    const withModel = (model: unknown): string => JSON.stringify({ type: 'assistant', message: { model, usage: { input_tokens: 10, cache_read_input_tokens: 400_000 } } });
+    expect(readSessionDepth(write([withModel('claude-opus-5-5')]))).toMatchObject({ ok: true, tokens: 400_010, model: 'claude-opus-5-5' });
+    expect(readSessionDepth(write([withModel('claude-opus-4-6[1m]')]))).toMatchObject({ model: 'claude-opus-4-6[1m]' });
+    for (const bad of ['a secret, with spaces', '', 42, null, 'x'.repeat(200)]) {
+      expect(readSessionDepth(write([withModel(bad)]))).toMatchObject({ ok: true, tokens: 400_010, model: null });
+    }
+    // A sidechain turn is skipped whole, so its model never stands in for the root's.
+    const side = JSON.stringify({ type: 'assistant', isSidechain: true, message: { model: 'claude-haiku-4-5', usage: { input_tokens: 1 } } });
+    expect(readSessionDepth(write([withModel('claude-opus-5-5'), side]))).toMatchObject({ tokens: 400_010, model: 'claude-opus-5-5' });
   });
 
   it('ignores a usage object with no readable term, and a usage that is not an object', () => {

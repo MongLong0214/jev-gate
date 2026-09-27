@@ -55,6 +55,7 @@ describe('validateConfig', () => {
     expect(validateConfig({ version: 5, delegationDepthFloor: 0 })).toMatchObject({ ok: true, config: { delegationDepthFloor: 0 } });
     expect(validateConfig({ version: 5, delegationDepthFloor: 300_000 })).toMatchObject({ ok: true, config: { delegationDepthFloor: 300_000 } });
     expect(validateConfig({ version: 5, delegationDepthFraction: 0.3 })).toMatchObject({ ok: true, config: { delegationDepthFraction: 0.3 } });
+    for (const edge of [0.25, 0.95]) expect(validateConfig({ version: 5, delegationDepthFraction: edge })).toMatchObject({ ok: true, config: { delegationDepthFraction: edge } });
     // The two shapes are configured independently and no longer agree: Gate A ships atomic because the composite
     // question admitted 0 of 61 real prompts offline, while Gate B's atomic shape has one end-to-end observation.
     expect(DEFAULT_CONFIG.admissionQuestionShape).toBe('atomic');
@@ -98,6 +99,9 @@ describe('validateConfig', () => {
     ['fractional depth floor', { version: 5, delegationDepthFloor: 300_000.5 }, 'delegationDepthFloor must be'],
     ['depth fraction type', { version: 5, delegationDepthFraction: '0.6' }, 'delegationDepthFraction must be'],
     ['depth fraction zero', { version: 5, delegationDepthFraction: 0 }, 'delegationDepthFraction must be'],
+    // #48 review: small enough to turn the derived floor into (nearly) nothing on a 100K window.
+    ['depth fraction below 0.25', { version: 5, delegationDepthFraction: 0.001 }, 'delegationDepthFraction must be'],
+    ['depth fraction above 0.95', { version: 5, delegationDepthFraction: 0.99 }, 'delegationDepthFraction must be'],
     ['depth fraction one', { version: 5, delegationDepthFraction: 1 }, 'delegationDepthFraction must be'],
     ['depth fraction above one', { version: 5, delegationDepthFraction: 1.5 }, 'delegationDepthFraction must be'],
     ['admission shape', { version: 5, admissionQuestionShape: 'fanout' }, 'admissionQuestionShape must be'],

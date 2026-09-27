@@ -49,7 +49,17 @@ describe('doctor: effective depth floor (#48 P0-1)', () => {
   it('warns when the host window is unknown and the floor falls back to the legacy absolute default', () => {
     const stdout = doctor({});
     expect(stdout).toMatch(/host compaction window: unknown/);
-    expect(stdout).toMatch(/\[warn\].*fell back to the fixed 300000-token default \(fallback_absolute\)/);
+    expect(stdout).toMatch(/\[warn\] no autoCompactWindow is configured/);
+    // The runtime default by model is spelled out, and so is the fallback a 200K session would never reach.
+    expect(stdout).toMatch(/1M for Opus 4\.7\+, Sonnet 5 and Fable on the Anthropic API \(floor 300000\), 200K for other models or with CLAUDE_CODE_DISABLE_1M_CONTEXT \(floor 120000\)/);
+    expect(stdout).toMatch(/the floor is the fixed 300000 \(fallback_absolute\), which a 200K session never reaches/);
+    expect(stdout).toMatch(/--autocompact or --settings flag, MDM policy and server-managed settings are not visible to a hook/);
+  });
+
+  it('caps the window at 200K under CLAUDE_CODE_DISABLE_1M_CONTEXT, so a configured 1M no longer passes as healthy', () => {
+    const stdout = doctor({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '1000000', CLAUDE_CODE_DISABLE_1M_CONTEXT: '1' });
+    expect(stdout).toMatch(/host compaction window: 200000 tokens \(env capped by CLAUDE_CODE_DISABLE_1M_CONTEXT\)/);
+    expect(stdout).toMatch(/effective depth floor: 120000 \(window_fraction\)/);
   });
 
   it('reports an info line, not a warning, for a floor comfortably under a known window', () => {

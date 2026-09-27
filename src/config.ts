@@ -64,6 +64,14 @@ export const MAX_REQUEST_DEADLINE_MS = 3500;
  * and as the value an operator gets back by setting `delegationDepthFloor` explicitly to today's number.
  */
 export const LEGACY_DEPTH_FLOOR = 300_000;
+/**
+ * #48 P0-1: bounds on delegationDepthFraction. With the host window clamped to at least 100K (`host-window.ts`), the
+ * lower bound keeps a derived floor at 25K or above, so no valid fraction can quietly turn the floor into 0 and send
+ * shallow prompts to Gate A; an operator who wants no floor sets `delegationDepthFloor: 0`, which says so. The upper
+ * bound leaves a margin below the window itself, where the host compacts.
+ */
+export const MIN_DEPTH_FRACTION = 0.25;
+export const MAX_DEPTH_FRACTION = 0.95;
 export const MAX_PARALLEL_WORKERS_LIMIT = 16;
 /** A plan larger than this is a runaway whatever the config says; MAX_COMPOSED_BYTES bounds each task, this bounds the count. */
 export const MAX_TASKS_PER_PLAN_LIMIT = 64;
@@ -185,8 +193,8 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
   // #48 P0-1: same optional-key rule as the rest of this file; 0.6 is DEFAULT_CONFIG's policy choice, not a bound
   // anyone is meant to read as a crossing point.
   const fraction = 'delegationDepthFraction' in c ? c['delegationDepthFraction'] : DEFAULT_CONFIG.delegationDepthFraction;
-  if (typeof fraction !== 'number' || !Number.isFinite(fraction) || fraction <= 0 || fraction >= 1) {
-    return { ok: false, error: 'delegationDepthFraction must be a finite number strictly between 0 and 1' };
+  if (typeof fraction !== 'number' || !Number.isFinite(fraction) || fraction < MIN_DEPTH_FRACTION || fraction > MAX_DEPTH_FRACTION) {
+    return { ok: false, error: `delegationDepthFraction must be a finite number from ${MIN_DEPTH_FRACTION} to ${MAX_DEPTH_FRACTION}` };
   }
 
   // Same rule as routeQuestionShape: absence defaults, an explicit wrong value is an error.
@@ -284,9 +292,13 @@ export interface EffectiveDepthFloor {
  * the floor behaved before this feature existed. Otherwise it is derived from the host's own compaction window
  * (`host-window.ts`): `min(LEGACY_DEPTH_FLOOR, floor(fraction * window))` when the window is known, so a 1M-window
  * host keeps exactly the old 300K behaviour and a smaller window gets a floor it can actually reach; and
- * `LEGACY_DEPTH_FLOOR` when the window is unknown, which is reachable only on a session that never moved
- * `autoCompactWindow` away from Claude Code's own 1M-token default. `fraction` (0.6 by default) is a policy number
- * chosen for this purpose, not a measured crossing point -- see DEFAULT_CONFIG.delegationDepthFraction.
+ * `LEGACY_DEPTH_FLOOR` when the window is unknown. Unknown means neither a setting nor the session's model settled it
+ * (a gateway alias, a native-1M model on Bedrock/Vertex/Foundry, a `--autocompact` launch): such a session may run a
+ * 200K window that never reaches this floor. Keeping 300K there rather than guessing low is deliberate: too high
+ * costs the saving and the liveness ring then says so at SessionStart, while too low on a 1M session admits shallow
+ * prompts, where forced orchestration measured +182% (see LEGACY_DEPTH_FLOOR's history above). `fraction` (0.6 by
+ * default) is a policy number chosen for this purpose, not a measured crossing point -- see
+ * DEFAULT_CONFIG.delegationDepthFraction.
  */
 export const effectiveDepthFloor = (config: ConfigV5, window: number | null): EffectiveDepthFloor => {
   if (config.delegationDepthFloor !== null) return { floor: config.delegationDepthFloor, source: 'config' };

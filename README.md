@@ -269,19 +269,33 @@ The default is `null`, not a fixed number (#48): a floor is only reachable if th
 above it, and that window varies by host and session (a 300,000-token window compacts a session before a fixed
 300,000-token floor is ever reached — 1,014 admission decisions measured on this project's own dogfood session were 0
 attempted). With `delegationDepthFloor: null`, the effective floor is derived from whatever window is known:
-`min(300000, floor(delegationDepthFraction × window))` when the window can be read, or the historical fixed 300,000
-when it cannot. `delegationDepthFraction` (default `0.6`) is a policy choice, not a measured crossing — say so if you
-change it. Setting `delegationDepthFloor` to an explicit non-negative integer keeps the old absolute behavior exactly,
-including `0` to disable the floor.
+`min(300000, floor(delegationDepthFraction × window))` when the window is known, or the historical fixed 300,000 when
+it is not. `delegationDepthFraction` (default `0.6`, accepted from `0.25` to `0.95`) is a policy choice, not a measured
+crossing — say so if you change it. Setting `delegationDepthFloor` to an explicit non-negative integer keeps the old
+absolute behavior exactly, including `0` to disable the floor.
 
-**What the gate reads to find the host's compaction window** (`src/host-window.ts`), in order, first valid value wins:
-the `CLAUDE_CODE_AUTO_COMPACT_WINDOW` environment variable; then `.claude/settings.local.json` and `.claude/settings.json`
-in your project's working directory; then `$CLAUDE_CONFIG_DIR/settings.json` (or `~/.claude/settings.json` if
-`CLAUDE_CONFIG_DIR` is unset). A file only counts if it parses as a JSON object with a positive `autoCompactWindow`;
-anything unreadable, oversized (over 1 MiB) or invalid is skipped, never thrown. Run `node dist/cli.js doctor` to see
-which source it found (or `unknown` if none did) and the effective floor that follows from it — doctor **FAILs** when
-the floor is at or above a known window (Gate A can never be reached), **WARNs** when it is within 15% of a known
-window or when the window is unknown and the fixed fallback applies, and otherwise reports it as `info`.
+**How the gate finds the host's compaction window** (`src/host-window.ts`, following Claude Code's own settings,
+model-config and managed-settings pages). The first valid configured value wins: the
+`CLAUDE_CODE_AUTO_COMPACT_WINDOW` environment variable; then managed settings (`managed-settings.json` and
+`managed-settings.d/*.json` in the system directory); then `.claude/settings.local.json` at the repository root (the
+main checkout's root when you work in a linked worktree); then `.claude/settings.json` in the session's project
+directory (`CLAUDE_PROJECT_DIR`, falling back to the hook's `cwd`); then `$CLAUDE_CONFIG_DIR/settings.json` (or
+`~/.claude/settings.json`). A file only counts if it parses as a JSON object with a positive `autoCompactWindow`;
+anything unreadable, oversized (over 1 MiB) or invalid is skipped, never thrown. The value is clamped to the host's
+100K–1M range and capped at the model's own context window, which is 200K under `CLAUDE_CODE_DISABLE_1M_CONTEXT`.
+When nothing is configured, the host compacts at the model's context limit, so the gate takes the window from the
+model the session transcript records: 1M for Opus 4.7 and later, Sonnet 5 and Fable on the Anthropic API, 200K for
+earlier and smaller models.
+
+**Where this can still be wrong.** A launch's `--autocompact` or `--settings` flag, MDM policies and server-managed
+settings are invisible to a hook. A native-1M model on Bedrock, Vertex or Foundry, or a gateway model alias, leaves the
+window unknown. In those sessions the floor stays at 300,000, which a 200K session never reaches: the gate then costs
+nothing and saves nothing. That is deliberate — guessing low would admit shallow prompts on a 1M session, where forced
+orchestration measured +182 %. It is not silent: after 50 auto-mode decisions with no Gate A attempt, the SessionStart
+liveness notice tells you to run doctor. Run `node dist/cli.js doctor` to see the window, its source and the effective
+floor. Doctor has no session model, so it reports the configured half and spells out the per-model defaults the hook
+will apply. It **FAILs** when the floor is at or above a known window, **WARNs** when it is within 15% of one or when
+no window is configured, and otherwise reports `info`.
 
 `maxTasksPerPlan` rejects an accepted plan above that many tasks. It is a backstop against a runaway split rather than
 a budget: every worker pays to be started, a 13-task plan measured +92.5 %, and plans that worked ran 2 to 7.

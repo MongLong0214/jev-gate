@@ -5,9 +5,9 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { AUTH_CONFLICT_ENV, isSubscriptionOAuth, parseAuthStatus, subagentModelOverride, type CommandResult } from './auth.js';
-import { effectiveDepthFloor, loadConfig, MIGRATION_SAMPLE, NATIVE_HOOK_TIMEOUT_MS } from './config.js';
+import { effectiveDepthFloor, LEGACY_DEPTH_FLOOR, loadConfig, MIGRATION_SAMPLE, NATIVE_HOOK_TIMEOUT_MS } from './config.js';
 import { explainDir } from './explain.js';
-import { readHostCompactWindow } from './host-window.js';
+import { HOST_WINDOW_MAX, readHostCompactWindow, STANDARD_CONTEXT_WINDOW } from './host-window.js';
 import { jobsDir } from './job.js';
 import { LIVENESS_WINDOW, livenessPath, readLiveness } from './liveness.js';
 import { OWNED_AGENTS } from './types.js';
@@ -142,7 +142,7 @@ const checkConfig = (): void => {
    */
   const window = readHostCompactWindow(process.env, process.cwd());
   const { floor, source: floorSource } = effectiveDepthFloor(c, window.tokens);
-  say('info', `host compaction window: ${window.tokens === null ? `unknown (${window.source})` : `${window.tokens} tokens (${window.source})`}`);
+  say('info', `host compaction window: ${window.tokens === null ? `unknown (${window.source})` : `${window.tokens} tokens (${window.source})`}; a launch's --autocompact or --settings flag, MDM policy and server-managed settings are not visible to a hook and can override this`);
   if (floor === 0) {
     say('warn', 'effective depth floor is 0: Gate A is asked on every prompt regardless of how deep the session is. Forced orchestration measured +182% on a fresh session and -57% on a loaded one');
   } else if (window.tokens !== null && floor >= window.tokens) {
@@ -153,7 +153,12 @@ const checkConfig = (): void => {
   } else if (window.tokens !== null && floor >= Math.floor(0.85 * window.tokens)) {
     say('warn', `effective depth floor ${floor} (${floorSource}) is within 15% of the host's compaction window ${window.tokens}: most sessions will compact before reaching it`);
   } else if (window.tokens === null && floorSource === 'fallback_absolute') {
-    say('warn', `host compaction window could not be read, so the effective floor fell back to the fixed ${floor}-token default (${floorSource}) instead of being derived from the host`);
+    // Doctor has no session, so no model: this is the configured half only. At runtime the hook also reads the
+    // session's model from the transcript, which settles most unconfigured sessions (host-window.ts).
+    say(
+      'warn',
+      `no autoCompactWindow is configured where a hook can read it (env, managed, project-local, project, user settings). At runtime the window then comes from the session's model: 1M for Opus 4.7+, Sonnet 5 and Fable on the Anthropic API (floor ${Math.min(LEGACY_DEPTH_FLOOR, Math.floor(c.delegationDepthFraction * HOST_WINDOW_MAX))}), 200K for other models or with CLAUDE_CODE_DISABLE_1M_CONTEXT (floor ${Math.min(LEGACY_DEPTH_FLOOR, Math.floor(c.delegationDepthFraction * STANDARD_CONTEXT_WINDOW))}). When the model does not settle it either (a gateway alias, a native-1M model on Bedrock/Vertex/Foundry), the floor is the fixed ${floor} (${floorSource}), which a 200K session never reaches: set autoCompactWindow, or delegationDepthFloor, to make it explicit`,
+    );
   } else {
     say(
       'info',

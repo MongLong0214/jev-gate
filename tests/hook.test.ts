@@ -103,14 +103,14 @@ const fence = (value: unknown): string => 'summary prose\n```json\n' + JSON.stri
  * context is not this session's, and reading it instead would admit jobs on a number that describes another turn.
  */
 let transcriptSeq = 0;
-const transcriptAt = (tokens: number): string => {
+const transcriptAt = (tokens: number, model?: string): string => {
   const p = join(tmp, `transcript-${(transcriptSeq += 1)}.jsonl`);
   writeFileSync(
     p,
     [
       JSON.stringify({ type: 'user', message: { role: 'user', content: 'an earlier turn' } }),
       JSON.stringify({ type: 'assistant', isSidechain: true, message: { usage: { cache_read_input_tokens: 9_000_000 } } }),
-      JSON.stringify({ type: 'assistant', message: { usage: { cache_read_input_tokens: tokens - 1000, cache_creation_input_tokens: 600, input_tokens: 400 } } }),
+      JSON.stringify({ type: 'assistant', message: { ...(model !== undefined ? { model } : {}), usage: { cache_read_input_tokens: tokens - 1000, cache_creation_input_tokens: 600, input_tokens: 400 } } }),
       '',
     ].join('\n'),
   );
@@ -278,6 +278,21 @@ describe('Gate A admission', () => {
     expect(state(env).current.shape).toBe('direct');
     const record = readdirSync(dir).map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>).find((x) => x['phase'] === 'admission_result');
     expect(record).toMatchObject({ attempted: false, context_tokens: 55_000, depth_floor: 300_000, decision: { reason: 'depth_below_floor', changed_default: false } });
+  });
+
+  it.each([
+    // A 200K model with nothing configured: the host compacts at 200K, so the floor is 0.6 x 200K and 150K is admitted.
+    ['claude-haiku-4-5', 200_000, 120_000, true],
+    // A native-1M model with nothing configured: the floor stays at 300K, and 150K is not deep enough.
+    ['claude-opus-5-5', 1_000_000, 300_000, false],
+  ])('with no window configured, takes the window from the session model %s', async (model, window, floor, asked) => {
+    const dir = join(tmp, `trace-model-${model}`);
+    const env = makeEnv({ JEV_GATE_TRACE_DIR: dir });
+    const fetchImpl = fakeJev({ execution: 'orchestrated' });
+    await run(env, promptEvent({ transcript_path: transcriptAt(150_000, model) }), fetchImpl);
+    expect(fetchImpl.mock.calls.length > 0).toBe(asked);
+    const record = readdirSync(dir).map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>).find((x) => x['phase'] === 'admission_result');
+    expect(record).toMatchObject({ context_tokens: 150_000, host_window: window, host_window_source: `default:model:${model}`, depth_floor: floor });
   });
 
   it.each([

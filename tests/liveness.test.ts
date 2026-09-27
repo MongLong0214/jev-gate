@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -101,6 +101,30 @@ describe('readLiveness / appendLiveness', () => {
     appendLiveness(e, { at: 'new', attempted: false, reason: 'key_missing' });
     // The symlink is left exactly as it was -- appendLiveness refused to write through it.
     expect(JSON.parse(readFileSync(real, 'utf8'))).toEqual({ version: 1, recent: [{ at: 'sneaky', attempted: true, reason: null }] });
+  });
+
+  it('never writes through a jev-gate state directory that is itself a symlink, and never reads one', () => {
+    const e = env();
+    const outside = mkdtempSync(join(tmp, 'outside-'));
+    writeFileSync(join(outside, 'liveness.json'), JSON.stringify({ version: 1, recent: [{ at: 'elsewhere', attempted: true, reason: null }] }));
+    const dir = join(livenessPath(e), '..');
+    mkdirSync(join(dir, '..'), { recursive: true });
+    symlinkSync(outside, dir);
+    expect(readLiveness(e)).toBeNull();
+    appendLiveness(e, { at: 'new', attempted: false, reason: 'key_missing' });
+    // Neither the ring nor a temp file landed in the directory the symlink points at.
+    expect(readdirSync(outside)).toEqual(['liveness.json']);
+    expect(JSON.parse(readFileSync(join(outside, 'liveness.json'), 'utf8'))).toEqual({ version: 1, recent: [{ at: 'elsewhere', attempted: true, reason: null }] });
+  });
+
+  it('writes through a fresh temp name each time, leaving none behind', () => {
+    const e = env();
+    appendLiveness(e, { at: 'a', attempted: false, reason: 'key_missing' });
+    appendLiveness(e, { at: 'b', attempted: true, reason: null });
+    const dir = join(livenessPath(e), '..');
+    expect(readdirSync(dir)).toEqual(['liveness.json']);
+    expect(readLiveness(e)?.recent.map((r) => r.at)).toEqual(['a', 'b']);
+    expect(existsSync(`${livenessPath(e)}.${process.pid}.tmp`)).toBe(false);
   });
 
   it('never throws when the state directory cannot be created', () => {

@@ -1,9 +1,9 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 
-import { readHostCompactWindow } from '../src/host-window.js';
+import { modelContextWindow, readHostCompactWindow } from '../src/host-window.js';
 
 const tmp = mkdtempSync(join(tmpdir(), 'jev-host-window-'));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
@@ -84,5 +84,110 @@ describe('readHostCompactWindow', () => {
   it('an unreadable settings path (missing file) is skipped, not an error', () => {
     const cwd = dir();
     expect(readHostCompactWindow({ HOME: dir() }, cwd)).toEqual({ tokens: null, source: 'unknown' });
+  });
+});
+
+describe('#48 review: the window the host actually compacts at', () => {
+  const none: string[] = [];
+
+  it('clamps a configured window into the host range 100K..1M, so a tiny value can never derive a zero floor', () => {
+    expect(readHostCompactWindow({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '1', HOME: dir() }, null, { managedDirs: none })).toEqual({ tokens: 100_000, source: 'env (clamped from 1)' });
+    const cwd = dir();
+    writeSettings(cwd, '.claude/settings.json', { autoCompactWindow: 5_000_000 });
+    expect(readHostCompactWindow({ HOME: dir() }, cwd, { managedDirs: none }).tokens).toBe(1_000_000);
+  });
+
+  it('caps a configured window at the model window: CLAUDE_CODE_DISABLE_1M_CONTEXT holds every model at 200K', () => {
+    const env = { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '1000000', CLAUDE_CODE_DISABLE_1M_CONTEXT: '1', HOME: dir() };
+    expect(readHostCompactWindow(env, null, { managedDirs: none })).toEqual({ tokens: 200_000, source: 'env capped by CLAUDE_CODE_DISABLE_1M_CONTEXT' });
+    expect(readHostCompactWindow({ ...env, CLAUDE_CODE_DISABLE_1M_CONTEXT: '0' }, null, { managedDirs: none }).tokens).toBe(1_000_000);
+    expect(readHostCompactWindow({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '500000', HOME: dir() }, null, { model: 'claude-haiku-4-5-20251001', managedDirs: none })).toEqual({
+      tokens: 200_000,
+      source: 'env capped by model:claude-haiku-4-5-20251001',
+    });
+    // A window already under the model's is left alone.
+    expect(readHostCompactWindow({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '300000', HOME: dir() }, null, { model: 'claude-opus-5-5', managedDirs: none })).toEqual({ tokens: 300_000, source: 'env' });
+  });
+
+  it.each([
+    ['claude-opus-5-5', 1_000_000],
+    ['claude-opus-4-7', 1_000_000],
+    ['claude-sonnet-5', 1_000_000],
+    ['claude-fable-5-1', 1_000_000],
+    ['claude-opus-4-6', 200_000],
+    ['claude-opus-4-6[1m]', 1_000_000],
+    ['claude-sonnet-4-6', 200_000],
+    ['claude-opus-4-20250514', 200_000],
+    ['claude-haiku-4-5-20251001', 200_000],
+    ['claude-3-5-sonnet-20241022', 200_000],
+    ['my-gateway-alias', null],
+  ])('with nothing configured, the model %s sets the window to %s', (model, tokens) => {
+    const r = readHostCompactWindow({ HOME: dir() }, null, { model, managedDirs: none });
+    expect(r.tokens).toBe(tokens);
+    if (tokens !== null) expect(r.source).toBe(`default:model:${model}`);
+  });
+
+  it('does not establish a native-1M model window on Bedrock, Vertex or Foundry, where the deployment pins it', () => {
+    for (const k of ['CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY']) {
+      expect(modelContextWindow({ [k]: '1' }, 'claude-opus-5-5')).toBeNull();
+      expect(modelContextWindow({ [k]: '1' }, 'claude-haiku-4-5')).toEqual({ tokens: 200_000, source: 'model:claude-haiku-4-5' });
+    }
+  });
+
+  it('reads managed settings above every settings file but below the env var; the last drop-in in name order wins', () => {
+    const managed = dir();
+    const cwd = dir();
+    writeSettings(cwd, '.claude/settings.local.json', { autoCompactWindow: 400_000 });
+    writeSettings(managed, 'managed-settings.json', { autoCompactWindow: 600_000 });
+    expect(readHostCompactWindow({ HOME: dir() }, cwd, { managedDirs: [managed] })).toEqual({ tokens: 600_000, source: `managed:${join(managed, 'managed-settings.json')}` });
+    writeSettings(managed, 'managed-settings.d/20-b.json', { autoCompactWindow: 250_000 });
+    writeSettings(managed, 'managed-settings.d/10-a.json', { autoCompactWindow: 700_000 });
+    writeSettings(managed, 'managed-settings.d/.hidden.json', { autoCompactWindow: 900_000 });
+    expect(readHostCompactWindow({ HOME: dir() }, cwd, { managedDirs: [managed] })).toEqual({ tokens: 250_000, source: `managed:${join(managed, 'managed-settings.d', '20-b.json')}` });
+    expect(readHostCompactWindow({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '300000', HOME: dir() }, cwd, { managedDirs: [managed] }).source).toBe('env');
+  });
+
+  it('reads project settings from CLAUDE_PROJECT_DIR, which a `cd` does not move, before the hook cwd', () => {
+    const project = dir();
+    const moved = dir();
+    writeSettings(project, '.claude/settings.json', { autoCompactWindow: 450_000 });
+    writeSettings(moved, '.claude/settings.json', { autoCompactWindow: 150_000 });
+    expect(readHostCompactWindow({ CLAUDE_PROJECT_DIR: project, HOME: dir() }, moved, { managedDirs: none }).tokens).toBe(450_000);
+  });
+
+  it('reads settings.local.json at the repository root, and at the main checkout root from a linked worktree', () => {
+    const main = dir();
+    mkdirSync(join(main, '.git', 'worktrees', 'wt'), { recursive: true });
+    writeFileSync(join(main, '.git', 'worktrees', 'wt', 'commondir'), '../..\n');
+    const wt = dir();
+    writeFileSync(join(wt, '.git'), `gitdir: ${join(main, '.git', 'worktrees', 'wt')}\n`);
+    writeSettings(main, '.claude/settings.local.json', { autoCompactWindow: 350_000 });
+    // From a subdirectory of the worktree the walk reaches the worktree's `.git` file, then the main checkout.
+    const sub = join(wt, 'src', 'deep');
+    mkdirSync(sub, { recursive: true });
+    expect(readHostCompactWindow({ HOME: dir() }, sub, { managedDirs: none })).toEqual({ tokens: 350_000, source: `settings:${join(main, '.claude', 'settings.local.json')}` });
+    // In the main checkout itself, from a subdirectory, the repository root.
+    const mainSub = join(main, 'lib');
+    mkdirSync(mainSub);
+    expect(readHostCompactWindow({ HOME: dir() }, mainSub, { managedDirs: none }).tokens).toBe(350_000);
+  });
+
+  it('keeps settings.local.json in the session directory when the repository root is the home directory', () => {
+    const home = dir();
+    mkdirSync(join(home, '.git'));
+    const cwd = join(home, 'proj');
+    mkdirSync(cwd);
+    writeSettings(home, '.claude/settings.local.json', { autoCompactWindow: 800_000 });
+    writeSettings(cwd, '.claude/settings.local.json', { autoCompactWindow: 220_000 });
+    expect(readHostCompactWindow({ HOME: home }, cwd, { managedDirs: none }).tokens).toBe(220_000);
+  });
+
+  it('a symlinked settings file is read like the host reads it (the host follows it)', () => {
+    const cwd = dir();
+    const real = join(dir(), 'real.json');
+    writeFileSync(real, JSON.stringify({ autoCompactWindow: 330_000 }));
+    mkdirSync(join(cwd, '.claude'));
+    symlinkSync(real, join(cwd, '.claude', 'settings.json'));
+    expect(readHostCompactWindow({ HOME: dir() }, cwd, { managedDirs: none }).tokens).toBe(330_000);
   });
 });
