@@ -158,34 +158,36 @@ describe('doctor: checkModelAuthority (#48 P0-2)', () => {
   });
 
   /**
-   * gen-agents.mjs resolves its own root from its file location, not cwd, and reads the real repo's dist/agents.js
-   * and dist/config.js (not the throwaway build above) -- so this requires the worktree's own `npm run build` to be
-   * current, exactly as `npm run gen:agents` would in normal use.
+   * gen-agents.mjs resolves its own root from its file location, not cwd, and reads that root's dist/agents.js and
+   * dist/config.js. #53 review: it runs from a copy inside a prepared plugin root, against the throwaway build above,
+   * so the test neither needs this checkout's own `npm run build` (CI runs the tests first) nor rewrites its agents/.
    */
   describe('scripts/gen-agents.mjs --check (#48 P0-2)', () => {
+    const genAgents = (pluginRoot: string, args: string[] = []) => {
+      mkdirSync(join(pluginRoot, 'scripts'), { recursive: true });
+      cpSync(join(root, 'scripts', 'gen-agents.mjs'), join(pluginRoot, 'scripts', 'gen-agents.mjs'));
+      return spawnSync(process.execPath, [join(pluginRoot, 'scripts', 'gen-agents.mjs'), ...args], { encoding: 'utf8' });
+    };
+
     it('reports no drift on the repository as checked in', () => {
-      const r = spawnSync(process.execPath, [join(root, 'scripts', 'gen-agents.mjs'), '--check'], { encoding: 'utf8' });
+      const r = genAgents(preparePluginRoot(), ['--check']);
       expect(r.status, r.stdout + r.stderr).toBe(0);
       expect(r.stdout).not.toContain('drifts from the table');
     });
 
     it('detects a hand-edited model line, exits 1, and leaves the file untouched; without --check it writes the fix back', () => {
-      const path = join(root, 'agents', 'worker-frontier.md');
-      const original = readFileSync(path, 'utf8');
-      try {
-        writeFileSync(path, original.replace(/^model:.*$/m, 'model: haiku'));
-        const check = spawnSync(process.execPath, [join(root, 'scripts', 'gen-agents.mjs'), '--check'], { encoding: 'utf8' });
-        expect(check.status).toBe(1);
-        expect(check.stdout).toContain('worker-frontier.md drifts from the table (model: opus, effort: xhigh)');
-        expect(readFileSync(path, 'utf8')).not.toBe(original); // --check must not write
+      const original = readFileSync(join(root, 'agents', 'worker-frontier.md'), 'utf8');
+      const pluginRoot = preparePluginRoot({ file: 'worker-frontier.md', content: original.replace(/^model:.*$/m, 'model: haiku') });
+      const path = join(pluginRoot, 'agents', 'worker-frontier.md');
+      const check = genAgents(pluginRoot, ['--check']);
+      expect(check.status).toBe(1);
+      expect(check.stdout).toContain('worker-frontier.md drifts from the table (model: opus, effort: xhigh)');
+      expect(readFileSync(path, 'utf8')).not.toBe(original); // --check must not write
 
-        const write = spawnSync(process.execPath, [join(root, 'scripts', 'gen-agents.mjs')], { encoding: 'utf8' });
-        expect(write.status).toBe(0);
-        expect(write.stdout).toContain('wrote worker-frontier.md');
-        expect(readFileSync(path, 'utf8')).toBe(original); // byte-for-byte restored: only the model line moved
-      } finally {
-        writeFileSync(path, original);
-      }
+      const write = genAgents(pluginRoot);
+      expect(write.status).toBe(0);
+      expect(write.stdout).toContain('wrote worker-frontier.md');
+      expect(readFileSync(path, 'utf8')).toBe(original); // byte-for-byte restored: only the model line moved
     });
   });
 });

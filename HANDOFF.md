@@ -55,6 +55,9 @@ model as requested, or a false mismatch. Seventh round: the coordinator is told 
 branch before reporting the work done, not only before a dependent, since a one-task plan never has one; a
 single-executor or ad-hoc dispatch is no longer isolated, because nothing tells its coordinator to merge; and the
 main-session steps come back only once every task is accepted, the fact Stop reads, not when nothing else is ready.
+Eighth round: `doctor` no longer says an ad-hoc dispatch is isolated, and the gen-agents tests run the script from a
+copy inside a prepared plugin root against the test's own build, so they need no prior `npm run build` and no longer
+rewrite this checkout's `agents/`.
 
 **Capability-aware plan steps (P2-1).** `PlannerReply` (the `ready` variant) gains an optional
 `main_session_steps: Array<{ step: string; needs: Capability }>`, `Capability` a closed union of `os_permission`,
