@@ -72,6 +72,18 @@ export const foregroundDispatchPossible = (env: Env): boolean =>
   (env['CLAUDE_CODE_DISABLE_BACKGROUND_TASKS'] === '1' || env['CLAUDE_CODE_FORK_SUBAGENT'] === '0');
 
 /**
+ * Why no owned Agent call this session makes could reach a worker, or null when one could. A subagent model override
+ * is refused by checkEligibility just as a background-only call is, so an orchestrated job is locked out either way:
+ * its guard refuses the main session's edits while every brief is declined. Both are fixed at launch, so admission,
+ * the forced arm, lean and the SessionStart notice all read this one answer.
+ */
+export const dispatchBlocker = (env: Env): 'background_only' | 'subagent_model_override' | null => {
+  if (!foregroundDispatchPossible(env)) return 'background_only';
+  const override = subagentModelOverride(env);
+  return override.concrete || override.force ? 'subagent_model_override' : null;
+};
+
+/**
  * V4 §4 conditions kept for V5. A caller pin is reported rather than fatal: a pinned call still receives the canonical
  * task contract (A5), it just keeps its model. Every other failing condition is a documented no-op with HTTP 0.
  */

@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -17,22 +17,25 @@ const tmp = mkdtempSync(join(tmpdir(), 'jev-cli-'));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
 beforeAll(() => {
-  out = mkdtempSync(join(tmp, 'dist-'));
+  // A plugin-shaped root, so doctor's own file checks pass and its exit status reflects only what a test sets up.
+  const root = mkdtempSync(join(tmp, 'plugin-'));
+  out = join(root, 'dist');
   const r = spawnSync(process.execPath, [join(__dirname, '..', 'node_modules', 'typescript', 'bin', 'tsc'), '-p', join(__dirname, '..', 'tsconfig.json'), '--outDir', out], { encoding: 'utf8' });
   expect(r.status, r.stdout + r.stderr).toBe(0);
+  for (const d of ['.claude-plugin', 'hooks', 'agents']) cpSync(join(__dirname, '..', d), join(root, d), { recursive: true });
 }, 60_000);
 
 let seq = 0;
-const doctor = (env: Record<string, string | undefined>): string => {
-  const cwd = mktemp();
+const doctorRun = (env: Record<string, string | undefined>, cwd: string = mktemp()): { status: number | null; stdout: string } => {
   const r = spawnSync(process.execPath, [join(out, 'cli.js'), 'doctor'], {
     cwd,
     encoding: 'utf8',
     // PATH: /nonexistent keeps checkClaude from finding a real `claude` binary on this machine.
     env: { PATH: '/nonexistent', HOME: mktemp(), ...env },
   });
-  return r.stdout;
+  return { status: r.status, stdout: r.stdout };
 };
+const doctor = (env: Record<string, string | undefined>): string => doctorRun(env).stdout;
 // spawnSync's cwd/HOME must actually exist on disk (unlike liveness.ts's own state dir, which mkdirs itself).
 const mktemp = (): string => {
   const p = join(tmp, `d${(seq += 1)}`);
@@ -186,14 +189,30 @@ describe('doctor: a launch profile that lets an admitted job reach a worker (#48
     return home;
   };
 
+  // A [fail] line must also fail the process, and a clean profile must not: a script reads the status, not the text.
+  const expectFail = (r: { status: number | null; stdout: string }): string | undefined => {
+    expect(r.status).toBe(1);
+    return failLine(r.stdout);
+  };
+  const expectPass = (r: { status: number | null; stdout: string }): void => {
+    expect(failLine(r.stdout)).toBeUndefined();
+    expect(r.status).toBe(0);
+  };
+  const projectWith = (file: 'settings.json' | 'settings.local.json', env: Record<string, string>): string => {
+    const dir = mktemp();
+    mkdirSync(join(dir, '.claude'), { recursive: true });
+    writeFileSync(join(dir, '.claude', file), JSON.stringify({ env }));
+    return dir;
+  };
+
   it('fails in auto mode when Agent calls could only run in the background, and says the hook sends nothing', () => {
-    const line = failLine(doctor({ JEV_GATE_CONFIG: configFile({ version: 5, mode: 'auto' }) }));
+    const line = expectFail(doctorRun({ JEV_GATE_CONFIG: configFile({ version: 5, mode: 'auto' }) }));
     expect(line).toContain('mode=auto but Agent calls can only run in the background (fork=unset, disable_background=unset');
     expect(line).toContain('host_unsupported and sends no Jev request');
   });
 
   it('fails in lean mode for the same reason', () => {
-    expect(failLine(doctor({ JEV_GATE_CONFIG: configFile({ version: 5, mode: 'lean' }) }))).toContain('mode=lean but');
+    expect(expectFail(doctorRun({ JEV_GATE_CONFIG: configFile({ version: 5, mode: 'lean' }) }))).toContain('mode=lean but');
   });
 
   it.each([
@@ -201,27 +220,46 @@ describe('doctor: a launch profile that lets an admitted job reach a worker (#48
     ['forced foreground alone', { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' }],
     ['fork mode off alone', { CLAUDE_CODE_FORK_SUBAGENT: '0' }],
   ])('does not fail with %s in this shell', (_label, launch) => {
-    expect(failLine(doctor({ JEV_GATE_CONFIG: configFile({ version: 5, mode: 'auto' }), ...launch }))).toBeUndefined();
+    expectPass(doctorRun({ JEV_GATE_CONFIG: configFile({ version: 5, mode: 'auto' }), ...launch }));
+  });
+
+  it.each(['settings.json', 'settings.local.json'] as const)('reads the profile from the project %s env, as a session started there would', (file) => {
+    const cwd = projectWith(file, { CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' });
+    expectPass(doctorRun({ JEV_GATE_CONFIG: configFile({ version: 5, mode: 'auto' }) }, cwd));
+  });
+
+  it('lets project-local settings win over project settings', () => {
+    const cwd = projectWith('settings.json', { CLAUDE_CODE_FORK_SUBAGENT: '0' });
+    writeFileSync(join(cwd, '.claude', 'settings.local.json'), JSON.stringify({ env: { CLAUDE_CODE_FORK_SUBAGENT: '1' } }));
+    expect(expectFail(doctorRun({ JEV_GATE_CONFIG: configFile({ version: 5, mode: 'auto' }) }, cwd))).toContain('fork=1');
+  });
+
+  it('fails in auto mode under a subagent model override, which every owned Agent call refuses', () => {
+    const r = doctorRun({ JEV_GATE_CONFIG: configFile({ version: 5, mode: 'auto' }), CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_SUBAGENT_MODEL: 'opus' });
+    expect(r.status).toBe(1);
+    expect(r.stdout).toMatch(/\[fail\] CLAUDE_CODE_SUBAGENT_MODEL is a concrete override; mode=auto stays native on every prompt as host_unsupported/);
+    const off = doctorRun({ JEV_GATE_CONFIG: configFile({ version: 5, mode: 'off' }), CLAUDE_CODE_SUBAGENT_MODEL: 'opus' });
+    expect(off.stdout).toMatch(/\[warn\] CLAUDE_CODE_SUBAGENT_MODEL is a concrete override; eligible calls are preserved/);
   });
 
   it('reads the profile from the user settings env too, and lets it win over the shell', () => {
     const cfg = configFile({ version: 5, mode: 'auto' });
     const profile = withSettingsEnv({ CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' });
-    expect(failLine(doctor({ JEV_GATE_CONFIG: cfg, HOME: profile }))).toBeUndefined();
+    expectPass(doctorRun({ JEV_GATE_CONFIG: cfg, HOME: profile }));
     const forking = withSettingsEnv({ CLAUDE_CODE_FORK_SUBAGENT: '1' });
-    expect(failLine(doctor({ JEV_GATE_CONFIG: cfg, HOME: forking, CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' }))).toContain('fork=1');
+    expect(expectFail(doctorRun({ JEV_GATE_CONFIG: cfg, HOME: forking, CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' }))).toContain('fork=1');
   });
 
   it('reads the settings file under CLAUDE_CONFIG_DIR when that is set', () => {
     const dir = join(withSettingsEnv({ CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' }), '.claude');
-    expect(failLine(doctor({ JEV_GATE_CONFIG: configFile({ version: 5, mode: 'auto' }), CLAUDE_CONFIG_DIR: dir }))).toBeUndefined();
+    expectPass(doctorRun({ JEV_GATE_CONFIG: configFile({ version: 5, mode: 'auto' }), CLAUDE_CONFIG_DIR: dir }));
   });
 
   it('does not fail when the gate is off or native, and keeps the informational line', () => {
     for (const mode of ['off', 'native']) {
-      const out = doctor({ JEV_GATE_CONFIG: configFile({ version: 5, mode }) });
-      expect(failLine(out), mode).toBeUndefined();
-      expect(out, mode).toContain('[info] launch profile not set');
+      const r = doctorRun({ JEV_GATE_CONFIG: configFile({ version: 5, mode }) });
+      expectPass(r);
+      expect(r.stdout, mode).toContain('[info] launch profile not set');
     }
   });
 });

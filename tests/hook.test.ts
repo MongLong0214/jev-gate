@@ -538,6 +538,67 @@ describe('#48: a session whose Agent calls can only run in the background', () =
       expect(await run(makeEnv({ ...backgroundOnly, JEV_GATE_MODE: mode }), { hook_event_name: 'SessionStart', session_id: 's1' })).toMatchObject({ stdout: null });
     }
   });
+
+  it('pays no transcript scan for a turn it refuses, and none for a missing key either', async () => {
+    const dir = join(tmp, 'trace-background-only-depth');
+    await run(makeEnv({ ...backgroundOnly, JEV_GATE_TRACE_DIR: dir }), promptEvent());
+    expect(admission(dir)).toMatchObject({ blocker: 'background_only' });
+    expect(admission(dir)).not.toHaveProperty('context_depth_read');
+    const keyless = join(tmp, 'trace-keyless-depth');
+    const r = await run(makeEnv({ TYPESAFE_API_KEY: undefined, JEV_GATE_TRACE_DIR: keyless }), promptEvent());
+    expect(r.code).toBe('key_missing');
+    expect(admission(keyless)).not.toHaveProperty('context_depth_read');
+  });
+
+  it.each(['auto', 'native'])('refuses the forced arm in %s mode: no job would reach a worker, and the main session keeps its edits', async (mode) => {
+    const dir = join(tmp, `trace-forced-background-only-${mode}`);
+    const env = makeEnv({ ...backgroundOnly, JEV_GATE_MODE: mode, JEV_GATE_EXPERIMENT_ADMISSION: 'orchestrated', JEV_GATE_TRACE_DIR: dir });
+    const r = await run(env, promptEvent(), fakeJev({ execution: 'orchestrated' }));
+    expect(r.code).toBe('host_unsupported');
+    expect(state(env).current.shape).toBe('direct');
+    expect(state(env).current).not.toHaveProperty('forced');
+    expect(admission(dir)).toMatchObject({ forced: false, forced_requested: true, blocker: 'background_only', decision: { shape: 'direct', reason: 'host_unsupported' } });
+    // A refused bench arm is a configuration fact, not an admission outage.
+    expect(readLiveness(env)).toBeNull();
+    expect(await run(env, preEvent('Edit', {}))).toMatchObject({ kind: 'skip', code: 'shape_direct', stdout: null });
+  });
+});
+
+describe('#48: a subagent model override every owned Agent call refuses', () => {
+  const admission = (dir: string): Record<string, unknown> | undefined =>
+    readdirSync(dir).map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>).find((x) => x['phase'] === 'admission_result');
+
+  it.each([
+    ['a concrete model', { CLAUDE_CODE_SUBAGENT_MODEL: 'opus' }],
+    ['the force flag', { CLAUDE_CODE_SUBAGENT_MODEL_FORCE: '1' }],
+  ])('stays direct before Gate A under %s, as lean already does', async (_label, override) => {
+    const dir = join(tmp, `trace-override-${Object.keys(override)[0]}`);
+    const env = makeEnv({ ...override, JEV_GATE_TRACE_DIR: dir });
+    const fetchImpl = fakeJev({ execution: 'orchestrated' });
+    const r = await run(env, promptEvent(), fetchImpl);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(r.code).toBe('host_unsupported');
+    expect(admission(dir)).toMatchObject({ blocker: 'subagent_model_override', decision: { shape: 'direct', reason: 'host_unsupported' } });
+    expect(await run(env, preEvent('Edit', {}))).toMatchObject({ kind: 'skip', code: 'shape_direct' });
+  });
+
+  it('refuses the forced arm under the override too', async () => {
+    const env = makeEnv({ CLAUDE_CODE_SUBAGENT_MODEL: 'haiku', JEV_GATE_EXPERIMENT_ADMISSION: 'orchestrated' });
+    expect((await run(env, promptEvent())).code).toBe('host_unsupported');
+    expect(state(env).current.shape).toBe('direct');
+  });
+
+  it('still asks Gate A when the override is inherit, which pins nothing', async () => {
+    const fetchImpl = fakeJev({ execution: 'orchestrated' });
+    await run(makeEnv({ CLAUDE_CODE_SUBAGENT_MODEL: 'inherit' }), promptEvent(), fetchImpl);
+    expect(fetchImpl).toHaveBeenCalled();
+  });
+
+  it('names the override at SessionStart', async () => {
+    const r = await run(makeEnv({ CLAUDE_CODE_SUBAGENT_MODEL: 'opus' }), { hook_event_name: 'SessionStart', session_id: 's1' });
+    expect(r).toMatchObject({ kind: 'notice', code: 'host_unsupported' });
+    expect(String((JSON.parse(r.stdout as string) as Record<string, unknown>)['systemMessage'])).toContain('CLAUDE_CODE_SUBAGENT_MODEL');
+  });
 });
 
 describe('SessionStart liveness warning (#48 P2)', () => {
@@ -1910,7 +1971,8 @@ describe('dist/hook.js (process)', () => {
   };
 
   it('always exits 0 and writes at most one JSON object plus one fixed code', () => {
-    const guidance = exec(promptEvent(), { JEV_GATE_MODE: 'auto' });
+    // A foreground profile, so the one code is the missing key rather than the background-only host refused before it.
+    const guidance = exec(promptEvent(), { JEV_GATE_MODE: 'auto', CLAUDE_CODE_FORK_SUBAGENT: '0' });
     expect(guidance.status).toBe(0);
     expect(guidance.stdout.trim().split('\n')).toHaveLength(1);
     expect(guidance.stderr).toBe('jev-gate: key_missing\n');
