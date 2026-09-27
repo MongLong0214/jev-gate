@@ -427,7 +427,9 @@ describe('R11: the frozen configuration is the one the child reads', () => {
   const PARENT: ConfigV5['models'] = { fast: 'sonnet', standard: 'sonnet', deep: 'opus', frontier: 'fable' };
   const writeConfig = (path: string, models: ConfigV5['models'], cap: number): void => {
     mkdirSync(join(path, '..'), { recursive: true });
-    writeFileSync(path, JSON.stringify({ version: 5, mode: 'auto', models, maxParallelWorkers: cap, requestDeadlineMs: 2500 }, null, 2));
+    // #48 P1-2: a cap above 1 now requires workerIsolation: "worktree", which itself requires Bash in guardAllowTools.
+    const isolation = cap > 1 ? { workerIsolation: 'worktree' as const, guardAllowTools: ['Bash'] } : {};
+    writeFileSync(path, JSON.stringify({ version: 5, mode: 'auto', models, maxParallelWorkers: cap, requestDeadlineMs: 2500, ...isolation }, null, 2));
   };
 
   it('plan, execution and accounting agree, and mid-run edits to either source do not reach later cells', () => {

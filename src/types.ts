@@ -14,6 +14,27 @@ export type AdmissionQuestionShape = RouteQuestionShape;
 export const ROUTE_QUESTION_SHAPES: readonly RouteQuestionShape[] = ['composite', 'atomic'];
 
 /**
+ * #48 P1-2: `worktree` is the only way `maxParallelWorkers > 1` is allowed. `none` is a planner's deliverable claim
+ * with no enforced write boundary; a worktree is the boundary itself, not another claim about one.
+ */
+export type WorkerIsolation = 'none' | 'worktree';
+export const WORKER_ISOLATIONS: readonly WorkerIsolation[] = ['none', 'worktree'];
+
+/**
+ * #48 P2-1: what a main_session_steps entry needs that a worker shell cannot provide. Workers here run in
+ * non-interactive shells without macOS privacy (TCC) grants, so a step needing one of these has to stay with the
+ * main session rather than be handed to a worker that "verifies" it with unit tests alone.
+ */
+export type Capability = 'os_permission' | 'live_app' | 'interactive_login' | 'device';
+export const CAPABILITIES: readonly Capability[] = ['os_permission', 'live_app', 'interactive_login', 'device'];
+
+/** #48 P2-1: one step a planner keeps for the main session instead of dispatching, and why. */
+export interface MainSessionStep {
+  step: string;
+  needs: Capability;
+}
+
+/**
  * A19: what an admitted turn is executed as. `hierarchy` is the shipped product -- planner, plan, several workers.
  * `single` dispatches one worker with the user's own request and no plan at all, to test whether the saving measured
  * at depth comes from starting in a fresh context or from splitting the work. It is a hypothesis under measurement,
@@ -84,6 +105,12 @@ export interface ConfigV5 {
   models: Record<Tier, string>;
   maxParallelWorkers: number;
   guardAllowTools: string[];
+  /**
+   * #48 P1-2: absent means `none`, like the other optional keys. `maxParallelWorkers > 1` requires `worktree`: a
+   * declared deliverable is the planner's claim, a worktree is a boundary. `worktree` requires `Bash` in
+   * `guardAllowTools`, because the root has to merge each worker's branch while the guard is active.
+   */
+  workerIsolation: WorkerIsolation;
   /**
    * How Gate B asks. `composite` is the shipped five-way choice; `atomic` fans the same judgement out into read-off
    * questions and composes them in code. Optional in a config file and defaulted to `composite`, so a deployed file
@@ -220,6 +247,8 @@ export interface Plan {
   chain_depth: number;
   /** T11: what the planner said its chain depth was. A claim the graph does not support is recorded, never rejected. */
   chain_depth_claimed: number | null;
+  /** #48 P2-1: kept with the plan so the main session is reminded of them at admission and again at the last accept. */
+  main_session_steps: MainSessionStep[];
 }
 
 export type PlannerReply =
@@ -231,6 +260,8 @@ export type PlannerReply =
       tasks: Array<Omit<PlannedTask, 'contract_hash'>>;
       /** A17: what the planner says its chain depth is. The code computes the authoritative value from the graph. */
       chain_depth_claimed: number | null;
+      /** #48 P2-1: absent reads as none. Never dispatched and never gates task readiness -- advisory only. */
+      main_session_steps?: MainSessionStep[];
     }
   | { status: 'needs_context'; questions: string[]; findings: string[] }
   | { status: 'blocked'; reason: string; findings: string[] };

@@ -4,6 +4,49 @@ Everything below is what was actually observed, with the file that proves it. Th
 overstated claims from the original write-up; this one adds the 2026-09-19 measurements, which override several
 figures below and are marked where they do.
 
+## 2026-09-27 — issue #48 P0-2/P1-2/P2-1 are in code and offline tests; nothing here is observed on a host
+
+Three changes, none measured and none run against a live host — offline tests and `doctor`/`gen-agents` subprocess
+checks only.
+
+**Model authority (P0-2).** `models.frontier` now defaults to `opus`, not `fable`: a restricted or premium model runs
+only when the owner writes it into their own config, because 22 subagent runs went to Fable in issue #48 without the
+owner choosing it — the frontmatter is what the host actually uses whenever the hook does not patch the call. The six
+owned agents' file/role/tier/effort/tools facts are now one table, `OWNED_AGENT_PROFILES` in `src/agents.ts`, with
+`model` read off `DEFAULT_CONFIG.models[tier]` rather than copied a third time; `doctor`'s expectations are derived
+from it, and `npm run gen:agents` (`--check` for CI) rewrites agent frontmatter from it. `doctor` also now fails when
+an effective config's `models.<tier>` names a different model family than that tier's owned agent's installed
+frontmatter — a gated dispatch and a direct or ungated one read the model off two different places and could
+otherwise disagree silently. Separately, a native root-caller Agent call for which no job state exists (exactly the
+shape the 22 unrecorded Fable runs took) now writes a `post`/`failure` trace record with `subagent_type`,
+`requested_model` and `resolved_model` in every mode except `off`, instead of the prior silent `skip('no_state')`;
+`explain` renders `requested → resolved` for these.
+
+**Worker isolation (P1-2).** A new config key, `workerIsolation: "none" | "worktree"` (absent reads as `none`).
+`maxParallelWorkers > 1` now requires `"worktree"`, and `"worktree"` requires `"Bash"` in `guardAllowTools` — a
+declared deliverable is the planner's claim about what a task writes, not an enforced write boundary, and a worktree
+is the boundary rather than the claim. Under `"worktree"`, every planned or ad-hoc *worker* dispatch the hook patches
+also carries `isolation: "worktree"` in the patched call; a planner dispatch never does, and mechanically cannot,
+since `isolation` can only ride an `emitPatch` call and planner dispatches are never denied that path by this change.
+Whether the host does anything at all with an `isolation` field on a patched call — gives the worker its own git
+worktree, ignores it, or errors — is **not observed**; this is a documented, tested patch, not a verified behavior.
+
+**Capability-aware plan steps (P2-1).** `PlannerReply` (the `ready` variant) gains an optional
+`main_session_steps: Array<{ step: string; needs: Capability }>`, `Capability` a closed union of `os_permission`,
+`live_app`, `interactive_login`, `device`. Bounded to 16 entries; an unknown capability or malformed entry invalidates
+the whole reply. A step is never dispatched and never gates a task's readiness — it is rendered back to the
+coordinator on plan acceptance and again when the last ready task drains to zero (an approximation for "the plan is
+done," since a task can still be blocked-but-not-ready rather than the plan being truly finished).
+
+Deviations from the original task packet, recorded because they were not anticipated by it: (1) a real latent bug was
+found and fixed in `plannerModelAgreement` — it compared against an undeduplicated array of configured model names,
+so once `deep` and `frontier` both defaulted to the same string (`opus`), an unambiguous match misread as ambiguous;
+fixed with a `Set`. (2) The existing `'post'`/`'failure'` trace phases were reused for the new fields rather than
+introducing a new `agent_call` phase, because `explain.ts` and `src/bench/run.ts` already treat unknown fields on
+those phases defensively, and a new phase would have needed a new render path for no behavioral gain. All existing
+tests kept passing; 51 tests were added across `tests/cli.test.ts` (new), `tests/config.test.ts`, `tests/plan.test.ts`,
+`tests/coordinator.test.ts`, `tests/hook.test.ts` and `tests/explain.test.ts`.
+
 ## 2026-09-27 — #48 P0-1/P2: depth floor relative to the host window, a liveness alarm, and a thinner idle hook; admission on a real host is still not observed
 
 **Review round (gpt-6-sol, PR #52).** Four blockers, all fixed. (1) The window is now resolved the way the host resolves

@@ -80,11 +80,16 @@ const compositeGateAEnv = (over: Env = {}): Env => {
   return makeEnv({ JEV_GATE_CONFIG: cfg, ...over });
 };
 
-/** T5: the default is one worker, so any test that needs concurrency has to raise the cap explicitly. */
+/**
+ * T5: the default is one worker, so any test that needs concurrency has to raise the cap explicitly.
+ * #48 P1-2: a cap above 1 now requires `workerIsolation: "worktree"`, which itself requires `Bash` in
+ * `guardAllowTools` -- these tests are about the deliverable/parallel-cap checks, not isolation, so both are added
+ * here to keep every existing `capEnv(n)` call valid rather than repeating the pair at each call site.
+ */
 let capSeq = 0;
 const capEnv = (cap: number, over: Env = {}): Env => {
   const cfg = join(tmp, `cap-${cap}-${(capSeq += 1)}.json`);
-  writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', maxParallelWorkers: cap }));
+  writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', maxParallelWorkers: cap, workerIsolation: 'worktree', guardAllowTools: ['Bash'] }));
   return makeEnv({ JEV_GATE_CONFIG: cfg, ...over });
 };
 
@@ -823,14 +828,14 @@ describe('planner dispatch', () => {
     const frontierEnv = makeEnv();
     await run(frontierEnv, promptEvent(), fakeJev());
     const frontier = await run(frontierEnv, plannerPre(), fakeJev({ planning_tier: 'frontier' }));
-    expect(updatedInput(frontier)).toMatchObject({ subagent_type: 'jev-gate:planner-frontier', model: 'fable' });
+    expect(updatedInput(frontier)).toMatchObject({ subagent_type: 'jev-gate:planner-frontier', model: 'opus' });
 
     const cfg = join(tmp, 'frontier-default.json');
     writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', plannerDefaultTier: 'frontier' }));
     const defaulted = makeEnv({ JEV_GATE_CONFIG: cfg });
     await run(defaulted, promptEvent(), fakeJev());
     const abstained = await run(defaulted, plannerPre(), fakeJev({ planning_tier: 'abstain' }));
-    expect(updatedInput(abstained)).toMatchObject({ subagent_type: 'jev-gate:planner-frontier', model: 'fable' });
+    expect(updatedInput(abstained)).toMatchObject({ subagent_type: 'jev-gate:planner-frontier', model: 'opus' });
     expect(abstained.code).toBe('route_abstain');
   });
 
@@ -897,7 +902,8 @@ describe('planner dispatch', () => {
     const conflict = await run(env, plannerPre({ model: 'haiku' }), fakeJev());
     expect(conflict).toMatchObject({ kind: 'deny', code: 'planner_pin_conflict' });
     expect(String(hookOutput(conflict)['permissionDecisionReason'])).toContain('strong planning models');
-    const pinned = await run(env, plannerPre({ model: 'fable' }), fakeJev());
+    // #48 P0-2: frontier now defaults to opus too, so a pin of the once-distinct frontier model pins opus itself.
+    const pinned = await run(env, plannerPre({ model: 'opus' }), fakeJev());
     expect(pinned).toMatchObject({ kind: 'preserve', code: 'pinned', stdout: null });
     expect(state(env).current.active['toolu_plan']).toMatchObject({ role: 'planner' });
   });
@@ -1258,6 +1264,49 @@ describe('worker dispatch', () => {
   });
 });
 
+describe('worker isolation (#48 P1-2)', () => {
+  it('patches isolation: "worktree" onto a planned worker dispatch when configured, and omits it otherwise', async () => {
+    const isolated = capEnv(1);
+    await seedPlanned(isolated, PLAN_REPLY, fakeJev());
+    const patched = await run(isolated, preEvent('Agent', agentInput()), fakeJev());
+    expect(patched.kind).toBe('patch');
+    expect(updatedInput(patched)).toMatchObject({ isolation: 'worktree', subagent_type: 'jev-gate:worker' });
+
+    const plain = makeEnv();
+    await seedPlanned(plain, PLAN_REPLY, fakeJev());
+    const unpatched = await run(plain, preEvent('Agent', agentInput()), fakeJev());
+    expect(unpatched.kind).toBe('patch');
+    expect(updatedInput(unpatched)).not.toHaveProperty('isolation');
+  });
+
+  it('patches isolation on a pinned worker dispatch too (mechanically, isolation can only ride an emitPatch)', async () => {
+    const isolated = capEnv(2);
+    await seedPlanned(isolated, PLAN_REPLY, fakeJev());
+    const pinned = await run(isolated, preEvent('Agent', agentInput({ model: 'haiku' })), fakeJev());
+    expect(pinned).toMatchObject({ kind: 'patch', code: 'pinned' });
+    expect(updatedInput(pinned)).toMatchObject({ isolation: 'worktree', model: 'haiku' });
+  });
+
+  it('patches isolation onto an ad-hoc single-executor worker dispatch (#48 P1-2 + A19)', async () => {
+    const cfg = join(tmp, `single-isolated-${Math.random().toString(36).slice(2)}.json`);
+    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', admittedShape: 'single', workerIsolation: 'worktree', guardAllowTools: ['Bash'] }));
+    const env = makeEnv({ JEV_GATE_CONFIG: cfg });
+    const fetchImpl = fakeJev({ execution: 'orchestrated' });
+    await run(env, promptEvent(), fetchImpl);
+    const r = await run(env, preEvent('Agent', agentInput({ prompt: 'Do what the request asks.' })), fetchImpl);
+    expect(r.kind).toBe('patch');
+    expect(updatedInput(r)).toMatchObject({ isolation: 'worktree' });
+  });
+
+  it('never patches isolation onto a planner dispatch, even when workerIsolation is "worktree"', async () => {
+    const isolated = capEnv(1);
+    await run(isolated, promptEvent(), fakeJev());
+    const planner = await run(isolated, plannerPre(), fakeJev({ planning_tier: 'deep' }));
+    expect(planner.kind).toBe('patch');
+    expect(updatedInput(planner)).not.toHaveProperty('isolation');
+  });
+});
+
 describe('rework evidence (A17)', () => {
   it('evaluates attempt 2 on strictly more evidence than attempt 1', async () => {
     const env = makeEnv();
@@ -1578,6 +1627,57 @@ describe('traces', () => {
     const r = await run(env, promptEvent(), fetchImpl);
     expect(r.code).toBe('trace_intent_failed');
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  /**
+   * #48 P0-2: this is the exact shape 22 Fable runs went unrecorded in -- a root-caller Agent call for which no job
+   * ever started (no promptEvent, so no state at all for this session), meaning `handlePostToolUse` used to return
+   * `skip('no_state')` with no trace write. `requested_model` reads the configured tier default (opus); `resolved_model`
+   * reads what the host actually reported (fable): the gap between the two is exactly what went unobserved before.
+   */
+  it('records subagent_type, requested_model and resolved_model for a native call with no job state', async () => {
+    const dir = join(tmp, 'trace-no-job');
+    const env = makeEnv({ JEV_GATE_TRACE_DIR: dir });
+    const r = await run(
+      env,
+      workerPost('toolu_native', workerReply(), {
+        tool_input: { subagent_type: 'jev-gate:worker-frontier' },
+        tool_response: { status: 'completed', resolvedModel: 'fable', content: [{ type: 'text', text: fence(workerReply()) }] },
+      }),
+    );
+    expect(r).toMatchObject({ kind: 'skip', code: 'no_state' });
+    const records = readdirSync(dir).map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>);
+    const post = records.find((rec) => rec['phase'] === 'post' && rec['job_state'] === 'absent');
+    expect(post).toMatchObject({ matched: false, subagent_type: 'jev-gate:worker-frontier', requested_model: 'opus', resolved_model: 'fable' });
+  });
+
+  it('records the same fields for a PostToolUseFailure with no job state', async () => {
+    const dir = join(tmp, 'trace-failure-no-job');
+    const env = makeEnv({ JEV_GATE_TRACE_DIR: dir });
+    await run(env, { hook_event_name: 'PostToolUseFailure', session_id: 's1', tool_name: 'Agent', tool_use_id: 'toolu_x', tool_input: { subagent_type: 'jev-gate:worker-frontier' }, error: 'boom' });
+    const records = readdirSync(dir).map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>);
+    const failure = records.find((rec) => rec['phase'] === 'failure');
+    expect(failure).toMatchObject({ subagent_type: 'jev-gate:worker-frontier', requested_model: 'opus', resolved_model: null });
+  });
+
+  it('records subagent_type and resolved_model on an orchestrated worker-result post record too', async () => {
+    const dir = join(tmp, 'trace-orchestrated-post');
+    const env = makeEnv({ JEV_GATE_TRACE_DIR: dir });
+    const fetchImpl = fakeJev();
+    await seedPlanned(env, PLAN_REPLY, fetchImpl);
+    await run(env, preEvent('Agent', agentInput()), fetchImpl);
+    await run(env, workerPost('toolu_1', workerReply()), fetchImpl);
+    const records = readdirSync(dir).map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>);
+    const post = records.find((rec) => rec['phase'] === 'post' && rec['task_id'] === 't1');
+    expect(post).toMatchObject({ subagent_type: 'jev-gate:worker', resolved_model: 'claude-sonnet-5', verdict: 'accept' });
+  });
+
+  it('writes no trace record at all in mode off, even with JEV_GATE_TRACE_DIR set', async () => {
+    const dir = join(tmp, 'trace-mode-off');
+    const env = makeEnv({ JEV_GATE_MODE: 'off', JEV_GATE_TRACE_DIR: dir });
+    await run(env, promptEvent(), fakeJev());
+    await run(env, workerPost('toolu_1', workerReply()));
+    expect(existsSync(dir)).toBe(false);
   });
 });
 
@@ -2206,7 +2306,7 @@ describe('receipt selection and observation keys (2026-09-20)', () => {
         .find((r) => r['phase'] === 'pre_result' && r['attempted'] === true && r['role'] === role)?.['decision'] ?? {}) as Record<string, unknown>;
     // A reader of a stored trace cannot know which `models` map was in force when it was written, and deriving the
     // model from the tier through today's map would answer a question about yesterday with today's configuration.
-    expect(decision('planner')).toMatchObject({ tier: 'frontier', model: 'fable' });
+    expect(decision('planner')).toMatchObject({ tier: 'frontier', model: 'opus' });
     expect(decision('worker')).toMatchObject({ tier: 'deep', model: 'opus' });
     // The recorded model is the one the patch actually carried; a record that drifts from the emitted call is worse
     // than no record, because it reads as evidence.

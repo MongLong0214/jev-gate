@@ -137,7 +137,10 @@ your request
 
 **Sonnet runs the plan; it does not invent the important parts of it.** V4 left decomposition to the coordinator, and on
 four small jobs it never delegated at all ([results](#results)). V5 moves that decision to Jev and the planner. The
-planner may add optional `spec`/`uncertainty` context per task; neither field is required by the schema.
+planner may add optional `spec`/`uncertainty` context per task; neither field is required by the schema. It may also
+list `main_session_steps` (#48) alongside the plan: steps that need an OS permission, a live app, an interactive login
+or a physical device, which no headless worker can do — the coordinator context repeats these on plan acceptance and
+again when the last task is accepted, but a step is never dispatched and never gates a task's readiness.
 
 **Code owns acceptance.** A worker's result unlocks its dependents only when the reply reports every required check of
 its task contract as passed. That is a deterministic check, not a Jev call — the normal path no longer makes a Gate C
@@ -153,10 +156,21 @@ already going to happen. A tier above standard additionally requires a concrete 
 | fast | `haiku` | requested `low` — **not applied by the host for this model** | mechanical, fully specified work |
 | standard | `sonnet` | session default | bounded implementation under established contracts |
 | deep | `opus` | `high` | unresolved interacting constraints, or an observed reasoning failure |
-| frontier | `fable` | `xhigh` | exceptional foundational uncertainty |
+| frontier | `opus` | `xhigh` | exceptional foundational uncertainty |
 
 Planner dispatches use the deep and frontier tiers only. Tiers are abstract on purpose: the model names are a per-host
 map, so the same policy can move to another coding host later.
+
+`frontier` defaults to the strongest generally-allowed model, not to a restricted or premium one: a model like Fable
+now runs only when the owner writes it into their own `models.frontier`, never inherited from the shipped default,
+because 22 subagent runs went to Fable that way without the owner choosing it (issue #48). This one table
+(`OWNED_AGENT_PROFILES` in `src/agents.ts`, joined with `DEFAULT_CONFIG.models`) is the single place a tier's model is
+decided; each owned agent's frontmatter and `doctor`'s checks are both generated or checked from it, never hand-copied
+in three places again. `npm run gen:agents` rewrites the six agents' `model:`/`effort:` frontmatter lines from that
+table (add `--check` to fail without writing, for CI); `doctor` fails if an installed agent's frontmatter disagrees
+with it, and separately fails if your own config's `models.<tier>` names a different model family than that agent's
+installed frontmatter — the two are different code paths (a gated dispatch reads `models`, a direct or ungated one
+reads frontmatter straight off the host) and can otherwise quietly disagree.
 
 <details>
 <summary><strong>Technical boundary: exactly where the gates run</strong></summary>
@@ -173,7 +187,10 @@ boundary, not a sandbox. A disabled or crashed hook removes it.
 `isolation`/`fork`, no concrete `CLAUDE_CODE_SUBAGENT_MODEL`, a valid `[JEV_TASK rev=<n> id=<id>]` marker naming a task
 of the current plan revision whose dependencies are accepted, deliverables disjoint from running tasks, and the composed
 contract within 64 KiB. The patch returns the complete original input with `subagent_type`, `model` and the appended
-contract changed; permissions, role and every other field survive.
+contract changed; permissions, role and every other field survive. Under `workerIsolation: "worktree"` a patched
+*worker* dispatch also carries `isolation: "worktree"` — a planner dispatch never does, and the coordinator's own
+incoming call still may not name `isolation` itself (see the ineligibility list above). Whether the host actually
+gives that worker its own git worktree for a patched call is not yet observed on a live host.
 
 **Gate C** (the Jev HTTP call that could tighten an already-accepted reply to `rework`/`replan`) is **removed from the
 normal path**. Acceptance is the deterministic required-check completeness judgment described above; it is the only
@@ -184,7 +201,9 @@ before this change remain readable as history.
 per parsed plan before any worker ran; that call no longer happens.
 
 Bounds per job: two planning attempts, two replans, two attempts per task, one parallel worker by default
-(`maxParallelWorkers`, configurable — parallelism is not offered as a speed feature). Job state lives in one
+(`maxParallelWorkers`, configurable — parallelism is not offered as a speed feature). Above one worker,
+`workerIsolation: "worktree"` is required: a declared deliverable is the planner's claim about what a task writes,
+not an enforced write boundary, and a worktree is the boundary rather than the claim. Job state lives in one
 private file per session under `$XDG_STATE_HOME/jev-gate/jobs/` (0700/0600, atomic writes, superseded generations kept as
 history). Any failure — missing key, timeout (one deadline covering headers and body), HTTP 401/422/429/529, invalid
 response, oversized input — preserves the native call with a fixed stderr code. There are no retries.
@@ -245,10 +264,11 @@ Optional config at `~/.config/jev-gate/config.json` (or `JEV_GATE_CONFIG`), `JEV
 { "version": 5, "mode": "off", "jevModel": "jev-1.13.0", "requestDeadlineMs": 3000,
   "admissionConfidenceFloor": 0.8, "routeConfidenceFloor": 0.8, "resultConfidenceFloor": 0.8,
   "plannerDefaultTier": "deep", "maxParallelWorkers": 1, "guardAllowTools": [],
+  "workerIsolation": "none",
   "delegationDepthFloor": null, "delegationDepthFraction": 0.6, "maxTasksPerPlan": 10,
   "admissionQuestionShape": "atomic", "routeQuestionShape": "composite",
   "planInterpretation": false,
-  "models": { "fast": "haiku", "standard": "sonnet", "deep": "opus", "frontier": "fable" } }
+  "models": { "fast": "haiku", "standard": "sonnet", "deep": "opus", "frontier": "opus" } }
 ```
 
 A V3 or V4 file is rejected with this sample and the plugin never rewrites yours — V5 sends more of your text to
@@ -257,7 +277,16 @@ no account access. The three floors are uncalibrated policy values; `resultConfi
 kept only for config compatibility, since the normal path no longer makes the Gate C call it used to gate.
 `guardAllowTools` adds read-only tools your project needs during orchestration, for example an MCP reader.
 
-The last six keys are optional and default to the values shown, so an existing V5 file keeps its behaviour unedited.
+`workerIsolation` is `"none"` by default, and can be set to `"worktree"`: every planned or ad-hoc worker dispatch the
+hook patches then also carries `isolation: "worktree"` in the patched call (a planner dispatch never does). It is
+required once `maxParallelWorkers > 1` — a declared deliverable is the planner's claim about what a task writes, not
+an enforced write boundary, and a worktree is the boundary rather than the claim — and it itself requires `"Bash"` in
+`guardAllowTools`, because the root has to merge each worker's branch back while the guard is active. Whether the host
+actually gives a patched call its own git worktree is not yet observed on a live host; this is a documented, tested
+patch, not a measured behavior.
+
+The last seven keys before `models` are optional and default to the values shown, so an existing V5 file keeps its
+behaviour unedited.
 
 `delegationDepthFloor` is how much context your session must already be carrying before Gate A is asked anything at
 all. Below it the turn is direct and no request is sent. It exists because depth, not the request, is what decides
@@ -369,7 +398,11 @@ Gate C's HTTP call has since been removed from the normal path (see [How V5 work
 above describes the host-smoke session as recorded at the time, not the current design.
 
 `doctor` reports configuration and environment issues (auth method, model overrides, launch profile, key presence, the
-six role definitions and their effort fields). It is not proof that patching, effort or model access works on your host.
+six role definitions and their effort fields). It also fails on two model-authority disagreements (#48): an installed
+agent's frontmatter that drifts from `src/agents.ts`'s table (run `npm run gen:agents` to fix it), and your own
+config's `models.<tier>` naming a different model family than that agent's installed frontmatter, which can otherwise
+happen silently because a gated dispatch and a direct or ungated one read the model off two different places. It is
+not proof that patching, effort or model access works on your host.
 It also reports the host compaction window and the effective depth floor derived from it (FAIL/WARN as described
 [above](#try-v5) when the floor cannot realistically be reached), and a liveness check: `<stateRoot>/jev-gate/liveness.json`
 keeps the last 50 auto-mode admission decisions, and doctor WARNs — the same condition a new `SessionStart` hook warns
@@ -410,6 +443,14 @@ That block is one recorded session from the `v5-replan-bound` run of 2026-09-19,
 `model` field, so the two model names in parentheses are the ones today's records would carry and the stored ones read
 `(model not recorded)`. It is also a fair example of what the surface is for: the two turns that stayed native say why,
 and Gate B preserved four of the five dispatches at low confidence rather than routing them.
+
+A native call with no job state (#48: this is how 22 Fable runs went unrecorded before this change) still writes a
+`post` or `failure` record carrying `requested_model` and `resolved_model`, so a run like that shows up in the raw
+trace even without `explain`:
+
+```bash
+jq -r 'select(.phase=="post" and .job_state=="absent") | "\(.subagent_type): \(.requested_model) -> \(.resolved_model)"' ~/.jev-gate/trace/*.json
+```
 
 It reads the same records the benchmark reads, and states three things it cannot answer: a verdict is what the worker
 reported about its own work, a model after `ran` is what the host reported resolving rather than a check that the

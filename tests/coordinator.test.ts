@@ -8,6 +8,7 @@ import {
   PRECEDENCE_SENTENCE,
   renderDirectGuidance,
   renderDispatchDeny,
+  renderMainSessionSteps,
   renderOrchestrationGuidance,
   renderPlannedContext,
   renderPlannerModelNote,
@@ -19,7 +20,9 @@ import {
   renderWorkerReported,
   STOP_REASON,
   SUPERSEDED_SENTENCE,
+  WORKTREE_ISOLATION_SENTENCE,
 } from '../src/coordinator.js';
+import type { MainSessionStep } from '../src/types.js';
 
 describe('guidance', () => {
   it('renders direct guidance per mode without any orchestration rule', () => {
@@ -62,6 +65,57 @@ describe('guidance', () => {
     expect(three).toContain('send at most 3 ready tasks');
     expect(renderPlannedContext(2, ['t1', 't2', 't3', 't4'], 2)).toContain('send at most 2 ready tasks');
     expect(renderWorkerAccepted('t1', ['t2', 't3'], 1)).toContain('dispatch one ready task at a time');
+  });
+
+  /** #48 P1-2: the reminder only appears under worktree isolation, and only once per rendered guidance block. */
+  it('adds the worktree-isolation reminder only when workerIsolation is "worktree"', () => {
+    const none = renderOrchestrationGuidance({ mode: 'auto', confidence: 0.9, superseded: false, maxParallelWorkers: 3 });
+    expect(none).not.toContain(WORKTREE_ISOLATION_SENTENCE);
+    const worktree = renderOrchestrationGuidance({ mode: 'auto', confidence: 0.9, superseded: false, maxParallelWorkers: 3, workerIsolation: 'worktree' });
+    expect(worktree).toContain(WORKTREE_ISOLATION_SENTENCE);
+    expect(orchestrationRules(3)).not.toContain(WORKTREE_ISOLATION_SENTENCE);
+    expect(orchestrationRules(3, 'worktree')).toContain(WORKTREE_ISOLATION_SENTENCE);
+    // A call site that predates isolation (no workerIsolation key at all) still compiles and behaves as before.
+    expect(renderOrchestrationGuidance({ mode: 'auto', confidence: 0.9, superseded: false, maxParallelWorkers: 3 })).not.toContain('git worktree');
+  });
+});
+
+/** #48 P2-1: main_session_steps is rendered, not dispatched -- these tests are about the text, not readiness. */
+describe('main_session_steps rendering (#48 P2-1)', () => {
+  const steps: MainSessionStep[] = [
+    { step: 'grant the TCC screen-recording permission', needs: 'os_permission' },
+    { step: 'click through the vendor console login', needs: 'interactive_login' },
+  ];
+
+  it('renders nothing for an empty list', () => {
+    expect(renderMainSessionSteps([])).toBe('');
+  });
+
+  it('lists each step with what it needs, framed as the main session\'s own work', () => {
+    const text = renderMainSessionSteps(steps);
+    expect(text).toContain('a worker cannot do these');
+    expect(text).toContain('grant the TCC screen-recording permission (needs os_permission)');
+    expect(text).toContain('click through the vendor console login (needs interactive_login)');
+  });
+
+  it('renderPlannedContext lists the steps when a plan is accepted', () => {
+    const text = renderPlannedContext(1, ['t1'], 1, steps);
+    expect(text).toContain('a worker cannot do these');
+    expect(text).toContain('needs os_permission');
+    // Absent steps behave exactly as before isolation/steps existed: no trailing note at all.
+    expect(renderPlannedContext(1, ['t1'], 1)).not.toContain('a worker cannot do these');
+  });
+
+  it('renderWorkerAccepted repeats the steps only when the last task is accepted, and adds the isolation note independently', () => {
+    const notLast = renderWorkerAccepted('t1', ['t2'], 1, { mainSessionSteps: steps, isLastTask: false });
+    expect(notLast).not.toContain('a worker cannot do these');
+    const last = renderWorkerAccepted('t1', [], 1, { mainSessionSteps: steps, isLastTask: true });
+    expect(last).toContain('a worker cannot do these');
+    const lastNoSteps = renderWorkerAccepted('t1', [], 1, { isLastTask: true });
+    expect(lastNoSteps).not.toContain('a worker cannot do these');
+    const isolated = renderWorkerAccepted('t1', ['t2'], 1, { workerIsolation: 'worktree' });
+    expect(isolated).toContain(WORKTREE_ISOLATION_SENTENCE);
+    expect(renderWorkerAccepted('t1', ['t2'], 1)).not.toContain(WORKTREE_ISOLATION_SENTENCE);
   });
 });
 

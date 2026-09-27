@@ -126,8 +126,23 @@ const ranOn = (result: Rec | null): string | null => {
   return tr ? str(tr['resolvedModel']) : null;
 };
 
+/**
+ * #48 P0-2: `requested_model`/`resolved_model` exist only on the records this issue added -- a native call with no
+ * job state, an unmatched dispatch, and a PostToolUseFailure -- so a record from before this change simply has
+ * neither field, and this renders as absent rather than as "unrecorded" standing in for a zero-byte model name.
+ */
+const requestedResolved = (r: Rec): string => {
+  const requested = str(r['requested_model']);
+  const resolved = str(r['resolved_model']);
+  return requested === null && resolved === null ? '' : `  ${requested ?? 'unrecorded'} → ${resolved ?? 'unrecorded'}`;
+};
+
 const resultLine = (r: Rec): string => {
-  if (r['matched'] === false) return `result   unmatched dispatch${r['orphaned'] === true ? ' (belonged to a replaced generation)' : ''}`;
+  if (r['matched'] === false) {
+    const subagent = str(r['subagent_type']);
+    const noJob = r['job_state'] === 'absent' ? '  no job state for this session' : '';
+    return `result   unmatched dispatch${subagent ? ` (${subagent})` : ''}${r['orphaned'] === true ? ' (belonged to a replaced generation)' : ''}${noJob}${requestedResolved(r)}`;
+  }
   const attempt = num(r['attempt']);
   const verdict = str(r['verdict']) ?? 'no verdict';
   const reason = str(r['verdict_reason']);
@@ -262,7 +277,8 @@ const lineFor = (r: Rec, posts: Map<string, Rec>): string | null => {
       return planLine(r);
     case 'failure': {
       const ms = num(r['duration_ms']);
-      return `failure  ${str(r['error_first_line']) ?? 'no message recorded'}${ms === null ? '' : `  after ${ms}ms`}`;
+      const subagent = str(r['subagent_type']);
+      return `failure  ${str(r['error_first_line']) ?? 'no message recorded'}${ms === null ? '' : `  after ${ms}ms`}${subagent ? `  (${subagent})` : ''}${requestedResolved(r)}`;
     }
     case 'stop':
       return `stop     ${str(r['outcome']) ?? 'no outcome recorded'}`;

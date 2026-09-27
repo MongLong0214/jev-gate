@@ -1,7 +1,7 @@
 ---
 name: worker-frontier
 description: Implement exactly one planned Jev Gate task contract, run its checks, and return a WorkerReply.
-model: fable
+model: opus
 effort: xhigh
 background: false
 tools: Read, Grep, Glob, Edit, Write, Bash

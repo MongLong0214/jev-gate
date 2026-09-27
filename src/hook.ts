@@ -271,6 +271,21 @@ const replyText = (toolResponse: unknown): string => {
 const responseStatus = (toolResponse: unknown): string | null => (isRecord(toolResponse) ? str(toolResponse['status']) : null);
 const observedModel = (toolResponse: unknown): string | null => (isRecord(toolResponse) ? str(toolResponse['resolvedModel']) : null);
 
+/**
+ * #48 P0-2: what the dispatch asked for, read from the same fields doctor's `checkModelAuthority` reasons about --
+ * an explicit pin if the call carried one (the model literally requested), else the configured model for the owned
+ * agent's tier (what a gated dispatch would have run it as). `null` for a `subagent_type` this plugin does not own:
+ * there is no configured expectation to compare against.
+ */
+const requestedModelFor = (toolInput: unknown, config: ConfigV5): string | null => {
+  if (!isRecord(toolInput)) return null;
+  const pinned = str(toolInput['model']);
+  if (pinned !== null) return pinned;
+  const subagent = str(toolInput['subagent_type']);
+  const owned = subagent !== null ? OWNED_AGENTS[subagent] : undefined;
+  return owned ? config.models[owned.tier] : null;
+};
+
 const isSlashCommand = (prompt: string): boolean => prompt.trimStart().startsWith('/');
 
 /** T1: the tasks that would be built on this one's result, directly or through a chain of dependencies. */
@@ -1049,7 +1064,11 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     if (stale) return emitContext('UserPromptSubmit', renderDirectGuidance(mode), 'generation_changed');
     if (!applied.ok) return emitContext('UserPromptSubmit', renderDirectGuidance(mode), applied.code);
     if (config.admittedShape === 'single') return emitContext('UserPromptSubmit', renderSingleGuidance({ mode, confidence, superseded }), reason);
-    return emitContext('UserPromptSubmit', renderOrchestrationGuidance({ mode, confidence, superseded, maxParallelWorkers: config.maxParallelWorkers }), reason);
+    return emitContext(
+      'UserPromptSubmit',
+      renderOrchestrationGuidance({ mode, confidence, superseded, maxParallelWorkers: config.maxParallelWorkers, workerIsolation: config.workerIsolation }),
+      reason,
+    );
   };
 
   // ---------------------------------------------------------------- PreToolUse
@@ -1292,9 +1311,17 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     if (raced !== null) return emitDeny(raced, renderDispatchDeny(raced), null);
 
     const note = (tier: Tier): string => renderRouteNote(tier);
+    /**
+     * #48 P1-2: every patched WORKER dispatch below carries `isolation: "worktree"` under that setting -- a planner
+     * dispatch (handlePlanner's own `emitPatch` call) never goes through this wrapper, so it never gets the field.
+     * A `preserve()` return (line above, on a failed reservation) cannot carry it either: that path emits no patch at
+     * all, so the call proceeds completely unmodified.
+     */
+    const emitWorkerPatch = (patch: Parameters<typeof patchAgentInput>[1], code: ErrorCode | null): HookResult =>
+      emitPatch(eligibility.input, config.workerIsolation === 'worktree' ? { ...patch, isolation: 'worktree' } : patch, code);
     // A5: native, pinned, abstained and failed paths still receive the canonical contract; only the model is left alone.
     if (mode === 'native' || eligibility.pinned || !apiKey) {
-      return emitPatch(eligibility.input, { prompt: composed + note(eligibility.tier) }, mode === 'native' ? 'mode_native' : eligibility.pinned ? 'pinned' : 'key_missing');
+      return emitWorkerPatch({ prompt: composed + note(eligibility.tier) }, mode === 'native' ? 'mode_native' : eligibility.pinned ? 'pinned' : 'key_missing');
     }
     let routed: WorkerRouteDecision | null = null;
     const gate = await callGate(
@@ -1332,13 +1359,12 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     if (!confirmOwnership(sessionId, gen, plan.rev, eligibility.toolUseId)) {
       return emitDeny('stale_generation', renderDispatchDeny('stale_generation'), null);
     }
-    if ('blocked' in gate) return emitPatch(eligibility.input, { prompt: composed + note(eligibility.tier) }, gate.blocked);
-    if (!gate.outcome.ok) return emitPatch(eligibility.input, { prompt: composed + note(eligibility.tier) }, gate.outcome.code);
-    if (routed === null) return emitPatch(eligibility.input, { prompt: composed + note(eligibility.tier) }, 'route_invalid');
+    if ('blocked' in gate) return emitWorkerPatch({ prompt: composed + note(eligibility.tier) }, gate.blocked);
+    if (!gate.outcome.ok) return emitWorkerPatch({ prompt: composed + note(eligibility.tier) }, gate.outcome.code);
+    if (routed === null) return emitWorkerPatch({ prompt: composed + note(eligibility.tier) }, 'route_invalid');
     const decision: WorkerRouteDecision = routed;
-    if (decision.action === 'preserve') return emitPatch(eligibility.input, { prompt: composed + note(decision.tier) }, decision.reason);
-    return emitPatch(
-      eligibility.input,
+    if (decision.action === 'preserve') return emitWorkerPatch({ prompt: composed + note(decision.tier) }, decision.reason);
+    return emitWorkerPatch(
       { subagent_type: agentForTier('worker', decision.tier), model: config.models[decision.tier], prompt: composed + note(decision.tier) },
       null,
     );
@@ -1405,9 +1431,16 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     }
     // The note cannot point at a contract on a shape that has none, and the ad-hoc shape keeps the contract wording.
     const note = (tier: Tier): string => (carriedRequest === null ? renderRouteNote(tier) : renderSingleRouteNote(tier));
+    /**
+     * #48 P1-2: every patched WORKER dispatch below carries `isolation: "worktree"` under that setting. A `preserve()`
+     * return (the `carriedRequest === null` branch of `preserveAdhoc`, and the ordinary ad-hoc shape's non-single
+     * preserve reasons) cannot carry it: that path emits no patch at all, so the call proceeds completely unmodified.
+     */
+    const emitWorkerPatch = (patch: Parameters<typeof patchAgentInput>[1], code: ErrorCode | null): HookResult =>
+      emitPatch(eligibility.input, config.workerIsolation === 'worktree' ? { ...patch, isolation: 'worktree' } : patch, code);
     /** A preserve leaves the model exactly as the coordinator called it. That is all it leaves alone. */
     const preserveAdhoc = (code: ErrorCode, tier: Tier = eligibility.tier): HookResult =>
-      carriedRequest === null ? preserve(code) : emitPatch(eligibility.input, { prompt: composed + note(tier) }, code);
+      carriedRequest === null ? preserve(code) : emitWorkerPatch({ prompt: composed + note(tier) }, code);
     if (single !== null) {
       // A4: reserved before any HTTP call, and before the routing outcome, so every single dispatch is recorded --
       // reserving only the patched dispatches was rejected: a preserved call still runs a worker, and would leave
@@ -1508,8 +1541,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     if (routed === null) return preserveAdhoc('route_invalid');
     const decision: WorkerRouteDecision = routed;
     if (decision.action === 'preserve') return preserveAdhoc(decision.reason ?? 'route_invalid', decision.tier);
-    return emitPatch(
-      eligibility.input,
+    return emitWorkerPatch(
       { subagent_type: agentForTier('worker', decision.tier), model: config.models[decision.tier], prompt: composed + note(decision.tier) },
       null,
     );
@@ -1578,13 +1610,19 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
    * T4: the planner profile this job asked for and the model the host reports running are different facts. The
    * configured id is an alias, the host reports a concrete id, and an id this plugin does not recognize settles
    * nothing: it is recorded as unverified rather than counted as a strong planner that ran.
+   *
+   * #48 P0-2: deduped by the model string, not by tier. Two tiers configured with the identical model id (`deep` and
+   * `frontier` both default to `opus` since a restricted model needs explicit opt-in) used to make an observed
+   * `opus` count as two names and read as ambiguous; deduping first means an unambiguous observed string still
+   * settles match/mismatch even when more than one tier happens to name it, and only a genuinely different pair of
+   * matched ids is unverified.
    */
   const plannerModelAgreement = (tier: JobGeneration['planner_tier'], observed: string | null): ModelAgreement => {
     if (tier === null || observed === null || observed.length === 0) return 'unverified';
     const seen = observed.toLowerCase();
-    const named = Object.values(config.models).filter((id) => seen.includes(id.toLowerCase()));
-    if (named.length !== 1) return 'unverified';
-    return named[0] === config.models[tier] ? 'match' : 'mismatch';
+    const named = new Set(Object.values(config.models).filter((id) => seen.includes(id.toLowerCase())));
+    if (named.size !== 1) return 'unverified';
+    return named.has(config.models[tier]) ? 'match' : 'mismatch';
   };
 
   const handlePlannerResult = async (sessionId: string, gen: JobGeneration, toolUseId: string): Promise<HookResult> => {
@@ -1644,6 +1682,8 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
           // T11: the graph is the fact; the planner's own number is recorded beside it and never rejects a plan.
           chain_depth: chainDepth(tasks),
           chain_depth_claimed: reply.chain_depth_claimed,
+          // #48 P2-1: absent reads as none. Kept with the plan so it survives to the last-task-accepted context too.
+          main_session_steps: reply.main_session_steps ?? [],
         };
         /**
          * T3: no completion receipt is reused for readiness across a plan revision. `contract_hash` identifies the
@@ -1655,7 +1695,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         const retired = next.receipts;
         next = { ...next, phase: 'planned', plan, receipts: [] };
         context =
-          renderPlannedContext(rev, readyForDispatch(next), config.maxParallelWorkers) +
+          renderPlannedContext(rev, readyForDispatch(next), config.maxParallelWorkers, plan.main_session_steps) +
           (agreement === 'match' ? '' : renderPlannerModelNote(agreement));
         trace?.write('plan', {
           ...base,
@@ -1776,8 +1816,17 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         // A19: rework and replan are hierarchy verdicts; this path only ever produces the four below.
         const shown = finalVerdict === 'accept' || finalVerdict === 'invalid' || finalVerdict === 'unknown' ? finalVerdict : 'incomplete';
         context = renderSingleResult(shown, reason ?? '');
-      } else if (finalVerdict === 'accept') context = renderWorkerAccepted(taskId, readyForDispatch(next), config.maxParallelWorkers);
-      else if (finalVerdict === 'rework' || finalVerdict === 'replan') context = renderWorkerReported(taskId, finalVerdict, reason ?? '');
+      } else if (finalVerdict === 'accept') {
+        const ready = readyForDispatch(next);
+        // #48 P2-1: "the last task is accepted" has no explicit signal here, so nothing else being ready to dispatch
+        // is used as the proxy -- an approximation, since a task can still be blocked-but-not-ready rather than the
+        // plan truly being done.
+        context = renderWorkerAccepted(taskId, ready, config.maxParallelWorkers, {
+          workerIsolation: config.workerIsolation,
+          mainSessionSteps: next.plan?.main_session_steps ?? [],
+          isLastTask: ready.length === 0,
+        });
+      } else if (finalVerdict === 'rework' || finalVerdict === 'replan') context = renderWorkerReported(taskId, finalVerdict, reason ?? '');
       else if (finalVerdict === 'unknown') context = renderWorkerUnknown(taskId);
       else if (finalVerdict === 'invalid') context = renderWorkerInvalid(taskId, reason ?? 'unparsable reply');
       else context = renderWorkerIncomplete(taskId, reason ?? 'the reported checks do not satisfy the contract');
@@ -1789,6 +1838,12 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         verdict: finalVerdict,
         verdict_reason: reason,
         advisory: null,
+        // #48 P0-2: the same two fields the native no-job branch above records, so an orchestrated dispatch and an
+        // unrecorded native one read the same way in `explain` -- what subagent_type ran, and what model it resolved
+        // to. `subagent_type` here is the dispatched one (tool_input reflects the patched call), not the tier the
+        // coordinator originally called.
+        subagent_type: str(isRecord(input.tool_input) ? input.tool_input['subagent_type'] : null),
+        resolved_model: observedModel(input.tool_response),
         tool_response: whitelistToolResponse(input.tool_response),
         root_effort: input.effort ?? null,
       });
@@ -1807,12 +1862,38 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     const state = readJob(deps.env, sessionId);
     if (!state.ok) return skip(state.code);
     const job = state.value;
-    if (!job) return skip('no_state');
+    /**
+     * #48 P0-2: this branch used to return with no trace write at all -- a native, unorchestrated Agent call (no job
+     * state because orchestration never started for this session) left no record of which model it actually ran on.
+     * That is exactly how the frontier runs in issue #48 went unobserved: nothing here depended on a job existing,
+     * only on this being a root-caller Agent call, which was already confirmed above.
+     */
+    if (!job) {
+      trace?.write('post', {
+        ...base,
+        matched: false,
+        job_state: 'absent',
+        subagent_type: str(isRecord(input.tool_input) ? input.tool_input['subagent_type'] : null),
+        requested_model: requestedModelFor(input.tool_input, config),
+        resolved_model: observedModel(input.tool_response),
+        tool_response: whitelistToolResponse(input.tool_response),
+      });
+      return skip('no_state');
+    }
     const reservation = own(job.current.active, toolUseId);
     if (!reservation) {
       // A2: a late result belongs to its own generation only; it is recorded and never advances the current plan.
       const orphaned = job.history.some((h) => own(h.active, toolUseId) !== undefined);
-      trace?.write('post', { ...base, matched: false, orphaned, tool_response: whitelistToolResponse(input.tool_response) });
+      trace?.write('post', {
+        ...base,
+        matched: false,
+        orphaned,
+        job_state: 'present',
+        subagent_type: str(isRecord(input.tool_input) ? input.tool_input['subagent_type'] : null),
+        requested_model: requestedModelFor(input.tool_input, config),
+        resolved_model: observedModel(input.tool_response),
+        tool_response: whitelistToolResponse(input.tool_response),
+      });
       return skip(orphaned ? 'generation_changed' : null);
     }
     if (reservation.role === 'planner') return await handlePlannerResult(sessionId, job.current, toolUseId);
@@ -1854,6 +1935,11 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     trace?.write('failure', {
       ...base,
       tool_input: summarizeToolInput(input.tool_input),
+      // #48 P0-2: same fields as the 'post' phase's no-job branch, for the same reason -- a native call that fails
+      // is still a dispatch of some subagent_type, requested at some model, and this is the one record of it.
+      subagent_type: str(isRecord(input.tool_input) ? input.tool_input['subagent_type'] : null),
+      requested_model: requestedModelFor(input.tool_input, config),
+      resolved_model: observedModel(input.tool_response),
       error_first_line: error.split('\n')[0]?.slice(0, 200) ?? null,
       error_len: error.length,
       is_interrupt: input.is_interrupt ?? null,

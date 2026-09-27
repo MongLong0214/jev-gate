@@ -114,6 +114,13 @@ export interface AgentPatch {
   subagent_type?: string;
   model?: string;
   prompt?: string;
+  /**
+   * #48 P1-2: only a WORKER dispatch the hook patches carries this, and only under `workerIsolation: "worktree"`.
+   * `EXECUTION_CONTROL_KEYS` above still rejects a CALLER-supplied `isolation` at eligibility time -- this field is
+   * the hook adding the key itself, afterward, on the patch it was already going to emit; it is never added on a
+   * `preserve()` path, since that path emits no output and the call proceeds completely unpatched.
+   */
+  isolation?: 'worktree';
 }
 
 /** New object; only the named fields differ, and the original prompt stays an exact prefix of a patched prompt. */
@@ -121,6 +128,7 @@ export const patchAgentInput = (original: AgentInput, patch: AgentPatch): AgentI
   const out: AgentInput = { ...original };
   if (patch.subagent_type !== undefined) out['subagent_type'] = patch.subagent_type;
   if (patch.model !== undefined) out['model'] = patch.model;
+  if (patch.isolation !== undefined) out['isolation'] = patch.isolation;
   if (patch.prompt !== undefined) {
     if (!patch.prompt.startsWith(String(original['prompt'] ?? ''))) throw new Error('patched prompt must keep the original as an exact prefix');
     out['prompt'] = patch.prompt;

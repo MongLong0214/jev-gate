@@ -77,7 +77,7 @@ describe('updateJob', () => {
 
     const env3 = freshEnv();
     const big = seed(env3);
-    const oversized = updateJob(env3, 's1', (prev) => ({ ...(prev ?? big), current: { ...(prev ?? big).current, plan: { rev: 1, goal: 'z'.repeat(STATE_MAX_BYTES + 1), assumptions: [], constraints: [], tasks: [], chain_depth: 0, chain_depth_claimed: null } } }));
+    const oversized = updateJob(env3, 's1', (prev) => ({ ...(prev ?? big), current: { ...(prev ?? big).current, plan: { rev: 1, goal: 'z'.repeat(STATE_MAX_BYTES + 1), assumptions: [], constraints: [], tasks: [], chain_depth: 0, chain_depth_claimed: null, main_session_steps: [] } } }));
     expect(oversized).toEqual({ ok: false, code: 'state_too_large' });
     expect(readJob(env3, 's1')).toMatchObject({ ok: true, value: { current: { plan: null } } });
   });

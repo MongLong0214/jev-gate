@@ -19,7 +19,9 @@ const V5 = {
   plannerDefaultTier: 'deep',
   models: { fast: 'haiku', standard: 'sonnet', deep: 'opus', frontier: 'fable' },
   maxParallelWorkers: 3,
-  guardAllowTools: [],
+  // #48 P1-2: maxParallelWorkers > 1 requires worktree isolation, which in turn requires Bash in guardAllowTools.
+  workerIsolation: 'worktree',
+  guardAllowTools: ['Bash'],
 };
 
 const write = (name: string, value: unknown): string => {
@@ -41,7 +43,7 @@ describe('validateConfig', () => {
     expect(partial.config).toMatchObject({
       mode: 'native',
       plannerDefaultTier: 'frontier',
-      models: { fast: 'haiku', standard: 'sonnet', deep: 'claude-opus-5', frontier: 'fable' },
+      models: { fast: 'haiku', standard: 'sonnet', deep: 'claude-opus-5', frontier: 'opus' },
       // T5: the default is one worker; parallel dispatch is opt-in until write isolation is actually verified.
       maxParallelWorkers: 1,
       guardAllowTools: [],
@@ -118,6 +120,33 @@ describe('validateConfig', () => {
     const r = validateConfig(raw);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toContain(message);
+  });
+
+  describe('workerIsolation (#48 P1-2)', () => {
+    it('defaults to none when absent, and stays none with a single worker', () => {
+      const r = validateConfig({ version: 5 });
+      expect(r).toMatchObject({ ok: true, config: { workerIsolation: 'none', maxParallelWorkers: 1 } });
+    });
+
+    it('rejects an unrecognized value', () => {
+      const r = validateConfig({ version: 5, workerIsolation: 'branch' });
+      expect(r).toMatchObject({ ok: false, error: expect.stringContaining('workerIsolation must be') });
+    });
+
+    it('requires workerIsolation: "worktree" once maxParallelWorkers > 1', () => {
+      const r = validateConfig({ version: 5, maxParallelWorkers: 2, workerIsolation: 'none' });
+      expect(r).toMatchObject({ ok: false, error: 'maxParallelWorkers > 1 requires workerIsolation: "worktree": a declared deliverable is the planner\'s claim, a worktree is a boundary' });
+    });
+
+    it('requires "Bash" in guardAllowTools once workerIsolation is "worktree"', () => {
+      const r = validateConfig({ version: 5, workerIsolation: 'worktree', guardAllowTools: [] });
+      expect(r).toMatchObject({ ok: false, error: 'workerIsolation: "worktree" requires "Bash" in guardAllowTools: the root must merge each worker\'s branch while the guard is active' });
+    });
+
+    it('accepts maxParallelWorkers > 1 with worktree isolation and Bash allowed', () => {
+      const r = validateConfig({ version: 5, maxParallelWorkers: 4, workerIsolation: 'worktree', guardAllowTools: ['Bash'] });
+      expect(r).toMatchObject({ ok: true, config: { maxParallelWorkers: 4, workerIsolation: 'worktree', guardAllowTools: ['Bash'] } });
+    });
   });
 
   it('keeps the V5 defaults in the migration sample', () => {

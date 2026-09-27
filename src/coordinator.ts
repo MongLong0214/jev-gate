@@ -1,4 +1,4 @@
-import type { DenyReason, RoutingMode, Tier } from './types.js';
+import type { DenyReason, MainSessionStep, RoutingMode, Tier, WorkerIsolation } from './types.js';
 
 /** All coordinator text is fixed (D10): it never contains the user's prompt, repository content or a Jev answer's text. */
 export const GUIDANCE_HEADER = '[Jev Gate coordinator guidance for this session]';
@@ -23,7 +23,15 @@ export const renderDispatchRule = (cap: number): string =>
     ? 'Follow the plan: dispatch one ready task at a time and wait for its result. This build runs one worker at a time; a second concurrent dispatch is denied.'
     : `Follow the plan: dispatch a task whose dependencies are already accepted. At most ${cap} workers run at once, so send at most ${cap} ready tasks with disjoint deliverables in one message and hold the rest.`;
 
-export const orchestrationRules = (cap: number): string[] => [
+/**
+ * #48 P1-2: shown once in orchestration guidance and again after every accepted worker while `workerIsolation` is
+ * `"worktree"` -- the write boundary is per-worker there, so a dependent task must not start until the predecessor's
+ * worktree is merged back into the branch the next worker will read from.
+ */
+export const WORKTREE_ISOLATION_SENTENCE =
+  'workerIsolation is "worktree": each dispatched worker runs in its own git worktree, not this working tree. Merge a worker\'s branch back before dispatching a task that depends on it.';
+
+export const orchestrationRules = (cap: number, workerIsolation: WorkerIsolation = 'none'): string[] => [
   'You do not implement this request yourself; you coordinate.',
   'Available to you now: Read, Grep, Glob, TodoWrite, and Agent calls to jev-gate:planner and the jev-gate worker roles. Edit, Write, Bash and every other agent (including Explore) are unavailable for this request and will be denied; do not probe them.',
   'Planner first: call jev-gate:planner with no model argument. Give it the exact request, the relevant earlier user constraints, and factual observations about this repository. It is read-only and returns the plan.',
@@ -31,6 +39,7 @@ export const orchestrationRules = (cap: number): string[] => [
   'Each worker prompt starts with the marker [JEV_TASK rev=<n> id=<id>] followed by your own short brief. Do not paste the planner task block: the hook appends the canonical task contract, the global constraints, the required check ids and the predecessor facts.',
   'Never pass a model argument to an owned agent call. Add attempt=<n> to the marker only when you deliberately rework a task that was already dispatched, and only with the next attempt number for that task.',
   'A declared deliverable is the planner\'s claim about what a task writes, not an enforced write boundary; two workers that touch the same file can still collide.',
+  ...(workerIsolation === 'worktree' ? [WORKTREE_ISOLATION_SENTENCE] : []),
   'Replan only on a changed interface, a changed dependency, an invalidated task or a major failure, and only after active workers have finished: call the planner again with the concrete violated assumption. A new plan revision starts every task again; results from the previous revision are kept as history, not reused.',
   'Report what was implemented, what was checked, and what was reported but not verified, separately.',
 ];
@@ -80,13 +89,15 @@ export interface OrchestrationGuidanceOptions {
   confidence: number | null;
   superseded: boolean;
   maxParallelWorkers: number;
+  /** #48 P1-2: optional so every existing call site that predates isolation keeps compiling and behaving as before. */
+  workerIsolation?: WorkerIsolation;
 }
 
 export const renderOrchestrationGuidance = (opts: OrchestrationGuidanceOptions): string =>
   [
     GUIDANCE_HEADER,
     opts.mode === 'auto' ? renderAdmissionLine(opts.confidence) : NATIVE_ORCHESTRATION_SENTENCE,
-    ...orchestrationRules(opts.maxParallelWorkers),
+    ...orchestrationRules(opts.maxParallelWorkers, opts.workerIsolation ?? 'none'),
     ...(opts.superseded ? [SUPERSEDED_SENTENCE] : []),
   ].join('\n');
 
@@ -160,9 +171,16 @@ const bounded = (detail: string): string => (detail.length > 1000 ? `${detail.sl
 export const renderDispatchDeny = (reason: DenyReason, detail: string | null = null): string =>
   `${DISPATCH_DENY_TEXT[reason]}${detail ? ` (${bounded(detail)})` : ''} Nothing was changed by this call.`;
 
+/**
+ * #48 P2-1: a `main_session_steps` entry is never dispatched and never gates readiness -- it is read here so the main
+ * session is reminded, at the moment a plan is accepted, of what it agreed to keep for itself.
+ */
+export const renderMainSessionSteps = (steps: readonly MainSessionStep[]): string =>
+  steps.length ? ` Keep for yourself; a worker cannot do these: ${steps.map((s) => `${s.step} (needs ${s.needs})`).join('; ')}.` : '';
+
 /** T5: the dispatch sentence carries the real cap, so the plan context cannot ask for more workers than will be admitted. */
-export const renderPlannedContext = (rev: number, readyIds: string[], cap: number): string =>
-  `[Jev Gate plan] Revision ${rev} accepted. Ready task ids: ${readyIds.length ? readyIds.join(', ') : 'none'}. ${renderDispatchRule(cap)} Each prompt starts with [JEV_TASK rev=${rev} id=<id>].`;
+export const renderPlannedContext = (rev: number, readyIds: string[], cap: number, mainSessionSteps: readonly MainSessionStep[] = []): string =>
+  `[Jev Gate plan] Revision ${rev} accepted. Ready task ids: ${readyIds.length ? readyIds.join(', ') : 'none'}. ${renderDispatchRule(cap)} Each prompt starts with [JEV_TASK rev=${rev} id=<id>].${renderMainSessionSteps(mainSessionSteps)}`;
 
 /** T4: what the pin asked for and what the host reported running are different facts; an unknown id settles neither. */
 export const renderPlannerModelNote = (agreement: 'mismatch' | 'unverified'): string =>
@@ -219,5 +237,15 @@ export const renderSingleResult = (verdict: 'accept' | 'incomplete' | 'unknown' 
         ? `[Jev Gate result] The single-executor dispatch replied in a shape this plugin could not read (${bounded(reason)}). Nothing about the work is settled; dispatch it again or finish it another way.`
         : `[Jev Gate result] The single-executor dispatch reported that it did not finish (${bounded(reason)}). There is no replan path on this shape: dispatch it again with what was wrong.`;
 
-export const renderWorkerAccepted = (taskId: string, readyIds: string[], cap: number): string =>
-  `[Jev Gate result] Task ${taskId} accepted. Ready task ids: ${readyIds.length ? readyIds.join(', ') : 'none'}. ${renderDispatchRule(cap)}`;
+export interface WorkerAcceptedOptions {
+  workerIsolation?: WorkerIsolation;
+  /** #48 P2-1: repeated only when `isLastTask` -- the packet's proxy for this is "nothing else is ready to dispatch". */
+  mainSessionSteps?: readonly MainSessionStep[];
+  isLastTask?: boolean;
+}
+
+export const renderWorkerAccepted = (taskId: string, readyIds: string[], cap: number, opts: WorkerAcceptedOptions = {}): string => {
+  const isolationNote = opts.workerIsolation === 'worktree' ? ` ${WORKTREE_ISOLATION_SENTENCE}` : '';
+  const stepsNote = opts.isLastTask ? renderMainSessionSteps(opts.mainSessionSteps ?? []) : '';
+  return `[Jev Gate result] Task ${taskId} accepted. Ready task ids: ${readyIds.length ? readyIds.join(', ') : 'none'}. ${renderDispatchRule(cap)}${isolationNote}${stepsNote}`;
+};
