@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { HttpReply } from '../../mods/router/hooks/client.ts';
 import { JEV_ENDPOINT, JEV_MODEL } from '../../mods/router/hooks/client.ts';
 import { resolveConfig } from '../../mods/router/hooks/config.ts';
+import { TIER_LEVELS } from '../../mods/router/hooks/policy.ts';
 import type { SpawnEvent, SpawnOutcome, TurnStepEvent } from '../../mods/router/hooks/router.ts';
 import { createRouter, hostSupported, VERIFIED_HOST } from '../../mods/router/hooks/router.ts';
 import { answering, CLEAR, deferred, drain, FAKE_KEY, fakeEngine, streamNext } from './fake-engine.ts';
@@ -56,11 +57,14 @@ describe('root effort', () => {
     expect(req?.headers['authorization']).toBe(`Bearer ${FAKE_KEY}`);
     expect(req?.state).toEqual({ task: { text: TEXT } });
     expect(Object.keys(req?.questions ?? {})).toEqual(['control', 'effort', 'action_risk']);
-    // Offered levels are the model's unconditional ones, never max.
-    expect(Object.keys(req?.questions['effort']?.criteria ?? {})).toEqual(['low', 'medium', 'high', 'xhigh', 'preserve']);
+    // Effort is asked as three levels of work; which effort each maps to is decided locally.
+    expect(req?.questions['effort']).toMatchObject({ type: 'score', criteria: [TIER_LEVELS.fast, TIER_LEVELS.standard, TIER_LEVELS.deep] });
 
     const root = f.logs.find((l) => l['event'] === 'root');
     expect(root).toMatchObject({ assessment: 'ok', sent: true, patch: { effort: 'low' }, reasons: { effort: 'applied', model: 'not_asked' } });
+    // The receipt: what the move was read from.
+    expect(root?.['answers']).toMatchObject({ control: 'task_clear', task_clear: 0.97, ordinary: 0.97 });
+    expect((root?.['answers'] as { effort: number[] }).effort[0]).toBe(0.95);
     expect(JSON.stringify(f.logs)).not.toContain('parseRow');
     expect(JSON.stringify(f.logs)).not.toContain(FAKE_KEY);
   });
@@ -75,11 +79,12 @@ describe('root effort', () => {
     expect(f1.logs.find((l) => l['event'] === 'root')).toMatchObject({ reasons: { effort: 'risk_blocks_downgrade' } });
 
     const up = createRouter(configOf(EFFORT_ONLY));
-    const f2 = fakeEngine({ respond: answering({ control: ['task_clear', 0.85], action_risk: ['unclear', 0.5], effort: ['xhigh', 0.85] }) });
+    const f2 = fakeEngine({ respond: answering({ control: ['task_clear', 0.85], action_risk: ['unclear', 0.5], effort: ['high', 0.85] }) });
     up.turnStart({ turnId: 't1', text: TEXT });
     const n2 = streamNext<TurnStepEvent>();
     await drain(up.turnStep(f2.engine, step({ effort: 'medium' }), n2.next));
-    expect(n2.calls).toEqual([step({ effort: 'xhigh' })]);
+    // Hard work asks for high, never more.
+    expect(n2.calls).toEqual([step({ effort: 'high' })]);
   });
 
   it('stops for the rest of the turn when a step arrives with parameters other than the baseline', async () => {
@@ -238,8 +243,9 @@ describe('root effort', () => {
     await drain(router.turnStep(f.engine, step({ index: 1 }), later.next));
     expect(later.calls).toEqual([step({ index: 1 })]);
     expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root', assessment: 'timeout', sent: true }));
-    // What the late reply cost is still recorded, against the turn that asked.
-    expect(f.logs).toContainEqual({ event: 'late', scope: 'root', turn: 't1', usage: { input_tokens: 900, output_tokens: 40 } });
+    // What the late reply cost is still recorded, against the turn that asked, under keys the host's debug log does not
+    // redact (it blanks any key containing "token").
+    expect(f.logs).toContainEqual({ event: 'late', scope: 'root', turn: 't1', usage: { input: 900, output: 40 } });
   });
 
   it('stops asking for the rest of the activation after a 401, including one that arrives late', async () => {
@@ -351,13 +357,13 @@ describe('root effort', () => {
   });
 
   it('stops an effort-only override when a fallback model answers that cannot take it, or no model is reported', async () => {
-    for (const observed of ['claude-sonnet-5', null]) {
+    for (const observed of ['claude-haiku-4-5', null]) {
       const router = createRouter(configOf(EFFORT_ONLY));
-      const f = fakeEngine({ respond: answering({ ...CLEAR, effort: ['xhigh', 0.95] }) });
+      const f = fakeEngine({ respond: answering({ ...CLEAR, effort: ['low', 0.95] }) });
       router.turnStart({ turnId: 't1', text: TEXT });
       const first = streamNext<TurnStepEvent>(() => observed);
       await drain(router.turnStep(f.engine, step(), first.next));
-      expect(first.calls[0]?.effort).toBe('xhigh');
+      expect(first.calls[0]?.effort).toBe('low');
       const second = streamNext<TurnStepEvent>();
       await drain(router.turnStep(f.engine, step({ index: 1 }), second.next));
       expect(second.calls, String(observed)).toEqual([step({ index: 1 })]);
@@ -455,7 +461,7 @@ describe('root model', () => {
     await drain(router.turnStep(f.engine, step({ model: 'claude-sonnet-5' }), n.next));
     expect(n.calls).toEqual([step({ model: 'claude-opus-5-5' })]);
     // fast is a smaller window, so it is not offered even though a switch to it is listed.
-    expect(Object.keys(f.sent[0]?.questions['tier']?.criteria ?? {})).toEqual(['standard', 'deep', 'frontier', 'preserve']);
+    expect(f.sent[0]?.questions['tier']?.criteria).toEqual([TIER_LEVELS.standard, TIER_LEVELS.deep, TIER_LEVELS.frontier]);
   });
 
   it('refuses a pair the target rejects, and asks nothing when no other profile could be applied', async () => {
@@ -560,11 +566,11 @@ describe('root model', () => {
 
   it('drops a stored model whose pair fails once a pin suppresses its effort', async () => {
     const router = createRouter(configOf({ ...MODEL_ONLY, routeMainEffort: true }), SWITCHES);
-    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['standard', 0.95], effort: ['high', 0.95] }) });
+    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['standard', 0.95], effort: ['medium', 0.95] }) });
     router.turnStart({ turnId: 't1', text: TEXT });
     const first = streamNext<TurnStepEvent>();
     await drain(router.turnStep(f.engine, step({ effort: 'max' }), first.next));
-    expect(first.calls).toEqual([step({ model: 'claude-sonnet-5', effort: 'high' })]);
+    expect(first.calls).toEqual([step({ model: 'claude-sonnet-5', effort: 'medium' })]);
     // Sonnet takes no max: without the effort patch the request would keep max on a model that cannot run it.
     f.pins.mainEffort = true;
     const second = streamNext<TurnStepEvent>();
@@ -598,7 +604,7 @@ describe('root model', () => {
       index: 0,
       applied: { model: 'claude-opus-5-5' },
       observed: 'claude-opus-5-5',
-      usage: { input_tokens: 1200, output_tokens: 80, cache_read_input_tokens: 40000, cache_creation_input_tokens: 0 },
+      usage: { input: 1200, output: 80, cache_read: 40000, cache_creation: 0 },
     });
   });
 

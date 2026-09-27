@@ -4,6 +4,17 @@ Everything below is what was actually observed, with the file that proves it. Th
 overstated claims from the original write-up; this one adds the 2026-09-19 measurements, which override several
 figures below and are marked where they do.
 
+## 2026-09-27 — the Router asks for described levels, and moves more work without moving deep work
+
+Tier and effort are now Jev Score questions over described levels (`TIER_LEVELS`), not choices over labels, and
+effort has three levels whose hard end keeps a baseline above `high`. Through the shipped path against live Jev,
+on 25 development tasks and 8 requests that should stay put, the previous labels moved 12 of 18 non-deep spawns and 6
+of 18 non-deep root turns and lowered one deep root turn; the levels moved 14 and 13, and no deep task. Neither moved
+a negative. All four spawns left native were held by `control` at the 0.9 downgrade floor (`task_clear` 0.68–0.82); that
+floor was not lowered after seeing them, and is the first thing to calibrate in shadow mode. Decision records now
+carry an `answers` receipt, and usage keys drop the `token` suffix the host's debug log redacts. One call per task on
+short synthetic prompts: a count of moves, not a saving.
+
 ## 2026-09-27 — the Router's patches take effect on an installed 2.1.283 host; no saving is claimed
 
 Two things kept the Router native on the owner's real host. It pinned spawns to release base 2.1.282 while the host

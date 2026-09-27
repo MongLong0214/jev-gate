@@ -86,9 +86,8 @@ text, so it is logged as `other`, never by name.
   retained request carries — thinking, `max_tokens`, tools, media, beta headers, the window — and the 2.1.282
   declarations do not say the engine re-derives them for a model named in `next`. The list is empty until a host
   observation establishes a pair, so every root model stays native.
-- **The answer.** Missing or malformed answers, a `preserve` choice, the same model under another spelling, too
-  little probability mass on either side (below), a `control` answer whose `task_clear` probability is under the
-  floor, a downgrade whose `ordinary` risk probability is under the downgrade floor, a model that cannot run the
+- **The answer.** Missing or malformed answers, the same model under another spelling, too little probability mass
+  on either side (below), a `control` answer whose `task_clear` probability is under the floor, a downgrade whose `ordinary` risk probability is under the downgrade floor, a model that cannot run the
   effort it would get (`pair_invalid`), and a root model with a smaller context window (`capacity_smaller`, which is
   also why such a profile is never offered).
 - **The request.** Nothing is sent for text that looks like a credential (`input_secret`, the same patterns as Lean's
@@ -97,17 +96,42 @@ text, so it is logged as `other`, never by name.
   (`credential_refused`). No request is retried. A reply that arrives after its wait ended is never applied; what it
   cost is logged against the turn or tool use that asked (`{"event":"late",…}`).
 
-**How an answer becomes a move.** Jev returns a probability for every label it was offered, not just a choice. The
-offered levels (tiers `fast < standard < deep < frontier`, or efforts `low < … < max`) are ordered together with the
-current one, even if the current one was not offered (an Opus `max` baseline). The Router moves down to the lowest
-level whose mass at or below it reaches `minDowngradeConfidence`, else up to the highest level whose mass at or above
-it reaches `minUpgradeConfidence`, else nowhere (`low_confidence`, or `same_value` when Jev chose the current level).
-`preserve` counts for neither side. So `{fast: 0.42, standard: 0.57, preserve: 0.01}` under a `deep` parent moves to
-`standard`: 0.99 says the work needs no more than it, while neither label alone reaches 0.9. A single top-choice floor
-was dropped because Jev spreads its answer across adjacent levels: on a 13-task spawn panel (2026-09-27, one call per
-task) the top choice cleared 0.9 on two of the ten tasks that are not deep work, the cumulative rule moves eight of
-them, and it moves none of the three deep ones.
-The floors are policy numbers, not a calibration.
+**How an answer becomes a move.** Model and effort are asked as Jev Score questions, one level per line, each
+describing work rather than naming a model: lookup or a mechanical edit; ordinary multistep work with clear
+requirements; hard debugging, design under competing constraints or subtle correctness; exceptional reasoning beyond
+that (`TIER_LEVELS` in `hooks/policy.ts`). The wording is the contract: a level's name never reaches Jev, and editing
+a description changes what the Router does. The model question lists the offered profiles' levels in rank order.
+Effort is always the first three levels, mapped to `low`, `medium` and `high`, except that hard work keeps a current
+level above `high`, so a configured `xhigh` or `max` is never lowered for it; a target the model does not take moves
+up to the next one it does.
+
+Jev returns a probability for every level. The Router orders the levels together with the current one and moves
+down to the lowest whose mass at or below it reaches `minDowngradeConfidence`, else up to the highest whose mass at
+or above it reaches `minUpgradeConfidence`, else nowhere (`low_confidence`, or `same_value` when the current level
+holds the most mass). So `[0.74, 0.26, 0]` under an Opus parent moves the spawn to `sonnet`: 1.0 says the work needs
+no more than ordinary, while lookup alone is under 0.9.
+
+The `control` question stays a choice, and it is the escape hatch: a move needs `task_clear` at the floor for its
+direction, so a request that depends on earlier conversation or names its own model or effort stays where it is. No
+level has a `preserve` answer; declining is `control`'s job. Every decision logs its receipt, `answers`, with the
+`control` choice, the `task_clear` and `ordinary` probabilities and each Score's levels.
+
+Why levels rather than labels (2026-09-27, `bench/results/host-obs-2026-09-27/`). The same 25 development tasks
+and 8 requests that should stay put (context-dependent or explicitly pinned) went through the shipped path
+(`createRouter`, live Jev, one call each) under both question forms, from an Opus parent and an `xhigh` root:
+
+| | labels (previous) | levels |
+|---|---|---|
+| spawns moved, of 18 not deep | 12 | 14 |
+| root turns moved, of 18 not deep | 6 | 13 |
+| deep tasks lowered, of 7 | 1 (root, `xhigh` → `high`) | 0 |
+| negatives moved, of 8 | 0 | 0 |
+
+The four spawns the levels left native were held by `control` (`task_clear` 0.68–0.82 against the 0.9 floor), not by
+the level answer. A call used about 870 input and 105 output units of Jev usage and returned in about 200 ms. The
+prompts are short and written by us, and the level wording was drafted after seeing an earlier panel; the 12 held-out
+tasks and the negatives were fixed before any run. These are counts of moves, not a saving: whether a moved task
+still succeeds, and what it saves, is unmeasured. The floors are policy numbers, not a calibration.
 
 A root turn is judged once, at its first step, and its patch is reapplied to each later step of that turn. A turn with
 no user text (`no_task_text`) is not judged. If a step reports another model than the one requested, or reports none,
@@ -125,9 +149,11 @@ the host release, the allowlist, Jev) ends with that dispatch or with the sessio
 ended meanwhile sends nothing more and stays native (`session_ended`).
 
 Each routed result is logged with what the host reported: `root_result` carries the applied patch, the model the step
-reports and the four token counts of its usage (nothing else of it), and `spawn_result` the requested and resolved
-model and the agent id, or the denial. These are per-step records, not a saving: overlapping totals are for #45 to
-normalize.
+reports and the four counts of its usage (nothing else of it), and `spawn_result` the requested and resolved
+model and the agent id, or the denial. Usage counts are logged as `input`, `output`, `cache_read` and
+`cache_creation`, for the Router's own Jev calls and for the host's: the host's debug log replaces the value of any
+key containing `token` with a bare `[REDACTED]`, which leaves the line unparsable, so logs written before this change
+carry no readable usage. These are per-step records, not a saving: overlapping totals are for #45 to normalize.
 
 ## Limits
 

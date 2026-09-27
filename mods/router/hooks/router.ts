@@ -4,7 +4,7 @@ import type { RouterConfig } from './config.ts';
 import { validKey } from './config.ts';
 import type { RootSwitch, SymbolicEffort } from './models.ts';
 import { answeredBy, factsOf, sameModel, VERIFIED_ROOT_SWITCHES } from './models.ts';
-import type { Baseline, DimensionReason, MutableDimensions, PolicyOptions, RoutedEffort, RoutingPatch, RoutingTask } from './policy.ts';
+import type { Answers, Baseline, DimensionReason, MutableDimensions, PolicyOptions, RoutedEffort, RoutingPatch, RoutingTask } from './policy.ts';
 import { allowedBy, buildQuestions, buildState, choosePatch, offerableEfforts, offerableTiers, pairValid, validateAnswers } from './policy.ts';
 
 /**
@@ -103,6 +103,26 @@ const countsOf = (usage: unknown): Record<string, number> | null => {
   const u = usage as Record<string, unknown>;
   return Object.fromEntries(COUNTS.flatMap((k) => (typeof u[k] === 'number' && Number.isFinite(u[k]) ? [[k, u[k]]] : [])));
 };
+
+/**
+ * Usage under key names the host's debug log keeps: it redacts the value of any key containing "token", so on 2.1.283
+ * every `input_tokens` reached the log as a bare [REDACTED] and neither Jev's nor a step's usage could be read back.
+ * `input_tokens` → `input`, `cache_read_input_tokens` → `cache_read`.
+ */
+const loggable = (counts: object | null): Record<string, unknown> | null =>
+  counts === null ? null : Object.fromEntries(Object.entries(counts).map(([k, v]) => [k.replace(/(_input)?_tokens$/, ''), v]));
+
+/**
+ * What Jev answered, beside what was done with it, so the floors can be checked against outcomes later: the control
+ * label and its task_clear probability, the ordinary-risk probability, and each score's levels. Numbers and closed
+ * labels only.
+ */
+const receiptOf = (a: Answers): Record<string, unknown> => ({
+  ...(a.control ? { control: a.control.choice, task_clear: a.control.probabilities['task_clear'] ?? null } : {}),
+  ...(a.action_risk ? { ordinary: a.action_risk.probabilities['ordinary'] ?? null } : {}),
+  ...(a.tier ? { tier: a.tier.levels } : {}),
+  ...(a.effort ? { effort: a.effort.levels } : {}),
+});
 
 const ABORTED = Symbol('aborted');
 /** Waits for `p` unless `signal` ends the wait first. `p` itself is never cancelled by this. */
@@ -209,7 +229,16 @@ interface TurnRouting {
 
 type Assessed =
   | { kind: 'skipped'; reason: string }
-  | { kind: 'assessed'; assessment: 'ok' | ClientReason; usage: Usage | null; sent: boolean; patch: RoutingPatch; model: DimensionReason; effort: DimensionReason };
+  | {
+      kind: 'assessed';
+      assessment: 'ok' | ClientReason;
+      usage: Usage | null;
+      sent: boolean;
+      answers: Record<string, unknown> | null;
+      patch: RoutingPatch;
+      model: DimensionReason;
+      effort: DimensionReason;
+    };
 
 /** `rootSwitches` is the verified list; tests pass their own to reach the root-model path. */
 export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSwitch[] = VERIFIED_ROOT_SWITCHES) => {
@@ -300,11 +329,12 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
   ): Promise<Assessed> => {
     const questions = buildQuestions(dims);
     if (!questions) return { kind: 'skipped', reason: 'nothing_to_change' };
-    const onLate = (usage: Usage | null): void => log(engine, { event: 'late', ...late, usage });
+    const onLate = (usage: Usage | null): void => log(engine, { event: 'late', ...late, usage: loggable(usage) });
     const res = await client.assess(engine, key, buildState(task), questions, signal, onLate);
-    if (!res.ok) return { kind: 'assessed', assessment: res.reason, usage: res.usage, sent: res.sent, patch: {}, model: 'not_asked', effort: 'not_asked' };
-    const decision = choosePatch(validateAnswers(res.answers, questions), baseline, dims, opts);
-    return { kind: 'assessed', assessment: 'ok', usage: res.usage, sent: true, ...decision };
+    if (!res.ok) return { kind: 'assessed', assessment: res.reason, usage: res.usage, sent: res.sent, answers: null, patch: {}, model: 'not_asked', effort: 'not_asked' };
+    const answers = validateAnswers(res.answers, questions);
+    const decision = choosePatch(answers, baseline, dims, opts);
+    return { kind: 'assessed', assessment: 'ok', usage: res.usage, sent: true, answers: receiptOf(answers), ...decision };
   };
 
   // ---------------------------------------------------------------------------------------------- root
@@ -369,7 +399,14 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
       ...(withheld !== undefined ? { model_withheld: withheld } : {}),
       ...(outcome.kind === 'skipped'
         ? { skipped: outcome.reason }
-        : { assessment: outcome.assessment, sent: outcome.sent, usage: outcome.usage, patch: outcome.patch, reasons: { model: outcome.model, effort: outcome.effort } }),
+        : {
+            assessment: outcome.assessment,
+            sent: outcome.sent,
+            usage: loggable(outcome.usage),
+            answers: outcome.answers,
+            patch: outcome.patch,
+            reasons: { model: outcome.model, effort: outcome.effort },
+          }),
     });
   };
 
@@ -487,7 +524,7 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
       if (!t) return;
       const requested = patch.model ?? e.model;
       const seen = result && typeof result.usage?.model === 'string' ? result.usage.model : null;
-      log(engine, { event: 'root_result', turn: e.turnId, index: e.index, applied: patch, observed: seen, usage: result ? countsOf(result.usage) : null });
+      log(engine, { event: 'root_result', turn: e.turnId, index: e.index, applied: patch, observed: seen, usage: result ? loggable(countsOf(result.usage)) : null });
       // Missing is unknown, not confirmation: the override is not reapplied on a guess. A model override needs its own
       // variant reported back, so a bare id does not confirm a requested [1m]. An effort-only patch is checked too, since
       // the host can answer from a fallback; effort depends only on the model, so there the variant is not asked for.
@@ -564,7 +601,8 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
       from: baseline.model,
       assessment: outcome.assessment,
       sent: outcome.sent,
-      usage: outcome.usage,
+      usage: loggable(outcome.usage),
+      answers: outcome.answers,
       patch: outcome.patch,
       reasons: { model: outcome.model },
     });
