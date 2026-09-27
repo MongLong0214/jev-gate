@@ -2,7 +2,8 @@
 
 A Claude Code Function Hooks plugin that answers the host's auto compaction itself. The conversation before a recent
 tail becomes one built user message (the digest): the previous summary, the person's requests, and a log of earlier
-steps with each tool call's input and, while room lasts, an excerpt of its output. The tail stays as the engine has it.
+steps with each tool call's input and, while room lasts, an excerpt of its output. The tail stays as the engine has it,
+except a last message that answers tool calls, which is handed up rebuilt with a closing line after its results (below).
 No model is asked, so a compaction sends no summarizer request and takes milliseconds instead of a minute or more.
 
 **It calls no Jev.** Jev was tried in two places and neither earned it (below): ranking which tool exchanges to keep, and
@@ -37,6 +38,11 @@ engine's time and usage.
   and a result whose call is nowhere leaves the compaction to the engine. It always holds the last assistant message and
   what follows (often the large result that crossed the threshold) and every call still in flight (a tool_use no result
   answers yet), and grows back within 40% of the budget.
+- **The closing line.** When the tail ends in tool results (555 of 581 auto compactions in a week of transcripts), that
+  last message is handed up built rather than by its handle: the same results, as text, with their ids and error flags,
+  then one line saying the kept messages end there. A result with no text (an image or a document, 3 of the 581) has
+  nothing to rebuild it from, so that compaction is left to the engine (`opaque_result`); a result that mixes text with
+  an image would reach the model as its text alone (none of the 581 did).
 - **The ceiling.** Sizes are characters of text, tool inputs and results, plus each call's and result's id and 40
   characters of structure, and 16 per message (the digest's own message included), so a stretch of many small calls is
   not counted as nearly free. Because
@@ -141,13 +147,21 @@ cause is in the host's transcript writer, not in what the hook returns.
 ## Host placement: the session's own context lands after the kept messages
 
 For its own compaction the engine re-attaches the session's instructions and context (CLAUDE.md files, date,
-reminders) ahead of its summary. For messages a hook hands up it appends them after the last one, so behind the kept
-tail they arrive inside the turn that carries the last tool result. The result type has no field to place them.
+reminders) ahead of its summary. For messages a hook hands up it appends them after the last one, and it joins text that
+follows a tool result into that result's content (2.1.283), so behind a tail that ends in tool results the owner's
+CLAUDE.md arrived as part of the last tool's output. The result type has no field to place them.
 
 On the installed host (2.1.283, Sonnet, the owner's full settings, `CLAUDE_CODE_AUTO_COMPACT_WINDOW=120000`, the
-twelve-file probe): under the earlier header, after the first auto compaction the model said the tool output "carried a
-large injected system-reminder block presenting itself as global CLAUDE.md orchestration rules", set it aside and ended
-its turn after 6 turns and 3 of the 12 files. The header's last sentence now says what that context is. Two runs with
-it read all twelve files over 21 turns, with 4 auto compactions answered by the hook each, and listed the twelve
-secret words in order; neither called the re-attached context injected. Digests written under the earlier header are
-still recognized by the header's first sentence and the checksum, so a session that crosses an upgrade keeps chaining.
+twelve-file probe), after the first auto compaction the model said the tool output "carried a large injected
+system-reminder block presenting itself as global CLAUDE.md orchestration rules", set it aside and ended its turn after
+6 turns and 3 of the 12 files. A sentence in the digest header saying what that context was helped in two runs (all
+twelve files, 4 hook compactions each) but not a third, which ended its turn after its third compaction at 9 of 12 files;
+and a header that vouches for text the tool result ends with would vouch for a forged copy there too.
+
+So the last message is rebuilt instead. The engine lays a built user message out as its tool results followed by its
+text, and appends after a closing text block rather than into it; the re-attached context then comes after the closing
+line, outside the results, where nothing a tool returned can follow it. Checked on the installed host by pointing it at a
+local stand-in for the Messages API (no model runs; `bench/compact/fake-api.py`): at the first hook compaction
+the last turn went out as the tool result alone (23,971 characters), the closing line, then the CLAUDE.md reminder as a
+block of its own; with 622bbdf the same turn was one tool result of 42,570 characters with the CLAUDE.md reminder inside.
+How a model continues after the rebuilt turn has not been run on the host.

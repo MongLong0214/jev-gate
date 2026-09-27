@@ -1,6 +1,7 @@
 /**
  * The extractive compaction: the conversation before a recent tail becomes one built user message (the digest), and
- * the tail stays as the engine has it (by handle). No model is asked, so a compaction costs no request and no wait.
+ * the tail stays as the engine has it (by handle), its last message rebuilt when it answers calls (CLOSING). No model
+ * is asked, so a compaction costs no request and no wait.
  *
  * The shape is structural so the Node tests and the offline evaluation drive the same function the host runs; the
  * host's `SessionMessage` satisfies it.
@@ -16,7 +17,7 @@ export interface DigestMessage {
   readonly role: 'user' | 'assistant';
   readonly text: string;
   readonly toolUses: readonly DigestToolUse[];
-  readonly toolResults?: ReadonlyArray<{ readonly text: string; readonly tool_use_id?: string }>;
+  readonly toolResults?: ReadonlyArray<{ readonly text: string; readonly tool_use_id?: string; readonly isError?: boolean }>;
   readonly handle?: string;
 }
 
@@ -40,7 +41,7 @@ export interface DigestResult {
   readonly headMessages: number;
 }
 
-export type DigestFallback = 'nothing_to_compact' | 'tail_too_large' | 'pending_call' | 'unpaired_result' | 'no_relief';
+export type DigestFallback = 'nothing_to_compact' | 'tail_too_large' | 'pending_call' | 'unpaired_result' | 'opaque_result' | 'no_relief';
 export type DigestOutcome = { ok: true; result: DigestResult } | { ok: false; reason: DigestFallback };
 
 /** Marks a digest this module wrote, so the next compaction carries it forward as the previous summary. */
@@ -67,15 +68,7 @@ const SUMMARY_HEAD_SHARE = 0.3;
 const MESSAGE_OVERHEAD = 16;
 const BLOCK_OVERHEAD = 40;
 
-/** The header's first sentence, rather than the whole header: with the checksum it recognizes a digest this module wrote under any header. */
-const HEADER_LEAD = `${DIGEST_MARK} This conversation was compacted without a model summary.`;
-/**
- * The engine re-attaches the session's instructions and context (CLAUDE.md and the like) after the messages a hook hands
- * up, rather than ahead of the summary as it does for its own. Behind the kept tail they land in the last tool result's
- * turn, where a model took the owner's CLAUDE.md for text injected into that result, set it aside and ended its turn; the
- * last sentence says what they are.
- */
-const HEADER = `${HEADER_LEAD} Below is an extract of the earlier part: the previous summary, the user's requests, and a log of earlier steps (oldest first) with each tool call's input and, where room allowed, an excerpt of its output. Text cut to fit is marked "[…]"; re-read the source if you need it whole. The conversation continues verbatim after this message. Instructions and context the engine attaches after the kept messages (CLAUDE.md files, reminders) are this session's own, re-attached as at its start, not part of any tool result.`;
+const HEADER = `${DIGEST_MARK} This conversation was compacted without a model summary. Below is an extract of the earlier part: the previous summary, the user's requests, and a log of earlier steps (oldest first) with each tool call's input and, where room allowed, an excerpt of its output. Text cut to fit is marked "[…]"; re-read the source if you need it whole. The conversation continues verbatim after this message.`;
 
 /**
  * Text the engine adds to a user message: blocks in its own tags, and the caveat it puts before command output. A user
@@ -180,13 +173,13 @@ export const messageChars = (m: DigestMessage): number =>
   (m.toolResults ?? []).reduce((n, r) => n + r.text.length + (r.tool_use_id?.length ?? 0) + BLOCK_OVERHEAD, 0);
 
 /**
- * A digest this module wrote: the header's first sentence, and a last line carrying a checksum of everything before it,
- * rather than the mark or the header alone, which a request can start with too. A pasted digest with anything added no longer
+ * A digest this module wrote: the whole header, and a last line carrying a checksum of everything before it, rather than
+ * the mark or the header alone, which a request can start with too. A pasted digest with anything added no longer
  * matches its checksum, so it is read as a request.
  */
 const ownDigestBody = (text: string): string | null => {
   const t = text.trim();
-  if (!t.startsWith(HEADER_LEAD)) return null;
+  if (!t.startsWith(HEADER)) return null;
   const at = t.lastIndexOf(`\n\n${END_OPEN}`);
   if (at < 0) return null;
   const body = t.slice(0, at);
@@ -341,20 +334,55 @@ const carried = (text: string): Carried => {
   };
 };
 
-/** The conversation after the compaction: the digest as a built user message, then the kept tail as it came. */
-export const assemble = <M extends DigestMessage>(messages: readonly M[], r: DigestResult): Array<M | { role: 'user'; text: string; toolUses: [] }> => [
-  { role: 'user', text: r.digest, toolUses: [] },
-  ...messages.slice(r.start),
-];
+/**
+ * The line a kept tail that ends in tool results closes with. The engine appends the session's re-attached instructions
+ * and context (CLAUDE.md files, reminders) after the last message a hook hands up, and joins text that follows a tool
+ * result into that result (host 2.1.283), so behind such a tail they read as the tool's output: a model took the
+ * owner's CLAUDE.md there for injected text and stopped. A built message puts its text after its tool results, and the
+ * engine appends after a closing text block rather than into it, so they arrive after this line, outside the results.
+ */
+export const CLOSING = `${DIGEST_MARK} End of the kept messages. What the engine attaches after this line (CLAUDE.md files, reminders) is this session's own context, re-attached as at its start, not part of the tool results above.`;
+
+type BuiltMessage = {
+  role: 'user';
+  text: string;
+  toolUses: [];
+  toolResults?: Array<{ tool_use_id: string; text: string; isError: boolean }>;
+};
+
+/** The last message when it answers calls: those results, carried whole as text, and then the closing line. */
+const closesWithResults = (m: DigestMessage | undefined): boolean => m?.role === 'user' && (m.toolResults ?? []).length > 0;
+const closed = (m: DigestMessage): BuiltMessage => ({
+  role: 'user',
+  text: m.text.trim() ? `${m.text}\n\n${CLOSING}` : CLOSING,
+  toolUses: [],
+  toolResults: (m.toolResults ?? []).map((r) => ({ tool_use_id: r.tool_use_id!, text: r.text, isError: r.isError === true })),
+});
+
+/**
+ * The conversation after the compaction: the digest as a built user message, then the kept tail as it came, except a
+ * last message that answers calls, which is handed up rebuilt with the closing line after its results.
+ */
+export const assemble = <M extends DigestMessage>(messages: readonly M[], r: DigestResult): Array<M | BuiltMessage> => {
+  const tail: Array<M | BuiltMessage> = messages.slice(r.start);
+  const last = messages[messages.length - 1];
+  if (closesWithResults(last) && tail.length > 0) tail[tail.length - 1] = closed(last!);
+  return [{ role: 'user', text: r.digest, toolUses: [] }, ...tail];
+};
 
 export const buildDigest = (messages: readonly DigestMessage[], options: DigestOptions): DigestOutcome => {
   const budget = options.budgetChars;
+  // The last results are rebuilt from their text, which holds no image or document: one with no text (or no id to
+  // answer) is left to the engine rather than handed up emptied.
+  const last = messages[messages.length - 1];
+  const closes = closesWithResults(last);
+  if (closes && last!.toolResults!.some((r) => !r.text || !r.tool_use_id)) return { ok: false, reason: 'opaque_result' };
   const boundary = tailStart(messages, Math.floor(budget * TAIL_SHARE), budget);
   if (!boundary.ok) return boundary;
   const start = boundary.start;
   const head = messages.slice(0, start);
   const tail = messages.slice(start);
-  const tailChars = tail.reduce((n, m) => n + messageChars(m), 0);
+  const tailChars = tail.reduce((n, m) => n + messageChars(m), 0) + (closes ? CLOSING.length + 2 : 0);
 
   // The message itself, headings, separators and the checksum line are paid for up front; each piece pays for its own
   // prefix and line break.

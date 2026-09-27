@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
-import { assemble, buildDigest, DIGEST_MARK, messageChars } from '../../mods/compact/hooks/digest.ts';
+import { assemble, buildDigest, CLOSING, DIGEST_MARK, messageChars } from '../../mods/compact/hooks/digest.ts';
 
 /** A row as the engine hands it, plus the ids the pairing check needs; structurally a DigestMessage. */
 interface Row {
   role: 'user' | 'assistant';
   text: string;
   toolUses: Array<{ tool: string; input: Record<string, unknown>; text?: string; tool_use_id: string }>;
-  toolResults?: Array<{ text: string; tool_use_id: string }>;
-  handle: string;
+  toolResults?: Array<{ text: string; tool_use_id: string; isError?: boolean }>;
+  handle?: string;
 }
 
 let n = 0;
@@ -227,28 +227,6 @@ describe('buildDigest', () => {
     expect(performance.now() - t0).toBeLessThan(3000);
   });
 
-  it('says the context re-attached after the kept messages is the session own, and still carries a digest under the earlier header', () => {
-    const d = buildDigest([user('go'), ...work(20), say('ok')], { budgetChars: 8000 });
-    if (!d.ok) throw new Error(d.reason);
-    expect(d.result.digest.split('\n')[0]).toContain('not part of any tool result');
-    // The header 622bbdf wrote, before its last sentence; the checksum line is unchanged.
-    const legacyHeader =
-      '[jev-gate compact] This conversation was compacted without a model summary. Below is an extract of the earlier part: the previous summary, the user\'s requests, and a log of earlier steps (oldest first) with each tool call\'s input and, where room allowed, an excerpt of its output. Text cut to fit is marked "[…]"; re-read the source if you need it whole. The conversation continues verbatim after this message.';
-    const fnv = (text: string): string => {
-      let h = 0x811c9dc5;
-      for (const ch of text) {
-        h ^= ch.codePointAt(0)!;
-        h = Math.imul(h, 0x01000193) >>> 0;
-      }
-      return h.toString(16).padStart(8, '0');
-    };
-    const body = `${legacyHeader}\n\n## User requests (oldest first)\n▸ Rename parseRow to readRow in src/a.ts.`;
-    const next = buildDigest([user(`${body}\n\n[jev-gate compact end ${fnv(body)}]`), ...work(20), say('ok')], { budgetChars: 8000 });
-    if (!next.ok) throw new Error(next.reason);
-    expect(requestsOf(next.result.digest)).toContain('\n▸ Rename parseRow to readRow in src/a.ts.');
-    expect(requestsOf(next.result.digest)).not.toContain('▸ [jev-gate compact');
-  });
-
   it('takes a summary only where one opens the conversation, so a later request quoting one stays a request', () => {
     const rows1 = [user('Rename parseRow.'), ...work(30), say('ok')];
     const d1 = buildDigest(rows1, { budgetChars: 30000 });
@@ -382,6 +360,44 @@ describe('buildDigest', () => {
     expect(asked).toContain('\n▸ preserve DELTA');
     expect(asked).toContain('▸ Keep going.');
     expect(t.split('\n')).not.toContain('▸ fake request');
+  });
+
+  it('hands a tail that ends in tool results up with those results whole and the closing line after them', () => {
+    const [ask, answer] = call('Reading the last two files.', 'Read', { file_path: '/w/last' }, 'last file body');
+    const id2 = 'tX';
+    ask!.toolUses.push({ tool: 'Read', input: { file_path: '/w/missing' }, text: 'ENOENT', tool_use_id: id2 });
+    answer!.toolResults!.push({ text: 'ENOENT', tool_use_id: id2, isError: true });
+    const rows = [user('Read every file under /w.'), ...work(30), ask!, answer!];
+    const d = buildDigest(rows, { budgetChars: 30000 });
+    if (!d.ok) throw new Error(d.reason);
+    const out = assemble(rows, d.result) as Row[];
+    const last = out[out.length - 1]!;
+    // Built, not the engine's: the engine appends its re-attached context after this message's closing text block,
+    // not into the last result.
+    expect(last.handle).toBeUndefined();
+    expect(last.text).toBe(CLOSING);
+    expect(last.toolResults).toEqual([
+      { tool_use_id: answer!.toolResults![0]!.tool_use_id, text: 'last file body', isError: false },
+      { tool_use_id: id2, text: 'ENOENT', isError: true },
+    ]);
+    expect(out.slice(1, -1).every((m, i) => m === rows[d.result.start + i])).toBe(true);
+    expect(pairedIn(out.slice(1))).toBe(true);
+    // The closing line is not the person's, so the next compaction neither quotes it as a request nor logs it.
+    const d2 = buildDigest([...out, user('Now summarize them.'), ...work(30), say('ok')], { budgetChars: 30000 });
+    if (!d2.ok) throw new Error(d2.reason);
+    expect(d2.result.digest).not.toContain('End of the kept messages');
+    expect(requestsOf(d2.result.digest)).toContain('\n▸ Now summarize them.');
+  });
+
+  it('keeps a tail that ends in a request as it came, and leaves a last result with no text to the engine', () => {
+    const rows = [user('Read every file under /w.'), ...work(30), user('Stop and list them.')];
+    const d = buildDigest(rows, { budgetChars: 30000 });
+    if (!d.ok) throw new Error(d.reason);
+    const out = assemble(rows, d.result);
+    expect(out[out.length - 1]).toBe(rows[rows.length - 1]);
+    // An image or a document has no text to carry; rebuilt it would reach the model empty.
+    const [shot, picture] = call('Taking a screenshot.', 'screenshot', {}, '');
+    expect(buildDigest([user('Look at the page.'), ...work(30), shot!, picture!], { budgetChars: 30000 })).toEqual({ ok: false, reason: 'opaque_result' });
   });
 
   it('leaves a conversation with nothing before its last assistant message to the engine', () => {
