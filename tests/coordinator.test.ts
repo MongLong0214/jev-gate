@@ -1,7 +1,10 @@
+import { readFileSync } from 'node:fs';
+
 import { describe, expect, it } from 'vitest';
 
 import {
   renderToolRule,
+  WORKTREE_WORKER_SENTENCE,
   singleRules,
   DIRECT_MODE_SENTENCE,
   GUARD_DENY_REASON,
@@ -211,5 +214,15 @@ describe('renderDispatchDeny (review P2: bounded detail)', () => {
     expect(text).toContain('…');
     expect(text).not.toContain(huge);
     expect(renderDispatchDeny('deliverable_overlap', 'src/a.js')).toContain('(src/a.js)');
+  });
+});
+
+describe('#48 third review: an isolated worker is allowed the commit its note asks for', () => {
+  it('names the note in every worker profile, whose commit ban otherwise needs the contract to ask', () => {
+    expect(WORKTREE_WORKER_SENTENCE).toContain('[Jev Gate isolation]');
+    for (const name of ['worker', 'worker-fast', 'worker-deep', 'worker-frontier']) {
+      const profile = readFileSync(new URL(`../agents/${name}.md`, import.meta.url), 'utf8').replace(/\s+/g, ' ');
+      expect(profile, name).toContain('A `[Jev Gate isolation]` note in your prompt is that request for one commit');
+    }
   });
 });
