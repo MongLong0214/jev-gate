@@ -165,7 +165,8 @@ carry no readable usage. These are per-step records, not a saving: overlapping t
   what the host reports instead. If a routed spawn reports another model than the one requested
   (`model_mismatch`), or an unrouted inheriting spawn does not run on its parent's model (`baseline_mismatch`, which
   means the baseline the Router ranks from is wrong), every later spawn in that activation stays native
-  (`spawn_suspended`, logged once). The suspension outlives a session end, so a host that broke it once is not
+  (`spawn_suspended`, logged once), including one whose assessment was still waiting on Jev. A spawn that a pin
+  kept native, even one set while Jev answered, runs on the pinned model and is not checked against the parent's. The suspension outlives a session end, so a host that broke it once is not
   trusted again until the plugin reloads. The check comes after the fact: the spawn that reveals the mismatch has
   already run.
 - **A hook never calls `next` after its signal aborts.** By then the host has gone on without it, and a `next` would

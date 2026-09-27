@@ -650,7 +650,13 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     } catch {
       target = null;
     }
-    if (target === null) return null;
+    if (target === null) {
+      // A pin that arrived while Jev answered puts this native spawn on the pinned model, which says nothing about how
+      // the host resolves an inheriting one.
+      const now = await within(pinsOf(engine), live);
+      if (now.subagentModel || now.aliasRemap) assumed.delete(e);
+      return null;
+    }
     // A pin or a narrower allowlist can arrive while Jev answers, so they are read again here rather than trusted from
     // before the request: what applies is what holds when the spawn is made. The pins are read last, after the
     // allowlist, so no await separates them from next.
@@ -664,6 +670,8 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
           ? 'target_not_allowed'
           : null;
     if (stop) {
+      // Left native by a pin, the spawn runs on the pinned model; left native by the allowlist, it still inherits.
+      if (stop !== 'target_not_allowed') assumed.delete(e);
       log(engine, { event: 'spawn_stop', tool_use_id: e.tool_use_id, reason: stop, requested: target });
       return null;
     }
@@ -697,9 +705,14 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     }
     // As on turn.step: the host has already spawned natively, so nothing here may spawn again.
     if (next.signal.aborted) throw new Error('jev-router: spawn dispatch abandoned before next');
-    // Nothing is awaited between this check and next: a session that ended meanwhile gets nothing from this dispatch.
+    // Nothing is awaited between these checks and next: a session that ended meanwhile gets nothing from this dispatch,
+    // and neither does one whose routing another spawn's result suspended while this one waited.
     if (target !== null && own.aborted) {
       log(engine, { event: 'spawn_stop', tool_use_id: e.tool_use_id, reason: 'session_ended', requested: target });
+      target = null;
+    }
+    if (target !== null && suspended !== null) {
+      log(engine, { event: 'spawn_stop', tool_use_id: e.tool_use_id, reason: 'spawn_suspended', requested: target });
       target = null;
     }
     const result = await next(target !== null ? { ...e, model: target } : e);

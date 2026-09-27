@@ -971,6 +971,38 @@ describe('spawn model', () => {
     expect(g.logs.some((l) => l['event'] === 'spawn_suspended')).toBe(false);
   });
 
+  it('leaves a spawn native that was still waiting when another spawn suspended routing', async () => {
+    const router = createRouter(configOf(SPAWN_ONLY));
+    const held = deferred<HttpReply>();
+    let calls = 0;
+    const f = fakeEngine({ respond: (req) => (calls++ === 0 ? held.promise : answering({ ...CLEAR, tier: ['fast', 0.95] })(req)) });
+    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    const waiting = spawnNext();
+    const b = router.agentSpawn(f.engine, spawn({ tool_use_id: 'tuB' }), waiting.next);
+    await vi.waitFor(() => expect(f.sent).toHaveLength(1));
+    await router.agentSpawn(f.engine, spawn({ tool_use_id: 'tuA' }), spawnNext(() => ({ model: 'claude-opus-5-5' })).next);
+    expect(f.logs).toContainEqual({ event: 'spawn_suspended', reason: 'model_mismatch' });
+    held.resolve(answering({ ...CLEAR, tier: ['fast', 0.95] })(f.sent[0]!) as HttpReply);
+    await b;
+    expect(waiting.calls).toEqual([spawn({ tool_use_id: 'tuB' })]);
+    expect(f.logs).toContainEqual({ event: 'spawn_stop', tool_use_id: 'tuB', reason: 'spawn_suspended', requested: 'haiku' });
+  });
+
+  it('does not suspend for a spawn a pin set during its assessment kept native, whatever Jev answered', async () => {
+    for (const pick of ['fast', 'deep'] as const) {
+      const router = createRouter(configOf(SPAWN_ONLY));
+      const held = deferred<HttpReply>();
+      const f = fakeEngine({ respond: () => held.promise });
+      router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+      const run = router.agentSpawn(f.engine, spawn(), spawnNext(() => ({ model: 'claude-haiku-4-5' })).next);
+      await vi.waitFor(() => expect(f.sent).toHaveLength(1));
+      f.pins.subagentModel = true;
+      held.resolve(answering({ ...CLEAR, tier: [pick, 0.95] })(f.sent[0]!) as HttpReply);
+      await run;
+      expect(f.logs.some((l) => l['event'] === 'spawn_native_result' || l['event'] === 'spawn_suspended'), pick).toBe(false);
+    }
+  });
+
   it('does not suspend for a spawn a pin kept native, which runs on the pinned model', async () => {
     const router = createRouter(configOf(SPAWN_ONLY));
     const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['fast', 0.95] }), pins: { subagentModel: true } });
