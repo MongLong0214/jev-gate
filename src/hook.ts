@@ -38,8 +38,8 @@ import {
   type AgentInput,
   type Eligibility,
 } from './brief.js';
-import { effectiveDepthFloor, loadConfig, NATIVE_HOOK_TIMEOUT_MS, type Env } from './config.js';
-import { readHostCompactWindow } from './host-window.js';
+import { DEFAULT_CONFIG, effectiveDepthFloor, loadConfig, NATIVE_HOOK_TIMEOUT_MS, type Env } from './config.js';
+import { readHostCompactWindow, readHostWorktreeBaseRef } from './host-window.js';
 import {
   buildLeanRequest,
   composeFullPacket,
@@ -273,17 +273,19 @@ const observedModel = (toolResponse: unknown): string | null => (isRecord(toolRe
 
 /**
  * #48 P0-2: what the dispatch asked for, read from the same fields doctor's `checkModelAuthority` reasons about --
- * an explicit pin if the call carried one (the model literally requested), else the configured model for the owned
- * agent's tier (what a gated dispatch would have run it as). `null` for a `subagent_type` this plugin does not own:
- * there is no configured expectation to compare against.
+ * an explicit pin if the call carried one (the model literally requested), else the owned agent's frontmatter model
+ * (what the host runs an unpinned call on). `null` for a `subagent_type` this plugin does not own: there is no
+ * expectation to compare against.
  */
-const requestedModelFor = (toolInput: unknown, config: ConfigV5): string | null => {
+const requestedModelFor = (toolInput: unknown): string | null => {
   if (!isRecord(toolInput)) return null;
   const pinned = str(toolInput['model']);
   if (pinned !== null) return pinned;
   const subagent = str(toolInput['subagent_type']);
   const owned = subagent !== null ? OWNED_AGENTS[subagent] : undefined;
-  return owned ? config.models[owned.tier] : null;
+  // #48 P0-2 review: a call the hook did not patch runs on the agent's frontmatter model, which gen-agents writes from
+  // DEFAULT_CONFIG.models; the owner's configured table only reaches a call through a patch, which pins `model`.
+  return owned ? DEFAULT_CONFIG.models[owned.tier] : null;
 };
 
 const isSlashCommand = (prompt: string): boolean => prompt.trimStart().startsWith('/');
@@ -373,7 +375,14 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
   if (deps.env['JEV_GATE_MODE'] === 'off') return isAgentPre ? preserve('mode_off') : skip('mode_off');
   const loaded = loadConfig(deps.env);
   if (!loaded.ok) return isAgentPre ? preserve('config_invalid') : skip('config_invalid');
-  const config: ConfigV5 = loaded.config;
+  /**
+   * #48 P1-2 review: a worker under `isolation: "worktree"` starts from the host's `worktree.baseRef`, whose default
+   * ("fresh") is origin/<default-branch> rather than this branch, so a worker would build on a revision missing the
+   * task's inputs. Only "head" is the revision the plan was made against; any other reading, unset included, runs as
+   * workerIsolation "none" -- one worker at a time in the caller's tree -- rather than dispatching onto the wrong base.
+   */
+  const baseRef = loaded.config.workerIsolation === 'worktree' ? readHostWorktreeBaseRef(deps.env, input.cwd ?? null) : null;
+  const config: ConfigV5 = baseRef !== null && baseRef.value !== 'head' ? { ...loaded.config, workerIsolation: 'none', maxParallelWorkers: 1 } : loaded.config;
   const rawMode = config.mode;
   if (rawMode === 'off') return isAgentPre ? preserve('mode_off') : skip('mode_off');
   /**
@@ -407,6 +416,8 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     caller,
     tool_use_id: input.tool_use_id ?? null,
     mode: rawMode,
+    // Only under a configured worktree isolation, so a record says which isolation this call actually ran with and why.
+    ...(baseRef !== null ? { worker_isolation: config.workerIsolation, worktree_base_ref: baseRef.value, worktree_base_ref_source: baseRef.source } : {}),
   };
   const apiKey = deps.env['TYPESAFE_API_KEY'];
 
@@ -1063,10 +1074,10 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     // A newer prompt owns the session now; this turn does not get to turn orchestration on behind it.
     if (stale) return emitContext('UserPromptSubmit', renderDirectGuidance(mode), 'generation_changed');
     if (!applied.ok) return emitContext('UserPromptSubmit', renderDirectGuidance(mode), applied.code);
-    if (config.admittedShape === 'single') return emitContext('UserPromptSubmit', renderSingleGuidance({ mode, confidence, superseded }), reason);
+    if (config.admittedShape === 'single') return emitContext('UserPromptSubmit', renderSingleGuidance({ mode, confidence, superseded, guardAllowTools: config.guardAllowTools }), reason);
     return emitContext(
       'UserPromptSubmit',
-      renderOrchestrationGuidance({ mode, confidence, superseded, maxParallelWorkers: config.maxParallelWorkers, workerIsolation: config.workerIsolation }),
+      renderOrchestrationGuidance({ mode, confidence, superseded, maxParallelWorkers: config.maxParallelWorkers, workerIsolation: config.workerIsolation, guardAllowTools: config.guardAllowTools }),
       reason,
     );
   };
@@ -1874,7 +1885,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         matched: false,
         job_state: 'absent',
         subagent_type: str(isRecord(input.tool_input) ? input.tool_input['subagent_type'] : null),
-        requested_model: requestedModelFor(input.tool_input, config),
+        requested_model: requestedModelFor(input.tool_input),
         resolved_model: observedModel(input.tool_response),
         tool_response: whitelistToolResponse(input.tool_response),
       });
@@ -1890,7 +1901,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         orphaned,
         job_state: 'present',
         subagent_type: str(isRecord(input.tool_input) ? input.tool_input['subagent_type'] : null),
-        requested_model: requestedModelFor(input.tool_input, config),
+        requested_model: requestedModelFor(input.tool_input),
         resolved_model: observedModel(input.tool_response),
         tool_response: whitelistToolResponse(input.tool_response),
       });
@@ -1938,7 +1949,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       // #48 P0-2: same fields as the 'post' phase's no-job branch, for the same reason -- a native call that fails
       // is still a dispatch of some subagent_type, requested at some model, and this is the one record of it.
       subagent_type: str(isRecord(input.tool_input) ? input.tool_input['subagent_type'] : null),
-      requested_model: requestedModelFor(input.tool_input, config),
+      requested_model: requestedModelFor(input.tool_input),
       resolved_model: observedModel(input.tool_response),
       error_first_line: error.split('\n')[0]?.slice(0, 200) ?? null,
       error_len: error.length,

@@ -87,10 +87,19 @@ const compositeGateAEnv = (over: Env = {}): Env => {
  * here to keep every existing `capEnv(n)` call valid rather than repeating the pair at each call site.
  */
 let capSeq = 0;
+/**
+ * #48 P1-2 review: worktree isolation holds only when the host branches worker worktrees from HEAD, so the user
+ * settings these envs point at say `worktree.baseRef: "head"`; without it the hook runs the turn serially.
+ */
+const headBaseRefConfigDir = (baseRef: unknown = 'head'): string => {
+  const dir = mkdtempSync(join(tmp, 'claude-config-'));
+  writeFileSync(join(dir, 'settings.json'), JSON.stringify({ worktree: { baseRef } }));
+  return dir;
+};
 const capEnv = (cap: number, over: Env = {}): Env => {
   const cfg = join(tmp, `cap-${cap}-${(capSeq += 1)}.json`);
   writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', maxParallelWorkers: cap, workerIsolation: 'worktree', guardAllowTools: ['Bash'] }));
-  return makeEnv({ JEV_GATE_CONFIG: cfg, ...over });
+  return makeEnv({ JEV_GATE_CONFIG: cfg, CLAUDE_CONFIG_DIR: headBaseRefConfigDir(), ...over });
 };
 
 const run = (env: Env, event: unknown, fetchImpl?: unknown, extra: Partial<HookDeps> = {}): Promise<HookResult> =>
@@ -1290,12 +1299,39 @@ describe('worker isolation (#48 P1-2)', () => {
   it('patches isolation onto an ad-hoc single-executor worker dispatch (#48 P1-2 + A19)', async () => {
     const cfg = join(tmp, `single-isolated-${Math.random().toString(36).slice(2)}.json`);
     writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', admittedShape: 'single', workerIsolation: 'worktree', guardAllowTools: ['Bash'] }));
-    const env = makeEnv({ JEV_GATE_CONFIG: cfg });
+    const env = makeEnv({ JEV_GATE_CONFIG: cfg, CLAUDE_CONFIG_DIR: headBaseRefConfigDir() });
     const fetchImpl = fakeJev({ execution: 'orchestrated' });
     await run(env, promptEvent(), fetchImpl);
     const r = await run(env, preEvent('Agent', agentInput({ prompt: 'Do what the request asks.' })), fetchImpl);
     expect(r.kind).toBe('patch');
     expect(updatedInput(r)).toMatchObject({ isolation: 'worktree' });
+  });
+
+  /**
+   * #48 P1-2 review: the host's default base ("fresh") is origin/<default-branch>, so a worker there would build on a
+   * revision without the task's inputs. Unset, "fresh" and an invalid value all run the turn as workerIsolation
+   * "none": no isolation patched and one worker at a time, whatever maxParallelWorkers says.
+   */
+  it.each([
+    ['unset', undefined],
+    ['fresh', 'fresh'],
+    ['invalid', 'HEAD'],
+  ])('runs serially with no isolation when worktree.baseRef is %s', async (_label, baseRef) => {
+    const env = capEnv(2, { CLAUDE_CONFIG_DIR: baseRef === undefined ? mkdtempSync(join(tmp, 'claude-config-')) : headBaseRefConfigDir(baseRef) });
+    const guidance = await run(env, promptEvent(), fakeJev());
+    expect(context(guidance)).toContain('dispatch one ready task at a time');
+    expect(context(guidance)).not.toContain('git worktree');
+    await seedPlanned(env, PLAN_REPLY, fakeJev());
+    const first = await run(env, preEvent('Agent', agentInput()), fakeJev());
+    expect(first.kind).toBe('patch');
+    expect(updatedInput(first)).not.toHaveProperty('isolation');
+  });
+
+  it('names Bash as available and says worker trees start at the last commit when isolation holds', async () => {
+    const guidance = context(await run(capEnv(2), promptEvent(), fakeJev()));
+    expect(guidance).toContain('Available to you now: Read, Grep, Glob, TodoWrite, Bash, and Agent calls');
+    expect(guidance).toContain('Edit, Write and every other agent (including Explore) are unavailable');
+    expect(guidance).toContain("branched from this checkout's last commit");
   });
 
   it('never patches isolation onto a planner dispatch, even when workerIsolation is "worktree"', async () => {
@@ -1632,7 +1668,7 @@ describe('traces', () => {
   /**
    * #48 P0-2: this is the exact shape 22 Fable runs went unrecorded in -- a root-caller Agent call for which no job
    * ever started (no promptEvent, so no state at all for this session), meaning `handlePostToolUse` used to return
-   * `skip('no_state')` with no trace write. `requested_model` reads the configured tier default (opus); `resolved_model`
+   * `skip('no_state')` with no trace write. `requested_model` reads the agent's frontmatter model (opus); `resolved_model`
    * reads what the host actually reported (fable): the gap between the two is exactly what went unobserved before.
    */
   it('records subagent_type, requested_model and resolved_model for a native call with no job state', async () => {
@@ -1649,6 +1685,17 @@ describe('traces', () => {
     const records = readdirSync(dir).map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>);
     const post = records.find((rec) => rec['phase'] === 'post' && rec['job_state'] === 'absent');
     expect(post).toMatchObject({ matched: false, subagent_type: 'jev-gate:worker-frontier', requested_model: 'opus', resolved_model: 'fable' });
+  });
+
+  /** #48 P0-2 review: an unpatched call runs on the frontmatter, so the owner's own model table is not what it requested. */
+  it('reports the frontmatter model, not the configured tier model, for an unpinned call the hook did not patch', async () => {
+    const dir = join(tmp, 'trace-no-job-configured');
+    const cfg = join(tmp, 'models-sonnet-frontier.json');
+    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', models: { fast: 'haiku', standard: 'sonnet', deep: 'opus', frontier: 'sonnet' } }));
+    const env = makeEnv({ JEV_GATE_TRACE_DIR: dir, JEV_GATE_CONFIG: cfg });
+    await run(env, workerPost('toolu_native', workerReply(), { tool_input: { subagent_type: 'jev-gate:worker-frontier' }, tool_response: { status: 'completed', resolvedModel: 'opus', content: [] } }));
+    const records = readdirSync(dir).map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>);
+    expect(records.find((rec) => rec['phase'] === 'post')).toMatchObject({ requested_model: 'opus', resolved_model: 'opus' });
   });
 
   it('records the same fields for a PostToolUseFailure with no job state', async () => {

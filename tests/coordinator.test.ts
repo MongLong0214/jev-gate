@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  renderToolRule,
+  singleRules,
   DIRECT_MODE_SENTENCE,
   GUARD_DENY_REASON,
   GUIDANCE_HEADER,
@@ -77,6 +79,21 @@ describe('guidance', () => {
     expect(orchestrationRules(3, 'worktree')).toContain(WORKTREE_ISOLATION_SENTENCE);
     // A call site that predates isolation (no workerIsolation key at all) still compiles and behaves as before.
     expect(renderOrchestrationGuidance({ mode: 'auto', confidence: 0.9, superseded: false, maxParallelWorkers: 3 })).not.toContain('git worktree');
+  });
+
+  /** #48 P1-2 review: the tool line follows the guard's allow-list, so Bash is never both required and forbidden. */
+  it('names the tools the guard allows, keeping the default line unchanged', () => {
+    const agents = 'Agent calls to jev-gate:planner and the jev-gate worker roles';
+    expect(renderToolRule(agents)).toBe(
+      'Available to you now: Read, Grep, Glob, TodoWrite, and Agent calls to jev-gate:planner and the jev-gate worker roles. Edit, Write, Bash and every other agent (including Explore) are unavailable for this request and will be denied; do not probe them.',
+    );
+    const withBash = orchestrationRules(2, 'worktree', ['Bash']).join('\n');
+    expect(withBash).toContain('Available to you now: Read, Grep, Glob, TodoWrite, Bash, and Agent calls');
+    expect(withBash).toContain('Edit, Write and every other agent (including Explore) are unavailable');
+    expect(withBash).not.toMatch(/Bash and every other agent/);
+    expect(renderToolRule(agents, ['Edit', 'Write', 'Bash', 'Read'])).toContain('TodoWrite, Edit, Write, Bash, and Agent calls');
+    expect(renderToolRule(agents, ['Edit', 'Write', 'Bash'])).toContain('Every other agent (including Explore) is unavailable');
+    expect(singleRules(['Bash']).join('\n')).toContain('TodoWrite, Bash, and one Agent call');
   });
 });
 

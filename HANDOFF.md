@@ -31,6 +31,15 @@ since `isolation` can only ride an `emitPatch` call and planner dispatches are n
 Whether the host does anything at all with an `isolation` field on a patched call — gives the worker its own git
 worktree, ignores it, or errors — is **not observed**; this is a documented, tested patch, not a verified behavior.
 
+Review round (gpt-6-sol, PR #53): isolation is gated on the host's `worktree.baseRef`. Claude Code 2.1.283's settings
+schema says it applies to agent isolation and that its default, `"fresh"`, branches from `origin/<default-branch>`,
+so a worker would have started without this branch's commits. Unless a readable scope sets `"head"`, the hook runs
+the turn as `workerIsolation: "none"` with a cap of 1, records `worker_isolation`/`worktree_base_ref` in the trace,
+and `doctor` warns. The coordinator's tool line is now rendered from the guard's allow-list, so under isolation it
+names Bash as available instead of "unavailable, do not probe", and says worker trees start at the last commit.
+An unpinned call the hook did not patch now records the frontmatter model as `requested_model`, not the owner's
+configured tier model.
+
 **Capability-aware plan steps (P2-1).** `PlannerReply` (the `ready` variant) gains an optional
 `main_session_steps: Array<{ step: string; needs: Capability }>`, `Capability` a closed union of `os_permission`,
 `live_app`, `interactive_login`, `device`. Bounded to 16 entries; an unknown capability or malformed entry invalidates

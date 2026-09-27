@@ -285,6 +285,14 @@ an enforced write boundary, and a worktree is the boundary rather than the claim
 actually gives a patched call its own git worktree is not yet observed on a live host; this is a documented, tested
 patch, not a measured behavior.
 
+Isolation also needs the host's `worktree.baseRef` set to `"head"` in Claude Code settings
+(`"worktree": {"baseRef": "head"}`). The host branches an isolated agent from that ref, and its default, `"fresh"`, is
+`origin/<default-branch>` — a worker there would start without this branch's commits. The hook reads the setting
+through the same scopes as the compaction window (managed, project-local, project, user); when it is anything but
+`"head"`, including unset, the turn runs as `workerIsolation: "none"` with one worker at a time, and `doctor` warns.
+Even with `"head"` a worker sees the last commit, not uncommitted changes, so the coordinator is told to commit what
+a worker needs before dispatching it; under isolation its tool line names Bash as available for that and for merging.
+
 The last seven keys before `models` are optional and default to the values shown, so an existing V5 file keeps its
 behaviour unedited.
 

@@ -55,27 +55,33 @@ const fromEnv = (env: Env): number | null => {
   return isPositiveSafeInteger(n) ? n : null;
 };
 
-/** One candidate file. Never throws: missing, oversized, unreadable, non-JSON and non-object all read as "no window here". */
-const readSettingsWindow = (path: string): number | null => {
+type Found<T> = { value: T; source: string };
+type SettingsPick<T> = (settings: Record<string, unknown>) => T | null;
+
+const pickWindow: SettingsPick<number> = (settings) => {
+  const w = settings['autoCompactWindow'];
+  return isPositiveSafeInteger(w) ? w : null;
+};
+
+/** One candidate file. Never throws: missing, oversized, unreadable, non-JSON and non-object all read as "not set here". */
+const readSettingsKey = <T>(path: string, pick: SettingsPick<T>): T | null => {
   try {
     const st = statSync(path);
     if (!st.isFile() || st.size > HOST_WINDOW_MAX_BYTES) return null;
     const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
-    if (!isRecord(parsed)) return null;
-    const w = parsed['autoCompactWindow'];
-    return isPositiveSafeInteger(w) ? w : null;
+    return isRecord(parsed) ? pick(parsed) : null;
   } catch {
     return null;
   }
 };
 
 /** The host merges managed-settings.json first, then every non-hidden `managed-settings.d/*.json` alphabetically; the last to set the key wins. */
-const readManagedWindow = (dirs: readonly string[]): Known | null => {
-  let found: Known | null = null;
+const readManaged = <T>(dirs: readonly string[], pick: SettingsPick<T>): Found<T> | null => {
+  let found: Found<T> | null = null;
   for (const dir of dirs) {
     const file = join(dir, 'managed-settings.json');
-    const own = readSettingsWindow(file);
-    if (own !== null) found = { tokens: own, source: `managed:${file}` };
+    const own = readSettingsKey(file, pick);
+    if (own !== null) found = { value: own, source: `managed:${file}` };
     let names: string[] = [];
     try {
       names = readdirSync(join(dir, 'managed-settings.d'))
@@ -86,8 +92,8 @@ const readManagedWindow = (dirs: readonly string[]): Known | null => {
     }
     for (const name of names) {
       const path = join(dir, 'managed-settings.d', name);
-      const w = readSettingsWindow(path);
-      if (w !== null) found = { tokens: w, source: `managed:${path}` };
+      const v = readSettingsKey(path, pick);
+      if (v !== null) found = { value: v, source: `managed:${path}` };
     }
   }
   return found;
@@ -145,11 +151,9 @@ const localSettingsDir = (primary: string, home: string): string => {
   return primary;
 };
 
-const readConfiguredWindow = (env: Env, cwd: string | null | undefined, managedDirs: readonly string[]): Known | null => {
-  const envWindow = fromEnv(env);
-  if (envWindow !== null) return { tokens: envWindow, source: 'env' };
-
-  const managed = readManagedWindow(managedDirs);
+/** Settings scopes a hook can read, first valid wins: managed, project-local, project-shared, user. */
+const readSettingsChain = <T>(env: Env, cwd: string | null | undefined, managedDirs: readonly string[], pick: SettingsPick<T>): Found<T> | null => {
+  const managed = readManaged(managedDirs, pick);
   if (managed !== null) return managed;
 
   const home = env['HOME'] && env['HOME'].length > 0 ? env['HOME'] : homedir();
@@ -170,10 +174,17 @@ const readConfiguredWindow = (env: Env, cwd: string | null | undefined, managedD
   candidates.push(join(configDir, 'settings.json'));
 
   for (const path of candidates) {
-    const tokens = readSettingsWindow(path);
-    if (tokens !== null) return { tokens, source: `settings:${path}` };
+    const value = readSettingsKey(path, pick);
+    if (value !== null) return { value, source: `settings:${path}` };
   }
   return null;
+};
+
+const readConfiguredWindow = (env: Env, cwd: string | null | undefined, managedDirs: readonly string[]): Known | null => {
+  const envWindow = fromEnv(env);
+  if (envWindow !== null) return { tokens: envWindow, source: 'env' };
+  const found = readSettingsChain(env, cwd, managedDirs, pickWindow);
+  return found === null ? null : { tokens: found.value, source: found.source };
 };
 
 /** ANTHROPIC_BASE_URL naming anything but Anthropic's own API, which the host treats as an LLM gateway. */
@@ -229,4 +240,26 @@ export const readHostCompactWindow = (env: Env, cwd: string | null | undefined, 
   const source = clamped === configured.tokens ? configured.source : `${configured.source} (clamped from ${configured.tokens})`;
   if (model !== null && model.tokens < clamped) return { tokens: model.tokens, source: `${source} capped by ${model.source}` };
   return { tokens: clamped, source };
+};
+
+export type WorktreeBaseRef = 'fresh' | 'head';
+export type WorktreeBaseRefResult = { value: WorktreeBaseRef; source: string } | { value: null; source: 'unset' };
+
+const pickBaseRef: SettingsPick<WorktreeBaseRef> = (settings) => {
+  const worktree = settings['worktree'];
+  if (!isRecord(worktree)) return null;
+  const ref = worktree['baseRef'];
+  return ref === 'fresh' || ref === 'head' ? ref : null;
+};
+
+/**
+ * #48 P1-2 review: the ref a subagent's `isolation: "worktree"` branches from. Claude Code 2.1.283's settings schema
+ * describes `worktree.baseRef` as applying to "--worktree, EnterWorktree, and agent isolation": `"fresh"`, the
+ * default, branches from origin/<default-branch>; `"head"` from the session's local HEAD. Unset reads as `null`, which
+ * the host treats as "fresh". Read through the same scopes as the window, with the same blind spots (`--settings`,
+ * MDM, server-managed settings).
+ */
+export const readHostWorktreeBaseRef = (env: Env, cwd: string | null | undefined, opts: Pick<HostWindowOptions, 'managedDirs'> = {}): WorktreeBaseRefResult => {
+  const found = readSettingsChain(env, cwd, opts.managedDirs ?? defaultManagedDirs(), pickBaseRef);
+  return found === null ? { value: null, source: 'unset' } : found;
 };

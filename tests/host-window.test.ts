@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 
-import { modelContextWindow, readHostCompactWindow } from '../src/host-window.js';
+import { modelContextWindow, readHostCompactWindow, readHostWorktreeBaseRef } from '../src/host-window.js';
 
 const tmp = mkdtempSync(join(tmpdir(), 'jev-host-window-'));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
@@ -246,5 +246,40 @@ describe('#48 third review: the legacy local file in the starting directory', ()
     // Below both local files: the shared project file only applies when neither local file sets the key.
     writeSettings(sub, '.claude/settings.json', { autoCompactWindow: 700_000 });
     expect(readHostCompactWindow({ HOME: dir() }, sub, { managedDirs: [], model: 'claude-opus-5-5' }).tokens).toBe(400_000);
+  });
+});
+
+describe('readHostWorktreeBaseRef (#48 P1-2 review)', () => {
+  const none: string[] = [];
+
+  it('reads unset when no scope sets it, and ignores a value the host would not accept', () => {
+    const cwd = dir();
+    expect(readHostWorktreeBaseRef({ HOME: dir() }, cwd, { managedDirs: none })).toEqual({ value: null, source: 'unset' });
+    writeSettings(cwd, '.claude/settings.json', { worktree: { baseRef: 'HEAD' } });
+    expect(readHostWorktreeBaseRef({ HOME: dir() }, cwd, { managedDirs: none })).toEqual({ value: null, source: 'unset' });
+    writeSettings(cwd, '.claude/settings.json', { worktree: 'head' });
+    expect(readHostWorktreeBaseRef({ HOME: dir() }, cwd, { managedDirs: none })).toEqual({ value: null, source: 'unset' });
+  });
+
+  it('takes the first scope that sets it: managed, then project-local, project, user', () => {
+    const home = dir();
+    const cwd = dir();
+    mkdirSync(join(cwd, '.git'));
+    writeSettings(home, '.claude/settings.json', { worktree: { baseRef: 'head' } });
+    expect(readHostWorktreeBaseRef({ HOME: home }, cwd, { managedDirs: none })).toEqual({ value: 'head', source: `settings:${join(home, '.claude', 'settings.json')}` });
+    writeSettings(cwd, '.claude/settings.json', { worktree: { baseRef: 'fresh' } });
+    expect(readHostWorktreeBaseRef({ HOME: home }, cwd, { managedDirs: none }).value).toBe('fresh');
+    writeSettings(cwd, '.claude/settings.local.json', { worktree: { baseRef: 'head' } });
+    expect(readHostWorktreeBaseRef({ HOME: home }, cwd, { managedDirs: none }).value).toBe('head');
+    const managed = dir();
+    writeSettings(managed, 'managed-settings.json', { worktree: { baseRef: 'fresh' } });
+    expect(readHostWorktreeBaseRef({ HOME: home }, cwd, { managedDirs: [managed] })).toEqual({ value: 'fresh', source: `managed:${join(managed, 'managed-settings.json')}` });
+  });
+
+  it('reads the base ref and the window from one file independently', () => {
+    const cwd = dir();
+    writeSettings(cwd, '.claude/settings.json', { autoCompactWindow: 400_000, worktree: { baseRef: 'head' } });
+    expect(readHostWorktreeBaseRef({ HOME: dir() }, cwd, { managedDirs: none }).value).toBe('head');
+    expect(readHostCompactWindow({ HOME: dir() }, cwd, { managedDirs: none }).tokens).toBe(400_000);
   });
 });

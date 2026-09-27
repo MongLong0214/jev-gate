@@ -29,11 +29,26 @@ export const renderDispatchRule = (cap: number): string =>
  * worktree is merged back into the branch the next worker will read from.
  */
 export const WORKTREE_ISOLATION_SENTENCE =
-  'workerIsolation is "worktree": each dispatched worker runs in its own git worktree, not this working tree. Merge a worker\'s branch back before dispatching a task that depends on it.';
+  'workerIsolation is "worktree": each dispatched worker runs in its own git worktree branched from this checkout\'s last commit, not from uncommitted changes in this working tree, so commit what a worker has to read before dispatching it. Merge a worker\'s branch back before dispatching a task that depends on it.';
 
-export const orchestrationRules = (cap: number, workerIsolation: WorkerIsolation = 'none'): string[] => [
+const ALWAYS_NAMED = ['Read', 'Grep', 'Glob', 'TodoWrite'];
+const DENIED_UNLESS_ALLOWED = ['Edit', 'Write', 'Bash'];
+
+/**
+ * #48 P1-2 review: the tool line names what the guard actually allows (brief.ts `guardDecision`: its fixed read-only
+ * set plus config `guardAllowTools`). A fixed "Bash is unavailable, do not probe it" told the coordinator not to use
+ * the one tool worktree isolation requires it to use, to commit inputs and merge each worker's branch.
+ */
+export const renderToolRule = (agents: string, allowTools: readonly string[] = []): string => {
+  const available = [...ALWAYS_NAMED, ...allowTools.filter((t) => !ALWAYS_NAMED.includes(t))].join(', ');
+  const denied = DENIED_UNLESS_ALLOWED.filter((t) => !allowTools.includes(t));
+  const unavailable = denied.length > 0 ? `${denied.join(', ')} and every other agent (including Explore) are unavailable` : 'Every other agent (including Explore) is unavailable';
+  return `Available to you now: ${available}, and ${agents}. ${unavailable} for this request and will be denied; do not probe them.`;
+};
+
+export const orchestrationRules = (cap: number, workerIsolation: WorkerIsolation = 'none', allowTools: readonly string[] = []): string[] => [
   'You do not implement this request yourself; you coordinate.',
-  'Available to you now: Read, Grep, Glob, TodoWrite, and Agent calls to jev-gate:planner and the jev-gate worker roles. Edit, Write, Bash and every other agent (including Explore) are unavailable for this request and will be denied; do not probe them.',
+  renderToolRule('Agent calls to jev-gate:planner and the jev-gate worker roles', allowTools),
   'Planner first: call jev-gate:planner with no model argument. Give it the exact request, the relevant earlier user constraints, and factual observations about this repository. It is read-only and returns the plan.',
   renderDispatchRule(cap),
   'Each worker prompt starts with the marker [JEV_TASK rev=<n> id=<id>] followed by your own short brief. Do not paste the planner task block: the hook appends the canonical task contract, the global constraints, the required check ids and the predecessor facts.',
@@ -50,9 +65,9 @@ export const orchestrationRules = (cap: number, workerIsolation: WorkerIsolation
  * saving measured at depth comes from starting in a fresh context or from splitting the work, which every figure in
  * this repository so far confounds.
  */
-export const singleRules = (): string[] => [
+export const singleRules = (allowTools: readonly string[] = []): string[] => [
   'You do not implement this request yourself; you coordinate.',
-  'Available to you now: Read, Grep, Glob, TodoWrite, and one Agent call to the jev-gate worker role. Edit, Write, Bash and every other agent (including Explore) are unavailable for this request and will be denied; do not probe them.',
+  renderToolRule('one Agent call to the jev-gate worker role', allowTools),
   'Dispatch this request once, whole, to jev-gate:worker. There is no plan for this request: jev-gate:planner is denied, and splitting the work across several workers is not what this shape does.',
   'Your brief does not have to restate the request: the hook appends the user\'s own request verbatim, and the worker is told it is the task.',
   'Never pass a model argument to an owned agent call.',
@@ -64,13 +79,14 @@ export interface SingleGuidanceOptions {
   mode: RoutingMode;
   confidence: number | null;
   superseded: boolean;
+  guardAllowTools?: readonly string[];
 }
 
 export const renderSingleGuidance = (opts: SingleGuidanceOptions): string =>
   [
     GUIDANCE_HEADER,
     opts.mode === 'auto' ? renderAdmissionLine(opts.confidence) : NATIVE_ORCHESTRATION_SENTENCE,
-    ...singleRules(),
+    ...singleRules(opts.guardAllowTools),
     ...(opts.superseded ? [SUPERSEDED_SENTENCE] : []),
   ].join('\n');
 
@@ -91,13 +107,14 @@ export interface OrchestrationGuidanceOptions {
   maxParallelWorkers: number;
   /** #48 P1-2: optional so every existing call site that predates isolation keeps compiling and behaving as before. */
   workerIsolation?: WorkerIsolation;
+  guardAllowTools?: readonly string[];
 }
 
 export const renderOrchestrationGuidance = (opts: OrchestrationGuidanceOptions): string =>
   [
     GUIDANCE_HEADER,
     opts.mode === 'auto' ? renderAdmissionLine(opts.confidence) : NATIVE_ORCHESTRATION_SENTENCE,
-    ...orchestrationRules(opts.maxParallelWorkers, opts.workerIsolation ?? 'none'),
+    ...orchestrationRules(opts.maxParallelWorkers, opts.workerIsolation ?? 'none', opts.guardAllowTools),
     ...(opts.superseded ? [SUPERSEDED_SENTENCE] : []),
   ].join('\n');
 

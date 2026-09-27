@@ -8,7 +8,7 @@ import { AUTH_CONFLICT_ENV, isSubscriptionOAuth, parseAuthStatus, subagentModelO
 import { OWNED_AGENT_PROFILES } from './agents.js';
 import { DEFAULT_CONFIG, effectiveDepthFloor, LEGACY_DEPTH_FLOOR, loadConfig, MIGRATION_SAMPLE, NATIVE_HOOK_TIMEOUT_MS, type ConfigResult } from './config.js';
 import { explainDir } from './explain.js';
-import { HOST_WINDOW_MAX, readHostCompactWindow, STANDARD_CONTEXT_WINDOW } from './host-window.js';
+import { HOST_WINDOW_MAX, readHostCompactWindow, readHostWorktreeBaseRef, STANDARD_CONTEXT_WINDOW } from './host-window.js';
 import { jobsDir } from './job.js';
 import { LIVENESS_WINDOW, livenessPath, readLiveness } from './liveness.js';
 import { OWNED_AGENTS, type Tier } from './types.js';
@@ -227,8 +227,11 @@ const checkConfig = (loaded: ConfigResult): void => {
   }
   say('info', `job state directory: ${jobsDir(process.env)} (0700, one 0600 file per session, removed after 7 days)`);
   if (process.env['JEV_GATE_EXPERIMENT_ADMISSION'] === 'orchestrated') say('warn', `JEV_GATE_EXPERIMENT_ADMISSION=orchestrated is set: every prompt starts an orchestrated job in ${c.mode} mode without a Gate A request (recorded as forced/admission_forced); allocation and result gates are unaffected`);
-  if (c.workerIsolation === 'worktree') say('info', `workerIsolation=worktree: every planned or ad-hoc worker dispatch the hook patches also carries isolation: "worktree"; whether the host actually gives that worker its own git worktree for a patched call is not yet observed`);
-  else say('info', `workerIsolation=${c.workerIsolation}: workers share the caller's working tree; maxParallelWorkers stays 1 under this setting`);
+  if (c.workerIsolation === 'worktree') {
+    const baseRef = readHostWorktreeBaseRef(process.env, process.cwd());
+    if (baseRef.value === 'head') say('info', `workerIsolation=worktree with worktree.baseRef="head" (${baseRef.source}): every planned or ad-hoc worker dispatch the hook patches also carries isolation: "worktree"; whether the host actually gives that worker its own git worktree for a patched call is not yet observed`);
+    else say('warn', `workerIsolation=worktree is not in effect: host worktree.baseRef is ${baseRef.value === null ? 'unset' : `"${baseRef.value}" (${baseRef.source})`}, so an isolated worker would start from origin/<default-branch> instead of this branch. The hook runs such turns as workerIsolation=none with one worker at a time; set "worktree": {"baseRef": "head"} in Claude Code settings to use it`);
+  } else say('info', `workerIsolation=${c.workerIsolation}: workers share the caller's working tree; maxParallelWorkers stays 1 under this setting`);
 };
 
 const checkClaude = (): void => {

@@ -150,3 +150,29 @@ describe('doctor: mentions SessionStart as a sixth registered event', () => {
     expect(stdout).toMatch(/\/hooks should list six jev-gate entries \(UserPromptSubmit, PreToolUse with no matcher, PostToolUse on \^Agent\$, PostToolUseFailure on \^Agent\$, Stop, SessionStart\)/);
   });
 });
+
+describe('doctor: worker isolation base (#48 P1-2 review)', () => {
+  const isolated = (): string => configFile({ version: 5, mode: 'auto', maxParallelWorkers: 2, workerIsolation: 'worktree', guardAllowTools: ['Bash'] });
+  const configDir = (settings: unknown): string => {
+    const dir = mktemp();
+    writeFileSync(join(dir, 'settings.json'), JSON.stringify(settings));
+    return dir;
+  };
+
+  it('warns that worktree isolation is not in effect when the host base ref is unset', () => {
+    const stdout = doctor({ JEV_GATE_CONFIG: isolated(), CLAUDE_CONFIG_DIR: mktemp() });
+    expect(stdout).toMatch(/\[warn\] workerIsolation=worktree is not in effect: host worktree\.baseRef is unset/);
+  });
+
+  it('warns and names the file when the host base ref is "fresh"', () => {
+    const dir = configDir({ worktree: { baseRef: 'fresh' } });
+    const stdout = doctor({ JEV_GATE_CONFIG: isolated(), CLAUDE_CONFIG_DIR: dir });
+    expect(stdout).toContain(`host worktree.baseRef is "fresh" (settings:${join(dir, 'settings.json')})`);
+  });
+
+  it('reports isolation as configured when the host base ref is "head"', () => {
+    const stdout = doctor({ JEV_GATE_CONFIG: isolated(), CLAUDE_CONFIG_DIR: configDir({ worktree: { baseRef: 'head' } }) });
+    expect(stdout).toMatch(/\[info\] workerIsolation=worktree with worktree\.baseRef="head"/);
+    expect(stdout).not.toMatch(/is not in effect/);
+  });
+});
