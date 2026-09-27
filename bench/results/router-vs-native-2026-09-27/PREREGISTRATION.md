@@ -5,7 +5,8 @@ Issue #45 (JGR-06), section C. Written **before any cell of this run exists**, o
 
 **Not authorised to run.** The owner's approval for this repository's current spending covers host observations
 only, about $10 in total, of which $2.665 is spent (`bench/results/host-obs-2026-09-27/`). This run's estimate is
-above what is left. It runs only after the owner approves it directly, as written here (see "Precondition").
+above what is left. It also needs a spend stop in the runner first, and runs only after the owner approves it
+directly, as written here (see "Precondition for spending").
 
 ## The question
 
@@ -45,7 +46,7 @@ that is a valid result (rule 9), not a reason to pick another effort and run aga
 TYPESAFE_API_KEY="$(cat ~/.config/jev-gate/typesafe.key)" \
 node dist/bench/run.js --cases bench/cases.json --out ~/jev-gate-runs/router-vs-native-2026-09-27 \
   --arms router --frontier-model opus --base-effort xhigh --fixed-effort medium \
-  --repetitions 2 --max-sessions 30 --timeout-ms 600000 --seed 20260927 --execute
+  --repetitions 2 --max-sessions 30 --max-cost-usd 30 --timeout-ms 600000 --seed 20260927 --execute
 ```
 
 The key reaches the plugin only through the environment variable, never through a file the runner writes
@@ -87,16 +88,20 @@ assessed/proposed/applied/observed model and effort, skip and stop reasons, spaw
    difference this bench can resolve".
 6. **The order is the runner's seeded order** (`--seed 20260927`). There is no treatment-only warm-up, no prompt
    salting and no artificial priming. Auto-compact stays on.
-7. **Spend stop.** The run stops at a cumulative $30. Rows already written are kept, including incomplete ones. A stop
+7. **Spend stop.** The run stops at a cumulative $30: before starting each cell, the runner sums the complete cost
+   of every row written so far and starts no cell once that sum reaches the cap (`--max-cost-usd`, precondition 1).
+   A row whose cost is unknown stops the run too. Rows already written are kept, including incomplete ones. A stop
    never turns into a cheaper "result".
 8. **No post-hoc changes.** Not the arms, the efforts, the cases, the 15 %, rule 2's "every cell", or rule 4's three
    cases. A different design is a different pre-registration.
-9. **The negative result is the deliverable.**
+9. **The negative result is the deliverable.** These apply only to a pair that rule 4 adjudicates; a pair that is
+   not adjudicated is reported as that, with no conclusion either way.
    - If `router` is not more than 15 % cheaper than `router_native` on the median across adjudicated cases, the
-     README's first line says the Router did not make these tasks cheaper for the owner's configuration.
-   - If `router` is not more than 15 % cheaper than `router_fixed`, it says that choosing an effort per step measured
-     no value over running at `medium` without Jev. The recommendation is then the fixed setting, which costs no Jev
-     request and no plugin.
+     README's first line says the Router did not make these tasks more than 15 % cheaper for the owner's
+     configuration. Under rule 5 no smaller difference is quoted.
+   - If `router` is not more than 15 % cheaper than `router_fixed`, it says that choosing an effort per step showed
+     no value over running at `medium` without Jev that this bench can resolve. The recommendation is then the fixed
+     setting, which costs no Jev request and no plugin.
 10. **This run changes no default.** Enabling the Router on the owner's real host, or by default, is a separate
     decision by the owner, recorded separately. A bench result is not a release.
 11. **The build is frozen and recorded.** The commit sha and `frozen_inputs.router_sha256` go in the results README.
@@ -104,12 +109,18 @@ assessed/proposed/applied/observed model and effort, skip and stop reasons, spaw
 
 ## Falsification
 
+Each claim below is tested only on a pair that rule 4 adjudicates; otherwise it is reported as untested. "Not
+supported" means the bench found no difference above 15 %, which under rule 5 is not the same as finding none.
+
+| claim | not supported when, on an adjudicated pair |
+|---|---|
+| the Router saves on the owner's configuration | median paired cost saving against `router_native` not above 15 % |
+| per-step selection adds value over a fixed lower effort | median paired cost saving against `router_fixed` not above 15 % |
+| the Router is faster | median paired wall-time saving against `router_native` not above 15 % |
+
 | claim | falsified by |
 |---|---|
-| the Router saves on the owner's configuration | median paired cost difference against `router_native` not above 15 % |
-| per-step selection adds value over a fixed lower effort | median paired cost difference against `router_fixed` not above 15 % |
 | the Router is quality-neutral | a `router` cell failing its checker on a case where every `router_native` cell passes |
-| the Router is faster | median paired wall-time difference against `router_native` not above 15 % |
 
 ## Estimate
 
@@ -120,9 +131,12 @@ authorisation.
 
 ## Precondition for spending
 
-1. Gates green on the frozen build: `npm run typecheck`, `npm run build`, `npx vitest run`, `claude plugin validate .`.
-2. A plan-only run of the command above without `--execute` (0 inference) that lists 30 cells and freezes
+1. **A spend stop in the runner.** The runner (`src/bench/run.ts`) has session and time limits but no cost limit.
+   It needs `--max-cost-usd`, checked before each cell as rule 7 says, with unit tests through actual rows. Until it
+   exists, the command above does not run.
+2. Gates green on the frozen build: `npm run typecheck`, `npm run build`, `npx vitest run`, `claude plugin validate .`.
+3. A plan-only run of the command above without `--execute` (0 inference) that lists 30 cells and freezes
    `cli.router_policy`.
-3. **The owner's own approval for this run as written, given directly.** A relayed approval is not the owner's
+4. **The owner's own approval for this run as written, given directly.** A relayed approval is not the owner's
    word. It covers these 30 cells and the $30 stop. It does not cover a relaxed rule, another effort, a second
    attempt after a bad result, enabling the Router on the real host, or any release or tag.
