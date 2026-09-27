@@ -47,6 +47,13 @@ describe('validateChoice', () => {
     expect(validateChoice({ ...choice(KEYS, ['a', 0.9]), probabilities: { a: 0.68, b: 0.03, c: 0.27 } }, KEYS)).toBeNull();
   });
 
+  it('rescales only two-decimal answers, so a tie cannot come back from rescaling (sol review R62-01)', () => {
+    // 1.01 in total, a unique leader by 1.005e-6 as given and a tie (9.95e-7) once divided by 1.01.
+    expect(validateChoice({ ...choice(KEYS, ['a', 0.9]), probabilities: { a: 0.5050005025, b: 0.5049994975, c: 0 } }, KEYS)).toBeNull();
+    // A two-decimal tie that misses 1 is still a tie, so still not an answer.
+    expect(validateChoice({ ...choice(KEYS, ['a', 0.9]), probabilities: { a: 0.45, b: 0.45, c: 0.09 } }, KEYS)).toBeNull();
+  });
+
   it('checks each asked question against its own labels, and a missing one is null, never a default', () => {
     const questions = buildQuestions({ tiers: ['fast', 'standard'], efforts: null });
     if (!questions) throw new Error('expected questions');
@@ -87,6 +94,9 @@ describe('validateScore', () => {
     // Three labels allow 0.015 plus the float tolerance; 0.98 is beyond it.
     expect(validateScore({ ...rounded, probabilities: { 0: 0.05, 1: 0.92, 2: 0.01 } }, 3)).toBeNull();
     expect(validateScore({ ...rounded, probabilities: { 0: 0.06, 1: 0.94, 2: 0.01 } }, 3)?.levels[1]).toBeCloseTo(0.94 / 1.01, 12);
+    // Only two-decimal values are rescaled, and a zero sum never is, however many levels allow for rounding (sol review R62-02).
+    expect(validateScore({ ...rounded, probabilities: { 0: 0.05, 1: 0.9300004, 2: 0.01 } }, 3)).toBeNull();
+    expect(validateScore({ type: 'score', probabilities: Object.fromEntries(Array.from({ length: 200 }, (_, i) => [i, 0])) }, 200)).toBeNull();
 
     const questions = buildQuestions({ tiers: null, efforts: ['low', 'medium', 'high'] });
     if (!questions) throw new Error('expected questions');

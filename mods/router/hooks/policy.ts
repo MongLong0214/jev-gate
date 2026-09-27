@@ -157,20 +157,29 @@ export const ARGMAX_TOLERANCE = 1e-6;
  * answer is still not an answer.
  */
 export const ROUNDING_PER_LABEL = 0.005;
+export const HUNDREDTHS_TOLERANCE = 1e-9;
 
-/** What each probability is divided by: 1 when they sum to 1, their sum when they miss it only by rounding, else null. */
+/**
+ * What each probability is divided by: 1 when they sum to 1; their sum when every one is a two-decimal value, the sum is
+ * positive and it misses 1 by no more than that rounding; otherwise null. Rescaling is kept to two-decimal answers
+ * rather than any sum that is near 1, because it spreads values apart: two values less than ARGMAX_TOLERANCE apart can
+ * end up more than that apart, and a tie becomes a winner. Two-decimal values are either equal or at least 0.01 apart,
+ * so rescaling keeps their ties and their order.
+ */
 const scaleOf = (probs: readonly number[]): number | null => {
   const sum = probs.reduce((x, y) => x + y, 0);
   const miss = Math.abs(sum - 1);
   if (miss <= PROB_SUM_TOLERANCE) return 1;
-  return miss > probs.length * ROUNDING_PER_LABEL + PROB_SUM_TOLERANCE ? null : sum;
+  if (sum <= 0 || miss > probs.length * ROUNDING_PER_LABEL + PROB_SUM_TOLERANCE) return null;
+  return probs.every((p) => Math.abs(p * 100 - Math.round(p * 100)) <= HUNDREDTHS_TOLERANCE) ? sum : null;
 };
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 /**
  * Exact label set, finite probabilities in [0,1] summing to 1 up to Jev's rounding, and a UNIQUE maximum within 1e-6
- * that is the stated choice. A tie is not an answer: nothing about it says which side to take.
+ * of the returned probabilities that is the stated choice. A tie is not an answer: nothing about it says which side to
+ * take.
  */
 export const validateChoice = (value: unknown, keys: readonly string[]): ChoiceAnswer | null => {
   if (!isRecord(value) || value['type'] !== 'choice') return null;
@@ -180,19 +189,19 @@ export const validateChoice = (value: unknown, keys: readonly string[]): ChoiceA
   if (!isRecord(probs)) return null;
   const probKeys = Object.keys(probs);
   if (probKeys.length !== keys.length || !keys.every((k) => Object.prototype.hasOwnProperty.call(probs, k))) return null;
-  let max = Number.NEGATIVE_INFINITY;
   for (const k of keys) {
     const p = probs[k];
     if (typeof p !== 'number' || !Number.isFinite(p) || p < 0 || p > 1) return null;
-    if (p > max) max = p;
   }
   const scale = scaleOf(keys.map((k) => probs[k] as number));
   if (scale === null) return null;
-  const top = keys.filter((k) => (probs[k] as number) >= max - ARGMAX_TOLERANCE);
+  const probabilities: Record<string, number> = Object.fromEntries(keys.map((k) => [k, (probs[k] as number) / scale]));
+  const max = Math.max(...keys.map((k) => probabilities[k] as number));
+  const top = keys.filter((k) => (probabilities[k] as number) >= max - ARGMAX_TOLERANCE);
   if (top.length !== 1 || top[0] !== choice) return null;
   const confidence = value['confidence'];
   if (typeof confidence !== 'number' || !Number.isFinite(confidence) || confidence < 0 || confidence > 1) return null;
-  return { choice, confidence, probabilities: Object.fromEntries(keys.map((k) => [k, (probs[k] as number) / scale])) };
+  return { choice, confidence, probabilities };
 };
 
 /** Exactly one finite probability in [0,1] per level index, summing to 1 up to Jev's rounding. `score` and `legend` are not read. */
