@@ -1,8 +1,10 @@
 **The run stopped at 16 of 45 cells under rule 7, and no pair is adjudicated: no claim in the pre-registration is
 supported or refuted by it.** The stop came from a Jev server error. One Router request was answered after 22.9 s
 with HTTP 520 and no usage, long after the Router's 800 ms wait had ended. A row whose cost is unknown stops the run.
-Of six Router assessments, one lowered the effort. One more should have, but the Router rejected Jev's answer: its
-probabilities, rounded to two decimals, summed to 0.99. That validator defect is fixed in #62.
+Of six Router assessments, one lowered the effort. The Router's own validator discarded another's effort answer
+(`answer_invalid`). Its raw reply was not logged. The likely cause, shown by replaying the request but not recorded
+for that cell, is a validator defect fixed in #62: it rejected correct answers whose two-decimal probabilities sum to
+0.99. Such an answer would have lowered the effort.
 
 # Router vs native `xhigh` vs fixed `high`, 2026-09-28 — results
 
@@ -89,12 +91,13 @@ there.
 
 These are not claims under the pre-registration. They are written down so the next design can use them.
 
-- **`answer_invalid` in `quote-pricing` rep 1 was a Router defect, not a Jev failure.** The Router's validators
-  rejected any answer whose probabilities summed more than 1e-3 away from 1. Jev rounds each probability to two
+- **`answer_invalid` in `quote-pricing` rep 1 most likely came from a Router defect, not a Jev failure.** The
+  Router's validators rejected any answer whose probabilities summed more than 1e-3 away from 1. Jev rounds each probability to two
   decimals, so a correct answer can sum to 0.99 or 1.01. The raw reply was not logged. Replaying the same root request
   40 times through the shipped question builder (`~/jev-gate-runs/router-replay-2026-09-28/`) returned HTTP 200 every
   time, median 207 ms. Three of the 40 effort answers were `[0.05, 0.93, 0.01]`, which the Router marks
-  `answer_invalid`. With task_clear at 0.94, such an answer lowers `xhigh` to `medium`. #62 fixes the validators; with
+  `answer_invalid`. They were the only invalid answers in the replay, which is why this is the likely cause for rep 1,
+  though it is not a recorded one. With rep 1's task_clear of 0.94, such an answer lowers `xhigh` to `medium`. #62 fixes the validators; with
   the fix, all 40 replies validate. The main gate's `validateChoice` had the same tolerance and is fixed there too.
 - **The Router's 800 ms wait is not a bound on its cost.** A request that outlives the wait still runs and may bill.
   A late event without usage leaves the session's complete cost unknown. A longer `timeoutMs` would not have kept this
