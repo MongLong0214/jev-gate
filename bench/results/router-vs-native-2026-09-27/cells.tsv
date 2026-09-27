@@ -1,0 +1,31 @@
+case	arm	rep	checker	total_cost_usd	jev_cost_usd	wall_s	input	cache_creation	cache_read	output	tool_uses	router_effort_answer	router_task_clear	router_patch	router_reason	steps_applied
+search-race	router_native	1	pass	0.382216	0.000000	65.1	22	27014	339680	4904	15	-	-	-	-	-
+search-race	router_native	2	pass	0.333553	0.000000	40.1	18	25522	266326	3802	14	-	-	-	-	-
+search-race	router	1	pass	0.365277	0.000041	48.1	20	26184	305321	4731	13	[0, 0.71, 0.29]	0.96	none	low_confidence	0
+search-race	router	2	pass	0.289084	0.000041	36.5	10	24364	136059	3344	8	[0, 0.69, 0.31]	0.97	none	low_confidence	0
+search-race	router_fixed	1	pass	0.299120	0.000000	33.6	14	24243	199600	3260	9	-	-	-	-	-
+search-race	router_fixed	2	pass	0.319261	0.000000	36.7	16	25178	235565	3533	10	-	-	-	-	-
+quote-pricing	router_native	1	pass	0.263309	0.000000	25.6	12	22933	165283	2337	7	-	-	-	-	-
+quote-pricing	router_native	2	pass	0.249492	0.000000	21.2	12	22607	162941	1800	6	-	-	-	-	-
+quote-pricing	router	1	pass	0.235257	0.000040	24.7	12	22175	164646	1242	5	[0.06, 0.92, 0.02]	0.91	medium	applied	6
+quote-pricing	router	2	pass	0.245168	0.000040	20.4	12	22532	164621	1595	7	[0.07, 0.92, 0.01]	0.94	medium	applied	6
+quote-pricing	router_fixed	1	pass	0.240915	0.000000	19.3	12	22231	164094	1510	6	-	-	-	-	-
+quote-pricing	router_fixed	2	pass	0.227632	0.000000	15.8	10	22084	132798	1218	5	-	-	-	-	-
+status-count	router_native	1	pass	0.315598	0.000000	47.5	14	24492	199832	3982	9	-	-	-	-	-
+status-count	router_native	2	pass	0.290725	0.000000	35.5	10	24176	135887	3505	7	-	-	-	-	-
+status-count	router	1	pass	0.301491	0.000042	41.3	10	24331	136706	3971	6	[0.03, 0.96, 0.01]	0.85	none	control_low_confidence	0
+status-count	router	2	pass	0.309893	0.000042	42.4	10	24799	136298	4208	6	[0.04, 0.95, 0.01]	0.87	none	control_low_confidence	0
+status-count	router_fixed	1	pass	0.253966	0.000000	32.6	12	22660	164789	1984	7	-	-	-	-	-
+status-count	router_fixed	2	pass	0.274308	0.000000	27.8	14	23253	197839	2433	8	-	-	-	-	-
+ttl-cache	router_native	1	fail	0.319770	0.000000	41.6	14	25130	202069	3913	8	-	-	-	-	-
+ttl-cache	router_native	2	fail	0.289271	0.000000	31.0	12	24395	168113	3022	8	-	-	-	-	-
+ttl-cache	router	1	pass	0.342405	0.000040	45.5	18	25608	272546	4146	11	[0.01, 0.8, 0.19]	0.96	none	low_confidence	0
+ttl-cache	router	2	fail	0.308239	0.000040	38.0	12	24925	168853	3749	8	[0, 0.83, 0.17]	0.95	none	low_confidence	0
+ttl-cache	router_fixed	1	fail	0.272318	0.000000	26.6	14	23271	197770	2327	8	-	-	-	-	-
+ttl-cache	router_fixed	2	pass	0.226897	0.000000	17.9	8	21991	101885	1528	4	-	-	-	-	-
+wide-validators	router_native	1	pass	0.527325	0.000000	74.9	16	35707	254627	9534	42	-	-	-	-	-
+wide-validators	router_native	2	pass	0.548064	0.000000	84.5	22	34516	369540	9897	21	-	-	-	-	-
+wide-validators	router	1	pass	0.592226	0.000043	92.1	22	38295	384978	10437	44	[0.01, 0.95, 0.04]	0.98	medium	applied	11
+wide-validators	router	2	pass	0.590649	0.000043	80.9	20	39265	333934	10481	43	[0.01, 0.94, 0.05]	0.97	medium	applied	10
+wide-validators	router_fixed	1	pass	0.279604	0.000000	26.2	12	25545	167078	2089	5	-	-	-	-	-
+wide-validators	router_fixed	2	pass	0.312837	0.000000	39.1	16	26233	234545	2800	9	-	-	-	-	-
