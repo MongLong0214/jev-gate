@@ -1,9 +1,6 @@
-# Router vs native vs fixed `medium`, 2026-09-27 — results
+**The Router did not make these tasks more than 15 % cheaper for the owner's configuration, and choosing an effort per step showed no value over running at `medium` without Jev that this bench can resolve. The recommendation under rule 9 is the fixed setting, which costs no Jev request and no plugin: no `router_fixed` cell failed its checker on a case where every `router_native` cell passed.**
 
-**The Router did not make these tasks more than 15 % cheaper for the owner's configuration, and choosing an effort
-per step showed no value over running at `medium` without Jev that this bench can resolve. The recommendation under
-rule 9 is the fixed setting, which costs no Jev request and no plugin: no `router_fixed` cell failed its checker on a
-case where every `router_native` cell passed.**
+# Router vs native vs fixed `medium`, 2026-09-27 — results
 
 Preregistered in [`PREREGISTRATION.md`](PREREGISTRATION.md) before any cell ran. **Development data:** five small,
 familiar fixtures, two repetitions each; a paired, per-task difference on these tasks, not a claim about the owner's
@@ -33,48 +30,48 @@ Raw data (stream JSON, Router debug logs, each cell's repository, `report-1.md/j
 | 2 quality gates cost | `ttl-cache` is excluded from both registered pairs: `router_native` failed both cells, `router` failed rep 2, `router_fixed` failed rep 1 |
 | 3 unknown is not zero | every cell's complete cost is known; Router Jev attempts 10, known responses 10, unparsable lines 0 |
 | 4 three cases | both pairs adjudicated on 4 cases |
-| 5 15 % line | cost medians of both pairs fall under it: "no difference this bench can resolve" |
+| 5 15 % line | a difference under 15 % is written `< 15 %` and read as "no difference this bench can resolve"; only differences at or over it are quoted |
 | 9 negative result | first line above; the recommendation condition holds (`router_fixed` failed only on `ttl-cache`, where `router_native` failed too) |
 | 10 no default | nothing enabled or changed on the host |
 | 11 frozen build | as recorded above |
 
 Each case's figure is the mean of its two repetitions; saving is `(other − router) / other`, so a negative saving means
-the Router cost more.
+the Router cost more. Wall time is from `report-1.json` in milliseconds; `cells.tsv` rounds it to 0.1 s.
 
 ### `router` against `router_native` (does the Router save on the owner's configuration?)
 
-| case | cost router / native | saving | wall s | saving | tokens | saving |
+| case | cost $ router / native | saving | wall s | saving | tokens | saving |
 |---|---|---|---|---|---|---|
-| search-race | 0.327 / 0.358 | +8.6 % | 42 / 53 | +19.7 % | 250,016 / 333,644 | +25.1 % |
-| quote-pricing | 0.240 / 0.256 | +6.3 % | 23 / 23 | +3.7 % | 188,418 / 188,962 | +0.3 % |
-| status-count | 0.306 / 0.303 | −0.8 % | 42 / 42 | −0.7 % | 165,166 / 195,949 | +15.7 % |
-| wide-validators | 0.591 / 0.538 | −10.0 % | 86 / 80 | −8.5 % | 408,716 / 356,930 | −14.5 % |
+| search-race | 0.327 / 0.358 | < 15 % | 42 / 53 | +19.7 % | 250,016 / 333,644 | +25.1 % |
+| quote-pricing | 0.240 / 0.256 | < 15 % | 23 / 23 | < 15 % | 188,418 / 188,962 | < 15 % |
+| status-count | 0.306 / 0.303 | < 15 % | 42 / 42 | < 15 % | 165,166 / 195,949 | +15.7 % |
+| wide-validators | 0.591 / 0.538 | < 15 % | 86 / 80 | < 15 % | 408,716 / 356,930 | < 15 % |
 | ttl-cache | excluded (rule 2) | | | | | |
-| **median** | | **+2.7 %** | | **+1.5 %** | | **+8.0 %** |
+| **median** | | **< 15 %** | | **< 15 %** | | **< 15 %** |
 
-All three medians are under 15 %: no difference this bench can resolve.
+No median reaches 15 %: no difference this bench can resolve, in cost, wall time or tokens.
 
 ### `router` against `router_fixed` (does choosing per step beat a fixed lower effort?)
 
-| case | cost router / fixed | saving | wall s | saving | tokens | saving |
+| case | cost $ router / fixed | saving | wall s | saving | tokens | saving |
 |---|---|---|---|---|---|---|
-| search-race | 0.327 / 0.309 | −5.8 % | 42 / 35 | −20.4 % | 250,016 / 245,704 | −1.8 % |
-| quote-pricing | 0.240 / 0.234 | −2.5 % | 23 / 18 | −28.3 % | 188,418 / 171,978 | −9.6 % |
+| search-race | 0.327 / 0.309 | < 15 % | 42 / 35 | −20.4 % | 250,016 / 245,704 | < 15 % |
+| quote-pricing | 0.240 / 0.234 | < 15 % | 23 / 18 | −28.3 % | 188,418 / 171,978 | < 15 % |
 | status-count | 0.306 / 0.264 | −15.7 % | 42 / 30 | −38.8 % | 165,166 / 206,492 | +20.0 % |
 | wide-validators | 0.591 / 0.296 | −99.7 % | 86 / 33 | −164.9 % | 408,716 / 229,159 | −78.4 % |
 | ttl-cache | excluded (rule 2) | | | | | |
-| **median** | | **−10.8 %** | | **−33.5 %** | | **−5.7 %** |
+| **median** | | **< 15 %** | | **−33.5 %** | | **< 15 %** |
 
-The cost median is under 15 % and is not quoted as a difference. The wall-time median is over it: the `router` cells
-took longer than the `router_fixed` cells, by a median of 33.5 % of the fixed arm's time.
+The cost and token medians are under 15 %: no difference this bench can resolve. The wall-time median is over it:
+the `router` cells took longer than the `router_fixed` cells, by a median of 33.5 % of the fixed arm's time.
 
 ## Falsification
 
 | claim | result |
 |---|---|
-| the Router saves on the owner's configuration | **not supported** (median cost saving +2.7 %) |
-| per-step selection adds value over a fixed lower effort | **not supported** (median cost saving −10.8 %) |
-| the Router is faster | **not supported** (median wall-time saving +1.5 %) |
+| the Router saves on the owner's configuration | **not supported** (median cost saving under 15 %) |
+| per-step selection adds value over a fixed lower effort | **not supported** (median cost saving under 15 %) |
+| the Router is faster | **not supported** (median wall-time saving under 15 %) |
 | the Router is quality-neutral | **not falsified**: its one failure is on `ttl-cache`, where both `router_native` cells failed too |
 
 ## What the Router decided (recorded for every cell, rule "What is measured")
@@ -101,8 +98,8 @@ subagent-model routing is untested here.
 These are not results. They are recorded because they bear on the next preregistration, and each would need its
 own before any decision rests on it.
 
-1. **`router_fixed` against `router_native`** (not a registered pair) on the same 4 cases: median cost saving
-   +13.2 % (under the 15 % line), wall time +30.3 %, tokens +17.7 %, output tokens +37.5 %.
+1. **`router_fixed` against `router_native`** (not a registered pair) on the same 4 cases: the median cost saving
+   is under 15 %; the medians over it are wall time +30.3 %, tokens +17.7 % and output tokens +37.5 %.
 2. **A patched `medium` did not behave like a launched `medium` on `wide-validators`.** The Router ran every root step
    of both cells at `medium` (11/11 and 10/10 observed), yet the sessions made 44 and 43 tool calls and wrote
    10,437 and 10,481 output tokens, like `router_native` (42 and 21 calls, 9,534 and 9,897 tokens) and unlike
@@ -110,16 +107,16 @@ own before any decision rests on it.
    case; why is not established. One reading to test: the launch effort shapes the session beyond the per-request
    effort field the Router patches. If that holds, a per-step effort patch cannot reach the saving a launch-time
    effort gets, whatever the selector decides.
-3. No counterfactual floor is computed (rule 8). Because `medium` topped every answer, a lower floor could only
-   have moved the `router` arm toward what `router_fixed` already measured.
+3. No other floor is computed or tried (rule 8). What a different floor would have done is untested, and
+   observation 2 means it cannot be read off the `router_fixed` arm.
 
 ## Reading this against "the extra call has to earn its place"
 
 The owner asked that this work follow
 [How to Build Agentic Harness using Jev](https://x.com/av1dlive/status/2102802621664985241) (keel 0.2.0). Its test
-for a decision layer is the total task cost (selector, worker, retries, review), not the decision alone. Here the
-decision was cheap ($0.00004 a session) and still did not earn its place: the saving it chose (`medium`) is
-available with no decision at all, and when its floor abstained it fell back to the costliest option. The same
-guide asks that fallbacks be recorded apart from selector wins, and that each hop be traced rather than assumed.
-The table above does the first. Observation 2 is the second: the receipt said `medium` and the host confirmed it,
-but the work did not change.
+for a decision layer is the total task cost (selector, worker, retries, review), not the decision alone. By the
+registered readings, the per-step decision did not pass that test here: against a fixed `medium` chosen before the
+run it bought no cost or token difference this bench can resolve, and its sessions took longer. The same guide asks
+that fallbacks be recorded apart from selector wins, and that each hop be traced rather than assumed. The decision
+table above records the six fallbacks. Observation 2 is a traced hop that raises a question for another run: the
+receipt said `medium` and the step ran at `medium`, but in those two cells the work looked like `xhigh`'s.
