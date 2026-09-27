@@ -44,6 +44,20 @@ describe('decideAdmission', () => {
       },
       'admission_tie',
     ],
+    [
+      'a near-tie that misses 1 (sol review R62-01)',
+      {
+        execution: { type: 'choice', choice: 'orchestrated', probabilities: { direct: 0.4950004975, orchestrated: 0.4949995025, needs_context: 0, abstain: 0 }, confidence: 0.99 },
+      },
+      'admission_invalid',
+    ],
+    [
+      'a two-decimal tie that misses 1',
+      {
+        execution: { type: 'choice', choice: 'orchestrated', probabilities: { direct: 0.45, orchestrated: 0.45, needs_context: 0.05, abstain: 0.04 }, confidence: 0.95 },
+      },
+      'admission_tie',
+    ],
     ['needs_context', { execution: choice('needs_context') }, 'admission_needs_context'],
     ['abstain', { execution: choice('abstain') }, 'admission_abstain'],
     ['low confidence', { execution: choice('orchestrated', 0.82, 0.77) }, 'admission_low_confidence'],

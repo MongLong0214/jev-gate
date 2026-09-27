@@ -5,6 +5,28 @@ export const MAX_REQUEST_BYTES = 128 * 1024;
 export const MAX_RESPONSE_BYTES = 1024 * 1024;
 const PROB_SUM_TOLERANCE = 1e-3;
 const ARGMAX_TOLERANCE = 1e-6;
+/**
+ * Jev rounds each probability to two decimals, so a correct answer can miss a sum of 1 by up to half a hundredth per
+ * label (a stored five-label route answer summed to 0.99). Within that allowance, and only when every probability is a
+ * two-decimal value, the distribution is rescaled.
+ */
+const ROUNDING_PER_LABEL = 0.005;
+const HUNDREDTHS_TOLERANCE = 1e-9;
+
+/**
+ * What each probability is divided by: 1 when they sum to 1; their sum when every one is a two-decimal value, the sum is
+ * positive and it misses 1 by no more than that rounding; otherwise null. Rescaling is kept to two-decimal answers
+ * rather than any sum that is near 1, because it spreads values apart: two values less than ARGMAX_TOLERANCE apart can
+ * end up more than that apart, and a tie becomes a winner. Two-decimal values are either equal or at least 0.01 apart,
+ * so rescaling keeps their ties and their order.
+ */
+const scaleOf = (probs: readonly number[]): number | null => {
+  const sum = probs.reduce((x, y) => x + y, 0);
+  const miss = Math.abs(sum - 1);
+  if (miss <= PROB_SUM_TOLERANCE) return 1;
+  if (sum <= 0 || miss > probs.length * ROUNDING_PER_LABEL + PROB_SUM_TOLERANCE) return null;
+  return probs.every((p) => Math.abs(p * 100 - Math.round(p * 100)) <= HUNDREDTHS_TOLERANCE) ? sum : null;
+};
 
 /** Vendor-neutral tier descriptions (D3/D10): Jev sees capability profiles, never model or provider names. */
 export const TIER_PROFILES: Record<Tier, string> = {
@@ -190,7 +212,11 @@ export const callJev = async <S, Q>(request: JevRequest<S, Q>, deps: JevCallDeps
   }
 };
 
-/** Strict schema check: exact key set, finite probabilities in [0,1] summing to 1, choice equals argmax. No coercion or renormalization. */
+/**
+ * Strict schema check: exact key set, finite probabilities in [0,1] summing to 1, choice equals argmax of the returned
+ * probabilities. No coercion; the only renormalization is of a two-decimal answer whose sum misses 1 by no more than
+ * Jev's rounding.
+ */
 export const validateChoice = <K extends string>(value: unknown, keys: readonly K[]): ChoiceAnswer<K> | null => {
   if (!isRecord(value) || value['type'] !== 'choice') return null;
   const choice = value['choice'];
@@ -199,20 +225,18 @@ export const validateChoice = <K extends string>(value: unknown, keys: readonly 
   if (!isRecord(probs)) return null;
   const probKeys = Object.keys(probs);
   if (probKeys.length !== keys.length || !keys.every((k) => Object.prototype.hasOwnProperty.call(probs, k))) return null;
-  let sum = 0;
-  let max = Number.NEGATIVE_INFINITY;
   for (const k of keys) {
     const p = probs[k];
     if (typeof p !== 'number' || !Number.isFinite(p) || p < 0 || p > 1) return null;
-    sum += p;
-    if (p > max) max = p;
   }
-  if (Math.abs(sum - 1) > PROB_SUM_TOLERANCE) return null;
-  const chosen = probs[choice] as number;
-  if (chosen < max - ARGMAX_TOLERANCE) return null;
+  const scale = scaleOf(keys.map((k) => probs[k] as number));
+  if (scale === null) return null;
+  const probabilities = Object.fromEntries(keys.map((k) => [k, (probs[k] as number) / scale])) as Record<K, number>;
+  const max = Math.max(...keys.map((k) => probabilities[k]));
+  if (probabilities[choice as K] < max - ARGMAX_TOLERANCE) return null;
   const confidence = value['confidence'];
   if (typeof confidence !== 'number' || !Number.isFinite(confidence) || confidence < 0 || confidence > 1) return null;
-  return { type: 'choice', choice: choice as K, probabilities: probs as Record<K, number>, confidence };
+  return { type: 'choice', choice: choice as K, probabilities, confidence };
 };
 
 export const topChoices = <K extends string>(answer: ChoiceAnswer<K>): K[] => {

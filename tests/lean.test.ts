@@ -188,6 +188,14 @@ describe('lean decision', () => {
     expect(d.retainedGroupIds).toEqual(['g1', 'g2']);
   });
 
+  it('does not omit a group on a near-tie that misses 1 (sol review R62-01)', () => {
+    // keep leads omit by 9.95e-7, a tie, and the sum is 0.99; rescaling it would have made keep the one top choice.
+    const relation = { type: 'choice', choice: 'omit', probabilities: { keep: 0.4950004975, omit: 0.4949995025, uncertain: 0 }, confidence: 0.99 };
+    const d = decideLean(answers({ relation_g2: relation }), ['g1', 'g2']);
+    expect(d.action).toBe('direct');
+    expect(d.retainedGroupIds).toEqual(['g1', 'g2']);
+  });
+
   it('is no_effect, not a handoff, when every group is kept', () => {
     const d = decideLean(answers({ relation_g2: choice(RELATION_ANSWERS, 'keep') }), ['g1', 'g2']);
     expect(d.action).toBe('direct');

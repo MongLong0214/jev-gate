@@ -80,6 +80,25 @@ describe('validateChoice', () => {
     expect(tie && topChoices(tie).sort()).toEqual(['fast', 'standard']);
   });
 
+  it("rescales a distribution that misses 1 only by Jev's two-decimal rounding", () => {
+    // A route answer stored by the v5-replan-bound run: five labels summing to 0.99.
+    const stored = { type: 'choice', choice: 'standard', probabilities: { standard: 0.68, abstain: 0, deep: 0.03, fast: 0.28, frontier: 0 }, confidence: 0.68 };
+    const answer = validateChoice(stored, ROUTE_ANSWERS);
+    expect(answer?.probabilities.standard).toBeCloseTo(0.68 / 0.99, 12);
+    expect(Object.values<number>(answer?.probabilities ?? {}).reduce((x, y) => x + y, 0)).toBeCloseTo(1, 12);
+    // Five labels allow 0.025 plus the float tolerance; 0.97 is beyond it.
+    expect(validateChoice({ ...stored, probabilities: { ...stored.probabilities, fast: 0.26 } }, ROUTE_ANSWERS)).toBeNull();
+  });
+
+  it('rescales only two-decimal answers, so a near-tie cannot become a winner', () => {
+    // sol review R62-01: 0.99 in total, the two leaders 9.95e-7 apart (a tie) before rescaling and 1.005e-6 after.
+    const nearTie = { type: 'choice', choice: 'standard', probabilities: { standard: 0.4949995025, fast: 0.4950004975, deep: 0, frontier: 0, abstain: 0 }, confidence: 0.99 };
+    expect(validateChoice(nearTie, ROUTE_ANSWERS)).toBeNull();
+    // A two-decimal tie that misses 1 stays a tie once rescaled.
+    const roundedTie = validateChoice({ ...nearTie, probabilities: { standard: 0.45, fast: 0.45, deep: 0.05, frontier: 0.04, abstain: 0 } }, ROUTE_ANSWERS);
+    expect(roundedTie && topChoices(roundedTie).sort()).toEqual(['fast', 'standard']);
+  });
+
   it.each([
     ['wrong type', { type: 'text', choice: 'fast' }],
     ['unknown choice', { ...choice('deep'), choice: 'genius' }],
