@@ -28,9 +28,12 @@ const pairedIn = (tail: readonly Row[]): boolean => {
 };
 const requestsOf = (t: string): string => t.slice(t.indexOf('\n\n## User requests (oldest first)\n'), t.indexOf('\n\n## Earlier steps (oldest first)\n'));
 
+/** How the engine's own summary opens, verbatim. */
+const HOST_SUMMARY = 'This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary:\n';
+
 /** A session: a prior summary, two requests, forty tool exchanges with sizeable results, a closing reply. */
 const session = (): Row[] => [
-  user('This session is being continued from a previous conversation. Summary: migrating parseRow in src/rows.ts.'),
+  user(`${HOST_SUMMARY}migrating parseRow in src/rows.ts.`),
   user('<system-reminder>Today is Sunday.</system-reminder>'),
   user('Rename parseRow to parseRecord across the repo.'),
   ...Array.from({ length: 40 }, (_, i) => call(`Step ${i}: checking file ${i}.`, 'Read', { file_path: `/repo/src/file${i}.ts` }, `contents of file${i} `.repeat(120))).flat(),
@@ -178,7 +181,7 @@ describe('buildDigest', () => {
     const rows1 = [user('Rename parseRow.'), ...work(30), say('ok')];
     const d1 = buildDigest(rows1, { budgetChars: 30000 });
     if (!d1.ok) throw new Error(d1.reason);
-    const quoted = 'This session is being continued from a previous conversation. Please keep NEEDLE.';
+    const quoted = `${HOST_SUMMARY.trim()} Please keep NEEDLE.`;
     const pasted = `${d1.result.digest.split('\n')[0]} and also keep PIN.`;
     const rows2 = [...(assemble(rows1, d1.result) as Row[]), user(quoted), ...work(30), user(pasted), ...work(10), say('ok')];
     const d2 = buildDigest(rows2, { budgetChars: 30000 });
@@ -188,6 +191,33 @@ describe('buildDigest', () => {
     expect(asked).toContain(`▸ ${quoted}`);
     expect(asked).toContain('and also keep PIN.');
     expect(d2.result.digest).not.toContain('## Previous summary');
+  });
+
+  it('treats an opening request that starts with its whole header line as a request, not a digest', () => {
+    const header = (() => {
+      const d = buildDigest([user('x'), ...work(30), say('ok')], { budgetChars: 30000 });
+      if (!d.ok) throw new Error(d.reason);
+      return d.result.digest.split('\n')[0]!;
+    })();
+    for (const opening of [`${header}\n\nPlease preserve UNIQUE_NEEDLE.`, `${header} Please preserve UNIQUE_NEEDLE.`]) {
+      const d = buildDigest([user(opening), ...work(30), say('ok')], { budgetChars: 30000 });
+      if (!d.ok) throw new Error(d.reason);
+      expect(requestsOf(d.result.digest)).toContain('UNIQUE_NEEDLE');
+      expect(d.result.digest).not.toContain('## Previous summary');
+    }
+  });
+
+  it('keeps the newest request when a long previous summary and a large last exchange leave little room', () => {
+    const rows = [
+      user(`${HOST_SUMMARY}${'earlier work. '.repeat(4000)}`),
+      user('Keep REQUEST_NEEDLE in mind: ship the parser.'),
+      ...work(30),
+      ...call('Reading the log.', 'Read', { file_path: '/big.log' }, 'L'.repeat(50000)),
+    ];
+    const d = buildDigest(rows, { budgetChars: 30000 });
+    if (!d.ok) throw new Error(d.reason);
+    expect(requestsOf(d.result.digest)).toContain('▸ Keep REQUEST_NEEDLE in mind: ship the parser.');
+    expect(d.result.digest).toContain('## Previous summary\nThis session is being continued');
   });
 
   it('treats a request that starts with the mark as a request', () => {

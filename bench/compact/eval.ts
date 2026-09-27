@@ -71,6 +71,12 @@ const render = (ms: readonly DigestMessage[]): string =>
   ms.map((m) => [m.text, ...m.toolUses.map((u) => `${u.tool} ${JSON.stringify(u.input)}`), ...(m.toolResults ?? []).map((r) => r.text)].join('\n')).join('\n');
 
 const isSummaryRec = (r: Rec): boolean => r.isCompactSummary === true || blocks(r).some((b) => (b.text ?? '').trimStart().startsWith('This session is being continued'));
+/** The summary that opens a stretch after a boundary: before its first assistant record, as the module looks for it. */
+const openingSummaryRec = (seg: Rec[]): number => {
+  const first = seg.findIndex((r) => r.type === 'assistant');
+  const at = seg.findIndex(isSummaryRec);
+  return at >= 0 && (first < 0 || at < first) ? at : -1;
+};
 
 /**
  * What the engine held at the boundary `hi`: the records since the preceding boundary `lo`, with the messages that
@@ -82,7 +88,7 @@ const heldAt = (recs: Rec[], lo: number, hi: number): Rec[] => {
   const kept = new Set<string>(recs[lo].compactMetadata?.preservedMessages?.uuids ?? []);
   const inSeg = new Set(seg.map((r) => r.uuid));
   const preserved = recs.slice(0, lo).filter((r) => kept.has(r.uuid) && !inSeg.has(r.uuid));
-  const at = seg.findIndex(isSummaryRec);
+  const at = openingSummaryRec(seg);
   return [...seg.slice(0, at + 1), ...preserved, ...seg.slice(at + 1)];
 };
 
@@ -166,7 +172,8 @@ for (const [f, lo, hi] of points) {
   for (const b of BUDGETS) {
     const d = buildDigest(before, { budgetChars: b });
     row[`d${b / 1000}k`] = d.ok ? recall(render(assemble(before, d.result))) : null;
-    row[`d${b / 1000}k_chars`] = d.ok ? d.result.digestChars + d.result.tailChars : d.reason;
+    // Rendered as text, the same way the host's side is measured, so the two sizes compare.
+    row[`d${b / 1000}k_chars`] = d.ok ? render(assemble(before, d.result)).length : d.reason;
   }
   rows.push(row);
 }
@@ -198,7 +205,9 @@ for (const [f, spans] of [...byFile].filter(([, h]) => h.length >= 3).sort((a, b
   let held: DigestMessage[] = [];
   let lo = 0;
   bounds.forEach(([prev, hi], k) => {
-    const fresh = recs.slice(lo, hi).filter((r) => r.subtype !== 'compact_boundary' && !isSummaryRec(r));
+    const span = recs.slice(lo, hi);
+    const opening = openingSummaryRec(span);
+    const fresh = span.filter((r, j) => r.subtype !== 'compact_boundary' && j !== opening);
     // A manual compaction in between replaced what the engine held, so the replay starts again from it.
     const between = recs.slice(lo, hi).flatMap((r, j) => (r.subtype === 'compact_boundary' ? [lo + j] : [])).at(-1);
     const before = k === 0 ? toMessages(heldAt(recs, prev, hi)) : between !== undefined ? toMessages(heldAt(recs, between, hi)) : [...held, ...toMessages(fresh)];

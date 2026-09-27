@@ -42,14 +42,19 @@ engine's time and usage.
   the last exchange is kept whole, the total can pass `budgetChars`: up to twice it for the
   tail plus 30% for the digest, 2.3 times in all. Past twice for the tail, or when the digest and tail would come to more
   than half of the conversation they replace, the engine compacts instead, so an answered compaction always at least
-  halves what it was given.
-- **The digest** gets the rest, and never less than 30%: the previous summary (up to 30%), the requests (the newest up
-  to 2,000 characters, earlier ones 400), then for each earlier assistant message, newest first, its narration (400) and
+  halves what it was given. Both bounds hold in that count, ids and structure included, not in text alone: 500
+  one-word exchanges and a 60K result went from 161.6K to 72.2K counted that way, but from 72.9K to 72.0K in text,
+  since what was dropped was mostly ids and structure. Where the host compacts (well over 100K tokens of conversation)
+  the ceiling is a small part of it either way.
+- **The digest** gets the rest, and never less than 30%: the newest request (up to 2,000 characters), the previous
+  summary (up to 30% of the budget and half of what is left, so a long summary cannot crowd out the newest request),
+  earlier requests (400 each), then for each earlier assistant message, newest first, its narration (400) and
   tool inputs (240 each), then result excerpts (1,200 each), newest first. Pieces are chosen by that priority and
   printed oldest first. Engine-injected user text (`<system-reminder>`, task notifications, command echoes) is not a
   request.
-- **A digest it wrote earlier** (recognized by its whole header line, and only where a summary opens the conversation,
-  before the first assistant message, so a later request that quotes one stays a request) is taken apart at the next
+- **A digest it wrote earlier** (recognized by its whole header line followed by nothing or one of its own section
+  headings, and only where a summary opens the conversation, before the first assistant message, so a request that
+  starts with or quotes the header stays a request) is taken apart at the next
   compaction: its previous summary stays the summary, its
   requests and steps join the new ones as the oldest, so the newest survive the cut rather than the oldest. A content
   line that starts like a section heading (`## `) or a request marker (`▸ `) is written indented by one space, so a
@@ -64,21 +69,23 @@ the share of referents (paths, SHAs, `#N`, identifiers) that the next 12 assista
 existed in that input, found in what the model holds afterwards. The host's side counts its summary, the messages it
 kept and the files it re-attached.
 
-| | recall | ≥ host | size (chars) |
+| | recall | ≥ host | text (chars) |
 |---|---|---|---|
-| host: summary + kept messages | 0.694 | — | 37,500 |
-| host: the same + re-attached files | 0.732 | — | 52,700 |
-| digest, 30,000 | 0.761 | 27/40 | 30,900 |
-| digest, 40,000 (default) | 0.803 | 31/40 | 40,600 |
-| digest, 50,000 | 0.828 | 33/40 | 50,500 |
+| host: summary + kept messages | 0.751 | — | 36,400 |
+| host: the same + re-attached files | 0.792 | — | 49,400 |
+| digest, 30,000 | 0.791 | 28/40 | 30,200 |
+| digest, 40,000 (default) | 0.839 | 30/40 | 39,700 |
+| digest, 50,000 | 0.865 | 34/40 | 49,200 |
 
-"≥ host" is against the host with its re-attached files. At the default the digest recalled less at 9 of 40 points,
-by 0.06 to 0.33. Sizes count each call's id and structure (see the ceiling above). The sample is the week before the run
-(2026-09-27), so a rerun on a later day draws different points.
+"≥ host" is against the host with its re-attached files. At the default the digest recalled less at 10 of 40 points,
+by 0.04 to 0.40. Both sides' sizes are the rendered text the model holds (the budget's own count, with ids and
+structure, runs higher). The sample is the week before the run (2026-09-27), so a rerun on a later day draws different
+points: an earlier run the same day, on a slightly different week, had host 0.732 and digest 0.803 at the default.
 
 Chained, as if active through whole sessions (each digest built over the previous digest, its tail and the messages
-since): 177 later compactions in 12 sessions, host 0.715, digest 0.759 (≥ host at 121). The gap holds with depth: at
-the 16th–31st compaction 0.700 vs 0.726, at the 32nd–63rd 0.714 vs 0.785. No compaction fell back.
+since): 179 later compactions in 12 sessions, host 0.715, digest 0.761 (≥ host at 123). The gap narrows but holds with
+depth: at the 8th–15th compaction 0.731 vs 0.733, the 16th–31st 0.700 vs 0.726, the 32nd–63rd 0.713 vs 0.789. No
+compaction fell back.
 
 The same 7-day transcripts put the host's own compactions at a 95-second median wait each.
 

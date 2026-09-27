@@ -45,7 +45,7 @@ export type DigestOutcome = { ok: true; result: DigestResult } | { ok: false; re
 
 /** Marks a digest this module wrote, so the next compaction carries it forward as the previous summary. */
 export const DIGEST_MARK = '[jev-gate compact]';
-const CORE_SUMMARY = 'This session is being continued from a previous conversation';
+const CORE_SUMMARY = 'This session is being continued from a previous conversation that ran out of context.';
 
 /** Shares of the budget; the rest of the digest goes to the log and then to result excerpts, newest first. */
 const TAIL_SHARE = 0.4;
@@ -92,9 +92,19 @@ export const messageChars = (m: DigestMessage): number =>
   (m.role === 'assistant' ? m.toolUses.reduce((n, u) => n + inputText(u).length + (u.tool_use_id?.length ?? 0) + BLOCK_OVERHEAD, 0) : 0) +
   (m.toolResults ?? []).reduce((n, r) => n + r.text.length + (r.tool_use_id?.length ?? 0) + BLOCK_OVERHEAD, 0);
 
-/** A digest this module wrote is recognized by its whole header rather than the mark alone: a request can start with the mark. */
-const isSummary = (m: DigestMessage): boolean =>
-  m.role === 'user' && (m.text.trimStart().startsWith(CORE_SUMMARY) || m.text.trimStart().startsWith(HEADER));
+/**
+ * A digest this module wrote: the whole header, then nothing or one of its own sections, rather than the mark or the
+ * header alone, which a request can start with too.
+ */
+const isOwnDigest = (text: string): boolean => {
+  const t = text.trimStart();
+  if (!t.startsWith(HEADER)) return false;
+  const rest = t.slice(HEADER.length);
+  return rest.trim() === '' || Object.values(SECTION).some((h) => rest.startsWith(`\n\n${h}\n`));
+};
+
+/** The engine's summary is kept whole as the previous summary; a digest this module wrote is taken apart. */
+const isSummary = (m: DigestMessage): boolean => m.role === 'user' && (m.text.trimStart().startsWith(CORE_SUMMARY) || isOwnDigest(m.text));
 
 /**
  * The previous summary, the engine's or one this module wrote, opens the conversation: it is looked for only before
@@ -214,7 +224,7 @@ interface Carried {
  */
 const carried = (text: string): Carried => {
   const t = text.trim();
-  if (!t.startsWith(HEADER)) return { summary: t, requests: [], steps: [] };
+  if (!isOwnDigest(t)) return { summary: t, requests: [], steps: [] };
   const at = (h: string): number => t.indexOf(`\n\n${h}\n`);
   const bounds = [SECTION.summary, SECTION.requests, SECTION.steps].map(at);
   const part = (k: number): string => {
@@ -259,18 +269,21 @@ export const buildDigest = (messages: readonly DigestMessage[], options: DigestO
 
   const summaryAt = openingSummary(head);
   const prior: Carried = summaryAt >= 0 ? carried(head[summaryAt]!.text) : { summary: '', requests: [], steps: [] };
-  const summary = take(prior.summary, Math.floor(budget * SUMMARY_SHARE), 0);
-
-  // Requests, the carried ones first in time: the newest gets the most room.
+  // Requests, the carried ones first in time. The newest is taken before the previous summary rather than after it, so
+  // a long summary cannot crowd it out; the summary then gets at most half of what is left, and earlier requests follow.
   const asked: Piece[] = [
     ...prior.requests.map((text, k) => ({ at: k - prior.requests.length, sub: 0, text })),
     ...head.flatMap((m, i) => (i !== summaryAt && isRequest(m) ? [{ at: i, sub: 0, text: m.text.trim() }] : [])),
   ];
   const requests: Piece[] = [];
-  [...asked].reverse().forEach((p, k) => {
-    const t = take(p.text, k === 0 ? LAST_REQUEST_CHARS : REQUEST_CHARS, REQUEST_PREFIX.length + 1);
+  const ask = (p: Piece, cap: number): void => {
+    const t = take(p.text, cap, REQUEST_PREFIX.length + 1);
     if (t) requests.push({ ...p, text: t });
-  });
+  };
+  const newestFirst = [...asked].reverse();
+  if (newestFirst[0]) ask(newestFirst[0], LAST_REQUEST_CHARS);
+  const summary = take(prior.summary, Math.min(Math.floor(budget * SUMMARY_SHARE), Math.floor(left / 2)), 0);
+  for (const p of newestFirst.slice(1)) ask(p, REQUEST_CHARS);
 
   // Steps: this stretch's inputs and narration, then its result excerpts, newest first; then carried steps. Recency
   // orders them rather than a Jev relevance score, which over 40 real compactions kept no more of what the next turns
