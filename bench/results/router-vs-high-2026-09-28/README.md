@@ -1,7 +1,8 @@
 **The run stopped at 16 of 45 cells under rule 7, and no pair is adjudicated: no claim in the pre-registration is
-supported or refuted by it.** The stop came from the Router itself: one of its Jev requests outlived the Router's
-800 ms wait, its usage never arrived, and a row whose cost is unknown stops the run. Of six Router assessments, one
-lowered the effort; two produced no usable answer.
+supported or refuted by it.** The stop came from a Jev server error. One Router request was answered after 22.9 s
+with HTTP 520 and no usage, long after the Router's 800 ms wait had ended. A row whose cost is unknown stops the run.
+Of six Router assessments, one lowered the effort. One more should have, but the Router rejected Jev's answer: its
+probabilities, rounded to two decimals, summed to 0.99. That validator defect is fixed in #62.
 
 # Router vs native `xhigh` vs fixed `high`, 2026-09-28 — results
 
@@ -29,9 +30,10 @@ it; `total_cost_usd` is Claude's cost plus, for `router`, the Router's Jev cost,
 
 The runner's seeded order reached `quote-pricing` rep 3. In its `router` cell the Router sent its one assessment at
 the root's first step and stopped waiting after its default `timeoutMs` of 800 ms, so the step ran at the baseline
-`xhigh` (`assessment: "timeout"`). The host's HTTP takes no abort signal, so the request itself ran on. Its late
-event arrived 23 s after it was sent, with `usage: null`. The provider may have billed it, and the Router cannot say
-for how much. The cell is otherwise valid (exit 0, checker pass, Claude cost $0.2056 known).
+`xhigh` (`assessment: "timeout"`). The host's HTTP takes no abort signal, so the request itself ran on. The host's
+fetch log shows how it ended: `520 in 22853ms, 7342 chars`, Cloudflare's code for an error at the origin server, so
+the late event carried `usage: null`. Whether the provider billed it is not known. The other 15 Router requests across
+both runs returned 200 in 226–279 ms. The cell is otherwise valid (exit 0, checker pass, Claude cost $0.2056 known).
 
 Before the next cell the runner summed the complete cost of every row, met one it could not complete, and stopped:
 `stop: the complete cost of cells/quote-pricing/router/3 is unknown, so --max-cost-usd 29 cannot be checked; no
@@ -73,28 +75,36 @@ answer's mass at or below the target to reach `minDowngradeConfidence` 0.9 and t
 | case | rep | effort answer | task_clear | patch | reason | steps at `medium` |
 |---|---|---|---|---|---|---|
 | `search-race` | 1, 2, 3 | `[0, .73, .27]`, `[0, .70, .30]`, `[0, .69, .31]` | .97, .98, .97 | none | `low_confidence` | 0 |
-| `quote-pricing` | 1 | none returned | .94 | none | `answer_invalid` | 0 |
+| `quote-pricing` | 1 | rejected by the Router (below) | .94 | none | `answer_invalid` | 0 |
 | `quote-pricing` | 2 | `[.06, .93, .01]` | .95 | `medium` | `applied` | 6 |
-| `quote-pricing` | 3 | no answer | — | none | `timeout` | 0 |
+| `quote-pricing` | 3 | no answer (HTTP 520 after 22.9 s) | — | none | `timeout` | 0 |
 
 The Router lowered the effort in **1 of 6** sessions. In the other five the session ran at the baseline `xhigh` with
 one Jev request added. The `search-race` answers repeat 2026-09-27's almost exactly. In `quote-pricing`, 2026-09-27
-applied `medium` in both reps from answers like rep 2's. Here, one rep's answer carried no effort field and another
-never arrived in time. No spawn was assessed (`spawn_assessed` 0), so subagent-model routing is untested here as
+applied `medium` in both reps from answers like rep 2's. Here, the Router discarded rep 1's answer and rep 3's never
+came. No spawn was assessed (`spawn_assessed` 0), so subagent-model routing is untested here as
 there.
 
 ## Observations this run did not register
 
 These are not claims under the pre-registration. They are written down so the next design can use them.
 
-- **The Router's 800 ms wait is not a bound on its cost.** A request that outlives the wait still runs and may bill,
-  and a late event without usage leaves the session's complete cost unknown. Any run that holds rule 3 and rule 7 as
-  written can stop on the Router's own timeout. A design that wants 45 cells needs either a longer `timeoutMs` in the
-  frozen config or a spend stop that bounds an unknown Jev request, and either one is a new pre-registration.
-- **Two of six Jev assessments returned nothing usable** (`answer_invalid`, `timeout`); 2026-09-27 had none in ten.
-  Six is too few to call that a rate.
+- **`answer_invalid` in `quote-pricing` rep 1 was a Router defect, not a Jev failure.** The Router's validators
+  rejected any answer whose probabilities summed more than 1e-3 away from 1. Jev rounds each probability to two
+  decimals, so a correct answer can sum to 0.99 or 1.01. The raw reply was not logged. Replaying the same root request
+  40 times through the shipped question builder (`~/jev-gate-runs/router-replay-2026-09-28/`) returned HTTP 200 every
+  time, median 207 ms. Three of the 40 effort answers were `[0.05, 0.93, 0.01]`, which the Router marks
+  `answer_invalid`. With task_clear at 0.94, such an answer lowers `xhigh` to `medium`. #62 fixes the validators; with
+  the fix, all 40 replies validate. The main gate's `validateChoice` had the same tolerance and is fixed there too.
+- **The Router's 800 ms wait is not a bound on its cost.** A request that outlives the wait still runs and may bill.
+  A late event without usage leaves the session's complete cost unknown. A longer `timeoutMs` would not have kept this
+  run going: this reply was a server error with no usage at any wait. To finish 45 cells, a design needs usage
+  accounting for a failed reply or a pre-registered bound on an unknown request's cost rather than a longer wait,
+  and either is a new pre-registration.
+- One server error in 16 Router requests across both runs. That is too few to call it a rate.
 - Across both runs the Router has now lowered the effort in 5 of 16 sessions, all on `quote-pricing` and
-  `wide-validators`, and never on `search-race`, `status-count` or `ttl-cache`.
+  `wide-validators`, and never on `search-race`, `status-count` or `ttl-cache`. Without the validator defect it would
+  most likely have been 6: rep 1's raw answer is not on record.
 
 ## Standing of the question
 
