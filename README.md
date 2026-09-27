@@ -292,6 +292,10 @@ through the same scopes as the compaction window (managed, project-local, projec
 `"head"`, including unset, the turn runs as `workerIsolation: "none"` with one worker at a time, and `doctor` warns.
 Even with `"head"` a worker sees the last commit, not uncommitted changes, so the coordinator is told to commit what
 a worker needs before dispatching it; under isolation its tool line names Bash as available for that and for merging.
+Each isolated worker's prompt also asks it to commit its own changes on its worktree branch, without pushing, because
+uncommitted edits in a worktree never reach the branch the coordinator merges. The hook reads project scopes only
+from `CLAUDE_PROJECT_DIR`, which the host exports to hooks, since its own `cwd` moves with `cd`; without it the base
+ref is unknown and the turn runs serially.
 
 The last seven keys before `models` are optional and default to the values shown, so an existing V5 file keeps its
 behaviour unedited.

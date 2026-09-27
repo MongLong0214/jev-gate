@@ -31,6 +31,14 @@ export const renderDispatchRule = (cap: number): string =>
 export const WORKTREE_ISOLATION_SENTENCE =
   'workerIsolation is "worktree": each dispatched worker runs in its own git worktree branched from this checkout\'s last commit, not from uncommitted changes in this working tree, so commit what a worker has to read before dispatching it. Merge a worker\'s branch back before dispatching a task that depends on it.';
 
+/**
+ * #53 review: appended to every patched worker prompt under worktree isolation. The worker profiles say not to commit
+ * unless the contract asks, and a worktree's uncommitted edits never reach the branch the coordinator merges, so a
+ * dependent worker would start without them. This is the contract asking.
+ */
+export const WORKTREE_WORKER_SENTENCE =
+  '\n\n[Jev Gate isolation] You run in your own git worktree. When your checks are done, commit every change you made on this worktree\'s current branch in one commit, and do not push: the coordinator merges that branch, and uncommitted changes are not merged.';
+
 const ALWAYS_NAMED = ['Read', 'Grep', 'Glob', 'TodoWrite'];
 const DENIED_UNLESS_ALLOWED = ['Edit', 'Write', 'Bash'];
 

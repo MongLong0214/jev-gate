@@ -243,7 +243,7 @@ export const readHostCompactWindow = (env: Env, cwd: string | null | undefined, 
 };
 
 export type WorktreeBaseRef = 'fresh' | 'head';
-export type WorktreeBaseRefResult = { value: WorktreeBaseRef; source: string } | { value: null; source: 'unset' };
+export type WorktreeBaseRefResult = { value: WorktreeBaseRef; source: string } | { value: null; source: 'unset' | 'project dir unknown' };
 
 const pickBaseRef: SettingsPick<WorktreeBaseRef> = (settings) => {
   const worktree = settings['worktree'];
@@ -259,7 +259,13 @@ const pickBaseRef: SettingsPick<WorktreeBaseRef> = (settings) => {
  * the host treats as "fresh". Read through the same scopes as the window, with the same blind spots (`--settings`,
  * MDM, server-managed settings).
  */
-export const readHostWorktreeBaseRef = (env: Env, cwd: string | null | undefined, opts: Pick<HostWindowOptions, 'managedDirs'> = {}): WorktreeBaseRefResult => {
-  const found = readSettingsChain(env, cwd, opts.managedDirs ?? defaultManagedDirs(), pickBaseRef);
+export const readHostWorktreeBaseRef = (env: Env, projectDir: string | null | undefined, opts: Pick<HostWindowOptions, 'managedDirs'> = {}): WorktreeBaseRefResult => {
+  // #53 review: project scopes live in the session's primary directory. A hook's own `cwd` moves with `cd`, so reading
+  // them from it could miss a "fresh" at the real project root and fall through to a user-level "head"; without
+  // CLAUDE_PROJECT_DIR (or a caller that knows the directory, like doctor) the answer is unknown rather than guessed.
+  const envDir = env['CLAUDE_PROJECT_DIR'];
+  const dir = typeof envDir === 'string' && envDir.length > 0 ? envDir : projectDir;
+  if (typeof dir !== 'string' || dir.length === 0) return { value: null, source: 'project dir unknown' };
+  const found = readSettingsChain(env, dir, opts.managedDirs ?? defaultManagedDirs(), pickBaseRef);
   return found === null ? { value: null, source: 'unset' } : found;
 };

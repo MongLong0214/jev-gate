@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { GUARD_DENY_REASON, STOP_REASON } from '../src/coordinator.js';
+import { GUARD_DENY_REASON, STOP_REASON, WORKTREE_WORKER_SENTENCE } from '../src/coordinator.js';
 import { DENIALS_BEFORE_STOP } from '../src/brief.js';
 import { runHook, type HookDeps, type HookResult } from '../src/hook.js';
 import { CLAUSE_VERDICTS, MAX_INTERPRETATION_CLAUSES } from '../src/interpretation.js';
@@ -99,7 +99,7 @@ const headBaseRefConfigDir = (baseRef: unknown = 'head'): string => {
 const capEnv = (cap: number, over: Env = {}): Env => {
   const cfg = join(tmp, `cap-${cap}-${(capSeq += 1)}.json`);
   writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', maxParallelWorkers: cap, workerIsolation: 'worktree', guardAllowTools: ['Bash'] }));
-  return makeEnv({ JEV_GATE_CONFIG: cfg, CLAUDE_CONFIG_DIR: headBaseRefConfigDir(), ...over });
+  return makeEnv({ JEV_GATE_CONFIG: cfg, CLAUDE_CONFIG_DIR: headBaseRefConfigDir(), CLAUDE_PROJECT_DIR: mkdtempSync(join(tmp, 'project-')), ...over });
 };
 
 const run = (env: Env, event: unknown, fetchImpl?: unknown, extra: Partial<HookDeps> = {}): Promise<HookResult> =>
@@ -1280,12 +1280,15 @@ describe('worker isolation (#48 P1-2)', () => {
     const patched = await run(isolated, preEvent('Agent', agentInput()), fakeJev());
     expect(patched.kind).toBe('patch');
     expect(updatedInput(patched)).toMatchObject({ isolation: 'worktree', subagent_type: 'jev-gate:worker' });
+    // #53 review: the worker is told to commit, or its worktree's edits never reach the branch that is merged.
+    expect(String(updatedInput(patched)['prompt'])).toContain(WORKTREE_WORKER_SENTENCE);
 
     const plain = makeEnv();
     await seedPlanned(plain, PLAN_REPLY, fakeJev());
     const unpatched = await run(plain, preEvent('Agent', agentInput()), fakeJev());
     expect(unpatched.kind).toBe('patch');
     expect(updatedInput(unpatched)).not.toHaveProperty('isolation');
+    expect(String(updatedInput(unpatched)['prompt'])).not.toContain('[Jev Gate isolation]');
   });
 
   it('patches isolation on a pinned worker dispatch too (mechanically, isolation can only ride an emitPatch)', async () => {
@@ -1299,12 +1302,13 @@ describe('worker isolation (#48 P1-2)', () => {
   it('patches isolation onto an ad-hoc single-executor worker dispatch (#48 P1-2 + A19)', async () => {
     const cfg = join(tmp, `single-isolated-${Math.random().toString(36).slice(2)}.json`);
     writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', admittedShape: 'single', workerIsolation: 'worktree', guardAllowTools: ['Bash'] }));
-    const env = makeEnv({ JEV_GATE_CONFIG: cfg, CLAUDE_CONFIG_DIR: headBaseRefConfigDir() });
+    const env = makeEnv({ JEV_GATE_CONFIG: cfg, CLAUDE_CONFIG_DIR: headBaseRefConfigDir(), CLAUDE_PROJECT_DIR: mkdtempSync(join(tmp, 'project-')) });
     const fetchImpl = fakeJev({ execution: 'orchestrated' });
     await run(env, promptEvent(), fetchImpl);
     const r = await run(env, preEvent('Agent', agentInput({ prompt: 'Do what the request asks.' })), fetchImpl);
     expect(r.kind).toBe('patch');
     expect(updatedInput(r)).toMatchObject({ isolation: 'worktree' });
+    expect(String(updatedInput(r)['prompt'])).toContain(WORKTREE_WORKER_SENTENCE);
   });
 
   /**
@@ -1316,8 +1320,12 @@ describe('worker isolation (#48 P1-2)', () => {
     ['unset', undefined],
     ['fresh', 'fresh'],
     ['invalid', 'HEAD'],
+    ['head, but with no CLAUDE_PROJECT_DIR to find the project scopes in', 'no-project-dir'],
   ])('runs serially with no isolation when worktree.baseRef is %s', async (_label, baseRef) => {
-    const env = capEnv(2, { CLAUDE_CONFIG_DIR: baseRef === undefined ? mkdtempSync(join(tmp, 'claude-config-')) : headBaseRefConfigDir(baseRef) });
+    const env =
+      baseRef === 'no-project-dir'
+        ? capEnv(2, { CLAUDE_PROJECT_DIR: undefined })
+        : capEnv(2, { CLAUDE_CONFIG_DIR: baseRef === undefined ? mkdtempSync(join(tmp, 'claude-config-')) : headBaseRefConfigDir(baseRef) });
     const guidance = await run(env, promptEvent(), fakeJev());
     expect(context(guidance)).toContain('dispatch one ready task at a time');
     expect(context(guidance)).not.toContain('git worktree');

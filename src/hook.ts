@@ -36,6 +36,7 @@ import {
   renderPreToolUseOutput,
   renderSystemMessage,
   type AgentInput,
+  type AgentPatch,
   type Eligibility,
 } from './brief.js';
 import { DEFAULT_CONFIG, effectiveDepthFloor, loadConfig, NATIVE_HOOK_TIMEOUT_MS, type Env } from './config.js';
@@ -75,6 +76,7 @@ import {
   renderWorkerReported,
   renderWorkerUnknown,
   STOP_REASON,
+  WORKTREE_WORKER_SENTENCE,
 } from './coordinator.js';
 import { buildPlanInterpretationRequest, classifyInterpretation, type PlanInterpretation } from './interpretation.js';
 import { callJev, MAX_REQUEST_BYTES, type JevOutcome, type JevRequest } from './jev.js';
@@ -288,6 +290,13 @@ const requestedModelFor = (toolInput: unknown): string | null => {
   return owned ? DEFAULT_CONFIG.models[owned.tier] : null;
 };
 
+/** #53 review: an isolated worker is told to commit, since only its branch comes back to the coordinator. */
+const isolatedWorkerPatch = (input: AgentInput, patch: AgentPatch): AgentPatch => ({
+  ...patch,
+  prompt: (patch.prompt ?? String(input['prompt'] ?? '')) + WORKTREE_WORKER_SENTENCE,
+  isolation: 'worktree',
+});
+
 const isSlashCommand = (prompt: string): boolean => prompt.trimStart().startsWith('/');
 
 /** T1: the tasks that would be built on this one's result, directly or through a chain of dependencies. */
@@ -381,7 +390,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
    * task's inputs. Only "head" is the revision the plan was made against; any other reading, unset included, runs as
    * workerIsolation "none" -- one worker at a time in the caller's tree -- rather than dispatching onto the wrong base.
    */
-  const baseRef = loaded.config.workerIsolation === 'worktree' ? readHostWorktreeBaseRef(deps.env, input.cwd ?? null) : null;
+  const baseRef = loaded.config.workerIsolation === 'worktree' ? readHostWorktreeBaseRef(deps.env, null) : null;
   const config: ConfigV5 = baseRef !== null && baseRef.value !== 'head' ? { ...loaded.config, workerIsolation: 'none', maxParallelWorkers: 1 } : loaded.config;
   const rawMode = config.mode;
   if (rawMode === 'off') return isAgentPre ? preserve('mode_off') : skip('mode_off');
@@ -1329,7 +1338,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
      * all, so the call proceeds completely unmodified.
      */
     const emitWorkerPatch = (patch: Parameters<typeof patchAgentInput>[1], code: ErrorCode | null): HookResult =>
-      emitPatch(eligibility.input, config.workerIsolation === 'worktree' ? { ...patch, isolation: 'worktree' } : patch, code);
+      emitPatch(eligibility.input, config.workerIsolation === 'worktree' ? isolatedWorkerPatch(eligibility.input, patch) : patch, code);
     // A5: native, pinned, abstained and failed paths still receive the canonical contract; only the model is left alone.
     if (mode === 'native' || eligibility.pinned || !apiKey) {
       return emitWorkerPatch({ prompt: composed + note(eligibility.tier) }, mode === 'native' ? 'mode_native' : eligibility.pinned ? 'pinned' : 'key_missing');
@@ -1448,7 +1457,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
      * preserve reasons) cannot carry it: that path emits no patch at all, so the call proceeds completely unmodified.
      */
     const emitWorkerPatch = (patch: Parameters<typeof patchAgentInput>[1], code: ErrorCode | null): HookResult =>
-      emitPatch(eligibility.input, config.workerIsolation === 'worktree' ? { ...patch, isolation: 'worktree' } : patch, code);
+      emitPatch(eligibility.input, config.workerIsolation === 'worktree' ? isolatedWorkerPatch(eligibility.input, patch) : patch, code);
     /** A preserve leaves the model exactly as the coordinator called it. That is all it leaves alone. */
     const preserveAdhoc = (code: ErrorCode, tier: Tier = eligibility.tier): HookResult =>
       carriedRequest === null ? preserve(code) : emitWorkerPatch({ prompt: composed + note(tier) }, code);

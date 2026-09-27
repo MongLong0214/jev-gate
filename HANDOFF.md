@@ -38,7 +38,10 @@ the turn as `workerIsolation: "none"` with a cap of 1, records `worker_isolation
 and `doctor` warns. The coordinator's tool line is now rendered from the guard's allow-list, so under isolation it
 names Bash as available instead of "unavailable, do not probe", and says worker trees start at the last commit.
 An unpinned call the hook did not patch now records the frontmatter model as `requested_model`, not the owner's
-configured tier model.
+configured tier model. Second round: the base ref is read only from `CLAUDE_PROJECT_DIR`'s scopes (a hook's `cwd`
+could miss a project-level `"fresh"` and fall through to a user-level `"head"`), and every isolated worker prompt
+carries `WORKTREE_WORKER_SENTENCE`, asking it to commit on its worktree branch; the worker profiles forbid commits
+unless the contract asks, and without one nothing reaches the merged branch.
 
 **Capability-aware plan steps (P2-1).** `PlannerReply` (the `ready` variant) gains an optional
 `main_session_steps: Array<{ step: string; needs: Capability }>`, `Capability` a closed union of `os_permission`,

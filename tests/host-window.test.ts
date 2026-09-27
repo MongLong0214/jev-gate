@@ -283,3 +283,21 @@ describe('readHostWorktreeBaseRef (#48 P1-2 review)', () => {
     expect(readHostCompactWindow({ HOME: dir() }, cwd, { managedDirs: none }).tokens).toBe(400_000);
   });
 });
+
+describe('readHostWorktreeBaseRef: the project directory (#53 review)', () => {
+  it('is unknown without CLAUDE_PROJECT_DIR or a caller-given directory, even with a user-level "head"', () => {
+    const home = dir();
+    writeSettings(home, '.claude/settings.json', { worktree: { baseRef: 'head' } });
+    expect(readHostWorktreeBaseRef({ HOME: home }, null, { managedDirs: [] })).toEqual({ value: null, source: 'project dir unknown' });
+  });
+
+  it('reads project scopes from CLAUDE_PROJECT_DIR, not the directory the session moved into', () => {
+    const home = dir();
+    writeSettings(home, '.claude/settings.json', { worktree: { baseRef: 'head' } });
+    const project = dir();
+    writeSettings(project, '.claude/settings.json', { worktree: { baseRef: 'fresh' } });
+    const moved = join(project, 'src');
+    mkdirSync(moved);
+    expect(readHostWorktreeBaseRef({ HOME: home, CLAUDE_PROJECT_DIR: project }, moved, { managedDirs: [] }).value).toBe('fresh');
+  });
+});
