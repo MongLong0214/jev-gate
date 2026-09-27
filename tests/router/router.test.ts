@@ -3,8 +3,9 @@ import { describe, expect, it, vi } from 'vitest';
 import type { HttpReply } from '../../mods/router/hooks/client.ts';
 import { JEV_ENDPOINT, JEV_MODEL } from '../../mods/router/hooks/client.ts';
 import { resolveConfig } from '../../mods/router/hooks/config.ts';
+import { TIER_LEVELS } from '../../mods/router/hooks/policy.ts';
 import type { SpawnEvent, SpawnOutcome, TurnStepEvent } from '../../mods/router/hooks/router.ts';
-import { createRouter, VERIFIED_HOST } from '../../mods/router/hooks/router.ts';
+import { createRouter, hostSupported, VERIFIED_HOST } from '../../mods/router/hooks/router.ts';
 import { answering, CLEAR, deferred, drain, FAKE_KEY, fakeEngine, streamNext } from './fake-engine.ts';
 
 const configOf = (options: Record<string, string | number | boolean>) => {
@@ -56,11 +57,14 @@ describe('root effort', () => {
     expect(req?.headers['authorization']).toBe(`Bearer ${FAKE_KEY}`);
     expect(req?.state).toEqual({ task: { text: TEXT } });
     expect(Object.keys(req?.questions ?? {})).toEqual(['control', 'effort', 'action_risk']);
-    // Offered levels are the model's unconditional ones, never max.
-    expect(Object.keys(req?.questions['effort']?.criteria ?? {})).toEqual(['low', 'medium', 'high', 'xhigh', 'preserve']);
+    // Effort is asked as three levels of work; which effort each maps to is decided locally.
+    expect(req?.questions['effort']).toMatchObject({ type: 'score', criteria: [TIER_LEVELS.fast, TIER_LEVELS.standard, TIER_LEVELS.deep] });
 
     const root = f.logs.find((l) => l['event'] === 'root');
     expect(root).toMatchObject({ assessment: 'ok', sent: true, patch: { effort: 'low' }, reasons: { effort: 'applied', model: 'not_asked' } });
+    // The receipt: what the move was read from.
+    expect(root?.['answers']).toMatchObject({ control: 'task_clear', task_clear: 0.97, ordinary: 0.97 });
+    expect((root?.['answers'] as { effort: number[] }).effort[0]).toBe(0.95);
     expect(JSON.stringify(f.logs)).not.toContain('parseRow');
     expect(JSON.stringify(f.logs)).not.toContain(FAKE_KEY);
   });
@@ -75,11 +79,12 @@ describe('root effort', () => {
     expect(f1.logs.find((l) => l['event'] === 'root')).toMatchObject({ reasons: { effort: 'risk_blocks_downgrade' } });
 
     const up = createRouter(configOf(EFFORT_ONLY));
-    const f2 = fakeEngine({ respond: answering({ control: ['task_clear', 0.85], action_risk: ['unclear', 0.5], effort: ['xhigh', 0.85] }) });
+    const f2 = fakeEngine({ respond: answering({ control: ['task_clear', 0.85], action_risk: ['unclear', 0.5], effort: ['high', 0.85] }) });
     up.turnStart({ turnId: 't1', text: TEXT });
     const n2 = streamNext<TurnStepEvent>();
     await drain(up.turnStep(f2.engine, step({ effort: 'medium' }), n2.next));
-    expect(n2.calls).toEqual([step({ effort: 'xhigh' })]);
+    // Hard work asks for high, never more.
+    expect(n2.calls).toEqual([step({ effort: 'high' })]);
   });
 
   it('stops for the rest of the turn when a step arrives with parameters other than the baseline', async () => {
@@ -238,8 +243,9 @@ describe('root effort', () => {
     await drain(router.turnStep(f.engine, step({ index: 1 }), later.next));
     expect(later.calls).toEqual([step({ index: 1 })]);
     expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root', assessment: 'timeout', sent: true }));
-    // What the late reply cost is still recorded, against the turn that asked.
-    expect(f.logs).toContainEqual({ event: 'late', scope: 'root', turn: 't1', usage: { input_tokens: 900, output_tokens: 40 } });
+    // What the late reply cost is still recorded, against the turn that asked, under keys the host's debug log does not
+    // redact (it blanks any key containing "token").
+    expect(f.logs).toContainEqual({ event: 'late', scope: 'root', turn: 't1', usage: { input: 900, output: 40 } });
   });
 
   it('stops asking for the rest of the activation after a 401, including one that arrives late', async () => {
@@ -351,13 +357,13 @@ describe('root effort', () => {
   });
 
   it('stops an effort-only override when a fallback model answers that cannot take it, or no model is reported', async () => {
-    for (const observed of ['claude-sonnet-5', null]) {
+    for (const observed of ['claude-haiku-4-5', null]) {
       const router = createRouter(configOf(EFFORT_ONLY));
-      const f = fakeEngine({ respond: answering({ ...CLEAR, effort: ['xhigh', 0.95] }) });
+      const f = fakeEngine({ respond: answering({ ...CLEAR, effort: ['low', 0.95] }) });
       router.turnStart({ turnId: 't1', text: TEXT });
       const first = streamNext<TurnStepEvent>(() => observed);
       await drain(router.turnStep(f.engine, step(), first.next));
-      expect(first.calls[0]?.effort).toBe('xhigh');
+      expect(first.calls[0]?.effort).toBe('low');
       const second = streamNext<TurnStepEvent>();
       await drain(router.turnStep(f.engine, step({ index: 1 }), second.next));
       expect(second.calls, String(observed)).toEqual([step({ index: 1 })]);
@@ -455,7 +461,7 @@ describe('root model', () => {
     await drain(router.turnStep(f.engine, step({ model: 'claude-sonnet-5' }), n.next));
     expect(n.calls).toEqual([step({ model: 'claude-opus-5-5' })]);
     // fast is a smaller window, so it is not offered even though a switch to it is listed.
-    expect(Object.keys(f.sent[0]?.questions['tier']?.criteria ?? {})).toEqual(['standard', 'deep', 'frontier', 'preserve']);
+    expect(f.sent[0]?.questions['tier']?.criteria).toEqual([TIER_LEVELS.standard, TIER_LEVELS.deep, TIER_LEVELS.frontier]);
   });
 
   it('refuses a pair the target rejects, and asks nothing when no other profile could be applied', async () => {
@@ -560,11 +566,11 @@ describe('root model', () => {
 
   it('drops a stored model whose pair fails once a pin suppresses its effort', async () => {
     const router = createRouter(configOf({ ...MODEL_ONLY, routeMainEffort: true }), SWITCHES);
-    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['standard', 0.95], effort: ['high', 0.95] }) });
+    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['standard', 0.95], effort: ['medium', 0.95] }) });
     router.turnStart({ turnId: 't1', text: TEXT });
     const first = streamNext<TurnStepEvent>();
     await drain(router.turnStep(f.engine, step({ effort: 'max' }), first.next));
-    expect(first.calls).toEqual([step({ model: 'claude-sonnet-5', effort: 'high' })]);
+    expect(first.calls).toEqual([step({ model: 'claude-sonnet-5', effort: 'medium' })]);
     // Sonnet takes no max: without the effort patch the request would keep max on a model that cannot run it.
     f.pins.mainEffort = true;
     const second = streamNext<TurnStepEvent>();
@@ -598,7 +604,7 @@ describe('root model', () => {
       index: 0,
       applied: { model: 'claude-opus-5-5' },
       observed: 'claude-opus-5-5',
-      usage: { input_tokens: 1200, output_tokens: 80, cache_read_input_tokens: 40000, cache_creation_input_tokens: 0 },
+      usage: { input: 1200, output: 80, cache_read: 40000, cache_creation: 0 },
     });
   });
 
@@ -661,7 +667,9 @@ describe('spawn model', () => {
       ['type_unverified', spawn({ subagentType: 'code-reviewer' }), {}, true],
       ['definition_unverified', spawn(), {}, false],
       ['definition_unverified', spawn({ provider: { plugin: 'someone', tier: 'append' } }), {}, true],
-      ['host_unverified', spawn(), { hostBase: '2.1.283' }, true],
+      ['host_unverified', spawn(), { hostBase: '2.1.281' }, true],
+      ['host_unverified', spawn(), { hostBase: '2.2.0' }, true],
+      ['host_unverified', spawn(), { hostBase: '2.1.283-dev' }, true],
       ['host_unverified', spawn(), { hostBase: undefined }, true],
       ['baseline_unknown', spawn({ subagentType: 'Explore', parentModel: 'claude-fable-5-1' }), {}, true],
       ['lean_marker', spawn({ prompt: 'Execute packet jev-lean-0123456789abcdef now.' }), {}, true],
@@ -913,8 +921,99 @@ describe('spawn model', () => {
     expect(n.calls).toHaveLength(0);
   });
 
-  it('verifies against the host release it was read from', () => {
+  it('verifies against the host release it was read from, and accepts later 2.1 releases', () => {
     expect(VERIFIED_HOST).toBe('2.1.282');
+    expect(['2.1.282', '2.1.283', '2.1.300'].map(hostSupported)).toEqual([true, true, true]);
+    expect(['2.1.281', '2.2.0', '2.1.283-dev', 'local', undefined].map(hostSupported)).toEqual([false, false, false, false, false]);
+  });
+
+  it('routes on a later 2.1 release', async () => {
+    const router = createRouter(configOf(SPAWN_ONLY));
+    const f = fakeEngine({ hostBase: '2.1.283', respond: answering({ ...CLEAR, tier: ['fast', 0.95] }) });
+    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    const n = spawnNext();
+    expect(await router.agentSpawn(f.engine, spawn(), n.next)).toEqual({ model: 'haiku' });
+  });
+
+  it('stops routing spawns for the activation once a routed spawn runs on another model', async () => {
+    const router = createRouter(configOf(SPAWN_ONLY));
+    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['fast', 0.95] }) });
+    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    const first = spawnNext(() => ({ model: 'claude-opus-5-5' }));
+    expect(await router.agentSpawn(f.engine, spawn(), first.next)).toEqual({ model: 'claude-opus-5-5' });
+    expect(f.logs).toContainEqual({ event: 'spawn_suspended', reason: 'model_mismatch' });
+    const second = spawnNext();
+    await router.agentSpawn(f.engine, spawn({ tool_use_id: 'tu2' }), second.next);
+    expect(second.calls).toEqual([spawn({ tool_use_id: 'tu2' })]);
+    expect(f.sent).toHaveLength(1);
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn', tool_use_id: 'tu2', skipped: 'spawn_suspended' }));
+    // A session end does not lift it: the host's resolution has not changed.
+    router.sessionEnd();
+    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    await router.agentSpawn(f.engine, spawn({ tool_use_id: 'tu3' }), spawnNext().next);
+    expect(f.sent).toHaveLength(1);
+  });
+
+  it('stops routing spawns once an unrouted one does not run on the baseline it was judged against', async () => {
+    const router = createRouter(configOf(SPAWN_ONLY));
+    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', 0.95] }) });
+    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    const n = spawnNext(() => ({ model: 'claude-sonnet-5' }));
+    await router.agentSpawn(f.engine, spawn(), n.next);
+    expect(n.calls).toEqual([spawn()]);
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn_native_result', assumed: 'claude-opus-5-5', observed: 'claude-sonnet-5', reason: 'baseline_mismatch' }));
+    expect(f.logs).toContainEqual({ event: 'spawn_suspended', reason: 'baseline_mismatch' });
+    // The same model in its 1M variant is the baseline, not a contradiction.
+    const other = createRouter(configOf(SPAWN_ONLY));
+    const g = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', 0.95] }) });
+    other.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    await other.agentSpawn(g.engine, spawn({ parentModel: 'claude-opus-5-5[1m]' }), spawnNext().next);
+    expect(g.logs.some((l) => l['event'] === 'spawn_suspended')).toBe(false);
+  });
+
+  it('leaves a spawn native that was still waiting when another spawn suspended routing', async () => {
+    const router = createRouter(configOf(SPAWN_ONLY));
+    const held = deferred<HttpReply>();
+    let calls = 0;
+    const f = fakeEngine({ respond: (req) => (calls++ === 0 ? held.promise : answering({ ...CLEAR, tier: ['fast', 0.95] })(req)) });
+    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    const waiting = spawnNext();
+    const b = router.agentSpawn(f.engine, spawn({ tool_use_id: 'tuB' }), waiting.next);
+    await vi.waitFor(() => expect(f.sent).toHaveLength(1));
+    await router.agentSpawn(f.engine, spawn({ tool_use_id: 'tuA' }), spawnNext(() => ({ model: 'claude-opus-5-5' })).next);
+    expect(f.logs).toContainEqual({ event: 'spawn_suspended', reason: 'model_mismatch' });
+    held.resolve(answering({ ...CLEAR, tier: ['fast', 0.95] })(f.sent[0]!) as HttpReply);
+    await b;
+    expect(waiting.calls).toEqual([spawn({ tool_use_id: 'tuB' })]);
+    expect(f.logs).toContainEqual({ event: 'spawn_stop', tool_use_id: 'tuB', reason: 'spawn_suspended', requested: 'haiku' });
+  });
+
+  it('does not suspend for a spawn a pin set during its assessment kept native, whatever Jev answered', async () => {
+    for (const pick of ['fast', 'deep'] as const) {
+      const router = createRouter(configOf(SPAWN_ONLY));
+      const held = deferred<HttpReply>();
+      const f = fakeEngine({ respond: () => held.promise });
+      router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+      const run = router.agentSpawn(f.engine, spawn(), spawnNext(() => ({ model: 'claude-haiku-4-5' })).next);
+      await vi.waitFor(() => expect(f.sent).toHaveLength(1));
+      f.pins.subagentModel = true;
+      held.resolve(answering({ ...CLEAR, tier: [pick, 0.95] })(f.sent[0]!) as HttpReply);
+      await run;
+      expect(f.logs.some((l) => l['event'] === 'spawn_native_result' || l['event'] === 'spawn_suspended'), pick).toBe(false);
+    }
+  });
+
+  it('does not suspend for a spawn a pin kept native, which runs on the pinned model', async () => {
+    const router = createRouter(configOf(SPAWN_ONLY));
+    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['fast', 0.95] }), pins: { subagentModel: true } });
+    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    await router.agentSpawn(f.engine, spawn(), spawnNext(() => ({ model: 'claude-haiku-4-5' })).next);
+    expect(f.logs.some((l) => l['event'] === 'spawn_native_result' || l['event'] === 'spawn_suspended')).toBe(false);
+    f.pins.subagentModel = false;
+    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    const n = spawnNext(() => ({ model: 'claude-haiku-4-5' }));
+    await router.agentSpawn(f.engine, spawn({ tool_use_id: 'tu2' }), n.next);
+    expect(n.calls).toEqual([spawn({ tool_use_id: 'tu2', model: 'haiku' })]);
   });
 });
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { JEV_MODEL } from '../../mods/router/hooks/client.ts';
-import { choice, FAKE_KEY } from './fake-engine.ts';
+import { choice, FAKE_KEY, score } from './fake-engine.ts';
 
 /**
  * register.ts types itself against the host's `claude-code` declarations, which this Node typecheck does not load, so
@@ -39,9 +39,14 @@ const fakeHost = (world: World = {}) => {
     http: {
       fetch: async (url: string, init: { headers: Record<string, string>; body: string }) => {
         requests.push({ url, headers: init.headers });
-        const { questions } = JSON.parse(init.body) as { questions: Record<string, { criteria: Record<string, string> }> };
+        const { questions } = JSON.parse(init.body) as { questions: Record<string, { criteria: Record<string, string> | string[] }> };
         const picks: Record<string, [string, number]> = { control: ['task_clear', 0.97], action_risk: ['ordinary', 0.97], tier: ['fast', 0.95] };
-        const answers = Object.fromEntries(Object.entries(questions).map(([n, q]) => [n, choice(Object.keys(q.criteria), picks[n] ?? ['preserve', 0.9])]));
+        const answers = Object.fromEntries(
+          Object.entries(questions).map(([n, q]) => {
+            const pick = picks[n] ?? ['preserve', 0.9];
+            return [n, Array.isArray(q.criteria) ? score(n, q.criteria, pick) : choice(Object.keys(q.criteria), pick)];
+          }),
+        );
         return { status: 200, ok: true, headers: {}, text: JSON.stringify({ model: JEV_MODEL, answers, usage: { input_tokens: 800, output_tokens: 20 } }) };
       },
     },

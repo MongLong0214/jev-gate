@@ -12,8 +12,6 @@ const ROUTED_EFFORTS: readonly RoutedEffort[] = ['low', 'medium', 'high', 'xhigh
 
 export type ControlAnswer = 'task_clear' | 'explicit_lock' | 'needs_context' | 'unclear';
 export type RiskAnswer = 'ordinary' | 'consequential' | 'unclear';
-export type TierAnswer = ModelTier | 'preserve';
-export type EffortAnswer = RoutedEffort | 'preserve';
 
 export interface RoutingPatch {
   model?: string;
@@ -29,9 +27,29 @@ export interface ChoiceQuestion {
   criteria: Record<string, string>;
 }
 
+/**
+ * An ordered rubric, least demanding level first. Jev answers with a probability for each level index, so the whole
+ * distribution along the order is read, as for a choice, without a `preserve` label: the control question is the
+ * escape hatch.
+ */
+export interface ScoreQuestion {
+  type: 'score';
+  instructions: string;
+  criteria: readonly string[];
+}
+
+export type Question = ChoiceQuestion | ScoreQuestion;
+
+/** A validated score: one probability per level, in the question's order. */
+export interface ScoreAnswer {
+  levels: readonly number[];
+}
+
 export interface ChoiceAnswer<K extends string = string> {
   choice: K;
   confidence: number;
+  /** Every label's probability, as validated: the decision reads these, not `confidence`. */
+  probabilities: Readonly<Record<string, number>>;
 }
 
 // ------------------------------------------------------------------------------------------------ questions
@@ -51,37 +69,38 @@ const CONTROL_QUESTION: ChoiceQuestion = {
   } satisfies Record<ControlAnswer, string>,
 };
 
-const TIER_CRITERIA: Record<ModelTier, string> = {
-  fast: 'Mechanical or local transformation, or straightforward reading, with explicit requirements and cheap checks.',
-  standard: 'Ordinary implementation, testing or investigation, including substantial routine engineering.',
-  deep: 'Difficult debugging or design, or interacting unresolved constraints that need substantial reasoning.',
-  frontier: 'Exceptional reasoning beyond what the deep profile is suited for.',
+/**
+ * Level descriptions say what the work is, not how hard it feels, and they are the contract: Jev never sees a level's
+ * name. On 25 development tasks through this path (2026-09-27, bench/results/host-obs-2026-09-27), choices over
+ * labels moved 12 of 18 non-deep spawns and 6 of 18 root turns; a score over these descriptions moved 14 and 13.
+ */
+export const TIER_LEVELS: Record<ModelTier, string> = {
+  fast: 'Lookup, search, listing or a mechanical edit with an obvious answer.',
+  standard: 'Ordinary multistep implementation or investigation with clear requirements.',
+  deep: 'Hard debugging, design under competing constraints, or subtle correctness reasoning.',
+  frontier: 'Exceptional reasoning beyond what hard debugging or design needs.',
 };
 
-const tierQuestion = (tiers: readonly ModelTier[]): ChoiceQuestion => ({
-  type: 'choice',
-  instructions: `Choose the least capable listed profile reasonably suited to the work in task.text (with task.description and task.subagent_type when present). Judge the reasoning the work needs, not the length of task.text: a short request for a difficult algorithm is not fast work. Do not assume a model, a price or guaranteed success. Choose preserve when task.text gives insufficient basis to choose a different profile. ${DATA_NOTE}`,
-  criteria: {
-    ...Object.fromEntries(tiers.map((t) => [t, TIER_CRITERIA[t]])),
-    preserve: 'task.text gives insufficient basis to choose a different profile.',
-  },
+const LIGHT_NOTE = 'Judge the reasoning the work needs, not the length of task.text: a short request for a difficult algorithm is not light work.';
+
+const tierQuestion = (tiers: readonly ModelTier[]): ScoreQuestion => ({
+  type: 'score',
+  instructions: `How capable a model does the work in task.text need (with task.description and task.subagent_type when present)? ${LIGHT_NOTE} ${DATA_NOTE}`,
+  criteria: tiers.map((t) => TIER_LEVELS[t]),
 });
 
-const EFFORT_CRITERIA: Record<RoutedEffort, string> = {
-  low: 'Straightforward reasoning.',
-  medium: 'Ordinary multistep work.',
-  high: 'Demanding reasoning.',
-  xhigh: 'Exceptionally demanding work.',
+/**
+ * The effort score has three fixed levels. Light work asks for low and ordinary work for medium; hard work asks for
+ * high, or keeps a higher baseline, so a configured xhigh is never lowered for the work it was chosen for. With
+ * effort labels, one of seven deep tasks was lowered from xhigh to high on the same panel.
+ */
+export const EFFORT_LEVEL_TARGETS: readonly RoutedEffort[] = ['low', 'medium', 'high'];
+
+const EFFORT_QUESTION: ScoreQuestion = {
+  type: 'score',
+  instructions: `How much reasoning does the work in task.text need? ${LIGHT_NOTE} ${DATA_NOTE}`,
+  criteria: [TIER_LEVELS.fast, TIER_LEVELS.standard, TIER_LEVELS.deep],
 };
-
-const effortQuestion = (efforts: readonly RoutedEffort[]): ChoiceQuestion => ({
-  type: 'choice',
-  instructions: `Choose the reasoning effort the work in task.text needs. Judge the reasoning required, not the length of task.text. Choose preserve when task.text gives insufficient basis. ${DATA_NOTE}`,
-  criteria: {
-    ...Object.fromEntries(efforts.map((e) => [e, EFFORT_CRITERIA[e]])),
-    preserve: 'task.text gives insufficient basis to choose.',
-  },
-});
 
 const RISK_QUESTION: ChoiceQuestion = {
   type: 'choice',
@@ -101,7 +120,12 @@ export interface MutableDimensions {
   efforts: readonly RoutedEffort[] | null;
 }
 
-export type Questions = Partial<Record<'control' | 'tier' | 'effort' | 'action_risk', ChoiceQuestion>>;
+export interface Questions {
+  control?: ChoiceQuestion;
+  tier?: ScoreQuestion;
+  effort?: ScoreQuestion;
+  action_risk?: ChoiceQuestion;
+}
 
 /** One batch. Every question reads the same state and none depends on another's answer. Null: nothing to ask. */
 export const buildQuestions = (dims: MutableDimensions): Questions | null => {
@@ -111,7 +135,7 @@ export const buildQuestions = (dims: MutableDimensions): Questions | null => {
   return {
     control: CONTROL_QUESTION,
     ...(tiers ? { tier: tierQuestion(tiers) } : {}),
-    ...(efforts ? { effort: effortQuestion(efforts) } : {}),
+    ...(efforts ? { effort: EFFORT_QUESTION } : {}),
     action_risk: RISK_QUESTION,
   };
 };
@@ -154,17 +178,39 @@ export const validateChoice = (value: unknown, keys: readonly string[]): ChoiceA
   if (top.length !== 1 || top[0] !== choice) return null;
   const confidence = value['confidence'];
   if (typeof confidence !== 'number' || !Number.isFinite(confidence) || confidence < 0 || confidence > 1) return null;
-  return { choice, confidence };
+  return { choice, confidence, probabilities: Object.fromEntries(keys.map((k) => [k, probs[k] as number])) };
 };
 
-export type Answers = Partial<Record<keyof Questions, ChoiceAnswer | null>>;
-
-/** Each declared question checked against its own labels. A missing or invalid one is null, never a default. */
-export const validateAnswers = (answers: unknown, questions: Questions): Answers => {
-  const out: Answers = {};
-  for (const [name, q] of Object.entries(questions) as [keyof Questions, ChoiceQuestion][]) {
-    out[name] = isRecord(answers) ? validateChoice(answers[name], Object.keys(q.criteria)) : null;
+/** Exactly one finite probability in [0,1] per level index, summing to 1 within 1e-3. `score` and `legend` are not read. */
+export const validateScore = (value: unknown, levels: number): ScoreAnswer | null => {
+  if (!isRecord(value) || value['type'] !== 'score') return null;
+  const probs = value['probabilities'];
+  if (!isRecord(probs) || Object.keys(probs).length !== levels) return null;
+  const out: number[] = [];
+  for (let i = 0; i < levels; i++) {
+    const p = probs[String(i)];
+    if (typeof p !== 'number' || !Number.isFinite(p) || p < 0 || p > 1) return null;
+    out.push(p);
   }
+  if (Math.abs(out.reduce((a, b) => a + b, 0) - 1) > PROB_SUM_TOLERANCE) return null;
+  return { levels: out };
+};
+
+export interface Answers {
+  control?: ChoiceAnswer | null;
+  tier?: ScoreAnswer | null;
+  effort?: ScoreAnswer | null;
+  action_risk?: ChoiceAnswer | null;
+}
+
+/** Each declared question checked against its own labels or levels. A missing or invalid one is null, never a default. */
+export const validateAnswers = (answers: unknown, questions: Questions): Answers => {
+  const raw = (name: string): unknown => (isRecord(answers) ? answers[name] : undefined);
+  const out: Answers = {};
+  if (questions.control) out.control = validateChoice(raw('control'), Object.keys(questions.control.criteria));
+  if (questions.tier) out.tier = validateScore(raw('tier'), questions.tier.criteria.length);
+  if (questions.effort) out.effort = validateScore(raw('effort'), questions.effort.criteria.length);
+  if (questions.action_risk) out.action_risk = validateChoice(raw('action_risk'), Object.keys(questions.action_risk.criteria));
   return out;
 };
 
@@ -175,7 +221,6 @@ export type DimensionReason =
   | 'applied'
   | 'not_asked'
   | 'answer_invalid'
-  | 'answer_preserve'
   | 'same_value'
   | 'low_confidence'
   | 'control_invalid'
@@ -299,26 +344,89 @@ export const pairValid = (model: string, effort: SymbolicEffort | number | undef
   return false;
 };
 
+type Distribution = Pick<ChoiceAnswer, 'probabilities'>;
+
+const probOf = (answer: Distribution, label: string): number => answer.probabilities[label] ?? 0;
+
+/** Level probabilities summed onto the labels they stand for; two levels may name one label. */
+const onLabels = (answer: ScoreAnswer, labels: readonly string[]): Distribution => {
+  const probabilities: Record<string, number> = {};
+  answer.levels.forEach((p, i) => {
+    const label = labels[i] as string;
+    probabilities[label] = (probabilities[label] ?? 0) + p;
+  });
+  return { probabilities };
+};
+
+/** The label with the most mass, used only to tell `same_value` from `low_confidence`. */
+const topLabel = (d: Distribution): string | null => {
+  let best: string | null = null;
+  for (const [k, p] of Object.entries(d.probabilities)) if (best === null || p > (d.probabilities[best] ?? 0)) best = k;
+  return best;
+};
+
+/**
+ * What each effort level asks for on this baseline: low, medium, and high or the baseline when it is higher. A level
+ * whose target the model does not take moves up to the next level it does, or to the baseline.
+ */
+export const effortTargets = (offered: readonly SymbolicEffort[], from: SymbolicEffort): SymbolicEffort[] => {
+  const order = [...new Set<SymbolicEffort>([...offered, from])].sort((x, y) => effortIndex(x) - effortIndex(y));
+  return EFFORT_LEVEL_TARGETS.map((t, i) => {
+    const want: SymbolicEffort = i === EFFORT_LEVEL_TARGETS.length - 1 && effortIndex(from) > effortIndex(t) ? from : t;
+    return order.find((e) => effortIndex(e) >= effortIndex(want)) ?? from;
+  });
+};
+
 const controlGate = (control: ChoiceAnswer | null | undefined, floor: number): DimensionReason | null => {
   if (!control) return 'control_invalid';
   if (control.choice === 'explicit_lock') return 'control_lock';
   if (control.choice === 'needs_context') return 'control_needs_context';
   if (control.choice === 'unclear') return 'control_unclear';
-  return control.confidence >= floor ? null : 'control_low_confidence';
+  return probOf(control, 'task_clear') >= floor ? null : 'control_low_confidence';
 };
 
 /**
- * One dimension's movement: its own answer and task_clear control at the direction's floor, and a confident
- * ordinary action_risk for any downward move. Missing or unclear risk blocks only a downward move.
+ * A move's other conditions: task_clear control at the direction's floor, and a probable ordinary action_risk for
+ * any downward move. Missing or unclear risk blocks only a downward move.
  */
-const gate = (answer: ChoiceAnswer, direction: 1 | -1, answers: Answers, opts: PolicyOptions): DimensionReason | null => {
+const gate = (direction: 1 | -1, answers: Answers, opts: PolicyOptions): DimensionReason | null => {
   const floor = direction > 0 ? opts.minUpgradeConfidence : opts.minDowngradeConfidence;
-  if (answer.confidence < floor) return 'low_confidence';
   const control = controlGate(answers.control, floor);
   if (control) return control;
   if (direction < 0) {
     const risk = answers.action_risk;
-    if (!risk || risk.choice !== 'ordinary' || risk.confidence < opts.minDowngradeConfidence) return 'risk_blocks_downgrade';
+    if (!risk || risk.choice !== 'ordinary' || probOf(risk, 'ordinary') < opts.minDowngradeConfidence) return 'risk_blocks_downgrade';
+  }
+  return null;
+};
+
+/**
+ * Where an ordered answer moves from `current`, read from the whole distribution rather than the top label: down to
+ * the least level whose probability mass at or below it reaches the downgrade floor, else up to the greatest level
+ * whose mass at or above it reaches the upgrade floor. `preserve` belongs to neither side, so its mass holds the
+ * current value in both directions.
+ *
+ * Why not the top label's confidence: on 13 development tasks (2026-09-27, bench/results/host-obs-2026-09-27) Jev
+ * ranked every deep task deep and every standard task standard, yet a trivial lookup came back "standard 0.60,
+ * fast 0.38" with confidence 0.46. Its confidence tracks the margin between labels, so a 0.9 floor on it held almost
+ * every task, including ones whose mass at or below a cheaper level was 0.98. The floors are policy numbers, not a
+ * measured calibration.
+ */
+export const orderedMove = (
+  answer: Distribution,
+  order: readonly string[],
+  current: number,
+  opts: Pick<PolicyOptions, 'minUpgradeConfidence' | 'minDowngradeConfidence'>,
+): { index: number; direction: 1 | -1 } | null => {
+  let below = 0;
+  for (let i = 0; i < current; i++) {
+    below += probOf(answer, order[i] as string);
+    if (below >= opts.minDowngradeConfidence) return { index: i, direction: -1 };
+  }
+  let above = 0;
+  for (let i = order.length - 1; i > current; i--) {
+    above += probOf(answer, order[i] as string);
+    if (above >= opts.minUpgradeConfidence) return { index: i, direction: 1 };
   }
   return null;
 };
@@ -330,43 +438,48 @@ export const choosePatch = (answers: Answers, baseline: Baseline, asked: Mutable
   let targetEffort: RoutedEffort | undefined;
 
   if (asked.tiers && asked.tiers.length > 0) {
-    const a = answers.tier;
     const current = rankOf(baseline.model, opts.tiers);
+    // The score's levels are the asked tiers in order; a baseline outside them cannot be placed on it.
+    const order = TIER_ORDER.filter((t) => asked.tiers?.includes(t));
+    const a = answers.tier ? onLabels(answers.tier, order) : null;
     if (!a) model = 'answer_invalid';
-    else if (a.choice === 'preserve') model = 'answer_preserve';
-    else if (current === null) model = 'target_unavailable';
+    else if (current === null || !order.includes(current)) model = 'target_unavailable';
     else {
-      const tier = a.choice as ModelTier;
-      const value = opts.tiers[tier];
-      const direction = Math.sign(TIER_ORDER.indexOf(tier) - TIER_ORDER.indexOf(current));
-      const refusal = targetRefusal(value, baseline, opts);
-      if (direction === 0 || (value !== undefined && sameModel(value, baseline.model))) model = 'same_value';
-      else if (refusal) model = refusal;
+      const move = orderedMove(a, order, order.indexOf(current), opts);
+      if (!move) model = topLabel(a) === current ? 'same_value' : 'low_confidence';
       else {
-        const blocked = gate(a, direction as 1 | -1, answers, opts);
-        if (blocked) model = blocked;
+        const value = opts.tiers[order[move.index] as ModelTier];
+        const refusal = targetRefusal(value, baseline, opts);
+        if (value !== undefined && sameModel(value, baseline.model)) model = 'same_value';
+        else if (refusal) model = refusal;
         else {
-          model = 'applied';
-          targetModel = value;
+          const blocked = gate(move.direction, answers, opts);
+          if (blocked) model = blocked;
+          else {
+            model = 'applied';
+            targetModel = value;
+          }
         }
       }
     }
   }
 
   if (asked.efforts && asked.efforts.length > 0 && isSymbolicEffort(baseline.effort)) {
-    const a = answers.effort;
+    const from = baseline.effort;
+    const targets = effortTargets(asked.efforts, from);
+    const a = answers.effort ? onLabels(answers.effort, targets) : null;
     if (!a) effort = 'answer_invalid';
-    else if (a.choice === 'preserve') effort = 'answer_preserve';
     else {
-      const level = a.choice as RoutedEffort;
-      const direction = Math.sign(effortIndex(level) - effortIndex(baseline.effort));
-      if (direction === 0) effort = 'same_value';
+      // The baseline is placed in the order even when no level asks for it (max), so every target is on one side.
+      const order = [...new Set<SymbolicEffort>([...targets, from])].sort((x, y) => effortIndex(x) - effortIndex(y));
+      const move = orderedMove(a, order, order.indexOf(from), opts);
+      if (!move) effort = topLabel(a) === from ? 'same_value' : 'low_confidence';
       else {
-        const blocked = gate(a, direction as 1 | -1, answers, opts);
+        const blocked = gate(move.direction, answers, opts);
         if (blocked) effort = blocked;
         else {
           effort = 'applied';
-          targetEffort = level;
+          targetEffort = order[move.index] as RoutedEffort;
         }
       }
     }

@@ -1,5 +1,7 @@
 import type { HttpReply } from '../../mods/router/hooks/client.ts';
 import { JEV_MODEL } from '../../mods/router/hooks/client.ts';
+import type { ModelTier } from '../../mods/router/hooks/policy.ts';
+import { TIER_LEVELS } from '../../mods/router/hooks/policy.ts';
 import type { HostPins, RouterEngine } from '../../mods/router/hooks/router.ts';
 
 /** Shaped like a key and matching nothing real. */
@@ -9,7 +11,7 @@ export interface SentRequest {
   url: string;
   headers: Record<string, string>;
   state: unknown;
-  questions: Record<string, { criteria: Record<string, string> }>;
+  questions: Record<string, { type: string; criteria: Record<string, string> | readonly string[] }>;
 }
 
 export type Responder = (req: SentRequest) => HttpReply | Promise<HttpReply>;
@@ -99,9 +101,26 @@ type Pick = [choice: string, confidence: number];
 export const choice = (keys: readonly string[], [pick, confidence]: Pick): Record<string, unknown> => ({
   type: 'choice',
   choice: pick,
-  probabilities: Object.fromEntries(keys.map((k) => [k, k === pick ? 0.9 : 0.1 / (keys.length - 1)])),
+  // The pick carries its stated confidence as its probability and the rest is spread evenly, so a low confidence is a
+  // low mass on every side, as the decision reads it.
+  probabilities: Object.fromEntries(keys.map((k) => [k, k === pick ? confidence : (1 - confidence) / (keys.length - 1)])),
   confidence,
 });
+
+const EFFORT_LEVEL: Record<string, number> = { low: 0, medium: 1, high: 2, xhigh: 2, max: 2 };
+
+/**
+ * A valid score picked by label: a tier by its level description, an effort by the level that asks for it (hard work
+ * for high and above). The pick carries its confidence as mass and the rest is spread evenly; `preserve` spreads all of
+ * it. A label the question does not offer gives an invalid answer, as an unoffered choice would.
+ */
+export const score = (name: string, criteria: readonly string[], [pick, confidence]: Pick): Record<string, unknown> => {
+  const n = criteria.length;
+  if (pick === 'preserve') return { type: 'score', probabilities: Object.fromEntries(criteria.map((_, i) => [String(i), 1 / n])) };
+  const at = name === 'tier' ? criteria.indexOf(TIER_LEVELS[pick as ModelTier] ?? '') : (EFFORT_LEVEL[pick] ?? -1);
+  if (at < 0 || at >= n) return { type: 'score', probabilities: {} };
+  return { type: 'score', probabilities: Object.fromEntries(criteria.map((_, i) => [String(i), i === at ? confidence : (1 - confidence) / (n - 1)])) };
+};
 
 /** Answers each question that was actually asked, from `picks`; a question without a pick is left out. */
 export const answering =
@@ -113,7 +132,8 @@ export const answering =
       answers: Object.fromEntries(
         Object.entries(req.questions).flatMap(([name, q]) => {
           const pick = picks[name as keyof typeof picks];
-          return pick ? [[name, choice(Object.keys(q.criteria), pick)]] : [];
+          if (!pick) return [];
+          return [[name, Array.isArray(q.criteria) ? score(name, q.criteria, pick) : choice(Object.keys(q.criteria), pick)]];
         }),
       ),
       usage,
