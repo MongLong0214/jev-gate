@@ -40,6 +40,13 @@ describe('validateChoice', () => {
     for (const v of bad) expect(validateChoice(v, KEYS)).toBeNull();
   });
 
+  it("rescales a distribution that misses 1 only by Jev's two-decimal rounding", () => {
+    const got = validateChoice({ ...choice(KEYS, ['a', 0.9]), probabilities: { a: 0.68, b: 0.03, c: 0.28 } }, KEYS);
+    expect(got?.probabilities['a']).toBeCloseTo(0.68 / 0.99, 12);
+    expect(Object.values(got?.probabilities ?? {}).reduce((x, y) => x + y, 0)).toBeCloseTo(1, 12);
+    expect(validateChoice({ ...choice(KEYS, ['a', 0.9]), probabilities: { a: 0.68, b: 0.03, c: 0.27 } }, KEYS)).toBeNull();
+  });
+
   it('checks each asked question against its own labels, and a missing one is null, never a default', () => {
     const questions = buildQuestions({ tiers: ['fast', 'standard'], efforts: null });
     if (!questions) throw new Error('expected questions');
@@ -69,6 +76,27 @@ describe('validateScore', () => {
       { ...real, probabilities: [0.73, 0.27, 0] },
     ];
     for (const v of bad) expect(validateScore(v, 3)).toBeNull();
+  });
+
+  it("accepts a sum that misses 1 only by Jev's two-decimal rounding, rescaled, and lets it move the effort", () => {
+    // As Jev returned it 3 times in 40 for the quote-pricing request on 2026-09-28: the sum is 0.99.
+    const rounded = { type: 'score', score: 0.96, confidence: 0.9, legend: { 0: 'a', 1: 'b', 2: 'c' }, probabilities: { 0: 0.05, 1: 0.93, 2: 0.01 } };
+    const got = validateScore(rounded, 3);
+    expect(got?.levels.reduce((x, y) => x + y, 0)).toBeCloseTo(1, 12);
+    expect(got?.levels[1]).toBeCloseTo(0.93 / 0.99, 12);
+    // Three labels allow 0.015 plus the float tolerance; 0.98 is beyond it.
+    expect(validateScore({ ...rounded, probabilities: { 0: 0.05, 1: 0.92, 2: 0.01 } }, 3)).toBeNull();
+    expect(validateScore({ ...rounded, probabilities: { 0: 0.06, 1: 0.94, 2: 0.01 } }, 3)?.levels[1]).toBeCloseTo(0.94 / 1.01, 12);
+
+    const questions = buildQuestions({ tiers: null, efforts: ['low', 'medium', 'high'] });
+    if (!questions) throw new Error('expected questions');
+    const answers = validateAnswers(
+      { control: choice(['task_clear', 'explicit_lock', 'needs_context', 'unclear'], ['task_clear', 0.94]), effort: rounded, action_risk: choice(['ordinary', 'consequential', 'unclear'], ['ordinary', 0.97]) },
+      questions,
+    );
+    const decision = choosePatch(answers, { model: 'claude-opus-5-5', effort: 'xhigh' }, { tiers: null, efforts: ['low', 'medium', 'high'] }, opts());
+    expect(decision.effort).toBe('applied');
+    expect(decision.patch).toEqual({ effort: 'medium' });
   });
 });
 

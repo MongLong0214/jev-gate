@@ -5,6 +5,11 @@ export const MAX_REQUEST_BYTES = 128 * 1024;
 export const MAX_RESPONSE_BYTES = 1024 * 1024;
 const PROB_SUM_TOLERANCE = 1e-3;
 const ARGMAX_TOLERANCE = 1e-6;
+/**
+ * Jev rounds each probability to two decimals, so a correct answer can miss a sum of 1 by up to half a hundredth per
+ * label (a stored five-label route answer summed to 0.99). Within that allowance the distribution is rescaled.
+ */
+const ROUNDING_PER_LABEL = 0.005;
 
 /** Vendor-neutral tier descriptions (D3/D10): Jev sees capability profiles, never model or provider names. */
 export const TIER_PROFILES: Record<Tier, string> = {
@@ -190,7 +195,10 @@ export const callJev = async <S, Q>(request: JevRequest<S, Q>, deps: JevCallDeps
   }
 };
 
-/** Strict schema check: exact key set, finite probabilities in [0,1] summing to 1, choice equals argmax. No coercion or renormalization. */
+/**
+ * Strict schema check: exact key set, finite probabilities in [0,1] summing to 1, choice equals argmax. No coercion; the
+ * only renormalization is of a sum that misses 1 by no more than Jev's two-decimal rounding.
+ */
 export const validateChoice = <K extends string>(value: unknown, keys: readonly K[]): ChoiceAnswer<K> | null => {
   if (!isRecord(value) || value['type'] !== 'choice') return null;
   const choice = value['choice'];
@@ -207,12 +215,15 @@ export const validateChoice = <K extends string>(value: unknown, keys: readonly 
     sum += p;
     if (p > max) max = p;
   }
-  if (Math.abs(sum - 1) > PROB_SUM_TOLERANCE) return null;
+  const miss = Math.abs(sum - 1);
+  if (miss > keys.length * ROUNDING_PER_LABEL + PROB_SUM_TOLERANCE) return null;
+  const scale = miss <= PROB_SUM_TOLERANCE ? 1 : sum;
   const chosen = probs[choice] as number;
   if (chosen < max - ARGMAX_TOLERANCE) return null;
   const confidence = value['confidence'];
   if (typeof confidence !== 'number' || !Number.isFinite(confidence) || confidence < 0 || confidence > 1) return null;
-  return { type: 'choice', choice: choice as K, probabilities: probs as Record<K, number>, confidence };
+  const probabilities = Object.fromEntries(keys.map((k) => [k, (probs[k] as number) / scale])) as Record<K, number>;
+  return { type: 'choice', choice: choice as K, probabilities, confidence };
 };
 
 export const topChoices = <K extends string>(answer: ChoiceAnswer<K>): K[] => {
