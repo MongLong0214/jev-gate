@@ -155,7 +155,7 @@ describe('#48 review: the window the host actually compacts at', () => {
 
   describe('#48 fourth review: a session that moved', () => {
     // The host keeps a session's transcript under a folder named after the session's directory and moves it on `/cd`.
-    const transcriptFor = (sessionDir: string): string => join(dir(), sessionDir.replace(/[^a-zA-Z0-9]/g, '-'), 'session.jsonl');
+    const transcriptFor = (sessionDir: string): string => join(dir(), 'projects', sessionDir.replace(/[^a-zA-Z0-9]/g, '-'), 'session.jsonl');
 
     it('reads the directory `/cd` moved to, which CLAUDE_PROJECT_DIR still names as the start', () => {
       const project = dir();
@@ -184,6 +184,31 @@ describe('#48 review: the window the host actually compacts at', () => {
         const window = readHostCompactWindow({ CLAUDE_PROJECT_DIR: project, HOME: dir() }, moved, { managedDirs: none, transcriptPath });
         expect(window.tokens).toBeNull();
         expect(window.source).toMatch(/^unknown: the session moved/);
+      }
+    });
+
+    it('#48 fifth review: follows the transcript even when a Bash `cd` brought the cwd back to the start', () => {
+      // `/cd` into the parent, then `cd` back: the cwd is CLAUDE_PROJECT_DIR again, but the settings are the parent's.
+      const parent = dir();
+      const start = join(parent, 'pkg');
+      mkdirSync(start, { recursive: true });
+      writeSettings(start, '.claude/settings.json', { autoCompactWindow: 400_000 });
+      writeSettings(parent, '.claude/settings.json', { autoCompactWindow: 150_000 });
+      const env = { CLAUDE_PROJECT_DIR: start, HOME: dir() };
+      expect(readHostCompactWindow(env, start, { managedDirs: none, transcriptPath: transcriptFor(parent) }).tokens).toBe(150_000);
+      expect(readHostCompactWindow(env, start, { managedDirs: none, transcriptPath: transcriptFor(start) }).tokens).toBe(400_000);
+    });
+
+    it('#48 fifth review: is unknown when the transcript names a directory that is no candidate', () => {
+      // `/cd` to B, then `cd` back to A or anywhere outside B: B is neither CLAUDE_PROJECT_DIR nor on the cwd's path.
+      const a = dir();
+      const b = dir();
+      writeSettings(a, '.claude/settings.json', { autoCompactWindow: 400_000 });
+      writeSettings(b, '.claude/settings.json', { autoCompactWindow: 150_000 });
+      for (const cwd of [a, dir()]) {
+        const window = readHostCompactWindow({ CLAUDE_PROJECT_DIR: a, HOME: dir() }, cwd, { managedDirs: none, transcriptPath: transcriptFor(b) });
+        expect(window.tokens).toBeNull();
+        expect(window.source).toMatch(/^unknown: the transcript folder .* names none of/);
       }
     });
 

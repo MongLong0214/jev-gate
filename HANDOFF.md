@@ -28,7 +28,10 @@ still does.
 Fourth round: `/cd` moves the host's settings directory and the transcript folder but not `CLAUDE_PROJECT_DIR`
 (2.1.283: the move sets `originalCwd` and relocates the transcript; `CLAUDE_PROJECT_DIR` is `projectRoot`). Once the
 `cwd` differs from `CLAUDE_PROJECT_DIR`, the transcript folder picks the directory, and without a match the window is
-known only if every candidate agrees (`settingsDirCandidates`, `src/host-window.ts`).
+known only if every candidate agrees (`settingsDirCandidates`, `src/host-window.ts`). Fifth round: a Bash `cd` back to
+the start after `/cd`, or out of the `/cd` target, left the wrong directory standing; the transcript folder now
+decides whenever the transcript is in the host's `projects/<folder>/` layout, and a folder naming no candidate
+reads as unknown.
 
 The fact to fix is in #48: 1,014 admission decisions, 0 attempted, because a fixed 300,000
 `delegationDepthFloor` sits at the same 300,000 value as this host's own `autoCompactWindow`, so the session compacts
