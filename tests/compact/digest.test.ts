@@ -147,6 +147,49 @@ describe('buildDigest', () => {
     expect(buildDigest(early, { budgetChars: 8000 })).toEqual({ ok: false, reason: 'pending_call' });
   });
 
+  it('counts call ids and structure, so many small calls are not taken for a small conversation', () => {
+    // Ids shaped like the host's (toolu_ and 24 more), where the id is most of each small exchange.
+    const id = (i: number): string => `toolu_01${String(i).padStart(22, 'A')}`;
+    const rows: Row[] = [user('Check every entry.')];
+    for (let i = 0; i < 1500; i++) {
+      rows.push({ role: 'assistant', text: '', toolUses: [{ tool: 'Get', input: { k: i }, text: 'ok', tool_use_id: id(i) }], handle: `s${i}` });
+      rows.push({ role: 'user', text: '', toolUses: [], toolResults: [{ text: 'ok', tool_use_id: id(i) }], handle: `r${i}` });
+    }
+    rows.push(say('done'));
+    // Counted independently: what the model sees of each message, ids included.
+    const visible = (m: Row | { text: string; toolUses: Row['toolUses']; toolResults?: Row['toolResults'] }): number =>
+      m.text.length + m.toolUses.reduce((n, u) => n + u.tool.length + JSON.stringify(u.input).length + u.tool_use_id.length, 0) + (m.toolResults ?? []).reduce((n, r) => n + r.text.length + r.tool_use_id.length, 0);
+    const d = buildDigest(rows, { budgetChars: 40000 });
+    if (!d.ok) throw new Error(d.reason);
+    const out = assemble(rows, d.result);
+    const after = out.reduce((n, m) => n + visible(m as Row), 0);
+    expect(after).toBeLessThanOrEqual(0.5 * rows.reduce((n, m) => n + visible(m), 0));
+    expect(d.result.digestChars + d.result.tailChars).toBeLessThanOrEqual(40000);
+  });
+
+  it('grows the tail in linear time', () => {
+    const rows = [user('go'), ...Array.from({ length: 16000 }, (_, i) => call('', 'T', {}, String(i % 10))).flat(), say('done')];
+    const t0 = performance.now();
+    expect(buildDigest(rows, { budgetChars: 40000 }).ok).toBe(true);
+    expect(performance.now() - t0).toBeLessThan(3000);
+  });
+
+  it('takes a summary only where one opens the conversation, so a later request quoting one stays a request', () => {
+    const rows1 = [user('Rename parseRow.'), ...work(30), say('ok')];
+    const d1 = buildDigest(rows1, { budgetChars: 30000 });
+    if (!d1.ok) throw new Error(d1.reason);
+    const quoted = 'This session is being continued from a previous conversation. Please keep NEEDLE.';
+    const pasted = `${d1.result.digest.split('\n')[0]} and also keep PIN.`;
+    const rows2 = [...(assemble(rows1, d1.result) as Row[]), user(quoted), ...work(30), user(pasted), ...work(10), say('ok')];
+    const d2 = buildDigest(rows2, { budgetChars: 30000 });
+    if (!d2.ok) throw new Error(d2.reason);
+    const asked = requestsOf(d2.result.digest);
+    expect(asked).toContain('▸ Rename parseRow.');
+    expect(asked).toContain(`▸ ${quoted}`);
+    expect(asked).toContain('and also keep PIN.');
+    expect(d2.result.digest).not.toContain('## Previous summary');
+  });
+
   it('treats a request that starts with the mark as a request', () => {
     const rows = [user('[jev-gate compact] Please preserve NEEDLE until the end.'), ...work(30), say('ok')];
     const d = buildDigest(rows, { budgetChars: 30000 });

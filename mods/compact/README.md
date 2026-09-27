@@ -37,7 +37,9 @@ engine's time and usage.
   and a result whose call is nowhere leaves the compaction to the engine. It always holds the last assistant message and
   what follows (often the large result that crossed the threshold) and every call still in flight (a tool_use no result
   answers yet), and grows back within 40% of the budget.
-- **The ceiling.** Because the last exchange is kept whole, the total can pass `budgetChars`: up to twice it for the
+- **The ceiling.** Sizes are characters of text, tool inputs and results, plus each call's and result's id and 40
+  characters of structure, and 16 per message, so a stretch of many small calls is not counted as nearly free. Because
+  the last exchange is kept whole, the total can pass `budgetChars`: up to twice it for the
   tail plus 30% for the digest, 2.3 times in all. Past twice for the tail, or when the digest and tail would come to more
   than half of the conversation they replace, the engine compacts instead, so an answered compaction always at least
   halves what it was given.
@@ -46,8 +48,9 @@ engine's time and usage.
   tool inputs (240 each), then result excerpts (1,200 each), newest first. Pieces are chosen by that priority and
   printed oldest first. Engine-injected user text (`<system-reminder>`, task notifications, command echoes) is not a
   request.
-- **A digest it wrote earlier** (recognized by its whole header line, so a request that only starts with the mark stays
-  a request) is taken apart at the next compaction: its previous summary stays the summary, its
+- **A digest it wrote earlier** (recognized by its whole header line, and only where a summary opens the conversation,
+  before the first assistant message, so a later request that quotes one stays a request) is taken apart at the next
+  compaction: its previous summary stays the summary, its
   requests and steps join the new ones as the oldest, so the newest survive the cut rather than the oldest. A content
   line that starts like a section heading (`## `) or a request marker (`▸ `) is written indented by one space, so a
   request or result that quotes them cannot move the parse.
@@ -63,18 +66,19 @@ kept and the files it re-attached.
 
 | | recall | ≥ host | size (chars) |
 |---|---|---|---|
-| host: summary + kept messages | 0.743 | — | 24,200 |
-| host: the same + re-attached files | 0.781 | — | 38,500 |
-| digest, 30,000 | 0.793 | 31/40 | 30,000 |
-| digest, 40,000 (default) | 0.816 | 34/40 | 40,000 |
-| digest, 50,000 | 0.849 | 36/40 | 50,000 |
+| host: summary + kept messages | 0.694 | — | 37,500 |
+| host: the same + re-attached files | 0.732 | — | 52,700 |
+| digest, 30,000 | 0.761 | 27/40 | 30,900 |
+| digest, 40,000 (default) | 0.803 | 31/40 | 40,600 |
+| digest, 50,000 | 0.828 | 33/40 | 50,500 |
 
-"≥ host" is against the host with its re-attached files. At the default the digest recalled less at 6 of 40 points,
-by 0.07 to 0.27.
+"≥ host" is against the host with its re-attached files. At the default the digest recalled less at 9 of 40 points,
+by 0.06 to 0.33. Sizes count each call's id and structure (see the ceiling above). The sample is the week before the run
+(2026-09-27), so a rerun on a later day draws different points.
 
 Chained, as if active through whole sessions (each digest built over the previous digest, its tail and the messages
-since): 176 later compactions in 12 sessions, host 0.717, digest 0.761 (≥ host at 122). The gap holds with depth: at
-the 16th–31st compaction 0.700 vs 0.723, at the 32nd–63rd 0.727 vs 0.801. No compaction fell back.
+since): 177 later compactions in 12 sessions, host 0.715, digest 0.759 (≥ host at 121). The gap holds with depth: at
+the 16th–31st compaction 0.700 vs 0.726, at the 32nd–63rd 0.714 vs 0.785. No compaction fell back.
 
 The same 7-day transcripts put the host's own compactions at a 95-second median wait each.
 

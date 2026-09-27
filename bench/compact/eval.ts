@@ -198,7 +198,7 @@ for (const [f, spans] of [...byFile].filter(([, h]) => h.length >= 3).sort((a, b
   let held: DigestMessage[] = [];
   let lo = 0;
   bounds.forEach(([prev, hi], k) => {
-    const fresh = recs.slice(lo, hi).filter((r) => r.subtype !== 'compact_boundary' && !r.isCompactSummary);
+    const fresh = recs.slice(lo, hi).filter((r) => r.subtype !== 'compact_boundary' && !isSummaryRec(r));
     // A manual compaction in between replaced what the engine held, so the replay starts again from it.
     const between = recs.slice(lo, hi).flatMap((r, j) => (r.subtype === 'compact_boundary' ? [lo + j] : [])).at(-1);
     const before = k === 0 ? toMessages(heldAt(recs, prev, hi)) : between !== undefined ? toMessages(heldAt(recs, between, hi)) : [...held, ...toMessages(fresh)];

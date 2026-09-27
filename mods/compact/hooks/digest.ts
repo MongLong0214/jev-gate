@@ -61,6 +61,9 @@ const NARRATION_CHARS = 400;
 const INPUT_CHARS = 240;
 const RESULT_CHARS = 1200;
 const CUT = ' […]';
+/** What a message and each tool call or result in it cost beyond their text, near enough: the id and the structure. */
+const MESSAGE_OVERHEAD = 16;
+const BLOCK_OVERHEAD = 40;
 
 const HEADER = `${DIGEST_MARK} This conversation was compacted without a model summary. Below is an extract of the earlier part: the previous summary, the user's requests, and a log of earlier steps (oldest first) with each tool call's input and, where room allowed, an excerpt of its output. Text cut to fit ends in "[…]"; re-read the source if you need it whole. The conversation continues verbatim after this message.`;
 
@@ -79,18 +82,34 @@ const inputText = (u: DigestToolUse): string => {
   return `${u.tool} ${json}`;
 };
 
-/** What a kept message costs in the context, near enough: its text, tool inputs and tool results. */
+/**
+ * What a kept message costs in the context, near enough: its text, its tool calls and results with their ids, and the
+ * structure around each, so a stretch of many small calls is not counted as nearly free.
+ */
 export const messageChars = (m: DigestMessage): number =>
+  MESSAGE_OVERHEAD +
   m.text.length +
-  (m.role === 'assistant' ? m.toolUses.reduce((n, u) => n + inputText(u).length, 0) : 0) +
-  (m.toolResults ?? []).reduce((n, r) => n + r.text.length, 0);
+  (m.role === 'assistant' ? m.toolUses.reduce((n, u) => n + inputText(u).length + (u.tool_use_id?.length ?? 0) + BLOCK_OVERHEAD, 0) : 0) +
+  (m.toolResults ?? []).reduce((n, r) => n + r.text.length + (r.tool_use_id?.length ?? 0) + BLOCK_OVERHEAD, 0);
 
 /** A digest this module wrote is recognized by its whole header rather than the mark alone: a request can start with the mark. */
 const isSummary = (m: DigestMessage): boolean =>
   m.role === 'user' && (m.text.trimStart().startsWith(CORE_SUMMARY) || m.text.trimStart().startsWith(HEADER));
 
+/**
+ * The previous summary, the engine's or one this module wrote, opens the conversation: it is looked for only before
+ * the first assistant message rather than anywhere, so a request that quotes one later stays a request.
+ */
+const openingSummary = (messages: readonly DigestMessage[]): number => {
+  for (let i = 0; i < messages.length; i++) {
+    if (messages[i]!.role === 'assistant') return -1;
+    if (isSummary(messages[i]!)) return i;
+  }
+  return -1;
+};
+
 const isRequest = (m: DigestMessage): boolean =>
-  m.role === 'user' && (m.toolResults ?? []).length === 0 && m.text.trim() !== '' && !isSummary(m) && !NOT_A_REQUEST.test(m.text);
+  m.role === 'user' && (m.toolResults ?? []).length === 0 && m.text.trim() !== '' && !NOT_A_REQUEST.test(m.text);
 
 const toolUseIds = (m: DigestMessage): string[] => (m.role === 'assistant' ? m.toolUses.flatMap((u) => (u.tool_use_id ? [u.tool_use_id] : [])) : []);
 
@@ -143,11 +162,21 @@ const tailStart = (messages: readonly DigestMessage[], tailBudget: number, budge
   if (floor === 0) return { ok: false, reason: 'nothing_to_compact' };
   let used = messages.slice(floor).reduce((n, m) => n + messageChars(m), 0);
   if (used > MINIMAL_TAIL_BUDGETS * budget) return { ok: false, reason: pending >= 0 && pending < lastAssistant ? 'pending_call' : 'tail_too_large' };
+  // Growing back one message at a time: `open` holds the results in the grown tail whose call it does not hold yet, so a
+  // start is taken only where it is empty.
+  const uses = new Set(messages.slice(floor).flatMap(toolUseIds));
+  const open = new Set<string>();
   let start = floor;
   for (let i = floor - 1; i >= 1; i--) {
-    used += messageChars(messages[i]!);
+    const m = messages[i]!;
+    used += messageChars(m);
     if (used > tailBudget) break;
-    if (messages[i]!.role === 'assistant' && paired(messages, i) === i) start = i;
+    for (const id of toolUseIds(m)) {
+      uses.add(id);
+      open.delete(id);
+    }
+    for (const r of m.toolResults ?? []) if (r.tool_use_id && !uses.has(r.tool_use_id)) open.add(r.tool_use_id);
+    if (m.role === 'assistant' && open.size === 0) start = i;
   }
   return { ok: true, start };
 };
@@ -228,19 +257,14 @@ export const buildDigest = (messages: readonly DigestMessage[], options: DigestO
     return t;
   };
 
-  let prior: Carried = { summary: '', requests: [], steps: [] };
-  for (let i = head.length - 1; i >= 0; i--) {
-    if (isSummary(head[i]!)) {
-      prior = carried(head[i]!.text);
-      break;
-    }
-  }
+  const summaryAt = openingSummary(head);
+  const prior: Carried = summaryAt >= 0 ? carried(head[summaryAt]!.text) : { summary: '', requests: [], steps: [] };
   const summary = take(prior.summary, Math.floor(budget * SUMMARY_SHARE), 0);
 
   // Requests, the carried ones first in time: the newest gets the most room.
   const asked: Piece[] = [
     ...prior.requests.map((text, k) => ({ at: k - prior.requests.length, sub: 0, text })),
-    ...head.flatMap((m, i) => (isRequest(m) ? [{ at: i, sub: 0, text: m.text.trim() }] : [])),
+    ...head.flatMap((m, i) => (i !== summaryAt && isRequest(m) ? [{ at: i, sub: 0, text: m.text.trim() }] : [])),
   ];
   const requests: Piece[] = [];
   [...asked].reverse().forEach((p, k) => {
