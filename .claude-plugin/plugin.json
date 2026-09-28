@@ -1,6 +1,6 @@
 {
   "name": "jev-gate",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Jev-directed orchestration for deep sessions: a planner and tiered workers, admitted only past a context-depth floor; off by default.",
   "author": {
     "name": "MongLong0214",

@@ -30,7 +30,7 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     const archive = readdirSync(outDir).find((f) => /^jev-gate-.*\.zip$/.test(f));
     expect(archive).toBeDefined();
     const list = spawnSync('unzip', ['-Z1', join(outDir, archive!)], { encoding: 'utf8' }).stdout.trim().split('\n');
-    const agents = ['worker-fast', 'worker', 'worker-deep', 'worker-frontier', 'planner', 'planner-frontier'].map((a) => `agents/${a}.md`);
+    const agents = ['worker-fast', 'worker', 'worker-deep', 'worker-frontier', 'planner', 'planner-frontier', 'executor'].map((a) => `agents/${a}.md`);
     for (const must of ['dist/entry.js', 'dist/hook.js', 'dist/jev.js', 'dist/brief.js', 'dist/cli.js', 'dist/job.js', 'dist/plan.js', 'hooks/hooks.json', ...agents, '.claude-plugin/plugin.json', 'README.md']) expect(list, must).toContain(must);
     expect(list.some((f) => f.startsWith('src/') || f.startsWith('tests/') || f.startsWith('node_modules/') || f.includes('.env') && !f.endsWith('.env.example'))).toBe(false);
 
@@ -74,6 +74,15 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     // #48 P2: SessionStart is the sixth registered event, wired to the same dist/entry.js command.
     expect(doctor.stdout).toMatch(/hooks\.json SessionStart \(no matcher\): 1 command hook/);
     for (const agent of agents) expect(existsSync(join(dest, agent)), agent).toBe(true);
+    // v0.3.0 shipped without agents/executor.md and doctor failed on the installed archive; the lines above only
+    // sampled its output. With the host able to run Agent calls in the foreground, doctor on the archive fails nothing.
+    const whole = spawnSync(process.execPath, [join(dest, 'dist', 'cli.js'), 'doctor'], {
+      cwd: otherCwd,
+      encoding: 'utf8',
+      env: { ...env, PATH: '/nonexistent', CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' },
+    });
+    expect(whole.stdout.split('\n').filter((l) => l.startsWith('[fail]'))).toEqual([]);
+    expect(whole.status).toBe(0);
   }, 60_000);
 
   it('packs a lean profile with one executor, the lean hook set and no stale compiled modules', () => {
