@@ -142,4 +142,50 @@ describe('scripts/release.mjs', () => {
     expect(check.stderr).toContain(`served serves {"source":"archive"`);
     expect(release('check', '--tag', 'v0.3.0', '--against', 'v0.3.0').status).toBe(0);
   });
+
+  it('refuses a served marketplace that serves this version with other plugin files', () => {
+    git('switch', '-q', '-c', 'served');
+    write('mods/router/hooks/register.ts', 'export default () => { /* merged after the check */ };\n');
+    commit('same-version change merged');
+    git('switch', '-q', '--detach', 'v0.3.0');
+    const check = release('check', '--tag', 'v0.3.0', '--against', 'served');
+    expect(check.status).toBe(1);
+    expect(check.stderr).toContain('served serves v0.3.0 with other plugin files: mods/router/hooks/register.ts');
+  });
+
+  // R64-03: main moving on to a later version between publication and the read-back must not fail the earlier release.
+  it('accepts a served marketplace that has moved on to a later version', () => {
+    git('switch', '-q', '-c', 'served');
+    write('mods/compact/hooks/register.ts', 'export default () => { /* 0.3.1 */ };\n');
+    setVersion('0.3.1');
+    expect(release('pin').status).toBe(0);
+    commit('0.3.1');
+    git('switch', '-q', '--detach', 'v0.3.0');
+    const check = release('check', '--tag', 'v0.3.0', '--against', 'served');
+    expect(check.stderr).toBe('');
+    expect(check.status).toBe(0);
+  });
+
+  it('refuses a served marketplace that does not serve this version yet', () => {
+    git('switch', '-q', '-c', 'served');
+    setVersion('0.2.9');
+    expect(release('pin').status).toBe(0);
+    commit('older');
+    git('switch', '-q', '--detach', 'v0.3.0');
+    const check = release('check', '--tag', 'v0.3.0', '--against', 'served');
+    expect(check.status).toBe(1);
+    expect(check.stderr).toContain('served serves v0.2.9, not v0.3.0 yet');
+  });
+
+  it('accepts the published asset only when it is the pinned archive', () => {
+    const out = join(repo, 'out');
+    expect(release('check', '--tag', 'v0.3.0', '--out', out).status).toBe(0);
+    const good = release('check', '--tag', 'v0.3.0', '--asset', join(out, 'jev-gate-0.3.0.zip'));
+    expect(good.stderr).toBe('');
+    expect(good.status).toBe(0);
+    writeFileSync(join(out, 'other.zip'), 'not the archive');
+    const bad = release('check', '--tag', 'v0.3.0', '--asset', join(out, 'other.zip'));
+    expect(bad.status).toBe(1);
+    expect(bad.stderr).toContain('other.zip is ');
+  });
 });

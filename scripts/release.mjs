@@ -3,11 +3,13 @@
 // install without dist; the Function Hooks Mods run from their TypeScript and ship from their source directories.
 // Usage, after `npm run build`:
 //   node scripts/release.mjs pin                          pack the archive, write its URL and SHA-256 into the entry
-//   node scripts/release.mjs check [--tag vX.Y.Z] [--against <ref>] [--out <dir>]
+//   node scripts/release.mjs check [--tag vX.Y.Z] [--against <ref>] [--asset <file>] [--out <dir>]
 //                                                        pack it again and fail unless it matches the pin; --against
-//                                                        also requires the entry at <ref> (the served marketplace) to
-//                                                        be this one; with --out, keep the archive and the release
-//                                                        notes there for upload
+//                                                        also requires <ref> (the served marketplace) to serve this
+//                                                        version with this entry and these plugin files, or a later
+//                                                        version; --asset requires a published file to be the pinned
+//                                                        archive; with --out, keep the archive and the release notes
+//                                                        there for upload
 // Both refuse unless package.json, every plugin.json and the tag carry one version, and once a version is released (its
 // tag exists) its content is frozen: a user updates only when the version changes, so the same version with another
 // archive or other plugin files would leave installed copies stale and make the published archive fail its pin.
@@ -82,6 +84,32 @@ const frozenProblems = (sha256) => {
   return problems.length ? [...problems, `raise the version in package.json and every plugin.json`] : [];
 };
 
+const later = (a, b) => {
+  const [x, y] = [a, b].map((v) => v.split('.').map(Number));
+  const i = x.findIndex((n, k) => n !== y[k]);
+  return i >= 0 && x[i] > y[i];
+};
+
+// The served marketplace at this version must serve exactly this entry and these plugin files. A later version there
+// has moved on and this release no longer decides what installs, so it passes rather than reading as a mismatch that
+// would withdraw a valid release; an earlier one does not serve this version yet.
+const servedProblems = (ref) => {
+  const pkg = git('show', `${ref}:package.json`);
+  if (!pkg.ok) return [`cannot read the version ${ref} serves: ${pkg.err}`];
+  const servedVersion = JSON.parse(pkg.out).version;
+  if (servedVersion !== version) return later(servedVersion, version) ? [] : [`${ref} serves v${servedVersion}, not v${version} yet`];
+  const problems = [];
+  const served = git('show', `${ref}:${MARKETPLACE_PATH}`);
+  const servedSource = served.ok ? archiveEntry(JSON.parse(served.out))?.source : undefined;
+  if (JSON.stringify(servedSource) !== JSON.stringify(entry.source)) {
+    problems.push(`${ref} serves ${JSON.stringify(servedSource ?? null)}, not this entry ${JSON.stringify(entry.source)}`);
+  }
+  const changed = git('diff', '--name-only', ref, '--', ...sourceDirs);
+  if (!changed.ok) problems.push(`cannot compare ${sourceDirs.join(', ')} with ${ref}: ${changed.err}`);
+  else if (changed.out) problems.push(`${ref} serves v${version} with other plugin files: ${changed.out.split('\n').join(', ')}`);
+  return problems;
+};
+
 if (command === 'pin') {
   const { dir, sha256 } = packed();
   rmSync(dir, { recursive: true, force: true });
@@ -97,11 +125,17 @@ if (command === 'pin') {
   if (entry.source.sha256 !== sha256) problems.push(`the entry pins ${entry.source.sha256}, this tree packs ${sha256}`);
   problems.push(...frozenProblems(sha256));
   const against = flag('against');
-  if (against !== null) {
-    const served = git('show', `${against}:${MARKETPLACE_PATH}`);
-    const servedSource = served.ok ? archiveEntry(JSON.parse(served.out))?.source : undefined;
-    if (JSON.stringify(servedSource) !== JSON.stringify(entry.source)) {
-      problems.push(`${against} serves ${JSON.stringify(servedSource ?? null)}, not this entry ${JSON.stringify(entry.source)}`);
+  if (against !== null) problems.push(...servedProblems(against));
+  const asset = flag('asset');
+  if (asset !== null) {
+    let published = null;
+    try {
+      published = createHash('sha256').update(readFileSync(asset)).digest('hex');
+    } catch (error) {
+      problems.push(`cannot read ${asset}: ${error.message}`);
+    }
+    if (published !== null && published !== entry.source.sha256) {
+      problems.push(`${asset} is ${published}, the entry pins ${entry.source.sha256}`);
     }
   }
   const out = flag('out');
@@ -117,5 +151,5 @@ if (command === 'pin') {
   if (problems.length) fail(problems.join('; '));
   process.stdout.write(`ok ${archiveName} ${sha256}\n`);
 } else {
-  fail('usage: node scripts/release.mjs pin | check [--tag vX.Y.Z] [--against <ref>] [--out <dir>]');
+  fail('usage: node scripts/release.mjs pin | check [--tag vX.Y.Z] [--against <ref>] [--asset <file>] [--out <dir>]');
 }
