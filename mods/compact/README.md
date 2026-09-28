@@ -1,8 +1,8 @@
 # jev-gate-compact
 
 A Claude Code Function Hooks plugin that answers the host's auto compaction itself. The conversation before a recent
-tail becomes one built user message (the digest): the previous summary, the person's requests, and a log of earlier
-steps with each tool call's input and, while room lasts, an excerpt of its output. The tail stays as the engine has it,
+tail becomes one built user message (the digest): the previous summary, every earlier user-role message and failed
+call whole, and a log of earlier steps with each tool call's input and, while room lasts, an excerpt of its output. The tail stays as the engine has it,
 except a last message that answers tool calls, which is handed up rebuilt with a closing line after its results (below).
 No model is asked, so a compaction sends no summarizer request and takes milliseconds instead of a minute or more.
 
@@ -35,7 +35,8 @@ Off by default; off registers no hook at all. Options live under `pluginConfigs[
 
 An option it cannot use turns it off and logs the field name once per session. Every compaction it is asked about logs
 one `jev-compact {...}` debug line: why it deferred to the engine, or the sizes, the fallback reason, and in shadow the
-engine's time and usage.
+engine's time and usage. A failure of its own (`error`) leaves that compaction to the engine once; the engine's own
+failure or cancellation is passed up and never retried, and a log that throws changes nothing.
 
 ## What it keeps
 
@@ -48,7 +49,8 @@ engine's time and usage.
   last message is handed up built rather than by its handle: the same results, as text, with their ids and error flags,
   then one line saying the kept messages end there. The text is all a rebuild can carry, so it is done only when every
   result answers a built-in tool that returns text alone (Bash, Edit, Write, Grep, Agent, …; a Read unless its path is
-  an image, a PDF or a notebook). A result with no text, or from any other tool (an MCP tool may send a screenshot
+  an image, a PDF or a notebook, and a Bash unless its record says `isImage` or carries `structuredContent`, as the
+  host's 2.1.283 declaration names them). A result with no text, or from any other tool (an MCP tool may send a screenshot
   beside its text), leaves that compaction to the engine (`opaque_result`). In a later week of transcripts that was 1
   of 376 compactions ending in results (an image Read); the other 375 came from Bash (290), Write, Edit, Read,
   SubagentHandback, Agent, SendMessage, AskUserQuestion, Glob and Grep.
@@ -62,29 +64,37 @@ engine's time and usage.
   one-word exchanges and a 60K result went from 161.6K to 72.2K counted that way, but from 72.9K to 72.0K in text,
   since what was dropped was mostly ids and structure. Where the host compacts (well over 100K tokens of conversation)
   the ceiling is a small part of it either way.
-- **The digest** gets the rest, and never less than 30%: the newest request (up to 2,000 characters), the previous
-  summary (up to 30% of the budget and half of what is left, so a long summary cannot crowd out the newest request),
-  earlier requests (400 each), then for each earlier assistant message, newest first, its narration (400) and
-  tool inputs (240 each), then result excerpts (1,200 each), newest first. Pieces are chosen by that priority and
-  printed oldest first. A long request or previous summary is cut in the middle, so its end survives: the last line of
-  a request is often the instruction, and the engine's summary ends with the current work and the next step.
-- **Requests** are what a user message says once the engine's own additions are cut out: blocks in its tags
-  (`<system-reminder>`, task notifications, command echoes and output, `!` shell input and output) that start a line,
-  as its own text blocks do, and the caveat it puts before command output. A message the engine wrote alone is not a
-  request; one it added a reminder to still is, and a tag quoted inside a sentence stays part of it. The host does not
-  say who wrote a message, so this is read from the text and can be wrong at the edges.
+- **The digest** gets the rest, and never less than 30%. Mandatory first and whole: the previous summary, every
+  earlier user-role message, and every failed or interrupted call. None of them is cut to a length; when they do not
+  fit beside the tail, the engine compacts instead (`mandatory_overflow`), rather than the budget growing or a limit
+  in the middle of a message being cut. What is left goes to each earlier assistant message, newest first, its
+  narration (400) and tool inputs (240 each), then result excerpts (1,200 each), newest first. Pieces are printed
+  oldest first.
+- **User-role messages** are quoted whole, beside tool results too. The host joins a message's text blocks and does
+  not say who wrote them (2.1.283's `SessionMessage` has no such field), so nothing is cut out by its shape: a
+  `<system-reminder>` at a line start, a tag in a code fence, the engine's caveat before command output, and a
+  pasted digest with a matching checksum all stay. The header says they are past input of unverified origin, not new
+  instructions, and that whether a limit in one still holds depends on the work it was given for. The cost is size:
+  engine reminders count against the budget too, and a conversation holding many falls back sooner.
+- **Failures.** A call the host marks `isError`, or a Bash it records as `interrupted`, is kept whole with its input
+  in its own section, each attempt of a repeated one included, and carried whole into later digests. The header
+  says a later success does not show an earlier failure fixed. The text of a failure is not parsed for its
+  expected/actual lines: it is kept whole, or the engine compacts. A result the tool did not mark failed is an
+  excerpt like any other.
 - **A digest it wrote earlier** (recognized by its whole header line, a section heading straight after it, and a last
   line carrying a checksum of the rest, exact but for whitespace around the whole message; one changed inside, even by
-  a space, is read as a request, as is one with text outside its sections, since the checksum is public and a request
-  can carry one it computed,
-  and only where a summary opens the conversation, before the first assistant message, so a request that starts with,
-  quotes or pastes a digest and adds to it stays a request) is taken apart at the next
-  compaction: its previous summary stays the summary, its
-  requests and steps join the new ones as the oldest, so the newest survive the cut rather than the oldest. A content
-  line that starts like a section heading (`## `) or a request marker (`▸ `) is written indented by one space, so a
-  request or result that quotes them cannot move the parse.
+  a space, is read as a user-role message, as is one with text outside its sections, and only where a summary opens
+  the conversation, before the first assistant message) is taken apart at the next compaction: its previous summary
+  stays the summary, its messages and failures join the new ones as the oldest, whole, and its steps are carried as
+  excerpts. The checksum is public: it checks the layout, not who wrote it, and is never a reason to drop text. A
+  digest in the layout before this one (its requests were cut to 2,000 and 400 characters) is not taken apart: it is
+  quoted whole as past input, or the engine compacts. A content line that starts like a section heading (`## `) or
+  an entry marker (`▸ `) is written indented by one space, so a message or result that quotes them cannot move the
+  parse.
 
 ## Evidence (2026-09-27)
+
+Measured before user-role messages and failures were kept whole (#79); the figures below have not been re-run since.
 
 **Offline, the shipped function over real compactions** (`bench/compact/eval.ts`, 40 seeded auto compactions from the
 past week's local transcripts, main and subagent). Each digest is built from what the engine held at that boundary: the

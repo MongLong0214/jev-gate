@@ -1,4 +1,4 @@
-import type { Register } from 'claude-code';
+import type { Register, SessionMessage } from 'claude-code';
 
 import { resolveCompactConfig } from './config.ts';
 import { assemble, buildDigest } from './digest.ts';
@@ -41,9 +41,12 @@ export const register: Register = (on, options) => {
     }
 
     const t0 = Date.now();
+    // Its own failure, building or assembling, leaves the compaction to the engine; the engine's is never retried.
     let outcome: ReturnType<typeof buildDigest> | null = null;
+    let answer: SessionMessage[] | null = null;
     try {
       outcome = buildDigest(e.messages, { budgetChars: config.budgetChars });
+      if (config.mode === 'active' && outcome.ok) answer = assemble(e.messages, outcome.result);
     } catch {
       outcome = null;
     }
@@ -51,12 +54,13 @@ export const register: Register = (on, options) => {
       ? { head: outcome.result.headMessages, tail: outcome.result.tailMessages, digestChars: outcome.result.digestChars, tailChars: outcome.result.tailChars, buildMs: Date.now() - t0 }
       : { fallback: outcome ? outcome.reason : 'error' };
 
-    if (config.mode === 'active' && outcome?.ok) {
+    if (answer) {
       log({ applied: true, messages: e.messages.length, ...built });
-      return { messages: assemble(e.messages, outcome.result) };
+      return { messages: answer };
     }
     const t1 = Date.now();
-    // The engine can refuse too (a lone exchange it cannot summarize); the line is still written, the rejection passes up.
+    // The engine can refuse too (a lone exchange it cannot summarize), or be cancelled; the line is still written, the
+    // rejection passes up, and the engine is not asked again.
     const result = await next(e).catch((err: unknown) => {
       log({ applied: false, messages: e.messages.length, ...built, coreMs: Date.now() - t1, coreError: true });
       throw err;
