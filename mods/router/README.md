@@ -30,6 +30,13 @@ The plugin is **off by default**. With `enabled` false it registers no hook at a
 Set the options in `/config`. They are stored in settings.json under `pluginConfigs["jev-gate-router@jev-gate"].options`
 (`jev-gate-router@inline` for a `--plugin-dir` load), except a sensitive one, which the host keeps in secure storage.
 
+**Option lifetime.** The options are fixed for an activation: the host reloads the plugin when they change and
+`register` runs again with the new ones (the `Register` declaration), so every decision, pending wait and suspension of
+the old activation is dropped with it. Turned off, nothing is registered and no earlier override is applied again. An
+override is only ever a field of one request passed to `next`: the Router never writes the session's model or effort,
+settings.json, the environment or another plugin's state, so there is nothing to undo. A request already sent keeps
+what it was sent with.
+
 The key comes from `typesafeApiKey` (a sensitive option) or, when that is empty, from `TYPESAFE_API_KEY` in the
 environment. An explicit key that cannot ride in a header is refused and the environment is **not** consulted, so a
 typo never silently switches credentials. The key is sent only in the `Authorization` header and never logged. It is
@@ -161,7 +168,9 @@ An effort-only patch compares by model alone, in both directions (bare against `
 not depend on the variant. If a step's incoming model or effort differs from the
 baseline, something else changed it, and the Router stops for the rest of the turn (`root_stop`). So it does if the
 host dispatched a step without waiting for the hook (`step_abandoned`): a later step never switches away from what that
-one ran on.
+one ran on. A patched request whose stream fails leaves the rest of the turn native too (`step_failed`): the error
+passes through unchanged, `next` is never called again for it, and whatever the host sends next, a retry or a
+fallback, goes without the override.
 
 **Root effort and the prompt cache.** Changing the effort always invalidates a conversation's cached messages
 (platform docs, *Prompt caching*), and the host sends each turn's effort both as a per-message change and
@@ -178,7 +187,11 @@ carries (2.1.283, observed). The spawn is asked the effort question on the full 
 is known; its loop's first step reads that answer against the model and effort the loop actually runs at and decides
 for the whole loop, so one subagent keeps one effort and its cache is never restarted. A first step that could not
 wait for the spawn's id (1.5 s) runs native and so does the rest of its loop. A step that arrives on another model or
-effort, an effort pin, or a patched step answered by another model leaves that loop native too (`child_stop`). On the fake API, a probe plugin making the same two patches (a named `model: "opus"` spawn to
+effort, an effort pin, a patched step answered by another model or one that failed leaves that loop native too
+(`child_stop`). The answer is for the spawn's own task: a later run of the same subagent (a SendMessage continuation,
+which steps under a new turn id) runs native (`next_turn`). A subagent whose model is known at the spawn and takes no
+effort at all (Haiku, named by the call or inherited by a verified built-in, with no model pin or remapped alias) is
+not asked about effort, and with its model not movable either, nothing is sent. On the fake API, a probe plugin making the same two patches (a named `model: "opus"` spawn to
 `sonnet`, each of its loop's steps to `low`) sent every subagent request as `claude-sonnet-5` at `effort: low` while
 the root stayed at `xhigh` (`~/jev-gate-runs/router-v2-2026-09-28/probe-child/`).
 
@@ -186,9 +199,12 @@ A spawn is judged per dispatch, on its own prompt, even when a `tool_use_id` rep
 the host release, the allowlist, Jev) ends with that dispatch or with the session it began in. A spawn whose session
 ended meanwhile sends nothing more and stays native (`session_ended`).
 
-Each routed result is logged with what the host reported: `root_result` carries the applied patch, the model the step
-reports and the four counts of its usage (nothing else of it), and `spawn_result` the requested and resolved
-model and the agent id, or the denial. Usage counts are logged as `input`, `output`, `cache_read` and
+Each routed result is logged with what the host reported: `root_result` carries the patch sent with the request
+(`applied`: requested, not confirmed), the model the step reports (`observed`), `observed_effort: "unknown"` when an
+effort was requested, and the four counts of its usage (nothing else of it), and `spawn_result` the requested and
+resolved model and the agent id, or the denial. A model is confirmed only by what the response reports; the effort a
+request actually ran at is never reported to a hook, so no log line claims it. A subagent step's effort is logged as
+the `child` line's `patch`, likewise requested only. Usage counts are logged as `input`, `output`, `cache_read` and
 `cache_creation`, for the Router's own Jev calls and for the host's: the host's debug log replaces the value of any
 key containing `token` with a bare `[REDACTED]`, which leaves the line unparsable, so logs written before this change
 carry no readable usage. These are per-step records, not a saving: overlapping totals are for #45 to normalize.
@@ -215,5 +231,13 @@ carry no readable usage. These are per-step records, not a saving: overlapping t
   checks, with nothing awaited before `next`, that the session it began in has not ended (and, at the root, that the
   turn is still live); otherwise the step or spawn goes on native (`session_ended`, `turn_stopped`). A failing
   diagnostic or bookkeeping call never keeps an event from being forwarded.
+- **Not confirmed on an installed host.** That the API ran a request at the effort passed to `next` (the host reports
+  the answering model, not the effort; the probe above saw it on a fake API only), any root model switch (none is
+  verified), and a SendMessage continuation stepping under a new turn id (read from the declarations, not observed).
+  The cache behaviour of an effort change is the 2.1.283 fake-API observation above, not a general rule: the host
+  sent both the per-message and the top-level form, so no path that would keep the cache is verified, the warm-cache
+  hold stays, and no beta header, message, thinking or `max_tokens` field is ever rewritten to make one.
+- **The Router never starts a subagent** (`$.agent` is never read) and owns no other feature's lifecycle: a spawn's
+  result means only that the subagent started, and it releases nothing of Lean's or the gate's.
 - **The credential screen is copied, not imported,** because a Function Hooks module cannot import the Node side of
   the repository. A parity test keeps the two lists identical.
