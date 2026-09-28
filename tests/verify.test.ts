@@ -3,14 +3,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 
-import { readWorkerObservation, subagentTranscriptPath, verifyChecks } from '../src/verify.js';
+import { readWorkerObservation, refusalReason, runsCommand, subagentTranscriptPath, verifyChecks } from '../src/verify.js';
 
 const tmp = mkdtempSync(join(tmpdir(), 'jev-verify-'));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
 const use = (id: string, name: string, input: Record<string, unknown>): string =>
   JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id, name, input }] } });
-const result = (id: string, isError: boolean): string => JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: isError, content: 'x' }] } });
+const result = (id: string, isError: boolean | undefined): string =>
+  JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, ...(isError === undefined ? {} : { is_error: isError }), content: 'x' }] } });
 const file = (name: string, lines: string[]): string => {
   const p = join(tmp, name);
   writeFileSync(p, lines.join('\n') + '\n');
@@ -30,12 +31,21 @@ describe('readWorkerObservation', () => {
     const p = file('pairs.jsonl', [use('1', 'Bash', { command: 'npm test' }), result('1', true), use('2', 'Edit', { file_path: 'a' }), result('2', false), use('3', 'Bash', { command: 'npm test' }), result('3', false), 'not json']);
     expect(readWorkerObservation(p)).toEqual({
       runs: [
-        { command: 'npm test', failed: true, at: 1 },
-        { command: 'npm test', failed: false, at: 3 },
+        { command: 'npm test', status: 'failed', at: 1 },
+        { command: 'npm test', status: 'passed', at: 3 },
       ],
       lastWrite: 2,
       truncated: false,
     });
+  });
+
+  it('orders runs by when they were called, and reads a result with no mark as unknown', () => {
+    // Two parallel calls: the later call's result arrives first.
+    const p = file('parallel.jsonl', [use('1', 'Bash', { command: 'npm test' }), use('2', 'Bash', { command: 'npm test' }), result('2', true), result('1', undefined)]);
+    expect(readWorkerObservation(p)?.runs).toEqual([
+      { command: 'npm test', status: 'unknown', at: 1 },
+      { command: 'npm test', status: 'failed', at: 2 },
+    ]);
   });
 
   it('keeps the tail of an oversized transcript and drops the cut first line', () => {
@@ -44,7 +54,7 @@ describe('readWorkerObservation', () => {
     const tail = Buffer.byteLength(`${lines[2]}\n${lines[3]}\n`) + 5;
     const obs = readWorkerObservation(p, tail);
     expect(obs?.truncated).toBe(true);
-    expect(obs?.runs).toEqual([{ command: 'npm test', failed: true, at: 1 }]);
+    expect(obs?.runs).toEqual([{ command: 'npm test', status: 'failed', at: 1 }]);
   });
 
   it('returns null for a transcript that is not there', () => {
@@ -52,8 +62,30 @@ describe('readWorkerObservation', () => {
   });
 });
 
+describe('runsCommand', () => {
+  it.each([
+    ['npm test', true],
+    ['npm  test -- --run', true],
+    ['cd pkg && npm test', true],
+    ['CI=1 npm test 2>&1 | tail -20', true],
+    ['echo npm test', false],
+    ['npm testing', false],
+    ['git commit -m "npm test"', false],
+  ])('%s runs npm test: %s', (run, expected) => {
+    expect(runsCommand(run, 'npm test')).toBe(expected);
+  });
+});
+
 describe('verifyChecks', () => {
-  const obs = { runs: [{ command: 'npm test', failed: true, at: 1 }, { command: 'npm run  lint', failed: false, at: 2 }], lastWrite: 3, truncated: false };
+  const obs = {
+    runs: [
+      { command: 'npm test', status: 'failed' as const, at: 1 },
+      { command: 'npm run  lint', status: 'passed' as const, at: 2 },
+      { command: 'npm run typecheck', status: 'unknown' as const, at: 4 },
+    ],
+    lastWrite: 3,
+    truncated: false,
+  };
 
   it('sorts each claim by what its last run shows', () => {
     expect(
@@ -63,8 +95,17 @@ describe('verifyChecks', () => {
         { id: 'c3', command: 'npm run build' },
         { id: 'c4', command: null },
         { id: 'c5', command: 'ls' },
+        { id: 'c6', command: 'npm run typecheck' },
       ]),
-    ).toEqual({ transcript: 'read', contradicted: ['c1'], unobserved: ['c3'], stale: ['c2'] });
+    ).toEqual({ transcript: 'read', contradicted: ['c1'], unobserved: ['c3', 'c6'], stale: ['c2'] });
+  });
+
+  it('refuses a failed last run always, and a pass it cannot find only in a transcript read whole', () => {
+    expect(refusalReason({ transcript: 'truncated', contradicted: ['c1'], unobserved: [], stale: [] })).toContain('last run in the worker');
+    expect(refusalReason({ transcript: 'read', contradicted: [], unobserved: ['c3'], stale: [] })).toContain('no passing run');
+    expect(refusalReason({ transcript: 'truncated', contradicted: [], unobserved: ['c3'], stale: [] })).toBeNull();
+    expect(refusalReason({ transcript: 'unavailable', contradicted: [], unobserved: [], stale: [] })).toBeNull();
+    expect(refusalReason({ transcript: 'read', contradicted: [], unobserved: [], stale: ['c2'] })).toBeNull();
   });
 
   it('judges nothing without a transcript', () => {

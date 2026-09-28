@@ -28,11 +28,11 @@ const FLOOR = costModelFloor(MODEL);
 const DEEP = 406_000;
 
 const answers = (over: Record<string, number> = {}): Record<string, unknown> => {
-  const { size = 3, tool_calls = 4, ...facts } = { forbids_delegation: 0.05, external_tools: 0.05, ...over };
+  const { size = 3, tool_calls = 4, ...facts } = { forbids_delegation: 0.05, external_tools: 0.05, plan_only: 0.05, parallel_outcomes: 0.05, ...over };
   return {
-    ...Object.fromEntries(Object.entries(facts).map(([k, v]) => [k, { noul: v }])),
-    size: { score: size, confidence: 0.9 },
-    tool_calls: { score: tool_calls, confidence: 0.9 },
+    ...Object.fromEntries(Object.entries(facts).map(([k, v]) => [k, { type: 'noul', noul: v }])),
+    size: { type: 'score', score: size, confidence: 0.9 },
+    tool_calls: { type: 'score', score: tool_calls, confidence: 0.9 },
   };
 };
 
@@ -128,21 +128,26 @@ describe('decideAdmissionAtomic', () => {
     expect(decideAdmissionAtomic(answers({ forbids_delegation: 0.9 }), 1_000, 0, MODEL).reason).toBe('admission_forbids_delegation');
   });
 
-  it('never lets a shape read-off invalidate a turn the vetoes and the price admitted', () => {
-    const loud = decideAdmissionAtomic({ ...answers(), plan_only: { noul: 0.95 }, parallel_outcomes: { noul: 0.95 } }, DEEP, FLOOR, MODEL);
+  it('lets a shape read-off shape the turn but never veto it', () => {
+    const loud = decideAdmissionAtomic(answers({ plan_only: 0.95, parallel_outcomes: 0.95 }), DEEP, FLOOR, MODEL);
     expect(loud).toMatchObject({ shape: 'orchestrated', decided: true });
-    expect(decideAdmissionAtomic({ ...answers(), plan_only: { noul: 2 } }, DEEP, FLOOR, MODEL)).toMatchObject({ shape: 'orchestrated' });
   });
 
   it.each([
     ['a missing noul', (() => { const a = answers(); delete a['external_tools']; return a; })()],
-    ['a non-numeric noul', { ...answers(), external_tools: { noul: 'high' } }],
-    ['a noul outside 0..1', { ...answers(), forbids_delegation: { noul: 1.2 } }],
+    ['a non-numeric noul', { ...answers(), external_tools: { type: 'noul', noul: 'high' } }],
+    ['a noul outside 0..1', { ...answers(), forbids_delegation: { type: 'noul', noul: 1.2 } }],
     ['a choice answer where a noul belongs', { ...answers(), external_tools: { choice: 'yes', confidence: 0.99 } }],
     ['a missing tool-call score', (() => { const a = answers(); delete a['tool_calls']; return a; })()],
-    ['a noul where the tool-call score belongs', { ...answers(), tool_calls: { noul: 0.9 } }],
-    ['a tool-call score above the question\'s own scale', { ...answers(), tool_calls: { score: 999, confidence: 0.9 } }],
-    ['a tool-call score below the question\'s own scale', { ...answers(), tool_calls: { score: -1, confidence: 0.9 } }],
+    ['a noul where the tool-call score belongs', { ...answers(), tool_calls: { type: 'noul', noul: 0.9 } }],
+    ['a tool-call score above the question\'s own scale', { ...answers(), tool_calls: { type: 'score', score: 999, confidence: 0.9 } }],
+    ['a tool-call score below the question\'s own scale', { ...answers(), tool_calls: { type: 'score', score: -1, confidence: 0.9 } }],
+    ['a noul number under a choice type', { ...answers(), external_tools: { type: 'choice', noul: 0.05 } }],
+    ['a noul number with no type', { ...answers(), forbids_delegation: { noul: 0.05 } }],
+    ['a score answered as a noul type', { ...answers(), tool_calls: { type: 'noul', score: 4 } }],
+    ['a missing shape answer', (() => { const a = answers(); delete a['parallel_outcomes']; return a; })()],
+    ['a malformed shape answer', { ...answers(), plan_only: { type: 'noul', noul: 2 } }],
+    ['a size outside its scale', { ...answers(), size: { type: 'score', score: 9 } }],
   ])('leaves the turn direct for %s', (_name, a) => {
     expect(decideAdmissionAtomic(a as Record<string, unknown>, DEEP, FLOOR, MODEL)).toEqual({ shape: 'direct', decided: false, reason: 'admission_invalid', answer: null, estimate: null });
   });
@@ -150,9 +155,9 @@ describe('decideAdmissionAtomic', () => {
 
 describe('shape', () => {
   const facts = (parallel: number | null, size: number | null, planOnly = 0.1): Record<string, unknown> => ({
-    ...(parallel === null ? {} : { parallel_outcomes: { noul: parallel } }),
-    ...(size === null ? {} : { size: { score: size } }),
-    plan_only: { noul: planOnly },
+    ...(parallel === null ? {} : { parallel_outcomes: { type: 'noul', noul: parallel } }),
+    ...(size === null ? {} : { size: { type: 'score', score: size } }),
+    plan_only: { type: 'noul', noul: planOnly },
   });
 
   it('recommends hierarchy only for separate outcomes or a whole project', () => {

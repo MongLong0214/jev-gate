@@ -332,7 +332,7 @@ export interface CheckVerification {
   transcript: 'read' | 'truncated' | 'unavailable';
   /** Reported pass; the last run of its command failed. */
   contradicted: string[];
-  /** Reported pass; its command was never run through Bash in the part of the transcript that was read. */
+  /** Reported pass; the part of the transcript that was read shows no run of its command, or only an unmarked one. */
   unobserved: string[];
   /** Reported pass; the passing run came before a later edit. */
   stale: string[];

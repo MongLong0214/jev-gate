@@ -132,7 +132,7 @@ import {
 } from './plan.js';
 import { openTraceDir, type TraceWriter } from './trace.js';
 import { appendLiveness, LIVENESS_WINDOW, readLiveness } from './liveness.js';
-import { readWorkerObservation, subagentTranscriptPath, verifyChecks } from './verify.js';
+import { readWorkerObservation, refusalReason, subagentTranscriptPath, verifyChecks } from './verify.js';
 import type { CheckVerification, ConfigV5, DenyReason, ErrorCode, ExecutionShape, HookInput, JobGeneration, JobState, LeanPending, ModelAgreement, Plan, PlannedTask, Receipt, Reservation, RoutingMode, Tier } from './types.js';
 import { agentForTier, LEAN_EXECUTOR_AGENT, OWNED_AGENTS, TIERS } from './types.js';
 import { EXECUTION_CONTROL_KEYS, MAX_PROMPT_BYTES } from './brief.js';
@@ -1041,7 +1041,8 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       const floorFacts = { depth_floor: floor, depth_floor_source: floorSource, host_window: window.tokens, host_window_source: window.source };
       // The forced arm never reaches this branch at all (see above), so unlike before, no `!forced` guard is needed.
       const belowFloor = floor > 0 && depth.ok && depth.tokens < floor;
-      const depthUnreadable = floor > 0 && !depth.ok;
+      // Unreadable depth stays direct even with the floor off: `0` turns off the comparison, not the need for a number.
+      const depthUnreadable = !depth.ok;
 
       if (depthUnreadable || belowFloor) {
         // Not knowing the depth is treated as being below it: without the number, the cheaper shape is the native one.
@@ -1874,13 +1875,16 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       const agentId = isRecord(input.tool_response) ? str(input.tool_response['agentId']) : null;
       const path = agentId !== null && input.transcript_path && input.session_id ? subagentTranscriptPath(input.transcript_path, input.session_id, agentId) : null;
       const passed = parsed.value.checks.filter((c) => c.result === 'pass');
+      // On the single shape the check_id is the command itself, which can carry anything a shell line can: it is
+      // matched but never stored, and the trace and the reason name the check by its position in the reply instead.
       const claims = isSingle
-        ? passed.map((c) => ({ id: c.check_id, command: c.check_id }))
+        ? passed.map((c) => ({ id: `#${parsed.value.checks.indexOf(c) + 1}`, command: c.check_id }))
         : passed.map((c) => ({ id: c.check_id, command: task?.checks.find((k) => k.id === c.check_id && k.required)?.command ?? null }));
       verification = verifyChecks(path === null ? null : readWorkerObservation(path), claims);
-      if (finalVerdict === 'accept' && verification.contradicted.length > 0) {
+      const refused = refusalReason(verification);
+      if (finalVerdict === 'accept' && refused !== null) {
         finalVerdict = 'incomplete';
-        reason = `check ${verification.contradicted.join(', ')} was reported pass, but its last run in the worker's own transcript failed`;
+        reason = refused;
       }
     }
 

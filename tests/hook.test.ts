@@ -41,6 +41,8 @@ interface FakeAnswers {
   route?: string;
   basis?: string;
   planning_tier?: string;
+  /** Returns this question's answer with its numbers intact but typed `choice`, as a malformed Jev response would. */
+  mistype?: string;
   onCall?: (questions: string[], state: Record<string, unknown>) => void;
 }
 
@@ -49,6 +51,8 @@ const ATOMIC_ROUTE_FACTS: Record<string, Record<string, number>> = {
   standard: {},
   deep: { unresolved_interaction: 0.9 },
 };
+
+const isRecordValue = (v: unknown): boolean => typeof v === 'object' && v !== null;
 
 const fakeJev = (opts: FakeAnswers = {}): ReturnType<typeof vi.fn> =>
   vi.fn(async (_url: string, init: RequestInit) => {
@@ -74,6 +78,7 @@ const fakeJev = (opts: FakeAnswers = {}): ReturnType<typeof vi.fn> =>
     }
     if (questions.includes('upgrade_basis')) answers['upgrade_basis'] = choice(UPGRADE_BASES, opts.basis ?? 'no_specific_basis');
     if (questions.includes('planning_tier')) answers['planning_tier'] = choice(PLANNER_ROUTE_ANSWERS, opts.planning_tier ?? 'deep');
+    if (opts.mistype !== undefined && isRecordValue(answers[opts.mistype])) answers[opts.mistype] = { ...(answers[opts.mistype] as object), type: 'choice' };
     return new Response(JSON.stringify({ model: 'jev-1.13.0', answers, usage: { input_tokens: 10, output_tokens: 2 } }), { status: 200 });
   });
 
@@ -394,8 +399,19 @@ describe('Gate A admission', () => {
     writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', delegationDepthFloor: 0 }));
     const env = makeEnv({ JEV_GATE_CONFIG: cfg });
     const fetchImpl = fakeJev({ execution: 'orchestrated' });
-    await run(env, { ...promptEvent(), transcript_path: undefined }, fetchImpl);
+    await run(env, promptEvent({ transcript_path: transcriptAt(1_000) }), fetchImpl);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['composite', 'atomic'])('keeps an unreadable transcript direct with the floor off (%s)', async (shape) => {
+    const cfg = join(tmp, `floor-off-unreadable-${shape}.json`);
+    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', delegationDepthFloor: 0, admissionQuestionShape: shape }));
+    const env = makeEnv({ JEV_GATE_CONFIG: cfg });
+    const fetchImpl = fakeJev({ execution: 'orchestrated' });
+    const r = await run(env, { ...promptEvent(), transcript_path: undefined }, fetchImpl);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(context(r)).toContain('Execution shape: direct');
+    expect(state(env).current.shape).toBe('direct');
   });
 
   it('asks the atomic Gate A questions and admits on them when the shape is atomic', async () => {
@@ -441,7 +457,7 @@ describe('Gate A admission', () => {
     ['separate outcomes', { parallelOutcomes: 0.95, size: 3 }, undefined, 'you coordinate'],
     ['a whole project', { parallelOutcomes: 0.05, size: 4 }, undefined, 'Planner first'],
     ['one outcome', { parallelOutcomes: 0.05, size: 3 }, 'single', 'Dispatch first'],
-    ['nothing readable about shape', { parallelOutcomes: 0.05, size: 3 }, 'single', 'Dispatch this request once'],
+    ['neither separate outcomes nor a project', { parallelOutcomes: 0.05, size: 3 }, 'single', 'Dispatch this request once'],
   ] as const)('auto: runs %s as the shape the request asked for', async (_name, answers, execution, guidance) => {
     const dir = join(tmp, `trace-auto-${_name.replace(/\W+/g, '-')}`);
     const env = makeEnv({ JEV_GATE_TRACE_DIR: dir });
@@ -450,6 +466,13 @@ describe('Gate A admission', () => {
     expect(state(env).current.execution).toBe(execution);
     const record = readdirSync(dir).map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>).find((x) => x['phase'] === 'admission_result');
     expect(record?.['recommendation']).toMatchObject({ admitted_shape: execution ?? 'hierarchy', applied: true });
+  });
+
+  it.each(['external_tools', 'tool_calls', 'parallel_outcomes', 'size'])('keeps the turn direct when Jev answers %s in the wrong type', async (key) => {
+    const env = makeEnv();
+    const r = await run(env, promptEvent(), fakeJev({ mistype: key }));
+    expect(context(r)).toContain('Execution shape: direct');
+    expect(state(env).current.shape).toBe('direct');
   });
 
   it('records prompt_id_absent and creates no orchestrated state', async () => {
@@ -1246,6 +1269,14 @@ describe('worker dispatch', () => {
     expect(state(env).current.active['toolu_1']).toMatchObject({ role: 'worker', task_id: 't1', rev: 1, deliverables: ['src/t1.ts'] });
   });
 
+  it('leaves the called tier alone when Gate B answers a fact in the wrong type', async () => {
+    const env = makeEnv();
+    await seedPlanned(env, PLAN_REPLY, fakeJev());
+    const r = await run(env, preEvent('Agent', agentInput()), fakeJev({ route: 'fast', mistype: 'fully_specified' }));
+    expect(String(updatedInput(r)['prompt'])).not.toContain('Tier: fast');
+    expect(updatedInput(r)['subagent_type']).not.toBe('jev-gate:worker-fast');
+  });
+
   /**
    * A17/v5-job2-orbit-2026-09-19: the accepted plan had renamed four of the request's exports and dropped a fifth.
    * No worker could have caught that, because until now nothing carried the request past the planner.
@@ -1619,6 +1650,24 @@ describe('worker check verification (0.4.0)', () => {
     expect(state(env).current.receipts[0]).toMatchObject({ verdict: 'accept', verification: { contradicted: [], unobserved: [], stale: ['c1'] } });
   });
 
+  it('refuses a reported pass the whole transcript shows no run of', async () => {
+    const env = makeEnv();
+    await dispatched(env);
+    await run(env, postWith(workerReply(), workerTranscript([{ command: 'npm run lint', failed: false }])));
+    const receipt = state(env).current.receipts[0];
+    expect(receipt).toMatchObject({ verdict: 'incomplete', verification: { transcript: 'read', unobserved: ['c1'] } });
+    expect(receipt?.verdict_reason).toContain('shows no passing run of its command');
+  });
+
+  it('does not let a later command that only mentions the check mask its failed run', async () => {
+    const env = makeEnv();
+    await dispatched(env);
+    await run(env, postWith(workerReply(), workerTranscript([{ command: 'npm test', failed: true }, { command: 'echo npm test', failed: false }])));
+    expect(state(env).current.receipts[0]).toMatchObject({ verdict: 'incomplete', verification: { contradicted: ['c1'] } });
+  });
+
+  // A missing transcript cannot show that a check did not run; refusing on it would refuse every task on a host whose
+  // layout moved. The receipt says the transcript was unavailable, so the acceptance is visibly the worker's word.
   it('accepts on the report alone when there is no transcript to read, and says so', async () => {
     const env = makeEnv();
     await dispatched(env);
@@ -1646,7 +1695,26 @@ describe('worker check verification (0.4.0)', () => {
     await run(env, preEvent('Agent', agentInput({ prompt: 'Do what the request asks.' })), fetchImpl);
     const reply = workerReply({ checks: [{ check_id: 'npm run build', result: 'pass', note: 'built' }] });
     await run(env, postWith(reply, workerTranscript([{ command: 'npm run build', failed: true }])));
-    expect(state(env).current.receipts[0]).toMatchObject({ verdict: 'incomplete', verification: { contradicted: ['npm run build'] } });
+    expect(state(env).current.receipts[0]).toMatchObject({ verdict: 'incomplete', verification: { contradicted: ['#1'] } });
+  });
+
+  it('names a single-shape check by its position, so the command it ran never reaches the trace', async () => {
+    const dir = join(tmp, 'trace-verify-secret');
+    const cfg = join(tmp, 'verify-single-secret.json');
+    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', admittedShape: 'single' }));
+    const env = makeEnv({ JEV_GATE_CONFIG: cfg, JEV_GATE_TRACE_DIR: dir });
+    const fetchImpl = fakeJev();
+    await run(env, promptEvent(), fetchImpl);
+    await run(env, preEvent('Agent', agentInput({ prompt: 'Do what the request asks.' })), fetchImpl);
+    const command = 'curl -fsS -H "Authorization: Bearer sk-test-SECRET" https://example.invalid/health';
+    const reply = workerReply({ checks: [{ check_id: command, result: 'pass', note: 'ok' }] });
+    await run(env, postWith(reply, workerTranscript([{ command, failed: true }])));
+    const receipt = state(env).current.receipts[0];
+    expect(receipt).toMatchObject({ verdict: 'incomplete', verification: { contradicted: ['#1'] } });
+    expect(receipt?.verdict_reason).not.toContain('SECRET');
+    const traced = readdirSync(dir).map((f) => readFileSync(join(dir, f), 'utf8')).join('\n');
+    expect(traced).toMatch(/"contradicted": \[\s*"#1"\s*\]/);
+    expect(traced).not.toContain('SECRET');
   });
 });
 

@@ -140,8 +140,9 @@ export const buildAtomicAdmissionRequest = (prompt: string, config: ConfigV5): A
   questions: ADMISSION_FACT_QUESTIONS,
 });
 
+// An answer is read only in the type its question asked for: a `choice` carrying a `noul` number is not a noul answer.
 const noulValue = (v: unknown): number | null => {
-  if (typeof v !== 'object' || v === null) return null;
+  if (typeof v !== 'object' || v === null || (v as { type?: unknown }).type !== 'noul') return null;
   const n = (v as { noul?: unknown }).noul;
   return typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 1 ? n : null;
 };
@@ -155,7 +156,7 @@ export const SIZE_MAX_SCORE = ADMISSION_FACT_QUESTIONS.size.criteria.length - 1;
 export const TOOL_CALLS_MAX_SCORE = ADMISSION_FACT_QUESTIONS.tool_calls.criteria.length - 1;
 
 const scoreValue = (v: unknown, max: number): number | null => {
-  if (typeof v !== 'object' || v === null) return null;
+  if (typeof v !== 'object' || v === null || (v as { type?: unknown }).type !== 'score') return null;
   const n = (v as { score?: unknown }).score;
   return typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= max ? n : null;
 };
@@ -236,16 +237,17 @@ export const decideAdmissionAtomic = (
   const fallback = (reason: PreserveReason, estimate: AdmissionEstimate | null = null) => ({ shape: 'direct' as const, decided: false, reason, answer: null, estimate });
   if (depth === null) return fallback('depth_unknown');
   if (floor > 0 && depth < floor) return fallback('depth_below_floor');
+  // Every question asked must come back readable, in the type it was asked in, before any of them is used: a response
+  // that did not answer what was asked is not one to act on, and its unread shape facts would otherwise quietly pick
+  // `single`. Measured on 2026-09-28, all 100 real answers answered all six (bench/results/v5-gate-a-cost-2026-09-28).
   const facts: Record<string, number> = {};
-  // A21: `plan_only`, `parallel_outcomes` and `size` are absent from this list: they shape an admitted turn and never
-  // veto one, so a missing answer to one of them must not be able to invalidate the turn.
-  for (const key of ['forbids_delegation', 'external_tools'] as const) {
+  for (const key of ['forbids_delegation', 'external_tools', 'plan_only', 'parallel_outcomes'] as const) {
     const n = noulValue(answers[key]);
     if (n === null) return fallback('admission_invalid');
     facts[key] = n;
   }
   const calls = scoreValue(answers['tool_calls'], TOOL_CALLS_MAX_SCORE);
-  if (calls === null) return fallback('admission_invalid');
+  if (calls === null || scoreValue(answers['size'], SIZE_MAX_SCORE) === null) return fallback('admission_invalid');
   if ((facts['forbids_delegation'] as number) >= FACT_TRUE) return fallback('admission_forbids_delegation');
   // Only a coordinator that cannot call a connector itself (`guardAllowMcp: false`) stalls on one; with the default
   // the root runs those steps and the rest is still worth delegating, so the fact is recorded and vetoes nothing.

@@ -22,9 +22,12 @@ rest were delegated ("나머지는 너가 모두 자율판단해서 진행해") 
   change, not the number: once the coordinator may call MCP tools itself, a connector step no longer blocks
   delegation. The run showed the veto also flagging `gh` and shell work (14 of 100). Both numbers are published side by
   side in RESULTS.md.
-- **Verification refuses only on contradiction.** A reported pass whose last observed run failed is refused. Refusing
-  an unobserved or stale check too was ruled out: the transcript cannot see every way a check can be run, so it would
-  refuse correct work. Those are recorded and refuse nothing.
+- **Verification refuses on evidence, not on missing evidence.** A reported pass whose last observed run failed is
+  refused, and so is one the whole transcript shows no passing run of: the worker is told to run each check as its
+  command, so a pass with no run behind it is the self-grade the owner named. Refusing when the transcript is cut or
+  missing was ruled out: neither can show absence, and a host whose transcript layout moved would then have every
+  task refused. A pass an edit came after is recorded, not refused, because the later edit may not touch what the
+  check covers.
 
 ## Not decided here
 

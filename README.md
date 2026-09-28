@@ -169,12 +169,15 @@ again when the last task is accepted, but a step is never dispatched and never g
 
 **Code owns acceptance.** A worker's result unlocks its dependents only when the reply reports every required check of
 its task contract as passed. That is a deterministic check, not a Jev call — the normal path no longer makes a Gate C
-HTTP request. Since 0.4.0 (`verifyWorkerChecks`, on by default) each reported pass is also compared with the last run
-of its command in the worker's own transcript: a check whose last run failed is refused, and a pass that an edit came
-after, or whose command never ran, is recorded on the receipt as `stale` or `unobserved`. It sees only what the host
-marks as a failed Bash call — a command piped into `tail` exits with `tail`'s status — so an accept is still not
-independent proof that the code works; historical Gate C `result_*` records from before this change are still read as
-history.
+HTTP request. Since 0.4.0 (`verifyWorkerChecks`, on by default) each reported pass is also compared with the last call
+of its command in the worker's own transcript (a shell segment that starts with the command, so `echo npm test` is not
+a run of `npm test`). A check whose last run failed is refused, and so is a check the whole transcript shows no passing
+run of. A transcript that was cut or could not be found cannot show absence, so there a missing run, like a pass an
+edit came after, is recorded on the receipt as `unobserved` or `stale` and refuses nothing. On the single shape a
+check is named in traces by its position (`#1`), never by the command. It sees only how the host marked each Bash
+call — a command piped into `tail` exits with `tail`'s status, and an unmarked result is unknown — so an accept is
+still not independent proof that the code works; historical Gate C `result_*` records from before this change are
+still read as history.
 
 **Uncertainty preserves the default.** A tie, a low confidence, an abstention or any HTTP failure keeps the call that was
 already going to happen. A tier above standard additionally requires a concrete upgrade basis in the task itself —
@@ -366,7 +369,7 @@ one shape.
 all. Below it the turn is direct and no request is sent. It exists because depth, not the request, is what decides
 whether delegating is cheaper: the same job measured +182 % on a fresh session and -57 % on a loaded one. The number is
 read from the session transcript the host passes to the hook, and a transcript that cannot be read counts as below the
-floor. `0` turns the floor off.
+floor. `0` turns the floor off; a transcript that cannot be read still keeps the turn direct.
 
 With the atomic gate and `delegationDepthFloor: null`, the floor is the cost model's own: the shallowest depth at which
 the largest answer could pay (48,980 tokens with the defaults), whatever the host window. The rest of this section
