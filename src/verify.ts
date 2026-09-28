@@ -14,6 +14,9 @@ import type { CheckVerification } from './types.js';
  * with no mark is unknown, never a pass. A command piped into `tail` exits with `tail`'s status and reads as a pass
  * here too. A check is found only where a run contains the check's own shell segments in order and nothing around them
  * can decide the exit status in their place (`runsCommand`), so a check the worker ran some other way is not found.
+ * A run is also matched with its unquoted arguments under its own working directory made relative (`relativeTo`): the
+ * host tells workers to write absolute paths, and in that directory the two name the same file. An unquoted pattern
+ * argument that looks like such a path is read the same way, the known gap.
  *
  * What refuses: a check whose last run failed, and a check reported as passing whose passing run the gate cannot see --
  * none in a transcript read whole, none in the tail of a cut one, no transcript at all, or no command to look for. A pass the gate cannot see
@@ -38,6 +41,8 @@ export const subagentTranscriptPath = (parentTranscript: string, sessionId: stri
 
 export interface ObservedRun {
   command: string;
+  /** The same run with its absolute paths under the run's working directory made relative (`relativeTo`), when any. */
+  relative?: string;
   status: 'passed' | 'failed' | 'unknown';
   /** Position among the transcript's tool calls, so a run can be ordered against a later edit. */
   at: number;
@@ -51,6 +56,35 @@ export interface WorkerObservation {
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/**
+ * A run that may resolve a relative path from another directory: a `cd`, `pushd` or `popd` anywhere (quoted too, as in
+ * `eval 'cd sub'`), or an option that moves a tool's base (`git -C`, `--cwd`, `--prefix`, `--root`, ...).
+ */
+const CHANGES_DIR = /(?:^|[\s;&|(`'"])(?:cd|pushd|popd)(?=[\s;&|)`'"]|$)|\s(?:-C|--chdir|--cwd|--prefix|--dir|--directory|--root)(?=[\s=]|$)/;
+/** A segment's command word, with a leading `!` and `NAME=value` assignments; an executable's path is never rewritten. */
+const COMMAND_WORD = /^\s*(?:!\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*\S*/;
+
+/**
+ * The run with each unquoted argument `<cwd>/x` (or `=<cwd>/x`) read as `x`, or undefined when that changes nothing or
+ * cannot be trusted. Left alone: another directory sharing the prefix (`<cwd>2/x`), a quoted argument (it may be a
+ * pattern: `! grep -q '<cwd>/a' f` passing says nothing of `'a'`), a command word, a cwd of `/`, and every run that
+ * changes directory.
+ */
+const relativeTo = (command: string, cwd: unknown): string | undefined => {
+  const dir = typeof cwd === 'string' ? cwd.replace(/\/+$/, '') : '';
+  if (!dir.startsWith('/') || CHANGES_DIR.test(command)) return undefined;
+  const abs = new RegExp(`([\\s=])${dir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/`, 'g');
+  const out = command
+    .split(/(&&|\|\||;|\||\n)/)
+    .map((part, i) => {
+      if (i % 2 === 1) return part;
+      const head = COMMAND_WORD.exec(part)![0];
+      return head + part.slice(head.length).replace(abs, '$1');
+    })
+    .join('');
+  return out === command ? undefined : out;
+};
 
 /** Reads the transcript's last VERIFY_MAX_BYTES; null when there is no file to read. Never throws. */
 export const readWorkerObservation = (path: string, maxBytes = VERIFY_MAX_BYTES): WorkerObservation | null => {
@@ -86,13 +120,16 @@ export const readWorkerObservation = (path: string, maxBytes = VERIFY_MAX_BYTES)
     }
     const content = isRecord(rec) && isRecord(rec['message']) ? rec['message']['content'] : null;
     if (!Array.isArray(content)) continue;
+    const cwd = isRecord(rec) ? rec['cwd'] : undefined;
     for (const block of content) {
       if (!isRecord(block)) continue;
       if (block['type'] === 'tool_use' && typeof block['id'] === 'string') {
         at += 1;
         const input = isRecord(block['input']) ? block['input'] : {};
-        if (block['name'] === 'Bash' && typeof input['command'] === 'string') pending.set(block['id'], { command: input['command'], status: 'unknown', at });
-        else if (typeof block['name'] === 'string' && WRITE_TOOLS.has(block['name'])) lastWrite = at;
+        if (block['name'] === 'Bash' && typeof input['command'] === 'string') {
+          const relative = relativeTo(input['command'], cwd);
+          pending.set(block['id'], { command: input['command'], ...(relative === undefined ? {} : { relative }), status: 'unknown', at });
+        } else if (typeof block['name'] === 'string' && WRITE_TOOLS.has(block['name'])) lastWrite = at;
       } else if (block['type'] === 'tool_result' && typeof block['tool_use_id'] === 'string') {
         const run = pending.get(block['tool_use_id']);
         if (!run) continue;
@@ -157,7 +194,7 @@ export const verifyChecks = (observation: WorkerObservation | null, claims: read
   if (observation === null) return { transcript: 'unavailable', contradicted: [], unobserved: claims.map((c) => c.id), stale: [] };
   const out: CheckVerification = { transcript: observation.truncated ? 'truncated' : 'read', contradicted: [], unobserved: [], stale: [] };
   for (const { id, command } of claims) {
-    const last = command === null || normalize(command) === '' ? undefined : [...observation.runs].reverse().find((r) => runsCommand(r.command, command));
+    const last = command === null || normalize(command) === '' ? undefined : [...observation.runs].reverse().find((r) => runsCommand(r.command, command) || (r.relative !== undefined && runsCommand(r.relative, command)));
     if (!last || last.status === 'unknown') out.unobserved.push(id);
     else if (last.status === 'failed') out.contradicted.push(id);
     else if (observation.lastWrite !== null && observation.lastWrite > last.at) out.stale.push(id);

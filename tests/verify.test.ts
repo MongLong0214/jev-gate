@@ -57,6 +57,33 @@ describe('readWorkerObservation', () => {
     expect(obs?.runs).toEqual([{ command: 'npm test', status: 'failed', at: 1 }]);
   });
 
+  // Observed 2026-09-28 (2.1.283, worker-fast on haiku): the worker ran the planned check with its paths made absolute.
+  it('also matches a run with its unquoted arguments under its own working directory made relative', () => {
+    const runs = [
+      "! grep -q 'old' /w/repo/tests/a.ts && grep -q 'new' /w/repo/tests/a.ts",
+      "cat /w/repo2/x x/w/repo/y --config=/w/repo/z && ! grep -q '/w/repo/src' /w/repo/f",
+      'cd sub && node /w/repo/test.js',
+      "eval 'cd sub' && node /w/repo/test.js",
+      'git -C sub diff --quiet -- /w/repo/f',
+      '/w/repo/npm test && ! /w/repo/bin/ok',
+      'node /w/repo/run.js',
+    ];
+    const lines = runs.flatMap((command, i) => [JSON.stringify({ ...JSON.parse(use(`${i}`, 'Bash', { command })), cwd: '/w/repo/' }), result(`${i}`, false)]);
+    const obs = readWorkerObservation(file('cwd.jsonl', lines))!;
+    expect(obs.runs.map((r) => r.relative)).toEqual(["! grep -q 'old' tests/a.ts && grep -q 'new' tests/a.ts", "cat /w/repo2/x x/w/repo/y --config=z && ! grep -q '/w/repo/src' f", undefined, undefined, undefined, undefined, 'node run.js']);
+    const v = verifyChecks(obs, [
+      { id: 'observed', command: "! grep -q 'old' tests/a.ts && grep -q 'new' tests/a.ts" },
+      { id: 'quoted', command: "! grep -q 'src' f" },
+      { id: 'cd', command: 'cd sub && node test.js' },
+      { id: 'eval', command: "eval 'cd sub' && node test.js" },
+      { id: 'option', command: 'git -C sub diff --quiet -- f' },
+      { id: 'word', command: 'npm test' },
+      { id: 'absolute', command: 'node /w/repo/run.js' },
+    ]);
+    expect(v.unobserved).toEqual(['quoted', 'cd', 'eval', 'option', 'word']);
+    expect(readWorkerObservation(file('nocwd.jsonl', [use('1', 'Bash', { command: runs[0] }), result('1', false)]))!.runs[0]!.relative).toBeUndefined();
+  });
+
   it('returns null for a transcript that is not there', () => {
     expect(readWorkerObservation(join(tmp, 'absent.jsonl'))).toBeNull();
   });
