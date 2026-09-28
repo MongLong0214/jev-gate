@@ -74,6 +74,20 @@ describe('runsCommand', () => {
   ])('%s runs npm test: %s', (run, expected) => {
     expect(runsCommand(run, 'npm test')).toBe(expected);
   });
+
+  // A declared check may itself be a compound command; its exact run must be recognized, separators and all.
+  it.each([
+    ['npm run typecheck && npm test', 'npm run typecheck && npm test', true],
+    ['cd pkg && npm run typecheck && npm test -- --run', 'npm run typecheck && npm test', true],
+    ['npm run typecheck; npm test', 'npm run typecheck && npm test', false],
+    ['npm run typecheck && echo npm test', 'npm run typecheck && npm test', false],
+    ['npm run build || true', 'npm run build || true', true],
+    ['npm run lint; npm test', 'npm run lint; npm test', true],
+    ['npm run lint\nnpm test', 'npm run lint; npm test', true],
+    ['npm test | tail -5', 'npm test | tail -5', true],
+  ])('%s runs %s: %s', (run, wanted, expected) => {
+    expect(runsCommand(run, wanted)).toBe(expected);
+  });
 });
 
 describe('verifyChecks', () => {
@@ -100,15 +114,32 @@ describe('verifyChecks', () => {
     ).toEqual({ transcript: 'read', contradicted: ['c1'], unobserved: ['c3', 'c6'], stale: ['c2'] });
   });
 
-  it('refuses a failed last run always, and a pass it cannot find only in a transcript read whole', () => {
+  it('refuses a failed last run and a pass it cannot see, however much of the transcript it read', () => {
     expect(refusalReason({ transcript: 'truncated', contradicted: ['c1'], unobserved: [], stale: [] })).toContain('last run in the worker');
-    expect(refusalReason({ transcript: 'read', contradicted: [], unobserved: ['c3'], stale: [] })).toContain('no passing run');
-    expect(refusalReason({ transcript: 'truncated', contradicted: [], unobserved: ['c3'], stale: [] })).toBeNull();
+    expect(refusalReason({ transcript: 'read', contradicted: [], unobserved: ['c3'], stale: [] })).toContain('shows no passing run');
+    expect(refusalReason({ transcript: 'truncated', contradicted: [], unobserved: ['c3'], stale: [] })).toContain('last 8 MiB');
+    expect(refusalReason({ transcript: 'unavailable', contradicted: [], unobserved: ['c3'], stale: [] })).toContain('could not be read');
     expect(refusalReason({ transcript: 'unavailable', contradicted: [], unobserved: [], stale: [] })).toBeNull();
     expect(refusalReason({ transcript: 'read', contradicted: [], unobserved: [], stale: ['c2'] })).toBeNull();
   });
 
-  it('judges nothing without a transcript', () => {
-    expect(verifyChecks(null, [{ id: 'c1', command: 'npm test' }])).toEqual({ transcript: 'unavailable', contradicted: [], unobserved: [], stale: [] });
+  it('sees no passing run of any judged claim without a transcript', () => {
+    expect(
+      verifyChecks(null, [
+        { id: 'c1', command: 'npm test' },
+        { id: 'c2', command: null },
+        { id: 'c3', command: 'ls' },
+      ]),
+    ).toEqual({ transcript: 'unavailable', contradicted: [], unobserved: ['c1'], stale: [] });
+    expect(verifyChecks(null, [])).toEqual({ transcript: 'unavailable', contradicted: [], unobserved: [], stale: [] });
+  });
+
+  it('refuses a claim a cut transcript shows no run of, and judges one it does show', () => {
+    const cut = { ...obs, truncated: true };
+    const v = verifyChecks(cut, [
+      { id: 'c1', command: 'npm test' },
+      { id: 'c3', command: 'npm run build' },
+    ]);
+    expect(v).toEqual({ transcript: 'truncated', contradicted: ['c1'], unobserved: ['c3'], stale: [] });
   });
 });

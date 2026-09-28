@@ -252,17 +252,40 @@ const workerReply = (over: Partial<WorkerReply> = {}): WorkerReply => ({
   ...over,
 });
 
-const workerPost = (toolUseId: string, reply: unknown, over: Record<string, unknown> = {}): Record<string, unknown> => ({
-  hook_event_name: 'PostToolUse',
-  session_id: 's1',
-  prompt_id: 'p1',
-  tool_name: 'Agent',
-  tool_use_id: toolUseId,
-  effort: 'high',
-  tool_input: { subagent_type: 'jev-gate:worker' },
-  tool_response: { status: 'completed', resolvedModel: 'claude-sonnet-5', content: [{ type: 'text', text: fence(reply) }] },
-  ...over,
-});
+/** The host's layout: the parent transcript's folder, then `<session>/subagents/agent-<agentId>.jsonl`. */
+const workerTranscript = (runs: Array<{ command: string; failed: boolean }>, editAfter = false): { parent: string; agentId: string } => {
+  const dir = mkdtempSync(join(tmp, 'project-dir-'));
+  const agentId = `a${Math.random().toString(16).slice(2, 12)}`;
+  mkdirSync(join(dir, 's1', 'subagents'), { recursive: true });
+  const lines: string[] = [];
+  runs.forEach((run, i) => {
+    lines.push(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: `tu${i}`, name: 'Bash', input: { command: run.command } }] } }));
+    lines.push(JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: `tu${i}`, is_error: run.failed, content: run.failed ? 'Exit code 1' : 'ok' }] } }));
+  });
+  if (editAfter) lines.push(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tuE', name: 'Edit', input: { file_path: 'src/t1.ts' } }] } }));
+  writeFileSync(join(dir, 's1', 'subagents', `agent-${agentId}.jsonl`), lines.join('\n') + '\n');
+  return { parent: join(dir, 's1.jsonl'), agentId };
+};
+
+/** Every command the fixture plans declare. A worker that reports them passing ran them, as a real one does. */
+const FIXTURE_CHECK_COMMANDS = ['npm test', 'npm run typecheck', 'npm run lint', 'npm run build'];
+
+/** A worker's result, with the transcript of a worker that ran every fixture check and saw it pass. */
+const workerPost = (toolUseId: string, reply: unknown, over: Record<string, unknown> = {}): Record<string, unknown> => {
+  const ran = workerTranscript(FIXTURE_CHECK_COMMANDS.map((command) => ({ command, failed: false })));
+  return {
+    hook_event_name: 'PostToolUse',
+    session_id: 's1',
+    prompt_id: 'p1',
+    tool_name: 'Agent',
+    tool_use_id: toolUseId,
+    effort: 'high',
+    transcript_path: ran.parent,
+    tool_input: { subagent_type: 'jev-gate:worker' },
+    tool_response: { status: 'completed', agentId: ran.agentId, resolvedModel: 'claude-sonnet-5', content: [{ type: 'text', text: fence(reply) }] },
+    ...over,
+  };
+};
 
 const state = (env: Env): JobState => {
   const r = readJob(env, 's1');
@@ -853,12 +876,12 @@ describe('single executor (A19)', () => {
     const fetchImpl = fakeJev({ execution: 'orchestrated' });
     await run(env, promptEvent(), fetchImpl);
     await run(env, preEvent('Agent', agentInput({ prompt: 'Do what the request asks.' })), fetchImpl);
-    const reply = workerReply({ checks: [{ check_id: 'empty array rejected', result: 'pass', note: 'node --test' }] });
+    const reply = workerReply({ checks: [{ check_id: 'npm run typecheck', result: 'pass', note: 'no errors' }] });
     await run(env, workerPost('toolu_1', reply), fetchImpl);
     const receipt = state(env).current.receipts[0];
     expect(receipt).toMatchObject({ task_id: 'single', verdict: 'accept' });
     // The name is kept as the worker wrote it, so the record says which check ran.
-    expect(receipt?.reply?.checks).toEqual([{ check_id: 'empty array rejected', result: 'pass', note: 'node --test' }]);
+    expect(receipt?.reply?.checks).toEqual([{ check_id: 'npm run typecheck', result: 'pass', note: 'no errors' }]);
     await run(env, { hook_event_name: 'Stop', session_id: 's1' });
     expect(state(env).current.outcome).toBe('completed');
   });
@@ -1605,20 +1628,6 @@ describe('rework evidence (A17)', () => {
 });
 
 describe('worker check verification (0.4.0)', () => {
-  /** The host's layout: the parent transcript's folder, then `<session>/subagents/agent-<agentId>.jsonl`. */
-  const workerTranscript = (runs: Array<{ command: string; failed: boolean }>, editAfter = false): { parent: string; agentId: string } => {
-    const dir = mkdtempSync(join(tmp, 'project-dir-'));
-    const agentId = `a${Math.random().toString(16).slice(2, 12)}`;
-    mkdirSync(join(dir, 's1', 'subagents'), { recursive: true });
-    const lines: string[] = [];
-    runs.forEach((run, i) => {
-      lines.push(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: `tu${i}`, name: 'Bash', input: { command: run.command } }] } }));
-      lines.push(JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: `tu${i}`, is_error: run.failed, content: run.failed ? 'Exit code 1' : 'ok' }] } }));
-    });
-    if (editAfter) lines.push(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tuE', name: 'Edit', input: { file_path: 'src/t1.ts' } }] } }));
-    writeFileSync(join(dir, 's1', 'subagents', `agent-${agentId}.jsonl`), lines.join('\n') + '\n');
-    return { parent: join(dir, 's1.jsonl'), agentId };
-  };
   const postWith = (reply: WorkerReply, t: { parent: string; agentId: string }): Record<string, unknown> =>
     workerPost('toolu_1', reply, {
       transcript_path: t.parent,
@@ -1666,13 +1675,15 @@ describe('worker check verification (0.4.0)', () => {
     expect(state(env).current.receipts[0]).toMatchObject({ verdict: 'incomplete', verification: { contradicted: ['c1'] } });
   });
 
-  // A missing transcript cannot show that a check did not run; refusing on it would refuse every task on a host whose
-  // layout moved. The receipt says the transcript was unavailable, so the acceptance is visibly the worker's word.
-  it('accepts on the report alone when there is no transcript to read, and says so', async () => {
+  // A missing transcript cannot show that the check ran, so its pass is the worker's word alone and is not accepted.
+  // On a host whose layout moved this refuses every reported pass, and the receipt names why.
+  it('refuses a reported pass when there is no transcript to read, and says why', async () => {
     const env = makeEnv();
     await dispatched(env);
-    await run(env, workerPost('toolu_1', workerReply()));
-    expect(state(env).current.receipts[0]).toMatchObject({ verdict: 'accept', verification: { transcript: 'unavailable', contradicted: [] } });
+    await run(env, workerPost('toolu_1', workerReply(), { transcript_path: undefined }));
+    const receipt = state(env).current.receipts[0];
+    expect(receipt).toMatchObject({ verdict: 'incomplete', verification: { transcript: 'unavailable', contradicted: [], unobserved: ['c1'] } });
+    expect(receipt?.verdict_reason).toContain('could not be read');
   });
 
   it('reads nothing when verifyWorkerChecks is off', async () => {

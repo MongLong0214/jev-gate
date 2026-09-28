@@ -15,10 +15,12 @@ import type { CheckVerification } from './types.js';
  * here too. A check is found only where one shell segment of a run starts with the check's command, so a check the
  * worker ran some other way is not found.
  *
- * What refuses: a check whose last run failed, and, when the whole transcript was read, a check reported as passing
- * with no passing run of its command at all -- a pass the transcript does not show is the self-grade this exists to
- * catch. A cut or missing transcript cannot show absence, and an edit after the last run does not show the check
- * failing, so those are recorded and refuse nothing.
+ * What refuses: a check whose last run failed, and a check reported as passing whose passing run the gate cannot see --
+ * none in a transcript read whole, none in the tail of a cut one, or no transcript at all. A pass the gate cannot see
+ * is the self-grade this exists to catch, so it is not accepted on the worker's word; the reason says which of the
+ * three it was. The cost: on a host whose transcript layout moved, every task with a reported pass comes back
+ * incomplete, visibly (`transcript: unavailable`). An edit after the last passing run does not show the check failing,
+ * so that is recorded and refuses nothing.
  */
 
 /** The tail the reader keeps: the runs that decide are the latest ones, and the hook has a 5 s budget. */
@@ -110,16 +112,25 @@ const normalize = (command: string): string => command.replace(/\s+/g, ' ').trim
 /** Leading `NAME=value` assignments, which run the same command with a different environment. */
 const ENV_PREFIX = /^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)+/;
 
+/** A command line as its shell segments, at even indexes, and the separators between them; a newline separates as `;` does. */
+const segments = (command: string): string[] =>
+  command.split(/(&&|\|\||;|\||\n)/).map((part, i) => (i % 2 === 1 ? (part === '\n' ? ';' : part) : normalize(part).replace(ENV_PREFIX, '')));
+
 /**
- * Whether `run` ran `wanted`: some segment between `&&`, `||`, `;`, `|` or a newline starts with it, after any leading
- * environment assignments, and ends there or continues with its arguments. `echo npm test` does not run `npm test`;
- * `cd pkg && npm test -- --run` does. Quoting is not parsed, so a separator inside quotes still splits.
+ * Whether `run` ran `wanted`: the segments of `wanted`, split at `&&`, `||`, `;`, `|` or a newline, appear in `run` in
+ * order with the same separators, each after any leading environment assignments, and only the last may continue with
+ * arguments. `echo npm test` does not run `npm test`; `cd pkg && npm test -- --run` does, and so does an exact run of a
+ * compound check such as `npm run typecheck && npm test`. Quoting is not parsed, so a separator inside quotes still
+ * splits, on both sides alike.
  */
-export const runsCommand = (run: string, wanted: string): boolean =>
-  run
-    .split(/&&|\|\||;|\||\n/)
-    .map((segment) => normalize(segment).replace(ENV_PREFIX, ''))
-    .some((segment) => segment === wanted || segment.startsWith(`${wanted} `));
+export const runsCommand = (run: string, wanted: string): boolean => {
+  const have = segments(run);
+  const want = segments(wanted);
+  for (let i = 0; i + want.length <= have.length; i += 2) {
+    if (want.every((w, j) => have[i + j] === w || (j === want.length - 1 && have[i + j]!.startsWith(`${w} `)))) return true;
+  }
+  return false;
+};
 
 /**
  * `claims` pairs each check reported as passing with the command that check runs: the planned check's declared
@@ -128,16 +139,17 @@ export const runsCommand = (run: string, wanted: string): boolean =>
  * opaque position on the single shape, never the command. A claim with no command is not judged.
  */
 export const verifyChecks = (observation: WorkerObservation | null, claims: readonly { id: string; command: string | null }[]): CheckVerification => {
-  if (observation === null) return { transcript: 'unavailable', contradicted: [], unobserved: [], stale: [] };
+  const judged = claims.flatMap((claim) => {
+    const wanted = claim.command === null ? '' : normalize(claim.command);
+    return wanted.length < 3 ? [] : [{ id: claim.id, wanted }];
+  });
+  if (observation === null) return { transcript: 'unavailable', contradicted: [], unobserved: judged.map((c) => c.id), stale: [] };
   const out: CheckVerification = { transcript: observation.truncated ? 'truncated' : 'read', contradicted: [], unobserved: [], stale: [] };
-  for (const claim of claims) {
-    if (claim.command === null) continue;
-    const wanted = normalize(claim.command);
-    if (wanted.length < 3) continue;
+  for (const { id, wanted } of judged) {
     const last = [...observation.runs].reverse().find((r) => runsCommand(r.command, wanted));
-    if (!last || last.status === 'unknown') out.unobserved.push(claim.id);
-    else if (last.status === 'failed') out.contradicted.push(claim.id);
-    else if (observation.lastWrite !== null && observation.lastWrite > last.at) out.stale.push(claim.id);
+    if (!last || last.status === 'unknown') out.unobserved.push(id);
+    else if (last.status === 'failed') out.contradicted.push(id);
+    else if (observation.lastWrite !== null && observation.lastWrite > last.at) out.stale.push(id);
   }
   return out;
 };
@@ -145,7 +157,10 @@ export const verifyChecks = (observation: WorkerObservation | null, claims: read
 /** Why the transcript refuses an `accept`, or null when it does not. See the module note for what refuses. */
 export const refusalReason = (v: CheckVerification): string | null => {
   if (v.contradicted.length > 0) return `check ${v.contradicted.join(', ')} was reported pass, but its last run in the worker's own transcript failed`;
-  if (v.transcript === 'read' && v.unobserved.length > 0)
-    return `check ${v.unobserved.join(', ')} was reported pass, but the worker's own transcript shows no passing run of its command`;
-  return null;
+  if (v.unobserved.length === 0) return null;
+  const which = `check ${v.unobserved.join(', ')} was reported pass`;
+  if (v.transcript === 'read') return `${which}, but the worker's own transcript shows no passing run of its command`;
+  if (v.transcript === 'truncated')
+    return `${which}, but the last ${VERIFY_MAX_BYTES / (1024 * 1024)} MiB of the worker's transcript shows no passing run of its command, so the pass is unconfirmed`;
+  return `${which}, but the worker's transcript could not be read, so the pass is unconfirmed`;
 };

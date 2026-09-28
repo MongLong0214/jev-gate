@@ -171,10 +171,12 @@ again when the last task is accepted, but a step is never dispatched and never g
 its task contract as passed. That is a deterministic check, not a Jev call — the normal path no longer makes a Gate C
 HTTP request. Since 0.4.0 (`verifyWorkerChecks`, on by default) each reported pass is also compared with the last call
 of its command in the worker's own transcript (a shell segment that starts with the command, so `echo npm test` is not
-a run of `npm test`). A check whose last run failed is refused, and so is a check the whole transcript shows no passing
-run of. A transcript that was cut or could not be found cannot show absence, so there a missing run, like a pass an
-edit came after, is recorded on the receipt as `unobserved` or `stale` and refuses nothing. On the single shape a
-check is named in traces by its position (`#1`), never by the command. It sees only how the host marked each Bash
+a run of `npm test`; a compound check matches only its own segments in order). A check whose last run failed is
+refused, and so is a pass the gate cannot see: no passing run in the transcript, none in the last 8 MiB of a longer one,
+or no transcript at all (`unobserved`). The last case means a host whose transcript layout moved gets every reported
+pass back as incomplete, with the reason saying the transcript could not be read. A pass an edit came after is recorded
+as `stale` and refuses nothing. On the single shape a check is named in traces by its position (`#1`), never by the
+command. It sees only how the host marked each Bash
 call — a command piped into `tail` exits with `tail`'s status, and an unmarked result is unknown — so an accept is
 still not independent proof that the code works; historical Gate C `result_*` records from before this change are
 still read as history.

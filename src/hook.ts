@@ -1869,7 +1869,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       if (deterministic.verdict === 'incomplete') finalVerdict = reportedRecovery(task, parsed.value) ?? 'incomplete';
     }
     // A pass the worker reported is compared with the last run its own transcript shows (src/verify.ts): a check whose
-    // last run failed cannot be accepted on the worker's word.
+    // last run failed, or whose passing run cannot be seen, is not accepted on the worker's word.
     let verification: CheckVerification | undefined;
     if (config.verifyWorkerChecks && parsed !== null && parsed.ok) {
       const agentId = isRecord(input.tool_response) ? str(input.tool_response['agentId']) : null;

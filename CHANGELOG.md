@@ -35,10 +35,11 @@ This release answers the owner's review of real use on 2026-09-28, point by poin
 
 - **Reported passes are checked against the worker's own transcript** (`verifyWorkerChecks`, default on). A worker's
   `accept` used to be accepted on its word. The hook now reads the worker's transcript (last 8 MiB) and compares each
-  check reported as passing with the last call of that check's command, where a call counts only if one of its shell
-  segments starts with the command. The task is `incomplete`, with the check named in the reason, when that last run
-  failed (the host marked it `is_error`) or when the whole transcript shows no passing run of it. A cut or missing
-  transcript, or a run before a later edit, is recorded in `verification` and refuses nothing. The check is still
+  check reported as passing with the last call of that check's command, where a call counts only if its shell segments
+  contain the command's own segments in order. The task is `incomplete`, with the check named in the reason, when that
+  last run failed (the host marked it `is_error`) or when the gate cannot see a passing run: none in the transcript,
+  none in the last 8 MiB of a longer one, or no transcript at all. A run before a later edit is recorded in
+  `verification` and refuses nothing. The check is still
   weak: a command piped into `tail` exits with `tail`'s status. On the single shape, checks are named by position in
   traces, never by the command. `explain` prints the verification and Gate A's price.
 - **Malformed Jev answers change nothing.** Gate A needs all six answers, each in the type its question asked for, or
