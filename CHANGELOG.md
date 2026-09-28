@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.6.1 — A check run with absolute paths counts
+
+### Fixed
+
+- **A worker's passing check is no longer refused because its paths were made absolute.** The gate accepts a planned
+  task only when the worker's own transcript shows a passing run of each required check's command. Claude Code tells
+  workers to prefer absolute paths, and in an end-to-end run on 2.1.283 a `worker-fast` (Haiku) ran the planned
+  `! grep -q '…' tests/zz/spam.test.ts && grep -q '…' tests/zz/spam.test.ts` as the same command with
+  `<cwd>/tests/zz/spam.test.ts`: the run passed, the gate found no run of the check and marked the task incomplete.
+  The reader now reads an unquoted path under the run's own working directory (the transcript's `cwd` for that call)
+  as the relative path, so both name the same file. A quoted one stays as written, since it may be a pattern
+  (`! grep -q '<cwd>/a' f` passing says nothing of `'a'`); an unquoted pattern that looks like such a path is the known
+  gap. Replayed on that transcript, both checks are observed and nothing refuses.
+
+### Upgrading
+
+- `claude plugin marketplace update jev-gate && claude plugin update jev-gate@jev-gate`, or wait for the
+  marketplace's auto-update, then restart Claude Code (or `/reload-plugins`). Options carry over.
+
 ## v0.6.0 — One plugin: install once, update once
 
 ### Changed

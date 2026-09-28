@@ -18,7 +18,7 @@ An experiment in using frontier intelligence for the hard parts—not every part
 
 </div>
 
-> **Status · September 28, 2026 · v0.6.0.** V5 turns one request into a judged workflow: Jev decides the execution
+> **Status · September 28, 2026 · v0.6.1.** V5 turns one request into a judged workflow: Jev decides the execution
 > shape, a strong read-only planner decomposes the job, a Sonnet coordinator runs the plan behind an execution guard,
 > and Jev picks a tier for every planner and worker dispatch. The mechanism was **observed end to end on Claude Code
 > 2.1.275/2.1.276** (headless and interactive). **No cost or time benefit is established for the gate itself**: the
@@ -28,7 +28,7 @@ An experiment in using frontier intelligence for the hard parts—not every part
 > are one plugin, installed and updated once. See [What is verified](#what-is-verified-and-what-is-not) and
 > [Results](#results). Contract: [#21 PRD](https://github.com/MongLong0214/jev-gate/issues/21) →
 > [#22 ADR](https://github.com/MongLong0214/jev-gate/issues/22).
-> Release: [v0.6.0](https://github.com/MongLong0214/jev-gate/releases/tag/v0.6.0). Next work and current state:
+> Release: [v0.6.1](https://github.com/MongLong0214/jev-gate/releases/tag/v0.6.1). Next work and current state:
 > [HANDOFF.md](HANDOFF.md).
 
 ## Install

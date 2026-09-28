@@ -4,6 +4,19 @@ Everything below is what was actually observed, with the file that proves it. Th
 overstated claims from the original write-up; this one adds the 2026-09-19 measurements, which override several
 figures below and are marked where they do.
 
+## 2026-09-28 — v0.6.1: end-to-end run of the installed v0.6.0, and one gate fix
+
+End to end on 2.1.283, from the marketplace install (owner settings, a scratch clone, options overridden per run):
+a fresh install into an empty config dir and home loaded the module with no events, the gate in `mode_off`, the
+evidence server and the skill. With the parts on: the Router sent Jev a root and a spawn assessment and the Explore
+spawn ran on Haiku as routed; Gate A answered `direct` twice (HTTP 200, ~300 ms); the Vitest folder refused a verbose
+log whose test names contain "failed" (`format`, by design) and folded a toy log (`applied`); compaction fell back on
+a short session (`no_relief`) and applied on one with five large reads (11 messages to a 7,860-char digest, 4 ms), and
+the next turn answered from it; `jev_evidence` answered an exact-symbol lookup locally and a semantic one through Jev
+(`backend: jev`), and refused a root outside `allowedRoots`. A forced orchestration (planner, then `worker-fast`)
+made the change, but the gate marked the task incomplete: the worker ran a check with absolute paths. v0.6.1 reads
+those as the relative paths (CHANGELOG v0.6.1). One run of each; nothing here is a measured saving.
+
 ## 2026-09-28 — v0.6.0: the five plugins are one, `jev-gate`
 
 The owner's biggest complaint was installing and updating five plugins one by one (sessions on v0.5.0 were still
