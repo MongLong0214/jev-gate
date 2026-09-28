@@ -1,4 +1,4 @@
-import { callJev, validateChoice, type JevRequest } from '../jev.js';
+import { callJev, topChoices, validateChoice, type JevRequest } from '../jev.js';
 import { estimateTokens } from '../lean.js';
 import { looksSecret } from '../lean-source.js';
 import type { ChoiceAnswer } from '../types.js';
@@ -140,7 +140,8 @@ export const selectPage = async (
       const valid: Record<string, ChoiceAnswer<Judgement>> = {};
       b.members.forEach((_, k) => {
         const a = validateChoice(outcome.response.answers[`c${k + 1}`], JUDGEMENTS);
-        if (a) valid[`c${k + 1}`] = a;
+        // validateChoice accepts a tie; a tied answer has no single winner and stays unjudged (ADR D5).
+        if (a && topChoices(a).length === 1) valid[`c${k + 1}`] = a;
       });
       apply(b.members, valid);
       if (Object.keys(valid).length === b.members.length) deps.cache.set(b.key, valid);
