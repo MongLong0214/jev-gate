@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.3.1 — the release archive ships lean's executor
+
+- The `jev-gate` archive now includes `agents/executor.md`. v0.3.0 shipped only the six routing roles, so
+  `node dist/cli.js doctor` failed on the installed plugin (`agents/executor.md missing`), and `mode: lean` would have
+  dispatched an agent that was not installed. The default hook set runs every mode, so the default archive carries
+  every agent doctor checks. `tests/pack.test.ts` now runs doctor on the packed archive and requires no failure.
+- `jev-gate-compact` and `jev-gate-router` are unchanged apart from the version, which the three plugins share.
+
 ## v0.3.0 — a plugin marketplace, the compactor and the Router
 
 Install from the repository's own marketplace instead of a local checkout:

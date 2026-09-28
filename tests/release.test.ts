@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 const root = join(__dirname, '..');
-const AGENTS = ['worker-fast', 'worker', 'worker-deep', 'worker-frontier', 'planner', 'planner-frontier'];
+const AGENTS = ['worker-fast', 'worker', 'worker-deep', 'worker-frontier', 'planner', 'planner-frontier', 'executor'];
 let repo: string;
 
 const write = (rel: string, text: string) => {
