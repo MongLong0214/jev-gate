@@ -258,6 +258,8 @@ interface ChildRouting {
   baseline: Baseline | null;
   effort: RoutedEffort | null;
   stopped: boolean;
+  /** Set as a patched step goes to next: from then on the loop's cache was written at its effort. */
+  dispatched: boolean;
 }
 
 /** What a spawn's assessment decided: its model, and the answer its subagent's steps read their effort from. */
@@ -735,6 +737,7 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
       patch = null;
       log(engine, { event: 'child_stop', agent_id: e.agentId ?? null, index: e.index, reason: own.aborted ? 'session_ended' : 'child_stopped' });
     }
+    if (prepared?.child && patch) prepared.child.dispatched = true;
     // Once next starts, every chunk, the return, a refusal or an error belongs to the host: nothing here retries it.
     const result = yield* next(patch ? { ...e, ...patch } : e);
     if (prepared?.child) observeChild(engine, e, prepared.child, patch, result);
@@ -759,10 +762,10 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     if (suspended !== null) return;
     suspended = reason;
     log(engine, { event: 'spawn_suspended', reason });
-    // A loop that has not stepped yet stays native too; one already running keeps its effort rather than restarting its
-    // cache.
+    // A loop that has sent no patched step yet stays native too, even one whose first step is still being prepared;
+    // one already running keeps its effort rather than restarting its cache.
     for (const [id, c] of children) {
-      if (c.baseline !== null || c.stopped) continue;
+      if (c.dispatched || c.stopped) continue;
       c.stopped = true;
       log(engine, { event: 'child_stop', agent_id: id, index: null, reason: 'spawn_suspended' });
     }
@@ -954,7 +957,7 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     try {
       result = await next(target !== null ? { ...e, model: target } : e);
       if (answers && result.deny === undefined && result.agentId !== undefined && !own.aborted)
-        children.put(result.agentId, { answers, baseline: null, effort: null, stopped: false });
+        if (suspended === null) children.put(result.agentId, { answers, baseline: null, effort: null, stopped: false, dispatched: false });
     } finally {
       landing.delete(landed);
       land();

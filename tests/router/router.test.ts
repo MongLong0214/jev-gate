@@ -1150,6 +1150,44 @@ describe('subagent effort and named models', () => {
     expect(m.calls).toEqual([childStep({ agentId: 'a2' })]);
   });
 
+  it('leaves native a loop whose spawn returns after a suspension, or whose first step was still being prepared', async () => {
+    const router = createRouter(configOf(CHILD));
+    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['fast', 0.95], effort: ['low', 0.95] }) });
+    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    // Spawn A runs cleanly and its loop's first step reaches the pin read, the last wait before next.
+    const a = spawnNext(() => ({ model: 'claude-haiku-4-5', agentId: 'a1' }));
+    await router.agentSpawn(f.engine, spawn(), a.next);
+    const gate = deferred<void>();
+    let reading = false;
+    const paused = { ...f.engine, pins: async () => ((reading = true), await gate.promise, f.engine.pins()) };
+    const n = streamNext<TurnStepEvent>();
+    const first = drain(router.turnStep(paused as typeof f.engine, childStep(), n.next));
+    while (!reading) await settle();
+    // Spawn B is still waiting on next when spawn C reports another model and suspends routing.
+    const started = deferred<SpawnOutcome>();
+    let spawned = false;
+    const b = Object.assign(
+      async (): Promise<SpawnOutcome> => {
+        spawned = true;
+        return started.promise;
+      },
+      { signal: new AbortController().signal },
+    );
+    const runB = router.agentSpawn(f.engine, spawn({ tool_use_id: 'tu2' }), b);
+    while (!spawned) await settle();
+    await router.agentSpawn(f.engine, spawn({ tool_use_id: 'tu3' }), spawnNext(() => ({ model: 'claude-opus-5-5', agentId: 'a3' })).next);
+    expect(f.logs).toContainEqual({ event: 'spawn_suspended', reason: 'model_mismatch' });
+    gate.resolve();
+    await first;
+    started.resolve({ model: 'claude-haiku-4-5', agentId: 'a2' });
+    await runB;
+    const m = streamNext<TurnStepEvent>();
+    await drain(router.turnStep(f.engine, childStep({ agentId: 'a2' }), m.next));
+    // Neither loop had sent a patched step: both run as they resolved.
+    expect(n.calls).toEqual([childStep()]);
+    expect(m.calls).toEqual([childStep({ agentId: 'a2' })]);
+  });
+
   it('leaves a loop native once a step arrives on another effort or model, or its patch is answered by another model', async () => {
     const router = createRouter(configOf(CHILD));
     const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', 0.95], effort: ['low', 0.95] }) });
