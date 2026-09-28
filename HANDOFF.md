@@ -4,6 +4,21 @@ Everything below is what was actually observed, with the file that proves it. Th
 overstated claims from the original write-up; this one adds the 2026-09-19 measurements, which override several
 figures below and are marked where they do.
 
+## 2026-09-28 — v0.5.1: #73–#81 (`jev-evidence-v1.2`) are implemented; no product effect is measured
+
+The contract is the issue bodies (#73 PRD, #74 ADR, #75–#81); #78 (benchmarks) is closed as not planned, so nothing
+below is a measured saving of tokens or time.
+
+- **Evidence (#75–#77).** `plugins/evidence`, one MCP tool `jev_evidence`, shipped as a second SHA-256-pinned archive
+  (`jev-gate-evidence-<version>.zip`); `scripts/release.mjs` packs, pins, freezes and checks both archives. Observed on
+  Claude Code 2.1.283 (headless, `--plugin-dir`, the archive unzipped under a path with spaces): the tool registers as
+  `mcp__plugin_jev-gate-evidence_evidence__jev_evidence` (deferred, found by ToolSearch) and the manual skill
+  `/jev-gate-evidence:evidence` answers with it. One live remote call judged 16 candidates in 2 requests in 440 ms and
+  folded 4. The marketplace install path is new in v0.5.1 and not observed before its release.
+- **Compact (#79), Output (#80), Router (#81).** Offline tests only, against the host's declared types. The Router's
+  "a turn at another effort keeps it" rule (v0.5.1) is read from the declarations, which carry no effort source.
+- **Next.** Anything that claims a saving needs the measurement #78 excluded, run as its own decision.
+
 ## 2026-09-27 — issue #48 P0-2/P1-2/P2-1 are in code and offline tests; nothing here is observed on a host
 
 Three changes, none measured and none run against a live host — offline tests and `doctor`/`gen-agents` subprocess

@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.5.1 — The evidence tool installs from the marketplace, and a hand-set effort stays
+
+### Changed
+
+- **`jev-gate-evidence` is a marketplace entry (#77, v1.2).** Like `jev-gate`, it is the tagged release's archive pinned
+  by SHA-256 (`jev-gate-evidence-0.5.1.zip`), so `/plugin install jev-gate-evidence@jev-gate` installs it; downloading
+  the asset and loading it with `--plugin-dir` still works. `scripts/release.mjs` packs, pins and checks every archive
+  entry with its own pack profile, freezes each one once its version is released (an archive entry added after a
+  release has no pin there and is refused the same way), and takes `--asset` once per archive, matched by file name.
+  The release job uploads both archives, downloads both back and checks them against their pins.
+- **Router: a turn that arrives at another effort keeps it (#81, v1.2).** The host does not say who set a root turn's
+  effort, and a change made in the session (`/effort`, the model picker) shows only as a turn arriving at another
+  effort than the turn before. That turn now keeps its effort and asks Jev nothing about it
+  (`"effort_kept":"incoming_changed"`); the next turn at the same effort is routed again. `CLAUDE_CODE_EFFORT_LEVEL`
+  still pins it for good. Read from the declarations; not observed on an installed host.
+
+### Dependencies
+
+- `@modelcontextprotocol/sdk` 1.30.1 and `esbuild` 0.28.2 (devDependencies, fixed by `package-lock.json`), added in
+  v0.5.0 for #77. The SDK is the official MCP implementation, used so the server writes no JSON-RPC of its own; esbuild
+  bundles it into `plugins/evidence/dist/server.mjs`, so the installed plugin needs Node 22 and no `node_modules`. The
+  bundle is byte-identical between macOS and the Linux release job (checked on v0.5.0's asset).
+
 ## v0.5.0 — One evidence tool, a Vitest log folder, and compact and router fixes
 
 ### Added

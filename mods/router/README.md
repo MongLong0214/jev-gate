@@ -85,6 +85,12 @@ so it is logged as `other`, never by name.
   (`model_not_allowed`). The pins are read last, after the allowlist, so no wait separates them from `next`. When a
   pin ends a root effort override, a model override whose target cannot take the effort the request keeps ends too
   (`pair_invalid`).
+- **An effort changed by hand.** A root turn's effort is the session's setting, and the host does not say who set it:
+  a change made in the session (`/effort`, the model picker) shows only as a turn arriving at another effort than the
+  turn before, with no environment pin. So a root turn whose effort differs from the previous root turn's keeps it and
+  asks Jev nothing about effort (`"effort_kept":"incoming_changed"` on its `root` record). Only that turn: the next one at
+  the same effort is routed again. To keep an effort for good, set `CLAUDE_CODE_EFFORT_LEVEL`. Read from the
+  declarations (`TurnStepInput.effort` has no source field); not observed on an installed host.
 - **Spawns it cannot vouch for.** A fork (`fork`, whose loop shares its parent's context), an explicit model when
   `routeExplicitSpawnModel` is off (`explicit_model`), for a spawn that names no model a type other than the
   inheriting built-ins `general-purpose`, `claude`, `Plan` and `Explore` (`type_unverified`), a built-in's name that the

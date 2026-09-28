@@ -16,7 +16,7 @@ describe('the marketplace', () => {
   it('is named jev-gate, so a plugin installs as <plugin>@jev-gate', () => {
     expect(marketplace.name).toBe('jev-gate');
     expect(marketplace.owner.name).toBeTruthy();
-    expect(marketplace.plugins.map((p) => p.name).sort()).toEqual(['jev-gate', 'jev-gate-compact', 'jev-gate-output', 'jev-gate-router']);
+    expect(marketplace.plugins.map((p) => p.name).sort()).toEqual(['jev-gate', 'jev-gate-compact', 'jev-gate-evidence', 'jev-gate-output', 'jev-gate-router']);
   });
 
   it('leaves every version to plugin.json, and every plugin.json is at the package version', () => {
@@ -34,13 +34,18 @@ describe('the marketplace', () => {
     }
   });
 
-  it('pins jev-gate to this version’s release archive by SHA-256', () => {
-    const entry = marketplace.plugins.find((p) => p.name === 'jev-gate')!;
-    expect(entry.source).toEqual({
-      source: 'archive',
-      url: `https://github.com/MongLong0214/jev-gate/releases/download/v${version}/jev-gate-${version}.zip`,
-      sha256: expect.stringMatching(/^[0-9a-f]{64}$/),
-    });
+  it('pins jev-gate and jev-gate-evidence to this version’s release archives by SHA-256', () => {
+    const archives = marketplace.plugins.filter((p) => typeof p.source !== 'string');
+    expect(archives.map((p) => p.name).sort()).toEqual(['jev-gate', 'jev-gate-evidence']);
+    for (const entry of archives) {
+      expect(entry.source, entry.name).toEqual({
+        source: 'archive',
+        url: `https://github.com/MongLong0214/jev-gate/releases/download/v${version}/${entry.name}-${version}.zip`,
+        sha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+      });
+    }
+    // The evidence archive is built from plugins/evidence, whose manifest names it (#77).
+    expect((readJson(join(root, 'plugins', 'evidence', '.claude-plugin', 'plugin.json')) as { name: string }).name).toBe('jev-gate-evidence');
     expect(readFileSync(join(root, 'CHANGELOG.md'), 'utf8')).toMatch(new RegExp(`^## v${version.replace(/\./g, '\\.')} `, 'm'));
   });
 

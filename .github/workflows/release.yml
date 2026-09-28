@@ -24,11 +24,9 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
-      # Rebuilds the archive and refuses unless it matches the SHA-256 the marketplace pins, the tag names the version,
-      # and main serves this same entry.
+      # Rebuilds both archives (jev-gate and, #77, jev-gate-evidence) and refuses unless each matches the SHA-256 the
+      # marketplace pins, the tag names the version, and main serves these same entries.
       - run: node scripts/release.mjs check --tag "$GITHUB_REF_NAME" --against origin/main --out dist-release
-      # The evidence plugin's own archive (#77) goes up beside it; the marketplace does not list or pin it.
-      - run: node scripts/pack.mjs dist-release --profile evidence
       # main may have moved while the job ran: fetch it again and repeat the comparison just before publishing.
       - run: |
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
@@ -38,7 +36,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            echo "release $GITHUB_REF_NAME exists; verifying its asset"
+            echo "release $GITHUB_REF_NAME exists; verifying its assets"
           else
             gh release create "$GITHUB_REF_NAME" "dist-release/jev-gate-${GITHUB_REF_NAME#v}.zip" "dist-release/jev-gate-evidence-${GITHUB_REF_NAME#v}.zip" \
               --verify-tag --title "$GITHUB_REF_NAME" --notes-file dist-release/NOTES.md
@@ -49,7 +47,10 @@ jobs:
       # version, and deleting would break installs of this one. A maintainer raises the version.
       - env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release download "$GITHUB_REF_NAME" --pattern "jev-gate-${GITHUB_REF_NAME#v}.zip" --dir published --clobber
+        run: |
+          gh release download "$GITHUB_REF_NAME" --pattern "jev-gate-${GITHUB_REF_NAME#v}.zip" --dir published --clobber
+          gh release download "$GITHUB_REF_NAME" --pattern "jev-gate-evidence-${GITHUB_REF_NAME#v}.zip" --dir published --clobber
       - run: |
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-          node scripts/release.mjs check --tag "$GITHUB_REF_NAME" --against origin/main --asset "published/jev-gate-${GITHUB_REF_NAME#v}.zip"
+          node scripts/release.mjs check --tag "$GITHUB_REF_NAME" --against origin/main \
+            --asset "published/jev-gate-${GITHUB_REF_NAME#v}.zip" --asset "published/jev-gate-evidence-${GITHUB_REF_NAME#v}.zip"

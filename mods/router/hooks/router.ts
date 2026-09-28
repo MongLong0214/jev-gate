@@ -253,6 +253,11 @@ interface TurnRouting {
   effortStopped: boolean;
   /** The effort the conversation's cached prefix was last sent at, while that cache is still warm; null when cold. */
   warmEffort: SymbolicEffort | null;
+  /**
+   * The turn arrived at another effort than the root turn before it. The host does not say who changed it, and a
+   * change the person made by hand shows only there, so this turn keeps its effort as if pinned (#81).
+   */
+  effortChanged: boolean;
 }
 
 /**
@@ -307,6 +312,8 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
   let lastReply: string | null = null;
   /** The last root request that got a response: when, on which model, and at which effort. */
   let lastRoot: { at: number; model: string; effort: SymbolicEffort | null } | null = null;
+  /** The effort the last root turn arrived with, before any patch; null before the session's first turn. */
+  let lastIncoming: { effort: TurnStepEvent['effort'] } | null = null;
   const turnTexts = bounded<string, string>(MAX_TURNS);
   const turns = bounded<string, TurnRouting>(MAX_TURNS, (t) => t.controller.abort());
   const offers = bounded<string, boolean>(MAX_OFFERS);
@@ -435,7 +442,7 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     try {
       // Pins and the allowlist can only narrow what the event and configuration allow, so a turn with nothing to ask
       // even without them never waits for the key or a read.
-      const ceiling = rootDims(t.baseline, NO_ROOT_PINS, undefined);
+      const ceiling = rootDims(t.baseline, t.effortChanged ? { mainModel: false, mainEffort: true } : NO_ROOT_PINS, undefined);
       if (!buildQuestions(ceiling.dims)) {
         withheld = ceiling.withheld;
         outcome = { kind: 'skipped', reason: 'nothing_to_change' };
@@ -447,7 +454,7 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
         else {
           const pins = await within(pinsOf(engine), live);
           const available = config.routeMainModel && !pins.mainModel ? await within(engine.availableModels().catch(() => []), live) : undefined;
-          const r = rootDims(t.baseline, pins, available);
+          const r = rootDims(t.baseline, { mainModel: pins.mainModel, mainEffort: pins.mainEffort || t.effortChanged }, available);
           withheld = r.withheld;
           const task: RoutingTask = { scope: 'root', text, ...(context ? { previousReply: context } : {}) };
           outcome = await assess(engine, key.key, task, t.baseline, r.dims, r.opts, live, { scope: 'root', turn: turnId });
@@ -470,6 +477,7 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
       context_chars: context?.length ?? 0,
       from: { model: t.baseline.model, effort: t.baseline.effort ?? null },
       ...(withheld !== undefined ? { model_withheld: withheld } : {}),
+      ...(t.effortChanged ? { effort_kept: 'incoming_changed' } : {}),
       ...(outcome.kind === 'skipped'
         ? { skipped: outcome.reason }
         : {
@@ -590,7 +598,9 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
       modelStopped: false,
       effortStopped: false,
       warmEffort: lastRoot && lastRoot.model === e.model && engine.now() - lastRoot.at < WARM_MS ? lastRoot.effort : null,
+      effortChanged: lastIncoming !== null && lastIncoming.effort !== e.effort,
     };
+    lastIncoming = { effort: e.effort };
     // sessionEnd retires every turn, which aborts its controller: no session listener is needed here.
     turns.put(e.turnId, t);
     const text = turnTexts.get(e.turnId);
@@ -1070,6 +1080,7 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
       children.clear();
       lastReply = null;
       lastRoot = null;
+      lastIncoming = null;
       keyWait = null;
       diagnosed = false;
     },

@@ -1,6 +1,6 @@
 {
   "name": "jev-gate-output",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Folds runs of identical consecutive lines in a passing Vitest log the host saved to a file, so the model reads the whole run with exact counts instead of a 2 KB preview; off by default.",
   "author": {
     "name": "MongLong0214",

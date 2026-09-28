@@ -1,6 +1,6 @@
 {
   "name": "jev-gate-evidence",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "One read-only MCP tool, jev_evidence: exact source windows from the project you configure, paged, with exact read-back; with remote on, TypeSafe Jev judges a page and folds clearly unrelated bodies. Needs Node 22 and JEV_EVIDENCE_CONFIG; unavailable until configured.",
   "author": {
     "name": "MongLong0214",

@@ -4,7 +4,7 @@
     "name": "MongLong0214",
     "url": "https://github.com/MongLong0214"
   },
-  "description": "Claude Code plugins from the jev-gate repository: an instant extractive compactor, a Vitest log folder, a Jev model and effort router, and the Jev orchestration gate. Each is off by default until you enable it.",
+  "description": "Claude Code plugins from the jev-gate repository: an instant extractive compactor, a Vitest log folder, a Jev model and effort router, a read-only evidence search tool, and the Jev orchestration gate. Each is off by default until you enable it.",
   "plugins": [
     {
       "name": "jev-gate-compact",
@@ -52,8 +52,8 @@
       "name": "jev-gate",
       "source": {
         "source": "archive",
-        "url": "https://github.com/MongLong0214/jev-gate/releases/download/v0.5.0/jev-gate-0.5.0.zip",
-        "sha256": "a307a9a2ea1557521ff4fb70ad1b1dfa5cdd1115202f3f1e0fd17edd39e25ccf"
+        "url": "https://github.com/MongLong0214/jev-gate/releases/download/v0.5.1/jev-gate-0.5.1.zip",
+        "sha256": "493306a8d81e8fb7d3b6da9a3a1bf5f958489af0d6612b5ee326578ef4ca248e"
       },
       "displayName": "Jev Gate",
       "description": "Jev-directed orchestration for deep sessions: a planner and tiered workers, admitted only past a context-depth floor. Built from the tagged release; needs Node 22 and a TypeSafe key.",
@@ -64,6 +64,25 @@
         "jev",
         "typesafe",
         "hooks"
+      ]
+    },
+    {
+      "name": "jev-gate-evidence",
+      "source": {
+        "source": "archive",
+        "url": "https://github.com/MongLong0214/jev-gate/releases/download/v0.5.1/jev-gate-evidence-0.5.1.zip",
+        "sha256": "6fa7c2cb8aff69584548e407c22054c2664e242f299baecf53ab424af702bf1d"
+      },
+      "displayName": "Jev Gate Evidence",
+      "description": "One read-only MCP tool, jev_evidence: exact source windows from the one project you configure, paged, with exact read-back; with remote on, Jev judges a page and folds clearly unrelated bodies. Built from the tagged release; needs Node 22 and JEV_EVIDENCE_CONFIG, unavailable until configured.",
+      "homepage": "https://github.com/MongLong0214/jev-gate/tree/main/plugins/evidence#readme",
+      "category": "productivity",
+      "tags": [
+        "evidence",
+        "search",
+        "mcp",
+        "jev",
+        "typesafe"
       ]
     }
   ]

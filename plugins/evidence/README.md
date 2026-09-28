@@ -40,19 +40,26 @@ without reading a source or sending a request.
 
 ## Install
 
-This plugin ships as its own archive; it is not in the marketplace. Each release from v0.5.0 on carries
-`jev-gate-evidence-<version>.zip` beside the jev-gate archive:
+From v0.5.1 the marketplace lists it, pinned like `jev-gate` to the release archive by SHA-256:
+
+```text
+/plugin marketplace add MongLong0214/jev-gate
+/plugin install jev-gate-evidence@jev-gate
+```
+
+Every release from v0.5.0 on also carries `jev-gate-evidence-<version>.zip`, which loads without the marketplace:
 
 ```sh
-gh release download v0.5.0 --repo MongLong0214/jev-gate --pattern 'jev-gate-evidence-*.zip'
-unzip jev-gate-evidence-0.5.0.zip -d ~/.claude/jev-gate-evidence
+gh release download v0.5.1 --repo MongLong0214/jev-gate --pattern 'jev-gate-evidence-*.zip'
+unzip jev-gate-evidence-0.5.1.zip -d ~/.claude/jev-gate-evidence
 claude --plugin-dir ~/.claude/jev-gate-evidence
 ```
 
 From a checkout, `npm ci && npm run build` and then `node scripts/pack.mjs dist-pack --profile evidence` builds the
 same archive, and `claude --plugin-dir plugins/evidence` loads the working tree directly. The archive holds the bundled server with the MCP
 SDK inside it; it needs Node 22 or later and nothing else. To turn it off, start Claude Code without that
-`--plugin-dir`, or disable the `evidence` server in `/mcp`. To remove it, delete the unzipped directory.
+`--plugin-dir` (or `claude plugin disable jev-gate-evidence@jev-gate`), or disable the `evidence` server in `/mcp`. To
+remove it, `claude plugin uninstall jev-gate-evidence@jev-gate` or delete the unzipped directory.
 
 `node <plugin dir>/dist/server.mjs --doctor` prints the config state, whether remote is on and whether the key is
 present. It reads the config only: no source scan, no request. A passing doctor says the server can start, nothing

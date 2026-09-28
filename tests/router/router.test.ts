@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { HttpReply } from '../../mods/router/hooks/client.ts';
 import { JEV_ENDPOINT, JEV_MODEL } from '../../mods/router/hooks/client.ts';
 import { resolveConfig } from '../../mods/router/hooks/config.ts';
+import type { SymbolicEffort } from '../../mods/router/hooks/models.ts';
 import { offerableEfforts, TIER_LEVELS } from '../../mods/router/hooks/policy.ts';
 import type { SpawnEvent, SpawnOutcome, TurnStepEvent } from '../../mods/router/hooks/router.ts';
 import { createRouter, hostSupported, VERIFIED_HOST } from '../../mods/router/hooks/router.ts';
@@ -1278,6 +1279,31 @@ describe('root effort and the prompt cache', () => {
     // A session's end forgets the cache.
     router.sessionEnd();
     expect(await turn('t6', ['medium', 0.95], 60_000)).toBe('medium');
+  });
+
+  it('keeps the effort of a turn that arrives at another one than the turn before, which may be a change by hand (#81)', async () => {
+    const router = createRouter(configOf(EFFORT_ONLY));
+    const f = fakeEngine({ respond: answering({ ...CLEAR, effort: ['medium', 0.95] }) });
+    const n = streamNext<TurnStepEvent>();
+    const turn = async (id: string, effort: SymbolicEffort) => {
+      f.clock.ms += 60 * 60_000;
+      router.turnStart({ turnId: id, text: TEXT });
+      await drain(router.turnStep(f.engine, step({ turnId: id, effort }), n.next));
+      router.turnComplete({ turnId: id });
+      return n.calls.at(-1)?.effort;
+    };
+    expect(await turn('t1', 'xhigh')).toBe('medium');
+    expect(f.sent).toHaveLength(1);
+    // The session's effort went from xhigh to high between turns: this turn keeps it, and nothing is asked.
+    expect(await turn('t2', 'high')).toBe('high');
+    expect(f.sent).toHaveLength(1);
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root', turn: 't2', effort_kept: 'incoming_changed', skipped: 'nothing_to_change' }));
+    // At the same effort again, the next turn is routed as before.
+    expect(await turn('t3', 'high')).toBe('medium');
+    expect(f.sent).toHaveLength(2);
+    // A session's end forgets the last turn's effort.
+    router.sessionEnd();
+    expect(await turn('t4', 'low')).toBe('medium');
   });
 
   it('takes a step that got no response, or another model, as leaving no warm cache', async () => {
