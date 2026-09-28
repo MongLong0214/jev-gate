@@ -1,7 +1,7 @@
 # jev-gate-router
 
 A Claude Code Function Hooks plugin that asks Jev, once per decision, whether a root turn's effort (and optionally its
-model) or a built-in subagent's model should change. It is independent of the Lean handoff in the repository root and
+model), a subagent's model, or a subagent's effort should change. It is independent of the Lean handoff in the repository root and
 of V5 orchestration; composing them is #44.
 
 **Status.** Written against the Function Hooks declarations shipped with Claude Code 2.1.282
@@ -39,14 +39,16 @@ Every wait, for the key or a read, ends when its turn is retired or its dispatch
 | Option | Default | Meaning |
 |---|---|---|
 | `enabled` | `false` | Master switch. |
-| `routeSubagentModel` | `true` | Choose the model of a built-in subagent that would inherit its parent's. |
+| `routeSubagentModel` | `true` | Choose a subagent's model: an inheriting built-in that names none, or (below) any Agent call that names one. |
+| `routeExplicitSpawnModel` | `true` | Treat the model an Agent call names (`model: "opus"`) as a default the Router may move. Off, such a call keeps it (`explicit_model`). |
+| `routeSubagentEffort` | `true` | Set each subagent's effort from its spawn's answer, on every request its loop makes. |
 | `routeMainEffort` | `true` | Choose the root turn's effort among the levels its model takes unconditionally. |
 | `routeMainModel` | `false` | Also choose the root turn's model. Exact identifiers only, never to a smaller context window, and only along a verified switch: none is verified yet, so today this asks nothing. |
 | `typesafeApiKey` | — | Explicit key; overrides `TYPESAFE_API_KEY`. |
 | `fastModel` / `standardModel` / `deepModel` | `haiku` / `sonnet` / `opus` | Profiles. A spawn takes aliases; the root takes exact identifiers only. |
 | `frontierModel` | empty | An exact identifier only (`claude-fable-5-1`); an alias cannot authorize it. |
 | `minUpgradeConfidence` | `0.8` | Floor for moving up: Jev's probability mass at or above the target. |
-| `minDowngradeConfidence` | `0.9` | Floor for moving down: Jev's probability mass at or below the target. A downgrade also needs `ordinary` risk at this probability. |
+| `minDowngradeConfidence` | `0.6` | Floor for moving down: Jev's probability mass at or below the target. A downgrade also needs `ordinary` risk at this probability. On a week of the owner's traffic (2026-09-21..28), 0.9 moved 2 of 174 routable spawns and 2 of 245 root turns. |
 | `timeoutMs` | `800` | Wait for Jev, 50–30000. The request is still observed for its usage after the wait ends. |
 | `logDecisions` | `true` | One `jev-router {...}` line per decision in the debug log. |
 
@@ -70,7 +72,8 @@ text, so it is logged as `other`, never by name.
   (`model_not_allowed`). The pins are read last, after the allowlist, so no wait separates them from `next`. When a
   pin ends a root effort override, a model override whose target cannot take the effort the request keeps ends too
   (`pair_invalid`).
-- **Spawns it cannot vouch for.** A fork (`fork`), an explicit model (`explicit_model`), a type other than the
+- **Spawns it cannot vouch for.** A fork (`fork`, whose loop shares its parent's context), an explicit model when
+  `routeExplicitSpawnModel` is off (`explicit_model`), for a spawn that names no model a type other than the
   inheriting built-ins `general-purpose`, `claude`, `Plan` and `Explore` (`type_unverified`), a built-in's name that the
   engine's own core listing did not offer (`definition_unverified`), a host whose release base is not 2.1.N with N at
   least 282 (`host_unverified`, including development builds), any spawn after this session's routing was suspended
@@ -102,9 +105,11 @@ describing work rather than naming a model: lookup or a mechanical edit; ordinar
 requirements; hard debugging, design under competing constraints or subtle correctness; exceptional reasoning beyond
 that (`TIER_LEVELS` in `hooks/policy.ts`). The wording is the contract: a level's name never reaches Jev, and editing
 a description changes what the Router does. The model question lists the offered profiles' levels in rank order.
-Effort is always the first three levels, mapped to `low`, `medium` and `high`, except that hard work keeps a current
-level above `high`, so a configured `xhigh` or `max` is never lowered for it; a target the model does not take moves
-up to the next one it does.
+Effort is always the four levels, mapped to `low`, `medium`, `high` and `xhigh`, except that exceptional work keeps a
+current level above `xhigh`, so a configured `max` is never lowered for it; a target the model does not take moves up
+to the next one it does. Hard work asks for `high`, so a configured `xhigh` is lowered for it: on five paired
+development cells native `xhigh` cost 11 % more in total than a fixed `high` with every cell passing
+(`bench/results/router-vs-high-2026-09-28`, stopped at 16 of 45 cells and not adjudicated).
 
 Jev returns a probability for every level. The Router orders the levels together with the current one and moves
 down to the lowest whose mass at or below it reaches `minDowngradeConfidence`, else up to the highest whose mass at
@@ -112,8 +117,12 @@ or above it reaches `minUpgradeConfidence`, else nowhere (`low_confidence`, or `
 holds the most mass). So `[0.74, 0.26, 0]` under an Opus parent moves the spawn to `sonnet`: 1.0 says the work needs
 no more than ordinary, while lookup alone is under 0.9.
 
-The `control` question stays a choice, and it is the escape hatch: a move needs `task_clear` at the floor for its
-direction, so a request that depends on earlier conversation or names its own model or effort stays where it is. No
+The `control` question stays a choice, and it is the escape hatch: a root move needs `task_clear` at the floor for its
+direction, so a request that depends on earlier conversation or names its own model or effort stays where it is. A
+root turn is sent with the tail of the conversation's last visible reply (`previous_reply`, 2,000 characters), which
+most of the owner's turns answer ("ㅇㅇ", "다진행해": a median 22 characters over 245 turns); replayed with it, Jev
+judged 54 of them `needs_context` rather than 115. A spawn's prompt is everything its subagent gets, so a spawn is
+held only by `explicit_lock`: `needs_context` and `unclear` judge the same text the subagent works from. No
 level has a `preserve` answer; declining is `control`'s job. Every decision logs its receipt, `answers`, with the
 `control` choice, the `task_clear` and `ordinary` probabilities and each Score's levels.
 
@@ -144,6 +153,25 @@ not depend on the variant. If a step's incoming model or effort differs from the
 baseline, something else changed it, and the Router stops for the rest of the turn (`root_stop`). So it does if the
 host dispatched a step without waiting for the hook (`step_abandoned`): a later step never switches away from what that
 one ran on.
+
+**Root effort and the prompt cache.** Changing the top-level effort restarts a conversation's prompt cache
+(platform docs, *Effort* and *Prompt caching*), and the host sends each turn's effort both as a per-message change and
+as the top-level value (2.1.283, observed on a local fake API). So on a warm cache — a response on the same model
+within the last 55 minutes, under the host's one-hour cache lifetime — a lower effort is held at the one the cache was
+written at (`held_for_cache` names what was asked), and only a rise pays the rewrite. Lowering waits for a cold cache:
+a session's first turn, a model change, or an hour's pause. Replayed on the owner's 245 root turns of 2026-09-21..28,
+whose first requests re-read a median 185K tokens, lowering freely moved effort at 71 warm turns and, with each
+rewrite priced, cost 2.7 % more than it saved; held, 12 warm turns moved and it saved whichever way the cache behaves.
+The savings in that replay are assumed shares of each turn's cost, not measured ones.
+
+**Subagent effort.** A subagent's loop steps through `turn.step` with its own `agentId`, which the spawn's result
+carries (2.1.283, observed). The spawn is asked the effort question on the full scale before its subagent's effort
+is known; its loop's first step reads that answer against the model and effort the loop actually runs at and decides
+for the whole loop, so one subagent keeps one effort and its cache is never restarted. A step that arrives on another
+model or effort, an effort pin, or a patched step answered by another model leaves that loop native
+(`child_stop`). On the fake API, a probe plugin making the same two patches (a named `model: "opus"` spawn to
+`sonnet`, each of its loop's steps to `low`) sent every subagent request as `claude-sonnet-5` at `effort: low` while
+the root stayed at `xhigh` (`~/jev-gate-runs/router-v2-2026-09-28/probe-child/`).
 
 A spawn is judged per dispatch, on its own prompt, even when a `tool_use_id` repeats. Every wait it makes (the pins,
 the host release, the allowlist, Jev) ends with that dispatch or with the session it began in. A spawn whose session

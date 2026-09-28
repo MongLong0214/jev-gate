@@ -13,6 +13,7 @@ const set = (v: string | undefined): boolean => v !== undefined && v.trim() !== 
 const engineOf = ($: EngineInterface): RouterEngine => ({
   fetch: (url, init) => $.http.fetch(url, init),
   sleep: (ms, signal) => $.clock.sleep(ms, { signal }),
+  now: () => Date.now(),
   envKey: () => $.env.get('TYPESAFE_API_KEY'),
   pins: async (): Promise<HostPins> => {
     const [mainModel, mainEffort, subagent, subagentForce, opus, sonnet, haiku] = await Promise.all([
@@ -72,12 +73,15 @@ export const register: Register = (on, options) => {
       quietly(() => router.turnStart(e));
       return next(e);
     });
-    on('turn.step', async function* ($, e, next) {
-      return yield* router.turnStep(engineOf($), e, next);
-    });
     on('turn.complete', ($, e, next) => {
       quietly(() => router.turnComplete(e));
       return next(e);
+    });
+  }
+  // Root turns and subagent loops both step here.
+  if (router.stepEnabled) {
+    on('turn.step', async function* ($, e, next) {
+      return yield* router.turnStep(engineOf($), e, next);
     });
   }
   if (router.spawnEnabled) {

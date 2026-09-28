@@ -17,7 +17,19 @@
     },
     "routeSubagentModel": {
       "title": "Route subagent models",
-      "description": "Choose the model of an inheriting built-in subagent (general-purpose, claude, Plan, Explore) that names none.",
+      "description": "Choose the model of a subagent: an inheriting built-in (general-purpose, claude, Plan, Explore) that names none, or any Agent call that names one.",
+      "type": "boolean",
+      "default": true
+    },
+    "routeExplicitSpawnModel": {
+      "title": "Route named subagent models",
+      "description": "Also choose the model when the Agent call names one (model: \"opus\"): the name is treated as a default.",
+      "type": "boolean",
+      "default": true
+    },
+    "routeSubagentEffort": {
+      "title": "Route subagent effort",
+      "description": "Set each subagent's reasoning effort from its task, on every request its loop makes.",
       "type": "boolean",
       "default": true
     },
@@ -73,7 +85,7 @@
       "title": "Downgrade confidence floor",
       "description": "Least probability, 0.5 to 1, that the weaker model or lower effort is enough: Jev's answer mass at or below it.",
       "type": "number",
-      "default": 0.9
+      "default": 0.6
     },
     "timeoutMs": {
       "title": "Assessment wait (ms)",

@@ -50,6 +50,7 @@ export const fakeEngine = (o: FakeEngineOptions = {}) => {
   const timers: Array<{ ms: number; resolve: () => void }> = [];
   // Read on every call, so a test can set a pin between steps as another Mod could.
   const pins: Partial<HostPins> = { ...o.pins };
+  const clock = { ms: 0 };
   // A test can hold a read open with `wait`, to change something while the Router is between reads.
   const allowed: { models: readonly string[] | undefined; reads: number; wait: Promise<unknown> | null } = { models: o.availableModels, reads: 0, wait: null };
   const engine: RouterEngine = {
@@ -78,6 +79,7 @@ export const fakeEngine = (o: FakeEngineOptions = {}) => {
       return allowed.models;
     },
     hostBase: async () => ('hostBase' in o ? o.hostBase : '2.1.282'),
+    now: () => clock.ms,
     log: (line) => {
       if (!line.startsWith('jev-router ')) throw new Error(`unprefixed log line: ${line}`);
       logs.push(JSON.parse(line.slice('jev-router '.length)) as Record<string, unknown>);
@@ -88,6 +90,7 @@ export const fakeEngine = (o: FakeEngineOptions = {}) => {
     sent,
     logs,
     pins,
+    clock,
     allowed,
     expire: (): void => {
       for (const t of timers.splice(0)) t.resolve();
@@ -107,11 +110,11 @@ export const choice = (keys: readonly string[], [pick, confidence]: Pick): Recor
   confidence,
 });
 
-const EFFORT_LEVEL: Record<string, number> = { low: 0, medium: 1, high: 2, xhigh: 2, max: 2 };
+const EFFORT_LEVEL: Record<string, number> = { low: 0, medium: 1, high: 2, xhigh: 3, max: 3 };
 
 /**
- * A valid score picked by label: a tier by its level description, an effort by the level that asks for it (hard work
- * for high and above). The pick carries its confidence as mass and the rest is spread evenly; `preserve` spreads all of
+ * A valid score picked by label: a tier by its level description, an effort by the level that asks for it (exceptional
+ * reasoning for xhigh and above). The pick carries its confidence as mass and the rest is spread evenly; `preserve` spreads all of
  * it. A label the question does not offer gives an invalid answer, as an unoffered choice would.
  */
 export const score = (name: string, criteria: readonly string[], [pick, confidence]: Pick): Record<string, unknown> => {

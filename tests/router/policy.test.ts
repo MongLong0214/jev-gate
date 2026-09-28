@@ -98,10 +98,12 @@ describe('validateScore', () => {
     expect(validateScore({ ...rounded, probabilities: { 0: 0.05, 1: 0.9300004, 2: 0.01 } }, 3)).toBeNull();
     expect(validateScore({ type: 'score', probabilities: Object.fromEntries(Array.from({ length: 200 }, (_, i) => [i, 0])) }, 200)).toBeNull();
 
+    // The effort question has four levels; the same rounding on four labels.
+    const fourLevels = { ...rounded, legend: { ...rounded.legend, 3: 'd' }, probabilities: { ...rounded.probabilities, 3: 0 } };
     const questions = buildQuestions({ tiers: null, efforts: ['low', 'medium', 'high'] });
     if (!questions) throw new Error('expected questions');
     const answers = validateAnswers(
-      { control: choice(['task_clear', 'explicit_lock', 'needs_context', 'unclear'], ['task_clear', 0.94]), effort: rounded, action_risk: choice(['ordinary', 'consequential', 'unclear'], ['ordinary', 0.97]) },
+      { control: choice(['task_clear', 'explicit_lock', 'needs_context', 'unclear'], ['task_clear', 0.94]), effort: fourLevels, action_risk: choice(['ordinary', 'consequential', 'unclear'], ['ordinary', 0.97]) },
       questions,
     );
     const decision = choosePatch(answers, { model: 'claude-opus-5-5', effort: 'xhigh' }, { tiers: null, efforts: ['low', 'medium', 'high'] }, opts());
@@ -116,8 +118,8 @@ describe('questions and state', () => {
     expect(buildQuestions({ tiers: [], efforts: [] })).toBeNull();
     const q = buildQuestions({ tiers: null, efforts: ['low', 'high'] });
     expect(Object.keys(q ?? {})).toEqual(['control', 'effort', 'action_risk']);
-    // Effort is always the same three levels; which effort each asks for is the decision's to work out.
-    expect(q?.effort).toMatchObject({ type: 'score', criteria: [TIER_LEVELS.fast, TIER_LEVELS.standard, TIER_LEVELS.deep] });
+    // Effort is always the same four levels; which effort each asks for is the decision's to work out.
+    expect(q?.effort).toMatchObject({ type: 'score', criteria: [TIER_LEVELS.fast, TIER_LEVELS.standard, TIER_LEVELS.deep, TIER_LEVELS.frontier] });
     expect(buildQuestions({ tiers: ['standard', 'deep', 'frontier'], efforts: null })?.tier?.criteria).toEqual([TIER_LEVELS.standard, TIER_LEVELS.deep, TIER_LEVELS.frontier]);
     for (const question of Object.values(q ?? {})) {
       expect(question.instructions).toContain('task.text');
@@ -180,24 +182,23 @@ describe('what is offered', () => {
   });
 
   it('offers only the unconditional levels of the exact model, never max, and only for a symbolic root effort', () => {
-    expect(offerableEfforts({ model: 'claude-opus-5-5', effort: 'high' }, 'root')).toEqual(['low', 'medium', 'high', 'xhigh']);
-    expect(offerableEfforts({ model: 'claude-sonnet-5', effort: 'xhigh' }, 'root')).toEqual(['low', 'medium', 'high']);
-    expect(offerableEfforts({ model: 'claude-haiku-4-5', effort: 'high' }, 'root')).toBeNull();
-    expect(offerableEfforts({ model: 'claude-opus-5-5', effort: 16_000 }, 'root')).toBeNull();
-    expect(offerableEfforts({ model: 'claude-opus-5-5' }, 'root')).toBeNull();
-    expect(offerableEfforts({ model: 'claude-opus-5-5', effort: 'high' }, 'spawn')).toBeNull();
+    expect(offerableEfforts({ model: 'claude-opus-5-5', effort: 'high' })).toEqual(['low', 'medium', 'high', 'xhigh']);
+    expect(offerableEfforts({ model: 'claude-sonnet-5', effort: 'xhigh' })).toEqual(['low', 'medium', 'high']);
+    expect(offerableEfforts({ model: 'claude-haiku-4-5', effort: 'high' })).toBeNull();
+    expect(offerableEfforts({ model: 'claude-opus-5-5', effort: 16_000 })).toBeNull();
+    expect(offerableEfforts({ model: 'claude-opus-5-5' })).toBeNull();
   });
 });
 
 describe('effortTargets', () => {
-  it('asks low, medium and high, keeps a higher baseline for hard work, and moves an untaken target up', () => {
+  it('asks low, medium, high and xhigh, keeps a higher baseline for exceptional work, and moves an untaken target up', () => {
     const all = ['low', 'medium', 'high', 'xhigh'] as const;
-    expect(effortTargets(all, 'medium')).toEqual(['low', 'medium', 'high']);
-    expect(effortTargets(all, 'xhigh')).toEqual(['low', 'medium', 'xhigh']);
-    expect(effortTargets(all, 'max')).toEqual(['low', 'medium', 'max']);
-    expect(effortTargets(['medium', 'high'], 'high')).toEqual(['medium', 'medium', 'high']);
-    // Nothing the model takes reaches high: hard work stays where it is.
-    expect(effortTargets(['low', 'medium'], 'medium')).toEqual(['low', 'medium', 'medium']);
+    expect(effortTargets(all, 'medium')).toEqual(['low', 'medium', 'high', 'xhigh']);
+    expect(effortTargets(all, 'xhigh')).toEqual(['low', 'medium', 'high', 'xhigh']);
+    expect(effortTargets(all, 'max')).toEqual(['low', 'medium', 'high', 'max']);
+    expect(effortTargets(['medium', 'high'], 'high')).toEqual(['medium', 'medium', 'high', 'high']);
+    // Nothing the model takes reaches high: hard and exceptional work stay where they are.
+    expect(effortTargets(['low', 'medium'], 'medium')).toEqual(['low', 'medium', 'medium', 'medium']);
   });
 });
 
@@ -210,7 +211,7 @@ describe('choosePatch', () => {
     levels: order.map((l) => (l === label ? p : (1 - p) / (order.length - 1))),
   });
   const tier = (label: string, p = 0.95) => at(modelOnly.tiers, label, p);
-  const effort = (level: 'light' | 'ordinary' | 'hard', p = 0.95) => at(['light', 'ordinary', 'hard'], level, p);
+  const effort = (level: 'light' | 'ordinary' | 'hard' | 'exceptional', p = 0.95) => at(['light', 'ordinary', 'hard', 'exceptional'], level, p);
 
   it('closes every gate with its own reason', () => {
     const cases: Array<[Answers, string]> = [
@@ -283,9 +284,9 @@ describe('choosePatch', () => {
   it('drops a model that cannot take the effort it would run with, and keeps an effort the original model takes', () => {
     const toSonnet = opts(switches(['claude-opus-5-5', 'claude-sonnet-5']));
     const both = { tiers: modelOnly.tiers, efforts: effortOnly.efforts };
-    // Hard work keeps xhigh, which Sonnet does not take: the model change is refused and the effort is unchanged.
+    // Exceptional work keeps xhigh, which Sonnet does not take: the model change is refused and the effort is unchanged.
     const xhigh: Baseline = { model: 'claude-opus-5-5', effort: 'xhigh' };
-    expect(choosePatch({ ...CLEAR, tier: tier('standard'), effort: effort('hard') }, xhigh, both, toSonnet)).toEqual({ patch: {}, model: 'pair_invalid', effort: 'same_value' });
+    expect(choosePatch({ ...CLEAR, tier: tier('standard'), effort: effort('exceptional') }, xhigh, both, toSonnet)).toEqual({ patch: {}, model: 'pair_invalid', effort: 'same_value' });
     const kept = choosePatch({ ...CLEAR, tier: tier('standard'), effort: effort('light') }, base, both, toSonnet);
     expect(kept).toEqual({ patch: { model: 'claude-sonnet-5', effort: 'low' }, model: 'applied', effort: 'applied' });
     expect(choosePatch({ ...CLEAR, tier: tier('standard') }, { model: 'claude-opus-5-5', effort: 'max' }, modelOnly, toSonnet).model).toBe('pair_invalid');
@@ -310,16 +311,18 @@ describe('choosePatch', () => {
     expect(choosePatch({ ...CLEAR, tier: { levels: [0.02, 0.6, 0.38] } }, opus, spawnTiers, spawnOpts).model).toBe('low_confidence');
   });
 
-  it('reads effort on three levels, and never lowers a baseline above high for hard work', () => {
+  it('reads effort on four levels, lowers xhigh to high for hard work, and keeps it for exceptional work', () => {
     const xhigh: Baseline = { model: 'claude-opus-5-5', effort: 'xhigh' };
     // Pagination: all of it on ordinary work.
-    expect(choosePatch({ ...CLEAR, effort: { levels: [0, 1, 0] } }, xhigh, effortOnly, opts()).patch).toEqual({ effort: 'medium' });
+    expect(choosePatch({ ...CLEAR, effort: { levels: [0, 1, 0, 0] } }, xhigh, effortOnly, opts()).patch).toEqual({ effort: 'medium' });
     // From max, which is never offered, every other target is below it.
-    expect(choosePatch({ ...CLEAR, effort: { levels: [0, 1, 0] } }, { model: 'claude-opus-5-5', effort: 'max' }, effortOnly, opts()).patch).toEqual({ effort: 'medium' });
-    // A replica migration design: 0.99 hard. With four effort labels this came back at high and lowered xhigh.
-    expect(choosePatch({ ...CLEAR, effort: { levels: [0, 0.01, 0.99] } }, xhigh, effortOnly, opts()).effort).toBe('same_value');
+    expect(choosePatch({ ...CLEAR, effort: { levels: [0, 1, 0, 0] } }, { model: 'claude-opus-5-5', effort: 'max' }, effortOnly, opts()).patch).toEqual({ effort: 'medium' });
+    // A replica migration design, 0.99 hard: high, which the paired cells ran as well as xhigh.
+    expect(choosePatch({ ...CLEAR, effort: { levels: [0, 0.01, 0.99, 0] } }, xhigh, effortOnly, opts()).patch).toEqual({ effort: 'high' });
+    // Exceptional reasoning keeps the baseline.
+    expect(choosePatch({ ...CLEAR, effort: { levels: [0, 0.01, 0.2, 0.79] } }, xhigh, effortOnly, opts()).effort).toBe('same_value');
     // Lookups: low.
-    expect(choosePatch({ ...CLEAR, effort: { levels: [0.96, 0.04, 0] } }, xhigh, effortOnly, opts()).patch).toEqual({ effort: 'low' });
+    expect(choosePatch({ ...CLEAR, effort: { levels: [0.96, 0.04, 0, 0] } }, xhigh, effortOnly, opts()).patch).toEqual({ effort: 'low' });
   });
 
   it('moves up to the greatest level whose mass at or above it reaches the upgrade floor', () => {
