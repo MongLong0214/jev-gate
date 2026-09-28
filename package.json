@@ -1,6 +1,6 @@
 {
   "name": "jev-gate",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "Claude Code plugin: Jev judges the execution shape, a strong read-only planner decomposes the job, and every worker dispatch is routed to a tier.",
   "type": "module",
@@ -12,6 +12,8 @@
     "typecheck": "tsc -p tsconfig.typecheck.json && tsc -p mods/tsconfig.json",
     "test": "vitest run",
     "pack": "node scripts/pack.mjs",
+    "release:pin": "npm run build && node scripts/release.mjs pin",
+    "release:check": "npm run build && node scripts/release.mjs check",
     "gen:agents": "node scripts/gen-agents.mjs"
   },
   "devDependencies": {

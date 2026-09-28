@@ -1,0 +1,56 @@
+{
+  "name": "jev-gate",
+  "owner": {
+    "name": "MongLong0214",
+    "url": "https://github.com/MongLong0214"
+  },
+  "description": "Claude Code plugins from the jev-gate repository: an instant extractive compactor, a Jev model and effort router, and the Jev orchestration gate. Each is off by default until you enable it.",
+  "plugins": [
+    {
+      "name": "jev-gate-compact",
+      "source": "./mods/compact",
+      "displayName": "Jev Gate Compact",
+      "description": "Answers auto compactions with an extractive digest and the recent tail: no summarizer request, milliseconds instead of a minute. Calls no Jev. Needs CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1; off until enabled.",
+      "homepage": "https://github.com/MongLong0214/jev-gate/tree/main/mods/compact#readme",
+      "category": "productivity",
+      "tags": [
+        "compaction",
+        "context",
+        "tokens",
+        "function-hooks"
+      ]
+    },
+    {
+      "name": "jev-gate-router",
+      "source": "./mods/router",
+      "displayName": "Jev Gate Router",
+      "description": "Chooses each request's Claude model and effort from one TypeSafe Jev assessment and stays native on any doubt. Needs CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 and a TypeSafe key; off until enabled.",
+      "homepage": "https://github.com/MongLong0214/jev-gate/tree/main/mods/router#readme",
+      "category": "productivity",
+      "tags": [
+        "routing",
+        "jev",
+        "typesafe",
+        "function-hooks"
+      ]
+    },
+    {
+      "name": "jev-gate",
+      "source": {
+        "source": "archive",
+        "url": "https://github.com/MongLong0214/jev-gate/releases/download/v0.3.0/jev-gate-0.3.0.zip",
+        "sha256": "f75e00b4361c96c2b9e072ac206371081ecb9d9cfa9da5dcf290618f6a0673b8"
+      },
+      "displayName": "Jev Gate",
+      "description": "Jev-directed orchestration for deep sessions: a planner and tiered workers, admitted only past a context-depth floor. Built from the tagged release; needs Node 22 and a TypeSafe key.",
+      "homepage": "https://github.com/MongLong0214/jev-gate#readme",
+      "category": "productivity",
+      "tags": [
+        "orchestration",
+        "jev",
+        "typesafe",
+        "hooks"
+      ]
+    }
+  ]
+}

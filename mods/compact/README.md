@@ -11,13 +11,19 @@ deciding when a digest should fall back to the engine's own summary.
 
 ## Enable
 
+Install it from the repository's marketplace. Function Hooks are gated in the host, so
+`CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` must be in the environment Claude Code starts in (for example under `env` in
+`~/.claude/settings.json`):
+
 ```sh
-export CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1
-claude --plugin-dir /path/to/jev-gate/mods/compact
+claude plugin marketplace add MongLong0214/jev-gate
+claude plugin install jev-gate-compact@jev-gate --config enabled=true --config mode=active
 ```
 
-Off by default; off registers no hook at all. Options live under `pluginConfigs["jev-gate-compact"].options` (or
-`jev-gate-compact@inline` for a `--plugin-dir` load).
+From a checkout, `claude --plugin-dir /path/to/jev-gate/mods/compact` loads the working tree instead.
+
+Off by default; off registers no hook at all. Options live under `pluginConfigs["jev-gate-compact@jev-gate"].options`
+(`jev-gate-compact@inline` for a `--plugin-dir` load).
 
 | Option | Default | Meaning |
 |---|---|---|
