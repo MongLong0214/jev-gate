@@ -180,8 +180,13 @@ const checkConfig = (loaded: ConfigResult): void => {
     return;
   }
   const c = loaded.config;
-  say('ok', `config ${loaded.source}: mode=${c.mode} jevModel=${c.jevModel} deadline=${c.requestDeadlineMs}ms floors={admission:${c.admissionConfidenceFloor},route:${c.routeConfidenceFloor},result:${c.resultConfidenceFloor}} plannerDefaultTier=${c.plannerDefaultTier} models=${JSON.stringify(c.models)} maxParallelWorkers=${c.maxParallelWorkers} guardAllowTools=${JSON.stringify(c.guardAllowTools)} routeQuestionShape=${c.routeQuestionShape} admissionQuestionShape=${c.admissionQuestionShape} delegationDepthFloor=${c.delegationDepthFloor === null ? 'null (derive from host window)' : c.delegationDepthFloor} delegationDepthFraction=${c.delegationDepthFraction} maxTasksPerPlan=${c.maxTasksPerPlan}`);
-  if (c.admissionQuestionShape === 'atomic') say('info', 'admissionQuestionShape=atomic: Gate A asks read-off questions composed in code as vetoes and does not consult admissionConfidenceFloor at all');
+  say('ok', `config ${loaded.source}: mode=${c.mode} jevModel=${c.jevModel} deadline=${c.requestDeadlineMs}ms floors={admission:${c.admissionConfidenceFloor},route:${c.routeConfidenceFloor},result:${c.resultConfidenceFloor}} plannerDefaultTier=${c.plannerDefaultTier} models=${JSON.stringify(c.models)} maxParallelWorkers=${c.maxParallelWorkers} guardAllowTools=${JSON.stringify(c.guardAllowTools)} routeQuestionShape=${c.routeQuestionShape} admissionQuestionShape=${c.admissionQuestionShape} delegationDepthFloor=${c.delegationDepthFloor === null ? 'null (derived)' : c.delegationDepthFloor} delegationDepthFraction=${c.delegationDepthFraction} maxTasksPerPlan=${c.maxTasksPerPlan} admittedShape=${c.admittedShape} delegationCoordinatorTurns=${c.delegationCoordinatorTurns} delegationWorkerTokensPerCall=${c.delegationWorkerTokensPerCall} guardAllowMcp=${c.guardAllowMcp} verifyWorkerChecks=${c.verifyWorkerChecks}`);
+  if (c.admissionQuestionShape === 'atomic') {
+    say(
+      'info',
+      `admissionQuestionShape=atomic: Gate A asks read-off questions and prices the request in code -- delegate when (turns - ${c.delegationCoordinatorTurns}) x depth - turns x ${c.delegationWorkerTokensPerCall} > 0 -- and does not consult admissionConfidenceFloor; delegationDepthFraction is read only by the composite gate`,
+    );
+  }
   /**
    * #48 P0-1: doctor resolves the same host window and effective floor the hook resolves on the auto path
    * (`effectiveDepthFloor` in src/config.ts), so what is printed here is the number that would actually gate the
@@ -210,7 +215,7 @@ const checkConfig = (loaded: ConfigResult): void => {
   } else {
     say(
       'info',
-      `effective depth floor: ${floor} (${floorSource}): a prompt arriving with less context than this stays direct and sends no Gate A request (recorded as depth_below_floor); an unreadable transcript is depth_unknown and also stays direct`,
+      `effective depth floor: ${floor} (${floorSource}): a prompt arriving with less context than this stays direct and sends no Gate A request (recorded as depth_below_floor)${floorSource === 'cost_model' ? ', because below it no tool-call answer could repay the coordinator' : ''}; an unreadable transcript is depth_unknown and also stays direct`,
     );
   }
   if (c.mode === 'off') {

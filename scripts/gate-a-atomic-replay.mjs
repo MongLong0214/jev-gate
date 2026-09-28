@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..');
 const { callJev } = await import(join(ROOT, 'dist/jev.js'));
-const { buildAtomicAdmissionRequest, decideAdmissionAtomic } = await import(join(ROOT, 'dist/admission.js'));
+const { buildAtomicAdmissionRequest, decideAdmissionAtomic, delegationModel } = await import(join(ROOT, 'dist/admission.js'));
 const { DEFAULT_CONFIG, LEGACY_DEPTH_FLOOR } = await import(join(ROOT, 'dist/config.js'));
 
 // #48 P0-1: DEFAULT_CONFIG.delegationDepthFloor is now null (derive from the host window, see config.ts), so it can
@@ -47,7 +47,7 @@ for (const row of rows) {
     continue;
   }
   const a = r.response.answers;
-  const d = decideAdmissionAtomic(a, row.context_tokens ?? null, args.floor);
+  const d = decideAdmissionAtomic(a, row.context_tokens ?? null, args.floor, delegationModel(config), !config.guardAllowMcp);
   out.push({
     project: row.project ?? null,
     len: row.text.length,
@@ -58,11 +58,11 @@ for (const row of rows) {
     // The facts themselves are numbers, never prompt text, so they are safe to publish alongside the decision.
     facts: {
       forbids_delegation: a.forbids_delegation?.noul ?? null,
-      answer_only: a.answer_only?.noul ?? null,
-      missing_reference: a.missing_reference?.noul ?? null,
+      external_tools: a.external_tools?.noul ?? null,
       size: a.size?.score ?? null,
-      size_confidence: a.size?.confidence ?? null,
+      tool_calls: a.tool_calls?.score ?? null,
     },
+    estimate: d.estimate,
     tokens: r.response.usage?.input_tokens ?? null,
   });
 }

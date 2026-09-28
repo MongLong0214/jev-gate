@@ -675,6 +675,9 @@ describe('spawn model', () => {
       ['host_unverified', spawn(), { hostBase: undefined }, true],
       ['baseline_unknown', spawn({ subagentType: 'Explore', parentModel: 'claude-fable-5-1' }), {}, true],
       ['lean_marker', spawn({ prompt: 'Execute packet jev-lean-0123456789abcdef now.' }), {}, true],
+      ['gate_routed', spawn({ subagentType: 'jev-gate:worker' }), {}, true],
+      ['gate_routed', spawn({ subagentType: 'jev-gate:planner' }), {}, true],
+      ['gate_routed', spawn({ prompt: 'Fix it.\n\n[Jev Gate route note] Tier: fast. Precedence: ...' }), {}, true],
       ['rank_unknown', spawn({ parentModel: 'claude-unknown-9' }), {}, true],
     ];
     for (const [reason, e, opts, offered] of cases) {

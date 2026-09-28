@@ -43,8 +43,8 @@ export interface MainSessionStep {
  * It is a separate shape rather than `maxTasksPerPlan: 1`: a one-task plan still pays for the planner, still carries a
  * contract and still has a replan path, so it would measure a small hierarchy rather than the absence of one.
  */
-export type AdmittedShape = 'hierarchy' | 'single';
-export const ADMITTED_SHAPES: readonly AdmittedShape[] = ['hierarchy', 'single'];
+export type AdmittedShape = 'hierarchy' | 'single' | 'auto';
+export const ADMITTED_SHAPES: readonly AdmittedShape[] = ['hierarchy', 'single', 'auto'];
 
 export type AdmissionAnswer = 'direct' | 'orchestrated' | 'needs_context' | 'abstain';
 export type RouteAnswer = Tier | 'abstain';
@@ -132,6 +132,7 @@ export interface ConfigV5 {
    * #48 P0-1: the fraction of the host's compaction window that `effectiveDepthFloor` uses when `delegationDepthFloor`
    * is not set explicitly. 0.6 is a policy choice made so a smaller window still admits some prompts before the host
    * compacts; it is not a measured crossing point. Must be strictly between 0 and 1. Optional in a config file.
+   * Since 0.4.0 only the composite Gate A reads it: the atomic gate's floor comes from its cost model.
    */
   delegationDepthFraction: number;
   /**
@@ -146,10 +147,28 @@ export interface ConfigV5 {
    */
   maxTasksPerPlan: number;
   /**
-   * A19: how an admitted turn is executed. Optional in a config file and defaulted to `hierarchy`, so a deployed file
-   * keeps its behaviour. `single` removes the planner, the plan, Gate B's contract and the replan path from the turn.
+   * A19: how an admitted turn is executed. `single` removes the planner, the plan, Gate B's contract and the replan
+   * path from the turn. `auto` (the default since 0.4.0) runs `single` unless Gate A read the request as naming
+   * separate outcomes or as a whole project (`resolveAdmittedShape` in src/admission.ts).
    */
   admittedShape: AdmittedShape;
+  /**
+   * Gate A's cost model (`delegationSaving` in src/admission.ts): the root turns a delegated turn still takes at
+   * depth, and what one worker turn reads. Declared, not fitted; the coordinator figure is the jev_single bench's
+   * 11-17 root turns.
+   */
+  delegationCoordinatorTurns: number;
+  delegationWorkerTokensPerCall: number;
+  /**
+   * Whether the coordinator may call MCP tools (`mcp__*`) while the guard is active. A worker cannot reach a
+   * connector, so without this a turn that needs one stalls. On by default.
+   */
+  guardAllowMcp: boolean;
+  /**
+   * Whether a worker's reported check results are compared with the commands its own transcript shows it ran
+   * (src/verify.ts). A check reported as passing whose last run failed makes the task `incomplete`. On by default.
+   */
+  verifyWorkerChecks: boolean;
   /**
    * A23: whether a candidate plan is compared against the request before it is adopted. One extra HTTP call per
    * candidate plan, and it changes nothing: the classification is recorded and no plan is ever rejected by it.
@@ -308,6 +327,17 @@ export interface Reservation {
   orphaned?: true;
 }
 
+/** What a worker's own transcript showed about the checks it reported as passing (src/verify.ts). */
+export interface CheckVerification {
+  transcript: 'read' | 'truncated' | 'unavailable';
+  /** Reported pass; the last run of its command failed. */
+  contradicted: string[];
+  /** Reported pass; its command was never run through Bash in the part of the transcript that was read. */
+  unobserved: string[];
+  /** Reported pass; the passing run came before a later edit. */
+  stale: string[];
+}
+
 export interface Receipt {
   task_id: string;
   contract_hash: string;
@@ -323,6 +353,8 @@ export interface Receipt {
   observed_model: string | null;
   root_effort: string | null;
   recorded_at: string;
+  /** Present when `verifyWorkerChecks` compared the reply with the worker's transcript. */
+  verification?: CheckVerification;
 }
 
 export interface JobAttempts {
@@ -495,8 +527,11 @@ export type PreserveReason =
   | 'depth_unknown'
   | 'depth_below_floor'
   | 'admission_forbids_delegation'
+  /** Historical only (before 0.4.0): stored traces carry these; no current decision produces them. */
   | 'admission_answer_only'
   | 'admission_too_small'
+  | 'admission_external_tools'
+  | 'admission_not_worth'
   | 'route_invalid'
   | 'route_tie'
   | 'route_abstain'

@@ -1,5 +1,60 @@
 # Changelog
 
+## v0.4.0 — Gate A prices the request, both gates act, and a reported pass is checked
+
+This release answers the owner's review of real use on 2026-09-28, point by point.
+
+### Changed
+
+- **Gate A prices each request instead of vetoing on its kind.** The `answer_only` veto is gone: it said nothing about
+  cost, and it vetoed a 26-call analysis that would have cost 7.9M tokens direct and 3.24M delegated. The `size ≥ 1`
+  floor is gone with it, since it let almost everything through. Jev now reads off roughly how many tool calls the
+  request needs (`tool_calls`, a 0–4 score). Code maps that score to root turns (`TOOL_CALL_TURNS = [0, 10, 10, 10, 60]`)
+  and delegates only when `(turns − 11) × depth − turns × 40,000 > 0`. Put simply: delegate when the turns saved,
+  each of which would re-read the whole session, outweigh what the worker reads doing them. A turn that does not pay
+  stays direct as `admission_not_worth`, and the trace records the price (`estimate`). Both constants are config
+  keys (`delegationCoordinatorTurns`, `delegationWorkerTokensPerCall`).
+- **The floor is derived, not a policy number.** With the atomic gate (the default) and `delegationDepthFloor: null`,
+  the floor is the shallowest depth at which the largest answer could pay: 48,980 tokens (`source: cost_model`). The
+  window-fraction floor (180K on a 300K window) applies only to the composite gate now. The measured points behind it
+  are unchanged: +182% at 55K and −57% at 406K.
+- **`admittedShape: auto` is the default.** An admitted turn runs as one worker carrying the request verbatim, with no
+  planner, unless Gate A read the request as separate outcomes or a whole project; only then does the planner
+  hierarchy run. The owner chose this on 2026-09-28, following `DECISION-admitted-shape-2026-09-19.md` (single passed
+  6/6, hierarchy 4/6). The single-shape coordinator is told to dispatch before reading anything.
+- **Gate B's answer is applied.** `routeQuestionShape` defaults to `atomic`. The composite answer never cleared its
+  0.8 floor in real use (0.78, 0.35), so every dispatch kept the tier the coordinator called. The atomic shape
+  composes fast, standard or deep in code, with no floor. It never picks frontier.
+- **The Router leaves jev-gate dispatches alone.** A `jev-gate:` subagent, or a prompt carrying Gate B's route note,
+  is skipped as `gate_routed`, so Gate B's model and effort are the ones that run.
+- **MCP work can be delegated.** The root guard now allows `mcp__*` tools (`guardAllowMcp`, default on), and the
+  coordinator is told to run any connector step itself and hand the worker the result. Gate A's `external_tools`
+  veto applies only when `guardAllowMcp` is off.
+
+### Added
+
+- **Reported passes are checked against the worker's own transcript** (`verifyWorkerChecks`, default on). A worker's
+  `accept` used to be accepted on its word. The hook now reads the worker's transcript (last 8 MiB) and compares each
+  check reported as passing with the last run of that check's command. If that run failed (the host marked it
+  `is_error`), the task is `incomplete` and the reason names the check. A check that was never run, or was run before
+  a later edit, is recorded in `verification` but refuses nothing. That signal is not strong enough: a command piped
+  into `tail` exits with `tail`'s status. `explain` prints the verification and Gate A's price.
+- `bench/results/v5-gate-a-cost-2026-09-28/`: the pre-registered calibration and validation of the cost model on 100
+  real prompts (numbers only).
+
+### Measured, and the limits
+
+- On 50 held-out prompts the gate admitted 8, with a precision of 0.625. The net saving under the model was +30.4M
+  tokens against 885.1M native, which meets the pre-registered rule. The shipped default, which does not veto on
+  `external_tools`, admitted 9 with a precision of 0.667 and a net saving of +66.4M; that comparison was not
+  pre-registered.
+- **Jev's read-off barely predicts the turns a request takes:** Spearman correlation 0.05–0.08. As a result the gate
+  recovers 5–11% of the saving the model says is available. Admitting everything at depth would save 513.6M under the
+  model, but that figure prices only tokens, not the quality of a worker that does not see the conversation. It is
+  not taken here: it needs a quality guard and a paid measurement.
+- The oracle is the cost model itself (`C` and `d` are declared, not fitted), so this checks which prompts the gate
+  picks, not whether delegation pays. No paid end-to-end run backs 0.4.0.
+
 ## v0.3.1 — the release archive ships lean's executor
 
 - The `jev-gate` archive now includes `agents/executor.md`. v0.3.0 shipped only the six routing roles, so

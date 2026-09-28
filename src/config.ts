@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import type { AdmissionQuestionShape, AdmittedShape, ConfigV5, Mode, PlannerTier, RouteQuestionShape, Tier, WorkerIsolation } from './types.js';
+import { costModelFloor, delegationModel } from './admission.js';
 import { DEFAULT_MAX_TASKS_PER_PLAN } from './plan.js';
 import { ADMITTED_SHAPES, MODES, PLANNER_TIERS, ROUTE_QUESTION_SHAPES, TIERS, WORKER_ISOLATIONS } from './types.js';
 
@@ -28,8 +29,9 @@ export const DEFAULT_CONFIG: ConfigV5 = {
   // maxParallelWorkers > 1 (see validateConfig): a declared deliverable is the planner's claim, a worktree is a
   // boundary, and the write-boundary concern is solved by the worktree rather than by trusting the planner's claim.
   workerIsolation: 'none',
-  // Optional in a config file: absent keeps the shipped composite Gate B question.
-  routeQuestionShape: 'composite',
+  // Atomic since 0.4.0: the composite question's 0.8 confidence floor never cleared in real use (0.78, 0.35), so Gate B
+  // was asked and then ignored. The atomic path composes read-off facts in code with no floor, so its tier is applied.
+  routeQuestionShape: 'atomic',
   // #48 P0-1: null derives the floor from the host's own auto-compaction window (effectiveDepthFloor) instead of a
   // fixed absolute number. The prior default of the fixed 300,000 was itself derived, not measured -- the two
   // end-to-end points were 55K (delegation loses) and 406K (delegation wins) and it sat between them nearer the win
@@ -53,8 +55,16 @@ export const DEFAULT_CONFIG: ConfigV5 = {
   admissionQuestionShape: 'atomic',
   // Above the 2-7 band that ordinary plans ran in, below the 13 that cost +92.5 %: it stops a runaway, not a plan.
   maxTasksPerPlan: DEFAULT_MAX_TASKS_PER_PLAN,
-  // A19: the shipped product. `single` is an arm under measurement, not a default anything is moving toward yet.
-  admittedShape: 'hierarchy',
+  // Auto since 0.4.0 (owner's choice, 2026-09-28): single passed 6/6 and hierarchy 4/6 on this repository's two jobs
+  // (DECISION-admitted-shape-2026-09-19.md), and a planner for a one-task request is a planner run for nothing.
+  admittedShape: 'auto',
+  // The jev_single bench's coordinator took 11-17 root turns at depth; 11 is the low end, so a delegated turn is not
+  // credited with removing turns it never measured removing. 40,000 is a declared worker context, not a fit.
+  delegationCoordinatorTurns: 11,
+  delegationWorkerTokensPerCall: 40_000,
+  // A worker has no connector, so a Notion or Figma step can only run in the root.
+  guardAllowMcp: true,
+  verifyWorkerChecks: true,
   // A23: off. The call decides nothing, so its whole cost is the call, and nobody should pay it without asking.
   planInterpretation: false,
 };
@@ -107,6 +117,10 @@ const V5_KEYS = new Set<string>([
   'maxTasksPerPlan',
   'admittedShape',
   'planInterpretation',
+  'delegationCoordinatorTurns',
+  'delegationWorkerTokensPerCall',
+  'guardAllowMcp',
+  'verifyWorkerChecks',
 ]);
 const LEGACY_MARKERS = ['uncertainTier', 'opusModel', 'frontierModel', 'confidenceFloor'];
 /** `resultConfidenceFloor` is a deprecated no-op (T11): it is still validated so a deployed file loads, and read by nothing. */
@@ -218,7 +232,7 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
   }
 
   // Same rule again: absence defaults, an explicit wrong value is an error.
-  const admittedShape = 'admittedShape' in c ? c['admittedShape'] : 'hierarchy';
+  const admittedShape = c['admittedShape'];
   if (typeof admittedShape !== 'string' || !ADMITTED_SHAPES.includes(admittedShape as AdmittedShape)) {
     return { ok: false, error: `admittedShape must be one of ${ADMITTED_SHAPES.join(', ')}` };
   }
@@ -226,6 +240,18 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
   // A23: absence defaults to false; an explicit non-boolean is an error, like every other optional key here.
   const planInterpretation = 'planInterpretation' in c ? c['planInterpretation'] : false;
   if (typeof planInterpretation !== 'boolean') return { ok: false, error: 'planInterpretation must be a boolean' };
+
+  const coordinatorTurns = c['delegationCoordinatorTurns'];
+  if (typeof coordinatorTurns !== 'number' || !Number.isInteger(coordinatorTurns) || coordinatorTurns < 1 || coordinatorTurns > 1000) {
+    return { ok: false, error: 'delegationCoordinatorTurns must be an integer in [1, 1000]' };
+  }
+  const workerTokens = c['delegationWorkerTokensPerCall'];
+  if (typeof workerTokens !== 'number' || !Number.isInteger(workerTokens) || workerTokens < 1 || workerTokens > 1_000_000) {
+    return { ok: false, error: 'delegationWorkerTokensPerCall must be an integer in [1, 1000000]' };
+  }
+  for (const key of ['guardAllowMcp', 'verifyWorkerChecks'] as const) {
+    if (typeof c[key] !== 'boolean') return { ok: false, error: `${key} must be a boolean` };
+  }
 
   const allow = c['guardAllowTools'];
   if (!Array.isArray(allow) || allow.some((t) => typeof t !== 'string' || !TOOL_NAME_RE.test(t))) {
@@ -265,6 +291,10 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
       maxTasksPerPlan: maxTasks,
       admittedShape: admittedShape as AdmittedShape,
       planInterpretation,
+      delegationCoordinatorTurns: coordinatorTurns,
+      delegationWorkerTokensPerCall: workerTokens,
+      guardAllowMcp: c['guardAllowMcp'] as boolean,
+      verifyWorkerChecks: c['verifyWorkerChecks'] as boolean,
     },
   };
 };
@@ -306,7 +336,7 @@ export const loadConfig = (env: Env, readFile: (path: string) => string = (p) =>
 
 export interface EffectiveDepthFloor {
   floor: number;
-  source: 'config' | 'window_fraction' | 'fallback_absolute';
+  source: 'config' | 'cost_model' | 'window_fraction' | 'fallback_absolute';
 }
 
 /**
@@ -324,6 +354,11 @@ export interface EffectiveDepthFloor {
  */
 export const effectiveDepthFloor = (config: ConfigV5, window: number | null): EffectiveDepthFloor => {
   if (config.delegationDepthFloor !== null) return { floor: config.delegationDepthFloor, source: 'config' };
+  // Since 0.4.0 the atomic gate prices each request (`delegationSaving`), so its floor is only where no answer could
+  // pay, and the host window does not enter into it. The composite gate has no price and keeps the window rule.
+  if (config.admissionQuestionShape === 'atomic') {
+    return { floor: costModelFloor(delegationModel(config)), source: 'cost_model' };
+  }
   if (window !== null) return { floor: Math.min(LEGACY_DEPTH_FLOOR, Math.floor(config.delegationDepthFraction * window)), source: 'window_fraction' };
   return { floor: LEGACY_DEPTH_FLOOR, source: 'fallback_absolute' };
 };

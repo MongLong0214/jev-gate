@@ -77,7 +77,12 @@ const admissionLine = (r: Rec): string => {
   const floorText = floor === null ? '' : ` (floor ${thousands(floor)})`;
   const forced = r['forced'] === true ? '  forced arm' : '';
   const confText = conf === null ? '' : `  confidence ${conf}`;
-  return `gate A   ${shape}${confText}  ${depth}${floorText}  ${jevCall(r)}${forced}${because(reason)}`;
+  // Since 0.4.0 the atomic gate prices the turn: the root turns it read off and the saving that price came to.
+  const est = sub(r, 'estimate');
+  const turns = est ? num(est['turns']) : null;
+  const saving = est ? num(est['saving_tokens']) : null;
+  const priced = turns === null || saving === null ? '' : `  priced ${turns} turns, saving ${thousands(saving)} tokens`;
+  return `gate A   ${shape}${confText}  ${depth}${floorText}${priced}  ${jevCall(r)}${forced}${because(reason)}`;
 };
 
 const dispatchLine = (r: Rec, post: Rec | null): string => {
@@ -137,6 +142,12 @@ const requestedResolved = (r: Rec): string => {
   return requested === null && resolved === null ? '' : `  ${requested ?? 'unrecorded'} → ${resolved ?? 'unrecorded'}`;
 };
 
+/** One named list from a check verification, left out when it is empty. */
+const checkList = (v: Rec, key: string): string => {
+  const ids = Array.isArray(v[key]) ? (v[key] as unknown[]).filter((x): x is string => typeof x === 'string') : [];
+  return ids.length === 0 ? '' : `, ${key} ${ids.join(' ')}`;
+};
+
 const resultLine = (r: Rec): string => {
   if (r['matched'] === false) {
     const subagent = str(r['subagent_type']);
@@ -150,7 +161,9 @@ const resultLine = (r: Rec): string => {
   const ms = tr ? num(tr['totalDurationMs']) : null;
   const tools = tr ? num(tr['totalToolUseCount']) : null;
   const work = [ms === null ? null : `${Math.round(ms / 1000)}s`, tools === null ? null : `${tools} tool calls`].filter((x) => x !== null).join(', ');
-  return `result   task ${str(r['task_id']) ?? '?'}${attempt === null ? '' : ` attempt ${attempt}`}  worker-reported ${verdict}${work ? `  (${work})` : ''}${because(reason)}`;
+  const v = sub(r, 'verification');
+  const verified = v ? `  transcript ${str(v['transcript']) ?? '?'}${checkList(v, 'contradicted')}${checkList(v, 'unobserved')}${checkList(v, 'stale')}` : '';
+  return `result   task ${str(r['task_id']) ?? '?'}${attempt === null ? '' : ` attempt ${attempt}`}  worker-reported ${verdict}${work ? `  (${work})` : ''}${verified}${because(reason)}`;
 };
 
 const planLine = (r: Rec): string => {
@@ -295,7 +308,7 @@ const lineFor = (r: Rec, posts: Map<string, Rec>): string | null => {
 
 /** What the trace cannot answer. Printed every time, because the gaps are the part a reader would otherwise invent. */
 export const EXPLAIN_CAVEATS: readonly string[] = [
-  'A verdict is what the worker reported about its own work. The gate records the report; it does not re-run the checks.',
+  'A verdict is what the worker reported about its own work. The gate does not re-run the checks; since 0.4.0 it compares each reported pass with that command\'s last run in the worker\'s transcript, and refuses only a pass whose last run failed.',
   'A model after "ran" is the one the host reported resolving. A dispatch with no result record has no observed model, and what was asked for is never read back as what was got.',
   'Records exist only for turns taken while JEV_GATE_TRACE_DIR was set. A missing phase means nothing was recorded, not that nothing happened.',
 ];

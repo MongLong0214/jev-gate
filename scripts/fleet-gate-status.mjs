@@ -18,7 +18,11 @@ import { fileURLToPath } from 'node:url';
 
 const HOME = homedir();
 // Resolve the built reader from this script's own checkout, so the tool works wherever the repo lives.
-const { readSessionDepth } = createRequire(import.meta.url)(join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'depth.js'));
+const DIST = join(dirname(fileURLToPath(import.meta.url)), '..', 'dist');
+const require = createRequire(import.meta.url);
+const { readSessionDepth } = require(join(DIST, 'depth.js'));
+const { costModelFloor, delegationModel } = require(join(DIST, 'admission.js'));
+const { DEFAULT_CONFIG } = require(join(DIST, 'config.js'));
 
 const sh = (cmd, args) => {
   try {
@@ -44,7 +48,13 @@ const config = (() => {
  * would not be uniformly comparable across sessions with different windows -- reporting the same legacy constant for
  * all of them, instead, is the correct simplification for a fleet-wide summary, not a gap.
  */
-const FLOOR = typeof config.delegationDepthFloor === 'number' ? config.delegationDepthFloor : 300000;
+const FLOOR = typeof config.delegationDepthFloor === 'number'
+  ? config.delegationDepthFloor
+  : // Since 0.4.0 the atomic gate (the default) derives its floor from the cost model, not from the window, so it is
+    // one number across the fleet and needs no simplification.
+    (config.admissionQuestionShape ?? DEFAULT_CONFIG.admissionQuestionShape) === 'atomic'
+    ? costModelFloor(delegationModel({ ...DEFAULT_CONFIG, ...config }))
+    : 300000;
 const MODE = config.mode ?? 'off';
 
 /** session_id -> the job state the hook last wrote for it. */

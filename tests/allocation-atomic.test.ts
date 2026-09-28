@@ -98,10 +98,10 @@ describe('decideWorkerRouteAtomic', () => {
 });
 
 describe('routeQuestionShape config', () => {
-  it('defaults to composite so a deployed file keeps its behaviour', () => {
-    expect(DEFAULT_CONFIG.routeQuestionShape).toBe('composite');
+  it('defaults to atomic since 0.4.0, because the composite answer never cleared its floor in real use', () => {
+    expect(DEFAULT_CONFIG.routeQuestionShape).toBe('atomic');
     const r = validateConfig({ version: 5, mode: 'auto' });
-    expect(r.ok && r.config.routeQuestionShape).toBe('composite');
+    expect(r.ok && r.config.routeQuestionShape).toBe('atomic');
   });
 
   it('accepts atomic and rejects anything else', () => {

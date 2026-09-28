@@ -49,16 +49,28 @@ const DENIED_UNLESS_ALLOWED = ['Edit', 'Write', 'Bash'];
  * set plus config `guardAllowTools`). A fixed "Bash is unavailable, do not probe it" told the coordinator not to use
  * the one tool worktree isolation requires it to use, to commit inputs and merge each worker's branch.
  */
-export const renderToolRule = (agents: string, allowTools: readonly string[] = []): string => {
+export const renderToolRule = (agents: string, allowTools: readonly string[] = [], allowMcp = false): string => {
   const available = [...ALWAYS_NAMED, ...allowTools.filter((t) => !ALWAYS_NAMED.includes(t))].join(', ');
   const denied = DENIED_UNLESS_ALLOWED.filter((t) => !allowTools.includes(t));
   const unavailable = denied.length > 0 ? `${denied.join(', ')} and every other agent (including Explore) are unavailable` : 'Every other agent (including Explore) is unavailable';
-  return `Available to you now: ${available}, and ${agents}. ${unavailable} for this request and will be denied; do not probe them.`;
+  const rule = `Available to you now: ${available}, and ${agents}. ${unavailable} for this request and will be denied; do not probe them.`;
+  return allowMcp ? `${rule} ${MCP_SENTENCE}` : rule;
 };
 
-export const orchestrationRules = (cap: number, workerIsolation: WorkerIsolation = 'none', allowTools: readonly string[] = []): string[] => [
+/** Workers have no connector, so a step that needs one is the coordinator's; without this a Notion or Figma turn stalled. */
+export const MCP_SENTENCE =
+  'Connected MCP tools (mcp__...) stay available to you: run any step that needs one yourself, because workers cannot reach a connector, and give the worker what it returned.';
+
+/**
+ * Every root turn re-reads the whole session, so the saving of a delegated turn is the root turns it removes. The
+ * jev_single bench took 11-17 root turns; reading the repository before dispatch is what the worker is there to do.
+ */
+export const DISPATCH_FIRST_SENTENCE =
+  'Dispatch first: do not read or search the repository before the dispatch. Every turn you take re-reads this whole session, and the worker reads what it needs in its own context.';
+
+export const orchestrationRules = (cap: number, workerIsolation: WorkerIsolation = 'none', allowTools: readonly string[] = [], allowMcp = false): string[] => [
   'You do not implement this request yourself; you coordinate.',
-  renderToolRule('Agent calls to jev-gate:planner and the jev-gate worker roles', allowTools),
+  renderToolRule('Agent calls to jev-gate:planner and the jev-gate worker roles', allowTools, allowMcp),
   'Planner first: call jev-gate:planner with no model argument. Give it the exact request, the relevant earlier user constraints, and factual observations about this repository. It is read-only and returns the plan.',
   renderDispatchRule(cap),
   'Each worker prompt starts with the marker [JEV_TASK rev=<n> id=<id>] followed by your own short brief. Do not paste the planner task block: the hook appends the canonical task contract, the global constraints, the required check ids and the predecessor facts.',
@@ -75,10 +87,11 @@ export const orchestrationRules = (cap: number, workerIsolation: WorkerIsolation
  * saving measured at depth comes from starting in a fresh context or from splitting the work, which every figure in
  * this repository so far confounds.
  */
-export const singleRules = (allowTools: readonly string[] = []): string[] => [
+export const singleRules = (allowTools: readonly string[] = [], allowMcp = false): string[] => [
   'You do not implement this request yourself; you coordinate.',
-  renderToolRule('one Agent call to the jev-gate worker role', allowTools),
+  renderToolRule('one Agent call to the jev-gate worker role', allowTools, allowMcp),
   'Dispatch this request once, whole, to jev-gate:worker. There is no plan for this request: jev-gate:planner is denied, and splitting the work across several workers is not what this shape does.',
+  DISPATCH_FIRST_SENTENCE,
   'Your brief does not have to restate the request: the hook appends the user\'s own request verbatim, and the worker is told it is the task.',
   'Never pass a model argument to an owned agent call.',
   'If the worker comes back incomplete or wrong, say so and dispatch it again with what was wrong; there is no replan path here.',
@@ -90,13 +103,14 @@ export interface SingleGuidanceOptions {
   confidence: number | null;
   superseded: boolean;
   guardAllowTools?: readonly string[];
+  guardAllowMcp?: boolean;
 }
 
 export const renderSingleGuidance = (opts: SingleGuidanceOptions): string =>
   [
     GUIDANCE_HEADER,
     opts.mode === 'auto' ? renderAdmissionLine(opts.confidence) : NATIVE_ORCHESTRATION_SENTENCE,
-    ...singleRules(opts.guardAllowTools),
+    ...singleRules(opts.guardAllowTools, opts.guardAllowMcp),
     ...(opts.superseded ? [SUPERSEDED_SENTENCE] : []),
   ].join('\n');
 
@@ -118,13 +132,14 @@ export interface OrchestrationGuidanceOptions {
   /** #48 P1-2: optional so every existing call site that predates isolation keeps compiling and behaving as before. */
   workerIsolation?: WorkerIsolation;
   guardAllowTools?: readonly string[];
+  guardAllowMcp?: boolean;
 }
 
 export const renderOrchestrationGuidance = (opts: OrchestrationGuidanceOptions): string =>
   [
     GUIDANCE_HEADER,
     opts.mode === 'auto' ? renderAdmissionLine(opts.confidence) : NATIVE_ORCHESTRATION_SENTENCE,
-    ...orchestrationRules(opts.maxParallelWorkers, opts.workerIsolation ?? 'none', opts.guardAllowTools),
+    ...orchestrationRules(opts.maxParallelWorkers, opts.workerIsolation ?? 'none', opts.guardAllowTools, opts.guardAllowMcp),
     ...(opts.superseded ? [SUPERSEDED_SENTENCE] : []),
   ].join('\n');
 

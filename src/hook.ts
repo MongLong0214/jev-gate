@@ -9,8 +9,11 @@ import {
   buildAtomicAdmissionRequest,
   decideAdmission,
   decideAdmissionAtomic,
+  delegationModel,
+  resolveAdmittedShape,
   shapeRecommendation,
   type AdmissionDecision,
+  type AdmissionEstimate,
   type AdmissionState,
 } from './admission.js';
 import {
@@ -129,7 +132,8 @@ import {
 } from './plan.js';
 import { openTraceDir, type TraceWriter } from './trace.js';
 import { appendLiveness, LIVENESS_WINDOW, readLiveness } from './liveness.js';
-import type { ConfigV5, DenyReason, ErrorCode, ExecutionShape, HookInput, JobGeneration, JobState, LeanPending, ModelAgreement, Plan, PlannedTask, Receipt, Reservation, RoutingMode, Tier } from './types.js';
+import { readWorkerObservation, subagentTranscriptPath, verifyChecks } from './verify.js';
+import type { CheckVerification, ConfigV5, DenyReason, ErrorCode, ExecutionShape, HookInput, JobGeneration, JobState, LeanPending, ModelAgreement, Plan, PlannedTask, Receipt, Reservation, RoutingMode, Tier } from './types.js';
 import { agentForTier, LEAN_EXECUTOR_AGENT, OWNED_AGENTS, TIERS } from './types.js';
 import { EXECUTION_CONTROL_KEYS, MAX_PROMPT_BYTES } from './brief.js';
 import { subagentModelOverride } from './auth.js';
@@ -996,6 +1000,8 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
      * session before the job prompt.
      */
     const depth: DepthReading = readSessionDepth(input.transcript_path);
+    // Gate A's read-offs, kept for `admittedShape: auto`; null on every path that asked nothing (forced, native).
+    let admissionAnswers: Record<string, unknown> | null = null;
     const contextTokens = depth.ok ? depth.tokens : null;
     const depthFacts = {
       context_tokens: contextTokens,
@@ -1061,7 +1067,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         // The explicit return type is what lets one call site carry both shapes: callGate cannot infer Q from a union.
         const admissionRequest = (): JevRequest<AdmissionState, Record<string, unknown>> =>
           atomicAdmission ? buildAtomicAdmissionRequest(prompt, config) : buildAdmissionRequest(prompt, config);
-        let admitted: AdmissionDecision | null = null;
+        let admitted: (AdmissionDecision & { estimate?: AdmissionEstimate | null }) | null = null;
         const gate = await callGate(
           admissionRequest(),
           'admission_intent',
@@ -1070,17 +1076,19 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
           admissionKeys,
           (outcome) => {
             if (!outcome.ok) return { forced: false, decision: { shape: 'direct', decided: false, reason: outcome.code, changed_default: false } };
+            if (atomicAdmission) admissionAnswers = outcome.response.answers;
             admitted = atomicAdmission
-              ? decideAdmissionAtomic(outcome.response.answers, contextTokens, floor)
+              ? decideAdmissionAtomic(outcome.response.answers, contextTokens, floor, delegationModel(config), !config.guardAllowMcp)
               : decideAdmission(outcome.response.answers, config.admissionConfidenceFloor);
             // A17 item 7: without Jev this turn would have been one native conversation.
             return {
               forced: false,
               decision: { shape: admitted.shape, decided: admitted.decided, reason: admitted.reason, changed_default: admitted.decided && admitted.shape === 'orchestrated' },
-              // A21: recorded beside the decision, never inside it. `applied: false` is the whole point of the field:
-              // the configured `admittedShape` still decides, and this says what the request asked for so that a later
-              // run can ask whether following it would have been better.
-              ...(atomicAdmission ? { recommendation: shapeRecommendation(outcome.response.answers) } : {}),
+              // The priced turn count and saving behind the decision, so a later run can compare them with what the
+              // turn actually took.
+              ...(admitted.estimate ? { estimate: admitted.estimate } : {}),
+              // A21: recorded beside the decision. `applied` says whether `admittedShape: auto` let it pick the shape.
+              ...(atomicAdmission ? { recommendation: shapeRecommendation(outcome.response.answers, config.admittedShape === 'auto') } : {}),
             };
           },
         );
@@ -1104,6 +1112,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     // the worker is told the user's own words come first. Stored whole or not at all -- never truncated into a
     // half-specification that reads as complete.
     const carriedRequest = Buffer.byteLength(prompt, 'utf8') <= REQUEST_MAX_BYTES ? prompt : null;
+    const executed = resolveAdmittedShape(config.admittedShape, admissionAnswers);
     let stale = false;
     const applied = updateJob(deps.env, sessionId, (prev) => {
       if (!prev || prev.current.prompt_id !== promptId) {
@@ -1113,15 +1122,15 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       // A19: the execution shape is fixed at admission from the config this turn loaded, so a config edit mid-job
       // cannot change what a running generation is.
       const next = { ...prev.current, shape, request: carriedRequest };
-      return { ...prev, current: config.admittedShape === 'single' ? { ...next, execution: 'single' as const } : next };
+      return { ...prev, current: executed === 'single' ? { ...next, execution: 'single' as const } : next };
     });
     // A newer prompt owns the session now; this turn does not get to turn orchestration on behind it.
     if (stale) return emitContext('UserPromptSubmit', renderDirectGuidance(mode), 'generation_changed');
     if (!applied.ok) return emitContext('UserPromptSubmit', renderDirectGuidance(mode), applied.code);
-    if (config.admittedShape === 'single') return emitContext('UserPromptSubmit', renderSingleGuidance({ mode, confidence, superseded, guardAllowTools: config.guardAllowTools }), reason);
+    if (executed === 'single') return emitContext('UserPromptSubmit', renderSingleGuidance({ mode, confidence, superseded, guardAllowTools: config.guardAllowTools, guardAllowMcp: config.guardAllowMcp }), reason);
     return emitContext(
       'UserPromptSubmit',
-      renderOrchestrationGuidance({ mode, confidence, superseded, maxParallelWorkers: config.maxParallelWorkers, workerIsolation: config.workerIsolation, guardAllowTools: config.guardAllowTools }),
+      renderOrchestrationGuidance({ mode, confidence, superseded, maxParallelWorkers: config.maxParallelWorkers, workerIsolation: config.workerIsolation, guardAllowTools: config.guardAllowTools, guardAllowMcp: config.guardAllowMcp }),
       reason,
     );
   };
@@ -1858,6 +1867,22 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       // T11: no request is made here. A result past plain incompleteness comes from what the worker itself reported.
       if (deterministic.verdict === 'incomplete') finalVerdict = reportedRecovery(task, parsed.value) ?? 'incomplete';
     }
+    // A pass the worker reported is compared with the last run its own transcript shows (src/verify.ts): a check whose
+    // last run failed cannot be accepted on the worker's word.
+    let verification: CheckVerification | undefined;
+    if (config.verifyWorkerChecks && parsed !== null && parsed.ok) {
+      const agentId = isRecord(input.tool_response) ? str(input.tool_response['agentId']) : null;
+      const path = agentId !== null && input.transcript_path && input.session_id ? subagentTranscriptPath(input.transcript_path, input.session_id, agentId) : null;
+      const passed = parsed.value.checks.filter((c) => c.result === 'pass');
+      const claims = isSingle
+        ? passed.map((c) => ({ id: c.check_id, command: c.check_id }))
+        : passed.map((c) => ({ id: c.check_id, command: task?.checks.find((k) => k.id === c.check_id && k.required)?.command ?? null }));
+      verification = verifyChecks(path === null ? null : readWorkerObservation(path), claims);
+      if (finalVerdict === 'accept' && verification.contradicted.length > 0) {
+        finalVerdict = 'incomplete';
+        reason = `check ${verification.contradicted.join(', ')} was reported pass, but its last run in the worker's own transcript failed`;
+      }
+    }
 
     let context: string | null = null;
     const written = updateJob(deps.env, sessionId, (prev) => {
@@ -1879,6 +1904,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         observed_model: observedModel(input.tool_response),
         root_effort: input.effort ?? null,
         recorded_at: new Date().toISOString(),
+        ...(verification ? { verification } : {}),
       };
       // T1: the receipt is appended, so the latest attempt is the one that decides; earlier ones stay in the array.
       next = { ...next, receipts: [...next.receipts.filter((r) => r.tool_use_id !== toolUseId), receipt] };
@@ -1916,6 +1942,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         resolved_model: observedModel(input.tool_response),
         tool_response: whitelistToolResponse(input.tool_response),
         root_effort: input.effort ?? null,
+        ...(verification ? { verification } : {}),
       });
       return { ...prev, current: next };
     });
