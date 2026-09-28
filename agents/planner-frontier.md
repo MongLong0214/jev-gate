@@ -52,6 +52,8 @@ path is a claim about what a task writes, not an enforced boundary, and this bui
 default, so a shallow chain matters more than a wide one.
 Give every check a stable `id` inside its task. Every task needs at least one check with `required: true`: that is
 what decides whether the task is accepted, and a task with no required check is rejected as an invalid plan.
+Give every required check the shell `command` that shows it: a reported pass is accepted only when the worker's own
+transcript shows that command passing, so a required check with no command can never be accepted.
 Do not write source, run commands or create children.
 Return `blocked` or `needs_context` with the concrete obstacle instead of inventing a business decision.
 

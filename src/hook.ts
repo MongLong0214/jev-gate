@@ -1877,11 +1877,21 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       const passed = parsed.value.checks.filter((c) => c.result === 'pass');
       // On the single shape the check_id is the command itself, which can carry anything a shell line can: it is
       // matched but never stored, and the trace and the reason name the check by its position in the reply instead.
+      // On a planned task only the required checks decide acceptance, so only they are judged.
       const claims = isSingle
         ? passed.map((c) => ({ id: `#${parsed.value.checks.indexOf(c) + 1}`, command: c.check_id }))
-        : passed.map((c) => ({ id: c.check_id, command: task?.checks.find((k) => k.id === c.check_id && k.required)?.command ?? null }));
-      verification = verifyChecks(path === null ? null : readWorkerObservation(path), claims);
-      const refused = refusalReason(verification);
+        : passed.flatMap((c) => {
+            const declared = task?.checks.find((k) => k.id === c.check_id && k.required);
+            return declared ? [{ id: c.check_id, command: declared.command }] : [];
+          });
+      const observation = path === null ? null : readWorkerObservation(path);
+      verification = verifyChecks(observation, claims);
+      // A single worker that changed files and reports no passing check has shown nothing but its word: the request
+      // it carries asks it to run the checks the change implies. One that changed nothing (an answer, an analysis)
+      // may have nothing to run.
+      const changed = parsed.value.changed_files.length > 0 || (observation?.lastWrite ?? null) !== null;
+      const refused =
+        refusalReason(verification) ?? (isSingle && claims.length === 0 && changed ? 'the worker changed files but reported no passing check it ran' : null);
       if (finalVerdict === 'accept' && refused !== null) {
         finalVerdict = 'incomplete';
         reason = refused;

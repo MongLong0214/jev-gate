@@ -272,7 +272,7 @@ export const renderWorkerReported = (taskId: string, verdict: 'rework' | 'replan
  */
 export const renderSingleResult = (verdict: 'accept' | 'incomplete' | 'unknown' | 'invalid', reason: string): string =>
   verdict === 'accept'
-    ? '[Jev Gate result] The single-executor dispatch reported done with no blockers, and its receipt is recorded as reported rather than verified: this shape has no contract, so no check of it was owned by code. Confirm the work yourself before reporting it finished, and report what was checked separately from what was only reported.'
+    ? '[Jev Gate result] The single-executor dispatch reported done with no blockers, and its receipt is recorded as reported rather than verified: this shape has no contract, so code checked only that each reported pass has a passing run in the transcript the worker left, not that those checks cover the request. Confirm the work yourself before reporting it finished, and report what was checked separately from what was only reported.'
     : verdict === 'unknown'
       ? `[Jev Gate result] The single-executor dispatch returned no usable reply (${bounded(reason)}). Its reservation was released; dispatch the request again if the work is still needed.`
       : verdict === 'invalid'

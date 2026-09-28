@@ -71,6 +71,14 @@ describe('runsCommand', () => {
     ['echo npm test', false],
     ['npm testing', false],
     ['git commit -m "npm test"', false],
+    // Whatever follows may not decide the exit status, and whatever precedes may not skip the check.
+    ['npm test || true', false],
+    ['npm test; echo done', false],
+    ['npm test\necho done', false],
+    ['npm test &', false],
+    ['true || npm test', false],
+    ['npm test && echo ok', true],
+    ['npm run build; npm test', true],
   ])('%s runs npm test: %s', (run, expected) => {
     expect(runsCommand(run, 'npm test')).toBe(expected);
   });
@@ -85,6 +93,12 @@ describe('runsCommand', () => {
     ['npm run lint; npm test', 'npm run lint; npm test', true],
     ['npm run lint\nnpm test', 'npm run lint; npm test', true],
     ['npm test | tail -5', 'npm test | tail -5', true],
+    ['npm run typecheck && npm test || true', 'npm run typecheck && npm test', false],
+    ['npm run typecheck && npm test; true', 'npm run typecheck && npm test', false],
+    // An assignment the check sets must be the one the run set; one it leaves open is ignored.
+    ['NODE_ENV=production npm test', 'NODE_ENV=test npm test', false],
+    ['NODE_ENV=test npm test', 'NODE_ENV=test npm test', true],
+    ['NODE_ENV=production npm test', 'npm test', true],
   ])('%s runs %s: %s', (run, wanted, expected) => {
     expect(runsCommand(run, wanted)).toBe(expected);
   });
@@ -111,7 +125,20 @@ describe('verifyChecks', () => {
         { id: 'c5', command: 'ls' },
         { id: 'c6', command: 'npm run typecheck' },
       ]),
-    ).toEqual({ transcript: 'read', contradicted: ['c1'], unobserved: ['c3', 'c6'], stale: ['c2'] });
+    ).toEqual({ transcript: 'read', contradicted: ['c1'], unobserved: ['c3', 'c4', 'c5', 'c6'], stale: ['c2'] });
+  });
+
+  // The declared command reaches the matcher as written, so a newline in it still separates.
+  it.each([
+    ['npm run lint\nnpm test', 'passed', [], []],
+    ['npm run typecheck && npm test', 'passed', [], []],
+    ['npm run typecheck && npm test || true', 'passed', ['c1'], []],
+    ['npm run typecheck && npm test', 'failed', [], ['c1']],
+  ] as const)('judges a run of %j that %s', (command, status, unobserved, contradicted) => {
+    const declared = command.includes('\n') ? 'npm run lint\nnpm test' : 'npm run typecheck && npm test';
+    const v = verifyChecks({ runs: [{ command, status, at: 1 }], lastWrite: null, truncated: false }, [{ id: 'c1', command: declared }]);
+    expect(v).toEqual({ transcript: 'read', contradicted, unobserved, stale: [] });
+    expect(refusalReason(v) === null).toBe(unobserved.length === 0 && contradicted.length === 0);
   });
 
   it('refuses a failed last run and a pass it cannot see, however much of the transcript it read', () => {
@@ -123,14 +150,14 @@ describe('verifyChecks', () => {
     expect(refusalReason({ transcript: 'read', contradicted: [], unobserved: [], stale: ['c2'] })).toBeNull();
   });
 
-  it('sees no passing run of any judged claim without a transcript', () => {
+  it('sees no passing run of any claim without a transcript', () => {
     expect(
       verifyChecks(null, [
         { id: 'c1', command: 'npm test' },
         { id: 'c2', command: null },
         { id: 'c3', command: 'ls' },
       ]),
-    ).toEqual({ transcript: 'unavailable', contradicted: [], unobserved: ['c1'], stale: [] });
+    ).toEqual({ transcript: 'unavailable', contradicted: [], unobserved: ['c1', 'c2', 'c3'], stale: [] });
     expect(verifyChecks(null, [])).toEqual({ transcript: 'unavailable', contradicted: [], unobserved: [], stale: [] });
   });
 

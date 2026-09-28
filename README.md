@@ -169,13 +169,16 @@ again when the last task is accepted, but a step is never dispatched and never g
 
 **Code owns acceptance.** A worker's result unlocks its dependents only when the reply reports every required check of
 its task contract as passed. That is a deterministic check, not a Jev call — the normal path no longer makes a Gate C
-HTTP request. Since 0.4.0 (`verifyWorkerChecks`, on by default) each reported pass is also compared with the last call
-of its command in the worker's own transcript (a shell segment that starts with the command, so `echo npm test` is not
-a run of `npm test`; a compound check matches only its own segments in order). A check whose last run failed is
-refused, and so is a pass the gate cannot see: no passing run in the transcript, none in the last 8 MiB of a longer one,
-or no transcript at all (`unobserved`). The last case means a host whose transcript layout moved gets every reported
-pass back as incomplete, with the reason saying the transcript could not be read. A pass an edit came after is recorded
-as `stale` and refuses nothing. On the single shape a check is named in traces by its position (`#1`), never by the
+HTTP request. Since 0.4.0 (`verifyWorkerChecks`, on by default) each reported pass of a required check is also
+compared with the last call of its command in the worker's own transcript. A call counts when it contains the check's
+own shell segments in order and nothing around them can decide the exit status in their place: `echo npm test`,
+`true || npm test`, `npm test || true` and `npm test; echo done` are not runs of `npm test`, while
+`cd pkg && npm test -- --run` is. A check whose last run failed is refused, and so is a pass the gate cannot see: no
+passing run in the transcript, none in the last 8 MiB of a longer one, no transcript at all, or a required check with
+no command (`unobserved`). A host whose transcript layout moved therefore gets every reported pass back as incomplete,
+with the reason saying the transcript could not be read. A pass an edit came after is recorded as `stale` and refuses
+nothing. On the single shape, where the worker names each check by the command it ran, a worker that changed files and
+reports no passing check is not accepted either, and a check is named in traces by its position (`#1`), never by the
 command. It sees only how the host marked each Bash
 call — a command piped into `tail` exits with `tail`'s status, and an unmarked result is unknown — so an accept is
 still not independent proof that the code works; historical Gate C `result_*` records from before this change are

@@ -28,7 +28,7 @@ Run every check listed in the contract and report its result by `check_id`. The 
 required check ids; use those ids verbatim, once each. The `c1` in the example below is a placeholder, not an id.
 A check you did not run is `not_run`, never `pass`; nothing fills a result in for you, and a missing or renamed id is
 rejected as a malformed report rather than guessed at. A check is `pass` only when its last run passed: the hook reads
-your transcript, and a reported pass whose last run failed, or whose passing run it cannot see there, is refused. Report the interfaces you actually created, with the names and
+your transcript, and a reported pass whose last run failed, or whose passing run it cannot see there, is refused. Run each check as its command, not followed by `||` or `;`: those decide the exit status in its place, so such a run does not count. Report the interfaces you actually created, with the names and
 signatures another task can rely on.
 Work inside the repository you were given with your native permissions; do not widen scope.
 Do not start nested Claude or Jev processes, do not spawn helper agents through Bash, and do not commit, push, deploy

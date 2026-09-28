@@ -23,8 +23,11 @@ rest were delegated ("나머지는 너가 모두 자율판단해서 진행해") 
   delegation. The run showed the veto also flagging `gh` and shell work (14 of 100). Both numbers are published side by
   side in RESULTS.md.
 - **Verification accepts only a pass it can see.** A reported pass whose last observed run failed is refused, and so is
-  one whose passing run the gate cannot see: none in a transcript read whole, none in the last 8 MiB of a cut one, or
-  no transcript at all. The worker is told to run each check as its command, so a pass with no run behind it is the
+  one whose passing run the gate cannot see: none in a transcript read whole, none in the last 8 MiB of a cut one, no
+  transcript at all, or a required check with no command. A single-shape worker that changed files and reports no
+  passing check is not accepted either; one that changed nothing (an answer, an analysis) may have had nothing to run.
+  A run counts only when nothing around it (`|| true`, `; …`) can decide its exit status; a pipe still can, and that
+  gap is stated rather than closed, because workers pipe long test output into `tail`. The worker is told to run each check as its command, so a pass with no run behind it is the
   self-grade the owner named. A first version accepted on a cut or missing transcript, because neither can show
   absence; that was reversed the same day, since accepting there is accepting on the worker's word, which is the
   failure being fixed. The cost is stated rather than avoided: a host whose transcript layout moved gets every

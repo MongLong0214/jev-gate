@@ -12,11 +12,11 @@ import type { CheckVerification } from './types.js';
  * What this can and cannot see, stated so nobody reads more into it: a failed run is one the host marked
  * `is_error: true` (a non-zero exit, a timeout, an interrupt), a passed run one it marked `is_error: false`, and a result
  * with no mark is unknown, never a pass. A command piped into `tail` exits with `tail`'s status and reads as a pass
- * here too. A check is found only where one shell segment of a run starts with the check's command, so a check the
- * worker ran some other way is not found.
+ * here too. A check is found only where a run contains the check's own shell segments in order and nothing around them
+ * can decide the exit status in their place (`runsCommand`), so a check the worker ran some other way is not found.
  *
  * What refuses: a check whose last run failed, and a check reported as passing whose passing run the gate cannot see --
- * none in a transcript read whole, none in the tail of a cut one, or no transcript at all. A pass the gate cannot see
+ * none in a transcript read whole, none in the tail of a cut one, no transcript at all, or no command to look for. A pass the gate cannot see
  * is the self-grade this exists to catch, so it is not accepted on the worker's word; the reason says which of the
  * three it was. The cost: on a host whose transcript layout moved, every task with a reported pass comes back
  * incomplete, visibly (`transcript: unavailable`). An edit after the last passing run does not show the check failing,
@@ -113,13 +113,24 @@ const normalize = (command: string): string => command.replace(/\s+/g, ' ').trim
 const ENV_PREFIX = /^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)+/;
 
 /** A command line as its shell segments, at even indexes, and the separators between them; a newline separates as `;` does. */
-const segments = (command: string): string[] =>
-  command.split(/(&&|\|\||;|\||\n)/).map((part, i) => (i % 2 === 1 ? (part === '\n' ? ';' : part) : normalize(part).replace(ENV_PREFIX, '')));
+const segments = (command: string): string[] => command.split(/(&&|\|\||;|\||\n)/).map((part, i) => (i % 2 === 1 ? (part === '\n' ? ';' : part) : normalize(part)));
 
 /**
- * Whether `run` ran `wanted`: the segments of `wanted`, split at `&&`, `||`, `;`, `|` or a newline, appear in `run` in
- * order with the same separators, each after any leading environment assignments, and only the last may continue with
- * arguments. `echo npm test` does not run `npm test`; `cd pkg && npm test -- --run` does, and so does an exact run of a
+ * One segment of a run against one of the check: the same, or, for the check's last segment, the same followed by
+ * arguments. Environment assignments the check sets must be the ones the run set; those it leaves open are ignored.
+ */
+const sameSegment = (have: string, want: string, last: boolean): boolean => {
+  const run = ENV_PREFIX.test(want) ? have : have.replace(ENV_PREFIX, '');
+  return run === want || (last && run.startsWith(`${want} `) && !/\s&$/.test(run));
+};
+
+/**
+ * Whether `run` ran `wanted` in a way whose exit status is the check's own: the segments of `wanted`, split at `&&`,
+ * `||`, `;`, `|` or a newline, appear in `run` in order with the same separators, only the last may carry more
+ * arguments, and nothing around them can hide their result. So the match may not follow `||` (`true || npm test`
+ * never runs it) and may be followed only by `&&` or a pipe: `npm test || true` and `npm test; echo done` succeed
+ * whatever the tests did. A pipe is let through and is the known gap -- a pipeline exits with its last command's
+ * status. `echo npm test` does not run `npm test`; `cd pkg && npm test -- --run` does, and so does an exact run of a
  * compound check such as `npm run typecheck && npm test`. Quoting is not parsed, so a separator inside quotes still
  * splits, on both sides alike.
  */
@@ -127,26 +138,26 @@ export const runsCommand = (run: string, wanted: string): boolean => {
   const have = segments(run);
   const want = segments(wanted);
   for (let i = 0; i + want.length <= have.length; i += 2) {
-    if (want.every((w, j) => have[i + j] === w || (j === want.length - 1 && have[i + j]!.startsWith(`${w} `)))) return true;
+    const before = have[i - 1];
+    const after = have[i + want.length];
+    if (before === '||' || (after !== undefined && after !== '&&' && after !== '|')) continue;
+    if (want.every((w, j) => (j % 2 === 1 ? have[i + j] === w : sameSegment(have[i + j]!, w, j === want.length - 1)))) return true;
   }
   return false;
 };
 
 /**
- * `claims` pairs each check reported as passing with the command that check runs: the planned check's declared
- * command on a planned task, or the reported `check_id` itself on the single shape, which is asked to name the exact
- * command it ran. `id` is what the result lists carry, so it must be safe to store: a planned check's id, or an
- * opaque position on the single shape, never the command. A claim with no command is not judged.
+ * `claims` pairs each required check reported as passing with the command that check runs: the planned check's
+ * declared command on a planned task, or the reported `check_id` itself on the single shape, which is asked to name
+ * the exact command it ran. `id` is what the result lists carry, so it must be safe to store: a planned check's id, or
+ * an opaque position on the single shape, never the command. A claim with no command has nothing a run could show, so
+ * it is unobserved like one whose run is missing.
  */
 export const verifyChecks = (observation: WorkerObservation | null, claims: readonly { id: string; command: string | null }[]): CheckVerification => {
-  const judged = claims.flatMap((claim) => {
-    const wanted = claim.command === null ? '' : normalize(claim.command);
-    return wanted.length < 3 ? [] : [{ id: claim.id, wanted }];
-  });
-  if (observation === null) return { transcript: 'unavailable', contradicted: [], unobserved: judged.map((c) => c.id), stale: [] };
+  if (observation === null) return { transcript: 'unavailable', contradicted: [], unobserved: claims.map((c) => c.id), stale: [] };
   const out: CheckVerification = { transcript: observation.truncated ? 'truncated' : 'read', contradicted: [], unobserved: [], stale: [] };
-  for (const { id, wanted } of judged) {
-    const last = [...observation.runs].reverse().find((r) => runsCommand(r.command, wanted));
+  for (const { id, command } of claims) {
+    const last = command === null || normalize(command) === '' ? undefined : [...observation.runs].reverse().find((r) => runsCommand(r.command, command));
     if (!last || last.status === 'unknown') out.unobserved.push(id);
     else if (last.status === 'failed') out.contradicted.push(id);
     else if (observation.lastWrite !== null && observation.lastWrite > last.at) out.stale.push(id);

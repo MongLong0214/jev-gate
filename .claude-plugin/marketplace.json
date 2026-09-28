@@ -39,7 +39,7 @@
       "source": {
         "source": "archive",
         "url": "https://github.com/MongLong0214/jev-gate/releases/download/v0.4.0/jev-gate-0.4.0.zip",
-        "sha256": "06004fe4021b69ad9a5f42b697e04c34fe867b6009b6ef4242e8f544f45971ab"
+        "sha256": "8c24d311404777cf7fd68f21fdeb8ff55f50de7055fea12ad164edf8982f5fba"
       },
       "displayName": "Jev Gate",
       "description": "Jev-directed orchestration for deep sessions: a planner and tiered workers, admitted only past a context-depth floor. Built from the tagged release; needs Node 22 and a TypeSafe key.",

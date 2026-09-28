@@ -841,18 +841,43 @@ describe('single executor (A19)', () => {
     const fetchImpl = fakeJev({ execution: 'orchestrated' });
     await run(env, promptEvent(), fetchImpl);
     await run(env, preEvent('Agent', agentInput({ prompt: 'Do what the request asks.' })), fetchImpl);
-    const post = await run(env, workerPost('toolu_1', workerReply()), fetchImpl);
+    const post = await run(env, workerPost('toolu_1', workerReply({ checks: [{ check_id: 'npm test', result: 'pass', note: 'all passed' }] })), fetchImpl);
     // The accept is stated as reported rather than verified: this shape has no contract for code to check.
     expect(context(post)).toContain('recorded as reported rather than verified');
     expect(context(post)).not.toContain('Ready task ids');
     const gen = state(env).current;
     expect(gen.active).toEqual({});
     expect(gen.receipts).toHaveLength(1);
-    // The contract hash is empty because there is no contract, and the checks the worker reported are kept unjudged.
+    // The contract hash is empty because there is no contract; the check the worker reported is kept as it wrote it.
     expect(gen.receipts[0]).toMatchObject({ task_id: 'single', contract_hash: '', verdict: 'accept', provenance: 'worker_reported' });
-    expect(gen.receipts[0]?.reply?.checks).toEqual([{ check_id: 'c1', result: 'pass', note: 'npm test' }]);
+    expect(gen.receipts[0]?.reply?.checks).toEqual([{ check_id: 'npm test', result: 'pass', note: 'all passed' }]);
     await run(env, { hook_event_name: 'Stop', session_id: 's1' });
     expect(state(env).current.outcome).toBe('completed');
+  });
+
+  it('does not accept a worker that changed files on its word alone: no passing check, or one that names no command', async () => {
+    for (const [reply, reason] of [
+      [workerReply({ checks: [] }), 'changed files but reported no passing check'],
+      [workerReply({ checks: [{ check_id: 'unit tests', result: 'pass', note: '' }] }), 'shows no passing run'],
+    ] as const) {
+      const env = singleEnv();
+      const fetchImpl = fakeJev({ execution: 'orchestrated' });
+      await run(env, promptEvent(), fetchImpl);
+      await run(env, preEvent('Agent', agentInput({ prompt: 'Do what the request asks.' })), fetchImpl);
+      await run(env, workerPost('toolu_1', reply), fetchImpl);
+      const receipt = state(env).current.receipts[0];
+      expect(receipt?.verdict).toBe('incomplete');
+      expect(receipt?.verdict_reason).toContain(reason);
+    }
+  });
+
+  it('accepts a worker that changed nothing and had nothing to check', async () => {
+    const env = singleEnv();
+    const fetchImpl = fakeJev({ execution: 'orchestrated' });
+    await run(env, promptEvent(), fetchImpl);
+    await run(env, preEvent('Agent', agentInput({ prompt: 'Do what the request asks.' })), fetchImpl);
+    await run(env, workerPost('toolu_1', workerReply({ changed_files: [], checks: [] })), fetchImpl);
+    expect(state(env).current.receipts[0]?.verdict).toBe('accept');
   });
 
   it('does not complete the job when the one worker says it did not finish', async () => {
@@ -1639,6 +1664,29 @@ describe('worker check verification (0.4.0)', () => {
     await run(env, preEvent('Agent', agentInput()), fetchImpl);
     return fetchImpl;
   };
+
+  it('judges only required checks, and counts a required check with no command as unobserved', async () => {
+    const plannedWith = async (env: Env, checks: PlannedTask['checks']): Promise<void> => {
+      const fetchImpl = fakeJev();
+      await seedPlanned(env, planReply([rawTask('t1', { checks }), rawTask('t2'), rawTask('t3', { depends_on: ['t1', 't2'] })]), fetchImpl);
+      await run(env, preEvent('Agent', agentInput()), fetchImpl);
+    };
+    const bothPass = workerReply({ checks: [{ check_id: 'c1', result: 'pass', note: '' }, { check_id: 'c2', result: 'pass', note: '' }] });
+    const optional = makeEnv();
+    await plannedWith(optional, [
+      { id: 'c1', description: 'tests pass', required: true, command: 'npm test' },
+      { id: 'c2', description: 'lint is clean', required: false, command: 'npm run lint' },
+    ]);
+    await run(optional, postWith(bothPass, workerTranscript([{ command: 'npm test', failed: false }])));
+    expect(state(optional).current.receipts[0]).toMatchObject({ verdict: 'accept', verification: { unobserved: [] } });
+    const bare = makeEnv();
+    await plannedWith(bare, [
+      { id: 'c1', description: 'tests pass', required: true, command: 'npm test' },
+      { id: 'c2', description: 'reviewed by hand', required: true, command: null },
+    ]);
+    await run(bare, postWith(bothPass, workerTranscript([{ command: 'npm test', failed: false }])));
+    expect(state(bare).current.receipts[0]).toMatchObject({ verdict: 'incomplete', verification: { unobserved: ['c2'] } });
+  });
 
   it('refuses a reported pass whose last run in the worker transcript failed', async () => {
     const env = makeEnv();
