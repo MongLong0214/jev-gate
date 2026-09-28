@@ -96,7 +96,7 @@ const spawnThrough = async (hooks: Map<string, Hook>, host: ReturnType<typeof fa
 describe('register', () => {
   it('registers nothing when off, or when every switch is off', async () => {
     expect([...(await registered({})).keys()]).toEqual([]);
-    expect([...(await registered({ enabled: true, routeSubagentModel: false, routeMainEffort: false, routeMainModel: false })).keys()]).toEqual([]);
+    expect([...(await registered({ enabled: true, routeSubagentModel: false, routeSubagentEffort: false, routeMainEffort: false, routeMainModel: false })).keys()]).toEqual([]);
   });
 
   it('registers only a diagnostic for an option it cannot read, naming the field and never the value', async () => {
@@ -118,8 +118,11 @@ describe('register', () => {
 
   it('registers the root hooks and the spawn hooks their switches ask for', async () => {
     expect([...(await registered({ enabled: true })).keys()].sort()).toEqual(['agent.offer', 'agent.spawn', 'session.end', 'turn.complete', 'turn.start', 'turn.step']);
-    expect([...(await registered({ enabled: true, routeMainEffort: false })).keys()].sort()).toEqual(['agent.offer', 'agent.spawn', 'session.end']);
-    expect([...(await registered({ enabled: true, routeSubagentModel: false })).keys()].sort()).toEqual(['session.end', 'turn.complete', 'turn.start', 'turn.step']);
+    // A subagent's effort is set on its own loop's steps, so turn.step stays without the root switches.
+    expect([...(await registered({ enabled: true, routeMainEffort: false })).keys()].sort()).toEqual(['agent.offer', 'agent.spawn', 'session.end', 'turn.step']);
+    expect([...(await registered({ enabled: true, routeMainEffort: false, routeSubagentEffort: false })).keys()].sort()).toEqual(['agent.offer', 'agent.spawn', 'session.end']);
+    expect([...(await registered({ enabled: true, routeSubagentModel: false })).keys()].sort()).toEqual(['agent.offer', 'agent.spawn', 'session.end', 'turn.complete', 'turn.start', 'turn.step']);
+    expect([...(await registered({ enabled: true, routeSubagentModel: false, routeSubagentEffort: false })).keys()].sort()).toEqual(['session.end', 'turn.complete', 'turn.start', 'turn.step']);
   });
 
   it('routes a spawn through the host adapter with the environment key, sent only in the header', async () => {
@@ -147,14 +150,19 @@ describe('register', () => {
   it('stays native when the environment pins the child model or remaps an alias', async () => {
     for (const name of ['CLAUDE_CODE_SUBAGENT_MODEL', 'CLAUDE_CODE_SUBAGENT_MODEL_FORCE', 'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL']) {
       const host = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY, [name]: 'claude-sonnet-5' } });
-      expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false }), host), name).toBeUndefined();
+      expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false, routeSubagentEffort: false }), host), name).toBeUndefined();
       expect(host.requests, name).toHaveLength(0);
+      // A model pin leaves the effort open: the spawn is still asked, for its subagent's effort alone.
+      const effort = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY, [name]: 'claude-sonnet-5' } });
+      expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false }), effort), name).toBeUndefined();
+      expect(effort.requests, name).toHaveLength(1);
+      expect(effort.logs.join('\n'), name).toContain('"effort":"per_step"');
     }
   });
 
   it('reads a malformed availableModels as allowing nothing, and a development build or one without a release base as unverified', async () => {
     const malformed = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY }, settings: { availableModels: 'haiku' } });
-    expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false }), malformed)).toBeUndefined();
+    expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false, routeSubagentEffort: false }), malformed)).toBeUndefined();
     // Nothing the list allows could be applied, so nothing is asked.
     expect(malformed.logs.join('\n')).toContain('"no_applicable_target"');
     expect(malformed.requests).toHaveLength(0);
@@ -164,7 +172,7 @@ describe('register', () => {
 
     for (const version of [{ version: '2.1.282-dev.20260920', base: '2.1.282-dev' }, { version: 'local' }]) {
       const host = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY }, version });
-      expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false }), host), version.version).toBeUndefined();
+      expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false, routeSubagentEffort: false }), host), version.version).toBeUndefined();
       expect(host.logs.join('\n')).toContain('"host_unverified"');
       expect(host.requests).toHaveLength(0);
     }

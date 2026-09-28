@@ -15,19 +15,21 @@ describe('resolveConfig', () => {
     expect(c).toMatchObject({
       enabled: false,
       routeSubagentModel: true,
+      routeExplicitSpawnModel: true,
+      routeSubagentEffort: true,
       routeMainEffort: true,
       routeMainModel: false,
       explicitKey: { kind: 'absent' },
       tiers: { fast: 'haiku', standard: 'sonnet', deep: 'opus' },
       tierIssues: [],
       minUpgradeConfidence: 0.8,
-      minDowngradeConfidence: 0.9,
+      minDowngradeConfidence: 0.6,
       timeoutMs: 800,
       logDecisions: true,
     });
     expect(anyRouting(c)).toBe(false);
     expect(anyRouting(ok({ enabled: true }))).toBe(true);
-    expect(anyRouting(ok({ enabled: true, routeSubagentModel: false, routeMainEffort: false, routeMainModel: false }))).toBe(false);
+    expect(anyRouting(ok({ enabled: true, routeSubagentModel: false, routeSubagentEffort: false, routeMainEffort: false, routeMainModel: false }))).toBe(false);
   });
 
   it('turns the Router off, naming the field, for a wrong type or an out-of-range number', () => {

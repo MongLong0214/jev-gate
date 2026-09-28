@@ -10,6 +10,10 @@ import { TIER_ORDER } from './policy.ts';
 export interface RouterConfig {
   enabled: boolean;
   routeSubagentModel: boolean;
+  /** Route the model even when the Agent call names one: the caller's `model` is a default, not a requirement. */
+  routeExplicitSpawnModel: boolean;
+  /** Set each subagent's effort from its spawn's assessment, on every step of its loop. */
+  routeSubagentEffort: boolean;
   routeMainEffort: boolean;
   routeMainModel: boolean;
   /** An explicit key always wins; an invalid one never falls back to the environment's. */
@@ -54,6 +58,10 @@ export const resolveConfig = (options: Options): ConfigResult => {
   if (enabled === null) return { ok: false, field: 'enabled' };
   const routeSubagentModel = bool('routeSubagentModel', true);
   if (routeSubagentModel === null) return { ok: false, field: 'routeSubagentModel' };
+  const routeExplicitSpawnModel = bool('routeExplicitSpawnModel', true);
+  if (routeExplicitSpawnModel === null) return { ok: false, field: 'routeExplicitSpawnModel' };
+  const routeSubagentEffort = bool('routeSubagentEffort', true);
+  if (routeSubagentEffort === null) return { ok: false, field: 'routeSubagentEffort' };
   const routeMainEffort = bool('routeMainEffort', true);
   if (routeMainEffort === null) return { ok: false, field: 'routeMainEffort' };
   const routeMainModel = bool('routeMainModel', false);
@@ -63,7 +71,10 @@ export const resolveConfig = (options: Options): ConfigResult => {
   // A floor at or under one half would let a coin flip move a model.
   const minUpgradeConfidence = num('minUpgradeConfidence', 0.8, 0.5, 1);
   if (minUpgradeConfidence === null) return { ok: false, field: 'minUpgradeConfidence' };
-  const minDowngradeConfidence = num('minDowngradeConfidence', 0.9, 0.5, 1);
+  // 0.9 moved 2 of 174 routable spawns and 2 of 245 root turns in a week of the owner's traffic (2026-09-21..28);
+  // 0.6 moves 43 spawns to Sonnet, and lowers most spawns' and a fifth of root turns' effort below xhigh, on the same
+  // answers (before the root's cache hold).
+  const minDowngradeConfidence = num('minDowngradeConfidence', 0.6, 0.5, 1);
   if (minDowngradeConfidence === null) return { ok: false, field: 'minDowngradeConfidence' };
   const timeoutMs = num('timeoutMs', 800, 50, 30_000);
   if (timeoutMs === null) return { ok: false, field: 'timeoutMs' };
@@ -103,6 +114,8 @@ export const resolveConfig = (options: Options): ConfigResult => {
     config: {
       enabled,
       routeSubagentModel,
+      routeExplicitSpawnModel,
+      routeSubagentEffort,
       routeMainEffort,
       routeMainModel,
       explicitKey,
@@ -117,4 +130,5 @@ export const resolveConfig = (options: Options): ConfigResult => {
 };
 
 /** Whether anything would run at all. Off, or every switch off, registers nothing and reads nothing. */
-export const anyRouting = (c: RouterConfig): boolean => c.enabled && (c.routeSubagentModel || c.routeMainEffort || c.routeMainModel);
+export const anyRouting = (c: RouterConfig): boolean =>
+  c.enabled && (c.routeSubagentModel || c.routeSubagentEffort || c.routeMainEffort || c.routeMainModel);
