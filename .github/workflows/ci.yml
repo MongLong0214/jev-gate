@@ -8,6 +8,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # release.mjs check reads the release tags to keep a released version frozen; a shallow clone has none.
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -18,3 +21,6 @@ jobs:
       - run: npm run build
       # doctor performs no inference and needs no key or login; it only reports missing ones.
       - run: node dist/cli.js doctor
+      # main serves the marketplace: its jev-gate entry must pin the archive this tree builds.
+      - if: github.base_ref == 'main' || github.ref == 'refs/heads/main'
+        run: node scripts/release.mjs check

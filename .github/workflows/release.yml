@@ -1,0 +1,53 @@
+name: release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # The job may write releases. Install, tests and build run third-party code, so the gh steps below receive the
+          # write token rather than git's config holding it for every step; the repository is public, so fetches need none.
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      # The marketplace is served from main, so a tag on a commit main does not have is rejected rather than released.
+      - run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      # Rebuilds the archive and refuses unless it matches the SHA-256 the marketplace pins, the tag names the version,
+      # and main serves this same entry.
+      - run: node scripts/release.mjs check --tag "$GITHUB_REF_NAME" --against origin/main --out dist-release
+      # main may have moved while the job ran: fetch it again and repeat the comparison just before publishing.
+      - run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          node scripts/release.mjs check --tag "$GITHUB_REF_NAME" --against origin/main
+      # A rerun after a later step failed finds the release already published: verify it below instead of creating it.
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "release $GITHUB_REF_NAME exists; verifying its asset"
+          else
+            gh release create "$GITHUB_REF_NAME" "dist-release/jev-gate-${GITHUB_REF_NAME#v}.zip" \
+              --verify-tag --title "$GITHUB_REF_NAME" --notes-file dist-release/NOTES.md
+          fi
+      # A merge between that check and the upload could still leave main serving this version with another archive or
+      # other plugin files. Read back what was published and compare it, and main as it is now, with this tree. On a
+      # mismatch the job fails and the release stays, rather than being withdrawn: main may already serve a later
+      # version, and deleting would break installs of this one. A maintainer raises the version.
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download "$GITHUB_REF_NAME" --pattern "jev-gate-${GITHUB_REF_NAME#v}.zip" --dir published --clobber
+      - run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          node scripts/release.mjs check --tag "$GITHUB_REF_NAME" --against origin/main --asset "published/jev-gate-${GITHUB_REF_NAME#v}.zip"
