@@ -5,7 +5,7 @@
 //   router (JGR-01)  → <outDir>/jev-gate-router-<version>.zip  the Function Hooks Mod in mods/router, at its own version
 // legacy and lean require `npm run build` first (which clears dist, so a deleted module cannot reappear here).
 // The archive is written here rather than by the zip CLI, so one tree gives the same bytes on any machine: the marketplace pins
-// the legacy archive's SHA-256 before a release is tagged, and the release job rebuilds it to check (scripts/release.mjs).
+// the legacy archive's SHA-256 before a release is tagged, and scripts/release.mjs check rebuilds it to compare.
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';

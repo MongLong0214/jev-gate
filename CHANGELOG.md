@@ -15,9 +15,9 @@ also need `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` in the environment Claude Code s
 ### Added
 
 - **Marketplace** (`.claude-plugin/marketplace.json`): three plugins. The two Function Hooks plugins ship from their
-  source directories; `jev-gate` ships as this release's archive, pinned by SHA-256. The release job rebuilds the
-  archive and refuses to publish unless it matches the pin (`scripts/release.mjs`), and `scripts/pack.mjs` now writes
-  the same bytes on any machine.
+  source directories; `jev-gate` ships as this release's archive, pinned by SHA-256. `npm run release:check` rebuilds
+  the archive and fails unless it matches the pin (`scripts/release.mjs`), and `scripts/pack.mjs` now writes the same
+  bytes for the same tree.
 - **`jev-gate-compact`** (#59, #60): answers the host's auto compaction with an extractive digest of the earlier
   conversation and the recent tail. No summarizer request is sent, so a compaction takes milliseconds (2–7 ms
   observed) instead of the engine's minute or more (a 95-second median over the owner's week of sessions). It calls no

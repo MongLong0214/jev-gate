@@ -422,7 +422,7 @@ file until the session's file is removed.
 
 Without a checkout, install `jev-gate@jev-gate` from the marketplace ([Install](#install)): it is the release's archive,
 pinned by SHA-256. `npm run pack` writes the same archive locally, `dist-pack/jev-gate-<version>.zip` (compiled hook,
-manifest, hooks, the six agent profiles, docs), byte for byte what the release job builds from that commit; load it
+manifest, hooks, the six agent profiles, docs), byte for byte what `npm run release:check` rebuilds from that commit; load it
 with `--plugin-dir /path/to/jev-gate-<version>.zip`.
 
 ## What is verified, and what is not
