@@ -1,6 +1,6 @@
 // Builds a distributable local plugin archive (#18): compiled hook + modules, manifest, hooks, agents, docs.
 // Usage: node scripts/pack.mjs [outDir] [--root <pluginRoot>] [--profile legacy|lean|router]
-//   legacy (default) → <outDir>/jev-gate-<version>.zip         six routing roles, the V5 hook set
+//   legacy (default) → <outDir>/jev-gate-<version>.zip         six routing roles and lean's executor, the V5 hook set
 //   lean   (JGL-04)  → <outDir>/jev-gate-lean-<version>.zip    one executor, the lean hook set, `--lean` entrypoint
 //   router (JGR-01)  → <outDir>/jev-gate-router-<version>.zip  the Function Hooks Mod in mods/router, at its own version
 // legacy and lean require `npm run build` first (which clears dist, so a deleted module cannot reappear here).
@@ -35,7 +35,10 @@ const outDir = resolve(positional[0] ?? join(root, 'dist-pack'));
 
 const LEGACY_AGENTS = ['worker-fast', 'worker', 'worker-deep', 'worker-frontier', 'planner', 'planner-frontier'];
 const LEAN_AGENTS = ['executor'];
-const agents = profile === 'lean' ? LEAN_AGENTS : LEGACY_AGENTS;
+// The default hook set runs every mode, lean included (only the lean artifact refuses modes it cannot serve), so the
+// default archive ships lean's executor too rather than leaving `mode: lean` to dispatch an agent that is not
+// installed; doctor requires every one of these files.
+const agents = profile === 'lean' ? LEAN_AGENTS : [...LEGACY_AGENTS, ...LEAN_AGENTS];
 
 const walk = (p) => (statSync(p).isDirectory() ? readdirSync(p).flatMap((n) => walk(join(p, n))) : [p]);
 
