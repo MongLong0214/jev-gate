@@ -41,12 +41,17 @@ The repository is its own Claude Code plugin marketplace. In a Claude Code sessi
 |---|---|---|
 | `jev-gate-compact` | Answers auto compactions with an extractive digest and the recent tail: no summarizer request, milliseconds instead of a minute. Calls no Jev. [README](mods/compact/README.md) | `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` |
 | `jev-gate-router` | Chooses the main thread's effort and a subagent's model and effort from one Jev assessment each; native on any doubt. The main thread's model stays native. [README](mods/router/README.md) | `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`, a TypeSafe key |
+| `jev-gate-output` | Folds runs of identical lines in a passing Vitest log the host saved to a file, so the whole run reaches the model with exact counts instead of a 2 KB preview. Calls no Jev. [README](mods/output/README.md) | `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` |
 | `jev-gate` | The orchestration gate described below, built from the tagged release. | Node.js 22+, a TypeSafe key, `JEV_GATE_MODE` |
 
-Every plugin is off after install. The two Function Hooks plugins take their options in `/plugin` (or
+Every plugin is off after install. The three Function Hooks plugins take their options in `/plugin` (or
 `claude plugin install <plugin>@jev-gate --config enabled=true`), and the host loads them only when
 `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` is in its environment, for example under `env` in `~/.claude/settings.json`.
 `jev-gate` reads its mode from `JEV_GATE_MODE` or `~/.config/jev-gate/config.json` ([Try V5](#try-v5)).
+
+`jev-gate-evidence`, one read-only MCP tool that returns exact source windows (and, with remote on, lets Jev fold
+clearly unrelated ones), is not in the marketplace: download its archive from a release and load it with `--plugin-dir`
+([README](plugins/evidence/README.md)).
 
 A plugin changes only when a release raises its version, and `main` takes only releases. To update, run
 `/plugin marketplace update jev-gate` and then `claude plugin update <plugin>@jev-gate`, or turn on auto-update for the

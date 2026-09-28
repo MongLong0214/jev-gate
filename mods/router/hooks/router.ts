@@ -3,7 +3,7 @@ import { createClient } from './client.ts';
 import type { RouterConfig } from './config.ts';
 import { validKey } from './config.ts';
 import type { RootSwitch, SymbolicEffort } from './models.ts';
-import { answeredBy, effortIndex, factsOf, isSymbolicEffort, sameModel, VERIFIED_ROOT_SWITCHES } from './models.ts';
+import { aliasFamily, answeredBy, effortIndex, factsOf, isSymbolicEffort, MODEL_FACTS, sameModel, VERIFIED_ROOT_SWITCHES } from './models.ts';
 import type { Answers, Baseline, DimensionReason, ModelTier, MutableDimensions, PolicyOptions, RoutedEffort, RoutingPatch, RoutingTask } from './policy.ts';
 import { allowedBy, buildQuestions, buildState, choosePatch, EFFORT_LEVEL_TARGETS, offerableEfforts, offerableTiers, pairValid, validateAnswers } from './policy.ts';
 import { looksSecret } from './secret.ts';
@@ -263,6 +263,11 @@ interface ChildRouting {
   answers: Answers;
   /** The first step's model and effort, once seen. A later step arriving with others leaves the loop native. */
   baseline: Baseline | null;
+  /**
+   * The run the first step belonged to. The answer is for the spawn's task alone: a later run of the same subagent
+   * (a SendMessage continuation, which steps under a new turn id) is another task, and runs native.
+   */
+  turnId: string | null;
   effort: RoutedEffort | null;
   stopped: boolean;
   /** Set as a patched step goes to next: from then on the loop's cache was written at its effort. */
@@ -626,6 +631,7 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     }
     if (c.baseline === null) {
       c.baseline = { model: e.model, ...(e.effort !== undefined ? { effort: e.effort } : {}) };
+      c.turnId = e.turnId;
       const efforts = offerableEfforts(c.baseline);
       const decision = efforts ? choosePatch(c.answers, c.baseline, { tiers: null, efforts }, policy('spawn', undefined)) : null;
       c.effort = decision?.patch.effort ?? null;
@@ -634,6 +640,10 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
         c.stopped = true;
         return null;
       }
+    } else if (e.turnId !== c.turnId) {
+      c.stopped = true;
+      log(engine, { event: 'child_stop', agent_id: id, index: e.index, reason: 'next_turn' });
+      return null;
     } else if (e.model !== c.baseline.model || e.effort !== c.baseline.effort) {
       c.stopped = true;
       log(engine, { event: 'child_stop', agent_id: id, index: e.index, reason: 'incoming_divergence' });
@@ -680,7 +690,17 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
       if (!t) return;
       const requested = patch.model ?? e.model;
       const seen = result && typeof result.usage?.model === 'string' ? result.usage.model : null;
-      log(engine, { event: 'root_result', turn: e.turnId, index: e.index, applied: patch, observed: seen, usage: result ? loggable(countsOf(result.usage)) : null });
+      // `applied` is what was sent to next, not a confirmation: the host reports the model that answered, never the
+      // effort it ran at.
+      log(engine, {
+        event: 'root_result',
+        turn: e.turnId,
+        index: e.index,
+        applied: patch,
+        observed: seen,
+        ...(patch.effort !== undefined ? { observed_effort: 'unknown' } : {}),
+        usage: result ? loggable(countsOf(result.usage)) : null,
+      });
       // Missing is unknown, not confirmation: the override is not reapplied on a guess. A model override needs its own
       // variant reported back, so a bare id does not confirm a requested [1m]. An effort-only patch is checked too, since
       // the host can answer from a fallback; effort depends only on the model, so there the variant is not asked for.
@@ -746,7 +766,21 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     }
     if (prepared?.child && patch) prepared.child.dispatched = true;
     // Once next starts, every chunk, the return, a refusal or an error belongs to the host: nothing here retries it.
-    const result = yield* next(patch ? { ...e, ...patch } : e);
+    let result: R;
+    try {
+      result = yield* next(patch ? { ...e, ...patch } : e);
+    } catch (err) {
+      // A patched request that failed leaves the rest of its turn or loop native: whatever the host sends next, a retry
+      // or a fallback, it is never sent the override again.
+      if (patch && prepared?.child) {
+        prepared.child.stopped = true;
+        log(engine, { event: 'child_stop', agent_id: e.agentId ?? null, index: e.index, reason: 'step_failed' });
+      } else if (patch && prepared?.turn) {
+        prepared.turn.stopped = true;
+        log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: 'step_failed' });
+      }
+      throw err;
+    }
     if (prepared?.child) observeChild(engine, e, prepared.child, patch, result);
     else observeStep(engine, e, patch, result);
     if (e.agentId === undefined && !own.aborted) {
@@ -870,7 +904,20 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
       if ('reason' in offer) modelSkip = offer.reason;
       else tiers = offer.tiers;
     }
-    const efforts = childEnabled && !pins.mainEffort ? EFFORT_LEVEL_TARGETS : null;
+    // A subagent whose model is known here and takes no effort at all (Haiku) has no effort to ask about. Known: named
+    // by the call, unless a pin or a remapped alias overrides it, or inherited by a verified built-in.
+    const child = pins.subagentModel
+      ? null
+      : explicit !== null
+        ? pins.aliasRemap && aliasFamily(explicit) !== null
+          ? null
+          : explicit
+        : inheritSkip(e) === null
+          ? e.parentModel
+          : null;
+    const childFacts = child === null ? null : (factsOf(child) ?? MODEL_FACTS.find((f) => f.family === aliasFamily(child)) ?? null);
+    const effortless = tiers === null && childFacts !== null && childFacts.unconditionalEffort.length === 0;
+    const efforts = childEnabled && !pins.mainEffort && !effortless ? EFFORT_LEVEL_TARGETS : null;
     if (tiers === null && efforts === null) return spawnSkip(engine, e, modelSkip ?? 'effort_pinned');
     // Recorded only once every gate passed: a spawn left native by a pin runs on the pinned model, which says nothing
     // about how the host resolves an inheriting one.
@@ -965,7 +1012,7 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     try {
       result = await next(target !== null ? { ...e, model: target } : e);
       if (answers && result.deny === undefined && result.agentId !== undefined && !own.aborted)
-        if (suspended === null) children.put(result.agentId, { answers, baseline: null, effort: null, stopped: false, dispatched: false });
+        if (suspended === null) children.put(result.agentId, { answers, baseline: null, turnId: null, effort: null, stopped: false, dispatched: false });
     } finally {
       landing.delete(landed);
       land();

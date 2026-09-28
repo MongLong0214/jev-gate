@@ -147,6 +147,12 @@ describe('what is offered', () => {
     expect(rankOf('claude-opus-5-5', ALIASES)).toBe('deep');
     expect(rankOf('claude-opus-5-5[1m]', FULL)).toBe('deep');
     expect(rankOf('claude-unknown-1', FULL)).toBeNull();
+    // An identifier that only contains a known one is unknown, never read as that model or its family.
+    for (const id of ['claude-opus-5-5-preview', 'claude-haiku-4-5-latest', 'us.claude-sonnet-5', 'opus-4']) {
+      expect(rankOf(id, FULL), id).toBeNull();
+      expect(rankOf(id, ALIASES), id).toBeNull();
+      expect(offerableEfforts({ model: id, effort: 'high' }), id).toBeNull();
+    }
   });
 
   it('offers profiles only with a known rank and another target that could be applied', () => {

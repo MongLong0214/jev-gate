@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { JEV_MODEL } from '../../mods/router/hooks/client.ts';
-import { choice, FAKE_KEY, score } from './fake-engine.ts';
+import { choice, drain, FAKE_KEY, score } from './fake-engine.ts';
 
 /**
  * register.ts types itself against the host's `claude-code` declarations, which this Node typecheck does not load, so
@@ -133,6 +133,26 @@ describe('register', () => {
     expect(host.requests[0]?.headers['authorization']).toBe(`Bearer ${FAKE_KEY}`);
     expect(host.logs.join('\n')).not.toContain(FAKE_KEY);
     expect(host.logs.every((l) => l.startsWith('jev-router '))).toBe(true);
+  });
+
+  it('never starts a subagent of its own: `$.agent` is never read, and each spawn and step calls next once', async () => {
+    const host = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY } });
+    const nouns = new Set<string>();
+    const $ = new Proxy(host.$, { get: (t, k) => (nouns.add(String(k)), Reflect.get(t, k)) });
+    const hooks = await registered({ enabled: true });
+    await hooks.get('agent.offer')?.($, OFFER, withSignal(async (e: unknown) => ({ isOffered: true, e })));
+    let spawns = 0;
+    await hooks.get('agent.spawn')?.($, SPAWN, withSignal(async (e: { model?: string }) => (spawns++, { model: e.model ?? 'claude-opus-5-5', agentId: 'a1' })));
+    let steps = 0;
+    const stepNext = withSignal(async function* (e: { model: string }) {
+      steps++;
+      yield 'chunk';
+      return { usage: { model: e.model } };
+    });
+    const gen = hooks.get('turn.step')?.($, { turnId: 'c1', index: 0, model: 'claude-haiku-4-5', agentId: 'a1', messageCount: 1 }, stepNext) as AsyncGenerator<string, unknown>;
+    expect((await drain(gen)).chunks).toEqual(['chunk']);
+    expect([spawns, steps]).toEqual([1, 1]);
+    expect(nouns.has('agent')).toBe(false);
   });
 
   it('prefers a valid explicit key, and never falls back from an invalid one to the environment', async () => {

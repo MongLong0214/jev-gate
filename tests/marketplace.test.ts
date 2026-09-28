@@ -16,19 +16,19 @@ describe('the marketplace', () => {
   it('is named jev-gate, so a plugin installs as <plugin>@jev-gate', () => {
     expect(marketplace.name).toBe('jev-gate');
     expect(marketplace.owner.name).toBeTruthy();
-    expect(marketplace.plugins.map((p) => p.name).sort()).toEqual(['jev-gate', 'jev-gate-compact', 'jev-gate-router']);
+    expect(marketplace.plugins.map((p) => p.name).sort()).toEqual(['jev-gate', 'jev-gate-compact', 'jev-gate-output', 'jev-gate-router']);
   });
 
   it('leaves every version to plugin.json, and every plugin.json is at the package version', () => {
     // A version in both places is taken from plugin.json without warning; one place keeps the update signal honest.
     for (const p of marketplace.plugins) expect(p.version, p.name).toBeUndefined();
-    for (const rel of ['.claude-plugin/plugin.json', 'mods/compact/.claude-plugin/plugin.json', 'mods/router/.claude-plugin/plugin.json']) {
+    for (const rel of ['.claude-plugin/plugin.json', ...['mods/compact', 'mods/router', 'mods/output', 'plugins/evidence'].map((d) => `${d}/.claude-plugin/plugin.json`)]) {
       expect((readJson(join(root, rel)) as { version: string }).version, rel).toBe(version);
     }
   });
 
   it('points each relative source at a plugin of the same name', () => {
-    expect(relativeEntries.map((p) => p.source).sort()).toEqual(['./mods/compact', './mods/router']);
+    expect(relativeEntries.map((p) => p.source).sort()).toEqual(['./mods/compact', './mods/output', './mods/router']);
     for (const p of relativeEntries) {
       expect((readJson(join(root, p.source, '.claude-plugin', 'plugin.json')) as { name: string }).name).toBe(p.name);
     }

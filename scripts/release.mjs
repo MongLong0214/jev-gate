@@ -23,7 +23,13 @@ import { fileURLToPath } from 'node:url';
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const REPO = 'MongLong0214/jev-gate';
 const MARKETPLACE_PATH = '.claude-plugin/marketplace.json';
-const MANIFESTS = ['.claude-plugin/plugin.json', 'mods/compact/.claude-plugin/plugin.json', 'mods/router/.claude-plugin/plugin.json'];
+const MANIFESTS = [
+  '.claude-plugin/plugin.json',
+  'mods/compact/.claude-plugin/plugin.json',
+  'mods/router/.claude-plugin/plugin.json',
+  'mods/output/.claude-plugin/plugin.json',
+  'plugins/evidence/.claude-plugin/plugin.json',
+];
 
 const [command, ...rest] = process.argv.slice(2);
 const flag = (name) => {

@@ -123,5 +123,30 @@ describe('register', () => {
     const bad = { ui: { log: () => { throw new Error('log down'); } } };
     const r = (await hook(bad, { trigger: 'auto', messages: conversation() }, nextSpy().next)) as { messages: unknown[] };
     expect(r.messages.length).toBeGreaterThan(1);
+    const shadow = (await hooksFor({ enabled: true })).get('session.compact')!;
+    const { next, calls } = nextSpy();
+    expect(await shadow(bad, { trigger: 'auto', messages: conversation() }, next)).toBe(CORE);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('its own failure goes to the engine once; the engine failing or being cancelled is passed up, never retried', async () => {
+    const hook = (await hooksFor({ enabled: true, mode: 'active' })).get('session.compact')!;
+    const broken = conversation();
+    Object.defineProperty(broken[5]!, 'text', { get: () => { throw new Error('unreadable'); } });
+    const { next, calls } = nextSpy();
+    logs.length = 0;
+    expect(await hook($, { trigger: 'auto', messages: broken }, next)).toBe(CORE);
+    expect(calls).toHaveLength(1);
+    expect(JSON.parse(logs[0]!.replace(/^jev-compact /, ''))).toMatchObject({ applied: false, fallback: 'error' });
+    const lone = [{ role: 'user', text: 'hi', toolUses: [] }];
+    for (const mode of ['shadow', 'active']) {
+      const on = (await hooksFor({ enabled: true, mode })).get('session.compact')!;
+      let asked = 0;
+      await expect(on($, { trigger: 'auto', messages: lone }, async () => { asked++; throw new Error('engine down'); })).rejects.toThrow('engine down');
+      await expect(on($, { trigger: 'auto', messages: lone }, async () => { asked++; throw new DOMException('cancelled', 'AbortError'); })).rejects.toThrow('cancelled');
+      const skipped = { skip: 'cancelled' };
+      expect(await on($, { trigger: 'auto', messages: lone }, async () => { asked++; return skipped; })).toBe(skipped);
+      expect(asked).toBe(3);
+    }
   });
 });
