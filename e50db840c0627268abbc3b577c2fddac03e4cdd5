@@ -1,0 +1,1607 @@
+Limit: The host caps the model-facing Grep result invisibly: 27,391 characters arrived at the hook and reached the model as a 2 KB preview, with nothing in tool_response saying so. Any saving measured against the bytes the hook saw is fabricated.
+Warn: A guard whose reason code is the point needs a test that asserts the reason code. Deleting the totalLines > numLines check left the whole suite green: every test reaching it asserted only ok:false, and the one confirmed truncated fixture is caught a check earlier by appliedLimit.
+Blast: module
+Undo: easy
+Certainty: firm
+Record-Id: r-bd574dc006ed
+Evidence: bench/results/v5-context-probe-2026-09-18/README.md
+Evidence: tests/context-fixtures.test.ts
+Provenance: inherited 7af569184e9280d93874107f954ce5cf73f4590e
+
+Limit: The host's model-facing cap is 20,000 characters and counts characters, not bytes: a Korean result of 19,974 characters and 51,894 bytes was delivered whole in the same run that capped 20,001 ASCII bytes. MIN_CONTENT_BYTES (floor) and MAX_CONTENT_CHARS (ceiling) are deliberately in different units for that reason.
+Limit: head_limit's 250-line default binds before the character cap on ordinary line lengths, so a result with short lines tops out near 21 KB and never reaches the character ceiling at all.
+Warn: One headless cell costs about $0.13 whatever it measures: the money is session boot (cache_creation_input_tokens 42036 against input_tokens 4), not the payload. 35 cells cost $4.5851 against a $0.20-0.50 estimate. Batch a sweep into one session and buy independence per call instead.
+Blast: module
+Undo: easy
+Certainty: firm
+Record-Id: r-c6d7fce330d5
+Follows: r-bd574dc006ed
+Evidence: bench/results/v5-context-cap-2026-09-18/README.md
+Evidence: bench/results/v5-context-cap-2026-09-18/measurements.json
+Provenance: inherited cf5fcca6886cc9de7072e22586160a1e6754a8c3
+
+Limit: Only about 4% of a real session's Grep results are eligible for this filter: 85% of targeted searches fall below the 8 KiB floor, and 88% of broad searches -- the ones a relevance filter actually suits -- are cut by the host's 250-line head_limit, which §6 excludes from selection.
+Limit: OMIT_CONFIDENCE_FLOOR at 0.9 discards every saving this feature can produce. Measured on one 95-block result: scope answers keep_all at 0.99 on an exhaustive request and selectable at 0.13 otherwise, so the protection the floor exists to give already comes from keep_all, while the floor throws away a 40-54% byte reduction the block answers would have delivered.
+Limit: Jev is not deterministic: the same request sent twice agrees on 67-89% of block classifications, and the scope choice itself flipped between keep_all and selectable on identical input. The 0.9 floor currently hides this; moving it would make the same search filter differently between runs.
+Limit: A block question is 1,116 bytes of which 459 is SHARED_INSTRUCTIONS repeated verbatim, so the request runs about 8x the content and MAX_REQUEST_BYTES binds at roughly 110 blocks. A 15,954-byte result inside the documented window built a 131 KiB request and never reached Jev.
+Warn: Do not move OMIT_CONFIDENCE_FLOOR on the strength of these numbers. It is a declared criterion and this repository does not move one after seeing results; the measurement exists so the owner can decide deliberately.
+Blast: system
+Undo: easy
+Certainty: tentative
+Unverified: Eligibility is emulated from ripgrep over four TypeScript-heavy repositories, not observed from real sessions, and the user requests driving the Jev calls were written for this run rather than sampled.
+Record-Id: r-0b6170f1d960
+Follows: r-c6d7fce330d5
+Evidence: bench/results/v5-context-viability-2026-09-18/README.md
+Provenance: inherited 0cd4de62fa81456608afb786f90d446e1dc52105
+
+Limit: On this operator's machine the Grep tool is never called: 20,080 session transcripts, 120,756 tool calls, zero Grep. Bypass-permissions mode tells the session to search through Bash instead, so Bash is 91.2% of calls and Read only 1.4%. A PostToolUse matcher of ^Grep$ has no surface here.
+Limit: Real search output is small: 37,462 Bash searches totalling 25.5 MB, median 373 B and p99 4,641 B, so MIN_CONTENT_BYTES at 8 KiB sits above the 99th percentile and 98.3% of searches fall below it. Granting the feature everything -- hook on Bash, parser taught grep -n, scope gate settled -- caps total benefit at 0.25-0.34 MB across 19,590 sessions, about four tokens per session.
+Warn: Sections 1-5 of the viability README measured the gates on an emulated Grep corpus before the real sessions were read. Their numbers stand, their conclusion does not: the scope floor, the 250-line truncation and the request-size waste are all optimisations of a path with four tokens a session of headroom. Read section 0 first.
+Blast: system
+Undo: easy
+Certainty: firm
+Unverified: One operator and one configuration. A session run without bypass-permissions mode would call Grep, and the section 1-5 figures would be the ones that apply; how common either configuration is among other users was not measured.
+Record-Id: r-b87a1c3cc6f3
+Follows: r-0b6170f1d960
+Evidence: bench/results/v5-context-viability-2026-09-18/README.md
+Provenance: inherited e70c287475950ce449c6c5d7936bbff7b41af3a9
+
+Limit: 82% of this operator's weighted token bill is cache read: 120,716M tokens over 233,624 assistant turns in 64 main sessions, an average of 516,711 tokens of context re-read on every turn. Cache write is 11% and output 7%. Cost here is context carried per turn, not the size of any one tool result.
+Limit: Every search result this machine has produced is 6.4M tokens, which is 0.0044% of that weighted bill even assuming a filter removed all of it and it never had to be re-read. Tool results overall are 85.1 MB at a mean of 742 bytes per call, 92% of it Bash, with only 530 of 105,610 calls over 8 KiB -- context accumulates by many small additions, so a per-result relevance filter has nothing to bite on.
+Warn: Only 64 of ~19,600 transcripts carry usage; the rest are subagent and sidechain records that do not. Aggregate over all files and per-session figures come out wrong. Filter to the files that have usage before computing anything about spend.
+Blast: system
+Undo: easy
+Certainty: firm
+Unverified: The shares are relative weights, not currency. They come from the published billing ratios against base input -- cache read 0.1x, one-hour cache write 2x, output 5x -- applied to the recorded counts.
+Record-Id: r-c100c28ec0e6
+Follows: r-b87a1c3cc6f3
+Evidence: bench/results/v5-context-viability-2026-09-18/data/token-spend.json
+Provenance: inherited 71e56f13441bbbcdfe933b3a4118aca458ec5fe7
+
+Limit: Auto-compact was letting the window fill before acting: 222 compactions across the eleven largest transcripts peak at a median 966,799 tokens and drop to a floor of 72,731, cycling about every 1,149 turns at 916 tokens added per turn. That sawtooth is the 516,711-token average, and it is also the latency -- with output held flat, the median turn takes 2.7s under 100K and 5.3s at 800K-1M.
+Limit: The floor sets a hard lower bound on the window. At CLAUDE_CODE_AUTO_COMPACT_WINDOW=100000 the host aborted the session with "Autocompact is thrashing: the context refilled to the limit within 3 turns of the previous compact, 3 times in a row": compaction leaves about 72.7K behind, so a 100K window has no headroom and two tool results refill it. An arithmetic optimum of 100-150K was wrong for this reason.
+Warn: autoCompactWindow is read at session start, so a running session keeps whatever window it resolved then. Also note the environment variable takes precedence over the setting, and --setting-sources project,local silently discards the user settings file, which will make a verification run look like the setting did nothing.
+Blast: system
+Undo: easy
+Certainty: firm
+Unverified: The A/B ran 63 turns, which is two teeth of the sawtooth; the near-60% steady-state figure for long sessions is modelled from the measured floor, growth and re-cache values, not observed. Whether compacting roughly eight times more often costs work quality was not measured at all.
+Record-Id: r-8e38e314e7a5
+Follows: r-c100c28ec0e6
+Evidence: bench/results/v5-context-viability-2026-09-18/README.md
+Provenance: inherited cd65dea4f31266671600e1cebd900d3b4e3f2dbf
+
+Limit: The static prefix is never compacted away, so everything in it is paid on every turn of every session. Itemised by one-turn probes against a 64,500 baseline: Claude Code itself 46,475 (fixed), ~/.claude/rules/*.md 9,000, CLAUDE.md 5,687, skills 4,259, MCP servers 2,552. Across 20,080 transcripts only 9 skills were ever invoked and only 4 of 8 MCP servers ever called.
+Warn: Claude Code loads every file in ~/.claude/rules/ as a global instruction file, whether or not CLAUDE.md references it. grok-blind-review.md was in none of CLAUDE.md's own three tiers and still cost 4,094 tokens a turn for that reason. Anything dropped into rules/ is an always-loaded decision, not a filing decision.
+Blast: system
+Undo: easy
+Certainty: firm
+Unverified: The prefix figures come from one-turn headless sessions in an empty directory. An interactive session in a real repository also carries that project's CLAUDE.md and its own attachments, so the fixed part is a floor rather than the whole of it.
+Record-Id: r-4c12767e35a2
+Follows: r-8e38e314e7a5
+Evidence: bench/results/v5-context-viability-2026-09-18/README.md
+Provenance: inherited 7b472cc404ebb37cffa49e9d2e90fcec2e7b8683
+
+Limit: Gate A never admits orchestrated on this operator's work: 0 of 110 genuine typed prompts from the recorded sessions, 0 of 5 bench jobs, and 0 on a purpose-built twelve-module job. Jev calls 8.2% of real prompts compound but never above 0.67 confidence against a 0.8 floor, and a third return needs_context because it is shown one string with no conversation around it. Removing the floor entirely still only reaches 15.3%.
+Limit: Gate A costs nothing worth counting: $0.000146 for five gates, 0.015% of the Claude bill, 558-637ms each. Whatever is expensive about routing, it is not asking.
+Warn: wide-validators is wide, not compound, and does not discriminate. Gate A's own criterion says many mechanical edits with no design decision are direct, and reserves orchestrated for distinct outcomes with dependencies -- twelve copies of the same one-line change are the former. Its direct answer is the criterion working. Do not cite this fixture as evidence about Gate A's judgment; a discriminating fixture needs dependent deliverables and is unbuilt.
+Blast: system
+Undo: easy
+Certainty: firm
+Unverified: One repetition per arm. The 3.0% cost and 4.9% runtime gap between the arms is under the 20% bar the pre-registration set for n=1, and an earlier four-job run came out the other way at -5.3% and -14.6%, so neither sign means anything. Whether orchestration would pay on work it was designed for is untested, not answered.
+Record-Id: r-d4fc7982a1f1
+Evidence: bench/results/v5-wide-2026-09-18/README.md
+Provenance: inherited cd3e7ccea9cc9bf6d863bd68332a2353db0805b1
+
+Limit: Four surfaces tried, none pays: the Grep filter hooks a tool called 0 of 120,756 times; Gate A answers direct correctly on the bench jobs; Gate A admits 0 of 110 real prompts; a goal-termination classifier does not discriminate, with the six most-fired goals all returning terminating. Each time the mechanism was sound and the decision it informs was either not taken or already taken correctly.
+Limit: 82% of the bill is cache read, which is a mechanical consequence of context carried per turn rather than the outcome of any decision. A classifier cannot reduce a quantity nothing chooses, which is why both changes that did reduce it were settings.
+Warn: An earlier diagnosis in this investigation said the 466-firing goal was structurally unsatisfiable because a clause reads keep going. That is wrong: its first two clauses name observable end states and the third describes how to work, not a condition. The goal was simply far from met. The expensive failure was a gate with no ceiling -- the only bound is the host capping 9 consecutive blocks in one turn, which does not bound nine days -- so it is a missing bound, not a missing judgment.
+Blast: system
+Undo: easy
+Certainty: firm
+Unverified: The goal gate's own evaluation is a built-in feature whose cost is not recorded in the session transcript, so what each of the 2,158 firings spent could not be measured and no substitution saving can be quantified.
+Record-Id: r-b93c0de2ebaa
+Evidence: bench/results/v5-wide-2026-09-18/MOVING-THE-GATE.md
+Provenance: inherited f4f933d44a64ce7831fc2d00ab1476bf1805be94
+
+Limit: Delegation's cost depends on the context depth it is used at, not just on the job. Identical work, all cells passing: forced orchestration cost +182% on a fresh session (X~55K) and -57% on a loaded one (X~406K), with the main session peaking at 127,216 against 406,218 because workers start at their own prefix and do not inherit the conversation.
+Limit: Every earlier comparison in this repository ran at X~44K, within noise of a worker's own prefix, where the arithmetic says no saving can exist. V4's recorded finding that forced delegation cost 37.7% more is a fact about the harness depth, not about delegation.
+Limit: Gate A is not shown how full the context is: its state is the request and the available execution shapes only. The variable that decides which branch is cheaper, by a factor of four in this run, is absent from its input.
+Warn: This is not yet a speed result. Runtime moved the wrong way in both conditions -- 199s against 91s fresh, 386s against 325s loaded -- because maxParallelWorkers is 1 and the workers run in series.
+Blast: system
+Undo: easy
+Certainty: tentative
+Unverified: One repetition per cell, and two mechanically identical arms differed by 5% in an earlier run, so the 57% and the 182% are a direction with a mechanism rather than a magnitude. Repetitions of the loaded cell are the next thing needed, not a new question.
+Record-Id: r-45c7a936e372
+Evidence: bench/results/v5-context-locality-2026-09-19/README.md
+Provenance: inherited 11b8cd7559b4c8797e2b227e47456a76df593cd0
+
+Limit: Gate A asks whether the work is compound; the decision that matters is whether this shape is cheaper here. The first answer does not depend on context depth, so supplying depth cannot move it. Replaying 61 real prompts with their true context: adding the number changed nothing (12/61 orchestrated either way, 0 admitted), and adding the number plus what each shape costs made it LESS likely to orchestrate, 7/61.
+Limit: Jev is confident when the answer is present in its input and hedges when the answer is a forecast. On the same day through the same client it returned 0.99 on whether a request needs every match and 0.98-1.00 on block relevance, against 0.68 for is-this-compound and 0.78 for is-delegating-cheaper. Job length is a prediction about work not yet done, and restating the question does not remove that.
+Warn: This decision is dominated by a measured number, not a judgement. With saving ~= (T-2)X - T*P and P ~= 45,000, at this operator's median depth of 657K delegation wins for any job of three turns or more and loses about 90K on a two-turn job. All 61 sampled prompts were above the crossing point, so a threshold on context depth captures essentially the whole saving while a classifier asked to predict job length admits nothing at 0.78.
+Blast: system
+Undo: easy
+Certainty: tentative
+Unverified: The break-even arithmetic is derived from measured constants rather than measured itself; the decisive test is a short job run at high context where the margin is thinnest, and it is unbuilt. Gate B's tier choice has still never been exercised because no job was ever admitted.
+Record-Id: r-26c9cf8c81b9
+Evidence: bench/results/v5-context-locality-2026-09-19/OPENING-THE-GATE.md
+Provenance: inherited d55b0367eb31f723cb86af8f590a90788562308d
+
+Limit: The vendor documents atomic questions fanned out in one call, mixed primitives, and results combined in code; this repository asks one composite choice per gate, uses choice only, and applies a fixed floor regardless of risk. The 0.6-0.8 confidence ceiling every measurement hit follows from that: asked to estimate work not yet done Jev returns 0.65-0.78, while read-offs from the same input on the same day returned 0.98-1.00.
+Limit: Seven questions cost 741 tokens and 272ms against 674 and 264ms for one, so decomposition is nearly free. But a question that asks for a forecast behaves like one at any granularity: separable was decisive on 0 of 61 prompts, spanning 0.33-0.79.
+Limit: Delegation carries a fixed planner toll of about $0.39, measured as claude-opus-5 at $0.3608 and $0.4192 on the two cells. With saving ~= T*(context - 45,000)*$0.30/M - $0.39 the signs match both measured cells, and the turns needed to repay the toll fall from 121 at 55,718 of context to 2.1 at 657,393.
+Warn: A noul that names a prohibition in general will catch prohibitions about method. forbids_delegation read 0.62-0.67 on two requests that restrict how to work but never mention delegation; naming the distinction explicitly moved the same requests to 0.08-0.10 and took decisive answers across 61 prompts from 7 to 42.
+Blast: system
+Undo: easy
+Certainty: tentative
+Unverified: The turns-per-size mapping is fitted to nothing -- two ground-truth points do not constrain five levels -- and every dollar figure inherits that. The corrected rule was never run end to end, so 43 of 61 is what it decides, not what it would save.
+Record-Id: r-7ef0083c71ed
+Evidence: bench/results/v5-fanout-2026-09-19/README.md
+Provenance: inherited 8410731da5b76cd3f10578e47157e6c988fafcae
+
+Limit: Gate B fired seven times in the delegated run and changed nothing: eligible=7, patched=0, six preserved for route_low_confidence. ROUTE_QUESTION is one five-way choice carrying ~900 characters of policy, the same monolith as Gate A. Decomposed into six read-offs it costs 879 tokens against 1,189 -- cheaper, because the shipped instruction block is larger than six atomic questions -- and routes 3 of 6 dispatches to fast.
+Limit: Tier choice is worth 48% of cost and 31% of wall clock on a task that was routed to fast: the same real dispatch produced 4/4 assigned modules correct, the unassigned module untouched and four test files on both models, at $0.1202 and 26.0s on haiku against $0.2320 and 37.9s on sonnet. Unlike Gate A's guidance this is applied through updatedInput, so nothing downstream can ignore it.
+Limit: Delegation moves cost from cache read to cache write: read fell from 22,973,645 to 3,257,720 while write rose from 388,625 to 537,482, because every worker writes its own prefix. Weighted, write is now the largest term in the delegated arm at 1.07M against 0.33M for read.
+Warn: The 12-module checker cannot grade a single dispatch that covers 4 modules -- it reports empty_rejected_everywhere false for correct work. Grade a task against what that task was assigned, and check separately that unassigned files were left alone.
+Blast: system
+Undo: easy
+Certainty: tentative
+Unverified: One task, one repetition per model, on one fixture. The haiku result is a single observation and says nothing about tasks the fan-out routes to standard, nor about whether routing the whole run this way keeps the end-to-end saving.
+Record-Id: r-d3173a053642
+Evidence: bench/results/v5-fanout-2026-09-19/README.md
+Provenance: inherited 8e190459ae9c02118db11c7e965cd4e02b38f336
+
+Limit: Delegation and the worker tier multiply rather than overlap: on the loaded job with zero failed checks in every arm, sonnet_native $6.2851, forced orchestration with sonnet workers $2.6922, forced orchestration with haiku workers $1.1465 -- 0.43 times 0.43, or -81.8% together. They act on different factors of the same product, so neither absorbs the other.
+Limit: The planner is now the largest fixed item. claude-opus-5 costs $0.3358 here, barely changed from the $0.3608 and $0.4192 measured earlier, but as the total fell it went from about 12% of the bill to 29%. The next lever is the planner, not the workers.
+Limit: The cheap tier does not rescue delegation without depth: the fresh cell came in at $0.9239 against sonnet_native's $0.3148, three times the cost with the same haiku workers. The depth condition is intact and load-bearing.
+Warn: The token half of the goal is met and the speed half is not. 285.1s against the native arm's 324.6s is 12%, and the sonnet-worker arm took 386s, so run-to-run variance here exceeds the effect. maxParallelWorkers is still 1 and the workers run in series.
+Blast: system
+Undo: easy
+Certainty: tentative
+Unverified: Every figure is the forced arm: Gate A did not admit and Gate B patched nothing, attempted=2 patched=0 on the loaded cell, so -82% is reachable rather than actual. One repetition per cell, and forcing every worker to haiku was more aggressive than the fan-out's own 3-of-6 split yet still passed, on one job whose tasks are unusually well specified.
+Record-Id: r-7125984b83c4
+Evidence: bench/results/v5-tier-e2e-2026-09-19/README.md
+Provenance: inherited 2be86af46a9b4f6919d431878271f5db7144bc9e
+
+Limit: The shipped admission question's answer depends on the order its options are written in: reversing the four options changed 11 of 61 answers and swapping pairs changed 7, against a field report of 7 in 120 for a comparable reshuffle. The admission rate was stable at 0 of 61 across every ordering, but the choice distribution was not.
+Limit: needs_context and abstain absorb answers the model can make. 14 of 61 prompts took an escape hatch and 2 more came back unparseable; with only the two actionable options left, those 14 answered direct 10 and orchestrated 4, one at 0.99 confidence, unparseable fell to 0, and the two-option arm was the only one admitting anything at the 0.8 floor.
+Warn: Never quote a choice distribution from a single option ordering. The 8.2% orchestrated figure in v5-wide-2026-09-18 came from one ordering and moves by 11-18% under another; the 0-of-61 admission rate it sits beside is what survives.
+Blast: module
+Undo: easy
+Certainty: tentative
+Unverified: Two of the twenty-four orderings of four options were tried, one repetition each, on one question and one model version. The order sensitivity figure is itself a single measurement, and removing the hatches was tested on the admission question only -- ROUTE_QUESTION's abstain is untouched.
+Record-Id: r-417e19689dcf
+Evidence: bench/results/v5-question-shape-2026-09-19/README.md
+Provenance: inherited e101813891effb07f6ddf47e70ef848a127c9477
+
+Limit: A cheaper planner is more expensive by a factor of two. Dropping the deep tier from opus to sonnet took the loaded job from $1.5219 to $3.2615 and 70% slower, with the checker still passing: removing a $0.41 opus pass added $2.14 of sonnet, because a weaker plan is made good by the coordinator doing more work. The planner returns about five times its price.
+Limit: Parallelism buys wall clock with prefix writes rather than reordering free work. maxParallelWorkers 1 to 4 moved the loaded job -18.6% in wall and +32.7% in cost, with agent calls 2 to 6 and main turns 9 to 15: given slots the coordinator subdivides more, and every extra worker writes its own prefix to cache -- the term that became dominant once delegation removed the cache reads.
+Limit: No configuration is best on both axes. Serial haiku workers are -81.8% cost and -11.3% wall; parallel-4 haiku workers are -75.8% and -27.8%. $0.38 buys 53 seconds, both beat native on both axes, and neither dominates.
+Warn: v5-tier-e2e called the planner the largest fixed item left and named it as the next lever because it had grown to 29% of a shrinking bill. That reading was wrong and this run inverts it. A share of a total is not evidence that an item is reducible.
+Blast: system
+Undo: easy
+Certainty: firm
+Unverified: One repetition per cell across five configurations. The $0.38 between serial and parallel-4 could plausibly be noise while the planner result is far too large to be; only deep-to-sonnet was tried for the planner and only 4 for the parallel setting, and every row is the forced arm.
+Record-Id: r-3559fc41606a
+Evidence: bench/results/v5-parallel-2026-09-19/README.md
+Provenance: inherited d37688650f88f6edc01ddd48bf21025e9ac11a95
+
+Limit: Gate B's composite question cleared its floor once in six real dispatches, and that once it answered standard -- the default -- so it changed nothing, which is what patched=0 in the orchestrated run was. The atomic shape routed three of six to fast at 879 tokens against 1,189, so decomposing is cheaper here as well as usable: the shipped instruction block is larger than six read-off questions.
+Warn: routeQuestionShape defaults to composite and is optional in a config file, so a deployed V5 config keeps its behaviour without being edited. Absence defaults, an explicit wrong value is an error -- the first draft used ?? and would have turned a null in the file into composite silently.
+Warn: An atomic answer that is missing, non-numeric, out of 0..1, or shaped like a choice leaves the dispatch on the tier the coordinator called. A fact the gate cannot read is never evidence for moving a tier in either direction.
+Blast: module
+Undo: easy
+Certainty: firm
+Unverified: FACT_TRUE 0.6 and FACT_NOT_AGAINST 0.5 are uncalibrated policy values, fixed before the measurement that produced them and not moved after, on six dispatches from one job. Nothing has yet run the atomic shape end to end, so it is implemented and offline-tested, not observed to fire.
+Record-Id: r-1af0a7b1c874
+Evidence: bench/results/v5-fanout-2026-09-19/README.md
+Provenance: inherited 4d363820bce3efdc6803412d18a918c545448809
+
+Limit: The atomic Gate B fires and its effect is conditional on context depth, like everything else here. Same job, models.standard left at sonnet so any haiku is the gate choosing fast: on the loaded job $2.6922 to $1.3315, -50.5%, with sonnet falling $2.2717 to $0.5714 and haiku rising to $0.3553 across four re-routed dispatches; on the fresh job $0.8888 to $1.7112, +92.5%. The composite question patched nothing in either.
+Limit: Worker count is the hidden cost axis of this design and three separate results underestimated it. Delegation made cache write the largest term at 1.07M against 0.33M; raising maxParallelWorkers 1 to 4 took workers 2 to 6 and cost +32.7%; the atomic gate on the fresh job took workers 2 to 13 and cost +92.5%. The tier saving is per dispatch, the prefix cost is per worker, and depth decides which wins.
+Warn: A process check whose pattern appears in its own command line never terminates. Every `until ! pgrep -f "dist/bench/run.js"` poll matched its own shell and reported the run as still going for about twenty minutes after both cells had finished and passed.
+Blast: system
+Undo: easy
+Certainty: tentative
+Unverified: One repetition per cell, so -50.5% and +92.5% are each a single observation. The plan differing between gates is unexplained -- the planner does not know Gate B exists, so the 2-to-13 worker split may be ordinary variation in planning rather than anything the gate caused, and one run cannot separate them.
+Record-Id: r-723114ae536a
+Evidence: bench/results/v5-atomic-gate-2026-09-19/README.md
+Provenance: inherited cc9381eff36d2c5d69ecb6c17667cbfbf56a9a55
+
+Limit: Forced orchestration measured +182 % on a fresh session (~55K) and -57 % on a loaded one (~406K), so how deep the session already is -- not the prompt -- is what decides whether delegation is cheaper here.
+Limit: The reader reproduces the definition the 61-prompt replay used rather than inventing one, so the recorded depth distribution applies to what the gate now reads.
+Limit: The host does send the field this step depends on, and the hook had been discarding it.
+Ruled-out: asking Jev how deep the session is | it is a fact the hook can read rather than a judgement, so it is computed in code
+Ruled-out: reading the last usage line of any turn, a subagent's included | a sidechain describes a different turn's context, and admitting a job on it would be admitting on the wrong number
+Ruled-out: decoding each backward chunk to a string on its own | a chunk boundary inside a multi-byte character would decode to replacement characters
+Ruled-out: flooring the forced experiment arm along with the real gate | it is the only evidence of what orchestration costs at a given depth, and flooring it would erase the shallow half
+Warn: An unreadable or absent transcript is treated as below the floor, never as permission to orchestrate; the first prompt of a fresh session therefore always stays direct.
+Warn: The floor default is a policy number, not a measured crossing point. Do not cite it as one.
+Warn: Four of the eleven recorded sessions would be refused outright by the shipped floor; whether that is correct is what step 2 measures.
+Blast: module
+Undo: easy
+Certainty: firm
+Unverified: Nothing in this step is an end-to-end cost; it changed what the gate knows, not what a job costs.
+Unverified: The depth_unknown path was exercised against a fresh session and a missing file only.
+Record-Id: r-43a8aedf5c1a
+Evidence: bench/results/v5-depth-reader-2026-09-19/README.md
+Provenance: inherited 2a557ac47496125626ab078c2e8ecdd603a6e5f3
+
+Limit: The bench could not have exercised a depth gate at all: every session was launched with --no-session-persistence, and no transcript file is written under it.
+Limit: The host flushes a turn's usage line to the transcript after the turn ends, so a job prompt submitted immediately behind the priming turn can read a file that does not have the line yet.
+Limit: The job text of a primed case is byte-identical to the unprimed case, so depth is the only thing that differs between these cells.
+Ruled-out: keeping --no-session-persistence for primed cases | without the transcript on disk the depth is unreadable and every prompt reads depth_unknown
+Ruled-out: a single priming prompt immediately followed by the job prompt | the usage line can still be unflushed when the job prompt fires, and the cell then measures nothing
+Ruled-out: inferring where the job prompt starts from the event stream shape | --replay-user-messages makes the host say so, echoing each stdin prompt as a user event with string content
+Warn: Each result event reports the session total so far, not that turn's own cost. Summing them double-counts; the job's own cost is a difference.
+Warn: The note counts for the 200K and 300K cells are a linear guess from a single measured point. Read the achieved depth from the cell, never from the case name.
+Blast: module
+Undo: easy
+Certainty: firm
+Unverified: Nothing has been run with these cases yet; the flush race was observed once and did not repeat in three later runs of the same shape.
+Record-Id: r-79edc7e01cb2
+Evidence: bench/cases-depth.json
+Provenance: inherited 1ffd989f14ab516efe1b7fb96fc63927a859a1ad
+
+Limit: The composition Fable specified admits 1 of 63 real prompts, against a predicted count similar to the offline rule's 43/61.
+Limit: missing_reference is nearly a constant in this population: min 0.52, median 0.77, at or above the veto on 61 of 63 prompts.
+Limit: forbids_delegation never reached the veto in 63 prompts, so nothing in this sample exercised it either way.
+Ruled-out: the offline rule's T = size x 12 saving formula | fitted to two points, so it was decided against rather than ported
+Ruled-out: consulting admissionConfidenceFloor on the atomic path | the composition is done in code, so a model confidence floor was decided against here as for atomic Gate B
+Ruled-out: moving FACT_TRUE or SIZE_FLOOR to make the gate admit more | tuning a criterion against the result it was meant to test
+Warn: A real prompt in a working session nearly always points at something its own text does not contain, so any question of that form is a constant rather than a signal.
+Warn: A decision table reading decisive 8/61 means it rarely answers at the extremes, not that it rarely crosses a threshold placed in the middle.
+Blast: module
+Undo: easy
+Certainty: firm
+Unverified: Nothing has been run end to end with the atomic Gate A; the default stays composite and no session has used this path.
+Record-Id: r-304830c39608
+Evidence: bench/results/v5-gate-a-atomic-2026-09-19/README.md
+Provenance: inherited f9c45c3cff1606c933c370d8c65699a84dfcf551
+
+Limit: The criterion for choosing between the variants was fixed before either was measured, so the choice was not made by preferring the better-looking number.
+Limit: Dropping missing_reference applies a rule that predates the data -- separable went at 0/61 decisive, mechanical at 5/61, and this is decisive on 4 of 63.
+Limit: Measured: variant A admits 41 of 57 at or above the depth floor and variant B 29 of 57; both admit the deep ground-truth job and refuse the small follow-up.
+Ruled-out: variant B, the re-worded question | the pre-registered rule preferred the variant with fewer questions when both passed, so B was decided against despite being a real signal
+Ruled-out: moving FACT_TRUE or SIZE_FLOOR to get a nicer admitted count | tuning a criterion against the result it was meant to test
+Warn: A question that is mildly true of nearly every real prompt is a constant, not a signal, however sensible it reads. Check the distribution before using one as a veto.
+Warn: admissionQuestionShape still defaults to composite; nothing deployed changes until an end-to-end run at real depth justifies the flip.
+Blast: module
+Undo: easy
+Certainty: firm
+Unverified: Nothing has run end to end with the atomic Gate A, and forbids_delegation has still never reached its veto on real data.
+Record-Id: r-823d8b8fef26
+Provenance: inherited aee0a881fe36a54fc2efe7fa13e2ecd336caca1b
+
+Limit: Worker count is the cost axis this design was not watching: 1 to 4 parallel workers took the plan from 2 to 6 and cost +32.7 per cent, and a 13-worker plan cost +92.5 per cent.
+Limit: Plans that worked ran two to seven tasks, so the ceiling sits above that band rather than inside it.
+Ruled-out: setting the ceiling inside the two-to-seven band | it would shape ordinary plans, which is not what a backstop is for
+Ruled-out: raising maxParallelWorkers alongside the ceiling | raising it was measured as a cost increase and the ceiling does not change that
+Warn: A12's rule that bounds are bytes and not task counts no longer holds on its own: bytes bound what a task carries, the count has a ceiling.
+Warn: The rejection reason is fixed text naming the ceiling and the count received, so a rejected planner is told the number rather than invited to argue.
+Blast: module
+Undo: easy
+Certainty: tentative
+Unverified: No run has exercised the ceiling: replan success after a rejection, and whether merged tasks pass the checks a finer plan passed, are both unmeasured.
+Record-Id: r-bafdfc9ce1f4
+Provenance: inherited 7de339bf6f6398a2c7f24017583efdeefb67e236
+
+Limit: Delegation at a real prompt-time depth halves the job turn for the same finished work: -53.5 per cent over two repetitions, four valid cells, all checks passing.
+Limit: It is not a speed result. Wall time is 47.8 per cent worse, so the token axis moves the right way and the speed axis the wrong way.
+Limit: Worker count, not how priming is charged, is what moves this cost: the same job at the same depth cost 3.0022 with 13 workers and 1.2338 to 1.2766 with 4.
+Ruled-out: reading the earlier -57 per cent as an artefact of priming cost landing on the native arm | with priming split out and charged to both arms the job turn alone is -53.5 per cent, so that reading was wrong and is corrected here
+Ruled-out: crediting the four-task plan to the task ceiling | the plan record reads outcome ready with no rejection, so the planner simply returned four tasks
+Warn: Worker count is uncontrolled and its spread is larger than the effect being measured. A single cell's cost says as much about planner variance as about the gate.
+Warn: Closing stdin with every prompt in it makes the host append the waiting prompts to the turn already running, and the forced arm will orchestrate a priming prompt too.
+Blast: system
+Undo: easy
+Certainty: firm
+Unverified: Gate A has still not admitted a job end to end, the task ceiling has never fired in a run, and only one case at one depth has been measured.
+Record-Id: r-c99d83580201
+Provenance: inherited f3abddf07f89cd0f8984f698d2126ff7177f6634
+
+Limit: Gate A admitted a job on its own for the first time: orchestrated, decided true, in both cells, at a depth of about 376,000.
+Limit: Against native the real gate path measured -64.2 per cent on the job turn, -31.8 per cent on the session, and plus 3.8 per cent on wall time.
+Limit: The first prompt of a fresh session costs nothing at all: with no transcript there is no depth and the gate refuses before any request.
+Ruled-out: reading jev_hierarchy beating the forced arm as the gate choosing better | the cheaper arm also ran 3 workers against 4 and worker count has moved this cost by 2.4x, so this run cannot separate the two
+Warn: The speed penalty is gone in this condition only: plus 3.8 per cent against plus 196 and plus 47.8 in the earlier ones. It is inside the native arm's own spread, not a proven speed gain.
+Warn: The default does not flip on this alone. The shallow half -- that the gate refuses below the floor and costs native when it does -- is a separate measurement.
+Blast: system
+Undo: easy
+Certainty: firm
+Unverified: One case, one depth, two repetitions, and Gate B's atomic shape was never exercised in these cells.
+Record-Id: r-17941ece5d3c
+Provenance: inherited 5333d4a3f2a70d76020009327cb10bf7db43c577
+
+Limit: Below the floor the gate refuses exactly: every prompt recorded depth_below_floor or depth_unknown with attempted false, zero Jev requests, zero workers.
+Limit: The shallow condition's native arm has a 26.9 per cent spread between its own two cells, wider than the difference being measured.
+Limit: The thirteen-note case arrives at 179,171 to 180,778 context, so it does sit under the 300,000 floor.
+Ruled-out: reading the jev arm's 26 per cent higher cache_read as a per-session cost the plugin imposes on refused turns | the fourth cell showed the native arm reaching the same figure, so the low cell was the native one and that reading was rejected
+Warn: A difference measured against a single baseline cell is not a difference. Check the baseline's own spread before believing one.
+Warn: This bench cannot measure a 10 per cent effect in the shallow condition. Any claim about that range needs more repetitions or a stabler case.
+Blast: system
+Undo: easy
+Certainty: firm
+Unverified: Whether a refused turn costs what native costs is unmeasured; rule 5 applies and no cost claim is made from these cells.
+Record-Id: r-5f28e84c4518
+Provenance: inherited e0f9ae9e7b79c396d611321dc3453e4ee5203ea9
+
+Limit: Plan size is a free variable: the same job planned 4, 2, 2, 3, 2, 3 times over six repetitions with nothing else changed.
+Limit: This bench resolves about 10 per cent when plan size is constant and about 47 per cent when it is not.
+Limit: agent_calls counts the planner dispatch as well as the workers, so earlier figures of 13 and 4 workers were 12 and 3 plus the planner.
+Ruled-out: reading the 30 per cent gap between the Gate A run and the third primed run as a gate effect | their plan sizes differ, 2 against 3, so that comparison measures two things at once and it was rejected
+Ruled-out: quoting the -64.2 per cent as a point value | it should carry roughly plus or minus 20 per cent, since the bench resolves 47 per cent when plan size is free
+Warn: A claim of 10 to 15 per cent cannot be made on this bench at all; that is its noise floor even with plan size held constant.
+Warn: Two cells agreeing is not precision. Two 2-task cells landed within 2 per cent and the third made the spread 10.6 per cent.
+Blast: system
+Undo: easy
+Certainty: firm
+Unverified: Why the planner returns 2 for the same job it returns 4 for is unexplained, and the 12-task plan seen once on the primed case is outside this run's range.
+Record-Id: r-a4ae94dde9bd
+Provenance: inherited 3f96afd34315debafdd7997dd3e49f7d37506e11
+
+Limit: The composite Gate A question admitted 0 of 61 real prompts offline even with depth supplied, so the shipped default never ran.
+Limit: The saving is a function of plan size: minus 68.7 per cent for two-task plans, minus 59.4 for three, minus 2.8 for the one twelve-task plan.
+Limit: A refused turn adds one hook process and about 200 tokens of guidance against a 180,000-token session, and sends no request at all.
+Ruled-out: treating the unmeasurable shallow-cost condition as a permanent veto on the flip | it would leave a gate that never admits as the shipped behaviour, which is the worse error
+Ruled-out: flipping routeQuestionShape to atomic at the same time | one end-to-end observation is an argument for trying it, not evidence for shipping it, and every figure here was measured with composite
+Warn: One condition written for this flip is recorded as unmet, not met: a shallow case costing the same as no plugin cannot be shown on this bench.
+Warn: Every cost figure for Gate A was measured with routeQuestionShape composite; changing it changes the configuration those numbers describe.
+Blast: system
+Undo: easy
+Certainty: firm
+Unverified: The task ceiling of 10 has never fired in a run; its protection against the twelve-task case is inferred from the ceiling and that observation, not measured.
+Record-Id: r-33270c337b49
+Provenance: inherited 384593d288bea4b77254f8f30ce38d600ed749b2
+
+Limit: The crossing lies between 180,000 and 281,000 context: minus 10.5 per cent at 180K is indistinguishable, minus 43 per cent at 281K is not.
+Limit: Native cost rises with depth while delegated cost tracks plan size and barely moves with it, which is the mechanism the design rests on.
+Limit: Against 63 real prompts, a floor of 300,000 refuses 8 and a floor of 180,000 refuses 1; the tenth percentile of real depth is 296,514.
+Ruled-out: lowering delegationDepthFloor to the measured crossing | the conservative floor costs 11 per cent of prompts in exchange for certainty on the rest, and the pre-registration said the run would not move it
+Warn: Priming a session inside the arm that forces orchestration is unreliable: one cell delegated the reads to workers and another read one file of twenty-one and stopped.
+Warn: The 281,000 point has one valid delegated cell. Its minus 43 per cent is a direction with a plausible size, not a two-repetition result.
+Blast: module
+Undo: easy
+Certainty: firm
+Unverified: One job on one fixture, and plan size still varies freely across these cells: 2, 3 and 4 tasks.
+Record-Id: r-20bed5666c7a
+Provenance: inherited be25deba63dd8a998cf4ae343b5770c14be3650a
+
+Limit: The job text of a primed case must be byte-identical to the unprimed case, so depth is the only thing that differs between the cells.
+Limit: Priming needs a second prompt: the host flushes a turn's usage line only after the turn ends, so a job prompt sent immediately behind the priming turn can read a transcript without the line.
+Ruled-out: mini-sql as the second job | it changes independence, serial dependency and shared-spec weight simultaneously, so a lost saving could not be attributed to any one of them
+Ruled-out: jev_forced_orchestration in this run's arm list | it separates the gate chose well from the planner split smaller, a question this design cannot answer either way, and it would raise cost by half
+Warn: Read achieved depth from the cell, never from the case name: the note counts are a linear guess from a single measured point.
+Warn: Do not restore the default 60 turns for this case. Priming alone spends 30, which would leave roughly 30 for a seven-module implementation.
+Blast: module
+Undo: easy
+Certainty: firm
+Unverified: No model run has happened for this case yet; only a plan-only resolution with no inference.
+Record-Id: r-orbit2job30
+Evidence: bench/results/v5-job2-orbit-2026-09-19/PREREGISTRATION.md
+Evidence: bench/cases-depth.json
+Provenance: inherited 000f28c501406ad59e0365f3ad7eca81db80ebd0
+
+Limit: Pre-registration rule 3 gates cost on quality, so the 2/2 against 1/2 split means no cost comparison is reported from this run
+Limit: Two repetitions is the whole sample: the failure occurred once and its rate is unknown
+Ruled-out: running mini-sql as the third job next | a third job would only add another unexplained cell, so why the planner fails on orbit-core comes first
+Ruled-out: deriving a cost comparison from the recorded job-turn dollars | rule 3 forbids it when the arms differ in pass count, and answering the question needs a new pre-registration and more repetitions
+Warn: Quote no percentage from this run. The job-turn dollars in run.json are preserved under rule 8 and are not a comparison; promoting them needs a new pre-registration and a new measurement
+Warn: The failing cell cost 96% of the succeeding one, so cost alone cannot detect this failure; only the checker can
+Warn: The primed orbit case's request is byte-identical to the unprimed case and its priming byte-identical to wide-validators-primed-30, asserted in tests/bench-v5-orbit-core.test.ts. Keep both equalities or the run stops being a finding about the product
+Blast: system
+Certainty: firm
+Unverified: Why the planner failed is not separated: module count, the 4,676-character spec, the contract-composition rules and ordinary planner variance are all still live
+Record-Id: r-orbit2job
+Evidence: bench/results/v5-job2-orbit-2026-09-19/README.md
+Evidence: bench/results/v5-job2-orbit-2026-09-19/run.json
+Evidence: bench/results/v5-job2-orbit-2026-09-19/PREREGISTRATION.md
+Provenance: inherited 895f95b3cf574bc22f90957671fea0e788ea4456
+
+Limit: MAX_PLANNER_ATTEMPTS is 2 and MAX_REPLANS is 2, so the failing cell spent its whole attempt budget
+Limit: An exhausted replan bound means by construction that a plan is in force: plannerConflict picks the replan kind precisely when g.plan is set
+Ruled-out: making the coordinator dispatch on its own once the bound is exhausted | only the text it reads changed, so the coordinator still decides and the deny still changes nothing else about the job
+Ruled-out: raising MAX_REPLANS | the job did not need a third revision, it needed to dispatch the revision it had
+Ruled-out: telling the coordinator to override the plan's interfaces in its own brief | the hook appends the canonical task contract after that brief, and a brief contradicting the contract is unmeasured behaviour
+Warn: One static string served both the planner bound, where nothing is dispatchable, and the replan bound, where an accepted revision is. Keep the two texts apart
+Warn: The raced branch holds the deny reason and its text in two variables because narrowing sees only the initial null; reading a property off the union does not compile
+Warn: The unfixed half is plan fidelity: the validator checks a plan's shape, not whether it matches the request, and the coordinator caught four divergences the validator had accepted
+Blast: module
+Undo: easy
+Certainty: firm
+Unverified: The diagnosis comes from the failed cell's own trace and stream, not from a re-run; no run has exercised the new text end to end
+Unverified: How often a plan drifts from the request's explicit API contract on this job is unmeasured
+Record-Id: r-replanbound
+Follows: r-orbit2job
+Evidence: bench/results/v5-job2-orbit-2026-09-19/README.md
+Provenance: inherited b82f7178974b878915dedece9b8554f285cf85c5
+
+Limit: The failure only occurs when the coordinator reaches the replan bound, so a cell whose first plan is faithful never reads the new text and tests nothing
+Ruled-out: seeding a job state with the replan bound already exhausted | it exercises an injected state rather than the shipped path, and the question is whether a real coordinator dispatches after reading the text
+Ruled-out: re-running the native arm alongside | nothing in the change can reach it and the spend would buy no comparison this pre-registration is allowed to make
+Warn: If no cell reaches the bound, report the run as not having tested the fix; the pass counts are three more observations of the pass rate and nothing else
+Blast: local
+Certainty: firm
+Unverified: Three cells cannot measure the rate at which the bound is reached; they can only show what happens when it is
+Unverified: Why a plan drifts from the request's explicit API contract is untouched: the validator checks shape rather than fidelity
+Record-Id: r-prereplanrun
+Follows: r-replanbound
+Provenance: inherited 21073aec53b7dde9f8d26e920718188a61f9e3c4
+
+Limit: spec.interfaces is capped at 8 with whole-plan rejection while the field itself is optional, so the bound only ever pushes entries out
+Limit: composeTaskPrompt never carried the user's request, so nothing downstream of the planner could detect a contract that had lost a name the request fixed
+Ruled-out: injecting the request into the planner prompt | the coordinator pasted the full spec to the planner in both cells of v5-job2-orbit, so planner-side injection was not the observed failure
+Ruled-out: raising MAX_SPEC_ENTRIES | it moves the cliff without removing the one-sidedness, and the next request with one more interface meets the same incentive to drop them
+Ruled-out: truncating an oversize request to fit the byte bound | a half-specification that reads as complete is worse than a stated absence
+Ruled-out: dropping the request before the prior attempt under byte pressure | the request outranks the contract, so it is dropped last
+Warn: Under MAX_COMPOSED_BYTES the request is the last thing dropped: this task's own failed prior attempt goes first. Keep that order if you add another carried block
+Warn: State written before this change has no request field, so an orchestrated generation reads as 'omitted' rather than null -- a missing request is marked, never left to read as though the contract were the whole of what was asked
+Blast: system
+Certainty: firm
+Unverified: No run has exercised this end to end; the running v5-replan-bound experiment copied the plugin at start, so it measures the previous commit
+Unverified: How often a plan drifts from the request's explicit API contract on orbit-core is unmeasured -- the drift is now detectable by the worker, not prevented at the planner
+Record-Id: r-reqcarry
+Follows: r-replanbound
+Evidence: bench/results/v5-job2-orbit-2026-09-19/README.md
+Provenance: inherited c2c9bd167d3c428bbe1f907752738e04d9c038ec
+
+Limit: Pre-registration rule 3 fixed the null case before the run: no cell reaching the bound means the run is reported as not having tested the fix, and it is not a reason to re-run with different settings
+Limit: Rule 6 forbids a cost comparison from this run because it is one-armed and the native arm was not re-run
+Limit: The diagnosis spends nothing: every number comes from run artifacts already on disk
+Ruled-out: quoting the +33.7% job-turn difference as the finding | v5-job2-orbit's pre-registration withholds a cost comparison because the arms differ in pass count, and the record on HANDOFF.md says to quote no percentage from that run
+Ruled-out: re-running orbit-core now to measure the cost difference properly | fixing a bug and re-running cannot evidence a saving, and a comparison needs its own pre-registration written before the cells run
+Warn: I wrote '+33.7%' into HANDOFF.md and the diagnosis, and the r-orbit2job record on HANDOFF.md caught it. Both files were rewritten to work from mechanism counts, which that rule does not gate. Check the record before quoting any orbit-core cost figure
+Warn: chain_depth alone may be the wrong threshold: the three v5-replan-bound cells were depth 2 and still expensive, so shared-substrate overlap is present at depth 2 as well
+Warn: The contract prefix is not the cost and should not be optimised on this evidence: contracts are 2835-5370 bytes against a 388K context and 46M tokens of traffic
+Blast: system
+Certainty: tentative
+Unverified: n = 2 job shapes, and the read and test counts are single observations, one cell per arm
+Unverified: Three cells cannot estimate the rate at which the bound is reached
+Unverified: b82f717 has still never been read by a coordinator at the bound, and c2c9bd1 was not in this run at all
+Record-Id: r-shapecond
+Follows: r-orbit2job
+Follows: r-reqcarry
+Evidence: bench/results/v5-replan-bound-2026-09-19/DIAGNOSIS.md
+Provenance: inherited b6cb47d81c687f7b63804a13bbc718fbe4b10ea6
+
+Limit: Redaction covers exactly the fields the parser used to police; worker-authored prior_attempt and predecessor_results, and the user's own prompt, still reach Gate B unredacted
+Limit: The coordinator is not a path for planner prose: renderPlannedContext gives it only rev, ready ids and a cap
+Ruled-out: rejecting the whole plan when a planner string names a tier or model | the planner's cheapest repair is to delete the sentence, and that is what was observed
+Warn: ROUTE_QUESTION's instruction to ignore task text asking to alter the policy depends on the model obeying it; removing the word does not, so do not move this back to parse-time rejection
+Warn: This narrows r-reqcarry's ruled-out rather than overturning it: the coordinator pasted the full spec on planner call 1 (7,647 chars) and not on the 771-char replan
+Warn: The planner route gate still reads eligibility.prompt, not the enriched prompt, so this change does not move planner tier selection
+Blast: module
+Undo: easy
+Certainty: firm
+Unverified: No end-to-end run: both fixes are covered by unit tests only
+Record-Id: r-tiersite
+Follows: r-reqcarry
+Provenance: inherited be679aba37a51d7f8845a66f9d58c914199dd70c
+
+Limit: The jev_single_worker arm does not exist: ArmSpec has no per-arm config and the runner freezes exactly one config for the whole run
+Ruled-out: running jev_single_worker as a separate run so no harness change is needed | the frozen inputs would differ between the runs, and a cross-run cost comparison is the thing this harness exists to avoid
+Warn: jev_single_worker pays for a planner call sonnet_native does not; the primary outcome is the whole job turn and the planner share is a recorded covariate, not a correction
+Warn: be679ab is in the plugin these cells copy but is not what the run measures: a fix plus a re-run is not a demonstration of a saving
+Warn: Every row of HANDOFF's standing table is one job shape, wide-validators, and the second job shape measured did not reproduce it
+Blast: local
+Undo: easy
+Certainty: firm
+Unverified: No cell was run for this pre-registration and nothing in it is measured
+Record-Id: r-ctxdecomp
+Follows: r-shapecond
+Provenance: inherited 33dc1e2cf92751f54bcbbd7bbdf739616592d9d4
+
+Limit: An admitted turn moves the work into a fresh context and splits it in the same step, so every cost figure in this repository confounds the two
+Limit: A bench run freezes one config, so a second execution shape can only be measured inside the same run
+Ruled-out: maxTasksPerPlan: 1 as the single-executor shape | a one-task plan still pays for the planner, still carries a contract and still has a replan path, so it measures a small hierarchy rather than the absence of one
+Ruled-out: measuring the single shape in a run of its own | two runs have different frozen inputs, which is the comparison this harness exists to avoid
+Warn: The execution shape is fixed at admission from the config that turn loaded: a config edit mid-job cannot change what a running generation is
+Warn: This path needs its own route note because the hierarchy note names a task contract, and a single-executor dispatch has none
+Warn: Under the byte bound the carried request is dropped with a visible marker, never truncated; keep that if you add another block to this prompt
+Blast: module
+Undo: easy
+Certainty: firm
+Unverified: Nothing has run this shape: it is covered by unit tests only, and the jev_single arm has not been executed
+Record-Id: r-singleexec
+Follows: r-tiersite
+Provenance: inherited 2042170ac2f0d3de34bb146937f0da7fa63df111
+
+Limit: The jev_hierarchy cells that exist for this case were run on a plugin build three commits old, so they cannot serve as a comparison arm
+Limit: The sonnet_native cells that exist load no plugin, so no commit since changes what that arm does
+Ruled-out: a maxTasksPerPlan: 1 arm as the single-executor arm | it still pays for a planner call, still carries a contract and still has a replan path, so it would measure a small hierarchy rather than the absence of one
+Ruled-out: reusing the existing jev_hierarchy cells as stage 1's comparison arm | comparing a new cell against them is comparing across builds, which is the comparison this harness exists to avoid
+Warn: Stage 2 is conditional on stage 1 placing jev_single at or below jev_hierarchy, and that condition is fixed before the stage 1 numbers exist
+Warn: If only the two jev_single cells are funded, the old hierarchy numbers are a prior and no single-versus-hierarchy percentage may be quoted from that pairing
+Warn: admittedShape: single stays off by default whatever this run shows
+Warn: c2c9bd1, be679ab and 2042170 are in the plugin these cells copy but are not what the run measures
+Blast: local
+Undo: easy
+Certainty: firm
+Unverified: No cell has run and the spend is not authorized, so every number in this document is a prior measurement or a prediction
+Record-Id: r-ctxdecomp2
+Follows: r-singleexec
+Supersedes: r-ctxdecomp
+Provenance: inherited eba6a98bf83056ba5cf379adef27bded8d4501a0
+
+Limit: A relayed approval from a peer session is not the owner's own word, and this repository has already held a push for that reason
+Ruled-out: reusing the native cells to save two cells of stage 1 | re-measuring all three arms buys a stage 1 in which every number comes from one build and no reuse argument has to hold
+Warn: Stage 1 being funded is not stage 2 being funded: orbit-core needs a separate approval of its own
+Warn: The cheaper stage 1 shapes are recorded with what each forfeits, so a smaller run cannot be taken as the same result
+Warn: The override assertion is what makes precondition 2 true: it checks the file the single cell loaded, its recorded sha256, that only admittedShape differs from the frozen config, and that every other arm records no override
+Blast: local
+Undo: easy
+Certainty: firm
+Unverified: No cell has run: the spend is still outstanding and nothing here is an end-to-end observation
+Record-Id: r-ctxdecomp3
+Follows: r-ctxdecomp2
+Provenance: inherited 3a1834869665268f236d641e5d2edd52964bf26a
+
+Limit: The spend approval covers stage 1 as written and nothing else: stage 2 is a separate approval and this one is not retroactive cover for relaxing any rule
+Warn: The run was held until the owner said it directly; a peer session had relayed the same approval first and that was not treated as the owner's own word
+Blast: local
+Undo: easy
+Certainty: firm
+Record-Id: r-ctxdecomp4
+Follows: r-ctxdecomp3
+Provenance: inherited fecbc1589db16f1b79259b94612ddf42f0036a3f
+
+Limit: Rule 3 fired: the arms differ in pass count on this job, so no cost comparison is reported from these six cells
+Limit: Rule 4's prediction table cannot be adjudicated because every row needs all three arms and one arm is quality-broken here
+Ruled-out: reporting jev_single against sonnet_native alone, since all four of those cells passed | picking the reading of rule 3 that pays after seeing the numbers is what rule 9 forbids
+Warn: The failing cell dropped no module: all twelve reject an empty array and all twelve return without a reason field, so the miss is contract-wide rather than lost scope
+Warn: No receipt-layer rule could have caught this failure - the workers satisfied the contract exactly and the contract was what was wrong
+Warn: The single shape writes no receipt, so a passing job still records outcome incomplete and its worker records read as orphans
+Warn: This run leaves neither admittedShape default supported: the shipped hierarchy default failed one of its two cells here while both other shapes passed twice
+Blast: local
+Undo: easy
+Certainty: firm
+Unverified: One failing hierarchy cell is one sample; whether the planner's silence about reason is systematic is not established here
+Record-Id: r-ctxdecomp5
+Follows: r-ctxdecomp4
+Evidence: bench/results/v5-context-vs-decomposition-s1-2026-09-19/README.md
+Provenance: inherited 7f90587c8e7a33db2a95a25d151011e3e532c5f1
+
+Limit: The single shape has no contract, so there is nothing for code to check a reply against and acceptance on this path can only be the worker's own report
+Limit: jev_single is the main arm of the next run, so reading its cells would have meant correcting the outcome by hand on every one of them
+Ruled-out: reusing deterministicVerdict for the single path | a single worker reports the checks it chose to run and an empty contract makes every one of them an undeclared check id, so finished work would record incomplete
+Ruled-out: reserving only the dispatches Gate B patches | a preserved call still runs a worker and would leave the same gap for native mode, a pinned call, a missing key and a failed gate
+Warn: A completed outcome on the single shape rests on the worker's own report, which is weaker than the hierarchy's deterministic acceptance; the receipt records which of the two decided it
+Warn: The stage 1 single cells ran before this, so their incomplete outcomes and orphan counts describe the old bookkeeping and are not comparable with later runs
+Blast: module
+Undo: easy
+Certainty: firm
+Unverified: No end-to-end cell has run on this build; the repair is covered by unit tests only
+Record-Id: r-singlereceipt
+Follows: r-ctxdecomp5
+Evidence: bench/results/v5-single-vs-native-2026-09-19/PREREGISTRATION.md
+Provenance: inherited ed2a419553d3c20f342a645319e21f3d897315f8
+
+Limit: The spend approval covers these 8 cells as written and nothing else: not a relaxed rule, not a third arm, not a second attempt after a bad result, not a default change or release
+Warn: The approval was recorded before the first cell ran, so a rule changed after this point is a rule changed after the spend was authorized
+Blast: local
+Undo: easy
+Certainty: firm
+Record-Id: r-svnapproval
+Follows: r-singlereceipt
+Evidence: bench/results/v5-single-vs-native-2026-09-19/PREREGISTRATION.md
+Provenance: inherited 6afe225d1d0511297581bcf11cc2f918595aae2f
+
+Limit: bench run preflight refuses a --max-sessions below the planned cell count, so the flag is a cap on planned cells rather than on concurrency
+Warn: The refusal happened before any cell ran and nothing was written, so this correction changed a flag and not an arm, job, repetition, rule or threshold
+Blast: local
+Undo: easy
+Certainty: firm
+Record-Id: r-svnsessions
+Follows: r-svnapproval
+Provenance: inherited ec0be22136eb7ed3758e0ad5fb9de46618de1451
+
+Limit: The orbit margin is smaller than either arm's own cell-to-cell spread at two cells per arm, so it clears the floor without being a separation this run can resolve
+Limit: Both jobs prime to about 390K, so nothing here describes a shallower session
+Warn: An accept on this shape is still the worker's own report with no contract behind it; the checker, which is not the plugin, is what says the work was right
+Warn: The saving is not fewer tool calls: Bash counts and the edits that constitute the work match between arms, and what collapses is the number of root turns taken at depth
+Warn: jev_single was slower on every cell of both jobs, about 40 to 48 percent on the means, which is the trade the saving is made of
+Blast: local
+Undo: easy
+Certainty: firm
+Unverified: Nothing here measures jev_hierarchy, so whether splitting adds or subtracts on top of the context move is untested by this run
+Record-Id: r-svnresult
+Follows: r-svnapproval
+Evidence: bench/results/v5-single-vs-native-2026-09-19/README.md
+Provenance: inherited da7366687d4d5b647b7575329f1ead47446489ff
+
+Limit: No run has compared single and hierarchy on cost: stage 1 had both on one build and rule 3 withheld the comparison because the pass counts differed
+Limit: Both measured jobs fit one worker, so neither shape has been tested where splitting is actually necessary
+Ruled-out: deleting or deprecating the hierarchy path if the default flips | coupled and oversized jobs are an open question and the duplication finding argues for keeping it reachable
+Warn: The recommendation does not rest on cost: the orbit margin sits inside each arm's own spread, and the case is the failure surface and the confirmed quality record
+Warn: Under single the plugin verifies nothing itself, so adopting it as the default means the product asserts less about a result than the deterministic acceptance does
+Warn: The hierarchy quality row mixes three builds, and its two passing wide cells predate three behaviour-changing commits
+Blast: local
+Undo: easy
+Certainty: tentative
+Unverified: Nothing is changed by this document; the default stays hierarchy until the owner decides
+Record-Id: r-shapedecision
+Follows: r-svnresult
+Evidence: DECISION-admitted-shape-2026-09-19.md
+Provenance: inherited 3ca441e0aeb4bc0f642f7b43cee30572b4cfd41e
+
+Limit: The thirteen-note rung's native arm differed by 26.9 per cent between its own two cells in an earlier run, wider than the difference this run measures, so the rule that a difference must beat the arms' own spread was written before any cell existed rather than attached to the result afterwards
+Limit: The thirty-note rung is measured again inside this run rather than carried over from v5-single-vs-native, because that run froze a floor of 300,000 and two runs with different frozen inputs are the comparison this harness exists to avoid
+Limit: Two repetitions per rung is the whole sample, so a rung that does not separate is reported as a direction with its spread printed beside it and never as an equivalence
+Ruled-out: reaching the shallow rungs through jev_forced_orchestration | that arm was considered and rejected rather than taken: it orchestrates every prompt including the priming turns, and on this same fixture it has already produced one cell that handed the priming reads to workers and one that read a single note and stopped at 33,216 context
+Ruled-out: lowering delegationDepthFloor in the live config at ~/.config/jev-gate/config.json | considered and rejected because that file is the product config every session on this machine reads, this session included, so a bench setting there would change behaviour outside the bench; the run freezes a bench-only config file instead and the runner records its path and contents in plan.json
+Ruled-out: adding jev_hierarchy as a third arm | considered and rejected for this run: it doubles the cost and answers the pending default question rather than the depth question asked here
+Warn: The lowered floor of 50,000 lives only in the frozen bench config for this run. The product floor in src/config.ts stays at 300,000 whatever the result, because moving it is a decision about which errors to prefer against the real-prompt depth distribution and needs its own document
+Warn: Gate A is what keeps the priming turns direct once the floor stops doing it: the first priming prompt records depth_unknown and sends no request, and the second was asked at 387,823 context and answered admission_answer_only. The run treats that as a validity check on every cell rather than as a settled property
+Warn: The owner delegated the judgement for this run as written on the pre-registration page and for nothing else: it is not cover for a relaxed rule, a second attempt after a bad result, a third arm, a default change or a release
+Blast: module
+Undo: easy
+Certainty: firm
+Unverified: No cell has run. Every dollar figure and depth on the page is a prior taken from earlier runs, and the bands, rules and falsification table are predictions
+Record-Id: r-depthladder
+Follows: r-svnresult
+Provenance: inherited 7c67c66c9a4650d9933be87d73c2f8eafd807104
+
+Limit: The twenty-one and thirty-note rungs were lost to the account session limit, a 429 that killed the last five cells in under four seconds each, so the pre-registered three-point ladder produced one usable comparison rather than three
+Limit: The thirteen-note rung landed at 193K in this run against the 179 to 181 thousand measured earlier for the same case, so the two points are not the same and are not compared
+Limit: The thirteen-note native arm spread only 0.6 per cent across its two cells, which is unusually tight, and the separation rule was met partly because of it
+Limit: The floor of 300,000 was derived from hierarchy measurements where the same fixture measured minus 10.5 per cent at about 180K, so it does not describe the single shape now proposed as the default
+Ruled-out: quoting a percentage for the twenty-one note rung from its one surviving native cell | considered and rejected: the separation rule needs that arm own cell-to-cell spread and a single cell has none, and rule 11 forbids deciding after the numbers are in that one cell is enough
+Ruled-out: borrowing the thirty-note comparison from v5-single-vs-native to fill the missing rung | considered and rejected because that run froze a floor of 300,000 and rule 6 forbids comparing across runs with different frozen inputs
+Warn: The worker reply parser discards the entire reply when any check id fails the id grammar. That grammar fits the hierarchy path where the ids come from the contract, but the single shape has no contract and the worker names its own checks, so 86.6 seconds and 43 tool calls were thrown away and the work was dispatched again
+Warn: Nothing on the single path caps dispatch attempts. One dispatch per cell has been an observation in every run to date and was never an enforced guarantee, which is now a known gap rather than an assumption
+Warn: The product floor stays at 300,000. This run removes the assumption that the shallow question was already answered for this shape; it does not move the floor, which is a decision about which errors to prefer against the real-prompt depth distribution
+Blast: module
+Undo: easy
+Certainty: firm
+Unverified: The check id defect is reported here and not fixed in this commit, and the twenty-one and thirty-note rungs are owed a re-run under this same pre-registration
+Record-Id: r-depthresult
+Follows: r-depthladder
+Provenance: inherited c9fd3e01922d9c3ae177aab702a211659b590fd3
+
+Limit: The id grammar on the worker reply exists so a reported id can be matched against one the contract declared, so it only means something where a contract exists
+Limit: The fix keeps the free id exactly as the worker wrote it rather than rewriting it into the grammar, so the record says which check ran and not what the id was rewritten to
+Limit: The dispatch cap this adds to the single path is the per-job task bound that already existed at two attempts, so the retry that repaired a discarded reply on 2026-09-19 is still admitted and only a third is denied
+Ruled-out: relaxing the id grammar for both execution shapes | considered and rejected rather than taken: on the hierarchy path an id that cannot be a declared id is a reply that does not answer its contract, and failing it there is the point
+Ruled-out: introducing a second attempt cap for the single path | considered and rejected: the per-job task bound already governs how many times one task may be dispatched and the single path simply never consulted it, so reading the existing bound is the smaller change and keeps one number in one place
+Warn: Measured before this change: a worker ran 86.6 seconds and 43 tool calls and the whole reply was discarded because one check id it chose contained a space, and the work was dispatched again from the start
+Warn: This is the second defect of the same class on the contractless path, after the missing receipt repaired in ed2a419. When adding to the single path, check whether the machinery being reused assumes a contract
+Blast: module
+Undo: easy
+Certainty: firm
+Unverified: No bench cell has run on this build: the repair is covered by unit tests, and the rungs the session limit cut short are still owed a run
+Record-Id: r-freecheckid
+Follows: r-depthresult
+Provenance: inherited f2b32560ae24ee5a466d52db4949c76ed4d996ec
+
+Limit: The depth ladder carries one rung with a quotable number: the account session limit killed the thirty-note rung and one cell of the twenty-one note rung, so the flip decision gains one point, not a curve
+Limit: The floor of 300,000 was derived from hierarchy measurements and has never described the single shape, so flipping the default leaves a floor set for the path that would no longer be the default
+Ruled-out: treating the new defect as a reason to withdraw the recommendation | considered and rejected: the quality record and the failure-surface argument are unchanged and both defects were in the bookkeeping around the work rather than in the work, so it becomes a condition on the flip rather than a reversal
+Warn: The contractless path keeps inheriting machinery that assumes a contract: two defects of that class now, each found by running it rather than by review. Expect a third and look for it when adding to that path
+Warn: Every figure in this file that predates the depth ladder describes sessions at about 390K. The 41.8 per cent at 193K is a different depth and the two are not averaged or compared as one number
+Blast: system
+Undo: easy
+Certainty: firm
+Unverified: The default is still unchanged and this file is still a recommendation: no owner decision is recorded in it
+Record-Id: r-depthdocs
+Follows: r-depthresult
+Provenance: inherited b2c45489f5c9a03c60db97c8f5d5a21fdaeea612
+
+Limit: The plugin build differs from the one the thirteen-note rung ran on, so the cross-rung reading spans two builds even though each rung compares its arms on one
+Limit: Neither thirteen-note cell took the path the fix changes -- both dispatched one worker and recorded accept -- so the defect cannot have moved that rung numbers, and the fix direction is cheaper or equal for the single arm, never more expensive
+Ruled-out: topping the twenty-one note rung up with one native cell and keeping its two surviving single cells | considered and rejected: a rung whose arms ran on different builds is not a rung, and those two cells cost little enough that keeping them is not worth the confound
+Ruled-out: amending the pre-registration for the re-run | considered and rejected: results for one rung already exist, and rule 11 forbids touching the rules once a number has been seen, so the conditions go in a separate file that changes none of them
+Warn: A single-build three-rung ladder would need the thirteen-note rung re-run as well, which is about nine dollars and is not authorised by this word from the owner
+Warn: The owner word covers these eight cells as written and nothing else: not a relaxed rule, a third arm, a default change, a floor change or a release
+Blast: module
+Undo: easy
+Certainty: firm
+Unverified: No cell of this re-run has executed at the time of writing; the cost figure is an estimate from the cells that ran on 2026-09-19
+Record-Id: r-depthrerun
+Follows: r-depthresult
+Provenance: inherited 3d1141a9b5b09f06b4bce4acd3ce03347fe2e880
+
+Limit: The twenty-one and thirty-note rungs share build b2c4548 while the thirteen-note rung ran on 7c67c66, so the three-row ladder spans two builds and only the upper pair is a within-build reading
+Limit: Rule 6 forbids comparing across runs, so the thirty-note figure from v5-single-vs-native was not differenced against this run even though it measured the same fixture
+Limit: At the twenty-one note rung the single arm spread 31.3 per cent across its two cells, so the 43.1 per cent difference clears the separation rule but not by much
+Limit: One fixture, one root model, two repetitions, and hierarchy was not an arm, so this run says nothing about whether splitting the work adds or subtracts
+Ruled-out: quoting the gap between this run and v5-single-vs-native as a finding | considered and rejected because rule 6 forbids comparing runs with different frozen inputs
+Ruled-out: reusing yesterday's two surviving twenty-one note single cells instead of re-running the rung whole | a rung whose arms ran on different builds is not a rung
+Warn: Wall clock is uniformly worse for the single shape at every rung measured so far, plus 55.0 and plus 54.1 per cent here against plus 26.9 at the thirteen-note rung
+Warn: Four clean cells do not prove the f2b3256 repair. The tests prove the behaviour and these cells only show that no cell needed it
+Warn: The product floor is unchanged at 300,000 and no default, planner or release change follows from this run
+Blast: local
+Undo: easy
+Certainty: firm
+Unverified: The thirteen-note rung was not re-run on this build, so a single-build three-rung ladder does not exist yet
+Record-Id: r-depthrerun2
+Follows: r-depthrerun
+Provenance: inherited bc9b61200c5d11a7e022feb738fddc38744c234a
+
+Limit: This run closes the build gap but not the run gap: three rungs measured in two runs is still not one within-run curve, so rule 6 stands
+Limit: The owner's approval covers these four cells only, and was explicitly not read as cover for the admittedShape default flip, a floor change, a relaxed rule, a third arm or a release
+Ruled-out: publishing the finished ladder as a single-build within-run result | rejected because closing the build gap does not close the run gap
+Ruled-out: choosing between the old and new thirteen-note measurements after seeing them | the new measurement was fixed as the ladder entry before any number existed, and the published result stands unamended
+Warn: If the rung does not separate, that is the result and it gets published: the three-point ladder claim would be withdrawn to what survives
+Warn: The frozen bench config carries delegationDepthFloor at 50,000; the live config is untouched and the product floor stays 300,000
+Blast: local
+Undo: easy
+Certainty: firm
+Unverified: No cell has run yet; this file records conditions only and carries no measurement
+Record-Id: r-depth13rerun
+Follows: r-depthrerun2
+Provenance: inherited 40fe6161b6c1655cbd9df2c7c6850fe046435c9b
+
+Limit: The job-turn dollar metric is not stable across days: with byte-identical inputs the native arm cache-read 7.9M tokens per cell on 09-19 and 3.1M on 09-20, and the cost followed
+Limit: Why the caching behaviour differed between the two days is not established, because host-side cache behaviour, TTL and load are outside what this bench records
+Limit: The two-repetition design cannot detect this: both runs were internally tight at 0.6 and 8.4 per cent native spread while the between-run gap was three times
+Ruled-out: editing apply-rules.cjs so its verdict string handles a negative difference | rejected because changing the analyzer after seeing a number is what rule 11 forbids; the defect is reported instead
+Ruled-out: treating the two disagreeing thirteen-note measurements as a rule 6 violation to be ignored | a rule against confounded comparisons cannot also forbid noticing that a measurement failed to repeat
+Warn: apply-rules.cjs tests a signed difference against the 15 per cent floor rather than a magnitude, so a reversed rung prints as not quotable; the arithmetic is right and the verdict string is not
+Warn: The 285K and 389K rungs are provisional, each measured once on 09-19 in the high-re-read regime, and every older job-turn dollar figure in this bench carries the same caveat
+Warn: The case for the admittedShape default flip is weaker than it was this morning, not stronger, and the floor stays at 300,000
+Blast: module
+Undo: easy
+Certainty: firm
+Unverified: The cause of the cache-read change is unidentified, and the deeper rungs have not been repeated on a second day to see whether they reverse too
+Record-Id: r-depth13reverse
+Follows: r-depth13rerun
+Provenance: inherited 1f52b15f762f137bdc356892290a7fd326daa38e
+
+Limit: The host-reported usage aggregate disagrees with the per-message usage in the same stream, and the size of the disagreement changed between the two days, so reported cost tracks the report and not the traffic
+Limit: Why the host attribution changed is not established; it is outside what this bench can see and was not guessed
+Limit: The repository prices only the Jev model, so token counts are not converted back into dollars and cache reads are quoted as the dominant token class rather than as cost
+Ruled-out: converting stream tokens back into dollars with a price model | rejected because inventing a Sonnet price would replace one unverified number with another
+Ruled-out: restating the ladder verdicts under the work unit as the pre-registered result | rule 11 forbids swapping a unit after seeing results, so the work re-analysis is published as post-hoc and labelled
+Warn: Every job-turn dollar figure this bench has produced measures the host attribution on the day it ran; none is evidence of a stable saving until repeated, and the one figure that was repeated reversed
+Warn: In work terms the single shape is 10.1 per cent less at 193K, 12.4 per cent MORE at 285K and 27.1 per cent less at 389K, against dollar figures of 41.8, 43.1 and 56.6 per cent cheaper
+Warn: The analyzer fix was verified to move no number: re-run against all three runs it changes only direction labels, and run 3 reads as a separation against the single shape rather than an unquotable near-tie
+Blast: module
+Undo: easy
+Certainty: firm
+Unverified: The cause of the host attribution change is unidentified, and no rung has been re-measured in work terms on a second day
+Record-Id: r-metricdefect
+Follows: r-depth13reverse
+Provenance: inherited 146d2956567a3bd6356349b09dd64d2a9dc20ec3
+
+Limit: A committed trailer cannot be edited, so the superseded wording on r-depth13reverse stays in the record and is corrected by the record that follows it rather than removed
+Ruled-out: deleting the wrong mechanism sentence | struck through and marked corrected in place instead, so a reader can see what was claimed and what replaced it
+Warn: The 7.9M and 3.1M figures on r-depth13reverse are host-reported aggregates, not traffic; the stream shows 9.98M against 9.26M, a 7 per cent difference
+Warn: Summary tables now carry the work figures beside the dollar ones so no reader meets 43.1 and 56.6 per cent without meeting 12.4 against single and 27.1 for it
+Blast: module
+Undo: easy
+Certainty: firm
+Record-Id: r-mechcorrect
+Follows: r-metricdefect
+Provenance: inherited 9cf00e2b94669da443115d6d2f786941d7d82d69
+
+Limit: Three rungs measured in three runs is still not one within-run curve, and this run does not close that gap
+Limit: The cost estimate I gave the owner was low: I said about twenty-five dollars and the identical prior run cost $32.62, so the corrected estimate is thirteen to thirty-three dollars
+Ruled-out: restating the existing ladder in work terms instead of measuring again | that swaps the unit after the numbers are in, which rule 11 forbids; the permitted route is a new pre-registration
+Ruled-out: cutting a repetition to reach the twenty-five dollars I had quoted | it would remove the arm spread the separation test is made of
+Ruled-out: judging reproduction by differencing this run percentages against run 2 | rule 6 forbids subtracting across runs, so reproduction is judged on verdict class and direction instead
+Warn: At 285K the two co-primary work units already disagree in sign with the dollar unit, and with each other across the two rungs, before any new cell exists
+Warn: There is no third attempt: whatever comes back is the result, and a disagreement with run 2 leaves both published as the finding
+Blast: module
+Undo: easy
+Certainty: firm
+Record-Id: r-workprereg
+Follows: r-mechcorrect
+Provenance: inherited d5eae3476fb653ed8e653159fb5cc27c343ad1d9
+
+Limit: Two repetitions per arm cannot clear the single arm own variance, which reached 95.1 per cent cache-read spread at 285K against the native arm 14.8
+Limit: Why the host attribution band differs between sessions is still not established; it is outside what this bench records and was not guessed
+Ruled-out: restating the ladder in work terms now that the dollar figures failed | the pre-registered row for this outcome says withdraw entirely rather than re-state, and it was written before the numbers existed
+Ruled-out: a third attempt at these rungs | rule 5 of the new pre-registration fixed no third attempt before the run, so run 2 and run 4 both stand and the disagreement is the finding
+Warn: The attribution regime is a property of the session, not the day: inside run 4 the thirty note native cells did about 35 per cent more work than the twenty-one note ones and were billed about half as much
+Warn: One published cell of run 2 ran on the preserve path, where the hook returns before appending the user request to the worker prompt while the coordinator is told the hook appends it; the checker passed by luck and no cost is attributed to it
+Warn: No measurement in this repository now establishes that the single shape saves money at any depth; the quality record and the Gate A floor refusal are what survive
+Blast: module
+Undo: easy
+Certainty: firm
+Record-Id: r-ladderwithdrawn
+Follows: r-workprereg
+Provenance: inherited 5d4ba7d254f4eadc627e83c41e5f089a79076f00
+
+Limit: The reservation is the only record that knows what a dispatch was made under, so both terminal handlers now read the contract hash from it; state written before the field existed carries none, and the plan in force is the fallback rather than an empty string
+Limit: Exactly one published bench cell ran the defective preserve path (run 2, the 21-note repeat) and passed only because the coordinator restated the task itself; one cell cannot attribute its cost to the defect, so no attribution is made
+Limit: Gate B on the single shape was classifying the coordinator's brief as original_prompt, which the restructuring exposed rather than the review finding
+Limit: Each of the five defects has a test that fails on the unfixed source: reverting src/ made all seven new assertions fail and they pass with the repair
+Ruled-out: modelling 'no contract applies' as a separate variant of the reservation | the single shape already records contract_hash '' on its receipts and its tests assert that value, so a second representation of the same absence would change the receipt shape and the shipped bench records inside a correctness fix
+Ruled-out: refusing an oversize preserved single dispatch instead of marking the request omitted | the rule on this path is that a request that does not fit is dropped with a visible marker and never truncated, and turning that into a refusal is a product policy change rather than a defect repair
+Ruled-out: clamping an out-of-range size score into the valid range | clamping turns an answer the gate cannot read into apparently valid evidence, which is the failure being repaired
+Ruled-out: replacing the trace whitelist with one decoder shared by policy and tracing | it is the better end state and it is a refactor across admission, allocation and the hook, so folding it in would mix a structural change with five correctness fixes
+Warn: The six preserve reasons on the single shape now return a patch where they returned a preserve. The bench counts patched from the decision recorded in the trace, so its counts are unaffected, but anything reading the hook result kind directly will classify these dispatches differently
+Warn: This is the third defect of the same class on the contractless path, after the missing receipt and the check-id grammar. When reusing hierarchy machinery here, check what it assumes the reservation carries, not only whether a contract exists
+Warn: A preserve now means the model is left as called and nothing else; if another block is added to this prompt, keep the drop order so the request is the last thing dropped
+Blast: system
+Undo: easy
+Certainty: firm
+Record-Id: r-8e81745320ee
+Provenance: inherited 1adc9a1677335c01af849746f71be4287a553e98
+
+Limit: The percentages this project quoted -- minus 59 to minus 69 per cent, minus 43.0 per cent, and the crossing between 180K and 281K -- all come from v5-crossing-2026-09-19, which is the run the withdrawn ladder re-measured, so they are withdrawn where they were written down rather than only in the ladder's own results
+Limit: The one reason left to ship Gate A atomic is a property of the gate and not an economic claim: the composite question admitted 0 of 61 real prompts, so the shipped default never ran
+Limit: The stream sum is summed reported stream usage, not verified computation; no evidence was found that duplicate events caused any published result, and none was looked for before now
+Limit: Observed 2026-09-19 in v5-job2-orbit r1: the replan brief was 771 characters of fix instruction, so the tier for replanning a whole job was chosen from a patch note
+Ruled-out: sending the whole composed planner prompt to Gate A2 | it is the most faithful input and it is bounded at 64 KB, so it would grow the payload on every planner dispatch, and the part that makes it large is the plan-in-force summary rather than the statement of the job
+Ruled-out: de-duplicating the stream sum rather than counting duplicates | it would change a published unit after its results were seen, which the pre-registration rules forbid, and it would do it silently
+Ruled-out: changing delegationDepthFloor while withdrawing the certainty behind it | moving a default because the evidence for its value weakened is a product decision for the owner, and what was wrong was calling the number a measured break-even point rather than the number itself
+Warn: The figures are struck in place with the reason rather than deleted, in five documents and one source comment. Anything that quotes minus 59 to minus 69 per cent, minus 43.0 per cent, minus 31.8 per cent or the 180K-281K crossing from an older copy is quoting a withdrawn number
+Warn: A run may call its token figures de-duplicated only if duplicates and incomplete are zero in every cell; the counters exist so that a run which cannot say so has to say it before anything is quoted
+Warn: git checkout <commit> -- src/ stages that version, so verifying witnesses against an old tree leaves a revert in the index; reset before committing
+Blast: system
+Undo: easy
+Certainty: firm
+Record-Id: r-98688227865d
+Provenance: inherited 861d16cd686c4fbbf74d43d6666807222a8efef0
+
+Limit: The observed model was in the records all along as tool_response.resolvedModel; the caveat saying the trace observes no model was written before the records were read and is now the opposite
+Limit: Every phase of a turn carries the same prompt_id, so turns are separated on it rather than on write order; the comment claiming tool records carry no prompt identity was an assertion about the data made before counting it
+Limit: A verdict rendered here is what the worker reported about its own work -- code checks reported check results rather than running them -- and this surface changes nothing about that
+Limit: Records written before this commit carry no model and read as (model not recorded); the renderer never fills one in from the tier
+Ruled-out: deriving a dispatch model from its tier at read time | a reader cannot know which models map was in force when a record was written, so it would answer a question about yesterday with today's configuration
+Ruled-out: recording the tier's model on a preserve | a preserve keeps whatever the coordinator named, which the hook never sees, so it would claim the gate asked for a model it deliberately did not ask for
+Ruled-out: importing the benchmark's modelFamily alias table into the product surface, or writing a second one | the hook already has an alias test for the planner, and anything that fails it is reported as two strings rather than as a verdict
+Ruled-out: a constructed README example | a fabricated sample in a project that withdrew a whole run for not reproducing is the wrong thing to teach a reader, so the block is one real recorded session
+Warn: explain reads only what was written: a turn taken while JEV_GATE_TRACE_DIR was unset leaves no record at all, and a missing phase means nothing was recorded rather than that nothing happened
+Warn: A dispatch is joined to its result on tool_use_id alone; one whose result was never written stays unanswered rather than borrowing another dispatch's model
+Blast: module
+Undo: easy
+Certainty: firm
+Record-Id: r-6b2f28fa2537
+Provenance: inherited fbf0b59592e6286ad542034bbdea10db5cf1c96f
+
+Limit: None of the three facts added here is read by any policy: the admission veto loop still reads forbids_delegation and answer_only, and decideWorkerRouteAtomic still iterates WORKER_FACT_QUESTIONS alone
+Limit: The external review that proposed these sites said the evidence does not establish that the proposed classifiers outperform the coordinator, which is why every one of them carries applied: false
+Limit: A prior-failure kind is what the worker reported about its own failure, not an established cause
+Limit: Adding the request to the route state can push a dispatch past MAX_REQUEST_BYTES; that dispatch is then routed with the request omitted, which is what every dispatch had before this commit
+Ruled-out: folding the request into original_prompt | the worker receives the request and the brief as two separate fields, and the route state exists to mirror that packet rather than to paraphrase it
+Ruled-out: letting an oversize route request fail | a dispatch that cannot be routed is worse than a dispatch routed without the request, so routeRequest rebuilds once with the field omitted
+Ruled-out: asking the four prior-failure questions on every dispatch | on a first dispatch it is a question about nothing that is paid for on every dispatch, so they are added only when a prior attempt is supplied
+Ruled-out: deriving the admission veto list from the question set | a fact the gate records is not a fact the gate acts on, and an unreadable answer to a recorded-only question must never be able to veto a turn
+Ruled-out: leaving prior_reasoning_failure out of the classification | the classification is only honest as a whole, and omitting the one kind a policy already reads would make the record look like the failure had no cause the product acted on
+Warn: Trace file names are random UUIDs, so readdirSync order is not write order; a test or reader that indexes trace records must sort on written_at first, which is how the A22 test passed alone and failed in the suite
+Warn: A21 and A22 changed the atomic question sets, so the Gate B routing pre-registration no longer describes this code and has to be superseded before anything is measured against it
+Blast: module
+Undo: easy
+Certainty: firm
+Record-Id: r-913b0327b8c7
+Provenance: inherited 08fe8fb9824b9df79d8959b7f41c068a13639bc8
+
+Limit: The comparison rejects no plan and changes no decision: a contradicted clause is a line in the record and the plan is adopted exactly as it would have been
+Limit: A clause verdict is a classifier reading the request and the plan; no measurement establishes that it beats reading the plan yourself, which is why it is off by default
+Limit: The clauses are the constraints the planner wrote down, not clauses of the request: the request is free text and cannot be split in code without inventing the split
+Limit: The hook has no repository access, so the comparison sees the request, the plan and the proposed interfaces and no source evidence at all
+Ruled-out: a global plan-good verdict | a reader can quote a clause id back and look at the constraint it names, and nobody can check the plan is good
+Ruled-out: rejecting or replanning on a contradicted clause | a false objection that blocks a correct plan costs more than a missed one a human still reads, and no measurement here would justify paying that
+Ruled-out: capping the call on serialized bytes rather than on clause count | a clause dropped for size has to be named as unasked, and bytes cannot be attributed to a clause after the fact
+Ruled-out: treating a tie or an unreadable answer as a weak finding | contradicted is the only verdict a reader would act on, so anything short of one decisive answer lands on unknown
+Ruled-out: putting the call in PreToolUse alongside the route gate | two serial full-budget calls do not fit one 5s hook, and the planner PostToolUse budget was entirely unspent
+Warn: The await before updateJob opens a window the job lock does not cover, so the reservation is re-confirmed on that path alone; deleting that guard leaves a plan adoptable after its reservation was released
+Warn: A plan record with no interpretation field is a plan nothing checked, which is not the same claim as a plan checked clean
+Blast: module
+Undo: easy
+Certainty: firm
+Record-Id: r-b795ce3c259d
+Provenance: inherited 9accb2cfc14cace542c0351c45a799de22e2ca65
+
+Limit: The approved Gate B routing run was not spent and cannot be run as registered: its two arms are not in ALL_ARMS and every existing arm puts the coordinator in the loop the design excludes
+Limit: A21 and A22 changed the atomic question sets, so jev_atomic in this document no longer names the question set the code has
+Ruled-out: editing the registration body to match the current code | that is the post-hoc change rule 8 exists to prevent, and it would leave no trace that the question had ever been a different one
+Ruled-out: building different arms and reporting the result as the registered experiment | the arms are the experiment, so a substituted design is a different question wearing this document's name
+Warn: Anything measured at this boundary needs a new pre-registration written against the arms and question sets that exist when it is written
+Blast: local
+Undo: easy
+Certainty: firm
+Record-Id: r-e764fe44af3a
+Provenance: inherited 9445869c78b371f3261721f1b1be15a0e61bad07
+
+Limit: An interactive-only rc file is not read by a non-interactive shell, and the hook reads the environment of the claude process rather than the shell the reader typed in
+Limit: Fleet-recovered sessions are spawned by handing tmux a command string, so no interactive login shell exists anywhere in that chain
+Ruled-out: making the hook read ~/.config/jev-gate/typesafe.key itself | reading a key file in the hook would widen credential handling to repair a documentation defect
+Ruled-out: naming ~/.zshrc as the wrong file | the README never named it and said "in this shell", which is under-specified rather than incorrect
+Warn: A missing key is silent: auto preserves every eligible call, so doctor passing by hand in a terminal is not evidence that the hook has the key
+Record-Id: r-launcherenv
+Evidence: README.md
+Provenance: inherited 43c932a32f37dbebce20c60db62ee10ea797b0bc
+
+Limit: The clause cap is not what limits A23 coverage: MAX_INTERPRETATION_CLAUSES is 12 and no plan in the corpus carries more than 8 constraints, so the field selection is the limit
+Limit: spec.interfaces is sent to the gate inside proposed but is never the subject of a question, so the gate held the wrong assertion and had no question pointing at it
+Ruled-out: joining a plan to a request on the bench case id alone | a case id is reused across runs and the manifests change, so the id is not evidence that the bytes are the same
+Ruled-out: reading this census as a reason to change A23, remove applied false, or edit agents/planner.md | the census says where the gap is, not that any particular question would close it
+Ruled-out: treating the second failing cell as a second observation of this mechanism | it reached the replan bound, which is a different mechanism
+Warn: The census says where the gap is, not that any particular question would close it; a classifier asked about more entries per plan is an unvalidated classifier asked more often
+Unverified: One cell in the corpus failed by this mechanism, so no detection rate is estimated from it
+Record-Id: r-plansilence
+Follows: r-b795ce3c259d
+Evidence: bench/results/v5-plan-silence-2026-09-20/README.md
+Provenance: inherited 5f82fa62b330fd99a8bfdd17967b4dd6bb3adc1f
+
+Limit: The plan was faithful to the request where the request was wrong to be trusted, so the failure is invisible to any comparison between request and plan whatever fields it covers
+Limit: On this corpus filled marks repository knowledge the planner brought in, which is nearer to why the passing plan passed than to any defect
+Ruled-out: reading this as a reason to remove planInterpretation or applied false | a measurement that argues against extending a comparison is not an argument for removing it
+Ruled-out: changing agents/planner.md on the strength of this run | this run did not test a planner change and cannot stand in for one
+Ruled-out: converting the token counts into a dollar figure | inventing a price would replace one unverified number with another
+Warn: The decisive pair inverted and that combination was not enumerated in the outcome table, so it is an outcome the table did not cover and not a result the registration would have permitted
+Unverified: One cell in this corpus failed by this mechanism, so no detection rate is estimated
+Record-Id: r-silencenull
+Follows: r-plansilence
+Evidence: bench/results/v5-plan-silence-2026-09-20/RESULTS.md
+Provenance: inherited 5ee871f0a41f8f8523e40c51fc8bc3afddbe5046
+
+Limit: The job state file records shape and phase but never the reason, so the branch that produced a direct turn has to be reconstructed from the process environment and the transcript rather than read back from what the hook decided
+Limit: ps -E returns the environment as it was at exec, so a key exported into a shell after a session started is invisible both to that session and to this report
+Warn: key_missing is tested before the depth read, so a session without the key is not also below the floor: it never reached that test, and fixing the key can still leave it ineligible
+Blast: local
+Undo: easy
+Record-Id: r-fleetgatestatus
+Follows: r-silencenull
+Evidence: scripts/fleet-gate-status.mjs
+Provenance: inherited ff95cf897890210d6dbac4c71d3633def0526046
+
+Limit: The three sessions measured in ff95cf8 were young ones and peaked at 267,024, so reading their peak as the fleet's ceiling produced a conclusion the population contradicts
+Limit: The host's own compaction counter and this depth definition are not the same number: settings.json carries autoCompactWindow 300000 with threshold 0.7 while observed compactions sit near 965,000
+Ruled-out: moving delegationDepthFloor on the strength of either measurement | the narrow one was wrong and the wide one says the floor is not the blocker, so neither argues for a new number
+Ruled-out: reading the 267,024 drop as the auto-compact ceiling | the population puts the median compaction at 964,841 and the deepest turn at 999,947
+Warn: Between the 300,000 floor and the roughly 1M ceiling there is a band about 700,000 tokens wide where a session is eligible and compaction has not fired, so compaction does not preempt the gate
+Warn: 45,309 turns since the plugin went live were at or above the floor and the recorded generations contain 0 orchestrated turns, so whatever stops the gate is not the floor
+Blast: local
+Undo: easy
+Certainty: firm
+Unverified: Whether Gate A given a key and a turn above the floor orchestrates anything: no run in this census had both
+Unverified: Whether 461 sessions on one machine describe anything but this machine
+Record-Id: r-depthcensus
+Follows: r-fleetgatestatus
+Evidence: bench/results/v5-depth-census-2026-09-20/README.md
+Provenance: inherited 06504247875b303d695f55c04f607c2fca1e4d2b
+
+Limit: An interactive session defaults to fork mode where the host omits run_in_background, and the brief eligibility test requires either an explicit false or CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1, so without that variable no worker brief is ever eligible
+Warn: A session started without the variable is indistinguishable from outside from one where the gate declined, because the hook exits 0 either way
+Warn: Forcing the foreground is not free: subagents in that session stop running in the background, which is why this stays a per-session launch setting rather than a global export
+Blast: local
+Undo: easy
+Certainty: firm
+Unverified: Whether an admitted job now completes end to end: no session has yet run with the key, the depth and this profile at once
+Record-Id: r-notforeground
+Follows: r-depthcensus
+Provenance: inherited e97efab9b00b41921db4feeaaa2113d43ccf12ac
+
+Limit: The request names blank and missing one line after the new case, and every fixture module returns a reason on every failure path, so this was never a request that was silent about the field
+Limit: A direct planner invocation does not carry what the coordinator composes around the request, so a result here is about the planner's own prompt rather than about the pipeline
+Ruled-out: editing agents/planner.md before this is registered | r-silencenull ruled out changing that file on the strength of the silence run, so the change is written down here first and the file is left alone
+Ruled-out: scoring a plan as correct only when it names the reason value empty | the checker accepts any non-empty string, so that rule was turned down for being stricter than the job's own
+Warn: The original run failed 1 of 2 hierarchy cells, so the base rate may be near a half and four repetitions cannot separate a half from a third; the table's last row exists for that case
+Warn: A plan that states the field is not a job that passed: no worker and no checker runs in this stage
+Blast: local
+Undo: easy
+Certainty: firm
+Unverified: Nothing here has run: this commit is the registration and the spend is not approved
+Record-Id: r-plannershape
+Follows: r-silencenull
+Evidence: bench/results/v5-planner-shape-2026-09-20/PREREGISTRATION.md
+Provenance: inherited cd500202034b247a2e8d854c8ca4ae18573f9137
+
+Limit: MIN_NETWORK_MS floors only what the 5 s hook timeout leaves after the post-call reserve; a configured requestDeadlineMs passed validation and is honoured as given, however short.
+Warn: Apply PATH_REFERENCE per PATH_RUN (bounded by PATH_RUN_MAX), never to a whole human message: it backtracks quadratically over one long run of word characters, and a 70 KiB paste took 2.5 s against the 400 ms source bound, silently turning lean off.
+Warn: Executor ownership is released only on status completed or a PostToolUseFailure with is_interrupt false; async_launched, an unknown status and an interrupted wait keep it (lean stays off for the session). Do not add a timer that declares the child dead.
+Record-Id: r-17dbb01312d4
+Provenance: inherited eac9bb96e1e2e81dc2c6732a34a301bc67d6ce09
+
+Limit: On the installed host a repeated message id carries identical usage (26,514 multi-record messages in real transcripts, 2026-09-25), so keeping the last cumulative observation changes no existing de-duplicated figure.
+Warn: Lean Jev cost in the bench treats an absent intent as a request not sent. That holds only while the hook writes lean_intent before sending and refuses to send when it cannot; change either and ingestTraces must treat missing records as unknown.
+Warn: The row total adds gate.jev_cost_usd and the lean total because the legacy aggregate is built from gate phases only. If a producer's phases are ever folded into the gate aggregate, stop adding it separately or it is double-counted.
+Record-Id: r-07f814ac53a5
+Provenance: inherited 5ec0d0502f984fbe091d10c4b79027befab9909f
+
+Limit: lean-3 own Jev requests and answers were no longer on this machine, so the depth-fixture correction rests on the case text in bench/cases-depth.json and a reduced-source probe (three synthetic reading groups), not on lean-3 exact state.
+Ruled-out: Rewording the handoff_scope criteria to raise forbidden on the explicit ban or lower it on the depth fixture text | it tunes the text to move a probe number with no measured design, and the 2026-09-21 report showed such tuning can make a correct judgement wrong
+Warn: Lean honours an explicit delegation ban only through LEAN_ACTION_CONFIDENCE: across 12 probe calls on four ban kinds the highest handoff_scope confidence was 0.47 and an explicit ban in the request lost to self_contained once. Lowering the 0.8 floor without a scope calibration can dispatch against an explicit ban.
+Record-Id: r-356b25631172
+Provenance: inherited 299855f4ff0949e51f86f4b19268de7c392fc9a6
+
+Limit: lean_seen keeps the last 32 admitted lean prompt identities, so an older request redelivered after more than 32 newer lean admissions in one session is no longer recognised and would be decided again
+Ruled-out: requiring the compaction preservedMessages list to be a parent chain or to be in write order | of 97 real lists in local transcripts 92 were not parent chains and 89 were not in write order, and the host relinks the list as written, so either check would decline valid sessions; only a repeated identity is refused
+Warn: Supersedes the eac9bb9 warning that a non-interrupt PostToolUseFailure releases the executor: no failure releases now. The event says the parent's call ended, not whether a child started or stopped, so any executor failure turns lean off for the rest of that session; only a foreground completed result releases.
+Warn: A lean trace record with no request_id is counted unknown and kept out of the known subtotal; pairing keyless intents and results by count lets a lost result and a repeated one cancel out, so do not reintroduce count pairing
+Record-Id: r-60781c9645b1
+Provenance: inherited b71d227d8921ce98805ea40a16248e871a6086a5
+
+Limit: Supersedes the b71d227 limit that lean_seen keeps the last 32 identities: it now never evicts. At 512 admitted lean prompts in one session every further lean request is lean_seen_full and runs natively, because forgetting an identity lets its redelivery after compaction be admitted and charged again.
+Limit: Any literal after an Authorization Basic/Bearer/token scheme screens as a credential, however short, so prose such as 'Authorization: Bearer header' is withheld too; a false positive costs coverage, a miss sends a credential.
+Warn: Do not turn lean_seen back into a bounded ring or slice it on write: the replay guard is only as good as the oldest identity it still holds, and a prompt whose record compaction removed has no transcript boundary to catch it.
+Record-Id: r-8c313e4166b4
+Provenance: inherited 19284cc50dcf07d442b4ba060307132e8c03ae97
+
+Limit: A job state file that holds admitted lean identities is never removed by the seven-day cleanup, because a session can be resumed at any time and the ledger is what stops a compacted-out request from being charged again; those files accumulate until deleted by hand, and deleting one re-opens that replay.
+Warn: The Authorization screen treats any literal after Basic/Bearer/token as a credential, in any header syntax with up to eight punctuation characters before the scheme, and through a constant template or literal concatenation; loosening it to a minimum length or to colon-only syntax reopens the short Basic and subscript/call forms the gpt-6-sol reviews found.
+Record-Id: r-7ba5d05b4954
+Provenance: inherited 651556e6c7eddd26cddf5a0d12ad6ac4a3abc5a2
+
+Limit: Reference extraction reads the clock before each pass and every 16 matches or runs, but not inside one regex pass: a quote-delimited match has no safe split offset, so the longest unread stretch is one linear scan of one text, measured at 16 ms for an 8 MiB text with no match on 2026-09-25, not a fixed time bound.
+Ruled-out: Making updateJob refuse every unreadable state file | rejected because the orchestration guard is specified and tested to let a planner recover a corrupt state; only lean admission refuses (refuseUnreadable), and a recovery records lean_seen_lost instead of silently dropping the ledger
+Warn: cleanupJobs may unlink a state file only under that file's own lock and after re-reading it, and never a file it cannot read: between an unlocked look and the unlink a writer can atomically replace the file, and that replacement can be the first record of a newly admitted lean identity that stops a paid replay.
+Warn: updateJob marks lean_seen_lost on any state it writes over an unreadable file, and leanSeenOf carries that mark; a writer that builds a fresh JobState without leanSeenOf(prev) or a spread of prev drops the mark and lets lean admit again in a session whose ledger is unknown.
+Record-Id: r-8443d9c842fe
+Provenance: inherited 5a23a6b9fe44fbbae7b91256a00d40a23ac02bad
+
+Ruled-out: [ \t] as the whitespace allowance in the Authorization gaps | rejected because the class it replaces matched a no-break space, so Authorization:\u00a0Basic would stop screening
+Warn: cleanupJobs may age out a state file only when parseState accepts it for the session whose sha256 names the file, the same test readJob applies; JSON that parses but that readJob refuses is kept, because lean declines over an unreadable state and deleting it would turn that refusal into an empty ledger.
+Warn: Supersedes the r-8443d9c842fe warning's claim that cleanup never removes a file it cannot read: at 5a23a6b 'read' meant JSON.parse and isRecord, not readJob, and the fifth gpt-6-sol review found the gap. Any new state-validity rule belongs in parseState so cleanup and lean keep agreeing on what is unreadable.
+Warn: The Authorization screen's gap classes must stay disjoint: [^\S\n] for whitespace and [^\w\s] for punctuation. If they overlap, the nested bounded repetition can backtrack; as written an 8 MiB input built to force it took 32 ms on 2026-09-25.
+Record-Id: r-127b510956e2
+Provenance: inherited 4e6cc4742600f463844afd3602bf982f2b32db55
+
+Warn: cleanupJobs decides readability by calling readRaw for the session the file's sha256 name claims; do not reintroduce a local copy of its checks. At 5a23a6b and again at 4e6cc47 the copy missed one (the structure, then the 1 MiB size bound), and each miss let cleanup delete a state lean would have refused, turning a native decline into an empty ledger.
+Warn: Supersedes the r-127b510956e2 warning that new validity rules belong in parseState: they belong anywhere in readRaw's path, since cleanup now reads through readRaw itself; and lean_seen is judged as parsed, so an entry lean ignores (for example null) no longer keeps an old file forever.
+Record-Id: r-b1f231e2bcca
+Provenance: inherited 6eca95c5aa47b0bdee4c09667d494d17ef8a950f
+
+Limit: The host test kit cannot set plugin options (a config.set needs an answer and does not reload the plugin), so claude plugin test covers only the default off path; every enabled path is covered in vitest by driving register.ts with a fake $, which is not host observation.
+Limit: Spawn routing runs only on a host whose release base is exactly 2.1.282 (VERIFIED_HOST); any other base, including a development build, leaves every spawn native until that release is verified. No routed turn or spawn has been observed on an installed host.
+Ruled-out: falling back to TYPESAFE_API_KEY when the explicit typesafeApiKey option is invalid | rejected because a typo in the option would then silently switch credentials; an invalid explicit key is refused and nothing is sent
+Warn: A Router hook must never call next after next.signal has aborted: by then the host has dispatched without the hook, so a next would open a second request. turnStep returns without calling next, and agentSpawn throws.
+Warn: mods/router/hooks/secret.ts is a copy of SECRET_PATTERNS in src/lean-source.ts, because a Function Hooks module cannot import the Node side; change Lean's list first and re-sync. tests/router/secret-parity.test.ts fails on any drift.
+Record-Id: r-99feb7e6249c
+Provenance: inherited a416a01915bde36d2d85e4e29188c6d5e797cc34
+
+Limit: A model suffix is known only where MODEL_FACTS lists it: [1m] on claude-opus-5-5 and claude-sonnet-5, as the 2.1.282 host lists them. Any other suffix, including one a later host adds, makes the profile unknown_model until the table lists it.
+Limit: answeredBy compares an unsuffixed TurnUsage.model with the requested model by model alone, so the variant a response ran on is never confirmed. The d.ts says only that the id is the one the API reports; comparing suffixes strictly would end effort routing after the first step of every [1m] session.
+Ruled-out: sharing one pending spawn assessment between dispatches with the same tool_use_id | rejected because a redispatch under that id can carry a different prompt, which would then run on a tier earned by another text, and an abandoned dispatch's answer would decide the next one; each dispatch is assessed on its own
+Ruled-out: refusing every suffixed model id outright | rejected because the host's own Opus and Sonnet 1M entries are suffixed, so real [1m] baselines would lose all routing; only suffixes the table does not list are refused
+Warn: Every root model stays native until its exact from -> to pair is listed in VERIFIED_ROOT_SWITCHES (mods/router/hooks/models.ts), which ships empty. Add a pair only after an installed-host observation shows the retained request's controls (thinking, max_tokens, tools, media, beta headers, context window) stay valid on the target; the model table's facts are not that evidence.
+Record-Id: r-c8166de919ed
+Provenance: inherited 252f5b4076b766784b2de1cdb4510814e532b9e6
+
+Limit: A model override is confirmed only when TurnUsage.model carries the same variant, so a bare claude-opus-5-5 does not confirm a requested claude-opus-5-5[1m] and ends that override. Whether a 2.1.282 host ever reports [1m] in that field is unobserved, so a routed [1m] switch may stop after its first step. An effort-only patch is still compared by model alone; this narrows the 252f5b4 Limit on answeredBy to effort-only patches.
+Ruled-out: trusting the pins and availableModels read before the Jev request when applying a spawn target | rejected because a pin or a narrower allowlist can arrive during the wait; they are read again after the answer rather than trusted, and the spawn stays native (spawn_stop) if either now excludes the target
+Warn: offerableTiers must be given the efforts offered in the same question batch: without them a target that only a changed effort could pair with (Sonnet from an Opus max baseline) is withheld as no_applicable_target, and with them an answer that keeps the old effort is still refused as pair_invalid at choosePatch.
+Warn: root_result and spawn_result are per-step records of what the host reported, the four ModelUsage counts only; they are not a saving, and overlapping totals across steps are left for #45 to normalize.
+Record-Id: r-d9fb8cd7c3f2
+Provenance: inherited ebf709d1761dcb51152ff7e9e94d3937c771321a
+
+Limit: Reading the pins last narrows the window but cannot close it: pinsOf itself awaits engine.pins(), and a pin set after that read resolves is not seen by the step or spawn already under way; it applies from the next step or dispatch.
+Ruled-out: applying a stored model patch after an effort pin suppresses its effort, trusting the pair choosePatch checked | rejected because the request then keeps its own effort, which the target may not take (Sonnet with max); the model override is dropped (pair_invalid) rather than sending a pair nothing approved
+Warn: In applyStored and spawnTarget the pins must stay the last await before next: availableModels is read first, then pinsOf, and nothing is awaited after. Adding any await after the pins read reopens the window in which a pin another Mod sets is missed.
+Record-Id: r-e78aff9a2e7f
+Provenance: inherited 097905009d0ba2626bb7ca18319c13d9e0e779a4
+
+Ruled-out: linking a spawn to the session only around its Jev request | rejected because the pins, host-release and allowlist reads before and after the request ran outside that link, so a dispatch whose session ended during a read could still send a request and route; every wait is linked to the dispatch and to the session captured at dispatch start instead, and a final check before next leaves it native (session_ended)
+Warn: answeredBy ignores the variant in both directions (bare against [1m] and back) and is only for effort-only patches, whose efforts do not depend on the variant. A model override must be confirmed with sameModel, which keeps the variant; using answeredBy there would let a bare id confirm a requested [1m].
+Record-Id: r-af0b052f8fea
+Provenance: inherited 638d154673a845fa3a431b6fff47b04be450b697
+
+Limit: The session-end tests sweep 0 to 12 microtask hops after the last pins read of a fake engine; they cover the gaps that fake scheduling produces, not a real host scheduler, which is unobserved.
+Ruled-out: checking the session only where the patch or spawn target is made (the end of applyStored or spawnTarget) | rejected because the session can end in the microtask gap before turnStep or agentSpawn resumes; the handler captures the session it began in and checks it, and for a root step the turn identity, with nothing awaited before next
+Warn: Every call register.ts makes before next goes through quietly; a new handler must do the same, or a throwing ui.log or bookkeeping call keeps the host event from being forwarded.
+Record-Id: r-dde4792f0cbb
+Provenance: inherited 009ab1d1bf3e2135b0c50c3f4d99a37702ce703b
+
+Limit: The key is now read before pins, settings and the host version on both paths, so every native reason that needs no key (pins, host_unverified, rank_unknown, nothing_to_change) is reported as key_missing or key_invalid when no usable key is configured.
+Ruled-out: awaiting the cached key promise directly, or through until(), in each caller | rejected because a never-settling envKey read would hold every abandoned spawn and keep a then-closure per waiter for the session; the read is shared once per session and each waiter is removed from the set as soon as its own signal aborts instead
+Warn: A spawn type outside INHERITING_BUILT_INS is caller-controlled Agent input and is logged only as other (typeLabel). Any new log field must likewise carry only host ids, config values, closed reasons or numbers, never caller text, since logs are not screened for credentials.
+Record-Id: r-730a411644c5
+Provenance: inherited 6810ead5c08f1ffd4b14ec8992e79bb5b8dff3cf
+
+Limit: Supersedes the previous Limit on key-first ordering: only reasons that need a pin, settings or host-version read (model_pinned, effort_pinned, subagent_model_pinned, alias_remapped, host_unverified, target_not_allowed) are now reported as key_missing or key_invalid when no usable key is configured; event and configuration reasons are reported as themselves.
+Ruled-out: reading the key before every other check on both paths | rejected because a fork, an explicit model, an unrouted type or a turn with nothing to ask then waited on a slow envKey read although no key could change its outcome; the event and configuration ceiling (rootDims with no pins and no allowlist, offerableTiers with no allowlist) is checked first instead, and the key still comes before any pin, settings or host-version read
+Warn: The ceiling check is valid only while pins and the allowlist can only narrow what rootDims and offerableTiers offer. A change that lets a pin or an allowlist entry add a dimension or a tier must drop the ceiling shortcut, or that call is skipped as nothing_to_change without asking.
+Record-Id: r-3ddca61280fb
+Provenance: inherited 0569d103eed778f75b2f415304220f9027256f12
+
+Limit: Jev's top-label confidence tracks the margin between adjacent labels, not the probability of the chosen label, so a 0.9 floor on it held almost every task on the 13-task panel; the floors now read probability mass on each side of the current level.
+Limit: Supersedes the a416a01 Limit that spawn routing runs only on release base exactly 2.1.282: any 2.1.N with N >= 282 is accepted, and a spawn result that contradicts the contract suspends spawn routing for the activation.
+Limit: A spawn still runs at its parent's effort, because the agent.spawn event has no effort field; only the root turn's effort is routed.
+Ruled-out: gating on the top label's confidence | Jev spreads its answer across adjacent levels, so the top label rarely clears 0.9 even when 0.98 of the mass says a cheaper level suffices; the move is read from the whole distribution rather than the top label
+Ruled-out: pinning spawn routing to one exact host release | it left every spawn native after each host update; the session checks what the host reports instead
+Warn: Record the assumed spawn baseline only after every gate has passed: a spawn left native by a pin runs on the pinned model, and checking it against the parent's model would suspend routing on a false baseline_mismatch.
+Warn: The suspension is detected after the fact: the spawn that reveals a model or baseline mismatch has already run, and the suspension lasts until the plugin reloads, surviving session end.
+Warn: minUpgradeConfidence and minDowngradeConfidence are policy numbers, not a calibration; the panel is one Jev call per task.
+Unverified: The routed and native host sessions on 2.1.283 are one session per condition; they show the patches take effect, not a cost or time saving.
+Record-Id: r-dace758de9a0
+Provenance: inherited 64a2977f3a1e49716e6bc5a50f8b1bf7593e0b46
+
+Limit: A move needs task_clear at the floor for its direction, so the 0.9 downgrade floor held four of 18 non-deep spawns native on the 2026-09-27 issuance panel (task_clear 0.68-0.82); the floor was not lowered after seeing them and is the first number to calibrate in shadow mode.
+Limit: Decision logs carry usage as input, output, cache_read and cache_creation because the host debug log redacts usage keys by name and leaves the line unparsable; logs written before this change have no readable usage.
+Ruled-out: asking tier and effort as choices over labels with a preserve answer | on the same 33 requests through the shipped path the labels moved 12 of 18 spawns and 6 of 18 root turns and lowered one deep root turn from xhigh; each level is asked as a description of the work rather than a label, and declining is left to control instead
+Warn: TIER_LEVELS is the contract: Jev never sees a level's name, so editing a description changes routing; rerun the issuance panel (~/jev-gate-runs/host-obs-2026-09-27/issuance) before shipping new wording.
+Warn: Effort is three fixed levels mapped to low, medium and high by position; hard work keeps a baseline above high, so an xhigh or max session is only ever lowered, never raised.
+Unverified: One Jev call per request on short prompts written by us; the panel counts moves, not whether a moved task still succeeds or any cost or time saving.
+Record-Id: r-c17b2a52445f
+Provenance: inherited bc411fc67d45c2b7a9182e129bbd4c45b88be0f5
+
+Limit: The fixture script node --test test/ fails on Node 22.23 because the directory is resolved as a module, so S3 and S4 failed their tests in both arms for a harness reason; they are kept and were rerun once as S3b and S4b.
+Warn: Until S3 the probe logged each event before the Router patched it, so S1 to S3 probe steps show the incoming effort, not the effort that ran; only S3b, with the probe inside, observes the patched root effort.
+Unverified: One session per condition on a 4-file fixture: the sessions show that spawn and root effort patches take effect on 2.1.283, not a cost or time saving.
+Record-Id: r-62ebb6ca8fca
+Provenance: inherited 563bf72c31461df3abdbfea9f4e163dc62b2f09a
+
+Warn: Suspension is checked again with nothing awaited before next: a spawn whose Jev answer was still pending when another spawn's result suspended routing would otherwise still be routed on a host already known to resolve models differently.
+Warn: A pin read after the assessment, including on the no-move path, drops that spawn's assumed baseline: a spawn kept native by a pin runs on the pinned model, and checking it against the parent's model falsely suspended routing for the whole activation.
+Record-Id: r-877f5ffc6557
+Provenance: inherited a30f6a6d11f2929025186fd6f5eabba827d02ada
+
+Limit: Offline only: fake CLIs and fake debug logs. No --execute run, no claude -p call and no Jev request was made.
+Ruled-out: running the Router arms on the Sonnet root native_auto uses | the Router saves by lowering an Opus xhigh session's effort and spawn models; from Sonnet at the host default it has little to lower, so that comparison would not measure it
+Warn: Neither starting effort defaults: router and router_native need --base-effort and router_fixed needs --fixed-effort, and both are frozen in cli.router_policy before anything runs.
+Warn: --frontier-model still defaults to fable in this runner; a Router run for the owner's configuration must pass --frontier-model opus.
+Record-Id: r-d06e2d894895
+Provenance: inherited 805e35ab8051463105ed03dfad3a6b2a2f9912e6
+
+Limit: delegationDepthFraction 0.6 is a policy number, not a measured crossing point; whether delegation pays at 60% of a 300K window has not been measured.
+Ruled-out: a fixed absolute delegationDepthFloor | on a host whose compaction window is at or below it no prompt is ever admitted: 0 of 1,014 decisions attempted on a 300K window
+Warn: The liveness ring has no lock: two hook processes racing on the file can lose an update, which is accepted for an is-it-firing signal.
+Warn: entry.ts must not import any gate module statically: the idle saving comes only from loading hook.ts's graph after the off check.
+Record-Id: r-dd386decfc07
+Provenance: inherited c57806a431523da1d35bc1d80e00d2259613587a
+
+Ruled-out: loading the Router from the repository's mods/router and recording only its path | a checkout that changes mid-run would put different Router code under one comparison without any record of it
+Warn: A Router cell's Jev total is unknown, never zero, when its log is missing or unreadable, when a Router line did not parse, or when the session ended by the timeout or a cancel; the known part stays as a subtotal.
+Warn: A run of Router arms alone neither checks nor copies the legacy plugin; plugin_copy and plugin_hook_sha256 are null in such a plan.
+Record-Id: r-184895d8bf43
+Provenance: inherited 55fbf5013c4236b8144ea39ce0179baf87912a42
+
+Ruled-out: recognising a truncated Router record by the jev-router prefix alone | a write cut short can end before the prefix is complete (jev-ro), so a prefix test passes it over as host chatter and a sent request reads as a known zero
+Warn: An unterminated last debug-log line counts as unparsable on a Router cell. This relies on the host ending every debug line with a newline (all eight host-obs-2026-09-27 logs do); if a host version stops doing that, every Router cell's cost becomes unknown.
+Warn: The report takes a Router arm's cost from the row verdict, not the block: a router-expected block with log other than read is unknown, including one still at its initial zeros because ingestion never ran.
+Record-Id: r-7e486da876e6
+Provenance: inherited 7c2a699ba9a9e250c3e613bda0d449cc80608bf9
+
+Limit: A launch's --autocompact or --settings flag, MDM policies and server-managed settings are invisible to a hook, so a session started that way can compact at a window the gate does not see.
+Ruled-out: a 200K-derived floor (120K) when the window is unknown | on a 1M session it admits shallow prompts, where forced orchestration measured +182%; too high only costs the saving, and the SessionStart liveness notice reports it
+Ruled-out: a predictable pid temp name opened with 'w' for the liveness ring | a symlink planted at that path is followed and its target truncated
+Warn: modelContextWindow encodes the host's model-config page as of 2026-09-27 (Opus 4.7+, Sonnet 5 and Fable run 1M on the Anthropic API; others 200K). A new model family or a changed host default needs a new row; an ID it does not recognise leaves the window unknown and the floor at 300K.
+Record-Id: r-863957598f09
+Provenance: inherited 73559fa4accdd7ff5741eec4eafcb182e1b2c31a
+
+Limit: Opus and Fable behind an LLM gateway read as unknown: the host's model-config page states the gateway budget only for Sonnet 5 (200K unless [1m] was picked)
+Ruled-out: mapping the /model command's display name to a model ID | the host writes only a display name such as `Opus 5.5 (1M context)`, and the next reply carries the real ID, so the model reads as unknown until then instead of guessed
+Record-Id: r-07b886a89d30
+Provenance: inherited 87e719e91cbc7a0285688c9055fa92d655b22f7d
+
+Ruled-out: reading only the repository-root settings.local.json | a pre-2.1.211 host left the file in the starting directory and the host still reads it after the root's, so a window set only there would be missed
+Record-Id: r-3f8153729967
+Provenance: inherited a25be3e5a361228d3658bd8348c88a06457bbdff
+
+Limit: Whether the host honours isolation: worktree on a patched worker call, ignores it, or errors is not observed; it is a tested patch only.
+Warn: A restricted or premium frontier model must come from the owner's own config, never from DEFAULT_CONFIG: agent frontmatter is what the host uses whenever the hook does not patch the call, and 22 runs went to Fable that way.
+Warn: plannerModelAgreement must compare against a deduplicated set of configured models: with deep and frontier both opus, a list reads an unambiguous match as ambiguous.
+Record-Id: r-c7c3d9027a13
+Provenance: inherited 44221d87a2eb2d7f0feb89ad46b8b2611c1588b7
+
+Limit: worktree.baseRef set only by --settings, MDM or server-managed settings is invisible to the hook, so a host that does branch from HEAD can still be run serially here
+Ruled-out: patching isolation: worktree whatever the host base ref is | the host default base ref "fresh" is origin/<default-branch>, so a worker would build on a revision without this branch's commits; the turn runs serially in the caller's tree instead
+Warn: Even with baseRef head a worker's tree holds only committed state; the coordinator is told to commit what a worker reads before dispatching it, and nothing enforces that it does
+Record-Id: r-c74874f1e649
+Provenance: inherited 49fc7ca6b287fd79ad9850662b97fe90b6372877
+
+Ruled-out: falling back to the hook's cwd for the project scopes when CLAUDE_PROJECT_DIR is absent | cwd moves with cd, so a project-level "fresh" at the real root is missed and a user-level "head" is read instead; the base ref is unknown and the turn runs serially
+Warn: Isolated workers are asked to commit on their worktree branch through WORKTREE_WORKER_SENTENCE; the worker profiles forbid commits unless the contract asks, so removing the sentence leaves nothing on the branch the coordinator merges
+Record-Id: r-72b002792d40
+Provenance: inherited 9454a33015110b502ea3ccc2c898d5d8addf4d3d
+
+Limit: The Router run's five cases are development fixtures and router_fixed's medium was chosen from one development session (host-obs S3b); a result there is not a claim about the owner's own work
+Ruled-out: running the lean arms on bench/cases-depth.json | every depth prime carries a delegation ban and artificial priming, which #29 rules out and which stopped lean-3; new episode cases are built instead
+Record-Id: r-3193d34e5a16
+Provenance: inherited f50770b2dcfc66dc87a8b172ff729794de6d6ad3
+
+Limit: A session moved by /cd and then by a Bash cd outside the /cd target, or whose transcript folder name the host hashed (over 200 characters), has no matching candidate; its window is known only where every candidate agrees
+Ruled-out: trusting CLAUDE_PROJECT_DIR over the hook cwd | /cd moves the host's settings directory and leaves CLAUDE_PROJECT_DIR at the start, so a window from the start directory was reported as known; the transcript folder picks the directory instead
+Warn: projectsFolderName mirrors the host's projects-folder naming as of 2.1.283 (non-alphanumerics to '-'); if the host renames that folder, moved sessions fall back to the agreement check rather than breaking
+Record-Id: r-c52603e25211
+Provenance: inherited a157bbbead406bbffea084a3dcad1f77231e8f02
+
+Ruled-out: putting the commit instruction into the task contract itself | the contract is the planner's canonical text and isolation is a dispatch-time fact the planner does not see; the profiles name the isolation note as the request instead
+Record-Id: r-bbef0a6e91c1
+Provenance: inherited 5d4fe6e467cd8aa37083b40bb04b8b18e55f6bcc
+
+Limit: After /cd the base ref is read from the directory the transcript folder names; with no match and disagreeing candidates it is unknown, and the hook then runs the turn without isolation even if the real directory says head
+Record-Id: r-827458290e4e
+Provenance: inherited e46ac47b0c86747ef4be5acf71334264d25a635e
+
+Limit: A launch with --project-config-root reads settings from that root, which the transcript folder does not name, so its window reads as unknown and the 300K fallback floor applies
+Ruled-out: falling back to CLAUDE_PROJECT_DIR whenever the cwd equals it | a Bash cd back to the start after /cd makes them equal while the settings stay at the /cd target; the transcript folder decides instead
+Record-Id: r-0d9d9c6c6607
+Provenance: inherited b0422be38710633ec7ebe56f5cd544e33452db05
+
+Limit: Both commands name --max-cost-usd, which the runner does not have yet; neither run can start until it is built and tested, so the spend stop is enforced by the runner, not by someone watching the bill
+Record-Id: r-c0510067572f
+Provenance: inherited f448cfce11efd055685113a2b95ba261e8838b2c
+
+Warn: planner_model on a failed plan record was a bare agreement string and is now the { requested, observed, agreement } object that ready records carry; a trace reader that read the string must read .agreement
+Record-Id: r-557bab4db883
+Provenance: inherited 37a3af0f5a98a1f6456b3873637691b5729bf377
+
+Warn: requested_model on an Agent record is the call's own pin, else the owned agent's frontmatter model; a patched planner's requested model is the configured tier's, so the two can differ only when the host does not reflect a patch in tool_input
+Record-Id: r-a765c7bff7bc
+Provenance: inherited d4f2e64a0a49835541fc711215a45d444b011315
+
+Limit: The cap is checked between cells, so a run can end above it by the cost of the one cell that was running when the cap was reached
+Ruled-out: a separate cost sum inside the runner | it would be a second reading of a cell's cost beside report.ts, and the two could disagree; the stop reads each cell back through toRowView instead
+Warn: A cell with an unknown complete cost stops a capped run; that includes a timeout or an unread Router log, so a flaky host can stop a run early rather than let it spend past the cap
+Record-Id: r-cb57be76a80a
+Provenance: inherited 7b3190e2fb4e19383ad683ddf63a22719302b81c
+
+Warn: planner_tier now describes only the current planner attempt: it is reset when the call is reserved and plannerPatch sets it on every patched path, so a new patched path that does not set it records the call's pin or frontmatter model instead
+Record-Id: r-150c625643dc
+Provenance: inherited 54a0c84037b438333487c020cb5a150b009ef0d5
+
+Warn: A primed row is complete only when it reported one cumulative total per turn it was sent (priming prompts plus the request); a new way of sending turns must keep prime_sha256 and turn_totals_usd in step or every row reads as partial or whole wrongly
+Record-Id: r-07ed890a578b
+Provenance: inherited e08ae363993ce04254e10f2a5863be73cbcabff6
+
+Limit: The merge instruction is text the coordinator reads. Nothing checks that an accepted worker's branch was merged before Stop records the plan completed.
+Ruled-out: keeping worktree isolation on the single-executor path and adding a merge note to its guidance and result | one worker has no sibling to collide with, so isolation there only adds a merge step, and a missed merge strands accepted edits on a branch
+Warn: The last-task note and Stop now read the same planComplete fact. Change one and the note can announce an end that Stop does not record, which is the bug this fixes.
+Record-Id: r-b856c9e59f64
+Provenance: inherited f385ee88c66fc54d5756e2eb2b732c2ec79727c3
+
+Limit: The plan-interpretation request shares the plan-level Jev group with the historical scope gate, so the report's per-group column no longer tells which of the two a cell paid for; the trace phases still do.
+Ruled-out: comparing the float sum against the cap with an epsilon | an epsilon picks a tolerance by hand; an integer nanodollar sum is exact for every row the report can show
+Warn: Every Jev request the hook can send must be accounted in ingestTraces, or the spend stop reads a known cost below the real spend. A new request phase needs its intent and result counted here.
+Record-Id: r-1133d2728117
+Provenance: inherited 5b1bcad44283db90838fcb765dc3f18c80611b71
+
+Limit: These run the real Router handlers against a fake engine, clock and HTTP, not a live host. The live-host side of #42 and #43 is the host observation host-obs-2026-09-27 (S1c, S3, S3b).
+Warn: The rank-unknown case depends on no configured profile naming the root model's family. Two profiles naming one family make resolveConfig drop every tier as ambiguous, which reaches rank_unknown by a different route.
+Record-Id: r-3de914eb9194
+Provenance: inherited fcf2fc6bed6cad24aba1fff717d774f479275e15
+
+Warn: gen-agents.mjs reads dist/ next to its own file, not the caller's cwd. A test that runs it from the checkout depends on that checkout's build and writes its agents/; run it from a copy inside a prepared plugin root.
+Record-Id: r-a16892bc9959
+Provenance: inherited 91f05c6f723f8bc82123d676ae1ea4c1f2fff10a
+
+Limit: Rounding each row and the cap up makes the stop early by at most a nanodollar per row, and the summary's known_usd an upper bound by the same amount.
+Record-Id: r-033a1ac0ca47
+Provenance: inherited 0d436bf307a9ec1f5823447d2ac7a5012b08ac3f
+
+Warn: A handler test whose answer clears both confidence floors cannot tell which floor moved it; use a probability between minUpgradeConfidence (0.8) and minDowngradeConfidence (0.9) to pin one.
+Record-Id: r-5e4e4c4561c4
+Provenance: inherited 1dee95d7a9562b6a5a905afe621d39443871fd69
+
+Limit: Whether a conditional level is offered is not observable through the handler: the request asks three described levels and effortTargets maps them locally, and pairValid reads unconditionalEffort directly. The handler test checks offerableEfforts itself for that.
+Record-Id: r-1734e9817e36
+Provenance: inherited cc98c8ee93d75260e1d2265df9a8f7e9b76c5d31
+
+Limit: doctor reads this shell and the user settings env only; project or managed settings env and a variable only the launcher sets are invisible, and that the settings env wins over the shell is assumed from how the host applies it, not observed
+Ruled-out: setting CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 globally on the owner's host | forcing the foreground in every session ends the background subagents #48 P1-2 names as what sped delivery up
+Warn: An interactive 2.1.283 session runs Agent calls in fork mode with no run_in_background field, so without CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 or CLAUDE_CODE_FORK_SUBAGENT=0 every planned brief is not_foreground; an admitted auto job there reached no worker while its guard refused the main session's edits
+Warn: foregroundDispatchPossible reads the launch environment only; a host release whose fork mode exposes run_in_background would still be skipped as host_unsupported until this test is revisited
+Record-Id: r-bdc390727358
+Provenance: inherited a2e689ecc27a2daf79f52000c0d21da40c3d29e9
+
+Limit: doctor resolves launch variables from its own cwd through host-window's managed, project-local, project and user settings chain; a --settings flag, MDM or server-managed settings and a variable only the launcher sets stay invisible, and that settings env wins over the shell is taken from the host docs, not observed
+Warn: The forced bench arm is refused wherever dispatchBlocker answers: a run whose launch env lacks a foreground profile, or sets CLAUDE_CODE_SUBAGENT_MODEL, records forced_requested with a direct shape, not an orchestrated control arm. src/bench/run.ts sets FORK=0 and DISABLE_BACKGROUND_TASKS=1, so bench arms are unaffected
+Warn: host_unsupported and key_missing now return before the transcript depth read, so their admission_result records carry no context_tokens or context_depth_read; explain.ts reads a missing context_tokens as null
+Record-Id: r-09a27645777a
+Provenance: inherited 0f7ecb96c9f8fcaf7fe83a5dd35f0a365edfd23a
+
+Limit: The Router's subagent-model routing is untested by this run: no cell delegated, so spawn_assessed is 0 in every router cell
+Warn: The rule-9 recommendation is fixed medium on five development fixtures; it is not an instruction to change the owner's effortLevel, which rule 10 leaves to a separate owner decision and a follow-up on the owner's own tasks
+Warn: Observation 2 (a patched medium behaving like xhigh on wide-validators) rests on two cells per arm on one case and is unexplained; it is not a result and needs its own preregistration before any Router change rests on it
+Record-Id: r-5f6ad29e5069
+Provenance: inherited bb4b1c51c34061c44e2dd11998545cc83331e17e
+
+Warn: Rule 5 forbids quoting any difference under 15 %, per case as well as in medians: such cells read '< 15 %', and the exact values stay in cells.tsv and report-1.json rather than in this README
+Warn: Rule 9 fixes the README's first line, so the negative-result sentence sits above the title and must stay line 1
+Record-Id: r-7476864b0793
+Provenance: inherited 2d07e55c9cc5cb7e7420484bc98ab02e3c47915a
+
+Limit: Recall is a proxy: the offline comparison counts referents (paths, SHAs, #N, identifiers) the next 12 turns used in tool inputs, not whether the work that followed was as good; the installed-host probes are single runs of a read-files task
+Ruled-out: a Jev relevance score for which earlier tool exchanges the digest keeps | over 40 real compactions it kept no more of what the next turns used than recency (0.783 vs 0.788; AUC 0.589 vs 0.536), so recency orders them rather than Jev
+Ruled-out: a Jev gate that sends a weak digest back to the engine's summarizer | Noul P(the extract suffices) separated the 8 digests worse than the host's from 31 others at AUC 0.653, every answer between 0.16 and 0.5; a buildable digest is used instead
+Ruled-out: carrying a previous digest nested whole as the next previous summary | the summary cut would keep the oldest text and drop the newest stretch; it is taken apart rather than nested
+Warn: Keep compactManual off: when this hook answered /compact in a resumed headless session, the host (2.1.283) wrote the kept tool_result with its pre-compaction parent and the next --resume sent the whole old conversation; auto compactions, fresh or resumed, linked correctly in every probe
+Warn: A --plugin-dir load makes the host write tsconfig.json and .claude-plugin/types/ into the mod; they are ignored, not committed
+Record-Id: r-3818cae49839
+Provenance: inherited 20d91cfe80fa6d2d70c17bd3eb8c3c3d15856ac4
+
+Limit: At the default budget the digest recalled less than the host with its re-attached files at 6 of 40 points, by 0.07 to 0.27
+Ruled-out: a strict budgetChars cap that empties the digest or falls back whenever the last exchange is over its share | a large tool result is often what crosses the threshold, and each fallback is a summarizer wait (95 s median this week); the 2.3x ceiling is stated and a half-the-input relief rule bounds it instead
+Warn: The 0.850 vs 0.742 recall in 20d91cf came from digests built without the messages the previous boundary preserved (all 364 auto boundaries this week preserve some); rebuilt as the engine held them it is 0.816 vs 0.781, and the chained run 0.761 vs 0.717
+Record-Id: r-5e37226a046c
+Provenance: inherited 3fa0a78074c08e6a53f58833717ff3b7fef50068
+
+Warn: When one turn of parallel reads alone is over twice the budget, this hook defers (tail_too_large) and the host's reactive path declines too ('no assistant messages in summarize set', seen on 2.1.283 with the window set by env); next() rejects and the request goes out uncompacted
+Record-Id: r-01ff0a0e2256
+Provenance: inherited fe8492828f66955815dae95818e4d001bbb0c5d1
+
+Ruled-out: recognizing a carried digest by the [jev-gate compact] mark alone | a request that starts with the mark was dropped as a summary; the whole header line is required instead
+Record-Id: r-93752eb92d54
+Provenance: inherited 223559bd98fe984245ca9b349d123145884e3a31
+
+Limit: The size model (text + inputs + results + ids, 40 chars of structure per call or result, 16 per message) is an estimate of what the API is sent, not a token count; the 2.3x ceiling and the half-the-input relief rule hold in that model
+Ruled-out: recognizing a previous summary by its opening text wherever it appears | a request quoting the engine's summary line or a pasted digest header replaced the carried summary and lost earlier requests; only a summary before the first assistant message counts instead
+Record-Id: r-8b5a76a9ddc4
+Provenance: inherited 469ede55f251cc017f1d8132678be3a52bde1d79
+
+Limit: The ceiling and the halving rule hold in the size estimate (ids and structure counted), not in text alone: 500 one-word exchanges plus a 60K result went 161.6K -> 72.2K estimated but 72.9K -> 72.0K in text; at real compaction sizes (well over 100K tokens) the ceiling is small either way
+Ruled-out: taking the previous summary before the newest request | with a large last exchange the digest gets only its 30% floor, and a long carried summary took all of it, so the newest request was dropped; the newest request is taken first and the summary gets at most half of what is left instead
+Ruled-out: recognizing a digest this module wrote by its header line alone | an opening request that starts with the header and goes on was parsed as a digest with no sections and the request was lost; the header must be followed by nothing or one of the digest's own section headings instead
+Record-Id: r-8f0e64cf7024
+Provenance: inherited 06818f037aedaffe04d19a339b6f4cbe1ac37ad1
+
+Ruled-out: judging a user message as engine text by how it starts | the host joins a message's text blocks, so a request with a <system-reminder> block ahead of it was discarded whole; engine blocks and the exact caveat are cut out and what remains is the request instead
+Ruled-out: recognizing a digest this module wrote by its header and section headings | a pasted digest with an added instruction parsed as a digest and the instruction was crowded out; a last line with a checksum of the rest is required instead
+Warn: The checksum ignores whitespace only. If a host version rewrites stored message text in any other way, digests stop chaining and each is read as one clipped request: after a host upgrade, check that the jev-compact debug lines of chained compactions still carry requests from earlier stretches
+Record-Id: r-dfdb0883b1ec
+Provenance: inherited 188ba03dba5e137842312392938526ffffbf45d2
+
+Limit: The eval horizon is now the next 12 assistant messages grouped by API message id, not 12 transcript records; eval numbers from before this commit used the shorter horizon and are not comparable
+Ruled-out: cutting engine tags wherever they appear in a user message | a request that quoted <system-reminder>...</system-reminder> inside a sentence lost the quoted text; only blocks that start a line, as the engine's own text blocks do, are cut instead
+Warn: At the default budgetChars 40000 the chained replay fell behind the host at the 8th-31st compaction (0.617 and 0.614 against 0.654 and 0.641); at 60000 it stayed ahead at every depth. Enable with budgetChars 60000 unless live data says otherwise
+Record-Id: r-ba60db33c4b9
+Provenance: inherited fe2015bf3c232e863974fe74c23130f4c8c12be9
+
+Limit: fe2015b's commit message says whitespace the checksum tolerates cannot drop a section; that was false and is superseded here. Exactness relies on the host storing the digest byte for byte, which three probes showed (stored length = logged digestChars)
+Ruled-out: a lazy regex per engine block, repeated until stable | an open tag with no close rescanned to the end each time: 80,000 unclosed <system-reminder> lines took 8.9 s inside the host's compaction; one pass with the closes indexed first takes 14 ms instead
+Ruled-out: a checksum that ignores whitespace | the section parser needs exact headings, so a digest changed by one space kept a valid checksum and lost its carried requests, contrary to fe2015b's commit message; the checksum is exact instead and a changed digest is read as a request
+Record-Id: r-8b9ba7c23738
+Provenance: inherited de4e239908481d46bb3d121912d059c661ab22e9
+
+Limit: A tool_use id that appears twice resolves to its first use, so such a tail can start earlier than before (never later); the host's ids are unique
+Limit: de4e239's README and commit message said the host stored each digest byte for byte; that was unsupported (three probes compared lengths only and predated the checksum). Probe 12 on 2026-09-27, with the checksum, found all three stored digests pass it, match the logged lengths and chain
+Ruled-out: a rescan of the tail each time the start moves back | results that arrive a call late pull the start back one message per move, so a rescan per move is quadratic: 4,000 staggered exchanges took 2.46 s inside the compaction; one pass down from the end takes 4 ms instead, and matched the old result on 9,000 fuzzed conversations
+Record-Id: r-421c28f83e59
+Provenance: inherited cd923227006610c1f7ebb039a8ed3b4e811fe99b
+
+Limit: The host still places the re-attached instructions inside the last tool result's turn (the hook's result has no placement field); the fix is a sentence the model reads, checked on the installed host in two runs of a twelve-file task with Sonnet after one run under the earlier header ended its turn at 3 of 12 files
+Ruled-out: recognizing own digests by the whole header | a session that crosses the upgrade would no longer know the digest the earlier header wrote and would quote it back as a user request; the first sentence plus the checksum still identifies it instead
+Warn: Before re-enabling on a host (window 200000 by jev-gate-compact-ctl.sh on), promote this commit: the copy pinned at 622bbdf carries the earlier header, under which a model took the owner's CLAUDE.md for injected text and stopped
+Record-Id: r-cdc7d9fc5d7d
+Provenance: inherited d3b4f7170c6df59dae97d24eaa175c83f7596194
+
+Limit: How a model continues after the rebuilt turn has not been run on the host: the host-observation budget was spent; what the host sends was checked at no cost with bench/compact/fake-api.py (tool result 23,971 chars alone, closing line, CLAUDE.md reminder as its own block; 42,570 chars with the reminder inside at 622bbdf)
+Limit: A last result that mixes text with an image reaches the model as its text alone; none of 581 auto compactions in a week ended in one, and the 3 image-only ones fall back to the engine (opaque_result)
+Ruled-out: a digest header sentence saying the context re-attached after the kept messages is the session's own (d3b4f71) | on the installed host it helped in two runs but a third ended its turn after its third compaction at 9 of 12 files, and a header that vouches for text a tool result ends with vouches for a forged copy there too; rebuilding the last turn puts that context outside the results instead
+Ruled-out: recognizing own digests by the header's first sentence plus the checksum (d3b4f71) | a request that opens with that sentence and carries a checksum it computed was taken for a digest and lost (sol review of #60); the header is back to 622bbdf's text, matched whole
+Warn: This relies on host 2.1.283 laying a built user message out as its tool results then its text, and appending re-attached context after a closing text block rather than into it; after a host upgrade rerun bench/compact/fake-api.py and look at the first hook compaction's last turn before trusting it
+Record-Id: r-a28e9663e2a5
+Provenance: inherited ba88635d440041f06f4f6ff268a6cec418d10c94
+
+Limit: The text-only tool list is kept by hand: a built-in tool added later is left to the engine until it is listed, and a listed tool that starts returning media would lose it in the rebuild. Bash image output arrives as an image with no text and falls to the no-text rule
+Limit: Supersedes ba88635's limit on mixed text-and-image results: such a result is no longer rebuilt. In a later week (390 auto compactions, 376 ending in results) 1 fell back for this, an image Read; no last result came from an MCP tool
+Ruled-out: rebuilding any last tool result that has text (ba88635) | a result with text beside media (a PDF's pages, an MCP tool's screenshot) lost the media in the rebuild (sol review 2 of #60, reproduced through buildDigest and assemble); the rebuild is now limited to built-in tools that return text alone, and any other result is left to the engine rather than trusted by its nonempty text
+Record-Id: r-7c0a22398330
+Provenance: inherited a5a52dcd9c918bbaa877511634bc475c580b9c7d
+
+Limit: The shape check closes loss, not provenance: a request that forges a whole digest (header, headings, checksum) is still taken apart into its sections; its text is kept, though a request placed under the summary heading is carried as summary
+Ruled-out: recognizing a digest by its whole header and its checksum alone (622bbdf through a5a52dc) | the checksum is public, so a request carrying the header, text of its own and a checksum it computed was taken apart and that text, outside every section, dropped (sol attempt 3 of #60); the body must now have a section heading straight after the header, so such a request is read as a request rather than emptied
+Warn: A Read's media kind follows the host's own rule, the path's extension (2.1.283 binary: png, jpg, jpeg, gif, webp and pdf; notebooks by ipynb); the call's record type (image, pdf, parts, notebook) also defers the rebuild when the transcript holds one. After a host upgrade, recheck that rule in the binary before trusting the rebuild of a Read
+Record-Id: r-a05363c363dc
+Provenance: inherited f80d8c91648e964fd9c4fd0956dde47116e6f27f
+
+Limit: Development cases that never delegate: the Router's subagent-model routing is not exercised, and a result is a paired per-task difference on five small fixtures, not a claim about the owner's own work
+Ruled-out: repeating the 2026-09-27 fixed-medium arm | it is measured already (30 cells); high is the mildest step below the owner's xhigh and the one that decides the owner's effortLevel, so the fixed arm is high instead
+Ruled-out: a subagents-on-Sonnet fixed arm | the runner strips CLAUDE_CODE_SUBAGENT_MODEL and none of the five cases delegates, so it would need code and a new case rather than a flag
+Record-Id: r-4e80daf8c600
+Provenance: inherited 3d952d85b5e4f2047a99fcc0f0a59bd191652597
+
+Limit: No pair is adjudicated (rule 4): only search-race is complete for all three arms. The per-cell numbers are published with no comparison, and nothing under 15 % is quoted
+Ruled-out: resuming the 29 unstarted cells under a spend stop that bounds or ignores the Router's unknown Jev request | rule 7 stops on an unknown row and the owner's approval excludes a relaxed rule or a second attempt, so the 16 cells are reported as they are and a longer run needs a new pre-registration
+Warn: The Router's 800 ms timeoutMs ends the wait, not the request: a late event with usage null leaves the cell's complete cost unknown, so any run holding rules 3 and 7 can stop on the Router's own timeout
+Record-Id: r-b2237738e472
+Provenance: inherited 7bf69a9d78f8efea0f5a1fe93be7cec895b19fa9
+
+Limit: The allowance is half a hundredth per label, which fits Jev's two-decimal rounding (every stored answer but two used two decimals); a coarser rounding would be rejected again as answer_invalid, and a sum within the allowance but wrong for another reason is now accepted
+Ruled-out: reading a distribution that sums to 0.99 or 1.01 as given | the effort and control floors read probability mass, so a 1.01 sum could lift a mass just under the 0.9 floor over it; an accepted distribution is rescaled to sum to 1 rather than read as given
+Warn: ROUNDING_PER_LABEL exists twice, in src/jev.ts and mods/router/hooks/policy.ts, because the Router plugin cannot import from src; change both together
+Record-Id: r-cb994fbfcb39
+Provenance: inherited 2b91ab7802185bab16011bec0be7f122c671d0a0
+
+Limit: Quote-pricing rep 1's raw Jev reply was not logged; that it was a rounded sum is inferred from a 40-request replay in which every answer_invalid was [0.05, 0.93, 0.01], not read from the cell
+Ruled-out: a longer Router timeoutMs as the way to finish 45 cells | the late reply was an HTTP 520 with no usage, so no wait would have made its cost known (sol review RVH-01); finishing needs usage accounting for a failed reply or a pre-registered bound, rather than a longer wait
+Record-Id: r-b274a5e33ddc
+Provenance: inherited c61aa356d507bec8680b8882fce58d1de693d45a
+
+Limit: Rep 1's answer_invalid cause is inferred from a 40-request replay, not read from the cell; c61aa35's commit message states it as fact and was left as pushed
+Record-Id: r-87511a58d897
+Provenance: inherited 11a78dc70a60def89f79ddd395354bf22a04d56f
+
+Limit: The Router logs answer_invalid both for a missing effort answer and for one its validator rejected, so a cell's log cannot say which; only a saved raw reply can
+Record-Id: r-d31d73724fce
+Provenance: inherited 09793a1c8519f563174975e7da8bf247324b0865
+
+Ruled-out: Rescaling any distribution whose sum is within the rounding allowance, whatever its precision | division by a sum below 1 spreads values that are less than ARGMAX_TOLERANCE apart past it, so a near-tie became a single top choice and lean omitted a group it had kept (sol review R62-01); 263 distinct stored Jev distributions were all two-decimal
+Record-Id: r-6f282019ac21
+Provenance: inherited 2accd3fab9b731dcbe88ad6f2d658ff07b47de70
+
+Limit: Supersedes the 64a2977 Limit that a spawn runs at its parent's effort: the subagent's own loop steps arrive on turn.step with the spawn result's agentId (2.1.283, observed on a local fake API with a probe plugin, not with the Router), and each loop is patched to one effort decided at its first step
+Limit: The savings behind these defaults are replays of the owner's week with Jev's answers re-asked: model moves reprice each spawn's recorded tokens as if Sonnet used the same tokens as Opus (spawn cost -4.9 %), and effort savings are assumed shares of each turn's or spawn's cost (low 45 %, medium 25 %, high 10 %), not measured ones. Whether the API keeps the cache when the host changes both the per-message and the top-level effort is not observable on a fake API.
+Ruled-out: lowering the root effort whenever Jev's answer allows it | rejected because a top-level effort change restarts the conversation's prompt cache and the host sends each turn's effort as the top-level value; replayed on 245 root turns (median 185K tokens re-read per first request) free lowering moved effort at 71 warm turns and, rewrites priced, cost 2.7 % more than it saved, so on a warm cache a lower effort is held at the one the cache was written at rather than paying a rewrite, and only a rise pays it
+Ruled-out: holding a spawn on needs_context or unclear as at the root | rejected because a spawn's prompt is everything its subagent works from; 44 of 253 spawns came back needs_context with a median 2,882-character prompt, so only explicit_lock holds a spawn instead
+Ruled-out: the three-level effort scale that kept a configured xhigh for hard work | rejected because it ran every hard task at xhigh; hard work now asks for high instead and only exceptional reasoning keeps xhigh, since native xhigh cost 11 % more than a fixed high on five paired development cells with every cell passing (a stopped, unadjudicated run)
+Warn: At the 0.6 downgrade floor a flat answer moves: one third on each of three profiles puts 0.67 at or below Sonnet and moves an Opus spawn there, and a flat four-level effort answer lowers xhigh to high. None of the 43 spawns the replay moved had a top level under 0.5, but nothing in the policy refuses a flat answer.
+Record-Id: r-aca730cc120e
+Provenance: inherited 81d8d8c145a5f8c642e422517bc483b06b63939e
+
+Limit: The warm-cache hold counts only a root response whose reported usage model answered the requested one; a response on another model, or with no usage model, leaves the previous record, so a fallback response never makes a later turn hold its effort
+Ruled-out: screening only the kept 2,000-character tail of a root reply before sending it as previous_reply | rejected because a tail cut from a longer credential passes the screen on its own (a PEM body past its header); the whole reply is screened rather than the kept tail, and a flagged reply is not carried at all
+Ruled-out: stopping every subagent loop when spawn routing is suspended | rejected because a loop that has already stepped would change effort mid-loop and restart its cache; only loops that have not stepped are stopped, and one already running keeps its effort rather than restarting its cache
+Warn: A subagent loop whose first step could not wait for its spawn's id (CHILD_WAIT_MS, 1.5 s) stays native for its whole loop; lowering that wait makes native loops more common, and deciding at a later step would change effort mid-loop and restart its cache
+Record-Id: r-5982ec941377
+Provenance: inherited 10d99ed3a2e0a78e8bb74c9410a62dd94292f694
+
+Ruled-out: treating a subagent loop as running once its first step has a baseline | rejected because the baseline is set before the pin read, the last wait before next, so a suspension landing there left a loop that had sent nothing at its lower effort; a loop counts as running only once a patched step goes to next (dispatched), and every other loop stays native rather than restarting its cache
+Warn: A spawn whose next returns after the suspension registers no child: its agentId never gets the spawn's answers, so its loop runs as it resolved; moving the registration before that check would reopen R63-03 race 1
+Record-Id: r-7c204d1f8416
+Provenance: inherited ee7c3a68a894ea6cba3a75a6b563128d955f4cc7
+
+Limit: A suspension cannot recall a spawn already handed to the host: that spawn keeps the model it was sent with, and only its subagent's effort is withheld when it returns after the suspension (R63-05, final review round)
+Record-Id: r-fa32b25507be
+Provenance: inherited 7d2b4078003a90998bf8eba944436fb6865b272d
+
+Limit: Cross-machine byte equality of the archive is argued from the writer (stored entries, 1980-01-01 times, sorted names, mode from the executable bit), not yet observed on another machine; until v0.3.0 is published jev-gate@jev-gate cannot install because the pinned URL does not exist
+Ruled-out: packing the release archive with the zip CLI | its entries carry each file's local modification time, so the same tree packs to different bytes on another machine or day and a SHA-256 pinned before the tag could never be checked by the release job; pack.mjs writes stored entries with fixed times in sorted order instead
+Ruled-out: a relative-path marketplace entry ("./") for the jev-gate plugin, or committing dist to serve one | the plugin runs from dist, which is built and not committed, so a relative entry installs without it; the entry is the release archive pinned by SHA-256 rather than build output kept in the branch
+Warn: Any change to a file the archive carries (README.md, AGENTS.md, .env.example, package.json, hooks/, the six agents, anything compiled from src/) changes the pin: run npm run release:pin before a release, or release:check fails
+Warn: Only a Function Hooks plugin's own directory reaches the plugin cache, so a module in mods/compact or mods/router that imports across to src/ or another mod works under --plugin-dir and breaks every marketplace install; tests/marketplace.test.ts fails on such an import
+Record-Id: r-86683f1d0a9d
+Provenance: inherited f8467d8ff7dacb8ab0972264571a03a820cc4bb7
+
+Warn: README.md travels inside the jev-gate archive, so any README edit moves the pinned SHA-256: re-run npm run release:pin in the same change, or release:check fails and an install from a stale pin is refused
+Record-Id: r-86beea04999f
+Provenance: inherited 6af207bbd2bd60dd0b9453c8a9c6858186c08eb3
+
+Ruled-out: reading a missing v<version> tag as an unreleased version | CI's default checkout is shallow and has no tags, so the frozen-version check would pass there by absence; release.mjs refuses a shallow checkout rather than read it as unreleased
+Warn: The three plugins share one version: after a release, a change to any archive file or to mods/compact or mods/router fails release:check (and release:pin) until package.json and all three plugin.json files are raised
+Warn: The frozen-version check needs tags: a CI job that runs release:check must check out with fetch-depth 0, or it fails closed on the shallow clone
+Record-Id: r-c1a1d39ca054
+Provenance: inherited 99555d532aaf462dd3b2934728ffedc2a40ad512
+
+Ruled-out: withdrawing a release when main pins another archive | main may have moved on to a later version, whose pin differs by design; deleting then removes a valid release (R64-03), so a later served version is accepted rather than read as a mismatch
+Warn: A same-version change whose PR CI ran before the tag existed can still merge after the release job's last read of main; main's push CI then fails the frozen-version check, which detects it but does not prevent it
+Record-Id: r-93e7c18c72c5
+Provenance: inherited 70ace6b6ca1d855f65e8701473ada4dfc422fb6b
+
+Ruled-out: keeping the default archive to the six routing roles | the default hook set runs every mode, lean included, so it ships lean's executor rather than leaving mode lean to dispatch an agent that is not installed; doctor on v0.3.0's archive failed on the missing file
+Warn: tests/pack.test.ts runs doctor on the packed archive and requires no [fail]: an agent doctor checks must also be in pack.mjs's agent lists, or the pack test fails
+Record-Id: r-d0968c96c1cc
+Provenance: inherited 445f6265d0f30ee480c6b0a64de9f2319cf93860
+
+Provenance: inherited 24e9853d673c4a05efe72213e51366d3024bf611
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+Provenance: inherited 86199215ffb7e61e59f7e4507be2d4f4ffb0bb2c
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+Provenance: inherited a8a84573e72fb1d864abfe1634b58a59557cf9f7
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+Provenance: inherited a9d1c88cb4daafa97594f7ea2d8c1e7695902d6f
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+Provenance: inherited 816491eb6849b89b64c96dd95e60e909a97096b3
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+X-Claude-Session: https://claude.ai/code/session_01TP8H8f2GZtGZVK7KV9jfRh
+
+Provenance: inherited 47334ad17d80536b28833d048b2e8a3215d2a0f9
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+X-Claude-Session: https://claude.ai/code/session_01TP8H8f2GZtGZVK7KV9jfRh
+
+Provenance: inherited 472ff518b059adf00acfd8dbff3014ab5c1ebc8f
+X-Claude-Session: https://claude.ai/code/session_01TP8H8f2GZtGZVK7KV9jfRh
+
+Provenance: inherited a70cdb86be6bdba654f312af9215fa94808c52e2
+X-Claude-Session: https://claude.ai/code/session_01TP8H8f2GZtGZVK7KV9jfRh
+
+Provenance: inherited b0a8b181ad5da2f1e592085cce2a252c1c9d3b50
+X-Claude-Session: https://claude.ai/code/session_01TP8H8f2GZtGZVK7KV9jfRh
+
+Provenance: inherited f10e460206427a0c60e3d0682f6e02cf2ff83b5a
+X-Claude-Session: https://claude.ai/code/session_01TP8H8f2GZtGZVK7KV9jfRh
+
+Provenance: inherited 92ca4b807085ce128d05f1379c521a4fe0a74ec3
+X-Claude-Session: https://claude.ai/code/session_01TP8H8f2GZtGZVK7KV9jfRh
+
+Provenance: inherited 1afb868a32a1e9c21136fd45ed970e18cc24d405
+X-Claude-Session: https://claude.ai/code/session_01TP8H8f2GZtGZVK7KV9jfRh
+
+Provenance: inherited 64936d4671dbd680e21e03bfb77e1cd77543ce0a
+X-Claude-Session: https://claude.ai/code/session_01TP8H8f2GZtGZVK7KV9jfRh
+
+Provenance: inherited ed03c24ee0f30810b78586c28a643269fb970cb1
+X-Claude-Session: https://claude.ai/code/session_01TP8H8f2GZtGZVK7KV9jfRh
+
+Provenance: inherited c334e9e95f08b0cf143afe132d718f44978b7e4f
+X-Claude-Session: https://claude.ai/code/session_01TP8H8f2GZtGZVK7KV9jfRh
+
+Provenance: inherited 055f6213a4c24b08bc65ab4fa8618fe722e54091
+X-Claude-Session: https://claude.ai/code/session_01TP8H8f2GZtGZVK7KV9jfRh
+
+Provenance: inherited 3f045ed7a70579044d250364b41b54f0785319fc
+X-Claude-Session: https://claude.ai/code/session_01TP8H8f2GZtGZVK7KV9jfRh
+
+Provenance: inherited e924bbb49a1041004d361f3df61c8bb0b41501e0
+X-Claude-Session: https://claude.ai/code/session_01TP8H8f2GZtGZVK7KV9jfRh
+
+Provenance: inherited 21516cae03822a601e52e456cf31392cdfd5c685
+X-Claude-Session: https://claude.ai/code/session_01TP8H8f2GZtGZVK7KV9jfRh
+
+Provenance: inherited dfc8bf8e9815a1e320453f2a03e0868ced0391f2
+X-Claude-Session: https://claude.ai/code/session_01TP8H8f2GZtGZVK7KV9jfRh
+
+Provenance: inherited 31f3e4706c3c474cc86a18fcaabc4f59f814eeab
+X-Claude-Session: https://claude.ai/code/session_01TP8H8f2GZtGZVK7KV9jfRh
+
+Provenance: inherited 68bf28ebd0642714999432e96645a9e31746265a
+X-Claude-Session: https://claude.ai/code/session_01TP8H8f2GZtGZVK7KV9jfRh
+
+Provenance: inherited 64d05bcea8eb3005469dbc45e5c4504b4700dde2
+X-Claude-Session: https://claude.ai/code/session_01QTzawQw4wxvXJmQGy9Ybhj
+
+Provenance: inherited 7b0702d5f01571055672cc386e749cc3f4123d59
+X-Claude-Session: https://claude.ai/code/session_014kEDBhmP5idhufSBeCtHcM
+
+Provenance: inherited 23f069c5c22b4d142d37c539fcb32b7248ebf360
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+Provenance: inherited 9d1639b038f477683c99edfe43ae2d27f86f1758
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+Provenance: inherited 402912564b9850217121fddd74d3a842d772df94
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+Provenance: inherited 8069eb947667c97cd621c00cca00ff539e2654aa
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+Provenance: inherited 2344d6f4ef31b162b32313e7ac4c121b9884da7f
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+Provenance: inherited ec32631d2ca1c5bdad401edee833cdf05e0d223c
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+Provenance: inherited 816ea55ad2dffd91d5ac8dde2657bd72c0703c41
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+Provenance: inherited 06e4262c10051c6457b7e4419f48842ecac80bc3
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+Provenance: inherited ebc7e6cff930bada6bf81198010af0a578a75a22
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+Provenance: inherited f8a70b0fd85159319c554c6dd85f66fc5f3c8bac
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+Provenance: inherited 42852ac035c593a7bc6631576090316a816355a6
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+Provenance: inherited 749bfe2c27e75166bb1535feb13e813e90979aeb
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+Provenance: inherited 989c36691bc26412940c43e1f5218995bbabbdd6
+Claude-Session: https://claude.ai/code/session_018U6ahzTf7LLKxVngUs7eAc
+
+Provenance: inherited 2280c24d884610879152637faae69da6eea2131d
+X-Claude-Session: https://claude.ai/code/session_0126YuzFhhuiS8ycBTYyaPgR
+
+Provenance: inherited 4bee0451075a9328b48402b9ac148f325892acd8
+X-Claude-Session: https://claude.ai/code/session_0126YuzFhhuiS8ycBTYyaPgR
+
+Provenance: inherited 9b0eca5210d456dd09b2f3f768ce7fa08cb2ef41
+Router: take effect on 2.1.283 and ask described levels
+
+Provenance: inherited 7d81ded009229bcb796fc75be1841bb11113d651
+X-Claude-Session: https://claude.ai/code/session_0126YuzFhhuiS8ycBTYyaPgR
+
+Provenance: inherited bc339151c726757083d39f5887de2498b8e4dd4c
+X-Claude-Session: https://claude.ai/code/session_0126YuzFhhuiS8ycBTYyaPgR
+
+Provenance: inherited 1677c7509d53bf58704a611a09f1dc0c1939e15a
+X-Claude-Session: https://claude.ai/code/session_0126YuzFhhuiS8ycBTYyaPgR
+
+Provenance: inherited e12f3df32d692ccf1717084dc065f52fa4772b8d
+X-Claude-Session: https://claude.ai/code/session_0126YuzFhhuiS8ycBTYyaPgR
+
+Provenance: inherited 2d3e67f11d663140a035df782940128259247d23
+X-Claude-Session: https://claude.ai/code/session_0126YuzFhhuiS8ycBTYyaPgR
+
+Provenance: inherited c97ee5a2d2af03043c44392d214891d90f3f545b
+compact: hand a tail that ends in tool results up with a closing line after them
+
+Provenance: inherited 8db845d4aa8b4a4e715752df1824a8718784351e
+bench: Router vs native xhigh vs fixed high (stopped at 16/45, not adjudicated)
+
+Provenance: inherited b66a31c8c05ed19515046755de1d84f9296b6b03
+release: plugin marketplace and v0.3.0 packaging
+
+Provenance: inherited ebd4427a8f2ba9b3b94b0fbd88e865019a746c1c
+chore: merge main (v0.3.0 squash) back into dev
