@@ -18,14 +18,17 @@ An experiment in using frontier intelligence for the hard parts—not every part
 
 </div>
 
-> **Status · September 18, 2026 · v0.2.0.** V5 turns one request into a judged workflow: Jev decides the execution
+> **Status · September 28, 2026 · v0.5.0.** V5 turns one request into a judged workflow: Jev decides the execution
 > shape, a strong read-only planner decomposes the job, a Sonnet coordinator runs the plan behind an execution guard,
 > and Jev picks a tier for every planner and worker dispatch. The mechanism was **observed end to end on Claude Code
-> 2.1.275/2.1.276** (headless and interactive). **No cost or time benefit is established**: the whole-job comparison was
-> stopped after one cell for budget reasons, and in that cell every task routed to the same tier. See
+> 2.1.275/2.1.276** (headless and interactive). **No cost or time benefit is established for the gate itself**: the
+> whole-job comparison was stopped after one cell for budget reasons, and in that cell every task routed to the same
+> tier. Three smaller Function Hooks plugins have since shipped alongside it — an extractive compactor, a model/effort
+> router and a Vitest output folder — and a read-only evidence MCP tool ships as a release asset; each has its own
+> evidence and limits, in [Install](#install) and its own README. See
 > [What is verified](#what-is-verified-and-what-is-not) and [Results](#results). Contract:
 > [#21 PRD](https://github.com/MongLong0214/jev-gate/issues/21) → [#22 ADR](https://github.com/MongLong0214/jev-gate/issues/22).
-> Release: [v0.2.0](https://github.com/MongLong0214/jev-gate/releases/tag/v0.2.0). Next work and current state:
+> Release: [v0.5.0](https://github.com/MongLong0214/jev-gate/releases/tag/v0.5.0). Next work and current state:
 > [HANDOFF.md](HANDOFF.md).
 
 ## Install
@@ -470,8 +473,8 @@ file until the session's file is removed.
 
 Without a checkout, install `jev-gate@jev-gate` from the marketplace ([Install](#install)): it is the release's archive,
 pinned by SHA-256. `npm run pack` writes the same archive locally, `dist-pack/jev-gate-<version>.zip` (compiled hook,
-manifest, hooks, the six agent profiles and lean's executor, docs), byte for byte what `npm run release:check` rebuilds from that commit; load it
-with `--plugin-dir /path/to/jev-gate-<version>.zip`.
+manifest, hooks, the six agent profiles and lean's executor, docs), byte for byte what `npm run release:check` rebuilds
+from that commit; unzip it and load the extracted directory with `--plugin-dir /path/to/jev-gate-<version>`.
 
 ## What is verified, and what is not
 
