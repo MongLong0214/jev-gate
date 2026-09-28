@@ -198,8 +198,9 @@ carry no readable usage. These are per-step records, not a saving: overlapping t
   (`model_mismatch`), or an unrouted inheriting spawn does not run on its parent's model (`baseline_mismatch`, which
   means the baseline the Router ranks from is wrong), every later spawn in that activation stays native,
   model and subagent effort alike (`spawn_suspended`, logged once), including one whose assessment was still waiting
-  on Jev, one whose spawn returns after the suspension, and a subagent whose loop has sent no patched step yet (even
-  one whose first step is still being prepared); a loop already running keeps its effort. A spawn that a pin
+  on Jev and a subagent whose loop has sent no patched step yet (even one whose first step is still being prepared).
+  A spawn already handed to the host keeps the model it was sent with; if it returns after the suspension, its
+  subagent gets no effort from it. A loop already running keeps its effort. A spawn that a pin
   kept native, even one set while Jev answered, runs on the pinned model and is not checked against the parent's. The suspension outlives a session end, so a host that broke it once is not
   trusted again until the plugin reloads. The check comes after the fact: the spawn that reveals the mismatch has
   already run.

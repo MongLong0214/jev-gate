@@ -1166,8 +1166,10 @@ describe('subagent effort and named models', () => {
     // Spawn B is still waiting on next when spawn C reports another model and suspends routing.
     const started = deferred<SpawnOutcome>();
     let spawned = false;
+    let sentB: SpawnEvent | undefined;
     const b = Object.assign(
-      async (): Promise<SpawnOutcome> => {
+      async (e: SpawnEvent): Promise<SpawnOutcome> => {
+        sentB = e;
         spawned = true;
         return started.promise;
       },
@@ -1183,6 +1185,8 @@ describe('subagent effort and named models', () => {
     await runB;
     const m = streamNext<TurnStepEvent>();
     await drain(router.turnStep(f.engine, childStep({ agentId: 'a2' }), m.next));
+    // B was handed to the host before the suspension, so its model was already sent; its subagent gets no effort.
+    expect(sentB?.model).toBe('haiku');
     // Neither loop had sent a patched step: both run as they resolved.
     expect(n.calls).toEqual([childStep()]);
     expect(m.calls).toEqual([childStep({ agentId: 'a2' })]);
