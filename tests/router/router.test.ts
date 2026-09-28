@@ -1095,6 +1095,61 @@ describe('subagent effort and named models', () => {
     expect(n.calls).toEqual([childStep({ effort: 'medium' })]);
   });
 
+  it("leaves a loop native when its first step ran before the spawn's id arrived", async () => {
+    const router = createRouter(configOf(CHILD));
+    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', 0.95], effort: ['medium', 0.95] }) });
+    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    const started = deferred<SpawnOutcome>();
+    let spawned = false;
+    const s = spawnNext(() => ({ model: 'claude-opus-5-5', agentId: 'a1' }));
+    const next = Object.assign(
+      async (e: SpawnEvent): Promise<SpawnOutcome> => {
+        s.calls.push(e);
+        spawned = true;
+        return started.promise;
+      },
+      { signal: s.controller.signal },
+    );
+    const run = router.agentSpawn(f.engine, spawn(), next);
+    while (!spawned) await settle();
+    const n = streamNext<TurnStepEvent>();
+    const first = drain(router.turnStep(f.engine, childStep(), n.next));
+    await settle();
+    // The wait runs out: the first step goes on at the effort it resolved to.
+    f.expire();
+    await first;
+    started.resolve({ model: 'claude-opus-5-5', agentId: 'a1' });
+    await run;
+    // A lower effort from here would restart the cache the first step wrote.
+    await drain(router.turnStep(f.engine, childStep({ index: 1 }), n.next));
+    expect(n.calls).toEqual([childStep(), childStep({ index: 1 })]);
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'child_stop', agent_id: 'a1', index: 1, reason: 'first_step_native' }));
+  });
+
+  it('leaves every later spawn native once suspended, the effort of its subagent too', async () => {
+    const router = createRouter(configOf(CHILD));
+    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['fast', 0.95], effort: ['low', 0.95] }) });
+    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    // The routed spawn runs on another model: routing is suspended, and its loop, not yet stepped, stays native.
+    const first = spawnNext(() => ({ model: 'claude-opus-5-5', agentId: 'a1' }));
+    await router.agentSpawn(f.engine, spawn(), first.next);
+    expect(f.logs).toContainEqual({ event: 'spawn_suspended', reason: 'model_mismatch' });
+    const n = streamNext<TurnStepEvent>();
+    await drain(router.turnStep(f.engine, childStep(), n.next));
+    expect(n.calls).toEqual([childStep()]);
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'child_stop', agent_id: 'a1', reason: 'spawn_suspended' }));
+
+    // A later spawn is not assessed at all, and its loop runs as it resolved.
+    const second = spawnNext(() => ({ model: 'claude-opus-5-5', agentId: 'a2' }));
+    await router.agentSpawn(f.engine, spawn({ tool_use_id: 'tu2' }), second.next);
+    expect(second.calls).toEqual([spawn({ tool_use_id: 'tu2' })]);
+    expect(f.sent).toHaveLength(1);
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn', tool_use_id: 'tu2', skipped: 'spawn_suspended' }));
+    const m = streamNext<TurnStepEvent>();
+    await drain(router.turnStep(f.engine, childStep({ agentId: 'a2' }), m.next));
+    expect(m.calls).toEqual([childStep({ agentId: 'a2' })]);
+  });
+
   it('leaves a loop native once a step arrives on another effort or model, or its patch is answered by another model', async () => {
     const router = createRouter(configOf(CHILD));
     const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', 0.95], effort: ['low', 0.95] }) });
@@ -1197,6 +1252,23 @@ describe('root effort and the prompt cache', () => {
   });
 });
 
+describe('root effort and the prompt cache: the model that answered', () => {
+  it('takes a response from another model as no warm cache on the one asked', async () => {
+    const router = createRouter(configOf(EFFORT_ONLY));
+    let pick: [string, number] = ['xhigh', 0.95];
+    const f = fakeEngine({ respond: (req) => answering({ ...CLEAR, effort: pick })(req) });
+    router.turnStart({ turnId: 't1', text: TEXT });
+    await drain(router.turnStep(f.engine, step({ turnId: 't1', effort: 'xhigh' }), streamNext<TurnStepEvent>(() => 'claude-sonnet-5').next));
+    router.turnComplete({ turnId: 't1' });
+    pick = ['low', 0.95];
+    router.turnStart({ turnId: 't2', text: TEXT });
+    const n = streamNext<TurnStepEvent>();
+    await drain(router.turnStep(f.engine, step({ turnId: 't2', effort: 'xhigh' }), n.next));
+    expect(n.calls).toEqual([step({ turnId: 't2', effort: 'low' })]);
+    expect(f.logs.some((l) => 'held_for_cache' in l)).toBe(false);
+  });
+});
+
 describe('root context', () => {
   it("sends the conversation's last visible reply with the next root turn, and forgets it when the session ends", async () => {
     const router = createRouter(configOf(EFFORT_ONLY));
@@ -1221,6 +1293,28 @@ describe('root context', () => {
     router.turnStart({ turnId: 't3', text: 'ㅇㅇ' });
     await drain(router.turnStep(f.engine, step({ turnId: 't3' }), replying('')));
     expect(f.sent[2]?.state).toEqual({ task: { text: 'ㅇㅇ' } });
+  });
+
+  it('screens the whole reply before keeping its tail, and carries none of a screened one', async () => {
+    const router = createRouter(configOf(EFFORT_ONLY));
+    const f = fakeEngine({ respond: answering({ ...CLEAR, effort: ['medium', 0.95] }) });
+    const replying = (answer: string) =>
+      Object.assign(
+        async function* (e: TurnStepEvent): AsyncGenerator<string, { answer: string; usage: { model: string } }> {
+          yield 'chunk';
+          return { answer, usage: { model: e.model } };
+        },
+        { signal: new AbortController().signal },
+      );
+    // The key's header falls outside the kept tail; the tail alone passes the screen.
+    const key = `-----BEGIN PRIVATE KEY-----\n${'A'.repeat(2200)}\n-----END PRIVATE KEY-----`;
+    router.turnStart({ turnId: 't1', text: TEXT });
+    await drain(router.turnStep(f.engine, step(), replying(key)));
+    router.turnComplete({ turnId: 't1' });
+    router.turnStart({ turnId: 't2', text: 'Continue' });
+    await drain(router.turnStep(f.engine, step({ turnId: 't2' }), replying('')));
+    expect(f.sent[1]?.state).toEqual({ task: { text: 'Continue' } });
+    expect(JSON.stringify(f.sent)).not.toContain('AAAA');
   });
 });
 

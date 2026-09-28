@@ -29,8 +29,8 @@ Set the options in `/config`. They are stored in settings.json under `pluginConf
 The key comes from `typesafeApiKey` (a sensitive option) or, when that is empty, from `TYPESAFE_API_KEY` in the
 environment. An explicit key that cannot ride in a header is refused and the environment is **not** consulted, so a
 typo never silently switches credentials. The key is sent only in the `Authorization` header and never logged. It is
-read once per session. A call that the event and configuration alone leave native (a fork, an explicit model, an
-unrouted type, a numeric effort, nothing to ask) goes on without waiting for it. Otherwise the key comes before
+read once per session. A call that the event and configuration alone leave with nothing to ask (a fork, a numeric
+effort, a spawn whose model is not routed while subagent effort is off) goes on without waiting for it. Otherwise the key comes before
 anything optional: without one (`key_missing`, `key_invalid`) no pin, setting or host version is read for the call.
 Every wait, for the key or a read, ends when its turn is retired or its dispatch or session ends.
 
@@ -59,8 +59,10 @@ profile, since each rank lookup would then be a guess.
 
 ## When it leaves a call native
 
-Every gate below leaves the call exactly as it was and logs why. A spawn type the Router does not route is caller
-text, so it is logged as `other`, never by name.
+Every gate below leaves what it gates exactly as it was and logs why. On a spawn, a gate on its model leaves the model
+native while its subagent's effort is still asked (unless `routeSubagentEffort` is off); a fork, a lean marker, a
+missing key, an effort pin and a suspension leave both native. A spawn type the Router does not route is caller text,
+so it is logged as `other`, never by name.
 
 - **Environment pins.** `ANTHROPIC_MODEL` pins the root model and `CLAUDE_CODE_EFFORT_LEVEL` its effort.
   `CLAUDE_CODE_SUBAGENT_MODEL` or `…_FORCE` pins spawns (`subagent_model_pinned`), and any
@@ -119,7 +121,8 @@ no more than ordinary, while lookup alone is under 0.9.
 
 The `control` question stays a choice, and it is the escape hatch: a root move needs `task_clear` at the floor for its
 direction, so a request that depends on earlier conversation or names its own model or effort stays where it is. A
-root turn is sent with the tail of the conversation's last visible reply (`previous_reply`, 2,000 characters), which
+root turn is sent with the tail of the conversation's last visible reply (`previous_reply`, 2,000 characters; a reply
+the credential screen flags anywhere is not sent at all), which
 most of the owner's turns answer ("ㅇㅇ", "다진행해": a median 22 characters over 245 turns); replayed with it, Jev
 judged 54 of them `needs_context` rather than 115. A spawn's prompt is everything its subagent gets, so a spawn is
 held only by `explicit_lock`: `needs_context` and `unclear` judge the same text the subagent works from. No
@@ -154,10 +157,10 @@ baseline, something else changed it, and the Router stops for the rest of the tu
 host dispatched a step without waiting for the hook (`step_abandoned`): a later step never switches away from what that
 one ran on.
 
-**Root effort and the prompt cache.** Changing the top-level effort restarts a conversation's prompt cache
-(platform docs, *Effort* and *Prompt caching*), and the host sends each turn's effort both as a per-message change and
-as the top-level value (2.1.283, observed on a local fake API). So on a warm cache — a response on the same model
-within the last 55 minutes, under the host's one-hour cache lifetime — a lower effort is held at the one the cache was
+**Root effort and the prompt cache.** Changing the effort always invalidates a conversation's cached messages
+(platform docs, *Prompt caching*), and the host sends each turn's effort both as a per-message change and
+as the top-level value (2.1.283, observed on a local fake API). So on a warm cache — a response that the requested model
+itself gave (by the model its usage reports) within the last 55 minutes, under the host's one-hour cache lifetime — a lower effort is held at the one the cache was
 written at (`held_for_cache` names what was asked), and only a rise pays the rewrite. Lowering waits for a cold cache:
 a session's first turn, a model change, or an hour's pause. Replayed on the owner's 245 root turns of 2026-09-21..28,
 whose first requests re-read a median 185K tokens, lowering freely moved effort at 71 warm turns and, with each
@@ -167,9 +170,9 @@ The savings in that replay are assumed shares of each turn's cost, not measured 
 **Subagent effort.** A subagent's loop steps through `turn.step` with its own `agentId`, which the spawn's result
 carries (2.1.283, observed). The spawn is asked the effort question on the full scale before its subagent's effort
 is known; its loop's first step reads that answer against the model and effort the loop actually runs at and decides
-for the whole loop, so one subagent keeps one effort and its cache is never restarted. A step that arrives on another
-model or effort, an effort pin, or a patched step answered by another model leaves that loop native
-(`child_stop`). On the fake API, a probe plugin making the same two patches (a named `model: "opus"` spawn to
+for the whole loop, so one subagent keeps one effort and its cache is never restarted. A first step that could not
+wait for the spawn's id (1.5 s) runs native and so does the rest of its loop. A step that arrives on another model or
+effort, an effort pin, or a patched step answered by another model leaves that loop native too (`child_stop`). On the fake API, a probe plugin making the same two patches (a named `model: "opus"` spawn to
 `sonnet`, each of its loop's steps to `low`) sent every subagent request as `claude-sonnet-5` at `effort: low` while
 the root stayed at `xhigh` (`~/jev-gate-runs/router-v2-2026-09-28/probe-child/`).
 
@@ -193,8 +196,9 @@ carry no readable usage. These are per-step records, not a saving: overlapping t
   every spawn native after each host update, so any 2.1.N with N at least 282 is accepted, and the session checks
   what the host reports instead. If a routed spawn reports another model than the one requested
   (`model_mismatch`), or an unrouted inheriting spawn does not run on its parent's model (`baseline_mismatch`, which
-  means the baseline the Router ranks from is wrong), every later spawn in that activation stays native
-  (`spawn_suspended`, logged once), including one whose assessment was still waiting on Jev. A spawn that a pin
+  means the baseline the Router ranks from is wrong), every later spawn in that activation stays native,
+  model and subagent effort alike (`spawn_suspended`, logged once), including one whose assessment was still waiting
+  on Jev and a subagent whose loop had not stepped yet; a loop already running keeps its effort. A spawn that a pin
   kept native, even one set while Jev answered, runs on the pinned model and is not checked against the parent's. The suspension outlives a session end, so a host that broke it once is not
   trusted again until the plugin reloads. The check comes after the fact: the spawn that reveals the mismatch has
   already run.

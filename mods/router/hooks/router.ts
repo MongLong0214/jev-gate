@@ -6,6 +6,7 @@ import type { RootSwitch, SymbolicEffort } from './models.ts';
 import { answeredBy, effortIndex, factsOf, isSymbolicEffort, sameModel, VERIFIED_ROOT_SWITCHES } from './models.ts';
 import type { Answers, Baseline, DimensionReason, ModelTier, MutableDimensions, PolicyOptions, RoutedEffort, RoutingPatch, RoutingTask } from './policy.ts';
 import { allowedBy, buildQuestions, buildState, choosePatch, EFFORT_LEVEL_TARGETS, offerableEfforts, offerableTiers, pairValid, validateAnswers } from './policy.ts';
+import { looksSecret } from './secret.ts';
 
 /**
  * The Router's handlers over a structural engine. register.ts adapts the host's `$` to RouterEngine (the environment
@@ -608,6 +609,12 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
       c = children.get(id);
     }
     if (!c || c.stopped) return null;
+    if (c.baseline === null && e.index > 0) {
+      // The loop's first step ran before its spawn landed and went native; a lower effort now would restart its cache.
+      c.stopped = true;
+      log(engine, { event: 'child_stop', agent_id: id, index: e.index, reason: 'first_step_native' });
+      return null;
+    }
     if (c.baseline === null) {
       c.baseline = { model: e.model, ...(e.effort !== undefined ? { effort: e.effort } : {}) };
       const efforts = offerableEfforts(c.baseline);
@@ -693,10 +700,15 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     }
   };
 
-  /** Keeps the tail of a root step's visible reply for the next turn's assessment. */
+  /**
+   * Keeps the tail of a root step's visible reply for the next turn's assessment. The whole reply is screened rather
+   * than the kept tail: a tail cut from a longer credential can pass the screen on its own. A screened reply is not
+   * carried at all.
+   */
   const remember = (result: TurnStepOutcome | void): void => {
     const answer = result?.answer;
-    if (typeof answer === 'string' && answer.trim() !== '') lastReply = answer.length > REPLY_CHARS ? answer.slice(-REPLY_CHARS) : answer;
+    if (typeof answer !== 'string' || answer.trim() === '') return;
+    lastReply = looksSecret(answer) ? null : answer.length > REPLY_CHARS ? answer.slice(-REPLY_CHARS) : answer;
   };
 
   async function* turnStep<E extends TurnStepEvent, C, R extends TurnStepOutcome | void>(engine: RouterEngine, e: E, next: StreamNextLike<E, C, R>): AsyncGenerator<C, R | void> {
@@ -730,7 +742,10 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     if (e.agentId === undefined && !own.aborted) {
       remember(result);
       const sent = patch?.effort ?? e.effort;
-      if (result?.usage) lastRoot = { at: engine.now(), model: patch?.model ?? e.model, effort: isSymbolicEffort(sent) ? sent : null };
+      const asked = patch?.model ?? e.model;
+      const seen = typeof result?.usage?.model === 'string' ? result.usage.model : null;
+      // Only a response the asked model gave wrote the cache a later turn on that model reads.
+      if (seen !== null && answeredBy(asked, seen)) lastRoot = { at: engine.now(), model: asked, effort: isSymbolicEffort(sent) ? sent : null };
     }
     return result;
   }
@@ -744,6 +759,13 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     if (suspended !== null) return;
     suspended = reason;
     log(engine, { event: 'spawn_suspended', reason });
+    // A loop that has not stepped yet stays native too; one already running keeps its effort rather than restarting its
+    // cache.
+    for (const [id, c] of children) {
+      if (c.baseline !== null || c.stopped) continue;
+      c.stopped = true;
+      log(engine, { event: 'child_stop', agent_id: id, index: null, reason: 'spawn_suspended' });
+    }
   };
 
   const spawnSkip = (engine: RouterEngine, e: SpawnEvent, reason: string): null => {
@@ -804,6 +826,7 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     // Native ignores a fork's model and inherits the parent's context and model.
     if (e.fork) return spawnSkip(engine, e, 'fork');
     if (LEAN_MARKER.test(e.prompt) || LEAN_MARKER.test(e.description)) return spawnSkip(engine, e, 'lean_marker');
+    if (suspended !== null) return spawnSkip(engine, e, 'spawn_suspended');
     void diagnose(engine);
     const explicit = e.model !== undefined && e.model.trim() !== '' ? e.model : null;
     // What the event, configuration and offer cache decide comes before any wait. Null: the model can move.
@@ -814,7 +837,6 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
           ? null
           : 'explicit_model'
         : inheritSkip(e);
-    if (modelSkip === null && suspended !== null) modelSkip = 'spawn_suspended';
     const baseline: Baseline = { model: explicit ?? e.parentModel };
     if (modelSkip === null) {
       // The allowlist can only narrow this.
@@ -917,11 +939,11 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
       log(engine, { event: 'spawn_stop', tool_use_id: e.tool_use_id, reason: 'session_ended', requested: target });
       target = null;
     }
-    if (target !== null && suspended !== null) {
+    if ((target !== null || plan?.answers) && !own.aborted && suspended !== null) {
       log(engine, { event: 'spawn_stop', tool_use_id: e.tool_use_id, reason: 'spawn_suspended', requested: target });
       target = null;
     }
-    const answers = own.aborted ? null : (plan?.answers ?? null);
+    const answers = own.aborted || suspended !== null ? null : (plan?.answers ?? null);
     // The subagent's first step can be dispatched before next returns its id; it waits on this, never past next.
     let land = (): void => {};
     const landed = new Promise<void>((resolve) => {
