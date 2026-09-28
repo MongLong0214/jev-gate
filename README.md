@@ -14,7 +14,7 @@ An experiment in using frontier intelligence for the hard parts—not every part
 [![Savings not established](https://img.shields.io/badge/savings-not%20established-D29922)](#results)
 [![Node 22+](https://img.shields.io/badge/node-22%2B-3FB950)](#try-v5)
 
-[The idea](#the-idea) · [lean (new)](#lean--a-second-separate-mode-in-development) · [How V5 works](#how-v5-works-legacy-routing-modes) · [Try V5](#try-v5) · [What is verified](#what-is-verified-and-what-is-not) · [Results](#results) · [Build with us](#build-with-us)
+[Install](#install) · [The idea](#the-idea) · [lean (new)](#lean--a-second-separate-mode-in-development) · [How V5 works](#how-v5-works-legacy-routing-modes) · [Try V5](#try-v5) · [What is verified](#what-is-verified-and-what-is-not) · [Results](#results) · [Build with us](#build-with-us)
 
 </div>
 
@@ -27,6 +27,30 @@ An experiment in using frontier intelligence for the hard parts—not every part
 > [#21 PRD](https://github.com/MongLong0214/jev-gate/issues/21) → [#22 ADR](https://github.com/MongLong0214/jev-gate/issues/22).
 > Release: [v0.2.0](https://github.com/MongLong0214/jev-gate/releases/tag/v0.2.0). Next work and current state:
 > [HANDOFF.md](HANDOFF.md).
+
+## Install
+
+The repository is its own Claude Code plugin marketplace. In a Claude Code session:
+
+```text
+/plugin marketplace add MongLong0214/jev-gate
+/plugin install jev-gate-compact@jev-gate
+```
+
+| Plugin | What it does | Needs |
+|---|---|---|
+| `jev-gate-compact` | Answers auto compactions with an extractive digest and the recent tail: no summarizer request, milliseconds instead of a minute. Calls no Jev. [README](mods/compact/README.md) | `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` |
+| `jev-gate-router` | Chooses the main thread's effort and a subagent's model and effort from one Jev assessment each; native on any doubt. The main thread's model stays native. [README](mods/router/README.md) | `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`, a TypeSafe key |
+| `jev-gate` | The orchestration gate described below, built from the tagged release. | Node.js 22+, a TypeSafe key, `JEV_GATE_MODE` |
+
+Every plugin is off after install. The two Function Hooks plugins take their options in `/plugin` (or
+`claude plugin install <plugin>@jev-gate --config enabled=true`), and the host loads them only when
+`CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` is in its environment, for example under `env` in `~/.claude/settings.json`.
+`jev-gate` reads its mode from `JEV_GATE_MODE` or `~/.config/jev-gate/config.json` ([Try V5](#try-v5)).
+
+A plugin changes only when a release raises its version, and `main` takes only releases. To update, run
+`/plugin marketplace update jev-gate` and then `claude plugin update <plugin>@jev-gate`, or turn on auto-update for the
+marketplace under **Marketplaces** in `/plugin`. [CHANGELOG](CHANGELOG.md) lists what each release changed.
 
 ## The idea
 
@@ -396,8 +420,10 @@ Job state lives in `$XDG_STATE_HOME/jev-gate/jobs/` (`~/.local/state/jev-gate/jo
 containing your plan and task text. Delete the directory to remove it; a superseded job is kept as history inside its own
 file until the session's file is removed.
 
-A local archive for a machine without a checkout: `npm run pack` writes `dist-pack/jev-gate-<version>.zip` (compiled
-hook, manifest, hooks, the six agent profiles, docs); load it with `--plugin-dir /path/to/jev-gate-<version>.zip`.
+Without a checkout, install `jev-gate@jev-gate` from the marketplace ([Install](#install)): it is the release's archive,
+pinned by SHA-256. `npm run pack` writes the same archive locally, `dist-pack/jev-gate-<version>.zip` (compiled hook,
+manifest, hooks, the six agent profiles, docs), byte for byte what `npm run release:check` rebuilds from that commit; load it
+with `--plugin-dir /path/to/jev-gate-<version>.zip`.
 
 ## What is verified, and what is not
 

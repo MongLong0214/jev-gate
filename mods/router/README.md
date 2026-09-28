@@ -15,16 +15,20 @@ patches take effect, not a saving; no saving is claimed.**
 
 ## Enable
 
-Function Hooks are gated in the host:
+Install it from the repository's marketplace. Function Hooks are gated in the host, so
+`CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` must be in the environment Claude Code starts in (for example under `env` in
+`~/.claude/settings.json`):
 
 ```sh
-export CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1
-claude --plugin-dir /path/to/jev-gate/mods/router
+claude plugin marketplace add MongLong0214/jev-gate
+claude plugin install jev-gate-router@jev-gate --config enabled=true
 ```
 
+From a checkout, `claude --plugin-dir /path/to/jev-gate/mods/router` loads the working tree instead.
+
 The plugin is **off by default**. With `enabled` false it registers no hook at all, so the session is exactly native.
-Set the options in `/config`. They are stored in settings.json under `pluginConfigs["jev-gate-router"].options` (or
-`jev-gate-router@inline` for a `--plugin-dir` load), except a sensitive one, which the host keeps in secure storage.
+Set the options in `/config`. They are stored in settings.json under `pluginConfigs["jev-gate-router@jev-gate"].options`
+(`jev-gate-router@inline` for a `--plugin-dir` load), except a sensitive one, which the host keeps in secure storage.
 
 The key comes from `typesafeApiKey` (a sensitive option) or, when that is empty, from `TYPESAFE_API_KEY` in the
 environment. An explicit key that cannot ride in a header is refused and the environment is **not** consulted, so a

@@ -1,7 +1,7 @@
 {
   "name": "jev-gate-router",
-  "version": "0.1.0",
-  "description": "Routes each request's Claude model and effort with one TypeSafe Jev assessment; off by default, native on any doubt.",
+  "version": "0.3.0",
+  "description": "Routes the main thread's effort and each subagent's model and effort with one TypeSafe Jev assessment; off by default, native on any doubt.",
   "author": {
     "name": "MongLong0214",
     "url": "https://github.com/MongLong0214"

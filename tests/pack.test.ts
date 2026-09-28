@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -8,7 +9,8 @@ const root = join(__dirname, '..');
 let tmp: string;
 let pluginRoot: string;
 
-const hasZip = spawnSync('zip', ['-v'], { encoding: 'utf8' }).status === 0 && spawnSync('unzip', ['-v'], { encoding: 'utf8' }).status === 0;
+// pack.mjs writes the archive itself; unzip only reads it back here.
+const hasZip = spawnSync('unzip', ['-v'], { encoding: 'utf8' }).status === 0;
 
 beforeAll(() => {
   tmp = mkdtempSync(join(tmpdir(), 'jev-pack-'));
@@ -103,6 +105,25 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     const quietViaEntry = spawnSync(process.execPath, [join(dest, 'dist', 'entry.js'), '--lean'], { cwd: otherCwd, encoding: 'utf8', env, input: JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 's', prompt_id: 'p', prompt: 'add a test' }) });
     expect(quietViaEntry).toMatchObject({ status: 0, stdout: '', stderr: 'jev-gate: key_missing\n' });
   }, 60_000);
+
+  it('packs the same bytes every time, whatever the timestamps of its files', () => {
+    const sha = (dir: string) => {
+      const pack = spawnSync(process.execPath, [join(root, 'scripts', 'pack.mjs'), dir, '--root', pluginRoot], { encoding: 'utf8' });
+      expect(pack.status, pack.stderr).toBe(0);
+      const archive = readdirSync(dir).find((f) => /^jev-gate-[0-9].*\.zip$/.test(f))!;
+      return createHash('sha256').update(readFileSync(join(dir, archive))).digest('hex');
+    };
+    const first = sha(join(tmp, 'repro a'));
+    const later = new Date('2031-05-06T07:08:09Z');
+    for (const rel of ['README.md', 'package.json', join('dist', 'entry.js')]) utimesSync(join(pluginRoot, rel), later, later);
+    expect(sha(join(tmp, 'repro b'))).toBe(first);
+    const archive = join(tmp, 'repro b', readdirSync(join(tmp, 'repro b'))[0]!);
+    expect(spawnSync('unzip', ['-tq', archive], { encoding: 'utf8' }).status).toBe(0);
+    // No entry carries the clock: a release rebuilt on another machine, on another day, gives the pinned bytes.
+    const rows = spawnSync('unzip', ['-Z', archive], { encoding: 'utf8' }).stdout.split('\n').filter((l) => /^-/.test(l));
+    expect(rows.length).toBeGreaterThan(10);
+    for (const row of rows) expect(row).toMatch(/ stor 80-Jan-01 00:00 /);
+  });
 
   it('packs the router Mod from its source, at its own version, with nothing of Lean or legacy', () => {
     const outDir = join(tmp, 'pack router out');
