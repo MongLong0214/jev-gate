@@ -2,7 +2,7 @@ import type { ChoiceAnswer } from '../types.js';
 import { createJudgementCache } from './cache.js';
 import { buildCandidates, lineStarts, sliceLines, snapshotId, type Candidate, type SourceFile } from './candidates.js';
 import { selectPage, type Selection } from './selector.js';
-import { excluded, globToRegExp, listFiles, normalizeRelative, readSource, within, type ReadOutcome } from './source.js';
+import { excluded, exists, globToRegExp, listFiles, normalizeRelative, readSource, within, type ReadOutcome } from './source.js';
 import {
   LIMITS,
   MODES,
@@ -371,6 +371,12 @@ export const createEvidenceService = (config: EvidenceConfig | null, deps: Evide
     const outside = input.sources.find((s) => !cfg.allowedRoots.some((a) => within(s.path, a)) || excluded(s.path, globs));
     if (outside) return refuse(root, 'out_of_scope', `${JSON.stringify(outside.path.slice(0, 200))} is outside the allowed roots or excluded`);
 
+    // A read-back admits only what a search could have returned: a listed file, not ignored, not inside a submodule.
+    const inventory = await listFiles(root, [...new Set(input.sources.map((s) => s.path))], deadline - now());
+    if (signal.aborted) return cancelled();
+    if (!inventory) return refuse(root, 'unsupported_inventory', 'git could not list the project files');
+    const listed = new Set(inventory.paths);
+
     const reads = new Map<string, ReadOutcome>();
     const reasons: ReasonCode[] = [];
     const reason = (r: ReasonCode): void => {
@@ -380,6 +386,11 @@ export const createEvidenceService = (config: EvidenceConfig | null, deps: Evide
     const items: EvidenceItem[] = [];
     for (const [i, s] of input.sources.entries()) {
       if (signal.aborted) return cancelled();
+      if (!listed.has(s.path)) {
+        reason((await exists(root, s.path)) ? 'out_of_scope' : 'source_missing');
+        items.push({ source: s, textState: 'stale', origin: 'local', judgement: 'unjudged' });
+        continue;
+      }
       let r = reads.get(s.path);
       if (!r) {
         if (now() >= deadline || readBytes + LIMITS.fileBytes > LIMITS.totalReadBytes) {
@@ -410,7 +421,9 @@ export const createEvidenceService = (config: EvidenceConfig | null, deps: Evide
       sourceIncomplete: items.some((i) => i.textState !== 'included'),
     };
     const result = fitResult({ projectRoot: root, items, snapshotId: null, next: null, coverage, reasons, partial: coverage.sourceIncomplete });
-    return result ? { result, isError: false } : refuse(root, 'output_limit', 'the result metadata does not fit in 64 KiB');
+    // Folding a read-back for size would hand back the same folded answer on every retry: it is a capacity error.
+    if (!result || result.reasonCodes.includes('output_limit')) return refuse(root, 'output_limit', 'these sources do not fit in one 64 KiB result; ask for fewer or smaller ranges, or use Read');
+    return { result, isError: false };
   };
 
   return {
@@ -422,7 +435,9 @@ export const createEvidenceService = (config: EvidenceConfig | null, deps: Evide
       if (active >= LIMITS.concurrentCalls) return refuse(config.projectRoot, 'busy', 'two evidence calls are already running; retry after one finishes');
       active++;
       try {
-        return parsed.input.kind === 'sources' ? await readSources(config, parsed.input, signal) : await search(config, parsed.input, signal);
+        const reply = parsed.input.kind === 'sources' ? await readSources(config, parsed.input, signal) : await search(config, parsed.input, signal);
+        // A cancellation seen only after the last read is still a cancellation, never a local success.
+        return signal.aborted ? cancelled() : reply;
       } finally {
         active--;
       }

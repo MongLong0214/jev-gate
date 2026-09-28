@@ -197,7 +197,9 @@ export const buildCandidates = (files: readonly SourceFile[], query: CandidateQu
       const l = line.toLowerCase();
       return terms.some(([t]) => l.includes(t));
     };
-    for (const c of windowsAround(w, hitLines(w, hit), set)) {
+    const hits = hitLines(w, hit);
+    // A path that names a term is a candidate even when its text never repeats it: its first window.
+    for (const c of windowsAround(w, hits.length === 0 && pathScore > 0 && lineCount(w) > 0 ? [1] : hits, set)) {
       const text = c.text.toLowerCase();
       scored.push({ c, score: pathScore + terms.reduce((n, [t, weight]) => n + (text.includes(t) ? weight : 0), 0) });
     }

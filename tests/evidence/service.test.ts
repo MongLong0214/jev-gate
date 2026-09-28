@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createEvidenceService, type EvidenceService } from '../../src/evidence/service.js';
 import { sha256Hex } from '../../src/evidence/source.js';
 import { LIMITS, type EvidenceResult, type SourceRef } from '../../src/evidence/types.js';
-import { config, lineBytes, live, repo, write } from './repo.js';
+import { config, git, lineBytes, live, repo, write } from './repo.js';
 
 const numbered = (n: number, line = (i: number) => `line ${i}`): string => Array.from({ length: n }, (_, i) => `${line(i + 1)}\n`).join('');
 const run = async (svc: EvidenceService, raw: unknown): Promise<EvidenceResult> => (await svc.run(raw, live())).result;
@@ -108,6 +108,27 @@ describe('sources', () => {
     expect((await svc.run({ goal: 'x', sources: [{ ...wide, startLine: 1, endLine: 30 }] }, live())).result.reasonCodes).toEqual(['range_too_large']);
     expect((await svc.run({ goal: 'x', sources: [wide], roots: ['src'] }, live())).result.reasonCodes).toEqual(['invalid_input']);
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('reads back only a listed file, and refuses rather than folds a read-back over 64 KiB', async () => {
+    const big = numbered(640, (i) => `${i} ${'b'.repeat(170)}`);
+    const root = repo({ '.gitignore': 'secret.ts\n', 'src/secret.ts': 'hidden\n', 'src/nested/in.ts': 'inner\n', 'src/big.ts': big });
+    git(join(root, 'src/nested'), 'init', '-q');
+    const svc = await local(root);
+    const ref = (path: string, text: string): SourceRef => ({ path, startLine: 1, endLine: 1, fileSha256: sha256Hex(text) });
+    const hidden = await run(svc, { goal: 'x', sources: [ref('src/secret.ts', 'hidden\n'), ref('src/nested/in.ts', 'inner\n'), ref('src/gone.ts', '')] });
+    expect(hidden.items.map((i) => [i.textState, i.text])).toEqual([['stale', undefined], ['stale', undefined], ['stale', undefined]]);
+    expect(hidden.reasonCodes).toEqual(['out_of_scope', 'source_missing']);
+
+    const sources = Array.from({ length: 16 }, (_, k) => ({ path: 'src/big.ts', startLine: k * 40 + 1, endLine: k * 40 + 40, fileSha256: sha256Hex(big) }));
+    const over = await svc.run({ goal: 'x', sources }, live());
+    expect(over).toMatchObject({ isError: true, result: { items: [], reasonCodes: ['output_limit'] } });
+  });
+
+  it('makes a file whose path names a term a candidate, and excludes fixed directories in any case', async () => {
+    const root = repo({ 'src/auth/guard.ts': 'export const check = () => true;\n', 'NODE_MODULES/pkg/auth.ts': 'auth\n' });
+    const r = await run(await local(root), { goal: 'x', queryTerms: ['auth'] });
+    expect(r.items.map((i) => [i.source.path, i.source.startLine])).toEqual([['src/auth/guard.ts', 1]]);
   });
 });
 

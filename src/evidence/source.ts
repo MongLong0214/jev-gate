@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
-import { lstat, open, readFile, realpath, stat } from 'node:fs/promises';
+import { lstat, open, realpath } from 'node:fs/promises';
 import { isAbsolute, join, posix } from 'node:path';
 
 import { LIMITS, type EvidenceConfig } from './types.js';
@@ -26,7 +26,7 @@ export const within = (rel: string, root: string): boolean => root === '' || rel
 
 const EXCLUDED_DIRS = new Set([
   '.git', 'node_modules', 'vendor', 'bower_components', 'jspm_packages', 'dist', 'build', 'out', 'target', 'coverage',
-  '.next', '.nuxt', '.svelte-kit', '.turbo', '.cache', '.venv', 'venv', '__pycache__', 'Pods', '.gradle',
+  '.next', '.nuxt', '.svelte-kit', '.turbo', '.cache', '.venv', 'venv', '__pycache__', 'pods', '.gradle',
 ]);
 const CREDENTIAL_FILE =
   /^(?:\.env.*|.*\.(?:pem|key|p12|pfx|jks|keystore|crt|cer|der|gpg|asc|kdbx|tfstate|tfstate\.backup)|id_(?:rsa|dsa|ecdsa|ed25519)(?:\.pub)?|\.npmrc|\.yarnrc(?:\.yml)?|\.pypirc|\.netrc|\.pgpass|\.git-credentials|\.htpasswd|credentials(?:\.[\w-]+)?)$/i;
@@ -52,7 +52,8 @@ export const globToRegExp = (glob: string): RegExp => {
 /** The fixed exclusions, then the owner's, which may only narrow further. A glob matching a directory excludes its contents. */
 export const excluded = (rel: string, ownerGlobs: readonly RegExp[]): boolean => {
   const parts = rel.split('/');
-  if (parts.some((p) => EXCLUDED_DIRS.has(p)) || CREDENTIAL_FILE.test(parts[parts.length - 1]!)) return true;
+  // Lower-cased: on a case-insensitive file system NODE_MODULES is node_modules.
+  if (parts.some((p) => EXCLUDED_DIRS.has(p.toLowerCase())) || CREDENTIAL_FILE.test(parts[parts.length - 1]!)) return true;
   if (ownerGlobs.length === 0) return false;
   for (let i = 1; i <= parts.length; i++) {
     const prefix = parts.slice(0, i).join('/');
@@ -92,10 +93,19 @@ export const loadConfig = async (env: Readonly<Record<string, string | undefined
   if (!isAbsolute(path)) return bad('JEV_EVIDENCE_CONFIG is not an absolute path');
   let raw: unknown;
   try {
-    const st = await stat(path);
-    if (!st.isFile()) return bad('JEV_EVIDENCE_CONFIG is not a regular file');
-    if (st.size > LIMITS.configBytes) return bad('the config file is over 64 KiB');
-    raw = JSON.parse(await readFile(path, 'utf8'));
+    // One descriptor and a capped read, so a file that grows after the check is still read only to its bound.
+    const fh = await open(path, constants.O_RDONLY | constants.O_NONBLOCK);
+    let text: string;
+    try {
+      if (!(await fh.stat()).isFile()) return bad('JEV_EVIDENCE_CONFIG is not a regular file');
+      const cap = Buffer.alloc(LIMITS.configBytes + 1);
+      const { bytesRead } = await fh.read(cap, 0, cap.length, 0);
+      if (bytesRead > LIMITS.configBytes) return bad('the config file is over 64 KiB');
+      text = cap.subarray(0, bytesRead).toString('utf8');
+    } finally {
+      await fh.close();
+    }
+    raw = JSON.parse(text);
   } catch {
     return bad('the config file cannot be read as JSON');
   }
@@ -172,6 +182,9 @@ export const listFiles = async (root: string, pathspecs: readonly string[], time
   return { paths: [...seen].sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b))), complete: !truncated, unreadable };
 };
 
+/** Whether anything is at the path, without reading it or following a final symlink. */
+export const exists = (root: string, rel: string): Promise<boolean> => lstat(join(root, rel)).then(() => true, () => false);
+
 export type ReadOutcome =
   | { ok: true; bytes: number; text: string; sha256: string }
   /** `excluded`: not a readable text source by rule (binary, not UTF-8, a symlink or special file, gone); `incomplete`: a limit or a change stopped the read. */
@@ -216,7 +229,8 @@ export const readSource = async (root: string, rel: string): Promise<ReadOutcome
       await fh.close();
     }
     const after = await lstat(abs);
-    if (!sameFile(after, before) || buf.length !== before.size) return { ok: false, kind: 'incomplete', why: 'changed', bytes: buf.length };
+    // Again after the read: an ancestor swapped for a symlink between the checks would resolve elsewhere now.
+    if (!sameFile(after, before) || buf.length !== before.size || (await realpath(abs)) !== abs) return { ok: false, kind: 'incomplete', why: 'changed', bytes: buf.length };
   } catch {
     return { ok: false, kind: 'incomplete', why: 'error', bytes: 0 };
   }
