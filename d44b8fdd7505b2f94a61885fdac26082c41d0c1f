@@ -1,0 +1,15 @@
+Limit: The release job's rebuild on ubuntu is the first cross-machine check of the archive's bytes; if it disagrees with the pin made on macOS the job fails before publishing, and nothing has yet shown which way it goes
+Ruled-out: cutting the release from any tagged commit | the marketplace is served from main, so a tag main does not have could publish an archive no marketplace entry names; the job refuses rather than publish it
+Warn: A PR to main fails CI unless its tree packs to the archive the marketplace pins: after any change to a file the archive carries, run npm run release:pin on the release branch
+Record-Id: r-f2881cdf76a2
+Provenance: inherited f9bd3695f3348d54c89820b3c3621a1404589440
+
+Ruled-out: deleting the release when the read-back disagrees with main | main may already serve a later version, and deleting would break installs of this one (R64-03); the job fails and the release stays rather than being withdrawn
+Warn: The tag alone does not stop a same-version change whose PR CI ran before the tag from merging after this job's last read of main; main's push CI (fetch-depth 0) then fails the frozen-version check, and a maintainer raises the version
+Record-Id: r-e1e202496eda
+Provenance: inherited c5cbd6ddc711e5bae29a3d9bce8a99b48449db13
+
+Ruled-out: leaving the checkout's credentials in git's config for the whole release job | npm ci, tests and build run third-party code while the job holds contents: write (R67-01); only the gh steps get GH_TOKEN, and the public repository needs no token to fetch
+Warn: The release job fetches main without credentials; if the repository becomes private, the fetch steps need a read token
+Record-Id: r-44d2dd9d672d
+Provenance: inherited d7266e01a60a381dfb2c83e5f692142808b92e24
