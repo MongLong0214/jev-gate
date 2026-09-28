@@ -24,8 +24,23 @@ jobs:
       # Rebuilds the archive and refuses unless it matches the SHA-256 the marketplace pins, the tag names the version,
       # and main serves this same entry.
       - run: node scripts/release.mjs check --tag "$GITHUB_REF_NAME" --against origin/main --out dist-release
+      # main may have moved while the job ran: fetch it again and repeat the comparison just before publishing.
+      - run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          node scripts/release.mjs check --tag "$GITHUB_REF_NAME" --against origin/main
       - env:
           GH_TOKEN: ${{ github.token }}
         run: >-
           gh release create "$GITHUB_REF_NAME" "dist-release/jev-gate-${GITHUB_REF_NAME#v}.zip"
           --verify-tag --title "$GITHUB_REF_NAME" --notes-file dist-release/NOTES.md
+      # A merge between that check and the upload could still leave main serving this version with another archive or
+      # other plugin files. Read back what was published and compare it, and main as it is now, with this tree. On a
+      # mismatch the job fails and the release stays, rather than being withdrawn: main may already serve a later
+      # version, and deleting would break installs of this one. A maintainer raises the version.
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          asset="jev-gate-${GITHUB_REF_NAME#v}.zip"
+          gh release download "$GITHUB_REF_NAME" --pattern "$asset" --dir published
+          node scripts/release.mjs check --tag "$GITHUB_REF_NAME" --against origin/main --asset "published/$asset"
