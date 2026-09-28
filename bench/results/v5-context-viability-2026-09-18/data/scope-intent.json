@@ -1,0 +1,98 @@
+[
+  {
+    "label": "exhaustive",
+    "attempt": 1,
+    "scope": "keep_all",
+    "conf": 0.99,
+    "probs": {
+      "keep_all": 1,
+      "selectable": 0,
+      "uncertain": 0
+    },
+    "omits": 0,
+    "blocks": 95,
+    "before": 15954,
+    "after": 15954,
+    "saved": 0
+  },
+  {
+    "label": "exhaustive",
+    "attempt": 2,
+    "scope": "keep_all",
+    "conf": 0.99,
+    "probs": {
+      "keep_all": 1,
+      "selectable": 0,
+      "uncertain": 0
+    },
+    "omits": 0,
+    "blocks": 95,
+    "before": 15954,
+    "after": 15954,
+    "saved": 0
+  },
+  {
+    "label": "selective",
+    "attempt": 1,
+    "scope": "selectable",
+    "conf": 0.13,
+    "probs": {
+      "keep_all": 0.33,
+      "uncertain": 0.25,
+      "selectable": 0.42
+    },
+    "omits": 50,
+    "blocks": 95,
+    "before": 15954,
+    "after": 7381,
+    "saved": 8573
+  },
+  {
+    "label": "selective",
+    "attempt": 2,
+    "scope": "selectable",
+    "conf": 0.1,
+    "probs": {
+      "selectable": 0.4,
+      "keep_all": 0.35,
+      "uncertain": 0.25
+    },
+    "omits": 49,
+    "blocks": 95,
+    "before": 15954,
+    "after": 7492,
+    "saved": 8462
+  },
+  {
+    "label": "neutral",
+    "attempt": 1,
+    "scope": "keep_all",
+    "conf": 0.16,
+    "probs": {
+      "selectable": 0.42,
+      "keep_all": 0.45,
+      "uncertain": 0.13
+    },
+    "omits": 36,
+    "blocks": 95,
+    "before": 15954,
+    "after": 9602,
+    "saved": 6352
+  },
+  {
+    "label": "neutral",
+    "attempt": 2,
+    "scope": "selectable",
+    "conf": 0.18,
+    "probs": {
+      "selectable": 0.45,
+      "uncertain": 0.13,
+      "keep_all": 0.42
+    },
+    "omits": 40,
+    "blocks": 95,
+    "before": 15954,
+    "after": 9056,
+    "saved": 6898
+  }
+]

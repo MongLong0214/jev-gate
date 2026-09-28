@@ -2,8 +2,9 @@ import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import type { ConfigV5, Mode, PlannerTier, Tier } from './types.js';
-import { MODES, PLANNER_TIERS, TIERS } from './types.js';
+import type { AdmissionQuestionShape, AdmittedShape, ConfigV5, Mode, PlannerTier, RouteQuestionShape, Tier, WorkerIsolation } from './types.js';
+import { DEFAULT_MAX_TASKS_PER_PLAN } from './plan.js';
+import { ADMITTED_SHAPES, MODES, PLANNER_TIERS, ROUTE_QUESTION_SHAPES, TIERS, WORKER_ISOLATIONS } from './types.js';
 
 export const DEFAULT_CONFIG: ConfigV5 = {
   version: 5,
@@ -14,9 +15,48 @@ export const DEFAULT_CONFIG: ConfigV5 = {
   routeConfidenceFloor: 0.8,
   resultConfidenceFloor: 0.8,
   plannerDefaultTier: 'deep',
-  models: { fast: 'haiku', standard: 'sonnet', deep: 'opus', frontier: 'fable' },
-  maxParallelWorkers: 3,
+  // #48 P0-2: frontier defaults to the strongest generally-allowed model. A restricted or premium model (Fable) now
+  // runs only when the owner writes it into their own config file -- never inherited from this default -- because the
+  // frontmatter is what the host actually uses whenever the hook does not patch the call (mode off, or a direct or
+  // ungated dispatch), and 22 subagent runs went to Fable that way on 2026-09-20 though the owner never chose it.
+  models: { fast: 'haiku', standard: 'sonnet', deep: 'opus', frontier: 'opus' },
+  // T5: one worker by default. A declared deliverable is a planner's claim, not an enforced write boundary, and no
+  // measurement yet shows parallel dispatch is faster here, so concurrency is opt-in rather than advertised.
+  maxParallelWorkers: 1,
   guardAllowTools: [],
+  // #48 P1-2: absent means none, so a deployed file keeps its behaviour. `worktree` is required once
+  // maxParallelWorkers > 1 (see validateConfig): a declared deliverable is the planner's claim, a worktree is a
+  // boundary, and the write-boundary concern is solved by the worktree rather than by trusting the planner's claim.
+  workerIsolation: 'none',
+  // Optional in a config file: absent keeps the shipped composite Gate B question.
+  routeQuestionShape: 'composite',
+  // #48 P0-1: null derives the floor from the host's own auto-compaction window (effectiveDepthFloor) instead of a
+  // fixed absolute number. The prior default of the fixed 300,000 was itself derived, not measured -- the two
+  // end-to-end points were 55K (delegation loses) and 406K (delegation wins) and it sat between them nearer the win
+  // -- and the ladder built to establish that crossing was withdrawn on 2026-09-20: six comparisons, none reproduced,
+  // and the deepest rung reversed sign on a separation. It is superseded, not merely stale: on this host, 1,014
+  // admission decisions (2026-09-20->27) were 997 depth_below_floor and 17 depth_unknown, 0 attempted, because the
+  // host's own autoCompactWindow of 300,000 compacts the session before the fixed floor of 300,000 can ever be
+  // reached. LEGACY_DEPTH_FLOOR keeps the old number as the fallback for a host whose window cannot be read at all.
+  delegationDepthFloor: null,
+  // #48 P0-1: 0.6 is a policy number chosen so a smaller compaction window still admits some prompts before the host
+  // compacts it away; it is not a measured crossing point, and effectiveDepthFloor never lets it push the floor above
+  // LEGACY_DEPTH_FLOOR.
+  delegationDepthFraction: 0.6,
+  /**
+   * Atomic since 2026-09-19 (DECISION-defaults-2026-09-19.md): the composite question admitted 0 of 61 real prompts
+   * offline, so the shipped gate never ran. The atomic path admits 41 of 65, and refusals send no request at all.
+   * The -59 % to -69 % this comment used to quote is withdrawn (2026-09-20): the ladder that re-measured those
+   * depths reproduced none of its six comparisons. The reason to ship atomic is that the composite gate never fires,
+   * which is a property of the gate; it was never that the admissions it makes are cheaper by a known amount.
+   */
+  admissionQuestionShape: 'atomic',
+  // Above the 2-7 band that ordinary plans ran in, below the 13 that cost +92.5 %: it stops a runaway, not a plan.
+  maxTasksPerPlan: DEFAULT_MAX_TASKS_PER_PLAN,
+  // A19: the shipped product. `single` is an arm under measurement, not a default anything is moving toward yet.
+  admittedShape: 'hierarchy',
+  // A23: off. The call decides nothing, so its whole cost is the call, and nobody should pay it without asking.
+  planInterpretation: false,
 };
 
 /**
@@ -26,7 +66,23 @@ export const DEFAULT_CONFIG: ConfigV5 = {
  */
 export const NATIVE_HOOK_TIMEOUT_MS = 5000;
 export const MAX_REQUEST_DEADLINE_MS = 3500;
+/**
+ * #48 P0-1: the fixed floor this plugin shipped before the depth gate was made relative to the host's own
+ * auto-compaction window. Kept as the fallback for a host whose window cannot be read at all (`effectiveDepthFloor`),
+ * and as the value an operator gets back by setting `delegationDepthFloor` explicitly to today's number.
+ */
+export const LEGACY_DEPTH_FLOOR = 300_000;
+/**
+ * #48 P0-1: bounds on delegationDepthFraction. With the host window clamped to at least 100K (`host-window.ts`), the
+ * lower bound keeps a derived floor at 25K or above, so no valid fraction can quietly turn the floor into 0 and send
+ * shallow prompts to Gate A; an operator who wants no floor sets `delegationDepthFloor: 0`, which says so. The upper
+ * bound leaves a margin below the window itself, where the host compacts.
+ */
+export const MIN_DEPTH_FRACTION = 0.25;
+export const MAX_DEPTH_FRACTION = 0.95;
 export const MAX_PARALLEL_WORKERS_LIMIT = 16;
+/** A plan larger than this is a runaway whatever the config says; MAX_COMPOSED_BYTES bounds each task, this bounds the count. */
+export const MAX_TASKS_PER_PLAN_LIMIT = 64;
 /** Trusted model identifiers only: no whitespace, shell characters or free text reach the host or the API. */
 export const MODEL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 export const TOOL_NAME_RE = /^[A-Za-z_][A-Za-z0-9_:-]{0,63}$/;
@@ -43,8 +99,17 @@ const V5_KEYS = new Set<string>([
   'models',
   'maxParallelWorkers',
   'guardAllowTools',
+  'workerIsolation',
+  'routeQuestionShape',
+  'delegationDepthFloor',
+  'delegationDepthFraction',
+  'admissionQuestionShape',
+  'maxTasksPerPlan',
+  'admittedShape',
+  'planInterpretation',
 ]);
 const LEGACY_MARKERS = ['uncertainTier', 'opusModel', 'frontierModel', 'confidenceFloor'];
+/** `resultConfidenceFloor` is a deprecated no-op (T11): it is still validated so a deployed file loads, and read by nothing. */
 const FLOOR_KEYS = ['admissionConfidenceFloor', 'routeConfidenceFloor', 'resultConfidenceFloor'] as const;
 
 export const MIGRATION_SAMPLE = `{
@@ -56,8 +121,8 @@ export const MIGRATION_SAMPLE = `{
   "routeConfidenceFloor": 0.8,
   "resultConfidenceFloor": 0.8,
   "plannerDefaultTier": "deep",
-  "models": { "fast": "haiku", "standard": "sonnet", "deep": "opus", "frontier": "fable" },
-  "maxParallelWorkers": 3,
+  "models": { "fast": "haiku", "standard": "sonnet", "deep": "opus", "frontier": "opus" },
+  "maxParallelWorkers": 1,
   "guardAllowTools": []
 }`;
 
@@ -87,7 +152,7 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
   if (unknown.length) return { ok: false, error: `unknown config keys: ${unknown.join(',')}` };
   const c: Record<string, unknown> = { ...DEFAULT_CONFIG, ...raw };
   const mode = c['mode'];
-  if (typeof mode !== 'string' || !MODES.includes(mode as Mode)) return { ok: false, error: 'mode must be off|native|auto' };
+  if (typeof mode !== 'string' || !MODES.includes(mode as Mode)) return { ok: false, error: 'mode must be off|native|auto|lean (the `context` search filter was withdrawn and its code removed; see bench/results/v5-context-viability-2026-09-18)' };
   const jevModel = c['jevModel'];
   if (typeof jevModel !== 'string' || !MODEL_NAME_RE.test(jevModel)) return { ok: false, error: `jevModel must match ${MODEL_NAME_RE.source}` };
   const deadline = c['requestDeadlineMs'];
@@ -119,9 +184,64 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
   if (typeof cap !== 'number' || !Number.isInteger(cap) || cap < 1 || cap > MAX_PARALLEL_WORKERS_LIMIT) {
     return { ok: false, error: `maxParallelWorkers must be an integer in [1, ${MAX_PARALLEL_WORKERS_LIMIT}]` };
   }
+  // Absent means composite, so a deployed V5 file keeps its behaviour without being edited (§4).
+  // Absence defaults; an explicit wrong value is an error. `??` would have turned a null in the file into composite.
+  const shape = 'routeQuestionShape' in c ? c['routeQuestionShape'] : 'composite';
+  if (typeof shape !== 'string' || !ROUTE_QUESTION_SHAPES.includes(shape as RouteQuestionShape)) {
+    return { ok: false, error: `routeQuestionShape must be one of ${ROUTE_QUESTION_SHAPES.join(', ')}` };
+  }
+
+  // #48 P0-1: absence and an explicit null both mean "derive from the host window" (effectiveDepthFloor). 0 is a real
+  // value -- it turns the floor off -- so it is not rejected; neither is any other non-negative integer.
+  const floorRaw = 'delegationDepthFloor' in c ? c['delegationDepthFloor'] : null;
+  if (floorRaw !== null && (typeof floorRaw !== 'number' || !Number.isInteger(floorRaw) || floorRaw < 0)) {
+    return { ok: false, error: 'delegationDepthFloor must be null (derive from the host window) or a non-negative integer number of context tokens (0 disables the floor)' };
+  }
+  const floor = floorRaw as number | null;
+
+  // #48 P0-1: same optional-key rule as the rest of this file; 0.6 is DEFAULT_CONFIG's policy choice, not a bound
+  // anyone is meant to read as a crossing point.
+  const fraction = 'delegationDepthFraction' in c ? c['delegationDepthFraction'] : DEFAULT_CONFIG.delegationDepthFraction;
+  if (typeof fraction !== 'number' || !Number.isFinite(fraction) || fraction < MIN_DEPTH_FRACTION || fraction > MAX_DEPTH_FRACTION) {
+    return { ok: false, error: `delegationDepthFraction must be a finite number from ${MIN_DEPTH_FRACTION} to ${MAX_DEPTH_FRACTION}` };
+  }
+
+  // Same rule as routeQuestionShape: absence defaults, an explicit wrong value is an error.
+  const admissionShape = c['admissionQuestionShape'];
+  if (typeof admissionShape !== 'string' || !ROUTE_QUESTION_SHAPES.includes(admissionShape as RouteQuestionShape)) {
+    return { ok: false, error: `admissionQuestionShape must be one of ${ROUTE_QUESTION_SHAPES.join(', ')}` };
+  }
+
+  const maxTasks = c['maxTasksPerPlan'];
+  if (typeof maxTasks !== 'number' || !Number.isInteger(maxTasks) || maxTasks < 1 || maxTasks > MAX_TASKS_PER_PLAN_LIMIT) {
+    return { ok: false, error: `maxTasksPerPlan must be an integer in [1, ${MAX_TASKS_PER_PLAN_LIMIT}]` };
+  }
+
+  // Same rule again: absence defaults, an explicit wrong value is an error.
+  const admittedShape = 'admittedShape' in c ? c['admittedShape'] : 'hierarchy';
+  if (typeof admittedShape !== 'string' || !ADMITTED_SHAPES.includes(admittedShape as AdmittedShape)) {
+    return { ok: false, error: `admittedShape must be one of ${ADMITTED_SHAPES.join(', ')}` };
+  }
+
+  // A23: absence defaults to false; an explicit non-boolean is an error, like every other optional key here.
+  const planInterpretation = 'planInterpretation' in c ? c['planInterpretation'] : false;
+  if (typeof planInterpretation !== 'boolean') return { ok: false, error: 'planInterpretation must be a boolean' };
+
   const allow = c['guardAllowTools'];
   if (!Array.isArray(allow) || allow.some((t) => typeof t !== 'string' || !TOOL_NAME_RE.test(t))) {
     return { ok: false, error: `guardAllowTools must be an array of tool names matching ${TOOL_NAME_RE.source}` };
+  }
+
+  // #48 P1-2: absence defaults to none, like the other optional keys; an explicit wrong value is an error.
+  const isolation = 'workerIsolation' in c ? c['workerIsolation'] : 'none';
+  if (typeof isolation !== 'string' || !WORKER_ISOLATIONS.includes(isolation as WorkerIsolation)) {
+    return { ok: false, error: `workerIsolation must be one of ${WORKER_ISOLATIONS.join(', ')}` };
+  }
+  if (cap > 1 && isolation !== 'worktree') {
+    return { ok: false, error: 'maxParallelWorkers > 1 requires workerIsolation: "worktree": a declared deliverable is the planner\'s claim, a worktree is a boundary' };
+  }
+  if (isolation === 'worktree' && !(allow as string[]).includes('Bash')) {
+    return { ok: false, error: 'workerIsolation: "worktree" requires "Bash" in guardAllowTools: the root must merge each worker\'s branch while the guard is active' };
   }
   return {
     ok: true,
@@ -137,6 +257,14 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
       models,
       maxParallelWorkers: cap,
       guardAllowTools: allow as string[],
+      workerIsolation: isolation as WorkerIsolation,
+      routeQuestionShape: shape as RouteQuestionShape,
+      delegationDepthFloor: floor,
+      delegationDepthFraction: fraction,
+      admissionQuestionShape: admissionShape as AdmissionQuestionShape,
+      maxTasksPerPlan: maxTasks,
+      admittedShape: admittedShape as AdmittedShape,
+      planInterpretation,
     },
   };
 };
@@ -148,7 +276,7 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
 export const loadConfig = (env: Env, readFile: (path: string) => string = (p) => readFileSync(p, 'utf8')): ConfigResult => {
   const modeEnv = env['JEV_GATE_MODE'];
   if (modeEnv === 'off') return { ok: true, config: { ...DEFAULT_CONFIG, mode: 'off' }, source: 'env:off' };
-  if (modeEnv !== undefined && modeEnv !== '' && !MODES.includes(modeEnv as Mode)) return { ok: false, error: 'JEV_GATE_MODE must be off|native|auto', source: 'env' };
+  if (modeEnv !== undefined && modeEnv !== '' && !MODES.includes(modeEnv as Mode)) return { ok: false, error: 'JEV_GATE_MODE must be off|native|auto|lean', source: 'env' };
   const path = resolveConfigPath(env);
   let text: string | null = null;
   try {
@@ -172,6 +300,30 @@ export const loadConfig = (env: Env, readFile: (path: string) => string = (p) =>
     base = v.config;
     source = path;
   }
-  if (modeEnv === 'native' || modeEnv === 'auto') return { ok: true, config: { ...base, mode: modeEnv }, source };
+  if (modeEnv === 'native' || modeEnv === 'auto' || modeEnv === 'lean') return { ok: true, config: { ...base, mode: modeEnv }, source };
   return { ok: true, config: base, source };
+};
+
+export interface EffectiveDepthFloor {
+  floor: number;
+  source: 'config' | 'window_fraction' | 'fallback_absolute';
+}
+
+/**
+ * #48 P0-1: what `delegationDepthFloor` actually is for this turn. An explicit config value wins outright, exactly as
+ * the floor behaved before this feature existed. Otherwise it is derived from the host's own compaction window
+ * (`host-window.ts`): `min(LEGACY_DEPTH_FLOOR, floor(fraction * window))` when the window is known, so a 1M-window
+ * host keeps exactly the old 300K behaviour and a smaller window gets a floor it can actually reach; and
+ * `LEGACY_DEPTH_FLOOR` when the window is unknown. Unknown means neither a setting nor the session's model settled it
+ * (a gateway alias, a native-1M model on Bedrock/Vertex/Foundry, a `--autocompact` launch): such a session may run a
+ * 200K window that never reaches this floor. Keeping 300K there rather than guessing low is deliberate: too high
+ * costs the saving and the liveness ring then says so at SessionStart, while too low on a 1M session admits shallow
+ * prompts, where forced orchestration measured +182% (see LEGACY_DEPTH_FLOOR's history above). `fraction` (0.6 by
+ * default) is a policy number chosen for this purpose, not a measured crossing point -- see
+ * DEFAULT_CONFIG.delegationDepthFraction.
+ */
+export const effectiveDepthFloor = (config: ConfigV5, window: number | null): EffectiveDepthFloor => {
+  if (config.delegationDepthFloor !== null) return { floor: config.delegationDepthFloor, source: 'config' };
+  if (window !== null) return { floor: Math.min(LEGACY_DEPTH_FLOOR, Math.floor(config.delegationDepthFraction * window)), source: 'window_fraction' };
+  return { floor: LEGACY_DEPTH_FLOOR, source: 'fallback_absolute' };
 };

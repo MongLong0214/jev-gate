@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 
-import { DEFAULT_CONFIG, loadConfig, MIGRATION_SAMPLE, resolveConfigPath, validateConfig } from '../src/config.js';
+import { DEFAULT_CONFIG, effectiveDepthFloor, LEGACY_DEPTH_FLOOR, loadConfig, MIGRATION_SAMPLE, resolveConfigPath, validateConfig } from '../src/config.js';
 
 const tmp = mkdtempSync(join(tmpdir(), 'jev-config-'));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
@@ -19,7 +19,9 @@ const V5 = {
   plannerDefaultTier: 'deep',
   models: { fast: 'haiku', standard: 'sonnet', deep: 'opus', frontier: 'fable' },
   maxParallelWorkers: 3,
-  guardAllowTools: [],
+  // #48 P1-2: maxParallelWorkers > 1 requires worktree isolation, which in turn requires Bash in guardAllowTools.
+  workerIsolation: 'worktree',
+  guardAllowTools: ['Bash'],
 };
 
 const write = (name: string, value: unknown): string => {
@@ -30,17 +32,40 @@ const write = (name: string, value: unknown): string => {
 
 describe('validateConfig', () => {
   it('accepts a full V5 file and a partial file over the defaults', () => {
-    expect(validateConfig(V5)).toEqual({ ok: true, config: { ...V5, mode: 'auto' } });
+    // routeQuestionShape is optional in a file and defaulted, so a deployed V5 config keeps composite Gate B.
+    expect(validateConfig(V5)).toEqual({
+      ok: true,
+      config: { ...V5, mode: 'auto', routeQuestionShape: 'composite', delegationDepthFloor: null, delegationDepthFraction: 0.6, admissionQuestionShape: 'atomic', maxTasksPerPlan: 10, admittedShape: 'hierarchy', planInterpretation: false },
+    });
     const partial = validateConfig({ version: 5, mode: 'native', plannerDefaultTier: 'frontier', models: { deep: 'claude-opus-5' } });
     expect(partial.ok).toBe(true);
     if (!partial.ok) return;
     expect(partial.config).toMatchObject({
       mode: 'native',
       plannerDefaultTier: 'frontier',
-      models: { fast: 'haiku', standard: 'sonnet', deep: 'claude-opus-5', frontier: 'fable' },
-      maxParallelWorkers: 3,
+      models: { fast: 'haiku', standard: 'sonnet', deep: 'claude-opus-5', frontier: 'opus' },
+      // T5: the default is one worker; parallel dispatch is opt-in until write isolation is actually verified.
+      maxParallelWorkers: 1,
       guardAllowTools: [],
     });
+    expect(DEFAULT_CONFIG.maxParallelWorkers).toBe(1);
+    // #48 P0-1: absent (and an explicit null) derive the floor from the host's own compaction window instead of a
+    // fixed absolute number; 0 is still accepted and still turns the floor off outright.
+    expect(DEFAULT_CONFIG.delegationDepthFloor).toBe(null);
+    expect(DEFAULT_CONFIG.delegationDepthFraction).toBe(0.6);
+    expect(validateConfig({ version: 5, delegationDepthFloor: null })).toMatchObject({ ok: true, config: { delegationDepthFloor: null } });
+    expect(validateConfig({ version: 5, delegationDepthFloor: 0 })).toMatchObject({ ok: true, config: { delegationDepthFloor: 0 } });
+    expect(validateConfig({ version: 5, delegationDepthFloor: 300_000 })).toMatchObject({ ok: true, config: { delegationDepthFloor: 300_000 } });
+    expect(validateConfig({ version: 5, delegationDepthFraction: 0.3 })).toMatchObject({ ok: true, config: { delegationDepthFraction: 0.3 } });
+    for (const edge of [0.25, 0.95]) expect(validateConfig({ version: 5, delegationDepthFraction: edge })).toMatchObject({ ok: true, config: { delegationDepthFraction: edge } });
+    // The two shapes are configured independently and no longer agree: Gate A ships atomic because the composite
+    // question admitted 0 of 61 real prompts offline, while Gate B's atomic shape has one end-to-end observation.
+    expect(DEFAULT_CONFIG.admissionQuestionShape).toBe('atomic');
+    expect(DEFAULT_CONFIG.routeQuestionShape).toBe('composite');
+    expect(validateConfig({ version: 5, admissionQuestionShape: 'composite' })).toMatchObject({ ok: true, config: { admissionQuestionShape: 'composite', routeQuestionShape: 'composite' } });
+    // T11: a deployed file that still sets resultConfidenceFloor keeps loading; nothing reads it any more.
+    const deprecated = validateConfig({ version: 5, mode: 'auto', resultConfidenceFloor: 0.95 });
+    expect(deprecated).toMatchObject({ ok: true, config: { resultConfidenceFloor: 0.95 } });
   });
 
   it.each([
@@ -59,6 +84,8 @@ describe('validateConfig', () => {
   it.each([
     ['unknown key', { version: 5, nope: 1 }, 'unknown config keys'],
     ['mode', { version: 5, mode: 'enrich2' }, 'mode must be'],
+    // The withdrawn search filter's mode: a deployed file that still sets it is refused with the reason, not crashed.
+    ['withdrawn context mode', { version: 5, mode: 'context' }, 'the `context` search filter was withdrawn'],
     ['jevModel', { version: 5, jevModel: 'jev 1;rm -rf' }, 'jevModel must match'],
     ['deadline over the hook timeout', { version: 5, requestDeadlineMs: 9000 }, 'requestDeadlineMs must be'],
     ['floor of zero', { version: 5, routeConfidenceFloor: 0 }, 'routeConfidenceFloor must be'],
@@ -69,10 +96,57 @@ describe('validateConfig', () => {
     ['parallel cap', { version: 5, maxParallelWorkers: 0 }, 'maxParallelWorkers must be'],
     ['parallel cap type', { version: 5, maxParallelWorkers: 2.5 }, 'maxParallelWorkers must be'],
     ['guard allow-list', { version: 5, guardAllowTools: ['rm -rf'] }, 'guardAllowTools must be'],
+    ['depth floor type', { version: 5, delegationDepthFloor: '300k' }, 'delegationDepthFloor must be'],
+    ['negative depth floor', { version: 5, delegationDepthFloor: -1 }, 'delegationDepthFloor must be'],
+    ['fractional depth floor', { version: 5, delegationDepthFloor: 300_000.5 }, 'delegationDepthFloor must be'],
+    ['depth fraction type', { version: 5, delegationDepthFraction: '0.6' }, 'delegationDepthFraction must be'],
+    ['depth fraction zero', { version: 5, delegationDepthFraction: 0 }, 'delegationDepthFraction must be'],
+    // #48 review: small enough to turn the derived floor into (nearly) nothing on a 100K window.
+    ['depth fraction below 0.25', { version: 5, delegationDepthFraction: 0.001 }, 'delegationDepthFraction must be'],
+    ['depth fraction above 0.95', { version: 5, delegationDepthFraction: 0.99 }, 'delegationDepthFraction must be'],
+    ['depth fraction one', { version: 5, delegationDepthFraction: 1 }, 'delegationDepthFraction must be'],
+    ['depth fraction above one', { version: 5, delegationDepthFraction: 1.5 }, 'delegationDepthFraction must be'],
+    ['admission shape', { version: 5, admissionQuestionShape: 'fanout' }, 'admissionQuestionShape must be'],
+    ['admission shape null', { version: 5, admissionQuestionShape: null }, 'admissionQuestionShape must be'],
+    // A19: absence defaults to hierarchy, an explicit wrong value is an error -- the same rule as the two shapes above.
+    ['admitted shape', { version: 5, admittedShape: 'solo' }, 'admittedShape must be'],
+    ['admitted shape null', { version: 5, admittedShape: null }, 'admittedShape must be'],
+    // A23: a call that costs money and decides nothing does not start being made because a key was mistyped.
+    ['plan interpretation', { version: 5, planInterpretation: 'on' }, 'planInterpretation must be'],
+    ['plan interpretation null', { version: 5, planInterpretation: null }, 'planInterpretation must be'],
+    ['task ceiling of zero', { version: 5, maxTasksPerPlan: 0 }, 'maxTasksPerPlan must be'],
+    ['task ceiling above the hard limit', { version: 5, maxTasksPerPlan: 65 }, 'maxTasksPerPlan must be'],
   ])('rejects an invalid %s', (_name, raw, message) => {
     const r = validateConfig(raw);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toContain(message);
+  });
+
+  describe('workerIsolation (#48 P1-2)', () => {
+    it('defaults to none when absent, and stays none with a single worker', () => {
+      const r = validateConfig({ version: 5 });
+      expect(r).toMatchObject({ ok: true, config: { workerIsolation: 'none', maxParallelWorkers: 1 } });
+    });
+
+    it('rejects an unrecognized value', () => {
+      const r = validateConfig({ version: 5, workerIsolation: 'branch' });
+      expect(r).toMatchObject({ ok: false, error: expect.stringContaining('workerIsolation must be') });
+    });
+
+    it('requires workerIsolation: "worktree" once maxParallelWorkers > 1', () => {
+      const r = validateConfig({ version: 5, maxParallelWorkers: 2, workerIsolation: 'none' });
+      expect(r).toMatchObject({ ok: false, error: 'maxParallelWorkers > 1 requires workerIsolation: "worktree": a declared deliverable is the planner\'s claim, a worktree is a boundary' });
+    });
+
+    it('requires "Bash" in guardAllowTools once workerIsolation is "worktree"', () => {
+      const r = validateConfig({ version: 5, workerIsolation: 'worktree', guardAllowTools: [] });
+      expect(r).toMatchObject({ ok: false, error: 'workerIsolation: "worktree" requires "Bash" in guardAllowTools: the root must merge each worker\'s branch while the guard is active' });
+    });
+
+    it('accepts maxParallelWorkers > 1 with worktree isolation and Bash allowed', () => {
+      const r = validateConfig({ version: 5, maxParallelWorkers: 4, workerIsolation: 'worktree', guardAllowTools: ['Bash'] });
+      expect(r).toMatchObject({ ok: true, config: { maxParallelWorkers: 4, workerIsolation: 'worktree', guardAllowTools: ['Bash'] } });
+    });
   });
 
   it('keeps the V5 defaults in the migration sample', () => {
@@ -105,5 +179,26 @@ describe('loadConfig', () => {
     expect(loadConfig({ HOME: join(tmp, 'nonexistent') })).toEqual({ ok: true, config: DEFAULT_CONFIG, source: 'defaults' });
     expect(resolveConfigPath({ HOME: '/h' })).toBe(join('/h', '.config', 'jev-gate', 'config.json'));
     expect(resolveConfigPath({ HOME: '/h', JEV_GATE_CONFIG: '/x/y.json' })).toBe('/x/y.json');
+  });
+});
+
+describe('effectiveDepthFloor (#48 P0-1)', () => {
+  it('an explicit config value always wins, whatever the window is', () => {
+    const config = { ...DEFAULT_CONFIG, delegationDepthFloor: 300_000 };
+    expect(effectiveDepthFloor(config, null)).toEqual({ floor: 300_000, source: 'config' });
+    expect(effectiveDepthFloor(config, 1_000_000)).toEqual({ floor: 300_000, source: 'config' });
+    // 0 is a real, explicit value: it disables the floor outright, it is not "absent".
+    expect(effectiveDepthFloor({ ...DEFAULT_CONFIG, delegationDepthFloor: 0 }, 1_000_000)).toEqual({ floor: 0, source: 'config' });
+  });
+
+  it('derives from the window at the configured fraction, capped at the legacy absolute floor', () => {
+    // default fraction 0.6 x a 300K host window: a smaller window still admits some prompts before it compacts.
+    expect(effectiveDepthFloor(DEFAULT_CONFIG, 300_000)).toEqual({ floor: 180_000, source: 'window_fraction' });
+    // A 1M-window host keeps exactly the old 300K behaviour: min(LEGACY_DEPTH_FLOOR, 0.6 x 1,000,000) = 300,000.
+    expect(effectiveDepthFloor(DEFAULT_CONFIG, 1_000_000)).toEqual({ floor: LEGACY_DEPTH_FLOOR, source: 'window_fraction' });
+  });
+
+  it('falls back to the legacy absolute floor when the window is unknown', () => {
+    expect(effectiveDepthFloor(DEFAULT_CONFIG, null)).toEqual({ floor: LEGACY_DEPTH_FLOOR, source: 'fallback_absolute' });
   });
 });

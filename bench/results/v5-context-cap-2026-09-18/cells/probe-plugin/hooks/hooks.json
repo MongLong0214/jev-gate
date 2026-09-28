@@ -1,0 +1,10 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      { "matcher": "^Grep$", "hooks": [ { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/recorder.mjs\"", "timeout": 10 } ] }
+    ],
+    "PostToolBatch": [
+      { "hooks": [ { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/recorder.mjs\"", "timeout": 10 } ] }
+    ]
+  }
+}

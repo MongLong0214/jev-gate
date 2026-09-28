@@ -1,0 +1,380 @@
+{
+  "caps": {
+    "bytes": 8388608,
+    "ms": 200
+  },
+  "transcripts": 11,
+  "eof_matches": 11,
+  "prompt_positions": 44,
+  "prompt_matches": 44,
+  "slowest_ms": 0.7,
+  "largest_mb": 276.3,
+  "unknown_at_eof": 0,
+  "rows": [
+    {
+      "size_mb": 27.5,
+      "forward_tokens": 611699,
+      "reader_tokens": 611699,
+      "reader_ok": true,
+      "match": true,
+      "bytes_read": 262144,
+      "ms": 0.3
+    },
+    {
+      "size_mb": 22.4,
+      "forward_tokens": 598422,
+      "reader_tokens": 598422,
+      "reader_ok": true,
+      "match": true,
+      "bytes_read": 262144,
+      "ms": 0.2
+    },
+    {
+      "size_mb": 86.7,
+      "forward_tokens": 734921,
+      "reader_tokens": 734921,
+      "reader_ok": true,
+      "match": true,
+      "bytes_read": 262144,
+      "ms": 0.4
+    },
+    {
+      "size_mb": 276.3,
+      "forward_tokens": 179651,
+      "reader_tokens": 179651,
+      "reader_ok": true,
+      "match": true,
+      "bytes_read": 262144,
+      "ms": 0.2
+    },
+    {
+      "size_mb": 67.5,
+      "forward_tokens": 714317,
+      "reader_tokens": 714317,
+      "reader_ok": true,
+      "match": true,
+      "bytes_read": 262144,
+      "ms": 0.7
+    },
+    {
+      "size_mb": 134.5,
+      "forward_tokens": 256632,
+      "reader_tokens": 256632,
+      "reader_ok": true,
+      "match": true,
+      "bytes_read": 262144,
+      "ms": 0.1
+    },
+    {
+      "size_mb": 64.2,
+      "forward_tokens": 221143,
+      "reader_tokens": 221143,
+      "reader_ok": true,
+      "match": true,
+      "bytes_read": 262144,
+      "ms": 0.4
+    },
+    {
+      "size_mb": 230.4,
+      "forward_tokens": 192228,
+      "reader_tokens": 192228,
+      "reader_ok": true,
+      "match": true,
+      "bytes_read": 262144,
+      "ms": 0.4
+    },
+    {
+      "size_mb": 135.4,
+      "forward_tokens": 788040,
+      "reader_tokens": 788040,
+      "reader_ok": true,
+      "match": true,
+      "bytes_read": 262144,
+      "ms": 0.1
+    },
+    {
+      "size_mb": 243.3,
+      "forward_tokens": 473826,
+      "reader_tokens": 473826,
+      "reader_ok": true,
+      "match": true,
+      "bytes_read": 262144,
+      "ms": 0.1
+    },
+    {
+      "size_mb": 152.1,
+      "forward_tokens": 663328,
+      "reader_tokens": 663328,
+      "reader_ok": true,
+      "match": true,
+      "bytes_read": 262144,
+      "ms": 0.3
+    }
+  ],
+  "prompt_rows": [
+    {
+      "at": 11013349,
+      "expected": 226096,
+      "got": 226096,
+      "match": true
+    },
+    {
+      "at": 13195644,
+      "expected": 506568,
+      "got": 506568,
+      "match": true
+    },
+    {
+      "at": 15188723,
+      "expected": 767506,
+      "got": 767506,
+      "match": true
+    },
+    {
+      "at": 17113063,
+      "expected": 80130,
+      "got": 80130,
+      "match": true
+    },
+    {
+      "at": 5934462,
+      "expected": 848565,
+      "got": 848565,
+      "match": true
+    },
+    {
+      "at": 10409237,
+      "expected": 515060,
+      "got": 515060,
+      "match": true
+    },
+    {
+      "at": 12532226,
+      "expected": 747183,
+      "got": 747183,
+      "match": true
+    },
+    {
+      "at": 14411267,
+      "expected": 924341,
+      "got": 924341,
+      "match": true
+    },
+    {
+      "at": 10131714,
+      "expected": 893269,
+      "got": 893269,
+      "match": true
+    },
+    {
+      "at": 37774045,
+      "expected": 770236,
+      "got": 770236,
+      "match": true
+    },
+    {
+      "at": 43180599,
+      "expected": 507153,
+      "got": 507153,
+      "match": true
+    },
+    {
+      "at": 60328595,
+      "expected": 830965,
+      "got": 830965,
+      "match": true
+    },
+    {
+      "at": 81301656,
+      "expected": 900368,
+      "got": 900368,
+      "match": true
+    },
+    {
+      "at": 113910661,
+      "expected": 727254,
+      "got": 727254,
+      "match": true
+    },
+    {
+      "at": 143054340,
+      "expected": 563470,
+      "got": 563470,
+      "match": true
+    },
+    {
+      "at": 182577736,
+      "expected": 793399,
+      "got": 793399,
+      "match": true
+    },
+    {
+      "at": 23332485,
+      "expected": 809828,
+      "got": 809828,
+      "match": true
+    },
+    {
+      "at": 35139588,
+      "expected": 511135,
+      "got": 511135,
+      "match": true
+    },
+    {
+      "at": 51791158,
+      "expected": 826904,
+      "got": 826904,
+      "match": true
+    },
+    {
+      "at": 59899079,
+      "expected": 937433,
+      "got": 937433,
+      "match": true
+    },
+    {
+      "at": 20058150,
+      "expected": 877919,
+      "got": 877919,
+      "match": true
+    },
+    {
+      "at": 68485816,
+      "expected": 805249,
+      "got": 805249,
+      "match": true
+    },
+    {
+      "at": 89291719,
+      "expected": 702846,
+      "got": 702846,
+      "match": true
+    },
+    {
+      "at": 104679423,
+      "expected": 896027,
+      "got": 896027,
+      "match": true
+    },
+    {
+      "at": 14551926,
+      "expected": 553583,
+      "got": 553583,
+      "match": true
+    },
+    {
+      "at": 16636308,
+      "expected": 812235,
+      "got": 812235,
+      "match": true
+    },
+    {
+      "at": 31023611,
+      "expected": 606725,
+      "got": 606725,
+      "match": true
+    },
+    {
+      "at": 32540420,
+      "expected": 781817,
+      "got": 781817,
+      "match": true
+    },
+    {
+      "at": 23559386,
+      "expected": 608547,
+      "got": 608547,
+      "match": true
+    },
+    {
+      "at": 46174266,
+      "expected": 867651,
+      "got": 867651,
+      "match": true
+    },
+    {
+      "at": 126247898,
+      "expected": 630035,
+      "got": 630035,
+      "match": true
+    },
+    {
+      "at": 166330939,
+      "expected": 667457,
+      "got": 667457,
+      "match": true
+    },
+    {
+      "at": 11630887,
+      "expected": 850552,
+      "got": 850552,
+      "match": true
+    },
+    {
+      "at": 27845922,
+      "expected": 406224,
+      "got": 406224,
+      "match": true
+    },
+    {
+      "at": 66697368,
+      "expected": 863074,
+      "got": 863074,
+      "match": true
+    },
+    {
+      "at": 92570169,
+      "expected": 551335,
+      "got": 551335,
+      "match": true
+    },
+    {
+      "at": 40481254,
+      "expected": 727202,
+      "got": 727202,
+      "match": true
+    },
+    {
+      "at": 169842780,
+      "expected": 137770,
+      "got": 137770,
+      "match": true
+    },
+    {
+      "at": 192193984,
+      "expected": 879936,
+      "got": 879936,
+      "match": true
+    },
+    {
+      "at": 220121414,
+      "expected": 539679,
+      "got": 539679,
+      "match": true
+    },
+    {
+      "at": 26230626,
+      "expected": 450554,
+      "got": 450554,
+      "match": true
+    },
+    {
+      "at": 41235926,
+      "expected": 399851,
+      "got": 399851,
+      "match": true
+    },
+    {
+      "at": 71680370,
+      "expected": 634932,
+      "got": 634932,
+      "match": true
+    },
+    {
+      "at": 118748529,
+      "expected": 654446,
+      "got": 654446,
+      "match": true
+    }
+  ]
+}

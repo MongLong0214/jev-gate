@@ -8,8 +8,11 @@ import { fileURLToPath } from 'node:url';
 import { isSubscriptionOAuth, parseAuthStatus, subagentModelOverride, AUTH_CONFLICT_ENV, type CommandResult } from '../auth.js';
 import { DENIALS_BEFORE_STOP } from '../brief.js';
 import { DEFAULT_CONFIG, loadConfig } from '../config.js';
-import { OWNED_AGENTS, type Tier } from '../types.js';
+import { LEAN_ACTION_CONFIDENCE, LEAN_COORDINATOR_RESERVE_BYTES, LEAN_OMISSION_CONFIDENCE, LEAN_PACKET_BUDGET_BYTES, LEAN_PACKET_MAX_BYTES } from '../lean.js';
+import { MAX_OPTIONAL_GROUPS, SOURCE_MAX_BYTES, SOURCE_MAX_MS } from '../lean-source.js';
+import { OWNED_AGENTS, type ConfigV5, type Tier } from '../types.js';
 import { gradeDir, type Grade } from './checker.js';
+import { toRowView } from './report.js';
 import { canonicalize, copyTree, createExclusiveDir, isInside, isSafeId, overlaps, type SnapshotReport } from './paths.js';
 import { estimateJevCostUsd, modelFamily, parseModelUsage, safeSum, tokenCount, type ModelUsage } from './usage.js';
 
@@ -18,20 +21,57 @@ import { estimateJevCostUsd, modelFamily, parseModelUsage, safeSum, tokenCount, 
  * the report still reads runs that contain it, because a retired arm is a fact about an old run, not a reason to stop
  * reading it.
  */
-export type Arm = 'sonnet_native' | 'frontier_native' | 'native_hierarchy' | 'orchestrated_control' | 'frontier_orchestrated' | 'jev_hierarchy' | 'jev_forced_orchestration';
+export type Arm =
+  | 'sonnet_native'
+  | 'frontier_native'
+  | 'native_hierarchy'
+  | 'orchestrated_control'
+  | 'frontier_orchestrated'
+  | 'jev_hierarchy'
+  | 'jev_single'
+  | 'jev_forced_orchestration'
+  /** JGL-05: the three lean arms. Same model, same normal auto-compact, one packet budget shared by the last two. */
+  | 'native_auto'
+  | 'recent_packet'
+  | 'jev_lean'
+  /**
+   * #45 offline part: the Router comparison. `router_native` is plain host with nothing enabled (identical to
+   * `native_auto`'s spec, kept as a separate name so a Router run reads as its own three-arm group); `router` loads
+   * the jev-gate-router plugin through Function Hooks; `router_fixed` is the no-Jev alternative, a fixed effort
+   * chosen up front with `--fixed-effort`, so a Router win is not just "effort changed".
+   */
+  | 'router_native'
+  | 'router'
+  | 'router_fixed';
 /** The only variables a measured session inherits; everything else, including the parent's CLAUDE_* settings, is dropped. */
 export const KEEP_ENV: readonly string[] = ['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'LC_ALL', 'TMPDIR', 'TERM', 'TZ', 'SSL_CERT_FILE', 'NODE_EXTRA_CA_CERTS', 'TYPESAFE_API_KEY'];
 /** FAKE_CLAUDE_* is the test double's control channel; a real session has none, so passing it through changes nothing. */
 const KEEP_ENV_PREFIX = 'FAKE_CLAUDE_';
 const keepEnvVar = (key: string): boolean => KEEP_ENV.includes(key) || key.startsWith(KEEP_ENV_PREFIX);
 
-export const ALL_ARMS: readonly Arm[] = ['sonnet_native', 'frontier_native', 'native_hierarchy', 'orchestrated_control', 'frontier_orchestrated', 'jev_hierarchy', 'jev_forced_orchestration'];
+/** The legacy default. A lean run selects its own three arms with `--arms lean`; it is not mixed into this set. */
+export const ALL_ARMS: readonly Arm[] = ['sonnet_native', 'frontier_native', 'native_hierarchy', 'orchestrated_control', 'frontier_orchestrated', 'jev_hierarchy', 'jev_single', 'jev_forced_orchestration'];
+/** JGL-05: the three arms of the lean comparison. `--arms lean` is shorthand for exactly these. */
+export const LEAN_ARMS: readonly Arm[] = ['native_auto', 'recent_packet', 'jev_lean'];
+/** #45: the three arms of the Router comparison. `--arms router` is shorthand for exactly these; not in ALL_ARMS/LEAN_ARMS. */
+export const ROUTER_ARMS: readonly Arm[] = ['router_native', 'router', 'router_fixed'];
+export const KNOWN_ARMS: readonly Arm[] = [...ALL_ARMS, ...LEAN_ARMS, ...ROUTER_ARMS];
+
+/**
+ * #45: the Router plugin options this runner turns on for the `router` arm, frozen here so the plan (buildPlan's
+ * `cli.router_policy`) and the actual per-cell `--settings` file (runClaudeCell) can never drift apart. Everything
+ * else is left at the plugin's own default (mods/router/hooks/config.ts resolveConfig) -- this runner tunes nothing,
+ * it only turns the Router on. The key itself is never here: it stays in the TYPESAFE_API_KEY env var (KEEP_ENV).
+ */
+export const ROUTER_OPTIONS: Readonly<Record<string, boolean>> = { enabled: true, logDecisions: true };
+/** The inline plugin config key `--plugin-dir` loads a settings file under (mods/router/README.md). */
+export const ROUTER_SETTINGS_KEY = 'jev-gate-router@inline';
 
 export interface ArmSpec {
   arm: Arm;
   rootModel: string;
   plugin: boolean;
-  mode: 'native' | 'auto' | null;
+  mode: 'native' | 'auto' | 'lean' | null;
   /** A9/A15/A16: forced orchestration through the same state, guard, profiles and cap. */
   experimentAdmission: 'orchestrated' | null;
   /**
@@ -39,16 +79,55 @@ export interface ArmSpec {
    * jobs below the admission floor, so this arm keeps Gate B and C measurable without tuning the floor on pilot data.
    */
   diagnostic: boolean;
+  /**
+   * A19: the arm runs the same frozen config with `admittedShape` overridden, written per cell so the file the cell
+   * actually loaded is on disk beside its trace and its sha256 is recorded in the cell. Every other key is the frozen
+   * one, so the two plugin arms differ in this key and nothing else.
+   *
+   * An override rather than a second run: a run freezes one config, so measuring this shape separately would compare
+   * two runs with different frozen inputs, which is the comparison this harness exists to avoid.
+   */
+  admittedShape?: 'single';
+  /**
+   * JGL-05: the deterministic recency comparison. It is an explicitly enabled research dependency of this runner,
+   * not a product mode: the cell runs with no provider key at all, so the arm cannot make a Jev request even by
+   * accident, and nothing but this flag selects it.
+   */
+  benchRecent?: true;
+  /**
+   * #45: this arm loads the jev-gate-router plugin through Function Hooks (env `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`,
+   * `--plugin-dir mods/router`, options via a per-cell `--settings` file, `--debug-file` for the decision log). It is
+   * a separate plugin from the legacy jev-gate one, so `plugin`/`mode` stay `false`/`null` for this arm.
+   */
+  routerEnabled?: true;
+  /**
+   * #45: the host's own `--effort` for the root. `router_native` and `router` start at `--base-effort`, the session
+   * the Router is meant to make cheaper; `router_fixed` runs at `--fixed-effort` throughout. There is no default: a
+   * run that selects one of these arms without its level is refused at plan time (see parseArgs).
+   */
+  effort?: string;
 }
 
-export const armSpecs = (frontierModel: string): Record<Arm, ArmSpec> => ({
+export const armSpecs = (frontierModel: string, fixedEffort: string | null = null, baseEffort: string | null = null): Record<Arm, ArmSpec> => ({
   sonnet_native: { arm: 'sonnet_native', rootModel: 'sonnet', plugin: false, mode: null, experimentAdmission: null, diagnostic: false },
   frontier_native: { arm: 'frontier_native', rootModel: frontierModel, plugin: false, mode: null, experimentAdmission: null, diagnostic: false },
   native_hierarchy: { arm: 'native_hierarchy', rootModel: 'sonnet', plugin: true, mode: 'native', experimentAdmission: null, diagnostic: false },
   orchestrated_control: { arm: 'orchestrated_control', rootModel: 'sonnet', plugin: true, mode: 'native', experimentAdmission: 'orchestrated', diagnostic: false },
   frontier_orchestrated: { arm: 'frontier_orchestrated', rootModel: frontierModel, plugin: true, mode: 'native', experimentAdmission: 'orchestrated', diagnostic: false },
   jev_hierarchy: { arm: 'jev_hierarchy', rootModel: 'sonnet', plugin: true, mode: 'auto', experimentAdmission: null, diagnostic: false },
+  jev_single: { arm: 'jev_single', rootModel: 'sonnet', plugin: true, mode: 'auto', experimentAdmission: null, diagnostic: false, admittedShape: 'single' },
   jev_forced_orchestration: { arm: 'jev_forced_orchestration', rootModel: 'sonnet', plugin: true, mode: 'auto', experimentAdmission: 'orchestrated', diagnostic: true },
+  // JGL-05. The baseline keeps its own native delegation and helpers: crippling it would not be ordinary Claude.
+  native_auto: { arm: 'native_auto', rootModel: 'sonnet', plugin: false, mode: null, experimentAdmission: null, diagnostic: false },
+  recent_packet: { arm: 'recent_packet', rootModel: 'sonnet', plugin: true, mode: 'lean', experimentAdmission: null, diagnostic: false, benchRecent: true },
+  jev_lean: { arm: 'jev_lean', rootModel: 'sonnet', plugin: true, mode: 'lean', experimentAdmission: null, diagnostic: false },
+  // #45. The frontier root at the owner's effort, with nothing else added: the native side of the Router comparison is
+  // the session the Router is meant to make cheaper, rather than a Sonnet one it has little to lower from.
+  router_native: { arm: 'router_native', rootModel: frontierModel, plugin: false, mode: null, experimentAdmission: null, diagnostic: false, ...(baseEffort !== null ? { effort: baseEffort } : {}) },
+  router: { arm: 'router', rootModel: frontierModel, plugin: false, mode: null, experimentAdmission: null, diagnostic: false, routerEnabled: true, ...(baseEffort !== null ? { effort: baseEffort } : {}) },
+  // The effort is filled in by the caller (parseArgs refuses these arms without it); undefined here would read as "the
+  // host's default", which is never true once the arm is actually selected.
+  router_fixed: { arm: 'router_fixed', rootModel: frontierModel, plugin: false, mode: null, experimentAdmission: null, diagnostic: false, ...(fixedEffort !== null ? { effort: fixedEffort } : {}) },
 });
 
 export interface CodingCase {
@@ -56,6 +135,20 @@ export interface CodingCase {
   group: string;
   fixtureDir: string;
   request: string;
+  /**
+   * Prompts sent in the same session before `request`. Their purpose is depth: a gate that reads how much context the
+   * session is carrying (`src/depth.ts`) sees a fresh session when the priming happens inside the job turn, which is
+   * what every earlier loaded case did. A primed case sends its prompts over stream-json input and keeps session
+   * persistence on, because without the transcript on disk the depth is unreadable -- measured: every prompt reads
+   * depth_unknown with --no-session-persistence, and a real depth without it.
+   *
+   * More than one prompt is allowed for a measured reason: the host flushes a turn's usage line to the transcript
+   * after the turn ends, and a job prompt submitted immediately behind the priming turn can read depth_unknown from a
+   * file that does not have the line yet (observed 2026-09-19: the line carried timestamp 01:55:13.762 and the hook
+   * two seconds later still saw none). A short confirming turn between the two costs almost nothing and gives the
+   * write time to land.
+   */
+  prime: string[];
   setup: string[][];
   evaluationSetup: string[][];
   checkFile: string;
@@ -71,6 +164,8 @@ export interface Options {
   arms: Arm[];
   repetitions: number;
   maxSessions: number | null;
+  /** Pre-registered spend stop: no cell starts once the complete cost of the cells run so far reaches it. */
+  maxCostUsd: number | null;
   timeoutMs: number;
   maxTurns: number;
   seed: number;
@@ -81,7 +176,16 @@ export interface Options {
   allowedTools: string;
   frontierModel: string;
   allowEnvConflicts: boolean;
+  /** Case ids to run from the manifest; empty means every case. Staging a run costs less than one big one. */
+  only: string[];
+  /** #45: router_fixed's frozen baseline, a level for the host's own `--effort` flag. Null means none was chosen. */
+  fixedEffort: string | null;
+  /** #45: the effort router_native and router start at. Null means none was chosen. */
+  baseEffort: string | null;
 }
+
+/** #45: the closed set `claude --help` documents for `--effort` (Claude Code 2.1.283). */
+export const FIXED_EFFORT_LEVELS: readonly string[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 
 export interface AgentCall {
   tool_use_id: string;
@@ -107,6 +211,12 @@ export interface AgentCall {
   root_effort: string | null;
   /** A2: a late result whose reservation belongs to a superseded generation. */
   orphaned: boolean;
+  /** T6/B1: the model the final patch/preserve/pin policy required. Null when no record determines it. */
+  target_model: string | null;
+  /** T6: that required model against the model the host actually resolved. An unknown alias is neither. */
+  target_model_match: 'match' | 'mismatch' | 'unknown';
+  /** T6: whether the final policy moved the call off the model its original profile would have used. */
+  target_model_changed: boolean | null;
   result_gate: Record<string, unknown> | null;
   plan: Record<string, unknown> | null;
 }
@@ -129,6 +239,58 @@ export interface WorkerTierRecord {
   pinned: number;
 }
 
+/**
+ * JGL-05: what lean actually did in this cell, read from the hook's own records. Every field is an observation.
+ * `selections` counts admission events that got as far as a decision; `jev_attempts` counts requests actually sent,
+ * which is not the same number and never becomes zero because a request failed.
+ */
+export interface LeanV5 {
+  /**
+   * L6 accounting revision. Cells ingested before it carry no field, and their token fields meant something else:
+   * `jev_input_tokens` was the known subtotal and `jev_input_tokens_known` counted responses. The report reads such
+   * a block as revision 1: its known subtotal relabelled, its complete totals unknown.
+   */
+  accounting: 1 | 2;
+  selections: number;
+  policy: Record<string, number>;
+  /** Requests actually sent, one per request identity however many records repeat it. */
+  jev_attempts: number;
+  /**
+   * An intent with no result, possibly sent and billed, plus every record with no request identity, which can be
+   * neither joined nor de-duplicated. Any of them leaves the complete totals unknown.
+   */
+  jev_attempt_unknown: number;
+  /** Responses whose charged input count came back -- a count of responses, not of tokens. */
+  jev_responses_known: number;
+  /** The input tokens of those responses; null only when the safe sum overflowed. */
+  jev_input_tokens_known: number | null;
+  /** Every request's input tokens, or null when any is unknown. Never replaced by the subtotal. */
+  jev_input_tokens: number | null;
+  /** Every request's cost, or null when any charged count, model price or possibly sent request is unknown. */
+  jev_cost_usd: number | null;
+  jev_cost_known_subtotal: number;
+  /** Repeated records of one request, collapsed into it rather than counted as more requests. */
+  duplicate_records: number;
+  http_codes: Record<string, number>;
+  action: Record<string, number>;
+  reasons: Record<string, number>;
+  packets_proposed: number;
+  packets_dispatched: number;
+  dispatch_denied: Record<string, number>;
+  recommendation_not_taken: number;
+  retained_groups: number;
+  omitted_groups: number;
+  unassessed: number;
+  mandatory_bytes: number | null;
+  optional_bytes: number | null;
+  source_bytes_read: number | null;
+  coverage: Record<string, number>;
+  packet_bytes_max: number | null;
+  composed_bytes_max: number | null;
+  observed_model: Record<string, number>;
+  terminal_status: Record<string, number>;
+}
+
 /** Schema 5 additions (#28, ADR A13). Every field is observed; nothing is inferred from agent frontmatter. */
 export interface GateV5 {
   admission: { attempted: boolean; known_not_sent: boolean; forced: boolean; decided: boolean | null; choice: string | null; confidence: number | null; decision: string | null; reason: string | null };
@@ -136,14 +298,85 @@ export interface GateV5 {
   continue_false: number;
   planner_calls: { requested: number; completed: number; tier_proposed: string | null; model_observed: string | null; plan_status: string | null; rev: number | null };
   worker_calls: Record<string, WorkerTierRecord>;
-  receipts: { accept: number; incomplete: number; invalid: number; unknown: number };
+  receipts: { accept: number; incomplete: number; invalid: number; unknown: number; rework: number; replan: number };
   advisory: { accept: number; rework: number; replan: number; abstain: number; none: number };
   parallel: { reservation_overlap_max: number; observed_overlap_max: number };
-  jev_requests: { admission: JevPhaseUsage; allocation: JevPhaseUsage; result: JevPhaseUsage };
+  jev_requests: { admission: JevPhaseUsage; allocation: JevPhaseUsage; result: JevPhaseUsage; scope: JevPhaseUsage };
   outcome: string | null;
+  /** A17: judgments made against judgments that changed the outcome; nine calls that changed nothing must read as nine. */
+  influence: { judgments: number; changed_default: number };
   orphan_records: number;
   /** Cross-check (A13): recorded Gate B decisions whose applied tier disagrees with the observed model family. */
   decision_mismatch: number;
+}
+
+/** One decided root step, read from a `root_result` line (mods/router/hooks/router.ts). Not a saving: per-step only. */
+export interface RouterRootStep {
+  turn: string;
+  index: number;
+  /** The patch actually applied to the step (model and/or effort), `{}` when the step ran with nothing changed. */
+  applied: { model?: string; effort?: string | number };
+  observed_model: string | null;
+  /** The routed call's own four token counts (`root_result.usage`) -- never Router's Jev usage. Null when unobserved. */
+  usage: Record<string, number> | null;
+}
+
+/** One decided spawn, read from a `spawn_result` line. `model_mismatch` is the host's own reason code, not inferred. */
+export interface RouterSpawnResult {
+  tool_use_id: string;
+  requested: string;
+  observed: string | null;
+  agent_id: string | null;
+  denied: boolean;
+  model_mismatch: boolean;
+}
+
+/**
+ * #45: what the Router actually did in this cell, read from `jev-router {json}` lines in the cell's debug log
+ * (`ingestRouterLog`). `root_assessed`/`spawn_assessed` count every non-skipped decision attempt (Jev was consulted,
+ * whatever it answered); `root_applied`/`spawn_applied` are the ones that ever reached the host as a step-changing
+ * request -- a step can be assessed and proposed and still never applied (`root_stop`/`spawn_stop`).
+ *
+ * `jev_attempts` is Router's own Jev assessment usage (the HTTP call this Mod makes to decide), never the routed
+ * Claude call's usage (that is `root_applied[].usage`/`spawn`'s ModelUsage, already priced elsewhere as ordinary
+ * Claude spend). No routed turn or spawn has been observed on an installed host (mods/router/README.md), so on a
+ * real run this block's `jev_attempts` is expected to be 0 -- that is a fact about the host verification gate, not
+ * an ingestion bug.
+ */
+export interface RouterV5 {
+  /** Accounting revision, mirroring LeanV5's pattern for a future migration; this bench has produced only 1. */
+  accounting: 1;
+  /** `jev-router `-prefixed lines whose JSON payload failed to parse (truncated tail, corruption, noise). */
+  unparsable_lines: number;
+  /** The cell's debug log: `read`, `missing` or `unreadable`; null before ingestion. */
+  log: 'read' | 'missing' | 'unreadable' | null;
+  diagnostic: { root_effort: boolean; root_model: boolean; spawn_model: boolean; key: string | null } | null;
+  root_assessed: number;
+  root_proposed: number;
+  root_skip_reasons: Record<string, number>;
+  root_stop_reasons: Record<string, number>;
+  root_applied: RouterRootStep[];
+  root_observed: number;
+  root_model_mismatches: number;
+  spawn_assessed: number;
+  spawn_proposed: number;
+  spawn_skip_reasons: Record<string, number>;
+  spawn_stop_reasons: Record<string, number>;
+  spawn_applied: RouterSpawnResult[];
+  spawn_denied: number;
+  spawn_observed: number;
+  spawn_model_mismatches: number;
+  /** Requests actually sent to Jev (an assessment whose `sent` was true), whatever answer came back. */
+  jev_attempts: number;
+  /** Of those, the ones whose input token count came back known -- a count of responses, not of tokens. */
+  jev_responses_known: number;
+  jev_input_tokens_known: number | null;
+  /** Every attempt's input tokens, or null when any sent attempt's usage never came back (enabled, unobserved). */
+  jev_input_tokens: number | null;
+  jev_cost_usd: number | null;
+  jev_cost_known_subtotal: number;
+  /** `late` events: a reply that arrived after the wait ended. Counted so a late answer is visible as a fact. */
+  late_events: number;
 }
 
 export interface CellRecord {
@@ -154,14 +387,39 @@ export interface CellRecord {
   repetition: number;
   root_model_requested: string;
   plugin_expected: boolean;
-  mode: 'native' | 'auto' | null;
+  /** #45: whether this arm's spec turned the Router on. Read by the report to tell "disabled" from "unobserved". */
+  router_expected: boolean;
+  mode: 'native' | 'auto' | 'lean' | null;
   /** Retired V4 field, kept so a reader that knows only V4 cells still parses a V5 one. */
   experimental_allocation: string | null;
   experiment_admission: 'orchestrated' | null;
   diagnostic: boolean;
   /** Per-cell job state directory, so job state never touches the real HOME or another cell. */
   state_dir: string | null;
+  /** A19: set when the arm overrode a config key; the path and hash of the file this cell actually loaded. */
+  config_override: { path: string; sha256: string; admittedShape: string } | null;
   request_sha256: string;
+  /** Set only for a primed case: the priming prompts sent before the job prompt in the same session. */
+  prime_sha256: string[];
+  /**
+   * Primed cases only. `context_at_job_prompt` is the main session's context when the job prompt was submitted --
+   * the number the depth gate reads, observed from the stream rather than claimed. `turn_totals_usd` is each turn's
+   * cumulative `total_cost_usd`, so the priming turn can be subtracted from the job: the host reports the session
+   * total on every result event, not that turn's own cost.
+   */
+  context_at_job_prompt: number | null;
+  turn_totals_usd: number[];
+  /**
+   * The same turn boundaries measured in tokens, summed from every message in the stream that carries a usage block --
+   * subagent messages included, because they are work this cell did. Cumulative like `turn_totals_usd`, so a job turn
+   * is the same subtraction.
+   *
+   * It exists because the dollar figure alone could not be trusted: on 2026-09-20 the 13-note ladder rung reversed
+   * sign in dollars while the stream showed the arms doing the same work to within 0.0 points, the host having
+   * reported a different fraction of the same traffic on the two days. Cost is a host-reported aggregate; this is
+   * what the transcript itself says happened.
+   */
+  turn_totals_stream: StreamTotals[];
   fixture_sha256: string | null;
   dispatch: { intent_at: string | null; spawn_observed_at: string | null; pid: number | null };
   started: boolean;
@@ -210,7 +468,13 @@ export interface CellRecord {
     hint_delivered: number;
     target_model_matches: number;
     target_model_mismatches: number;
+    /** T6: calls whose required or observed model could not be normalized; neither a match nor a mismatch. */
+    target_model_unknown: number;
   } & GateV5;
+  /** JGL-05: the lean path's own observations. Empty on an arm that never ran lean. */
+  lean: LeanV5;
+  /** #45: the Router path's own observations, read from the cell's debug log. Empty on an arm that never ran it. */
+  router: RouterV5;
   final_snapshot: (SnapshotReport & { path: string }) | null;
   grade: Grade | null;
   grade_history: Array<{ at: string; grade: Grade | null }>;
@@ -227,6 +491,11 @@ const positiveInt = (name: string, v: string | undefined): number => {
   if (!Number.isInteger(n) || n <= 0) throw new Error(`${name} must be a positive integer`);
   return n;
 };
+const positiveUsd = (name: string, v: string | undefined): number => {
+  const n = v === undefined || v.trim() === '' ? NaN : Number(v);
+  if (!Number.isFinite(n) || n <= 0) throw new Error(`${name} must be a positive number of US dollars`);
+  return n;
+};
 
 export const parseArgs = (argv: string[]): Options => {
   const o: Options = {
@@ -237,6 +506,7 @@ export const parseArgs = (argv: string[]): Options => {
     arms: [...ALL_ARMS],
     repetitions: 1,
     maxSessions: null,
+    maxCostUsd: null,
     timeoutMs: 900_000,
     maxTurns: 60,
     seed: 42,
@@ -247,6 +517,9 @@ export const parseArgs = (argv: string[]): Options => {
     allowedTools: 'Bash(node *),Bash(npm test),Bash(npm run test),Bash(ls *)',
     frontierModel: 'fable',
     allowEnvConflicts: false,
+    only: [],
+    fixedEffort: null,
+    baseEffort: null,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
@@ -261,12 +534,28 @@ export const parseArgs = (argv: string[]): Options => {
     else if (a === '--regrade') o.regrade = true;
     else if (a === '--allow-env-conflicts') o.allowEnvConflicts = true;
     else if (a === '--arms') {
-      const arms = next().split(',').map((s) => s.trim()).filter(Boolean);
-      const bad = arms.filter((x) => !(ALL_ARMS as readonly string[]).includes(x));
-      if (bad.length || arms.length === 0 || new Set(arms).size !== arms.length) throw new Error(`--arms must be a unique subset of ${ALL_ARMS.join(',')}`);
+      const raw = next().trim();
+      // `--arms lean`/`--arms router` are profile shorthands: the three arms of that comparison and nothing else.
+      // `router` is also a single arm's own name, but the profile wins here, exactly as `lean` does for JGL-05.
+      const arms = raw === 'lean' ? [...LEAN_ARMS] : raw === 'router' ? [...ROUTER_ARMS] : raw.split(',').map((s) => s.trim()).filter(Boolean);
+      const bad = arms.filter((x) => !(KNOWN_ARMS as readonly string[]).includes(x));
+      if (bad.length || arms.length === 0 || new Set(arms).size !== arms.length) throw new Error(`--arms must be \`lean\`, \`router\`, or a unique subset of ${KNOWN_ARMS.join(',')}`);
       o.arms = arms as Arm[];
+    } else if (a === '--fixed-effort') {
+      const level = next().trim();
+      if (!FIXED_EFFORT_LEVELS.includes(level)) throw new Error(`--fixed-effort must be one of ${FIXED_EFFORT_LEVELS.join(',')}`);
+      o.fixedEffort = level;
+    } else if (a === '--base-effort') {
+      const level = next().trim();
+      if (!FIXED_EFFORT_LEVELS.includes(level)) throw new Error(`--base-effort must be one of ${FIXED_EFFORT_LEVELS.join(',')}`);
+      o.baseEffort = level;
+    } else if (a === '--only') {
+      const ids = next().split(',').map((x) => x.trim()).filter(Boolean);
+      if (ids.length === 0 || new Set(ids).size !== ids.length) throw new Error('--only must be a unique, non-empty list of case ids');
+      o.only = ids;
     } else if (a === '--repetitions') o.repetitions = positiveInt(a, next());
     else if (a === '--max-sessions') o.maxSessions = positiveInt(a, next());
+    else if (a === '--max-cost-usd') o.maxCostUsd = positiveUsd(a, next());
     else if (a === '--timeout-ms') o.timeoutMs = positiveInt(a, next());
     else if (a === '--max-turns') o.maxTurns = positiveInt(a, next());
     else if (a === '--seed') o.seed = positiveInt(a, next());
@@ -284,6 +573,11 @@ export const parseArgs = (argv: string[]): Options => {
   if (!o.cases || !o.out) throw new Error('usage: run.js --cases <manifest> --out <new dir> [--arms a,b] [--repetitions N] [--execute --max-sessions N] | --regrade --cases <manifest> --out <existing run>');
   if (o.execute && o.maxSessions === null) throw new Error('--execute requires --max-sessions');
   if (o.execute && o.regrade) throw new Error('--regrade re-scores an existing run and never executes; drop --execute');
+  // #45: router_fixed with no chosen level would otherwise silently run the host's own default effort, which is
+  // exactly the "just an effort change" confound the arm exists to rule out. Refused here, before anything is planned.
+  if (o.arms.includes('router_fixed') && o.fixedEffort === null) throw new Error('--arms includes router_fixed but no --fixed-effort was given; a fixed baseline is never silently defaulted');
+  // The Router lowers from wherever the session starts, so that start is part of the comparison and never the host's.
+  if ((o.arms.includes('router') || o.arms.includes('router_native')) && o.baseEffort === null) throw new Error('--arms includes router or router_native but no --base-effort was given; the starting effort is never silently defaulted');
   return o;
 };
 
@@ -316,7 +610,10 @@ export const loadManifest = (path: string): { cases: CodingCase[]; manifestDir: 
     if (!isInside(base, fixtureDir) || !isInside(base, checkFile)) throw new Error(`case ${id}: fixtureDir and checkFile must live under the manifest directory`);
     if (!existsSync(fixtureDir) || !statSync(fixtureDir).isDirectory()) throw new Error(`case ${id}: fixtureDir missing`);
     if (!existsSync(checkFile)) throw new Error(`case ${id}: checkFile missing`);
-    return { id, group: s('group'), fixtureDir, request: s('request'), setup: cmds('setup'), evaluationSetup: cmds('evaluationSetup'), checkFile, checkFileRel: relative(base, checkFile) };
+    const primeRaw = raw['prime'] ?? [];
+    if (!Array.isArray(primeRaw) || primeRaw.some((x) => typeof x !== 'string' || x.length === 0)) throw new Error(`case ${id}: prime must be an array of non-empty strings`);
+    const prime = primeRaw as string[];
+    return { id, group: s('group'), fixtureDir, request: s('request'), prime, setup: cmds('setup'), evaluationSetup: cmds('evaluationSetup'), checkFile, checkFileRel: relative(base, checkFile) };
   });
   return { cases, manifestDir: base, version: parsed['version'] as number };
 };
@@ -355,23 +652,35 @@ export interface Plan {
   execute: boolean;
   manifest: string;
   manifest_version: number;
-  cases: Array<{ id: string; group: string; fixtureDir: string; checkFile: string; setup: string[][]; evaluationSetup: string[][]; request: string; request_sha256: string }>;
+  cases: Array<{ id: string; group: string; fixtureDir: string; checkFile: string; setup: string[][]; evaluationSetup: string[][]; request: string; request_sha256: string; prime: string[]; prime_sha256: string[] }>;
   arms: ArmSpec[];
   repetitions: number;
   rows: PlanRow[];
   planned_cells: number;
   max_sessions: number | null;
+  /** Absent in a plan written before the spend stop existed. */
+  max_cost_usd?: number | null;
   cli: Record<string, unknown>;
+  /**
+   * T8/B3: the configuration resolved once, before execution. `--execute` freezes exactly this object and points every
+   * plugin child at the frozen copy, so the model mappings, floors, concurrency and deadlines recorded here are the
+   * ones the run used. Null when the resolved configuration does not load; preflight then refuses to start.
+   */
+  effective_config: ConfigV5 | null;
+  effective_config_source: string;
+  effective_config_error: string | null;
   frozen_inputs: Record<string, unknown> | null;
   preflight: Preflight | null;
 }
 
 export const buildPlan = (o: Options, cases: CodingCase[], manifestVersion: number): Plan => {
-  const specs = armSpecs(o.frontierModel);
+  const specs = armSpecs(o.frontierModel, o.fixedEffort, o.baseEffort);
   const rows: PlanRow[] = [];
   cases.forEach((cs, i) => {
     for (let rep = 1; rep <= o.repetitions; rep++) rows.push({ job: cs.id, group: cs.group, repetition: rep, arms: shuffledArms(o.arms, o.seed, i, rep) });
   });
+  // The per-arm mode is the one deliberate override, so the file is read as if mode were auto; every other field
+  // (models, floors, concurrency, deadline) is taken exactly as resolved.
   const effective = loadConfig({ ...process.env, JEV_GATE_MODE: 'auto' });
   return {
     schema: 5,
@@ -379,12 +688,13 @@ export const buildPlan = (o: Options, cases: CodingCase[], manifestVersion: numb
     execute: o.execute,
     manifest: resolve(o.cases),
     manifest_version: manifestVersion,
-    cases: cases.map((c) => ({ id: c.id, group: c.group, fixtureDir: c.fixtureDir, checkFile: c.checkFile, setup: c.setup, evaluationSetup: c.evaluationSetup, request: c.request, request_sha256: sha256(c.request) })),
+    cases: cases.map((c) => ({ id: c.id, group: c.group, fixtureDir: c.fixtureDir, checkFile: c.checkFile, setup: c.setup, evaluationSetup: c.evaluationSetup, request: c.request, request_sha256: sha256(c.request), prime: c.prime, prime_sha256: c.prime.map((t) => sha256(t)) })),
     arms: o.arms.map((a) => specs[a]),
     repetitions: o.repetitions,
     rows,
     planned_cells: rows.length * o.arms.length,
     max_sessions: o.maxSessions,
+    max_cost_usd: o.maxCostUsd,
     cli: {
       claude: o.claude,
       plugin_dir: o.pluginDir,
@@ -397,8 +707,41 @@ export const buildPlan = (o: Options, cases: CodingCase[], manifestVersion: numb
       frontier_model: o.frontierModel,
       launch_env: { CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' },
       effective_config_nonsecret: effective.ok ? { ...effective.config, source: effective.source } : { error: effective.error },
+      /**
+       * JGL-05: the packet policy, frozen in the plan before anything is executed. `recent_packet` and `jev_lean`
+       * fill the SAME budget, and recording it here is what stops it being adjusted after Jev's retained size is
+       * known. These are code constants, not configuration, so the plan records the values actually compiled in.
+       */
+      lean_packet_policy: {
+        packet_budget_bytes: LEAN_PACKET_BUDGET_BYTES,
+        packet_max_bytes: LEAN_PACKET_MAX_BYTES,
+        coordinator_reserve_bytes: LEAN_COORDINATOR_RESERVE_BYTES,
+        max_optional_groups: MAX_OPTIONAL_GROUPS,
+        source_max_bytes: SOURCE_MAX_BYTES,
+        source_max_ms: SOURCE_MAX_MS,
+        action_confidence: LEAN_ACTION_CONFIDENCE,
+        omission_confidence: LEAN_OMISSION_CONFIDENCE,
+        note: 'Uncalibrated development constants, identical for recent_packet and jev_lean. Recency fills this budget newest-first with no requirement to omit anything.',
+      },
+      /**
+       * #45: the Router options and the two efforts, frozen before anything is executed, exactly like the lean packet
+       * policy above. router_native carries no options: it is the plain host at base_effort.
+       */
+      router_policy: {
+        // The source copied to inputs/router-plugin at execution; frozen_inputs.router_sha256 is what ran.
+        plugin_dir: join(root, 'mods', 'router'),
+        settings_key: ROUTER_SETTINGS_KEY,
+        options: ROUTER_OPTIONS,
+        env: { CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: '1' },
+        fixed_effort: o.fixedEffort,
+        base_effort: o.baseEffort,
+        note: 'Options are the plugin default plus enabled/logDecisions; this runner tunes nothing else. The TypeSafe key is never written here -- it stays in the TYPESAFE_API_KEY env var. base_effort is the --effort router_native and router start at; fixed_effort is router_fixed’s throughout. Each is null when no arm using it was selected.',
+      },
       note: 'Root models are CLI aliases; actual models come from system/init and modelUsage. User-scope settings are excluded for every arm via --setting-sources; user-level CLAUDE.md still loads equally in all arms. --max-turns bounds top-level turns, not every descendant request or subscription spend.',
     },
+    effective_config: effective.ok ? effective.config : null,
+    effective_config_source: effective.source,
+    effective_config_error: effective.ok ? null : effective.error,
     frozen_inputs: null,
     preflight: null,
   };
@@ -412,6 +755,8 @@ interface Preflight {
   env_observed: Record<string, string | null>;
   typesafe_key_present: boolean;
   plugin_hook_present: boolean;
+  /** #45: the Router plugin's own manifest and entry module, checked only when a selected arm actually needs it. */
+  router_plugin_present: boolean;
   errors: string[];
 }
 
@@ -444,13 +789,108 @@ export const preflight = (o: Options, needsJev: boolean): Preflight => {
   const env_observed: Record<string, string | null> = {};
   for (const k of observed) env_observed[k] = process.env[k] ?? null;
   const typesafe_key_present = Boolean(process.env['TYPESAFE_API_KEY']);
-  if (needsJev && !typesafe_key_present) errors.push('TYPESAFE_API_KEY not set: the jev_hierarchy arm would only exercise key_missing preservation');
-  const plugin_hook_present = existsSync(join(o.pluginDir, 'dist', 'hook.js')) && existsSync(join(o.pluginDir, 'hooks', 'hooks.json')) && existsSync(join(o.pluginDir, 'agents', 'worker.md'));
-  if (!plugin_hook_present) errors.push(`plugin dir ${o.pluginDir} lacks dist/hook.js, hooks/hooks.json or agents/worker.md; run npm run build`);
-  return { claude_version: version.status === 0 ? version.stdout.trim() : null, auth, auth_reason, env_conflicts: [...authEnv, ...(override.concrete || override.force ? ['CLAUDE_CODE_SUBAGENT_MODEL'] : [])], env_observed, typesafe_key_present, plugin_hook_present, errors };
+  if (needsJev && !typesafe_key_present) errors.push('TYPESAFE_API_KEY not set: the Jev treatment arms would only exercise key_missing preservation');
+  // The agent definition each selected arm actually needs: the lean arms ship one executor and none of the six roles.
+  const specs = armSpecs(o.frontierModel, o.fixedEffort, o.baseEffort);
+  const needed = [...new Set(o.arms.filter((a) => specs[a].plugin).map((a) => (specs[a].mode === 'lean' ? 'executor.md' : 'worker.md')))];
+  // #45: a run of Router arms alone loads no legacy plugin, so it neither needs nor checks one.
+  const plugin_hook_present =
+    needed.length === 0 ||
+    (existsSync(join(o.pluginDir, 'dist', 'hook.js')) && existsSync(join(o.pluginDir, 'hooks', 'hooks.json')) && needed.every((f) => existsSync(join(o.pluginDir, 'agents', f))));
+  if (!plugin_hook_present) errors.push(`plugin dir ${o.pluginDir} lacks dist/hook.js, hooks/hooks.json or agents/{${needed.join(',')}}; run npm run build`);
+  // #45: the Router is its own plugin, loaded from source (mods/router/hooks/hooks.json points at register.ts
+  // directly, no dist step) -- checked only when a selected arm actually loads it.
+  const routerPluginDir = join(root, 'mods', 'router');
+  const routerNeeded = o.arms.some((a) => specs[a].routerEnabled === true);
+  const router_plugin_present = !routerNeeded || (existsSync(join(routerPluginDir, 'hooks', 'hooks.json')) && existsSync(join(routerPluginDir, 'hooks', 'register.ts')));
+  if (!router_plugin_present) errors.push(`router plugin dir ${routerPluginDir} lacks hooks/hooks.json or hooks/register.ts`);
+  return {
+    claude_version: version.status === 0 ? version.stdout.trim() : null,
+    auth,
+    auth_reason,
+    env_conflicts: [...authEnv, ...(override.concrete || override.force ? ['CLAUDE_CODE_SUBAGENT_MODEL'] : [])],
+    env_observed,
+    typesafe_key_present,
+    plugin_hook_present,
+    router_plugin_present,
+    errors,
+  };
 };
 
+/**
+ * #55 review: the spend stop sums dollars as whole nanodollars. Binary floating point adds $1.13, $8.04 and $20.83 to
+ * 29.999999999999996, which would start one more cell under a $30 cap; the integer sum reaches the cap exactly,
+ * rather than through an epsilon comparison, which would pick a tolerance by hand. Both a row and the cap round up:
+ * a sum of rounded-up rows is never below the real spend, and a whole number at or above the real cap is at or above
+ * its ceiling, so the stop is never late. It can be early by at most a nanodollar per row. A cap under a nanodollar
+ * still rounds up to one, so no cap stops the run before its first cell.
+ */
+const NANO_PER_USD = 1_000_000_000;
+export const toNanoUsd = (usd: number): number => Math.ceil(usd * NANO_PER_USD);
+export const capReached = (knownNanoUsd: number, capUsd: number): boolean => knownNanoUsd >= toNanoUsd(capUsd);
+
 const emptyJevPhase = (): JevPhaseUsage => ({ attempts: 0, tokens: null, tokens_known: 0, cost_usd: null });
+
+export const emptyLeanV5 = (): LeanV5 => ({
+  accounting: 2,
+  selections: 0,
+  policy: {},
+  jev_attempts: 0,
+  jev_attempt_unknown: 0,
+  jev_responses_known: 0,
+  jev_input_tokens_known: 0,
+  jev_input_tokens: 0,
+  jev_cost_usd: 0,
+  jev_cost_known_subtotal: 0,
+  duplicate_records: 0,
+  http_codes: {},
+  action: {},
+  reasons: {},
+  packets_proposed: 0,
+  packets_dispatched: 0,
+  dispatch_denied: {},
+  recommendation_not_taken: 0,
+  retained_groups: 0,
+  omitted_groups: 0,
+  unassessed: 0,
+  mandatory_bytes: null,
+  optional_bytes: null,
+  source_bytes_read: null,
+  coverage: {},
+  packet_bytes_max: null,
+  composed_bytes_max: null,
+  observed_model: {},
+  terminal_status: {},
+});
+
+export const emptyRouterV5 = (): RouterV5 => ({
+  accounting: 1,
+  unparsable_lines: 0,
+  log: null,
+  diagnostic: null,
+  root_assessed: 0,
+  root_proposed: 0,
+  root_skip_reasons: {},
+  root_stop_reasons: {},
+  root_applied: [],
+  root_observed: 0,
+  root_model_mismatches: 0,
+  spawn_assessed: 0,
+  spawn_proposed: 0,
+  spawn_skip_reasons: {},
+  spawn_stop_reasons: {},
+  spawn_applied: [],
+  spawn_denied: 0,
+  spawn_observed: 0,
+  spawn_model_mismatches: 0,
+  jev_attempts: 0,
+  jev_responses_known: 0,
+  jev_input_tokens_known: 0,
+  jev_input_tokens: 0,
+  jev_cost_usd: 0,
+  jev_cost_known_subtotal: 0,
+  late_events: 0,
+});
 
 const emptyGateV5 = (): GateV5 => ({
   admission: { attempted: false, known_not_sent: false, forced: false, decided: null, choice: null, confidence: null, decision: null, reason: null },
@@ -458,16 +898,18 @@ const emptyGateV5 = (): GateV5 => ({
   continue_false: 0,
   planner_calls: { requested: 0, completed: 0, tier_proposed: null, model_observed: null, plan_status: null, rev: null },
   worker_calls: {},
-  receipts: { accept: 0, incomplete: 0, invalid: 0, unknown: 0 },
+  receipts: { accept: 0, incomplete: 0, invalid: 0, unknown: 0, rework: 0, replan: 0 },
   advisory: { accept: 0, rework: 0, replan: 0, abstain: 0, none: 0 },
   parallel: { reservation_overlap_max: 0, observed_overlap_max: 0 },
-  jev_requests: { admission: emptyJevPhase(), allocation: emptyJevPhase(), result: emptyJevPhase() },
+  jev_requests: { admission: emptyJevPhase(), allocation: emptyJevPhase(), result: emptyJevPhase(), scope: emptyJevPhase() },
   outcome: null,
+  influence: { judgments: 0, changed_default: 0 },
   orphan_records: 0,
   decision_mismatch: 0,
 });
 
-const emptyCell = (cs: CodingCase, spec: ArmSpec, repetition: number): CellRecord => ({
+/** A planned cell before anything is observed. Exported so regressions can drive `observeEvent`/`ingestTraces` directly. */
+export const emptyCell = (cs: CodingCase, spec: ArmSpec, repetition: number): CellRecord => ({
   schema: 5,
   job: cs.id,
   group: cs.group,
@@ -475,12 +917,18 @@ const emptyCell = (cs: CodingCase, spec: ArmSpec, repetition: number): CellRecor
   repetition,
   root_model_requested: spec.rootModel,
   plugin_expected: spec.plugin,
+  router_expected: spec.routerEnabled === true,
+  config_override: null,
   mode: spec.mode,
   experimental_allocation: null,
   experiment_admission: spec.experimentAdmission,
   diagnostic: spec.diagnostic,
   state_dir: null,
   request_sha256: sha256(cs.request),
+  prime_sha256: cs.prime.map((t) => sha256(t)),
+  context_at_job_prompt: null,
+  turn_totals_usd: [],
+  turn_totals_stream: [],
   fixture_sha256: null,
   dispatch: { intent_at: null, spawn_observed_at: null, pid: null },
   started: false,
@@ -500,7 +948,9 @@ const emptyCell = (cs: CodingCase, spec: ArmSpec, repetition: number): CellRecor
   agent_calls: [],
   api_retries: 0,
   result: null,
-  gate: { prompt_injections: 0, agent_calls: 0, owned_calls: 0, pinned: 0, eligible_attempted: 0, patched: 0, preserved: 0, preserve_reasons: {}, skipped: {}, attempt_unknown: 0, missing_pre_records: 0, jev_model: null, jev_input_tokens: null, jev_input_tokens_known: 0, jev_cost_usd: null, gate_ms_total: null, hint_delivered: 0, target_model_matches: 0, target_model_mismatches: 0, ...emptyGateV5() },
+  gate: { prompt_injections: 0, agent_calls: 0, owned_calls: 0, pinned: 0, eligible_attempted: 0, patched: 0, preserved: 0, preserve_reasons: {}, skipped: {}, attempt_unknown: 0, missing_pre_records: 0, jev_model: null, jev_input_tokens: null, jev_input_tokens_known: 0, jev_cost_usd: null, gate_ms_total: null, hint_delivered: 0, target_model_matches: 0, target_model_mismatches: 0, target_model_unknown: 0, ...emptyGateV5() },
+  lean: emptyLeanV5(),
+  router: emptyRouterV5(),
   final_snapshot: null,
   grade: null,
   grade_history: [],
@@ -529,13 +979,145 @@ const emptyAgentCall = (toolUseId: string): AgentCall => ({
   observed_model: null,
   root_effort: null,
   orphaned: false,
+  target_model: null,
+  target_model_match: 'unknown',
+  target_model_changed: null,
   result_gate: null,
   plan: null,
 });
 
+/**
+ * The main session's context at the moment an event was produced, by the same definition `src/depth.ts` reads from the
+ * transcript: cache reads + cache writes + fresh input. Only top-level turns count; a subagent's usage describes its
+ * own context, not this session's.
+ */
+const contextOf = (message: Record<string, unknown>): number | null => {
+  const usage = message['usage'];
+  if (!isRecord(usage)) return null;
+  let total = 0;
+  let seen = false;
+  for (const k of ['cache_read_input_tokens', 'cache_creation_input_tokens', 'input_tokens'] as const) {
+    const v = usage[k];
+    if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) continue;
+    total += v;
+    seen = true;
+  }
+  return seen ? total : null;
+};
+const lastMainContext = new WeakMap<CellRecord, number>();
+const promptsSeen = new WeakMap<CellRecord, number>();
+
+/**
+ * Two views of the same stream, kept side by side (JGL-05). The plain counters are the published unit and are not
+ * changed retroactively. The `deduped_*` counters drop a repeat of the same message within the same agent scope,
+ * which is the identity the host actually reuses -- a root message and a child's carry the same id space, so keying
+ * on the id alone would have conflated them. Neither view is chosen for producing the larger saving.
+ */
+type StreamTotals = {
+  cache_read: number;
+  cache_creation: number;
+  input: number;
+  output: number;
+  messages: number;
+  duplicates: number;
+  incomplete: number;
+  deduped_cache_read: number;
+  deduped_cache_creation: number;
+  deduped_input: number;
+  deduped_output: number;
+  deduped_messages: number;
+  /** A repeat whose counters went down: not a cumulative update of the same message, so the view is incomplete. */
+  deduped_incompatible: number;
+};
+/** The last observation the de-duplicated view holds for one message, and whether every counter in it was readable. */
+type MessageUsage = { cacheRead: number; cacheCreation: number; input: number; output: number; complete: boolean };
+const streamTotals = new WeakMap<CellRecord, StreamTotals>();
+const streamIds = new WeakMap<CellRecord, Map<string, MessageUsage>>();
+const emptyStreamTotals = (): StreamTotals => ({
+  cache_read: 0,
+  cache_creation: 0,
+  input: 0,
+  output: 0,
+  messages: 0,
+  duplicates: 0,
+  incomplete: 0,
+  deduped_cache_read: 0,
+  deduped_cache_creation: 0,
+  deduped_input: 0,
+  deduped_output: 0,
+  deduped_messages: 0,
+  deduped_incompatible: 0,
+});
+
+/**
+ * Adds one message's usage to the cell's running stream totals. A message without a usable usage block is not counted.
+ *
+ * This sum is *reported* stream usage, not verified provider computation, and two things could make it neither. The
+ * host could emit one message's usage twice, and a counter could be absent or unreadable and be added as zero. Both
+ * are counted here and neither changes the sums: a run whose `duplicates` and `incomplete` are zero has earned the
+ * stronger description, and one whose are not has said so before anything is quoted from it. Silently de-duplicating
+ * instead would change a published unit after its results were seen, which the pre-registration rules forbid.
+ */
+const addStreamUsage = (cell: CellRecord, message: unknown, scope: string): void => {
+  if (!isRecord(message)) return;
+  const usage = message['usage'];
+  if (!isRecord(usage)) return;
+  const acc = streamTotals.get(cell) ?? emptyStreamTotals();
+  let incomplete = false;
+  const read = (k: string): number => {
+    const v = usage[k];
+    // Non-negative safe integers only: a fractional or unrepresentable counter is unknown, not a value.
+    if (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0) return v;
+    // An absent counter and a zero counter are different facts, and adding both as zero makes them one number.
+    incomplete = true;
+    return 0;
+  };
+  const cacheRead = read('cache_read_input_tokens');
+  const cacheCreation = read('cache_creation_input_tokens');
+  const inputTokens = read('input_tokens');
+  const outputTokens = read('output_tokens');
+  acc.cache_read += cacheRead;
+  acc.cache_creation += cacheCreation;
+  acc.input += inputTokens;
+  acc.output += outputTokens;
+  acc.messages += 1;
+
+  // L6: the de-duplicated view holds one value per message -- the last complete cumulative observation of it, never
+  // the first one seen and never the sum of every update. Identity is the agent scope plus the message id: the same
+  // id under root and under a child is two reports. The installed host (checked over 26,514 multi-record messages in
+  // real transcripts, 2026-09-25) repeats identical usage, so on it the first and the last observation agree.
+  const now: MessageUsage = { cacheRead, cacheCreation, input: inputTokens, output: outputTokens, complete: !incomplete };
+  const id = str(message['id']);
+  const seen = streamIds.get(cell) ?? new Map<string, MessageUsage>();
+  streamIds.set(cell, seen);
+  const key = id !== null && id.length > 0 ? `${scope}\u0000${id}` : null;
+  const prev = key === null ? undefined : seen.get(key);
+  let held: MessageUsage | null = now;
+  if (prev) {
+    acc.duplicates += 1;
+    const cumulative = now.cacheRead >= prev.cacheRead && now.cacheCreation >= prev.cacheCreation && now.input >= prev.input && now.output >= prev.output;
+    if (!now.complete) held = null;
+    else if (prev.complete && !cumulative) {
+      acc.deduped_incompatible += 1;
+      held = null;
+    }
+  }
+  if (held) {
+    acc.deduped_cache_read += held.cacheRead - (prev?.cacheRead ?? 0);
+    acc.deduped_cache_creation += held.cacheCreation - (prev?.cacheCreation ?? 0);
+    acc.deduped_input += held.input - (prev?.input ?? 0);
+    acc.deduped_output += held.output - (prev?.output ?? 0);
+    if (!prev) acc.deduped_messages += 1;
+    if (key !== null) seen.set(key, held);
+  }
+  if (incomplete) acc.incomplete += 1;
+  streamTotals.set(cell, acc);
+};
+
 /** Folds one stream-json event into the record. Unknown shapes are ignored, never guessed. */
 export const observeEvent = (cell: CellRecord, ev: unknown): void => {
   if (!isRecord(ev)) return;
+  addStreamUsage(cell, ev['message'], str(ev['parent_tool_use_id']) ?? 'root');
   const type = ev['type'];
   if (type === 'system' && ev['subtype'] === 'init') {
     const plugins = Array.isArray(ev['plugins']) ? ev['plugins'].map((p) => (isRecord(p) ? (str(p['name']) ?? '') : String(p))) : [];
@@ -561,6 +1143,8 @@ export const observeEvent = (cell: CellRecord, ev: unknown): void => {
     const model = str(message['model']);
     const parent = str(ev['parent_tool_use_id']);
     if (parent === null) {
+      const ctx = contextOf(message);
+      if (ctx !== null) lastMainContext.set(cell, ctx);
       if (model && !cell.models_seen_main.includes(model)) cell.models_seen_main.push(model);
       for (const block of Array.isArray(message['content']) ? message['content'] : []) {
         if (!isRecord(block) || block['type'] !== 'tool_use' || block['name'] !== 'Agent') continue;
@@ -583,6 +1167,17 @@ export const observeEvent = (cell: CellRecord, ev: unknown): void => {
   }
   if (type === 'user') {
     const message = ev['message'];
+    /**
+     * With --replay-user-messages the host echoes each prompt read from stdin as a user event whose content is a
+     * plain string; a tool result is an array of blocks. The second such echo is the job prompt of a primed case, and
+     * the context standing at the echo that follows the priming prompts is what the depth gate saw at the job prompt.
+     */
+    if (isRecord(message) && typeof message['content'] === 'string') {
+      const n = (promptsSeen.get(cell) ?? 0) + 1;
+      promptsSeen.set(cell, n);
+      if (n === cell.prime_sha256.length + 1) cell.context_at_job_prompt = lastMainContext.get(cell) ?? null;
+      return;
+    }
     for (const block of isRecord(message) && Array.isArray(message['content']) ? message['content'] : []) {
       if (!isRecord(block) || block['type'] !== 'tool_result') continue;
       const call = cell.agent_calls.find((c) => c.tool_use_id === block['tool_use_id']);
@@ -591,6 +1186,10 @@ export const observeEvent = (cell: CellRecord, ev: unknown): void => {
     return;
   }
   if (type === 'result') {
+    const turnTotal = num(ev['total_cost_usd']);
+    // Every turn reports the session total so far, so the list is cumulative and the job's own cost is a difference.
+    if (turnTotal !== null) cell.turn_totals_usd.push(turnTotal);
+    cell.turn_totals_stream.push({ ...(streamTotals.get(cell) ?? emptyStreamTotals()) });
     const inferenceObserved = cell.models_seen_main.length > 0 || cell.agent_calls.length > 0;
     const usage = parseModelUsage(ev, inferenceObserved);
     cell.result = {
@@ -637,6 +1236,8 @@ const emptyTier = (): WorkerTierRecord => ({ calls: 0, proposed: {}, observed_mo
  */
 export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<Tier, string> = DEFAULT_CONFIG.models): void => {
   const records: Array<Record<string, unknown>> = [];
+  // A record that cannot be read could belong to any producer, so it leaves every producer's complete total unknown.
+  let unreadable = 0;
   if (existsSync(traceDir)) {
     for (const f of readdirSync(traceDir).filter((x) => x.endsWith('.json')).sort()) {
       try {
@@ -644,15 +1245,139 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
         if (isRecord(r) && r['version'] === 5 && typeof r['phase'] === 'string') records.push(r);
       } catch {
         cell.gate.attempt_unknown++;
+        unreadable++;
       }
     }
   }
   const g = cell.gate;
   const phase = (p: string): Array<Record<string, unknown>> => records.filter((r) => r['phase'] === p);
+
+  /**
+   * JGL-05: lean writes its own phases and shares none of the gate ones, so it is read separately. Nothing here is
+   * inferred: an attempt with no usage stays unknown, a proposed packet is not a dispatch, and a dispatched packet
+   * is not a checked task.
+   */
+  const L = cell.lean;
+  const maxOf = (cur: number | null, v: number | null): number | null => (v === null ? cur : cur === null ? v : Math.max(cur, v));
+  for (const r of phase('lean_result')) {
+    L.selections += 1;
+    bump(L.policy, str(r['policy']) ?? 'jev');
+    const src = isRecord(r['source']) ? r['source'] : null;
+    const groups = isRecord(r['groups']) ? r['groups'] : null;
+    if (src) {
+      bump(L.coverage, str(src['coverage']) ?? 'unknown');
+      L.unassessed += num(src['unassessed']) ?? 0;
+      L.source_bytes_read = maxOf(L.source_bytes_read, num(src['bytes_read']));
+    }
+    if (groups) {
+      L.mandatory_bytes = maxOf(L.mandatory_bytes, num(groups['mandatory_bytes']));
+      L.optional_bytes = maxOf(L.optional_bytes, num(groups['optional_bytes']));
+    }
+    const d = isRecord(r['decision']) ? r['decision'] : null;
+    if (d) {
+      bump(L.action, str(d['action']) ?? 'unknown');
+      const reason = str(d['reason']);
+      if (reason) bump(L.reasons, reason);
+    }
+  }
+
+  /**
+   * L6: Jev spend is joined per actual request over the union of intents and results, by the `request_id` the hook
+   * writes into both. A result alone still counts. An intent with no result may have been sent and billed, so it
+   * leaves the complete totals unknown. A confirmed local no-send is zero. A repeated record of one request is one
+   * request. The hook writes its intent before sending and does not send when it cannot, so with this cell's trace
+   * directory set, a request with no intent was not sent. Money needs only the charged input count and a known
+   * price: output is free, so an unknown output count never makes a known cost unknown.
+   *
+   * A record with no `request_id` can be neither joined nor de-duplicated: pairing keyless intents and results by
+   * count would let a lost result and a repeated one cancel out. Each is counted unknown and kept out of the known
+   * subtotal, so the subtotal stays a lower bound and the complete totals are null.
+   */
+  const leanRequests = new Map<string, { intent: boolean; result: Record<string, unknown> | null }>();
+  let keylessRecords = 0;
+  for (const r of records) {
+    if (r['phase'] !== 'lean_intent' && r['phase'] !== 'lean_result') continue;
+    const k = str(r['request_id']);
+    if (k === null) {
+      if (r['phase'] === 'lean_intent' || r['attempted'] === true) keylessRecords += 1;
+      continue;
+    }
+    const entry = leanRequests.get(k) ?? { intent: false, result: null };
+    if (r['phase'] === 'lean_intent') {
+      if (entry.intent) L.duplicate_records += 1;
+      entry.intent = true;
+    } else if (entry.result === null) entry.result = r;
+    else L.duplicate_records += 1;
+    leanRequests.set(k, entry);
+  }
+  const sent: Array<Record<string, unknown>> = [];
+  let possiblySent = keylessRecords;
+  for (const { result } of leanRequests.values()) {
+    if (result === null) possiblySent += 1;
+    else if (result['attempted'] === true) sent.push(result);
+  }
+  const tokens: Array<number | null> = [];
+  const costs: Array<number | null> = [];
+  for (const r of sent) {
+    const http = isRecord(r['http']) ? r['http'] : null;
+    bump(L.http_codes, http ? (str(http['code']) ?? `http_${String(num(http['status']) ?? 'none')}`) : 'unrecorded');
+    const jev = isRecord(r['jev']) ? r['jev'] : null;
+    const usage = jev && isRecord(jev['usage']) ? jev['usage'] : null;
+    const input = usage ? tokenCount(usage['input_tokens']) : null;
+    tokens.push(input);
+    costs.push(estimateJevCostUsd(jev ? str(jev['model']) : null, input));
+  }
+  const knownTokens = tokens.filter((t): t is number => t !== null);
+  const knownCosts = costs.filter((c): c is number => c !== null);
+  const complete = possiblySent === 0 && unreadable === 0;
+  L.jev_attempts = sent.length;
+  L.jev_attempt_unknown = possiblySent;
+  L.jev_responses_known = knownTokens.length;
+  L.jev_input_tokens_known = safeSum(knownTokens);
+  L.jev_input_tokens = complete ? safeSum(tokens) : null;
+  L.jev_cost_known_subtotal = knownCosts.reduce((a, b) => a + b, 0);
+  L.jev_cost_usd = complete && knownCosts.length === costs.length ? L.jev_cost_known_subtotal : null;
+  for (const r of phase('lean_dispatch')) {
+    const reason = str(r['reason']);
+    if (r['applied'] === true) {
+      L.packets_dispatched += 1;
+      L.retained_groups += num(r['retained_groups']) ?? 0;
+      L.omitted_groups += num(r['omitted_groups']) ?? 0;
+      L.composed_bytes_max = maxOf(L.composed_bytes_max, num(r['composed_bytes']));
+    } else if (reason === 'packet_proposed') {
+      L.packets_proposed += 1;
+      L.packet_bytes_max = maxOf(L.packet_bytes_max, num(r['packet_bytes']));
+    } else if (reason === 'recommendation_not_taken') {
+      L.recommendation_not_taken += 1;
+    } else if (reason) {
+      bump(L.dispatch_denied, reason);
+    }
+  }
+  for (const r of phase('lean_post')) {
+    bump(L.terminal_status, str(r['status']) ?? 'unrecorded');
+    const m = str(r['observed_model']);
+    if (m) bump(L.observed_model, m);
+  }
+
   const byId = (p: string, id: string): Array<Record<string, unknown>> => records.filter((r) => r['phase'] === p && r['tool_use_id'] === id);
   const answer = (r: Record<string, unknown> | null, key: string): Record<string, unknown> | null => {
     const answers = r && isRecord(r['answers']) ? r['answers'] : null;
     return answers && isRecord(answers[key]) ? (answers[key] as Record<string, unknown>) : null;
+  };
+  /** T6: the frozen configuration's model for a tier; a tier it does not map stays unknown. */
+  const modelOfTier = (tier: string | null): string | null => (tier === null ? null : ((models[tier as Tier] as string | undefined) ?? null));
+  /** T7: the id a gate call writes into both of its records; older records only have the tool_use_id. */
+  const corrKey = (r: Record<string, unknown>): string | null => str(r['request_id']) ?? str(r['tool_use_id']);
+  /**
+   * T7: the last record by recorded event time, never by the random UUID in its filename. Missing or tied timestamps
+   * leave the order unresolved, and an unresolved order is reported as unknown rather than guessed.
+   */
+  const lastByTime = <T extends Record<string, unknown>>(rows: T[]): T | null => {
+    if (rows.length <= 1) return rows[0] ?? null;
+    const times = rows.map(timeOf);
+    if (times.some((t) => t === null)) return null;
+    const max = Math.max(...(times as number[]));
+    return times.filter((t) => t === max).length === 1 ? (rows[times.indexOf(max)] as T) : null;
   };
   let jevKnownAll = true;
 
@@ -676,9 +1401,30 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
       if (r['known_not_sent'] !== true) continue;
       bump(g.skipped, str(r['skip_code']) ?? str(r['reason']) ?? 'unknown');
     }
-    // An intent with no result of its own is one paid-or-not attempt whose consumption is unknown.
-    const resultKeys = new Set(rows.map((r) => str(r['tool_use_id']) ?? ''));
-    const unmatched = intents.filter((i) => !resultKeys.has(str(i['tool_use_id']) ?? '')).length;
+    // An intent with no result of its own is one paid-or-not attempt whose consumption is unknown. T7: the pairing key
+    // is the per-call `request_id`; `invocation_id` differs per record and Gate A usually has no `tool_use_id`, so two
+    // different admissions must never collapse into one. Records written before `request_id` keep the tool_use_id
+    // fallback, and keyless ones pair by count alone, which reveals a missing result instead of hiding it.
+    const pool = new Map<string, number>();
+    let keylessResults = 0;
+    for (const r of rows) {
+      const k = corrKey(r);
+      if (k === null) keylessResults++;
+      else pool.set(k, (pool.get(k) ?? 0) + 1);
+    }
+    let unmatched = 0;
+    let keylessIntents = 0;
+    for (const i of intents) {
+      const k = corrKey(i);
+      if (k === null) {
+        keylessIntents++;
+        continue;
+      }
+      const left = pool.get(k) ?? 0;
+      if (left > 0) pool.set(k, left - 1);
+      else unmatched++;
+    }
+    unmatched += Math.max(0, keylessIntents - keylessResults);
     g.attempt_unknown += unmatched;
     if (unmatched > 0) known = false;
     if (!known) jevKnownAll = false;
@@ -689,22 +1435,47 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
   // ---- Gate A
   const admissions = phase('admission_result');
   g.prompt_injections = admissions.length;
-  const admission = admissions[admissions.length - 1] ?? null;
+  const admission = lastByTime(admissions);
+  if (admission === null && admissions.length > 0) {
+    // The counts below still hold; only which admission decided this prompt is unresolved.
+    g.admission = {
+      attempted: admissions.some((r) => r['attempted'] === true),
+      known_not_sent: admissions.every((r) => r['known_not_sent'] === true),
+      forced: admissions.some((r) => r['forced'] === true),
+      decided: null,
+      choice: null,
+      confidence: null,
+      decision: null,
+      reason: 'ambiguous_record_order',
+    };
+  }
   if (admission) {
     const execution = answer(admission, 'execution');
+    // A17: every gate now records its decision nested under `decision`; records written before that are flat.
+    const dec = isRecord(admission['decision']) ? admission['decision'] : admission;
     g.admission = {
       attempted: admission['attempted'] === true,
       known_not_sent: admission['known_not_sent'] === true,
       // A16: a forced generation is a bench control, not a Jev answer, and the admission table says so.
       forced: admission['forced'] === true,
-      decided: typeof admission['decided'] === 'boolean' ? admission['decided'] : null,
+      decided: typeof dec['decided'] === 'boolean' ? dec['decided'] : null,
       choice: execution ? str(execution['choice']) : null,
       confidence: execution ? num(execution['confidence']) : null,
-      decision: str(admission['decision']),
-      reason: str(admission['reason']) ?? str(admission['skip_code']),
+      decision: str(dec['shape']) ?? str(dec['decision']),
+      reason: str(dec['reason']) ?? str(admission['skip_code']),
     };
   }
-  account(admissions, phase('admission_intent'), g.jev_requests.admission);
+  const admissionIntents = phase('admission_intent');
+  account(admissions, admissionIntents, g.jev_requests.admission);
+  // T7/B2: in auto every prompt reaches Gate A unless something says otherwise. A recorded bypass (known_not_sent, a
+  // skip code, a forced admission) proves the zero; the plugin not loading proves it too. No record at all proves
+  // nothing, so the admission stays unknown instead of becoming a free call.
+  if (cell.mode === 'auto' && cell.started && cell.init?.jev_gate_loaded !== false && admissions.length === 0 && admissionIntents.length === 0) {
+    g.attempt_unknown++;
+    g.jev_requests.admission.tokens = null;
+    g.jev_requests.admission.cost_usd = null;
+    jevKnownAll = false;
+  }
 
   // ---- guard (A6): a denial that reaches the threshold is the one that also returns continue:false
   const denied = phase('guard').filter((r) => r['allow'] === false);
@@ -712,7 +1483,7 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
   // The hook records the stop it actually applied; older records without the field fall back to the denial count.
   g.continue_false = denied.filter((r) => (typeof r['stopped'] === 'boolean' ? r['stopped'] : (num(r['denials']) ?? 0) >= DENIALS_BEFORE_STOP - 1)).length;
   const stops = phase('stop');
-  g.outcome = str(stops[stops.length - 1]?.['outcome'] ?? null);
+  g.outcome = str(lastByTime(stops)?.['outcome'] ?? null);
 
   // ---- union of stream calls and record-only calls
   const callPhases = ['pre_intent', 'pre_result', 'post', 'failure', 'result_intent', 'result_result', 'plan'];
@@ -755,7 +1526,8 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
       call.orphaned = call.post['matched'] === false;
       if (call.orphaned) g.orphan_records++;
       const verdict = str(call.post['verdict']);
-      if (verdict === 'accept' || verdict === 'incomplete' || verdict === 'invalid' || verdict === 'unknown') g.receipts[verdict]++;
+      // A17: Gate C may demote an accept, so every receipt verdict has a bucket and the totals still add up.
+      if (verdict !== null && Object.prototype.hasOwnProperty.call(g.receipts, verdict)) g.receipts[verdict as keyof typeof g.receipts]++;
       const gateC = isRecord(call.result_gate?.['decision']) ? (call.result_gate?.['decision'] as Record<string, unknown>) : null;
       const advisory = gateC ? (str(gateC['verdict']) ?? (str(gateC['reason']) === 'result_abstain' ? 'abstain' : 'none')) : str(call.post['advisory']);
       if (advisory === 'accept' || advisory === 'rework' || advisory === 'replan' || advisory === 'abstain') g.advisory[advisory]++;
@@ -765,6 +1537,27 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
       if (observedEnd !== null && duration !== null) observedIntervals.push([observedEnd - duration, observedEnd]);
     }
     call.observed_model = call.observed_model ?? call.resolved_models_stream[0] ?? null;
+
+    // T6/B1: the three facts are separate. Jev's answer lives in `answers`, the policy the hook applied lives in
+    // `decision`, and the model the host resolved lives in the post record. The comparison that matters is the model
+    // the final patch/preserve/pin policy required against the one actually observed; asking "did either differ from
+    // the original?" lets original sonnet -> patched haiku -> executed opus pass as a match. A missing step is never
+    // filled in from another, and normalization is only the alias mapping that already exists (modelFamily), so an
+    // alias it does not know is unknown rather than a verdict.
+    const gateDecision = isRecord(call.pre?.['decision']) ? (call.pre?.['decision'] as Record<string, unknown>) : null;
+    const profileTier = call.called_tier ?? str(intent?.['default_tier'] ?? null);
+    const profileModel = call.has_model ? call.model_param : modelOfTier(profileTier);
+    // An eligible call in auto whose gate result was never recorded has no known final policy: whether the hook
+    // patched it is exactly the missing step, so it is not assumed to have kept its profile.
+    const policyUnknown = cell.mode === 'auto' && !call.has_model && call.pre === null && (call.pre_intent !== null || owned !== undefined);
+    call.target_model = policyUnknown ? null : gateDecision !== null && str(gateDecision['action']) === 'patch' ? modelOfTier(str(gateDecision['tier'])) : profileModel;
+    const wantedFamily = call.target_model === null ? 'unknown' : modelFamily(call.target_model);
+    const gotFamily = call.observed_model === null ? 'unknown' : modelFamily(call.observed_model);
+    call.target_model_match = wantedFamily === 'unknown' || gotFamily === 'unknown' ? 'unknown' : wantedFamily === gotFamily ? 'match' : 'mismatch';
+    call.target_model_changed = call.target_model === null || profileModel === null ? null : wantedFamily !== modelFamily(profileModel);
+    if (call.target_model_match === 'match') g.target_model_matches++;
+    else if (call.target_model_match === 'mismatch') g.target_model_mismatches++;
+    else g.target_model_unknown++;
     if (cell.mode === 'auto' && owned && !call.has_model && !call.pre && !call.pre_intent) {
       g.missing_pre_records++;
       jevKnownAll = false;
@@ -799,8 +1592,6 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
       const baseModel = models[tier as Tier] as string | undefined;
       const baseFamily = baseModel === undefined ? 'unknown' : modelFamily(baseModel);
       const observedFamily = call.observed_model === null ? null : modelFamily(call.observed_model);
-      // The recorded decision is authoritative; the observed model family (A13) only cross-checks it.
-      const materialChange = observedFamily === null || baseFamily === 'unknown' ? null : observedFamily !== baseFamily;
       if (decision) {
         const patched = decision['action'] === 'patch';
         if (patched) {
@@ -811,8 +1602,8 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
           bucket.preserved++;
           bump(g.preserve_reasons, str(decision['reason']) ?? 'unknown');
         }
-        const expectedChange = patched && str(decision['tier']) !== call.called_tier;
-        if (materialChange !== null && materialChange !== expectedChange) g.decision_mismatch++;
+        // A13 cross-check, read from the T6 comparison: the model this decision required against the one observed.
+        if (call.target_model_match === 'mismatch') g.decision_mismatch++;
       } else if (observedFamily !== null && baseFamily !== 'unknown') {
         if (observedFamily === baseFamily) {
           bucket.preserved++;
@@ -831,21 +1622,189 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
 
   account(records.filter((r) => r['phase'] === 'pre_result'), phase('pre_intent'), g.jev_requests.allocation);
   account(records.filter((r) => r['phase'] === 'result_result'), phase('result_intent'), g.jev_requests.result);
+  // A17: the plan scope gate is a real request per plan, so its consumption is counted like every other gate. #55 review:
+  // A23's plan interpretation is the live plan-level request that replaced it, and it is billed too, so it is counted
+  // in the same group; left out, a cell's complete cost read below its real spend and the spend stop read the same.
+  account(
+    records.filter((r) => r['phase'] === 'scope_result' || r['phase'] === 'interpretation_result'),
+    [...phase('scope_intent'), ...phase('interpretation_intent')],
+    g.jev_requests.scope,
+  );
+  // A17: influence is read from the records, never re-derived here; the hook is the only thing that knows the counterfactual.
+  for (const r of records) {
+    if (!['admission_result', 'pre_result', 'result_result', 'scope_result'].includes(String(r['phase'])) || r['attempted'] !== true) continue;
+    g.influence.judgments += 1;
+    const decision = isRecord(r['decision']) ? r['decision'] : {};
+    if (decision['changed_default'] === true) g.influence.changed_default += 1;
+  }
   g.parallel = { reservation_overlap_max: maxOverlap(reservationIntervals), observed_overlap_max: maxOverlap(observedIntervals) };
-  g.jev_input_tokens_known = g.jev_requests.admission.tokens_known + g.jev_requests.allocation.tokens_known + g.jev_requests.result.tokens_known;
+  g.jev_input_tokens_known =
+    g.jev_requests.admission.tokens_known + g.jev_requests.allocation.tokens_known + g.jev_requests.result.tokens_known + g.jev_requests.scope.tokens_known;
 
   const observedOk = cell.result !== null && cell.result.usage_status === 'ok' && cell.init !== null;
-  const attempts = g.jev_requests.admission.attempts + g.jev_requests.allocation.attempts + g.jev_requests.result.attempts;
+  const attempts = g.jev_requests.admission.attempts + g.jev_requests.allocation.attempts + g.jev_requests.result.attempts + g.jev_requests.scope.attempts;
   if (cell.mode !== 'auto') {
-    // Native/absent arms send nothing to TypeSafe when the plugin state matches the plan and the run completed.
+    // L6: the legacy gate runs only in auto, so in any other mode it is a producer known disabled and contributes
+    // zero -- also when the run timed out, since its own records would show a call. It stays unknown when the plugin
+    // state differs from the plan, or when a record could not be read and might have been one of its calls.
     const pluginStateOk = cell.init !== null && cell.init.jev_gate_loaded === cell.plugin_expected;
-    g.jev_input_tokens = observedOk && pluginStateOk && attempts === 0 && !cell.timed_out && !cell.cancelled ? 0 : null;
+    g.jev_input_tokens = pluginStateOk && attempts === 0 && g.attempt_unknown === 0 ? 0 : null;
   } else if (attempts === 0 && g.attempt_unknown === 0 && g.missing_pre_records === 0 && observedOk && !cell.timed_out && !cell.cancelled) {
     g.jev_input_tokens = 0;
   } else {
     g.jev_input_tokens = jevKnownAll && g.attempt_unknown === 0 && g.missing_pre_records === 0 && !cell.timed_out && !cell.cancelled ? g.jev_input_tokens_known : null;
   }
   g.jev_cost_usd = g.jev_input_tokens === null ? null : g.jev_input_tokens === 0 ? 0 : estimateJevCostUsd(g.jev_model ?? 'jev-1.13.0', g.jev_input_tokens);
+};
+
+const ROUTER_LOG_PREFIX = 'jev-router ';
+/** The Jev model the Router calls (mods/router/hooks/client.ts JEV_MODEL) -- fixed, never per-record. */
+const ROUTER_JEV_MODEL = 'jev-1.13.0';
+
+/**
+ * #45: reads a cell's `--debug-file` output and folds every `jev-router {json}` line into `cell.router`. The debug
+ * log is plain host debug text, not the `trace/*.json` records `ingestTraces` reads, so this is a separate ingestion
+ * over a separate file. Every other debug line -- another category's output, blank lines, a truncated final write --
+ * is tolerated and simply skipped; a line that carries the Router's own prefix but fails to parse as JSON is counted
+ * in `unparsable_lines` rather than silently dropped, so a corrupt log is visible as a fact rather than read as zero
+ * activity.
+ *
+ * Two different `usage` fields exist in these records and this function never conflates them: `root`/`spawn`/`late`
+ * events carry Router's OWN Jev assessment usage (parsed from the Jev HTTP response body in client.ts) and are the
+ * only source for `jev_attempts`/`jev_input_tokens`/`jev_cost_usd` here; `root_result`'s `usage` is the four token
+ * counts of the ROUTED Claude call (already priced as ordinary Claude spend elsewhere) and is kept only as a raw
+ * per-step observation in `root_applied`, per mods/router/README.md: "these are per-step records, not a saving."
+ *
+ * PR #49 (`mods/router/hooks/router.ts` `loggable()`): the host's debug log redacts the value of any key containing
+ * "token" to a bare, unquoted `[REDACTED]`, which is not valid JSON -- so on 2.1.283 every old-format usage line
+ * failed `JSON.parse` outright and was already being counted in `unparsable_lines`, never misread as zero. The
+ * Router now logs `input`/`output`/`cache_read`/`cache_creation` instead of `input_tokens`/`output_tokens`/
+ * `cache_read_input_tokens`/`cache_creation_input_tokens`. `readUsage` below reads the new key first and falls back
+ * to the old one only for a line that still parses as JSON under it (never true for a real redacted log line, but
+ * costs nothing to keep for an older cached log or a hand-built fixture).
+ */
+export const ingestRouterLog = (cell: CellRecord, logPath: string): void => {
+  const r = cell.router;
+  let raw: string;
+  try {
+    if (!existsSync(logPath)) {
+      r.log = 'missing';
+      raw = '';
+    } else raw = readFileSync(logPath, 'utf8');
+  } catch {
+    r.log = 'unreadable';
+    raw = '';
+  }
+  // Outside a Router arm the file is not expected and the Router is a producer known disabled: zero, as initialised.
+  if (r.log !== null && !cell.router_expected) return;
+  if (r.log === null) r.log = 'read';
+  const lines = raw.split('\n');
+  // The host ends every debug line with a newline (all eight host-obs-2026-09-27 logs do), so a last element that is
+  // not empty is a write the session never finished. It is counted as unparsable without being read, rather than
+  // tested for the `jev-router ` prefix: cut short, it can lack even the full prefix (`jev-ro`), and a prefix-only
+  // test would pass it over as host chatter and let a sent request's missing line read as a known zero.
+  const tail = lines.pop();
+  if (tail !== undefined && tail !== '') r.unparsable_lines++;
+  // A `late` reply's usage belongs to the sent attempt that asked it, joined by (scope, id) -- the same identity the
+  // hook logs under, never by count: two attempts under one key are two entries, and only the most recent of them
+  // still missing usage is filled in, so a lost reply and a late one can never be swapped for each other.
+  const sent: Array<{ key: string; tokens: number | null }> = [];
+  // `input` is PR #49's key; `input_tokens` is read only as a fallback for a line that still parses as JSON under
+  // the pre-#49 name (never true for a genuinely redacted log line -- that fails JSON.parse above and is already
+  // counted in `unparsable_lines`, not read here as zero).
+  const readUsage = (v: unknown): { input_tokens: number | null } | null => (isRecord(v) ? { input_tokens: tokenCount(v['input']) ?? tokenCount(v['input_tokens']) } : null);
+  for (const line of lines) {
+    const idx = line.indexOf(ROUTER_LOG_PREFIX);
+    if (idx === -1) continue; // Not a Router line -- other debug output, blank lines, host chatter.
+    let rec: unknown;
+    try {
+      rec = JSON.parse(line.slice(idx + ROUTER_LOG_PREFIX.length));
+    } catch {
+      r.unparsable_lines++;
+      continue;
+    }
+    if (!isRecord(rec)) {
+      r.unparsable_lines++;
+      continue;
+    }
+    const event = str(rec['event']);
+    // PR #49 adds `answers` (Jev's decision receipt: control/task_clear/ordinary/tier/effort) to `root` and `spawn`
+    // records. It is deliberately ignored here -- never priced, and out of #45's scope, which is cost and mechanism
+    // counts, not decision content. A future ticket that wants it can read `rec['answers']` at these same branches.
+    if (event === 'router') {
+      r.diagnostic = { root_effort: rec['root_effort'] === true, root_model: rec['root_model'] === true, spawn_model: rec['spawn_model'] === true, key: str(rec['key']) };
+    } else if (event === 'root') {
+      const skipped = str(rec['skipped']);
+      if (skipped !== null) {
+        bump(r.root_skip_reasons, skipped);
+        continue;
+      }
+      r.root_assessed++;
+      const patch = isRecord(rec['patch']) ? rec['patch'] : {};
+      if (Object.keys(patch).length > 0) r.root_proposed++;
+      const usage = readUsage(rec['usage']);
+      if (rec['sent'] === true) sent.push({ key: `root:${str(rec['turn']) ?? ''}`, tokens: usage?.input_tokens ?? null });
+    } else if (event === 'root_stop') {
+      const reason = str(rec['reason']) ?? 'unknown';
+      bump(r.root_stop_reasons, reason);
+      if (reason === 'model_mismatch') r.root_model_mismatches++;
+    } else if (event === 'root_result') {
+      const applied = isRecord(rec['applied']) ? (rec['applied'] as { model?: string; effort?: string | number }) : {};
+      const observed = str(rec['observed']);
+      const usage = isRecord(rec['usage']) ? (rec['usage'] as Record<string, number>) : null;
+      r.root_applied.push({ turn: str(rec['turn']) ?? '', index: num(rec['index']) ?? -1, applied, observed_model: observed, usage });
+      if (observed !== null) r.root_observed++;
+    } else if (event === 'spawn') {
+      const skipped = str(rec['skipped']);
+      if (skipped !== null) {
+        bump(r.spawn_skip_reasons, skipped);
+        continue;
+      }
+      r.spawn_assessed++;
+      const patch = isRecord(rec['patch']) ? rec['patch'] : {};
+      if (typeof patch['model'] === 'string') r.spawn_proposed++;
+      const usage = readUsage(rec['usage']);
+      if (rec['sent'] === true) sent.push({ key: `spawn:${str(rec['tool_use_id']) ?? ''}`, tokens: usage?.input_tokens ?? null });
+    } else if (event === 'spawn_stop') {
+      bump(r.spawn_stop_reasons, str(rec['reason']) ?? 'unknown');
+    } else if (event === 'spawn_result') {
+      const requested = str(rec['requested']) ?? '';
+      const denied = rec['denied'] === true;
+      const observed = str(rec['observed']);
+      const mismatch = str(rec['reason']) === 'model_mismatch';
+      r.spawn_applied.push({ tool_use_id: str(rec['tool_use_id']) ?? '', requested, observed, agent_id: str(rec['agent_id']), denied, model_mismatch: mismatch });
+      if (denied) r.spawn_denied++;
+      else r.spawn_observed++;
+      if (mismatch) r.spawn_model_mismatches++;
+    } else if (event === 'late') {
+      r.late_events++;
+      const scope = str(rec['scope']);
+      const key = scope === 'root' ? `root:${str(rec['turn']) ?? ''}` : scope === 'spawn' ? `spawn:${str(rec['tool_use_id']) ?? ''}` : null;
+      const usage = readUsage(rec['usage']);
+      if (key !== null && usage !== null && usage.input_tokens !== null) {
+        for (let i = sent.length - 1; i >= 0; i--) {
+          if (sent[i]!.key === key && sent[i]!.tokens === null) {
+            sent[i]!.tokens = usage.input_tokens;
+            break;
+          }
+        }
+      }
+    }
+    // An event name this ingestion does not recognize (a newer Router build) is neither dropped as noise nor guessed
+    // at: it simply contributes to none of the counts above, which is the same "unknown, not zero" discipline as the
+    // rest of this bench.
+  }
+  r.jev_attempts = sent.length;
+  const known = sent.filter((s) => s.tokens !== null);
+  r.jev_responses_known = known.length;
+  r.jev_input_tokens_known = safeSum(known.map((s) => s.tokens));
+  // The log is the only record of the Router's Jev calls, so the total is unknown, never zero, whenever it may be
+  // missing one: no readable log, a Router line that did not parse (it may have been a sent call), or a session ended
+  // by the timeout or a cancel while a request may still have been waiting for its line. The known part is kept.
+  const complete = r.log === 'read' && r.unparsable_lines === 0 && !cell.timed_out && !cell.cancelled;
+  r.jev_input_tokens = !complete ? null : sent.length === 0 ? 0 : known.length === sent.length ? r.jev_input_tokens_known : null;
+  r.jev_cost_known_subtotal = r.jev_input_tokens_known !== null ? (estimateJevCostUsd(ROUTER_JEV_MODEL, r.jev_input_tokens_known) ?? 0) : 0;
+  r.jev_cost_usd = r.jev_input_tokens === null ? null : r.jev_input_tokens === 0 ? 0 : estimateJevCostUsd(ROUTER_JEV_MODEL, r.jev_input_tokens);
 };
 
 const killTree = (child: ChildProcess, signal: NodeJS.Signals): void => {
@@ -865,7 +1824,7 @@ const writeJsonAtomic = (path: string, value: unknown): void => {
   renameSync(tmp, path);
 };
 
-const runClaudeCell = (cs: CodingCase, spec: ArmSpec, o: Options, pluginDir: string, cellDir: string, cell: CellRecord): Promise<void> =>
+const runClaudeCell = (cs: CodingCase, spec: ArmSpec, o: Options, pluginDir: string, routerDir: string | null, configPath: string, cellDir: string, cell: CellRecord): Promise<void> =>
   new Promise((done) => {
     const work = join(cellDir, 'work');
     const traceDir = join(cellDir, 'trace');
@@ -881,14 +1840,35 @@ const runClaudeCell = (cs: CodingCase, spec: ArmSpec, o: Options, pluginDir: str
     const envAdded = ['CLAUDE_CODE_FORK_SUBAGENT', 'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS'];
     if (spec.plugin && spec.mode) {
       env['JEV_GATE_MODE'] = spec.mode;
+      // T8: the parent's JEV_GATE_CONFIG is stripped with the rest of the parent environment and replaced by the frozen
+      // file, so a child can never fall back to the HOME config or to defaults while the plan records something else.
+      // A19: an arm that overrides a config key gets its own file, derived from the frozen one so every other key is
+      // identical, written inside the cell and hashed there. The plan's frozen config stays the record of what the
+      // run was planned with; this records what this cell actually loaded.
+      if (spec.admittedShape) {
+        const base = JSON.parse(readFileSync(configPath, 'utf8')) as Record<string, unknown>;
+        const text = JSON.stringify({ ...base, admittedShape: spec.admittedShape }, null, 2) + '\n';
+        const overridePath = join(cellDir, 'config.json');
+        writeFileSync(overridePath, text, 'utf8');
+        cell.config_override = { path: overridePath, sha256: sha256(text), admittedShape: spec.admittedShape };
+        env['JEV_GATE_CONFIG'] = overridePath;
+      } else {
+        env['JEV_GATE_CONFIG'] = configPath;
+      }
       env['JEV_GATE_TRACE_DIR'] = traceDir;
       // D7: a fresh state root per cell, so one cell's job state can never reach another cell or the real HOME.
       env['JEV_GATE_STATE_DIR'] = stateDir;
-      envAdded.push('JEV_GATE_MODE', 'JEV_GATE_TRACE_DIR', 'JEV_GATE_STATE_DIR');
+      envAdded.push('JEV_GATE_MODE', 'JEV_GATE_CONFIG', 'JEV_GATE_TRACE_DIR', 'JEV_GATE_STATE_DIR');
       cell.state_dir = stateDir;
       if (spec.experimentAdmission) {
         env['JEV_GATE_EXPERIMENT_ADMISSION'] = spec.experimentAdmission;
         envAdded.push('JEV_GATE_EXPERIMENT_ADMISSION');
+      }
+      if (spec.benchRecent) {
+        env['JEV_GATE_BENCH_RECENT'] = '1';
+        // No credential reaches this cell, so "this arm made no Jev request" is a property of the process, not a policy.
+        delete env['TYPESAFE_API_KEY'];
+        envAdded.push('JEV_GATE_BENCH_RECENT');
       }
       mkdirSync(traceDir, { recursive: true, mode: 0o700 });
       mkdirSync(stateDir, { recursive: true, mode: 0o700 });
@@ -896,8 +1876,40 @@ const runClaudeCell = (cs: CodingCase, spec: ArmSpec, o: Options, pluginDir: str
       env['JEV_GATE_MODE'] = 'off';
       envAdded.push('JEV_GATE_MODE');
     }
-    const argv = [o.claude, '-p', '--model', spec.rootModel, '--input-format', 'text', '--output-format', 'stream-json', '--verbose', '--max-turns', String(o.maxTurns), '--permission-mode', o.permissionMode, '--allowedTools', o.allowedTools, '--setting-sources', o.settingSources, '--no-session-persistence'];
+    /**
+     * A primed case needs two things an unprimed one does not: stream-json input, to send the priming prompt and the
+     * job prompt as two turns of one session, and the session transcript on disk, because that file is where the depth
+     * gate reads how deep the session already is. Measured on 2026-09-19: with --no-session-persistence both prompts
+     * read depth_unknown and 0 bytes; without it the second prompt reads a real depth. Every arm of a given case gets
+     * the same profile, so the comparison inside a case never mixes the two.
+     */
+    const primed = cs.prime.length > 0;
+    const argv = [o.claude, '-p', '--model', spec.rootModel, '--input-format', primed ? 'stream-json' : 'text', '--output-format', 'stream-json', '--verbose', '--max-turns', String(o.maxTurns), '--permission-mode', o.permissionMode, '--allowedTools', o.allowedTools, '--setting-sources', o.settingSources];
+    if (primed) argv.push('--replay-user-messages');
+    else argv.push('--no-session-persistence');
     if (spec.plugin) argv.push('--plugin-dir', pluginDir);
+    /**
+     * #45: the `router` arm loads jev-gate-router -- its own plugin, separate from the legacy jev-gate one above, so
+     * `spec.plugin` stays false and none of the JEV_GATE_* branch above runs for it. Every flag here is verified
+     * against `claude --help` on Claude Code 2.1.283 (see bench/README.md): `--plugin-dir`, `--settings` and
+     * `--debug-file` all exist as documented. The options are ROUTER_OPTIONS, frozen in the plan's
+     * `cli.router_policy` before anything is executed, so this file can never disagree with what the plan recorded.
+     * The TypeSafe key is never written into this file -- it reaches the plugin only through the TYPESAFE_API_KEY
+     * env var, already in KEEP_ENV.
+     */
+    if (spec.routerEnabled) {
+      if (routerDir === null) throw new Error('a Router arm ran without a frozen Router copy');
+      env['CLAUDE_CODE_ENABLE_FUNCTION_HOOKS'] = '1';
+      envAdded.push('CLAUDE_CODE_ENABLE_FUNCTION_HOOKS');
+      argv.push('--plugin-dir', routerDir);
+      const settingsPath = join(cellDir, 'router-settings.json');
+      writeFileSync(settingsPath, JSON.stringify({ pluginConfigs: { [ROUTER_SETTINGS_KEY]: { options: ROUTER_OPTIONS } } }, null, 2) + '\n', 'utf8');
+      argv.push('--settings', settingsPath);
+      argv.push('--debug-file', join(cellDir, 'router-debug.log'));
+    }
+    // #45: router_fixed's frozen no-Jev alternative -- the host's own --effort flag, chosen up front (parseArgs
+    // refuses this arm without one) so the comparison is not just "effort changed" relative to router_native.
+    if (spec.effort) argv.push('--effort', spec.effort);
     cell.spawn = { argv, cwd: work, env_added: envAdded, env_stripped: strippedEnv };
     cell.dispatch.intent_at = new Date().toISOString();
     writeJsonAtomic(join(cellDir, 'cell.json'), cell);
@@ -914,16 +1926,32 @@ const runClaudeCell = (cs: CodingCase, spec: ArmSpec, o: Options, pluginDir: str
       writeJsonAtomic(join(cellDir, 'cell.json'), cell);
     });
     child.stdin.on('error', () => undefined);
-    child.stdin.end(cs.request);
+    const userMessage = (text: string): string => JSON.stringify({ type: 'user', message: { role: 'user', content: text } }) + '\n';
+    /**
+     * Prompts are written one turn at a time, on the `result` event that ends the previous turn -- never all at once.
+     * Measured 2026-09-19: closing stdin with every prompt in it makes the host append the waiting input to the turn
+     * already running, so a thirty-file priming turn and the job prompt become ONE turn and the job prompt is
+     * submitted at a fresh session's depth. That run recorded context_at_job_prompt 27-28K for a case built to reach
+     * 406K, and its arms disagreed on whether the job was even in scope.
+     */
+    const queued = primed ? [...cs.prime.slice(1), cs.request] : [];
+    if (primed) child.stdin.write(userMessage(cs.prime[0] as string));
+    else child.stdin.end(cs.request);
     const rl = createInterface({ input: child.stdout });
     rl.on('line', (line) => {
       streamOut.write(line + '\n');
       cell.stdout_lines++;
+      let parsed: unknown = null;
       try {
-        observeEvent(cell, JSON.parse(line));
+        parsed = JSON.parse(line);
+        observeEvent(cell, parsed);
       } catch {
         cell.unparsed_lines++;
       }
+      if (!primed || !isRecord(parsed) || parsed['type'] !== 'result') return;
+      const next = queued.shift();
+      if (next === undefined) child.stdin.end();
+      else child.stdin.write(userMessage(next));
     });
     child.stderr.pipe(streamErr);
     const escalate = (why: 'timeout' | 'cancel'): void => {
@@ -979,18 +2007,36 @@ const grade = (cs: CodingCase, checkFile: string, cellDir: string, timeoutMs: nu
   return gradeDir(checkFile, evalDir, { timeoutMs, evaluationSetup: cs.evaluationSetup, checkerId });
 };
 
-/** Copies the fixtures, manifest, checkers (with their support files and referenced broken sources) and the plugin build into the run. */
-const freezeInputs = (o: Options, cases: CodingCase[], manifestDir: string, out: string): Record<string, unknown> => {
+/** Copies the fixtures, manifest, checkers (with their support files and referenced broken sources), the plugin build and the resolved config into the run. */
+const freezeInputs = (o: Options, cases: CodingCase[], manifestDir: string, out: string, config: ConfigV5): Record<string, unknown> => {
   const inputs = join(out, 'inputs');
   mkdirSync(inputs, { recursive: true });
   const manifestCopy = join(inputs, 'bench');
   const benchReport = copyTree(manifestDir, manifestCopy, { forbiddenRoots: [out], strictSymlinks: true });
-  const pluginCopy = join(inputs, 'plugin');
-  mkdirSync(pluginCopy, { recursive: true });
-  for (const rel of ['dist', 'hooks', 'agents', '.claude-plugin']) cpSync(join(o.pluginDir, rel), join(pluginCopy, rel), { recursive: true });
+  const specs = armSpecs(o.frontierModel, o.fixedEffort, o.baseEffort);
+  // #45: the legacy plugin is copied only when a selected arm loads it.
+  let pluginCopy: string | null = null;
+  if (o.arms.some((a) => specs[a].plugin)) {
+    pluginCopy = join(inputs, 'plugin');
+    mkdirSync(pluginCopy, { recursive: true });
+    for (const rel of ['dist', 'hooks', 'agents', '.claude-plugin']) cpSync(join(o.pluginDir, rel), join(pluginCopy, rel), { recursive: true });
+  }
+  // #45: the Router runs from source, so the source is what gets frozen. Every Router cell loads this copy, rather
+  // than the repository's mods/router, and a change to the checkout mid-run cannot reach a later cell.
+  let routerCopy: string | null = null;
+  let routerReport: SnapshotReport | null = null;
+  if (o.arms.some((a) => specs[a].routerEnabled === true)) {
+    routerCopy = join(inputs, 'router-plugin');
+    routerReport = copyTree(join(root, 'mods', 'router'), routerCopy, { forbiddenRoots: [out], strictSymlinks: true });
+  }
+  // T8: the configuration every plugin child reads, written once here. ConfigV5 holds no key or secret; the API key
+  // stays in the environment. Editing the parent's file or the HOME config after this point changes nothing.
+  const configCopy = join(inputs, 'config.json');
+  const configText = JSON.stringify(config, null, 2) + '\n';
+  writeFileSync(configCopy, configText, { encoding: 'utf8', mode: 0o600 });
   const checkerIds: Record<string, string> = {};
   for (const cs of cases) checkerIds[cs.id] = checkerIdentity(cs.checkFile);
-  return { bench_copy: manifestCopy, bench_sha256: benchReport.sha256, bench_files: benchReport.files, bench_skipped: benchReport.skipped, plugin_copy: pluginCopy, plugin_hook_sha256: createHash('sha256').update(readFileSync(join(pluginCopy, 'dist', 'hook.js'))).digest('hex'), checker_ids: checkerIds };
+  return { config_copy: configCopy, config_sha256: sha256(configText), config: { ...config }, bench_copy: manifestCopy, bench_sha256: benchReport.sha256, bench_files: benchReport.files, bench_skipped: benchReport.skipped, plugin_copy: pluginCopy, plugin_hook_sha256: pluginCopy === null ? null : createHash('sha256').update(readFileSync(join(pluginCopy, 'dist', 'hook.js'))).digest('hex'), router_copy: routerCopy, router_sha256: routerReport?.sha256 ?? null, router_files: routerReport?.files ?? null, checker_ids: checkerIds };
 };
 
 export const regrade = (o: Options): number => {
@@ -1036,7 +2082,11 @@ export const regrade = (o: Options): number => {
 export const main = async (argv: string[]): Promise<number> => {
   const o = parseArgs(argv);
   if (o.regrade) return regrade(o);
-  const { cases, manifestDir, version } = loadManifest(o.cases);
+  const { cases: allCases, manifestDir, version } = loadManifest(o.cases);
+  // Staging a run is cheaper than one big one, and a case named here but absent is a typo, never a silent no-op.
+  const missing = o.only.filter((id) => !allCases.some((c) => c.id === id));
+  if (missing.length) throw new Error(`--only names cases that are not in the manifest: ${missing.join(',')}`);
+  const cases = o.only.length ? allCases.filter((c) => o.only.includes(c.id)) : allCases;
   const out = resolve(o.out);
   if (overlaps(manifestDir, out)) throw new Error(`--out ${out} overlaps the manifest directory ${manifestDir}`);
   const plan = buildPlan(o, cases, version);
@@ -1046,21 +2096,42 @@ export const main = async (argv: string[]): Promise<number> => {
     return 0;
   }
   if (existsSync(out)) throw new Error(`--out ${out} already exists; execute creates a new result directory exclusively`);
-  const pf = preflight(o, o.arms.some((a) => armSpecs(o.frontierModel)[a].mode === 'auto'));
+  const pf = preflight(o, o.arms.some((a) => {
+    const spec = armSpecs(o.frontierModel, o.fixedEffort, o.baseEffort)[a];
+    return spec.mode === 'auto' || (spec.mode === 'lean' && spec.benchRecent !== true) || spec.routerEnabled === true;
+  }));
   plan.preflight = pf;
+  // T8: a plugin arm without a loadable configuration would run on defaults while the plan claimed otherwise.
+  if (plan.effective_config === null && o.arms.some((a) => armSpecs(o.frontierModel, o.fixedEffort, o.baseEffort)[a].plugin)) {
+    pf.errors.push(`jev-gate config at ${plan.effective_config_source} does not load: ${String(plan.effective_config_error)}`);
+  }
   if (o.maxSessions !== null && o.maxSessions < plan.planned_cells) pf.errors.push(`--max-sessions ${o.maxSessions} is below the ${plan.planned_cells} planned top-level sessions`);
   if (pf.errors.length) {
     process.stderr.write(`preflight failed; nothing executed and nothing written:\n${pf.errors.map((e) => `  - ${e}`).join('\n')}\n`);
     return 2;
   }
   createExclusiveDir(out);
-  plan.frozen_inputs = freezeInputs(o, cases, manifestDir, out);
+  const frozenConfig = plan.effective_config ?? DEFAULT_CONFIG;
+  plan.frozen_inputs = freezeInputs(o, cases, manifestDir, out, frozenConfig);
   writeJsonAtomic(join(out, 'plan.json'), plan);
-  const pluginDir = String(plan.frozen_inputs['plugin_copy']);
+  const pluginDir = plan.frozen_inputs['plugin_copy'] === null ? '' : String(plan.frozen_inputs['plugin_copy']);
+  const routerDir = plan.frozen_inputs['router_copy'] === null ? null : String(plan.frozen_inputs['router_copy']);
+  const configPath = String(plan.frozen_inputs['config_copy']);
   const frozenBench = String(plan.frozen_inputs['bench_copy']);
-  const specs = armSpecs(o.frontierModel);
+  const specs = armSpecs(o.frontierModel, o.fixedEffort, o.baseEffort);
   let sessions = 0;
   const written: string[] = [];
+  // The spend stop reads each finished cell back from its cell.json through the report's own row view rather than a
+  // second sum of its own, so the total it stops on is the complete cost the report will show: Claude plus every Jev
+  // producer. A cell whose complete cost is unknown stops the run as well, since an unknown is not a zero and the cap
+  // could already be passed.
+  const spend = { known_nano_usd: 0, unknown_cell: null as string | null, stopped: null as 'max_cost_reached' | 'cost_unknown' | null };
+  const addSpend = (row: Plan['rows'][number], arm: string, cellDir: string): void => {
+    const cellFile = join(cellDir, 'cell.json');
+    const view = toRowView({ job: row.job, group: row.group, repetition: row.repetition, arm, file: cellFile }, JSON.parse(readFileSync(cellFile, 'utf8')) as Record<string, unknown>);
+    if (view.total_cost_usd === null) spend.unknown_cell ??= relative(out, cellDir);
+    else spend.known_nano_usd += toNanoUsd(view.total_cost_usd);
+  };
   for (const row of plan.rows) {
     const cs = cases.find((c) => c.id === row.job)!;
     for (const arm of row.arms) {
@@ -1076,6 +2147,20 @@ export const main = async (argv: string[]): Promise<number> => {
       }
       if (o.maxSessions !== null && sessions >= o.maxSessions) {
         cell.not_started_reason = 'max_sessions_reached';
+        writeJsonAtomic(join(cellDir, 'cell.json'), cell);
+        continue;
+      }
+      if (o.maxCostUsd !== null && (spend.unknown_cell !== null || capReached(spend.known_nano_usd, o.maxCostUsd))) {
+        const reason = spend.unknown_cell !== null ? 'cost_unknown' : 'max_cost_reached';
+        if (spend.stopped === null) {
+          process.stdout.write(
+            reason === 'cost_unknown'
+              ? `stop: the complete cost of ${spend.unknown_cell} is unknown, so --max-cost-usd ${o.maxCostUsd} cannot be checked; no further cell starts\n`
+              : `stop: the complete cost so far, $${(spend.known_nano_usd / NANO_PER_USD).toFixed(4)}, reached --max-cost-usd ${o.maxCostUsd}; no further cell starts\n`,
+          );
+        }
+        spend.stopped = reason;
+        cell.not_started_reason = reason;
         writeJsonAtomic(join(cellDir, 'cell.json'), cell);
         continue;
       }
@@ -1106,7 +2191,7 @@ export const main = async (argv: string[]): Promise<number> => {
       }
       sessions++;
       process.stdout.write(`[${sessions}/${plan.planned_cells}] ${cs.id} r${row.repetition} ${arm} (root=${spec.rootModel}${spec.plugin ? `, jev-gate ${spec.mode}${spec.experimentAdmission ? ' forced-orchestrated' : ''}` : ''})\n`);
-      await runClaudeCell(cs, spec, o, pluginDir, cellDir, cell);
+      await runClaudeCell(cs, spec, o, pluginDir, routerDir, configPath, cellDir, cell);
       try {
         const finalReport = copyTree(work, join(cellDir, 'final'), { keepGit: true, forbiddenRoots: [] });
         cell.final_snapshot = { ...finalReport, path: join(cellDir, 'final') };
@@ -1114,8 +2199,13 @@ export const main = async (argv: string[]): Promise<number> => {
         cell.final_snapshot = null;
         cell.not_started_reason = `snapshot_failed: ${(err as Error).message}`;
       }
-      ingestTraces(cell, join(cellDir, 'trace'));
+      // T8: the accounting and the model-match comparison read the same frozen configuration the child ran on.
+      ingestTraces(cell, join(cellDir, 'trace'), frozenConfig.models);
+      // #45: a separate file, a separate parser -- the Router's decision log is host debug text, not a trace/*.json
+      // record. Called unconditionally like ingestTraces above; on an arm that never wrote this file it is a no-op.
+      ingestRouterLog(cell, join(cellDir, 'router-debug.log'));
       writeJsonAtomic(join(cellDir, 'cell.json'), cell);
+      addSpend(row, arm, cellDir);
       process.stdout.write(`    exit=${String(cell.exit_code)} elapsed=${String(cell.elapsed_ms)}ms timed_out=${cell.timed_out} model=${cell.init?.model ?? 'unknown'} plugins=${cell.init?.plugins.join(',') || '-'} agents=${cell.agent_calls.map((c) => `${c.subagent_type}${c.has_model ? `(pin:${c.model_param})` : ''}`).join(',') || '-'} jev: attempted=${cell.gate.eligible_attempted} patched=${cell.gate.patched} preserved=${cell.gate.preserved}\n`);
     }
   }
@@ -1132,7 +2222,13 @@ export const main = async (argv: string[]): Promise<number> => {
     writeJsonAtomic(cellPath, cell);
     process.stdout.write(`    ${cell.job} r${cell.repetition} ${cell.arm}: ${cell.grade.quality}${cell.grade.reason ? ` (${cell.grade.reason})` : ''}\n`);
   }
-  writeJsonAtomic(join(out, 'summary.json'), { schema: 5, finished_at: new Date().toISOString(), cancelled, cells: written.length });
+  writeJsonAtomic(join(out, 'summary.json'), {
+    schema: 5,
+    finished_at: new Date().toISOString(),
+    cancelled,
+    cells: written.length,
+    spend: { max_cost_usd: o.maxCostUsd, known_usd: spend.known_nano_usd / NANO_PER_USD, unknown_cell: spend.unknown_cell, stopped: spend.stopped },
+  });
   process.stdout.write(`done: ${out}. Next: node dist/bench/report.js --run ${out}\n`);
   return cancelled ? 130 : 0;
 };

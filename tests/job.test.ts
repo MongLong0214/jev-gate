@@ -6,6 +6,8 @@ import { afterAll, describe, expect, it } from 'vitest';
 import {
   ACTIVE_GRACE_MS,
   activeDeliverables,
+  activePlanners,
+  activeTaskIds,
   activeWorkers,
   boundExhausted,
   cleanupJobs,
@@ -21,7 +23,6 @@ import {
   RETENTION_MS,
   stateRoot,
   STATE_MAX_BYTES,
-  supersedeTask,
   updateJob,
 } from '../src/job.js';
 import type { JobState } from '../src/types.js';
@@ -76,7 +77,7 @@ describe('updateJob', () => {
 
     const env3 = freshEnv();
     const big = seed(env3);
-    const oversized = updateJob(env3, 's1', (prev) => ({ ...(prev ?? big), current: { ...(prev ?? big).current, plan: { rev: 1, goal: 'z'.repeat(STATE_MAX_BYTES + 1), assumptions: [], constraints: [], tasks: [] } } }));
+    const oversized = updateJob(env3, 's1', (prev) => ({ ...(prev ?? big), current: { ...(prev ?? big).current, plan: { rev: 1, goal: 'z'.repeat(STATE_MAX_BYTES + 1), assumptions: [], constraints: [], tasks: [], chain_depth: 0, chain_depth_claimed: null, main_session_steps: [] } } }));
     expect(oversized).toEqual({ ok: false, code: 'state_too_large' });
     expect(readJob(env3, 's1')).toMatchObject({ ok: true, value: { current: { plan: null } } });
   });
@@ -104,10 +105,27 @@ describe('updateJob', () => {
   });
 });
 
+describe('updateJob over an unreadable file', () => {
+  it('refuses when asked to, and otherwise records on the new state that any lean identities were lost', () => {
+    const env = freshEnv();
+    mkdirSync(jobsDir(env), { recursive: true });
+    writeFileSync(jobPath(env, 's1'), '{"version":5,');
+    const fresh = (prev: JobState | null): JobState => newGeneration(prev, 's1', 'p1', 'direct').state;
+    expect(updateJob(env, 's1', fresh, { refuseUnreadable: true })).toEqual({ ok: false, code: 'state_corrupt' });
+    expect(readFileSync(jobPath(env, 's1'), 'utf8')).toBe('{"version":5,');
+    const recovered = updateJob(env, 's1', fresh);
+    expect(recovered.ok && recovered.value?.lean_seen_lost).toBe(true);
+    updateJob(env, 's1', (prev) => (prev ? newGeneration(prev, 's1', 'p2', 'direct').state : null));
+    const later = readJob(env, 's1');
+    expect(later.ok && later.value?.lean_seen_lost).toBe(true);
+    expect(later.ok && later.value?.current.prompt_id).toBe('p2');
+  });
+});
+
 describe('newGeneration', () => {
   it('supersedes an unfinished generation, keeps it as history and orphans its actives', () => {
     const first = newGeneration(null, 's1', 'p1', 'orchestrated').state;
-    first.current = reserve({ ...first.current, phase: 'planned' }, 'toolu_1', { role: 'worker', taskId: 't1', rev: 1, tier: 'standard', attempt: 1, deliverables: ['a.ts'] });
+    first.current = reserve({ ...first.current, phase: 'planned' }, 'toolu_1', { role: 'worker', taskId: 't1', contractHash: 'h-t1', rev: 1, tier: 'standard', attempt: 1, deliverables: ['a.ts'] });
     const second = newGeneration(first, 's1', 'p2', 'direct');
     expect(second.superseded).toBe(true);
     expect(second.state.current).toMatchObject({ prompt_id: 'p2', shape: 'direct', phase: 'admitted', plan: null, receipts: [] });
@@ -120,17 +138,20 @@ describe('newGeneration', () => {
 });
 
 describe('reservations and bounds', () => {
-  it('tracks active workers, deliverables and supersedes a rework', () => {
+  it('tracks active workers, planners, task ids and deliverables', () => {
     let gen = emptyGeneration('p1', 'orchestrated');
-    gen = reserve(gen, 'toolu_1', { role: 'worker', taskId: 't1', rev: 1, tier: 'standard', attempt: 1, deliverables: ['a.ts'] });
-    gen = reserve(gen, 'toolu_2', { role: 'worker', taskId: 't2', rev: 1, tier: 'fast', attempt: 1, deliverables: ['b.ts'] });
+    gen = reserve(gen, 'toolu_1', { role: 'worker', taskId: 't1', contractHash: 'h-t1', rev: 1, tier: 'standard', attempt: 1, deliverables: ['a.ts'] });
+    gen = reserve(gen, 'toolu_2', { role: 'worker', taskId: 't2', contractHash: 'h-t2', rev: 1, tier: 'fast', attempt: 1, deliverables: ['b.ts'] });
+    gen = reserve(gen, 'toolu_p', { role: 'planner', taskId: null, contractHash: null, rev: null, tier: null, attempt: 1, deliverables: [] });
     expect(activeWorkers(gen)).toHaveLength(2);
+    expect(activePlanners(gen)).toHaveLength(1);
+    // T1: a planner holds no task, so it never appears as a task in flight.
+    expect([...activeTaskIds(gen)].sort()).toEqual(['t1', 't2']);
     expect(activeDeliverables(gen, 't1')).toEqual(['b.ts']);
     expect(activeDeliverables(gen, null).sort()).toEqual(['a.ts', 'b.ts']);
-    const superseded = supersedeTask(gen, 't1');
-    expect(superseded.superseded).toEqual(['toolu_1']);
-    expect(activeWorkers(superseded.generation)).toHaveLength(1);
-    expect(Object.keys(release(gen, 'toolu_2').active)).toEqual(['toolu_1']);
+    expect(Object.keys(release(gen, 'toolu_2').active).sort()).toEqual(['toolu_1', 'toolu_p']);
+    // T2: releasing the last reservation removes the record, and nothing else claims the writer stopped.
+    expect(activeTaskIds(release(release(gen, 'toolu_1'), 'toolu_2'))).toEqual(new Set());
   });
 
   it('treats a prototype id as absent instead of resolving it through Object.prototype', () => {
@@ -172,7 +193,7 @@ describe('cleanupJobs', () => {
     seed(env, 'old');
     const withActive = updateJob(env, 'old-but-busy', (prev) => {
       const state = newGeneration(prev, 'old-but-busy', 'p1', 'orchestrated').state;
-      return { ...state, current: reserve(state.current, 'toolu_1', { role: 'worker', taskId: 't1', rev: 1, tier: 'standard', attempt: 1, deliverables: [] }, new Date(now - ACTIVE_GRACE_MS / 2)) };
+      return { ...state, current: reserve(state.current, 'toolu_1', { role: 'worker', taskId: 't1', contractHash: 'h-t1', rev: 1, tier: 'standard', attempt: 1, deliverables: [] }, new Date(now - ACTIVE_GRACE_MS / 2)) };
     });
     expect(withActive.ok).toBe(true);
     const past = (now - RETENTION_MS - 60_000) / 1000;
@@ -183,5 +204,57 @@ describe('cleanupJobs', () => {
     expect(existsSync(jobPath(env, 'old-but-busy'))).toBe(true);
     expect(existsSync(jobPath(env, 'fresh'))).toBe(true);
     expect(cleanupJobs({ JEV_GATE_STATE_DIR: join(tmp, 'never-created') }, now)).toBe(0);
+  });
+
+  it('removes a file only under its own lock, and never one readJob would refuse or that records lost identities', () => {
+    const env = freshEnv();
+    const now = Date.now();
+    seed(env, 'in-use');
+    seed(env, 'lost');
+    updateJob(env, 'lost', (prev) => (prev ? { ...prev, lean_seen_lost: true } : null));
+    writeFileSync(jobPath(env, 'unreadable'), '{"version":5,');
+    // Valid JSON that readJob still refuses: no active map, or another session's state under this session's name.
+    writeFileSync(jobPath(env, 'no-active'), JSON.stringify({ version: 5, session_id: 'no-active', current: {} }));
+    seed(env, 'donor');
+    writeFileSync(jobPath(env, 'misnamed'), readFileSync(jobPath(env, 'donor'), 'utf8'));
+    // Valid state over the size bound: readJob refuses it as state_too_large, so cleanup keeps it.
+    seed(env, 'oversize');
+    const padded = { ...JSON.parse(readFileSync(jobPath(env, 'oversize'), 'utf8')), pad: 'x'.repeat(STATE_MAX_BYTES) };
+    writeFileSync(jobPath(env, 'oversize'), JSON.stringify(padded));
+    expect(readJob(env, 'no-active').ok).toBe(false);
+    expect(readJob(env, 'misnamed').ok).toBe(false);
+    expect(readJob(env, 'oversize')).toEqual({ ok: false, code: 'state_too_large' });
+    // A live holder: no owner file, so the lock is not stale and cleanup does not wait for it.
+    mkdirSync(`${jobPath(env, 'in-use')}.lock`);
+    const past = (now - RETENTION_MS - 60_000) / 1000;
+    const kept = ['in-use', 'lost', 'unreadable', 'no-active', 'misnamed', 'oversize'];
+    for (const id of kept) utimesSync(jobPath(env, id), past, past);
+    expect(cleanupJobs(env, now)).toBe(0);
+    for (const id of kept) expect(existsSync(jobPath(env, id))).toBe(true);
+    rmSync(`${jobPath(env, 'in-use')}.lock`, { recursive: true });
+    expect(cleanupJobs(env, now)).toBe(1);
+    expect(existsSync(jobPath(env, 'in-use'))).toBe(false);
+    expect(existsSync(`${jobPath(env, 'in-use')}.lock`)).toBe(false);
+  });
+
+  it('never ages out a file holding admitted lean identities: a resumed session still recognises an old request', () => {
+    const env = freshEnv();
+    const now = Date.now();
+    seed(env, 'lean-session');
+    updateJob(env, 'lean-session', (prev) => (prev ? { ...prev, lean_seen: ['p1'] } : null));
+    seed(env, 'plain-session');
+    const past = (now - RETENTION_MS - 60_000) / 1000;
+    utimesSync(jobPath(env, 'lean-session'), past, past);
+    utimesSync(jobPath(env, 'plain-session'), past, past);
+    // An entry lean does not read as an identity does not hold the file either.
+    seed(env, 'null-seen');
+    writeFileSync(jobPath(env, 'null-seen'), JSON.stringify({ ...JSON.parse(readFileSync(jobPath(env, 'null-seen'), 'utf8')), lean_seen: [null] }));
+    expect(readJob(env, 'null-seen')).toMatchObject({ ok: true, value: { lean_seen: [] } });
+    utimesSync(jobPath(env, 'null-seen'), past, past);
+    expect(cleanupJobs(env, now)).toBe(2);
+    expect(existsSync(jobPath(env, 'plain-session'))).toBe(false);
+    expect(existsSync(jobPath(env, 'null-seen'))).toBe(false);
+    const kept = readJob(env, 'lean-session');
+    expect(kept.ok && kept.value?.lean_seen).toEqual(['p1']);
   });
 });

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 
-import { buildReport, compare, FRONTIER_PREFERRED, gateV5Of, plannedCells, renderMarkdown, summarizeArm, toRowView } from '../src/bench/report.js';
+import { buildReport, compare, concludeRun, FRONTIER_PREFERRED, gateV5Of, plannedCells, renderMarkdown, summarizeArm, summarizeLean, toRowView, type ArmSummary } from '../src/bench/report.js';
 import { parseModelUsage, safeSum, tokenCount, familyTokens } from '../src/bench/usage.js';
 
 const tmp = mkdtempSync(join(tmpdir(), 'jev-report-'));
@@ -167,6 +167,17 @@ describe('numeric validation and historical compatibility', () => {
     expect(existsSync(join(run, 'report.checker-v1.md'))).toBe(true);
   });
 
+  it('reads a session that stopped before its last turn as an unknown cost, not as the earlier turn\'s total', () => {
+    const at = { job: 'A', group: 'g', repetition: 1, arm: 'sonnet_native', file: '' };
+    // One priming prompt and the request: two turns sent, each reporting the session total so far.
+    const partial = toRowView(at, cell('A', 'sonnet_native', { prime_sha256: ['p'], turn_totals_usd: [4], timed_out: true, result: { ...cell('A', 'x')['result'] as object, total_cost_usd: 4 } }));
+    expect(partial).toMatchObject({ claude_cost_usd: null, total_cost_usd: null, usage_status: 'partial_session', model_usage: null });
+    const whole = toRowView(at, cell('A', 'sonnet_native', { prime_sha256: ['p'], turn_totals_usd: [4, 10] }));
+    expect(whole).toMatchObject({ claude_cost_usd: 10, total_cost_usd: 10, usage_status: 'ok' });
+    // A cell recorded before turn totals existed reads as it always did.
+    expect(toRowView(at, cell('A', 'sonnet_native')).total_cost_usd).toBe(10);
+  });
+
   it('compare handles an unrelated missing arm without discarding a usable pair', () => {
     const rows = [cell('A', 'native_hierarchy'), cell('A', 'jev_hierarchy')].map((c, i) => toRowView({ job: 'A', group: 'g', repetition: 1, arm: String(c['arm']), file: '' }, c));
     const cmp = compare(rows, 'jev_hierarchy', 'native_hierarchy');
@@ -221,7 +232,7 @@ describe('schema 5 observation', () => {
     expect(v.plan_status).toEqual({ ready: 2 });
     expect(v.worker_calls['fast']).toMatchObject({ calls: 4, preserved: 4, patched: 0 });
     expect(v.worker_calls['deep']).toMatchObject({ calls: 2, patched: 2, root_effort: { high: 2 } });
-    expect(v.receipts).toEqual({ accept: 4, incomplete: 2, invalid: 0, unknown: 0 });
+    expect(v.receipts).toEqual({ accept: 4, incomplete: 2, invalid: 0, unknown: 0, rework: 0, replan: 0 });
     expect(v.advisory.rework).toBe(2);
     // The maximum concurrency observed anywhere in the arm, not a sum.
     expect(v.parallel).toEqual({ reservation_overlap_max: 3, observed_overlap_max: 5 });
@@ -390,5 +401,40 @@ describe('diagnostic arm (A16)', () => {
     expect(byArm['jev_forced_orchestration']!.gate_v5.jev_requests.admission.attempts).toBe(0);
     expect(byArm['jev_hierarchy']!.diagnostic).toBe(false);
     expect(renderMarkdown(r)).toContain('jev_forced_orchestration (diagnostic)');
+  });
+});
+
+
+describe('lean conclusion (JGL-05)', () => {
+  const leanArm = (over: Record<string, unknown> = {}): ArmSummary =>
+    ({
+      arm: 'jev_lean',
+      diagnostic: false,
+      planned: 2,
+      by_status: { completed: 2, timed_out: 0, cancelled: 0, not_started: 0, intent_only: 0, missing_record: 0 },
+      pass: 0,
+      fail: 0,
+      unknown: 2,
+      gate_v5: { rows_observed: 2 },
+      lean: { ...summarizeLean([]), selections: 2, jev_attempts: 2, http_codes: { http_200: 2 }, reasons: { scope_unusable: 2 }, ...over },
+    }) as unknown as ArmSummary;
+
+  it('does not read a successful call as a failed one', () => {
+    // The client records no error code on success, so the ingest labels it by status. Reading anything that is not
+    // `null` as a failure turned a fully answered run into "every attempt failed", which is the opposite of true.
+    const c = concludeRun([leanArm()], []);
+    expect(c.reason).not.toMatch(/failed/);
+    expect(c.category).toBe('no dispatch exposure');
+    expect(c.reason).toContain('scope_unusable');
+  });
+
+  it('does report a run whose calls really did fail', () => {
+    const c = concludeRun([leanArm({ http_codes: { http_400: 2 }, reasons: { http_other: 2 } })], []);
+    expect(c.category).toBe('no selection exposure');
+    expect(c.reason).toContain('failed');
+  });
+
+  it('never reports on jev_hierarchy when a lean run never planned it', () => {
+    expect(concludeRun([leanArm()], []).reason).not.toContain('jev_hierarchy');
   });
 });

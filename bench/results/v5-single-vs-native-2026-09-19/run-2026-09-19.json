@@ -1,0 +1,199 @@
+{
+ "run": "v5-single-vs-native",
+ "date": "2026-09-19",
+ "build": "ed2a419",
+ "cells": 8,
+ "valid": 8,
+ "arms": [
+  "sonnet_native",
+  "jev_single"
+ ],
+ "jobs": [
+  "wide-validators-primed-30",
+  "orbit-core-primed-30"
+ ],
+ "frozen_config_sha256_prefix": "ac58c9469753",
+ "single_config_override_sha256_prefix": "c24c3ef72691",
+ "quality": {
+  "wide-validators-primed-30": {
+   "sonnet_native": "2/2",
+   "jev_single": "2/2"
+  },
+  "orbit-core-primed-30": {
+   "sonnet_native": "2/2",
+   "jev_single": "2/2"
+  }
+ },
+ "rule_3": "satisfied on both jobs (all four cells of each job pass), so both cost comparisons are reported",
+ "job_turn_usd": {
+  "wide-validators-primed-30": {
+   "sonnet_native": [
+    2.5621,
+    3.5825
+   ],
+   "jev_single": [
+    0.8587,
+    0.9241
+   ]
+  },
+  "orbit-core-primed-30": {
+   "sonnet_native": [
+    3.0281,
+    2.3602
+   ],
+   "jev_single": [
+    1.9396,
+    2.3494
+   ]
+  }
+ },
+ "cost_difference_mean": {
+  "wide-validators-primed-30": "-71.0%",
+  "orbit-core-primed-30": "-20.4%"
+ },
+ "caveat_orbit": "the 20.4% difference is smaller than each arm's own cell-to-cell spread (single 21%, native 28%); worst single and best native differ by $0.011",
+ "wall_s": {
+  "wide-validators-primed-30": {
+   "sonnet_native": [
+    137.9,
+    190.0
+   ],
+   "jev_single": [
+    271.6,
+    212.6
+   ]
+  },
+  "orbit-core-primed-30": {
+   "sonnet_native": [
+    448.0,
+    355.8
+   ],
+   "jev_single": [
+    538.8,
+    588.7
+   ]
+  }
+ },
+ "root_turns": {
+  "wide-validators-primed-30": {
+   "sonnet_native": [
+    42,
+    43
+   ],
+   "jev_single": [
+    11,
+    11
+   ]
+  },
+  "orbit-core-primed-30": {
+   "sonnet_native": [
+    27,
+    22
+   ],
+   "jev_single": [
+    13,
+    17
+   ]
+  }
+ },
+ "mechanism": {
+  "wide_native": [
+   {
+    "read": 14,
+    "paths": 14,
+    "bash": 33,
+    "tests": 1,
+    "write": 11,
+    "edit": 13
+   },
+   {
+    "read": 13,
+    "paths": 13,
+    "bash": 35,
+    "tests": 1,
+    "write": 11,
+    "edit": 13
+   }
+  ],
+  "wide_single": [
+   {
+    "read": 22,
+    "paths": 21,
+    "bash": 33,
+    "tests": 1,
+    "write": 11,
+    "edit": 13
+   },
+   {
+    "read": 18,
+    "paths": 14,
+    "bash": 37,
+    "tests": 1,
+    "write": 11,
+    "edit": 13
+   }
+  ],
+  "orbit_native": [
+   {
+    "read": 0,
+    "paths": 0,
+    "bash": 43,
+    "tests": 4,
+    "write": 14,
+    "edit": 0
+   },
+   {
+    "read": 6,
+    "paths": 6,
+    "bash": 36,
+    "tests": 3,
+    "write": 8,
+    "edit": 1
+   }
+  ],
+  "orbit_single": [
+   {
+    "read": 16,
+    "paths": 12,
+    "bash": 37,
+    "tests": 5,
+    "write": 14,
+    "edit": 1
+   },
+   {
+    "read": 19,
+    "paths": 14,
+    "bash": 36,
+    "tests": 2,
+    "write": 14,
+    "edit": 1
+   }
+  ]
+ },
+ "depth": [
+  387439,
+  388002,
+  388170,
+  388350,
+  387867,
+  388103,
+  388330,
+  388500
+ ],
+ "gates": {
+  "admission": "orchestrated:4",
+  "gate_b": "patched 4/4 to standard",
+  "jev_cost_usd": 0.0007,
+  "receipts": "accept:4",
+  "outcomes": "completed:4",
+  "orphan_records": 0
+ },
+ "kill_criterion": "not met: jev_single beat sonnet_native by more than 15% on both jobs",
+ "falsified": [],
+ "not_settled": [
+  "anything about jev_hierarchy",
+  "any default change (rule 10)",
+  "behaviour at shallower depth",
+  "n=2 per arm per job; the orbit margin sits inside the arms' own spread"
+ ]
+}

@@ -1,0 +1,134 @@
+[
+  {
+    "i": 0,
+    "len": 460,
+    "shipped": {
+      "choice": "standard",
+      "confidence": 0.7,
+      "passes_floor": false,
+      "in": 1014,
+      "ms": 567
+    },
+    "fan": {
+      "fully_specified": 0.56,
+      "interfaces_fixed": 0.8,
+      "checks_stated": 0.33,
+      "repetitive": 0.91,
+      "unresolved_interaction": 0.3,
+      "prior_reasoning_failure": 0.15,
+      "tier": "standard",
+      "in": 704,
+      "ms": 687
+    }
+  },
+  {
+    "i": 1,
+    "len": 447,
+    "shipped": {
+      "choice": "standard",
+      "confidence": 0.71,
+      "passes_floor": false,
+      "in": 1009,
+      "ms": 228
+    },
+    "fan": {
+      "fully_specified": 0.54,
+      "interfaces_fixed": 0.8,
+      "checks_stated": 0.3,
+      "repetitive": 0.9,
+      "unresolved_interaction": 0.27,
+      "prior_reasoning_failure": 0.16,
+      "tier": "standard",
+      "in": 699,
+      "ms": 267
+    }
+  },
+  {
+    "i": 2,
+    "len": 645,
+    "shipped": {
+      "choice": "standard",
+      "confidence": 0.8,
+      "passes_floor": true,
+      "in": 1049,
+      "ms": 251
+    },
+    "fan": {
+      "fully_specified": 0.55,
+      "interfaces_fixed": 0.74,
+      "checks_stated": 0.36,
+      "repetitive": 0.87,
+      "unresolved_interaction": 0.25,
+      "prior_reasoning_failure": 0.17,
+      "tier": "standard",
+      "in": 739,
+      "ms": 280
+    }
+  },
+  {
+    "i": 3,
+    "len": 1922,
+    "shipped": {
+      "choice": "standard",
+      "confidence": 0.78,
+      "passes_floor": false,
+      "in": 1347,
+      "ms": 302
+    },
+    "fan": {
+      "fully_specified": 0.46,
+      "interfaces_fixed": 0.92,
+      "checks_stated": 0.94,
+      "repetitive": 0.86,
+      "unresolved_interaction": 0.34,
+      "prior_reasoning_failure": 0.17,
+      "tier": "fast",
+      "in": 1037,
+      "ms": 284
+    }
+  },
+  {
+    "i": 4,
+    "len": 1790,
+    "shipped": {
+      "choice": "standard",
+      "confidence": 0.74,
+      "passes_floor": false,
+      "in": 1320,
+      "ms": 220
+    },
+    "fan": {
+      "fully_specified": 0.52,
+      "interfaces_fixed": 0.93,
+      "checks_stated": 0.95,
+      "repetitive": 0.87,
+      "unresolved_interaction": 0.27,
+      "prior_reasoning_failure": 0.17,
+      "tier": "fast",
+      "in": 1010,
+      "ms": 278
+    }
+  },
+  {
+    "i": 5,
+    "len": 2014,
+    "shipped": {
+      "choice": "standard",
+      "confidence": 0.63,
+      "passes_floor": false,
+      "in": 1396,
+      "ms": 249
+    },
+    "fan": {
+      "fully_specified": 0.56,
+      "interfaces_fixed": 0.91,
+      "checks_stated": 0.95,
+      "repetitive": 0.89,
+      "unresolved_interaction": 0.31,
+      "prior_reasoning_failure": 0.21,
+      "tier": "fast",
+      "in": 1086,
+      "ms": 285
+    }
+  }
+]

@@ -6,6 +6,9 @@ import { join } from 'node:path';
  * Opt-in local recorder (#14 §2, A13). Writes one private file per phase with random names, atomically (tmp + rename).
  * Records carry their own join keys (session_id, caller, tool_use_id); filenames are never identities.
  * Refuses a symlinked trace directory. Never receives keys, headers or environment dumps: callers whitelist fields.
+ * Stored traces from earlier revisions also carry `result_intent`, `result_result`, `scope_intent`, `scope_result`
+ * and the withdrawn search filter's `context_intent`/`context_result`; nothing writes those any more, and readers of
+ * historical directories still have to handle them.
  */
 export type TracePhase =
   | 'admission_intent'
@@ -14,22 +17,24 @@ export type TracePhase =
   | 'pre_intent'
   | 'pre_result'
   | 'post'
-  | 'result_intent'
-  | 'result_result'
   | 'failure'
   | 'plan'
-  | 'stop';
+  | 'stop'
+  /** A23: the plan-interpretation pair, joined by a shared `request_id` like every other gate call. */
+  | 'interpretation_intent'
+  | 'interpretation_result'
+  /** JGL: the lean selection pair, the local decision that needed no call, and the owned dispatch and its result. */
+  | 'lean_intent'
+  | 'lean_result'
+  | 'lean_dispatch'
+  | 'lean_post';
 
-export interface TraceRecordBase {
-  version: 5;
-  phase: TracePhase;
-  invocation_id: string;
-  written_at: string;
-  session_id: string | null;
-  caller: { agent_id: string | null; agent_type: string | null };
-  tool_use_id: string | null;
-}
 
+/**
+ * Every record carries `version`, `phase`, `request_id` where a gate call pairs an intent with a result,
+ * `invocation_id`, `written_at`, and the join keys `session_id`, `prompt_id`, `caller` and `tool_use_id`.
+ * Readers parse the raw object, so the shape lives here as documentation rather than as a type nothing checks.
+ */
 export interface TraceWriter {
   write(phase: TracePhase, body: Record<string, unknown>): { ok: true; file: string } | { ok: false; error: string };
 }

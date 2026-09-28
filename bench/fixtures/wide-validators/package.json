@@ -1,0 +1,8 @@
+{
+  "name": "fixture-wide-validators",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}

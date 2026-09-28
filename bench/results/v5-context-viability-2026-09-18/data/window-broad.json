@@ -1,0 +1,542 @@
+[
+  {
+    "repo": "jev-gate",
+    "pattern": "error",
+    "total_lines": 313,
+    "truncated": true,
+    "bytes": 63715,
+    "chars": 50865,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "jev-gate",
+    "pattern": "config",
+    "total_lines": 231,
+    "truncated": false,
+    "bytes": 28758,
+    "chars": 28675,
+    "verdict": "above_cap"
+  },
+  {
+    "repo": "jev-gate",
+    "pattern": "result",
+    "total_lines": 546,
+    "truncated": true,
+    "bytes": 35303,
+    "chars": 35225,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "jev-gate",
+    "pattern": "session",
+    "total_lines": 335,
+    "truncated": true,
+    "bytes": 33842,
+    "chars": 33761,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "jev-gate",
+    "pattern": "path",
+    "total_lines": 307,
+    "truncated": true,
+    "bytes": 27585,
+    "chars": 27500,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "jev-gate",
+    "pattern": "write",
+    "total_lines": 289,
+    "truncated": true,
+    "bytes": 31476,
+    "chars": 31465,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "jev-gate",
+    "pattern": "timeout",
+    "total_lines": 100,
+    "truncated": false,
+    "bytes": 15954,
+    "chars": 15849,
+    "verdict": "ELIGIBLE"
+  },
+  {
+    "repo": "jev-gate",
+    "pattern": "record",
+    "total_lines": 442,
+    "truncated": true,
+    "bytes": 35565,
+    "chars": 35527,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "jev-gate",
+    "pattern": "status",
+    "total_lines": 543,
+    "truncated": true,
+    "bytes": 32825,
+    "chars": 32824,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "jev-gate",
+    "pattern": "index",
+    "total_lines": 89,
+    "truncated": false,
+    "bytes": 43961,
+    "chars": 30561,
+    "verdict": "above_cap"
+  },
+  {
+    "repo": "jev-gate",
+    "pattern": "parse",
+    "total_lines": 446,
+    "truncated": true,
+    "bytes": 25192,
+    "chars": 25183,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "jev-gate",
+    "pattern": "token",
+    "total_lines": 457,
+    "truncated": true,
+    "bytes": 31833,
+    "chars": 31814,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "jev-gate",
+    "pattern": "cache",
+    "total_lines": 424,
+    "truncated": true,
+    "bytes": 31815,
+    "chars": 31641,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "jev-gate",
+    "pattern": "hook",
+    "total_lines": 373,
+    "truncated": true,
+    "bytes": 32039,
+    "chars": 31842,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "jev-gate",
+    "pattern": "test",
+    "total_lines": 358,
+    "truncated": true,
+    "bytes": 39398,
+    "chars": 35541,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "commitlore",
+    "pattern": "error",
+    "total_lines": 3357,
+    "truncated": true,
+    "bytes": 23295,
+    "chars": 23249,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "commitlore",
+    "pattern": "config",
+    "total_lines": 2222,
+    "truncated": true,
+    "bytes": 27754,
+    "chars": 27729,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "commitlore",
+    "pattern": "result",
+    "total_lines": 6404,
+    "truncated": true,
+    "bytes": 22499,
+    "chars": 22481,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "commitlore",
+    "pattern": "session",
+    "total_lines": 1570,
+    "truncated": true,
+    "bytes": 30736,
+    "chars": 29870,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "commitlore",
+    "pattern": "path",
+    "total_lines": 8855,
+    "truncated": true,
+    "bytes": 26149,
+    "chars": 26124,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "commitlore",
+    "pattern": "write",
+    "total_lines": 4287,
+    "truncated": true,
+    "bytes": 26755,
+    "chars": 26723,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "commitlore",
+    "pattern": "timeout",
+    "total_lines": 401,
+    "truncated": true,
+    "bytes": 151671,
+    "chars": 149603,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "commitlore",
+    "pattern": "record",
+    "total_lines": 13301,
+    "truncated": true,
+    "bytes": 22794,
+    "chars": 22786,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "commitlore",
+    "pattern": "status",
+    "total_lines": 2023,
+    "truncated": true,
+    "bytes": 23909,
+    "chars": 23855,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "commitlore",
+    "pattern": "index",
+    "total_lines": 4041,
+    "truncated": true,
+    "bytes": 25191,
+    "chars": 24719,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "commitlore",
+    "pattern": "parse",
+    "total_lines": 3368,
+    "truncated": true,
+    "bytes": 25057,
+    "chars": 25040,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "commitlore",
+    "pattern": "token",
+    "total_lines": 4074,
+    "truncated": true,
+    "bytes": 27718,
+    "chars": 27289,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "commitlore",
+    "pattern": "cache",
+    "total_lines": 1663,
+    "truncated": true,
+    "bytes": 24112,
+    "chars": 24104,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "commitlore",
+    "pattern": "hook",
+    "total_lines": 3869,
+    "truncated": true,
+    "bytes": 25566,
+    "chars": 25520,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "commitlore",
+    "pattern": "test",
+    "total_lines": 3124,
+    "truncated": true,
+    "bytes": 23780,
+    "chars": 23758,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "logic-pro-mcp",
+    "pattern": "error",
+    "total_lines": 3653,
+    "truncated": true,
+    "bytes": 32090,
+    "chars": 32080,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "logic-pro-mcp",
+    "pattern": "config",
+    "total_lines": 502,
+    "truncated": true,
+    "bytes": 33955,
+    "chars": 33924,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "logic-pro-mcp",
+    "pattern": "result",
+    "total_lines": 6065,
+    "truncated": true,
+    "bytes": 33077,
+    "chars": 33071,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "logic-pro-mcp",
+    "pattern": "session",
+    "total_lines": 670,
+    "truncated": true,
+    "bytes": 54884,
+    "chars": 54670,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "logic-pro-mcp",
+    "pattern": "path",
+    "total_lines": 8962,
+    "truncated": true,
+    "bytes": 37045,
+    "chars": 37013,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "logic-pro-mcp",
+    "pattern": "write",
+    "total_lines": 3952,
+    "truncated": true,
+    "bytes": 38724,
+    "chars": 38672,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "logic-pro-mcp",
+    "pattern": "timeout",
+    "total_lines": 839,
+    "truncated": true,
+    "bytes": 42702,
+    "chars": 42607,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "logic-pro-mcp",
+    "pattern": "record",
+    "total_lines": 3899,
+    "truncated": true,
+    "bytes": 44864,
+    "chars": 44796,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "logic-pro-mcp",
+    "pattern": "status",
+    "total_lines": 2253,
+    "truncated": true,
+    "bytes": 33526,
+    "chars": 33508,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "logic-pro-mcp",
+    "pattern": "index",
+    "total_lines": 2815,
+    "truncated": true,
+    "bytes": 30302,
+    "chars": 30286,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "logic-pro-mcp",
+    "pattern": "parse",
+    "total_lines": 1380,
+    "truncated": true,
+    "bytes": 32189,
+    "chars": 32083,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "logic-pro-mcp",
+    "pattern": "token",
+    "total_lines": 251,
+    "truncated": true,
+    "bytes": 48897,
+    "chars": 48730,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "logic-pro-mcp",
+    "pattern": "cache",
+    "total_lines": 3351,
+    "truncated": true,
+    "bytes": 30765,
+    "chars": 30705,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "logic-pro-mcp",
+    "pattern": "hook",
+    "total_lines": 78,
+    "truncated": false,
+    "bytes": 12042,
+    "chars": 12012,
+    "verdict": "ELIGIBLE"
+  },
+  {
+    "repo": "logic-pro-mcp",
+    "pattern": "test",
+    "total_lines": 5740,
+    "truncated": true,
+    "bytes": 34114,
+    "chars": 34061,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "agent-operator-score",
+    "pattern": "error",
+    "total_lines": 744,
+    "truncated": true,
+    "bytes": 26389,
+    "chars": 26389,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "agent-operator-score",
+    "pattern": "config",
+    "total_lines": 711,
+    "truncated": true,
+    "bytes": 52134,
+    "chars": 52132,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "agent-operator-score",
+    "pattern": "result",
+    "total_lines": 2905,
+    "truncated": true,
+    "bytes": 48115,
+    "chars": 47965,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "agent-operator-score",
+    "pattern": "session",
+    "total_lines": 1088,
+    "truncated": true,
+    "bytes": 35848,
+    "chars": 35468,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "agent-operator-score",
+    "pattern": "path",
+    "total_lines": 2264,
+    "truncated": true,
+    "bytes": 46680,
+    "chars": 46380,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "agent-operator-score",
+    "pattern": "write",
+    "total_lines": 1619,
+    "truncated": true,
+    "bytes": 46393,
+    "chars": 46387,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "agent-operator-score",
+    "pattern": "timeout",
+    "total_lines": 147,
+    "truncated": false,
+    "bytes": 21398,
+    "chars": 21396,
+    "verdict": "above_cap"
+  },
+  {
+    "repo": "agent-operator-score",
+    "pattern": "record",
+    "total_lines": 4203,
+    "truncated": true,
+    "bytes": 69561,
+    "chars": 69545,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "agent-operator-score",
+    "pattern": "status",
+    "total_lines": 2674,
+    "truncated": true,
+    "bytes": 32534,
+    "chars": 32458,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "agent-operator-score",
+    "pattern": "index",
+    "total_lines": 1040,
+    "truncated": true,
+    "bytes": 29115,
+    "chars": 28971,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "agent-operator-score",
+    "pattern": "parse",
+    "total_lines": 838,
+    "truncated": true,
+    "bytes": 26906,
+    "chars": 26896,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "agent-operator-score",
+    "pattern": "token",
+    "total_lines": 628,
+    "truncated": true,
+    "bytes": 31715,
+    "chars": 31715,
+    "verdict": "truncated_250"
+  },
+  {
+    "repo": "agent-operator-score",
+    "pattern": "cache",
+    "total_lines": 54,
+    "truncated": false,
+    "bytes": 5901,
+    "chars": 5901,
+    "verdict": "below_floor"
+  },
+  {
+    "repo": "agent-operator-score",
+    "pattern": "hook",
+    "total_lines": 23,
+    "truncated": false,
+    "bytes": 3380,
+    "chars": 3380,
+    "verdict": "below_floor"
+  },
+  {
+    "repo": "agent-operator-score",
+    "pattern": "test",
+    "total_lines": 4740,
+    "truncated": true,
+    "bytes": 53157,
+    "chars": 53003,
+    "verdict": "truncated_250"
+  }
+]

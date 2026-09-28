@@ -80,6 +80,25 @@ describe('validateChoice', () => {
     expect(tie && topChoices(tie).sort()).toEqual(['fast', 'standard']);
   });
 
+  it("rescales a distribution that misses 1 only by Jev's two-decimal rounding", () => {
+    // A route answer stored by the v5-replan-bound run: five labels summing to 0.99.
+    const stored = { type: 'choice', choice: 'standard', probabilities: { standard: 0.68, abstain: 0, deep: 0.03, fast: 0.28, frontier: 0 }, confidence: 0.68 };
+    const answer = validateChoice(stored, ROUTE_ANSWERS);
+    expect(answer?.probabilities.standard).toBeCloseTo(0.68 / 0.99, 12);
+    expect(Object.values<number>(answer?.probabilities ?? {}).reduce((x, y) => x + y, 0)).toBeCloseTo(1, 12);
+    // Five labels allow 0.025 plus the float tolerance; 0.97 is beyond it.
+    expect(validateChoice({ ...stored, probabilities: { ...stored.probabilities, fast: 0.26 } }, ROUTE_ANSWERS)).toBeNull();
+  });
+
+  it('rescales only two-decimal answers, so a near-tie cannot become a winner', () => {
+    // sol review R62-01: 0.99 in total, the two leaders 9.95e-7 apart (a tie) before rescaling and 1.005e-6 after.
+    const nearTie = { type: 'choice', choice: 'standard', probabilities: { standard: 0.4949995025, fast: 0.4950004975, deep: 0, frontier: 0, abstain: 0 }, confidence: 0.99 };
+    expect(validateChoice(nearTie, ROUTE_ANSWERS)).toBeNull();
+    // A two-decimal tie that misses 1 stays a tie once rescaled.
+    const roundedTie = validateChoice({ ...nearTie, probabilities: { standard: 0.45, fast: 0.45, deep: 0.05, frontier: 0.04, abstain: 0 } }, ROUTE_ANSWERS);
+    expect(roundedTie && topChoices(roundedTie).sort()).toEqual(['fast', 'standard']);
+  });
+
   it.each([
     ['wrong type', { type: 'text', choice: 'fast' }],
     ['unknown choice', { ...choice('deep'), choice: 'genius' }],
@@ -97,5 +116,36 @@ describe('tier profiles', () => {
     const text = [...Object.values(TIER_PROFILES), ...Object.values(PLANNER_TIER_PROFILES)].join(' ').toLowerCase();
     for (const vendor of ['haiku', 'sonnet', 'opus', 'fable', 'claude', 'gpt', 'anthropic', 'openai']) expect(text).not.toContain(vendor);
     expect(Object.keys(TIER_PROFILES)).toEqual([...TIERS]);
+  });
+});
+
+describe('usage and response boundaries (JGL-02)', () => {
+  const post = async (body: string | Buffer, status = 200): Promise<Awaited<ReturnType<typeof callJev>>> =>
+    await callJev({ model: 'jev-1.13.0', state: {}, questions: {} }, { apiKey: 'k', deadlineMs: 1000, fetchImpl: async () => new Response(body, { status }) });
+
+  it('rejects fractional, negative and unsafe counters as unknown rather than reading them as values', async () => {
+    const r = await post(JSON.stringify({ model: 'jev-1.13.0', answers: {}, usage: { input_tokens: 10.5, output_tokens: -1 } }));
+    expect(r.ok && r.response.usage).toEqual({ input_tokens: null, output_tokens: null });
+    const big = await post(JSON.stringify({ model: 'jev-1.13.0', answers: {}, usage: { input_tokens: Number.MAX_SAFE_INTEGER + 2, output_tokens: 3 } }));
+    expect(big.ok && big.response.usage).toEqual({ input_tokens: null, output_tokens: 3 });
+  });
+
+  it('keeps usage that parsed independently of answers it cannot use', async () => {
+    const r = await post(JSON.stringify({ model: 'jev-1.13.0', usage: { input_tokens: 40, output_tokens: 5 }, answers: 'not an object' }));
+    expect(r.ok).toBe(false);
+    expect(r.ok === false && r.code).toBe('response_invalid');
+    expect(r.ok === false && r.usage).toEqual({ input_tokens: 40, output_tokens: 5 });
+    expect(r.ok === false && r.model).toBe('jev-1.13.0');
+  });
+
+  it('rejects invalid UTF-8 instead of repairing it into source', async () => {
+    const r = await post(Buffer.from([0x7b, 0x22, 0x61, 0x22, 0x3a, 0x22, 0xff, 0xfe, 0x22, 0x7d]));
+    expect(r.ok).toBe(false);
+    expect(r.ok === false && r.code).toBe('response_invalid');
+  });
+
+  it('reports a missing model as null so a caller cannot read an unknown model as the pinned one', async () => {
+    const r = await post(JSON.stringify({ answers: {}, usage: { input_tokens: 1, output_tokens: 1 } }));
+    expect(r.ok && r.response.model).toBeNull();
   });
 });

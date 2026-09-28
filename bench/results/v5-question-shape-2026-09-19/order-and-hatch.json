@@ -1,0 +1,1466 @@
+[
+  {
+    "len": 25,
+    "context_tokens": 290292,
+    "shipped": {
+      "choice": "orchestrated",
+      "confidence": 0.51,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "orchestrated",
+      "confidence": 0.46,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "orchestrated",
+      "confidence": 0.49,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "orchestrated",
+      "confidence": 0.48,
+      "unique": true
+    }
+  },
+  {
+    "len": 64,
+    "context_tokens": 514887,
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.16,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "direct",
+      "confidence": 0.22,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "direct",
+      "confidence": 0.25,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 0.22,
+      "unique": true
+    }
+  },
+  {
+    "len": 18,
+    "context_tokens": 842101,
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.49,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "direct",
+      "confidence": 0.45,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "direct",
+      "confidence": 0.49,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 0.98,
+      "unique": true
+    }
+  },
+  {
+    "len": 719,
+    "context_tokens": 918746,
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.41,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "direct",
+      "confidence": 0.45,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "direct",
+      "confidence": 0.47,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 0.26,
+      "unique": true
+    }
+  },
+  {
+    "len": 515,
+    "context_tokens": 501052,
+    "shipped": {
+      "choice": "needs_context",
+      "confidence": 0.16,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "needs_context",
+      "confidence": 0.28,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "direct",
+      "confidence": 0.16,
+      "unique": false
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 0.2,
+      "unique": true
+    }
+  },
+  {
+    "len": 57,
+    "context_tokens": 498672,
+    "shipped": {
+      "choice": "needs_context",
+      "confidence": 0.85,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "needs_context",
+      "confidence": 0.8,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "needs_context",
+      "confidence": 0.85,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 0.89,
+      "unique": true
+    }
+  },
+  {
+    "len": 21,
+    "context_tokens": 661785,
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.36,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "direct",
+      "confidence": 0.35,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "direct",
+      "confidence": 0.32,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 0.99,
+      "unique": true
+    }
+  },
+  {
+    "len": 25,
+    "context_tokens": 259792,
+    "shipped": {
+      "choice": "needs_context",
+      "confidence": 0.26,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "needs_context",
+      "confidence": 0.28,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "direct",
+      "confidence": 0.19,
+      "unique": false
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 0.69,
+      "unique": true
+    }
+  },
+  {
+    "len": 21,
+    "context_tokens": 832738,
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.98,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "direct",
+      "confidence": 0.99,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "direct",
+      "confidence": 0.99,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 1,
+      "unique": true
+    }
+  },
+  {
+    "len": 37,
+    "context_tokens": 488872,
+    "shipped": {
+      "choice": "needs_context",
+      "confidence": 0.56,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "needs_context",
+      "confidence": 0.58,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "needs_context",
+      "confidence": 0.54,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 0.4,
+      "unique": true
+    }
+  },
+  {
+    "len": 30,
+    "context_tokens": 428196,
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.38,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "direct",
+      "confidence": 0.35,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "direct",
+      "confidence": 0.37,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 0.7,
+      "unique": true
+    }
+  },
+  {
+    "len": 1610,
+    "context_tokens": 962877,
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.59,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "direct",
+      "confidence": 0.55,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "direct",
+      "confidence": 0.56,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 0.81,
+      "unique": true
+    }
+  },
+  {
+    "len": 1609,
+    "context_tokens": 657393,
+    "shipped": {
+      "choice": "orchestrated",
+      "confidence": 0.7,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "orchestrated",
+      "confidence": 0.68,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "orchestrated",
+      "confidence": 0.63,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "orchestrated",
+      "confidence": 0.59,
+      "unique": true
+    }
+  },
+  {
+    "len": 82,
+    "context_tokens": 989072,
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.25,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "direct",
+      "confidence": 0.21,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "direct",
+      "confidence": 0.21,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 0.35,
+      "unique": true
+    }
+  },
+  {
+    "len": 38,
+    "context_tokens": 961765,
+    "shipped": {
+      "choice": "orchestrated",
+      "confidence": 0.24,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "orchestrated",
+      "confidence": 0.16,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "orchestrated",
+      "confidence": 0.13,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "orchestrated",
+      "confidence": 0.02,
+      "unique": true
+    }
+  },
+  {
+    "len": 58,
+    "context_tokens": 785855,
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.44,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "direct",
+      "confidence": 0.5,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "direct",
+      "confidence": 0.45,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 0.62,
+      "unique": true
+    }
+  },
+  {
+    "len": 513,
+    "context_tokens": 111582,
+    "shipped": {
+      "choice": "needs_context",
+      "confidence": 0.38,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "needs_context",
+      "confidence": 0.46,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "needs_context",
+      "confidence": 0.35,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 0.55,
+      "unique": true
+    }
+  },
+  {
+    "len": 78,
+    "context_tokens": 659117,
+    "shipped": {
+      "choice": "needs_context",
+      "confidence": 0.46,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "needs_context",
+      "confidence": 0.48,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "needs_context",
+      "confidence": 0.57,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "orchestrated",
+      "confidence": 0.3,
+      "unique": true
+    }
+  },
+  {
+    "len": 607,
+    "context_tokens": 950388,
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.63,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "direct",
+      "confidence": 0.61,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "direct",
+      "confidence": 0.63,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 0.56,
+      "unique": true
+    }
+  },
+  {
+    "len": 568,
+    "context_tokens": 239650,
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.78,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "direct",
+      "confidence": 0.76,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "direct",
+      "confidence": 0.78,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 0.82,
+      "unique": true
+    }
+  },
+  {
+    "len": 30,
+    "context_tokens": 808370,
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.87,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "direct",
+      "confidence": 0.89,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "direct",
+      "confidence": 0.88,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 1,
+      "unique": true
+    }
+  },
+  {
+    "len": 107,
+    "context_tokens": 160999,
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.37,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "direct",
+      "confidence": 0.41,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "direct",
+      "confidence": 0.47,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 0.99,
+      "unique": true
+    }
+  },
+  {
+    "len": 30,
+    "context_tokens": 866951,
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.32,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "direct",
+      "confidence": 0.3,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "direct",
+      "confidence": 0.34,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 0.65,
+      "unique": true
+    }
+  },
+  {
+    "len": 382,
+    "context_tokens": 764029,
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.71,
+      "unique": true
+    },
+    "reversed": {
+      "choice": null,
+      "confidence": null,
+      "unique": false
+    },
+    "swapped": {
+      "choice": "direct",
+      "confidence": 0.74,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 0.81,
+      "unique": true
+    }
+  },
+  {
+    "len": 26,
+    "context_tokens": 553583,
+    "shipped": {
+      "choice": "orchestrated",
+      "confidence": 0.39,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "needs_context",
+      "confidence": 0.35,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "needs_context",
+      "confidence": 0.38,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "orchestrated",
+      "confidence": 0.83,
+      "unique": true
+    }
+  },
+  {
+    "len": 38,
+    "context_tokens": 638349,
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.64,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "direct",
+      "confidence": 0.68,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "direct",
+      "confidence": 0.64,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 0.93,
+      "unique": true
+    }
+  },
+  {
+    "len": 22,
+    "context_tokens": 927327,
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.35,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "direct",
+      "confidence": 0.28,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "direct",
+      "confidence": 0.29,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 0.73,
+      "unique": true
+    }
+  },
+  {
+    "len": 29,
+    "context_tokens": 774003,
+    "shipped": {
+      "choice": "abstain",
+      "confidence": 0.64,
+      "unique": true
+    },
+    "reversed": {
+      "choice": null,
+      "confidence": null,
+      "unique": false
+    },
+    "swapped": {
+      "choice": "abstain",
+      "confidence": 0.58,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 0.99,
+      "unique": true
+    }
+  },
+  {
+    "len": 34,
+    "context_tokens": 986085,
+    "shipped": {
+      "choice": "orchestrated",
+      "confidence": 0.31,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "needs_context",
+      "confidence": 0.23,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "orchestrated",
+      "confidence": 0.27,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "orchestrated",
+      "confidence": 0.34,
+      "unique": true
+    }
+  },
+  {
+    "len": 19,
+    "context_tokens": 974787,
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.3,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "needs_context",
+      "confidence": 0.22,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "direct",
+      "confidence": 0.3,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 0.91,
+      "unique": true
+    }
+  },
+  {
+    "len": 1025,
+    "context_tokens": 623831,
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.92,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "direct",
+      "confidence": 0.91,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "direct",
+      "confidence": 0.88,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 0.93,
+      "unique": true
+    }
+  },
+  {
+    "len": 19,
+    "context_tokens": 938233,
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.43,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "direct",
+      "confidence": 0.46,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "direct",
+      "confidence": 0.4,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 0.98,
+      "unique": true
+    }
+  },
+  {
+    "len": 16,
+    "context_tokens": 348307,
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.5,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "direct",
+      "confidence": 0.61,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "direct",
+      "confidence": 0.48,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 0.99,
+      "unique": true
+    }
+  },
+  {
+    "len": 28,
+    "context_tokens": 225807,
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.34,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "direct",
+      "confidence": 0.36,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "direct",
+      "confidence": 0.3,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 0.8,
+      "unique": true
+    }
+  },
+  {
+    "len": 17,
+    "context_tokens": 905218,
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.37,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "direct",
+      "confidence": 0.4,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "direct",
+      "confidence": 0.3,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 0.98,
+      "unique": true
+    }
+  },
+  {
+    "len": 457,
+    "context_tokens": 605655,
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.7,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "direct",
+      "confidence": 0.75,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "direct",
+      "confidence": 0.73,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 0.73,
+      "unique": true
+    }
+  },
+  {
+    "len": 179,
+    "context_tokens": 202286,
+    "shipped": {
+      "choice": "orchestrated",
+      "confidence": 0.37,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "needs_context",
+      "confidence": 0.44,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "needs_context",
+      "confidence": 0.35,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "orchestrated",
+      "confidence": 0.78,
+      "unique": true
+    }
+  },
+  {
+    "len": 228,
+    "context_tokens": 948406,
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.33,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "direct",
+      "confidence": 0.32,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "direct",
+      "confidence": 0.32,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 0.56,
+      "unique": true
+    }
+  },
+  {
+    "len": 53,
+    "context_tokens": 678286,
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.3,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "needs_context",
+      "confidence": 0.31,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "direct",
+      "confidence": 0.28,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 0.72,
+      "unique": true
+    }
+  },
+  {
+    "len": 20,
+    "context_tokens": 250620,
+    "shipped": {
+      "choice": null,
+      "confidence": null,
+      "unique": false
+    },
+    "reversed": {
+      "choice": "needs_context",
+      "confidence": 0.09,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "direct",
+      "confidence": 0.11,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 0.28,
+      "unique": true
+    }
+  },
+  {
+    "len": 438,
+    "context_tokens": 582278,
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.79,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "direct",
+      "confidence": 0.83,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "direct",
+      "confidence": 0.79,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 0.8,
+      "unique": true
+    }
+  },
+  {
+    "len": 29,
+    "context_tokens": 312301,
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.81,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "direct",
+      "confidence": 0.84,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "direct",
+      "confidence": 0.86,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 0.96,
+      "unique": true
+    }
+  },
+  {
+    "len": 37,
+    "context_tokens": 871945,
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.36,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "direct",
+      "confidence": 0.5,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "direct",
+      "confidence": 0.4,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 0.95,
+      "unique": true
+    }
+  },
+  {
+    "len": 2319,
+    "context_tokens": 153617,
+    "shipped": {
+      "choice": "orchestrated",
+      "confidence": 0.28,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "orchestrated",
+      "confidence": 0.19,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "orchestrated",
+      "confidence": 0.2,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "orchestrated",
+      "confidence": 0.2,
+      "unique": true
+    }
+  },
+  {
+    "len": 312,
+    "context_tokens": 839825,
+    "shipped": {
+      "choice": "needs_context",
+      "confidence": 0.31,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "needs_context",
+      "confidence": 0.36,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "needs_context",
+      "confidence": 0.38,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 0.32,
+      "unique": true
+    }
+  },
+  {
+    "len": 15,
+    "context_tokens": 663815,
+    "shipped": {
+      "choice": "needs_context",
+      "confidence": 0.16,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "needs_context",
+      "confidence": 0.18,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "needs_context",
+      "confidence": 0.24,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 0.98,
+      "unique": true
+    }
+  },
+  {
+    "len": 66,
+    "context_tokens": 512835,
+    "shipped": {
+      "choice": "orchestrated",
+      "confidence": 0.22,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "orchestrated",
+      "confidence": 0.24,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "orchestrated",
+      "confidence": 0.19,
+      "unique": false
+    },
+    "no_hatch": {
+      "choice": "orchestrated",
+      "confidence": 0.3,
+      "unique": true
+    }
+  },
+  {
+    "len": 28,
+    "context_tokens": 905702,
+    "shipped": {
+      "choice": "needs_context",
+      "confidence": 0.48,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "needs_context",
+      "confidence": 0.47,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "needs_context",
+      "confidence": 0.48,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 0.94,
+      "unique": true
+    }
+  },
+  {
+    "len": 49,
+    "context_tokens": 447304,
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.42,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "direct",
+      "confidence": 0.58,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "direct",
+      "confidence": 0.5,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 0.99,
+      "unique": true
+    }
+  },
+  {
+    "len": 34,
+    "context_tokens": 412787,
+    "shipped": {
+      "choice": "needs_context",
+      "confidence": 0.27,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "needs_context",
+      "confidence": 0.31,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "needs_context",
+      "confidence": 0.26,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "orchestrated",
+      "confidence": 0.52,
+      "unique": true
+    }
+  },
+  {
+    "len": 248,
+    "context_tokens": 245379,
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.81,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "direct",
+      "confidence": 0.82,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "direct",
+      "confidence": 0.81,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 0.98,
+      "unique": true
+    }
+  },
+  {
+    "len": 25,
+    "context_tokens": 373511,
+    "shipped": {
+      "choice": "needs_context",
+      "confidence": 0.18,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "needs_context",
+      "confidence": 0.23,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "needs_context",
+      "confidence": 0.19,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "orchestrated",
+      "confidence": 0.09,
+      "unique": true
+    }
+  },
+  {
+    "len": 16,
+    "context_tokens": 687086,
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.48,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "direct",
+      "confidence": 0.43,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "direct",
+      "confidence": 0.46,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 0.99,
+      "unique": true
+    }
+  },
+  {
+    "len": 93,
+    "context_tokens": 380093,
+    "shipped": {
+      "choice": "orchestrated",
+      "confidence": 0.32,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "needs_context",
+      "confidence": 0.28,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "orchestrated",
+      "confidence": 0.26,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "orchestrated",
+      "confidence": 0.61,
+      "unique": true
+    }
+  },
+  {
+    "len": 24,
+    "context_tokens": 981051,
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.35,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "direct",
+      "confidence": 0.47,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "direct",
+      "confidence": 0.43,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 0.89,
+      "unique": true
+    }
+  },
+  {
+    "len": 43,
+    "context_tokens": 791912,
+    "shipped": {
+      "choice": "needs_context",
+      "confidence": 0.22,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "direct",
+      "confidence": 0.26,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "direct",
+      "confidence": 0.22,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 0.61,
+      "unique": true
+    }
+  },
+  {
+    "len": 35,
+    "context_tokens": 429662,
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.65,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "direct",
+      "confidence": 0.61,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "direct",
+      "confidence": 0.64,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 1,
+      "unique": true
+    }
+  },
+  {
+    "len": 43,
+    "context_tokens": 946924,
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.58,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "direct",
+      "confidence": 0.61,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "direct",
+      "confidence": 0.54,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 0.96,
+      "unique": true
+    }
+  },
+  {
+    "len": 26,
+    "context_tokens": 254351,
+    "shipped": {
+      "choice": null,
+      "confidence": null,
+      "unique": false
+    },
+    "reversed": {
+      "choice": "needs_context",
+      "confidence": 0.45,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "needs_context",
+      "confidence": 0.47,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 0.2,
+      "unique": true
+    }
+  },
+  {
+    "len": 28,
+    "context_tokens": 577606,
+    "shipped": {
+      "choice": "direct",
+      "confidence": 0.34,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "direct",
+      "confidence": 0.47,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "direct",
+      "confidence": 0.41,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "direct",
+      "confidence": 0.62,
+      "unique": true
+    }
+  },
+  {
+    "len": 76,
+    "context_tokens": 984598,
+    "shipped": {
+      "choice": "needs_context",
+      "confidence": 0.44,
+      "unique": true
+    },
+    "reversed": {
+      "choice": "needs_context",
+      "confidence": 0.48,
+      "unique": true
+    },
+    "swapped": {
+      "choice": "needs_context",
+      "confidence": 0.54,
+      "unique": true
+    },
+    "no_hatch": {
+      "choice": "orchestrated",
+      "confidence": 0.57,
+      "unique": true
+    }
+  }
+]

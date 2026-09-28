@@ -1,17 +1,20 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import type { ConfigV5 } from '../src/types.js';
 import type { Report } from '../src/bench/report.js';
-import { loadManifest, maxOverlap, type CellRecord, type Plan } from '../src/bench/run.js';
+import { armSpecs, capReached, loadManifest, maxOverlap, toNanoUsd, type CellRecord, type Plan } from '../src/bench/run.js';
 
 const root = join(__dirname, '..');
 const fake = join(__dirname, 'fixtures', 'fake-claude.mjs');
 const cases = join(__dirname, 'fixtures', 'mini', 'cases.json');
-const ARMS = ['sonnet_native', 'frontier_native', 'native_hierarchy', 'orchestrated_control', 'frontier_orchestrated', 'jev_hierarchy', 'jev_forced_orchestration'] as const;
+const ARMS = ['sonnet_native', 'frontier_native', 'native_hierarchy', 'orchestrated_control', 'frontier_orchestrated', 'jev_hierarchy', 'jev_single', 'jev_forced_orchestration'] as const;
 const JEV_ARMS = ['jev_hierarchy', 'jev_forced_orchestration'] as const;
+const LEAN_ARMS = ['native_auto', 'recent_packet', 'jev_lean'] as const;
 const HIERARCHY_ARMS = ['native_hierarchy', 'orchestrated_control', 'frontier_orchestrated', 'jev_hierarchy', 'jev_forced_orchestration'] as const;
 let tmp: string;
 let dist: string;
@@ -41,6 +44,11 @@ beforeAll(() => {
   pluginDir = join(tmp, 'plugin');
   cpSync(dist, join(pluginDir, 'dist'), { recursive: true });
   for (const rel of ['hooks', 'agents', '.claude-plugin']) cpSync(join(root, rel), join(pluginDir, rel), { recursive: true });
+  // #45: run.ts resolves the Router plugin dir as `<root>/mods/router` where `root` is three levels above the
+  // running run.js file. Under this harness that file is compiled into `tmp/dist/bench/run.js`, so `root` here is
+  // `tmp`, not the real repo -- the real mods/router has to be copied alongside the compiled dist for a router-arm
+  // execute test (or preflight's router_plugin_present) to find it at all.
+  cpSync(join(root, 'mods', 'router'), join(tmp, 'mods', 'router'), { recursive: true });
 }, 60_000);
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
@@ -50,11 +58,11 @@ describe('plan', () => {
     expect(r.status, r.stderr).toBe(0);
     const plan = JSON.parse(r.stdout) as Plan;
     expect(plan.schema).toBe(5);
-    expect(plan.planned_cells).toBe(7);
+    expect(plan.planned_cells).toBe(8);
     expect(plan.arms.map((a) => a.arm).sort()).toEqual([...ARMS].sort());
     expect(plan.arms.filter((a) => a.experimentAdmission === 'orchestrated').map((a) => a.arm).sort()).toEqual(['frontier_orchestrated', 'jev_forced_orchestration', 'orchestrated_control']);
     expect(plan.arms.filter((a) => a.diagnostic).map((a) => a.arm)).toEqual(['jev_forced_orchestration']);
-    expect(plan.arms.filter((a) => a.mode === 'auto').map((a) => a.arm).sort()).toEqual(['jev_forced_orchestration', 'jev_hierarchy']);
+    expect(plan.arms.filter((a) => a.mode === 'auto').map((a) => a.arm).sort()).toEqual(['jev_forced_orchestration', 'jev_hierarchy', 'jev_single']);
     expect(plan.arms.filter((a) => a.rootModel === 'fable').map((a) => a.arm).sort()).toEqual(['frontier_native', 'frontier_orchestrated']);
     expect(existsSync(r.out)).toBe(false);
     expect(JSON.parse(bench(['--seed', '7']).stdout).rows).toEqual(plan.rows);
@@ -67,9 +75,21 @@ describe('plan', () => {
     expect(bench(['--arms', 'jev_hierarchy,bogus']).status).toBe(1);
     const retired = bench(['--arms', 'jev_hierarchy,fixed_hierarchy']);
     expect(retired.status).toBe(1);
-    expect(retired.stderr).toMatch(/--arms must be a unique subset/);
+    expect(retired.stderr).toMatch(/--arms must be `lean`, `router`, or a unique subset/);
     expect(bench(['--arms', 'jev_hierarchy,jev_hierarchy']).status).toBe(1);
-    expect(bench(['--regrade', '--execute', '--max-sessions', '7']).status).toBe(1);
+    // JGL-05: `lean` is a profile name, and it selects exactly the three arms of that comparison.
+    const leanPlan = JSON.parse(bench(['--arms', 'lean']).stdout) as Plan;
+    expect(leanPlan.arms.map((a) => a.arm)).toEqual(['native_auto', 'recent_packet', 'jev_lean']);
+    expect(leanPlan.arms.filter((a) => a.mode === 'lean').map((a) => a.arm)).toEqual(['recent_packet', 'jev_lean']);
+    // Only the research arm enables the no-Jev dependency.
+    expect(leanPlan.arms.filter((a) => a.benchRecent === true).map((a) => a.arm)).toEqual(['recent_packet']);
+    expect(leanPlan.arms.map((a) => a.rootModel)).toEqual(['sonnet', 'sonnet', 'sonnet']);
+    // The packet budget both handoff arms fill is frozen in the plan, before anything runs.
+    const policy = (leanPlan.cli as Record<string, unknown>)['lean_packet_policy'] as Record<string, number>;
+    expect(policy['packet_budget_bytes']).toBe(60 * 1024);
+    expect(policy['action_confidence']).toBe(0.8);
+    expect(policy['omission_confidence']).toBe(0.9);
+    expect(bench(['--regrade', '--execute', '--max-sessions', '8']).status).toBe(1);
     expect(bench(['--execute']).stderr).toMatch(/--max-sessions/);
     const badManifest = join(tmp, 'bad.json');
     require('node:fs').writeFileSync(badManifest, JSON.stringify({ version: 5, cases: [{ id: '../../victim', group: 'g', fixtureDir: 'x', request: 'r', setup: [], checkFile: 'c.mjs' }] }));
@@ -93,39 +113,111 @@ describe('plan', () => {
     require('node:fs').writeFileSync(v2, JSON.stringify({ version: 2, cases: [] }));
     expect(() => loadManifest(v2)).toThrow(/version:3\|4\|5/);
   });
+
+  it('#45: plans `--arms router` -- all three on the frontier root, router at base effort with the policy frozen, each effort refused when missing', () => {
+    // The native side is the session the Router is meant to make cheaper: the frontier root at the owner's effort.
+    const specs = armSpecs('opus', 'high', 'xhigh');
+    expect(specs['router_native']).toEqual({ ...specs['frontier_native'], arm: 'router_native', effort: 'xhigh' });
+    expect(specs['router']).toEqual({ ...specs['router_native'], arm: 'router', routerEnabled: true });
+    expect(specs['router_fixed']).toEqual({ ...specs['router_native'], arm: 'router_fixed', effort: 'high' });
+
+    const refused = bench(['--arms', 'router', '--base-effort', 'xhigh']);
+    expect(refused.status).toBe(1);
+    expect(refused.stderr).toMatch(/--arms includes router_fixed but no --fixed-effort was given/);
+    const noBase = bench(['--arms', 'router', '--fixed-effort', 'high']);
+    expect(noBase.status).toBe(1);
+    expect(noBase.stderr).toMatch(/--arms includes router or router_native but no --base-effort was given/);
+
+    const invalid = bench(['--arms', 'router', '--fixed-effort', 'bogus']);
+    expect(invalid.status).toBe(1);
+    expect(invalid.stderr).toMatch(/--fixed-effort must be one of low,medium,high,xhigh,max/);
+    expect(bench(['--arms', 'router', '--base-effort', 'ultra']).stderr).toMatch(/--base-effort must be one of low,medium,high,xhigh,max/);
+
+    const plan = JSON.parse(bench(['--arms', 'router', '--fixed-effort', 'high', '--base-effort', 'xhigh', '--frontier-model', 'opus']).stdout) as Plan;
+    expect(plan.arms.map((a) => a.arm)).toEqual(['router_native', 'router', 'router_fixed']);
+    expect(plan.arms.map((a) => a.rootModel)).toEqual(['opus', 'opus', 'opus']);
+    expect(plan.arms.map((a) => a.effort)).toEqual(['xhigh', 'xhigh', 'high']);
+    expect(plan.arms.find((a) => a.arm === 'router')?.routerEnabled).toBe(true);
+    expect(plan.arms.find((a) => a.arm === 'router_native')?.routerEnabled).toBeUndefined();
+
+    // The Router options, plugin dir, env and both efforts are frozen in the plan before anything runs -- the same
+    // policy-freeze convention as lean_packet_policy above.
+    const policy = (plan.cli as Record<string, unknown>)['router_policy'] as Record<string, unknown>;
+    // Same three-levels-up resolution quirk as the beforeAll mods/router copy above: under this harness the
+    // compiled run.js lives at `tmp/dist/bench/run.js`, so its own notion of `root` is `tmp`, not this test file's --
+    // and macOS resolves `/var` to `/private/var` by the time Node reports the running module's own path, so the
+    // expected value has to go through the same realpath as run.ts's `import.meta.url` does.
+    expect(policy['plugin_dir']).toBe(join(realpathSync(tmp), 'mods', 'router'));
+    expect(policy['settings_key']).toBe('jev-gate-router@inline');
+    expect(policy['options']).toEqual({ enabled: true, logDecisions: true });
+    expect(policy['env']).toEqual({ CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: '1' });
+    expect(policy['fixed_effort']).toBe('high');
+    expect(policy['base_effort']).toBe('xhigh');
+
+    // router_native and router alone (no router_fixed) never need --fixed-effort, and that baseline is null.
+    const noFixed = bench(['--arms', 'router_native,router', '--base-effort', 'xhigh']);
+    expect(noFixed.status, noFixed.stderr).toBe(0);
+    const noFixedPlan = JSON.parse(noFixed.stdout) as Plan;
+    expect((noFixedPlan.cli as Record<string, unknown>)['router_policy']).toMatchObject({ fixed_effort: null, base_effort: 'xhigh' });
+  });
 });
 
 describe('execute', () => {
   it('refuses to start (writing nothing) under API-key auth, unverifiable auth, missing key with the Jev arm, or a low budget', () => {
     for (const [args, env, pattern] of [
-      [['--execute', '--max-sessions', '7'], { ANTHROPIC_API_KEY: 'sk-x' }, /ANTHROPIC_API_KEY/],
-      [['--execute', '--max-sessions', '7'], { FAKE_CLAUDE_AUTH_EXIT: '7' }, /cannot verify subscription OAuth/],
-      [['--execute', '--max-sessions', '7'], { FAKE_CLAUDE_AUTH: JSON.stringify({ loggedIn: true, authMethod: 'console', apiProvider: 'firstParty' }) }, /not claude\.ai subscription OAuth/],
-      [['--execute', '--max-sessions', '6'], {}, /below the 7 planned/],
+      [['--execute', '--max-sessions', '8'], { ANTHROPIC_API_KEY: 'sk-x' }, /ANTHROPIC_API_KEY/],
+      [['--execute', '--max-sessions', '8'], { FAKE_CLAUDE_AUTH_EXIT: '7' }, /cannot verify subscription OAuth/],
+      [['--execute', '--max-sessions', '8'], { FAKE_CLAUDE_AUTH: JSON.stringify({ loggedIn: true, authMethod: 'console', apiProvider: 'firstParty' }) }, /not claude\.ai subscription OAuth/],
+      [['--execute', '--max-sessions', '7'], {}, /below the 8 planned/],
     ] as Array<[string[], Record<string, string>, RegExp]>) {
       const r = bench(args, env);
       expect(r.status, r.stderr).toBe(2);
       expect(r.stderr).toMatch(pattern);
       expect(existsSync(r.out)).toBe(false);
     }
-    const noKey = spawnSync(process.execPath, [join(dist, 'bench', 'run.js'), '--cases', cases, '--out', join(tmp, 'nokey'), '--claude', fake, '--plugin-dir', pluginDir, '--execute', '--max-sessions', '7'], { encoding: 'utf8', env: { PATH: process.env['PATH'] ?? '', HOME: join(tmp, 'home') } });
+    const noKey = spawnSync(process.execPath, [join(dist, 'bench', 'run.js'), '--cases', cases, '--out', join(tmp, 'nokey'), '--claude', fake, '--plugin-dir', pluginDir, '--execute', '--max-sessions', '8'], { encoding: 'utf8', env: { PATH: process.env['PATH'] ?? '', HOME: join(tmp, 'home') } });
     expect(noKey.status).toBe(2);
     expect(noKey.stderr).toMatch(/TYPESAFE_API_KEY/);
     const noKeyNoJev = spawnSync(process.execPath, [join(dist, 'bench', 'run.js'), '--cases', cases, '--out', join(tmp, 'nokey-ok'), '--claude', fake, '--plugin-dir', pluginDir, '--execute', '--max-sessions', '1', '--arms', 'sonnet_native'], { encoding: 'utf8', env: { PATH: process.env['PATH'] ?? '', HOME: join(tmp, 'home') } });
     expect(noKeyNoJev.status, noKeyNoJev.stderr).toBe(0);
   });
 
+  it('runs the three lean arms, and only the research arm gets the no-Jev dependency and no key', () => {
+    const r = bench(['--execute', '--arms', 'lean', '--max-sessions', '3', '--seed', '5', '--timeout-ms', '60000']);
+    expect(r.status, r.stderr + r.stdout).toBe(0);
+    const cells = Object.fromEntries(LEAN_ARMS.map((a) => [a, readCell(r.out, a)])) as Record<(typeof LEAN_ARMS)[number], CellRecord>;
+    expect(new Set(LEAN_ARMS.map((a) => cells[a].request_sha256)).size).toBe(1);
+    for (const a of LEAN_ARMS) expect(cells[a].started, a).toBe(true);
+
+    // The baseline runs without the plugin at all and keeps its own native delegation.
+    expect(cells.native_auto.spawn!.argv).not.toContain('--plugin-dir');
+    expect(cells.native_auto.state_dir).toBeNull();
+
+    for (const a of ['recent_packet', 'jev_lean'] as const) {
+      expect(cells[a].spawn!.argv).toContain(join(r.out, 'inputs', 'plugin'));
+      expect(cells[a].spawn!.env_added).toContain('JEV_GATE_MODE');
+      expect(cells[a].spawn!.env_added).toContain('JEV_GATE_STATE_DIR');
+    }
+    // Only the research arm selects the no-Jev dependency, and it runs with no provider key in the cell at all.
+    expect(cells.recent_packet.spawn!.env_added).toContain('JEV_GATE_BENCH_RECENT');
+    expect(cells.jev_lean.spawn!.env_added).not.toContain('JEV_GATE_BENCH_RECENT');
+    expect(cells.native_auto.spawn!.env_added).not.toContain('JEV_GATE_BENCH_RECENT');
+
+    // No legacy machinery is configured for these arms.
+    for (const a of LEAN_ARMS) expect(cells[a].spawn!.env_added).not.toContain('JEV_GATE_EXPERIMENT_ADMISSION');
+  }, 180_000);
+
   it('refuses an existing output directory, even an empty one', () => {
     const out = join(tmp, 'existing');
     mkdirSync(out);
-    const r = bench(['--execute', '--max-sessions', '7'], {}, out);
+    const r = bench(['--execute', '--max-sessions', '8'], {}, out);
     expect(r.status).toBe(1);
     expect(r.stderr).toMatch(/already exists/);
     expect(readdirSync(out)).toEqual([]);
   });
 
-  it('runs seven arms from frozen inputs with identical prompts, a private state dir and whole-tree accounting', () => {
-    const r = bench(['--execute', '--max-sessions', '7', '--seed', '3', '--timeout-ms', '60000']);
+  it('runs eight arms from frozen inputs with identical prompts, a private state dir and whole-tree accounting', () => {
+    const r = bench(['--execute', '--max-sessions', '8', '--seed', '3', '--timeout-ms', '60000']);
     expect(r.status, r.stderr + r.stdout).toBe(0);
     const plan = JSON.parse(readFileSync(join(r.out, 'plan.json'), 'utf8')) as Plan;
     expect(plan.preflight?.errors).toEqual([]);
@@ -172,6 +264,20 @@ describe('execute', () => {
     expect(cells.jev_hierarchy.spawn!.env_added).not.toContain('JEV_GATE_EXPERIMENT_ADMISSION');
     expect(ARMS.filter((a) => cells[a].diagnostic)).toEqual(['jev_forced_orchestration']);
 
+    // A19: the single arm loads a config derived from the frozen one inside its own cell, and the cell records which
+    // file that was with its hash. Every other arm loads the frozen file itself, so the override is visible per cell
+    // rather than asserted for the run.
+    const frozen = JSON.parse(readFileSync(String(plan.frozen_inputs!['config_copy']), 'utf8')) as Record<string, unknown>;
+    const override = cells.jev_single.config_override!;
+    expect(override.path).toBe(join(r.out, 'cells', 'mini', 'jev_single', '1', 'config.json'));
+    const overrideText = readFileSync(override.path, 'utf8');
+    expect(createHash('sha256').update(overrideText).digest('hex')).toBe(override.sha256);
+    expect(override.admittedShape).toBe('single');
+    // Only the one key differs, so the two plugin arms are the same run in every other respect.
+    expect(JSON.parse(overrideText)).toEqual({ ...frozen, admittedShape: 'single' });
+    expect(cells.jev_single.spawn!.env_added).toContain('JEV_GATE_CONFIG');
+    for (const a of ARMS.filter((x) => x !== 'jev_single')) expect(cells[a].config_override, a).toBeNull();
+
     // native: admission recorded as not sent, no Jev spend, no plan
     expect(cells.native_hierarchy.gate.admission).toMatchObject({ attempted: false, known_not_sent: true, decision: 'direct', reason: 'mode_native', choice: null });
     expect(cells.native_hierarchy.gate).toMatchObject({ skipped: { mode_native: 1 }, jev_input_tokens: 0, jev_cost_usd: 0, guard_denials: 0, outcome: 'completed' });
@@ -184,7 +290,7 @@ describe('execute', () => {
       expect(g.guard_denials, a).toBe(3);
       expect(g.continue_false, a).toBe(1);
       expect(g.planner_calls, a).toMatchObject({ requested: 1, completed: 1, plan_status: 'ready', rev: 1, model_observed: 'claude-opus-5', tier_proposed: null });
-      expect(g.receipts, a).toEqual({ accept: 2, incomplete: 1, invalid: 0, unknown: 1 });
+      expect(g.receipts, a).toEqual({ accept: 2, incomplete: 1, invalid: 0, unknown: 1, rework: 0, replan: 0 });
       expect(g.advisory, a).toEqual({ accept: 0, rework: 0, replan: 0, abstain: 0, none: 4 });
       expect(g.outcome, a).toBe('incomplete');
       expect(g.jev_input_tokens, a).toBe(0);
@@ -200,13 +306,19 @@ describe('execute', () => {
     expect(jev.admission).toMatchObject({ attempted: true, known_not_sent: false, forced: false, decided: true, choice: 'orchestrated', confidence: 0.93, decision: 'orchestrated', reason: null });
     expect(jev.guard_denials).toBe(0);
     expect(jev.planner_calls).toMatchObject({ requested: 1, completed: 1, tier_proposed: 'deep', model_observed: 'claude-opus-5', plan_status: 'ready', rev: 1 });
-    expect(jev.receipts).toEqual({ accept: 2, incomplete: 1, invalid: 0, unknown: 1 });
-    expect(jev.advisory).toEqual({ accept: 0, rework: 1, replan: 0, abstain: 0, none: 3 });
+    // T11: the current policy runs no Gate C, so a deterministic accept is the receipt that stands.
+    expect(jev.receipts).toEqual({ accept: 2, incomplete: 1, invalid: 0, unknown: 1, rework: 0, replan: 0 });
+    expect(jev.advisory).toEqual({ accept: 0, rework: 0, replan: 0, abstain: 0, none: 4 });
     expect(jev.jev_requests.admission).toMatchObject({ attempts: 1, tokens: 300 });
     expect(jev.jev_requests.allocation).toMatchObject({ attempts: 7, tokens: 2620 });
-    expect(jev.jev_requests.result).toMatchObject({ attempts: 1, tokens: 200 });
-    expect(jev.jev_input_tokens).toBe(3120);
-    expect(jev.jev_cost_usd).toBeCloseTo((3120 * 0.042) / 1_000_000, 12);
+    // T11: no Gate C and no plan-scope request on the current path; the buckets stay readable and stay at zero.
+    expect(jev.jev_requests.result).toMatchObject({ attempts: 0, tokens: 0 });
+    expect(jev.jev_requests.scope).toMatchObject({ attempts: 0, tokens: 0 });
+    expect(jev.jev_input_tokens).toBe(2920);
+    expect(jev.jev_cost_usd).toBeCloseTo((2920 * 0.042) / 1_000_000, 12);
+    // A17 item 7: judgments made, and the ones that changed what would have happened without Jev.
+    expect(jev.influence).toEqual({ judgments: 8, changed_default: 3 });
+    expect(cells.orchestrated_control.gate.influence).toEqual({ judgments: 0, changed_default: 0 });
     expect(jev.parallel).toEqual({ reservation_overlap_max: 2, observed_overlap_max: 2 });
     expect(jev.outcome).toBe('incomplete');
     // The recorded Gate B decision is authoritative; `proposed` stays Jev's answer even when the call was preserved.
@@ -233,9 +345,12 @@ describe('execute', () => {
     expect(forcedJev.admission).toMatchObject({ attempted: false, known_not_sent: true, decision: 'orchestrated', reason: 'admission_forced', choice: null });
     expect(forcedJev.jev_requests.admission).toMatchObject({ attempts: 0, tokens: 0 });
     expect(forcedJev.jev_requests.allocation).toMatchObject({ attempts: 7, tokens: 2620 });
-    expect(forcedJev.jev_requests.result).toMatchObject({ attempts: 1, tokens: 200 });
-    expect(forcedJev.jev_input_tokens).toBe(2820);
-    expect(forcedJev.advisory.rework).toBe(1);
+    expect(forcedJev.jev_requests.result).toMatchObject({ attempts: 0, tokens: 0 });
+    expect(forcedJev.jev_requests.scope).toMatchObject({ attempts: 0, tokens: 0 });
+    expect(forcedJev.jev_input_tokens).toBe(2620);
+    // A16: Gate A is not asked here, so the forced admission is never counted as a judgment or as influence.
+    expect(forcedJev.influence).toEqual({ judgments: 7, changed_default: 2 });
+    expect(forcedJev.advisory.rework).toBe(0);
     expect(forcedJev.patched).toBe(5);
     expect(forcedJev.parallel.reservation_overlap_max).toBe(2);
     expect(forcedJev.guard_denials).toBe(0);
@@ -247,12 +362,12 @@ describe('execute', () => {
 
     const rep = report(r.out);
     expect(rep.schema).toBe(5);
-    expect(rep.planned_rows).toBe(7);
+    expect(rep.planned_rows).toBe(8);
     expect(rep.per_job.map((j) => j.job)).toEqual(['mini']);
-    expect(rep.per_job[0]!.arms).toHaveLength(7);
+    expect(rep.per_job[0]!.arms).toHaveLength(8);
     const byArm = Object.fromEntries(rep.arms.map((a) => [a.arm, a]));
     expect(byArm['frontier_native']!.fable_tokens).toBe(1260);
-    expect(byArm['jev_hierarchy']!.gate_v5.receipts).toEqual({ accept: 2, incomplete: 1, invalid: 0, unknown: 1 });
+    expect(byArm['jev_hierarchy']!.gate_v5.receipts).toEqual({ accept: 2, incomplete: 1, invalid: 0, unknown: 1, rework: 0, replan: 0 });
     expect(byArm['jev_hierarchy']!.gate_v5.admission).toEqual({ orchestrated: 1 });
     expect(byArm['jev_forced_orchestration']!.diagnostic).toBe(true);
     expect(byArm['jev_hierarchy']!.diagnostic).toBe(false);
@@ -333,4 +448,225 @@ describe('overlap arithmetic', () => {
     expect(maxOverlap([[0, 10], [5, 20], [6, 7]])).toBe(3);
     expect(maxOverlap([[0, 10], [11, 20], [12, 30]])).toBe(2);
   });
+});
+
+describe('historical runs recorded under the earlier policy', () => {
+  it('still reads the plan-scope gate, Gate C and its advisory, and counts them in the arm totals', () => {
+    // T11 removed both gates from the live path. A run recorded before that is a fact about that run, so the reader
+    // keeps parsing it; this is the only place those records are asserted.
+    const r = bench(['--execute', '--max-sessions', '1', '--arms', 'jev_hierarchy', '--timeout-ms', '60000'], { FAKE_CLAUDE_HISTORICAL_GATES: '1' });
+    expect(r.status, r.stderr).toBe(0);
+    const g = readCell(r.out, 'jev_hierarchy').gate;
+    expect(g.jev_requests.scope).toMatchObject({ attempts: 1, tokens: 150 });
+    expect(g.jev_requests.result).toMatchObject({ attempts: 1, tokens: 200 });
+    // Gate C demoted t3, so that accepted receipt reads as a rework and the totals still cover every dispatch.
+    expect(g.receipts).toEqual({ accept: 1, incomplete: 1, invalid: 0, unknown: 1, rework: 1, replan: 0 });
+    expect(g.advisory).toEqual({ accept: 0, rework: 1, replan: 0, abstain: 0, none: 3 });
+    expect(g.influence).toEqual({ judgments: 10, changed_default: 5 });
+    expect(g.jev_input_tokens).toBe(3270);
+    expect(g.jev_cost_usd).toBeCloseTo((3270 * 0.042) / 1_000_000, 12);
+    const arm = report(r.out).arms.find((a) => a.arm === 'jev_hierarchy')!;
+    expect(arm.gate_v5.jev_requests.scope.tokens).toBe(150);
+    expect(arm.gate_v5.receipts.rework).toBe(1);
+    expect(arm.gate_v5.influence).toEqual({ judgments: 10, changed_default: 5 });
+  }, 120_000);
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// R11: the frozen configuration (document section T8). R08-R10 live in bench-ingest.test.ts, which needs no CLI.
+
+describe('R11: the frozen configuration is the one the child reads', () => {
+  const PARENT: ConfigV5['models'] = { fast: 'sonnet', standard: 'sonnet', deep: 'opus', frontier: 'fable' };
+  const writeConfig = (path: string, models: ConfigV5['models'], cap: number): void => {
+    mkdirSync(join(path, '..'), { recursive: true });
+    // #48 P1-2: a cap above 1 now requires workerIsolation: "worktree", which itself requires Bash in guardAllowTools.
+    const isolation = cap > 1 ? { workerIsolation: 'worktree' as const, guardAllowTools: ['Bash'] } : {};
+    writeFileSync(path, JSON.stringify({ version: 5, mode: 'auto', models, maxParallelWorkers: cap, requestDeadlineMs: 2500, ...isolation }, null, 2));
+  };
+
+  it('plan, execution and accounting agree, and mid-run edits to either source do not reach later cells', () => {
+    const home = join(tmp, 't8-home');
+    const parentPath = join(tmp, 't8-parent.json');
+    const homePath = join(home, '.config', 'jev-gate', 'config.json');
+    writeConfig(parentPath, PARENT, 2);
+    writeConfig(homePath, { fast: 'opus', standard: 'opus', deep: 'opus', frontier: 'opus' }, 7);
+    const env = { HOME: home, JEV_GATE_CONFIG: parentPath };
+
+    // plan-only still writes nothing, and it records the configuration the run would use.
+    const planned = bench(['--arms', 'jev_hierarchy'], env);
+    expect(planned.status, planned.stderr).toBe(0);
+    expect(existsSync(planned.out)).toBe(false);
+    expect((JSON.parse(planned.stdout) as Plan).effective_config?.models).toEqual(PARENT);
+
+    const r = bench(['--execute', '--max-sessions', '2', '--arms', 'native_hierarchy,jev_hierarchy', '--seed', '5', '--timeout-ms', '60000'], { ...env, FAKE_CLAUDE_MUTATE_CONFIG: JSON.stringify([parentPath, homePath]) });
+    expect(r.status, r.stderr + r.stdout).toBe(0);
+    const plan = JSON.parse(readFileSync(join(r.out, 'plan.json'), 'utf8')) as Plan;
+    const frozenPath = join(r.out, 'inputs', 'config.json');
+    const frozen = JSON.parse(readFileSync(frozenPath, 'utf8')) as ConfigV5;
+    expect(plan.effective_config_source).toBe(parentPath);
+    expect(plan.effective_config).toEqual(frozen);
+    expect(frozen).toMatchObject({ version: 5, models: PARENT, maxParallelWorkers: 2, requestDeadlineMs: 2500 });
+    expect(JSON.stringify(frozen)).not.toMatch(/test-key/);
+
+    // Both sources were rewritten while the run was in flight.
+    for (const p of [parentPath, homePath]) expect((JSON.parse(readFileSync(p, 'utf8')) as ConfigV5).models.deep).toBe('mutated-deep');
+
+    for (const arm of ['native_hierarchy', 'jev_hierarchy'] as const) {
+      const observed = JSON.parse(readFileSync(join(r.out, 'cells', 'mini', arm, '1', 'trace', 'config-observed.json'), 'utf8')) as { path: string; from_env: boolean; config: ConfigV5 };
+      expect(observed.path, arm).toBe(frozenPath);
+      expect(observed.from_env, arm).toBe(true);
+      expect(observed.config, arm).toEqual(frozen);
+      expect(readCell(r.out, arm).spawn!.env_added, arm).toContain('JEV_GATE_CONFIG');
+    }
+    // Accounting reads the same frozen mapping: under it the fast profile is sonnet, so the haiku children that the
+    // default mapping would have called a match are mismatches here.
+    const g = readCell(r.out, 'jev_hierarchy').gate;
+    expect(g.target_model_mismatches).toBe(3);
+    expect(g.decision_mismatch).toBe(3);
+  }, 120_000);
+
+  it('refuses to start a plugin arm when the resolved configuration does not load', () => {
+    const bad = join(tmp, 't8-bad.json');
+    writeFileSync(bad, JSON.stringify({ version: 4, models: {} }));
+    const r = bench(['--execute', '--max-sessions', '1', '--arms', 'jev_hierarchy'], { JEV_GATE_CONFIG: bad });
+    expect(r.status).toBe(2);
+    expect(r.stderr).toMatch(/config at .*t8-bad\.json does not load/);
+    expect(existsSync(r.out)).toBe(false);
+  });
+});
+
+describe('#45: Router execution inputs', () => {
+  it('a Router-only run needs no legacy plugin, and every Router cell loads one frozen copy of mods/router', () => {
+    const r = bench(['--arms', 'router_native,router', '--base-effort', 'xhigh', '--frontier-model', 'opus', '--execute', '--max-sessions', '2', '--plugin-dir', join(tmp, 'no-such-plugin')]);
+    expect(r.status, r.stderr).toBe(0);
+    const plan = JSON.parse(readFileSync(join(r.out, 'plan.json'), 'utf8')) as Plan;
+    const frozen = plan.frozen_inputs as Record<string, unknown>;
+    expect(frozen['plugin_copy']).toBeNull();
+    expect(frozen['plugin_hook_sha256']).toBeNull();
+    expect(existsSync(join(r.out, 'inputs', 'plugin'))).toBe(false);
+    const routerCopy = join(r.out, 'inputs', 'router-plugin');
+    expect(frozen['router_copy']).toBe(routerCopy);
+    expect(frozen['router_sha256']).toMatch(/^[0-9a-f]{64}$/);
+    expect(existsSync(join(routerCopy, 'hooks', 'register.ts'))).toBe(true);
+    expect(existsSync(join(routerCopy, '.claude-plugin', 'plugin.json'))).toBe(true);
+
+    const routed = readCell(r.out, 'router').spawn!.argv;
+    expect(routed[routed.indexOf('--plugin-dir') + 1]).toBe(routerCopy);
+    expect(routed.slice(routed.indexOf('--model'), routed.indexOf('--model') + 2)).toEqual(['--model', 'opus']);
+    expect(routed.slice(routed.indexOf('--effort'), routed.indexOf('--effort') + 2)).toEqual(['--effort', 'xhigh']);
+    const native = readCell(r.out, 'router_native').spawn!.argv;
+    expect(native).not.toContain('--plugin-dir');
+    expect(native.slice(native.indexOf('--effort'), native.indexOf('--effort') + 2)).toEqual(['--effort', 'xhigh']);
+  });
+});
+
+describe('the spend stop (--max-cost-usd)', () => {
+  const cells = (out: string, arm: string): CellRecord[] => [readCell(out, arm, 1), readCell(out, arm, 2)];
+  const summary = (out: string): { spend: { max_cost_usd: number | null; known_usd: number; unknown_cell: string | null; stopped: string | null } } =>
+    JSON.parse(readFileSync(join(out, 'summary.json'), 'utf8')) as ReturnType<typeof summary>;
+
+  it('#55 review: sums dollars as whole nanodollars, so rows that add up to the cap reach it', () => {
+    const rows = [1.13, 8.04, 20.83];
+    // The float sum falls short of 30 and would start one more cell under a $30 cap.
+    expect(rows.reduce((a, c) => a + c, 0)).toBeLessThan(30);
+    expect(capReached(rows.reduce((a, c) => a + toNanoUsd(c), 0), 30)).toBe(true);
+    expect(capReached(toNanoUsd(29.99), 30)).toBe(false);
+    // Rounded up, never down: a sub-nanodollar cap still lets the first cell start, and rows a fraction of a
+    // nanodollar over each whole value still reach a cap they pass together.
+    expect(capReached(0, 4e-10)).toBe(false);
+    expect(capReached([1.00000000049, 1.00000000049, 1.00000000049].reduce((a, c) => a + toNanoUsd(c), 0), 3.0000000012)).toBe(true);
+  });
+
+  it('#55 review: counts the plan-interpretation request in the complete cost the stop reads', () => {
+    const r = bench(['--execute', '--max-sessions', '1', '--arms', 'jev_hierarchy', '--timeout-ms', '60000'], { FAKE_CLAUDE_INTERPRETATION: '1' });
+    expect(r.status, r.stderr).toBe(0);
+    const g = readCell(r.out, 'jev_hierarchy').gate;
+    expect(g.jev_requests.scope).toMatchObject({ attempts: 1, tokens: 170 });
+    const { admission, allocation, result, scope } = g.jev_requests;
+    expect(g.jev_input_tokens).toBe(admission.tokens! + allocation.tokens! + result.tokens! + scope.tokens!);
+  }, 120_000);
+
+  it('#55 review: stops on a plan-interpretation request whose usage never came back', () => {
+    const r = bench(['--execute', '--arms', 'jev_hierarchy', '--repetitions', '2', '--max-sessions', '2', '--max-cost-usd', '100', '--timeout-ms', '60000'], { FAKE_CLAUDE_INTERPRETATION: 'lost' });
+    expect(r.status, r.stderr).toBe(0);
+    const [a, b] = cells(r.out, 'jev_hierarchy');
+    const ran = [a!, b!].find((c) => c.started)!;
+    const held = [a!, b!].find((c) => !c.started)!;
+    expect(ran.gate.jev_input_tokens).toBeNull();
+    expect(held.not_started_reason).toBe('cost_unknown');
+    expect(summary(r.out).spend).toMatchObject({ stopped: 'cost_unknown' });
+  }, 120_000);
+
+  it('rejects a cap that is not a positive number of dollars', () => {
+    for (const v of ['0', '-1', 'abc', '']) {
+      const r = bench(['--max-cost-usd', v]);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toMatch(/--max-cost-usd must be a positive number of US dollars/);
+    }
+  });
+
+  it('starts no cell once the complete cost of the rows written so far reaches the cap, and keeps every row', () => {
+    const r = bench(['--execute', '--arms', 'sonnet_native', '--repetitions', '2', '--max-sessions', '2', '--max-cost-usd', '0.001', '--timeout-ms', '60000']);
+    expect(r.status, r.stderr).toBe(0);
+    const [a, b] = cells(r.out, 'sonnet_native');
+    const ran = [a!, b!].filter((c) => c.started);
+    const held = [a!, b!].filter((c) => !c.started);
+    expect(ran).toHaveLength(1);
+    expect(held.map((c) => c.not_started_reason)).toEqual(['max_cost_reached']);
+    expect(r.stdout).toMatch(/stop: the complete cost so far, \$0\.\d{4}, reached --max-cost-usd 0\.001/);
+    const plan = JSON.parse(readFileSync(join(r.out, 'plan.json'), 'utf8')) as Plan;
+    expect(plan.max_cost_usd).toBe(0.001);
+    const s = summary(r.out).spend;
+    expect(s).toMatchObject({ max_cost_usd: 0.001, unknown_cell: null, stopped: 'max_cost_reached' });
+    // The stop reads the same complete cost the report shows for that row.
+    const rep = report(r.out);
+    expect(s.known_usd).toBeCloseTo(rep.arms[0]!.total_cost_usd!, 10);
+    expect(rep.arms[0]).toMatchObject({ planned: 2, by_status: expect.objectContaining({ completed: 1, not_started: 1 }) });
+  }, 120_000);
+
+  it('runs every planned cell while the complete cost stays below the cap', () => {
+    const r = bench(['--execute', '--arms', 'sonnet_native', '--repetitions', '2', '--max-sessions', '2', '--max-cost-usd', '100', '--timeout-ms', '60000']);
+    expect(r.status, r.stderr).toBe(0);
+    expect(cells(r.out, 'sonnet_native').every((c) => c.started)).toBe(true);
+    const s = summary(r.out).spend;
+    expect(s.stopped).toBeNull();
+    expect(s.known_usd).toBeCloseTo(report(r.out).arms[0]!.total_cost_usd!, 10);
+  }, 120_000);
+
+  it('stops on a row whose complete cost is unknown, since an unknown is not a zero', () => {
+    const r = bench(['--execute', '--arms', 'frontier_native', '--repetitions', '2', '--max-sessions', '2', '--max-cost-usd', '100', '--timeout-ms', '1500'], { FAKE_CLAUDE_HANG: '1' });
+    expect(r.status, r.stderr).toBe(0);
+    const [a, b] = cells(r.out, 'frontier_native');
+    const ran = [a!, b!].find((c) => c.started)!;
+    const held = [a!, b!].find((c) => !c.started)!;
+    expect(ran.timed_out).toBe(true);
+    expect(held.not_started_reason).toBe('cost_unknown');
+    expect(summary(r.out).spend).toMatchObject({ stopped: 'cost_unknown', known_usd: 0, unknown_cell: join('cells', 'mini', 'frontier_native', String(ran.repetition)) });
+    expect(r.stdout).toMatch(/stop: the complete cost of cells\/mini\/frontier_native\/\d is unknown/);
+  }, 120_000);
+
+  it('counts a primed session that stopped before its last turn as unknown, not as the earlier turn\'s total', () => {
+    // Each turn reports the session total so far, so a primed cell cut off after its priming turn holds a subtotal.
+    const dir = join(tmp, 'primed-mini');
+    cpSync(join(__dirname, 'fixtures', 'mini'), dir, { recursive: true });
+    const manifest = JSON.parse(readFileSync(join(dir, 'cases.json'), 'utf8')) as { cases: Array<Record<string, unknown>> };
+    manifest.cases[0]!['prime'] = ['먼저 src/answer.mjs를 읽어줘.'];
+    writeFileSync(join(dir, 'cases.json'), JSON.stringify(manifest));
+    const out = join(tmp, `run-${n++}`);
+    const r = spawnSync(process.execPath, [join(dist, 'bench', 'run.js'), '--cases', join(dir, 'cases.json'), '--out', out, '--claude', fake, '--plugin-dir', pluginDir, '--execute', '--arms', 'sonnet_native', '--repetitions', '2', '--max-sessions', '2', '--max-cost-usd', '100', '--timeout-ms', '2500'], { encoding: 'utf8', env: { ...baseEnv(), FAKE_CLAUDE_PRIMED_HANG: '1' }, timeout: 120_000 });
+    expect(r.status, r.stderr).toBe(0);
+    const [a, b] = cells(out, 'sonnet_native');
+    const ran = [a!, b!].find((c) => c.started)!;
+    const held = [a!, b!].find((c) => !c.started)!;
+    expect(ran).toMatchObject({ timed_out: true, turn_totals_usd: [0.02], result: expect.objectContaining({ total_cost_usd: 0.02 }) });
+    expect(held.not_started_reason).toBe('cost_unknown');
+    expect(summary(out).spend).toMatchObject({ stopped: 'cost_unknown', known_usd: 0 });
+  }, 120_000);
+
+  it('changes nothing without the flag: an unknown row does not stop a run that set no cap', () => {
+    const r = bench(['--execute', '--arms', 'frontier_native', '--repetitions', '2', '--max-sessions', '2', '--timeout-ms', '1500'], { FAKE_CLAUDE_HANG: '1' });
+    expect(r.status, r.stderr).toBe(0);
+    expect(cells(r.out, 'frontier_native').every((c) => c.started)).toBe(true);
+    expect(summary(r.out).spend).toMatchObject({ max_cost_usd: null, stopped: null });
+  }, 120_000);
 });

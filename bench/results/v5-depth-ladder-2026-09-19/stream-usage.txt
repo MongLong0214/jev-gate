@@ -1,0 +1,57 @@
+############ v5-depth-ladder
+| job | arm | rep | job turn $ | stream cacheR | stream out | host-reported cacheR | host/stream |
+|---|---|---|---|---|---|---|---|
+| wide-validators-primed-13 | jev_single | 1 | $0.7374 | 8.90M | 613 | 1.57M | 18% |
+| wide-validators-primed-13 | jev_single | 2 | $0.9119 | 9.03M | 295 | 2.56M | 28% |
+| wide-validators-primed-13 | sonnet_native | 1 | $1.4204 | 9.98M | 529 | 6.26M | 63% |
+| wide-validators-primed-13 | sonnet_native | 2 | $1.4118 | 9.95M | 496 | 6.24M | 63% |
+| wide-validators-primed-21 | jev_single | 1 | $0.9142 | 12.01M | 332 | 2.61M | 22% |
+| wide-validators-primed-21 | jev_single | 2 | $0.9392 | 6.25M | 525 | 2.31M | 37% |
+| wide-validators-primed-21 | sonnet_native | 1 | $2.0684 | 15.45M | 481 | 9.40M | 61% |
+
+## job-turn work, arm means (stream-derived)
+### wide-validators-primed-13
+- cache reads: native 9.97M vs single 8.96M — single 10.1% less
+- output tokens: native 513 vs single 454 — single 11.4% less
+- dollars (pre-registered unit): native $1.4161 vs single $0.8246 — single 41.8% less
+### wide-validators-primed-21
+- cache reads: native 15.45M vs single 9.13M — single 40.9% less
+- output tokens: native 481 vs single 429 — single 10.9% less
+- dollars (pre-registered unit): native $2.0684 vs single $0.9267 — single 55.2% less
+
+############ v5-depth-ladder-2
+| job | arm | rep | job turn $ | stream cacheR | stream out | host-reported cacheR | host/stream |
+|---|---|---|---|---|---|---|---|
+| wide-validators-primed-21 | jev_single | 1 | $0.9656 | 13.01M | 641 | 2.61M | 20% |
+| wide-validators-primed-21 | jev_single | 2 | $1.2681 | 18.79M | 673 | 4.35M | 23% |
+| wide-validators-primed-21 | sonnet_native | 1 | $1.9915 | 14.28M | 562 | 9.10M | 64% |
+| wide-validators-primed-21 | sonnet_native | 2 | $1.9319 | 14.01M | 452 | 8.83M | 63% |
+| wide-validators-primed-30 | jev_single | 1 | $1.1899 | 16.20M | 650 | 3.93M | 24% |
+| wide-validators-primed-30 | jev_single | 2 | $1.1656 | 13.79M | 462 | 3.53M | 26% |
+| wide-validators-primed-30 | sonnet_native | 1 | $2.6296 | 19.77M | 454 | 12.33M | 62% |
+| wide-validators-primed-30 | sonnet_native | 2 | $2.7995 | 21.35M | 545 | 13.12M | 61% |
+
+## job-turn work, arm means (stream-derived)
+### wide-validators-primed-21
+- cache reads: native 14.15M vs single 15.90M — single -12.4% less
+- output tokens: native 507 vs single 657 — single -29.6% less
+- dollars (pre-registered unit): native $1.9617 vs single $1.1169 — single 43.1% less
+### wide-validators-primed-30
+- cache reads: native 20.56M vs single 14.99M — single 27.1% less
+- output tokens: native 500 vs single 556 — single -11.3% less
+- dollars (pre-registered unit): native $2.7146 vs single $1.1778 — single 56.6% less
+
+############ v5-depth-ladder-3
+| job | arm | rep | job turn $ | stream cacheR | stream out | host-reported cacheR | host/stream |
+|---|---|---|---|---|---|---|---|
+| wide-validators-primed-13 | jev_single | 1 | $0.8469 | 8.20M | 416 | 2.17M | 26% |
+| wide-validators-primed-13 | jev_single | 2 | $0.7362 | 8.61M | 430 | 1.37M | 16% |
+| wide-validators-primed-13 | sonnet_native | 1 | $0.4775 | 9.26M | 398 | 1.59M | 17% |
+| wide-validators-primed-13 | sonnet_native | 2 | $0.4404 | 9.43M | 124 | 1.39M | 15% |
+
+## job-turn work, arm means (stream-derived)
+### wide-validators-primed-13
+- cache reads: native 9.35M vs single 8.40M — single 10.1% less
+- output tokens: native 261 vs single 423 — single -62.1% less
+- dollars (pre-registered unit): native $0.4590 vs single $0.7916 — single -72.5% less
+

@@ -1,0 +1,5 @@
+{
+  "name": "jev-capprobe",
+  "version": "0.0.1",
+  "description": "TEST-ONLY probe: records what a Grep result looked like to the hook and to the model. Never published."
+}

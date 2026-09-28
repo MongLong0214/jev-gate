@@ -1,0 +1,66 @@
+{
+  "run": "v5-depth-ladder-2",
+  "date": "2026-09-20",
+  "preregistration_commit": "7c67c66",
+  "preregistration_amended": false,
+  "conditions_commit": "3d1141a",
+  "build": "b2c4548",
+  "frozen_config": {
+    "delegationDepthFloor": 50000,
+    "source": "bench/results/v5-depth-ladder-2026-09-19/config-floor-50000.json",
+    "product_floor_unchanged": 300000
+  },
+  "spend_usd": 32.6175,
+  "planned_cells": 8,
+  "cells_that_ran": 8,
+  "cells_valid": 8,
+  "checker_pass": "8/8",
+  "rungs": {
+    "21-note": {
+      "depth": [284661, 285764],
+      "native_job_turn": [1.9915, 1.9319],
+      "single_job_turn": [0.9656, 1.2681],
+      "native_spread_pct": 3.1,
+      "single_spread_pct": 31.3,
+      "difference_pct": 43.1,
+      "rule5": "separation",
+      "wall_native_s": 133,
+      "wall_single_s": 206,
+      "wall_pct": 55.0,
+      "quality": "4/4 pass",
+      "single_admitted": "2/2"
+    },
+    "30-note": {
+      "depth": [388315, 389183],
+      "native_job_turn": [2.6296, 2.7995],
+      "single_job_turn": [1.1899, 1.1656],
+      "native_spread_pct": 6.5,
+      "single_spread_pct": 2.1,
+      "difference_pct": 56.6,
+      "rule5": "separation",
+      "wall_native_s": 138,
+      "wall_single_s": 212,
+      "wall_pct": 54.1,
+      "quality": "4/4 pass",
+      "single_admitted": "2/2"
+    }
+  },
+  "invalid_cells": [],
+  "single_path": {
+    "agents_per_cell": 1,
+    "receipts": "accept:1",
+    "outcome": "completed",
+    "note": "no reply discarded and no re-dispatch in any of the four cells, after f2b3256"
+  },
+  "rule2_priming": {
+    "held": true,
+    "job_prompt": "orchestrated",
+    "priming_prompts": ["depth_unknown", "admission_answer_only"],
+    "admission_answer_only_at": [285097, 285409, 388671, 388836]
+  },
+  "limits": [
+    "the 13-note rung ran on build 7c67c66; the cross-rung table spans two builds",
+    "rule 6: no comparison with v5-single-vs-native, which froze a different floor",
+    "one fixture, one root model, two repetitions; hierarchy was not an arm"
+  ]
+}

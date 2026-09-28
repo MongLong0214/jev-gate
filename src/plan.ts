@@ -1,15 +1,43 @@
 import { createHash } from 'node:crypto';
 
-import type { DeterministicVerdict, Plan, PlannedCheck, PlannedTask, PlannerReply, Receipt, WorkerCheckResult, WorkerReply } from './types.js';
+import type { Capability, DeterministicVerdict, MainSessionStep, Plan, PlannedCheck, PlannedTask, PlannerReply, Receipt, TaskSpec, TaskUncertainty, WorkerCheckResult, WorkerReply } from './types.js';
+import { CAPABILITIES, TIERS } from './types.js';
 
-/** A12: bounds are bytes, not task counts. A plan may have as many tasks as fits. */
+/**
+ * A12 said bounds are bytes, not task counts, and that a plan may have as many tasks as fits. Bytes are still the
+ * bound on what a task carries, but the count now has a ceiling too: worker count turned out to be the cost axis
+ * this design was not watching, and a plan of 13 cost +92.5 % against plans of 2 to 7 that worked.
+ */
 export const MAX_REPLY_BYTES = 64 * 1024;
+/** Mirrors `DEFAULT_CONFIG.maxTasksPerPlan`; the parser takes the configured value and falls back to this. */
+export const DEFAULT_MAX_TASKS_PER_PLAN = 10;
 export const MAX_COMPOSED_BYTES = 64 * 1024;
 export const MAX_FIELD_BYTES = 8 * 1024;
+/** #33: routing evidence is a short list of facts, not a report; a planner with more than this is not being specific. */
+export const MAX_UNCERTAINTY_ENTRIES = 8;
+/** A17: a specification names the interfaces of one task; beyond this the task is too large, not better specified. */
+export const MAX_SPEC_ENTRIES = 8;
+/** #48 P2-1: a list of what to keep for the main session, not a report; beyond this the planner is not being specific. */
+export const MAX_MAIN_SESSION_STEPS = 16;
 /** Bounded on purpose: ids appear in deny reasons and coordinator context, so they must stay short and inert. */
 export const ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 export const TASK_MARKER_RE = /^\[JEV_TASK rev=(\d{1,9}) id=([A-Za-z0-9][A-Za-z0-9_-]{0,63})(?: attempt=(\d{1,3}))?\]/;
 export const CONTRACT_HEADER = '[Jev Gate task contract]';
+/** A17: the user's own request, carried to the worker because the contract it is planned into is a paraphrase of it. */
+export const REQUEST_HEADER = '[Jev Gate user request]';
+export const REQUEST_PRECEDENCE =
+  "The block above is the user's own request for this job, carried verbatim. It outranks the contract below on what was asked for; the contract fixes this task's boundary -- its deliverables and the checks it is accepted on.";
+export const REQUEST_OMITTED =
+  'The request was not carried: it did not fit the size bound. Ask the coordinator for it rather than reading the contract as a complete statement of what was asked.';
+
+/**
+ * A19: a single-executor dispatch has no contract, so the request is not outranking one -- it is the whole task.
+ */
+export const REQUEST_ONLY_NOTE =
+  "The block above is the user's own request for this job, carried verbatim. It is the task: there is no plan and no task contract for this dispatch. Implement what it asks, run the checks it implies, and report separately anything you could not do.";
+
+export const composeSingleWorkerPrompt = (coordinatorBrief: string, request: string | 'omitted' | null): string =>
+  [coordinatorBrief, ...(request === null ? [] : ['', REQUEST_HEADER, request === 'omitted' ? REQUEST_OMITTED : request, REQUEST_ONLY_NOTE])].join('\n');
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const bytes = (s: string): number => Buffer.byteLength(s, 'utf8');
@@ -77,6 +105,155 @@ const strArray = (v: unknown, name: string): ParseResult<string[]> => {
   return { ok: true, value: v as string[] };
 };
 
+/**
+ * A18: a hyphen or underscore joins a token rather than splitting it, so "deep-copy" is one word and does not name the
+ * deep tier -- which is what the original rule ("a whole token matches", so "deepen the cache" is not the deep tier)
+ * always said, and not what splitting on every non-alphanumeric run did. Configured model ids are hyphenated, so
+ * preserving the join is also what lets one of them match as a single token.
+ */
+const normalizeToken = (t: string): string => t.toLowerCase().replace(/^[-_]+|[-_]+$/g, '');
+const routingTargets = (modelIds: readonly string[]): Set<string> =>
+  new Set([...TIERS, ...modelIds].map((w) => normalizeToken(w)).filter((w) => w.length > 0));
+
+/** #33/A18: what the tier gate reads in place of a routing target the planner wrote. */
+export const ROUTING_TARGET_MARK = '[tier name removed]';
+
+/**
+ * #33/A18: the planner still does not get to ask for a route -- the word is removed from what the gate reads, so it
+ * cannot be read as a request. It is removed there rather than rejected here because rejecting rejects the whole plan,
+ * and the words are ordinary engineering English. Observed 2026-09-19 (`v5-job2-orbit` r1, stream.jsonl:312): a
+ * four-task plan covering all seven modules was rejected for the constraint "serialize must deep-copy so later
+ * mutation ...", and the constraint did not survive the revision that replaced it. "read from standard input" and "a
+ * deep clone of the array" reject a plan the same way.
+ */
+export const redactRoutingTargets = (value: string, modelIds: readonly string[]): string => {
+  const targets = routingTargets(modelIds);
+  return value.replace(/[A-Za-z0-9_-]+/g, (token) => (targets.has(normalizeToken(token)) ? ROUTING_TARGET_MARK : token));
+};
+
+/**
+ * #33/A18: the plan-authored text the tier gate reads, with routing targets removed. It is a copy made for the gate:
+ * the contract the worker implements keeps its words, so a redaction can never change what gets built, and
+ * `contract_hash` is carried unchanged for the same reason. Paths and ids are left alone -- `src/fast-path.ts` is a
+ * file, not a request. Coverage matches what the parser used to reject: the fields the planner writes. Worker-authored
+ * text (`prior_attempt`, `predecessor_results`) and the user's own prompt reach the gate unredacted, as before.
+ */
+export const redactTaskRoutingTargets = (task: PlannedTask, modelIds: readonly string[]): PlannedTask => {
+  const r = (v: string): string => redactRoutingTargets(v, modelIds);
+  return {
+    ...task,
+    outcome: r(task.outcome),
+    context: r(task.context),
+    constraints: task.constraints.map(r),
+    replan_if: task.replan_if.map(r),
+    checks: task.checks.map((c) => ({ ...c, description: r(c.description), command: c.command === null ? null : r(c.command) })),
+    ...(task.spec === undefined
+      ? {}
+      : { spec: { ...task.spec, interfaces: task.spec.interfaces.map(r), data_shapes: task.spec.data_shapes.map(r), invariants: task.spec.invariants.map(r) } }),
+    ...(task.uncertainty === undefined
+      ? {}
+      : {
+          uncertainty: {
+            unresolved: task.uncertainty.unresolved.map(r),
+            interacts_with: task.uncertainty.interacts_with.map(r),
+            prior_failure: task.uncertainty.prior_failure === null ? null : r(task.uncertainty.prior_failure),
+          },
+        }),
+  };
+};
+
+/** A path field is structural: a repository path has no whitespace, so prose cannot hide in one. */
+export const MAX_PATH_CHARS = 256;
+
+const pathArray = (v: unknown, name: string): ParseResult<string[]> => {
+  const list = strArray(v, name);
+  if (!list.ok) return list;
+  for (const item of list.value) {
+    if (item.length === 0 || item.length > MAX_PATH_CHARS || /\s/.test(item)) {
+      return { ok: false, error: `${name} must be a repository path: no whitespace, 1 to ${MAX_PATH_CHARS} characters` };
+    }
+  }
+  return list;
+};
+
+const evidenceArray = (v: unknown, name: string): ParseResult<string[]> => {
+  const list = strArray(v, name);
+  if (!list.ok) return list;
+  if (list.value.length > MAX_UNCERTAINTY_ENTRIES) return { ok: false, error: `${name} exceeds ${MAX_UNCERTAINTY_ENTRIES} entries` };
+  return list;
+};
+
+const parseUncertainty = (v: unknown, taskId: string): ParseResult<TaskUncertainty> => {
+  if (!isRecord(v)) return { ok: false, error: `task ${taskId}: uncertainty must be an object with unresolved, interacts_with and prior_failure` };
+  const unresolved = evidenceArray(v['unresolved'] ?? [], `task ${taskId}: uncertainty.unresolved`);
+  if (!unresolved.ok) return unresolved;
+  const interacts = evidenceArray(v['interacts_with'] ?? [], `task ${taskId}: uncertainty.interacts_with`);
+  if (!interacts.ok) return interacts;
+  const rawFailure = v['prior_failure'] ?? null;
+  if (rawFailure === null) return { ok: true, value: { unresolved: unresolved.value, interacts_with: interacts.value, prior_failure: null } };
+  const failure = strField(rawFailure, `task ${taskId}: uncertainty.prior_failure`);
+  if (!failure.ok) return failure;
+  return { ok: true, value: { unresolved: unresolved.value, interacts_with: interacts.value, prior_failure: failure.value } };
+};
+
+/**
+ * #48 P2-1: absent reads as none, like `spec`/`uncertainty`. Unlike those, an invalid entry fails the whole reply
+ * rather than being read as a lower-confidence claim: `needs` is a closed union a router elsewhere keys off, so a
+ * value it does not recognize is a malformed reply, not evidence.
+ */
+const parseMainSessionSteps = (v: unknown): ParseResult<MainSessionStep[]> => {
+  if (v === undefined) return { ok: true, value: [] };
+  if (!Array.isArray(v)) return { ok: false, error: 'main_session_steps must be an array' };
+  if (v.length > MAX_MAIN_SESSION_STEPS) return { ok: false, error: `main_session_steps exceeds ${MAX_MAIN_SESSION_STEPS} entries` };
+  const out: MainSessionStep[] = [];
+  for (const item of v) {
+    if (!isRecord(item)) return { ok: false, error: 'main_session_steps[] must be an object with step and needs' };
+    const step = strField(item['step'], 'main_session_steps[].step');
+    if (!step.ok) return step;
+    const needs = item['needs'];
+    if (typeof needs !== 'string' || !CAPABILITIES.includes(needs as Capability)) {
+      return { ok: false, error: `main_session_steps[].needs must be one of ${CAPABILITIES.join(', ')}` };
+    }
+    out.push({ step: step.value, needs: needs as Capability });
+  }
+  return { ok: true, value: out };
+};
+
+/** A17: a spec states signatures and invariants, never a code block; the worker reads the repository for the body. */
+const specArray = (v: unknown, name: string): ParseResult<string[]> => {
+  const list = strArray(v, name);
+  if (!list.ok) return list;
+  // A17: the bound is one-sided -- too many entries rejects the plan, while omitting them entirely is free -- so the
+  // rejection names the repairs that keep the information. Observed 2026-09-19 (`v5-job2-orbit`): told only that the
+  // list was too long, the planner dropped the interfaces instead of splitting the task, and the exact names the
+  // request had fixed were gone from every later revision.
+  if (list.value.length > MAX_SPEC_ENTRIES) {
+    return {
+      ok: false,
+      error: `${name} exceeds ${MAX_SPEC_ENTRIES} entries; split the task so each part names at most ${MAX_SPEC_ENTRIES}, or move what is not a signature to data_shapes or invariants. Do not drop entries the request names: a task with fewer interfaces is not a smaller task`,
+    };
+  }
+  for (const item of list.value) {
+    if (item.includes('```')) return { ok: false, error: `${name} contains a code block; state the signature or invariant, not an implementation` };
+  }
+  return list;
+};
+
+const parseSpec = (v: unknown, taskId: string): ParseResult<TaskSpec> => {
+  if (!isRecord(v)) return { ok: false, error: `task ${taskId}: spec must be an object with interfaces, data_shapes, invariants and files` };
+  const interfaces = specArray(v['interfaces'] ?? [], `task ${taskId}: spec.interfaces`);
+  if (!interfaces.ok) return interfaces;
+  const shapes = specArray(v['data_shapes'] ?? [], `task ${taskId}: spec.data_shapes`);
+  if (!shapes.ok) return shapes;
+  const invariants = specArray(v['invariants'] ?? [], `task ${taskId}: spec.invariants`);
+  if (!invariants.ok) return invariants;
+  // Paths carry no prose, so they are shape-checked instead of name-filtered: src/fast-path.ts is a file, not a request.
+  const files = pathArray(v['files'] ?? [], `task ${taskId}: spec.files`);
+  if (!files.ok) return files;
+  if (files.value.length > MAX_SPEC_ENTRIES) return { ok: false, error: `task ${taskId}: spec.files exceeds ${MAX_SPEC_ENTRIES} entries` };
+  return { ok: true, value: { interfaces: interfaces.value, data_shapes: shapes.value, invariants: invariants.value, files: files.value } };
+};
+
 const parseChecks = (v: unknown, taskId: string): ParseResult<PlannedCheck[]> => {
   if (!Array.isArray(v)) return { ok: false, error: `task ${taskId}: checks must be an array` };
   const out: PlannedCheck[] = [];
@@ -100,7 +277,14 @@ const parseChecks = (v: unknown, taskId: string): ParseResult<PlannedCheck[]> =>
   return { ok: true, value: out };
 };
 
-/** A3: the scheduling-relevant contract only; context and replan_if do not invalidate an existing receipt. */
+/**
+ * A3: the scheduling-relevant contract of one task. Optional planner fields join it only when the planner supplied
+ * them, so an omitted field does not read as a value.
+ *
+ * T3: this identity is deliberately narrow, and the fix for the reuse defect is not to widen it. A receipt is never
+ * reused for readiness across a plan revision (see `handlePlannerResult`), so the hash only has to tell two tasks of
+ * one revision apart. The trade-off is that an accepted task is redone after any replan.
+ */
 export const contractHash = (task: Omit<PlannedTask, 'contract_hash'>): string =>
   createHash('sha256')
     .update(
@@ -110,13 +294,24 @@ export const contractHash = (task: Omit<PlannedTask, 'contract_hash'>): string =
         constraints: task.constraints,
         deliverables: [...task.deliverables].sort(),
         checks: task.checks.map((c) => ({ id: c.id, description: c.description, required: c.required, command: c.command })),
+        spec: task.spec,
+        uncertainty: task.uncertainty,
+        fully_specified: task.fully_specified,
       }),
       'utf8',
     )
     .digest('hex');
 
-const parseTasks = (raw: unknown): ParseResult<Array<Omit<PlannedTask, 'contract_hash'>>> => {
+const parseTasks = (raw: unknown, maxTasks: number): ParseResult<Array<Omit<PlannedTask, 'contract_hash'>>> => {
   if (!Array.isArray(raw) || raw.length === 0) return { ok: false, error: 'tasks must be a non-empty array' };
+  /**
+   * A backstop against a runaway split, not a budget for the planner to spend. Worker count is the hidden cost axis
+   * of this design and it has surprised three measurements in a row: parallelism 2 -> 6 workers cost +32.7 %, and an
+   * atomic Gate B that produced 13 workers on a shallow job cost +92.5 %. Plans that were fine ran 2 to 7 tasks, so a
+   * ceiling above that band stops the runaway without shaping an ordinary plan. The reason text is fixed, so a
+   * rejected planner is told the number rather than invited to argue about it.
+   */
+  if (raw.length > maxTasks) return { ok: false, error: `tasks must contain at most ${maxTasks} entries (got ${raw.length}); split the work into fewer, larger outcomes` };
   const tasks: Array<Omit<PlannedTask, 'contract_hash'>> = [];
   const ids = new Set<string>();
   for (const item of raw) {
@@ -125,6 +320,8 @@ const parseTasks = (raw: unknown): ParseResult<Array<Omit<PlannedTask, 'contract
     if (typeof id !== 'string' || !ID_RE.test(id)) return { ok: false, error: `task id must match ${ID_RE.source}` };
     if (ids.has(id)) return { ok: false, error: `duplicate task id ${id}` };
     ids.add(id);
+    // A18: every planner string below reaches Gate B as state, so all of them -- not only the evidence fields -- are
+    // redacted at that boundary by `redactTaskRoutingTargets`. They are parsed here as written.
     const outcome = strField(item['outcome'], `task ${id}: outcome`);
     if (!outcome.ok) return outcome;
     const context = strField(item['context'] ?? '', `task ${id}: context`);
@@ -133,7 +330,7 @@ const parseTasks = (raw: unknown): ParseResult<Array<Omit<PlannedTask, 'contract
     if (!depends.ok) return depends;
     const constraints = strArray(item['constraints'] ?? [], `task ${id}: constraints`);
     if (!constraints.ok) return constraints;
-    const deliverables = strArray(item['deliverables'] ?? [], `task ${id}: deliverables`);
+    const deliverables = pathArray(item['deliverables'] ?? [], `task ${id}: deliverables`);
     if (!deliverables.ok) return deliverables;
     const replanIf = strArray(item['replan_if'] ?? [], `task ${id}: replan_if`);
     if (!replanIf.ok) return replanIf;
@@ -141,6 +338,34 @@ const parseTasks = (raw: unknown): ParseResult<Array<Omit<PlannedTask, 'contract
     if (!checks.ok) return checks;
     // A1: acceptance is decided by required checks, so a task without one could never be verified.
     if (!checks.value.some((c) => c.required)) return { ok: false, error: `task ${id}: at least one check must be marked required` };
+    // Document §7: none of the three is required. An absent field is unknown, not "mechanical", so a plan that omits
+    // them is valid; a plan that supplies them is still held to the same shape and inertness rules.
+    const rawSpec = item['spec'];
+    let spec: TaskSpec | undefined;
+    if (rawSpec !== undefined && rawSpec !== null) {
+      const parsedSpec = parseSpec(rawSpec, id);
+      if (!parsedSpec.ok) return parsedSpec;
+      spec = parsedSpec.value;
+    }
+    const rawUncertainty = item['uncertainty'];
+    let uncertainty: TaskUncertainty | undefined;
+    if (rawUncertainty !== undefined && rawUncertainty !== null) {
+      const parsedUncertainty = parseUncertainty(rawUncertainty, id);
+      if (!parsedUncertainty.ok) return parsedUncertainty;
+      uncertainty = parsedUncertainty.value;
+    }
+    const rawFullySpecified = item['fully_specified'];
+    let fullySpecified: boolean | undefined;
+    if (rawFullySpecified !== undefined && rawFullySpecified !== null) {
+      if (typeof rawFullySpecified !== 'boolean') return { ok: false, error: `task ${id}: fully_specified must be a boolean when it is supplied` };
+      fullySpecified = rawFullySpecified;
+    }
+    if (fullySpecified === true && (uncertainty?.unresolved.length ?? 0) > 0) {
+      return { ok: false, error: `task ${id}: fully_specified is true but uncertainty.unresolved is not empty` };
+    }
+    if (fullySpecified === true && (spec?.interfaces.length ?? 0) === 0) {
+      return { ok: false, error: `task ${id}: fully_specified is true but spec.interfaces is empty; a specified task names the interfaces it produces or consumes` };
+    }
     tasks.push({
       id,
       outcome: outcome.value,
@@ -150,6 +375,9 @@ const parseTasks = (raw: unknown): ParseResult<Array<Omit<PlannedTask, 'contract
       deliverables: deliverables.value,
       checks: checks.value,
       replan_if: replanIf.value,
+      ...(spec === undefined ? {} : { spec }),
+      ...(uncertainty === undefined ? {} : { uncertainty }),
+      ...(fullySpecified === undefined ? {} : { fully_specified: fullySpecified }),
     });
   }
   for (const task of tasks) {
@@ -173,8 +401,27 @@ const parseTasks = (raw: unknown): ParseResult<Array<Omit<PlannedTask, 'contract
   return { ok: true, value: tasks };
 };
 
+/**
+ * A17: the longest dependency path in the plan, which is the floor on wall-clock however many workers run.
+ * The graph is already known acyclic here, so one memoised walk is enough.
+ */
+export const chainDepth = (tasks: Array<Pick<PlannedTask, 'id' | 'depends_on'>>): number => {
+  const byId = new Map(tasks.map((t) => [t.id, t]));
+  const depth = new Map<string, number>();
+  const walk = (id: string): number => {
+    const cached = depth.get(id);
+    if (cached !== undefined) return cached;
+    depth.set(id, 1);
+    const deps = byId.get(id)?.depends_on ?? [];
+    const value = deps.length === 0 ? 1 : 1 + Math.max(...deps.map(walk));
+    depth.set(id, value);
+    return value;
+  };
+  return tasks.length === 0 ? 0 : Math.max(...tasks.map((t) => walk(t.id)));
+};
+
 /** Structural validation only (D8): no repair, no defaulting of a missing status, no second model call. */
-export const parsePlannerReply = (text: string): ParseResult<PlannerReply> => {
+export const parsePlannerReply = (text: string, maxTasks: number = DEFAULT_MAX_TASKS_PER_PLAN): ParseResult<PlannerReply> => {
   if (bytes(text) > MAX_REPLY_BYTES) return { ok: false, error: `reply exceeds ${MAX_REPLY_BYTES} bytes` };
   const json = extractJson(text);
   if (json === null) return { ok: false, error: 'no JSON object found in the reply' };
@@ -193,9 +440,28 @@ export const parsePlannerReply = (text: string): ParseResult<PlannerReply> => {
     if (!assumptions.ok) return assumptions;
     const constraints = strArray(parsed['constraints'] ?? [], 'constraints');
     if (!constraints.ok) return constraints;
-    const tasks = parseTasks(parsed['tasks']);
+    const tasks = parseTasks(parsed['tasks'], maxTasks);
     if (!tasks.ok) return tasks;
-    return { ok: true, value: { status: 'ready', goal: goal.value, assumptions: assumptions.value, constraints: constraints.value, tasks: tasks.value } };
+    // A17: the graph is the fact and `chainDepth` computes it; the planner's own number is recorded as a claim, so a
+    // planner that miscounts does not lose an otherwise valid plan.
+    const claimed = parsed['chain_depth'];
+    if (claimed !== undefined && (typeof claimed !== 'number' || !Number.isInteger(claimed) || claimed < 0)) {
+      return { ok: false, error: 'chain_depth must be a non-negative integer' };
+    }
+    const mainSessionSteps = parseMainSessionSteps(parsed['main_session_steps']);
+    if (!mainSessionSteps.ok) return mainSessionSteps;
+    return {
+      ok: true,
+      value: {
+        status: 'ready',
+        goal: goal.value,
+        assumptions: assumptions.value,
+        constraints: constraints.value,
+        tasks: tasks.value,
+        chain_depth_claimed: typeof claimed === 'number' ? claimed : null,
+        main_session_steps: mainSessionSteps.value,
+      },
+    };
   }
   if (status === 'needs_context') {
     const questions = strArray(parsed['questions'] ?? [], 'questions');
@@ -214,7 +480,17 @@ export const parsePlannerReply = (text: string): ParseResult<PlannerReply> => {
   return { ok: false, error: `status must be ready|needs_context|blocked (got ${describeValue(status)})` };
 };
 
-export const parseWorkerReply = (text: string): ParseResult<WorkerReply> => {
+/**
+ * `freeCheckIds` is set on the single path (A19), where the worker names its own checks because there is no
+ * contract to take ids from. The id grammar exists so a reported id can be matched against a declared one; with
+ * nothing declared there is nothing to match, and rejecting the reply throws away finished work over the spelling
+ * of a label. Measured on 2026-09-19: one worker's 86.6 seconds and 43 tool calls were discarded and re-dispatched
+ * because an id it chose contained a space.
+ *
+ * Relaxing ID_RE for both paths was considered and rejected rather than taken: on the hierarchy path an id that
+ * cannot be a declared id is a reply that does not answer its contract, and failing it there is the point.
+ */
+export const parseWorkerReply = (text: string, opts: { freeCheckIds?: boolean } = {}): ParseResult<WorkerReply> => {
   if (bytes(text) > MAX_REPLY_BYTES) return { ok: false, error: `reply exceeds ${MAX_REPLY_BYTES} bytes` };
   const json = extractJson(text);
   if (json === null) return { ok: false, error: 'no JSON object found in the reply' };
@@ -241,7 +517,10 @@ export const parseWorkerReply = (text: string): ParseResult<WorkerReply> => {
   for (const raw of rawChecks) {
     if (!isRecord(raw)) return { ok: false, error: 'each check result must be an object with check_id and result' };
     const id = raw['check_id'];
-    if (typeof id !== 'string' || !ID_RE.test(id)) return { ok: false, error: `check_id must match ${ID_RE.source}` };
+    if (typeof id !== 'string') return { ok: false, error: 'check_id must be a string' };
+    // A free id is kept verbatim, so a check the worker ran is recorded under the name it used rather than a rewrite.
+    if (opts.freeCheckIds ? id.length === 0 || bytes(id) > MAX_FIELD_BYTES : !ID_RE.test(id))
+      return { ok: false, error: opts.freeCheckIds ? `check_id must be a non-empty string of at most ${MAX_FIELD_BYTES} bytes` : `check_id must match ${ID_RE.source}` };
     const result = raw['result'];
     if (result !== 'pass' && result !== 'fail' && result !== 'not_run') return { ok: false, error: `check ${id}: result must be pass|fail|not_run` };
     const note = strField(raw['note'] ?? '', `check ${id}: note`);
@@ -277,34 +556,197 @@ export interface PredecessorSummary {
   interfaces: string[];
 }
 
+/**
+ * A17/#33 item 4: a task's own failed attempt, so a rework is judged on what went wrong rather than on the same text.
+ * Without it `observed_reasoning_failure` is unreachable even after a real failure.
+ */
+export interface PriorAttemptSummary {
+  attempt: number;
+  verdict: Receipt['verdict'];
+  verdict_reason: string | null;
+  status: WorkerReply['status'] | null;
+  summary: string;
+  blockers: string[];
+  failed_checks: string[];
+  /** T9: a reported failure is not an observed one. The host either named the model that ran, or it did not. */
+  observed_model_confirmed: boolean;
+  provenance: Receipt['provenance'];
+}
+
+/** T10: the worker copies check ids from the contract, so the contract states exactly which ids it must report. */
+export const requiredCheckIds = (task: PlannedTask): string[] => task.checks.filter((c) => c.required).map((c) => c.id);
+
 /** A12: the coordinator sends the marker and its own brief; this appends the one canonical block, keeping the prompt an exact prefix. */
-export const composeTaskPrompt = (originalPrompt: string, task: PlannedTask, globalConstraints: string[], predecessors: PredecessorSummary[]): string =>
+export const composeTaskPrompt = (
+  originalPrompt: string,
+  task: PlannedTask,
+  globalConstraints: string[],
+  predecessors: PredecessorSummary[],
+  /** T9: `omitted` when a real prior attempt did not fit the byte bound; the gap is stated, never passed off as absent. */
+  priorAttempt: PriorAttemptSummary | 'omitted' | null = null,
+  /** A17: the admitted request, `omitted` when it did not fit, `null` when the job never carried one. */
+  request: string | 'omitted' | null = null,
+): string =>
   [
     originalPrompt,
+    ...(request === null ? [] : ['', REQUEST_HEADER, request === 'omitted' ? REQUEST_OMITTED : request, REQUEST_PRECEDENCE]),
     '',
     CONTRACT_HEADER,
     JSON.stringify(task, null, 2),
     `Global constraints: ${JSON.stringify(globalConstraints)}`,
+    // T10: the generic `c1` of the reply template is an example; these are the ids this task is accepted on.
+    `Required check ids (report each of these exactly once, using these ids): ${JSON.stringify(requiredCheckIds(task))}`,
     `Predecessor results (worker_reported): ${JSON.stringify(predecessors)}`,
+    ...(priorAttempt === null
+      ? []
+      : priorAttempt === 'omitted'
+        ? ['Previous attempt of this task: omitted because it did not fit the size bound; ask the coordinator for it.']
+        : [`Previous attempt of this task (worker_reported): ${JSON.stringify(priorAttempt)}`]),
   ].join('\n');
 
-export const acceptedReceipt = (receipts: Receipt[], task: PlannedTask): Receipt | null =>
-  receipts.find((r) => r.task_id === task.id && r.contract_hash === task.contract_hash && r.verdict === 'accept') ?? null;
+/** A18: what a replan is revising. The planner is a fresh session, so the revision in force is not something it recalls. */
+export const PLAN_IN_FORCE_HEADER = '[Jev Gate plan in force]';
+export const PLAN_IN_FORCE_NOTE =
+  'This is the plan revision currently in force, and what the coordinator is asking you to revise. Keep every task the request still needs: a revision that drops a deliverable or an interface the request names is a regression, not a smaller plan. Change what the stated problem requires and say what you changed.';
+export const PLAN_IN_FORCE_OMITTED =
+  'A plan revision is in force but did not fit the size bound, so it is not shown. Ask the coordinator for it rather than planning as though none existed: this call is a revision, not a first plan.';
 
-/** Ready = not already accepted for this contract and every dependency accepted for its current contract. */
-export const readyTaskIds = (plan: Plan | null, receipts: Receipt[]): string[] => {
+/** A18: the scheduling-and-contract face of a task. The bodies a worker needs are not what a revising planner reads. */
+export interface PlanInForceTask {
+  id: string;
+  outcome: string;
+  depends_on: string[];
+  deliverables: string[];
+  interfaces: string[];
+}
+
+export interface PlanInForceSummary {
+  rev: number;
+  goal: string;
+  chain_depth: number;
+  tasks: PlanInForceTask[];
+}
+
+export const planInForceSummary = (plan: Plan): PlanInForceSummary => ({
+  rev: plan.rev,
+  goal: plan.goal,
+  chain_depth: plan.chain_depth,
+  tasks: plan.tasks.map((t) => ({
+    id: t.id,
+    outcome: t.outcome,
+    depends_on: t.depends_on,
+    deliverables: t.deliverables,
+    interfaces: t.spec?.interfaces ?? [],
+  })),
+});
+
+/**
+ * A18: the planner call gets the same treatment as a worker dispatch -- the coordinator's brief, then one canonical
+ * block the hook owns. Observed 2026-09-19 (`v5-job2-orbit` r1): a replan was called with 771 characters of fix
+ * instruction and nothing else, so a fresh planner took the repository's existing tests for the specification and
+ * returned a revision missing three modules the request had asked for. The brief is what the coordinator noticed; it
+ * was never the job.
+ */
+export const composePlannerPrompt = (
+  originalPrompt: string,
+  /** A17: the admitted request, `omitted` when it did not fit, `null` when the job never carried one. */
+  request: string | 'omitted' | null = null,
+  /** A18: present only on a replan; `omitted` when the revision in force did not fit the byte bound. */
+  planInForce: PlanInForceSummary | 'omitted' | null = null,
+): string =>
+  [
+    originalPrompt,
+    ...(request === null ? [] : ['', REQUEST_HEADER, request === 'omitted' ? REQUEST_OMITTED : request, REQUEST_PRECEDENCE]),
+    ...(planInForce === null
+      ? []
+      : planInForce === 'omitted'
+        ? ['', PLAN_IN_FORCE_HEADER, PLAN_IN_FORCE_OMITTED]
+        : ['', PLAN_IN_FORCE_HEADER, JSON.stringify(planInForce, null, 2), PLAN_IN_FORCE_NOTE]),
+  ].join('\n');
+
+/**
+ * T9: the latest receipt of this task that did not end accepted, restricted to the contract now in force. A receipt
+ * without a reply is a transport failure, not a reasoning failure, and must not make one reachable.
+ */
+export const priorAttemptSummary = (receipts: Receipt[], task: PlannedTask): PriorAttemptSummary | null => {
+  const failed = receipts.filter((r) => r.task_id === task.id && r.contract_hash === task.contract_hash && r.verdict !== 'accept' && r.reply !== null);
+  const last = failed[failed.length - 1];
+  if (!last) return null;
+  return {
+    attempt: last.attempt,
+    verdict: last.verdict,
+    verdict_reason: last.verdict_reason,
+    status: last.reply?.status ?? null,
+    summary: last.reply?.summary ?? '',
+    blockers: last.reply?.blockers ?? [],
+    failed_checks: (last.reply?.checks ?? []).filter((c) => c.result !== 'pass').map((c) => c.check_id),
+    observed_model_confirmed: last.observed_model !== null,
+    provenance: last.provenance,
+  };
+};
+
+/**
+ * T1: the attempt that decides completion now is the last receipt recorded for this contract, not any accept in the
+ * array. A rework that failed, or one still running, therefore covers the success it replaced.
+ */
+export const currentReceipt = (receipts: Receipt[], task: PlannedTask): Receipt | null => {
+  const matching = receipts.filter((r) => r.task_id === task.id && r.contract_hash === task.contract_hash);
+  return matching[matching.length - 1] ?? null;
+};
+
+export const acceptedReceipt = (receipts: Receipt[], task: PlannedTask): Receipt | null => {
+  const current = currentReceipt(receipts, task);
+  return current !== null && current.verdict === 'accept' ? current : null;
+};
+
+/**
+ * Ready = not accepted for this contract, not running, and every dependency accepted and not running.
+ * T1: a dependency whose rework is in flight has no settled result yet, so a dependent is not ready even though the
+ * receipt of its earlier attempt still says accept.
+ */
+export const readyTaskIds = (plan: Plan | null, receipts: Receipt[], active: ReadonlySet<string> = new Set()): string[] => {
   if (!plan) return [];
   const byId = new Map(plan.tasks.map((t) => [t.id, t]));
   return plan.tasks
     .filter((task) => {
-      if (acceptedReceipt(receipts, task)) return false;
+      if (active.has(task.id) || acceptedReceipt(receipts, task)) return false;
       return task.depends_on.every((dep) => {
         const depTask = byId.get(dep);
-        return depTask !== undefined && acceptedReceipt(receipts, depTask) !== null;
+        return depTask !== undefined && !active.has(dep) && acceptedReceipt(receipts, depTask) !== null;
       });
     })
     .map((t) => t.id);
 };
+
+/** T5: a repository path with no whitespace that resolves outside the root, or to nothing, is not a distinct file. */
+export const OUT_OF_ROOT = '<unresolved>';
+
+/**
+ * T5: deliverables are compared as normalized repository-relative paths, so `src/t1.ts` and `src/./t1.ts` are one file.
+ * Anything that is absolute, escapes the root or resolves to nothing collapses to one sentinel, so unknown scope
+ * collides with itself and with every other unknown: an ambiguous declaration is treated as shared, never as disjoint.
+ * The limit is real and not hidden: a declared path is a claim by the planner, not write isolation. Case-insensitive
+ * filesystems, hard links and symlinks are not resolved here.
+ */
+export const normalizeDeliverable = (path: string): string => {
+  const trimmed = path.trim().replace(/\\/g, '/');
+  if (trimmed.length === 0 || trimmed.startsWith('/') || /^[A-Za-z]:\//.test(trimmed) || trimmed.startsWith('~')) return OUT_OF_ROOT;
+  const parts: string[] = [];
+  for (const segment of trimmed.split('/')) {
+    if (segment === '' || segment === '.') continue;
+    if (segment === '..') {
+      if (parts.length === 0) return OUT_OF_ROOT;
+      parts.pop();
+      continue;
+    }
+    parts.push(segment);
+  }
+  return parts.length === 0 ? OUT_OF_ROOT : parts.join('/');
+};
+
+/** T5: the normalized paths a task would write that a set of other normalized paths already claims. */
+export const deliverableOverlap = (deliverables: string[], claimed: ReadonlySet<string>): string[] =>
+  deliverables.filter((d) => claimed.has(normalizeDeliverable(d)));
 
 export interface DeterministicResult {
   verdict: DeterministicVerdict;
@@ -313,7 +755,8 @@ export interface DeterministicResult {
 
 /**
  * A1: acceptance is code-owned. done, no blockers, and every required check reported pass exactly once.
- * Anything else is incomplete and dependents stay locked; Gate C can add a hint but never promotes this.
+ * Anything else is incomplete and dependents stay locked. A17: Gate C may demote this accept to rework or
+ * replan, but it is never asked about anything it could promote.
  */
 export const deterministicVerdict = (task: PlannedTask, reply: WorkerReply): DeterministicResult => {
   if (reply.status !== 'done') return { verdict: 'incomplete', reason: `worker reported status ${reply.status}` };
@@ -333,4 +776,35 @@ export const deterministicVerdict = (task: PlannedTask, reply: WorkerReply): Det
     if (only.result !== 'pass') return { verdict: 'incomplete', reason: `required check ${check.id} reported ${only.result}` };
   }
   return { verdict: 'accept', reason: null };
+};
+
+/** A19: the task id a single-executor receipt is filed under. There is no plan, so nothing else can name this work. */
+export const SINGLE_TASK_ID = 'single';
+
+/**
+ * A19: the single-executor shape dispatches with no contract, so there is nothing for code to check the reply
+ * against: the verdict is the worker's own report and no more than that. It is deliberately weaker than
+ * `deterministicVerdict`, and it is recorded rather than hidden -- a receipt filed here means the worker said it
+ * finished, not that a declared check was observed to pass. Reported checks are kept in the receipt and judged by
+ * nobody, because no contract declared them.
+ *
+ * `deterministicVerdict` was rejected for this path rather than reused: a single worker reports the checks it chose
+ * to run, and with an empty contract every one of them is an undeclared check id, so reusing it would have recorded
+ * `incomplete` for work that finished.
+ */
+export const reportedSingleVerdict = (reply: WorkerReply): DeterministicResult => {
+  if (reply.status !== 'done') return { verdict: 'incomplete', reason: `worker reported status ${reply.status}` };
+  if (reply.blockers.length > 0) return { verdict: 'incomplete', reason: 'worker reported blockers with status done' };
+  return { verdict: 'accept', reason: null };
+};
+
+/**
+ * T11: Gate C no longer runs, so a verdict past plain incompleteness comes from the worker's own report. `replan` is
+ * the status the worker itself returned; `rework` is a required check it says it ran and observed fail. Neither can
+ * promote anything: both are reached only after the deterministic judgement already refused to accept.
+ */
+export const reportedRecovery = (task: PlannedTask, reply: WorkerReply): 'rework' | 'replan' | null => {
+  if (reply.status === 'replan') return 'replan';
+  const required = new Set(requiredCheckIds(task));
+  return reply.checks.some((c) => c.result === 'fail' && required.has(c.check_id)) ? 'rework' : null;
 };

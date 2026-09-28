@@ -1,0 +1,127 @@
+{
+  "question": "does the gate refuse a session below the floor, and does refusing cost what native costs?",
+  "refusal": "yes: every prompt recorded depth_below_floor or depth_unknown with attempted=false, zero Jev requests, zero workers",
+  "cost_verdict": "undecidable on this data: the native arm's own two cells differ by 24% ($1.3697 and $1.7378), which is wider than the difference being measured",
+  "native": {
+    "cells": [
+      1.3697,
+      1.7378
+    ],
+    "mean": 1.5537,
+    "spread_pct": 26.9
+  },
+  "jev_hierarchy": {
+    "cells": [
+      1.7605,
+      1.7848
+    ],
+    "mean": 1.7727,
+    "spread_pct": 1.4
+  },
+  "jev_vs_native_pct": 14.1,
+  "preregistration_rule_2": "not met (+14.1% against a 10% band), and rule 5 therefore applies: no cost claim is made from these cells",
+  "achieved_depth": [
+    180778,
+    180504,
+    179672,
+    179171
+  ],
+  "gate_decisions": [
+    {
+      "rep": 1,
+      "context_tokens": null,
+      "attempted": false,
+      "shape": "direct",
+      "reason": "depth_unknown"
+    },
+    {
+      "rep": 1,
+      "context_tokens": 180431,
+      "attempted": false,
+      "shape": "direct",
+      "reason": "depth_below_floor"
+    },
+    {
+      "rep": 1,
+      "context_tokens": 180778,
+      "attempted": false,
+      "shape": "direct",
+      "reason": "depth_below_floor"
+    },
+    {
+      "rep": 2,
+      "context_tokens": 180504,
+      "attempted": false,
+      "shape": "direct",
+      "reason": "depth_below_floor"
+    },
+    {
+      "rep": 2,
+      "context_tokens": 180157,
+      "attempted": false,
+      "shape": "direct",
+      "reason": "depth_below_floor"
+    },
+    {
+      "rep": 2,
+      "context_tokens": null,
+      "attempted": false,
+      "shape": "direct",
+      "reason": "depth_unknown"
+    }
+  ],
+  "cells": [
+    {
+      "arm": "jev_hierarchy",
+      "rep": 1,
+      "context_at_job_prompt": 180778,
+      "job_cost_usd": 1.7605,
+      "session_cost_usd": 2.7271,
+      "cache_read": 9275140,
+      "cache_creation": 184338,
+      "agent_calls": 0,
+      "num_turns": 41,
+      "quality": "pass",
+      "wall_s": 227
+    },
+    {
+      "arm": "jev_hierarchy",
+      "rep": 2,
+      "context_at_job_prompt": 180504,
+      "job_cost_usd": 1.7848,
+      "session_cost_usd": 2.7468,
+      "cache_read": 9445018,
+      "cache_creation": 183563,
+      "agent_calls": 0,
+      "num_turns": 42,
+      "quality": "pass",
+      "wall_s": 219
+    },
+    {
+      "arm": "sonnet_native",
+      "rep": 1,
+      "context_at_job_prompt": 179672,
+      "job_cost_usd": 1.3697,
+      "session_cost_usd": 2.3276,
+      "cache_read": 7360698,
+      "cache_creation": 182143,
+      "agent_calls": 0,
+      "num_turns": 41,
+      "quality": "pass",
+      "wall_s": 197
+    },
+    {
+      "arm": "sonnet_native",
+      "rep": 2,
+      "context_at_job_prompt": 179171,
+      "job_cost_usd": 1.7378,
+      "session_cost_usd": 2.6878,
+      "cache_read": 9185753,
+      "cache_creation": 182167,
+      "agent_calls": 0,
+      "num_turns": 41,
+      "quality": "pass",
+      "wall_s": 214
+    }
+  ]
+}

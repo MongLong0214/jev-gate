@@ -1,0 +1,66 @@
+| job | arm | rep | context | valid | quality | admitted | cacheR | out | msgs | src | host/stream | job turn $ |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| wide-validators-primed-21 | jev_single | 1 | 285492 | ok | pass | true | 8.95M | 423 | 70 | field | 23% | $0.8077 |
+| wide-validators-primed-21 | jev_single | 2 | 285484 | ok | pass | true | 17.46M | 728 | 91 | field | 20% | $1.3109 |
+| wide-validators-primed-21 | sonnet_native | 1 | 285066 | ok | pass | false | 13.73M | 441 | 47 | field | 62% | $1.8753 |
+| wide-validators-primed-21 | sonnet_native | 2 | 284718 | ok | pass | false | 15.77M | 485 | 54 | field | 60% | $2.0783 |
+| wide-validators-primed-30 | jev_single | 1 | 389013 | ok | pass | true | 14.66M | 215 | 80 | field | 30% | $1.3828 |
+| wide-validators-primed-30 | jev_single | 2 | 389226 | ok | pass | true | 18.85M | 632 | 92 | field | 25% | $1.6771 |
+| wide-validators-primed-30 | sonnet_native | 1 | 388349 | ok | pass | false | 19.23M | 229 | 49 | field | 20% | $0.9387 |
+| wide-validators-primed-30 | sonnet_native | 2 | 388422 | ok | pass | false | 20.44M | 337 | 52 | field | 17% | $0.8910 |
+
+## rungs, work unit (rules of PREREGISTRATION-WORK-2026-09-20.md)
+
+### wide-validators-primed-21 — 4/4 valid, jev_single admitted 2/2
+- cache reads: native 14.75M [13.73M, 15.77M] spread 14.8% | single 13.21M [8.95M, 17.46M] spread 95.1%
+  → **10.5% single LESS** — not quotable: under the 15% floor
+- output tokens: native 463 [441, 485] spread 10.0% | single 576 [423, 728] spread 72.1%
+  → **24.3% single MORE** — direction only: does not beat the arms' own spread
+- dollars (co-primary): native $1.9768 [$1.8753, $2.0783] spread 10.8% | single $1.0593 [$0.8077, $1.3109] spread 62.3%
+  → **46.4% single LESS** — direction only: does not beat the arms' own spread
+### wide-validators-primed-30 — 4/4 valid, jev_single admitted 2/2
+- cache reads: native 19.83M [19.23M, 20.44M] spread 6.3% | single 16.75M [14.66M, 18.85M] spread 28.5%
+  → **15.5% single LESS** — direction only: does not beat the arms' own spread
+- output tokens: native 283 [229, 337] spread 47.2% | single 424 [215, 632] spread 194.0%
+  → **49.6% single MORE** — direction only: does not beat the arms' own spread
+- dollars (co-primary): native $0.9148 [$0.9387, $0.8910] spread 5.4% | single $1.5299 [$1.3828, $1.6771] spread 21.3%
+  → **67.2% single MORE** — SEPARATION
+
+```json
+{
+  "wide-validators-primed-21": {
+    "cache_reads": {
+      "mag": 10.5,
+      "dir": "single LESS",
+      "sep": false
+    },
+    "output_tokens": {
+      "mag": 24.3,
+      "dir": "single MORE",
+      "sep": false
+    },
+    "dollars": {
+      "mag": 46.4,
+      "dir": "single LESS",
+      "sep": false
+    }
+  },
+  "wide-validators-primed-30": {
+    "cache_reads": {
+      "mag": 15.5,
+      "dir": "single LESS",
+      "sep": false
+    },
+    "output_tokens": {
+      "mag": 49.6,
+      "dir": "single MORE",
+      "sep": false
+    },
+    "dollars": {
+      "mag": 67.2,
+      "dir": "single MORE",
+      "sep": true
+    }
+  }
+}
+```

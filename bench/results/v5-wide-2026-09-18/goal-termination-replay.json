@@ -1,0 +1,155 @@
+[
+  {
+    "firings": 466,
+    "met": 16,
+    "choice": "terminating",
+    "confidence": 0.64,
+    "unique": true,
+    "in": 534,
+    "ms": 748
+  },
+  {
+    "firings": 411,
+    "met": 3,
+    "choice": "terminating",
+    "confidence": 0.87,
+    "unique": true,
+    "in": 502,
+    "ms": 529
+  },
+  {
+    "firings": 374,
+    "met": 0,
+    "choice": "terminating",
+    "confidence": 0.45,
+    "unique": true,
+    "in": 516,
+    "ms": 208
+  },
+  {
+    "firings": 242,
+    "met": 1,
+    "choice": "terminating",
+    "confidence": 0.92,
+    "unique": true,
+    "in": 516,
+    "ms": 242
+  },
+  {
+    "firings": 232,
+    "met": 1,
+    "choice": "terminating",
+    "confidence": 0.49,
+    "unique": true,
+    "in": 509,
+    "ms": 239
+  },
+  {
+    "firings": 111,
+    "met": 0,
+    "choice": "terminating",
+    "confidence": 0.67,
+    "unique": true,
+    "in": 543,
+    "ms": 249
+  },
+  {
+    "firings": 85,
+    "met": 0,
+    "choice": "non_terminating",
+    "confidence": 0.75,
+    "unique": true,
+    "in": 515,
+    "ms": 234
+  },
+  {
+    "firings": 80,
+    "met": 0,
+    "choice": "terminating",
+    "confidence": 0.85,
+    "unique": true,
+    "in": 502,
+    "ms": 253
+  },
+  {
+    "firings": 66,
+    "met": 0,
+    "choice": "terminating",
+    "confidence": 0.65,
+    "unique": true,
+    "in": 531,
+    "ms": 259
+  },
+  {
+    "firings": 47,
+    "met": 1,
+    "choice": "terminating",
+    "confidence": 0.68,
+    "unique": true,
+    "in": 507,
+    "ms": 293
+  },
+  {
+    "firings": 28,
+    "met": 0,
+    "choice": "terminating",
+    "confidence": 0.98,
+    "unique": true,
+    "in": 542,
+    "ms": 226
+  },
+  {
+    "firings": 9,
+    "met": 0,
+    "choice": "non_terminating",
+    "confidence": 0.59,
+    "unique": true,
+    "in": 540,
+    "ms": 236
+  },
+  {
+    "firings": 2,
+    "met": 0,
+    "choice": "non_terminating",
+    "confidence": 0.36,
+    "unique": true,
+    "in": 741,
+    "ms": 285
+  },
+  {
+    "firings": 2,
+    "met": 0,
+    "choice": "non_terminating",
+    "confidence": 0.88,
+    "unique": true,
+    "in": 502,
+    "ms": 303
+  },
+  {
+    "firings": 1,
+    "met": 0,
+    "choice": "unclear",
+    "confidence": 0.96,
+    "unique": true,
+    "in": 491,
+    "ms": 260
+  },
+  {
+    "firings": 1,
+    "met": 1,
+    "choice": "terminating",
+    "confidence": 0.91,
+    "unique": true,
+    "in": 688,
+    "ms": 250
+  },
+  {
+    "firings": 1,
+    "met": 0,
+    "choice": "terminating",
+    "confidence": 0.79,
+    "unique": true,
+    "in": 521,
+    "ms": 219
+  }
+]

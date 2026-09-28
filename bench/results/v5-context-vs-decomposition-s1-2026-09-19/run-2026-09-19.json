@@ -1,0 +1,119 @@
+{
+ "run": "v5-context-vs-decomposition stage 1",
+ "date": "2026-09-19",
+ "build": "2042170",
+ "job": "wide-validators-primed-30",
+ "cells": 6,
+ "valid": 6,
+ "rule_3": "fired: arms differ in pass count; no cost comparison reported for this job",
+ "rule_4": "no row of the prediction table can be adjudicated (every row needs all three arms)",
+ "quality": {
+  "sonnet_native": "2/2",
+  "jev_single": "2/2",
+  "jev_hierarchy": "1/2"
+ },
+ "failure": {
+  "cell": "jev_hierarchy r1",
+  "checker": "empty_rejected_everywhere",
+  "shape": "all 12 modules reject [] but return no reason string - uniform, no module missed",
+  "cause": "plan spec.data_shapes froze the request's silence: \"new empty-array case: { ok:false, field:'<name>' }\"",
+  "contrast": "r2 plan specified reason:'empty' and passed; native and single both wrote reason:'empty'",
+  "acceptance": "receipts accept:3, plan ready, outcome completed - the contract was satisfied and the contract was wrong"
+ },
+ "mechanism": {
+  "sonnet_native": [
+   {
+    "rep": 1,
+    "read": 14,
+    "paths": 14,
+    "bash": 33,
+    "tests": 1,
+    "workers": 0
+   },
+   {
+    "rep": 2,
+    "read": 14,
+    "paths": 14,
+    "bash": 32,
+    "tests": 1,
+    "workers": 0
+   }
+  ],
+  "jev_single": [
+   {
+    "rep": 1,
+    "read": 16,
+    "paths": 16,
+    "bash": 36,
+    "tests": 2,
+    "workers": 1,
+    "plan": null,
+    "planner_usd": 0
+   },
+   {
+    "rep": 2,
+    "read": 17,
+    "paths": 14,
+    "bash": 33,
+    "tests": 2,
+    "workers": 1,
+    "plan": null,
+    "planner_usd": 0
+   }
+  ],
+  "jev_hierarchy": [
+   {
+    "rep": 1,
+    "read": 42,
+    "paths": 26,
+    "bash": 44,
+    "tests": 10,
+    "workers": 3,
+    "plan_tasks": 3,
+    "chain_depth": 2,
+    "planner_usd": 0.4157
+   },
+   {
+    "rep": 2,
+    "read": 30,
+    "paths": 16,
+    "bash": 39,
+    "tests": 6,
+    "workers": 2,
+    "plan_tasks": 2,
+    "chain_depth": 1,
+    "planner_usd": 0.3773
+   }
+  ]
+ },
+ "job_turn_usd_record_not_comparison": {
+  "sonnet_native": [
+   2.7092,
+   2.6237
+  ],
+  "jev_single": [
+   0.7255,
+   0.9927
+  ],
+  "jev_hierarchy": [
+   1.6297,
+   1.3324
+  ]
+ },
+ "depth": [
+  387845,
+  387539,
+  388324,
+  388579,
+  388271,
+  388331
+ ],
+ "single_arm_evidence": {
+  "execution": "single",
+  "plan": null,
+  "agent_calls": 1,
+  "config_override_sha256": "c24c3ef72691"
+ },
+ "defect_found": "single shape writes no receipt, so a successful job records outcome incomplete and its worker records read as orphans",
+ "stage_2": "not run; needs its own approval and a different question"
+}

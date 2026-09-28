@@ -1,0 +1,46 @@
+{
+  "verdict": "INVALID under PREREGISTRATION rule 1: context_at_job_prompt below 250,000 in every cell",
+  "cause": "stdin was closed with every prompt in it, so the host appended the waiting prompts to the turn already running; one turn, and the job prompt submitted at a fresh session's depth",
+  "cells": [
+    {
+      "arm": "jev_forced_orchestration",
+      "repetition": 1,
+      "context_at_job_prompt": 28481,
+      "turn_results": 1,
+      "cost_usd": 1.55536935,
+      "num_turns": 12,
+      "quality": "pass",
+      "elapsed_s": 534
+    },
+    {
+      "arm": "jev_forced_orchestration",
+      "repetition": 2,
+      "context_at_job_prompt": 28481,
+      "turn_results": 1,
+      "cost_usd": 0.11488899999999999,
+      "num_turns": 2,
+      "quality": "fail",
+      "elapsed_s": 55
+    },
+    {
+      "arm": "sonnet_native",
+      "repetition": 1,
+      "context_at_job_prompt": 27459,
+      "turn_results": 1,
+      "cost_usd": 2.686703599999999,
+      "num_turns": 31,
+      "quality": "fail",
+      "elapsed_s": 78
+    },
+    {
+      "arm": "sonnet_native",
+      "repetition": 2,
+      "context_at_job_prompt": 27136,
+      "turn_results": 1,
+      "cost_usd": 2.677603599999999,
+      "num_turns": 31,
+      "quality": "fail",
+      "elapsed_s": 127
+    }
+  ]
+}

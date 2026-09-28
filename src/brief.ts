@@ -59,6 +59,31 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 const nonEmpty = (v: unknown): v is string => typeof v === 'string' && v.length > 0;
 
 /**
+ * Whether any Agent call this session makes can pass checkEligibility's foreground test, read from the launch
+ * environment alone. Unless CLAUDE_CODE_FORK_SUBAGENT=0, an interactive session runs in the host's fork mode, whose
+ * Agent tool has no `run_in_background` field at all; without CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 every brief there
+ * is `not_foreground`, and forced forking is refused outright. #48: on such a host an admitted job never reaches a
+ * worker, while its guard still refuses the main session's own edits, so admission must not be paid for at all.
+ * The gate stays native there rather than asking for the variable to be set globally: forcing the foreground in every
+ * session would end the background subagents that #48 P1-2 names as what sped delivery up.
+ */
+export const foregroundDispatchPossible = (env: Env): boolean =>
+  env['CLAUDE_CODE_FORK_SUBAGENT'] !== '1' &&
+  (env['CLAUDE_CODE_DISABLE_BACKGROUND_TASKS'] === '1' || env['CLAUDE_CODE_FORK_SUBAGENT'] === '0');
+
+/**
+ * Why no owned Agent call this session makes could reach a worker, or null when one could. A subagent model override
+ * is refused by checkEligibility just as a background-only call is, so an orchestrated job is locked out either way:
+ * its guard refuses the main session's edits while every brief is declined. Both are fixed at launch, so admission,
+ * the forced arm, lean and the SessionStart notice all read this one answer.
+ */
+export const dispatchBlocker = (env: Env): 'background_only' | 'subagent_model_override' | null => {
+  if (!foregroundDispatchPossible(env)) return 'background_only';
+  const override = subagentModelOverride(env);
+  return override.concrete || override.force ? 'subagent_model_override' : null;
+};
+
+/**
  * V4 §4 conditions kept for V5. A caller pin is reported rather than fatal: a pinned call still receives the canonical
  * task contract (A5), it just keeps its model. Every other failing condition is a documented no-op with HTTP 0.
  */
@@ -114,6 +139,13 @@ export interface AgentPatch {
   subagent_type?: string;
   model?: string;
   prompt?: string;
+  /**
+   * #48 P1-2: only a WORKER dispatch the hook patches carries this, and only under `workerIsolation: "worktree"`.
+   * `EXECUTION_CONTROL_KEYS` above still rejects a CALLER-supplied `isolation` at eligibility time -- this field is
+   * the hook adding the key itself, afterward, on the patch it was already going to emit; it is never added on a
+   * `preserve()` path, since that path emits no output and the call proceeds completely unpatched.
+   */
+  isolation?: 'worktree';
 }
 
 /** New object; only the named fields differ, and the original prompt stays an exact prefix of a patched prompt. */
@@ -121,6 +153,7 @@ export const patchAgentInput = (original: AgentInput, patch: AgentPatch): AgentI
   const out: AgentInput = { ...original };
   if (patch.subagent_type !== undefined) out['subagent_type'] = patch.subagent_type;
   if (patch.model !== undefined) out['model'] = patch.model;
+  if (patch.isolation !== undefined) out['isolation'] = patch.isolation;
   if (patch.prompt !== undefined) {
     if (!patch.prompt.startsWith(String(original['prompt'] ?? ''))) throw new Error('patched prompt must keep the original as an exact prefix');
     out['prompt'] = patch.prompt;
@@ -148,4 +181,14 @@ export const renderPreToolUseOutput = (out: PreToolUseOutput): string | null => 
 export const renderAdditionalContext = (event: 'UserPromptSubmit' | 'PostToolUse', additionalContext: string): string | null => {
   const text = JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext } });
   return Buffer.byteLength(text, 'utf8') > MAX_OUTPUT_BYTES ? null : text;
+};
+
+/**
+ * #48 P2: a SessionStart-only notice the host shows the user directly and never feeds back into model context --
+ * contrast `renderAdditionalContext`, whose whole point is the opposite. Used for the liveness warning, which is
+ * about the gate's own health and has no business spending the session's own context budget to report on itself.
+ */
+export const renderSystemMessage = (text: string): string | null => {
+  const out = JSON.stringify({ systemMessage: text });
+  return Buffer.byteLength(out, 'utf8') > MAX_OUTPUT_BYTES ? null : out;
 };

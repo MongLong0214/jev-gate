@@ -2,23 +2,64 @@
 
 export type Tier = 'fast' | 'standard' | 'deep' | 'frontier';
 export type PlannerTier = 'deep' | 'frontier';
-export type Mode = 'off' | 'native' | 'auto';
-export type OwnedRole = 'worker' | 'planner';
+/** `lean` (JGL v1.1) is a separate additive mode: it shares no gate, guard or plan with native/auto. */
+export type Mode = 'off' | 'native' | 'auto' | 'lean';
+/** The two modes that reach V5 routing; routing-only types name these instead of excluding 'off'. */
+export type RoutingMode = 'native' | 'auto';
+export type OwnedRole = 'worker' | 'planner' | 'executor';
 export type ExecutionShape = 'direct' | 'orchestrated';
+export type RouteQuestionShape = 'composite' | 'atomic';
+/** Gate A asks the same way Gate B does, and the two are configured independently. */
+export type AdmissionQuestionShape = RouteQuestionShape;
+export const ROUTE_QUESTION_SHAPES: readonly RouteQuestionShape[] = ['composite', 'atomic'];
+
+/**
+ * #48 P1-2: `worktree` is the only way `maxParallelWorkers > 1` is allowed. `none` is a planner's deliverable claim
+ * with no enforced write boundary; a worktree is the boundary itself, not another claim about one.
+ */
+export type WorkerIsolation = 'none' | 'worktree';
+export const WORKER_ISOLATIONS: readonly WorkerIsolation[] = ['none', 'worktree'];
+
+/**
+ * #48 P2-1: what a main_session_steps entry needs that a worker shell cannot provide. Workers here run in
+ * non-interactive shells without macOS privacy (TCC) grants, so a step needing one of these has to stay with the
+ * main session rather than be handed to a worker that "verifies" it with unit tests alone.
+ */
+export type Capability = 'os_permission' | 'live_app' | 'interactive_login' | 'device';
+export const CAPABILITIES: readonly Capability[] = ['os_permission', 'live_app', 'interactive_login', 'device'];
+
+/** #48 P2-1: one step a planner keeps for the main session instead of dispatching, and why. */
+export interface MainSessionStep {
+  step: string;
+  needs: Capability;
+}
+
+/**
+ * A19: what an admitted turn is executed as. `hierarchy` is the shipped product -- planner, plan, several workers.
+ * `single` dispatches one worker with the user's own request and no plan at all, to test whether the saving measured
+ * at depth comes from starting in a fresh context or from splitting the work. It is a hypothesis under measurement,
+ * not a recommendation.
+ *
+ * It is a separate shape rather than `maxTasksPerPlan: 1`: a one-task plan still pays for the planner, still carries a
+ * contract and still has a replan path, so it would measure a small hierarchy rather than the absence of one.
+ */
+export type AdmittedShape = 'hierarchy' | 'single';
+export const ADMITTED_SHAPES: readonly AdmittedShape[] = ['hierarchy', 'single'];
+
 export type AdmissionAnswer = 'direct' | 'orchestrated' | 'needs_context' | 'abstain';
 export type RouteAnswer = Tier | 'abstain';
 export type PlannerRouteAnswer = PlannerTier | 'abstain';
 export type UpgradeBasis = 'unresolved_contract_reasoning' | 'observed_reasoning_failure' | 'no_specific_basis' | 'unknown';
+/** Historical only (T11): Gate C no longer runs, so this union types stored advisories, never a live request. */
 export type ResultVerdict = 'accept' | 'rework' | 'replan' | 'abstain';
 
 export const TIERS: readonly Tier[] = ['fast', 'standard', 'deep', 'frontier'];
 export const PLANNER_TIERS: readonly PlannerTier[] = ['deep', 'frontier'];
-export const MODES: readonly Mode[] = ['off', 'native', 'auto'];
+export const MODES: readonly Mode[] = ['off', 'native', 'auto', 'lean'];
 export const ADMISSION_ANSWERS: readonly AdmissionAnswer[] = ['direct', 'orchestrated', 'needs_context', 'abstain'];
 export const ROUTE_ANSWERS: readonly RouteAnswer[] = ['fast', 'standard', 'deep', 'frontier', 'abstain'];
 export const PLANNER_ROUTE_ANSWERS: readonly PlannerRouteAnswer[] = ['deep', 'frontier', 'abstain'];
 export const UPGRADE_BASES: readonly UpgradeBasis[] = ['unresolved_contract_reasoning', 'observed_reasoning_failure', 'no_specific_basis', 'unknown'];
-export const RESULT_VERDICTS: readonly ResultVerdict[] = ['accept', 'rework', 'replan', 'abstain'];
 /** The two bases that can justify an above-default worker (#27); the other two never can. */
 export const UPGRADE_BASES_SUFFICIENT: readonly UpgradeBasis[] = ['unresolved_contract_reasoning', 'observed_reasoning_failure'];
 
@@ -39,6 +80,12 @@ export const OWNED_AGENTS: Record<string, OwnedAgent> = {
 
 export const OWNED_AGENT_NAMES: readonly string[] = Object.keys(OWNED_AGENTS);
 
+/**
+ * JGL-01: the one agent lean owns. Deliberately NOT in OWNED_AGENTS -- the legacy guard, eligibility check and tier
+ * router all key off that map, and lean shares none of them. Nothing but the lean PreToolUse branch matches this name.
+ */
+export const LEAN_EXECUTOR_AGENT = 'jev-gate:executor';
+
 export const agentForTier = (role: OwnedRole, tier: Tier): string => {
   const found = OWNED_AGENT_NAMES.find((name) => OWNED_AGENTS[name]?.role === role && OWNED_AGENTS[name]?.tier === tier);
   // A planner has no fast/standard profile; the caller's tier decision is clamped to the strong profiles before this point.
@@ -52,11 +99,64 @@ export interface ConfigV5 {
   requestDeadlineMs: number;
   admissionConfidenceFloor: number;
   routeConfidenceFloor: number;
+  /** Deprecated no-op (T11): accepted so a deployed config still loads; no gate reads it and it triggers no request. */
   resultConfidenceFloor: number;
   plannerDefaultTier: PlannerTier;
   models: Record<Tier, string>;
   maxParallelWorkers: number;
   guardAllowTools: string[];
+  /**
+   * #48 P1-2: absent means `none`, like the other optional keys. `maxParallelWorkers > 1` requires `worktree`: a
+   * declared deliverable is the planner's claim, a worktree is a boundary. `worktree` requires `Bash` in
+   * `guardAllowTools`, because the root has to merge each worker's branch while the guard is active.
+   */
+  workerIsolation: WorkerIsolation;
+  /**
+   * How Gate B asks. `composite` is the shipped five-way choice; `atomic` fans the same judgement out into read-off
+   * questions and composes them in code. Optional in a config file and defaulted to `composite`, so a deployed file
+   * keeps its current behaviour without being edited.
+   */
+  routeQuestionShape: RouteQuestionShape;
+  /**
+   * Context tokens the main session must already be carrying before Gate A is asked anything. Below it the turn is
+   * direct and no request is sent: delegation measured +182 % at 55K and -57 % at 406K, so depth, not the prompt, is
+   * what decides. 0 disables the floor.
+   *
+   * #48 P0-1: `null` (the default) means derive the floor from the host's own auto-compaction window instead of
+   * this absolute number -- see `effectiveDepthFloor` in config.ts. An explicit non-negative integer keeps today's
+   * absolute meaning exactly, including 0 to disable it. Optional in a config file, like `routeQuestionShape`; an
+   * explicit `null` in a file is accepted and means the same as leaving the key out.
+   */
+  delegationDepthFloor: number | null;
+  /**
+   * #48 P0-1: the fraction of the host's compaction window that `effectiveDepthFloor` uses when `delegationDepthFloor`
+   * is not set explicitly. 0.6 is a policy choice made so a smaller window still admits some prompts before the host
+   * compacts; it is not a measured crossing point. Must be strictly between 0 and 1. Optional in a config file.
+   */
+  delegationDepthFraction: number;
+  /**
+   * How Gate A asks. `composite` is the shipped four-way choice; `atomic` fans the same judgement out into read-off
+   * questions composed in code as vetoes, and does not consult `admissionConfidenceFloor` at all. Optional in a
+   * config file and defaulted to `composite`, mirroring `routeQuestionShape`.
+   */
+  admissionQuestionShape: AdmissionQuestionShape;
+  /**
+   * The most tasks an accepted plan may contain. A backstop against a runaway split, not a budget: worker count is
+   * the hidden cost axis here, and a plan of 13 cost +92.5 % where plans that worked ran 2 to 7.
+   */
+  maxTasksPerPlan: number;
+  /**
+   * A19: how an admitted turn is executed. Optional in a config file and defaulted to `hierarchy`, so a deployed file
+   * keeps its behaviour. `single` removes the planner, the plan, Gate B's contract and the replan path from the turn.
+   */
+  admittedShape: AdmittedShape;
+  /**
+   * A23: whether a candidate plan is compared against the request before it is adopted. One extra HTTP call per
+   * candidate plan, and it changes nothing: the classification is recorded and no plan is ever rejected by it.
+   * Off by default and optional in a config file, because a call that costs money and decides nothing is not
+   * something a deployed file should start making without being edited.
+   */
+  planInterpretation: boolean;
 }
 
 export interface ChoiceAnswer<K extends string> {
@@ -76,6 +176,8 @@ export interface HookInput {
   hook_event_name: string;
   session_id?: string;
   prompt_id?: string;
+  /** Every hook event carries it; only Gate A reads it, to measure how deep the session already is (`src/depth.ts`). */
+  transcript_path?: string;
   cwd?: string;
   permission_mode?: string;
   agent_id?: string;
@@ -99,6 +201,24 @@ export interface PlannedCheck {
   command: string | null;
 }
 
+/**
+ * A17: the optional specification a planner may fix once, so a worker starts from its findings instead of re-deriving
+ * them. `files` are the repository paths the planner actually inspected.
+ */
+export interface TaskSpec {
+  interfaces: string[];
+  data_shapes: string[];
+  invariants: string[];
+  files: string[];
+}
+
+/** #33: optional routing evidence Gate B reads. An empty `unresolved` is a claim that the task is ordinary bounded work. */
+export interface TaskUncertainty {
+  unresolved: string[];
+  interacts_with: string[];
+  prior_failure: string | null;
+}
+
 export interface PlannedTask {
   id: string;
   outcome: string;
@@ -108,6 +228,11 @@ export interface PlannedTask {
   deliverables: string[];
   checks: PlannedCheck[];
   replan_if: string[];
+  /** Optional (document §7): an absent field is unknown, not "mechanical", so a plan that omits it is still valid. */
+  spec?: TaskSpec;
+  uncertainty?: TaskUncertainty;
+  /** #33/A17: every design decision is already made (a non-empty `spec.interfaces`, nothing unresolved). */
+  fully_specified?: boolean;
   /** A3: sha256 over the scheduling-relevant contract; a receipt is accepted for (task_id, contract_hash). */
   contract_hash: string;
 }
@@ -118,10 +243,26 @@ export interface Plan {
   assumptions: string[];
   constraints: string[];
   tasks: PlannedTask[];
+  /** A17: the longest dependency path, computed from the graph. Wall-clock cannot fall below it. */
+  chain_depth: number;
+  /** T11: what the planner said its chain depth was. A claim the graph does not support is recorded, never rejected. */
+  chain_depth_claimed: number | null;
+  /** #48 P2-1: kept with the plan so the main session is reminded of them at admission and again at the last accept. */
+  main_session_steps: MainSessionStep[];
 }
 
 export type PlannerReply =
-  | { status: 'ready'; goal: string; assumptions: string[]; constraints: string[]; tasks: Array<Omit<PlannedTask, 'contract_hash'>> }
+  | {
+      status: 'ready';
+      goal: string;
+      assumptions: string[];
+      constraints: string[];
+      tasks: Array<Omit<PlannedTask, 'contract_hash'>>;
+      /** A17: what the planner says its chain depth is. The code computes the authoritative value from the graph. */
+      chain_depth_claimed: number | null;
+      /** #48 P2-1: absent reads as none. Never dispatched and never gates task readiness -- advisory only. */
+      main_session_steps?: MainSessionStep[];
+    }
   | { status: 'needs_context'; questions: string[]; findings: string[] }
   | { status: 'blocked'; reason: string; findings: string[] };
 
@@ -140,14 +281,25 @@ export interface WorkerReply {
   blockers: string[];
 }
 
+/** T4: the pin that was requested and the model the host actually ran are different facts; an unknown id is neither. */
+export type ModelAgreement = 'match' | 'mismatch' | 'unverified';
+
 export type JobPhase = 'admitted' | 'planning' | 'planned' | 'blocked';
 export type JobOutcome = 'completed' | 'incomplete' | 'blocked' | 'superseded';
 export type DeterministicVerdict = 'accept' | 'incomplete';
+/** T11: rework and replan are reached from what the worker itself reported, never from a second model's judgement. */
+export type ReceiptVerdict = DeterministicVerdict | 'invalid' | 'unknown' | 'rework' | 'replan';
 
 /** A4: one reservation per dispatched owned call, taken before any HTTP and released at Post. */
 export interface Reservation {
   role: OwnedRole;
   task_id: string | null;
+  /**
+   * A4/T1: the contract this dispatch was reserved under, so the receipt that closes it is selectable by the same key
+   * it was dispatched on. `null` on a planner and `''` on a single-executor dispatch, neither of which has a contract.
+   * State written before this field existed carries none, so read it through `reservedContractHash`, never directly.
+   */
+  contract_hash: string | null;
   rev: number | null;
   tier: Tier | null;
   attempt: number;
@@ -164,9 +316,9 @@ export interface Receipt {
   tool_use_id: string;
   provenance: 'worker_reported';
   reply: WorkerReply | null;
-  verdict: DeterministicVerdict | 'invalid' | 'unknown';
+  verdict: ReceiptVerdict;
   verdict_reason: string | null;
-  /** Gate C is advisory (A1): recorded, never applied to readiness. */
+  /** Historical only (T11): Gate C is not called, so new receipts always record null here. */
   advisory: ResultVerdict | null;
   observed_model: string | null;
   root_effort: string | null;
@@ -182,10 +334,18 @@ export interface JobAttempts {
 /** One generation = one (session_id, prompt_id) pair (A2). A new prompt supersedes the previous one into history. */
 export interface JobGeneration {
   prompt_id: string | null;
+  /**
+   * A17: the admitted request, verbatim. A plan is a paraphrase of it, and the worker is told the user's own words
+   * outrank the contract -- which is only true if they reach the worker at all. Null when the turn carried none, or
+   * when it was larger than REQUEST_MAX_BYTES: the absence is stated in the prompt, never truncated into a half-spec.
+   */
+  request: string | null;
   created_at: string;
   shape: ExecutionShape;
   phase: JobPhase;
   planner_tier: PlannerTier | null;
+  /** T4: whether the host's resolvedModel agreed with the planner profile this job asked for. Unverified is not a match. */
+  planner_model: ModelAgreement | null;
   plan: Plan | null;
   active: Record<string, Reservation>;
   receipts: Receipt[];
@@ -194,6 +354,41 @@ export interface JobGeneration {
   outcome: JobOutcome | null;
   /** A16: the generation was started by the bench control variable, not by a Gate A answer. */
   forced?: true;
+  /** A19: present only when the turn was admitted under `admittedShape: single`. Absent reads as `hierarchy`. */
+  execution?: 'single';
+  /** JGL-03: at most one pending lean packet per generation. Null once consumed, superseded or never produced. */
+  lean?: LeanPending | null;
+}
+
+/**
+ * JGL-03: the short-lived packet one root request may apply to one owned executor. Bound to the request, the source
+ * lineage and the observed source prefix, so an ordinary assistant/tool append does not invalidate it but a new human
+ * instruction, a compaction or a destructive rewrite does. Never a transcript archive: only what dispatch needs.
+ */
+export interface LeanPending {
+  /**
+   * `pending` was registered before the call and never answered; `native` was decided and is not dispatchable;
+   * `proposed` carries a packet; `dispatched` is a packet one executor call consumed, kept with its packet emptied
+   * so the same request cannot be admitted or applied again (L5). Repeated delivery of the same request reads this
+   * instead of spending again, and a later request reads it to record whether a recommendation was taken.
+   */
+  outcome: 'pending' | 'native' | 'proposed' | 'dispatched';
+  marker: string;
+  packet: string;
+  packet_sha256: string;
+  request_sha256: string;
+  epoch: string;
+  prefix_digest: string;
+  cwd: string | null;
+  /**
+   * The canonical working tree the packet was built in: the real path of the nearest directory holding `.git`. A
+   * dispatch from another tree is stale; one from a subdirectory of the same tree is not. Absent on state written
+   * before the field existed; such a packet is treated as stale rather than bound on `cwd` alone.
+   */
+  worktree?: string | null;
+  omitted_groups: number;
+  retained_groups: number;
+  created_at: string;
 }
 
 export interface JobState {
@@ -202,6 +397,17 @@ export interface JobState {
   updated_at: string;
   current: JobGeneration;
   history: JobGeneration[];
+  /**
+   * Lean request identities this session has admitted, newest first and never evicted (LEAN_SEEN_MAX, then
+   * `lean_seen_full`). A lean registration overwrites `current`, so without this an older request redelivered after a
+   * newer one would look new and be paid for again.
+   */
+  lean_seen?: string[];
+  /**
+   * Set when a writer replaced a state file it could not read. Whatever identities that file held are unknown, so this
+   * session admits no further lean request (`lean_ledger_unknown`); an orchestration turn can still recover the file.
+   */
+  lean_seen_lost?: true;
 }
 
 /** Fixed diagnostic codes: the only text the hook writes to stderr, and the only reason strings a trace stores. */
@@ -228,7 +434,41 @@ export type SkipCode =
   | 'output_too_large'
   | 'no_state'
   | 'shape_direct'
-  | 'aborted';
+  | 'aborted'
+  /** JGL: lean-only local skips. Every one of them leaves ordinary native execution untouched. */
+  | 'profile_mode_mismatch'
+  | 'source_unavailable'
+  | 'source_lineage_unknown'
+  | 'source_bounded'
+  /** A complete record that does not decode or parse, or one identity with two contents: corruption, not noise. */
+  | 'source_corrupt'
+  /** At the prompt, the transcript ends inside a record the host is still writing, which may be context this turn needs. */
+  | 'source_incomplete'
+  /** A record form or provenance the source adapter has not seen, or content it cannot carry (an image, a document). */
+  | 'source_unsupported'
+  /** The transcript, a record in it, or the request's own record belongs to a different session or request. */
+  | 'source_identity_mismatch'
+  /** Local work left too little of the hook's own time for the provider call; nothing was sent. */
+  | 'deadline_exhausted'
+  | 'mandatory_overflow'
+  | 'mandatory_unsafe'
+  | 'host_unsupported'
+  | 'no_optional_groups'
+  | 'no_room_for_candidates'
+  | 'lean_executor_active'
+  | 'work_shape_unusable'
+  | 'work_shape_short_step'
+  | 'scope_unusable'
+  | 'scope_needs_context'
+  | 'scope_forbidden'
+  | 'no_effect'
+  | 'duplicate_request'
+  /** The session already holds LEAN_SEEN_MAX lean prompt identities; admitting another would mean forgetting one. */
+  | 'lean_seen_full'
+  /** The session's state could not be read, or replaced one that could not be: an identity it held may be charged again. */
+  | 'lean_ledger_unknown'
+  | 'packet_overflow'
+  | 'source_changed';
 
 export type HttpCode =
   | 'http_401'
@@ -252,6 +492,11 @@ export type PreserveReason =
   | 'admission_low_confidence'
   | 'prompt_id_absent'
   | 'admission_forced'
+  | 'depth_unknown'
+  | 'depth_below_floor'
+  | 'admission_forbids_delegation'
+  | 'admission_answer_only'
+  | 'admission_too_small'
   | 'route_invalid'
   | 'route_tie'
   | 'route_abstain'
@@ -260,10 +505,6 @@ export type PreserveReason =
   | 'basis_tie'
   | 'basis_absent'
   | 'basis_low_confidence'
-  | 'result_invalid'
-  | 'result_tie'
-  | 'result_abstain'
-  | 'result_low_confidence'
   | 'generation_changed'
   | 'pinned';
 
@@ -273,10 +514,13 @@ export type DenyReason =
   | 'dispatch_ineligible'
   | 'task_active'
   | 'task_accepted'
-  | 'reservation_superseded'
+  | 'attempt_mismatch'
+  | 'dependent_active'
+  | 'stale_generation'
   | 'deliverable_overlap'
   | 'parallel_cap'
   | 'planner_pin_conflict'
+  | 'planner_active'
   | 'workers_active'
   | 'bounds_exhausted'
   | 'composed_too_large'
@@ -284,7 +528,15 @@ export type DenyReason =
   | 'unknown_task'
   | 'stale_rev'
   | 'deps_incomplete'
-  | 'phase_not_planned';
+  | 'phase_not_planned'
+  /** A19: the planner was called on a turn admitted as a single executor, which has no plan to make. */
+  | 'single_shape'
+  /** JGL-01: an owned executor call whose marker resolves to no current packet is not an executable task. */
+  | 'marker_unresolved'
+  | 'marker_stale'
+  | 'executor_active'
+  /** JGL-01 (L5): an owned marker whose dispatch could not be recorded is declined, never passed through half-applied. */
+  | 'reservation_failed';
 
 export type StateCode = 'state_corrupt' | 'state_too_large' | 'state_locked' | 'state_symlink' | 'state_write_failed';
 

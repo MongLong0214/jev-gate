@@ -6,6 +6,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 
 import { gradeDir } from '../src/bench/checker.js';
 import { isInside, isSafeId, isSensitiveName } from '../src/bench/paths.js';
+import { loadManifest } from '../src/bench/run.js';
 
 const root = join(__dirname, '..');
 const benchDir = join(root, 'bench', 'v5');
@@ -13,8 +14,9 @@ const tmp = mkdtempSync(join(tmpdir(), 'jev-bench-v5-orbit-core-'));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 const opts = { timeoutMs: 60_000, checkerId: 'test' };
 
-// The fragment is parsed here rather than through loadManifest: loadManifest still accepts version 3|4 only, and merging
-// the V5 fragments into a manifest it accepts is another ticket's change. The shape checked below is the one it enforces.
+// The fragment is parsed directly rather than through loadManifest: it is a standalone one-case manifest and the shape
+// checked below is the one loadManifest enforces. The primed variant further down does go through loadManifest, because
+// it lives in bench/cases-depth.json alongside the wide cases it is meant to be compared against.
 interface Fragment {
   version: number;
   cases: Array<{ id: string; group: string; fixtureDir: string; request: string; setup: unknown; evaluationSetup: unknown; checkFile: string }>;
@@ -162,5 +164,63 @@ describe('bench/v5 orbit-core checker', () => {
     expect(g.environmentError).toBeNull();
     expect(g.checks.find((c) => c.id === failing)?.pass, `${name} was not caught by ${failing}`).toBe(false);
     for (const id of untouched) expect(g.checks.find((c) => c.id === id)?.pass, `${name} also broke ${id}`).toBe(true);
+  }, 120_000);
+});
+
+// The primed variant is the second job at depth (#1 of the 2026-09-19 order). It exists so the −64.2 % job-turn saving
+// measured on `wide-validators` can be re-measured on a job of a different shape — same independence, far more work per
+// task. Depth has to come from the same priming material, and the job text has to be the unprimed case's, or the cell
+// varies more than the one thing under test.
+describe('bench/cases-depth.json orbit-core-primed-30', () => {
+  const { cases, manifestDir } = loadManifest(join(root, 'bench', 'cases-depth.json'));
+  const primed = cases.find((c) => c.id === 'orbit-core-primed-30')!;
+  const wide30 = cases.find((c) => c.id === 'wide-validators-primed-30')!;
+  const loadedDir = resolve(manifestDir, 'v5', 'fixtures', 'orbit-core-loaded');
+
+  it('is a safe, contained case whose group is its own', () => {
+    expect(isSafeId(primed.id)).toBe(true);
+    expect(isInside(manifestDir, primed.fixtureDir)).toBe(true);
+    expect(isInside(manifestDir, primed.checkFile)).toBe(true);
+    expect(resolve(primed.fixtureDir)).toBe(loadedDir);
+    expect(resolve(primed.checkFile)).toBe(checkFile);
+    expect(cases.filter((c) => c.group === primed.group)).toHaveLength(1);
+  });
+
+  it('varies only the job: the request is the unprimed case byte for byte, the priming is the wide case byte for byte', () => {
+    expect(primed.request).toBe(orbit.request);
+    expect(primed.prime).toEqual(wide30.prime);
+    expect(primed.prime).toHaveLength(2); // a second prompt so the host has flushed the priming turn's usage line
+    expect(primed.setup).toEqual([['node', 'make-reference.mjs']]);
+  });
+
+  it('is the plain fixture plus the generator and nothing else', () => {
+    const rel = (dir: string): string[] => walk(dir).map((f) => f.slice(dir.length + 1)).sort();
+    expect(rel(loadedDir)).toEqual([...rel(fixtureDir), 'make-reference.mjs'].sort());
+    expect(readFileSync(join(loadedDir, 'make-reference.mjs'), 'utf8')).toBe(
+      readFileSync(join(root, 'bench', 'fixtures', 'wide-validators-loaded', 'make-reference.mjs'), 'utf8'),
+    );
+  });
+
+  it('generates thirty notes, and grading is unchanged by them', () => {
+    const dir = join(tmp, 'primed-fixture');
+    cpSync(loadedDir, dir, { recursive: true });
+    const gen = spawnSync(process.execPath, ['make-reference.mjs'], { cwd: dir, encoding: 'utf8' });
+    expect(gen.status, gen.stderr).toBe(0);
+    const notes = readdirSync(join(dir, 'reference')).sort();
+    expect(notes).toHaveLength(30);
+    expect(notes[0]).toBe('note-01.md');
+    expect(notes[29]).toBe('note-30.md');
+    // Each note stays under the host's 20,000-character model-facing cap, so it arrives whole and depth is predictable.
+    for (const n of notes) expect(readFileSync(join(dir, 'reference', n), 'utf8').length).toBeLessThan(20_000);
+
+    const before = gradeDir(checkFile, dir, opts);
+    expect(before.quality, JSON.stringify(before)).toBe('fail');
+    expect(before.environmentError).toBeNull();
+
+    cpSync(referenceDir, dir, { recursive: true });
+    const after = gradeDir(checkFile, dir, opts);
+    expect(after.quality, JSON.stringify(after)).toBe('pass');
+    expect(after.environmentError).toBeNull();
+    expect(after.checks.every((c) => c.pass === true)).toBe(true);
   }, 120_000);
 });

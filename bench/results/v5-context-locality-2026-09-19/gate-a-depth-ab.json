@@ -1,0 +1,1771 @@
+[
+  {
+    "project": "-Users-isaac",
+    "len": 25,
+    "context_tokens": 290292,
+    "A_bare": {
+      "choice": "orchestrated",
+      "confidence": 0.52,
+      "shape": "direct",
+      "decided": false,
+      "in": 585,
+      "ms": 727
+    },
+    "B_number": {
+      "choice": "orchestrated",
+      "confidence": 0.67,
+      "shape": "direct",
+      "decided": false,
+      "in": 597,
+      "ms": 584
+    },
+    "C_number_and_cost": {
+      "choice": "orchestrated",
+      "confidence": 0.62,
+      "shape": "direct",
+      "decided": false,
+      "in": 649,
+      "ms": 246
+    }
+  },
+  {
+    "project": "-Users-isaac",
+    "len": 64,
+    "context_tokens": 514887,
+    "A_bare": {
+      "choice": "orchestrated",
+      "confidence": 0.2,
+      "shape": "direct",
+      "decided": false,
+      "in": 605,
+      "ms": 238
+    },
+    "B_number": {
+      "choice": "orchestrated",
+      "confidence": 0.17,
+      "shape": "direct",
+      "decided": false,
+      "in": 617,
+      "ms": 315
+    },
+    "C_number_and_cost": {
+      "choice": "direct",
+      "confidence": 0.3,
+      "shape": "direct",
+      "decided": false,
+      "in": 669,
+      "ms": 262
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-agent-operator-score",
+    "len": 18,
+    "context_tokens": 842101,
+    "A_bare": {
+      "choice": "direct",
+      "confidence": 0.52,
+      "shape": "direct",
+      "decided": false,
+      "in": 578,
+      "ms": 282
+    },
+    "B_number": {
+      "choice": "direct",
+      "confidence": 0.51,
+      "shape": "direct",
+      "decided": false,
+      "in": 590,
+      "ms": 268
+    },
+    "C_number_and_cost": {
+      "choice": "direct",
+      "confidence": 0.35,
+      "shape": "direct",
+      "decided": false,
+      "in": 642,
+      "ms": 250
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-agent-operator-score",
+    "len": 719,
+    "context_tokens": 918746,
+    "A_bare": {
+      "choice": "direct",
+      "confidence": 0.39,
+      "shape": "direct",
+      "decided": false,
+      "in": 854,
+      "ms": 458
+    },
+    "B_number": {
+      "choice": "direct",
+      "confidence": 0.29,
+      "shape": "direct",
+      "decided": false,
+      "in": 866,
+      "ms": 266
+    },
+    "C_number_and_cost": {
+      "choice": "direct",
+      "confidence": 0.39,
+      "shape": "direct",
+      "decided": false,
+      "in": 918,
+      "ms": 301
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-agent-operator-score",
+    "len": 515,
+    "context_tokens": 501052,
+    "A_bare": {
+      "choice": "needs_context",
+      "confidence": 0.15,
+      "shape": "direct",
+      "decided": false,
+      "in": 708,
+      "ms": 422
+    },
+    "B_number": {
+      "choice": "needs_context",
+      "confidence": 0.19,
+      "shape": "direct",
+      "decided": false,
+      "in": 720,
+      "ms": 260
+    },
+    "C_number_and_cost": {
+      "choice": "direct",
+      "confidence": 0.23,
+      "shape": "direct",
+      "decided": false,
+      "in": 772,
+      "ms": 327
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-agent-operator-score",
+    "len": 57,
+    "context_tokens": 498672,
+    "A_bare": {
+      "choice": "needs_context",
+      "confidence": 0.86,
+      "shape": "direct",
+      "decided": false,
+      "in": 609,
+      "ms": 231
+    },
+    "B_number": {
+      "choice": "needs_context",
+      "confidence": 0.86,
+      "shape": "direct",
+      "decided": false,
+      "in": 621,
+      "ms": 401
+    },
+    "C_number_and_cost": {
+      "choice": "needs_context",
+      "confidence": 0.88,
+      "shape": "direct",
+      "decided": false,
+      "in": 673,
+      "ms": 225
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 21,
+    "context_tokens": 661785,
+    "A_bare": {
+      "choice": "direct",
+      "confidence": 0.35,
+      "shape": "direct",
+      "decided": false,
+      "in": 581,
+      "ms": 285
+    },
+    "B_number": {
+      "choice": "direct",
+      "confidence": 0.4,
+      "shape": "direct",
+      "decided": false,
+      "in": 593,
+      "ms": 251
+    },
+    "C_number_and_cost": {
+      "choice": "direct",
+      "confidence": 0.43,
+      "shape": "direct",
+      "decided": false,
+      "in": 645,
+      "ms": 311
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 25,
+    "context_tokens": 259792,
+    "A_bare": {
+      "choice": "direct",
+      "confidence": 0.26,
+      "shape": "direct",
+      "decided": false,
+      "in": 583,
+      "ms": 250
+    },
+    "B_number": {
+      "choice": "direct",
+      "confidence": 0.19,
+      "shape": "direct",
+      "decided": false,
+      "in": 595,
+      "ms": 258
+    },
+    "C_number_and_cost": {
+      "choice": "direct",
+      "confidence": 0.21,
+      "shape": "direct",
+      "decided": false,
+      "in": 647,
+      "ms": 385
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 21,
+    "context_tokens": 832738,
+    "A_bare": {
+      "choice": "direct",
+      "confidence": 0.99,
+      "shape": "direct",
+      "decided": true,
+      "in": 580,
+      "ms": 243
+    },
+    "B_number": {
+      "choice": "direct",
+      "confidence": 0.99,
+      "shape": "direct",
+      "decided": true,
+      "in": 592,
+      "ms": 312
+    },
+    "C_number_and_cost": {
+      "choice": "direct",
+      "confidence": 0.99,
+      "shape": "direct",
+      "decided": true,
+      "in": 644,
+      "ms": 269
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 37,
+    "context_tokens": 488872,
+    "A_bare": {
+      "choice": "needs_context",
+      "confidence": 0.58,
+      "shape": "direct",
+      "decided": false,
+      "in": 589,
+      "ms": 232
+    },
+    "B_number": {
+      "choice": "needs_context",
+      "confidence": 0.6,
+      "shape": "direct",
+      "decided": false,
+      "in": 601,
+      "ms": 264
+    },
+    "C_number_and_cost": {
+      "choice": "needs_context",
+      "confidence": 0.59,
+      "shape": "direct",
+      "decided": false,
+      "in": 653,
+      "ms": 235
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 30,
+    "context_tokens": 428196,
+    "A_bare": {
+      "choice": "direct",
+      "confidence": 0.41,
+      "shape": "direct",
+      "decided": false,
+      "in": 582,
+      "ms": 252
+    },
+    "B_number": {
+      "choice": "direct",
+      "confidence": 0.45,
+      "shape": "direct",
+      "decided": false,
+      "in": 594,
+      "ms": 218
+    },
+    "C_number_and_cost": {
+      "choice": "direct",
+      "confidence": 0.46,
+      "shape": "direct",
+      "decided": false,
+      "in": 646,
+      "ms": 288
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 1610,
+    "context_tokens": 962877,
+    "A_bare": {
+      "choice": "direct",
+      "confidence": 0.55,
+      "shape": "direct",
+      "decided": false,
+      "in": 1447,
+      "ms": 287
+    },
+    "B_number": {
+      "choice": "direct",
+      "confidence": 0.45,
+      "shape": "direct",
+      "decided": false,
+      "in": 1459,
+      "ms": 277
+    },
+    "C_number_and_cost": {
+      "choice": "direct",
+      "confidence": 0.58,
+      "shape": "direct",
+      "decided": false,
+      "in": 1511,
+      "ms": 248
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 1609,
+    "context_tokens": 657393,
+    "A_bare": {
+      "choice": "orchestrated",
+      "confidence": 0.65,
+      "shape": "direct",
+      "decided": false,
+      "in": 1589,
+      "ms": 471
+    },
+    "B_number": {
+      "choice": "orchestrated",
+      "confidence": 0.68,
+      "shape": "direct",
+      "decided": false,
+      "in": 1601,
+      "ms": 406
+    },
+    "C_number_and_cost": {
+      "choice": "orchestrated",
+      "confidence": 0.48,
+      "shape": "direct",
+      "decided": false,
+      "in": 1653,
+      "ms": 234
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 82,
+    "context_tokens": 989072,
+    "A_bare": {
+      "choice": "direct",
+      "confidence": 0.24,
+      "shape": "direct",
+      "decided": false,
+      "in": 615,
+      "ms": 232
+    },
+    "B_number": {
+      "choice": "direct",
+      "confidence": 0.34,
+      "shape": "direct",
+      "decided": false,
+      "in": 627,
+      "ms": 486
+    },
+    "C_number_and_cost": {
+      "choice": "direct",
+      "confidence": 0.37,
+      "shape": "direct",
+      "decided": false,
+      "in": 679,
+      "ms": 282
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 38,
+    "context_tokens": 961765,
+    "A_bare": {
+      "choice": "orchestrated",
+      "confidence": 0.25,
+      "shape": "direct",
+      "decided": false,
+      "in": 594,
+      "ms": 255
+    },
+    "B_number": {
+      "choice": "orchestrated",
+      "confidence": 0.25,
+      "shape": "direct",
+      "decided": false,
+      "in": 606,
+      "ms": 550
+    },
+    "C_number_and_cost": {
+      "choice": "direct",
+      "confidence": 0.11,
+      "shape": "direct",
+      "decided": false,
+      "in": 658,
+      "ms": 300
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 58,
+    "context_tokens": 785855,
+    "A_bare": {
+      "choice": "direct",
+      "confidence": 0.44,
+      "shape": "direct",
+      "decided": false,
+      "in": 605,
+      "ms": 249
+    },
+    "B_number": {
+      "choice": "direct",
+      "confidence": 0.56,
+      "shape": "direct",
+      "decided": false,
+      "in": 617,
+      "ms": 282
+    },
+    "C_number_and_cost": {
+      "choice": "direct",
+      "confidence": 0.64,
+      "shape": "direct",
+      "decided": false,
+      "in": 669,
+      "ms": 282
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 513,
+    "context_tokens": 111582,
+    "A_bare": {
+      "choice": "needs_context",
+      "confidence": 0.36,
+      "shape": "direct",
+      "decided": false,
+      "in": 708,
+      "ms": 332
+    },
+    "B_number": {
+      "choice": "needs_context",
+      "confidence": 0.33,
+      "shape": "direct",
+      "decided": false,
+      "in": 720,
+      "ms": 344
+    },
+    "C_number_and_cost": {
+      "choice": "needs_context",
+      "confidence": 0.3,
+      "shape": "direct",
+      "decided": false,
+      "in": 772,
+      "ms": 294
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 78,
+    "context_tokens": 659117,
+    "A_bare": {
+      "choice": "needs_context",
+      "confidence": 0.49,
+      "shape": "direct",
+      "decided": false,
+      "in": 616,
+      "ms": 232
+    },
+    "B_number": {
+      "choice": "needs_context",
+      "confidence": 0.32,
+      "shape": "direct",
+      "decided": false,
+      "in": 628,
+      "ms": 390
+    },
+    "C_number_and_cost": {
+      "choice": "needs_context",
+      "confidence": 0.24,
+      "shape": "direct",
+      "decided": false,
+      "in": 680,
+      "ms": 291
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 607,
+    "context_tokens": 950388,
+    "A_bare": {
+      "choice": "direct",
+      "confidence": 0.57,
+      "shape": "direct",
+      "decided": false,
+      "in": 751,
+      "ms": 252
+    },
+    "B_number": {
+      "choice": "direct",
+      "confidence": 0.47,
+      "shape": "direct",
+      "decided": false,
+      "in": 763,
+      "ms": 214
+    },
+    "C_number_and_cost": {
+      "choice": "direct",
+      "confidence": 0.65,
+      "shape": "direct",
+      "decided": false,
+      "in": 815,
+      "ms": 248
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 568,
+    "context_tokens": 239650,
+    "A_bare": {
+      "choice": "direct",
+      "confidence": 0.78,
+      "shape": "direct",
+      "decided": false,
+      "in": 734,
+      "ms": 253
+    },
+    "B_number": {
+      "choice": "direct",
+      "confidence": 0.8,
+      "shape": "direct",
+      "decided": true,
+      "in": 746,
+      "ms": 276
+    },
+    "C_number_and_cost": {
+      "choice": "direct",
+      "confidence": 0.9,
+      "shape": "direct",
+      "decided": true,
+      "in": 798,
+      "ms": 208
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-commitlore",
+    "len": 30,
+    "context_tokens": 808370,
+    "A_bare": {
+      "choice": "direct",
+      "confidence": 0.89,
+      "shape": "direct",
+      "decided": true,
+      "in": 583,
+      "ms": 266
+    },
+    "B_number": {
+      "choice": "direct",
+      "confidence": 0.86,
+      "shape": "direct",
+      "decided": true,
+      "in": 595,
+      "ms": 268
+    },
+    "C_number_and_cost": {
+      "choice": "direct",
+      "confidence": 0.82,
+      "shape": "direct",
+      "decided": true,
+      "in": 647,
+      "ms": 266
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 107,
+    "context_tokens": 160999,
+    "A_bare": {
+      "choice": "direct",
+      "confidence": 0.45,
+      "shape": "direct",
+      "decided": false,
+      "in": 605,
+      "ms": 256
+    },
+    "B_number": {
+      "choice": "direct",
+      "confidence": 0.47,
+      "shape": "direct",
+      "decided": false,
+      "in": 617,
+      "ms": 265
+    },
+    "C_number_and_cost": {
+      "choice": "direct",
+      "confidence": 0.29,
+      "shape": "direct",
+      "decided": false,
+      "in": 669,
+      "ms": 244
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 30,
+    "context_tokens": 866951,
+    "A_bare": {
+      "choice": "direct",
+      "confidence": 0.34,
+      "shape": "direct",
+      "decided": false,
+      "in": 584,
+      "ms": 296
+    },
+    "B_number": {
+      "choice": "direct",
+      "confidence": 0.3,
+      "shape": "direct",
+      "decided": false,
+      "in": 596,
+      "ms": 239
+    },
+    "C_number_and_cost": {
+      "choice": "direct",
+      "confidence": 0.39,
+      "shape": "direct",
+      "decided": false,
+      "in": 648,
+      "ms": 640
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 382,
+    "context_tokens": 764029,
+    "A_bare": {
+      "choice": "direct",
+      "confidence": 0.72,
+      "shape": "direct",
+      "decided": false,
+      "in": 669,
+      "ms": 243
+    },
+    "B_number": {
+      "choice": "direct",
+      "confidence": 0.63,
+      "shape": "direct",
+      "decided": false,
+      "in": 681,
+      "ms": 250
+    },
+    "C_number_and_cost": {
+      "choice": "direct",
+      "confidence": 0.8,
+      "shape": "direct",
+      "decided": true,
+      "in": 733,
+      "ms": 543
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 26,
+    "context_tokens": 553583,
+    "A_bare": {
+      "choice": "orchestrated",
+      "confidence": 0.38,
+      "shape": "direct",
+      "decided": false,
+      "in": 585,
+      "ms": 313
+    },
+    "B_number": {
+      "choice": "orchestrated",
+      "confidence": 0.46,
+      "shape": "direct",
+      "decided": false,
+      "in": 597,
+      "ms": 304
+    },
+    "C_number_and_cost": {
+      "choice": "orchestrated",
+      "confidence": 0.4,
+      "shape": "direct",
+      "decided": false,
+      "in": 649,
+      "ms": 262
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 38,
+    "context_tokens": 638349,
+    "A_bare": {
+      "choice": "direct",
+      "confidence": 0.66,
+      "shape": "direct",
+      "decided": false,
+      "in": 589,
+      "ms": 309
+    },
+    "B_number": {
+      "choice": "direct",
+      "confidence": 0.68,
+      "shape": "direct",
+      "decided": false,
+      "in": 601,
+      "ms": 272
+    },
+    "C_number_and_cost": {
+      "choice": "direct",
+      "confidence": 0.74,
+      "shape": "direct",
+      "decided": false,
+      "in": 653,
+      "ms": 283
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 22,
+    "context_tokens": 927327,
+    "A_bare": {
+      "choice": "direct",
+      "confidence": 0.32,
+      "shape": "direct",
+      "decided": false,
+      "in": 581,
+      "ms": 320
+    },
+    "B_number": {
+      "choice": "direct",
+      "confidence": 0.28,
+      "shape": "direct",
+      "decided": false,
+      "in": 593,
+      "ms": 581
+    },
+    "C_number_and_cost": {
+      "choice": "direct",
+      "confidence": 0.23,
+      "shape": "direct",
+      "decided": false,
+      "in": 645,
+      "ms": 263
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 29,
+    "context_tokens": 774003,
+    "A_bare": {
+      "choice": "abstain",
+      "confidence": 0.65,
+      "shape": "direct",
+      "decided": false,
+      "in": 569,
+      "ms": 266
+    },
+    "B_number": {
+      "choice": "abstain",
+      "confidence": 0.63,
+      "shape": "direct",
+      "decided": false,
+      "in": 581,
+      "ms": 292
+    },
+    "C_number_and_cost": {
+      "choice": "abstain",
+      "confidence": 0.55,
+      "shape": "direct",
+      "decided": false,
+      "in": 633,
+      "ms": 268
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 34,
+    "context_tokens": 986085,
+    "A_bare": {
+      "choice": "orchestrated",
+      "confidence": 0.43,
+      "shape": "direct",
+      "decided": false,
+      "in": 590,
+      "ms": 281
+    },
+    "B_number": {
+      "choice": "orchestrated",
+      "confidence": 0.41,
+      "shape": "direct",
+      "decided": false,
+      "in": 602,
+      "ms": 229
+    },
+    "C_number_and_cost": {
+      "choice": "orchestrated",
+      "confidence": 0.2,
+      "shape": "direct",
+      "decided": false,
+      "in": 654,
+      "ms": 251
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 19,
+    "context_tokens": 974787,
+    "A_bare": {
+      "choice": "direct",
+      "confidence": 0.3,
+      "shape": "direct",
+      "decided": false,
+      "in": 584,
+      "ms": 285
+    },
+    "B_number": {
+      "choice": "direct",
+      "confidence": 0.33,
+      "shape": "direct",
+      "decided": false,
+      "in": 596,
+      "ms": 290
+    },
+    "C_number_and_cost": {
+      "choice": "needs_context",
+      "confidence": 0.24,
+      "shape": "direct",
+      "decided": false,
+      "in": 648,
+      "ms": 262
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 1025,
+    "context_tokens": 623831,
+    "A_bare": {
+      "choice": "direct",
+      "confidence": 0.89,
+      "shape": "direct",
+      "decided": true,
+      "in": 948,
+      "ms": 427
+    },
+    "B_number": {
+      "choice": "direct",
+      "confidence": 0.77,
+      "shape": "direct",
+      "decided": false,
+      "in": 960,
+      "ms": 232
+    },
+    "C_number_and_cost": {
+      "choice": "direct",
+      "confidence": 0.9,
+      "shape": "direct",
+      "decided": true,
+      "in": 1012,
+      "ms": 246
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-logic-pro-mcp",
+    "len": 19,
+    "context_tokens": 938233,
+    "A_bare": {
+      "choice": "direct",
+      "confidence": 0.39,
+      "shape": "direct",
+      "decided": false,
+      "in": 569,
+      "ms": 317
+    },
+    "B_number": {
+      "choice": "direct",
+      "confidence": 0.36,
+      "shape": "direct",
+      "decided": false,
+      "in": 581,
+      "ms": 257
+    },
+    "C_number_and_cost": {
+      "choice": "direct",
+      "confidence": 0.35,
+      "shape": "direct",
+      "decided": false,
+      "in": 633,
+      "ms": 233
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 16,
+    "context_tokens": 348307,
+    "A_bare": {
+      "choice": "direct",
+      "confidence": 0.53,
+      "shape": "direct",
+      "decided": false,
+      "in": 576,
+      "ms": 336
+    },
+    "B_number": {
+      "choice": "direct",
+      "confidence": 0.43,
+      "shape": "direct",
+      "decided": false,
+      "in": 588,
+      "ms": 232
+    },
+    "C_number_and_cost": {
+      "choice": "direct",
+      "confidence": 0.45,
+      "shape": "direct",
+      "decided": false,
+      "in": 640,
+      "ms": 231
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 28,
+    "context_tokens": 225807,
+    "A_bare": {
+      "choice": "direct",
+      "confidence": 0.33,
+      "shape": "direct",
+      "decided": false,
+      "in": 584,
+      "ms": 371
+    },
+    "B_number": {
+      "choice": "direct",
+      "confidence": 0.35,
+      "shape": "direct",
+      "decided": false,
+      "in": 596,
+      "ms": 332
+    },
+    "C_number_and_cost": {
+      "choice": "direct",
+      "confidence": 0.4,
+      "shape": "direct",
+      "decided": false,
+      "in": 648,
+      "ms": 310
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 17,
+    "context_tokens": 905218,
+    "A_bare": {
+      "choice": "direct",
+      "confidence": 0.3,
+      "shape": "direct",
+      "decided": false,
+      "in": 575,
+      "ms": 261
+    },
+    "B_number": {
+      "choice": "direct",
+      "confidence": 0.39,
+      "shape": "direct",
+      "decided": false,
+      "in": 587,
+      "ms": 250
+    },
+    "C_number_and_cost": {
+      "choice": "direct",
+      "confidence": 0.39,
+      "shape": "direct",
+      "decided": false,
+      "in": 639,
+      "ms": 251
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 457,
+    "context_tokens": 605655,
+    "A_bare": {
+      "choice": "direct",
+      "confidence": 0.73,
+      "shape": "direct",
+      "decided": false,
+      "in": 727,
+      "ms": 242
+    },
+    "B_number": {
+      "choice": "direct",
+      "confidence": 0.62,
+      "shape": "direct",
+      "decided": false,
+      "in": 739,
+      "ms": 293
+    },
+    "C_number_and_cost": {
+      "choice": "direct",
+      "confidence": 0.81,
+      "shape": "direct",
+      "decided": true,
+      "in": 791,
+      "ms": 257
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 179,
+    "context_tokens": 202286,
+    "A_bare": {
+      "choice": "orchestrated",
+      "confidence": 0.34,
+      "shape": "direct",
+      "decided": false,
+      "in": 697,
+      "ms": 395
+    },
+    "B_number": {
+      "choice": "orchestrated",
+      "confidence": 0.42,
+      "shape": "direct",
+      "decided": false,
+      "in": 709,
+      "ms": 246
+    },
+    "C_number_and_cost": {
+      "choice": "needs_context",
+      "confidence": 0.36,
+      "shape": "direct",
+      "decided": false,
+      "in": 761,
+      "ms": 285
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 228,
+    "context_tokens": 948406,
+    "A_bare": {
+      "choice": "direct",
+      "confidence": 0.32,
+      "shape": "direct",
+      "decided": false,
+      "in": 732,
+      "ms": 286
+    },
+    "B_number": {
+      "choice": "direct",
+      "confidence": 0.25,
+      "shape": "direct",
+      "decided": false,
+      "in": 744,
+      "ms": 235
+    },
+    "C_number_and_cost": {
+      "choice": "direct",
+      "confidence": 0.68,
+      "shape": "direct",
+      "decided": false,
+      "in": 796,
+      "ms": 265
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 53,
+    "context_tokens": 678286,
+    "A_bare": {
+      "choice": "needs_context",
+      "confidence": 0.27,
+      "shape": "direct",
+      "decided": false,
+      "in": 598,
+      "ms": 327
+    },
+    "B_number": {
+      "choice": "direct",
+      "confidence": 0.32,
+      "shape": "direct",
+      "decided": false,
+      "in": 610,
+      "ms": 256
+    },
+    "C_number_and_cost": {
+      "choice": "direct",
+      "confidence": 0.46,
+      "shape": "direct",
+      "decided": false,
+      "in": 662,
+      "ms": 392
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 20,
+    "context_tokens": 250620,
+    "A_bare": {
+      "choice": "direct",
+      "confidence": 0.13,
+      "shape": "direct",
+      "decided": false,
+      "in": 581,
+      "ms": 225
+    },
+    "B_number": {
+      "choice": "orchestrated",
+      "confidence": 0.1,
+      "shape": "direct",
+      "decided": false,
+      "in": 593,
+      "ms": 251
+    },
+    "C_number_and_cost": {
+      "choice": "direct",
+      "confidence": 0.13,
+      "shape": "direct",
+      "decided": false,
+      "in": 645,
+      "ms": 339
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 438,
+    "context_tokens": 582278,
+    "A_bare": {
+      "choice": "direct",
+      "confidence": 0.8,
+      "shape": "direct",
+      "decided": true,
+      "in": 822,
+      "ms": 357
+    },
+    "B_number": {
+      "choice": "direct",
+      "confidence": 0.82,
+      "shape": "direct",
+      "decided": true,
+      "in": 834,
+      "ms": 246
+    },
+    "C_number_and_cost": {
+      "choice": "direct",
+      "confidence": 0.94,
+      "shape": "direct",
+      "decided": true,
+      "in": 886,
+      "ms": 280
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 29,
+    "context_tokens": 312301,
+    "A_bare": {
+      "choice": "direct",
+      "confidence": 0.83,
+      "shape": "direct",
+      "decided": true,
+      "in": 585,
+      "ms": 258
+    },
+    "B_number": {
+      "choice": "direct",
+      "confidence": 0.86,
+      "shape": "direct",
+      "decided": true,
+      "in": 597,
+      "ms": 284
+    },
+    "C_number_and_cost": {
+      "choice": "direct",
+      "confidence": 0.87,
+      "shape": "direct",
+      "decided": true,
+      "in": 649,
+      "ms": 222
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 37,
+    "context_tokens": 871945,
+    "A_bare": {
+      "choice": "direct",
+      "confidence": 0.38,
+      "shape": "direct",
+      "decided": false,
+      "in": 588,
+      "ms": 265
+    },
+    "B_number": {
+      "choice": "direct",
+      "confidence": 0.48,
+      "shape": "direct",
+      "decided": false,
+      "in": 600,
+      "ms": 309
+    },
+    "C_number_and_cost": {
+      "choice": "direct",
+      "confidence": 0.49,
+      "shape": "direct",
+      "decided": false,
+      "in": 652,
+      "ms": 241
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 2319,
+    "context_tokens": 153617,
+    "A_bare": {
+      "choice": "orchestrated",
+      "confidence": 0.28,
+      "shape": "direct",
+      "decided": false,
+      "in": 1863,
+      "ms": 284
+    },
+    "B_number": {
+      "choice": "orchestrated",
+      "confidence": 0.28,
+      "shape": "direct",
+      "decided": false,
+      "in": 1875,
+      "ms": 488
+    },
+    "C_number_and_cost": {
+      "choice": "direct",
+      "confidence": 0.41,
+      "shape": "direct",
+      "decided": false,
+      "in": 1927,
+      "ms": 292
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-repo-factory",
+    "len": 312,
+    "context_tokens": 839825,
+    "A_bare": {
+      "choice": "direct",
+      "confidence": 0.23,
+      "shape": "direct",
+      "decided": false,
+      "in": 720,
+      "ms": 435
+    },
+    "B_number": {
+      "choice": "needs_context",
+      "confidence": 0.32,
+      "shape": "direct",
+      "decided": false,
+      "in": 732,
+      "ms": 259
+    },
+    "C_number_and_cost": {
+      "choice": "direct",
+      "confidence": 0.37,
+      "shape": "direct",
+      "decided": false,
+      "in": 784,
+      "ms": 244
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 15,
+    "context_tokens": 663815,
+    "A_bare": {
+      "choice": "needs_context",
+      "confidence": 0.18,
+      "shape": "direct",
+      "decided": false,
+      "in": 572,
+      "ms": 221
+    },
+    "B_number": {
+      "choice": "needs_context",
+      "confidence": 0.26,
+      "shape": "direct",
+      "decided": false,
+      "in": 584,
+      "ms": 257
+    },
+    "C_number_and_cost": {
+      "choice": "needs_context",
+      "confidence": 0.28,
+      "shape": "direct",
+      "decided": false,
+      "in": 636,
+      "ms": 232
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 66,
+    "context_tokens": 512835,
+    "A_bare": {
+      "choice": "orchestrated",
+      "confidence": 0.22,
+      "shape": "direct",
+      "decided": false,
+      "in": 608,
+      "ms": 255
+    },
+    "B_number": {
+      "choice": "orchestrated",
+      "confidence": 0.32,
+      "shape": "direct",
+      "decided": false,
+      "in": 620,
+      "ms": 230
+    },
+    "C_number_and_cost": {
+      "choice": "orchestrated",
+      "confidence": 0.23,
+      "shape": "direct",
+      "decided": false,
+      "in": 672,
+      "ms": 310
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 28,
+    "context_tokens": 905702,
+    "A_bare": {
+      "choice": "needs_context",
+      "confidence": 0.53,
+      "shape": "direct",
+      "decided": false,
+      "in": 576,
+      "ms": 286
+    },
+    "B_number": {
+      "choice": "needs_context",
+      "confidence": 0.4,
+      "shape": "direct",
+      "decided": false,
+      "in": 588,
+      "ms": 241
+    },
+    "C_number_and_cost": {
+      "choice": "needs_context",
+      "confidence": 0.37,
+      "shape": "direct",
+      "decided": false,
+      "in": 640,
+      "ms": 280
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 49,
+    "context_tokens": 447304,
+    "A_bare": {
+      "choice": "direct",
+      "confidence": 0.48,
+      "shape": "direct",
+      "decided": false,
+      "in": 598,
+      "ms": 265
+    },
+    "B_number": {
+      "choice": "direct",
+      "confidence": 0.55,
+      "shape": "direct",
+      "decided": false,
+      "in": 610,
+      "ms": 241
+    },
+    "C_number_and_cost": {
+      "choice": "direct",
+      "confidence": 0.5,
+      "shape": "direct",
+      "decided": false,
+      "in": 662,
+      "ms": 253
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 34,
+    "context_tokens": 412787,
+    "A_bare": {
+      "choice": "orchestrated",
+      "confidence": 0.28,
+      "shape": "direct",
+      "decided": false,
+      "in": 590,
+      "ms": 260
+    },
+    "B_number": {
+      "choice": "orchestrated",
+      "confidence": 0.33,
+      "shape": "direct",
+      "decided": false,
+      "in": 602,
+      "ms": 556
+    },
+    "C_number_and_cost": {
+      "choice": "orchestrated",
+      "confidence": 0.23,
+      "shape": "direct",
+      "decided": false,
+      "in": 654,
+      "ms": 239
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 248,
+    "context_tokens": 245379,
+    "A_bare": {
+      "choice": "direct",
+      "confidence": 0.77,
+      "shape": "direct",
+      "decided": false,
+      "in": 642,
+      "ms": 312
+    },
+    "B_number": {
+      "choice": "direct",
+      "confidence": 0.83,
+      "shape": "direct",
+      "decided": true,
+      "in": 654,
+      "ms": 238
+    },
+    "C_number_and_cost": {
+      "choice": "direct",
+      "confidence": 0.73,
+      "shape": "direct",
+      "decided": false,
+      "in": 706,
+      "ms": 245
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 25,
+    "context_tokens": 373511,
+    "A_bare": {
+      "choice": "orchestrated",
+      "confidence": 0.22,
+      "shape": "direct",
+      "decided": false,
+      "in": 571,
+      "ms": 218
+    },
+    "B_number": {
+      "choice": "needs_context",
+      "confidence": 0.21,
+      "shape": "direct",
+      "decided": false,
+      "in": 583,
+      "ms": 271
+    },
+    "C_number_and_cost": {
+      "choice": "orchestrated",
+      "confidence": 0.3,
+      "shape": "direct",
+      "decided": false,
+      "in": 635,
+      "ms": 313
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 16,
+    "context_tokens": 687086,
+    "A_bare": {
+      "choice": "direct",
+      "confidence": 0.44,
+      "shape": "direct",
+      "decided": false,
+      "in": 576,
+      "ms": 298
+    },
+    "B_number": {
+      "choice": "direct",
+      "confidence": 0.47,
+      "shape": "direct",
+      "decided": false,
+      "in": 588,
+      "ms": 228
+    },
+    "C_number_and_cost": {
+      "choice": "direct",
+      "confidence": 0.49,
+      "shape": "direct",
+      "decided": false,
+      "in": 640,
+      "ms": 256
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 93,
+    "context_tokens": 380093,
+    "A_bare": {
+      "choice": "orchestrated",
+      "confidence": 0.33,
+      "shape": "direct",
+      "decided": false,
+      "in": 624,
+      "ms": 257
+    },
+    "B_number": {
+      "choice": "orchestrated",
+      "confidence": 0.36,
+      "shape": "direct",
+      "decided": false,
+      "in": 636,
+      "ms": 279
+    },
+    "C_number_and_cost": {
+      "choice": "needs_context",
+      "confidence": 0.2,
+      "shape": "direct",
+      "decided": false,
+      "in": 688,
+      "ms": 221
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 24,
+    "context_tokens": 981051,
+    "A_bare": {
+      "choice": "direct",
+      "confidence": 0.41,
+      "shape": "direct",
+      "decided": false,
+      "in": 582,
+      "ms": 299
+    },
+    "B_number": {
+      "choice": "direct",
+      "confidence": 0.49,
+      "shape": "direct",
+      "decided": false,
+      "in": 594,
+      "ms": 233
+    },
+    "C_number_and_cost": {
+      "choice": "direct",
+      "confidence": 0.47,
+      "shape": "direct",
+      "decided": false,
+      "in": 646,
+      "ms": 259
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 43,
+    "context_tokens": 791912,
+    "A_bare": {
+      "choice": "direct",
+      "confidence": 0.21,
+      "shape": "direct",
+      "decided": false,
+      "in": 584,
+      "ms": 262
+    },
+    "B_number": {
+      "choice": "direct",
+      "confidence": 0.24,
+      "shape": "direct",
+      "decided": false,
+      "in": 596,
+      "ms": 260
+    },
+    "C_number_and_cost": {
+      "choice": "direct",
+      "confidence": 0.44,
+      "shape": "direct",
+      "decided": false,
+      "in": 648,
+      "ms": 259
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 35,
+    "context_tokens": 429662,
+    "A_bare": {
+      "choice": "direct",
+      "confidence": 0.62,
+      "shape": "direct",
+      "decided": false,
+      "in": 593,
+      "ms": 232
+    },
+    "B_number": {
+      "choice": "direct",
+      "confidence": 0.58,
+      "shape": "direct",
+      "decided": false,
+      "in": 605,
+      "ms": 236
+    },
+    "C_number_and_cost": {
+      "choice": "direct",
+      "confidence": 0.6,
+      "shape": "direct",
+      "decided": false,
+      "in": 657,
+      "ms": 252
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 43,
+    "context_tokens": 946924,
+    "A_bare": {
+      "choice": "direct",
+      "confidence": 0.46,
+      "shape": "direct",
+      "decided": false,
+      "in": 596,
+      "ms": 281
+    },
+    "B_number": {
+      "choice": "direct",
+      "confidence": 0.57,
+      "shape": "direct",
+      "decided": false,
+      "in": 608,
+      "ms": 270
+    },
+    "C_number_and_cost": {
+      "choice": "direct",
+      "confidence": 0.63,
+      "shape": "direct",
+      "decided": false,
+      "in": 660,
+      "ms": 284
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 26,
+    "context_tokens": 254351,
+    "A_bare": {
+      "choice": "needs_context",
+      "confidence": 0.35,
+      "shape": "direct",
+      "decided": false,
+      "in": 581,
+      "ms": 270
+    },
+    "B_number": {
+      "choice": "needs_context",
+      "confidence": 0.39,
+      "shape": "direct",
+      "decided": false,
+      "in": 593,
+      "ms": 247
+    },
+    "C_number_and_cost": {
+      "choice": "needs_context",
+      "confidence": 0.35,
+      "shape": "direct",
+      "decided": false,
+      "in": 645,
+      "ms": 276
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 28,
+    "context_tokens": 577606,
+    "A_bare": {
+      "choice": "direct",
+      "confidence": 0.3,
+      "shape": "direct",
+      "decided": false,
+      "in": 583,
+      "ms": 230
+    },
+    "B_number": {
+      "choice": "direct",
+      "confidence": 0.39,
+      "shape": "direct",
+      "decided": false,
+      "in": 595,
+      "ms": 240
+    },
+    "C_number_and_cost": {
+      "choice": "needs_context",
+      "confidence": 0.3,
+      "shape": "direct",
+      "decided": false,
+      "in": 647,
+      "ms": 229
+    }
+  },
+  {
+    "project": "-Users-isaac-projects-stock-ai-newsletter",
+    "len": 76,
+    "context_tokens": 984598,
+    "A_bare": {
+      "choice": "needs_context",
+      "confidence": 0.41,
+      "shape": "direct",
+      "decided": false,
+      "in": 623,
+      "ms": 294
+    },
+    "B_number": {
+      "choice": "needs_context",
+      "confidence": 0.37,
+      "shape": "direct",
+      "decided": false,
+      "in": 635,
+      "ms": 249
+    },
+    "C_number_and_cost": {
+      "choice": "needs_context",
+      "confidence": 0.51,
+      "shape": "direct",
+      "decided": false,
+      "in": 687,
+      "ms": 304
+    }
+  }
+]

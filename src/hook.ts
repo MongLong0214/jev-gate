@@ -1,102 +1,161 @@
-import { createHash } from 'node:crypto';
-import { realpathSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { existsSync, realpathSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { buildAdmissionRequest, decideAdmission, type AdmissionDecision } from './admission.js';
 import {
+  ADMISSION_FACT_QUESTIONS,
+  buildAdmissionRequest,
+  buildAtomicAdmissionRequest,
+  decideAdmission,
+  decideAdmissionAtomic,
+  shapeRecommendation,
+  type AdmissionDecision,
+  type AdmissionState,
+} from './admission.js';
+import {
+  buildAtomicWorkerRouteRequest,
   buildPlannerRouteRequest,
-  buildResultRequest,
   buildWorkerRouteRequest,
   decidePlannerRoute,
-  decideResult,
   decideWorkerRoute,
+  decideWorkerRouteAtomic,
+  PRIOR_FAILURE_FACT_QUESTIONS,
+  priorFailureClassification,
+  WORKER_FACT_QUESTIONS,
   type PlannerRouteDecision,
   type WorkerRouteDecision,
+  type WorkerRouteState,
 } from './allocation.js';
 import {
   checkEligibility,
   DENIALS_BEFORE_STOP,
+  dispatchBlocker,
   guardDecision,
   patchAgentInput,
   renderAdditionalContext,
   renderPreToolUseOutput,
+  renderSystemMessage,
   type AgentInput,
+  type AgentPatch,
   type Eligibility,
 } from './brief.js';
-import { loadConfig, type Env } from './config.js';
+import { DEFAULT_CONFIG, effectiveDepthFloor, loadConfig, NATIVE_HOOK_TIMEOUT_MS, type Env } from './config.js';
+import { readHostCompactWindow, readHostWorktreeBaseRef } from './host-window.js';
+import {
+  buildLeanRequest,
+  composeFullPacket,
+  composeDispatchPrompt,
+  composeLeanPacket,
+  decideLean,
+  groupBytes,
+  LEAN_PACKET_BUDGET_BYTES,
+  LEAN_PACKET_MAX_BYTES,
+  selectRecent,
+  type LeanDecision,
+} from './lean.js';
+import { looksSecret, mandatoryGroups, optionalGroups, readLeanSource, SOURCE_MAX_MS, type LeanSource } from './lean-source.js';
+import { readSessionDepth, type DepthReading } from './depth.js';
 import {
   GUARD_DENY_REASON,
   renderDirectGuidance,
   renderDispatchDeny,
+  renderLeanRecommendation,
+  renderReplanBoundExhausted,
   renderOrchestrationGuidance,
+  renderSingleGuidance,
+  renderSingleResult,
+  renderSingleRouteNote,
   renderPlannedContext,
+  renderPlannerModelNote,
   renderPlannerProblem,
   renderReplanProblem,
   renderRouteNote,
   renderWorkerAccepted,
   renderWorkerIncomplete,
   renderWorkerInvalid,
+  renderWorkerReported,
   renderWorkerUnknown,
   STOP_REASON,
+  WORKTREE_WORKER_SENTENCE,
 } from './coordinator.js';
+import { buildPlanInterpretationRequest, classifyInterpretation, type PlanInterpretation } from './interpretation.js';
 import { callJev, MAX_REQUEST_BYTES, type JevOutcome, type JevRequest } from './jev.js';
+import type { BoundKind } from './job.js';
 import {
   activeDeliverables,
+  activePlanners,
+  activeTaskIds,
   activeWorkers,
   boundExhausted,
+  REQUEST_MAX_BYTES,
   cleanupJobs,
   countAttempt,
   emptyGeneration,
+  LEAN_SEEN_MAX,
+  leanSeenOf,
+  LOCK_DEADLINE_MS,
   MAX_HISTORY,
   newGeneration,
   own,
   readJob,
   release,
   reserve,
-  supersedeTask,
   updateJob,
 } from './job.js';
 import {
   acceptedReceipt,
+  chainDepth,
+  composePlannerPrompt,
+  composeSingleWorkerPrompt,
   composeTaskPrompt,
   contractHash,
+  deliverableOverlap,
   deterministicVerdict,
   MAX_COMPOSED_BYTES,
+  normalizeDeliverable,
   parsePlannerReply,
   parseTaskMarker,
   parseWorkerReply,
+  planInForceSummary,
+  priorAttemptSummary,
   readyTaskIds,
+  reportedRecovery,
+  reportedSingleVerdict,
+  SINGLE_TASK_ID,
+  type PlanInForceSummary,
   type PredecessorSummary,
+  type PriorAttemptSummary,
 } from './plan.js';
 import { openTraceDir, type TraceWriter } from './trace.js';
-import type {
-  ConfigV5,
-  DenyReason,
-  ErrorCode,
-  ExecutionShape,
-  HookInput,
-  JobGeneration,
-  JobState,
-  PlannedTask,
-  Receipt,
-  Tier,
-} from './types.js';
-import { agentForTier, OWNED_AGENTS, TIERS } from './types.js';
+import { appendLiveness, LIVENESS_WINDOW, readLiveness } from './liveness.js';
+import type { ConfigV5, DenyReason, ErrorCode, ExecutionShape, HookInput, JobGeneration, JobState, LeanPending, ModelAgreement, Plan, PlannedTask, Receipt, Reservation, RoutingMode, Tier } from './types.js';
+import { agentForTier, LEAN_EXECUTOR_AGENT, OWNED_AGENTS, TIERS } from './types.js';
+import { EXECUTION_CONTROL_KEYS, MAX_PROMPT_BYTES } from './brief.js';
+import { subagentModelOverride } from './auth.js';
 
 export const MAX_STDIN_BYTES = 256 * 1024;
 
 export interface HookDeps {
   stdin: AsyncIterable<Uint8Array | string>;
   env: Env;
+  /** JGL-04: the lean artifact installs its hook command with `--lean`, so a legacy mode there is diagnosed, not run. */
+  argv?: readonly string[];
   fetchImpl?: typeof fetch;
   signal?: AbortSignal;
   openTrace?: typeof openTraceDir;
+  /** When this hook process started, in epoch ms. The provider gets what is left of the host's hook timeout (L7). */
+  startedAt?: number;
 }
 
-/** skip: nothing to do; preserve: a call was seen and left untouched; guidance/patch/deny/context: one JSON object on stdout. */
+/**
+ * skip: nothing to do; preserve: a call was seen and left untouched; guidance/patch/deny/context: one JSON object on
+ * stdout, read by the model. notice (#48 P2): one JSON object on stdout too, but a `systemMessage` the host shows the
+ * user directly and never feeds into model context -- SessionStart's liveness warning is the only source of it.
+ */
 export type HookResult =
   | { kind: 'skip' | 'preserve'; code: ErrorCode | null; stdout: null }
-  | { kind: 'guidance' | 'patch' | 'deny' | 'context'; code: ErrorCode | null; stdout: string };
+  | { kind: 'guidance' | 'patch' | 'deny' | 'context' | 'notice'; code: ErrorCode | null; stdout: string };
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const sha256 = (s: string): string => createHash('sha256').update(s, 'utf8').digest('hex');
@@ -132,7 +191,7 @@ const parseInput = (text: string): HookInput | { code: ErrorCode } => {
   }
   if (!isRecord(parsed) || typeof parsed['hook_event_name'] !== 'string') return { code: 'stdin_invalid_json' };
   const out: HookInput = { hook_event_name: parsed['hook_event_name'] as string };
-  for (const k of ['session_id', 'prompt_id', 'cwd', 'permission_mode', 'agent_id', 'agent_type', 'prompt', 'tool_name', 'tool_use_id', 'error'] as const) {
+  for (const k of ['session_id', 'prompt_id', 'transcript_path', 'cwd', 'permission_mode', 'agent_id', 'agent_type', 'prompt', 'tool_name', 'tool_use_id', 'error'] as const) {
     const v = str(parsed[k]);
     if (v !== null) out[k] = v;
   }
@@ -160,7 +219,9 @@ const whitelistAnswers = (answers: Record<string, unknown>, keys: readonly strin
     const probs = isRecord(a['probabilities'])
       ? Object.fromEntries(Object.entries(a['probabilities']).filter(([, v]) => typeof v === 'number').slice(0, 8))
       : null;
-    out[q] = { type: str(a['type']), choice: str(a['choice']), probabilities: probs, confidence: num(a['confidence']) };
+    // Both atomic gates decide on `noul` and `score`, and neither is a choice, so a trace carrying only the choice
+    // fields recorded the question and not the answer: the shipped Gate A was unauditable from its own observations.
+    out[q] = { type: str(a['type']), choice: str(a['choice']), noul: num(a['noul']), score: num(a['score']), probabilities: probs, confidence: num(a['confidence']) };
   }
   return out;
 };
@@ -213,13 +274,52 @@ const replyText = (toolResponse: unknown): string => {
 const responseStatus = (toolResponse: unknown): string | null => (isRecord(toolResponse) ? str(toolResponse['status']) : null);
 const observedModel = (toolResponse: unknown): string | null => (isRecord(toolResponse) ? str(toolResponse['resolvedModel']) : null);
 
+/**
+ * #48 P0-2: what the dispatch asked for, read from the same fields doctor's `checkModelAuthority` reasons about --
+ * an explicit pin if the call carried one (the model literally requested), else the owned agent's frontmatter model
+ * (what the host runs an unpinned call on). `null` for a `subagent_type` this plugin does not own: there is no
+ * expectation to compare against.
+ */
+const requestedModelFor = (toolInput: unknown): string | null => {
+  if (!isRecord(toolInput)) return null;
+  const pinned = str(toolInput['model']);
+  if (pinned !== null) return pinned;
+  const subagent = str(toolInput['subagent_type']);
+  const owned = subagent !== null ? OWNED_AGENTS[subagent] : undefined;
+  // #48 P0-2 review: a call the hook did not patch runs on the agent's frontmatter model, which gen-agents writes from
+  // DEFAULT_CONFIG.models; the owner's configured table only reaches a call through a patch, which pins `model`.
+  return owned ? DEFAULT_CONFIG.models[owned.tier] : null;
+};
+
+/** #53 review: an isolated worker is told to commit, since only its branch comes back to the coordinator. */
+const isolatedWorkerPatch = (input: AgentInput, patch: AgentPatch): AgentPatch => ({
+  ...patch,
+  prompt: (patch.prompt ?? String(input['prompt'] ?? '')) + WORKTREE_WORKER_SENTENCE,
+  isolation: 'worktree',
+});
+
 const isSlashCommand = (prompt: string): boolean => prompt.trimStart().startsWith('/');
 
-/** A task that is already running is not offered again; a duplicate dispatch would only be denied. */
-const readyForDispatch = (gen: JobGeneration): string[] => {
-  const running = new Set(Object.values(gen.active).map((r) => r.task_id));
-  return readyTaskIds(gen.plan, gen.receipts).filter((id) => !running.has(id));
+/**
+ * T1: a plan is complete when every task is accepted by its current attempt AND nothing is still running. A worker that
+ * was never observed to finish is not a finished job, whatever the receipt of an earlier attempt says. Stop and the
+ * last-task note read the same fact, so the note never announces an end that Stop would not record.
+ */
+const planComplete = (gen: JobGeneration): boolean =>
+  gen.plan !== null && activeWorkers(gen).length === 0 && gen.plan.tasks.every((t) => acceptedReceipt(gen.receipts, t) !== null);
+
+/** T1: the tasks that would be built on this one's result, directly or through a chain of dependencies. */
+const dependentsOf = (plan: Plan, taskId: string): Set<string> => {
+  const out = new Set<string>();
+  for (;;) {
+    const before = out.size;
+    for (const t of plan.tasks) if (t.depends_on.some((d) => d === taskId || out.has(d))) out.add(t.id);
+    if (out.size === before) return out;
+  }
 };
+
+/** T1: a task that is running, or whose predecessor is, is not offered; running means no settled result, not a value. */
+const readyForDispatch = (gen: JobGeneration): string[] => readyTaskIds(gen.plan, gen.receipts, activeTaskIds(gen));
 
 /** The worst-case route note: every tier name is short, so one bound covers whichever tier is chosen. */
 const ROUTE_NOTE_MAX_BYTES = Math.max(...TIERS.map((t) => Buffer.byteLength(renderRouteNote(t), 'utf8')));
@@ -231,12 +331,56 @@ const predecessorSummaries = (task: PlannedTask, gen: JobGeneration): Predecesso
     return receipt?.reply ? [{ task_id: dep, summary: receipt.reply.summary, interfaces: receipt.reply.interfaces }] : [];
   });
 
+/** L7: below this, a provider call cannot plausibly finish, so it is not started. */
+const MIN_NETWORK_MS = 250;
+
+/**
+ * L7: what a lean prompt still has to do after its call returns -- one source re-read, one lock and write, and the
+ * output -- is reserved from the host's hook timeout. The provider gets the rest, never a fresh full budget.
+ */
+const LEAN_POST_CALL_RESERVE_MS = SOURCE_MAX_MS + LOCK_DEADLINE_MS + 300;
+
+/**
+ * L3: the real path of the nearest directory at or above `cwd` holding `.git`, else of `cwd` itself. A dispatch
+ * from a subdirectory of the tree a packet was built in is the same tree; one from a different tree is not.
+ */
+const canonicalWorktree = (cwd: string | undefined): string | null => {
+  if (typeof cwd !== 'string' || cwd.length === 0) return null;
+  let start: string;
+  try {
+    start = realpathSync(cwd);
+  } catch {
+    return null;
+  }
+  for (let at = start; ; ) {
+    if (existsSync(join(at, '.git'))) return at;
+    const up = dirname(at);
+    if (up === at) return start;
+    at = up;
+  }
+};
+
+/** L7: the trace keeps every reason a group in view was not carried apart; none of them is Jev's judgment. */
+const leanSourceTrace = (source: LeanSource, unasked: number | null): Record<string, unknown> => ({
+  epoch: source.epoch,
+  coverage: source.coverage,
+  unassessed: source.unassessed + (unasked ?? 0),
+  excluded: source.excluded,
+  unasked,
+  host_context: source.hostContext,
+  abandoned: source.abandoned,
+  request_recorded: source.requestRecorded,
+  bytes_read: source.bytesRead,
+  duration_ms: source.durationMs,
+});
+
 /**
  * Event dispatch (V5). UserPromptSubmit: Gate A and the job generation. PreToolUse: root guard plus owned dispatch
- * validation, reservation and Gate B. PostToolUse: receipts, Gate C advisory and readiness. Stop: terminal outcome.
+ * validation, reservation and Gate B. PostToolUse: receipts and readiness, decided by code alone (T11). Stop: terminal outcome.
  * Exit code is always 0; a failure anywhere leaves the host's native behavior untouched.
  */
 export const runHook = async (deps: HookDeps): Promise<HookResult> => {
+  const startedAt = deps.startedAt ?? Date.now();
   const skip = (code: ErrorCode | null = null): HookResult => ({ kind: 'skip', code, stdout: null });
   const preserve = (code: ErrorCode): HookResult => ({ kind: 'preserve', code, stdout: null });
 
@@ -249,9 +393,29 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
   if (deps.env['JEV_GATE_MODE'] === 'off') return isAgentPre ? preserve('mode_off') : skip('mode_off');
   const loaded = loadConfig(deps.env);
   if (!loaded.ok) return isAgentPre ? preserve('config_invalid') : skip('config_invalid');
-  const config: ConfigV5 = loaded.config;
-  if (config.mode === 'off') return isAgentPre ? preserve('mode_off') : skip('mode_off');
-  const mode: 'native' | 'auto' = config.mode;
+  /**
+   * #48 P1-2 review: a worker under `isolation: "worktree"` starts from the host's `worktree.baseRef`, whose default
+   * ("fresh") is origin/<default-branch> rather than this branch, so a worker would build on a revision missing the
+   * task's inputs. Only "head" is the revision the plan was made against; any other reading, unset included, runs as
+   * workerIsolation "none" -- one worker at a time in the caller's tree -- rather than dispatching onto the wrong base.
+   */
+  const baseRef = loaded.config.workerIsolation === 'worktree' ? readHostWorktreeBaseRef(deps.env, null, { cwd: input.cwd ?? null, transcriptPath: input.transcript_path ?? null }) : null;
+  const config: ConfigV5 = baseRef !== null && baseRef.value !== 'head' ? { ...loaded.config, workerIsolation: 'none', maxParallelWorkers: 1 } : loaded.config;
+  const rawMode = config.mode;
+  if (rawMode === 'off') return isAgentPre ? preserve('mode_off') : skip('mode_off');
+  /**
+   * JGL-04: the lean artifact ships one executor and none of the six legacy roles, so a legacy mode selected there
+   * would start a guard referring to agents that are not installed. Diagnose it and leave native operation alone.
+   */
+  const leanProfile = (deps.argv ?? []).includes('--lean');
+  if (leanProfile && rawMode !== 'lean') return isAgentPre ? preserve('profile_mode_mismatch') : skip('profile_mode_mismatch');
+  /**
+   * L7: a lean prompt with no key does no optional work at all -- no trace directory, no source read, no state. The
+   * comparison arm is the one exception, because it is explicitly enabled and spends nothing.
+   */
+  if (rawMode === 'lean' && input.hook_event_name === 'UserPromptSubmit' && !deps.env['TYPESAFE_API_KEY'] && deps.env['JEV_GATE_BENCH_RECENT'] !== '1') {
+    return skip('key_missing');
+  }
 
   let trace: TraceWriter | null = null;
   let traceError: string | null = null;
@@ -269,7 +433,9 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     prompt_id: input.prompt_id ?? null,
     caller,
     tool_use_id: input.tool_use_id ?? null,
-    mode,
+    mode: rawMode,
+    // Only under a configured worktree isolation, so a record says which isolation this call actually ran with and why.
+    ...(baseRef !== null ? { worker_isolation: config.workerIsolation, worktree_base_ref: baseRef.value, worktree_base_ref_source: baseRef.source } : {}),
   };
   const apiKey = deps.env['TYPESAFE_API_KEY'];
 
@@ -294,27 +460,44 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
   /** One attempt, intent before the request, result after it. A trace directory that cannot be written blocks the call. */
   const callGate = async <S, Q>(
     request: JevRequest<S, Q>,
-    intentPhase: 'admission_intent' | 'pre_intent' | 'result_intent',
-    resultPhase: 'admission_result' | 'pre_result' | 'result_result',
+    intentPhase: 'admission_intent' | 'pre_intent' | 'interpretation_intent' | 'lean_intent',
+    resultPhase: 'admission_result' | 'pre_result' | 'interpretation_result' | 'lean_result',
     intent: Record<string, unknown>,
     questionKeys: readonly string[],
     /** Applies the gate's policy and returns the closed decision fields to record (JG5-06 accounting). */
     decide: (outcome: JevOutcome) => Record<string, unknown>,
+    /** L7: the epoch ms by which the call must have returned. The deadline is what is left then, not a fresh budget. */
+    mustReturnBy?: number,
   ): Promise<{ outcome: JevOutcome } | { blocked: ErrorCode }> => {
     const requestBytes = Buffer.byteLength(JSON.stringify(request), 'utf8');
+    // B2/T7: one id per gate call, written to both records, so accounting joins an intent to its own result. Gate A
+    // has no tool_use_id and `invocation_id` is per record, so neither of those can carry the pairing.
+    const requestId = randomUUID();
     if (requestBytes > MAX_REQUEST_BYTES) {
-      trace?.write(resultPhase, { ...base, ...intent, attempted: false, known_not_sent: true, skip_code: 'request_too_large', request_bytes: requestBytes });
+      trace?.write(resultPhase, { ...base, ...intent, request_id: requestId, attempted: false, known_not_sent: true, skip_code: 'request_too_large', request_bytes: requestBytes });
       return { blocked: 'request_too_large' };
     }
     if (deps.signal?.aborted) return { blocked: 'aborted' };
+    // The floor guards only what the hook timeout leaves. A configured deadline passed validation and is the
+    // operator's to set, however short.
+    const hookLeft = (): number => (mustReturnBy === undefined ? Infinity : mustReturnBy - Date.now());
+    const exhausted = (): { blocked: ErrorCode } => {
+      trace?.write(resultPhase, { ...base, ...intent, request_id: requestId, attempted: false, known_not_sent: true, skip_code: 'deadline_exhausted', request_bytes: requestBytes });
+      return { blocked: 'deadline_exhausted' };
+    };
+    if (hookLeft() < MIN_NETWORK_MS) return exhausted();
     if (traceDir) {
       if (!trace) return { blocked: 'trace_intent_failed' };
-      const written = trace.write(intentPhase, { ...base, ...intent, request_bytes: requestBytes });
+      const written = trace.write(intentPhase, { ...base, ...intent, request_id: requestId, request_bytes: requestBytes });
       if (!written.ok) return { blocked: 'trace_intent_failed' };
     }
+    // Measured again after the intent write: that write is local work the budget has already paid for.
+    const left = hookLeft();
+    if (left < MIN_NETWORK_MS) return exhausted();
+    const deadlineMs = Math.min(config.requestDeadlineMs, left);
     const outcome = await callJev(request, {
       apiKey: apiKey as string,
-      deadlineMs: config.requestDeadlineMs,
+      deadlineMs,
       ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
       ...(deps.signal ? { signal: deps.signal } : {}),
     });
@@ -322,14 +505,419 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     trace?.write(resultPhase, {
       ...base,
       ...intent,
+      request_id: requestId,
       attempted: true,
       http: { status: outcome.status, code: outcome.ok ? null : outcome.code, duration_ms: outcome.durationMs, request_bytes: requestBytes },
-      jev: outcome.ok ? { model: outcome.response.model, usage: outcome.response.usage, response_bytes: outcome.response.bytes } : { model: null, usage: null, response_bytes: null },
+      // JGL-05: a rejected or unusable answer does not erase the usage that parsed beside it. Absent stays unknown.
+      jev: outcome.ok
+        ? { model: outcome.response.model, usage: outcome.response.usage, response_bytes: outcome.response.bytes }
+        : { model: outcome.model ?? null, usage: outcome.usage ?? null, response_bytes: null },
       answers: outcome.ok ? whitelistAnswers(outcome.response.answers, questionKeys) : null,
       ...decided,
     });
     return { outcome };
   };
+
+  // ---------------------------------------------------------------- lean (JGL-01/02/03)
+  //
+  // A separate path. It shares the dispatcher, the state file, the lock, the trace and the TypeSafe client with the
+  // legacy modes, and none of their decisions: no Gate A/B/C, no depth reading, no planner, no task graph, no tier
+  // routing, no root guard and no plan interpretation runs here.
+
+  const MARKER_RE = /jev-lean-[0-9a-f]{16}/;
+
+  /** JGL-03: one private record per session, and a new request replaces the pending packet without erasing actives. */
+  const leanWrite = (sessionId: string, promptId: string | null, fn: (gen: JobGeneration) => JobGeneration): JobState | null => {
+    const written = updateJob(deps.env, sessionId, (prev) => {
+      const current = prev?.current ?? emptyGeneration(promptId, 'direct');
+      return { version: 5, session_id: sessionId, updated_at: '', current: fn(current), history: prev?.history ?? [], ...leanSeenOf(prev) };
+    });
+    return written.ok ? (written.value ?? null) : null;
+  };
+
+  const leanActive = (gen: JobGeneration | null | undefined): Reservation[] =>
+    Object.values(gen?.active ?? {}).filter((r) => r.role === 'executor' && r.orphaned !== true);
+
+  const leanPrompt = async (): Promise<HookResult> => {
+    const prompt = input.prompt;
+    if (typeof prompt !== 'string' || prompt.trim().length === 0 || isSlashCommand(prompt) || caller.agent_id || caller.agent_type) return skip();
+    const sessionId = input.session_id;
+    const promptId = input.prompt_id ?? null;
+    if (!sessionId || promptId === null) return skip('missing_ids');
+    /**
+     * JGL-05: the no-Jev comparison arm. An explicitly enabled benchmark dependency, never a user-facing mode and
+     * never a fake key: it reads the same authorized source and fills the same budget by recency, with no classifier
+     * and no requirement to omit anything. Without this variable the product guarantee below is what runs.
+     */
+    const benchRecent = deps.env['JEV_GATE_BENCH_RECENT'] === '1';
+    // D2: no key returns before any optional source read, state write or HTTP.
+    if (!apiKey && !benchRecent) return skip('key_missing');
+    /**
+     * Host controls are read locally, before the call. An override that pins every subagent's model, or forced
+     * forking, means the dispatch could only ever be denied -- and paying for a selection this session cannot use
+     * is the one cost with no possible return.
+     */
+    if (dispatchBlocker(deps.env) !== null) return skip('host_unsupported');
+    cleanupJobs(deps.env);
+
+    /**
+     * Repeated delivery of the same request reuses its decision. An in-flight duplicate cannot spend a second time,
+     * and a decided or consumed one is not re-decided; only a genuinely new request is a new identity. This unlocked
+     * read is only the fast path -- the authoritative comparison happens again under the lock, at registration.
+     */
+    const existing = readJob(deps.env, sessionId);
+    // A state that cannot be read may hold identities already charged, and one written over such a file has lost them.
+    if (!existing.ok || existing.value?.lean_seen_lost) return skip('lean_ledger_unknown');
+    const prior = existing.value?.current ?? null;
+    if (prior && prior.prompt_id === promptId && prior.lean) {
+      const seen = prior.lean;
+      if (seen.outcome === 'proposed') return emitContext('UserPromptSubmit', renderLeanRecommendation(seen.marker, seen.omitted_groups), 'duplicate_request');
+      return skip('duplicate_request');
+    }
+    // An older request delivered again after a newer one registered: its identity is no longer `current`, but it is known.
+    if (existing.value?.lean_seen?.includes(promptId)) return skip('duplicate_request');
+    if (leanActive(prior).length > 0) return skip('lean_executor_active');
+
+    const binding = { request: prompt, promptId, sessionId, phase: 'prompt' } as const;
+    const read = readLeanSource(input.transcript_path, binding);
+    if (!read.ok) return skip(read.reason);
+    const source = read.source;
+    // A human turn after this request means it is no longer the latest one; deciding it now would spend on a stale turn.
+    if (source.newerHumanText) return skip('source_changed');
+    /**
+     * L1: every original string this request would export is screened -- the request itself as well as the required
+     * context. An unsafe one is native before HTTP; masking it and calling the meaning unchanged would be a lie.
+     */
+    if (looksSecret(prompt) || mandatoryGroups(source).some((g) => looksSecret(g.text))) return skip('mandatory_unsafe');
+    // Nothing selectable means zero requests. A fresh session with no history lands here, and so does a shallow one.
+    if (optionalGroups(source).length === 0) return skip('no_optional_groups');
+    // The mandatory layer has to fit the FINAL packet, wrapper and attribution included, before anything is sent.
+    if (Buffer.byteLength(composeLeanPacket(source, [], { omitted: optionalGroups(source).length, unasked: 0 }), 'utf8') > LEAN_PACKET_BUDGET_BYTES) return skip('mandatory_overflow');
+    const worktree = canonicalWorktree(input.cwd);
+    if (worktree === null) return skip('missing_ids');
+
+    const marker = `jev-lean-${randomUUID().replace(/-/g, '').slice(0, 16)}`;
+    const carriedRequest = Buffer.byteLength(prompt, 'utf8') <= REQUEST_MAX_BYTES ? prompt : null;
+    if (carriedRequest === null) return skip('mandatory_overflow');
+    /**
+     * Register this request's identity before the await. A pending record with an empty packet is not dispatchable,
+     * so a call that never comes back leaves nothing that could be applied to a worker -- and nothing that a
+     * redelivery of the same event could spend on again.
+     */
+    const identity: LeanPending = {
+      outcome: 'pending',
+      marker,
+      packet: '',
+      packet_sha256: '',
+      request_sha256: sha256(prompt),
+      epoch: source.epoch,
+      prefix_digest: source.prefixDigest,
+      cwd: input.cwd ?? null,
+      worktree,
+      omitted_groups: 0,
+      retained_groups: 0,
+      created_at: new Date().toISOString(),
+    };
+    /**
+     * L5: compare and register under one short lock. Two hook processes for the same request, or an old and a new
+     * request arriving together, cannot both pass the checks above and then both spend: only the one that registers
+     * here calls out, and the other reads what it registered.
+     */
+    const admission: { refused: ErrorCode | null; notTaken: LeanPending | null } = { refused: null, notTaken: null };
+    const admitted = updateJob(
+      deps.env,
+      sessionId,
+      (prev) => {
+        const current = prev?.current ?? null;
+        if (prev?.lean_seen_lost) {
+          admission.refused = 'lean_ledger_unknown';
+          return null;
+        }
+        if ((current && current.prompt_id === promptId && current.lean) || prev?.lean_seen?.includes(promptId)) {
+          admission.refused = 'duplicate_request';
+          return null;
+        }
+        // Registering past the bound would have to forget an identity, and a forgotten one can be charged again.
+        if ((prev?.lean_seen?.length ?? 0) >= LEAN_SEEN_MAX) {
+          admission.refused = 'lean_seen_full';
+          return null;
+        }
+        // A new prompt cannot certify an old worker canceled; until its terminal event is observed there is no second one.
+        if (leanActive(current).length > 0) {
+          admission.refused = 'lean_executor_active';
+          return null;
+        }
+        if (current && current.lean?.outcome === 'proposed') admission.notTaken = current.lean;
+        const gen = current ?? emptyGeneration(promptId, 'direct');
+        return {
+          version: 5,
+          session_id: sessionId,
+          updated_at: '',
+          current: { ...gen, prompt_id: promptId, request: carriedRequest, shape: 'direct', lean: identity },
+          history: prev?.history ?? [],
+          lean_seen: [promptId, ...(prev?.lean_seen ?? [])],
+        };
+      },
+      // Writing a fresh ledger over a file that could not be read would forget every identity in it.
+      { refuseUnreadable: true },
+    );
+    if (admission.refused !== null) return skip(admission.refused);
+    if (!admitted.ok) return skip(admitted.code === 'state_write_failed' || admitted.code === 'state_locked' ? 'state_write_failed' : 'lean_ledger_unknown');
+    /**
+     * JGL-01 step 3: a recommendation the root did not act on is a real outcome and stays in the denominator. It is
+     * recorded here, at the next admitted request, because that is where it becomes observable without forcing anything.
+     */
+    const notTaken = admission.notTaken;
+    if (notTaken) {
+      trace?.write('lean_dispatch', { ...base, applied: false, reason: 'recommendation_not_taken', marker: notTaken.marker, omitted_groups: notTaken.omitted_groups, retained_groups: notTaken.retained_groups });
+    }
+
+    /** Store the composed packet against this request, or fall back to native and leave nothing dispatchable. */
+    const publish = (packet: string, retained: number, omitted: number): HookResult => {
+      const recheck = readLeanSource(input.transcript_path, binding);
+      if (!recheck.ok || recheck.source.epoch !== source.epoch || recheck.source.prefixDigest !== source.prefixDigest || recheck.source.newerHumanText) return native('source_changed');
+      let stale = false;
+      const saved = leanWrite(sessionId, promptId, (gen) => {
+        if (gen.prompt_id !== promptId || gen.lean?.marker !== marker || gen.lean.outcome !== 'pending') {
+          stale = true;
+          return gen;
+        }
+        return { ...gen, lean: { ...identity, outcome: 'proposed', packet, packet_sha256: sha256(packet), omitted_groups: omitted, retained_groups: retained } };
+      });
+      if (stale || saved === null) return skip('generation_changed');
+      trace?.write('lean_dispatch', { ...base, applied: false, reason: 'packet_proposed', marker, retained_groups: retained, omitted_groups: omitted, packet_bytes: Buffer.byteLength(packet, 'utf8') });
+      return emitContext('UserPromptSubmit', renderLeanRecommendation(marker, omitted), null);
+    };
+
+    /** Native, and the attempt's cost stands: a paid call that selected nothing is overhead, not a zero. */
+    const native = (code: ErrorCode | null): HookResult => {
+      // Recorded rather than deleted, so a duplicate delivery of this same request reads the decision instead of
+      // paying for it again. An empty packet is not dispatchable.
+      leanWrite(sessionId, promptId, (gen) => (gen.prompt_id === promptId && gen.lean?.marker === marker ? { ...gen, lean: { ...identity, outcome: 'native' } } : gen));
+      return skip(code);
+    };
+
+    if (benchRecent) {
+      const recent = selectRecent(source);
+      trace?.write('lean_result', {
+        ...base,
+        attempted: false,
+        known_not_sent: true,
+        policy: 'recent_packet',
+        request_sha256: sha256(prompt),
+        source: leanSourceTrace(source, null),
+        groups: {
+          mandatory: mandatoryGroups(source).length,
+          mandatory_bytes: groupBytes(mandatoryGroups(source)),
+          optional_asked: optionalGroups(source).length,
+          optional_bytes: groupBytes(optionalGroups(source)),
+          request_bytes: Buffer.byteLength(prompt, 'utf8'),
+        },
+        decision: { action: recent ? 'handoff' : 'direct', retained: recent?.retainedGroupIds.length ?? null, omitted: recent?.omittedGroupIds.length ?? null },
+      });
+      if (recent === null) return native('mandatory_overflow');
+      const packet = composeLeanPacket(source, recent.retainedGroupIds, { omitted: recent.omittedGroupIds.length, unasked: 0 });
+      if (Buffer.byteLength(packet, 'utf8') > LEAN_PACKET_BUDGET_BYTES) return native('packet_overflow');
+      return publish(packet, recent.retainedGroupIds.length, recent.omittedGroupIds.length);
+    }
+
+    const packing = buildLeanRequest(source, config);
+    if (!packing.ok) return native(packing.reason);
+
+    const held: { decision: LeanDecision | null } = { decision: null };
+    const gate = await callGate(
+      packing.request,
+      'lean_intent',
+      'lean_result',
+      {
+        request_len: prompt.length,
+        request_sha256: sha256(prompt),
+        source: leanSourceTrace(source, packing.unasked),
+        groups: {
+          mandatory: mandatoryGroups(source).length,
+          mandatory_bytes: groupBytes(mandatoryGroups(source)),
+          optional_asked: packing.askedIds.length,
+          optional_bytes: groupBytes(optionalGroups(source)),
+          request_bytes: Buffer.byteLength(prompt, 'utf8'),
+        },
+      },
+      ['work_shape', 'handoff_scope', ...packing.askedIds.map((id) => `relation_${id}`)],
+      (outcome) => {
+        if (!outcome.ok) return { decision: { action: 'direct', reason: outcome.code, retained: null, omitted: null } };
+        const d = decideLean(outcome.response.answers, packing.askedIds);
+        held.decision = d;
+        return { decision: { action: d.action, reason: d.reason, retained: d.retainedGroupIds.length, omitted: d.omittedGroupIds.length } };
+      },
+      startedAt + NATIVE_HOOK_TIMEOUT_MS - LEAN_POST_CALL_RESERVE_MS,
+    );
+
+    if ('blocked' in gate) return native(gate.blocked);
+    if (!gate.outcome.ok) return native(gate.outcome.code);
+    const decided = held.decision;
+    if (decided === null || decided.action !== 'handoff') return native(decided?.reason ?? 'response_invalid');
+    // A returned model that is missing or not the pinned one cannot authorize a selection.
+    if (gate.outcome.response.model !== config.jevModel) return native('response_invalid');
+
+    const packet = composeLeanPacket(source, decided.retainedGroupIds, { omitted: decided.omittedGroupIds.length, unasked: packing.unasked });
+    // Byte-only diagnostic (#34): a packet no smaller than the all-groups rendering is no_effect, not a saving.
+    if (Buffer.byteLength(packet, 'utf8') >= Buffer.byteLength(composeFullPacket(source), 'utf8')) return native('no_effect');
+    if (Buffer.byteLength(packet, 'utf8') > LEAN_PACKET_BUDGET_BYTES) return native('packet_overflow');
+    // The source is re-read inside publish(): a compaction, a new human instruction or a rewritten prefix during the
+    // call means this packet describes a conversation that no longer exists.
+    return publish(packet, decided.retainedGroupIds.length, decided.omittedGroupIds.length);
+  };
+
+  /** JGL-01 step 4: only a matching owned call with a resolvable marker is touched. Everything else is left alone. */
+  const leanPre = (): HookResult => {
+    if (caller.agent_id || caller.agent_type) return skip('child_caller');
+    if (input.tool_name !== 'Agent') return skip('not_agent_tool');
+    const toolInput = input.tool_input;
+    if (!isRecord(toolInput) || toolInput['subagent_type'] !== LEAN_EXECUTOR_AGENT) return skip('role_not_owned');
+    const sessionId = input.session_id;
+    const toolUseId = input.tool_use_id;
+    if (!sessionId || !toolUseId) return skip('missing_ids');
+    const coordinatorPrompt = str(toolInput['prompt']) ?? '';
+    const deny = (reason: DenyReason, detail: string): HookResult => {
+      trace?.write('lean_dispatch', { ...base, applied: false, reason, detail, tool_input: summarizeToolInput(toolInput) });
+      return emitDeny(reason, `jev-gate lean: ${detail}`, null);
+    };
+
+    const marker = MARKER_RE.exec(coordinatorPrompt)?.[0] ?? null;
+    // An unresolved marker is not an executable task, and an executor called without one is somebody else's call.
+    if (marker === null) return deny('marker_unresolved', 'this call carries no lean packet marker, so there is no task to apply. Do the work in this conversation instead.');
+
+    const job = readJob(deps.env, sessionId);
+    const gen = job.ok ? (job.value?.current ?? null) : null;
+    const pending = gen?.lean ?? null;
+    if (!gen || !pending || pending.outcome !== 'proposed' || pending.marker !== marker || pending.packet.length === 0) {
+      return deny('marker_unresolved', 'that marker resolves to no current packet. Do the work in this conversation instead.');
+    }
+    /**
+     * L3: the packet is bound to the request, session and tree it was built for by identity, not by matching text. A
+     * call from a later turn, from another tree, or with no tree to compare is stale, whatever its text says.
+     */
+    if (gen.prompt_id === null || (input.prompt_id !== undefined && input.prompt_id !== gen.prompt_id)) return deny('marker_stale', 'the packet belongs to an earlier request.');
+    if (!pending.worktree || canonicalWorktree(input.cwd) !== pending.worktree) return deny('marker_stale', 'the packet was built in a different working tree.');
+    if (leanActive(gen).length > 0) return deny('executor_active', 'a lean executor from this session has not been observed to finish.');
+
+    // Unsupported ordinary calls are refused outright rather than half-patched: pins, background, resume, fork,
+    // team and isolation all change execution semantics this packet was not built for. None of them is overwritten,
+    // and a call-shape problem is reported as one -- it is not the same fact as a packet that went stale.
+    if (!coordinatorPrompt.isWellFormed()) return deny('dispatch_ineligible', 'this call’s prompt is not well-formed Unicode.');
+    if (Object.prototype.hasOwnProperty.call(toolInput, 'model')) return deny('dispatch_ineligible', 'the call pins a model; lean uses the executor profile’s inherited model.');
+    const bg = toolInput['run_in_background'];
+    if (bg !== false && !(bg === undefined && deps.env['CLAUDE_CODE_DISABLE_BACKGROUND_TASKS'] === '1')) return deny('dispatch_ineligible', 'the call is not in the foreground.');
+    if (EXECUTION_CONTROL_KEYS.some((k) => Object.prototype.hasOwnProperty.call(toolInput, k))) return deny('dispatch_ineligible', 'the call carries resume/fork/team/isolation controls.');
+    const override = subagentModelOverride(deps.env);
+    if (override.concrete || override.force) return deny('dispatch_ineligible', 'a subagent model override is in force.');
+    if (deps.env['CLAUDE_CODE_FORK_SUBAGENT'] === '1') return deny('dispatch_ineligible', 'subagent forking is on, so the worker would not start fresh.');
+
+    // The source is checked again here, inside the dispatch, not only after the call.
+    const request = gen.request;
+    if (request === null || sha256(request) !== pending.request_sha256) return deny('marker_stale', 'the request this packet was built for is no longer the current one.');
+    const recheck = readLeanSource(input.transcript_path, { request, promptId: gen.prompt_id, sessionId, phase: 'dispatch' });
+    if (!recheck.ok || recheck.source.epoch !== pending.epoch || recheck.source.prefixDigest !== pending.prefix_digest || recheck.source.newerHumanText) {
+      return deny('marker_stale', 'the conversation this packet was built from has changed.');
+    }
+
+    // The coordinator's own text stays first and unchanged, framed as a lower-authority note (L7), and the final
+    // serialized prompt is what is measured.
+    const composed = composeDispatchPrompt(coordinatorPrompt, pending.packet);
+    if (Buffer.byteLength(composed, 'utf8') > Math.min(LEAN_PACKET_MAX_BYTES, MAX_PROMPT_BYTES)) {
+      return deny('composed_too_large', 'the packet plus this call’s own notes exceeds the prompt bound; a partial task is not dispatched.');
+    }
+    // L5: the output is rendered before anything is reserved, so a reservation always has a patch to go with it.
+    const stdout = renderPreToolUseOutput({ kind: 'update', updatedInput: patchAgentInput(toolInput, { prompt: composed }) });
+    if (stdout === null) return deny('composed_too_large', 'the patched call does not fit the hook output bound; a partial task is not dispatched.');
+
+    const reservation: { raced: string | null } = { raced: null };
+    const reserved = leanWrite(sessionId, gen.prompt_id, (current) => {
+      const lean = current.lean;
+      if (!lean || lean.outcome !== 'proposed' || lean.marker !== marker || lean.packet_sha256 !== pending.packet_sha256) {
+        reservation.raced = 'the packet changed or was already used while this dispatch was being reserved.';
+        return current;
+      }
+      if (leanActive(current).length > 0) {
+        reservation.raced = 'a lean executor from this session has not been observed to finish.';
+        return current;
+      }
+      const next = reserve(current, toolUseId, { role: 'executor', taskId: null, contractHash: pending.packet_sha256, rev: null, tier: null, attempt: 1, deliverables: [] });
+      // Applied at most once. The packet is emptied, and the request's identity stays as the one bounded fact that a
+      // redelivery of the same request, or a second dispatch of this marker, reads instead of acting again (L5).
+      return { ...next, lean: { ...lean, outcome: 'dispatched', packet: '' } };
+    });
+    if (reservation.raced !== null) return deny('executor_active', reservation.raced);
+    // An owned marker that cannot be recorded is declined, never passed through with the marker as the whole task.
+    if (reserved === null) return deny('reservation_failed', 'this dispatch could not be recorded, so its packet is not applied. Do the work in this conversation instead.');
+
+    trace?.write('lean_dispatch', {
+      ...base,
+      applied: true,
+      marker,
+      packet_sha256: pending.packet_sha256,
+      retained_groups: pending.retained_groups,
+      omitted_groups: pending.omitted_groups,
+      composed_bytes: Buffer.byteLength(composed, 'utf8'),
+      tool_input: summarizeToolInput(toolInput),
+    });
+    return { kind: 'patch', code: null, stdout };
+  };
+
+  /**
+   * Only an observed terminal event releases the owner. A deleted reservation is not a stopped process.
+   *
+   * L5: what counts as terminal is what the host establishes. A foreground result with status `completed` means the
+   * child returned. A failure -- interrupted or not -- establishes only that the parent's call ended: the event does
+   * not say whether a child started, and a thrown call is not evidence that one stopped. `async_launched`, an unknown
+   * status and every failure therefore keep ownership: native work continues, lean stays off for the rest of the
+   * session, and nothing here declares the child dead on a timer.
+   */
+  const leanPost = (): HookResult => {
+    if (caller.agent_id) return skip('child_caller');
+    if (input.tool_name !== 'Agent') return skip('not_agent_tool');
+    const sessionId = input.session_id;
+    const toolUseId = input.tool_use_id;
+    if (!sessionId || !toolUseId) return skip('missing_ids');
+    const failed = input.hook_event_name === 'PostToolUseFailure';
+    const status = responseStatus(input.tool_response);
+    const terminal = !failed && status === 'completed';
+    let released = false;
+    // Read first: an Agent result that owns nothing here must not create a state file for an unrelated session.
+    const job = readJob(deps.env, sessionId);
+    const owner = job.ok ? own(job.value?.current.active ?? {}, toolUseId) : undefined;
+    if (owner?.role === 'executor' && terminal) {
+      leanWrite(sessionId, job.ok ? (job.value?.current.prompt_id ?? null) : null, (gen) => {
+        const reservation = own(gen.active, toolUseId);
+        if (!reservation || reservation.role !== 'executor') return gen;
+        released = true;
+        return release(gen, toolUseId);
+      });
+    }
+    trace?.write('lean_post', {
+      ...base,
+      released,
+      // An owned executor whose stop the host did not establish: ownership stays, and this says why.
+      release_unconfirmed: owner?.role === 'executor' && !terminal,
+      status,
+      observed_model: observedModel(input.tool_response),
+      tool_response: whitelistToolResponse(input.tool_response),
+      // L1: a closed reason, never the error text. Truncating a message is not redacting it.
+      failure: failed ? (input.is_interrupt === true ? 'interrupted' : input.is_interrupt === false ? 'error' : 'unknown') : null,
+      error_len: failed ? (input.error ?? '').length : null,
+      is_interrupt: input.is_interrupt ?? null,
+      duration_ms: input.duration_ms ?? null,
+    });
+    return skip();
+  };
+
+  if (rawMode === 'lean') {
+    if (input.hook_event_name === 'UserPromptSubmit') return leanPrompt();
+    if (input.hook_event_name === 'PreToolUse') return leanPre();
+    if (input.hook_event_name === 'PostToolUse' || input.hook_event_name === 'PostToolUseFailure') return leanPost();
+    return skip();
+  }
+
+  const mode: RoutingMode = rawMode;
 
   // ---------------------------------------------------------------- UserPromptSubmit (Gate A)
 
@@ -342,88 +930,260 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     const promptId = input.prompt_id ?? null;
     // A2: without a prompt identity there is no generation to guard, so the turn stays native.
     if (promptId === null) {
-      trace?.write('admission_result', { ...base, attempted: false, known_not_sent: true, decision: 'direct', reason: 'prompt_id_absent' });
+      trace?.write('admission_result', { ...base, attempted: false, known_not_sent: true, decision: { shape: 'direct', decided: false, reason: 'prompt_id_absent', changed_default: false } });
+      // #48 P2: a host that never sends a prompt id would make Gate A unreachable on every turn, which is exactly
+      // what liveness exists to catch, so this counts even though it is not the depth/admission branch below.
+      if (mode === 'auto') appendLiveness(deps.env, { at: new Date().toISOString(), attempted: false, reason: 'prompt_id_absent' });
       return emitContext('UserPromptSubmit', renderDirectGuidance(mode), 'prompt_id_absent');
     }
 
     let shape: ExecutionShape = 'direct';
     let reason: ErrorCode | null = null;
     let confidence: number | null = null;
-    // A16: the forced control arm starts an orchestrated job in either mode without asking Gate A; B and C still run.
-    const forced = deps.env['JEV_GATE_EXPERIMENT_ADMISSION'] === 'orchestrated';
-    if (forced) {
-      shape = 'orchestrated';
-      reason = mode === 'auto' ? 'admission_forced' : null;
+    /**
+     * #48: fixed at launch and read before anything that costs. Where no owned Agent call could reach a worker, an
+     * orchestrated job only locks the main session out -- its guard refuses the root's edits while every brief is
+     * declined -- so neither Gate A nor the forced arm may start one there.
+     */
+    const blocker = dispatchBlocker(deps.env);
+    const forcedRequested = deps.env['JEV_GATE_EXPERIMENT_ADMISSION'] === 'orchestrated';
+    // A16: the forced control arm starts an orchestrated job in either mode without asking Gate A; B still runs.
+    const forced = forcedRequested && blocker === null;
+
+    /**
+     * T2: this turn's identity is registered before any network call, and the shape is written back afterwards only
+     * while it is still the current turn. A slow admission that finishes after a newer prompt arrived therefore has
+     * nothing left to overwrite. Until it is written back the generation is direct, which guards nothing.
+     */
+    let superseded = false;
+    const registered = updateJob(deps.env, sessionId, (prev) => {
+      const change = newGeneration(prev, sessionId, promptId, 'direct');
+      superseded = change.superseded;
+      return forced ? { ...change.state, current: { ...change.state.current, forced: true as const } } : change.state;
+    });
+    // Without durable state there is no guard and no plan, so the turn falls back to native behavior.
+    if (!registered.ok) return emitContext('UserPromptSubmit', renderDirectGuidance(mode), registered.code);
+    const nowIso = (): string => new Date().toISOString();
+
+    /**
+     * The refusals that need no depth come before the transcript read, so a turn that can never be admitted pays no
+     * scan for it. Native without the forced arm is the control arm and keeps its depth record, so it is not refused.
+     */
+    if (blocker !== null && (mode === 'auto' || forcedRequested)) {
       trace?.write('admission_result', {
         ...base,
         attempted: false,
         known_not_sent: true,
-        forced: true,
-        decision: shape,
-        reason: mode === 'auto' ? 'admission_forced' : 'mode_native',
+        forced: false,
+        ...(forcedRequested ? { forced_requested: true } : {}),
+        blocker,
+        decision: { shape: 'direct', decided: false, reason: 'host_unsupported', changed_default: false },
       });
+      // Like the forced arm itself, a refused forced request is a bench configuration, not an admission outage.
+      if (!forcedRequested) appendLiveness(deps.env, { at: nowIso(), attempted: false, reason: 'host_unsupported' });
+      return emitContext('UserPromptSubmit', renderDirectGuidance(mode), 'host_unsupported');
+    }
+    if (mode === 'auto' && !forced && !apiKey) {
+      trace?.write('admission_result', { ...base, attempted: false, known_not_sent: true, decision: { shape: 'direct', decided: false, reason: 'key_missing', changed_default: false } });
+      appendLiveness(deps.env, { at: nowIso(), attempted: false, reason: 'key_missing' });
+      return emitContext('UserPromptSubmit', renderDirectGuidance(mode), 'key_missing');
+    }
+
+    /**
+     * Decision 1 of the depth gate: how deep the session already is is read from the host's transcript, never asked of
+     * Jev, and it is read before Gate A rather than after, so a shallow prompt costs no request at all. The same
+     * number is written to every admission_result record below, which is how a bench case proves it primed the
+     * session before the job prompt.
+     */
+    const depth: DepthReading = readSessionDepth(input.transcript_path);
+    const contextTokens = depth.ok ? depth.tokens : null;
+    const depthFacts = {
+      context_tokens: contextTokens,
+      context_depth_read: { bytes: depth.bytesRead, duration_ms: depth.durationMs },
+      ...(depth.ok && depth.modelSwitched ? { model_switched: true } : {}),
+    };
+
+    if (forced) {
+      // The forced arm is the bench control variable and is deliberately not floored: it is the only evidence that
+      // exists for what orchestration costs at a given depth, and flooring it would erase the shallow half.
+      shape = 'orchestrated';
+      reason = mode === 'auto' ? 'admission_forced' : null;
+      trace?.write('admission_result', {
+        ...base,
+        ...depthFacts,
+        attempted: false,
+        known_not_sent: true,
+        forced: true,
+        // A16: a forced generation is the bench control variable, not a Jev decision, so it never counts as influence.
+        decision: { shape, decided: false, reason: mode === 'auto' ? 'admission_forced' : 'mode_native', changed_default: false },
+      });
+      // #48 P2: forced never asks Gate A on purpose (A16), so it must not count toward liveness -- that would flag a
+      // running bench control arm as an outage.
     } else if (mode === 'native') {
       // A9: the control arm initializes the same state and guard as auto; only the Jev calls differ.
-      trace?.write('admission_result', { ...base, attempted: false, known_not_sent: true, forced: false, decision: shape, reason: 'mode_native' });
-    } else if (!apiKey) {
-      reason = 'key_missing';
-      trace?.write('admission_result', { ...base, attempted: false, known_not_sent: true, decision: 'direct', reason });
+      trace?.write('admission_result', { ...base, ...depthFacts, attempted: false, known_not_sent: true, forced: false, decision: { shape, decided: false, reason: 'mode_native', changed_default: false } });
+      // Native is a deliberate configuration choice, not an auto-mode admission decision, so it is excluded too.
     } else {
-      let admitted: AdmissionDecision | null = null;
-      const gate = await callGate(
-        buildAdmissionRequest(prompt, config),
-        'admission_intent',
-        'admission_result',
-        { prompt_len: prompt.length, prompt_sha256: sha256(prompt) },
-        ['execution'],
-        (outcome) => {
-          if (!outcome.ok) return { forced: false, decision: 'direct', decided: false, reason: outcome.code };
-          admitted = decideAdmission(outcome.response.answers, config.admissionConfidenceFloor);
-          return { forced: false, decision: admitted.shape, decided: admitted.decided, reason: admitted.reason };
-        },
-      );
-      if ('blocked' in gate) reason = gate.blocked;
-      else if (!gate.outcome.ok) reason = gate.outcome.code;
-      else if (admitted !== null) {
-        const decision: AdmissionDecision = admitted;
-        shape = decision.shape;
-        reason = decision.reason;
-        confidence = decision.answer?.confidence ?? null;
+      /**
+       * #48 P0-1: the host's own auto-compaction window is read only here -- the one path (not forced, not native, key
+       * present, dispatch possible) that actually applies the depth test at all, so every other branch pays nothing for it.
+       */
+      // The session's own model, from the same transcript line the depth came from: with no window configured, the
+      // host compacts at the model's context limit, so a 200K model and a 1M model get different floors.
+      const window = readHostCompactWindow(deps.env, input.cwd ?? null, { model: depth.ok ? depth.model : null, transcriptPath: input.transcript_path ?? null });
+      const { floor, source: floorSource } = effectiveDepthFloor(config, window.tokens);
+      const floorFacts = { depth_floor: floor, depth_floor_source: floorSource, host_window: window.tokens, host_window_source: window.source };
+      // The forced arm never reaches this branch at all (see above), so unlike before, no `!forced` guard is needed.
+      const belowFloor = floor > 0 && depth.ok && depth.tokens < floor;
+      const depthUnreadable = floor > 0 && !depth.ok;
+
+      if (depthUnreadable || belowFloor) {
+        // Not knowing the depth is treated as being below it: without the number, the cheaper shape is the native one.
+        reason = belowFloor ? 'depth_below_floor' : 'depth_unknown';
+        trace?.write('admission_result', {
+          ...base,
+          ...depthFacts,
+          attempted: false,
+          known_not_sent: true,
+          forced: false,
+          ...floorFacts,
+          decision: { shape: 'direct', decided: false, reason, changed_default: false },
+        });
+        appendLiveness(deps.env, { at: nowIso(), attempted: false, reason });
+      } else {
+        /**
+         * Decision 2: the atomic shape asks read-offs and composes them here as vetoes. It never consults
+         * `admissionConfidenceFloor`, as atomic Gate B never consults `routeConfidenceFloor`; the depth test it applies
+         * is the same one the branch above already passed, so on this path it can only agree.
+         */
+        const atomicAdmission = config.admissionQuestionShape === 'atomic';
+        const admissionKeys: string[] = atomicAdmission ? Object.keys(ADMISSION_FACT_QUESTIONS) : ['execution'];
+        // The explicit return type is what lets one call site carry both shapes: callGate cannot infer Q from a union.
+        const admissionRequest = (): JevRequest<AdmissionState, Record<string, unknown>> =>
+          atomicAdmission ? buildAtomicAdmissionRequest(prompt, config) : buildAdmissionRequest(prompt, config);
+        let admitted: AdmissionDecision | null = null;
+        const gate = await callGate(
+          admissionRequest(),
+          'admission_intent',
+          'admission_result',
+          { prompt_len: prompt.length, prompt_sha256: sha256(prompt), ...depthFacts, ...floorFacts },
+          admissionKeys,
+          (outcome) => {
+            if (!outcome.ok) return { forced: false, decision: { shape: 'direct', decided: false, reason: outcome.code, changed_default: false } };
+            admitted = atomicAdmission
+              ? decideAdmissionAtomic(outcome.response.answers, contextTokens, floor)
+              : decideAdmission(outcome.response.answers, config.admissionConfidenceFloor);
+            // A17 item 7: without Jev this turn would have been one native conversation.
+            return {
+              forced: false,
+              decision: { shape: admitted.shape, decided: admitted.decided, reason: admitted.reason, changed_default: admitted.decided && admitted.shape === 'orchestrated' },
+              // A21: recorded beside the decision, never inside it. `applied: false` is the whole point of the field:
+              // the configured `admittedShape` still decides, and this says what the request asked for so that a later
+              // run can ask whether following it would have been better.
+              ...(atomicAdmission ? { recommendation: shapeRecommendation(outcome.response.answers) } : {}),
+            };
+          },
+        );
+        // #48 P2: `'outcome' in gate` is the one place that tells whether a Gate A request was actually attempted --
+        // `'blocked' in gate` means callGate itself declined to send it (bad request, byte cap, etc).
+        const attempted = 'outcome' in gate;
+        if ('blocked' in gate) reason = gate.blocked;
+        else if (!gate.outcome.ok) reason = gate.outcome.code;
+        else if (admitted !== null) {
+          const decision: AdmissionDecision = admitted;
+          shape = decision.shape;
+          reason = decision.reason;
+          confidence = decision.answer?.confidence ?? null;
+        }
+        appendLiveness(deps.env, { at: nowIso(), attempted, reason });
       }
     }
 
-    let superseded = false;
-    const written = updateJob(deps.env, sessionId, (prev) => {
-      const change = newGeneration(prev, sessionId, promptId, shape);
-      superseded = change.superseded;
-      return forced ? { ...change.state, current: { ...change.state.current, forced: true as const } } : change.state;
+    if (shape === 'direct') return emitContext('UserPromptSubmit', renderDirectGuidance(mode), reason);
+    // A17: an orchestrated turn keeps its request, because every worker contract downstream is a paraphrase of it and
+    // the worker is told the user's own words come first. Stored whole or not at all -- never truncated into a
+    // half-specification that reads as complete.
+    const carriedRequest = Buffer.byteLength(prompt, 'utf8') <= REQUEST_MAX_BYTES ? prompt : null;
+    let stale = false;
+    const applied = updateJob(deps.env, sessionId, (prev) => {
+      if (!prev || prev.current.prompt_id !== promptId) {
+        stale = true;
+        return null;
+      }
+      // A19: the execution shape is fixed at admission from the config this turn loaded, so a config edit mid-job
+      // cannot change what a running generation is.
+      const next = { ...prev.current, shape, request: carriedRequest };
+      return { ...prev, current: config.admittedShape === 'single' ? { ...next, execution: 'single' as const } : next };
     });
-    if (!written.ok) {
-      // Without durable state there is no guard and no plan, so the turn falls back to native behavior.
-      return emitContext('UserPromptSubmit', renderDirectGuidance(mode), written.code);
-    }
-    const text = shape === 'orchestrated' ? renderOrchestrationGuidance({ mode, confidence, superseded }) : renderDirectGuidance(mode);
-    return emitContext('UserPromptSubmit', text, reason);
+    // A newer prompt owns the session now; this turn does not get to turn orchestration on behind it.
+    if (stale) return emitContext('UserPromptSubmit', renderDirectGuidance(mode), 'generation_changed');
+    if (!applied.ok) return emitContext('UserPromptSubmit', renderDirectGuidance(mode), applied.code);
+    if (config.admittedShape === 'single') return emitContext('UserPromptSubmit', renderSingleGuidance({ mode, confidence, superseded, guardAllowTools: config.guardAllowTools }), reason);
+    return emitContext(
+      'UserPromptSubmit',
+      renderOrchestrationGuidance({ mode, confidence, superseded, maxParallelWorkers: config.maxParallelWorkers, workerIsolation: config.workerIsolation, guardAllowTools: config.guardAllowTools }),
+      reason,
+    );
   };
 
   // ---------------------------------------------------------------- PreToolUse
 
+  /**
+   * T2: after an await, the turn, the plan revision and this call's own reservation are re-checked inside the lock.
+   * A read taken before the network call proves nothing about the state that exists when the answer arrives, and a
+   * lock this process could not take is not a confirmation either, so both fail closed.
+   */
+  const confirmOwnership = (sessionId: string, gen: JobGeneration, rev: number | null, toolUseId: string): boolean => {
+    let mine = false;
+    updateJob(deps.env, sessionId, (prev) => {
+      mine =
+        prev !== null &&
+        prev.current.prompt_id === gen.prompt_id &&
+        (prev.current.plan?.rev ?? null) === rev &&
+        own(prev.current.active, toolUseId) !== undefined;
+      return null;
+    });
+    return mine;
+  };
+
   const plannerPatch = async (gen: JobGeneration, sessionId: string, eligibility: Extract<Eligibility, { eligible: true }>): Promise<HookResult> => {
     const composed = eligibility.prompt;
+    // A18: the planner call gets the request the plan is written from, and on a replan the revision it is revising.
+    // Observed 2026-09-19 (`v5-job2-orbit` r1): the coordinator's replan brief was 771 characters of fix instruction,
+    // and the fresh planner read the repository's existing tests as the specification. The drop order is A17's: the
+    // plan in force goes first, the request last, and each leaves a visible marker rather than reading as absent.
+    let carriedRequest: string | 'omitted' | null = gen.request ?? (gen.shape === 'orchestrated' ? 'omitted' : null);
+    let carriedPlan: PlanInForceSummary | 'omitted' | null = gen.plan === null || gen.plan === undefined ? null : planInForceSummary(gen.plan);
+    let plannerPrompt = composePlannerPrompt(composed, carriedRequest, carriedPlan);
+    if (Buffer.byteLength(plannerPrompt, 'utf8') > MAX_COMPOSED_BYTES && carriedPlan !== null) {
+      carriedPlan = 'omitted';
+      plannerPrompt = composePlannerPrompt(composed, carriedRequest, carriedPlan);
+    }
+    if (Buffer.byteLength(plannerPrompt, 'utf8') > MAX_COMPOSED_BYTES && carriedRequest !== null && carriedRequest !== 'omitted') {
+      carriedRequest = 'omitted';
+      plannerPrompt = composePlannerPrompt(composed, carriedRequest, carriedPlan);
+    }
     let tier = config.plannerDefaultTier;
     let code: ErrorCode | null = null;
     if (apiKey) {
       let routed: PlannerRouteDecision | null = null;
+      // A18: the state field this fills is named `request`, and it was being given the coordinator's brief. What
+      // decides a planning tier is how hard the job is, and the job is the request the plan is written from -- the
+      // same correction the single path needed. Observed 2026-09-19 (`v5-job2-orbit` r1): the replan brief was 771
+      // characters of fix instruction, so the tier for replanning a whole job was chosen from a patch note.
+      const routedRequest = carriedRequest !== null && carriedRequest !== 'omitted' ? carriedRequest : composed;
       const gate = await callGate(
-        buildPlannerRouteRequest(composed, config),
+        buildPlannerRouteRequest(routedRequest, config),
         'pre_intent',
         'pre_result',
         { role: 'planner', tool_input: summarizeToolInput(eligibility.input), default_tier: config.plannerDefaultTier },
         ['planning_tier'],
         (outcome) => {
-          if (!outcome.ok) return { decision: { action: 'patch', tier: config.plannerDefaultTier, reason: outcome.code } };
+          // The model is recorded, not left to be reconstructed from the tier: a reader of a stored trace has no way
+          // to know which `models` map was in force when it was written, and the hook knows exactly what it asked for.
+          if (!outcome.ok) return { decision: { action: 'patch', tier: config.plannerDefaultTier, reason: outcome.code, changed_default: false, model: config.models[config.plannerDefaultTier] } };
           routed = decidePlannerRoute(outcome.response.answers, config.routeConfidenceFloor, config.plannerDefaultTier);
-          return { decision: { action: routed.action, tier: routed.tier, reason: routed.reason } };
+          return { decision: { action: routed.action, tier: routed.tier, reason: routed.reason, changed_default: routed.tier !== config.plannerDefaultTier, model: config.models[routed.tier] } };
         },
       );
       if ('blocked' in gate) code = gate.blocked;
@@ -436,11 +1196,29 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     } else {
       code = 'key_missing';
     }
-    // A2: a prompt that arrived during the call replaces this generation; the patch is dropped rather than applied late.
-    const after = readJob(deps.env, sessionId);
-    if (!after.ok || after.value === null || after.value.current.prompt_id !== gen.prompt_id) return preserve('generation_changed');
+    // T2: a prompt that arrived during the call replaces this generation. The call is refused outright rather than
+    // passed through unpatched: it belongs to a plan that is no longer in force.
+    if (!confirmOwnership(sessionId, gen, gen.plan?.rev ?? null, eligibility.toolUseId)) {
+      return emitDeny('stale_generation', renderDispatchDeny('stale_generation'), null);
+    }
     updateJob(deps.env, sessionId, (prev) => (prev && prev.current.prompt_id === gen.prompt_id ? { ...prev, current: { ...prev.current, planner_tier: tier } } : null));
-    return emitPatch(eligibility.input, { subagent_type: agentForTier('planner', tier), model: config.models[tier] }, code);
+    return emitPatch(eligibility.input, { subagent_type: agentForTier('planner', tier), model: config.models[tier], prompt: plannerPrompt }, code);
+  };
+
+  /** A4/T4: every reason a planner call may not start now. Run on the pre-lock read and again under the reservation lock. */
+  const plannerConflict = (g: JobGeneration): { reason: DenyReason; text: string } | null => {
+    // T4: one planner per generation. A second one would race the first over the same plan revision.
+    if (activePlanners(g).length > 0) return { reason: 'planner_active', text: renderDispatchDeny('planner_active') };
+    // A3: draining first keeps a replan from racing the workers whose receipts it would invalidate.
+    if (activeWorkers(g).length > 0) return { reason: 'workers_active', text: renderDispatchDeny('workers_active') };
+    const kind: BoundKind = g.plan ? 'replan' : 'planner';
+    if (!boundExhausted(g, kind, null)) return null;
+    // A7: an exhausted replan bound leaves an accepted revision in force, so the text says what can still be dispatched.
+    // Only an exhausted planner bound leaves nothing to dispatch, and there reporting the blocker is all that is left.
+    const text = g.plan
+      ? renderReplanBoundExhausted(g.plan.rev, readyForDispatch(g), config.maxParallelWorkers)
+      : renderDispatchDeny('bounds_exhausted', kind);
+    return { reason: 'bounds_exhausted', text };
   };
 
   const handlePlanner = async (gen: JobGeneration, sessionId: string, eligibility: Extract<Eligibility, { eligible: true }>): Promise<HookResult> => {
@@ -451,41 +1229,71 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         return emitDeny('planner_pin_conflict', renderDispatchDeny('planner_pin_conflict'), null);
       }
     }
-    // A3: draining first keeps a replan from racing the workers whose receipts it would invalidate.
-    if (activeWorkers(gen).length > 0) return emitDeny('workers_active', renderDispatchDeny('workers_active'), null);
-    const boundKind = gen.plan ? 'replan' : 'planner';
-    if (boundExhausted(gen, boundKind, null)) return emitDeny('bounds_exhausted', renderDispatchDeny('bounds_exhausted', boundKind), null);
+    const conflict = plannerConflict(gen);
+    if (conflict) return emitDeny(conflict.reason, conflict.text, null);
+    // Narrowing sees only the initial null, so the reason and its text are held apart rather than read off one object.
+    let raced: DenyReason | null = null;
+    let racedText = '';
     const reserved = updateJob(deps.env, sessionId, (prev) => {
       // A planner dispatch is also the recovery path from missing or unreadable state, and the point where a
       // coordinator-initiated job becomes orchestrated. A2: a generation without a prompt identity is never guarded.
       const current = prev?.current ?? recoveredGeneration();
+      // T4: the counts, the phase, the active workers and any other planner are re-checked here, not only pre-lock.
+      const again = plannerConflict(current);
+      if (again) {
+        raced = again.reason;
+        racedText = again.text;
+        return null;
+      }
+      const boundKind: BoundKind = current.plan ? 'replan' : 'planner';
       const counted = countAttempt(current, boundKind, null);
       const shape: ExecutionShape = current.prompt_id === null ? 'direct' : 'orchestrated';
-      const next = reserve({ ...counted, phase: 'planning', shape }, eligibility.toolUseId, {
+      // #53 review: the tier belongs to this attempt. plannerPatch sets it again on every patched path, so a pinned or
+      // native retry after a patched attempt must not report the earlier tier's model as its own.
+      const next = reserve({ ...counted, phase: 'planning', shape, planner_tier: null }, eligibility.toolUseId, {
         role: 'planner',
         taskId: null,
+        contractHash: null,
         rev: null,
         tier: null,
         attempt: 1,
         deliverables: [],
       });
-      return { version: 5, session_id: sessionId, updated_at: '', current: next, history: prev?.history ?? [] };
+      return { version: 5, session_id: sessionId, updated_at: '', current: next, history: prev?.history ?? [], ...leanSeenOf(prev) };
     });
     if (!reserved.ok) return preserve(reserved.code);
+    if (raced !== null) return emitDeny(raced, racedText, null);
     // A5: a pin bypasses tier selection, so the call is left exactly as the coordinator made it.
     if (eligibility.pinned) return preserve('pinned');
     if (mode === 'native') return preserve('mode_native');
     return plannerPatch(reserved.value?.current ?? gen, sessionId, eligibility);
   };
 
-  /** A4: every reason a ready task may still not be dispatched now. Run on the pre-lock read and again under the lock. */
-  const dispatchConflict = (g: JobGeneration, task: PlannedTask, rework: boolean): { reason: DenyReason; detail: string } | null => {
-    const running = Object.values(g.active).filter((r) => r.task_id === task.id);
-    if (!rework && running.length > 0) return { reason: 'task_active', detail: task.id };
-    if (!rework && acceptedReceipt(g.receipts, task)) return { reason: 'task_accepted', detail: task.id };
+  /** A4/T1/T2/T5: every reason a ready task may still not be dispatched now. Run pre-lock and again under the lock. */
+  const dispatchConflict = (g: JobGeneration, plan: Plan, task: PlannedTask, attempt: number | null): { reason: DenyReason; detail: string } | null => {
+    const running = activeTaskIds(g);
+    // T1: a dependency that is accepted but running again has no settled result, so a past accept does not cover it.
+    const missingDeps = task.depends_on.filter((dep) => {
+      const depTask = plan.tasks.find((t) => t.id === dep);
+      return !depTask || running.has(dep) || acceptedReceipt(g.receipts, depTask) === null;
+    });
+    if (missingDeps.length) return { reason: 'deps_incomplete', detail: missingDeps.join(', ') };
+    // T2: an active writer whose termination was never observed is refused a replacement, rework or not. Deleting a
+    // reservation is bookkeeping, not a stopped process, and this hook cannot stop one.
+    if (running.has(task.id)) return { reason: 'task_active', detail: task.id };
+    if (attempt === null && acceptedReceipt(g.receipts, task)) return { reason: 'task_accepted', detail: task.id };
+    // T1: attempt=<n> is text the coordinator wrote. The counted attempts decide which attempt this really is.
+    const next = (own(g.attempts.tasks, task.id) ?? 0) + 1;
+    if (attempt !== null && attempt !== next) return { reason: 'attempt_mismatch', detail: `marker attempt=${attempt}, next attempt=${next}` };
     if (boundExhausted(g, 'task', task.id)) return { reason: 'bounds_exhausted', detail: task.id };
-    const otherDeliverables = new Set(activeDeliverables(g, task.id));
-    const overlap = task.deliverables.filter((d) => otherDeliverables.has(d));
+    // T1: reworking a predecessor under a running dependent moves the contract that dependent is already working to.
+    if (attempt !== null) {
+      const busy = [...dependentsOf(plan, task.id)].filter((id) => running.has(id));
+      if (busy.length) return { reason: 'dependent_active', detail: busy.join(', ') };
+    }
+    // T5: paths are compared normalized, so src/t1.ts and src/./t1.ts are one file and an unresolvable path is shared.
+    const claimed = new Set(activeDeliverables(g, task.id).map(normalizeDeliverable));
+    const overlap = deliverableOverlap(task.deliverables, claimed);
     if (overlap.length) return { reason: 'deliverable_overlap', detail: overlap.join(', ') };
     const otherActive = activeWorkers(g).filter((r) => r.task_id !== task.id).length;
     if (otherActive >= config.maxParallelWorkers) return { reason: 'parallel_cap', detail: `${otherActive}/${config.maxParallelWorkers}` };
@@ -500,41 +1308,55 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     const task = plan.tasks.find((t) => t.id === marker.id);
     if (!task) return emitDeny('unknown_task', renderDispatchDeny('unknown_task', marker.id), null);
     if (marker.rev !== plan.rev) return emitDeny('stale_rev', renderDispatchDeny('stale_rev', `marker rev=${marker.rev}, current rev=${plan.rev}`), null);
-    const missingDeps = task.depends_on.filter((dep) => {
-      const depTask = plan.tasks.find((t) => t.id === dep);
-      return !depTask || acceptedReceipt(gen.receipts, depTask) === null;
-    });
-    if (missingDeps.length) return emitDeny('deps_incomplete', renderDispatchDeny('deps_incomplete', missingDeps.join(', ')), null);
-    const rework = marker.attempt !== null;
-    const conflict = dispatchConflict(gen, task, rework);
+    const conflict = dispatchConflict(gen, plan, task, marker.attempt);
     if (conflict) return emitDeny(conflict.reason, renderDispatchDeny(conflict.reason, conflict.detail), null);
+
     const predecessors = predecessorSummaries(task, gen);
-    const composed = composeTaskPrompt(eligibility.prompt, task, plan.constraints, predecessors);
+    // A17/T9: a rework carries this task's own failed attempt, under the contract now in force, so the upgrade gate
+    // and the worker both see the observed failure instead of the same text twice.
+    const priorAttempt = marker.attempt !== null ? priorAttemptSummary(gen.receipts, task) : null;
     // The route note is part of what the worker receives, so it counts against the same bound.
-    const composedBytes = Buffer.byteLength(composed, 'utf8') + ROUTE_NOTE_MAX_BYTES;
-    if (composedBytes > MAX_COMPOSED_BYTES) {
-      return emitDeny('composed_too_large', renderDispatchDeny('composed_too_large', `${composedBytes} bytes`), null);
+    const totalBytes = (text: string): number => Buffer.byteLength(text, 'utf8') + ROUTE_NOTE_MAX_BYTES;
+    let carried: PriorAttemptSummary | 'omitted' | null = priorAttempt;
+    // A17: the request outranks the contract, so it is the last thing dropped -- this task's own failed attempt goes
+    // first. Both leave a visible marker; neither is passed off as absent.
+    // An orchestrated generation was started by a request, so a missing one was not carried rather than absent: it is
+    // marked, not left to read as though the contract were the whole of what was asked. State written before A17 lands
+    // here too, and says the same true thing.
+    let carriedRequest: string | 'omitted' | null = gen.request ?? (gen.shape === 'orchestrated' ? 'omitted' : null);
+    let composed = composeTaskPrompt(eligibility.prompt, task, plan.constraints, predecessors, carried, carriedRequest);
+    if (totalBytes(composed) > MAX_COMPOSED_BYTES && priorAttempt !== null) {
+      // T9: evidence that does not fit is dropped with a visible marker, never passed off as a complete input.
+      carried = 'omitted';
+      composed = composeTaskPrompt(eligibility.prompt, task, plan.constraints, predecessors, carried, carriedRequest);
+    }
+    if (totalBytes(composed) > MAX_COMPOSED_BYTES && carriedRequest !== null && carriedRequest !== 'omitted') {
+      carriedRequest = 'omitted';
+      composed = composeTaskPrompt(eligibility.prompt, task, plan.constraints, predecessors, carried, carriedRequest);
+    }
+    if (totalBytes(composed) > MAX_COMPOSED_BYTES) {
+      return emitDeny('composed_too_large', renderDispatchDeny('composed_too_large', `${totalBytes(composed)} bytes`), null);
     }
 
     // A4: the reservation is taken before any HTTP call, and the conflict checks are re-run under the lock,
     // so two dispatches in one assistant message cannot both pass on the same pre-lock snapshot.
     const attempt = marker.attempt ?? 1;
-    let raced: DenyReason | 'generation_changed' | null = null;
+    let raced: DenyReason | null = null;
     const reserved = updateJob(deps.env, sessionId, (prev) => {
       if (!prev || prev.current.prompt_id !== gen.prompt_id || prev.current.plan?.rev !== plan.rev) {
-        raced = 'generation_changed';
+        raced = 'stale_generation';
         return null;
       }
-      const again = dispatchConflict(prev.current, task, rework);
+      const again = dispatchConflict(prev.current, plan, task, marker.attempt);
       if (again) {
         raced = again.reason;
         return null;
       }
-      const superseded = rework ? supersedeTask(prev.current, task.id) : { generation: prev.current, superseded: [] as string[] };
-      const counted = countAttempt(superseded.generation, 'task', task.id);
+      const counted = countAttempt(prev.current, 'task', task.id);
       const next = reserve(counted, eligibility.toolUseId, {
         role: 'worker',
         taskId: task.id,
+        contractHash: task.contract_hash,
         rev: plan.rev,
         tier: eligibility.tier,
         attempt,
@@ -543,48 +1365,201 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       return { ...prev, current: next };
     });
     if (!reserved.ok) return preserve(reserved.code);
-    if (raced === 'generation_changed') return preserve('generation_changed');
     if (raced !== null) return emitDeny(raced, renderDispatchDeny(raced), null);
 
     const note = (tier: Tier): string => renderRouteNote(tier);
+    /**
+     * #48 P1-2: every patched WORKER dispatch below carries `isolation: "worktree"` under that setting -- a planner
+     * dispatch (handlePlanner's own `emitPatch` call) never goes through this wrapper, so it never gets the field.
+     * A `preserve()` return (line above, on a failed reservation) cannot carry it either: that path emits no patch at
+     * all, so the call proceeds completely unmodified.
+     */
+    const emitWorkerPatch = (patch: Parameters<typeof patchAgentInput>[1], code: ErrorCode | null): HookResult =>
+      emitPatch(eligibility.input, config.workerIsolation === 'worktree' ? isolatedWorkerPatch(eligibility.input, patch) : patch, code);
     // A5: native, pinned, abstained and failed paths still receive the canonical contract; only the model is left alone.
     if (mode === 'native' || eligibility.pinned || !apiKey) {
-      return emitPatch(eligibility.input, { prompt: composed + note(eligibility.tier) }, mode === 'native' ? 'mode_native' : eligibility.pinned ? 'pinned' : 'key_missing');
+      return emitWorkerPatch({ prompt: composed + note(eligibility.tier) }, mode === 'native' ? 'mode_native' : eligibility.pinned ? 'pinned' : 'key_missing');
     }
     let routed: WorkerRouteDecision | null = null;
     const gate = await callGate(
-      buildWorkerRouteRequest(task, plan.constraints, predecessors, eligibility.prompt, eligibility.tier, config),
+      // A20: the worker will read the brief, the request, the contract and any prior attempt. Every one of those is a
+      // field of this state except the request, which was the one that says what the work is for.
+      routeRequest(task, plan.constraints, predecessors, eligibility.prompt, eligibility.tier, priorAttempt, carriedRequest),
       'pre_intent',
       'pre_result',
-      { role: 'worker', task_id: task.id, rev: plan.rev, called_tier: eligibility.tier, tool_input: summarizeToolInput(eligibility.input) },
-      ['route', 'upgrade_basis'],
+      {
+        role: 'worker',
+        task_id: task.id,
+        rev: plan.rev,
+        called_tier: eligibility.tier,
+        attempt,
+        has_prior_attempt: priorAttempt !== null,
+        prior_attempt_omitted: carried === 'omitted',
+        tool_input: summarizeToolInput(eligibility.input),
+      },
+      routeAnswerKeys(priorAttempt !== null),
       (outcome) => {
-        if (!outcome.ok) return { decision: { action: 'preserve', tier: eligibility.tier, reason: outcome.code } };
-        routed = decideWorkerRoute(outcome.response.answers, config.routeConfidenceFloor, eligibility.tier);
-        return { decision: { action: routed.action, tier: routed.tier, reason: routed.reason } };
+        // A preserve keeps the model the coordinator called, which the hook never names, so the recorded model is
+        // null there rather than the tier's model -- the two are not the same claim.
+        if (!outcome.ok) return { decision: { action: 'preserve', tier: eligibility.tier, reason: outcome.code, changed_default: false, model: null } };
+        routed = routeDecision(outcome.response.answers, eligibility.tier);
+        // A17 item 7: without Jev this dispatch would have run on the profile the coordinator called.
+        return {
+          decision: { action: routed.action, tier: routed.tier, reason: routed.reason, changed_default: routed.action === 'patch' && routed.tier !== eligibility.tier, model: routed.action === 'patch' ? config.models[routed.tier] : null },
+          // A22: recorded on a rework only, and read by no policy. The tier this dispatch got was decided by the
+          // facts above; this says what the previous attempt reported was wrong with it.
+          ...(atomicRoute && priorAttempt !== null ? { prior_failure: priorFailureClassification(outcome.response.answers) } : {}),
+        };
       },
     );
-    const after = readJob(deps.env, sessionId);
-    if (!after.ok || after.value === null || after.value.current.prompt_id !== gen.prompt_id || after.value.current.plan?.rev !== plan.rev) {
-      return preserve('generation_changed');
+    // T2: the router failing is a valid call that keeps its profile; the turn moving on is a call that must not run.
+    if (!confirmOwnership(sessionId, gen, plan.rev, eligibility.toolUseId)) {
+      return emitDeny('stale_generation', renderDispatchDeny('stale_generation'), null);
     }
-    if ('blocked' in gate) return emitPatch(eligibility.input, { prompt: composed + note(eligibility.tier) }, gate.blocked);
-    if (!gate.outcome.ok) return emitPatch(eligibility.input, { prompt: composed + note(eligibility.tier) }, gate.outcome.code);
-    if (routed === null) return emitPatch(eligibility.input, { prompt: composed + note(eligibility.tier) }, 'route_invalid');
+    if ('blocked' in gate) return emitWorkerPatch({ prompt: composed + note(eligibility.tier) }, gate.blocked);
+    if (!gate.outcome.ok) return emitWorkerPatch({ prompt: composed + note(eligibility.tier) }, gate.outcome.code);
+    if (routed === null) return emitWorkerPatch({ prompt: composed + note(eligibility.tier) }, 'route_invalid');
     const decision: WorkerRouteDecision = routed;
-    if (decision.action === 'preserve') return emitPatch(eligibility.input, { prompt: composed + note(decision.tier) }, decision.reason);
-    return emitPatch(
-      eligibility.input,
+    if (decision.action === 'preserve') return emitWorkerPatch({ prompt: composed + note(decision.tier) }, decision.reason);
+    return emitWorkerPatch(
       { subagent_type: agentForTier('worker', decision.tier), model: config.models[decision.tier], prompt: composed + note(decision.tier) },
       null,
     );
   };
 
+  /**
+   * Gate B in whichever shape the config selects. `composite` is the shipped five-way choice; `atomic` fans the same
+   * judgement into read-off questions and composes them in code. The answer keys the trace records differ with the
+   * shape, so an observation says which questions were actually asked.
+   */
+  const atomicRoute = config.routeQuestionShape === 'atomic';
+  /** A22: the prior-failure facts exist only on a rework, so the whitelist that records answers has to follow. */
+  const routeAnswerKeys = (hasPrior: boolean): string[] =>
+    atomicRoute ? [...Object.keys(WORKER_FACT_QUESTIONS), ...(hasPrior ? Object.keys(PRIOR_FAILURE_FACT_QUESTIONS) : [])] : ['route', 'upgrade_basis'];
+  const routeRequest = (
+    task: PlannedTask,
+    constraints: string[],
+    predecessors: Parameters<typeof buildWorkerRouteRequest>[2],
+    prompt: string,
+    tier: Tier,
+    prior: Parameters<typeof buildWorkerRouteRequest>[6] = null,
+    request: string | 'omitted' | null = null,
+    // Widened on purpose: the two shapes carry different question sets, and callGate is indifferent to which.
+  ): JevRequest<WorkerRouteState, Record<string, unknown>> => {
+    const build = (req: string | 'omitted' | null): JevRequest<WorkerRouteState, Record<string, unknown>> =>
+      atomicRoute
+        ? buildAtomicWorkerRouteRequest(task, constraints, predecessors, prompt, tier, config, prior, req)
+        : buildWorkerRouteRequest(task, constraints, predecessors, prompt, tier, config, prior, req);
+    const built = build(request);
+    /**
+     * A20/T9: carrying the request can push a dispatch over the gate's own bound, where `callGate` would refuse the
+     * call outright and the dispatch would keep the coordinator's tier. Dropping the request with its marker leaves a
+     * gate that still routes on the contract, which is what it had before this field existed, and says that it is
+     * reading a packet the worker is not. The size that decides this is the gate's, not the worker's: the worker's
+     * copy has already been composed under its own bound.
+     */
+    if (typeof request !== 'string' || Buffer.byteLength(JSON.stringify(built), 'utf8') <= MAX_REQUEST_BYTES) return built;
+    return build('omitted');
+  };
+  const routeDecision = (answers: Record<string, unknown>, tier: Tier): WorkerRouteDecision =>
+    atomicRoute ? decideWorkerRouteAtomic(answers, tier) : decideWorkerRoute(answers, config.routeConfidenceFloor, tier);
+
   /** A direct-shape owned worker call is an ad-hoc task: routed V4-style in auto, untouched in native. */
-  const handleAdhocWorker = async (eligibility: Extract<Eligibility, { eligible: true }>): Promise<HookResult> => {
-    if (mode === 'native') return preserve('mode_native');
-    if (eligibility.pinned) return preserve('pinned');
-    if (!apiKey) return preserve('key_missing');
+  const handleAdhocWorker = async (
+    eligibility: Extract<Eligibility, { eligible: true }>,
+    // A19: set only on the single-executor path, where the request is the task rather than the source of a contract.
+    carriedRequest: string | 'omitted' | null = null,
+    // A19: present on that same path, so the one dispatch this shape makes is reserved and leaves a receipt behind it.
+    single: { sessionId: string; gen: JobGeneration } | null = null,
+  ): Promise<HookResult> => {
+    /**
+     * A19/T9: the worker packet is prepared before anything on this path can return, so a routing outcome decides the
+     * model and nothing else. `carriedRequest` is set exactly on the single-executor path, where the request is the
+     * task rather than the source of a contract, and the coordinator is told the hook appends it verbatim. Composing
+     * after the routing checks meant every preserve reason -- native mode, a pin, a missing key, a blocked or failed
+     * gate, an unreadable answer -- dispatched a worker with the brief alone and no statement of the work.
+     */
+    let carried: string | 'omitted' | null = carriedRequest;
+    let composed = composeSingleWorkerPrompt(eligibility.prompt, carried);
+    if (Buffer.byteLength(composed, 'utf8') + ROUTE_NOTE_MAX_BYTES > MAX_COMPOSED_BYTES && carried !== null && carried !== 'omitted') {
+      // T9: a request that does not fit is dropped with a visible marker, never truncated into a half-specification.
+      carried = 'omitted';
+      composed = composeSingleWorkerPrompt(eligibility.prompt, carried);
+    }
+    // The note cannot point at a contract on a shape that has none, and the ad-hoc shape keeps the contract wording.
+    const note = (tier: Tier): string => (carriedRequest === null ? renderRouteNote(tier) : renderSingleRouteNote(tier));
+    /**
+     * #53 review: an ad-hoc or single-executor dispatch is never isolated. Isolation is the write boundary between
+     * parallel planned workers, and this path runs one worker with no plan; its coordinator is never told to merge a
+     * branch back, so an isolated worker's accepted edits would stay on a branch rather than in this checkout. Keeping
+     * the isolation and adding a merge note to the single guidance was the other fix; one worker has no sibling to
+     * collide with, so this path drops the isolation instead of adding a merge step it gains nothing from.
+     */
+    const emitWorkerPatch = (patch: Parameters<typeof patchAgentInput>[1], code: ErrorCode | null): HookResult => emitPatch(eligibility.input, patch, code);
+    /** A preserve leaves the model exactly as the coordinator called it. That is all it leaves alone. */
+    const preserveAdhoc = (code: ErrorCode, tier: Tier = eligibility.tier): HookResult =>
+      carriedRequest === null ? preserve(code) : emitWorkerPatch({ prompt: composed + note(tier) }, code);
+    if (single !== null) {
+      // A4: reserved before any HTTP call, and before the routing outcome, so every single dispatch is recorded --
+      // reserving only the patched dispatches was rejected: a preserved call still runs a worker, and would leave
+      // the same gap this repairs for every preserve reason (native mode, a pinned call, a missing key, a failed gate).
+      let stale = false;
+      // A7/A19: the per-job task bound already governs how many times one task may be dispatched; the single path
+      // counted its attempts without ever consulting it, so a reply this shape could not parse could be retried
+      // without end. Reading the existing bound here applies the cap the hierarchy path already has rather than
+      // introducing a second one, and the attempt that repaired a discarded reply on 2026-09-19 is still the
+      // second, which this admits.
+      let exhausted = false;
+      // A4/T2: the hierarchy re-runs every dispatch conflict under the lock; this path ran none, so two Agent calls
+      // in one assistant message both reserved and both dispatched. The single shape has one task, so the two that
+      // can apply to it are the ones below: a writer already running it, and the configured worker cap.
+      let conflict: { reason: DenyReason; detail: string } | null = null;
+      const reserved = updateJob(deps.env, single.sessionId, (prev) => {
+        if (!prev || prev.current.prompt_id !== single.gen.prompt_id || prev.current.execution !== 'single') {
+          stale = true;
+          return null;
+        }
+        if (boundExhausted(prev.current, 'task', SINGLE_TASK_ID)) {
+          exhausted = true;
+          return null;
+        }
+        // T2: deleting a reservation is bookkeeping, not a stopped process, so an unobserved writer blocks a second.
+        const running = activeWorkers(prev.current);
+        if (running.some((r) => r.task_id === SINGLE_TASK_ID)) {
+          conflict = { reason: 'task_active', detail: SINGLE_TASK_ID };
+          return null;
+        }
+        if (running.length >= config.maxParallelWorkers) {
+          conflict = { reason: 'parallel_cap', detail: `${running.length}/${config.maxParallelWorkers}` };
+          return null;
+        }
+        const counted = countAttempt(prev.current, 'task', SINGLE_TASK_ID);
+        return {
+          ...prev,
+          current: reserve(counted, eligibility.toolUseId, {
+            role: 'worker',
+            taskId: SINGLE_TASK_ID,
+            // A19: this shape has no contract, so the key its receipt closes on is the empty one, fixed at dispatch.
+            contractHash: '',
+            rev: null,
+            tier: eligibility.tier,
+            attempt: (own(prev.current.attempts.tasks, SINGLE_TASK_ID) ?? 0) + 1,
+            deliverables: [],
+          }),
+        };
+      });
+      if (!reserved.ok) return preserveAdhoc(reserved.code);
+      if (stale) return emitDeny('stale_generation', renderDispatchDeny('stale_generation'), null);
+      if (exhausted) return emitDeny('bounds_exhausted', renderDispatchDeny('bounds_exhausted', SINGLE_TASK_ID), null);
+      if (conflict !== null) {
+        const c: { reason: DenyReason; detail: string } = conflict;
+        return emitDeny(c.reason, renderDispatchDeny(c.reason, c.detail), null);
+      }
+    }
+    if (mode === 'native') return preserveAdhoc('mode_native');
+    if (eligibility.pinned) return preserveAdhoc('pinned');
+    if (!apiKey) return preserveAdhoc('key_missing');
+    // Document §7: an ad-hoc call has no plan, so spec, uncertainty and fully_specified are absent, which is unknown.
     const task: PlannedTask = {
       id: 'adhoc',
       outcome: eligibility.description || eligibility.prompt.slice(0, 200),
@@ -597,26 +1572,35 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       contract_hash: '',
     };
     let routed: WorkerRouteDecision | null = null;
+    // A19/A20: the brief is not the work on this shape -- the request is -- and the adhoc contract above is empty, so
+    // without the request the gate classifies a covering note. It is sent as the field the worker receives it as
+    // rather than in place of the brief: substituting one for the other hid half of the packet either way.
     const gate = await callGate(
-      buildWorkerRouteRequest(task, [], [], eligibility.prompt, eligibility.tier, config),
+      routeRequest(task, [], [], eligibility.prompt, eligibility.tier, null, carried),
       'pre_intent',
       'pre_result',
       { role: 'worker', task_id: 'adhoc', called_tier: eligibility.tier, tool_input: summarizeToolInput(eligibility.input) },
-      ['route', 'upgrade_basis'],
+      routeAnswerKeys(false),
       (outcome) => {
-        if (!outcome.ok) return { decision: { action: 'preserve', tier: eligibility.tier, reason: outcome.code } };
-        routed = decideWorkerRoute(outcome.response.answers, config.routeConfidenceFloor, eligibility.tier);
-        return { decision: { action: routed.action, tier: routed.tier, reason: routed.reason } };
+        // A preserve keeps the model the coordinator called, which the hook never names, so the recorded model is
+        // null there rather than the tier's model -- the two are not the same claim.
+        if (!outcome.ok) return { decision: { action: 'preserve', tier: eligibility.tier, reason: outcome.code, changed_default: false, model: null } };
+        routed = routeDecision(outcome.response.answers, eligibility.tier);
+        return { decision: { action: routed.action, tier: routed.tier, reason: routed.reason, changed_default: routed.action === 'patch' && routed.tier !== eligibility.tier, model: routed.action === 'patch' ? config.models[routed.tier] : null } };
       },
     );
-    if ('blocked' in gate) return preserve(gate.blocked);
-    if (!gate.outcome.ok) return preserve(gate.outcome.code);
-    if (routed === null) return preserve('route_invalid');
+    // T2: the router failing is a valid call that keeps its profile; the turn moving on is a call that must not run.
+    // The lock is not held across the HTTP call, so the generation this dispatch belongs to is re-confirmed here.
+    if (single !== null && !confirmOwnership(single.sessionId, single.gen, null, eligibility.toolUseId)) {
+      return emitDeny('stale_generation', renderDispatchDeny('stale_generation'), null);
+    }
+    if ('blocked' in gate) return preserveAdhoc(gate.blocked);
+    if (!gate.outcome.ok) return preserveAdhoc(gate.outcome.code);
+    if (routed === null) return preserveAdhoc('route_invalid');
     const decision: WorkerRouteDecision = routed;
-    if (decision.action === 'preserve') return preserve(decision.reason ?? 'route_invalid');
-    return emitPatch(
-      eligibility.input,
-      { subagent_type: agentForTier('worker', decision.tier), model: config.models[decision.tier], prompt: eligibility.prompt + renderRouteNote(decision.tier) },
+    if (decision.action === 'preserve') return preserveAdhoc(decision.reason ?? 'route_invalid', decision.tier);
+    return emitWorkerPatch(
+      { subagent_type: agentForTier('worker', decision.tier), model: config.models[decision.tier], prompt: composed + note(decision.tier) },
       null,
     );
   };
@@ -669,66 +1653,159 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     const eligibility = checkEligibility(input, deps.env, config);
     // Inside an orchestrated job an owned call that cannot be validated is denied, never waved through unvalidated.
     if (!eligibility.eligible) return emitDeny('dispatch_ineligible', renderDispatchDeny('dispatch_ineligible', eligibility.code), null);
+    // A19: the single-executor shape has no planner and no plan, so the planner is refused and the worker call is an
+    // ad-hoc dispatch carrying the request this turn was admitted with.
+    if (generation.execution === 'single') {
+      if (eligibility.role === 'planner') return emitDeny('single_shape', renderDispatchDeny('single_shape'), null);
+      return handleAdhocWorker(eligibility, generation.request ?? 'omitted', { sessionId, gen: generation });
+    }
     return eligibility.role === 'planner' ? handlePlanner(generation, sessionId, eligibility) : handleWorker(generation, sessionId, eligibility);
   };
 
   // ---------------------------------------------------------------- PostToolUse
 
   /**
-   * A3: a receipt survives a replan only when the new task has the same id and contract; its dependents reset with it.
-   * Reset receipts are moved to history, never deleted: the work they record happened and stays in the accounting.
+   * T4: the planner profile this job asked for and the model the host reports running are different facts. The
+   * configured id is an alias, the host reports a concrete id, and an id this plugin does not recognize settles
+   * nothing: it is recorded as unverified rather than counted as a strong planner that ran.
+   *
+   * #48 P0-2: deduped by the model string, not by tier. Two tiers configured with the identical model id (`deep` and
+   * `frontier` both default to `opus` since a restricted model needs explicit opt-in) used to make an observed
+   * `opus` count as two names and read as ambiguous; deduping first means an unambiguous observed string still
+   * settles match/mismatch even when more than one tier happens to name it, and only a genuinely different pair of
+   * matched ids is unverified.
    */
-  const carryForward = (tasks: PlannedTask[], receipts: Receipt[]): { kept: Receipt[]; dropped: Receipt[] } => {
-    const kept = new Set(tasks.filter((t) => receipts.some((r) => r.task_id === t.id && r.contract_hash === t.contract_hash)).map((t) => t.id));
-    for (;;) {
-      const next = new Set([...kept].filter((id) => (tasks.find((t) => t.id === id)?.depends_on ?? []).every((dep) => kept.has(dep))));
-      if (next.size === kept.size) break;
-      kept.clear();
-      for (const id of next) kept.add(id);
-    }
-    const survives = (r: Receipt): boolean => kept.has(r.task_id) && tasks.some((t) => t.id === r.task_id && t.contract_hash === r.contract_hash);
-    return { kept: receipts.filter(survives), dropped: receipts.filter((r) => !survives(r)) };
+  const plannerModelAgreement = (tier: JobGeneration['planner_tier'], observed: string | null): ModelAgreement => {
+    if (tier === null || observed === null || observed.length === 0) return 'unverified';
+    const seen = observed.toLowerCase();
+    const named = new Set(Object.values(config.models).filter((id) => seen.includes(id.toLowerCase())));
+    if (named.size !== 1) return 'unverified';
+    return named.has(config.models[tier]) ? 'match' : 'mismatch';
   };
 
-  const handlePlannerResult = (sessionId: string, gen: JobGeneration, toolUseId: string): HookResult => {
+  const handlePlannerResult = async (sessionId: string, gen: JobGeneration, toolUseId: string): Promise<HookResult> => {
     const status = responseStatus(input.tool_response);
     const text = replyText(input.tool_response);
-    const parsed = status === 'completed' ? parsePlannerReply(text) : null;
+    const parsed = status === 'completed' ? parsePlannerReply(text, config.maxTasksPerPlan) : null;
+    const agreement = plannerModelAgreement(gen.planner_tier, observedModel(input.tool_response));
+    // #53 review: every plan record, whatever the outcome, names the agent that ran and both models, as the post
+    // records do for unmatched calls; an agreement label alone does not say which agent or model ran.
+    // A pinned or native planner call is never patched, so it has no tier; what it asked for is its own pin or its
+    // frontmatter model, read the same way as every other Agent record.
+    const plannerFacts = {
+      subagent_type: str(isRecord(input.tool_input) ? input.tool_input['subagent_type'] : null),
+      planner_model: {
+        requested: gen.planner_tier === null ? requestedModelFor(input.tool_input) : config.models[gen.planner_tier],
+        observed: observedModel(input.tool_response),
+        agreement,
+      },
+    };
+    /**
+     * A23: the one place a semantic discrepancy is still visible. Everything downstream -- the contract, the checks,
+     * the receipt -- is derived from this plan, so a plan that quietly answers a different request than the user's is
+     * confirmed by every later stage. The comparison happens here, between the reply parsing and the plan being
+     * adopted, and it rejects nothing: a false objection that blocks a correct plan costs more than a missed one.
+     *
+     * It is the only extra HTTP call in the product, and it is in the one hook that made none. The plugin's hook
+     * declarations give PostToolUse the same 5 s as PreToolUse, which is why the review's "two serial full-budget
+     * calls do not fit one hook" does not apply here: this hook's budget is otherwise entirely unspent.
+     */
+    const candidate = parsed && parsed.ok && parsed.value.status === 'ready' ? parsed.value : null;
+    let interpretation: PlanInterpretation | null = null;
+    let interpreted = false;
+    if (config.planInterpretation && candidate !== null && candidate.constraints.length > 0 && gen.request !== null && mode !== 'native' && apiKey) {
+      interpreted = true;
+      const built = buildPlanInterpretationRequest(gen.request, candidate.goal, candidate.constraints, candidate.tasks, config);
+      await callGate(
+        built.request,
+        'interpretation_intent',
+        'interpretation_result',
+        { role: 'planner', planner_tier: gen.planner_tier, clauses: built.clauses.length, constraints: candidate.constraints.length, tasks: candidate.tasks.length },
+        built.clauses.map((c) => c.id),
+        (outcome) => {
+          // A failed call leaves the plan unexamined, which is what every plan before this option existed had.
+          if (!outcome.ok) return { interpretation: null, skip_code: outcome.code };
+          interpretation = classifyInterpretation(outcome.response.answers, built.clauses, candidate.constraints.length);
+          return { interpretation };
+        },
+      );
+    }
     let context: string | null = null;
     const written = updateJob(deps.env, sessionId, (prev) => {
       if (!prev || prev.current.prompt_id !== gen.prompt_id) return null;
+      // T2/A23: an await happened before this lock only when the plan was interpreted, so the reservation this result
+      // closes is re-confirmed on that path alone. Without the call there is no window, and no recheck to pay for.
+      if (interpreted && own(prev.current.active, toolUseId) === undefined) return null;
       let next = release(prev.current, toolUseId);
-      if (status !== 'completed') {
-        trace?.write('plan', { ...base, status, outcome: 'unknown' });
-        return { ...prev, current: next };
-      }
-      if (parsed && parsed.ok && parsed.value.status === 'ready') {
-        const reply = parsed.value;
-        const tasks: PlannedTask[] = reply.tasks.map((t) => ({ ...t, contract_hash: contractHash(t) }));
+      next = { ...next, planner_model: agreement };
+      const reply = parsed && parsed.ok ? parsed.value : null;
+      if (reply !== null && reply.status === 'ready') {
+        // The revision is taken under the lock, so a plan numbered during a race is still numbered correctly.
         const rev = (next.plan?.rev ?? 0) + 1;
-        const carried = carryForward(tasks, next.receipts);
-        next = {
-          ...next,
-          phase: 'planned',
-          plan: { rev, goal: reply.goal, assumptions: reply.assumptions, constraints: reply.constraints, tasks },
-          receipts: carried.kept,
+        const tasks = reply.tasks.map((t) => ({ ...t, contract_hash: contractHash(t) }));
+        const plan: Plan = {
+          rev,
+          goal: reply.goal,
+          assumptions: reply.assumptions,
+          constraints: reply.constraints,
+          tasks,
+          // T11: the graph is the fact; the planner's own number is recorded beside it and never rejects a plan.
+          chain_depth: chainDepth(tasks),
+          chain_depth_claimed: reply.chain_depth_claimed,
+          // #48 P2-1: absent reads as none. Kept with the plan so it survives to the last-task-accepted context too.
+          main_session_steps: reply.main_session_steps ?? [],
         };
-        context = renderPlannedContext(rev, readyForDispatch(next));
-        trace?.write('plan', { ...base, status, outcome: 'ready', rev, tasks: tasks.length, carried_receipts: carried.kept.length, reset_receipts: carried.dropped.length });
-        const history = carried.dropped.length
-          ? [{ ...prev.current, plan: null, active: {}, receipts: carried.dropped, outcome: 'superseded' as const }, ...prev.history].slice(0, MAX_HISTORY)
-          : prev.history;
+        /**
+         * T3: no completion receipt is reused for readiness across a plan revision. `contract_hash` identifies the
+         * scheduling contract but not the implementation context a worker was actually given, and the plan's global
+         * constraints are outside it entirely, so an identical hash under a changed plan is not evidence that the
+         * previous result still satisfies the new contract. The trade-off is explicit: a replan redoes accepted work.
+         * The receipts themselves are kept as history, never deleted.
+         */
+        const retired = next.receipts;
+        next = { ...next, phase: 'planned', plan, receipts: [] };
+        context =
+          renderPlannedContext(rev, readyForDispatch(next), config.maxParallelWorkers, plan.main_session_steps) +
+          (agreement === 'match' ? '' : renderPlannerModelNote(agreement));
+        trace?.write('plan', {
+          ...base,
+          status,
+          outcome: 'ready',
+          rev,
+          tasks: tasks.length,
+          chain_depth: plan.chain_depth,
+          chain_depth_claimed: plan.chain_depth_claimed,
+          planner_tier: gen.planner_tier,
+          ...plannerFacts,
+          retired_receipts: retired.length,
+          // A23: recorded beside the adopted plan, and read by nothing. `applied: false` is inside the value.
+          ...(interpretation === null ? {} : { interpretation }),
+        });
+        const history = retired.length ? [{ ...prev.current, plan: null, active: {}, receipts: retired, outcome: 'superseded' as const }, ...prev.history].slice(0, MAX_HISTORY) : prev.history;
         return { ...prev, current: next, history };
       }
-      const reply = parsed && parsed.ok ? parsed.value : null;
-      const detail = reply === null ? (parsed?.ok === false ? parsed.error : 'no reply') : reply.status === 'blocked' ? reply.reason : reply.status === 'needs_context' ? reply.questions.join(' ') : '';
-      const label = reply === null ? 'an invalid reply' : reply.status;
+      /**
+       * T4: a terminal planner result that is not a usable plan never leaves the job sitting in `planning` with only
+       * the reservation cleared. It returns to a state the coordinator can act on: the revision already in force, a
+       * retry while an attempt remains, or blocked with the reason.
+       */
+      const detail =
+        reply === null
+          ? parsed === null
+            ? `the call reported status ${String(status)}`
+            : parsed.ok === false
+              ? parsed.error
+              : 'no reply'
+          : reply.status === 'blocked'
+            ? reply.reason
+            : reply.questions.join(' ');
+      const label = parsed === null ? `status ${String(status)}` : reply === null ? 'an invalid reply' : reply.status;
       // A failed replan leaves the plan it tried to replace in force; only a job with no valid plan is downgraded.
       const inForce = next.plan;
       if (inForce !== null) {
         next = { ...next, phase: 'planned' };
         context = renderReplanProblem(label, detail, inForce.rev);
-        trace?.write('plan', { ...base, status, outcome: label, phase: next.phase, replan_failed: true });
+        trace?.write('plan', { ...base, status, outcome: label, phase: next.phase, replan_failed: true, ...plannerFacts });
         return { ...prev, current: next };
       }
       // A7: the first planner failure returns the job to admitted so the coordinator can retry once; the second blocks it.
@@ -736,23 +1813,41 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       const exhausted = boundExhausted(next, 'planner', null);
       next = { ...next, phase: exhausted ? 'blocked' : 'admitted' };
       context = renderPlannerProblem(label, exhausted ? `${detail} No planner attempts remain; report this to the user.` : detail);
-      trace?.write('plan', { ...base, status, outcome: label, phase: next.phase });
+      trace?.write('plan', { ...base, status, outcome: label, phase: next.phase, ...plannerFacts });
       return { ...prev, current: next };
     });
     if (!written.ok) return skip(written.code);
     return context === null ? skip() : emitContext('PostToolUse', context, null);
   };
 
-  const handleWorkerResult = async (sessionId: string, gen: JobGeneration, toolUseId: string, taskId: string, rev: number, attempt: number): Promise<HookResult> => {
+  /**
+   * A4/T1: a receipt is selected by the task id *and* the contract hash of the dispatch it closes, so the hash must be
+   * the one the dispatch was reserved under rather than one the closing path picks. A reservation written before
+   * `contract_hash` existed carries none; the plan in force is then the fallback, because an empty string there would
+   * leave an in-flight hierarchy dispatch unclosable across an upgrade.
+   */
+  const closingHash = (reservation: Reservation, task: PlannedTask | null): string =>
+    reservation.contract_hash ?? task?.contract_hash ?? '';
+
+  const handleWorkerResult = (sessionId: string, gen: JobGeneration, toolUseId: string, reservation: Reservation): HookResult => {
+    const taskId = reservation.task_id ?? '';
+    const rev = reservation.rev ?? 0;
+    const attempt = reservation.attempt;
     const task = gen.plan?.tasks.find((t) => t.id === taskId) ?? null;
+    // A19: the single shape has no plan, so a missing task is what this path expects rather than a stale reference.
+    const isSingle = gen.execution === 'single';
     const status = responseStatus(input.tool_response);
-    const parsed = status === 'completed' ? parseWorkerReply(replyText(input.tool_response)) : null;
+    const parsed = status === 'completed' ? parseWorkerReply(replyText(input.tool_response), { freeCheckIds: isSingle }) : null;
     let finalVerdict: Receipt['verdict'] = 'unknown';
     let reason: string | null = null;
     if (parsed === null) reason = `the call reported status ${String(status)}`;
     else if (!parsed.ok) {
       finalVerdict = 'invalid';
       reason = parsed.error;
+    } else if (isSingle) {
+      const reported = reportedSingleVerdict(parsed.value);
+      finalVerdict = reported.verdict;
+      reason = reported.reason;
     } else if (!task) {
       finalVerdict = 'invalid';
       reason = 'the task is no longer in the current plan';
@@ -760,33 +1855,18 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       const deterministic = deterministicVerdict(task, parsed.value);
       finalVerdict = deterministic.verdict;
       reason = deterministic.reason;
-    }
-
-    // A1: Gate C is advisory. It runs only on a deterministic accept and never changes what is unlocked.
-    let advisory: string | null = null;
-    if (mode === 'auto' && apiKey && finalVerdict === 'accept' && task && parsed && parsed.ok) {
-      await callGate(
-        buildResultRequest(task, parsed.value, config),
-        'result_intent',
-        'result_result',
-        { task_id: taskId, rev, deterministic: finalVerdict },
-        ['result'],
-        (outcome) => {
-          if (!outcome.ok) return { decision: { verdict: null, reason: outcome.code, advisory_only: true } };
-          const judged = decideResult(outcome.response.answers, config.resultConfidenceFloor);
-          if (judged.verdict && judged.verdict !== 'accept') advisory = judged.verdict;
-          return { decision: { verdict: judged.verdict, reason: judged.reason, advisory_only: true } };
-        },
-      );
+      // T11: no request is made here. A result past plain incompleteness comes from what the worker itself reported.
+      if (deterministic.verdict === 'incomplete') finalVerdict = reportedRecovery(task, parsed.value) ?? 'incomplete';
     }
 
     let context: string | null = null;
     const written = updateJob(deps.env, sessionId, (prev) => {
-      if (!prev || prev.current.prompt_id !== gen.prompt_id) return null;
+      // A2: both the generation and the plan revision must still be the ones this result belongs to.
+      if (!prev || prev.current.prompt_id !== gen.prompt_id || (prev.current.plan?.rev ?? null) !== (gen.plan?.rev ?? null)) return null;
       let next = release(prev.current, toolUseId);
       const receipt: Receipt = {
         task_id: taskId,
-        contract_hash: task?.contract_hash ?? '',
+        contract_hash: closingHash(reservation, task),
         rev,
         attempt,
         tool_use_id: toolUseId,
@@ -794,13 +1874,28 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         reply: parsed && parsed.ok ? parsed.value : null,
         verdict: finalVerdict,
         verdict_reason: reason,
-        advisory: advisory === null ? null : (advisory as Receipt['advisory']),
+        // T11: Gate C is not called, so nothing advises on a receipt any more; stored records may still carry one.
+        advisory: null,
         observed_model: observedModel(input.tool_response),
         root_effort: input.effort ?? null,
         recorded_at: new Date().toISOString(),
       };
+      // T1: the receipt is appended, so the latest attempt is the one that decides; earlier ones stay in the array.
       next = { ...next, receipts: [...next.receipts.filter((r) => r.tool_use_id !== toolUseId), receipt] };
-      if (finalVerdict === 'accept') context = renderWorkerAccepted(taskId, readyForDispatch(next), advisory);
+      if (isSingle) {
+        // A19: rework and replan are hierarchy verdicts; this path only ever produces the four below.
+        const shown = finalVerdict === 'accept' || finalVerdict === 'invalid' || finalVerdict === 'unknown' ? finalVerdict : 'incomplete';
+        context = renderSingleResult(shown, reason ?? '');
+      } else if (finalVerdict === 'accept') {
+        const ready = readyForDispatch(next);
+        // #53 review: "nothing else is ready" was the proxy here, and it is true while an independent sibling is still
+        // running, so the main-session steps came before the work they follow. The note now reads Stop's own fact.
+        context = renderWorkerAccepted(taskId, ready, config.maxParallelWorkers, {
+          workerIsolation: config.workerIsolation,
+          mainSessionSteps: next.plan?.main_session_steps ?? [],
+          isLastTask: planComplete(next),
+        });
+      } else if (finalVerdict === 'rework' || finalVerdict === 'replan') context = renderWorkerReported(taskId, finalVerdict, reason ?? '');
       else if (finalVerdict === 'unknown') context = renderWorkerUnknown(taskId);
       else if (finalVerdict === 'invalid') context = renderWorkerInvalid(taskId, reason ?? 'unparsable reply');
       else context = renderWorkerIncomplete(taskId, reason ?? 'the reported checks do not satisfy the contract');
@@ -811,7 +1906,14 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         attempt,
         verdict: finalVerdict,
         verdict_reason: reason,
-        advisory,
+        advisory: null,
+        // #48 P0-2: the same two fields the native no-job branch above records, so an orchestrated dispatch and an
+        // unrecorded native one read the same way in `explain` -- what subagent_type ran, and what model it resolved
+        // to. `subagent_type` here is the dispatched one (tool_input reflects the patched call), not the tier the
+        // coordinator originally called.
+        subagent_type: str(isRecord(input.tool_input) ? input.tool_input['subagent_type'] : null),
+        requested_model: requestedModelFor(input.tool_input),
+        resolved_model: observedModel(input.tool_response),
         tool_response: whitelistToolResponse(input.tool_response),
         root_effort: input.effort ?? null,
       });
@@ -830,16 +1932,42 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     const state = readJob(deps.env, sessionId);
     if (!state.ok) return skip(state.code);
     const job = state.value;
-    if (!job) return skip('no_state');
+    /**
+     * #48 P0-2: this branch used to return with no trace write at all -- a native, unorchestrated Agent call (no job
+     * state because orchestration never started for this session) left no record of which model it actually ran on.
+     * That is exactly how the frontier runs in issue #48 went unobserved: nothing here depended on a job existing,
+     * only on this being a root-caller Agent call, which was already confirmed above.
+     */
+    if (!job) {
+      trace?.write('post', {
+        ...base,
+        matched: false,
+        job_state: 'absent',
+        subagent_type: str(isRecord(input.tool_input) ? input.tool_input['subagent_type'] : null),
+        requested_model: requestedModelFor(input.tool_input),
+        resolved_model: observedModel(input.tool_response),
+        tool_response: whitelistToolResponse(input.tool_response),
+      });
+      return skip('no_state');
+    }
     const reservation = own(job.current.active, toolUseId);
     if (!reservation) {
       // A2: a late result belongs to its own generation only; it is recorded and never advances the current plan.
       const orphaned = job.history.some((h) => own(h.active, toolUseId) !== undefined);
-      trace?.write('post', { ...base, matched: false, orphaned, tool_response: whitelistToolResponse(input.tool_response) });
+      trace?.write('post', {
+        ...base,
+        matched: false,
+        orphaned,
+        job_state: 'present',
+        subagent_type: str(isRecord(input.tool_input) ? input.tool_input['subagent_type'] : null),
+        requested_model: requestedModelFor(input.tool_input),
+        resolved_model: observedModel(input.tool_response),
+        tool_response: whitelistToolResponse(input.tool_response),
+      });
       return skip(orphaned ? 'generation_changed' : null);
     }
-    if (reservation.role === 'planner') return handlePlannerResult(sessionId, job.current, toolUseId);
-    return handleWorkerResult(sessionId, job.current, toolUseId, reservation.task_id ?? '', reservation.rev ?? 0, reservation.attempt);
+    if (reservation.role === 'planner') return await handlePlannerResult(sessionId, job.current, toolUseId);
+    return handleWorkerResult(sessionId, job.current, toolUseId, reservation);
   };
 
   const handlePostToolUseFailure = (): HookResult => {
@@ -853,9 +1981,12 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         const reservation = prev ? own(prev.current.active, toolUseId) : undefined;
         if (!prev || !reservation) return null;
         const next = release(prev.current, toolUseId);
+        const task = prev.current.plan?.tasks.find((t) => t.id === reservation.task_id) ?? null;
         const receipt: Receipt = {
           task_id: reservation.task_id ?? '',
-          contract_hash: '',
+          // T1: a rework that failed has to cover the accept it replaced, and `currentReceipt` matches on this hash.
+          // Writing '' here left the failed attempt unselectable, so the old accept still read as the task's result.
+          contract_hash: closingHash(reservation, task),
           rev: reservation.rev ?? 0,
           attempt: reservation.attempt,
           tool_use_id: toolUseId,
@@ -874,12 +2005,45 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     trace?.write('failure', {
       ...base,
       tool_input: summarizeToolInput(input.tool_input),
+      // #48 P0-2: same fields as the 'post' phase's no-job branch, for the same reason -- a native call that fails
+      // is still a dispatch of some subagent_type, requested at some model, and this is the one record of it.
+      subagent_type: str(isRecord(input.tool_input) ? input.tool_input['subagent_type'] : null),
+      requested_model: requestedModelFor(input.tool_input),
+      resolved_model: observedModel(input.tool_response),
       error_first_line: error.split('\n')[0]?.slice(0, 200) ?? null,
       error_len: error.length,
       is_interrupt: input.is_interrupt ?? null,
       duration_ms: input.duration_ms ?? null,
     });
     return skip();
+  };
+
+  /**
+   * #48 P2: SessionStart is the one moment the gate gets to speak to the user directly and not to the model. It never
+   * blocks and never touches job state -- it only reads the liveness ring (`src/liveness.ts`) written by every
+   * auto-mode admission decision, and says something only when a full window of 50 decisions never once attempted a
+   * Gate A call, which is a stronger claim than a single unlucky run and worth a `doctor` visit. Off, native and lean
+   * modes never populate the ring with auto-mode decisions in the first place, so there is nothing to check there.
+   * One condition needs no window: a session whose Agent calls can only run in the background, where auto mode stays
+   * native on every prompt (`host_unsupported`). That is read from this session's own environment and said at once,
+   * since the ring would otherwise take 50 prompts to reach the same conclusion.
+   */
+  const handleSessionStart = (): HookResult => {
+    if (mode !== 'auto') return skip();
+    const blocker = dispatchBlocker(deps.env);
+    if (blocker !== null) {
+      const text =
+        blocker === 'background_only'
+          ? 'jev-gate: mode=auto, but this session\'s Agent calls can only run in the background, so no admitted job could reach a worker. Every prompt stays native and sends no Jev request. To use the gate, start Claude Code with CLAUDE_CODE_FORK_SUBAGENT=0 CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1; otherwise set mode to off.'
+          : 'jev-gate: mode=auto, but CLAUDE_CODE_SUBAGENT_MODEL pins every subagent\'s model, which each owned Agent call refuses, so no admitted job could reach a worker. Every prompt stays native and sends no Jev request. To use the gate, start Claude Code without that override; otherwise set mode to off.';
+      const stdout = renderSystemMessage(text);
+      return stdout === null ? skip('host_unsupported') : { kind: 'notice', code: 'host_unsupported', stdout };
+    }
+    const recent = readLiveness(deps.env)?.recent ?? [];
+    if (recent.length < LIVENESS_WINDOW || recent.some((e) => e.attempted)) return skip();
+    const text = `jev-gate: the last ${recent.length} auto-mode admission decisions never attempted a Gate A call. Run \`jev-gate doctor\` to check the key, the depth floor and the host window.`;
+    const stdout = renderSystemMessage(text);
+    return stdout === null ? skip() : { kind: 'notice', code: null, stdout };
   };
 
   /** A6/A7: Stop is observational. It records the terminal outcome and blocks nothing, so it cannot loop. */
@@ -891,8 +2055,15 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     updateJob(deps.env, sessionId, (prev) => {
       if (!prev || prev.current.outcome !== null) return null;
       const gen = prev.current;
-      const allAccepted = gen.plan !== null && gen.plan.tasks.every((t) => acceptedReceipt(gen.receipts, t) !== null);
-      outcome = gen.phase === 'blocked' ? 'blocked' : gen.shape === 'direct' || allAccepted ? 'completed' : 'incomplete';
+      const allAccepted = planComplete(gen);
+      // A19: the single shape has no plan to complete, so its completion is the latest receipt of the one dispatch it
+      // makes. That receipt is the worker's own report (reportedSingleVerdict), so `completed` is a weaker statement
+      // here than under a plan -- the difference lives in the receipt, which records what it was decided from.
+      const singleDone =
+        gen.execution === 'single' &&
+        activeWorkers(gen).length === 0 &&
+        (gen.receipts.filter((r) => r.task_id === SINGLE_TASK_ID).at(-1)?.verdict ?? null) === 'accept';
+      outcome = gen.phase === 'blocked' ? 'blocked' : gen.shape === 'direct' || allAccepted || singleDone ? 'completed' : 'incomplete';
       return { ...prev, current: { ...gen, outcome } };
     });
     trace?.write('stop', { ...base, outcome });
@@ -904,6 +2075,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
   if (input.hook_event_name === 'PostToolUse') return handlePostToolUse();
   if (input.hook_event_name === 'PostToolUseFailure') return handlePostToolUseFailure();
   if (input.hook_event_name === 'Stop') return handleStop();
+  if (input.hook_event_name === 'SessionStart') return handleSessionStart();
   return skip();
 };
 
@@ -917,15 +2089,23 @@ const isMainModule = (): boolean => {
   }
 };
 
-if (isMainModule()) {
-  runHook({ stdin: process.stdin, env: process.env })
-    .then((result) => {
-      if (result.stdout !== null) process.stdout.write(result.stdout + '\n');
-      if (result.code) process.stderr.write(`jev-gate: ${result.code}\n`);
-      process.exitCode = 0;
-    })
-    .catch(() => {
-      process.stderr.write('jev-gate: internal\n');
-      process.exitCode = 0;
-    });
-}
+/**
+ * #48 P2: the process entrypoint, factored out so `entry.ts` can dynamically import this module and call it, instead
+ * of every hook process paying this file's full static import graph (admission, allocation, plan, coordinator, ...)
+ * on every invocation, including the vast majority that turn out to be `JEV_GATE_MODE=off` and do nothing at all.
+ * Behavior is unchanged from the inline promise chain this replaces: a rejection from `runHook` itself (not a field
+ * inside its result) is the one case treated as internal, everything else is a normal result.
+ */
+export const main = async (): Promise<void> => {
+  const result = await runHook({ stdin: process.stdin, env: process.env, argv: process.argv, startedAt: performance.timeOrigin }).catch(() => null);
+  if (result === null) {
+    process.stderr.write('jev-gate: internal\n');
+    process.exitCode = 0;
+    return;
+  }
+  if (result.stdout !== null) process.stdout.write(result.stdout + '\n');
+  if (result.code) process.stderr.write(`jev-gate: ${result.code}\n`);
+  process.exitCode = 0;
+};
+
+if (isMainModule()) void main();

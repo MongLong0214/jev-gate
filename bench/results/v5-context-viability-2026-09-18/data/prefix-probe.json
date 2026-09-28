@@ -1,0 +1,13 @@
+{
+  "baseline_full": 64500,
+  "no_mcp": 61948,
+  "no_skills": 60241,
+  "no_mcp_no_skills": 56281,
+  "no_user_settings": 46475,
+  "no_rules_dir": 55500,
+  "no_claude_md": 58813,
+  "no_grok_blind_review": 60406,
+  "no_conventions": 60175,
+  "after_trim": 59668,
+  "note": "one-turn sessions; turn-1 prompt size is the static prefix"
+}

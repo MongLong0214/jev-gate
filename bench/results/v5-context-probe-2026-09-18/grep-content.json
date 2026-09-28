@@ -1,0 +1,25 @@
+{
+  "_source": {
+    "host": "Claude Code 2.1.276, macOS 26.2 (Darwin 25.2.0)",
+    "captured": "2026-09-18",
+    "cell": "c1-capture",
+    "note": "Real PostToolUse payload from an installed host. Paths and line text are placeholders; key names, key order, value types and every numeric relationship are exactly as observed. model_facing_render is the string the host actually delivered to the model, taken from the PostToolBatch event that followed (PostToolBatch carries the rendered text, not this object).",
+    "call_index": 0
+  },
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Grep",
+  "tool_input": {
+    "pattern": "TOKEN_",
+    "path": ".",
+    "output_mode": "content"
+  },
+  "tool_response": {
+    "mode": "content",
+    "numFiles": 0,
+    "filenames": [],
+    "content": "src/module-a.ts:5:  // identifier: TOKEN_A\nsrc/module-a.ts:6:  if (value === undefined) throw new Error('TOKEN_A requires a value');\nsrc/module-a.ts:7:  return 'TOKEN_A';\nsrc/module-a.ts:10:export const meta = { id: 'TOKEN_A', region: 'Alpha' };\nsrc/module-d.ts:5:  // identifier: TOKEN_D\nsrc/module-d.ts:6:  if (value === undefined) throw new Error('TOKEN_D requires a value');\nsrc/module-d.ts:7:  return 'TOKEN_D';\nsrc/module-d.ts:10:export const meta = { id: 'TOKEN_D', region: 'Delta' };\nsrc/module-c.ts:5:  // identifier: TOKEN_C\nsrc/module-c.ts:6:  if (value === undefined) throw new Error('TOKEN_C requires a value');\nsrc/module-c.ts:7:  return 'TOKEN_C';\nsrc/module-c.ts:10:export const meta = { id: 'TOKEN_C', region: 'Charlie' };\nsrc/module-e.ts:5:  // identifier: TOKEN_E\nsrc/module-e.ts:6:  if (value === undefined) throw new Error('TOKEN_E requires a value');\nsrc/module-e.ts:7:  return 'TOKEN_E';\nsrc/module-e.ts:10:export const meta = { id: 'TOKEN_E', region: 'Echo' };\nsrc/module-b.ts:5:  // identifier: TOKEN_B\nsrc/module-b.ts:6:  if (value === undefined) throw new Error('TOKEN_B requires a value');\nsrc/module-b.ts:7:  return 'TOKEN_B';\nsrc/module-b.ts:10:export const meta = { id: 'TOKEN_B', region: 'Bravo' };",
+    "numLines": 20,
+    "totalLines": 20
+  },
+  "model_facing_render": "src/module-a.ts:5:  // identifier: TOKEN_A\nsrc/module-a.ts:6:  if (value === undefined) throw new Error('TOKEN_A requires a value');\nsrc/module-a.ts:7:  return 'TOKEN_A';\nsrc/module-a.ts:10:export const meta = { id: 'TOKEN_A', region: 'Alpha' };\nsrc/module-d.ts:5:  // identifier: TOKEN_D\nsrc/module-d.ts:6:  if (value === undefined) throw new Error('TOKEN_D requires a value');\nsrc/module-d.ts:7:  return 'TOKEN_D';\nsrc/module-d.ts:10:export const meta = { id: 'TOKEN_D', region: 'Delta' };\nsrc/module-c.ts:5:  // identifier: TOKEN_C\nsrc/module-c.ts:6:  if (value === undefined) throw new Error('TOKEN_C requires a value');\nsrc/module-c.ts:7:  return 'TOKEN_C';\nsrc/module-c.ts:10:export const meta = { id: 'TOKEN_C', region: 'Charlie' };\nsrc/module-e.ts:5:  // identifier: TOKEN_E\nsrc/module-e.ts:6:  if (value === undefined) throw new Error('TOKEN_E requires a value');\nsrc/module-e.ts:7:  return 'TOKEN_E';\nsrc/module-e.ts:10:export const meta = { id: 'TOKEN_E', region: 'Echo' };\nsrc/module-b.ts:5:  // identifier: TOKEN_B\nsrc/module-b.ts:6:  if (value === undefined) throw new Error('TOKEN_B requires a value');\nsrc/module-b.ts:7:  return 'TOKEN_B';\nsrc/module-b.ts:10:export const meta = { id: 'TOKEN_B', region: 'Bravo' };"
+}

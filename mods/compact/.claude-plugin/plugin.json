@@ -1,0 +1,43 @@
+{
+  "name": "jev-gate-compact",
+  "version": "0.3.0",
+  "description": "Answers auto compactions with an extractive digest and the recent tail, so compacting sends no summarizer request and has no wait; off by default.",
+  "author": {
+    "name": "MongLong0214",
+    "url": "https://github.com/MongLong0214"
+  },
+  "repository": "https://github.com/MongLong0214/jev-gate",
+  "keywords": ["compaction", "context", "function-hooks"],
+  "userConfig": {
+    "enabled": {
+      "title": "Enable extractive compaction",
+      "description": "Off registers no hook at all. Every compaction is the engine's own.",
+      "type": "boolean",
+      "default": false
+    },
+    "mode": {
+      "title": "Mode",
+      "description": "shadow: build and log the digest, let the engine compact. active: compact with the digest; the engine's summarizer is not asked.",
+      "type": "string",
+      "default": "shadow"
+    },
+    "budgetChars": {
+      "title": "Budget (characters)",
+      "description": "Characters for the digest and the kept recent messages together, 8000 to 400000.",
+      "type": "number",
+      "default": 40000
+    },
+    "compactSubagents": {
+      "title": "Subagents too",
+      "description": "Also answer a subagent's own auto compactions.",
+      "type": "boolean",
+      "default": true
+    },
+    "compactManual": {
+      "title": "Also /compact",
+      "description": "Also answer /compact typed without instructions. Off leaves /compact the engine's.",
+      "type": "boolean",
+      "default": false
+    }
+  }
+}

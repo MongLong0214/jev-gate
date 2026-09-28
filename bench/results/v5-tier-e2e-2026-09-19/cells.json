@@ -1,0 +1,30 @@
+[
+  {
+    "job": "wide-validators",
+    "arm": "jev_forced_orchestration+haiku",
+    "cost": 0.9238902,
+    "turns": 5,
+    "duration_ms": 232444,
+    "models": {
+      "claude-haiku-4-5-20251001": 0.13818745,
+      "claude-sonnet-5": 0.457749,
+      "claude-opus-5[1m]": 0.32795375000000004
+    },
+    "failed": [],
+    "agent_calls": 4
+  },
+  {
+    "job": "wide-validators-loaded",
+    "arm": "jev_forced_orchestration+haiku",
+    "cost": 1.1465374499999996,
+    "turns": 9,
+    "duration_ms": 285060,
+    "models": {
+      "claude-haiku-4-5-20251001": 0.0013369999999999999,
+      "claude-sonnet-5": 0.8093986999999999,
+      "claude-opus-5[1m]": 0.33580175
+    },
+    "failed": [],
+    "agent_calls": 2
+  }
+]

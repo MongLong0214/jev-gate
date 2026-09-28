@@ -1,0 +1,11 @@
+{
+  "sessions": 19594,
+  "sessionsWithUsage": 59,
+  "turns": 233624,
+  "input": 514949,
+  "cache_create": 809025839,
+  "cache_read": 120716107884,
+  "output": 201861122,
+  "thinking": 51707806,
+  "firstCreate": 2270133
+}

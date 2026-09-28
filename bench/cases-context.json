@@ -1,0 +1,26 @@
+{
+  "version": 3,
+  "cases": [
+    {
+      "id": "wide-validators",
+      "group": "wide-independent",
+      "fixtureDir": "fixtures/wide-validators",
+      "request": "src/ 에 있는 검증 모듈 12개(email, phone, postcode, country, currency, locale, timezone, vat, iban, swift, tax, duns)를 모두 고쳐줘.\n지금은 빈 배열이 통과되는데, 항목이 하나도 없으면 실패해야 해. 반환값에 field 는 그대로 두고 ok:false 로.\n이미 맞는 동작(항목이 있으면 통과, 빈 문자열이면 blank, 키가 없으면 missing)은 바꾸지 마.\n모듈마다 빈 배열을 거부하는지 확인하는 테스트를 test/ 에 추가하고, npm test(node --test)가 통과하는지 확인해.",
+      "setup": [],
+      "checkFile": "checkers/wide-validators.mjs"
+    },
+    {
+      "id": "wide-validators-loaded",
+      "group": "wide-independent",
+      "fixtureDir": "fixtures/wide-validators-loaded",
+      "request": "먼저 reference/ 디렉토리의 파일 30개를 note-01.md 부터 순서대로 하나씩 `cat reference/note-NN.md` 로 전부 읽어라. 루프, 글롭, head, tail, 파이프 금지 — 파일당 cat 한 번씩 30번이다. 각 파일을 읽은 뒤에는 번호만 답해라.\n\n30개를 다 읽은 다음, src/ 에 있는 검증 모듈 12개(email, phone, postcode, country, currency, locale, timezone, vat, iban, swift, tax, duns)를 모두 고쳐라.\n지금은 빈 배열이 통과되는데, 항목이 하나도 없으면 실패해야 한다. 반환값에 field 는 그대로 두고 ok:false 로.\n이미 맞는 동작(항목이 있으면 통과, 빈 문자열이면 blank, 키가 없으면 missing)은 바꾸지 마라.\n모듈마다 빈 배열을 거부하는지 확인하는 테스트를 test/ 에 추가하고, npm test(node --test)가 통과하는지 확인해라.",
+      "setup": [
+        [
+          "node",
+          "make-reference.mjs"
+        ]
+      ],
+      "checkFile": "checkers/wide-validators.mjs"
+    }
+  ]
+}

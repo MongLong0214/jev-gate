@@ -1,0 +1,423 @@
+{
+  "sessions": 19592,
+  "total": 85119554,
+  "assistantText": 30615985,
+  "rows": [
+    [
+      "Bash",
+      {
+        "calls": 105610,
+        "bytes": 78404370,
+        "big": 530
+      }
+    ],
+    [
+      "Read",
+      {
+        "calls": 1247,
+        "bytes": 3091761,
+        "big": 82
+      }
+    ],
+    [
+      "Agent",
+      {
+        "calls": 551,
+        "bytes": 659794,
+        "big": 4
+      }
+    ],
+    [
+      "TaskStop",
+      {
+        "calls": 326,
+        "bytes": 436629,
+        "big": 3
+      }
+    ],
+    [
+      "Edit",
+      {
+        "calls": 2009,
+        "bytes": 381442,
+        "big": 0
+      }
+    ],
+    [
+      "Write",
+      {
+        "calls": 1949,
+        "bytes": 362864,
+        "big": 0
+      }
+    ],
+    [
+      "ListAgents",
+      {
+        "calls": 61,
+        "bytes": 347309,
+        "big": 0
+      }
+    ],
+    [
+      "SendMessage",
+      {
+        "calls": 1573,
+        "bytes": 319970,
+        "big": 0
+      }
+    ],
+    [
+      "Monitor",
+      {
+        "calls": 1158,
+        "bytes": 265883,
+        "big": 0
+      }
+    ],
+    [
+      "mcp__commitlore__commitlore_prepare_capture",
+      {
+        "calls": 20,
+        "bytes": 237163,
+        "big": 17
+      }
+    ],
+    [
+      "TaskOutput",
+      {
+        "calls": 167,
+        "bytes": 207060,
+        "big": 4
+      }
+    ],
+    [
+      "WebSearch",
+      {
+        "calls": 26,
+        "bytes": 71832,
+        "big": 0
+      }
+    ],
+    [
+      "WebFetch",
+      {
+        "calls": 42,
+        "bytes": 62232,
+        "big": 1
+      }
+    ],
+    [
+      "mcp__commitlore__commitlore_query",
+      {
+        "calls": 13,
+        "bytes": 50298,
+        "big": 1
+      }
+    ],
+    [
+      "ScheduleWakeup",
+      {
+        "calls": 214,
+        "bytes": 34541,
+        "big": 0
+      }
+    ],
+    [
+      "AskUserQuestion",
+      {
+        "calls": 72,
+        "bytes": 30778,
+        "big": 0
+      }
+    ],
+    [
+      "mcp__commitlore__commitlore_verify_capture",
+      {
+        "calls": 9,
+        "bytes": 24156,
+        "big": 0
+      }
+    ],
+    [
+      "Artifact",
+      {
+        "calls": 26,
+        "bytes": 21210,
+        "big": 0
+      }
+    ],
+    [
+      "mcp__chrome-devtools__take_snapshot",
+      {
+        "calls": 7,
+        "bytes": 19977,
+        "big": 0
+      }
+    ],
+    [
+      "ExitPlanMode",
+      {
+        "calls": 1,
+        "bytes": 13978,
+        "big": 1
+      }
+    ],
+    [
+      "mcp__chrome-devtools__new_page",
+      {
+        "calls": 21,
+        "bytes": 12454,
+        "big": 0
+      }
+    ],
+    [
+      "SendUserFile",
+      {
+        "calls": 52,
+        "bytes": 12402,
+        "big": 0
+      }
+    ],
+    [
+      "mcp__plugin_commitlore_commitlore__commitlore_prepare_capture",
+      {
+        "calls": 2,
+        "bytes": 7886,
+        "big": 0
+      }
+    ],
+    [
+      "mcp__chrome-devtools__click",
+      {
+        "calls": 4,
+        "bytes": 6899,
+        "big": 0
+      }
+    ],
+    [
+      "mcp__chrome-devtools__navigate_page",
+      {
+        "calls": 13,
+        "bytes": 5648,
+        "big": 0
+      }
+    ],
+    [
+      "mcp__acp-attach__capacity_get",
+      {
+        "calls": 4,
+        "bytes": 5311,
+        "big": 0
+      }
+    ],
+    [
+      "mcp__chrome-devtools__evaluate_script",
+      {
+        "calls": 7,
+        "bytes": 4252,
+        "big": 0
+      }
+    ],
+    [
+      "mcp__plugin_commitlore_commitlore__commitlore_query",
+      {
+        "calls": 1,
+        "bytes": 3493,
+        "big": 0
+      }
+    ],
+    [
+      "mcp__acp-attach__doctor_run",
+      {
+        "calls": 3,
+        "bytes": 3128,
+        "big": 0
+      }
+    ],
+    [
+      "mcp__chrome-devtools__take_screenshot",
+      {
+        "calls": 30,
+        "bytes": 2630,
+        "big": 0
+      }
+    ],
+    [
+      "TaskCreate",
+      {
+        "calls": 27,
+        "bytes": 2228,
+        "big": 0
+      }
+    ],
+    [
+      "mcp__commitlore__commitlore_runtime_identity",
+      {
+        "calls": 11,
+        "bytes": 2202,
+        "big": 0
+      }
+    ],
+    [
+      "TaskUpdate",
+      {
+        "calls": 42,
+        "bytes": 1284,
+        "big": 0
+      }
+    ],
+    [
+      "mcp__plugin_commitlore_commitlore__commitlore_runtime_identity",
+      {
+        "calls": 4,
+        "bytes": 956,
+        "big": 0
+      }
+    ],
+    [
+      "mcp__chrome-devtools__resize_page",
+      {
+        "calls": 2,
+        "bytes": 838,
+        "big": 0
+      }
+    ],
+    [
+      "PushNotification",
+      {
+        "calls": 12,
+        "bytes": 701,
+        "big": 0
+      }
+    ],
+    [
+      "CronCreate",
+      {
+        "calls": 4,
+        "bytes": 686,
+        "big": 0
+      }
+    ],
+    [
+      "mcp__chrome-devtools__emulate",
+      {
+        "calls": 5,
+        "bytes": 592,
+        "big": 0
+      }
+    ],
+    [
+      "Skill",
+      {
+        "calls": 14,
+        "bytes": 512,
+        "big": 0
+      }
+    ],
+    [
+      "mcp__acp-attach__role_owner_message_claim",
+      {
+        "calls": 2,
+        "bytes": 430,
+        "big": 0
+      }
+    ],
+    [
+      "mcp__commitlore__commitlore_stage_capture",
+      {
+        "calls": 4,
+        "bytes": 421,
+        "big": 0
+      }
+    ],
+    [
+      "mcp__commitlore__commitlore_guard",
+      {
+        "calls": 3,
+        "bytes": 403,
+        "big": 0
+      }
+    ],
+    [
+      "CronList",
+      {
+        "calls": 4,
+        "bytes": 212,
+        "big": 0
+      }
+    ],
+    [
+      "mcp__commitlore__commitlore_stale",
+      {
+        "calls": 1,
+        "bytes": 204,
+        "big": 0
+      }
+    ],
+    [
+      "mcp__chrome-devtools__list_pages",
+      {
+        "calls": 3,
+        "bytes": 137,
+        "big": 0
+      }
+    ],
+    [
+      "mcp__acp-attach__role_wake_endpoint_register",
+      {
+        "calls": 1,
+        "bytes": 96,
+        "big": 0
+      }
+    ],
+    [
+      "mcp__chrome-devtools__fill",
+      {
+        "calls": 2,
+        "bytes": 70,
+        "big": 0
+      }
+    ],
+    [
+      "CronDelete",
+      {
+        "calls": 3,
+        "bytes": 69,
+        "big": 0
+      }
+    ],
+    [
+      "ToolSearch",
+      {
+        "calls": 334,
+        "bytes": 64,
+        "big": 0
+      }
+    ],
+    [
+      "mcp__acp-attach__role_owner_message_complete",
+      {
+        "calls": 1,
+        "bytes": 43,
+        "big": 0
+      }
+    ],
+    [
+      "TaskList",
+      {
+        "calls": 2,
+        "bytes": 28,
+        "big": 0
+      }
+    ],
+    [
+      "TaskGet",
+      {
+        "calls": 2,
+        "bytes": 28,
+        "big": 0
+      }
+    ]
+  ]
+}

@@ -2,8 +2,8 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import type { GateV5, JevPhaseUsage, Plan, WorkerTierRecord } from './run.js';
-import { addUsage, familyCosts, familyTokens, money, safeSum, totalTokens, type ModelUsage } from './usage.js';
+import type { GateV5, JevPhaseUsage, LeanV5, Plan, RouterRootStep, RouterSpawnResult, RouterV5, WorkerTierRecord } from './run.js';
+import { addUsage, estimateJevCostUsd, familyCosts, familyTokens, money, safeSum, totalTokens, type ModelUsage } from './usage.js';
 
 /**
  * Plan-first reporting (#16). Rows come from plan.json; artifacts are joined to them. Missing files stay missing,
@@ -23,7 +23,15 @@ export interface RowView {
   grade_reason: string | null;
   elapsed_ms: number | null;
   claude_cost_usd: number | null;
+  /** L6: every producer's Jev cost for this row, or null when any enabled producer's is unknown. */
   jev_cost_usd: number | null;
+  /** L6: the part of it that is known, so an unknown total is never read as zero or replaced by this. */
+  jev_cost_known_subtotal: number;
+  /**
+   * L6/#45: Jev cost by the producer that made the calls. Legacy, Lean and Router record disjoint phases, so they
+   * add; a producer known disabled for the row's mode/arm is zero, and an enabled one with no observation is null.
+   */
+  jev_cost_by_producer: { legacy: number | null; lean: number | null; router: number | null };
   total_cost_usd: number | null;
   model_usage: ModelUsage | null;
   usage_status: string | null;
@@ -49,6 +57,10 @@ export interface RowView {
   diagnostic: boolean;
   /** Null for a V3/V4 cell: schema-5 observation is unknown there, never zero. */
   v5: GateV5 | null;
+  /** JGL-05: the lean observations of this row, or null for a row that carried none. */
+  lean: LeanV5 | null;
+  /** #45: the Router observations of this row, or null when the cell carries no router block at all (pre-#45 cell). */
+  router: RouterV5 | null;
 }
 
 export interface ArmSummary {
@@ -79,7 +91,88 @@ export interface ArmSummary {
   completed_pass_count: number;
   gate: { agent_calls: number; owned_calls: number; pinned: number; eligible_attempted: number; patched: number; preserved: number; preserve_reasons: Record<string, number>; skipped: Record<string, number>; attempt_unknown: number; missing_pre_records: number; hint_delivered: number; target_model_mismatches: number };
   gate_v5: GateV5Summary;
+  /** JGL-05: what lean actually did. Zeroed on an arm that never ran it. */
+  lean: LeanSummary;
+  /** #45: what the Router actually did. Zeroed on an arm that never ran it -- see RouterSummary's own caveats. */
+  router: RouterSummary;
   validity_problems: string[];
+}
+
+/**
+ * JGL-05. `packets_proposed` is what the root was offered, `packets_dispatched` is what it actually used, and
+ * `recommendation_not_taken` is the gap it chose. They are three different facts and are never collapsed.
+ */
+export interface LeanSummary {
+  selections: number;
+  policy: Record<string, number>;
+  jev_attempts: number;
+  jev_attempt_unknown: number;
+  jev_responses_known: number;
+  /** Known input tokens; null when a sum overflowed or a row's own subtotal was unknown. */
+  jev_input_tokens_known: number | null;
+  /** Every row's complete input tokens, or null. */
+  jev_input_tokens: number | null;
+  jev_cost_usd: number | null;
+  jev_cost_known_subtotal: number;
+  /** Rows whose lean block predates the L6 accounting and so carry no complete total. */
+  rows_uncorrected: number;
+  http_codes: Record<string, number>;
+  action: Record<string, number>;
+  reasons: Record<string, number>;
+  packets_proposed: number;
+  packets_dispatched: number;
+  recommendation_not_taken: number;
+  dispatch_denied: Record<string, number>;
+  retained_groups: number;
+  omitted_groups: number;
+  unassessed: number;
+  mandatory_bytes_max: number | null;
+  optional_bytes_max: number | null;
+  packet_bytes_max: number | null;
+  composed_bytes_max: number | null;
+  coverage: Record<string, number>;
+  observed_model: Record<string, number>;
+  terminal_status: Record<string, number>;
+}
+
+/**
+ * #45: Router observations aggregated over an arm's rows. `root_applied`/`spawn_applied` are counts here (the
+ * per-step records themselves stay on each row's `router.root_applied`/`spawn_applied`, not concatenated here).
+ * `jev_attempts` at 0 for every row is expected on an installed host (see RouterV5) -- that reads as a known zero,
+ * not an unknown, and is not itself evidence of a bug. No savings headline is computed from this producer.
+ */
+export interface RouterSummary {
+  rows_observed: number;
+  unparsable_lines: number;
+  root_assessed: number;
+  root_proposed: number;
+  root_skip_reasons: Record<string, number>;
+  root_stop_reasons: Record<string, number>;
+  root_applied: number;
+  root_observed: number;
+  root_model_mismatches: number;
+  root_requested_models: Record<string, number>;
+  root_observed_models: Record<string, number>;
+  root_effort_applied: Record<string, number>;
+  spawn_assessed: number;
+  spawn_proposed: number;
+  spawn_skip_reasons: Record<string, number>;
+  spawn_stop_reasons: Record<string, number>;
+  spawn_applied: number;
+  spawn_denied: number;
+  spawn_observed: number;
+  spawn_model_mismatches: number;
+  spawn_requested_models: Record<string, number>;
+  spawn_observed_models: Record<string, number>;
+  jev_attempts: number;
+  jev_responses_known: number;
+  jev_input_tokens_known: number | null;
+  jev_input_tokens: number | null;
+  jev_cost_usd: number | null;
+  jev_cost_known_subtotal: number;
+  late_events: number;
+  /** Rows whose Router Jev cost is unknown (log missing, unreadable, damaged or never ingested). */
+  rows_cost_unknown: number;
 }
 
 /** Schema-5 observation aggregated over an arm's rows. `rows_observed` says how many rows carried it at all. */
@@ -94,11 +187,12 @@ export interface GateV5Summary {
   planner_model_observed: Record<string, number>;
   plan_status: Record<string, number>;
   worker_calls: Record<string, WorkerTierRecord>;
-  receipts: { accept: number; incomplete: number; invalid: number; unknown: number };
+  receipts: { accept: number; incomplete: number; invalid: number; unknown: number; rework: number; replan: number };
   advisory: { accept: number; rework: number; replan: number; abstain: number; none: number };
   parallel: { reservation_overlap_max: number; observed_overlap_max: number };
-  jev_requests: { admission: JevPhaseUsage; allocation: JevPhaseUsage; result: JevPhaseUsage };
+  jev_requests: { admission: JevPhaseUsage; allocation: JevPhaseUsage; result: JevPhaseUsage; scope: JevPhaseUsage };
   outcomes: Record<string, number>;
+  influence: { judgments: number; changed_default: number };
   orphan_records: number;
   decision_mismatch: number;
 }
@@ -129,6 +223,8 @@ export interface Comparison {
 
 export interface Report {
   schema: 5;
+  /** L6: 2 prices every Jev producer a row used, joined per request; reports without it priced the legacy gate only. */
+  accounting: 2;
   run: string;
   generated_at: string;
   plan_schema: number | null;
@@ -202,14 +298,68 @@ const usageOf = (c: Record<string, unknown>): { usage: ModelUsage | null; status
   return { usage: isRecord(mu) ? (mu as ModelUsage) : null, status };
 };
 
+/**
+ * L6: a cell's lean block in the current accounting. A block ingested before it (no `accounting: 2`) used
+ * `jev_input_tokens` for the known subtotal and `jev_input_tokens_known` for a response count, and never joined
+ * intents to results -- so its subtotal is kept, relabelled, and its complete totals are unknown rather than trusted.
+ */
+export const leanOf = (v: unknown): LeanV5 | null => {
+  if (!isRecord(v)) return null;
+  const l = v as unknown as LeanV5 & { accounting?: number };
+  if (l.accounting === 2) return l;
+  const oldTokens = typeof v['jev_input_tokens'] === 'number' ? v['jev_input_tokens'] : null;
+  const oldResponses = typeof v['jev_input_tokens_known'] === 'number' ? v['jev_input_tokens_known'] : 0;
+  const oldCost = money(v['jev_cost_usd']);
+  return {
+    ...l,
+    accounting: 1,
+    jev_attempt_unknown: 0,
+    jev_responses_known: oldResponses,
+    jev_input_tokens_known: oldTokens,
+    jev_input_tokens: null,
+    jev_cost_usd: null,
+    jev_cost_known_subtotal: oldCost ?? 0,
+    duplicate_records: 0,
+  };
+};
+
+/**
+ * #45: a cell's router block. This bench has produced only `accounting: 1`, so unlike `leanOf` there is no older
+ * shape to migrate; a value that is not a record at all (a pre-#45 cell with no `router` key) reads as null.
+ */
+export const routerOf = (v: unknown): RouterV5 | null => (isRecord(v) && v['accounting'] === 1 ? (v as unknown as RouterV5) : null);
+
 export const toRowView = (p: PlannedCell, c: Record<string, unknown> | null): RowView => {
   const status = rowStatus(c);
   const grade = c && isRecord(c['grade']) ? c['grade'] : null;
   const gate = c && isRecord(c['gate']) ? c['gate'] : {};
-  const { usage, status: usageStatus } = c ? usageOf(c) : { usage: null, status: null };
+  // A session reports its cumulative total after each of its turns (the priming prompts, then the request). One that
+  // stopped before its last turn's result, by a timeout, a cancel or a crash, keeps an earlier turn's total, which
+  // leaves out what the unreported turn spent: that is a subtotal, so the cost and usage are unknown rather than it.
+  const turnsReported = c && Array.isArray(c['turn_totals_usd']) ? c['turn_totals_usd'].length : null;
+  const turnsSent = c && Array.isArray(c['prime_sha256']) ? c['prime_sha256'].length + 1 : null;
+  const partialSession = turnsReported !== null && turnsSent !== null && turnsReported > 0 && turnsReported < turnsSent;
+  const { usage, status: usageStatus } = !c ? { usage: null, status: null } : partialSession ? { usage: null, status: 'partial_session' } : usageOf(c);
   const result = c && isRecord(c['result']) ? c['result'] : null;
-  const claude = result ? money(result['total_cost_usd']) : null;
-  const jev = money(gate['jev_cost_usd']);
+  const claude = result && !partialSession ? money(result['total_cost_usd']) : null;
+  const lean = c ? leanOf(c['lean']) : null;
+  const router = c ? routerOf(c['router']) : null;
+  // L6/#45: each producer once. The legacy aggregate is built from the gate phases only, so it never already holds a
+  // lean or router request. Lean/Router are known disabled outside their mode/arm; when expected, a missing block
+  // (routerOf/leanOf returning null on a raw record that carries no such key at all) is an unobserved producer.
+  const legacyCost = money(gate['jev_cost_usd']);
+  const leanCost = lean ? lean.jev_cost_usd : c && c['mode'] === 'lean' ? null : 0;
+  // A Router arm's cost is known only from a log the runner read: a block still at its initial zero (a partial run
+  // reported before ingestion, `log: null`) is unobserved, not free.
+  const routerCost = c && c['router_expected'] === true ? (router && router.log === 'read' ? router.jev_cost_usd : null) : router ? router.jev_cost_usd : 0;
+  const jev = legacyCost !== null && leanCost !== null && routerCost !== null ? legacyCost + leanCost + routerCost : null;
+  // An incomplete legacy total still has a known part; the known subtotal keeps it, priced as the total would be.
+  const legacyKnownTokens = money(gate['jev_input_tokens_known']);
+  const legacyKnownCost =
+    legacyCost ??
+    (legacyKnownTokens !== null && legacyKnownTokens > 0
+      ? (estimateJevCostUsd(typeof gate['jev_model'] === 'string' ? gate['jev_model'] : 'jev-1.13.0', legacyKnownTokens) ?? 0)
+      : 0);
   const init = c && isRecord(c['init']) ? c['init'] : null;
   const pluginExpected = c ? c['plugin_expected'] : null;
   const rec = (v: unknown): Record<string, number> => (isRecord(v) ? Object.fromEntries(Object.entries(v).filter(([, n]) => typeof n === 'number')) as Record<string, number> : {});
@@ -226,6 +376,8 @@ export const toRowView = (p: PlannedCell, c: Record<string, unknown> | null): Ro
     elapsed_ms: c ? money(c['elapsed_ms']) : null,
     claude_cost_usd: claude,
     jev_cost_usd: jev,
+    jev_cost_known_subtotal: legacyKnownCost + (lean ? lean.jev_cost_known_subtotal : 0) + (router ? router.jev_cost_known_subtotal : 0),
+    jev_cost_by_producer: { legacy: legacyCost, lean: leanCost, router: routerCost },
     total_cost_usd: claude !== null && jev !== null ? claude + jev : null,
     model_usage: usage,
     usage_status: usageStatus,
@@ -249,6 +401,8 @@ export const toRowView = (p: PlannedCell, c: Record<string, unknown> | null): Ro
     api_retries: c && typeof c['api_retries'] === 'number' ? (c['api_retries'] as number) : 0,
     diagnostic: c !== null && c['diagnostic'] === true,
     v5: gateV5Of(gate),
+    lean,
+    router,
   };
 };
 
@@ -267,7 +421,7 @@ const jevPhase = (v: unknown): JevPhaseUsage => {
   return { attempts: int(src['attempts']), tokens: money(src['tokens']), tokens_known: int(src['tokens_known']), cost_usd: money(src['cost_usd']) };
 };
 
-const RECEIPT_KEYS = ['accept', 'incomplete', 'invalid', 'unknown'] as const;
+const RECEIPT_KEYS = ['accept', 'incomplete', 'invalid', 'unknown', 'rework', 'replan'] as const;
 const ADVISORY_KEYS = ['accept', 'rework', 'replan', 'abstain', 'none'] as const;
 
 /** Reads the schema-5 gate block defensively; a V3/V4 cell returns null so its observation stays unknown, not zero. */
@@ -277,6 +431,7 @@ export const gateV5Of = (gate: Record<string, unknown>): GateV5 | null => {
   const planner = isRecord(gate['planner_calls']) ? gate['planner_calls'] : {};
   const parallel = isRecord(gate['parallel']) ? gate['parallel'] : {};
   const jev = gate['jev_requests'];
+  const influence = isRecord(gate['influence']) ? gate['influence'] : {};
   const workers: Record<string, WorkerTierRecord> = {};
   if (isRecord(gate['worker_calls'])) {
     for (const [tier, raw] of Object.entries(gate['worker_calls'])) {
@@ -303,7 +458,8 @@ export const gateV5Of = (gate: Record<string, unknown>): GateV5 | null => {
     receipts: counters(gate['receipts'], RECEIPT_KEYS) as GateV5['receipts'],
     advisory: counters(gate['advisory'], ADVISORY_KEYS) as GateV5['advisory'],
     parallel: { reservation_overlap_max: int(parallel['reservation_overlap_max']), observed_overlap_max: int(parallel['observed_overlap_max']) },
-    jev_requests: { admission: jevPhase(jev['admission']), allocation: jevPhase(jev['allocation']), result: jevPhase(jev['result']) },
+    jev_requests: { admission: jevPhase(jev['admission']), allocation: jevPhase(jev['allocation']), result: jevPhase(jev['result']), scope: jevPhase(jev['scope']) },
+    influence: { judgments: int(influence['judgments']), changed_default: int(influence['changed_default']) },
     outcome: text(gate['outcome']),
     orphan_records: int(gate['orphan_records']),
     decision_mismatch: int(gate['decision_mismatch']),
@@ -328,11 +484,17 @@ const emptyGateV5Summary = (): GateV5Summary => ({
   planner_model_observed: {},
   plan_status: {},
   worker_calls: {},
-  receipts: { accept: 0, incomplete: 0, invalid: 0, unknown: 0 },
+  receipts: { accept: 0, incomplete: 0, invalid: 0, unknown: 0, rework: 0, replan: 0 },
   advisory: { accept: 0, rework: 0, replan: 0, abstain: 0, none: 0 },
   parallel: { reservation_overlap_max: 0, observed_overlap_max: 0 },
-  jev_requests: { admission: { attempts: 0, tokens: 0, tokens_known: 0, cost_usd: 0 }, allocation: { attempts: 0, tokens: 0, tokens_known: 0, cost_usd: 0 }, result: { attempts: 0, tokens: 0, tokens_known: 0, cost_usd: 0 } },
+  jev_requests: {
+    admission: { attempts: 0, tokens: 0, tokens_known: 0, cost_usd: 0 },
+    allocation: { attempts: 0, tokens: 0, tokens_known: 0, cost_usd: 0 },
+    result: { attempts: 0, tokens: 0, tokens_known: 0, cost_usd: 0 },
+    scope: { attempts: 0, tokens: 0, tokens_known: 0, cost_usd: 0 },
+  },
   outcomes: {},
+  influence: { judgments: 0, changed_default: 0 },
   orphan_records: 0,
   decision_mismatch: 0,
 });
@@ -342,6 +504,155 @@ const addJevPhase = (into: JevPhaseUsage, more: JevPhaseUsage): void => {
   into.tokens_known += more.tokens_known;
   into.tokens = into.tokens === null || more.tokens === null ? null : into.tokens + more.tokens;
   into.cost_usd = into.cost_usd === null || more.cost_usd === null ? null : into.cost_usd + more.cost_usd;
+};
+
+const emptyLeanSummary = (): LeanSummary => ({
+  selections: 0,
+  policy: {},
+  jev_attempts: 0,
+  jev_attempt_unknown: 0,
+  jev_responses_known: 0,
+  jev_input_tokens_known: 0,
+  jev_input_tokens: 0,
+  jev_cost_usd: 0,
+  jev_cost_known_subtotal: 0,
+  rows_uncorrected: 0,
+  http_codes: {},
+  action: {},
+  reasons: {},
+  packets_proposed: 0,
+  packets_dispatched: 0,
+  recommendation_not_taken: 0,
+  dispatch_denied: {},
+  retained_groups: 0,
+  omitted_groups: 0,
+  unassessed: 0,
+  mandatory_bytes_max: null,
+  optional_bytes_max: null,
+  packet_bytes_max: null,
+  composed_bytes_max: null,
+  coverage: {},
+  observed_model: {},
+  terminal_status: {},
+});
+
+/** Sums the lean observations of an arm's rows. Sizes are reported as the largest seen, never averaged into one. */
+export const summarizeLean = (rows: RowView[]): LeanSummary => {
+  const out = emptyLeanSummary();
+  const big = (cur: number | null, v: number | null | undefined): number | null =>
+    typeof v !== 'number' || !Number.isFinite(v) ? cur : cur === null ? v : Math.max(cur, v);
+  for (const r of rows) {
+    const l = r.lean;
+    if (!l) continue;
+    out.selections += l.selections ?? 0;
+    out.jev_attempts += l.jev_attempts ?? 0;
+    out.jev_attempt_unknown += l.jev_attempt_unknown ?? 0;
+    out.jev_responses_known += l.jev_responses_known ?? 0;
+    out.jev_input_tokens_known = safeSum([out.jev_input_tokens_known, l.jev_input_tokens_known]);
+    out.jev_input_tokens = safeSum([out.jev_input_tokens, l.jev_input_tokens]);
+    out.jev_cost_usd = out.jev_cost_usd === null || l.jev_cost_usd === null ? null : out.jev_cost_usd + l.jev_cost_usd;
+    out.jev_cost_known_subtotal += l.jev_cost_known_subtotal ?? 0;
+    if (l.accounting !== 2) out.rows_uncorrected += 1;
+    out.packets_proposed += l.packets_proposed ?? 0;
+    out.packets_dispatched += l.packets_dispatched ?? 0;
+    out.recommendation_not_taken += l.recommendation_not_taken ?? 0;
+    out.retained_groups += l.retained_groups ?? 0;
+    out.omitted_groups += l.omitted_groups ?? 0;
+    out.unassessed += l.unassessed ?? 0;
+    for (const k of ['policy', 'http_codes', 'action', 'reasons', 'dispatch_denied', 'coverage', 'observed_model', 'terminal_status'] as const) {
+      addCounts(out[k], (l[k] ?? {}) as Record<string, number>);
+    }
+    out.mandatory_bytes_max = big(out.mandatory_bytes_max, l.mandatory_bytes);
+    out.optional_bytes_max = big(out.optional_bytes_max, l.optional_bytes);
+    out.packet_bytes_max = big(out.packet_bytes_max, l.packet_bytes_max);
+    out.composed_bytes_max = big(out.composed_bytes_max, l.composed_bytes_max);
+  }
+  return out;
+};
+
+const emptyRouterSummary = (): RouterSummary => ({
+  rows_observed: 0,
+  unparsable_lines: 0,
+  root_assessed: 0,
+  root_proposed: 0,
+  root_skip_reasons: {},
+  root_stop_reasons: {},
+  root_applied: 0,
+  root_observed: 0,
+  root_model_mismatches: 0,
+  root_requested_models: {},
+  root_observed_models: {},
+  root_effort_applied: {},
+  spawn_assessed: 0,
+  spawn_proposed: 0,
+  spawn_skip_reasons: {},
+  spawn_stop_reasons: {},
+  spawn_applied: 0,
+  spawn_denied: 0,
+  spawn_observed: 0,
+  spawn_model_mismatches: 0,
+  spawn_requested_models: {},
+  spawn_observed_models: {},
+  jev_attempts: 0,
+  jev_responses_known: 0,
+  jev_input_tokens_known: 0,
+  jev_input_tokens: 0,
+  jev_cost_usd: 0,
+  jev_cost_known_subtotal: 0,
+  late_events: 0,
+  rows_cost_unknown: 0,
+});
+
+/**
+ * #45: sums an arm's rows' router blocks. `root_applied`/`spawn_applied` per-step records are counted here (never
+ * concatenated); requested/observed/effort tallies come from those same per-step records so "wanted X, got Y" is
+ * visible per model, not just as an aggregate mismatch count. Every row (router-expected or not) carries a router
+ * block (possibly all-zero), same as `summarizeLean` -- the zeros of an arm that never ran it contribute nothing.
+ */
+export const summarizeRouter = (rows: RowView[]): RouterSummary => {
+  const out = emptyRouterSummary();
+  for (const r of rows) {
+    const v = r.router;
+    if (!v) continue;
+    out.rows_observed += 1;
+    out.unparsable_lines += v.unparsable_lines;
+    out.root_assessed += v.root_assessed;
+    out.root_proposed += v.root_proposed;
+    addCounts(out.root_skip_reasons, v.root_skip_reasons);
+    addCounts(out.root_stop_reasons, v.root_stop_reasons);
+    out.root_applied += v.root_applied.length;
+    out.root_observed += v.root_observed;
+    out.root_model_mismatches += v.root_model_mismatches;
+    for (const step of v.root_applied) {
+      if (typeof step.applied.model === 'string') addCounts(out.root_requested_models, { [step.applied.model]: 1 });
+      if (step.applied.effort !== undefined) addCounts(out.root_effort_applied, { [String(step.applied.effort)]: 1 });
+      if (step.observed_model) addCounts(out.root_observed_models, { [step.observed_model]: 1 });
+    }
+    out.spawn_assessed += v.spawn_assessed;
+    out.spawn_proposed += v.spawn_proposed;
+    addCounts(out.spawn_skip_reasons, v.spawn_skip_reasons);
+    addCounts(out.spawn_stop_reasons, v.spawn_stop_reasons);
+    out.spawn_applied += v.spawn_applied.length;
+    out.spawn_denied += v.spawn_denied;
+    out.spawn_observed += v.spawn_observed;
+    out.spawn_model_mismatches += v.spawn_model_mismatches;
+    for (const sp of v.spawn_applied) {
+      addCounts(out.spawn_requested_models, { [sp.requested]: 1 });
+      if (sp.observed) addCounts(out.spawn_observed_models, { [sp.observed]: 1 });
+    }
+    out.jev_attempts += v.jev_attempts;
+    out.jev_responses_known += v.jev_responses_known;
+    out.jev_input_tokens_known = safeSum([out.jev_input_tokens_known, v.jev_input_tokens_known]);
+    // The row's own verdict (`toRowView`), not the block's raw number: a Router block the runner never read still
+    // holds its initial zeros, which are not observations.
+    const rowCost = r.jev_cost_by_producer.router;
+    if (rowCost === null) out.rows_cost_unknown += 1;
+    out.jev_input_tokens = safeSum([out.jev_input_tokens, rowCost === null ? null : v.jev_input_tokens]);
+    out.jev_cost_usd = out.jev_cost_usd === null || rowCost === null ? null : out.jev_cost_usd + rowCost;
+    out.jev_cost_known_subtotal += v.jev_cost_known_subtotal;
+    out.late_events += v.late_events;
+  }
+  return out;
 };
 
 export const summarizeGateV5 = (rows: RowView[]): GateV5Summary => {
@@ -376,7 +687,10 @@ export const summarizeGateV5 = (rows: RowView[]): GateV5Summary => {
     addJevPhase(out.jev_requests.admission, v.jev_requests.admission);
     addJevPhase(out.jev_requests.allocation, v.jev_requests.allocation);
     addJevPhase(out.jev_requests.result, v.jev_requests.result);
+    addJevPhase(out.jev_requests.scope, v.jev_requests.scope);
     if (v.outcome) addCounts(out.outcomes, { [v.outcome]: 1 });
+    out.influence.judgments += v.influence.judgments;
+    out.influence.changed_default += v.influence.changed_default;
     out.orphan_records += v.orphan_records;
     out.decision_mismatch += v.decision_mismatch;
   }
@@ -441,7 +755,7 @@ export const summarizeArm = (arm: string, rows: RowView[]): ArmSummary => {
     claude_cost_known_subtotal: sum(claudeKnown.map((r) => r.claude_cost_usd!)),
     claude_cost_unknown_rows: spendRows.length - claudeKnown.length,
     jev_cost_usd: jevCost,
-    jev_cost_known_subtotal: sum(jevKnown.map((r) => r.jev_cost_usd!)),
+    jev_cost_known_subtotal: sum(spendRows.map((r) => r.jev_cost_known_subtotal)),
     jev_cost_unknown_rows: spendRows.length - jevKnown.length,
     total_cost_usd: total,
     cost_per_pass_usd: total !== null && pass > 0 ? total / pass : null,
@@ -451,6 +765,8 @@ export const summarizeArm = (arm: string, rows: RowView[]): ArmSummary => {
     completed_pass_count: completedPass.length,
     gate,
     gate_v5: summarizeGateV5(mine),
+    lean: summarizeLean(mine),
+    router: summarizeRouter(mine),
     validity_problems: problems,
   };
 };
@@ -561,21 +877,75 @@ const COMPARISONS: Array<[string, string, CriterionKind]> = [
   ['native_hierarchy', 'sonnet_native', 'none'],
   ['sonnet_gated', 'sonnet_native', 'none'],
   ['sonnet_gated', 'frontier_raw', 'none'],
+  /**
+   * JGL-05: both comparisons are reported, and neither carries a pass/fail criterion. A win over native_auto alone
+   * is not value over a simple recency handoff, and a win over recent_packet alone is not value over ordinary Claude.
+   */
+  ['jev_lean', 'native_auto', 'none'],
+  ['jev_lean', 'recent_packet', 'none'],
+  ['recent_packet', 'native_auto', 'none'],
+  /**
+   * #45: descriptive only, like the lean rows above -- no criterion is declared for router/router_native/router_fixed.
+   * router_native is the frontier root at the base effort, not native_auto's Sonnet (see armSpecs), so the Router is
+   * compared with the session it is meant to make cheaper.
+   */
+  ['router', 'router_native', 'none'],
+  ['router', 'router_fixed', 'none'],
+  ['router_fixed', 'router_native', 'none'],
 ];
 
-/** The PRD conclusion categories (ADR A13), chosen in order: the first one the observation supports is the answer. */
-export const CONCLUSION_CATEGORIES = [
-  'insufficient observation',
-  'no admission exposure',
-  'no allocation exposure',
-  'no added value over matched orchestration',
-  'lower cost with quality loss',
-  'lower cost with slower completion',
-  'repeated whole-job improvement in the tested workload',
-  'mechanism only',
-] as const;
 
 export const concludeRun = (arms: ArmSummary[], comparisons: Comparison[]): { category: string; reason: string } => {
+  /**
+   * JGL-05: a lean run plans none of the hierarchy arms, so the hierarchy conclusion would report on an arm that was
+   * never scheduled. This run's own question is answered from its own arms, and it never returns a verdict: three
+   * arms over a handful of jobs is an exploratory reading, not a demonstration.
+   */
+  /**
+   * #45: a router run plans none of the hierarchy or lean arms either, for the same reason as the lean branch below --
+   * this run answers only its own native-vs-Router-vs-fixed question. No declared criterion applies to any of the
+   * three router arms (see COMPARISONS), so this never returns a met/not_met verdict, and the category says plainly
+   * that it carries no savings headline.
+   */
+  const routerRan = arms.some((a) => a.arm === 'router' || a.arm === 'router_native' || a.arm === 'router_fixed');
+  if (routerRan && !arms.some((a) => a.arm === 'jev_hierarchy' || a.arm === 'jev_lean')) {
+    const routerArm = arms.find((a) => a.arm === 'router');
+    if (!routerArm || routerArm.by_status.completed === 0) {
+      return { category: 'insufficient observation', reason: 'no completed router session in this run' };
+    }
+    const r = routerArm.router;
+    return {
+      category: 'exploratory router reading',
+      reason: `router arm: root_assessed ${r.root_assessed} (applied ${r.root_applied}), spawn_assessed ${r.spawn_assessed} (applied ${r.spawn_applied}, denied ${r.spawn_denied}), Jev attempts ${r.jev_attempts} (cost ${fmt(r.jev_cost_usd, 6)}); this is a mechanism and cost observation only -- no declared criterion applies and there is no savings headline, so read router/router_native/router_fixed rows side by side instead of a verdict`,
+    };
+  }
+  const leanArm = arms.find((a) => a.arm === 'jev_lean');
+  if (leanArm && !arms.some((a) => a.arm === 'jev_hierarchy')) {
+    const l = leanArm.lean;
+    if (leanArm.by_status.completed === 0) return { category: 'insufficient observation', reason: 'no completed jev_lean session in this run' };
+    if (l.jev_attempts === 0 && l.selections === 0) return { category: 'insufficient observation', reason: 'no lean selection was recorded for jev_lean' };
+    // A successful call records no error code, and the ingest labels it by status: `http_200` is the success bucket.
+    const failed = Object.entries(l.http_codes).filter(([code]) => code !== 'http_200').reduce((n, [, v]) => n + v, 0);
+    if (l.jev_attempts > 0 && failed === l.jev_attempts) {
+      return { category: 'no selection exposure', reason: `every one of jev_lean's ${l.jev_attempts} Jev attempts failed (${counts(l.http_codes)}), so the arm ran as native and no selection was measured` };
+    }
+    if (l.packets_dispatched === 0) {
+      const offered = l.packets_proposed;
+      if (offered > 0) {
+        return { category: 'no dispatch exposure', reason: `lean proposed ${offered} packet(s) and the root dispatched none (${l.recommendation_not_taken} recommendation(s) not taken)` };
+      }
+      // Selection ran and declined. That is the policy working, not an absence of observation, so say which reason.
+      const why = Object.keys(l.reasons).length ? counts(l.reasons) : 'no reason recorded';
+      return {
+        category: 'no dispatch exposure',
+        reason: `lean selected ${l.selections} time(s) over ${l.jev_attempts} answered request(s) and proposed no packet (${why}); the arm ran as native and no handoff was measured`,
+      };
+    }
+    return {
+      category: 'exploratory lean reading',
+      reason: `${l.packets_dispatched} dispatched packet(s) over ${leanArm.by_status.completed} completed session(s); read the paired jev_lean vs native_auto and jev_lean vs recent_packet rows together, and treat neither alone as value`,
+    };
+  }
   const jev = arms.find((a) => a.arm === 'jev_hierarchy');
   const by = (control: string): Comparison | undefined => comparisons.find((c) => c.treatment === 'jev_hierarchy' && c.control === control);
   const diagnostic = arms.find((a) => a.arm === 'jev_forced_orchestration');
@@ -618,6 +988,8 @@ export const buildReport = (runDir: string): Report => {
   const notes = [
     'Rows come from plan.json. missing_record means the planned cell has no saved file; it is not "not started" and never cost zero.',
     'Claude total_cost_usd is an API-equivalent estimate (whole tree incl. children), not subscription billing or quota; Jev cost is list price × input tokens, null when any attempt has unknown usage.',
+    'Accounting 2 (L6): Jev cost adds every producer a row used -- the legacy gate, lean, and (#45) Router, whose records are disjoint -- joining intents to results per request. An intent without a result leaves the total unknown; a lean block from an older ingestion keeps only its known subtotal.',
+    '#45: the Router producer prices only its own Jev assessment calls (root/spawn/late `usage`), never the routed Claude call’s own usage (root_result/spawn_result), which stays a per-step observational record and is already priced as ordinary Claude spend elsewhere. Router arms carry no declared comparison criterion and no savings headline; zero Jev attempts on a host `hostSupported` accepts (any `2.1.N`, N>=282, per PR #49) is not the expected reading and needs its own explanation (e.g. no TypeSafe key, or the plugin disabled) -- only an unsupported host makes it a structural no-op.',
     'Totals are over the planned cohort including failures and timeouts; a null total means some consumption is unknown and the known subtotal is shown beside it.',
     'The complete-case diagnostic is labeled and lists exclusions; it never replaces the planned-cohort headline. Per-row percentages are not averaged.',
     'A timeout duration is not time-to-success; completed_pass_latency is reported separately with its count.',
@@ -631,6 +1003,7 @@ export const buildReport = (runDir: string): Report => {
   ];
   return {
     schema: 5,
+    accounting: 2,
     run: runDir,
     generated_at: new Date().toISOString(),
     plan_schema: schema,
@@ -683,10 +1056,58 @@ export const renderMarkdown = (r: Report): string => {
   L.push('', '## gate activity per arm', '', '| arm | Agent calls | owned | pinned | eligible attempted | patched | preserved (reasons) | skipped (codes) | attempt unknown | missing pre records | hint delivered | target/actual mismatches | validity problems |', '|---|---|---|---|---|---|---|---|---|---|---|---|---|');
   for (const a of r.arms) L.push(`| ${a.arm} | ${a.gate.agent_calls} | ${a.gate.owned_calls} | ${a.gate.pinned} | ${a.gate.eligible_attempted} | ${a.gate.patched} | ${a.gate.preserved} (${counts(a.gate.preserve_reasons)}) | ${counts(a.gate.skipped)} | ${a.gate.attempt_unknown} | ${a.gate.missing_pre_records} | ${a.gate.hint_delivered} | ${a.gate.target_model_mismatches} | ${a.validity_problems.length ? a.validity_problems.join('; ') : '-'} |`);
   L.push('', '## V5 gates per arm (observed)', '', ...v5Table(r.arms));
-  L.push('', '## Jev requests per arm (attempts / input tokens / est $ at the dated price)', '', '| arm | admission | allocation | result |', '|---|---|---|---|');
+  if (r.arms.some((a) => a.lean.selections > 0 || a.lean.packets_proposed > 0 || a.lean.packets_dispatched > 0)) {
+    L.push(
+      '',
+      '## lean selection and dispatch (observed)',
+      '',
+      '| arm | selections | policy | Jev attempts (HTTP) | Jev input tokens: complete (known subtotal / responses, possibly sent) | Jev cost: complete (known) | action | reasons | packets proposed | dispatched | not taken | denied | groups retained/omitted/unassessed | mandatory B | optional B | packet B | composed B | coverage | observed model | terminal |',
+      '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|',
+    );
+    for (const a of r.arms) {
+      const l = a.lean;
+      L.push(
+        `| ${a.arm} | ${l.selections} | ${counts(l.policy)} | ${l.jev_attempts} (${counts(l.http_codes)}) | ${l.jev_input_tokens ?? 'null'} (${l.jev_input_tokens_known ?? 'null'} / ${l.jev_responses_known}, ${l.jev_attempt_unknown}) | ${fmt(l.jev_cost_usd, 6)} (${fmt(l.jev_cost_known_subtotal, 6)}) | ${counts(l.action)} | ${counts(l.reasons)} | ${l.packets_proposed} | ${l.packets_dispatched} | ${l.recommendation_not_taken} | ${counts(l.dispatch_denied)} | ${l.retained_groups}/${l.omitted_groups}/${l.unassessed} | ${l.mandatory_bytes_max ?? 'null'} | ${l.optional_bytes_max ?? 'null'} | ${l.packet_bytes_max ?? 'null'} | ${l.composed_bytes_max ?? 'null'} | ${counts(l.coverage)} | ${counts(l.observed_model)} | ${counts(l.terminal_status)} |`,
+      );
+    }
+    L.push(
+      '',
+      '- A proposed packet is what the root was offered; a dispatched one is what it actually used; "not taken" is the gap it chose. They are not the same number and are never collapsed.',
+      '- Byte columns are the largest observed in the arm, not an average, and a packet byte difference is a diagnostic — never a token count or a saving.',
+      '- An attempt whose usage never came back is unknown, not zero: the known-rows count beside the token total says how many contributed.',
+      '- Unassessed groups are source Jev never judged: groups past the enumeration window, groups withheld as credentials, tool results that could not be attributed to a call, and groups the provider\u2019s token bound kept out of the request. None of them was judged irrelevant.',
+    );
+  }
+  // An unknown cost shows the table on its own: a Router cell whose log never arrived has no activity to count, and
+  // hiding the table then would hide exactly the row that makes the arm's Jev spend unknown.
+  if (r.arms.some((a) => a.router.root_assessed > 0 || a.router.spawn_assessed > 0 || a.router.jev_attempts > 0 || a.router.unparsable_lines > 0 || a.router.late_events > 0 || a.router.rows_cost_unknown > 0)) {
+    L.push(
+      '',
+      '## Router decisions and Jev usage (observed) -- no savings headline; no criterion is declared for these arms',
+      '',
+      '| arm | root assessed/proposed/applied/observed | root skip reasons | root stop reasons | root model mismatches | root requested → observed models | root effort applied | spawn assessed/proposed/applied/denied/observed | spawn skip reasons | spawn stop reasons | spawn model mismatches | spawn requested → observed models | Jev attempts (responses known) | Jev input tokens: complete (known) | Jev cost: complete (known) | late events | unparsable lines |',
+      '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|',
+    );
+    for (const a of r.arms) {
+      const rt = a.router;
+      L.push(
+        `| ${a.arm} | ${rt.root_assessed}/${rt.root_proposed}/${rt.root_applied}/${rt.root_observed} | ${counts(rt.root_skip_reasons)} | ${counts(rt.root_stop_reasons)} | ${rt.root_model_mismatches} | ${counts(rt.root_requested_models)} → ${counts(rt.root_observed_models)} | ${counts(rt.root_effort_applied)} | ${rt.spawn_assessed}/${rt.spawn_proposed}/${rt.spawn_applied}/${rt.spawn_denied}/${rt.spawn_observed} | ${counts(rt.spawn_skip_reasons)} | ${counts(rt.spawn_stop_reasons)} | ${rt.spawn_model_mismatches} | ${counts(rt.spawn_requested_models)} → ${counts(rt.spawn_observed_models)} | ${rt.jev_attempts} (${rt.jev_responses_known}) | ${rt.jev_input_tokens ?? 'null'} (${rt.jev_input_tokens_known ?? 'null'}) | ${fmt(rt.jev_cost_usd, 6)} (${fmt(rt.jev_cost_known_subtotal, 6)}) | ${rt.late_events} | ${rt.unparsable_lines} |`,
+      );
+    }
+    L.push(
+      '',
+      '- Router’s own Jev assessment usage (this table) is never the routed Claude call’s own usage (already priced as ordinary Claude spend in the arm/cost tables above); root_result/spawn_result are per-step observations, not a saving.',
+      '- Jev attempts at 0 for every row is the expected reading only on a host `hostSupported` refuses -- not `2.1.N` with N>=282 (PR #49, mods/router/README.md); on a supported host it needs its own explanation (no key, plugin disabled), not a shrug.',
+      '- A model-mismatch count is the host’s own `model_mismatch` reason code on a stop/spawn_result line, never inferred from the requested/observed pair by this ingestion.',
+    );
+  }
+  L.push('', '## Jev requests per arm (attempts / input tokens / est $ at the dated price)', '', '| arm | admission | allocation | result | plan (scope or interpretation) | influence (changed/judged) |', '|---|---|---|---|---|---|');
   for (const a of r.arms) {
     const j = (p: JevPhaseUsage): string => `${p.attempts} / ${p.tokens === null ? `null (known ${p.tokens_known})` : p.tokens} / ${fmt(p.cost_usd, 6)}`;
-    L.push(`| ${a.arm} | ${j(a.gate_v5.jev_requests.admission)} | ${j(a.gate_v5.jev_requests.allocation)} | ${j(a.gate_v5.jev_requests.result)} |`);
+    const inf = a.gate_v5.influence;
+    L.push(
+      `| ${a.arm} | ${j(a.gate_v5.jev_requests.admission)} | ${j(a.gate_v5.jev_requests.allocation)} | ${j(a.gate_v5.jev_requests.result)} | ${j(a.gate_v5.jev_requests.scope)} | ${inf.changed_default}/${inf.judgments} |`,
+    );
   }
   L.push('', '## worker tier distribution (observed models and root effort)', '');
   for (const a of r.arms) {
