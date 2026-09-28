@@ -40,7 +40,7 @@ The repository is its own Claude Code plugin marketplace. In a Claude Code sessi
 | Plugin | What it does | Needs |
 |---|---|---|
 | `jev-gate-compact` | Answers auto compactions with an extractive digest and the recent tail: no summarizer request, milliseconds instead of a minute. Calls no Jev. [README](mods/compact/README.md) | `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` |
-| `jev-gate-router` | Chooses each request's model and effort from one Jev assessment; native on any doubt. [README](mods/router/README.md) | `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`, a TypeSafe key |
+| `jev-gate-router` | Chooses the main thread's effort and a subagent's model and effort from one Jev assessment each; native on any doubt. The main thread's model stays native. [README](mods/router/README.md) | `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`, a TypeSafe key |
 | `jev-gate` | The orchestration gate described below, built from the tagged release. | Node.js 22+, a TypeSafe key, `JEV_GATE_MODE` |
 
 Every plugin is off after install. The two Function Hooks plugins take their options in `/plugin` (or

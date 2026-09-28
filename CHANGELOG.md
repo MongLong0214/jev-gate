@@ -23,9 +23,9 @@ also need `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` in the environment Claude Code s
   observed) instead of the engine's minute or more (a 95-second median over the owner's week of sessions). It calls no
   Jev: Jev was tried for ranking what to keep and for deciding when to fall back, and neither beat recency. Keep
   `compactManual` off (host defect, see its README).
-- **`jev-gate-router`** (#47, #49, #63): chooses the effort of the main thread and of subagents, and the model of
-  inheriting built-in subagents, from one TypeSafe Jev assessment per turn; any doubt, timeout or unverified host
-  leaves the request native.
+- **`jev-gate-router`** (#47, #49, #63): chooses the effort of the main thread and of subagents, and the model of a
+  subagent (an inheriting built-in, or one whose Agent call names a model), from one TypeSafe Jev assessment each; any
+  doubt, timeout or unverified host leaves the request native. The main thread's model is not routed.
 - **Lean mode** (#37): one request, one selected packet, one fresh executor. Implemented, not measured.
 
 ### Changed

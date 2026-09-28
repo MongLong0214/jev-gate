@@ -24,7 +24,7 @@
       "name": "jev-gate-router",
       "source": "./mods/router",
       "displayName": "Jev Gate Router",
-      "description": "Chooses each request's Claude model and effort from one TypeSafe Jev assessment and stays native on any doubt. Needs CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 and a TypeSafe key; off until enabled.",
+      "description": "Chooses the main thread's effort and each subagent's model and effort from one TypeSafe Jev assessment, and stays native on any doubt; the main thread's model is not routed. Needs CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 and a TypeSafe key; off until enabled.",
       "homepage": "https://github.com/MongLong0214/jev-gate/tree/main/mods/router#readme",
       "category": "productivity",
       "tags": [
@@ -39,7 +39,7 @@
       "source": {
         "source": "archive",
         "url": "https://github.com/MongLong0214/jev-gate/releases/download/v0.3.0/jev-gate-0.3.0.zip",
-        "sha256": "af1cc0bb0f9fded98fd2588fa9267e4dace6e58dcfc9382fbcaae9711e6192a8"
+        "sha256": "8ce89a286709444be4909e1ba019e7a3d08517a078093164ca385d8f10bbf8a1"
       },
       "displayName": "Jev Gate",
       "description": "Jev-directed orchestration for deep sessions: a planner and tiered workers, admitted only past a context-depth floor. Built from the tagged release; needs Node 22 and a TypeSafe key.",
