@@ -50,8 +50,8 @@ Every plugin is off after install. The three Function Hooks plugins take their o
 `jev-gate` reads its mode from `JEV_GATE_MODE` or `~/.config/jev-gate/config.json` ([Try V5](#try-v5)).
 
 `jev-gate-evidence`, one read-only MCP tool that returns exact source windows (and, with remote on, lets Jev fold
-clearly unrelated ones), is not in the marketplace yet: build its archive from a checkout and load it with
-`--plugin-dir` ([README](plugins/evidence/README.md)).
+clearly unrelated ones), is not in the marketplace: download its archive from a release and load it with `--plugin-dir`
+([README](plugins/evidence/README.md)).
 
 A plugin changes only when a release raises its version, and `main` takes only releases. To update, run
 `/plugin marketplace update jev-gate` and then `claude plugin update <plugin>@jev-gate`, or turn on auto-update for the

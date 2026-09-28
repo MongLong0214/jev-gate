@@ -2,12 +2,11 @@
 
 ## v0.5.0 — One evidence tool, a Vitest log folder, and compact and router fixes
 
-Unreleased: the version is raised and the jev-gate archive re-pinned; no tag, asset or marketplace publish yet.
-
 ### Added
 
 - **`jev-gate-evidence` (#75–#77).** One read-only MCP tool, `jev_evidence`, in `plugins/evidence`, shipped as its own
-  archive (`node scripts/pack.mjs <out> --profile evidence`) with the MCP SDK bundled into `dist/server.mjs`. It reads
+  archive (`jev-gate-evidence-0.5.0.zip` on the release, or `node scripts/pack.mjs <out> --profile evidence`) with the
+  MCP SDK bundled into `dist/server.mjs`. It reads
   the one project `JEV_EVIDENCE_CONFIG` names, returns exact 40-line windows with their path, lines and file SHA-256,
   pages with a snapshot check, and reads a returned reference back exactly. With `remote: true` and a key, a semantic
   page goes to Jev (at most two requests of eight candidates, no retry, 1.5 s): relevant windows first, and a clearly

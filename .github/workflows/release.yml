@@ -27,6 +27,8 @@ jobs:
       # Rebuilds the archive and refuses unless it matches the SHA-256 the marketplace pins, the tag names the version,
       # and main serves this same entry.
       - run: node scripts/release.mjs check --tag "$GITHUB_REF_NAME" --against origin/main --out dist-release
+      # The evidence plugin's own archive (#77) goes up beside it; the marketplace does not list or pin it.
+      - run: node scripts/pack.mjs dist-release --profile evidence
       # main may have moved while the job ran: fetch it again and repeat the comparison just before publishing.
       - run: |
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
@@ -38,7 +40,7 @@ jobs:
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             echo "release $GITHUB_REF_NAME exists; verifying its asset"
           else
-            gh release create "$GITHUB_REF_NAME" "dist-release/jev-gate-${GITHUB_REF_NAME#v}.zip" \
+            gh release create "$GITHUB_REF_NAME" "dist-release/jev-gate-${GITHUB_REF_NAME#v}.zip" "dist-release/jev-gate-evidence-${GITHUB_REF_NAME#v}.zip" \
               --verify-tag --title "$GITHUB_REF_NAME" --notes-file dist-release/NOTES.md
           fi
       # A merge between that check and the upload could still leave main serving this version with another archive or

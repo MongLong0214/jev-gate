@@ -40,15 +40,17 @@ without reading a source or sending a request.
 
 ## Install
 
-This plugin ships as its own archive; it is not in the marketplace yet. From a checkout:
+This plugin ships as its own archive; it is not in the marketplace. Each release from v0.5.0 on carries
+`jev-gate-evidence-<version>.zip` beside the jev-gate archive:
 
 ```sh
-npm ci && npm run build
-node scripts/pack.mjs dist-pack --profile evidence   # dist-pack/jev-gate-evidence-<version>.zip
+gh release download v0.5.0 --repo MongLong0214/jev-gate --pattern 'jev-gate-evidence-*.zip'
+unzip jev-gate-evidence-0.5.0.zip -d ~/.claude/jev-gate-evidence
+claude --plugin-dir ~/.claude/jev-gate-evidence
 ```
 
-Unzip the archive anywhere and load it with `claude --plugin-dir <unzipped dir>`, or load the working tree directly
-with `claude --plugin-dir plugins/evidence` after `npm run build`. The archive holds the bundled server with the MCP
+From a checkout, `npm ci && npm run build` and then `node scripts/pack.mjs dist-pack --profile evidence` builds the
+same archive, and `claude --plugin-dir plugins/evidence` loads the working tree directly. The archive holds the bundled server with the MCP
 SDK inside it; it needs Node 22 or later and nothing else. To turn it off, start Claude Code without that
 `--plugin-dir`, or disable the `evidence` server in `/mcp`. To remove it, delete the unzipped directory.
 
