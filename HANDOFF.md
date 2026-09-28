@@ -4,6 +4,16 @@ Everything below is what was actually observed, with the file that proves it. Th
 overstated claims from the original write-up; this one adds the 2026-09-19 measurements, which override several
 figures below and are marked where they do.
 
+## 2026-09-28 — v0.6.0: the five plugins are one, `jev-gate`
+
+The owner's biggest complaint was installing and updating five plugins one by one (sessions on v0.5.0 were still
+running after v0.5.1 shipped). v0.6.0 ships one archive: the gate's command hooks, the three Mods through one hooks
+module (`hooks/register.ts`), and the evidence server and skill. Options take prefixed names (CHANGELOG v0.6.0). Observed
+from the repository with `--plugin-dir` on 2.1.283 (CHANGELOG); the marketplace install is observed only after the
+release. Nothing here is a measured saving. Evidence from real use so far (v3_fe, recorded outside the repository):
+delegating a deep turn to a fresh worker, and compaction with a 300K window, were the only changes that moved tokens;
+the Router's Jev answers changed nothing there.
+
 ## 2026-09-28 — v0.5.1: #73–#81 (`jev-evidence-v1.2`) are implemented; no product effect is measured
 
 The contract is the issue bodies (#73 PRD, #74 ADR, #75–#81); #78 (benchmarks) is closed as not planned, so nothing

@@ -1,7 +1,7 @@
-// Keeps the marketplace's archive pins true to what the release builds. The jev-gate plugin and the evidence server
-// (#77) run from build output, which is not committed, so their marketplace entries are release archives pinned by
-// SHA-256 rather than relative paths that would install without it; the Function Hooks Mods run from their TypeScript
-// and ship from their source directories.
+// Keeps the marketplace's archive pins true to what the release builds. From v0.6.0 the marketplace lists one plugin,
+// jev-gate, which runs from build output that is not committed (the gate's dist and the evidence server's bundle), so
+// its entry is a release archive pinned by SHA-256 rather than a relative path that would install without it. A
+// source-directory entry, as the Function Hooks Mods had until v0.5.1, is still checked if one is listed.
 // Usage, after `npm run build`:
 //   node scripts/release.mjs pin                          pack each archive, write its URL and SHA-256 into its entry
 //   node scripts/release.mjs check [--tag vX.Y.Z] [--against <ref>] [--asset <file>]... [--out <dir>]
@@ -101,15 +101,17 @@ const frozenProblems = (packs) => {
     if (thenPin !== sha256) problems.push(`v${version} is released with ${a.name} ${thenPin ?? '(none)'}, this tree packs ${sha256}`);
   }
   // An entry dropped at the same version would leave installed copies with nothing to update to.
-  const names = (ps) => ps.map((p) => p.name).sort().join(', ');
   if (names(thenPlugins) !== names(marketplace.plugins)) {
     problems.push(`v${version} is released with entries ${names(thenPlugins)}, this tree lists ${names(marketplace.plugins)}`);
   }
-  const changed = git('diff', '--name-only', `v${version}`, '--', ...sourceDirs);
+  // With no source entry there is nothing but the pinned archives to compare; an empty path list would diff every file.
+  const changed = sourceDirs.length ? git('diff', '--name-only', `v${version}`, '--', ...sourceDirs) : { ok: true, out: '' };
   if (!changed.ok) problems.push(`cannot compare ${sourceDirs.join(', ')} with v${version}: ${changed.err}`);
   else if (changed.out) problems.push(`changed since v${version} at the same version: ${changed.out.split('\n').join(', ')}`);
   return problems.length ? [...problems, `raise the version in package.json and every plugin.json`] : [];
 };
+
+const names = (ps) => ps.map((p) => p.name).sort().join(', ');
 
 const later = (a, b) => {
   const [x, y] = [a, b].map((v) => v.split('.').map(Number));
@@ -127,16 +129,18 @@ const servedProblems = (ref) => {
   if (servedVersion !== version) return later(servedVersion, version) ? [] : [`${ref} serves v${servedVersion}, not v${version} yet`];
   const problems = [];
   const served = git('show', `${ref}:${MARKETPLACE_PATH}`);
-  const servedArchives = served.ok ? JSON.parse(served.out).plugins.filter((p) => p.source?.source === 'archive') : [];
-  for (const { entry } of archives) {
-    const servedSource = servedArchives.find((p) => p.name === entry.name)?.source;
+  const servedPlugins = served.ok ? JSON.parse(served.out).plugins : [];
+  // Any other entry there, archive or source directory, is a plugin this release does not decide, and could run the
+  // same hooks twice beside it.
+  if (names(servedPlugins) !== names(marketplace.plugins)) problems.push(`${ref} serves entries ${names(servedPlugins)}, this tree lists ${names(marketplace.plugins)}`);
+  // Each entry's source too, a source directory's path as much as an archive's pin.
+  for (const entry of marketplace.plugins) {
+    const servedSource = servedPlugins.find((p) => p.name === entry.name)?.source;
     if (JSON.stringify(servedSource) !== JSON.stringify(entry.source)) {
       problems.push(`${ref} serves ${JSON.stringify(servedSource ?? null)}, not this entry ${JSON.stringify(entry.source)}`);
     }
   }
-  const extra = servedArchives.filter((p) => !archives.some((a) => a.entry.name === p.name)).map((p) => p.name);
-  if (extra.length) problems.push(`${ref} serves archive entries this tree does not: ${extra.join(', ')}`);
-  const changed = git('diff', '--name-only', ref, '--', ...sourceDirs);
+  const changed = sourceDirs.length ? git('diff', '--name-only', ref, '--', ...sourceDirs) : { ok: true, out: '' };
   if (!changed.ok) problems.push(`cannot compare ${sourceDirs.join(', ')} with ${ref}: ${changed.err}`);
   else if (changed.out) problems.push(`${ref} serves v${version} with other plugin files: ${changed.out.split('\n').join(', ')}`);
   return problems;

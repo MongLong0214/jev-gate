@@ -1,7 +1,7 @@
 {
   "name": "jev-gate",
-  "version": "0.5.1",
-  "description": "Jev-directed orchestration for deep sessions: a planner and tiered workers, admitted only past a context-depth floor; off by default.",
+  "version": "0.6.0",
+  "description": "Jev Gate in one plugin: the orchestration gate, the extractive compactor, the Vitest log folder, the Jev effort and model router and the jev_evidence tool. Each is off until you enable it.",
   "author": {
     "name": "MongLong0214",
     "url": "https://github.com/MongLong0214"
@@ -11,6 +11,146 @@
     "typesafe",
     "jev",
     "routing",
-    "hooks"
-  ]
+    "hooks",
+    "compaction",
+    "function-hooks",
+    "mcp"
+  ],
+  "skills": "./plugins/evidence/skills/",
+  "mcpServers": {
+    "evidence": {
+      "command": "node",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/plugins/evidence/dist/server.mjs"
+      ]
+    }
+  },
+  "userConfig": {
+    "compactEnabled": {
+      "title": "Compact: Enable extractive compaction",
+      "description": "Off registers no hook at all. Every compaction is the engine's own.",
+      "type": "boolean",
+      "default": false
+    },
+    "compactMode": {
+      "title": "Compact: Mode",
+      "description": "shadow: build and log the digest, let the engine compact. active: compact with the digest; the engine's summarizer is not asked.",
+      "type": "string",
+      "default": "shadow"
+    },
+    "compactBudgetChars": {
+      "title": "Compact: Budget (characters)",
+      "description": "Characters for the digest and the kept recent messages together, 8000 to 400000.",
+      "type": "number",
+      "default": 40000
+    },
+    "compactSubagents": {
+      "title": "Compact: Subagents too",
+      "description": "Also answer a subagent's own auto compactions.",
+      "type": "boolean",
+      "default": true
+    },
+    "compactManual": {
+      "title": "Compact: Also /compact",
+      "description": "Also answer /compact typed without instructions. Off leaves /compact the engine's.",
+      "type": "boolean",
+      "default": false
+    },
+    "outputEnabled": {
+      "title": "Output: Enable output folding",
+      "description": "Off registers no hook at all. Every Bash result is the host's own.",
+      "type": "boolean",
+      "default": false
+    },
+    "routerEnabled": {
+      "title": "Router: Enable the Router",
+      "description": "Off registers no hook at all. Every request keeps its native model and effort.",
+      "type": "boolean",
+      "default": false
+    },
+    "routeSubagentModel": {
+      "title": "Router: Route subagent models",
+      "description": "Choose the model of a subagent: an inheriting built-in (general-purpose, claude, Plan, Explore) that names none, or any Agent call that names one.",
+      "type": "boolean",
+      "default": true
+    },
+    "routeExplicitSpawnModel": {
+      "title": "Router: Route named subagent models",
+      "description": "Also choose the model when the Agent call names one (model: \"opus\"): the name is treated as a default.",
+      "type": "boolean",
+      "default": true
+    },
+    "routeSubagentEffort": {
+      "title": "Router: Route subagent effort",
+      "description": "Set each subagent's reasoning effort from its task, on every request its loop makes.",
+      "type": "boolean",
+      "default": true
+    },
+    "routeMainEffort": {
+      "title": "Router: Route main-thread effort",
+      "description": "Choose the effort of the main thread's requests, per turn.",
+      "type": "boolean",
+      "default": true
+    },
+    "routeMainModel": {
+      "title": "Router: Route main-thread model",
+      "description": "Choose the model of the main thread's requests, per turn. Off by default.",
+      "type": "boolean",
+      "default": false
+    },
+    "typesafeApiKey": {
+      "title": "Router: TypeSafe API key",
+      "description": "Used only in the Authorization header of the assessment request. Blank reads TYPESAFE_API_KEY from the environment.",
+      "type": "string",
+      "sensitive": true
+    },
+    "routerFastModel": {
+      "title": "Router: Fast profile model",
+      "description": "Alias or exact model ID for the fast profile.",
+      "type": "string",
+      "default": "haiku"
+    },
+    "routerStandardModel": {
+      "title": "Router: Standard profile model",
+      "description": "Alias or exact model ID for the standard profile.",
+      "type": "string",
+      "default": "sonnet"
+    },
+    "routerDeepModel": {
+      "title": "Router: Deep profile model",
+      "description": "Alias or exact model ID for the deep profile.",
+      "type": "string",
+      "default": "opus"
+    },
+    "routerFrontierModel": {
+      "title": "Router: Frontier profile model",
+      "description": "Exact model ID for the frontier profile. Blank leaves the profile unconfigured.",
+      "type": "string",
+      "default": ""
+    },
+    "routerMinUpgradeConfidence": {
+      "title": "Router: Upgrade confidence floor",
+      "description": "Least probability, 0.5 to 1, that the work needs at least the stronger model or higher effort: Jev's answer mass at or above it.",
+      "type": "number",
+      "default": 0.8
+    },
+    "routerMinDowngradeConfidence": {
+      "title": "Router: Downgrade confidence floor",
+      "description": "Least probability, 0.5 to 1, that the weaker model or lower effort is enough: Jev's answer mass at or below it.",
+      "type": "number",
+      "default": 0.6
+    },
+    "routerTimeoutMs": {
+      "title": "Router: Assessment wait (ms)",
+      "description": "How long a request waits for the assessment, 50 to 30000. Past it the request runs natively.",
+      "type": "number",
+      "default": 800
+    },
+    "routerLogDecisions": {
+      "title": "Router: Log decisions",
+      "description": "Write one metadata-only line per decision to the debug log. Never task text or the key.",
+      "type": "boolean",
+      "default": true
+    }
+  }
 }

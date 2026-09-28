@@ -1,4 +1,4 @@
-# jev-gate-router
+# Router (in the jev-gate plugin)
 
 A Claude Code Function Hooks plugin that asks Jev, once per decision, whether a root turn's effort (and optionally its
 model), a subagent's model, or a subagent's effort should change. It is independent of the Lean handoff in the repository root and
@@ -15,20 +15,23 @@ patches take effect, not a saving; no saving is claimed.**
 
 ## Enable
 
-Install it from the repository's marketplace. Function Hooks are gated in the host, so
-`CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` must be in the environment Claude Code starts in (for example under `env` in
-`~/.claude/settings.json`):
+It ships inside the `jev-gate` plugin (v0.6.0; until v0.5.1 it was its own `jev-gate-router`). Function Hooks are
+gated in the host, so `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` must be in the environment Claude Code starts in (for
+example under `env` in `~/.claude/settings.json`):
 
 ```sh
 claude plugin marketplace add MongLong0214/jev-gate
-claude plugin install jev-gate-router@jev-gate --config enabled=true
+claude plugin install jev-gate@jev-gate --config routerEnabled=true
 ```
 
-From a checkout, `claude --plugin-dir /path/to/jev-gate/mods/router` loads the working tree instead.
+From a checkout, `claude --plugin-dir /path/to/jev-gate` loads the working tree as the whole plugin, and
+`--plugin-dir /path/to/jev-gate/mods/router` loads the Router alone, under its own option names (`enabled`,
+`timeoutMs`, `fastModel`, …, keyed `jev-gate-router@inline`).
 
-The plugin is **off by default**. With `enabled` false it registers no hook at all, so the session is exactly native.
-Set the options in `/config`. They are stored in settings.json under `pluginConfigs["jev-gate-router@jev-gate"].options`
-(`jev-gate-router@inline` for a `--plugin-dir` load), except a sensitive one, which the host keeps in secure storage.
+The Router is **off by default**. With `routerEnabled` false it registers no hook at all, so the session is exactly
+native. Set the options in `/config`. They are stored in settings.json under `pluginConfigs["jev-gate@jev-gate"].options`
+(`jev-gate@inline` for a `--plugin-dir` load), except a sensitive one, which the host keeps in secure storage. The
+table names each option as the plugin does; the Router alone reads it without the `router` prefix.
 
 **Option lifetime.** The options are fixed for an activation: the host reloads the plugin when they change and
 `register` runs again with the new ones (the `Register` declaration), so every decision, pending wait and suspension of
@@ -49,23 +52,23 @@ Every wait, for the key or a read, ends when its turn is retired or its dispatch
 
 | Option | Default | Meaning |
 |---|---|---|
-| `enabled` | `false` | Master switch. |
+| `routerEnabled` | `false` | Master switch. |
 | `routeSubagentModel` | `true` | Choose a subagent's model: an inheriting built-in that names none, or (below) any Agent call that names one. |
 | `routeExplicitSpawnModel` | `true` | Treat the model an Agent call names (`model: "opus"`) as a default the Router may move. Off, such a call keeps it (`explicit_model`). |
 | `routeSubagentEffort` | `true` | Set each subagent's effort from its spawn's answer, on every request its loop makes. |
 | `routeMainEffort` | `true` | Choose the root turn's effort among the levels its model takes unconditionally. |
 | `routeMainModel` | `false` | Also choose the root turn's model. Exact identifiers only, never to a smaller context window, and only along a verified switch: none is verified yet, so today this asks nothing. |
 | `typesafeApiKey` | — | Explicit key; overrides `TYPESAFE_API_KEY`. |
-| `fastModel` / `standardModel` / `deepModel` | `haiku` / `sonnet` / `opus` | Profiles. A spawn takes aliases; the root takes exact identifiers only. |
-| `frontierModel` | empty | An exact identifier only (`claude-fable-5-1`); an alias cannot authorize it. |
-| `minUpgradeConfidence` | `0.8` | Floor for moving up: Jev's probability mass at or above the target. |
-| `minDowngradeConfidence` | `0.6` | Floor for moving down: Jev's probability mass at or below the target. A downgrade also needs `ordinary` risk at this probability. On a week of the owner's traffic (2026-09-21..28), 0.9 moved 2 of 174 routable spawns and 2 of 245 root turns. |
-| `timeoutMs` | `800` | Wait for Jev, 50–30000. The request is still observed for its usage after the wait ends. |
-| `logDecisions` | `true` | One `jev-router {...}` line per decision in the debug log. |
+| `routerFastModel` / `routerStandardModel` / `routerDeepModel` | `haiku` / `sonnet` / `opus` | Profiles. A spawn takes aliases; the root takes exact identifiers only. |
+| `routerFrontierModel` | empty | An exact identifier only (`claude-fable-5-1`); an alias cannot authorize it. |
+| `routerMinUpgradeConfidence` | `0.8` | Floor for moving up: Jev's probability mass at or above the target. |
+| `routerMinDowngradeConfidence` | `0.6` | Floor for moving down: Jev's probability mass at or below the target. A downgrade also needs `ordinary` risk at this probability. On a week of the owner's traffic (2026-09-21..28), 0.9 moved 2 of 174 routable spawns and 2 of 245 root turns. |
+| `routerTimeoutMs` | `800` | Wait for Jev, 50–30000. The request is still observed for its usage after the wait ends. |
+| `routerLogDecisions` | `true` | One `jev-router {...}` line per decision in the debug log. |
 
 The host checks each option's declared type before the module loads. An option the Router still cannot use, such as a
 number out of range, turns the whole Router off and logs only the field name, never its value
-(`{"event":"router","disabled":"invalid_option","field":"timeoutMs"}`). Two profiles that name one family drop every
+(`{"event":"router","disabled":"invalid_option","field":"routerTimeoutMs"}`; `timeoutMs` when the Router is loaded alone). Two profiles that name one family drop every
 profile, since each rank lookup would then be a guess.
 
 ## When it leaves a call native
@@ -133,8 +136,8 @@ development cells native `xhigh` cost 11 % more in total than a fixed `high` wit
 (`bench/results/router-vs-high-2026-09-28`, stopped at 16 of 45 cells and not adjudicated).
 
 Jev returns a probability for every level. The Router orders the levels together with the current one and moves
-down to the lowest whose mass at or below it reaches `minDowngradeConfidence`, else up to the highest whose mass at
-or above it reaches `minUpgradeConfidence`, else nowhere (`low_confidence`, or `same_value` when the current level
+down to the lowest whose mass at or below it reaches `routerMinDowngradeConfidence`, else up to the highest whose mass at
+or above it reaches `routerMinUpgradeConfidence`, else nowhere (`low_confidence`, or `same_value` when the current level
 holds the most mass). So `[0.74, 0.26, 0]` under an Opus parent moves the spawn to `sonnet`: 1.0 says the work needs
 no more than ordinary, while lookup alone is under 0.9.
 

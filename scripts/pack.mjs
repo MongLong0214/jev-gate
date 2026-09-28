@@ -1,6 +1,7 @@
 // Builds a distributable local plugin archive (#18): compiled hook + modules, manifest, hooks, agents, docs.
 // Usage: node scripts/pack.mjs [outDir] [--root <pluginRoot>] [--profile legacy|lean|router|evidence]
-//   legacy (default) → <outDir>/jev-gate-<version>.zip         six routing roles and lean's executor, the V5 hook set
+//   legacy (default) → <outDir>/jev-gate-<version>.zip         six routing roles and lean's executor, the V5 hook set,
+//                                                              the three Mods and the evidence server (the one plugin)
 //   lean   (JGL-04)  → <outDir>/jev-gate-lean-<version>.zip    one executor, the lean hook set, `--lean` entrypoint
 //   router (JGR-01)  → <outDir>/jev-gate-router-<version>.zip  the Function Hooks Mod in mods/router, at its own version
 //   evidence (JGE-03) → <outDir>/jev-gate-evidence-<version>.zip the bundled jev_evidence MCP server in plugins/evidence
@@ -54,6 +55,19 @@ const routerHooks = () =>
 const EVIDENCE = 'plugins/evidence';
 const EVIDENCE_FILES = ['.claude-plugin/plugin.json', 'dist/server.mjs', 'skills/evidence/SKILL.md', 'README.md'];
 
+// The one jev-gate plugin (v0.6.0) also carries the three Mods, loaded through hooks/register.ts from their source, and
+// the evidence server with its skill, at the paths the manifest and that module name. Lean's hook set loads no Mod, but
+// its archive shares the manifest, whose MCP server and skill it carries too.
+const modSources = () =>
+  ['compact', 'output', 'router'].flatMap((m) =>
+    readdirSync(join(root, 'mods', m, 'hooks'))
+      .filter((n) => n.endsWith('.ts'))
+      .sort()
+      .map((n) => `mods/${m}/hooks/${n}`),
+  );
+const EVIDENCE_IN_PLUGIN = [`${EVIDENCE}/dist/server.mjs`, `${EVIDENCE}/skills/evidence/SKILL.md`];
+const shared = () => [...(profile === 'legacy' ? ['hooks/register.ts', ...modSources()] : []), ...EVIDENCE_IN_PLUGIN];
+
 // [source path relative to root, path inside the archive]. The hook set is the only file that is renamed.
 const hostsDist = profile === 'legacy' || profile === 'lean';
 const entries =
@@ -73,6 +87,7 @@ const entries =
         [profile === 'lean' ? 'hooks/lean.json' : 'hooks/hooks.json', 'hooks/hooks.json'],
         ...agents.map((a) => [`agents/${a}.md`, `agents/${a}.md`]),
         ...['README.md', 'AGENTS.md', '.env.example', 'package.json'].map((f) => [f, f]),
+        ...shared().map((f) => [f, f]),
       ];
 const missing = entries.map(([src]) => src).filter((rel) => !existsSync(join(root, rel)));
 if (hostsDist && !existsSync(join(root, 'dist/hook.js'))) missing.push('dist/hook.js');

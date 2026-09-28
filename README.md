@@ -18,47 +18,56 @@ An experiment in using frontier intelligence for the hard parts—not every part
 
 </div>
 
-> **Status · September 28, 2026 · v0.5.1.** V5 turns one request into a judged workflow: Jev decides the execution
+> **Status · September 28, 2026 · v0.6.0.** V5 turns one request into a judged workflow: Jev decides the execution
 > shape, a strong read-only planner decomposes the job, a Sonnet coordinator runs the plan behind an execution guard,
 > and Jev picks a tier for every planner and worker dispatch. The mechanism was **observed end to end on Claude Code
 > 2.1.275/2.1.276** (headless and interactive). **No cost or time benefit is established for the gate itself**: the
 > whole-job comparison was stopped after one cell for budget reasons, and in that cell every task routed to the same
-> tier. Three smaller Function Hooks plugins have since shipped alongside it — an extractive compactor, a model/effort
-> router and a Vitest output folder — and a read-only evidence MCP tool ships as a second pinned archive; each has its own
-> evidence and limits, in [Install](#install) and its own README. See
-> [What is verified](#what-is-verified-and-what-is-not) and [Results](#results). Contract:
-> [#21 PRD](https://github.com/MongLong0214/jev-gate/issues/21) → [#22 ADR](https://github.com/MongLong0214/jev-gate/issues/22).
-> Release: [v0.5.1](https://github.com/MongLong0214/jev-gate/releases/tag/v0.5.1). Next work and current state:
+> tier. The plugin also carries an extractive compactor, a model/effort router, a Vitest output folder and a read-only
+> evidence MCP tool; each has its own evidence and limits, in [Install](#install) and its own README. From v0.6.0 they
+> are one plugin, installed and updated once. See [What is verified](#what-is-verified-and-what-is-not) and
+> [Results](#results). Contract: [#21 PRD](https://github.com/MongLong0214/jev-gate/issues/21) →
+> [#22 ADR](https://github.com/MongLong0214/jev-gate/issues/22).
+> Release: [v0.6.0](https://github.com/MongLong0214/jev-gate/releases/tag/v0.6.0). Next work and current state:
 > [HANDOFF.md](HANDOFF.md).
 
 ## Install
 
-The repository is its own Claude Code plugin marketplace. In a Claude Code session:
+The repository is its own Claude Code plugin marketplace, with one plugin. In a Claude Code session:
 
 ```text
 /plugin marketplace add MongLong0214/jev-gate
-/plugin install jev-gate-compact@jev-gate
+/plugin install jev-gate@jev-gate
 ```
 
-| Plugin | What it does | Needs |
-|---|---|---|
-| `jev-gate-compact` | Answers auto compactions with an extractive digest and the recent tail: no summarizer request, milliseconds instead of a minute. Calls no Jev. [README](mods/compact/README.md) | `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` |
-| `jev-gate-router` | Chooses the main thread's effort and a subagent's model and effort from one Jev assessment each; native on any doubt. The main thread's model stays native. [README](mods/router/README.md) | `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`, a TypeSafe key |
-| `jev-gate-output` | Folds runs of identical lines in a passing Vitest log the host saved to a file, so the whole run reaches the model with exact counts instead of a 2 KB preview. Calls no Jev. [README](mods/output/README.md) | `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` |
-| `jev-gate-evidence` | One read-only MCP tool, `jev_evidence`: exact source windows from the one project you configure, paged, with exact read-back; with remote on, Jev orders a page and folds clearly unrelated bodies. Built from the tagged release. [README](plugins/evidence/README.md) | Node.js 22+, `JEV_EVIDENCE_CONFIG`; a TypeSafe key for remote |
-| `jev-gate` | The orchestration gate described below, built from the tagged release. | Node.js 22+, a TypeSafe key, `JEV_GATE_MODE` |
+| Part | What it does | Turn it on | Needs |
+|---|---|---|---|
+| Gate | The orchestration gate described below. | `JEV_GATE_MODE` or `~/.config/jev-gate/config.json` ([Try V5](#try-v5)) | a TypeSafe key |
+| Compact | Answers auto compactions with an extractive digest and the recent tail: no summarizer request, milliseconds instead of a minute. Calls no Jev. [README](mods/compact/README.md) | `compactEnabled`, `compactMode=active` | `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` |
+| Router | Chooses the main thread's effort and a subagent's model and effort from one Jev assessment each; native on any doubt. The main thread's model stays native. [README](mods/router/README.md) | `routerEnabled` | `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`, a TypeSafe key |
+| Output | Folds runs of identical lines in a passing Vitest log the host saved to a file, so the whole run reaches the model with exact counts instead of a 2 KB preview. Calls no Jev. [README](mods/output/README.md) | `outputEnabled` | `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` |
+| Evidence | One read-only MCP tool, `jev_evidence`: exact source windows from the one project you configure, paged, with exact read-back; with remote on, Jev orders a page and folds clearly unrelated bodies. [README](plugins/evidence/README.md) | `JEV_EVIDENCE_CONFIG` ([configure](plugins/evidence/README.md#configure)) | a TypeSafe key for remote |
 
-Every plugin is off after install. The three Function Hooks plugins take their options in `/plugin` (or
-`claude plugin install <plugin>@jev-gate --config enabled=true`), and the host loads them only when
-`CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` is in its environment, for example under `env` in `~/.claude/settings.json`.
-`jev-gate` reads its mode from `JEV_GATE_MODE` or `~/.config/jev-gate/config.json` ([Try V5](#try-v5)).
+Every part is off after install, and the plugin needs Node.js 22 or later. Compact, Router and Output take their
+options in `/plugin` (or `claude plugin install jev-gate@jev-gate --config compactEnabled=true --config
+compactMode=active`), and the host loads them only when `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` is in its environment, for
+example under `env` in `~/.claude/settings.json`; without it the gate and the evidence tool still run. The evidence
+tool is listed once installed, and every call answers `unavailable_config` until `JEV_EVIDENCE_CONFIG` names a config.
+The gate's command hooks start a Node process per event even in mode `off` (tens of milliseconds each).
 
-`jev-gate-evidence` lists its tool once installed, and every call answers `unavailable_config` until
-`JEV_EVIDENCE_CONFIG` names a config ([README](plugins/evidence/README.md#configure)).
+A plugin changes only when a release raises its version, and `main` takes only releases. Turn on auto-update for the
+marketplace under **Marketplaces** in `/plugin`, or run `/plugin marketplace update jev-gate` and then
+`claude plugin update jev-gate@jev-gate`. A running session keeps the hooks it started with: restart it, or run
+`/reload-plugins`, after an update. [CHANGELOG](CHANGELOG.md) lists what each release changed.
 
-A plugin changes only when a release raises its version, and `main` takes only releases. To update, run
-`/plugin marketplace update jev-gate` and then `claude plugin update <plugin>@jev-gate`, or turn on auto-update for the
-marketplace under **Marketplaces** in `/plugin`. [CHANGELOG](CHANGELOG.md) lists what each release changed.
+**From v0.5.x:** the four separate plugins are gone from the marketplace and will not update again. Uninstall them
+(`claude plugin uninstall jev-gate-compact@jev-gate`, likewise `jev-gate-router`, `jev-gate-output`,
+`jev-gate-evidence`) before updating `jev-gate`, or their hooks would run twice. Set their options again under the
+plugin's names: `enabled` becomes `compactEnabled`, `routerEnabled` or `outputEnabled`; compact's `mode` and `budgetChars` become
+`compactMode` and `compactBudgetChars`; the router's `timeoutMs`, `logDecisions`, `minUpgradeConfidence`,
+`minDowngradeConfidence` and `<tier>Model` take a `router` prefix (`routerTimeoutMs`, `routerFastModel`, …); every
+other name stays. The evidence tool is now `mcp__plugin_jev-gate_evidence__jev_evidence` and its skill
+`/jev-gate:evidence`.
 
 ## The idea
 

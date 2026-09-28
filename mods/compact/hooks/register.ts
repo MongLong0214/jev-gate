@@ -1,5 +1,6 @@
-import type { Register, SessionMessage } from 'claude-code';
+import type { On, Register, SessionMessage } from 'claude-code';
 
+import type { CompactConfig } from './config.ts';
 import { resolveCompactConfig } from './config.ts';
 import { assemble, buildDigest } from './digest.ts';
 
@@ -27,7 +28,11 @@ export const register: Register = (on, options) => {
     });
     return;
   }
-  const config = resolved.config;
+  registerCompact(on, resolved.config);
+};
+
+/** The hooks for a resolved config; the combined jev-gate module (hooks/register.ts) calls this directly. */
+export const registerCompact = (on: On, config: CompactConfig): void => {
   if (!config.enabled) return;
 
   on('session.compact', async ($, e, next) => {

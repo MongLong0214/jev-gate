@@ -57,8 +57,10 @@ describe('scripts/release.mjs', () => {
         { name: 'jev-gate', source: { source: 'archive', url: 'https://example.invalid/x.zip', sha256: '0'.repeat(64) } },
       ],
     });
-    for (const m of ['compact', 'router']) write(`mods/${m}/hooks/register.ts`, 'export default () => {};\n');
+    // The jev-gate archive carries all three Mods' hook sources and the module that loads them (v0.6.0).
+    for (const m of ['compact', 'router', 'output']) write(`mods/${m}/hooks/register.ts`, 'export default () => {};\n');
     write('hooks/hooks.json', '{}\n');
+    write('hooks/register.ts', 'export {};\n');
     for (const a of AGENTS) write(`agents/${a}.md`, `# ${a}\n`);
     for (const f of ['README.md', 'AGENTS.md', '.env.example']) write(f, `${f}\n`);
     write('dist/hook.js', 'export {};\n');
@@ -103,6 +105,22 @@ describe('scripts/release.mjs', () => {
     expect(check.stderr).toContain('raise the version');
   });
 
+  it('with only the archive entry, lets a file the archive does not carry change at a released version', () => {
+    // v0.6.0 lists no source entry; an empty path list must not turn into a diff of every file in the repository.
+    const m = JSON.parse(readFileSync(join(repo, '.claude-plugin', 'marketplace.json'), 'utf8'));
+    m.plugins = m.plugins.filter((p: { name: string }) => p.name === 'jev-gate');
+    json('.claude-plugin/marketplace.json', m);
+    commit('one entry');
+    git('tag', '-f', 'v0.3.0');
+    write('docs/notes.md', 'not in the archive\n');
+    commit('docs');
+    const r = release('check', '--tag', 'v0.3.0', '--against', 'HEAD');
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    write('README.md', 'README.md, edited after the release\n');
+    expect(release('check').stderr).toMatch(/is released with jev-gate-0\.3\.0\.zip/);
+  });
+
   it('refuses a changed Function Hooks plugin at a released version', () => {
     write('mods/compact/hooks/register.ts', 'export default () => { /* changed */ };\n');
     commit('B');
@@ -131,6 +149,20 @@ describe('scripts/release.mjs', () => {
     const check = spawnSync(process.execPath, [join(shallow, 'scripts', 'release.mjs'), 'check'], { cwd: shallow, encoding: 'utf8' });
     expect(check.status).toBe(1);
     expect(check.stderr).toContain('a shallow checkout cannot tell whether v0.3.0 is released');
+  });
+
+  it('refuses a served marketplace that lists another entry at this version, source directory or archive', () => {
+    const m = JSON.parse(readFileSync(join(repo, '.claude-plugin', 'marketplace.json'), 'utf8'));
+    git('switch', '-q', '-c', 'served');
+    json('.claude-plugin/marketplace.json', { ...m, plugins: [...m.plugins, { name: 'jev-gate-output', source: './mods/output' }] });
+    commit('served lists one more');
+    git('switch', '-q', '-');
+    expect(release('check', '--against', 'served').stderr).toMatch(/served serves entries jev-gate, jev-gate-compact, jev-gate-output, jev-gate-router, this tree lists jev-gate, jev-gate-compact, jev-gate-router/);
+    git('switch', '-q', 'served');
+    json('.claude-plugin/marketplace.json', { ...m, plugins: m.plugins.map((p: { name: string }) => (p.name === 'jev-gate-compact' ? { ...p, source: './mods/output' } : p)) });
+    commit('served moves a source directory');
+    git('switch', '-q', '-');
+    expect(release('check', '--against', 'served').stderr).toMatch(/served serves "\.\/mods\/output", not this entry "\.\/mods\/compact"/);
   });
 
   it('publishes only the entry the served marketplace pins', () => {
