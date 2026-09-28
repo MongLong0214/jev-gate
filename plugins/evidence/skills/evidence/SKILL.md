@@ -11,7 +11,8 @@ Answer this with source evidence from the `jev_evidence` tool (host name
 Call it with:
 
 - `goal`: the question in the user's words; `constraints`: requirements the user stated that the evidence must respect.
-- `roots`: the narrowest directories or files that can hold the answer.
+- `roots`: only when you already know where the answer lives, inside the allowed roots the tool description lists;
+  otherwise leave it out and every allowed root is searched.
 - `queryTerms`: identifiers and words as the code spells them, especially when the goal is in another language.
 - `exactSymbols` instead, when you only need where a literal name occurs (never with `queryTerms` or `audit`).
 - `mode: "audit"` only to review every window in a small scope, not just the matching ones.

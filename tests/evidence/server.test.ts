@@ -74,6 +74,7 @@ describe('jev_evidence over stdio (#77)', () => {
     expect(tools.map((t) => t.name)).toEqual([TOOL_NAME]);
     expect(tools[0]!.annotations).toMatchObject({ readOnlyHint: true, openWorldHint: false });
     expect(tools[0]!.outputSchema).toBeUndefined();
+    expect(tools[0]!.description).toContain(`Project ${project}; allowed roots: src; remote Jev off.`);
 
     const first = await call(client, { goal: 'where is findMe used', exactSymbols: ['findMe'], limit: 1 });
     expect(first.isError).toBe(false);
@@ -99,7 +100,9 @@ describe('jev_evidence over stdio (#77)', () => {
 
   it('starts without a config, lists the tool, and refuses every call before reading a source', async () => {
     const client = await connect({});
-    expect((await client.listTools()).tools).toHaveLength(1);
+    const { tools } = await client.listTools();
+    expect(tools).toHaveLength(1);
+    expect(tools[0]!.description).toContain('Not configured');
     const r = await call(client, { goal: 'x', exactSymbols: ['findMe'] });
     expect(r).toMatchObject({ isError: true, body: { projectRoot: null, items: [], reasonCodes: ['unavailable_config'] } });
   });

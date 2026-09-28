@@ -7,7 +7,7 @@ import { CallToolRequestSchema, ErrorCode, ListToolsRequestSchema, McpError, typ
 
 import { createEvidenceService, type EvidenceReply, type EvidenceServiceDeps } from './service.js';
 import { loadConfig, type ConfigLoad } from './source.js';
-import { LIMITS, MODES } from './types.js';
+import { LIMITS, MODES, type EvidenceConfig } from './types.js';
 
 export const TOOL_NAME = 'jev_evidence';
 export const SERVER_VERSION = '0.5.0';
@@ -20,7 +20,7 @@ const INPUT_SCHEMA: Tool['inputSchema'] = {
   type: 'object',
   properties: {
     goal: { type: 'string', minLength: 1, description: 'What you need to find out, in your own words.' },
-    roots: strings('Narrow the search to these paths relative to projectRoot. Default: every allowed root.'),
+    roots: strings('Only when you know where the answer lives: paths relative to projectRoot inside the allowed roots. Omit it to search every allowed root.'),
     mode: { type: 'string', enum: [...MODES], description: 'locate (default): windows matching goal/queryTerms. audit: every window read in scope, matching or not.' },
     queryTerms: strings('Words or identifiers as they appear in the code, e.g. English names for a Korean goal.'),
     exactSymbols: strings('Literal strings to find exactly; no semantic judgement. Not with queryTerms or audit.'),
@@ -45,8 +45,15 @@ const INPUT_SCHEMA: Tool['inputSchema'] = {
   additionalProperties: false,
 };
 
-const DESCRIPTION = [
+/** The scope is part of the description, so a caller does not spend a call guessing a root it may not search. */
+const scopeLine = (config: EvidenceConfig | null): string =>
+  config
+    ? `Project ${config.projectRoot}; allowed roots: ${config.allowedRoots.map((r) => (r === '' ? '.' : r)).join(', ')}; remote Jev ${config.remote ? 'on' : 'off'}.`
+    : 'Not configured: every call returns unavailable_config.';
+
+const description = (config: EvidenceConfig | null): string => [
   'Read-only source evidence from the one project this server was configured for (projectRoot in every result).',
+  scopeLine(config),
   'Returns exact windows (16 lines for exactSymbols, at most 40 otherwise): path, 1-based startLine/endLine, fileSha256 and text.',
   'Narrow with roots; add queryTerms spelled as the code spells them; exactSymbols finds literal occurrences only.',
   'For more, call again with next.offset and next.expectedSnapshot. To read a returned window back exactly, pass its source as sources; the same path and fileSha256 with other lines (at most 40) reads a wider view.',
@@ -67,7 +74,7 @@ export const createServer = (load: ConfigLoad, deps: EvidenceServiceDeps): Serve
   const server = new Server({ name: 'jev-evidence', version: SERVER_VERSION }, { capabilities: { tools: {} } });
   const tool: Tool = {
     name: TOOL_NAME,
-    description: DESCRIPTION,
+    description: description(config),
     inputSchema: INPUT_SCHEMA,
     // Hints only, not access control; openWorld says whether any source may leave the machine.
     annotations: { title: 'Jev evidence', readOnlyHint: true, destructiveHint: false, openWorldHint: config?.remote === true },
