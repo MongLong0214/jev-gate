@@ -147,8 +147,9 @@ returns in under a second; the expensive models are asked only where a decision 
 
 ```text
 your request
-  └─ Gate A  Jev: one direct conversation, or a decomposed job?
+  └─ Gate A  Jev: how many tool calls would this take? code: does delegating it pay at this depth?
        ├─ direct        → Sonnet works normally, no plan, no guard
+       ├─ single        → one worker carries the request itself, no planner (the default for one outcome)
        └─ orchestrated  → strong planner (Opus, or Fable when Jev says the uncertainty warrants it)
                             reads the repository and returns a specification per task: interfaces, data shapes,
                             invariants, the files it inspected, and what it could not resolve
@@ -168,8 +169,20 @@ again when the last task is accepted, but a step is never dispatched and never g
 
 **Code owns acceptance.** A worker's result unlocks its dependents only when the reply reports every required check of
 its task contract as passed. That is a deterministic check, not a Jev call — the normal path no longer makes a Gate C
-HTTP request. A `worker_reported` accept is not independent proof that the code works; historical Gate C `result_*`
-records from before this change are still read as history.
+HTTP request. Since 0.4.0 (`verifyWorkerChecks`, on by default) each reported pass of a required check is also
+compared with the last call of its command in the worker's own transcript. A call counts when it contains the check's
+own shell segments in order and nothing around them can decide the exit status in their place: `echo npm test`,
+`true || npm test`, `npm test || true` and `npm test; echo done` are not runs of `npm test`, while
+`cd pkg && npm test -- --run` is. A check whose last run failed is refused, and so is a pass the gate cannot see: no
+passing run in the transcript, none in the last 8 MiB of a longer one, no transcript at all, or a required check with
+no command (`unobserved`). A host whose transcript layout moved therefore gets every reported pass back as incomplete,
+with the reason saying the transcript could not be read. A pass an edit came after is recorded as `stale` and refuses
+nothing. On the single shape, where the worker names each check by the command it ran, a worker that changed files and
+reports no passing check is not accepted either, and a check is named in traces by its position (`#1`), never by the
+command. It sees only how the host marked each Bash
+call — a command piped into `tail` exits with `tail`'s status, and an unmarked result is unknown — so an accept is
+still not independent proof that the code works; historical Gate C `result_*` records from before this change are
+still read as history.
 
 **Uncertainty preserves the default.** A tie, a low confidence, an abstention or any HTTP failure keeps the call that was
 already going to happen. A tier above standard additionally requires a concrete upgrade basis in the task itself —
@@ -297,7 +310,9 @@ Optional config at `~/.config/jev-gate/config.json` (or `JEV_GATE_CONFIG`), `JEV
   "plannerDefaultTier": "deep", "maxParallelWorkers": 1, "guardAllowTools": [],
   "workerIsolation": "none",
   "delegationDepthFloor": null, "delegationDepthFraction": 0.6, "maxTasksPerPlan": 10,
-  "admissionQuestionShape": "atomic", "routeQuestionShape": "composite",
+  "admissionQuestionShape": "atomic", "routeQuestionShape": "atomic",
+  "admittedShape": "auto", "delegationCoordinatorTurns": 11, "delegationWorkerTokensPerCall": 40000,
+  "guardAllowMcp": true, "verifyWorkerChecks": true,
   "planInterpretation": false,
   "models": { "fast": "haiku", "standard": "sonnet", "deep": "opus", "frontier": "opus" } }
 ```
@@ -306,7 +321,10 @@ A V3 or V4 file is rejected with this sample and the plugin never rewrites yours
 TypeSafe, so an old `auto` setting is not carried over silently. Model mappings choose what a patch proposes; they grant
 no account access. The three floors are uncalibrated policy values; `resultConfidenceFloor` is now a deprecated no-op
 kept only for config compatibility, since the normal path no longer makes the Gate C call it used to gate.
-`guardAllowTools` adds read-only tools your project needs during orchestration, for example an MCP reader.
+`guardAllowTools` adds read-only tools your project needs during orchestration. `guardAllowMcp` (default `true`)
+lets the coordinator call any MCP tool (`mcp__…`) itself while the guard is active: workers have no connector, so
+without it a turn that needed Notion or Figma stalled. Set it to `false` and Gate A instead keeps a request that needs
+a connector direct (`admission_external_tools`).
 
 `workerIsolation` is `"none"` by default, and can be set to `"worktree"`: every planned worker dispatch the hook
 patches then also carries `isolation: "worktree"` in the patched call (a planner, ad-hoc or single-executor dispatch
@@ -331,16 +349,38 @@ a one-task plan or an independent last task is merged too. The hook reads projec
 from `CLAUDE_PROJECT_DIR`, which the host exports to hooks, since its own `cwd` moves with `cd`; without it the base
 ref is unknown and the turn runs serially.
 
-The last seven keys before `models` are optional and default to the values shown, so an existing V5 file keeps its
-behaviour unedited.
+Every key after `guardAllowTools` is optional and defaults to the value shown. 0.4.0 changed three of those defaults
+(`routeQuestionShape`, `admittedShape`, and the atomic gate's floor), so a V5 file that leaves them out now gets the new
+behaviour; write the old value to keep the old one.
+
+**Gate A prices the request (0.4.0).** The atomic gate asks how many tool calls the request would take (five bins) and
+composes a price in code: delegate when `(turns − delegationCoordinatorTurns) × depth − turns ×
+delegationWorkerTokensPerCall > 0`. Every root turn re-reads the whole session (1.00–1.05 × depth per turn over 631 real
+prompts), so the saving is the root turns delegation removes; the coordinator still takes about 11 of its own (the
+jev_single bench took 11–17). The bin-to-turns map `[0, 10, 10, 10, 60]` was set on the calibration half of a
+pre-registered replay of 100 real prompts (`bench/results/v5-gate-a-cost-2026-09-28`). The same run is the honest
+limit: Jev's read-off of the prompt text barely ranks the work it turns into (Spearman 0.05–0.08), because a short
+prompt deep in a session carries work its text does not state; on the validation half the gate admitted 9 of 50, 6 of
+them correctly, for a modelled saving of 66M of the 885M tokens those prompts actually cost. Admitting everything
+would have saved more by the same model, which does not price what a worker loses by not seeing the conversation.
+
+`admittedShape` is how an admitted turn runs. `auto` (the default since 0.4.0) runs `single` — one worker carrying the
+request verbatim, no planner — unless Gate A read the request as separate outcomes or a whole project, in which case it
+runs the planner hierarchy. On this repository's two jobs single passed 6/6 and hierarchy 4/6
+(`DECISION-admitted-shape-2026-09-19.md`); the owner chose single-first on 2026-09-28. `hierarchy` and `single` pin
+one shape.
 
 `delegationDepthFloor` is how much context your session must already be carrying before Gate A is asked anything at
 all. Below it the turn is direct and no request is sent. It exists because depth, not the request, is what decides
 whether delegating is cheaper: the same job measured +182 % on a fresh session and -57 % on a loaded one. The number is
 read from the session transcript the host passes to the hook, and a transcript that cannot be read counts as below the
-floor. `0` turns the floor off.
+floor. `0` turns the floor off; a transcript that cannot be read still keeps the turn direct.
 
-The default is `null`, not a fixed number (#48): a floor is only reachable if the host's own auto-compaction window is
+With the atomic gate and `delegationDepthFloor: null`, the floor is the cost model's own: the shallowest depth at which
+the largest answer could pay (48,980 tokens with the defaults), whatever the host window. The rest of this section
+describes the composite gate, which has no price and keeps the window rule.
+
+For the composite gate the default is `null`, not a fixed number (#48): a floor is only reachable if the host's own auto-compaction window is
 above it, and that window varies by host and session (a 300,000-token window compacts a session before a fixed
 300,000-token floor is ever reached — 1,014 admission decisions measured on this project's own dogfood session were 0
 attempted). With `delegationDepthFloor: null`, the effective floor is derived from whatever window is known:
@@ -396,8 +436,11 @@ an offline replay even with depth supplied, so the gate never ran. The atomic pa
 never fires against one that does — is the whole reason it ships; ~~at depth its admissions measured −59 % to −69 % on
 the job turn~~ is **withdrawn (2026-09-20)**: the ladder built to establish that crossing reproduced none of its six
 comparisons and the deepest rung reversed sign
-(`bench/results/v5-depth-ladder-2026-09-19/RESULTS-WORK-RERUN-2026-09-20.md`). **Gate B stays `composite`**, because
-its atomic shape has one end-to-end observation and every figure above was measured with the composite one.
+(`bench/results/v5-depth-ladder-2026-09-19/RESULTS-WORK-RERUN-2026-09-20.md`). **Gate B ships `atomic` since 0.4.0**:
+in real use the composite answer never cleared its 0.8 floor (0.78, 0.35), so every dispatch kept the tier the
+coordinator called and the gate was paid for and ignored. The atomic shape composes fast, standard or deep in code with
+no floor, so its answer is applied; it never picks frontier. The Router plugin leaves a jev-gate dispatch alone
+(`gate_routed`), so Gate B's model and effort are the ones that run.
 
 `planInterpretation` turns on one extra request, made after the planner replies and before its plan is adopted. It
 compares each constraint the plan wrote down against your own request and the interfaces the plan proposes, and answers

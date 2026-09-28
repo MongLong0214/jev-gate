@@ -84,7 +84,9 @@ so it is logged as `other`, never by name.
   engine's own core listing did not offer (`definition_unverified`), a host whose release base is not 2.1.N with N at
   least 282 (`host_unverified`, including development builds), any spawn after this session's routing was suspended
   (`spawn_suspended`, below), an `Explore` under a parent of unknown family
-  (`baseline_unknown`), and a prompt that carries a Lean marker (`lean_marker`).
+  (`baseline_unknown`), a prompt that carries a Lean marker (`lean_marker`), and a jev-gate dispatch -- a
+  `jev-gate:` agent type or a prompt carrying the gate's route note (`gate_routed`), whose model and effort Gate B
+  already chose.
 - **The settings allowlist.** A target outside `availableModels` is `target_not_allowed`. A malformed
   `availableModels` allows nothing. An entry allows a variant only by naming it: `claude-opus-5-5` does not allow
   `claude-opus-5-5[1m]`, and an alias allows only the unsuffixed model. A suffix the host does not list for that model

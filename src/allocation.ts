@@ -254,8 +254,9 @@ export const priorFailureClassification = (answers: Record<string, unknown>): Pr
 export const FACT_TRUE = 0.6;
 export const FACT_NOT_AGAINST = 0.5;
 
+// Read only as the type the question asked for, as Gate A's reader is: a `choice` carrying a `noul` number is invalid.
 const noulValue = (v: unknown): number | null => {
-  if (typeof v !== 'object' || v === null) return null;
+  if (typeof v !== 'object' || v === null || (v as { type?: unknown }).type !== 'noul') return null;
   const n = (v as { noul?: unknown }).noul;
   return typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 1 ? n : null;
 };

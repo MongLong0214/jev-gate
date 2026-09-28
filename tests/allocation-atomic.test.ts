@@ -30,7 +30,7 @@ const task: PlannedTask = {
 /** A full set of answers, so each test can move one fact and leave the rest neutral. */
 const answers = (over: Record<string, number> = {}): Record<string, unknown> => {
   const base = { fully_specified: 0.1, interfaces_fixed: 0.1, checks_stated: 0.1, repetitive: 0.1, unresolved_interaction: 0.1, prior_reasoning_failure: 0.1, ...over };
-  return Object.fromEntries(Object.entries(base).map(([k, v]) => [k, { noul: v }]));
+  return Object.fromEntries(Object.entries(base).map(([k, v]) => [k, { type: 'noul', noul: v }]));
 };
 
 describe('atomic worker route questions', () => {
@@ -88,9 +88,11 @@ describe('decideWorkerRouteAtomic', () => {
 
   it.each([
     ['a missing answer', (() => { const a = answers(); delete a['checks_stated']; return a; })()],
-    ['a non-numeric noul', { ...answers(), checks_stated: { noul: 'high' } }],
-    ['a value outside 0..1', { ...answers(), checks_stated: { noul: 1.4 } }],
-    ['a choice answer where a noul belongs', { ...answers(), checks_stated: { choice: 'yes', confidence: 0.99 } }],
+    ['a non-numeric noul', { ...answers(), checks_stated: { type: 'noul', noul: 'high' } }],
+    ['a value outside 0..1', { ...answers(), checks_stated: { type: 'noul', noul: 1.4 } }],
+    ['a choice answer where a noul belongs', { ...answers(), checks_stated: { type: 'choice', choice: 'yes', confidence: 0.99 } }],
+    ['a noul number under a choice type', { ...answers(), checks_stated: { type: 'choice', noul: 0.95 } }],
+    ['a noul number with no type', { ...answers(), checks_stated: { noul: 0.95 } }],
   ])('leaves the dispatch on the called tier for %s', (_name, a) => {
     const d = decideWorkerRouteAtomic(a as Record<string, unknown>, 'standard');
     expect(d).toEqual({ action: 'preserve', tier: 'standard', reason: 'route_invalid', route: null, basis: null });
@@ -98,10 +100,10 @@ describe('decideWorkerRouteAtomic', () => {
 });
 
 describe('routeQuestionShape config', () => {
-  it('defaults to composite so a deployed file keeps its behaviour', () => {
-    expect(DEFAULT_CONFIG.routeQuestionShape).toBe('composite');
+  it('defaults to atomic since 0.4.0, because the composite answer never cleared its floor in real use', () => {
+    expect(DEFAULT_CONFIG.routeQuestionShape).toBe('atomic');
     const r = validateConfig({ version: 5, mode: 'auto' });
-    expect(r.ok && r.config.routeQuestionShape).toBe('composite');
+    expect(r.ok && r.config.routeQuestionShape).toBe('atomic');
   });
 
   it('accepts atomic and rejects anything else', () => {

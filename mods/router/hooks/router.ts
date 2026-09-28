@@ -98,6 +98,13 @@ const INHERITING_BUILT_INS = new Set(['general-purpose', 'claude', 'Plan', 'Expl
 const EXPLORE_FAMILIES = new Set(['haiku', 'sonnet', 'opus']);
 /** A Lean executor prompt: its packet is not visible here, so its model is Lean's and native's to decide (#44). */
 const LEAN_MARKER = /jev-lean-[0-9a-f]{16}/;
+/**
+ * A jev-gate dispatch: Gate B already chose its model and effort (the tier's agent profile), so routing it again here
+ * overrode the gate's answer with a second one. Its planner and workers are the plugin's own agents, and a worker the
+ * gate patched carries its route note.
+ */
+const GATE_ROUTE_NOTE = /\[Jev Gate route note\] Tier: (?:fast|standard|deep|frontier)\./;
+const GATE_AGENT_PREFIX = 'jev-gate:';
 const MAX_TURNS = 16;
 const MAX_OFFERS = 64;
 /** Subagents whose spawn answer is kept for their steps. */
@@ -829,6 +836,7 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     // Native ignores a fork's model and inherits the parent's context and model.
     if (e.fork) return spawnSkip(engine, e, 'fork');
     if (LEAN_MARKER.test(e.prompt) || LEAN_MARKER.test(e.description)) return spawnSkip(engine, e, 'lean_marker');
+    if (e.subagentType.startsWith(GATE_AGENT_PREFIX) || GATE_ROUTE_NOTE.test(e.prompt)) return spawnSkip(engine, e, 'gate_routed');
     if (suspended !== null) return spawnSkip(engine, e, 'spawn_suspended');
     void diagnose(engine);
     const explicit = e.model !== undefined && e.model.trim() !== '' ? e.model : null;
