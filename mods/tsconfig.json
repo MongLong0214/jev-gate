@@ -19,6 +19,7 @@
   "include": [
     "*/types/**/*.d.ts",
     "*/hooks",
+    "../hooks/register.ts",
     "*/tests"
   ]
 }

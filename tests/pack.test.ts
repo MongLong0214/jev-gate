@@ -18,7 +18,10 @@ beforeAll(() => {
   mkdirSync(pluginRoot, { recursive: true });
   const r = spawnSync(process.execPath, [join(root, 'node_modules', 'typescript', 'bin', 'tsc'), '-p', join(root, 'tsconfig.json'), '--outDir', join(pluginRoot, 'dist')], { encoding: 'utf8' });
   expect(r.status, r.stdout + r.stderr).toBe(0);
-  for (const rel of ['.claude-plugin', 'hooks', 'agents', 'README.md', 'AGENTS.md', '.env.example', 'package.json']) cpSync(join(root, rel), join(pluginRoot, rel), { recursive: true });
+  for (const rel of ['.claude-plugin', 'hooks', 'agents', 'mods', 'plugins/evidence/skills', 'README.md', 'AGENTS.md', '.env.example', 'package.json']) cpSync(join(root, rel), join(pluginRoot, rel), { recursive: true });
+  // The evidence bundle is build output, and the tests run before the build.
+  const evidence = spawnSync(process.execPath, [join(root, 'scripts', 'build-evidence.mjs'), join(pluginRoot, 'plugins', 'evidence', 'dist', 'server.mjs')], { encoding: 'utf8' });
+  expect(evidence.status, evidence.stderr).toBe(0);
 }, 60_000);
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
@@ -32,9 +35,12 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     const list = spawnSync('unzip', ['-Z1', join(outDir, archive!)], { encoding: 'utf8' }).stdout.trim().split('\n');
     const agents = ['worker-fast', 'worker', 'worker-deep', 'worker-frontier', 'planner', 'planner-frontier', 'executor'].map((a) => `agents/${a}.md`);
     for (const must of ['dist/entry.js', 'dist/hook.js', 'dist/jev.js', 'dist/brief.js', 'dist/cli.js', 'dist/job.js', 'dist/plan.js', 'hooks/hooks.json', ...agents, '.claude-plugin/plugin.json', 'README.md']) expect(list, must).toContain(must);
-    expect(list.some((f) => f.startsWith('src/') || f.startsWith('tests/') || f.startsWith('node_modules/') || f.includes('.env') && !f.endsWith('.env.example'))).toBe(false);
-    // #77: the evidence server is bundled into plugins/evidence and ships only in its own archive.
-    expect(list.filter((f) => f.includes('evidence'))).toEqual([]);
+    expect(list.some((f) => f.startsWith('src/') || f.includes('/tests/') || f.startsWith('tests/') || f.startsWith('node_modules/') || f.includes('.env') && !f.endsWith('.env.example'))).toBe(false);
+    // v0.6.0: the one plugin carries the three Mods from their source, the module that loads them, and the evidence
+    // server with its skill, at the paths plugin.json and hooks/register.ts name; no Mod manifest, test or declaration.
+    for (const must of ['hooks/register.ts', 'mods/compact/hooks/register.ts', 'mods/output/hooks/filter.ts', 'mods/router/hooks/router.ts', 'plugins/evidence/dist/server.mjs', 'plugins/evidence/skills/evidence/SKILL.md']) expect(list, must).toContain(must);
+    expect(list.filter((f) => f.startsWith('mods/') && !/^mods\/(compact|output|router)\/hooks\/[a-z-]+\.ts$/.test(f))).toEqual([]);
+    expect(list.filter((f) => f.startsWith('plugins/'))).toEqual(['plugins/evidence/dist/server.mjs', 'plugins/evidence/skills/evidence/SKILL.md']);
 
     const dest = join(tmp, 'installed here', 'jev gate');
     mkdirSync(dest, { recursive: true });
@@ -99,6 +105,9 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     // The build clears dist, so a module deleted from src cannot reappear in an archive.
     expect(list).not.toContain('dist/context.js');
     expect(list.some((f) => f.startsWith('src/') || f.startsWith('tests/'))).toBe(false);
+    // Lean's hook set loads no Mod; the shared manifest's evidence server and skill are there.
+    expect(list.filter((f) => f.startsWith('mods/') || f === 'hooks/register.ts')).toEqual([]);
+    expect(list.filter((f) => f.startsWith('plugins/'))).toEqual(['plugins/evidence/dist/server.mjs', 'plugins/evidence/skills/evidence/SKILL.md']);
 
     const dest = join(tmp, 'lean installed', 'jev gate');
     mkdirSync(dest, { recursive: true });

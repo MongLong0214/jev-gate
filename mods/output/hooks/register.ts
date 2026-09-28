@@ -1,5 +1,6 @@
-import type { Register } from 'claude-code';
+import type { On, Register } from 'claude-code';
 
+import type { OutputConfig } from './config.ts';
 import { resolveOutputConfig } from './config.ts';
 import { foldVitest, isVitestCommand, MAX_BYTES, MIN_SAVING, utf8Bytes, withNote } from './filter.ts';
 
@@ -28,7 +29,12 @@ export const register: Register = (on, options) => {
     });
     return;
   }
-  if (!resolved.config.enabled) return;
+  registerOutput(on, resolved.config);
+};
+
+/** The hooks for a resolved config; the combined jev-gate module (hooks/register.ts) calls this directly. */
+export const registerOutput = (on: On, config: OutputConfig): void => {
+  if (!config.enabled) return;
 
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     const ran = await next(e);

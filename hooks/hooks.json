@@ -44,5 +44,6 @@
         ]
       }
     ]
-  }
+  },
+  "modules": ["./register.ts"]
 }

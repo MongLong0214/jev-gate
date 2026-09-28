@@ -16,7 +16,8 @@ describe('the marketplace', () => {
   it('is named jev-gate, so a plugin installs as <plugin>@jev-gate', () => {
     expect(marketplace.name).toBe('jev-gate');
     expect(marketplace.owner.name).toBeTruthy();
-    expect(marketplace.plugins.map((p) => p.name).sort()).toEqual(['jev-gate', 'jev-gate-compact', 'jev-gate-evidence', 'jev-gate-output', 'jev-gate-router']);
+    // v0.6.0: one plugin, so one install and one update; the Mods and the evidence server ship inside it.
+    expect(marketplace.plugins.map((p) => p.name)).toEqual(['jev-gate']);
   });
 
   it('leaves every version to plugin.json, and every plugin.json is at the package version', () => {
@@ -27,16 +28,10 @@ describe('the marketplace', () => {
     }
   });
 
-  it('points each relative source at a plugin of the same name', () => {
-    expect(relativeEntries.map((p) => p.source).sort()).toEqual(['./mods/compact', './mods/output', './mods/router']);
-    for (const p of relativeEntries) {
-      expect((readJson(join(root, p.source, '.claude-plugin', 'plugin.json')) as { name: string }).name).toBe(p.name);
-    }
-  });
-
-  it('pins jev-gate and jev-gate-evidence to this version’s release archives by SHA-256', () => {
+  it('pins jev-gate to this version’s release archive by SHA-256', () => {
     const archives = marketplace.plugins.filter((p) => typeof p.source !== 'string');
-    expect(archives.map((p) => p.name).sort()).toEqual(['jev-gate', 'jev-gate-evidence']);
+    expect(archives.map((p) => p.name)).toEqual(['jev-gate']);
+    expect(relativeEntries).toEqual([]);
     for (const entry of archives) {
       expect(entry.source, entry.name).toEqual({
         source: 'archive',
@@ -44,29 +39,29 @@ describe('the marketplace', () => {
         sha256: expect.stringMatching(/^[0-9a-f]{64}$/),
       });
     }
-    // The evidence archive is built from plugins/evidence, whose manifest names it (#77).
-    expect((readJson(join(root, 'plugins', 'evidence', '.claude-plugin', 'plugin.json')) as { name: string }).name).toBe('jev-gate-evidence');
     expect(readFileSync(join(root, 'CHANGELOG.md'), 'utf8')).toMatch(new RegExp(`^## v${version.replace(/\./g, '\\.')} `, 'm'));
   });
 
-  it('ships Function Hooks plugins whose modules import nothing outside their own directory', () => {
-    // Only the plugin's directory reaches the cache, so an import that climbs out of it breaks the installed copy.
+  it('loads a hooks module whose imports all resolve inside the files the archive carries', () => {
+    // The archive holds hooks/ and mods/<mod>/hooks/*.ts (scripts/pack.mjs), so an import outside them breaks the installed copy.
     const specifier = /(?:^|\n)\s*(?:import|export)\b[^'"]*?\bfrom\s+['"]([^'"]+)['"]|\bimport\(\s*['"]([^'"]+)['"]\s*\)/g;
-    for (const p of relativeEntries) {
-      const dir = resolve(root, p.source);
-      const hooks = readJson(join(dir, 'hooks', 'hooks.json')) as { modules: string[] };
-      for (const m of hooks.modules) expect(existsSync(resolve(dir, 'hooks', m)), `${p.name} ${m}`).toBe(true);
-      for (const file of readdirSync(join(dir, 'hooks')).filter((n) => n.endsWith('.ts'))) {
-        const text = readFileSync(join(dir, 'hooks', file), 'utf8');
-        for (const [, a, b] of text.matchAll(specifier)) {
-          const spec = (a ?? b)!;
-          if (spec === 'claude-code' || spec.startsWith('node:')) continue;
-          expect(spec.startsWith('.'), `${p.name}/hooks/${file} imports ${spec}`).toBe(true);
-          const target = resolve(dirname(join(dir, 'hooks', file)), spec);
-          expect(relative(dir, target).startsWith('..'), `${p.name}/hooks/${file} imports ${spec}`).toBe(false);
-          expect(existsSync(target), `${p.name}/hooks/${file} imports ${spec}`).toBe(true);
-        }
+    const shipped = (rel: string) => /^(hooks|mods\/(compact|output|router)\/hooks)\/[a-z-]+\.ts$/.test(rel);
+    const hooks = readJson(join(root, 'hooks', 'hooks.json')) as { modules: string[] };
+    expect(hooks.modules).toEqual(['./register.ts']);
+    const seen = new Set<string>();
+    const visit = (rel: string): void => {
+      if (seen.has(rel)) return;
+      seen.add(rel);
+      expect(shipped(rel), rel).toBe(true);
+      expect(existsSync(join(root, rel)), rel).toBe(true);
+      for (const [, a, b] of readFileSync(join(root, rel), 'utf8').matchAll(specifier)) {
+        const spec = (a ?? b)!;
+        if (spec === 'claude-code' || spec.startsWith('node:')) continue;
+        expect(spec.startsWith('.'), `${rel} imports ${spec}`).toBe(true);
+        visit(relative(root, resolve(dirname(join(root, rel)), spec)));
       }
-    }
+    };
+    visit('hooks/register.ts');
+    expect([...seen].filter((f) => f.startsWith('mods/')).length).toBeGreaterThan(10);
   });
 });

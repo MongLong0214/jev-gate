@@ -1,5 +1,6 @@
-import type { EngineInterface, Register } from 'claude-code';
+import type { EngineInterface, On, Register } from 'claude-code';
 
+import type { RouterConfig } from './config.ts';
 import { anyRouting, resolveConfig } from './config.ts';
 import type { HostPins, RouterEngine } from './router.ts';
 import { createRouter } from './router.ts';
@@ -64,7 +65,11 @@ export const register: Register = (on, options) => {
     });
     return;
   }
-  const config = resolved.config;
+  registerRouter(on, resolved.config);
+};
+
+/** The hooks for a resolved config; the combined jev-gate module (hooks/register.ts) calls this directly. */
+export const registerRouter = (on: On, config: RouterConfig): void => {
   if (!anyRouting(config)) return;
   const router = createRouter(config);
 

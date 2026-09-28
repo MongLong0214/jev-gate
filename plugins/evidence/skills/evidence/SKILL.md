@@ -6,7 +6,8 @@ argument-hint: "[what you need to find out]"
 ---
 
 Answer this with source evidence from the `jev_evidence` tool (host name
-`mcp__plugin_jev-gate-evidence_evidence__jev_evidence`): $ARGUMENTS
+`mcp__plugin_jev-gate_evidence__jev_evidence`, or `mcp__plugin_jev-gate-evidence_evidence__jev_evidence` when this
+server is loaded alone): $ARGUMENTS
 
 Call it with:
 

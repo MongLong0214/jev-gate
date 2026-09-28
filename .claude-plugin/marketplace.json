@@ -4,85 +4,28 @@
     "name": "MongLong0214",
     "url": "https://github.com/MongLong0214"
   },
-  "description": "Claude Code plugins from the jev-gate repository: an instant extractive compactor, a Vitest log folder, a Jev model and effort router, a read-only evidence search tool, and the Jev orchestration gate. Each is off by default until you enable it.",
+  "description": "One Claude Code plugin from the jev-gate repository: the Jev orchestration gate, an instant extractive compactor, a Vitest log folder, a Jev effort and model router and a read-only evidence search tool. Each part is off until you enable it.",
   "plugins": [
-    {
-      "name": "jev-gate-compact",
-      "source": "./mods/compact",
-      "displayName": "Jev Gate Compact",
-      "description": "Answers auto compactions with an extractive digest and the recent tail: no summarizer request, milliseconds instead of a minute. Calls no Jev. Needs CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1; off until enabled.",
-      "homepage": "https://github.com/MongLong0214/jev-gate/tree/main/mods/compact#readme",
-      "category": "productivity",
-      "tags": [
-        "compaction",
-        "context",
-        "tokens",
-        "function-hooks"
-      ]
-    },
-    {
-      "name": "jev-gate-router",
-      "source": "./mods/router",
-      "displayName": "Jev Gate Router",
-      "description": "Chooses the main thread's effort and each subagent's model and effort from one TypeSafe Jev assessment, and stays native on any doubt; the main thread's model is not routed. Needs CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 and a TypeSafe key; off until enabled.",
-      "homepage": "https://github.com/MongLong0214/jev-gate/tree/main/mods/router#readme",
-      "category": "productivity",
-      "tags": [
-        "routing",
-        "jev",
-        "typesafe",
-        "function-hooks"
-      ]
-    },
-    {
-      "name": "jev-gate-output",
-      "source": "./mods/output",
-      "displayName": "Jev Gate Output",
-      "description": "Folds runs of identical consecutive lines in a passing Vitest log the host saved to a file, so the model reads the whole run with exact counts instead of a 2 KB preview. Calls no Jev. Needs CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1; off until enabled.",
-      "homepage": "https://github.com/MongLong0214/jev-gate/tree/main/mods/output#readme",
-      "category": "productivity",
-      "tags": [
-        "output",
-        "context",
-        "tokens",
-        "function-hooks"
-      ]
-    },
     {
       "name": "jev-gate",
       "source": {
         "source": "archive",
-        "url": "https://github.com/MongLong0214/jev-gate/releases/download/v0.5.1/jev-gate-0.5.1.zip",
-        "sha256": "493306a8d81e8fb7d3b6da9a3a1bf5f958489af0d6612b5ee326578ef4ca248e"
+        "url": "https://github.com/MongLong0214/jev-gate/releases/download/v0.6.0/jev-gate-0.6.0.zip",
+        "sha256": "8e3ca771053613bd22b62bae75dd2914eee94c868556cf220989f622b6d1ad20"
       },
       "displayName": "Jev Gate",
-      "description": "Jev-directed orchestration for deep sessions: a planner and tiered workers, admitted only past a context-depth floor. Built from the tagged release; needs Node 22 and a TypeSafe key.",
+      "description": "The orchestration gate (a planner and tiered workers past a context-depth floor), extractive compaction, Vitest log folding, a Jev effort and model router and the jev_evidence tool, in one install. Each part is off until enabled. Built from the tagged release; needs Node 22, a TypeSafe key for the Jev parts, and CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 for compaction, folding and routing.",
       "homepage": "https://github.com/MongLong0214/jev-gate#readme",
       "category": "productivity",
       "tags": [
         "orchestration",
         "jev",
         "typesafe",
-        "hooks"
-      ]
-    },
-    {
-      "name": "jev-gate-evidence",
-      "source": {
-        "source": "archive",
-        "url": "https://github.com/MongLong0214/jev-gate/releases/download/v0.5.1/jev-gate-evidence-0.5.1.zip",
-        "sha256": "6fa7c2cb8aff69584548e407c22054c2664e242f299baecf53ab424af702bf1d"
-      },
-      "displayName": "Jev Gate Evidence",
-      "description": "One read-only MCP tool, jev_evidence: exact source windows from the one project you configure, paged, with exact read-back; with remote on, Jev judges a page and folds clearly unrelated bodies. Built from the tagged release; needs Node 22 and JEV_EVIDENCE_CONFIG, unavailable until configured.",
-      "homepage": "https://github.com/MongLong0214/jev-gate/tree/main/plugins/evidence#readme",
-      "category": "productivity",
-      "tags": [
-        "evidence",
-        "search",
-        "mcp",
-        "jev",
-        "typesafe"
+        "hooks",
+        "compaction",
+        "routing",
+        "function-hooks",
+        "mcp"
       ]
     }
   ]

@@ -1,6 +1,6 @@
-# jev-gate-evidence
+# Evidence (in the jev-gate plugin)
 
-A Claude Code plugin with one read-only MCP tool, `jev_evidence`. It searches the one project you configure and
+A Claude Code MCP server with one read-only tool, `jev_evidence`. It searches the one project you configure and
 returns exact source windows (16 lines around an exact-symbol hit, otherwise at most 40 lines; 8 KiB at most) with their path, 1-based lines and the SHA-256 of the
 whole file, a page at a time. A returned reference can be sent back to read exactly that window again. With `remote`
 on and a TypeSafe key, a semantic page is judged by Jev: windows are ordered relevant first, and in `locate` a clearly
@@ -40,34 +40,26 @@ without reading a source or sending a request.
 
 ## Install
 
-From v0.5.1 the marketplace lists it, pinned like `jev-gate` to the release archive by SHA-256:
+It ships inside the `jev-gate` plugin (v0.6.0; v0.5.0 and v0.5.1 shipped it as its own `jev-gate-evidence`), which
+the marketplace pins to the release archive by SHA-256:
 
 ```text
 /plugin marketplace add MongLong0214/jev-gate
-/plugin install jev-gate-evidence@jev-gate
+/plugin install jev-gate@jev-gate
 ```
 
-Every release from v0.5.0 on also carries `jev-gate-evidence-<version>.zip`, which loads without the marketplace:
+From a checkout, `npm ci && npm run build` and then `claude --plugin-dir .` loads the whole plugin from the working
+tree; `claude --plugin-dir plugins/evidence` loads this server alone (as `jev-gate-evidence`), and
+`node scripts/pack.mjs dist-pack --profile evidence` still builds that standalone archive. The bundled server has the
+MCP SDK inside it; it needs Node 22 or later and nothing else. To turn it off, disable the `evidence` server in `/mcp`.
 
-```sh
-gh release download v0.5.1 --repo MongLong0214/jev-gate --pattern 'jev-gate-evidence-*.zip'
-unzip jev-gate-evidence-0.5.1.zip -d ~/.claude/jev-gate-evidence
-claude --plugin-dir ~/.claude/jev-gate-evidence
-```
-
-From a checkout, `npm ci && npm run build` and then `node scripts/pack.mjs dist-pack --profile evidence` builds the
-same archive, and `claude --plugin-dir plugins/evidence` loads the working tree directly. The archive holds the bundled server with the MCP
-SDK inside it; it needs Node 22 or later and nothing else. To turn it off, start Claude Code without that
-`--plugin-dir` (or `claude plugin disable jev-gate-evidence@jev-gate`), or disable the `evidence` server in `/mcp`. To
-remove it, `claude plugin uninstall jev-gate-evidence@jev-gate` or delete the unzipped directory.
-
-`node <plugin dir>/dist/server.mjs --doctor` prints the config state, whether remote is on and whether the key is
+`node <plugin dir>/plugins/evidence/dist/server.mjs --doctor` (`<dir>/dist/server.mjs` for the standalone archive) prints the config state, whether remote is on and whether the key is
 present. It reads the config only: no source scan, no request. A passing doctor says the server can start, nothing
 about the quality of its answers.
 
 ## Use
 
-The manual skill `/jev-gate-evidence:evidence <question>` asks Claude to answer with this tool. It runs only when you
+The manual skill `/jev-gate:evidence <question>` asks Claude to answer with this tool. It runs only when you
 type it; nothing else in a session calls the tool unless Claude chooses to.
 
 | Need | Arguments | Jev |
@@ -104,3 +96,7 @@ archive unzipped under a path with spaces, run from another directory:
 - **Not observed on a host:** a cancellation from the host, `busy`, an interactive session, and any saving in tokens or time.
 
 The SDK client tests start the bundled server from an unpacked archive over stdio; they are not a host observation.
+
+In v0.6.0, inside the `jev-gate` plugin (2.1.283, `--plugin-dir` of the repository): the server connected as
+`plugin:jev-gate:evidence`, the skill loaded as `jev-gate:evidence`, and ToolSearch returned
+`mcp__plugin_jev-gate_evidence__jev_evidence`. The observations above were made on v0.5.x, under the old names.

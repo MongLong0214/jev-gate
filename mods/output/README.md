@@ -1,4 +1,4 @@
-# jev-gate-output
+# Output (in the jev-gate plugin)
 
 A Claude Code Function Hooks plugin for one kind of Bash result: a passing `vitest run` log too large for the host to
 send inline. The host saves such output to a file and gives the model a 2 KB preview of it. This plugin reads that
@@ -12,23 +12,24 @@ matter.
 
 ## Enable
 
-Install it from the repository's marketplace. Function Hooks are gated in the host, so
-`CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` must be in the environment Claude Code starts in (for example under `env` in
-`~/.claude/settings.json`):
+It ships inside the `jev-gate` plugin (v0.6.0; until v0.5.1 it was its own `jev-gate-output`). Function Hooks are
+gated in the host, so `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` must be in the environment Claude Code starts in (for
+example under `env` in `~/.claude/settings.json`):
 
 ```sh
 claude plugin marketplace add MongLong0214/jev-gate
-claude plugin install jev-gate-output@jev-gate --config enabled=true
+claude plugin install jev-gate@jev-gate --config outputEnabled=true
 ```
 
-From a checkout, `claude --plugin-dir /path/to/jev-gate/mods/output` loads the working tree instead.
+From a checkout, `claude --plugin-dir /path/to/jev-gate` loads the working tree as the whole plugin, and
+`--plugin-dir /path/to/jev-gate/mods/output` loads this module alone (option `enabled`, keyed `jev-gate-output@inline`).
 
-Off by default; off registers no hook at all. Options live under `pluginConfigs["jev-gate-output@jev-gate"].options`
-(`jev-gate-output@inline` for a `--plugin-dir` load).
+Off by default; off registers no hook at all. Options live under `pluginConfigs["jev-gate@jev-gate"].options`
+(`jev-gate@inline` for a `--plugin-dir` load).
 
 | Option | Default | Meaning |
 |---|---|---|
-| `enabled` | `false` | Master switch. |
+| `outputEnabled` | `false` | Master switch. |
 
 An option it cannot use turns it off and logs the field name once per session. Each `vitest run` it looks at logs one
 `jev-output {...}` debug line: `applied` with the number of folded runs, or the reason it skipped.

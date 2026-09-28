@@ -36,7 +36,8 @@ interpretation 중 어느 것도 lean에서 실행되지 않는다. 공유하는
 | `hooks/hooks.json`, `agents/*.md` | 어댑터 | (legacy) UserPromptSubmit·PreToolUse(matcher 없음)·PostToolUse/Failure(`^Agent$`)·Stop·SessionStart(#48, matcher 없음); worker 4종 + planner 2종, 모두 Agent·SendMessage 금지. 커맨드는 `dist/entry.js`(#48) |
 | `hooks/lean.json`, `agents/executor.md` | 어댑터 | (lean) UserPromptSubmit + Agent 전용 Pre/Post/Failure, entrypoint `dist/entry.js --lean`(#48, 이전 `dist/hook.js --lean`); executor 1종, `model: inherit`, Agent·SendMessage 금지. SessionStart 없음(lean은 필요 없음) |
 | `src/bench/{run,report,paths,checker,usage}.ts` | 도구 | legacy 8 arm + `--arms lean`(native_auto/recent_packet/jev_lean) 실행기(계획=stdout만, 실행=배타적 새 out + 입력 동결 + 셀별 state dir + 부모 환경 차단), 계획 우선 보고, checker 프로토콜 |
-| `mods/router/` | Mod | (router, #40–#43) Function Hooks 플러그인 `jev-gate-router`. 기본 off. root turn의 effort(선택적으로 model)와 상속형 built-in subagent의 model만 바꾼다. 비밀정보 패턴은 `src/lean-source.ts`의 사본이고 `tests/router/secret-parity.test.ts`가 일치를 강제한다. 타입은 `mods/tsconfig.json`, 테스트는 `tests/router/`(vitest)와 `mods/router/tests/`(호스트 키트), 패키지는 `pack --profile router` |
+| `hooks/register.ts` | 어댑터 | (v0.6.0) 한 plugin의 유일한 Function Hooks 모듈. compact·output·router의 `registerX(on, config)`를 부르고, 옵션 이름을 `OPTION_NAMES`로 각 Mod 이름으로 바꾸며, 옵션 오류 진단은 `session.start` 하나에서 쓴다(호스트는 모듈 하나·이벤트당 등록 하나만 받는다). `plugin.json` userConfig는 `tests/plugin-modules.test.ts`가 각 Mod manifest와 일치시킨다 |
+| `mods/router/` | Mod | (router, #40–#43) Function Hooks Mod, v0.6.0부터 `jev-gate` plugin 안에서 로드(단독 `--plugin-dir`는 개발·벤치용 `jev-gate-router`). 기본 off. root turn의 effort(선택적으로 model)와 상속형 built-in subagent의 model만 바꾼다. 비밀정보 패턴은 `src/lean-source.ts`의 사본이고 `tests/router/secret-parity.test.ts`가 일치를 강제한다. 타입은 `mods/tsconfig.json`, 테스트는 `tests/router/`(vitest)와 `mods/router/tests/`(호스트 키트), 패키지는 `pack --profile router` |
 | `bench/v5/`, `bench/v4/` | 도구 | 평가 job·checker·reference. V4는 개발 데이터로 보존 |
 | `bench/results/` | 기록 | 공개 가능한 집계만. 원자료는 저장소 밖 |
 

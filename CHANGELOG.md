@@ -1,5 +1,45 @@
 # Changelog
 
+## v0.6.0 — One plugin: install once, update once
+
+### Changed
+
+- **The marketplace lists one plugin, `jev-gate`, and it carries every part.** Until v0.5.1 the gate, the compactor,
+  the Router, the Vitest folder and the evidence tool were five plugins, installed, configured and updated one by one.
+  `jev-gate-<version>.zip` now holds the gate's command hooks, the three Function Hooks Mods (from their source in
+  `mods/`, loaded through one module, `hooks/register.ts`) and the evidence server and skill (`plugins/evidence/`).
+  Each part is still off until enabled, and a part without `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` is still not loaded
+  while the gate and the evidence tool run.
+- **Options take the plugin's names.** A name two Mods shared, or one that would read as the gate's, carries the Mod's
+  prefix: `compactEnabled`, `compactMode`, `compactBudgetChars`, `outputEnabled`, `routerEnabled`, `routerTimeoutMs`,
+  `routerLogDecisions`, `routerMinUpgradeConfidence`, `routerMinDowngradeConfidence` and `router<Tier>Model`; the rest
+  (`compactSubagents`, `compactManual`, `route*`, `typesafeApiKey`) keep theirs. A test holds `plugin.json` to each
+  Mod's own options, types and defaults. An unusable option still turns only its Mod off, with the same debug line.
+- **The evidence tool is `mcp__plugin_jev-gate_evidence__jev_evidence`**, and its skill `/jev-gate:evidence`.
+- The release uploads, downloads back and checks every archive the marketplace pins, now one.
+
+### Upgrading from v0.5.x
+
+The four separate plugins are gone from the marketplace and will not update again. Uninstall them
+(`claude plugin uninstall jev-gate-compact@jev-gate`, and likewise `jev-gate-router`, `jev-gate-output`,
+`jev-gate-evidence`) before updating `jev-gate`, or their hooks run twice, and set their options again under the names
+above. Each directory still loads alone with `--plugin-dir` under its old names, for development and the bench.
+
+### Host facts behind the shape (Claude Code 2.1.283)
+
+- A plugin loads one hooks module; a second `modules` entry fails the whole `hooks.json`, command hooks included.
+- A module that registers one event twice fails to load, so the Mods' diagnostics for an unusable option (each on
+  `session.start`) are written from one hook; their own hooks share no event.
+- The validator reads every `on("<event>", hook)` call and every use of `$` statically, through imports.
+
+### Observed (Claude Code 2.1.283, `claude -p --plugin-dir .`, no user settings, 2026-09-28)
+
+- One session ran the gate's command hooks (`SessionStart`, `UserPromptSubmit`, `Stop`, in mode `off`), loaded the
+  combined module with the Router's and Output's events, connected the evidence server (`jev-evidence` 0.6.0) and loaded
+  the skill as `jev-gate:evidence`. `compactMode: "fast"` wrote `jev-compact {…"field":"compactMode"}` and left the
+  others on; `compactMode: "active"` registered `session.compact`. ToolSearch returned
+  `mcp__plugin_jev-gate_evidence__jev_evidence`. Loading from the marketplace archive is observed only after release.
+
 ## v0.5.1 — The evidence tool installs from the marketplace, and a hand-set effort stays
 
 ### Changed

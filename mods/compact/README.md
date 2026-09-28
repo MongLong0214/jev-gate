@@ -1,6 +1,6 @@
-# jev-gate-compact
+# Compact (in the jev-gate plugin)
 
-A Claude Code Function Hooks plugin that answers the host's auto compaction itself. The conversation before a recent
+A Claude Code Function Hooks module that answers the host's auto compaction itself. The conversation before a recent
 tail becomes one built user message (the digest): the previous summary, every earlier user-role message and failed
 call whole, and a log of earlier steps with each tool call's input and, while room lasts, an excerpt of its output. The tail stays as the engine has it,
 except a last message that answers tool calls, which is handed up rebuilt with a closing line after its results (below).
@@ -11,25 +11,27 @@ deciding when a digest should fall back to the engine's own summary.
 
 ## Enable
 
-Install it from the repository's marketplace. Function Hooks are gated in the host, so
-`CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` must be in the environment Claude Code starts in (for example under `env` in
-`~/.claude/settings.json`):
+It ships inside the `jev-gate` plugin (v0.6.0; until v0.5.1 it was its own `jev-gate-compact`). Function Hooks are
+gated in the host, so `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` must be in the environment Claude Code starts in (for
+example under `env` in `~/.claude/settings.json`):
 
 ```sh
 claude plugin marketplace add MongLong0214/jev-gate
-claude plugin install jev-gate-compact@jev-gate --config enabled=true --config mode=active
+claude plugin install jev-gate@jev-gate --config compactEnabled=true --config compactMode=active
 ```
 
-From a checkout, `claude --plugin-dir /path/to/jev-gate/mods/compact` loads the working tree instead.
+From a checkout, `claude --plugin-dir /path/to/jev-gate` loads the working tree as the whole plugin, and
+`--plugin-dir /path/to/jev-gate/mods/compact` loads this module alone, under its own option names (`enabled`, `mode`,
+`budgetChars`, keyed `jev-gate-compact@inline`).
 
-Off by default; off registers no hook at all. Options live under `pluginConfigs["jev-gate-compact@jev-gate"].options`
-(`jev-gate-compact@inline` for a `--plugin-dir` load).
+Off by default; off registers no hook at all. Options live under `pluginConfigs["jev-gate@jev-gate"].options`
+(`jev-gate@inline` for a `--plugin-dir` load).
 
 | Option | Default | Meaning |
 |---|---|---|
-| `enabled` | `false` | Master switch. |
-| `mode` | `shadow` | `shadow` builds and logs the digest and lets the engine compact, logging how long that took and what its summarizer used. `active` answers the compaction with the digest. |
-| `budgetChars` | `40000` | Target characters for the digest and the kept tail together, 8000–400000. See the ceiling below. |
+| `compactEnabled` | `false` | Master switch. |
+| `compactMode` | `shadow` | `shadow` builds and logs the digest and lets the engine compact, logging how long that took and what its summarizer used. `active` answers the compaction with the digest. |
+| `compactBudgetChars` | `40000` | Target characters for the digest and the kept tail together, 8000–400000. See the ceiling below. |
 | `compactSubagents` | `true` | Also answer a subagent's own auto compactions. |
 | `compactManual` | `false` | Also answer `/compact` typed without instructions. Keep it off: see the host defect below. |
 
@@ -57,7 +59,7 @@ failure or cancellation is passed up and never retried, and a log that throws ch
 - **The ceiling.** Sizes are characters of text, tool inputs and results, plus each call's and result's id and 40
   characters of structure, and 16 per message (the digest's own message included), so a stretch of many small calls is
   not counted as nearly free. Because
-  the last exchange is kept whole, the total can pass `budgetChars`: up to twice it for the
+  the last exchange is kept whole, the total can pass `compactBudgetChars`: up to twice it for the
   tail plus 30% for the digest, 2.3 times in all. Past twice for the tail, or when the digest and tail would come to more
   than half of the conversation they replace, the engine compacts instead, so an answered compaction always at least
   halves what it was given. Both bounds hold in that count, ids and structure included, not in text alone: 500

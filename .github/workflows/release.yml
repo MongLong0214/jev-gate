@@ -24,8 +24,8 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
-      # Rebuilds both archives (jev-gate and, #77, jev-gate-evidence) and refuses unless each matches the SHA-256 the
-      # marketplace pins, the tag names the version, and main serves these same entries.
+      # Rebuilds every archive the marketplace pins (from v0.6.0 the one jev-gate plugin) and refuses unless each matches
+      # its SHA-256, the tag names the version, and main serves these same entries.
       - run: node scripts/release.mjs check --tag "$GITHUB_REF_NAME" --against origin/main --out dist-release
       # main may have moved while the job ran: fetch it again and repeat the comparison just before publishing.
       - run: |
@@ -38,7 +38,7 @@ jobs:
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             echo "release $GITHUB_REF_NAME exists; verifying its assets"
           else
-            gh release create "$GITHUB_REF_NAME" "dist-release/jev-gate-${GITHUB_REF_NAME#v}.zip" "dist-release/jev-gate-evidence-${GITHUB_REF_NAME#v}.zip" \
+            gh release create "$GITHUB_REF_NAME" dist-release/*.zip \
               --verify-tag --title "$GITHUB_REF_NAME" --notes-file dist-release/NOTES.md
           fi
       # A merge between that check and the upload could still leave main serving this version with another archive or
@@ -48,9 +48,8 @@ jobs:
       - env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release download "$GITHUB_REF_NAME" --pattern "jev-gate-${GITHUB_REF_NAME#v}.zip" --dir published --clobber
-          gh release download "$GITHUB_REF_NAME" --pattern "jev-gate-evidence-${GITHUB_REF_NAME#v}.zip" --dir published --clobber
+          gh release download "$GITHUB_REF_NAME" --pattern '*.zip' --dir published --clobber
       - run: |
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-          node scripts/release.mjs check --tag "$GITHUB_REF_NAME" --against origin/main \
-            --asset "published/jev-gate-${GITHUB_REF_NAME#v}.zip" --asset "published/jev-gate-evidence-${GITHUB_REF_NAME#v}.zip"
+          assets=(); for f in published/*.zip; do assets+=(--asset "$f"); done
+          node scripts/release.mjs check --tag "$GITHUB_REF_NAME" --against origin/main "${assets[@]}"
