@@ -49,8 +49,17 @@ const configFile = (body: unknown): string => {
 };
 
 describe('doctor: effective depth floor (#48 P0-1)', () => {
+  it('prints the cost model floor for the shipped atomic gate, whatever the window', () => {
+    const stdout = doctor({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '300000' });
+    expect(stdout).toMatch(/\[info\].*effective depth floor: 48980 \(cost_model\).*could repay the coordinator/);
+    expect(stdout).toMatch(/prices the request in code -- delegate when \(turns - 11\) x depth - turns x 40000 > 0/);
+  });
+
+  // The window rule below is the composite gate's; the atomic gate's floor comes from its cost model.
+  const composite = (): string => configFile({ version: 5, mode: 'auto', admissionQuestionShape: 'composite' });
+
   it('warns when the host window is unknown and the floor falls back to the legacy absolute default', () => {
-    const stdout = doctor({});
+    const stdout = doctor({ JEV_GATE_CONFIG: composite() });
     expect(stdout).toMatch(/host compaction window: unknown/);
     expect(stdout).toMatch(/\[warn\] no autoCompactWindow is configured/);
     // The runtime default by model is spelled out, and so is the fallback a 200K session would never reach.
@@ -60,13 +69,13 @@ describe('doctor: effective depth floor (#48 P0-1)', () => {
   });
 
   it('caps the window at 200K under CLAUDE_CODE_DISABLE_1M_CONTEXT, so a configured 1M no longer passes as healthy', () => {
-    const stdout = doctor({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '1000000', CLAUDE_CODE_DISABLE_1M_CONTEXT: '1' });
+    const stdout = doctor({ JEV_GATE_CONFIG: composite(), CLAUDE_CODE_AUTO_COMPACT_WINDOW: '1000000', CLAUDE_CODE_DISABLE_1M_CONTEXT: '1' });
     expect(stdout).toMatch(/host compaction window: 200000 tokens \(env capped by CLAUDE_CODE_DISABLE_1M_CONTEXT\)/);
     expect(stdout).toMatch(/effective depth floor: 120000 \(window_fraction\)/);
   });
 
   it('reports an info line, not a warning, for a floor comfortably under a known window', () => {
-    const stdout = doctor({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '300000' });
+    const stdout = doctor({ JEV_GATE_CONFIG: composite(), CLAUDE_CODE_AUTO_COMPACT_WINDOW: '300000' });
     expect(stdout).toMatch(/host compaction window: 300000 tokens \(env\)/);
     // DEFAULT_CONFIG.delegationDepthFloor is null, so this is window_fraction: min(300000, floor(0.6*300000))=180000.
     expect(stdout).toMatch(/\[info\].*effective depth floor: 180000 \(window_fraction\)/);
@@ -96,7 +105,8 @@ describe('doctor: effective depth floor (#48 P0-1)', () => {
 
   it('prints delegationDepthFraction alongside the raw config summary', () => {
     const stdout = doctor({});
-    expect(stdout).toMatch(/delegationDepthFloor=null \(derive from host window\) delegationDepthFraction=0\.6/);
+    expect(stdout).toMatch(/delegationDepthFloor=null \(derived\) delegationDepthFraction=0\.6/);
+    expect(stdout).toMatch(/admittedShape=auto delegationCoordinatorTurns=11 delegationWorkerTokensPerCall=40000 guardAllowMcp=true verifyWorkerChecks=true/);
   });
 });
 

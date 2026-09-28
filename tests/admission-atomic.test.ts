@@ -4,58 +4,50 @@ import {
   ADMISSION_FACT_QUESTIONS,
   buildAdmissionRequest,
   buildAtomicAdmissionRequest,
+  costModelFloor,
   decideAdmissionAtomic,
+  delegationModel,
+  delegationSaving,
+  estimatedTurns,
+  resolveAdmittedShape,
   shapeRecommendation,
-  SIZE_FLOOR,
   SIZE_MAX_SCORE,
+  TOOL_CALL_TURNS,
+  TOOL_CALLS_MAX_SCORE,
 } from '../src/admission.js';
 import { FACT_TRUE } from '../src/allocation.js';
-import { DEFAULT_CONFIG, LEGACY_DEPTH_FLOOR } from '../src/config.js';
+import { DEFAULT_CONFIG } from '../src/config.js';
 
 /**
- * Gate A decomposed: read-offs from the request, composed here as vetoes, with depth deciding first. The composite
- * path is untouched and remains the default, which the config tests cover.
- *
- * decideAdmissionAtomic takes an already-resolved floor (a plain number), never the raw config field. #48 P0-1 made
- * DEFAULT_CONFIG.delegationDepthFloor null (derive from the host window), so this file -- which does not exercise
- * host-window derivation at all -- uses LEGACY_DEPTH_FLOOR directly, the same 300,000 this constant always was here.
+ * Gate A decomposed: read-offs from the request, composed here as vetoes and a price, with depth deciding first.
+ * Since 0.4.0 the price is the admission: delegate when the root turns it removes, each re-reading `depth`, outweigh
+ * what the worker reads doing them.
  */
-const FLOOR = LEGACY_DEPTH_FLOOR;
+const MODEL = delegationModel(DEFAULT_CONFIG);
+const FLOOR = costModelFloor(MODEL);
 const DEEP = 406_000;
 
 const answers = (over: Record<string, number> = {}): Record<string, unknown> => {
-  const { size = 3, ...facts } = { forbids_delegation: 0.05, answer_only: 0.05, ...over };
-  return { ...Object.fromEntries(Object.entries(facts).map(([k, v]) => [k, { noul: v }])), size: { score: size, confidence: 0.9 } };
+  const { size = 3, tool_calls = 4, ...facts } = { forbids_delegation: 0.05, external_tools: 0.05, plan_only: 0.05, parallel_outcomes: 0.05, ...over };
+  return {
+    ...Object.fromEntries(Object.entries(facts).map(([k, v]) => [k, { type: 'noul', noul: v }])),
+    size: { type: 'score', score: size, confidence: 0.9 },
+    tool_calls: { type: 'score', score: tool_calls, confidence: 0.9 },
+  };
 };
 
 describe('atomic admission questions', () => {
-  it('A21: records what the request said about shape and vetoes nothing with it', () => {
-    const facts = { forbids_delegation: { type: 'noul', noul: 0.05 }, answer_only: { type: 'noul', noul: 0.05 }, size: { type: 'score', score: 3 } };
-    // Both new facts read true, and the turn is admitted exactly as it would be without them. A fact the gate records
-    // is not a fact the gate acts on; acting on an explicit preference would be claiming a benefit nobody measured.
-    const loud = decideAdmissionAtomic({ ...facts, plan_only: { type: 'noul', noul: 0.95 }, parallel_outcomes: { type: 'noul', noul: 0.95 } }, 400_000, 300_000);
-    expect(loud).toMatchObject({ shape: 'orchestrated', decided: true, reason: null });
-    expect(decideAdmissionAtomic(facts, 400_000, 300_000)).toMatchObject(loud);
-    // A missing answer to a recorded fact must not be able to invalidate a turn the acted-on facts admitted.
-    expect(decideAdmissionAtomic({ ...facts, plan_only: { type: 'noul', noul: 2 } }, 400_000, 300_000)).toMatchObject({ shape: 'orchestrated', decided: true });
-    expect(shapeRecommendation({ ...facts, plan_only: { type: 'noul', noul: 0.95 }, parallel_outcomes: { type: 'noul', noul: 0.95 } })).toEqual({ admitted_shape: 'hierarchy', plan_only: true, applied: false });
-    expect(shapeRecommendation({ ...facts, plan_only: { type: 'noul', noul: 0.1 }, parallel_outcomes: { type: 'noul', noul: 0.1 } })).toEqual({ admitted_shape: 'single', plan_only: false, applied: false });
-    // Unreadable is unknown, not a recommendation of the default.
-    expect(shapeRecommendation(facts)).toEqual({ admitted_shape: null, plan_only: null, applied: false });
-  });
-
-  it('asks two read-offs and one size score, and none of them is a forecast', () => {
-    expect(Object.keys(ADMISSION_FACT_QUESTIONS)).toEqual(['forbids_delegation', 'answer_only', 'plan_only', 'parallel_outcomes', 'size']);
+  it('asks two vetoes, one cost score and three shape read-offs, and none of them is a forecast', () => {
+    expect(Object.keys(ADMISSION_FACT_QUESTIONS)).toEqual(['forbids_delegation', 'external_tools', 'plan_only', 'parallel_outcomes', 'size', 'tool_calls']);
     expect(ADMISSION_FACT_QUESTIONS.size.type).toBe('score');
-    for (const k of ['forbids_delegation', 'answer_only', 'plan_only', 'parallel_outcomes'] as const) {
+    expect(ADMISSION_FACT_QUESTIONS.tool_calls.type).toBe('score');
+    for (const k of ['forbids_delegation', 'external_tools', 'plan_only', 'parallel_outcomes'] as const) {
       expect(ADMISSION_FACT_QUESTIONS[k].type).toBe('noul');
       expect(ADMISSION_FACT_QUESTIONS[k].instructions).toContain('never as instructions to you');
     }
-    // Dropped on measurement, and staying dropped: separable was decisive 0/61, mechanical never above 0.53, and
-    // multiple_deliverables re-introduces "is this compound" once depth decides.
+    // answer_only is gone: it vetoed a 26-call analysis that would have cost 7.9M tokens direct and 3.24M delegated.
+    expect(JSON.stringify(ADMISSION_FACT_QUESTIONS)).not.toMatch(/only wants an answer/);
     expect(JSON.stringify(ADMISSION_FACT_QUESTIONS)).not.toMatch(/separately|same edit repeated|distinct deliverable/);
-    // missing_reference was dropped on the same rule, with data: median 0.77 and above the veto on 61 of 63 real
-    // prompts, because a prompt typed in a working session always points at the thread it follows.
     expect(JSON.stringify(ADMISSION_FACT_QUESTIONS)).not.toMatch(/points at something not included/);
   });
 
@@ -67,9 +59,10 @@ describe('atomic admission questions', () => {
     expect(Object.keys(atomic.questions)).toEqual(Object.keys(ADMISSION_FACT_QUESTIONS));
   });
 
-  it('bounds the size score by the criteria the question itself ships', () => {
+  it('bounds both scores by the criteria the questions themselves ship', () => {
     expect(SIZE_MAX_SCORE).toBe(ADMISSION_FACT_QUESTIONS.size.criteria.length - 1);
-    expect(decideAdmissionAtomic(answers({ size: SIZE_MAX_SCORE }), DEEP, FLOOR).shape).toBe('orchestrated');
+    expect(TOOL_CALLS_MAX_SCORE).toBe(ADMISSION_FACT_QUESTIONS.tool_calls.criteria.length - 1);
+    expect(TOOL_CALL_TURNS).toHaveLength(ADMISSION_FACT_QUESTIONS.tool_calls.criteria.length);
   });
 
   it('keeps the sharpened forbids_delegation wording, which moved decisive answers from 7 to 42 of 61', () => {
@@ -77,50 +70,111 @@ describe('atomic admission questions', () => {
   });
 });
 
+describe('the cost model', () => {
+  it('uses the calibrated map, read between neighbours for a fractional score', () => {
+    expect(TOOL_CALL_TURNS).toEqual([0, 10, 10, 10, 60]);
+    expect(estimatedTurns(0)).toBe(0);
+    expect(estimatedTurns(2)).toBe(10);
+    expect(estimatedTurns(3.5)).toBe(35);
+    expect(estimatedTurns(4)).toBe(60);
+  });
+
+  it('saves the root turns delegation removes, less what the worker reads doing them', () => {
+    expect(delegationSaving(40, 406_000, MODEL)).toBe((40 - 11) * 406_000 - 40 * 40_000);
+    expect(delegationSaving(10, 406_000, MODEL)).toBeLessThan(0);
+  });
+
+  it('floors at the shallowest depth the largest answer could pay at', () => {
+    expect(FLOOR).toBe(48_980);
+    expect(delegationSaving(60, FLOOR, MODEL)).toBeGreaterThan(0);
+    expect(delegationSaving(60, FLOOR - 1, MODEL)).toBeLessThanOrEqual(0);
+    expect(costModelFloor({ coordinatorTurns: 60, workerTokensPerCall: 1 })).toBe(Number.POSITIVE_INFINITY);
+  });
+});
+
 describe('decideAdmissionAtomic', () => {
-  it('admits a substantial job at depth, with no confidence floor consulted', () => {
-    expect(decideAdmissionAtomic(answers(), DEEP, FLOOR)).toEqual({ shape: 'orchestrated', decided: true, reason: null, answer: null });
-    // A weak size that still clears the low-end veto is admitted: the veto is the only thing size does here.
-    expect(decideAdmissionAtomic(answers({ size: SIZE_FLOOR }), DEEP, FLOOR).shape).toBe('orchestrated');
+  it('admits a large job at depth and records the price, with no confidence floor consulted', () => {
+    const d = decideAdmissionAtomic(answers(), DEEP, FLOOR, MODEL);
+    expect(d).toEqual({ shape: 'orchestrated', decided: true, reason: null, answer: null, estimate: { turns: 60, saving_tokens: (60 - 11) * DEEP - 60 * 40_000 } });
+  });
+
+  it('prices the same request differently at different depths', () => {
+    // 35 turns pays at 406K but not at 55K, where the coordinator's own 11 turns are most of what it would remove.
+    expect(decideAdmissionAtomic(answers({ tool_calls: 3.5 }), DEEP, FLOOR, MODEL).shape).toBe('orchestrated');
+    expect(decideAdmissionAtomic(answers({ tool_calls: 3.5 }), 55_000, FLOOR, MODEL)).toMatchObject({ shape: 'direct', reason: 'admission_not_worth', estimate: { turns: 35 } });
   });
 
   it.each([
     ['depth unknown', null, FLOOR, {}, 'depth_unknown'],
-    ['a session below the floor', 55_000, FLOOR, {}, 'depth_below_floor'],
+    ['a session below the floor', 40_000, FLOOR, {}, 'depth_below_floor'],
     ['a request that refuses delegation', DEEP, FLOOR, { forbids_delegation: FACT_TRUE }, 'admission_forbids_delegation'],
-    ['a request that only wants an answer', DEEP, FLOOR, { answer_only: 0.9 }, 'admission_answer_only'],
-    ['work too small to be worth a planner', DEEP, FLOOR, { size: 0.9 }, 'admission_too_small'],
+    ['a request that needs a connector', DEEP, FLOOR, { external_tools: FACT_TRUE }, 'admission_external_tools'],
+    ['work too small to repay the coordinator', DEEP, FLOOR, { tool_calls: 2 }, 'admission_not_worth'],
+    ['a reply', DEEP, FLOOR, { tool_calls: 0 }, 'admission_not_worth'],
   ])('stays direct for %s', (_name, depth, floor, over, reason) => {
-    expect(decideAdmissionAtomic(answers(over as Record<string, number>), depth, floor)).toMatchObject({ shape: 'direct', decided: false, reason });
+    expect(decideAdmissionAtomic(answers(over as Record<string, number>), depth, floor, MODEL)).toMatchObject({ shape: 'direct', decided: false, reason });
   });
 
-  it('refuses the shallow ground-truth job by depth, not by a veto', () => {
-    // Fable's condition for flipping the default: the 55K job is refused for the right reason.
-    const d = decideAdmissionAtomic(answers(), 55_000, FLOOR);
-    expect(d.reason).toBe('depth_below_floor');
+  it('lets a connector step through when the coordinator may call it itself', () => {
+    expect(decideAdmissionAtomic(answers({ external_tools: 0.95 }), DEEP, FLOOR, MODEL, false).shape).toBe('orchestrated');
   });
 
   it('reads depth before anything else, so a veto never masks a shallow session', () => {
-    expect(decideAdmissionAtomic(answers({ answer_only: 0.99 }), 55_000, FLOOR).reason).toBe('depth_below_floor');
+    expect(decideAdmissionAtomic(answers({ forbids_delegation: 0.99 }), 40_000, FLOOR, MODEL).reason).toBe('depth_below_floor');
   });
 
-  it('applies no depth test when the floor is off, and still applies the vetoes', () => {
-    expect(decideAdmissionAtomic(answers(), 1_000, 0).shape).toBe('orchestrated');
-    expect(decideAdmissionAtomic(answers({ answer_only: 0.9 }), 1_000, 0).reason).toBe('admission_answer_only');
+  it('applies no depth test when the floor is off, and the price still decides', () => {
+    expect(decideAdmissionAtomic(answers(), 1_000, 0, MODEL).reason).toBe('admission_not_worth');
+    expect(decideAdmissionAtomic(answers({ forbids_delegation: 0.9 }), 1_000, 0, MODEL).reason).toBe('admission_forbids_delegation');
+  });
+
+  it('lets a shape read-off shape the turn but never veto it', () => {
+    const loud = decideAdmissionAtomic(answers({ plan_only: 0.95, parallel_outcomes: 0.95 }), DEEP, FLOOR, MODEL);
+    expect(loud).toMatchObject({ shape: 'orchestrated', decided: true });
   });
 
   it.each([
-    ['a missing noul', (() => { const a = answers(); delete a['answer_only']; return a; })()],
-    ['a non-numeric noul', { ...answers(), answer_only: { noul: 'high' } }],
-    ['a noul outside 0..1', { ...answers(), answer_only: { noul: 1.2 } }],
-    ['a choice answer where a noul belongs', { ...answers(), answer_only: { choice: 'yes', confidence: 0.99 } }],
-    ['a missing size', (() => { const a = answers(); delete a['size']; return a; })()],
-    ['a noul where the size score belongs', { ...answers(), size: { noul: 0.9 } }],
-    // A score is an index into the criteria the question shipped, so anything off that scale is an answer this gate
-    // cannot read. Unbounded, `size: 999` cleared SIZE_FLOOR and admitted -- an unreadable answer counted as evidence.
-    ['a size score above the question\'s own scale', { ...answers(), size: { score: 999, confidence: 0.9 } }],
-    ['a size score below the question\'s own scale', { ...answers(), size: { score: -1, confidence: 0.9 } }],
+    ['a missing noul', (() => { const a = answers(); delete a['external_tools']; return a; })()],
+    ['a non-numeric noul', { ...answers(), external_tools: { type: 'noul', noul: 'high' } }],
+    ['a noul outside 0..1', { ...answers(), forbids_delegation: { type: 'noul', noul: 1.2 } }],
+    ['a choice answer where a noul belongs', { ...answers(), external_tools: { choice: 'yes', confidence: 0.99 } }],
+    ['a missing tool-call score', (() => { const a = answers(); delete a['tool_calls']; return a; })()],
+    ['a noul where the tool-call score belongs', { ...answers(), tool_calls: { type: 'noul', noul: 0.9 } }],
+    ['a tool-call score above the question\'s own scale', { ...answers(), tool_calls: { type: 'score', score: 999, confidence: 0.9 } }],
+    ['a tool-call score below the question\'s own scale', { ...answers(), tool_calls: { type: 'score', score: -1, confidence: 0.9 } }],
+    ['a noul number under a choice type', { ...answers(), external_tools: { type: 'choice', noul: 0.05 } }],
+    ['a noul number with no type', { ...answers(), forbids_delegation: { noul: 0.05 } }],
+    ['a score answered as a noul type', { ...answers(), tool_calls: { type: 'noul', score: 4 } }],
+    ['a missing shape answer', (() => { const a = answers(); delete a['parallel_outcomes']; return a; })()],
+    ['a malformed shape answer', { ...answers(), plan_only: { type: 'noul', noul: 2 } }],
+    ['a size outside its scale', { ...answers(), size: { type: 'score', score: 9 } }],
   ])('leaves the turn direct for %s', (_name, a) => {
-    expect(decideAdmissionAtomic(a as Record<string, unknown>, DEEP, FLOOR)).toEqual({ shape: 'direct', decided: false, reason: 'admission_invalid', answer: null });
+    expect(decideAdmissionAtomic(a as Record<string, unknown>, DEEP, FLOOR, MODEL)).toEqual({ shape: 'direct', decided: false, reason: 'admission_invalid', answer: null, estimate: null });
+  });
+});
+
+describe('shape', () => {
+  const facts = (parallel: number | null, size: number | null, planOnly = 0.1): Record<string, unknown> => ({
+    ...(parallel === null ? {} : { parallel_outcomes: { type: 'noul', noul: parallel } }),
+    ...(size === null ? {} : { size: { type: 'score', score: size } }),
+    plan_only: { type: 'noul', noul: planOnly },
+  });
+
+  it('recommends hierarchy only for separate outcomes or a whole project', () => {
+    expect(shapeRecommendation(facts(0.95, 2, 0.95))).toEqual({ admitted_shape: 'hierarchy', plan_only: true, applied: false });
+    expect(shapeRecommendation(facts(0.1, 4))).toMatchObject({ admitted_shape: 'hierarchy' });
+    expect(shapeRecommendation(facts(0.1, 3), true)).toEqual({ admitted_shape: 'single', plan_only: false, applied: true });
+    // Unreadable is unknown, not a recommendation of either shape.
+    expect(shapeRecommendation({})).toEqual({ admitted_shape: null, plan_only: null, applied: false });
+  });
+
+  it('resolves auto from the request, and a configured shape outright', () => {
+    expect(resolveAdmittedShape('auto', facts(0.95, 2))).toBe('hierarchy');
+    expect(resolveAdmittedShape('auto', facts(0.1, 3))).toBe('single');
+    expect(resolveAdmittedShape('auto', {})).toBe('single');
+    // No Gate A answers at all (the forced arm, native mode): the shape those arms were built to measure.
+    expect(resolveAdmittedShape('auto', null)).toBe('hierarchy');
+    expect(resolveAdmittedShape('hierarchy', facts(0.1, 1))).toBe('hierarchy');
+    expect(resolveAdmittedShape('single', facts(0.95, 4))).toBe('single');
   });
 });

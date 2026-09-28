@@ -32,10 +32,24 @@ const write = (name: string, value: unknown): string => {
 
 describe('validateConfig', () => {
   it('accepts a full V5 file and a partial file over the defaults', () => {
-    // routeQuestionShape is optional in a file and defaulted, so a deployed V5 config keeps composite Gate B.
+    // Every key past the sample is optional in a file and defaulted; 0.4.0 moved Gate B to atomic and the shape to auto.
     expect(validateConfig(V5)).toEqual({
       ok: true,
-      config: { ...V5, mode: 'auto', routeQuestionShape: 'composite', delegationDepthFloor: null, delegationDepthFraction: 0.6, admissionQuestionShape: 'atomic', maxTasksPerPlan: 10, admittedShape: 'hierarchy', planInterpretation: false },
+      config: {
+        ...V5,
+        mode: 'auto',
+        routeQuestionShape: 'atomic',
+        delegationDepthFloor: null,
+        delegationDepthFraction: 0.6,
+        admissionQuestionShape: 'atomic',
+        maxTasksPerPlan: 10,
+        admittedShape: 'auto',
+        planInterpretation: false,
+        delegationCoordinatorTurns: 11,
+        delegationWorkerTokensPerCall: 40_000,
+        guardAllowMcp: true,
+        verifyWorkerChecks: true,
+      },
     });
     const partial = validateConfig({ version: 5, mode: 'native', plannerDefaultTier: 'frontier', models: { deep: 'claude-opus-5' } });
     expect(partial.ok).toBe(true);
@@ -61,8 +75,12 @@ describe('validateConfig', () => {
     // The two shapes are configured independently and no longer agree: Gate A ships atomic because the composite
     // question admitted 0 of 61 real prompts offline, while Gate B's atomic shape has one end-to-end observation.
     expect(DEFAULT_CONFIG.admissionQuestionShape).toBe('atomic');
-    expect(DEFAULT_CONFIG.routeQuestionShape).toBe('composite');
-    expect(validateConfig({ version: 5, admissionQuestionShape: 'composite' })).toMatchObject({ ok: true, config: { admissionQuestionShape: 'composite', routeQuestionShape: 'composite' } });
+    expect(DEFAULT_CONFIG.routeQuestionShape).toBe('atomic');
+    expect(validateConfig({ version: 5, admissionQuestionShape: 'composite' })).toMatchObject({ ok: true, config: { admissionQuestionShape: 'composite', routeQuestionShape: 'atomic' } });
+    expect(validateConfig({ version: 5, admittedShape: 'hierarchy', guardAllowMcp: false, verifyWorkerChecks: false, delegationCoordinatorTurns: 17, delegationWorkerTokensPerCall: 60_000 })).toMatchObject({
+      ok: true,
+      config: { admittedShape: 'hierarchy', guardAllowMcp: false, verifyWorkerChecks: false, delegationCoordinatorTurns: 17, delegationWorkerTokensPerCall: 60_000 },
+    });
     // T11: a deployed file that still sets resultConfidenceFloor keeps loading; nothing reads it any more.
     const deprecated = validateConfig({ version: 5, mode: 'auto', resultConfidenceFloor: 0.95 });
     expect(deprecated).toMatchObject({ ok: true, config: { resultConfidenceFloor: 0.95 } });
@@ -100,6 +118,12 @@ describe('validateConfig', () => {
     ['negative depth floor', { version: 5, delegationDepthFloor: -1 }, 'delegationDepthFloor must be'],
     ['fractional depth floor', { version: 5, delegationDepthFloor: 300_000.5 }, 'delegationDepthFloor must be'],
     ['depth fraction type', { version: 5, delegationDepthFraction: '0.6' }, 'delegationDepthFraction must be'],
+    ['admitted shape', { version: 5, admittedShape: 'planner' }, 'admittedShape must be one of hierarchy, single, auto'],
+    ['coordinator turns zero', { version: 5, delegationCoordinatorTurns: 0 }, 'delegationCoordinatorTurns must be'],
+    ['coordinator turns fraction', { version: 5, delegationCoordinatorTurns: 11.5 }, 'delegationCoordinatorTurns must be'],
+    ['worker tokens type', { version: 5, delegationWorkerTokensPerCall: '40000' }, 'delegationWorkerTokensPerCall must be'],
+    ['mcp flag type', { version: 5, guardAllowMcp: 'yes' }, 'guardAllowMcp must be a boolean'],
+    ['verify flag type', { version: 5, verifyWorkerChecks: 1 }, 'verifyWorkerChecks must be a boolean'],
     ['depth fraction zero', { version: 5, delegationDepthFraction: 0 }, 'delegationDepthFraction must be'],
     // #48 review: small enough to turn the derived floor into (nearly) nothing on a 100K window.
     ['depth fraction below 0.25', { version: 5, delegationDepthFraction: 0.001 }, 'delegationDepthFraction must be'],
@@ -191,14 +215,22 @@ describe('effectiveDepthFloor (#48 P0-1)', () => {
     expect(effectiveDepthFloor({ ...DEFAULT_CONFIG, delegationDepthFloor: 0 }, 1_000_000)).toEqual({ floor: 0, source: 'config' });
   });
 
-  it('derives from the window at the configured fraction, capped at the legacy absolute floor', () => {
-    // default fraction 0.6 x a 300K host window: a smaller window still admits some prompts before it compacts.
-    expect(effectiveDepthFloor(DEFAULT_CONFIG, 300_000)).toEqual({ floor: 180_000, source: 'window_fraction' });
-    // A 1M-window host keeps exactly the old 300K behaviour: min(LEGACY_DEPTH_FLOOR, 0.6 x 1,000,000) = 300,000.
-    expect(effectiveDepthFloor(DEFAULT_CONFIG, 1_000_000)).toEqual({ floor: LEGACY_DEPTH_FLOOR, source: 'window_fraction' });
+  it("takes the atomic gate's floor from its cost model, whatever the window", () => {
+    for (const window of [null, 200_000, 1_000_000]) expect(effectiveDepthFloor(DEFAULT_CONFIG, window)).toEqual({ floor: 48_980, source: 'cost_model' });
+    // A coordinator that costs more turns needs a deeper session before anything can pay.
+    expect(effectiveDepthFloor({ ...DEFAULT_CONFIG, delegationCoordinatorTurns: 30 }, null).floor).toBe(Math.floor((60 * 40_000) / 30) + 1);
   });
 
-  it('falls back to the legacy absolute floor when the window is unknown', () => {
-    expect(effectiveDepthFloor(DEFAULT_CONFIG, null)).toEqual({ floor: LEGACY_DEPTH_FLOOR, source: 'fallback_absolute' });
+  const composite = { ...DEFAULT_CONFIG, admissionQuestionShape: 'composite' as const };
+
+  it("derives the composite gate's floor from the window at the configured fraction, capped at the legacy absolute floor", () => {
+    // default fraction 0.6 x a 300K host window: a smaller window still admits some prompts before it compacts.
+    expect(effectiveDepthFloor(composite, 300_000)).toEqual({ floor: 180_000, source: 'window_fraction' });
+    // A 1M-window host keeps exactly the old 300K behaviour: min(LEGACY_DEPTH_FLOOR, 0.6 x 1,000,000) = 300,000.
+    expect(effectiveDepthFloor(composite, 1_000_000)).toEqual({ floor: LEGACY_DEPTH_FLOOR, source: 'window_fraction' });
+  });
+
+  it('falls back to the legacy absolute floor for the composite gate when the window is unknown', () => {
+    expect(effectiveDepthFloor(composite, null)).toEqual({ floor: LEGACY_DEPTH_FLOOR, source: 'fallback_absolute' });
   });
 });

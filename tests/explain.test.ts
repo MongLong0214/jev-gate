@@ -132,6 +132,20 @@ describe('explain (2026-09-20)', () => {
     expect(out).toContain('patch deep (model not recorded)');
   });
 
+  it('prints the price the atomic gate put on a turn', () => {
+    const out = render([admission(1, { attempted: true, context_tokens: 406000, http: { status: 200, code: null, duration_ms: 555, request_bytes: 800 }, decision: { shape: 'orchestrated', decided: true, reason: null, changed_default: true }, estimate: { turns: 60, saving_tokens: 17494000 } })]);
+    expect(out).toContain('priced 60 turns, saving 17,494,000 tokens');
+    const direct = render([admission(1, { attempted: true, context_tokens: 55000, decision: { shape: 'direct', decided: false, reason: 'admission_not_worth', changed_default: false }, estimate: { turns: 10, saving_tokens: -30000 } })]);
+    expect(direct).toContain('saving -30,000 tokens');
+    expect(direct).toContain('reason: admission_not_worth');
+  });
+
+  it('prints what the worker transcript showed about each reported pass', () => {
+    const out = render([post(1, 'toolu_a', 'claude-sonnet-5', { verdict: 'incomplete', verification: { transcript: 'read', contradicted: ['npm test'], unobserved: ['c2'], stale: [] } })]);
+    expect(out).toContain('transcript read, contradicted npm test, unobserved c2');
+    expect(out).not.toContain('stale');
+  });
+
   it('calls a verdict worker-reported, and always prints what the trace cannot answer', () => {
     const out = render([post(1, 'toolu_a', 'claude-sonnet-5')]);
     expect(out).toContain('worker-reported accept');

@@ -12,6 +12,11 @@ import { jobPath, newGeneration, readJob, updateJob } from '../src/job.js';
 import { appendLiveness, LIVENESS_WINDOW, readLiveness } from '../src/liveness.js';
 import { chainDepth, composeTaskPrompt, contractHash, MAX_COMPOSED_BYTES } from '../src/plan.js';
 import { ADMISSION_ANSWERS, PLANNER_ROUTE_ANSWERS, ROUTE_ANSWERS, UPGRADE_BASES, type JobState, type PlannedTask, type WorkerReply } from '../src/types.js';
+import { costModelFloor, delegationModel } from '../src/admission.js';
+import { DEFAULT_CONFIG } from '../src/config.js';
+
+/** The atomic Gate A's shipped pre-filter: the shallowest depth at which any tool-call answer could pay. */
+const COST_FLOOR = costModelFloor(delegationModel(DEFAULT_CONFIG));
 
 const KEY = 'ts-secret-key-123';
 const tmp = mkdtempSync(join(tmpdir(), 'jev-hook-'));
@@ -27,13 +32,27 @@ const choice = (keys: readonly string[], winner: string, p = 0.95, confidence = 
 interface FakeAnswers {
   execution?: string;
   forbidsDelegation?: number;
-  answerOnly?: number;
+  externalTools?: number;
+  /** Gate A's tool-call read-off; 4 prices an admitted job at the depths these tests run. */
+  toolCalls?: number;
+  /** 0.95 reads as separate outcomes, so `admittedShape: auto` runs the hierarchy these tests were written for. */
+  parallelOutcomes?: number;
   size?: number;
   route?: string;
   basis?: string;
   planning_tier?: string;
+  /** Returns this question's answer with its numbers intact but typed `choice`, as a malformed Jev response would. */
+  mistype?: string;
   onCall?: (questions: string[], state: Record<string, unknown>) => void;
 }
+
+const ATOMIC_ROUTE_FACTS: Record<string, Record<string, number>> = {
+  fast: { fully_specified: 0.9, interfaces_fixed: 0.9, checks_stated: 0.9 },
+  standard: {},
+  deep: { unresolved_interaction: 0.9 },
+};
+
+const isRecordValue = (v: unknown): boolean => typeof v === 'object' && v !== null;
 
 const fakeJev = (opts: FakeAnswers = {}): ReturnType<typeof vi.fn> =>
   vi.fn(async (_url: string, init: RequestInit) => {
@@ -45,12 +64,21 @@ const fakeJev = (opts: FakeAnswers = {}): ReturnType<typeof vi.fn> =>
     // Gate A is atomic by default since 2026-09-19, so the double answers its read-offs the way an admitted job reads.
     if (questions.includes('forbids_delegation')) {
       answers['forbids_delegation'] = { type: 'noul', noul: opts.forbidsDelegation ?? 0.05 };
-      answers['answer_only'] = { type: 'noul', noul: opts.answerOnly ?? 0.05 };
+      answers['external_tools'] = { type: 'noul', noul: opts.externalTools ?? 0.05 };
+      answers['plan_only'] = { type: 'noul', noul: 0.05 };
+      answers['parallel_outcomes'] = { type: 'noul', noul: opts.parallelOutcomes ?? 0.95 };
       answers['size'] = { type: 'score', score: opts.size ?? 3, confidence: 0.9 };
+      answers['tool_calls'] = { type: 'score', score: opts.toolCalls ?? 4, confidence: 0.9 };
     }
     if (questions.includes('route')) answers['route'] = choice(ROUTE_ANSWERS, opts.route ?? 'standard');
+    // Gate B is atomic by default since 0.4.0: the same `route` option is answered as the facts that compose to it.
+    if (questions.includes('fully_specified')) {
+      const facts = ATOMIC_ROUTE_FACTS[opts.route ?? 'standard'] ?? {};
+      for (const k of questions) answers[k] = { type: 'noul', noul: facts[k] ?? 0.1 };
+    }
     if (questions.includes('upgrade_basis')) answers['upgrade_basis'] = choice(UPGRADE_BASES, opts.basis ?? 'no_specific_basis');
     if (questions.includes('planning_tier')) answers['planning_tier'] = choice(PLANNER_ROUTE_ANSWERS, opts.planning_tier ?? 'deep');
+    if (opts.mistype !== undefined && isRecordValue(answers[opts.mistype])) answers[opts.mistype] = { ...(answers[opts.mistype] as object), type: 'choice' };
     return new Response(JSON.stringify({ model: 'jev-1.13.0', answers, usage: { input_tokens: 10, output_tokens: 2 } }), { status: 200 });
   });
 
@@ -59,7 +87,7 @@ const jevFailingRoute = (): ReturnType<typeof vi.fn> => {
   const answering = fakeJev({ execution: 'orchestrated' });
   return vi.fn(async (url: string, init: RequestInit) => {
     const body = JSON.parse(String(init.body)) as { questions: Record<string, unknown> };
-    if ('route' in body.questions) return new Response('upstream is down', { status: 500 });
+    if ('route' in body.questions || 'fully_specified' in body.questions) return new Response('upstream is down', { status: 500 });
     return await (answering as unknown as typeof fetch)(url, init);
   });
 };
@@ -77,6 +105,13 @@ let compositeSeq = 0;
 const compositeGateAEnv = (over: Env = {}): Env => {
   const cfg = join(tmp, `composite-gate-a-${(compositeSeq += 1)}.json`);
   writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', admissionQuestionShape: 'composite' }));
+  return makeEnv({ JEV_GATE_CONFIG: cfg, ...over });
+};
+
+/** Gate B ships atomic since 0.4.0; the five-way choice is still supported and its own tests select it explicitly. */
+const compositeGateBEnv = (over: Env = {}): Env => {
+  const cfg = join(tmp, `composite-gate-b-${(compositeSeq += 1)}.json`);
+  writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', routeQuestionShape: 'composite' }));
   return makeEnv({ JEV_GATE_CONFIG: cfg, ...over });
 };
 
@@ -217,17 +252,40 @@ const workerReply = (over: Partial<WorkerReply> = {}): WorkerReply => ({
   ...over,
 });
 
-const workerPost = (toolUseId: string, reply: unknown, over: Record<string, unknown> = {}): Record<string, unknown> => ({
-  hook_event_name: 'PostToolUse',
-  session_id: 's1',
-  prompt_id: 'p1',
-  tool_name: 'Agent',
-  tool_use_id: toolUseId,
-  effort: 'high',
-  tool_input: { subagent_type: 'jev-gate:worker' },
-  tool_response: { status: 'completed', resolvedModel: 'claude-sonnet-5', content: [{ type: 'text', text: fence(reply) }] },
-  ...over,
-});
+/** The host's layout: the parent transcript's folder, then `<session>/subagents/agent-<agentId>.jsonl`. */
+const workerTranscript = (runs: Array<{ command: string; failed: boolean }>, editAfter = false): { parent: string; agentId: string } => {
+  const dir = mkdtempSync(join(tmp, 'project-dir-'));
+  const agentId = `a${Math.random().toString(16).slice(2, 12)}`;
+  mkdirSync(join(dir, 's1', 'subagents'), { recursive: true });
+  const lines: string[] = [];
+  runs.forEach((run, i) => {
+    lines.push(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: `tu${i}`, name: 'Bash', input: { command: run.command } }] } }));
+    lines.push(JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: `tu${i}`, is_error: run.failed, content: run.failed ? 'Exit code 1' : 'ok' }] } }));
+  });
+  if (editAfter) lines.push(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tuE', name: 'Edit', input: { file_path: 'src/t1.ts' } }] } }));
+  writeFileSync(join(dir, 's1', 'subagents', `agent-${agentId}.jsonl`), lines.join('\n') + '\n');
+  return { parent: join(dir, 's1.jsonl'), agentId };
+};
+
+/** Every command the fixture plans declare. A worker that reports them passing ran them, as a real one does. */
+const FIXTURE_CHECK_COMMANDS = ['npm test', 'npm run typecheck', 'npm run lint', 'npm run build'];
+
+/** A worker's result, with the transcript of a worker that ran every fixture check and saw it pass. */
+const workerPost = (toolUseId: string, reply: unknown, over: Record<string, unknown> = {}): Record<string, unknown> => {
+  const ran = workerTranscript(FIXTURE_CHECK_COMMANDS.map((command) => ({ command, failed: false })));
+  return {
+    hook_event_name: 'PostToolUse',
+    session_id: 's1',
+    prompt_id: 'p1',
+    tool_name: 'Agent',
+    tool_use_id: toolUseId,
+    effort: 'high',
+    transcript_path: ran.parent,
+    tool_input: { subagent_type: 'jev-gate:worker' },
+    tool_response: { status: 'completed', agentId: ran.agentId, resolvedModel: 'claude-sonnet-5', content: [{ type: 'text', text: fence(reply) }] },
+    ...over,
+  };
+};
 
 const state = (env: Env): JobState => {
   const r = readJob(env, 's1');
@@ -284,14 +342,34 @@ describe('Gate A admission', () => {
     const dir = join(tmp, 'trace-shallow');
     const env = makeEnv({ JEV_GATE_TRACE_DIR: dir });
     const fetchImpl = fakeJev({ execution: 'orchestrated' });
-    const r = await run(env, promptEvent({ transcript_path: transcriptAt(55_000) }), fetchImpl);
-    // The saving is the whole point: at 55K the measured forced arm was +182%, so the cheapest gate is no gate.
+    const r = await run(env, promptEvent({ transcript_path: transcriptAt(40_000) }), fetchImpl);
+    // Below the cost model's floor no answer could pay, so the cheapest gate is no gate.
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(r.code).toBe('depth_below_floor');
     expect(context(r)).toContain('Execution shape: direct');
     expect(state(env).current.shape).toBe('direct');
     const record = readdirSync(dir).map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>).find((x) => x['phase'] === 'admission_result');
-    expect(record).toMatchObject({ attempted: false, context_tokens: 55_000, depth_floor: 300_000, decision: { reason: 'depth_below_floor', changed_default: false } });
+    expect(record).toMatchObject({ attempted: false, context_tokens: 40_000, depth_floor: COST_FLOOR, depth_floor_source: 'cost_model', decision: { reason: 'depth_below_floor', changed_default: false } });
+  });
+
+  it('prices the job: a request too small to repay the coordinator stays direct at depth', async () => {
+    const dir = join(tmp, 'trace-not-worth');
+    const env = makeEnv({ JEV_GATE_TRACE_DIR: dir });
+    const r = await run(env, promptEvent({ transcript_path: transcriptAt(55_000) }), fakeJev({ toolCalls: 3 }));
+    expect(r.code).toBe('admission_not_worth');
+    expect(state(env).current.shape).toBe('direct');
+    const record = readdirSync(dir).map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>).find((x) => x['phase'] === 'admission_result');
+    expect(record).toMatchObject({ attempted: true, decision: { shape: 'direct', reason: 'admission_not_worth' }, estimate: { turns: 10 } });
+    expect((record?.['estimate'] as { saving_tokens: number }).saving_tokens).toBeLessThan(0);
+  });
+
+  it('stays direct when the request needs a connector and the coordinator may not call one', async () => {
+    const cfg = join(tmp, 'no-mcp.json');
+    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', guardAllowMcp: false }));
+    const r = await run(makeEnv({ JEV_GATE_CONFIG: cfg }), promptEvent(), fakeJev({ externalTools: 0.9 }));
+    expect(r.code).toBe('admission_external_tools');
+    // With the default the coordinator runs the connector step itself, so the same request is delegated.
+    expect((await run(makeEnv(), promptEvent(), fakeJev({ externalTools: 0.9 }))).code).toBeNull();
   });
 
   it.each([
@@ -299,9 +377,10 @@ describe('Gate A admission', () => {
     ['claude-haiku-4-5', 200_000, 120_000, true],
     // A native-1M model with nothing configured: the floor stays at 300K, and 150K is not deep enough.
     ['claude-opus-5-5', 1_000_000, 300_000, false],
-  ])('with no window configured, takes the window from the session model %s', async (model, window, floor, asked) => {
+  ])('with no window configured, the composite gate takes the window from the session model %s', async (model, window, floor, asked) => {
     const dir = join(tmp, `trace-model-${model}`);
-    const env = makeEnv({ JEV_GATE_TRACE_DIR: dir });
+    // The atomic gate prices each request and ignores the window; the composite gate keeps the window rule.
+    const env = compositeGateAEnv({ JEV_GATE_TRACE_DIR: dir });
     const fetchImpl = fakeJev({ execution: 'orchestrated' });
     await run(env, promptEvent({ transcript_path: transcriptAt(150_000, model) }), fetchImpl);
     expect(fetchImpl.mock.calls.length > 0).toBe(asked);
@@ -327,7 +406,7 @@ describe('Gate A admission', () => {
     const env = makeEnv({ JEV_GATE_TRACE_DIR: dir });
     await run(env, promptEvent(), fakeJev({ execution: 'orchestrated' }));
     const record = readdirSync(dir).map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>).find((x) => x['phase'] === 'admission_result');
-    expect(record).toMatchObject({ attempted: true, context_tokens: 406_000, depth_floor: 300_000, decision: { shape: 'orchestrated' } });
+    expect(record).toMatchObject({ attempted: true, context_tokens: 406_000, depth_floor: COST_FLOOR, decision: { shape: 'orchestrated' } });
   });
 
   it('does not floor the forced arm: it is the only measurement of what orchestration costs when shallow', async () => {
@@ -343,8 +422,19 @@ describe('Gate A admission', () => {
     writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', delegationDepthFloor: 0 }));
     const env = makeEnv({ JEV_GATE_CONFIG: cfg });
     const fetchImpl = fakeJev({ execution: 'orchestrated' });
-    await run(env, { ...promptEvent(), transcript_path: undefined }, fetchImpl);
+    await run(env, promptEvent({ transcript_path: transcriptAt(1_000) }), fetchImpl);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['composite', 'atomic'])('keeps an unreadable transcript direct with the floor off (%s)', async (shape) => {
+    const cfg = join(tmp, `floor-off-unreadable-${shape}.json`);
+    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', delegationDepthFloor: 0, admissionQuestionShape: shape }));
+    const env = makeEnv({ JEV_GATE_CONFIG: cfg });
+    const fetchImpl = fakeJev({ execution: 'orchestrated' });
+    const r = await run(env, { ...promptEvent(), transcript_path: undefined }, fetchImpl);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(context(r)).toContain('Execution shape: direct');
+    expect(state(env).current.shape).toBe('direct');
   });
 
   it('asks the atomic Gate A questions and admits on them when the shape is atomic', async () => {
@@ -355,24 +445,24 @@ describe('Gate A admission', () => {
     const fetchImpl = vi.fn(async (_url: string, init: RequestInit) => {
       const body = JSON.parse(String(init.body)) as { questions: Record<string, unknown> };
       asked = Object.keys(body.questions);
-      const answers: Record<string, unknown> = { size: { type: 'score', score: 3, confidence: 0.9 } };
-      for (const k of ['forbids_delegation', 'answer_only', 'plan_only', 'parallel_outcomes']) answers[k] = { type: 'noul', noul: 0.05 };
+      const answers: Record<string, unknown> = { size: { type: 'score', score: 3, confidence: 0.9 }, tool_calls: { type: 'score', score: 4, confidence: 0.9 } };
+      for (const k of ['forbids_delegation', 'external_tools', 'plan_only', 'parallel_outcomes']) answers[k] = { type: 'noul', noul: 0.05 };
       return new Response(JSON.stringify({ model: 'jev-1.13.0', answers, usage: { input_tokens: 10, output_tokens: 2 } }), { status: 200 });
     });
     const r = await run(env, promptEvent(), fetchImpl);
-    expect(asked).toEqual(['forbids_delegation', 'answer_only', 'plan_only', 'parallel_outcomes', 'size']);
+    expect(asked).toEqual(['forbids_delegation', 'external_tools', 'plan_only', 'parallel_outcomes', 'size', 'tool_calls']);
     expect(context(r)).toContain('Execution shape: orchestrated');
     expect(state(env).current.shape).toBe('orchestrated');
   });
 
-  it('A21: records the shape the request asked for, and applies the configured one', async () => {
+  it('A21: records the shape the request asked for, and a configured shape still decides', async () => {
     const cfg = join(tmp, 'gate-a-recommend.json');
-    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', admissionQuestionShape: 'atomic' }));
+    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', admissionQuestionShape: 'atomic', admittedShape: 'single' }));
     const dir = join(tmp, 'trace-recommend');
     const env = makeEnv({ JEV_GATE_CONFIG: cfg, JEV_GATE_TRACE_DIR: dir });
     const fetchImpl = vi.fn(async () => {
-      const answers: Record<string, unknown> = { size: { type: 'score', score: 3, confidence: 0.9 } };
-      for (const k of ['forbids_delegation', 'answer_only']) answers[k] = { type: 'noul', noul: 0.05 };
+      const answers: Record<string, unknown> = { size: { type: 'score', score: 3, confidence: 0.9 }, tool_calls: { type: 'score', score: 4, confidence: 0.9 } };
+      for (const k of ['forbids_delegation', 'external_tools']) answers[k] = { type: 'noul', noul: 0.05 };
       // The request says, loudly, that it wants separate outcomes and only a plan.
       for (const k of ['plan_only', 'parallel_outcomes']) answers[k] = { type: 'noul', noul: 0.95 };
       return new Response(JSON.stringify({ model: 'jev-1.13.0', answers, usage: { input_tokens: 10, output_tokens: 2 } }), { status: 200 });
@@ -382,10 +472,30 @@ describe('Gate A admission', () => {
       .map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>)
       .find((x) => x['phase'] === 'admission_result');
     expect(record?.['recommendation']).toEqual({ admitted_shape: 'hierarchy', plan_only: true, applied: false });
-    // The generation keeps the configured shape. `execution` is set only where `admittedShape` is `single`, so the
-    // default leaves it unset -- and a recommendation of `hierarchy` must not start writing it either. Following the
-    // request's own words is what a measurement would have to justify; `applied: false` records that it was not.
-    expect(state(env).current.execution).toBeUndefined();
+    // A configured shape is not overridden by what the request said: `applied: false` records that it was not used.
+    expect(state(env).current.execution).toBe('single');
+  });
+
+  it.each([
+    ['separate outcomes', { parallelOutcomes: 0.95, size: 3 }, undefined, 'you coordinate'],
+    ['a whole project', { parallelOutcomes: 0.05, size: 4 }, undefined, 'Planner first'],
+    ['one outcome', { parallelOutcomes: 0.05, size: 3 }, 'single', 'Dispatch first'],
+    ['neither separate outcomes nor a project', { parallelOutcomes: 0.05, size: 3 }, 'single', 'Dispatch this request once'],
+  ] as const)('auto: runs %s as the shape the request asked for', async (_name, answers, execution, guidance) => {
+    const dir = join(tmp, `trace-auto-${_name.replace(/\W+/g, '-')}`);
+    const env = makeEnv({ JEV_GATE_TRACE_DIR: dir });
+    const r = await run(env, promptEvent(), fakeJev(answers));
+    expect(context(r)).toContain(guidance);
+    expect(state(env).current.execution).toBe(execution);
+    const record = readdirSync(dir).map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>).find((x) => x['phase'] === 'admission_result');
+    expect(record?.['recommendation']).toMatchObject({ admitted_shape: execution ?? 'hierarchy', applied: true });
+  });
+
+  it.each(['external_tools', 'tool_calls', 'parallel_outcomes', 'size'])('keeps the turn direct when Jev answers %s in the wrong type', async (key) => {
+    const env = makeEnv();
+    const r = await run(env, promptEvent(), fakeJev({ mistype: key }));
+    expect(context(r)).toContain('Execution shape: direct');
+    expect(state(env).current.shape).toBe('direct');
   });
 
   it('records prompt_id_absent and creates no orchestrated state', async () => {
@@ -442,7 +552,7 @@ describe('Gate A admission', () => {
 describe('liveness ring (#48 P2)', () => {
   it('records a below-floor decision as not attempted, with the reason', async () => {
     const env = makeEnv();
-    await run(env, promptEvent({ transcript_path: transcriptAt(55_000) }), fakeJev({ execution: 'orchestrated' }));
+    await run(env, promptEvent({ transcript_path: transcriptAt(40_000) }), fakeJev({ execution: 'orchestrated' }));
     expect(readLiveness(env)?.recent).toEqual([{ at: expect.any(String), attempted: false, reason: 'depth_below_floor' }]);
   });
 
@@ -731,18 +841,43 @@ describe('single executor (A19)', () => {
     const fetchImpl = fakeJev({ execution: 'orchestrated' });
     await run(env, promptEvent(), fetchImpl);
     await run(env, preEvent('Agent', agentInput({ prompt: 'Do what the request asks.' })), fetchImpl);
-    const post = await run(env, workerPost('toolu_1', workerReply()), fetchImpl);
+    const post = await run(env, workerPost('toolu_1', workerReply({ checks: [{ check_id: 'npm test', result: 'pass', note: 'all passed' }] })), fetchImpl);
     // The accept is stated as reported rather than verified: this shape has no contract for code to check.
     expect(context(post)).toContain('recorded as reported rather than verified');
     expect(context(post)).not.toContain('Ready task ids');
     const gen = state(env).current;
     expect(gen.active).toEqual({});
     expect(gen.receipts).toHaveLength(1);
-    // The contract hash is empty because there is no contract, and the checks the worker reported are kept unjudged.
+    // The contract hash is empty because there is no contract; the check the worker reported is kept as it wrote it.
     expect(gen.receipts[0]).toMatchObject({ task_id: 'single', contract_hash: '', verdict: 'accept', provenance: 'worker_reported' });
-    expect(gen.receipts[0]?.reply?.checks).toEqual([{ check_id: 'c1', result: 'pass', note: 'npm test' }]);
+    expect(gen.receipts[0]?.reply?.checks).toEqual([{ check_id: 'npm test', result: 'pass', note: 'all passed' }]);
     await run(env, { hook_event_name: 'Stop', session_id: 's1' });
     expect(state(env).current.outcome).toBe('completed');
+  });
+
+  it('does not accept a worker that changed files on its word alone: no passing check, or one that names no command', async () => {
+    for (const [reply, reason] of [
+      [workerReply({ checks: [] }), 'changed files but reported no passing check'],
+      [workerReply({ checks: [{ check_id: 'unit tests', result: 'pass', note: '' }] }), 'shows no passing run'],
+    ] as const) {
+      const env = singleEnv();
+      const fetchImpl = fakeJev({ execution: 'orchestrated' });
+      await run(env, promptEvent(), fetchImpl);
+      await run(env, preEvent('Agent', agentInput({ prompt: 'Do what the request asks.' })), fetchImpl);
+      await run(env, workerPost('toolu_1', reply), fetchImpl);
+      const receipt = state(env).current.receipts[0];
+      expect(receipt?.verdict).toBe('incomplete');
+      expect(receipt?.verdict_reason).toContain(reason);
+    }
+  });
+
+  it('accepts a worker that changed nothing and had nothing to check', async () => {
+    const env = singleEnv();
+    const fetchImpl = fakeJev({ execution: 'orchestrated' });
+    await run(env, promptEvent(), fetchImpl);
+    await run(env, preEvent('Agent', agentInput({ prompt: 'Do what the request asks.' })), fetchImpl);
+    await run(env, workerPost('toolu_1', workerReply({ changed_files: [], checks: [] })), fetchImpl);
+    expect(state(env).current.receipts[0]?.verdict).toBe('accept');
   });
 
   it('does not complete the job when the one worker says it did not finish', async () => {
@@ -766,12 +901,12 @@ describe('single executor (A19)', () => {
     const fetchImpl = fakeJev({ execution: 'orchestrated' });
     await run(env, promptEvent(), fetchImpl);
     await run(env, preEvent('Agent', agentInput({ prompt: 'Do what the request asks.' })), fetchImpl);
-    const reply = workerReply({ checks: [{ check_id: 'empty array rejected', result: 'pass', note: 'node --test' }] });
+    const reply = workerReply({ checks: [{ check_id: 'npm run typecheck', result: 'pass', note: 'no errors' }] });
     await run(env, workerPost('toolu_1', reply), fetchImpl);
     const receipt = state(env).current.receipts[0];
     expect(receipt).toMatchObject({ task_id: 'single', verdict: 'accept' });
     // The name is kept as the worker wrote it, so the record says which check ran.
-    expect(receipt?.reply?.checks).toEqual([{ check_id: 'empty array rejected', result: 'pass', note: 'node --test' }]);
+    expect(receipt?.reply?.checks).toEqual([{ check_id: 'npm run typecheck', result: 'pass', note: 'no errors' }]);
     await run(env, { hook_event_name: 'Stop', session_id: 's1' });
     expect(state(env).current.outcome).toBe('completed');
   });
@@ -883,7 +1018,7 @@ describe('single executor (A19)', () => {
     const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
       const body = JSON.parse(String(init.body)) as { questions: Record<string, unknown> };
       // The user sends the next prompt while this dispatch is waiting on its route answer.
-      if ('route' in body.questions && !superseded) {
+      if (('route' in body.questions || 'fully_specified' in body.questions) && !superseded) {
         superseded = true;
         await run(env, promptEvent({ prompt_id: 'p2', prompt: 'actually, do something else' }), admit);
       }
@@ -910,16 +1045,26 @@ describe('root guard (A6 allow-list)', () => {
 
   it('passes allowed tools with no output and denies the rest with the fixed reason', async () => {
     const env = await orchestrate();
-    for (const tool of ['Read', 'Grep', 'TodoWrite', 'TaskCreate']) {
+    // A connector step is the coordinator's (a worker has none), so MCP tools pass under the default guardAllowMcp.
+    for (const tool of ['Read', 'Grep', 'TodoWrite', 'TaskCreate', 'mcp__unknown__write']) {
       expect(await run(env, preEvent(tool, {})), tool).toMatchObject({ kind: 'skip', code: null, stdout: null });
     }
-    for (const tool of ['Bash', 'Edit', 'Write', 'Skill', 'mcp__unknown__write']) {
+    for (const tool of ['Bash', 'Edit', 'Write', 'Skill', 'mcp_not_a_prefix']) {
       const r = await run(env, preEvent(tool, {}));
       expect(r.kind, tool).toBe('deny');
       expect(hookOutput(r)).toMatchObject({ permissionDecision: 'deny', permissionDecisionReason: GUARD_DENY_REASON });
     }
     const other = await run(env, preEvent('Agent', { subagent_type: 'Explore', prompt: 'x' }));
     expect(other.kind).toBe('deny');
+  });
+
+  it('denies MCP tools too when guardAllowMcp is off', async () => {
+    const cfg = join(tmp, 'guard-no-mcp.json');
+    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', guardAllowMcp: false }));
+    const env = makeEnv({ JEV_GATE_CONFIG: cfg });
+    // The external-tools fact is low here, so the turn is admitted and the guard is on.
+    await run(env, promptEvent(), fakeJev());
+    expect((await run(env, preEvent('mcp__notion__search', {}))).kind).toBe('deny');
   });
 
   it('adds continue:false once the denial budget of one prompt is spent', async () => {
@@ -936,9 +1081,9 @@ describe('root guard (A6 allow-list)', () => {
   it('never guards a child caller, a direct job or a session without state', async () => {
     const env = await orchestrate();
     expect(await run(env, preEvent('Bash', {}, { agent_id: 'child' }))).toMatchObject({ kind: 'skip', code: 'child_caller' });
-    // A direct turn under the atomic gate: the request only wants an answer, so the veto fires and nothing is guarded.
+    // A direct turn under the atomic gate: the request refuses delegation, so the veto fires and nothing is guarded.
     const direct = makeEnv();
-    await run(direct, promptEvent(), fakeJev({ answerOnly: 0.9 }));
+    await run(direct, promptEvent(), fakeJev({ forbidsDelegation: 0.9 }));
     expect(await run(direct, preEvent('Bash', {}))).toMatchObject({ kind: 'skip', code: 'shape_direct' });
     expect(await run(makeEnv(), preEvent('Bash', {}))).toMatchObject({ kind: 'skip', code: 'no_state' });
   });
@@ -1172,6 +1317,14 @@ describe('worker dispatch', () => {
     expect(state(env).current.active['toolu_1']).toMatchObject({ role: 'worker', task_id: 't1', rev: 1, deliverables: ['src/t1.ts'] });
   });
 
+  it('leaves the called tier alone when Gate B answers a fact in the wrong type', async () => {
+    const env = makeEnv();
+    await seedPlanned(env, PLAN_REPLY, fakeJev());
+    const r = await run(env, preEvent('Agent', agentInput()), fakeJev({ route: 'fast', mistype: 'fully_specified' }));
+    expect(String(updatedInput(r)['prompt'])).not.toContain('Tier: fast');
+    expect(updatedInput(r)['subagent_type']).not.toBe('jev-gate:worker-fast');
+  });
+
   /**
    * A17/v5-job2-orbit-2026-09-19: the accepted plan had renamed four of the request's exports and dropped a fifth.
    * No worker could have caught that, because until now nothing carried the request past the planner.
@@ -1207,7 +1360,8 @@ describe('worker dispatch', () => {
   });
 
   it('preserves the called profile when Jev abstains but still appends the contract', async () => {
-    const env = makeEnv();
+    // Only the composite Gate B has an abstain answer; the atomic one composes facts and always names a tier.
+    const env = compositeGateBEnv();
     const fetchImpl = fakeJev({ route: 'abstain' });
     await seedPlanned(env, PLAN_REPLY, fetchImpl);
     const r = await run(env, preEvent('Agent', agentInput({ subagent_type: 'jev-gate:worker-deep' })), fetchImpl);
@@ -1352,7 +1506,7 @@ describe('worker dispatch', () => {
     // with its own input: it belongs to a plan that is no longer in force.
     const racing = fakeJev({
       onCall: (questions) => {
-        if (questions.includes('route')) updateJob(env, 's1', (prev) => newGeneration(prev, 's1', 'p2', 'orchestrated').state);
+        if (questions.includes('route') || questions.includes('fully_specified')) updateJob(env, 's1', (prev) => newGeneration(prev, 's1', 'p2', 'orchestrated').state);
       },
     });
     const r = await run(env, preEvent('Agent', agentInput()), racing);
@@ -1483,7 +1637,7 @@ describe('rework evidence (A17)', () => {
   it('evaluates attempt 2 on strictly more evidence than attempt 1', async () => {
     const env = makeEnv();
     const routeStates: Array<Record<string, unknown>> = [];
-    const fetchImpl = fakeJev({ onCall: (q, st) => void (q.includes('route') && routeStates.push(st)) });
+    const fetchImpl = fakeJev({ onCall: (q, st) => void ((q.includes('route') || q.includes('fully_specified')) && routeStates.push(st)) });
     await seedPlanned(env, PLAN_REPLY, fetchImpl);
     await run(env, preEvent('Agent', agentInput()), fetchImpl);
     await run(env, workerPost('toolu_1', workerReply({ checks: [{ check_id: 'c1', result: 'fail', note: 'ordering' }] })), fetchImpl);
@@ -1495,6 +1649,131 @@ describe('rework evidence (A17)', () => {
     expect(JSON.stringify(routeStates[1]).length).toBeGreaterThan(JSON.stringify(routeStates[0]).length);
     // The worker sees the same failure the gate saw.
     expect(String(updatedInput(second)['prompt'])).toContain('Previous attempt of this task (worker_reported)');
+  });
+});
+
+describe('worker check verification (0.4.0)', () => {
+  const postWith = (reply: WorkerReply, t: { parent: string; agentId: string }): Record<string, unknown> =>
+    workerPost('toolu_1', reply, {
+      transcript_path: t.parent,
+      tool_response: { status: 'completed', agentId: t.agentId, resolvedModel: 'claude-sonnet-5', content: [{ type: 'text', text: fence(reply) }] },
+    });
+  const dispatched = async (env: Env): Promise<ReturnType<typeof vi.fn>> => {
+    const fetchImpl = fakeJev();
+    await seedPlanned(env, PLAN_REPLY, fetchImpl);
+    await run(env, preEvent('Agent', agentInput()), fetchImpl);
+    return fetchImpl;
+  };
+
+  it('judges only required checks, and counts a required check with no command as unobserved', async () => {
+    const plannedWith = async (env: Env, checks: PlannedTask['checks']): Promise<void> => {
+      const fetchImpl = fakeJev();
+      await seedPlanned(env, planReply([rawTask('t1', { checks }), rawTask('t2'), rawTask('t3', { depends_on: ['t1', 't2'] })]), fetchImpl);
+      await run(env, preEvent('Agent', agentInput()), fetchImpl);
+    };
+    const bothPass = workerReply({ checks: [{ check_id: 'c1', result: 'pass', note: '' }, { check_id: 'c2', result: 'pass', note: '' }] });
+    const optional = makeEnv();
+    await plannedWith(optional, [
+      { id: 'c1', description: 'tests pass', required: true, command: 'npm test' },
+      { id: 'c2', description: 'lint is clean', required: false, command: 'npm run lint' },
+    ]);
+    await run(optional, postWith(bothPass, workerTranscript([{ command: 'npm test', failed: false }])));
+    expect(state(optional).current.receipts[0]).toMatchObject({ verdict: 'accept', verification: { unobserved: [] } });
+    const bare = makeEnv();
+    await plannedWith(bare, [
+      { id: 'c1', description: 'tests pass', required: true, command: 'npm test' },
+      { id: 'c2', description: 'reviewed by hand', required: true, command: null },
+    ]);
+    await run(bare, postWith(bothPass, workerTranscript([{ command: 'npm test', failed: false }])));
+    expect(state(bare).current.receipts[0]).toMatchObject({ verdict: 'incomplete', verification: { unobserved: ['c2'] } });
+  });
+
+  it('refuses a reported pass whose last run in the worker transcript failed', async () => {
+    const env = makeEnv();
+    await dispatched(env);
+    const post = await run(env, postWith(workerReply(), workerTranscript([{ command: 'npm test', failed: true }])));
+    expect(context(post)).not.toContain('Task t1 accepted');
+    const receipt = state(env).current.receipts[0];
+    expect(receipt).toMatchObject({ verdict: 'incomplete', verification: { transcript: 'read', contradicted: ['c1'] } });
+    expect(receipt?.verdict_reason).toContain("reported pass, but its last run in the worker's own transcript failed");
+  });
+
+  it('accepts when the last run passed, and records a pass that an edit came after as stale', async () => {
+    const env = makeEnv();
+    await dispatched(env);
+    const t = workerTranscript([{ command: 'npm test', failed: true }, { command: 'npm  test -- --run', failed: false }], true);
+    const post = await run(env, postWith(workerReply(), t));
+    expect(context(post)).toContain('Task t1 accepted');
+    expect(state(env).current.receipts[0]).toMatchObject({ verdict: 'accept', verification: { contradicted: [], unobserved: [], stale: ['c1'] } });
+  });
+
+  it('refuses a reported pass the whole transcript shows no run of', async () => {
+    const env = makeEnv();
+    await dispatched(env);
+    await run(env, postWith(workerReply(), workerTranscript([{ command: 'npm run lint', failed: false }])));
+    const receipt = state(env).current.receipts[0];
+    expect(receipt).toMatchObject({ verdict: 'incomplete', verification: { transcript: 'read', unobserved: ['c1'] } });
+    expect(receipt?.verdict_reason).toContain('shows no passing run of its command');
+  });
+
+  it('does not let a later command that only mentions the check mask its failed run', async () => {
+    const env = makeEnv();
+    await dispatched(env);
+    await run(env, postWith(workerReply(), workerTranscript([{ command: 'npm test', failed: true }, { command: 'echo npm test', failed: false }])));
+    expect(state(env).current.receipts[0]).toMatchObject({ verdict: 'incomplete', verification: { contradicted: ['c1'] } });
+  });
+
+  // A missing transcript cannot show that the check ran, so its pass is the worker's word alone and is not accepted.
+  // On a host whose layout moved this refuses every reported pass, and the receipt names why.
+  it('refuses a reported pass when there is no transcript to read, and says why', async () => {
+    const env = makeEnv();
+    await dispatched(env);
+    await run(env, workerPost('toolu_1', workerReply(), { transcript_path: undefined }));
+    const receipt = state(env).current.receipts[0];
+    expect(receipt).toMatchObject({ verdict: 'incomplete', verification: { transcript: 'unavailable', contradicted: [], unobserved: ['c1'] } });
+    expect(receipt?.verdict_reason).toContain('could not be read');
+  });
+
+  it('reads nothing when verifyWorkerChecks is off', async () => {
+    const cfg = join(tmp, 'no-verify.json');
+    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', verifyWorkerChecks: false }));
+    const env = makeEnv({ JEV_GATE_CONFIG: cfg });
+    await dispatched(env);
+    await run(env, postWith(workerReply(), workerTranscript([{ command: 'npm test', failed: true }])));
+    const receipt = state(env).current.receipts[0];
+    expect(receipt?.verdict).toBe('accept');
+    expect(receipt).not.toHaveProperty('verification');
+  });
+
+  it('holds the single shape to the command it names as its check id', async () => {
+    const cfg = join(tmp, 'verify-single.json');
+    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', admittedShape: 'single' }));
+    const env = makeEnv({ JEV_GATE_CONFIG: cfg });
+    const fetchImpl = fakeJev();
+    await run(env, promptEvent(), fetchImpl);
+    await run(env, preEvent('Agent', agentInput({ prompt: 'Do what the request asks.' })), fetchImpl);
+    const reply = workerReply({ checks: [{ check_id: 'npm run build', result: 'pass', note: 'built' }] });
+    await run(env, postWith(reply, workerTranscript([{ command: 'npm run build', failed: true }])));
+    expect(state(env).current.receipts[0]).toMatchObject({ verdict: 'incomplete', verification: { contradicted: ['#1'] } });
+  });
+
+  it('names a single-shape check by its position, so the command it ran never reaches the trace', async () => {
+    const dir = join(tmp, 'trace-verify-secret');
+    const cfg = join(tmp, 'verify-single-secret.json');
+    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', admittedShape: 'single' }));
+    const env = makeEnv({ JEV_GATE_CONFIG: cfg, JEV_GATE_TRACE_DIR: dir });
+    const fetchImpl = fakeJev();
+    await run(env, promptEvent(), fetchImpl);
+    await run(env, preEvent('Agent', agentInput({ prompt: 'Do what the request asks.' })), fetchImpl);
+    const command = 'curl -fsS -H "Authorization: Bearer sk-test-SECRET" https://example.invalid/health';
+    const reply = workerReply({ checks: [{ check_id: command, result: 'pass', note: 'ok' }] });
+    await run(env, postWith(reply, workerTranscript([{ command, failed: true }])));
+    const receipt = state(env).current.receipts[0];
+    expect(receipt).toMatchObject({ verdict: 'incomplete', verification: { contradicted: ['#1'] } });
+    expect(receipt?.verdict_reason).not.toContain('SECRET');
+    const traced = readdirSync(dir).map((f) => readFileSync(join(dir, f), 'utf8')).join('\n');
+    expect(traced).toMatch(/"contradicted": \[\s*"#1"\s*\]/);
+    expect(traced).not.toContain('SECRET');
   });
 });
 
@@ -1739,7 +2018,7 @@ describe('Stop', () => {
   it('records completed, incomplete and blocked outcomes without output', async () => {
     const done = makeEnv();
     const fetchImpl = fakeJev();
-    await run(done, promptEvent(), fakeJev({ answerOnly: 0.9 }));
+    await run(done, promptEvent(), fakeJev({ forbidsDelegation: 0.9 }));
     expect(await run(done, { hook_event_name: 'Stop', session_id: 's1' })).toMatchObject({ kind: 'skip', stdout: null });
     expect(state(done).current.outcome).toBe('completed');
 
@@ -1779,7 +2058,8 @@ describe('traces', () => {
     // A17 item 6: every gate records its decision in the same place, nested under `decision`.
     expect(attempted('admission_result')).toMatchObject({ forced: false, decision: { shape: 'orchestrated', decided: true, reason: null, changed_default: true } });
     expect(attempted('pre_result', 'planner')).toMatchObject({ decision: { action: 'patch', tier: 'deep', reason: null } });
-    expect(attempted('pre_result', 'worker')).toMatchObject({ decision: { action: 'patch', tier: 'standard', reason: null } });
+    // Atomic Gate B (the default since 0.4.0) composes to the tier the coordinator called here, so it keeps it.
+    expect(attempted('pre_result', 'worker')).toMatchObject({ decision: { action: 'preserve', tier: 'standard', reason: null } });
     // A17 item 7: every gate records whether it changed what would have happened without it.
     expect(attempted('pre_result', 'worker')).toMatchObject({ decision: { changed_default: false } });
     // T4/T11: the plan record carries the computed depth, the planner's own claim and the model agreement.
@@ -2225,7 +2505,7 @@ describe('failure evidence and report repair (T9, T10)', () => {
   it('R12: the rework of a task carries its own previous failure, and no failure from another task', async () => {
     const env = capEnv(2);
     const routeStates: Array<Record<string, unknown>> = [];
-    const fetchImpl = fakeJev({ onCall: (q, st) => void (q.includes('route') && routeStates.push(st)) });
+    const fetchImpl = fakeJev({ onCall: (q, st) => void ((q.includes('route') || q.includes('fully_specified')) && routeStates.push(st)) });
     await seedPlanned(env, PLAN_REPLY, fetchImpl);
     await run(env, preEvent('Agent', agentInput()), fetchImpl);
     await run(env, workerPost('toolu_1', workerReply({ status: 'blocked', blockers: ['the cache contract is ambiguous'] })), fetchImpl);
@@ -2245,7 +2525,7 @@ describe('failure evidence and report repair (T9, T10)', () => {
   it('R12: a transport failure is not promoted to a reasoning failure', async () => {
     const env = makeEnv();
     const routeStates: Array<Record<string, unknown>> = [];
-    const fetchImpl = fakeJev({ onCall: (q, st) => void (q.includes('route') && routeStates.push(st)) });
+    const fetchImpl = fakeJev({ onCall: (q, st) => void ((q.includes('route') || q.includes('fully_specified')) && routeStates.push(st)) });
     await seedPlanned(env, PLAN_REPLY, fetchImpl);
     await run(env, preEvent('Agent', agentInput()), fetchImpl);
     await run(env, { ...workerPost('toolu_1', workerReply()), hook_event_name: 'PostToolUseFailure', error: 'Agent terminated early' });
@@ -2598,16 +2878,18 @@ describe('receipt selection and observation keys (2026-09-20)', () => {
   it('records the numbers the atomic gates decide on, not only the fields a choice answer has', async () => {
     const dir = join(tmp, 'trace-atomic-answers');
     const env = makeEnv({ JEV_GATE_TRACE_DIR: dir });
-    await run(env, promptEvent(), fakeJev({ execution: 'orchestrated', size: 3, forbidsDelegation: 0.07, answerOnly: 0.02 }));
+    await run(env, promptEvent(), fakeJev({ execution: 'orchestrated', size: 3, forbidsDelegation: 0.07, externalTools: 0.02, toolCalls: 3.6 }));
     const record = readdirSync(dir)
       .map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>)
       .find((x) => x['phase'] === 'admission_result');
     const answers = (record?.['answers'] ?? {}) as Record<string, Record<string, unknown>>;
-    // The shipped Gate A decides on these three numbers and on nothing else, so a trace without them says which
-    // questions were asked and not what was answered -- the observation cannot reproduce its own decision.
+    // The shipped Gate A decides on these numbers, so a trace without them says which questions were asked and not
+    // what was answered -- the observation cannot reproduce its own decision.
     expect(answers['size']).toMatchObject({ type: 'score', score: 3, choice: null });
+    expect(answers['tool_calls']).toMatchObject({ type: 'score', score: 3.6, choice: null });
     expect(answers['forbids_delegation']).toMatchObject({ type: 'noul', noul: 0.07 });
-    expect(answers['answer_only']).toMatchObject({ type: 'noul', noul: 0.02 });
+    expect(answers['external_tools']).toMatchObject({ type: 'noul', noul: 0.02 });
+    expect(record?.['estimate']).toEqual({ turns: 40, saving_tokens: (40 - 11) * 406_000 - 40 * 40_000 });
   });
 });
 
