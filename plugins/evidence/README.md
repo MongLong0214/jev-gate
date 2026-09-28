@@ -85,6 +85,13 @@ judgements of a completed page are cached in memory for 10 minutes, keyed by the
 
 ## Checked
 
-The SDK client tests start the bundled server over stdio and call it. Whether a given Claude Code build lists and
-calls the tool is recorded in the repository's changelog for the build it was checked on; a test run is not a host
-observation.
+On Claude Code 2.1.283, headless (`-p`), with `--plugin-dir plugins/evidence` and with `--plugin-dir` on the packed
+archive unzipped under a path with spaces, run from another directory:
+
+- **Observed:** the server connects; the tool is listed as `mcp__plugin_jev-gate-evidence_evidence__jev_evidence`
+  (deferred, loaded through ToolSearch) and the skill as `jev-gate-evidence:evidence`; an `exactSymbols` call and a
+  `remote: true` search with a real key return results; the skill, given a Korean question, sent English
+  `queryTerms` and answered from two calls.
+- **Not observed on a host:** a cancellation from the host, `busy`, an interactive session, and any saving in tokens or time.
+
+The SDK client tests start the bundled server from an unpacked archive over stdio; they are not a host observation.
