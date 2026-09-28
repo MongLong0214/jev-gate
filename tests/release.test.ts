@@ -63,6 +63,7 @@ describe('scripts/release.mjs', () => {
     for (const f of ['README.md', 'AGENTS.md', '.env.example']) write(f, `${f}\n`);
     write('dist/hook.js', 'export {};\n');
     write('dist/entry.js', 'export {};\n');
+    for (const f of ['dist/server.mjs', 'skills/evidence/SKILL.md', 'README.md']) write(`plugins/evidence/${f}`, `${f}\n`);
     git('init', '-q');
     expect(release('pin').status).toBe(0);
     commit('A');
@@ -86,7 +87,7 @@ describe('scripts/release.mjs', () => {
     write('README.md', 'README.md, edited after the release\n');
     const refused = release('pin');
     expect(refused.status).toBe(1);
-    expect(refused.stderr).toContain(`v0.3.0 is released with archive ${released}`);
+    expect(refused.stderr).toContain(`v0.3.0 is released with jev-gate-0.3.0.zip ${released}`);
     // Written by hand, the repin still fails the check that main's CI and the release job run.
     const packed = spawnSync(process.execPath, [join(repo, 'scripts', 'pack.mjs'), join(repo, 'out')], { encoding: 'utf8' });
     expect(packed.status, packed.stderr).toBe(0);
@@ -98,7 +99,7 @@ describe('scripts/release.mjs', () => {
     commit('B');
     const check = release('check');
     expect(check.status).toBe(1);
-    expect(check.stderr).toContain(`v0.3.0 is released with archive ${released}, this tree packs ${sha}`);
+    expect(check.stderr).toContain(`v0.3.0 is released with jev-gate-0.3.0.zip ${released}, this tree packs ${sha}`);
     expect(check.stderr).toContain('raise the version');
   });
 
@@ -185,9 +186,93 @@ describe('scripts/release.mjs', () => {
     const good = release('check', '--tag', 'v0.3.0', '--asset', join(out, 'jev-gate-0.3.0.zip'));
     expect(good.stderr).toBe('');
     expect(good.status).toBe(0);
-    writeFileSync(join(out, 'other.zip'), 'not the archive');
-    const bad = release('check', '--tag', 'v0.3.0', '--asset', join(out, 'other.zip'));
+    mkdirSync(join(out, 'bad'));
+    writeFileSync(join(out, 'bad', 'jev-gate-0.3.0.zip'), 'not the archive');
+    const bad = release('check', '--tag', 'v0.3.0', '--asset', join(out, 'bad', 'jev-gate-0.3.0.zip'));
     expect(bad.status).toBe(1);
-    expect(bad.stderr).toContain('other.zip is ');
+    expect(bad.stderr).toContain('jev-gate-0.3.0.zip is ');
+    writeFileSync(join(out, 'other.zip'), 'not the archive');
+    const unnamed = release('check', '--tag', 'v0.3.0', '--asset', join(out, 'other.zip'));
+    expect(unnamed.status).toBe(1);
+    expect(unnamed.stderr).toContain('other.zip is not a release archive name (jev-gate-0.3.0.zip)');
+  });
+
+  // #77: the evidence server's archive is a second pinned entry, packed with its own profile and frozen the same way.
+  it('pins, freezes and checks the evidence archive beside the gate archive', () => {
+    const m = JSON.parse(readFileSync(join(repo, '.claude-plugin', 'marketplace.json'), 'utf8'));
+    m.plugins.push({ name: 'jev-gate-evidence', source: { source: 'archive', url: 'https://example.invalid/e.zip', sha256: '0'.repeat(64) } });
+    json('.claude-plugin/marketplace.json', m);
+    // Added after v0.3.0 was released, the entry has no pin there: the version must move.
+    const refused = release('pin');
+    expect(refused.status).toBe(1);
+    expect(refused.stderr).toContain('v0.3.0 is released with jev-gate-evidence-0.3.0.zip (none)');
+    setVersion('0.3.1');
+    expect(release('pin').status).toBe(0);
+    commit('B');
+    const evidence = () => JSON.parse(readFileSync(join(repo, '.claude-plugin', 'marketplace.json'), 'utf8')).plugins[3].source;
+    const packed = spawnSync(process.execPath, [join(repo, 'scripts', 'pack.mjs'), join(repo, 'ev'), '--profile', 'evidence'], { encoding: 'utf8' });
+    expect(packed.status, packed.stderr).toBe(0);
+    expect(evidence()).toEqual({
+      source: 'archive',
+      url: 'https://github.com/MongLong0214/jev-gate/releases/download/v0.3.1/jev-gate-evidence-0.3.1.zip',
+      sha256: createHash('sha256').update(readFileSync(join(repo, 'ev', 'jev-gate-evidence-0.3.1.zip'))).digest('hex'),
+    });
+    rmSync(join(repo, 'ev'), { recursive: true, force: true });
+    const out = join(repo, 'out');
+    const check = release('check', '--tag', 'v0.3.1', '--out', out);
+    expect(check.stderr).toBe('');
+    expect(check.stdout).toContain('ok jev-gate-evidence-0.3.1.zip');
+    expect(readFileSync(join(out, 'NOTES.md'), 'utf8')).toContain(`- \`jev-gate-evidence-0.3.1.zip\`: \`${evidence().sha256}\``);
+    const both = ['jev-gate-0.3.1.zip', 'jev-gate-evidence-0.3.1.zip'].flatMap((n) => ['--asset', join(out, n)]);
+    expect(release('check', '--tag', 'v0.3.1', ...both).status).toBe(0);
+    // The second asset is checked too, not only the first.
+    mkdirSync(join(out, 'bad'));
+    writeFileSync(join(out, 'bad', 'jev-gate-evidence-0.3.1.zip'), 'not the archive');
+    const second = release('check', '--tag', 'v0.3.1', '--asset', join(out, 'jev-gate-0.3.1.zip'), '--asset', join(out, 'bad', 'jev-gate-evidence-0.3.1.zip'));
+    expect(second.status).toBe(1);
+    expect(second.stderr).toContain('jev-gate-evidence-0.3.1.zip is ');
+    // A served marketplace that pins another evidence archive at this version is refused.
+    git('switch', '-q', '-c', 'served');
+    const served = JSON.parse(readFileSync(join(repo, '.claude-plugin', 'marketplace.json'), 'utf8'));
+    served.plugins[3].source.sha256 = 'f'.repeat(64);
+    json('.claude-plugin/marketplace.json', served);
+    commit('served evidence moved');
+    git('switch', '-q', '-');
+    const against = release('check', '--tag', 'v0.3.1', '--against', 'served');
+    expect(against.status).toBe(1);
+    expect(against.stderr).toContain(`served serves {"source":"archive","url":"https://github.com/MongLong0214/jev-gate/releases/download/v0.3.1/jev-gate-evidence-0.3.1.zip","sha256":"${'f'.repeat(64)}"}`);
+    git('tag', 'v0.3.1');
+    // Released, a change to the evidence plugin's files repacks its archive and is refused at the same version.
+    write('plugins/evidence/README.md', 'README.md, edited after the release\n');
+    const frozen = release('check', '--tag', 'v0.3.1');
+    expect(frozen.status).toBe(1);
+    expect(frozen.stderr).toContain(`v0.3.1 is released with jev-gate-evidence-0.3.1.zip ${evidence().sha256}`);
+    write('plugins/evidence/README.md', 'README.md\n');
+    expect(release('check', '--tag', 'v0.3.1').status).toBe(0);
+    // Dropping a released entry at the same version is refused as well.
+    const m2 = JSON.parse(readFileSync(join(repo, '.claude-plugin', 'marketplace.json'), 'utf8'));
+    m2.plugins.pop();
+    json('.claude-plugin/marketplace.json', m2);
+    const dropped = release('check', '--tag', 'v0.3.1');
+    expect(dropped.status).toBe(1);
+    expect(dropped.stderr).toContain('v0.3.1 is released with entries jev-gate, jev-gate-compact, jev-gate-evidence, jev-gate-router, this tree lists jev-gate, jev-gate-compact, jev-gate-router');
+  });
+
+  it('refuses a flag that is given no value', () => {
+    for (const f of ['--against', '--asset', '--tag', '--out']) {
+      const r = release('check', f);
+      expect(r.status, f).toBe(1);
+      expect(r.stderr).toContain(`${f} needs a value`);
+    }
+    expect(release('check', '--asset', '--tag', 'v0.3.0').stderr).toContain('--asset needs a value');
+  });
+
+  it('refuses an archive entry no pack profile builds', () => {
+    const m = JSON.parse(readFileSync(join(repo, '.claude-plugin', 'marketplace.json'), 'utf8'));
+    m.plugins.push({ name: 'jev-gate-other', source: { source: 'archive', url: 'https://example.invalid/o.zip', sha256: '0'.repeat(64) } });
+    json('.claude-plugin/marketplace.json', m);
+    const check = release('check');
+    expect(check.status).toBe(1);
+    expect(check.stderr).toContain('archive entry jev-gate-other that no pack profile builds');
   });
 });

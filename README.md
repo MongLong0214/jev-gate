@@ -18,17 +18,17 @@ An experiment in using frontier intelligence for the hard parts—not every part
 
 </div>
 
-> **Status · September 28, 2026 · v0.5.0.** V5 turns one request into a judged workflow: Jev decides the execution
+> **Status · September 28, 2026 · v0.5.1.** V5 turns one request into a judged workflow: Jev decides the execution
 > shape, a strong read-only planner decomposes the job, a Sonnet coordinator runs the plan behind an execution guard,
 > and Jev picks a tier for every planner and worker dispatch. The mechanism was **observed end to end on Claude Code
 > 2.1.275/2.1.276** (headless and interactive). **No cost or time benefit is established for the gate itself**: the
 > whole-job comparison was stopped after one cell for budget reasons, and in that cell every task routed to the same
 > tier. Three smaller Function Hooks plugins have since shipped alongside it — an extractive compactor, a model/effort
-> router and a Vitest output folder — and a read-only evidence MCP tool ships as a release asset; each has its own
+> router and a Vitest output folder — and a read-only evidence MCP tool ships as a second pinned archive; each has its own
 > evidence and limits, in [Install](#install) and its own README. See
 > [What is verified](#what-is-verified-and-what-is-not) and [Results](#results). Contract:
 > [#21 PRD](https://github.com/MongLong0214/jev-gate/issues/21) → [#22 ADR](https://github.com/MongLong0214/jev-gate/issues/22).
-> Release: [v0.5.0](https://github.com/MongLong0214/jev-gate/releases/tag/v0.5.0). Next work and current state:
+> Release: [v0.5.1](https://github.com/MongLong0214/jev-gate/releases/tag/v0.5.1). Next work and current state:
 > [HANDOFF.md](HANDOFF.md).
 
 ## Install
@@ -45,6 +45,7 @@ The repository is its own Claude Code plugin marketplace. In a Claude Code sessi
 | `jev-gate-compact` | Answers auto compactions with an extractive digest and the recent tail: no summarizer request, milliseconds instead of a minute. Calls no Jev. [README](mods/compact/README.md) | `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` |
 | `jev-gate-router` | Chooses the main thread's effort and a subagent's model and effort from one Jev assessment each; native on any doubt. The main thread's model stays native. [README](mods/router/README.md) | `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`, a TypeSafe key |
 | `jev-gate-output` | Folds runs of identical lines in a passing Vitest log the host saved to a file, so the whole run reaches the model with exact counts instead of a 2 KB preview. Calls no Jev. [README](mods/output/README.md) | `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` |
+| `jev-gate-evidence` | One read-only MCP tool, `jev_evidence`: exact source windows from the one project you configure, paged, with exact read-back; with remote on, Jev orders a page and folds clearly unrelated bodies. Built from the tagged release. [README](plugins/evidence/README.md) | Node.js 22+, `JEV_EVIDENCE_CONFIG`; a TypeSafe key for remote |
 | `jev-gate` | The orchestration gate described below, built from the tagged release. | Node.js 22+, a TypeSafe key, `JEV_GATE_MODE` |
 
 Every plugin is off after install. The three Function Hooks plugins take their options in `/plugin` (or
@@ -52,9 +53,8 @@ Every plugin is off after install. The three Function Hooks plugins take their o
 `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` is in its environment, for example under `env` in `~/.claude/settings.json`.
 `jev-gate` reads its mode from `JEV_GATE_MODE` or `~/.config/jev-gate/config.json` ([Try V5](#try-v5)).
 
-`jev-gate-evidence`, one read-only MCP tool that returns exact source windows (and, with remote on, lets Jev fold
-clearly unrelated ones), is not in the marketplace: download its archive from a release and load it with `--plugin-dir`
-([README](plugins/evidence/README.md)).
+`jev-gate-evidence` lists its tool once installed, and every call answers `unavailable_config` until
+`JEV_EVIDENCE_CONFIG` names a config ([README](plugins/evidence/README.md#configure)).
 
 A plugin changes only when a release raises its version, and `main` takes only releases. To update, run
 `/plugin marketplace update jev-gate` and then `claude plugin update <plugin>@jev-gate`, or turn on auto-update for the
