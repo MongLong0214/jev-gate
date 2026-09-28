@@ -1,0 +1,39 @@
+Limit: Jev's text-only tool_calls read-off barely predicts the root turns a request takes (Spearman 0.05-0.08 on 100 real prompts), so the priced Gate A recovers only 5-11% of the saving the cost model says is available
+Limit: Worker check verification sees only runs the host marked is_error: a check piped into tail exits with tail's status and reads as a pass
+Ruled-out: admit every request at depth | the cost model prices tokens only; a worker does not see the conversation, so it needs a quality guard and a paid measurement first
+Ruled-out: refuse a check that was unobserved or stale in the worker transcript | the transcript cannot see every way a check can be run, so it would refuse correct work
+Warn: Do not change delegationCoordinatorTurns (C) or delegationWorkerTokensPerCall (d) to fit the 2026-09-28 validation; that fits them to the run. Re-run scripts/gate-a-cost-replay.mjs under a new pre-registration instead
+Warn: The Router must keep skipping jev-gate dispatches (gate_routed); without it the Router's own assessment replaces Gate B's on every dispatch
+Blast: system
+Certainty: tentative
+Unverified: No paid end-to-end run backs 0.4.0; the saving is the cost model's, not a measured bill
+Record-Id: r-gatecost04
+Provenance: inherited ca1c25ba7ea9b966f4492ce0eb9076f47a8fe6ee
+
+Limit: The installed host leaves some Bash tool_results with no is_error mark (46 of 12,755 in 60 real subagent transcripts); verification reads those as unknown, never as a pass
+Ruled-out: refuse an accept when the worker transcript is cut or missing | neither can show absence, and a host whose transcript layout moved would then have every task refused
+Warn: Narrows r-gatecost04's ruled-out: a check the fully read transcript shows no passing run of is now refused; only cut or missing transcripts and runs before a later edit refuse nothing
+Warn: Single-shape check ids are the shell commands the worker ran; keep them out of traces, receipts' verification lists and reasons, and name checks by position (#N)
+Warn: Gate A now needs all six answers in their asked type or the turn stays direct; a new Gate A question must be answered by every real response or it turns the gate off
+Record-Id: r-verifyfix4
+Follows: r-gatecost04
+Provenance: inherited 8988b2facccab933c4aea6149d79b5e8171a3dc1
+
+Ruled-out: accept a reported pass on a cut or missing worker transcript | that is accepting on the worker's word, the failure verification exists to fix; the cost is named in the reason instead of avoided
+Warn: Reverses r-verifyfix4's ruled-out: a cut or missing transcript now refuses every reported pass whose passing run it cannot see, so a host whose transcript layout moved gets every such task back incomplete with the reason 'could not be read'
+Warn: A check matches a run only when the check's own shell segments appear in the run in order with the same separators; matching each run segment against the whole command never recognizes an exact compound check such as npm run typecheck && npm test
+Warn: Hook tests give every worker result a transcript of passing fixture runs (FIXTURE_CHECK_COMMANDS); a test about a worker with no transcript must say so with transcript_path: undefined
+Record-Id: r-verifyfix5
+Follows: r-verifyfix4
+Provenance: inherited 4f6a5d6c0300ecc28522b3d8e9a0eab2173c62e9
+
+Limit: A check piped into another command still counts as its run, and a pipeline exits with its last command's status, so a failing check piped into tail reads as a pass
+Ruled-out: refuse a check run that is piped into another command | workers pipe long test output into tail, so most real passes would be refused; the gap is stated instead
+Warn: A single-shape worker that changed files (in its reply or its transcript) and reports no passing check is incomplete; one that changed nothing and checked nothing still accepts
+Warn: Every required planned check needs a command: one without is unobserved, so its task can never be accepted
+Record-Id: r-verifyfix6
+Follows: r-verifyfix5
+Provenance: inherited fff7b8af03c13922c8a6748a5d936b8d33c8b8dc
+
+Provenance: inherited 77213f96238d2ed6e1bc39a3c76941e8d2c85c55
+https: //claude.ai/code/session_0126YuzFhhuiS8ycBTYyaPgR
