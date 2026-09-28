@@ -41,10 +41,13 @@ describe('locate and audit', () => {
     const svc = await local(root);
     const r = await run(svc, { goal: 'where', exactSymbols: ['a.b(c)*'] });
     expect(r.items.map((i) => [i.source.path, i.source.startLine, i.source.endLine])).toEqual([
-      ['src/crlf.ts', 1, 40],
-      ['src/crlf.ts', 55, 63],
+      ['src/crlf.ts', 1, 16],
+      ['src/crlf.ts', 60, 63],
     ]);
     exact(root, r);
+    // A wider view is the same file's reference with other lines, read back exactly.
+    const wide = await run(svc, { goal: 'where', sources: [{ ...r.items[0]!.source, endLine: 40 }] });
+    expect(wide.items[0]).toMatchObject({ textState: 'included', source: { startLine: 1, endLine: 40 } });
     expect(r.items[0]!.text!.startsWith('﻿const x')).toBe(true);
     expect(r.items[1]!.text!.endsWith('return a.b(c)*3;')).toBe(true);
     // The line too long for any window is named by reason, never cut.

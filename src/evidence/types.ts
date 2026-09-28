@@ -110,6 +110,8 @@ export const LIMITS = {
   candidates: 1024,
   windowLines: 40,
   windowBytes: 8 * 1024,
+  /** An exact lookup answers where a name occurs; a wider view is a `sources` read-back of the same file. */
+  exactWindowLines: 16,
   defaultPage: 8,
   maxPage: 16,
   batch: 8,

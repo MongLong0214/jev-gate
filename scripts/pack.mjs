@@ -1,9 +1,10 @@
 // Builds a distributable local plugin archive (#18): compiled hook + modules, manifest, hooks, agents, docs.
-// Usage: node scripts/pack.mjs [outDir] [--root <pluginRoot>] [--profile legacy|lean|router]
+// Usage: node scripts/pack.mjs [outDir] [--root <pluginRoot>] [--profile legacy|lean|router|evidence]
 //   legacy (default) → <outDir>/jev-gate-<version>.zip         six routing roles and lean's executor, the V5 hook set
 //   lean   (JGL-04)  → <outDir>/jev-gate-lean-<version>.zip    one executor, the lean hook set, `--lean` entrypoint
 //   router (JGR-01)  → <outDir>/jev-gate-router-<version>.zip  the Function Hooks Mod in mods/router, at its own version
-// legacy and lean require `npm run build` first (which clears dist, so a deleted module cannot reappear here).
+//   evidence (JGE-03) → <outDir>/jev-gate-evidence-<version>.zip the bundled jev_evidence MCP server in plugins/evidence
+// legacy, lean and evidence require `npm run build` first (which clears dist, so a deleted module cannot reappear here).
 // The archive is written here rather than by the zip CLI, so one tree gives the same bytes on any machine: the marketplace pins
 // the legacy archive's SHA-256 before a release is tagged, and scripts/release.mjs check rebuilds it to compare.
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -17,7 +18,7 @@ const flag = (name) => {
 };
 const root = flag('root') ? resolve(flag('root')) : dirname(dirname(fileURLToPath(import.meta.url)));
 const profile = flag('profile') ?? 'legacy';
-if (profile !== 'legacy' && profile !== 'lean' && profile !== 'router') {
+if (!['legacy', 'lean', 'router', 'evidence'].includes(profile)) {
   process.stderr.write(`pack: unknown profile ${profile}\n`);
   process.exit(1);
 }
@@ -49,9 +50,16 @@ const ROUTER = 'mods/router';
 const routerHooks = () =>
   existsSync(join(root, ROUTER, 'hooks')) ? readdirSync(join(root, ROUTER, 'hooks')).filter((n) => n.endsWith('.ts') || n === 'hooks.json').sort() : [];
 
+// The evidence archive is the plugin directory with its one bundled server: nothing of dist/, hooks or agents.
+const EVIDENCE = 'plugins/evidence';
+const EVIDENCE_FILES = ['.claude-plugin/plugin.json', 'dist/server.mjs', 'skills/evidence/SKILL.md', 'README.md'];
+
 // [source path relative to root, path inside the archive]. The hook set is the only file that is renamed.
+const hostsDist = profile === 'legacy' || profile === 'lean';
 const entries =
-  profile === 'router'
+  profile === 'evidence'
+    ? EVIDENCE_FILES.map((f) => [`${EVIDENCE}/${f}`, f])
+    : profile === 'router'
     ? [
         [`${ROUTER}/.claude-plugin/plugin.json`, '.claude-plugin/plugin.json'],
         [`${ROUTER}/hooks/hooks.json`, 'hooks/hooks.json'],
@@ -67,22 +75,29 @@ const entries =
         ...['README.md', 'AGENTS.md', '.env.example', 'package.json'].map((f) => [f, f]),
       ];
 const missing = entries.map(([src]) => src).filter((rel) => !existsSync(join(root, rel)));
-if (profile !== 'router' && !existsSync(join(root, 'dist/hook.js'))) missing.push('dist/hook.js');
+if (hostsDist && !existsSync(join(root, 'dist/hook.js'))) missing.push('dist/hook.js');
 // #48 P2: hooks.json/lean.json now command dist/entry.js, which dynamically imports dist/hook.js -- both must ship.
-if (profile !== 'router' && !existsSync(join(root, 'dist/entry.js'))) missing.push('dist/entry.js');
+if (hostsDist && !existsSync(join(root, 'dist/entry.js'))) missing.push('dist/entry.js');
 if (missing.length) {
   process.stderr.write(`pack: missing ${missing.join(', ')}${profile === 'router' ? '' : ' — run npm run build first'}\n`);
   process.exit(1);
 }
-if (profile !== 'router') {
+if (hostsDist) {
   for (const p of walk(join(root, 'dist'))) {
     const rel = relative(root, p);
     if (!rel.endsWith('.tsbuildinfo')) entries.push([rel, rel]);
   }
 }
 
-const routerVersion = () => JSON.parse(readFileSync(join(root, ROUTER, '.claude-plugin/plugin.json'), 'utf8')).version;
-const name = profile === 'router' ? `jev-gate-router-${routerVersion()}` : profile === 'lean' ? `jev-gate-lean-${pkg.version}` : `jev-gate-${pkg.version}`;
+const manifestVersion = (dir) => JSON.parse(readFileSync(join(root, dir, '.claude-plugin/plugin.json'), 'utf8')).version;
+const name =
+  profile === 'router'
+    ? `jev-gate-router-${manifestVersion(ROUTER)}`
+    : profile === 'evidence'
+      ? `jev-gate-evidence-${manifestVersion(EVIDENCE)}`
+      : profile === 'lean'
+        ? `jev-gate-lean-${pkg.version}`
+        : `jev-gate-${pkg.version}`;
 const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
   let c = n;
   for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;

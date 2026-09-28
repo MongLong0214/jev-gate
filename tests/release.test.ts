@@ -31,6 +31,8 @@ const setVersion = (v: string) => {
     ['.claude-plugin/plugin.json', 'jev-gate'],
     ['mods/compact/.claude-plugin/plugin.json', 'jev-gate-compact'],
     ['mods/router/.claude-plugin/plugin.json', 'jev-gate-router'],
+    ['mods/output/.claude-plugin/plugin.json', 'jev-gate-output'],
+    ['plugins/evidence/.claude-plugin/plugin.json', 'jev-gate-evidence'],
   ] as const) json(rel, { name, version: v, type: 'module' });
   write('CHANGELOG.md', `# Changelog\n\n## v${v} — test\n\nNotes for ${v}.\n`);
 };

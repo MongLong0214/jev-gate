@@ -1,6 +1,6 @@
 {
   "name": "jev-gate-compact",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Answers auto compactions with an extractive digest and the recent tail, so compacting sends no summarizer request and has no wait; off by default.",
   "author": {
     "name": "MongLong0214",

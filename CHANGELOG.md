@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.5.0 — One evidence tool, a Vitest log folder, and compact and router fixes
+
+Unreleased: the version is raised and the jev-gate archive re-pinned; no tag, asset or marketplace publish yet.
+
+### Added
+
+- **`jev-gate-evidence` (#75–#77).** One read-only MCP tool, `jev_evidence`, in `plugins/evidence`, shipped as its own
+  archive (`node scripts/pack.mjs <out> --profile evidence`) with the MCP SDK bundled into `dist/server.mjs`. It reads
+  the one project `JEV_EVIDENCE_CONFIG` names, returns exact 40-line windows with their path, lines and file SHA-256,
+  pages with a snapshot check, and reads a returned reference back exactly. With `remote: true` and a key, a semantic
+  page goes to Jev (at most two requests of eight candidates, no retry, 1.5 s): relevant windows first, and a clearly
+  unrelated `locate` window keeps its reference but not its text. Exact-symbol lookups, read-backs, `remote: false`
+  and a missing key send nothing. A manual skill, `/jev-gate-evidence:evidence`, runs only when typed.
+  Checked on Claude Code 2.1.283 with `--plugin-dir plugins/evidence`: the server connected, the tool was listed
+  (deferred, found by ToolSearch) as `mcp__plugin_jev-gate-evidence_evidence__jev_evidence`, the skill as
+  `jev-gate-evidence:evidence`, and an `exactSymbols` call returned its windows. With `remote: true` and a real key,
+  a 16-candidate page took two Jev requests and 440 ms and folded four windows. The skill itself was not run on a host.
+- **`jev-gate-output` (#80)** is in the marketplace: it folds runs of identical lines in a passing Vitest log the host
+  persisted, off by default.
+
+### Fixed
+
+- **Compact (#79).** User-role text is kept beside tool results and quoted whole; the previous summary, user
+  messages and failed or interrupted calls are mandatory and unclipped, and when they do not fit the engine compacts
+  (`mandatory_overflow`). Failures get their own section.
+- **Router (#81).** No override after a failed step (`step_failed`) or into a subagent's later run (`next_turn`); a
+  spawn onto a model that takes no effort sends no Jev request.
+
 ## v0.4.0 — Gate A prices the request, both gates act, and a reported pass is checked
 
 This release answers the owner's review of real use on 2026-09-28, point by point.

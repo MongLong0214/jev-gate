@@ -33,6 +33,8 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     const agents = ['worker-fast', 'worker', 'worker-deep', 'worker-frontier', 'planner', 'planner-frontier', 'executor'].map((a) => `agents/${a}.md`);
     for (const must of ['dist/entry.js', 'dist/hook.js', 'dist/jev.js', 'dist/brief.js', 'dist/cli.js', 'dist/job.js', 'dist/plan.js', 'hooks/hooks.json', ...agents, '.claude-plugin/plugin.json', 'README.md']) expect(list, must).toContain(must);
     expect(list.some((f) => f.startsWith('src/') || f.startsWith('tests/') || f.startsWith('node_modules/') || f.includes('.env') && !f.endsWith('.env.example'))).toBe(false);
+    // #77: the evidence server is bundled into plugins/evidence and ships only in its own archive.
+    expect(list.filter((f) => f.includes('evidence'))).toEqual([]);
 
     const dest = join(tmp, 'installed here', 'jev gate');
     mkdirSync(dest, { recursive: true });

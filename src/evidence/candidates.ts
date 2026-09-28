@@ -96,11 +96,11 @@ const candidate = (w: Windowing, start: number, end: number): Candidate => ({
 });
 
 /**
- * Windows around hit lines: each opens a little before its first uncovered hit and runs to at most 40 lines and
- * 8 KiB, shrinking from the side away from the hit. Windows never overlap. A hit line too long for any window is
+ * Windows around hit lines: each opens `lead` lines before its first uncovered hit and runs to at most `span` lines
+ * and 8 KiB, shrinking from the side away from the hit. Windows never overlap. A hit line too long for any window is
  * reported, not cut.
  */
-const windowsAround = (w: Windowing, hits: readonly number[], set: CandidateSet): Candidate[] => {
+const windowsAround = (w: Windowing, hits: readonly number[], set: CandidateSet, span: number = LIMITS.windowLines, lead = 8): Candidate[] => {
   const out: Candidate[] = [];
   let covered = 0;
   const n = lineCount(w);
@@ -111,8 +111,8 @@ const windowsAround = (w: Windowing, hits: readonly number[], set: CandidateSet)
       covered = h;
       continue;
     }
-    let start = Math.max(1, covered + 1, h - 8);
-    let end = Math.min(n, start + LIMITS.windowLines - 1);
+    let start = Math.max(1, covered + 1, h - lead);
+    let end = Math.min(n, start + span - 1);
     while (rangeBytes(w, start, end) > LIMITS.windowBytes) {
       if (end > h) end--;
       else start++;
@@ -181,7 +181,7 @@ export const buildCandidates = (files: readonly SourceFile[], query: CandidateQu
   if (query.exactSymbols.length > 0) {
     for (const f of files) {
       const w = windowing(f);
-      push(windowsAround(w, hitLines(w, (line) => query.exactSymbols.some((s) => line.includes(s))), set));
+      push(windowsAround(w, hitLines(w, (line) => query.exactSymbols.some((s) => line.includes(s))), set, LIMITS.exactWindowLines, 3));
       if (set.capped) break;
     }
     return set;
