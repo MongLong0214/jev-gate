@@ -300,13 +300,21 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
 };
 
 /**
- * Explicit JEV_GATE_MODE=off returns before any file is read, so a broken config can never enable routing.
- * Otherwise the optional file is loaded and validated as V5 only; JEV_GATE_MODE overrides just the mode.
+ * The mode with no config file. The host exports the plugin's `gateMode` option to hooks only once the user sets it, so
+ * its manifest default is applied here: a legacy hook under the plugin (`CLAUDE_PLUGIN_ROOT`) runs `auto` with no
+ * setup. The lean artifact (`--lean`) stays opt-in, and every other caller (doctor, bench, a bare `node`) stays `off`.
  */
-export const loadConfig = (env: Env, readFile: (path: string) => string = (p) => readFileSync(p, 'utf8')): ConfigResult => {
-  const modeEnv = env['JEV_GATE_MODE'];
+export const hookDefaultMode = (env: Env, argv: readonly string[]): Mode => (env['CLAUDE_PLUGIN_ROOT'] && !argv.includes('--lean') ? 'auto' : 'off');
+
+/**
+ * Explicit JEV_GATE_MODE=off returns before any file is read, so a broken config can never enable routing.
+ * Otherwise the optional file is loaded and validated as V5 only; JEV_GATE_MODE, else the plugin's `gateMode` option,
+ * overrides just the mode. With no file the mode is `defaultMode` (see hookDefaultMode).
+ */
+export const loadConfig = (env: Env, readFile: (path: string) => string = (p) => readFileSync(p, 'utf8'), defaultMode: Mode = 'off'): ConfigResult => {
+  const modeEnv = env['JEV_GATE_MODE'] || env['CLAUDE_PLUGIN_OPTION_GATEMODE'];
   if (modeEnv === 'off') return { ok: true, config: { ...DEFAULT_CONFIG, mode: 'off' }, source: 'env:off' };
-  if (modeEnv !== undefined && modeEnv !== '' && !MODES.includes(modeEnv as Mode)) return { ok: false, error: 'JEV_GATE_MODE must be off|native|auto|lean', source: 'env' };
+  if (modeEnv !== undefined && modeEnv !== '' && !MODES.includes(modeEnv as Mode)) return { ok: false, error: 'JEV_GATE_MODE (or the gateMode option) must be off|native|auto|lean', source: 'env' };
   const path = resolveConfigPath(env);
   let text: string | null = null;
   try {
@@ -316,7 +324,7 @@ export const loadConfig = (env: Env, readFile: (path: string) => string = (p) =>
     if (code !== 'ENOENT' && code !== 'ENOTDIR') return { ok: false, error: `cannot read config: ${code ?? 'unknown'}`, source: path };
     if (env['JEV_GATE_CONFIG']) return { ok: false, error: 'JEV_GATE_CONFIG points to a missing file', source: path };
   }
-  let base: ConfigV5 = DEFAULT_CONFIG;
+  let base: ConfigV5 = defaultMode === DEFAULT_CONFIG.mode ? DEFAULT_CONFIG : { ...DEFAULT_CONFIG, mode: defaultMode };
   let source = 'defaults';
   if (text !== null) {
     let parsed: unknown;

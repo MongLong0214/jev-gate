@@ -32,6 +32,13 @@ describe('isDefinitelyOff (#48 P2)', () => {
     expect(isDefinitelyOff({ HOME } as Env)).toBe(true);
   });
 
+  it('under the plugin with no setup the legacy hook runs auto, the lean one stays off, and gateMode=off is the fast path', () => {
+    const plugin = { HOME, CLAUDE_PLUGIN_ROOT: '/p' } as Env;
+    expect(isDefinitelyOff(plugin, ['node', 'entry.js'])).toBe(false);
+    expect(isDefinitelyOff(plugin, ['node', 'entry.js', '--lean'])).toBe(true);
+    expect(isDefinitelyOff({ ...plugin, CLAUDE_PLUGIN_OPTION_GATEMODE: 'off' } as Env, ['node', 'entry.js'])).toBe(true);
+  });
+
   it('reads mode:"off" from a config file when no env override is set -- the config-file-off variant', () => {
     const cfg = configFile({ version: 5, mode: 'off' });
     expect(isDefinitelyOff({ HOME, JEV_GATE_CONFIG: cfg } as Env)).toBe(true);

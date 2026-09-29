@@ -18,18 +18,18 @@ example under `env` in `~/.claude/settings.json`):
 
 ```sh
 claude plugin marketplace add MongLong0214/jev-gate
-claude plugin install jev-gate@jev-gate --config outputEnabled=true
+claude plugin install jev-gate@jev-gate
 ```
 
 From a checkout, `claude --plugin-dir /path/to/jev-gate` loads the working tree as the whole plugin, and
 `--plugin-dir /path/to/jev-gate/mods/output` loads this module alone (option `enabled`, keyed `jev-gate-output@inline`).
 
-Off by default; off registers no hook at all. Options live under `pluginConfigs["jev-gate@jev-gate"].options`
+On by default (v0.6.3); off registers no hook at all. Options live under `pluginConfigs["jev-gate@jev-gate"].options`
 (`jev-gate@inline` for a `--plugin-dir` load).
 
 | Option | Default | Meaning |
 |---|---|---|
-| `outputEnabled` | `false` | Master switch. |
+| `outputEnabled` | `true` | Master switch. |
 
 An option it cannot use turns it off and logs the field name once per session. Each `vitest run` it looks at logs one
 `jev-output {...}` debug line: `applied` with the number of folded runs, or the reason it skipped.

@@ -43,7 +43,7 @@ import {
   type AgentPatch,
   type Eligibility,
 } from './brief.js';
-import { DEFAULT_CONFIG, effectiveDepthFloor, loadConfig, NATIVE_HOOK_TIMEOUT_MS, type Env } from './config.js';
+import { DEFAULT_CONFIG, effectiveDepthFloor, hookDefaultMode, loadConfig, NATIVE_HOOK_TIMEOUT_MS, type Env } from './config.js';
 import { readHostCompactWindow, readHostWorktreeBaseRef } from './host-window.js';
 import {
   buildLeanRequest,
@@ -395,7 +395,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
   const isAgentPre = input.hook_event_name === 'PreToolUse' && input.tool_name === 'Agent';
 
   if (deps.env['JEV_GATE_MODE'] === 'off') return isAgentPre ? preserve('mode_off') : skip('mode_off');
-  const loaded = loadConfig(deps.env);
+  const loaded = loadConfig(deps.env, undefined, hookDefaultMode(deps.env, deps.argv ?? []));
   if (!loaded.ok) return isAgentPre ? preserve('config_invalid') : skip('config_invalid');
   /**
    * #48 P1-2 review: a worker under `isolation: "worktree"` starts from the host's `worktree.baseRef`, whose default

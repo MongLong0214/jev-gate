@@ -95,7 +95,7 @@ const spawnThrough = async (hooks: Map<string, Hook>, host: ReturnType<typeof fa
 
 describe('register', () => {
   it('registers nothing when off, or when every switch is off', async () => {
-    expect([...(await registered({})).keys()]).toEqual([]);
+    expect([...(await registered({ enabled: false })).keys()]).toEqual([]);
     expect([...(await registered({ enabled: true, routeSubagentModel: false, routeSubagentEffort: false, routeMainEffort: false, routeMainModel: false })).keys()]).toEqual([]);
   });
 

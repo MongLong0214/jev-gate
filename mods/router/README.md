@@ -21,14 +21,14 @@ example under `env` in `~/.claude/settings.json`):
 
 ```sh
 claude plugin marketplace add MongLong0214/jev-gate
-claude plugin install jev-gate@jev-gate --config routerEnabled=true
+claude plugin install jev-gate@jev-gate
 ```
 
 From a checkout, `claude --plugin-dir /path/to/jev-gate` loads the working tree as the whole plugin, and
 `--plugin-dir /path/to/jev-gate/mods/router` loads the Router alone, under its own option names (`enabled`,
 `timeoutMs`, `fastModel`, …, keyed `jev-gate-router@inline`).
 
-The Router is **off by default**. With `routerEnabled` false it registers no hook at all, so the session is exactly
+The Router is **on by default** (v0.6.3; off before). With `routerEnabled` false it registers no hook at all, so the session is exactly
 native. Set the options in `/config`. They are stored in settings.json under `pluginConfigs["jev-gate@jev-gate"].options`
 (`jev-gate@inline` for a `--plugin-dir` load), except a sensitive one, which the host keeps in secure storage. The
 table names each option as the plugin does; the Router alone reads it without the `router` prefix.
@@ -52,7 +52,7 @@ Every wait, for the key or a read, ends when its turn is retired or its dispatch
 
 | Option | Default | Meaning |
 |---|---|---|
-| `routerEnabled` | `false` | Master switch. |
+| `routerEnabled` | `true` | Master switch. |
 | `routeSubagentModel` | `true` | Choose a subagent's model: an inheriting built-in that names none, or (below) any Agent call that names one. |
 | `routeExplicitSpawnModel` | `true` | Treat the model an Agent call names (`model: "opus"`) as a default the Router may move. Off, such a call keeps it (`explicit_model`). |
 | `routeSubagentEffort` | `true` | Set each subagent's effort from its spawn's answer, on every request its loop makes. |
