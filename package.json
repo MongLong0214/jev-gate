@@ -1,6 +1,6 @@
 {
   "name": "jev-gate",
-  "version": "0.6.5",
+  "version": "0.6.6",
   "private": true,
   "description": "Claude Code plugin: Jev judges the execution shape, a strong read-only planner decomposes the job, and every worker dispatch is routed to a tier.",
   "type": "module",
