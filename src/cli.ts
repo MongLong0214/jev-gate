@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -8,6 +8,7 @@ import { AUTH_CONFLICT_ENV, isSubscriptionOAuth, parseAuthStatus, subagentModelO
 import { OWNED_AGENT_PROFILES } from './agents.js';
 import { foregroundDispatchPossible } from './brief.js';
 import { DEFAULT_CONFIG, effectiveDepthFloor, LEGACY_DEPTH_FLOOR, loadConfig, MIGRATION_SAMPLE, NATIVE_HOOK_TIMEOUT_MS, type ConfigResult } from './config.js';
+import { startDashboard } from './dashboard.js';
 import { explainDir } from './explain.js';
 import { HOST_WINDOW_MAX, readHostCompactWindow, readHostWorktreeBaseRef, readSettingsEnvVar, STANDARD_CONTEXT_WINDOW } from './host-window.js';
 import { jobsDir } from './job.js';
@@ -365,12 +366,54 @@ const explain = (dir: string | undefined): void => {
   for (const line of explainDir(target)) process.stdout.write(`${line}\n`);
 };
 
+/** A shell env wins. Otherwise the same settings env the host would give the hook, and only that one name. */
+const configuredDir = (flag: string | undefined, key: string): string | null => {
+  if (flag && flag.length > 0) return flag;
+  const fromEnv = process.env[key];
+  if (fromEnv && fromEnv.length > 0) return fromEnv;
+  const found = readSettingsEnvVar(process.env, process.cwd(), key);
+  if (found && 'value' in found && found.value.length > 0) return found.value;
+  return null;
+};
+
+const flagValue = (argv: string[], name: string): string | undefined => {
+  const i = argv.indexOf(name);
+  const value = i >= 0 ? argv[i + 1] : undefined;
+  return value && !value.startsWith('--') ? value : undefined;
+};
+
+const dashboard = async (argv: string[]): Promise<void> => {
+  const portArg = flagValue(argv, '--port');
+  const port = portArg === undefined ? 4731 : Number(portArg);
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    process.stderr.write('dashboard: --port needs an integer from 0 to 65535\n');
+    process.exitCode = 2;
+    return;
+  }
+  const started = await startDashboard(
+    { traceDir: configuredDir(flagValue(argv, '--trace'), 'JEV_GATE_TRACE_DIR'), debugDir: configuredDir(flagValue(argv, '--debug'), 'CLAUDE_CODE_DEBUG_LOGS_DIR'), env: process.env },
+    port,
+  );
+  process.stdout.write(`dashboard: ${started.url}\n`);
+  process.stdout.write('local records only; nothing is sent to Jev. Ctrl-C stops it.\n');
+  if (process.platform === 'darwin' && process.env['JEV_DASHBOARD_NO_OPEN'] !== '1') {
+    const opened = spawn('open', [started.url], { stdio: 'ignore', detached: true });
+    opened.on('error', () => undefined);
+    opened.unref();
+  }
+};
+
 if (isMainModule()) {
   const argv = process.argv.slice(2);
   if (argv[0] === 'doctor') main();
   else if (argv[0] === 'explain') explain(argv[1]);
-  else {
-    process.stdout.write('usage: node dist/cli.js doctor\n       node dist/cli.js explain [trace-dir]   (default: $JEV_GATE_TRACE_DIR)\n');
+  else if (argv[0] === 'dashboard') {
+    dashboard(argv.slice(1)).catch((err: unknown) => {
+      process.stderr.write(`dashboard: ${err instanceof Error ? err.message : 'failed'}\n`);
+      process.exitCode = 1;
+    });
+  } else {
+    process.stdout.write('usage: node dist/cli.js doctor\n       node dist/cli.js explain [trace-dir]   (default: $JEV_GATE_TRACE_DIR)\n       node dist/cli.js dashboard [--port 4731] [--trace dir] [--debug dir]\n');
     process.exitCode = 2;
   }
 }

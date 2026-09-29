@@ -174,6 +174,7 @@ Doctor is not one program.
 - Checkout, after `npm run build`: `node dist/cli.js doctor` from the repository root.
 - Installed bundle: `node <plugin-dir>/dist/cli.js doctor`, where `<plugin-dir>` is the directory that contains that `dist/cli.js`.
 - Evidence, same bundle: `node <plugin-dir>/plugins/evidence/dist/server.mjs --doctor`. A standalone Evidence archive uses `node <dir>/dist/server.mjs --doctor`.
+- Follow a call while it is in flight: `node dist/cli.js dashboard` after a build. On `127.0.0.1:4731` the open stage appears when the intent is written and turns into the decision when the result file arrives. It does not call Jev and does not show the prompt. Details are in [Advanced usage](docs/advanced-usage.md#doctor-and-explain).
 
 A passing doctor means the files and the config it could read look usable. It is not model access, not source accuracy, not a valid key, and not a performance guarantee. Evidence doctor reads the config only: no source scan and no request.
 

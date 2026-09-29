@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.6.5 — Watch a call while it is in flight
+
+### Added
+
+- **A loopback page shows the open call.** `node dist/cli.js dashboard` serves `http://127.0.0.1:4731/` and watches the trace directory and `jev-router` lines in `CLAUDE_CODE_DEBUG_LOGS_DIR` (the shell env, then the same settings env the host would give a hook). An intent file with no result yet stays on screen as in flight, and the result file replaces that stage. The page copy is Korean. It does not call Jev, and it does not read prompt text, the API key, or job files. Evidence calls are not in those records. Without a trace directory the page waits on that note.
+
+### Upgrading
+
+- No config change. From a built checkout, run `node dist/cli.js dashboard`. An installed bundle has the same command at `node <plugin-dir>/dist/cli.js dashboard`.
+
 ## v0.6.4 — Checks follow the command, evidence stays bounded
 
 ### Fixed

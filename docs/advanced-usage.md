@@ -140,6 +140,8 @@ From a built checkout, `node dist/cli.js doctor` reads this tree. From an instal
 
 Doctor reports the launch profile, key presence (not validity), the role files, a model-family mismatch between config and installed frontmatter, the compaction window, the effective floor, and liveness. Liveness is `<stateRoot>/jev-gate/liveness.json`, a ring of the last 50 auto-mode admission decisions. Doctor warns when all 50 never attempted Gate A. In `off`, doctor warns that the hook process still starts; `claude plugin disable jev-gate@jev-gate` is what stops that. Explain is `node dist/cli.js explain`. Neither command calls Jev.
 
+`node dist/cli.js dashboard` serves `http://127.0.0.1:4731/` and keeps one turn on screen. It watches the trace directory and `jev-router` lines in `CLAUDE_CODE_DEBUG_LOGS_DIR` (the shell env, then the same settings env the host would give a hook). An intent file with no result yet is shown as in flight, and the result file replaces that stage. It does not call Jev, and it does not read prompt text, the API key, or job files. Evidence calls are not in those records. A missing trace directory means the page stays on the liveness note and waits.
+
 ## Checkout
 
 Not required to install.
