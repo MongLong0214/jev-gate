@@ -1273,6 +1273,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     });
     if (!reserved.ok) return preserve(reserved.code);
     if (raced !== null) return emitDeny(raced, racedText, null);
+    trace?.write('dispatch', { ...base, role: 'planner', requested_tier: eligibility.tier, requested_model: requestedModelFor(eligibility.input), pinned: eligibility.pinned, selection: mode === 'native' ? 'native' : eligibility.pinned ? 'pinned' : !apiKey ? 'key_missing' : 'gate_b' });
     // A5: a pin bypasses tier selection, so the call is left exactly as the coordinator made it.
     if (eligibility.pinned) return preserve('pinned');
     if (mode === 'native') return preserve('mode_native');
@@ -1376,6 +1377,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     });
     if (!reserved.ok) return preserve(reserved.code);
     if (raced !== null) return emitDeny(raced, renderDispatchDeny(raced), null);
+    trace?.write('dispatch', { ...base, role: 'worker', task_id: task.id, rev: plan.rev, attempt, requested_tier: eligibility.tier, requested_model: requestedModelFor(eligibility.input), pinned: eligibility.pinned, selection: mode === 'native' ? 'native' : eligibility.pinned ? 'pinned' : !apiKey ? 'key_missing' : 'gate_b', depends_on: task.depends_on });
 
     const note = (tier: Tier): string => renderRouteNote(tier);
     /**
@@ -1565,6 +1567,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         const c: { reason: DenyReason; detail: string } = conflict;
         return emitDeny(c.reason, renderDispatchDeny(c.reason, c.detail), null);
       }
+      trace?.write('dispatch', { ...base, role: 'single_worker', task_id: SINGLE_TASK_ID, requested_tier: eligibility.tier, requested_model: requestedModelFor(eligibility.input), pinned: eligibility.pinned, selection: mode === 'native' ? 'native' : eligibility.pinned ? 'pinned' : !apiKey ? 'key_missing' : 'gate_b' });
     }
     if (mode === 'native') return preserveAdhoc('mode_native');
     if (eligibility.pinned) return preserveAdhoc('pinned');
@@ -1783,11 +1786,13 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
           outcome: 'ready',
           rev,
           tasks: tasks.length,
+          graph: tasks.map((task) => ({ id: task.id, depends_on: task.depends_on, required_checks: task.checks.filter((check) => check.required).length })),
           chain_depth: plan.chain_depth,
           chain_depth_claimed: plan.chain_depth_claimed,
           planner_tier: gen.planner_tier,
           ...plannerFacts,
           retired_receipts: retired.length,
+          main_session_capabilities: plan.main_session_steps.map((step) => step.needs),
           // A23: recorded beside the adopted plan, and read by nothing. `applied: false` is inside the value.
           ...(interpretation === null ? {} : { interpretation }),
         });
@@ -1947,6 +1952,13 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         attempt,
         verdict: finalVerdict,
         verdict_reason: reason,
+        reported_checks: parsed?.ok ? {
+          pass: parsed.value.checks.filter((check) => check.result === 'pass').length,
+          fail: parsed.value.checks.filter((check) => check.result === 'fail').length,
+          not_run: parsed.value.checks.filter((check) => check.result === 'not_run').length,
+        } : null,
+        ready_task_ids: finalVerdict === 'accept' && !isSingle ? readyForDispatch(next) : [],
+        plan_complete: !isSingle && planComplete(next),
         advisory: null,
         // #48 P0-2: the same two fields the native no-job branch above records, so an orchestrated dispatch and an
         // unrecorded native one read the same way in `explain` -- what subagent_type ran, and what model it resolved

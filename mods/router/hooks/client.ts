@@ -113,7 +113,7 @@ const parseBody = (text: string): unknown => {
 
 export interface JevClient {
   /** `onLate` sees this request's usage if its reply arrives after the wait ended, alongside the client-wide one. */
-  assess: (transport: Transport, apiKey: string, state: unknown, questions: unknown, signal?: AbortSignal, onLate?: (usage: Usage | null) => void) => Promise<Assessment>;
+  assess: (transport: Transport, apiKey: string, state: unknown, questions: unknown, signal?: AbortSignal, onLate?: (usage: Usage | null) => void, onSent?: () => void) => Promise<Assessment>;
   /** Unresolved requests right now. */
   inFlight: () => number;
 }
@@ -143,7 +143,7 @@ export const createClient = (opts: ClientOptions): JevClient => {
     return { ok: true, answers: body['answers'], usage, requestBytes };
   };
 
-  const assess: JevClient['assess'] = async (transport, apiKey, state, questions, signal, onLate) => {
+  const assess: JevClient['assess'] = async (transport, apiKey, state, questions, signal, onLate, onSent) => {
     if (refused) return { ok: false, reason: 'credential_refused', usage: null, requestBytes: null, sent: false };
     // Masking would send a changed task; dropping the string would drop a constraint. Either way: no request.
     if (stringsIn(state).concat(stringsIn(questions)).some(looksSecret)) {
@@ -158,6 +158,7 @@ export const createClient = (opts: ClientOptions): JevClient => {
     if (inFlight >= MAX_IN_FLIGHT) return { ok: false, reason: 'saturated', usage: null, requestBytes, sent: false };
 
     inFlight += 1;
+    try { onSent?.(); } catch { /* observation only */ }
     const request = (async () => {
       try {
         return await transport.fetch(JEV_ENDPOINT, {

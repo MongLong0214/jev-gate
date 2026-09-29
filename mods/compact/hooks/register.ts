@@ -4,6 +4,8 @@ import type { CompactConfig } from './config.ts';
 import { resolveCompactConfig } from './config.ts';
 import { assemble, buildDigest } from './digest.ts';
 
+let sequence = 0;
+
 /** Bookkeeping never stands between the host and its own event. */
 const quietly = (f: () => void): void => {
   try {
@@ -36,14 +38,17 @@ export const registerCompact = (on: On, config: CompactConfig): void => {
   if (!config.enabled) return;
 
   on('session.compact', async ($, e, next) => {
+    const runId = `${Date.now()}-${++sequence}`;
     const log = (fields: Record<string, unknown>): void =>
-      quietly(() => $.ui.log(`jev-compact ${JSON.stringify({ event: 'compact', mode: config.mode, trigger: e.trigger, subagent: e.agentId !== undefined, ...fields })}`, { to: 'debug' }));
+      quietly(() => $.ui.log(`jev-compact ${JSON.stringify({ event: 'compact', run_id: runId, mode: config.mode, trigger: e.trigger, subagent: e.agentId !== undefined, ...fields })}`, { to: 'debug' }));
     const handled = e.trigger === 'auto' || (e.trigger === 'manual' && config.manual);
     const deferred = !handled ? 'trigger' : e.agentId !== undefined && !config.subagents ? 'subagent' : e.trigger === 'manual' && e.instructions ? 'instructions' : null;
     if (deferred) {
       log({ deferred });
       return next(e);
     }
+
+    log({ stage: 'started', messages: e.messages.length });
 
     const t0 = Date.now();
     // Its own failure, building or assembling, leaves the compaction to the engine; the engine's is never retried.

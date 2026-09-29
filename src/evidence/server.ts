@@ -1,11 +1,13 @@
 import { realpathSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ErrorCode, ListToolsRequestSchema, McpError, type CallToolResult, type Tool } from '@modelcontextprotocol/sdk/types.js';
 
-import { createEvidenceService, type EvidenceReply, type EvidenceServiceDeps } from './service.js';
+import { createEvidenceService, parseRequest, type EvidenceReply, type EvidenceServiceDeps } from './service.js';
+import { openTraceDir, type TraceWriter } from '../trace.js';
 import { loadConfig, type ConfigLoad } from './source.js';
 import { LIMITS, MODES, type EvidenceConfig } from './types.js';
 
@@ -72,7 +74,7 @@ const toolResult = (reply: EvidenceReply): CallToolResult => {
 };
 
 /** One server, one tool, one service: the call and HTTP bounds hold across every request this process serves. */
-export const createServer = (load: ConfigLoad, deps: EvidenceServiceDeps): Server => {
+export const createServer = (load: ConfigLoad, deps: EvidenceServiceDeps & { trace?: TraceWriter }): Server => {
   const config = load.ok ? load.config : null;
   const service = createEvidenceService(config, deps);
   const server = new Server({ name: 'jev-evidence', version: SERVER_VERSION }, { capabilities: { tools: {} } });
@@ -86,7 +88,57 @@ export const createServer = (load: ConfigLoad, deps: EvidenceServiceDeps): Serve
   server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: [tool] }));
   server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     if (request.params.name !== TOOL_NAME) throw new McpError(ErrorCode.InvalidParams, `unknown tool ${JSON.stringify(request.params.name.slice(0, 64))}`);
-    return toolResult(await service.run(request.params.arguments ?? {}, extra.signal));
+    const callId = randomUUID();
+    const parsed = parseRequest(request.params.arguments ?? {});
+    const base = {
+      request_id: callId,
+      component: 'evidence',
+      kind: parsed.ok ? parsed.input.kind : 'invalid',
+      mode: parsed.ok && parsed.input.kind === 'search' ? parsed.input.mode : null,
+      remote_configured: config?.remote === true,
+      key_present: deps.apiKey !== null,
+    };
+    deps.trace?.write('evidence_start', base);
+    let remoteCalls = 0;
+    let cacheHits = 0;
+    const started = Date.now();
+    const reply = await service.run(request.params.arguments ?? {}, extra.signal, (event) => {
+      const remote = { ...base, request_id: `${callId}:${event.batch}`, parent_request_id: callId, batch: event.batch, candidates: event.candidates };
+      if (event.phase === 'cache') {
+        cacheHits++;
+        deps.trace?.write('evidence_cache', remote);
+      } else if (event.phase === 'intent') {
+        remoteCalls++;
+        deps.trace?.write('evidence_jev_intent', remote);
+      } else {
+        deps.trace?.write('evidence_jev_result', {
+          ...remote,
+          attempted: true,
+          http: { status: event.status, code: event.code, duration_ms: event.duration_ms },
+          jev: { model: event.model, usage: event.usage },
+        });
+      }
+    });
+    deps.trace?.write('evidence_result', {
+      ...base,
+      status: reply.result.status,
+      backend: reply.result.backend,
+      is_error: reply.isError,
+      duration_ms: Date.now() - started,
+      remote_calls: remoteCalls,
+      cache_hits: cacheHits,
+      items: reply.result.items.length,
+      reason_codes: reply.result.reasonCodes,
+      coverage: {
+        files_total: reply.result.coverage.filesTotal,
+        read_files: reply.result.coverage.readFiles,
+        candidates: reply.result.coverage.candidates,
+        page_candidates: reply.result.coverage.pageCandidates,
+        unjudged_on_page: reply.result.coverage.unjudgedOnPage,
+        omitted_bodies: reply.result.coverage.omittedBodies,
+      },
+    });
+    return toolResult(reply);
   });
   return server;
 };
@@ -114,7 +166,9 @@ const main = async (): Promise<void> => {
     return;
   }
   process.stderr.write(`jev-evidence: config ${load.ok ? 'ok' : `unavailable (${load.reason})`} (${load.origin}), remote ${load.ok && load.config.remote ? 'on' : 'off'}, key ${env['TYPESAFE_API_KEY'] ? 'present' : 'absent'}\n`);
-  const server = createServer(load, { apiKey: env['TYPESAFE_API_KEY'] || null });
+  const traceDir = env['JEV_GATE_TRACE_DIR'];
+  const opened = traceDir ? openTraceDir(traceDir) : null;
+  const server = createServer(load, { apiKey: env['TYPESAFE_API_KEY'] || null, ...(opened?.ok ? { trace: opened.writer } : {}) });
   await server.connect(new StdioServerTransport());
 };
 

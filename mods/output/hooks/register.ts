@@ -1,6 +1,8 @@
 import type { On, Register } from 'claude-code';
 
 import type { OutputConfig } from './config.ts';
+
+let sequence = 0;
 import { resolveOutputConfig } from './config.ts';
 import { foldVitest, isVitestCommand, MAX_BYTES, MIN_SAVING, utf8Bytes, withNote } from './filter.ts';
 
@@ -37,10 +39,15 @@ export const registerOutput = (on: On, config: OutputConfig): void => {
   if (!config.enabled) return;
 
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
-    const ran = await next(e);
-    if (!isVitestCommand(e.command)) return ran;
+    if (!isVitestCommand(e.command)) return next(e);
+    const runId = `${Date.now()}-${++sequence}`;
     const log = (fields: Record<string, unknown>): void =>
-      quietly(() => $.ui.log(`jev-output ${JSON.stringify({ event: 'output', parser: 'vitest', ...fields })}`, { to: 'debug' }));
+      quietly(() => $.ui.log(`jev-output ${JSON.stringify({ event: 'output', run_id: runId, parser: 'vitest', ...fields })}`, { to: 'debug' }));
+    log({ stage: 'started' });
+    const ran = await next(e).catch((error: unknown) => {
+      log({ skipped: 'host_error' });
+      throw error;
+    });
     try {
       if (ran.deny !== undefined || ran.isError === true || ran.text === undefined) {
         log({ skipped: 'not_completed' });

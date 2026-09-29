@@ -7,6 +7,7 @@ import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import { SERVER_VERSION, TOOL_NAME } from '../../src/evidence/server.js';
 import { LIMITS, type EvidenceResult } from '../../src/evidence/types.js';
+import { readTraceRecords } from '../../src/explain.js';
 import { configFile, repo, tmp } from './repo.js';
 
 const root = join(__dirname, '..', '..');
@@ -61,6 +62,20 @@ const call = async (client: Client, args: Record<string, unknown>, signal?: Abor
 };
 
 describe('jev_evidence over stdio (#77)', () => {
+  it('records a private start and result for a local call without storing the goal or source text', async () => {
+    const trace = join(tmp, 'evidence trace');
+    mkdirSync(trace, { recursive: true });
+    const client = await connect({ JEV_EVIDENCE_CONFIG: cfg, JEV_GATE_TRACE_DIR: trace });
+    const reply = await call(client, { goal: 'PRIVATE_EVIDENCE_PROMPT', exactSymbols: ['findMe'] });
+    expect(reply.body.items.length).toBeGreaterThan(0);
+    const records = readTraceRecords(trace).records;
+    expect(records.map((r) => r['phase'])).toEqual(['evidence_start', 'evidence_result']);
+    expect(records[0]?.['request_id']).toBe(records[1]?.['request_id']);
+    expect(records[1]).toMatchObject({ backend: 'local', remote_calls: 0, cache_hits: 0 });
+    expect(JSON.stringify(records)).not.toContain('PRIVATE_EVIDENCE_PROMPT');
+    expect(JSON.stringify(records)).not.toContain('export const findMe');
+  });
+
   it('ships one version across the server, its manifest and the package', () => {
     const manifest = JSON.parse(readFileSync(join(root, 'plugins', 'evidence', '.claude-plugin', 'plugin.json'), 'utf8')) as { name: string; version: string };
     expect(manifest).toMatchObject({ name: 'jev-gate-evidence', version: SERVER_VERSION });

@@ -402,7 +402,7 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     const questions = buildQuestions(dims);
     if (!questions) return { kind: 'skipped', reason: 'nothing_to_change' };
     const onLate = (usage: Usage | null): void => log(engine, { event: 'late', ...late, usage: loggable(usage) });
-    const res = await client.assess(engine, key, buildState(task), questions, signal, onLate);
+    const res = await client.assess(engine, key, buildState(task), questions, signal, onLate, () => log(engine, { event: 'request', ...late, sent: true }));
     if (!res.ok)
       return { kind: 'assessed', assessment: res.reason, usage: res.usage, sent: res.sent, answers: null, validated: null, patch: {}, model: 'not_asked', effort: 'not_asked' };
     const answers = validateAnswers(res.answers, questions);
