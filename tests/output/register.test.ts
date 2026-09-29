@@ -113,7 +113,11 @@ describe('register', () => {
     expect(stdout).toContain(`${MARK} the line above, 300 times in a row`);
     expect(stdout).toContain(' ↓ tests/logs.test.ts > parser > skipped one');
     expect(Buffer.byteLength(stdout) + 512).toBeLessThanOrEqual(Buffer.byteLength(ran.text));
-    expect(h.lines()).toEqual([{ event: 'output', parser: 'vitest', applied: true, runs: 1 }]);
+    expect(h.lines()).toEqual([
+      { event: 'output', parser: 'vitest', stage: 'started', run_id: expect.any(String) },
+      { event: 'output', parser: 'vitest', applied: true, runs: 1, run_id: expect.any(String) },
+    ]);
+    expect(h.lines()[0]?.['run_id']).toBe(h.lines()[1]?.['run_id']);
   });
 
   it('keeps the context the host resolved with', async () => {
@@ -149,7 +153,10 @@ describe('register', () => {
       expect(calls).toHaveLength(1);
       expect(h.reads.length > 0).toBe(read);
       expect(h.fetched).toEqual([]);
-      expect(h.lines()).toEqual([{ event: 'output', parser: 'vitest', skipped }]);
+      expect(h.lines()).toEqual([
+        { event: 'output', parser: 'vitest', stage: 'started', run_id: expect.any(String) },
+        { event: 'output', parser: 'vitest', skipped, run_id: expect.any(String) },
+      ]);
     }
   });
 
@@ -159,7 +166,10 @@ describe('register', () => {
     const h = fakeHost({ [PATH]: failing });
     const ran = persisted({ persistedOutputSize: Buffer.byteLength(failing) });
     expect(await hook(h.$, CALL, nextOf(ran).next)).toBe(ran);
-    expect(h.lines()).toEqual([{ event: 'output', parser: 'vitest', skipped: 'format' }]);
+    expect(h.lines()).toEqual([
+      { event: 'output', parser: 'vitest', stage: 'started', run_id: expect.any(String) },
+      { event: 'output', parser: 'vitest', skipped: 'format', run_id: expect.any(String) },
+    ]);
   });
 
   it('any other command is not looked at: no read, no log', async () => {

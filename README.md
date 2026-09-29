@@ -9,7 +9,7 @@
 
 </div>
 
-One plugin for Claude Code: evidence search, context compaction, output folding, and task routing. Jev makes a narrow judgement. Claude Code does the work.
+One Claude Code plugin for task routing, evidence search, context compaction, and readable tool output. Jev returns fast, typed judgments; code applies the policy; Claude Code does the work. The local dashboard lets you inspect each recorded step as it happens.
 
 The gate can change delegation and what the root session is allowed to run while a job is admitted. The session's model stays whatever Claude Code already set. Results vary by task. No general saving is guaranteed.
 
@@ -48,6 +48,33 @@ Three different gaps:
 Every part defaults to on. That does not mean every prompt is compacted, folded, routed, or delegated. Gate often stays native: a direct admission, a shallow session, a missing key, or no `prompt_id` are different cases, and none of them is a failure of the install. `gateMode` `off` does not turn the other parts off. There is no master switch and no `evidenceEnabled` option.
 
 End the session and start Claude Code again after changing settings. There is no setup command.
+
+## See it work live
+
+The dashboard runs on your machine and opens in your browser. Its four lanes show the **Gate** (admission, plan, tier allocation, workers, and root guard), the separate **Lean** handoff, the independent **Router / Compact / Output** hooks, and **Evidence** search. Select any stage to read what it does, when it runs, whether it calls Jev, and the recorded outcome. The timeline separates the Jev request and response from the code decision and the host's execution. Korean/English and light/dark controls are in the top right.
+
+1. **Record new activity.** Add these absolute directories to the same settings `env` as above, then restart Claude Code. The trace directory is used by Gate and Evidence; point the debug variable to the host debug directory used by Router, Compact, and Output. For a macOS default install, inspect `~/.claude/debug` first. Replace both example paths with paths on your machine.
+
+   ```json
+   {
+     "env": {
+       "JEV_GATE_TRACE_DIR": "/absolute/path/to/jev-traces",
+       "CLAUDE_CODE_DEBUG_LOGS_DIR": "/absolute/path/to/claude-debug"
+     }
+   }
+   ```
+
+2. **Run a request in Claude Code.** A feature appears as *observed* when that feature emits a record. A configured source with no event says *awaiting record*. A missing or unreadable source says *source unavailable*. Previously unrecorded activity cannot be reconstructed.
+
+3. **Open the dashboard.** From a built checkout, run `node dist/cli.js dashboard`. For a marketplace install, find the current installed path with `claude plugin list --json` (`installPath` for `jev-gate@jev-gate`) and run:
+
+   ```sh
+   node "<installPath>/dist/cli.js" dashboard
+   ```
+
+   On macOS the command opens `http://127.0.0.1:4731/` automatically; elsewhere, open the printed URL. Keep the terminal running and press Ctrl-C to stop. Use `--port`, `--trace`, or `--debug` to override the defaults. The page does not send requests to Jev or expose prompts, source bodies, or API keys.
+
+**How to read the numbers:** the latency strip uses measured Jev response times, not a simulated speed value. An intent without a result becomes *unconfirmed*; missing usage is unknown rather than zero. A projected token saving in Gate A is a routing estimate, not measured savings. Compact and Output run locally without Jev. The dashboard shows what the available records prove, so a quiet feature is not necessarily disabled. See [recording details and limits](docs/advanced-usage.md#doctor-and-explain).
 
 ## The five parts
 
@@ -174,7 +201,7 @@ Doctor is not one program.
 - Checkout, after `npm run build`: `node dist/cli.js doctor` from the repository root.
 - Installed bundle: `node <plugin-dir>/dist/cli.js doctor`, where `<plugin-dir>` is the directory that contains that `dist/cli.js`.
 - Evidence, same bundle: `node <plugin-dir>/plugins/evidence/dist/server.mjs --doctor`. A standalone Evidence archive uses `node <dir>/dist/server.mjs --doctor`.
-- Follow a call while it is in flight: `node dist/cli.js dashboard` after a build. On `127.0.0.1:4731` the open stage appears when the intent is written and turns into the decision when the result file arrives. It does not call Jev and does not show the prompt. Details are in [Advanced usage](docs/advanced-usage.md#doctor-and-explain).
+- Dashboard: follow [See it work live](#see-it-work-live) to open the local page and interpret its records.
 
 A passing doctor means the files and the config it could read look usable. It is not model access, not source accuracy, not a valid key, and not a performance guarantee. Evidence doctor reads the config only: no source scan and no request.
 

@@ -2,6 +2,7 @@ import { callJev, topChoices, validateChoice, type JevRequest } from '../jev.js'
 import { estimateTokens } from '../lean.js';
 import { looksSecret } from '../lean-source.js';
 import type { ChoiceAnswer } from '../types.js';
+import type { JevUsage } from '../types.js';
 import type { JudgementCache } from './cache.js';
 import type { Candidate } from './candidates.js';
 import { sha256Hex } from './source.js';
@@ -33,7 +34,14 @@ export interface SelectorDeps {
   http: { active: number };
   fetchImpl?: typeof fetch;
   now: () => number;
+  /** Metadata only. The observer cannot change a decision or block a remote request. */
+  observeRemote?: (event: EvidenceRemoteEvent) => void;
 }
+
+export type EvidenceRemoteEvent =
+  | { phase: 'cache'; batch: number; candidates: number }
+  | { phase: 'intent'; batch: number; candidates: number }
+  | { phase: 'result'; batch: number; candidates: number; status: number | null; code: string | null; duration_ms: number | null; model: string | null; usage: JevUsage | null };
 
 export interface Selection {
   /** Keyed by the candidate's index on the page. */
@@ -78,7 +86,7 @@ export const selectPage = async (
     return !unsafe;
   });
 
-  const batches: Array<{ key: string; members: typeof sendable; request: JevRequest<EvidenceState, Record<string, unknown>> }> = [];
+  const batches: Array<{ batch: number; key: string; members: typeof sendable; request: JevRequest<EvidenceState, Record<string, unknown>> }> = [];
   for (let i = 0; i < sendable.length && batches.length < LIMITS.httpPerCall; i += LIMITS.batch) {
     const members = sendable.slice(i, i + LIMITS.batch);
     const build = (ms: typeof members): JevRequest<EvidenceState, Record<string, unknown>> => {
@@ -99,7 +107,7 @@ export const selectPage = async (
     const key = sha256Hex(
       JSON.stringify([RUBRIC_VERSION, EVIDENCE_MODEL, scopeKey, goal, constraints, members.map(({ c }) => [c.path, c.startLine, c.endLine, c.fileSha256, sha256Hex(c.text)])]),
     );
-    batches.push({ key, members, request });
+    batches.push({ batch: batches.length + 1, key, members, request });
   }
 
   const apply = (members: typeof sendable, answers: Record<string, ChoiceAnswer<Judgement>>): void =>
@@ -110,7 +118,10 @@ export const selectPage = async (
 
   const pending = batches.filter((b) => {
     const hit = deps.cache.get(b.key);
-    if (hit) apply(b.members, hit);
+    if (hit) {
+      apply(b.members, hit);
+      try { deps.observeRemote?.({ phase: 'cache', batch: b.batch, candidates: b.members.length }); } catch { /* observation is advisory */ }
+    }
     return !hit;
   });
   const results = await Promise.all(
@@ -120,7 +131,19 @@ export const selectPage = async (
       if (deps.http.active >= LIMITS.concurrentHttp) return { b, outcome: 'no_slot' as const };
       deps.http.active++;
       try {
-        return { b, outcome: await callJev(b.request, { apiKey: deps.apiKey, deadlineMs: Math.min(ms, LIMITS.remoteMs), signal, ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}) }) };
+        try { deps.observeRemote?.({ phase: 'intent', batch: b.batch, candidates: b.members.length }); } catch { /* observation is advisory */ }
+        const outcome = await callJev(b.request, { apiKey: deps.apiKey, deadlineMs: Math.min(ms, LIMITS.remoteMs), signal, ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}) });
+        try {
+          deps.observeRemote?.({
+            phase: 'result', batch: b.batch, candidates: b.members.length,
+            status: outcome.status,
+            code: outcome.ok ? null : outcome.code,
+            duration_ms: outcome.durationMs,
+            model: outcome.ok ? outcome.response.model : outcome.model ?? null,
+            usage: outcome.ok ? outcome.response.usage : outcome.usage ?? null,
+          });
+        } catch { /* observation is advisory */ }
+        return { b, outcome };
       } finally {
         deps.http.active--;
       }

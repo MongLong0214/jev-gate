@@ -1,7 +1,7 @@
 import type { ChoiceAnswer } from '../types.js';
 import { createJudgementCache, type JudgementCache } from './cache.js';
 import { buildCandidates, LEXICAL_TERM_DETAIL, lineStarts, planLexical, sliceLines, snapshotId, yieldToEventLoop, type Candidate, type SourceFile } from './candidates.js';
-import { selectPage, type Selection } from './selector.js';
+import { selectPage, type EvidenceRemoteEvent, type Selection } from './selector.js';
 import { excluded, exists, globToRegExp, listFiles as listProjectFiles, normalizeRelative, readSource as readProjectFile, within, type ReadOutcome } from './source.js';
 import {
   LIMITS,
@@ -227,7 +227,7 @@ export interface EvidenceServiceDeps {
 }
 
 export interface EvidenceService {
-  run: (raw: unknown, signal: AbortSignal) => Promise<EvidenceReply>;
+  run: (raw: unknown, signal: AbortSignal, observeRemote?: (event: EvidenceRemoteEvent) => void) => Promise<EvidenceReply>;
 }
 
 /**
@@ -245,7 +245,7 @@ export const createEvidenceService = (config: EvidenceConfig | null, deps: Evide
 
   const cancelled = (): EvidenceReply => refuse(config?.projectRoot ?? null, 'cancelled', undefined, 'cancelled');
 
-  const search = async (cfg: EvidenceConfig, input: SearchInput, signal: AbortSignal): Promise<EvidenceReply> => {
+  const search = async (cfg: EvidenceConfig, input: SearchInput, signal: AbortSignal, observeRemote?: (event: EvidenceRemoteEvent) => void): Promise<EvidenceReply> => {
     const root = cfg.projectRoot;
     const deadline = now() + LIMITS.deadlineMs;
     const semantic = input.exactSymbols.length === 0;
@@ -354,7 +354,7 @@ export const createEvidenceService = (config: EvidenceConfig | null, deps: Evide
     else if (semantic && deps.apiKey === null) reason('missing_key');
     else if (remote && page.length > 0 && !cpuStopped && now() < deadline) {
       const scopeKey = JSON.stringify([root, scope, cfg.excludeGlobs, input.mode]);
-      selection = await selectPage(input.goal, input.constraints, page, scopeKey, publishBy, signal, { apiKey: deps.apiKey!, cache, http, now, ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}) });
+      selection = await selectPage(input.goal, input.constraints, page, scopeKey, publishBy, signal, { apiKey: deps.apiKey!, cache, http, now, ...(observeRemote ? { observeRemote } : {}), ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}) });
       if (selection.cancelled || signal.aborted) return cancelled();
       selection.reasons.forEach(reason);
     } else if (remote && page.length > 0 && !cpuStopped) reason('deadline');
@@ -463,7 +463,7 @@ export const createEvidenceService = (config: EvidenceConfig | null, deps: Evide
   };
 
   return {
-    run: async (raw, signal) => {
+    run: async (raw, signal, observeRemote) => {
       if (!config) return refuse(null, 'unavailable_config', 'the evidence server has no valid config; run the server with --doctor');
       if (signal.aborted) return cancelled();
       const parsed = parseRequest(raw);
@@ -471,7 +471,7 @@ export const createEvidenceService = (config: EvidenceConfig | null, deps: Evide
       if (active >= LIMITS.concurrentCalls) return refuse(config.projectRoot, 'busy', 'two evidence calls are already running; retry after one finishes');
       active++;
       try {
-        const reply = parsed.input.kind === 'sources' ? await readSources(config, parsed.input, signal) : await search(config, parsed.input, signal);
+        const reply = parsed.input.kind === 'sources' ? await readSources(config, parsed.input, signal) : await search(config, parsed.input, signal, observeRemote);
         // A cancellation seen only after the last read is still a cancellation, never a local success.
         return signal.aborted ? cancelled() : reply;
       } finally {

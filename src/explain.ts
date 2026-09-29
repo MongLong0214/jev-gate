@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { closeSync, constants, fstatSync, openSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
@@ -36,12 +36,21 @@ export const readTraceRecords = (dir: string): TraceRead => {
   }
   for (const name of names.sort()) {
     if (!name.endsWith('.json') || name.startsWith('.')) continue;
+    let fd: number | undefined;
     try {
-      const parsed: unknown = JSON.parse(readFileSync(join(dir, name), 'utf8'));
+      fd = openSync(join(dir, name), constants.O_RDONLY | constants.O_NOFOLLOW);
+      const stat = fstatSync(fd);
+      if (!stat.isFile() || stat.size > 512_000) {
+        unreadable++;
+        continue;
+      }
+      const parsed: unknown = JSON.parse(readFileSync(fd, 'utf8'));
       if (isRecord(parsed)) records.push(parsed);
       else unreadable++;
     } catch {
       unreadable++;
+    } finally {
+      if (fd !== undefined) closeSync(fd);
     }
   }
   // `written_at` is an ISO string, so lexical order is chronological; the read order breaks ties stably.

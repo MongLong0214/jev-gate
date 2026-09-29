@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import type { Env } from './config.js';
 import { readTraceRecords } from './explain.js';
 import { readLiveness } from './liveness.js';
+import { buildOperations, type DebugRecord, type OperationsView } from './operations.js';
 
 /**
  * A local view of calls the gate and the router already recorded. It whitelists short tokens from those records.
@@ -14,7 +15,7 @@ const MAX_DEBUG_BYTES = 2_000_000;
 const MAX_EVENTS = 120;
 const TOKEN = /^[A-Za-z0-9_.:/+@-]{1,80}$/;
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
-const ROUTER_PREFIX = 'jev-router ';
+const DEBUG_PREFIX = /jev-(router|compact|output) /;
 
 const REASON: Record<string, string> = {
   admission_not_worth: '위임해도 계산상 이득이 없어 이 세션이 직접 처리합니다',
@@ -66,6 +67,7 @@ export interface ActivitySnapshot {
   orchestrated: number;
   routerChanges: number;
   events: ActivityEvent[];
+  operations: OperationsView;
   /** The turn on screen. An intent with no result yet is `working` until the result file appears. */
   live: LiveBoard;
   notes: string[];
@@ -121,6 +123,17 @@ const thousands = (n: number): string => Math.round(n).toLocaleString('en-US');
 const isSymlink = (p: string): boolean => {
   try {
     return lstatSync(p).isSymbolicLink();
+  } catch {
+    return false;
+  }
+};
+
+const readableDir = (path: string | null): boolean => {
+  if (path === null || isSymlink(path)) return false;
+  try {
+    if (!statSync(path).isDirectory()) return false;
+    readdirSync(path);
+    return true;
   } catch {
     return false;
   }
@@ -307,16 +320,17 @@ const routerChanged = (r: Rec): boolean => {
   return false;
 };
 
-const readRouter = (dir: string): { rows: Array<{ at: string; rec: Rec }>; notes: string[] } => {
+const readRouter = (dir: string): { rows: Array<{ at: string; rec: Rec }>; all: DebugRecord[]; notes: string[] } => {
   const notes: string[] = [];
-  if (isSymlink(dir)) return { rows: [], notes: ['라우터 디버그 디렉터리가 심볼릭 링크라 읽지 않습니다'] };
+  if (isSymlink(dir)) return { rows: [], all: [], notes: ['호스트 디버그 디렉터리가 심볼릭 링크라 읽지 않습니다'] };
   let names: string[];
   try {
     names = readdirSync(dir);
   } catch {
-    return { rows: [], notes: ['라우터 디버그 디렉터리를 열 수 없습니다'] };
+    return { rows: [], all: [], notes: ['호스트 디버그 디렉터리를 열 수 없습니다'] };
   }
   const rows: Array<{ at: string; rec: Rec }> = [];
+  const all: DebugRecord[] = [];
   let unparsed = 0;
   let skippedLarge = 0;
   for (const name of names) {
@@ -343,11 +357,15 @@ const readRouter = (dir: string): { rows: Array<{ at: string; rec: Rec }>; notes
     for (const line of text.split('\n')) {
       const atMatch = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)/.exec(line);
       const at = atMatch?.[1] ?? '';
-      const i = line.indexOf(ROUTER_PREFIX);
-      if (i < 0) continue;
+      const match = DEBUG_PREFIX.exec(line);
+      if (!match || !match[1]) continue;
+      const component = match[1] as DebugRecord['component'];
       try {
-        const parsed: unknown = JSON.parse(line.slice(i + ROUTER_PREFIX.length));
-        if (isRecord(parsed)) rows.push({ at, rec: parsed });
+        const parsed: unknown = JSON.parse(line.slice(match.index + match[0].length));
+        if (isRecord(parsed)) {
+          all.push({ at, component, rec: parsed });
+          if (component === 'router') rows.push({ at, rec: parsed });
+        }
         else unparsed++;
       } catch {
         unparsed++;
@@ -356,13 +374,13 @@ const readRouter = (dir: string): { rows: Array<{ at: string; rec: Rec }>; notes
   }
   if (skippedLarge > 0) notes.push(`라우터 디버그 ${skippedLarge}개는 ${MAX_DEBUG_BYTES}바이트를 넘겨 건너뛰었습니다`);
   if (unparsed > 0) notes.push(`라우터 줄 ${unparsed}개는 JSON으로 읽지 못했습니다`);
-  return { rows, notes };
+  return { rows, all, notes };
 };
 
 const NOTES = [
   '프롬프트 원문, API 키, 작업 파일은 읽지 않습니다.',
   '가격의 토큰 수는 게이트가 위임을 고를 때 쓴 계산이고, 측정된 절감이나 청구액이 아닙니다.',
-  'Evidence의 Jev 호출은 이 화면에 없습니다. 게이트 추적과 라우터 디버그 로그만 봅니다.',
+  'Evidence는 같은 JEV_GATE_TRACE_DIR을 받은 새 서버의 호출부터 기록됩니다. Compact·Output·Router는 호스트 디버그 로그를 사용합니다.',
 ];
 
 /** A result file is written after the HTTP call. Past this, an intent with no result is not still in flight. */
@@ -516,12 +534,15 @@ export const loadActivity = (opts: { traceDir: string | null; debugDir: string |
   const events: ActivityEvent[] = [];
   const gateRecords: Rec[] = [];
   const routerRows: Array<{ at: string; rec: Rec }> = [];
+  const debugRows: DebugRecord[] = [];
   let traceFiles = 0;
   let unreadable = 0;
   let jevCalls = 0;
   let direct = 0;
   let orchestrated = 0;
   let routerChanges = 0;
+  const traceAvailable = readableDir(opts.traceDir);
+  const debugAvailable = readableDir(opts.debugDir);
 
   if (opts.traceDir === null) notes.push('게이트 추적 디렉터리가 없습니다. 최근 50건의 시도 여부만 liveness에 있습니다.');
   else if (isSymlink(opts.traceDir)) notes.push('게이트 추적 디렉터리가 심볼릭 링크라 읽지 않습니다.');
@@ -547,6 +568,7 @@ export const loadActivity = (opts: { traceDir: string | null; debugDir: string |
   if (opts.debugDir !== null) {
     const router = readRouter(opts.debugDir);
     notes.push(...router.notes);
+    debugRows.push(...router.all);
     for (const row of router.rows) {
       routerRows.push(row);
       if (row.rec['sent'] === true) jevCalls++;
@@ -559,6 +581,10 @@ export const loadActivity = (opts: { traceDir: string | null; debugDir: string |
   events.sort((a, b) => b.at.localeCompare(a.at));
   const now = opts.now ?? new Date();
   const liveness = readLiveness(opts.env);
+  const operations = buildOperations(gateRecords, debugRows, now, {
+    trace: traceAvailable,
+    debug: debugAvailable,
+  });
   return {
     at: now.toISOString(),
     traceDir: opts.traceDir,
@@ -571,6 +597,7 @@ export const loadActivity = (opts: { traceDir: string | null; debugDir: string |
     orchestrated,
     routerChanges,
     events: events.slice(0, MAX_EVENTS),
+    operations,
     live: buildLive(gateRecords, routerRows, now.getTime()),
     notes,
   };

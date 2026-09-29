@@ -71,7 +71,9 @@ describe('register', () => {
     const e = { trigger: 'auto', messages: conversation() };
     expect(await hook($, e, next)).toBe(CORE);
     expect(calls).toEqual([e]);
-    const line = JSON.parse(logs[0]!.replace(/^jev-compact /, '')) as Record<string, unknown>;
+    const start = JSON.parse(logs[0]!.replace(/^jev-compact /, '')) as Record<string, unknown>;
+    const line = JSON.parse(logs[1]!.replace(/^jev-compact /, '')) as Record<string, unknown>;
+    expect(start).toMatchObject({ stage: 'started', run_id: line['run_id'], mode: 'shadow' });
     expect(line).toMatchObject({ mode: 'shadow', trigger: 'auto', subagent: false, applied: false, tokensBefore: 180000, usage: { output_tokens: 9000 } });
     expect(typeof line['digestChars']).toBe('number');
     expect(typeof line['coreMs']).toBe('number');
@@ -98,7 +100,7 @@ describe('register', () => {
     await on($, { trigger: 'auto', agentId: 'a1', messages: conversation() }, next);
     await on($, { trigger: 'auto', messages: [{ role: 'user', text: 'hi', toolUses: [] }] }, next);
     expect(calls).toHaveLength(4);
-    const why = logs.map((l) => JSON.parse(l.replace(/^jev-compact /, '')) as Record<string, unknown>).map((x) => x['deferred'] ?? x['fallback']);
+    const why = logs.map((l) => JSON.parse(l.replace(/^jev-compact /, '')) as Record<string, unknown>).filter((x) => x['stage'] !== 'started').map((x) => x['deferred'] ?? x['fallback']);
     expect(why).toEqual(['trigger', 'trigger', 'subagent', 'nothing_to_compact']);
     const manual = (await hooksFor({ enabled: true, mode: 'active', compactManual: true })).get('session.compact')!;
     await manual($, { trigger: 'manual', instructions: 'keep the plan', messages: conversation() }, next);
@@ -115,7 +117,7 @@ describe('register', () => {
     ];
     logs.length = 0;
     await expect(hook($, { trigger: 'auto', messages: huge }, async () => Promise.reject(new Error('no assistant messages')))).rejects.toThrow('no assistant messages');
-    expect(JSON.parse(logs[0]!.replace(/^jev-compact /, ''))).toMatchObject({ applied: false, fallback: 'tail_too_large', coreError: true });
+    expect(JSON.parse(logs.at(-1)!.replace(/^jev-compact /, ''))).toMatchObject({ applied: false, fallback: 'tail_too_large', coreError: true });
   });
 
   it('a throwing log does not stand between the host and its compaction', async () => {
@@ -137,7 +139,7 @@ describe('register', () => {
     logs.length = 0;
     expect(await hook($, { trigger: 'auto', messages: broken }, next)).toBe(CORE);
     expect(calls).toHaveLength(1);
-    expect(JSON.parse(logs[0]!.replace(/^jev-compact /, ''))).toMatchObject({ applied: false, fallback: 'error' });
+    expect(JSON.parse(logs.at(-1)!.replace(/^jev-compact /, ''))).toMatchObject({ applied: false, fallback: 'error' });
     const lone = [{ role: 'user', text: 'hi', toolUses: [] }];
     for (const mode of ['shadow', 'active']) {
       const on = (await hooksFor({ enabled: true, mode })).get('session.compact')!;

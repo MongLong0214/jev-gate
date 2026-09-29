@@ -71,6 +71,14 @@ describe('loadActivity', () => {
     expect(snap.traceFiles).toBe(0);
     expect(snap.jevCalls).toBe(0);
     expect(snap.notes.some((n) => n.includes('심볼릭 링크'))).toBe(true);
+    expect(snap.operations.features.find((f) => f.id === 'admission')?.state).toBe('unavailable');
+  });
+
+  it('does not label configured but unreadable record sources as waiting', () => {
+    const parent = make();
+    const missing = join(parent, 'missing');
+    const snap = loadActivity({ traceDir: missing, debugDir: missing, env: { JEV_GATE_STATE_DIR: make() } });
+    expect(snap.operations.features.every((f) => f.state === 'unavailable')).toBe(true);
   });
 
   it('shows an open intent until its result file replaces that stage', () => {
@@ -127,6 +135,34 @@ describe('loadActivity', () => {
 });
 
 describe('dashboard server', () => {
+  it('pushes a Compact event even when the legacy single-turn signature is unchanged', async () => {
+    const trace = make();
+    const debug = make();
+    const server = await startDashboard({ traceDir: trace, debugDir: debug, env: { JEV_GATE_STATE_DIR: make() } }, 0);
+    const response = await fetch(`${server.url}api/live`);
+    const reader = response.body!.getReader();
+    const read = async (): Promise<{ live: { sig: string }; operations: { features: Array<{ id: string; count: number }> } }> => {
+      const result = await Promise.race([
+        reader.read(),
+        new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error('SSE timed out')), 2500)),
+      ]);
+      if (result.done) throw new Error('SSE ended');
+      const line = new TextDecoder().decode(result.value).split('\n').find((s) => s.startsWith('data: '));
+      if (!line) throw new Error('missing SSE data');
+      return JSON.parse(line.slice(6));
+    };
+    try {
+      const first = await read();
+      writeFileSync(join(debug, 'host.log'), `${new Date().toISOString()} [DEBUG] jev-compact ${JSON.stringify({ event: 'compact', run_id: 'live-1', mode: 'active', stage: 'started' })}\n`);
+      const changed = await read();
+      expect(changed.live.sig).toBe(first.live.sig);
+      expect(changed.operations.features.find((f) => f.id === 'compact')?.count).toBe(1);
+    } finally {
+      await reader.cancel();
+      await server.close();
+    }
+  });
+
   it('serves the page and a snapshot on loopback', async () => {
     const trace = make();
     write(trace, 'stop-1.json', { phase: 'stop', written_at: '2026-09-29T01:00:00.000Z', outcome: 'incomplete' });
@@ -135,7 +171,10 @@ describe('dashboard server', () => {
     try {
       const page = await fetch(server.url);
       expect(page.status).toBe(200);
-      expect(await page.text()).toContain('호출이 기록되는 즉시');
+      const html = await page.text();
+      expect(html).toContain('전체 기능 파이프라인');
+      expect(html).toContain('id="theme"');
+      expect(html).toContain('id="language"');
       const body = (await (await fetch(`${server.url}api/snapshot`)).json()) as { events: Array<{ title: string; used: string }> };
       expect(body.events.map((e) => e.used).join('\n')).not.toContain('completed');
       expect(body.events[0]?.title).toBe('턴 종료');

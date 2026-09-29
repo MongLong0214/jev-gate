@@ -14,6 +14,7 @@ export type TracePhase =
   | 'admission_intent'
   | 'admission_result'
   | 'guard'
+  | 'dispatch'
   | 'pre_intent'
   | 'pre_result'
   | 'post'
@@ -27,7 +28,13 @@ export type TracePhase =
   | 'lean_intent'
   | 'lean_result'
   | 'lean_dispatch'
-  | 'lean_post';
+  | 'lean_post'
+  /** The evidence MCP server records only bounded metadata; source text and goals stay out. */
+  | 'evidence_start'
+  | 'evidence_jev_intent'
+  | 'evidence_jev_result'
+  | 'evidence_cache'
+  | 'evidence_result';
 
 
 /**

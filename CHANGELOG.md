@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.6.6 (unreleased) — Live operations across the plugin
+
+### Added
+
+- The local dashboard now shows separate, chronological runs for Gate A, Gate B, planning, worker dispatch and acceptance, the root guard, Lean, Router, Compact, Output, and Evidence. It distinguishes a Jev request from Jev's answer, the code's decision, and the host's observed result. A missing result is marked unconfirmed; missing usage is unknown, not zero. The feature grid says whether each record source is configured or has actually emitted an event.
+- The Evidence MCP server writes metadata-only start, local result, cache, remote intent, and remote result records to `JEV_GATE_TRACE_DIR`. Router, Compact, and Output emit in-flight start records to the host debug log before their respective work. Planner and worker dispatches carry their requested tier/model; accepted plans carry a bounded dependency graph and required-check counts. The dashboard never reads source text, prompts, job files, or keys.
+- The SSE stream now updates when any feature's record changes, including Compact, Output, and Evidence events that leave the legacy single-turn view unchanged.
+
+### Upgrading
+
+- This section describes the next development version. The published v0.6.5 archive remains unchanged. Set `JEV_GATE_TRACE_DIR` for Gate and Evidence records and `CLAUDE_CODE_DEBUG_LOGS_DIR` for Router, Compact, and Output records in the host's `env`, then restart the host and open `node dist/cli.js dashboard`. Previously unrecorded events cannot be reconstructed.
+
 ## v0.6.5 — Watch a call while it is in flight
 
 ### Added
