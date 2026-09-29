@@ -233,9 +233,10 @@ describe('effectiveDepthFloor (#48 P0-1)', () => {
   });
 
   it("takes the atomic gate's floor from its cost model, whatever the window", () => {
-    for (const window of [null, 200_000, 1_000_000]) expect(effectiveDepthFloor(DEFAULT_CONFIG, window)).toEqual({ floor: 48_980, source: 'cost_model' });
-    // A coordinator that costs more turns needs a deeper session before anything can pay.
-    expect(effectiveDepthFloor({ ...DEFAULT_CONFIG, delegationCoordinatorTurns: 30 }, null).floor).toBe(Math.floor((60 * 40_000) / 30) + 1);
+    for (const window of [null, 200_000, 1_000_000]) expect(effectiveDepthFloor(DEFAULT_CONFIG, window)).toEqual({ floor: 50_865, source: 'cost_model' });
+    // A coordinator that costs more turns needs a deeper session before anything can pay. The bound is the live last
+    // bin (51.5), not a second copy of the default floor.
+    expect(effectiveDepthFloor({ ...DEFAULT_CONFIG, delegationCoordinatorTurns: 30 }, null).floor).toBe(Math.floor((51.5 * 40_000) / (51.5 - 30)) + 1);
   });
 
   const composite = { ...DEFAULT_CONFIG, admissionQuestionShape: 'composite' as const };

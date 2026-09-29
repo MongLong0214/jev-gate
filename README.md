@@ -386,9 +386,11 @@ behaviour; write the old value to keep the old one.
 composes a price in code: delegate when `(turns − delegationCoordinatorTurns) × depth − turns ×
 delegationWorkerTokensPerCall > 0`. Every root turn re-reads the whole session (1.00–1.05 × depth per turn over 631 real
 prompts), so the saving is the root turns delegation removes; the coordinator still takes about 11 of its own (the
-jev_single bench took 11–17). The bin-to-turns map `[0, 10, 10, 10, 60]` was set on the calibration half of a
-pre-registered replay of 100 real prompts (`bench/results/v5-gate-a-cost-2026-09-28`). The same run is the honest
-limit: Jev's read-off of the prompt text barely ranks the work it turns into (Spearman 0.05–0.08), because a short
+jev_single bench took 11–17). The live bin-to-turns map is `[4, 6, 6, 26.5, 51.5]` (#99): estimated root turns per bin,
+not a count of tool calls on one request. It replaces `[0, 10, 10, 10, 60]`, set on the calibration half of a
+pre-registered replay of 100 real prompts (`bench/results/v5-gate-a-cost-2026-09-28`); the samples behind the new map are
+owner-reported model-based estimates, not a measured bill. That earlier run is the honest
+limit of the map it fit: Jev's read-off of the prompt text barely ranks the work it turns into (Spearman 0.05–0.08), because a short
 prompt deep in a session carries work its text does not state; on the validation half the gate admitted 9 of 50, 6 of
 them correctly, for a modelled saving of 66M of the 885M tokens those prompts actually cost. Admitting everything
 would have saved more by the same model, which does not price what a worker loses by not seeing the conversation.
@@ -406,7 +408,7 @@ read from the session transcript the host passes to the hook, and a transcript t
 floor. `0` turns the floor off; a transcript that cannot be read still keeps the turn direct.
 
 With the atomic gate and `delegationDepthFloor: null`, the floor is the cost model's own: the shallowest depth at which
-the largest answer could pay (48,980 tokens with the defaults), whatever the host window. The rest of this section
+the largest answer could pay (50,865 tokens with the defaults), whatever the host window. The rest of this section
 describes the composite gate, which has no price and keeps the window rule.
 
 For the composite gate the default is `null`, not a fixed number (#48): a floor is only reachable if the host's own auto-compaction window is

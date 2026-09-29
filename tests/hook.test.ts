@@ -382,8 +382,38 @@ describe('Gate A admission', () => {
     expect(r.code).toBe('admission_not_worth');
     expect(state(env).current.shape).toBe('direct');
     const record = readdirSync(dir).map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>).find((x) => x['phase'] === 'admission_result');
-    expect(record).toMatchObject({ attempted: true, decision: { shape: 'direct', reason: 'admission_not_worth' }, estimate: { turns: 10 } });
-    expect((record?.['estimate'] as { saving_tokens: number }).saving_tokens).toBeLessThan(0);
+    expect(record).toMatchObject({ attempted: true, decision: { shape: 'direct', reason: 'admission_not_worth' }, estimate: { turns: 26.5, saving_tokens: -207_500 } });
+  });
+
+  it('sends no request just below the derived floor, and one request at it', async () => {
+    expect(COST_FLOOR).toBe(50_865);
+    const belowDir = join(tmp, 'trace-floor-below');
+    const belowEnv = makeEnv({ JEV_GATE_TRACE_DIR: belowDir });
+    const belowFetch = fakeJev({ toolCalls: 4 });
+    const below = await run(belowEnv, promptEvent({ transcript_path: transcriptAt(50_864) }), belowFetch);
+    expect(belowFetch).not.toHaveBeenCalled();
+    expect(below.code).toBe('depth_below_floor');
+    const belowRecord = readdirSync(belowDir).map((f) => JSON.parse(readFileSync(join(belowDir, f), 'utf8')) as Record<string, unknown>).find((x) => x['phase'] === 'admission_result');
+    expect(belowRecord).toMatchObject({ attempted: false, context_tokens: 50_864, depth_floor: 50_865, depth_floor_source: 'cost_model', decision: { reason: 'depth_below_floor', changed_default: false } });
+
+    const atDir = join(tmp, 'trace-floor-at');
+    const atEnv = makeEnv({ JEV_GATE_TRACE_DIR: atDir });
+    const atFetch = fakeJev({ toolCalls: 4 });
+    const at = await run(atEnv, promptEvent({ transcript_path: transcriptAt(50_865) }), atFetch);
+    expect(atFetch).toHaveBeenCalledTimes(1);
+    expect(at.code).toBeNull();
+    expect(state(atEnv).current.shape).toBe('orchestrated');
+    const atRecord = readdirSync(atDir).map((f) => JSON.parse(readFileSync(join(atDir, f), 'utf8')) as Record<string, unknown>).find((x) => x['phase'] === 'admission_result');
+    expect(atRecord).toMatchObject({ attempted: true, context_tokens: 50_865, depth_floor: 50_865, depth_floor_source: 'cost_model', decision: { shape: 'orchestrated', reason: null }, estimate: { turns: 51.5, saving_tokens: 33 } });
+  });
+
+  it('asks below the derived floor when an explicit delegationDepthFloor says to, and the price still decides', async () => {
+    const cfg = join(tmp, 'floor-explicit-below-derived.json');
+    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', delegationDepthFloor: 40_000 }));
+    const fetchImpl = fakeJev({ toolCalls: 4 });
+    const r = await run(makeEnv({ JEV_GATE_CONFIG: cfg }), promptEvent({ transcript_path: transcriptAt(50_000) }), fetchImpl);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(r.code).toBe('admission_not_worth');
   });
 
   it('stays direct when the request needs a connector and the coordinator may not call one', async () => {
@@ -3068,7 +3098,7 @@ describe('receipt selection and observation keys (2026-09-20)', () => {
     expect(answers['tool_calls']).toMatchObject({ type: 'score', score: 3.6, choice: null });
     expect(answers['forbids_delegation']).toMatchObject({ type: 'noul', noul: 0.07 });
     expect(answers['external_tools']).toMatchObject({ type: 'noul', noul: 0.02 });
-    expect(record?.['estimate']).toEqual({ turns: 40, saving_tokens: (40 - 11) * 406_000 - 40 * 40_000 });
+    expect(record?.['estimate']).toEqual({ turns: 41.5, saving_tokens: (41.5 - 11) * 406_000 - 41.5 * 40_000 });
   });
 });
 

@@ -51,7 +51,7 @@ const configFile = (body: unknown): string => {
 describe('doctor: effective depth floor (#48 P0-1)', () => {
   it('prints the cost model floor for the shipped atomic gate, whatever the window', () => {
     const stdout = doctor({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '300000' });
-    expect(stdout).toMatch(/\[info\].*effective depth floor: 48980 \(cost_model\).*could repay the coordinator/);
+    expect(stdout).toMatch(/\[info\].*effective depth floor: 50865 \(cost_model\).*could repay the coordinator/);
     expect(stdout).toMatch(/prices the request in code -- delegate when \(turns - 11\) x depth - turns x 40000 > 0/);
   });
 

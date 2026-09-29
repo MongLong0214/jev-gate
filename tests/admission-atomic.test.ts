@@ -71,12 +71,16 @@ describe('atomic admission questions', () => {
 });
 
 describe('the cost model', () => {
-  it('uses the calibrated map, read between neighbours for a fractional score', () => {
-    expect(TOOL_CALL_TURNS).toEqual([0, 10, 10, 10, 60]);
-    expect(estimatedTurns(0)).toBe(0);
-    expect(estimatedTurns(2)).toBe(10);
-    expect(estimatedTurns(3.5)).toBe(35);
-    expect(estimatedTurns(4)).toBe(60);
+  it('maps each tool-call bin to a finite, non-decreasing estimate and reads between neighbours', () => {
+    expect(TOOL_CALL_TURNS).toEqual([4, 6, 6, 26.5, 51.5]);
+    expect(TOOL_CALL_TURNS).toHaveLength(ADMISSION_FACT_QUESTIONS.tool_calls.criteria.length);
+    for (let i = 0; i < TOOL_CALL_TURNS.length; i += 1) {
+      const turns = TOOL_CALL_TURNS[i] as number;
+      expect(Number.isFinite(turns)).toBe(true);
+      expect(turns).toBeGreaterThanOrEqual(0);
+      if (i > 0) expect(turns).toBeGreaterThanOrEqual(TOOL_CALL_TURNS[i - 1] as number);
+    }
+    expect([0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4].map((score) => estimatedTurns(score))).toEqual([4, 5, 6, 6, 6, 16.25, 26.5, 39, 51.5]);
   });
 
   it('saves the root turns delegation removes, less what the worker reads doing them', () => {
@@ -85,23 +89,91 @@ describe('the cost model', () => {
   });
 
   it('floors at the shallowest depth the largest answer could pay at', () => {
-    expect(FLOOR).toBe(48_980);
-    expect(delegationSaving(60, FLOOR, MODEL)).toBeGreaterThan(0);
-    expect(delegationSaving(60, FLOOR - 1, MODEL)).toBeLessThanOrEqual(0);
-    expect(costModelFloor({ coordinatorTurns: 60, workerTokensPerCall: 1 })).toBe(Number.POSITIVE_INFINITY);
+    expect(FLOOR).toBe(50_865);
+    expect(estimatedTurns(4)).toBe(51.5);
+    // Raw saving and the rounded receipt are different facts: 32.5 rounds to 33, and -8 does not admit.
+    expect(delegationSaving(51.5, 50_864, MODEL)).toBe(-8);
+    expect(delegationSaving(51.5, 50_865, MODEL)).toBe(32.5);
+    expect(delegationSaving(51.5, FLOOR, MODEL)).toBeGreaterThan(0);
+    expect(delegationSaving(51.5, FLOOR - 1, MODEL)).toBeLessThanOrEqual(0);
+    // No map entry can pay once the coordinator takes at least as many turns as the largest estimate.
+    expect(costModelFloor({ coordinatorTurns: 51.5, workerTokensPerCall: 40_000 })).toBe(Number.POSITIVE_INFINITY);
+    expect(costModelFloor({ coordinatorTurns: 80, workerTokensPerCall: 1 })).toBe(Number.POSITIVE_INFINITY);
+  });
+
+  it('prices other coordinator and worker constants through the same function', () => {
+    const model = delegationModel({ ...DEFAULT_CONFIG, delegationCoordinatorTurns: 20, delegationWorkerTokensPerCall: 10_000 });
+    expect(model).toEqual({ coordinatorTurns: 20, workerTokensPerCall: 10_000 });
+    expect(costModelFloor(model)).toBe(Math.floor((51.5 * 10_000) / (51.5 - 20)) + 1);
+    expect(costModelFloor(model)).not.toBe(FLOOR);
+    expect(delegationSaving(26.5, 200_000, model)).toBe((26.5 - 20) * 200_000 - 26.5 * 10_000);
+  });
+
+  it('treats an exact zero saving as not worth admitting', () => {
+    const model = { coordinatorTurns: 3, workerTokensPerCall: 1_000 };
+    expect(delegationSaving(estimatedTurns(2), 2_000, model)).toBe(0);
+    expect(decideAdmissionAtomic(answers({ tool_calls: 2 }), 2_000, costModelFloor(model), model)).toMatchObject({
+      shape: 'direct',
+      decided: false,
+      reason: 'admission_not_worth',
+      estimate: { turns: 6, saving_tokens: 0 },
+    });
   });
 });
 
 describe('decideAdmissionAtomic', () => {
   it('admits a large job at depth and records the price, with no confidence floor consulted', () => {
     const d = decideAdmissionAtomic(answers(), DEEP, FLOOR, MODEL);
-    expect(d).toEqual({ shape: 'orchestrated', decided: true, reason: null, answer: null, estimate: { turns: 60, saving_tokens: (60 - 11) * DEEP - 60 * 40_000 } });
+    expect(d).toEqual({ shape: 'orchestrated', decided: true, reason: null, answer: null, estimate: { turns: 51.5, saving_tokens: (51.5 - 11) * DEEP - 51.5 * 40_000 } });
   });
 
   it('prices the same request differently at different depths', () => {
-    // 35 turns pays at 406K but not at 55K, where the coordinator's own 11 turns are most of what it would remove.
+    // 39 turns pays at 406K but not at 55K, where the coordinator's own 11 turns are most of what it would remove.
     expect(decideAdmissionAtomic(answers({ tool_calls: 3.5 }), DEEP, FLOOR, MODEL).shape).toBe('orchestrated');
-    expect(decideAdmissionAtomic(answers({ tool_calls: 3.5 }), 55_000, FLOOR, MODEL)).toMatchObject({ shape: 'direct', reason: 'admission_not_worth', estimate: { turns: 35 } });
+    expect(decideAdmissionAtomic(answers({ tool_calls: 3.5 }), 55_000, FLOOR, MODEL)).toMatchObject({ shape: 'direct', reason: 'admission_not_worth', estimate: { turns: 39, saving_tokens: -20_000 } });
+  });
+
+  it.each([
+    ['score 3 at a depth where 26.5 turns pay', 3, 406_000, { turns: 26.5, saving_tokens: 5_233_000 }, 'orchestrated', null],
+    ['score 3 at 55K', 3, 55_000, { turns: 26.5, saving_tokens: -207_500 }, 'direct', 'admission_not_worth'],
+    ['score 3.5 at 55K', 3.5, 55_000, { turns: 39, saving_tokens: -20_000 }, 'direct', 'admission_not_worth'],
+    ['the largest answer just below the derived floor', 4, 50_864, null, 'direct', 'depth_below_floor'],
+    ['the largest answer at the derived floor', 4, 50_865, { turns: 51.5, saving_tokens: 33 }, 'orchestrated', null],
+  ] as const)('%s', (_name, score, depth, estimate, shape, reason) => {
+    expect(decideAdmissionAtomic(answers({ tool_calls: score }), depth, FLOOR, MODEL)).toMatchObject({
+      shape,
+      decided: shape === 'orchestrated',
+      reason,
+      estimate,
+    });
+  });
+
+  it.each([0, 1, 2])('keeps score %s direct under the default constants: the estimate is under 11 coordinator turns', (score) => {
+    expect(estimatedTurns(score)).toBeLessThan(MODEL.coordinatorTurns);
+    const d = decideAdmissionAtomic(answers({ tool_calls: score }), DEEP, FLOOR, MODEL);
+    expect(d).toMatchObject({ shape: 'direct', decided: false, reason: 'admission_not_worth' });
+    expect(d.estimate?.saving_tokens).toBeLessThanOrEqual(0);
+  });
+
+  it('stays direct when a cost-eligible answer still forbids delegation', () => {
+    expect(decideAdmissionAtomic(answers({ tool_calls: 3 }), DEEP, FLOOR, MODEL)).toMatchObject({ shape: 'orchestrated', estimate: { turns: 26.5, saving_tokens: 5_233_000 } });
+    expect(decideAdmissionAtomic(answers({ tool_calls: 3, forbids_delegation: FACT_TRUE }), DEEP, FLOOR, MODEL)).toMatchObject({
+      shape: 'direct',
+      decided: false,
+      reason: 'admission_forbids_delegation',
+      estimate: null,
+    });
+  });
+
+  it('uses the floor it was given, including one that is not the derived default', () => {
+    // Below the derived floor the prefilter never asks; a lower explicit floor lets the price decide, and -8 stays direct.
+    expect(decideAdmissionAtomic(answers({ tool_calls: 4 }), 50_864, 40_000, MODEL)).toMatchObject({
+      shape: 'direct',
+      reason: 'admission_not_worth',
+      estimate: { turns: 51.5, saving_tokens: -8 },
+    });
+    expect(decideAdmissionAtomic(answers({ tool_calls: 4 }), DEEP, 500_000, MODEL).reason).toBe('depth_below_floor');
+    expect(decideAdmissionAtomic(answers(), null, 0, MODEL).reason).toBe('depth_unknown');
   });
 
   it.each([
