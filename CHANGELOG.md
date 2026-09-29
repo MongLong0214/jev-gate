@@ -1,5 +1,60 @@
 # Changelog
 
+## v0.6.4 — Checks follow the command, evidence stays bounded
+
+### Fixed
+
+- **A reported check passes only when that same whole command ran and the host marked the run successful.** Spaces
+  between words can differ. Quotes, escapes, extra arguments, a different program, an environment assignment, `cd`, a
+  pipe, `||`, and `;` do not make it the same command. A pure `&&` list can count when the whole list succeeded. If
+  that list failed or its result is unknown, the check stays unconfirmed, and an older pass is not reused.
+- **A required pass that started before the last observed Edit, Write, MultiEdit, or NotebookEdit no longer completes
+  the task.** The receipt stays incomplete: `check <id>: 마지막 관측 변경 이후의 검사 결과 필요`. Run that check again
+  after the edit. An optional check does not block. A Write or Edit whose result was not observed also leaves the pass
+  unconfirmed. An edit made inside Bash, by another editor, or by another process is outside this comparison.
+
+### Changed
+
+- **Gate A's tool-call map is `[4, 6, 6, 26.5, 51.5]`.** Each entry is an estimated root-turn count for that bin, not
+  the tool calls one request will make, and a fractional score is still read between neighbours. With the default
+  coordinator (11 turns) and worker (40,000 tokens) constants, the derived depth floor is 50,865 tokens, up from
+  48,980, because the largest bin is smaller. `costModelFloor()` still computes it; an explicit `delegationDepthFloor`
+  still wins, and `saving_tokens <= 0` still stays direct. The bins are an owner-supplied recalibration. The samples
+  that motivated them are owner-reported model-based estimates, not a measured bill. Vetoes and admitted shape are
+  unchanged.
+- **A locate search with more than 128 unique lexical terms is an input error before any source read or Jev call.**
+  The cap lives in `LIMITS.lexicalTerms`. Without `queryTerms`, terms still come from the goal. With `queryTerms`, only
+  those hints are lexical; the goal and constraints are not cut and are still sent for semantic judgement. Derived
+  terms over the cap are the same error, not a silent first 128. Candidate generation uses the request's existing
+  deadline, cancel signal, and an event-loop yield. The 1,024-candidate cap is applied while collecting, in file and
+  line order, and only that bounded set is score-sorted. Stopping at the cap, or before the rest of the files were
+  checked, is `partial` (`source_limit` or `deadline`) and is the prefix actually processed. A search-budget stop does
+  not start Jev on that page; files already chosen may still be re-read while the total deadline and the verify
+  reserve remain. Once the total deadline has expired, no new re-read, HTTP, or retry starts. Caller cancellation
+  starts no new read, HTTP, or cache write and stays `cancelled`. The snapshot id is `jev-evidence-candidates-2` and
+  does not include a deadline timestamp.
+- **Doctor names where the evidence config came from** (`explicit` when `JEV_EVIDENCE_CONFIG` is set, `session`
+  otherwise) and says a changed file applies only after this server process restarts. An invalid explicit file stays
+  `unavailable_config` and does not fall back to the session worktree. `remote: false` stops only Evidence's TypeSafe
+  sends. Local reads continue. That is not Claude offline, and a Native Read deny is not inherited. Exclusions are a
+  filter, not a retention or approval control. Key presence is not key validity.
+- **Checked on Claude Code 2.1.284: an unset `gateMode` is not exported to hooks**, so it does not override a config
+  file `off`. An explicit `gateMode` still does. The resolver is unchanged. Managed settings were not part of that
+  check.
+- **The root README is the installer page:** one marketplace install, the five parts and their defaults, what a
+  session can send, and how to update or turn one part off. Current Gate and lean settings, including the live turn
+  map and the derived floor, are in `docs/advanced-usage.md`. The V3/V4/V5 experiment tables stay at v0.6.3
+  (`931e8367e8b8f27536e14da1ed41baed1f83e22e`) and are not rewritten. The integrated and lean archives pack that page,
+  the feature READMEs, `CHANGELOG.md`, and the logo. They no longer pack `hero.svg`, `pilot.svg`, or `v4-flow.svg`.
+
+### Upgrading
+
+- `claude plugin marketplace update jev-gate && claude plugin update jev-gate@jev-gate`, or wait for the marketplace's
+  auto-update, then restart Claude Code (or `/reload-plugins`). Options carry over. An evidence config edited on disk
+  is read by the next server process, not the one already running.
+- Unless `delegationDepthFloor` is set, the derived floor is now 50,865. A worker acceptance that reused another
+  command's success, or a check from before the last observed edit, stays incomplete until that check runs again.
+
 ## v0.6.3 — Every part is on after install
 
 ### Changed
