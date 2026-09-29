@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.6.2 — The evidence tool needs no setup
+
+### Changed
+
+- **`jev_evidence` works as soon as the plugin is installed.** Without `JEV_EVIDENCE_CONFIG`, the server searches the
+  Git worktree holding the session's directory (`CLAUDE_PROJECT_DIR`, which Claude Code 2.1.284 sets for a plugin's
+  MCP server; `PWD` otherwise), the whole worktree, with remote on: when `TYPESAFE_API_KEY` is present a semantic page
+  is sent to Jev. Installing the plugin with a key is that opt-in; the built-in exclusions (credentials, `.env*`,
+  dependency and build directories, symlinks, submodules, binaries) are unchanged. A session outside a Git worktree
+  gets `unsupported_inventory`. `JEV_EVIDENCE_CONFIG` still decides when set, and an invalid one never falls back.
+  Observed: a `--plugin-dir` session in this repository with no config logged `config ok, remote on, key present`
+  and a semantic call answered with `backend: jev`.
+
+### Upgrading
+
+- To keep a project's source on the machine, point `JEV_EVIDENCE_CONFIG` at a config with `"remote": false`
+  (`plugins/evidence/README.md#configure`).
+
 ## v0.6.1 — A check run with absolute paths counts
 
 ### Fixed

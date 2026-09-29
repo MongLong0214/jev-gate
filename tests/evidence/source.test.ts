@@ -101,6 +101,20 @@ describe('inventory and access', () => {
     expect(await bad({ JEV_EVIDENCE_CONFIG: configFile({ projectRoot: join(root, 'sub'), allowedRoots: ['.'] }) })).toBe('unsupported_inventory');
     expect(await bad({ JEV_EVIDENCE_CONFIG: configFile({ projectRoot: root, allowedRoots: ['.'] }) })).toBe('ok');
 
+    // No config file: the Git worktree holding the session's directory, all of it, remote on; a file still decides.
+    const session = await loadConfig({ CLAUDE_PROJECT_DIR: join(root, 'sub'), PWD: plain });
+    expect(session).toEqual({ ok: true, config: { projectRoot: realpathSync(root), allowedRoots: [''], excludeGlobs: [], remote: true } });
+    expect(await loadConfig({ PWD: root })).toEqual(session);
+    expect(await bad({ CLAUDE_PROJECT_DIR: plain })).toBe('unsupported_inventory');
+    expect(await bad({ CLAUDE_PROJECT_DIR: 'relative' })).toBe('unavailable_config');
+    expect(await bad({ CLAUDE_PROJECT_DIR: root, JEV_EVIDENCE_CONFIG: '' })).toBe('unavailable_config');
+    // A worktree the session directory is not inside is not the session's.
+    const away = repo({ 'b.ts': body });
+    git(plain, 'init', '-q');
+    git(plain, 'config', 'core.worktree', away);
+    expect(await bad({ CLAUDE_PROJECT_DIR: plain })).toBe('unsupported_inventory');
+    expect(await loadConfig({ CLAUDE_PROJECT_DIR: root, JEV_EVIDENCE_CONFIG: configFile({ projectRoot: root, allowedRoots: ['sub'], remote: false }) })).toMatchObject({ ok: true, config: { allowedRoots: ['sub'], remote: false } });
+
     const fetchImpl = vi.fn();
     const none = await createEvidenceService(null, { apiKey: 'test-key', fetchImpl: fetchImpl as unknown as typeof fetch }).run({ goal: 'widget' }, live());
     expect(none).toMatchObject({ isError: true, result: { projectRoot: null, status: 'unavailable', reasonCodes: ['unavailable_config'], items: [] } });

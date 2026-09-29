@@ -1,6 +1,6 @@
 {
   "name": "jev-gate",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "Jev Gate in one plugin: the orchestration gate, the extractive compactor, the Vitest log folder, the Jev effort and model router and the jev_evidence tool. Each is off until you enable it.",
   "author": {
     "name": "MongLong0214",

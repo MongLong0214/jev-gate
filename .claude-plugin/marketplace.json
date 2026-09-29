@@ -10,8 +10,8 @@
       "name": "jev-gate",
       "source": {
         "source": "archive",
-        "url": "https://github.com/MongLong0214/jev-gate/releases/download/v0.6.1/jev-gate-0.6.1.zip",
-        "sha256": "c64a63b106a1d06b6a46e6fc8f4467d61d3fafd9febf97619242d7444df537a9"
+        "url": "https://github.com/MongLong0214/jev-gate/releases/download/v0.6.2/jev-gate-0.6.2.zip",
+        "sha256": "353c2e7ab6a011f113b783a37406b847c311a8ca796862534330a71f5b3b6384"
       },
       "displayName": "Jev Gate",
       "description": "The orchestration gate (a planner and tiered workers past a context-depth floor), extractive compaction, Vitest log folding, a Jev effort and model router and the jev_evidence tool, in one install. Each part is off until enabled. Built from the tagged release; needs Node 22, a TypeSafe key for the Jev parts, and CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 for compaction, folding and routing.",

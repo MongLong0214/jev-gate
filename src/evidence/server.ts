@@ -10,7 +10,7 @@ import { loadConfig, type ConfigLoad } from './source.js';
 import { LIMITS, MODES, type EvidenceConfig } from './types.js';
 
 export const TOOL_NAME = 'jev_evidence';
-export const SERVER_VERSION = '0.6.1';
+export const SERVER_VERSION = '0.6.2';
 
 const strings = (description: string) => ({ type: 'array', items: { type: 'string', minLength: 1 }, minItems: 1, maxItems: LIMITS.arrayItems, description });
 const HEX64 = { type: 'string', pattern: '^[0-9a-f]{64}$' };
