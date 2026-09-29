@@ -12,7 +12,13 @@ search; exact-symbol lookups and read-backs never send anything.
 
 ## Configure
 
-The server reads one JSON file named by `JEV_EVIDENCE_CONFIG` (an absolute path, at most 64 KiB) when it starts:
+Nothing, by default (v0.6.2). Started by Claude Code, the server searches the Git worktree that holds the session's
+directory (`CLAUDE_PROJECT_DIR`, which the host sets for a plugin's server), all of it, with remote on when
+`TYPESAFE_API_KEY` is present: installing the plugin with a key is the opt-in to sending a semantic page to Jev. A
+session outside any Git worktree gets `unsupported_inventory` on every call.
+
+To narrow the roots, exclude paths or keep a project's source on the machine, the server instead reads one JSON file
+named by `JEV_EVIDENCE_CONFIG` (an absolute path, at most 64 KiB) when it starts:
 
 ```json
 {
@@ -35,8 +41,8 @@ Both variables come from the environment Claude Code starts in, for example a pr
 { "env": { "JEV_EVIDENCE_CONFIG": "/absolute/path/to/evidence.json" } }
 ```
 
-Without a valid config the server still starts and lists the tool, and every call returns `unavailable_config`
-without reading a source or sending a request.
+With `JEV_EVIDENCE_CONFIG` set but invalid, the server still starts and lists the tool, and every call returns
+`unavailable_config` without reading a source or sending a request; it never falls back to the session default.
 
 ## Install
 

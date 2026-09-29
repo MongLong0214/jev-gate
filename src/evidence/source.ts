@@ -83,13 +83,33 @@ export type ConfigLoad = { ok: true; config: EvidenceConfig } | { ok: false; rea
 const CONFIG_KEYS = new Set(['projectRoot', 'allowedRoots', 'excludeGlobs', 'remote']);
 
 /**
- * The one configuration, read once at start from the absolute path in JEV_EVIDENCE_CONFIG. No search for a file, no
- * key in it, no reload. The detail names what is wrong, never a value from the file.
+ * The one configuration, read once at start. With JEV_EVIDENCE_CONFIG, from that absolute path: no search for a file,
+ * no key in it, no reload; the detail names what is wrong, never a value from the file. Without it, the Git worktree
+ * holding the session's directory (`CLAUDE_PROJECT_DIR`, which the host sets for a plugin's server, else `PWD`), the
+ * whole worktree allowed, and remote on: installing the plugin with a TypeSafe key is the opt-in, and a config file
+ * with `"remote": false` keeps a project local.
  */
 export const loadConfig = async (env: Readonly<Record<string, string | undefined>>): Promise<ConfigLoad> => {
   const bad = (detail: string): ConfigLoad => ({ ok: false, reason: 'unavailable_config', detail });
   const path = env['JEV_EVIDENCE_CONFIG'];
-  if (!path) return bad('JEV_EVIDENCE_CONFIG is not set');
+  // Set but empty is set: only an absent variable takes the session default.
+  if (path === undefined) {
+    const dir = env['CLAUDE_PROJECT_DIR'] || env['PWD'];
+    if (!dir || !isAbsolute(dir)) return bad('JEV_EVIDENCE_CONFIG is not set and no session directory is known');
+    const top = await git(dir, ['rev-parse', '--show-toplevel'], 64 * 1024, 2000);
+    const topPath = top.error ? '' : top.stdout.toString('utf8').replace(/\n$/, '');
+    let inside = false;
+    try {
+      const [d, t] = [await realpath(dir), await realpath(topPath)];
+      inside = d === t || d.startsWith(`${t}/`);
+    } catch {
+      inside = false;
+    }
+    // A worktree elsewhere (`core.worktree`, a `.git` file pointing away) is not the session's own.
+    if (!topPath || !inside) return { ok: false, reason: 'unsupported_inventory', detail: 'the session directory is not inside a Git worktree' };
+    return settle(topPath, [''], [], true);
+  }
+  if (!path) return bad('JEV_EVIDENCE_CONFIG is empty');
   if (!isAbsolute(path)) return bad('JEV_EVIDENCE_CONFIG is not an absolute path');
   let raw: unknown;
   try {
@@ -124,16 +144,19 @@ export const loadConfig = async (env: Readonly<Record<string, string | undefined
   if (excludeGlobs !== undefined && (!Array.isArray(excludeGlobs) || excludeGlobs.length > 64 || !excludeGlobs.every((g) => typeof g === 'string' && g !== '' && !g.includes('\0'))))
     return bad('excludeGlobs is not a list of up to 64 globs');
   if (remote !== undefined && typeof remote !== 'boolean') return bad('remote is not a boolean');
+  return settle(projectRoot, roots, (excludeGlobs as string[] | undefined) ?? [], remote === true);
+};
 
+const settle = async (projectRoot: string, allowedRoots: string[], excludeGlobs: string[], remote: boolean): Promise<ConfigLoad> => {
   // The root's own OS alias (a symlinked checkout, /tmp on macOS) is resolved once here; nothing below it is followed.
   let canonical: string;
   try {
     canonical = await realpath(projectRoot);
   } catch {
-    return bad('projectRoot does not exist');
+    return { ok: false, reason: 'unavailable_config', detail: 'projectRoot does not exist' };
   }
   const top = await git(canonical, ['rev-parse', '--show-toplevel'], 64 * 1024, 2000);
-  const topPath = top.error ? null : top.stdout.toString('utf8').trim();
+  const topPath = top.error ? null : top.stdout.toString('utf8').replace(/\n$/, '');
   let topReal: string | null = null;
   try {
     topReal = topPath ? await realpath(topPath) : null;
@@ -141,7 +164,7 @@ export const loadConfig = async (env: Readonly<Record<string, string | undefined
     topReal = null;
   }
   if (topReal !== canonical) return { ok: false, reason: 'unsupported_inventory', detail: 'projectRoot is not the root of a Git worktree' };
-  return { ok: true, config: { projectRoot: canonical, allowedRoots: roots, excludeGlobs: (excludeGlobs as string[] | undefined) ?? [], remote: remote === true } };
+  return { ok: true, config: { projectRoot: canonical, allowedRoots, excludeGlobs, remote } };
 };
 
 export interface Inventory {
