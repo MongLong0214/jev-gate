@@ -116,8 +116,10 @@ describe('jev_evidence over stdio (#77)', () => {
     const client = await connect({ JEV_EVIDENCE_CONFIG: cfg });
     const abort = new AbortController();
     const pending = call(client, { goal: 'x', mode: 'audit' }, abort.signal);
+    // Attach before abort. The client SDK rejects on the abort event, and a handler that arrives later is an unhandled rejection.
+    const caught = pending.then(() => null, (error: unknown) => error);
     abort.abort();
-    await expect(pending).rejects.toThrow();
+    await expect(caught).resolves.toBeInstanceOf(Error);
     expect((await call(client, { goal: 'x', exactSymbols: ['other'] })).body.items).toHaveLength(1);
   });
 
@@ -132,13 +134,14 @@ describe('jev_evidence over stdio (#77)', () => {
     const terms = Array.from({ length: 96 }, (_, i) => `cccc${String(i).padStart(4, '0')}`);
     const ac = new AbortController();
     const heavy = call(client, { goal: terms.join(' '), mode: 'locate' }, ac.signal);
+    const heavyError = heavy.then(() => null, (error: unknown) => error);
     const light = call(client, { goal: 'marker', exactSymbols: ['MARKER'] });
     const timer = setTimeout(() => ac.abort(), 80);
     const lightReply = await Promise.race([light, new Promise<never>((_, reject) => setTimeout(() => reject(new Error('watchdog')), 8_000))]);
     expect(lightReply.isError).toBe(false);
     expect(lightReply.body.items.some((item) => item.text?.includes('MARKER'))).toBe(true);
     ac.abort();
-    await expect(heavy).rejects.toThrow();
+    await expect(heavyError).resolves.toBeInstanceOf(Error);
     clearTimeout(timer);
     expect((await call(client, { goal: 'marker', exactSymbols: ['MARKER'] })).body.items).toHaveLength(1);
   }, 20_000);
