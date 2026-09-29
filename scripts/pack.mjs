@@ -67,18 +67,16 @@ const modSources = () =>
   );
 const EVIDENCE_IN_PLUGIN = [`${EVIDENCE}/dist/server.mjs`, `${EVIDENCE}/skills/evidence/SKILL.md`];
 const shared = () => [...(profile === 'legacy' ? ['hooks/register.ts', ...modSources()] : []), ...EVIDENCE_IN_PLUGIN];
-// Install paths the root README links (#95). Not a link crawl: bench/ and HANDOFF stay out, and docs/advanced-usage.md
-// is omitted until the file exists. The SVGs are that README's direct image targets. Legacy and lean share the README.
+// Install paths the root README links (#95, #98). Not a link crawl: bench/ and HANDOFF stay out. The logo is the
+// README's image. hero.svg, pilot.svg, and v4-flow.svg are not packed; the README no longer embeds them.
 const INSTALL_DOCS = [
   'CHANGELOG.md',
+  'docs/advanced-usage.md',
   'plugins/evidence/README.md',
   'mods/compact/README.md',
   'mods/output/README.md',
   'mods/router/README.md',
   'assets/readme/jev-gate-logo.svg',
-  'assets/readme/hero.svg',
-  'assets/readme/pilot.svg',
-  'assets/readme/v4-flow.svg',
 ];
 
 // [source path relative to root, path inside the archive]. The hook set is the only file that is renamed.

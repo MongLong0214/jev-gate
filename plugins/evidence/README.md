@@ -70,9 +70,9 @@ type it; nothing else in a session calls the tool unless Claude chooses to.
 | Need | Arguments | Jev |
 |---|---|---|
 | Where a name occurs | `{ "goal": "…", "exactSymbols": ["parseRequest"] }` | never |
-| Code for a question in other words | `{ "goal": "압축 digest 예산 배분", "queryTerms": ["buildDigest", "budget"], "roots": ["src"] }` | when remote |
+| Code for a question in other words | `{ "goal": "압축 digest 예산 배분", "queryTerms": ["buildDigest", "budget"], "roots": ["mods/compact/hooks"] }` | when remote |
 | The next page | the same arguments plus `"offset"` and `"expectedSnapshot"` from `next` | when remote |
-| A window back, exactly | `{ "goal": "…", "sources": [<a returned source object>] }` | never |
+| A window back, exactly | `{ "goal": "…", "sources": [{ "path": "<path>", "startLine": 1, "endLine": 16, "fileSha256": "<64 lowercase hex digits>" }] }` | never |
 | More lines around a hit | the same `path` and `fileSha256` with a wider `startLine`/`endLine` (≤ 40 lines) in `sources` | never |
 | Every window in a small scope | `{ "goal": "…", "mode": "audit", "roots": ["src/evidence"] }` | when remote, never folded |
 

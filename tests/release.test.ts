@@ -63,7 +63,8 @@ describe('scripts/release.mjs', () => {
       write(`mods/${m}/hooks/register.ts`, 'export default () => {};\n');
       write(`mods/${m}/README.md`, `# ${m}\n`);
     }
-    for (const name of ['jev-gate-logo.svg', 'hero.svg', 'pilot.svg', 'v4-flow.svg']) write(`assets/readme/${name}`, '<svg xmlns="http://www.w3.org/2000/svg"></svg>\n');
+    for (const name of ['jev-gate-logo.svg']) write(`assets/readme/${name}`, '<svg xmlns="http://www.w3.org/2000/svg"></svg>\n');
+    write('docs/advanced-usage.md', '# Advanced usage\n\nGate and lean settings for a checkout.\n');
     write('hooks/hooks.json', '{}\n');
     write('hooks/register.ts', 'export {};\n');
     for (const a of AGENTS) write(`agents/${a}.md`, `# ${a}\n`);
