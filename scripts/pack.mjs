@@ -67,6 +67,19 @@ const modSources = () =>
   );
 const EVIDENCE_IN_PLUGIN = [`${EVIDENCE}/dist/server.mjs`, `${EVIDENCE}/skills/evidence/SKILL.md`];
 const shared = () => [...(profile === 'legacy' ? ['hooks/register.ts', ...modSources()] : []), ...EVIDENCE_IN_PLUGIN];
+// Install paths the root README links (#95). Not a link crawl: bench/ and HANDOFF stay out, and docs/advanced-usage.md
+// is omitted until the file exists. The SVGs are that README's direct image targets. Legacy and lean share the README.
+const INSTALL_DOCS = [
+  'CHANGELOG.md',
+  'plugins/evidence/README.md',
+  'mods/compact/README.md',
+  'mods/output/README.md',
+  'mods/router/README.md',
+  'assets/readme/jev-gate-logo.svg',
+  'assets/readme/hero.svg',
+  'assets/readme/pilot.svg',
+  'assets/readme/v4-flow.svg',
+];
 
 // [source path relative to root, path inside the archive]. The hook set is the only file that is renamed.
 const hostsDist = profile === 'legacy' || profile === 'lean';
@@ -87,6 +100,7 @@ const entries =
         [profile === 'lean' ? 'hooks/lean.json' : 'hooks/hooks.json', 'hooks/hooks.json'],
         ...agents.map((a) => [`agents/${a}.md`, `agents/${a}.md`]),
         ...['README.md', 'AGENTS.md', '.env.example', 'package.json'].map((f) => [f, f]),
+        ...INSTALL_DOCS.map((f) => [f, f]),
         ...shared().map((f) => [f, f]),
       ];
 const missing = entries.map(([src]) => src).filter((rel) => !existsSync(join(root, rel)));
