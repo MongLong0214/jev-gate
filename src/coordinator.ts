@@ -41,25 +41,21 @@ export const WORKTREE_ISOLATION_SENTENCE =
 export const WORKTREE_WORKER_SENTENCE =
   '\n\n[Jev Gate isolation] You run in your own git worktree. When your checks are done, commit every change you made on this worktree\'s current branch in one commit, and do not push: the coordinator merges that branch, and uncommitted changes are not merged.';
 
-const ALWAYS_NAMED = ['Read', 'Grep', 'Glob', 'TodoWrite'];
 const DENIED_UNLESS_ALLOWED = ['Edit', 'Write', 'Bash'];
 
 /**
- * #48 P1-2 review: the tool line names what the guard actually allows (brief.ts `guardDecision`: its fixed read-only
- * set plus config `guardAllowTools`). A fixed "Bash is unavailable, do not probe it" told the coordinator not to use
- * the one tool worktree isolation requires it to use, to commit inputs and merge each worker's branch.
+ * The guard's allow-list is policy, not a host tool inventory. Never promise that an allowed tool is installed.
  */
 export const renderToolRule = (agents: string, allowTools: readonly string[] = [], allowMcp = false): string => {
-  const available = [...ALWAYS_NAMED, ...allowTools.filter((t) => !ALWAYS_NAMED.includes(t))].join(', ');
   const denied = DENIED_UNLESS_ALLOWED.filter((t) => !allowTools.includes(t));
-  const unavailable = denied.length > 0 ? `${denied.join(', ')} and every other agent (including Explore) are unavailable` : 'Every other agent (including Explore) is unavailable';
-  const rule = `Available to you now: ${available}, and ${agents}. ${unavailable} for this request and will be denied; do not probe them.`;
+  const rootTools = denied.length ? `The plugin guard denies root ${denied.join(', ')} calls for this request.` : '';
+  const rule = `Jev Gate permits ${agents} and the read/task tools actually provided by the host. Other Agent roles are denied by this root guard. ${rootTools} Host availability and permissions still apply.`;
   return allowMcp ? `${rule} ${MCP_SENTENCE}` : rule;
 };
 
-/** Workers have no connector, so a step that needs one is the coordinator's; without this a Notion or Figma turn stalled. */
+/** Child sessions inherit host tools; root MCP policy does not describe what workers have. */
 export const MCP_SENTENCE =
-  'Connected MCP tools (mcp__...) stay available to you: run any step that needs one yourself, because workers cannot reach a connector, and give the worker what it returned.';
+  'Connected MCP tools and ToolSearch pass the root plugin guard. Include the target URL or ID and constraints in a worker brief so the worker can inspect and verify it directly.';
 
 /**
  * Every root turn re-reads the whole session, so the saving of a delegated turn is the root turns it removes. The
@@ -218,7 +214,7 @@ export const renderDispatchDeny = (reason: DenyReason, detail: string | null = n
  * session is reminded, at the moment a plan is accepted, of what it agreed to keep for itself.
  */
 export const renderMainSessionSteps = (steps: readonly MainSessionStep[]): string =>
-  steps.length ? ` Keep for yourself; a worker cannot do these: ${steps.map((s) => `${s.step} (needs ${s.needs})`).join('; ')}.` : '';
+  steps.length ? ` Main-session steps explicitly reserved by the planner: ${steps.map((s) => `${s.step} (needs ${s.needs})`).join('; ')}.` : '';
 
 /** T5: the dispatch sentence carries the real cap, so the plan context cannot ask for more workers than will be admitted. */
 export const renderPlannedContext = (rev: number, readyIds: string[], cap: number, mainSessionSteps: readonly MainSessionStep[] = []): string =>

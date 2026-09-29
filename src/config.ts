@@ -62,7 +62,7 @@ export const DEFAULT_CONFIG: ConfigV5 = {
   // credited with removing turns it never measured removing. 40,000 is a declared worker context, not a fit.
   delegationCoordinatorTurns: 11,
   delegationWorkerTokensPerCall: 40_000,
-  // A worker has no connector, so a Notion or Figma step can only run in the root.
+  // Root guard policy only; workers inherit whatever connected tools the host provides.
   guardAllowMcp: true,
   verifyWorkerChecks: true,
   // A23: off. The call decides nothing, so its whole cost is the call, and nobody should pay it without asking.

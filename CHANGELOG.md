@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.6.6 (unreleased) — Live operations across the plugin
+## v0.6.6 — 2026-09-29 — Live operations across the plugin
 
 ### Added
 
@@ -8,9 +8,14 @@
 - The Evidence MCP server writes metadata-only start, local result, cache, remote intent, and remote result records to `JEV_GATE_TRACE_DIR`. Router, Compact, and Output emit in-flight start records to the host debug log before their respective work. Planner and worker dispatches carry their requested tier/model; accepted plans carry a bounded dependency graph and required-check counts. The dashboard never reads source text, prompts, job files, or keys.
 - The SSE stream now updates when any feature's record changes, including Compact, Output, and Evidence events that leave the legacy single-turn view unchanged.
 
+### Fixed
+
+- A single worker whose reported passing checks used only a display suffix gets one same-tier evidence-format retry. The refusal names the closest executed command, and worker prompts require the exact check command. Strict acceptance still requires an observed passing exact run. When the single-worker attempt cap is reached, the root guard is released so the root session can finish the remaining work.
+- All seven planner, worker, and lean executor profiles inherit the host's tools and connected MCPs. The root guard permits `ToolSearch` when MCP use is enabled; `guardAllowMcp` no longer vetoes delegation to a worker. Connector work is no longer reserved for the root. A Claude Code 2.1.284 host probe observed `jev-gate:worker-fast` call `ToolSearch` and a test MCP directly.
+
 ### Upgrading
 
-- This section describes the next development version. The published v0.6.5 archive remains unchanged. Set `JEV_GATE_TRACE_DIR` for Gate and Evidence records and `CLAUDE_CODE_DEBUG_LOGS_DIR` for Router, Compact, and Output records in the host's `env`, then restart the host and open `node dist/cli.js dashboard`. Previously unrecorded events cannot be reconstructed.
+- Set `JEV_GATE_TRACE_DIR` for Gate and Evidence records and `CLAUDE_CODE_DEBUG_LOGS_DIR` for Router, Compact, and Output records in the host's `env`, then restart the host and open `node dist/cli.js dashboard`. Previously unrecorded events cannot be reconstructed. Restart Claude Code after updating so the seven agent definitions reload with inherited host tools.
 
 ## v0.6.5 — Watch a call while it is in flight
 

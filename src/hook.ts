@@ -1079,7 +1079,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
             if (!outcome.ok) return { forced: false, decision: { shape: 'direct', decided: false, reason: outcome.code, changed_default: false } };
             if (atomicAdmission) admissionAnswers = outcome.response.answers;
             admitted = atomicAdmission
-              ? decideAdmissionAtomic(outcome.response.answers, contextTokens, floor, delegationModel(config), !config.guardAllowMcp)
+              ? decideAdmissionAtomic(outcome.response.answers, contextTokens, floor, delegationModel(config))
               : decideAdmission(outcome.response.answers, config.admissionConfidenceFloor);
             // A17 item 7: without Jev this turn would have been one native conversation.
             return {

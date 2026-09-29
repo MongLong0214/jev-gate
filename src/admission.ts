@@ -86,7 +86,8 @@ const requestFact = (statement: string): { type: 'noul'; instructions: string } 
  * 2026-09-28 (owner review of real use): `answer_only` was a veto that had nothing to do with cost. A question can
  * take 26 tool calls to answer, and at depth those calls are the expensive part; answered correctly, the veto kept
  * exactly that work in the deep session. It is replaced by `tool_calls`, which asks for the term the saving is made
- * of, and `external_tools`, because the workers cannot reach a connector and a turn that needs one stalls there.
+ * of. `external_tools` remains a measured request fact, but does not veto delegation: workers inherit connected
+ * tools from the host, and `guardAllowMcp` applies only to the root guard.
  */
 export const ADMISSION_FACT_QUESTIONS = {
   forbids_delegation: requestFact('The request says this work must not be handed to a subagent, assistant or other worker. Restrictions on how to do the work, or on what not to change, are not this.'),
@@ -228,7 +229,6 @@ export const decideAdmissionAtomic = (
   depth: number | null,
   floor: number,
   model: DelegationCostModel,
-  vetoExternalTools = true,
 ): AdmissionDecision & { estimate: AdmissionEstimate | null } => {
   const fallback = (reason: PreserveReason, estimate: AdmissionEstimate | null = null) => ({ shape: 'direct' as const, decided: false, reason, answer: null, estimate });
   if (depth === null) return fallback('depth_unknown');
@@ -245,9 +245,6 @@ export const decideAdmissionAtomic = (
   const calls = scoreValue(answers['tool_calls'], TOOL_CALLS_MAX_SCORE);
   if (calls === null || scoreValue(answers['size'], SIZE_MAX_SCORE) === null) return fallback('admission_invalid');
   if ((facts['forbids_delegation'] as number) >= FACT_TRUE) return fallback('admission_forbids_delegation');
-  // Only a coordinator that cannot call a connector itself (`guardAllowMcp: false`) stalls on one; with the default
-  // the root runs those steps and the rest is still worth delegating, so the fact is recorded and vetoes nothing.
-  if (vetoExternalTools && (facts['external_tools'] as number) >= FACT_TRUE) return fallback('admission_external_tools');
   const turns = estimatedTurns(calls);
   const estimate = { turns, saving_tokens: Math.round(delegationSaving(turns, depth, model)) };
   if (estimate.saving_tokens <= 0) return fallback('admission_not_worth', estimate);

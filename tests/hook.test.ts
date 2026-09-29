@@ -416,12 +416,11 @@ describe('Gate A admission', () => {
     expect(r.code).toBe('admission_not_worth');
   });
 
-  it('stays direct when the request needs a connector and the coordinator may not call one', async () => {
+  it('may delegate a connector request even when the root MCP guard is off', async () => {
     const cfg = join(tmp, 'no-mcp.json');
     writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', guardAllowMcp: false }));
     const r = await run(makeEnv({ JEV_GATE_CONFIG: cfg }), promptEvent(), fakeJev({ externalTools: 0.9 }));
-    expect(r.code).toBe('admission_external_tools');
-    // With the default the coordinator runs the connector step itself, so the same request is delegated.
+    expect(r.code).toBeNull();
     expect((await run(makeEnv(), promptEvent(), fakeJev({ externalTools: 0.9 }))).code).toBeNull();
   });
 
@@ -1126,8 +1125,7 @@ describe('root guard (A6 allow-list)', () => {
 
   it('passes allowed tools with no output and denies the rest with the fixed reason', async () => {
     const env = await orchestrate();
-    // A connector step is the coordinator's (a worker has none), so MCP tools pass under the default guardAllowMcp.
-    for (const tool of ['Read', 'Grep', 'TodoWrite', 'TaskCreate', 'mcp__unknown__write']) {
+    for (const tool of ['Read', 'Grep', 'TodoWrite', 'TaskCreate', 'ToolSearch', 'mcp__unknown__write']) {
       expect(await run(env, preEvent(tool, {})), tool).toMatchObject({ kind: 'skip', code: null, stdout: null });
     }
     for (const tool of ['Bash', 'Edit', 'Write', 'Skill', 'mcp_not_a_prefix']) {
@@ -1146,6 +1144,7 @@ describe('root guard (A6 allow-list)', () => {
     // The external-tools fact is low here, so the turn is admitted and the guard is on.
     await run(env, promptEvent(), fakeJev());
     expect((await run(env, preEvent('mcp__notion__search', {}))).kind).toBe('deny');
+    expect((await run(env, preEvent('ToolSearch', {}))).kind).toBe('deny');
   });
 
   it('adds continue:false once the denial budget of one prompt is spent', async () => {
@@ -1161,7 +1160,11 @@ describe('root guard (A6 allow-list)', () => {
 
   it('never guards a child caller, a direct job or a session without state', async () => {
     const env = await orchestrate();
-    expect(await run(env, preEvent('Bash', {}, { agent_id: 'child' }))).toMatchObject({ kind: 'skip', code: 'child_caller' });
+    const before = state(env).current.denials;
+    for (const tool of ['Bash', 'Agent', 'ToolSearch', 'mcp__test__lookup']) {
+      expect(await run(env, preEvent(tool, {}, { agent_id: 'child' }))).toMatchObject({ kind: 'skip', code: 'child_caller' });
+    }
+    expect(state(env).current.denials).toBe(before);
     // A direct turn under the atomic gate: the request refuses delegation, so the veto fires and nothing is guarded.
     const direct = makeEnv();
     await run(direct, promptEvent(), fakeJev({ forbidsDelegation: 0.9 }));
@@ -1700,8 +1703,9 @@ describe('worker isolation (#48 P1-2)', () => {
 
   it('names Bash as available and says worker trees start at the last commit when isolation holds', async () => {
     const guidance = context(await run(capEnv(2), promptEvent(), fakeJev()));
-    expect(guidance).toContain('Available to you now: Read, Grep, Glob, TodoWrite, Bash, and Agent calls');
-    expect(guidance).toContain('Edit, Write and every other agent (including Explore) are unavailable');
+    expect(guidance).toContain('read/task tools actually provided by the host');
+    expect(guidance).not.toMatch(/Grep|Glob/);
+    expect(guidance).toContain('denies root Edit, Write calls');
     expect(guidance).toContain("branched from this checkout's last commit");
   });
 
@@ -2554,7 +2558,7 @@ describe('sources', () => {
     for (const f of files) {
       const text = readFileSync(join(__dirname, '..', 'agents', f), 'utf8');
       const body = text.slice(text.indexOf('\n---', 4) + 4);
-      expect(text, f).toContain('disallowedTools: Agent, SendMessage');
+      expect(text, f).not.toMatch(/^tools:|^disallowedTools:/m);
       expect(text, f).toContain('background: false');
       if (f.startsWith('worker')) workerBodies.add(body);
       expect(body.match(/```json\n/g), f).toHaveLength(1);
@@ -2565,7 +2569,7 @@ describe('sources', () => {
   it('keeps the lean executor out of the legacy contract: inherited model, no reply format, a fail-safe', () => {
     const text = readFileSync(join(__dirname, '..', 'agents', 'executor.md'), 'utf8');
     expect(text).toContain('model: inherit');
-    expect(text).toContain('disallowedTools: Agent, SendMessage');
+    expect(text).not.toMatch(/^tools:|^disallowedTools:/m);
     expect(text).toContain('background: false');
     // No WorkerReply JSON, no check_id list, no length quota: the executor reports in prose.
     expect(text).not.toContain('```json');

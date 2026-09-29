@@ -21,9 +21,8 @@ export type WorkerIsolation = 'none' | 'worktree';
 export const WORKER_ISOLATIONS: readonly WorkerIsolation[] = ['none', 'worktree'];
 
 /**
- * #48 P2-1: what a main_session_steps entry needs that a worker shell cannot provide. Workers here run in
- * non-interactive shells without macOS privacy (TCC) grants, so a step needing one of these has to stay with the
- * main session rather than be handed to a worker that "verifies" it with unit tests alone.
+ * #48 P2-1: what a main_session_steps entry needs when it genuinely requires the main session or user. A worker
+ * can use connected host tools, including browser/MCP tools, so these names alone do not reserve a step for root.
  */
 export type Capability = 'os_permission' | 'live_app' | 'interactive_login' | 'device';
 export const CAPABILITIES: readonly Capability[] = ['os_permission', 'live_app', 'interactive_login', 'device'];

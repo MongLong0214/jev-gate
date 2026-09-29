@@ -78,9 +78,11 @@ describe('guardDecision', () => {
   it('declines writing tools, non-owned agents and unknown tools', () => {
     for (const tool of ['Edit', 'MultiEdit', 'Write', 'NotebookEdit', 'Bash', 'PowerShell', 'Skill', 'SendMessage', 'Workflow', 'mcp_unknown'])
       expect(guardDecision(tool, {}, config), tool).toEqual({ allow: false });
-    // A worker has no connector, so MCP tools stay with the coordinator unless guardAllowMcp is off.
+    // The root guard policy does not constrain child tools.
     expect(guardDecision('mcp__unknown__do', {}, config)).toEqual({ allow: true });
+    expect(guardDecision('ToolSearch', {}, config)).toEqual({ allow: true });
     expect(guardDecision('mcp__unknown__do', {}, { ...config, guardAllowMcp: false })).toEqual({ allow: false });
+    expect(guardDecision('ToolSearch', {}, { ...config, guardAllowMcp: false })).toEqual({ allow: false });
     // #77: the evidence tool under the name 2.1.283 registers it with, the same way.
     expect(guardDecision('mcp__plugin_jev-gate_evidence__jev_evidence', {}, config)).toEqual({ allow: true });
     expect(guardDecision('mcp__plugin_jev-gate_evidence__jev_evidence', {}, { ...config, guardAllowMcp: false })).toEqual({ allow: false });

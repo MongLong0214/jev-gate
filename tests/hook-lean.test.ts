@@ -893,7 +893,7 @@ globalThis.fetch = async (_url, init) => {
     expect(readdirSync(join(packed, 'agents'))).toEqual(['executor.md']);
     const definition = readFileSync(join(packed, 'agents', 'executor.md'), 'utf8');
     expect(definition).toContain('model: inherit');
-    expect(definition).toContain('disallowedTools: Agent');
+    expect(definition).not.toMatch(/^tools:|^disallowedTools:/m);
     expect(definition).toContain('handoff_unavailable');
   });
 

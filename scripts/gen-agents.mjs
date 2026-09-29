@@ -1,7 +1,7 @@
 // #48 P0-2: rewrites the `model:`/`effort:` frontmatter lines of the six owned `agents/*.md` files from the built
 // `OWNED_AGENT_PROFILES` table (src/agents.ts) and `DEFAULT_CONFIG.models` (src/config.ts) -- the same table doctor's
 // `checkModelAuthority` reads -- so the packaged frontmatter and that table cannot quietly drift apart.
-// Every other frontmatter field and the whole body are left byte-for-byte untouched. `executor.md` (lean's one
+// The old tool restrictions are removed; every other frontmatter field and the whole body are left untouched. `executor.md` (lean's one
 // untiered agent, `model: inherit`) is not in the table and is never touched here.
 // Usage: node scripts/gen-agents.mjs [--check]   (requires `npm run build` first: it reads dist/, not src/)
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -51,6 +51,7 @@ for (const profile of OWNED_AGENT_PROFILES) {
     // No existing effort line: insert one right after model, so field order stays the same as every hand-written file.
     nextHead = nextHead.replace(/^(model:.*)$/m, `$1\neffort: ${effort}`);
   }
+  nextHead = nextHead.replace(/\n(?:tools|disallowedTools):.*$/gm, '');
 
   const next = nextHead + tail;
   if (next === text) continue;
