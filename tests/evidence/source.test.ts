@@ -103,8 +103,10 @@ describe('inventory and access', () => {
 
     // No config file: the Git worktree holding the session's directory, all of it, remote on; a file still decides.
     const session = await loadConfig({ CLAUDE_PROJECT_DIR: join(root, 'sub'), PWD: plain });
-    expect(session).toEqual({ ok: true, config: { projectRoot: realpathSync(root), allowedRoots: [''], excludeGlobs: [], remote: true } });
+    expect(session).toEqual({ ok: true, origin: 'session', config: { projectRoot: realpathSync(root), allowedRoots: [''], excludeGlobs: [], remote: true } });
     expect(await loadConfig({ PWD: root })).toEqual(session);
+    expect(await loadConfig({ CLAUDE_PROJECT_DIR: plain })).toMatchObject({ ok: false, origin: 'session', reason: 'unsupported_inventory' });
+    expect(await loadConfig({ JEV_EVIDENCE_CONFIG: configFile('{not json') })).toMatchObject({ ok: false, origin: 'explicit', reason: 'unavailable_config' });
     expect(await bad({ CLAUDE_PROJECT_DIR: plain })).toBe('unsupported_inventory');
     expect(await bad({ CLAUDE_PROJECT_DIR: 'relative' })).toBe('unavailable_config');
     expect(await bad({ CLAUDE_PROJECT_DIR: root, JEV_EVIDENCE_CONFIG: '' })).toBe('unavailable_config');
@@ -113,11 +115,37 @@ describe('inventory and access', () => {
     git(plain, 'init', '-q');
     git(plain, 'config', 'core.worktree', away);
     expect(await bad({ CLAUDE_PROJECT_DIR: plain })).toBe('unsupported_inventory');
-    expect(await loadConfig({ CLAUDE_PROJECT_DIR: root, JEV_EVIDENCE_CONFIG: configFile({ projectRoot: root, allowedRoots: ['sub'], remote: false }) })).toMatchObject({ ok: true, config: { allowedRoots: ['sub'], remote: false } });
+    expect(await loadConfig({ CLAUDE_PROJECT_DIR: root, JEV_EVIDENCE_CONFIG: configFile({ projectRoot: root, allowedRoots: ['sub'], remote: false }) })).toMatchObject({ ok: true, origin: 'explicit', config: { allowedRoots: ['sub'], remote: false } });
 
     const fetchImpl = vi.fn();
     const none = await createEvidenceService(null, { apiKey: 'test-key', fetchImpl: fetchImpl as unknown as typeof fetch }).run({ goal: 'widget' }, live());
     expect(none).toMatchObject({ isError: true, result: { projectRoot: null, status: 'unavailable', reasonCodes: ['unavailable_config'], items: [] } });
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('keeps a loaded config when the file changes, and a new load sees remote:false', async () => {
+    const root = repo({ 'src/a.ts': 'export const widget = 1;\n' });
+    const path = configFile({ projectRoot: root, allowedRoots: ['.'], remote: true });
+    const first = await loadConfig({ JEV_EVIDENCE_CONFIG: path });
+    expect(first).toMatchObject({ ok: true, origin: 'explicit', config: { remote: true } });
+    writeFileSync(path, JSON.stringify({ projectRoot: root, allowedRoots: ['.'], remote: false }));
+    expect(first.ok && first.config.remote).toBe(true);
+    const fetchImpl = vi.fn(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)) as { questions: Record<string, unknown> };
+      return new Response(JSON.stringify({
+        model: 'jev-1.13.0',
+        answers: Object.fromEntries(Object.keys(body.questions).map((id) => [id, { type: 'choice', choice: 'relevant', probabilities: { relevant: 0.9, unrelated: 0.05, needs_context: 0.05 }, confidence: 0.9 }])),
+        usage: { input_tokens: 1, output_tokens: 1 },
+      }), { status: 200 });
+    });
+    const held = await createEvidenceService(first.ok ? first.config : null, { apiKey: 'test-key', fetchImpl: fetchImpl as unknown as typeof fetch }).run({ goal: 'widget' }, live());
+    expect(held.result.reasonCodes).not.toContain('remote_disabled');
+    expect(fetchImpl).toHaveBeenCalled();
+    const again = await loadConfig({ JEV_EVIDENCE_CONFIG: path });
+    expect(again).toMatchObject({ ok: true, origin: 'explicit', config: { remote: false } });
+    const localFetch = vi.fn();
+    const local = await createEvidenceService(again.ok ? again.config : null, { apiKey: 'test-key', fetchImpl: localFetch as unknown as typeof fetch }).run({ goal: 'widget' }, live());
+    expect(local.result.reasonCodes).toContain('remote_disabled');
+    expect(localFetch).not.toHaveBeenCalled();
   });
 });

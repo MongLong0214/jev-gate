@@ -78,7 +78,12 @@ const git = (cwd: string, args: string[], maxBuffer: number, timeout: number): P
     });
   });
 
-export type ConfigLoad = { ok: true; config: EvidenceConfig } | { ok: false; reason: 'unavailable_config' | 'unsupported_inventory'; detail: string };
+/** `explicit`: `JEV_EVIDENCE_CONFIG` was set. `session`: it was absent, so the session worktree default was used. */
+export type ConfigOrigin = 'explicit' | 'session';
+
+type Settled = { ok: true; config: EvidenceConfig } | { ok: false; reason: 'unavailable_config' | 'unsupported_inventory'; detail: string };
+
+export type ConfigLoad = Settled & { origin: ConfigOrigin };
 
 const CONFIG_KEYS = new Set(['projectRoot', 'allowedRoots', 'excludeGlobs', 'remote']);
 
@@ -90,12 +95,12 @@ const CONFIG_KEYS = new Set(['projectRoot', 'allowedRoots', 'excludeGlobs', 'rem
  * with `"remote": false` keeps a project local.
  */
 export const loadConfig = async (env: Readonly<Record<string, string | undefined>>): Promise<ConfigLoad> => {
-  const bad = (detail: string): ConfigLoad => ({ ok: false, reason: 'unavailable_config', detail });
+  const bad = (detail: string, origin: ConfigOrigin): ConfigLoad => ({ ok: false, origin, reason: 'unavailable_config', detail });
   const path = env['JEV_EVIDENCE_CONFIG'];
   // Set but empty is set: only an absent variable takes the session default.
   if (path === undefined) {
     const dir = env['CLAUDE_PROJECT_DIR'] || env['PWD'];
-    if (!dir || !isAbsolute(dir)) return bad('JEV_EVIDENCE_CONFIG is not set and no session directory is known');
+    if (!dir || !isAbsolute(dir)) return bad('JEV_EVIDENCE_CONFIG is not set and no session directory is known', 'session');
     const top = await git(dir, ['rev-parse', '--show-toplevel'], 64 * 1024, 2000);
     const topPath = top.error ? '' : top.stdout.toString('utf8').replace(/\n$/, '');
     let inside = false;
@@ -106,48 +111,48 @@ export const loadConfig = async (env: Readonly<Record<string, string | undefined
       inside = false;
     }
     // A worktree elsewhere (`core.worktree`, a `.git` file pointing away) is not the session's own.
-    if (!topPath || !inside) return { ok: false, reason: 'unsupported_inventory', detail: 'the session directory is not inside a Git worktree' };
-    return settle(topPath, [''], [], true);
+    if (!topPath || !inside) return { ok: false, origin: 'session', reason: 'unsupported_inventory', detail: 'the session directory is not inside a Git worktree' };
+    return { ...(await settle(topPath, [''], [], true)), origin: 'session' };
   }
-  if (!path) return bad('JEV_EVIDENCE_CONFIG is empty');
-  if (!isAbsolute(path)) return bad('JEV_EVIDENCE_CONFIG is not an absolute path');
+  if (!path) return bad('JEV_EVIDENCE_CONFIG is empty', 'explicit');
+  if (!isAbsolute(path)) return bad('JEV_EVIDENCE_CONFIG is not an absolute path', 'explicit');
   let raw: unknown;
   try {
     // One descriptor and a capped read, so a file that grows after the check is still read only to its bound.
     const fh = await open(path, constants.O_RDONLY | constants.O_NONBLOCK);
     let text: string;
     try {
-      if (!(await fh.stat()).isFile()) return bad('JEV_EVIDENCE_CONFIG is not a regular file');
+      if (!(await fh.stat()).isFile()) return bad('JEV_EVIDENCE_CONFIG is not a regular file', 'explicit');
       const cap = Buffer.alloc(LIMITS.configBytes + 1);
       const { bytesRead } = await fh.read(cap, 0, cap.length, 0);
-      if (bytesRead > LIMITS.configBytes) return bad('the config file is over 64 KiB');
+      if (bytesRead > LIMITS.configBytes) return bad('the config file is over 64 KiB', 'explicit');
       text = cap.subarray(0, bytesRead).toString('utf8');
     } finally {
       await fh.close();
     }
     raw = JSON.parse(text);
   } catch {
-    return bad('the config file cannot be read as JSON');
+    return bad('the config file cannot be read as JSON', 'explicit');
   }
-  if (!isRecord(raw)) return bad('the config is not a JSON object');
+  if (!isRecord(raw)) return bad('the config is not a JSON object', 'explicit');
   const unknown = Object.keys(raw).find((k) => !CONFIG_KEYS.has(k));
-  if (unknown) return bad(`unknown config key ${JSON.stringify(unknown)}`);
+  if (unknown) return bad(`unknown config key ${JSON.stringify(unknown)}`, 'explicit');
   const { projectRoot, allowedRoots, excludeGlobs, remote } = raw;
-  if (typeof projectRoot !== 'string' || !isAbsolute(projectRoot)) return bad('projectRoot is not an absolute path');
-  if (!Array.isArray(allowedRoots) || allowedRoots.length === 0 || allowedRoots.length > 64) return bad('allowedRoots is not a list of 1 to 64 paths');
+  if (typeof projectRoot !== 'string' || !isAbsolute(projectRoot)) return bad('projectRoot is not an absolute path', 'explicit');
+  if (!Array.isArray(allowedRoots) || allowedRoots.length === 0 || allowedRoots.length > 64) return bad('allowedRoots is not a list of 1 to 64 paths', 'explicit');
   const roots: string[] = [];
   for (const r of allowedRoots) {
     const n = typeof r === 'string' ? (r === '.' ? '' : normalizeRelative(r)) : null;
-    if (n === null) return bad('an allowedRoots entry is not a relative path inside the project');
+    if (n === null) return bad('an allowedRoots entry is not a relative path inside the project', 'explicit');
     roots.push(n);
   }
   if (excludeGlobs !== undefined && (!Array.isArray(excludeGlobs) || excludeGlobs.length > 64 || !excludeGlobs.every((g) => typeof g === 'string' && g !== '' && !g.includes('\0'))))
-    return bad('excludeGlobs is not a list of up to 64 globs');
-  if (remote !== undefined && typeof remote !== 'boolean') return bad('remote is not a boolean');
-  return settle(projectRoot, roots, (excludeGlobs as string[] | undefined) ?? [], remote === true);
+    return bad('excludeGlobs is not a list of up to 64 globs', 'explicit');
+  if (remote !== undefined && typeof remote !== 'boolean') return bad('remote is not a boolean', 'explicit');
+  return { ...(await settle(projectRoot, roots, (excludeGlobs as string[] | undefined) ?? [], remote === true)), origin: 'explicit' };
 };
 
-const settle = async (projectRoot: string, allowedRoots: string[], excludeGlobs: string[], remote: boolean): Promise<ConfigLoad> => {
+const settle = async (projectRoot: string, allowedRoots: string[], excludeGlobs: string[], remote: boolean): Promise<Settled> => {
   // The root's own OS alias (a symlinked checkout, /tmp on macOS) is resolved once here; nothing below it is followed.
   let canonical: string;
   try {

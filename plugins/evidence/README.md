@@ -31,8 +31,9 @@ named by `JEV_EVIDENCE_CONFIG` (an absolute path, at most 64 KiB) when it starts
 
 `projectRoot` must be a Git worktree. `.git`, `.env*`, keys and other credential files, dependency, vendor and build
 directories, symlinks, submodules, binary and non-UTF-8 files are always excluded. The config is fixed for the life
-of the process: restart the server (or Claude Code) after changing it. For another project or worktree, point
-`JEV_EVIDENCE_CONFIG` at another config in that project's settings; a tool argument never moves the root.
+of the process. Editing the JSON does not change a server that is already running, and `/reload-plugins` is not a
+guarantee that a live MCP process re-reads it. End the Claude session and start it again. For another project or worktree, point
+`JEV_EVIDENCE_CONFIG` at another config in that project's settings; a tool argument never moves the root. Do not put the API key in this file.
 
 The key is read only from `TYPESAFE_API_KEY` in the server's environment, never from the config or a `.env` file.
 Both variables come from the environment Claude Code starts in, for example a project's `.claude/settings.local.json`:
@@ -59,9 +60,7 @@ tree; `claude --plugin-dir plugins/evidence` loads this server alone (as `jev-ga
 `node scripts/pack.mjs dist-pack --profile evidence` still builds that standalone archive. The bundled server has the
 MCP SDK inside it; it needs Node 22 or later and nothing else. To turn it off, disable the `evidence` server in `/mcp`.
 
-`node <plugin dir>/plugins/evidence/dist/server.mjs --doctor` (`<dir>/dist/server.mjs` for the standalone archive) prints the config state, whether remote is on and whether the key is
-present. It reads the config only: no source scan, no request. A passing doctor says the server can start, nothing
-about the quality of its answers.
+`node <plugin dir>/plugins/evidence/dist/server.mjs --doctor` (`<dir>/dist/server.mjs` for the standalone archive) prints where the config came from (`explicit` or `session`), the project root, how many roots and exclusions are in force, whether remote is on, and whether the key is present. It reads the config only: no source scan, no request. A passing doctor says the server can start, nothing about key validity, answer quality, or that a later edit of the JSON is already in effect.
 
 ## Use
 
@@ -77,7 +76,9 @@ type it; nothing else in a session calls the tool unless Claude chooses to.
 | More lines around a hit | the same `path` and `fileSha256` with a wider `startLine`/`endLine` (≤ 40 lines) in `sources` | never |
 | Every window in a small scope | `{ "goal": "…", "mode": "audit", "roots": ["src/evidence"] }` | when remote, never folded |
 
-With `remote: false` or no key, searches run locally and say so (`remote_disabled`, `missing_key`).
+`remote: false` turns off Evidence's sends to TypeSafe only. The server still reads local files, and Claude's own model calls are unchanged. It is not an offline mode for Claude. To stop this server from reading files, disable the `evidence` MCP server (or the plugin). A Native Read deny is not inherited by this reader; if the same restriction cannot be applied here, disable the server. Built-in exclusions are a filter, not a DLP, a retention promise, or proof that an organization approved the send. A key being present is not proof that it is valid or that a request will succeed.
+
+With `remote: false` or no key, searches run locally and say so (`remote_disabled`, `missing_key`). The two are different: remote off is a setting, a missing key is an absent credential while remote is still on.
 
 `queryTerms`, when you pass them, are the only lexical hints. The goal is not trimmed and is still the question sent
 for semantic judgement, along with `constraints`. Without `queryTerms`, locate takes terms from the goal. More than
