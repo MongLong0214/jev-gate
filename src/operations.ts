@@ -239,6 +239,8 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
     if (verification) details.push(text(`실행 기록 ${token(verification['transcript']) ?? '미확인'}`, list(verification['contradicted']).length ? `모순 ${list(verification['contradicted']).join(', ')}` : null, list(verification['unobserved']).length ? `미관측 ${list(verification['unobserved']).join(', ')}` : null));
     if (list(r['ready_task_ids']).length) details.push(`다음 실행 가능: ${list(r['ready_task_ids']).join(', ')}`);
     if (r['plan_complete'] === true) details.push('계획의 모든 작업 수락');
+    if (r['evidence_format_only'] === true) details.push('검사 명령 형식만 불일치 · 한 번의 무료 재검증 가능');
+    if (r['root_fallback'] === true) details.push('단일 워커 시도 상한 · 루트 도구 가드 해제');
     if (r['orphaned'] === true) details.push('이전 세대의 늦은 결과 · 현재 계획 미진행');
   } else if (phase === 'lean_dispatch') {
     lane = 'policy';

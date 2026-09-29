@@ -975,10 +975,38 @@ describe('single executor (A19)', () => {
     expect(second.kind).toBe('patch');
     expect(state(env).current.active['toolu_2']).toMatchObject({ task_id: 'single', attempt: 2 });
     await run(env, workerPost('toolu_2', 'still nothing parseable'), fetchImpl);
+    expect(state(env).current.root_fallback).toBe(true);
+    expect(await run(env, preEvent('Edit', { file_path: '/w/src/a.ts', old_string: 'a', new_string: 'b' }), fetchImpl)).toMatchObject({ kind: 'skip' });
+    expect(await run(env, preEvent('Bash', { command: 'npm test' }), fetchImpl)).toMatchObject({ kind: 'skip' });
     const third = await run(env, preEvent('Agent', agentInput({ prompt: 'Do what the request asks.' }), { tool_use_id: 'toolu_3' }), fetchImpl);
     expect(third).toMatchObject({ kind: 'deny', code: 'bounds_exhausted' });
     expect(String(hookOutput(third)['permissionDecisionReason'])).toContain('allowed attempts');
     expect(state(env).current.active['toolu_3']).toBeUndefined();
+  });
+
+  it('grants one same-tier retry for a check hidden by an output suffix without accepting it', async () => {
+    const env = singleEnv();
+    const fetchImpl = fakeJev({ execution: 'orchestrated' });
+    await run(env, promptEvent(), fetchImpl);
+    await run(env, preEvent('Agent', agentInput({ prompt: 'Do what the request asks.' }), { tool_use_id: 'toolu_1' }), fetchImpl);
+    const ran = workerTranscript([{ command: 'npm test; echo "exit=$?"', failed: false }]);
+    const reply = workerReply({ checks: [{ check_id: 'npm test', result: 'pass', note: '' }] });
+    const first = await run(env, workerPost('toolu_1', reply, {
+      transcript_path: ran.parent,
+      tool_response: { status: 'completed', agentId: ran.agentId, resolvedModel: 'claude-sonnet-5', content: [{ type: 'text', text: fence(reply) }] },
+    }), fetchImpl);
+    expect(state(env).current.receipts[0]).toMatchObject({ verdict: 'incomplete', evidence_format_only: true, requested_tier: 'standard' });
+    expect(state(env).current.root_fallback).toBeUndefined();
+    expect(context(first)).toContain('npm test; echo');
+    expect(context(first)).toContain('same worker profile');
+    const wrongTier = await run(env, preEvent('Agent', agentInput({ subagent_type: 'jev-gate:worker-deep', prompt: 'Do what the request asks.' }), { tool_use_id: 'toolu_wrong' }), fetchImpl);
+    expect(wrongTier).toMatchObject({ kind: 'deny', code: 'attempt_mismatch' });
+    const retry = await run(env, preEvent('Agent', agentInput({ prompt: 'Do what the request asks.' }), { tool_use_id: 'toolu_2' }), fetchImpl);
+    expect(retry).toMatchObject({ kind: 'patch' });
+    expect(updatedInput(retry)['model']).toBe('sonnet');
+    expect(state(env).current.active['toolu_2']).toMatchObject({ task_id: 'single', attempt: 2 });
+    await run(env, workerPost('toolu_2', reply), fetchImpl);
+    expect(state(env).current.receipts.at(-1)?.verdict).toBe('accept');
   });
 
   /**

@@ -424,6 +424,50 @@ export const verifyChecks = (observation: WorkerObservation | null, claims: read
   return out;
 };
 
+/**
+ * This is a retry classification, never acceptance evidence. A trailing echo or a `tail` pipeline can hide the
+ * check's exit code even when Bash reports success. It only identifies a likely formatting mistake so one retry
+ * can run the declared command on its own without spending the implementation-attempt budget.
+ */
+const displaySuffix = (run: string, wanted: string): boolean => {
+  const command = wanted.trimEnd();
+  if (!command || !run.startsWith(command)) return false;
+  const suffix = run.slice(command.length);
+  return /^;\s*echo\s+(?:["']?exit=\$\?["']?)\s*$/.test(suffix)
+    || /^\s+2>&1\s*\|\s*tail\s+-\d+\s*;\s*echo\b.*$/.test(suffix);
+};
+
+export const evidenceFormatOnly = (
+  observation: WorkerObservation | null,
+  claims: readonly { id: string; command: string | null }[],
+  verification: CheckVerification,
+): boolean => {
+  if (!observation || verification.transcript !== 'read' || verification.unobserved.length === 0
+    || verification.contradicted.length > 0 || verification.stale.length > 0 || observation.openWrite) return false;
+  return verification.unobserved.every((id) => {
+    const command = claims.find((c) => c.id === id)?.command;
+    if (!command) return false;
+    const matching = observation.runs.filter((run) => displaySuffix(run.command, command));
+    const latest = matching.reduce<(typeof matching)[number] | null>((best, run) => best === null || run.at > best.at ? run : best, null);
+    return latest?.status === 'passed' && (observation.lastWrite === null || latest.at > observation.lastWrite);
+  });
+};
+
+/** Only for the root's repair instruction. Do not persist or trace this command. */
+export const nearestFormatCommands = (
+  observation: WorkerObservation | null,
+  claims: readonly { id: string; command: string | null }[],
+  verification: CheckVerification,
+): Array<{ id: string; command: string }> => {
+  if (!observation) return [];
+  return verification.unobserved.slice(0, 8).flatMap((id) => {
+    const wanted = claims.find((c) => c.id === id)?.command;
+    if (!wanted) return [];
+    const run = [...observation.runs].reverse().find((r) => displaySuffix(r.command, wanted));
+    return run ? [{ id, command: run.command }] : [];
+  });
+};
+
 /** Why the transcript refuses an `accept`, or null when it does not. Failure, then a missing run, then a stale pass. */
 export const refusalReason = (v: CheckVerification): string | null => {
   if (v.contradicted.length > 0) return `check ${v.contradicted.join(', ')} was reported pass, but its last run in the worker's own transcript failed`;

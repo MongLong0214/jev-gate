@@ -132,7 +132,7 @@ import {
 } from './plan.js';
 import { openTraceDir, type TraceWriter } from './trace.js';
 import { appendLiveness, LIVENESS_WINDOW, readLiveness } from './liveness.js';
-import { readWorkerObservation, refusalReason, subagentTranscriptPath, verifyChecks } from './verify.js';
+import { evidenceFormatOnly, nearestFormatCommands, readWorkerObservation, refusalReason, subagentTranscriptPath, verifyChecks } from './verify.js';
 import type { CheckVerification, ConfigV5, DenyReason, ErrorCode, ExecutionShape, HookInput, JobGeneration, JobState, LeanPending, ModelAgreement, Plan, PlannedTask, Receipt, Reservation, RoutingMode, Tier } from './types.js';
 import { agentForTier, LEAN_EXECUTOR_AGENT, OWNED_AGENTS, TIERS } from './types.js';
 import { EXECUTION_CONTROL_KEYS, MAX_PROMPT_BYTES } from './brief.js';
@@ -1484,6 +1484,14 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     // A19: present on that same path, so the one dispatch this shape makes is reserved and leaves a receipt behind it.
     single: { sessionId: string; gen: JobGeneration } | null = null,
   ): Promise<HookResult> => {
+    const lastSingle = single?.gen.receipts.filter((r) => r.task_id === SINGLE_TASK_ID).at(-1);
+    const formatRetry = lastSingle?.evidence_format_only === true ? lastSingle : null;
+    if (formatRetry?.requested_tier && eligibility.tier !== formatRetry.requested_tier) {
+      return emitDeny('attempt_mismatch', renderDispatchDeny('attempt_mismatch', `evidence retry must use ${agentForTier('worker', formatRetry.requested_tier)}`), null);
+    }
+    if (formatRetry?.requested_model && eligibility.pinned && eligibility.input['model'] !== formatRetry.requested_model) {
+      return emitDeny('attempt_mismatch', renderDispatchDeny('attempt_mismatch', 'evidence retry must keep the previous model'), null);
+    }
     /**
      * A19/T9: the worker packet is prepared before anything on this path can return, so a routing outcome decides the
      * model and nothing else. `carriedRequest` is set exactly on the single-executor path, where the request is the
@@ -1567,7 +1575,11 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         const c: { reason: DenyReason; detail: string } = conflict;
         return emitDeny(c.reason, renderDispatchDeny(c.reason, c.detail), null);
       }
-      trace?.write('dispatch', { ...base, role: 'single_worker', task_id: SINGLE_TASK_ID, requested_tier: eligibility.tier, requested_model: requestedModelFor(eligibility.input), pinned: eligibility.pinned, selection: mode === 'native' ? 'native' : eligibility.pinned ? 'pinned' : !apiKey ? 'key_missing' : 'gate_b' });
+      trace?.write('dispatch', { ...base, role: 'single_worker', task_id: SINGLE_TASK_ID, requested_tier: eligibility.tier, requested_model: requestedModelFor(eligibility.input), pinned: eligibility.pinned, selection: formatRetry ? 'evidence_retry' : mode === 'native' ? 'native' : eligibility.pinned ? 'pinned' : !apiKey ? 'key_missing' : 'gate_b' });
+    }
+    if (formatRetry?.requested_tier) {
+      const tier = formatRetry.requested_tier;
+      return emitWorkerPatch({ subagent_type: agentForTier('worker', tier), model: formatRetry.requested_model ?? config.models[tier], prompt: composed + note(tier) }, null);
     }
     if (mode === 'native') return preserveAdhoc('mode_native');
     if (eligibility.pinned) return preserveAdhoc('pinned');
@@ -1630,11 +1642,12 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     if (state.ok) gen = state.value?.current ?? null;
     else gen = { ...recoveredGeneration(), phase: 'blocked' };
 
-    const orchestrated = gen !== null && gen.shape === 'orchestrated' && gen.outcome === null;
+    const orchestrated = gen !== null && gen.shape === 'orchestrated' && gen.outcome === null && gen.root_fallback !== true;
     const ownedCall = toolName === 'Agent' && isRecord(input.tool_input) && typeof input.tool_input['subagent_type'] === 'string' && input.tool_input['subagent_type'] in OWNED_AGENTS;
 
     if (!orchestrated) {
       if (toolName !== 'Agent') return skip(gen ? 'shape_direct' : 'no_state');
+      if (gen?.root_fallback && ownedCall) return emitDeny('bounds_exhausted', renderDispatchDeny('bounds_exhausted', 'single worker cap reached; continue in the root session'), null);
       if (!ownedCall) return skip('role_not_owned');
       const eligibility = checkEligibility(input, deps.env, config);
       if (!eligibility.eligible) return preserve(eligibility.code);
@@ -1877,6 +1890,8 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     // observed failure, a pass that cannot be seen, or a pass that is not after the last observed edit turns an
     // accept into incomplete. Run the declared exact check in the foreground and report its actual result.
     let verification: CheckVerification | undefined;
+    let formatOnly = false;
+    let formatHint = '';
     if (config.verifyWorkerChecks && parsed !== null && parsed.ok) {
       const agentId = isRecord(input.tool_response) ? str(input.tool_response['agentId']) : null;
       const path = agentId !== null && input.transcript_path && input.session_id ? subagentTranscriptPath(input.transcript_path, input.session_id, agentId) : null;
@@ -1892,6 +1907,12 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
           });
       const observation = path === null ? null : readWorkerObservation(path);
       verification = verifyChecks(observation, claims);
+      if (isSingle && finalVerdict === 'accept' && evidenceFormatOnly(observation, claims, verification)) {
+        formatOnly = true;
+        formatHint = nearestFormatCommands(observation, claims, verification)
+          .map((item) => `${item.id}: ${looksSecret(item.command) ? '[redacted]' : JSON.stringify(item.command.slice(0, 200))}`)
+          .join('; ');
+      }
       // A single worker that changed files and reports no passing check has shown nothing but its word: the request
       // it carries asks it to run the checks the change implies. One that changed nothing (an answer, an analysis)
       // may have nothing to run.
@@ -1905,6 +1926,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     }
 
     let context: string | null = null;
+    const dispatchedType = str(isRecord(input.tool_input) ? input.tool_input['subagent_type'] : null);
     const written = updateJob(deps.env, sessionId, (prev) => {
       // A2: both the generation and the plan revision must still be the ones this result belongs to.
       if (!prev || prev.current.prompt_id !== gen.prompt_id || (prev.current.plan?.rev ?? null) !== (gen.plan?.rev ?? null)) return null;
@@ -1925,13 +1947,18 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         root_effort: input.effort ?? null,
         recorded_at: new Date().toISOString(),
         ...(verification ? { verification } : {}),
+        ...(formatOnly ? { evidence_format_only: true as const } : {}),
+        requested_tier: (dispatchedType ? OWNED_AGENTS[dispatchedType]?.tier : null) ?? reservation.tier,
+        requested_model: requestedModelFor(input.tool_input),
       };
       // T1: the receipt is appended, so the latest attempt is the one that decides; earlier ones stay in the array.
       next = { ...next, receipts: [...next.receipts.filter((r) => r.tool_use_id !== toolUseId), receipt] };
+      const rootFallback = isSingle && finalVerdict !== 'accept' && boundExhausted(next, 'task', SINGLE_TASK_ID);
+      if (rootFallback) next = { ...next, root_fallback: true };
       if (isSingle) {
         // A19: rework and replan are hierarchy verdicts; this path only ever produces the four below.
         const shown = finalVerdict === 'accept' || finalVerdict === 'invalid' || finalVerdict === 'unknown' ? finalVerdict : 'incomplete';
-        context = renderSingleResult(shown, reason ?? '');
+        context = renderSingleResult(shown, reason ?? '', { formatHint, rootFallback });
       } else if (finalVerdict === 'accept') {
         const ready = readyForDispatch(next);
         // #53 review: "nothing else is ready" was the proxy here, and it is true while an independent sibling is still
@@ -1959,12 +1986,14 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         } : null,
         ready_task_ids: finalVerdict === 'accept' && !isSingle ? readyForDispatch(next) : [],
         plan_complete: !isSingle && planComplete(next),
+        evidence_format_only: formatOnly,
+        root_fallback: rootFallback,
         advisory: null,
         // #48 P0-2: the same two fields the native no-job branch above records, so an orchestrated dispatch and an
         // unrecorded native one read the same way in `explain` -- what subagent_type ran, and what model it resolved
         // to. `subagent_type` here is the dispatched one (tool_input reflects the patched call), not the tier the
         // coordinator originally called.
-        subagent_type: str(isRecord(input.tool_input) ? input.tool_input['subagent_type'] : null),
+        subagent_type: dispatchedType,
         requested_model: requestedModelFor(input.tool_input),
         resolved_model: observedModel(input.tool_response),
         tool_response: whitelistToolResponse(input.tool_response),

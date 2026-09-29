@@ -270,14 +270,24 @@ export const renderWorkerReported = (taskId: string, verdict: 'rework' | 'replan
  * the worker's own report; nothing in this plugin checked it, and the coordinator is told so rather than left to read
  * an accept as the hierarchy's deterministic one.
  */
-export const renderSingleResult = (verdict: 'accept' | 'incomplete' | 'unknown' | 'invalid', reason: string): string =>
-  verdict === 'accept'
+export const renderSingleResult = (
+  verdict: 'accept' | 'incomplete' | 'unknown' | 'invalid',
+  reason: string,
+  opts: { formatHint?: string; rootFallback?: boolean } = {},
+): string => {
+  if (opts.rootFallback) {
+    return `[Jev Gate result] The single-worker attempt limit is reached (${bounded(reason)}). Jev Gate has released the root tool guard for this turn. Finish the remaining work in this session, run checks you can execute, and identify anything still unverified.`;
+  }
+  const result = verdict === 'accept'
     ? '[Jev Gate result] The single-executor dispatch reported done with no blockers, and its receipt is recorded as reported rather than verified: this shape has no contract, so code checked only that each reported pass has a passing run in the transcript the worker left, not that those checks cover the request. Confirm the work yourself before reporting it finished, and report what was checked separately from what was only reported.'
     : verdict === 'unknown'
       ? `[Jev Gate result] The single-executor dispatch returned no usable reply (${bounded(reason)}). Its reservation was released; dispatch the request again if the work is still needed.`
       : verdict === 'invalid'
         ? `[Jev Gate result] The single-executor dispatch replied in a shape this plugin could not read (${bounded(reason)}). Nothing about the work is settled; dispatch it again or finish it another way.`
         : `[Jev Gate result] The single-executor dispatch reported that it did not finish (${bounded(reason)}). There is no replan path on this shape: dispatch it again with what was wrong.`;
+  const format = opts.formatHint ? ` This appears to be a check-command format mismatch. Closest executed command per unmatched check: ${bounded(opts.formatHint)}. Run each reported check_id as its own exact Bash command, with no ; echo, pipe, or output suffix. Retry the same worker profile and model; this formatting retry does not use one of the two charged attempts.` : '';
+  return result + format;
+};
 
 export interface WorkerAcceptedOptions {
   workerIsolation?: WorkerIsolation;
