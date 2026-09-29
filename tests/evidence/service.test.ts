@@ -2,8 +2,10 @@ import { readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
+import { createJudgementCache } from '../../src/evidence/cache.js';
+import { LEXICAL_TERM_DETAIL, yieldToEventLoop } from '../../src/evidence/candidates.js';
 import { createEvidenceService, type EvidenceService } from '../../src/evidence/service.js';
-import { sha256Hex } from '../../src/evidence/source.js';
+import { listFiles as listProjectFiles, readSource as readProjectFile, sha256Hex } from '../../src/evidence/source.js';
 import { LIMITS, type EvidenceResult, type SourceRef } from '../../src/evidence/types.js';
 import { config, git, lineBytes, live, repo, write } from './repo.js';
 
@@ -178,5 +180,301 @@ describe('bounds', () => {
     expect(keyless).toMatchObject({ isError: false, result: { status: 'ok', backend: 'local', reasonCodes: ['missing_key'] } });
     expect(keyless.result.items.map((i) => [i.text, i.origin, i.judgement])).toEqual([['widget\n', 'local', 'unjudged']]);
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+const lexicalGoal = (n: number): string => Array.from({ length: n }, (_, i) => `aaaa${String(i).padStart(5, '0')}`).join(' ');
+
+describe('lexical input', () => {
+  it('rejects too many goal terms before scan or HTTP, and does not confuse that with the byte cap', async () => {
+    const goal = lexicalGoal(1500);
+    expect(Buffer.byteLength(JSON.stringify({ goal }), 'utf8')).toBeLessThan(LIMITS.inputBytes);
+    const root = repo({ 'src/a.ts': 'aaaa00000\n' });
+    const listFiles = vi.fn(listProjectFiles);
+    const readSource = vi.fn(readProjectFile);
+    const fetchImpl = vi.fn();
+    const svc = createEvidenceService(await config(root, { remote: true }), { apiKey: 'test-key', fetchImpl: fetchImpl as unknown as typeof fetch, listFiles, readSource });
+    const reply = await svc.run({ goal, mode: 'locate' }, live());
+    expect(reply).toMatchObject({ isError: true, detail: LEXICAL_TERM_DETAIL, result: { status: 'unavailable', items: [], snapshotId: null, reasonCodes: ['invalid_input'], coverage: { readFiles: 0 } } });
+    expect(reply.detail).not.toMatch(/root/i);
+    expect(listFiles).not.toHaveBeenCalled();
+    expect(readSource).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+
+    const bytes = 'word '.repeat(5000);
+    expect(Buffer.byteLength(JSON.stringify({ goal: bytes }), 'utf8')).toBeGreaterThan(LIMITS.inputBytes);
+    const overBytes = await svc.run({ goal: bytes }, live());
+    expect(overBytes.detail).toBe('the input is over 16 KiB');
+    expect(overBytes.detail).not.toBe(LEXICAL_TERM_DETAIL);
+    expect(listFiles).not.toHaveBeenCalled();
+
+    const phrase = Array.from({ length: LIMITS.lexicalTerms }, (_, i) => `zzzz${String(i).padStart(4, '0')}`).join(' ');
+    const derived = await svc.run({ goal: 'short question', queryTerms: [phrase] }, live());
+    expect(derived.detail).toBe(LEXICAL_TERM_DETAIL);
+    expect(listFiles).not.toHaveBeenCalled();
+  });
+
+  it('keeps a long goal and its constraints when short queryTerms are the only lexical hints', async () => {
+    const goal = lexicalGoal(1500);
+    const constraints = ['keep-this-constraint'];
+    const raw = { goal, queryTerms: ['needle'], constraints };
+    expect(Buffer.byteLength(JSON.stringify(raw), 'utf8')).toBeLessThan(LIMITS.inputBytes);
+    const root = repo({ 'src/decoy.ts': 'aaaa00000\n', 'src/hit.ts': 'needle here\n' });
+    const requests: Array<{ state: { goal: string; constraints: string[] } }> = [];
+    const fetchImpl = vi.fn(async (_url: string, init: RequestInit) => {
+      requests.push(JSON.parse(String(init.body)) as { state: { goal: string; constraints: string[] } });
+      const body = JSON.parse(String(init.body)) as { questions: Record<string, unknown> };
+      return new Response(JSON.stringify({
+        model: 'jev-1.13.0',
+        answers: Object.fromEntries(Object.keys(body.questions).map((id) => [id, { type: 'choice', choice: 'relevant', probabilities: { relevant: 0.91, unrelated: 0.05, needs_context: 0.04 }, confidence: 0.91 }])),
+        usage: { input_tokens: 1, output_tokens: 1 },
+      }), { status: 200 });
+    });
+    const svc = createEvidenceService(await config(root, { remote: true }), { apiKey: 'test-key', fetchImpl: fetchImpl as unknown as typeof fetch });
+    const found = await run(svc, raw);
+    expect(found.items.map((i) => i.source.path)).toEqual(['src/hit.ts']);
+    expect(found.items[0]!.text).toBe('needle here\n');
+    expect(requests[0]!.state.goal).toBe(goal);
+    expect(requests[0]!.state.constraints).toEqual(constraints);
+    expect(requests[0]!.state.goal).toContain('aaaa01499');
+  });
+
+  it('does not reject audit, exact, or sources for unused goal terms', async () => {
+    const goal = lexicalGoal(200);
+    const root = repo({ 'src/a.ts': 'marker\n' });
+    const listFiles = vi.fn(listProjectFiles);
+    const svc = createEvidenceService(await config(root), { apiKey: null, listFiles });
+    const audit = await run(svc, { goal, mode: 'audit' });
+    expect(audit.reasonCodes).not.toContain('invalid_input');
+    expect(audit.items.map((i) => i.source.path)).toEqual(['src/a.ts']);
+    const exact = await run(svc, { goal, exactSymbols: ['marker'] });
+    expect(exact.reasonCodes).not.toContain('invalid_input');
+    expect(exact.items[0]!.text).toBe('marker\n');
+    const back = await run(svc, { goal, sources: [exact.items[0]!.source] });
+    expect(back.reasonCodes).not.toContain('invalid_input');
+    expect(back.items[0]!.text).toBe('marker\n');
+    expect(back.snapshotId).toBeNull();
+    expect(listFiles).toHaveBeenCalled();
+  });
+});
+
+describe('search endings', () => {
+  const needleFile = (): string => 'needle\n'.repeat(400);
+
+  it('applies the search budget during generation, before a full candidate set exists', async () => {
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 4; i++) files[`src/f${i}.ts`] = needleFile();
+    const root = repo(files);
+    const full = await run(await local(root), { goal: 'needle', limit: 16 });
+    let t = 0;
+    let yields = 0;
+    const stopped = createEvidenceService(await config(root), {
+      apiKey: null,
+      now: () => t,
+      yield: async () => {
+        yields += 1;
+        t = 10_000;
+      },
+    });
+    const partial = (await stopped.run({ goal: 'needle', limit: 16 }, live())).result;
+    expect(yields).toBeGreaterThan(0);
+    expect(partial.coverage.candidates).toBeGreaterThan(0);
+    expect(partial.coverage.candidates).toBeLessThan(full.coverage.candidates);
+    expect(partial.reasonCodes).toContain('deadline');
+    expect(partial.coverage.sourceIncomplete).toBe(true);
+    expect(partial.status).toBe('partial');
+  });
+
+  it('re-verifies a budget stop while reserve remains, and does not call Jev or write the cache', async () => {
+    const root = repo({ 'src/a.ts': needleFile() });
+    const fetchImpl = vi.fn();
+    const cache = createJudgementCache(() => 0);
+    let t = 80_000;
+    const reads: string[] = [];
+    const svc = createEvidenceService(await config(root, { remote: true }), {
+      apiKey: 'test-key',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      cache,
+      now: () => t,
+      readSource: async (dir, rel) => {
+        reads.push(rel);
+        return readProjectFile(dir, rel);
+      },
+      yield: async () => {
+        // deadline is t0+3000; readBy is 400ms publish reserve plus 1500ms remote reserve earlier.
+        t = 82_000;
+      },
+    });
+    const reply = await svc.run({ goal: 'where', queryTerms: ['needle'], limit: 2 }, live());
+    expect(reply.result.status).toBe('partial');
+    expect(reply.result.reasonCodes).toContain('deadline');
+    expect(reply.result.coverage.sourceIncomplete).toBe(true);
+    expect(reply.result.items.length).toBeGreaterThan(0);
+    expect(reply.result.items.every((i) => i.textState === 'included' && i.text?.includes('needle'))).toBe(true);
+    exact(root, reply.result);
+    expect(reads.filter((rel) => rel === 'src/a.ts').length).toBe(2);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(cache.size()).toBe(0);
+  });
+
+  it('does not re-read, call Jev, or cache when the total deadline is already gone', async () => {
+    const root = repo({ 'src/a.ts': needleFile() });
+    const fetchImpl = vi.fn();
+    const cache = createJudgementCache(() => 0);
+    let t = 80_000;
+    let after = false;
+    const lateReads: string[] = [];
+    const svc = createEvidenceService(await config(root, { remote: true }), {
+      apiKey: 'test-key',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      cache,
+      now: () => t,
+      readSource: async (dir, rel) => {
+        if (after) lateReads.push(rel);
+        return readProjectFile(dir, rel);
+      },
+      yield: async () => {
+        after = true;
+        t = 90_000;
+        write(root, 'src/a.ts', 'CHANGED\n');
+      },
+    });
+    const reply = await svc.run({ goal: 'where', queryTerms: ['needle'], limit: 2 }, live());
+    expect(reply.result.status).toBe('partial');
+    expect(reply.result.reasonCodes).toEqual(expect.arrayContaining(['deadline', 'source_unverified']));
+    expect(reply.result.reasonCodes).not.toContain('source_changed');
+    expect(reply.result.items.every((i) => i.text === undefined && i.textState === 'omitted_budget')).toBe(true);
+    expect(lateReads).toEqual([]);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(cache.size()).toBe(0);
+  });
+
+  it('cancels the scanning call only, then serves the next request on the same service', async () => {
+    const root = repo({ 'src/a.ts': needleFile(), 'src/mark.ts': 'MARKER\n' });
+    const fetchImpl = vi.fn();
+    const cache = createJudgementCache(() => 0);
+    const ac = new AbortController();
+    let stopReads = false;
+    let release: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const svc = createEvidenceService(await config(root, { remote: true }), {
+      apiKey: 'test-key',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      cache,
+      readSource: async (dir, rel) => {
+        // The other call is rooted at src/mark.ts, so a late read of the scan file belongs to the cancelled call.
+        if (stopReads && rel === 'src/a.ts') throw new Error(`read ${rel} after cancel`);
+        return readProjectFile(dir, rel);
+      },
+      yield: async () => {
+        if (release) {
+          release();
+          release = undefined;
+        }
+        await yieldToEventLoop();
+      },
+    });
+    const heavy = svc.run({ goal: 'where', queryTerms: ['needle'], roots: ['src/a.ts'] }, ac.signal);
+    await started;
+    const light = svc.run({ goal: 'marker', exactSymbols: ['MARKER'], roots: ['src/mark.ts'] }, live());
+    // setTimeout would run only after this scan's setImmediate chain drained. Queue the abort behind the yield already waiting.
+    setImmediate(() => {
+      stopReads = true;
+      ac.abort();
+    });
+    const lightReply = await light;
+    expect(lightReply.result.status).not.toBe('cancelled');
+    expect(lightReply.result.items.map((i) => i.text)).toEqual(['MARKER\n']);
+    const heavyReply = await heavy;
+    expect(heavyReply).toMatchObject({ isError: true, result: { status: 'cancelled', items: [], reasonCodes: ['cancelled'] } });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(cache.size()).toBe(0);
+    const next = await svc.run({ goal: 'marker', exactSymbols: ['MARKER'], roots: ['src/mark.ts'] }, live());
+    expect(next.result.items).toHaveLength(1);
+    expect(next.result.status).not.toBe('cancelled');
+  });
+
+  it('still judges a capped page when the deadline remains, and re-reads only that page', async () => {
+    const root = repo({ 'src/a.ts': 'alpha\n', 'src/z.ts': 'alpha zzqq\n' });
+    const fetchImpl = vi.fn(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)) as { questions: Record<string, unknown> };
+      const answers = Object.fromEntries(Object.keys(body.questions).map((id) => [id, { type: 'choice', choice: 'relevant', probabilities: { relevant: 0.91, unrelated: 0.05, needs_context: 0.04 }, confidence: 0.91 }]));
+      return new Response(JSON.stringify({ model: 'jev-1.13.0', answers, usage: { input_tokens: 1, output_tokens: 1 } }), { status: 200 });
+    });
+    const cache = createJudgementCache(() => 1);
+    const reads: string[] = [];
+    const svc = createEvidenceService(await config(root, { remote: true }), {
+      apiKey: 'test-key',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      cache,
+      now: () => 5_000,
+      readSource: async (dir, rel) => {
+        reads.push(rel);
+        return readProjectFile(dir, rel);
+      },
+    });
+    // Enough windows to stop inside a.ts. zzqq exists only in z.ts, so a global ranking would have put that file first.
+    write(root, 'src/a.ts', 'alpha\n'.repeat(40 * (LIMITS.candidates + 1)));
+    const found = await run(svc, { goal: 'alpha zzqq', limit: 2 });
+    expect(found.status).toBe('partial');
+    expect(found.reasonCodes).toContain('source_limit');
+    expect(found.coverage.candidates).toBe(LIMITS.candidates);
+    expect(found.coverage.sourceIncomplete).toBe(true);
+    expect(found.items.every((i) => i.source.path === 'src/a.ts' && i.textState === 'included')).toBe(true);
+    expect(reads.filter((rel) => rel === 'src/z.ts')).toEqual(['src/z.ts']);
+    expect(reads.filter((rel) => rel === 'src/a.ts')).toEqual(['src/a.ts', 'src/a.ts']);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(cache.size()).toBe(1);
+  });
+});
+
+describe('snapshots', () => {
+  it('pages one set, ignores limit, and changes when queryTerms or the file change', async () => {
+    const root = repo({ 'src/a.ts': 'needle\n'.repeat(90), 'src/b.ts': 'other\n' });
+    const svc = await local(root);
+    const goal = 'where is the needle';
+    const q = { goal, queryTerms: ['needle'], mode: 'locate' as const };
+    const first = await run(svc, { ...q, limit: 1 });
+    const wider = await run(svc, { ...q, limit: 2 });
+    expect(first.snapshotId).toMatch(/^[0-9a-f]{64}$/);
+    expect(wider.snapshotId).toBe(first.snapshotId);
+    expect(first.next?.expectedSnapshot).toBe(first.snapshotId);
+    const second = await run(svc, { ...q, limit: 1, ...first.next });
+    expect(second.snapshotId).toBe(first.snapshotId);
+    expect(second.items[0]!.source.startLine).toBeGreaterThan(first.items[0]!.source.endLine);
+    exact(root, first);
+    exact(root, second);
+    const otherTerms = await run(svc, { goal, queryTerms: ['other'], ...first.next });
+    expect(otherTerms).toMatchObject({ status: 'partial', items: [], snapshotId: null, reasonCodes: ['source_changed'] });
+    const audit = await run(svc, { goal, mode: 'audit', limit: 1 });
+    const exactHit = await run(svc, { goal, exactSymbols: ['needle'], limit: 1 });
+    expect(audit.snapshotId).toMatch(/^[0-9a-f]{64}$/);
+    expect(exactHit.snapshotId).toMatch(/^[0-9a-f]{64}$/);
+    expect(audit.snapshotId).not.toBe(first.snapshotId);
+    expect(exactHit.snapshotId).not.toBe(first.snapshotId);
+    const back = await run(svc, { goal, sources: [exactHit.items[0]!.source] });
+    expect(back.snapshotId).toBeNull();
+    expect(back.items[0]!.text).toBe(exactHit.items[0]!.text);
+    write(root, 'src/a.ts', `${'needle\n'.repeat(90)}\n`);
+    const changed = await run(svc, { ...q, limit: 1, ...first.next });
+    expect(changed.reasonCodes).toContain('source_changed');
+    expect(changed.snapshotId).toBeNull();
+  });
+
+  it('distinguishes a full 1,024-candidate set from one that stopped at the cap', async () => {
+    const root = repo({ 'src/a.ts': 'a\n'.repeat(40 * LIMITS.candidates) });
+    const full = await run(await local(root), { goal: 'review', mode: 'audit', limit: 1 });
+    expect(full.coverage).toMatchObject({ candidates: LIMITS.candidates, sourceIncomplete: false });
+    expect(full.reasonCodes).not.toContain('source_limit');
+    expect(full.snapshotId).toMatch(/^[0-9a-f]{64}$/);
+    write(root, 'src/a.ts', 'a\n'.repeat(40 * LIMITS.candidates + 1));
+    const capped = await run(await local(root), { goal: 'review', mode: 'audit', limit: 1 });
+    expect(capped.coverage).toMatchObject({ candidates: LIMITS.candidates, sourceIncomplete: true });
+    expect(capped.reasonCodes).toContain('source_limit');
+    expect(capped.snapshotId).not.toBe(full.snapshotId);
+    const again = await run(await local(root), { goal: 'review', mode: 'audit', limit: 8 });
+    expect(again.snapshotId).toBe(capped.snapshotId);
   });
 });

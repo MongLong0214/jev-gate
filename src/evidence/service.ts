@@ -1,8 +1,8 @@
 import type { ChoiceAnswer } from '../types.js';
-import { createJudgementCache } from './cache.js';
-import { buildCandidates, lineStarts, sliceLines, snapshotId, type Candidate, type SourceFile } from './candidates.js';
+import { createJudgementCache, type JudgementCache } from './cache.js';
+import { buildCandidates, LEXICAL_TERM_DETAIL, lineStarts, planLexical, sliceLines, snapshotId, yieldToEventLoop, type Candidate, type SourceFile } from './candidates.js';
 import { selectPage, type Selection } from './selector.js';
-import { excluded, exists, globToRegExp, listFiles, normalizeRelative, readSource, within, type ReadOutcome } from './source.js';
+import { excluded, exists, globToRegExp, listFiles as listProjectFiles, normalizeRelative, readSource as readProjectFile, within, type ReadOutcome } from './source.js';
 import {
   LIMITS,
   MODES,
@@ -217,6 +217,13 @@ export interface EvidenceServiceDeps {
   apiKey: string | null;
   fetchImpl?: typeof fetch;
   now?: () => number;
+  /** Event-loop turn during candidate generation. Default yields with setImmediate. Not an MCP argument. */
+  yield?: () => Promise<void>;
+  /** Judgement cache. Default is private to this service. Tests pass one to observe writes. */
+  cache?: JudgementCache;
+  /** Source I/O. Defaults are the real readers. Tests pass counters; not MCP arguments. */
+  listFiles?: typeof listProjectFiles;
+  readSource?: typeof readProjectFile;
 }
 
 export interface EvidenceService {
@@ -230,7 +237,9 @@ export interface EvidenceService {
  */
 export const createEvidenceService = (config: EvidenceConfig | null, deps: EvidenceServiceDeps): EvidenceService => {
   const now = deps.now ?? Date.now;
-  const cache = createJudgementCache(now);
+  const cache = deps.cache ?? createJudgementCache(now);
+  const listFiles = deps.listFiles ?? listProjectFiles;
+  const readSource = deps.readSource ?? readProjectFile;
   const http = { active: 0 };
   let active = 0;
 
@@ -248,6 +257,10 @@ export const createEvidenceService = (config: EvidenceConfig | null, deps: Evide
     const scope = input.roots ?? cfg.allowedRoots;
     const outside = scope.find((r) => !cfg.allowedRoots.some((a) => within(r, a)) || (r !== '' && excluded(r, globs)));
     if (outside !== undefined) return refuse(root, 'out_of_scope', `${JSON.stringify(outside.slice(0, 200))} is outside the allowed roots or excluded`);
+
+    // Term policy before any scan or HTTP. Audit, exact, and sources do not reach here with an unused goal vocabulary.
+    const query = { mode: input.mode, goal: input.goal, queryTerms: input.queryTerms, exactSymbols: input.exactSymbols };
+    if (planLexical(query).overflow) return refuse(root, 'invalid_input', LEXICAL_TERM_DETAIL);
 
     const inventory = await listFiles(root, scope, readBy - now());
     if (signal.aborted) return cancelled();
@@ -276,6 +289,8 @@ export const createEvidenceService = (config: EvidenceConfig | null, deps: Evide
         break;
       }
       const r = await readSource(root, p);
+      // A read already in flight is allowed to finish; cancellation still starts nothing else.
+      if (signal.aborted) return cancelled();
       readBytes += r.bytes;
       if (r.ok) files.push({ path: p, text: r.text, sha256: r.sha256 });
       else {
@@ -288,17 +303,34 @@ export const createEvidenceService = (config: EvidenceConfig | null, deps: Evide
     }
     if (signal.aborted) return cancelled();
 
-    const query = { mode: input.mode, goal: input.goal, queryTerms: input.queryTerms, exactSymbols: input.exactSymbols };
-    const set = buildCandidates(files, query);
+    const set = await buildCandidates(files, query, { now, until: readBy, signal, yield: deps.yield ?? yieldToEventLoop });
+    if (set.overflow) return refuse(root, 'invalid_input', LEXICAL_TERM_DETAIL);
+    if (set.stopped === 'cancelled' || signal.aborted) return cancelled();
     if (set.longLines.length > 0) {
       reason('line_too_long');
       incomplete.push(...set.longLines.map((l) => `line:${l.path}:${l.line}`));
+    }
+    // A search-stage stop is partial even when the total deadline still has room to re-verify the page.
+    if (set.stopped === 'deadline') {
+      reason('deadline');
+      incomplete.push(`deadline@candidates:${set.scannedFiles}`);
     }
     if (set.capped) {
       reason('source_limit');
       incomplete.push('candidates');
     }
-    const snapshot = snapshotId({ projectRoot: root, scope, excludeGlobs: cfg.excludeGlobs, query, constraints: input.constraints, inventoryComplete: inventory.complete, incomplete, files, candidates: set.candidates });
+    const snapshot = snapshotId({
+      projectRoot: root,
+      scope,
+      excludeGlobs: cfg.excludeGlobs,
+      query,
+      constraints: input.constraints,
+      inventoryComplete: inventory.complete,
+      incomplete,
+      scannedFiles: set.scannedFiles,
+      files,
+      candidates: set.candidates,
+    });
     const coverage: Coverage = {
       ...emptyCoverage(),
       inventoryComplete: inventory.complete,
@@ -316,14 +348,16 @@ export const createEvidenceService = (config: EvidenceConfig | null, deps: Evide
     const page = set.candidates.slice(input.offset, input.offset + input.limit);
 
     let selection: Selection | null = null;
+    // Candidate generation already stopped on the search budget: do not open a Jev call on that partial page.
+    const cpuStopped = set.stopped === 'deadline';
     if (semantic && !cfg.remote) reason('remote_disabled');
     else if (semantic && deps.apiKey === null) reason('missing_key');
-    else if (remote && page.length > 0) {
+    else if (remote && page.length > 0 && !cpuStopped && now() < deadline) {
       const scopeKey = JSON.stringify([root, scope, cfg.excludeGlobs, input.mode]);
       selection = await selectPage(input.goal, input.constraints, page, scopeKey, publishBy, signal, { apiKey: deps.apiKey!, cache, http, now, ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}) });
       if (selection.cancelled || signal.aborted) return cancelled();
       selection.reasons.forEach(reason);
-    }
+    } else if (remote && page.length > 0 && !cpuStopped) reason('deadline');
 
     const ordered = page
       .map((c, i) => ({ c, a: selection?.answers.get(i) }))
@@ -340,6 +374,7 @@ export const createEvidenceService = (config: EvidenceConfig | null, deps: Evide
         continue;
       }
       const r = await readSource(root, c.path);
+      if (signal.aborted) return cancelled();
       readBytes += r.bytes;
       state.set(c.path, r.ok && r.sha256 === c.fileSha256 ? 'ok' : 'stale');
     }
@@ -399,6 +434,7 @@ export const createEvidenceService = (config: EvidenceConfig | null, deps: Evide
           continue;
         }
         r = await readSource(root, s.path);
+        if (signal.aborted) return cancelled();
         readBytes += r.bytes;
         reads.set(s.path, r);
       }

@@ -79,16 +79,27 @@ type it; nothing else in a session calls the tool unless Claude chooses to.
 
 With `remote: false` or no key, searches run locally and say so (`remote_disabled`, `missing_key`).
 
-`status: "partial"` means something was not read, judged or included; `coverage` and `reasonCodes` say what. An
-empty page is not proof of absence, and an audit page is not a completed audit. A read-back of a file that changed
+`queryTerms`, when you pass them, are the only lexical hints. The goal is not trimmed and is still the question sent
+for semantic judgement, along with `constraints`. Without `queryTerms`, locate takes terms from the goal. More than
+128 unique terms is an input error (`invalid_input`): pass short `queryTerms` or a narrower question. Narrowing
+`roots` does not raise that cap. Exact-symbol, audit, and `sources` reads are not rejected for unused words in the goal.
+
+`status: "partial"` means something was not read, judged or included; `coverage` and `reasonCodes` say what. A page
+stopped by the 1,024-candidate cap or by the cooperative search budget is the prefix collected in file and line order
+(locate then scores only that prefix), not the repository's global top. An empty page is not proof of absence, and an
+audit page is not a completed audit. Continuing requires the same snapshot (`next.offset` and `next.expectedSnapshot`).
+A stop that depends on time can differ between calls; there is no cursor for it. A read-back of a file that changed
 returns `stale` without text rather than the new text under the old reference.
 
 ## Bounds
 
-At most 200 files, 256 KiB per file and 16 MiB read per call, 1,024 candidates, a page of 16, a 3-second cooperative
-deadline of which at most 1.5 seconds go to Jev, two Jev requests of eight candidates per call with no retry, two
-calls and four Jev requests at once per server (a third call is refused as `busy`), and 64 KiB per result. Jev
-judgements of a completed page are cached in memory for 10 minutes, keyed by the exact text sent.
+At most 200 files, 256 KiB per file and 16 MiB read per call, 128 unique lexical terms, 1,024 candidates, a page of
+16, and one 3-second cooperative budget for the whole call — reading, candidate generation and at most 1.5 seconds of
+Jev share it. That budget is cooperative: it is not an operating-system or network guarantee. Two Jev requests of
+eight candidates per call with no retry, two calls and four Jev requests at once per server (a third call is refused
+as `busy`), and 64 KiB per result. Jev judgements of a completed page are cached in memory for 10 minutes, keyed by
+the exact text sent. A page stopped because candidate generation ran out of budget is not sent to Jev; the files
+already chosen for that page may still be re-read while the total budget and the verify reserve remain.
 
 ## Checked
 
