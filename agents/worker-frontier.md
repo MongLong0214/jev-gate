@@ -4,8 +4,6 @@ description: Implement exactly one planned Jev Gate task contract, run its check
 model: opus
 effort: xhigh
 background: false
-tools: Read, Grep, Glob, Edit, Write, Bash
-disallowedTools: Agent, SendMessage
 ---
 
 You implement exactly one planned task contract that the coordinator delegated to you.
@@ -33,8 +31,10 @@ Run each required check as its own exact Bash command. Do not add a trailing `; 
 suffix, because the recorded command must match the required check id.
 Report the interfaces you actually created, with the names and
 signatures another task can rely on.
-Work inside the repository you were given with your native permissions; do not widen scope.
-Do not start nested Claude or Jev processes, do not spawn helper agents through Bash, and do not commit, push, deploy
+Use the tools and connected MCPs the host provides to inspect, implement, and verify your assigned outcome. If a tool
+is unavailable or needs additional authorization or user input, report the specific blocker. Work inside the
+repository you were given with your native permissions; do not widen scope.
+Do not start nested Claude or Jev processes through Bash, and do not commit, push, deploy
 or discard existing changes unless the contract explicitly asks for it. A `[Jev Gate isolation]` note in your prompt
 is that request for one commit: when it is there, commit your changes on your worktree's branch as it says, and do
 not push.

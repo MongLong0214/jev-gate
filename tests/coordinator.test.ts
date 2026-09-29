@@ -84,19 +84,17 @@ describe('guidance', () => {
     expect(renderOrchestrationGuidance({ mode: 'auto', confidence: 0.9, superseded: false, maxParallelWorkers: 3 })).not.toContain('git worktree');
   });
 
-  /** #48 P1-2 review: the tool line follows the guard's allow-list, so Bash is never both required and forbidden. */
-  it('names the tools the guard allows, keeping the default line unchanged', () => {
+  it('describes root guard policy without promising tools the host may not provide', () => {
     const agents = 'Agent calls to jev-gate:planner and the jev-gate worker roles';
-    expect(renderToolRule(agents)).toBe(
-      'Available to you now: Read, Grep, Glob, TodoWrite, and Agent calls to jev-gate:planner and the jev-gate worker roles. Edit, Write, Bash and every other agent (including Explore) are unavailable for this request and will be denied; do not probe them.',
-    );
+    expect(renderToolRule(agents)).toContain('read/task tools actually provided by the host');
+    expect(renderToolRule(agents)).toContain('denies root Edit, Write, Bash');
+    expect(renderToolRule(agents)).not.toMatch(/Grep|Glob/);
     const withBash = orchestrationRules(2, 'worktree', ['Bash']).join('\n');
-    expect(withBash).toContain('Available to you now: Read, Grep, Glob, TodoWrite, Bash, and Agent calls');
-    expect(withBash).toContain('Edit, Write and every other agent (including Explore) are unavailable');
-    expect(withBash).not.toMatch(/Bash and every other agent/);
-    expect(renderToolRule(agents, ['Edit', 'Write', 'Bash', 'Read'])).toContain('TodoWrite, Edit, Write, Bash, and Agent calls');
-    expect(renderToolRule(agents, ['Edit', 'Write', 'Bash'])).toContain('Every other agent (including Explore) is unavailable');
-    expect(singleRules(['Bash']).join('\n')).toContain('TodoWrite, Bash, and one Agent call');
+    expect(withBash).toContain('denies root Edit, Write calls');
+    expect(withBash).not.toContain('denies root Edit, Write, Bash');
+    expect(renderToolRule(agents, ['Edit', 'Write', 'Bash'])).not.toContain('denies root');
+    expect(singleRules(['Bash']).join('\n')).toContain('one Agent call');
+    expect(renderToolRule(agents, [], true)).toContain('ToolSearch pass the root plugin guard');
   });
 });
 
@@ -113,26 +111,26 @@ describe('main_session_steps rendering (#48 P2-1)', () => {
 
   it('lists each step with what it needs, framed as the main session\'s own work', () => {
     const text = renderMainSessionSteps(steps);
-    expect(text).toContain('a worker cannot do these');
+    expect(text).toContain('Main-session steps explicitly reserved');
     expect(text).toContain('grant the TCC screen-recording permission (needs os_permission)');
     expect(text).toContain('click through the vendor console login (needs interactive_login)');
   });
 
   it('renderPlannedContext lists the steps when a plan is accepted', () => {
     const text = renderPlannedContext(1, ['t1'], 1, steps);
-    expect(text).toContain('a worker cannot do these');
+    expect(text).toContain('Main-session steps explicitly reserved');
     expect(text).toContain('needs os_permission');
     // Absent steps behave exactly as before isolation/steps existed: no trailing note at all.
-    expect(renderPlannedContext(1, ['t1'], 1)).not.toContain('a worker cannot do these');
+    expect(renderPlannedContext(1, ['t1'], 1)).not.toContain('Main-session steps explicitly reserved');
   });
 
   it('renderWorkerAccepted repeats the steps only when the last task is accepted, and adds the isolation note independently', () => {
     const notLast = renderWorkerAccepted('t1', ['t2'], 1, { mainSessionSteps: steps, isLastTask: false });
-    expect(notLast).not.toContain('a worker cannot do these');
+    expect(notLast).not.toContain('Main-session steps explicitly reserved');
     const last = renderWorkerAccepted('t1', [], 1, { mainSessionSteps: steps, isLastTask: true });
-    expect(last).toContain('a worker cannot do these');
+    expect(last).toContain('Main-session steps explicitly reserved');
     const lastNoSteps = renderWorkerAccepted('t1', [], 1, { isLastTask: true });
-    expect(lastNoSteps).not.toContain('a worker cannot do these');
+    expect(lastNoSteps).not.toContain('Main-session steps explicitly reserved');
     const isolated = renderWorkerAccepted('t1', ['t2'], 1, { workerIsolation: 'worktree' });
     expect(isolated).toContain(WORKTREE_ISOLATION_SENTENCE);
     expect(renderWorkerAccepted('t1', ['t2'], 1)).not.toContain(WORKTREE_ISOLATION_SENTENCE);

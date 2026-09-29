@@ -47,7 +47,7 @@ for (const row of rows) {
     continue;
   }
   const a = r.response.answers;
-  const d = decideAdmissionAtomic(a, row.context_tokens ?? null, args.floor, delegationModel(config), !config.guardAllowMcp);
+  const d = decideAdmissionAtomic(a, row.context_tokens ?? null, args.floor, delegationModel(config));
   out.push({
     project: row.project ?? null,
     len: row.text.length,

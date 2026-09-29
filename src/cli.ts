@@ -51,7 +51,6 @@ export const parseFrontmatter = (text: string): Frontmatter => {
   return { fields, error: null };
 };
 
-const listOf = (v: string | undefined): string[] => (v ? v.split(',').map((s) => s.trim()).filter(Boolean) : []);
 
 /**
  * #48 P0-2: derived, not hand-copied. The six owned rows come from `OWNED_AGENT_PROFILES` (src/agents.ts) with
@@ -59,12 +58,12 @@ const listOf = (v: string | undefined): string[] => (v ? v.split(',').map((s) =>
  * this expectation and the packaged frontmatter can only agree or both be visibly wrong, never quietly disagree.
  * `executor.md` is added by hand because it is lean's one untiered agent and is deliberately not in that table.
  */
-const AGENT_EXPECTATIONS: Record<string, { model: string; effort: string | null; tools: string[] }> = {
+const AGENT_EXPECTATIONS: Record<string, { model: string; effort: string | null }> = {
   ...Object.fromEntries(
-    OWNED_AGENT_PROFILES.map((p) => [p.file, { model: DEFAULT_CONFIG.models[p.tier], effort: p.effort, tools: [...p.tools] }]),
+    OWNED_AGENT_PROFILES.map((p) => [p.file, { model: DEFAULT_CONFIG.models[p.tier], effort: p.effort }]),
   ),
   // JGL-01: lean's one agent. `inherit` is the point of it: a saving from a cheaper model would not be this feature's.
-  'executor.md': { model: 'inherit', effort: null, tools: ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'Bash'] },
+  'executor.md': { model: 'inherit', effort: null },
 };
 
 /** haiku|sonnet|opus|fable, case-insensitive substring match; `null` when the string names none of them. */
@@ -135,19 +134,17 @@ const checkPluginFiles = (): Map<string, string> => {
       continue;
     }
     const name = file.replace('.md', '');
-    const tools = listOf(fm.fields['tools']);
-    const disallowed = listOf(fm.fields['disallowedTools']);
     if (fm.fields['model'] !== undefined) installedModels.set(file, fm.fields['model']);
     const problems: string[] = [];
     if (fm.fields['name'] !== name) problems.push(`name=${fm.fields['name'] ?? 'missing'}`);
     if (fm.fields['model'] !== exp.model) problems.push(`model=${fm.fields['model'] ?? 'missing'} (expected ${exp.model})`);
     if (exp.effort !== null && fm.fields['effort'] !== exp.effort) problems.push(`effort=${fm.fields['effort'] ?? 'missing'} (expected ${exp.effort})`);
     if (exp.effort === null && 'effort' in fm.fields) problems.push(`effort=${String(fm.fields['effort'])} (this profile inherits the session effort)`);
-    if (tools.join(',') !== exp.tools.join(',')) problems.push(`tools=${tools.join(',') || 'missing'}`);
+    if ('tools' in fm.fields) problems.push('tools must be absent so host tools are inherited');
     if (fm.fields['background'] !== 'false') problems.push('background must be false');
-    if (!disallowed.includes('Agent') || !disallowed.includes('SendMessage')) problems.push('disallowedTools must include Agent and SendMessage');
+    if ('disallowedTools' in fm.fields) problems.push('disallowedTools must be absent so host tools are inherited');
     for (const ignored of ['permissionMode', 'hooks', 'mcpServers']) if (ignored in fm.fields) problems.push(`${ignored} is ignored for plugin agents`);
-    say(problems.length ? 'fail' : 'ok', `agents/${file}: jev-gate:${name} model=${exp.model} effort=${exp.effort ?? 'inherited'} tools=[${exp.tools.join(',')}] no Agent/SendMessage${problems.length ? ` — ${problems.join('; ')}` : ''}`);
+    say(problems.length ? 'fail' : 'ok', `agents/${file}: jev-gate:${name} model=${exp.model} effort=${exp.effort ?? 'inherited'} tools=host inherited${problems.length ? ` — ${problems.join('; ')}` : ''}`);
   }
   say('info', 'effort support unverified for haiku: worker-fast declares effort: low, but no child-context probe has shown CLAUDE_EFFORT for that model (A8)');
   return installedModels;

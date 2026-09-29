@@ -96,6 +96,10 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     expect(dest.includes(' '), dest).toBe(true);
     expect(dest.startsWith(root), dest).toBe(false);
     expect(spawnSync('unzip', ['-q', join(outDir, archive!), '-d', dest], { encoding: 'utf8' }).status).toBe(0);
+    for (const agent of agents) {
+      const definition = readFileSync(join(dest, agent), 'utf8');
+      expect(definition, agent).not.toMatch(/^tools:|^disallowedTools:/m);
+    }
     expectInstallDocs(dest);
     const env = { PATH: process.env['PATH'] ?? '', HOME: join(tmp, 'home'), JEV_GATE_MODE: 'auto' };
     const guidance = spawnSync('node "' + join(dest, 'dist', 'hook.js') + '"', { shell: true, cwd: otherCwd, encoding: 'utf8', env, input: JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 's', prompt: 'add a test' }) });

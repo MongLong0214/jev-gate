@@ -37,7 +37,7 @@ const answers = (over: Record<string, number> = {}): Record<string, unknown> => 
 };
 
 describe('atomic admission questions', () => {
-  it('asks two vetoes, one cost score and three shape read-offs, and none of them is a forecast', () => {
+  it('asks one veto, one cost score and four read-offs, and none of them is a forecast', () => {
     expect(Object.keys(ADMISSION_FACT_QUESTIONS)).toEqual(['forbids_delegation', 'external_tools', 'plan_only', 'parallel_outcomes', 'size', 'tool_calls']);
     expect(ADMISSION_FACT_QUESTIONS.size.type).toBe('score');
     expect(ADMISSION_FACT_QUESTIONS.tool_calls.type).toBe('score');
@@ -180,15 +180,14 @@ describe('decideAdmissionAtomic', () => {
     ['depth unknown', null, FLOOR, {}, 'depth_unknown'],
     ['a session below the floor', 40_000, FLOOR, {}, 'depth_below_floor'],
     ['a request that refuses delegation', DEEP, FLOOR, { forbids_delegation: FACT_TRUE }, 'admission_forbids_delegation'],
-    ['a request that needs a connector', DEEP, FLOOR, { external_tools: FACT_TRUE }, 'admission_external_tools'],
     ['work too small to repay the coordinator', DEEP, FLOOR, { tool_calls: 2 }, 'admission_not_worth'],
     ['a reply', DEEP, FLOOR, { tool_calls: 0 }, 'admission_not_worth'],
   ])('stays direct for %s', (_name, depth, floor, over, reason) => {
     expect(decideAdmissionAtomic(answers(over as Record<string, number>), depth, floor, MODEL)).toMatchObject({ shape: 'direct', decided: false, reason });
   });
 
-  it('lets a connector step through when the coordinator may call it itself', () => {
-    expect(decideAdmissionAtomic(answers({ external_tools: 0.95 }), DEEP, FLOOR, MODEL, false).shape).toBe('orchestrated');
+  it('lets a connector step through regardless of the root guard setting', () => {
+    expect(decideAdmissionAtomic(answers({ external_tools: 0.95 }), DEEP, FLOOR, MODEL).shape).toBe('orchestrated');
   });
 
   it('reads depth before anything else, so a veto never masks a shallow session', () => {

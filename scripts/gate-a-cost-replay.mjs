@@ -130,8 +130,10 @@ const turnsFor = (score) => {
   return calibrated[lo] + (calibrated[hi] - calibrated[lo]) * (score - lo);
 };
 const decide = (x, vetoExternalTools = true) => {
-  const d = admission.decideAdmissionAtomic(x.answers, x.depth, 0, model, vetoExternalTools);
-  if (d.reason === 'admission_forbids_delegation' || d.reason === 'admission_external_tools' || d.reason === 'admission_invalid') return { admit: false, reason: d.reason };
+  // Preserve the historical pre-registration policy in this replay, independently of the current runtime policy.
+  if (vetoExternalTools && (x.external_tools ?? 0) >= 0.6) return { admit: false, reason: 'admission_external_tools' };
+  const d = admission.decideAdmissionAtomic(x.answers, x.depth, 0, model);
+  if (d.reason === 'admission_forbids_delegation' || d.reason === 'admission_invalid') return { admit: false, reason: d.reason };
   const saving = admission.delegationSaving(turnsFor(x.tool_calls), x.depth, model);
   return { admit: saving > 0, reason: saving > 0 ? null : 'admission_not_worth' };
 };
@@ -159,8 +161,7 @@ const validate = (vetoExternalTools) => {
   };
 };
 const pre = validate(true);
-// Not pre-registered: the shipped default vetoes on external_tools only when guardAllowMcp is off, a change made
-// after this run showed the veto sending shell and `gh` work direct. Reported beside the pre-registered result.
+// Historical comparison without the old veto, now also the runtime policy. Keep both outputs for result provenance.
 const shipped = validate(false);
 const judged = pre.judged;
 const byReason = pre.result.by_reason;

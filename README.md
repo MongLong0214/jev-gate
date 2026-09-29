@@ -47,6 +47,8 @@ Three different gaps:
 
 Every part defaults to on. That does not mean every prompt is compacted, folded, routed, or delegated. Gate often stays native: a direct admission, a shallow session, a missing key, or no `prompt_id` are different cases, and none of them is a failure of the install. `gateMode` `off` does not turn the other parts off. There is no master switch and no `evidenceEnabled` option.
 
+Gate workers, planners, and the lean executor inherit the tools and connected MCPs that Claude Code provides to their session. A worker can inspect a linked Figma file or use an available browser or other MCP directly when its task needs one. Pass the target URL or ID and any restrictions in the brief. Host permissions still apply; `guardAllowMcp` controls only the admitted root session's guard, not a worker's tools.
+
 End the session and start Claude Code again after changing settings. There is no setup command.
 
 ## See it work live
@@ -72,9 +74,16 @@ The dashboard runs on your machine and opens in your browser. Its four lanes sho
    node "<installPath>/dist/cli.js" dashboard
    ```
 
-   On macOS the command opens `http://127.0.0.1:4731/` automatically; elsewhere, open the printed URL. Keep the terminal running and press Ctrl-C to stop. Use `--port`, `--trace`, or `--debug` to override the defaults. The page does not send requests to Jev or expose prompts, source bodies, or API keys.
+   On macOS the command opens `http://127.0.0.1:4731/` automatically; elsewhere, open the printed URL. Keep the terminal running and press Ctrl-C to stop. The page updates through a local event stream as records arrive. For a different port or record directories, use `dashboard --port 4732 --trace /path/to/jev-traces --debug /path/to/claude-debug` after `node dist/cli.js`. The page does not send requests to Jev or expose prompts, source bodies, or API keys.
 
-**How to read the numbers:** the latency strip uses measured Jev response times, not a simulated speed value. An intent without a result becomes *unconfirmed*; missing usage is unknown rather than zero. A projected token saving in Gate A is a routing estimate, not measured savings. Compact and Output run locally without Jev. The dashboard shows what the available records prove, so a quiet feature is not necessarily disabled. See [recording details and limits](docs/advanced-usage.md#doctor-and-explain).
+| Dashboard label | What it means | What to check |
+|---|---|---|
+| **Observed** | This feature emitted at least one record. | Open its stage and inspect the latest decision and host result. |
+| **Awaiting record** | The source is configured, but this feature has not emitted an event in the visible window. | Run a request that uses the feature; ordinary prompts do not exercise every feature. |
+| **Source unavailable** | A trace or debug directory is missing or unreadable. | Check the two paths in settings, restart Claude Code, and reopen the dashboard. |
+| **Unconfirmed** | An intent was recorded without a matching result. | Inspect the run timeline; do not treat an intent as a completed Jev call or worker action. |
+
+The latency strip uses measured Jev response times, not a simulated speed value. Missing usage is unknown rather than zero. A projected token saving in Gate A is a routing estimate, not measured savings. Compact and Output run locally without Jev. The dashboard shows what the available records prove, so a quiet feature is not necessarily disabled. See [recording details and limits](docs/advanced-usage.md#doctor-and-explain).
 
 ## The five parts
 

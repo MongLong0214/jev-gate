@@ -22,9 +22,18 @@ describe('committed agents/*.md match OWNED_AGENT_PROFILES + DEFAULT_CONFIG.mode
       expect(fm.fields['model']).toBe(DEFAULT_CONFIG.models[profile.tier]);
       if (profile.effort === null) expect(fm.fields['effort']).toBeUndefined();
       else expect(fm.fields['effort']).toBe(profile.effort);
-      expect((fm.fields['tools'] ?? '').split(',').map((s) => s.trim())).toEqual([...profile.tools]);
+      expect(fm.fields['tools']).toBeUndefined();
+      expect(fm.fields['disallowedTools']).toBeUndefined();
     });
   }
+
+  it('lean executor also inherits all host tools', () => {
+    const fm = parseFrontmatter(readFileSync(join(root, 'agents/executor.md'), 'utf8'));
+    expect(fm.error).toBeNull();
+    expect(fm.fields['model']).toBe('inherit');
+    expect(fm.fields['tools']).toBeUndefined();
+    expect(fm.fields['disallowedTools']).toBeUndefined();
+  });
 
   it('frontier defaults to opus, not fable (#48 P0-2: a restricted model now requires explicit owner opt-in)', () => {
     expect(DEFAULT_CONFIG.models.frontier).toBe('opus');
@@ -126,6 +135,15 @@ describe('doctor: checkModelAuthority (#48 P0-2)', () => {
     const { status, stdout } = runDoctor(pluginRoot);
     expect(status).toBe(1);
     expect(stdout).toMatch(/\[fail\] agents\/worker-frontier\.md:.*model=haiku \(expected opus\)/);
+  });
+
+  it('FAIL: a packaged agent reintroduces a restrictive tool list', () => {
+    const original = readFileSync(join(root, 'agents', 'worker.md'), 'utf8');
+    const pluginRoot = preparePluginRoot({ file: 'worker.md', content: original.replace('background: false', 'background: false\ntools: Read, Bash\ndisallowedTools: Agent') });
+    const { status, stdout } = runDoctor(pluginRoot);
+    expect(status).toBe(1);
+    expect(stdout).toContain('tools must be absent so host tools are inherited');
+    expect(stdout).toContain('disallowedTools must be absent so host tools are inherited');
   });
 
   it('FAIL: effective config models.frontier disagrees by family with installed frontmatter', () => {

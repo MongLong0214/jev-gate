@@ -20,7 +20,7 @@ const DEBUG_PREFIX = /jev-(router|compact|output) /;
 const REASON: Record<string, string> = {
   admission_not_worth: '위임해도 계산상 이득이 없어 이 세션이 직접 처리합니다',
   admission_forbids_delegation: '요청이 위임을 금해서 직접 처리합니다',
-  admission_external_tools: '커넥터가 필요해서 워커에게 넘기지 않습니다',
+  admission_external_tools: '이전 버전 규칙으로 커넥터 작업을 직접 처리했습니다',
   admission_needs_context: '요청만으로 범위를 정할 수 없어 직접 처리합니다',
   admission_abstain: 'Jev가 판단을 보류해서 직접 처리합니다',
   admission_low_confidence: '확신이 낮아서 더 강한 모델로 올리지 않고 직접 처리합니다',

@@ -132,8 +132,8 @@ export const guardDecision = (toolName: string, toolInput: unknown, config: Conf
     const subagent = isRecord(toolInput) ? toolInput['subagent_type'] : undefined;
     return { allow: typeof subagent === 'string' && subagent in OWNED_AGENTS };
   }
-  // A connector step can only run in the root (a worker has none), so MCP tools pass when `guardAllowMcp` is on.
-  return { allow: GUARD_ALLOW_TOOLS.includes(toolName) || config.guardAllowTools.includes(toolName) || (config.guardAllowMcp && toolName.startsWith('mcp__')) };
+  // This is the root guard only. A child inherits the host's tools and is skipped before this decision.
+  return { allow: GUARD_ALLOW_TOOLS.includes(toolName) || config.guardAllowTools.includes(toolName) || (config.guardAllowMcp && (toolName === 'ToolSearch' || toolName.startsWith('mcp__'))) };
 };
 
 export interface AgentPatch {
