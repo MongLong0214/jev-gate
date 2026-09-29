@@ -267,6 +267,29 @@ const workerTranscript = (runs: Array<{ command: string; failed: boolean }>, edi
   return { parent: join(dir, 's1.jsonl'), agentId };
 };
 
+const toolUseLine = (id: string, name: string, input: Record<string, unknown>, cwd?: string): string =>
+  JSON.stringify({ type: 'assistant', ...(cwd === undefined ? {} : { cwd }), message: { content: [{ type: 'tool_use', id, name, input }] } });
+const toolResultLine = (id: string, isError?: boolean): string =>
+  JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, ...(isError === undefined ? {} : { is_error: isError }), content: 'x' }] } });
+const workerLines = (lines: string[]): { parent: string; agentId: string } => {
+  const dir = mkdtempSync(join(tmp, 'project-dir-'));
+  const agentId = `a${Math.random().toString(16).slice(2, 12)}`;
+  mkdirSync(join(dir, 's1', 'subagents'), { recursive: true });
+  writeFileSync(join(dir, 's1', 'subagents', `agent-${agentId}.jsonl`), `${lines.join('\n')}\n`);
+  return { parent: join(dir, 's1.jsonl'), agentId };
+};
+const bashLines = (id: string, command: string, mark: 'pass' | 'fail' | 'unknown' | 'pending', cwd?: string): string[] => {
+  const started = toolUseLine(id, 'Bash', { command }, cwd);
+  if (mark === 'pending') return [started];
+  if (mark === 'unknown') return [started, toolResultLine(id)];
+  return [started, toolResultLine(id, mark === 'fail')];
+};
+const editLines = (id: string, name: 'Edit' | 'Write' | 'MultiEdit' | 'NotebookEdit', mark: 'done' | 'fail' | 'pending'): string[] => {
+  const started = toolUseLine(id, name, { file_path: 'src/t1.ts' });
+  if (mark === 'pending') return [started];
+  return [started, toolResultLine(id, mark === 'fail')];
+};
+
 /** Every command the fixture plans declare. A worker that reports them passing ran them, as a real one does. */
 const FIXTURE_CHECK_COMMANDS = ['npm test', 'npm run typecheck', 'npm run lint', 'npm run build'];
 
@@ -359,8 +382,38 @@ describe('Gate A admission', () => {
     expect(r.code).toBe('admission_not_worth');
     expect(state(env).current.shape).toBe('direct');
     const record = readdirSync(dir).map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>).find((x) => x['phase'] === 'admission_result');
-    expect(record).toMatchObject({ attempted: true, decision: { shape: 'direct', reason: 'admission_not_worth' }, estimate: { turns: 10 } });
-    expect((record?.['estimate'] as { saving_tokens: number }).saving_tokens).toBeLessThan(0);
+    expect(record).toMatchObject({ attempted: true, decision: { shape: 'direct', reason: 'admission_not_worth' }, estimate: { turns: 26.5, saving_tokens: -207_500 } });
+  });
+
+  it('sends no request just below the derived floor, and one request at it', async () => {
+    expect(COST_FLOOR).toBe(50_865);
+    const belowDir = join(tmp, 'trace-floor-below');
+    const belowEnv = makeEnv({ JEV_GATE_TRACE_DIR: belowDir });
+    const belowFetch = fakeJev({ toolCalls: 4 });
+    const below = await run(belowEnv, promptEvent({ transcript_path: transcriptAt(50_864) }), belowFetch);
+    expect(belowFetch).not.toHaveBeenCalled();
+    expect(below.code).toBe('depth_below_floor');
+    const belowRecord = readdirSync(belowDir).map((f) => JSON.parse(readFileSync(join(belowDir, f), 'utf8')) as Record<string, unknown>).find((x) => x['phase'] === 'admission_result');
+    expect(belowRecord).toMatchObject({ attempted: false, context_tokens: 50_864, depth_floor: 50_865, depth_floor_source: 'cost_model', decision: { reason: 'depth_below_floor', changed_default: false } });
+
+    const atDir = join(tmp, 'trace-floor-at');
+    const atEnv = makeEnv({ JEV_GATE_TRACE_DIR: atDir });
+    const atFetch = fakeJev({ toolCalls: 4 });
+    const at = await run(atEnv, promptEvent({ transcript_path: transcriptAt(50_865) }), atFetch);
+    expect(atFetch).toHaveBeenCalledTimes(1);
+    expect(at.code).toBeNull();
+    expect(state(atEnv).current.shape).toBe('orchestrated');
+    const atRecord = readdirSync(atDir).map((f) => JSON.parse(readFileSync(join(atDir, f), 'utf8')) as Record<string, unknown>).find((x) => x['phase'] === 'admission_result');
+    expect(atRecord).toMatchObject({ attempted: true, context_tokens: 50_865, depth_floor: 50_865, depth_floor_source: 'cost_model', decision: { shape: 'orchestrated', reason: null }, estimate: { turns: 51.5, saving_tokens: 33 } });
+  });
+
+  it('asks below the derived floor when an explicit delegationDepthFloor says to, and the price still decides', async () => {
+    const cfg = join(tmp, 'floor-explicit-below-derived.json');
+    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', delegationDepthFloor: 40_000 }));
+    const fetchImpl = fakeJev({ toolCalls: 4 });
+    const r = await run(makeEnv({ JEV_GATE_CONFIG: cfg }), promptEvent({ transcript_path: transcriptAt(50_000) }), fetchImpl);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(r.code).toBe('admission_not_worth');
   });
 
   it('stays direct when the request needs a connector and the coordinator may not call one', async () => {
@@ -1658,6 +1711,11 @@ describe('worker check verification (0.4.0)', () => {
       transcript_path: t.parent,
       tool_response: { status: 'completed', agentId: t.agentId, resolvedModel: 'claude-sonnet-5', content: [{ type: 'text', text: fence(reply) }] },
     });
+  const postAs = (toolUseId: string, reply: WorkerReply, t: { parent: string; agentId: string }): Record<string, unknown> =>
+    workerPost(toolUseId, reply, {
+      transcript_path: t.parent,
+      tool_response: { status: 'completed', agentId: t.agentId, resolvedModel: 'claude-sonnet-5', content: [{ type: 'text', text: fence(reply) }] },
+    });
   const dispatched = async (env: Env): Promise<ReturnType<typeof vi.fn>> => {
     const fetchImpl = fakeJev();
     await seedPlanned(env, PLAN_REPLY, fetchImpl);
@@ -1698,13 +1756,15 @@ describe('worker check verification (0.4.0)', () => {
     expect(receipt?.verdict_reason).toContain("reported pass, but its last run in the worker's own transcript failed");
   });
 
-  it('accepts when the last run passed, and records a pass that an edit came after as stale', async () => {
+  it('does not accept a later run that adds arguments when the exact check failed', async () => {
     const env = makeEnv();
     await dispatched(env);
     const t = workerTranscript([{ command: 'npm test', failed: true }, { command: 'npm  test -- --run', failed: false }], true);
     const post = await run(env, postWith(workerReply(), t));
-    expect(context(post)).toContain('Task t1 accepted');
-    expect(state(env).current.receipts[0]).toMatchObject({ verdict: 'accept', verification: { contradicted: [], unobserved: [], stale: ['c1'] } });
+    expect(context(post)).not.toContain('Task t1 accepted');
+    expect(state(env).current.receipts[0]).toMatchObject({ verdict: 'incomplete', verification: { contradicted: ['c1'], unobserved: [], stale: [] } });
+    expect(state(env).current.receipts[0]?.verdict_reason).toContain("last run in the worker's own transcript failed");
+    expect(state(env).current.receipts[0]?.verdict_reason).not.toContain('npm test');
   });
 
   it('refuses a reported pass the whole transcript shows no run of', async () => {
@@ -1774,6 +1834,155 @@ describe('worker check verification (0.4.0)', () => {
     const traced = readdirSync(dir).map((f) => readFileSync(join(dir, f), 'utf8')).join('\n');
     expect(traced).toMatch(/"contradicted": \[\s*"#1"\s*\]/);
     expect(traced).not.toContain('SECRET');
+  });
+
+  it('judges a pass against the check start and the last observed edit', async () => {
+    const rows: Array<{ label: string; lines: string[]; verdict: 'accept' | 'incomplete'; contradicted?: string[]; unobserved?: string[]; stale?: string[] }> = [
+      { label: 'pass then write', lines: [...bashLines('b', 'npm test', 'pass'), ...editLines('w', 'Write', 'done')], verdict: 'incomplete', stale: ['c1'] },
+      { label: 'write then pass', lines: [...editLines('w', 'MultiEdit', 'done'), ...bashLines('b', 'npm test', 'pass')], verdict: 'accept' },
+      { label: 'pass write pass', lines: [...bashLines('b1', 'npm test', 'pass'), ...editLines('w', 'Edit', 'done'), ...bashLines('b2', 'npm test', 'pass')], verdict: 'accept' },
+      { label: 'pass write fail', lines: [...bashLines('b1', 'npm test', 'pass'), ...editLines('w', 'Write', 'done'), ...bashLines('b2', 'npm test', 'fail')], verdict: 'incomplete', contradicted: ['c1'] },
+      { label: 'check start then write then success', lines: [...bashLines('b', 'npm test', 'pending'), ...editLines('w', 'Write', 'done'), toolResultLine('b', false)], verdict: 'incomplete', stale: ['c1'] },
+      {
+        label: 'write start, check start, write done, check success',
+        lines: [toolUseLine('w', 'Write', { file_path: 'src/t1.ts' }), toolUseLine('b', 'Bash', { command: 'npm test' }), toolResultLine('w', false), toolResultLine('b', false)],
+        verdict: 'incomplete',
+        stale: ['c1'],
+      },
+      { label: 'newer pending', lines: [...bashLines('b1', 'npm test', 'pass'), ...bashLines('b2', 'npm test', 'pending')], verdict: 'incomplete', unobserved: ['c1'] },
+      { label: 'open write before the check', lines: [...editLines('w', 'NotebookEdit', 'pending'), ...bashLines('b', 'npm test', 'pass')], verdict: 'incomplete', stale: ['c1'] },
+    ];
+    for (const row of rows) {
+      const env = makeEnv();
+      await dispatched(env);
+      const post = await run(env, postWith(workerReply(), workerLines(row.lines)));
+      const receipt = state(env).current.receipts[0];
+      expect({ label: row.label, verdict: receipt?.verdict, contradicted: receipt?.verification?.contradicted, unobserved: receipt?.verification?.unobserved, stale: receipt?.verification?.stale }).toEqual({
+        label: row.label,
+        verdict: row.verdict,
+        contradicted: row.contradicted ?? [],
+        unobserved: row.unobserved ?? [],
+        stale: row.stale ?? [],
+      });
+      if (row.verdict === 'accept') expect(context(post)).toContain('Task t1 accepted');
+      else expect(context(post)).not.toContain('Task t1 accepted');
+      if (row.stale && !row.contradicted && !row.unobserved) {
+        expect(receipt?.verdict_reason).toBe(`check ${row.stale.join(', ')}: 마지막 관측 변경 이후의 검사 결과 필요`);
+        expect(receipt?.verdict_reason).not.toContain('npm');
+      }
+      if (row.contradicted) expect(receipt?.verdict_reason).toContain('last run');
+      if (row.unobserved) expect(receipt?.verdict_reason).toContain('shows no passing run');
+    }
+  });
+
+  it('does not open a dependent on a stale pass, and does after a check that starts once the edit is done', async () => {
+    const env = makeEnv();
+    const fetchImpl = fakeJev();
+    await seedPlanned(env, planReply([rawTask('t1'), rawTask('t2', { depends_on: ['t1'] })]), fetchImpl);
+    await run(env, preEvent('Agent', agentInput()), fetchImpl);
+    const stale = await run(env, postWith(workerReply(), workerLines([...bashLines('b', 'npm test', 'pass'), ...editLines('w', 'Write', 'done')])));
+    expect(context(stale)).not.toContain('Task t1 accepted');
+    expect(state(env).current.receipts[0]).toMatchObject({ verdict: 'incomplete', verification: { stale: ['c1'], contradicted: [], unobserved: [] } });
+    expect(await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t2]\nwork' }), { tool_use_id: 'toolu_2' }), fetchImpl)).toMatchObject({ code: 'deps_incomplete' });
+    await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t1 attempt=2]\nredo' }), { tool_use_id: 'toolu_3' }), fetchImpl);
+    const fresh = await run(env, postAs('toolu_3', workerReply(), workerLines([...editLines('w', 'Write', 'done'), ...bashLines('b', 'npm test', 'pass')])), fetchImpl);
+    expect(context(fresh)).toContain('Task t1 accepted');
+    expect(context(fresh)).toContain('Ready task ids: t2');
+    expect(state(env).current.receipts.at(-1)).toMatchObject({ verdict: 'accept', verification: { stale: [], contradicted: [], unobserved: [] } });
+  });
+
+  it('does not block a required pass when only an optional check is stale', async () => {
+    const env = makeEnv();
+    const fetchImpl = fakeJev();
+    await seedPlanned(
+      env,
+      planReply([
+        rawTask('t1', {
+          checks: [
+            { id: 'c1', description: 'tests pass', required: true, command: 'npm test' },
+            { id: 'c2', description: 'lint', required: false, command: 'npm run lint' },
+          ],
+        }),
+        rawTask('t2', { depends_on: ['t1'] }),
+      ]),
+      fetchImpl,
+    );
+    await run(env, preEvent('Agent', agentInput()), fetchImpl);
+    const reply = workerReply({ checks: [{ check_id: 'c1', result: 'pass', note: '' }, { check_id: 'c2', result: 'pass', note: '' }] });
+    const post = await run(env, postWith(reply, workerLines([...bashLines('l', 'npm run lint', 'pass'), ...editLines('w', 'Write', 'done'), ...bashLines('t', 'npm test', 'pass')])));
+    expect(context(post)).toContain('Task t1 accepted');
+    expect(state(env).current.receipts[0]).toMatchObject({ verdict: 'accept', verification: { contradicted: [], unobserved: [], stale: [] } });
+  });
+
+  it('does not accept the three reproduced command confusions, and a same-command mark still stands', async () => {
+    const confused: Array<{ planned: string; actual: string; cwd?: string }> = [
+      { planned: "! grep -Fq 'a  b' double.txt", actual: "! grep -Fq 'a b' double.txt" },
+      { planned: "! grep -Fq 'prefix a' prefix.txt", actual: "! grep -Fq 'prefix /w/repo/a' prefix.txt", cwd: '/w/repo' },
+      { planned: 'false', actual: 'false | cat' },
+    ];
+    for (const c of confused) {
+      const env = makeEnv();
+      const fetchImpl = fakeJev();
+      await seedPlanned(env, planReply([rawTask('t1', { checks: [{ id: 'c1', description: 'check', required: true, command: c.planned }] }), rawTask('t2', { depends_on: ['t1'] })]), fetchImpl);
+      await run(env, preEvent('Agent', agentInput()), fetchImpl);
+      const post = await run(env, postWith(workerReply({ checks: [{ check_id: 'c1', result: 'pass', note: '' }] }), workerLines(bashLines('b', c.actual, 'pass', c.cwd))));
+      const receipt = state(env).current.receipts[0];
+      expect(receipt?.verdict).toBe('incomplete');
+      expect(receipt?.verification).toMatchObject({ contradicted: [], unobserved: ['c1'], stale: [] });
+      expect(context(post)).not.toContain('Task t1 accepted');
+      expect(receipt?.verdict_reason ?? '').not.toContain('prefix');
+      expect(receipt?.verdict_reason ?? '').not.toContain('double');
+      expect(receipt?.verdict_reason ?? '').not.toContain('|');
+      expect(await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t2]\nwork' }), { tool_use_id: 'toolu_9' }), fetchImpl)).toMatchObject({ code: 'deps_incomplete' });
+    }
+    const marks: Array<{ mark: 'pass' | 'fail' | 'unknown'; verdict: 'accept' | 'incomplete'; key: 'contradicted' | 'unobserved' | 'stale'; ids: string[] }> = [
+      { mark: 'pass', verdict: 'accept', key: 'stale', ids: [] },
+      { mark: 'fail', verdict: 'incomplete', key: 'contradicted', ids: ['c1'] },
+      { mark: 'unknown', verdict: 'incomplete', key: 'unobserved', ids: ['c1'] },
+    ];
+    for (const mark of marks) {
+      const env = makeEnv();
+      const fetchImpl = fakeJev();
+      await seedPlanned(env, planReply([rawTask('t1', { checks: [{ id: 'c1', description: 'check', required: true, command: 'false' }] })]), fetchImpl);
+      await run(env, preEvent('Agent', agentInput()), fetchImpl);
+      await run(env, postWith(workerReply({ checks: [{ check_id: 'c1', result: 'pass', note: '' }] }), workerLines(bashLines('b', 'false', mark.mark))));
+      const receipt = state(env).current.receipts[0];
+      expect(receipt?.verdict).toBe(mark.verdict);
+      expect(receipt?.verification?.[mark.key]).toEqual(mark.ids);
+    }
+  });
+
+  it('does not copy an && list failure onto the member, or let an unrelated failure erase a pass', async () => {
+    const rows: Array<{ command: string; failed: boolean; verdict: 'accept' | 'incomplete'; contradicted: string[]; unobserved: string[] }> = [
+      { command: 'npm test && echo ok', failed: false, verdict: 'accept', contradicted: [], unobserved: [] },
+      { command: 'npm test && echo ok', failed: true, verdict: 'incomplete', contradicted: [], unobserved: ['c1'] },
+      { command: 'false && npm test', failed: true, verdict: 'incomplete', contradicted: [], unobserved: ['c1'] },
+      { command: 'cd pkg && npm test', failed: false, verdict: 'incomplete', contradicted: [], unobserved: ['c1'] },
+    ];
+    for (const row of rows) {
+      const env = makeEnv();
+      await dispatched(env);
+      await run(env, postWith(workerReply(), workerTranscript([{ command: row.command, failed: row.failed }])));
+      expect(state(env).current.receipts[0]).toMatchObject({ verdict: row.verdict, verification: { contradicted: row.contradicted, unobserved: row.unobserved } });
+    }
+    const env = makeEnv();
+    await dispatched(env);
+    const post = await run(env, postWith(workerReply(), workerTranscript([{ command: 'npm test', failed: false }, { command: 'npm run lint', failed: true }])));
+    expect(context(post)).toContain('Task t1 accepted');
+    const hidden = makeEnv();
+    await dispatched(hidden);
+    await run(hidden, postWith(workerReply(), workerTranscript([{ command: 'npm test', failed: false }, { command: 'npm test && echo ok', failed: true }])));
+    expect(state(hidden).current.receipts[0]).toMatchObject({ verdict: 'incomplete', verification: { contradicted: [], unobserved: ['c1'], stale: [] } });
+  });
+
+  it('reads the worker transcript, not a pass recorded on the parent', async () => {
+    const env = makeEnv();
+    await dispatched(env);
+    const t = workerTranscript([{ command: 'npm test', failed: true }]);
+    writeFileSync(t.parent, [...bashLines('p', 'npm test', 'pass'), ''].join('\n'));
+    const post = await run(env, postWith(workerReply(), t));
+    expect(context(post)).not.toContain('Task t1 accepted');
+    expect(state(env).current.receipts[0]).toMatchObject({ verdict: 'incomplete', verification: { contradicted: ['c1'] } });
   });
 });
 
@@ -2889,7 +3098,7 @@ describe('receipt selection and observation keys (2026-09-20)', () => {
     expect(answers['tool_calls']).toMatchObject({ type: 'score', score: 3.6, choice: null });
     expect(answers['forbids_delegation']).toMatchObject({ type: 'noul', noul: 0.07 });
     expect(answers['external_tools']).toMatchObject({ type: 'noul', noul: 0.02 });
-    expect(record?.['estimate']).toEqual({ turns: 40, saving_tokens: (40 - 11) * 406_000 - 40 * 40_000 });
+    expect(record?.['estimate']).toEqual({ turns: 41.5, saving_tokens: (41.5 - 11) * 406_000 - 41.5 * 40_000 });
   });
 });
 

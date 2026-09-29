@@ -108,6 +108,11 @@ export const LIMITS = {
   /** Held back from the search so every file a page can return is read again before it is published. */
   verifyReserveBytes: 16 * 256 * 1024,
   candidates: 1024,
+  /**
+   * Unique lexical terms of one locate search. Operational policy, not a measured optimum: past this the call is an
+   * input error, not a truncated question. Explicit `queryTerms` replace the goal as the only lexical source.
+   */
+  lexicalTerms: 128,
   windowLines: 40,
   windowBytes: 8 * 1024,
   /** An exact lookup answers where a name occurs; a wider view is a `sources` read-back of the same file. */

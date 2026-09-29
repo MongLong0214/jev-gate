@@ -6,8 +6,9 @@ of V5 orchestration; composing them is #44.
 
 **Status.** Written against the Function Hooks declarations shipped with Claude Code 2.1.282
 (`types/claude-code.d.ts`); the 2.1.283 declarations differ only in UI and cost documentation. Every path is exercised
-with a fake engine and fake HTTP (`tests/router/*.test.ts`), and the host's own test kit loads the plugin and confirms
-the default is off (`tests/register.test.ts`). On an installed 2.1.283 host (2026-09-27, one session per condition,
+with a fake engine and fake HTTP (`tests/router/*.test.ts`). The host's own test kit loads the module and
+cannot set plugin options (`tests/register.test.ts`); the manifest default is on, and that kit is not a demonstration
+that the Router ships off. On an installed 2.1.283 host (2026-09-27, one session per condition,
 `bench/results/host-obs-2026-09-27/`), the host passed on a root turn's steps at the effort the Router patched in (seen
 at the hook boundary, not on the wire), and an `Explore` and a `general-purpose` spawn under Opus ran on the Sonnet
 the Router asked for. **Those are single observations that the
@@ -29,7 +30,7 @@ From a checkout, `claude --plugin-dir /path/to/jev-gate` loads the working tree 
 `timeoutMs`, `fastModel`, …, keyed `jev-gate-router@inline`).
 
 The Router is **on by default** (v0.6.3; off before). With `routerEnabled` false it registers no hook at all, so the session is exactly
-native. Set the options in `/config`. They are stored in settings.json under `pluginConfigs["jev-gate@jev-gate"].options`
+native. Set the options in `/plugin`. They are stored in settings.json under `pluginConfigs["jev-gate@jev-gate"].options`
 (`jev-gate@inline` for a `--plugin-dir` load), except a sensitive one, which the host keeps in secure storage. The
 table names each option as the plugin does; the Router alone reads it without the `router` prefix.
 
@@ -220,8 +221,9 @@ carry no readable usage. These are per-step records, not a saving: overlapping t
 
 ## Limits
 
-- **The host's test kit cannot set plugin options**, so `claude plugin test` only covers the default (off) path. The
-  enabled paths run through `register.ts` in vitest with a fake `$` (`tests/router/register.test.ts`).
+- **The host's test kit cannot set plugin options**, so `claude plugin test` cannot select a profile or turn the
+  Router off. The manifest default is on. Paths with options set run through `register.ts` in vitest with a fake `$`
+  (`tests/router/register.test.ts`).
 - **Hosts are checked at run time, not pinned.** Spawn routing depends on how the host resolves an inheriting
   built-in's model: 2.1.282 was read from its declarations, and 2.1.283 was observed. A pin to one exact release left
   every spawn native after each host update, so any 2.1.N with N at least 282 is accepted, and the session checks

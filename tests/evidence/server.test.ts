@@ -6,7 +6,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import { SERVER_VERSION, TOOL_NAME } from '../../src/evidence/server.js';
-import type { EvidenceResult } from '../../src/evidence/types.js';
+import { LIMITS, type EvidenceResult } from '../../src/evidence/types.js';
 import { configFile, repo, tmp } from './repo.js';
 
 const root = join(__dirname, '..', '..');
@@ -75,6 +75,11 @@ describe('jev_evidence over stdio (#77)', () => {
     expect(tools[0]!.annotations).toMatchObject({ readOnlyHint: true, openWorldHint: false });
     expect(tools[0]!.outputSchema).toBeUndefined();
     expect(tools[0]!.description).toContain(`Project ${project}; allowed roots: src; remote Jev off.`);
+    expect(tools[0]!.description).toContain('only lexical hints');
+    expect(tools[0]!.description).toContain(`${LIMITS.lexicalTerms}`);
+    expect(tools[0]!.description).toContain('not an operating-system or network guarantee');
+    const schema = tools[0]!.inputSchema as unknown as { properties: { queryTerms: { description: string } } };
+    expect(schema.properties.queryTerms.description).toContain('Narrowing roots does not');
 
     const first = await call(client, { goal: 'where is findMe used', exactSymbols: ['findMe'], limit: 1 });
     expect(first.isError).toBe(false);
@@ -111,22 +116,57 @@ describe('jev_evidence over stdio (#77)', () => {
     const client = await connect({ JEV_EVIDENCE_CONFIG: cfg });
     const abort = new AbortController();
     const pending = call(client, { goal: 'x', mode: 'audit' }, abort.signal);
+    // Attach before abort. The client SDK rejects on the abort event, and a handler that arrives later is an unhandled rejection.
+    const caught = pending.then(() => null, (error: unknown) => error);
     abort.abort();
-    await expect(pending).rejects.toThrow();
+    await expect(caught).resolves.toBeInstanceOf(Error);
     expect((await call(client, { goal: 'x', exactSymbols: ['other'] })).body.items).toHaveLength(1);
   });
+
+  it('aborts one scanning call on a timer without cancelling another, then answers the next', async () => {
+    // Large enough that a locate still running term comparisons is in progress when the timer fires. The lines do not
+    // contain the terms, so the scan does not end early at the candidate cap. Under the term cap and the read caps.
+    const files: Record<string, string> = { 'src/mark.ts': 'MARKER\n' };
+    for (let i = 0; i < 24; i++) files[`src/f${i}.ts`] = `${'c'.repeat(3500)}\n`.repeat(70);
+    const heavyRoot = realpathSync(repo(files));
+    const heavyCfg = configFile({ projectRoot: heavyRoot, allowedRoots: ['src'], remote: false });
+    const client = await connect({ JEV_EVIDENCE_CONFIG: heavyCfg });
+    const terms = Array.from({ length: 96 }, (_, i) => `cccc${String(i).padStart(4, '0')}`);
+    const ac = new AbortController();
+    const heavy = call(client, { goal: terms.join(' '), mode: 'locate' }, ac.signal);
+    const heavyError = heavy.then(() => null, (error: unknown) => error);
+    const light = call(client, { goal: 'marker', exactSymbols: ['MARKER'] });
+    const timer = setTimeout(() => ac.abort(), 80);
+    const lightReply = await Promise.race([light, new Promise<never>((_, reject) => setTimeout(() => reject(new Error('watchdog')), 8_000))]);
+    expect(lightReply.isError).toBe(false);
+    expect(lightReply.body.items.some((item) => item.text?.includes('MARKER'))).toBe(true);
+    ac.abort();
+    await expect(heavyError).resolves.toBeInstanceOf(Error);
+    clearTimeout(timer);
+    expect((await call(client, { goal: 'marker', exactSymbols: ['MARKER'] })).body.items).toHaveLength(1);
+  }, 20_000);
 
   it('diagnoses with --doctor from the config alone', () => {
     const run = (env: Record<string, string>) => spawnSync(process.execPath, [server, '--doctor'], { cwd: otherCwd(), encoding: 'utf8', env: { PATH: process.env['PATH'] ?? '', ...env } });
     const ok = run({ JEV_EVIDENCE_CONFIG: cfg, TYPESAFE_API_KEY: 'sk-never-printed' });
     expect(ok.status).toBe(0);
+    expect(ok.stdout).toContain('config source: explicit');
     expect(ok.stdout).toContain(`config: ok ${project}`);
     expect(ok.stdout).toContain('TYPESAFE_API_KEY: present');
+    expect(ok.stdout).toContain('a changed config applies only after this server process restarts.');
+    expect(ok.stdout).toContain('no source was scanned and no request was sent');
     expect(ok.stdout).not.toContain('sk-never-printed');
     expect(ok.stdout).not.toContain('findMe');
+    expect(ok.stderr).not.toContain('sk-never-printed');
+    const session = run({ CLAUDE_PROJECT_DIR: project, TYPESAFE_API_KEY: 'sk-never-printed' });
+    expect(session.status).toBe(0);
+    expect(session.stdout).toContain('config source: session');
+    expect(session.stdout).toContain('remote: on');
+    expect(session.stdout).not.toContain('sk-never-printed');
     const missing = run({});
     expect(missing.status).toBe(1);
     expect(missing.stdout).toContain('config: unavailable (unavailable_config)');
+    expect(missing.stdout).toContain('config source: session');
     expect(readdirSync(project).sort()).toEqual(['.git', 'src']);
   });
 });

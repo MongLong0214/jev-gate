@@ -334,7 +334,7 @@ export interface CheckVerification {
   contradicted: string[];
   /** Reported pass; no passing run of its command was seen: the transcript read shows none or only an unmarked one, or none could be read. */
   unobserved: string[];
-  /** Reported pass; the passing run came before a later edit. */
+  /** Reported pass whose start is not known to follow the last observed edit. Aged success, not an observed failure. */
   stale: string[];
 }
 

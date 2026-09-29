@@ -4,17 +4,17 @@
     "name": "MongLong0214",
     "url": "https://github.com/MongLong0214"
   },
-  "description": "One Claude Code plugin from the jev-gate repository: the Jev orchestration gate, an instant extractive compactor, a Vitest log folder, a Jev effort and model router and a read-only evidence search tool. Each part is off until you enable it.",
+  "description": "One Claude Code plugin from the jev-gate repository: evidence search, extractive compaction, Vitest log folding, a Jev effort and model router, and an orchestration gate. Gate, Compact, Output, and the Router are on by default, and each of those four has a switch. Evidence has no switch. gateMode off does not turn the others off.",
   "plugins": [
     {
       "name": "jev-gate",
       "source": {
         "source": "archive",
-        "url": "https://github.com/MongLong0214/jev-gate/releases/download/v0.6.3/jev-gate-0.6.3.zip",
-        "sha256": "631121f9e922b86e99bcd02ee5720eeb7b41315922c402614cf393b3bc9cc2a3"
+        "url": "https://github.com/MongLong0214/jev-gate/releases/download/v0.6.4/jev-gate-0.6.4.zip",
+        "sha256": "d79867626eabaacbf921d5f984725f7a982346603bc1d88a2852c808daa61ca5"
       },
       "displayName": "Jev Gate",
-      "description": "The orchestration gate (a planner and tiered workers past a context-depth floor), extractive compaction, Vitest log folding, a Jev effort and model router and the jev_evidence tool, in one install. Each part is off until enabled. Built from the tagged release; needs Node 22, a TypeSafe key for the Jev parts, and CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 for compaction, folding and routing.",
+      "description": "Evidence search, extractive compaction, Vitest log folding, a Jev effort and model router, and an orchestration gate, in one install. Gate, Compact, Output, and the Router are on by default, and each of those four has a switch. Evidence has no switch. Needs Node 22. A TypeSafe key is separate from a Claude login. CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 is required for compaction, folding, and routing.",
       "homepage": "https://github.com/MongLong0214/jev-gate#readme",
       "category": "productivity",
       "tags": [

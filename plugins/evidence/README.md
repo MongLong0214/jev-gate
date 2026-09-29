@@ -31,8 +31,9 @@ named by `JEV_EVIDENCE_CONFIG` (an absolute path, at most 64 KiB) when it starts
 
 `projectRoot` must be a Git worktree. `.git`, `.env*`, keys and other credential files, dependency, vendor and build
 directories, symlinks, submodules, binary and non-UTF-8 files are always excluded. The config is fixed for the life
-of the process: restart the server (or Claude Code) after changing it. For another project or worktree, point
-`JEV_EVIDENCE_CONFIG` at another config in that project's settings; a tool argument never moves the root.
+of the process. Editing the JSON does not change a server that is already running, and `/reload-plugins` is not a
+guarantee that a live MCP process re-reads it. End the Claude session and start it again. For another project or worktree, point
+`JEV_EVIDENCE_CONFIG` at another config in that project's settings; a tool argument never moves the root. Do not put the API key in this file.
 
 The key is read only from `TYPESAFE_API_KEY` in the server's environment, never from the config or a `.env` file.
 Both variables come from the environment Claude Code starts in, for example a project's `.claude/settings.local.json`:
@@ -59,9 +60,7 @@ tree; `claude --plugin-dir plugins/evidence` loads this server alone (as `jev-ga
 `node scripts/pack.mjs dist-pack --profile evidence` still builds that standalone archive. The bundled server has the
 MCP SDK inside it; it needs Node 22 or later and nothing else. To turn it off, disable the `evidence` server in `/mcp`.
 
-`node <plugin dir>/plugins/evidence/dist/server.mjs --doctor` (`<dir>/dist/server.mjs` for the standalone archive) prints the config state, whether remote is on and whether the key is
-present. It reads the config only: no source scan, no request. A passing doctor says the server can start, nothing
-about the quality of its answers.
+`node <plugin dir>/plugins/evidence/dist/server.mjs --doctor` (`<dir>/dist/server.mjs` for the standalone archive) prints where the config came from (`explicit` or `session`), the project root, how many roots and exclusions are in force, whether remote is on, and whether the key is present. It reads the config only: no source scan, no request. A passing doctor says the server can start, nothing about key validity, answer quality, or that a later edit of the JSON is already in effect.
 
 ## Use
 
@@ -71,24 +70,37 @@ type it; nothing else in a session calls the tool unless Claude chooses to.
 | Need | Arguments | Jev |
 |---|---|---|
 | Where a name occurs | `{ "goal": "…", "exactSymbols": ["parseRequest"] }` | never |
-| Code for a question in other words | `{ "goal": "압축 digest 예산 배분", "queryTerms": ["buildDigest", "budget"], "roots": ["src"] }` | when remote |
+| Code for a question in other words | `{ "goal": "압축 digest 예산 배분", "queryTerms": ["buildDigest", "budget"], "roots": ["mods/compact/hooks"] }` | when remote |
 | The next page | the same arguments plus `"offset"` and `"expectedSnapshot"` from `next` | when remote |
-| A window back, exactly | `{ "goal": "…", "sources": [<a returned source object>] }` | never |
+| A window back, exactly | `{ "goal": "…", "sources": [{ "path": "<path>", "startLine": 1, "endLine": 16, "fileSha256": "<64 lowercase hex digits>" }] }` | never |
 | More lines around a hit | the same `path` and `fileSha256` with a wider `startLine`/`endLine` (≤ 40 lines) in `sources` | never |
 | Every window in a small scope | `{ "goal": "…", "mode": "audit", "roots": ["src/evidence"] }` | when remote, never folded |
 
-With `remote: false` or no key, searches run locally and say so (`remote_disabled`, `missing_key`).
+`remote: false` turns off Evidence's sends to TypeSafe only. The server still reads local files, and Claude's own model calls are unchanged. It is not an offline mode for Claude. To stop this server from reading files, disable the `evidence` MCP server (or the plugin). A Native Read deny is not inherited by this reader; if the same restriction cannot be applied here, disable the server. Built-in exclusions are a filter, not a DLP, a retention promise, or proof that an organization approved the send. A key being present is not proof that it is valid or that a request will succeed.
 
-`status: "partial"` means something was not read, judged or included; `coverage` and `reasonCodes` say what. An
-empty page is not proof of absence, and an audit page is not a completed audit. A read-back of a file that changed
+With `remote: false` or no key, searches run locally and say so (`remote_disabled`, `missing_key`). The two are different: remote off is a setting, a missing key is an absent credential while remote is still on.
+
+`queryTerms`, when you pass them, are the only lexical hints. The goal is not trimmed and is still the question sent
+for semantic judgement, along with `constraints`. Without `queryTerms`, locate takes terms from the goal. More than
+128 unique terms is an input error (`invalid_input`): pass short `queryTerms` or a narrower question. Narrowing
+`roots` does not raise that cap. Exact-symbol, audit, and `sources` reads are not rejected for unused words in the goal.
+
+`status: "partial"` means something was not read, judged or included; `coverage` and `reasonCodes` say what. A page
+stopped by the 1,024-candidate cap or by the cooperative search budget is the prefix collected in file and line order
+(locate then scores only that prefix), not the repository's global top. An empty page is not proof of absence, and an
+audit page is not a completed audit. Continuing requires the same snapshot (`next.offset` and `next.expectedSnapshot`).
+A stop that depends on time can differ between calls; there is no cursor for it. A read-back of a file that changed
 returns `stale` without text rather than the new text under the old reference.
 
 ## Bounds
 
-At most 200 files, 256 KiB per file and 16 MiB read per call, 1,024 candidates, a page of 16, a 3-second cooperative
-deadline of which at most 1.5 seconds go to Jev, two Jev requests of eight candidates per call with no retry, two
-calls and four Jev requests at once per server (a third call is refused as `busy`), and 64 KiB per result. Jev
-judgements of a completed page are cached in memory for 10 minutes, keyed by the exact text sent.
+At most 200 files, 256 KiB per file and 16 MiB read per call, 128 unique lexical terms, 1,024 candidates, a page of
+16, and one 3-second cooperative budget for the whole call — reading, candidate generation and at most 1.5 seconds of
+Jev share it. That budget is cooperative: it is not an operating-system or network guarantee. Two Jev requests of
+eight candidates per call with no retry, two calls and four Jev requests at once per server (a third call is refused
+as `busy`), and 64 KiB per result. Jev judgements of a completed page are cached in memory for 10 minutes, keyed by
+the exact text sent. A page stopped because candidate generation ran out of budget is not sent to Jev; the files
+already chosen for that page may still be re-read while the total budget and the verify reserve remain.
 
 ## Checked
 

@@ -162,16 +162,12 @@ const scoreValue = (v: unknown, max: number): number | null => {
 };
 
 /**
- * Root API turns a request takes natively, by `tool_calls` answer: the median of the turns real prompts actually took
- * when Jev gave that answer, on the calibration half of the pre-registered replay in
- * bench/results/v5-gate-a-cost-2026-09-28 (bins 1-3: 10, 5.5 and 8, made non-decreasing; bins 0 and 4 had fewer than
- * 3 prompts and keep the declared 0 and 60). A fractional score is read between two neighbours.
- *
- * Measured there too, and the reason this map is flat: Jev's read-off of the prompt text barely ranks the work the
- * prompt turned into (Spearman 0.05-0.08 over 100 prompts). A short prompt deep in a session carries work its text
- * does not state. What admits is the read-off near "many" at depth, which was right for 5 of 8 validation admissions.
+ * Estimated root turns for a `tool_calls` score, not the tool calls one request will make. Owner-supplied
+ * recalibration (#99) of the flat map in bench/results/v5-gate-a-cost-2026-09-28. A fractional score is read between
+ * two neighbours, and the halves are intentional. The samples behind these bins are owner-reported model-based
+ * estimates, not a measured bill.
  */
-export const TOOL_CALL_TURNS: readonly number[] = [0, 10, 10, 10, 60];
+export const TOOL_CALL_TURNS: readonly number[] = [4, 6, 6, 26.5, 51.5];
 
 export const estimatedTurns = (score: number): number => {
   const lo = Math.floor(score);

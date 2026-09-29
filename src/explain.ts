@@ -308,7 +308,7 @@ const lineFor = (r: Rec, posts: Map<string, Rec>): string | null => {
 
 /** What the trace cannot answer. Printed every time, because the gaps are the part a reader would otherwise invent. */
 export const EXPLAIN_CAVEATS: readonly string[] = [
-  'A verdict is what the worker reported about its own work. The gate does not re-run the checks; since 0.4.0 it compares each reported pass with that command\'s last run in the worker\'s transcript, and refuses a pass whose last run failed or whose passing run it cannot see. It still sees only how the host marked each run.',
+  'A verdict is what the worker reported about its own work. The gate does not re-run the checks; since 0.4.0 it compares each reported pass with that command\'s run in the worker\'s transcript, and refuses a pass whose last run failed, whose passing run it cannot see, or that started before the last observed edit. It still sees only how the host marked each run, not an edit made inside Bash or by another process.',
   'A model after "ran" is the one the host reported resolving. A dispatch with no result record has no observed model, and what was asked for is never read back as what was got.',
   'Records exist only for turns taken while JEV_GATE_TRACE_DIR was set. A missing phase means nothing was recorded, not that nothing happened.',
 ];

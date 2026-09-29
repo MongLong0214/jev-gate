@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 const root = join(__dirname, '..');
@@ -12,13 +12,59 @@ let pluginRoot: string;
 // pack.mjs writes the archive itself; unzip only reads it back here.
 const hasZip = spawnSync('unzip', ['-v'], { encoding: 'utf8' }).status === 0;
 
+// The root README's install targets (#95, #98).
+const INSTALL_DOCS = [
+  'README.md',
+  'AGENTS.md',
+  'CHANGELOG.md',
+  'docs/advanced-usage.md',
+  'plugins/evidence/README.md',
+  'mods/compact/README.md',
+  'mods/output/README.md',
+  'mods/router/README.md',
+  'assets/readme/jev-gate-logo.svg',
+];
+
+const relativeReadmeLinks = (markdown: string): string[] => {
+  const found: string[] = [];
+  for (const match of markdown.matchAll(/!?\[[^\]]*\]\(([^)\s]+)(?:\s[^)]*)?\)|<img\b[^>]*?\bsrc="([^"]+)"/g)) {
+    const raw = (match[1] ?? match[2] ?? '').trim();
+    if (raw.startsWith('#') || /^[a-z][a-z0-9+.-]*:/i.test(raw)) continue;
+    const path = raw.split('#')[0] ?? '';
+    if (path) found.push(path);
+  }
+  return found;
+};
+
+const expectReadmeLinksInside = (dir: string, rel = 'README.md') => {
+  const markdown = readFileSync(join(dir, rel), 'utf8');
+  expect(markdown.length, rel).toBeGreaterThan(40);
+  const base = dirname(join(dir, rel));
+  for (const target of relativeReadmeLinks(markdown)) {
+    const resolved = join(base, target);
+    const fromRoot = relative(dir, resolved);
+    expect(fromRoot.startsWith('..'), `${rel} -> ${target}`).toBe(false);
+    expect(existsSync(resolved), `${rel} -> ${target}`).toBe(true);
+  }
+};
+
+const expectInstallDocs = (dest: string) => {
+  for (const rel of INSTALL_DOCS) expect(readFileSync(join(dest, rel), 'utf8').length, rel).toBeGreaterThan(20);
+  expect(readFileSync(join(dest, 'README.md'), 'utf8')).toContain('plugins/evidence/README.md#configure');
+  expect(readFileSync(join(dest, 'plugins/evidence/README.md'), 'utf8')).toMatch(/^## Configure$/m);
+  for (const rel of INSTALL_DOCS.filter((f) => f.endsWith('.svg'))) expect(readFileSync(join(dest, rel), 'utf8'), rel).toMatch(/^<svg\b/);
+  expectReadmeLinksInside(dest);
+  expectReadmeLinksInside(dest, 'docs/advanced-usage.md');
+};
+
 beforeAll(() => {
   tmp = mkdtempSync(join(tmpdir(), 'jev-pack-'));
   pluginRoot = join(tmp, 'root');
   mkdirSync(pluginRoot, { recursive: true });
   const r = spawnSync(process.execPath, [join(root, 'node_modules', 'typescript', 'bin', 'tsc'), '-p', join(root, 'tsconfig.json'), '--outDir', join(pluginRoot, 'dist')], { encoding: 'utf8' });
   expect(r.status, r.stdout + r.stderr).toBe(0);
-  for (const rel of ['.claude-plugin', 'hooks', 'agents', 'mods', 'plugins/evidence/skills', 'README.md', 'AGENTS.md', '.env.example', 'package.json']) cpSync(join(root, rel), join(pluginRoot, rel), { recursive: true });
+  mkdirSync(join(pluginRoot, 'docs'), { recursive: true });
+  for (const rel of ['.claude-plugin', 'hooks', 'agents', 'mods', 'plugins/evidence/skills', 'plugins/evidence/.claude-plugin', 'plugins/evidence/README.md', 'assets/readme', 'README.md', 'AGENTS.md', 'CHANGELOG.md', 'docs/advanced-usage.md', '.env.example', 'package.json']) cpSync(join(root, rel), join(pluginRoot, rel), { recursive: true });
   // The evidence bundle is build output, and the tests run before the build.
   const evidence = spawnSync(process.execPath, [join(root, 'scripts', 'build-evidence.mjs'), join(pluginRoot, 'plugins', 'evidence', 'dist', 'server.mjs')], { encoding: 'utf8' });
   expect(evidence.status, evidence.stderr).toBe(0);
@@ -28,25 +74,29 @@ afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 describe.skipIf(!hasZip)('npm run pack (#18)', () => {
   it('produces an archive that loads from a path with spaces and answers a hook event with no network and no key', () => {
     const outDir = join(tmp, 'pack out');
-    const pack = spawnSync(process.execPath, [join(root, 'scripts', 'pack.mjs'), outDir, '--root', pluginRoot], { encoding: 'utf8' });
+    const otherCwd = join(tmp, 'other cwd');
+    mkdirSync(otherCwd, { recursive: true });
+    const pack = spawnSync(process.execPath, [join(root, 'scripts', 'pack.mjs'), outDir, '--root', pluginRoot], { cwd: otherCwd, encoding: 'utf8' });
     expect(pack.status, pack.stderr).toBe(0);
     const archive = readdirSync(outDir).find((f) => /^jev-gate-.*\.zip$/.test(f));
     expect(archive).toBeDefined();
     const list = spawnSync('unzip', ['-Z1', join(outDir, archive!)], { encoding: 'utf8' }).stdout.trim().split('\n');
     const agents = ['worker-fast', 'worker', 'worker-deep', 'worker-frontier', 'planner', 'planner-frontier', 'executor'].map((a) => `agents/${a}.md`);
-    for (const must of ['dist/entry.js', 'dist/hook.js', 'dist/jev.js', 'dist/brief.js', 'dist/cli.js', 'dist/job.js', 'dist/plan.js', 'hooks/hooks.json', ...agents, '.claude-plugin/plugin.json', 'README.md']) expect(list, must).toContain(must);
-    expect(list.some((f) => f.startsWith('src/') || f.includes('/tests/') || f.startsWith('tests/') || f.startsWith('node_modules/') || f.includes('.env') && !f.endsWith('.env.example'))).toBe(false);
+    for (const must of ['dist/entry.js', 'dist/hook.js', 'dist/jev.js', 'dist/brief.js', 'dist/cli.js', 'dist/job.js', 'dist/plan.js', 'hooks/hooks.json', ...agents, '.claude-plugin/plugin.json', ...INSTALL_DOCS]) expect(list, must).toContain(must);
+    expect(list.some((f) => f.startsWith('src/') || f.includes('/tests/') || f.startsWith('tests/') || f.startsWith('node_modules/') || f.startsWith('bench/') || f === 'HANDOFF.md' || f.includes('.env') && !f.endsWith('.env.example'))).toBe(false);
     // v0.6.0: the one plugin carries the three Mods from their source, the module that loads them, and the evidence
     // server with its skill, at the paths plugin.json and hooks/register.ts name; no Mod manifest, test or declaration.
+    // #95 adds the feature READMEs beside that source, not the Mod tests.
     for (const must of ['hooks/register.ts', 'mods/compact/hooks/register.ts', 'mods/output/hooks/filter.ts', 'mods/router/hooks/router.ts', 'plugins/evidence/dist/server.mjs', 'plugins/evidence/skills/evidence/SKILL.md']) expect(list, must).toContain(must);
-    expect(list.filter((f) => f.startsWith('mods/') && !/^mods\/(compact|output|router)\/hooks\/[a-z-]+\.ts$/.test(f))).toEqual([]);
-    expect(list.filter((f) => f.startsWith('plugins/'))).toEqual(['plugins/evidence/dist/server.mjs', 'plugins/evidence/skills/evidence/SKILL.md']);
+    expect(list.filter((f) => f.startsWith('mods/') && !/^mods\/(compact|output|router)\/(?:hooks\/[a-z-]+\.ts|README\.md)$/.test(f))).toEqual([]);
+    expect(list.filter((f) => f.startsWith('plugins/'))).toEqual(['plugins/evidence/README.md', 'plugins/evidence/dist/server.mjs', 'plugins/evidence/skills/evidence/SKILL.md']);
 
     const dest = join(tmp, 'installed here', 'jev gate');
     mkdirSync(dest, { recursive: true });
+    expect(dest.includes(' '), dest).toBe(true);
+    expect(dest.startsWith(root), dest).toBe(false);
     expect(spawnSync('unzip', ['-q', join(outDir, archive!), '-d', dest], { encoding: 'utf8' }).status).toBe(0);
-    const otherCwd = join(tmp, 'other cwd');
-    mkdirSync(otherCwd);
+    expectInstallDocs(dest);
     const env = { PATH: process.env['PATH'] ?? '', HOME: join(tmp, 'home'), JEV_GATE_MODE: 'auto' };
     const guidance = spawnSync('node "' + join(dest, 'dist', 'hook.js') + '"', { shell: true, cwd: otherCwd, encoding: 'utf8', env, input: JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 's', prompt: 'add a test' }) });
     expect(guidance.status).toBe(0);
@@ -95,25 +145,26 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
 
   it('packs a lean profile with one executor, the lean hook set and no stale compiled modules', () => {
     const outDir = join(tmp, 'pack lean out');
-    const pack = spawnSync(process.execPath, [join(root, 'scripts', 'pack.mjs'), outDir, '--root', pluginRoot, '--profile', 'lean'], { encoding: 'utf8' });
+    const otherCwd = join(tmp, 'other lean cwd');
+    mkdirSync(otherCwd, { recursive: true });
+    const pack = spawnSync(process.execPath, [join(root, 'scripts', 'pack.mjs'), outDir, '--root', pluginRoot, '--profile', 'lean'], { cwd: otherCwd, encoding: 'utf8' });
     expect(pack.status, pack.stderr).toBe(0);
     const archive = readdirSync(outDir).find((f) => /^jev-gate-lean-.*\.zip$/.test(f));
     expect(archive).toBeDefined();
     const list = spawnSync('unzip', ['-Z1', join(outDir, archive!)], { encoding: 'utf8' }).stdout.trim().split('\n');
     expect(list.filter((f) => f.startsWith('agents/') && f.endsWith('.md'))).toEqual(['agents/executor.md']);
-    for (const must of ['dist/entry.js', 'dist/hook.js', 'dist/lean.js', 'dist/lean-source.js', 'hooks/hooks.json', '.claude-plugin/plugin.json']) expect(list, must).toContain(must);
+    for (const must of ['dist/entry.js', 'dist/hook.js', 'dist/lean.js', 'dist/lean-source.js', 'hooks/hooks.json', '.claude-plugin/plugin.json', ...INSTALL_DOCS]) expect(list, must).toContain(must);
     // The build clears dist, so a module deleted from src cannot reappear in an archive.
     expect(list).not.toContain('dist/context.js');
-    expect(list.some((f) => f.startsWith('src/') || f.startsWith('tests/'))).toBe(false);
-    // Lean's hook set loads no Mod; the shared manifest's evidence server and skill are there.
-    expect(list.filter((f) => f.startsWith('mods/') || f === 'hooks/register.ts')).toEqual([]);
-    expect(list.filter((f) => f.startsWith('plugins/'))).toEqual(['plugins/evidence/dist/server.mjs', 'plugins/evidence/skills/evidence/SKILL.md']);
+    expect(list.some((f) => f.startsWith('src/') || f.startsWith('tests/') || f.startsWith('bench/'))).toBe(false);
+    // No Mod is loaded: register.ts and hook sources stay out. The shared README's feature docs are files only (#95).
+    expect(list.filter((f) => f.startsWith('mods/') || f === 'hooks/register.ts')).toEqual(['mods/compact/README.md', 'mods/output/README.md', 'mods/router/README.md']);
+    expect(list.filter((f) => f.startsWith('plugins/'))).toEqual(['plugins/evidence/README.md', 'plugins/evidence/dist/server.mjs', 'plugins/evidence/skills/evidence/SKILL.md']);
 
     const dest = join(tmp, 'lean installed', 'jev gate');
     mkdirSync(dest, { recursive: true });
     expect(spawnSync('unzip', ['-q', join(outDir, archive!), '-d', dest], { encoding: 'utf8' }).status).toBe(0);
-    const otherCwd = join(tmp, 'other lean cwd');
-    mkdirSync(otherCwd);
+    expectInstallDocs(dest);
     const env = { PATH: process.env['PATH'] ?? '', HOME: join(tmp, 'lean home'), JEV_GATE_MODE: 'lean' };
     // No key: the installed lean entrypoint reads no source, sends nothing and prints nothing.
     const quiet = spawnSync(process.execPath, [join(dest, 'dist', 'hook.js'), '--lean'], { cwd: otherCwd, encoding: 'utf8', env, input: JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 's', prompt_id: 'p', prompt: 'add a test' }) });
@@ -147,7 +198,9 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
 
   it('packs the router Mod from its source, at its own version, with nothing of Lean or legacy', () => {
     const outDir = join(tmp, 'pack router out');
-    const pack = spawnSync(process.execPath, [join(root, 'scripts', 'pack.mjs'), outDir, '--profile', 'router'], { encoding: 'utf8' });
+    const otherCwd = join(tmp, 'other router cwd');
+    mkdirSync(otherCwd, { recursive: true });
+    const pack = spawnSync(process.execPath, [join(root, 'scripts', 'pack.mjs'), outDir, '--profile', 'router'], { cwd: otherCwd, encoding: 'utf8' });
     expect(pack.status, pack.stderr).toBe(0);
     const manifest = JSON.parse(readFileSync(join(root, 'mods', 'router', '.claude-plugin', 'plugin.json'), 'utf8')) as { name: string; version: string };
     expect(manifest.name).toBe('jev-gate-router');
@@ -158,5 +211,32 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     expect(files).toEqual(['.claude-plugin/plugin.json', 'README.md', 'hooks/hooks.json', ...modules.map((n) => `hooks/${n}`)].sort());
     // Declarations, host tests, compiled Lean and the executor stay out: Router-only exposes no Lean executor or history reader.
     expect(list.some((f) => /^(types|tests|dist|agents|src)\//.test(f))).toBe(false);
+    const dest = join(tmp, 'router installed', 'jev router');
+    mkdirSync(dest, { recursive: true });
+    expect(dest.includes(' ')).toBe(true);
+    expect(dest.startsWith(root)).toBe(false);
+    expect(spawnSync('unzip', ['-q', join(outDir, `jev-gate-router-${manifest.version}.zip`), '-d', dest], { encoding: 'utf8' }).status).toBe(0);
+    expectReadmeLinksInside(dest);
+    expect(readFileSync(join(dest, 'README.md'), 'utf8')).toMatch(/^## Enable$/m);
+  });
+
+  it('packs evidence with a root readme whose relative links stay inside that archive', () => {
+    const outDir = join(tmp, 'pack evidence out');
+    const otherCwd = join(tmp, 'other evidence cwd');
+    mkdirSync(otherCwd, { recursive: true });
+    const pack = spawnSync(process.execPath, [join(root, 'scripts', 'pack.mjs'), outDir, '--root', pluginRoot, '--profile', 'evidence'], { cwd: otherCwd, encoding: 'utf8' });
+    expect(pack.status, pack.stderr).toBe(0);
+    const manifest = JSON.parse(readFileSync(join(pluginRoot, 'plugins', 'evidence', '.claude-plugin', 'plugin.json'), 'utf8')) as { version: string };
+    const archive = join(outDir, `jev-gate-evidence-${manifest.version}.zip`);
+    const list = spawnSync('unzip', ['-Z1', archive], { encoding: 'utf8' }).stdout.trim().split('\n').sort();
+    expect(list).toEqual(['.claude-plugin/plugin.json', 'README.md', 'dist/server.mjs', 'skills/evidence/SKILL.md']);
+    const dest = join(tmp, 'evidence installed', 'jev evidence');
+    mkdirSync(dest, { recursive: true });
+    expect(dest.includes(' ')).toBe(true);
+    expect(dest.startsWith(root)).toBe(false);
+    expect(spawnSync('unzip', ['-q', archive, '-d', dest], { encoding: 'utf8' }).status).toBe(0);
+    expectReadmeLinksInside(dest);
+    expect(readFileSync(join(dest, 'README.md'), 'utf8')).toMatch(/^## Configure$/m);
+    expect(existsSync(join(dest, 'dist', 'server.mjs'))).toBe(true);
   });
 });

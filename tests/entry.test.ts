@@ -64,3 +64,53 @@ describe('isDefinitelyOff (#48 P2)', () => {
     expect(isDefinitelyOff({ HOME, JEV_GATE_MODE: 'bogus' } as Env)).toBe(false);
   });
 });
+
+describe('isDefinitelyOff gateMode precedence (#96)', () => {
+  // Stub env. An absent CLAUDE_PLUGIN_OPTION_GATEMODE is the resolver input, not evidence that a host omits it.
+  const plugin = { HOME, CLAUDE_PLUGIN_ROOT: '/p' } as Env;
+  const argv = ['node', 'entry.js'];
+
+  it('stays off when the plugin option is unset and the file is off', () => {
+    const cfg = configFile({ version: 5, mode: 'off' });
+    expect(isDefinitelyOff({ ...plugin, JEV_GATE_CONFIG: cfg }, argv)).toBe(true);
+  });
+
+  it('is not off when the plugin option is unset and the file is native or lean', () => {
+    for (const mode of ['native', 'lean']) {
+      const cfg = configFile({ version: 5, mode });
+      expect(isDefinitelyOff({ ...plugin, JEV_GATE_CONFIG: cfg }, argv)).toBe(false);
+    }
+  });
+
+  it('is not off for a legacy plugin hook with no file and no option, and is off for --lean and a bare node', () => {
+    expect(isDefinitelyOff(plugin, argv)).toBe(false);
+    expect(isDefinitelyOff(plugin, [...argv, '--lean'])).toBe(true);
+    expect(isDefinitelyOff({ HOME } as Env, argv)).toBe(true);
+  });
+
+  it('an explicit plugin auto is not off when the file says off', () => {
+    const cfg = configFile({ version: 5, mode: 'off' });
+    expect(isDefinitelyOff({ ...plugin, JEV_GATE_CONFIG: cfg, CLAUDE_PLUGIN_OPTION_GATEMODE: 'auto' }, argv)).toBe(false);
+  });
+
+  it('an explicit plugin off is the fast path when the config is missing or unreadable', () => {
+    expect(isDefinitelyOff({ ...plugin, JEV_GATE_CONFIG: join(tmp, 'missing-96.json'), CLAUDE_PLUGIN_OPTION_GATEMODE: 'off' }, argv)).toBe(true);
+    expect(isDefinitelyOff({ ...plugin, JEV_GATE_CONFIG: configFile('{not json'), CLAUDE_PLUGIN_OPTION_GATEMODE: 'off' }, argv)).toBe(true);
+  });
+
+  it('JEV_GATE_MODE=off is the fast path over an explicit plugin auto and a file', () => {
+    const cfg = configFile({ version: 5, mode: 'auto' });
+    expect(isDefinitelyOff({ ...plugin, JEV_GATE_CONFIG: cfg, JEV_GATE_MODE: 'off', CLAUDE_PLUGIN_OPTION_GATEMODE: 'auto' }, argv)).toBe(true);
+  });
+
+  it('JEV_GATE_MODE=native is not off when the plugin option is auto', () => {
+    const cfg = configFile({ version: 5, mode: 'off' });
+    expect(isDefinitelyOff({ ...plugin, JEV_GATE_CONFIG: cfg, JEV_GATE_MODE: 'native', CLAUDE_PLUGIN_OPTION_GATEMODE: 'auto' }, argv)).toBe(false);
+  });
+
+  it('does not treat a bad explicit config as off, including under a legacy plugin hook', () => {
+    expect(isDefinitelyOff({ ...plugin, JEV_GATE_CONFIG: join(tmp, 'no-such-96.json') }, argv)).toBe(false);
+    expect(isDefinitelyOff({ ...plugin, JEV_GATE_CONFIG: configFile('{not json') }, argv)).toBe(false);
+    expect(isDefinitelyOff({ HOME, JEV_GATE_CONFIG: configFile({ version: 5, mode: 'bogus' }) } as Env)).toBe(false);
+  });
+});

@@ -223,6 +223,87 @@ describe('loadConfig', () => {
   });
 });
 
+describe('gateMode precedence when the plugin option is unset (#96)', () => {
+  // Stub env. An absent CLAUDE_PLUGIN_OPTION_GATEMODE is the resolver input, not evidence that a host omits it.
+  const home = join(tmp, 'nonexistent-96');
+  const plugin = { HOME: home, CLAUDE_PLUGIN_ROOT: '/plugin' };
+  const legacyArgv = ['node', 'entry.js'];
+  const leanArgv = ['node', 'entry.js', '--lean'];
+  const file = (mode: string): string => write(`p96-${mode}.json`, { ...V5, mode });
+  const unread = (): string => {
+    throw new Error('config must not be read');
+  };
+
+  it('keeps the file mode when the plugin option is unset', () => {
+    for (const mode of ['off', 'native', 'lean']) {
+      const path = file(mode);
+      const env = { ...plugin, JEV_GATE_CONFIG: path };
+      expect(loadConfig(env, undefined, hookDefaultMode(env, legacyArgv))).toMatchObject({ ok: true, config: { mode }, source: path });
+    }
+  });
+
+  it('stays auto for a legacy plugin hook with no file and no plugin option', () => {
+    expect(hookDefaultMode(plugin, legacyArgv)).toBe('auto');
+    expect(loadConfig(plugin, undefined, hookDefaultMode(plugin, legacyArgv))).toEqual({ ok: true, config: { ...DEFAULT_CONFIG, mode: 'auto' }, source: 'defaults' });
+  });
+
+  it('lets an explicit plugin auto override a file off', () => {
+    const path = file('off');
+    const env = { ...plugin, JEV_GATE_CONFIG: path, CLAUDE_PLUGIN_OPTION_GATEMODE: 'auto' };
+    expect(loadConfig(env, undefined, hookDefaultMode(env, legacyArgv))).toMatchObject({ ok: true, config: { mode: 'auto' }, source: path });
+  });
+
+  it('keeps the off fast path for an explicit plugin off before an unreadable config', () => {
+    const env = { ...plugin, JEV_GATE_CONFIG: join(tmp, 'missing-96.json'), CLAUDE_PLUGIN_OPTION_GATEMODE: 'off' };
+    expect(loadConfig(env, unread, 'auto')).toMatchObject({ ok: true, source: 'env:off', config: { mode: 'off' } });
+    const denied = (): string => {
+      const err = new Error('denied') as NodeJS.ErrnoException;
+      err.code = 'EACCES';
+      throw err;
+    };
+    expect(loadConfig({ ...env, JEV_GATE_CONFIG: join(tmp, 'denied-96.json') }, denied, 'auto')).toMatchObject({ ok: true, source: 'env:off', config: { mode: 'off' } });
+  });
+
+  it('returns off before reading a file when JEV_GATE_MODE=off, whatever else is set', () => {
+    const env = { ...plugin, JEV_GATE_CONFIG: file('auto'), JEV_GATE_MODE: 'off', CLAUDE_PLUGIN_OPTION_GATEMODE: 'auto' };
+    expect(loadConfig(env, unread, 'auto')).toMatchObject({ ok: true, source: 'env:off', config: { mode: 'off' } });
+  });
+
+  it('lets JEV_GATE_MODE=native beat an explicit plugin auto', () => {
+    const path = file('off');
+    const env = { ...plugin, JEV_GATE_CONFIG: path, JEV_GATE_MODE: 'native', CLAUDE_PLUGIN_OPTION_GATEMODE: 'auto' };
+    expect(loadConfig(env, undefined, 'auto')).toMatchObject({ ok: true, config: { mode: 'native' }, source: path });
+  });
+
+  it('stays off for --lean, doctor, and a bare node when nothing overrides and no file exists', () => {
+    expect(hookDefaultMode(plugin, leanArgv)).toBe('off');
+    expect(loadConfig(plugin, undefined, hookDefaultMode(plugin, leanArgv))).toEqual({ ok: true, config: DEFAULT_CONFIG, source: 'defaults' });
+    // doctor and a bare node call loadConfig without hookDefaultMode, so a plugin root alone does not select auto.
+    expect(loadConfig(plugin)).toEqual({ ok: true, config: DEFAULT_CONFIG, source: 'defaults' });
+    expect(loadConfig({ HOME: home })).toEqual({ ok: true, config: DEFAULT_CONFIG, source: 'defaults' });
+  });
+
+  it('follows a valid config file for --lean and for doctor', () => {
+    const path = file('native');
+    const lean = { ...plugin, JEV_GATE_CONFIG: path };
+    expect(loadConfig(lean, undefined, hookDefaultMode(lean, leanArgv))).toMatchObject({ ok: true, config: { mode: 'native' }, source: path });
+    expect(loadConfig({ HOME: home, JEV_GATE_CONFIG: path })).toMatchObject({ ok: true, config: { mode: 'native' }, source: path });
+  });
+
+  it('errors on a bad explicit config instead of treating it as no file and therefore auto', () => {
+    const missing = { ...plugin, JEV_GATE_CONFIG: join(tmp, 'missing-explicit-96.json') };
+    expect(loadConfig(missing, undefined, 'auto')).toMatchObject({ ok: false, error: 'JEV_GATE_CONFIG points to a missing file' });
+    const bad = { ...plugin, JEV_GATE_CONFIG: write('p96-bad.json', '{nope') };
+    expect(loadConfig(bad, undefined, 'auto')).toMatchObject({ ok: false, error: 'config is not valid JSON' });
+    const denied = (): string => {
+      const err = new Error('denied') as NodeJS.ErrnoException;
+      err.code = 'EACCES';
+      throw err;
+    };
+    expect(loadConfig({ ...plugin, JEV_GATE_CONFIG: join(tmp, 'denied-explicit-96.json') }, denied, 'auto')).toMatchObject({ ok: false, error: 'cannot read config: EACCES' });
+  });
+});
+
 describe('effectiveDepthFloor (#48 P0-1)', () => {
   it('an explicit config value always wins, whatever the window is', () => {
     const config = { ...DEFAULT_CONFIG, delegationDepthFloor: 300_000 };
@@ -233,9 +314,10 @@ describe('effectiveDepthFloor (#48 P0-1)', () => {
   });
 
   it("takes the atomic gate's floor from its cost model, whatever the window", () => {
-    for (const window of [null, 200_000, 1_000_000]) expect(effectiveDepthFloor(DEFAULT_CONFIG, window)).toEqual({ floor: 48_980, source: 'cost_model' });
-    // A coordinator that costs more turns needs a deeper session before anything can pay.
-    expect(effectiveDepthFloor({ ...DEFAULT_CONFIG, delegationCoordinatorTurns: 30 }, null).floor).toBe(Math.floor((60 * 40_000) / 30) + 1);
+    for (const window of [null, 200_000, 1_000_000]) expect(effectiveDepthFloor(DEFAULT_CONFIG, window)).toEqual({ floor: 50_865, source: 'cost_model' });
+    // A coordinator that costs more turns needs a deeper session before anything can pay. The bound is the live last
+    // bin (51.5), not a second copy of the default floor.
+    expect(effectiveDepthFloor({ ...DEFAULT_CONFIG, delegationCoordinatorTurns: 30 }, null).floor).toBe(Math.floor((51.5 * 40_000) / (51.5 - 30)) + 1);
   });
 
   const composite = { ...DEFAULT_CONFIG, admissionQuestionShape: 'composite' as const };
