@@ -1,7 +1,7 @@
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-import { loadConfig, type Env } from './config.js';
+import { hookDefaultMode, loadConfig, type Env } from './config.js';
 
 /**
  * #48 P2: idle cost. `hooks.json` and `lean.json` point every event at this file instead of `dist/hook.js` directly.
@@ -18,8 +18,8 @@ import { loadConfig, type Env } from './config.js';
  * runs it, not a second copy of it here. A wrong "not off" costs one extra dynamic import; a wrong "off" would
  * silently disable the gate, which is why only the unambiguous case takes the shortcut.
  */
-export const isDefinitelyOff = (env: Env): boolean => {
-  const loaded = loadConfig(env);
+export const isDefinitelyOff = (env: Env, argv: readonly string[] = []): boolean => {
+  const loaded = loadConfig(env, undefined, hookDefaultMode(env, argv));
   return loaded.ok && loaded.config.mode === 'off';
 };
 
@@ -36,7 +36,7 @@ const drainStdin = async (stdin: AsyncIterable<Uint8Array | string>): Promise<vo
 };
 
 export const run = async (): Promise<void> => {
-  if (isDefinitelyOff(process.env)) {
+  if (isDefinitelyOff(process.env, process.argv)) {
     await drainStdin(process.stdin);
     // Matches runHook's own skip('mode_off')/preserve('mode_off'): no stdout, this stderr line, exit 0.
     process.stderr.write('jev-gate: mode_off\n');

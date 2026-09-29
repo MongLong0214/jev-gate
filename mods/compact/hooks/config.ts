@@ -19,9 +19,9 @@ export const BUDGET_MAX = 400000;
 export const resolveCompactConfig = (options: Options | undefined): CompactConfigResult => {
   const o = options ?? {};
   const bool = (k: string, d: boolean): boolean | null => (o[k] === undefined ? d : typeof o[k] === 'boolean' ? (o[k] as boolean) : null);
-  const enabled = bool('enabled', false);
+  const enabled = bool('enabled', true);
   if (enabled === null) return { ok: false, field: 'enabled' };
-  const mode = o['mode'] === undefined ? 'shadow' : o['mode'];
+  const mode = o['mode'] === undefined ? 'active' : o['mode'];
   if (mode !== 'shadow' && mode !== 'active') return { ok: false, field: 'mode' };
   const budget = o['budgetChars'] === undefined ? 40000 : o['budgetChars'];
   if (typeof budget !== 'number' || !Number.isInteger(budget) || budget < BUDGET_MIN || budget > BUDGET_MAX) return { ok: false, field: 'budgetChars' };

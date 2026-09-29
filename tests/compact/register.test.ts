@@ -40,8 +40,8 @@ const nextSpy = () => {
 };
 
 describe('resolveCompactConfig', () => {
-  it('defaults to off, shadow, 40000 characters, subagents on, /compact left alone', () => {
-    expect(resolveCompactConfig(undefined)).toEqual({ ok: true, config: { enabled: false, mode: 'shadow', budgetChars: 40000, subagents: true, manual: false } });
+  it('defaults to on, active, 40000 characters, subagents on, /compact left alone', () => {
+    expect(resolveCompactConfig(undefined)).toEqual({ ok: true, config: { enabled: true, mode: 'active', budgetChars: 40000, subagents: true, manual: false } });
   });
   it('names the field it cannot use', () => {
     expect(resolveCompactConfig({ mode: 'fast' })).toEqual({ ok: false, field: 'mode' });
@@ -53,7 +53,7 @@ describe('resolveCompactConfig', () => {
 
 describe('register', () => {
   it('registers nothing when off', async () => {
-    expect([...(await hooksFor({})).keys()]).toEqual([]);
+    expect([...(await hooksFor({ enabled: false })).keys()]).toEqual([]);
   });
 
   it('with an option it cannot use, registers only a session-start diagnostic naming the field', async () => {
@@ -65,7 +65,7 @@ describe('register', () => {
   });
 
   it('shadow: the engine compacts; the digest size and the engine time and usage are logged', async () => {
-    const hook = (await hooksFor({ enabled: true })).get('session.compact')!;
+    const hook = (await hooksFor({ enabled: true, mode: 'shadow' })).get('session.compact')!;
     const { next, calls } = nextSpy();
     logs.length = 0;
     const e = { trigger: 'auto', messages: conversation() };
@@ -123,7 +123,7 @@ describe('register', () => {
     const bad = { ui: { log: () => { throw new Error('log down'); } } };
     const r = (await hook(bad, { trigger: 'auto', messages: conversation() }, nextSpy().next)) as { messages: unknown[] };
     expect(r.messages.length).toBeGreaterThan(1);
-    const shadow = (await hooksFor({ enabled: true })).get('session.compact')!;
+    const shadow = (await hooksFor({ enabled: true, mode: 'shadow' })).get('session.compact')!;
     const { next, calls } = nextSpy();
     expect(await shadow(bad, { trigger: 'auto', messages: conversation() }, next)).toBe(CORE);
     expect(calls).toHaveLength(1);

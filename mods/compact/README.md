@@ -17,20 +17,20 @@ example under `env` in `~/.claude/settings.json`):
 
 ```sh
 claude plugin marketplace add MongLong0214/jev-gate
-claude plugin install jev-gate@jev-gate --config compactEnabled=true --config compactMode=active
+claude plugin install jev-gate@jev-gate
 ```
 
 From a checkout, `claude --plugin-dir /path/to/jev-gate` loads the working tree as the whole plugin, and
 `--plugin-dir /path/to/jev-gate/mods/compact` loads this module alone, under its own option names (`enabled`, `mode`,
 `budgetChars`, keyed `jev-gate-compact@inline`).
 
-Off by default; off registers no hook at all. Options live under `pluginConfigs["jev-gate@jev-gate"].options`
+On by default (v0.6.3), in `active` mode; off registers no hook at all. Options live under `pluginConfigs["jev-gate@jev-gate"].options`
 (`jev-gate@inline` for a `--plugin-dir` load).
 
 | Option | Default | Meaning |
 |---|---|---|
-| `compactEnabled` | `false` | Master switch. |
-| `compactMode` | `shadow` | `shadow` builds and logs the digest and lets the engine compact, logging how long that took and what its summarizer used. `active` answers the compaction with the digest. |
+| `compactEnabled` | `true` | Master switch. |
+| `compactMode` | `active` | `shadow` builds and logs the digest and lets the engine compact, logging how long that took and what its summarizer used. `active` answers the compaction with the digest. |
 | `compactBudgetChars` | `40000` | Target characters for the digest and the kept tail together, 8000–400000. See the ceiling below. |
 | `compactSubagents` | `true` | Also answer a subagent's own auto compactions. |
 | `compactManual` | `false` | Also answer `/compact` typed without instructions. Keep it off: see the host defect below. |

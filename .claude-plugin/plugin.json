@@ -1,7 +1,7 @@
 {
   "name": "jev-gate",
-  "version": "0.6.2",
-  "description": "Jev Gate in one plugin: the orchestration gate, the extractive compactor, the Vitest log folder, the Jev effort and model router and the jev_evidence tool. Each is off until you enable it.",
+  "version": "0.6.3",
+  "description": "Jev Gate in one plugin: the orchestration gate, the extractive compactor, the Vitest log folder, the Jev effort and model router and the jev_evidence tool. Every part is on by default; each has its own on/off option.",
   "author": {
     "name": "MongLong0214",
     "url": "https://github.com/MongLong0214"
@@ -26,17 +26,23 @@
     }
   },
   "userConfig": {
+    "gateMode": {
+      "type": "string",
+      "title": "Gate: mode (auto, native, off)",
+      "description": "auto: Jev decides whether a request is split across workers. native: route only the calls you make. off: the gate does nothing. A JEV_GATE_MODE variable overrides this.",
+      "default": "auto"
+    },
     "compactEnabled": {
       "title": "Compact: Enable extractive compaction",
       "description": "Off registers no hook at all. Every compaction is the engine's own.",
       "type": "boolean",
-      "default": false
+      "default": true
     },
     "compactMode": {
       "title": "Compact: Mode",
       "description": "shadow: build and log the digest, let the engine compact. active: compact with the digest; the engine's summarizer is not asked.",
       "type": "string",
-      "default": "shadow"
+      "default": "active"
     },
     "compactBudgetChars": {
       "title": "Compact: Budget (characters)",
@@ -60,13 +66,13 @@
       "title": "Output: Enable output folding",
       "description": "Off registers no hook at all. Every Bash result is the host's own.",
       "type": "boolean",
-      "default": false
+      "default": true
     },
     "routerEnabled": {
       "title": "Router: Enable the Router",
       "description": "Off registers no hook at all. Every request keeps its native model and effort.",
       "type": "boolean",
-      "default": false
+      "default": true
     },
     "routeSubagentModel": {
       "title": "Router: Route subagent models",

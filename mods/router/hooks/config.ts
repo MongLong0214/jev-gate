@@ -54,7 +54,7 @@ export const resolveConfig = (options: Options): ConfigResult => {
     return typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max ? v : null;
   };
 
-  const enabled = bool('enabled', false);
+  const enabled = bool('enabled', true);
   if (enabled === null) return { ok: false, field: 'enabled' };
   const routeSubagentModel = bool('routeSubagentModel', true);
   if (routeSubagentModel === null) return { ok: false, field: 'routeSubagentModel' };

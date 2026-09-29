@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 
-import { DEFAULT_CONFIG, effectiveDepthFloor, LEGACY_DEPTH_FLOOR, loadConfig, MIGRATION_SAMPLE, resolveConfigPath, validateConfig } from '../src/config.js';
+import { DEFAULT_CONFIG, effectiveDepthFloor, hookDefaultMode, LEGACY_DEPTH_FLOOR, loadConfig, MIGRATION_SAMPLE, resolveConfigPath, validateConfig } from '../src/config.js';
 
 const tmp = mkdtempSync(join(tmpdir(), 'jev-config-'));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
@@ -203,6 +203,23 @@ describe('loadConfig', () => {
     expect(loadConfig({ HOME: join(tmp, 'nonexistent') })).toEqual({ ok: true, config: DEFAULT_CONFIG, source: 'defaults' });
     expect(resolveConfigPath({ HOME: '/h' })).toBe(join('/h', '.config', 'jev-gate', 'config.json'));
     expect(resolveConfigPath({ HOME: '/h', JEV_GATE_CONFIG: '/x/y.json' })).toBe('/x/y.json');
+  });
+
+  it('runs a plugin hook auto with no setup; the gateMode option and JEV_GATE_MODE override it, a file decides otherwise', () => {
+    const home = join(tmp, 'nonexistent');
+    const plugin = { HOME: home, CLAUDE_PLUGIN_ROOT: '/p' };
+    expect(hookDefaultMode(plugin, [])).toBe('auto');
+    expect(hookDefaultMode(plugin, ['--lean'])).toBe('off');
+    expect(hookDefaultMode({ HOME: home }, [])).toBe('off');
+    expect(loadConfig(plugin)).toEqual({ ok: true, config: DEFAULT_CONFIG, source: 'defaults' });
+    expect(loadConfig(plugin, undefined, 'auto')).toEqual({ ok: true, config: { ...DEFAULT_CONFIG, mode: 'auto' }, source: 'defaults' });
+    expect(loadConfig({ ...plugin, CLAUDE_PLUGIN_OPTION_GATEMODE: 'off' }, undefined, 'auto')).toMatchObject({ ok: true, source: 'env:off' });
+    expect(loadConfig({ ...plugin, CLAUDE_PLUGIN_OPTION_GATEMODE: 'native' }, undefined, 'auto')).toMatchObject({ ok: true, config: { mode: 'native' } });
+    expect(loadConfig({ ...plugin, CLAUDE_PLUGIN_OPTION_GATEMODE: 'off', JEV_GATE_MODE: 'native' }, undefined, 'auto')).toMatchObject({ ok: true, config: { mode: 'native' } });
+    expect(loadConfig({ ...plugin, CLAUDE_PLUGIN_OPTION_GATEMODE: 'fast' }, undefined, 'auto')).toMatchObject({ ok: false, source: 'env' });
+    const p = write('native.json', { ...V5, mode: 'native' });
+    expect(loadConfig({ ...plugin, JEV_GATE_CONFIG: p }, undefined, 'auto')).toMatchObject({ ok: true, config: { mode: 'native' } });
+    expect(loadConfig({ ...plugin, JEV_GATE_CONFIG: p, CLAUDE_PLUGIN_OPTION_GATEMODE: 'off' }, undefined, 'auto')).toMatchObject({ ok: true, source: 'env:off' });
   });
 });
 

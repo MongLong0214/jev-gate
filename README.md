@@ -28,7 +28,7 @@ An experiment in using frontier intelligence for the hard parts—not every part
 > are one plugin, installed and updated once. See [What is verified](#what-is-verified-and-what-is-not) and
 > [Results](#results). Contract: [#21 PRD](https://github.com/MongLong0214/jev-gate/issues/21) →
 > [#22 ADR](https://github.com/MongLong0214/jev-gate/issues/22).
-> Release: [v0.6.2](https://github.com/MongLong0214/jev-gate/releases/tag/v0.6.2). Next work and current state:
+> Release: [v0.6.3](https://github.com/MongLong0214/jev-gate/releases/tag/v0.6.3). Next work and current state:
 > [HANDOFF.md](HANDOFF.md).
 
 ## Install
@@ -40,20 +40,32 @@ The repository is its own Claude Code plugin marketplace, with one plugin. In a 
 /plugin install jev-gate@jev-gate
 ```
 
-| Part | What it does | Turn it on | Needs |
-|---|---|---|---|
-| Gate | The orchestration gate described below. | `JEV_GATE_MODE` or `~/.config/jev-gate/config.json` ([Try V5](#try-v5)) | a TypeSafe key |
-| Compact | Answers auto compactions with an extractive digest and the recent tail: no summarizer request, milliseconds instead of a minute. Calls no Jev. [README](mods/compact/README.md) | `compactEnabled`, `compactMode=active` | `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` |
-| Router | Chooses the main thread's effort and a subagent's model and effort from one Jev assessment each; native on any doubt. The main thread's model stays native. [README](mods/router/README.md) | `routerEnabled` | `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`, a TypeSafe key |
-| Output | Folds runs of identical lines in a passing Vitest log the host saved to a file, so the whole run reaches the model with exact counts instead of a 2 KB preview. Calls no Jev. [README](mods/output/README.md) | `outputEnabled` | `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` |
-| Evidence | One read-only MCP tool, `jev_evidence`: exact source windows from the session's Git worktree, paged, with exact read-back; with a key, Jev orders a page and folds clearly unrelated bodies. [README](plugins/evidence/README.md) | nothing (optional `JEV_EVIDENCE_CONFIG`, [configure](plugins/evidence/README.md#configure)) | a TypeSafe key for remote |
+Then add two lines under `env` in `~/.claude/settings.json` and restart Claude Code. That is the whole setup:
 
-Every part is off after install, and the plugin needs Node.js 22 or later. Compact, Router and Output take their
-options in `/plugin` (or `claude plugin install jev-gate@jev-gate --config compactEnabled=true --config
-compactMode=active`), and the host loads them only when `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` is in its environment, for
-example under `env` in `~/.claude/settings.json`; without it the gate and the evidence tool still run. The evidence
-tool works once installed: it searches the session's Git worktree, and with the key Jev judges its pages.
-The gate's command hooks start a Node process per event even in mode `off` (tens of milliseconds each).
+```json
+"env": {
+  "TYPESAFE_API_KEY": "<your key>",
+  "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "1"
+}
+```
+
+Every part is on after install. Each has one switch in `/plugin` → jev-gate → configure (or
+`claude plugin install jev-gate@jev-gate --config routerEnabled=false`):
+
+| Part | What it does | Switch (default) | Needs |
+|---|---|---|---|
+| Gate | The orchestration gate described below. | `gateMode` (`auto`; `native`, `off`) | the key |
+| Compact | Answers auto compactions with an extractive digest and the recent tail: no summarizer request, milliseconds instead of a minute. Calls no Jev. [README](mods/compact/README.md) | `compactEnabled` (on), `compactMode` (`active`; `shadow` only logs) | the flag |
+| Router | Chooses the main thread's effort and a subagent's model and effort from one Jev assessment each; native on any doubt. The main thread's model stays native. [README](mods/router/README.md) | `routerEnabled` (on) | the flag, the key |
+| Output | Folds runs of identical lines in a passing Vitest log the host saved to a file, so the whole run reaches the model with exact counts instead of a 2 KB preview. Calls no Jev. [README](mods/output/README.md) | `outputEnabled` (on) | the flag |
+| Evidence | One read-only MCP tool, `jev_evidence`: exact source windows from the session's Git worktree, paged, with exact read-back; with the key, Jev orders a page and folds clearly unrelated bodies. [README](plugins/evidence/README.md) | none (optional `JEV_EVIDENCE_CONFIG`, [configure](plugins/evidence/README.md#configure)) | the key for remote |
+
+The plugin needs Node.js 22 or later. Without the key, the parts that ask Jev leave every call native. Without
+`CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` the host does not load Compact, Router or Output; the gate and the evidence tool
+still run. The router waits up to `routerTimeoutMs` (800 ms) for Jev on a turn it routes. The gate's command hooks
+start a Node process per event (tens of milliseconds each). A `JEV_GATE_MODE` variable or a
+`~/.config/jev-gate/config.json` ([Try V5](#try-v5)) still decides the gate's mode where present; the variable, then
+`gateMode` once set, win over the file.
 
 A plugin changes only when a release raises its version, and `main` takes only releases. Turn on auto-update for the
 marketplace under **Marketplaces** in `/plugin`, or run `/plugin marketplace update jev-gate` and then

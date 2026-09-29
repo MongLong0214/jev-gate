@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.6.3 — Every part is on after install
+
+### Changed
+
+- **Every part is on by default.** Compact (`compactEnabled` true, `compactMode` `active`), Output (`outputEnabled`
+  true) and Router (`routerEnabled` true) now default to on; each keeps its switch in `/plugin`. Setup is the key and
+  `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` under `env`.
+- **The gate has a switch: `gateMode`** (`auto` by default; `native`, `off`). Under the plugin with no
+  `~/.config/jev-gate/config.json`, the gate runs `auto`, so no config file is needed. `JEV_GATE_MODE` wins over
+  `gateMode` once set, and both win over the file; a file still decides otherwise. The lean artifact (`--lean`) stays
+  opt-in, and outside the plugin hooks (`doctor`, the bench, a bare `node dist/hook.js`) the default stays `off`.
+
+### Upgrading
+
+- An option you already set keeps its value. To keep a part off, set its switch to false (or `gateMode` to `off`).
+- The router now asks Jev on the turns it routes and waits up to `routerTimeoutMs` (800 ms) for the answer; set
+  `routerEnabled` false to keep every turn native.
+
 ## v0.6.2 — The evidence tool needs no setup
 
 ### Changed

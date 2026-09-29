@@ -10,10 +10,10 @@ const ok = (options: Record<string, string | number | boolean>) => {
 };
 
 describe('resolveConfig', () => {
-  it('is off by default, and off registers nothing', () => {
+  it('is on by default, and off registers nothing', () => {
     const c = ok({});
     expect(c).toMatchObject({
-      enabled: false,
+      enabled: true,
       routeSubagentModel: true,
       routeExplicitSpawnModel: true,
       routeSubagentEffort: true,
@@ -27,8 +27,8 @@ describe('resolveConfig', () => {
       timeoutMs: 800,
       logDecisions: true,
     });
-    expect(anyRouting(c)).toBe(false);
-    expect(anyRouting(ok({ enabled: true }))).toBe(true);
+    expect(anyRouting(c)).toBe(true);
+    expect(anyRouting(ok({ enabled: false }))).toBe(false);
     expect(anyRouting(ok({ enabled: true, routeSubagentModel: false, routeSubagentEffort: false, routeMainEffort: false, routeMainModel: false }))).toBe(false);
   });
 

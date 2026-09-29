@@ -68,15 +68,14 @@ const nextOf = (answer: unknown) => {
 };
 
 describe('resolveOutputConfig', () => {
-  it('defaults to off and names a field it cannot use', () => {
-    expect(resolveOutputConfig(undefined)).toEqual({ ok: true, config: { enabled: false } });
+  it('defaults to on and names a field it cannot use', () => {
+    expect(resolveOutputConfig(undefined)).toEqual({ ok: true, config: { enabled: true } });
     expect(resolveOutputConfig({ enabled: 'yes' })).toEqual({ ok: false, field: 'enabled' });
   });
 });
 
 describe('register', () => {
   it('registers nothing when off', async () => {
-    expect([...(await hooksFor({})).keys()]).toEqual([]);
     expect([...(await hooksFor({ enabled: false })).keys()]).toEqual([]);
   });
 

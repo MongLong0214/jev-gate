@@ -36,17 +36,22 @@ describe('the one plugin’s hooks module', () => {
       expect(Object.keys(OPTION_NAMES[mod]!).sort(), mod).toEqual(Object.keys(own).sort());
       for (const [key, option] of Object.entries(own)) expected[OPTION_NAMES[mod]![key]!] = { ...option, title: `${label[mod]}: ${option.title}` };
     }
-    expect(readJson('.claude-plugin/plugin.json').userConfig).toEqual(expected);
+    const { gateMode, ...mods } = readJson('.claude-plugin/plugin.json').userConfig!;
+    expect(gateMode).toMatchObject({ type: 'string', default: 'auto' });
+    expect(mods).toEqual(expected);
   });
 
-  it('registers nothing with every option at its default', async () => {
-    expect([...(await registered({})).keys()]).toEqual([]);
+  it('registers nothing with all three Mods off, and reads only the plugin’s own names', async () => {
+    const off = { compactEnabled: false, outputEnabled: false, routerEnabled: false };
+    expect([...(await registered(off)).keys()]).toEqual([]);
+    expect([...(await registered({ ...off, enabled: true })).keys()]).toEqual([]);
   });
 
-  it('registers each event once with all three Mods on, and reads only the plugin’s own names', async () => {
-    const all = await registered({ compactEnabled: true, outputEnabled: true, routerEnabled: true });
-    expect([...all.keys()].sort()).toEqual(['agent.offer', 'agent.spawn', 'session.compact', 'session.end', 'tool.call {"tool":"Bash"}', 'turn.complete', 'turn.start', 'turn.step'].sort());
-    expect([...(await registered({ enabled: true })).keys()]).toEqual([]);
+  it('registers each event once with every option at its default, all three Mods on', async () => {
+    const defaults = Object.fromEntries(Object.entries(readJson('.claude-plugin/plugin.json').userConfig!).map(([k, v]) => [k, (v as { default?: unknown }).default]));
+    for (const options of [{}, defaults]) {
+      expect([...(await registered(options)).keys()].sort()).toEqual(['agent.offer', 'agent.spawn', 'session.compact', 'session.end', 'tool.call {"tool":"Bash"}', 'turn.complete', 'turn.start', 'turn.step'].sort());
+    }
   });
 
   it('writes every unusable option from one session-start hook and keeps the other Mods', async () => {

@@ -1,7 +1,7 @@
 {
   "name": "jev-gate-output",
-  "version": "0.6.2",
-  "description": "Folds runs of identical consecutive lines in a passing Vitest log the host saved to a file, so the model reads the whole run with exact counts instead of a 2 KB preview; off by default.",
+  "version": "0.6.3",
+  "description": "Folds runs of identical consecutive lines in a passing Vitest log the host saved to a file, so the model reads the whole run with exact counts instead of a 2 KB preview; on by default.",
   "author": {
     "name": "MongLong0214",
     "url": "https://github.com/MongLong0214"
@@ -13,7 +13,7 @@
       "title": "Enable output folding",
       "description": "Off registers no hook at all. Every Bash result is the host's own.",
       "type": "boolean",
-      "default": false
+      "default": true
     }
   }
 }
