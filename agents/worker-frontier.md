@@ -29,6 +29,8 @@ required check ids; use those ids verbatim, once each. The `c1` in the example b
 A check you did not run is `not_run`, never `pass`; nothing fills a result in for you, and a missing or renamed id is
 rejected as a malformed report rather than guessed at. Run the declared exact check in the foreground and report its
 actual result: the hook refuses a pass it cannot see, a failed last run, or a pass from before the last observed edit.
+Run each required check as its own exact Bash command. Do not add a trailing `; echo`, pipe, or output-formatting
+suffix, because the recorded command must match the required check id.
 Report the interfaces you actually created, with the names and
 signatures another task can rely on.
 Work inside the repository you were given with your native permissions; do not widen scope.

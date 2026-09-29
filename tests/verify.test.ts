@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 
-import { readWorkerObservation, refusalReason, runsCommand, subagentTranscriptPath, verifyChecks } from '../src/verify.js';
+import { evidenceFormatOnly, nearestFormatCommands, readWorkerObservation, refusalReason, runsCommand, subagentTranscriptPath, verifyChecks } from '../src/verify.js';
 
 const tmp = mkdtempSync(join(tmpdir(), 'jev-verify-'));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
@@ -272,6 +272,38 @@ describe('verifyChecks', () => {
     expect(claim('npm test', [{ command: 'npm test', status: 'passed', at: 1 }, { command: 'npm test', status: 'failed', at: 4 }], 3)).toEqual({ transcript: 'read', contradicted: ['c1'], unobserved: [], stale: [] });
     expect(claim('npm test', [{ command: 'npm test', status: 'passed', at: 3 }], 1, true)).toEqual({ transcript: 'read', contradicted: [], unobserved: [], stale: ['c1'] });
     expect(refusalReason(verifyChecks({ runs: [], lastWrite: 1, truncated: false }, []))).toBeNull();
+  });
+});
+
+describe('evidence format retry', () => {
+  const claims = [{ id: 'suite', command: 'npm test' }];
+  const classify = (command: string, status: 'passed' | 'failed' = 'passed', lastWrite: number | null = null, openWrite = false) => {
+    const observation = { runs: [{ command, status, at: 2 }], lastWrite, truncated: false, ...(openWrite ? { openWrite: true as const } : {}) };
+    const verification = verifyChecks(observation, claims);
+    return { eligible: evidenceFormatOnly(observation, claims, verification), nearest: nearestFormatCommands(observation, claims, verification) };
+  };
+
+  it('identifies only a passing display suffix and reports the actual executed command', () => {
+    expect(classify('npm test; echo "exit=$?"')).toEqual({ eligible: true, nearest: [{ id: 'suite', command: 'npm test; echo "exit=$?"' }] });
+    expect(classify('npm test 2>&1 | tail -15; echo "exit=$?"').eligible).toBe(true);
+    expect(classify('npm test -- --watch; echo "exit=$?"').eligible).toBe(false);
+    expect(classify('npm test || true').eligible).toBe(false);
+    expect(classify('npm test && echo ok').eligible).toBe(false);
+  });
+
+  it('does not waive a failed, stale, or still writing result', () => {
+    expect(classify('npm test; echo "exit=$?"', 'failed').eligible).toBe(false);
+    expect(classify('npm test; echo "exit=$?"', 'passed', 3).eligible).toBe(false);
+    expect(classify('npm test; echo "exit=$?"', 'passed', null, true).eligible).toBe(false);
+    const observation = {
+      runs: [
+        { command: 'npm test; echo "exit=$?"', status: 'passed' as const, at: 1 },
+        { command: 'npm test; echo "exit=$?"', status: 'failed' as const, at: 2 },
+      ],
+      lastWrite: null,
+      truncated: false,
+    };
+    expect(evidenceFormatOnly(observation, claims, verifyChecks(observation, claims))).toBe(false);
   });
 });
 

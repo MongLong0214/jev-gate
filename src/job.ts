@@ -308,7 +308,11 @@ export type BoundKind = 'planner' | 'replan' | 'task';
 export const boundExhausted = (gen: JobGeneration, kind: BoundKind, taskId: string | null): boolean => {
   if (kind === 'planner') return gen.attempts.planner >= MAX_PLANNER_ATTEMPTS;
   if (kind === 'replan') return gen.attempts.replans >= MAX_REPLANS;
-  return (own(gen.attempts.tasks, taskId ?? '') ?? 0) >= MAX_TASK_ATTEMPTS;
+  const id = taskId ?? '';
+  // At most one evidence-format-only single dispatch is free. The attempt number stays monotonic so receipts and
+  // markers remain unambiguous, while the paid attempt cap still bounds the job.
+  const waiver = gen.execution === 'single' && gen.receipts.some((r) => r.task_id === id && r.evidence_format_only === true) ? 1 : 0;
+  return (own(gen.attempts.tasks, id) ?? 0) >= MAX_TASK_ATTEMPTS + waiver;
 };
 
 export const countAttempt = (gen: JobGeneration, kind: BoundKind, taskId: string | null): JobGeneration => {
