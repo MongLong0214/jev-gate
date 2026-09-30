@@ -4,7 +4,7 @@ Measures the installed plugin against itself switched off, on the same tasks, in
 kind of number the README may call a saving: a within-session "direct estimate" is not one (#130).
 
 ```
-node dist/bench/ab.js run    --tasks bench/ab/tasks.example.json --out ~/.jev-gate/bench/2026-09-30 [--reps 3] [--only S,M] [--conds A,B,C,D] [--timeout-ms 3600000]
+node dist/bench/ab.js run    --tasks bench/ab/tasks.example.json --out ~/.jev-gate/bench/2026-09-30 --model claude-fable-5-1 [--reps 3] [--only S,M] [--conds A,B,C,D] [--timeout-ms 3600000]
 node dist/bench/ab.js report --out ~/.jev-gate/bench/2026-09-30 [--trace ~/.jev-gate/trace]
 ```
 
@@ -13,9 +13,10 @@ node dist/bench/ab.js report --out ~/.jev-gate/bench/2026-09-30 [--trace ~/.jev-
 | | |
 | --- | --- |
 | Conditions | A everything off (baseline), B Gate only, C Compact only, D everything on (shipped defaults). Written as `--settings` plugin options; `JEV_GATE_MODE` is set to match because it overrides the option. |
-| Two turns per cell | Turn 1 primes the context with the same prompt for every condition. Turn 2 (`--resume`) is the task and the only turn measured. A headless first prompt has no transcript, so Gate A reads `depth_unknown` and never asks Jev (#114); without priming, condition B and D would be A. |
+| Two turns per cell | Turn 1 primes the context with the same prompt for every condition. Name the files to read explicitly: given only a directory, some model/effort pairs give up after one call (#134). Turn 2 (`--resume`) is the task and the only turn measured. A headless first prompt has no transcript, so Gate A reads `depth_unknown` and never asks Jev (#114); without priming, condition B and D would be A. |
 | Order | Rotated one position per repetition (ABCD, BCDA, CDAB, DABC) so prompt-cache warming does not favour one condition. |
 | Environment | The child inherits nothing named `CLAUDE_*` or `JEV_GATE_*` from the shell. |
+| Model | `--model` is required and passed to both turns. A headless session otherwise follows `~/.claude/settings.json`, which another session's `/model` can change mid-sweep; two cells of the first sweep ran on a different model that way (#133). `report` reads the model each cell actually ran on from the transcript and excludes a cell whose model is not the pinned one (`model_mismatch`). |
 | Editing tasks | `base` checks that commit out in a fresh git worktree under `--out/wt/`, with the main checkout's `node_modules` linked. Worktrees are removed by `git worktree remove --force` (#126). |
 | Timeout | Every `claude -p` and every check command gets `--timeout-ms` (default 1 h) and is killed past it; the cell is recorded `timed_out` and excluded (#121). |
 | Resume | A cell whose result file exists is skipped, so an interrupted sweep continues where it stopped. Progress is read from the files (`started_at`, `wall_s`, and `report` lists cells with a prime but no result), never from a remembered start time (#127). |
@@ -34,6 +35,9 @@ node dist/bench/ab.js report --out ~/.jev-gate/bench/2026-09-30 [--trace ~/.jev-
 }
 ```
 
+- `_prime` must list the files to read one per line. "Read the 30 files under `<dir>`" is read reliably only by some
+  model/effort pairs; others answer that Read cannot open a directory and stop after one call, which leaves that cell's
+  context 40K smaller than its neighbours' and skews the comparison (#134). `prime_tools` per cell shows whether it worked.
 - `check` runs in `/bin/sh` inside the task's cwd after the task; exit 0 passes. Jest path patterns are **regular
   expressions**: `(routes)` and `[projectPk]` are metacharacters and match nothing as written; use a fragment such as
   `'data-transfer./downloads/'` or escape them (#122).
@@ -48,6 +52,16 @@ repetition where both were ok. Anything less is reported as `k/n below A` and is
 say. Cache creation and cache read are separate columns because they price differently and warm differently.
 
 `prime_tools` is how many tool calls the priming turn made, so "read 30 files" is a checked fact per cell (#123).
+
+`model`, `prime_effort` and `effort` are read from the transcript's assistant lines, per cell. The first Router effect
+ever measured was condition D running the task at `medium` (priming at `low`) while A/B/C ran at `xhigh`: 55 s and $1.02
+against 462 s and $5.60, with half the review text and a priming turn that read one file instead of thirty (#132). A
+saving next to a lower effort is less work being done, not the same work costing less; the grid repeats the effort per
+condition so that reading is not missed.
+
+`gate_turns` is what Gate A estimated the prompt would take in root turns (`admission_result.estimate.turns`), beside the
+measured `tools`. In the first sweep the estimate was about a tenth of the measured tool calls on every S and M cell, and
+no S or M cell was ever delegated (#135); the column exists so that gap is a number per cell rather than an impression.
 
 ## Interpretation caveats (read before quoting a number) — #129
 
@@ -66,6 +80,9 @@ say. Cache creation and cache read are separate columns because they price diffe
    spends fewer tokens and would look like a saving. They do not show that two passing runs did equal work.
 6. **Three repetitions give a direction, not a size.** There is no statistical test here. Report the paired sign and
    the medians, and say so.
+7. **A lower effort is not a saving until quality is judged equal.** The Router lowers effort; the cheaper cell then
+   reads fewer files and writes less. Compare `effort` across conditions before reading `tok/A`, and judge the outputs
+   side by side for the cells where it differs (#132).
 
 Also budget for it: the second turn of a `--resume` session cost about $1.1 for a one-word reply in smoke runs (#119),
 apparently from prompt-cache regeneration. It lands on every condition equally, so it does not bias the comparison,

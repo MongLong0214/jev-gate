@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 import { CONDITIONS, cleanEnv, conditionSettings, grid, median, parseRunArgs, rotate, rowOf, usageOf, type CellResult, type Row } from '../src/bench/ab.js';
 
-const row = (over: Partial<Row>): Row => ({ id: 'S-A-1', task: 'S', cond: 'A', rep: 1, ok: true, wall_s: 10, cost: 1, prime_cost: 1, prime_tools: 30, total_tokens: 100, cache_create: 10, cache_read: 80, output: 10, requests: 3, tools: 5, subs: 0, compacts: 0, shapes: '', ...over });
+const row = (over: Partial<Row>): Row => ({ id: 'S-A-1', task: 'S', cond: 'A', rep: 1, ok: true, wall_s: 10, cost: 1, prime_cost: 1, prime_tools: 30, model: 'm', model_mismatch: false, prime_effort: 'xhigh', effort: 'xhigh', gate_turns: '-', total_tokens: 100, cache_create: 10, cache_read: 80, output: 10, requests: 3, tools: 5, subs: 0, compacts: 0, shapes: '', ...over });
 
 describe('bench ab (#130)', () => {
   it('rotates the condition order one position per repetition (#129 cache warming)', () => {
@@ -29,9 +29,11 @@ describe('bench ab (#130)', () => {
 
   it('requires --tasks and --out and rejects unknown conditions', () => {
     expect(() => parseRunArgs(['--tasks', 't.json'])).toThrow(/--out/);
-    expect(() => parseRunArgs(['--tasks', 't.json', '--out', 'o', '--conds', 'A,E'])).toThrow(/unknown condition E/);
-    const o = parseRunArgs(['--tasks', 't.json', '--out', 'o', '--reps', '2', '--only', 'S,M', '--timeout-ms', '5000']);
-    expect(o).toMatchObject({ reps: 2, only: ['S', 'M'], timeoutMs: 5000, conds: ['A', 'B', 'C', 'D'] });
+    // #133: a bench never inherits the user's default model.
+    expect(() => parseRunArgs(['--tasks', 't.json', '--out', 'o'])).toThrow(/--model/);
+    expect(() => parseRunArgs(['--tasks', 't.json', '--out', 'o', '--model', 'm', '--conds', 'A,E'])).toThrow(/unknown condition E/);
+    const o = parseRunArgs(['--tasks', 't.json', '--out', 'o', '--model', 'claude-fable-5-1', '--reps', '2', '--only', 'S,M', '--timeout-ms', '5000']);
+    expect(o).toMatchObject({ model: 'claude-fable-5-1', reps: 2, only: ['S', 'M'], timeoutMs: 5000, conds: ['A', 'B', 'C', 'D'] });
   });
 
   it('counts the last usage per message id and every tool_use block', () => {
@@ -51,23 +53,30 @@ describe('bench ab (#130)', () => {
       t,
       [
         L({ type: 'user', timestamp: '2026-09-30T00:00:00Z', message: { content: 'prime' } }),
-        L({ type: 'assistant', timestamp: '2026-09-30T00:00:01Z', message: { id: 'p', usage: { cache_creation_input_tokens: 1000 }, content: [{ type: 'tool_use' }, { type: 'tool_use' }] } }),
+        L({ type: 'assistant', timestamp: '2026-09-30T00:00:01Z', effort: 'low', message: { id: 'p', model: 'claude-fable-5-1', usage: { cache_creation_input_tokens: 1000 }, content: [{ type: 'tool_use' }, { type: 'tool_use' }] } }),
         L({ type: 'user', timestamp: '2026-09-30T00:00:02Z', message: { content: 'task' } }),
-        L({ type: 'assistant', timestamp: '2026-09-30T00:00:03Z', message: { id: 'w', usage: { cache_read_input_tokens: 500, output_tokens: 7 }, content: [{ type: 'tool_use' }] } }),
+        L({ type: 'assistant', timestamp: '2026-09-30T00:00:03Z', effort: 'medium', message: { id: 'w', model: 'claude-fable-5-1', usage: { cache_read_input_tokens: 500, output_tokens: 7 }, content: [{ type: 'tool_use' }] } }),
       ].join('\n'),
     );
     mkdirSync(join(dir, 'sid', 'subagents'), { recursive: true });
     writeFileSync(join(dir, 'sid', 'subagents', 'a.jsonl'), L({ type: 'assistant', timestamp: '2026-09-30T00:00:04Z', message: { id: 's', usage: { input_tokens: 3 }, content: [] } }));
-    const cell: CellResult = { id: 'S-B-1', task: 'S', cond: 'B', rep: 1, sid: 'sid', cwd: dir, started_at: '', prime_wall_s: 1, wall_s: 2, prime_rc: 0, rc: 0, timed_out: false, check_rc: null, prime: {}, harness: { cost_usd: 0.5 }, result_head: 'SUCCESS' };
-    const r = rowOf(cell, null, t, join(dir, 'no-trace'));
-    expect(r).toMatchObject({ ok: true, prime_tools: 2, total_tokens: 510, cache_read: 500, output: 7, requests: 2, tools: 1, subs: 1 });
+    const trace = join(dir, 'trace');
+    mkdirSync(trace);
+    writeFileSync(join(trace, 'admission_result-1.json'), L({ session_id: 'sid', decision: { shape: 'direct', reason: 'admission_not_worth' }, estimate: { turns: 6, saving_tokens: -100 } }));
+    const cell: CellResult = { id: 'S-B-1', task: 'S', cond: 'B', rep: 1, sid: 'sid', cwd: dir, model: 'claude-fable-5-1', started_at: '', prime_wall_s: 1, wall_s: 2, prime_rc: 0, rc: 0, timed_out: false, check_rc: null, prime: {}, harness: { cost_usd: 0.5 }, result_head: 'SUCCESS' };
+    const r = rowOf(cell, null, t, trace);
+    // #132/#133/#135: model, per-turn effort and Gate A's own turn estimate sit beside the measured numbers.
+    expect(r).toMatchObject({ ok: true, prime_tools: 2, total_tokens: 510, cache_read: 500, output: 7, requests: 2, tools: 1, subs: 1, model: 'claude-fable-5-1', model_mismatch: false, prime_effort: 'low', effort: 'medium', gate_turns: '6', shapes: 'direct' });
+    // #133: the transcript says the task ran on another model than the sweep pinned -- not this cell's number.
+    const other = rowOf({ ...cell, model: 'claude-opus-5-5' }, null, t, trace);
+    expect(other).toMatchObject({ ok: false, model_mismatch: true, model: 'claude-fable-5-1' });
     const timedOut = rowOf({ ...cell, timed_out: true }, null, t, join(dir, 'no-trace'));
     expect(timedOut.ok).toBe(false);
     expect(rowOf(cell, null, null, join(dir, 'no-trace')).missing).toBe(true);
   });
 
   it('applies the result pattern gate from the tasks file', () => {
-    const cell: CellResult = { id: 'L-A-1', task: 'L', cond: 'A', rep: 1, sid: 'x', cwd: '', started_at: '', prime_wall_s: 0, wall_s: 0, prime_rc: 0, rc: 0, timed_out: false, check_rc: null, prime: {}, harness: {}, result_head: 'it failed' };
+    const cell: CellResult = { id: 'L-A-1', task: 'L', cond: 'A', rep: 1, sid: 'x', cwd: '', model: 'm', started_at: '', prime_wall_s: 0, wall_s: 0, prime_rc: 0, rc: 0, timed_out: false, check_rc: null, prime: {}, harness: {}, result_head: 'it failed' };
     const file = { _prime: '', _repo: '', L: { prompt: 'p', resultPattern: 'SUCCESS|zip' } };
     expect(rowOf(cell, file, null, '/nope').ok).toBe(false);
     expect(rowOf({ ...cell, result_head: 'zip downloaded' }, file, null, '/nope').ok).toBe(true);
@@ -87,12 +96,13 @@ describe('bench ab (#130)', () => {
       row({ id: 'S-C-2', cond: 'C', rep: 2, total_tokens: 120 }),
       row({ id: 'S-C-3', cond: 'C', rep: 3, total_tokens: 50 }),
       row({ id: 'S-D-1', cond: 'D', rep: 1, total_tokens: 10, ok: false }),
+      row({ id: 'S-D-2', cond: 'D', rep: 2, total_tokens: 20, effort: 'medium' }),
     ];
     const g = grid(rows, ['S']);
-    expect(g.find((x) => x.cond === 'B')).toMatchObject({ n: 3, tokens: 80, 'tok/A': '0.80', paired: '3/3 below A → effect' });
+    expect(g.find((x) => x.cond === 'B')).toMatchObject({ n: 3, tokens: 80, 'tok/A': '0.80', paired: '3/3 below A → effect', effort: 'xhigh' });
     // A lower median is not an effect when one repetition went the other way.
     expect(g.find((x) => x.cond === 'C')).toMatchObject({ n: 3, tokens: 50, paired: '2/3 below A' });
     // A failed run is excluded: fewer tokens from not doing the work are not a saving.
-    expect(g.find((x) => x.cond === 'D')).toMatchObject({ n: 0 });
+    expect(g.find((x) => x.cond === 'D')).toMatchObject({ n: 1, effort: 'medium' });
   });
 });

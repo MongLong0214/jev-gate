@@ -8,13 +8,16 @@
  * - worktrees are removed with `git worktree remove --force`, never `rm -rf` (#126)
  * - each cell records its own start time and wall clock, so progress is read from the file, not guessed (#127)
  * - nothing is symlinked or rsynced between directories (#128); node is glob-free by construction (#124)
+ * - the model is pinned with `--model` and checked against the transcript per cell, so a `/model` change in another
+ *   session cannot silently move half a sweep to a different model (#133); effort is read per cell too, because the
+ *   first measured Router effect was a lower effort doing less work, not the same work cheaper (#132)
  *
  * A two-turn session is the design, not a convenience: a headless first prompt has no transcript yet, so Gate A reads
  * `depth_unknown` and never asks Jev (#114). Turn 1 primes the context above the floor identically for every
  * condition; only turn 2 (`--resume`) is measured.
  *
  * Usage:
- *   node dist/bench/ab.js run    --tasks tasks.json --out DIR [--reps 3] [--only S,M] [--conds A,B,C,D] [--timeout-ms 3600000]
+ *   node dist/bench/ab.js run    --tasks tasks.json --out DIR --model <id> [--reps 3] [--only S,M] [--conds A,B,C,D] [--timeout-ms 3600000]
  *   node dist/bench/ab.js report --out DIR [--trace DIR]
  */
 import { spawnSync } from 'node:child_process';
@@ -70,6 +73,8 @@ export interface CellResult {
   rep: number;
   sid: string;
   cwd: string;
+  /** The model both turns were pinned to with `--model` (#133); the report checks the transcript against it. */
+  model?: string | undefined;
   started_at: string;
   prime_wall_s: number;
   wall_s: number;
@@ -108,6 +113,7 @@ export const cleanEnv = (env: NodeJS.ProcessEnv, mode: 'off' | 'auto'): NodeJS.P
 interface RunOptions {
   tasks: string;
   out: string;
+  model: string;
   reps: number;
   only: string[] | null;
   conds: Condition[];
@@ -124,7 +130,11 @@ const flag = (argv: string[], name: string): string | undefined => {
 export const parseRunArgs = (argv: string[]): RunOptions => {
   const tasks = flag(argv, '--tasks');
   const out = flag(argv, '--out');
+  const model = flag(argv, '--model');
   if (!tasks || !out) throw new Error('run needs --tasks <tasks.json> and --out <dir>');
+  // #133: without a pin the headless session follows ~/.claude/settings.json `model`, which another session's /model
+  // can change mid-sweep; two cells of the first sweep ran on a different model that way and had to be discarded.
+  if (!model) throw new Error('run needs --model <id>: a bench never inherits the user default model');
   const reps = Number(flag(argv, '--reps') ?? '3');
   const timeoutMs = Number(flag(argv, '--timeout-ms') ?? String(60 * 60 * 1000));
   if (!Number.isInteger(reps) || reps < 1) throw new Error('--reps must be a positive integer');
@@ -132,7 +142,7 @@ export const parseRunArgs = (argv: string[]): RunOptions => {
   const conds = (flag(argv, '--conds') ?? CONDITIONS.join(',')).split(',') as Condition[];
   for (const c of conds) if (!CONDITIONS.includes(c)) throw new Error(`unknown condition ${c}; use ${CONDITIONS.join('|')}`);
   const only = flag(argv, '--only')?.split(',') ?? null;
-  return { tasks: resolve(tasks), out: resolve(out), reps, only, conds, timeoutMs, claude: flag(argv, '--claude') ?? 'claude' };
+  return { tasks: resolve(tasks), out: resolve(out), model, reps, only, conds, timeoutMs, claude: flag(argv, '--claude') ?? 'claude' };
 };
 
 const git = (repo: string, args: string[]): void => {
@@ -167,7 +177,7 @@ export const runCell = (o: RunOptions, file: TasksFile, task: string, cond: Cond
 
   const settings = join(o.out, 'settings', `${cond}.json`);
   writeFileSync(settings, conditionSettings(cond));
-  const common = ['--settings', settings, '--output-format', 'json', '--dangerously-skip-permissions'];
+  const common = ['--model', o.model, '--settings', settings, '--output-format', 'json', '--dangerously-skip-permissions'];
   const env = cleanEnv(process.env, CONDITION_OPTIONS[cond].mode);
   const sid = crypto.randomUUID();
   const claude = (args: string[]): ReturnType<typeof spawnSync> =>
@@ -196,7 +206,7 @@ export const runCell = (o: RunOptions, file: TasksFile, task: string, cond: Cond
 
   const raw = readJson(join(R, `${id}.raw.json`));
   const result: CellResult = {
-    id, task, cond, rep, sid, cwd, started_at: startedAt,
+    id, task, cond, rep, sid, cwd, model: o.model, started_at: startedAt,
     prime_wall_s: Math.round((t0 - p0) / 1000), wall_s: Math.round((t1 - t0) / 1000),
     prime_rc: prime.status, rc: work.status, timed_out: timedOut, check_rc: checkRc,
     prime: summarize(readJson(join(R, `${id}.prime.json`))), harness: summarize(raw),
@@ -213,7 +223,7 @@ export const run = (argv: string[]): void => {
   if (!isRecord(file) || typeof file['_prime'] !== 'string' || typeof file['_repo'] !== 'string') throw new Error('tasks.json needs string fields _prime and _repo');
   const tasks = Object.keys(file).filter((k) => !k.startsWith('_') && (o.only === null || o.only.includes(k)));
   mkdirSync(o.out, { recursive: true });
-  writeFileSync(join(o.out, 'plan.json'), JSON.stringify({ tasks, conds: o.conds, reps: o.reps, tasks_file: o.tasks, started_at: new Date().toISOString() }, null, 1));
+  writeFileSync(join(o.out, 'plan.json'), JSON.stringify({ tasks, conds: o.conds, reps: o.reps, model: o.model, tasks_file: o.tasks, started_at: new Date().toISOString() }, null, 1));
   // Sequential on purpose: the tasks share a browser and a local server.
   for (let rep = 1; rep <= o.reps; rep++) for (const task of tasks) for (const cond of rotate(o.conds, rep)) runCell(o, file, task, cond, rep);
 };
@@ -224,7 +234,9 @@ export interface TranscriptLine {
   type?: string;
   uuid?: string;
   timestamp?: string;
-  message?: { id?: string; usage?: Record<string, unknown>; content?: unknown };
+  /** The host writes the effort each assistant request ran with; this is how a Router change is seen (#132). */
+  effort?: string;
+  message?: { id?: string; model?: string; usage?: Record<string, unknown>; content?: unknown };
 }
 export interface UsageSum {
   input: number;
@@ -255,6 +267,18 @@ export const usageOf = (lines: TranscriptLine[]): UsageSum => {
   return sum;
 };
 
+/** Distinct models and efforts the assistant lines ran with, in first-seen order; `-` when the field is absent. */
+export const observedOf = (lines: TranscriptLine[]): { models: string[]; efforts: string[] } => {
+  const models = new Set<string>();
+  const efforts = new Set<string>();
+  for (const e of lines) {
+    if (e.type !== 'assistant') continue;
+    if (typeof e.message?.model === 'string') models.add(e.message.model);
+    if (typeof e.effort === 'string') efforts.add(e.effort);
+  }
+  return { models: [...models], efforts: [...efforts] };
+};
+
 const readJsonl = (path: string): TranscriptLine[] =>
   readFileSync(path, 'utf8')
     .split('\n')
@@ -278,13 +302,17 @@ const findTranscript = (home: string, sid: string): string | null => {
   return null;
 };
 
-const traceShapes = (traceDir: string, sid: string): string[] => {
-  if (!existsSync(traceDir)) return [];
-  const out: string[] = [];
+/** Gate A records of one session: the shape decided and, when priced, the root turns it estimated (#135). */
+const traceAdmissions = (traceDir: string, sid: string): { shapes: string[]; gateTurns: number[] } => {
+  const out = { shapes: [] as string[], gateTurns: [] as number[] };
+  if (!existsSync(traceDir)) return out;
   for (const f of readdirSync(traceDir)) {
     if (!f.startsWith('admission_result')) continue;
     const r = readJson(join(traceDir, f));
-    if (isRecord(r) && r['session_id'] === sid) out.push(String(isRecord(r['decision']) ? r['decision']['shape'] ?? '?' : '?'));
+    if (!isRecord(r) || r['session_id'] !== sid) continue;
+    out.shapes.push(String(isRecord(r['decision']) ? r['decision']['shape'] ?? '?' : '?'));
+    const turns = isRecord(r['estimate']) ? r['estimate']['turns'] : undefined;
+    if (typeof turns === 'number' && Number.isFinite(turns)) out.gateTurns.push(turns);
   }
   return out;
 };
@@ -300,6 +328,14 @@ export interface Row {
   prime_cost: number | undefined;
   /** #123: how many tool calls the priming turn actually made, so "read 30 files" is checked, not assumed. */
   prime_tools: number | null;
+  /** #133: models the task turn ran on, from the transcript; more than one or a different one than pinned is a mismatch. */
+  model: string;
+  model_mismatch: boolean;
+  /** #132: efforts of the priming and task turns, from the transcript. A Router that lowers effort shows up here. */
+  prime_effort: string;
+  effort: string;
+  /** #135: root turns Gate A estimated for this prompt (from admission_result.estimate), beside the measured `tools`. */
+  gate_turns: string;
   total_tokens: number;
   cache_create: number;
   cache_read: number;
@@ -316,16 +352,21 @@ export interface Row {
 export const rowOf = (r: CellResult, file: TasksFile | null, transcript: string | null, traceDir: string): Row => {
   const spec = file && isRecord(file[r.task]) ? (file[r.task] as unknown as Task) : null;
   const pattern = spec?.resultPattern ? new RegExp(spec.resultPattern, 'i') : null;
-  const ok = !r.timed_out && r.rc === 0 && (r.check_rc === null || r.check_rc === 0) && (pattern === null || pattern.test(r.result_head));
-  const base: Row = { id: r.id, task: r.task, cond: r.cond, rep: r.rep, ok, wall_s: r.wall_s, cost: r.harness.cost_usd, prime_cost: r.prime.cost_usd, prime_tools: null, total_tokens: 0, cache_create: 0, cache_read: 0, output: 0, requests: 0, tools: 0, subs: 0, compacts: 0, shapes: traceShapes(traceDir, r.sid).join(',') };
+  const okSoFar = !r.timed_out && r.rc === 0 && (r.check_rc === null || r.check_rc === 0) && (pattern === null || pattern.test(r.result_head));
+  const admissions = traceAdmissions(traceDir, r.sid);
+  const base: Row = { id: r.id, task: r.task, cond: r.cond, rep: r.rep, ok: okSoFar, wall_s: r.wall_s, cost: r.harness.cost_usd, prime_cost: r.prime.cost_usd, prime_tools: null, model: '-', model_mismatch: false, prime_effort: '-', effort: '-', gate_turns: admissions.gateTurns.join(',') || '-', total_tokens: 0, cache_create: 0, cache_read: 0, output: 0, requests: 0, tools: 0, subs: 0, compacts: 0, shapes: admissions.shapes.join(',') };
   if (transcript === null) return { ...base, missing: true };
   const all = readJsonl(transcript);
   const userIdx = all.map((e, i) => (e.type === 'user' && typeof e.message?.content === 'string' ? i : -1)).filter((i) => i >= 0);
   const taskStart = userIdx.length >= 2 ? userIdx[1]! : 0;
   const taskTs = all[taskStart]?.timestamp ?? '';
   const primeUsage = usageOf(all.slice(0, taskStart));
+  const primeSeen = observedOf(all.slice(0, taskStart));
   const main = all.slice(taskStart);
   const mu = usageOf(main);
+  const seen = observedOf(main);
+  // A pinned model that the transcript contradicts, or a task turn that ran on more than one model, is not this cell.
+  const modelMismatch = seen.models.length !== 1 || (r.model !== undefined && seen.models[0] !== r.model);
   const su: UsageSum = { input: 0, cache_create: 0, cache_read: 0, output: 0, requests: 0, tools: 0 };
   let subs = 0;
   const subDir = transcript.replace(/\.jsonl$/, '/subagents');
@@ -342,7 +383,12 @@ export const rowOf = (r: CellResult, file: TasksFile | null, transcript: string 
   const compacts = (raw.match(/compact_boundary|isCompactSummary":true|\[jev-gate compact\]/g) ?? []).length;
   return {
     ...base,
+    ok: okSoFar && !modelMismatch,
     prime_tools: taskStart > 0 ? primeUsage.tools : null,
+    model: seen.models.join(',') || '-',
+    model_mismatch: modelMismatch,
+    prime_effort: primeSeen.efforts.join(',') || '-',
+    effort: seen.efforts.join(',') || '-',
     total_tokens: mu.input + mu.cache_create + mu.cache_read + mu.output + su.input + su.cache_create + su.cache_read + su.output,
     cache_create: mu.cache_create + su.cache_create,
     cache_read: mu.cache_read + su.cache_read,
@@ -370,6 +416,8 @@ export interface GridRow {
   cache_create?: number | null;
   cache_read?: number | null;
   compacts?: number | null;
+  /** #132: efforts seen across the condition's cells; a saving next to a lower effort is less work, not cheaper work. */
+  effort?: string;
   delegated?: number;
   /** #129 item 6: "effect" only when every paired repetition beats A; `k/n below A` otherwise. */
   paired?: string;
@@ -398,6 +446,7 @@ export const grid = (rows: Row[], tasks: string[], conds: readonly Condition[] =
       out.push({
         task, cond, n: g.length, tokens: T, 'tok/A': bT && T !== null ? (T / bT).toFixed(2) : '-', wall_s: median(g.map((r) => r.wall_s)), cost: C === null ? '-' : C.toFixed(3),
         cache_create: median(g.map((r) => r.cache_create)), cache_read: median(g.map((r) => r.cache_read)), compacts: median(g.map((r) => r.compacts)),
+        effort: [...new Set(g.map((r) => r.effort))].join('|'),
         delegated: g.filter((r) => /orchestrated|single|parallel/.test(r.shapes)).length, paired,
       });
     }
@@ -425,6 +474,9 @@ export const report = (argv: string[]): void => {
   console.log('== task x condition medians over ok cells; ratio to A; paired sign vs A ==');
   console.table(grid(rows, tasks));
   console.log('Rule: an effect needs every paired repetition below A. One median beating another may be model variance (#129).');
+  console.log('A lower effort next to a saving means less work was done, not the same work for less (#132). gate_turns vs tools shows how far Gate A\'s estimate was from the measured tool calls (#135).');
+  const mismatched = rows.filter((r) => r.model_mismatch);
+  if (mismatched.length) console.log(`${mismatched.length} cell(s) ran on a model other than the pinned one and are excluded: ${mismatched.map((r) => `${r.id}=${r.model}`).join(', ')} (#133).`);
   const planned = isRecord(plan) && Array.isArray(plan['tasks']) && Array.isArray(plan['conds']) && typeof plan['reps'] === 'number' ? plan['tasks'].length * plan['conds'].length * plan['reps'] : null;
   if (planned !== null) console.log(`planned cells ${planned}, result files ${rows.length}: a missing file is a not-run cell, not a zero.`);
   const stale = rows.filter((r) => r.missing).length;
@@ -447,7 +499,7 @@ if (isMainModule()) {
     if (argv[0] === 'run') run(argv.slice(1));
     else if (argv[0] === 'report') report(argv.slice(1));
     else {
-      process.stdout.write('usage: node dist/bench/ab.js run --tasks tasks.json --out DIR [--reps 3] [--only S,M] [--conds A,B,C,D] [--timeout-ms 3600000] [--claude claude]\n       node dist/bench/ab.js report --out DIR [--trace DIR]\n');
+      process.stdout.write('usage: node dist/bench/ab.js run --tasks tasks.json --out DIR --model <id> [--reps 3] [--only S,M] [--conds A,B,C,D] [--timeout-ms 3600000] [--claude claude]\n       node dist/bench/ab.js report --out DIR [--trace DIR]\n');
       process.exitCode = 2;
     }
   } catch (err) {
