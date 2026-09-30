@@ -158,6 +158,13 @@ export const renderRouteNote = (tier: Tier): string =>
 export const GUARD_DENY_REASON =
   'Jev Gate orchestration is active for this request. The main session coordinates; send implementation, shell checks and integration to a planned jev-gate worker task ([JEV_TASK ...]). Nothing was changed by this call.';
 
+/** A single job has no planner, marker or task contract. Its guard must describe the actual dispatch. */
+export const SINGLE_GUARD_DENY_REASON =
+  'Jev Gate single-worker execution is active for this request. Dispatch the whole request once to jev-gate:worker as a foreground call; the hook appends the original request. No planner or JEV_TASK marker is required. Nothing was changed by this call.';
+
+export const SINGLE_STOP_REASON =
+  'Jev Gate: the main session repeatedly tried to implement this admitted request directly instead of dispatching its single worker. Nothing further will run for this request. Relaunch with JEV_GATE_MODE=off to work without delegation.';
+
 export const STOP_REASON =
   'Jev Gate: orchestration blocked. The main session repeatedly tried to implement an admitted compound job directly instead of dispatching planned worker tasks. Nothing further will run for this request. Relaunch with JEV_GATE_MODE=off to work without orchestration.';
 
@@ -269,20 +276,25 @@ export const renderWorkerReported = (taskId: string, verdict: 'rework' | 'replan
 export const renderSingleResult = (
   verdict: 'accept' | 'incomplete' | 'unknown' | 'invalid',
   reason: string,
-  opts: { formatHint?: string; rootFallback?: boolean } = {},
+  opts: { formatHint?: string; rootFallback?: boolean; rootFallbackReason?: 'attempt_cap' | 'accepted'; checks?: string } = {},
 ): string => {
-  if (opts.rootFallback) {
-    return `[Jev Gate result] The single-worker attempt limit is reached (${bounded(reason)}). Jev Gate has released the root tool guard for this turn. Finish the remaining work in this session, run checks you can execute, and identify anything still unverified.`;
+  if (opts.rootFallback && opts.rootFallbackReason !== 'accepted') {
+    return `[Jev Gate result] The single-worker attempt limit is reached (${bounded(reason)}). Jev Gate has released the root tool guard for this turn. Finish the remaining work in this session, run checks you can execute, and identify anything still unverified.${opts.checks ? ` ${opts.checks}` : ''}`;
   }
-  const result = verdict === 'accept'
-    ? '[Jev Gate result] The single-executor dispatch reported done with no blockers, and its receipt is recorded as reported rather than verified: this shape has no contract, so code checked only that each reported pass has a passing run in the transcript the worker left, not that those checks cover the request. Confirm the work yourself before reporting it finished, and report what was checked separately from what was only reported.'
-    : verdict === 'unknown'
-      ? `[Jev Gate result] The single-executor dispatch returned no usable reply (${bounded(reason)}). Its reservation was released; dispatch the request again if the work is still needed.`
-      : verdict === 'invalid'
-        ? `[Jev Gate result] The single-executor dispatch replied in a shape this plugin could not read (${bounded(reason)}). Nothing about the work is settled; dispatch it again or finish it another way.`
-        : `[Jev Gate result] The single-executor dispatch reported that it did not finish (${bounded(reason)}). There is no replan path on this shape: dispatch it again with what was wrong.`;
+  const result =
+    verdict === 'accept'
+      ? '[Jev Gate result] The worker reported done with no blockers. Compare its result and observed checks with the user request. Do not spawn another worker or rerun identical checks merely to restate the same evidence on the same state. Check only missing requirements, contradictions, new edits or integration differences; an observed command pass does not prove complete requirement coverage. Report observed checks separately from the worker report.'
+      : verdict === 'unknown'
+        ? `[Jev Gate result] The single-executor dispatch returned no usable reply (${bounded(reason)}). Its reservation was released; dispatch the request again if the work is still needed.`
+        : verdict === 'invalid'
+          ? `[Jev Gate result] The single-executor dispatch replied in a shape this plugin could not read (${bounded(reason)}). Nothing about the work is settled; dispatch it again or finish it another way.`
+          : `[Jev Gate result] The single-executor dispatch reported that it did not finish (${bounded(reason)}). There is no replan path on this shape: dispatch it again with what was wrong.`;
   const format = opts.formatHint ? ` This appears to be a check-command format mismatch. Closest executed command per unmatched check: ${bounded(opts.formatHint)}. Run each reported check_id as its own exact Bash command, with no ; echo, pipe, or output suffix. Retry the same worker profile and model; this formatting retry does not use one of the two charged attempts.` : '';
-  return result + format;
+  const handoff =
+    opts.rootFallbackReason === 'accepted'
+      ? ' The worker actually ended and no Agent remains active. Jev Gate released the root guard for remaining review, integration and reporting; this is not a claim of complete requirements verification.'
+      : '';
+  return result + (opts.checks ? ` ${opts.checks}` : '') + handoff + format;
 };
 
 export interface WorkerAcceptedOptions {
@@ -290,10 +302,15 @@ export interface WorkerAcceptedOptions {
   /** #48 P2-1: repeated only when `isLastTask` -- the packet's proxy for this is "nothing else is ready to dispatch". */
   mainSessionSteps?: readonly MainSessionStep[];
   isLastTask?: boolean;
+  rootHandoff?: boolean;
+  checks?: string;
 }
 
 export const renderWorkerAccepted = (taskId: string, readyIds: string[], cap: number, opts: WorkerAcceptedOptions = {}): string => {
   const isolationNote = opts.workerIsolation === 'worktree' ? ` ${WORKTREE_ISOLATION_SENTENCE}` : '';
   const stepsNote = opts.isLastTask ? renderMainSessionSteps(opts.mainSessionSteps ?? []) : '';
-  return `[Jev Gate result] Task ${taskId} accepted. Ready task ids: ${readyIds.length ? readyIds.join(', ') : 'none'}. ${renderDispatchRule(cap)}${isolationNote}${stepsNote}`;
+  const handoff = opts.rootHandoff
+    ? ' All planned tasks are accepted and no Agent remains active. Jev Gate released the root guard for remaining integration, requirement review and reporting. Reuse observed checks on the same state; verify new edits and merge differences separately. This is not complete requirements verification.'
+    : '';
+  return `[Jev Gate result] Task ${taskId} accepted. Ready task ids: ${readyIds.length ? readyIds.join(', ') : 'none'}. ${renderDispatchRule(cap)}${isolationNote}${stepsNote}${opts.checks ? ` ${opts.checks}` : ''}${handoff}`;
 };

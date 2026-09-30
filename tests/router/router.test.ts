@@ -6,7 +6,7 @@ import { resolveConfig } from '../../mods/router/hooks/config.ts';
 import type { SymbolicEffort } from '../../mods/router/hooks/models.ts';
 import { offerableEfforts, TIER_LEVELS } from '../../mods/router/hooks/policy.ts';
 import type { SpawnEvent, SpawnOutcome, TurnStepEvent } from '../../mods/router/hooks/router.ts';
-import { createRouter, hostSupported, VERIFIED_HOST } from '../../mods/router/hooks/router.ts';
+import { cachePatch, createRouter, hostSupported, VERIFIED_HOST } from '../../mods/router/hooks/router.ts';
 import { answering, CLEAR, deferred, drain, FAKE_KEY, fakeEngine, streamNext } from './fake-engine.ts';
 
 const configOf = (options: Record<string, string | number | boolean>) => {
@@ -1072,7 +1072,29 @@ describe('subagent effort and named models', () => {
     expect(pinned.sent).toHaveLength(0);
   });
 
-  it("waits for the spawn's id when the loop's first step comes first, and never past it", async () => {
+  it('routes mapped A while B is still spawning, and never revives completed native B from its late callback', async () => {
+    const router = createRouter(configOf(CHILD));
+    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', 0.95], effort: ['medium', 0.95] }) });
+    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    await router.agentSpawn(f.engine, spawn(), spawnNext(() => ({ model: 'claude-opus-5-5', agentId: 'a1' })).next);
+    const result = deferred<SpawnOutcome>();
+    let started = false;
+    const next = Object.assign(async (_e: SpawnEvent) => { started = true; return result.promise; }, { signal: new AbortController().signal });
+    const b = router.agentSpawn(f.engine, spawn({ tool_use_id: 'tu2' }), next);
+    while (!started) await settle();
+    const aStep = streamNext<TurnStepEvent>();
+    await drain(router.turnStep(f.engine, childStep(), aStep.next));
+    expect(aStep.calls).toEqual([childStep({ effort: 'medium' })]);
+    const bStep = streamNext<TurnStepEvent>();
+    await drain(router.turnStep(f.engine, childStep({ agentId: 'a2' }), bStep.next));
+    router.turnComplete({ turnId: 'b', agentId: 'a2' });
+    result.resolve({ model: 'claude-opus-5-5', agentId: 'a2' });
+    await b;
+    await drain(router.turnStep(f.engine, childStep({ agentId: 'a2' }), bStep.next));
+    expect(bStep.calls).toEqual([childStep({ agentId: 'a2' }), childStep({ agentId: 'a2' })]);
+  });
+
+  it('starts an unmapped loop immediately and ignores a late spawn mapping', async () => {
     const router = createRouter(configOf(CHILD));
     const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', 0.95], effort: ['medium', 0.95] }) });
     router.agentOffer(OFFER_BUILT_IN('general-purpose'));
@@ -1092,11 +1114,16 @@ describe('subagent effort and named models', () => {
     const n = streamNext<TurnStepEvent>();
     const first = drain(router.turnStep(f.engine, childStep(), n.next));
     await settle();
-    expect(n.calls).toEqual([]);
+    expect(n.calls).toEqual([childStep()]);
+    router.turnComplete({ turnId: 'child1', agentId: 'a1' });
     started.resolve({ model: 'claude-opus-5-5', agentId: 'a1' });
     await run;
     await first;
-    expect(n.calls).toEqual([childStep({ effort: 'medium' })]);
+    expect(n.calls).toEqual([childStep()]);
+    await drain(router.turnStep(f.engine, childStep(), n.next));
+    expect(n.calls).toEqual([childStep(), childStep()]);
+    await drain(router.turnStep(f.engine, childStep({ turnId: 'later' }), n.next));
+    expect(n.calls.at(-1)).toEqual(childStep({ turnId: 'later' }));
   });
 
   it("leaves a loop native when its first step ran before the spawn's id arrived", async () => {
@@ -1127,7 +1154,7 @@ describe('subagent effort and named models', () => {
     // A lower effort from here would restart the cache the first step wrote.
     await drain(router.turnStep(f.engine, childStep({ index: 1 }), n.next));
     expect(n.calls).toEqual([childStep(), childStep({ index: 1 })]);
-    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'child_stop', agent_id: 'a1', index: 1, reason: 'first_step_native' }));
+    expect(f.sent).toHaveLength(1);
   });
 
   it('leaves every later spawn native once suspended, the effort of its subagent too', async () => {
@@ -1273,7 +1300,7 @@ describe('root effort and the prompt cache', () => {
     expect(await turn('t3', ['xhigh', 0.95], 60_000)).toBe('xhigh');
     // Held at the baseline, nothing is sent.
     expect(await turn('t4', ['medium', 0.95], 60_000)).toBe('xhigh');
-    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root', turn: 't4', patch: {}, held_for_cache: 'medium' }));
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root', turn: 't4', skipped: 'cache_native' }));
     // After an hour's pause the cache is cold again.
     expect(await turn('t5', ['low', 0.95], 60 * 60_000)).toBe('low');
     // A session's end forgets the cache.
@@ -1719,5 +1746,178 @@ describe('#81: control correctness', () => {
     router.turnStart({ turnId: 't1', text: TEXT });
     await drain(router.turnStep(f.engine, step(), streamNext<TurnStepEvent>().next));
     expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root_result', applied: { effort: 'low' }, observed: 'claude-opus-5-5', observed_effort: 'unknown' }));
+  });
+});
+
+describe('complete preparation budget and cache feasibility (#111)', () => {
+  it.each([
+    ['xhigh', 'high', 'low', {}],
+    ['xhigh', 'low', 'high', { effort: 'high' }],
+    ['medium', 'high', 'low', { effort: 'medium' }],
+    ['xhigh', 'xhigh', 'low', {}],
+    [null, 'xhigh', 'high', { effort: 'high' }],
+  ] as const)('applies warm/native/proposed %s %s %s without exceeding the native floor', (warm, native, want, expected) => {
+    expect(cachePatch({ model: 'claude-opus-5-5', effort: native }, warm, { effort: want }).patch).toEqual(expected);
+    expect(cachePatch({ model: 'claude-opus-5-5', effort: native }, warm, {}).patch).toEqual({});
+  });
+  it('forwards each timed-out dispatch once and does not start HTTP when a shared key finally arrives', async () => {
+    const router = createRouter(configOf(EFFORT_ONLY));
+    const f = fakeEngine();
+    const key = deferred<string | undefined>();
+    let reads = 0;
+    f.engine.envKey = () => {
+      reads++;
+      return key.promise;
+    };
+    for (let i = 0; i < 10; i++) {
+      const id = `budget${i}`;
+      router.turnStart({ turnId: id, text: TEXT });
+      const n = streamNext<TurnStepEvent>();
+      const run = drain(router.turnStep(f.engine, step({ turnId: id }), n.next));
+      await settle();
+      f.expire();
+      await run;
+      expect(n.calls).toEqual([step({ turnId: id })]);
+    }
+    expect(reads).toBe(1);
+    key.resolve(FAKE_KEY);
+    await settle();
+    expect(f.sent).toHaveLength(0);
+    expect(f.logs.filter((x) => x.event === 'budget_timeout')).toHaveLength(10);
+  });
+  it('reentry into a pending turn shares its original deadline', async () => {
+    const router = createRouter(configOf(EFFORT_ONLY));
+    const f = fakeEngine();
+    const key = deferred<string | undefined>();
+    f.engine.envKey = () => key.promise;
+    const waits: number[] = [];
+    const sleep = f.engine.sleep;
+    f.engine.sleep = (ms, s) => {
+      waits.push(ms);
+      return sleep(ms, s);
+    };
+    router.turnStart({ turnId: 't1', text: TEXT });
+    const a = streamNext<TurnStepEvent>(),
+      b = streamNext<TurnStepEvent>();
+    const first = drain(router.turnStep(f.engine, step(), a.next));
+    await settle();
+    f.clock.ms = 400;
+    const second = drain(router.turnStep(f.engine, step(), b.next));
+    await settle();
+    expect(waits).toEqual([800, 400]);
+    f.expire();
+    await Promise.all([first, second]);
+    expect(a.calls).toEqual([step()]);
+    expect(b.calls).toEqual([step()]);
+    key.resolve(FAKE_KEY);
+    await settle();
+    expect(f.sent).toHaveLength(0);
+  });
+  it('bounds stalled pins and version reads without launching duplicate host reads', async () => {
+    for (const stage of ['pins', 'version', 'settings'] as const) {
+      const router = createRouter(configOf(SPAWN_ONLY));
+      const f = fakeEngine();
+      let reads = 0;
+      if (stage === 'pins')
+        f.engine.pins = () => {
+          reads++;
+          return new Promise(() => {});
+        };
+      else if (stage === 'version')
+        f.engine.hostBase = () => {
+          reads++;
+          return new Promise(() => {});
+        };
+      else f.engine.availableModels = () => { reads++; return new Promise(() => {}); };
+      router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+      for (let i = 0; i < 5; i++) {
+        const n = spawnNext();
+        const e = spawn({ tool_use_id: `${stage}${i}` });
+        const run = router.agentSpawn(f.engine, e, n.next);
+        await settle();
+        f.expire();
+        await run;
+        expect(n.calls).toEqual([e]);
+      }
+      expect(reads).toBe(stage === 'settings' ? 5 : 1);
+      expect(f.sent).toHaveLength(0);
+    }
+  });
+  it('does not keep a preparation timer during the native stream', async () => {
+    const router = createRouter(configOf(EFFORT_ONLY));
+    const f = fakeEngine({ respond: answering({ ...CLEAR, effort: ['low', 0.95] }) });
+    router.turnStart({ turnId: 't1', text: TEXT });
+    const n = streamNext<TurnStepEvent>();
+    const gen = router.turnStep(f.engine, step(), n.next);
+    expect((await gen.next()).value).toBe('chunk');
+    f.expire();
+    await gen.next();
+    expect(n.calls).toEqual([step({ effort: 'low' })]);
+    expect(f.logs.some((x) => x.event === 'budget_timeout')).toBe(false);
+  });
+});
+
+describe('elapsed preparation deadline', () => {
+  it('allows only the remaining 200ms after 600ms of key preparation, and records late usage without applying it', async () => {
+    vi.useFakeTimers();
+    try {
+      const router = createRouter(configOf(EFFORT_ONLY));
+      const key = deferred<string | undefined>(),
+        reply = deferred<HttpReply>();
+      const f = fakeEngine({ respond: () => reply.promise });
+      f.engine.envKey = () => key.promise;
+      f.engine.now = () => Date.now();
+      f.engine.sleep = (ms, signal) =>
+        new Promise((resolve, reject) => {
+          const timer = setTimeout(resolve, ms);
+          signal.addEventListener(
+            'abort',
+            () => {
+              clearTimeout(timer);
+              reject(new Error('aborted'));
+            },
+            { once: true },
+          );
+        });
+      router.turnStart({ turnId: 't1', text: TEXT });
+      const n = streamNext<TurnStepEvent>();
+      const run = drain(router.turnStep(f.engine, step(), n.next));
+      await vi.advanceTimersByTimeAsync(600);
+      key.resolve(FAKE_KEY);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(f.sent).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(199);
+      expect(n.calls).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(1);
+      await run;
+      expect(n.calls).toEqual([step()]);
+      expect(router.inFlight()).toBe(1);
+      reply.resolve(answering({ ...CLEAR, effort: ['low', 0.95] })(f.sent[0]!) as HttpReply);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(router.inFlight()).toBe(0);
+      expect(n.calls).toHaveLength(1);
+      expect(f.logs).toContainEqual(expect.objectContaining({ event: 'late', turn: 't1', usage: { input: 900, output: 40 } }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('stops a stored root override permanently when its final mutable pin read exceeds the budget', async () => {
+    const router = createRouter(configOf(EFFORT_ONLY));
+    const f = fakeEngine({ respond: answering({ ...CLEAR, effort: ['low', 0.95] }) });
+    router.turnStart({ turnId: 't1', text: TEXT });
+    await drain(router.turnStep(f.engine, step(), streamNext<TurnStepEvent>().next));
+    const pins = f.engine.pins,
+      gate = deferred<Awaited<ReturnType<typeof pins>>>();
+    f.engine.pins = () => gate.promise;
+    const n = streamNext<TurnStepEvent>();
+    const run = drain(router.turnStep(f.engine, step({ index: 1 }), n.next));
+    await settle();
+    f.expire();
+    await run;
+    gate.resolve(await pins());
+    await settle();
+    await drain(router.turnStep(f.engine, step({ index: 2 }), n.next));
+    expect(n.calls).toEqual([step({ index: 1 }), step({ index: 2 })]);
+    expect(f.sent).toHaveLength(1);
   });
 });

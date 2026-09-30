@@ -4,7 +4,6 @@ import {
   buildAtomicWorkerRouteRequest,
   buildWorkerRouteRequest,
   decideWorkerRouteAtomic,
-  FACT_NOT_AGAINST,
   FACT_TRUE,
   WORKER_FACT_QUESTIONS,
 } from '../src/allocation.js';
@@ -13,7 +12,7 @@ import type { PlannedTask } from '../src/types.js';
 
 /**
  * The atomic Gate B: read-off questions fanned out in one call, composed by this code rather than by the model.
- * The composite path is untouched and remains the default, which the config tests cover.
+ * The composite path remains available explicitly; atomic is the shipped default.
  */
 const task: PlannedTask = {
   id: 't1',
@@ -53,16 +52,19 @@ describe('atomic worker route questions', () => {
     expect(Object.keys(atomic.questions)).toEqual(Object.keys(WORKER_FACT_QUESTIONS));
   });
 
-  it('is smaller on the wire than the question it replaces', () => {
-    const composite = Buffer.byteLength(JSON.stringify(buildWorkerRouteRequest(task, [], [], 'p', 'standard', DEFAULT_CONFIG).questions), 'utf8');
-    const atomic = Buffer.byteLength(JSON.stringify(buildAtomicWorkerRouteRequest(task, [], [], 'p', 'standard', DEFAULT_CONFIG).questions), 'utf8');
-    expect(atomic).toBeLessThan(composite);
+  it('names the actual supplied fields and distinguishes unresolved choices from resolved design', () => {
+    expect(WORKER_FACT_QUESTIONS.fully_specified.instructions).toContain('original_prompt');
+    expect(WORKER_FACT_QUESTIONS.fully_specified.instructions).toContain('unresolved design choices');
+    expect(WORKER_FACT_QUESTIONS.prior_reasoning_failure.instructions).toContain('null prior_attempt');
   });
 });
 
 describe('decideWorkerRouteAtomic', () => {
   it('routes fully specified work with fixed interfaces and a stated check down to fast', () => {
-    const d = decideWorkerRouteAtomic(answers({ fully_specified: FACT_TRUE, interfaces_fixed: FACT_NOT_AGAINST, checks_stated: FACT_NOT_AGAINST }), 'standard');
+    const d = decideWorkerRouteAtomic(
+      answers({ fully_specified: FACT_TRUE, interfaces_fixed: FACT_TRUE, checks_stated: FACT_TRUE }),
+      'standard',
+    );
     expect(d).toMatchObject({ action: 'patch', tier: 'fast', reason: null });
   });
 
@@ -73,7 +75,7 @@ describe('decideWorkerRouteAtomic', () => {
 
   it('keeps standard when nothing would catch a mistake, however mechanical the work is', () => {
     const d = decideWorkerRouteAtomic(answers({ repetitive: 0.95, interfaces_fixed: 0.9, checks_stated: 0.2 }), 'standard');
-    expect(d).toMatchObject({ action: 'preserve', tier: 'standard', reason: null });
+    expect(d).toMatchObject({ action: 'preserve', tier: 'standard', reason: 'route_low_confidence' });
   });
 
   it.each([['unresolved_interaction'], ['prior_reasoning_failure']])('upgrades to deep only on %s, the evidence UPGRADE_BASES names', (key) => {
@@ -86,13 +88,67 @@ describe('decideWorkerRouteAtomic', () => {
     expect(d).toMatchObject({ action: 'preserve', tier: 'fast', reason: null });
   });
 
+  it.each(['fast', 'standard', 'deep', 'frontier'] as const)('preserves all-neutral answers on the actual called %s tier', (tier) => {
+    expect(
+      decideWorkerRouteAtomic(answers(Object.fromEntries(Object.keys(WORKER_FACT_QUESTIONS).map((k) => [k, 0.5]))), tier),
+    ).toMatchObject({ action: 'preserve', tier, reason: 'route_low_confidence' });
+  });
+  it('does not downgrade frontier on hard evidence or require unused malformed cheap evidence', () => {
+    expect(decideWorkerRouteAtomic({ unresolved_interaction: { type: 'noul', noul: 0.8 } }, 'frontier')).toMatchObject({
+      action: 'preserve',
+      tier: 'frontier',
+      reason: null,
+    });
+    expect(
+      decideWorkerRouteAtomic({ unresolved_interaction: { type: 'noul', noul: 0.8 }, fully_specified: { type: 'text' } }, 'standard'),
+    ).toMatchObject({ action: 'patch', tier: 'deep' });
+  });
+  it.each(['fully_specified', 'repetitive'])('uses a decisive cheap OR arm with the unused arm missing (%s)', (key) => {
+    const a = answers({ [key]: 0.9, interfaces_fixed: 0.9, checks_stated: 0.9 });
+    delete a[key === 'fully_specified' ? 'repetitive' : 'fully_specified'];
+    expect(decideWorkerRouteAtomic(a, 'standard')).toMatchObject({ action: 'patch', tier: 'fast' });
+  });
+  it.each([0.599999, 0.6, 0.600001])('uses the .6 positive boundary without widening it (%s)', (value) => {
+    expect(decideWorkerRouteAtomic(answers({ fully_specified: 0.9, interfaces_fixed: value, checks_stated: 0.9 }), 'deep').action).toBe(
+      value >= 0.6 ? 'patch' : 'preserve',
+    );
+  });
+  it.each([0.399999, 0.4, 0.400001])('requires explicit .4 negative hard evidence (%s)', (value) => {
+    expect(
+      decideWorkerRouteAtomic(
+        answers({ fully_specified: 0.9, interfaces_fixed: 0.9, checks_stated: 0.9, unresolved_interaction: value }),
+        'standard',
+      ).action,
+    ).toBe(value <= 0.4 ? 'patch' : 'preserve');
+  });
+  it('does not turn an unused malformed conjunct into a route error', () => {
+    const a = answers({ fully_specified: 0.9, interfaces_fixed: 0.2 });
+    delete a['checks_stated'];
+    expect(decideWorkerRouteAtomic(a, 'deep')).toMatchObject({ action: 'preserve', tier: 'deep', reason: 'route_low_confidence' });
+  });
+
   it.each([
-    ['a missing answer', (() => { const a = answers(); delete a['checks_stated']; return a; })()],
-    ['a non-numeric noul', { ...answers(), checks_stated: { type: 'noul', noul: 'high' } }],
-    ['a value outside 0..1', { ...answers(), checks_stated: { type: 'noul', noul: 1.4 } }],
-    ['a choice answer where a noul belongs', { ...answers(), checks_stated: { type: 'choice', choice: 'yes', confidence: 0.99 } }],
-    ['a noul number under a choice type', { ...answers(), checks_stated: { type: 'choice', noul: 0.95 } }],
-    ['a noul number with no type', { ...answers(), checks_stated: { noul: 0.95 } }],
+    [
+      'a missing answer',
+      (() => {
+        const a = answers();
+        delete a['checks_stated'];
+        a['fully_specified'] = { type: 'noul', noul: 0.9 };
+        a['interfaces_fixed'] = { type: 'noul', noul: 0.9 };
+        return a;
+      })(),
+    ],
+    ['a non-numeric noul', { ...answers({ fully_specified: 0.9, interfaces_fixed: 0.9 }), checks_stated: { type: 'noul', noul: 'high' } }],
+    ['a value outside 0..1', { ...answers({ fully_specified: 0.9, interfaces_fixed: 0.9 }), checks_stated: { type: 'noul', noul: 1.4 } }],
+    [
+      'a choice answer where a noul belongs',
+      { ...answers({ fully_specified: 0.9, interfaces_fixed: 0.9 }), checks_stated: { type: 'choice', choice: 'yes', confidence: 0.99 } },
+    ],
+    [
+      'a noul number under a choice type',
+      { ...answers({ fully_specified: 0.9, interfaces_fixed: 0.9 }), checks_stated: { type: 'choice', noul: 0.95 } },
+    ],
+    ['a noul number with no type', { ...answers({ fully_specified: 0.9, interfaces_fixed: 0.9 }), checks_stated: { noul: 0.95 } }],
   ])('leaves the dispatch on the called tier for %s', (_name, a) => {
     const d = decideWorkerRouteAtomic(a as Record<string, unknown>, 'standard');
     expect(d).toEqual({ action: 'preserve', tier: 'standard', reason: 'route_invalid', route: null, basis: null });

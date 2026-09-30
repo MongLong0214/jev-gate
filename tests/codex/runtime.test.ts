@@ -65,6 +65,13 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
     const staged = join(tmp, 'source');
     const stagedPlugin = join(staged, 'plugins/codex');
     cpSync(join(root, 'plugins/codex'), stagedPlugin, { recursive: true, filter: p => !p.includes('/dist/') && !p.endsWith('/dist') });
+    // MCP server names are global in the host. A user's installed Evidence server must not shadow this fixture,
+    // or be re-enabled by it. Keep the packaged manifest path and loader, with only a disposable server name.
+    const mcpFile = join(stagedPlugin, '.mcp.json');
+    const mcp = JSON.parse(readFileSync(mcpFile, 'utf8')) as { mcpServers: Record<string, unknown> };
+    mcp.mcpServers['jev_runtime_fixture'] = mcp.mcpServers['jev_gate_evidence'];
+    delete mcp.mcpServers['jev_gate_evidence'];
+    writeFileSync(mcpFile, JSON.stringify(mcp));
     const built = spawnSync(process.execPath, [join(root, 'scripts/build-codex.mjs'), join(stagedPlugin, 'dist')], { encoding: 'utf8' });
     expect(built.status, built.stderr).toBe(0);
     cpSync(join(root, 'package.json'), join(staged, 'package.json'));
@@ -157,7 +164,7 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
     const session = await startCodexSession({ cwd: workspace, env: { ...process.env, PATH:`${join(workspace,'.bin')}:${process.env['PATH'] ?? ''}`, JEV_CODEX_CONFIG:policyFile, JEV_CODEX_TRACE_DIR: trace, JEV_GATE_STATE_DIR: join(tmp, `managed ${scenario} state`), JEV_CODEX_UPSTREAM: `http://127.0.0.1:${(server.address() as {port:number}).port}/v1`, TYPESAFE_API_KEY: 'fixture-key' }, serverArgs: config.flatMap(c => ['-c', c]), bypassHookTrust: true, nativeAuth: false, profiles,
       fetchImpl: (async (_url, init) => {
         const parsed=JSON.parse(String(init?.body)); const q = parsed.questions;
-        return new Response(JSON.stringify({ model: parsed.model, answers: Object.fromEntries(Object.keys(q).map(k => { const score=routing && k==='effort'?q[k].criteria.length-1:routing && k==='tier'?1:k==='tool_calls'?4:k==='size'?2:0; const picks:Record<string,string>={work_shape:'sustained_task',handoff_scope:'self_contained'}; const pick=k.startsWith('relation_')?'omit':picks[k] ?? Object.keys(q[k].criteria ?? {})[0]; return [k, q[k].type === 'score' ? { type: 'score', score, probabilities: Object.fromEntries(q[k].criteria.map((_:unknown,i:number)=>[i,i===score?1:0])) } : q[k].type === 'noul' ? { type:'noul',noul:0 } : { type: 'choice', choice: pick, confidence: 1, probabilities: Object.fromEntries(Object.keys(q[k].criteria).map(v=>[v,v===pick?1:0])) }]; })) }), { headers: { 'content-type': 'application/json' } });
+        return new Response(JSON.stringify({ model: parsed.model, answers: Object.fromEntries(Object.keys(q).map(k => { const score=routing && k==='effort'?q[k].criteria.length-1:routing && k==='tier'?1:k==='tool_calls'?4:k==='size'?2:0; const picks:Record<string,string>={work_shape:'sustained_task',handoff_scope:'self_contained'}; const pick=k.startsWith('relation_')?'omit':picks[k] ?? Object.keys(q[k].criteria ?? {})[0]; return [k, q[k].type === 'score' ? { type: 'score', score, confidence:1, probabilities: Object.fromEntries(q[k].criteria.map((_:unknown,i:number)=>[i,i===score?1:0])) } : q[k].type === 'noul' ? { type:'noul',noul:0 } : { type: 'choice', choice: pick, confidence: 1, probabilities: Object.fromEntries(Object.keys(q[k].criteria).map(v=>[v,v===pick?1:0])) }]; })) }), { headers: { 'content-type': 'application/json' } });
       }) as typeof fetch });
     const socket = new WebSocket(session.url, { headers: { Authorization: `Bearer ${session.token}` } });
     const opened = new Promise<void>((resolve,reject)=>{socket.once('open',resolve);socket.once('error',reject);});
@@ -315,7 +322,7 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
       `marketplaces.${market}.source_type="local"`,
       `marketplaces.${market}.source=${JSON.stringify(plugin)}`,
       `plugins.jev-gate@${market}.enabled=true`,
-      `plugins.jev-gate@${market}.mcp_servers.jev_gate_evidence.enabled=true`,
+      `plugins.jev-gate@${market}.mcp_servers.jev_runtime_fixture.enabled=true`,
       'shell_environment_policy.inherit="all"',
     ];
     const args = ['--no-daemon', ...(trust ? ['--dangerously-bypass-hook-trust'] : []), 'exec', '--ignore-rules', '--skip-git-repo-check', '--ephemeral', '--json', '-C', workspace, ...config.flatMap(c => ['-c', c]), 'Run the local fixture tools, then finish.'];

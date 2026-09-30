@@ -27,7 +27,7 @@ export interface HostPins {
 
 export interface RouterEngine extends Transport {
   envKey: () => Promise<string | undefined>;
-  pins: () => Promise<HostPins>;
+  pins: (scope?: 'effort' | 'root' | 'spawn') => Promise<HostPins>;
   /** The settings allowlist when one is set. */
   availableModels: () => Promise<readonly string[] | undefined>;
   /** The host's release (`SessionVersion.base`), or undefined when it is not spelled as one. */
@@ -109,11 +109,6 @@ const MAX_TURNS = 16;
 const MAX_OFFERS = 64;
 /** Subagents whose spawn answer is kept for their steps. */
 const MAX_CHILDREN = 64;
-/**
- * How long a subagent's first step waits for its spawn's id: `agent.spawn` resolves once the subagent started, which
- * can come after that loop dispatched its first step. Past this the step, and so the loop, stays native.
- */
-const CHILD_WAIT_MS = 1500;
 /** The tail of the last root reply a root turn is assessed with; replies end on what they ask or announce next. */
 const REPLY_CHARS = 2000;
 /**
@@ -188,7 +183,10 @@ const ENDED = Symbol('ended');
 const NO_ROOT_PINS = { mainModel: false, mainEffort: false } as const;
 
 const until = <T>(p: Promise<T>, signal: AbortSignal): Promise<T | typeof ABORTED> => {
-  if (signal.aborted) return Promise.resolve(ABORTED);
+  if (signal.aborted) {
+    void p.catch(() => undefined);
+    return Promise.resolve(ABORTED);
+  }
   return new Promise((resolve) => {
     const onAbort = (): void => resolve(ABORTED);
     signal.addEventListener('abort', onAbort, { once: true });
@@ -246,6 +244,7 @@ interface TurnRouting {
   baseline: Baseline;
   controller: AbortController;
   pending: Promise<void> | null;
+  deadline: number;
   patch: RoutingPatch;
   /** The whole turn is native from here on: skipped, diverged or retired. */
   stopped: boolean;
@@ -299,6 +298,23 @@ type Assessed =
       effort: DimensionReason;
     };
 
+/** Apply the cache floor without raising effort above the native baseline. Missing proposals stay missing. */
+export const cachePatch = (
+  baseline: Baseline,
+  warm: SymbolicEffort | null,
+  patch: RoutingPatch,
+): { patch: RoutingPatch; held?: RoutedEffort } => {
+  const want = patch.effort;
+  let final = want;
+  if (want !== undefined && warm !== null && patch.model === undefined && isSymbolicEffort(baseline.effort)) {
+    const floor = effortIndex(warm) < effortIndex(baseline.effort) ? warm : baseline.effort;
+    if (effortIndex(want) < effortIndex(floor)) final = floor === 'max' ? undefined : floor;
+  }
+  const { effort: _effort, ...rest } = patch;
+  const result = final === undefined || final === baseline.effort ? rest : { ...rest, effort: final };
+  return { patch: result, ...(want !== undefined && final !== want ? { held: want } : {}) };
+};
+
 /** `rootSwitches` is the verified list; tests pass their own to reach the root-model path. */
 export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSwitch[] = VERIFIED_ROOT_SWITCHES) => {
   const rootEnabled = config.enabled && (config.routeMainEffort || config.routeMainModel);
@@ -306,8 +322,13 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
   const childEnabled = config.enabled && config.routeSubagentEffort;
   const stepEnabled = rootEnabled || childEnabled;
   const children = bounded<string, ChildRouting>(MAX_CHILDREN);
-  /** Spawns between next and its result; a subagent step with no answer yet waits on these. */
-  const landing = new Set<Promise<void>>();
+  // Missing mappings never wait on another spawn. Once history fills, new unknown loops stay native.
+  const nativeChildren = new Set<string>();
+  let childHistoryFull = false;
+  const rememberNativeChild = (id: string): void => {
+    if (nativeChildren.size < MAX_CHILDREN) nativeChildren.add(id);
+    else childHistoryFull = true;
+  };
   /** The last root step's visible reply: the context a root turn that answers it is assessed with. */
   let lastReply: string | null = null;
   /** The last root request that got a response: when, on which model, and at which effort. */
@@ -320,6 +341,8 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
   let session = new AbortController();
   let keyWait: ((signal: AbortSignal) => Promise<KeyState | typeof ABORTED>) | null = null;
   let diagnosed = false;
+  let versionWait: ReturnType<typeof sharedRead<string | undefined>> | null = null;
+  const pinReads = new Map<string, ReturnType<typeof sharedRead<HostPins>>>();
   /**
    * Why spawn routing stopped for this activation, once a spawn's own result contradicted the contract: a routed
    * spawn that ran on another model than requested, or an unrouted one that did not run on the baseline this Router
@@ -343,6 +366,7 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
 
   /** Read once per session; each caller waits only as long as its own signal allows. */
   const keyFor = (engine: RouterEngine, signal: AbortSignal): Promise<KeyState | typeof ABORTED> => {
+    if (signal.aborted) return Promise.resolve(ABORTED);
     keyWait ??= sharedRead(
       (async (): Promise<KeyState> => {
         if (config.explicitKey.kind === 'valid') return { key: config.explicitKey.value };
@@ -356,15 +380,34 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     return keyWait(signal);
   };
 
-  /** Read on every use: another Mod can set a pin mid-session, and a pin set after a decision still wins. */
-  const pinsOf = (engine: RouterEngine): Promise<HostPins> =>
-    // An unreadable environment is treated as pinned everywhere: nothing is changed on a guess.
-    engine.pins().catch(() => ({ mainModel: true, mainEffort: true, subagentModel: true, aliasRemap: true }));
-
-  const diagnose = async (engine: RouterEngine): Promise<void> => {
+  /** Deduplicate pending reads; settled pins are reread so mid-session changes still win. */
+  const pinsOf = async (engine: RouterEngine, scope: 'effort' | 'root' | 'spawn', live: AbortSignal): Promise<HostPins> => {
+    if (live.aborted) throw ENDED;
+    let wait = pinReads.get(scope);
+    if (!wait) {
+      const read = engine.pins(scope).catch(() => ({ mainModel: true, mainEffort: true, subagentModel: true, aliasRemap: true }));
+      wait = sharedRead(read);
+      pinReads.set(scope, wait);
+      const current = wait;
+      void read.then(() => {
+        if (pinReads.get(scope) === current) pinReads.delete(scope);
+      });
+    }
+    const pins = await wait(live);
+    if (pins === ABORTED) throw ENDED;
+    return pins;
+  };
+  const versionFor = async (engine: RouterEngine, live: AbortSignal): Promise<string | undefined> => {
+    if (live.aborted) throw ENDED;
+    versionWait ??= sharedRead(engine.hostBase().catch(() => undefined));
+    const v = await versionWait(live);
+    if (v === ABORTED) throw ENDED;
+    return v;
+  };
+  const diagnose = async (engine: RouterEngine, live: AbortSignal): Promise<void> => {
     if (diagnosed) return;
     diagnosed = true;
-    const key = await keyFor(engine, session.signal);
+    const key = await keyFor(engine, live);
     if (key === ABORTED) return;
     log(engine, {
       event: 'router',
@@ -377,6 +420,27 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
       tiers: config.tiers,
       tier_issues: config.tierIssues,
     });
+  };
+  /** Uses only the host clock. Disposing ends the timer, never the native dispatch. */
+  const budget = (engine: RouterEngine, deadline: number, ...signals: AbortSignal[]) => {
+    const timer = new AbortController();
+    const expired = new AbortController();
+    const live = linked(...signals, expired.signal);
+    const remaining = deadline - engine.now();
+    if (remaining <= 0) expired.abort();
+    else
+      void engine.sleep(remaining, timer.signal).then(
+        () => expired.abort(),
+        () => undefined,
+      );
+    return {
+      signal: live.signal,
+      expired: expired.signal,
+      dispose: () => {
+        timer.abort();
+        live.dispose();
+      },
+    };
   };
 
   const policy = (scope: 'root' | 'spawn', availableModels: readonly string[] | undefined): PolicyOptions => ({
@@ -434,25 +498,37 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     return { dims: { tiers: offer && 'tiers' in offer ? offer.tiers : null, efforts }, opts, ...(offer && 'reason' in offer ? { withheld: offer.reason } : {}) };
   };
 
-  const rootAssessment = async (engine: RouterEngine, turnId: string, t: TurnRouting, text: string, context: string | null): Promise<void> => {
+  const rootAssessment = async (
+    engine: RouterEngine,
+    turnId: string,
+    t: TurnRouting,
+    text: string,
+    context: string | null,
+    live: AbortSignal,
+  ): Promise<void> => {
     let outcome: Assessed;
     let withheld: string | undefined;
     // Every wait here ends when the turn is retired.
-    const live = t.controller.signal;
+
     try {
       // Pins and the allowlist can only narrow what the event and configuration allow, so a turn with nothing to ask
       // even without them never waits for the key or a read.
       const ceiling = rootDims(t.baseline, t.effortChanged ? { mainModel: false, mainEffort: true } : NO_ROOT_PINS, undefined);
-      if (!buildQuestions(ceiling.dims)) {
+      const noCacheMove =
+        ceiling.dims.tiers === null &&
+        ceiling.dims.efforts !== null &&
+        ceiling.dims.efforts.every((effort) => Object.keys(cachePatch(t.baseline, t.warmEffort, { effort }).patch).length === 0);
+      if (!buildQuestions(ceiling.dims) || noCacheMove) {
         withheld = ceiling.withheld;
-        outcome = { kind: 'skipped', reason: 'nothing_to_change' };
+        outcome = { kind: 'skipped', reason: noCacheMove ? 'cache_native' : 'nothing_to_change' };
       } else {
         // The key comes next: without one nothing optional is read.
+        void diagnose(engine, live);
         const key = await keyFor(engine, live);
         if (key === ABORTED) throw ENDED;
         if (!('key' in key)) outcome = { kind: 'skipped', reason: key.reason };
         else {
-          const pins = await within(pinsOf(engine), live);
+          const pins = await within(pinsOf(engine, config.routeMainModel ? 'root' : 'effort', live), live);
           const available = config.routeMainModel && !pins.mainModel ? await within(engine.availableModels().catch(() => []), live) : undefined;
           const r = rootDims(t.baseline, { mainModel: pins.mainModel, mainEffort: pins.mainEffort || t.effortChanged }, available);
           withheld = r.withheld;
@@ -465,8 +541,8 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     }
     // A turn retired while this was in flight keeps its native parameters; a late answer reaches no other turn.
     let held: RoutedEffort | undefined;
-    if (!t.stopped && outcome.kind === 'assessed') {
-      const kept = holdForCache(t, outcome.patch);
+    if (!live.aborted && !t.stopped && outcome.kind === 'assessed') {
+      const kept = cachePatch(t.baseline, t.warmEffort, outcome.patch);
       t.patch = kept.patch;
       held = kept.held;
     }
@@ -493,27 +569,6 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
   };
 
   /**
-   * Changing the top-level effort restarts the conversation's prompt cache, so on a warm cache a lower effort is held
-   * at the one the cache was written at rather than paying a rewrite, and only a rise, which quality asks for, pays it.
-   * Lowering waits for a cold cache: a session's first turn, a model change, or an hour's pause. The host sends each
-   * turn's effort both as a per-message change and as the top-level value (2.1.283, observed on a local fake API), and
-   * the per-message form alone would keep the cache. Replayed on 245 root turns of the owner's week (2026-09-21..28;
-   * first requests re-read a median 185K tokens), lowering freely moved effort at 71 warm turns, and with rewrites
-   * priced cost 2.7 % more than it saved; held, 12 warm turns moved and it saved on either cache reading. The savings
-   * in that replay are assumed shares of each turn's cost, not measured ones.
-   */
-  const holdForCache = (t: TurnRouting, patch: RoutingPatch): { patch: RoutingPatch; held?: RoutedEffort } => {
-    const want = patch.effort;
-    const warm = t.warmEffort;
-    // A model change starts the cache over whatever the effort does.
-    if (want === undefined || warm === null || patch.model !== undefined || effortIndex(want) >= effortIndex(warm)) return { patch };
-    const { effort: _dropped, ...rest } = patch;
-    // Held at the baseline, nothing is sent; held below it, the cache's own effort is.
-    if (warm === t.baseline.effort || warm === 'max') return { patch: rest, held: want };
-    return { patch: { ...rest, effort: warm }, held: want };
-  };
-
-  /**
    * The stored patch for this step, or null. Incoming values that differ from the baseline win for the rest of the
    * turn, and so does a pin set since the decision.
    */
@@ -528,7 +583,7 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     // await still takes effect.
     const storedModel = !t.modelStopped ? t.patch.model : undefined;
     const allowed = storedModel !== undefined ? await within(engine.availableModels().catch(() => []), live) : undefined;
-    const pins = await within(pinsOf(engine), live);
+    const pins = await within(pinsOf(engine, storedModel !== undefined ? 'root' : 'effort', live), live);
     if (t.stopped) return null;
     if (pins.mainModel && !t.modelStopped && t.patch.model !== undefined) {
       t.modelStopped = true;
@@ -577,7 +632,8 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     }
   };
 
-  const prepareStep = async (engine: RouterEngine, e: TurnStepEvent, signal: AbortSignal): Promise<Prepared | null> => {
+  const prepareStep = async (engine: RouterEngine, e: TurnStepEvent, signal: AbortSignal, deadline: number): Promise<Prepared | null> => {
+    if (signal.aborted) return null;
     if (e.agentId !== undefined) return childEnabled ? await childStep(engine, e, e.agentId, signal) : null;
     if (!rootEnabled) return null;
     const known = turns.get(e.turnId);
@@ -588,11 +644,11 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     }
     // Routing never starts halfway through a turn.
     if (e.index !== 0) return null;
-    void diagnose(engine);
     const t: TurnRouting = {
       baseline: { model: e.model, ...(e.effort !== undefined ? { effort: e.effort } : {}) },
       controller: new AbortController(),
       pending: null,
+      deadline,
       patch: {},
       stopped: false,
       modelStopped: false,
@@ -609,7 +665,11 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
       log(engine, { event: 'root', turn: e.turnId, skipped: 'no_task_text' });
       return null;
     }
-    t.pending = rootAssessment(engine, e.turnId, t, text, lastReply);
+    const assessmentLive = linked(signal, t.controller.signal);
+    t.pending = rootAssessment(engine, e.turnId, t, text, lastReply, assessmentLive.signal).finally(() => {
+      t.pending = null;
+      assessmentLive.dispose();
+    });
     if ((await until(t.pending, signal)) === ABORTED) return null;
     return await stored(engine, t, e, signal);
   };
@@ -621,18 +681,10 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
    */
   const childStep = async (engine: RouterEngine, e: TurnStepEvent, id: string, signal: AbortSignal): Promise<Prepared | null> => {
     let c = children.get(id);
-    if (!c && e.index === 0 && landing.size > 0) {
-      // The spawn that started this loop may still be returning its id.
-      const wait = linked(signal, session.signal);
-      try {
-        const landed = Promise.allSettled([...landing]).then(() => undefined);
-        await until(Promise.race([landed, engine.sleep(CHILD_WAIT_MS, wait.signal).catch(() => undefined)]), wait.signal);
-      } finally {
-        wait.dispose();
-      }
-      c = children.get(id);
+    if (!c || nativeChildren.has(id) || c.stopped) {
+      rememberNativeChild(id);
+      return null;
     }
-    if (!c || c.stopped) return null;
     if (c.baseline === null && e.index > 0) {
       // The loop's first step ran before its spawn landed and went native; a lower effort now would restart its cache.
       c.stopped = true;
@@ -662,7 +714,7 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     const effort = c.effort;
     if (effort === null) return null;
     // Read last, so an effort pin set while the step waited still wins.
-    const pins = await until(pinsOf(engine), signal);
+    const pins = await until(pinsOf(engine, 'effort', signal), signal);
     if (pins === ABORTED || c.stopped) return null;
     if (pins.mainEffort) {
       c.stopped = true;
@@ -750,14 +802,28 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     lastReply = looksSecret(answer) ? null : answer.length > REPLY_CHARS ? answer.slice(-REPLY_CHARS) : answer;
   };
 
-  async function* turnStep<E extends TurnStepEvent, C, R extends TurnStepOutcome | void>(engine: RouterEngine, e: E, next: StreamNextLike<E, C, R>): AsyncGenerator<C, R | void> {
+  async function* turnStep<E extends TurnStepEvent, C, R extends TurnStepOutcome | void>(
+    engine: RouterEngine,
+    e: E,
+    next: StreamNextLike<E, C, R>,
+  ): AsyncGenerator<C, R | void> {
+    const startedAt = engine.now();
     const own = session.signal;
+    const known = e.agentId === undefined ? turns.get(e.turnId) : undefined;
+    const deadline = known?.pending ? known.deadline : startedAt + config.timeoutMs;
+    const wait = budget(engine, deadline, own, next.signal, ...(known ? [known.controller.signal] : []));
     let prepared: Prepared | null = null;
     try {
-      prepared = await prepareStep(engine, e, next.signal);
+      prepared = await prepareStep(engine, e, wait.signal, deadline);
     } catch {
       prepared = null;
     }
+    if (wait.expired.aborted || engine.now() >= deadline) {
+      abandon(engine, e);
+      prepared = null;
+      log(engine, { event: 'budget_timeout', scope: e.agentId === undefined ? 'root' : 'child', turn: e.turnId });
+    }
+    wait.dispose();
     // An aborted signal means the dispatch already went on without this hook; a next() now would open a second request.
     if (next.signal.aborted) {
       abandon(engine, e);
@@ -774,6 +840,14 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
       patch = null;
       log(engine, { event: 'child_stop', agent_id: e.agentId ?? null, index: e.index, reason: own.aborted ? 'session_ended' : 'child_stopped' });
     }
+    log(engine, {
+      event: 'prepared',
+      turn: e.turnId,
+      scope: e.agentId === undefined ? 'root' : 'child',
+      preparation_ms: Math.max(0, engine.now() - startedAt),
+      budget_ms: config.timeoutMs,
+      routed: patch !== null,
+    });
     if (prepared?.child && patch) prepared.child.dispatched = true;
     // Once next starts, every chunk, the return, a refusal or an error belongs to the host: nothing here retries it.
     let result: R;
@@ -882,7 +956,7 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     if (LEAN_MARKER.test(e.prompt) || LEAN_MARKER.test(e.description)) return spawnSkip(engine, e, 'lean_marker');
     if (e.subagentType.startsWith(GATE_AGENT_PREFIX) || GATE_ROUTE_NOTE.test(e.prompt)) return spawnSkip(engine, e, 'gate_routed');
     if (suspended !== null) return spawnSkip(engine, e, 'spawn_suspended');
-    void diagnose(engine);
+    void diagnose(engine, live);
     const explicit = e.model !== undefined && e.model.trim() !== '' ? e.model : null;
     // What the event, configuration and offer cache decide comes before any wait. Null: the model can move.
     let modelSkip: string | null = !config.routeSubagentModel
@@ -903,10 +977,10 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     const key = await keyFor(engine, live);
     if (key === ABORTED) throw ENDED;
     if (!('key' in key)) return spawnSkip(engine, e, key.reason);
-    const pins = await within(pinsOf(engine), live);
+    const pins = await within(pinsOf(engine, 'spawn', live), live);
     if (modelSkip === null && pins.subagentModel) modelSkip = 'subagent_model_pinned';
     if (modelSkip === null && pins.aliasRemap) modelSkip = 'alias_remapped';
-    if (modelSkip === null && !hostSupported(await within(engine.hostBase().catch(() => undefined), live))) modelSkip = 'host_unverified';
+    if (modelSkip === null && !hostSupported(await versionFor(engine, live))) modelSkip = 'host_unverified';
     const opts = policy('spawn', modelSkip === null ? await within(engine.availableModels().catch(() => []), live) : undefined);
     let tiers: ModelTier[] | null = null;
     if (modelSkip === null) {
@@ -947,7 +1021,7 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
       if (tiers !== null) {
         // A pin that arrived while Jev answered puts this native spawn on the pinned model, which says nothing about how
         // the host resolves an inheriting one.
-        const now = await within(pinsOf(engine), live);
+        const now = await within(pinsOf(engine, 'spawn', live), live);
         if (now.subagentModel || now.aliasRemap) assumed.delete(e);
       }
       return { target: null, answers };
@@ -956,7 +1030,7 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     // before the request: what applies is what holds when the spawn is made. The pins are read last, after the
     // allowlist, so no await separates them from next.
     const allowed = await within(engine.availableModels().catch(() => []), live);
-    const now = await within(pinsOf(engine), live);
+    const now = await within(pinsOf(engine, 'spawn', live), live);
     const stop = now.subagentModel
       ? 'subagent_model_pinned'
       : now.aliasRemap
@@ -983,7 +1057,7 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
       return await spawnDecision(engine, e, live.signal);
     } catch (err) {
       if (err !== ENDED) throw err;
-      if (own.aborted && !signal.aborted) log(engine, { event: 'spawn_stop', tool_use_id: e.tool_use_id, reason: 'session_ended' });
+      if (own.aborted) log(engine, { event: 'spawn_stop', tool_use_id: e.tool_use_id, reason: 'session_ended' });
       return null;
     } finally {
       live.dispose();
@@ -991,13 +1065,21 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
   };
 
   const agentSpawn = async <E extends SpawnEvent, R extends SpawnOutcome>(engine: RouterEngine, e: E, next: NextLike<E, R>): Promise<R> => {
+    const startedAt = engine.now();
+    const deadline = startedAt + config.timeoutMs;
     const own = session.signal;
+    const wait = budget(engine, deadline, own, next.signal);
     let plan: SpawnPlan | null = null;
     try {
-      plan = await spawnTarget(engine, e, next.signal, own);
+      plan = await spawnTarget(engine, e, wait.signal, own);
     } catch {
       plan = null;
     }
+    if (wait.expired.aborted || engine.now() >= deadline) {
+      plan = null;
+      log(engine, { event: 'budget_timeout', scope: 'spawn', tool_use_id: e.tool_use_id });
+    }
+    wait.dispose();
     // As on turn.step: the host has already spawned natively, so nothing here may spawn again.
     if (next.signal.aborted) throw new Error('jev-router: spawn dispatch abandoned before next');
     let target = plan?.target ?? null;
@@ -1012,21 +1094,25 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
       target = null;
     }
     const answers = own.aborted || suspended !== null ? null : (plan?.answers ?? null);
-    // The subagent's first step can be dispatched before next returns its id; it waits on this, never past next.
-    let land = (): void => {};
-    const landed = new Promise<void>((resolve) => {
-      land = resolve;
+    log(engine, {
+      event: 'prepared',
+      tool_use_id: e.tool_use_id,
+      scope: 'spawn',
+      preparation_ms: Math.max(0, engine.now() - startedAt),
+      budget_ms: config.timeoutMs,
+      routed: target !== null,
     });
-    if (answers) landing.add(landed);
-    let result: R;
-    try {
-      result = await next(target !== null ? { ...e, model: target } : e);
-      if (answers && result.deny === undefined && result.agentId !== undefined && !own.aborted)
-        if (suspended === null) children.put(result.agentId, { answers, baseline: null, turnId: null, effort: null, stopped: false, dispatched: false });
-    } finally {
-      landing.delete(landed);
-      land();
-    }
+    const result = await next(target !== null ? { ...e, model: target } : e);
+    if (
+      answers &&
+      result.deny === undefined &&
+      result.agentId !== undefined &&
+      !own.aborted &&
+      suspended === null &&
+      !childHistoryFull &&
+      !nativeChildren.has(result.agentId)
+    )
+      children.put(result.agentId, { answers, baseline: null, turnId: null, effort: null, stopped: false, dispatched: false });
     try {
       const baseline = assumed.get(e);
       if (target !== null) {
@@ -1066,6 +1152,12 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     /** A child's completion carries its agentId and never retires the root's turn. */
     turnComplete: <E extends TurnEndEvent>(e: E): void => {
       if (e.agentId === undefined) retire(e.turnId);
+      else {
+        const c = children.get(e.agentId);
+        if (c) c.stopped = true;
+        children.delete(e.agentId);
+        rememberNativeChild(e.agentId);
+      }
     },
     agentOffer: <E extends OfferEvent>(e: E): void => {
       if (spawnEnabled) offers.put(e.agent, e.source === 'built-in' && e.provider.plugin === 'engine' && e.provider.tier === 'core');
@@ -1078,10 +1170,14 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
       turnTexts.clear();
       offers.clear();
       children.clear();
+      nativeChildren.clear();
+      childHistoryFull = false;
       lastReply = null;
       lastRoot = null;
       lastIncoming = null;
       keyWait = null;
+      versionWait = null;
+      pinReads.clear();
       diagnosed = false;
     },
     inFlight: client.inFlight,

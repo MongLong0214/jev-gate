@@ -4,13 +4,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { GUARD_DENY_REASON, STOP_REASON, WORKTREE_WORKER_SENTENCE } from '../src/coordinator.js';
+import { GUARD_DENY_REASON, STOP_REASON, WORKTREE_WORKER_SENTENCE, renderSingleRouteNote } from '../src/coordinator.js';
 import { DENIALS_BEFORE_STOP } from '../src/brief.js';
 import { runHook, type HookDeps, type HookResult } from '../src/hook.js';
 import { CLAUSE_VERDICTS, MAX_INTERPRETATION_CLAUSES } from '../src/interpretation.js';
 import { jobPath, newGeneration, readJob, updateJob } from '../src/job.js';
 import { appendLiveness, LIVENESS_WINDOW, readLiveness } from '../src/liveness.js';
-import { chainDepth, composeTaskPrompt, contractHash, MAX_COMPOSED_BYTES } from '../src/plan.js';
+import { chainDepth, composeTaskPrompt, composeSingleWorkerPrompt, contractHash, MAX_COMPOSED_BYTES } from '../src/plan.js';
 import { ADMISSION_ANSWERS, PLANNER_ROUTE_ANSWERS, ROUTE_ANSWERS, UPGRADE_BASES, type JobState, type PlannedTask, type WorkerReply } from '../src/types.js';
 import { costModelFloor, delegationModel } from '../src/admission.js';
 import { DEFAULT_CONFIG } from '../src/config.js';
@@ -68,7 +68,14 @@ const fakeJev = (opts: FakeAnswers = {}): ReturnType<typeof vi.fn> =>
       answers['plan_only'] = { type: 'noul', noul: 0.05 };
       answers['parallel_outcomes'] = { type: 'noul', noul: opts.parallelOutcomes ?? 0.95 };
       answers['size'] = { type: 'score', score: opts.size ?? 3, confidence: 0.9 };
-      answers['tool_calls'] = { type: 'score', score: opts.toolCalls ?? 4, confidence: 0.9 };
+      const score = opts.toolCalls ?? 4;
+      answers['task_context'] = choice(['self_contained', 'needs_context', 'unclear'], 'self_contained');
+      answers['tool_calls'] = {
+        type: 'score',
+        score,
+        confidence: 0.9,
+        probabilities: Object.fromEntries([0, 1, 2, 3, 4].map((i) => [i, Math.max(0, 1 - Math.abs(i - score))])),
+      };
     }
     if (questions.includes('route')) answers['route'] = choice(ROUTE_ANSWERS, opts.route ?? 'standard');
     // Gate B is atomic by default since 0.4.0: the same `route` option is answered as the facts that compose to it.
@@ -98,7 +105,17 @@ const stdinOf = (value: unknown): AsyncIterable<Uint8Array> =>
   })();
 
 type Env = Record<string, string | undefined>;
-const makeEnv = (over: Env = {}): Env => ({ TYPESAFE_API_KEY: KEY, HOME: join(tmp, 'home'), JEV_GATE_MODE: 'auto', JEV_GATE_STATE_DIR: mkdtempSync(join(tmp, 'state-')), CLAUDE_CODE_FORK_SUBAGENT: '0', ...over });
+const hierarchyConfig = join(tmp, 'hierarchy-default.json');
+writeFileSync(hierarchyConfig, JSON.stringify({ version: 5, mode: 'auto', admittedShape: 'hierarchy' }));
+const makeEnv = (over: Env = {}): Env => ({
+  JEV_GATE_CONFIG: hierarchyConfig,
+  TYPESAFE_API_KEY: KEY,
+  HOME: join(tmp, 'home'),
+  JEV_GATE_MODE: 'auto',
+  JEV_GATE_STATE_DIR: mkdtempSync(join(tmp, 'state-')),
+  CLAUDE_CODE_FORK_SUBAGENT: '0',
+  ...over,
+});
 
 /** Gate A ships atomic; the four-way choice is still supported and its own tests select it explicitly. */
 let compositeSeq = 0;
@@ -111,7 +128,7 @@ const compositeGateAEnv = (over: Env = {}): Env => {
 /** Gate B ships atomic since 0.4.0; the five-way choice is still supported and its own tests select it explicitly. */
 const compositeGateBEnv = (over: Env = {}): Env => {
   const cfg = join(tmp, `composite-gate-b-${(compositeSeq += 1)}.json`);
-  writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', routeQuestionShape: 'composite' }));
+  writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', admittedShape: 'hierarchy', routeQuestionShape: 'composite' }));
   return makeEnv({ JEV_GATE_CONFIG: cfg, ...over });
 };
 
@@ -133,7 +150,17 @@ const headBaseRefConfigDir = (baseRef: unknown = 'head'): string => {
 };
 const capEnv = (cap: number, over: Env = {}): Env => {
   const cfg = join(tmp, `cap-${cap}-${(capSeq += 1)}.json`);
-  writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', maxParallelWorkers: cap, workerIsolation: 'worktree', guardAllowTools: ['Bash'] }));
+  writeFileSync(
+    cfg,
+    JSON.stringify({
+      version: 5,
+      mode: 'auto',
+      admittedShape: 'hierarchy',
+      maxParallelWorkers: cap,
+      workerIsolation: 'worktree',
+      guardAllowTools: ['Bash'],
+    }),
+  );
   return makeEnv({ JEV_GATE_CONFIG: cfg, CLAUDE_CONFIG_DIR: headBaseRefConfigDir(), CLAUDE_PROJECT_DIR: mkdtempSync(join(tmp, 'project-')), ...over });
 };
 
@@ -489,65 +516,54 @@ describe('Gate A admission', () => {
     expect(state(env).current.shape).toBe('direct');
   });
 
-  it('asks the atomic Gate A questions and admits on them when the shape is atomic', async () => {
+  it('asks only the three consumed facts at cap 1 and records selection without claiming application', async () => {
     const cfg = join(tmp, 'gate-a-atomic.json');
     writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', admissionQuestionShape: 'atomic' }));
-    const env = makeEnv({ JEV_GATE_CONFIG: cfg });
+    const dir = join(tmp, 'trace-atomic-selection');
+    const env = makeEnv({ JEV_GATE_CONFIG: cfg, JEV_GATE_TRACE_DIR: dir });
+    const reply = fakeJev({ parallelOutcomes: 0.95, size: 4 });
     let asked: string[] = [];
-    const fetchImpl = vi.fn(async (_url: string, init: RequestInit) => {
-      const body = JSON.parse(String(init.body)) as { questions: Record<string, unknown> };
-      asked = Object.keys(body.questions);
-      const answers: Record<string, unknown> = { size: { type: 'score', score: 3, confidence: 0.9 }, tool_calls: { type: 'score', score: 4, confidence: 0.9 } };
-      for (const k of ['forbids_delegation', 'external_tools', 'plan_only', 'parallel_outcomes']) answers[k] = { type: 'noul', noul: 0.05 };
-      return new Response(JSON.stringify({ model: 'jev-1.13.0', answers, usage: { input_tokens: 10, output_tokens: 2 } }), { status: 200 });
+    const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
+      asked = Object.keys(JSON.parse(String(init.body)).questions);
+      return await (reply as unknown as typeof fetch)(url, init);
     });
     const r = await run(env, promptEvent(), fetchImpl);
-    expect(asked).toEqual(['forbids_delegation', 'external_tools', 'plan_only', 'parallel_outcomes', 'size', 'tool_calls']);
-    expect(context(r)).toContain('Execution shape: orchestrated');
-    expect(state(env).current.shape).toBe('orchestrated');
-  });
-
-  it('A21: records the shape the request asked for, and a configured shape still decides', async () => {
-    const cfg = join(tmp, 'gate-a-recommend.json');
-    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', admissionQuestionShape: 'atomic', admittedShape: 'single' }));
-    const dir = join(tmp, 'trace-recommend');
-    const env = makeEnv({ JEV_GATE_CONFIG: cfg, JEV_GATE_TRACE_DIR: dir });
-    const fetchImpl = vi.fn(async () => {
-      const answers: Record<string, unknown> = { size: { type: 'score', score: 3, confidence: 0.9 }, tool_calls: { type: 'score', score: 4, confidence: 0.9 } };
-      for (const k of ['forbids_delegation', 'external_tools']) answers[k] = { type: 'noul', noul: 0.05 };
-      // The request says, loudly, that it wants separate outcomes and only a plan.
-      for (const k of ['plan_only', 'parallel_outcomes']) answers[k] = { type: 'noul', noul: 0.95 };
-      return new Response(JSON.stringify({ model: 'jev-1.13.0', answers, usage: { input_tokens: 10, output_tokens: 2 } }), { status: 200 });
-    });
-    await run(env, promptEvent(), fetchImpl);
+    expect(asked).toEqual(['forbids_delegation', 'task_context', 'tool_calls']);
+    expect(context(r)).toContain('Dispatch this request once');
+    expect(state(env).current).toMatchObject({ shape: 'orchestrated', execution: 'single', admission_revision: 'atomic-context-v1' });
     const record = readdirSync(dir)
-      .map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>)
-      .find((x) => x['phase'] === 'admission_result');
-    expect(record?.['recommendation']).toEqual({ admitted_shape: 'hierarchy', plan_only: true, applied: false });
-    // A configured shape is not overridden by what the request said: `applied: false` records that it was not used.
-    expect(state(env).current.execution).toBe('single');
+      .map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')))
+      .find((x) => x.phase === 'admission_result');
+    expect(record.selected_execution).toBe('single');
+    expect(record.recommendation).toBeUndefined();
   });
 
   it.each([
-    ['separate outcomes', { parallelOutcomes: 0.95, size: 3 }, undefined, 'you coordinate'],
+    ['separate outcomes', { parallelOutcomes: 0.95, size: 3 }, undefined, 'Planner first'],
     ['a whole project', { parallelOutcomes: 0.05, size: 4 }, undefined, 'Planner first'],
     ['one outcome', { parallelOutcomes: 0.05, size: 3 }, 'single', 'Dispatch first'],
-    ['neither separate outcomes nor a project', { parallelOutcomes: 0.05, size: 3 }, 'single', 'Dispatch this request once'],
-  ] as const)('auto: runs %s as the shape the request asked for', async (_name, answers, execution, guidance) => {
-    const dir = join(tmp, `trace-auto-${_name.replace(/\W+/g, '-')}`);
-    const env = makeEnv({ JEV_GATE_TRACE_DIR: dir });
+  ] as const)('auto cap 2: selects %s from the same atomic batch', async (_name, answers, execution, guidance) => {
+    const env = capEnv(2);
+    const cfg = env.JEV_GATE_CONFIG as string;
+    const c = JSON.parse(readFileSync(cfg, 'utf8'));
+    c.admittedShape = 'auto';
+    writeFileSync(cfg, JSON.stringify(c));
     const r = await run(env, promptEvent(), fakeJev(answers));
     expect(context(r)).toContain(guidance);
     expect(state(env).current.execution).toBe(execution);
-    const record = readdirSync(dir).map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>).find((x) => x['phase'] === 'admission_result');
-    expect(record?.['recommendation']).toMatchObject({ admitted_shape: execution ?? 'hierarchy', applied: true });
   });
 
-  it.each(['external_tools', 'tool_calls', 'parallel_outcomes', 'size'])('keeps the turn direct when Jev answers %s in the wrong type', async (key) => {
+  it.each(['forbids_delegation', 'tool_calls'])('keeps invalid required %s direct', async (key) => {
     const env = makeEnv();
     const r = await run(env, promptEvent(), fakeJev({ mistype: key }));
     expect(context(r)).toContain('Execution shape: direct');
     expect(state(env).current.shape).toBe('direct');
+  });
+
+  it('ignores unrequested external-tool and shape answers for a fixed hierarchy', async () => {
+    const env = makeEnv();
+    const r = await run(env, promptEvent(), fakeJev({ mistype: 'external_tools' }));
+    expect(context(r)).toContain('Planner first');
   });
 
   it('records prompt_id_absent and creates no orchestrated state', async () => {
@@ -873,6 +889,7 @@ describe('single executor (A19)', () => {
     await run(env, promptEvent(), fetchImpl);
     const denied = await run(env, preEvent('Edit', { file_path: '/w/src/a.ts', old_string: 'a', new_string: 'b' }), fetchImpl);
     expect(denied).toMatchObject({ kind: 'deny', code: 'guard_denied' });
+    expect(String(hookOutput(denied)['permissionDecisionReason'])).toContain('No planner or JEV_TASK marker is required');
   });
 
   /**
@@ -888,14 +905,15 @@ describe('single executor (A19)', () => {
     expect(state(env).current.active['toolu_1']).toMatchObject({ role: 'worker', task_id: 'single', rev: null, attempt: 1, deliverables: [] });
   });
 
-  it('records the receipt as the worker\'s own report, and completes the job on it', async () => {
+  it("records the receipt as the worker's own report, and completes the job on it", async () => {
     const env = singleEnv();
     const fetchImpl = fakeJev({ execution: 'orchestrated' });
     await run(env, promptEvent(), fetchImpl);
     await run(env, preEvent('Agent', agentInput({ prompt: 'Do what the request asks.' })), fetchImpl);
     const post = await run(env, workerPost('toolu_1', workerReply({ checks: [{ check_id: 'npm test', result: 'pass', note: 'all passed' }] })), fetchImpl);
     // The accept is stated as reported rather than verified: this shape has no contract for code to check.
-    expect(context(post)).toContain('recorded as reported rather than verified');
+    expect(context(post)).toContain('does not establish requirement coverage');
+    expect(state(env).current.root_fallback_reason).toBe('accepted');
     expect(context(post)).not.toContain('Ready task ids');
     const gen = state(env).current;
     expect(gen.active).toEqual({});
@@ -1187,7 +1205,7 @@ describe('planner dispatch', () => {
     expect(updatedInput(frontier)).toMatchObject({ subagent_type: 'jev-gate:planner-frontier', model: 'opus' });
 
     const cfg = join(tmp, 'frontier-default.json');
-    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', plannerDefaultTier: 'frontier' }));
+    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', admittedShape: 'hierarchy', plannerDefaultTier: 'frontier' }));
     const defaulted = makeEnv({ JEV_GATE_CONFIG: cfg });
     await run(defaulted, promptEvent(), fakeJev());
     const abstained = await run(defaulted, plannerPre(), fakeJev({ planning_tier: 'abstain' }));
@@ -1509,7 +1527,7 @@ describe('worker dispatch', () => {
     const overlap = await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t2]\nwork' }), { tool_use_id: 'toolu_2' }), fetchImpl);
     expect(overlap).toMatchObject({ kind: 'deny', code: 'deliverable_overlap' });
     const cfg = join(tmp, 'cap1.json');
-    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', maxParallelWorkers: 1 }));
+    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', admittedShape: 'hierarchy', maxParallelWorkers: 1 }));
     const capped = makeEnv({ JEV_GATE_CONFIG: cfg });
     await seedPlanned(capped, planReply(tasks), fetchImpl);
     await run(capped, preEvent('Agent', agentInput()), fetchImpl);
@@ -1767,7 +1785,8 @@ describe('worker check verification (0.4.0)', () => {
       { id: 'c1', description: 'tests pass', required: true, command: 'npm test' },
       { id: 'c2', description: 'lint is clean', required: false, command: 'npm run lint' },
     ]);
-    await run(optional, postWith(bothPass, workerTranscript([{ command: 'npm test', failed: false }])));
+    const result = await run(optional, postWith(bothPass, workerTranscript([{ command: 'npm test', failed: false }])));
+    expect(context(result)).toContain('reported pass 2; confirmed command pass 1');
     expect(state(optional).current.receipts[0]).toMatchObject({ verdict: 'accept', verification: { unobserved: [] } });
     const bare = makeEnv();
     await plannedWith(bare, [
@@ -2300,7 +2319,9 @@ describe('traces', () => {
     expect(attempted('admission_result')).toMatchObject({ forced: false, decision: { shape: 'orchestrated', decided: true, reason: null, changed_default: true } });
     expect(attempted('pre_result', 'planner')).toMatchObject({ decision: { action: 'patch', tier: 'deep', reason: null } });
     // Atomic Gate B (the default since 0.4.0) composes to the tier the coordinator called here, so it keeps it.
-    expect(attempted('pre_result', 'worker')).toMatchObject({ decision: { action: 'preserve', tier: 'standard', reason: null } });
+    expect(attempted('pre_result', 'worker')).toMatchObject({
+      decision: { action: 'preserve', tier: 'standard', reason: 'route_low_confidence' },
+    });
     // A17 item 7: every gate records whether it changed what would have happened without it.
     expect(attempted('pre_result', 'worker')).toMatchObject({ decision: { changed_default: false } });
     // T4/T11: the plan record carries the computed depth, the planner's own claim and the model agreement.
@@ -2335,7 +2356,15 @@ describe('traces', () => {
     const dir = join(tmp, 'trace-plan-retry-pinned');
     // Deep and frontier must differ for a retry to pin another allowed planner model.
     const cfg = join(tmp, 'retry-pinned-config.json');
-    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', models: { fast: 'haiku', standard: 'sonnet', deep: 'opus', frontier: 'sonnet' } }));
+    writeFileSync(
+      cfg,
+      JSON.stringify({
+        version: 5,
+        mode: 'auto',
+        admittedShape: 'hierarchy',
+        models: { fast: 'haiku', standard: 'sonnet', deep: 'opus', frontier: 'sonnet' },
+      }),
+    );
     const env = makeEnv({ JEV_GATE_TRACE_DIR: dir, JEV_GATE_CONFIG: cfg });
     await run(env, promptEvent(), fakeJev());
     const first = await run(env, plannerPre(), fakeJev());
@@ -2420,7 +2449,15 @@ describe('traces', () => {
   it('reports the frontmatter model, not the configured tier model, for an unpinned call the hook did not patch', async () => {
     const dir = join(tmp, 'trace-no-job-configured');
     const cfg = join(tmp, 'models-sonnet-frontier.json');
-    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', models: { fast: 'haiku', standard: 'sonnet', deep: 'opus', frontier: 'sonnet' } }));
+    writeFileSync(
+      cfg,
+      JSON.stringify({
+        version: 5,
+        mode: 'auto',
+        admittedShape: 'hierarchy',
+        models: { fast: 'haiku', standard: 'sonnet', deep: 'opus', frontier: 'sonnet' },
+      }),
+    );
     const env = makeEnv({ JEV_GATE_TRACE_DIR: dir, JEV_GATE_CONFIG: cfg });
     await run(env, workerPost('toolu_native', workerReply(), { tool_input: { subagent_type: 'jev-gate:worker-frontier' }, tool_response: { status: 'completed', resolvedModel: 'opus', content: [] } }));
     const records = readdirSync(dir).map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>);
@@ -2981,8 +3018,9 @@ describe('prior failure classification (A22)', () => {
     // A question about what an earlier attempt reported, asked where there was no earlier attempt, is a question
     // about nothing that every first dispatch pays for.
     expect(asked[0]).not.toContain('prior_environment_failure');
-    expect(asked[1]).toContain('prior_environment_failure');
-    expect(asked[1]).toContain('prior_report_format');
+    expect(asked[1]).not.toContain('prior_environment_failure');
+    expect(asked[1]).toHaveLength(6);
+    expect(asked[1]).not.toContain('prior_report_format');
   });
 
   it('records the kinds the rework reported and applies none of them', async () => {
@@ -3000,7 +3038,7 @@ describe('prior failure classification (A22)', () => {
       .filter((r) => r['phase'] === 'pre_result' && r['role'] === 'worker' && r['attempted'] === true)
       .sort((a, b) => String(a['written_at']).localeCompare(String(b['written_at'])));
     expect(records[0]?.['prior_failure']).toBeUndefined();
-    expect(records[1]?.['prior_failure']).toEqual({ kinds: ['prior_environment_failure', 'prior_missing_information'], unreadable: [], applied: false });
+    expect(records[1]?.['prior_failure']).toBeUndefined();
     // Two kinds that would argue against spending a stronger model are recorded, and the tier is still whatever the
     // acted-on facts decided. Reading a worker's account of its own failure as established cause is the error.
     expect(rework.kind).toBe('patch');
@@ -3120,17 +3158,16 @@ describe('receipt selection and observation keys (2026-09-20)', () => {
     const dir = join(tmp, 'trace-atomic-answers');
     const env = makeEnv({ JEV_GATE_TRACE_DIR: dir });
     await run(env, promptEvent(), fakeJev({ execution: 'orchestrated', size: 3, forbidsDelegation: 0.07, externalTools: 0.02, toolCalls: 3.6 }));
-    const record = readdirSync(dir)
-      .map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>)
-      .find((x) => x['phase'] === 'admission_result');
+    const record = readdirSync(dir).map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>).find((x) => x['phase'] === 'admission_result');
     const answers = (record?.['answers'] ?? {}) as Record<string, Record<string, unknown>>;
     // The shipped Gate A decides on these numbers, so a trace without them says which questions were asked and not
     // what was answered -- the observation cannot reproduce its own decision.
-    expect(answers['size']).toMatchObject({ type: 'score', score: 3, choice: null });
+    expect(answers['size']).toBeUndefined();
+    expect(answers['task_context']).toMatchObject({ choice: 'self_contained' });
     expect(answers['tool_calls']).toMatchObject({ type: 'score', score: 3.6, choice: null });
     expect(answers['forbids_delegation']).toMatchObject({ type: 'noul', noul: 0.07 });
-    expect(answers['external_tools']).toMatchObject({ type: 'noul', noul: 0.02 });
-    expect(record?.['estimate']).toEqual({ turns: 41.5, saving_tokens: (41.5 - 11) * 406_000 - 41.5 * 40_000 });
+    expect(answers['external_tools']).toBeUndefined();
+    expect(record?.['estimate']).toEqual({ turns: 41.5, saving_tokens: (41.5 - 11) * 406_000 - 41.5 * 40_000, cost_support: 1 });
   });
 });
 
@@ -3141,7 +3178,10 @@ describe('plan interpretation (A23)', () => {
   let a23Seq = 0;
   const a23Env = (on: boolean, extra: Record<string, string> = {}): ReturnType<typeof makeEnv> => {
     const cfg = join(tmp, `a23-${(a23Seq += 1)}.json`);
-    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', ...(on ? { planInterpretation: true } : {}) }));
+    writeFileSync(
+      cfg,
+      JSON.stringify({ version: 5, mode: 'auto', admittedShape: 'hierarchy', ...(on ? { planInterpretation: true } : {}) }),
+    );
     return makeEnv({ JEV_GATE_CONFIG: cfg, ...extra });
   };
 
@@ -3243,5 +3283,112 @@ describe('plan interpretation (A23)', () => {
     await seedPlanned(env, PLAN_REPLY, fetchImpl);
     expect(state(env).current.plan).toBeNull();
     expect(state(env).current.phase).toBe('planning');
+  });
+});
+
+describe('atomic required request delivery and root handoff (#108/#111)', () => {
+  const envFor = () => {
+    const cfg = join(tmp, `required-${compositeSeq++}.json`);
+    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', admittedShape: 'single' }));
+    return makeEnv({ JEV_GATE_CONFIG: cfg });
+  };
+  it('supersedes the old guarded generation before refusing an oversized new request, with HTTP0', async () => {
+    const env = envFor();
+    const fetchImpl = fakeJev();
+    await run(env, promptEvent(), fetchImpl);
+    const before = fetchImpl.mock.calls.length;
+    const r = await run(env, promptEvent({ prompt_id: 'p2', prompt: 'r'.repeat(65537) }), fetchImpl);
+    expect(r.code).toBe('admission_delivery_failed');
+    expect(fetchImpl).toHaveBeenCalledTimes(before);
+    expect(state(env).current).toMatchObject({ prompt_id: 'p2', shape: 'direct' });
+    expect(state(env).current.admission_revision).toBeUndefined();
+    expect(state(env).history[0]?.admission_revision).toBe('atomic-context-v1');
+    expect((await run(env, preEvent('Edit', { file_path: 'src/a.ts' }), fetchImpl)).kind).toBe('skip');
+  });
+  it.each(['ASCII', '한국어😀"\\\n'])('uses UTF-8 boundaries for the actual minimum single packet: %s', (prefix) => {
+    const fixed = Buffer.byteLength(composeSingleWorkerPrompt('', prefix, true), 'utf8');
+    const request = prefix + 'r'.repeat(MAX_COMPOSED_BYTES - fixed);
+    expect(Buffer.byteLength(composeSingleWorkerPrompt('', request, true), 'utf8')).toBe(MAX_COMPOSED_BYTES);
+    return (async () => {
+      const env = envFor();
+      const fetchImpl = fakeJev();
+      const r = await run(env, promptEvent({ prompt: request + 'r' }), fetchImpl);
+      expect(r.code).toBe('admission_delivery_failed');
+      expect(fetchImpl).not.toHaveBeenCalled();
+      expect(state(env).current.shape).toBe('direct');
+    })();
+  });
+  it.each([-1, 0, 1])('checks the complete final packet before reservation or paid Gate B, byte delta %s', async (delta) => {
+    const env = envFor();
+    const fetchImpl = fakeJev();
+    const brief = 'Do this.';
+    const overhead = Math.max(
+      ...(['fast', 'standard', 'deep', 'frontier'] as const).map((t) =>
+        Buffer.byteLength(composeSingleWorkerPrompt(brief, '', true) + renderSingleRouteNote(t), 'utf8'),
+      ),
+    );
+    const request = '한국어😀"\\\n' + 'r'.repeat(MAX_COMPOSED_BYTES - overhead - Buffer.byteLength('한국어😀"\\\n') + delta);
+    await run(env, promptEvent({ prompt: request }), fetchImpl);
+    expect(state(env).current.execution).toBe('single');
+    const before = fetchImpl.mock.calls.length;
+    const r = await run(env, preEvent('Agent', agentInput({ prompt: brief })), fetchImpl);
+    if (delta <= 0) {
+      expect(r.kind).toBe('patch');
+      expect(String(updatedInput(r).prompt)).toContain(request);
+      expect(state(env).current.active['toolu_1']).toBeDefined();
+    } else {
+      expect(r.kind).toBe('deny');
+      expect(fetchImpl).toHaveBeenCalledTimes(before);
+      expect(state(env).current.active).toEqual({});
+      expect(state(env).current.attempts.tasks).toEqual({});
+      expect(state(env).current.root_fallback_reason).toBe('delivery_failed');
+      expect(String(hookOutput(r).permissionDecisionReason)).toContain('No worker attempt');
+      expect((await run(env, preEvent('Bash', { command: 'npm test' }), fetchImpl)).kind).toBe('skip');
+    }
+  });
+  it.each(['omitted', '한국어 원문 "x" 😀\n제약: 기존 이름 유지'])(
+    'preserves a required original even on pinned model bypass: %s',
+    async (request) => {
+      const env = envFor();
+      const fetchImpl = fakeJev();
+      await run(env, promptEvent({ prompt: request }), fetchImpl);
+      const r = await run(env, preEvent('Agent', agentInput({ prompt: 'Do this.', model: 'opus' })), fetchImpl);
+      expect(updatedInput(r).model).toBe('opus');
+      expect(String(updatedInput(r).prompt)).toContain(request);
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(state(env).current.admission_revision).toBe('atomic-context-v1');
+    },
+  );
+  it('does not release an active worker when another oversized dispatch arrives', async () => {
+    const env = envFor();
+    const fetchImpl = fakeJev();
+    await run(env, promptEvent(), fetchImpl);
+    await run(env, preEvent('Agent', agentInput({ prompt: 'Do this.' })), fetchImpl);
+    const before = fetchImpl.mock.calls.length;
+    const r = await run(
+      env,
+      preEvent('Agent', agentInput({ prompt: 'r'.repeat(MAX_COMPOSED_BYTES) }), { tool_use_id: 'toolu_2' }),
+      fetchImpl,
+    );
+    expect(r.code).toBe('task_active');
+    expect(fetchImpl).toHaveBeenCalledTimes(before);
+    expect(Object.keys(state(env).current.active)).toEqual(['toolu_1']);
+    expect(state(env).current.root_fallback).toBeUndefined();
+  });
+  it('releases the guard only after terminal acceptance, keeps outcome undecided, and ignores a duplicate post', async () => {
+    const env = envFor();
+    const fetchImpl = fakeJev();
+    await run(env, promptEvent(), fetchImpl);
+    await run(env, preEvent('Agent', agentInput({ prompt: 'Do this.' })), fetchImpl);
+    const event = workerPost('toolu_1', workerReply({ checks: [{ check_id: 'npm test', result: 'pass', note: '' }] }));
+    const post = await run(env, event, fetchImpl);
+    expect(context(post)).toContain('confirmed command pass 1');
+    expect(state(env).current).toMatchObject({ root_fallback: true, root_fallback_reason: 'accepted', outcome: null });
+    expect((await run(env, preEvent('Bash', { command: 'npm test' }), fetchImpl)).kind).toBe('skip');
+    expect((await run(env, preEvent('Edit', { file_path: 'src/a.ts' }), fetchImpl)).kind).toBe('skip');
+    const receipt = state(env).current.receipts[0];
+    await run(env, event, fetchImpl);
+    expect(state(env).current.receipts).toEqual([receipt]);
+    expect(state(env).current.outcome).toBeNull();
   });
 });

@@ -16,7 +16,13 @@ const engineOf = ($: EngineInterface): RouterEngine => ({
   sleep: (ms, signal) => $.clock.sleep(ms, { signal }),
   now: () => Date.now(),
   envKey: () => $.env.get('TYPESAFE_API_KEY'),
-  pins: async (): Promise<HostPins> => {
+  pins: async (scope = 'spawn'): Promise<HostPins> => {
+    if (scope === 'effort')
+      return { mainModel: false, mainEffort: set(await $.env.get('CLAUDE_CODE_EFFORT_LEVEL')), subagentModel: false, aliasRemap: false };
+    if (scope === 'root') {
+      const [model, effort] = await Promise.all([$.env.get('ANTHROPIC_MODEL'), $.env.get('CLAUDE_CODE_EFFORT_LEVEL')]);
+      return { mainModel: set(model), mainEffort: set(effort), subagentModel: false, aliasRemap: false };
+    }
     const [mainModel, mainEffort, subagent, subagentForce, opus, sonnet, haiku] = await Promise.all([
       $.env.get('ANTHROPIC_MODEL'),
       $.env.get('CLAUDE_CODE_EFFORT_LEVEL'),
@@ -78,6 +84,8 @@ export const registerRouter = (on: On, config: RouterConfig): void => {
       quietly(() => router.turnStart(e));
       return next(e);
     });
+  }
+  if (router.stepEnabled) {
     on('turn.complete', ($, e, next) => {
       quietly(() => router.turnComplete(e));
       return next(e);

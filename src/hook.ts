@@ -4,14 +4,12 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
-  ADMISSION_FACT_QUESTIONS,
   buildAdmissionRequest,
   buildAtomicAdmissionRequest,
   decideAdmission,
   decideAdmissionAtomic,
   delegationModel,
   resolveAdmittedShape,
-  shapeRecommendation,
   type AdmissionDecision,
   type AdmissionEstimate,
   type AdmissionState,
@@ -23,8 +21,6 @@ import {
   decidePlannerRoute,
   decideWorkerRoute,
   decideWorkerRouteAtomic,
-  PRIOR_FAILURE_FACT_QUESTIONS,
-  priorFailureClassification,
   WORKER_FACT_QUESTIONS,
   type PlannerRouteDecision,
   type WorkerRouteDecision,
@@ -61,6 +57,8 @@ import { looksSecret, mandatoryGroups, optionalGroups, readLeanSource, SOURCE_MA
 import { readSessionDepth, type DepthReading } from './depth.js';
 import {
   GUARD_DENY_REASON,
+  SINGLE_GUARD_DENY_REASON,
+  SINGLE_STOP_REASON,
   renderDirectGuidance,
   renderDispatchDeny,
   renderLeanRecommendation,
@@ -395,7 +393,7 @@ const leanSourceTrace = (source: LeanSource, unasked: number | null): Record<str
 export const runHook = async (deps: HookDeps): Promise<HookResult> => {
   const startedAt = deps.startedAt ?? Date.now();
   const skip = (code: ErrorCode | null = null): HookResult => ({ kind: 'skip', code, stdout: null });
-  const preserve = (code: ErrorCode): HookResult => ({ kind: 'preserve', code, stdout: null });
+  const preserve = (code: ErrorCode | null): HookResult => ({ kind: 'preserve', code, stdout: null });
 
   const read = await readAll(deps.stdin);
   if ('code' in read) return skip(read.code);
@@ -1005,6 +1003,23 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       return emitContext('UserPromptSubmit', renderDirectGuidance(mode), 'key_missing');
     }
 
+    const atomicAdmission = config.admissionQuestionShape === 'atomic';
+    const requiredAdmission = mode === 'auto' && !forced && atomicAdmission;
+    const minimumSingleFits = Buffer.byteLength(composeSingleWorkerPrompt('', prompt, true), 'utf8') <= MAX_COMPOSED_BYTES;
+    if (
+      requiredAdmission &&
+      (Buffer.byteLength(prompt, 'utf8') > REQUEST_MAX_BYTES || (config.admittedShape === 'single' && !minimumSingleFits))
+    ) {
+      trace?.write('admission_result', {
+        ...base,
+        attempted: false,
+        known_not_sent: true,
+        decision: { shape: 'direct', decided: false, reason: 'admission_delivery_failed', changed_default: false },
+      });
+      appendLiveness(deps.env, { at: nowIso(), attempted: false, reason: 'admission_delivery_failed' });
+      return emitContext('UserPromptSubmit', renderDirectGuidance(mode), 'admission_delivery_failed');
+    }
+
     /**
      * Decision 1 of the depth gate: how deep the session already is is read from the host's transcript, never asked of
      * Jev, and it is read before Gate A rather than after, so a shallow prompt costs no request at all. The same
@@ -1014,6 +1029,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     const depth: DepthReading = deps.host ? deps.host.depth() : readSessionDepth(input.transcript_path);
     // Gate A's read-offs, kept for `admittedShape: auto`; null on every path that asked nothing (forced, native).
     let admissionAnswers: Record<string, unknown> | null = null;
+    let selectedExecution: 'single' | 'hierarchy' | null = null;
     const contextTokens = depth.ok ? depth.tokens : null;
     const depthFacts = {
       context_tokens: contextTokens,
@@ -1075,33 +1091,41 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
          * `admissionConfidenceFloor`, as atomic Gate B never consults `routeConfidenceFloor`; the depth test it applies
          * is the same one the branch above already passed, so on this path it can only agree.
          */
-        const atomicAdmission = config.admissionQuestionShape === 'atomic';
-        const admissionKeys: string[] = atomicAdmission ? Object.keys(ADMISSION_FACT_QUESTIONS) : ['execution'];
         // The explicit return type is what lets one call site carry both shapes: callGate cannot infer Q from a union.
         const admissionRequest = (): JevRequest<AdmissionState, Record<string, unknown>> =>
           atomicAdmission ? buildAtomicAdmissionRequest(prompt, config) : buildAdmissionRequest(prompt, config);
-        let admitted: (AdmissionDecision & { estimate?: AdmissionEstimate | null }) | null = null;
+        const request = admissionRequest();
+        let admitted: (AdmissionDecision & { estimate?: AdmissionEstimate | null; execution?: 'single' | 'hierarchy' | null }) | null =
+          null;
         const gate = await callGate(
-          admissionRequest(),
+          request,
           'admission_intent',
           'admission_result',
           { prompt_len: prompt.length, prompt_sha256: sha256(prompt), ...depthFacts, ...floorFacts },
-          admissionKeys,
+          Object.keys(request.questions),
           (outcome) => {
             if (!outcome.ok) return { forced: false, decision: { shape: 'direct', decided: false, reason: outcome.code, changed_default: false } };
             if (atomicAdmission) admissionAnswers = outcome.response.answers;
             admitted = atomicAdmission
-              ? decideAdmissionAtomic(outcome.response.answers, contextTokens, floor, delegationModel(config))
+              ? decideAdmissionAtomic(outcome.response.answers, contextTokens, floor, delegationModel(config), config)
               : decideAdmission(outcome.response.answers, config.admissionConfidenceFloor);
+            if (atomicAdmission && admitted.execution === 'single' && !minimumSingleFits)
+              admitted = { ...admitted, shape: 'direct', execution: null, decided: false, reason: 'admission_delivery_failed' };
+            selectedExecution = admitted.execution ?? null;
             // A17 item 7: without Jev this turn would have been one native conversation.
             return {
               forced: false,
-              decision: { shape: admitted.shape, decided: admitted.decided, reason: admitted.reason, changed_default: admitted.decided && admitted.shape === 'orchestrated' },
+              decision: {
+                shape: admitted.shape,
+                decided: admitted.decided,
+                reason: admitted.reason,
+                changed_default: admitted.decided && admitted.shape === 'orchestrated',
+              },
               // The priced turn count and saving behind the decision, so a later run can compare them with what the
               // turn actually took.
               ...(admitted.estimate ? { estimate: admitted.estimate } : {}),
-              // A21: recorded beside the decision. `applied` says whether `admittedShape: auto` let it pick the shape.
-              ...(atomicAdmission ? { recommendation: shapeRecommendation(outcome.response.answers, config.admittedShape === 'auto') } : {}),
+              // Selected policy is not application evidence; only the successful state write below installs it.
+              ...(atomicAdmission ? { selected_execution: selectedExecution, policy_revision: 'atomic-context-v1' } : {}),
             };
           },
         );
@@ -1125,7 +1149,8 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     // the worker is told the user's own words come first. Stored whole or not at all -- never truncated into a
     // half-specification that reads as complete.
     const carriedRequest = Buffer.byteLength(prompt, 'utf8') <= REQUEST_MAX_BYTES ? prompt : null;
-    const executed = resolveAdmittedShape(config.admittedShape, admissionAnswers);
+    const executed = requiredAdmission ? selectedExecution : resolveAdmittedShape(config.admittedShape, admissionAnswers);
+    if (executed === null) return emitContext('UserPromptSubmit', renderDirectGuidance(mode), 'admission_shape_unknown');
     let stale = false;
     const applied = updateJob(deps.env, sessionId, (prev) => {
       if (!prev || prev.current.prompt_id !== promptId) {
@@ -1134,7 +1159,12 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       }
       // A19: the execution shape is fixed at admission from the config this turn loaded, so a config edit mid-job
       // cannot change what a running generation is.
-      const next = { ...prev.current, shape, request: carriedRequest };
+      const next = {
+        ...prev.current,
+        shape,
+        request: carriedRequest,
+        ...(requiredAdmission ? { admission_revision: 'atomic-context-v1' as const } : {}),
+      };
       return { ...prev, current: executed === 'single' ? { ...next, execution: 'single' as const } : next };
     });
     // A newer prompt owns the session now; this turn does not get to turn orchestration on behind it.
@@ -1323,7 +1353,11 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     return null;
   };
 
-  const handleWorker = async (gen: JobGeneration, sessionId: string, eligibility: Extract<Eligibility, { eligible: true }>): Promise<HookResult> => {
+  const handleWorker = async (
+    gen: JobGeneration,
+    sessionId: string,
+    eligibility: Extract<Eligibility, { eligible: true }>,
+  ): Promise<HookResult> => {
     const plan = gen.plan;
     if (gen.phase !== 'planned' || !plan) return emitDeny('phase_not_planned', renderDispatchDeny('phase_not_planned', gen.phase), null);
     const marker = parseTaskMarker(eligibility.prompt);
@@ -1405,10 +1439,11 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       return emitWorkerPatch({ prompt: composed + note(eligibility.tier) }, mode === 'native' ? 'mode_native' : eligibility.pinned ? 'pinned' : 'key_missing');
     }
     let routed: WorkerRouteDecision | null = null;
+    const request = routeRequest(task, plan.constraints, predecessors, eligibility.prompt, eligibility.tier, priorAttempt, carriedRequest);
     const gate = await callGate(
       // A20: the worker will read the brief, the request, the contract and any prior attempt. Every one of those is a
       // field of this state except the request, which was the one that says what the work is for.
-      routeRequest(task, plan.constraints, predecessors, eligibility.prompt, eligibility.tier, priorAttempt, carriedRequest),
+      request,
       'pre_intent',
       'pre_result',
       {
@@ -1421,19 +1456,14 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         prior_attempt_omitted: carried === 'omitted',
         tool_input: summarizeToolInput(eligibility.input),
       },
-      routeAnswerKeys(priorAttempt !== null),
+      Object.keys(request.questions),
       (outcome) => {
         // A preserve keeps the model the coordinator called, which the hook never names, so the recorded model is
         // null there rather than the tier's model -- the two are not the same claim.
         if (!outcome.ok) return { decision: { action: 'preserve', tier: eligibility.tier, reason: outcome.code, changed_default: false, model: null } };
         routed = routeDecision(outcome.response.answers, eligibility.tier);
         // A17 item 7: without Jev this dispatch would have run on the profile the coordinator called.
-        return {
-          decision: { action: routed.action, tier: routed.tier, reason: routed.reason, changed_default: routed.action === 'patch' && routed.tier !== eligibility.tier, model: routed.action === 'patch' ? config.models[routed.tier] : null },
-          // A22: recorded on a rework only, and read by no policy. The tier this dispatch got was decided by the
-          // facts above; this says what the previous attempt reported was wrong with it.
-          ...(atomicRoute && priorAttempt !== null ? { prior_failure: priorFailureClassification(outcome.response.answers) } : {}),
-        };
+        return { decision: { action: routed.action, tier: routed.tier, reason: routed.reason, changed_default: routed.action === 'patch' && routed.tier !== eligibility.tier, model: routed.action === 'patch' ? config.models[routed.tier] : null } };
       },
     );
     // T2: the router failing is a valid call that keeps its profile; the turn moving on is a call that must not run.
@@ -1457,9 +1487,6 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
    * shape, so an observation says which questions were actually asked.
    */
   const atomicRoute = config.routeQuestionShape === 'atomic';
-  /** A22: the prior-failure facts exist only on a rework, so the whitelist that records answers has to follow. */
-  const routeAnswerKeys = (hasPrior: boolean): string[] =>
-    atomicRoute ? [...Object.keys(WORKER_FACT_QUESTIONS), ...(hasPrior ? Object.keys(PRIOR_FAILURE_FACT_QUESTIONS) : [])] : ['route', 'upgrade_basis'];
   const routeRequest = (
     task: PlannedTask,
     constraints: string[],
@@ -1512,8 +1539,61 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
      * gate, an unreadable answer -- dispatched a worker with the brief alone and no statement of the work.
      */
     let carried: string | 'omitted' | null = carriedRequest;
-    let composed = composeSingleWorkerPrompt(eligibility.prompt, carried);
-    if (Buffer.byteLength(composed, 'utf8') + ROUTE_NOTE_MAX_BYTES > MAX_COMPOSED_BYTES && carried !== null && carried !== 'omitted') {
+    const requiredRequest = single?.gen.admission_revision === 'atomic-context-v1';
+    let composed = composeSingleWorkerPrompt(eligibility.prompt, carried, requiredRequest);
+    if (requiredRequest) {
+      const fits =
+        typeof single?.gen.request === 'string' &&
+        TIERS.every((tier) => {
+          const prompt = composed + renderSingleRouteNote(tier);
+          return (
+            Buffer.byteLength(prompt, 'utf8') <= MAX_COMPOSED_BYTES &&
+            renderPreToolUseOutput({ kind: 'update', updatedInput: patchAgentInput(eligibility.input, { prompt }) }) !== null &&
+            renderPreToolUseOutput({
+              kind: 'update',
+              updatedInput: patchAgentInput(eligibility.input, {
+                prompt,
+                model: config.models[tier],
+                subagent_type: agentForTier('worker', tier),
+              }),
+            }) !== null
+          );
+        });
+      if (!fits && single) {
+        let handedOff = false;
+        let stale = false;
+        let active = false;
+        const saved = updateJob(deps.env, single.sessionId, (prev) => {
+          if (!prev || prev.current.prompt_id !== single.gen.prompt_id || prev.current.execution !== 'single') {
+            stale = true;
+            return null;
+          }
+          if (Object.keys(prev.current.active).length) {
+            active = true;
+            return null;
+          }
+          handedOff = true;
+          return { ...prev, current: { ...prev.current, root_fallback: true, root_fallback_reason: 'delivery_failed' } };
+        });
+        if (stale) return emitDeny('stale_generation', renderDispatchDeny('stale_generation'), null);
+        if (active) return emitDeny('task_active', renderDispatchDeny('task_active'), null);
+        trace?.write('guard', { ...base, tool_name: 'Agent', allow: false, reason: 'admission_delivery_failed',
+          root_fallback: saved.ok && handedOff, root_fallback_reason: 'delivery_failed', stopped: false });
+        return emitDeny(
+          'dispatch_ineligible',
+          saved.ok && handedOff
+            ? 'The complete user request cannot fit this worker dispatch. No worker attempt or Gate B call was made. Jev Gate released the root guard; continue this request in the main session.'
+            : 'The complete user request cannot fit this worker dispatch and root handoff could not be saved. No worker was dispatched; inspect the current job.',
+          null,
+        );
+      }
+    }
+    if (
+      !requiredRequest &&
+      Buffer.byteLength(composed, 'utf8') + ROUTE_NOTE_MAX_BYTES > MAX_COMPOSED_BYTES &&
+      carried !== null &&
+      carried !== 'omitted'
+    ) {
       // T9: a request that does not fit is dropped with a visible marker, never truncated into a half-specification.
       carried = 'omitted';
       composed = composeSingleWorkerPrompt(eligibility.prompt, carried);
@@ -1529,7 +1609,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
      */
     const emitWorkerPatch = (patch: Parameters<typeof patchAgentInput>[1], code: ErrorCode | null): HookResult => emitPatch(eligibility.input, patch, code);
     /** A preserve leaves the model exactly as the coordinator called it. That is all it leaves alone. */
-    const preserveAdhoc = (code: ErrorCode, tier: Tier = eligibility.tier): HookResult =>
+    const preserveAdhoc = (code: ErrorCode | null, tier: Tier = eligibility.tier): HookResult =>
       carriedRequest === null ? preserve(code) : emitWorkerPatch({ prompt: composed + note(tier) }, code);
     if (single !== null) {
       // A4: reserved before any HTTP call, and before the routing outcome, so every single dispatch is recorded --
@@ -1612,12 +1692,13 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     // A19/A20: the brief is not the work on this shape -- the request is -- and the adhoc contract above is empty, so
     // without the request the gate classifies a covering note. It is sent as the field the worker receives it as
     // rather than in place of the brief: substituting one for the other hid half of the packet either way.
+    const request = routeRequest(task, [], [], eligibility.prompt, eligibility.tier, null, carried);
     const gate = await callGate(
-      routeRequest(task, [], [], eligibility.prompt, eligibility.tier, null, carried),
+      request,
       'pre_intent',
       'pre_result',
       { role: 'worker', task_id: 'adhoc', called_tier: eligibility.tier, tool_input: summarizeToolInput(eligibility.input) },
-      routeAnswerKeys(false),
+      Object.keys(request.questions),
       (outcome) => {
         // A preserve keeps the model the coordinator called, which the hook never names, so the recorded model is
         // null there rather than the tier's model -- the two are not the same claim.
@@ -1635,7 +1716,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     if (!gate.outcome.ok) return preserveAdhoc(gate.outcome.code);
     if (routed === null) return preserveAdhoc('route_invalid');
     const decision: WorkerRouteDecision = routed;
-    if (decision.action === 'preserve') return preserveAdhoc(decision.reason ?? 'route_invalid', decision.tier);
+    if (decision.action === 'preserve') return preserveAdhoc(decision.reason, decision.tier);
     return emitWorkerPatch(
       { subagent_type: agentForTier('worker', decision.tier), model: config.models[decision.tier], prompt: composed + note(decision.tier) },
       null,
@@ -1659,7 +1740,17 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
 
     if (!orchestrated) {
       if (toolName !== 'Agent') return skip(gen ? 'shape_direct' : 'no_state');
-      if (gen?.root_fallback && ownedCall) return emitDeny('bounds_exhausted', renderDispatchDeny('bounds_exhausted', 'single worker cap reached; continue in the root session'), null);
+      if (
+        gen?.root_fallback &&
+        ownedCall &&
+        (gen.root_fallback_reason !== 'accepted' ||
+          OWNED_AGENTS[String(isRecord(input.tool_input) ? input.tool_input['subagent_type'] : '')]?.role === 'planner')
+      )
+        return emitDeny(
+          'bounds_exhausted',
+          renderDispatchDeny('bounds_exhausted', 'root handoff is active; continue in the main session'),
+          null,
+        );
       if (!ownedCall) return skip('role_not_owned');
       const eligibility = checkEligibility(input, deps.env, config);
       if (!eligibility.eligible) return preserve(eligibility.code);
@@ -1685,7 +1776,8 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       if (!counted.ok) denials = generation.denials + 1;
       const stopped = denials >= DENIALS_BEFORE_STOP;
       trace?.write('guard', { ...base, tool_name: toolName, allow: false, denials, stopped });
-      return emitDeny('guard_denied', GUARD_DENY_REASON, stopped ? STOP_REASON : null);
+      const single = generation.execution === 'single';
+      return emitDeny('guard_denied', single ? SINGLE_GUARD_DENY_REASON : GUARD_DENY_REASON, stopped ? single ? SINGLE_STOP_REASON : STOP_REASON : null);
     }
 
     const eligibility = checkEligibility(input, deps.env, config);
@@ -1902,6 +1994,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     // observed failure, a pass that cannot be seen, or a pass that is not after the last observed edit turns an
     // accept into incomplete. Run the declared exact check in the foreground and report its actual result.
     let verification: CheckVerification | undefined;
+    let observedClaimCount = 0;
     let formatOnly = false;
     let formatHint = '';
     if (config.verifyWorkerChecks && parsed !== null && parsed.ok) {
@@ -1917,6 +2010,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
             const declared = task?.checks.find((k) => k.id === c.check_id && k.required);
             return declared ? [{ id: c.check_id, command: declared.command }] : [];
           });
+      observedClaimCount = claims.length;
       const observation = deps.host ? deps.host.observation(agentId) : path === null ? null : readWorkerObservation(path);
       verification = verifyChecks(observation, claims);
       if (isSingle && finalVerdict === 'accept' && evidenceFormatOnly(observation, claims, verification)) {
@@ -1941,7 +2035,13 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     const dispatchedType = str(isRecord(input.tool_input) ? input.tool_input['subagent_type'] : null);
     const written = updateJob(deps.env, sessionId, (prev) => {
       // A2: both the generation and the plan revision must still be the ones this result belongs to.
-      if (!prev || prev.current.prompt_id !== gen.prompt_id || (prev.current.plan?.rev ?? null) !== (gen.plan?.rev ?? null)) return null;
+      if (
+        !prev ||
+        prev.current.prompt_id !== gen.prompt_id ||
+        (prev.current.plan?.rev ?? null) !== (gen.plan?.rev ?? null) ||
+        own(prev.current.active, toolUseId)?.attempt !== reservation.attempt
+      )
+        return null;
       let next = release(prev.current, toolUseId);
       const receipt: Receipt = {
         task_id: taskId,
@@ -1965,12 +2065,22 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       };
       // T1: the receipt is appended, so the latest attempt is the one that decides; earlier ones stay in the array.
       next = { ...next, receipts: [...next.receipts.filter((r) => r.tool_use_id !== toolUseId), receipt] };
-      const rootFallback = isSingle && finalVerdict !== 'accept' && boundExhausted(next, 'task', SINGLE_TASK_ID);
-      if (rootFallback) next = { ...next, root_fallback: true };
+      const acceptedHandoff =
+        status === 'completed' && finalVerdict === 'accept' && Object.keys(next.active).length === 0 && (isSingle || planComplete(next));
+      const rootFallback = acceptedHandoff || (isSingle && finalVerdict !== 'accept' && boundExhausted(next, 'task', SINGLE_TASK_ID));
+      const rootFallbackReason = acceptedHandoff ? ('accepted' as const) : ('attempt_cap' as const);
+      if (rootFallback) next = { ...next, root_fallback: true, root_fallback_reason: rootFallbackReason };
+      const passedCount = parsed?.ok ? parsed.value.checks.filter((c) => c.result === 'pass').length : 0;
+      const confirmedCount = verification
+        ? Math.max(0, observedClaimCount - new Set([...verification.contradicted, ...verification.stale, ...verification.unobserved]).size)
+        : 0;
+      const checks = verification
+        ? `Check evidence: reported pass ${passedCount}; confirmed command pass ${confirmedCount}; transcript ${verification.transcript}; contradicted ${verification.contradicted.length}; stale ${verification.stale.length}; unobserved ${verification.unobserved.length}. Confirmation covers matched command runs and observed edit timing only; this does not establish requirement coverage.`
+        : `Check evidence: reported pass ${passedCount}; observation disabled or unavailable. No verified pass is claimed.`;
       if (isSingle) {
         // A19: rework and replan are hierarchy verdicts; this path only ever produces the four below.
         const shown = finalVerdict === 'accept' || finalVerdict === 'invalid' || finalVerdict === 'unknown' ? finalVerdict : 'incomplete';
-        context = renderSingleResult(shown, reason ?? '', { formatHint, rootFallback });
+        context = renderSingleResult(shown, reason ?? '', { formatHint, rootFallback, rootFallbackReason, checks });
       } else if (finalVerdict === 'accept') {
         const ready = readyForDispatch(next);
         // #53 review: "nothing else is ready" was the proxy here, and it is true while an independent sibling is still
@@ -1979,11 +2089,14 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
           workerIsolation: config.workerIsolation,
           mainSessionSteps: next.plan?.main_session_steps ?? [],
           isLastTask: planComplete(next),
+          rootHandoff: acceptedHandoff,
+          checks,
         });
       } else if (finalVerdict === 'rework' || finalVerdict === 'replan') context = renderWorkerReported(taskId, finalVerdict, reason ?? '');
       else if (finalVerdict === 'unknown') context = renderWorkerUnknown(taskId);
       else if (finalVerdict === 'invalid') context = renderWorkerInvalid(taskId, reason ?? 'unparsable reply');
       else context = renderWorkerIncomplete(taskId, reason ?? 'the reported checks do not satisfy the contract');
+      if (!isSingle && finalVerdict !== 'accept') context += ` ${checks}`;
       trace?.write('post', {
         ...base,
         task_id: taskId,
@@ -1991,15 +2104,18 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         attempt,
         verdict: finalVerdict,
         verdict_reason: reason,
-        reported_checks: parsed?.ok ? {
-          pass: parsed.value.checks.filter((check) => check.result === 'pass').length,
-          fail: parsed.value.checks.filter((check) => check.result === 'fail').length,
-          not_run: parsed.value.checks.filter((check) => check.result === 'not_run').length,
-        } : null,
+        reported_checks: parsed?.ok
+          ? {
+            pass: parsed.value.checks.filter((check) => check.result === 'pass').length,
+            fail: parsed.value.checks.filter((check) => check.result === 'fail').length,
+            not_run: parsed.value.checks.filter((check) => check.result === 'not_run').length,
+          }
+          : null,
         ready_task_ids: finalVerdict === 'accept' && !isSingle ? readyForDispatch(next) : [],
         plan_complete: !isSingle && planComplete(next),
         evidence_format_only: formatOnly,
         root_fallback: rootFallback,
+        ...(rootFallback ? { root_fallback_reason: rootFallbackReason } : {}),
         advisory: null,
         // #48 P0-2: the same two fields the native no-job branch above records, so an orchestrated dispatch and an
         // unrecorded native one read the same way in `explain` -- what subagent_type ran, and what model it resolved

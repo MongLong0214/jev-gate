@@ -80,7 +80,9 @@ Three different gaps:
 - No `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` in the environment Claude Code starts in: Compact, Output, and the Router are not loaded. Gate's command hooks and the Evidence server still run.
 - Foreground conditions unmet (a session that cannot run a foreground worker, or a concrete subagent-model override): Gate `auto` and `lean` stay native and send no Gate request. See [Advanced usage](docs/advanced-usage.md).
 
-Every part defaults to on. That does not mean every prompt is compacted, folded, routed, or delegated. Gate often stays native: a direct admission, a shallow session, a missing key, or no `prompt_id` are different cases, and none of them is a failure of the install. `gateMode` `off` does not turn the other parts off. There is no master switch and no `evidenceEnabled` option.
+Every part defaults to on. That does not mean every prompt is compacted, folded, routed, or delegated. At the default concurrency of 1, an admitted automatic task uses one worker for investigation, implementation and checks, without a separate planner. Jev facts are batched into one request per eligible gate event. Router bounds all preparation to 800ms by default and skips requests that cannot change the final settings. The dashboard shows recorded Jev response times; these rules do not guarantee end-to-end speed or token savings.
+
+Gate often stays native: a direct admission, a shallow session, a missing key, or no `prompt_id` are different cases, and none of them is a failure of the install. `gateMode` `off` does not turn the other parts off. There is no master switch and no `evidenceEnabled` option.
 
 Gate workers, planners, and the lean executor inherit the tools and connected MCPs that Claude Code provides to their session. A worker can inspect a linked Figma file or use an available browser or other MCP directly when its task needs one. Pass the target URL or ID and any restrictions in the brief. Host permissions still apply; `guardAllowMcp` controls only the admitted root session's guard, not a worker's tools.
 

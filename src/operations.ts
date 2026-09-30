@@ -207,6 +207,9 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
     }
     if (phase === 'admission_result') {
       details.push(text(`세션 문맥 ${n(number(r['context_tokens']))} 토큰`, `실행 floor ${n(number(r['depth_floor']))}`, token(r['depth_floor_source']), number(r['host_window']) === null ? null : `호스트 창 ${n(number(r['host_window']))} 토큰`));
+      const selected = token(r['selected_execution']);
+      if (selected) details.push(`선택한 실행 형태 ${selected} · 실제 적용 전 정책 결정`);
+      if (number(estimate?.['cost_support']) !== null) details.push(`비용 정책 지지 ${(number(estimate?.['cost_support'])! * 100).toFixed(1)}% · 실제 절감 확률 아님`);
       if (number(estimate?.['turns']) !== null) details.push(`계산에 사용한 루트 턴 ${n(number(estimate?.['turns']))}회`);
     }
     if (phase === 'pre_result') details.push(text(`요청 ${token(r['called_tier']) ?? '?'}`, `적용 ${tier ?? '원래 프로필'}`, token(decision?.['model'])));
@@ -265,7 +268,7 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
     if (list(r['ready_task_ids']).length) details.push(`다음 실행 가능: ${list(r['ready_task_ids']).join(', ')}`);
     if (r['plan_complete'] === true) details.push('계획의 모든 작업 수락');
     if (r['evidence_format_only'] === true) details.push('검사 명령 형식만 불일치 · 한 번의 무료 재검증 가능');
-    if (r['root_fallback'] === true) details.push('단일 워커 시도 상한 · 루트 도구 가드 해제');
+    if (r['root_fallback'] === true) details.push(r['root_fallback_reason'] === 'accepted' ? '종료된 작업 수락 · 루트에서 남은 확인 가능 · 전체 요구사항 검증과는 다름' : r['root_fallback_reason'] === 'delivery_failed' ? '필수 원문 전달 불가 · 루트 복귀' : '단일 워커 시도 상한 · 루트 도구 가드 해제');
     if (r['orphaned'] === true) details.push('이전 세대의 늦은 결과 · 현재 계획 미진행');
   } else if (phase === 'lean_dispatch') {
     lane = 'policy';
@@ -279,6 +282,7 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
     lane = 'policy';
     summary = text(token(r['tool_name']) ?? '도구', r['allow'] === false ? '거절' : '가드 통과', r['stopped'] === true ? '예산 소진 · 턴 중단' : null);
     details.push(`누적 거절 ${n(number(r['denials']))}회`);
+    if (r['reason'] === 'admission_delivery_failed') details.push(r['root_fallback'] === true ? '필수 원문 전달 불가 · 워커 미실행 · 루트에서 계속 진행' : '필수 원문 전달 불가 · 루트 복귀 저장 실패');
   } else if (phase === 'stop') {
     lane = 'host'; summary = text('턴 종료', token(r['outcome']));
   } else if (phase === 'failure') {
@@ -316,6 +320,7 @@ const debugStep = (row: DebugRecord, now: number, closed: Set<string>): Operatio
     const from = field(r, 'from'); const patch = field(r, 'patch'); const reasons = field(r, 'reasons'); const applied = field(r, 'applied');
     summary = event === 'request' ? 'Jev 요청 전송 · 응답 대기' : text(event, r['sent'] === true ? 'Jev 응답' : r['sent'] === false ? '전송 안 함' : null, token(r['skipped']), token(r['reason']));
     details.push(text(`기존 모델 ${token(from?.['model']) ?? token(r['from']) ?? '?'}`, `기존 effort ${token(from?.['effort']) ?? '?'}`));
+    if (number(r['preparation_ms']) !== null) details.push(`Router 준비 ${n(number(r['preparation_ms']))}ms · Jev 응답 시간과 별도 · 예산 ${n(number(r['budget_ms']))}ms`);
     details.push(text(`요청 변경 모델 ${token(patch?.['model']) ?? '?'}`, `요청 변경 effort ${token(patch?.['effort']) ?? token(r['patch']) ?? '?'}`));
     details.push(text(`모델 이유 ${token(reasons?.['model']) ?? '?'}`, `effort 이유 ${token(reasons?.['effort']) ?? '?'}`, `실제 적용 effort ${token(applied?.['effort']) ?? '?'}`, `관측 모델 ${token(r['observed']) ?? '?'}`));
     const usage = field(r, 'usage');

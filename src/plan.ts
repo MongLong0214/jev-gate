@@ -36,8 +36,8 @@ export const REQUEST_OMITTED =
 export const REQUEST_ONLY_NOTE =
   "The block above is the user's own request for this job, carried verbatim. It is the task: there is no plan and no task contract for this dispatch. Implement what it asks, run the checks it implies, and report separately anything you could not do. Give each check's check_id as the exact command you ran: the hook compares every reported pass with that command's last run in your own transcript. If you change files, report at least one check you ran; a change with no passing check is not accepted.";
 
-export const composeSingleWorkerPrompt = (coordinatorBrief: string, request: string | 'omitted' | null): string =>
-  [coordinatorBrief, ...(request === null ? [] : ['', REQUEST_HEADER, request === 'omitted' ? REQUEST_OMITTED : request, REQUEST_ONLY_NOTE])].join('\n');
+export const composeSingleWorkerPrompt = (coordinatorBrief: string, request: string | 'omitted' | null, required = false): string =>
+  [coordinatorBrief, ...(request === null ? [] : ['', REQUEST_HEADER, request === 'omitted' && !required ? REQUEST_OMITTED : request, REQUEST_ONLY_NOTE])].join('\n');
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const bytes = (s: string): number => Buffer.byteLength(s, 'utf8');
