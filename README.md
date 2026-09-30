@@ -19,7 +19,14 @@ The marketplace installs [the latest release](https://github.com/MongLong0214/je
 
 The [native Codex plugin](plugins/codex/README.md) supplies Evidence, Output and recording. Start the native terminal through its included launcher to enable **Gate A/B, planning, contract acceptance, root guard, Lean, Router and Compact** with the shared policies. It connects the official Codex App Server to the real Codex terminal; native login and permissions remain authoritative. Tested with Codex CLI 0.158.0 and 0.159.2 and Node 22.15+.
 
-Build and install from the repository checkout:
+For an installation without a build step, download **`jev-gate-codex-0.7.0.zip`** from the [v0.7.0 release](https://github.com/MongLong0214/jev-gate/releases/tag/v0.7.0), extract it, and register the extracted directory:
+
+```sh
+codex plugin marketplace add /absolute/path/to/extracted-plugin
+codex plugin add jev-gate@jev-gate-codex
+```
+
+Or build and install from a repository checkout:
 
 ```sh
 npm ci
@@ -32,6 +39,7 @@ Then, **in the Git project you want to inspect**:
 
 ```sh
 export JEV_CODEX_WORKSPACE="$PWD"
+# Set TYPESAFE_API_KEY in this terminal for Jev judgments.
 node /absolute/jev-gate/plugins/codex/dist/cli.mjs codex
 ```
 
@@ -46,7 +54,9 @@ node /absolute/jev-gate/plugins/codex/dist/cli.mjs dashboard
 
 The dashboard opens on **http://127.0.0.1:4731**. Choose another port with `--port 4733` if it is in use. Hooks and MCP record to the same private Codex trace directory by default. Korean/English and light/dark controls are in the top right.
 
-The Codex dashboard shows all feature pipelines and separates Jev selection from actual host application. A standalone `codex` session retains Evidence, Output and observation; automatic policies require the launch command above.
+For an extracted release, use `/absolute/path/to/extracted-plugin/dist/cli.mjs` in those commands. Keep the dashboard terminal running while working in a separate Codex terminal.
+
+The Codex dashboard shows all ten feature stages and separates Jev selection from actual host application. At the default concurrency of 1, admitted automatic work follows **Gate A → Gate B → one worker → code acceptance → root continuation**; only planned delegation adds a planner and dependency graph. A standalone `codex` session retains Evidence, Output and observation; automatic policies require the launch command above.
 
 [Native feature support, configuration, environment inheritance and troubleshooting →](plugins/codex/README.md)
 
@@ -90,7 +100,7 @@ End the session and start Claude Code again after changing settings. There is no
 
 ## See it work live · Claude Code
 
-The dashboard runs on your machine and opens in your browser. Its four lanes show the **Gate** (admission, plan, tier allocation, workers, and root guard), the separate **Lean** handoff, the independent **Router / Compact / Output** hooks, and **Evidence** search. Select any stage to read what it does, when it runs, whether it calls Jev, and the recorded outcome. The timeline separates the Jev request and response from the code decision and the host's execution. Korean/English and light/dark controls are in the top right.
+The dashboard runs on your machine and opens in your browser. Its four lanes show the **Gate** (admission, tier allocation, workers, optional planning, and root guard), the separate **Lean** handoff, the independent **Router / Compact / Output** hooks, and **Evidence** search. The main Gate path shows one worker; the planned branch adds a planner and returns each ready task to Gate B. Select any stage to read what it does, when it runs, whether it calls Jev, and the recorded outcome. The timeline separates the Jev request and response from the code decision and the host's execution. Korean/English and light/dark controls are in the top right.
 
 1. **Record new activity.** Add these absolute directories to the same settings `env` as above, then restart Claude Code. The trace directory is used by Gate and Evidence; point the debug variable to the host debug directory used by Router, Compact, and Output. For a macOS default install, inspect `~/.claude/debug` first. Replace both example paths with paths on your machine.
 
@@ -247,7 +257,7 @@ Doctor is not one program.
 - Checkout, after `npm run build`: `node dist/cli.js doctor` from the repository root.
 - Installed bundle: `node <plugin-dir>/dist/cli.js doctor`, where `<plugin-dir>` is the directory that contains that `dist/cli.js`.
 - Evidence, same bundle: `node <plugin-dir>/plugins/evidence/dist/server.mjs --doctor`. A standalone Evidence archive uses `node <dir>/dist/server.mjs --doctor`.
-- Dashboard: follow [See it work live](#see-it-work-live) to open the local page and interpret its records.
+- Dashboard: follow [See it work live](#see-it-work-live--claude-code) to open the local page and interpret its records.
 
 A passing doctor means the files and the config it could read look usable. It is not model access, not source accuracy, not a valid key, and not a performance guarantee. Evidence doctor reads the config only: no source scan and no request.
 
