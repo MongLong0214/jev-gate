@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — bench findings (#114, #117, #118, #121–#130)
+## v0.7.1 — 2026-09-30 — Bench findings: skipped-gate notice, needs_context re-ask, packaged A/B bench
 
 - Gate A tells the user, via `systemMessage` and not model context, when it was skipped because the session depth could not be read (`depth_unknown`): the first prompt of a session and every headless `claude -p` single turn. Single-prompt automation never reaches the gate; the behaviour is unchanged, the silence is not (#114).
 - Gate A re-asks once with the last three user-typed turns from the transcript when a prompt reads as `needs_context` on its own, so a long task that arrives as a short follow-up ("e2e 해봐") can still be delegated. Only user-typed text goes; tool results, host messages, commands and anything that looks like a secret do not. The second record carries `context_turns` (#115).
