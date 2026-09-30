@@ -3,6 +3,7 @@ import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { codexTraceDir } from './codex-paths.js';
 
 import { AUTH_CONFLICT_ENV, isSubscriptionOAuth, parseAuthStatus, subagentModelOverride, type CommandResult } from './auth.js';
 import { OWNED_AGENT_PROFILES } from './agents.js';
@@ -380,6 +381,8 @@ const flagValue = (argv: string[], name: string): string | undefined => {
 };
 
 const dashboard = async (argv: string[]): Promise<void> => {
+  const host = flagValue(argv, '--host');
+  if (host && host !== 'codex' && host !== 'claude') throw new Error('--host must be codex or claude');
   const portArg = flagValue(argv, '--port');
   const port = portArg === undefined ? 4731 : Number(portArg);
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
@@ -388,7 +391,9 @@ const dashboard = async (argv: string[]): Promise<void> => {
     return;
   }
   const started = await startDashboard(
-    { traceDir: configuredDir(flagValue(argv, '--trace'), 'JEV_GATE_TRACE_DIR'), debugDir: configuredDir(flagValue(argv, '--debug'), 'CLAUDE_CODE_DEBUG_LOGS_DIR'), env: process.env },
+    { traceDir: host === 'codex' ? flagValue(argv, '--trace') ?? codexTraceDir(process.env) : configuredDir(flagValue(argv, '--trace'), 'JEV_GATE_TRACE_DIR'),
+      debugDir: host === 'codex' ? null : configuredDir(flagValue(argv, '--debug'), 'CLAUDE_CODE_DEBUG_LOGS_DIR'), env: process.env,
+      ...(host ? { host: host as 'codex' | 'claude' } : {}) },
     port,
   );
   process.stdout.write(`dashboard: ${started.url}\n`);

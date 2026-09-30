@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.7.0 — Unreleased — Native Codex adapter
+
+- Separate native Codex plugin with bundled Evidence MCP, conservative Vitest output folding, lifecycle recording, doctor, and a host-specific live dashboard. Codex Evidence requires an explicit workspace or config and ignores inherited Claude/PWD variables, preventing accidental plugin-cache searches.
+- Codex features show active, observation-only, or unsupported status. Spawn receipts and stop hooks are never called accepted worker results; host spans are not counted as Jev latency or savings.
+- Automatic Gate A/B, planning/contract acceptance, root guard, Lean, Router, and extractive compaction replacement remain unavailable in the native adapter. Claude behavior and approval policy are preserved.
+- Build from source before adding the local Codex marketplace, then review/trust hooks with `/hooks`. `npm run pack -- --profile codex` produces an independently installable native archive.
+
 ## v0.6.6 — 2026-09-29 — Live operations across the plugin
 
 ### Added

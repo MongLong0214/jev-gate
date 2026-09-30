@@ -19,6 +19,7 @@ const INSTALL_DOCS = [
   'CHANGELOG.md',
   'docs/advanced-usage.md',
   'plugins/evidence/README.md',
+  'plugins/codex/README.md',
   'mods/compact/README.md',
   'mods/output/README.md',
   'mods/router/README.md',
@@ -64,7 +65,7 @@ beforeAll(() => {
   const r = spawnSync(process.execPath, [join(root, 'node_modules', 'typescript', 'bin', 'tsc'), '-p', join(root, 'tsconfig.json'), '--outDir', join(pluginRoot, 'dist')], { encoding: 'utf8' });
   expect(r.status, r.stdout + r.stderr).toBe(0);
   mkdirSync(join(pluginRoot, 'docs'), { recursive: true });
-  for (const rel of ['.claude-plugin', 'hooks', 'agents', 'mods', 'plugins/evidence/skills', 'plugins/evidence/.claude-plugin', 'plugins/evidence/README.md', 'assets/readme', 'README.md', 'AGENTS.md', 'CHANGELOG.md', 'docs/advanced-usage.md', '.env.example', 'package.json']) cpSync(join(root, rel), join(pluginRoot, rel), { recursive: true });
+  for (const rel of ['.claude-plugin', 'hooks', 'agents', 'mods', 'plugins/evidence/skills', 'plugins/evidence/.claude-plugin', 'plugins/evidence/README.md', 'plugins/codex/README.md', 'assets/readme', 'README.md', 'AGENTS.md', 'CHANGELOG.md', 'docs/advanced-usage.md', '.env.example', 'package.json']) cpSync(join(root, rel), join(pluginRoot, rel), { recursive: true });
   // The evidence bundle is build output, and the tests run before the build.
   const evidence = spawnSync(process.execPath, [join(root, 'scripts', 'build-evidence.mjs'), join(pluginRoot, 'plugins', 'evidence', 'dist', 'server.mjs')], { encoding: 'utf8' });
   expect(evidence.status, evidence.stderr).toBe(0);
@@ -89,7 +90,7 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     // #95 adds the feature READMEs beside that source, not the Mod tests.
     for (const must of ['hooks/register.ts', 'mods/compact/hooks/register.ts', 'mods/output/hooks/filter.ts', 'mods/router/hooks/router.ts', 'plugins/evidence/dist/server.mjs', 'plugins/evidence/skills/evidence/SKILL.md']) expect(list, must).toContain(must);
     expect(list.filter((f) => f.startsWith('mods/') && !/^mods\/(compact|output|router)\/(?:hooks\/[a-z-]+\.ts|README\.md)$/.test(f))).toEqual([]);
-    expect(list.filter((f) => f.startsWith('plugins/'))).toEqual(['plugins/evidence/README.md', 'plugins/evidence/dist/server.mjs', 'plugins/evidence/skills/evidence/SKILL.md']);
+    expect(list.filter((f) => f.startsWith('plugins/'))).toEqual(['plugins/codex/README.md', 'plugins/evidence/README.md', 'plugins/evidence/dist/server.mjs', 'plugins/evidence/skills/evidence/SKILL.md']);
 
     const dest = join(tmp, 'installed here', 'jev gate');
     mkdirSync(dest, { recursive: true });
@@ -163,7 +164,7 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     expect(list.some((f) => f.startsWith('src/') || f.startsWith('tests/') || f.startsWith('bench/'))).toBe(false);
     // No Mod is loaded: register.ts and hook sources stay out. The shared README's feature docs are files only (#95).
     expect(list.filter((f) => f.startsWith('mods/') || f === 'hooks/register.ts')).toEqual(['mods/compact/README.md', 'mods/output/README.md', 'mods/router/README.md']);
-    expect(list.filter((f) => f.startsWith('plugins/'))).toEqual(['plugins/evidence/README.md', 'plugins/evidence/dist/server.mjs', 'plugins/evidence/skills/evidence/SKILL.md']);
+    expect(list.filter((f) => f.startsWith('plugins/'))).toEqual(['plugins/codex/README.md', 'plugins/evidence/README.md', 'plugins/evidence/dist/server.mjs', 'plugins/evidence/skills/evidence/SKILL.md']);
 
     const dest = join(tmp, 'lean installed', 'jev gate');
     mkdirSync(dest, { recursive: true });

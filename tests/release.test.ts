@@ -33,6 +33,7 @@ const setVersion = (v: string) => {
     ['mods/router/.claude-plugin/plugin.json', 'jev-gate-router'],
     ['mods/output/.claude-plugin/plugin.json', 'jev-gate-output'],
     ['plugins/evidence/.claude-plugin/plugin.json', 'jev-gate-evidence'],
+    ['plugins/codex/.codex-plugin/plugin.json', 'jev-gate'],
   ] as const) json(rel, { name, version: v, type: 'module' });
   write('CHANGELOG.md', `# Changelog\n\n## v${v} — test\n\nNotes for ${v}.\n`);
 };
@@ -64,6 +65,7 @@ describe('scripts/release.mjs', () => {
       write(`mods/${m}/README.md`, `# ${m}\n`);
     }
     for (const name of ['jev-gate-logo.svg']) write(`assets/readme/${name}`, '<svg xmlns="http://www.w3.org/2000/svg"></svg>\n');
+    write('plugins/codex/README.md', '# Native Codex usage\n');
     write('docs/advanced-usage.md', '# Advanced usage\n\nGate and lean settings for a checkout.\n');
     write('hooks/hooks.json', '{}\n');
     write('hooks/register.ts', 'export {};\n');

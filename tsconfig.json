@@ -17,5 +17,5 @@
     "declaration": false
   },
   "include": ["src"],
-  "exclude": ["src/evidence"]
+  "exclude": ["src/evidence", "src/codex"]
 }

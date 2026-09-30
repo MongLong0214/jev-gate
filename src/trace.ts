@@ -11,6 +11,8 @@ import { join } from 'node:path';
  * historical directories still have to handle them.
  */
 export type TracePhase =
+  | 'codex_event'
+  | 'codex_output'
   | 'admission_intent'
   | 'admission_result'
   | 'guard'

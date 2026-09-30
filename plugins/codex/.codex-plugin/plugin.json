@@ -1,0 +1,7 @@
+{
+  "name": "jev-gate",
+  "version": "0.7.0",
+  "description": "Jev evidence and Codex-native execution observation.",
+  "hooks": "./hooks/hooks.json",
+  "mcpServers": "./.mcp.json"
+}

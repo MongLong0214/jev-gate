@@ -1,0 +1,12 @@
+{
+  "name": "jev-gate-codex",
+  "interface": { "displayName": "Jev Gate for Codex" },
+  "plugins": [
+    {
+      "name": "jev-gate",
+      "source": { "source": "local", "path": "./plugins/codex" },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+      "category": "Developer Tools"
+    }
+  ]
+}

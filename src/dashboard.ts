@@ -5,10 +5,12 @@ import type { Socket } from 'node:net';
 import { loadActivity, type ActivitySnapshot } from './activity.js';
 import { DASHBOARD_PAGE } from './dashboard-page.js';
 import type { Env } from './config.js';
+import type { Host } from './host-support.js';
 
 const PAGE = DASHBOARD_PAGE;
 
 export interface DashboardSources {
+  host?: Host;
   traceDir: string | null;
   debugDir: string | null;
   env: Env;

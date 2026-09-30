@@ -1,11 +1,12 @@
 // Builds a distributable local plugin archive (#18): compiled hook + modules, manifest, hooks, agents, docs.
-// Usage: node scripts/pack.mjs [outDir] [--root <pluginRoot>] [--profile legacy|lean|router|evidence]
+// Usage: node scripts/pack.mjs [outDir] [--root <pluginRoot>] [--profile legacy|lean|router|evidence|codex]
 //   legacy (default) → <outDir>/jev-gate-<version>.zip         six routing roles and lean's executor, the V5 hook set,
 //                                                              the three Mods and the evidence server (the one plugin)
 //   lean   (JGL-04)  → <outDir>/jev-gate-lean-<version>.zip    one executor, the lean hook set, `--lean` entrypoint
 //   router (JGR-01)  → <outDir>/jev-gate-router-<version>.zip  the Function Hooks Mod in mods/router, at its own version
 //   evidence (JGE-03) → <outDir>/jev-gate-evidence-<version>.zip the bundled jev_evidence MCP server in plugins/evidence
-// legacy, lean and evidence require `npm run build` first (which clears dist, so a deleted module cannot reappear here).
+//   codex → <outDir>/jev-gate-codex-<version>.zip native Codex hooks, Evidence MCP, skills and dashboard
+// legacy, lean, evidence and codex require `npm run build` first (which clears dist, so a deleted module cannot reappear here).
 // The archive is written here rather than by the zip CLI, so one tree gives the same bytes on any machine: the marketplace pins
 // the legacy archive's SHA-256 before a release is tagged, and scripts/release.mjs check rebuilds it to compare.
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -19,7 +20,7 @@ const flag = (name) => {
 };
 const root = flag('root') ? resolve(flag('root')) : dirname(dirname(fileURLToPath(import.meta.url)));
 const profile = flag('profile') ?? 'legacy';
-if (!['legacy', 'lean', 'router', 'evidence'].includes(profile)) {
+if (!['legacy', 'lean', 'router', 'evidence', 'codex'].includes(profile)) {
   process.stderr.write(`pack: unknown profile ${profile}\n`);
   process.exit(1);
 }
@@ -54,6 +55,7 @@ const routerHooks = () =>
 // The evidence archive is the plugin directory with its one bundled server: nothing of dist/, hooks or agents.
 const EVIDENCE = 'plugins/evidence';
 const EVIDENCE_FILES = ['.claude-plugin/plugin.json', 'dist/server.mjs', 'skills/evidence/SKILL.md', 'README.md'];
+const CODEX_FILES = ['.codex-plugin/plugin.json', '.agents/plugins/marketplace.json', '.mcp.json', 'hooks/hooks.json', 'dist/hook.mjs', 'dist/server.mjs', 'dist/cli.mjs', 'skills/jev-gate/SKILL.md', 'README.md'];
 
 // The one jev-gate plugin (v0.6.0) also carries the three Mods, loaded through hooks/register.ts from their source, and
 // the evidence server with its skill, at the paths the manifest and that module name. Lean's hook set loads no Mod, but
@@ -73,6 +75,7 @@ const INSTALL_DOCS = [
   'CHANGELOG.md',
   'docs/advanced-usage.md',
   'plugins/evidence/README.md',
+  'plugins/codex/README.md',
   'mods/compact/README.md',
   'mods/output/README.md',
   'mods/router/README.md',
@@ -82,7 +85,9 @@ const INSTALL_DOCS = [
 // [source path relative to root, path inside the archive]. The hook set is the only file that is renamed.
 const hostsDist = profile === 'legacy' || profile === 'lean';
 const entries =
-  profile === 'evidence'
+  profile === 'codex'
+    ? CODEX_FILES.map((f) => [`plugins/codex/${f}`, f])
+    : profile === 'evidence'
     ? EVIDENCE_FILES.map((f) => [`${EVIDENCE}/${f}`, f])
     : profile === 'router'
     ? [
@@ -118,7 +123,9 @@ if (hostsDist) {
 
 const manifestVersion = (dir) => JSON.parse(readFileSync(join(root, dir, '.claude-plugin/plugin.json'), 'utf8')).version;
 const name =
-  profile === 'router'
+  profile === 'codex'
+    ? `jev-gate-codex-${JSON.parse(readFileSync(join(root, 'plugins/codex/.codex-plugin/plugin.json'), 'utf8')).version}`
+    : profile === 'router'
     ? `jev-gate-router-${manifestVersion(ROUTER)}`
     : profile === 'evidence'
       ? `jev-gate-evidence-${manifestVersion(EVIDENCE)}`

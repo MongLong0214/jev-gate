@@ -8,11 +8,12 @@ import { CallToolRequestSchema, ErrorCode, ListToolsRequestSchema, McpError, typ
 
 import { createEvidenceService, parseRequest, type EvidenceReply, type EvidenceServiceDeps } from './service.js';
 import { openTraceDir, type TraceWriter } from '../trace.js';
+import { codexTraceDir } from '../codex-paths.js';
 import { loadConfig, type ConfigLoad } from './source.js';
 import { LIMITS, MODES, type EvidenceConfig } from './types.js';
 
 export const TOOL_NAME = 'jev_evidence';
-export const SERVER_VERSION = '0.6.6';
+export const SERVER_VERSION = '0.7.0';
 
 const strings = (description: string) => ({ type: 'array', items: { type: 'string', minLength: 1 }, minItems: 1, maxItems: LIMITS.arrayItems, description });
 const HEX64 = { type: 'string', pattern: '^[0-9a-f]{64}$' };
@@ -61,7 +62,7 @@ const description = (config: EvidenceConfig | null): string => [
   'Returns exact windows (16 lines for exactSymbols, at most 40 otherwise): path, 1-based startLine/endLine, fileSha256 and text.',
   `Narrow with roots when you know the directory. queryTerms, when set, are the only lexical hints and are not filled back from the goal; more than ${LIMITS.lexicalTerms} unique terms is an input error. exactSymbols finds literal occurrences only.`,
   'For more, call again with next.offset and next.expectedSnapshot. To read a returned window back exactly, pass its source as sources; the same path and fileSha256 with other lines (at most 40) reads a wider view.',
-  'When the owner enabled remote and a key is present, a semantic page is sent to TypeSafe (a service separate from Claude). remote off sends nothing to TypeSafe; local reads continue, and this is not an offline mode for Claude. exactSymbols and sources read-backs are not sent. A changed config applies only after this server process restarts.',
+  'When the owner enabled remote and a key is present, a semantic page is sent to TypeSafe (a service separate from the coding host). remote off sends nothing to TypeSafe; local reads continue, and this does not make the coding host offline. exactSymbols and sources read-backs are not sent. A changed config applies only after this server process restarts.',
   'A clearly unrelated locate window keeps its source but not its text (omitted_irrelevant).',
   'status partial means the page is not complete: a cap, the cooperative deadline, judgement or inclusion stopped the scan. See coverage and reasonCodes. A capped or time-stopped page is the prefix that was collected, then scored only inside that prefix — not the whole repository\'s best matches, and not proof of absence. Audit is not a completed audit.',
   'The deadline is one cooperative budget for reading, candidate generation and Jev, not an operating-system or network guarantee. A stop that depends on time is not a cursor; continue only with next.offset and next.expectedSnapshot of the same snapshot.',
@@ -74,7 +75,7 @@ const toolResult = (reply: EvidenceReply): CallToolResult => {
 };
 
 /** One server, one tool, one service: the call and HTTP bounds hold across every request this process serves. */
-export const createServer = (load: ConfigLoad, deps: EvidenceServiceDeps & { trace?: TraceWriter }): Server => {
+export const createServer = (load: ConfigLoad, deps: EvidenceServiceDeps & { trace?: TraceWriter; host?: 'codex' }): Server => {
   const config = load.ok ? load.config : null;
   const service = createEvidenceService(config, deps);
   const server = new Server({ name: 'jev-evidence', version: SERVER_VERSION }, { capabilities: { tools: {} } });
@@ -91,6 +92,7 @@ export const createServer = (load: ConfigLoad, deps: EvidenceServiceDeps & { tra
     const callId = randomUUID();
     const parsed = parseRequest(request.params.arguments ?? {});
     const base = {
+      ...(deps.host ? { host: deps.host } : {}),
       request_id: callId,
       component: 'evidence',
       kind: parsed.ok ? parsed.input.kind : 'invalid',
@@ -159,16 +161,19 @@ export const doctorLines = (load: ConfigLoad, env: Readonly<Record<string, strin
 
 const main = async (): Promise<void> => {
   const env = process.env;
-  const load = await loadConfig(env);
+  const codex = process.argv.includes('--codex');
+  const load = await loadConfig(env, codex ? { host: 'codex', cwd: env['JEV_CODEX_WORKSPACE'] ?? '' } : undefined);
   if (process.argv.includes('--doctor')) {
     process.stdout.write(`${doctorLines(load, env, fileURLToPath(import.meta.url)).join('\n')}\n`);
     process.exitCode = load.ok ? 0 : 1;
     return;
   }
   process.stderr.write(`jev-evidence: config ${load.ok ? 'ok' : `unavailable (${load.reason})`} (${load.origin}), remote ${load.ok && load.config.remote ? 'on' : 'off'}, key ${env['TYPESAFE_API_KEY'] ? 'present' : 'absent'}\n`);
-  const traceDir = env['JEV_GATE_TRACE_DIR'];
+  let traceDir = env['JEV_GATE_TRACE_DIR'];
+  try { if (codex) traceDir = codexTraceDir(env); }
+  catch { traceDir = undefined; process.stderr.write('jev-evidence: invalid Codex trace directory; recording unavailable\n'); }
   const opened = traceDir ? openTraceDir(traceDir) : null;
-  const server = createServer(load, { apiKey: env['TYPESAFE_API_KEY'] || null, ...(opened?.ok ? { trace: opened.writer } : {}) });
+  const server = createServer(load, { apiKey: env['TYPESAFE_API_KEY'] || null, ...(opened?.ok ? { trace: opened.writer } : {}), ...(codex ? { host: 'codex' as const } : {}) });
   await server.connect(new StdioServerTransport());
 };
 

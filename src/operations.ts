@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { codexOperations } from './codex-operations.js';
+import { CODEX_CAPABILITIES, type HostCapability, type Host } from './host-support.js';
 
 /** A display model made only from named metadata fields. Raw prompts, source and debug text never leave here. */
 type Rec = Record<string, unknown>;
@@ -18,6 +20,8 @@ export interface OperationStep {
   /** Timings are measured by the caller or paired recorded events, never estimated from usage. */
   durationMs?: number;
   elapsedMs?: number;
+  /** Native host spans store their explicit start; other records are end-stamped measurements. */
+  startedAt?: string;
   judgements?: Array<{ question: string; value: string; confidence: number | null; probabilities: Array<{ label: string; value: number }> }>;
   graph?: Array<{ id: string; dependsOn: string[]; checks: number }>;
 }
@@ -25,7 +29,7 @@ export interface OperationStep {
 export interface OperationRun {
   id: string;
   title: string;
-  source: 'gate' | 'router' | 'compact' | 'output' | 'evidence';
+  source: 'gate' | 'router' | 'compact' | 'output' | 'evidence' | 'codex';
   mode: string;
   firstAt: string;
   lastAt: string;
@@ -39,7 +43,8 @@ export interface FeatureView {
   source: 'trace' | 'debug';
   count: number;
   lastAt: string | null;
-  state: 'observed' | 'waiting' | 'unavailable';
+  state: 'observed' | 'waiting' | 'unavailable' | 'unsupported';
+  capability?: HostCapability;
 }
 
 export interface OperationsView {
@@ -321,7 +326,7 @@ const debugGroup = (row: DebugRecord): string => row.component === 'router'
   ? `router:${token(row.rec['turn']) ?? token(row.rec['tool_use_id']) ?? 'session'}`
   : `${row.component}:${token(row.rec['run_id']) ?? row.at}`;
 
-export const buildOperations = (records: Rec[], debug: DebugRecord[], now: Date, availability: { trace: boolean; debug: boolean }): OperationsView => {
+export const buildOperations = (records: Rec[], debug: DebugRecord[], now: Date, availability: { trace: boolean; debug: boolean; host?: Host }): OperationsView => {
   const resultIds = new Set(records.flatMap((r) => token(r['request_id']) && token(r['phase']) ? [`${token(r['request_id'])}:${token(r['phase'])}`] : []));
   const intents = new Map(records.flatMap((r): Array<[string, string]> => {
     const phase = token(r['phase']); const requestId = token(r['request_id']); const at = iso(r['written_at']);
@@ -360,13 +365,19 @@ export const buildOperations = (records: Rec[], debug: DebugRecord[], now: Date,
   const allRuns: OperationRun[] = [...grouped].map(([key, group]) => {
     const steps = group.steps.sort((a, b) => a.at.localeCompare(b.at) || (a.lane === 'policy' ? 1 : 0) - (b.lane === 'policy' ? 1 : 0) || a.id.localeCompare(b.id));
     const state: OperationRun['state'] = steps.some((s) => s.state === 'active') ? 'active' : steps.some((s) => s.state === 'error' || s.state === 'unconfirmed') ? 'attention' : 'done';
-    const title = ({ gate: group.mode === 'lean' ? 'Lean 세션' : '게이트 세션', router: 'Router 실행', compact: 'Compact 실행', output: 'Output 실행', evidence: 'Evidence 검색' } as const)[group.source];
+    const title = ({ gate: group.mode === 'lean' ? 'Lean 세션' : '게이트 세션', router: 'Router 실행', compact: 'Compact 실행', output: 'Output 실행', evidence: 'Evidence 검색', codex: 'Codex 실행' } as const)[group.source];
     return { id: id(key), title: `${title} · ${id(key).slice(0, 6)}`, source: group.source, mode: group.mode, firstAt: steps[0]?.at ?? '', lastAt: steps.at(-1)?.at ?? '', state, steps };
-  }).sort((a, b) => b.lastAt.localeCompare(a.lastAt));
+  }).concat(codexOperations(records, now)).sort((a, b) => b.lastAt.localeCompare(a.lastAt));
   const runs = allRuns.slice(0, 200);
   const all = allRuns.flatMap((run) => run.steps.map((step) => ({ ...step, runId: run.id, runTitle: run.title })));
   const features = FEATURES.map((f): FeatureView => {
     const steps = all.filter((s) => s.feature === f.id);
+    if (availability.host === 'codex') {
+      const capability = CODEX_CAPABILITIES[f.id];
+      return { ...f, source: 'trace', label: f.id === 'workers' ? 'Codex · 도구와 에이전트' : f.id === 'compact' ? 'Compact · Codex 압축' : f.label, capability,
+        count: steps.length, lastAt: steps.length ? steps.map(s => s.at).sort().at(-1)! : null,
+        state: capability.mode === 'unsupported' ? 'unsupported' : steps.length ? 'observed' : availability.trace ? 'waiting' : 'unavailable' };
+    }
     return { ...f, count: steps.length, lastAt: steps.length ? steps.map((s) => s.at).sort().at(-1)! : null, state: steps.length ? 'observed' : availability[f.source] ? 'waiting' : 'unavailable' };
   });
   const jevRequests = new Set<string>();
