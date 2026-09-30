@@ -478,6 +478,10 @@ describe('Gate A admission', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(r.code).toBe('depth_unknown');
     expect(state(env).current.shape).toBe('direct');
+    // #114: the reason reaches the user as a systemMessage, and only the user -- the model context is unchanged.
+    const body = JSON.parse(r.stdout as string) as Record<string, unknown>;
+    expect(String(body['systemMessage'])).toContain('depth_unknown');
+    expect(JSON.stringify(body['hookSpecificOutput'])).not.toContain('depth_unknown');
   });
 
   it('carries the depth into the record of an admitted job, so a bench case can prove it primed the session', async () => {

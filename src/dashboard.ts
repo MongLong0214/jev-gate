@@ -1,6 +1,9 @@
 import { createServer, type Server } from 'node:http';
-import { watch, type FSWatcher } from 'node:fs';
+import { readFileSync, watch, type FSWatcher } from 'node:fs';
 import type { Socket } from 'node:net';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { loadActivity, type ActivitySnapshot } from './activity.js';
 import { DASHBOARD_PAGE } from './dashboard-page.js';
@@ -16,7 +19,42 @@ export interface DashboardSources {
   env: Env;
 }
 
-const snapshot = (sources: DashboardSources): ActivitySnapshot => loadActivity({ ...sources, now: new Date() });
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+const readJson = (path: string): unknown => {
+  try {
+    return JSON.parse(readFileSync(path, 'utf8')) as unknown;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * #118: the dashboard process is the build it was started from and never reloads; the plugin the host runs is whatever
+ * `installed_plugins.json` says. Both are read on every snapshot so an update shows up as a mismatch on the next
+ * repaint instead of as silently stale cards. `null` means "could not read", never "same".
+ */
+export interface DashboardVersions {
+  running: string | null;
+  installed: string | null;
+}
+export const readVersions = (env: Env, pluginRoot: string = dirname(dirname(fileURLToPath(import.meta.url)))): DashboardVersions => {
+  const own = readJson(join(pluginRoot, '.claude-plugin', 'plugin.json'));
+  const running = isRecord(own) && typeof own['version'] === 'string' ? own['version'] : null;
+  const home = env['HOME'] ?? homedir();
+  const registry = readJson(join(home, '.claude', 'plugins', 'installed_plugins.json'));
+  let installed: string | null = null;
+  const plugins = isRecord(registry) ? registry['plugins'] : null;
+  if (isRecord(plugins)) {
+    for (const [key, entries] of Object.entries(plugins)) {
+      if (!key.startsWith('jev-gate@') || !Array.isArray(entries)) continue;
+      const first = entries.find((e) => isRecord(e) && typeof e['version'] === 'string');
+      if (isRecord(first)) installed = first['version'] as string;
+    }
+  }
+  return { running, installed };
+};
+
+const snapshot = (sources: DashboardSources): ActivitySnapshot & { version: DashboardVersions } => ({ ...loadActivity({ ...sources, now: new Date() }), version: readVersions(sources.env) });
 
 export const startDashboard = (sources: DashboardSources, port: number): Promise<{ url: string; port: number; close: () => Promise<void> }> =>
   new Promise((resolve, reject) => {
@@ -29,7 +67,7 @@ export const startDashboard = (sources: DashboardSources, port: number): Promise
         return;
       }
       if (req.method === 'GET' && path === '/api/snapshot') {
-        const body = JSON.stringify(snapshot(sources) satisfies ActivitySnapshot);
+        const body = JSON.stringify(snapshot(sources));
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
         res.end(body);
         return;

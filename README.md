@@ -273,7 +273,7 @@ npm run build
 claude plugin validate . --strict
 ```
 
-`npm test` uses fake HTTP and a fake CLI. It does not need a key or a login. The bench is not part of installing or of changing the plugin. Do not send secrets or raw transcripts.
+A saving claim needs the paired A/B bench (`node dist/bench/ab.js`, see `docs/bench-ab.md`), not a within-session estimate. `npm test` uses fake HTTP and a fake CLI. It does not need a key or a login. The bench is not part of installing or of changing the plugin. Do not send secrets or raw transcripts.
 
 `claude --plugin-dir .` loads this tree as the plugin. One part can be loaded from `mods/compact`, `mods/output`, `mods/router`, or `plugins/evidence`; option names differ, and those READMEs say how. Gate and lean settings, foreground and worktree conditions, and `node dist/cli.js explain` are in [Advanced usage](docs/advanced-usage.md).
 

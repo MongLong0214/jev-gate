@@ -168,6 +168,10 @@ export type HookResult =
   | { kind: 'skip' | 'preserve'; code: ErrorCode | null; stdout: null }
   | { kind: 'guidance' | 'patch' | 'deny' | 'context' | 'notice'; code: ErrorCode | null; stdout: string };
 
+/** #114: shown to the user (not the model) when Gate A was skipped because the session depth could not be read. */
+export const DEPTH_UNKNOWN_NOTICE =
+  'jev-gate: Gate A was not asked on this prompt because the session depth could not be read from the transcript (the first prompt of a session and every headless `claude -p` single turn look like this). Recorded as depth_unknown; the turn runs natively. Single-prompt automation therefore never reaches the gate.';
+
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const sha256 = (s: string): string => createHash('sha256').update(s, 'utf8').digest('hex');
 const str = (v: unknown): string | null => (typeof v === 'string' ? v : null);
@@ -452,8 +456,8 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
   };
   const apiKey = deps.env['TYPESAFE_API_KEY'];
 
-  const emitContext = (event: 'UserPromptSubmit' | 'PostToolUse', text: string, code: ErrorCode | null): HookResult => {
-    const stdout = renderAdditionalContext(event, text);
+  const emitContext = (event: 'UserPromptSubmit' | 'PostToolUse', text: string, code: ErrorCode | null, notice: string | null = null): HookResult => {
+    const stdout = renderAdditionalContext(event, text, notice);
     if (stdout === null) return skip('output_too_large');
     return { kind: event === 'UserPromptSubmit' ? 'guidance' : 'context', code, stdout };
   };
@@ -1144,7 +1148,9 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       }
     }
 
-    if (shape === 'direct') return emitContext('UserPromptSubmit', renderDirectGuidance(mode), reason);
+    // #114: an unreadable depth is the one direct reason the user cannot see coming -- the first prompt of a session
+    // and every headless `claude -p` single turn have no transcript yet -- so it is the one that is said out loud.
+    if (shape === 'direct') return emitContext('UserPromptSubmit', renderDirectGuidance(mode), reason, reason === 'depth_unknown' ? DEPTH_UNKNOWN_NOTICE : null);
     // A17: an orchestrated turn keeps its request, because every worker contract downstream is a paraphrase of it and
     // the worker is told the user's own words come first. Stored whole or not at all -- never truncated into a
     // half-specification that reads as complete.
