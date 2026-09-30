@@ -33,7 +33,7 @@ describe('native Codex hook', () => {
   it.each(['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'SubagentStart', 'SubagentStop', 'PreCompact', 'PostCompact', 'Stop', 'Interrupt', 'SessionEnd'])('never approves permissions or patches inputs for %s', async event => {
     const result = await runCodexHook({ stdin: stdin({ ...input, hook_event_name: event, tool_response: 'ordinary result' }), env: { JEV_CODEX_TRACE_DIR: dir() } });
     expect(JSON.stringify(result)).not.toMatch(/permissionDecision|updatedInput|decision.*block/);
-    if (event === 'SessionStart') expect(JSON.stringify(result)).toContain('unavailable');
+    if (event === 'SessionStart') expect(JSON.stringify(result)).toContain('cli.mjs codex');
     else expect(result).toEqual({});
   });
 
@@ -103,7 +103,7 @@ describe('Codex lifecycle in the dashboard', () => {
     expect(view.feed.find(s => s.title.includes('에이전트 시작'))).toMatchObject({ state: 'active' });
     expect(view.requests).toBe(0);
     expect(view.latency.measured).toBe(0);
-    expect(view.features.find(f => f.id === 'admission')?.state).toBe('unsupported');
+    expect(view.features.find(f => f.id === 'admission')?.capability?.mode).toBe('connect');
     expect(view.features.find(f => f.id === 'compact')?.capability?.mode).toBe('observe');
     const ended = buildOperations([...records, row('SubagentStop', { agent_id: 'child', written_at: '2026-09-30T01:00:02Z', last_assistant_message: 'SECRET_FINAL' })], [], now, { trace: true, debug: false });
     expect(ended.active).toBe(0);

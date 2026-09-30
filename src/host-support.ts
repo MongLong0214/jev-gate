@@ -2,21 +2,26 @@ import type { FeatureId } from './operations.js';
 
 export type Host = 'claude' | 'codex';
 export interface HostCapability {
-  mode: 'active' | 'observe' | 'unsupported';
+  mode: 'active' | 'observe' | 'connect' | 'unsupported';
   ko: string;
   en: string;
 }
 
-/** Native Codex plugin capabilities. A loaded hook is not evidence of policy enforcement. */
+/** Availability is distinct from recorded use. Native permissions remain authoritative. */
 export const CODEX_CAPABILITIES: Record<FeatureId, HostCapability> = {
-  admission: { mode: 'unsupported', ko: '자동 Gate A는 비활성입니다. Codex의 문맥 깊이와 실행 계약을 보장할 어댑터가 없습니다.', en: 'Automatic Gate A is disabled: Codex context depth and execution contracts are not supported by this adapter.' },
-  allocation: { mode: 'unsupported', ko: 'Gate B 자동 배정은 비활성입니다. 입력 교체에 권한 승인이 필요한 Codex 훅을 사용하지 않습니다.', en: 'Automatic Gate B is disabled: Codex requires an allow decision for input replacement.' },
-  planning: { mode: 'unsupported', ko: 'Jev 계획·의존성 관리는 비활성입니다. Codex는 Claude의 전용 에이전트 프로필을 로드하지 않습니다.', en: 'Jev plan and dependency management is disabled: Codex does not load Claude agent profiles.' },
-  workers: { mode: 'observe', ko: 'Codex 도구와 에이전트의 시작·종료를 관측합니다. 생성 응답은 작업 완료나 계약 수락을 뜻하지 않습니다.', en: 'Observes Codex tools and agents starting and stopping. A spawn receipt is not completion or contract acceptance.' },
-  guard: { mode: 'unsupported', ko: 'Jev 루트 가드는 비활성입니다. Codex 자체 sandbox와 승인 정책이 적용됩니다.', en: 'The Jev root guard is disabled. Codex sandbox and approval policies remain in force.' },
-  lean: { mode: 'unsupported', ko: 'Lean 자동 문맥 교체는 비활성입니다. 안정적인 transcript 계약과 승인 없는 입력 교체가 필요합니다.', en: 'Automatic Lean handoff is disabled: it needs a stable transcript contract and input replacement without approval.' },
-  router: { mode: 'unsupported', ko: '자동 모델·effort 변경은 비활성입니다. Codex 훅에 루트 모델·effort 변경 출력이 없습니다.', en: 'Automatic model and effort routing is disabled: Codex hooks cannot override the root model or effort.' },
-  compact: { mode: 'observe', ko: 'Codex 압축 시작·종료를 관측합니다. 추출형 요약으로 압축 결과를 교체하지 않습니다.', en: 'Observes native Codex compaction. Does not replace its result with an extractive digest.' },
+  admission: { mode: 'active', ko: '실제 문맥 사용량과 사용자 요청으로 직접 실행과 위임을 결정합니다.', en: 'Uses observed context usage and the user request to choose direct execution or delegation.' },
+  allocation: { mode: 'active', ko: '같은 Gate B 정책으로 전용 워커의 모델을 배정하고 실행 입력에 반영합니다.', en: 'Applies the shared Gate B policy to owned worker models and execution inputs.' },
+  planning: { mode: 'active', ko: '읽기 전용 플래너가 계획을 만들고 코드가 의존성과 다음 작업의 실행 조건을 관리합니다.', en: 'A read-only planner returns the plan; code manages dependencies and readiness.' },
+  workers: { mode: 'active', ko: '실제 Codex 워커를 실행하고 관측된 검사 결과와 계약을 대조해 수락합니다.', en: 'Runs native Codex workers and verifies observed checks against their contracts.' },
+  guard: { mode: 'active', ko: '위임 중 루트 도구를 허용 목록으로 제한합니다. Codex 권한을 승인하거나 확장하지 않습니다.', en: 'Restricts root tools during delegation using the shared allowlist. Never grants or expands native permissions.' },
+  lean: { mode: 'active', ko: '완전한 App Server 기록에서 필요한 문맥을 선별해 executor 입력에 적용합니다. 불명확한 기록은 보존합니다.', en: 'Selects context from complete App Server records and applies it to executor input; unknown sources preserve native execution.' },
+  router: { mode: 'active', ko: '계정의 실제 모델·effort 목록과 Jev 확률로 턴 설정을 선택하고 실제 모델 요청에서 적용을 확인합니다.', en: 'Selects turn settings using the live account catalog and Jev probabilities; confirms them at the actual model request.' },
+  compact: { mode: 'active', ko: '자동 압축 시 추출형 digest를 Codex 자체 압축 절차로 설치합니다. 미디어·불명확한 문맥은 기본 압축을 사용합니다.', en: 'Installs an extractive digest through native automatic compaction. Media and opaque context use native compaction.' },
   output: { mode: 'active', ko: '완전한 성공 Vitest 출력에서 동일한 연속 줄만 접습니다. 실패·잘림·알 수 없는 형식은 보존합니다.', en: 'Folds identical consecutive lines in complete passing Vitest output. Preserves failures, truncation and unknown formats.' },
   evidence: { mode: 'active', ko: '동일한 Evidence MCP를 사용합니다. 로컬 검색과 Jev 판정, 페이지·캐시·근거 읽기를 지원합니다.', en: 'Uses the same Evidence MCP: local search, Jev judgments, pagination, cache and evidence reads.' },
 };
+export const CODEX_PLUGIN_CAPABILITIES: Record<FeatureId, HostCapability> = Object.fromEntries(Object.entries(CODEX_CAPABILITIES).map(([id, capability]) => [id,
+  ['output', 'evidence'].includes(id) ? capability : ['workers', 'compact'].includes(id)
+    ? { mode: 'observe', ko: '기본 플러그인에서 호스트 이벤트를 관측합니다. 전체 정책은 cli.mjs codex로 세션을 연결하세요.', en: 'The standalone plugin observes host events. Connect a session with cli.mjs codex for full policies.' }
+    : { mode: 'connect', ko: 'cli.mjs codex로 네이티브 세션을 연결하면 자동 정책이 적용됩니다.', en: 'Connect the native session with cli.mjs codex to apply automatic policies.' },
+])) as Record<FeatureId, HostCapability>;

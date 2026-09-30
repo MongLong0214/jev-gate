@@ -39,7 +39,7 @@ describe('installed Codex archive', () => {
     expect(result.stderr).toBe('');
     expect(existsSync(empty)).toBe(false);
     expect(result.stdout).toContain('No source was scanned and no request was sent.');
-    expect(result.stdout).toContain('[unsupported] router:');
+    expect(result.stdout).toContain('[active] router:');
   });
   it('runs the actual hook from a path with spaces and preserves execution on invalid input', () => {
     const run = spawnSync(process.execPath, [join(installed, 'dist/hook.mjs')], { cwd: project, env: shellEnv, encoding: 'utf8', input: JSON.stringify({ hook_event_name: 'SessionStart', session_id: 's' }) });
@@ -76,7 +76,7 @@ describe('installed Codex archive', () => {
     expect(await loadConfig({ PWD: project, CLAUDE_PROJECT_DIR: project }, { host: 'codex', cwd: tmp })).toMatchObject({ ok: false, reason: 'unsupported_inventory' });
   });
 
-  it('streams real hook records to the dashboard and includes unsupported capability explanations', async () => {
+  it('streams real hook records to the dashboard and explains how to connect automatic policies', async () => {
     const server = await startDashboard({ traceDir: traces, debugDir: null, env: {}, host: 'codex' }, 0);
     const abort = new AbortController();
     try {
@@ -90,7 +90,7 @@ describe('installed Codex archive', () => {
       const event = new TextDecoder().decode(changed.value);
       expect(event).toContain('Codex · 도구 시작');
       expect(event).toContain('"state":"active"');
-      expect(event).toContain('"state":"unsupported"');
+      expect(event).toContain('"mode":"connect"');
       expect(event).not.toContain('codexEvidenceNeedle');
       await reader.cancel();
     } finally { abort.abort(); await server.close(); }

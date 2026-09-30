@@ -63,13 +63,14 @@ export const codexOperations = (records: Rec[], now: Date): OperationRun[] => {
     const detail = output ? r['applied'] === true ? '동일한 연속 줄을 접어 모델에 전달' : `원본 출력 보존 · ${token(r['reason']) ?? 'unknown'}`
       : tool === 'spawn_agent' && event === 'PostToolUse' ? '에이전트 생성 응답 · 작업 완료 여부는 별도 관측'
       : event === 'SubagentStop' ? '종료 훅 관측 · Jev 계약 수락 검사 없음'
-      : event === 'PreCompact' || event === 'PostCompact' ? 'Codex 기본 압축 · Jev 요약 대체 없음'
+      : event === 'PreCompact' || event === 'PostCompact' ? r['managed'] === true ? 'Codex 압축 절차 · digest 설치는 별도 적용 기록에서 확인' : 'Codex 기본 압축 · 연결 세션에서 digest 적용 가능'
       : [tool, token(r['agent_type']), token(r['model'])].filter(Boolean).join(' · ') || 'Codex 호스트 이벤트';
     const measured = end ? Date.parse(at(end)) - Date.parse(at(r)) : undefined;
     const numbers = output && r['applied'] === true ? ['before_bytes', 'after_bytes', 'runs'].flatMap(k => typeof r[k] === 'number' && Number.isSafeInteger(r[k]) && r[k] >= 0 ? [`${k}: ${r[k]}`] : []) : [];
     const step: OperationStep = {
       id: hash(`${key}:${token(r['invocation_id']) ?? at(r)}:${event}:${output}`), at: at(r),
       feature: output ? 'output' : event.includes('Compact') ? 'compact' : 'workers',
+      ...(!output && !event.includes('Compact') && !isAgent && tool !== 'spawn_agent' ? { lifecycle: true } : {}),
       state, lane: output ? 'local' : 'host', title: output ? 'Output · 로그 접기' : TITLE[event]!, summary: detail,
       details: [...numbers, ...(token(r['tool_use_id']) ? [`call: ${hash(String(r['tool_use_id']))}`] : [])],
       ...(measured !== undefined && Number.isFinite(measured) && measured >= 0 ? { durationMs: measured } : {}),

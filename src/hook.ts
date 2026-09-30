@@ -150,6 +150,15 @@ export interface HookDeps {
   openTrace?: typeof openTraceDir;
   /** When this hook process started, in epoch ms. The provider gets what is left of the host's hook timeout (L7). */
   startedAt?: number;
+  /** Host facts supplied by an execution adapter. No policy is reimplemented here. */
+  host?: {
+    id: 'codex';
+    config: ConfigV5;
+    depth: () => DepthReading;
+    compactWindow: number | null;
+    source: (binding: import('./lean-source.js').LeanSourceBinding) => import('./lean-source.js').LeanSourceOutcome;
+    observation: (agentId: string | null) => import('./verify.js').WorkerObservation | null;
+  };
 }
 
 /**
@@ -284,7 +293,7 @@ const observedModel = (toolResponse: unknown): string | null => (isRecord(toolRe
  * (what the host runs an unpinned call on). `null` for a `subagent_type` this plugin does not own: there is no
  * expectation to compare against.
  */
-const requestedModelFor = (toolInput: unknown): string | null => {
+const requestedModelFrom = (toolInput: unknown, models = DEFAULT_CONFIG.models): string | null => {
   if (!isRecord(toolInput)) return null;
   const pinned = str(toolInput['model']);
   if (pinned !== null) return pinned;
@@ -292,7 +301,7 @@ const requestedModelFor = (toolInput: unknown): string | null => {
   const owned = subagent !== null ? OWNED_AGENTS[subagent] : undefined;
   // #48 P0-2 review: a call the hook did not patch runs on the agent's frontmatter model, which gen-agents writes from
   // DEFAULT_CONFIG.models; the owner's configured table only reaches a call through a patch, which pins `model`.
-  return owned ? DEFAULT_CONFIG.models[owned.tier] : null;
+  return owned ? models[owned.tier] : null;
 };
 
 /** #53 review: an isolated worker is told to commit, since only its branch comes back to the coordinator. */
@@ -395,7 +404,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
   const isAgentPre = input.hook_event_name === 'PreToolUse' && input.tool_name === 'Agent';
 
   if (deps.env['JEV_GATE_MODE'] === 'off') return isAgentPre ? preserve('mode_off') : skip('mode_off');
-  const loaded = loadConfig(deps.env, undefined, hookDefaultMode(deps.env, deps.argv ?? []));
+  const loaded = deps.host ? { ok: true as const, config: deps.host.config, source: 'host' } : loadConfig(deps.env, undefined, hookDefaultMode(deps.env, deps.argv ?? []));
   if (!loaded.ok) return isAgentPre ? preserve('config_invalid') : skip('config_invalid');
   /**
    * #48 P1-2 review: a worker under `isolation: "worktree"` starts from the host's `worktree.baseRef`, whose default
@@ -403,8 +412,9 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
    * task's inputs. Only "head" is the revision the plan was made against; any other reading, unset included, runs as
    * workerIsolation "none" -- one worker at a time in the caller's tree -- rather than dispatching onto the wrong base.
    */
-  const baseRef = loaded.config.workerIsolation === 'worktree' ? readHostWorktreeBaseRef(deps.env, null, { cwd: input.cwd ?? null, transcriptPath: input.transcript_path ?? null }) : null;
+  const baseRef = loaded.config.workerIsolation === 'worktree' ? deps.host ? { value: 'head', source: 'codex_head' } : readHostWorktreeBaseRef(deps.env, null, { cwd: input.cwd ?? null, transcriptPath: input.transcript_path ?? null }) : null;
   const config: ConfigV5 = baseRef !== null && baseRef.value !== 'head' ? { ...loaded.config, workerIsolation: 'none', maxParallelWorkers: 1 } : loaded.config;
+  const requestedModelFor = (tool: unknown): string | null => requestedModelFrom(tool, deps.host ? config.models : DEFAULT_CONFIG.models);
   const rawMode = config.mode;
   if (rawMode === 'off') return isAgentPre ? preserve('mode_off') : skip('mode_off');
   /**
@@ -433,6 +443,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
   /** A2: state rebuilt outside UserPromptSubmit is guarded only when the host gave this turn a prompt identity. */
   const recoveredGeneration = (): JobGeneration => emptyGeneration(input.prompt_id ?? null, input.prompt_id ? 'orchestrated' : 'direct');
   const base = {
+    ...(deps.host ? { host: deps.host.id } : {}),
     session_id: input.session_id ?? null,
     prompt_id: input.prompt_id ?? null,
     caller,
@@ -561,7 +572,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
      * forking, means the dispatch could only ever be denied -- and paying for a selection this session cannot use
      * is the one cost with no possible return.
      */
-    if (dispatchBlocker(deps.env) !== null) return skip('host_unsupported');
+    if (!deps.host && dispatchBlocker(deps.env) !== null) return skip('host_unsupported');
     cleanupJobs(deps.env);
 
     /**
@@ -583,7 +594,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     if (leanActive(prior).length > 0) return skip('lean_executor_active');
 
     const binding = { request: prompt, promptId, sessionId, phase: 'prompt' } as const;
-    const read = readLeanSource(input.transcript_path, binding);
+    const read = deps.host ? deps.host.source(binding) : readLeanSource(input.transcript_path, binding);
     if (!read.ok) return skip(read.reason);
     const source = read.source;
     // A human turn after this request means it is no longer the latest one; deciding it now would spend on a stale turn.
@@ -678,7 +689,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
 
     /** Store the composed packet against this request, or fall back to native and leave nothing dispatchable. */
     const publish = (packet: string, retained: number, omitted: number): HookResult => {
-      const recheck = readLeanSource(input.transcript_path, binding);
+      const recheck = deps.host ? deps.host.source(binding) : readLeanSource(input.transcript_path, binding);
       if (!recheck.ok || recheck.source.epoch !== source.epoch || recheck.source.prefixDigest !== source.prefixDigest || recheck.source.newerHumanText) return native('source_changed');
       let stale = false;
       const saved = leanWrite(sessionId, promptId, (gen) => {
@@ -819,7 +830,8 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     // The source is checked again here, inside the dispatch, not only after the call.
     const request = gen.request;
     if (request === null || sha256(request) !== pending.request_sha256) return deny('marker_stale', 'the request this packet was built for is no longer the current one.');
-    const recheck = readLeanSource(input.transcript_path, { request, promptId: gen.prompt_id, sessionId, phase: 'dispatch' });
+    const sourceBinding = { request, promptId: gen.prompt_id, sessionId, phase: 'dispatch' as const };
+    const recheck = deps.host ? deps.host.source(sourceBinding) : readLeanSource(input.transcript_path, sourceBinding);
     if (!recheck.ok || recheck.source.epoch !== pending.epoch || recheck.source.prefixDigest !== pending.prefix_digest || recheck.source.newerHumanText) {
       return deny('marker_stale', 'the conversation this packet was built from has changed.');
     }
@@ -949,7 +961,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
      * orchestrated job only locks the main session out -- its guard refuses the root's edits while every brief is
      * declined -- so neither Gate A nor the forced arm may start one there.
      */
-    const blocker = dispatchBlocker(deps.env);
+    const blocker = deps.host ? null : dispatchBlocker(deps.env);
     const forcedRequested = deps.env['JEV_GATE_EXPERIMENT_ADMISSION'] === 'orchestrated';
     // A16: the forced control arm starts an orchestrated job in either mode without asking Gate A; B still runs.
     const forced = forcedRequested && blocker === null;
@@ -999,7 +1011,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
      * number is written to every admission_result record below, which is how a bench case proves it primed the
      * session before the job prompt.
      */
-    const depth: DepthReading = readSessionDepth(input.transcript_path);
+    const depth: DepthReading = deps.host ? deps.host.depth() : readSessionDepth(input.transcript_path);
     // Gate A's read-offs, kept for `admittedShape: auto`; null on every path that asked nothing (forced, native).
     let admissionAnswers: Record<string, unknown> | null = null;
     const contextTokens = depth.ok ? depth.tokens : null;
@@ -1036,7 +1048,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
        */
       // The session's own model, from the same transcript line the depth came from: with no window configured, the
       // host compacts at the model's context limit, so a 200K model and a 1M model get different floors.
-      const window = readHostCompactWindow(deps.env, input.cwd ?? null, { model: depth.ok ? depth.model : null, transcriptPath: input.transcript_path ?? null });
+      const window = deps.host ? { tokens: deps.host.compactWindow, source: 'codex_usage' } : readHostCompactWindow(deps.env, input.cwd ?? null, { model: depth.ok ? depth.model : null, transcriptPath: input.transcript_path ?? null });
       const { floor, source: floorSource } = effectiveDepthFloor(config, window.tokens);
       const floorFacts = { depth_floor: floor, depth_floor_source: floorSource, host_window: window.tokens, host_window_source: window.source };
       // The forced arm never reaches this branch at all (see above), so unlike before, no `!forced` guard is needed.
@@ -1905,7 +1917,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
             const declared = task?.checks.find((k) => k.id === c.check_id && k.required);
             return declared ? [{ id: c.check_id, command: declared.command }] : [];
           });
-      const observation = path === null ? null : readWorkerObservation(path);
+      const observation = deps.host ? deps.host.observation(agentId) : path === null ? null : readWorkerObservation(path);
       verification = verifyChecks(observation, claims);
       if (isSingle && finalVerdict === 'accept' && evidenceFormatOnly(observation, claims, verification)) {
         formatOnly = true;
@@ -2113,7 +2125,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
    */
   const handleSessionStart = (): HookResult => {
     if (mode !== 'auto') return skip();
-    const blocker = dispatchBlocker(deps.env);
+    const blocker = deps.host ? null : dispatchBlocker(deps.env);
     if (blocker !== null) {
       const text =
         blocker === 'background_only'
@@ -2162,7 +2174,9 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
   return skip();
 };
 
+declare const __JEV_HOOK_AUTORUN__: boolean;
 const isMainModule = (): boolean => {
+  if (typeof __JEV_HOOK_AUTORUN__ !== 'undefined' && !__JEV_HOOK_AUTORUN__) return false;
   const argv1 = process.argv[1];
   if (!argv1) return false;
   try {

@@ -1,6 +1,6 @@
 ---
 name: jev-gate
-description: Find exact repository evidence with Jev and inspect native Codex execution records. Use for locating source evidence, reading verified source windows, or diagnosing the Jev Gate Codex plugin. Does not enable automatic delegation, model routing or compaction replacement.
+description: Use Jev Gate policies and exact repository evidence in native Codex. Use for locating source evidence, reading verified source windows, or diagnosing the Jev Gate Codex plugin. Automatic policies require the native session connection.
 ---
 
 # Jev Gate in Codex
@@ -15,7 +15,9 @@ Use the plugin's `jev_evidence` MCP tool for repository evidence. Its descriptio
 
 The native hooks record lifecycle metadata and fold only repeated identical lines in complete passing Vitest output. A spawn receipt is not a completed worker. A stop event is not Jev contract acceptance. Missing events mean unknown; no fake activity is generated.
 
-Automatic Gate A/B orchestration, plan/dependency acceptance, Jev root guard, Lean handoff, model/effort Router, and extractive compaction replacement are unavailable in this adapter. Do not emulate them by approving permissions, editing Codex transcripts, launching a separate runner, or silently treating advice as enforced policy.
+Start a fresh native terminal with `node <installed-plugin>/dist/cli.mjs codex` for automatic Gate A/B, plans, contract checks, root guard, Lean, Router and Compact. Review and trust the plugin hooks in ordinary Codex `/hooks` first. The connection uses the official App Server and real terminal. Use `jev_agent` only with the exact owned profile and marker in current policy guidance; never replace it with native spawn_agent when a job is admitted. Code owns acceptance and native permissions remain authoritative. Lean uses a separate executor path with no Gate or plan. Unknown input, invalid Jev judgments and timeouts preserve the baseline. Missing records are not proof that a policy ran.
+
+A standalone plugin session provides Evidence, Output and host observation. It does not have automatic policy enforcement until connected. Do not silently approve permissions, modify transcripts or infer savings.
 
 With `JEV_CODEX_WORKSPACE` set to the intended Git project, use the absolute installed plugin path:
 

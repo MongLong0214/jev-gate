@@ -1,11 +1,13 @@
 # Changelog
 
-## v0.7.0 — Unreleased — Native Codex adapter
+## v0.7.0 — 2026-09-30 — Native Codex policies
 
-- Separate native Codex plugin with bundled Evidence MCP, conservative Vitest output folding, lifecycle recording, doctor, and a host-specific live dashboard. Codex Evidence requires an explicit workspace or config and ignores inherited Claude/PWD variables, preventing accidental plugin-cache searches.
-- Codex features show active, observation-only, or unsupported status. Spawn receipts and stop hooks are never called accepted worker results; host spans are not counted as Jev latency or savings.
-- Automatic Gate A/B, planning/contract acceptance, root guard, Lean, Router, and extractive compaction replacement remain unavailable in the native adapter. Claude behavior and approval policy are preserved.
-- Build from source before adding the local Codex marketplace, then review/trust hooks with `/hooks`. `npm run pack -- --profile codex` produces an independently installable native archive.
+- Native Codex plugin and terminal launcher connect the official App Server to the real terminal. Gate A/B, plans, dependency readiness, observed check acceptance, root guard and the separate Lean executor use the shared core and existing agent instructions.
+- Codex routing supports the full live account catalog, including GPT-6/6.1 and Terra, and model-specific max/ultra efforts. Native workspace backend and residency routing are preserved. GPT-6 Responses Lite tool definitions are handled during local compaction.
+- Router applies official turn settings using the account's actual model/effort catalog and records selection separately from the outbound native model request. Compact installs the shared extractive digest through Codex's local compaction lifecycle; media, encrypted or incomplete context falls back to native compaction.
+- Bundled Evidence MCP, conservative Vitest Output folding, metadata-only lifecycle recording, doctor and all-feature live pipelines. A standalone plugin session explains how to connect automatic policies. The dashboard never equates host spans with Jev latency, spawned agents with accepted work, or digest bytes with measured savings.
+- Native runtime tests use actual Codex processes with a disposable installed archive and local scripted provider: root denial, accepted/rejected worker checks, dependent plans, Lean input, cancellation, automatic/manual compaction, Output and Evidence. Native approvals are forwarded unchanged, permissions are inherited, and workers cannot start nested coordinators. Additional runtime checks cover denial-budget interruption, read-only execution and planned-worker worktree isolation.
+- Build and install the separate `jev-gate-codex` archive; review/trust `/hooks`, then start `node <plugin>/dist/cli.mjs codex`. Tested with Codex CLI 0.158.0 and 0.159.2. No persistent host configuration edits or new daemon. Claude Code policy behavior is preserved.
 
 ## v0.6.6 — 2026-09-29 — Live operations across the plugin
 

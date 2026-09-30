@@ -6,15 +6,18 @@ import { codexTraceDir } from '../codex-paths.js';
 import { CODEX_CAPABILITIES } from '../host-support.js';
 import { loadConfig } from '../evidence/source.js';
 import { startDashboard } from '../dashboard.js';
+import { launchCodex } from './launch.js';
+import { loadCodexPolicy } from './config.js';
 
 export const codexDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: string): Promise<{ ok: boolean; lines: string[] }> => {
   const lines: string[] = [];
   let ok = true;
   const check = (pass: boolean, text: string): void => { if (!pass) ok = false; lines.push(`[${pass ? 'ok' : 'fail'}] ${text}`); };
-  check(Number(process.versions.node.split('.')[0]) >= 22, `Node ${process.versions.node} (22+ required)`);
+  const [major, minor] = process.versions.node.split('.').map(Number);
+  check(major! > 22 || major === 22 && minor! >= 15, `Node ${process.versions.node} (22.15+ required for native compressed Responses)`);
   const version = spawnSync('codex', ['--version'], { env, encoding: 'utf8', timeout: 3000 });
   const v = /codex-cli (\d+)\.(\d+)\.(\d+)/.exec(version.stdout ?? '');
-  check(version.status === 0 && !!v && (Number(v[1]) > 0 || Number(v[2]) >= 158), `Codex ${v ? v.slice(1).join('.') : 'unavailable'} (tested with 0.158.0; older hosts are unsupported)`);
+  check(version.status === 0 && !!v && (Number(v[1]) > 0 || Number(v[2]) >= 158), `Codex ${v ? v.slice(1).join('.') : 'unavailable'} (tested with 0.158.0 and 0.159.2; older hosts are unsupported)`);
   for (const path of ['.codex-plugin/plugin.json', '.mcp.json', 'hooks/hooks.json', 'dist/hook.mjs', 'dist/server.mjs', 'skills/jev-gate/SKILL.md']) check(existsSync(join(root, path)), path);
   try {
     const path = codexTraceDir(env);
@@ -31,6 +34,9 @@ export const codexDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: str
   lines.push('[info] No source was scanned and no request was sent.');
   lines.push(`[info] hooks: ${env['JEV_CODEX_ENABLED'] === '0' ? 'disabled by JEV_CODEX_ENABLED=0' : 'enabled by configuration; use /hooks in Codex to review trust and execution'}`);
   lines.push(`[info] output folding: ${env['JEV_CODEX_OUTPUT'] === 'off' ? 'off' : 'on'}`);
+  try { const policy = loadCodexPolicy(env); check(true, `policy: Gate ${policy.gate.mode}; Router ${policy.router.enabled ? 'on' : 'off'}; Compact ${policy.compact.enabled ? 'on' : 'off'}`); }
+  catch { check(false, 'policy: invalid Codex policy configuration'); }
+  lines.push('[info] Full automatic policies require: node <plugin>/dist/cli.mjs codex. A standalone codex session provides Evidence, Output and observation.');
   for (const [feature, capability] of Object.entries(CODEX_CAPABILITIES)) lines.push(`[${capability.mode}] ${feature}: ${capability.en}`);
   lines.push('[info] This checks local readiness, not plugin installation, hook trust, or measured savings.');
   return { ok, lines };
@@ -39,7 +45,9 @@ export const codexDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: str
 const main = async (): Promise<void> => {
   const root = dirname(dirname(fileURLToPath(import.meta.url)));
   const argv = process.argv.slice(2);
-  if (argv[0] === 'doctor') {
+  if (argv[0] === 'codex') {
+    process.exitCode = await launchCodex(argv.slice(1), process.env);
+  } else if (argv[0] === 'doctor') {
     const result = await codexDoctor(root, process.env, process.cwd());
     process.stdout.write(`${result.lines.join('\n')}\n`);
     process.exitCode = result.ok ? 0 : 1;
@@ -53,10 +61,10 @@ const main = async (): Promise<void> => {
       const child = spawn('open', [server.url], { stdio: 'ignore', detached: true }); child.on('error', () => undefined); child.unref();
     }
   } else {
-    process.stdout.write('usage: node <plugin>/dist/cli.mjs doctor\n       node <plugin>/dist/cli.mjs dashboard [--port 4731]\n');
+    process.stdout.write('usage: node <plugin>/dist/cli.mjs codex [native terminal options]\n       node <plugin>/dist/cli.mjs doctor\n       node <plugin>/dist/cli.mjs dashboard [--port 4731]\n');
     process.exitCode = 2;
   }
 };
 let direct = false;
 try { direct = !!process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { /* imported */ }
-if (direct) void main().catch(() => { process.stderr.write('jev-gate codex: command failed; check the port and absolute trace directory.\n'); process.exitCode = 1; });
+if (direct) void main().catch(() => { process.stderr.write('jev-gate codex: command failed; check Codex installation, hook trust, policy configuration and CLI arguments.\n'); process.exitCode = 1; });

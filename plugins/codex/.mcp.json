@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "evidence": {
+    "jev_gate_evidence": {
       "command": "node",
       "args": [
         "dist/server.mjs",

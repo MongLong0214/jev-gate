@@ -27,6 +27,10 @@ jobs:
       # Rebuilds every archive the marketplace pins (from v0.6.0 the one jev-gate plugin) and refuses unless each matches
       # its SHA-256, the tag names the version, and main serves these same entries.
       - run: node scripts/release.mjs check --tag "$GITHUB_REF_NAME" --against origin/main --out dist-release
+      - run: node scripts/pack.mjs dist-release --profile codex
+      - run: |
+          printf '\nCodex archive SHA-256:\n\n' >> dist-release/NOTES.md
+          sha256sum dist-release/jev-gate-codex-*.zip >> dist-release/NOTES.md
       # main may have moved while the job ran: fetch it again and repeat the comparison just before publishing.
       - run: |
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
@@ -51,5 +55,9 @@ jobs:
           gh release download "$GITHUB_REF_NAME" --pattern '*.zip' --dir published --clobber
       - run: |
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-          assets=(); for f in published/*.zip; do assets+=(--asset "$f"); done
+          assets=(); for f in published/*.zip; do
+            case "$f" in published/jev-gate-codex-*) continue ;; esac
+            assets+=(--asset "$f")
+          done
           node scripts/release.mjs check --tag "$GITHUB_REF_NAME" --against origin/main "${assets[@]}"
+          cmp dist-release/jev-gate-codex-*.zip published/jev-gate-codex-*.zip

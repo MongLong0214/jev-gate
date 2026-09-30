@@ -24,7 +24,7 @@ export const handleCodexEvent = (input: Rec, env: CodexHookDeps['env'], trace?: 
   const tool = token(input['tool_name']);
   const response = record(input['tool_response']);
   const base = {
-    host: 'codex', mode: 'native', event, session_id: session,
+    host: 'codex', mode: 'native', managed: !!env['JEV_CODEX_BRIDGE_URL'], event, session_id: session,
     prompt_id: token(input['turn_id']), tool_use_id: token(input['tool_use_id']),
     tool_name: tool, agent_id: token(input['agent_id']), agent_type: token(input['agent_type']),
     // The hook's model is the emitting session's model. It is never promoted to a spawned child's model.
@@ -44,8 +44,10 @@ export const handleCodexEvent = (input: Rec, env: CodexHookDeps['env'], trace?: 
     // Native PostToolUse replaces the completed tool result with stopReason and continues the model.
     if (folded.applied) return { continue: false, stopReason: folded.text };
   }
+  if (event === 'SessionStart' && env['JEV_CODEX_BRIDGE_URL']) return { hookSpecificOutput: { hookEventName: event, additionalContext:
+    'Jev Gate is connected to the native Codex session adapter. Gate A/B, plans, contract acceptance, root guard and Lean use the shared policies; Router uses official turn settings; Compact uses the native compaction lifecycle. Follow the current turn guidance and use jev_agent for owned dispatches. Native permissions and the user request remain authoritative. Do not claim unobserved policies or savings ran.' } };
   if (event === 'SessionStart') return { hookSpecificOutput: { hookEventName: event, additionalContext:
-    'Jev Gate native Codex plugin: jev_evidence provides repository evidence (local search without a TypeSafe key; Jev judgments when configured). Hooks record Codex lifecycle metadata and fold complete passing Vitest logs. Automatic Gate A/B orchestration, Jev contract acceptance, root guard, Lean handoff, model/effort Router and extractive compaction replacement are unavailable on this native adapter. Use Codex native tools and permissions. Do not claim these unavailable features ran or saved tokens. See the jev-gate Codex skill for usage and diagnostics.' } };
+    'Jev Gate native Codex plugin: jev_evidence provides repository evidence and hooks record lifecycle metadata and fold complete passing Vitest logs. To enable automatic Gate, Lean, Router and Compact, start native Codex through node <installed-plugin>/dist/cli.mjs codex. That connects the official Codex App Server to the native terminal UI and applies shared Jev policies. This session has no policy connection; do not claim those policies ran. See the Jev Gate skill for setup.' } };
   return {};
 };
 
@@ -62,7 +64,18 @@ export const runCodexHook = async (deps: CodexHookDeps): Promise<Rec> => {
     const input = record(JSON.parse(Buffer.concat(chunks).toString('utf8')));
     if (!input) return {};
     const opened = (deps.openTrace ?? openTraceDir)(codexTraceDir(deps.env));
-    return handleCodexEvent(input, deps.env, opened.ok ? opened.writer : undefined);
+    const recorded = handleCodexEvent(input, deps.env, opened.ok ? opened.writer : undefined);
+    const bridge = deps.env['JEV_CODEX_BRIDGE_URL'];
+    const secret = deps.env['JEV_CODEX_BRIDGE_TOKEN'];
+    if (!bridge || !secret) return recorded;
+    const url = new URL(bridge);
+    if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1') return recorded;
+    try {
+      const response = await fetch(new URL('/hook', url), { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${secret}` }, body: JSON.stringify(input), signal: AbortSignal.timeout(4200) });
+      if (!response.ok) return recorded;
+      const policy = record(await response.json());
+      return policy && Object.keys(policy).length ? policy : recorded;
+    } catch { return recorded; }
   } catch {
     // Hook failures preserve native behavior. No exception messages containing input reach stdout/stderr.
     return {};
