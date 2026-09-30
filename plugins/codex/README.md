@@ -80,6 +80,8 @@ Records default to `$XDG_STATE_HOME/jev-gate/codex/traces`, otherwise `~/.local/
 
 If there are no records, check `/hooks` trust, plugin enablement, environment inheritance, and `doctor`. A symlinked trace directory is refused. A recording failure preserves normal host execution. Doctor reports local readiness, not proof that Codex trusted or ran a hook.
 
+If Codex rejects the configured model for your account, choose an available model with `/model` or `codex --model <available-model>`. Plugin installation does not grant model access; doctor does not validate your login or account's model availability.
+
 ## Verification
 
 `npm test` covers the core, native adapter and extracted archive with fake HTTP and no credentials. `npm run test:codex:runtime` additionally requires Codex CLI: it installs a uniquely named disposable plugin, uses a local scripted model (no model API key), checks the actual model-visible output and MCP result, and removes that test installation. It does not establish measured token savings or production model quality.
