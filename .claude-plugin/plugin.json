@@ -147,8 +147,8 @@
       "default": 0.6
     },
     "routerTimeoutMs": {
-      "title": "Router: Assessment wait (ms)",
-      "description": "How long a request waits for the assessment, 50 to 30000. Past it the request runs natively.",
+      "title": "Router: Preparation budget (ms)",
+      "description": "Total routing preparation budget, including host reads and Jev, 50 to 30000 ms. Past it the request runs natively.",
       "type": "number",
       "default": 800
     },

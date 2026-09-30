@@ -159,8 +159,8 @@ export interface ConfigV5 {
   delegationCoordinatorTurns: number;
   delegationWorkerTokensPerCall: number;
   /**
-   * Whether the coordinator may call MCP tools (`mcp__*`) while the guard is active. A worker cannot reach a
-   * connector, so without this a turn that needs one stalls. On by default.
+   * Whether the coordinator may call MCP tools (`mcp__*`) while the guard is active. Workers inherit the connected
+   * tools provided by their host independently of this root guard option. On by default.
    */
   guardAllowMcp: boolean;
   /**
@@ -391,8 +391,11 @@ export interface JobGeneration {
   forced?: true;
   /** A19: present only when the turn was admitted under `admittedShape: single`. Absent reads as `hierarchy`. */
   execution?: 'single';
-  /** The single-shape cap was reached without acceptance; the root may use its own tools to finish. */
+  /** The admitted job handed remaining work to the root: accepted terminal results, failed required delivery, or the single-attempt cap. */
   root_fallback?: true;
+  root_fallback_reason?: 'attempt_cap' | 'delivery_failed' | 'accepted';
+  /** New automatic atomic admissions require an intact single-worker request. Absent is legacy. */
+  admission_revision?: 'atomic-context-v1';
   /** JGL-03: at most one pending lean packet per generation. Null once consumed, superseded or never produced. */
   lean?: LeanPending | null;
 }
@@ -537,6 +540,8 @@ export type PreserveReason =
   | 'admission_too_small'
   | 'admission_external_tools'
   | 'admission_not_worth'
+  | 'admission_shape_unknown'
+  | 'admission_delivery_failed'
   | 'route_invalid'
   | 'route_tie'
   | 'route_abstain'

@@ -64,7 +64,7 @@ Every wait, for the key or a read, ends when its turn is retired or its dispatch
 | `routerFrontierModel` | empty | An exact identifier only (`claude-fable-5-1`); an alias cannot authorize it. |
 | `routerMinUpgradeConfidence` | `0.8` | Floor for moving up: Jev's probability mass at or above the target. |
 | `routerMinDowngradeConfidence` | `0.6` | Floor for moving down: Jev's probability mass at or below the target. A downgrade also needs `ordinary` risk at this probability. On a week of the owner's traffic (2026-09-21..28), 0.9 moved 2 of 174 routable spawns and 2 of 245 root turns. |
-| `routerTimeoutMs` | `800` | Wait for Jev, 50–30000. The request is still observed for its usage after the wait ends. |
+| `routerTimeoutMs` | `800` | Total preparation budget from dispatch to native next, 50–30000; includes key, pins, settings, version, Jev and final confirmation. The request is still observed for its usage after the wait ends. |
 | `routerLogDecisions` | `true` | One `jev-router {...}` line per decision in the debug log. |
 
 The host checks each option's declared type before the module loads. An option the Router still cannot use, such as a
@@ -182,21 +182,14 @@ one ran on. A patched request whose stream fails leaves the rest of the turn nat
 passes through unchanged, `next` is never called again for it, and whatever the host sends next, a retry or a
 fallback, goes without the override.
 
-**Root effort and the prompt cache.** Changing the effort always invalidates a conversation's cached messages
-(platform docs, *Prompt caching*), and the host sends each turn's effort both as a per-message change and
-as the top-level value (2.1.283, observed on a local fake API). So on a warm cache — a response that the requested model
-itself gave (by the model its usage reports) within the last 55 minutes, under the host's one-hour cache lifetime — a lower effort is held at the one the cache was
-written at (`held_for_cache` names what was asked), and only a rise pays the rewrite. Lowering waits for a cold cache:
-a session's first turn, a model change, or an hour's pause. Replayed on the owner's 245 root turns of 2026-09-21..28,
-whose first requests re-read a median 185K tokens, lowering freely moved effort at 71 warm turns and, with each
-rewrite priced, cost 2.7 % more than it saved; held, 12 warm turns moved and it saved whichever way the cache behaves.
-The savings in that replay are assumed shares of each turn's cost, not measured ones.
+**Root effort and the prompt cache.** On a warm cache (a response from the requested model within 55 minutes), a lower proposal can be held at the valid cache effort, bounded by the native baseline. Past high effort never raises the current baseline: high/warm xhigh/low remains native high; low/warm xhigh/high keeps the current high upgrade. Final native values are omitted from the patch. A model change or cold cache uses the allowed proposal. The same helper checks every finite candidate before host reads or HTTP: if all end native, the turn sends no Jev request. These rules protect the observed top-level effort path; they do not claim measured savings or a verified per-message-only path.
+
+**Preparation budget.** The default 800ms covers all optional preparation, not just HTTP. Pending reentry keeps the original deadline. Pins are reread before application, while stalled key/version and pending pin reads are shared. Effort-only root routing reads only its effort pin. A timeout forwards the native event once; host cancellation forwards none. The timer is removed before native streaming starts. Unresolved HTTP retains its in-flight slot until settlement; late usage stays attributed to its original request. Decision logs expose preparation milliseconds separately from Jev response time.
 
 **Subagent effort.** A subagent's loop steps through `turn.step` with its own `agentId`, which the spawn's result
 carries (2.1.283, observed). The spawn is asked the effort question on the full scale before its subagent's effort
 is known; its loop's first step reads that answer against the model and effort the loop actually runs at and decides
-for the whole loop, so one subagent keeps one effort and its cache is never restarted. A first step that could not
-wait for the spawn's id (1.5 s) runs native and so does the rest of its loop. A step that arrives on another model or
+for the whole loop, so one subagent keeps one effort and its cache is never restarted. A first step without its own ready spawn mapping starts native immediately and stays native. It waits for neither its own spawn result nor unrelated spawns. Late mappings, same-index retries and continuations cannot revive that loop. Child completion cleans up the bounded mapping state. A step that arrives on another model or
 effort, an effort pin, a patched step answered by another model or one that failed leaves that loop native too
 (`child_stop`). The answer is for the spawn's own task: a later run of the same subagent (a SendMessage continuation,
 which steps under a new turn id) runs native (`next_turn`). A subagent whose model is known at the spawn and takes no

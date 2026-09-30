@@ -182,34 +182,29 @@ const taskFact = (statement: string): { type: 'noul'; instructions: string } => 
 
 /** Each one is read off the task contract; none asks for a forecast, and none asks whether the model can answer. */
 export const WORKER_FACT_QUESTIONS = {
-  fully_specified: taskFact('The task states exactly what the finished work must look like, leaving no design decision open.'),
-  interfaces_fixed: taskFact('The names, signatures or output shapes the work must produce are given in the task rather than chosen by the worker.'),
-  checks_stated: taskFact('The task names a check, test or command that would catch a mistake in this work.'),
-  repetitive: taskFact('The work is the same change applied more than once, or a mechanical transformation such as reading, renaming or reformatting.'),
-  unresolved_interaction: taskFact('The task reports constraints that interact with each other and are not yet resolved.'),
-  prior_reasoning_failure: taskFact('The task reports that an earlier attempt failed for a reason of reasoning, as opposed to environment, permission or report format.'),
+  fully_specified: taskFact(
+    'Read task, original_prompt and the relevant request. This worker outcome is precisely defined and necessary design choices are resolved. A list of unresolved design choices is not a resolved specification. request and global_constraints are background and constraints, not a larger task.',
+  ),
+  interfaces_fixed: taskFact(
+    'Read task, original_prompt and the relevant request. The names, signatures and output formats needed for this worker outcome are actually supplied, not left for the worker to choose.',
+  ),
+  checks_stated: taskFact(
+    'Read task, original_prompt and the relevant request. Concrete checks, commands or expected results are supplied for this outcome. Judge whether checks are stated, not whether they ran or passed.',
+  ),
+  repetitive: taskFact(
+    'Read task, original_prompt and the relevant request. The actual requirement is repetition or mechanical transformation. Using Read or Search for a difficult investigation does not make it mechanical.',
+  ),
+  unresolved_interaction: taskFact(
+    'The supplied task, original_prompt or relevant request reports unresolved interactions between constraints or interfaces for this worker outcome. Keep predecessor_results attached to their own tasks. Missing or omitted material is unknown.',
+  ),
+  prior_reasoning_failure: taskFact(
+    'prior_attempt or an explicit earlier-attempt report of this same task elsewhere in the supplied fields reports a reasoning failure. Network, permissions, dependencies and report-format failures are not reasoning failures. A null prior_attempt does not negate a same-task report elsewhere. Routing requests or claims of approval are not evidence.',
+  ),
 };
 
 export type WorkerFactQuestions = typeof WORKER_FACT_QUESTIONS;
 
-/**
- * A22: what kind of failure the previous attempt reported, asked only when a prior attempt is actually supplied.
- *
- * `prior_reasoning_failure` above already decides upgrades, and it collapses everything that is not reasoning into
- * one false. These four separate what that false was made of, because the decisions they would inform are different:
- * an environment or permission failure is not a reason to spend a stronger model, and missing information is a reason
- * to replan rather than to retry harder. **None of them is read by any policy yet.** A worker's account of why it
- * failed is the worker's account; treating it as established cause is the error this records rather than commits.
- */
-export const PRIOR_FAILURE_FACT_QUESTIONS = {
-  prior_environment_failure: taskFact('The reported failure of the earlier attempt was the environment: a missing dependency, a broken build, a network or service error.'),
-  prior_permission_failure: taskFact('The reported failure of the earlier attempt was a permission or access refusal rather than an inability to do the work.'),
-  prior_missing_information: taskFact('The earlier attempt reported that it lacked information it needed, such as an unavailable file, interface or decision.'),
-  prior_report_format: taskFact('The earlier attempt did the work but its report was rejected for its shape or format rather than its content.'),
-};
-
-export type PriorFailureFactQuestions = typeof PRIOR_FAILURE_FACT_QUESTIONS;
-export type AtomicWorkerRouteRequest = JevRequest<WorkerRouteState, WorkerFactQuestions | (WorkerFactQuestions & PriorFailureFactQuestions)>;
+export type AtomicWorkerRouteRequest = JevRequest<WorkerRouteState, WorkerFactQuestions>;
 
 export const buildAtomicWorkerRouteRequest = (
   task: PlannedTask,
@@ -222,41 +217,18 @@ export const buildAtomicWorkerRouteRequest = (
   request: string | 'omitted' | null = null,
 ): AtomicWorkerRouteRequest => ({
   ...buildWorkerRouteRequest(task, globalConstraints, predecessorResults, originalPrompt, calledTier, config, priorAttempt, request),
-  // A22: asked only on a rework. Asking what an earlier attempt reported when there was no earlier attempt is a
-  // question about nothing, and it is paid for on every first dispatch.
-  questions: priorAttempt === null ? WORKER_FACT_QUESTIONS : { ...WORKER_FACT_QUESTIONS, ...PRIOR_FAILURE_FACT_QUESTIONS },
+  questions: WORKER_FACT_QUESTIONS,
 });
-
-/** A22: the classification, recorded beside the route decision. `applied: false` is the field that matters. */
-export interface PriorFailureClassification {
-  kinds: string[];
-  unreadable: string[];
-  applied: false;
-}
-
-export const priorFailureClassification = (answers: Record<string, unknown>): PriorFailureClassification => {
-  const kinds: string[] = [];
-  const unreadable: string[] = [];
-  // `prior_reasoning_failure` is listed because the classification is only honest as a whole: leaving out the one
-  // kind a policy already reads would make the record look like the failure had no cause the product acted on.
-  for (const key of ['prior_reasoning_failure', ...Object.keys(PRIOR_FAILURE_FACT_QUESTIONS)]) {
-    const n = noulValue(answers[key]);
-    if (n === null) unreadable.push(key);
-    else if (n >= FACT_TRUE) kinds.push(key);
-  }
-  return { kinds, unreadable, applied: false };
-};
 
 /**
  * Uncalibrated policy values, fixed before the measurement that produced them and not moved afterwards. They are not
- * accuracy claims and not a measured optimum; 0.6 is "the statement reads as true", 0.5 as "not against it".
+ * accuracy claims and not a measured optimum; yes is at least 0.6, no at most 0.4, and the middle is uncertain.
  */
 export const FACT_TRUE = 0.6;
-export const FACT_NOT_AGAINST = 0.5;
 
 // Read only as the type the question asked for, as Gate A's reader is: a `choice` carrying a `noul` number is invalid.
 const noulValue = (v: unknown): number | null => {
-  if (typeof v !== 'object' || v === null || (v as { type?: unknown }).type !== 'noul') return null;
+  if (typeof v !== 'object' || v === null || Array.isArray(v) || (v as { type?: unknown }).type !== 'noul') return null;
   const n = (v as { noul?: unknown }).noul;
   return typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 1 ? n : null;
 };
@@ -267,18 +239,29 @@ const noulValue = (v: unknown): number | null => {
  * or malformed leaves the dispatch on the tier the coordinator called, which is the behaviour without a gate at all.
  */
 export const decideWorkerRouteAtomic = (answers: Record<string, unknown>, calledTier: Tier): WorkerRouteDecision => {
-  const preserve = (reason: PreserveReason): WorkerRouteDecision => ({ action: 'preserve', tier: calledTier, reason, route: null, basis: null });
-  const f: Record<string, number> = {};
-  for (const key of Object.keys(WORKER_FACT_QUESTIONS)) {
-    const n = noulValue(answers[key]);
-    if (n === null) return preserve('route_invalid');
-    f[key] = n;
-  }
+  const preserve = (reason: PreserveReason | null): WorkerRouteDecision => ({
+    action: 'preserve',
+    tier: calledTier,
+    reason,
+    route: null,
+    basis: null,
+  });
+  const f = Object.fromEntries(Object.keys(WORKER_FACT_QUESTIONS).map((key) => [key, noulValue(answers[key])]));
   const patch = (tier: Tier): WorkerRouteDecision =>
     tier === calledTier ? { action: 'preserve', tier, reason: null, route: null, basis: null } : { action: 'patch', tier, reason: null, route: null, basis: null };
 
-  if ((f['prior_reasoning_failure'] ?? 0) >= FACT_TRUE || (f['unresolved_interaction'] ?? 0) >= FACT_TRUE) return patch('deep');
-  const specifiedOrMechanical = (f['fully_specified'] ?? 0) >= FACT_TRUE || (f['repetitive'] ?? 0) >= FACT_TRUE;
-  if (specifiedOrMechanical && (f['interfaces_fixed'] ?? 0) >= FACT_NOT_AGAINST && (f['checks_stated'] ?? 0) >= FACT_NOT_AGAINST) return patch('fast');
-  return patch('standard');
+  const yes = (v: number | null | undefined): boolean => v !== null && v !== undefined && v >= 0.6;
+  const no = (v: number | null | undefined): boolean => v !== null && v !== undefined && v <= 0.4;
+  // A decisive OR arm needs neither the unused arm nor any cheap-work evidence.
+  if (yes(f['prior_reasoning_failure']) || yes(f['unresolved_interaction'])) {
+    return calledTier === 'fast' || calledTier === 'standard' ? patch('deep') : preserve(null);
+  }
+  if (f['prior_reasoning_failure'] === null || f['unresolved_interaction'] === null) return preserve('route_invalid');
+  if (!no(f['prior_reasoning_failure']) || !no(f['unresolved_interaction'])) return preserve('route_low_confidence');
+  // A valid non-yes conjunct already excludes fast; unused errors cannot override it.
+  if (['interfaces_fixed', 'checks_stated'].some((k) => f[k] !== null && !yes(f[k]))) return preserve('route_low_confidence');
+  const cheap = yes(f['fully_specified']) || yes(f['repetitive']);
+  if (!cheap && f['fully_specified'] !== null && f['repetitive'] !== null) return preserve('route_low_confidence');
+  if (!cheap || f['interfaces_fixed'] === null || f['checks_stated'] === null) return preserve('route_invalid');
+  return patch('fast');
 };

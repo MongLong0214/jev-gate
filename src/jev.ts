@@ -58,19 +58,19 @@ export interface JevResponse {
 export type JevOutcome =
   | { ok: true; response: JevResponse; status: number; durationMs: number; requestBytes: number }
   | {
-      ok: false;
-      code: HttpCode;
-      status: number | null;
-      durationMs: number;
-      requestBytes: number;
-      /**
-       * Additive (JGL-02): usage and model that parsed on their own even though the answers did not. A call that
-       * was answered unusably still cost tokens, and reporting it as zero would understate what the policy spent.
-       * Absent means nothing was parseable, which is unknown -- not zero.
-       */
-      usage?: JevUsage;
-      model?: string | null;
-    };
+    ok: false;
+    code: HttpCode;
+    status: number | null;
+    durationMs: number;
+    requestBytes: number;
+    /**
+     * Additive (JGL-02): usage and model that parsed on their own even though the answers did not. A call that
+     * was answered unusably still cost tokens, and reporting it as zero would understate what the policy spent.
+     * Absent means nothing was parseable, which is unknown -- not zero.
+     */
+    usage?: JevUsage;
+    model?: string | null;
+  };
 
 export interface JevCallDeps {
   apiKey: string;
@@ -237,6 +237,36 @@ export const validateChoice = <K extends string>(value: unknown, keys: readonly 
   const confidence = value['confidence'];
   if (typeof confidence !== 'number' || !Number.isFinite(confidence) || confidence < 0 || confidence > 1) return null;
   return { type: 'choice', choice: choice as K, probabilities, confidence };
+};
+
+/** A five-level Score's raw distribution and a separate calculation copy. Choice tie semantics stay unchanged. */
+export const validateScore = (
+  value: unknown,
+): { score: number; confidence: number; probabilities: number[]; normalized: number[] } | null => {
+  if (!isRecord(value) || value['type'] !== 'score') return null;
+  const score = value['score'];
+  const confidence = value['confidence'];
+  const probabilities = value['probabilities'];
+  if (
+    typeof score !== 'number' ||
+    !Number.isFinite(score) ||
+    score < 0 ||
+    score > 4 ||
+    typeof confidence !== 'number' ||
+    !Number.isFinite(confidence) ||
+    confidence < 0 ||
+    confidence > 1 ||
+    !isRecord(probabilities)
+  )
+    return null;
+  const keys = ['0', '1', '2', '3', '4'];
+  if (Object.keys(probabilities).length !== keys.length || keys.some((k) => !Object.hasOwn(probabilities, k))) return null;
+  const raw = keys.map((k) => probabilities[k]);
+  if (raw.some((p) => typeof p !== 'number' || !Number.isFinite(p) || p < 0 || p > 1)) return null;
+  const p = raw as number[];
+  if (scaleOf(p) === null || Math.abs(score - p.reduce((n, v, i) => n + i * v, 0)) > 0.06 + Number.EPSILON * 8) return null;
+  const sum = p.reduce((n, v) => n + v, 0);
+  return { score, confidence, probabilities: p, normalized: p.map((v) => v / sum) };
 };
 
 export const topChoices = <K extends string>(answer: ChoiceAnswer<K>): K[] => {

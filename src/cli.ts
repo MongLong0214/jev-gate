@@ -183,9 +183,11 @@ const checkConfig = (loaded: ConfigResult): void => {
   if (c.admissionQuestionShape === 'atomic') {
     say(
       'info',
-      `admissionQuestionShape=atomic: Gate A asks read-off questions and prices the request in code -- delegate when (turns - ${c.delegationCoordinatorTurns}) x depth - turns x ${c.delegationWorkerTokensPerCall} > 0 -- and does not consult admissionConfidenceFloor; delegationDepthFraction is read only by the composite gate`,
+      `admissionQuestionShape=atomic: Gate A requires self-contained support >= 0.8 and positive-saving distribution support >= 0.8, then prices the request in code -- delegate when (turns - ${c.delegationCoordinatorTurns}) x depth - turns x ${c.delegationWorkerTokensPerCall} > 0 -- and does not consult admissionConfidenceFloor; delegationDepthFraction is read only by the composite gate`,
     );
   }
+  if (c.routeQuestionShape === 'atomic') say('info', 'atomic Gate B: six core facts; yes >= 0.6, no <= 0.4; uncertain answers preserve the called profile; fast requires all cheap-work evidence; specific difficulty upgrades only fast/standard to deep');
+  if (c.admissionQuestionShape === 'atomic') say('info', `atomic admission execution: ${c.admittedShape === 'auto' && c.maxParallelWorkers === 1 ? 'single (no planner)' : c.admittedShape}; ${c.admittedShape === 'auto' && c.maxParallelWorkers > 1 ? 5 : 3} questions in one batch; selected execution is recorded before application`);
   /**
    * #48 P0-1: doctor resolves the same host window and effective floor the hook resolves on the auto path
    * (`effectiveDepthFloor` in src/config.ts), so what is printed here is the number that would actually gate the

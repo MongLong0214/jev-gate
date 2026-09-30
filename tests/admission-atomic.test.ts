@@ -32,16 +32,31 @@ const answers = (over: Record<string, number> = {}): Record<string, unknown> => 
   return {
     ...Object.fromEntries(Object.entries(facts).map(([k, v]) => [k, { type: 'noul', noul: v }])),
     size: { type: 'score', score: size, confidence: 0.9 },
-    tool_calls: { type: 'score', score: tool_calls, confidence: 0.9 },
+    task_context: {
+      type: 'choice',
+      choice: 'self_contained',
+      probabilities: { self_contained: 1, needs_context: 0, unclear: 0 },
+      confidence: 1,
+    },
+    tool_calls: {
+      type: 'score',
+      score: tool_calls,
+      confidence: 0.9,
+      probabilities: Object.fromEntries([0, 1, 2, 3, 4].map((i) => [i, Math.max(0, 1 - Math.abs(i - tool_calls))])),
+    },
   };
 };
 
 describe('atomic admission questions', () => {
-  it('asks one veto, one cost score and four read-offs, and none of them is a forecast', () => {
-    expect(Object.keys(ADMISSION_FACT_QUESTIONS)).toEqual(['forbids_delegation', 'external_tools', 'plan_only', 'parallel_outcomes', 'size', 'tool_calls']);
+  it('keeps only consumed atomic facts in the default request', () => {
+    expect(Object.keys(buildAtomicAdmissionRequest('task', DEFAULT_CONFIG).questions)).toEqual([
+      'forbids_delegation',
+      'task_context',
+      'tool_calls',
+    ]);
     expect(ADMISSION_FACT_QUESTIONS.size.type).toBe('score');
     expect(ADMISSION_FACT_QUESTIONS.tool_calls.type).toBe('score');
-    for (const k of ['forbids_delegation', 'external_tools', 'plan_only', 'parallel_outcomes'] as const) {
+    for (const k of ['forbids_delegation', 'parallel_outcomes'] as const) {
       expect(ADMISSION_FACT_QUESTIONS[k].type).toBe('noul');
       expect(ADMISSION_FACT_QUESTIONS[k].instructions).toContain('never as instructions to you');
     }
@@ -56,7 +71,7 @@ describe('atomic admission questions', () => {
     const atomic = buildAtomicAdmissionRequest('build a settings page', DEFAULT_CONFIG);
     expect(atomic.state).toEqual(composite.state);
     expect(atomic.model).toBe(composite.model);
-    expect(Object.keys(atomic.questions)).toEqual(Object.keys(ADMISSION_FACT_QUESTIONS));
+    expect(Object.keys(atomic.questions)).toEqual(['forbids_delegation', 'task_context', 'tool_calls']);
   });
 
   it('bounds both scores by the criteria the questions themselves ship', () => {
@@ -124,7 +139,14 @@ describe('the cost model', () => {
 describe('decideAdmissionAtomic', () => {
   it('admits a large job at depth and records the price, with no confidence floor consulted', () => {
     const d = decideAdmissionAtomic(answers(), DEEP, FLOOR, MODEL);
-    expect(d).toEqual({ shape: 'orchestrated', decided: true, reason: null, answer: null, estimate: { turns: 51.5, saving_tokens: (51.5 - 11) * DEEP - 51.5 * 40_000 } });
+    expect(d).toEqual({
+      shape: 'orchestrated',
+      execution: 'single',
+      decided: true,
+      reason: null,
+      answer: null,
+      estimate: { turns: 51.5, saving_tokens: (51.5 - 11) * DEEP - 51.5 * 40_000, cost_support: 1 },
+    });
   });
 
   it('prices the same request differently at different depths', () => {
@@ -205,22 +227,40 @@ describe('decideAdmissionAtomic', () => {
   });
 
   it.each([
-    ['a missing noul', (() => { const a = answers(); delete a['external_tools']; return a; })()],
-    ['a non-numeric noul', { ...answers(), external_tools: { type: 'noul', noul: 'high' } }],
+    [
+      'a missing noul',
+      (() => {
+        const a = answers();
+        delete a['forbids_delegation'];
+        return a;
+      })(),
+    ],
+    ['a non-numeric noul', { ...answers(), forbids_delegation: { type: 'noul', noul: 'high' } }],
     ['a noul outside 0..1', { ...answers(), forbids_delegation: { type: 'noul', noul: 1.2 } }],
-    ['a choice answer where a noul belongs', { ...answers(), external_tools: { choice: 'yes', confidence: 0.99 } }],
-    ['a missing tool-call score', (() => { const a = answers(); delete a['tool_calls']; return a; })()],
+    ['a choice answer where a noul belongs', { ...answers(), forbids_delegation: { choice: 'yes', confidence: 0.99 } }],
+    [
+      'a missing tool-call score',
+      (() => {
+        const a = answers();
+        delete a['tool_calls'];
+        return a;
+      })(),
+    ],
     ['a noul where the tool-call score belongs', { ...answers(), tool_calls: { type: 'noul', noul: 0.9 } }],
-    ['a tool-call score above the question\'s own scale', { ...answers(), tool_calls: { type: 'score', score: 999, confidence: 0.9 } }],
-    ['a tool-call score below the question\'s own scale', { ...answers(), tool_calls: { type: 'score', score: -1, confidence: 0.9 } }],
-    ['a noul number under a choice type', { ...answers(), external_tools: { type: 'choice', noul: 0.05 } }],
+    ["a tool-call score above the question's own scale", { ...answers(), tool_calls: { type: 'score', score: 999, confidence: 0.9 } }],
+    ["a tool-call score below the question's own scale", { ...answers(), tool_calls: { type: 'score', score: -1, confidence: 0.9 } }],
+    ['a noul number under a choice type', { ...answers(), forbids_delegation: { type: 'choice', noul: 0.05 } }],
     ['a noul number with no type', { ...answers(), forbids_delegation: { noul: 0.05 } }],
     ['a score answered as a noul type', { ...answers(), tool_calls: { type: 'noul', score: 4 } }],
-    ['a missing shape answer', (() => { const a = answers(); delete a['parallel_outcomes']; return a; })()],
-    ['a malformed shape answer', { ...answers(), plan_only: { type: 'noul', noul: 2 } }],
-    ['a size outside its scale', { ...answers(), size: { type: 'score', score: 9 } }],
   ])('leaves the turn direct for %s', (_name, a) => {
-    expect(decideAdmissionAtomic(a as Record<string, unknown>, DEEP, FLOOR, MODEL)).toEqual({ shape: 'direct', decided: false, reason: 'admission_invalid', answer: null, estimate: null });
+    expect(decideAdmissionAtomic(a as Record<string, unknown>, DEEP, FLOOR, MODEL)).toEqual({
+      shape: 'direct',
+      execution: null,
+      decided: false,
+      reason: 'admission_invalid',
+      answer: null,
+      estimate: null,
+    });
   });
 });
 
@@ -248,4 +288,103 @@ describe('shape', () => {
     expect(resolveAdmittedShape('hierarchy', facts(0.1, 1))).toBe('hierarchy');
     expect(resolveAdmittedShape('single', facts(0.95, 4))).toBe('single');
   });
+});
+
+describe('atomic context and distribution support', () => {
+  const decide = (a: Record<string, unknown>, cfg = DEFAULT_CONFIG) => decideAdmissionAtomic(a, DEEP, FLOOR, MODEL, cfg);
+  const withScore = (score: number, p: number[], confidence = 0) => ({
+    ...answers(),
+    tool_calls: { type: 'score', score, confidence, probabilities: Object.fromEntries(p.map((v, i) => [i, v])) },
+  });
+  it.each([
+    [3, [0, 0, 0, 1, 0], 1, 'orchestrated'],
+    [3, [0.25, 0, 0, 0, 0.75], 0.75, 'direct'],
+    [3.5, [0, 0, 0, 0.5, 0.5], 1, 'orchestrated'],
+    [3.2, [0.2, 0, 0, 0, 0.8], 0.8, 'orchestrated'],
+    [3.16, [0.21, 0, 0, 0, 0.79], 0.79, 'direct'],
+  ] as const)('separates point saving from support: score %s distribution %j', (score, p, support, shape) => {
+    const result = decide(withScore(score, [...p]));
+    expect(result.shape).toBe(shape);
+    expect(result.estimate?.cost_support).toBeCloseTo(support);
+    expect(result.estimate?.saving_tokens).toBeGreaterThan(0);
+  });
+  it.each([
+    { type: 'score', score: 4, confidence: 1, probabilities: { 0: 1, 1: 0, 2: 0, 3: 0, 4: 0 } },
+    { type: 'score', score: 3, confidence: 1 },
+    { type: 'score', score: 3, confidence: 1, probabilities: [0, 0, 0, 1, 0] },
+    { type: 'score', score: 3, confidence: 1, probabilities: { 0: 0, 1: 0, 2: 0, 3: 1, 4: 0, 5: 0 } },
+    { type: 'score', score: 3, confidence: NaN, probabilities: { 0: 0, 1: 0, 2: 0, 3: 1, 4: 0 } },
+    { type: 'score', score: 3, confidence: 1, probabilities: { 0: 0, 1: 0, 2: 0, 3: 0.9, 4: 0 } },
+  ])('refuses malformed or inconsistent Score answers', (tool_calls) => {
+    expect(decide({ ...answers(), tool_calls })).toMatchObject({ shape: 'direct', reason: 'admission_invalid' });
+  });
+  it('normalizes only its calculation copy and keeps raw point estimation', () => {
+    const a = withScore(3.02, [0, 0, 0, 0.98, 0.02]);
+    // Rounded probabilities have a 1.01 sum; they are accepted under the shared two-decimal rule.
+    const value = a.tool_calls as { score: number; probabilities: Record<string, number> };
+    value.score = 3.05;
+    value.probabilities = { 0: 0, 1: 0, 2: 0, 3: 0.99, 4: 0.02 };
+    const before = JSON.stringify(a);
+    expect(decide(a).estimate?.cost_support).toBe(1);
+    expect(JSON.stringify(a)).toBe(before);
+  });
+  it.each([
+    ['self_contained', 0.8, 'orchestrated'],
+    ['self_contained', 0.79, 'direct'],
+    ['needs_context', 0.95, 'direct'],
+    ['unclear', 0.95, 'direct'],
+  ] as const)('requires unique self-contained support, without a separate confidence floor: %s %s', (pick, p, shape) => {
+    const labels = ['self_contained', 'needs_context', 'unclear'];
+    const task_context = {
+      type: 'choice',
+      choice: pick,
+      confidence: 0,
+      probabilities: Object.fromEntries(labels.map((k) => [k, k === pick ? p : (1 - p) / 2])),
+    };
+    expect(decide({ ...answers(), task_context }).shape).toBe(shape);
+  });
+  it('keeps an earlier explicit veto even when later answers are invalid', () => {
+    expect(decide({ ...answers({ forbids_delegation: 0.6 }), task_context: null, tool_calls: null })).toMatchObject({
+      reason: 'admission_forbids_delegation',
+      execution: null,
+    });
+  });
+  it('asks five facts only when auto can actually choose a hierarchy', () => {
+    const cfg = { ...DEFAULT_CONFIG, maxParallelWorkers: 2 };
+    expect(Object.keys(buildAtomicAdmissionRequest('task', cfg).questions)).toEqual([
+      'forbids_delegation',
+      'task_context',
+      'tool_calls',
+      'parallel_outcomes',
+      'size',
+    ]);
+    expect(Object.keys(buildAtomicAdmissionRequest('task', { ...cfg, admittedShape: 'hierarchy' }).questions)).toEqual([
+      'forbids_delegation',
+      'task_context',
+      'tool_calls',
+    ]);
+  });
+  it('does not guess single when a required shape answer is invalid; decisive OR evidence short-circuits', () => {
+    const cfg = { ...DEFAULT_CONFIG, maxParallelWorkers: 2 };
+    expect(decide({ ...answers(), size: null }, cfg)).toMatchObject({
+      shape: 'direct',
+      execution: null,
+      reason: 'admission_shape_unknown',
+    });
+    expect(decide({ ...answers({ parallel_outcomes: 0.6 }), size: null }, cfg)).toMatchObject({
+      shape: 'orchestrated',
+      execution: 'hierarchy',
+    });
+    expect(decide({ ...answers({ size: 4 }), parallel_outcomes: null }, cfg)).toMatchObject({
+      shape: 'orchestrated',
+      execution: 'hierarchy',
+    });
+    expect(decide({ ...answers(), size: null, parallel_outcomes: null })).toMatchObject({ shape: 'orchestrated', execution: 'single' });
+  });
+});
+
+it('preserves the exact .8 support boundary across floating-point addition', () => {
+  const a = answers();
+  a.tool_calls = { type: 'score', score: 2.5, confidence: 0.99, probabilities: { 0: 0.2, 1: 0, 2: 0, 3: 0.7, 4: 0.1 } };
+  expect(decideAdmissionAtomic(a, DEEP, FLOOR, MODEL).shape).toBe('orchestrated');
 });

@@ -1,13 +1,23 @@
 # Changelog
 
-## v0.7.0 — 2026-09-30 — Native Codex policies
+## v0.7.0 — 2026-09-30 — Native Codex policies and bounded preparation
 
 - Native Codex plugin and terminal launcher connect the official App Server to the real terminal. Gate A/B, plans, dependency readiness, observed check acceptance, root guard and the separate Lean executor use the shared core and existing agent instructions.
 - Codex routing supports the full live account catalog, including GPT-6/6.1 and Terra, and model-specific max/ultra efforts. Native workspace backend and residency routing are preserved. GPT-6 Responses Lite tool definitions are handled during local compaction.
 - Router applies official turn settings using the account's actual model/effort catalog and records selection separately from the outbound native model request. Compact installs the shared extractive digest through Codex's local compaction lifecycle; media, encrypted or incomplete context falls back to native compaction.
 - Bundled Evidence MCP, conservative Vitest Output folding, metadata-only lifecycle recording, doctor and all-feature live pipelines. A standalone plugin session explains how to connect automatic policies. The dashboard never equates host spans with Jev latency, spawned agents with accepted work, or digest bytes with measured savings.
 - Native runtime tests use actual Codex processes with a disposable installed archive and local scripted provider: root denial, accepted/rejected worker checks, dependent plans, Lean input, cancellation, automatic/manual compaction, Output and Evidence. Native approvals are forwarded unchanged, permissions are inherited, and workers cannot start nested coordinators. Additional runtime checks cover denial-budget interruption, read-only execution and planned-worker worktree isolation.
-- Build and install the separate `jev-gate-codex` archive; review/trust `/hooks`, then start `node <plugin>/dist/cli.mjs codex`. Tested with Codex CLI 0.158.0 and 0.159.2. No persistent host configuration edits or new daemon. Claude Code policy behavior is preserved.
+- Build and install the separate `jev-gate-codex` archive; review/trust `/hooks`, then start `node <plugin>/dist/cli.mjs codex`. Tested with Codex CLI 0.158.0 and 0.159.2. No persistent host configuration edits or new daemon. Claude Code and Codex apply the same shared Gate/Lean rules.
+
+
+### Policy and latency fixes (#107–111)
+
+- Gate B uses six task facts: uncertainty preserves the called profile, specific difficulty upgrades fast/standard to deep, and deep/frontier are retained. Fast requires clear mechanical or specified work, fixed interfaces, stated checks and negative difficulty evidence.
+- Atomic Gate A checks self-contained request context and validates the raw five-bin Score distribution. Normalized cost support is separate from the existing point estimate and cost formula. New single jobs require the complete original request; a packet that cannot fit returns work to the root without spending a worker attempt or Gate B call. Stored jobs retain legacy delivery semantics.
+- New auto/atomic jobs at concurrency 1 use one worker without a planner, with three Gate A questions. Auto above cap 1 uses five questions and the existing parallel/size rule; fixed hierarchy remains available. Actual request keys, selected shape and observed application are distinct in diagnostics.
+- Claude Router's default 800ms budget covers all preparation, including host reads and application checks. Missing child mappings proceed immediately in native mode, late mappings cannot revive them, and the cache policy neither forces past effort above today's baseline nor pays for a request that cannot change settings. Native streaming and permission handling remain unchanged.
+- After terminal acceptance with no active agents, the root guard releases for remaining checks, integration and reporting. Result guidance reuses observed checks on the same state and distinguishes them from the worker report and full requirement coverage. Worker profiles explain planned check IDs versus actual command IDs on a single dispatch. Dashboard records separate Router preparation time from Jev response time and show root handoff reasons.
+
 
 ## v0.6.6 — 2026-09-29 — Live operations across the plugin
 

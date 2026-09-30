@@ -255,6 +255,8 @@ const gateEvent = (r: Rec): ActivityEvent | null => {
 
 const ROUTER_TITLE: Record<string, string> = {
   router: '라우터 준비',
+  prepared: '라우터 · 요청 준비 완료',
+  budget_timeout: '라우터 · 준비 예산 종료',
   root: '라우터 · 루트 턴',
   root_result: '라우터 · 루트 턴 결과',
   root_stop: '라우터 · 루트 턴 유지',
@@ -294,6 +296,7 @@ const routerEvent = (r: Rec, at: string): ActivityEvent | null => {
   const reasons = sub(r, 'reasons');
   const applied = isRecord(r['applied']) ? r['applied'] : null;
   const bits: string[] = [];
+  if (num(r['preparation_ms']) !== null) bits.push(`Router 준비 ${num(r['preparation_ms'])}ms · Jev 응답 시간과 별도`);
   const fromModel = from ? token(from['model']) : null;
   const fromEffort = from ? token(from['effort']) : null;
   if (fromModel || fromEffort) bits.push(`들어오기 전 ${[fromModel, fromEffort].filter((x): x is string => x !== null).join(' · ')}`);

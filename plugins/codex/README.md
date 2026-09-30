@@ -45,9 +45,9 @@ The session connection is an authenticated loopback WebSocket to `codex app-serv
 
 | Feature | Automatic connected session |
 | --- | --- |
-| Gate A | Reads observed native context usage; Jev chooses direct work or orchestration; code enforces the depth floor |
+| Gate A | Reads observed native context usage; Jev judges context and cost support; code chooses direct, single-worker or planned delegation and enforces the depth floor |
 | Gate B | Applies shared tier policy to the exact owned dispatch; checks account model availability |
-| Planning | Runs the existing read-only planner instructions in a native Codex thread; validates the returned task graph |
+| Planning | Only on the planned path: runs the existing read-only planner instructions in a native Codex thread and validates the returned task graph |
 | Workers / acceptance | Runs real foreground Codex workers; compares reports with observed command exits and edits. The current shared core does not call Gate C; acceptance is owned by code on both hosts. |
 | Root guard | Enforces the shared root allowlist while a job is admitted; never returns an allow decision |
 | Lean | Uses attributed App Server items; retains user constraints, selects optional groups with Jev, and applies a packet to one executor; no Gate or plan runs on this path |
@@ -57,6 +57,8 @@ The session connection is an authenticated loopback WebSocket to `codex app-serv
 | Evidence | Same local search, Jev judgments, pagination, cache and exact source read-back as Claude Code |
 
 Native permissions remain authoritative for root and workers. Planners use a read-only sandbox; custom named permission profiles are preserved and planner shell commands are denied under them. Workers cannot create another coordinator. Worktree isolation creates a separate branch and leaves it for inspection and integration; it does not silently merge changes.
+
+The default concurrency is 1. Newly admitted auto/atomic work uses **Gate A → Gate B → one worker → code acceptance**, without a planner or shape-only questions. The one worker can investigate, implement and run checks. Planned delegation remains available through explicit configuration or the auto shape policy above concurrency 1. Once terminal work is accepted and no agents are active, the root continues remaining integration, review and reporting. Acceptance does not certify complete coverage of every user requirement.
 
 Missing source, unknown checks and a worker's self-reported pass never become observed success. Check verification sees native command exits and file-change events; shell-based edits and external editor writes are not established by those events. Encrypted reasoning, media, pending calls or an oversized mandatory context cannot be guessed; these cases use native compaction/handoff behavior. Digest bytes are not measured token or billing savings. Manual `/compact` stays native unless explicitly enabled below.
 
@@ -131,7 +133,7 @@ node <plugin>/dist/cli.mjs doctor
 node <plugin>/dist/cli.mjs dashboard --port 4731
 ```
 
-The local browser opens at `http://127.0.0.1:4731`. All ten feature stages are visible in four pipeline lanes. Select a stage or execution to see typed Jev judgments, measured latency, policy selection, worker checks and observed application. Router selection and actual model request are separate records; Compact generation and installation are separate records. Live events stream without reloading. Korean/English and light/dark controls are at the top right.
+The local browser opens at `http://127.0.0.1:4731`. Keep this terminal running and use a second terminal for the connected Codex session. All ten feature stages are visible in four pipeline lanes; single-worker and planned delegation are separate paths. Select a stage or execution to see typed Jev judgments, measured latency, policy selection, worker checks and observed application. Router selection and actual model request are separate records; Compact generation and installation are separate records. Live events stream without reloading. Korean/English and light/dark controls are at the top right.
 
 Records default to `$XDG_STATE_HOME/jev-gate/codex/traces` or `~/.local/state/jev-gate/codex/traces`. Private atomic metadata records contain no raw prompts, source, tool output, credentials or transcript paths. Missing records mean unknown. No simulated activity or inferred token savings is shown. Old records are not automatically deleted.
 
