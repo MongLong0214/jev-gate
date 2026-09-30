@@ -3,6 +3,7 @@
 ## Unreleased — bench findings (#114, #117, #118, #121–#130)
 
 - Gate A tells the user, via `systemMessage` and not model context, when it was skipped because the session depth could not be read (`depth_unknown`): the first prompt of a session and every headless `claude -p` single turn. Single-prompt automation never reaches the gate; the behaviour is unchanged, the silence is not (#114).
+- Gate A re-asks once with the last three user-typed turns from the transcript when a prompt reads as `needs_context` on its own, so a long task that arrives as a short follow-up ("e2e 해봐") can still be delegated. Only user-typed text goes; tool results, host messages, commands and anything that looks like a secret do not. The second record carries `context_turns` (#115).
 - `doctor` warns when `CLAUDE_CODE_DEBUG_LOGS_DIR` is set neither in the shell nor in a settings `env` block: Router, Compact and Output decisions are then not recorded and the dashboard's cards for them stay unavailable (#117).
 - The dashboard shows its own build version next to the installed plugin version and flags a mismatch, since the process is fixed to the build it started from (#118).
 - `node dist/bench/ab.js run|report`: the paired A/B bench harness moved into the package. Two-turn cells, rotated condition order, hard timeouts, permanent output directory, git-managed worktrees, per-cell start times, priming tool count, cache create/read split and the paired-sign verdict. Caveats for reading its numbers are in `docs/bench-ab.md` (#121–#130).

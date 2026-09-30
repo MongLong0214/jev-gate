@@ -55,6 +55,7 @@ import {
 } from './lean.js';
 import { looksSecret, mandatoryGroups, optionalGroups, readLeanSource, SOURCE_MAX_MS, type LeanSource } from './lean-source.js';
 import { readSessionDepth, type DepthReading } from './depth.js';
+import { readRecentPrompts, withRecentPrompts } from './recent-prompts.js';
 import {
   GUARD_DENY_REASON,
   SINGLE_GUARD_DENY_REASON,
@@ -1096,16 +1097,17 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
          * is the same one the branch above already passed, so on this path it can only agree.
          */
         // The explicit return type is what lets one call site carry both shapes: callGate cannot infer Q from a union.
-        const admissionRequest = (): JevRequest<AdmissionState, Record<string, unknown>> =>
-          atomicAdmission ? buildAtomicAdmissionRequest(prompt, config) : buildAdmissionRequest(prompt, config);
-        const request = admissionRequest();
+        const admissionRequest = (text: string): JevRequest<AdmissionState, Record<string, unknown>> =>
+          atomicAdmission ? buildAtomicAdmissionRequest(text, config) : buildAdmissionRequest(text, config);
         let admitted: (AdmissionDecision & { estimate?: AdmissionEstimate | null; execution?: 'single' | 'hierarchy' | null }) | null =
           null;
-        const gate = await callGate(
+        const askGateA = (text: string, facts: Record<string, unknown>): ReturnType<typeof callGate> => {
+          const request = admissionRequest(text);
+          return callGate(
           request,
           'admission_intent',
           'admission_result',
-          { prompt_len: prompt.length, prompt_sha256: sha256(prompt), ...depthFacts, ...floorFacts },
+          { prompt_len: prompt.length, prompt_sha256: sha256(prompt), ...depthFacts, ...floorFacts, ...facts },
           Object.keys(request.questions),
           (outcome) => {
             if (!outcome.ok) return { forced: false, decision: { shape: 'direct', decided: false, reason: outcome.code, changed_default: false } };
@@ -1132,7 +1134,19 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
               ...(atomicAdmission ? { selected_execution: selectedExecution, policy_revision: 'atomic-context-v1' } : {}),
             };
           },
-        );
+          );
+        };
+        let gate = await askGateA(prompt, {});
+        /**
+         * #115: a short follow-up ("e2e 해봐") reads as `needs_context` on its own, and the context it needs is the
+         * turns before it. One re-ask with the last few user prompts attached, once, only for that reason. The
+         * second record carries `context_turns` so accounting can tell the two requests apart.
+         */
+        const needsContext = 'outcome' in gate && gate.outcome.ok && admitted !== null && (admitted as AdmissionDecision).reason === 'admission_needs_context';
+        if (needsContext) {
+          const recent = deps.host ? [] : readRecentPrompts(input.transcript_path, prompt);
+          if (recent.length > 0) gate = await askGateA(withRecentPrompts(prompt, recent), { context_turns: recent.length });
+        }
         // #48 P2: `'outcome' in gate` is the one place that tells whether a Gate A request was actually attempted --
         // `'blocked' in gate` means callGate itself declined to send it (bad request, byte cap, etc).
         const attempted = 'outcome' in gate;
