@@ -5,6 +5,7 @@ import type { Env } from './config.js';
 import { readTraceRecords } from './explain.js';
 import { readLiveness } from './liveness.js';
 import { buildOperations, type DebugRecord, type OperationsView } from './operations.js';
+import type { Host } from './host-support.js';
 
 /**
  * A local view of calls the gate and the router already recorded. It whitelists short tokens from those records.
@@ -56,6 +57,7 @@ export interface ActivityEvent {
 }
 
 export interface ActivitySnapshot {
+  host: Host | 'mixed';
   at: string;
   traceDir: string | null;
   debugDir: string | null;
@@ -529,7 +531,7 @@ const buildLive = (records: Rec[], routerRows: Array<{ at: string; rec: Rec }>, 
   };
 };
 
-export const loadActivity = (opts: { traceDir: string | null; debugDir: string | null; env: Env; now?: Date }): ActivitySnapshot => {
+export const loadActivity = (opts: { traceDir: string | null; debugDir: string | null; env: Env; now?: Date; host?: Host }): ActivitySnapshot => {
   const notes = [...NOTES];
   const events: ActivityEvent[] = [];
   const gateRecords: Rec[] = [];
@@ -552,6 +554,7 @@ export const loadActivity = (opts: { traceDir: string | null; debugDir: string |
     unreadable = read.unreadable;
     if (read.unreadable > 0) notes.push(`추적 파일 ${read.unreadable}개는 읽지 못했습니다.`);
     for (const r of read.records) {
+      if (opts.host && (r['host'] === 'codex' ? 'codex' : 'claude') !== opts.host) continue;
       gateRecords.push(r);
       const phase = token(r['phase']);
       if (phase === 'admission_result') {
@@ -565,7 +568,7 @@ export const loadActivity = (opts: { traceDir: string | null; debugDir: string |
     }
   }
 
-  if (opts.debugDir !== null) {
+  if (opts.debugDir !== null && opts.host !== 'codex') {
     const router = readRouter(opts.debugDir);
     notes.push(...router.notes);
     debugRows.push(...router.all);
@@ -576,16 +579,20 @@ export const loadActivity = (opts: { traceDir: string | null; debugDir: string |
       const event = routerEvent(row.rec, row.at);
       if (event) events.push(event);
     }
-  } else notes.push('라우터 디버그 디렉터리가 없습니다. 라우터 결정은 그 로그가 있을 때만 보입니다.');
+  } else if (opts.host !== 'codex') notes.push('라우터 디버그 디렉터리가 없습니다. 라우터 결정은 그 로그가 있을 때만 보입니다.');
 
   events.sort((a, b) => b.at.localeCompare(a.at));
   const now = opts.now ?? new Date();
-  const liveness = readLiveness(opts.env);
+  const liveness = opts.host === 'codex' ? null : readLiveness(opts.env);
+  const hosts = new Set(gateRecords.map(r => r['host'] === 'codex' ? 'codex' : 'claude'));
+  const host = opts.host ?? (hosts.size > 1 ? 'mixed' : hosts.has('codex') ? 'codex' : 'claude');
   const operations = buildOperations(gateRecords, debugRows, now, {
     trace: traceAvailable,
     debug: debugAvailable,
+    ...(host === 'codex' ? { host } : {}),
   });
   return {
+    host,
     at: now.toISOString(),
     traceDir: opts.traceDir,
     debugDir: opts.debugDir,

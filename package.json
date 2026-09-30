@@ -1,16 +1,17 @@
 {
   "name": "jev-gate",
-  "version": "0.6.6",
+  "version": "0.7.0",
   "private": true,
-  "description": "Claude Code plugin: Jev judges the execution shape, a strong read-only planner decomposes the job, and every worker dispatch is routed to a tier.",
+  "description": "Jev policies for Claude Code and native Codex: task routing, observed contract checks, evidence, compaction, output folding and a live dashboard.",
   "type": "module",
   "engines": {
     "node": ">=22"
   },
   "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.json && node scripts/build-evidence.mjs",
+    "build": "rm -rf dist && tsc -p tsconfig.json && node scripts/build-evidence.mjs && node scripts/build-codex.mjs",
     "typecheck": "tsc -p tsconfig.typecheck.json && tsc -p mods/tsconfig.json",
     "test": "vitest run",
+    "test:codex:runtime": "JEV_CODEX_E2E=1 vitest run tests/codex/runtime.test.ts",
     "pack": "node scripts/pack.mjs",
     "release:pin": "npm run build && node scripts/release.mjs pin",
     "release:check": "npm run build && node scripts/release.mjs check",
@@ -19,8 +20,10 @@
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.30.1",
     "@types/node": "^22.20.3",
+    "@types/ws": "^8.18.1",
     "esbuild": "^0.28.2",
     "typescript": "^5.9.0",
-    "vitest": "^5.0.1"
+    "vitest": "^5.0.1",
+    "ws": "^8.21.0"
   }
 }

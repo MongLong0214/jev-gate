@@ -94,12 +94,13 @@ const CONFIG_KEYS = new Set(['projectRoot', 'allowedRoots', 'excludeGlobs', 'rem
  * whole worktree allowed, and remote on: installing the plugin with a TypeSafe key is the opt-in, and a config file
  * with `"remote": false` keeps a project local.
  */
-export const loadConfig = async (env: Readonly<Record<string, string | undefined>>): Promise<ConfigLoad> => {
+export const loadConfig = async (env: Readonly<Record<string, string | undefined>>, session?: { host: 'codex'; cwd: string }): Promise<ConfigLoad> => {
   const bad = (detail: string, origin: ConfigOrigin): ConfigLoad => ({ ok: false, origin, reason: 'unavailable_config', detail });
   const path = env['JEV_EVIDENCE_CONFIG'];
   // Set but empty is set: only an absent variable takes the session default.
   if (path === undefined) {
-    const dir = env['CLAUDE_PROJECT_DIR'] || env['PWD'];
+    // Codex bundled MCP starts in the plugin cache. Use only the owner-supplied workspace; never shell PWD / Claude env.
+    const dir = session?.host === 'codex' ? session.cwd : env['CLAUDE_PROJECT_DIR'] || env['PWD'];
     if (!dir || !isAbsolute(dir)) return bad('JEV_EVIDENCE_CONFIG is not set and no session directory is known', 'session');
     const top = await git(dir, ['rev-parse', '--show-toplevel'], 64 * 1024, 2000);
     const topPath = top.error ? '' : top.stdout.toString('utf8').replace(/\n$/, '');

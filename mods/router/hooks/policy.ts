@@ -438,7 +438,7 @@ const spawnControlGate = (control: ChoiceAnswer | null | undefined): DimensionRe
  * A move's other conditions: task_clear control at the direction's floor (on a spawn, no explicit lock), and a
  * probable ordinary action_risk for any downward move. Missing or unclear risk blocks only a downward move.
  */
-const gate = (direction: 1 | -1, answers: Answers, opts: PolicyOptions): DimensionReason | null => {
+export const moveGate = (direction: 1 | -1, answers: Answers, opts: PolicyOptions): DimensionReason | null => {
   const floor = direction > 0 ? opts.minUpgradeConfidence : opts.minDowngradeConfidence;
   const control = opts.scope === 'spawn' ? spawnControlGate(answers.control) : controlGate(answers.control, floor);
   if (control) return control;
@@ -502,7 +502,7 @@ export const choosePatch = (answers: Answers, baseline: Baseline, asked: Mutable
         if (value !== undefined && sameModel(value, baseline.model)) model = 'same_value';
         else if (refusal) model = refusal;
         else {
-          const blocked = gate(move.direction, answers, opts);
+          const blocked = moveGate(move.direction, answers, opts);
           if (blocked) model = blocked;
           else {
             model = 'applied';
@@ -524,7 +524,7 @@ export const choosePatch = (answers: Answers, baseline: Baseline, asked: Mutable
       const move = orderedMove(a, order, order.indexOf(from), opts);
       if (!move) effort = topLabel(a) === from ? 'same_value' : 'low_confidence';
       else {
-        const blocked = gate(move.direction, answers, opts);
+          const blocked = moveGate(move.direction, answers, opts);
         if (blocked) effort = blocked;
         else {
           effort = 'applied';

@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "jev_gate_evidence": {
+      "command": "node",
+      "args": [
+        "dist/server.mjs",
+        "--codex"
+      ],
+      "cwd": ".",
+      "env_vars": [
+        "JEV_CODEX_WORKSPACE",
+        "JEV_EVIDENCE_CONFIG",
+        "TYPESAFE_API_KEY",
+        "JEV_CODEX_TRACE_DIR",
+        "JEV_GATE_TRACE_DIR",
+        "XDG_STATE_HOME"
+      ]
+    }
+  }
+}

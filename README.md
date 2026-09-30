@@ -9,13 +9,48 @@
 
 </div>
 
-One Claude Code plugin for task routing, evidence search, context compaction, and readable tool output. Jev returns fast, typed judgments; code applies the policy; Claude Code does the work. The local dashboard lets you inspect each recorded step as it happens.
+Jev-assisted task routing, evidence search, context compaction, and readable tool output for Claude Code and native Codex. Jev returns typed judgments; code applies the policy; the coding host executes the work. The local dashboard shows recorded activity as it happens.
 
-The gate can change delegation and what the root session is allowed to run while a job is admitted. The session's model stays whatever Claude Code already set. Results vary by task. No general saving is guaranteed.
+The gate can change delegation and what the root session is allowed to run while a job is admitted. The Gate keeps the host-selected session model; root model routing is opt-in. Results vary by task. No general saving is guaranteed.
 
 The marketplace installs [the latest release](https://github.com/MongLong0214/jev-gate/releases/latest). Node.js 22 or later is required (`package.json`, `engines`).
 
-## Install
+## Codex native plugin
+
+The [native Codex plugin](plugins/codex/README.md) supplies Evidence, Output and recording. Start the native terminal through its included launcher to enable **Gate A/B, planning, contract acceptance, root guard, Lean, Router and Compact** with the shared policies. It connects the official Codex App Server to the real Codex terminal; native login and permissions remain authoritative. Tested with Codex CLI 0.158.0 and 0.159.2 and Node 22.15+.
+
+Build and install from the repository checkout:
+
+```sh
+npm ci
+npm run build
+codex plugin marketplace add "$PWD"
+codex plugin add jev-gate@jev-gate-codex
+```
+
+Then, **in the Git project you want to inspect**:
+
+```sh
+export JEV_CODEX_WORKSPACE="$PWD"
+node /absolute/jev-gate/plugins/codex/dist/cli.mjs codex
+```
+
+Before connecting, open ordinary Codex, review and trust the Jev Gate definitions in `/hooks`, then exit it. Enable only one Jev Gate installation in `/plugins`. Set the workspace again when switching projects; missing workspace configuration refuses Evidence searches. Requires Node 22.15+; tested on Codex CLI 0.158.0 and 0.159.2. Build before installing a source checkout.
+
+Use the absolute path of this checkout (or the installed Codex plugin) for diagnostics and the dashboard:
+
+```sh
+node /absolute/jev-gate/plugins/codex/dist/cli.mjs doctor
+node /absolute/jev-gate/plugins/codex/dist/cli.mjs dashboard
+```
+
+The dashboard opens on **http://127.0.0.1:4731**. Choose another port with `--port 4733` if it is in use. Hooks and MCP record to the same private Codex trace directory by default. Korean/English and light/dark controls are in the top right.
+
+The Codex dashboard shows all feature pipelines and separates Jev selection from actual host application. A standalone `codex` session retains Evidence, Output and observation; automatic policies require the launch command above.
+
+[Native feature support, configuration, environment inheritance and troubleshooting →](plugins/codex/README.md)
+
+## Install · Claude Code
 
 In a Claude Code session:
 
@@ -51,7 +86,7 @@ Gate workers, planners, and the lean executor inherit the tools and connected MC
 
 End the session and start Claude Code again after changing settings. There is no setup command.
 
-## See it work live
+## See it work live · Claude Code
 
 The dashboard runs on your machine and opens in your browser. Its four lanes show the **Gate** (admission, plan, tier allocation, workers, and root guard), the separate **Lean** handoff, the independent **Router / Compact / Output** hooks, and **Evidence** search. Select any stage to read what it does, when it runs, whether it calls Jev, and the recorded outcome. The timeline separates the Jev request and response from the code decision and the host's execution. Korean/English and light/dark controls are in the top right.
 

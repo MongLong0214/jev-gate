@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { codexOperations } from './codex-operations.js';
+import { CODEX_CAPABILITIES, CODEX_PLUGIN_CAPABILITIES, type HostCapability, type Host } from './host-support.js';
 
 /** A display model made only from named metadata fields. Raw prompts, source and debug text never leave here. */
 type Rec = Record<string, unknown>;
@@ -10,6 +12,8 @@ export interface OperationStep {
   id: string;
   at: string;
   feature: FeatureId;
+  /** Generic native session/tool events are not evidence that a Jev feature executed. */
+  lifecycle?: boolean;
   state: StepState;
   lane: StepLane;
   title: string;
@@ -18,6 +22,8 @@ export interface OperationStep {
   /** Timings are measured by the caller or paired recorded events, never estimated from usage. */
   durationMs?: number;
   elapsedMs?: number;
+  /** Native host spans store their explicit start; other records are end-stamped measurements. */
+  startedAt?: string;
   judgements?: Array<{ question: string; value: string; confidence: number | null; probabilities: Array<{ label: string; value: number }> }>;
   graph?: Array<{ id: string; dependsOn: string[]; checks: number }>;
 }
@@ -25,7 +31,7 @@ export interface OperationStep {
 export interface OperationRun {
   id: string;
   title: string;
-  source: 'gate' | 'router' | 'compact' | 'output' | 'evidence';
+  source: 'gate' | 'router' | 'compact' | 'output' | 'evidence' | 'codex';
   mode: string;
   firstAt: string;
   lastAt: string;
@@ -39,7 +45,8 @@ export interface FeatureView {
   source: 'trace' | 'debug';
   count: number;
   lastAt: string | null;
-  state: 'observed' | 'waiting' | 'unavailable';
+  state: 'observed' | 'waiting' | 'unavailable' | 'unsupported';
+  capability?: HostCapability;
 }
 
 export interface OperationsView {
@@ -135,6 +142,8 @@ const callDetails = (r: Rec): string[] => {
 };
 
 const traceFeature = (phase: string): FeatureId | null => {
+  if (phase === 'codex_router_intent' || phase === 'codex_router_result' || phase === 'codex_route_applied') return 'router';
+  if (phase === 'codex_compact') return 'compact';
   if (phase.startsWith('admission_')) return 'admission';
   if (phase.startsWith('pre_')) return 'allocation';
   if (phase.startsWith('interpretation_') || phase === 'plan') return 'planning';
@@ -145,6 +154,7 @@ const traceFeature = (phase: string): FeatureId | null => {
   return null;
 };
 const traceTitle = (phase: string, r: Rec): string => ({
+  codex_router_intent: 'Router · Jev 요청', codex_router_result: 'Router · 턴 설정 결정', codex_route_applied: 'Router · Codex 적용 확인', codex_compact: 'Compact · Codex digest',
   admission_intent: 'Gate A · Jev 요청', admission_result: 'Gate A · 실행 형태',
   pre_intent: 'Gate B · Jev 요청', pre_result: 'Gate B · 등급 결정',
   interpretation_intent: '계획 해석 · Jev 요청', interpretation_result: '계획 해석 · 자문',
@@ -157,7 +167,7 @@ const traceTitle = (phase: string, r: Rec): string => ({
 const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<string, string>): OperationStep | null => {
   const phase = token(r['phase']);
   if (!phase) return null;
-  const feature = traceFeature(phase);
+  const feature = phase === 'dispatch' && r['role'] === 'planner' ? 'planning' : traceFeature(phase);
   if (!feature) return null;
   const at = iso(r['written_at']);
   if (!at) return null;
@@ -167,7 +177,9 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
   const expected = phase === 'evidence_start' ? 'evidence_result' : phase.replace(/_intent$/, '_result');
   const hasResult = requestId !== null && resultIds.has(`${requestId}:${expected}`);
   const age = now - Date.parse(at);
-  const state: StepState = isIntent ? hasResult ? 'done' : age >= 0 && age < 30_000 ? 'active' : 'unconfirmed'
+  const compactWaiting = phase === 'codex_compact' && r['stage'] === 'selected' && !resultIds.has(`codex_compact:${token(r['run_id'])}`);
+  const state: StepState = compactWaiting ? age >= 0 && age < 30_000 ? 'active' : 'unconfirmed'
+    : isIntent ? hasResult ? 'done' : age >= 0 && age < 30_000 ? 'active' : 'unconfirmed'
     : r['known_not_sent'] === true || r['attempted'] === false ? 'skipped'
       : r['is_error'] === true || phase === 'failure' ? 'error' : 'done';
   const details: string[] = [];
@@ -188,6 +200,11 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
     const reason = token(decision?.['reason']);
     const estimate = field(r, 'estimate');
     summary = text(shape, action, tier, reason) || (state === 'skipped' ? '전송 없이 원래 경로 유지' : '응답 기록됨');
+    if (phase === 'codex_router_result') {
+      summary = text(token(r['selected_model']), token(r['selected_effort']), token(r['reason']));
+      const reasons = field(r, 'reasons');
+      details.push(text(`모델 ${token(reasons?.['tier']) ?? '유지'}`, `effort ${token(reasons?.['effort']) ?? '유지'}`, '선택 결과 · 실제 적용은 모델 요청에서 확인'));
+    }
     if (phase === 'admission_result') {
       details.push(text(`세션 문맥 ${n(number(r['context_tokens']))} 토큰`, `실행 floor ${n(number(r['depth_floor']))}`, token(r['depth_floor_source']), number(r['host_window']) === null ? null : `호스트 창 ${n(number(r['host_window']))} 토큰`));
       if (number(estimate?.['turns']) !== null) details.push(`계산에 사용한 루트 턴 ${n(number(estimate?.['turns']))}회`);
@@ -202,6 +219,14 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
       if (groups) details.push(text(`필수 ${n(number(groups['mandatory']))}그룹`, `선택 질문 ${n(number(groups['optional_asked']))}그룹`, `읽은 요청 ${n(number(groups['request_bytes']))}B`));
       details.push('packet 크기와 실제 토큰 절감은 다른 사실입니다');
     }
+  } else if (phase === 'codex_route_applied') {
+    lane = 'host'; summary = text(r['applied'] === true ? '선택한 설정 적용 확인' : '선택과 실행 설정 불일치', token(r['observed_model']), token(r['observed_effort']));
+    details.push(text('실제 Codex 모델 요청', `선택 ${token(r['selected_model']) ?? '?'} / ${token(r['selected_effort']) ?? '?'}`));
+    if (r['effort_resolution'] === 'native_ultra') details.push(`Codex Ultra 선택 확인 · 네이티브 추론 요청 effort ${token(r['observed_effort']) ?? '?'} · Codex가 변환한 값`);
+  } else if (phase === 'codex_compact') {
+    lane = r['applied'] === true ? 'host' : 'local';
+    summary = r['applied'] === true ? '추출형 digest 설치 확인 · 요약 모델 호출 대체' : '추출형 digest 생성 · 호스트 설치 대기';
+    details.push(text(`압축 전 ${n(number(r['before_bytes']))}B`, `digest ${n(number(r['after_bytes']))}B`, '바이트 크기 · 측정된 토큰 절감 아님'));
   } else if (phase === 'evidence_result') {
     lane = 'local';
     summary = text(token(r['status']), token(r['backend']), `근거 ${n(number(r['items']))}건`, `Jev 호출 ${n(number(r['remote_calls']))}건`, `캐시 ${n(number(r['cache_hits']))}건`);
@@ -266,6 +291,7 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
   const sentAt = requestId && phase.endsWith('_result') ? intents.get(`${requestId}:${phase.replace(/_result$/, '_intent')}`) : undefined;
   const elapsed = sentAt ? Date.parse(at) - Date.parse(sentAt) : null;
   return { id: id(ownId), at, feature, state, lane, title: traceTitle(phase, r), summary, details: details.filter(Boolean),
+    ...(phase === 'stop' ? { lifecycle: true } : {}),
     ...(duration !== null && duration >= 0 ? { durationMs: duration } : {}),
     ...(elapsed !== null && elapsed >= 0 ? { elapsedMs: elapsed } : {}),
     ...(phase.endsWith('_result') && judgements(r) ? { judgements: judgements(r)! } : {}),
@@ -315,14 +341,17 @@ const debugStep = (row: DebugRecord, now: number, closed: Set<string>): Operatio
 const gateGroup = (r: Rec): string => {
   const phase = token(r['phase']) ?? '';
   if (phase.startsWith('evidence_')) return `evidence:${token(r['parent_request_id']) ?? token(r['request_id']) ?? token(r['invocation_id']) ?? 'unknown'}`;
+  if (phase.startsWith('codex_router_') || phase === 'codex_route_applied') return `router:${token(r['session_id']) ?? 'unknown'}:${token(r['prompt_id']) ?? 'unknown'}`;
+  if (phase === 'codex_compact') return `compact:${token(r['session_id']) ?? 'unknown'}:${token(r['run_id']) ?? 'unknown'}`;
   return `gate:${token(r['session_id']) ?? 'unknown'}:${token(r['prompt_id']) ?? 'unknown'}`;
 };
 const debugGroup = (row: DebugRecord): string => row.component === 'router'
   ? `router:${token(row.rec['turn']) ?? token(row.rec['tool_use_id']) ?? 'session'}`
   : `${row.component}:${token(row.rec['run_id']) ?? row.at}`;
 
-export const buildOperations = (records: Rec[], debug: DebugRecord[], now: Date, availability: { trace: boolean; debug: boolean }): OperationsView => {
+export const buildOperations = (records: Rec[], debug: DebugRecord[], now: Date, availability: { trace: boolean; debug: boolean; host?: Host }): OperationsView => {
   const resultIds = new Set(records.flatMap((r) => token(r['request_id']) && token(r['phase']) ? [`${token(r['request_id'])}:${token(r['phase'])}`] : []));
+  for (const r of records) if (r['phase'] === 'codex_compact' && r['applied'] === true && token(r['run_id'])) resultIds.add(`codex_compact:${token(r['run_id'])}`);
   const intents = new Map(records.flatMap((r): Array<[string, string]> => {
     const phase = token(r['phase']); const requestId = token(r['request_id']); const at = iso(r['written_at']);
     return phase?.endsWith('_intent') && requestId && at ? [[`${requestId}:${phase}`, at]] : [];
@@ -337,9 +366,10 @@ export const buildOperations = (records: Rec[], debug: DebugRecord[], now: Date,
     const step = traceStep(r, now.getTime(), resultIds, intents);
     if (!step) continue;
     const key = gateGroup(r);
-    const group = grouped.get(key) ?? { source: key.startsWith('evidence:') ? 'evidence' : 'gate', mode: token(r['mode']) ?? 'unknown', steps: [] };
+    const source = key.split(':')[0] as OperationRun['source'];
+    const group = grouped.get(key) ?? { source, mode: token(r['mode']) ?? 'unknown', steps: [] };
     const phase = token(r['phase']);
-    if (r['attempted'] === true && ['admission_result', 'pre_result', 'interpretation_result', 'lean_result'].includes(phase ?? '')) {
+    if (r['attempted'] === true && ['admission_result', 'pre_result', 'interpretation_result', 'lean_result', 'codex_router_result'].includes(phase ?? '')) {
       const { durationMs: _duration, elapsedMs: _elapsed, judgements: _judgements, ...rest } = step;
       group.steps.push({ ...step, title: step.title.replace(/ · .+$/, ' · Jev 응답'), summary: step.judgements?.length
         ? `${step.judgements.length}개 선택형 응답 · 코드가 정책 판정에 사용`
@@ -360,20 +390,27 @@ export const buildOperations = (records: Rec[], debug: DebugRecord[], now: Date,
   const allRuns: OperationRun[] = [...grouped].map(([key, group]) => {
     const steps = group.steps.sort((a, b) => a.at.localeCompare(b.at) || (a.lane === 'policy' ? 1 : 0) - (b.lane === 'policy' ? 1 : 0) || a.id.localeCompare(b.id));
     const state: OperationRun['state'] = steps.some((s) => s.state === 'active') ? 'active' : steps.some((s) => s.state === 'error' || s.state === 'unconfirmed') ? 'attention' : 'done';
-    const title = ({ gate: group.mode === 'lean' ? 'Lean 세션' : '게이트 세션', router: 'Router 실행', compact: 'Compact 실행', output: 'Output 실행', evidence: 'Evidence 검색' } as const)[group.source];
+    const title = ({ gate: group.mode === 'lean' ? 'Lean 세션' : '게이트 세션', router: 'Router 실행', compact: 'Compact 실행', output: 'Output 실행', evidence: 'Evidence 검색', codex: 'Codex 실행' } as const)[group.source];
     return { id: id(key), title: `${title} · ${id(key).slice(0, 6)}`, source: group.source, mode: group.mode, firstAt: steps[0]?.at ?? '', lastAt: steps.at(-1)?.at ?? '', state, steps };
-  }).sort((a, b) => b.lastAt.localeCompare(a.lastAt));
+  }).concat(codexOperations(records, now)).sort((a, b) => b.lastAt.localeCompare(a.lastAt));
   const runs = allRuns.slice(0, 200);
   const all = allRuns.flatMap((run) => run.steps.map((step) => ({ ...step, runId: run.id, runTitle: run.title })));
   const features = FEATURES.map((f): FeatureView => {
-    const steps = all.filter((s) => s.feature === f.id);
+    const steps = all.filter((s) => s.feature === f.id && !s.lifecycle);
+    if (availability.host === 'codex') {
+      const managed = records.some(r => r['host'] === 'codex' && (r['managed'] === true || traceFeature(String(r['phase'])) !== null && r['phase'] !== 'evidence_result' && !String(r['phase']).startsWith('evidence_')));
+      const capability = (managed ? CODEX_CAPABILITIES : CODEX_PLUGIN_CAPABILITIES)[f.id];
+      return { ...f, source: 'trace', capability,
+        count: steps.length, lastAt: steps.length ? steps.map(s => s.at).sort().at(-1)! : null,
+        state: capability.mode === 'unsupported' ? 'unsupported' : steps.length ? 'observed' : availability.trace ? 'waiting' : 'unavailable' };
+    }
     return { ...f, count: steps.length, lastAt: steps.length ? steps.map((s) => s.at).sort().at(-1)! : null, state: steps.length ? 'observed' : availability[f.source] ? 'waiting' : 'unavailable' };
   });
   const jevRequests = new Set<string>();
   for (const r of records) {
     const phase = token(r['phase']) ?? '';
-    if (!['admission_intent', 'pre_intent', 'interpretation_intent', 'lean_intent', 'evidence_jev_intent'].includes(phase)
-      && !(r['attempted'] === true && ['admission_result', 'pre_result', 'interpretation_result', 'lean_result', 'evidence_jev_result'].includes(phase))) continue;
+    if (!['admission_intent', 'pre_intent', 'interpretation_intent', 'lean_intent', 'evidence_jev_intent', 'codex_router_intent'].includes(phase)
+      && !(r['attempted'] === true && ['admission_result', 'pre_result', 'interpretation_result', 'lean_result', 'evidence_jev_result', 'codex_router_result'].includes(phase))) continue;
     const kind = phase.replace(/_(intent|result)$/, '');
     jevRequests.add(`${kind}:${token(r['request_id']) ?? token(r['invocation_id']) ?? iso(r['written_at'])}`);
   }
