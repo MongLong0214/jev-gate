@@ -70,6 +70,7 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
     const mcpFile = join(stagedPlugin, '.mcp.json');
     const mcp = JSON.parse(readFileSync(mcpFile, 'utf8')) as { mcpServers: Record<string, unknown> };
     mcp.mcpServers['jev_runtime_fixture'] = mcp.mcpServers['jev_gate_evidence'];
+    (mcp.mcpServers['jev_runtime_fixture'] as Rec)['env'] = { JEV_CODEX_AUTO_CONNECT: '0' };
     delete mcp.mcpServers['jev_gate_evidence'];
     writeFileSync(mcpFile, JSON.stringify(mcp));
     const built = spawnSync(process.execPath, [join(root, 'scripts/build-codex.mjs'), join(stagedPlugin, 'dist')], { encoding: 'utf8' });
@@ -327,7 +328,7 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
     ];
     const args = ['--no-daemon', ...(trust ? ['--dangerously-bypass-hook-trust'] : []), 'exec', '--ignore-rules', '--skip-git-repo-check', '--ephemeral', '--json', '-C', workspace, ...config.flatMap(c => ['-c', c]), 'Run the local fixture tools, then finish.'];
     let output = '';
-    const child = spawn('codex', args, { cwd: workspace, env: { HOME: process.env['HOME'] ?? '', ...(process.env['CODEX_HOME'] ? { CODEX_HOME: process.env['CODEX_HOME'] } : {}), PATH: `${join(workspace, '.bin')}:${process.env['PATH'] ?? ''}`, JEV_CODEX_TRACE_DIR: trace, ...(scenario === 'missing-workspace' ? {} : { JEV_CODEX_WORKSPACE: workspace }), JEV_CODEX_ENABLED: scenario === 'hooks-disabled' ? '0' : '1', JEV_CODEX_OUTPUT: scenario === 'disabled' ? 'off' : 'on', CLAUDE_PROJECT_DIR: '/wrong-workspace', PWD: '/wrong-workspace' } });
+    const child = spawn('codex', args, { cwd: workspace, env: { HOME: process.env['HOME'] ?? '', ...(process.env['CODEX_HOME'] ? { CODEX_HOME: process.env['CODEX_HOME'] } : {}), PATH: `${join(workspace, '.bin')}:${process.env['PATH'] ?? ''}`, JEV_CODEX_AUTO_CONNECT: '0', JEV_CODEX_TRACE_DIR: trace, ...(scenario === 'missing-workspace' ? {} : { JEV_CODEX_WORKSPACE: workspace }), JEV_CODEX_ENABLED: scenario === 'hooks-disabled' ? '0' : '1', JEV_CODEX_OUTPUT: scenario === 'disabled' ? 'off' : 'on', CLAUDE_PROJECT_DIR: '/wrong-workspace', PWD: '/wrong-workspace' } });
     child.stdin.end(); child.stdout.on('data', b => { output += String(b); }); child.stderr.on('data', b => { output += String(b); });
     const timer = setTimeout(() => child.kill('SIGTERM'), 40_000);
     try {
@@ -381,14 +382,17 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
     expect(snapshot.operations.features.find(f => f.id === 'output')?.count).toBe(scenario === 'disabled' ? 0 : 1);
   }, 60_000);
 
-  it('refuses Evidence without an explicit workspace instead of searching the plugin cache or inherited PWD', async () => {
+  it('binds Evidence to the actual native workspace with no environment setting or launcher', async () => {
     const result = await run(true, 'missing-workspace');
     expect(result.code, result.output).toBe(0);
     const last = JSON.stringify(result.requests.at(-1)?.['input']);
-    expect(last).toContain('unavailable_config');
-    expect(last).not.toContain('export const runtimeEvidenceNeedle');
+    expect(last).not.toContain('unavailable_config');
+    expect(last).toContain('export const runtimeEvidenceNeedle');
+    expect(last).toContain(workspace);
+    expect(last).not.toContain('/wrong-workspace');
     const rows = readdirSync(result.trace).map(f => JSON.parse(readFileSync(join(result.trace, f), 'utf8')) as Rec);
     expect(rows.some(r => r['phase'] === 'evidence_result')).toBe(true);
+    expect(rows.find(r => r['phase'] === 'evidence_result')?.['session_id']).toBeTypeOf('string');
   }, 60_000);
 
   it.each(['recording-unavailable', 'hooks-disabled'])('preserves native output and the separate MCP when %s', async scenario => {

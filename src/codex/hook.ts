@@ -1,8 +1,10 @@
 import { realpathSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { codexTraceDir } from '../codex-paths.js';
 import { openTraceDir, type TraceWriter } from '../trace.js';
 import { foldCodexOutput } from './output.js';
+import { connectionRequest, ensureConnection } from './connection.js';
 
 type Rec = Record<string, unknown>;
 const record = (v: unknown): Rec | null => v !== null && typeof v === 'object' && !Array.isArray(v) ? v as Rec : null;
@@ -67,7 +69,14 @@ export const runCodexHook = async (deps: CodexHookDeps): Promise<Rec> => {
     const recorded = handleCodexEvent(input, deps.env, opened.ok ? opened.writer : undefined);
     const bridge = deps.env['JEV_CODEX_BRIDGE_URL'];
     const secret = deps.env['JEV_CODEX_BRIDGE_TOKEN'];
-    if (!bridge || !secret) return recorded;
+    if (!bridge || !secret) {
+      if (deps.env['JEV_CODEX_AUTO_CONNECT'] === '0') return recorded;
+      if (input['hook_event_name'] === 'SessionStart' && typeof input['model'] === 'string' && typeof input['cwd'] === 'string') await ensureConnection(dirname(dirname(fileURLToPath(import.meta.url))), deps.env);
+      const policy = await connectionRequest(deps.env, '/hook', input, AbortSignal.timeout(4200));
+      if (policy && Object.keys(policy).length) return policy;
+      if (input['hook_event_name'] === 'SessionStart' && policy) return { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: 'Jev Gate native hooks and jev_agent dispatch are available. Follow the current Gate or Lean guidance and use jev_agent for owned dispatches. Router and Compact apply only when actual model requests pass through the local connection; a host already running before installation retains its previous provider until restarted. Native permissions and user constraints remain authoritative. Do not claim unobserved policies ran.' } };
+      return recorded;
+    }
     const url = new URL(bridge);
     if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1') return recorded;
     try {

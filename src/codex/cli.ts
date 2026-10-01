@@ -8,6 +8,7 @@ import { loadConfig } from '../evidence/source.js';
 import { startDashboard } from '../dashboard.js';
 import { launchCodex } from './launch.js';
 import { loadCodexPolicy } from './config.js';
+import { serveConnection } from './connection.js';
 
 export const codexDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: string): Promise<{ ok: boolean; lines: string[] }> => {
   const lines: string[] = [];
@@ -27,10 +28,11 @@ export const codexDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: str
     lines.push(`[info] recorded files: ${valid && exists ? readdirSync(path).filter(f => f.endsWith('.json')).length : 0}`);
   } catch { check(false, 'trace: set an absolute JEV_CODEX_TRACE_DIR'); }
   const load = await loadConfig(env, { host: 'codex', cwd: env['JEV_CODEX_WORKSPACE'] ?? '' });
-  check(load.ok, 'Evidence workspace configuration (JEV_CODEX_WORKSPACE or JEV_EVIDENCE_CONFIG required)');
-  if (!load.ok) lines.push(`[info] Start in your project with JEV_CODEX_WORKSPACE set to its absolute path. Current directory: ${cwd}`);
-  lines.push(`[info] Evidence scope: ${load.ok ? load.config.projectRoot : load.detail}`);
-  lines.push(`[info] Evidence remote: ${load.ok && load.config.remote ? 'on' : 'off'}; TYPESAFE_API_KEY: ${env['TYPESAFE_API_KEY'] ? 'present' : 'absent'}`);
+  const automatic = env['JEV_CODEX_WORKSPACE'] === undefined && env['JEV_EVIDENCE_CONFIG'] === undefined;
+  check(automatic || load.ok, automatic ? 'Evidence workspace: selected automatically from native MCP call metadata' : 'Evidence workspace override');
+  lines.push(`[info] Evidence scope: ${automatic ? 'the calling native thread\'s Git worktree; no workspace export is required' : load.ok ? load.config.projectRoot : load.detail}`);
+  if (!automatic && !load.ok) lines.push(`[info] Invalid explicit override; current directory ${cwd} is not substituted.`);
+  lines.push(`[info] Evidence remote: ${automatic || load.ok && load.config.remote ? 'on' : 'off'}; TYPESAFE_API_KEY: ${env['TYPESAFE_API_KEY'] ? 'present' : 'absent'}`);
   lines.push('[info] No source was scanned and no request was sent.');
   lines.push(`[info] hooks: ${env['JEV_CODEX_ENABLED'] === '0' ? 'disabled by JEV_CODEX_ENABLED=0' : 'enabled by configuration; use /hooks in Codex to review trust and execution'}`);
   lines.push(`[info] output folding: ${env['JEV_CODEX_OUTPUT'] === 'off' ? 'off' : 'on'}`);
@@ -45,7 +47,9 @@ export const codexDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: str
 const main = async (): Promise<void> => {
   const root = dirname(dirname(fileURLToPath(import.meta.url)));
   const argv = process.argv.slice(2);
-  if (argv[0] === 'codex') {
+  if (argv[0] === 'connection-serve') {
+    await serveConnection(root, process.env);
+  } else if (argv[0] === 'codex') {
     process.exitCode = await launchCodex(argv.slice(1), process.env);
   } else if (argv[0] === 'doctor') {
     const result = await codexDoctor(root, process.env, process.cwd());

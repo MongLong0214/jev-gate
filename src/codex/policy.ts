@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { join } from 'node:path';
-import { mkdirSync } from 'node:fs';
+import { join, isAbsolute } from 'node:path';
+import { mkdirSync, realpathSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { runHook, type HookDeps } from '../hook.js';
 import { stateRoot } from '../job.js';
@@ -14,6 +14,9 @@ import { loadCodexPolicy, type CodexPolicyConfig } from './config.js';
 import { codexSource, codexObservation, textInput, obj, type Obj } from './source.js';
 import { AGENT_TOOL, CODEX_PROFILES, codexGuidance } from './profiles.js';
 import { routeCodex, type CodexModel } from './router.js';
+import { capturedPermissions } from './permissions.js';
+import { codexCallerWorkspace } from './workspace.js';
+import { wireSource } from './wire.js';
 
 interface Session {
   id: string; settings: Obj; baseline: { model: string; effort: string | null }; policy: CodexPolicyConfig;
@@ -23,6 +26,9 @@ interface Session {
   requestModel?: string; requestEffort?: string;
   compactAllowed?: boolean; eligible?: boolean; terminal?: boolean;
   role?: string; parent?: string; done?: (turn: Obj) => void; route?: { model?: string; effort?: string };
+  external?: boolean; task?: string; routed?: string; stop?: string;
+  wire?: unknown[];
+  wirePending?: boolean;
 }
 const contextOf = (result: { stdout: string | null }): string => {
   if (!result.stdout) return '';
@@ -99,6 +105,91 @@ export class CodexPolicy {
         cursor = r['nextCursor']; if (!cursor) { this.catalog = catalog; return; }
       }
     } catch { /* Unknown catalog preserves the original model and effort. */ }
+  }
+  async initialize(): Promise<void> { this.catalogReady = this.loadCatalog(); await this.catalogReady; }
+  supplyKey(key: string): void { if (key.length > 0 && key.length <= 8192 && !/[\r\n\0]/.test(key)) this.env['TYPESAFE_API_KEY'] = key; }
+
+  /** Native plugin hooks register ordinary app/CLI/IDE roots. The sidecar owns only its child App Server. */
+  async externalHook(input: Obj, signal?: AbortSignal): Promise<Obj> {
+    const id = input['session_id']; const event = input['hook_event_name'];
+    if (typeof id !== 'string' || !/^[A-Za-z0-9_.:-]{1,160}$/.test(id)) return {};
+    let session = this.sessions.get(id);
+    if (input['agent_id'] && (!session || session.external)) return {};
+    if (!session && event === 'SessionStart' && typeof input['cwd'] === 'string' && isAbsolute(input['cwd']) && typeof input['model'] === 'string' && this.sessions.size < 256) {
+      const model = input['model'];
+      session = { id, external: true, settings: { cwd: input['cwd'], model, approvalPolicy: 'never' }, baseline: { model, effort: null }, policy: loadCodexPolicy({ ...this.env, JEV_CODEX_MODEL: model }), prompt: null, turn: null, items: [], complete: false, epoch: 'native-wire', tokens: null, window: null, controller: null, commands: new Map() };
+      this.sessions.set(id, session);
+    }
+    if (!session?.external) return this.nativeHook(input, signal);
+    if (event === 'UserPromptSubmit' && typeof input['prompt'] === 'string') {
+      if (session.wirePending) session.complete = false;
+      session.items = session.items.map(({ clientId: _previousPrompt, ...item }) => item);
+      session.controller?.abort(); session.controller = new AbortController();
+      session.prompt = typeof input['turn_id'] === 'string' && input['turn_id'] !== session.prompt ? input['turn_id'] : randomUUID();
+      session.turn = session.prompt; session.task = input['prompt']; session.eligible = true;
+      delete session.stop; delete session.routed; delete session.route;
+    }
+    if (event === 'Interrupt' || event === 'SessionEnd') {
+      session.controller?.abort(); await this.interruptChildren(session);
+      if (event === 'SessionEnd') { this.sessions.delete(id); this.hooked.delete(id); this.compactPending.delete(id); }
+      return {};
+    }
+    const result = await this.nativeHook(input, signal);
+    if (event === 'Stop') session.turn = null;
+    return result;
+  }
+
+  /** Selection is made once from the actual submitted prompt; every original Responses field is preserved. */
+  async externalRequest(id: string, request: Obj, signal: AbortSignal): Promise<{ request: Obj; stop?: string }> {
+    const session = this.sessions.get(id);
+    if (!session?.external || !session.prompt || !session.task || !this.hooked.has(id)) return { request };
+    if (session.stop) return { request, stop: session.stop };
+    const source = wireSource(request['input'], session.task, session.prompt);
+    session.items = source.items; session.complete = source.complete && !request['previous_response_id'];
+    if (session.complete && Array.isArray(request['input'])) session.wire = request['input']; else delete session.wire;
+    const model = request['model']; const effort = obj(request['reasoning'])?.['effort'];
+    if (typeof model !== 'string') return { request };
+    if (session.routed !== session.prompt) {
+      session.baseline = { model, effort: typeof effort === 'string' ? effort : null };
+      session.policy = loadCodexPolicy({ ...this.env, JEV_CODEX_MODEL: model });
+      const prompt = session.prompt; session.routed = prompt;
+      await this.catalogReady;
+      // Ultra is a native selection that Codex resolves before the provider request. A proxy cannot invent that mapping.
+      const catalog = this.catalog.map(m => ({ ...m, supportedReasoningEfforts: m.supportedReasoningEfforts.filter(e => e.reasoningEffort !== 'ultra') }));
+      const patch = await routeCodex({ ...session.baseline, task: session.task, session: id, prompt, catalog, config: session.policy, env: this.env, ...(this.trace ? { trace: this.trace } : {}), signal: session.controller ? AbortSignal.any([signal, session.controller.signal]) : signal, ...(this.fetchImpl ? { fetchImpl: this.fetchImpl } : {}) });
+      if (signal.aborted || session.controller?.signal.aborted || session.prompt !== prompt) throw new Error('interrupted policy');
+      session.route = patch;
+    }
+    // A native settings change during the turn takes precedence over a previous route.
+    if (model !== session.baseline.model || (typeof effort === 'string' ? effort : null) !== session.baseline.effort) delete session.route;
+    const selected = { ...request, ...(session.route?.model ? { model: session.route.model } : {}), ...(session.route?.effort ? { reasoning: { ...obj(request['reasoning']), effort: session.route.effort } } : {}) };
+    session.requestModel = String(selected['model']); session.requestEffort = String(obj(selected['reasoning'])?.['effort'] ?? '');
+    if (session.route && Object.keys(session.route).length) this.trace?.write('codex_route_applied', { host: 'codex', session_id: id, prompt_id: session.prompt, stage: 'model_request', observed_model: selected['model'], observed_effort: obj(selected['reasoning'])?.['effort'] ?? null, observed_host_effort: effort ?? null, selected_model: selected['model'], selected_effort: obj(selected['reasoning'])?.['effort'] ?? null, effort_resolution: 'provider_request', applied: true });
+    return { request: selected };
+  }
+  observeUsage(id: string, response: Obj): void {
+    const session = this.sessions.get(id); const input = obj(response['usage'])?.['input_tokens'];
+    if (session?.external) {
+      session.tokens = Number.isSafeInteger(input) && Number(input) >= 0 ? Number(input) : null;
+      if (session.wire && session.task && session.prompt && Array.isArray(response['output'])) {
+        const source = wireSource([...session.wire, ...response['output']], session.task, session.prompt);
+        session.wirePending = !source.complete;
+        // A just-issued current-turn tool call does not alter the prefix a Lean packet references.
+        // Keep that prefix for dispatch, but forbid using a pending source for a subsequent prompt.
+        if (source.complete) { session.items = source.items; session.complete = true; }
+      } else session.complete = false;
+    }
+  }
+  async dispatch(arguments_: unknown, meta: unknown): Promise<string> {
+    const caller = codexCallerWorkspace(meta); const session = caller && this.sessions.get(caller.session);
+    if (!caller || !session?.external) return 'No connected native root. No worker was started.';
+    try { if (realpathSync(String(session.settings['cwd'])) !== realpathSync(caller.cwd)) return 'Native workspace changed. No worker was started.'; }
+    catch { return 'Native workspace unavailable. No worker was started.'; }
+    return this.agent({ threadId: caller.session, callId: obj(meta)?.['callId'] ?? randomUUID(), arguments: arguments_, nativeMeta: meta });
+  }
+  cancelCaller(meta: unknown): void {
+    const caller = codexCallerWorkspace(meta); const session = caller && this.sessions.get(caller.session);
+    if (session?.external) { session.controller?.abort(); void this.interruptChildren(session); }
   }
   private async hydrate(id: string): Promise<void> {
     const session = this.sessions.get(id)!;
@@ -242,8 +333,11 @@ export class CodexPolicy {
     // interruption API instead of silently removing the stop instruction or approving a tool.
     if (event === 'PreToolUse') {
       if (output['continue'] === false && session.turn) {
-        session.controller?.abort();
-        void this.rpc.request('turn/interrupt', { threadId: session.id, turnId: session.turn }).catch(() => undefined);
+        if (session.external) session.stop = String(output['stopReason'] ?? 'Jev Gate stopped the turn after its denial budget was exhausted. No completion is claimed.');
+        else {
+          session.controller?.abort();
+          void this.rpc.request('turn/interrupt', { threadId: session.id, turnId: session.turn }).catch(() => undefined);
+        }
       }
       delete output['continue']; delete output['stopReason'];
     }
@@ -291,22 +385,25 @@ export class CodexPolicy {
     let worker: Session | null = null;
     const t0 = Date.now();
     try {
+      const planner = profile?.role === 'planner';
+      const captured = session.external ? capturedPermissions(p['nativeMeta'], planner) : null;
+      if (session.external && !captured) throw new Error('parent permissions unavailable');
       if (applied['isolation'] === 'worktree') {
-        const root = join(stateRoot(this.env), 'jev-gate', 'worktrees');
-        mkdirSync(root, { recursive: true, mode: 0o700 });
+        const root = session.external ? join(cwd, '.jev-gate-worktrees') : join(stateRoot(this.env), 'jev-gate', 'worktrees');
+        if (!session.external) mkdirSync(root, { recursive: true, mode: 0o700 });
         const branch = `jev-codex-${randomUUID()}`; const path = join(root, branch);
-        const added = spawnSync('git', ['worktree', 'add', '-b', branch, path, 'HEAD'], { cwd, env: safeGitEnv(this.env), encoding: 'utf8', timeout: 10_000 });
+        const sandbox = session.external ? ['sandbox', '--sandbox-state-json', JSON.stringify(obj(p['nativeMeta'])?.['codex/sandbox-state-meta']), '--', 'git'] : [];
+        const added = spawnSync(session.external ? 'codex' : 'git', [...sandbox, 'worktree', 'add', '-b', branch, path, 'HEAD'], { cwd, env: safeGitEnv(this.env), encoding: 'utf8', timeout: 10_000 });
         if (added.status !== 0) throw new Error('worktree unavailable'); worktree = { path, branch }; cwd = path;
       }
       const sandbox = obj(session.settings['sandboxPolicy']);
-      const planner = profile?.role === 'planner';
       const permissions = obj(session.settings['activePermissionProfile'])?.['id'];
       const customPermissions = typeof permissions === 'string' && !permissions.startsWith(':');
-      if (typeof permissions !== 'string' && !['dangerFullAccess', 'readOnly', 'workspaceWrite'].includes(String(sandbox?.['type']))) throw new Error('parent permissions unavailable');
+      if (session.external ? !captured : typeof permissions !== 'string' && !['dangerFullAccess', 'readOnly', 'workspaceWrite'].includes(String(sandbox?.['type']))) throw new Error('parent permissions unavailable');
       const child = await this.rpc.request('thread/start', { model, modelProvider: session.settings['modelProvider'], cwd, ephemeral: true,
         approvalPolicy: session.settings['approvalPolicy'], approvalsReviewer: session.settings['approvalsReviewer'],
-        ...(planner && !customPermissions ? { sandbox: 'read-only' } : typeof permissions === 'string' ? { permissions } : { sandbox: sandbox?.['type'] === 'dangerFullAccess' ? 'danger-full-access' : sandbox?.['type'] === 'readOnly' ? 'read-only' : 'workspace-write' }),
-        developerInstructions: this.profiles[role], config: { 'features.multi_agent': false, ...await this.hookConfig(cwd) }, dynamicTools: [] });
+        ...(captured ? { permissions: captured.permissions } : planner && !customPermissions ? { sandbox: 'read-only' } : typeof permissions === 'string' ? { permissions } : { sandbox: sandbox?.['type'] === 'dangerFullAccess' ? 'danger-full-access' : sandbox?.['type'] === 'readOnly' ? 'read-only' : 'workspace-write' }),
+        developerInstructions: this.profiles[role], config: { 'features.multi_agent': false, ...captured?.config, ...await this.hookConfig(cwd) }, dynamicTools: [] });
       await this.response(child, 'thread/start', {});
       worker = this.sessions.get(String(obj(child['thread'])?.['id'])) ?? null;
       if (!worker) throw new Error('worker unavailable');
@@ -346,7 +443,11 @@ export class CodexPolicy {
   hooksReady(session: string): boolean { return this.env['JEV_CODEX_ENABLED'] === '0' || this.hooked.has(session); }
   requestSession(metadata: unknown, affinity: unknown): string | null {
     if (typeof metadata === 'string') {
-      try { const id = obj(JSON.parse(metadata))?.['session_id']; if (typeof id === 'string' && this.sessions.has(id)) return id; } catch { /* No invented identity. */ }
+      try {
+        const parsed = obj(JSON.parse(metadata));
+        const id = parsed?.['thread_id'] ?? parsed?.['session_id'];
+        if (typeof id === 'string' && this.sessions.has(id)) return id;
+      } catch { /* No invented identity. */ }
     }
     return typeof affinity === 'string' && this.sessions.has(affinity) ? affinity : null;
   }
