@@ -74,6 +74,8 @@ const shared = () => [...(profile === 'legacy' ? ['hooks/register.ts', ...modSou
 const INSTALL_DOCS = [
   'CHANGELOG.md',
   'docs/advanced-usage.md',
+  'docs/bench-ab.md',
+  'bench/ab/tasks.example.json',
   'plugins/evidence/README.md',
   'plugins/codex/README.md',
   'mods/compact/README.md',

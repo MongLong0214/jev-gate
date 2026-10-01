@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { loadActivity } from '../src/activity.js';
-import { startDashboard } from '../src/dashboard.js';
+import { startDashboard, readVersions } from '../src/dashboard.js';
 
 const dirs: string[] = [];
 const make = (): string => {
@@ -135,6 +135,26 @@ describe('loadActivity', () => {
 });
 
 describe('dashboard server', () => {
+  it('notifies connected clients when only the installed plugin version changes', async () => {
+    const home = make(); const registryDir = join(home, '.claude/plugins'); mkdirSync(registryDir, { recursive: true });
+    const registry = join(registryDir, 'installed_plugins.json');
+    const set = (version: string): void => writeFileSync(registry, JSON.stringify({ plugins: { 'jev-gate@jev-gate': [{ version }] } }));
+    set('0.7.0');
+    expect(readVersions({ HOME: home }, 'codex').installed).toBeNull();
+    const server = await startDashboard({ traceDir: null, debugDir: null, env: { HOME: home, JEV_GATE_STATE_DIR: make() } }, 0);
+    const response = await fetch(`${server.url}api/live`); const reader = response.body!.getReader();
+    const read = async (): Promise<{ version: { running: string; installed: string } }> => {
+      const chunk = await Promise.race([reader.read(), new Promise<never>((_, reject) => setTimeout(() => reject(new Error('version SSE timed out')), 2500))]);
+      if (chunk.done) throw new Error('SSE ended');
+      return JSON.parse(new TextDecoder().decode(chunk.value).split('data: ')[1]!.trim());
+    };
+    try {
+      const first = await read(); expect(first.version.installed).toBe('0.7.0');
+      set('0.7.1'); const second = await read();
+      expect(second.version.running).toBe(first.version.running); expect(second.version.installed).toBe('0.7.1');
+    } finally { await reader.cancel(); await server.close(); }
+  });
+
   it('pushes a Compact event even when the legacy single-turn signature is unchanged', async () => {
     const trace = make();
     const debug = make();

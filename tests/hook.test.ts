@@ -418,6 +418,11 @@ describe('Gate A admission', () => {
     expect(seen[1]).toContain('Run the download e2e');
     expect(seen[1]).toMatch(/Current request:\ne2e 해봐$/);
     expect(state(env).current.shape).toBe('orchestrated');
+    expect(state(env).current.request).toContain('Run the download e2e');
+    expect(state(env).current.request).toContain('Current request:\ne2e 해봐');
+    const dispatched = await run(env, plannerPre(), fakeJev());
+    expect(dispatched.kind).toBe('patch');
+    if (dispatched.kind === 'patch') expect(JSON.parse(dispatched.stdout).hookSpecificOutput.updatedInput.prompt).toContain('Run the download e2e');
   });
 
   it('stays direct as admission_needs_context when the re-ask with earlier turns still says so', async () => {

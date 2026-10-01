@@ -1009,6 +1009,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     }
 
     const atomicAdmission = config.admissionQuestionShape === 'atomic';
+    let dispatchRequest = prompt;
     const requiredAdmission = mode === 'auto' && !forced && atomicAdmission;
     const minimumSingleFits = Buffer.byteLength(composeSingleWorkerPrompt('', prompt, true), 'utf8') <= MAX_COMPOSED_BYTES;
     if (
@@ -1145,7 +1146,13 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         const needsContext = 'outcome' in gate && gate.outcome.ok && admitted !== null && (admitted as AdmissionDecision).reason === 'admission_needs_context';
         if (needsContext) {
           const recent = deps.host ? [] : readRecentPrompts(input.transcript_path, prompt);
-          if (recent.length > 0) gate = await askGateA(withRecentPrompts(prompt, recent), { context_turns: recent.length });
+          if (recent.length > 0) {
+            const contextual = withRecentPrompts(prompt, recent);
+            if (Buffer.byteLength(contextual, 'utf8') <= REQUEST_MAX_BYTES && Buffer.byteLength(composeSingleWorkerPrompt('', contextual, true), 'utf8') <= MAX_COMPOSED_BYTES) {
+              gate = await askGateA(contextual, { context_turns: recent.length });
+              dispatchRequest = contextual;
+            }
+          }
         }
         // #48 P2: `'outcome' in gate` is the one place that tells whether a Gate A request was actually attempted --
         // `'blocked' in gate` means callGate itself declined to send it (bad request, byte cap, etc).
@@ -1168,7 +1175,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     // A17: an orchestrated turn keeps its request, because every worker contract downstream is a paraphrase of it and
     // the worker is told the user's own words come first. Stored whole or not at all -- never truncated into a
     // half-specification that reads as complete.
-    const carriedRequest = Buffer.byteLength(prompt, 'utf8') <= REQUEST_MAX_BYTES ? prompt : null;
+    const carriedRequest = Buffer.byteLength(dispatchRequest, 'utf8') <= REQUEST_MAX_BYTES ? dispatchRequest : null;
     const executed = requiredAdmission ? selectedExecution : resolveAdmittedShape(config.admittedShape, admissionAnswers);
     if (executed === null) return emitContext('UserPromptSubmit', renderDirectGuidance(mode), 'admission_shape_unknown');
     let stale = false;

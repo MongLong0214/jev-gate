@@ -93,3 +93,5 @@ but it inflates the absolute cost of a sweep.
 Implementation done, plugin observed on an installed host, and a measured product effect are three different kinds of
 done. A smaller packet, a Jev call that happened, or a passing test is not "tokens went down"; only this bench, read
 with the caveats above, can say that.
+
+The plan freezes task prompts and quality checks when the sweep starts. Resume accepts only identical inputs. Reports use that snapshot, not a subsequently edited tasks file. Missing transcripts, incomplete usage, failed priming and unobserved required checks are excluded with unknown token totals. Paired effects require all planned repetitions; partial successful pairs cannot establish an effect.

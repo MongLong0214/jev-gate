@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -47,6 +47,9 @@ describe('readRecentPrompts (#115)', () => {
 
   it('is empty for a missing, empty or unnamed transcript', () => {
     expect(readRecentPrompts(join(tmp, 'gone.jsonl'), 'x')).toEqual([]);
+    const target = write([user('private')]); const link = join(tmp, 'symlink.jsonl'); symlinkSync(target, link);
+    expect(readRecentPrompts(link, 'x')).toEqual([]);
+    expect(readRecentPrompts(tmp, 'x')).toEqual([]);
     expect(readRecentPrompts(null, 'x')).toEqual([]);
     expect(readRecentPrompts(write([{ type: 'assistant', message: {} }]), 'x')).toEqual([]);
   });

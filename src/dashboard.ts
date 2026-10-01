@@ -28,18 +28,18 @@ const readJson = (path: string): unknown => {
   }
 };
 
-/**
- * #118: the dashboard process is the build it was started from and never reloads; the plugin the host runs is whatever
- * `installed_plugins.json` says. Both are read on every snapshot so an update shows up as a mismatch on the next
- * repaint instead of as silently stale cards. `null` means "could not read", never "same".
- */
+/** Running code is captured at module load. Only the host's installed version can change. */
 export interface DashboardVersions {
   running: string | null;
   installed: string | null;
 }
-export const readVersions = (env: Env, pluginRoot: string = dirname(dirname(fileURLToPath(import.meta.url)))): DashboardVersions => {
-  const own = readJson(join(pluginRoot, '.claude-plugin', 'plugin.json'));
-  const running = isRecord(own) && typeof own['version'] === 'string' ? own['version'] : null;
+const PLUGIN_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+const ownAtStartup = readJson(join(PLUGIN_ROOT, '.claude-plugin', 'plugin.json'));
+const RUNNING_VERSION = isRecord(ownAtStartup) && typeof ownAtStartup['version'] === 'string' ? ownAtStartup['version'] : null;
+export const readVersions = (env: Env, host: Host = 'claude'): DashboardVersions => {
+  const running = RUNNING_VERSION;
+  // Codex does not use Claude's install registry; its installation remains unknown here.
+  if (host === 'codex') return { running, installed: null };
   const home = env['HOME'] ?? homedir();
   const registry = readJson(join(home, '.claude', 'plugins', 'installed_plugins.json'));
   let installed: string | null = null;
@@ -54,7 +54,7 @@ export const readVersions = (env: Env, pluginRoot: string = dirname(dirname(file
   return { running, installed };
 };
 
-const snapshot = (sources: DashboardSources): ActivitySnapshot & { version: DashboardVersions } => ({ ...loadActivity({ ...sources, now: new Date() }), version: readVersions(sources.env) });
+const snapshot = (sources: DashboardSources): ActivitySnapshot & { version: DashboardVersions } => ({ ...loadActivity({ ...sources, now: new Date() }), version: readVersions(sources.env, sources.host) });
 
 export const startDashboard = (sources: DashboardSources, port: number): Promise<{ url: string; port: number; close: () => Promise<void> }> =>
   new Promise((resolve, reject) => {
@@ -85,7 +85,7 @@ export const startDashboard = (sources: DashboardSources, port: number): Promise
           if (closed) return;
           try {
             const body = snapshot(sources);
-            const next = `${body.live.sig}:${body.operations.sig}:${body.unreadable}`;
+            const next = `${body.live.sig}:${body.operations.sig}:${body.unreadable}:${JSON.stringify(body.version)}`;
             if (next === last) return;
             last = next;
             res.write(`data: ${JSON.stringify(body)}\n\n`);

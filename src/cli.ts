@@ -294,7 +294,7 @@ const checkEnv = (mode: Mode | null): void => {
   // this variable (or `--debug`) is set; without it the dashboard's Router/Compact/Output cards can never fill.
   const debugDir = launch('CLAUDE_CODE_DEBUG_LOGS_DIR');
   if (debugDir) say('ok', `CLAUDE_CODE_DEBUG_LOGS_DIR=${debugDir}: Router/Compact/Output decisions are recorded there for the dashboard`);
-  else say('warn', 'CLAUDE_CODE_DEBUG_LOGS_DIR not set (shell and settings env): the host keeps no debug log, so Router, Compact and Output decisions are not recorded and the dashboard shows those cards as unavailable. Set it in the settings `env` block and restart the host');
+  else say('warn', 'CLAUDE_CODE_DEBUG_LOGS_DIR not set (shell and settings env): Router/Compact/Output recording cannot be confirmed here. If you start Claude with --debug, use its actual debug directory; otherwise set the directory in settings env and restart the host');
   say(env['TYPESAFE_API_KEY'] ? 'ok' : 'warn', env['TYPESAFE_API_KEY'] ? 'TYPESAFE_API_KEY is set (value not shown)' : 'TYPESAFE_API_KEY not set: auto mode preserves every eligible call, and lean reads no source and sends nothing (key_missing)');
   if (existsSync(join(process.cwd(), '.env'))) say('info', '.env in cwd is NOT auto-loaded by the hook; export the variable in the shell that starts Claude Code');
 };

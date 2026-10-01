@@ -107,6 +107,8 @@ export const cleanEnv = (env: NodeJS.ProcessEnv, mode: 'off' | 'auto'): NodeJS.P
   const out: NodeJS.ProcessEnv = {};
   for (const [k, v] of Object.entries(env)) if (!k.startsWith('CLAUDE_') && !k.startsWith('JEV_GATE_')) out[k] = v;
   out['JEV_GATE_MODE'] = mode;
+  out['CLAUDE_CODE_ENABLE_FUNCTION_HOOKS'] = '1';
+  for (const key of Object.keys(out)) if (key.startsWith('GIT_')) delete out[key];
   return out;
 };
 
@@ -140,13 +142,15 @@ export const parseRunArgs = (argv: string[]): RunOptions => {
   if (!Number.isInteger(reps) || reps < 1) throw new Error('--reps must be a positive integer');
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1000) throw new Error('--timeout-ms must be an integer >= 1000');
   const conds = (flag(argv, '--conds') ?? CONDITIONS.join(',')).split(',') as Condition[];
+  if (!conds.length || new Set(conds).size !== conds.length) throw new Error('--conds must be nonempty and distinct');
   for (const c of conds) if (!CONDITIONS.includes(c)) throw new Error(`unknown condition ${c}; use ${CONDITIONS.join('|')}`);
   const only = flag(argv, '--only')?.split(',') ?? null;
   return { tasks: resolve(tasks), out: resolve(out), model, reps, only, conds, timeoutMs, claude: flag(argv, '--claude') ?? 'claude' };
 };
 
 const git = (repo: string, args: string[]): void => {
-  const r = spawnSync('git', ['-C', repo, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('GIT_')));
+  const r = spawnSync('git', ['-C', repo, ...args], { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   if (r.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${r.stderr}`);
 };
 
@@ -179,6 +183,9 @@ export const runCell = (o: RunOptions, file: TasksFile, task: string, cond: Cond
   writeFileSync(settings, conditionSettings(cond));
   const common = ['--model', o.model, '--settings', settings, '--output-format', 'json', '--dangerously-skip-permissions'];
   const env = cleanEnv(process.env, CONDITION_OPTIONS[cond].mode);
+  env['JEV_GATE_STATE_DIR'] = join(o.out, 'state', id);
+  env['JEV_GATE_TRACE_DIR'] = join(o.out, 'trace');
+  env['CLAUDE_CODE_DEBUG_LOGS_DIR'] = join(o.out, 'debug', id);
   const sid = crypto.randomUUID();
   const claude = (args: string[]): ReturnType<typeof spawnSync> =>
     // #121: a real timeout, from node itself; `timeout`/`gtimeout` are not on macOS.
@@ -222,8 +229,16 @@ export const run = (argv: string[]): void => {
   const file = readJson(o.tasks) as TasksFile | null;
   if (!isRecord(file) || typeof file['_prime'] !== 'string' || typeof file['_repo'] !== 'string') throw new Error('tasks.json needs string fields _prime and _repo');
   const tasks = Object.keys(file).filter((k) => !k.startsWith('_') && (o.only === null || o.only.includes(k)));
+  if (!tasks.length || tasks.some(k => !/^[A-Za-z0-9_-]+$/.test(k))) throw new Error('select at least one task; task names must be safe file names');
   mkdirSync(o.out, { recursive: true });
-  writeFileSync(join(o.out, 'plan.json'), JSON.stringify({ tasks, conds: o.conds, reps: o.reps, model: o.model, tasks_file: o.tasks, started_at: new Date().toISOString() }, null, 1));
+  const planPath = join(o.out, 'plan.json');
+  const identity = { tasks, conds: o.conds, reps: o.reps, model: o.model, tasks_file: o.tasks, inputs: file };
+  if (existsSync(planPath)) {
+    const old = readJson(planPath); if (!isRecord(old) || Object.entries(identity).some(([k, v]) => JSON.stringify(old[k]) !== JSON.stringify(v))) throw new Error('existing output belongs to different or unfrozen inputs; choose a new --out');
+  } else {
+    if (readdirSync(o.out).length) throw new Error('new output must be empty');
+    writeFileSync(planPath, JSON.stringify({ ...identity, started_at: new Date().toISOString() }, null, 1), { flag: 'wx' });
+  }
   // Sequential on purpose: the tasks share a browser and a local server.
   for (let rep = 1; rep <= o.reps; rep++) for (const task of tasks) for (const cond of rotate(o.conds, rep)) runCell(o, file, task, cond, rep);
 };
@@ -236,6 +251,8 @@ export interface TranscriptLine {
   timestamp?: string;
   /** The host writes the effort each assistant request ran with; this is how a Router change is seen (#132). */
   effort?: string;
+  isMeta?: boolean;
+  isSidechain?: boolean;
   message?: { id?: string; model?: string; usage?: Record<string, unknown>; content?: unknown };
 }
 export interface UsageSum {
@@ -245,20 +262,25 @@ export interface UsageSum {
   output: number;
   requests: number;
   tools: number;
+  complete: boolean;
 }
 
 /** Streaming leaves several lines per message id; only the last usage of each counts. Tool calls are counted per block. */
 export const usageOf = (lines: TranscriptLine[]): UsageSum => {
   const byId = new Map<string, Record<string, unknown>>();
   let tools = 0;
+  const toolIds = new Set<string>(); const messages = new Set<string>();
   for (const e of lines) {
     if (e.type !== 'assistant' || !e.message) continue;
-    if (e.message.usage) byId.set(e.message.id ?? e.uuid ?? String(byId.size), e.message.usage);
-    if (Array.isArray(e.message.content)) for (const b of e.message.content) if (isRecord(b) && b['type'] === 'tool_use') tools++;
+    const id = e.message.id ?? e.uuid ?? `unknown-${messages.size}`; messages.add(id);
+    if (e.message.usage) byId.set(id, e.message.usage);
+    if (Array.isArray(e.message.content)) e.message.content.forEach((b, i) => { if (isRecord(b) && b['type'] === 'tool_use') toolIds.add(typeof b['id'] === 'string' ? b['id'] : `${id}:${i}`); });
   }
-  const sum: UsageSum = { input: 0, cache_create: 0, cache_read: 0, output: 0, requests: byId.size, tools };
+  tools = toolIds.size;
+  const sum: UsageSum = { input: 0, cache_create: 0, cache_read: 0, output: 0, requests: byId.size, tools, complete: messages.size > 0 && byId.size === messages.size };
   const n = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
   for (const u of byId.values()) {
+    if (!['input_tokens', 'output_tokens'].every(k => typeof u[k] === 'number' && Number.isSafeInteger(u[k]) && Number(u[k]) >= 0) || !['cache_creation_input_tokens', 'cache_read_input_tokens'].every(k => u[k] === undefined || typeof u[k] === 'number' && Number.isSafeInteger(u[k]) && Number(u[k]) >= 0)) sum.complete = false;
     sum.input += n(u['input_tokens']);
     sum.cache_create += n(u['cache_creation_input_tokens']);
     sum.cache_read += n(u['cache_read_input_tokens']);
@@ -336,7 +358,7 @@ export interface Row {
   effort: string;
   /** #135: root turns Gate A estimated for this prompt (from admission_result.estimate), beside the measured `tools`. */
   gate_turns: string;
-  total_tokens: number;
+  total_tokens: number | null;
   cache_create: number;
   cache_read: number;
   output: number;
@@ -352,13 +374,18 @@ export interface Row {
 export const rowOf = (r: CellResult, file: TasksFile | null, transcript: string | null, traceDir: string): Row => {
   const spec = file && isRecord(file[r.task]) ? (file[r.task] as unknown as Task) : null;
   const pattern = spec?.resultPattern ? new RegExp(spec.resultPattern, 'i') : null;
-  const okSoFar = !r.timed_out && r.rc === 0 && (r.check_rc === null || r.check_rc === 0) && (pattern === null || pattern.test(r.result_head));
+  const okSoFar = !r.timed_out && r.prime_rc === 0 && r.rc === 0 && (spec?.check ? r.check_rc === 0 : r.check_rc === null || r.check_rc === 0) && (pattern === null || pattern.test(r.result_head));
   const admissions = traceAdmissions(traceDir, r.sid);
   const base: Row = { id: r.id, task: r.task, cond: r.cond, rep: r.rep, ok: okSoFar, wall_s: r.wall_s, cost: r.harness.cost_usd, prime_cost: r.prime.cost_usd, prime_tools: null, model: '-', model_mismatch: false, prime_effort: '-', effort: '-', gate_turns: admissions.gateTurns.join(',') || '-', total_tokens: 0, cache_create: 0, cache_read: 0, output: 0, requests: 0, tools: 0, subs: 0, compacts: 0, shapes: admissions.shapes.join(',') };
-  if (transcript === null) return { ...base, missing: true };
+  if (transcript === null) return { ...base, ok: false, missing: true, total_tokens: null };
   const all = readJsonl(transcript);
-  const userIdx = all.map((e, i) => (e.type === 'user' && typeof e.message?.content === 'string' ? i : -1)).filter((i) => i >= 0);
-  const taskStart = userIdx.length >= 2 ? userIdx[1]! : 0;
+  const userIdx = all.flatMap((e, i) => {
+    const c = e.message?.content;
+    const text = typeof c === 'string' ? c : Array.isArray(c) && c.length > 0 && c.every(b => isRecord(b) && b['type'] === 'text' && typeof b['text'] === 'string') ? c.map(b => (b as { text: string }).text).join('\n') : null;
+    return e.type === 'user' && e.isMeta !== true && e.isSidechain !== true && text !== null && !/^<(?:command-|local-command-)|^\[Request interrupted/.test(text) ? [i] : [];
+  });
+  if (userIdx.length !== 2) return { ...base, ok: false, missing: true, total_tokens: null };
+  const taskStart = userIdx[1]!;
   const taskTs = all[taskStart]?.timestamp ?? '';
   const primeUsage = usageOf(all.slice(0, taskStart));
   const primeSeen = observedOf(all.slice(0, taskStart));
@@ -367,7 +394,7 @@ export const rowOf = (r: CellResult, file: TasksFile | null, transcript: string 
   const seen = observedOf(main);
   // A pinned model that the transcript contradicts, or a task turn that ran on more than one model, is not this cell.
   const modelMismatch = seen.models.length !== 1 || (r.model !== undefined && seen.models[0] !== r.model);
-  const su: UsageSum = { input: 0, cache_create: 0, cache_read: 0, output: 0, requests: 0, tools: 0 };
+  const su: UsageSum = { input: 0, cache_create: 0, cache_read: 0, output: 0, requests: 0, tools: 0, complete: true };
   let subs = 0;
   const subDir = transcript.replace(/\.jsonl$/, '/subagents');
   if (existsSync(subDir)) {
@@ -376,20 +403,21 @@ export const rowOf = (r: CellResult, file: TasksFile | null, transcript: string 
       if (!lines.length) continue;
       subs++;
       const u = usageOf(lines);
-      for (const k of Object.keys(su) as Array<keyof UsageSum>) su[k] += u[k];
+      for (const k of ['input', 'cache_create', 'cache_read', 'output', 'requests', 'tools'] as const) su[k] += u[k];
+      su.complete &&= u.complete;
     }
   }
   const raw = main.map((e) => JSON.stringify(e)).join('\n');
   const compacts = (raw.match(/compact_boundary|isCompactSummary":true|\[jev-gate compact\]/g) ?? []).length;
   return {
     ...base,
-    ok: okSoFar && !modelMismatch,
+    ok: okSoFar && !modelMismatch && mu.complete && su.complete,
     prime_tools: taskStart > 0 ? primeUsage.tools : null,
     model: seen.models.join(',') || '-',
     model_mismatch: modelMismatch,
     prime_effort: primeSeen.efforts.join(',') || '-',
     effort: seen.efforts.join(',') || '-',
-    total_tokens: mu.input + mu.cache_create + mu.cache_read + mu.output + su.input + su.cache_create + su.cache_read + su.output,
+    total_tokens: mu.complete && su.complete ? mu.input + mu.cache_create + mu.cache_read + mu.output + su.input + su.cache_create + su.cache_read + su.output : null,
     cache_create: mu.cache_create + su.cache_create,
     cache_read: mu.cache_read + su.cache_read,
     output: mu.output + su.output,
@@ -427,22 +455,23 @@ export interface GridRow {
  * Median per task x condition over ok rows, ratio to A, and the paired-sign verdict: a condition counts as an effect
  * on a task only when, for every repetition where both it and A are ok, its token total is below A's.
  */
-export const grid = (rows: Row[], tasks: string[], conds: readonly Condition[] = CONDITIONS): GridRow[] => {
+export const grid = (rows: Row[], tasks: string[], conds: readonly Condition[] = CONDITIONS, plannedReps?: number): GridRow[] => {
   const out: GridRow[] = [];
   for (const task of tasks) {
-    const A = rows.filter((r) => r.task === task && r.cond === 'A' && r.ok);
+    const measured = (r: Row): r is Row & { total_tokens: number } => r.ok && typeof r.total_tokens === 'number' && Number.isFinite(r.total_tokens) && r.total_tokens >= 0;
+    const A = rows.filter((r) => r.task === task && r.cond === 'A').filter(measured);
     const bT = median(A.map((r) => r.total_tokens));
     for (const cond of conds) {
-      const g = rows.filter((r) => r.task === task && r.cond === cond && r.ok);
+      const g = rows.filter((r) => r.task === task && r.cond === cond).filter(measured);
       if (!g.length) {
         out.push({ task, cond, n: 0 });
         continue;
       }
       const T = median(g.map((r) => r.total_tokens));
       const C = median(g.map((r) => r.cost ?? NaN).filter((x) => Number.isFinite(x)));
-      const pairs = g.map((r) => [r, A.find((a) => a.rep === r.rep)] as const).filter((p): p is readonly [Row, Row] => p[1] !== undefined);
+      const pairs = g.flatMap(r => { const a = A.find(a => a.rep === r.rep); return a ? [[r, a] as const] : []; });
       const below = pairs.filter(([r, a]) => r.total_tokens < a.total_tokens).length;
-      const paired = cond === 'A' ? '-' : pairs.length === 0 ? 'no pair' : `${below}/${pairs.length} below A${below === pairs.length && pairs.length >= 3 ? ' → effect' : ''}`;
+      const paired = cond === 'A' ? '-' : pairs.length === 0 ? 'no pair' : `${below}/${pairs.length} below A${below === pairs.length && pairs.length >= 3 && pairs.length === (plannedReps ?? Math.max(...rows.filter(r => r.task === task).map(r => r.rep))) ? ' → effect' : ''}`;
       out.push({
         task, cond, n: g.length, tokens: T, 'tok/A': bT && T !== null ? (T / bT).toFixed(2) : '-', wall_s: median(g.map((r) => r.wall_s)), cost: C === null ? '-' : C.toFixed(3),
         cache_create: median(g.map((r) => r.cache_create)), cache_read: median(g.map((r) => r.cache_read)), compacts: median(g.map((r) => r.compacts)),
@@ -458,31 +487,34 @@ export const report = (argv: string[]): void => {
   const out = flag(argv, '--out');
   if (!out) throw new Error('report needs --out <dir>');
   const home = process.env['HOME'] ?? homedir();
-  const traceDir = flag(argv, '--trace') ?? process.env['JEV_GATE_TRACE_DIR'] ?? join(home, '.jev-gate', 'trace');
+  const traceDir = flag(argv, '--trace') ?? join(out, 'trace');
   const plan = readJson(join(out, 'plan.json'));
-  const file = isRecord(plan) && typeof plan['tasks_file'] === 'string' ? (readJson(plan['tasks_file']) as TasksFile | null) : null;
+  const file = isRecord(plan) && isRecord(plan['inputs']) ? plan['inputs'] as unknown as TasksFile : null;
+  if (!isRecord(plan) || !file) throw new Error('report needs a plan with frozen inputs; legacy output cannot establish measurement validity');
   const R = join(out, 'results');
   const rows: Row[] = [];
-  for (const f of readdirSync(R).filter((x) => /^[^.]+-[ABCD]-\d+\.json$/.test(x))) {
+  for (const f of (existsSync(R) ? readdirSync(R) : []).filter((x) => /^[^.]+-[ABCD]-\d+\.json$/.test(x))) {
     const r = readJson(join(R, f)) as CellResult | null;
     if (!r) continue;
     rows.push(rowOf(r, file, findTranscript(home, r.sid), traceDir));
   }
-  const tasks = [...new Set(rows.map((r) => r.task))].sort();
+  const tasks = Array.isArray(plan['tasks']) ? plan['tasks'] as string[] : [];
+  const conds = Array.isArray(plan['conds']) ? plan['conds'] as Condition[] : [];
+  const reps = typeof plan['reps'] === 'number' ? plan['reps'] : undefined;
   console.log('\n== cells (ok=false and timed_out are excluded from medians; missing = transcript not found) ==');
   console.table(rows.map((r) => ({ ...r, shapes: r.shapes || '-' })));
   console.log('== task x condition medians over ok cells; ratio to A; paired sign vs A ==');
-  console.table(grid(rows, tasks));
+  console.table(grid(rows, tasks, conds, reps));
   console.log('Rule: an effect needs every paired repetition below A. One median beating another may be model variance (#129).');
   console.log('A lower effort next to a saving means less work was done, not the same work for less (#132). gate_turns vs tools shows how far Gate A\'s estimate was from the measured tool calls (#135).');
   const mismatched = rows.filter((r) => r.model_mismatch);
   if (mismatched.length) console.log(`${mismatched.length} cell(s) ran on a model other than the pinned one and are excluded: ${mismatched.map((r) => `${r.id}=${r.model}`).join(', ')} (#133).`);
   const planned = isRecord(plan) && Array.isArray(plan['tasks']) && Array.isArray(plan['conds']) && typeof plan['reps'] === 'number' ? plan['tasks'].length * plan['conds'].length * plan['reps'] : null;
-  if (planned !== null) console.log(`planned cells ${planned}, result files ${rows.length}: a missing file is a not-run cell, not a zero.`);
+  if (planned !== null) console.log(`planned cells ${planned}, result files ${rows.length}: a missing file is unknown, not a zero or proof that it never started.`);
   const stale = rows.filter((r) => r.missing).length;
   if (stale) console.log(`${stale} cell(s) have no transcript under ~/.claude/projects; their tokens are unknown, not zero.`);
   // #127: progress of a sweep is read from the files it wrote, never from a remembered start time.
-  for (const f of readdirSync(R).filter((x) => x.endsWith('.prime.json'))) {
+  for (const f of (existsSync(R) ? readdirSync(R) : []).filter((x) => x.endsWith('.prime.json'))) {
     const id = f.replace(/\.prime\.json$/, '');
     if (!existsSync(join(R, `${id}.json`))) console.log(`in progress or aborted: ${id} (prime written ${statSync(join(R, f)).mtime.toISOString()})`);
   }

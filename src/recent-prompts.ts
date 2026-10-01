@@ -1,4 +1,4 @@
-import { closeSync, fstatSync, openSync, readSync } from 'node:fs';
+import { constants, closeSync, fstatSync, openSync, readSync } from 'node:fs';
 
 import { looksSecret } from './lean-source.js';
 
@@ -34,12 +34,13 @@ const textOnly = (content: unknown): string | null => {
 const readTail = (path: string): string | null => {
   let fd: number;
   try {
-    fd = openSync(path, 'r');
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   } catch {
     return null;
   }
   try {
-    const size = fstatSync(fd).size;
+    const stat = fstatSync(fd); if (!stat.isFile()) return null;
+    const size = stat.size;
     const len = Math.min(size, TAIL_BYTES);
     const buf = Buffer.allocUnsafe(len);
     const n = readSync(fd, buf, 0, len, size - len);
@@ -87,7 +88,7 @@ export const readRecentPrompts = (path: string | null | undefined, current: stri
   return found
     .filter((t) => !looksSecret(t))
     .slice(-max)
-    .map((t) => (t.length > RECENT_PROMPT_MAX_CHARS ? `${t.slice(0, RECENT_PROMPT_MAX_CHARS)} […]` : t));
+    .map((t) => (t.length > RECENT_PROMPT_MAX_CHARS ? `${t.slice(0, RECENT_PROMPT_MAX_CHARS).replace(/[\uD800-\uDBFF]$/, '')} […]` : t));
 };
 
 /** The request text Gate A is re-asked with: earlier turns as data, the current request last and marked as such. */
