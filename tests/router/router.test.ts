@@ -21,7 +21,7 @@ const EFFORT_ONLY = { routeMainEffort: true, routeMainModel: false, routeSubagen
 const FULL_IDS = { fastModel: 'claude-haiku-4-5', standardModel: 'claude-sonnet-5', deepModel: 'claude-opus-5-5', frontierModel: 'claude-fable-5-1' };
 const MODEL_ONLY = { routeMainEffort: false, routeMainModel: true, routeSubagentModel: false, ...SUBAGENT_OFF, ...FULL_IDS };
 const SPAWN_ONLY = { routeMainEffort: false, routeMainModel: false, routeSubagentModel: true, ...SUBAGENT_OFF };
-/** Root switches these tests declare verified, to reach the root-model path; the shipped list is empty. */
+/** Explicit switch overrides used by tests that constrain the root-model path. */
 const SWITCHES = ([
   ['claude-sonnet-5', 'claude-opus-5-5'],
   ['claude-opus-5-5', 'claude-sonnet-5'],
@@ -173,6 +173,41 @@ describe('root effort', () => {
     expect(n.calls).toEqual([step()]);
     expect(reads).toBe(0);
     expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root', skipped: 'key_missing' }));
+  });
+
+  it('uses a key entered after a keyless turn without restarting the session', async () => {
+    const router = createRouter(configOf(EFFORT_ONLY));
+    const f = fakeEngine({ envKey: undefined, respond: answering({ ...CLEAR, effort: ['xhigh', 0.95] }) });
+    router.turnStart({ turnId: 't1', text: TEXT });
+    const first = streamNext<TurnStepEvent>();
+    await drain(router.turnStep(f.engine, step(), first.next));
+    expect(first.calls).toEqual([step()]);
+    expect(f.sent).toHaveLength(0);
+
+    f.engine.envKey = async () => FAKE_KEY;
+    router.turnStart({ turnId: 't2', text: TEXT });
+    const second = streamNext<TurnStepEvent>();
+    await drain(router.turnStep(f.engine, step({ turnId: 't2' }), second.next));
+    expect(second.calls).toEqual([step({ turnId: 't2', effort: 'xhigh' })]);
+    expect(f.sent).toHaveLength(1);
+  });
+
+  it('retries a missing key even when its first read settles after the turn times out', async () => {
+    const router = createRouter(configOf(EFFORT_ONLY));
+    const f = fakeEngine({ respond: answering({ ...CLEAR, effort: ['xhigh', 0.95] }) });
+    const pending = deferred<string | undefined>(); f.engine.envKey = () => pending.promise;
+    router.turnStart({ turnId: 't1', text: TEXT });
+    const first = streamNext<TurnStepEvent>(); const running = drain(router.turnStep(f.engine, step(), first.next));
+    await settle(); f.expire(); await running;
+    expect(first.calls).toEqual([step()]); expect(f.sent).toHaveLength(0);
+    pending.resolve(undefined); await settle();
+
+    f.engine.envKey = async () => FAKE_KEY;
+    router.turnStart({ turnId: 't2', text: TEXT });
+    const second = streamNext<TurnStepEvent>();
+    await drain(router.turnStep(f.engine, step({ turnId: 't2' }), second.next));
+    expect(second.calls).toEqual([step({ turnId: 't2', effort: 'xhigh' })]);
+    expect(f.sent).toHaveLength(1);
   });
 
   it('forwards a step that could never be routed without waiting for the key', async () => {
@@ -439,21 +474,15 @@ describe('root effort', () => {
 });
 
 describe('root model', () => {
-  it('keeps the root model native as shipped: no model question, and with nothing else to ask, no request', async () => {
+  it('routes the main model without requiring a manually verified switch table', async () => {
     const router = createRouter(configOf(MODEL_ONLY));
     const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', 0.99] }) });
     router.turnStart({ turnId: 't1', text: TEXT });
     const n = streamNext<TurnStepEvent>();
     await drain(router.turnStep(f.engine, step({ model: 'claude-sonnet-5' }), n.next));
-    expect(n.calls).toEqual([step({ model: 'claude-sonnet-5' })]);
-    expect(f.sent).toHaveLength(0);
-    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root', model_withheld: 'no_applicable_target', skipped: 'nothing_to_change' }));
-
-    const both = createRouter(configOf({ ...MODEL_ONLY, routeMainEffort: true }));
-    const g = fakeEngine({ respond: answering({ ...CLEAR, effort: ['low', 0.95] }) });
-    both.turnStart({ turnId: 't1', text: TEXT });
-    await drain(both.turnStep(g.engine, step(), streamNext<TurnStepEvent>().next));
-    expect(Object.keys(g.sent[0]?.questions ?? {})).toEqual(['control', 'effort', 'action_risk']);
+    expect(n.calls).toEqual([step({ model: 'claude-opus-5-5' })]);
+    expect(f.sent).toHaveLength(1);
+    expect(f.sent[0]?.questions['tier']).toBeDefined();
   });
 
   it('moves to a stronger configured model on the upgrade floor, and offers only the targets a switch could reach', async () => {
@@ -611,14 +640,14 @@ describe('root model', () => {
     });
   });
 
-  it('offers no model change with the default aliases, since a root request takes only exact identifiers', async () => {
-    const router = createRouter(configOf({ ...MODEL_ONLY, fastModel: 'haiku', standardModel: 'sonnet', deepModel: 'opus', frontierModel: '' }));
-    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['fast', 0.99] }) });
+  it('resolves default aliases to exact root identifiers and enables the frontier tier', async () => {
+    const router = createRouter(configOf({ routeMainModel: true, routeMainEffort: false, routeSubagentModel: false }));
+    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['frontier', 0.99] }) });
     router.turnStart({ turnId: 't1', text: TEXT });
     const n = streamNext<TurnStepEvent>();
-    await drain(router.turnStep(f.engine, step(), n.next));
-    expect(n.calls).toEqual([step()]);
-    expect(f.sent).toHaveLength(0);
+    await drain(router.turnStep(f.engine, step({ model: 'claude-sonnet-5' }), n.next));
+    expect(n.calls).toEqual([step({ model: 'claude-fable-5-1' })]);
+    expect(f.sent).toHaveLength(1);
   });
 });
 
@@ -1920,4 +1949,89 @@ describe('elapsed preparation deadline', () => {
     expect(n.calls).toEqual([step({ index: 1 }), step({ index: 2 })]);
     expect(f.sent).toHaveLength(1);
   });
+});
+
+describe('bounded child history question feasibility (#140)', () => {
+  const saturate = (r: ReturnType<typeof createRouter>) => {
+    for (let i = 0; i < 65; i++) r.turnComplete({ turnId: `finished-${i}`, agentId: `native-${i}` });
+  };
+  it('skips saturated effort-only spawn before key or host preparation', async () => {
+    const router = createRouter(configOf({ ...CHILD, routeSubagentModel: false }));
+    const f = fakeEngine();
+    const key = vi.spyOn(f.engine, 'envKey');
+    const pins = vi.spyOn(f.engine, 'pins');
+    saturate(router);
+    const n = spawnNext();
+    await router.agentSpawn(f.engine, spawn(), n.next);
+    expect(n.calls).toEqual([spawn()]);
+    expect(f.sent).toHaveLength(0);
+    expect(key).not.toHaveBeenCalled();
+    expect(pins).not.toHaveBeenCalled();
+  });
+  it('keeps model routing without asking effort after saturation', async () => {
+    const router = createRouter(configOf(CHILD));
+    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['fast', 0.95], effort: ['low', 0.95] }) });
+    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    saturate(router);
+    const n = spawnNext(e => ({ model: e.model ?? 'claude-opus-5-5', agentId: 'new-child' }));
+    await router.agentSpawn(f.engine, spawn(), n.next);
+    expect(f.sent).toHaveLength(1);
+    expect(Object.keys(f.sent[0]!.questions)).toEqual(['control', 'tier', 'action_risk']);
+    expect(n.calls[0]!.model).toBe('haiku');
+  });
+  it.each(['key', 'pins'])('rechecks saturation after pending %s preparation', async phase => {
+    const router = createRouter(configOf({ ...CHILD, routeSubagentModel: false }));
+    const f = fakeEngine({ respond: answering({ ...CLEAR, effort: ['low', 0.95] }) });
+    const pending = deferred<void>();
+    if (phase === 'key') f.engine.envKey = async () => { await pending.promise; return FAKE_KEY; };
+    else { const pins = f.engine.pins; f.engine.pins = async () => { await pending.promise; return pins(); }; }
+    const n = spawnNext(); const run = router.agentSpawn(f.engine, spawn(), n.next);
+    await settle(); saturate(router); pending.resolve(); await run;
+    expect(f.sent).toHaveLength(0); expect(n.calls).toEqual([spawn()]);
+  });
+  it('keeps an independently valid model after saturation during HTTP without registering effort', async () => {
+    const router = createRouter(configOf(CHILD));
+    const f = fakeEngine({ respond: req => { saturate(router); return answering({ ...CLEAR, tier: ['fast', 0.95], effort: ['low', 0.95] })(req); } });
+    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    const n = spawnNext(e => ({ model: e.model ?? 'claude-opus-5-5', agentId: 'a1' }));
+    await router.agentSpawn(f.engine, spawn(), n.next);
+    expect(f.sent).toHaveLength(1); expect(n.calls[0]!.model).toBe('haiku');
+    const stepNext = streamNext<TurnStepEvent>();
+    await drain(router.turnStep(f.engine, childStep({ model: 'claude-haiku-4-5' }), stepNext.next));
+    expect(stepNext.calls[0]!.effort).toBe('xhigh');
+    expect(f.logs.some(l => l['event'] === 'spawn' && l['sent'] === true)).toBe(true);
+  });
+  it('keeps old mappings and resets saturation only for a new session', async () => {
+    const router = createRouter(configOf(CHILD));
+    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', 0.95], effort: ['low', 0.95] }) });
+    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    await router.agentSpawn(f.engine, spawn(), spawnNext(() => ({ model: 'claude-opus-5-5', agentId: 'a1' })).next);
+    saturate(router);
+    const n = streamNext<TurnStepEvent>(); await drain(router.turnStep(f.engine, childStep(), n.next));
+    expect(n.calls[0]!.effort).toBe('low');
+    router.sessionEnd(); router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    await router.agentSpawn(f.engine, spawn(), spawnNext().next);
+    expect(f.sent.at(-1)!.questions).toHaveProperty('effort');
+  });
+  it('keeps necessary pin checks but sends no question when the model is pinned', async () => {
+    const router = createRouter(configOf(CHILD)); const f = fakeEngine({ pins: { subagentModel: true } });
+    router.agentOffer(OFFER_BUILT_IN('general-purpose')); saturate(router);
+    const n = spawnNext(); await router.agentSpawn(f.engine, spawn(), n.next);
+    expect(f.sent).toHaveLength(0); expect(n.calls).toEqual([spawn()]);
+  });
+
+  it('ignores an extra unasked effort answer in a valid model-only response', async () => {
+    const router = createRouter(configOf(CHILD));
+    const f = fakeEngine({ respond: async req => {
+      const response = await answering({ ...CLEAR, tier: ['fast', 0.95] })(req);
+      const body = JSON.parse(response.text); body.answers.effort = { type: 'score', probabilities: { invalid: 1 } };
+      return { ...response, text: JSON.stringify(body) };
+    } });
+    router.agentOffer(OFFER_BUILT_IN('general-purpose')); saturate(router);
+    const n = spawnNext(); await router.agentSpawn(f.engine, spawn(), n.next);
+    expect(n.calls[0]!.model).toBe('haiku');
+    expect(f.sent[0]!.questions).not.toHaveProperty('effort');
+    expect(f.logs.find(l => l['event'] === 'spawn')?.['assessment']).toBe('ok');
+  });
+
 });

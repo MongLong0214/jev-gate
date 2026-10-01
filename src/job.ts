@@ -248,9 +248,33 @@ export const newGeneration = (prev: JobState | null, sessionId: string, promptId
     active: Object.fromEntries(Object.entries(old.active).map(([id, r]) => [id, { ...r, orphaned: true as const }])),
   };
   return {
-    state: { version: 5, session_id: sessionId, updated_at: now.toISOString(), current, history: [retired, ...prev.history].slice(0, MAX_HISTORY), ...leanSeenOf(prev) },
+    state: { version: 5, session_id: sessionId, updated_at: now.toISOString(), current, history: retainHistory([retired, ...prev.history]), ...leanSeenOf(prev) },
     superseded: unfinished,
   };
+};
+
+/** Unsettled native executions are never evicted to satisfy a history count; the existing byte cap still applies. */
+export const retainHistory = (history: JobGeneration[]): JobGeneration[] => {
+  let ordinary = 0;
+  return history.filter(g => Object.values(g.active).some(r => r.codex_execution) || ordinary++ < MAX_HISTORY);
+};
+
+/** Existing job files own conflict protection, including after adapter/connection close. */
+export const codexExecutions = (env: Env): Reservation[] => {
+  const result: Reservation[] = [];
+  let files: string[];
+  try { files = readdirSync(jobsDir(env)); } catch { return result; }
+  for (const file of files.filter(f => f.endsWith('.json'))) {
+    try {
+      const path = join(jobsDir(env), file);
+      if (isSymlink(path) || statSync(path).size > STATE_MAX_BYTES) continue;
+      const id = (JSON.parse(readFileSync(path, 'utf8')) as JobState).session_id;
+      if (jobFileName(id) !== file) continue;
+      const state = readRaw(path, id);
+      if (state.ok && state.value) for (const g of [state.value.current, ...state.value.history]) result.push(...Object.values(g.active).filter(r => r.codex_execution));
+    } catch { /* An unreadable file cannot provide a fabricated execution identity. */ }
+  }
+  return result;
 };
 
 export interface ReservationInput {
@@ -339,6 +363,7 @@ const agedOut = (file: string, now: number): boolean => {
     const read = readRaw(file, claimed);
     if (!read.ok || read.value === null) return false;
     const state = read.value;
+    if ([state.current, ...state.history].some(g => Object.values(g.active).some(r => r.codex_execution))) return false;
     if (Object.values(state.current.active).some((r) => now - Date.parse(r.started_at) < ACTIVE_GRACE_MS)) return false;
     /**
      * A session can be resumed after any length of time, and its admitted lean identities are what stop an old

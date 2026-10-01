@@ -4,7 +4,6 @@ import { join } from 'node:path';
 
 import type { AdmissionQuestionShape, AdmittedShape, ConfigV5, Mode, PlannerTier, RouteQuestionShape, Tier, WorkerIsolation } from './types.js';
 import { costModelFloor, delegationModel } from './admission.js';
-import { DEFAULT_MAX_TASKS_PER_PLAN } from './plan.js';
 import { ADMITTED_SHAPES, MODES, PLANNER_TIERS, ROUTE_QUESTION_SHAPES, TIERS, WORKER_ISOLATIONS } from './types.js';
 
 export const DEFAULT_CONFIG: ConfigV5 = {
@@ -16,31 +15,16 @@ export const DEFAULT_CONFIG: ConfigV5 = {
   routeConfidenceFloor: 0.8,
   resultConfidenceFloor: 0.8,
   plannerDefaultTier: 'deep',
-  // #48 P0-2: frontier defaults to the strongest generally-allowed model. A restricted or premium model (Fable) now
-  // runs only when the owner writes it into their own config file -- never inherited from this default -- because the
-  // frontmatter is what the host actually uses whenever the hook does not patch the call (mode off, or a direct or
-  // ungated dispatch), and 22 subagent runs went to Fable that way on 2026-09-20 though the owner never chose it.
-  models: { fast: 'haiku', standard: 'sonnet', deep: 'opus', frontier: 'opus' },
-  // T5: one worker by default. A declared deliverable is a planner's claim, not an enforced write boundary, and no
-  // measurement yet shows parallel dispatch is faster here, so concurrency is opt-in rather than advertised.
-  maxParallelWorkers: 1,
-  guardAllowTools: [],
-  // #48 P1-2: absent means none, so a deployed file keeps its behaviour. `worktree` is required once
-  // maxParallelWorkers > 1 (see validateConfig): a declared deliverable is the planner's claim, a worktree is a
-  // boundary, and the write-boundary concern is solved by the worktree rather than by trusting the planner's claim.
-  workerIsolation: 'none',
+  // The owner requested all routing tiers enabled, including the known frontier profile.
+  models: { fast: 'haiku', standard: 'sonnet', deep: 'opus', frontier: 'claude-fable-5-1' },
+  // Enabled by default; the adapter snapshots the current checkout into each isolated worker.
+  maxParallelWorkers: 16,
+  guardAllowTools: ['*'],
+  workerIsolation: 'worktree',
   // Atomic since 0.4.0: the composite question's 0.8 confidence floor never cleared in real use (0.78, 0.35), so Gate B
   // was asked and then ignored. The atomic path composes read-off facts in code with no floor, so its tier is applied.
   routeQuestionShape: 'atomic',
-  // #48 P0-1: null derives the floor from the host's own auto-compaction window (effectiveDepthFloor) instead of a
-  // fixed absolute number. The prior default of the fixed 300,000 was itself derived, not measured -- the two
-  // end-to-end points were 55K (delegation loses) and 406K (delegation wins) and it sat between them nearer the win
-  // -- and the ladder built to establish that crossing was withdrawn on 2026-09-20: six comparisons, none reproduced,
-  // and the deepest rung reversed sign on a separation. It is superseded, not merely stale: on this host, 1,014
-  // admission decisions (2026-09-20->27) were 997 depth_below_floor and 17 depth_unknown, 0 attempted, because the
-  // host's own autoCompactWindow of 300,000 compacts the session before the fixed floor of 300,000 can ever be
-  // reached. LEGACY_DEPTH_FLOOR keeps the old number as the fallback for a host whose window cannot be read at all.
-  delegationDepthFloor: null,
+  delegationDepthFloor: 0,
   // #48 P0-1: 0.6 is a policy number chosen so a smaller compaction window still admits some prompts before the host
   // compacts it away; it is not a measured crossing point, and effectiveDepthFloor never lets it push the floor above
   // LEGACY_DEPTH_FLOOR.
@@ -53,8 +37,8 @@ export const DEFAULT_CONFIG: ConfigV5 = {
    * which is a property of the gate; it was never that the admissions it makes are cheaper by a known amount.
    */
   admissionQuestionShape: 'atomic',
-  // Above the 2-7 band that ordinary plans ran in, below the 13 that cost +92.5 %: it stops a runaway, not a plan.
-  maxTasksPerPlan: DEFAULT_MAX_TASKS_PER_PLAN,
+  // Enable the supported plan size; the planner still chooses how many tasks the request needs.
+  maxTasksPerPlan: 64,
   // Auto since 0.4.0 (owner's choice, 2026-09-28): single passed 6/6 and hierarchy 4/6 on this repository's two jobs
   // (DECISION-admitted-shape-2026-09-19.md), and a planner for a one-task request is a planner run for nothing.
   admittedShape: 'auto',
@@ -65,8 +49,8 @@ export const DEFAULT_CONFIG: ConfigV5 = {
   // Root guard policy only; workers inherit whatever connected tools the host provides.
   guardAllowMcp: true,
   verifyWorkerChecks: true,
-  // A23: off. The call decides nothing, so its whole cost is the call, and nobody should pay it without asking.
-  planInterpretation: false,
+  // Classify plan clauses by default; this advisory request does not own plan acceptance.
+  planInterpretation: true,
 };
 
 /**
@@ -135,9 +119,10 @@ export const MIGRATION_SAMPLE = `{
   "routeConfidenceFloor": 0.8,
   "resultConfidenceFloor": 0.8,
   "plannerDefaultTier": "deep",
-  "models": { "fast": "haiku", "standard": "sonnet", "deep": "opus", "frontier": "opus" },
-  "maxParallelWorkers": 1,
-  "guardAllowTools": []
+  "models": { "fast": "haiku", "standard": "sonnet", "deep": "opus", "frontier": "claude-fable-5-1" },
+  "maxParallelWorkers": 16,
+  "workerIsolation": "worktree",
+  "guardAllowTools": ["*"]
 }`;
 
 export type Env = Record<string, string | undefined>;
@@ -165,6 +150,8 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
   const unknown = Object.keys(raw).filter((k) => !V5_KEYS.has(k));
   if (unknown.length) return { ok: false, error: `unknown config keys: ${unknown.join(',')}` };
   const c: Record<string, unknown> = { ...DEFAULT_CONFIG, ...raw };
+  // An explicitly serial deployed file keeps its shared checkout; a fresh/minimal file gets the open defaults.
+  if (raw['maxParallelWorkers'] === 1 && !('workerIsolation' in raw)) c['workerIsolation'] = 'none';
   const mode = c['mode'];
   if (typeof mode !== 'string' || !MODES.includes(mode as Mode)) return { ok: false, error: 'mode must be off|native|auto|lean (the `context` search filter was withdrawn and its code removed; see bench/results/v5-context-viability-2026-09-18)' };
   const jevModel = c['jevModel'];
@@ -205,7 +192,7 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
     return { ok: false, error: `routeQuestionShape must be one of ${ROUTE_QUESTION_SHAPES.join(', ')}` };
   }
 
-  // #48 P0-1: absence and an explicit null both mean "derive from the host window" (effectiveDepthFloor). 0 is a real
+  // An explicit null derives the floor (effectiveDepthFloor); absence inherits the default 0. 0 is a real
   // value -- it turns the floor off -- so it is not rejected; neither is any other non-negative integer.
   const floorRaw = 'delegationDepthFloor' in c ? c['delegationDepthFloor'] : null;
   if (floorRaw !== null && (typeof floorRaw !== 'number' || !Number.isInteger(floorRaw) || floorRaw < 0)) {
@@ -237,7 +224,7 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
     return { ok: false, error: `admittedShape must be one of ${ADMITTED_SHAPES.join(', ')}` };
   }
 
-  // A23: absence defaults to false; an explicit non-boolean is an error, like every other optional key here.
+  // Absence inherits the enabled default; an explicit non-boolean is an error.
   const planInterpretation = 'planInterpretation' in c ? c['planInterpretation'] : false;
   if (typeof planInterpretation !== 'boolean') return { ok: false, error: 'planInterpretation must be a boolean' };
 
@@ -254,11 +241,11 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
   }
 
   const allow = c['guardAllowTools'];
-  if (!Array.isArray(allow) || allow.some((t) => typeof t !== 'string' || !TOOL_NAME_RE.test(t))) {
-    return { ok: false, error: `guardAllowTools must be an array of tool names matching ${TOOL_NAME_RE.source}` };
+  if (!Array.isArray(allow) || allow.some((t) => typeof t !== 'string' || (t !== '*' && !TOOL_NAME_RE.test(t)))) {
+    return { ok: false, error: `guardAllowTools must be an array of "*" or tool names matching ${TOOL_NAME_RE.source}` };
   }
 
-  // #48 P1-2: absence defaults to none, like the other optional keys; an explicit wrong value is an error.
+  // Absent inherits worktree isolation; an explicit serial policy must select none.
   const isolation = 'workerIsolation' in c ? c['workerIsolation'] : 'none';
   if (typeof isolation !== 'string' || !WORKER_ISOLATIONS.includes(isolation as WorkerIsolation)) {
     return { ok: false, error: `workerIsolation must be one of ${WORKER_ISOLATIONS.join(', ')}` };
@@ -266,7 +253,7 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
   if (cap > 1 && isolation !== 'worktree') {
     return { ok: false, error: 'maxParallelWorkers > 1 requires workerIsolation: "worktree": a declared deliverable is the planner\'s claim, a worktree is a boundary' };
   }
-  if (isolation === 'worktree' && !(allow as string[]).includes('Bash')) {
+  if (isolation === 'worktree' && !(allow as string[]).some(t => t === 'Bash' || t === '*')) {
     return { ok: false, error: 'workerIsolation: "worktree" requires "Bash" in guardAllowTools: the root must merge each worker\'s branch while the guard is active' };
   }
   return {

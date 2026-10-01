@@ -14,7 +14,7 @@ import {
 import { DEFAULT_CONFIG } from '../src/config.js';
 import type { ConfigV5, HookInput } from '../src/types.js';
 
-const config: ConfigV5 = { ...DEFAULT_CONFIG, mode: 'auto' };
+const config: ConfigV5 = { ...DEFAULT_CONFIG, mode: 'auto', guardAllowTools: [] };
 const env = { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' };
 const hook = (input: Record<string, unknown> = {}, top: Record<string, unknown> = {}): HookInput => ({
   hook_event_name: 'PreToolUse',
@@ -69,6 +69,9 @@ describe('checkEligibility', () => {
 });
 
 describe('guardDecision', () => {
+  it('allows every native root tool under the installed default without approving native permissions', () => {
+    for (const name of ['Edit', 'Bash', 'UnknownFutureTool', 'mcp__service__action', 'Agent']) expect(guardDecision(name, { subagent_type: 'Explore' }, DEFAULT_CONFIG)).toEqual({ allow: true });
+  });
   it('allows the read-only and bookkeeping tools, owned agents and configured extras', () => {
     for (const tool of GUARD_ALLOW_TOOLS) expect(guardDecision(tool, {}, config), tool).toEqual({ allow: true });
     expect(guardDecision('Agent', { subagent_type: 'jev-gate:worker-deep' }, config)).toEqual({ allow: true });

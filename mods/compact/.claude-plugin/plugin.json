@@ -1,13 +1,17 @@
 {
   "name": "jev-gate-compact",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "Answers auto compactions with an extractive digest and the recent tail, so compacting sends no summarizer request and has no wait; on by default.",
   "author": {
     "name": "MongLong0214",
     "url": "https://github.com/MongLong0214"
   },
   "repository": "https://github.com/MongLong0214/jev-gate",
-  "keywords": ["compaction", "context", "function-hooks"],
+  "keywords": [
+    "compaction",
+    "context",
+    "function-hooks"
+  ],
   "userConfig": {
     "enabled": {
       "title": "Enable extractive compaction",
@@ -37,7 +41,7 @@
       "title": "Also /compact",
       "description": "Also answer /compact typed without instructions. Off leaves /compact the engine's.",
       "type": "boolean",
-      "default": false
+      "default": true
     }
   }
 }

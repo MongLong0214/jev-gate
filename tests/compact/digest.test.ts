@@ -34,7 +34,7 @@ const sectionOf = (t: string, heading: string): string => {
   return t.slice(at, end < 0 ? t.length : end);
 };
 const REQUESTS = '## Earlier user-role messages (verbatim, oldest first)';
-const FAILURES = '## Failed or interrupted calls (whole, oldest first)';
+const FAILURES = '## Failed, interrupted or unknown calls (whole, oldest first)';
 const requestsOf = (t: string): string => sectionOf(t, REQUESTS);
 /** A content line the digest writes indented, so it cannot read as a heading or an entry marker. */
 const escaped = (t: string): string => t.replace(/^(?=## |▸ )/gm, ' ');

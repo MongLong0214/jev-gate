@@ -5,7 +5,7 @@ import type { TraceWriter } from '../trace.js';
 import type { CodexPolicyConfig } from './config.js';
 import { randomUUID } from 'node:crypto';
 
-export interface CodexModel { model: string; defaultReasoningEffort?: string; supportedReasoningEfforts: Array<{ reasoningEffort: string }> }
+export interface CodexModel { model: string; description?: string; isDefault?: boolean; hidden?: boolean; defaultReasoningEffort?: string; supportedReasoningEfforts: Array<{ reasoningEffort: string }> }
 // Host-specific effort vocabulary. The account catalog, not this order, decides which values may be sent.
 const EFFORT_LEVELS = {
   none: 'An immediate response or mechanical transformation requiring no reasoning.',

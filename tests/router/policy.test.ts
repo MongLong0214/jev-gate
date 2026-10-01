@@ -158,7 +158,7 @@ describe('what is offered', () => {
   it('offers profiles only with a known rank and another target that could be applied', () => {
     const opus = { model: 'claude-opus-5-5' };
     // With no verified root switch, a root model question could only be refused: it is not asked.
-    expect(offerableTiers(opus, opts())).toEqual({ reason: 'no_applicable_target' });
+    expect(offerableTiers(opus, opts())).toEqual({ tiers: ['standard', 'deep', 'frontier'] });
     // A verified switch makes its target offerable; a smaller window never is.
     expect(offerableTiers(opus, opts(switches(['claude-opus-5-5', 'claude-sonnet-5'], ['claude-opus-5-5', 'claude-haiku-4-5'])))).toEqual({ tiers: ['standard', 'deep'] });
     // A root request takes exact identifiers only.
@@ -269,10 +269,11 @@ describe('choosePatch', () => {
     expect(spawnTo('claude-opus-5-5[bogus]', ['claude-opus-5-5[bogus]'])).toBe('target_unavailable');
   });
 
-  it('keeps every root model native until the exact switch is verified', () => {
+  it('routes compatible root models by default and honors explicit switch restrictions', () => {
     const up = { ...CLEAR, tier: tier('frontier') };
     const sonnet: Baseline = { model: 'claude-sonnet-5' };
-    expect(choosePatch(up, sonnet, modelOnly, opts()).model).toBe('controls_unverified');
+    expect(choosePatch(up, sonnet, modelOnly, opts()).patch).toEqual({ model: 'claude-fable-5-1' });
+    expect(choosePatch(up, sonnet, modelOnly, opts({ rootSwitches: [] })).model).toBe('controls_unverified');
     expect(choosePatch(up, sonnet, modelOnly, opts(switches(['claude-sonnet-5', 'claude-fable-5-1']))).patch).toEqual({ model: 'claude-fable-5-1' });
     // A verified pair is exact: another variant of the same baseline is a different request.
     expect(choosePatch(up, { model: 'claude-sonnet-5[1m]' }, modelOnly, opts(switches(['claude-sonnet-5', 'claude-fable-5-1']))).model).toBe('controls_unverified');

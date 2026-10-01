@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.8.0 — 2026-10-01 — Automatic setup and open defaults
+
+- Claude Code prepares required launch settings and recording paths automatically. Both hosts open a local API key screen and share the private credential; no shell export or project policy file is required.
+- Main model routing, manual compaction, plan interpretation and parallel snapshot worktrees are enabled by default. Up to 16 workers and 64 planned tasks, a depth floor of 0 and an open root tool list retain native host permission handling.
+- Worktree snapshots include staged, unstaged and untracked working files without changing the root HEAD or index. Codex derives tier models from its live account catalog. Claude Router retries a missing key after local setup without requiring another session.
+- Fixed #137–#140: Codex Compact preserves matched failed/unknown results and full prior summaries; Gate A context retry shares one absolute hook deadline; uncertain Codex starts retain reservations until genuine terminal settlement; saturated Router history excludes unapplicable child effort questions while preserving model routing.
+- Initial host restart and native hook trust remain host requirements. Fixture-backed native tests do not establish paid-account model access or long-term product effects.
+
 ## v0.7.1 — 2026-10-01 — Automatic native Codex connection and benchmark fixes
 
 - Ordinary native Codex now connects automatically after plugin startup: no Jev launcher, workspace export or project setup file. Native login/hook trust stays authoritative; already open hosts need a fresh session to load the provider.

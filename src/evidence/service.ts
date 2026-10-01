@@ -215,6 +215,8 @@ const rounded = (p: Record<Judgement, number>): Record<Judgement, number> =>
 export interface EvidenceServiceDeps {
   /** TYPESAFE_API_KEY as the process received it; null when absent. */
   apiKey: string | null;
+  /** Installed hosts can accept/rotate a shared key without restarting the MCP process. */
+  getApiKey?: () => string | null;
   fetchImpl?: typeof fetch;
   now?: () => number;
   /** Event-loop turn during candidate generation. Default yields with setImmediate. Not an MCP argument. */
@@ -251,7 +253,8 @@ export const createEvidenceService = (config: EvidenceConfig | null, deps: Evide
     const root = cfg.projectRoot;
     const deadline = now() + LIMITS.deadlineMs;
     const semantic = input.exactSymbols.length === 0;
-    const remote = semantic && cfg.remote && deps.apiKey !== null;
+    const apiKey = deps.getApiKey ? deps.getApiKey() : deps.apiKey;
+    const remote = semantic && cfg.remote && apiKey !== null;
     const publishBy = deadline - LIMITS.publishReserveMs;
     const readBy = publishBy - (remote ? LIMITS.remoteMs : 0);
     const globs = cfg.excludeGlobs.map(globToRegExp);
@@ -353,10 +356,10 @@ export const createEvidenceService = (config: EvidenceConfig | null, deps: Evide
     // Candidate generation already stopped on the search budget: do not open a Jev call on that partial page.
     const cpuStopped = set.stopped === 'deadline';
     if (semantic && !cfg.remote) reason('remote_disabled');
-    else if (semantic && deps.apiKey === null) reason('missing_key');
+    else if (semantic && apiKey === null) reason('missing_key');
     else if (remote && page.length > 0 && !cpuStopped && now() < deadline) {
       const scopeKey = JSON.stringify([root, scope, cfg.excludeGlobs, input.mode]);
-      selection = await selectPage(input.goal, input.constraints, page, scopeKey, publishBy, signal, { apiKey: deps.apiKey!, cache, http, now, ...(observeRemote ? { observeRemote } : {}), ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}) });
+      selection = await selectPage(input.goal, input.constraints, page, scopeKey, publishBy, signal, { apiKey: apiKey!, cache, http, now, ...(observeRemote ? { observeRemote } : {}), ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}) });
       if (selection.cancelled || signal.aborted) return cancelled();
       selection.reasons.forEach(reason);
     } else if (remote && page.length > 0 && !cpuStopped) reason('deadline');

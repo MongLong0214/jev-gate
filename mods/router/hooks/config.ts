@@ -64,7 +64,7 @@ export const resolveConfig = (options: Options): ConfigResult => {
   if (routeSubagentEffort === null) return { ok: false, field: 'routeSubagentEffort' };
   const routeMainEffort = bool('routeMainEffort', true);
   if (routeMainEffort === null) return { ok: false, field: 'routeMainEffort' };
-  const routeMainModel = bool('routeMainModel', false);
+  const routeMainModel = bool('routeMainModel', true);
   if (routeMainModel === null) return { ok: false, field: 'routeMainModel' };
   const logDecisions = bool('logDecisions', true);
   if (logDecisions === null) return { ok: false, field: 'logDecisions' };
@@ -89,8 +89,8 @@ export const resolveConfig = (options: Options): ConfigResult => {
   const candidate: Partial<Record<ModelTier, string>> = {};
   for (const tier of TIER_ORDER) {
     const v = options[TIER_FIELDS[tier]];
-    // Frontier has no default: absent or blank is simply not configured.
-    const value = tier === 'frontier' ? (typeof v === 'string' && v.trim() === '' ? undefined : v) : (v ?? DEFAULT_TIERS[tier]);
+    // Frontier is enabled by default; an explicitly blank value disables that tier.
+    const value = tier === 'frontier' ? (typeof v === 'string' && v.trim() === '' ? undefined : v ?? 'claude-fable-5-1') : (v ?? DEFAULT_TIERS[tier]);
     if (value === undefined) continue;
     if (typeof value !== 'string' || !MODEL_VALUE.test(value)) {
       tierIssues.push({ tier, reason: 'invalid' });

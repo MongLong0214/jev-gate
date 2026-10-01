@@ -1,7 +1,7 @@
 ---
 name: planner-frontier
 description: Read the repository and return one implementation plan as a PlannerReply. Read-only; never implements.
-model: opus
+model: claude-fable-5-1
 effort: xhigh
 background: false
 ---

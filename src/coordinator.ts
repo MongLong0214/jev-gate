@@ -26,12 +26,12 @@ export const renderDispatchRule = (cap: number): string =>
 /**
  * #48 P1-2: shown once in orchestration guidance and again after every accepted worker while `workerIsolation` is
  * `"worktree"` -- the write boundary is per-worker there, so a dependent task must not start until the predecessor's
- * worktree is merged back into the branch the next worker will read from. #53 review: a one-task plan or an
+ * worker diff is integrated into the checkout the next snapshot reads. #53 review: a one-task plan or an
  * independent final task has no dependent dispatch to trigger that merge, yet Stop records the plan completed, so the
  * merge is owed for every accepted worker, not only for one that has a dependent.
  */
 export const WORKTREE_ISOLATION_SENTENCE =
-  'workerIsolation is "worktree": each dispatched worker runs in its own git worktree branched from this checkout\'s last commit, not from uncommitted changes in this working tree, so commit what a worker has to read before dispatching it. Merge every accepted worker\'s branch back into this checkout before dispatching a task that depends on it and before reporting the work done: until it is merged, an accepted task has changed nothing here.';
+  'workerIsolation is "worktree": each worker starts from a snapshot of this checkout including staged, unstaged and untracked files (ignored files are excluded). Record each worker snapshot baseline before it edits. After accepting a worker, inspect and apply only git diff --binary <snapshot-baseline> <worker-branch> in this checkout with git apply. Do not merge the snapshot commit or overwrite conflicting root changes. Integrate each predecessor before dispatching dependent work and integrate all accepted changes before reporting completion.';
 
 /**
  * #53 review: appended to every patched worker prompt under worktree isolation. The worker profiles say not to commit
@@ -39,7 +39,7 @@ export const WORKTREE_ISOLATION_SENTENCE =
  * dependent worker would start without them. This is the contract asking.
  */
 export const WORKTREE_WORKER_SENTENCE =
-  '\n\n[Jev Gate isolation] You run in your own git worktree. When your checks are done, commit every change you made on this worktree\'s current branch in one commit, and do not push: the coordinator merges that branch, and uncommitted changes are not merged.';
+  '\n\n[Jev Gate isolation] You run in a snapshot worktree containing the caller working files. Before editing, record git rev-parse HEAD as your snapshot baseline. Commit your own changes on this branch after checks, do not push, and report the baseline and branch. The coordinator applies only your diff from the baseline, preserving its uncommitted work.';
 
 const DENIED_UNLESS_ALLOWED = ['Edit', 'Write', 'Bash'];
 
@@ -47,8 +47,9 @@ const DENIED_UNLESS_ALLOWED = ['Edit', 'Write', 'Bash'];
  * The guard's allow-list is policy, not a host tool inventory. Never promise that an allowed tool is installed.
  */
 export const renderToolRule = (agents: string, allowTools: readonly string[] = [], allowMcp = false): string => {
-  const denied = DENIED_UNLESS_ALLOWED.filter((t) => !allowTools.includes(t));
+  const denied = DENIED_UNLESS_ALLOWED.filter((t) => !allowTools.includes('*') && !allowTools.includes(t));
   const rootTools = denied.length ? `The plugin guard denies root ${denied.join(', ')} calls for this request.` : '';
+  if (allowTools.includes('*')) return `Jev Gate permits all host-provided root tools; native host permissions still apply. Use ${agents}.`;
   const rule = `Jev Gate permits ${agents} and the read/task tools actually provided by the host. Other Agent roles are denied by this root guard. ${rootTools} Host availability and permissions still apply.`;
   return allowMcp ? `${rule} ${MCP_SENTENCE}` : rule;
 };

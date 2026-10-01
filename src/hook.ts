@@ -1,3 +1,5 @@
+import { integratedClaudePlugin } from './claude-setup.js';
+import { hasWorktreeHead } from './worktree.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, realpathSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -101,6 +103,7 @@ import {
   newGeneration,
   own,
   readJob,
+  retainHistory,
   release,
   reserve,
   updateJob,
@@ -410,14 +413,17 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
   if (deps.env['JEV_GATE_MODE'] === 'off') return isAgentPre ? preserve('mode_off') : skip('mode_off');
   const loaded = deps.host ? { ok: true as const, config: deps.host.config, source: 'host' } : loadConfig(deps.env, undefined, hookDefaultMode(deps.env, deps.argv ?? []));
   if (!loaded.ok) return isAgentPre ? preserve('config_invalid') : skip('config_invalid');
+  if (loaded.config.mode === 'off') return isAgentPre ? preserve('mode_off') : skip('mode_off');
   /**
    * #48 P1-2 review: a worker under `isolation: "worktree"` starts from the host's `worktree.baseRef`, whose default
    * ("fresh") is origin/<default-branch> rather than this branch, so a worker would build on a revision missing the
    * task's inputs. Only "head" is the revision the plan was made against; any other reading, unset included, runs as
    * workerIsolation "none" -- one worker at a time in the caller's tree -- rather than dispatching onto the wrong base.
    */
-  const baseRef = loaded.config.workerIsolation === 'worktree' ? deps.host ? { value: 'head', source: 'codex_head' } : readHostWorktreeBaseRef(deps.env, null, { cwd: input.cwd ?? null, transcriptPath: input.transcript_path ?? null }) : null;
-  const config: ConfigV5 = baseRef !== null && baseRef.value !== 'head' ? { ...loaded.config, workerIsolation: 'none', maxParallelWorkers: 1 } : loaded.config;
+  const baseRef = loaded.config.workerIsolation === 'worktree' ? deps.host ? { value: 'head', source: 'codex_head' } : integratedClaudePlugin(deps.env) ? { value: 'head', source: 'jev_snapshot' } : readHostWorktreeBaseRef(deps.env, null, { cwd: input.cwd ?? null, transcriptPath: input.transcript_path ?? null }) : null;
+  const snapshotHost = !!deps.host || integratedClaudePlugin(deps.env);
+  const unavailableWorktree = baseRef !== null && (baseRef.value !== 'head' || snapshotHost && !!input.cwd && !hasWorktreeHead(input.cwd, deps.env));
+  const config: ConfigV5 = unavailableWorktree ? { ...loaded.config, workerIsolation: 'none', maxParallelWorkers: 1 } : loaded.config;
   const requestedModelFor = (tool: unknown): string | null => requestedModelFrom(tool, deps.host ? config.models : DEFAULT_CONFIG.models);
   const rawMode = config.mode;
   if (rawMode === 'off') return isAgentPre ? preserve('mode_off') : skip('mode_off');
@@ -487,6 +493,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     decide: (outcome: JevOutcome) => Record<string, unknown>,
     /** L7: the epoch ms by which the call must have returned. The deadline is what is left then, not a fresh budget. */
     mustReturnBy?: number,
+    currentAdmission?: () => boolean,
   ): Promise<{ outcome: JevOutcome } | { blocked: ErrorCode }> => {
     const requestBytes = Buffer.byteLength(JSON.stringify(request), 'utf8');
     // B2/T7: one id per gate call, written to both records, so accounting joins an intent to its own result. Gate A
@@ -496,7 +503,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       trace?.write(resultPhase, { ...base, ...intent, request_id: requestId, attempted: false, known_not_sent: true, skip_code: 'request_too_large', request_bytes: requestBytes });
       return { blocked: 'request_too_large' };
     }
-    if (deps.signal?.aborted) return { blocked: 'aborted' };
+    if (deps.signal?.aborted || currentAdmission && !currentAdmission()) return { blocked: 'aborted' };
     // The floor guards only what the hook timeout leaves. A configured deadline passed validation and is the
     // operator's to set, however short.
     const hookLeft = (): number => (mustReturnBy === undefined ? Infinity : mustReturnBy - Date.now());
@@ -512,6 +519,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     }
     // Measured again after the intent write: that write is local work the budget has already paid for.
     const left = hookLeft();
+    if (deps.signal?.aborted || currentAdmission && !currentAdmission()) return { blocked: 'aborted' };
     if (left < MIN_NETWORK_MS) return exhausted();
     const deadlineMs = Math.min(config.requestDeadlineMs, left);
     const outcome = await callJev(request, {
@@ -520,7 +528,11 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
       ...(deps.signal ? { signal: deps.signal } : {}),
     });
-    const decided = decide(outcome);
+    // Timers can be queued behind body decoding or local work. The clock and caller cancellation own admission.
+    const admissionExpired = intentPhase === 'admission_intent' && (deps.signal?.aborted || hookLeft() <= 0);
+    const decided = admissionExpired
+      ? { forced: false, decision: { shape: 'direct', decided: false, reason: deps.signal?.aborted ? 'aborted' : 'deadline_exhausted', changed_default: false } }
+      : decide(outcome);
     trace?.write(resultPhase, {
       ...base,
       ...intent,
@@ -534,7 +546,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       answers: outcome.ok ? whitelistAnswers(outcome.response.answers, questionKeys) : null,
       ...decided,
     });
-    return { outcome };
+    return admissionExpired ? { blocked: deps.signal?.aborted ? 'aborted' : 'deadline_exhausted' } : { outcome };
   };
 
   // ---------------------------------------------------------------- lean (JGL-01/02/03)
@@ -942,6 +954,9 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
   // ---------------------------------------------------------------- UserPromptSubmit (Gate A)
 
   const handleUserPrompt = async (): Promise<HookResult> => {
+    if (deps.signal?.aborted) return skip('aborted');
+    const hookDeadline = startedAt + NATIVE_HOOK_TIMEOUT_MS;
+    const admissionDeadline = hookDeadline - LOCK_DEADLINE_MS - 300;
     const prompt = input.prompt;
     if (typeof prompt !== 'string' || prompt.trim().length === 0 || isSlashCommand(prompt) || caller.agent_id || caller.agent_type) return skip();
     const sessionId = input.session_id;
@@ -983,6 +998,11 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     });
     // Without durable state there is no guard and no plan, so the turn falls back to native behavior.
     if (!registered.ok) return emitContext('UserPromptSubmit', renderDirectGuidance(mode), registered.code);
+    const currentAdmission = (): boolean => {
+      if (deps.signal?.aborted) return false;
+      const state = readJob(deps.env, sessionId);
+      return state.ok && state.value?.current.prompt_id === promptId;
+    };
     const nowIso = (): string => new Date().toISOString();
 
     /**
@@ -1104,6 +1124,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         let admitted: (AdmissionDecision & { estimate?: AdmissionEstimate | null; execution?: 'single' | 'hierarchy' | null }) | null =
           null;
         const askGateA = (text: string, facts: Record<string, unknown>): ReturnType<typeof callGate> => {
+          if (!currentAdmission()) return Promise.resolve({ blocked: 'aborted' });
           const request = admissionRequest(text);
           return callGate(
           request,
@@ -1136,21 +1157,29 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
               ...(atomicAdmission ? { selected_execution: selectedExecution, policy_revision: 'atomic-context-v1' } : {}),
             };
           },
+          admissionDeadline,
+          currentAdmission,
           );
         };
         let gate = await askGateA(prompt, {});
+        if (!currentAdmission()) return skip(deps.signal?.aborted ? 'aborted' : 'generation_changed');
         /**
          * #115: a short follow-up ("e2e 해봐") reads as `needs_context` on its own, and the context it needs is the
          * turns before it. One re-ask with the last few user prompts attached, once, only for that reason. The
          * second record carries `context_turns` so accounting can tell the two requests apart.
          */
         const needsContext = 'outcome' in gate && gate.outcome.ok && admitted !== null && (admitted as AdmissionDecision).reason === 'admission_needs_context';
-        if (needsContext) {
+        if (needsContext && admissionDeadline - Date.now() < MIN_NETWORK_MS) {
+          gate = { blocked: 'deadline_exhausted' };
+          trace?.write('admission_result', { ...base, attempted: false, known_not_sent: true, retry_skipped: true, skip_code: 'deadline_exhausted' });
+        } else if (needsContext) {
           const recent = deps.host ? [...(deps.host.recentRequests?.() ?? [])] : readRecentPrompts(input.transcript_path, prompt);
+          if (!currentAdmission()) return skip(deps.signal?.aborted ? 'aborted' : 'generation_changed');
           if (recent.length > 0) {
             const contextual = withRecentPrompts(prompt, recent);
             if (Buffer.byteLength(contextual, 'utf8') <= REQUEST_MAX_BYTES && Buffer.byteLength(composeSingleWorkerPrompt('', contextual, true), 'utf8') <= MAX_COMPOSED_BYTES) {
               gate = await askGateA(contextual, { context_turns: recent.length });
+              if (!currentAdmission()) return skip(deps.signal?.aborted ? 'aborted' : 'generation_changed');
               dispatchRequest = contextual;
             }
           }
@@ -1172,6 +1201,8 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
 
     // #114: an unreadable depth is the one direct reason the user cannot see coming -- the first prompt of a session
     // and every headless `claude -p` single turn have no transcript yet -- so it is the one that is said out loud.
+    if (!currentAdmission()) return skip(deps.signal?.aborted ? 'aborted' : 'generation_changed');
+    if (Date.now() >= hookDeadline) return emitContext('UserPromptSubmit', renderDirectGuidance(mode), 'deadline_exhausted');
     if (shape === 'direct') return emitContext('UserPromptSubmit', renderDirectGuidance(mode), reason, reason === 'depth_unknown' ? DEPTH_UNKNOWN_NOTICE : null);
     // A17: an orchestrated turn keeps its request, because every worker contract downstream is a paraphrase of it and
     // the worker is told the user's own words come first. Stored whole or not at all -- never truncated into a
@@ -1181,7 +1212,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     if (executed === null) return emitContext('UserPromptSubmit', renderDirectGuidance(mode), 'admission_shape_unknown');
     let stale = false;
     const applied = updateJob(deps.env, sessionId, (prev) => {
-      if (!prev || prev.current.prompt_id !== promptId) {
+      if (!prev || prev.current.prompt_id !== promptId || deps.signal?.aborted || Date.now() >= hookDeadline) {
         stale = true;
         return null;
       }
@@ -1196,7 +1227,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       return { ...prev, current: executed === 'single' ? { ...next, execution: 'single' as const } : next };
     });
     // A newer prompt owns the session now; this turn does not get to turn orchestration on behind it.
-    if (stale) return emitContext('UserPromptSubmit', renderDirectGuidance(mode), 'generation_changed');
+    if (stale) return currentAdmission() ? emitContext('UserPromptSubmit', renderDirectGuidance(mode), 'deadline_exhausted') : skip(deps.signal?.aborted ? 'aborted' : 'generation_changed');
     if (!applied.ok) return emitContext('UserPromptSubmit', renderDirectGuidance(mode), applied.code);
     if (executed === 'single') return emitContext('UserPromptSubmit', renderSingleGuidance({ mode, confidence, superseded, guardAllowTools: config.guardAllowTools, guardAllowMcp: config.guardAllowMcp }), reason);
     return emitContext(
@@ -1941,7 +1972,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
           // A23: recorded beside the adopted plan, and read by nothing. `applied: false` is inside the value.
           ...(interpretation === null ? {} : { interpretation }),
         });
-        const history = retired.length ? [{ ...prev.current, plan: null, active: {}, receipts: retired, outcome: 'superseded' as const }, ...prev.history].slice(0, MAX_HISTORY) : prev.history;
+        const history = retired.length ? retainHistory([{ ...prev.current, plan: null, active: {}, receipts: retired, outcome: 'superseded' as const }, ...prev.history]) : prev.history;
         return { ...prev, current: next, history };
       }
       /**
@@ -2162,6 +2193,26 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     return context === null ? skip() : emitContext('PostToolUse', context, null);
   };
 
+  // Retired Codex execution is recorded as stale, never accepted into the newer plan.
+  const settleRetiredCodex = (sessionId: string, toolUseId: string): HookResult => {
+    const written = updateJob(deps.env, sessionId, prev => {
+      if (!prev) return null;
+      let changed = false;
+      const history = prev.history.map(gen => {
+        const r = own(gen.active, toolUseId);
+        if (gen.prompt_id !== input.prompt_id || !r?.codex_execution) return gen;
+        changed = true;
+        const next = release(gen, toolUseId);
+        const receipt: Receipt = { task_id: r.task_id ?? '', contract_hash: r.contract_hash ?? '', rev: r.rev ?? 0, attempt: r.attempt, tool_use_id: toolUseId,
+          provenance: 'worker_reported', reply: null, verdict: 'unknown', verdict_reason: 'generation_changed', advisory: null,
+          observed_model: observedModel(input.tool_response), root_effort: input.effort ?? null, recorded_at: new Date().toISOString() };
+        return { ...next, receipts: [...next.receipts, receipt] };
+      });
+      return changed ? { ...prev, history } : null;
+    }, { refuseUnreadable: true });
+    return skip(written.ok ? 'generation_changed' : written.code);
+  };
+
   const handlePostToolUse = async (): Promise<HookResult> => {
     if (caller.agent_id) return skip('child_caller');
     if (input.tool_name !== 'Agent') return skip('not_agent_tool');
@@ -2189,7 +2240,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       });
       return skip('no_state');
     }
-    const reservation = own(job.current.active, toolUseId);
+    const reservation = input.prompt_id == null || job.current.prompt_id === input.prompt_id ? own(job.current.active, toolUseId) : undefined;
     if (!reservation) {
       // A2: a late result belongs to its own generation only; it is recorded and never advances the current plan.
       const orphaned = job.history.some((h) => own(h.active, toolUseId) !== undefined);
@@ -2203,7 +2254,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         resolved_model: observedModel(input.tool_response),
         tool_response: whitelistToolResponse(input.tool_response),
       });
-      return skip(orphaned ? 'generation_changed' : null);
+      return orphaned ? settleRetiredCodex(sessionId, toolUseId) : skip();
     }
     if (reservation.role === 'planner') return await handlePlannerResult(sessionId, job.current, toolUseId);
     return handleWorkerResult(sessionId, job.current, toolUseId, reservation);
@@ -2216,8 +2267,10 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     const toolUseId = input.tool_use_id;
     const error = input.error ?? '';
     if (sessionId && toolUseId) {
-      updateJob(deps.env, sessionId, (prev) => {
-        const reservation = prev ? own(prev.current.active, toolUseId) : undefined;
+      const old = readJob(deps.env, sessionId);
+      if (input.prompt_id != null && old.ok && old.value && old.value.current.prompt_id !== input.prompt_id) return settleRetiredCodex(sessionId, toolUseId);
+      const written = updateJob(deps.env, sessionId, (prev) => {
+        const reservation = prev && (input.prompt_id == null || prev.current.prompt_id === input.prompt_id) ? own(prev.current.active, toolUseId) : undefined;
         if (!prev || !reservation) return null;
         const next = release(prev.current, toolUseId);
         const task = prev.current.plan?.tasks.find((t) => t.id === reservation.task_id) ?? null;
@@ -2240,6 +2293,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         };
         return { ...prev, current: { ...next, receipts: [...next.receipts, receipt] } };
       });
+      if (!written.ok) return skip(written.code);
     }
     trace?.write('failure', {
       ...base,
@@ -2338,13 +2392,22 @@ const isMainModule = (): boolean => {
  * inside its result) is the one case treated as internal, everything else is a normal result.
  */
 export const main = async (): Promise<void> => {
-  const result = await runHook({ stdin: process.stdin, env: process.env, argv: process.argv, startedAt: performance.timeOrigin }).catch(() => null);
+  const { withApiKey } = await import('./credentials.js');
+  const { claudeTraceDir, claudeSetupNotice, integratedClaudePlugin } = await import('./claude-setup.js');
+  const read = await readAll(process.stdin);
+  if ('code' in read) { process.stderr.write(`jev-gate: ${read.code}\n`); process.exitCode = 0; return; }
+  const input = parseInput(read.text);
+  const env = withApiKey(process.env);
+  if (env['CLAUDE_PLUGIN_ROOT'] && !env['JEV_GATE_TRACE_DIR']) env['JEV_GATE_TRACE_DIR'] = claudeTraceDir(env);
+  const notice = !('code' in input) && input.hook_event_name === 'SessionStart' && integratedClaudePlugin(env) ? claudeSetupNotice(env) : null;
+  const result = await runHook({ stdin: (async function* () { yield read.text; })(), env, argv: process.argv, startedAt: performance.timeOrigin }).catch(() => null);
   if (result === null) {
     process.stderr.write('jev-gate: internal\n');
     process.exitCode = 0;
     return;
   }
-  if (result.stdout !== null) process.stdout.write(result.stdout + '\n');
+  if (notice) process.stdout.write(renderSystemMessage(notice) + '\n');
+  else if (result.stdout !== null) process.stdout.write(result.stdout + '\n');
   if (result.code) process.stderr.write(`jev-gate: ${result.code}\n`);
   process.exitCode = 0;
 };

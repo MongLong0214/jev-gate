@@ -9,6 +9,7 @@ await build({
     hook: join(root, 'src/codex/hook.ts'),
     server: join(root, 'src/evidence/server.ts'),
     cli: join(root, 'src/codex/cli.ts'),
+    worktree: join(root, 'src/worktree-cli.ts'),
   },
   outdir: process.argv[2] ?? join(root, 'plugins/codex/dist'),
   outExtension: { '.js': '.mjs' },

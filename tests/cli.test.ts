@@ -35,8 +35,8 @@ describe('committed agents/*.md match OWNED_AGENT_PROFILES + DEFAULT_CONFIG.mode
     expect(fm.fields['disallowedTools']).toBeUndefined();
   });
 
-  it('frontier defaults to opus, not fable (#48 P0-2: a restricted model now requires explicit owner opt-in)', () => {
-    expect(DEFAULT_CONFIG.models.frontier).toBe('opus');
+  it('enables the frontier profile by default under the open policy', () => {
+    expect(DEFAULT_CONFIG.models.frontier).toBe('claude-fable-5-1');
   });
 });
 
@@ -134,7 +134,7 @@ describe('doctor: checkModelAuthority (#48 P0-2)', () => {
     const pluginRoot = preparePluginRoot({ file: 'worker-frontier.md', content: mutated });
     const { status, stdout } = runDoctor(pluginRoot);
     expect(status).toBe(1);
-    expect(stdout).toMatch(/\[fail\] agents\/worker-frontier\.md:.*model=haiku \(expected opus\)/);
+    expect(stdout).toMatch(/\[fail\] agents\/worker-frontier\.md:.*model=haiku \(expected claude-fable-5-1\)/);
   });
 
   it('FAIL: a packaged agent reintroduces a restrictive tool list', () => {
@@ -153,14 +153,14 @@ describe('doctor: checkModelAuthority (#48 P0-2)', () => {
     writeFileSync(configPath, JSON.stringify({ version: 5, mode: 'native', models: { frontier: 'sonnet' } }));
     const { status, stdout } = runDoctor(pluginRoot, { JEV_GATE_CONFIG: configPath, HOME: home });
     expect(status).toBe(1);
-    expect(stdout).toContain('a gated dispatch of jev-gate:worker-frontier runs sonnet (config models.frontier), a direct or ungated one runs opus (frontmatter)');
+    expect(stdout).toContain('a gated dispatch of jev-gate:worker-frontier runs sonnet (config models.frontier), a direct or ungated one runs claude-fable-5-1 (frontmatter)');
   });
 
   it('OK: effective config models.frontier equals installed frontmatter exactly', () => {
     const pluginRoot = preparePluginRoot();
     const home = mkdtempSync(join(tmpdir(), 'jev-cli-doctor-home-'));
     const configPath = join(home, 'config.json');
-    writeFileSync(configPath, JSON.stringify({ version: 5, mode: 'native', models: { frontier: 'opus' } }));
+    writeFileSync(configPath, JSON.stringify({ version: 5, mode: 'native', models: { frontier: 'claude-fable-5-1' } }));
     const { stdout } = runDoctor(pluginRoot, { JEV_GATE_CONFIG: configPath, HOME: home });
     expect(stdout).not.toMatch(/a gated dispatch of jev-gate:worker-frontier runs/);
   });
@@ -170,7 +170,7 @@ describe('doctor: checkModelAuthority (#48 P0-2)', () => {
     const home = mkdtempSync(join(tmpdir(), 'jev-cli-doctor-home-'));
     const configPath = join(home, 'config.json');
     // Frontmatter says the bare family name "opus"; config names a concrete dated alias of the same family.
-    writeFileSync(configPath, JSON.stringify({ version: 5, mode: 'native', models: { frontier: 'claude-opus-4-6-20260301' } }));
+    writeFileSync(configPath, JSON.stringify({ version: 5, mode: 'native', models: { frontier: 'fable' } }));
     const { stdout } = runDoctor(pluginRoot, { JEV_GATE_CONFIG: configPath, HOME: home });
     expect(stdout).not.toMatch(/a gated dispatch of jev-gate:worker-frontier runs/);
   });
@@ -199,7 +199,7 @@ describe('doctor: checkModelAuthority (#48 P0-2)', () => {
       const path = join(pluginRoot, 'agents', 'worker-frontier.md');
       const check = genAgents(pluginRoot, ['--check']);
       expect(check.status).toBe(1);
-      expect(check.stdout).toContain('worker-frontier.md drifts from the table (model: opus, effort: xhigh)');
+      expect(check.stdout).toContain('worker-frontier.md drifts from the table (model: claude-fable-5-1, effort: xhigh)');
       expect(readFileSync(path, 'utf8')).not.toBe(original); // --check must not write
 
       const write = genAgents(pluginRoot);

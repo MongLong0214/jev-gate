@@ -11,7 +11,7 @@
 
 Jev-assisted task routing, evidence search, context compaction, and readable tool output for Claude Code and native Codex. Jev returns typed judgments; code applies the policy; the coding host executes the work. The local dashboard shows recorded activity as it happens.
 
-The gate can change delegation and what the root session is allowed to run while a job is admitted. The Gate keeps the host-selected session model; root model routing is opt-in. Results vary by task. No general saving is guaranteed.
+The gate can change delegation and what the root session is allowed to run while a job is admitted. Main and subagent model routing are enabled by default, within host permissions and supported model controls. Results vary by task. No general saving is guaranteed.
 
 The marketplace installs [the latest release](https://github.com/MongLong0214/jev-gate/releases/latest). Node.js 22 or later is required (`package.json`, `engines`).
 
@@ -37,7 +37,9 @@ codex plugin add jev-gate@jev-gate-codex
 
 Open ordinary **Codex** in your project. The installed plugin discovers the calling thread’s workspace and connects automatic policies locally. No workspace export, separate Jev terminal or project configuration file is required.
 
-Codex still owns login and hook trust: supply `TYPESAFE_API_KEY` through the host environment for Jev judgments, and review/trust the installed hooks in `/hooks` when Codex requests it. Keep exactly one Jev Gate installation enabled in `/plugins`. Installation never forges a trust approval. A session already open during installation keeps its original model provider; start a new native session after the automatic connection is ready. Requires Node 22.15+; automatic connection was tested on Codex CLI 0.159.2. Build before installing a source checkout.
+When the installed plugin starts, it opens a local **Jev API key** screen if no key is available. Enter the key once; Claude Code and Codex share the same private local credential. No shell export or policy file is required. Existing `TYPESAFE_API_KEY` and the Claude plugin's key option remain supported.
+
+Codex owns login and hook trust: review/trust installed hooks in `/hooks` when the host requests it. Keep exactly one Jev Gate installation enabled in `/plugins`. Installation never forges a trust approval. A host already open during installation keeps its original model provider; start a fresh native host after the automatic connection is ready. Requires Node 22.15+; automatic connection was tested on Codex CLI 0.159.2. Build before installing a source checkout.
 
 Use the absolute path of this checkout (or the installed Codex plugin) for diagnostics and the dashboard:
 
@@ -50,7 +52,7 @@ The dashboard opens on **http://127.0.0.1:4731**. Choose another port with `--po
 
 For an extracted release, use `/absolute/path/to/extracted-plugin/dist/cli.mjs` in those commands. Keep the dashboard terminal running while working in a separate Codex terminal.
 
-The Codex dashboard shows all ten feature stages and separates Jev selection from actual host application. At the default concurrency of 1, admitted automatic work follows **Gate A → Gate B → one worker → code acceptance → root continuation**; only planned delegation adds a planner and dependency graph. Ordinary native sessions use the automatic local connection for policies. The dashboard distinguishes a recorded policy decision from its observed application; an open session using its previous provider does not become connected retroactively.
+The Codex dashboard shows all ten feature stages and separates Jev selection from actual host application. With up to 16 isolated workers enabled by default, Jev chooses a single worker or a planner and dependency graph for independent outcomes. Ordinary native sessions use the automatic local connection for policies. The dashboard distinguishes a recorded policy decision from its observed application; an open session using its previous provider does not become connected retroactively.
 
 [Native feature support, configuration, environment inheritance and troubleshooting →](plugins/codex/README.md)
 
@@ -63,53 +65,33 @@ In a Claude Code session:
 /plugin install jev-gate@jev-gate
 ```
 
-That is the install. A checkout, `npm`, and the old separate plugins are not required.
+Then enter your **Jev API key** in the local screen that opens automatically. That is the configuration: install the plugin and enter one key. A checkout, `npm`, environment-variable editing and a Gate config file are not required. You can also enter the same key through the plugin's sensitive `typesafeApiKey` option.
 
 A TypeSafe key is not a Claude login. TypeSafe charges and limits are separate from a Claude subscription. With a key, Gate, the Router, and an Evidence semantic search can send a request or some source text to TypeSafe. They do not upload the repository as a whole. Compact and Output do not call Jev. Exact-symbol lookups and Evidence read-backs are not sent.
 
-Merge the following into the `env` object of the settings Claude Code starts with. Do not replace the rest of the file. The usual file is user settings (`~/.claude/settings.json`, or `$CLAUDE_CONFIG_DIR/settings.json`). The value is a placeholder, not a real key.
+The plugin prepares missing Function Hooks and foreground-worker launch settings, trace/debug directories, and disables enabled obsolete `jev-gate-compact/-router/-output/-evidence` entries in user settings. It preserves unrelated settings, native permissions and explicit owner overrides. Foreground workers and parallel snapshot worktrees are prepared automatically.
 
-```json
-{
-  "env": {
-    "TYPESAFE_API_KEY": "<your-typesafe-api-key>",
-    "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "1"
-  }
-}
-```
+Claude Code reads some execution settings before loading plugins. On a fresh installation, the startup notice asks for **one host restart** after automatic preparation; no settings editing is needed. Already-open Codex hosts likewise need a fresh host to load a new provider, and Codex may require native hook trust approval. These are host lifecycle/security requirements, not extra Jev configuration. An explicit conflicting owner setting is reported and preserved.
 
-Three different gaps:
+The key is stored under `$XDG_CONFIG_HOME/jev-gate/auth/credentials.json`, or `~/.config/jev-gate/auth/credentials.json`, with a private directory and file (0700/0600). It is never put in a project, URL, command argument or diagnostic log. Both hosts read it; Evidence and Codex accept a newly saved key without an MCP restart. Existing explicit environment/plugin keys take precedence. Saving checks the key's format, not account validity, quota or API availability. Until a key exists, Gate/Lean/Router preserve native behavior and Evidence searches locally.
 
-- No key: Gate and the Router leave the call native. Evidence still searches locally and reports `missing_key`. That is not the same as `remote: false`.
-- No `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` in the environment Claude Code starts in: Compact, Output, and the Router are not loaded. Gate's command hooks and the Evidence server still run.
-- Foreground conditions unmet (a session that cannot run a foreground worker, or a concrete subagent-model override): Gate `auto` and `lean` stay native and send no Gate request. See [Advanced usage](docs/advanced-usage.md).
+Every feature defaults to on, including main model routing, manual Compact and remote Evidence. The root tool allow-list is `["*"]`: Jev imposes no extra restriction on native tools, while the host still decides execution permissions. That does not mean every prompt is compacted, folded, routed, or delegated. The defaults enable up to 16 isolated workers, plans of up to 64 tasks, a depth floor of 0 and plan interpretation. Workers receive the current working files through private snapshots. Jev facts are batched into one request per eligible gate event. Router bounds all preparation to 800ms by default and skips requests that cannot change the final settings. The dashboard shows recorded Jev response times; these rules do not guarantee end-to-end speed or token savings.
 
-Every part defaults to on. That does not mean every prompt is compacted, folded, routed, or delegated. At the default concurrency of 1, an admitted automatic task uses one worker for investigation, implementation and checks, without a separate planner. Jev facts are batched into one request per eligible gate event. Router bounds all preparation to 800ms by default and skips requests that cannot change the final settings. The dashboard shows recorded Jev response times; these rules do not guarantee end-to-end speed or token savings.
-
-Gate often stays native: a direct admission, a shallow session, a missing key, or no `prompt_id` are different cases, and none of them is a failure of the install. `gateMode` `off` does not turn the other parts off. There is no master switch and no `evidenceEnabled` option.
+Gate stays native for a direct admission, a missing key, or no `prompt_id`; none of those is a failure of the install. The default depth floor of 0 permits assessment even in a fresh session. `gateMode` `off` does not turn the other parts off. There is no master switch and no `evidenceEnabled` option.
 
 Gate workers, planners, and the lean executor inherit the tools and connected MCPs that Claude Code provides to their session. A worker can inspect a linked Figma file or use an available browser or other MCP directly when its task needs one. Pass the target URL or ID and any restrictions in the brief. Host permissions still apply; `guardAllowMcp` controls only the admitted root session's guard, not a worker's tools.
 
-End the session and start Claude Code again after changing settings. There is no setup command.
+The API key screen belongs to the existing MCP process and stops with it. In a headless environment its loopback URL is printed in MCP diagnostics. `JEV_GATE_NO_BROWSER=1` suppresses browser opening, and `JEV_GATE_ONBOARDING=0` disables automatic key entry for unattended runs. Neither is required for ordinary use.
 
 ## See it work live · Claude Code
 
 The dashboard runs on your machine and opens in your browser. Its four lanes show the **Gate** (admission, tier allocation, workers, optional planning, and root guard), the separate **Lean** handoff, the independent **Router / Compact / Output** hooks, and **Evidence** search. The main Gate path shows one worker; the planned branch adds a planner and returns each ready task to Gate B. Select any stage to read what it does, when it runs, whether it calls Jev, and the recorded outcome. The timeline separates the Jev request and response from the code decision and the host's execution. Korean/English and light/dark controls are in the top right.
 
-1. **Record new activity.** Add these absolute directories to the same settings `env` as above, then restart Claude Code. The trace directory is used by Gate and Evidence; point the debug variable to the host debug directory used by Router, Compact, and Output. For a macOS default install, inspect `~/.claude/debug` first. Replace both example paths with paths on your machine.
+Recording paths are prepared automatically: Gate/Evidence use `~/.local/state/jev-gate/claude/traces` (or `$XDG_STATE_HOME/jev-gate/claude/traces`), and the Function Hooks use the Claude config directory's `debug` folder. Explicit paths remain supported.
 
-   ```json
-   {
-     "env": {
-       "JEV_GATE_TRACE_DIR": "/absolute/path/to/jev-traces",
-       "CLAUDE_CODE_DEBUG_LOGS_DIR": "/absolute/path/to/claude-debug"
-     }
-   }
-   ```
+1. **Run a request in Claude Code.** A feature appears as *observed* when that feature emits a record. A configured source with no event says *awaiting record*. A missing or unreadable source says *source unavailable*. Previously unrecorded activity cannot be reconstructed.
 
-2. **Run a request in Claude Code.** A feature appears as *observed* when that feature emits a record. A configured source with no event says *awaiting record*. A missing or unreadable source says *source unavailable*. Previously unrecorded activity cannot be reconstructed.
-
-3. **Open the dashboard.** From a built checkout, run `node dist/cli.js dashboard`. For a marketplace install, find the current installed path with `claude plugin list --json` (`installPath` for `jev-gate@jev-gate`) and run:
+2. **Open the dashboard.** From a built checkout, run `node dist/cli.js dashboard`. For a marketplace install, find the current installed path with `claude plugin list --json` (`installPath` for `jev-gate@jev-gate`) and run:
 
    ```sh
    node "<installPath>/dist/cli.js" dashboard
@@ -132,10 +114,10 @@ Options are the names in [`.claude-plugin/plugin.json`](.claude-plugin/plugin.js
 
 | Part | What it does | Default | Jev |
 |---|---|---|---|
-| Gate | Admits a request as direct (the session continues), single (one worker carries the request), or orchestrated (a planner, then workers). An admitted job limits the root session's tools. This is not the Router. | `gateMode` `auto` (`native` and `off` send no Gate request; `lean` is a separate mode) | Only in `auto` or `lean`, and only when the call is eligible |
+| Gate | Admits a request as direct (the session continues), single (one worker carries the request), or orchestrated (a planner, then workers). Root tools remain open with the default `["*"]`; an explicit narrower policy limits them. This is not the Router. | `gateMode` `auto` (`native` and `off` send no Gate request; `lean` is a separate mode) | Only in `auto` or `lean`, and only when the call is eligible |
 | Compact | At an auto-compaction it can answer, replaces older context with an extractive digest plus a recent tail. If its own conditions fail, the engine compacts. | `compactEnabled` true, `compactMode` `active` | No. [Details](mods/compact/README.md) |
 | Output | Folds runs of identical consecutive lines in one case: a passing `vitest run` log the host saved to a file. Not a general CLI or failure-log compressor. | `outputEnabled` true | No. [Details](mods/output/README.md) |
-| Router | May change the root turn's effort, and a routed subagent's model and effort. The root model stays unless you set `routeMainModel` (default false). Pins and an unverified host stay native. | `routerEnabled` true | When it has something to ask. [Details](mods/router/README.md) |
+| Router | May change the root turn's model and effort, and a routed subagent's model and effort. Main model routing is enabled by default, including the frontier profile. Pins and an unverified host stay native. | `routerEnabled` true | When it has something to ask. [Details](mods/router/README.md) |
 | Evidence | When called, returns source windows with path, lines, and a file hash, a page at a time, and can read a window back. It does not write files. | No switch. Without a config file, the session's Git worktree, remote on if a key is present | A semantic page only. Exact symbols and read-backs are not sent. [Details](plugins/evidence/README.md) |
 
 ## First use
@@ -232,19 +214,19 @@ The first refreshes the marketplace catalog. The second installs the newer archi
 
 `gateMode` `off`, or one of `compactEnabled` / `outputEnabled` / `routerEnabled` set to false, turns that part off. It does not turn the others off, and it is not the same as disabling the plugin. `claude plugin disable jev-gate@jev-gate` disables the plugin (doctor prints the same command with `<marketplace>`). `claude plugin uninstall jev-gate@jev-gate` removes it. Neither command deletes job files, traces, settings, credentials, or transcripts.
 
-From v0.5.x, the separate plugins `jev-gate-compact`, `jev-gate-router`, `jev-gate-output`, and `jev-gate-evidence` are gone from the marketplace and will not update. Uninstall each (`claude plugin uninstall jev-gate-compact@jev-gate`, and the same for the other three) before updating `jev-gate`, or their hooks can run beside this one. Option names changed. The list is in the [changelog](CHANGELOG.md).
+From v0.5.x, the separate plugins `jev-gate-compact`, `jev-gate-router`, `jev-gate-output`, and `jev-gate-evidence` are gone from the marketplace and will not update. Initialization disables their enabled user-settings entries automatically; it does not delete their files or data. Project/managed installations and explicit overrides remain under host control. Option names changed. The list is in the [changelog](CHANGELOG.md).
 
 ## Troubleshooting
 
 | What you see | What it is | What to do |
 |---|---|---|
-| Compact, Output, or the Router never registers | The Function Hooks flag is missing from the environment Claude Code starts in | Merge the flag into `env` and restart. Gate and Evidence do not use that flag |
-| Gate and the Router stay native; Evidence says `missing_key` | No `TYPESAFE_API_KEY` where the process can read it. Not a failed Claude login | Put the key in `env` and restart. Different from `remote: false` |
+| Compact, Output, or the Router never registers | The host started before automatic initialization, or an explicit owner setting disables Function Hooks | Restart once after the startup notice; run doctor for preserved conflicts |
+| Gate and the Router stay native; Evidence says `missing_key` | No usable Jev key. Not a failed Claude login | Enter the key in the automatically opened local screen; saving is not API validity verification |
 | Gate stays native and sends nothing | Foreground conditions, depth floor, a direct admission, mode `native` or `off`, or no `prompt_id` | [Advanced usage](docs/advanced-usage.md). Not the missing-key row |
 | `unavailable_config` or `unsupported_inventory` | The Evidence file is invalid, or the session is not in a Git worktree. An invalid file does not fall back to the whole worktree | Fix the file or open a worktree, then restart. Doctor below |
 | `partial`, no candidate, or `stale` | An incomplete page, or the file changed. An empty page is not proof of absence | Read `coverage` and `reasonCodes`. Continue only with the same snapshot. After `stale`, search again |
 | A switch seems ignored | `pluginConfigs` in project or local settings are ignored; an unset `gateMode` is not exported; Evidence keeps the config it started with | User settings or an explicit `--settings` file, then a new session |
-| Hooks run twice | A v0.5.x plugin is still installed | Uninstall it. [Changelog](CHANGELOG.md) |
+| Hooks run twice | A v0.5.x plugin remains active from a project/managed source or an already-loaded host | Restart after initialization; use `/plugin` for host-controlled installations. [Changelog](CHANGELOG.md) |
 
 Doctor is not one program.
 

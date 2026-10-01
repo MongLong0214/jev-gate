@@ -3,7 +3,7 @@ import { createClient } from './client.ts';
 import type { RouterConfig } from './config.ts';
 import { validKey } from './config.ts';
 import type { RootSwitch, SymbolicEffort } from './models.ts';
-import { aliasFamily, answeredBy, effortIndex, factsOf, isSymbolicEffort, MODEL_FACTS, sameModel, VERIFIED_ROOT_SWITCHES } from './models.ts';
+import { aliasFamily, answeredBy, effortIndex, factsOf, isSymbolicEffort, MODEL_FACTS, sameModel } from './models.ts';
 import type { Answers, Baseline, DimensionReason, ModelTier, MutableDimensions, PolicyOptions, RoutedEffort, RoutingPatch, RoutingTask } from './policy.ts';
 import { allowedBy, buildQuestions, buildState, choosePatch, EFFORT_LEVEL_TARGETS, offerableEfforts, offerableTiers, pairValid, validateAnswers } from './policy.ts';
 import { looksSecret } from './secret.ts';
@@ -315,8 +315,8 @@ export const cachePatch = (
   return { patch: result, ...(want !== undefined && final !== want ? { held: want } : {}) };
 };
 
-/** `rootSwitches` is the verified list; tests pass their own to reach the root-model path. */
-export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSwitch[] = VERIFIED_ROOT_SWITCHES) => {
+/** Optional exact switch restrictions; the default routes every compatible, permitted target. */
+export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootSwitch[]) => {
   const rootEnabled = config.enabled && (config.routeMainEffort || config.routeMainModel);
   const spawnEnabled = config.enabled && (config.routeSubagentModel || config.routeSubagentEffort);
   const childEnabled = config.enabled && config.routeSubagentEffort;
@@ -364,19 +364,24 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
 
   const client = createClient({ timeoutMs: config.timeoutMs });
 
-  /** Read once per session; each caller waits only as long as its own signal allows. */
+  /** Cache a usable key for this session; retry missing input after local onboarding saves one. */
   const keyFor = (engine: RouterEngine, signal: AbortSignal): Promise<KeyState | typeof ABORTED> => {
     if (signal.aborted) return Promise.resolve(ABORTED);
-    keyWait ??= sharedRead(
-      (async (): Promise<KeyState> => {
+    if (keyWait === null) {
+      const read = (async (): Promise<KeyState> => {
         if (config.explicitKey.kind === 'valid') return { key: config.explicitKey.value };
         // An explicit value that cannot be sent never quietly selects a different account's key.
         if (config.explicitKey.kind === 'invalid') return { reason: 'key_invalid' };
         const v = await engine.envKey();
         if (v === undefined || v.trim() === '') return { reason: 'key_missing' };
         return validKey(v) ? { key: v } : { reason: 'key_invalid' };
-      })().catch((): KeyState => ({ reason: 'key_missing' })),
-    );
+      })().catch((): KeyState => ({ reason: 'key_missing' }));
+      const waiting = sharedRead(read);
+      keyWait = waiting;
+      void read.then(result => {
+        if ('reason' in result && result.reason === 'key_missing' && keyWait === waiting) keyWait = null;
+      });
+    }
     return keyWait(signal);
   };
 
@@ -445,11 +450,16 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
 
   const policy = (scope: 'root' | 'spawn', availableModels: readonly string[] | undefined): PolicyOptions => ({
     scope,
-    tiers: config.tiers,
+    tiers: scope === 'root' ? Object.fromEntries(Object.entries(config.tiers).map(([tier, value]) => {
+      const family = aliasFamily(value);
+      if (!family) return [tier, value];
+      const allowed = availableModels?.find(id => factsOf(id)?.family === family);
+      return [tier, allowed ?? MODEL_FACTS.find(f => f.family === family)?.ids[0] ?? value];
+    })) : config.tiers,
     minUpgradeConfidence: config.minUpgradeConfidence,
     minDowngradeConfidence: config.minDowngradeConfidence,
     availableModels,
-    ...(scope === 'root' ? { rootSwitches } : {}),
+    ...(scope === 'root' && rootSwitches !== undefined ? { rootSwitches } : {}),
   });
 
   /** One request for one task. Never throws. A reply after the wait ended is logged against `late`, never applied. */
@@ -928,7 +938,7 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
       usage: loggable(outcome.usage),
       answers: outcome.answers,
       patch: outcome.patch,
-      reasons: { model: modelSkip ?? outcome.model, effort: dims.efforts ? 'per_step' : 'not_asked' },
+      reasons: { model: modelSkip ?? outcome.model, effort: dims.efforts ? (childHistoryFull ? 'child_history_full' : 'per_step') : 'not_asked' },
     });
     return { target: outcome.patch.model ?? null, answers: outcome.validated };
   };
@@ -956,7 +966,6 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     if (LEAN_MARKER.test(e.prompt) || LEAN_MARKER.test(e.description)) return spawnSkip(engine, e, 'lean_marker');
     if (e.subagentType.startsWith(GATE_AGENT_PREFIX) || GATE_ROUTE_NOTE.test(e.prompt)) return spawnSkip(engine, e, 'gate_routed');
     if (suspended !== null) return spawnSkip(engine, e, 'spawn_suspended');
-    void diagnose(engine, live);
     const explicit = e.model !== undefined && e.model.trim() !== '' ? e.model : null;
     // What the event, configuration and offer cache decide comes before any wait. Null: the model can move.
     let modelSkip: string | null = !config.routeSubagentModel
@@ -972,7 +981,8 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
       const ceiling = offerableTiers(baseline, policy('spawn', undefined));
       if ('reason' in ceiling) modelSkip = ceiling.reason;
     }
-    if (modelSkip !== null && !childEnabled) return spawnSkip(engine, e, modelSkip);
+    if (modelSkip !== null && (!childEnabled || childHistoryFull)) return spawnSkip(engine, e, childHistoryFull && childEnabled ? 'child_history_full' : modelSkip);
+    void diagnose(engine, live);
     // The key comes next: without one nothing optional is read.
     const key = await keyFor(engine, live);
     if (key === ABORTED) throw ENDED;
@@ -1001,8 +1011,9 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
           : null;
     const childFacts = child === null ? null : (factsOf(child) ?? MODEL_FACTS.find((f) => f.family === aliasFamily(child)) ?? null);
     const effortless = tiers === null && childFacts !== null && childFacts.unconditionalEffort.length === 0;
-    const efforts = childEnabled && !pins.mainEffort && !effortless ? EFFORT_LEVEL_TARGETS : null;
-    if (tiers === null && efforts === null) return spawnSkip(engine, e, modelSkip ?? 'effort_pinned');
+    const efforts = childEnabled && !childHistoryFull && !pins.mainEffort && !effortless ? EFFORT_LEVEL_TARGETS : null;
+    if (childEnabled && childHistoryFull) log(engine, { event: 'spawn_dimension', tool_use_id: e.tool_use_id, reason: 'child_history_full', dimension: 'effort', sent: false });
+    if (tiers === null && efforts === null) return spawnSkip(engine, e, childHistoryFull ? 'child_history_full' : (modelSkip ?? 'effort_pinned'));
     // Recorded only once every gate passed: a spawn left native by a pin runs on the pinned model, which says nothing
     // about how the host resolves an inheriting one.
     if (tiers !== null) assumed.set(e, baseline.model);
@@ -1015,7 +1026,7 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
     } catch {
       plan = { target: null, answers: null };
     }
-    const answers = efforts !== null ? plan.answers : null;
+    const answers = efforts !== null && !childHistoryFull ? plan.answers : null;
     const target = tiers !== null ? plan.target : null;
     if (target === null) {
       if (tiers !== null) {
@@ -1103,6 +1114,7 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
       routed: target !== null,
     });
     const result = await next(target !== null ? { ...e, model: target } : e);
+    if (answers && childHistoryFull) log(engine, { event: 'spawn_dimension', tool_use_id: e.tool_use_id, reason: 'child_history_full', dimension: 'effort', applied: false });
     if (
       answers &&
       result.deny === undefined &&

@@ -41,10 +41,10 @@ override is only ever a field of one request passed to `next`: the Router never 
 settings.json, the environment or another plugin's state, so there is nothing to undo. A request already sent keeps
 what it was sent with.
 
-The key comes from `typesafeApiKey` (a sensitive option) or, when that is empty, from `TYPESAFE_API_KEY` in the
-environment. An explicit key that cannot ride in a header is refused and the environment is **not** consulted, so a
+The key comes from `typesafeApiKey` (a sensitive option), `TYPESAFE_API_KEY` in the environment, or the shared private
+credential entered in the local setup screen, in that order. An explicit key that cannot ride in a header is refused and the environment is **not** consulted, so a
 typo never silently switches credentials. The key is sent only in the `Authorization` header and never logged. It is
-read once per session. A call that the event and configuration alone leave with nothing to ask (a fork, a numeric
+cached once available; a missing key is reread on a later eligible turn or spawn, so local setup needs no session restart. A call that the event and configuration alone leave with nothing to ask (a fork, a numeric
 effort, a spawn whose model is not routed while subagent effort is off) goes on without waiting for it. Otherwise the key comes before
 anything optional: without one (`key_missing`, `key_invalid`) no pin, setting or host version is read for the call.
 Every wait, for the key or a read, ends when its turn is retired or its dispatch or session ends.
@@ -58,10 +58,10 @@ Every wait, for the key or a read, ends when its turn is retired or its dispatch
 | `routeExplicitSpawnModel` | `true` | Treat the model an Agent call names (`model: "opus"`) as a default the Router may move. Off, such a call keeps it (`explicit_model`). |
 | `routeSubagentEffort` | `true` | Set each subagent's effort from its spawn's answer, on every request its loop makes. |
 | `routeMainEffort` | `true` | Choose the root turn's effort among the levels its model takes unconditionally. |
-| `routeMainModel` | `false` | Also choose the root turn's model. Exact identifiers only, never to a smaller context window, and only along a verified switch: none is verified yet, so today this asks nothing. |
-| `typesafeApiKey` | — | Explicit key; overrides `TYPESAFE_API_KEY`. |
-| `routerFastModel` / `routerStandardModel` / `routerDeepModel` | `haiku` / `sonnet` / `opus` | Profiles. A spawn takes aliases; the root takes exact identifiers only. |
-| `routerFrontierModel` | empty | An exact identifier only (`claude-fable-5-1`); an alias cannot authorize it. |
+| `routeMainModel` | `true` | Choose the root model among known host-permitted identifiers with a compatible context window and effort. |
+| `typesafeApiKey` | — | Explicit key; overrides the environment and shared private credential. |
+| `routerFastModel` / `routerStandardModel` / `routerDeepModel` | `haiku` / `sonnet` / `opus` | Profiles. A spawn takes aliases; root routing resolves those aliases to known exact identifiers, preferring exact entries in the host allow-list. |
+| `routerFrontierModel` | `claude-fable-5-1` | An exact identifier only (`claude-fable-5-1`); an alias cannot authorize it. |
 | `routerMinUpgradeConfidence` | `0.8` | Floor for moving up: Jev's probability mass at or above the target. |
 | `routerMinDowngradeConfidence` | `0.6` | Floor for moving down: Jev's probability mass at or below the target. A downgrade also needs `ordinary` risk at this probability. On a week of the owner's traffic (2026-09-21..28), 0.9 moved 2 of 174 routable spawns and 2 of 245 root turns. |
 | `routerTimeoutMs` | `800` | Total preparation budget from dispatch to native next, 50–30000; includes key, pins, settings, version, Jev and final confirmation. The request is still observed for its usage after the wait ends. |
@@ -110,11 +110,7 @@ so it is logged as `other`, never by name.
   (anything but `[1m]` on Opus 5.5 and Sonnet 5) makes the profile `unknown_model`.
 - **Nothing it could apply.** A model question is asked only when some other profile could actually be applied, with
   an effort it would be sent with (the current one, or one offered alongside) that the profile takes; otherwise the dimension is withheld (`no_applicable_target`, or `rank_unknown` when the current model has no
-  profile), and with nothing else to ask no request is sent. At the root a model change also needs its exact
-  `from → to` pair in `VERIFIED_ROOT_SWITCHES` (`controls_unverified`). The hook sees none of the controls the
-  retained request carries — thinking, `max_tokens`, tools, media, beta headers, the window — and the 2.1.282
-  declarations do not say the engine re-derives them for a model named in `next`. The list is empty until a host
-  observation establishes a pair, so every root model stays native.
+  profile), and with nothing else to ask no request is sent. At the root, known compatible models are enabled without a manually populated switch table. The host allow-list, explicit model locks, supported effort levels and context capacity still apply. Only actual request and response records establish which model ran.
 - **The answer.** Missing or malformed answers, the same model under another spelling, too little probability mass
   on either side (below), a `control` answer whose `task_clear` probability is under the floor, a downgrade whose `ordinary` risk probability is under the downgrade floor, a model that cannot run the
   effort it would get (`pair_invalid`), and a root model with a smaller context window (`capacity_smaller`, which is

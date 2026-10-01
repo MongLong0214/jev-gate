@@ -7,6 +7,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { loadConfig } from '../../src/evidence/source.js';
 import { startDashboard } from '../../src/dashboard.js';
+import { resolveApiKey } from '../../src/credentials.js';
 
 const root = join(__dirname, '../..');
 const tmp = mkdtempSync(join(tmpdir(), 'jev-codex-package-'));
@@ -14,7 +15,7 @@ const staged = join(tmp, 'source');
 const installed = join(tmp, 'installed plugin');
 const project = join(tmp, 'workspace');
 const traces = join(tmp, 'records');
-const shellEnv = { PATH: process.env['PATH'] ?? '', JEV_CODEX_TRACE_DIR: traces, JEV_CODEX_WORKSPACE: project, JEV_CODEX_AUTO_CONNECT: '0' };
+const shellEnv = { PATH: process.env['PATH'] ?? '', XDG_CONFIG_HOME: join(tmp, 'config'), JEV_GATE_ONBOARDING: '0', JEV_CODEX_TRACE_DIR: traces, JEV_CODEX_WORKSPACE: project, JEV_CODEX_AUTO_CONNECT: '0' };
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
 beforeAll(() => {
@@ -33,6 +34,23 @@ beforeAll(() => {
 }, 60_000);
 
 describe('installed Codex archive', () => {
+  it('automatically offers key entry from the installed MCP with no environment key', async () => {
+    const client = new Client({ name: 'codex-onboarding-test', version: '0' });
+    const keyEnv = { ...shellEnv, XDG_CONFIG_HOME: join(tmp, 'onboarding config'), JEV_GATE_ONBOARDING: '1', JEV_GATE_NO_BROWSER: '1' };
+    const transport = new StdioClientTransport({ command: process.execPath, args: [join(installed, 'dist/server.mjs'), '--codex'], cwd: project, env: keyEnv, stderr: 'pipe' });
+    let diagnostics = '';
+    transport.stderr?.on('data', chunk => { diagnostics += String(chunk); });
+    try {
+      await client.connect(transport);
+      const url = diagnostics.match(/http:\/\/127\.0\.0\.1:\d+\/[a-f0-9]{64}/)?.[0]; expect(url, diagnostics).toBeDefined();
+      const response = await fetch(url!, { method: 'POST', headers: { origin: new URL(url!).origin, 'content-type': 'application/json' }, body: JSON.stringify({ apiKey: 'fake-native-entry-key' }) });
+      expect(response.status).toBe(204); expect(resolveApiKey(keyEnv)).toBe('fake-native-entry-key');
+      expect(diagnostics).not.toContain('fake-native-entry-key');
+      expect((await client.listTools()).tools.map(t => t.name)).toEqual(['jev_evidence']);
+      const found = await client.callTool({ name: 'jev_evidence', arguments: { goal: 'Find the test symbol', exactSymbols: ['codexEvidenceNeedle'] } });
+      expect(JSON.stringify(found)).toContain('codexEvidenceNeedle');
+    } finally { await client.close(); }
+  });
   it('runs doctor without starting an MCP transport or writing records', () => {
     const empty = join(tmp, 'doctor-only');
     const result = spawnSync(process.execPath, [join(installed, 'dist/cli.mjs'), 'doctor'], { cwd: project, env: { ...shellEnv, JEV_CODEX_TRACE_DIR: empty }, encoding: 'utf8', timeout: 5000 });

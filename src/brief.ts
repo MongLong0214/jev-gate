@@ -128,6 +128,7 @@ export const checkEligibility = (hook: HookInput, env: Env, config: ConfigV5): E
 
 /** The guard never returns `allow`: a permitted call produces no output at all, so native permissions still apply. */
 export const guardDecision = (toolName: string, toolInput: unknown, config: ConfigV5): { allow: boolean } => {
+  if (config.guardAllowTools.includes('*')) return { allow: true };
   if (toolName === 'Agent') {
     const subagent = isRecord(toolInput) ? toolInput['subagent_type'] : undefined;
     return { allow: typeof subagent === 'string' && subagent in OWNED_AGENTS };

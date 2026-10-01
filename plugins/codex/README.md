@@ -17,7 +17,9 @@ codex plugin add jev-gate@jev-gate-codex
 
 For the release archive, extract `jev-gate-codex-<version>.zip`, add that extracted directory as the marketplace, and install the same plugin name. The archive includes its dependencies; it needs no installed `node_modules`. A raw Git checkout must be built first.
 
-Open ordinary `codex` in the project. Codex supplies the calling thread’s workspace; **no `JEV_CODEX_WORKSPACE` export, Jev launcher or policy file is needed**. Enable one Jev Gate installation in `/plugins` and review/trust its hooks in `/hooks` when the native host requests approval. Installation does not forge hook trust or authenticate Jev. Supply `TYPESAFE_API_KEY` through the host environment for Jev judgments.
+Open ordinary `codex` in the project. The installed MCP automatically opens a local **Jev API key** screen when no key is available. Enter the key once; Codex and Claude Code share `~/.config/jev-gate/auth/credentials.json` (or the XDG config location), protected by 0700/0600 permissions. No key is written into a project or Codex's config. Environment keys remain supported and authoritative. Evidence and the native connection read newly saved keys without restarting MCP.
+
+Codex supplies the calling thread’s workspace; **no shell export, `JEV_CODEX_WORKSPACE`, Jev launcher or policy file is needed**. Enable one Jev Gate installation in `/plugins` and review/trust hooks when the native host requests approval. Installation does not forge hook trust or authenticate the key's API access. A host already running during installation needs a fresh host to load its new provider.
 
 ## Automatic connection
 
@@ -54,9 +56,9 @@ The older `node <plugin>/dist/cli.mjs codex` managed terminal remains available 
 
 Native permissions remain authoritative for root and workers. Owned workers inherit the calling tool’s captured native filesystem grants and denies. Planners narrow those grants to reads and disable network. An unrepresentable permission snapshot refuses dispatch instead of guessing broader access. Workers cannot create another coordinator. Worktree isolation creates a separate branch and leaves it for inspection and integration; it does not silently merge changes.
 
-The default concurrency is 1. Newly admitted auto/atomic work uses **Gate A → Gate B → one worker → code acceptance**, without a planner or shape-only questions. The one worker can investigate, implement and run checks. Planned delegation remains available through explicit configuration or the auto shape policy above concurrency 1. Once terminal work is accepted and no agents are active, the root continues remaining integration, review and reporting. Acceptance does not certify complete coverage of every user requirement.
+The defaults enable up to 16 snapshot worktree workers, up to 64 planned tasks, no depth floor, and plan interpretation. Jev chooses single or planned delegation from the request. Each planned worker sees staged, unstaged and untracked working files; ignored files stay excluded. Code acceptance is followed by root integration and reporting. Apply only the diff from each returned snapshot baseline to the worker branch; the snapshot commit itself is not a root commit.
 
-Missing source, unknown checks and a worker's self-reported pass never become observed success. Check verification sees native command exits and file-change events; shell-based edits and external editor writes are not established by those events. Encrypted reasoning, media, pending calls or an oversized mandatory context cannot be guessed; these cases use native compaction/handoff behavior. Digest bytes are not measured token or billing savings. Manual `/compact` stays native unless explicitly enabled below.
+Missing source, unknown checks and a worker's self-reported pass never become observed success. Check verification sees native command exits and file-change events; shell-based edits and external editor writes are not established by those events. Encrypted reasoning, media, pending calls or an oversized mandatory context cannot be guessed; these cases use native compaction/handoff behavior. Digest bytes are not measured token or billing savings. Manual and automatic Compact are both enabled by default.
 
 ## Policy settings
 
@@ -65,12 +67,12 @@ Use `JEV_CODEX_CONFIG=/absolute/codex.json`, otherwise `~/.config/jev-gate/codex
 ```json
 {
   "gate": {"mode":"auto"},
-  "router": {"enabled":true,"model":false,"effort":true,"timeoutMs":800},
-  "compact": {"enabled":true,"manual":false,"budgetChars":40000}
+  "router": {"enabled":true,"model":true,"effort":true,"timeoutMs":800},
+  "compact": {"enabled":true,"manual":true,"budgetChars":40000}
 }
 ```
 
-`gate` accepts the shared V5 options, including `mode: "lean"`, depth floors, budgets, checks and `workerIsolation`. Its four `models` entries must be native model IDs available to your Codex account. `router.model` is enabled only with explicit accessible tier mappings; effort routing is on by default. Router has the same directional probability thresholds (upgrade 0.8, downgrade 0.6). `JEV_GATE_MODE` overrides the Gate mode only; `gate.mode: "off"` does not disable Router or Compact.
+`gate` accepts the shared V5 options, including `mode: "lean"`, depth floors, budgets, checks and `workerIsolation`. Without a model mapping, the adapter selects accessible tiers from live `model/list` descriptions. Explicit `models` entries override only those tiers. Main model and effort routing are both enabled by default. Router has the same directional probability thresholds (upgrade 0.8, downgrade 0.6). `JEV_GATE_MODE` overrides the Gate mode only; `gate.mode: "off"` does not disable Router or Compact.
 
 ### Current Codex models and efforts
 
@@ -104,7 +106,9 @@ Native ChatGPT requests follow the official App Server's workspace backend and r
 | --- | --- |
 | `JEV_CODEX_WORKSPACE` | Optional explicit Evidence workspace override; otherwise supplied by the native caller |
 | `JEV_EVIDENCE_CONFIG` | Authoritative Evidence project/allowed roots/remote settings |
-| `TYPESAFE_API_KEY` | Jev judgments; absent means native Gate/Lean/Router and local Evidence |
+| `TYPESAFE_API_KEY` | Optional explicit key override; otherwise use the shared key entered in the local screen |
+| `JEV_GATE_NO_BROWSER=1` | Headless runs: print the local key-entry URL without opening a browser |
+| `JEV_GATE_ONBOARDING=0` | Disable automatic key entry for unattended runs |
 | `JEV_CODEX_CONFIG` | Absolute Codex policy JSON path |
 | `JEV_CODEX_AUTO_CONNECT=0` | Keep Evidence/Output without starting automatic provider integration |
 | `JEV_CODEX_ENABLED=0` | Disable hooks and connected automatic policies; the separate Evidence MCP remains available |
@@ -121,7 +125,7 @@ Evidence resolves each calling thread’s native workspace, with separate caches
 {"projectRoot":"/absolute/project","allowedRoots":["src"],"remote":false}
 ```
 
-Explicit scope changes require MCP restart. Desktop apps may not inherit shell environment variables.
+Explicit scope changes require MCP restart. Desktop apps do not need to inherit a shell key; the shared local key works there too.
 
 ## Live dashboard
 
@@ -134,7 +138,7 @@ The local browser opens at `http://127.0.0.1:4731`. Keep this terminal running a
 
 Records default to `$XDG_STATE_HOME/jev-gate/codex/traces` or `~/.local/state/jev-gate/codex/traces`. Private atomic metadata records contain no raw prompts, source, tool output, credentials or transcript paths. Missing records mean unknown. No simulated activity or inferred token savings is shown. Old records are not automatically deleted.
 
-If no policy runs, check automatic connection readiness, `/hooks` trust, enablement, key and context floor; start a new native session if the current host loaded the old provider. The first shallow turn often stays direct. `doctor` checks local readiness and configured Evidence scope, not login, hook execution or product effect.
+If no policy runs, check automatic connection readiness, `/hooks` trust, enablement and key; start a fresh native host if the current host loaded the old provider. The default depth floor is 0, so a fresh turn is eligible for assessment; Jev can still choose direct execution. `doctor` checks local readiness and configured Evidence scope, not login, hook execution or product effect.
 
 ## Verification and implementation references
 

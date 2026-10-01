@@ -44,13 +44,13 @@ const mktemp = (): string => {
 };
 const configFile = (body: unknown): string => {
   const p = join(tmp, `config-${(seq += 1)}.json`);
-  writeFileSync(p, JSON.stringify(body));
+  writeFileSync(p, JSON.stringify(typeof body === 'object' && body !== null ? { delegationDepthFloor: null, ...body } : body));
   return p;
 };
 
 describe('doctor: effective depth floor (#48 P0-1)', () => {
   it('prints the cost model floor for the shipped atomic gate, whatever the window', () => {
-    const stdout = doctor({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '300000' });
+    const stdout = doctor({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '300000', JEV_GATE_CONFIG: configFile({ version: 5 }) });
     expect(stdout).toMatch(/\[info\].*effective depth floor: 50865 \(cost_model\).*could repay the coordinator/);
     expect(stdout).toMatch(/prices the request in code -- delegate when \(turns - 11\) x depth - turns x 40000 > 0/);
   });
@@ -100,12 +100,12 @@ describe('doctor: effective depth floor (#48 P0-1)', () => {
   it('keeps the floor=0 warning for an explicit zero, independent of the window', () => {
     const cfg = configFile({ version: 5, mode: 'auto', delegationDepthFloor: 0 });
     const stdout = doctor({ JEV_GATE_CONFIG: cfg, CLAUDE_CODE_AUTO_COMPACT_WINDOW: '300000' });
-    expect(stdout).toMatch(/\[warn\] effective depth floor is 0: Gate A is asked on every prompt/);
+    expect(stdout).toMatch(/\[info\] effective depth floor is 0: Gate A can assess every eligible prompt/);
   });
 
   it('prints delegationDepthFraction alongside the raw config summary', () => {
     const stdout = doctor({});
-    expect(stdout).toMatch(/delegationDepthFloor=null \(derived\) delegationDepthFraction=0\.6/);
+    expect(stdout).toMatch(/delegationDepthFloor=0 delegationDepthFraction=0\.6/);
     expect(stdout).toMatch(/admittedShape=auto delegationCoordinatorTurns=11 delegationWorkerTokensPerCall=40000 guardAllowMcp=true verifyWorkerChecks=true/);
   });
 });
@@ -172,20 +172,20 @@ describe('doctor: worker isolation base (#48 P1-2 review)', () => {
     return dir;
   };
 
-  it('warns that worktree isolation is not in effect when the host base ref is unset', () => {
+  it('reports automatic snapshot isolation without a host base ref', () => {
     const stdout = doctor({ JEV_GATE_CONFIG: isolated(), CLAUDE_CONFIG_DIR: mktemp() });
-    expect(stdout).toMatch(/\[warn\] workerIsolation=worktree is not in effect: host worktree\.baseRef is unset/);
+    expect(stdout).toMatch(/\[info\] workerIsolation=worktree: the installed WorktreeCreate hook snapshots current working files/);
   });
 
-  it('warns and names the file when the host base ref is "fresh"', () => {
+  it('uses the integrated snapshot hook even when native baseRef is fresh', () => {
     const dir = configDir({ worktree: { baseRef: 'fresh' } });
     const stdout = doctor({ JEV_GATE_CONFIG: isolated(), CLAUDE_CONFIG_DIR: dir });
-    expect(stdout).toContain(`host worktree.baseRef is "fresh" (settings:${join(dir, 'settings.json')})`);
+    expect(stdout).toContain('No manual baseRef setting is needed');
   });
 
-  it('reports isolation as configured when the host base ref is "head"', () => {
+  it('reports snapshot isolation with native baseRef head', () => {
     const stdout = doctor({ JEV_GATE_CONFIG: isolated(), CLAUDE_CONFIG_DIR: configDir({ worktree: { baseRef: 'head' } }) });
-    expect(stdout).toMatch(/\[info\] workerIsolation=worktree with worktree\.baseRef="head"/);
+    expect(stdout).toContain('root HEAD and index are preserved');
     expect(stdout).not.toMatch(/is not in effect/);
   });
 });

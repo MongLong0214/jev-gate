@@ -1,13 +1,18 @@
 {
   "name": "jev-gate-router",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "Routes the main thread's effort and each subagent's model and effort with one TypeSafe Jev assessment; on by default, native on any doubt.",
   "author": {
     "name": "MongLong0214",
     "url": "https://github.com/MongLong0214"
   },
   "repository": "https://github.com/MongLong0214/jev-gate",
-  "keywords": ["typesafe", "jev", "routing", "function-hooks"],
+  "keywords": [
+    "typesafe",
+    "jev",
+    "routing",
+    "function-hooks"
+  ],
   "userConfig": {
     "enabled": {
       "title": "Enable the Router",
@@ -41,9 +46,9 @@
     },
     "routeMainModel": {
       "title": "Route main-thread model",
-      "description": "Choose the model of the main thread's requests, per turn. Off by default.",
+      "description": "Choose the model of the main thread's requests, per turn. Enabled by default.",
       "type": "boolean",
-      "default": false
+      "default": true
     },
     "typesafeApiKey": {
       "title": "TypeSafe API key",
@@ -73,7 +78,7 @@
       "title": "Frontier profile model",
       "description": "Exact model ID for the frontier profile. Blank leaves the profile unconfigured.",
       "type": "string",
-      "default": ""
+      "default": "claude-fable-5-1"
     },
     "minUpgradeConfidence": {
       "title": "Upgrade confidence floor",

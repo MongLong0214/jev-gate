@@ -105,8 +105,9 @@ const stdinOf = (value: unknown): AsyncIterable<Uint8Array> =>
   })();
 
 type Env = Record<string, string | undefined>;
+const SERIAL_POLICY = { maxParallelWorkers: 1, workerIsolation: 'none', guardAllowTools: [], delegationDepthFloor: null, planInterpretation: false };
 const hierarchyConfig = join(tmp, 'hierarchy-default.json');
-writeFileSync(hierarchyConfig, JSON.stringify({ version: 5, mode: 'auto', admittedShape: 'hierarchy' }));
+writeFileSync(hierarchyConfig, JSON.stringify({ version: 5, mode: 'auto', ...SERIAL_POLICY, admittedShape: 'hierarchy' }));
 const makeEnv = (over: Env = {}): Env => ({
   JEV_GATE_CONFIG: hierarchyConfig,
   TYPESAFE_API_KEY: KEY,
@@ -121,14 +122,14 @@ const makeEnv = (over: Env = {}): Env => ({
 let compositeSeq = 0;
 const compositeGateAEnv = (over: Env = {}): Env => {
   const cfg = join(tmp, `composite-gate-a-${(compositeSeq += 1)}.json`);
-  writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', admissionQuestionShape: 'composite' }));
+  writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', ...SERIAL_POLICY, admissionQuestionShape: 'composite' }));
   return makeEnv({ JEV_GATE_CONFIG: cfg, ...over });
 };
 
 /** Gate B ships atomic since 0.4.0; the five-way choice is still supported and its own tests select it explicitly. */
 const compositeGateBEnv = (over: Env = {}): Env => {
   const cfg = join(tmp, `composite-gate-b-${(compositeSeq += 1)}.json`);
-  writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', admittedShape: 'hierarchy', routeQuestionShape: 'composite' }));
+  writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', ...SERIAL_POLICY, admittedShape: 'hierarchy', routeQuestionShape: 'composite' }));
   return makeEnv({ JEV_GATE_CONFIG: cfg, ...over });
 };
 
@@ -488,7 +489,7 @@ describe('Gate A admission', () => {
 
   it('asks below the derived floor when an explicit delegationDepthFloor says to, and the price still decides', async () => {
     const cfg = join(tmp, 'floor-explicit-below-derived.json');
-    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', delegationDepthFloor: 40_000 }));
+    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', ...SERIAL_POLICY, delegationDepthFloor: 40_000 }));
     const fetchImpl = fakeJev({ toolCalls: 4 });
     const r = await run(makeEnv({ JEV_GATE_CONFIG: cfg }), promptEvent({ transcript_path: transcriptAt(50_000) }), fetchImpl);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -497,7 +498,7 @@ describe('Gate A admission', () => {
 
   it('may delegate a connector request even when the root MCP guard is off', async () => {
     const cfg = join(tmp, 'no-mcp.json');
-    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', guardAllowMcp: false }));
+    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', ...SERIAL_POLICY, guardAllowMcp: false }));
     const r = await run(makeEnv({ JEV_GATE_CONFIG: cfg }), promptEvent(), fakeJev({ externalTools: 0.9 }));
     expect(r.code).toBeNull();
     expect((await run(makeEnv(), promptEvent(), fakeJev({ externalTools: 0.9 }))).code).toBeNull();
@@ -554,7 +555,7 @@ describe('Gate A admission', () => {
 
   it('asks on every prompt when the floor is turned off', async () => {
     const cfg = join(tmp, 'floor-off.json');
-    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', delegationDepthFloor: 0 }));
+    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', ...SERIAL_POLICY, delegationDepthFloor: 0 }));
     const env = makeEnv({ JEV_GATE_CONFIG: cfg });
     const fetchImpl = fakeJev({ execution: 'orchestrated' });
     await run(env, promptEvent({ transcript_path: transcriptAt(1_000) }), fetchImpl);
@@ -563,7 +564,7 @@ describe('Gate A admission', () => {
 
   it.each(['composite', 'atomic'])('keeps an unreadable transcript direct with the floor off (%s)', async (shape) => {
     const cfg = join(tmp, `floor-off-unreadable-${shape}.json`);
-    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', delegationDepthFloor: 0, admissionQuestionShape: shape }));
+    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', ...SERIAL_POLICY, delegationDepthFloor: 0, admissionQuestionShape: shape }));
     const env = makeEnv({ JEV_GATE_CONFIG: cfg });
     const fetchImpl = fakeJev({ execution: 'orchestrated' });
     const r = await run(env, { ...promptEvent(), transcript_path: undefined }, fetchImpl);
@@ -574,7 +575,7 @@ describe('Gate A admission', () => {
 
   it('asks only the three consumed facts at cap 1 and records selection without claiming application', async () => {
     const cfg = join(tmp, 'gate-a-atomic.json');
-    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', admissionQuestionShape: 'atomic' }));
+    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', ...SERIAL_POLICY, admissionQuestionShape: 'atomic' }));
     const dir = join(tmp, 'trace-atomic-selection');
     const env = makeEnv({ JEV_GATE_CONFIG: cfg, JEV_GATE_TRACE_DIR: dir });
     const reply = fakeJev({ parallelOutcomes: 0.95, size: 4 });
@@ -896,7 +897,7 @@ describe('SessionStart liveness warning (#48 P2)', () => {
 describe('single executor (A19)', () => {
   const singleEnv = (): Env => {
     const cfg = join(tmp, `single-${Math.random().toString(36).slice(2)}.json`);
-    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', admittedShape: 'single' }));
+    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', ...SERIAL_POLICY, admittedShape: 'single' }));
     return makeEnv({ JEV_GATE_CONFIG: cfg });
   };
 
@@ -1213,7 +1214,7 @@ describe('root guard (A6 allow-list)', () => {
 
   it('denies MCP tools too when guardAllowMcp is off', async () => {
     const cfg = join(tmp, 'guard-no-mcp.json');
-    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', guardAllowMcp: false }));
+    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', ...SERIAL_POLICY, guardAllowMcp: false }));
     const env = makeEnv({ JEV_GATE_CONFIG: cfg });
     // The external-tools fact is low here, so the turn is admitted and the guard is on.
     await run(env, promptEvent(), fakeJev());
@@ -1258,14 +1259,14 @@ describe('planner dispatch', () => {
     const frontierEnv = makeEnv();
     await run(frontierEnv, promptEvent(), fakeJev());
     const frontier = await run(frontierEnv, plannerPre(), fakeJev({ planning_tier: 'frontier' }));
-    expect(updatedInput(frontier)).toMatchObject({ subagent_type: 'jev-gate:planner-frontier', model: 'opus' });
+    expect(updatedInput(frontier)).toMatchObject({ subagent_type: 'jev-gate:planner-frontier', model: 'claude-fable-5-1' });
 
     const cfg = join(tmp, 'frontier-default.json');
-    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', admittedShape: 'hierarchy', plannerDefaultTier: 'frontier' }));
+    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', ...SERIAL_POLICY, admittedShape: 'hierarchy', plannerDefaultTier: 'frontier' }));
     const defaulted = makeEnv({ JEV_GATE_CONFIG: cfg });
     await run(defaulted, promptEvent(), fakeJev());
     const abstained = await run(defaulted, plannerPre(), fakeJev({ planning_tier: 'abstain' }));
-    expect(updatedInput(abstained)).toMatchObject({ subagent_type: 'jev-gate:planner-frontier', model: 'opus' });
+    expect(updatedInput(abstained)).toMatchObject({ subagent_type: 'jev-gate:planner-frontier', model: 'claude-fable-5-1' });
     expect(abstained.code).toBe('route_abstain');
   });
 
@@ -1583,7 +1584,7 @@ describe('worker dispatch', () => {
     const overlap = await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t2]\nwork' }), { tool_use_id: 'toolu_2' }), fetchImpl);
     expect(overlap).toMatchObject({ kind: 'deny', code: 'deliverable_overlap' });
     const cfg = join(tmp, 'cap1.json');
-    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', admittedShape: 'hierarchy', maxParallelWorkers: 1 }));
+    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', ...SERIAL_POLICY, admittedShape: 'hierarchy', maxParallelWorkers: 1 }));
     const capped = makeEnv({ JEV_GATE_CONFIG: cfg });
     await seedPlanned(capped, planReply(tasks), fetchImpl);
     await run(capped, preEvent('Agent', agentInput()), fetchImpl);
@@ -1731,7 +1732,7 @@ describe('worker isolation (#48 P1-2)', () => {
 
   it('#53 review: does not isolate a single-executor worker dispatch, which nothing tells the coordinator to merge', async () => {
     const cfg = join(tmp, `single-isolated-${Math.random().toString(36).slice(2)}.json`);
-    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', admittedShape: 'single', workerIsolation: 'worktree', guardAllowTools: ['Bash'] }));
+    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', ...SERIAL_POLICY, admittedShape: 'single', workerIsolation: 'worktree', guardAllowTools: ['Bash'] }));
     const env = makeEnv({ JEV_GATE_CONFIG: cfg, CLAUDE_CONFIG_DIR: headBaseRefConfigDir(), CLAUDE_PROJECT_DIR: mkdtempSync(join(tmp, 'project-')) });
     const fetchImpl = fakeJev({ execution: 'orchestrated' });
     await run(env, promptEvent(), fetchImpl);
@@ -1748,7 +1749,7 @@ describe('worker isolation (#48 P1-2)', () => {
     await run(env, preEvent('Agent', agentInput()), fetchImpl);
     const post = await run(env, workerPost('toolu_1', workerReply()), fetchImpl);
     expect(context(post)).toContain('Task t1 accepted');
-    expect(context(post)).toContain('before reporting the work done');
+    expect(context(post)).toContain('before reporting completion');
   });
 
   /**
@@ -1775,12 +1776,12 @@ describe('worker isolation (#48 P1-2)', () => {
     expect(updatedInput(first)).not.toHaveProperty('isolation');
   });
 
-  it('names Bash as available and says worker trees start at the last commit when isolation holds', async () => {
+  it('permits root integration and explains snapshots when isolation holds', async () => {
     const guidance = context(await run(capEnv(2), promptEvent(), fakeJev()));
     expect(guidance).toContain('read/task tools actually provided by the host');
     expect(guidance).not.toMatch(/Grep|Glob/);
     expect(guidance).toContain('denies root Edit, Write calls');
-    expect(guidance).toContain("branched from this checkout's last commit");
+    expect(guidance).toContain("snapshot of this checkout including staged, unstaged and untracked files");
   });
 
   it('never patches isolation onto a planner dispatch, even when workerIsolation is "worktree"', async () => {
@@ -1903,7 +1904,7 @@ describe('worker check verification (0.4.0)', () => {
 
   it('reads nothing when verifyWorkerChecks is off', async () => {
     const cfg = join(tmp, 'no-verify.json');
-    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', verifyWorkerChecks: false }));
+    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', ...SERIAL_POLICY, verifyWorkerChecks: false }));
     const env = makeEnv({ JEV_GATE_CONFIG: cfg });
     await dispatched(env);
     await run(env, postWith(workerReply(), workerTranscript([{ command: 'npm test', failed: true }])));
@@ -1914,7 +1915,7 @@ describe('worker check verification (0.4.0)', () => {
 
   it('holds the single shape to the command it names as its check id', async () => {
     const cfg = join(tmp, 'verify-single.json');
-    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', admittedShape: 'single' }));
+    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', ...SERIAL_POLICY, admittedShape: 'single' }));
     const env = makeEnv({ JEV_GATE_CONFIG: cfg });
     const fetchImpl = fakeJev();
     await run(env, promptEvent(), fetchImpl);
@@ -1927,7 +1928,7 @@ describe('worker check verification (0.4.0)', () => {
   it('names a single-shape check by its position, so the command it ran never reaches the trace', async () => {
     const dir = join(tmp, 'trace-verify-secret');
     const cfg = join(tmp, 'verify-single-secret.json');
-    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', admittedShape: 'single' }));
+    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', ...SERIAL_POLICY, admittedShape: 'single' }));
     const env = makeEnv({ JEV_GATE_CONFIG: cfg, JEV_GATE_TRACE_DIR: dir });
     const fetchImpl = fakeJev();
     await run(env, promptEvent(), fetchImpl);
@@ -2498,7 +2499,7 @@ describe('traces', () => {
     expect(r).toMatchObject({ kind: 'skip', code: 'no_state' });
     const records = readdirSync(dir).map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>);
     const post = records.find((rec) => rec['phase'] === 'post' && rec['job_state'] === 'absent');
-    expect(post).toMatchObject({ matched: false, subagent_type: 'jev-gate:worker-frontier', requested_model: 'opus', resolved_model: 'fable' });
+    expect(post).toMatchObject({ matched: false, subagent_type: 'jev-gate:worker-frontier', requested_model: 'claude-fable-5-1', resolved_model: 'fable' });
   });
 
   /** #48 P0-2 review: an unpatched call runs on the frontmatter, so the owner's own model table is not what it requested. */
@@ -2517,7 +2518,7 @@ describe('traces', () => {
     const env = makeEnv({ JEV_GATE_TRACE_DIR: dir, JEV_GATE_CONFIG: cfg });
     await run(env, workerPost('toolu_native', workerReply(), { tool_input: { subagent_type: 'jev-gate:worker-frontier' }, tool_response: { status: 'completed', resolvedModel: 'opus', content: [] } }));
     const records = readdirSync(dir).map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>);
-    expect(records.find((rec) => rec['phase'] === 'post')).toMatchObject({ requested_model: 'opus', resolved_model: 'opus' });
+    expect(records.find((rec) => rec['phase'] === 'post')).toMatchObject({ requested_model: 'claude-fable-5-1', resolved_model: 'opus' });
   });
 
   it('records the same fields for a PostToolUseFailure with no job state', async () => {
@@ -2526,7 +2527,7 @@ describe('traces', () => {
     await run(env, { hook_event_name: 'PostToolUseFailure', session_id: 's1', tool_name: 'Agent', tool_use_id: 'toolu_x', tool_input: { subagent_type: 'jev-gate:worker-frontier' }, error: 'boom' });
     const records = readdirSync(dir).map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>);
     const failure = records.find((rec) => rec['phase'] === 'failure');
-    expect(failure).toMatchObject({ subagent_type: 'jev-gate:worker-frontier', requested_model: 'opus', resolved_model: null });
+    expect(failure).toMatchObject({ subagent_type: 'jev-gate:worker-frontier', requested_model: 'claude-fable-5-1', resolved_model: null });
   });
 
   it('records subagent_type and resolved_model on an orchestrated worker-result post record too', async () => {
@@ -2604,7 +2605,7 @@ describe('dist/hook.js (process)', () => {
     // imports dist/hook.js only once it knows the gate might be on (src/entry.ts). SessionStart (#48 P2) is the
     // liveness warning; the `^Grep$` group was the withdrawn search filter's, and nothing registers it any more --
     // adding one back would run this hook on every search result.
-    expect(Object.keys(hooks.hooks).sort()).toEqual(['PostToolUse', 'PostToolUseFailure', 'PreToolUse', 'SessionStart', 'Stop', 'UserPromptSubmit']);
+    expect(Object.keys(hooks.hooks).sort()).toEqual(['PostToolUse', 'PostToolUseFailure', 'PreToolUse', 'SessionStart', 'Stop', 'UserPromptSubmit', 'WorktreeCreate']);
     for (const event of ['UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'Stop', 'SessionStart']) {
       expect(hooks.hooks[event], event).toHaveLength(1);
       for (const group of hooks.hooks[event]!) expect(group.hooks).toEqual([{ type: 'command', command: 'node "${CLAUDE_PLUGIN_ROOT}/dist/entry.js"', timeout: 5 }]);
@@ -3045,7 +3046,7 @@ describe('planner routing input (2026-09-20)', () => {
 describe('prior failure classification (A22)', () => {
   const atomicEnv = (name: string, extra: Record<string, string> = {}): ReturnType<typeof makeEnv> => {
     const cfg = join(tmp, `${name}.json`);
-    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', routeQuestionShape: 'atomic' }));
+    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', ...SERIAL_POLICY, routeQuestionShape: 'atomic' }));
     return makeEnv({ JEV_GATE_CONFIG: cfg, ...extra });
   };
   const atomicJev = (asked: string[][]): ReturnType<typeof vi.fn> =>
@@ -3188,7 +3189,7 @@ describe('receipt selection and observation keys (2026-09-20)', () => {
         .find((r) => r['phase'] === 'pre_result' && r['attempted'] === true && r['role'] === role)?.['decision'] ?? {}) as Record<string, unknown>;
     // A reader of a stored trace cannot know which `models` map was in force when it was written, and deriving the
     // model from the tier through today's map would answer a question about yesterday with today's configuration.
-    expect(decision('planner')).toMatchObject({ tier: 'frontier', model: 'opus' });
+    expect(decision('planner')).toMatchObject({ tier: 'frontier', model: 'claude-fable-5-1' });
     expect(decision('worker')).toMatchObject({ tier: 'deep', model: 'opus' });
     // The recorded model is the one the patch actually carried; a record that drifts from the emitted call is worse
     // than no record, because it reads as evidence.
@@ -3236,7 +3237,7 @@ describe('plan interpretation (A23)', () => {
     const cfg = join(tmp, `a23-${(a23Seq += 1)}.json`);
     writeFileSync(
       cfg,
-      JSON.stringify({ version: 5, mode: 'auto', admittedShape: 'hierarchy', ...(on ? { planInterpretation: true } : {}) }),
+      JSON.stringify({ version: 5, mode: 'auto', ...SERIAL_POLICY, admittedShape: 'hierarchy', ...(on ? { planInterpretation: true } : {}) }),
     );
     return makeEnv({ JEV_GATE_CONFIG: cfg, ...extra });
   };
@@ -3345,7 +3346,7 @@ describe('plan interpretation (A23)', () => {
 describe('atomic required request delivery and root handoff (#108/#111)', () => {
   const envFor = () => {
     const cfg = join(tmp, `required-${compositeSeq++}.json`);
-    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', admittedShape: 'single' }));
+    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', ...SERIAL_POLICY, admittedShape: 'single' }));
     return makeEnv({ JEV_GATE_CONFIG: cfg });
   };
   it('supersedes the old guarded generation before refusing an oversized new request, with HTTP0', async () => {

@@ -3,14 +3,22 @@
     "UserPromptSubmit": [
       {
         "hooks": [
-          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/entry.js\"", "timeout": 5 }
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/entry.js\"",
+            "timeout": 5
+          }
         ]
       }
     ],
     "PreToolUse": [
       {
         "hooks": [
-          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/entry.js\"", "timeout": 5 }
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/entry.js\"",
+            "timeout": 5
+          }
         ]
       }
     ],
@@ -18,7 +26,11 @@
       {
         "matcher": "^Agent$",
         "hooks": [
-          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/entry.js\"", "timeout": 5 }
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/entry.js\"",
+            "timeout": 5
+          }
         ]
       }
     ],
@@ -26,24 +38,49 @@
       {
         "matcher": "^Agent$",
         "hooks": [
-          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/entry.js\"", "timeout": 5 }
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/entry.js\"",
+            "timeout": 5
+          }
         ]
       }
     ],
     "Stop": [
       {
         "hooks": [
-          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/entry.js\"", "timeout": 5 }
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/entry.js\"",
+            "timeout": 5
+          }
         ]
       }
     ],
     "SessionStart": [
       {
         "hooks": [
-          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/entry.js\"", "timeout": 5 }
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/entry.js\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "WorktreeCreate": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/worktree-cli.js\"",
+            "timeout": 120
+          }
         ]
       }
     ]
   },
-  "modules": ["./register.ts"]
+  "modules": [
+    "./register.ts"
+  ]
 }

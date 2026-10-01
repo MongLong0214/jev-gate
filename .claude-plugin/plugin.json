@@ -1,6 +1,6 @@
 {
   "name": "jev-gate",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "Jev Gate in one plugin: the orchestration gate, the extractive compactor, the Vitest log folder, the Jev effort and model router and the jev_evidence tool. Every part is on by default; each has its own on/off option.",
   "author": {
     "name": "MongLong0214",
@@ -60,7 +60,7 @@
       "title": "Compact: Also /compact",
       "description": "Also answer /compact typed without instructions. Off leaves /compact the engine's.",
       "type": "boolean",
-      "default": false
+      "default": true
     },
     "outputEnabled": {
       "title": "Output: Enable output folding",
@@ -100,13 +100,13 @@
     },
     "routeMainModel": {
       "title": "Router: Route main-thread model",
-      "description": "Choose the model of the main thread's requests, per turn. Off by default.",
+      "description": "Choose the model of the main thread's requests, per turn. Enabled by default.",
       "type": "boolean",
-      "default": false
+      "default": true
     },
     "typesafeApiKey": {
-      "title": "Router: TypeSafe API key",
-      "description": "Used only in the Authorization header of the assessment request. Blank reads TYPESAFE_API_KEY from the environment.",
+      "title": "Jev API key (all features)",
+      "description": "One key for Gate, Lean, Router and Evidence, shared with Codex. Blank opens the local key-entry screen when no environment or saved key is available.",
       "type": "string",
       "sensitive": true
     },
@@ -132,7 +132,7 @@
       "title": "Router: Frontier profile model",
       "description": "Exact model ID for the frontier profile. Blank leaves the profile unconfigured.",
       "type": "string",
-      "default": ""
+      "default": "claude-fable-5-1"
     },
     "routerMinUpgradeConfidence": {
       "title": "Router: Upgrade confidence floor",

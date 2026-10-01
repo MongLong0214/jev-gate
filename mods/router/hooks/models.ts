@@ -98,13 +98,3 @@ export interface RootSwitch {
   from: string;
   to: string;
 }
-
-/**
- * Root model changes known to keep every retained request control valid on the target: thinking mode, max_tokens,
- * tools, media, beta headers and the context window. The hook sees none of these, and the 2.1.282 declarations do not
- * say the engine re-derives them for a model named by `next({ ...e, model })`. So nothing is recorded here, and every
- * root model stays native (`controls_unverified`) until an installed-host observation establishes a pair (#41, #42).
- * The same observation has to settle the window: the table gives the platform's size, and the host's bare and `[1m]`
- * variants may differ.
- */
-export const VERIFIED_ROOT_SWITCHES: readonly RootSwitch[] = [];

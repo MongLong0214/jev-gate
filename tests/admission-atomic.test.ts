@@ -16,13 +16,14 @@ import {
   TOOL_CALLS_MAX_SCORE,
 } from '../src/admission.js';
 import { FACT_TRUE } from '../src/allocation.js';
-import { DEFAULT_CONFIG } from '../src/config.js';
+import { DEFAULT_CONFIG as OPEN_DEFAULT_CONFIG } from '../src/config.js';
 
 /**
  * Gate A decomposed: read-offs from the request, composed here as vetoes and a price, with depth deciding first.
  * Since 0.4.0 the price is the admission: delegate when the root turns it removes, each re-reading `depth`, outweigh
  * what the worker reads doing them.
  */
+const DEFAULT_CONFIG = { ...OPEN_DEFAULT_CONFIG, maxParallelWorkers: 1 };
 const MODEL = delegationModel(DEFAULT_CONFIG);
 const FLOOR = costModelFloor(MODEL);
 const DEEP = 406_000;
