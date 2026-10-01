@@ -1,11 +1,12 @@
 import { createHash } from 'node:crypto';
 import { codexOperations } from './codex-operations.js';
+import { operationState } from './operation-state.js';
 import { CODEX_CAPABILITIES, CODEX_PLUGIN_CAPABILITIES, type HostCapability, type Host } from './host-support.js';
 
 /** A display model made only from named metadata fields. Raw prompts, source and debug text never leave here. */
 type Rec = Record<string, unknown>;
 export type FeatureId = 'admission' | 'allocation' | 'planning' | 'workers' | 'guard' | 'lean' | 'router' | 'compact' | 'output' | 'evidence';
-export type StepState = 'active' | 'done' | 'skipped' | 'error' | 'unconfirmed';
+export type StepState = 'active' | 'done' | 'skipped' | 'error' | 'unconfirmed' | 'interrupted';
 export type StepLane = 'jev' | 'policy' | 'host' | 'local';
 
 export interface OperationStep {
@@ -14,11 +15,14 @@ export interface OperationStep {
   feature: FeatureId;
   /** Generic native session/tool events are not evidence that a Jev feature executed. */
   lifecycle?: boolean;
+  /** Recorded Gate A policy path, independent of request transmission and host completion. */
+  executionPath?: 'direct' | 'orchestrated';
   state: StepState;
   lane: StepLane;
   title: string;
   summary: string;
   details: string[];
+  model?: { selected: string | null; observed: string | null; status: 'confirmed' | 'mismatch' | 'unobserved'; selectedEffort: string | null; observedEffort: string | null };
   /** Timings are measured by the caller or paired recorded events, never estimated from usage. */
   durationMs?: number;
   elapsedMs?: number;
@@ -30,12 +34,15 @@ export interface OperationStep {
 
 export interface OperationRun {
   id: string;
+  /** Host/session/turn correlation, hashed locally; absent when the source cannot establish it. */
+  executionId?: string;
+  host?: Host;
   title: string;
   source: 'gate' | 'router' | 'compact' | 'output' | 'evidence' | 'codex';
   mode: string;
   firstAt: string;
   lastAt: string;
-  state: 'active' | 'done' | 'attention';
+  state: 'active' | 'done' | 'attention' | 'unconfirmed' | 'interrupted';
   steps: OperationStep[];
 }
 
@@ -52,7 +59,7 @@ export interface FeatureView {
 export interface OperationsView {
   runs: OperationRun[];
   features: FeatureView[];
-  feed: Array<OperationStep & { runId: string; runTitle: string }>;
+  feed: Array<OperationStep & { runId: string; runTitle: string; host?: Host | undefined }>;
   active: number;
   attention: number;
   /** Derived from recorded intent or explicit attempted result, not from an absent usage field. */
@@ -75,7 +82,7 @@ const FEATURES: Array<{ id: FeatureId; label: string; source: 'trace' | 'debug' 
   { id: 'output', label: 'Output · 로그 접기', source: 'debug' },
   { id: 'evidence', label: 'Evidence · 근거 판정', source: 'trace' },
 ];
-const TOKEN = /^[A-Za-z0-9_.:/+@-]{1,80}$/;
+const TOKEN = /^[A-Za-z0-9_.:/+@-]{1,80}(?:\[[A-Za-z0-9_-]{1,16}\])?$/;
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
 const rec = (v: unknown): Rec | null => typeof v === 'object' && v !== null && !Array.isArray(v) ? v as Rec : null;
 const field = (r: Rec | null, key: string): Rec | null => r ? rec(r[key]) : null;
@@ -86,6 +93,16 @@ const list = (v: unknown, cap = 16): string[] => Array.isArray(v) ? v.slice(0, c
 const id = (v: string): string => createHash('sha256').update(v).digest('hex').slice(0, 12);
 const n = (v: number | null): string => v === null ? '?' : Number(v.toFixed(2)).toLocaleString('en-US');
 const text = (...parts: Array<string | null | undefined | false>): string => parts.filter((x): x is string => typeof x === 'string' && x.length > 0).join(' · ');
+const modelObservation = (selected: unknown, observed: unknown, selectedEffort?: unknown, observedEffort?: unknown, confirmation?: unknown): OperationStep['model'] => {
+  const wanted = token(selected); const actual = token(observed);
+  if (!wanted && !actual) return undefined;
+  const family = (value: string) => /^(haiku|sonnet|opus)$/.test(value) ? value : /^claude-(haiku|sonnet|opus)(?:-|$)/.exec(value)?.[1];
+  const matches = wanted && actual && (wanted === actual || /^(haiku|sonnet|opus)$/.test(wanted) && family(wanted) === family(actual));
+  // Router owns exact variant and dated-alias identity checks. Older receipts fall back to literal/family matching.
+  const status = !wanted || !actual || confirmation === 'unobserved' ? 'unobserved'
+    : confirmation === 'confirmed' || confirmation === 'mismatch' ? confirmation : matches ? 'confirmed' : 'mismatch';
+  return { selected: wanted, observed: actual, status, selectedEffort: token(selectedEffort), observedEffort: observedEffort === 'unknown' ? null : token(observedEffort) };
+};
 const relation = (r: Rec): string[] => {
   const answers = field(r, 'answers');
   if (!answers) return [];
@@ -142,7 +159,7 @@ const callDetails = (r: Rec): string[] => {
 };
 
 const traceFeature = (phase: string): FeatureId | null => {
-  if (phase === 'codex_router_intent' || phase === 'codex_router_result' || phase === 'codex_route_applied') return 'router';
+  if (phase === 'codex_router_intent' || phase === 'codex_router_result' || phase === 'codex_router_skipped' || phase === 'codex_route_applied') return 'router';
   if (phase === 'codex_compact') return 'compact';
   if (phase.startsWith('admission_')) return 'admission';
   if (phase.startsWith('pre_')) return 'allocation';
@@ -154,7 +171,7 @@ const traceFeature = (phase: string): FeatureId | null => {
   return null;
 };
 const traceTitle = (phase: string, r: Rec): string => ({
-  codex_router_intent: 'Router · Jev 요청', codex_router_result: 'Router · 턴 설정 결정', codex_route_applied: 'Router · Codex 적용 확인', codex_compact: 'Compact · Codex digest',
+  codex_router_intent: 'Router · Jev 요청', codex_router_result: 'Router · 턴 설정 결정', codex_router_skipped: 'Router · Jev 호출 생략', codex_route_applied: 'Router · Codex 적용 확인', codex_compact: 'Compact · Codex digest',
   admission_intent: 'Gate A · Jev 요청', admission_result: 'Gate A · 실행 형태',
   pre_intent: 'Gate B · Jev 요청', pre_result: 'Gate B · 등급 결정',
   interpretation_intent: '계획 해석 · Jev 요청', interpretation_result: '계획 해석 · 자문',
@@ -178,10 +195,12 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
   const hasResult = requestId !== null && resultIds.has(`${requestId}:${expected}`);
   const age = now - Date.parse(at);
   const compactWaiting = phase === 'codex_compact' && r['stage'] === 'selected' && !resultIds.has(`codex_compact:${token(r['run_id'])}`);
-  const state: StepState = compactWaiting ? age >= 0 && age < 30_000 ? 'active' : 'unconfirmed'
+  const http = field(r, 'http');
+  const failedAssessment = r['attempted'] === true && token(http?.['code']) !== null && http?.['code'] !== 'ok';
+  let state: StepState = compactWaiting ? age >= 0 && age < 30_000 ? 'active' : 'unconfirmed'
     : isIntent ? hasResult ? 'done' : age >= 0 && age < 30_000 ? 'active' : 'unconfirmed'
     : r['known_not_sent'] === true || r['attempted'] === false ? 'skipped'
-      : r['is_error'] === true || phase === 'failure' ? 'error' : 'done';
+      : r['is_error'] === true || r['ok'] === false || failedAssessment || phase === 'failure' ? 'error' : 'done';
   const details: string[] = [];
   let summary = '';
   let lane: StepLane = 'policy';
@@ -222,6 +241,10 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
       if (groups) details.push(text(`필수 ${n(number(groups['mandatory']))}그룹`, `선택 질문 ${n(number(groups['optional_asked']))}그룹`, `읽은 요청 ${n(number(groups['request_bytes']))}B`));
       details.push('packet 크기와 실제 토큰 절감은 다른 사실입니다');
     }
+  } else if (phase === 'codex_router_skipped') {
+    lane = 'policy';
+    summary = ({ disabled: 'Jev 기능이 꺼져 있음', router_disabled: 'Router가 꺼져 있음', key_missing: 'Jev API 키 없음', aborted: '턴 중단으로 판단 생략', model_catalog_missing: '호스트 모델 목록에서 현재 모델을 확인할 수 없음', nothing_to_change: '변경 가능한 모델·effort 없음' } as Record<string, string>)[String(r['reason'])] ?? '원래 호스트 설정 유지';
+    details.push('Jev 전송 없음 · 원래 모델·effort 유지');
   } else if (phase === 'codex_route_applied') {
     lane = 'host'; summary = text(r['applied'] === true ? '선택한 설정 적용 확인' : '선택과 실행 설정 불일치', token(r['observed_model']), token(r['observed_effort']));
     details.push(text('실제 Codex 모델 요청', `선택 ${token(r['selected_model']) ?? '?'} / ${token(r['selected_effort']) ?? '?'}`));
@@ -289,13 +312,16 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
     lane = 'host'; summary = text('호스트 호출 실패', token(r['subagent_type']));
     details.push(text(`요청 모델 ${token(r['requested_model']) ?? '미기록'}`, `실행 모델 ${token(r['resolved_model']) ?? '미관측'}`));
   }
-  const http = field(r, 'http');
   const measured = number(http?.['duration_ms']);
   const duration = measured !== null && measured >= 0 ? measured : phase === 'evidence_result' ? number(r['duration_ms']) : null;
   const sentAt = requestId && phase.endsWith('_result') ? intents.get(`${requestId}:${phase.replace(/_result$/, '_intent')}`) : undefined;
   const elapsed = sentAt ? Date.parse(at) - Date.parse(sentAt) : null;
-  return { id: id(ownId), at, feature, state, lane, title: traceTitle(phase, r), summary, details: details.filter(Boolean),
+  const model = phase === 'codex_route_applied' ? modelObservation(r['selected_model'], r['observed_model'], r['selected_effort'], r['observed_effort'])
+    : phase === 'post' || phase === 'failure' ? modelObservation(r['requested_model'], r['resolved_model']) : undefined;
+  if (model?.status === 'mismatch' || phase === 'codex_route_applied' && r['applied'] === false) state = 'error';
+  return { id: id(ownId), at, feature, state, lane, title: traceTitle(phase, r), summary, details: details.filter(Boolean), ...(model ? { model } : {}),
     ...(phase === 'stop' ? { lifecycle: true } : {}),
+    ...(phase === 'admission_result' && ['direct', 'orchestrated'].includes(String(field(r, 'decision')?.['shape'])) ? { executionPath: field(r, 'decision')!['shape'] as 'direct' | 'orchestrated' } : {}),
     ...(duration !== null && duration >= 0 ? { durationMs: duration } : {}),
     ...(elapsed !== null && elapsed >= 0 ? { elapsedMs: elapsed } : {}),
     ...(phase.endsWith('_result') && judgements(r) ? { judgements: judgements(r)! } : {}),
@@ -308,10 +334,11 @@ const debugStep = (row: DebugRecord, now: number, closed: Set<string>): Operatio
   if (!event || !row.at) return null;
   const feature = row.component;
   const runId = token(r['run_id']);
-  const key = row.component === 'router' ? token(r['turn']) ?? token(r['tool_use_id']) ?? '' : runId ?? '';
+  const key = `${token(r['session_id']) ?? 'legacy'}:${row.component === 'router' ? token(r['turn']) ?? token(r['tool_use_id']) ?? '' : runId ?? ''}`;
   const started = (row.component === 'router' && event === 'request') || r['stage'] === 'started';
+  const failedAssessment = row.component === 'router' && r['sent'] === true && token(r['assessment']) !== null && r['assessment'] !== 'ok';
   const age = now - Date.parse(row.at);
-  const state: StepState = started && !closed.has(`${row.component}:${key}`) ? age >= 0 && age < 30_000 ? 'active' : 'unconfirmed' : r['skipped'] || r['deferred'] || r['disabled'] ? 'skipped' : r['coreError'] === true ? 'error' : 'done';
+  let state: StepState = started && !closed.has(`${row.component}:${key}`) ? age >= 0 && age < 30_000 ? 'active' : 'unconfirmed' : failedAssessment || r['confirmation'] === 'mismatch' || r['reason'] === 'model_mismatch' || r['coreError'] === true ? 'error' : r['confirmation'] === 'unobserved' ? 'unconfirmed' : r['skipped'] || r['deferred'] || r['disabled'] ? 'skipped' : 'done';
   const details: string[] = [];
   let summary = '';
   let lane: StepLane = 'local';
@@ -319,6 +346,7 @@ const debugStep = (row: DebugRecord, now: number, closed: Set<string>): Operatio
     lane = event === 'request' || r['sent'] === true ? 'jev' : 'policy';
     const from = field(r, 'from'); const patch = field(r, 'patch'); const reasons = field(r, 'reasons'); const applied = field(r, 'applied');
     summary = event === 'request' ? 'Jev 요청 전송 · 응답 대기' : text(event, r['sent'] === true ? 'Jev 응답' : r['sent'] === false ? '전송 안 함' : null, token(r['skipped']), token(r['reason']));
+    if (failedAssessment) summary = text('Jev 판정 실패 · 원래 호스트 설정 유지', token(r['assessment']));
     details.push(text(`기존 모델 ${token(from?.['model']) ?? token(r['from']) ?? '?'}`, `기존 effort ${token(from?.['effort']) ?? '?'}`));
     if (number(r['preparation_ms']) !== null) details.push(`Router 준비 ${n(number(r['preparation_ms']))}ms · Jev 응답 시간과 별도 · 예산 ${n(number(r['budget_ms']))}ms`);
     details.push(text(`요청 변경 모델 ${token(patch?.['model']) ?? '?'}`, `요청 변경 effort ${token(patch?.['effort']) ?? token(r['patch']) ?? '?'}`));
@@ -340,7 +368,14 @@ const debugStep = (row: DebugRecord, now: number, closed: Set<string>): Operatio
     summary = started ? 'Vitest Bash 실행 중' : r['applied'] === true ? 'Vitest 로그 접기 적용' : text('원본 출력 유지', token(r['skipped']), token(r['disabled']));
     details.push(text(`파서 ${token(r['parser']) ?? '?'}`, number(r['runs']) === null ? null : `실행 ${n(number(r['runs']))}건`));
   }
-  return { id: id(`${row.component}:${row.at}:${key}:${event}:${started ? 'start' : 'result'}`), at: row.at, feature, state, lane, title: { router: 'Router · ' + event, compact: 'Compact · 압축', output: 'Output · 로그 접기' }[feature], summary, details: details.filter(Boolean) };
+  const model = feature === 'router' && ['root_result', 'spawn_result', 'spawn_native_result', 'child_result'].includes(event)
+    ? modelObservation(r['requested'] ?? field(r, 'applied')?.['model'] ?? r['assumed'], r['observed'], r['requested_effort'] ?? field(r, 'applied')?.['effort'], r['observed_effort'], r['confirmation']) : undefined;
+  if (model) {
+    if (model.status === 'mismatch') state = 'error';
+    lane = 'host'; summary = text(model.status === 'confirmed' ? '선택 모델과 실제 모델 일치' : model.status === 'mismatch' ? '선택 모델과 실제 모델 불일치' : '실제 응답 모델 미관측', model.selected, model.observed);
+  }
+  const duration = number(r['duration_ms']);
+  return { id: id(`${row.component}:${row.at}:${key}:${event}:${started ? 'start' : 'result'}`), at: row.at, feature, state, lane, title: { router: 'Router · ' + event, compact: 'Compact · 압축', output: 'Output · 로그 접기' }[feature], summary, details: details.filter(Boolean), ...(model ? { model } : {}), ...(lane === 'jev' && duration !== null && duration >= 0 ? { durationMs: duration } : {}) };
 };
 
 const gateGroup = (r: Rec): string => {
@@ -351,8 +386,8 @@ const gateGroup = (r: Rec): string => {
   return `gate:${token(r['session_id']) ?? 'unknown'}:${token(r['prompt_id']) ?? 'unknown'}`;
 };
 const debugGroup = (row: DebugRecord): string => row.component === 'router'
-  ? `router:${token(row.rec['turn']) ?? token(row.rec['tool_use_id']) ?? 'session'}`
-  : `${row.component}:${token(row.rec['run_id']) ?? row.at}`;
+  ? `router:${token(row.rec['session_id']) ?? 'legacy'}:${token(row.rec['turn']) ?? token(row.rec['tool_use_id']) ?? 'session'}`
+  : `${row.component}:${token(row.rec['session_id']) ?? 'legacy'}:${token(row.rec['run_id']) ?? row.at}`;
 
 export const buildOperations = (records: Rec[], debug: DebugRecord[], now: Date, availability: { trace: boolean; debug: boolean; host?: Host }): OperationsView => {
   const resultIds = new Set(records.flatMap((r) => token(r['request_id']) && token(r['phase']) ? [`${token(r['request_id'])}:${token(r['phase'])}`] : []));
@@ -362,24 +397,29 @@ export const buildOperations = (records: Rec[], debug: DebugRecord[], now: Date,
     return phase?.endsWith('_intent') && requestId && at ? [[`${requestId}:${phase}`, at]] : [];
   }));
   const closed = new Set(debug.flatMap((row) => {
-    const key = row.component === 'router' ? token(row.rec['turn']) ?? token(row.rec['tool_use_id']) : token(row.rec['run_id']);
-    if (!key) return [];
+    const own = row.component === 'router' ? token(row.rec['turn']) ?? token(row.rec['tool_use_id']) : token(row.rec['run_id']);
+    if (!own) return [];
+    const key = `${token(row.rec['session_id']) ?? 'legacy'}:${own}`;
     return row.component === 'router' ? row.rec['event'] === 'request' ? [] : [`router:${key}`] : row.rec['stage'] === 'started' ? [] : [`${row.component}:${key}`];
   }));
-  const grouped = new Map<string, { source: OperationRun['source']; mode: string; steps: OperationStep[] }>();
+  const grouped = new Map<string, { source: OperationRun['source']; host: Host; mode: string; executionId?: string; steps: OperationStep[] }>();
   for (const r of records) {
     const step = traceStep(r, now.getTime(), resultIds, intents);
     if (!step) continue;
-    const key = gateGroup(r);
-    const source = key.split(':')[0] as OperationRun['source'];
-    const group = grouped.get(key) ?? { source, mode: token(r['mode']) ?? 'unknown', steps: [] };
+    const host = r['host'] === 'codex' ? 'codex' : 'claude';
+    const source = gateGroup(r).split(':')[0] as OperationRun['source'];
+    const key = `${host}:${gateGroup(r)}`;
+    const session = token(r['session_id']); const prompt = token(r['prompt_id']);
+    const group = grouped.get(key) ?? { source, host, mode: token(r['mode']) ?? 'unknown',
+      ...(session && prompt && source !== 'evidence' ? { executionId: id(`execution:${host}:${session}:${prompt}`) } : {}), steps: [] };
     const phase = token(r['phase']);
     if (r['attempted'] === true && ['admission_result', 'pre_result', 'interpretation_result', 'lean_result', 'codex_router_result'].includes(phase ?? '')) {
       const { durationMs: _duration, elapsedMs: _elapsed, judgements: _judgements, ...rest } = step;
-      group.steps.push({ ...step, title: step.title.replace(/ · .+$/, ' · Jev 응답'), summary: step.judgements?.length
+      const { executionPath: _executionPath, ...response } = step;
+      group.steps.push({ ...response, title: step.title.replace(/ · .+$/, ' · Jev 응답'), summary: step.state === 'error' ? 'Jev 판정 실패 · 원래 호출 유지' : step.judgements?.length
         ? `${step.judgements.length}개 선택형 응답 · 코드가 정책 판정에 사용`
         : '응답 기록 · 선택형 결과 미확인' });
-      group.steps.push({ ...rest, id: id(`${step.id}:policy`), lane: 'policy', details: [], summary: step.summary });
+      group.steps.push({ ...rest, id: id(`${step.id}:policy`), state: step.state === 'error' ? 'done' : step.state, lane: 'policy', details: [], summary: step.summary });
     } else group.steps.push(step);
     if (group.mode === 'unknown' && token(r['mode'])) group.mode = token(r['mode'])!;
     grouped.set(key, group);
@@ -388,18 +428,28 @@ export const buildOperations = (records: Rec[], debug: DebugRecord[], now: Date,
     const step = debugStep(row, now.getTime(), closed);
     if (!step) continue;
     const key = debugGroup(row);
-    const group = grouped.get(key) ?? { source: row.component, mode: row.component, steps: [] };
+    const group = grouped.get(key) ?? { source: row.component, host: 'claude' as const, mode: row.component, steps: [] };
     group.steps.push(step);
     grouped.set(key, group);
   }
-  const allRuns: OperationRun[] = [...grouped].map(([key, group]) => {
+  const separate: OperationRun[] = [...grouped].map(([key, group]): OperationRun => {
     const steps = group.steps.sort((a, b) => a.at.localeCompare(b.at) || (a.lane === 'policy' ? 1 : 0) - (b.lane === 'policy' ? 1 : 0) || a.id.localeCompare(b.id));
-    const state: OperationRun['state'] = steps.some((s) => s.state === 'active') ? 'active' : steps.some((s) => s.state === 'error' || s.state === 'unconfirmed') ? 'attention' : 'done';
+    const state = operationState(steps);
     const title = ({ gate: group.mode === 'lean' ? 'Lean 세션' : '게이트 세션', router: 'Router 실행', compact: 'Compact 실행', output: 'Output 실행', evidence: 'Evidence 검색', codex: 'Codex 실행' } as const)[group.source];
-    return { id: id(key), title: `${title} · ${id(key).slice(0, 6)}`, source: group.source, mode: group.mode, firstAt: steps[0]?.at ?? '', lastAt: steps.at(-1)?.at ?? '', state, steps };
-  }).concat(codexOperations(records, now)).sort((a, b) => b.lastAt.localeCompare(a.lastAt));
+    return { id: id(key), ...(group.executionId ? { executionId: group.executionId } : {}), host: group.host, title, source: group.source, mode: group.mode, firstAt: steps[0]?.at ?? '', lastAt: steps.at(-1)?.at ?? '', state, steps };
+  }).concat(codexOperations(records, now));
+  // Display the whole known turn rather than three unrelated Router/Gate/native cards.
+  const executions = new Map<string, OperationRun>();
+  for (const run of separate) {
+    const key = run.executionId ?? run.id; const existing = executions.get(key);
+    if (!existing) { executions.set(key, { ...run, id: key }); continue; }
+    const primary = existing.source === 'gate' ? existing : run.source === 'gate' ? run : existing.source !== 'codex' ? existing : run;
+    const steps = [...existing.steps, ...run.steps].sort((a, b) => a.at.localeCompare(b.at) || (a.lane === 'policy' ? 1 : 0) - (b.lane === 'policy' ? 1 : 0) || a.id.localeCompare(b.id));
+    executions.set(key, { ...primary, id: key, steps, firstAt: steps[0]!.at, lastAt: steps.at(-1)!.at, state: operationState(steps) });
+  }
+  const allRuns = [...executions.values()].sort((a, b) => b.lastAt.localeCompare(a.lastAt));
   const runs = allRuns.slice(0, 200);
-  const all = allRuns.flatMap((run) => run.steps.map((step) => ({ ...step, runId: run.id, runTitle: run.title })));
+  const all = allRuns.flatMap((run) => run.steps.map((step) => ({ ...step, runId: run.id, runTitle: run.title, host: run.host })));
   const features = FEATURES.map((f): FeatureView => {
     const steps = all.filter((s) => s.feature === f.id && !s.lifecycle);
     if (availability.host === 'codex') {
@@ -421,7 +471,7 @@ export const buildOperations = (records: Rec[], debug: DebugRecord[], now: Date,
   }
   for (const row of debug) {
     if (row.component !== 'router' || (row.rec['event'] !== 'request' && row.rec['sent'] !== true)) continue;
-    jevRequests.add(`router:${token(row.rec['turn']) ?? token(row.rec['tool_use_id']) ?? row.at}`);
+    jevRequests.add(`router:${token(row.rec['session_id']) ?? 'legacy'}:${token(row.rec['turn']) ?? token(row.rec['tool_use_id']) ?? row.at}`);
   }
   const requests = jevRequests.size;
   const durations = all.filter((s) => s.lane === 'jev' && s.durationMs !== undefined).map((s) => s.durationMs!).sort((a, b) => a - b);
@@ -430,7 +480,10 @@ export const buildOperations = (records: Rec[], debug: DebugRecord[], now: Date,
   const recent = all.filter((s) => s.lane === 'jev' && s.durationMs !== undefined)
     .sort((a, b) => b.at.localeCompare(a.at)).slice(0, 16).reverse().map((s) => ({ at: s.at, ms: s.durationMs! }));
   const latency = { measured: durations.length, p50: percentile(.5), p95: percentile(.95), fastest: durations[0] ?? null, latest, recent };
-  const feed = all.sort((a, b) => b.at.localeCompare(a.at) || b.id.localeCompare(a.id)).slice(0, 160);
+  const newestFirst = (a: typeof all[number], b: typeof all[number]) => b.at.localeCompare(a.at) || b.id.localeCompare(a.id);
+  // Busy native tool loops must not evict the last Jev judgment from the feature view.
+  const feed = [...all.filter(s => !s.lifecycle).sort(newestFirst).slice(0, 140),
+    ...all.filter(s => s.lifecycle).sort(newestFirst).slice(0, 20)].sort(newestFirst);
   const sig = createHash('sha256').update(JSON.stringify({ runs, features, requests, latency })).digest('hex').slice(0, 24);
   return { runs, features, feed, active: runs.filter((r) => r.state === 'active').length, attention: runs.filter((r) => r.state === 'attention').length, requests, latency, sig };
 };

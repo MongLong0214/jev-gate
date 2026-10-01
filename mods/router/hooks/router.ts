@@ -291,6 +291,7 @@ type Assessed =
       assessment: 'ok' | ClientReason;
       usage: Usage | null;
       sent: boolean;
+      durationMs: number;
       answers: Record<string, unknown> | null;
       validated: Answers | null;
       patch: RoutingPatch;
@@ -476,12 +477,14 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     const questions = buildQuestions(dims);
     if (!questions) return { kind: 'skipped', reason: 'nothing_to_change' };
     const onLate = (usage: Usage | null): void => log(engine, { event: 'late', ...late, usage: loggable(usage) });
+    const started = engine.now();
     const res = await client.assess(engine, key, buildState(task), questions, signal, onLate, () => log(engine, { event: 'request', ...late, sent: true }));
+    const durationMs = Math.max(0, engine.now() - started);
     if (!res.ok)
-      return { kind: 'assessed', assessment: res.reason, usage: res.usage, sent: res.sent, answers: null, validated: null, patch: {}, model: 'not_asked', effort: 'not_asked' };
+      return { kind: 'assessed', assessment: res.reason, usage: res.usage, sent: res.sent, durationMs, answers: null, validated: null, patch: {}, model: 'not_asked', effort: 'not_asked' };
     const answers = validateAnswers(res.answers, questions);
     const decision = choosePatch(answers, baseline, dims, opts);
-    return { kind: 'assessed', assessment: 'ok', usage: res.usage, sent: true, answers: receiptOf(answers), validated: answers, ...decision };
+    return { kind: 'assessed', assessment: 'ok', usage: res.usage, sent: true, durationMs, answers: receiptOf(answers), validated: answers, ...decision };
   };
 
   // ---------------------------------------------------------------------------------------------- root
@@ -569,6 +572,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
         : {
             assessment: outcome.assessment,
             sent: outcome.sent,
+            duration_ms: outcome.durationMs,
             usage: loggable(outcome.usage),
             answers: outcome.answers,
             patch: t.patch,
@@ -757,10 +761,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
 
   const observeStep = (engine: RouterEngine, e: TurnStepEvent, patch: RoutingPatch | null, result: TurnStepOutcome | void): void => {
     try {
-      if (!patch) return;
-      const t = turns.get(e.turnId);
-      if (!t) return;
-      const requested = patch.model ?? e.model;
+      const requested = patch?.model ?? e.model;
       const seen = result && typeof result.usage?.model === 'string' ? result.usage.model : null;
       // `applied` is what was sent to next, not a confirmation: the host reports the model that answered, never the
       // effort it ran at.
@@ -768,11 +769,17 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
         event: 'root_result',
         turn: e.turnId,
         index: e.index,
-        applied: patch,
+        requested,
+        requested_effort: patch?.effort ?? e.effort ?? null,
+        applied: patch ?? { model: e.model, ...(e.effort !== undefined ? { effort: e.effort } : {}) },
         observed: seen,
-        ...(patch.effort !== undefined ? { observed_effort: 'unknown' } : {}),
+        confirmation: seen === null ? 'unobserved' : patch?.model !== undefined ? sameModel(patch.model, seen) ? 'confirmed' : 'mismatch' : answeredBy(e.model, seen) ? 'confirmed' : 'mismatch',
+        observed_effort: 'unknown',
         usage: result ? loggable(countsOf(result.usage)) : null,
       });
+      if (!patch) return;
+      const t = turns.get(e.turnId);
+      if (!t) return;
       // Missing is unknown, not confirmation: the override is not reapplied on a guess. A model override needs its own
       // variant reported back, so a bare id does not confirm a requested [1m]. An effort-only patch is checked too, since
       // the host can answer from a fallback; effort depends only on the model, so there the variant is not asked for.
@@ -876,7 +883,17 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       throw err;
     }
     if (prepared?.child) observeChild(engine, e, prepared.child, patch, result);
-    else observeStep(engine, e, patch, result);
+    else if (e.agentId === undefined) observeStep(engine, e, patch, result);
+    if (e.agentId !== undefined) {
+      const requested = patch?.model ?? e.model;
+      const observed = result?.usage?.model ?? null;
+      log(engine, {
+        event: 'child_result', agent_id: e.agentId, turn: e.turnId, index: e.index,
+        requested, observed, requested_effort: patch?.effort ?? e.effort ?? null, observed_effort: 'unknown',
+        confirmation: observed === null ? 'unobserved' : answeredBy(requested, observed) ? 'confirmed' : 'mismatch',
+        usage: result ? loggable(countsOf(result.usage)) : null,
+      });
+    }
     if (e.agentId === undefined && !own.aborted) {
       remember(result);
       const sent = patch?.effort ?? e.effort;
@@ -935,6 +952,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       explicit: e.model !== undefined && e.model.trim() !== '',
       assessment: outcome.assessment,
       sent: outcome.sent,
+      duration_ms: outcome.durationMs,
       usage: loggable(outcome.usage),
       answers: outcome.answers,
       patch: outcome.patch,

@@ -624,6 +624,14 @@ describe('root model', () => {
     expect(f.logs).toContainEqual({ event: 'root_stop', turn: 't1', index: 1, reason: 'model_not_allowed' });
   });
 
+  it('records an unmapped native child response once without mislabelling it as a root response', async () => {
+    const router = createRouter(configOf(EFFORT_ONLY));
+    const f = fakeEngine();
+    await drain(router.turnStep(f.engine, step({ agentId: 'native-child' }), streamNext<TurnStepEvent>().next));
+    expect(f.logs.filter(l => l['event'] === 'root_result')).toHaveLength(0);
+    expect(f.logs.filter(l => l['event'] === 'child_result')).toEqual([expect.objectContaining({ agent_id: 'native-child', requested: 'claude-opus-5-5', observed: 'claude-opus-5-5', confirmation: 'confirmed' })]);
+    expect(f.sent).toHaveLength(0);
+  });
   it('records what each patched step was answered by and what it reported, counts only', async () => {
     const router = createRouter(configOf(MODEL_ONLY), SWITCHES);
     const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', 0.95] }) });
@@ -634,6 +642,10 @@ describe('root model', () => {
       event: 'root_result',
       turn: 't1',
       index: 0,
+      requested: 'claude-opus-5-5',
+      requested_effort: 'high',
+      observed_effort: 'unknown',
+      confirmation: 'confirmed',
       applied: { model: 'claude-opus-5-5' },
       observed: 'claude-opus-5-5',
       usage: { input: 1200, output: 80, cache_read: 40000, cache_creation: 0 },

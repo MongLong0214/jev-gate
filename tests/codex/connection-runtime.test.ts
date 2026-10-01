@@ -54,7 +54,7 @@ describe.skipIf(process.env['JEV_CODEX_E2E'] !== '1')('ordinary native Codex aut
     const built = spawnSync(process.execPath, [join(root, 'scripts/build-codex.mjs'), join(plugin, 'dist')], { encoding: 'utf8' });
     expect(built.status, built.stderr).toBe(0);
     const policyFile = join(temp, 'policy.json'); writeFileSync(policyFile, '{}');
-    const fixtureEnv = { PATH: `${join(workspace, '.bin')}:${process.env['PATH'] ?? ''}`, XDG_CONFIG_HOME: join(temp, 'config'), JEV_GATE_ONBOARDING: '0', JEV_CODEX_CONFIG: policyFile, JEV_GATE_STATE_DIR: join(temp, 'state'), JEV_CODEX_UPSTREAM: base, JEV_CODEX_CONNECTION_TEST_NO_AUTH: '1', NODE_OPTIONS: `--import ${preload}` };
+    const fixtureEnv = { PATH: `${join(workspace, '.bin')}:${process.env['PATH'] ?? ''}`, XDG_CONFIG_HOME: join(temp, 'config'), JEV_GATE_ONBOARDING: '0', JEV_DASHBOARD_NO_OPEN: '1', JEV_CODEX_CONFIG: policyFile, JEV_GATE_STATE_DIR: join(temp, 'state'), JEV_CODEX_UPSTREAM: base, JEV_CODEX_CONNECTION_TEST_NO_AUTH: '1', NODE_OPTIONS: `--import ${preload}` };
     saveApiKey(fixtureEnv, 'fake-local-jev-key');
     const mcpFile = join(plugin, '.mcp.json'); const mcp = JSON.parse(readFileSync(mcpFile, 'utf8')) as { mcpServers: Record<string, Obj> };
     mcp.mcpServers['jev_gate_evidence']!['env'] = fixtureEnv;

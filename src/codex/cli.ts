@@ -5,7 +5,10 @@ import { fileURLToPath } from 'node:url';
 import { codexTraceDir } from '../codex-paths.js';
 import { CODEX_CAPABILITIES } from '../host-support.js';
 import { loadConfig } from '../evidence/source.js';
-import { startDashboard } from '../dashboard.js';
+import { startDashboard, dashboardSources } from '../dashboard.js';
+import { ensureDashboard, serveAutomaticDashboard } from '../dashboard-launch.js';
+import { dashboardPreferenceCommand } from '../dashboard-settings.js';
+import { recordingCommand } from '../recording.js';
 import { launchCodex } from './launch.js';
 import { loadCodexPolicy } from './config.js';
 import { serveConnection } from './connection.js';
@@ -49,7 +52,9 @@ export const codexDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: str
 const main = async (): Promise<void> => {
   const root = dirname(dirname(fileURLToPath(import.meta.url)));
   const argv = process.argv.slice(2);
-  if (argv[0] === 'connection-serve') {
+  if (argv[0] === 'dashboard-serve') {
+    await serveAutomaticDashboard(root, process.env, argv[1] ?? '');
+  } else if (argv[0] === 'connection-serve') {
     await serveConnection(root, process.env);
   } else if (argv[0] === 'codex') {
     process.exitCode = await launchCodex(argv.slice(1), process.env);
@@ -58,16 +63,23 @@ const main = async (): Promise<void> => {
     process.stdout.write(`${result.lines.join('\n')}\n`);
     process.exitCode = result.ok ? 0 : 1;
   } else if (argv[0] === 'dashboard') {
+    if (['on', 'off', 'status'].includes(argv[1] ?? '')) {
+      process.stdout.write(dashboardPreferenceCommand(process.env, argv[1]!) + '\n');
+      if (argv[1] === 'on') await ensureDashboard(root, process.env);
+      return;
+    }
     const i = argv.indexOf('--port');
     const port = i === -1 ? 4731 : Number(argv[i + 1]);
     if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('--port requires an integer from 0 to 65535');
-    const server = await startDashboard({ traceDir: codexTraceDir(process.env), debugDir: null, env: process.env, host: 'codex' }, port);
+    const server = await startDashboard(dashboardSources(process.env), port);
     process.stdout.write(`Codex dashboard: ${server.url}\nLocal records only. Ctrl-C stops the server.\n`);
     if (process.platform === 'darwin' && process.env['JEV_DASHBOARD_NO_OPEN'] !== '1') {
       const child = spawn('open', [server.url], { stdio: 'ignore', detached: true }); child.on('error', () => undefined); child.unref();
     }
+  } else if (argv[0] === 'recording') {
+    process.stdout.write(recordingCommand(process.env, argv[1]) + '\n');
   } else {
-    process.stdout.write('usage: node <plugin>/dist/cli.mjs codex [native terminal options]\n       node <plugin>/dist/cli.mjs doctor\n       node <plugin>/dist/cli.mjs dashboard [--port 4731]\n');
+    process.stdout.write('usage: node <plugin>/dist/cli.mjs codex [native terminal options]\n       node <plugin>/dist/cli.mjs doctor\n       node <plugin>/dist/cli.mjs dashboard [on|off|status] [--port 4731]\n       node <plugin>/dist/cli.mjs recording on|off|status\n');
     process.exitCode = 2;
   }
 };

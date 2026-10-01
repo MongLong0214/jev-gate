@@ -445,7 +445,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
   let traceError: string | null = null;
   const traceDir = deps.env['JEV_GATE_TRACE_DIR'];
   if (traceDir) {
-    const opened = (deps.openTrace ?? openTraceDir)(traceDir);
+    const opened = (deps.openTrace ?? openTraceDir)(traceDir, deps.env);
     if (opened.ok) trace = opened.writer;
     else traceError = opened.error;
   }
@@ -515,7 +515,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     if (traceDir) {
       if (!trace) return { blocked: 'trace_intent_failed' };
       const written = trace.write(intentPhase, { ...base, ...intent, request_id: requestId, request_bytes: requestBytes });
-      if (!written.ok) return { blocked: 'trace_intent_failed' };
+      if (!written.ok && written.error !== 'recording_disabled') return { blocked: 'trace_intent_failed' };
     }
     // Measured again after the intent write: that write is local work the budget has already paid for.
     const left = hookLeft();

@@ -1,10 +1,25 @@
-import type { On, Register, SessionMessage } from 'claude-code';
+import type { EngineInterface, On, Register, SessionMessage } from 'claude-code';
 
 import type { CompactConfig } from './config.ts';
 import { resolveCompactConfig } from './config.ts';
 import { assemble, buildDigest } from './digest.ts';
+import { createRecorder } from './recording.ts';
 
 let sequence = 0;
+
+
+// The native validator follows $ only within this file; the shared recorder receives plain callbacks.
+const recorderOf = ($: EngineInterface) => createRecorder({
+  paths: async () => {
+    const [home, state, config, trace, session] = await Promise.all([
+      $.env.get('HOME'), $.env.get('XDG_STATE_HOME'), $.env.get('XDG_CONFIG_HOME'), $.env.get('JEV_GATE_TRACE_DIR'), $.session.id(),
+    ]);
+    return { home, state, config, trace, session };
+  },
+  stat: path => $.fs.stat(path), exists: path => $.fs.exists(path), read: path => $.fs.read(path),
+  write: (path, text) => $.fs.write(path, text), debug: line => $.ui.log(line, { to: 'debug' }),
+  wait: (ms, signal) => $.clock.sleep(ms, { signal }),
+});
 
 /** Bookkeeping never stands between the host and its own event. */
 const quietly = (f: () => void): void => {
@@ -38,9 +53,11 @@ export const registerCompact = (on: On, config: CompactConfig): void => {
   if (!config.enabled) return;
 
   on('session.compact', async ($, e, next) => {
+    const recorder = recorderOf($);
+    try {
     const runId = `${Date.now()}-${++sequence}`;
     const log = (fields: Record<string, unknown>): void =>
-      quietly(() => $.ui.log(`jev-compact ${JSON.stringify({ event: 'compact', run_id: runId, mode: config.mode, trigger: e.trigger, subagent: e.agentId !== undefined, ...fields })}`, { to: 'debug' }));
+      quietly(() => recorder.log(`jev-compact ${JSON.stringify({ event: 'compact', run_id: runId, mode: config.mode, trigger: e.trigger, subagent: e.agentId !== undefined, ...fields })}`));
     const handled = e.trigger === 'auto' || (e.trigger === 'manual' && config.manual);
     const deferred = !handled ? 'trigger' : e.agentId !== undefined && !config.subagents ? 'subagent' : e.trigger === 'manual' && e.instructions ? 'instructions' : null;
     if (deferred) {
@@ -80,5 +97,6 @@ export const registerCompact = (on: On, config: CompactConfig): void => {
       log({ applied: false, messages: e.messages.length, ...built, ...core });
     });
     return result;
+    } finally { await recorder.flush(); }
   });
 };

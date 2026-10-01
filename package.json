@@ -1,6 +1,6 @@
 {
   "name": "jev-gate",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "private": true,
   "description": "Jev policies for Claude Code and native Codex: task routing, observed contract checks, evidence, compaction, output folding and a live dashboard.",
   "type": "module",
@@ -22,6 +22,8 @@
     "@types/node": "^22.20.3",
     "@types/ws": "^8.18.1",
     "esbuild": "^0.28.2",
+    "happy-dom": "^20.14.5",
+    "playwright": "^1.58.2",
     "typescript": "^5.9.0",
     "vitest": "^5.0.1",
     "ws": "^8.21.0"

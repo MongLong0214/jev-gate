@@ -11,7 +11,10 @@ import { AUTH_CONFLICT_ENV, isSubscriptionOAuth, parseAuthStatus, subagentModelO
 import { OWNED_AGENT_PROFILES } from './agents.js';
 import { foregroundDispatchPossible } from './brief.js';
 import { DEFAULT_CONFIG, effectiveDepthFloor, LEGACY_DEPTH_FLOOR, loadConfig, MIGRATION_SAMPLE, NATIVE_HOOK_TIMEOUT_MS, type ConfigResult } from './config.js';
-import { startDashboard } from './dashboard.js';
+import { startDashboard, dashboardSources } from './dashboard.js';
+import { ensureDashboard, serveAutomaticDashboard } from './dashboard-launch.js';
+import { dashboardPreferenceCommand } from './dashboard-settings.js';
+import { recordingCommand, recordingStatus } from './recording.js';
 import { explainDir } from './explain.js';
 import { HOST_WINDOW_MAX, readHostCompactWindow, readHostWorktreeBaseRef, readSettingsEnvVar, STANDARD_CONTEXT_WINDOW } from './host-window.js';
 import { jobsDir } from './job.js';
@@ -297,11 +300,11 @@ const checkEnv = (mode: Mode | null): void => {
   else if (fork === '0' || bg === '1') say('ok', `launch profile: fork=${fork ?? 'unset'}, disable_background=${bg ?? 'unset'} (an Agent call can run in the foreground)`);
   else say('info', `launch profile not set (fork=${fork ?? 'unset'}, disable_background=${bg ?? 'unset'}): interactive sessions default to fork mode, where Agent calls omit run_in_background and V4 preserves them. Start with CLAUDE_CODE_FORK_SUBAGENT=0 CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`);
   if (env['CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS'] === '1') say('info', 'agent teams enabled: a named Agent call becomes a teammate; the coordinator guidance asks for no teammate name');
-  // #117: Router, Compact and Output write their decisions to the host debug log, which the host keeps only when
-  // this variable (or `--debug`) is set; without it the dashboard's Router/Compact/Output cards can never fill.
+  const recording = recordingStatus(env);
+  say(recording.error ? 'warn' : 'ok', `Jev local recording ${recording.enabled ? 'on (default)' : 'off'}: Router/Compact/Output do not require --debug; toggle with recording on|off${recording.error ? ` (${recording.error})` : ''}`);
   const debugDir = launch('CLAUDE_CODE_DEBUG_LOGS_DIR');
   if (debugDir) say('ok', `CLAUDE_CODE_DEBUG_LOGS_DIR=${debugDir}: Router/Compact/Output decisions are recorded there for the dashboard`);
-  else say('warn', 'CLAUDE_CODE_DEBUG_LOGS_DIR not set (shell and settings env): Router/Compact/Output recording cannot be confirmed here. If you start Claude with --debug, use its actual debug directory; otherwise set the directory in settings env and restart the host');
+  else say('info', 'Claude debug logs are optional; independent Jev metadata recording is available without --debug');
   const key = resolveApiKey({ ...env, TYPESAFE_API_KEY: launch('TYPESAFE_API_KEY') });
   say(key ? 'ok' : 'warn', key ? 'Jev API key available from the plugin option, environment or shared private store (value not shown)' : 'Jev API key missing: the installed plugin opens a local key-entry screen; Gate/Lean/Router remain native until a key is supplied');
   if (existsSync(join(process.cwd(), '.env'))) say('info', '.env in cwd is NOT auto-loaded by the hook; export the variable in the shell that starts Claude Code');
@@ -398,6 +401,11 @@ const flagValue = (argv: string[], name: string): string | undefined => {
 };
 
 const dashboard = async (argv: string[]): Promise<void> => {
+  if (['on', 'off', 'status'].includes(argv[0] ?? '')) {
+    process.stdout.write(dashboardPreferenceCommand(process.env, argv[0]!) + '\n');
+    if (argv[0] === 'on') await ensureDashboard(dirname(dirname(fileURLToPath(import.meta.url))), process.env);
+    return;
+  }
   const host = flagValue(argv, '--host');
   if (host && host !== 'codex' && host !== 'claude') throw new Error('--host must be codex or claude');
   const portArg = flagValue(argv, '--port');
@@ -408,9 +416,9 @@ const dashboard = async (argv: string[]): Promise<void> => {
     return;
   }
   const started = await startDashboard(
-    { traceDir: host === 'codex' ? flagValue(argv, '--trace') ?? codexTraceDir(process.env) : configuredDir(flagValue(argv, '--trace'), 'JEV_GATE_TRACE_DIR'),
-      debugDir: host === 'codex' ? null : configuredDir(flagValue(argv, '--debug'), 'CLAUDE_CODE_DEBUG_LOGS_DIR'), env: process.env,
-      ...(host ? { host: host as 'codex' | 'claude' } : {}) },
+    { ...dashboardSources(process.env, host as 'codex' | 'claude' | undefined),
+      ...(flagValue(argv, '--trace') ? { traceDir: flagValue(argv, '--trace')!, traceDirs: undefined } : {}),
+      ...(flagValue(argv, '--debug') ? { debugDir: flagValue(argv, '--debug')! } : {}) },
     port,
   );
   process.stdout.write(`dashboard: ${started.url}\n`);
@@ -425,6 +433,13 @@ const dashboard = async (argv: string[]): Promise<void> => {
 if (isMainModule()) {
   const argv = process.argv.slice(2);
   if (argv[0] === 'doctor') main();
+  else if (argv[0] === 'dashboard-serve') {
+    void serveAutomaticDashboard(dirname(dirname(fileURLToPath(import.meta.url))), process.env, argv[1] ?? '').catch(() => undefined);
+  }
+  else if (argv[0] === 'recording') {
+    try { process.stdout.write(recordingCommand(process.env, argv[1]) + '\n'); }
+    catch { process.stderr.write('recording: use on, off or status; the local settings directory must be writable\n'); process.exitCode = 1; }
+  }
   else if (argv[0] === 'explain') explain(argv[1]);
   else if (argv[0] === 'dashboard') {
     dashboard(argv.slice(1)).catch((err: unknown) => {
@@ -432,7 +447,7 @@ if (isMainModule()) {
       process.exitCode = 1;
     });
   } else {
-    process.stdout.write('usage: node dist/cli.js doctor\n       node dist/cli.js explain [trace-dir]   (default: $JEV_GATE_TRACE_DIR)\n       node dist/cli.js dashboard [--port 4731] [--trace dir] [--debug dir]\n');
+    process.stdout.write('usage: node dist/cli.js doctor\n       node dist/cli.js explain [trace-dir]   (default: $JEV_GATE_TRACE_DIR)\n       node dist/cli.js dashboard [on|off|status] [--port 4731] [--trace dir] [--debug dir]\n       node dist/cli.js recording on|off|status\n');
     process.exitCode = 2;
   }
 }

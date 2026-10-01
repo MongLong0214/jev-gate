@@ -9,15 +9,35 @@ import { loadActivity, type ActivitySnapshot } from './activity.js';
 import { DASHBOARD_PAGE } from './dashboard-page.js';
 import type { Env } from './config.js';
 import type { Host } from './host-support.js';
+import { claudeConfigDir, claudeTraceDir } from './claude-setup.js';
+import { codexTraceDir } from './codex-paths.js';
+import { readSettingsEnvVar } from './host-window.js';
+import { recordingStatus, setRecording } from './recording.js';
+import { dashboardStatus, setDashboard } from './dashboard-settings.js';
+import { JEV_FAVICON } from './dashboard-brand.js';
 
 const PAGE = DASHBOARD_PAGE;
 
 export interface DashboardSources {
   host?: Host;
   traceDir: string | null;
+  traceDirs?: readonly { host: Host; dir: string }[] | undefined;
   debugDir: string | null;
   env: Env;
 }
+
+/** Ordinary launches discover both native hosts. No shared directory or environment export is required. */
+export const dashboardSources = (env: Env, host?: Host): DashboardSources => {
+  const configured = (key: string): string | undefined => {
+    const setting = readSettingsEnvVar(env, process.cwd(), key);
+    return env[key] || (setting && 'value' in setting ? setting.value : undefined);
+  };
+  const claude = configured('JEV_GATE_TRACE_DIR') || claudeTraceDir(env);
+  const codex = codexTraceDir({ ...env, JEV_GATE_TRACE_DIR: undefined });
+  return { env, ...(host ? { host } : {}), traceDir: null,
+    traceDirs: [{ host: 'claude' as const, dir: claude }, { host: 'codex' as const, dir: codex }].filter(source => !host || source.host === host),
+    debugDir: host === 'codex' ? null : configured('CLAUDE_CODE_DEBUG_LOGS_DIR') || join(claudeConfigDir(env), 'debug') };
+};
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const readJson = (path: string): unknown => {
@@ -37,10 +57,10 @@ const PLUGIN_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const ownAtStartup = ['.claude-plugin', '.codex-plugin'].map(kind => readJson(join(PLUGIN_ROOT, kind, 'plugin.json')))
   .find(value => isRecord(value) && typeof value['version'] === 'string');
 const RUNNING_VERSION = isRecord(ownAtStartup) && typeof ownAtStartup['version'] === 'string' ? ownAtStartup['version'] : null;
-export const readVersions = (env: Env, host: Host = 'claude'): DashboardVersions => {
+export const readVersions = (env: Env, host?: Host): DashboardVersions => {
   const running = RUNNING_VERSION;
   // Codex does not use Claude's install registry; its installation remains unknown here.
-  if (host === 'codex') return { running, installed: null };
+  if (host === 'codex' || !host && isRecord(readJson(join(PLUGIN_ROOT, '.codex-plugin', 'plugin.json')))) return { running, installed: null };
   const home = env['HOME'] ?? homedir();
   const registry = readJson(join(home, '.claude', 'plugins', 'installed_plugins.json'));
   let installed: string | null = null;
@@ -55,16 +75,41 @@ export const readVersions = (env: Env, host: Host = 'claude'): DashboardVersions
   return { running, installed };
 };
 
-const snapshot = (sources: DashboardSources): ActivitySnapshot & { version: DashboardVersions } => ({ ...loadActivity({ ...sources, now: new Date() }), version: readVersions(sources.env, sources.host) });
+const snapshot = (sources: DashboardSources) => ({ ...loadActivity({ ...sources, now: new Date() }), version: readVersions(sources.env, sources.host), recording: recordingStatus(sources.env), dashboard: dashboardStatus(sources.env) });
 
-export const startDashboard = (sources: DashboardSources, port: number): Promise<{ url: string; port: number; close: () => Promise<void> }> =>
+export const startDashboard = (sources: DashboardSources, port: number, runtime: { token?: string } = {}): Promise<{ url: string; port: number; close: () => Promise<void> }> =>
   new Promise((resolve, reject) => {
     const sockets = new Set<Socket>();
-    const server: Server = createServer((req, res) => {
+    const server: Server = createServer(async (req, res) => {
+      if (!/^127\.0\.0\.1:\d+$/.test(req.headers.host ?? '')) { res.writeHead(403); res.end(); return; }
+      res.setHeader('x-content-type-options', 'nosniff');
+      res.setHeader('referrer-policy', 'no-referrer');
       const path = req.url?.split('?')[0];
-      if (req.method === 'GET' && path === '/favicon.ico') {
-        res.writeHead(204);
-        res.end();
+      if (path === '/api/health' && req.method === 'GET') {
+        res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+        res.end(JSON.stringify({ service: 'jev-gate-dashboard', token: runtime.token ?? null })); return;
+      }
+      if (path === '/api/shutdown' && req.method === 'POST') {
+        if (!runtime.token || req.headers.authorization !== `Bearer ${runtime.token}`) { res.writeHead(403); res.end(); return; }
+        res.end(); setTimeout(() => { for (const socket of sockets) socket.destroy(); server.close(); }, 25); return;
+      }
+      if ((path === '/api/recording' || path === '/api/dashboard') && req.method === 'POST') {
+        // Preferences require an explicit same-origin local UI action.
+        const origin = `http://${req.headers.host}`;
+        if (req.headers.origin !== origin || !/^127\.0\.0\.1:\d+$/.test(req.headers.host ?? '') || req.headers['content-type'] !== 'application/json') { res.writeHead(403); res.end(); return; }
+        try {
+          let body = ''; for await (const part of req) { body += part; if (body.length > 256) { res.writeHead(413); res.end(); return; } }
+          const input = JSON.parse(body) as { enabled?: unknown };
+          if (typeof input.enabled !== 'boolean') { res.writeHead(400); res.end(); return; }
+          const recording = path === '/api/recording';
+          (recording ? setRecording : setDashboard)(sources.env, input.enabled);
+          res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify((recording ? recordingStatus : dashboardStatus)(sources.env)));
+        } catch { res.writeHead(500); res.end(); }
+        return;
+      }
+      if (req.method === 'GET' && (path === '/favicon.ico' || path === '/favicon.svg')) {
+        res.writeHead(200, { 'content-type': 'image/svg+xml' });
+        res.end(JEV_FAVICON);
         return;
       }
       if (req.method === 'GET' && path === '/api/snapshot') {
@@ -86,7 +131,7 @@ export const startDashboard = (sources: DashboardSources, port: number): Promise
           if (closed) return;
           try {
             const body = snapshot(sources);
-            const next = `${body.live.sig}:${body.operations.sig}:${body.unreadable}:${JSON.stringify(body.version)}`;
+            const next = `${body.live.sig}:${body.operations.sig}:${body.unreadable}:${JSON.stringify(body.version)}:${JSON.stringify(body.recording)}:${JSON.stringify(body.dashboard)}`;
             if (next === last) return;
             last = next;
             res.write(`data: ${JSON.stringify(body)}\n\n`);
@@ -99,7 +144,7 @@ export const startDashboard = (sources: DashboardSources, port: number): Promise
           timer = setTimeout(publish, 16);
         };
         const watchers: FSWatcher[] = [];
-        for (const dir of [sources.traceDir, sources.debugDir]) {
+        for (const dir of [sources.traceDir, ...(sources.traceDirs?.map(source => source.dir) ?? []), sources.debugDir]) {
           if (!dir) continue;
           try {
             watchers.push(watch(dir, kick));

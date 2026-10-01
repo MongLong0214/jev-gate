@@ -2,7 +2,7 @@ import { mkdtempSync, readdirSync, readFileSync, lstatSync, rmSync, symlinkSync 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { runCodexHook as executeCodexHook, type CodexHookDeps } from '../../src/codex/hook.js';
+import { runCodexHook as executeCodexHook, toolOutcome, type CodexHookDeps } from '../../src/codex/hook.js';
 import { foldCodexOutput } from '../../src/codex/output.js';
 import { codexTraceDir } from '../../src/codex-paths.js';
 import { buildOperations } from '../../src/operations.js';
@@ -17,6 +17,13 @@ async function* stdin(v: unknown): AsyncIterable<string> { yield typeof v === 's
 const input = { hook_event_name: 'PostToolUse', session_id: 'session', turn_id: 'turn', tool_use_id: 'call', model: 'native-model', tool_name: 'Bash', tool_input: { command: 'vitest run' }, tool_response: passing };
 
 describe('native Codex hook', () => {
+  it('records only explicit failure metadata without interpreting raw output as status', () => {
+    expect(toolOutcome({ isError: true, content: [{ text: 'PRIVATE' }] })).toEqual({ exit_code: null, is_error: true });
+    expect(toolOutcome({ exit_code: 2, output: 'PRIVATE' })).toEqual({ exit_code: 2, is_error: true });
+    expect(toolOutcome('Chunk ID: abc\nWall time: 0.1 seconds\nProcess exited with code 7\nOutput:\nPRIVATE')).toEqual({ exit_code: 7, is_error: true });
+    expect(toolOutcome('example: Process exited with code 1')).toEqual({ exit_code: null, is_error: false });
+    expect(toolOutcome('PRIVATE')).toEqual({ exit_code: null, is_error: false });
+  });
   it('replaces only known output, keeps repeat counts, and records metadata without raw data', async () => {
     const path = dir();
     const result = await runCodexHook({ stdin: stdin({ ...input, prompt: 'PRIVATE_PROMPT', transcript_path: '/PRIVATE_PATH', api_key: 'sk-private' }), env: { JEV_CODEX_TRACE_DIR: path } });
@@ -129,8 +136,21 @@ describe('Codex lifecycle in the dashboard', () => {
   });
   it('pairs interrupted turns without reporting successful completion', () => {
     const view = buildOperations([row('UserPromptSubmit'), row('Interrupt', { written_at: '2026-09-30T01:00:01Z' })], [], now, { trace: true, debug: false });
-    expect(view.feed.find(s => s.title.includes('턴 시작'))).toMatchObject({ state: 'unconfirmed', durationMs: 1000 });
+    expect(view.feed.find(s => s.title.includes('턴 시작'))).toMatchObject({ state: 'interrupted', durationMs: 1000 });
+    expect(view.runs[0]?.state).toBe('interrupted');
+    expect(view.attention).toBe(0);
     expect(view.active).toBe(0);
+  });
+  it('ends pending indicators on turn closure without inventing a tool success', () => {
+    const view = buildOperations([row('PreToolUse', { tool_use_id: 'lost' }), row('Stop', { written_at: '2026-09-30T01:00:01Z' })], [], now, { trace: true, debug: false });
+    expect(view.runs[0]?.state).toBe('unconfirmed');
+    expect(view.active).toBe(0); expect(view.attention).toBe(0);
+    expect(view.feed.find(s => s.title.includes('도구 시작'))?.summary).toContain('결과 이벤트는 미관측');
+  });
+  it('pairs delayed exec receipts across turns by session and call, and propagates observed failure', () => {
+    const view = buildOperations([row('PreToolUse', { tool_use_id: 'call' }), row('PostToolUse', { prompt_id: 'later', tool_use_id: 'call', exit_code: 1, written_at: '2026-09-30T01:00:01Z' })], [], now, { trace: true, debug: false });
+    expect(view.feed.find(s => s.title.includes('도구 시작'))).toMatchObject({ state: 'error', durationMs: 1000 });
+    expect(view.active).toBe(0); expect(view.attention).toBe(2);
   });
   it('filters a shared trace directory by host', async () => {
     const path = dir();

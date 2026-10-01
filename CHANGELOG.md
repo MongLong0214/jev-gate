@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.8.1 — 2026-10-01 — Recorded execution circuit and automatic dashboard
+
+- The execution circuit leads the first screen, separates Gate's direct/worker/planned paths from independent policies and Lean, and adapts without horizontal scrolling. Selecting a stage opens a local inspector; selecting an execution scopes the circuit and its recorded transitions.
+- Cards and inspectors expose the latest recorded result, host, timing, Jev choice distribution and selected/observed model and effort. Errors, unobserved outcomes and user interruptions remain separate. Only new linked records in one execution animate; filtering or unrelated concurrent runs never invent traffic.
+- Claude Router, Compact and Output record private metadata without `--debug`. Both hosts share live recording and automatic-dashboard switches, enabled by default. The installed MCP starts one shared dashboard and opens the browser once, reuses concurrent hosts and replaces older builds. Fixed the integrated Claude MCP's dashboard root path.
+- Optional metadata recording cannot stall host execution when its filesystem or clock fails. Native model variants and dated aliases retain Router identity confirmation; failed Jev assessments are distinguished from the preserved host request.
+- Codex delayed tool results reconnect to their original calls. Explicit exit codes and MCP errors are recorded, missing tool receipts remain unknown, and generic host events do not count as feature execution. Claude child response receipts no longer duplicate root responses.
+- Browser E2E covers viewport/theme/language layouts, path geometry, keyboard focus, selection, live transitions, pause/resume, reduced motion and failed preference writes. Packaged native Claude tests verify Router's selected model at the actual provider request without `--debug`; fixture-backed tests are separate from paid-account and long-term product effects.
+
 ## v0.8.0 — 2026-10-01 — Automatic setup and open defaults
 
 - Claude Code prepares required launch settings and recording paths automatically. Both hosts open a local API key screen and share the private credential; no shell export or project policy file is required.

@@ -18,9 +18,10 @@ import { dirname } from 'node:path';
 import { resolveApiKey, saveApiKey } from '../credentials.js';
 import { claudeSetupMessage, claudeTraceDir, integratedClaudePlugin, prepareClaude } from '../claude-setup.js';
 import { startOnboarding } from '../onboarding.js';
+import { ensureDashboard } from '../dashboard-launch.js';
 
 export const TOOL_NAME = 'jev_evidence';
-export const SERVER_VERSION = '0.8.0';
+export const SERVER_VERSION = '0.8.1';
 
 const strings = (description: string) => ({ type: 'array', items: { type: 'string', minLength: 1 }, minItems: 1, maxItems: LIMITS.arrayItems, description });
 const HEX64 = { type: 'string', pattern: '^[0-9a-f]{64}$' };
@@ -220,8 +221,9 @@ const main = async (): Promise<void> => {
   if (installed && !codex && !traceDir) traceDir = claudeTraceDir(env);
   try { if (codex) traceDir = codexTraceDir(env); }
   catch { traceDir = undefined; process.stderr.write('jev-evidence: invalid Codex trace directory; recording unavailable\n'); }
-  const opened = traceDir ? openTraceDir(traceDir) : null;
-  const root = dirname(dirname(fileURLToPath(import.meta.url)));
+  const opened = traceDir ? openTraceDir(traceDir, env) : null;
+  const root = installed && !codex ? env['CLAUDE_PLUGIN_ROOT']! : dirname(dirname(fileURLToPath(import.meta.url)));
+  if (installed) void ensureDashboard(root, env);
   const automaticConnection = codex && env['JEV_CODEX_AUTO_CONNECT'] !== '0' && env['JEV_CODEX_ENABLED'] !== '0' && !env['JEV_CODEX_BRIDGE_URL'];
   if (automaticConnection) await ensureConnection(root, env);
   const server = createServer(load, { apiKey: resolveApiKey(env) || null, getApiKey: () => resolveApiKey(env) || null, ...(opened?.ok ? { trace: opened.writer } : {}), ...(codex ? { host: 'codex' as const, callerEnv: env } : {}), ...(automaticConnection ? { dispatch: async (arguments_: unknown, meta: unknown, signal: AbortSignal) => {

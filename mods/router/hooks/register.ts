@@ -5,6 +5,7 @@ import { anyRouting, resolveConfig } from './config.ts';
 import type { HostPins, RouterEngine } from './router.ts';
 import { createRouter } from './router.ts';
 import { installedKeyPath, parseInstalledKey } from './key.ts';
+import { createRecorder } from './recording.ts';
 
 const set = (v: string | undefined): boolean => v !== undefined && v.trim() !== '';
 
@@ -20,11 +21,25 @@ const installedKey = async ($: EngineInterface): Promise<string | undefined> => 
   } catch { return undefined; }
 };
 
+
+// The native validator follows $ only within this file; the shared recorder receives plain callbacks.
+const recorderOf = ($: EngineInterface) => createRecorder({
+  paths: async () => {
+    const [home, state, config, trace, session] = await Promise.all([
+      $.env.get('HOME'), $.env.get('XDG_STATE_HOME'), $.env.get('XDG_CONFIG_HOME'), $.env.get('JEV_GATE_TRACE_DIR'), $.session.id(),
+    ]);
+    return { home, state, config, trace, session };
+  },
+  stat: path => $.fs.stat(path), exists: path => $.fs.exists(path), read: path => $.fs.read(path),
+  write: (path, text) => $.fs.write(path, text), debug: line => $.ui.log(line, { to: 'debug' }),
+  wait: (ms, signal) => $.clock.sleep(ms, { signal }),
+});
+
 /**
  * The host's `$` as the Router's engine. `$.env.get` takes literal names only (validate lists what a module reads),
  * so every variable is spelled out here and nowhere else.
  */
-const engineOf = ($: EngineInterface): RouterEngine => ({
+const engineOf = ($: EngineInterface, log: RouterEngine['log']): RouterEngine => ({
   fetch: (url, init) => $.http.fetch(url, init),
   sleep: (ms, signal) => $.clock.sleep(ms, { signal }),
   now: () => Date.now(),
@@ -59,7 +74,7 @@ const engineOf = ($: EngineInterface): RouterEngine => ({
     return Array.isArray(v) && v.every((x): x is string => typeof x === 'string') ? v : [];
   },
   hostBase: async () => (await $.session.version()).base,
-  log: (line) => $.ui.log(line, { to: 'debug' }),
+  log,
 });
 
 /** Bookkeeping and diagnostics never stand between the host and its own event: a failure here leaves it native. */
@@ -107,7 +122,9 @@ export const registerRouter = (on: On, config: RouterConfig): void => {
   // Root turns and subagent loops both step here.
   if (router.stepEnabled) {
     on('turn.step', async function* ($, e, next) {
-      return yield* router.turnStep(engineOf($), e, next);
+      const recorder = recorderOf($);
+      try { return yield* router.turnStep(engineOf($, recorder.log), e, next); }
+      finally { await recorder.flush(); }
     });
   }
   if (router.spawnEnabled) {
@@ -115,7 +132,11 @@ export const registerRouter = (on: On, config: RouterConfig): void => {
       quietly(() => router.agentOffer(e));
       return next(e);
     });
-    on('agent.spawn', ($, e, next) => router.agentSpawn(engineOf($), e, next));
+    on('agent.spawn', async ($, e, next) => {
+      const recorder = recorderOf($);
+      try { return await router.agentSpawn(engineOf($, recorder.log), e, next); }
+      finally { await recorder.flush(); }
+    });
   }
   on('session.end', ($, e, next) => {
     quietly(() => router.sessionEnd());
