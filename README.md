@@ -19,7 +19,7 @@ The marketplace installs [the latest release](https://github.com/MongLong0214/je
 
 The [native Codex plugin](plugins/codex/README.md) supplies Evidence, Output and recording. Start the native terminal through its included launcher to enable **Gate A/B, planning, contract acceptance, root guard, Lean, Router and Compact** with the shared policies. It connects the official Codex App Server to the real Codex terminal; native login and permissions remain authoritative. Tested with Codex CLI 0.158.0 and 0.159.2 and Node 22.15+.
 
-For an installation without a build step, download **`jev-gate-codex-0.7.0.zip`** from the [v0.7.0 release](https://github.com/MongLong0214/jev-gate/releases/tag/v0.7.0), extract it, and register the extracted directory:
+For an installation without a build step, download **`jev-gate-codex-0.7.1.zip`** from the [v0.7.1 release](https://github.com/MongLong0214/jev-gate/releases/tag/v0.7.1), extract it, and register the extracted directory:
 
 ```sh
 codex plugin marketplace add /absolute/path/to/extracted-plugin
@@ -273,7 +273,7 @@ npm run build
 claude plugin validate . --strict
 ```
 
-`npm test` uses fake HTTP and a fake CLI. It does not need a key or a login. The bench is not part of installing or of changing the plugin. Do not send secrets or raw transcripts.
+A saving claim needs the paired A/B bench (`node dist/bench/ab.js`, see `docs/bench-ab.md`), not a within-session estimate. `npm test` uses fake HTTP and a fake CLI. It does not need a key or a login. The bench is not part of installing or of changing the plugin. Do not send secrets or raw transcripts.
 
 `claude --plugin-dir .` loads this tree as the plugin. One part can be loaded from `mods/compact`, `mods/output`, `mods/router`, or `plugins/evidence`; option names differ, and those READMEs say how. Gate and lean settings, foreground and worktree conditions, and `node dist/cli.js explain` are in [Advanced usage](docs/advanced-usage.md).
 

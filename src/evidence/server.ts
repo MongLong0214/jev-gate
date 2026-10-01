@@ -17,7 +17,7 @@ import { connectionRequest, ensureConnection } from '../codex/connection.js';
 import { dirname } from 'node:path';
 
 export const TOOL_NAME = 'jev_evidence';
-export const SERVER_VERSION = '0.7.0';
+export const SERVER_VERSION = '0.7.1';
 
 const strings = (description: string) => ({ type: 'array', items: { type: 'string', minLength: 1 }, minItems: 1, maxItems: LIMITS.arrayItems, description });
 const HEX64 = { type: 'string', pattern: '^[0-9a-f]{64}$' };

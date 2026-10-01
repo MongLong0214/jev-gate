@@ -1,6 +1,9 @@
 import { createServer, type Server } from 'node:http';
-import { watch, type FSWatcher } from 'node:fs';
+import { readFileSync, watch, type FSWatcher } from 'node:fs';
 import type { Socket } from 'node:net';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { loadActivity, type ActivitySnapshot } from './activity.js';
 import { DASHBOARD_PAGE } from './dashboard-page.js';
@@ -16,7 +19,42 @@ export interface DashboardSources {
   env: Env;
 }
 
-const snapshot = (sources: DashboardSources): ActivitySnapshot => loadActivity({ ...sources, now: new Date() });
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+const readJson = (path: string): unknown => {
+  try {
+    return JSON.parse(readFileSync(path, 'utf8')) as unknown;
+  } catch {
+    return null;
+  }
+};
+
+/** Running code is captured at module load. Only the host's installed version can change. */
+export interface DashboardVersions {
+  running: string | null;
+  installed: string | null;
+}
+const PLUGIN_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+const ownAtStartup = readJson(join(PLUGIN_ROOT, '.claude-plugin', 'plugin.json'));
+const RUNNING_VERSION = isRecord(ownAtStartup) && typeof ownAtStartup['version'] === 'string' ? ownAtStartup['version'] : null;
+export const readVersions = (env: Env, host: Host = 'claude'): DashboardVersions => {
+  const running = RUNNING_VERSION;
+  // Codex does not use Claude's install registry; its installation remains unknown here.
+  if (host === 'codex') return { running, installed: null };
+  const home = env['HOME'] ?? homedir();
+  const registry = readJson(join(home, '.claude', 'plugins', 'installed_plugins.json'));
+  let installed: string | null = null;
+  const plugins = isRecord(registry) ? registry['plugins'] : null;
+  if (isRecord(plugins)) {
+    for (const [key, entries] of Object.entries(plugins)) {
+      if (!key.startsWith('jev-gate@') || !Array.isArray(entries)) continue;
+      const first = entries.find((e) => isRecord(e) && typeof e['version'] === 'string');
+      if (isRecord(first)) installed = first['version'] as string;
+    }
+  }
+  return { running, installed };
+};
+
+const snapshot = (sources: DashboardSources): ActivitySnapshot & { version: DashboardVersions } => ({ ...loadActivity({ ...sources, now: new Date() }), version: readVersions(sources.env, sources.host) });
 
 export const startDashboard = (sources: DashboardSources, port: number): Promise<{ url: string; port: number; close: () => Promise<void> }> =>
   new Promise((resolve, reject) => {
@@ -29,7 +67,7 @@ export const startDashboard = (sources: DashboardSources, port: number): Promise
         return;
       }
       if (req.method === 'GET' && path === '/api/snapshot') {
-        const body = JSON.stringify(snapshot(sources) satisfies ActivitySnapshot);
+        const body = JSON.stringify(snapshot(sources));
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
         res.end(body);
         return;
@@ -47,7 +85,7 @@ export const startDashboard = (sources: DashboardSources, port: number): Promise
           if (closed) return;
           try {
             const body = snapshot(sources);
-            const next = `${body.live.sig}:${body.operations.sig}:${body.unreadable}`;
+            const next = `${body.live.sig}:${body.operations.sig}:${body.unreadable}:${JSON.stringify(body.version)}`;
             if (next === last) return;
             last = next;
             res.write(`data: ${JSON.stringify(body)}\n\n`);

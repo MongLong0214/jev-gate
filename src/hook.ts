@@ -55,6 +55,7 @@ import {
 } from './lean.js';
 import { looksSecret, mandatoryGroups, optionalGroups, readLeanSource, SOURCE_MAX_MS, type LeanSource } from './lean-source.js';
 import { readSessionDepth, type DepthReading } from './depth.js';
+import { readRecentPrompts, withRecentPrompts } from './recent-prompts.js';
 import {
   GUARD_DENY_REASON,
   SINGLE_GUARD_DENY_REASON,
@@ -167,6 +168,10 @@ export interface HookDeps {
 export type HookResult =
   | { kind: 'skip' | 'preserve'; code: ErrorCode | null; stdout: null }
   | { kind: 'guidance' | 'patch' | 'deny' | 'context' | 'notice'; code: ErrorCode | null; stdout: string };
+
+/** #114: shown to the user (not the model) when Gate A was skipped because the session depth could not be read. */
+export const DEPTH_UNKNOWN_NOTICE =
+  'jev-gate: Gate A was not asked on this prompt because the session depth could not be read from the transcript (the first prompt of a session and every headless `claude -p` single turn look like this). Recorded as depth_unknown; the turn runs natively. Single-prompt automation therefore never reaches the gate.';
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const sha256 = (s: string): string => createHash('sha256').update(s, 'utf8').digest('hex');
@@ -452,8 +457,8 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
   };
   const apiKey = deps.env['TYPESAFE_API_KEY'];
 
-  const emitContext = (event: 'UserPromptSubmit' | 'PostToolUse', text: string, code: ErrorCode | null): HookResult => {
-    const stdout = renderAdditionalContext(event, text);
+  const emitContext = (event: 'UserPromptSubmit' | 'PostToolUse', text: string, code: ErrorCode | null, notice: string | null = null): HookResult => {
+    const stdout = renderAdditionalContext(event, text, notice);
     if (stdout === null) return skip('output_too_large');
     return { kind: event === 'UserPromptSubmit' ? 'guidance' : 'context', code, stdout };
   };
@@ -1004,6 +1009,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     }
 
     const atomicAdmission = config.admissionQuestionShape === 'atomic';
+    let dispatchRequest = prompt;
     const requiredAdmission = mode === 'auto' && !forced && atomicAdmission;
     const minimumSingleFits = Buffer.byteLength(composeSingleWorkerPrompt('', prompt, true), 'utf8') <= MAX_COMPOSED_BYTES;
     if (
@@ -1092,16 +1098,17 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
          * is the same one the branch above already passed, so on this path it can only agree.
          */
         // The explicit return type is what lets one call site carry both shapes: callGate cannot infer Q from a union.
-        const admissionRequest = (): JevRequest<AdmissionState, Record<string, unknown>> =>
-          atomicAdmission ? buildAtomicAdmissionRequest(prompt, config) : buildAdmissionRequest(prompt, config);
-        const request = admissionRequest();
+        const admissionRequest = (text: string): JevRequest<AdmissionState, Record<string, unknown>> =>
+          atomicAdmission ? buildAtomicAdmissionRequest(text, config) : buildAdmissionRequest(text, config);
         let admitted: (AdmissionDecision & { estimate?: AdmissionEstimate | null; execution?: 'single' | 'hierarchy' | null }) | null =
           null;
-        const gate = await callGate(
+        const askGateA = (text: string, facts: Record<string, unknown>): ReturnType<typeof callGate> => {
+          const request = admissionRequest(text);
+          return callGate(
           request,
           'admission_intent',
           'admission_result',
-          { prompt_len: prompt.length, prompt_sha256: sha256(prompt), ...depthFacts, ...floorFacts },
+          { prompt_len: prompt.length, prompt_sha256: sha256(prompt), ...depthFacts, ...floorFacts, ...facts },
           Object.keys(request.questions),
           (outcome) => {
             if (!outcome.ok) return { forced: false, decision: { shape: 'direct', decided: false, reason: outcome.code, changed_default: false } };
@@ -1128,7 +1135,25 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
               ...(atomicAdmission ? { selected_execution: selectedExecution, policy_revision: 'atomic-context-v1' } : {}),
             };
           },
-        );
+          );
+        };
+        let gate = await askGateA(prompt, {});
+        /**
+         * #115: a short follow-up ("e2e 해봐") reads as `needs_context` on its own, and the context it needs is the
+         * turns before it. One re-ask with the last few user prompts attached, once, only for that reason. The
+         * second record carries `context_turns` so accounting can tell the two requests apart.
+         */
+        const needsContext = 'outcome' in gate && gate.outcome.ok && admitted !== null && (admitted as AdmissionDecision).reason === 'admission_needs_context';
+        if (needsContext) {
+          const recent = deps.host ? [] : readRecentPrompts(input.transcript_path, prompt);
+          if (recent.length > 0) {
+            const contextual = withRecentPrompts(prompt, recent);
+            if (Buffer.byteLength(contextual, 'utf8') <= REQUEST_MAX_BYTES && Buffer.byteLength(composeSingleWorkerPrompt('', contextual, true), 'utf8') <= MAX_COMPOSED_BYTES) {
+              gate = await askGateA(contextual, { context_turns: recent.length });
+              dispatchRequest = contextual;
+            }
+          }
+        }
         // #48 P2: `'outcome' in gate` is the one place that tells whether a Gate A request was actually attempted --
         // `'blocked' in gate` means callGate itself declined to send it (bad request, byte cap, etc).
         const attempted = 'outcome' in gate;
@@ -1144,11 +1169,13 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       }
     }
 
-    if (shape === 'direct') return emitContext('UserPromptSubmit', renderDirectGuidance(mode), reason);
+    // #114: an unreadable depth is the one direct reason the user cannot see coming -- the first prompt of a session
+    // and every headless `claude -p` single turn have no transcript yet -- so it is the one that is said out loud.
+    if (shape === 'direct') return emitContext('UserPromptSubmit', renderDirectGuidance(mode), reason, reason === 'depth_unknown' ? DEPTH_UNKNOWN_NOTICE : null);
     // A17: an orchestrated turn keeps its request, because every worker contract downstream is a paraphrase of it and
     // the worker is told the user's own words come first. Stored whole or not at all -- never truncated into a
     // half-specification that reads as complete.
-    const carriedRequest = Buffer.byteLength(prompt, 'utf8') <= REQUEST_MAX_BYTES ? prompt : null;
+    const carriedRequest = Buffer.byteLength(dispatchRequest, 'utf8') <= REQUEST_MAX_BYTES ? dispatchRequest : null;
     const executed = requiredAdmission ? selectedExecution : resolveAdmittedShape(config.admittedShape, admissionAnswers);
     if (executed === null) return emitContext('UserPromptSubmit', renderDirectGuidance(mode), 'admission_shape_unknown');
     let stale = false;

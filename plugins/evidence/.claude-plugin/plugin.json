@@ -1,6 +1,6 @@
 {
   "name": "jev-gate-evidence",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "One read-only MCP tool, jev_evidence: exact source windows from the session's Git worktree (or the project JEV_EVIDENCE_CONFIG names), paged, with exact read-back; with a TypeSafe key, Jev judges a page and folds clearly unrelated bodies. Needs Node 22.",
   "author": {
     "name": "MongLong0214",

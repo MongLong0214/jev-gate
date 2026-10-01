@@ -290,6 +290,11 @@ const checkEnv = (mode: Mode | null): void => {
   else if (fork === '0' || bg === '1') say('ok', `launch profile: fork=${fork ?? 'unset'}, disable_background=${bg ?? 'unset'} (an Agent call can run in the foreground)`);
   else say('info', `launch profile not set (fork=${fork ?? 'unset'}, disable_background=${bg ?? 'unset'}): interactive sessions default to fork mode, where Agent calls omit run_in_background and V4 preserves them. Start with CLAUDE_CODE_FORK_SUBAGENT=0 CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`);
   if (env['CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS'] === '1') say('info', 'agent teams enabled: a named Agent call becomes a teammate; the coordinator guidance asks for no teammate name');
+  // #117: Router, Compact and Output write their decisions to the host debug log, which the host keeps only when
+  // this variable (or `--debug`) is set; without it the dashboard's Router/Compact/Output cards can never fill.
+  const debugDir = launch('CLAUDE_CODE_DEBUG_LOGS_DIR');
+  if (debugDir) say('ok', `CLAUDE_CODE_DEBUG_LOGS_DIR=${debugDir}: Router/Compact/Output decisions are recorded there for the dashboard`);
+  else say('warn', 'CLAUDE_CODE_DEBUG_LOGS_DIR not set (shell and settings env): Router/Compact/Output recording cannot be confirmed here. If you start Claude with --debug, use its actual debug directory; otherwise set the directory in settings env and restart the host');
   say(env['TYPESAFE_API_KEY'] ? 'ok' : 'warn', env['TYPESAFE_API_KEY'] ? 'TYPESAFE_API_KEY is set (value not shown)' : 'TYPESAFE_API_KEY not set: auto mode preserves every eligible call, and lean reads no source and sends nothing (key_missing)');
   if (existsSync(join(process.cwd(), '.env'))) say('info', '.env in cwd is NOT auto-loaded by the hook; export the variable in the shell that starts Claude Code');
 };

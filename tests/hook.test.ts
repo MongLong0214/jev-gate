@@ -388,6 +388,58 @@ describe('Gate A admission', () => {
     expect(state(env).current.shape).toBe(shape);
   });
 
+  it('re-asks Gate A once with the earlier user turns when a follow-up reads as needs_context (#115)', async () => {
+    const env = makeEnv();
+    const transcript = join(tmp, `transcript-followup-${(transcriptSeq += 1)}.jsonl`);
+    writeFileSync(
+      transcript,
+      [
+        JSON.stringify({ type: 'user', message: { role: 'user', content: 'Run the download e2e in the local browser, auto ON and OFF, wait for SUCCESS and check the zip.' } }),
+        JSON.stringify({ type: 'assistant', message: { usage: { cache_read_input_tokens: 405_000, cache_creation_input_tokens: 600, input_tokens: 400 } } }),
+        '',
+      ].join('\n'),
+    );
+    const inner = fakeJev({ execution: 'orchestrated' });
+    const seen: string[] = [];
+    const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)) as { state: { request: string } };
+      seen.push(body.state.request);
+      const res = await (inner as unknown as typeof fetch)(url, init);
+      if (seen.length > 1) return res;
+      // The bare follow-up reads as needs_context; only the re-ask with the earlier turn attached reads self_contained.
+      const json = (await res.json()) as { answers: Record<string, unknown> };
+      json.answers['task_context'] = { type: 'choice', choice: 'needs_context', probabilities: { self_contained: 0.05, needs_context: 0.9, unclear: 0.05 }, confidence: 0.9 };
+      return new Response(JSON.stringify(json), { status: 200 });
+    });
+    const r = await run(env, promptEvent({ transcript_path: transcript, prompt: 'e2e 해봐' }), fetchImpl);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(seen[0]).toBe('e2e 해봐');
+    expect(seen[1]).toContain('Earlier requests from this session');
+    expect(seen[1]).toContain('Run the download e2e');
+    expect(seen[1]).toMatch(/Current request:\ne2e 해봐$/);
+    expect(state(env).current.shape).toBe('orchestrated');
+    expect(state(env).current.request).toContain('Run the download e2e');
+    expect(state(env).current.request).toContain('Current request:\ne2e 해봐');
+    const dispatched = await run(env, plannerPre(), fakeJev());
+    expect(dispatched.kind).toBe('patch');
+    if (dispatched.kind === 'patch') expect(JSON.parse(dispatched.stdout).hookSpecificOutput.updatedInput.prompt).toContain('Run the download e2e');
+  });
+
+  it('stays direct as admission_needs_context when the re-ask with earlier turns still says so', async () => {
+    const env = makeEnv();
+    const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
+      const res = await (fakeJev({ execution: 'orchestrated' }) as unknown as typeof fetch)(url, init);
+      const json = (await res.json()) as { answers: Record<string, unknown> };
+      json.answers['task_context'] = { type: 'choice', choice: 'needs_context', probabilities: { self_contained: 0.05, needs_context: 0.9, unclear: 0.05 }, confidence: 0.9 };
+      return new Response(JSON.stringify(json), { status: 200 });
+    });
+    // DEEP_TRANSCRIPT holds one earlier user turn, so the re-ask happens exactly once; a second needs_context is final.
+    const r = await run(env, promptEvent({ prompt: 'e2e 해봐' }), fetchImpl);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(r.code).toBe('admission_needs_context');
+    expect(state(env).current.shape).toBe('direct');
+  });
+
   it('sends no request at all when the session is not yet deep enough to be worth delegating', async () => {
     const dir = join(tmp, 'trace-shallow');
     const env = makeEnv({ JEV_GATE_TRACE_DIR: dir });
@@ -478,6 +530,10 @@ describe('Gate A admission', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(r.code).toBe('depth_unknown');
     expect(state(env).current.shape).toBe('direct');
+    // #114: the reason reaches the user as a systemMessage, and only the user -- the model context is unchanged.
+    const body = JSON.parse(r.stdout as string) as Record<string, unknown>;
+    expect(String(body['systemMessage'])).toContain('depth_unknown');
+    expect(JSON.stringify(body['hookSpecificOutput'])).not.toContain('depth_unknown');
   });
 
   it('carries the depth into the record of an admitted job, so a bench case can prove it primed the session', async () => {
