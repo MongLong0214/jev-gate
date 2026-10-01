@@ -14,7 +14,7 @@ import { startCodexSession } from '../../src/codex/launch.js';
 const required = process.env['JEV_CODEX_E2E'] === '1';
 const root = join(__dirname, '../..');
 const tmp = mkdtempSync(join(tmpdir(), 'jev-codex-runtime-'));
-const runtimeEnv = { ...process.env, XDG_CONFIG_HOME: join(tmp, 'config'), JEV_GATE_ONBOARDING: '0', CODEX_HOME: join(tmp, 'codex home') };
+const runtimeEnv = { ...process.env, HOME: join(tmp, 'home'), XDG_CONFIG_HOME: join(tmp, 'config'), XDG_STATE_HOME: join(tmp, 'state'), JEV_GATE_ONBOARDING: '0', JEV_DASHBOARD_NO_OPEN: '1', CODEX_HOME: join(tmp, 'codex home') };
 const plugin = join(tmp, 'plugin with spaces');
 const workspace = join(tmp, 'workspace');
 const market = `jev-test-${Date.now()}`;
@@ -55,7 +55,8 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
     const mcpFile = join(stagedPlugin, '.mcp.json');
     const mcp = JSON.parse(readFileSync(mcpFile, 'utf8')) as { mcpServers: Record<string, unknown> };
     mcp.mcpServers['jev_runtime_fixture'] = mcp.mcpServers['jev_gate_evidence'];
-    (mcp.mcpServers['jev_runtime_fixture'] as Rec)['env'] = { JEV_CODEX_AUTO_CONNECT: '0' };
+    (mcp.mcpServers['jev_runtime_fixture'] as Rec)['env'] = { HOME: runtimeEnv.HOME, XDG_CONFIG_HOME: runtimeEnv.XDG_CONFIG_HOME,
+      XDG_STATE_HOME: runtimeEnv.XDG_STATE_HOME, JEV_CODEX_AUTO_CONNECT: '0', JEV_GATE_ONBOARDING: '0', JEV_DASHBOARD_NO_OPEN: '1' };
     delete mcp.mcpServers['jev_gate_evidence'];
     writeFileSync(mcpFile, JSON.stringify(mcp));
     const built = spawnSync(process.execPath, [join(root, 'scripts/build-codex.mjs'), join(stagedPlugin, 'dist')], { env: runtimeEnv, encoding: 'utf8' });
@@ -322,7 +323,7 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
     ];
     const args = ['--no-daemon', ...(trust ? ['--dangerously-bypass-hook-trust'] : []), 'exec', '--ignore-rules', '--skip-git-repo-check', '--ephemeral', '--json', '-C', workspace, ...config.flatMap(c => ['-c', c]), 'Run the local fixture tools, then finish.'];
     let output = '';
-    const child = spawn('codex', args, { cwd: workspace, env: { HOME: process.env['HOME'] ?? '', XDG_CONFIG_HOME: runtimeEnv.XDG_CONFIG_HOME, JEV_GATE_ONBOARDING: '0', CODEX_HOME: runtimeEnv.CODEX_HOME, PATH: `${join(workspace, '.bin')}:${process.env['PATH'] ?? ''}`, JEV_CODEX_AUTO_CONNECT: '0', JEV_CODEX_TRACE_DIR: trace, ...(scenario === 'missing-workspace' ? {} : { JEV_CODEX_WORKSPACE: workspace }), JEV_CODEX_ENABLED: scenario === 'hooks-disabled' ? '0' : '1', JEV_CODEX_OUTPUT: scenario === 'disabled' ? 'off' : 'on', CLAUDE_PROJECT_DIR: '/wrong-workspace', PWD: '/wrong-workspace' } });
+    const child = spawn('codex', args, { cwd: workspace, env: { HOME: runtimeEnv.HOME, XDG_CONFIG_HOME: runtimeEnv.XDG_CONFIG_HOME, XDG_STATE_HOME: runtimeEnv.XDG_STATE_HOME, JEV_GATE_ONBOARDING: '0', JEV_DASHBOARD_NO_OPEN: '1', CODEX_HOME: runtimeEnv.CODEX_HOME, PATH: `${join(workspace, '.bin')}:${process.env['PATH'] ?? ''}`, JEV_CODEX_AUTO_CONNECT: '0', JEV_CODEX_TRACE_DIR: trace, ...(scenario === 'missing-workspace' ? {} : { JEV_CODEX_WORKSPACE: workspace }), JEV_CODEX_ENABLED: scenario === 'hooks-disabled' ? '0' : '1', JEV_CODEX_OUTPUT: scenario === 'disabled' ? 'off' : 'on', CLAUDE_PROJECT_DIR: '/wrong-workspace', PWD: '/wrong-workspace' } });
     child.stdin.end(); child.stdout.on('data', b => { output += String(b); }); child.stderr.on('data', b => { output += String(b); });
     const timer = setTimeout(() => child.kill('SIGTERM'), 40_000);
     try {

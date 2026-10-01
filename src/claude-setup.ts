@@ -33,6 +33,9 @@ export const prepareClaude = (env: Env): ClaudeSetup => {
   let fd: number | undefined;
   try {
     const dir = claudeConfigDir(env);
+    const traces = claudeTraceDir(env);
+    mkdirSync(traces, { recursive: true, mode: 0o700 });
+    if (lstatSync(traces).isSymbolicLink() || !lstatSync(traces).isDirectory()) throw new Error('trace directory');
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     if (lstatSync(dir).isSymbolicLink()) throw new Error('symlink');
     const settings = join(dir, 'settings.json');

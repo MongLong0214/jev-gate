@@ -8,11 +8,37 @@ const base = { written_at: at, session_id: 's1', prompt_id: 'p1', mode: 'auto', 
 const row = (component: DebugRecord['component'], rec: Record<string, unknown>, time = at): DebugRecord => ({ at: time, component, rec });
 
 describe('operations display model', () => {
+  it('preserves native variant IDs and the Router identity confirmation without reclassifying dated aliases', () => {
+    const view = buildOperations([], [
+      row('router', { event: 'root_result', turn: 'variant', requested: 'claude-opus-5-5[1m]', observed: 'claude-opus-5-5[1m]', confirmation: 'confirmed' }),
+      row('router', { event: 'spawn_result', tool_use_id: 'dated', requested: 'claude-haiku-4-5', observed: 'claude-haiku-4-5-20251001', confirmation: 'confirmed' }),
+      row('router', { event: 'root_result', turn: 'mismatch', requested: 'claude-opus-5-5[1m]', observed: 'claude-opus-5-5', confirmation: 'mismatch' }),
+    ], new Date(later), { trace: false, debug: true });
+    expect(view.feed.find(s => s.model?.selected === 'claude-haiku-4-5')?.model?.status).toBe('confirmed');
+    expect(view.feed.filter(s => s.model?.selected === 'claude-opus-5-5[1m]').map(s => s.model?.status).sort()).toEqual(['confirmed', 'mismatch']);
+  });
+  it('reports a failed Jev Router assessment separately from preserving native execution', () => {
+    const view = buildOperations([{ ...base, host: 'codex', phase: 'codex_router_result', attempted: true, ok: false, reason: 'timeout', http: { code: 'timeout', duration_ms: 500 } }], [], new Date(later), { trace: true, debug: false });
+    expect(view.runs[0]?.state).toBe('attention');
+    expect(view.feed.find(s => s.lane === 'jev')?.state).toBe('error');
+    const claude = buildOperations([], [row('router', { event: 'root', turn: 'failed', sent: true, assessment: 'timeout' })], new Date(later), { trace: false, debug: true });
+    expect(claude.runs[0]?.state).toBe('attention');
+    const gate = buildOperations([{ ...base, phase: 'admission_result', attempted: true, http: { code: 'deadline', duration_ms: 500 }, decision: { shape: 'direct' } }], [], new Date(later), { trace: true, debug: false });
+    expect(gate.feed.find(s => s.lane === 'jev')?.state).toBe('error');
+  });
   it('does not present a direct turn ending or a planner dispatch as observed worker execution', () => {
     const view = buildOperations([{ ...base, phase: 'stop', outcome: 'completed' }, { ...base, phase: 'dispatch', role: 'planner' }], [], new Date(later), { trace: true, debug: false, host: 'codex' });
     expect(view.features.find(f => f.id === 'workers')).toMatchObject({ count: 0, state: 'waiting' });
     expect(view.features.find(f => f.id === 'planning')).toMatchObject({ count: 1, state: 'observed' });
     expect(view.feed.some(s => s.title === '턴 종료' && s.lifecycle === true)).toBe(true);
+  });
+  it('exposes the applied admission path even when a Jev result or a local fallback owns it', () => {
+    const view = buildOperations([
+      { ...base, phase: 'admission_result', attempted: true, decision: { shape: 'direct' } },
+      { ...base, prompt_id: 'p2', request_id: 'second', phase: 'admission_result', attempted: false, decision: { shape: 'orchestrated' } },
+      { ...base, prompt_id: 'p3', request_id: 'third', phase: 'admission_result', decision: { shape: 'abstain' } },
+    ], [], new Date(later), { trace: true, debug: false });
+    expect(view.feed.map(s => s.executionPath).filter(Boolean).sort()).toEqual(['direct', 'orchestrated']);
   });
   it('shows every installed runtime feature and keeps Jev, policy and host facts separate', () => {
     const records = [
@@ -58,7 +84,7 @@ describe('operations display model', () => {
     const records = [{ ...base, phase: 'admission_intent', request_id: 'lost' }];
     const view = buildOperations(records, [], new Date('2026-09-29T06:01:00.000Z'), { trace: true, debug: false });
     expect(view.requests).toBe(1);
-    expect(view.runs[0]?.state).toBe('attention');
+    expect(view.runs[0]?.state).toBe('unconfirmed');
     expect(view.runs[0]?.steps[0]?.state).toBe('unconfirmed');
     expect(view.features.find((f) => f.id === 'router')?.state).toBe('unavailable');
     expect(JSON.stringify(view)).not.toContain('입력 0');
@@ -68,6 +94,32 @@ describe('operations display model', () => {
     const records = [{ ...base, phase: 'admission_result', request_id: 'old', attempted: true, decision: { shape: 'direct' } }];
     const view = buildOperations(records, [], new Date(at), { trace: true, debug: true });
     expect(view.requests).toBe(1);
+  });
+
+  it('shows actual model mismatch even while another step awaits a response', () => {
+    const view = buildOperations([
+      { ...base, phase: 'admission_intent', request_id: 'pending' },
+      { ...base, phase: 'post', requested_model: 'opus', resolved_model: 'claude-sonnet-5' },
+    ], [], new Date(later), { trace: true, debug: false });
+    expect(view.runs[0]?.state).toBe('attention');
+    expect(view.feed.find(s => s.model)?.state).toBe('error');
+  });
+
+  it('uses root_result applied.model as the selected model and keeps missing response evidence unknown', () => {
+    const debug = [row('router', { event: 'root_result', turn: 'r', applied: { model: 'sonnet', effort: 'low' }, observed: 'claude-sonnet-5' })];
+    const view = buildOperations([], debug, new Date(later), { trace: false, debug: true });
+    expect(view.feed[0]?.model).toMatchObject({ selected: 'sonnet', observed: 'claude-sonnet-5', status: 'confirmed', selectedEffort: 'low' });
+  });
+
+  it('keeps a Jev judgment visible after a busy native loop and correlates the known turn', () => {
+    const records: Array<Record<string, unknown>> = [
+      { ...base, host: 'codex', phase: 'admission_result', request_id: 'a', attempted: true, decision: { shape: 'direct' } },
+      ...Array.from({ length: 200 }, (_, i) => ({ ...base, written_at: later, host: 'codex', phase: 'codex_event', event: 'PostToolUse', tool_use_id: `c${i}`, invocation_id: `i${i}` })),
+    ];
+    const view = buildOperations(records, [], new Date(later), { trace: true, debug: false });
+    expect(view.runs).toHaveLength(1);
+    expect(view.runs[0]?.steps).toHaveLength(202);
+    expect(view.feed.some(s => s.lane === 'jev')).toBe(true);
   });
 
   it('separates measured Jev response, typed answer and code policy without treating a guard denial as an error', () => {

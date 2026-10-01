@@ -2,7 +2,7 @@
 
 Automatic Gate, Lean, Router and Compact connect to **ordinary native Codex** after the plugin starts. The plugin supplies hooks, Evidence MCP, Output folding and an authenticated local connection. Your login, permissions, terminal and official execution engine stay in Codex.
 
-Requires **Node 22.15+**. Automatic connection was tested with **Codex CLI 0.159.2**. The optional managed terminal connection was also tested on 0.158.0. An already open session retains its original provider until a new session loads the automatic settings. Local Codex app/IDE sessions must use this Codex home and support the same native plugin, hook and provider APIs; a remote managed coding session is a separate host.
+Requires **Node 22.15+**. Automatic connection was tested with **Codex CLI 0.159.3**. The optional managed terminal connection was also tested on 0.158.0. An already open session retains its original provider until a new session loads the automatic settings. Local Codex app/IDE sessions must use this Codex home and support the same native plugin, hook and provider APIs; a remote managed coding session is a separate host.
 
 ## Install
 
@@ -114,7 +114,7 @@ Native ChatGPT requests follow the official App Server's workspace backend and r
 | `JEV_CODEX_ENABLED=0` | Disable hooks and connected automatic policies; the separate Evidence MCP remains available |
 | `JEV_CODEX_OUTPUT=off` | Preserve original tool output; lifecycle recording continues |
 | `JEV_CODEX_TRACE_DIR` | Absolute recording directory; overrides `JEV_GATE_TRACE_DIR` |
-| `JEV_DASHBOARD_NO_OPEN=1` | Print dashboard URL without opening a browser |
+| `JEV_DASHBOARD_NO_OPEN=1` | Suppress the automatic dashboard for unattended runs; manual dashboard prints its URL without opening a browser |
 | `JEV_CODEX_UPSTREAM` | Owner-selected OpenAI-compatible Responses base URL; HTTPS or loopback HTTP only |
 
 The optional managed terminal supports native model, sandbox, approval and display options, and rejects options it cannot faithfully forward. Automatic connection preserves a pre-existing custom provider; use an explicit compatible upstream only when you intend it.
@@ -129,12 +129,9 @@ Explicit scope changes require MCP restart. Desktop apps do not need to inherit 
 
 ## Live dashboard
 
-```sh
-node <plugin>/dist/cli.mjs doctor
-node <plugin>/dist/cli.mjs dashboard --port 4731
-```
+The installed plugin opens the shared dashboard automatically, with recording on. Claude Code and Codex appear in one view with host filters; no separate dashboard command or `--debug` flag is required. The execution circuit, real response chart, latest judgment panel, execution timeline and model receipts distinguish selection from observed application. Korean/English and light/dark controls are at the top right.
 
-The local browser opens at `http://127.0.0.1:4731`. Keep this terminal running and continue working in ordinary Codex. All ten feature stages are visible in four pipeline lanes; single-worker and planned delegation are separate paths. Select a stage or execution to see typed Jev judgments, measured latency, policy selection, worker checks and observed application. Router selection and actual model request are separate records; Compact generation and installation are separate records. Live events stream without reloading. Korean/English and light/dark controls are at the top right.
+The settings panel controls recording and automatic opening independently. Both default to on. CLI equivalents are `node <plugin>/dist/cli.mjs recording on|off|status` and `node <plugin>/dist/cli.mjs dashboard on|off|status`. A manual development view remains available with `dashboard --port 4733`. Its terminal must stay running; the automatic dashboard manages its own lifecycle.
 
 Records default to `$XDG_STATE_HOME/jev-gate/codex/traces` or `~/.local/state/jev-gate/codex/traces`. Private atomic metadata records contain no raw prompts, source, tool output, credentials or transcript paths. Missing records mean unknown. No simulated activity or inferred token savings is shown. Old records are not automatically deleted.
 

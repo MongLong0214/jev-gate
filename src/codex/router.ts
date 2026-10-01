@@ -24,9 +24,17 @@ export const routeCodex = async (args: {
   catalog: CodexModel[]; config: CodexPolicyConfig; env: Env; trace?: TraceWriter; signal?: AbortSignal; fetchImpl?: typeof fetch;
 }): Promise<{ model?: string; effort?: string }> => {
   const { config, env, signal, catalog } = args;
-  if (env['JEV_CODEX_ENABLED'] === '0' || !config.router.enabled || !env['TYPESAFE_API_KEY'] || signal?.aborted) return {};
+  const skip = (reason: string): {} => {
+    args.trace?.write('codex_router_skipped', { host: 'codex', mode: config.gate.mode, session_id: args.session, prompt_id: args.prompt,
+      known_not_sent: true, attempted: false, reason });
+    return {};
+  };
+  if (env['JEV_CODEX_ENABLED'] === '0') return skip('disabled');
+  if (!config.router.enabled) return skip('router_disabled');
+  if (!env['TYPESAFE_API_KEY']) return skip('key_missing');
+  if (signal?.aborted) return skip('aborted');
   const base = catalog.find(m => m.model === args.model);
-  if (!base) return {};
+  if (!base) return skip('model_catalog_missing');
   const allowed = base.supportedReasoningEfforts.map(e => e.reasoningEffort);
   const from = args.effort ?? base.defaultReasoningEffort ?? null;
   const effortEnabled = config.router.effort && from !== null && effortOrder.some(e => e === from) && allowed.includes(from);
@@ -37,11 +45,12 @@ export const routeCodex = async (args: {
   const tiers: ModelTier[] | null = config.router.model && new Set(ids).size > 1 && ids.includes(args.model) && ids.every(id => catalog.some(m => m.model === id)) ? [...TIER_ORDER] : null;
   const dims = { tiers, efforts: mutableEfforts ? EFFORT_LEVEL_TARGETS : null };
   const questions = buildQuestions(dims);
-  if (!questions) return {};
+  if (!questions) return skip('nothing_to_change');
   if (mutableEfforts && questions.effort) questions.effort = { ...questions.effort, criteria: mutableEfforts.map(e => EFFORT_LEVELS[e]) };
   const requestId = randomUUID();
   const facts = { host: 'codex', mode: config.gate.mode, component: 'router', session_id: args.session, prompt_id: args.prompt, request_id: requestId };
-  if (!args.trace?.write('codex_router_intent', { ...facts, asked: Object.keys(questions), attempted: true }).ok) return {};
+  const intent = args.trace?.write('codex_router_intent', { ...facts, asked: Object.keys(questions), attempted: true });
+  if (intent && !intent.ok && intent.error !== 'recording_disabled') return {};
   const out = await callJev({ model: config.gate.jevModel, state: buildState({ scope: 'root', text: args.task, ...(args.previousReply ? { previousReply: args.previousReply } : {}) }), questions }, {
     apiKey: env['TYPESAFE_API_KEY'], deadlineMs: config.router.timeoutMs, ...(signal ? { signal } : {}), ...(args.fetchImpl ? { fetchImpl: args.fetchImpl } : {}),
   });
@@ -51,7 +60,9 @@ export const routeCodex = async (args: {
   if (out.ok && out.response.model === config.gate.jevModel && !signal?.aborted) {
     const answers = validateAnswers(out.response.answers, questions);
     for (const [key, answer] of Object.entries(answers)) {
-      if (answer) safeAnswers[key] = 'levels' in answer ? { type: 'score', probabilities: Object.fromEntries((answer.levels as readonly number[]).map((v, i) => [i, v])) } : answer;
+      // Persist the exact offered labels: Codex effort levels can vary with the native model catalog.
+      const labels = key === 'tier' ? tiers : key === 'effort' ? mutableEfforts : null;
+      if (answer) safeAnswers[key] = 'levels' in answer ? { type: 'score', probabilities: Object.fromEntries((answer.levels as readonly number[]).map((v, i) => [labels?.[i] ?? String(i), v])) } : answer;
     }
     const opts = { scope: 'root' as const, tiers: models, minUpgradeConfidence: config.router.minUpgradeConfidence, minDowngradeConfidence: config.router.minDowngradeConfidence };
     const choose = (key: 'tier' | 'effort', order: readonly string[], current: number, labels: readonly string[] = order): number | null => {

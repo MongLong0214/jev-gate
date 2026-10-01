@@ -12,6 +12,17 @@ const token = (v: unknown): string | null => typeof v === 'string' && /^[A-Za-z0
 const EVENTS = new Set(['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'SubagentStart', 'SubagentStop', 'PreCompact', 'PostCompact', 'Stop', 'Interrupt']);
 const LIMIT = 2 * 1024 * 1024;
 
+/** Only explicit structured status or the anchored native exec envelope; never infer from command output. */
+export const toolOutcome = (value: unknown): { exit_code: number | null; is_error: boolean } => {
+  const response = record(value);
+  let code = Number.isSafeInteger(response?.['exit_code']) ? response!['exit_code'] as number : null;
+  if (typeof value === 'string') {
+    const match = /^Chunk ID: [A-Za-z0-9_-]+\nWall time: [\d.]+ seconds\nProcess exited with code (-?\d+)\n(?:Final output:|Output:)\n/.exec(value);
+    if (match && Number.isSafeInteger(Number(match[1]))) code = Number(match[1]);
+  }
+  return { exit_code: code, is_error: response?.['isError'] === true || response?.['is_error'] === true || code !== null && code !== 0 };
+};
+
 export interface CodexHookDeps {
   stdin: AsyncIterable<string | Uint8Array>;
   env: Readonly<Record<string, string | undefined>>;
@@ -24,25 +35,25 @@ export const handleCodexEvent = (input: Rec, env: CodexHookDeps['env'], trace?: 
   const session = token(input['session_id']);
   if (!event || !EVENTS.has(event) || !session) return {};
   const tool = token(input['tool_name']);
-  const response = record(input['tool_response']);
   const base = {
     host: 'codex', mode: 'native', managed: !!env['JEV_CODEX_BRIDGE_URL'], event, session_id: session,
     prompt_id: token(input['turn_id']), tool_use_id: token(input['tool_use_id']),
     tool_name: tool, agent_id: token(input['agent_id']), agent_type: token(input['agent_type']),
     // The hook's model is the emitting session's model. It is never promoted to a spawned child's model.
     model: token(input['model']),
-    exit_code: Number.isSafeInteger(response?.['exit_code']) ? response!['exit_code'] : null,
+    ...toolOutcome(input['tool_response']),
     interrupted: event === 'Interrupt',
   };
-  if (!trace?.write('codex_event', base).ok) return {};
+  const eventRecord = trace?.write('codex_event', base);
+  if (!eventRecord || !eventRecord.ok && eventRecord.error !== 'recording_disabled') return {};
   if (event === 'PostToolUse' && tool === 'Bash' && env['JEV_CODEX_OUTPUT'] !== 'off') {
     const folded = foldCodexOutput(record(input['tool_input'])?.['command'], input['tool_response']);
     // Unrelated commands do not create a misleading Output run.
     if (!folded.applied && folded.reason === 'command') return {};
-    const recorded = trace.write('codex_output', { ...base, applied: folded.applied, ...(folded.applied
+    const recorded = trace!.write('codex_output', { ...base, applied: folded.applied, ...(folded.applied
       ? { before_bytes: folded.before, after_bytes: folded.after, runs: folded.runs }
       : { reason: folded.reason }) });
-    if (!recorded.ok) return {};
+    if (!recorded.ok && recorded.error !== 'recording_disabled') return {};
     // Native PostToolUse replaces the completed tool result with stopReason and continues the model.
     if (folded.applied) return { continue: false, stopReason: folded.text };
   }
@@ -65,7 +76,7 @@ export const runCodexHook = async (deps: CodexHookDeps): Promise<Rec> => {
     }
     const input = record(JSON.parse(Buffer.concat(chunks).toString('utf8')));
     if (!input) return {};
-    const opened = (deps.openTrace ?? openTraceDir)(codexTraceDir(deps.env));
+    const opened = (deps.openTrace ?? openTraceDir)(codexTraceDir(deps.env), deps.env);
     const recorded = handleCodexEvent(input, deps.env, opened.ok ? opened.writer : undefined);
     const bridge = deps.env['JEV_CODEX_BRIDGE_URL'];
     const secret = deps.env['JEV_CODEX_BRIDGE_TOKEN'];

@@ -1,9 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { lstatSync, mkdirSync, openSync, closeSync, writeSync, renameSync, fsyncSync } from 'node:fs';
 import { join } from 'node:path';
+import type { Env } from './config.js';
+import { recordingStatus } from './recording.js';
 
 /**
- * Opt-in local recorder (#14 §2, A13). Writes one private file per phase with random names, atomically (tmp + rename).
+ * Local metadata recorder, enabled by default with a live owner switch. Writes one private file per phase with
+ * random names, atomically (tmp + rename).
  * Records carry their own join keys (session_id, caller, tool_use_id); filenames are never identities.
  * Refuses a symlinked trace directory. Never receives keys, headers or environment dumps: callers whitelist fields.
  * Stored traces from earlier revisions also carry `result_intent`, `result_result`, `scope_intent`, `scope_result`
@@ -11,8 +14,12 @@ import { join } from 'node:path';
  * historical directories still have to handle them.
  */
 export type TracePhase =
+  | 'mod_router'
+  | 'mod_compact'
+  | 'mod_output'
   | 'codex_router_intent'
   | 'codex_router_result'
+  | 'codex_router_skipped'
   | 'codex_route_applied'
   | 'codex_compact'
   | 'codex_event'
@@ -60,7 +67,7 @@ const isSymlink = (p: string): boolean => {
   }
 };
 
-export const openTraceDir = (dir: string): { ok: true; writer: TraceWriter } | { ok: false; error: string } => {
+export const openTraceDir = (dir: string, env: Env = process.env): { ok: true; writer: TraceWriter } | { ok: false; error: string } => {
   try {
     if (isSymlink(dir)) return { ok: false, error: 'trace directory is a symlink' };
     mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -70,6 +77,7 @@ export const openTraceDir = (dir: string): { ok: true; writer: TraceWriter } | {
   }
   const writer: TraceWriter = {
     write(phase, body) {
+      if (!recordingStatus(env).enabled) return { ok: false, error: 'recording_disabled' };
       const id = randomUUID();
       const finalPath = join(dir, `${phase}-${id}.json`);
       const tmpPath = join(dir, `.${phase}-${id}.tmp`);

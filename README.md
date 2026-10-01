@@ -17,9 +17,9 @@ The marketplace installs [the latest release](https://github.com/MongLong0214/je
 
 ## Codex native plugin
 
-The [native Codex plugin](plugins/codex/README.md) connects **Gate A/B, planning, contract acceptance, root guard, Lean, Router and Compact** to ordinary native Codex through its local connection, alongside Evidence, Output and recording. Owned workers use the official Codex App Server; native login and permissions remain authoritative. Automatic connection was tested with Codex CLI 0.159.2 and Node 22.15+.
+The [native Codex plugin](plugins/codex/README.md) connects **Gate A/B, planning, contract acceptance, root guard, Lean, Router and Compact** to ordinary native Codex through its local connection, alongside Evidence, Output and recording. Owned workers use the official Codex App Server; native login and permissions remain authoritative. Automatic connection was tested with Codex CLI 0.159.3 and Node 22.15+.
 
-For an installation without a build step, download **`jev-gate-codex-0.7.1.zip`** from the [v0.7.1 release](https://github.com/MongLong0214/jev-gate/releases/tag/v0.7.1), extract it, and register the extracted directory:
+For an installation without a build step, download **`jev-gate-codex-0.8.1.zip`** from the [v0.8.1 release](https://github.com/MongLong0214/jev-gate/releases/tag/v0.8.1), extract it, and register the extracted directory:
 
 ```sh
 codex plugin marketplace add /absolute/path/to/extracted-plugin
@@ -39,18 +39,11 @@ Open ordinary **Codex** in your project. The installed plugin discovers the call
 
 When the installed plugin starts, it opens a local **Jev API key** screen if no key is available. Enter the key once; Claude Code and Codex share the same private local credential. No shell export or policy file is required. Existing `TYPESAFE_API_KEY` and the Claude plugin's key option remain supported.
 
-Codex owns login and hook trust: review/trust installed hooks in `/hooks` when the host requests it. Keep exactly one Jev Gate installation enabled in `/plugins`. Installation never forges a trust approval. A host already open during installation keeps its original model provider; start a fresh native host after the automatic connection is ready. Requires Node 22.15+; automatic connection was tested on Codex CLI 0.159.2. Build before installing a source checkout.
+Codex owns login and hook trust: review/trust installed hooks in `/hooks` when the host requests it. Keep exactly one Jev Gate installation enabled in `/plugins`. Installation never forges a trust approval. A host already open during installation keeps its original model provider; start a fresh native host after the automatic connection is ready. Requires Node 22.15+; automatic connection was tested on Codex CLI 0.159.3. Build before installing a source checkout.
 
-Use the absolute path of this checkout (or the installed Codex plugin) for diagnostics and the dashboard:
+The dashboard opens automatically when the installed plugin starts. Claude Code and Codex share one local browser dashboard, with host filters and private recording enabled by default. No dashboard terminal, port selection, trace directory or `--debug` flag is needed.
 
-```sh
-node /absolute/jev-gate/plugins/codex/dist/cli.mjs doctor
-node /absolute/jev-gate/plugins/codex/dist/cli.mjs dashboard
-```
-
-The dashboard opens on **http://127.0.0.1:4731**. Choose another port with `--port 4733` if it is in use. Hooks and MCP record to the same private Codex trace directory by default. Korean/English and light/dark controls are in the top right.
-
-For an extracted release, use `/absolute/path/to/extracted-plugin/dist/cli.mjs` in those commands. Keep the dashboard terminal running while working in a separate Codex terminal.
+For diagnostics, run `node /absolute/jev-gate/plugins/codex/dist/cli.mjs doctor`. Manual `dashboard --port 4733` remains available for development or a second view.
 
 The Codex dashboard shows all ten feature stages and separates Jev selection from actual host application. With up to 16 isolated workers enabled by default, Jev chooses a single worker or a planner and dependency graph for independent outcomes. Ordinary native sessions use the automatic local connection for policies. The dashboard distinguishes a recorded policy decision from its observed application; an open session using its previous provider does not become connected retroactively.
 
@@ -83,30 +76,31 @@ Gate workers, planners, and the lean executor inherit the tools and connected MC
 
 The API key screen belongs to the existing MCP process and stops with it. In a headless environment its loopback URL is printed in MCP diagnostics. `JEV_GATE_NO_BROWSER=1` suppresses browser opening, and `JEV_GATE_ONBOARDING=0` disables automatic key entry for unattended runs. Neither is required for ordinary use.
 
-## See it work live · Claude Code
+## See it work live · Claude Code and Codex
 
-The dashboard runs on your machine and opens in your browser. Its four lanes show the **Gate** (admission, tier allocation, workers, optional planning, and root guard), the separate **Lean** handoff, the independent **Router / Compact / Output** hooks, and **Evidence** search. The main Gate path shows one worker; the planned branch adds a planner and returns each ready task to Gate B. Select any stage to read what it does, when it runs, whether it calls Jev, and the recorded outcome. The timeline separates the Jev request and response from the code decision and the host's execution. Korean/English and light/dark controls are in the top right.
+The installed plugin opens one shared local dashboard automatically. Its execution circuit shows Gate's direct, single-worker and planned branches, independent Lean handoff, Router / Compact / Output policies, and Evidence search. Select a stage or execution to inspect Jev judgments, measured response time, code policy, model application and host outcomes. The host filter lets you view Claude Code, Codex or both. Korean/English and light/dark controls are in the top right.
 
-Recording paths are prepared automatically: Gate/Evidence use `~/.local/state/jev-gate/claude/traces` (or `$XDG_STATE_HOME/jev-gate/claude/traces`), and the Function Hooks use the Claude config directory's `debug` folder. Explicit paths remain supported.
+Recording defaults to on and does **not** require `claude --debug`. Both hosts record private metadata under `~/.local/state/jev-gate/{claude,codex}/traces` (or `$XDG_STATE_HOME`). An existing explicit trace/debug path remains supported. The dashboard shows metadata only; it does not send requests to Jev or expose prompts, source bodies, tool output or API keys.
 
-1. **Run a request in Claude Code.** A feature appears as *observed* when that feature emits a record. A configured source with no event says *awaiting record*. A missing or unreadable source says *source unavailable*. Previously unrecorded activity cannot be reconstructed.
+The settings panel has independent switches for **execution recording** and **automatic dashboard opening**. Both default to on and apply to both hosts. Turning recording off leaves Jev features running. Turning automatic opening off stops the automatically managed server; a manually started view stays available. The same settings can be changed with either host's CLI:
 
-2. **Open the dashboard.** From a built checkout, run `node dist/cli.js dashboard`. For a marketplace install, find the current installed path with `claude plugin list --json` (`installPath` for `jev-gate@jev-gate`) and run:
+```sh
+node "<installPath>/dist/cli.js" dashboard on|off|status
+node "<installPath>/dist/cli.js" recording on|off|status
+# Codex packages use dist/cli.mjs.
+```
 
-   ```sh
-   node "<installPath>/dist/cli.js" dashboard
-   ```
+The dashboard preference is `~/.config/jev-gate/dashboard/config.json` (`$XDG_CONFIG_HOME` is supported): `{ "version": 1, "enabled": true }`. Recording has the same format at `~/.config/jev-gate/auth/recording.json`. Neither file is needed for ordinary use. Manual `dashboard --port 4733` is available for development.
 
-   On macOS the command opens `http://127.0.0.1:4731/` automatically; elsewhere, open the printed URL. Keep the terminal running and press Ctrl-C to stop. The page updates through a local event stream as records arrive. For a different port or record directories, use `dashboard --port 4732 --trace /path/to/jev-traces --debug /path/to/claude-debug` after `node dist/cli.js`. The page does not send requests to Jev or expose prompts, source bodies, or API keys.
+| Dashboard state | What it means |
+|---|---|
+| **Observed** | The feature emitted a record. Select it to inspect the outcome. |
+| **No execution record** | No event for this feature is available in the selected host/time range. |
+| **Source unavailable** | The recording directory could not be read. Run `doctor` to check local readiness. |
+| **Unconfirmed** | A response or actual model observation is missing; it is not counted as confirmed execution. |
+| **Model mismatch** | Selected and observed models differ. Both values are shown. |
 
-| Dashboard label | What it means | What to check |
-|---|---|---|
-| **Observed** | This feature emitted at least one record. | Open its stage and inspect the latest decision and host result. |
-| **Awaiting record** | The source is configured, but this feature has not emitted an event in the visible window. | Run a request that uses the feature; ordinary prompts do not exercise every feature. |
-| **Source unavailable** | A trace or debug directory is missing or unreadable. | Check the two paths in settings, restart Claude Code, and reopen the dashboard. |
-| **Unconfirmed** | An intent was recorded without a matching result. | Inspect the run timeline; do not treat an intent as a completed Jev call or worker action. |
-
-The latency strip uses measured Jev response times, not a simulated speed value. Missing usage is unknown rather than zero. A projected token saving in Gate A is a routing estimate, not measured savings. Compact and Output run locally without Jev. The dashboard shows what the available records prove, so a quiet feature is not necessarily disabled. See [recording details and limits](docs/advanced-usage.md#doctor-and-explain).
+Circuit lines explain possible paths. A moving light requires a new connected event in the same recorded execution. Charts use measured Jev response times; quiet screens stay quiet. Missing usage remains unknown. Compact and Output run locally without Jev, and packet size is not measured token savings. See [recording details and limits](docs/advanced-usage.md#doctor-and-explain).
 
 ## The five parts
 

@@ -43,7 +43,7 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
   const token = options.connection?.token ?? randomBytes(32).toString('hex');
   const marker = options.connection?.marker ?? `[jev-gate compact ${randomBytes(24).toString('hex')}] Produce a factual compaction summary of the preceding conversation.`;
   const config = loadCodexPolicy(options.env);
-  const trace = openTraceDir(codexTraceDir(options.env));
+  const trace = openTraceDir(codexTraceDir(options.env), options.env);
   let child: ChildProcessWithoutNullStreams | undefined;
   let rpc: CodexRpc | undefined; let policy: CodexPolicy | undefined; let client: WebSocket | undefined;
   const proxyHeaders = new Set(['connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade', 'host', 'content-length', 'x-jev-gate-session']);

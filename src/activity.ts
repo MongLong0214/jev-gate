@@ -265,6 +265,7 @@ const ROUTER_TITLE: Record<string, string> = {
   spawn: '라우터 · 스폰',
   spawn_stop: '라우터 · 스폰 유지',
   spawn_result: '라우터 · 스폰 결과',
+  child_result: '라우터 · 실제 서브에이전트 응답',
   late: '라우터 · 늦은 응답',
 };
 
@@ -385,7 +386,7 @@ const readRouter = (dir: string): { rows: Array<{ at: string; rec: Rec }>; all: 
 const NOTES = [
   '프롬프트 원문, API 키, 작업 파일은 읽지 않습니다.',
   '가격의 토큰 수는 게이트가 위임을 고를 때 쓴 계산이고, 측정된 절감이나 청구액이 아닙니다.',
-  'Evidence는 같은 JEV_GATE_TRACE_DIR을 받은 새 서버의 호출부터 기록됩니다. Compact·Output·Router는 호스트 디버그 로그를 사용합니다.',
+  'Evidence·Compact·Output·Router는 기본 로컬 기록을 사용합니다. 호스트 디버그 로그는 선택적으로 함께 읽습니다.',
 ];
 
 /** A result file is written after the HTTP call. Past this, an intent with no result is not still in flight. */
@@ -534,7 +535,7 @@ const buildLive = (records: Rec[], routerRows: Array<{ at: string; rec: Rec }>, 
   };
 };
 
-export const loadActivity = (opts: { traceDir: string | null; debugDir: string | null; env: Env; now?: Date; host?: Host }): ActivitySnapshot => {
+export const loadActivity = (opts: { traceDir: string | null; traceDirs?: readonly { host: Host; dir: string }[] | undefined; debugDir: string | null; env: Env; now?: Date; host?: Host }): ActivitySnapshot => {
   const notes = [...NOTES];
   const events: ActivityEvent[] = [];
   const gateRecords: Rec[] = [];
@@ -546,20 +547,27 @@ export const loadActivity = (opts: { traceDir: string | null; debugDir: string |
   let direct = 0;
   let orchestrated = 0;
   let routerChanges = 0;
-  const traceAvailable = readableDir(opts.traceDir);
-  const debugAvailable = readableDir(opts.debugDir);
+  const traceDirs = opts.traceDirs ?? (opts.traceDir ? [{ host: opts.host ?? 'claude', dir: opts.traceDir }] : []);
+  const traceAvailable = traceDirs.some(source => readableDir(source.dir));
+  const debugAvailable = readableDir(opts.debugDir) || traceAvailable;
+  const recordedMods: DebugRecord[] = [];
 
-  if (opts.traceDir === null) notes.push('게이트 추적 디렉터리가 없습니다. 최근 50건의 시도 여부만 liveness에 있습니다.');
-  else if (isSymlink(opts.traceDir)) notes.push('게이트 추적 디렉터리가 심볼릭 링크라 읽지 않습니다.');
-  else {
-    const read = readTraceRecords(opts.traceDir);
-    traceFiles = read.records.length;
-    unreadable = read.unreadable;
+  for (const source of traceDirs) {
+    if (isSymlink(source.dir)) { notes.push('추적 디렉터리가 심볼릭 링크라 읽지 않습니다.'); continue; }
+    const read = readTraceRecords(source.dir);
+    traceFiles += read.records.length;
+    unreadable += read.unreadable;
     if (read.unreadable > 0) notes.push(`추적 파일 ${read.unreadable}개는 읽지 못했습니다.`);
-    for (const r of read.records) {
+    for (const original of read.records) {
+      const r: Rec = { ...original, host: original['host'] ?? source.host };
       if (opts.host && (r['host'] === 'codex' ? 'codex' : 'claude') !== opts.host) continue;
       gateRecords.push(r);
       const phase = token(r['phase']);
+      if (phase && ['mod_router', 'mod_compact', 'mod_output', 'claude_router', 'claude_compact', 'claude_output'].includes(phase)) {
+        const { host: _host, session_id: _session, phase: _phase, version: _version, invocation_id: _id, written_at: _at, ...fields } = r;
+        recordedMods.push({ component: phase.replace(/^(mod|claude)_/, '') as DebugRecord['component'], at: token(r['written_at']) ?? String(r['written_at'] ?? ''), rec: { ...fields, session_id: r['session_id'] } });
+        continue;
+      }
       if (phase === 'admission_result') {
         if (r['attempted'] === true) jevCalls++;
         const shape = token(sub(r, 'decision')?.['shape']);
@@ -574,15 +582,23 @@ export const loadActivity = (opts: { traceDir: string | null; debugDir: string |
   if (opts.debugDir !== null && opts.host !== 'codex') {
     const router = readRouter(opts.debugDir);
     notes.push(...router.notes);
-    debugRows.push(...router.all);
-    for (const row of router.rows) {
-      routerRows.push(row);
-      if (row.rec['sent'] === true) jevCalls++;
-      if (routerChanged(row.rec)) routerChanges++;
-      const event = routerEvent(row.rec, row.at);
-      if (event) events.push(event);
+    // A native record and its optional debug mirror describe one event. Prefer the independent recorder.
+    const fingerprint = (component: string, r: Rec) => JSON.stringify([component, Object.entries(r).filter(([key]) => key !== 'session_id').sort(([a], [b]) => a.localeCompare(b))]);
+    const remaining = new Map<string, number>();
+    for (const row of recordedMods) { const key = fingerprint(row.component, row.rec); remaining.set(key, (remaining.get(key) ?? 0) + 1); }
+    for (const row of router.all) {
+      const key = fingerprint(row.component, row.rec); const matches = remaining.get(key) ?? 0;
+      if (matches > 0) remaining.set(key, matches - 1); else debugRows.push(row);
     }
-  } else if (opts.host !== 'codex') notes.push('라우터 디버그 디렉터리가 없습니다. 라우터 결정은 그 로그가 있을 때만 보입니다.');
+  }
+  debugRows.push(...recordedMods);
+  for (const row of debugRows.filter(row => row.component === 'router')) {
+    routerRows.push({ at: row.at, rec: row.rec });
+    if (row.rec['sent'] === true) jevCalls++;
+    if (routerChanged(row.rec)) routerChanges++;
+    const event = routerEvent(row.rec, row.at);
+    if (event) events.push(event);
+  }
 
   events.sort((a, b) => b.at.localeCompare(a.at));
   const now = opts.now ?? new Date();

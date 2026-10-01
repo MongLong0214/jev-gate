@@ -63,7 +63,7 @@ export class CodexPolicy {
     this.env = Object.fromEntries(Object.entries(env).filter(([k]) => !k.startsWith('CLAUDE_')));
     this.env['JEV_GATE_TRACE_DIR'] = codexTraceDir(env);
     this.env['JEV_GATE_STATE_DIR'] = join(stateRoot(env), 'codex');
-    const trace = openTraceDir(this.env['JEV_GATE_TRACE_DIR']);
+    const trace = openTraceDir(this.env['JEV_GATE_TRACE_DIR'], this.env);
     if (trace.ok) this.trace = trace.writer;
     rpc.onResponse = (r, m, p) => this.response(r, m, p);
     rpc.onClose = () => this.close();

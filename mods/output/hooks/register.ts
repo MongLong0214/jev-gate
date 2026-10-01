@@ -1,10 +1,25 @@
-import type { On, Register } from 'claude-code';
+import type { EngineInterface, On, Register } from 'claude-code';
 
 import type { OutputConfig } from './config.ts';
 
 let sequence = 0;
 import { resolveOutputConfig } from './config.ts';
 import { foldVitest, isVitestCommand, MAX_BYTES, MIN_SAVING, utf8Bytes, withNote } from './filter.ts';
+import { createRecorder } from './recording.ts';
+
+
+// The native validator follows $ only within this file; the shared recorder receives plain callbacks.
+const recorderOf = ($: EngineInterface) => createRecorder({
+  paths: async () => {
+    const [home, state, config, trace, session] = await Promise.all([
+      $.env.get('HOME'), $.env.get('XDG_STATE_HOME'), $.env.get('XDG_CONFIG_HOME'), $.env.get('JEV_GATE_TRACE_DIR'), $.session.id(),
+    ]);
+    return { home, state, config, trace, session };
+  },
+  stat: path => $.fs.stat(path), exists: path => $.fs.exists(path), read: path => $.fs.read(path),
+  write: (path, text) => $.fs.write(path, text), debug: line => $.ui.log(line, { to: 'debug' }),
+  wait: (ms, signal) => $.clock.sleep(ms, { signal }),
+});
 
 /** Bookkeeping never stands between the host and its own event. */
 const quietly = (f: () => void): void => {
@@ -40,9 +55,11 @@ export const registerOutput = (on: On, config: OutputConfig): void => {
 
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     if (!isVitestCommand(e.command)) return next(e);
+    const recorder = recorderOf($);
+    try {
     const runId = `${Date.now()}-${++sequence}`;
     const log = (fields: Record<string, unknown>): void =>
-      quietly(() => $.ui.log(`jev-output ${JSON.stringify({ event: 'output', run_id: runId, parser: 'vitest', ...fields })}`, { to: 'debug' }));
+      quietly(() => recorder.log(`jev-output ${JSON.stringify({ event: 'output', run_id: runId, parser: 'vitest', ...fields })}`));
     log({ stage: 'started' });
     const ran = await next(e).catch((error: unknown) => {
       log({ skipped: 'host_error' });
@@ -92,5 +109,6 @@ export const registerOutput = (on: On, config: OutputConfig): void => {
       log({ skipped: 'error' });
       return ran;
     }
+    } finally { await recorder.flush(); }
   });
 };
