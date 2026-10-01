@@ -1,0 +1,17 @@
+{
+  "_comment": "_prime lists every file explicitly (#134): a directory alone is read by some model/effort pairs and abandoned by others. Run with --model pinned (#133).",
+  "_prime": "아래 30개 파일을 전부 Read 도구로 읽고(디렉터리 목록 조회 불필요, 경로를 그대로 사용), 파일별 한 줄 요약만 출력해. 다른 도구는 쓰지 마.\napp/(routes)/(main)/[projectPk]/(data-transfer)/downloads/enroll/_shared/_apis/index.tsx\napp/(routes)/(main)/[projectPk]/(data-transfer)/downloads/enroll/_shared/_libs/analytical-validation-rules.ts\n... (one path per line, 30 in all)",
+  "_repo": "/path/to/your/repo",
+  "S": {
+    "prompt": "https://github.com/ORG/REPO/pull/1234 이거 리뷰해줘. PR 에 코멘트는 남기지 말고 결과만 보고해."
+  },
+  "M": {
+    "prompt": "https://github.com/ORG/REPO/pull/1235 리뷰 달린거 유효한거만 수정해줘. 지금 체크아웃된 워크트리에서만 작업하고 커밋·push·PR 은 하지 마.",
+    "base": "<commit>",
+    "check": "git diff --quiet && exit 1; pnpm exec jest 'data-transfer./downloads/' || pnpm exec jest 'data-transfer./downloads/'"
+  },
+  "L": {
+    "prompt": "기능 X 의 e2e 를 로컬 브라우저에서 끝까지 돌려. 코드는 수정하지 마.",
+    "resultPattern": "SUCCESS|zip"
+  }
+}

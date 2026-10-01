@@ -66,6 +66,8 @@ describe('scripts/release.mjs', () => {
     }
     for (const name of ['jev-gate-logo.svg']) write(`assets/readme/${name}`, '<svg xmlns="http://www.w3.org/2000/svg"></svg>\n');
     write('plugins/codex/README.md', '# Native Codex usage\n');
+    write('docs/bench-ab.md', '# Paired benchmark usage\n');
+    write('bench/ab/tasks.example.json', '{}\n');
     write('docs/advanced-usage.md', '# Advanced usage\n\nGate and lean settings for a checkout.\n');
     write('hooks/hooks.json', '{}\n');
     write('hooks/register.ts', 'export {};\n');

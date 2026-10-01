@@ -124,6 +124,8 @@ Optional traces (`JEV_GATE_TRACE_DIR`) are local per-phase JSON: lengths, hashes
 
 `node dist/cli.js explain <trace-dir>` reads those records. A missing record means nothing was recorded, not that nothing happened. A worker verdict is what the worker reported. A model after `ran` is what the host reported, not a check that a patch took effect.
 
+When Gate A answers `needs_context` for the prompt alone, it is asked once more with the last three turns the user typed in this session attached as context (#115). Tool results, host and hook messages, `/commands`, subagent turns and any turn that looks like a credential are never included. The second `admission_result` record carries `context_turns`. A second `needs_context` is final and the turn stays direct.
+
 ## Lean
 
 `lean` shares the dispatcher, state files, locks, trace, and TypeSafe client with the other modes. It does not run Gate A, Gate B, the planner, the task graph, tier routing, the depth floor, the root guard, or plan interpretation. Set it with `gateMode` or `JEV_GATE_MODE`. The marketplace plugin already includes `agents/executor.md`. You do not install a second plugin.
