@@ -2,7 +2,7 @@ import { mkdtempSync, readdirSync, readFileSync, lstatSync, rmSync, symlinkSync 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { runCodexHook } from '../../src/codex/hook.js';
+import { runCodexHook as executeCodexHook, type CodexHookDeps } from '../../src/codex/hook.js';
 import { foldCodexOutput } from '../../src/codex/output.js';
 import { codexTraceDir } from '../../src/codex-paths.js';
 import { buildOperations } from '../../src/operations.js';
@@ -10,6 +10,7 @@ import { loadActivity } from '../../src/activity.js';
 
 export const passing = `\n RUN  v5.0.1 /test/project\n\n${'stdout: repeated test detail\n'.repeat(90)} ✓ src/a.test.ts (2 tests) 4ms\n\n Test Files  1 passed (1)\n      Tests  2 passed (2)\n   Start at  10:20:30\n   Duration  123ms\n`;
 const dirs: string[] = [];
+const runCodexHook = (deps: CodexHookDeps) => executeCodexHook({ ...deps, env: { ...deps.env, JEV_CODEX_AUTO_CONNECT: '0' } });
 const dir = (): string => { const d = mkdtempSync(join(tmpdir(), 'jev-codex-')); dirs.push(d); return d; };
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
 async function* stdin(v: unknown): AsyncIterable<string> { yield typeof v === 'string' ? v : JSON.stringify(v); }
@@ -33,7 +34,7 @@ describe('native Codex hook', () => {
   it.each(['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'SubagentStart', 'SubagentStop', 'PreCompact', 'PostCompact', 'Stop', 'Interrupt', 'SessionEnd'])('never approves permissions or patches inputs for %s', async event => {
     const result = await runCodexHook({ stdin: stdin({ ...input, hook_event_name: event, tool_response: 'ordinary result' }), env: { JEV_CODEX_TRACE_DIR: dir() } });
     expect(JSON.stringify(result)).not.toMatch(/permissionDecision|updatedInput|decision.*block/);
-    if (event === 'SessionStart') expect(JSON.stringify(result)).toContain('cli.mjs codex');
+    if (event === 'SessionStart') expect(JSON.stringify(result)).toContain('connects ordinary native Codex automatically');
     else expect(result).toEqual({});
   });
 
@@ -45,6 +46,15 @@ describe('native Codex hook', () => {
     const path = dir();
     expect(await runCodexHook({ stdin: stdin(input), env: { JEV_CODEX_OUTPUT: 'off', JEV_CODEX_TRACE_DIR: path } })).toEqual({});
     expect(readdirSync(path)).toHaveLength(1);
+  });
+
+  it('does not contact a running native connection when automatic connection is disabled', async () => {
+    const request = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('must not contact the connection'));
+    try {
+      const result = await runCodexHook({ stdin: stdin({ ...input, hook_event_name: 'SessionStart', cwd: dir() }), env: { JEV_CODEX_TRACE_DIR: dir() } });
+      expect(JSON.stringify(result)).toContain('native Codex plugin');
+      expect(request).not.toHaveBeenCalled();
+    } finally { request.mockRestore(); }
   });
 
   it.each(['broken json', '[]', 'null', 'x'.repeat(2 * 1024 * 1024 + 1)])('preserves native behavior for malformed or oversized input (%#)', async text => {

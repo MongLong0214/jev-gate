@@ -1,3 +1,4 @@
+import { StringDecoder } from 'node:string_decoder';
 import { createServer, request as httpRequest, type IncomingMessage } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
@@ -35,11 +36,12 @@ export interface CodexLaunchOptions {
   bypassHookTrust?: boolean;
   nativeAuth?: boolean;
   profiles?: Record<string, string>;
+  connection?: { token: string; marker: string; port: number; ready?: () => boolean; restart?: () => void };
 }
-/** Local session transport only. No daemon, persistent config edits, credential reads or replacement model harness. */
-export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ url: string; token: string; policy: CodexPolicy; close: () => Promise<void> }> => {
-  const token = randomBytes(32).toString('hex');
-  const marker = `[jev-gate compact ${randomBytes(24).toString('hex')}] Produce a factual compaction summary of the preceding conversation.`;
+/** Official App Server plus local transport. Persistent automatic connection settings are owned by connection.ts. */
+export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ url: string; token: string; policy: CodexPolicy; rpc: CodexRpc; close: () => Promise<void> }> => {
+  const token = options.connection?.token ?? randomBytes(32).toString('hex');
+  const marker = options.connection?.marker ?? `[jev-gate compact ${randomBytes(24).toString('hex')}] Produce a factual compaction summary of the preceding conversation.`;
   const config = loadCodexPolicy(options.env);
   const trace = openTraceDir(codexTraceDir(options.env));
   let child: ChildProcessWithoutNullStreams | undefined;
@@ -49,13 +51,35 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
   const server = createServer(async (req, res) => {
     try {
       const path = req.url?.split('?')[0];
+      if (options.connection && path === '/restart' && req.method === 'POST') {
+        if (!equal(req.headers.authorization, `Bearer ${token}`)) { res.writeHead(401); res.end(); return; }
+        res.writeHead(204); res.end(); setTimeout(() => options.connection?.restart?.(), 20); return;
+      }
+      if (options.connection && path === '/credentials' && req.method === 'POST') {
+        const header = typeof req.headers.authorization === 'string' ? req.headers.authorization : '';
+        const first = `Bearer ${token}.`;
+        if (!equal(header.slice(0, first.length), first)) { res.writeHead(401); res.end(); return; }
+        const key = Buffer.from(header.slice(first.length), 'base64url').toString('utf8');
+        if (key.length > 8192 || !key || /[\r\n\0]/.test(key)) { res.writeHead(400); res.end(); return; }
+        policy?.supplyKey(key); res.writeHead(204); res.end(); return;
+      }
+      if (options.connection && equal(req.headers.authorization, `Bearer ${token}`) && path === '/health' && req.method === 'GET') {
+        res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ ready: options.connection.ready?.() ?? !!policy })); return;
+      }
+      if (options.connection && path === '/agent' && req.method === 'POST') {
+        if (!equal(req.headers.authorization, `Bearer ${token}`)) { res.writeHead(401); res.end(); return; }
+        const input = obj(JSON.parse((await body(req, 2 * 1024 * 1024)).toString('utf8')));
+        res.once('close', () => { if (!res.writableEnded && input) policy?.cancelCaller(input['meta']); });
+        const output = input && policy ? await policy.dispatch(input['arguments'], input['meta']) : 'Native connection unavailable. No worker was started.';
+        res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ output })); return;
+      }
       if (req.url === '/hook' && req.method === 'POST') {
         if (!equal(req.headers.authorization, `Bearer ${token}`)) { res.writeHead(401); res.end(); return; }
         const input = obj(JSON.parse((await body(req, 2 * 1024 * 1024)).toString('utf8')));
         const disconnected = new AbortController();
         const abort = () => { if (!res.writableEnded) disconnected.abort(); };
         res.once('close', abort);
-        const result = input && policy ? await policy.nativeHook(input, AbortSignal.any([disconnected.signal, AbortSignal.timeout(3900)])) : {};
+        const result = input && policy ? await (options.connection ? policy.externalHook(input, AbortSignal.any([disconnected.signal, AbortSignal.timeout(3900)])) : policy.nativeHook(input, AbortSignal.any([disconnected.signal, AbortSignal.timeout(3900)]))) : {};
         res.removeListener('close', abort);
         if (disconnected.signal.aborted) return;
         res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(result)); return;
@@ -66,9 +90,19 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
       let decoded = raw;
       if (req.headers['content-encoding'] === 'zstd') decoded = (createRequire(import.meta.url)('node:zlib') as { zstdDecompressSync: (b: Buffer, o: { maxOutputLength: number }) => Buffer }).zstdDecompressSync(raw, { maxOutputLength: 32 * 1024 * 1024 });
       const sessionId = policy?.requestSession(req.headers['x-codex-turn-metadata'], req.headers['session-id']) ?? null;
+      let payload = raw;
+      let modified = false;
       if (req.method === 'POST' && (path === '/responses' || path === '/responses/compact')) {
-        if (!sessionId || !policy?.hooksReady(sessionId)) { res.writeHead(412); res.end('Trust the installed Jev Gate hooks in Codex /hooks before starting a managed session.'); return; }
-        policy.observeRequest(sessionId, obj(JSON.parse(decoded.toString('utf8'))) ?? {});
+        if ((!sessionId || !policy?.hooksReady(sessionId)) && !options.connection) { res.writeHead(412); res.end('Trust the installed Jev Gate hooks in Codex /hooks before starting a managed session.'); return; }
+        if (sessionId && policy) {
+          const parsed = obj(JSON.parse(decoded.toString('utf8'))) ?? {};
+          if (options.connection && path === '/responses' && !extractCodexCompact(parsed['input'], marker, config.compact.budgetChars).ok) {
+            const cancelled = new AbortController(); res.once('close', () => { if (!res.writableEnded) cancelled.abort(); });
+            const selected = await policy.externalRequest(sessionId, parsed, cancelled.signal);
+            if (selected.stop) { res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' }); res.end(compactResponse(selected.stop)); return; }
+            payload = Buffer.from(JSON.stringify(selected.request)); modified = true;
+          } else policy.observeRequest(sessionId, parsed);
+        }
       }
       if (config.compact.enabled && req.method === 'POST' && path === '/responses') {
         const parsed = obj(JSON.parse(decoded.toString('utf8')));
@@ -89,6 +123,7 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
       if (base.protocol !== 'https:' && !(base.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(base.hostname))) throw new Error('invalid upstream');
       base.pathname = base.pathname.replace(/\/$/, '') + req.url!.split('?')[0]; base.search = req.url!.includes('?') ? req.url!.slice(req.url!.indexOf('?')) : '';
       const headers = Object.fromEntries(Object.entries(req.headers).filter(([k]) => !proxyHeaders.has(k)));
+      if (modified) delete headers['content-encoding'];
       if (routing) {
         delete headers['x-openai-account-routing-override'];
         if (routing.override !== 'NO_CONSTRAINT') headers['x-openai-account-routing-override'] = routing.override;
@@ -96,11 +131,24 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
       const upstream = (base.protocol === 'https:' ? httpsRequest : httpRequest)(base, { method: req.method, headers }, response => {
         const output = Object.fromEntries(Object.entries(response.headers).filter(([k]) => !['connection', 'transfer-encoding'].includes(k)));
         res.writeHead(response.statusCode ?? 502, output); response.pipe(res);
+        if (options.connection && sessionId && response.statusCode === 200 && String(response.headers['content-type']).includes('text/event-stream')) {
+          let buffer = ''; const decoder = new StringDecoder('utf8');
+          response.on('data', chunk => {
+            buffer += decoder.write(Buffer.from(chunk));
+            if (Buffer.byteLength(buffer) > 4 * 1024 * 1024) { buffer = ''; return; }
+            let end: number;
+            while ((end = buffer.indexOf('\n\n')) >= 0) {
+              const event = buffer.slice(0, end); buffer = buffer.slice(end + 2);
+              const data = event.split('\n').filter(line => line.startsWith('data:')).map(line => line.slice(5).trim()).join('\n');
+              try { const value = obj(JSON.parse(data)); if (value?.['type'] === 'response.completed') policy?.observeUsage(sessionId, obj(value['response']) ?? {}); } catch { /* Unknown events are forwarded unchanged. */ }
+            }
+          });
+        }
       });
       requests.add(upstream); upstream.once('close', () => requests.delete(upstream));
       upstream.on('error', () => { if (!res.headersSent) res.writeHead(502); res.end(); });
       res.on('close', () => { if (!res.writableEnded) upstream.destroy(); });
-      upstream.end(raw);
+      upstream.end(payload);
     } catch { if (!res.headersSent) res.writeHead(502); res.end(); }
   });
   const ws = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 * 1024 });
@@ -108,14 +156,14 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
     if (req.url !== '/' || !equal(req.headers.authorization, `Bearer ${token}`) || client) { socket.destroy(); return; }
     ws.handleUpgrade(req, socket, head, c => { client = c; ws.emit('connection', c, req); });
   });
-  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', () => resolve()); });
+  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(options.connection?.port ?? 0, '127.0.0.1', () => resolve()); });
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('session listener unavailable');
   const base = `http://127.0.0.1:${address.port}`;
   const provider = ['-c', 'model_provider="jev-gate-native"', '-c', 'model_providers.jev-gate-native.name="Jev Gate / native Codex"', '-c', `model_providers.jev-gate-native.base_url="${base}"`,
     '-c', 'model_providers.jev-gate-native.wire_api="responses"', '-c', `model_providers.jev-gate-native.requires_openai_auth=${options.nativeAuth !== false}`, '-c', 'model_providers.jev-gate-native.supports_websockets=false',
     '-c', 'model_providers.jev-gate-native.env_http_headers={"x-jev-gate-session"="JEV_CODEX_BRIDGE_TOKEN"}', ...(config.compact.enabled ? ['-c', `compact_prompt=${JSON.stringify(marker)}`] : [])];
   child = spawn('codex', [...(options.bypassHookTrust ? ['--dangerously-bypass-hook-trust'] : []), 'app-server', '--stdio', ...(options.serverArgs ?? []), ...provider], { cwd: options.cwd,
-    env: { ...options.env, JEV_CODEX_BRIDGE_URL: base, JEV_CODEX_BRIDGE_TOKEN: token, JEV_CODEX_WORKSPACE: options.cwd }, stdio: ['pipe', 'pipe', 'pipe'] });
+    env: { ...options.env, JEV_CODEX_BRIDGE_URL: base, JEV_CODEX_BRIDGE_TOKEN: token }, stdio: ['pipe', 'pipe', 'pipe'] });
   rpc = new CodexRpc(child.stdout, child.stdin);
   policy = new CodexPolicy(rpc, options.env, options.fetchImpl, options.profiles, options.bypassHookTrust);
   child.stderr.pipe(process.stderr, { end: false });
@@ -131,9 +179,18 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
   });
   child.once('error', () => { rpc?.close(); client?.close(1011); });
   child.once('exit', () => { rpc?.close(); client?.close(1011); });
-  return { url: `ws://127.0.0.1:${address.port}`, token, policy,
-    close: async () => { policy?.close(); rpc?.close(); client?.terminate(); for (const r of requests) r.destroy(); child?.kill('SIGTERM');
-      await new Promise<void>(resolve => { server.close(() => resolve()); server.closeAllConnections(); }); ws.close(); } };
+  let closing: Promise<void> | undefined;
+  const close = (): Promise<void> => closing ??= (async () => {
+    policy?.close(); rpc?.close(); client?.terminate(); for (const r of requests) r.destroy(); child?.kill('SIGTERM');
+    await new Promise<void>(resolve => { server.close(() => resolve()); server.closeAllConnections(); }); ws.close();
+  })();
+  try {
+    if (options.connection) {
+      await rpc.request('initialize', { clientInfo: { name: 'jev-gate-native-connection', version: '0.7.1' }, capabilities: { experimentalApi: true } });
+      rpc.send({ method: 'initialized' }); await policy.initialize();
+    }
+    return { url: `ws://127.0.0.1:${address.port}`, token, policy, rpc, close };
+  } catch (error) { await close(); throw error; }
 };
 
 export const nativeLaunchOptions = (args: string[], originalCwd: string): { cwd: string; serverArgs: string[] } => {

@@ -6,11 +6,15 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ErrorCode, ListToolsRequestSchema, McpError, type CallToolResult, type Tool } from '@modelcontextprotocol/sdk/types.js';
 
-import { createEvidenceService, parseRequest, type EvidenceReply, type EvidenceServiceDeps } from './service.js';
+import { createEvidenceService, parseRequest, refuse, type EvidenceReply, type EvidenceServiceDeps } from './service.js';
 import { openTraceDir, type TraceWriter } from '../trace.js';
 import { codexTraceDir } from '../codex-paths.js';
 import { loadConfig, type ConfigLoad } from './source.js';
 import { LIMITS, MODES, type EvidenceConfig } from './types.js';
+import { CODEX_SANDBOX_META, codexCallerWorkspace } from '../codex/workspace.js';
+import { AGENT_TOOL } from '../codex/profiles.js';
+import { connectionRequest, ensureConnection } from '../codex/connection.js';
+import { dirname } from 'node:path';
 
 export const TOOL_NAME = 'jev_evidence';
 export const SERVER_VERSION = '0.7.1';
@@ -56,9 +60,9 @@ const scopeLine = (config: EvidenceConfig | null): string =>
     ? `Project ${config.projectRoot}; allowed roots: ${config.allowedRoots.map((r) => (r === '' ? '.' : r)).join(', ')}; remote Jev ${config.remote ? 'on' : 'off'}.`
     : 'Not configured: every call returns unavailable_config.';
 
-const description = (config: EvidenceConfig | null): string => [
-  'Read-only source evidence from the one project this server was configured for (projectRoot in every result).',
-  scopeLine(config),
+const description = (config: EvidenceConfig | null, automatic = false): string => [
+  automatic ? 'Read-only source evidence from the calling Codex thread\'s Git worktree. Codex supplies the workspace automatically; no path setting is required. projectRoot in every result identifies the actual scope. Missing native workspace metadata returns unavailable_config.' : 'Read-only source evidence from the one project this server was configured for (projectRoot in every result).',
+  automatic ? 'A caller cannot select another workspace through tool arguments.' : scopeLine(config),
   'Returns exact windows (16 lines for exactSymbols, at most 40 otherwise): path, 1-based startLine/endLine, fileSha256 and text.',
   `Narrow with roots when you know the directory. queryTerms, when set, are the only lexical hints and are not filled back from the goal; more than ${LIMITS.lexicalTerms} unique terms is an input error. exactSymbols finds literal occurrences only.`,
   'For more, call again with next.offset and next.expectedSnapshot. To read a returned window back exactly, pass its source as sources; the same path and fileSha256 with other lines (at most 40) reads a wider view.',
@@ -74,73 +78,100 @@ const toolResult = (reply: EvidenceReply): CallToolResult => {
   return { content: [{ type: 'text', text: JSON.stringify(body) }], ...(reply.isError ? { isError: true } : {}) };
 };
 
-/** One server, one tool, one service: the call and HTTP bounds hold across every request this process serves. */
-export const createServer = (load: ConfigLoad, deps: EvidenceServiceDeps & { trace?: TraceWriter; host?: 'codex' }): Server => {
-  const config = load.ok ? load.config : null;
-  const service = createEvidenceService(config, deps);
-  const server = new Server({ name: 'jev-evidence', version: SERVER_VERSION }, { capabilities: { tools: {} } });
+/** Workspace resolution and scanning share a process-wide call bound; HTTP is bounded across cached scopes. */
+export const createServer = (load: ConfigLoad, deps: EvidenceServiceDeps & { trace?: TraceWriter; host?: 'codex'; callerEnv?: Readonly<Record<string, string | undefined>>; dispatch?: (args: unknown, meta: unknown, signal: AbortSignal) => Promise<string> }): Server => {
+  const automatic = deps.host === 'codex' && deps.callerEnv !== undefined && deps.callerEnv['JEV_EVIDENCE_CONFIG'] === undefined && deps.callerEnv['JEV_CODEX_WORKSPACE'] === undefined;
+  const config = !automatic && load.ok ? load.config : null;
+  const sharedDeps = { ...deps, concurrency: { active: 0, http: { active: 0 } } };
+  const service = createEvidenceService(config, sharedDeps);
+  const services = new Map<string, ReturnType<typeof createEvidenceService>>();
+  let activeRequests = 0;
+  const server = new Server({ name: 'jev-evidence', version: SERVER_VERSION }, { capabilities: { tools: {}, ...(automatic || deps.dispatch ? { experimental: { [CODEX_SANDBOX_META]: {} } } : {}) } });
   const tool: Tool = {
     name: TOOL_NAME,
-    description: description(config),
+    description: description(config, automatic),
     inputSchema: INPUT_SCHEMA,
     // Hints only, not access control; openWorld says whether any source may leave the machine.
-    annotations: { title: 'Jev evidence', readOnlyHint: true, destructiveHint: false, openWorldHint: config?.remote === true },
+    annotations: { title: 'Jev evidence', readOnlyHint: true, destructiveHint: false, openWorldHint: automatic || config?.remote === true },
   };
-  server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: [tool] }));
+  server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: [tool, ...(deps.dispatch ? [{ name: AGENT_TOOL.name, description: AGENT_TOOL.description, inputSchema: AGENT_TOOL.inputSchema as Tool['inputSchema'], annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true } }] : [])] }));
   server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+    if (deps.dispatch && request.params.name === 'jev_agent') return { content: [{ type: 'text', text: await deps.dispatch(request.params.arguments ?? {}, request.params._meta, extra.signal) }] };
     if (request.params.name !== TOOL_NAME) throw new McpError(ErrorCode.InvalidParams, `unknown tool ${JSON.stringify(request.params.name.slice(0, 64))}`);
-    const callId = randomUUID();
-    const parsed = parseRequest(request.params.arguments ?? {});
-    const base = {
-      ...(deps.host ? { host: deps.host } : {}),
-      request_id: callId,
-      component: 'evidence',
-      kind: parsed.ok ? parsed.input.kind : 'invalid',
-      mode: parsed.ok && parsed.input.kind === 'search' ? parsed.input.mode : null,
-      remote_configured: config?.remote === true,
-      key_present: deps.apiKey !== null,
-    };
-    deps.trace?.write('evidence_start', base);
-    let remoteCalls = 0;
-    let cacheHits = 0;
-    const started = Date.now();
-    const reply = await service.run(request.params.arguments ?? {}, extra.signal, (event) => {
-      const remote = { ...base, request_id: `${callId}:${event.batch}`, parent_request_id: callId, batch: event.batch, candidates: event.candidates };
-      if (event.phase === 'cache') {
-        cacheHits++;
-        deps.trace?.write('evidence_cache', remote);
-      } else if (event.phase === 'intent') {
-        remoteCalls++;
-        deps.trace?.write('evidence_jev_intent', remote);
-      } else {
-        deps.trace?.write('evidence_jev_result', {
-          ...remote,
-          attempted: true,
-          http: { status: event.status, code: event.code, duration_ms: event.duration_ms },
-          jev: { model: event.model, usage: event.usage },
-        });
+    if (activeRequests >= LIMITS.concurrentCalls) return toolResult(refuse(null, 'busy'));
+    activeRequests++;
+    try {
+      const callId = randomUUID();
+      const parsed = parseRequest(request.params.arguments ?? {});
+      const caller = automatic ? codexCallerWorkspace(request.params._meta) : null;
+      let activeConfig = config;
+      let activeService = service;
+      if (caller) {
+        const resolved = await loadConfig(deps.callerEnv!, { host: 'codex', cwd: caller.cwd });
+        activeConfig = resolved.ok ? resolved.config : null;
+        if (activeConfig) {
+          const key = `${caller.session}\0${activeConfig.projectRoot}`;
+          let cached = services.get(key);
+          if (!cached) {
+            if (services.size >= 64) services.delete(services.keys().next().value!);
+            cached = createEvidenceService(activeConfig, sharedDeps);
+            services.set(key, cached);
+          }
+          activeService = cached;
+        }
       }
-    });
-    deps.trace?.write('evidence_result', {
-      ...base,
-      status: reply.result.status,
-      backend: reply.result.backend,
-      is_error: reply.isError,
-      duration_ms: Date.now() - started,
-      remote_calls: remoteCalls,
-      cache_hits: cacheHits,
-      items: reply.result.items.length,
-      reason_codes: reply.result.reasonCodes,
-      coverage: {
-        files_total: reply.result.coverage.filesTotal,
-        read_files: reply.result.coverage.readFiles,
-        candidates: reply.result.coverage.candidates,
-        page_candidates: reply.result.coverage.pageCandidates,
-        unjudged_on_page: reply.result.coverage.unjudgedOnPage,
-        omitted_bodies: reply.result.coverage.omittedBodies,
-      },
-    });
-    return toolResult(reply);
+      const base = {
+        ...(deps.host ? { host: deps.host } : {}),
+        ...(caller ? { session_id: caller.session } : {}),
+        request_id: callId,
+        component: 'evidence',
+        kind: parsed.ok ? parsed.input.kind : 'invalid',
+        mode: parsed.ok && parsed.input.kind === 'search' ? parsed.input.mode : null,
+        remote_configured: activeConfig?.remote === true,
+        key_present: deps.apiKey !== null,
+      };
+      deps.trace?.write('evidence_start', base);
+      let remoteCalls = 0;
+      let cacheHits = 0;
+      const started = Date.now();
+      const reply = await activeService.run(request.params.arguments ?? {}, extra.signal, (event) => {
+        const remote = { ...base, request_id: `${callId}:${event.batch}`, parent_request_id: callId, batch: event.batch, candidates: event.candidates };
+        if (event.phase === 'cache') {
+          cacheHits++;
+          deps.trace?.write('evidence_cache', remote);
+        } else if (event.phase === 'intent') {
+          remoteCalls++;
+          deps.trace?.write('evidence_jev_intent', remote);
+        } else {
+          deps.trace?.write('evidence_jev_result', {
+            ...remote,
+            attempted: true,
+            http: { status: event.status, code: event.code, duration_ms: event.duration_ms },
+            jev: { model: event.model, usage: event.usage },
+          });
+        }
+      });
+      deps.trace?.write('evidence_result', {
+        ...base,
+        status: reply.result.status,
+        backend: reply.result.backend,
+        is_error: reply.isError,
+        duration_ms: Date.now() - started,
+        remote_calls: remoteCalls,
+        cache_hits: cacheHits,
+        items: reply.result.items.length,
+        reason_codes: reply.result.reasonCodes,
+        coverage: {
+          files_total: reply.result.coverage.filesTotal,
+          read_files: reply.result.coverage.readFiles,
+          candidates: reply.result.coverage.candidates,
+          page_candidates: reply.result.coverage.pageCandidates,
+          unjudged_on_page: reply.result.coverage.unjudgedOnPage,
+          omitted_bodies: reply.result.coverage.omittedBodies,
+        },
+      });
+      return toolResult(reply);
+    } finally { activeRequests--; }
   });
   return server;
 };
@@ -173,7 +204,21 @@ const main = async (): Promise<void> => {
   try { if (codex) traceDir = codexTraceDir(env); }
   catch { traceDir = undefined; process.stderr.write('jev-evidence: invalid Codex trace directory; recording unavailable\n'); }
   const opened = traceDir ? openTraceDir(traceDir) : null;
-  const server = createServer(load, { apiKey: env['TYPESAFE_API_KEY'] || null, ...(opened?.ok ? { trace: opened.writer } : {}), ...(codex ? { host: 'codex' as const } : {}) });
+  const root = dirname(dirname(fileURLToPath(import.meta.url)));
+  const automaticConnection = codex && env['JEV_CODEX_AUTO_CONNECT'] !== '0' && env['JEV_CODEX_ENABLED'] !== '0' && !env['JEV_CODEX_BRIDGE_URL'];
+  if (automaticConnection) await ensureConnection(root, env);
+  const server = createServer(load, { apiKey: env['TYPESAFE_API_KEY'] || null, ...(opened?.ok ? { trace: opened.writer } : {}), ...(codex ? { host: 'codex' as const, callerEnv: env } : {}), ...(automaticConnection ? { dispatch: async (arguments_: unknown, meta: unknown, signal: AbortSignal) => {
+    const result = await connectionRequest(env, '/agent', { arguments: arguments_, meta }, signal);
+    return typeof result?.['output'] === 'string' ? result['output'] : 'Native connection unavailable or interrupted. No completion is claimed.';
+  } } : {}) });
+  let maintaining = false; let nextAttempt = 0;
+  const supervisor = automaticConnection ? setInterval(() => {
+    if (maintaining || Date.now() < nextAttempt) return;
+    maintaining = true;
+    void ensureConnection(root, env).then(ok => { nextAttempt = Date.now() + (ok ? 0 : 30_000); }).catch(() => { nextAttempt = Date.now() + 30_000; }).finally(() => { maintaining = false; });
+  }, 2000) : null;
+  supervisor?.unref();
+  server.onclose = () => { if (supervisor) clearInterval(supervisor); };
   await server.connect(new StdioServerTransport());
 };
 

@@ -85,11 +85,14 @@ export const readRecentPrompts = (path: string | null | undefined, current: stri
     found.push(trimmed);
   }
   if (found.length > 0 && found[found.length - 1] === current.trim()) found.pop();
-  return found
-    .filter((t) => !looksSecret(t))
-    .slice(-max)
-    .map((t) => (t.length > RECENT_PROMPT_MAX_CHARS ? `${t.slice(0, RECENT_PROMPT_MAX_CHARS).replace(/[\uD800-\uDBFF]$/, '')} […]` : t));
+  return selectRecentPrompts(found, max);
 };
+
+/** Native adapters provide only observed human requests; the same bounds and secret filtering apply. */
+export const selectRecentPrompts = (requests: readonly string[], max = RECENT_PROMPTS_MAX): string[] => requests
+  .filter(t => t.trim().length > 0 && !looksSecret(t) && !COMMAND_RECORD.test(t.trim()) && !INTERRUPTION.test(t.trim()))
+  .slice(-max)
+  .map(t => t.length > RECENT_PROMPT_MAX_CHARS ? `${t.slice(0, RECENT_PROMPT_MAX_CHARS).replace(/[\uD800-\uDBFF]$/, '')} […]` : t);
 
 /** The request text Gate A is re-asked with: earlier turns as data, the current request last and marked as such. */
 export const withRecentPrompts = (prompt: string, recent: readonly string[]): string =>

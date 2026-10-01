@@ -142,7 +142,7 @@ export interface EvidenceReply {
   detail?: string;
 }
 
-const refuse = (projectRoot: string | null, reason: ReasonCode, detail?: string, status: EvidenceResult['status'] = 'unavailable'): EvidenceReply => ({
+export const refuse = (projectRoot: string | null, reason: ReasonCode, detail?: string, status: EvidenceResult['status'] = 'unavailable'): EvidenceReply => ({
   result: { version: 1, projectRoot, status, backend: 'local', items: [], snapshotId: null, next: null, coverage: emptyCoverage(), reasonCodes: [reason] },
   isError: true,
   ...(detail ? { detail } : {}),
@@ -224,6 +224,8 @@ export interface EvidenceServiceDeps {
   /** Source I/O. Defaults are the real readers. Tests pass counters; not MCP arguments. */
   listFiles?: typeof listProjectFiles;
   readSource?: typeof readProjectFile;
+  /** Shared by a server serving several native workspaces; scope-specific services cannot multiply the I/O limits. */
+  concurrency?: { active: number; http: { active: number } };
 }
 
 export interface EvidenceService {
@@ -240,8 +242,8 @@ export const createEvidenceService = (config: EvidenceConfig | null, deps: Evide
   const cache = deps.cache ?? createJudgementCache(now);
   const listFiles = deps.listFiles ?? listProjectFiles;
   const readSource = deps.readSource ?? readProjectFile;
-  const http = { active: 0 };
-  let active = 0;
+  const concurrency = deps.concurrency ?? { active: 0, http: { active: 0 } };
+  const http = concurrency.http;
 
   const cancelled = (): EvidenceReply => refuse(config?.projectRoot ?? null, 'cancelled', undefined, 'cancelled');
 
@@ -468,14 +470,14 @@ export const createEvidenceService = (config: EvidenceConfig | null, deps: Evide
       if (signal.aborted) return cancelled();
       const parsed = parseRequest(raw);
       if (!parsed.ok) return refuse(config.projectRoot, 'invalid_input', parsed.detail);
-      if (active >= LIMITS.concurrentCalls) return refuse(config.projectRoot, 'busy', 'two evidence calls are already running; retry after one finishes');
-      active++;
+      if (concurrency.active >= LIMITS.concurrentCalls) return refuse(config.projectRoot, 'busy', 'two evidence calls are already running; retry after one finishes');
+      concurrency.active++;
       try {
         const reply = parsed.input.kind === 'sources' ? await readSources(config, parsed.input, signal) : await search(config, parsed.input, signal, observeRemote);
         // A cancellation seen only after the last read is still a cancellation, never a local success.
         return signal.aborted ? cancelled() : reply;
       } finally {
-        active--;
+        concurrency.active--;
       }
     },
   };

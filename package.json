@@ -11,7 +11,7 @@
     "build": "rm -rf dist && tsc -p tsconfig.json && node scripts/build-evidence.mjs && node scripts/build-codex.mjs",
     "typecheck": "tsc -p tsconfig.typecheck.json && tsc -p mods/tsconfig.json",
     "test": "vitest run",
-    "test:codex:runtime": "JEV_CODEX_E2E=1 vitest run tests/codex/runtime.test.ts",
+    "test:codex:runtime": "JEV_CODEX_E2E=1 vitest run tests/codex/runtime.test.ts tests/codex/connection-runtime.test.ts",
     "pack": "node scripts/pack.mjs",
     "release:pin": "npm run build && node scripts/release.mjs pin",
     "release:check": "npm run build && node scripts/release.mjs check",

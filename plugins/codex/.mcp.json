@@ -7,13 +7,28 @@
         "--codex"
       ],
       "cwd": ".",
+      "tools": {
+        "jev_agent": {
+          "approval_mode": "approve"
+        }
+      },
       "env_vars": [
+        "CODEX_HOME",
+        "JEV_CODEX_ENABLED",
+        "JEV_CODEX_AUTO_CONNECT",
+        "JEV_CODEX_BRIDGE_URL",
+        "JEV_CODEX_CONFIG",
+        "JEV_GATE_STATE_DIR",
+        "JEV_GATE_MODE",
         "JEV_CODEX_WORKSPACE",
         "JEV_EVIDENCE_CONFIG",
         "TYPESAFE_API_KEY",
         "JEV_CODEX_TRACE_DIR",
         "JEV_GATE_TRACE_DIR",
-        "XDG_STATE_HOME"
+        "XDG_STATE_HOME",
+        "JEV_CODEX_OUTPUT",
+        "JEV_CODEX_UPSTREAM",
+        "OPENAI_BASE_URL"
       ]
     }
   }

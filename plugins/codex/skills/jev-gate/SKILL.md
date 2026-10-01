@@ -15,17 +15,17 @@ Use the plugin's `jev_evidence` MCP tool for repository evidence. Its descriptio
 
 The native hooks record lifecycle metadata and fold only repeated identical lines in complete passing Vitest output. A spawn receipt is not a completed worker. A stop event is not Jev contract acceptance. Missing events mean unknown; no fake activity is generated.
 
-Start a fresh native terminal with `node <installed-plugin>/dist/cli.mjs codex` for automatic Gate A/B, plans, contract checks, root guard, Lean, Router and Compact. Review and trust the plugin hooks in ordinary Codex `/hooks` first. The connection uses the official App Server and real terminal. Use `jev_agent` only with the exact owned profile and marker in current policy guidance; never replace it with native spawn_agent when a job is admitted. Code owns acceptance and native permissions remain authoritative. Lean uses a separate executor path with no Gate or plan. Unknown input, invalid Jev judgments and timeouts preserve the baseline. Missing records are not proof that a policy ran.
+The installed plugin automatically connects ordinary native Codex sessions. No Jev terminal or workspace export is required. Codex owns hook trust and authentication; review/trust the hooks when prompted and start a new native session if the current host loaded its provider before installation. Never forge trust or claim connection merely from installation.
 
-A standalone plugin session provides Evidence, Output and host observation. It does not have automatic policy enforcement until connected. Do not silently approve permissions, modify transcripts or infer savings.
+Use `jev_agent` only with the exact owned profile and marker in current Gate/Lean guidance. Code owns acceptance; workers inherit the captured native permission scope. Lean remains separate from Gate/planning. Unknown input, invalid judgments and timeouts preserve the baseline. Router/Compact application requires actual provider requests through the local connection; consult observed records. Do not silently approve permissions, modify transcripts or infer savings.
 
-With `JEV_CODEX_WORKSPACE` set to the intended Git project, use the absolute installed plugin path:
+Use the absolute installed plugin path for diagnostics:
 
 ```sh
 node <plugin>/dist/cli.mjs doctor
 node <plugin>/dist/cli.mjs dashboard
 ```
 
-Doctor prints the configured Evidence scope; check that it is the intended project. The default trace directory is `$XDG_STATE_HOME/jev-gate/codex/traces` or `~/.local/state/jev-gate/codex/traces`; `JEV_CODEX_TRACE_DIR` overrides it. The dashboard supports Korean/English and light/dark themes. Use `/hooks` in Codex to review and trust the installed hook definitions. Installation alone does not trust hooks.
+Evidence resolves the native calling thread’s workspace automatically; check returned projectRoot against the intended project. Explicit Evidence configuration remains authoritative. The default trace directory is `$XDG_STATE_HOME/jev-gate/codex/traces` or `~/.local/state/jev-gate/codex/traces`; `JEV_CODEX_TRACE_DIR` overrides it. The dashboard supports Korean/English and light/dark themes. Use `/hooks` in Codex to review and trust the installed hook definitions. Installation alone does not trust hooks.
 
-If Evidence returns unavailable_config, tell the user to set `JEV_CODEX_WORKSPACE` to the target Git project (or `JEV_EVIDENCE_CONFIG`) and restart Codex. Never substitute the plugin cache or guess another project.
+If Evidence returns unavailable_config, check whether the native host supplied workspace metadata and whether an explicit override is invalid. Use an explicit scope only for a host that lacks native metadata; do not require a workspace export on supported ordinary Codex. Never substitute the plugin cache or guess another project.

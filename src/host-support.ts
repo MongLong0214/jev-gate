@@ -22,6 +22,6 @@ export const CODEX_CAPABILITIES: Record<FeatureId, HostCapability> = {
 };
 export const CODEX_PLUGIN_CAPABILITIES: Record<FeatureId, HostCapability> = Object.fromEntries(Object.entries(CODEX_CAPABILITIES).map(([id, capability]) => [id,
   ['output', 'evidence'].includes(id) ? capability : ['workers', 'compact'].includes(id)
-    ? { mode: 'observe', ko: '기본 플러그인에서 호스트 이벤트를 관측합니다. 전체 정책은 cli.mjs codex로 세션을 연결하세요.', en: 'The standalone plugin observes host events. Connect a session with cli.mjs codex for full policies.' }
-    : { mode: 'connect', ko: 'cli.mjs codex로 네이티브 세션을 연결하면 자동 정책이 적용됩니다.', en: 'Connect the native session with cli.mjs codex to apply automatic policies.' },
+    ? { mode: 'observe', ko: '호스트 이벤트를 관측합니다. 자동 연결 후 새 네이티브 세션의 실제 정책 적용 기록을 기다립니다.', en: 'Observes host events. After automatic connection, a fresh native session records actual policy application.' }
+    : { mode: 'connect', ko: '플러그인이 일반 Codex를 자동 연결합니다. 실제 정책 요청 기록이 들어오면 적용 상태를 표시합니다.', en: 'The plugin connects ordinary Codex automatically. Actual policy request records establish application.' },
 ])) as Record<FeatureId, HostCapability>;

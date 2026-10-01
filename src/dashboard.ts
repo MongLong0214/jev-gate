@@ -34,7 +34,8 @@ export interface DashboardVersions {
   installed: string | null;
 }
 const PLUGIN_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const ownAtStartup = readJson(join(PLUGIN_ROOT, '.claude-plugin', 'plugin.json'));
+const ownAtStartup = ['.claude-plugin', '.codex-plugin'].map(kind => readJson(join(PLUGIN_ROOT, kind, 'plugin.json')))
+  .find(value => isRecord(value) && typeof value['version'] === 'string');
 const RUNNING_VERSION = isRecord(ownAtStartup) && typeof ownAtStartup['version'] === 'string' ? ownAtStartup['version'] : null;
 export const readVersions = (env: Env, host: Host = 'claude'): DashboardVersions => {
   const running = RUNNING_VERSION;

@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,7 +14,7 @@ const staged = join(tmp, 'source');
 const installed = join(tmp, 'installed plugin');
 const project = join(tmp, 'workspace');
 const traces = join(tmp, 'records');
-const shellEnv = { PATH: process.env['PATH'] ?? '', JEV_CODEX_TRACE_DIR: traces, JEV_CODEX_WORKSPACE: project };
+const shellEnv = { PATH: process.env['PATH'] ?? '', JEV_CODEX_TRACE_DIR: traces, JEV_CODEX_WORKSPACE: project, JEV_CODEX_AUTO_CONNECT: '0' };
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
 beforeAll(() => {
@@ -40,6 +40,20 @@ describe('installed Codex archive', () => {
     expect(existsSync(empty)).toBe(false);
     expect(result.stdout).toContain('No source was scanned and no request was sent.');
     expect(result.stdout).toContain('[active] router:');
+  });
+  it('reports the running Codex archive version in its actual dashboard', async () => {
+    const child = spawn(process.execPath, [join(installed, 'dist/cli.mjs'), 'dashboard', '--port', '0'], { cwd: project, env: { ...shellEnv, JEV_DASHBOARD_NO_OPEN: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
+    try {
+      const url = await new Promise<string>((resolve, reject) => {
+        let output = '';
+        const timer = setTimeout(() => reject(new Error('dashboard did not start')), 5000);
+        child.stdout.on('data', chunk => { output += chunk.toString(); const match = output.match(/http:\/\/127\.0\.0\.1:\d+\//); if (match) { clearTimeout(timer); resolve(match[0]); } });
+        child.once('exit', code => { clearTimeout(timer); reject(new Error(`dashboard exited ${code}`)); });
+      });
+      const snapshot = await (await fetch(`${url}api/snapshot`)).json() as { version: { running: string; installed: null } };
+      const manifest = JSON.parse(readFileSync(join(installed, '.codex-plugin/plugin.json'), 'utf8'));
+      expect(snapshot.version).toEqual({ running: manifest.version, installed: null });
+    } finally { child.kill(); }
   });
   it('runs the actual hook from a path with spaces and preserves execution on invalid input', () => {
     const run = spawnSync(process.execPath, [join(installed, 'dist/hook.mjs')], { cwd: project, env: shellEnv, encoding: 'utf8', input: JSON.stringify({ hook_event_name: 'SessionStart', session_id: 's' }) });

@@ -2,7 +2,6 @@ import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -15,6 +14,7 @@ import { startCodexSession } from '../../src/codex/launch.js';
 const required = process.env['JEV_CODEX_E2E'] === '1';
 const root = join(__dirname, '../..');
 const tmp = mkdtempSync(join(tmpdir(), 'jev-codex-runtime-'));
+const runtimeEnv = { ...process.env, CODEX_HOME: join(tmp, 'codex home') };
 const plugin = join(tmp, 'plugin with spaces');
 const workspace = join(tmp, 'workspace');
 const market = `jev-test-${Date.now()}`;
@@ -24,11 +24,11 @@ let marketAdded = false;
 const isolation: string[] = [];
 afterAll(() => {
   if (installed) {
-    const removed = spawnSync('codex', ['plugin', 'remove', `jev-gate@${market}`], { encoding: 'utf8', timeout: 15_000 });
+    const removed = spawnSync('codex', ['plugin', 'remove', `jev-gate@${market}`], { env: runtimeEnv, encoding: 'utf8', timeout: 15_000 });
     expect(removed.status, removed.stderr).toBe(0);
   }
   if (marketAdded) {
-    const removed = spawnSync('codex', ['plugin', 'marketplace', 'remove', market], { encoding: 'utf8', timeout: 15_000 });
+    const removed = spawnSync('codex', ['plugin', 'marketplace', 'remove', market], { env: runtimeEnv, encoding: 'utf8', timeout: 15_000 });
     expect(removed.status, removed.stderr).toBe(0);
   }
   rmSync(tmp, { recursive: true, force: true });
@@ -42,26 +42,11 @@ const requestFunctions = (request: Rec): Rec[] => [...functions(request['tools']
 
 describe.skipIf(!required)('real Codex native plugin runtime', () => {
   beforeAll(() => {
-    const available = spawnSync('codex', ['--version'], { encoding: 'utf8' });
+    const available = spawnSync('codex', ['--version'], { env: runtimeEnv, encoding: 'utf8' });
     expect(available.status, 'Install Codex CLI 0.158.0+ to run the native runtime tests').toBe(0);
-    // Keep existing user hooks and MCPs out of this disposable, scripted-model invocation.
-    const userHooks = join(process.env['CODEX_HOME'] ?? join(homedir(), '.codex'), 'hooks.json');
-    const hookStates: string[] = [];
-    if (existsSync(userHooks)) {
-      const parsed = JSON.parse(readFileSync(userHooks, 'utf8')) as { hooks?: Record<string, Array<{ hooks: unknown[] }>> };
-      for (const [event, groups] of Object.entries(parsed.hooks ?? {})) groups.forEach((group, i) => group.hooks.forEach((_, j) => {
-        const snake = event.replace(/[A-Z]/g, (c, index: number) => `${index ? '_' : ''}${c.toLowerCase()}`);
-        hookStates.push(`${JSON.stringify(`${userHooks}:${snake}:${i}:${j}`)}={enabled=false}`);
-      }));
-    }
-    if (hookStates.length) isolation.push(`hooks.state={${hookStates.join(',')}}`);
-    const servers = spawnSync('codex', ['mcp', 'list', '--json'], { encoding: 'utf8', timeout: 10_000 });
-    expect(servers.status).toBe(0);
-    isolation.push(`mcp_servers={${(JSON.parse(servers.stdout) as Array<{name: string; transport: {type: string}}>).map(s => `${JSON.stringify(s.name)}={enabled=false,${s.transport.type === 'stdio' ? 'command="node"' : 'url="http://127.0.0.1:1"'}}`).join(',')}}`);
-    const existing = spawnSync('codex', ['plugin', 'list', '--json'], { encoding: 'utf8', timeout: 10_000 });
-    expect(existing.status).toBe(0);
-    const plugins = JSON.parse(existing.stdout) as { installed?: Array<{ pluginId: string }> };
-    isolation.push(`plugins={${(plugins.installed ?? []).map(p => `${JSON.stringify(p.pluginId)}={enabled=false}`).join(',')}}`);
+    // Never depend on or mutate the owner's plugins, hooks, MCPs or authentication.
+    mkdirSync(runtimeEnv.CODEX_HOME, { recursive: true });
+    writeFileSync(join(runtimeEnv.CODEX_HOME, 'config.toml'), '[features]\nplugins=true\nhooks=true\n');
     const staged = join(tmp, 'source');
     const stagedPlugin = join(staged, 'plugins/codex');
     cpSync(join(root, 'plugins/codex'), stagedPlugin, { recursive: true, filter: p => !p.includes('/dist/') && !p.endsWith('/dist') });
@@ -70,12 +55,13 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
     const mcpFile = join(stagedPlugin, '.mcp.json');
     const mcp = JSON.parse(readFileSync(mcpFile, 'utf8')) as { mcpServers: Record<string, unknown> };
     mcp.mcpServers['jev_runtime_fixture'] = mcp.mcpServers['jev_gate_evidence'];
+    (mcp.mcpServers['jev_runtime_fixture'] as Rec)['env'] = { JEV_CODEX_AUTO_CONNECT: '0' };
     delete mcp.mcpServers['jev_gate_evidence'];
     writeFileSync(mcpFile, JSON.stringify(mcp));
-    const built = spawnSync(process.execPath, [join(root, 'scripts/build-codex.mjs'), join(stagedPlugin, 'dist')], { encoding: 'utf8' });
+    const built = spawnSync(process.execPath, [join(root, 'scripts/build-codex.mjs'), join(stagedPlugin, 'dist')], { env: runtimeEnv, encoding: 'utf8' });
     expect(built.status, built.stderr).toBe(0);
     cpSync(join(root, 'package.json'), join(staged, 'package.json'));
-    const packed = spawnSync(process.execPath, [join(root, 'scripts/pack.mjs'), join(tmp, 'archives'), '--profile', 'codex', '--root', staged], { encoding: 'utf8' });
+    const packed = spawnSync(process.execPath, [join(root, 'scripts/pack.mjs'), join(tmp, 'archives'), '--profile', 'codex', '--root', staged], { env: runtimeEnv, encoding: 'utf8' });
     expect(packed.status, packed.stderr).toBe(0);
     const archive = readdirSync(join(tmp, 'archives')).find(f => f.endsWith('.zip'))!;
     mkdirSync(plugin);
@@ -87,12 +73,12 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
     const marketplace = JSON.parse(readFileSync(join(plugin, '.agents/plugins/marketplace.json'), 'utf8')) as Rec;
     marketplace['name'] = market;
     writeFileSync(join(plugin, '.agents/plugins/marketplace.json'), JSON.stringify(marketplace));
-    const registered = spawnSync('codex', ['plugin', 'marketplace', 'add', plugin], { encoding: 'utf8', timeout: 20_000 });
+    const registered = spawnSync('codex', ['plugin', 'marketplace', 'add', plugin], { env: runtimeEnv, encoding: 'utf8', timeout: 20_000 });
     expect(registered.status, registered.stderr).toBe(0);
     marketAdded = true;
     const added = spawnSync('codex', ['plugin', 'add', `jev-gate@${market}`, '--json',
       '-c', `marketplaces.${market}.source_type="local"`,
-      '-c', `marketplaces.${market}.source=${JSON.stringify(plugin)}`], { encoding: 'utf8', timeout: 20_000 });
+      '-c', `marketplaces.${market}.source=${JSON.stringify(plugin)}`], { env: runtimeEnv, encoding: 'utf8', timeout: 20_000 });
     expect(added.status, added.stderr).toBe(0);
     installed = true;
   }, 60_000);
@@ -161,7 +147,7 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
     }
     const policyFile=join(tmp, `policy ${scenario}.json`); writeFileSync(policyFile,JSON.stringify({gate:{mode:scenario.startsWith('compact')||routing?'off':scenario==='lean'?'lean':'auto',admittedShape:scenario==='hierarchy'||scenario==='worktree'?'hierarchy':'auto',...(scenario==='worktree'?{workerIsolation:'worktree',maxParallelWorkers:2,guardAllowTools:['Bash','Read','Glob','Grep','Agent']}: {})},...(scenario==='routing-model-terra'?{router:{model:true},gate:{mode:'off',models:{fast:'gpt-6-luna',standard:'gpt-5.6-terra',deep:'gpt-6.1-sol',frontier:'gpt-6-astra'}}}:{}),compact:{manual:scenario==='compact-manual'}}));
     const profiles=Object.fromEntries(['planner','planner-frontier','worker-fast','worker','worker-deep','worker-frontier','executor'].map(n=>[`jev-gate:${n}`,readFileSync(join(root,'agents',n+'.md'),'utf8').replace(/^---[\s\S]*?---\s*/, '')]));
-    const session = await startCodexSession({ cwd: workspace, env: { ...process.env, PATH:`${join(workspace,'.bin')}:${process.env['PATH'] ?? ''}`, JEV_CODEX_CONFIG:policyFile, JEV_CODEX_TRACE_DIR: trace, JEV_GATE_STATE_DIR: join(tmp, `managed ${scenario} state`), JEV_CODEX_UPSTREAM: `http://127.0.0.1:${(server.address() as {port:number}).port}/v1`, TYPESAFE_API_KEY: 'fixture-key' }, serverArgs: config.flatMap(c => ['-c', c]), bypassHookTrust: true, nativeAuth: false, profiles,
+    const session = await startCodexSession({ cwd: workspace, env: { ...runtimeEnv, PATH:`${join(workspace,'.bin')}:${process.env['PATH'] ?? ''}`, JEV_CODEX_CONFIG:policyFile, JEV_CODEX_TRACE_DIR: trace, JEV_GATE_STATE_DIR: join(tmp, `managed ${scenario} state`), JEV_CODEX_UPSTREAM: `http://127.0.0.1:${(server.address() as {port:number}).port}/v1`, TYPESAFE_API_KEY: 'fixture-key' }, serverArgs: config.flatMap(c => ['-c', c]), bypassHookTrust: true, nativeAuth: false, profiles,
       fetchImpl: (async (_url, init) => {
         const parsed=JSON.parse(String(init?.body)); const q = parsed.questions;
         return new Response(JSON.stringify({ model: parsed.model, answers: Object.fromEntries(Object.keys(q).map(k => { const score=routing && k==='effort'?q[k].criteria.length-1:routing && k==='tier'?1:k==='tool_calls'?4:k==='size'?2:0; const picks:Record<string,string>={work_shape:'sustained_task',handoff_scope:'self_contained'}; const pick=k.startsWith('relation_')?'omit':picks[k] ?? Object.keys(q[k].criteria ?? {})[0]; return [k, q[k].type === 'score' ? { type: 'score', score, confidence:1, probabilities: Object.fromEntries(q[k].criteria.map((_:unknown,i:number)=>[i,i===score?1:0])) } : q[k].type === 'noul' ? { type:'noul',noul:0 } : { type: 'choice', choice: pick, confidence: 1, probabilities: Object.fromEntries(Object.keys(q[k].criteria).map(v=>[v,v===pick?1:0])) }]; })) }), { headers: { 'content-type': 'application/json' } });
@@ -327,7 +313,7 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
     ];
     const args = ['--no-daemon', ...(trust ? ['--dangerously-bypass-hook-trust'] : []), 'exec', '--ignore-rules', '--skip-git-repo-check', '--ephemeral', '--json', '-C', workspace, ...config.flatMap(c => ['-c', c]), 'Run the local fixture tools, then finish.'];
     let output = '';
-    const child = spawn('codex', args, { cwd: workspace, env: { HOME: process.env['HOME'] ?? '', ...(process.env['CODEX_HOME'] ? { CODEX_HOME: process.env['CODEX_HOME'] } : {}), PATH: `${join(workspace, '.bin')}:${process.env['PATH'] ?? ''}`, JEV_CODEX_TRACE_DIR: trace, ...(scenario === 'missing-workspace' ? {} : { JEV_CODEX_WORKSPACE: workspace }), JEV_CODEX_ENABLED: scenario === 'hooks-disabled' ? '0' : '1', JEV_CODEX_OUTPUT: scenario === 'disabled' ? 'off' : 'on', CLAUDE_PROJECT_DIR: '/wrong-workspace', PWD: '/wrong-workspace' } });
+    const child = spawn('codex', args, { cwd: workspace, env: { HOME: process.env['HOME'] ?? '', CODEX_HOME: runtimeEnv.CODEX_HOME, PATH: `${join(workspace, '.bin')}:${process.env['PATH'] ?? ''}`, JEV_CODEX_AUTO_CONNECT: '0', JEV_CODEX_TRACE_DIR: trace, ...(scenario === 'missing-workspace' ? {} : { JEV_CODEX_WORKSPACE: workspace }), JEV_CODEX_ENABLED: scenario === 'hooks-disabled' ? '0' : '1', JEV_CODEX_OUTPUT: scenario === 'disabled' ? 'off' : 'on', CLAUDE_PROJECT_DIR: '/wrong-workspace', PWD: '/wrong-workspace' } });
     child.stdin.end(); child.stdout.on('data', b => { output += String(b); }); child.stderr.on('data', b => { output += String(b); });
     const timer = setTimeout(() => child.kill('SIGTERM'), 40_000);
     try {
@@ -381,14 +367,17 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
     expect(snapshot.operations.features.find(f => f.id === 'output')?.count).toBe(scenario === 'disabled' ? 0 : 1);
   }, 60_000);
 
-  it('refuses Evidence without an explicit workspace instead of searching the plugin cache or inherited PWD', async () => {
+  it('binds Evidence to the actual native workspace with no environment setting or launcher', async () => {
     const result = await run(true, 'missing-workspace');
     expect(result.code, result.output).toBe(0);
     const last = JSON.stringify(result.requests.at(-1)?.['input']);
-    expect(last).toContain('unavailable_config');
-    expect(last).not.toContain('export const runtimeEvidenceNeedle');
+    expect(last).not.toContain('unavailable_config');
+    expect(last).toContain('export const runtimeEvidenceNeedle');
+    expect(last).toContain(workspace);
+    expect(last).not.toContain('/wrong-workspace');
     const rows = readdirSync(result.trace).map(f => JSON.parse(readFileSync(join(result.trace, f), 'utf8')) as Rec);
     expect(rows.some(r => r['phase'] === 'evidence_result')).toBe(true);
+    expect(rows.find(r => r['phase'] === 'evidence_result')?.['session_id']).toBeTypeOf('string');
   }, 60_000);
 
   it.each(['recording-unavailable', 'hooks-disabled'])('preserves native output and the separate MCP when %s', async scenario => {

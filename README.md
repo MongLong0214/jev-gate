@@ -17,7 +17,7 @@ The marketplace installs [the latest release](https://github.com/MongLong0214/je
 
 ## Codex native plugin
 
-The [native Codex plugin](plugins/codex/README.md) supplies Evidence, Output and recording. Start the native terminal through its included launcher to enable **Gate A/B, planning, contract acceptance, root guard, Lean, Router and Compact** with the shared policies. It connects the official Codex App Server to the real Codex terminal; native login and permissions remain authoritative. Tested with Codex CLI 0.158.0 and 0.159.2 and Node 22.15+.
+The [native Codex plugin](plugins/codex/README.md) connects **Gate A/B, planning, contract acceptance, root guard, Lean, Router and Compact** to ordinary native Codex through its local connection, alongside Evidence, Output and recording. Owned workers use the official Codex App Server; native login and permissions remain authoritative. Automatic connection was tested with Codex CLI 0.159.2 and Node 22.15+.
 
 For an installation without a build step, download **`jev-gate-codex-0.7.1.zip`** from the [v0.7.1 release](https://github.com/MongLong0214/jev-gate/releases/tag/v0.7.1), extract it, and register the extracted directory:
 
@@ -35,15 +35,9 @@ codex plugin marketplace add "$PWD"
 codex plugin add jev-gate@jev-gate-codex
 ```
 
-Then, **in the Git project you want to inspect**:
+Open ordinary **Codex** in your project. The installed plugin discovers the calling thread’s workspace and connects automatic policies locally. No workspace export, separate Jev terminal or project configuration file is required.
 
-```sh
-export JEV_CODEX_WORKSPACE="$PWD"
-# Set TYPESAFE_API_KEY in this terminal for Jev judgments.
-node /absolute/jev-gate/plugins/codex/dist/cli.mjs codex
-```
-
-Before connecting, open ordinary Codex, review and trust the Jev Gate definitions in `/hooks`, then exit it. Enable only one Jev Gate installation in `/plugins`. Set the workspace again when switching projects; missing workspace configuration refuses Evidence searches. Requires Node 22.15+; tested on Codex CLI 0.158.0 and 0.159.2. Build before installing a source checkout.
+Codex still owns login and hook trust: supply `TYPESAFE_API_KEY` through the host environment for Jev judgments, and review/trust the installed hooks in `/hooks` when Codex requests it. Keep exactly one Jev Gate installation enabled in `/plugins`. Installation never forges a trust approval. A session already open during installation keeps its original model provider; start a new native session after the automatic connection is ready. Requires Node 22.15+; automatic connection was tested on Codex CLI 0.159.2. Build before installing a source checkout.
 
 Use the absolute path of this checkout (or the installed Codex plugin) for diagnostics and the dashboard:
 
@@ -56,7 +50,7 @@ The dashboard opens on **http://127.0.0.1:4731**. Choose another port with `--po
 
 For an extracted release, use `/absolute/path/to/extracted-plugin/dist/cli.mjs` in those commands. Keep the dashboard terminal running while working in a separate Codex terminal.
 
-The Codex dashboard shows all ten feature stages and separates Jev selection from actual host application. At the default concurrency of 1, admitted automatic work follows **Gate A → Gate B → one worker → code acceptance → root continuation**; only planned delegation adds a planner and dependency graph. A standalone `codex` session retains Evidence, Output and observation; automatic policies require the launch command above.
+The Codex dashboard shows all ten feature stages and separates Jev selection from actual host application. At the default concurrency of 1, admitted automatic work follows **Gate A → Gate B → one worker → code acceptance → root continuation**; only planned delegation adds a planner and dependency graph. Ordinary native sessions use the automatic local connection for policies. The dashboard distinguishes a recorded policy decision from its observed application; an open session using its previous provider does not become connected retroactively.
 
 [Native feature support, configuration, environment inheritance and troubleshooting →](plugins/codex/README.md)
 
