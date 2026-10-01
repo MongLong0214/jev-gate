@@ -15,9 +15,12 @@ import { CODEX_SANDBOX_META, codexCallerWorkspace } from '../codex/workspace.js'
 import { AGENT_TOOL } from '../codex/profiles.js';
 import { connectionRequest, ensureConnection } from '../codex/connection.js';
 import { dirname } from 'node:path';
+import { resolveApiKey, saveApiKey } from '../credentials.js';
+import { claudeSetupMessage, claudeTraceDir, integratedClaudePlugin, prepareClaude } from '../claude-setup.js';
+import { startOnboarding } from '../onboarding.js';
 
 export const TOOL_NAME = 'jev_evidence';
-export const SERVER_VERSION = '0.7.1';
+export const SERVER_VERSION = '0.8.0';
 
 const strings = (description: string) => ({ type: 'array', items: { type: 'string', minLength: 1 }, minItems: 1, maxItems: LIMITS.arrayItems, description });
 const HEX64 = { type: 'string', pattern: '^[0-9a-f]{64}$' };
@@ -128,7 +131,7 @@ export const createServer = (load: ConfigLoad, deps: EvidenceServiceDeps & { tra
         kind: parsed.ok ? parsed.input.kind : 'invalid',
         mode: parsed.ok && parsed.input.kind === 'search' ? parsed.input.mode : null,
         remote_configured: activeConfig?.remote === true,
-        key_present: deps.apiKey !== null,
+        key_present: (deps.getApiKey ? deps.getApiKey() : deps.apiKey) !== null,
       };
       deps.trace?.write('evidence_start', base);
       let remoteCalls = 0;
@@ -193,21 +196,35 @@ export const doctorLines = (load: ConfigLoad, env: Readonly<Record<string, strin
 const main = async (): Promise<void> => {
   const env = process.env;
   const codex = process.argv.includes('--codex');
+  const installed = codex || integratedClaudePlugin(env);
   const load = await loadConfig(env, codex ? { host: 'codex', cwd: env['JEV_CODEX_WORKSPACE'] ?? '' } : undefined);
   if (process.argv.includes('--doctor')) {
-    process.stdout.write(`${doctorLines(load, env, fileURLToPath(import.meta.url)).join('\n')}\n`);
+    process.stdout.write(`${doctorLines(load, { ...env, TYPESAFE_API_KEY: resolveApiKey(env) }, fileURLToPath(import.meta.url)).join('\n')}\n`);
     process.exitCode = load.ok ? 0 : 1;
     return;
   }
-  process.stderr.write(`jev-evidence: config ${load.ok ? 'ok' : `unavailable (${load.reason})`} (${load.origin}), remote ${load.ok && load.config.remote ? 'on' : 'off'}, key ${env['TYPESAFE_API_KEY'] ? 'present' : 'absent'}\n`);
+  let note: string | null = null;
+  if (installed && !codex) note = claudeSetupMessage(prepareClaude(env));
+  if (note) process.stderr.write(`jev-gate: ${note}\n`);
+  // Existing native option/environment input also counts as the user's one key entry. Never print it.
+  const option = env['CLAUDE_PLUGIN_OPTION_TYPESAFEAPIKEY'];
+  const supplied = option?.trim() ? option : env['TYPESAFE_API_KEY'];
+  if (installed && supplied && resolveApiKey(env) === supplied) {
+    try { if (resolveApiKey({ HOME: env['HOME'], XDG_CONFIG_HOME: env['XDG_CONFIG_HOME'] }) !== supplied) saveApiKey(env, supplied); }
+    catch { process.stderr.write('jev-gate: shared key storage unavailable; the supplied key remains usable in this host.\n'); }
+  }
+  const onboarding = installed ? await startOnboarding(env, { note: note ?? (codex ? 'Codex owns hook trust. If prompted, review the installed hooks. A host already open during installation needs a fresh host to load the connection.' : 'Claude Code settings are prepared automatically. Existing permissions and explicit settings remain in effect.') }) : null;
+  if (onboarding) process.stderr.write(`jev-gate: enter your Jev API key at ${onboarding.url}\n`);
+  process.stderr.write(`jev-evidence: config ${load.ok ? 'ok' : `unavailable (${load.reason})`} (${load.origin}), remote ${load.ok && load.config.remote ? 'on' : 'off'}, key ${resolveApiKey(env) ? 'present' : 'absent'}\n`);
   let traceDir = env['JEV_GATE_TRACE_DIR'];
+  if (installed && !codex && !traceDir) traceDir = claudeTraceDir(env);
   try { if (codex) traceDir = codexTraceDir(env); }
   catch { traceDir = undefined; process.stderr.write('jev-evidence: invalid Codex trace directory; recording unavailable\n'); }
   const opened = traceDir ? openTraceDir(traceDir) : null;
   const root = dirname(dirname(fileURLToPath(import.meta.url)));
   const automaticConnection = codex && env['JEV_CODEX_AUTO_CONNECT'] !== '0' && env['JEV_CODEX_ENABLED'] !== '0' && !env['JEV_CODEX_BRIDGE_URL'];
   if (automaticConnection) await ensureConnection(root, env);
-  const server = createServer(load, { apiKey: env['TYPESAFE_API_KEY'] || null, ...(opened?.ok ? { trace: opened.writer } : {}), ...(codex ? { host: 'codex' as const, callerEnv: env } : {}), ...(automaticConnection ? { dispatch: async (arguments_: unknown, meta: unknown, signal: AbortSignal) => {
+  const server = createServer(load, { apiKey: resolveApiKey(env) || null, getApiKey: () => resolveApiKey(env) || null, ...(opened?.ok ? { trace: opened.writer } : {}), ...(codex ? { host: 'codex' as const, callerEnv: env } : {}), ...(automaticConnection ? { dispatch: async (arguments_: unknown, meta: unknown, signal: AbortSignal) => {
     const result = await connectionRequest(env, '/agent', { arguments: arguments_, meta }, signal);
     return typeof result?.['output'] === 'string' ? result['output'] : 'Native connection unavailable or interrupted. No completion is claimed.';
   } } : {}) });
@@ -218,7 +235,7 @@ const main = async (): Promise<void> => {
     void ensureConnection(root, env).then(ok => { nextAttempt = Date.now() + (ok ? 0 : 30_000); }).catch(() => { nextAttempt = Date.now() + 30_000; }).finally(() => { maintaining = false; });
   }, 2000) : null;
   supervisor?.unref();
-  server.onclose = () => { if (supervisor) clearInterval(supervisor); };
+  server.onclose = () => { if (supervisor) clearInterval(supervisor); void onboarding?.close(); };
   await server.connect(new StdioServerTransport());
 };
 

@@ -186,7 +186,7 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
   })();
   try {
     if (options.connection) {
-      await rpc.request('initialize', { clientInfo: { name: 'jev-gate-native-connection', version: '0.7.1' }, capabilities: { experimentalApi: true } });
+      await rpc.request('initialize', { clientInfo: { name: 'jev-gate-native-connection', version: '0.8.0' }, capabilities: { experimentalApi: true } });
       rpc.send({ method: 'initialized' }); await policy.initialize();
     }
     return { url: `ws://127.0.0.1:${address.port}`, token, policy, rpc, close };

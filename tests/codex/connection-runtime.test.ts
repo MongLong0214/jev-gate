@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { CodexRpc } from '../../src/codex/rpc.js';
+import { saveApiKey } from '../../src/credentials.js';
 
 type Obj = Record<string, unknown>;
 const root = join(__dirname, '../..');
@@ -53,7 +54,8 @@ describe.skipIf(process.env['JEV_CODEX_E2E'] !== '1')('ordinary native Codex aut
     const built = spawnSync(process.execPath, [join(root, 'scripts/build-codex.mjs'), join(plugin, 'dist')], { encoding: 'utf8' });
     expect(built.status, built.stderr).toBe(0);
     const policyFile = join(temp, 'policy.json'); writeFileSync(policyFile, '{}');
-    const fixtureEnv = { PATH: `${join(workspace, '.bin')}:${process.env['PATH'] ?? ''}`, JEV_CODEX_CONFIG: policyFile, JEV_GATE_STATE_DIR: join(temp, 'state'), JEV_CODEX_UPSTREAM: base, JEV_CODEX_CONNECTION_TEST_NO_AUTH: '1', TYPESAFE_API_KEY: 'fake-local-jev-key', NODE_OPTIONS: `--import ${preload}` };
+    const fixtureEnv = { PATH: `${join(workspace, '.bin')}:${process.env['PATH'] ?? ''}`, XDG_CONFIG_HOME: join(temp, 'config'), JEV_GATE_ONBOARDING: '0', JEV_CODEX_CONFIG: policyFile, JEV_GATE_STATE_DIR: join(temp, 'state'), JEV_CODEX_UPSTREAM: base, JEV_CODEX_CONNECTION_TEST_NO_AUTH: '1', NODE_OPTIONS: `--import ${preload}` };
+    saveApiKey(fixtureEnv, 'fake-local-jev-key');
     const mcpFile = join(plugin, '.mcp.json'); const mcp = JSON.parse(readFileSync(mcpFile, 'utf8')) as { mcpServers: Record<string, Obj> };
     mcp.mcpServers['jev_gate_evidence']!['env'] = fixtureEnv;
     writeFileSync(mcpFile, JSON.stringify(mcp));
@@ -62,6 +64,7 @@ describe.skipIf(process.env['JEV_CODEX_E2E'] !== '1')('ordinary native Codex aut
     writeFileSync(marketFile, JSON.stringify(market));
     const env: NodeJS.ProcessEnv = { ...process.env, CODEX_HOME: codexHome, JEV_CODEX_TRACE_DIR: trace, ...fixtureEnv };
     delete env['JEV_CODEX_WORKSPACE']; delete env['JEV_EVIDENCE_CONFIG']; delete env['JEV_CODEX_BRIDGE_URL']; delete env['JEV_CODEX_BRIDGE_TOKEN'];
+    delete env['TYPESAFE_API_KEY']; delete env['CLAUDE_PLUGIN_OPTION_TYPESAFEAPIKEY'];
     const cli = (args: string[]) => spawnSync('codex', args, { env, cwd: workspace, encoding: 'utf8', timeout: 20_000 });
     const config = join(codexHome, 'config.toml');
     writeFileSync(config, `# Preserve this owner comment\nmodel = "gpt-6.1-sol"\nmodel_reasoning_effort = "high"\nopenai_base_url = ${JSON.stringify(base)}\n[shell_environment_policy]\ninherit = "all"\n[features]\nplugins = true\nhooks = true\n`);

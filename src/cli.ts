@@ -4,6 +4,8 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { codexTraceDir } from './codex-paths.js';
+import { resolveApiKey } from './credentials.js';
+import { claudeConfigDir, claudeTraceDir } from './claude-setup.js';
 
 import { AUTH_CONFLICT_ENV, isSubscriptionOAuth, parseAuthStatus, subagentModelOverride, type CommandResult } from './auth.js';
 import { OWNED_AGENT_PROFILES } from './agents.js';
@@ -198,7 +200,7 @@ const checkConfig = (loaded: ConfigResult): void => {
   const { floor, source: floorSource } = effectiveDepthFloor(c, window.tokens);
   say('info', `host compaction window: ${window.tokens === null ? `unknown (${window.source})` : `${window.tokens} tokens (${window.source})`}; a launch's --autocompact or --settings flag, MDM policy and server-managed settings are not visible to a hook and can override this`);
   if (floor === 0) {
-    say('warn', 'effective depth floor is 0: Gate A is asked on every prompt regardless of how deep the session is. Forced orchestration measured +182% on a fresh session and -57% on a loaded one');
+    say('info', 'effective depth floor is 0: Gate A can assess every eligible prompt; Jev and the admission policy still decide whether delegation applies');
   } else if (window.tokens !== null && floor >= window.tokens) {
     say(
       'fail',
@@ -235,9 +237,14 @@ const checkConfig = (loaded: ConfigResult): void => {
   say('info', `job state directory: ${jobsDir(process.env)} (0700, one 0600 file per session, removed after 7 days)`);
   if (process.env['JEV_GATE_EXPERIMENT_ADMISSION'] === 'orchestrated') say('warn', `JEV_GATE_EXPERIMENT_ADMISSION=orchestrated is set: every prompt starts an orchestrated job in ${c.mode} mode without a Gate A request (recorded as forced/admission_forced); allocation and result gates are unaffected`);
   if (c.workerIsolation === 'worktree') {
+    let snapshot = false;
+    try { snapshot = JSON.stringify(JSON.parse(readFileSync(join(root, 'hooks', 'hooks.json'), 'utf8'))?.hooks?.WorktreeCreate).includes('/dist/worktree-cli.js'); } catch { /* Standalone/legacy adapters retain the native baseRef behavior. */ }
+    if (snapshot) say('info', 'workerIsolation=worktree: the installed WorktreeCreate hook snapshots current working files with a private index; root HEAD and index are preserved. No manual baseRef setting is needed');
+    else {
     const baseRef = readHostWorktreeBaseRef(process.env, process.cwd());
     if (baseRef.value === 'head') say('info', `workerIsolation=worktree with worktree.baseRef="head" (${baseRef.source}): every planned worker dispatch the hook patches also carries isolation: "worktree" (an ad-hoc or single-executor dispatch never does); whether the host actually gives that worker its own git worktree for a patched call is not yet observed`);
     else say('warn', `workerIsolation=worktree is not in effect: host worktree.baseRef is ${baseRef.value === null ? (baseRef.source === 'unset' ? 'unset' : `unknown (${baseRef.source})`) : `"${baseRef.value}" (${baseRef.source})`}, so an isolated worker would start from origin/<default-branch> instead of this branch. The hook runs such turns as workerIsolation=none with one worker at a time; set "worktree": {"baseRef": "head"} in Claude Code settings to use it`);
+    }
   } else say('info', `workerIsolation=${c.workerIsolation}: workers share the caller's working tree; maxParallelWorkers stays 1 under this setting`);
 };
 
@@ -295,7 +302,8 @@ const checkEnv = (mode: Mode | null): void => {
   const debugDir = launch('CLAUDE_CODE_DEBUG_LOGS_DIR');
   if (debugDir) say('ok', `CLAUDE_CODE_DEBUG_LOGS_DIR=${debugDir}: Router/Compact/Output decisions are recorded there for the dashboard`);
   else say('warn', 'CLAUDE_CODE_DEBUG_LOGS_DIR not set (shell and settings env): Router/Compact/Output recording cannot be confirmed here. If you start Claude with --debug, use its actual debug directory; otherwise set the directory in settings env and restart the host');
-  say(env['TYPESAFE_API_KEY'] ? 'ok' : 'warn', env['TYPESAFE_API_KEY'] ? 'TYPESAFE_API_KEY is set (value not shown)' : 'TYPESAFE_API_KEY not set: auto mode preserves every eligible call, and lean reads no source and sends nothing (key_missing)');
+  const key = resolveApiKey({ ...env, TYPESAFE_API_KEY: launch('TYPESAFE_API_KEY') });
+  say(key ? 'ok' : 'warn', key ? 'Jev API key available from the plugin option, environment or shared private store (value not shown)' : 'Jev API key missing: the installed plugin opens a local key-entry screen; Gate/Lean/Router remain native until a key is supplied');
   if (existsSync(join(process.cwd(), '.env'))) say('info', '.env in cwd is NOT auto-loaded by the hook; export the variable in the shell that starts Claude Code');
 };
 
@@ -362,7 +370,7 @@ const isMainModule = (): boolean => {
  * every decision was already recorded, and reading it meant opening benchmark JSON by hand.
  */
 const explain = (dir: string | undefined): void => {
-  const target = dir ?? process.env['JEV_GATE_TRACE_DIR'];
+  const target = dir ?? configuredDir(undefined, 'JEV_GATE_TRACE_DIR') ?? claudeTraceDir(process.env);
   if (!target) {
     process.stdout.write('explain: pass a trace directory, or set JEV_GATE_TRACE_DIR\n');
     process.exitCode = 2;
@@ -378,6 +386,8 @@ const configuredDir = (flag: string | undefined, key: string): string | null => 
   if (fromEnv && fromEnv.length > 0) return fromEnv;
   const found = readSettingsEnvVar(process.env, process.cwd(), key);
   if (found && 'value' in found && found.value.length > 0) return found.value;
+  if (key === 'JEV_GATE_TRACE_DIR') return claudeTraceDir(process.env);
+  if (key === 'CLAUDE_CODE_DEBUG_LOGS_DIR') return join(claudeConfigDir(process.env), 'debug');
   return null;
 };
 

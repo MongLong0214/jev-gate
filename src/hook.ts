@@ -1,3 +1,5 @@
+import { integratedClaudePlugin } from './claude-setup.js';
+import { hasWorktreeHead } from './worktree.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, realpathSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -410,14 +412,17 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
   if (deps.env['JEV_GATE_MODE'] === 'off') return isAgentPre ? preserve('mode_off') : skip('mode_off');
   const loaded = deps.host ? { ok: true as const, config: deps.host.config, source: 'host' } : loadConfig(deps.env, undefined, hookDefaultMode(deps.env, deps.argv ?? []));
   if (!loaded.ok) return isAgentPre ? preserve('config_invalid') : skip('config_invalid');
+  if (loaded.config.mode === 'off') return isAgentPre ? preserve('mode_off') : skip('mode_off');
   /**
    * #48 P1-2 review: a worker under `isolation: "worktree"` starts from the host's `worktree.baseRef`, whose default
    * ("fresh") is origin/<default-branch> rather than this branch, so a worker would build on a revision missing the
    * task's inputs. Only "head" is the revision the plan was made against; any other reading, unset included, runs as
    * workerIsolation "none" -- one worker at a time in the caller's tree -- rather than dispatching onto the wrong base.
    */
-  const baseRef = loaded.config.workerIsolation === 'worktree' ? deps.host ? { value: 'head', source: 'codex_head' } : readHostWorktreeBaseRef(deps.env, null, { cwd: input.cwd ?? null, transcriptPath: input.transcript_path ?? null }) : null;
-  const config: ConfigV5 = baseRef !== null && baseRef.value !== 'head' ? { ...loaded.config, workerIsolation: 'none', maxParallelWorkers: 1 } : loaded.config;
+  const baseRef = loaded.config.workerIsolation === 'worktree' ? deps.host ? { value: 'head', source: 'codex_head' } : integratedClaudePlugin(deps.env) ? { value: 'head', source: 'jev_snapshot' } : readHostWorktreeBaseRef(deps.env, null, { cwd: input.cwd ?? null, transcriptPath: input.transcript_path ?? null }) : null;
+  const snapshotHost = !!deps.host || integratedClaudePlugin(deps.env);
+  const unavailableWorktree = baseRef !== null && (baseRef.value !== 'head' || snapshotHost && !!input.cwd && !hasWorktreeHead(input.cwd, deps.env));
+  const config: ConfigV5 = unavailableWorktree ? { ...loaded.config, workerIsolation: 'none', maxParallelWorkers: 1 } : loaded.config;
   const requestedModelFor = (tool: unknown): string | null => requestedModelFrom(tool, deps.host ? config.models : DEFAULT_CONFIG.models);
   const rawMode = config.mode;
   if (rawMode === 'off') return isAgentPre ? preserve('mode_off') : skip('mode_off');
@@ -2338,13 +2343,22 @@ const isMainModule = (): boolean => {
  * inside its result) is the one case treated as internal, everything else is a normal result.
  */
 export const main = async (): Promise<void> => {
-  const result = await runHook({ stdin: process.stdin, env: process.env, argv: process.argv, startedAt: performance.timeOrigin }).catch(() => null);
+  const { withApiKey } = await import('./credentials.js');
+  const { claudeTraceDir, claudeSetupNotice, integratedClaudePlugin } = await import('./claude-setup.js');
+  const read = await readAll(process.stdin);
+  if ('code' in read) { process.stderr.write(`jev-gate: ${read.code}\n`); process.exitCode = 0; return; }
+  const input = parseInput(read.text);
+  const env = withApiKey(process.env);
+  if (env['CLAUDE_PLUGIN_ROOT'] && !env['JEV_GATE_TRACE_DIR']) env['JEV_GATE_TRACE_DIR'] = claudeTraceDir(env);
+  const notice = !('code' in input) && input.hook_event_name === 'SessionStart' && integratedClaudePlugin(env) ? claudeSetupNotice(env) : null;
+  const result = await runHook({ stdin: (async function* () { yield read.text; })(), env, argv: process.argv, startedAt: performance.timeOrigin }).catch(() => null);
   if (result === null) {
     process.stderr.write('jev-gate: internal\n');
     process.exitCode = 0;
     return;
   }
-  if (result.stdout !== null) process.stdout.write(result.stdout + '\n');
+  if (notice) process.stdout.write(renderSystemMessage(notice) + '\n');
+  else if (result.stdout !== null) process.stdout.write(result.stdout + '\n');
   if (result.code) process.stderr.write(`jev-gate: ${result.code}\n`);
   process.exitCode = 0;
 };

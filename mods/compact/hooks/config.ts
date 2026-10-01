@@ -27,7 +27,7 @@ export const resolveCompactConfig = (options: Options | undefined): CompactConfi
   if (typeof budget !== 'number' || !Number.isInteger(budget) || budget < BUDGET_MIN || budget > BUDGET_MAX) return { ok: false, field: 'budgetChars' };
   const subagents = bool('compactSubagents', true);
   if (subagents === null) return { ok: false, field: 'compactSubagents' };
-  const manual = bool('compactManual', false);
+  const manual = bool('compactManual', true);
   if (manual === null) return { ok: false, field: 'compactManual' };
   return { ok: true, config: { enabled, mode, budgetChars: budget, subagents, manual } };
 };

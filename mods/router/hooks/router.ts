@@ -3,7 +3,7 @@ import { createClient } from './client.ts';
 import type { RouterConfig } from './config.ts';
 import { validKey } from './config.ts';
 import type { RootSwitch, SymbolicEffort } from './models.ts';
-import { aliasFamily, answeredBy, effortIndex, factsOf, isSymbolicEffort, MODEL_FACTS, sameModel, VERIFIED_ROOT_SWITCHES } from './models.ts';
+import { aliasFamily, answeredBy, effortIndex, factsOf, isSymbolicEffort, MODEL_FACTS, sameModel } from './models.ts';
 import type { Answers, Baseline, DimensionReason, ModelTier, MutableDimensions, PolicyOptions, RoutedEffort, RoutingPatch, RoutingTask } from './policy.ts';
 import { allowedBy, buildQuestions, buildState, choosePatch, EFFORT_LEVEL_TARGETS, offerableEfforts, offerableTiers, pairValid, validateAnswers } from './policy.ts';
 import { looksSecret } from './secret.ts';
@@ -315,8 +315,8 @@ export const cachePatch = (
   return { patch: result, ...(want !== undefined && final !== want ? { held: want } : {}) };
 };
 
-/** `rootSwitches` is the verified list; tests pass their own to reach the root-model path. */
-export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSwitch[] = VERIFIED_ROOT_SWITCHES) => {
+/** Optional exact switch restrictions; the default routes every compatible, permitted target. */
+export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootSwitch[]) => {
   const rootEnabled = config.enabled && (config.routeMainEffort || config.routeMainModel);
   const spawnEnabled = config.enabled && (config.routeSubagentModel || config.routeSubagentEffort);
   const childEnabled = config.enabled && config.routeSubagentEffort;
@@ -364,19 +364,24 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
 
   const client = createClient({ timeoutMs: config.timeoutMs });
 
-  /** Read once per session; each caller waits only as long as its own signal allows. */
+  /** Cache a usable key for this session; retry missing input after local onboarding saves one. */
   const keyFor = (engine: RouterEngine, signal: AbortSignal): Promise<KeyState | typeof ABORTED> => {
     if (signal.aborted) return Promise.resolve(ABORTED);
-    keyWait ??= sharedRead(
-      (async (): Promise<KeyState> => {
+    if (keyWait === null) {
+      const read = (async (): Promise<KeyState> => {
         if (config.explicitKey.kind === 'valid') return { key: config.explicitKey.value };
         // An explicit value that cannot be sent never quietly selects a different account's key.
         if (config.explicitKey.kind === 'invalid') return { reason: 'key_invalid' };
         const v = await engine.envKey();
         if (v === undefined || v.trim() === '') return { reason: 'key_missing' };
         return validKey(v) ? { key: v } : { reason: 'key_invalid' };
-      })().catch((): KeyState => ({ reason: 'key_missing' })),
-    );
+      })().catch((): KeyState => ({ reason: 'key_missing' }));
+      const waiting = sharedRead(read);
+      keyWait = waiting;
+      void read.then(result => {
+        if ('reason' in result && result.reason === 'key_missing' && keyWait === waiting) keyWait = null;
+      });
+    }
     return keyWait(signal);
   };
 
@@ -445,11 +450,16 @@ export const createRouter = (config: RouterConfig, rootSwitches: readonly RootSw
 
   const policy = (scope: 'root' | 'spawn', availableModels: readonly string[] | undefined): PolicyOptions => ({
     scope,
-    tiers: config.tiers,
+    tiers: scope === 'root' ? Object.fromEntries(Object.entries(config.tiers).map(([tier, value]) => {
+      const family = aliasFamily(value);
+      if (!family) return [tier, value];
+      const allowed = availableModels?.find(id => factsOf(id)?.family === family);
+      return [tier, allowed ?? MODEL_FACTS.find(f => f.family === family)?.ids[0] ?? value];
+    })) : config.tiers,
     minUpgradeConfidence: config.minUpgradeConfidence,
     minDowngradeConfidence: config.minDowngradeConfidence,
     availableModels,
-    ...(scope === 'root' ? { rootSwitches } : {}),
+    ...(scope === 'root' && rootSwitches !== undefined ? { rootSwitches } : {}),
   });
 
   /** One request for one task. Never throws. A reply after the wait ended is logged against `late`, never applied. */

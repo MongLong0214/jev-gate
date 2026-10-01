@@ -337,7 +337,7 @@ const targetRefusal = (value: string | undefined, baseline: Baseline, opts: Poli
   if (opts.scope === 'root') {
     // Message counts and character counts cannot prove the conversation fits a smaller window.
     if ((factsOf(value)?.contextTokens ?? 0) < (factsOf(baseline.model)?.contextTokens ?? Infinity)) return 'capacity_smaller';
-    if (!(opts.rootSwitches ?? []).some((s) => s.from === baseline.model && s.to === value)) return 'controls_unverified';
+    if (opts.rootSwitches !== undefined && !opts.rootSwitches.some((s) => s.from === baseline.model && s.to === value)) return 'controls_unverified';
   }
   return null;
 };

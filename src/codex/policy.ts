@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { join, isAbsolute } from 'node:path';
 import { mkdirSync, realpathSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { createWorkerWorktree, type WorkerWorktree } from '../worktree.js';
 import { runHook, type HookDeps } from '../hook.js';
 import { stateRoot } from '../job.js';
 import { OWNED_AGENTS, LEAN_EXECUTOR_AGENT, type HookInput } from '../types.js';
@@ -80,7 +82,7 @@ export class CodexPolicy {
       if (!this.sessions.has(id)) {
         const items = Array.isArray(thread?.['turns']) ? thread!['turns'].flatMap((t: unknown) => Array.isArray(obj(t)?.['items']) ? obj(t)!['items'] as Obj[] : []) : [];
         this.sessions.set(id, { id, settings: { ...result, sandboxPolicy: result['sandbox'], effort: result['reasoningEffort'] }, baseline: { model: result['model'], effort: typeof result['reasoningEffort'] === 'string' ? result['reasoningEffort'] : null },
-          policy: loadCodexPolicy({ ...this.env, JEV_CODEX_MODEL: result['model'] }), prompt: null, turn: null, items, complete: method === 'thread/start', epoch: 'initial', tokens: method === 'thread/start' ? 0 : null, window: null, controller: null, commands: new Map() });
+          policy: loadCodexPolicy({ ...this.env, JEV_CODEX_MODEL: result['model'] }, this.catalog), prompt: null, turn: null, items, complete: method === 'thread/start', epoch: 'initial', tokens: method === 'thread/start' ? 0 : null, window: null, controller: null, commands: new Map() });
         if (method !== 'thread/start') await this.hydrate(id);
       }
     }
@@ -120,7 +122,7 @@ export class CodexPolicy {
     if (input['agent_id'] && (!session || session.external)) return {};
     if (!session && event === 'SessionStart' && typeof input['cwd'] === 'string' && isAbsolute(input['cwd']) && typeof input['model'] === 'string' && this.sessions.size < 256) {
       const model = input['model'];
-      session = { id, external: true, settings: { cwd: input['cwd'], model, approvalPolicy: 'never' }, baseline: { model, effort: null }, policy: loadCodexPolicy({ ...this.env, JEV_CODEX_MODEL: model }), prompt: null, turn: null, items: [], complete: false, epoch: 'native-wire', tokens: null, window: null, controller: null, commands: new Map() };
+      session = { id, external: true, settings: { cwd: input['cwd'], model, approvalPolicy: 'never' }, baseline: { model, effort: null }, policy: loadCodexPolicy({ ...this.env, JEV_CODEX_MODEL: model }, this.catalog), prompt: null, turn: null, items: [], complete: false, epoch: 'native-wire', tokens: null, window: null, controller: null, commands: new Map() };
       this.sessions.set(id, session);
     }
     if (!session?.external) return this.nativeHook(input, signal);
@@ -154,9 +156,10 @@ export class CodexPolicy {
     if (typeof model !== 'string') return { request };
     if (session.routed !== session.prompt) {
       session.baseline = { model, effort: typeof effort === 'string' ? effort : null };
-      session.policy = loadCodexPolicy({ ...this.env, JEV_CODEX_MODEL: model });
+      session.policy = loadCodexPolicy({ ...this.env, JEV_CODEX_MODEL: model }, this.catalog);
       const prompt = session.prompt; session.routed = prompt;
       await this.catalogReady;
+      session.policy = loadCodexPolicy({ ...this.env, JEV_CODEX_MODEL: model }, this.catalog);
       // Ultra is a native selection that Codex resolves before the provider request. A proxy cannot invent that mapping.
       const catalog = this.catalog.map(m => ({ ...m, supportedReasoningEfforts: m.supportedReasoningEfforts.filter(e => e.reasoningEffort !== 'ultra') }));
       const patch = await routeCodex({ ...session.baseline, task: session.task, session: id, prompt, catalog, config: session.policy, env: this.env, ...(this.trace ? { trace: this.trace } : {}), signal: session.controller ? AbortSignal.any([signal, session.controller.signal]) : signal, ...(this.fetchImpl ? { fetchImpl: this.fetchImpl } : {}) });
@@ -245,12 +248,13 @@ export class CodexPolicy {
       const selectedModel = typeof modeSettings?.['model'] === 'string' ? modeSettings['model'] : typeof params['model'] === 'string' ? params['model'] : session.baseline.model;
       const selectedEffort = modeSettings && 'reasoning_effort' in modeSettings ? modeSettings['reasoning_effort'] : 'effort' in params ? params['effort'] : session.baseline.effort;
       session.baseline = { model: selectedModel, effort: typeof selectedEffort === 'string' ? selectedEffort : null };
-      session.policy = loadCodexPolicy({ ...this.env, JEV_CODEX_MODEL: session.baseline.model });
+      session.policy = loadCodexPolicy({ ...this.env, JEV_CODEX_MODEL: session.baseline.model }, this.catalog);
       const task = textInput(params['input']);
       session.eligible = task !== null;
       // Non-text and malformed input is preserved. No image or attachment is silently dropped to enable Jev.
       if (task === null || this.env['JEV_CODEX_ENABLED'] === '0' || collaboration && collaboration['mode'] !== 'default') { session.eligible = false; this.rpc.forward(message); return; }
       await this.catalogReady;
+      session.policy = loadCodexPolicy({ ...this.env, JEV_CODEX_MODEL: session.baseline.model }, this.catalog);
       const previousReply = [...session.items].reverse().find(i => i['type'] === 'agentMessage' && typeof i['text'] === 'string')?.['text'];
       const patch = await routeCodex({ model: session.baseline.model, effort: session.baseline.effort,
         task, ...(typeof previousReply === 'string' ? { previousReply } : {}), session: session.id, prompt, catalog: this.catalog, config: session.policy, env: this.env,
@@ -389,7 +393,7 @@ export class CodexPolicy {
     const role = String(applied['subagent_type']); const profile = OWNED_AGENTS[role];
     const model = typeof applied['model'] === 'string' ? applied['model'] : role === LEAN_EXECUTOR_AGENT ? session.requestModel ?? String(session.settings['model'] ?? session.baseline.model) : session.policy.gate.models[profile?.tier ?? 'standard'];
     if (!this.catalog.some(m => m.model === model)) { await this.failure(session, promptId, toolId, input, 'requested_model_unavailable'); return 'The requested worker model is absent from Codex model/list. Native execution remains available; configure accessible tier models.'; }
-    let cwd = String(session.settings['cwd']); let worktree: { path: string; branch: string } | null = null;
+    let cwd = String(session.settings['cwd']); let worktree: WorkerWorktree | null = null;
     let worker: Session | null = null;
     const t0 = Date.now();
     try {
@@ -399,10 +403,12 @@ export class CodexPolicy {
       if (applied['isolation'] === 'worktree') {
         const root = session.external ? join(cwd, '.jev-gate-worktrees') : join(stateRoot(this.env), 'jev-gate', 'worktrees');
         if (!session.external) mkdirSync(root, { recursive: true, mode: 0o700 });
-        const branch = `jev-codex-${randomUUID()}`; const path = join(root, branch);
-        const sandbox = session.external ? ['sandbox', '--sandbox-state-json', JSON.stringify(obj(p['nativeMeta'])?.['codex/sandbox-state-meta']), '--', 'git'] : [];
-        const added = spawnSync(session.external ? 'codex' : 'git', [...sandbox, 'worktree', 'add', '-b', branch, path, 'HEAD'], { cwd, env: safeGitEnv(this.env), encoding: 'utf8', timeout: 10_000 });
-        if (added.status !== 0) throw new Error('worktree unavailable'); worktree = { path, branch }; cwd = path;
+        if (session.external) {
+          const added = spawnSync('codex', ['sandbox', '--sandbox-state-json', JSON.stringify(obj(p['nativeMeta'])?.['codex/sandbox-state-meta']), '--', process.execPath, fileURLToPath(new URL('./worktree.mjs', import.meta.url)), '--codex', cwd, root], { cwd, env: safeGitEnv(this.env), encoding: 'utf8', timeout: 120_000 });
+          if (added.status !== 0) throw new Error('worktree unavailable');
+          worktree = JSON.parse(added.stdout) as WorkerWorktree;
+        } else worktree = createWorkerWorktree(cwd, root, this.env);
+        cwd = worktree.path;
       }
       const sandbox = obj(session.settings['sandboxPolicy']);
       const permissions = obj(session.settings['activePermissionProfile'])?.['id'];
@@ -436,7 +442,7 @@ export class CodexPolicy {
       if (status !== 'completed') { await this.failure(session, promptId, toolId, input, 'worker_not_completed'); return 'Worker interrupted or failed. No completion or acceptance is claimed.'; }
       const response = { status: 'completed', agentId: worker.id, resolvedModel: worker.requestModel ?? worker.settings['model'] ?? child['model'], content: [{ type: 'text', text: String(final?.['text'] ?? '') }], totalDurationMs: Date.now() - t0 };
       const post = await this.hook(session, { hook_event_name: 'PostToolUse', session_id: session.id, prompt_id: promptId, tool_name: 'Agent', tool_use_id: toolId, tool_input: applied, tool_response: response, cwd: String(session.settings['cwd']) });
-      return `${final?.['text'] ?? 'No worker final output.'}\n\n${codexGuidance(contextOf(post))}${worktree ? `\nWorker worktree: ${worktree.path}\nBranch: ${worktree.branch}. Inspect and merge in the root; this result does not merge it.` : ''}`;
+      return `${final?.['text'] ?? 'No worker final output.'}\n\n${codexGuidance(contextOf(post))}${worktree ? `\nWorker worktree: ${worktree.path}\nBranch: ${worktree.branch}\nSnapshot baseline: ${worktree.baseline}. Apply only the diff from this baseline to the worker branch in the root; this result does not integrate it.` : ''}`;
     } catch {
       await this.failure(session, promptId, toolId, input, 'worker_dispatch_failed');
       return 'Worker could not complete. Its files and any worktree are preserved. No acceptance is claimed.';

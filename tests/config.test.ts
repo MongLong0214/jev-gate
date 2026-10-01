@@ -39,12 +39,12 @@ describe('validateConfig', () => {
         ...V5,
         mode: 'auto',
         routeQuestionShape: 'atomic',
-        delegationDepthFloor: null,
+        delegationDepthFloor: 0,
         delegationDepthFraction: 0.6,
         admissionQuestionShape: 'atomic',
-        maxTasksPerPlan: 10,
+        maxTasksPerPlan: 64,
         admittedShape: 'auto',
-        planInterpretation: false,
+        planInterpretation: true,
         delegationCoordinatorTurns: 11,
         delegationWorkerTokensPerCall: 40_000,
         guardAllowMcp: true,
@@ -57,15 +57,15 @@ describe('validateConfig', () => {
     expect(partial.config).toMatchObject({
       mode: 'native',
       plannerDefaultTier: 'frontier',
-      models: { fast: 'haiku', standard: 'sonnet', deep: 'claude-opus-5', frontier: 'opus' },
+      models: { fast: 'haiku', standard: 'sonnet', deep: 'claude-opus-5', frontier: 'claude-fable-5-1' },
       // T5: the default is one worker; parallel dispatch is opt-in until write isolation is actually verified.
-      maxParallelWorkers: 1,
-      guardAllowTools: [],
+      maxParallelWorkers: 16,
+      guardAllowTools: ['*'],
     });
-    expect(DEFAULT_CONFIG.maxParallelWorkers).toBe(1);
+    expect(DEFAULT_CONFIG.maxParallelWorkers).toBe(16);
     // #48 P0-1: absent (and an explicit null) derive the floor from the host's own compaction window instead of a
     // fixed absolute number; 0 is still accepted and still turns the floor off outright.
-    expect(DEFAULT_CONFIG.delegationDepthFloor).toBe(null);
+    expect(DEFAULT_CONFIG.delegationDepthFloor).toBe(0);
     expect(DEFAULT_CONFIG.delegationDepthFraction).toBe(0.6);
     expect(validateConfig({ version: 5, delegationDepthFloor: null })).toMatchObject({ ok: true, config: { delegationDepthFloor: null } });
     expect(validateConfig({ version: 5, delegationDepthFloor: 0 })).toMatchObject({ ok: true, config: { delegationDepthFloor: 0 } });
@@ -147,9 +147,10 @@ describe('validateConfig', () => {
   });
 
   describe('workerIsolation (#48 P1-2)', () => {
-    it('defaults to none when absent, and stays none with a single worker', () => {
+    it('enables sixteen isolated workers when absent and honors an explicit serial policy', () => {
       const r = validateConfig({ version: 5 });
-      expect(r).toMatchObject({ ok: true, config: { workerIsolation: 'none', maxParallelWorkers: 1 } });
+      expect(r).toMatchObject({ ok: true, config: { workerIsolation: 'worktree', maxParallelWorkers: 16 } });
+      expect(validateConfig({ version: 5, maxParallelWorkers: 1, guardAllowTools: [] })).toMatchObject({ ok: true, config: { workerIsolation: 'none', maxParallelWorkers: 1 } });
     });
 
     it('rejects an unrecognized value', () => {
@@ -314,13 +315,13 @@ describe('effectiveDepthFloor (#48 P0-1)', () => {
   });
 
   it("takes the atomic gate's floor from its cost model, whatever the window", () => {
-    for (const window of [null, 200_000, 1_000_000]) expect(effectiveDepthFloor(DEFAULT_CONFIG, window)).toEqual({ floor: 50_865, source: 'cost_model' });
+    for (const window of [null, 200_000, 1_000_000]) expect(effectiveDepthFloor({ ...DEFAULT_CONFIG, delegationDepthFloor: null }, window)).toEqual({ floor: 50_865, source: 'cost_model' });
     // A coordinator that costs more turns needs a deeper session before anything can pay. The bound is the live last
     // bin (51.5), not a second copy of the default floor.
-    expect(effectiveDepthFloor({ ...DEFAULT_CONFIG, delegationCoordinatorTurns: 30 }, null).floor).toBe(Math.floor((51.5 * 40_000) / (51.5 - 30)) + 1);
+    expect(effectiveDepthFloor({ ...DEFAULT_CONFIG, delegationDepthFloor: null, delegationCoordinatorTurns: 30 }, null).floor).toBe(Math.floor((51.5 * 40_000) / (51.5 - 30)) + 1);
   });
 
-  const composite = { ...DEFAULT_CONFIG, admissionQuestionShape: 'composite' as const };
+  const composite = { ...DEFAULT_CONFIG, delegationDepthFloor: null, admissionQuestionShape: 'composite' as const };
 
   it("derives the composite gate's floor from the window at the configured fraction, capped at the legacy absolute floor", () => {
     // default fraction 0.6 x a 300K host window: a smaller window still admits some prompts before it compacts.

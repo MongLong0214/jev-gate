@@ -7,6 +7,7 @@ import { startCodexSession } from './launch.js';
 import { obj, type Obj } from './source.js';
 import type { Env } from '../config.js';
 import type { CodexRpc } from './rpc.js';
+import { resolveApiKey, withApiKey } from '../credentials.js';
 
 const PROVIDER = 'jev-gate-native';
 export interface Connection { version: 1; pid: number; port: number; token: string; marker: string; root: string; original: Obj; installed: Obj }
@@ -82,6 +83,7 @@ export const restoreConnection = async (rpc: CodexRpc, env: Env): Promise<void> 
 export const connectionRequest = async (env: Env, path: '/hook' | '/agent', input: Obj, signal?: AbortSignal): Promise<Obj | null> => {
   const state = read(env); if (!state) return null;
   try {
+    await provision(state, env);
     const response = await fetch(`http://127.0.0.1:${state.port}${path}`, { method: 'POST', headers: { authorization: `Bearer ${state.token}`, 'content-type': 'application/json' }, body: JSON.stringify(input), ...(signal ? { signal } : {}) });
     return response.ok ? obj(await response.json()) : null;
   } catch { return null; }
@@ -99,7 +101,7 @@ const packageVersion = (root: string): number => {
 };
 let provisioned: string | null = null;
 const provision = async (state: Connection, env: Env): Promise<void> => {
-  const key = env['TYPESAFE_API_KEY'];
+  const key = resolveApiKey(env);
   if (!key || provisioned === `${state.pid}:${key}`) return;
   const response = await fetch(`http://127.0.0.1:${state.port}/credentials`, { method: 'POST', headers: { authorization: `Bearer ${state.token}.${Buffer.from(key).toString('base64url')}` }, signal: AbortSignal.timeout(500) });
   if (response.ok) provisioned = `${state.pid}:${key}`;
@@ -127,7 +129,7 @@ export const ensureConnection = async (root: string, env: Env): Promise<boolean>
 
 /** One local helper per Codex home; active MCP clients restart it if it exits. It owns no UI or model harness. */
 export const serveConnection = async (root: string, env: Env): Promise<void> => {
-  env = { ...env };
+  env = withApiKey(env);
   privateDir(env); const lock = join(directory(env), 'service.lock');
   try { mkdirSync(lock, { mode: 0o700 }); }
   catch {

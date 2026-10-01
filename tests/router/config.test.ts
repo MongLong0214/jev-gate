@@ -18,9 +18,9 @@ describe('resolveConfig', () => {
       routeExplicitSpawnModel: true,
       routeSubagentEffort: true,
       routeMainEffort: true,
-      routeMainModel: false,
+      routeMainModel: true,
       explicitKey: { kind: 'absent' },
-      tiers: { fast: 'haiku', standard: 'sonnet', deep: 'opus' },
+      tiers: { fast: 'haiku', standard: 'sonnet', deep: 'opus', frontier: 'claude-fable-5-1' },
       tierIssues: [],
       minUpgradeConfidence: 0.8,
       minDowngradeConfidence: 0.6,
@@ -77,7 +77,7 @@ describe('resolveConfig', () => {
   it('keeps no profile at all when two name one family, since every rank lookup would be a guess', () => {
     const c = ok({ standardModel: 'opus' });
     expect(c.tiers).toEqual({});
-    expect(c.tierIssues.map((i) => i.reason)).toEqual(['ambiguous', 'ambiguous', 'ambiguous']);
+    expect(c.tierIssues.map((i) => i.reason)).toEqual(['ambiguous', 'ambiguous', 'ambiguous', 'ambiguous']);
     expect(ok({ deepModel: 'claude-opus-5-5', frontierModel: 'claude-fable-5-1' }).tiers).toEqual({
       fast: 'haiku',
       standard: 'sonnet',

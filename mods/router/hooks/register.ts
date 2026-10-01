@@ -4,8 +4,21 @@ import type { RouterConfig } from './config.ts';
 import { anyRouting, resolveConfig } from './config.ts';
 import type { HostPins, RouterEngine } from './router.ts';
 import { createRouter } from './router.ts';
+import { installedKeyPath, parseInstalledKey } from './key.ts';
 
 const set = (v: string | undefined): boolean => v !== undefined && v.trim() !== '';
+
+const installedKey = async ($: EngineInterface): Promise<string | undefined> => {
+  const existing = await $.env.get('TYPESAFE_API_KEY');
+  if (existing?.trim()) return existing;
+  try {
+    const path = installedKeyPath(await $.env.get('HOME'), await $.env.get('XDG_CONFIG_HOME'));
+    if (!path) return undefined;
+    const parent = await $.fs.stat(path.slice(0, path.lastIndexOf('/'))); const stat = await $.fs.stat(path);
+    if (parent.isLink || parent.kind !== 'dir' || stat.isLink || stat.kind !== 'file' || stat.size > 16 * 1024) return undefined;
+    return parseInstalledKey(await $.fs.read(path));
+  } catch { return undefined; }
+};
 
 /**
  * The host's `$` as the Router's engine. `$.env.get` takes literal names only (validate lists what a module reads),
@@ -15,7 +28,7 @@ const engineOf = ($: EngineInterface): RouterEngine => ({
   fetch: (url, init) => $.http.fetch(url, init),
   sleep: (ms, signal) => $.clock.sleep(ms, { signal }),
   now: () => Date.now(),
-  envKey: () => $.env.get('TYPESAFE_API_KEY'),
+  envKey: () => installedKey($),
   pins: async (scope = 'spawn'): Promise<HostPins> => {
     if (scope === 'effort')
       return { mainModel: false, mainEffort: set(await $.env.get('CLAUDE_CODE_EFFORT_LEVEL')), subagentModel: false, aliasRemap: false };

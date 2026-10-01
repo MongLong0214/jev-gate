@@ -21,7 +21,7 @@ const EFFORT_ONLY = { routeMainEffort: true, routeMainModel: false, routeSubagen
 const FULL_IDS = { fastModel: 'claude-haiku-4-5', standardModel: 'claude-sonnet-5', deepModel: 'claude-opus-5-5', frontierModel: 'claude-fable-5-1' };
 const MODEL_ONLY = { routeMainEffort: false, routeMainModel: true, routeSubagentModel: false, ...SUBAGENT_OFF, ...FULL_IDS };
 const SPAWN_ONLY = { routeMainEffort: false, routeMainModel: false, routeSubagentModel: true, ...SUBAGENT_OFF };
-/** Root switches these tests declare verified, to reach the root-model path; the shipped list is empty. */
+/** Explicit switch overrides used by tests that constrain the root-model path. */
 const SWITCHES = ([
   ['claude-sonnet-5', 'claude-opus-5-5'],
   ['claude-opus-5-5', 'claude-sonnet-5'],
@@ -173,6 +173,41 @@ describe('root effort', () => {
     expect(n.calls).toEqual([step()]);
     expect(reads).toBe(0);
     expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root', skipped: 'key_missing' }));
+  });
+
+  it('uses a key entered after a keyless turn without restarting the session', async () => {
+    const router = createRouter(configOf(EFFORT_ONLY));
+    const f = fakeEngine({ envKey: undefined, respond: answering({ ...CLEAR, effort: ['xhigh', 0.95] }) });
+    router.turnStart({ turnId: 't1', text: TEXT });
+    const first = streamNext<TurnStepEvent>();
+    await drain(router.turnStep(f.engine, step(), first.next));
+    expect(first.calls).toEqual([step()]);
+    expect(f.sent).toHaveLength(0);
+
+    f.engine.envKey = async () => FAKE_KEY;
+    router.turnStart({ turnId: 't2', text: TEXT });
+    const second = streamNext<TurnStepEvent>();
+    await drain(router.turnStep(f.engine, step({ turnId: 't2' }), second.next));
+    expect(second.calls).toEqual([step({ turnId: 't2', effort: 'xhigh' })]);
+    expect(f.sent).toHaveLength(1);
+  });
+
+  it('retries a missing key even when its first read settles after the turn times out', async () => {
+    const router = createRouter(configOf(EFFORT_ONLY));
+    const f = fakeEngine({ respond: answering({ ...CLEAR, effort: ['xhigh', 0.95] }) });
+    const pending = deferred<string | undefined>(); f.engine.envKey = () => pending.promise;
+    router.turnStart({ turnId: 't1', text: TEXT });
+    const first = streamNext<TurnStepEvent>(); const running = drain(router.turnStep(f.engine, step(), first.next));
+    await settle(); f.expire(); await running;
+    expect(first.calls).toEqual([step()]); expect(f.sent).toHaveLength(0);
+    pending.resolve(undefined); await settle();
+
+    f.engine.envKey = async () => FAKE_KEY;
+    router.turnStart({ turnId: 't2', text: TEXT });
+    const second = streamNext<TurnStepEvent>();
+    await drain(router.turnStep(f.engine, step({ turnId: 't2' }), second.next));
+    expect(second.calls).toEqual([step({ turnId: 't2', effort: 'xhigh' })]);
+    expect(f.sent).toHaveLength(1);
   });
 
   it('forwards a step that could never be routed without waiting for the key', async () => {
@@ -439,21 +474,15 @@ describe('root effort', () => {
 });
 
 describe('root model', () => {
-  it('keeps the root model native as shipped: no model question, and with nothing else to ask, no request', async () => {
+  it('routes the main model without requiring a manually verified switch table', async () => {
     const router = createRouter(configOf(MODEL_ONLY));
     const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', 0.99] }) });
     router.turnStart({ turnId: 't1', text: TEXT });
     const n = streamNext<TurnStepEvent>();
     await drain(router.turnStep(f.engine, step({ model: 'claude-sonnet-5' }), n.next));
-    expect(n.calls).toEqual([step({ model: 'claude-sonnet-5' })]);
-    expect(f.sent).toHaveLength(0);
-    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root', model_withheld: 'no_applicable_target', skipped: 'nothing_to_change' }));
-
-    const both = createRouter(configOf({ ...MODEL_ONLY, routeMainEffort: true }));
-    const g = fakeEngine({ respond: answering({ ...CLEAR, effort: ['low', 0.95] }) });
-    both.turnStart({ turnId: 't1', text: TEXT });
-    await drain(both.turnStep(g.engine, step(), streamNext<TurnStepEvent>().next));
-    expect(Object.keys(g.sent[0]?.questions ?? {})).toEqual(['control', 'effort', 'action_risk']);
+    expect(n.calls).toEqual([step({ model: 'claude-opus-5-5' })]);
+    expect(f.sent).toHaveLength(1);
+    expect(f.sent[0]?.questions['tier']).toBeDefined();
   });
 
   it('moves to a stronger configured model on the upgrade floor, and offers only the targets a switch could reach', async () => {
@@ -611,14 +640,14 @@ describe('root model', () => {
     });
   });
 
-  it('offers no model change with the default aliases, since a root request takes only exact identifiers', async () => {
-    const router = createRouter(configOf({ ...MODEL_ONLY, fastModel: 'haiku', standardModel: 'sonnet', deepModel: 'opus', frontierModel: '' }));
-    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['fast', 0.99] }) });
+  it('resolves default aliases to exact root identifiers and enables the frontier tier', async () => {
+    const router = createRouter(configOf({ routeMainModel: true, routeMainEffort: false, routeSubagentModel: false }));
+    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['frontier', 0.99] }) });
     router.turnStart({ turnId: 't1', text: TEXT });
     const n = streamNext<TurnStepEvent>();
-    await drain(router.turnStep(f.engine, step(), n.next));
-    expect(n.calls).toEqual([step()]);
-    expect(f.sent).toHaveLength(0);
+    await drain(router.turnStep(f.engine, step({ model: 'claude-sonnet-5' }), n.next));
+    expect(n.calls).toEqual([step({ model: 'claude-fable-5-1' })]);
+    expect(f.sent).toHaveLength(1);
   });
 });
 

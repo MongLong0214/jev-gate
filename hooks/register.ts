@@ -62,12 +62,16 @@ export const register: Register = (on, options) => {
     ...(output.ok ? [] : [['output', OPTION_NAMES.output[output.field as keyof typeof OPTION_NAMES.output] ?? output.field]]),
     ...(router.ok ? [] : [['router', OPTION_NAMES.router[router.field as keyof typeof OPTION_NAMES.router] ?? router.field]]),
   ];
-  if (invalid.length) {
-    on('session.start', ($, e, next) => {
-      for (const [mod, field] of invalid) quietly(() => $.ui.log(`jev-${mod} ${JSON.stringify({ event: mod, disabled: 'invalid_option', field })}`, { to: 'debug' }));
-      return next(e);
-    });
-  }
+  on('session.start', async ($, e, next) => {
+    try {
+      if (await $.env.get('CLAUDE_CODE_FORK_SUBAGENT') === undefined) await $.env.set('CLAUDE_CODE_FORK_SUBAGENT', '0');
+      if (await $.env.get('CLAUDE_CODE_DISABLE_BACKGROUND_TASKS') === undefined) await $.env.set('CLAUDE_CODE_DISABLE_BACKGROUND_TASKS', '1');
+      const key = router.ok && router.config.explicitKey.kind === 'valid' ? router.config.explicitKey.value : undefined;
+      if (key && !await $.env.get('TYPESAFE_API_KEY')) await $.env.set('TYPESAFE_API_KEY', key);
+    } catch { /* Initialization cannot interrupt the host. Command hooks also resolve the shared key. */ }
+    for (const [mod, field] of invalid) quietly(() => $.ui.log(`jev-${mod} ${JSON.stringify({ event: mod, disabled: 'invalid_option', field })}`, { to: 'debug' }));
+    return next(e);
+  });
   if (compact.ok) registerCompact(on, compact.config);
   if (output.ok) registerOutput(on, output.config);
   if (router.ok) registerRouter(on, router.config);

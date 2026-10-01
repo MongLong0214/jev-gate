@@ -19,11 +19,11 @@ Option names and defaults for Compact, Output, the Router, and Evidence stay in 
 
 An admitted turn is one of two shapes. `single` (the usual one under `admittedShape: "auto"`) dispatches the request once to a worker and does not run the planner. `hierarchy` runs a planner, then workers. Gate A calls the second shape orchestrated. Both are admitted jobs: the root is told to coordinate, and the guard below is on until terminal acceptance with no active work. Then the root can do remaining checks, integration and reporting under its native permissions. Reuse the observed checks for the same state; new edits, merges and explicitly requested independent reviews still need their own checks. Command success does not prove all requirements were met. A direct admission does not start a job or the guard.
 
-While a job is admitted, the root may use host-provided read and task tools, owned Agent calls, MCP tools and `ToolSearch` when `guardAllowMcp` is true (the default), and names in `guardAllowTools`. Anything else is denied with a fixed reason. The hook never returns `allow`; a call it does not deny is left to normal permissions. Agent profiles have no `tools` or `disallowedTools` frontmatter, so each worker and planner inherits the tools and connected MCPs the host actually provides. A child session (`agent_id` set) is not guarded. This is an execution boundary, not a sandbox. `gateMode` `off` or a hook that does not load removes it.
+The default `guardAllowTools: ["*"]` permits every native root tool, including MCPs and native Agent roles. A permitted call emits no approval: normal host permissions still apply. An explicit narrower list restores the read/task allow-list plus configured extras. Owned Jev dispatches still require their current marker, reservation and contract. Worker and planner profiles inherit the connected tools the host provides; child sessions are not root guarded.
 
 Acceptance is not a Jev call. A worker accept is an observed passing run of each declared check after the last observed Edit, Write, MultiEdit, or NotebookEdit in that worker's transcript. It does not certify an edit made inside Bash, by another editor, or by another process, and it does not certify that the check was the right one or that the current files are fully certified. The comparison is on by default (`verifyWorkerChecks`). The normal path does not make the old Gate C HTTP call.
 
-Uncertainty keeps the call that was already going to happen: a tie, low confidence, abstain, a missing key, a timeout, or an invalid response. A tier above standard needs a concrete upgrade basis on the task. Model names in config are aliases the patch proposes for a worker or planner. They do not change the root session's model, and they do not grant account access. `routeMainModel` is a Router option and defaults to false. The fast tier asks for low effort; haiku was observed, on 2026-09-18, not to apply a requested effort. That is a host fact about that model, not a new measurement.
+Uncertainty keeps the call that was already going to happen: a tie, low confidence, abstain, a missing key, a timeout, or an invalid response. A tier above standard needs a concrete upgrade basis on the task. Model names in config are aliases or exact IDs the patch proposes for a worker or planner. They do not change the root session's model, and they do not grant account access. `routeMainModel` is a Router option and defaults to true. The fast tier asks for low effort; haiku was observed, on 2026-09-18, not to apply a requested effort. That is a host fact about that model, not a new measurement.
 
 New automatic atomic jobs carry the user request verbatim. If the request or complete single-worker packet cannot fit the existing UTF-8 bounds, the request stays in the main session. A final packet failure consumes no worker reservation, attempt or Gate B call. Previously stored jobs without the policy revision keep their existing whole-or-omitted behaviour.
 
@@ -61,12 +61,12 @@ A V3 or V4 file is rejected with a sample. The plugin does not rewrite it. A key
   "routeConfidenceFloor": 0.8,
   "resultConfidenceFloor": 0.8,
   "plannerDefaultTier": "deep",
-  "maxParallelWorkers": 1,
-  "guardAllowTools": [],
-  "workerIsolation": "none",
-  "delegationDepthFloor": null,
+  "maxParallelWorkers": 16,
+  "guardAllowTools": ["*"],
+  "workerIsolation": "worktree",
+  "delegationDepthFloor": 0,
   "delegationDepthFraction": 0.6,
-  "maxTasksPerPlan": 10,
+  "maxTasksPerPlan": 64,
   "admissionQuestionShape": "atomic",
   "routeQuestionShape": "atomic",
   "admittedShape": "auto",
@@ -74,23 +74,23 @@ A V3 or V4 file is rejected with a sample. The plugin does not rewrite it. A key
   "delegationWorkerTokensPerCall": 40000,
   "guardAllowMcp": true,
   "verifyWorkerChecks": true,
-  "planInterpretation": false,
+  "planInterpretation": true,
   "models": {
     "fast": "haiku",
     "standard": "sonnet",
     "deep": "opus",
-    "frontier": "opus"
+    "frontier": "claude-fable-5-1"
   }
 }
 ```
 
-`admittedShape` `auto` runs `single` when effective `maxParallelWorkers` is 1. Above 1, separate outcomes (`parallel_outcomes >= .6`) or a whole project (`size >= 4`) select `hierarchy`; otherwise it selects `single`. An unreadable required shape answer stays direct unless the other OR arm already proves hierarchy. `single` and `hierarchy` pin one shape. `admissionQuestionShape` and `routeQuestionShape` default to `atomic`: the judgement is composed in this plugin, and the matching composite confidence floor is not consulted. Atomic Gate A requires a uniquely self-contained answer with at least .8 probability, a valid five-bin Score, positive rounded point saving and at least .8 normalized distribution support for positive-saving bins. This support is a policy heuristic, not a probability of actual savings. It asks three facts at cap 1 or a fixed shape, five for auto above cap 1, in one HTTP batch. Atomic Gate B asks six facts: yes is at least .6, no at most .4, and the middle preserves the called tier. Specific difficulty upgrades fast/standard to deep; deep/frontier are retained. Fast needs fully specified or repetitive work, fixed interfaces and stated checks, with both difficulty facts negative. `composite` is the single choice question. `planInterpretation` false means that extra request is not made. Turned on, it classifies clauses and rejects nothing; the plan is adopted either way. `maxTasksPerPlan` rejects a plan above that many tasks. `maxParallelWorkers` defaults to 1. Above 1, `workerIsolation` must be `worktree`, and `guardAllowTools` must include `Bash`. `guardAllowMcp` changes only the root guard; it never says which MCPs a worker has.
+`admittedShape` `auto` runs `single` when effective `maxParallelWorkers` is 1. Above 1, separate outcomes (`parallel_outcomes >= .6`) or a whole project (`size >= 4`) select `hierarchy`; otherwise it selects `single`. An unreadable required shape answer stays direct unless the other OR arm already proves hierarchy. `single` and `hierarchy` pin one shape. `admissionQuestionShape` and `routeQuestionShape` default to `atomic`: the judgement is composed in this plugin, and the matching composite confidence floor is not consulted. Atomic Gate A requires a uniquely self-contained answer with at least .8 probability, a valid five-bin Score, positive rounded point saving and at least .8 normalized distribution support for positive-saving bins. This support is a policy heuristic, not a probability of actual savings. It asks three facts at cap 1 or a fixed shape, five for auto above cap 1, in one HTTP batch. Atomic Gate B asks six facts: yes is at least .6, no at most .4, and the middle preserves the called tier. Specific difficulty upgrades fast/standard to deep; deep/frontier are retained. Fast needs fully specified or repetitive work, fixed interfaces and stated checks, with both difficulty facts negative. `composite` is the single choice question. `planInterpretation` is true by default; false skips the extra request. Turned on, it classifies clauses and rejects nothing; the plan is adopted either way. `maxTasksPerPlan` rejects a plan above that many tasks. `maxParallelWorkers` defaults to 16. Above 1, `workerIsolation` must be `worktree`, and `guardAllowTools` must include `Bash` or `*`. `guardAllowMcp` changes only the root guard; it never says which MCPs a worker has.
 
-`frontier` defaults to `opus`. A patched frontier dispatch is given that alias. It does not change the root session's model. A restricted model is proposed only when this file names it.
+On Claude Code, `frontier` defaults to `claude-fable-5-1`. A patched frontier dispatch is given that exact ID; account access remains a host decision. Codex derives its default frontier ID from the account's live model catalog. Gate tier configuration does not change the root session's model; the independent Router controls that.
 
 ## Depth floor
 
-With the default atomic shape, `delegationDepthFloor: null` does not use the host's compaction window. The floor is the shallowest depth at which the largest tool-call bin could still pay. The live map from that score to estimated root turns is `[4, 6, 6, 26.5, 51.5]`. At the defaults (`delegationCoordinatorTurns` 11, `delegationWorkerTokensPerCall` 40000) the floor is 50865. The formula is `floor(turns * delegationWorkerTokensPerCall / (turns - delegationCoordinatorTurns)) + 1` with `turns` the last bin. The bins are owner-reported estimates of root turns, not a count of tool calls and not a measured bill. Changing the two constants changes the floor. This is not a savings guarantee.
+The depth floor defaults to `0`. With an explicit `delegationDepthFloor: null` and the atomic shape, that null does not use the host's compaction window. The floor is the shallowest depth at which the largest tool-call bin could still pay. The live map from that score to estimated root turns is `[4, 6, 6, 26.5, 51.5]`. At the defaults (`delegationCoordinatorTurns` 11, `delegationWorkerTokensPerCall` 40000) the floor is 50865. The formula is `floor(turns * delegationWorkerTokensPerCall / (turns - delegationCoordinatorTurns)) + 1` with `turns` the last bin. The bins are owner-reported estimates of root turns, not a count of tool calls and not a measured bill. Changing the two constants changes the floor. This is not a savings guarantee.
 
 `delegationDepthFloor` set to an integer, including `0`, replaces that derivation. `0` turns the floor off. A transcript that cannot be read still keeps the turn direct.
 
@@ -104,7 +104,7 @@ The map this replaced, and the withdrawn savings claims attached to an earlier f
 
 A worker brief is eligible only when the Agent call is in the foreground. An interactive session defaults to fork mode, where the host omits `run_in_background`. Without a foreground profile every brief is `not_foreground`: an admitted job would not reach a worker, while the guard would still refuse the root's own edits. So `auto` and `lean` do not ask.
 
-Set both on the process that starts Claude Code. A settings `env` block is applied to that process, so it can carry them too. Forcing the foreground means subagents in that session do not run in the background. `CLAUDE_CODE_FORK_SUBAGENT=1` is refused. `CLAUDE_CODE_FORK_SUBAGENT=0` is enough for a call that says `run_in_background: false`. `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` also treats a call that says nothing as foreground.
+Ordinary installations prepare both settings automatically. On first startup, restart the host once if the initialization notice asks; do not edit an `env` block. These variables remain useful for explicit advanced launches. Forcing the foreground means subagents in that session do not run in the background. Explicit owner overrides are preserved: `CLAUDE_CODE_FORK_SUBAGENT=1` is refused. `CLAUDE_CODE_FORK_SUBAGENT=0` is enough for a call that says `run_in_background: false`. `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` also treats a call that says nothing as foreground.
 
 ```sh
 CLAUDE_CODE_FORK_SUBAGENT=0 \
@@ -112,7 +112,7 @@ CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 \
 claude --plugin-dir /path/to/jev-gate
 ```
 
-`workerIsolation` defaults to `none`. `worktree` adds `isolation: "worktree"` on a patched worker dispatch only. A planner dispatch and a single-executor dispatch do not carry it. The host's `worktree.baseRef` must be `"head"` (`"worktree": {"baseRef": "head"}` in Claude Code settings). Unset is treated as fresh, which tracks `origin/<default-branch>`, so the turn is run as `workerIsolation: "none"` with one worker, and doctor warns. Whether a patched call actually receives its own git worktree has not been observed on a live host. This is a tested patch, not a measured host behavior. Even with `"head"`, a worker sees the last commit, not uncommitted edits.
+`workerIsolation` defaults to `worktree`. Patched planned workers receive `isolation: "worktree"`; planners and single executors stay in the root. The integrated Claude plugin uses its `WorktreeCreate` hook, and Codex creates the same snapshot inside the captured native permission scope. Each snapshot includes staged, unstaged and untracked working files and excludes ignored files. A private Git index leaves the root HEAD, index and files intact. Record the worker's initial HEAD as its snapshot baseline; after checks, commit worker changes and apply only `git diff --binary <baseline> <worker-branch>` with `git apply` in the root. Integrate predecessors before creating dependent workers. Conflicting root changes require resolution; do not merge the snapshot commit. Explicit native worktree settings are preserved; the integrated snapshot hook selects its own baseline.
 
 ## What Gate sends
 
@@ -164,7 +164,7 @@ node dist/cli.js doctor
 
 `npm run pack` writes `dist-pack/jev-gate-<version>.zip` for the integrated plugin. `--profile lean`, `--profile router`, and `--profile evidence` write the single-part archives used for development. The bench is not part of that. `npm run release:check` rebuilds the integrated archive and compares it with the pin; it fails on a released version whose bytes changed, which is the point of the check. Do not publish from a documentation edit.
 
-Load the checkout with `claude --plugin-dir .` after the build. Gate will not dispatch until the foreground variables above are set on that process.
+Load the checkout with `claude --plugin-dir .` after the build. It performs the same automatic initialization as the installed archive; start a fresh host after a first-start notice.
 
 ## Recorded runs
 

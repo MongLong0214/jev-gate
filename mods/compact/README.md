@@ -33,7 +33,7 @@ On by default (v0.6.3), in `active` mode; off registers no hook at all. Options 
 | `compactMode` | `active` | `shadow` builds and logs the digest and lets the engine compact, logging how long that took and what its summarizer used. `active` answers the compaction with the digest. |
 | `compactBudgetChars` | `40000` | Target characters for the digest and the kept tail together, 8000–400000. See the ceiling below. |
 | `compactSubagents` | `true` | Also answer a subagent's own auto compactions. |
-| `compactManual` | `false` | Also answer `/compact` typed without instructions. Keep it off: see the host defect below. |
+| `compactManual` | `true` | Also answer `/compact` typed without instructions. A command with explicit instructions stays native. |
 
 An option it cannot use turns it off and logs the field name once per session. Every compaction it is asked about logs
 one `jev-compact {...}` debug line: why it deferred to the engine, or the sizes, the fallback reason, and in shadow the
@@ -160,12 +160,17 @@ narration instead. The probes are single runs on a toy task.
   as good as the host's and the 8 worse ones, with every answer between 0.16 and 0.5. Not a threshold to route on, so a digest that can be built is used instead
   of asking.
 
-## Host defect: keep `compactManual` off
+## Historical manual-compaction host defect
 
 When a `/compact` in a resumed headless session was answered by this hook, the host wrote the kept tool_result with
 its pre-compaction parent: the next `--resume` followed that link and sent the whole old conversation (43.7K tokens,
 all of it read from cache). Auto compactions, in a fresh or a resumed process, linked correctly in every probe. The
 cause is in the host's transcript writer, not in what the hook returns.
+
+That was observed on Claude Code 2.1.283. A local fake-model probe on 2.1.286 loaded eight text files, resumed for
+`/compact`, then resumed again: the next model request carried the Jev digest and omitted the old full tool results.
+This specific resume path no longer reproduced the old defect. Manual compaction is enabled by default; other host
+versions and transcript shapes are not established by that observation.
 
 ## Host placement: the session's own context lands after the kept messages
 

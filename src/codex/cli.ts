@@ -9,8 +9,10 @@ import { startDashboard } from '../dashboard.js';
 import { launchCodex } from './launch.js';
 import { loadCodexPolicy } from './config.js';
 import { serveConnection } from './connection.js';
+import { withApiKey } from '../credentials.js';
 
 export const codexDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: string): Promise<{ ok: boolean; lines: string[] }> => {
+  env = withApiKey(env);
   const lines: string[] = [];
   let ok = true;
   const check = (pass: boolean, text: string): void => { if (!pass) ok = false; lines.push(`[${pass ? 'ok' : 'fail'}] ${text}`); };

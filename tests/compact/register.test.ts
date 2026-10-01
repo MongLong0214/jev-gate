@@ -40,8 +40,8 @@ const nextSpy = () => {
 };
 
 describe('resolveCompactConfig', () => {
-  it('defaults to on, active, 40000 characters, subagents on, /compact left alone', () => {
-    expect(resolveCompactConfig(undefined)).toEqual({ ok: true, config: { enabled: true, mode: 'active', budgetChars: 40000, subagents: true, manual: false } });
+  it('defaults to on, active, 40000 characters, subagents and manual compaction on', () => {
+    expect(resolveCompactConfig(undefined)).toEqual({ ok: true, config: { enabled: true, mode: 'active', budgetChars: 40000, subagents: true, manual: true } });
   });
   it('names the field it cannot use', () => {
     expect(resolveCompactConfig({ mode: 'fast' })).toEqual({ ok: false, field: 'mode' });
@@ -80,7 +80,7 @@ describe('register', () => {
   });
 
   it('active: answers without asking the engine; the digest leads and the tail keeps its handles', async () => {
-    const hook = (await hooksFor({ enabled: true, mode: 'active' })).get('session.compact')!;
+    const hook = (await hooksFor({ enabled: true, mode: 'active', compactManual: false })).get('session.compact')!;
     const { next, calls } = nextSpy();
     const r = (await hook($, { trigger: 'auto', messages: conversation() }, next)) as { messages: Array<{ role: string; text: string; handle?: string }> };
     expect(calls).toEqual([]);
@@ -93,7 +93,7 @@ describe('register', () => {
 
   it('active: /compact, a subagent when excluded, and a digest it cannot build all go to the engine', async () => {
     const { next, calls } = nextSpy();
-    const on = (await hooksFor({ enabled: true, mode: 'active', compactSubagents: false })).get('session.compact')!;
+    const on = (await hooksFor({ enabled: true, mode: 'active', compactSubagents: false, compactManual: false })).get('session.compact')!;
     logs.length = 0;
     await on($, { trigger: 'manual', messages: conversation() }, next);
     await on($, { trigger: 'precompute', messages: conversation() }, next);
@@ -109,7 +109,7 @@ describe('register', () => {
   });
 
   it('when the engine refuses a compaction it was handed, the line is still written and the refusal passes up', async () => {
-    const hook = (await hooksFor({ enabled: true, mode: 'active' })).get('session.compact')!;
+    const hook = (await hooksFor({ enabled: true, mode: 'active', compactManual: false })).get('session.compact')!;
     const huge = [
       { role: 'user', text: 'Read it.', toolUses: [] },
       { role: 'assistant', text: 'Reading.', toolUses: [{ tool: 'Read', input: { file_path: '/big' }, tool_use_id: 'tx' }] },
@@ -121,7 +121,7 @@ describe('register', () => {
   });
 
   it('a throwing log does not stand between the host and its compaction', async () => {
-    const hook = (await hooksFor({ enabled: true, mode: 'active' })).get('session.compact')!;
+    const hook = (await hooksFor({ enabled: true, mode: 'active', compactManual: false })).get('session.compact')!;
     const bad = { ui: { log: () => { throw new Error('log down'); } } };
     const r = (await hook(bad, { trigger: 'auto', messages: conversation() }, nextSpy().next)) as { messages: unknown[] };
     expect(r.messages.length).toBeGreaterThan(1);
@@ -132,7 +132,7 @@ describe('register', () => {
   });
 
   it('its own failure goes to the engine once; the engine failing or being cancelled is passed up, never retried', async () => {
-    const hook = (await hooksFor({ enabled: true, mode: 'active' })).get('session.compact')!;
+    const hook = (await hooksFor({ enabled: true, mode: 'active', compactManual: false })).get('session.compact')!;
     const broken = conversation();
     Object.defineProperty(broken[5]!, 'text', { get: () => { throw new Error('unreadable'); } });
     const { next, calls } = nextSpy();

@@ -14,7 +14,7 @@ import { startCodexSession } from '../../src/codex/launch.js';
 const required = process.env['JEV_CODEX_E2E'] === '1';
 const root = join(__dirname, '../..');
 const tmp = mkdtempSync(join(tmpdir(), 'jev-codex-runtime-'));
-const runtimeEnv = { ...process.env, CODEX_HOME: join(tmp, 'codex home') };
+const runtimeEnv = { ...process.env, XDG_CONFIG_HOME: join(tmp, 'config'), JEV_GATE_ONBOARDING: '0', CODEX_HOME: join(tmp, 'codex home') };
 const plugin = join(tmp, 'plugin with spaces');
 const workspace = join(tmp, 'workspace');
 const market = `jev-test-${Date.now()}`;
@@ -83,9 +83,9 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
     installed = true;
   }, 60_000);
 
-  it.each(['single', 'failed', 'permission-boundary', 'edit-after-check', 'worktree', 'hierarchy', 'lean', 'cancelled', 'budget', 'compact-manual', 'compact-auto', 'routing-gpt-6.1-sol', 'routing-gpt-6-astra', 'routing-gpt-6-sol', 'routing-gpt-6-luna', 'routing-gpt-5.6-terra', 'routing-model-terra'])('runs automatic native Codex policies: %s', async scenario => {
+  it.each(['single', 'failed', 'permission-boundary', 'edit-after-check', 'worktree', 'hierarchy', 'lean', 'cancelled', 'budget', 'compact-manual', 'compact-auto', 'routing-gpt-6.1-sol', 'routing-gpt-6-astra', 'routing-gpt-6-sol', 'routing-gpt-6-luna', 'routing-gpt-5.6-terra', 'routing-model-terra', 'routing-auto-model'])('runs automatic native Codex policies: %s', async scenario => {
     const routing = scenario.startsWith('routing-');
-    const baselineModel = routing && scenario !== 'routing-model-terra' ? scenario.slice('routing-'.length) : 'gpt-6.1-sol';
+    const baselineModel = routing && !['routing-model-terra', 'routing-auto-model'].includes(scenario) ? scenario.slice('routing-'.length) : 'gpt-6.1-sol';
     const targetEffort = baselineModel.endsWith('luna') ? 'max' : 'ultra';
     const requests: Rec[] = []; const headerKeys: string[][]=[];
     const trace = join(tmp, `managed ${scenario} traces`);
@@ -145,12 +145,21 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
       expect(spawnSync('git',['add','source.ts'],{cwd:workspace}).status).toBe(0);
       expect(spawnSync('git',['-c','user.name=Jev fixture','-c','user.email=fixture@example.invalid','commit','-qm','Fixture'],{cwd:workspace}).status).toBe(0);
     }
-    const policyFile=join(tmp, `policy ${scenario}.json`); writeFileSync(policyFile,JSON.stringify({gate:{mode:scenario.startsWith('compact')||routing?'off':scenario==='lean'?'lean':'auto',admittedShape:scenario==='hierarchy'||scenario==='worktree'?'hierarchy':'auto',...(scenario==='worktree'?{workerIsolation:'worktree',maxParallelWorkers:2,guardAllowTools:['Bash','Read','Glob','Grep','Agent']}: {})},...(scenario==='routing-model-terra'?{router:{model:true},gate:{mode:'off',models:{fast:'gpt-6-luna',standard:'gpt-5.6-terra',deep:'gpt-6.1-sol',frontier:'gpt-6-astra'}}}:{}),compact:{manual:scenario==='compact-manual'}}));
+    // Serial and restrictive scenarios explicitly select that policy; worktree and automatic-model cases exercise the new defaults.
+    const policyFile = join(tmp, `policy ${scenario}.json`);
+    writeFileSync(policyFile, JSON.stringify({
+      gate: { mode: scenario.startsWith('compact') || routing ? 'off' : scenario === 'lean' ? 'lean' : 'auto',
+        admittedShape: scenario === 'hierarchy' || scenario === 'worktree' ? 'hierarchy' : 'auto',
+        ...(scenario === 'worktree' ? {} : { workerIsolation: 'none', maxParallelWorkers: 1, guardAllowTools: [], planInterpretation: false }),
+        ...(scenario === 'routing-model-terra' ? { models: { fast: 'gpt-6-luna', standard: 'gpt-5.6-terra', deep: 'gpt-6.1-sol', frontier: 'gpt-6-astra' } } : {}) },
+      ...(scenario === 'routing-auto-model' ? {} : { router: { model: scenario === 'routing-model-terra' } }),
+      compact: { manual: scenario === 'compact-manual' },
+    }));
     const profiles=Object.fromEntries(['planner','planner-frontier','worker-fast','worker','worker-deep','worker-frontier','executor'].map(n=>[`jev-gate:${n}`,readFileSync(join(root,'agents',n+'.md'),'utf8').replace(/^---[\s\S]*?---\s*/, '')]));
     const session = await startCodexSession({ cwd: workspace, env: { ...runtimeEnv, PATH:`${join(workspace,'.bin')}:${process.env['PATH'] ?? ''}`, JEV_CODEX_CONFIG:policyFile, JEV_CODEX_TRACE_DIR: trace, JEV_GATE_STATE_DIR: join(tmp, `managed ${scenario} state`), JEV_CODEX_UPSTREAM: `http://127.0.0.1:${(server.address() as {port:number}).port}/v1`, TYPESAFE_API_KEY: 'fixture-key' }, serverArgs: config.flatMap(c => ['-c', c]), bypassHookTrust: true, nativeAuth: false, profiles,
       fetchImpl: (async (_url, init) => {
         const parsed=JSON.parse(String(init?.body)); const q = parsed.questions;
-        return new Response(JSON.stringify({ model: parsed.model, answers: Object.fromEntries(Object.keys(q).map(k => { const score=routing && k==='effort'?q[k].criteria.length-1:routing && k==='tier'?1:k==='tool_calls'?4:k==='size'?2:0; const picks:Record<string,string>={work_shape:'sustained_task',handoff_scope:'self_contained'}; const pick=k.startsWith('relation_')?'omit':picks[k] ?? Object.keys(q[k].criteria ?? {})[0]; return [k, q[k].type === 'score' ? { type: 'score', score, confidence:1, probabilities: Object.fromEntries(q[k].criteria.map((_:unknown,i:number)=>[i,i===score?1:0])) } : q[k].type === 'noul' ? { type:'noul',noul:0 } : { type: 'choice', choice: pick, confidence: 1, probabilities: Object.fromEntries(Object.keys(q[k].criteria).map(v=>[v,v===pick?1:0])) }]; })) }), { headers: { 'content-type': 'application/json' } });
+        return new Response(JSON.stringify({ model: parsed.model, answers: Object.fromEntries(Object.keys(q).map(k => { const score=routing && k==='effort'?q[k].criteria.length-1:routing && k==='tier'?(scenario==='routing-auto-model'?3:1):k==='tool_calls'?4:k==='size'?2:0; const picks:Record<string,string>={work_shape:'sustained_task',handoff_scope:'self_contained'}; const pick=k.startsWith('relation_')?'omit':picks[k] ?? Object.keys(q[k].criteria ?? {})[0]; return [k, q[k].type === 'score' ? { type: 'score', score, confidence:1, probabilities: Object.fromEntries(q[k].criteria.map((_:unknown,i:number)=>[i,i===score?1:0])) } : q[k].type === 'noul' ? { type:'noul',noul:0 } : { type: 'choice', choice: pick, confidence: 1, probabilities: Object.fromEntries(Object.keys(q[k].criteria).map(v=>[v,v===pick?1:0])) }]; })) }), { headers: { 'content-type': 'application/json' } });
       }) as typeof fetch });
     const socket = new WebSocket(session.url, { headers: { Authorization: `Bearer ${session.token}` } });
     const opened = new Promise<void>((resolve,reject)=>{socket.once('open',resolve);socket.once('error',reject);});
@@ -199,7 +208,7 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
         const wireEffort = (requests[0]!['reasoning'] as Rec)['effort'];
         if (targetEffort === 'ultra') expect(['low', 'medium', 'high', 'xhigh', 'max']).toContain(wireEffort);
         else expect(wireEffort).toBe(targetEffort);
-        expect(requests[0]!['model']).toBe(scenario === 'routing-model-terra' ? 'gpt-5.6-terra' : baselineModel);
+        expect(requests[0]!['model']).toBe(scenario === 'routing-model-terra' ? 'gpt-5.6-terra' : scenario === 'routing-auto-model' ? 'gpt-6-astra' : baselineModel);
         expect(rows.some(r => r['phase'] === 'codex_route_applied' && r['selected_effort'] === targetEffort && r['observed_host_effort'] === targetEffort && r['observed_effort'] === wireEffort && r['applied'] === true), JSON.stringify(rows)).toBe(true);
         return;
       }
@@ -251,7 +260,7 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
         if(scenario!=='worktree') expect(JSON.stringify(requests[2]!['input'])).toContain('denied');
         if(scenario==='permission-boundary') expect(existsSync(join(workspace,'worker-must-not-exist'))).toBe(false);
         if(scenario==='worktree') {
-          expect(JSON.stringify(requests[6]!['input'])).toContain('worktrees/jev-codex-');
+          expect(JSON.stringify(requests[6]!['input'])).toContain('worktrees/jev-worker-');
           expect(all.some(r=>r['phase']==='post' && r['verdict']==='accept'),JSON.stringify(all)).toBe(true);
         }
         expect(all.some(r=>r['phase']==='admission_result' && (r['decision'] as Rec)?.['shape']==='orchestrated'),JSON.stringify(all)).toBe(true);
@@ -313,7 +322,7 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
     ];
     const args = ['--no-daemon', ...(trust ? ['--dangerously-bypass-hook-trust'] : []), 'exec', '--ignore-rules', '--skip-git-repo-check', '--ephemeral', '--json', '-C', workspace, ...config.flatMap(c => ['-c', c]), 'Run the local fixture tools, then finish.'];
     let output = '';
-    const child = spawn('codex', args, { cwd: workspace, env: { HOME: process.env['HOME'] ?? '', CODEX_HOME: runtimeEnv.CODEX_HOME, PATH: `${join(workspace, '.bin')}:${process.env['PATH'] ?? ''}`, JEV_CODEX_AUTO_CONNECT: '0', JEV_CODEX_TRACE_DIR: trace, ...(scenario === 'missing-workspace' ? {} : { JEV_CODEX_WORKSPACE: workspace }), JEV_CODEX_ENABLED: scenario === 'hooks-disabled' ? '0' : '1', JEV_CODEX_OUTPUT: scenario === 'disabled' ? 'off' : 'on', CLAUDE_PROJECT_DIR: '/wrong-workspace', PWD: '/wrong-workspace' } });
+    const child = spawn('codex', args, { cwd: workspace, env: { HOME: process.env['HOME'] ?? '', XDG_CONFIG_HOME: runtimeEnv.XDG_CONFIG_HOME, JEV_GATE_ONBOARDING: '0', CODEX_HOME: runtimeEnv.CODEX_HOME, PATH: `${join(workspace, '.bin')}:${process.env['PATH'] ?? ''}`, JEV_CODEX_AUTO_CONNECT: '0', JEV_CODEX_TRACE_DIR: trace, ...(scenario === 'missing-workspace' ? {} : { JEV_CODEX_WORKSPACE: workspace }), JEV_CODEX_ENABLED: scenario === 'hooks-disabled' ? '0' : '1', JEV_CODEX_OUTPUT: scenario === 'disabled' ? 'off' : 'on', CLAUDE_PROJECT_DIR: '/wrong-workspace', PWD: '/wrong-workspace' } });
     child.stdin.end(); child.stdout.on('data', b => { output += String(b); }); child.stderr.on('data', b => { output += String(b); });
     const timer = setTimeout(() => child.kill('SIGTERM'), 40_000);
     try {

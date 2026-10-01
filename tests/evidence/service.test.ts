@@ -181,6 +181,25 @@ describe('bounds', () => {
     expect(keyless.result.items.map((i) => [i.text, i.origin, i.judgement])).toEqual([['widget\n', 'local', 'unjudged']]);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
+
+  it('uses a newly entered key in the same service process and keeps exact reads local', async () => {
+    const root = repo({ 'src/a.ts': 'widget\n' });
+    let key: string | null = null;
+    const headers: string[] = [];
+    const fetchImpl = vi.fn(async (_url: string, init: RequestInit) => {
+      headers.push(new Headers(init.headers).get('authorization')!);
+      const body = JSON.parse(String(init.body)) as { questions: Record<string, unknown> };
+      expect(String(init.body)).not.toContain('fake-newly-entered-key');
+      return new Response(JSON.stringify({ model: 'jev-1.13.0', answers: Object.fromEntries(Object.keys(body.questions).map(id => [id, { type: 'choice', choice: 'relevant', confidence: .91, probabilities: { relevant: .91, unrelated: .05, needs_context: .04 } }])) }));
+    });
+    const svc = createEvidenceService(await config(root, { remote: true }), { apiKey: null, getApiKey: () => key, fetchImpl: fetchImpl as unknown as typeof fetch });
+    expect(await run(svc, { goal: 'widget' })).toMatchObject({ backend: 'local', reasonCodes: ['missing_key'] });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    key = 'fake-newly-entered-key';
+    expect(await run(svc, { goal: 'widget' })).toMatchObject({ backend: 'jev' });
+    expect(headers).toEqual(['Bearer fake-newly-entered-key']);
+    await run(svc, { goal: 'widget', exactSymbols: ['widget'] }); expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
 });
 
 const lexicalGoal = (n: number): string => Array.from({ length: n }, (_, i) => `aaaa${String(i).padStart(5, '0')}`).join(' ');

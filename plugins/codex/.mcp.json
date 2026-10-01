@@ -26,6 +26,9 @@
         "JEV_CODEX_TRACE_DIR",
         "JEV_GATE_TRACE_DIR",
         "XDG_STATE_HOME",
+        "XDG_CONFIG_HOME",
+        "JEV_GATE_ONBOARDING",
+        "JEV_GATE_NO_BROWSER",
         "JEV_CODEX_OUTPUT",
         "JEV_CODEX_UPSTREAM",
         "OPENAI_BASE_URL"

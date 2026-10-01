@@ -38,20 +38,32 @@ describe('the one plugin’s hooks module', () => {
     }
     const { gateMode, ...mods } = readJson('.claude-plugin/plugin.json').userConfig!;
     expect(gateMode).toMatchObject({ type: 'string', default: 'auto' });
+    // The integrated key config serves every feature; its type/sensitivity still match the Router option.
+    const actualKey = mods['typesafeApiKey']; const expectedKey = expected['typesafeApiKey'] as Record<string, unknown>;
+    expect(actualKey).toMatchObject({ type: expectedKey['type'], sensitive: expectedKey['sensitive'] });
+    delete mods['typesafeApiKey']; delete expected['typesafeApiKey'];
     expect(mods).toEqual(expected);
   });
 
   it('registers nothing with all three Mods off, and reads only the plugin’s own names', async () => {
     const off = { compactEnabled: false, outputEnabled: false, routerEnabled: false };
-    expect([...(await registered(off)).keys()]).toEqual([]);
-    expect([...(await registered({ ...off, enabled: true })).keys()]).toEqual([]);
+    expect([...(await registered(off)).keys()]).toEqual(['session.start']);
+    expect([...(await registered({ ...off, enabled: true })).keys()]).toEqual(['session.start']);
   });
 
   it('registers each event once with every option at its default, all three Mods on', async () => {
     const defaults = Object.fromEntries(Object.entries(readJson('.claude-plugin/plugin.json').userConfig!).map(([k, v]) => [k, (v as { default?: unknown }).default]));
     for (const options of [{}, defaults]) {
-      expect([...(await registered(options)).keys()].sort()).toEqual(['agent.offer', 'agent.spawn', 'session.compact', 'session.end', 'tool.call {"tool":"Bash"}', 'turn.complete', 'turn.start', 'turn.step'].sort());
+      expect([...(await registered(options)).keys()].sort()).toEqual(['session.start', 'agent.offer', 'agent.spawn', 'session.compact', 'session.end', 'tool.call {"tool":"Bash"}', 'turn.complete', 'turn.start', 'turn.step'].sort());
     }
+  });
+
+  it('sets missing foreground defaults and shares the configured key without changing explicit host settings', async () => {
+    const hooks = await registered({ typesafeApiKey: 'fake-configured-key' });
+    const env: Record<string, string | undefined> = { CLAUDE_CODE_FORK_SUBAGENT: '1' };
+    const input = { cwd: '/r' };
+    await hooks.get('session.start')!({ env: { get: async (name: string) => env[name], set: async (name: string, value: string | undefined) => { env[name] = value; } } }, input, async (e: unknown) => e);
+    expect(env).toEqual({ CLAUDE_CODE_FORK_SUBAGENT: '1', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1', TYPESAFE_API_KEY: 'fake-configured-key' });
   });
 
   it('writes every unusable option from one session-start hook and keeps the other Mods', async () => {
