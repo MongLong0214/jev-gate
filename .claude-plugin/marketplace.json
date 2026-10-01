@@ -11,7 +11,7 @@
       "source": {
         "source": "archive",
         "url": "https://github.com/MongLong0214/jev-gate/releases/download/v0.7.1/jev-gate-0.7.1.zip",
-        "sha256": "37c2e9033120b92e5d62dc119d9bca4476d42d64b7ae06d298f053a3c4ac71f3"
+        "sha256": "85dfa30f64d67053184ba8aafc4ee095b64658deb538bd767bc74d4fd5cf5beb"
       },
       "displayName": "Jev Gate",
       "description": "Evidence search, extractive compaction, Vitest log folding, a Jev effort and model router, and an orchestration gate, in one install. Gate, Compact, Output, and the Router are on by default, and each of those four has a switch. Evidence has no switch. Needs Node 22. A TypeSafe key is separate from a Claude login. CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 is required for compaction, folding, and routing.",
