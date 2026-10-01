@@ -7,7 +7,7 @@ import { obj, type Obj } from './source.js';
 export const capturedPermissions = (meta: unknown, planner: boolean): { cwd: string; config: Obj; permissions: string } | null => {
   const caller = codexCallerWorkspace(meta);
   const profile = obj(obj(obj(meta)?.[CODEX_SANDBOX_META])?.['permissionProfile']);
-  if (!caller || !profile || !['managed', 'disabled'].includes(String(profile['type']))) return null;
+  if (!caller || !profile || Object.keys(profile).some(k => !['type', 'network', 'file_system'].includes(k)) || !['managed', 'disabled'].includes(String(profile['type']))) return null;
   if (profile['type'] === 'disabled') return planner
     ? { cwd: caller.cwd, permissions: ':read-only', config: {} }
     : { cwd: caller.cwd, permissions: ':danger-full-access', config: {} };
@@ -28,7 +28,7 @@ export const capturedPermissions = (meta: unknown, planner: boolean): { cwd: str
       if (path['type'] === 'path' && typeof path['path'] === 'string') {
         try { key = path['path'].startsWith('file:') ? fileURLToPath(path['path']) : path['path']; } catch { return null; }
         if (!isAbsolute(key) || key.includes('\0')) return null;
-      } else if (path['type'] === 'glob_pattern' && typeof path['pattern'] === 'string') key = path['pattern'];
+      } else if (path['type'] === 'glob_pattern' && typeof path['pattern'] === 'string' && isAbsolute(path['pattern'])) key = path['pattern'];
       else if (path['type'] === 'special') {
         const special = obj(path['value']); const kind = special?.['kind'];
         if (!['root', 'minimal', 'project_roots', 'tmpdir', 'slash_tmp'].includes(String(kind))) return null;

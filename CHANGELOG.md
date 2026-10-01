@@ -1,6 +1,10 @@
 # Changelog
 
-## v0.7.1 — 2026-09-30 — Bench findings: skipped-gate notice, needs_context re-ask, packaged A/B bench
+## v0.7.1 — 2026-10-01 — Automatic native Codex connection and benchmark fixes
+
+- Ordinary native Codex now connects automatically after plugin startup: no Jev launcher, workspace export or project setup file. Native login/hook trust stays authoritative; already open hosts need a fresh session to load the provider.
+- Added caller-scoped Evidence, native permission inheritance for owned workers, real wire context for Lean, actual Responses Router application, helper crash recovery/concurrent ownership and removal restoration. README, dashboard support explanations and packaged skill now describe this workflow.
+- Tight native runtime coverage includes the ordinary connection, Gate/Lean/Compact, crash recovery and concurrent sessions. Unsupported metadata and unknown observations preserve native execution; no simulated policy success or token savings.
 
 - Gate A tells the user, via `systemMessage` and not model context, when it was skipped because the session depth could not be read (`depth_unknown`): the first prompt of a session and every headless `claude -p` single turn. Single-prompt automation never reaches the gate; the behaviour is unchanged, the silence is not (#114).
 - Gate A re-asks once with the last three user-typed turns from the transcript when a prompt reads as `needs_context` on its own, so a long task that arrives as a short follow-up ("e2e 해봐") can still be delegated. Only user-typed text goes; tool results, host messages, commands and anything that looks like a secret do not. The second record carries `context_turns` (#115).

@@ -14,6 +14,8 @@ await build({
   platform: 'node',
   format: 'esm',
   target: 'node22',
+  // The Codex connector shares the hook core; bundling must never consume MCP stdin as a hook event.
+  define: { __JEV_HOOK_AUTORUN__: 'false' },
   // The SDK's CommonJS dependencies call require(); an ES module bundle has none of its own.
   banner: { js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);" },
   logLevel: 'warning',

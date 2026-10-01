@@ -152,6 +152,7 @@ export interface HookDeps {
   /** Host facts supplied by an execution adapter. No policy is reimplemented here. */
   host?: {
     id: 'codex';
+    recentRequests?: () => readonly string[];
     config: ConfigV5;
     depth: () => DepthReading;
     compactWindow: number | null;
@@ -1145,7 +1146,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
          */
         const needsContext = 'outcome' in gate && gate.outcome.ok && admitted !== null && (admitted as AdmissionDecision).reason === 'admission_needs_context';
         if (needsContext) {
-          const recent = deps.host ? [] : readRecentPrompts(input.transcript_path, prompt);
+          const recent = deps.host ? [...(deps.host.recentRequests?.() ?? [])] : readRecentPrompts(input.transcript_path, prompt);
           if (recent.length > 0) {
             const contextual = withRecentPrompts(prompt, recent);
             if (Buffer.byteLength(contextual, 'utf8') <= REQUEST_MAX_BYTES && Buffer.byteLength(composeSingleWorkerPrompt('', contextual, true), 'utf8') <= MAX_COMPOSED_BYTES) {

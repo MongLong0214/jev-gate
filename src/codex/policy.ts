@@ -16,6 +16,7 @@ import { AGENT_TOOL, CODEX_PROFILES, codexGuidance } from './profiles.js';
 import { routeCodex, type CodexModel } from './router.js';
 import { capturedPermissions } from './permissions.js';
 import { codexCallerWorkspace } from './workspace.js';
+import { selectRecentPrompts } from '../recent-prompts.js';
 import { wireSource } from './wire.js';
 
 interface Session {
@@ -29,6 +30,8 @@ interface Session {
   external?: boolean; task?: string; routed?: string; stop?: string;
   wire?: unknown[];
   wirePending?: boolean;
+  requests?: string[];
+  recentRequests?: string[];
 }
 const contextOf = (result: { stdout: string | null }): string => {
   if (!result.stdout) return '';
@@ -209,6 +212,7 @@ export class CodexPolicy {
       id: 'codex', config: session.policy.gate, compactWindow: session.window,
       depth: () => session.tokens === null ? { ok: false, reason: 'depth_unknown', bytesRead: 0, durationMs: 0 }
         : { ok: true, tokens: session.tokens, model: session.requestModel ?? String(session.settings['model'] ?? session.baseline.model), modelSwitched: false, bytesRead: 0, durationMs: 0 },
+      recentRequests: () => session.recentRequests ?? [],
       source: b => codexSource(session.items, b, session.epoch, session.complete),
       observation: id => { const worker = id ? this.sessions.get(id) : undefined; return worker ? codexObservation(worker.items, worker.complete, worker.commands) : null; },
     };
@@ -323,6 +327,10 @@ export class CodexPolicy {
       ...(typeof input['tool_use_id'] === 'string' ? { tool_use_id: input['tool_use_id'] } : {}), ...(input['tool_input'] ? { tool_input: input['tool_input'] } : {}) };
     // This custom tool owns its execution and consumes the patch in-process. Never return native updatedInput/allow.
     if (event === 'PreToolUse' && (normalized.tool_name === 'jev_agent' || normalized.tool_name?.endsWith('__jev_agent'))) return {};
+    if (event === 'UserPromptSubmit' && typeof input['prompt'] === 'string') {
+      session.recentRequests = selectRecentPrompts(session.requests ?? []);
+      session.requests = selectRecentPrompts([...(session.requests ?? []), input['prompt']]);
+    }
     const result = await this.hook(session, normalized, signal);
     if (signal?.aborted || !result.stdout) return {};
     const output = obj(JSON.parse(result.stdout)) ?? {};

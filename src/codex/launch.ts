@@ -1,3 +1,4 @@
+import { StringDecoder } from 'node:string_decoder';
 import { createServer, request as httpRequest, type IncomingMessage } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
@@ -131,9 +132,9 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
         const output = Object.fromEntries(Object.entries(response.headers).filter(([k]) => !['connection', 'transfer-encoding'].includes(k)));
         res.writeHead(response.statusCode ?? 502, output); response.pipe(res);
         if (options.connection && sessionId && response.statusCode === 200 && String(response.headers['content-type']).includes('text/event-stream')) {
-          let buffer = '';
+          let buffer = ''; const decoder = new StringDecoder('utf8');
           response.on('data', chunk => {
-            buffer += Buffer.from(chunk).toString('utf8');
+            buffer += decoder.write(Buffer.from(chunk));
             if (Buffer.byteLength(buffer) > 4 * 1024 * 1024) { buffer = ''; return; }
             let end: number;
             while ((end = buffer.indexOf('\n\n')) >= 0) {

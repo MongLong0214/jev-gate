@@ -38,7 +38,7 @@ export const codexDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: str
   lines.push(`[info] output folding: ${env['JEV_CODEX_OUTPUT'] === 'off' ? 'off' : 'on'}`);
   try { const policy = loadCodexPolicy(env); check(true, `policy: Gate ${policy.gate.mode}; Router ${policy.router.enabled ? 'on' : 'off'}; Compact ${policy.compact.enabled ? 'on' : 'off'}`); }
   catch { check(false, 'policy: invalid Codex policy configuration'); }
-  lines.push('[info] Full automatic policies require: node <plugin>/dist/cli.mjs codex. A standalone codex session provides Evidence, Output and observation.');
+  lines.push('[info] The installed plugin connects ordinary Codex automatically; a host that already loaded its provider needs a fresh native session. Hook trust and authentication remain native. Doctor readiness is not proof of policy execution.');
   for (const [feature, capability] of Object.entries(CODEX_CAPABILITIES)) lines.push(`[${capability.mode}] ${feature}: ${capability.en}`);
   lines.push('[info] This checks local readiness, not plugin installation, hook trust, or measured savings.');
   return { ok, lines };

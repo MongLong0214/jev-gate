@@ -153,11 +153,14 @@ export const serveConnection = async (root: string, env: Env): Promise<void> => 
     const result = await session!.rpc.request('plugin/installed', {}, 5000);
     const user = await userConfig(session!.rpc);
     const plugins = obj(user.config['plugins']);
-    return (Array.isArray(result['marketplaces']) ? result['marketplaces'] : []).reduce((n, m) => n + (Array.isArray(obj(m)?.['plugins']) ? (obj(m)!['plugins'] as unknown[]).filter(p => {
-      const plugin = obj(p);
+    const enabledPlugins = (Array.isArray(result['marketplaces']) ? result['marketplaces'] : []).flatMap(m => Array.isArray(obj(m)?.['plugins']) ? obj(m)!['plugins'] as unknown[] : []).map(obj).filter(plugin => {
       const setting = obj(plugins?.[String(plugin?.['id'])]);
-      return plugin?.['name'] === 'jev-gate' && plugin['installed'] === true && plugin['enabled'] === true && setting?.['enabled'] !== false && (plugin['localVersion'] === null || plugin['localVersion'] === undefined || plugin['localVersion'] === obj(JSON.parse(readFileSync(join(root, '.codex-plugin', 'plugin.json'), 'utf8')))?.['version']);
-    }).length : 0), 0);
+      return plugin?.['name'] === 'jev-gate' && plugin['installed'] === true && plugin['enabled'] === true && setting?.['enabled'] !== false;
+    });
+    if (enabledPlugins.length !== 1) return 0;
+    const plugin = enabledPlugins[0]!;
+    const version = obj(JSON.parse(readFileSync(join(root, '.codex-plugin', 'plugin.json'), 'utf8')))?.['version'];
+    return plugin['localVersion'] === null || plugin['localVersion'] === undefined || plugin['localVersion'] === version ? 1 : 0;
   };
   try {
     session = await startCodexSession({ env, cwd: home(env), ...(env['JEV_CODEX_CONNECTION_TEST_NO_AUTH'] === '1' ? { nativeAuth: false } : {}), connection: { token: state.token, marker: state.marker, port: state.port, ready: () => ready, restart: () => { void close(); } } });

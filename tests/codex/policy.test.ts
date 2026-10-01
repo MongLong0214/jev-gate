@@ -205,6 +205,31 @@ describe('native transport authority', () => {
     const job = readJob({ JEV_GATE_STATE_DIR: join(env.JEV_GATE_STATE_DIR, 'codex') }, 'cancelled');
     expect(job.ok && job.value?.current.shape).toBe('direct'); rpc.close();
   });
+  it('reclassifies a native follow-up with only observed earlier human requests and carries them into dispatch', async () => {
+    const rpc = new CodexRpc(new PassThrough(), new PassThrough()); const seen: string[] = [];
+    const env = { JEV_CODEX_CONFIG: join(tmp, 'policy.json'), JEV_CODEX_TRACE_DIR: join(tmp, 'followup'), JEV_GATE_STATE_DIR: join(tmp, 'followup-state'), TYPESAFE_API_KEY: 'fixture-key' };
+    const fetchImpl = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body)); seen.push(request.state.request);
+      const answers = Object.fromEntries(Object.entries(request.questions as Record<string, { type: string; criteria: string[] | Record<string, string> }>).map(([k,q]) => {
+        if (q.type === 'noul') return [k, { type:'noul',noul:0 }];
+        if (q.type === 'score') return [k,{ type:'score', score:4, confidence:1, probabilities:Object.fromEntries((q.criteria as string[]).map((_,i)=>[i,i===4?1:0])) }];
+        const keys = Object.keys(q.criteria);
+        const pick = k === 'task_context' && request.state.request === 'Run it now.' ? 'needs_context' : keys[0];
+        return [k,{ type:'choice',choice:pick,confidence:1,probabilities:Object.fromEntries(keys.map(v=>[v,v===pick?1:0])) }];
+      })); return response({ model:request.model, answers });
+    });
+    const policy = new CodexPolicy(rpc,env,fetchImpl as typeof fetch);
+    await rpc.onResponse({model:'gpt-6.1-sol',cwd:tmp,thread:{id:'followup'}},'thread/start',{});
+    const session = policy.sessions.get('followup')!; session.tokens=500000; session.window=1000000;
+    session.prompt='first';
+    await policy.nativeHook({hook_event_name:'UserPromptSubmit',session_id:'followup',prompt:'Implement the download validation and run its full checks.'});
+    session.prompt='second';
+    await policy.nativeHook({hook_event_name:'UserPromptSubmit',session_id:'followup',prompt:'Run it now.'});
+    expect(seen.at(-1)).toContain('Implement the download validation');
+    const job = readJob({JEV_GATE_STATE_DIR:join(env.JEV_GATE_STATE_DIR,'codex')},'followup');
+    expect(job.ok && job.value?.current.request).toContain('Current request:\nRun it now.');
+    rpc.close();
+  });
   it('separates colliding client, internal and approval ids, preserving approval payload exactly', async () => {
     const input = new PassThrough(); const output = new PassThrough(); const outbound: Obj[] = []; const emitted: Obj[] = [];
     output.on('data', chunk => outbound.push(...String(chunk).trim().split('\n').map(l => JSON.parse(l))));
