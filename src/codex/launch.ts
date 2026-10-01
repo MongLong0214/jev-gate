@@ -10,7 +10,7 @@ import { CodexRpc } from './rpc.js';
 import { CodexPolicy } from './policy.js';
 import { obj } from './source.js';
 import { loadCodexPolicy } from './config.js';
-import { extractCodexCompact, compactResponse } from './compact.js';
+import { extractCodexCompact, isCodexCompactRequest, compactResponse } from './compact.js';
 import { codexTraceDir } from '../codex-paths.js';
 import { openTraceDir } from '../trace.js';
 import type { Env } from '../config.js';
@@ -96,7 +96,7 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
         if ((!sessionId || !policy?.hooksReady(sessionId)) && !options.connection) { res.writeHead(412); res.end('Trust the installed Jev Gate hooks in Codex /hooks before starting a managed session.'); return; }
         if (sessionId && policy) {
           const parsed = obj(JSON.parse(decoded.toString('utf8'))) ?? {};
-          if (options.connection && path === '/responses' && !extractCodexCompact(parsed['input'], marker, config.compact.budgetChars).ok) {
+          if (options.connection && path === '/responses' && !isCodexCompactRequest(parsed['input'], marker)) {
             const cancelled = new AbortController(); res.once('close', () => { if (!res.writableEnded) cancelled.abort(); });
             const selected = await policy.externalRequest(sessionId, parsed, cancelled.signal);
             if (selected.stop) { res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' }); res.end(compactResponse(selected.stop)); return; }
@@ -106,7 +106,7 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
       }
       if (config.compact.enabled && req.method === 'POST' && path === '/responses') {
         const parsed = obj(JSON.parse(decoded.toString('utf8')));
-        const compact = extractCodexCompact(parsed?.['input'], marker, config.compact.budgetChars);
+        const compact = extractCodexCompact(parsed?.['input'], marker, config.compact.budgetChars, sessionId ? policy?.previousCompact(sessionId) : undefined);
         if (compact.ok && sessionId && policy?.canCompact(sessionId)) {
           const session = sessionId;
           const run = `${Date.now()}-${randomBytes(4).toString('hex')}`;

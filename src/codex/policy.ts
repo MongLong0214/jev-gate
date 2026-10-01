@@ -1,17 +1,17 @@
 import { randomUUID } from 'node:crypto';
-import { join, isAbsolute } from 'node:path';
+import { join, isAbsolute, resolve, relative } from 'node:path';
 import { mkdirSync, realpathSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createWorkerWorktree, type WorkerWorktree } from '../worktree.js';
 import { runHook, type HookDeps } from '../hook.js';
-import { stateRoot } from '../job.js';
+import { stateRoot, readJob, updateJob, own, codexExecutions } from '../job.js';
 import { OWNED_AGENTS, LEAN_EXECUTOR_AGENT, type HookInput } from '../types.js';
 import { OWNED_AGENT_PROFILES } from '../agents.js';
 import type { Env } from '../config.js';
 import { codexTraceDir } from '../codex-paths.js';
 import { openTraceDir, type TraceWriter } from '../trace.js';
-import { CodexRpc } from './rpc.js';
+import { CodexRpc, RpcRequestError } from './rpc.js';
 import { loadCodexPolicy, type CodexPolicyConfig } from './config.js';
 import { codexSource, codexObservation, textInput, obj, type Obj } from './source.js';
 import { AGENT_TOOL, CODEX_PROFILES, codexGuidance } from './profiles.js';
@@ -21,6 +21,11 @@ import { codexCallerWorkspace } from './workspace.js';
 import { selectRecentPrompts } from '../recent-prompts.js';
 import { wireSource } from './wire.js';
 
+interface WorkerDispatch {
+  parent: Session; prompt: string; tool: string; input: Obj; signal: AbortSignal;
+  worktree: WorkerWorktree | null; startedAt: number; attempted: boolean;
+  ended?: Obj; settling?: Promise<string>; settled?: boolean; output?: string; interruptSent?: boolean; cancel?: () => void;
+}
 interface Session {
   id: string; settings: Obj; baseline: { model: string; effort: string | null }; policy: CodexPolicyConfig;
   prompt: string | null; turn: string | null; items: Obj[]; complete: boolean; epoch: string;
@@ -34,6 +39,8 @@ interface Session {
   wirePending?: boolean;
   requests?: string[];
   recentRequests?: string[];
+  dispatch?: WorkerDispatch;
+  lastCompactSummary?: string;
 }
 const contextOf = (result: { stdout: string | null }): string => {
   if (!result.stdout) return '';
@@ -67,7 +74,8 @@ export class CodexPolicy {
       let output: string;
       try { output = await this.agent(p); }
       catch { output = 'Jev dispatch failed or was interrupted. No completion is claimed. Continue in the main session or inspect the current job.'; }
-      rpc.send({ id: m['id'], result: { contentItems: [{ type: 'inputText', text: output }], success: true } });
+      try { rpc.send({ id: m['id'], result: { contentItems: [{ type: 'inputText', text: output }], success: true } }); }
+      catch { /* A closed local transport cannot deliver output and does not prove remote termination. */ }
       return true;
     };
   }
@@ -276,7 +284,10 @@ export class CodexPolicy {
     if (message['method'] === 'thread/settings/updated') {
       const settings = obj(p['threadSettings']); if (settings) session.settings = { ...session.settings, ...settings };
     }
-    if (message['method'] === 'turn/started') session.turn = String(obj(p['turn'])?.['id'] ?? '');
+    if (message['method'] === 'turn/started' && !session.terminal) {
+      session.turn = String(obj(p['turn'])?.['id'] ?? '');
+      if (session.dispatch) { this.persistWorkerTurn(session); if (session.dispatch.signal.aborted) this.interruptWorker(session); }
+    }
     if (message['method'] === 'thread/tokenUsage/updated') {
       const usage = obj(p['tokenUsage']); const last = obj(usage?.['last']);
       session.tokens = typeof last?.['inputTokens'] === 'number' ? last['inputTokens'] : null;
@@ -290,7 +301,11 @@ export class CodexPolicy {
       if (item['type'] === 'contextCompaction') { session.complete = false; session.epoch = String(item['id']); session.tokens = null; }
     }
     if (message['method'] === 'turn/completed') {
-      const turn = obj(p['turn']) ?? {}; session.turn = null; session.terminal = true; session.done?.(turn);
+      const turn = obj(p['turn']) ?? {};
+      if (session.dispatch && (session.dispatch.ended || session.turn && turn['id'] !== session.turn || !['completed', 'interrupted', 'failed'].includes(String(turn['status'])))) return;
+      session.turn = null; session.terminal = true;
+      if (session.dispatch) { session.dispatch.ended = turn; session.done?.(turn); void this.settleWorker(session).catch(() => undefined); }
+      else session.done?.(turn);
       if (!session.parent && turn['status'] !== 'completed') { session.controller?.abort(); void this.interruptChildren(session); }
     }
   }
@@ -301,6 +316,8 @@ export class CodexPolicy {
     const session = this.sessions.get(String(input['session_id']));
     if (!session) return {};
     const event = input['hook_event_name'];
+    await this.retrySettlements();
+    if (!session.role && event === 'PreToolUse' && this.writeConflict(String(input['cwd'] ?? session.settings['cwd']), String(input['tool_name']), obj(input['tool_input']) ?? {})) return deny('A managed Codex worker in this write scope has not completed terminal settlement. Read/status tools and unrelated paths remain available.');
     if (event === 'PreCompact') { session.compactAllowed = session.policy.compact.enabled && (input['trigger'] === 'auto' || input['trigger'] === 'manual' && session.policy.compact.manual); return {}; }
     if (event === 'PreToolUse' && input['tool_name'] === 'Bash' && typeof input['tool_use_id'] === 'string' && typeof obj(input['tool_input'])?.['command'] === 'string') {
       session.commands.set(input['tool_use_id'], String(obj(input['tool_input'])!['command']));
@@ -309,6 +326,7 @@ export class CodexPolicy {
       const compact = this.compactPending.get(session.id);
       if (compact) {
         this.compactPending.delete(session.id);
+        session.lastCompactSummary = compact.summary;
         session.items = [{ type: 'jevCompact', id: compact.run, text: compact.summary }]; session.complete = true; session.epoch = compact.run;
         this.trace?.write('codex_compact', { host: 'codex', session_id: session.id, run_id: compact.run, stage: 'installed', applied: true, before_bytes: compact.before, after_bytes: compact.after, summarizer_request: false });
       }
@@ -357,7 +375,7 @@ export class CodexPolicy {
   }
   private async interruptChildren(parent: Session): Promise<void> {
     await Promise.all([...this.sessions.values()].filter(s => s.parent === parent.id && s.turn).map(async s => {
-      try { await this.rpc.request('turn/interrupt', { threadId: s.id, turnId: s.turn }); } catch { /* No terminal event means no successful release. */ }
+      try { if (s.dispatch) this.interruptWorker(s); else await this.rpc.request('turn/interrupt', { threadId: s.id, turnId: s.turn }, 1000); } catch { /* No terminal event means no successful release. */ }
     }));
   }
   private async hookConfig(cwd: string, overrides: Obj = {}): Promise<Obj> {
@@ -382,40 +400,43 @@ export class CodexPolicy {
     const session = this.sessions.get(String(p['threadId'])); const original = obj(p['arguments']);
     if (!session || session.role || session.eligible === false || this.env['JEV_CODEX_ENABLED'] === '0' || !session.prompt || !session.controller || session.controller.signal.aborted || !original) return 'No active root Jev job.';
     if (typeof original['subagent_type'] !== 'string' || !this.profiles[original['subagent_type']] || typeof original['prompt'] !== 'string' || Object.keys(original).some(k => !['subagent_type', 'prompt', 'description', 'model'].includes(k))) return 'Invalid owned Agent input. Use the exact current Jev profile and marker.';
+    const parentSignal = session.controller.signal;
+    const parent: Session = { ...session, settings: { ...session.settings }, controller: null };
     const promptId = session.prompt;
     const toolId = String(p['callId']);
     const input = { ...original, run_in_background: false };
-    const pre = await this.hook(session, { hook_event_name: 'PreToolUse', session_id: session.id, prompt_id: promptId, tool_name: 'Agent', tool_use_id: toolId, tool_input: input, cwd: String(session.settings['cwd']) });
+    const pre = await this.hook(parent, { hook_event_name: 'PreToolUse', session_id: parent.id, prompt_id: promptId, tool_name: 'Agent', tool_use_id: toolId, tool_input: input, cwd: String(parent.settings['cwd']) }, parentSignal);
     if (pre.kind === 'deny') return codexGuidance(String(obj(obj(JSON.parse(pre.stdout))?.['hookSpecificOutput'])?.['permissionDecisionReason'] ?? 'Dispatch denied'));
-    if (session.controller.signal.aborted || session.prompt !== promptId) return 'Dispatch cancelled; no worker started.';
+    if (parentSignal.aborted || session.prompt !== promptId) { await this.failure(parent, promptId, toolId, input, 'dispatch_cancelled'); return 'Dispatch cancelled; no worker started.'; }
     const updated = pre.kind === 'patch' ? obj(obj(JSON.parse(pre.stdout))?.['hookSpecificOutput'])?.['updatedInput'] : input;
     const applied = obj(updated); if (!applied) return 'Dispatch input unavailable.';
     const role = String(applied['subagent_type']); const profile = OWNED_AGENTS[role];
-    const model = typeof applied['model'] === 'string' ? applied['model'] : role === LEAN_EXECUTOR_AGENT ? session.requestModel ?? String(session.settings['model'] ?? session.baseline.model) : session.policy.gate.models[profile?.tier ?? 'standard'];
-    if (!this.catalog.some(m => m.model === model)) { await this.failure(session, promptId, toolId, input, 'requested_model_unavailable'); return 'The requested worker model is absent from Codex model/list. Native execution remains available; configure accessible tier models.'; }
-    let cwd = String(session.settings['cwd']); let worktree: WorkerWorktree | null = null;
+    const model = typeof applied['model'] === 'string' ? applied['model'] : role === LEAN_EXECUTOR_AGENT ? parent.requestModel ?? String(parent.settings['model'] ?? parent.baseline.model) : parent.policy.gate.models[profile?.tier ?? 'standard'];
+    if (!this.catalog.some(m => m.model === model)) { await this.failure(parent, promptId, toolId, applied, 'requested_model_unavailable'); return 'The requested worker model is absent from Codex model/list. Native execution remains available; configure accessible tier models.'; }
+    let cwd = String(parent.settings['cwd']); let worktree: WorkerWorktree | null = null;
     let worker: Session | null = null;
+    let dispatch: WorkerDispatch | undefined;
     const t0 = Date.now();
     try {
       const planner = profile?.role === 'planner';
-      const captured = session.external ? capturedPermissions(p['nativeMeta'], planner) : null;
-      if (session.external && !captured) throw new Error('parent permissions unavailable');
+      const captured = parent.external ? capturedPermissions(p['nativeMeta'], planner) : null;
+      if (parent.external && !captured) throw new Error('parent permissions unavailable');
       if (applied['isolation'] === 'worktree') {
-        const root = session.external ? join(cwd, '.jev-gate-worktrees') : join(stateRoot(this.env), 'jev-gate', 'worktrees');
-        if (!session.external) mkdirSync(root, { recursive: true, mode: 0o700 });
-        if (session.external) {
+        const root = parent.external ? join(cwd, '.jev-gate-worktrees') : join(stateRoot(this.env), 'jev-gate', 'worktrees');
+        if (!parent.external) mkdirSync(root, { recursive: true, mode: 0o700 });
+        if (parent.external) {
           const added = spawnSync('codex', ['sandbox', '--sandbox-state-json', JSON.stringify(obj(p['nativeMeta'])?.['codex/sandbox-state-meta']), '--', process.execPath, fileURLToPath(new URL('./worktree.mjs', import.meta.url)), '--codex', cwd, root], { cwd, env: safeGitEnv(this.env), encoding: 'utf8', timeout: 120_000 });
           if (added.status !== 0) throw new Error('worktree unavailable');
           worktree = JSON.parse(added.stdout) as WorkerWorktree;
         } else worktree = createWorkerWorktree(cwd, root, this.env);
         cwd = worktree.path;
       }
-      const sandbox = obj(session.settings['sandboxPolicy']);
-      const permissions = obj(session.settings['activePermissionProfile'])?.['id'];
+      const sandbox = obj(parent.settings['sandboxPolicy']);
+      const permissions = obj(parent.settings['activePermissionProfile'])?.['id'];
       const customPermissions = typeof permissions === 'string' && !permissions.startsWith(':');
-      if (session.external ? !captured : typeof permissions !== 'string' && !['dangerFullAccess', 'readOnly', 'workspaceWrite'].includes(String(sandbox?.['type']))) throw new Error('parent permissions unavailable');
-      const child = await this.rpc.request('thread/start', { model, modelProvider: session.settings['modelProvider'], cwd, ephemeral: true,
-        approvalPolicy: session.settings['approvalPolicy'], approvalsReviewer: session.settings['approvalsReviewer'],
+      if (parent.external ? !captured : typeof permissions !== 'string' && !['dangerFullAccess', 'readOnly', 'workspaceWrite'].includes(String(sandbox?.['type']))) throw new Error('parent permissions unavailable');
+      const child = await this.rpc.request('thread/start', { model, modelProvider: parent.settings['modelProvider'], cwd, ephemeral: true,
+        approvalPolicy: parent.settings['approvalPolicy'], approvalsReviewer: parent.settings['approvalsReviewer'],
         ...(captured ? { permissions: captured.permissions } : planner && !customPermissions ? { sandbox: 'read-only' } : typeof permissions === 'string' ? { permissions } : { sandbox: sandbox?.['type'] === 'dangerFullAccess' ? 'danger-full-access' : sandbox?.['type'] === 'readOnly' ? 'read-only' : 'workspace-write' }),
         developerInstructions: this.profiles[role], config: { 'features.multi_agent': false, ...captured?.config, ...await this.hookConfig(cwd) }, dynamicTools: [] });
       await this.response(child, 'thread/start', {});
@@ -423,32 +444,142 @@ export class CodexPolicy {
       if (!worker) throw new Error('worker unavailable');
       worker.role = role; worker.parent = session.id;
       const terminal = new Promise<Obj>(resolve => { worker!.done = resolve; });
-      if (session.controller.signal.aborted || session.prompt !== promptId) throw new Error('cancelled');
-      const desired = OWNED_AGENT_PROFILES.find(p => p.name === role)?.effort ?? session.requestEffort ?? session.settings['effort'];
+      dispatch = { parent, prompt: promptId, tool: toolId, input: { ...applied }, signal: parentSignal, worktree, startedAt: t0, attempted: false };
+      worker.dispatch = dispatch;
+      if (parentSignal.aborted || session.prompt !== promptId) throw new Error('cancelled');
+      const desired = OWNED_AGENT_PROFILES.find(p => p.name === role)?.effort ?? parent.requestEffort ?? parent.settings['effort'];
       const offered = this.catalog.find(m => m.model === model)?.supportedReasoningEfforts.map(e => e.reasoningEffort) ?? [];
-      const effort = typeof desired === 'string' && offered.includes(desired) ? desired : typeof session.baseline.effort === 'string' && offered.includes(session.baseline.effort) ? session.baseline.effort : null;
-      const turn = await this.rpc.request('turn/start', { threadId: worker.id, input: [{ type: 'text', text: String(applied['prompt']), text_elements: [] }], model,
-        ...(effort ? { effort } : {}),
-        ...(sandbox && !planner && !customPermissions && (typeof permissions !== 'string' || worktree) ? { sandboxPolicy: worktree && sandbox['type'] === 'workspaceWrite' ? { ...sandbox, writableRoots: [cwd] } : sandbox } : {}) });
-      if (!worker.terminal) worker.turn = String(obj(turn['turn'])?.['id'] ?? worker.turn ?? '');
-      const cancel = (): void => { if (worker?.turn) void this.rpc.request('turn/interrupt', { threadId: worker.id, turnId: worker.turn }).catch(() => undefined); };
-      session.controller.signal.addEventListener('abort', cancel, { once: true });
-      if (session.controller.signal.aborted) cancel();
-      let ended: Obj;
-      try { ended = await terminal; } finally { session.controller.signal.removeEventListener('abort', cancel); }
+      const effort = typeof desired === 'string' && offered.includes(desired) ? desired : typeof parent.baseline.effort === 'string' && offered.includes(parent.baseline.effort) ? parent.baseline.effort : null;
+      // The durable reservation owns write protection before any user execution can be attempted.
+      let registered = false;
+      const saved = updateJob(this.env, parent.id, prev => {
+        const r = prev?.current.prompt_id === promptId ? own(prev.current.active, toolId) : undefined;
+        if (!prev || !r) return null;
+        if (this.writeConflict(String(parent.settings['cwd']), 'Agent', {}, r.deliverables)) throw new Error('worker write conflict');
+        registered = true;
+        return { ...prev, current: { ...prev.current, active: { ...prev.current.active, [toolId]: { ...r, codex_execution: { thread_id: worker!.id, turn_id: null, cwd, root_cwd: String(parent.settings['cwd']) } } } } };
+      }, { refuseUnreadable: true });
+      if (!saved.ok || !registered) throw new Error('execution reservation unavailable');
+      const cancel = (): void => this.interruptWorker(worker!);
+      dispatch.cancel = cancel;
+      parentSignal.addEventListener('abort', cancel, { once: true });
+      try {
+        dispatch.attempted = true;
+        try {
+          const turn = await this.rpc.request('turn/start', { threadId: worker.id, input: [{ type: 'text', text: String(applied['prompt']), text_elements: [] }], model,
+            ...(effort ? { effort } : {}),
+            ...(sandbox && !planner && !customPermissions && (typeof permissions !== 'string' || worktree) ? { sandboxPolicy: worktree && sandbox['type'] === 'workspaceWrite' ? { ...sandbox, writableRoots: [cwd] } : sandbox } : {}) });
+          if (!worker.terminal) { worker.turn = String(obj(turn['turn'])?.['id'] ?? worker.turn ?? ''); this.persistWorkerTurn(worker); }
+        } catch (error) {
+          if (error instanceof RpcRequestError && !error.attempted && !worker.turn && !dispatch.ended) { dispatch.attempted = false; throw error; }
+          if (!dispatch.ended) await this.recoverWorker(worker, terminal);
+          if (!dispatch.ended) return 'Worker termination unconfirmed. Its reservation, files and write-scope protection remain active. No replacement execution or acceptance is claimed.';
+        }
+        if (parentSignal.aborted) cancel();
+        if (!dispatch.ended) {
+          const ended = await terminal;
+          if (ended['localClose']) return 'Worker termination unconfirmed after local connection close. Reservation and files remain protected.';
+        }
+        return await this.settleWorker(worker);
+      } finally {
+        // Keep cancellation and terminal ownership while an uncertain execution still exists.
+        if (dispatch.settled || !dispatch.attempted) parentSignal.removeEventListener('abort', cancel);
+      }
+    } catch {
+      if (dispatch?.attempted) return 'Worker termination or settlement unconfirmed. Its reservation and files are preserved.';
+      if (worker && dispatch) {
+        // Definite pre-send failure is non-execution evidence, even if its first state write fails.
+        dispatch.ended = { status: 'failed', notExecuted: true };
+        return await this.settleWorker(worker);
+      }
+      await this.failure(parent, promptId, toolId, applied, 'worker_dispatch_failed');
+      if (worker) await this.cleanupWorker(worker);
+      return 'Worker could not start. Its files and any worktree are preserved. No acceptance is claimed.';
+    }
+  }
+  private persistWorkerTurn(worker: Session): void {
+    const d = worker.dispatch; if (!d) return;
+    updateJob(this.env, d.parent.id, prev => {
+      if (!prev) return null;
+      const change = (g: import('../types.js').JobGeneration) => {
+        const r = own(g.active, d.tool);
+        return g.prompt_id === d.prompt && r?.codex_execution?.thread_id === worker.id
+          ? { ...g, active: { ...g.active, [d.tool]: { ...r, codex_execution: { ...r.codex_execution, turn_id: worker.turn } } } } : g;
+      };
+      return { ...prev, current: change(prev.current), history: prev.history.map(change) };
+    }, { refuseUnreadable: true });
+  }
+  private interruptWorker(worker: Session, timeoutMs = 1000): void {
+    const d = worker.dispatch;
+    if (!d || d.ended || d.interruptSent || !worker.turn) return;
+    d.interruptSent = true;
+    void this.rpc.request('turn/interrupt', { threadId: worker.id, turnId: worker.turn }, timeoutMs).catch(() => undefined);
+  }
+  private async recoverWorker(worker: Session, terminal: Promise<Obj>): Promise<void> {
+    const deadline = Date.now() + 1000;
+    const left = () => Math.max(1, deadline - Date.now());
+    // Read only the exact known turn; never infer a latest turn when start identity is unknown.
+    if (worker.turn && !worker.dispatch?.ended) {
+      try {
+        const read = await this.rpc.request('thread/read', { threadId: worker.id, includeTurns: true }, left());
+        const turns = obj(read['thread'])?.['turns'];
+        const turn = Array.isArray(turns) ? turns.map(obj).find(t => t?.['id'] === worker.turn && ['completed', 'interrupted', 'failed'].includes(String(t['status']))) : null;
+        if (turn) this.notification({ method: 'turn/completed', params: { threadId: worker.id, turn } });
+      } catch { /* The single recovery deadline still owns the following wait. */ }
+    }
+    if (worker.dispatch?.ended || Date.now() >= deadline) return;
+    this.interruptWorker(worker, left());
+    let timer: NodeJS.Timeout | undefined;
+    try { await Promise.race([terminal, new Promise<void>(resolve => { timer = setTimeout(resolve, left()); })]); }
+    finally { if (timer) clearTimeout(timer); }
+  }
+  private async settleWorker(worker: Session): Promise<string> {
+    const d = worker.dispatch;
+    if (!d?.ended) return 'Worker termination unconfirmed.';
+    if (d.settled) return d.output ?? 'Worker already settled.';
+    if (d.settling) return d.settling;
+    d.settling = (async () => {
       const texts = worker.items.filter(i => i['type'] === 'agentMessage' && typeof i['text'] === 'string');
       const final = texts.filter(i => i['phase'] === 'final_answer').at(-1) ?? texts.at(-1);
-      const status = ended['status'];
-      if (status !== 'completed') { await this.failure(session, promptId, toolId, input, 'worker_not_completed'); return 'Worker interrupted or failed. No completion or acceptance is claimed.'; }
-      const response = { status: 'completed', agentId: worker.id, resolvedModel: worker.requestModel ?? worker.settings['model'] ?? child['model'], content: [{ type: 'text', text: String(final?.['text'] ?? '') }], totalDurationMs: Date.now() - t0 };
-      const post = await this.hook(session, { hook_event_name: 'PostToolUse', session_id: session.id, prompt_id: promptId, tool_name: 'Agent', tool_use_id: toolId, tool_input: applied, tool_response: response, cwd: String(session.settings['cwd']) });
-      return `${final?.['text'] ?? 'No worker final output.'}\n\n${codexGuidance(contextOf(post))}${worktree ? `\nWorker worktree: ${worktree.path}\nBranch: ${worktree.branch}\nSnapshot baseline: ${worktree.baseline}. Apply only the diff from this baseline to the worker branch in the root; this result does not integrate it.` : ''}`;
-    } catch {
-      await this.failure(session, promptId, toolId, input, 'worker_dispatch_failed');
-      return 'Worker could not complete. Its files and any worktree are preserved. No acceptance is claimed.';
-    } finally {
-      if (worker && !worker.turn) { try { await this.rpc.request('thread/archive', { threadId: worker.id }); } catch { /* Ephemeral worker cleanup is best effort. */ } this.sessions.delete(worker.id); this.hooked.delete(worker.id); this.compactPending.delete(worker.id); }
-    }
+      let guidance = '';
+      if (d.ended!['status'] === 'completed') {
+        const response = { status: 'completed', agentId: worker.id, resolvedModel: worker.requestModel ?? worker.settings['model'], content: [{ type: 'text', text: String(final?.['text'] ?? '') }], totalDurationMs: Date.now() - d.startedAt };
+        const post = await this.hook(d.parent, { hook_event_name: 'PostToolUse', session_id: d.parent.id, prompt_id: d.prompt, tool_name: 'Agent', tool_use_id: d.tool, tool_input: d.input, tool_response: response, cwd: String(d.parent.settings['cwd']) });
+        guidance = codexGuidance(contextOf(post));
+      } else await this.failure(d.parent, d.prompt, d.tool, d.input, 'worker_not_completed');
+      const state = readJob(this.env, d.parent.id);
+      const gen = state.ok && state.value ? [state.value.current, ...state.value.history].find(g => g.prompt_id === d.prompt) : null;
+      if (!gen || own(gen.active, d.tool) || !gen.receipts.some(r => r.tool_use_id === d.tool)) return 'Worker terminal observed; settlement pending. Reservation and files remain protected. Retry status/settlement without restarting execution.';
+      d.output = d.ended!['status'] === 'completed'
+        ? `${final?.['text'] ?? 'No worker final output.'}\n\n${guidance}${d.worktree ? `\nWorker worktree: ${d.worktree.path}\nBranch: ${d.worktree.branch}\nSnapshot baseline: ${d.worktree.baseline}. Apply only the diff from this baseline to the worker branch in the root; this result does not integrate it.` : ''}`
+        : 'Worker interrupted or failed. No completion or acceptance is claimed.';
+      d.settled = true;
+      if (d.cancel) d.signal.removeEventListener('abort', d.cancel);
+      await this.cleanupWorker(worker);
+      return d.output;
+    })();
+    try { return await d.settling; } finally { delete d.settling; }
+  }
+  private async retrySettlements(): Promise<void> {
+    await Promise.all([...this.sessions.values()].filter(s => s.dispatch?.ended && !s.dispatch.settled).map(s => this.settleWorker(s).catch(() => 'settlement pending')));
+  }
+  private async cleanupWorker(worker: Session): Promise<void> {
+    // Observations remain accessible until receipt/state commit, above.
+    this.sessions.delete(worker.id); this.hooked.delete(worker.id); this.compactPending.delete(worker.id);
+    try { await this.rpc.request('thread/archive', { threadId: worker.id }, 1000); } catch { /* Files are preserved. */ }
+  }
+  private writeConflict(cwd: string, tool: string, input: Obj, deliverables?: string[]): boolean {
+    if (!/^(Agent|Bash|Edit|Write|MultiEdit|NotebookEdit|apply_patch|exec_command|write_stdin)$/.test(tool)) return false;
+    if (tool === 'Bash' && /^(?:git (?:status|diff|log|show)|(?:pwd|ls|cat|rg|head|tail)\b)[^;&|`]*$/.test(String(input['command'] ?? ''))) return false;
+    const paths = deliverables ?? [input['file_path'], input['path']].filter((p): p is string => typeof p === 'string');
+    const contains = (base: string, path: string) => { const r = relative(resolve(base), resolve(path)); return r === '' || !r.startsWith('..') && !isAbsolute(r); };
+    return codexExecutions(this.env).some(r => {
+      const e = r.codex_execution!;
+      if (!contains(e.root_cwd, cwd) && !contains(e.cwd, cwd)) return false;
+      if (!paths.length) return true;
+      if (!r.deliverables.length) return paths.some(p => contains(e.root_cwd, resolve(cwd, p)) || contains(e.cwd, resolve(cwd, p)));
+      return paths.some(p => r.deliverables.some(q => contains(resolve(e.root_cwd, q), resolve(cwd, p)) || contains(resolve(cwd, p), resolve(e.root_cwd, q))));
+    });
   }
   private async failure(session: Session, prompt: string, tool: string, input: Obj, error: string): Promise<void> {
     await this.hook(session, { hook_event_name: 'PostToolUseFailure', session_id: session.id, prompt_id: prompt, tool_name: 'Agent', tool_use_id: tool, tool_input: input, error });
@@ -485,6 +616,7 @@ export class CodexPolicy {
       applied: request['model'] === selectedModel && (!session.route.effort || effort === selectedEffort || nativeUltra) });
     delete session.route;
   }
+  previousCompact(session: string): string | undefined { return this.sessions.get(session)?.lastCompactSummary; }
   canCompact(session: string): boolean { return this.sessions.get(session)?.compactAllowed === true; }
-  close(): void { for (const s of this.sessions.values()) { s.controller?.abort(); s.done?.({status:'interrupted'}); } }
+  close(): void { for (const s of this.sessions.values()) { s.controller?.abort(); s.done?.({localClose:true}); } }
 }

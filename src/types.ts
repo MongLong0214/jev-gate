@@ -324,6 +324,8 @@ export interface Reservation {
   deliverables: string[];
   started_at: string;
   orphaned?: true;
+  /** Native execution survives local RPC timeout and generation retirement until terminal settlement commits. */
+  codex_execution?: { thread_id: string; turn_id: string | null; cwd: string; root_cwd: string };
 }
 
 /** What a worker's own transcript showed about the checks it reported as passing (src/verify.ts). */

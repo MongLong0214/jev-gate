@@ -2,6 +2,10 @@ import { createInterface } from 'node:readline';
 import type { Readable, Writable } from 'node:stream';
 import { obj, type Obj } from './source.js';
 
+export class RpcRequestError extends Error {
+  constructor(readonly kind: 'unavailable' | 'write' | 'timeout' | 'rejected' | 'closed', readonly attempted: boolean) { super(kind === 'closed' ? 'Codex App Server disconnected' : `Codex request ${kind}`); }
+}
+
 /** Bidirectional App Server transport. Internal, client and server request ids occupy separate namespaces. */
 export class CodexRpc {
   private sequence = 0;
@@ -22,12 +26,18 @@ export class CodexRpc {
   }
   send(message: Obj): void { if (this.closed) throw new Error('Codex App Server disconnected'); this.output.write(JSON.stringify(message) + '\n'); }
   request(method: string, params: Obj, timeoutMs = 30_000): Promise<Obj> {
-    if (this.closed || this.pending.size >= 512) return Promise.reject(new Error('Codex request unavailable'));
+    if (this.closed || this.pending.size >= 512) return Promise.reject(new RpcRequestError('unavailable', false));
     const id = `jev-internal-${++this.sequence}`;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error('Codex request timed out')); }, timeoutMs);
+      const timer = setTimeout(() => { this.pending.delete(id); reject(new RpcRequestError('timeout', true)); }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
-      try { this.send({ id, method, params }); } catch (e) { clearTimeout(timer); this.pending.delete(id); reject(e); }
+      let attempted = false;
+      try {
+        const line = JSON.stringify({ id, method, params }) + '\n';
+        if (this.closed) throw new RpcRequestError('unavailable', false);
+        attempted = true;
+        this.output.write(line);
+      } catch { clearTimeout(timer); this.pending.delete(id); reject(new RpcRequestError('write', attempted)); }
     });
   }
   forward(message: Obj): void {
@@ -53,7 +63,7 @@ export class CodexRpc {
     const pending = this.pending.get(id);
     if (pending) {
       clearTimeout(pending.timer); this.pending.delete(id);
-      if (message['error']) pending.reject(new Error('Codex rejected request'));
+      if (message['error']) pending.reject(new RpcRequestError('rejected', true));
       else pending.resolve(obj(message['result']) ?? {});
       return;
     }
@@ -67,7 +77,7 @@ export class CodexRpc {
   close(): void {
     if (this.closed) return;
     this.closed = true;
-    for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(new Error('Codex App Server disconnected')); }
+    for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(new RpcRequestError('closed', true)); }
     this.pending.clear(); this.clients.clear(); this.servers.clear();
     this.onClose();
   }

@@ -1950,3 +1950,88 @@ describe('elapsed preparation deadline', () => {
     expect(f.sent).toHaveLength(1);
   });
 });
+
+describe('bounded child history question feasibility (#140)', () => {
+  const saturate = (r: ReturnType<typeof createRouter>) => {
+    for (let i = 0; i < 65; i++) r.turnComplete({ turnId: `finished-${i}`, agentId: `native-${i}` });
+  };
+  it('skips saturated effort-only spawn before key or host preparation', async () => {
+    const router = createRouter(configOf({ ...CHILD, routeSubagentModel: false }));
+    const f = fakeEngine();
+    const key = vi.spyOn(f.engine, 'envKey');
+    const pins = vi.spyOn(f.engine, 'pins');
+    saturate(router);
+    const n = spawnNext();
+    await router.agentSpawn(f.engine, spawn(), n.next);
+    expect(n.calls).toEqual([spawn()]);
+    expect(f.sent).toHaveLength(0);
+    expect(key).not.toHaveBeenCalled();
+    expect(pins).not.toHaveBeenCalled();
+  });
+  it('keeps model routing without asking effort after saturation', async () => {
+    const router = createRouter(configOf(CHILD));
+    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['fast', 0.95], effort: ['low', 0.95] }) });
+    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    saturate(router);
+    const n = spawnNext(e => ({ model: e.model ?? 'claude-opus-5-5', agentId: 'new-child' }));
+    await router.agentSpawn(f.engine, spawn(), n.next);
+    expect(f.sent).toHaveLength(1);
+    expect(Object.keys(f.sent[0]!.questions)).toEqual(['control', 'tier', 'action_risk']);
+    expect(n.calls[0]!.model).toBe('haiku');
+  });
+  it.each(['key', 'pins'])('rechecks saturation after pending %s preparation', async phase => {
+    const router = createRouter(configOf({ ...CHILD, routeSubagentModel: false }));
+    const f = fakeEngine({ respond: answering({ ...CLEAR, effort: ['low', 0.95] }) });
+    const pending = deferred<void>();
+    if (phase === 'key') f.engine.envKey = async () => { await pending.promise; return FAKE_KEY; };
+    else { const pins = f.engine.pins; f.engine.pins = async () => { await pending.promise; return pins(); }; }
+    const n = spawnNext(); const run = router.agentSpawn(f.engine, spawn(), n.next);
+    await settle(); saturate(router); pending.resolve(); await run;
+    expect(f.sent).toHaveLength(0); expect(n.calls).toEqual([spawn()]);
+  });
+  it('keeps an independently valid model after saturation during HTTP without registering effort', async () => {
+    const router = createRouter(configOf(CHILD));
+    const f = fakeEngine({ respond: req => { saturate(router); return answering({ ...CLEAR, tier: ['fast', 0.95], effort: ['low', 0.95] })(req); } });
+    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    const n = spawnNext(e => ({ model: e.model ?? 'claude-opus-5-5', agentId: 'a1' }));
+    await router.agentSpawn(f.engine, spawn(), n.next);
+    expect(f.sent).toHaveLength(1); expect(n.calls[0]!.model).toBe('haiku');
+    const stepNext = streamNext<TurnStepEvent>();
+    await drain(router.turnStep(f.engine, childStep({ model: 'claude-haiku-4-5' }), stepNext.next));
+    expect(stepNext.calls[0]!.effort).toBe('xhigh');
+    expect(f.logs.some(l => l['event'] === 'spawn' && l['sent'] === true)).toBe(true);
+  });
+  it('keeps old mappings and resets saturation only for a new session', async () => {
+    const router = createRouter(configOf(CHILD));
+    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', 0.95], effort: ['low', 0.95] }) });
+    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    await router.agentSpawn(f.engine, spawn(), spawnNext(() => ({ model: 'claude-opus-5-5', agentId: 'a1' })).next);
+    saturate(router);
+    const n = streamNext<TurnStepEvent>(); await drain(router.turnStep(f.engine, childStep(), n.next));
+    expect(n.calls[0]!.effort).toBe('low');
+    router.sessionEnd(); router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    await router.agentSpawn(f.engine, spawn(), spawnNext().next);
+    expect(f.sent.at(-1)!.questions).toHaveProperty('effort');
+  });
+  it('keeps necessary pin checks but sends no question when the model is pinned', async () => {
+    const router = createRouter(configOf(CHILD)); const f = fakeEngine({ pins: { subagentModel: true } });
+    router.agentOffer(OFFER_BUILT_IN('general-purpose')); saturate(router);
+    const n = spawnNext(); await router.agentSpawn(f.engine, spawn(), n.next);
+    expect(f.sent).toHaveLength(0); expect(n.calls).toEqual([spawn()]);
+  });
+
+  it('ignores an extra unasked effort answer in a valid model-only response', async () => {
+    const router = createRouter(configOf(CHILD));
+    const f = fakeEngine({ respond: async req => {
+      const response = await answering({ ...CLEAR, tier: ['fast', 0.95] })(req);
+      const body = JSON.parse(response.text); body.answers.effort = { type: 'score', probabilities: { invalid: 1 } };
+      return { ...response, text: JSON.stringify(body) };
+    } });
+    router.agentOffer(OFFER_BUILT_IN('general-purpose')); saturate(router);
+    const n = spawnNext(); await router.agentSpawn(f.engine, spawn(), n.next);
+    expect(n.calls[0]!.model).toBe('haiku');
+    expect(f.sent[0]!.questions).not.toHaveProperty('effort');
+    expect(f.logs.find(l => l['event'] === 'spawn')?.['assessment']).toBe('ok');
+  });
+
+});
