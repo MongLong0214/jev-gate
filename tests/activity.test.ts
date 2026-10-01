@@ -1,10 +1,12 @@
 import { mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { runInNewContext } from 'node:vm';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { loadActivity } from '../src/activity.js';
 import { startDashboard, readVersions } from '../src/dashboard.js';
+import { DASHBOARD_PAGE } from '../src/dashboard-page.js';
 
 const dirs: string[] = [];
 const make = (): string => {
@@ -135,6 +137,18 @@ describe('loadActivity', () => {
 });
 
 describe('dashboard server', () => {
+  it.each(['ko', 'en'])('renders unknown and mismatched versions without interrupting live rendering (%s)', lang => {
+    const functionBody = DASHBOARD_PAGE.split('\n').find(line => line.startsWith('function versionLine('))!;
+    const render = (version: { running: string; installed: string | null }) => runInNewContext(`${functionBody}\nversionLine(version)[0]`, {
+      lang, version, el: (_tag: string, _className: string, text: string) => ({ textContent: text, style: {} }),
+    }) as { textContent: string; style: { color?: string } };
+    expect(render({ running: '0.7.1', installed: null }).textContent).toBe(lang === 'ko'
+      ? '대시보드 v0.7.1 · 설치된 플러그인 확인 불가' : 'Dashboard v0.7.1 · Installed plugin unavailable');
+    const mismatch = render({ running: '0.7.0', installed: '0.7.1' });
+    expect(mismatch.textContent).toContain(lang === 'ko' ? '재시작하세요' : 'Restart the dashboard');
+    expect(mismatch.style.color).toBeDefined();
+  });
+
   it('notifies connected clients when only the installed plugin version changes', async () => {
     const home = make(); const registryDir = join(home, '.claude/plugins'); mkdirSync(registryDir, { recursive: true });
     const registry = join(registryDir, 'installed_plugins.json');
