@@ -329,6 +329,7 @@ export interface Reservation {
   /** Native execution survives local RPC timeout and generation retirement until terminal settlement commits. */
   codex_execution?: { thread_id: string; turn_id: string | null; cwd: string; root_cwd: string };
   /** A launch receipt is not a terminal result. Native identity remains reserved until observed completion. */
+  allocation_pair?: { model: string; effort_edit: { kind: 'keep' } | { kind: 'set'; value: string } | { kind: 'omit' } };
   background_execution?: { token: string; agent_id: string | null; subagent_type: string; resolved_model: string | null };
 }
 

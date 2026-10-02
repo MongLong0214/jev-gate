@@ -1,100 +1,69 @@
-import { buildQuestions, buildState, validateAnswers, orderedMove, moveGate, TIER_ORDER, EFFORT_LEVEL_TARGETS, TIER_LEVELS, type ModelTier } from '../../mods/router/hooks/policy.ts';
+import { randomUUID } from 'node:crypto';
+import { offerPairs, selectPair, pairReceipt, type PairPatch, type RouteCandidate } from '../../mods/router/hooks/selection.ts';
+import { routingContext } from '../../mods/router/hooks/context.ts';
+import { looksSecret } from '../../mods/router/hooks/secret.ts';
+import { MAX_REQUEST_TOKENS, estimateTokens } from '../../mods/router/hooks/client.ts';
 import { callJev } from '../jev.js';
 import type { Env } from '../config.js';
 import type { TraceWriter } from '../trace.js';
 import type { CodexPolicyConfig } from './config.js';
-import { randomUUID } from 'node:crypto';
+import { codexTargetAllowed, generalCodexModel, normalizeCatalog } from './catalog.js';
 
-export interface CodexModel { model: string; description?: string; isDefault?: boolean; hidden?: boolean; defaultReasoningEffort?: string; supportedReasoningEfforts: Array<{ reasoningEffort: string }> }
-// Host-specific effort vocabulary. The account catalog, not this order, decides which values may be sent.
-const EFFORT_LEVELS = {
-  none: 'An immediate response or mechanical transformation requiring no reasoning.',
-  minimal: 'A trivial, bounded decision requiring only a minimal reasoning step.',
-  low: TIER_LEVELS.fast,
-  medium: TIER_LEVELS.standard,
-  high: TIER_LEVELS.deep,
-  xhigh: TIER_LEVELS.frontier,
-  max: 'Exceptional reasoning requiring sustained comparison of many competing hypotheses or a difficult proof with several interacting constraints.',
-  ultra: 'Exhaustive reasoning for an exceptionally difficult problem requiring extended proof search, adversarial counterexamples and independent verification of interacting conclusions.',
-} as const;
-const effortOrder = Object.keys(EFFORT_LEVELS) as Array<keyof typeof EFFORT_LEVELS>;
-/** Same ordered probability policy; model identity and valid efforts come from this Codex account's live catalog. */
+export interface CodexModel {
+  model: string; displayName?: string; description?: string; isDefault?: boolean; hidden?: boolean;
+  defaultReasoningEffort?: string;
+  supportedReasoningEfforts: Array<{ reasoningEffort: string; description?: string }>;
+  inputModalities?: string[];
+  capabilities?: unknown;
+  [key: string]: unknown;
+}
+const supported = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
+export const codexCandidates = (catalog: readonly CodexModel[], allowAstra: boolean, baseline?: string): RouteCandidate[] =>
+  normalizeCatalog(catalog, true).models.filter(m => m.model === baseline || generalCodexModel(m) && codexTargetAllowed(m.model, allowAstra)).map(m => ({
+    id: m.model, description: (m.description ?? m.displayName ?? 'Account-listed coding model; performance and price rank unknown.').slice(0, 1200),
+    efforts: supported.filter(e => m.supportedReasoningEfforts.some(v => v.reasoningEffort === e)),
+    omitEffort: true,
+  }));
+
+/** Actual candidate IDs and their own effort contracts; one bounded POST, independent of optional recording. */
 export const routeCodex = async (args: {
-  model: string; effort: string | null; task: string; previousReply?: string; session: string; prompt: string;
-  catalog: CodexModel[]; config: CodexPolicyConfig; env: Env; trace?: TraceWriter; signal?: AbortSignal; fetchImpl?: typeof fetch;
-}): Promise<{ model?: string; effort?: string }> => {
-  const { config, env, signal, catalog } = args;
-  const skip = (reason: string): {} => {
-    args.trace?.write('codex_router_skipped', { host: 'codex', mode: config.gate.mode, session_id: args.session, prompt_id: args.prompt,
-      known_not_sent: true, attempted: false, reason });
-    return {};
-  };
+  model: string; effort: string | null; task: string; previousReply?: string; recentRequests?: readonly string[]; session: string; prompt: string;
+  modelPinned?: boolean; effortPinned?: boolean; catalog: CodexModel[]; catalogComplete?: boolean; catalogExcluded?: Record<string, number>; config: CodexPolicyConfig; env: Env; trace?: TraceWriter; signal?: AbortSignal; fetchImpl?: typeof fetch;
+}): Promise<PairPatch> => {
+  const { config, env, signal } = args;
+  const write = (event: Parameters<TraceWriter['write']>[0], facts: Record<string, unknown>): void => { try { args.trace?.write(event, facts); } catch { /* Optional diagnostics cannot change a request. */ } };
+  const facts = { host: 'codex', mode: config.gate.mode, component: 'router', session_id: args.session, prompt_id: args.prompt };
+  const skip = (reason: string): PairPatch => { write('codex_router_skipped', { ...facts, known_not_sent: true, attempted: false, reason }); return {}; };
   if (env['JEV_CODEX_ENABLED'] === '0') return skip('disabled');
   if (!config.router.enabled) return skip('router_disabled');
   if (!env['TYPESAFE_API_KEY']) return skip('key_missing');
   if (signal?.aborted) return skip('aborted');
-  const base = catalog.find(m => m.model === args.model);
-  if (!base) return skip('model_catalog_missing');
-  const allowed = base.supportedReasoningEfforts.map(e => e.reasoningEffort);
-  const from = args.effort ?? base.defaultReasoningEffort ?? null;
-  const effortEnabled = config.router.effort && from !== null && effortOrder.some(e => e === from) && allowed.includes(from);
-  const efforts = effortEnabled ? effortOrder.filter(e => allowed.includes(e)) : null;
-  const mutableEfforts = efforts && efforts.length > 1 ? efforts : null;
-  const models = config.gate.models;
-  const ids = Object.values(models);
-  const tiers: ModelTier[] | null = config.router.model && new Set(ids).size > 1 && ids.includes(args.model) && ids.every(id => catalog.some(m => m.model === id)) ? [...TIER_ORDER] : null;
-  const dims = { tiers, efforts: mutableEfforts ? EFFORT_LEVEL_TARGETS : null };
-  const questions = buildQuestions(dims);
-  if (!questions) return skip('nothing_to_change');
-  if (mutableEfforts && questions.effort) questions.effort = { ...questions.effort, criteria: mutableEfforts.map(e => EFFORT_LEVELS[e]) };
+  if (looksSecret(args.task)) return skip('input_secret');
+  const candidates = codexCandidates(args.catalog, config.router.allowAstra, args.model);
+  const modelPin = args.modelPinned === true; const effortPin = args.effortPinned === true;
+  const offer = offerPairs({ baseline: { model: args.model, effort: args.effort }, candidates,
+    model: config.router.model && !modelPin, effort: config.router.effort && !effortPin,
+    upgrade: config.router.minUpgradeConfidence, downgrade: config.router.minDowngradeConfidence });
+  if (!offer) return skip('no_alternative');
+  const request = { model: config.gate.jevModel, state: routingContext(args.task, args.previousReply, args.recentRequests), questions: offer.questions };
+  if (estimateTokens(JSON.stringify(request)) > MAX_REQUEST_TOKENS) return skip('input_too_large');
   const requestId = randomUUID();
-  const facts = { host: 'codex', mode: config.gate.mode, component: 'router', session_id: args.session, prompt_id: args.prompt, request_id: requestId };
-  const intent = args.trace?.write('codex_router_intent', { ...facts, asked: Object.keys(questions), attempted: true });
-  if (intent && !intent.ok && intent.error !== 'recording_disabled') return {};
-  const out = await callJev({ model: config.gate.jevModel, state: buildState({ scope: 'root', text: args.task, ...(args.previousReply ? { previousReply: args.previousReply } : {}) }), questions }, {
-    apiKey: env['TYPESAFE_API_KEY'], deadlineMs: config.router.timeoutMs, ...(signal ? { signal } : {}), ...(args.fetchImpl ? { fetchImpl: args.fetchImpl } : {}),
-  });
-  let patch: { model?: string; effort?: string } = {};
-  const safeAnswers: Record<string, unknown> = {};
-  const reasons: Record<string, string> = {};
-  if (out.ok && out.response.model === config.gate.jevModel && !signal?.aborted) {
-    const answers = validateAnswers(out.response.answers, questions);
-    for (const [key, answer] of Object.entries(answers)) {
-      // Persist the exact offered labels: Codex effort levels can vary with the native model catalog.
-      const labels = key === 'tier' ? tiers : key === 'effort' ? mutableEfforts : null;
-      if (answer) safeAnswers[key] = 'levels' in answer ? { type: 'score', probabilities: Object.fromEntries((answer.levels as readonly number[]).map((v, i) => [labels?.[i] ?? String(i), v])) } : answer;
-    }
-    const opts = { scope: 'root' as const, tiers: models, minUpgradeConfidence: config.router.minUpgradeConfidence, minDowngradeConfidence: config.router.minDowngradeConfidence };
-    const choose = (key: 'tier' | 'effort', order: readonly string[], current: number, labels: readonly string[] = order): number | null => {
-      const a = answers[key];
-      if (!a || current < 0) { reasons[key] = 'answer_invalid'; return null; }
-      const probabilities: Record<string, number> = {};
-      a.levels.forEach((p, i) => { const label = labels[i]; if (label) probabilities[label] = (probabilities[label] ?? 0) + p; });
-      const move = orderedMove({ probabilities }, order, current, opts);
-      if (!move) { reasons[key] = 'same_or_uncertain'; return null; }
-      const held = moveGate(move.direction, answers, opts);
-      reasons[key] = held ?? 'selected';
-      return held ? null : move.index;
-    };
-    if (tiers) {
-      const labels = tiers.map(t => models[t]); const order = [...new Set(labels)];
-      const ix = choose('tier', order, order.indexOf(args.model), labels);
-      if (ix !== null) patch.model = order[ix]!;
-    }
-    if (mutableEfforts && from) {
-      const ix = choose('effort', mutableEfforts, mutableEfforts.findIndex(e => e === from));
-      if (ix !== null) patch.effort = mutableEfforts[ix]!;
-    }
-    const effective = catalog.find(m => m.model === (patch.model ?? args.model));
-    if (patch.model && from && !effective?.supportedReasoningEfforts.some(e => e.reasoningEffort === (patch.effort ?? from))) {
-      delete patch.model;
-      reasons['tier'] = 'pair_invalid';
-    }
-  }
-  args.trace?.write('codex_router_result', { ...facts, attempted: true, duration_ms: out.durationMs, ok: out.ok, reason: out.ok ? signal?.aborted ? 'aborted' : out.response.model !== config.gate.jevModel ? 'model_mismatch' : null : out.code,
+  const diagnostic = { ...facts, request_id: requestId, baseline_model: args.model, baseline_effort: args.effort,
+    scope: 'root', excluded: { ...args.catalogExcluded,
+      astra_disabled_by_config: args.catalog.filter(m => m.model !== args.model && !codexTargetAllowed(m.model, config.router.allowAstra)).length,
+      ineligible: args.catalog.filter(m => m.model !== args.model && !generalCodexModel(m)).length },
+    discovered_count: args.catalog.length, eligible_count: candidates.length, offered_count: offer.candidates.length, catalog_complete: args.catalogComplete ?? true,
+    model_asked: offer.modelAsked, effort_asked: offer.effortQuestions.size > 0, allow_astra: config.router.allowAstra, model_pin: modelPin, effort_pin: effortPin,
+    model_enabled: config.router.model, effort_enabled: config.router.effort,
+    model_not_asked: offer.modelAsked ? null : modelPin ? 'model_pinned' : !config.router.model ? 'routing_off' : 'no_alternative',
+    effort_not_asked: offer.effortQuestions.size ? null : effortPin ? 'effort_pinned' : !config.router.effort ? 'routing_off' : 'no_alternative' };
+  write('codex_router_intent', { ...diagnostic, asked: Object.keys(offer.questions), attempted: true });
+  const out = await callJev(request, { apiKey: env['TYPESAFE_API_KEY'], deadlineMs: config.router.timeoutMs, ...(signal ? { signal } : {}), ...(args.fetchImpl ? { fetchImpl: args.fetchImpl } : {}) });
+  const decision = out.ok && out.response.model === config.gate.jevModel && !signal?.aborted ? selectPair(offer, out.response.answers) : { patch: {}, reasons: { model: 'not_asked', effort: 'not_asked' } };
+  write('codex_router_result', { ...diagnostic, attempted: true, duration_ms: out.durationMs, ok: out.ok,
+    reason: out.ok ? signal?.aborted ? 'aborted' : out.response.model !== config.gate.jevModel ? 'model_mismatch' : null : out.code,
     http: { duration_ms: out.durationMs, code: out.ok ? 'ok' : out.code }, jev: out.ok ? { model: out.response.model, usage: out.response.usage } : null,
-    answers: safeAnswers,
-    selected_model: patch.model ?? args.model, selected_effort: patch.effort ?? from, reasons,
-    ...(out.ok ? { usage: out.response.usage, returned_model: out.response.model } : {}), applied: false });
-  return patch;
+    selected_model: decision.patch.model ?? args.model, selected_effort: decision.patch.effort ?? (decision.patch.effortEdit?.kind === 'omit' ? null : args.effort), effort_edit: decision.patch.effortEdit ?? { kind: 'keep' },
+    reasons: decision.reasons, answers: out.ok ? pairReceipt(offer, out.response.answers) : {}, ...(out.ok ? { usage: out.response.usage, returned_model: out.response.model } : {}), applied: false });
+  return decision.patch;
 };

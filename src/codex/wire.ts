@@ -17,7 +17,7 @@ export const wireSource = (input: unknown, task: string, prompt: string): { item
       const body = text(item['content']); if (body === null) return { items: [], complete: false };
       const id = identify({ role: item['role'], text: body });
       if (item['role'] === 'user') { const submitted = at === current; own ||= submitted; items.push({ id, type: 'userMessage', content: [{ type: 'text', text: body }], ...(submitted ? { clientId: prompt } : {}) }); }
-      else if (item['role'] === 'assistant') items.push({ id, type: 'agentMessage', text: body });
+      else if (item['role'] === 'assistant') items.push({ id, type: 'agentMessage', text: body, ...(typeof item['phase'] === 'string' ? { phase: item['phase'] } : {}) });
       else if (!['developer', 'system'].includes(String(item['role']))) return { items: [], complete: false };
     } else if (item['type'] === 'function_call' || item['type'] === 'custom_tool_call') {
       if (typeof item['call_id'] !== 'string' || pending.has(item['call_id'])) return { items: [], complete: false };

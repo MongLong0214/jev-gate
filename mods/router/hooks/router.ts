@@ -1,12 +1,16 @@
-import type { ClientReason, Transport, Usage } from './client.ts';
+import type { Transport, Usage } from './client.ts';
 import { createClient } from './client.ts';
 import type { RouterConfig } from './config.ts';
 import { validKey } from './config.ts';
 import type { RootSwitch, SymbolicEffort } from './models.ts';
 import { aliasFamily, answeredBy, effortIndex, factsOf, isSymbolicEffort, MODEL_FACTS, sameModel } from './models.ts';
-import type { Answers, Baseline, DimensionReason, ModelTier, MutableDimensions, PolicyOptions, RoutedEffort, RoutingPatch, RoutingTask } from './policy.ts';
-import { allowedBy, buildQuestions, buildState, choosePatch, EFFORT_LEVEL_TARGETS, offerableEfforts, offerableTiers, pairValid, validateAnswers } from './policy.ts';
+import type { Answers, Baseline, PolicyOptions, RoutedEffort, RoutingPatch } from './policy.ts';
+import { choosePatch, EFFORT_LEVEL_TARGETS, offerableEfforts, pairValid } from './policy.ts';
 import { looksSecret } from './secret.ts';
+import { offerPairs, selectPair, pairReceipt, applyEffort, type PairOffer, type EffortEdit } from './selection.ts';
+import { routingContext } from './context.ts';
+import { claudeCandidates, claudeModelAllowed, resolveClaudeModel, type ModelAliases } from './candidates.ts';
+import { claudeTargetAllowed } from './models.ts';
 
 /**
  * The Router's handlers over a structural engine. register.ts adapts the host's `$` to RouterEngine (the environment
@@ -29,6 +33,9 @@ export interface RouterEngine extends Transport {
   envKey: () => Promise<string | undefined>;
   pins: (scope?: 'effort' | 'root' | 'spawn') => Promise<HostPins>;
   /** The settings allowlist when one is set. */
+  dispatchPair?: (tool: string, model: string, allowFable: boolean, agent: string, eligible?: boolean, unstartedToken?: string) => Promise<{ model?: string; effort_edit?: EffortEdit; deny?: string } | null>;
+  modelAliases?: () => Promise<ModelAliases>;
+  currentEffort?: () => Promise<SymbolicEffort | number | undefined>;
   availableModels: () => Promise<readonly string[] | undefined>;
   /** The host's release (`SessionVersion.base`), or undefined when it is not spelled as one. */
   hostBase: () => Promise<string | undefined>;
@@ -54,6 +61,8 @@ export interface TurnStepOutcome {
   answer?: string;
 }
 export interface TurnEndEvent {
+  answer?: string;
+  reason?: string;
   turnId: string;
   agentId?: string;
 }
@@ -87,8 +96,8 @@ export const VERIFIED_HOST = '2.1.282';
  * Later 2.1 releases are accepted too. Pinned to one release, spawn routing went native after every host update: the
  * owner's 2.1.283 was `host_unverified` the day it shipped, though its agent.spawn, agent.offer and turn.step
  * declarations are unchanged from 2.1.282 and its Explore was observed inheriting the parent's Opus. A later release
- * that resolves a spawn differently is caught where it shows, in the spawn's own result, and ends spawn routing for
- * the activation (`suspended`). A development build is still refused: its base names no release.
+ * that reports a different spawn model is visible in that response's diagnostics. A development build is refused:
+ * its base names no release.
  */
 export const hostSupported = (base: string | undefined): boolean => {
   const m = /^2\.1\.(\d+)$/.exec(base ?? '');
@@ -110,7 +119,7 @@ const MAX_OFFERS = 64;
 /** Subagents whose spawn answer is kept for their steps. */
 const MAX_CHILDREN = 64;
 /** The tail of the last root reply a root turn is assessed with; replies end on what they ask or announce next. */
-const REPLY_CHARS = 2000;
+
 /**
  * How long a root request's cached prefix is taken as still warm: under the host's one-hour cache lifetime (every cache
  * write in the owner's transcripts, 2026-09-26..28, was `ephemeral_1h`), with a margin.
@@ -138,12 +147,7 @@ const loggable = (counts: object | null): Record<string, unknown> | null =>
  * label and its task_clear probability, the ordinary-risk probability, and each score's levels. Numbers and closed
  * labels only.
  */
-const receiptOf = (a: Answers): Record<string, unknown> => ({
-  ...(a.control ? { control: a.control.choice, task_clear: a.control.probabilities['task_clear'] ?? null } : {}),
-  ...(a.action_risk ? { ordinary: a.action_risk.probabilities['ordinary'] ?? null } : {}),
-  ...(a.tier ? { tier: a.tier.levels } : {}),
-  ...(a.effort ? { effort: a.effort.levels } : {}),
-});
+
 
 const ABORTED = Symbol('aborted');
 /** Waits for `p` unless `signal` ends the wait first. `p` itself is never cancelled by this. */
@@ -265,6 +269,8 @@ interface TurnRouting {
  */
 interface ChildRouting {
   answers: Answers;
+  pair?: { offer: PairOffer; raw: unknown };
+  allocation?: EffortEdit;
   /** The first step's model and effort, once seen. A later step arriving with others leaves the loop native. */
   baseline: Baseline | null;
   /**
@@ -282,22 +288,10 @@ interface ChildRouting {
 interface SpawnPlan {
   target: string | null;
   answers: Answers | null;
+  pair?: { offer: PairOffer; raw: unknown };
+  allocation?: EffortEdit;
+  deny?: string;
 }
-
-type Assessed =
-  | { kind: 'skipped'; reason: string }
-  | {
-      kind: 'assessed';
-      assessment: 'ok' | ClientReason;
-      usage: Usage | null;
-      sent: boolean;
-      durationMs: number;
-      answers: Record<string, unknown> | null;
-      validated: Answers | null;
-      patch: RoutingPatch;
-      model: DimensionReason;
-      effort: DimensionReason;
-    };
 
 /** Apply the cache floor without raising effort above the native baseline. Missing proposals stay missing. */
 export const cachePatch = (
@@ -312,15 +306,16 @@ export const cachePatch = (
     if (effortIndex(want) < effortIndex(floor)) final = floor === 'max' ? undefined : floor;
   }
   const { effort: _effort, ...rest } = patch;
-  const result = final === undefined || final === baseline.effort ? rest : { ...rest, effort: final };
+  const { effortEdit: originalEdit, ...cleanRest } = rest;
+  const result = final === undefined || final === baseline.effort ? { ...cleanRest, ...(originalEdit?.kind === 'omit' ? { effortEdit: originalEdit } : {}) } : { ...rest, effort: final, ...(originalEdit ? { effortEdit: { kind: 'set' as const, value: final } } : {}) };
   return { patch: result, ...(want !== undefined && final !== want ? { held: want } : {}) };
 };
 
 /** Optional exact switch restrictions; the default routes every compatible, permitted target. */
-export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootSwitch[]) => {
+export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootSwitch[], ownedDispatch = false) => {
   const rootEnabled = config.enabled && (config.routeMainEffort || config.routeMainModel);
-  const spawnEnabled = config.enabled && (config.routeSubagentModel || config.routeSubagentEffort);
-  const childEnabled = config.enabled && config.routeSubagentEffort;
+  const spawnEnabled = ownedDispatch || config.enabled && (config.routeSubagentModel || config.routeSubagentEffort);
+  const childEnabled = ownedDispatch || config.enabled && config.routeSubagentEffort;
   const stepEnabled = rootEnabled || childEnabled;
   const children = bounded<string, ChildRouting>(MAX_CHILDREN);
   // Missing mappings never wait on another spawn. Once history fills, new unknown loops stay native.
@@ -330,8 +325,9 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     if (nativeChildren.size < MAX_CHILDREN) nativeChildren.add(id);
     else childHistoryFull = true;
   };
-  /** The last root step's visible reply: the context a root turn that answers it is assessed with. */
+  /** Last completed root answer, never an intermediate tool-loop reply. */
   let lastReply: string | null = null;
+  const recentRequests: string[] = [];
   /** The last root request that got a response: when, on which model, and at which effort. */
   let lastRoot: { at: number; model: string; effort: SymbolicEffort | null } | null = null;
   /** The effort the last root turn arrived with, before any patch; null before the session's first turn. */
@@ -344,16 +340,6 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
   let diagnosed = false;
   let versionWait: ReturnType<typeof sharedRead<string | undefined>> | null = null;
   const pinReads = new Map<string, ReturnType<typeof sharedRead<HostPins>>>();
-  /**
-   * Why spawn routing stopped for this activation, once a spawn's own result contradicted the contract: a routed
-   * spawn that ran on another model than requested, or an unrouted one that did not run on the baseline this Router
-   * assumed. Either means the host resolves spawns differently from what every other decision here relies on. It
-   * outlives a session end, because a host's resolution does not change within one process.
-   */
-  let suspended: string | null = null;
-  /** The baseline each eligible dispatch was judged against, so its result can be checked whether or not it moved. */
-  const assumed = new WeakMap<object, string>();
-
   const log = (engine: RouterEngine, record: Record<string, unknown>): void => {
     if (!config.logDecisions) return;
     try {
@@ -463,30 +449,6 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     ...(scope === 'root' && rootSwitches !== undefined ? { rootSwitches } : {}),
   });
 
-  /** One request for one task. Never throws. A reply after the wait ended is logged against `late`, never applied. */
-  const assess = async (
-    engine: RouterEngine,
-    key: string,
-    task: RoutingTask,
-    baseline: Baseline,
-    dims: MutableDimensions,
-    opts: PolicyOptions,
-    signal: AbortSignal,
-    late: Record<string, unknown>,
-  ): Promise<Assessed> => {
-    const questions = buildQuestions(dims);
-    if (!questions) return { kind: 'skipped', reason: 'nothing_to_change' };
-    const onLate = (usage: Usage | null): void => log(engine, { event: 'late', ...late, usage: loggable(usage) });
-    const started = engine.now();
-    const res = await client.assess(engine, key, buildState(task), questions, signal, onLate, () => log(engine, { event: 'request', ...late, sent: true }));
-    const durationMs = Math.max(0, engine.now() - started);
-    if (!res.ok)
-      return { kind: 'assessed', assessment: res.reason, usage: res.usage, sent: res.sent, durationMs, answers: null, validated: null, patch: {}, model: 'not_asked', effort: 'not_asked' };
-    const answers = validateAnswers(res.answers, questions);
-    const decision = choosePatch(answers, baseline, dims, opts);
-    return { kind: 'assessed', assessment: 'ok', usage: res.usage, sent: true, durationMs, answers: receiptOf(answers), validated: answers, ...decision };
-  };
-
   // ---------------------------------------------------------------------------------------------- root
 
   const retire = (turnId: string): void => {
@@ -499,87 +461,41 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     turnTexts.delete(turnId);
   };
 
-  /** What a root turn could be asked, under these pins and allowlist. */
-  const rootDims = (
-    baseline: Baseline,
-    pins: { mainModel: boolean; mainEffort: boolean },
-    available: readonly string[] | undefined,
-  ): { dims: MutableDimensions; opts: PolicyOptions; withheld?: string } => {
-    const opts = policy('root', available);
-    const efforts = config.routeMainEffort && !pins.mainEffort ? offerableEfforts(baseline) : null;
-    const offer = config.routeMainModel && !pins.mainModel ? offerableTiers(baseline, opts, efforts) : null;
-    return { dims: { tiers: offer && 'tiers' in offer ? offer.tiers : null, efforts }, opts, ...(offer && 'reason' in offer ? { withheld: offer.reason } : {}) };
-  };
+  const aliasesOf = (engine: RouterEngine): Promise<ModelAliases> => engine.modelAliases ? engine.modelAliases().catch(() => ({})) : Promise.resolve({ haiku: 'claude-haiku-4-5', sonnet: 'claude-sonnet-5', opus: 'claude-opus-5-5' });
 
-  const rootAssessment = async (
-    engine: RouterEngine,
-    turnId: string,
-    t: TurnRouting,
-    text: string,
-    context: string | null,
-    live: AbortSignal,
-  ): Promise<void> => {
-    let outcome: Assessed;
-    let withheld: string | undefined;
-    // Every wait here ends when the turn is retired.
-
+  const rootAssessment = async (engine: RouterEngine, turnId: string, t: TurnRouting, text: string, context: string | null, live: AbortSignal): Promise<void> => {
     try {
-      // Pins and the allowlist can only narrow what the event and configuration allow, so a turn with nothing to ask
-      // even without them never waits for the key or a read.
-      const ceiling = rootDims(t.baseline, t.effortChanged ? { mainModel: false, mainEffort: true } : NO_ROOT_PINS, undefined);
-      const noCacheMove =
-        ceiling.dims.tiers === null &&
-        ceiling.dims.efforts !== null &&
-        ceiling.dims.efforts.every((effort) => Object.keys(cachePatch(t.baseline, t.warmEffort, { effort }).patch).length === 0);
-      if (!buildQuestions(ceiling.dims) || noCacheMove) {
-        withheld = ceiling.withheld;
-        outcome = { kind: 'skipped', reason: noCacheMove ? 'cache_native' : 'nothing_to_change' };
-      } else {
-        // The key comes next: without one nothing optional is read.
-        void diagnose(engine, live);
-        const key = await keyFor(engine, live);
-        if (key === ABORTED) throw ENDED;
-        if (!('key' in key)) outcome = { kind: 'skipped', reason: key.reason };
-        else {
-          const pins = await within(pinsOf(engine, config.routeMainModel ? 'root' : 'effort', live), live);
-          const available = config.routeMainModel && !pins.mainModel ? await within(engine.availableModels().catch(() => []), live) : undefined;
-          const r = rootDims(t.baseline, { mainModel: pins.mainModel, mainEffort: pins.mainEffort || t.effortChanged }, available);
-          withheld = r.withheld;
-          const task: RoutingTask = { scope: 'root', text, ...(context ? { previousReply: context } : {}) };
-          outcome = await assess(engine, key.key, task, t.baseline, r.dims, r.opts, live, { scope: 'root', turn: turnId });
-        }
-      }
-    } catch (err) {
-      outcome = { kind: 'skipped', reason: err === ENDED ? 'turn_retired' : 'internal_error' };
-    }
-    // A turn retired while this was in flight keeps its native parameters; a late answer reaches no other turn.
-    let held: RoutedEffort | undefined;
-    if (!live.aborted && !t.stopped && outcome.kind === 'assessed') {
-      const kept = cachePatch(t.baseline, t.warmEffort, outcome.patch);
-      t.patch = kept.patch;
-      held = kept.held;
-    }
-    if (Object.keys(t.patch).length === 0) t.stopped = true;
-    log(engine, {
-      event: 'root',
-      turn: turnId,
-      context_chars: context?.length ?? 0,
-      from: { model: t.baseline.model, effort: t.baseline.effort ?? null },
-      ...(withheld !== undefined ? { model_withheld: withheld } : {}),
-      ...(t.effortChanged ? { effort_kept: 'incoming_changed' } : {}),
-      ...(outcome.kind === 'skipped'
-        ? { skipped: outcome.reason }
-        : {
-            assessment: outcome.assessment,
-            sent: outcome.sent,
-            duration_ms: outcome.durationMs,
-            usage: loggable(outcome.usage),
-            answers: outcome.answers,
-            patch: t.patch,
-            ...(held !== undefined ? { held_for_cache: held } : {}),
-            reasons: { model: outcome.model, effort: outcome.effort },
-          }),
-    });
+      if (!config.routeMainModel && (!isSymbolicEffort(t.baseline.effort) || !factsOf(t.baseline.model)?.unconditionalEffort.length)) { t.stopped = true; log(engine, { event: 'root', turn: turnId, skipped: 'nothing_to_change' }); return; }
+      const key = await keyFor(engine, live); if (key === ABORTED) throw ENDED;
+      if (!('key' in key)) { t.stopped = true; log(engine, { event: 'root', turn: turnId, skipped: key.reason }); return; }
+      const pins = await within(pinsOf(engine, 'root', live), live);
+      const aliases = await within(aliasesOf(engine), live);
+      const available = config.routeMainModel && !pins.mainModel ? await within(engine.availableModels().catch(() => []), live) : undefined;
+      const hostBase = await versionFor(engine, live);
+      const candidates = claudeCandidates({ baseline: t.baseline.model, aliases, allowFable: config.allowFable,
+        ...(available !== undefined ? { available } : {}), ...(hostBase ? { hostBase } : {}), preferences: Object.values(config.tiers), ...(rootSwitches ? { switches: rootSwitches } : {}) });
+      const offer = offerPairs({ baseline: { model: resolveClaudeModel(t.baseline.model, aliases) ?? t.baseline.model, effort: t.baseline.effort ?? null }, candidates,
+        model: config.routeMainModel && !pins.mainModel, effort: config.routeMainEffort && !pins.mainEffort && !t.effortChanged && isSymbolicEffort(t.baseline.effort),
+        upgrade: config.minUpgradeConfidence, downgrade: config.minDowngradeConfidence });
+      if (!offer) { t.stopped = true; log(engine, { event: 'root', scope: 'root', turn: turnId, skipped: !resolveClaudeModel(t.baseline.model, aliases) ? 'capability_unknown' : 'no_alternative', ...(t.effortChanged ? { effort_kept: 'incoming_changed' } : {}), model_withheld: 'no_applicable_target', model_asked: false, effort_asked: false }); return; }
+      void diagnose(engine, live);
+      const started = engine.now();
+      const result = await client.assess(engine, key.key, routingContext(text, context ?? undefined, recentRequests.slice(0, -1)), offer.questions, live,
+        usage => log(engine, { event: 'late', scope: 'root', turn: turnId, usage: loggable(usage) }), () => log(engine, { event: 'request', scope: 'root', turn: turnId, sent: true }));
+      const decision = result.ok ? selectPair(offer, result.answers) : { patch: {}, reasons: { model: 'not_asked', effort: 'not_asked' } };
+      const cached = cachePatch(t.baseline, t.warmEffort, decision.patch as RoutingPatch);
+      if (!live.aborted && !t.stopped) t.patch = cached.patch;
+      if (!Object.keys(t.patch).length) t.stopped = true;
+      log(engine, { event: 'root', scope: 'root', boundary: 'host_hook', turn: turnId, context_chars: context?.length ?? 0, from: { model: t.baseline.model, effort: t.baseline.effort ?? null },
+        assessment: result.ok ? 'ok' : result.reason, sent: result.ok || result.sent, duration_ms: Math.max(0, engine.now() - started), usage: loggable(result.usage),
+        discovered_count: MODEL_FACTS.length, eligible_count: candidates.length, offered_count: offer.candidates.length, catalog_complete: false,
+        model_asked: offer.modelAsked, effort_asked: offer.effortQuestions.size > 0, allow_fable: config.allowFable, model_pin: pins.mainModel, effort_pin: pins.mainEffort,
+        model_enabled: config.routeMainModel, effort_enabled: config.routeMainEffort,
+        model_not_asked: offer.modelAsked ? null : pins.mainModel ? 'model_pinned' : !config.routeMainModel ? 'routing_off' : 'no_alternative',
+        effort_not_asked: offer.effortQuestions.size ? null : pins.mainEffort ? 'effort_pinned' : !config.routeMainEffort ? 'routing_off' : 'no_alternative',
+        excluded: { fable_disabled_by_config: config.allowFable ? 0 : MODEL_FACTS.filter(f => f.family === 'fable' && !f.ids.includes(offer.baseline.model)).length },
+        patch: t.patch, ...(cached.held ? { held_for_cache: cached.held } : {}), reasons: decision.reasons, answers: result.ok ? pairReceipt(offer, result.answers) : null });
+    } catch (error) { t.stopped = true; log(engine, { event: 'root', turn: turnId, skipped: error === ENDED ? 'turn_retired' : 'internal_error' }); }
   };
 
   /**
@@ -588,42 +504,24 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
    */
   const applyStored = async (engine: RouterEngine, t: TurnRouting, e: TurnStepEvent, live: AbortSignal): Promise<RoutingPatch | null> => {
     if (t.stopped) return null;
-    if (e.model !== t.baseline.model || e.effort !== t.baseline.effort) {
-      t.stopped = true;
-      log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: 'incoming_divergence' });
-      return null;
+    const effectiveEffort = t.patch.effortEdit?.kind === 'omit' ? undefined : t.patch.effort ?? t.baseline.effort;
+    if (e.model !== t.baseline.model && e.model !== t.patch.model || e.effort !== t.baseline.effort && e.effort !== effectiveEffort) {
+      t.stopped = true; log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: 'incoming_divergence' }); return null;
     }
-    // The allowlist is read before the pins, so a pin is the last thing read before next: one set during an earlier
-    // await still takes effect.
-    const storedModel = !t.modelStopped ? t.patch.model : undefined;
-    const allowed = storedModel !== undefined ? await within(engine.availableModels().catch(() => []), live) : undefined;
-    const pins = await within(pinsOf(engine, storedModel !== undefined ? 'root' : 'effort', live), live);
-    if (t.stopped) return null;
-    if (pins.mainModel && !t.modelStopped && t.patch.model !== undefined) {
-      t.modelStopped = true;
-      log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: 'model_pinned' });
-    }
-    if (pins.mainEffort && !t.effortStopped && t.patch.effort !== undefined) {
-      t.effortStopped = true;
-      log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: 'effort_pinned' });
-    }
-    if (!t.modelStopped && storedModel !== undefined && !allowedBy(storedModel, allowed)) {
-      t.modelStopped = true;
-      log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: 'model_not_allowed' });
-    }
-    const effortOn = (m: string): RoutedEffort | undefined =>
-      !t.effortStopped && t.patch.effort !== undefined && factsOf(m)?.unconditionalEffort.includes(t.patch.effort) ? t.patch.effort : undefined;
-    let model = !t.modelStopped ? t.patch.model : undefined;
-    // The pair was checked when it was chosen. Once its effort is suppressed the request keeps its own, and the model
-    // goes only if it takes that one too, rather than sending a pair nothing approved.
-    if (model !== undefined && !pairValid(model, effortOn(model) ?? e.effort)) {
-      t.modelStopped = true;
-      model = undefined;
-      log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: 'pair_invalid' });
-    }
-    const effort = effortOn(model ?? e.model);
-    const patch: RoutingPatch = { ...(model !== undefined ? { model } : {}), ...(effort !== undefined ? { effort } : {}) };
-    return Object.keys(patch).length > 0 ? patch : null;
+    const available = await within(engine.availableModels().catch(() => []), live);
+    const aliases = await within(aliasesOf(engine), live);
+    const pins = await within(pinsOf(engine, 'root', live), live);
+    if (pins.mainModel && !t.modelStopped) { t.modelStopped = true; log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: 'model_pinned' }); }
+    if (pins.mainEffort && !t.effortStopped) { t.effortStopped = true; log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: 'effort_pinned' }); }
+    let model = t.modelStopped ? undefined : t.patch.model;
+    if (model && (!claudeTargetAllowed(model, config.allowFable) || !claudeModelAllowed(model, available, aliases))) { model = undefined; t.modelStopped = true; log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: 'model_not_allowed' }); }
+    // An effort selected conditionally for B can never be reused on A after B was suppressed.
+    if (t.patch.model && !model) return null;
+    const edit = !t.effortStopped ? t.patch.effortEdit : undefined;
+    const effort = edit?.kind === 'set' && isSymbolicEffort(edit.value) ? edit.value : !t.effortStopped ? t.patch.effort : undefined;
+    if (model && edit?.kind !== 'omit' && !pairValid(model, effort ?? e.effort)) { log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: 'pair_invalid' }); return null; }
+    const patch: RoutingPatch = { ...(model ? { model } : {}), ...(effort !== undefined ? { effort } : {}), ...(edit ? { effortEdit: edit } : {}) };
+    return Object.keys(patch).length ? patch : null;
   };
 
   /**
@@ -668,7 +566,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       modelStopped: false,
       effortStopped: false,
       warmEffort: lastRoot && lastRoot.model === e.model && engine.now() - lastRoot.at < WARM_MS ? lastRoot.effort : null,
-      effortChanged: lastIncoming !== null && lastIncoming.effort !== e.effort,
+      effortChanged: lastIncoming !== null && lastIncoming.effort !== e.effort && lastRoot?.effort !== e.effort,
     };
     lastIncoming = { effort: e.effort };
     // sessionEnd retires every turn, which aborts its controller: no session listener is needed here.
@@ -708,11 +606,21 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     if (c.baseline === null) {
       c.baseline = { model: e.model, ...(e.effort !== undefined ? { effort: e.effort } : {}) };
       c.turnId = e.turnId;
-      const efforts = offerableEfforts(c.baseline);
+      if (c.pair) {
+        const selected = selectPair({ ...c.pair.offer, baseline: { model: e.model, effort: e.effort ?? null }, modelAsked: false }, c.pair.raw);
+        if (selected.patch.effortEdit) c.allocation = selected.patch.effortEdit;
+      }
+      if (c.allocation) {
+        const edit = c.allocation;
+        if (edit.kind === 'keep') { c.stopped = true; return null; }
+        if (edit.kind === 'set' && !factsOf(e.model)?.unconditionalEffort.includes(edit.value as SymbolicEffort) || edit.kind === 'omit' && (factsOf(e.model)?.unconditionalEffort.length !== 0 || factsOf(e.model)?.conditionalEffort.length !== 0)) { c.stopped = true; return null; }
+        c.effort = edit.kind === 'set' && isSymbolicEffort(edit.value) ? edit.value : null;
+      }
+      const efforts = c.allocation ? null : offerableEfforts(c.baseline);
       const decision = efforts ? choosePatch(c.answers, c.baseline, { tiers: null, efforts }, policy('spawn', undefined)) : null;
-      c.effort = decision?.patch.effort ?? null;
+      if (!c.allocation) c.effort = decision?.patch.effort ?? null;
       log(engine, { event: 'child', agent_id: id, from: { model: e.model, effort: e.effort ?? null }, patch: c.effort, reason: decision ? decision.effort : 'effort_unknown' });
-      if (c.effort === null) {
+      if (c.effort === null && c.allocation?.kind !== 'omit') {
         c.stopped = true;
         return null;
       }
@@ -720,13 +628,13 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       c.stopped = true;
       log(engine, { event: 'child_stop', agent_id: id, index: e.index, reason: 'next_turn' });
       return null;
-    } else if (e.model !== c.baseline.model || e.effort !== c.baseline.effort) {
+    } else if (e.model !== c.baseline.model || e.effort !== c.baseline.effort && e.effort !== c.effort && !(c.allocation?.kind === 'omit' && e.effort === undefined)) {
       c.stopped = true;
       log(engine, { event: 'child_stop', agent_id: id, index: e.index, reason: 'incoming_divergence' });
       return null;
     }
     const effort = c.effort;
-    if (effort === null) return null;
+    if (effort === null && c.allocation?.kind !== 'omit') return null;
     // Read last, so an effort pin set while the step waited still wins.
     const pins = await until(pinsOf(engine, 'effort', signal), signal);
     if (pins === ABORTED || c.stopped) return null;
@@ -735,7 +643,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       log(engine, { event: 'child_stop', agent_id: id, index: e.index, reason: 'effort_pinned' });
       return null;
     }
-    return { patch: { effort }, child: c };
+    return { patch: { ...(effort !== null ? { effort } : {}), ...(c.allocation ? { effortEdit: c.allocation } : {}) }, child: c };
   };
 
   /**
@@ -770,53 +678,17 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
         turn: e.turnId,
         index: e.index,
         requested,
-        requested_effort: patch?.effort ?? e.effort ?? null,
+        requested_effort: patch?.effortEdit?.kind === 'omit' ? null : patch?.effort ?? e.effort ?? null,
         applied: patch ?? { model: e.model, ...(e.effort !== undefined ? { effort: e.effort } : {}) },
         observed: seen,
         confirmation: seen === null ? 'unobserved' : patch?.model !== undefined ? sameModel(patch.model, seen) ? 'confirmed' : 'mismatch' : answeredBy(e.model, seen) ? 'confirmed' : 'mismatch',
         observed_effort: 'unknown',
         usage: result ? loggable(countsOf(result.usage)) : null,
       });
-      if (!patch) return;
-      const t = turns.get(e.turnId);
-      if (!t) return;
-      // Missing is unknown, not confirmation: the override is not reapplied on a guess. A model override needs its own
-      // variant reported back, so a bare id does not confirm a requested [1m]. An effort-only patch is checked too, since
-      // the host can answer from a fallback; effort depends only on the model, so there the variant is not asked for.
-      const confirmed = seen !== null && (patch.model !== undefined ? sameModel(patch.model, seen) : answeredBy(e.model, seen));
-      if (!confirmed) {
-        if (patch.model !== undefined) t.modelStopped = true;
-        const facts = seen === null ? null : factsOf(seen);
-        if (patch.effort !== undefined && !facts?.unconditionalEffort.includes(patch.effort)) t.effortStopped = true;
-        log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: seen === null ? 'model_unobserved' : 'model_mismatch', requested, observed: seen });
-      }
+
     } catch {
       // Observation only.
     }
-  };
-
-  /** A patched subagent step answered by another model, or none, ends that loop's routing, as a root turn's does. */
-  const observeChild = (engine: RouterEngine, e: TurnStepEvent, c: ChildRouting, patch: RoutingPatch | null, result: TurnStepOutcome | void): void => {
-    try {
-      if (!patch || patch.effort === undefined) return;
-      const seen = result && typeof result.usage?.model === 'string' ? result.usage.model : null;
-      if (seen !== null && answeredBy(e.model, seen) && factsOf(seen)?.unconditionalEffort.includes(patch.effort)) return;
-      c.stopped = true;
-      log(engine, { event: 'child_stop', agent_id: e.agentId ?? null, index: e.index, reason: seen === null ? 'model_unobserved' : 'model_mismatch', observed: seen });
-    } catch {
-      // Observation only.
-    }
-  };
-
-  /**
-   * Keeps the tail of a root step's visible reply for the next turn's assessment. The whole reply is screened rather
-   * than the kept tail: a tail cut from a longer credential can pass the screen on its own. A screened reply is not
-   * carried at all.
-   */
-  const remember = (result: TurnStepOutcome | void): void => {
-    const answer = result?.answer;
-    if (typeof answer !== 'string' || answer.trim() === '') return;
-    lastReply = looksSecret(answer) ? null : answer.length > REPLY_CHARS ? answer.slice(-REPLY_CHARS) : answer;
   };
 
   async function* turnStep<E extends TurnStepEvent, C, R extends TurnStepOutcome | void>(
@@ -842,7 +714,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     }
     wait.dispose();
     // An aborted signal means the dispatch already went on without this hook; a next() now would open a second request.
-    if (next.signal.aborted) {
+    if (next.signal.aborted || own.aborted) {
       abandon(engine, e);
       return;
     }
@@ -869,7 +741,8 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     // Once next starts, every chunk, the return, a refusal or an error belongs to the host: nothing here retries it.
     let result: R;
     try {
-      result = yield* next(patch ? { ...e, ...patch } : e);
+      const applied = patch ? applyEffort({ ...e, ...(patch.model ? { model: patch.model } : {}), ...(patch.effort ? { effort: patch.effort } : {}) }, patch.effortEdit) : e;
+      result = yield* next(applied);
     } catch (err) {
       // A patched request that failed leaves the rest of its turn or loop native: whatever the host sends next, a retry
       // or a fallback, it is never sent the override again.
@@ -882,21 +755,19 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       }
       throw err;
     }
-    if (prepared?.child) observeChild(engine, e, prepared.child, patch, result);
-    else if (e.agentId === undefined) observeStep(engine, e, patch, result);
+    if (e.agentId === undefined) observeStep(engine, e, patch, result);
     if (e.agentId !== undefined) {
       const requested = patch?.model ?? e.model;
       const observed = result?.usage?.model ?? null;
       log(engine, {
         event: 'child_result', agent_id: e.agentId, turn: e.turnId, index: e.index,
-        requested, observed, requested_effort: patch?.effort ?? e.effort ?? null, observed_effort: 'unknown',
+        requested, observed, requested_effort: patch?.effortEdit?.kind === 'omit' ? null : patch?.effort ?? e.effort ?? null, observed_effort: 'unknown',
         confirmation: observed === null ? 'unobserved' : answeredBy(requested, observed) ? 'confirmed' : 'mismatch',
         usage: result ? loggable(countsOf(result.usage)) : null,
       });
     }
     if (e.agentId === undefined && !own.aborted) {
-      remember(result);
-      const sent = patch?.effort ?? e.effort;
+      const sent = patch?.effortEdit?.kind === 'omit' ? undefined : patch?.effort ?? e.effort;
       const asked = patch?.model ?? e.model;
       const seen = typeof result?.usage?.model === 'string' ? result.usage.model : null;
       // Only a response the asked model gave wrote the cache a later turn on that model reads.
@@ -910,55 +781,9 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
   /** A type the Router does not route is caller text: it is never logged, only named as other. */
   const typeLabel = (e: SpawnEvent): string => (INHERITING_BUILT_INS.has(e.subagentType) ? e.subagentType : 'other');
 
-  const suspend = (engine: RouterEngine, reason: string): void => {
-    if (suspended !== null) return;
-    suspended = reason;
-    log(engine, { event: 'spawn_suspended', reason });
-    // A loop that has sent no patched step yet stays native too, even one whose first step is still being prepared;
-    // one already running keeps its effort rather than restarting its cache.
-    for (const [id, c] of children) {
-      if (c.dispatched || c.stopped) continue;
-      c.stopped = true;
-      log(engine, { event: 'child_stop', agent_id: id, index: null, reason: 'spawn_suspended' });
-    }
-  };
-
   const spawnSkip = (engine: RouterEngine, e: SpawnEvent, reason: string): null => {
     log(engine, { event: 'spawn', tool_use_id: e.tool_use_id, type: typeLabel(e), skipped: reason });
     return null;
-  };
-
-  const spawnAssessment = async (
-    engine: RouterEngine,
-    key: string,
-    e: SpawnEvent,
-    baseline: Baseline,
-    opts: PolicyOptions,
-    dims: MutableDimensions,
-    modelSkip: string | null,
-    signal: AbortSignal,
-  ): Promise<SpawnPlan> => {
-    const task: RoutingTask = { scope: 'spawn', text: e.prompt, description: e.description, subagentType: e.subagentType };
-    const outcome = await assess(engine, key, task, baseline, dims, opts, signal, { scope: 'spawn', tool_use_id: e.tool_use_id });
-    if (outcome.kind === 'skipped') {
-      spawnSkip(engine, e, outcome.reason);
-      return { target: null, answers: null };
-    }
-    log(engine, {
-      event: 'spawn',
-      tool_use_id: e.tool_use_id,
-      type: typeLabel(e),
-      from: baseline.model,
-      explicit: e.model !== undefined && e.model.trim() !== '',
-      assessment: outcome.assessment,
-      sent: outcome.sent,
-      duration_ms: outcome.durationMs,
-      usage: loggable(outcome.usage),
-      answers: outcome.answers,
-      patch: outcome.patch,
-      reasons: { model: modelSkip ?? outcome.model, effort: dims.efforts ? (childHistoryFull ? 'child_history_full' : 'per_step') : 'not_asked' },
-    });
-    return { target: outcome.patch.model ?? null, answers: outcome.validated };
   };
 
   /** Why an inheriting spawn's model is left as resolved, read from the event and offers alone; null: it can move. */
@@ -978,102 +803,74 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
    * fork, whose loop shares the parent's context.
    */
   const spawnDecision = async (engine: RouterEngine, e: SpawnEvent, live: AbortSignal): Promise<SpawnPlan | null> => {
-    if (!spawnEnabled) return null;
-    // Native ignores a fork's model and inherits the parent's context and model.
-    if (e.fork) return spawnSkip(engine, e, 'fork');
-    if (LEAN_MARKER.test(e.prompt) || LEAN_MARKER.test(e.description)) return spawnSkip(engine, e, 'lean_marker');
-    if (e.subagentType.startsWith(GATE_AGENT_PREFIX) || GATE_ROUTE_NOTE.test(e.prompt)) return spawnSkip(engine, e, 'gate_routed');
-    if (suspended !== null) return spawnSkip(engine, e, 'spawn_suspended');
-    const explicit = e.model !== undefined && e.model.trim() !== '' ? e.model : null;
-    // What the event, configuration and offer cache decide comes before any wait. Null: the model can move.
-    let modelSkip: string | null = !config.routeSubagentModel
-      ? 'model_not_routed'
-      : explicit !== null
-        ? config.routeExplicitSpawnModel
-          ? null
-          : 'explicit_model'
-        : inheritSkip(e);
-    const baseline: Baseline = { model: explicit ?? e.parentModel };
-    if (modelSkip === null) {
-      // The allowlist can only narrow this.
-      const ceiling = offerableTiers(baseline, policy('spawn', undefined));
-      if ('reason' in ceiling) modelSkip = ceiling.reason;
-    }
-    if (modelSkip !== null && (!childEnabled || childHistoryFull)) return spawnSkip(engine, e, childHistoryFull && childEnabled ? 'child_history_full' : modelSkip);
-    void diagnose(engine, live);
-    // The key comes next: without one nothing optional is read.
-    const key = await keyFor(engine, live);
-    if (key === ABORTED) throw ENDED;
-    if (!('key' in key)) return spawnSkip(engine, e, key.reason);
-    const pins = await within(pinsOf(engine, 'spawn', live), live);
-    if (modelSkip === null && pins.subagentModel) modelSkip = 'subagent_model_pinned';
-    if (modelSkip === null && pins.aliasRemap) modelSkip = 'alias_remapped';
-    if (modelSkip === null && !hostSupported(await versionFor(engine, live))) modelSkip = 'host_unverified';
-    const opts = policy('spawn', modelSkip === null ? await within(engine.availableModels().catch(() => []), live) : undefined);
-    let tiers: ModelTier[] | null = null;
-    if (modelSkip === null) {
-      const offer = offerableTiers(baseline, opts);
-      if ('reason' in offer) modelSkip = offer.reason;
-      else tiers = offer.tiers;
-    }
-    // A subagent whose model is known here and takes no effort at all (Haiku) has no effort to ask about. Known: named
-    // by the call, unless a pin or a remapped alias overrides it, or inherited by a verified built-in.
-    const child = pins.subagentModel
-      ? null
-      : explicit !== null
-        ? pins.aliasRemap && aliasFamily(explicit) !== null
-          ? null
-          : explicit
-        : inheritSkip(e) === null
-          ? e.parentModel
-          : null;
-    const childFacts = child === null ? null : (factsOf(child) ?? MODEL_FACTS.find((f) => f.family === aliasFamily(child)) ?? null);
-    const effortless = tiers === null && childFacts !== null && childFacts.unconditionalEffort.length === 0;
-    const efforts = childEnabled && !childHistoryFull && !pins.mainEffort && !effortless ? EFFORT_LEVEL_TARGETS : null;
-    if (childEnabled && childHistoryFull) log(engine, { event: 'spawn_dimension', tool_use_id: e.tool_use_id, reason: 'child_history_full', dimension: 'effort', sent: false });
-    if (tiers === null && efforts === null) return spawnSkip(engine, e, childHistoryFull ? 'child_history_full' : (modelSkip ?? 'effort_pinned'));
-    // Recorded only once every gate passed: a spawn left native by a pin runs on the pinned model, which says nothing
-    // about how the host resolves an inheriting one.
-    if (tiers !== null) assumed.set(e, baseline.model);
-
-    // Each dispatch is assessed on its own text rather than sharing one answer per tool_use_id: a redispatch under
-    // that id can carry another prompt, which would then run on a tier earned by different text.
-    let plan: SpawnPlan;
-    try {
-      plan = await spawnAssessment(engine, key.key, e, baseline, opts, { tiers, efforts }, modelSkip, live);
-    } catch {
-      plan = { target: null, answers: null };
-    }
-    const answers = efforts !== null && !childHistoryFull ? plan.answers : null;
-    const target = tiers !== null ? plan.target : null;
-    if (target === null) {
-      if (tiers !== null) {
-        // A pin that arrived while Jev answered puts this native spawn on the pinned model, which says nothing about how
-        // the host resolves an inheriting one.
-        const now = await within(pinsOf(engine, 'spawn', live), live);
-        if (now.subagentModel || now.aliasRemap) assumed.delete(e);
+    const owned = e.subagentType.startsWith(GATE_AGENT_PREFIX) || GATE_ROUTE_NOTE.test(e.prompt) || LEAN_MARKER.test(e.prompt) || LEAN_MARKER.test(e.description);
+    if (owned) {
+      const token = /\[JEV_DISPATCH token=([a-f0-9-]{36})\]$/.exec(e.prompt)?.[1] ?? '';
+      // Eligibility and an already allocated effort only: Gate owns its single batch; Lean adds no policy call.
+      let pair;
+      try { pair = engine.dispatchPair ? await within(engine.dispatchPair(e.tool_use_id, e.model ?? (e.subagentType === 'jev-gate:executor' || LEAN_MARKER.test(e.prompt) ? e.parentModel : ''), config.allowFable, e.subagentType, true, token), live) : null; }
+      catch { return { target: null, answers: null, deny: 'Dispatch ownership unavailable; no child started.' }; }
+      if (pair?.deny) return { target: null, answers: null, deny: pair.deny };
+      if (pair?.model) {
+        const [aliases, available, pins, hostBase] = await Promise.all([within(aliasesOf(engine), live), within(engine.availableModels().catch(() => []), live), within(pinsOf(engine, 'spawn', live), live), versionFor(engine, live)]);
+        const candidate = claudeCandidates({ baseline: pair.model, aliases, allowFable: config.allowFable, ...(available !== undefined ? { available } : {}), ...(hostBase ? { hostBase } : {}), scope: 'spawn' }).find(c => c.id === pair.model);
+        if (!candidate || !claudeTargetAllowed(pair.model, config.allowFable) || !claudeModelAllowed(pair.model, available, aliases) || pins.subagentModel) {
+          const cleanup = engine.dispatchPair ? await within(engine.dispatchPair(e.tool_use_id, pair.model, config.allowFable, e.subagentType, false, token), live) : null;
+          return { target: null, answers: null, deny: cleanup?.deny ?? 'Automatic child unavailable; continue in the main session.' };
+        }
+        return { target: pair.model, answers: {}, ...(pair.effort_edit && !pins.mainEffort ? { allocation: pair.effort_edit } : {}) };
       }
-      return { target: null, answers };
+      const aliases = await within(aliasesOf(engine), live);
+      const id = e.model ?? e.parentModel;
+      const resolved = aliases[id] ?? id;
+      if (!claudeTargetAllowed(resolved, config.allowFable)) return { target: null, answers: null, deny: 'No eligible automatic child model. Continue in the main session; no child started.' };
+      spawnSkip(engine, e, LEAN_MARKER.test(e.prompt) || LEAN_MARKER.test(e.description) ? 'lean_marker' : 'gate_routed');
+      return { target: null, answers: null };
     }
-    // A pin or a narrower allowlist can arrive while Jev answers, so they are read again here rather than trusted from
-    // before the request: what applies is what holds when the spawn is made. The pins are read last, after the
-    // allowlist, so no await separates them from next.
-    const allowed = await within(engine.availableModels().catch(() => []), live);
-    const now = await within(pinsOf(engine, 'spawn', live), live);
-    const stop = now.subagentModel
-      ? 'subagent_model_pinned'
-      : now.aliasRemap
-        ? 'alias_remapped'
-        : !allowedBy(target, allowed)
-          ? 'target_not_allowed'
-          : null;
-    if (stop) {
-      // Left native by a pin, the spawn runs on the pinned model; left native by the allowlist, it still inherits.
-      if (stop !== 'target_not_allowed') assumed.delete(e);
-      log(engine, { event: 'spawn_stop', tool_use_id: e.tool_use_id, reason: stop, requested: target });
-      return { target: null, answers };
+    if (!config.enabled) return null;
+    if (e.fork) return spawnSkip(engine, e, 'fork');
+    if (!config.routeSubagentModel && (!config.routeSubagentEffort || childHistoryFull)) return spawnSkip(engine, e, 'nothing_to_change');
+    const explicitDefault = e.model?.trim() ? e.model : null;
+    const unverified = explicitDefault ? null : inheritSkip(e);
+    if (unverified && (unverified === 'baseline_unknown' || !config.routeSubagentEffort || childHistoryFull)) return spawnSkip(engine, e, unverified);
+    if (explicitDefault && !config.routeExplicitSpawnModel && !config.routeSubagentEffort) return spawnSkip(engine, e, 'explicit_model');
+    const key = await keyFor(engine, live); if (key === ABORTED) throw ENDED;
+    if (!('key' in key)) {
+      const aliases = await within(aliasesOf(engine), live);
+      return !claudeTargetAllowed(aliases[e.model ?? e.parentModel] ?? e.model ?? e.parentModel, config.allowFable) ? { target: null, answers: null, deny: 'Restricted automatic child disabled; continue in the main session.' } : spawnSkip(engine, e, key.reason);
     }
-    return { target, answers };
+    const explicit = e.model?.trim() ? e.model : null;
+    const inheritance = explicit ? null : inheritSkip(e);
+    if (!explicit && inheritance && (!config.routeSubagentEffort || childHistoryFull)) return spawnSkip(engine, e, inheritance);
+    if (!hostSupported(await versionFor(engine, live))) return spawnSkip(engine, e, 'host_unverified');
+    const pins = await within(pinsOf(engine, 'spawn', live), live);
+    if (pins.aliasRemap && !engine.modelAliases) return spawnSkip(engine, e, 'alias_remapped');
+    const aliases = await within(aliasesOf(engine), live);
+    const available = await within(engine.availableModels().catch(() => []), live);
+    const baselineModel = aliases[explicit ?? e.parentModel] ?? explicit ?? e.parentModel;
+    const candidates = claudeCandidates({ baseline: baselineModel, aliases, allowFable: config.allowFable,
+      ...(available !== undefined ? { available } : {}), scope: 'spawn', preferences: Object.values(config.tiers) }).filter(c => claudeTargetAllowed(c.id, config.allowFable));
+    if (!candidates.length) return { target: null, answers: null, deny: 'No eligible automatic child model. Continue in the main session; no child started.' };
+    const inheritedEffort = engine.currentEffort ? await within(engine.currentEffort().catch(() => undefined), live) : lastRoot?.effort ?? lastIncoming?.effort;
+    const offer = offerPairs({ baseline: { model: baselineModel, effort: inheritedEffort ?? null }, candidates,
+      model: config.routeSubagentModel && !pins.subagentModel && (!explicit || config.routeExplicitSpawnModel) && !inheritance,
+      effort: config.routeSubagentEffort && !pins.mainEffort && !childHistoryFull,
+      upgrade: config.minUpgradeConfidence, downgrade: config.minDowngradeConfidence });
+    if (!offer) return !claudeTargetAllowed(baselineModel, config.allowFable) ? { target: null, answers: null, deny: 'Restricted automatic child disabled; continue in the main session.' } : spawnSkip(engine, e, 'no_alternative');
+    const state = routingContext(e.prompt); Object.assign(state.task, { description: e.description, subagent_type: e.subagentType, source: 'child_contract' });
+    const result = await client.assess(engine, key.key, state, offer.questions, live, usage => log(engine, { event: 'late', scope: 'spawn', tool_use_id: e.tool_use_id, usage: loggable(usage) }));
+    if (!result.ok) { log(engine, { event: 'spawn', tool_use_id: e.tool_use_id, type: typeLabel(e), assessment: result.reason, sent: result.sent, usage: loggable(result.usage) }); return !claudeTargetAllowed(baselineModel, config.allowFable) ? { target: null, answers: null, deny: 'Restricted automatic child disabled; continue in the main session.' } : null; }
+    const selected = selectPair(offer, result.answers);
+    let target = selected.patch.model ?? null;
+    if (childHistoryFull && target && !candidates.find(c => c.id === target)?.efforts.includes(String(inheritedEffort))) target = null;
+    if (!target && !claudeTargetAllowed(baselineModel, config.allowFable)) return { target: null, answers: null, deny: 'Restricted automatic child disabled; continue in the main session.' };
+    const nowAvailable = await within(engine.availableModels().catch(() => []), live);
+    const nowPins = await within(pinsOf(engine, 'spawn', live), live);
+    if (target && (nowPins.subagentModel || nowPins.aliasRemap && !engine.modelAliases || !claudeTargetAllowed(target, config.allowFable) || !claudeModelAllowed(target, nowAvailable, aliases))) { log(engine, { event: 'spawn_stop', tool_use_id: e.tool_use_id, requested: target, reason: nowPins.subagentModel ? 'subagent_model_pinned' : nowPins.aliasRemap && !engine.modelAliases ? 'alias_remapped' : 'target_not_allowed' }); return null; }
+    log(engine, { event: 'spawn', scope: 'subagent', boundary: 'host_hook', tool_use_id: e.tool_use_id, type: typeLabel(e), from: baselineModel, assessment: 'ok', sent: true,
+      usage: loggable(result.usage), explicit: explicit !== null, patch: selected.patch, reasons: selected.reasons, model_asked: offer.modelAsked, effort_asked: offer.effortQuestions.size > 0,
+      discovered_count: MODEL_FACTS.length, eligible_count: candidates.length, offered_count: offer.candidates.length, catalog_complete: false, allow_fable: config.allowFable });
+    return { target, answers: {}, pair: { offer, raw: result.answers } };
   };
 
   /**
@@ -1099,7 +896,10 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     const own = session.signal;
     const wait = budget(engine, deadline, own, next.signal);
     let plan: SpawnPlan | null = null;
+    let baselineAllowed = claudeTargetAllowed(e.model ?? e.parentModel, config.allowFable);
     try {
+      const aliases = await within(aliasesOf(engine), wait.signal);
+      baselineAllowed = claudeTargetAllowed(aliases[e.model ?? e.parentModel] ?? e.model ?? e.parentModel, config.allowFable);
       plan = await spawnTarget(engine, e, wait.signal, own);
     } catch {
       plan = null;
@@ -1109,8 +909,10 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       log(engine, { event: 'budget_timeout', scope: 'spawn', tool_use_id: e.tool_use_id });
     }
     wait.dispose();
+    if ((!plan && (e.subagentType.startsWith(GATE_AGENT_PREFIX) || GATE_ROUTE_NOTE.test(e.prompt) || LEAN_MARKER.test(e.prompt) || LEAN_MARKER.test(e.description))) || !baselineAllowed && !plan?.target) plan = { target: null, answers: null, deny: 'Automatic dispatch could not be verified; continue in the main session. No child started.' };
     // As on turn.step: the host has already spawned natively, so nothing here may spawn again.
-    if (next.signal.aborted) throw new Error('jev-router: spawn dispatch abandoned before next');
+    if (next.signal.aborted || own.aborted) throw new Error('jev-router: spawn dispatch abandoned before next');
+    if (plan?.deny) return { deny: plan.deny } as R;
     let target = plan?.target ?? null;
     // Nothing is awaited between these checks and next: a session that ended meanwhile gets nothing from this dispatch,
     // and neither does one whose routing another spawn's result suspended while this one waited.
@@ -1118,11 +920,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       log(engine, { event: 'spawn_stop', tool_use_id: e.tool_use_id, reason: 'session_ended', requested: target });
       target = null;
     }
-    if ((target !== null || plan?.answers) && !own.aborted && suspended !== null) {
-      log(engine, { event: 'spawn_stop', tool_use_id: e.tool_use_id, reason: 'spawn_suspended', requested: target });
-      target = null;
-    }
-    const answers = own.aborted || suspended !== null ? null : (plan?.answers ?? null);
+    const answers = own.aborted ? null : (plan?.answers ?? null);
     log(engine, {
       event: 'prepared',
       tool_use_id: e.tool_use_id,
@@ -1138,13 +936,11 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       result.deny === undefined &&
       result.agentId !== undefined &&
       !own.aborted &&
-      suspended === null &&
       !childHistoryFull &&
       !nativeChildren.has(result.agentId)
     )
-      children.put(result.agentId, { answers, baseline: null, turnId: null, effort: null, stopped: false, dispatched: false });
+      children.put(result.agentId, { answers, ...(plan?.pair ? { pair: plan.pair } : {}), ...(plan?.allocation ? { allocation: plan.allocation } : {}), baseline: null, turnId: null, effort: null, stopped: false, dispatched: false });
     try {
-      const baseline = assumed.get(e);
       if (target !== null) {
         if (result.deny !== undefined) log(engine, { event: 'spawn_result', tool_use_id: e.tool_use_id, requested: target, denied: true });
         else {
@@ -1157,11 +953,8 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
             agent_id: result.agentId ?? null,
             ...(matched ? {} : { reason: 'model_mismatch' }),
           });
-          if (!matched) suspend(engine, 'model_mismatch');
+          // Response diagnostics never invalidate unrelated dispatches.
         }
-      } else if (baseline !== undefined && result.deny === undefined && !answeredBy(baseline, result.model)) {
-        log(engine, { event: 'spawn_native_result', tool_use_id: e.tool_use_id, assumed: baseline, observed: result.model, reason: 'baseline_mismatch' });
-        suspend(engine, 'baseline_mismatch');
       }
     } catch {
       // Observation only.
@@ -1176,12 +969,12 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     spawnEnabled,
     stepEnabled,
     turnStart: <E extends TurnStartEvent>(e: E): void => {
-      if (rootEnabled) turnTexts.put(e.turnId, e.text);
+      if (rootEnabled) { turnTexts.put(e.turnId, e.text); recentRequests.push(e.text); if (recentRequests.length > 4) recentRequests.shift(); }
     },
     turnStep,
     /** A child's completion carries its agentId and never retires the root's turn. */
     turnComplete: <E extends TurnEndEvent>(e: E): void => {
-      if (e.agentId === undefined) retire(e.turnId);
+      if (e.agentId === undefined) { lastReply = e.reason === 'answer' && e.answer?.trim() && !looksSecret(e.answer) ? e.answer : null; retire(e.turnId); }
       else {
         const c = children.get(e.agentId);
         if (c) c.stopped = true;
@@ -1202,7 +995,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       children.clear();
       nativeChildren.clear();
       childHistoryFull = false;
-      lastReply = null;
+      lastReply = null; recentRequests.length = 0;
       lastRoot = null;
       lastIncoming = null;
       keyWait = null;

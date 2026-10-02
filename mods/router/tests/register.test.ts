@@ -1,9 +1,9 @@
-import { describe, expect, test, tier } from 'claude-code/testing';
+import { describe, expect, mock, test, tier } from 'claude-code/testing';
 
 tier('user');
 
 describe('register', () => {
-  test('off by default: a spawn reaches the engine unchanged and nothing is fetched', async ($, on) => {
+  test('without a key: a spawn reaches the engine unchanged and nothing is fetched', async ($, on) => {
     const fetched: string[] = [];
     const spawned: Array<string | undefined> = [];
     on('http.fetch', ($, e) => {
@@ -31,3 +31,46 @@ describe('register', () => {
     expect(fetched).toEqual([]);
   });
 });
+
+// These dispatch the installed Function Hooks through the real host engine with a scripted HTTP/model bottom.
+for (const mode of ['keep', 'effort', 'model', 'both'] as const) {
+  test(`root request and later tool steps use one pair assessment: ${mode}`, async ($, on) => {
+    mock.env(on, { TYPESAFE_API_KEY: 'sk-router-testonlynotakey' });
+    mock.clock(on);
+    on('session.version', () => ({ value: { version: '2.1.287', base: '2.1.287' } }));
+    on('session.id', () => ({ value: 'root-fixture' }));
+    on('settings.read', () => ({ value: { effortLevel: 'high' } }));
+    on('fs.exists', () => ({ value: false }));
+    on('ui.log', () => ({ value: undefined }));
+    const sent: Array<{ model: string; effort?: string | number }> = [];
+    let calls = 0;
+    on('http.fetch', ($, e) => {
+      calls++;
+      const body = JSON.parse(e.init?.body ?? '{}');
+      const answers = Object.fromEntries(Object.entries(body.questions).map(([name, raw]) => {
+        const q = raw as { type: string; instructions: string; criteria: string[] | Record<string, string> };
+        if (q.type === 'choice') {
+          const value = name === 'model' ? mode === 'model' || mode === 'both' ? 'claude-opus-5-5' : '__keep__' : name === 'control' ? 'task_clear' : 'ordinary';
+          return [name, { type: 'choice', choice: value, confidence: 1, probabilities: Object.fromEntries(Object.keys(q.criteria).map(k => [k, k === value ? 1 : 0])) }];
+        }
+        const levels = q.criteria as string[];
+        const target = mode === 'both' && q.instructions.includes('IF using model claude-opus-5-5,') ? levels.length - 1 : mode === 'effort' ? 0 : 2;
+        return [name, { type: 'score', score: target, confidence: 1, probabilities: Object.fromEntries(levels.map((_, i) => [i, i === target ? 1 : 0])) }];
+      }));
+      return { value: { ok: true, status: 200, headers: {}, text: JSON.stringify({ model: body.model, answers }) } };
+    });
+    on('turn.start', ($, e) => ({ turnId: e.turnId }));
+    on('turn.step', async function* ($, e) {
+      sent.push({ model: e.model, ...(e.effort !== undefined ? { effort: e.effort } : {}) });
+      return { turnId: e.turnId, index: e.index, answer: 'fixture', toolUses: [], stopReason: 'end_turn', usage: null };
+    });
+    await $.turn.start({ text: 'Implement the clear local fixture.', turnId: 'root' });
+    for (const index of [0, 1]) {
+      const stream = $.turn.step({ turnId: 'root', index, model: 'claude-sonnet-5', effort: 'high', messageCount: 1 });
+      while (!(await stream.next()).done) { /* preserve the host stream */ }
+    }
+    const expected = { model: mode === 'model' || mode === 'both' ? 'claude-opus-5-5' : 'claude-sonnet-5', effort: mode === 'both' ? 'max' : mode === 'effort' ? 'low' : 'high' };
+    expect(sent).toEqual([expected, expected]);
+    expect(calls).toBe(1);
+  });
+}

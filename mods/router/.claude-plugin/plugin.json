@@ -103,6 +103,12 @@
       "description": "Write one metadata-only line per decision to the debug log. Never task text or the key.",
       "type": "boolean",
       "default": true
+    },
+    "allowFable": {
+      "type": "boolean",
+      "title": "Router: Allow automatic Fable selection",
+      "description": "Opt in to new automatic Fable model targets, including owned planners and workers. A manually selected root remains usable when off.",
+      "default": false
     }
   }
 }

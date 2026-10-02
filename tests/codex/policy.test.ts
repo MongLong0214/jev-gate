@@ -36,87 +36,66 @@ describe('Codex ordered routing and recorded application', () => {
     const override = join(tmp, 'explicit-models.json'); writeFileSync(override, JSON.stringify({ gate: { models: { fast: 'owner-model' } } }));
     expect(loadCodexPolicy({ JEV_CODEX_CONFIG: override, JEV_CODEX_MODEL: 'account-workhorse' }, available).gate.models).toEqual({ ...models, fast: 'owner-model' });
   });
-  const invoke = async (kind = 'valid', effort = 'medium') => {
+  const answersFor = (request: Obj, model = '__keep__', effort = 'low', control = 'task_clear'): Obj => {
+    const questions = request['questions'] as Record<string, { type: string; criteria: Record<string, string> | string[] }>;
+    return Object.fromEntries(Object.entries(questions).map(([name, q]) => {
+      if (q.type === 'choice') {
+        const pick = name === 'control' ? control : name === 'model' ? model : 'ordinary';
+        return [name, { type: 'choice', choice: pick, confidence: 1, probabilities: Object.fromEntries(Object.keys(q.criteria).map(k => [k, k === pick ? 1 : 0])) }];
+      }
+      const prefix: Record<string, string> = { none: 'No reasoning', minimal: 'A trivial', low: 'Light reasoning', medium: 'Ordinary reasoning', high: 'Strong reasoning', xhigh: 'Exceptional reasoning', max: 'Maximum sustained', ultra: 'Exhaustive host' };
+      return [name, { type: 'score', probabilities: Object.fromEntries((q.criteria as string[]).map((v, i) => [i, v.startsWith(prefix[effort]!) ? 1 : 0])) }];
+    }));
+  };
+  const invoke = async (kind = 'valid', effort: string | null = 'medium') => {
     const rows: Obj[] = [];
     const fetchImpl = vi.fn(async (_url: unknown, init: RequestInit | undefined) => {
       const request = JSON.parse(String(init?.body)) as Obj;
-      const answers: Obj = { control: { type: 'choice', choice: 'task_clear', confidence: 1, probabilities: { task_clear: 1, explicit_lock: 0, needs_context: 0, unclear: 0 } }, action_risk: { type: 'choice', choice: 'ordinary', confidence: 1, probabilities: { ordinary: 1, consequential: 0, unclear: 0 } }, effort: { type: 'score', score: 0, probabilities: { 0: 1, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 } } };
-      if (kind === 'locked') (answers['control'] as Obj)['choice'] = 'explicit_lock';
-      if (kind === 'invalid') (answers['effort'] as Obj)['probabilities'] = { 0: 0.4, 1: 0.4 };
+      const answers = answersFor(request, '__keep__', 'low', kind === 'locked' ? 'explicit_lock' : 'task_clear');
+      if (kind === 'invalid') answers['effort_0'] = { type: 'score', probabilities: { 0: .4, 1: .4 } };
       if (kind === 'failed') return new Response('', { status: 503 });
       return response({ model: kind === 'model-mismatch' ? 'wrong-model' : request['model'], answers });
     });
     const patch = await routeCodex({ model: 'gpt-6.1-sol', effort, task: 'PRIVATE_REQUEST', session: 's', prompt: 'p', catalog, config,
       env: { TYPESAFE_API_KEY: 'PRIVATE_KEY', ...(kind === 'disabled' ? { JEV_CODEX_ENABLED: '0' } : {}) }, fetchImpl: fetchImpl as typeof fetch,
-      trace: { write: (phase, row) => { rows.push({ phase, written_at: '2026-09-30T01:00:00Z', ...row }); return kind === 'disk-failed' ? { ok: false, error: 'full' } : { ok: true, file: 'f' }; } } });
+      trace: { write: (phase, row) => { rows.push({ phase, written_at: '2026-09-30T01:00:00Z', ...row }); if (kind === 'disk-threw') throw new Error('disk'); return kind === 'disk-failed' ? { ok: false, error: 'full' } : { ok: true, file: 'f' }; } } });
     return { patch, rows, fetchImpl };
   };
-  it('uses the full ordered distribution, applies a supported effort, and never publishes source/key', async () => {
+  it('uses ordered effort scores and records selections without confirming a response', async () => {
     const { patch, rows } = await invoke();
-    expect(patch).toEqual({ effort: 'low' });
+    expect(patch).toEqual({ effort: 'low', effortEdit: { kind: 'set', value: 'low' } });
     expect(JSON.stringify(rows)).not.toMatch(/PRIVATE_REQUEST|PRIVATE_KEY/);
-    const view = buildOperations([...rows, { phase: 'codex_route_applied', host: 'codex', session_id: 's', prompt_id: 'p', written_at: '2026-09-30T01:00:01Z', applied: true, observed_model: 'gpt-6.1-sol', observed_effort: 'low' }], [], new Date('2026-09-30T01:00:02Z'), { trace: true, debug: false, host: 'codex' });
-    expect(view.requests).toBe(1);
-    expect(view.latency.measured).toBe(1);
-    expect(view.features.find(f => f.id === 'router')).toMatchObject({ state: 'observed', capability: { mode: 'active' } });
-    expect(view.feed.some(s => s.feature === 'router' && s.lane === 'host')).toBe(true);
+    const view = buildOperations([...rows, { phase: 'codex_route_applied', host: 'codex', session_id: 's', prompt_id: 'p', written_at: '2026-09-30T01:00:01Z', applied: true, selected_model: 'gpt-6.1-sol', submitted_model: 'gpt-6.1-sol', submitted_effort: 'low' }], [], new Date('2026-09-30T01:00:02Z'), { trace: true, debug: false, host: 'codex' });
+    expect(view.requests).toBe(1); expect(view.latency.measured).toBe(1);
+    expect(view.feed.find(s => s.lane === 'host')?.model?.status).toBe('unobserved');
     expect(view.feed.some(s => s.judgements?.length)).toBe(true);
   });
-  it.each(['locked', 'invalid', 'failed', 'model-mismatch', 'disabled', 'disk-failed'])('preserves the original call on %s', async kind => {
-    const r = await invoke(kind); expect(r.patch).toEqual({});
-    expect(r.fetchImpl).toHaveBeenCalledTimes(['disabled', 'disk-failed'].includes(kind) ? 0 : 1);
+  it.each(['locked', 'invalid', 'failed', 'model-mismatch', 'disabled'])('preserves the original call on %s', async kind => {
+    const r = await invoke(kind); expect(r.patch).toEqual({}); expect(r.fetchImpl).toHaveBeenCalledTimes(kind === 'disabled' ? 0 : 1);
   });
-  it('preserves an unknown account model without a request', async () => {
-    const fetchImpl = vi.fn();
-    expect(await routeCodex({ model: 'unknown', effort: 'medium', task: 'task', session: 's', prompt: 'p', catalog, config, env: { TYPESAFE_API_KEY: 'key' }, fetchImpl })).toEqual({});
-    expect(fetchImpl).not.toHaveBeenCalled();
+  it.each(['disk-failed', 'disk-threw'])('keeps identical execution when optional recording is %s', async kind => {
+    const r = await invoke(kind); expect(r.patch).toEqual((await invoke()).patch); expect(r.fetchImpl).toHaveBeenCalledOnce();
   });
-  it('routes an inherited effort from the account catalog without guessing a default', async () => {
-    const r = await invoke();
-    const patch = await routeCodex({ model: 'gpt-6.1-sol', effort: null, task: 'task', session: 's', prompt: 'p', catalog: [{ ...catalog[0]!, defaultReasoningEffort: 'medium' }], config, env: { TYPESAFE_API_KEY: 'key' }, fetchImpl: r.fetchImpl as typeof fetch,
-      trace: { write: () => ({ ok: true, file: 'f' }) } });
-    expect(patch).toEqual({ effort: 'low' });
+  it('keeps unsupported host modes when the service answer is unavailable', async () => {
+    const fetchImpl = vi.fn(async () => new Response('', { status: 503 }));
+    expect(await routeCodex({ model: 'gpt-6-luna', effort: 'ultra', task: 'task', session: 's', prompt: 'p', catalog: [{ ...catalog[0]!, model: 'gpt-6-luna', supportedReasoningEfforts: catalog[0]!.supportedReasoningEfforts.slice(0, 5) }], config, env: { TYPESAFE_API_KEY: 'key' }, fetchImpl })).toEqual({});
   });
-  it.each(['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-5.6-terra', 'gpt-daybreak-blue-latest', 'account-specific-model'])('routes all catalog-supported efforts on %s without a model-name whitelist', async model => {
+  it('does not substitute a catalog default for an unobserved baseline effort', async () => {
+    expect((await invoke('valid', null)).patch).toEqual({ effort: 'low', effortEdit: { kind: 'set', value: 'low' } });
+  });
+  it.each(['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-5.6-terra', 'gpt-daybreak-blue-latest', 'account-specific-model'])('selects every listed effort on %s', async model => {
     const native = { ...catalog[0]!, model };
-    const trace = { write: () => ({ ok: true as const, file: 'f' }) };
     for (const target of native.supportedReasoningEfforts.map(e => e.reasoningEffort)) {
-      const fetchImpl = vi.fn(async (_url: unknown, init: RequestInit | undefined) => {
-        const request = JSON.parse(String(init?.body));
-        expect(request.questions.effort.criteria).toHaveLength(6);
-        return response({ model: request.model, answers: {
-          control: { type: 'choice', choice: 'task_clear', confidence: 1, probabilities: { task_clear: 1, explicit_lock: 0, needs_context: 0, unclear: 0 } },
-          action_risk: { type: 'choice', choice: 'ordinary', confidence: 1, probabilities: { ordinary: 1, consequential: 0, unclear: 0 } },
-          effort: { type: 'score', probabilities: Object.fromEntries(native.supportedReasoningEfforts.map((e, i) => [i, e.reasoningEffort === target ? 1 : 0])) },
-        } });
-      });
-      const from = target === 'low' ? 'ultra' : 'low';
-      expect(await routeCodex({ model, effort: from, task: 'task', session: 's', prompt: 'p', catalog: [native], config, env: { TYPESAFE_API_KEY: 'key' }, trace, fetchImpl })).toEqual({ effort: target });
+      const fetchImpl = vi.fn(async (_url: unknown, init?: RequestInit) => { const req = JSON.parse(String(init?.body)); return response({ model: req.model, answers: answersFor(req, '__keep__', target) }); });
+      expect(await routeCodex({ model, effort: target === 'low' ? 'ultra' : 'low', task: 'task', session: 's', prompt: 'p', catalog: [native], config, env: { TYPESAFE_API_KEY: 'key' }, fetchImpl })).toEqual({ effort: target, effortEdit: { kind: 'set', value: target } });
+      expect(fetchImpl).toHaveBeenCalledOnce();
     }
   });
-  it('offers only Luna-supported efforts and preserves unsupported ultra without a paid request', async () => {
-    const model = 'gpt-6-luna';
-    const native = { ...catalog[0]!, model, supportedReasoningEfforts: catalog[0]!.supportedReasoningEfforts.slice(0, 5) };
-    const fetchImpl = vi.fn();
-    expect(await routeCodex({ model, effort: 'ultra', task: 'task', session: 's', prompt: 'p', catalog: [native], config, env: { TYPESAFE_API_KEY: 'key' }, trace: { write: () => ({ ok: true, file: 'f' }) }, fetchImpl })).toEqual({});
-    expect(fetchImpl).not.toHaveBeenCalled();
-  });
-  it('allows explicit Terra model routing and rejects an incompatible model-effort pair', async () => {
-    const models = { fast: 'gpt-6-luna', standard: 'gpt-5.6-terra', deep: 'gpt-6.1-sol', frontier: 'gpt-6-astra' };
-    const native = Object.values(models).map(model => ({ ...catalog[0]!, model, supportedReasoningEfforts: model.endsWith('luna') ? catalog[0]!.supportedReasoningEfforts.slice(0, 5) : catalog[0]!.supportedReasoningEfforts }));
-    for (const tier of [0, 1]) {
-      const fetchImpl = async (_url: unknown, init: RequestInit | undefined) => {
-        const request = JSON.parse(String(init?.body));
-        return response({ model: request.model, answers: {
-          control: { type: 'choice', choice: 'task_clear', confidence: 1, probabilities: { task_clear: 1, explicit_lock: 0, needs_context: 0, unclear: 0 } },
-          action_risk: { type: 'choice', choice: 'ordinary', confidence: 1, probabilities: { ordinary: 1, consequential: 0, unclear: 0 } },
-          tier: { type: 'score', probabilities: Object.fromEntries([0, 1, 2, 3].map(i => [i, i === tier ? 1 : 0])) },
-          effort: { type: 'score', probabilities: { 0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 1 } },
-        } });
-      };
-      const patch = await routeCodex({ model: 'gpt-6.1-sol', effort: 'high', task: 'task', session: 's', prompt: 'p', catalog: native, config: { ...config, gate: { ...config.gate, models }, router: { ...config.router, model: true } }, env: { TYPESAFE_API_KEY: 'key' }, trace: { write: () => ({ ok: true, file: 'f' }) }, fetchImpl: fetchImpl as typeof fetch });
-      expect(patch).toEqual(tier === 1 ? { model: 'gpt-5.6-terra', effort: 'ultra' } : { effort: 'ultra' });
-    }
+  it.each(['Fixture-E', 'Fixture-F'])('selects %s outside four role preferences, including an unknown baseline', async target => {
+    const native = ['Fixture-A', 'Fixture-B', 'Fixture-C', 'Fixture-D', 'Fixture-E', 'Fixture-F'].map(model => ({ model, description: 'General coding model', supportedReasoningEfforts: ['low', 'high', 'max'].map(reasoningEffort => ({ reasoningEffort })) }));
+    const fetchImpl = vi.fn(async (_url: unknown, init?: RequestInit) => { const req = JSON.parse(String(init?.body)); expect(Object.keys(req.questions.model.criteria)).toContain(target); return response({ model: req.model, answers: answersFor(req, target, 'max') }); });
+    expect(await routeCodex({ model: 'outside-role-mapping', effort: 'high', task: 'task', session: 's', prompt: 'p', catalog: native, config, env: { TYPESAFE_API_KEY: 'key' }, fetchImpl })).toEqual({ model: target, effort: 'max', effortEdit: { kind: 'set', value: 'max' } });
+    expect(fetchImpl).toHaveBeenCalledOnce();
   });
 });
 describe('native workspace authentication routing', () => {
@@ -191,8 +170,8 @@ describe('native transport authority', () => {
     expect(session.settings['effort']).toBe('ultra');
     expect(session.requestEffort).toBe('max');
     const rows = readdirSync(trace).map(f => JSON.parse(readFileSync(join(trace, f), 'utf8')));
-    expect(rows.find(r => r.prompt_id === 'unconfirmed')).toMatchObject({ applied: false, selected_effort: 'ultra', observed_effort: 'max' });
-    expect(rows.find(r => r.prompt_id === 'confirmed')).toMatchObject({ applied: true, selected_effort: 'ultra', observed_host_effort: 'ultra', observed_effort: 'max', effort_resolution: 'native_ultra' });
+    expect(rows.find(r => r.prompt_id === 'unconfirmed')).toMatchObject({ applied: false, selected_effort: 'ultra', submitted_effort: 'max', observed_effort: 'unknown' });
+    expect(rows.find(r => r.prompt_id === 'confirmed')).toMatchObject({ applied: true, selected_effort: 'ultra', observed_host_effort: 'ultra', submitted_effort: 'max', observed_effort: 'unknown', effort_resolution: 'native_ultra' });
     rpc.close();
   });
   it('refuses duplicate active Jev installations before registering a thread', async () => {

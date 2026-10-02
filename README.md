@@ -76,7 +76,7 @@ On upgrade, the complete old Jev-generated foreground profile is migrated automa
 
 The key is stored under `$XDG_CONFIG_HOME/jev-gate/auth/credentials.json`, or `~/.config/jev-gate/auth/credentials.json`, with a private directory and file (0700/0600). It is never put in a project, URL, command argument or diagnostic log. Both hosts read it; Evidence and Codex accept a newly saved key without an MCP restart. Existing explicit environment/plugin keys take precedence. Saving checks the key's format, not account validity, quota or API availability. Until a key exists, Gate/Lean/Router preserve native behavior and Evidence searches locally.
 
-Every feature defaults to on, including main model routing, manual Compact and remote Evidence. The root tool allow-list is `["*"]`: Jev imposes no extra restriction on native tools, while the host still decides execution permissions. That does not mean every prompt is compacted, folded, routed, or delegated. The defaults enable up to 16 isolated workers, plans of up to 64 tasks, a depth floor of 0 and plan interpretation. Workers receive the current working files through private snapshots. Jev facts are batched into one request per eligible gate event. Router bounds all preparation to 800ms by default and skips requests that cannot change the final settings. The dashboard shows recorded Jev response times; these rules do not guarantee end-to-end speed or token savings.
+Every feature defaults to on, including main model routing, manual Compact and remote Evidence. Automatic Astra/Fable targets are the exception: they require the host-specific opt-in below. The root tool allow-list is `["*"]`: Jev imposes no extra restriction on native tools, while the host still decides execution permissions. That does not mean every prompt is compacted, folded, routed, or delegated. The defaults enable up to 16 isolated workers, plans of up to 64 tasks, a depth floor of 0 and plan interpretation. Workers receive the current working files through private snapshots. Jev facts are batched into one request per eligible gate event. Router bounds all preparation to 800ms by default and skips requests that cannot change the final settings. The dashboard shows recorded Jev response times; these rules do not guarantee end-to-end speed or token savings.
 
 Gate stays native for a direct admission, a missing key, or no `prompt_id`; none of those is a failure of the install. The default depth floor of 0 permits assessment even in a fresh session. `gateMode` `off` does not turn the other parts off. There is no master switch and no `evidenceEnabled` option.
 
@@ -119,8 +119,22 @@ Options are the names in [`.claude-plugin/plugin.json`](.claude-plugin/plugin.js
 | Gate | Admits a request as direct (the session continues), single (one worker carries the request), or orchestrated (a planner, then workers). Root tools remain open with the default `["*"]`; an explicit narrower policy limits them. This is not the Router. | `gateMode` `auto` (`native` and `off` send no Gate request; `lean` is a separate mode) | Only in `auto` or `lean`, and only when the call is eligible |
 | Compact | At an auto-compaction it can answer, replaces older context with an extractive digest plus a recent tail. If its own conditions fail, the engine compacts. | `compactEnabled` true, `compactMode` `active` | No. [Details](mods/compact/README.md) |
 | Output | Folds runs of identical consecutive lines in one case: a passing `vitest run` log the host saved to a file. Not a general CLI or failure-log compressor. | `outputEnabled` true | No. [Details](mods/output/README.md) |
-| Router | May change the root turn's model and effort, and a routed subagent's model and effort. Main model routing is enabled by default, including the frontier profile. Pins and an unverified host stay native. | `routerEnabled` true | When it has something to ask. [Details](mods/router/README.md) |
+| Router | May change the root turn's model and effort, and a routed subagent's model and effort. Chooses among eligible actual model IDs with each candidate’s own effort support. Main routing defaults to on; automatic Astra/Fable targets default to off. Pins and unknown capabilities are preserved. | `routerEnabled` true | When it has something to ask. [Details](mods/router/README.md) |
 | Evidence | When called, returns source windows with path, lines, and a file hash, a page at a time, and can read a window back. It does not write files. | No switch. Without a config file, the session's Git worktree, remote on if a key is present | A semantic page only. Exact symbols and read-backs are not sent. [Details](plugins/evidence/README.md) |
+
+## Model routing in normal use
+
+Your model picker, `--model`, or ordinary model setting establishes the native baseline. Router can keep that model, change effort, change model, or change both on the **same root request**. All eligible candidates participate; the four worker roles are preferences, not a four-model limit. Explicit pins and model/effort switches remain independent. A manual change during a turn takes precedence.
+
+Automatic **Astra/Fable selection defaults to OFF** in Router, Gate and Lean. A manually selected restricted root still works; it does not authorize restricted automatic children. No extra setup is needed for ordinary eligible models. To opt in, use the existing setting for your host:
+
+| Host/package | Optional setting |
+| --- | --- |
+| Codex `codex.json` | `{"router":{"allowAstra":true}}` |
+| Claude combined plugin options | `{"routerAllowFable":true}` |
+| Claude standalone Router options | `{"allowFable":true}` |
+
+Only boolean `true` is accepted. These settings are separate. The dashboard distinguishes **selected**, **submitted**, and **response observed**; missing actual model/effort stays unknown. Claude capability facts do not establish account entitlement, and Codex’s current `model/list` determines its available candidates. See [Router behavior, options and limits](mods/router/README.md).
 
 ## First use
 

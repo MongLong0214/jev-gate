@@ -10,7 +10,7 @@ import { cachePatch, createRouter, hostSupported, VERIFIED_HOST } from '../../mo
 import { answering, CLEAR, deferred, drain, FAKE_KEY, fakeEngine, streamNext } from './fake-engine.ts';
 
 const configOf = (options: Record<string, string | number | boolean>) => {
-  const r = resolveConfig({ enabled: true, ...options });
+  const r = resolveConfig({ enabled: true, allowFable: true, ...options });
   if (!r.ok) throw new Error(`invalid option ${r.field}`);
   return r.config;
 };
@@ -20,7 +20,7 @@ const SUBAGENT_OFF = { routeSubagentEffort: false, routeExplicitSpawnModel: fals
 const EFFORT_ONLY = { routeMainEffort: true, routeMainModel: false, routeSubagentModel: false, ...SUBAGENT_OFF };
 const FULL_IDS = { fastModel: 'claude-haiku-4-5', standardModel: 'claude-sonnet-5', deepModel: 'claude-opus-5-5', frontierModel: 'claude-fable-5-1' };
 const MODEL_ONLY = { routeMainEffort: false, routeMainModel: true, routeSubagentModel: false, ...SUBAGENT_OFF, ...FULL_IDS };
-const SPAWN_ONLY = { routeMainEffort: false, routeMainModel: false, routeSubagentModel: true, ...SUBAGENT_OFF };
+const SPAWN_ONLY = { routeMainEffort: false, routeMainModel: false, routeSubagentModel: true, ...SUBAGENT_OFF, routeSubagentEffort: true };
 /** Explicit switch overrides used by tests that constrain the root-model path. */
 const SWITCHES = ([
   ['claude-sonnet-5', 'claude-opus-5-5'],
@@ -58,16 +58,16 @@ describe('root effort', () => {
     const [req] = f.sent;
     expect(req?.url).toBe(JEV_ENDPOINT);
     expect(req?.headers['authorization']).toBe(`Bearer ${FAKE_KEY}`);
-    expect(req?.state).toEqual({ task: { text: TEXT } });
-    expect(Object.keys(req?.questions ?? {})).toEqual(['control', 'effort', 'action_risk']);
+    expect(req?.state).toEqual({ task: { text: TEXT, source: 'current_human_request', truncated: false, recent_requests: [] } });
+    expect(Object.keys(req?.questions ?? {})).toEqual(['effort_0', 'control', 'action_risk']);
     // Effort is asked as four levels of work; which effort each maps to is decided locally.
-    expect(req?.questions['effort']).toMatchObject({ type: 'score', criteria: [TIER_LEVELS.fast, TIER_LEVELS.standard, TIER_LEVELS.deep, TIER_LEVELS.frontier] });
+    expect(req?.questions['effort_0']).toMatchObject({ type: 'score', criteria: expect.arrayContaining([expect.stringContaining('Light reasoning'), expect.stringContaining('Maximum sustained')]) });
 
     const root = f.logs.find((l) => l['event'] === 'root');
-    expect(root).toMatchObject({ assessment: 'ok', sent: true, patch: { effort: 'low' }, reasons: { effort: 'applied', model: 'not_asked' } });
+    expect(root).toMatchObject({ assessment: 'ok', sent: true, patch: { effort: 'low' }, reasons: { effort: 'selected', model: 'not_asked' } });
     // The receipt: what the move was read from.
-    expect(root?.['answers']).toMatchObject({ control: 'task_clear', task_clear: 0.97, ordinary: 0.97 });
-    expect((root?.['answers'] as { effort: number[] }).effort[0]).toBe(0.95);
+    expect(root?.['answers']).toMatchObject({ control: { choice: 'task_clear', probabilities: { task_clear: .97 } }, action_risk: { probabilities: { ordinary: .97 } } });
+    expect((root?.['answers'] as { effort_0: { probabilities: Record<string, number> } }).effort_0.probabilities['0']).toBe(.95);
     expect(JSON.stringify(f.logs)).not.toContain('parseRow');
     expect(JSON.stringify(f.logs)).not.toContain(FAKE_KEY);
   });
@@ -394,41 +394,17 @@ describe('root effort', () => {
     expect(g.logs).toContainEqual({ event: 'root_stop', turn: 't1', index: 0, reason: 'effort_pinned' });
   });
 
-  it('stops an effort-only override when a fallback model answers that cannot take it, or no model is reported', async () => {
-    for (const observed of ['claude-haiku-4-5', null]) {
+  it('keeps the selected request independent of missing or mismatched response diagnostics', async () => {
+    for (const observed of ['claude-haiku-4-5', 'claude-sonnet-5', null]) {
       const router = createRouter(configOf(EFFORT_ONLY));
-      const f = fakeEngine({ respond: answering({ ...CLEAR, effort: ['low', 0.95] }) });
+      const f = fakeEngine({ respond: answering({ ...CLEAR, effort: ['low', .95] }) });
       router.turnStart({ turnId: 't1', text: TEXT });
-      const first = streamNext<TurnStepEvent>(() => observed);
-      await drain(router.turnStep(f.engine, step(), first.next));
-      expect(first.calls[0]?.effort).toBe('low');
-      const second = streamNext<TurnStepEvent>();
-      await drain(router.turnStep(f.engine, step({ index: 1 }), second.next));
-      expect(second.calls, String(observed)).toEqual([step({ index: 1 })]);
-      expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root_stop', reason: observed === null ? 'model_unobserved' : 'model_mismatch', requested: 'claude-opus-5-5' }));
-    }
-  });
-
-  it('keeps an effort the answering model takes, and reads either variant of the requested model as no mismatch', async () => {
-    const cases: Array<[TurnStepEvent, string, boolean, string]> = [
-      // A fallback that takes low: the effort stays, the mismatch is still logged.
-      [step(), 'claude-sonnet-5', true, 'low'],
-      // The reported id has no [1m]: it neither confirms nor refutes the variant, and is no mismatch.
-      [step({ model: 'claude-opus-5-5[1m]' }), 'claude-opus-5-5', false, 'low'],
-      // And the other way: a bare request answered with the listed [1m] form is the same model.
-      [step(), 'claude-opus-5-5[1m]', false, 'low'],
-      // A suffix the host does not list is not a known model, so nothing says it takes low.
-      [step(), 'claude-opus-5-5[bogus]', true, 'high'],
-    ];
-    for (const [e, observed, mismatch, effort] of cases) {
-      const router = createRouter(configOf(EFFORT_ONLY));
-      const f = fakeEngine({ respond: answering({ ...CLEAR, effort: ['low', 0.95] }) });
-      router.turnStart({ turnId: 't1', text: TEXT });
-      await drain(router.turnStep(f.engine, e, streamNext<TurnStepEvent>(() => observed).next));
-      const second = streamNext<TurnStepEvent>();
-      await drain(router.turnStep(f.engine, { ...e, index: 1 }, second.next));
-      expect(second.calls, observed).toEqual([{ ...e, index: 1, effort }]);
-      expect(f.logs.some((l) => l['event'] === 'root_stop'), observed).toBe(mismatch);
+      await drain(router.turnStep(f.engine, step(), streamNext<TurnStepEvent>(() => observed).next));
+      const next = streamNext<TurnStepEvent>();
+      await drain(router.turnStep(f.engine, step({ index: 1 }), next.next));
+      expect(next.calls).toEqual([step({ index: 1, effort: 'low' })]);
+      expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root_result', observed, observed_effort: 'unknown', confirmation: observed === null ? 'unobserved' : 'mismatch' }));
+      expect(f.logs.some(l => l['event'] === 'root_stop')).toBe(false);
     }
   });
 
@@ -452,8 +428,7 @@ describe('root effort', () => {
       };
       await drain(router.turnStep(f.engine, step(), n.next));
       await settle();
-      expect(n.calls, `hops ${hops}`).toHaveLength(1);
-      if (endedBeforeNext === true) expect(n.calls[0], `hops ${hops}`).toEqual(step());
+      expect(n.calls, `hops ${hops}`).toHaveLength(endedBeforeNext === true ? 0 : 1);
     }
   });
 
@@ -482,7 +457,7 @@ describe('root model', () => {
     await drain(router.turnStep(f.engine, step({ model: 'claude-sonnet-5' }), n.next));
     expect(n.calls).toEqual([step({ model: 'claude-opus-5-5' })]);
     expect(f.sent).toHaveLength(1);
-    expect(f.sent[0]?.questions['tier']).toBeDefined();
+    expect(f.sent[0]?.questions['model']).toBeDefined();
   });
 
   it('moves to a stronger configured model on the upgrade floor, and offers only the targets a switch could reach', async () => {
@@ -493,7 +468,7 @@ describe('root model', () => {
     await drain(router.turnStep(f.engine, step({ model: 'claude-sonnet-5' }), n.next));
     expect(n.calls).toEqual([step({ model: 'claude-opus-5-5' })]);
     // fast is a smaller window, so it is not offered even though a switch to it is listed.
-    expect(f.sent[0]?.questions['tier']?.criteria).toEqual([TIER_LEVELS.standard, TIER_LEVELS.deep, TIER_LEVELS.frontier]);
+    expect(Object.keys(f.sent[0]?.questions['model']?.criteria ?? {})).toEqual(['__keep__', '__abstain__', 'claude-fable-5-1', 'claude-opus-5-5']);
   });
 
   it('refuses a pair the target rejects, and asks nothing when no other profile could be applied', async () => {
@@ -547,35 +522,18 @@ describe('root model', () => {
     expect(f.logs).toContainEqual({ event: 'root_stop', turn: 't1', index: 1, reason: 'model_pinned' });
   });
 
-  it('stops the model override when the response names another model, or none', async () => {
-    for (const observed of ['claude-sonnet-5', null]) {
-      const router = createRouter(configOf(MODEL_ONLY), SWITCHES);
-      const f = fakeEngine({ respond: answering({ control: ['task_clear', 0.9], tier: ['deep', 0.9] }) });
-      router.turnStart({ turnId: 't1', text: TEXT });
-      const first = streamNext<TurnStepEvent>(() => observed);
-      await drain(router.turnStep(f.engine, step({ model: 'claude-sonnet-5' }), first.next));
-      expect(first.calls[0]?.model).toBe('claude-opus-5-5');
-      const second = streamNext<TurnStepEvent>();
-      await drain(router.turnStep(f.engine, step({ model: 'claude-sonnet-5', index: 1 }), second.next));
-      expect(second.calls).toEqual([step({ model: 'claude-sonnet-5', index: 1 })]);
-      expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root_stop', reason: observed === null ? 'model_unobserved' : 'model_mismatch' }));
-    }
-  });
-
-  it('stops a suffixed model override that a bare identifier answers, since the variant is unconfirmed', async () => {
-    const ids = { ...MODEL_ONLY, standardModel: 'claude-sonnet-5[1m]', deepModel: 'claude-opus-5-5[1m]' };
-    const router = createRouter(configOf(ids), [{ from: 'claude-sonnet-5[1m]', to: 'claude-opus-5-5[1m]' }]);
-    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', 0.95] }) });
+  it('does not consume a model patch through response observation, but a real incoming C wins', async () => {
+    const router = createRouter(configOf(MODEL_ONLY), SWITCHES);
+    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', .95] }) });
     router.turnStart({ turnId: 't1', text: TEXT });
-    const first = streamNext<TurnStepEvent>(() => 'claude-opus-5-5');
-    await drain(router.turnStep(f.engine, step({ model: 'claude-sonnet-5[1m]' }), first.next));
-    expect(first.calls[0]?.model).toBe('claude-opus-5-5[1m]');
-    const second = streamNext<TurnStepEvent>();
-    await drain(router.turnStep(f.engine, step({ model: 'claude-sonnet-5[1m]', index: 1 }), second.next));
-    expect(second.calls).toEqual([step({ model: 'claude-sonnet-5[1m]', index: 1 })]);
-    expect(f.logs).toContainEqual(
-      expect.objectContaining({ event: 'root_stop', reason: 'model_mismatch', requested: 'claude-opus-5-5[1m]', observed: 'claude-opus-5-5' }),
-    );
+    await drain(router.turnStep(f.engine, step({ model: 'claude-sonnet-5' }), streamNext<TurnStepEvent>(() => null).next));
+    const next = streamNext<TurnStepEvent>();
+    await drain(router.turnStep(f.engine, step({ model: 'claude-opus-5-5', index: 1 }), next.next));
+    expect(next.calls[0]!.model).toBe('claude-opus-5-5');
+    const manual = step({ model: 'claude-fable-5-1', index: 2 });
+    await drain(router.turnStep(f.engine, manual, next.next));
+    expect(next.calls.at(-1)).toEqual(manual);
+    expect(f.sent).toHaveLength(1);
   });
 
   it('reads the pins last, so a pin set while the allowlist is read still stops a stored override', async () => {
@@ -696,17 +654,15 @@ describe('spawn model', () => {
     router.agentOffer(OFFER_BUILT_IN('general-purpose'));
     const n = spawnNext();
     const result = await router.agentSpawn(f.engine, spawn(), n.next);
-    expect(n.calls).toEqual([{ ...spawn(), model: 'haiku' }]);
-    expect(result).toEqual({ model: 'haiku' });
-    expect(f.sent[0]?.state).toEqual({ task: { text: spawn().prompt, description: spawn().description, subagent_type: 'general-purpose' } });
-    expect(Object.keys(f.sent[0]?.questions ?? {})).toEqual(['control', 'tier', 'action_risk']);
+    expect(n.calls).toEqual([{ ...spawn(), model: 'claude-haiku-4-5-20251001' }]);
+    expect(result).toEqual({ model: 'claude-haiku-4-5-20251001' });
+    expect(f.sent[0]?.state).toMatchObject({ task: { text: spawn().prompt, description: spawn().description, subagent_type: 'general-purpose', source: 'child_contract', truncated: false } });
+    expect(Object.keys(f.sent[0]?.questions ?? {})).toContain('model');
   });
 
   it('stays native for every unverified case without a request', async () => {
     const cases: Array<[string, SpawnEvent, Parameters<typeof fakeEngine>[0], boolean]> = [
       ['fork', spawn({ fork: true }), {}, true],
-      ['explicit_model', spawn({ model: 'sonnet' }), {}, true],
-      ['subagent_model_pinned', spawn(), { pins: { subagentModel: true } }, true],
       ['alias_remapped', spawn(), { pins: { aliasRemap: true } }, true],
       ['type_unverified', spawn({ subagentType: 'code-reviewer' }), {}, true],
       ['definition_unverified', spawn(), {}, false],
@@ -720,10 +676,9 @@ describe('spawn model', () => {
       ['gate_routed', spawn({ subagentType: 'jev-gate:worker' }), {}, true],
       ['gate_routed', spawn({ subagentType: 'jev-gate:planner' }), {}, true],
       ['gate_routed', spawn({ prompt: 'Fix it.\n\n[Jev Gate route note] Tier: fast. Precedence: ...' }), {}, true],
-      ['rank_unknown', spawn({ parentModel: 'claude-unknown-9' }), {}, true],
     ];
     for (const [reason, e, opts, offered] of cases) {
-      const router = createRouter(configOf(SPAWN_ONLY));
+      const router = createRouter(configOf({ ...SPAWN_ONLY, routeSubagentEffort: false }));
       const f = fakeEngine({ ...opts, respond: answering({ ...CLEAR, tier: ['fast', 0.95] }) });
       if (offered) {
         router.agentOffer(OFFER_BUILT_IN('general-purpose'));
@@ -739,7 +694,7 @@ describe('spawn model', () => {
   });
 
   it('does not trust a listing whose source is not the built-in one', async () => {
-    const router = createRouter(configOf(SPAWN_ONLY));
+    const router = createRouter(configOf({ ...SPAWN_ONLY, routeSubagentEffort: false }));
     const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['fast', 0.95] }) });
     router.agentOffer({ agent: 'general-purpose', source: 'projectSettings', provider: { plugin: 'engine', tier: 'core' } });
     const n = spawnNext();
@@ -759,8 +714,8 @@ describe('spawn model', () => {
     const b = spawnNext();
     await Promise.all([router.agentSpawn(f.engine, spawn({ prompt: QUICK }), a.next), router.agentSpawn(f.engine, spawn(), b.next)]);
     expect(f.sent).toHaveLength(2);
-    expect(a.calls[0]?.model).toBe('haiku');
-    expect(b.calls[0]?.model).toBe('sonnet');
+    expect(a.calls[0]?.model).toBe('claude-haiku-4-5-20251001');
+    expect(b.calls[0]?.model).toBe('claude-sonnet-5');
   });
 
   it('lets an abandoned dispatch decide nothing for a later one, and records what its reply cost', async () => {
@@ -780,7 +735,7 @@ describe('spawn model', () => {
     first.resolve(answering({ ...CLEAR, tier: ['fast', 0.95] })(f.sent[0]!) as HttpReply);
     await pending;
     expect(f.sent).toHaveLength(2);
-    expect(again.calls[0]?.model).toBe('sonnet');
+    expect(again.calls[0]?.model).toBe('claude-sonnet-5');
     await vi.waitFor(() => expect(f.logs).toContainEqual(expect.objectContaining({ event: 'late', scope: 'spawn', tool_use_id: 'tu1' })));
   });
 
@@ -793,7 +748,7 @@ describe('spawn model', () => {
     const other = spawnNext(() => ({ model: 'claude-sonnet-5' }));
     expect(await router.agentSpawn(f.engine, spawn({ tool_use_id: 'tu2' }), other.next)).toEqual({ model: 'claude-sonnet-5' });
     expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn_result', denied: true }));
-    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn_result', reason: 'model_mismatch', requested: 'haiku', observed: 'claude-sonnet-5' }));
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn_result', reason: 'model_mismatch', requested: 'claude-haiku-4-5-20251001', observed: 'claude-sonnet-5' }));
   });
 
   it('stays native when a pin or the allowlist changes while Jev answers', async () => {
@@ -814,7 +769,7 @@ describe('spawn model', () => {
       reply.resolve(answering({ ...CLEAR, tier: ['fast', 0.95] })(f.sent[0]!) as HttpReply);
       await run;
       expect(n.calls, reason).toEqual([spawn()]);
-      expect(f.logs, reason).toContainEqual({ event: 'spawn_stop', tool_use_id: 'tu1', reason, requested: 'haiku' });
+      expect(f.logs, reason).toContainEqual({ event: 'spawn_stop', tool_use_id: 'tu1', reason, requested: 'claude-haiku-4-5-20251001' });
     }
   });
 
@@ -835,7 +790,7 @@ describe('spawn model', () => {
     gate.resolve();
     await run;
     expect(n.calls).toEqual([spawn()]);
-    expect(f.logs).toContainEqual({ event: 'spawn_stop', tool_use_id: 'tu1', reason: 'subagent_model_pinned', requested: 'haiku' });
+    expect(f.logs).toContainEqual({ event: 'spawn_stop', tool_use_id: 'tu1', reason: 'subagent_model_pinned', requested: 'claude-haiku-4-5-20251001' });
   });
 
   it('sends nothing and routes nothing for a dispatch whose session ended during a read', async () => {
@@ -856,8 +811,8 @@ describe('spawn model', () => {
       await vi.waitFor(() => expect(f.allowed.reads).toBe(during === 'first' ? 1 : 2));
       router.sessionEnd();
       gate.resolve();
-      await run;
-      expect(n.calls, during).toEqual([spawn()]);
+      await expect(run).rejects.toThrow('spawn dispatch abandoned');
+      expect(n.calls, during).toEqual([]);
       expect(f.sent, during).toHaveLength(during === 'first' ? 0 : 1);
       expect(f.logs, during).toContainEqual({ event: 'spawn_stop', tool_use_id: 'tu1', reason: 'session_ended' });
     }
@@ -881,10 +836,10 @@ describe('spawn model', () => {
         });
         return r;
       };
-      await router.agentSpawn(f.engine, spawn(), n.next);
+      const result = await router.agentSpawn(f.engine, spawn(), n.next).then(() => 'sent', () => 'cancelled');
       await settle();
-      expect(n.calls, `hops ${hops}`).toHaveLength(1);
-      if (endedBeforeNext === true) expect(n.calls[0], `hops ${hops}`).toEqual(spawn());
+      expect(n.calls, `hops ${hops}`).toHaveLength(endedBeforeNext === true ? 0 : 1);
+      expect(result).toBe(endedBeforeNext === true ? 'cancelled' : 'sent');
     }
   });
 
@@ -926,7 +881,7 @@ describe('spawn model', () => {
   });
 
   it('forwards a spawn that could never be routed without waiting for the key', async () => {
-    const router = createRouter(configOf(SPAWN_ONLY));
+    const router = createRouter(configOf({ ...SPAWN_ONLY, routeSubagentEffort: false }));
     const f = fakeEngine();
     f.engine.envKey = () => new Promise(() => {});
     const n = spawnNext();
@@ -936,7 +891,7 @@ describe('spawn model', () => {
   });
 
   it('never logs a spawn type it does not route, which is caller text', async () => {
-    const router = createRouter(configOf(SPAWN_ONLY));
+    const router = createRouter(configOf({ ...SPAWN_ONLY, routeSubagentEffort: false }));
     const f = fakeEngine();
     const type = `sk-${'b'.repeat(24)}testonlynotakey`;
     const n = spawnNext();
@@ -952,7 +907,7 @@ describe('spawn model', () => {
     router.agentOffer(OFFER_BUILT_IN('general-purpose'));
     const n = spawnNext(() => ({ model: 'claude-haiku-4-5', agentId: 'a1' }));
     await router.agentSpawn(f.engine, spawn(), n.next);
-    expect(f.logs).toContainEqual({ event: 'spawn_result', tool_use_id: 'tu1', requested: 'haiku', observed: 'claude-haiku-4-5', agent_id: 'a1' });
+    expect(f.logs).toContainEqual({ event: 'spawn_result', tool_use_id: 'tu1', requested: 'claude-haiku-4-5-20251001', observed: 'claude-haiku-4-5', agent_id: 'a1' });
   });
 
   it('throws instead of calling next once its dispatch was abandoned', async () => {
@@ -979,60 +934,20 @@ describe('spawn model', () => {
     const f = fakeEngine({ hostBase: '2.1.283', respond: answering({ ...CLEAR, tier: ['fast', 0.95] }) });
     router.agentOffer(OFFER_BUILT_IN('general-purpose'));
     const n = spawnNext();
-    expect(await router.agentSpawn(f.engine, spawn(), n.next)).toEqual({ model: 'haiku' });
+    expect(await router.agentSpawn(f.engine, spawn(), n.next)).toEqual({ model: 'claude-haiku-4-5-20251001' });
   });
 
-  it('stops routing spawns for the activation once a routed spawn runs on another model', async () => {
+  it('reports a mismatched spawn without stopping subsequent independent work', async () => {
     const router = createRouter(configOf(SPAWN_ONLY));
-    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['fast', 0.95] }) });
+    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['fast', .95] }) });
     router.agentOffer(OFFER_BUILT_IN('general-purpose'));
-    const first = spawnNext(() => ({ model: 'claude-opus-5-5' }));
-    expect(await router.agentSpawn(f.engine, spawn(), first.next)).toEqual({ model: 'claude-opus-5-5' });
-    expect(f.logs).toContainEqual({ event: 'spawn_suspended', reason: 'model_mismatch' });
-    const second = spawnNext();
-    await router.agentSpawn(f.engine, spawn({ tool_use_id: 'tu2' }), second.next);
-    expect(second.calls).toEqual([spawn({ tool_use_id: 'tu2' })]);
-    expect(f.sent).toHaveLength(1);
-    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn', tool_use_id: 'tu2', skipped: 'spawn_suspended' }));
-    // A session end does not lift it: the host's resolution has not changed.
-    router.sessionEnd();
-    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
-    await router.agentSpawn(f.engine, spawn({ tool_use_id: 'tu3' }), spawnNext().next);
-    expect(f.sent).toHaveLength(1);
-  });
-
-  it('stops routing spawns once an unrouted one does not run on the baseline it was judged against', async () => {
-    const router = createRouter(configOf(SPAWN_ONLY));
-    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', 0.95] }) });
-    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
-    const n = spawnNext(() => ({ model: 'claude-sonnet-5' }));
-    await router.agentSpawn(f.engine, spawn(), n.next);
-    expect(n.calls).toEqual([spawn()]);
-    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn_native_result', assumed: 'claude-opus-5-5', observed: 'claude-sonnet-5', reason: 'baseline_mismatch' }));
-    expect(f.logs).toContainEqual({ event: 'spawn_suspended', reason: 'baseline_mismatch' });
-    // The same model in its 1M variant is the baseline, not a contradiction.
-    const other = createRouter(configOf(SPAWN_ONLY));
-    const g = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', 0.95] }) });
-    other.agentOffer(OFFER_BUILT_IN('general-purpose'));
-    await other.agentSpawn(g.engine, spawn({ parentModel: 'claude-opus-5-5[1m]' }), spawnNext().next);
-    expect(g.logs.some((l) => l['event'] === 'spawn_suspended')).toBe(false);
-  });
-
-  it('leaves a spawn native that was still waiting when another spawn suspended routing', async () => {
-    const router = createRouter(configOf(SPAWN_ONLY));
-    const held = deferred<HttpReply>();
-    let calls = 0;
-    const f = fakeEngine({ respond: (req) => (calls++ === 0 ? held.promise : answering({ ...CLEAR, tier: ['fast', 0.95] })(req)) });
-    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
-    const waiting = spawnNext();
-    const b = router.agentSpawn(f.engine, spawn({ tool_use_id: 'tuB' }), waiting.next);
-    await vi.waitFor(() => expect(f.sent).toHaveLength(1));
-    await router.agentSpawn(f.engine, spawn({ tool_use_id: 'tuA' }), spawnNext(() => ({ model: 'claude-opus-5-5' })).next);
-    expect(f.logs).toContainEqual({ event: 'spawn_suspended', reason: 'model_mismatch' });
-    held.resolve(answering({ ...CLEAR, tier: ['fast', 0.95] })(f.sent[0]!) as HttpReply);
-    await b;
-    expect(waiting.calls).toEqual([spawn({ tool_use_id: 'tuB' })]);
-    expect(f.logs).toContainEqual({ event: 'spawn_stop', tool_use_id: 'tuB', reason: 'spawn_suspended', requested: 'haiku' });
+    await router.agentSpawn(f.engine, spawn(), spawnNext(() => ({ model: 'claude-opus-5-5' })).next);
+    const next = spawnNext();
+    await router.agentSpawn(f.engine, spawn({ tool_use_id: 'independent' }), next.next);
+    expect(next.calls[0]!.model).toBe('claude-haiku-4-5-20251001');
+    expect(f.sent).toHaveLength(2);
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn_result', reason: 'model_mismatch' }));
+    expect(f.logs.some(l => l['event'] === 'spawn_suspended')).toBe(false);
   });
 
   it('does not suspend for a spawn a pin set during its assessment kept native, whatever Jev answered', async () => {
@@ -1060,7 +975,7 @@ describe('spawn model', () => {
     router.agentOffer(OFFER_BUILT_IN('general-purpose'));
     const n = spawnNext(() => ({ model: 'claude-haiku-4-5' }));
     await router.agentSpawn(f.engine, spawn({ tool_use_id: 'tu2' }), n.next);
-    expect(n.calls).toEqual([spawn({ tool_use_id: 'tu2', model: 'haiku' })]);
+    expect(n.calls).toEqual([spawn({ tool_use_id: 'tu2', model: 'claude-haiku-4-5-20251001' })]);
   });
 });
 
@@ -1077,8 +992,8 @@ describe('subagent effort and named models', () => {
     await router.agentSpawn(f.engine, spawn(), s.next);
     // Deep work keeps Opus: the spawn is left on the model it inherits.
     expect(s.calls).toEqual([spawn()]);
-    expect(Object.keys(f.sent[0]?.questions ?? {})).toEqual(['control', 'tier', 'effort', 'action_risk']);
-    expect(f.logs.find((l) => l['event'] === 'spawn')).toMatchObject({ reasons: { model: 'same_value', effort: 'per_step' } });
+    expect(Object.keys(f.sent[0]?.questions ?? {})).toEqual(expect.arrayContaining(['control', 'model', 'effort_0', 'action_risk']));
+    expect(f.logs.find((l) => l['event'] === 'spawn')).toMatchObject({ reasons: { model: 'same_value', effort: 'selected' } });
 
     const n = streamNext<TurnStepEvent>();
     await drain(router.turnStep(f.engine, childStep(), n.next));
@@ -1098,7 +1013,7 @@ describe('subagent effort and named models', () => {
     const f = fakeEngine({ respond: answering({ ...CLEAR, effort: ['medium', 0.95] }) });
     const s = spawnNext(() => ({ model: 'claude-opus-5-5', agentId: 'a1' }));
     await router.agentSpawn(f.engine, spawn({ subagentType: 'my-reviewer' }), s.next);
-    expect(Object.keys(f.sent[0]?.questions ?? {})).toEqual(['control', 'effort', 'action_risk']);
+    expect(Object.keys(f.sent[0]?.questions ?? {})).toEqual(['effort_0', 'control', 'action_risk']);
     expect(s.calls).toEqual([spawn({ subagentType: 'my-reviewer' })]);
 
     f.pins.mainEffort = true;
@@ -1198,70 +1113,16 @@ describe('subagent effort and named models', () => {
     expect(f.sent).toHaveLength(1);
   });
 
-  it('leaves every later spawn native once suspended, the effort of its subagent too', async () => {
+  it('keeps concurrent child effort answers independent of another spawn response mismatch', async () => {
     const router = createRouter(configOf(CHILD));
-    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['fast', 0.95], effort: ['low', 0.95] }) });
+    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', .95], effort: ['low', .95] }) });
     router.agentOffer(OFFER_BUILT_IN('general-purpose'));
-    // The routed spawn runs on another model: routing is suspended, and its loop, not yet stepped, stays native.
-    const first = spawnNext(() => ({ model: 'claude-opus-5-5', agentId: 'a1' }));
-    await router.agentSpawn(f.engine, spawn(), first.next);
-    expect(f.logs).toContainEqual({ event: 'spawn_suspended', reason: 'model_mismatch' });
-    const n = streamNext<TurnStepEvent>();
-    await drain(router.turnStep(f.engine, childStep(), n.next));
-    expect(n.calls).toEqual([childStep()]);
-    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'child_stop', agent_id: 'a1', reason: 'spawn_suspended' }));
-
-    // A later spawn is not assessed at all, and its loop runs as it resolved.
-    const second = spawnNext(() => ({ model: 'claude-opus-5-5', agentId: 'a2' }));
-    await router.agentSpawn(f.engine, spawn({ tool_use_id: 'tu2' }), second.next);
-    expect(second.calls).toEqual([spawn({ tool_use_id: 'tu2' })]);
-    expect(f.sent).toHaveLength(1);
-    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn', tool_use_id: 'tu2', skipped: 'spawn_suspended' }));
-    const m = streamNext<TurnStepEvent>();
-    await drain(router.turnStep(f.engine, childStep({ agentId: 'a2' }), m.next));
-    expect(m.calls).toEqual([childStep({ agentId: 'a2' })]);
-  });
-
-  it('leaves native a loop whose spawn returns after a suspension, or whose first step was still being prepared', async () => {
-    const router = createRouter(configOf(CHILD));
-    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['fast', 0.95], effort: ['low', 0.95] }) });
-    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
-    // Spawn A runs cleanly and its loop's first step reaches the pin read, the last wait before next.
-    const a = spawnNext(() => ({ model: 'claude-haiku-4-5', agentId: 'a1' }));
-    await router.agentSpawn(f.engine, spawn(), a.next);
-    const gate = deferred<void>();
-    let reading = false;
-    const paused = { ...f.engine, pins: async () => ((reading = true), await gate.promise, f.engine.pins()) };
-    const n = streamNext<TurnStepEvent>();
-    const first = drain(router.turnStep(paused as typeof f.engine, childStep(), n.next));
-    while (!reading) await settle();
-    // Spawn B is still waiting on next when spawn C reports another model and suspends routing.
-    const started = deferred<SpawnOutcome>();
-    let spawned = false;
-    let sentB: SpawnEvent | undefined;
-    const b = Object.assign(
-      async (e: SpawnEvent): Promise<SpawnOutcome> => {
-        sentB = e;
-        spawned = true;
-        return started.promise;
-      },
-      { signal: new AbortController().signal },
-    );
-    const runB = router.agentSpawn(f.engine, spawn({ tool_use_id: 'tu2' }), b);
-    while (!spawned) await settle();
-    await router.agentSpawn(f.engine, spawn({ tool_use_id: 'tu3' }), spawnNext(() => ({ model: 'claude-opus-5-5', agentId: 'a3' })).next);
-    expect(f.logs).toContainEqual({ event: 'spawn_suspended', reason: 'model_mismatch' });
-    gate.resolve();
-    await first;
-    started.resolve({ model: 'claude-haiku-4-5', agentId: 'a2' });
-    await runB;
-    const m = streamNext<TurnStepEvent>();
-    await drain(router.turnStep(f.engine, childStep({ agentId: 'a2' }), m.next));
-    // B was handed to the host before the suspension, so its model was already sent; its subagent gets no effort.
-    expect(sentB?.model).toBe('haiku');
-    // Neither loop had sent a patched step: both run as they resolved.
-    expect(n.calls).toEqual([childStep()]);
-    expect(m.calls).toEqual([childStep({ agentId: 'a2' })]);
+    await router.agentSpawn(f.engine, spawn(), spawnNext(() => ({ model: 'claude-opus-5-5', agentId: 'a1' })).next);
+    await router.agentSpawn(f.engine, spawn({ tool_use_id: 'other' }), spawnNext(() => ({ model: 'claude-sonnet-5', agentId: 'a2' })).next);
+    const next = streamNext<TurnStepEvent>();
+    await drain(router.turnStep(f.engine, childStep(), next.next));
+    expect(next.calls).toEqual([childStep({ effort: 'low' })]);
+    expect(f.sent).toHaveLength(2);
   });
 
   it('leaves a loop native once a step arrives on another effort or model, or its patch is answered by another model', async () => {
@@ -1280,8 +1141,8 @@ describe('subagent effort and named models', () => {
     const fallback = streamNext<TurnStepEvent>(() => 'claude-sonnet-5');
     await drain(router.turnStep(f.engine, childStep({ agentId: 'a2' }), fallback.next));
     await drain(router.turnStep(f.engine, childStep({ agentId: 'a2', index: 1 }), fallback.next));
-    expect(fallback.calls).toEqual([childStep({ agentId: 'a2', effort: 'low' }), childStep({ agentId: 'a2', index: 1 })]);
-    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'child_stop', agent_id: 'a2', reason: 'model_mismatch' }));
+    expect(fallback.calls).toEqual([childStep({ agentId: 'a2', effort: 'low' }), childStep({ agentId: 'a2', index: 1, effort: 'low' })]);
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'child_result', agent_id: 'a2', confirmation: 'mismatch' }));
   });
 
   it("routes the model an Agent call names as a default, unless configured not to, and never a fork's", async () => {
@@ -1289,8 +1150,8 @@ describe('subagent effort and named models', () => {
     const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['fast', 0.95], effort: ['low', 0.95] }) });
     const s = spawnNext();
     await router.agentSpawn(f.engine, spawn({ model: 'opus', subagentType: 'my-reviewer' }), s.next);
-    expect(s.calls).toEqual([spawn({ model: 'haiku', subagentType: 'my-reviewer' })]);
-    expect(f.logs.find((l) => l['event'] === 'spawn')).toMatchObject({ explicit: true, from: 'opus', patch: { model: 'haiku' } });
+    expect(s.calls).toEqual([spawn({ model: 'claude-haiku-4-5-20251001', subagentType: 'my-reviewer' })]);
+    expect(f.logs.find((l) => l['event'] === 'spawn')).toMatchObject({ explicit: true, from: 'claude-opus-5-5', patch: { model: 'claude-haiku-4-5-20251001' } });
 
     const kept = createRouter(configOf({ ...CHILD, routeExplicitSpawnModel: false, routeSubagentEffort: false }));
     const k = spawnNext();
@@ -1303,13 +1164,13 @@ describe('subagent effort and named models', () => {
     expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn', tool_use_id: 'tu3', skipped: 'fork' }));
   });
 
-  it("reads a spawn's own prompt as its whole task: needing context moves it, and only an explicit lock holds it", async () => {
+  it("preserves a spawn when its contract needs missing context or explicitly locks it", async () => {
     const router = createRouter(configOf(CHILD));
     router.agentOffer(OFFER_BUILT_IN('general-purpose'));
     const moved = fakeEngine({ respond: answering({ control: ['needs_context', 0.9], action_risk: ['ordinary', 0.97], tier: ['fast', 0.95] }) });
     const m = spawnNext();
     await router.agentSpawn(moved.engine, spawn(), m.next);
-    expect(m.calls).toEqual([{ ...spawn(), model: 'haiku' }]);
+    expect(m.calls).toEqual([spawn()]);
 
     const locked = fakeEngine({ respond: answering({ control: ['explicit_lock', 0.9], action_risk: ['ordinary', 0.97], tier: ['fast', 0.95] }) });
     const l = spawnNext();
@@ -1336,12 +1197,12 @@ describe('root effort and the prompt cache', () => {
     expect(await turn('t1', ['medium', 0.95], 0)).toBe('medium');
     // Ten minutes on, lower work is held at the effort the cache was written at.
     expect(await turn('t2', ['low', 0.95], 10 * 60_000)).toBe('medium');
-    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root', turn: 't2', patch: { effort: 'medium' }, held_for_cache: 'low' }));
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root', turn: 't2', patch: expect.objectContaining({ effort: 'medium' }), held_for_cache: 'low' }));
     // Exceptional work rises to the baseline, paying the rewrite.
     expect(await turn('t3', ['xhigh', 0.95], 60_000)).toBe('xhigh');
     // Held at the baseline, nothing is sent.
     expect(await turn('t4', ['medium', 0.95], 60_000)).toBe('xhigh');
-    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root', turn: 't4', skipped: 'cache_native' }));
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root', turn: 't4', patch: {}, held_for_cache: 'medium' }));
     // After an hour's pause the cache is cold again.
     expect(await turn('t5', ['low', 0.95], 60 * 60_000)).toBe('low');
     // A session's end forgets the cache.
@@ -1365,7 +1226,7 @@ describe('root effort and the prompt cache', () => {
     // The session's effort went from xhigh to high between turns: this turn keeps it, and nothing is asked.
     expect(await turn('t2', 'high')).toBe('high');
     expect(f.sent).toHaveLength(1);
-    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root', turn: 't2', effort_kept: 'incoming_changed', skipped: 'nothing_to_change' }));
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root', turn: 't2', effort_kept: 'incoming_changed', skipped: 'no_alternative' }));
     // At the same effort again, the next turn is routed as before.
     expect(await turn('t3', 'high')).toBe('medium');
     expect(f.sent).toHaveLength(2);
@@ -1422,16 +1283,17 @@ describe('root context', () => {
       );
     router.turnStart({ turnId: 't1', text: TEXT });
     await drain(router.turnStep(f.engine, step(), replying('Renamed. Shall I also update the docs?')));
-    router.turnComplete({ turnId: 't1' });
+    router.turnComplete({ turnId: 't1', reason: 'answer', answer: 'Renamed. Shall I also update the docs?' });
     router.turnStart({ turnId: 't2', text: 'ㅇㅇ' });
     await drain(router.turnStep(f.engine, step({ turnId: 't2' }), replying('')));
-    expect(f.sent[0]?.state).toEqual({ task: { text: TEXT } });
-    expect(f.sent[1]?.state).toEqual({ task: { text: 'ㅇㅇ', previous_reply: 'Renamed. Shall I also update the docs?' } });
+    expect(f.sent[0]?.state).toMatchObject({ task: { text: TEXT, source: 'current_human_request' } });
+    expect(f.sent[1]?.state).toMatchObject({ task: { text: 'ㅇㅇ', previous_reply: 'Renamed. Shall I also update the docs?', previous_reply_source: 'completed_visible_assistant_reply', previous_reply_truncated: false, recent_requests: [{ text: TEXT, source: 'recent_human_request', truncated: false }] } });
 
     router.sessionEnd();
     router.turnStart({ turnId: 't3', text: 'ㅇㅇ' });
     await drain(router.turnStep(f.engine, step({ turnId: 't3' }), replying('')));
-    expect(f.sent[2]?.state).toEqual({ task: { text: 'ㅇㅇ' } });
+    expect(f.sent[2]?.state).toMatchObject({ task: { text: 'ㅇㅇ', recent_requests: [] } });
+    expect((f.sent[2]?.state as { task: object }).task).not.toHaveProperty('previous_reply');
   });
 
   it('screens the whole reply before keeping its tail, and carries none of a screened one', async () => {
@@ -1449,10 +1311,11 @@ describe('root context', () => {
     const key = `-----BEGIN PRIVATE KEY-----\n${'A'.repeat(2200)}\n-----END PRIVATE KEY-----`;
     router.turnStart({ turnId: 't1', text: TEXT });
     await drain(router.turnStep(f.engine, step(), replying(key)));
-    router.turnComplete({ turnId: 't1' });
+    router.turnComplete({ turnId: 't1', reason: 'answer', answer: key });
     router.turnStart({ turnId: 't2', text: 'Continue' });
     await drain(router.turnStep(f.engine, step({ turnId: 't2' }), replying('')));
-    expect(f.sent[1]?.state).toEqual({ task: { text: 'Continue' } });
+    expect(f.sent[1]?.state).toMatchObject({ task: { text: 'Continue' } });
+    expect((f.sent[1]?.state as { task: object }).task).not.toHaveProperty('previous_reply');
     expect(JSON.stringify(f.sent)).not.toContain('AAAA');
   });
 });
@@ -1469,7 +1332,7 @@ describe('lifecycle', () => {
     await vi.waitFor(() => expect(f.sent).toHaveLength(1));
     router.sessionEnd();
     await run;
-    expect(n.calls).toEqual([step()]);
+    expect(n.calls).toEqual([]);
 
     const s = spawnNext();
     await router.agentSpawn(fakeEngine({}).engine, spawn(), s.next);
@@ -1492,13 +1355,13 @@ describe('lifecycle', () => {
 
     router.agentOffer(OFFER_BUILT_IN('general-purpose'));
     const ok = spawnNext();
-    expect(await router.agentSpawn(engine, spawn(), ok.next)).toEqual({ model: 'haiku' });
+    expect(await router.agentSpawn(engine, spawn(), ok.next)).toEqual({ model: 'claude-haiku-4-5-20251001' });
     const failure = new Error('native spawn failed');
     const bad = spawnNext(() => {
       throw failure;
     });
     await expect(router.agentSpawn(engine, spawn({ tool_use_id: 'tu2' }), bad.next)).rejects.toBe(failure);
-    expect(bad.calls).toEqual([{ ...spawn({ tool_use_id: 'tu2' }), model: 'haiku' }]);
+    expect(bad.calls).toEqual([{ ...spawn({ tool_use_id: 'tu2' }), model: 'claude-haiku-4-5-20251001' }]);
   });
 
   it('a reply naming another Jev model is not applied', async () => {
@@ -1521,8 +1384,8 @@ describe('#42 and #43: handler cases the issues list', () => {
     const n = spawnNext();
     const e = spawn({ parentModel: 'claude-haiku-4-5' });
     await router.agentSpawn(f.engine, e, n.next);
-    expect(n.calls).toEqual([{ ...e, model: 'opus' }]);
-    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn', from: 'claude-haiku-4-5', patch: { model: 'opus' } }));
+    expect(n.calls).toEqual([{ ...e, model: 'claude-opus-5-5' }]);
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn', from: 'claude-haiku-4-5', patch: { model: 'claude-opus-5-5' } }));
   });
 
   it('forwards a spawn once, natively, when its assessment times out, and a late reply changes nothing', async () => {
@@ -1587,7 +1450,7 @@ describe('#42 and #43: handler cases the issues list', () => {
     // Jev's own usage, as the fake response reported it (answering's default), and the step's usage, as the stream did.
     expect(root?.['usage']).toMatchObject({ input: 900, output: 40 });
     expect(f.logs).toContainEqual(
-      expect.objectContaining({ event: 'root_result', turn: 't1', index: 0, applied: { effort: 'low' }, observed: 'claude-opus-5-5', usage: expect.objectContaining({ input: 700, output: 30 }) }),
+      expect.objectContaining({ event: 'root_result', turn: 't1', index: 0, applied: expect.objectContaining({ effort: 'low' }), observed: 'claude-opus-5-5', usage: expect.objectContaining({ input: 700, output: 30 }) }),
     );
   });
 
@@ -1600,8 +1463,8 @@ describe('#42 and #43: handler cases the issues list', () => {
     await drain(router.turnStep(f.engine, step(), n.next));
     expect(n.calls).toEqual([{ ...step(), effort: 'low' }]);
     expect(f.sent).toHaveLength(1);
-    expect(Object.keys(f.sent[0]?.questions ?? {})).toEqual(['control', 'effort', 'action_risk']);
-    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root', model_withheld: 'rank_unknown', patch: { effort: 'low' } }));
+    expect(f.sent[0]?.questions).toHaveProperty('model');
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root', model_asked: true, patch: expect.objectContaining({ effort: 'low' }) }));
   });
 
   it('#42: a conditional level the model cannot take is not offered, and a lower unconditional one still applies', async () => {
@@ -1616,7 +1479,7 @@ describe('#42 and #43: handler cases the issues list', () => {
     await drain(router.turnStep(f.engine, sonnet, n.next));
     expect(f.sent).toHaveLength(1);
     expect(n.calls).toEqual([{ ...sonnet, effort: 'low' }]);
-    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root', sent: true, patch: { effort: 'low' } }));
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root', sent: true, patch: expect.objectContaining({ effort: 'low' }) }));
 
     // The conditional level is what excludes a candidate: Opus at xhigh cannot move to Sonnet and keep xhigh, but can
     // with the lower level Sonnet takes unconditionally, answered in the same request.
@@ -1640,7 +1503,7 @@ describe('#42 and #43: handler cases the issues list', () => {
 describe('#81: control correctness', () => {
   it('asks nothing for the effort of a subagent whose model is known to take none, while a pin or remap keeps it unknown', async () => {
     const cases: Array<[SpawnEvent, Record<string, boolean>]> = [
-      [spawn({ model: 'haiku' }), { routeExplicitSpawnModel: false }],
+      [spawn({ model: 'claude-haiku-4-5-20251001' }), { routeExplicitSpawnModel: false }],
       [spawn({ model: 'claude-haiku-4-5' }), { routeSubagentModel: false }],
       [spawn({ parentModel: 'claude-haiku-4-5-20251001' }), { routeSubagentModel: false }],
     ];
@@ -1656,8 +1519,9 @@ describe('#81: control correctness', () => {
     // A remapped alias no longer names Haiku, so its effort is still asked.
     const router = createRouter(configOf({ ...CHILD, routeExplicitSpawnModel: false }));
     const remapped = fakeEngine({ pins: { aliasRemap: true }, respond: answering({ ...CLEAR, effort: ['low', 0.95] }) });
+    remapped.engine.modelAliases = async () => ({ haiku: 'claude-opus-5-5' });
     await router.agentSpawn(remapped.engine, spawn({ model: 'haiku' }), spawnNext().next);
-    expect(Object.keys(remapped.sent[0]?.questions ?? {})).toEqual(['control', 'effort', 'action_risk']);
+    expect(Object.keys(remapped.sent[0]?.questions ?? {})).toEqual(['effort_0', 'control', 'action_risk']);
   });
 
   it("keeps a subagent's answer to its own run: a later run under a new turn id goes native", async () => {
@@ -1786,7 +1650,7 @@ describe('#81: control correctness', () => {
     const f = fakeEngine({ respond: answering({ ...CLEAR, effort: ['low', 0.95] }) });
     router.turnStart({ turnId: 't1', text: TEXT });
     await drain(router.turnStep(f.engine, step(), streamNext<TurnStepEvent>().next));
-    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root_result', applied: { effort: 'low' }, observed: 'claude-opus-5-5', observed_effort: 'unknown' }));
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root_result', applied: expect.objectContaining({ effort: 'low' }), observed: 'claude-opus-5-5', observed_effort: 'unknown' }));
   });
 });
 
@@ -1982,14 +1846,14 @@ describe('bounded child history question feasibility (#140)', () => {
   });
   it('keeps model routing without asking effort after saturation', async () => {
     const router = createRouter(configOf(CHILD));
-    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['fast', 0.95], effort: ['low', 0.95] }) });
+    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['standard', 0.95], effort: ['low', 0.95] }) });
     router.agentOffer(OFFER_BUILT_IN('general-purpose'));
     saturate(router);
     const n = spawnNext(e => ({ model: e.model ?? 'claude-opus-5-5', agentId: 'new-child' }));
     await router.agentSpawn(f.engine, spawn(), n.next);
     expect(f.sent).toHaveLength(1);
-    expect(Object.keys(f.sent[0]!.questions)).toEqual(['control', 'tier', 'action_risk']);
-    expect(n.calls[0]!.model).toBe('haiku');
+    expect(Object.keys(f.sent[0]!.questions)).toEqual(['model', 'control', 'action_risk']);
+    expect(n.calls[0]!.model).toBe('claude-sonnet-5');
   });
   it.each(['key', 'pins'])('rechecks saturation after pending %s preparation', async phase => {
     const router = createRouter(configOf({ ...CHILD, routeSubagentModel: false }));
@@ -2003,11 +1867,11 @@ describe('bounded child history question feasibility (#140)', () => {
   });
   it('keeps an independently valid model after saturation during HTTP without registering effort', async () => {
     const router = createRouter(configOf(CHILD));
-    const f = fakeEngine({ respond: req => { saturate(router); return answering({ ...CLEAR, tier: ['fast', 0.95], effort: ['low', 0.95] })(req); } });
+    const f = fakeEngine({ respond: req => { saturate(router); return answering({ ...CLEAR, tier: ['standard', 0.95], effort: ['low', 0.95] })(req); } });
     router.agentOffer(OFFER_BUILT_IN('general-purpose'));
     const n = spawnNext(e => ({ model: e.model ?? 'claude-opus-5-5', agentId: 'a1' }));
     await router.agentSpawn(f.engine, spawn(), n.next);
-    expect(f.sent).toHaveLength(1); expect(n.calls[0]!.model).toBe('haiku');
+    expect(f.sent).toHaveLength(1); expect(n.calls[0]!.model).toBe('claude-sonnet-5');
     const stepNext = streamNext<TurnStepEvent>();
     await drain(router.turnStep(f.engine, childStep({ model: 'claude-haiku-4-5' }), stepNext.next));
     expect(stepNext.calls[0]!.effort).toBe('xhigh');
@@ -2023,7 +1887,7 @@ describe('bounded child history question feasibility (#140)', () => {
     expect(n.calls[0]!.effort).toBe('low');
     router.sessionEnd(); router.agentOffer(OFFER_BUILT_IN('general-purpose'));
     await router.agentSpawn(f.engine, spawn(), spawnNext().next);
-    expect(f.sent.at(-1)!.questions).toHaveProperty('effort');
+    expect(f.sent.at(-1)!.questions).toHaveProperty('effort_0');
   });
   it('keeps necessary pin checks but sends no question when the model is pinned', async () => {
     const router = createRouter(configOf(CHILD)); const f = fakeEngine({ pins: { subagentModel: true } });
@@ -2035,13 +1899,13 @@ describe('bounded child history question feasibility (#140)', () => {
   it('ignores an extra unasked effort answer in a valid model-only response', async () => {
     const router = createRouter(configOf(CHILD));
     const f = fakeEngine({ respond: async req => {
-      const response = await answering({ ...CLEAR, tier: ['fast', 0.95] })(req);
+      const response = await answering({ ...CLEAR, tier: ['standard', 0.95] })(req);
       const body = JSON.parse(response.text); body.answers.effort = { type: 'score', probabilities: { invalid: 1 } };
       return { ...response, text: JSON.stringify(body) };
     } });
     router.agentOffer(OFFER_BUILT_IN('general-purpose')); saturate(router);
     const n = spawnNext(); await router.agentSpawn(f.engine, spawn(), n.next);
-    expect(n.calls[0]!.model).toBe('haiku');
+    expect(n.calls[0]!.model).toBe('claude-sonnet-5');
     expect(f.sent[0]!.questions).not.toHaveProperty('effort');
     expect(f.logs.find(l => l['event'] === 'spawn')?.['assessment']).toBe('ok');
   });

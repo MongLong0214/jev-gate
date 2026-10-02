@@ -1,3 +1,7 @@
+import { claudeAllocation } from './claude-allocation.js';
+import { prepareDispatchAllocation, selectedDispatchPair, type DispatchAllocation } from './dispatch-allocation.js';
+import { OWNED_AGENT_PROFILES } from './agents.js';
+import type { PairOffer, PairPatch } from './router-selection.js';
 import { integratedClaudePlugin } from './claude-setup.js';
 import { claudeTerminal, dispatchMarker } from './claude-background.js';
 import { hasWorktreeHead } from './worktree.js';
@@ -154,6 +158,7 @@ export interface HookDeps {
   /** When this hook process started, in epoch ms. The provider gets what is left of the host's hook timeout (L7). */
   startedAt?: number;
   /** Host facts supplied by an execution adapter. No policy is reimplemented here. */
+  allocation?: DispatchAllocation;
   host?: {
     id: 'codex';
     recentRequests?: () => readonly string[];
@@ -427,6 +432,10 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
   const unavailableWorktree = baseRef !== null && (baseRef.value !== 'head' || snapshotHost && !!input.cwd && !hasWorktreeHead(input.cwd, deps.env));
   const config: ConfigV5 = unavailableWorktree ? { ...loaded.config, workerIsolation: 'none', maxParallelWorkers: 1 } : loaded.config;
   const requestedModelFor = (tool: unknown): string | null => requestedModelFrom(tool, deps.host ? config.models : DEFAULT_CONFIG.models);
+  const allocation = deps.allocation ?? (!deps.host ? claudeAllocation(deps.env) : undefined);
+  const allocationActive = !!allocation && (!!deps.allocation || integratedClaudePlugin(deps.env));
+  let allocationOffer: PairOffer | null = null;
+  let allocationPatch: PairPatch | null = null;
   const rawMode = config.mode;
   if (rawMode === 'off') return isAgentPre ? preserve('mode_off') : skip('mode_off');
   /**
@@ -448,7 +457,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
   const traceDir = deps.env['JEV_GATE_TRACE_DIR'];
   if (traceDir) {
     const opened = (deps.openTrace ?? openTraceDir)(traceDir, deps.env);
-    if (opened.ok) trace = opened.writer;
+    if (opened.ok) { const writer = opened.writer; trace = { write: (phase, data) => { try { return writer.write(phase, data); } catch { return { ok: false, error: 'recording_failed' }; } } }; }
     else traceError = opened.error;
   }
   const caller = { agent_id: input.agent_id ?? null, agent_type: input.agent_type ?? null };
@@ -479,12 +488,25 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
   };
 
   const emitPatch = (original: AgentInput, patch: Parameters<typeof patchAgentInput>[1], code: ErrorCode | null): HookResult => {
-    const stdout = renderPreToolUseOutput({ kind: 'update', updatedInput: patchAgentInput(original, patch) });
+    const applied = patchAgentInput(original, { ...patch, ...(allocationPatch && allocationOffer ? { model: allocationPatch.model ?? allocationOffer.baseline.model } : {}) });
+    if (allocationPatch && input.session_id && input.tool_use_id) {
+      let owner = false;
+      const saved = updateJob(deps.env, input.session_id, prev => {
+        const r = prev ? own(prev.current.active, input.tool_use_id!) : undefined;
+        if (!prev || !r) return null;
+        owner = true;
+        return { ...prev, current: { ...prev.current, active: { ...prev.current.active, [input.tool_use_id!]: { ...r, allocation_pair: {
+          model: String(applied['model']), effort_edit: allocationPatch!.effortEdit ?? { kind: 'keep' },
+        } } } } };
+      });
+      if (owner && !saved.ok) return emitDeny('dispatch_ineligible', 'Allocation ownership could not be committed. No worker started; continue in the main session.', null);
+    }
+    const stdout = renderPreToolUseOutput({ kind: 'update', updatedInput: applied });
     if (stdout === null) return preserve('output_too_large');
     return { kind: 'patch', code, stdout };
   };
 
-  /** One attempt, intent before the request, result after it. A trace directory that cannot be written blocks the call. */
+  /** One attempt, intent before the request, result after it. Optional recording failures do not block the call. */
   const callGate = async <S, Q>(
     request: JevRequest<S, Q>,
     intentPhase: 'admission_intent' | 'pre_intent' | 'interpretation_intent' | 'lean_intent',
@@ -497,7 +519,18 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     mustReturnBy?: number,
     currentAdmission?: () => boolean,
   ): Promise<{ outcome: JevOutcome } | { blocked: ErrorCode }> => {
-    const requestBytes = Buffer.byteLength(JSON.stringify(request), 'utf8');
+    let sentRequest: JevRequest<unknown, unknown> = request;
+    if (allocation && allocationActive && intentPhase === 'pre_intent' && (intent['role'] === 'planner' || intent['role'] === 'worker') && isRecord(input.tool_input)) {
+      const model = requestedModelFor(input.tool_input);
+      const profile = OWNED_AGENT_PROFILES.find(p => p.name === (input.tool_input as AgentInput)['subagent_type']);
+      const ownerState = input.session_id ? readJob(deps.env, input.session_id) : null;
+      const reserved = ownerState?.ok && !!own(ownerState.value?.current.active ?? {}, input.tool_use_id ?? '');
+      if (model) {
+        allocationOffer = prepareDispatchAllocation(allocation, model, profile?.effort ?? null, !!reserved, config.routeConfidenceFloor);
+        if (allocationOffer) { sentRequest = { ...request, questions: { ...(request.questions as object), ...allocationOffer.questions } }; questionKeys = Object.keys(sentRequest.questions as object); }
+      }
+    }
+    const requestBytes = Buffer.byteLength(JSON.stringify(sentRequest), 'utf8');
     // B2/T7: one id per gate call, written to both records, so accounting joins an intent to its own result. Gate A
     // has no tool_use_id and `invocation_id` is per record, so neither of those can carry the pairing.
     const requestId = randomUUID();
@@ -514,23 +547,24 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       return { blocked: 'deadline_exhausted' };
     };
     if (hookLeft() < MIN_NETWORK_MS) return exhausted();
-    if (traceDir) {
-      if (!trace) return { blocked: 'trace_intent_failed' };
-      const written = trace.write(intentPhase, { ...base, ...intent, request_id: requestId, request_bytes: requestBytes });
-      if (!written.ok && written.error !== 'recording_disabled') return { blocked: 'trace_intent_failed' };
-    }
+    try { trace?.write(intentPhase, { ...base, ...intent, request_id: requestId, request_bytes: requestBytes }); } catch { /* Recording is optional. */ }
     // Measured again after the intent write: that write is local work the budget has already paid for.
     const left = hookLeft();
     if (deps.signal?.aborted || currentAdmission && !currentAdmission()) return { blocked: 'aborted' };
     if (left < MIN_NETWORK_MS) return exhausted();
     const deadlineMs = Math.min(config.requestDeadlineMs, left);
-    const outcome = await callJev(request, {
+    let outcome = await callJev(sentRequest, {
       apiKey: apiKey as string,
       deadlineMs,
       ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
       ...(deps.signal ? { signal: deps.signal } : {}),
     });
+    if (allocationOffer && outcome.ok && outcome.response.model !== sentRequest.model) outcome = {
+      ok: false, code: 'response_invalid', status: outcome.status, durationMs: outcome.durationMs, requestBytes: outcome.requestBytes,
+      model: outcome.response.model, usage: outcome.response.usage,
+    };
     // Timers can be queued behind body decoding or local work. The clock and caller cancellation own admission.
+    if (allocationOffer && outcome.ok && !deps.signal?.aborted && hookLeft() > 0) allocationPatch = selectedDispatchPair(allocationOffer, outcome.response.answers);
     const admissionExpired = intentPhase === 'admission_intent' && (deps.signal?.aborted || hookLeft() <= 0);
     const decided = admissionExpired
       ? { forced: false, decision: { shape: 'direct', decided: false, reason: deps.signal?.aborted ? 'aborted' : 'deadline_exhausted', changed_default: false } }
@@ -547,6 +581,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         : { model: outcome.model ?? null, usage: outcome.usage ?? null, response_bytes: null },
       answers: outcome.ok ? whitelistAnswers(outcome.response.answers, questionKeys) : null,
       ...decided,
+      ...(allocationOffer ? { allocation: { baseline_model: allocationOffer.baseline.model, baseline_effort: allocationOffer.baseline.effort, offered_count: allocationOffer.candidates.length, model_asked: allocationOffer.modelAsked, effort_asked: allocationOffer.effortQuestions.size > 0, selected_model: allocationPatch?.model ?? allocationOffer.baseline.model, effort_edit: allocationPatch?.effortEdit ?? { kind: 'keep' } } } : {}),
     });
     return admissionExpired ? { blocked: deps.signal?.aborted ? 'aborted' : 'deadline_exhausted' } : { outcome };
   };
@@ -962,6 +997,24 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     return emitContext('UserPromptSubmit', `Jev Gate: answer the user's new message in the main session. The original background job and its contracts remain current; this message does not cancel or replace them. ${active ? `${active} owned execution(s) still have no terminal result. Do not wait synchronously, duplicate their work, or edit their files. Continue answering questions here; native permissions and explicit user cancellation remain authoritative.` : 'The previous execution has ended; use the policy result below before continuing the original job.'}\n${current.background_context ?? ''}`, null);
   };
 
+  const allocationPre = (result: HookResult): HookResult => {
+    if (!allocation || input.tool_name !== 'Agent' || !isRecord(input.tool_input) || !input.session_id || !input.tool_use_id || ['deny', 'skip'].includes(result.kind)) return result;
+    if (result.kind === 'preserve' && allocationPatch && allocationOffer) result = emitPatch(input.tool_input, {}, result.code);
+    const agent = input.tool_input['subagent_type'];
+    if (typeof agent !== 'string' || (!(agent in OWNED_AGENTS) && agent !== LEAN_EXECUTOR_AGENT)) return result;
+    const applied = result.stdout && result.kind === 'patch' ? JSON.parse(result.stdout)?.hookSpecificOutput?.updatedInput : input.tool_input;
+    const model = agent === LEAN_EXECUTOR_AGENT ? allocation.inheritedModel : isRecord(applied) ? requestedModelFor(applied) : null;
+    // Claude Lean's inherited model is checked by the native agent.spawn boundary where it is observable.
+    if (!model || allocation.allowed(model)) return result;
+    const saved = updateJob(deps.env, input.session_id, prev => {
+      if (!prev || prev.current.prompt_id !== input.prompt_id) return null;
+      const r = own(prev.current.active, input.tool_use_id!);
+      // This exact pre-dispatch boundary has not started a native child; never release older executions.
+      if (r?.codex_execution || r?.background_execution) return null;
+      return { ...prev, current: { ...release(prev.current, input.tool_use_id!), root_fallback: true, root_fallback_reason: 'delivery_failed', background_context: 'No eligible automatic child model. Continue the work in the main session; no child started.' } };
+    });
+    return emitDeny('dispatch_ineligible', saved.ok ? 'No eligible automatic child model. Continue in the main session; no child started.' : 'No child started. Ownership cleanup could not be committed; retry before continuing.', null);
+  };
   const backgroundPre = (result: HookResult): HookResult => {
     if (deps.host || deps.env['CLAUDE_CODE_DISABLE_BACKGROUND_TASKS'] === '1' || (result.kind !== 'patch' && result.kind !== 'preserve') || !input.session_id || !input.tool_use_id || !isRecord(input.tool_input)) return result;
     const state = readJob(deps.env, input.session_id);
@@ -1081,7 +1134,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
 
   if (rawMode === 'lean') {
     if (input.hook_event_name === 'UserPromptSubmit') return leanPrompt();
-    if (input.hook_event_name === 'PreToolUse') return backgroundPre(await leanPre());
+    if (input.hook_event_name === 'PreToolUse') return backgroundPre(allocationPre(await leanPre()));
     if (input.hook_event_name === 'PostToolUse' || input.hook_event_name === 'PostToolUseFailure') return leanPost();
     return skip();
   }
@@ -1949,7 +2002,8 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
           null,
         );
       if (!ownedCall) return skip('role_not_owned');
-      const eligibility = checkEligibility(input, deps.env, config);
+      const checkedEligibility = checkEligibility(input, deps.env, config);
+    const eligibility = checkedEligibility.eligible && allocationActive ? { ...checkedEligibility, pinned: false } : checkedEligibility;
       if (!eligibility.eligible) return preserve(eligibility.code);
       if (eligibility.role === 'worker') return handleAdhocWorker(eligibility);
       // A coordinator may start orchestration itself by calling the planner; its reservation writes the transition,
@@ -1977,7 +2031,8 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       return emitDeny('guard_denied', single ? SINGLE_GUARD_DENY_REASON : GUARD_DENY_REASON, stopped ? single ? SINGLE_STOP_REASON : STOP_REASON : null);
     }
 
-    const eligibility = checkEligibility(input, deps.env, config);
+    const checkedEligibility = checkEligibility(input, deps.env, config);
+    const eligibility = checkedEligibility.eligible && allocationActive ? { ...checkedEligibility, pinned: false } : checkedEligibility;
     // Inside an orchestrated job an owned call that cannot be validated is denied, never waved through unvalidated.
     if (!eligibility.eligible) return emitDeny('dispatch_ineligible', renderDispatchDeny('dispatch_ineligible', eligibility.code), null);
     // A19: the single-executor shape has no planner and no plan, so the planner is refused and the worker call is an
@@ -2507,7 +2562,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
   };
 
   if (input.hook_event_name === 'UserPromptSubmit') return handleUserPrompt();
-  if (input.hook_event_name === 'PreToolUse') return backgroundPre(await handlePreToolUse());
+  if (input.hook_event_name === 'PreToolUse') return backgroundPre(allocationPre(await handlePreToolUse()));
   if (input.hook_event_name === 'PostToolUse') return handlePostToolUse();
   if (input.hook_event_name === 'PostToolUseFailure') return handlePostToolUseFailure();
   if (input.hook_event_name === 'Stop') return handleStop();

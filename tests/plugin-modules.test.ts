@@ -45,10 +45,10 @@ describe('the one plugin’s hooks module', () => {
     expect(mods).toEqual(expected);
   });
 
-  it('registers nothing with all three Mods off, and reads only the plugin’s own names', async () => {
+  it('keeps owned dispatch eligibility with all Mods off and reads only plugin option names', async () => {
     const off = { compactEnabled: false, outputEnabled: false, routerEnabled: false };
-    expect([...(await registered(off)).keys()]).toEqual(['session.start']);
-    expect([...(await registered({ ...off, enabled: true })).keys()]).toEqual(['session.start']);
+    expect([...(await registered(off)).keys()]).toEqual(['session.start', 'turn.complete', 'turn.step', 'agent.offer', 'agent.spawn', 'session.end']);
+    expect([...(await registered({ ...off, enabled: true })).keys()]).toEqual(['session.start', 'turn.complete', 'turn.step', 'agent.offer', 'agent.spawn', 'session.end']);
   });
 
   it('registers each event once with every option at its default, all three Mods on', async () => {

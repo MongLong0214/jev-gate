@@ -1156,9 +1156,9 @@ describe('single executor (A19)', () => {
     const env = singleEnv();
     const fetchImpl = fakeJev({ execution: 'orchestrated' });
     await run(env, promptEvent(), fetchImpl);
-    const r = await run(env, preEvent('Agent', agentInput({ prompt: 'Do what the request asks.', model: 'claude-opus-5' })), fetchImpl);
+    const r = await run(env, preEvent('Agent', agentInput({ prompt: 'Do what the request asks.', model: 'claude-opus-5-5' })), fetchImpl);
     expect(r).toMatchObject({ kind: 'patch', code: 'pinned' });
-    expect(updatedInput(r)['model']).toBe('claude-opus-5');
+    expect(updatedInput(r)['model']).toBe('claude-opus-5-5');
     expect(String(updatedInput(r)['prompt'])).toContain('Build a settings page, migrate the store and wire the two together.');
   });
 
@@ -1251,20 +1251,20 @@ describe('root guard (A6 allow-list)', () => {
 
 describe('planner dispatch', () => {
   it('patches the configured default tier and upgrades to frontier on a confident answer', async () => {
-    const env = makeEnv();
+    const env = makeEnv({ CLAUDE_PLUGIN_OPTION_ROUTERALLOWFABLE: 'true' });
     await run(env, promptEvent(), fakeJev());
     const deep = await run(env, plannerPre(), fakeJev({ planning_tier: 'deep' }));
     expect(updatedInput(deep)).toMatchObject({ subagent_type: 'jev-gate:planner', model: 'opus' });
     expect(state(env).current).toMatchObject({ phase: 'planning', planner_tier: 'deep' });
 
-    const frontierEnv = makeEnv();
+    const frontierEnv = makeEnv({ CLAUDE_PLUGIN_OPTION_ROUTERALLOWFABLE: 'true' });
     await run(frontierEnv, promptEvent(), fakeJev());
     const frontier = await run(frontierEnv, plannerPre(), fakeJev({ planning_tier: 'frontier' }));
     expect(updatedInput(frontier)).toMatchObject({ subagent_type: 'jev-gate:planner-frontier', model: 'claude-fable-5-1' });
 
     const cfg = join(tmp, 'frontier-default.json');
     writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', ...SERIAL_POLICY, admittedShape: 'hierarchy', plannerDefaultTier: 'frontier' }));
-    const defaulted = makeEnv({ JEV_GATE_CONFIG: cfg });
+    const defaulted = makeEnv({ JEV_GATE_CONFIG: cfg, CLAUDE_PLUGIN_OPTION_ROUTERALLOWFABLE: 'true' });
     await run(defaulted, promptEvent(), fakeJev());
     const abstained = await run(defaulted, plannerPre(), fakeJev({ planning_tier: 'abstain' }));
     expect(updatedInput(abstained)).toMatchObject({ subagent_type: 'jev-gate:planner-frontier', model: 'claude-fable-5-1' });
@@ -2459,7 +2459,7 @@ describe('traces', () => {
 
   it('records changed_default true only when the applied outcome differs from the no-Jev outcome (A17)', async () => {
     const dir = join(tmp, 'trace-changed');
-    const env = makeEnv({ JEV_GATE_TRACE_DIR: dir });
+    const env = makeEnv({ JEV_GATE_TRACE_DIR: dir, CLAUDE_PLUGIN_OPTION_ROUTERALLOWFABLE: 'true' });
     const fetchImpl = fakeJev({ planning_tier: 'frontier', route: 'deep', basis: 'unresolved_contract_reasoning' });
     await seedPlanned(env, PLAN_REPLY, fetchImpl);
     await run(env, preEvent('Agent', agentInput()), fetchImpl);
@@ -2471,14 +2471,14 @@ describe('traces', () => {
     expect(decision('worker')).toMatchObject({ tier: 'deep', changed_default: true });
   });
 
-  it('blocks the request when the intent record cannot be written', async () => {
+  it('preserves the policy execution when optional intent recording fails', async () => {
     const file = join(tmp, 'not-a-dir');
     writeFileSync(file, 'x');
     const env = makeEnv({ JEV_GATE_TRACE_DIR: join(file, 'sub') });
     const fetchImpl = fakeJev();
     const r = await run(env, promptEvent(), fetchImpl);
-    expect(r.code).toBe('trace_intent_failed');
-    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(r.kind).toBe('guidance');
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   /**
@@ -3180,7 +3180,7 @@ describe('receipt selection and observation keys (2026-09-20)', () => {
 
   it('records the model each decision asked for, and records none where it asked for none', async () => {
     const dir = join(tmp, 'trace-model');
-    const env = makeEnv({ JEV_GATE_TRACE_DIR: dir });
+    const env = makeEnv({ JEV_GATE_TRACE_DIR: dir, CLAUDE_PLUGIN_OPTION_ROUTERALLOWFABLE: 'true' });
     const fetchImpl = fakeJev({ planning_tier: 'frontier', route: 'deep', basis: 'unresolved_contract_reasoning' });
     await seedPlanned(env, PLAN_REPLY, fetchImpl);
     const patched = await run(env, preEvent('Agent', agentInput()), fetchImpl);
@@ -3448,5 +3448,28 @@ describe('atomic required request delivery and root handoff (#108/#111)', () => 
     await run(env, event, fetchImpl);
     expect(state(env).current.receipts).toEqual([receipt]);
     expect(state(env).current.outcome).toBeNull();
+  });
+});
+
+describe('full candidate pair in the existing Gate B batch', () => {
+  it.each(['planner', 'worker'])('applies the sixth model/max to %s without an extra Jev call', async role => {
+    const env = makeEnv();
+    if (role === 'worker') await seedPlanned(env);
+    else await run(env, promptEvent(), fakeJev());
+    const base = fakeJev();
+    const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
+      const req = JSON.parse(String(init.body));
+      expect(Object.keys(req.questions.model.criteria)).toContain('fixture-F');
+      const old = await (base as unknown as typeof fetch)(url, init); const body = await old.json() as {answers:Record<string,unknown>};
+      for (const [name, q] of Object.entries(req.questions) as Array<[string, {type:string;criteria:Record<string,string>|string[]}]>) {
+        if (name === 'model' || name === 'control' || name === 'action_risk') body.answers[name] = choice(Object.keys(q.criteria), name === 'model' ? 'fixture-F' : name === 'control' ? 'task_clear' : 'ordinary', 1);
+        if (name.startsWith('effort_')) body.answers[name] = {type:'score', probabilities:Object.fromEntries((q.criteria as string[]).map((v,i)=>[i,v.startsWith('Maximum')?1:0]))};
+      }
+      return new Response(JSON.stringify(body));
+    });
+    const allocation = { candidates: () => ['A','B','C','D','E','F'].map(n=>({id:`fixture-${n}`,description:'fixture coding model',efforts:['high','max'],omitEffort:false})), allowed: (model:string)=>model.startsWith('fixture-') };
+    const result = await run(env, role === 'planner' ? plannerPre() : preEvent('Agent',agentInput()), fetchImpl, {allocation});
+    expect(result.kind).toBe('patch'); expect(updatedInput(result).model).toBe('fixture-F'); expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(state(env).current.active[role === 'planner' ? 'toolu_plan' : 'toolu_1']?.allocation_pair).toEqual({model:'fixture-F',effort_edit:{kind:'set',value:'max'}});
   });
 });

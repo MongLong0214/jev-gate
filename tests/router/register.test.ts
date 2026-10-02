@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { JEV_MODEL } from '../../mods/router/hooks/client.ts';
-import { choice, drain, FAKE_KEY, score } from './fake-engine.ts';
+import { answering, CLEAR, choice, drain, FAKE_KEY, score } from './fake-engine.ts';
 
 /**
  * register.ts types itself against the host's `claude-code` declarations, which this Node typecheck does not load, so
@@ -46,22 +46,15 @@ const fakeHost = (world: World = {}) => {
         return world.env?.[name];
       },
     },
-    settings: { read: async () => world.settings ?? {} },
+    settings: { read: async () => ({ effortLevel: 'high', ...world.settings }) },
     session: { version: async () => version },
     ui: { log: (text: string) => logs.push(text) },
     clock: { sleep: (_ms: number, o?: { signal?: AbortSignal }) => new Promise<void>((_r, reject) => o?.signal?.addEventListener('abort', () => reject(new Error('aborted')))) },
     http: {
       fetch: async (url: string, init: { headers: Record<string, string>; body: string }) => {
         requests.push({ url, headers: init.headers });
-        const { questions } = JSON.parse(init.body) as { questions: Record<string, { criteria: Record<string, string> | string[] }> };
-        const picks: Record<string, [string, number]> = { control: ['task_clear', 0.97], action_risk: ['ordinary', 0.97], tier: ['fast', 0.95] };
-        const answers = Object.fromEntries(
-          Object.entries(questions).map(([n, q]) => {
-            const pick = picks[n] ?? ['preserve', 0.9];
-            return [n, Array.isArray(q.criteria) ? score(n, q.criteria, pick) : choice(Object.keys(q.criteria), pick)];
-          }),
-        );
-        return { status: 200, ok: true, headers: {}, text: JSON.stringify({ model: JEV_MODEL, answers, usage: { input_tokens: 800, output_tokens: 20 } }) };
+        const { questions } = JSON.parse(init.body) as { questions: Record<string, { type: string; criteria: Record<string, string> | string[] }> };
+        return answering({ ...CLEAR, tier: ['fast', .95], effort: ['low', .95] })({ url, headers: init.headers, state: {}, questions });
       },
     },
   };
@@ -142,7 +135,7 @@ describe('register', () => {
   it('routes a spawn through the host adapter with the environment key, sent only in the header', async () => {
     const host = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY } });
     const asked = await spawnThrough(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false }), host);
-    expect(asked).toBe('haiku');
+    expect(asked).toBe('claude-haiku-4-5-20251001');
     expect(host.requests).toHaveLength(1);
     expect(host.requests[0]?.headers['authorization']).toBe(`Bearer ${FAKE_KEY}`);
     expect(host.logs.join('\n')).not.toContain(FAKE_KEY);
@@ -156,7 +149,7 @@ describe('register', () => {
     ] as const) {
       const files = { [path]: JSON.stringify({ version: 1, apiKey: FAKE_KEY }) };
       const host = fakeHost({ env, files });
-      expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false }), host)).toBe('haiku');
+      expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false }), host)).toBe('claude-haiku-4-5-20251001');
       expect(host.requests[0]?.headers['authorization']).toBe(`Bearer ${FAKE_KEY}`);
       expect(host.logs.join('\n')).not.toContain(FAKE_KEY);
       const invalid = fakeHost({ env: { ...env, TYPESAFE_API_KEY: 'invalid key' }, files });
@@ -197,16 +190,21 @@ describe('register', () => {
     expect(b.requests).toHaveLength(0);
   });
 
-  it('stays native when the environment pins the child model or remaps an alias', async () => {
-    for (const name of ['CLAUDE_CODE_SUBAGENT_MODEL', 'CLAUDE_CODE_SUBAGENT_MODEL_FORCE', 'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL']) {
+  it('keeps model pins independent from effort, and resolves aliases without treating them as pins', async () => {
+    for (const name of ['CLAUDE_CODE_SUBAGENT_MODEL', 'CLAUDE_CODE_SUBAGENT_MODEL_FORCE']) {
       const host = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY, [name]: 'claude-sonnet-5' } });
-      expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false, routeSubagentEffort: false }), host), name).toBeUndefined();
-      expect(host.requests, name).toHaveLength(0);
-      // A model pin leaves the effort open: the spawn is still asked, for its subagent's effort alone.
+      expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false, routeSubagentEffort: false }), host)).toBeUndefined();
+      expect(host.requests).toHaveLength(0);
       const effort = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY, [name]: 'claude-sonnet-5' } });
-      expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false }), effort), name).toBeUndefined();
-      expect(effort.requests, name).toHaveLength(1);
-      expect(effort.logs.join('\n'), name).toContain('"effort":"per_step"');
+      expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false }), effort)).toBeUndefined();
+      expect(effort.requests).toHaveLength(1);
+      expect(effort.logs.join('\n')).toContain('"effort_asked":true');
+    }
+    for (const name of ['ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL']) {
+      const host = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY, [name]: 'claude-sonnet-5' } });
+      expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false }), host)).toBe('claude-haiku-4-5-20251001');
+      expect(host.requests).toHaveLength(1);
+      expect(host.logs.join('\n')).toContain('"model_asked":true');
     }
   });
 
@@ -214,11 +212,11 @@ describe('register', () => {
     const malformed = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY }, settings: { availableModels: 'haiku' } });
     expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false, routeSubagentEffort: false }), malformed)).toBeUndefined();
     // Nothing the list allows could be applied, so nothing is asked.
-    expect(malformed.logs.join('\n')).toContain('"no_applicable_target"');
+    expect(malformed.logs.join('\n')).toContain('"no_alternative"');
     expect(malformed.requests).toHaveLength(0);
 
     const allowed = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY }, settings: { availableModels: ['haiku', 'sonnet', 'opus'] } });
-    expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false }), allowed)).toBe('haiku');
+    expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false }), allowed)).toBe('claude-haiku-4-5-20251001');
 
     for (const version of [{ version: '2.1.282-dev.20260920', base: '2.1.282-dev' }, { version: 'local' }]) {
       const host = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY }, version });

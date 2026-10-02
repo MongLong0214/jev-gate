@@ -395,14 +395,14 @@ describe('lean — untrusted source, deadlines and failures', () => {
     expect(again.code).toBe('duplicate_request');
   });
 
-  it('an unusable trace directory blocks the request and leaves native operation alone', async () => {
+  it('an unusable optional trace directory leaves the same Lean execution available', async () => {
     const notADir = join(tmp, `trace-file-${Math.random().toString(36).slice(2)}`);
     writeFileSync(notADir, 'not a directory');
     const fetchImpl = fakeJev();
     const r = await run(makeEnv({ JEV_GATE_TRACE_DIR: notADir }), promptEvent(base().path), fetchImpl);
-    expect(fetchImpl).not.toHaveBeenCalled();
-    expect(r.kind).toBe('skip');
-    expect(r.stdout).toBeNull();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(r.kind).toBe('guidance');
+    expect(markerOf(r)).toMatch(/jev-lean-/);
   });
 
   it('two overlapping root requests: the newer owns the session and the older marker is refused', async () => {

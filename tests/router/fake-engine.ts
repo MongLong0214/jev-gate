@@ -78,6 +78,7 @@ export const fakeEngine = (o: FakeEngineOptions = {}) => {
       if (allowed.wait) await allowed.wait;
       return allowed.models;
     },
+    currentEffort: async () => 'high',
     hostBase: async () => ('hostBase' in o ? o.hostBase : '2.1.282'),
     now: () => clock.ms,
     log: (line) => {
@@ -134,8 +135,20 @@ export const answering =
       model: JEV_MODEL,
       answers: Object.fromEntries(
         Object.entries(req.questions).flatMap(([name, q]) => {
-          const pick = picks[name as keyof typeof picks];
+          const pick: Pick | undefined = picks[(name.startsWith('effort_') ? 'effort' : name === 'model' ? 'tier' : name) as keyof typeof picks];
           if (!pick) return [];
+          if (name === 'model' && !Array.isArray(q.criteria)) {
+            const family = ({ fast: 'haiku', standard: 'sonnet', deep: 'opus', frontier: 'fable' } as Record<string, string>)[pick[0]];
+            const preferred = ({ fast: 'claude-haiku-4-5-20251001', standard: 'claude-sonnet-5', deep: 'claude-opus-5-5', frontier: 'claude-fable-5-1' } as Record<string, string>)[pick[0]];
+            const id = preferred && preferred in q.criteria ? preferred : Object.keys(q.criteria).find(id => id.startsWith(preferred + '[')) ?? '__keep__';
+            return [[name, choice(Object.keys(q.criteria), [id, pick[1]])]];
+          }
+          if (name.startsWith('effort_') && Array.isArray(q.criteria)) {
+            const words: Record<string, RegExp> = { low: /^Light reasoning/, medium: /^Ordinary reasoning/, high: /^Strong reasoning/, xhigh: /^Exceptional reasoning/, max: /^Maximum sustained/ };
+            const criteria = q.criteria;
+            const at = words[pick[0]] ? criteria.findIndex(text => words[pick[0]]!.test(text)) : -1;
+            return [[name, { type: 'score', probabilities: Object.fromEntries(criteria.map((_, i) => [i, at < 0 ? 1 / criteria.length : i === at ? pick[1] : (1 - pick[1]) / (criteria.length - 1)])) }]];
+          }
           return [[name, Array.isArray(q.criteria) ? score(name, q.criteria, pick) : choice(Object.keys(q.criteria), pick)]];
         }),
       ),

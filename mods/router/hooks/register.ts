@@ -73,6 +73,33 @@ const engineOf = ($: EngineInterface, log: RouterEngine['log']): RouterEngine =>
     // A malformed allowlist allows nothing, rather than everything.
     return Array.isArray(v) && v.every((x): x is string => typeof x === 'string') ? v : [];
   },
+  currentEffort: async () => {
+    const value = (await $.settings.read())['effortLevel'];
+    return typeof value === 'number' || ['low', 'medium', 'high', 'xhigh', 'max'].includes(String(value)) ? value as 'low' | 'medium' | 'high' | 'xhigh' | 'max' | number : undefined;
+  },
+  modelAliases: async () => {
+    const [opus, sonnet, haiku, fable, bedrock, vertex, foundry, mantle, version] = await Promise.all([
+      $.env.get('ANTHROPIC_DEFAULT_OPUS_MODEL'), $.env.get('ANTHROPIC_DEFAULT_SONNET_MODEL'), $.env.get('ANTHROPIC_DEFAULT_HAIKU_MODEL'),
+      $.env.get('ANTHROPIC_DEFAULT_FABLE_MODEL'), $.env.get('CLAUDE_CODE_USE_BEDROCK'), $.env.get('CLAUDE_CODE_USE_VERTEX'),
+      $.env.get('CLAUDE_CODE_USE_FOUNDRY'), $.env.get('CLAUDE_CODE_USE_MANTLE'), $.session.version(),
+    ]);
+    // Provider-specific deployments without an explicit verified mapping remain unresolved.
+    const api = !set(bedrock) && !set(vertex) && !set(foundry) && !set(mantle);
+    const modernSonnet = /^2\.1\.(\d+)$/.test(version.base ?? '') && Number(version.base?.split('.')[2]) >= 284;
+    return { ...(opus || api ? { opus: opus || 'claude-opus-5-5' } : {}),
+      ...(sonnet || api ? { sonnet: sonnet || (modernSonnet ? 'claude-sonnet-5-5' : 'claude-sonnet-5') } : {}),
+      ...(haiku || api ? { haiku: haiku || 'claude-haiku-4-5' } : {}), ...(fable || api ? { fable: fable || 'claude-fable-5-1' } : {}) };
+  },
+  dispatchPair: async (tool, model, allowFable, agent, eligible = true, token = '') => {
+    const root = await $.env.get('CLAUDE_PLUGIN_ROOT');
+    if (!root) return null;
+    const path = root + '/dist/dispatch-policy.js';
+    if (!await $.fs.exists(path)) return null; // Standalone Router has no owned Gate state.
+    const result = await $.process.run(['node', path, await $.session.id(), tool, model, String(allowFable), agent, String(eligible), token], { timeoutMs: 500 });
+    if (result.exitCode !== 0) return { deny: 'Dispatch ownership unavailable; no child started.' };
+    const out = JSON.parse(result.stdout);
+    return out && typeof out === 'object' ? out : { deny: 'Dispatch ownership unavailable; no child started.' };
+  },
   hostBase: async () => (await $.session.version()).base,
   log,
 });
@@ -103,9 +130,9 @@ export const register: Register = (on, options) => {
 };
 
 /** The hooks for a resolved config; the combined jev-gate module (hooks/register.ts) calls this directly. */
-export const registerRouter = (on: On, config: RouterConfig): void => {
-  if (!anyRouting(config)) return;
-  const router = createRouter(config);
+export const registerRouter = (on: On, config: RouterConfig, ownedDispatch = false): void => {
+  if (!ownedDispatch && !anyRouting(config)) return;
+  const router = createRouter(config, undefined, ownedDispatch);
 
   if (router.rootEnabled) {
     on('turn.start', ($, e, next) => {

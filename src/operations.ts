@@ -159,7 +159,7 @@ const callDetails = (r: Rec): string[] => {
 };
 
 const traceFeature = (phase: string): FeatureId | null => {
-  if (phase === 'codex_router_intent' || phase === 'codex_router_result' || phase === 'codex_router_skipped' || phase === 'codex_route_applied') return 'router';
+  if (phase === 'codex_router_intent' || phase === 'codex_router_result' || phase === 'codex_router_skipped' || phase === 'codex_route_applied' || phase === 'codex_router_response') return 'router';
   if (phase === 'codex_compact') return 'compact';
   if (phase.startsWith('admission_')) return 'admission';
   if (phase.startsWith('pre_')) return 'allocation';
@@ -171,7 +171,7 @@ const traceFeature = (phase: string): FeatureId | null => {
   return null;
 };
 const traceTitle = (phase: string, r: Rec): string => ({
-  codex_router_intent: 'Router · Jev 요청', codex_router_result: 'Router · 턴 설정 결정', codex_router_skipped: 'Router · Jev 호출 생략', codex_route_applied: 'Router · Codex 적용 확인', codex_compact: 'Compact · Codex digest',
+  codex_router_intent: 'Router · Jev 요청', codex_router_result: 'Router · 턴 설정 결정', codex_router_skipped: 'Router · Jev 호출 생략', codex_router_response: 'Router · Codex 응답 관측', codex_route_applied: 'Router · Codex 요청 전송', codex_compact: 'Compact · Codex digest',
   admission_intent: 'Gate A · Jev 요청', admission_result: 'Gate A · 실행 형태',
   pre_intent: 'Gate B · Jev 요청', pre_result: 'Gate B · 등급 결정',
   interpretation_intent: '계획 해석 · Jev 요청', interpretation_result: '계획 해석 · 자문',
@@ -223,7 +223,7 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
     if (phase === 'codex_router_result') {
       summary = text(token(r['selected_model']), token(r['selected_effort']), token(r['reason']));
       const reasons = field(r, 'reasons');
-      details.push(text(`모델 ${token(reasons?.['tier']) ?? '유지'}`, `effort ${token(reasons?.['effort']) ?? '유지'}`, '선택 결과 · 실제 적용은 모델 요청에서 확인'));
+      details.push(text(`모델 ${token(reasons?.['model']) ?? token(reasons?.['tier']) ?? '유지'}`, `effort ${token(reasons?.['effort']) ?? '유지'}`, '선택 결과 · 전송과 응답 확인은 별도 기록'));
     }
     if (phase === 'admission_result') {
       details.push(text(`세션 문맥 ${n(number(r['context_tokens']))} 토큰`, `실행 floor ${n(number(r['depth_floor']))}`, token(r['depth_floor_source']), number(r['host_window']) === null ? null : `호스트 창 ${n(number(r['host_window']))} 토큰`));
@@ -247,9 +247,11 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
     summary = ({ disabled: 'Jev 기능이 꺼져 있음', router_disabled: 'Router가 꺼져 있음', key_missing: 'Jev API 키 없음', aborted: '턴 중단으로 판단 생략', model_catalog_missing: '호스트 모델 목록에서 현재 모델을 확인할 수 없음', nothing_to_change: '변경 가능한 모델·effort 없음' } as Record<string, string>)[String(r['reason'])] ?? '원래 호스트 설정 유지';
     details.push('Jev 전송 없음 · 원래 모델·effort 유지');
   } else if (phase === 'codex_route_applied') {
-    lane = 'host'; summary = text(r['applied'] === true ? '선택한 설정 적용 확인' : '선택과 실행 설정 불일치', token(r['observed_model']), token(r['observed_effort']));
-    details.push(text('실제 Codex 모델 요청', `선택 ${token(r['selected_model']) ?? '?'} / ${token(r['selected_effort']) ?? '?'}`));
-    if (r['effort_resolution'] === 'native_ultra') details.push(`Codex Ultra 선택 확인 · 네이티브 추론 요청 effort ${token(r['observed_effort']) ?? '?'} · Codex가 변환한 값`);
+    lane = 'host'; summary = text('Codex 요청에 설정 제출', token(r['submitted_model'] ?? r['observed_model']), token(r['submitted_effort']));
+    details.push('요청 전송 관측 · 응답 모델과 실제 effort는 아직 미확인');
+  } else if (phase === 'codex_router_response') {
+    lane = 'host'; summary = text('Codex 응답 관측', token(r['observed_model']) ?? '모델 미확인', r['observed_effort'] === 'unknown' ? 'effort 미확인' : token(r['observed_effort']));
+    details.push('응답이 보고한 값만 표시');
   } else if (phase === 'codex_compact') {
     lane = r['applied'] === true ? 'host' : 'local';
     summary = r['applied'] === true ? '추출형 digest 설치 확인 · 요약 모델 호출 대체' : '추출형 digest 생성 · 호스트 설치 대기';
@@ -324,8 +326,17 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
   const duration = measured !== null && measured >= 0 ? measured : phase === 'evidence_result' ? number(r['duration_ms']) : null;
   const sentAt = requestId && phase.endsWith('_result') ? intents.get(`${requestId}:${phase.replace(/_result$/, '_intent')}`) : undefined;
   const elapsed = sentAt ? Date.parse(at) - Date.parse(sentAt) : null;
-  const model = phase === 'codex_route_applied' ? modelObservation(r['selected_model'], r['observed_model'], r['selected_effort'], r['observed_effort'])
+  const model = phase === 'codex_router_response' ? modelObservation(r['selected_model'], r['observed_model'], r['selected_effort'], r['observed_effort'])
+    : phase === 'codex_route_applied' ? modelObservation(r['selected_model'], null, r['selected_effort'], null, 'unobserved')
     : phase === 'post' || phase === 'failure' ? modelObservation(r['requested_model'], r['resolved_model']) : undefined;
+  if (phase.startsWith('codex_router_')) {
+    details.push(text(`baseline ${token(r['baseline_model']) ?? '?'}`, token(r['baseline_effort'])));
+    if (number(r['discovered_count']) !== null) details.push(text(`발견 ${n(number(r['discovered_count']))}`, `적격 ${n(number(r['eligible_count']))}`, `제시 ${n(number(r['offered_count']))}`, r['catalog_complete'] === true ? '목록 완전' : '목록 부분/미확인'));
+    details.push(text(`model 질문 ${r['model_asked'] === true ? '함' : token(r['model_not_asked']) ?? '미확인'}`, `effort 질문 ${r['effort_asked'] === true ? '함' : token(r['effort_not_asked']) ?? '미확인'}`));
+    if (typeof r['allow_astra'] === 'boolean') details.push(`Astra 자동 선택 ${r['allow_astra'] ? 'ON' : 'OFF'}`);
+    const exclusions = field(r, 'excluded');
+    if (exclusions) details.push(text(...Object.entries(exclusions).flatMap(([reason, value]) => number(value) ? [`제외 ${reason} ${n(number(value))}`] : [])));
+  }
   if (model?.status === 'mismatch' || phase === 'codex_route_applied' && r['applied'] === false) state = 'error';
   return { id: id(ownId), at, feature, state, lane, title: traceTitle(phase, r), summary, details: details.filter(Boolean), ...(model ? { model } : {}),
     ...(['stop', 'background_conversation'].includes(phase) ? { lifecycle: true } : {}),
@@ -357,6 +368,8 @@ const debugStep = (row: DebugRecord, now: number, closed: Set<string>): Operatio
     if (failedAssessment) summary = text('Jev 판정 실패 · 원래 호스트 설정 유지', token(r['assessment']));
     details.push(text(`기존 모델 ${token(from?.['model']) ?? token(r['from']) ?? '?'}`, `기존 effort ${token(from?.['effort']) ?? '?'}`));
     if (number(r['preparation_ms']) !== null) details.push(`Router 준비 ${n(number(r['preparation_ms']))}ms · Jev 응답 시간과 별도 · 예산 ${n(number(r['budget_ms']))}ms`);
+    if (number(r['discovered_count']) !== null) details.push(text(`발견 ${n(number(r['discovered_count']))}`, `적격 ${n(number(r['eligible_count']))}`, `제시 ${n(number(r['offered_count']))}`, r['catalog_complete'] === true ? '목록 완전' : '목록 부분/미확인'));
+    if (typeof r['allow_fable'] === 'boolean') details.push(`Fable 자동 선택 ${r['allow_fable'] ? 'ON' : 'OFF'}`);
     details.push(text(`요청 변경 모델 ${token(patch?.['model']) ?? '?'}`, `요청 변경 effort ${token(patch?.['effort']) ?? token(r['patch']) ?? '?'}`));
     details.push(text(`모델 이유 ${token(reasons?.['model']) ?? '?'}`, `effort 이유 ${token(reasons?.['effort']) ?? '?'}`, `실제 적용 effort ${token(applied?.['effort']) ?? '?'}`, `관측 모델 ${token(r['observed']) ?? '?'}`));
     const usage = field(r, 'usage');

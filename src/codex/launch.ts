@@ -9,7 +9,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { CodexRpc } from './rpc.js';
 import { CodexPolicy } from './policy.js';
 import { obj } from './source.js';
-import { loadCodexPolicy } from './config.js';
+import { runtimeCodexPolicy } from './config.js';
 import { extractCodexCompact, isCodexCompactRequest, compactResponse } from './compact.js';
 import { codexTraceDir } from '../codex-paths.js';
 import { openTraceDir } from '../trace.js';
@@ -42,7 +42,7 @@ export interface CodexLaunchOptions {
 export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ url: string; token: string; policy: CodexPolicy; rpc: CodexRpc; close: () => Promise<void> }> => {
   const token = options.connection?.token ?? randomBytes(32).toString('hex');
   const marker = options.connection?.marker ?? `[jev-gate compact ${randomBytes(24).toString('hex')}] Produce a factual compaction summary of the preceding conversation.`;
-  const config = loadCodexPolicy(options.env);
+  const config = runtimeCodexPolicy(options.env);
   const trace = openTraceDir(codexTraceDir(options.env), options.env);
   let child: ChildProcessWithoutNullStreams | undefined;
   let rpc: CodexRpc | undefined; let policy: CodexPolicy | undefined; let client: WebSocket | undefined;
@@ -101,7 +101,7 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
             const selected = await policy.externalRequest(sessionId, parsed, cancelled.signal);
             if (selected.stop) { res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' }); res.end(compactResponse(selected.stop)); return; }
             payload = Buffer.from(JSON.stringify(selected.request)); modified = true;
-          } else policy.observeRequest(sessionId, parsed);
+          }
         }
       }
       if (config.compact.enabled && req.method === 'POST' && path === '/responses') {
@@ -128,10 +128,12 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
         delete headers['x-openai-account-routing-override'];
         if (routing.override !== 'NO_CONSTRAINT') headers['x-openai-account-routing-override'] = routing.override;
       }
+      if (res.destroyed || req.destroyed && !req.complete) return;
+      let submitted: ReturnType<CodexPolicy['observeRequest']>;
       const upstream = (base.protocol === 'https:' ? httpsRequest : httpRequest)(base, { method: req.method, headers }, response => {
         const output = Object.fromEntries(Object.entries(response.headers).filter(([k]) => !['connection', 'transfer-encoding'].includes(k)));
         res.writeHead(response.statusCode ?? 502, output); response.pipe(res);
-        if (options.connection && sessionId && response.statusCode === 200 && String(response.headers['content-type']).includes('text/event-stream')) {
+        if (sessionId && response.statusCode === 200 && String(response.headers['content-type']).includes('text/event-stream')) {
           let buffer = ''; const decoder = new StringDecoder('utf8');
           response.on('data', chunk => {
             buffer += decoder.write(Buffer.from(chunk));
@@ -140,7 +142,7 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
             while ((end = buffer.indexOf('\n\n')) >= 0) {
               const event = buffer.slice(0, end); buffer = buffer.slice(end + 2);
               const data = event.split('\n').filter(line => line.startsWith('data:')).map(line => line.slice(5).trim()).join('\n');
-              try { const value = obj(JSON.parse(data)); if (value?.['type'] === 'response.completed') policy?.observeUsage(sessionId, obj(value['response']) ?? {}); } catch { /* Unknown events are forwarded unchanged. */ }
+              try { const value = obj(JSON.parse(data)); if (value?.['type'] === 'response.completed') policy?.observeUsage(sessionId, obj(value['response']) ?? {}, submitted); } catch { /* Unknown events are forwarded unchanged. */ }
             }
           });
         }
@@ -148,6 +150,9 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
       requests.add(upstream); upstream.once('close', () => requests.delete(upstream));
       upstream.on('error', () => { if (!res.headersSent) res.writeHead(502); res.end(); });
       res.on('close', () => { if (!res.writableEnded) upstream.destroy(); });
+      if (req.method === 'POST' && path === '/responses' && sessionId && policy) {
+        try { submitted = policy.observeRequest(sessionId, obj(JSON.parse((modified ? payload : decoded).toString('utf8'))) ?? {}); } catch { /* Observation does not block sending. */ }
+      }
       upstream.end(payload);
     } catch { if (!res.headersSent) res.writeHead(502); res.end(); }
   });

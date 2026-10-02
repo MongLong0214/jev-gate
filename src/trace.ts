@@ -20,6 +20,7 @@ export type TracePhase =
   | 'codex_router_intent'
   | 'codex_router_result'
   | 'codex_router_skipped'
+  | 'codex_router_response'
   | 'codex_route_applied'
   | 'codex_compact'
   | 'codex_event'

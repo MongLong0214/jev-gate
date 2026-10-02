@@ -50,7 +50,7 @@ export const codexSource = (items: readonly Obj[], binding: LeanSourceBinding, e
   const groups = safe.filter(g => g.mandatory || seen++ >= window).map(g => ({ ...g, id: g.mandatory ? `m${++mandatory}` : `g${++optional}` }));
   const unassessed = secret + window;
   return { ok: true, source: {
-    request: binding.request, groups, epoch, prefixDigest: sha(JSON.stringify(prefix)),
+    request: binding.request, groups, epoch, prefixDigest: sha(JSON.stringify(prefix.map(i => { if (i['type'] !== 'agentMessage') return i; const { phase: _transportPhase, ...facts } = i; return facts; }))),
     newerHumanText: own >= 0 && items.slice(own + 1).some(i => i['type'] === 'userMessage'), requestRecorded: own >= 0,
     coverage: unassessed ? 'partial' : 'complete', unassessed, excluded: { secret, window, unattributed: 0 },
     hostContext: prefix.filter(i => i['type'] === 'hookPrompt').length, abandoned: 0, bytesRead: bytes, durationMs: 0,

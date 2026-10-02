@@ -14,6 +14,7 @@ describe('resolveConfig', () => {
     const c = ok({});
     expect(c).toMatchObject({
       enabled: true,
+      allowFable: false,
       routeSubagentModel: true,
       routeExplicitSpawnModel: true,
       routeSubagentEffort: true,
@@ -74,10 +75,10 @@ describe('resolveConfig', () => {
     }
   });
 
-  it('keeps no profile at all when two name one family, since every rank lookup would be a guess', () => {
+  it('keeps role preferences when multiple roles name one family', () => {
     const c = ok({ standardModel: 'opus' });
-    expect(c.tiers).toEqual({});
-    expect(c.tierIssues.map((i) => i.reason)).toEqual(['ambiguous', 'ambiguous', 'ambiguous', 'ambiguous']);
+    expect(c.tiers).toEqual({ fast: 'haiku', standard: 'opus', deep: 'opus', frontier: 'claude-fable-5-1' });
+    expect(c.tierIssues).toEqual([]);
     expect(ok({ deepModel: 'claude-opus-5-5', frontierModel: 'claude-fable-5-1' }).tiers).toEqual({
       fast: 'haiku',
       standard: 'sonnet',
