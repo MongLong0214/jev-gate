@@ -147,7 +147,7 @@ export const answering =
             const words: Record<string, RegExp> = { low: /^Light reasoning/, medium: /^Ordinary reasoning/, high: /^Strong reasoning/, xhigh: /^Exceptional reasoning/, max: /^Maximum sustained/ };
             const criteria = q.criteria;
             const at = words[pick[0]] ? criteria.findIndex(text => words[pick[0]]!.test(text)) : -1;
-            return [[name, { type: 'score', probabilities: Object.fromEntries(criteria.map((_, i) => [i, at < 0 ? 1 / criteria.length : i === at ? pick[1] : (1 - pick[1]) / (criteria.length - 1)])) }]];
+            return [[name, { type: 'score', probabilities: at < 0 ? {} : Object.fromEntries(criteria.map((_, i) => [i, i === at ? pick[1] : (1 - pick[1]) / (criteria.length - 1)])) }]];
           }
           return [[name, Array.isArray(q.criteria) ? score(name, q.criteria, pick) : choice(Object.keys(q.criteria), pick)]];
         }),

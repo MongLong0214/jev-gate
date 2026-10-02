@@ -5,8 +5,8 @@ export const GUIDANCE_HEADER = '[Jev Gate coordinator guidance for this session]
 
 export const DIRECT_GUIDANCE = [
   'Keep the current request and relevant prior user constraints authoritative.',
-  'Complete small self-contained work directly; do not delegate individual file reads.',
-  'Delegate a bounded implementation outcome to a jev-gate worker only when it is genuinely separable.',
+  'Keep the main conversation for coordination and result integration. For a complete bounded repository lookup, file or symbol search, listing, or mechanical edit with focused checks, dispatch the whole outcome once to jev-gate:worker-fast without a model argument.',
+  'Do not spawn a worker for each file read or tool step of a larger unresolved task. Give one worker the complete bounded outcome, then integrate its result. Conversational answers stay in the main session.',
   'Include the outcome, original restrictions, established interfaces, file locations and requested checks.',
   "Integrate returned results and check the complete user's outcome before claiming success.",
   'Respect explicit models, no-delegation requests, plan mode, permissions and cancellation.',
@@ -87,11 +87,11 @@ export const orchestrationRules = (cap: number, workerIsolation: WorkerIsolation
  * saving measured at depth comes from starting in a fresh context or from splitting the work, which every figure in
  * this repository so far confounds.
  */
-export const singleRules = (allowTools: readonly string[] = [], allowMcp = false): string[] => [
+export const singleRules = (allowTools: readonly string[] = [], allowMcp = false, preferFastWorker = false): string[] => [
   'You do not implement this request yourself; you coordinate.',
   BACKGROUND_GUIDANCE,
   renderToolRule('one Agent call to the jev-gate worker role', allowTools, allowMcp),
-  'Dispatch this request once, whole, to jev-gate:worker. There is no plan for this request: jev-gate:planner is denied, and splitting the work across several workers is not what this shape does.',
+  `Dispatch this request once, whole, to ${preferFastWorker ? 'jev-gate:worker-fast' : 'jev-gate:worker'}. There is no plan for this request: jev-gate:planner is denied, and splitting the work across several workers is not what this shape does.`,
   DISPATCH_FIRST_SENTENCE,
   'Your brief does not have to restate the request: the hook appends the user\'s own request verbatim, and the worker is told it is the task.',
   'Never pass a model argument to an owned agent call.',
@@ -100,6 +100,7 @@ export const singleRules = (allowTools: readonly string[] = [], allowMcp = false
 ];
 
 export interface SingleGuidanceOptions {
+  preferFastWorker?: boolean;
   mode: RoutingMode;
   confidence: number | null;
   superseded: boolean;
@@ -111,7 +112,7 @@ export const renderSingleGuidance = (opts: SingleGuidanceOptions): string =>
   [
     GUIDANCE_HEADER,
     opts.mode === 'auto' ? renderAdmissionLine(opts.confidence) : NATIVE_ORCHESTRATION_SENTENCE,
-    ...singleRules(opts.guardAllowTools, opts.guardAllowMcp),
+    ...singleRules(opts.guardAllowTools, opts.guardAllowMcp, opts.preferFastWorker),
     ...(opts.superseded ? [SUPERSEDED_SENTENCE] : []),
   ].join('\n');
 
@@ -123,7 +124,9 @@ export const NATIVE_ORCHESTRATION_SENTENCE = 'You decide whether to start planni
 export const renderAdmissionLine = (confidence: number | null): string =>
   `Execution shape: orchestrated${confidence === null ? '' : ` (admission confidence ${confidence.toFixed(2)})`}.`;
 
-export const renderDirectGuidance = (mode: RoutingMode): string => [GUIDANCE_HEADER, ...DIRECT_GUIDANCE, DIRECT_MODE_SENTENCE[mode]].join('\n');
+export const renderDirectGuidance = (mode: RoutingMode, delegationForbidden = false): string => [GUIDANCE_HEADER, ...(delegationForbidden ? [
+  'The user explicitly prohibited delegation. Complete this request in the main conversation without a worker or planner. Keep the original restrictions and native permissions authoritative.',
+] : DIRECT_GUIDANCE), DIRECT_MODE_SENTENCE[mode]].join('\n');
 
 export interface OrchestrationGuidanceOptions {
   mode: RoutingMode;
@@ -165,7 +168,7 @@ export const GUARD_DENY_REASON =
 
 /** A single job has no planner, marker or task contract. Its guard must describe the actual dispatch. */
 export const SINGLE_GUARD_DENY_REASON =
-  'Jev Gate single-worker execution is active for this request. Dispatch the whole request once to jev-gate:worker as a background call; the hook appends the original request. No planner or JEV_TASK marker is required. Nothing was changed by this call.';
+  'Jev Gate single-worker execution is active for this request. Dispatch the whole request once to the Jev Gate worker role selected in coordinator guidance as a background call; the hook appends the original request. No planner or JEV_TASK marker is required. Nothing was changed by this call.';
 
 export const SINGLE_STOP_REASON =
   'Jev Gate: the main session repeatedly tried to implement this admitted request directly instead of dispatching its single worker. Nothing further will run for this request. Relaunch with JEV_GATE_MODE=off to work without delegation.';
@@ -183,7 +186,7 @@ const DISPATCH_DENY_TEXT: Record<DenyReason, string> = {
   deps_incomplete: 'This task still has dependencies without an accepted receipt for the current contract. Dispatch its predecessors first.',
   phase_not_planned: 'No valid plan is active for this request. Call jev-gate:planner and wait for a ready plan before dispatching workers.',
   single_shape:
-    'This request was admitted as a single executor, so there is no plan to make and the planner is not available for it. Dispatch the whole request once to jev-gate:worker; the hook appends the user\'s own request to your brief.',
+    'This request was admitted as a single executor, so there is no plan to make and the planner is not available for it. Dispatch the whole request once to the Jev Gate worker role selected in coordinator guidance; the hook appends the user\'s own request to your brief.',
   task_active:
     'This task is already running and its worker was never observed to stop, so a second dispatch of it is refused rather than replacing a live writer. Wait for its result, or cancel it in the session first.',
   task_accepted: 'This task already has an accepted receipt for the current contract. Add attempt=<n> only to deliberately rework it.',

@@ -8,6 +8,10 @@ export const EFFORT_ORDER: readonly SymbolicEffort[] = ['low', 'medium', 'high',
 
 export type Family = 'haiku' | 'sonnet' | 'opus' | 'fable';
 
+/** Agent.model accepts family tokens only. Actual IDs belong at the native agent.spawn boundary. */
+export const claudeAgentToolModel = (model: string): Family | null =>
+  ['haiku', 'sonnet', 'opus', 'fable'].includes(model) ? model as Family : factsOf(model)?.family ?? null;
+
 export interface ModelFacts {
   /** Every full identifier the host may send for this model, matched exactly. */
   ids: readonly string[];
@@ -19,6 +23,10 @@ export interface ModelFacts {
   suffixes: readonly string[];
   family: Family;
   contextTokens: number;
+  /** Documented output limit, used to reserve the entire possible response when switching to a smaller window. */
+  maxOutputTokens?: number;
+  /** Published model role; omitted for legacy versions without a current description. */
+  role?: string;
   /** Levels valid under every thinking mode the model accepts. Empty when the model takes no effort at all. */
   unconditionalEffort: readonly SymbolicEffort[];
   /**
@@ -30,15 +38,15 @@ export interface ModelFacts {
 
 export const MODEL_FACTS: readonly ModelFacts[] = [
   { ids: ['claude-fable-5'], suffixes: ['[1m]'], family: 'fable', contextTokens: 1_000_000, unconditionalEffort: ['low', 'medium', 'high', 'xhigh', 'max'], conditionalEffort: [] },
-  { ids: ['claude-sonnet-5-5', 'anthropic.claude-sonnet-5-5'], suffixes: ['[1m]'], family: 'sonnet', contextTokens: 1_000_000, unconditionalEffort: ['low', 'medium', 'high'], conditionalEffort: ['xhigh', 'max'] },
+  { ids: ['claude-sonnet-5-5', 'anthropic.claude-sonnet-5-5'], suffixes: ['[1m]'], family: 'sonnet', contextTokens: 1_000_000, role: 'Fast model combining speed and intelligence; daily coding and bounded implementation.', unconditionalEffort: ['low', 'medium', 'high'], conditionalEffort: ['xhigh', 'max'] },
   // Adaptive thinking is always on, so no thinking-disabled request exists to make xhigh or max invalid.
-  { ids: ['claude-fable-5-1', 'anthropic.claude-fable-5-1'], suffixes: [], family: 'fable', contextTokens: 1_000_000, unconditionalEffort: ['low', 'medium', 'high', 'xhigh', 'max'], conditionalEffort: [] },
-  { ids: ['claude-opus-5-5', 'anthropic.claude-opus-5-5'], suffixes: ['[1m]'], family: 'opus', contextTokens: 1_000_000, unconditionalEffort: ['low', 'medium', 'high', 'xhigh', 'max'], conditionalEffort: [] },
+  { ids: ['claude-fable-5-1', 'anthropic.claude-fable-5-1'], suffixes: [], family: 'fable', contextTokens: 1_000_000, role: 'Demanding reasoning and long-horizon agentic work, when Opus at higher effort is insufficient.', unconditionalEffort: ['low', 'medium', 'high', 'xhigh', 'max'], conditionalEffort: [] },
+  { ids: ['claude-opus-5-5', 'anthropic.claude-opus-5-5'], suffixes: ['[1m]'], family: 'opus', contextTokens: 1_000_000, role: 'Long-running agentic coding, complex reasoning and knowledge work.', unconditionalEffort: ['low', 'medium', 'high', 'xhigh', 'max'], conditionalEffort: [] },
   // Opus 5 permits thinking-disabled requests, which reject xhigh/max (official opus-5/overview).
   { ids: ['claude-opus-5', 'anthropic.claude-opus-5'], suffixes: [], family: 'opus', contextTokens: 1_000_000, unconditionalEffort: ['low', 'medium', 'high'], conditionalEffort: ['xhigh', 'max'] },
   { ids: ['claude-sonnet-5'], suffixes: ['[1m]'], family: 'sonnet', contextTokens: 1_000_000, unconditionalEffort: ['low', 'medium', 'high'], conditionalEffort: ['xhigh', 'max'] },
   // No effort parameter at all.
-  { ids: ['claude-haiku-4-5-20251001', 'claude-haiku-4-5', 'anthropic.claude-haiku-4-5', 'claude-haiku-4-5@20251001'], suffixes: [], family: 'haiku', contextTokens: 200_000, unconditionalEffort: [], conditionalEffort: [] },
+  { ids: ['claude-haiku-4-5-20251001', 'claude-haiku-4-5', 'anthropic.claude-haiku-4-5', 'claude-haiku-4-5@20251001'], suffixes: [], family: 'haiku', contextTokens: 200_000, maxOutputTokens: 64_000, role: 'Fastest model; simple tasks, lookup and mechanical transformations with clear checks.', unconditionalEffort: [], conditionalEffort: [] },
 ];
 
 /** The aliases the Agent tool resolves itself. Root requests never receive one of these. */

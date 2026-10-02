@@ -22,6 +22,7 @@ import { selectRecentPrompts } from '../recent-prompts.js';
 import { wireSource } from './wire.js';
 import { normalizeCatalog, codexTargetAllowed, generalCodexModel } from './catalog.js';
 import { applyEffort, type PairPatch } from '../../mods/router/hooks/selection.ts';
+import type { RoutingCache } from '../../mods/router/hooks/context.ts';
 
 export interface CodexSubmission { prompt: string | null; model: string; effort: string | null; requestId: string }
 interface WorkerDispatch {
@@ -47,6 +48,7 @@ interface Session {
   recentRequests?: string[];
   dispatch?: WorkerDispatch;
   lastCompactSummary?: string;
+  cache?: RoutingCache & { at: number };
 }
 const contextOf = (result: { stdout: string | null }): string => {
   if (!result.stdout) return '';
@@ -217,6 +219,7 @@ export class CodexPolicy {
           if (out.defaultReasoningEffort && !out.supportedReasoningEfforts.some(e => e.reasoningEffort === out.defaultReasoningEffort)) delete out.defaultReasoningEffort; return out; });
         const patch = await routeCodex({ ...baseline, task, ...(previousReply ? { previousReply } : {}),
           recentRequests: session.recentRequests ?? [], session: id, prompt, catalog, catalogComplete: this.catalogComplete, catalogExcluded: this.catalogExcluded,
+          ...(session.cache ? { cache: { ...session.cache, ageMs: Math.max(0, Date.now() - session.cache.at) } } : {}),
           config: { ...config, router: { ...config.router, timeoutMs: remaining } }, env: this.env,
           ...(this.trace ? { trace: this.trace } : {}), signal: requestController ? AbortSignal.any([signal, requestController.signal]) : signal,
           ...(this.fetchImpl ? { fetchImpl: this.fetchImpl } : {}) });
@@ -242,8 +245,13 @@ export class CodexPolicy {
     if (session && binding) {
       const model = typeof response['model'] === 'string' ? response['model'] : null;
       const effort = obj(response['reasoning'])?.['effort'];
+      if (binding.prompt === session.prompt && model === binding.model) {
+        const usage = obj(response['usage']); const counts = obj(usage?.['input_tokens_details']);
+        const count = (v: unknown): number | null => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? v : null;
+        session.cache = { model, input: count(usage?.['input_tokens']), read: count(counts?.['cached_tokens']), write: count(counts?.['cache_write_tokens']), ageMs: 0, at: Date.now(), source: 'provider_response_usage' };
+      }
       this.trace?.write('codex_router_response', { host: 'codex', session_id: id, prompt_id: binding.prompt, request_id: binding.requestId, stage: 'response',
-        selected_model: binding.model, selected_effort: binding.effort, observed_model: model, observed_effort: typeof effort === 'string' ? effort : 'unknown',
+        selected_model: binding.model, selected_effort: binding.effort, submitted_effort: binding.effort, observed_model: model, observed_effort: typeof effort === 'string' ? effort : 'unknown',
         reason: model === null ? 'response_unconfirmed' : model !== binding.model ? 'mismatch' : 'response_model_confirmed' });
     }
     if (session?.external && (!binding || binding.prompt === session.prompt)) {
@@ -347,6 +355,7 @@ export class CodexPolicy {
       const catalogEpoch = this.catalogEpoch;
       const patch = Date.now() >= deadline ? {} : await routeCodex({ model: session.baseline.model, effort: session.baseline.effort,
         task, recentRequests, catalogComplete: this.catalogComplete, catalogExcluded: this.catalogExcluded, ...(typeof previousReply === 'string' ? { previousReply } : {}), session: session.id, prompt, catalog: this.catalog, config: { ...session.policy, router: { ...session.policy.router, timeoutMs: Math.max(1, deadline - Date.now()) } }, env: this.env,
+        ...(session.cache ? { cache: { ...session.cache, ageMs: Math.max(0, Date.now() - session.cache.at) } } : {}),
         ...(this.trace ? { trace: this.trace } : {}), signal: controller.signal, ...(this.fetchImpl ? { fetchImpl: this.fetchImpl } : {}) });
       if (controller.signal.aborted || session.controller !== controller || session.prompt !== prompt) {
         if ('id' in message) this.rpc.emit({ id: message['id'], error: { code: -32800, message: 'Turn interrupted before Jev policy completed.' } });
@@ -385,6 +394,10 @@ export class CodexPolicy {
       const usage = obj(p['tokenUsage']); const last = obj(usage?.['last']);
       session.tokens = typeof last?.['inputTokens'] === 'number' ? last['inputTokens'] : null;
       session.window = typeof usage?.['modelContextWindow'] === 'number' ? usage['modelContextWindow'] : null;
+      if (session.turn && p['turnId'] === session.turn && !session.parent) {
+        const count = (v: unknown): number | null => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? v : null;
+        session.cache = { model: session.route?.model ?? session.baseline.model, input: count(last?.['inputTokens']), read: count(last?.['cachedInputTokens']), write: null, ageMs: 0, at: Date.now(), source: 'host_usage' };
+      }
     }
     if (message['method'] === 'item/started' || message['method'] === 'item/completed') {
       const item = obj(p['item']); if (!item) return;

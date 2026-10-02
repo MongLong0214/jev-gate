@@ -7,7 +7,7 @@ import type { SymbolicEffort } from '../../mods/router/hooks/models.ts';
 import { offerableEfforts, TIER_LEVELS } from '../../mods/router/hooks/policy.ts';
 import type { SpawnEvent, SpawnOutcome, TurnStepEvent } from '../../mods/router/hooks/router.ts';
 import { cachePatch, createRouter, hostSupported, VERIFIED_HOST } from '../../mods/router/hooks/router.ts';
-import { answering, CLEAR, deferred, drain, FAKE_KEY, fakeEngine, streamNext } from './fake-engine.ts';
+import { answering, choice, CLEAR, deferred, drain, FAKE_KEY, fakeEngine, streamNext } from './fake-engine.ts';
 
 const configOf = (options: Record<string, string | number | boolean>) => {
   const r = resolveConfig({ enabled: true, allowFable: true, ...options });
@@ -33,6 +33,92 @@ const TEXT = 'Rename the helper parseRow to parseRecord in src/rows.ts and updat
 const step = (over: Partial<TurnStepEvent> = {}): TurnStepEvent => ({ turnId: 't1', index: 0, model: 'claude-opus-5-5', effort: 'high', ...over });
 
 const settle = () => new Promise((r) => setTimeout(r, 0));
+describe('root window compatibility at the current request', () => {
+  it.each(['native_default', 'native_echo', 'conditional_haiku_echo', 'conditional_haiku_default'] as const)('reassesses three root turns and reuses only the current turn: %s', async mode => {
+    let phase = 0;
+    const targets = ['claude-sonnet-5-5', mode.startsWith('conditional') ? 'claude-haiku-4-5-20251001' : 'claude-sonnet-5-5', 'claude-opus-5-5'];
+    const router = createRouter(configOf({ routeMainModel: true, routeMainEffort: true, ...SUBAGENT_OFF }));
+    const f = fakeEngine({ hostBase: '2.1.287', respond: req => {
+      const target = targets[phase]!;
+      const q = req.questions.model?.criteria as Record<string, string> | undefined;
+      const pick = q && target in q ? target : '__keep__';
+      return { status: 200, text: JSON.stringify({ model: JEV_MODEL, answers: Object.fromEntries(Object.entries(req.questions).map(([name, q]) => [name,
+        q.type === 'choice' ? choice(Object.keys(q.criteria), [name === 'model' ? pick : name === 'control' ? 'task_clear' : 'ordinary', .99]) :
+          { type: 'score', probabilities: Object.fromEntries((q.criteria as string[]).map((s, i) => [i, s.startsWith(phase < 2 ? 'Light reasoning' : 'Strong reasoning') ? 1 : 0])) }])) }) };
+    } });
+    // A complete current-request bound and compatible transform are synthetic capabilities, not Claude host evidence.
+    f.engine.currentContextBound = async (turnId, index) => ({ turnId, index, inputUpperBound: 20_000, compatible: true });
+    f.engine.currentEffort = async () => undefined;
+    for (phase = 0; phase < 3; phase++) {
+      const turnId = `turn-${phase}`;
+      const model = phase === 0 || mode.endsWith('default') ? 'claude-opus-5-5' : targets[phase - 1]!;
+      const e = { turnId, index: 0, model, ...(model.includes('haiku') ? {} : { effort: phase === 0 || mode.endsWith('default') ? 'high' as const : 'low' as const }) };
+      router.turnStart({ turnId, text: phase === 0 ? 'Find the exact helper file.' : phase === 1 ? 'Find the exact caller file.' : 'Continue: diagnose the concurrency failure and fix it without changing the API.' });
+      const expected = { ...e, model: targets[phase]!, ...(targets[phase]!.includes('haiku') ? {} : { effort: phase < 2 ? 'low' : 'high' }) };
+      if (targets[phase]!.includes('haiku')) delete expected.effort;
+      const first = streamNext<TurnStepEvent>(undefined, { input_tokens: 900, cache_read_input_tokens: 40_000, cache_creation_input_tokens: 1000 });
+      await drain(router.turnStep(f.engine, e, first.next));
+      expect(first.calls).toEqual([expected]);
+      const later = streamNext<TurnStepEvent>();
+      await drain(router.turnStep(f.engine, { ...e, index: 1 }, later.next));
+      expect(later.calls).toEqual([{ ...expected, index: 1 }]);
+      expect(f.sent).toHaveLength(phase + 1);
+      router.turnComplete({ turnId, reason: 'answer', answer: 'Observed result.' });
+    }
+    expect(f.logs.filter(l => l.event === 'root').map(l => l.turn)).toEqual(['turn-0', 'turn-1', 'turn-2']);
+    expect(f.sent[1]?.state).toMatchObject({ execution: { cache: { source: 'provider_response_usage', cross_model_reuse_proven: false, current_fit_proven: false } } });
+    expect(f.logs.filter(l => l.event === 'root')[2]).toMatchObject({ selection: { direction: mode.endsWith('default') ? 'unknown' : 'upgrade' }, reasons: { model: mode.endsWith('default') ? 'same_value' : 'selected' } });
+  });
+  it('does not let a late retired root response or completion replace newer cache and visible context', async () => {
+    const router = createRouter(configOf(EFFORT_ONLY));
+    const f = fakeEngine({ respond: answering({ ...CLEAR, effort: ['low', .99] }) });
+    const late = deferred<void>(); let started = false;
+    const next = Object.assign(async function* (e: TurnStepEvent) {
+      started = true; await late.promise;
+      return { answer: 'OLD_REPLY', usage: { model: e.model, input_tokens: 11, cache_read_input_tokens: 111 } };
+    }, { signal: new AbortController().signal });
+    router.turnStart({ turnId: 't1', text: TEXT });
+    const old = drain(router.turnStep(f.engine, step(), next));
+    await vi.waitFor(() => expect(started).toBe(true));
+    router.turnStart({ turnId: 't2', text: 'Find the current file.' });
+    await drain(router.turnStep(f.engine, step({ turnId: 't2' }), streamNext<TurnStepEvent>(undefined, { input_tokens: 22, cache_read_input_tokens: 222 }).next));
+    router.turnComplete({ turnId: 't2', reason: 'answer', answer: 'NEW_REPLY' });
+    late.resolve(); await old;
+    router.turnComplete({ turnId: 't1', reason: 'answer', answer: 'OLD_REPLY' });
+    router.turnStart({ turnId: 't3', text: 'Continue' });
+    await drain(router.turnStep(f.engine, step({ turnId: 't3' }), streamNext<TurnStepEvent>().next));
+    expect(f.sent[2]?.state).toMatchObject({ task: { previous_reply: 'NEW_REPLY' }, execution: { cache: { cache_read_tokens: 222 } } });
+  });
+  it.each(['effective', 'unknown', 'numeric', 'auto', 'pinned'] as const)('resolves an absent field without inventing a host value: %s', async scenario => {
+    const router = createRouter(configOf({ routeMainModel: true, routeMainEffort: true, ...SUBAGENT_OFF }));
+    const f = fakeEngine({ hostBase: '2.1.287', pins: { mainEffort: scenario === 'pinned' }, respond: answering({ ...CLEAR, tier: ['standard', .95], effort: ['high', .95] }) });
+    f.engine.currentEffort = async () => scenario === 'effective' || scenario === 'pinned' ? 'high' : scenario === 'numeric' ? 12000 : undefined;
+    router.turnStart({ turnId: 't1', text: TEXT }); const first = streamNext<TurnStepEvent>();
+    const e = { turnId: 't1', index: 0, model: 'claude-opus-5-5' };
+    await drain(router.turnStep(f.engine, e, first.next));
+    if (scenario === 'numeric') expect(first.calls).toEqual([e]);
+    else expect(first.calls[0]?.model).toBe('claude-sonnet-5');
+    if (scenario === 'unknown' || scenario === 'auto') expect(first.calls[0]?.effort).toBe('high');
+    const metadata = f.logs.find(l => l.event === 'root'); if (metadata) expect(metadata.effort_source).toBe(scenario === 'effective' || scenario === 'numeric' || scenario === 'pinned' ? 'host_effective' : 'unknown');
+  });
+  it.each(['fit', 'large', 'unknown', 'failure', 'grows', 'estimate_only', 'stale', 'incompatible'] as const)('routes to Haiku only with a current fitting context and rechecks later requests: %s', async scenario => {
+    let tokens = 22_000;
+    const router = createRouter(configOf({ routeMainEffort: true, routeMainModel: true, ...SUBAGENT_OFF }));
+    const f = fakeEngine({ respond: req => {
+      const q = req.questions.model!.criteria as Record<string, string>;
+      const pick = Object.keys(q).find(k => k.includes('haiku')) ?? '__keep__';
+      return { status: 200, text: JSON.stringify({ model: JEV_MODEL, answers: { model: choice(Object.keys(q), [pick, .99]), control: choice(Object.keys(req.questions.control!.criteria), ['task_clear', .99]), action_risk: choice(Object.keys(req.questions.action_risk!.criteria), ['ordinary', .99]) } }) };
+    } });
+    if (scenario !== 'estimate_only') f.engine.currentContextBound = async (turnId, index) => { if (scenario === 'failure') throw new Error('bound unavailable'); return scenario === 'unknown' ? undefined : { turnId: scenario === 'stale' ? 'old-turn' : turnId, index, inputUpperBound: scenario === 'large' ? 180_000 : tokens, compatible: scenario !== 'incompatible' }; };
+    router.turnStart({ turnId: 't1', text: TEXT }); const first = streamNext<TurnStepEvent>();
+    await drain(router.turnStep(f.engine, step({ effort: 'xhigh' }), first.next));
+    if (scenario === 'fit' || scenario === 'grows') expect(first.calls).toEqual([{ turnId: 't1', index: 0, model: 'claude-haiku-4-5-20251001' }]);
+    else expect(first.calls).toEqual([step({ effort: 'xhigh' })]);
+    tokens = 180_000; const later = streamNext<TurnStepEvent>(); await drain(router.turnStep(f.engine, step({ index: 1, effort: 'xhigh' }), later.next));
+    expect(later.calls).toEqual([step({ index: 1, effort: 'xhigh' })]); expect(f.sent).toHaveLength(1);
+    if (scenario === 'grows') expect(f.logs.some(l => l.reason === 'context_unverified')).toBe(true);
+  });
+});
 /** Runs `f` after `hops` microtask turns, to land between two awaits of the code under test. */
 const later = (hops: number, f: () => void): void => {
   if (hops === 0) f();
@@ -105,11 +191,10 @@ describe('root effort', () => {
     expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root_stop', reason: 'incoming_divergence' }));
   });
 
-  it('asks nothing when effort cannot change: pinned, numeric, absent, or a model that takes none', async () => {
+  it('asks nothing when effort cannot change: pinned, numeric, or a model that takes none', async () => {
     const cases: Array<[TurnStepEvent, Partial<{ mainEffort: boolean }>]> = [
       [step(), { mainEffort: true }],
       [step({ effort: 12_000 }), {}],
-      [{ turnId: 't1', index: 0, model: 'claude-opus-5-5' }, {}],
       [step({ model: 'claude-haiku-4-5-20251001' }), {}],
       [step({ model: 'claude-unknown-9' }), {}],
     ];

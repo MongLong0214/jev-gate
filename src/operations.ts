@@ -22,7 +22,7 @@ export interface OperationStep {
   title: string;
   summary: string;
   details: string[];
-  model?: { selected: string | null; observed: string | null; status: 'confirmed' | 'mismatch' | 'unobserved'; selectedEffort: string | null; observedEffort: string | null };
+  model?: { selected: string | null; observed: string | null; status: 'confirmed' | 'mismatch' | 'unobserved'; selectedEffort: string | null; observedEffort: string | null; forwardedEffort?: string | null; effortSource?: 'host_hook' | 'provider_request' };
   /** Timings are measured by the caller or paired recorded events, never estimated from usage. */
   durationMs?: number;
   elapsedMs?: number;
@@ -93,7 +93,7 @@ const list = (v: unknown, cap = 16): string[] => Array.isArray(v) ? v.slice(0, c
 const id = (v: string): string => createHash('sha256').update(v).digest('hex').slice(0, 12);
 const n = (v: number | null): string => v === null ? '?' : Number(v.toFixed(2)).toLocaleString('en-US');
 const text = (...parts: Array<string | null | undefined | false>): string => parts.filter((x): x is string => typeof x === 'string' && x.length > 0).join(' · ');
-const modelObservation = (selected: unknown, observed: unknown, selectedEffort?: unknown, observedEffort?: unknown, confirmation?: unknown): OperationStep['model'] => {
+const modelObservation = (selected: unknown, observed: unknown, selectedEffort?: unknown, observedEffort?: unknown, confirmation?: unknown, submission?: { value: unknown; source: 'host_hook' | 'provider_request' }): OperationStep['model'] => {
   const wanted = token(selected); const actual = token(observed);
   if (!wanted && !actual) return undefined;
   const family = (value: string) => /^(haiku|sonnet|opus)$/.test(value) ? value : /^claude-(haiku|sonnet|opus)(?:-|$)/.exec(value)?.[1];
@@ -101,7 +101,7 @@ const modelObservation = (selected: unknown, observed: unknown, selectedEffort?:
   // Router owns exact variant and dated-alias identity checks. Older receipts fall back to literal/family matching.
   const status = !wanted || !actual || confirmation === 'unobserved' ? 'unobserved'
     : confirmation === 'confirmed' || confirmation === 'mismatch' ? confirmation : matches ? 'confirmed' : 'mismatch';
-  return { selected: wanted, observed: actual, status, selectedEffort: token(selectedEffort), observedEffort: observedEffort === 'unknown' ? null : token(observedEffort) };
+  return { selected: wanted, observed: actual, status, selectedEffort: token(selectedEffort), observedEffort: observedEffort === 'unknown' ? null : token(observedEffort), ...(submission ? { forwardedEffort: token(submission.value), effortSource: submission.source } : {}) };
 };
 const relation = (r: Rec): string[] => {
   const answers = field(r, 'answers');
@@ -229,6 +229,7 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
       details.push(text(`세션 문맥 ${n(number(r['context_tokens']))} 토큰`, `실행 floor ${n(number(r['depth_floor']))}`, token(r['depth_floor_source']), number(r['host_window']) === null ? null : `호스트 창 ${n(number(r['host_window']))} 토큰`));
       const selected = token(r['selected_execution']);
       if (selected) details.push(`선택한 실행 형태 ${selected} · 실제 적용 전 정책 결정`);
+      if (r['policy_basis'] === 'bounded_tool_worker') details.push('범위가 명확한 도구 작업 · 빠른 워커 우선 정책 · 비용 절감 판정과 별개');
       if (number(estimate?.['cost_support']) !== null) details.push(`비용 정책 지지 ${(number(estimate?.['cost_support'])! * 100).toFixed(1)}% · 실제 절감 확률 아님`);
       if (number(estimate?.['turns']) !== null) details.push(`계산에 사용한 루트 턴 ${n(number(estimate?.['turns']))}회`);
     }
@@ -326,8 +327,8 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
   const duration = measured !== null && measured >= 0 ? measured : phase === 'evidence_result' ? number(r['duration_ms']) : null;
   const sentAt = requestId && phase.endsWith('_result') ? intents.get(`${requestId}:${phase.replace(/_result$/, '_intent')}`) : undefined;
   const elapsed = sentAt ? Date.parse(at) - Date.parse(sentAt) : null;
-  const model = phase === 'codex_router_response' ? modelObservation(r['selected_model'], r['observed_model'], r['selected_effort'], r['observed_effort'])
-    : phase === 'codex_route_applied' ? modelObservation(r['selected_model'], null, r['selected_effort'], null, 'unobserved')
+  const model = phase === 'codex_router_response' ? modelObservation(r['selected_model'], r['observed_model'], r['selected_effort'], r['observed_effort'], undefined, 'submitted_effort' in r ? { value: r['submitted_effort'], source: 'provider_request' } : undefined)
+    : phase === 'codex_route_applied' ? modelObservation(r['selected_model'], null, r['selected_effort'], null, 'unobserved', 'submitted_effort' in r ? { value: r['submitted_effort'], source: 'provider_request' } : undefined)
     : phase === 'post' || phase === 'failure' ? modelObservation(r['requested_model'], r['resolved_model']) : undefined;
   if (phase.startsWith('codex_router_')) {
     details.push(text(`baseline ${token(r['baseline_model']) ?? '?'}`, token(r['baseline_effort'])));
@@ -370,10 +371,17 @@ const debugStep = (row: DebugRecord, now: number, closed: Set<string>): Operatio
     if (number(r['preparation_ms']) !== null) details.push(`Router 준비 ${n(number(r['preparation_ms']))}ms · Jev 응답 시간과 별도 · 예산 ${n(number(r['budget_ms']))}ms`);
     if (number(r['discovered_count']) !== null) details.push(text(`발견 ${n(number(r['discovered_count']))}`, `적격 ${n(number(r['eligible_count']))}`, `제시 ${n(number(r['offered_count']))}`, r['catalog_complete'] === true ? '목록 완전' : '목록 부분/미확인'));
     if (typeof r['allow_fable'] === 'boolean') details.push(`Fable 자동 선택 ${r['allow_fable'] ? 'ON' : 'OFF'}`);
+    if (typeof r['model_pin'] === 'boolean' || typeof r['effort_pin'] === 'boolean') details.push(text(`model pin ${r['model_pin'] === true ? 'ON' : 'OFF'}`, `effort pin ${r['effort_pin'] === true ? 'ON' : 'OFF'}`));
+    if (token(r['hook_version']) || token(r['host_version'])) details.push(text(`loaded hook ${token(r['hook_version']) ?? '?'}`, `host ${token(r['host_version']) ?? '?'}`));
+    if ('effort_source' in r) details.push(text(`effort source ${token(r['effort_source']) ?? '?'}`, `effective effort ${token(r['effective_effort']) ?? '?'}`, `incoming field ${r['effort_field_present'] === true ? 'present' : 'absent'}`));
+    const selection = field(r, 'selection');
+    if (selection) details.push(text(`direction ${token(selection['direction']) ?? '?'}`, `threshold ${n(number(selection['threshold']))}`, `p ${n(number(selection['probability']))}`, `effort policy ${token(selection['effort_policy']) ?? '?'}`));
+    const exclusions = field(r, 'excluded');
+    if (exclusions) details.push(text(...Object.entries(exclusions).flatMap(([reason, value]) => number(value) ? [`excluded ${token(reason) ?? '?'} ${n(number(value))}`] : [])));
     details.push(text(`요청 변경 모델 ${token(patch?.['model']) ?? '?'}`, `요청 변경 effort ${token(patch?.['effort']) ?? token(r['patch']) ?? '?'}`));
     details.push(text(`모델 이유 ${token(reasons?.['model']) ?? '?'}`, `effort 이유 ${token(reasons?.['effort']) ?? '?'}`, `실제 적용 effort ${token(applied?.['effort']) ?? '?'}`, `관측 모델 ${token(r['observed']) ?? '?'}`));
     const usage = field(r, 'usage');
-    if (usage) details.push(text(`입력 ${n(number(usage['input']))}`, `출력 ${n(number(usage['output']))}`));
+    if (usage) details.push(text(`입력 ${n(number(usage['input']))}`, `출력 ${n(number(usage['output']))}`, `cache read ${n(number(usage['cache_read']))}`, `cache write ${n(number(usage['cache_creation']))}`));
     const answers = field(r, 'answers');
     if (answers) details.push(text(`Jev 제어 ${token(answers['control']) ?? '?'}`, number(answers['task_clear']) === null ? null : `명확도 ${Math.round(number(answers['task_clear'])! * 100)}%`, number(answers['ordinary']) === null ? null : `일반 위험 ${Math.round(number(answers['ordinary'])! * 100)}%`));
     if (answers) for (const name of ['tier', 'effort']) {
@@ -390,7 +398,7 @@ const debugStep = (row: DebugRecord, now: number, closed: Set<string>): Operatio
     details.push(text(`파서 ${token(r['parser']) ?? '?'}`, number(r['runs']) === null ? null : `실행 ${n(number(r['runs']))}건`));
   }
   const model = feature === 'router' && ['root_result', 'spawn_result', 'spawn_native_result', 'child_result'].includes(event)
-    ? modelObservation(r['requested'] ?? field(r, 'applied')?.['model'] ?? r['assumed'], r['observed'], r['requested_effort'] ?? field(r, 'applied')?.['effort'], r['observed_effort'], r['confirmation']) : undefined;
+    ? modelObservation(r['requested'] ?? field(r, 'applied')?.['model'] ?? r['assumed'], r['observed'], r['requested_effort'] ?? field(r, 'applied')?.['effort'], r['observed_effort'], r['confirmation'], 'requested_effort' in r ? { value: r['requested_effort'], source: 'host_hook' } : undefined) : undefined;
   if (model) {
     if (model.status === 'mismatch') state = 'error';
     lane = 'host'; summary = text(model.status === 'confirmed' ? '선택 모델과 실제 모델 일치' : model.status === 'mismatch' ? '선택 모델과 실제 모델 불일치' : '실제 응답 모델 미관측', model.selected, model.observed);
@@ -441,7 +449,7 @@ export const buildOperations = (records: Rec[], debug: DebugRecord[], now: Date,
       group.steps.push({ ...response, title: step.title.replace(/ · .+$/, ' · Jev 응답'), summary: step.state === 'error' ? 'Jev 판정 실패 · 원래 호출 유지' : step.judgements?.length
         ? `${step.judgements.length}개 선택형 응답 · 코드가 정책 판정에 사용`
         : '응답 기록 · 선택형 결과 미확인' });
-      group.steps.push({ ...rest, id: id(`${step.id}:policy`), state: step.state === 'error' ? 'done' : step.state, lane: 'policy', details: [], summary: step.summary });
+      group.steps.push({ ...rest, id: id(`${step.id}:policy`), state: step.state === 'error' ? 'done' : step.state, lane: 'policy', details: phase === 'admission_result' ? step.details : [], summary: step.summary });
     } else group.steps.push(step);
     if (group.mode === 'unknown' && token(r['mode'])) group.mode = token(r['mode'])!;
     grouped.set(key, group);

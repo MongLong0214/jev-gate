@@ -74,3 +74,53 @@ for (const mode of ['keep', 'effort', 'model', 'both'] as const) {
     expect(calls).toBe(1);
   });
 }
+
+for (const baselineMode of ['default', 'echo'] as const) {
+  test(`three root turns reassess Sonnet, Sonnet, Opus with ${baselineMode} baselines`, async ($, on) => {
+    mock.env(on, { TYPESAFE_API_KEY: 'sk-router-testonlynotakey' });
+    mock.clock(on);
+    on('session.version', () => ({ value: { version: '2.1.287', base: '2.1.287' } }));
+    on('session.id', () => ({ value: 'same-root-fixture' }));
+    on('settings.read', () => ({ value: { effortLevel: 'high' } }));
+    on('fs.exists', () => ({ value: false }));
+    on('ui.log', () => ({ value: undefined }));
+    let phase = 0; let calls = 0; let children = 0;
+    const sent: Array<{ turnId: string; model: string; effort?: string | number }> = [];
+    on('agent.spawn', () => { children++; throw new Error('Root routing must not spawn a child'); });
+    on('http.fetch', ($, e) => {
+      calls++;
+      const body = JSON.parse(e.init?.body ?? '{}');
+      const target = phase < 2 ? 'claude-sonnet-5-5' : 'claude-opus-5-5';
+      const answers = Object.fromEntries(Object.entries(body.questions).map(([name, raw]) => {
+        const q = raw as { type: string; criteria: string[] | Record<string, string> };
+        if (q.type === 'choice') {
+          const value = name === 'model' ? target in q.criteria ? target : '__keep__' : name === 'control' ? 'task_clear' : 'ordinary';
+          return [name, { type: 'choice', choice: value, confidence: 1, probabilities: Object.fromEntries(Object.keys(q.criteria).map(k => [k, k === value ? 1 : 0])) }];
+        }
+        const levels = q.criteria as string[];
+        const at = levels.findIndex(s => s.startsWith(phase < 2 ? 'Ordinary reasoning' : 'Strong reasoning'));
+        return [name, { type: 'score', score: at, confidence: 1, probabilities: Object.fromEntries(levels.map((_, i) => [i, i === at ? 1 : 0])) }];
+      }));
+      return { value: { ok: true, status: 200, headers: {}, text: JSON.stringify({ model: body.model, answers }) } };
+    });
+    on('turn.start', ($, e) => ({ turnId: e.turnId }));
+    on('turn.complete', () => ({ text: '' }));
+    on('turn.step', async function* ($, e) {
+      sent.push({ turnId: e.turnId, model: e.model, ...(e.effort !== undefined ? { effort: e.effort } : {}) });
+      return { turnId: e.turnId, index: e.index, answer: 'fixture', toolUses: [], stopReason: 'end_turn', usage: null };
+    });
+    for (phase = 0; phase < 3; phase++) {
+      const turnId = `root-turn-${phase}`;
+      await $.turn.start({ text: phase < 2 ? 'Find the exact source file.' : 'Diagnose the concurrency failure.', turnId });
+      const model = phase === 0 || baselineMode === 'default' ? 'claude-opus-5-5' : 'claude-sonnet-5-5';
+      for (const index of [0, 1]) {
+        const stream = $.turn.step({ turnId, index, model, effort: phase > 0 && baselineMode === 'echo' ? 'medium' : 'high', messageCount: phase * 2 + 1 });
+        while (!(await stream.next()).done) { /* preserve the host stream */ }
+      }
+      expect(calls).toBe(phase + 1);
+      await $.turn.complete({ turnId, reason: 'answer', answer: 'Completed visible fixture answer.', durationMs: 1, isAborted: false });
+    }
+    expect(sent).toEqual([0, 1, 2].flatMap(i => [0, 1].map(() => ({ turnId: `root-turn-${i}`, model: i < 2 ? 'claude-sonnet-5-5' : 'claude-opus-5-5', effort: i < 2 ? 'medium' : 'high' }))));
+    expect(children).toBe(0);
+  });
+}

@@ -8,6 +8,14 @@ const base = { written_at: at, session_id: 's1', prompt_id: 'p1', mode: 'auto', 
 const row = (component: DebugRecord['component'], rec: Record<string, unknown>, time = at): DebugRecord => ({ at: time, component, rec });
 
 describe('operations display model', () => {
+  it('keeps host dispatch effort, wire request effort and missing response effort as different facts', () => {
+    const report = buildOperations([
+      { phase: 'codex_router_response', host: 'codex', session_id: 'codex', prompt_id: 'p1', written_at: at, selected_model: 'gpt-6.1-sol', observed_model: 'gpt-6.1-sol', selected_effort: 'low', submitted_effort: 'low', observed_effort: 'unknown' },
+    ], [row('router', { event: 'root_result', turn: 't1', requested: 'claude-opus-5-5', requested_effort: 'high', observed: 'claude-opus-5-5', observed_effort: 'unknown', confirmation: 'confirmed' })], new Date(at), { trace: true, debug: true });
+    const models = report.runs.flatMap(r => r.steps).filter(s => s.model).map(s => s.model!);
+    expect(models).toContainEqual(expect.objectContaining({ effortSource: 'host_hook', forwardedEffort: 'high', observedEffort: null }));
+    expect(models).toContainEqual(expect.objectContaining({ effortSource: 'provider_request', forwardedEffort: 'low', observedEffort: null }));
+  });
   it('connects background launches, questions and terminals to the original job without treating launch as completion', () => {
     const launch = { ...base, phase: 'background_launch', tool_use_id: 'd', status: 'running' };
     const question = { ...base, phase: 'background_conversation', prompt_id: 'q', execution_prompt_id: 'p1', active: 1 };
@@ -138,7 +146,7 @@ describe('operations display model', () => {
       { ...base, phase: 'admission_intent', request_id: 'typed' },
       { ...base, written_at: later, phase: 'admission_result', request_id: 'typed', attempted: true,
         http: { duration_ms: 247 }, answers: { need_worker: { noul: 0.81, confidence: 0.72 } },
-        decision: { shape: 'orchestrated' } },
+        decision: { shape: 'orchestrated' }, policy_basis: 'bounded_tool_worker', estimate: { saving_tokens: -245000, cost_support: 0 } },
       { ...base, written_at: later, phase: 'guard', tool_name: 'Bash', allow: false, denials: 1 },
     ];
     const view = buildOperations(records, [], new Date(later), { trace: true, debug: false });
@@ -148,6 +156,8 @@ describe('operations display model', () => {
     expect(response.judgements?.[0]?.probabilities?.[0]).toEqual({ label: '참', value: 0.81 });
     expect(response.judgements?.[0]?.probabilities?.[1]?.value).toBeCloseTo(0.19);
     expect(steps.find((s) => s.lane === 'policy' && s.feature === 'admission')?.summary).toContain('orchestrated');
+    expect(steps.find((s) => s.lane === 'policy' && s.feature === 'admission')?.details.join(' ')).toContain('빠른 워커 우선 정책');
+    expect(steps.find((s) => s.lane === 'policy' && s.feature === 'admission')?.details.join(' ')).toContain('-245,000');
     expect(steps.find((s) => s.feature === 'guard')?.state).toBe('done');
     expect(view.latency).toMatchObject({ measured: 1, p50: 247, p95: 247 });
   });

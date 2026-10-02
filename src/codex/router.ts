@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { offerPairs, selectPair, pairReceipt, type PairPatch, type RouteCandidate } from '../../mods/router/hooks/selection.ts';
-import { routingContext } from '../../mods/router/hooks/context.ts';
+import { routingContext, type RoutingCache } from '../../mods/router/hooks/context.ts';
 import { looksSecret } from '../../mods/router/hooks/secret.ts';
 import { MAX_REQUEST_TOKENS, estimateTokens } from '../../mods/router/hooks/client.ts';
 import { callJev } from '../jev.js';
@@ -20,7 +20,8 @@ export interface CodexModel {
 const supported = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
 export const codexCandidates = (catalog: readonly CodexModel[], allowAstra: boolean, baseline?: string): RouteCandidate[] =>
   normalizeCatalog(catalog, true).models.filter(m => m.model === baseline || generalCodexModel(m) && codexTargetAllowed(m.model, allowAstra)).map(m => ({
-    id: m.model, description: (m.description ?? m.displayName ?? 'Account-listed coding model; performance and price rank unknown.').slice(0, 1200),
+    id: m.model, description: ((m.description ?? m.displayName ?? 'Account-listed coding model; performance and price rank unknown.') +
+      (/^gpt-\d+(?:\.\d+)?-luna(?:-\d{4}-\d{2}-\d{2})?$/.test(m.model) ? ' Product fast-role preference: file discovery, lookup, listing and mechanical edits with clear checks.' : '')).slice(0, 1200),
     efforts: supported.filter(e => m.supportedReasoningEfforts.some(v => v.reasoningEffort === e)),
     omitEffort: true,
   }));
@@ -29,6 +30,7 @@ export const codexCandidates = (catalog: readonly CodexModel[], allowAstra: bool
 export const routeCodex = async (args: {
   model: string; effort: string | null; task: string; previousReply?: string; recentRequests?: readonly string[]; session: string; prompt: string;
   modelPinned?: boolean; effortPinned?: boolean; catalog: CodexModel[]; catalogComplete?: boolean; catalogExcluded?: Record<string, number>; config: CodexPolicyConfig; env: Env; trace?: TraceWriter; signal?: AbortSignal; fetchImpl?: typeof fetch;
+  cache?: RoutingCache;
 }): Promise<PairPatch> => {
   const { config, env, signal } = args;
   const write = (event: Parameters<TraceWriter['write']>[0], facts: Record<string, unknown>): void => { try { args.trace?.write(event, facts); } catch { /* Optional diagnostics cannot change a request. */ } };
@@ -45,7 +47,7 @@ export const routeCodex = async (args: {
     model: config.router.model && !modelPin, effort: config.router.effort && !effortPin,
     upgrade: config.router.minUpgradeConfidence, downgrade: config.router.minDowngradeConfidence });
   if (!offer) return skip('no_alternative');
-  const request = { model: config.gate.jevModel, state: routingContext(args.task, args.previousReply, args.recentRequests), questions: offer.questions };
+  const request = { model: config.gate.jevModel, state: routingContext(args.task, args.previousReply, args.recentRequests, args.cache), questions: offer.questions };
   if (estimateTokens(JSON.stringify(request)) > MAX_REQUEST_TOKENS) return skip('input_too_large');
   const requestId = randomUUID();
   const diagnostic = { ...facts, request_id: requestId, baseline_model: args.model, baseline_effort: args.effort,
@@ -59,11 +61,11 @@ export const routeCodex = async (args: {
     effort_not_asked: offer.effortQuestions.size ? null : effortPin ? 'effort_pinned' : !config.router.effort ? 'routing_off' : 'no_alternative' };
   write('codex_router_intent', { ...diagnostic, asked: Object.keys(offer.questions), attempted: true });
   const out = await callJev(request, { apiKey: env['TYPESAFE_API_KEY'], deadlineMs: config.router.timeoutMs, ...(signal ? { signal } : {}), ...(args.fetchImpl ? { fetchImpl: args.fetchImpl } : {}) });
-  const decision = out.ok && out.response.model === config.gate.jevModel && !signal?.aborted ? selectPair(offer, out.response.answers) : { patch: {}, reasons: { model: 'not_asked', effort: 'not_asked' } };
+  const decision = out.ok && out.response.model === config.gate.jevModel && !signal?.aborted ? selectPair(offer, out.response.answers) : { patch: {} as PairPatch, reasons: { model: 'not_asked', effort: 'not_asked' }, diagnostics: null };
   write('codex_router_result', { ...diagnostic, attempted: true, duration_ms: out.durationMs, ok: out.ok,
     reason: out.ok ? signal?.aborted ? 'aborted' : out.response.model !== config.gate.jevModel ? 'model_mismatch' : null : out.code,
     http: { duration_ms: out.durationMs, code: out.ok ? 'ok' : out.code }, jev: out.ok ? { model: out.response.model, usage: out.response.usage } : null,
     selected_model: decision.patch.model ?? args.model, selected_effort: decision.patch.effort ?? (decision.patch.effortEdit?.kind === 'omit' ? null : args.effort), effort_edit: decision.patch.effortEdit ?? { kind: 'keep' },
-    reasons: decision.reasons, answers: out.ok ? pairReceipt(offer, out.response.answers) : {}, ...(out.ok ? { usage: out.response.usage, returned_model: out.response.model } : {}), applied: false });
+    reasons: decision.reasons, selection: decision.diagnostics, answers: out.ok ? pairReceipt(offer, out.response.answers) : {}, ...(out.ok ? { usage: out.response.usage, returned_model: out.response.model } : {}), applied: false });
   return decision.patch;
 };

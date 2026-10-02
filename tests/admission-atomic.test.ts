@@ -54,6 +54,7 @@ describe('atomic admission questions', () => {
       'forbids_delegation',
       'task_context',
       'tool_calls',
+      'bounded_tool_work',
     ]);
     expect(ADMISSION_FACT_QUESTIONS.size.type).toBe('score');
     expect(ADMISSION_FACT_QUESTIONS.tool_calls.type).toBe('score');
@@ -72,7 +73,7 @@ describe('atomic admission questions', () => {
     const atomic = buildAtomicAdmissionRequest('build a settings page', DEFAULT_CONFIG);
     expect(atomic.state).toEqual(composite.state);
     expect(atomic.model).toBe(composite.model);
-    expect(Object.keys(atomic.questions)).toEqual(['forbids_delegation', 'task_context', 'tool_calls']);
+    expect(Object.keys(atomic.questions)).toEqual(['forbids_delegation', 'task_context', 'tool_calls', 'bounded_tool_work']);
   });
 
   it('bounds both scores by the criteria the questions themselves ship', () => {
@@ -356,6 +357,7 @@ describe('atomic context and distribution support', () => {
       'forbids_delegation',
       'task_context',
       'tool_calls',
+      'bounded_tool_work',
       'parallel_outcomes',
       'size',
     ]);
@@ -388,4 +390,29 @@ it('preserves the exact .8 support boundary across floating-point addition', () 
   const a = answers();
   a.tool_calls = { type: 'score', score: 2.5, confidence: 0.99, probabilities: { 0: 0.2, 1: 0, 2: 0, 3: 0.7, 4: 0.1 } };
   expect(decideAdmissionAtomic(a, DEEP, FLOOR, MODEL).shape).toBe('orchestrated');
+});
+
+describe('bounded fast-worker preference', () => {
+  const decide = (a: Record<string, unknown>, cfg = DEFAULT_CONFIG) => decideAdmissionAtomic(a, 1000, 0, MODEL, cfg);
+  it.each([1, 2])('admits one whole bounded tool outcome at shallow depth without claiming savings: %s', tool_calls => {
+    const result = decide(answers({ tool_calls, bounded_tool_work: .99 }));
+    expect(result).toMatchObject({ shape: 'orchestrated', execution: 'single', preference: 'bounded_tool_worker' });
+    expect(result.estimate?.saving_tokens).toBeLessThan(0);
+  });
+  it.each([undefined, .79, NaN, 1.1])('does not create a preference from absent, uncertain or invalid facts: %s', value => {
+    const a = answers({ tool_calls: 1 }); if (value !== undefined) a.bounded_tool_work = { type: 'noul', noul: value };
+    expect(decide(a)).toMatchObject({ shape: 'direct', reason: 'admission_not_worth' });
+  });
+  it('preserves no-delegation, missing context, conversational answers, broad work and explicit hierarchy', () => {
+    const base = answers({ tool_calls: 1, bounded_tool_work: .99 });
+    for (const a of [answers({ tool_calls: 1, bounded_tool_work: .99, forbids_delegation: .9 }), { ...base, task_context: { type: 'choice', choice: 'needs_context', confidence: 1, probabilities: { self_contained: 0, needs_context: 1, unclear: 0 } } }, answers({ tool_calls: 0, bounded_tool_work: .99 }), answers({ tool_calls: 3, bounded_tool_work: .99 })]) expect(decide(a).shape).toBe('direct');
+    expect(decide(base, { ...DEFAULT_CONFIG, admittedShape: 'hierarchy' }).shape).toBe('direct');
+    expect(decideAdmissionAtomic(base, null, 0, MODEL, DEFAULT_CONFIG).shape).toBe('direct');
+    expect(decideAdmissionAtomic(base, 1000, 2000, MODEL, DEFAULT_CONFIG).shape).toBe('direct');
+  });
+  it('does not flatten independent outcomes, projects or unknown shape facts into one fast worker', () => {
+    const cfg = { ...DEFAULT_CONFIG, maxParallelWorkers: 4 };
+    for (const a of [answers({ tool_calls: 1, bounded_tool_work: .99, parallel_outcomes: .9 }), answers({ tool_calls: 1, bounded_tool_work: .99, size: 4 }), { ...answers({ tool_calls: 1, bounded_tool_work: .99 }), size: undefined }, { ...answers({ tool_calls: 1, bounded_tool_work: .99 }), parallel_outcomes: undefined }]) expect(decide(a, cfg).shape).toBe('direct');
+    expect(decide(answers({ tool_calls: 1, bounded_tool_work: .99 }), cfg).preference).toBe('bounded_tool_worker');
+  });
 });

@@ -258,7 +258,7 @@ const checkClaude = (): void => {
     say('warn', `claude CLI not runnable (${version.error ?? `exit ${String(version.status)}`}); install/login is the user's step`);
     return;
   }
-  say('ok', `claude ${version.stdout.trim()} (V5 host checks recorded on 2.1.275; a version string alone is not proof of patch support)`);
+  say('ok', `claude ${version.stdout.trim()} (native model/worker request checks recorded on 2.1.287; a version string alone is not proof of patch support)`);
   const parsed = parseAuthStatus(runCommand('claude', ['auth', 'status']));
   if (!parsed.ok) {
     say('warn', `auth unverified: ${parsed.reason}`);
@@ -309,6 +309,10 @@ const checkEnv = (mode: Mode | null): void => {
   else say('info', 'Claude debug logs are optional; independent Jev metadata recording is available without --debug');
   const key = resolveApiKey({ ...env, TYPESAFE_API_KEY: launch('TYPESAFE_API_KEY') });
   say('info', 'Router automatic Fable default: off; active routerAllowFable is controlled by the host plugin options. Capabilities do not establish account access; missing response model/effort remains unknown.');
+  say('info', `Router launch pins: model=${launch('ANTHROPIC_MODEL')?.trim() ? 'present' : 'absent'}; effort=${launch('CLAUDE_CODE_EFFORT_LEVEL')?.trim() ? 'present' : 'absent'} (values hidden; injector source unknown). Starting with /model or --model establishes a baseline, not a permanent routing pin.`);
+  let installed = 'unknown'; try { const manifest = JSON.parse(readFileSync(join(root, '.claude-plugin/plugin.json'), 'utf8')); if (typeof manifest.version === 'string' && /^\d+\.\d+\.\d+$/.test(manifest.version)) installed = manifest.version; } catch { /* metadata unknown */ }
+  say('info', `Router installed package=${installed}; loaded hook version=unknown to doctor. The active root record reports hook_version, host_version, incoming/effective effort, pins, candidate exclusions and selection threshold. Restart an already open host after updating; the installed manifest does not prove its loaded hook version.`);
+  say('info', 'Claude 2.1.287: /context summary is an estimate, not a complete-request safe upper bound. Opus/Sonnet to Haiku root switching remains context_unverified; fresh Haiku workers are supported and omit effort. Previous cache usage is a routing cost hint, never current context-fit evidence.');
   say(key ? 'ok' : 'warn', key ? 'Jev API key available from the plugin option, environment or shared private store (value not shown)' : 'Jev API key missing: the installed plugin opens a local key-entry screen; Gate/Lean/Router remain native until a key is supplied');
   if (existsSync(join(process.cwd(), '.env'))) say('info', '.env in cwd is NOT auto-loaded by the hook; export the variable in the shell that starts Claude Code');
 };
