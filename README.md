@@ -19,7 +19,7 @@ The marketplace installs [the latest release](https://github.com/MongLong0214/je
 
 The [native Codex plugin](plugins/codex/README.md) connects **Gate A/B, planning, contract acceptance, root guard, Lean, Router and Compact** to ordinary native Codex through its local connection, alongside Evidence, Output and recording. Owned workers use the official Codex App Server; native login and permissions remain authoritative. Automatic connection was tested with Codex CLI 0.160.0 and Node 22.15+.
 
-For an installation without a build step, download **`jev-gate-codex-0.8.5.zip`** from the [v0.8.5 release](https://github.com/MongLong0214/jev-gate/releases/tag/v0.8.5), extract it, and register the extracted directory:
+For an installation without a build step, download **`jev-gate-codex-0.8.6.zip`** from the [v0.8.6 release](https://github.com/MongLong0214/jev-gate/releases/tag/v0.8.6), extract it, and register the extracted directory:
 
 ```sh
 codex plugin marketplace add /absolute/path/to/extracted-plugin
@@ -82,7 +82,7 @@ Starting with Opus establishes the incoming baseline. Every new user turn is ass
 
 Simple search, lookup, listing and mechanical worker tasks prefer **Haiku in Claude / account-listed Luna in Codex**. Main-model changes still evaluate the complete requested outcome and actual model capabilities. Known product-role downgrades in both hosts use the existing 0.6 confidence/control/risk criteria; upgrades and unknown relationships retain the stricter 0.8 default. Those probabilities are policy inputs, not measured success rates.
 
-“Do not edit,” “preserve the API” and required checks constrain the work; they do not pin a model or effort. An explicit instruction to keep Opus, keep xhigh, or disable delegation does. Both hosts use the same distinction. Codex uses the current account's model descriptions and effort list, including Luna and Terra when available.
+“Do not edit,” “preserve the API” and required checks constrain the work; they do not pin a model or effort. An explicit instruction to keep Opus or keep xhigh pins that dimension. “Do not delegate” keeps work in the main session; it does not itself pin the main model or effort. Both hosts use the same distinction. Codex uses the current account's model descriptions and effort list, including Luna and Terra when available.
 
 For a self-contained bounded tool outcome, Gate A can choose one fast worker without a planner even when the older delegation-cost estimate is negative. Current-workspace targets such as the current branch's PR, its diff and repository symbols can be discovered with native tools; you do not need to supply a PR URL, file list or test command for a mechanical documentation update. Jev classifies the whole requested outcome as bounded, other or unclear, using the existing support threshold. Missing earlier choices and broad investigations still preserve the normal path. This preference is judged in the existing Jev batch; it does not spawn a worker for each file read. The main integrates the result and remains available during background execution. Conversation-only replies, missing context, explicit no-delegation and configured depth floors retain their native behavior. The dashboard identifies this fast-worker preference separately from the cost estimate.
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.8.6 — 2026-10-02 — Routing instruction clarity
+
+- Clarify that no-delegation instructions keep work in the main session without pinning the main model or effort. Explicit model and effort pins remain independent. This corrects the v0.8.5 README; execution policies are unchanged.
+
 ## v0.8.5 — 2026-10-02 — Direct worker execution and routing parity
 
 - Track bounded owned worker calls in direct conversations in the shared hook. Claude and Codex now reserve the execution before Gate B, apply the selected exact model/effort pair, keep background questions responsive and settle the original subtask once. The main request stays direct and is not marked complete by a subtask receipt.
