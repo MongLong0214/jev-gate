@@ -1,4 +1,5 @@
 import { integratedClaudePlugin } from './claude-setup.js';
+import { claudeTerminal, dispatchMarker } from './claude-background.js';
 import { hasWorktreeHead } from './worktree.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, realpathSync } from 'node:fs';
@@ -161,6 +162,7 @@ export interface HookDeps {
     compactWindow: number | null;
     source: (binding: import('./lean-source.js').LeanSourceBinding) => import('./lean-source.js').LeanSourceOutcome;
     observation: (agentId: string | null) => import('./verify.js').WorkerObservation | null;
+    terminal?: (agentId: string) => boolean;
   };
 }
 
@@ -211,7 +213,7 @@ const parseInput = (text: string): HookInput | { code: ErrorCode } => {
   }
   if (!isRecord(parsed) || typeof parsed['hook_event_name'] !== 'string') return { code: 'stdin_invalid_json' };
   const out: HookInput = { hook_event_name: parsed['hook_event_name'] as string };
-  for (const k of ['session_id', 'prompt_id', 'transcript_path', 'cwd', 'permission_mode', 'agent_id', 'agent_type', 'prompt', 'tool_name', 'tool_use_id', 'error'] as const) {
+  for (const k of ['session_id', 'prompt_id', 'transcript_path', 'cwd', 'permission_mode', 'agent_id', 'agent_type', 'agent_transcript_path', 'last_assistant_message', 'prompt', 'tool_name', 'tool_use_id', 'error'] as const) {
     const v = str(parsed[k]);
     if (v !== null) out[k] = v;
   }
@@ -452,7 +454,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
   const caller = { agent_id: input.agent_id ?? null, agent_type: input.agent_type ?? null };
   /** A2: state rebuilt outside UserPromptSubmit is guarded only when the host gave this turn a prompt identity. */
   const recoveredGeneration = (): JobGeneration => emptyGeneration(input.prompt_id ?? null, input.prompt_id ? 'orchestrated' : 'direct');
-  const base = {
+  const base: Record<string, unknown> = {
     ...(deps.host ? { host: deps.host.id } : {}),
     session_id: input.session_id ?? null,
     prompt_id: input.prompt_id ?? null,
@@ -837,7 +839,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     if (!coordinatorPrompt.isWellFormed()) return deny('dispatch_ineligible', 'this call’s prompt is not well-formed Unicode.');
     if (Object.prototype.hasOwnProperty.call(toolInput, 'model')) return deny('dispatch_ineligible', 'the call pins a model; lean uses the executor profile’s inherited model.');
     const bg = toolInput['run_in_background'];
-    if (bg !== false && !(bg === undefined && deps.env['CLAUDE_CODE_DISABLE_BACKGROUND_TASKS'] === '1')) return deny('dispatch_ineligible', 'the call is not in the foreground.');
+    if (bg !== undefined && typeof bg !== 'boolean') return deny('dispatch_ineligible', 'invalid background control.');
     if (EXECUTION_CONTROL_KEYS.some((k) => Object.prototype.hasOwnProperty.call(toolInput, k))) return deny('dispatch_ineligible', 'the call carries resume/fork/team/isolation controls.');
     const override = subagentModelOverride(deps.env);
     if (override.concrete || override.force) return deny('dispatch_ineligible', 'a subagent model override is in force.');
@@ -912,24 +914,26 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     if (!sessionId || !toolUseId) return skip('missing_ids');
     const failed = input.hook_event_name === 'PostToolUseFailure';
     const status = responseStatus(input.tool_response);
-    const terminal = !failed && status === 'completed';
     let released = false;
     // Read first: an Agent result that owns nothing here must not create a state file for an unrelated session.
     const job = readJob(deps.env, sessionId);
     const owner = job.ok ? own(job.value?.current.active ?? {}, toolUseId) : undefined;
+    const terminal = !failed && status === 'completed' || !!owner?.codex_execution && deps.host?.terminal?.(owner.codex_execution.thread_id) === true;
     if (owner?.role === 'executor' && terminal) {
-      leanWrite(sessionId, job.ok ? (job.value?.current.prompt_id ?? null) : null, (gen) => {
+      const saved = leanWrite(sessionId, job.ok ? (job.value?.current.prompt_id ?? null) : null, (gen) => {
         const reservation = own(gen.active, toolUseId);
         if (!reservation || reservation.role !== 'executor') return gen;
         released = true;
-        return release(gen, toolUseId);
+        const next = release(gen, toolUseId);
+        return gen.background_job ? { ...next, outcome: !failed && status === 'completed' ? 'completed' : 'incomplete' } : next;
       });
+      released = saved !== null && released;
     }
     trace?.write('lean_post', {
       ...base,
       released,
       // An owned executor whose stop the host did not establish: ownership stays, and this says why.
-      release_unconfirmed: owner?.role === 'executor' && !terminal,
+      release_unconfirmed: owner?.role === 'executor' && !released,
       status,
       observed_model: observedModel(input.tool_response),
       tool_response: whitelistToolResponse(input.tool_response),
@@ -942,9 +946,142 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     return skip();
   };
 
+  const interactivePrompt = (): HookResult | null => {
+    if (caller.agent_id || caller.agent_type || !input.session_id || !input.prompt_id) return null;
+    let gen: JobGeneration | null = null;
+    const written = updateJob(deps.env, input.session_id, prev => {
+      if (!prev || !prev.current.background_job || prev.current.outcome !== null && !/^\s*<task-notification>/.test(input.prompt ?? '')) return null;
+      gen = prev.current;
+      return { ...prev, current: { ...prev.current, interactive_prompt_id: input.prompt_id! } };
+    });
+    if (!written.ok || gen === null) return null;
+    const current: JobGeneration = gen;
+    const active = Object.keys(current.active).length;
+    trace?.write('background_conversation', { ...base, active, execution_prompt_id: current.prompt_id });
+    if (current.outcome !== null) return emitContext('UserPromptSubmit', `Jev Gate: this background completion notice does not start or replace a job. The original job's recorded outcome is ${current.outcome}; use its stored policy result below. A notification is not new work or acceptance.\n${current.background_context ?? ''}`, null);
+    return emitContext('UserPromptSubmit', `Jev Gate: answer the user's new message in the main session. The original background job and its contracts remain current; this message does not cancel or replace them. ${active ? `${active} owned execution(s) still have no terminal result. Do not wait synchronously, duplicate their work, or edit their files. Continue answering questions here; native permissions and explicit user cancellation remain authoritative.` : 'The previous execution has ended; use the policy result below before continuing the original job.'}\n${current.background_context ?? ''}`, null);
+  };
+
+  const backgroundPre = (result: HookResult): HookResult => {
+    if (deps.host || deps.env['CLAUDE_CODE_DISABLE_BACKGROUND_TASKS'] === '1' || (result.kind !== 'patch' && result.kind !== 'preserve') || !input.session_id || !input.tool_use_id || !isRecord(input.tool_input)) return result;
+    const state = readJob(deps.env, input.session_id);
+    const gen = state.ok ? state.value?.current : null;
+    const r = gen ? own(gen.active, input.tool_use_id) : undefined;
+    if (!gen || !r) return result;
+    const patched = result.kind === 'patch' && result.stdout ? JSON.parse(result.stdout)?.hookSpecificOutput?.updatedInput : input.tool_input;
+    if (!isRecord(patched) || typeof patched['prompt'] !== 'string' || typeof patched['subagent_type'] !== 'string') return result;
+    const token = randomUUID();
+    const prompt = patched['prompt'] + dispatchMarker(token);
+    const stdout = renderPreToolUseOutput({ kind: 'update', updatedInput: { ...patched, prompt, run_in_background: true } });
+    if (Buffer.byteLength(prompt) > MAX_PROMPT_BYTES || stdout === null) {
+      updateJob(deps.env, input.session_id, prev => prev?.current.prompt_id === gen.prompt_id ? { ...prev, current: release(prev.current, input.tool_use_id!) } : null);
+      return emitDeny('dispatch_ineligible', 'Background dispatch identity exceeds the prompt size bound; no worker started.', null);
+    }
+    let registered = false;
+    const saved = updateJob(deps.env, input.session_id, prev => {
+      const owner = prev?.current.prompt_id === gen.prompt_id ? own(prev.current.active, input.tool_use_id!) : undefined;
+      if (!prev || !owner) return null;
+      registered = true;
+      return { ...prev, current: { ...prev.current, background_job: true, active: { ...prev.current.active, [input.tool_use_id!]: { ...owner, background_execution: { token, agent_id: null, subagent_type: String(patched['subagent_type']), resolved_model: null } } } } };
+    });
+    if (!saved.ok || !registered) return emitDeny('dispatch_ineligible', 'Background execution reservation unavailable; no worker started.', null);
+    trace?.write('background_dispatch', { ...base, execution_prompt_id: gen.prompt_id, role: r.role, task_id: r.task_id });
+    return { kind: 'patch', code: result.code, stdout };
+  };
+
+  const backgroundLaunch = (): HookResult | null => {
+    if (input.hook_event_name !== 'PostToolUse' || input.tool_name !== 'Agent' || !input.session_id || !input.tool_use_id || !isRecord(input.tool_response) || responseStatus(input.tool_response) !== 'async_launched') return null;
+    const agentId = str(input.tool_response['agentId']);
+    if (!agentId || !/^[A-Za-z0-9_-]{1,64}$/.test(agentId)) return skip();
+    const state = readJob(deps.env, input.session_id);
+    if (!state.ok || !state.value || ![state.value.current, ...state.value.history].some(g => own(g.active, input.tool_use_id!)?.background_execution)) return null;
+    let executionPrompt: string | null = null;
+    updateJob(deps.env, input.session_id, prev => {
+      if (!prev) return null;
+      const change = (gen: JobGeneration): JobGeneration => {
+        const r = own(gen.active, input.tool_use_id!); if (!r?.background_execution || r.background_execution.agent_id && r.background_execution.agent_id !== agentId) return gen;
+        executionPrompt = gen.prompt_id;
+        return { ...gen, active: { ...gen.active, [input.tool_use_id!]: { ...r, background_execution: { ...r.background_execution, agent_id: agentId, resolved_model: observedModel(input.tool_response) } } } };
+      };
+      return { ...prev, current: change(prev.current), history: prev.history.map(change) };
+    });
+    trace?.write('background_launch', { ...base, execution_prompt_id: executionPrompt, agent_id: agentId, status: 'running', resolved_model: observedModel(input.tool_response) });
+    return skip();
+  };
+
+  const backgroundResult = async (owner: { gen: JobGeneration; id: string; r: Reservation }, observed: { completed: boolean; text: string; model: string | null }, agentId: string): Promise<HookResult> => {
+    const sessionId = input.session_id!;
+    const state = readJob(deps.env, sessionId);
+    if (!state.ok || !state.value) return skip('no_state');
+    if (owner.gen.prompt_id !== state.value.current.prompt_id) {
+      updateJob(deps.env, sessionId, prev => prev ? { ...prev, history: prev.history.map(g => {
+        const r = own(g.active, owner.id);
+        if (g.prompt_id !== owner.gen.prompt_id || !r?.background_execution || r.background_execution.token !== owner.r.background_execution?.token) return g;
+        const receipt: Receipt = { task_id: r.task_id ?? '', contract_hash: r.contract_hash ?? '', rev: r.rev ?? 0, attempt: r.attempt, tool_use_id: owner.id,
+          provenance: 'worker_reported', reply: null, verdict: 'unknown', verdict_reason: 'generation_changed', advisory: null,
+          observed_model: observed.model, root_effort: null, recorded_at: new Date().toISOString() };
+        return { ...release(g, owner.id), receipts: [...g.receipts, receipt] };
+      }) } : null);
+      trace?.write('background_terminal', { ...base, execution_prompt_id: owner.gen.prompt_id, tool_use_id: owner.id, orphaned: true, accepted: false, status: observed.completed ? 'completed' : 'failed' });
+      return skip();
+    }
+    if (owner.r.role === 'executor') {
+      let released = false;
+      const saved = updateJob(deps.env, sessionId, prev => {
+        const r = prev?.current.prompt_id === owner.gen.prompt_id ? own(prev.current.active, owner.id) : undefined;
+        if (!prev || !r?.background_execution || r.background_execution.token !== owner.r.background_execution?.token) return null;
+        released = true;
+        return { ...prev, current: { ...release(prev.current, owner.id), outcome: observed.completed ? 'completed' : 'incomplete' } };
+      });
+      released = saved.ok && released;
+      trace?.write('lean_post', { ...base, prompt_id: owner.gen.prompt_id, tool_use_id: owner.id, released, release_unconfirmed: !released, status: observed.completed ? 'completed' : 'failed', observed_model: observed.model });
+    } else {
+      const event: HookInput = { hook_event_name: 'PostToolUse', session_id: sessionId, ...(owner.gen.prompt_id === null ? {} : { prompt_id: owner.gen.prompt_id }), ...(input.transcript_path ? { transcript_path: input.transcript_path } : {}), ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
+        tool_name: 'Agent', tool_use_id: owner.id, tool_input: { subagent_type: owner.r.background_execution!.subagent_type },
+        tool_response: { status: observed.completed ? 'completed' : 'failed', agentId, resolvedModel: observed.model, content: [{ type: 'text', text: observed.text }] } };
+      const result = await runHook({ ...deps, stdin: (async function* () { yield JSON.stringify(event); })() });
+      const context = result.stdout ? JSON.parse(result.stdout)?.hookSpecificOutput?.additionalContext : null;
+      if (typeof context === 'string') updateJob(deps.env, sessionId, prev => prev?.current.prompt_id === owner.gen.prompt_id ? { ...prev, current: { ...prev.current, background_context: context } } : null);
+    }
+    trace?.write('background_terminal', { ...base, execution_prompt_id: owner.gen.prompt_id, tool_use_id: owner.id, task_id: owner.r.task_id, status: observed.completed ? 'completed' : 'failed' });
+    return skip();
+  };
+
+  const backgroundStop = async (): Promise<HookResult> => {
+    if (!input.session_id || !input.agent_id) return skip('missing_ids');
+    const observed = claudeTerminal(input);
+    const state = readJob(deps.env, input.session_id);
+    if (!state.ok || !state.value) return skip('no_state');
+    const found = [state.value.current, ...state.value.history].flatMap(gen => Object.entries(gen.active).flatMap(([id, r]) => r.background_execution && (r.background_execution.agent_id === input.agent_id || observed?.token === r.background_execution.token) ? [{ gen, id, r }] : []));
+    if (found.length !== 1) return skip();
+    const owner = found[0]!; const execution = owner.r.background_execution;
+    if (!execution || execution.subagent_type !== input.agent_type || !observed || execution.agent_id !== null && execution.agent_id !== input.agent_id) return skip();
+    // SubagentStop context goes to the child. Root receives stored policy guidance on its native completion turn.
+    return backgroundResult(owner, observed, input.agent_id);
+  };
+
+  const backgroundCancel = async (): Promise<HookResult> => {
+    const response = isRecord(input.tool_response) ? input.tool_response : null;
+    const taskId = response?.['task_id'];
+    if (!input.session_id || typeof taskId !== 'string' || response?.['task_type'] !== 'local_agent' || typeof response['message'] !== 'string' || !response['message'].startsWith(`Successfully stopped task: ${taskId} (`) || !isRecord(input.tool_input) || input.tool_input['task_id'] !== taskId) return skip();
+    const state = readJob(deps.env, input.session_id);
+    if (!state.ok || !state.value) return skip('no_state');
+    const owners = [state.value.current, ...state.value.history].flatMap(gen => Object.entries(gen.active).flatMap(([id, r]) => r.background_execution?.agent_id === taskId ? [{ gen, id, r }] : []));
+    if (owners.length !== 1) return skip();
+    const owner = owners[0]!;
+    const result = await backgroundResult(owner, { completed: false, text: '', model: owner.r.background_execution!.resolved_model }, taskId);
+    updateJob(deps.env, input.session_id, prev => prev?.current.prompt_id === owner.gen.prompt_id && Object.keys(prev.current.active).length === 0 ? { ...prev, current: { ...prev.current, outcome: 'incomplete' } } : null);
+    return result;
+  };
+
+  if (input.hook_event_name === 'SubagentStop') return backgroundStop();
+  if (input.hook_event_name === 'PostToolUse' && input.tool_name === 'TaskStop') return backgroundCancel();
+  if (input.hook_event_name === 'PostToolUse') { const launch = backgroundLaunch(); if (launch) return launch; }
+  if (input.hook_event_name === 'UserPromptSubmit') { const response = interactivePrompt(); if (response) return response; }
+
   if (rawMode === 'lean') {
     if (input.hook_event_name === 'UserPromptSubmit') return leanPrompt();
-    if (input.hook_event_name === 'PreToolUse') return leanPre();
+    if (input.hook_event_name === 'PreToolUse') return backgroundPre(await leanPre());
     if (input.hook_event_name === 'PostToolUse' || input.hook_event_name === 'PostToolUseFailure') return leanPost();
     return skip();
   }
@@ -1794,6 +1931,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     if (state.ok) gen = state.value?.current ?? null;
     else gen = { ...recoveredGeneration(), phase: 'blocked' };
 
+    if (gen?.background_job) base['execution_prompt_id'] = gen.prompt_id;
     const orchestrated = gen !== null && gen.shape === 'orchestrated' && gen.outcome === null && gen.root_fallback !== true;
     const ownedCall = toolName === 'Agent' && isRecord(input.tool_input) && typeof input.tool_input['subagent_type'] === 'string' && input.tool_input['subagent_type'] in OWNED_AGENTS;
 
@@ -2268,6 +2406,10 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     const error = input.error ?? '';
     if (sessionId && toolUseId) {
       const old = readJob(deps.env, sessionId);
+      if (old.ok && old.value && [old.value.current, ...old.value.history].some(g => own(g.active, toolUseId)?.background_execution)) {
+        trace?.write('failure', { ...base, release_unconfirmed: true, is_interrupt: input.is_interrupt ?? null });
+        return skip();
+      }
       if (input.prompt_id != null && old.ok && old.value && old.value.current.prompt_id !== input.prompt_id) return settleRetiredCodex(sessionId, toolUseId);
       const written = updateJob(deps.env, sessionId, (prev) => {
         const reservation = prev && (input.prompt_id == null || prev.current.prompt_id === input.prompt_id) ? own(prev.current.active, toolUseId) : undefined;
@@ -2317,7 +2459,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
    * auto-mode admission decision, and says something only when a full window of 50 decisions never once attempted a
    * Gate A call, which is a stronger claim than a single unlucky run and worth a `doctor` visit. Off, native and lean
    * modes never populate the ring with auto-mode decisions in the first place, so there is nothing to check there.
-   * One condition needs no window: a session whose Agent calls can only run in the background, where auto mode stays
+   * One condition needs no window: a session without a verified fresh owned Agent profile, where auto mode stays
    * native on every prompt (`host_unsupported`). That is read from this session's own environment and said at once,
    * since the ring would otherwise take 50 prompts to reach the same conclusion.
    */
@@ -2327,7 +2469,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     if (blocker !== null) {
       const text =
         blocker === 'background_only'
-          ? 'jev-gate: mode=auto, but this session\'s Agent calls can only run in the background, so no admitted job could reach a worker. Every prompt stays native and sends no Jev request. To use the gate, start Claude Code with CLAUDE_CODE_FORK_SUBAGENT=0 CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1; otherwise set mode to off.'
+          ? 'jev-gate: mode=auto, but this session has no verified fresh owned Agent profile, so no admitted job could reach a worker. Every prompt stays native and sends no Jev request. To use the gate, start Claude Code with CLAUDE_CODE_FORK_SUBAGENT=0; otherwise set mode to off.'
           : 'jev-gate: mode=auto, but CLAUDE_CODE_SUBAGENT_MODEL pins every subagent\'s model, which each owned Agent call refuses, so no admitted job could reach a worker. Every prompt stays native and sends no Jev request. To use the gate, start Claude Code without that override; otherwise set mode to off.';
       const stdout = renderSystemMessage(text);
       return stdout === null ? skip('host_unsupported') : { kind: 'notice', code: 'host_unsupported', stdout };
@@ -2348,6 +2490,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     updateJob(deps.env, sessionId, (prev) => {
       if (!prev || prev.current.outcome !== null) return null;
       const gen = prev.current;
+      if (gen.background_job && (Object.keys(gen.active).length > 0 || gen.phase !== 'blocked' && !gen.root_fallback && (gen.execution === 'single' ? gen.receipts.filter(r => r.task_id === SINGLE_TASK_ID).at(-1)?.verdict !== 'accept' : !planComplete(gen)))) return null;
       const allAccepted = planComplete(gen);
       // A19: the single shape has no plan to complete, so its completion is the latest receipt of the one dispatch it
       // makes. That receipt is the worker's own report (reportedSingleVerdict), so `completed` is a weaker statement
@@ -2364,7 +2507,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
   };
 
   if (input.hook_event_name === 'UserPromptSubmit') return handleUserPrompt();
-  if (input.hook_event_name === 'PreToolUse') return handlePreToolUse();
+  if (input.hook_event_name === 'PreToolUse') return backgroundPre(await handlePreToolUse());
   if (input.hook_event_name === 'PostToolUse') return handlePostToolUse();
   if (input.hook_event_name === 'PostToolUseFailure') return handlePostToolUseFailure();
   if (input.hook_event_name === 'Stop') return handleStop();

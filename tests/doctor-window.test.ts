@@ -157,10 +157,10 @@ describe('doctor: mode=off idle-cost warning (#48 P2 Task 4.4)', () => {
   });
 });
 
-describe('doctor: mentions SessionStart as a sixth registered event', () => {
-  it('names all six events in the closing /hooks line', () => {
+describe('doctor: mentions all seven lifecycle hooks', () => {
+  it('names all seven events in the closing /hooks line', () => {
     const stdout = doctor({});
-    expect(stdout).toMatch(/\/hooks should list six jev-gate entries \(UserPromptSubmit, PreToolUse with no matcher, PostToolUse on \^Agent\$, PostToolUseFailure on \^Agent\$, Stop, SessionStart\)/);
+    expect(stdout).toContain('/hooks should list seven jev-gate lifecycle entries (UserPromptSubmit, PreToolUse with no matcher, PostToolUse on ^(Agent|TaskStop)$, PostToolUseFailure on ^Agent$, Stop, SessionStart, owned SubagentStop)');
   });
 });
 
@@ -215,9 +215,9 @@ describe('doctor: a launch profile that lets an admitted job reach a worker (#48
     return dir;
   };
 
-  it('fails in auto mode when Agent calls could only run in the background, and says the hook sends nothing', () => {
+  it('fails in auto mode when the fresh owned Agent profile is unavailable, and says the hook sends nothing', () => {
     const line = expectFail(doctorRun({ JEV_GATE_CONFIG: configFile({ version: 5, mode: 'auto' }) }));
-    expect(line).toContain('mode=auto but Agent calls can only run in the background (fork=unset, disable_background=unset');
+    expect(line).toContain('mode=auto but a fresh owned Agent profile is unavailable (fork=unset, disable_background=unset');
     expect(line).toContain('host_unsupported and sends no Jev request');
   });
 

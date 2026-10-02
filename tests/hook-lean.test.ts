@@ -708,7 +708,7 @@ describe('lean — applying the packet to the owned call', () => {
 
   it.each([
     ['a model pin', { model: 'haiku' }],
-    ['a background run', { run_in_background: true }],
+    ['an invalid background value', { run_in_background: 'invalid' }],
     ['a resume control', { resume: 'agent-1' }],
     ['a fork control', { fork: true }],
   ])('refuses rather than half-patching a call carrying %s', async (_name, inputOver) => {
@@ -900,7 +900,7 @@ globalThis.fetch = async (_url, init) => {
   it('installs a hook command that runs the lean entrypoint', () => {
     build();
     const hooks = JSON.parse(readFileSync(join(packed, 'hooks', 'hooks.json'), 'utf8')) as { hooks: Record<string, Array<{ matcher?: string; hooks: Array<{ command: string; timeout: number }> }>> };
-    expect(Object.keys(hooks.hooks).sort()).toEqual(['PostToolUse', 'PostToolUseFailure', 'PreToolUse', 'UserPromptSubmit']);
+    expect(Object.keys(hooks.hooks).sort()).toEqual(['PostToolUse', 'PostToolUseFailure', 'PreToolUse', 'SubagentStop', 'UserPromptSubmit']);
     for (const [event, matchers] of Object.entries(hooks.hooks)) {
       for (const m of matchers) {
         for (const h of m.hooks) {
@@ -910,7 +910,8 @@ globalThis.fetch = async (_url, init) => {
           expect(h.command).toContain('--lean');
           expect(h.timeout).toBeLessThanOrEqual(5);
         }
-        if (event !== 'UserPromptSubmit') expect(m.matcher).toBe('^Agent$');
+        if (event === 'SubagentStop') expect(m.matcher).toContain('jev-gate:');
+        else if (event !== 'UserPromptSubmit') expect(m.matcher).toBe(event === 'PostToolUse' ? '^(Agent|TaskStop)$' : '^Agent$');
       }
     }
   });

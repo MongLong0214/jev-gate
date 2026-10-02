@@ -11,7 +11,7 @@ const cleanups: (() => void)[] = [];
 afterEach(() => { cleanups.splice(0).forEach(f => f()); vi.restoreAllMocks(); });
 const setup = async (scenario = 'uncertain', started = true) => {
   const root = mkdtempSync(join(tmpdir(), 'jev-worker-')); const config = join(root, 'config.json');
-  writeFileSync(config, JSON.stringify({ gate: { mode: 'native', admittedShape: 'single', maxParallelWorkers: 1, workerIsolation: 'none', guardAllowTools: ['*'], models: { fast: 'gpt-6.1-sol', standard: 'gpt-6.1-sol', deep: 'gpt-6.1-sol', frontier: 'gpt-6.1-sol' } }, router: { enabled: false } }));
+  writeFileSync(config, JSON.stringify({ gate: { mode: 'native', admittedShape: scenario === 'planner' ? 'hierarchy' : 'single', maxParallelWorkers: 1, workerIsolation: 'none', guardAllowTools: ['*'], models: { fast: 'gpt-6.1-sol', standard: 'gpt-6.1-sol', deep: 'gpt-6.1-sol', frontier: 'gpt-6.1-sol' } }, router: { enabled: false } }));
   const input = new PassThrough(); const output = new PassThrough();
   const rpc = new CodexRpc(input, output); const sent: Obj[] = [];
   const reply = (id: unknown, result: Obj) => input.write(JSON.stringify({ id, result }) + '\n');
@@ -19,7 +19,7 @@ const setup = async (scenario = 'uncertain', started = true) => {
   let start: Obj | undefined;
   const env = { HOME: root, JEV_CODEX_CONFIG: config, JEV_CODEX_TRACE_DIR: join(root, 'trace'), JEV_GATE_STATE_DIR: join(root, 'state'), JEV_GATE_EXPERIMENT_ADMISSION: 'orchestrated' };
   const stateEnv = { JEV_GATE_STATE_DIR: join(env.JEV_GATE_STATE_DIR, 'codex') };
-  const policy = new CodexPolicy(rpc, env, undefined, { 'jev-gate:worker': 'Return a result' }, true);
+  const policy = new CodexPolicy(rpc, env, undefined, { 'jev-gate:worker': 'Return a result', 'jev-gate:planner': 'Return a plan' }, true);
   const nativeRequest = rpc.request.bind(rpc);
   vi.spyOn(rpc, 'request').mockImplementation((m, p, timeout) => nativeRequest(m, p, m === 'turn/start' ? 15 : timeout));
   output.on('data', b => {
@@ -31,7 +31,7 @@ const setup = async (scenario = 'uncertain', started = true) => {
         if (scenario === 'pre-failure') input.write(JSON.stringify({ id: m['id'], error: { code: -1 } }) + '\n');
         else reply(m['id'], { model: 'gpt-6.1-sol', cwd: root, sandbox: { type: 'dangerFullAccess' }, thread: { id: 'worker' } });
       }
-      if (m['method'] === 'turn/start') { start = m; if (started) notify('turn/started', { threadId: 'worker', turn: { id: 'turn-w' } }); if (scenario === 'normal') reply(m['id'], { turn: { id: 'turn-w' } }); }
+      if (m['method'] === 'turn/start') { start = m; if (started) notify('turn/started', { threadId: 'worker', turn: { id: 'turn-w' } }); if (scenario === 'normal' || scenario === 'planner') reply(m['id'], { turn: { id: 'turn-w' } }); }
       if (m['method'] === 'thread/read') reply(m['id'], { thread: { id: 'worker', turns: [] } });
       if (m['method'] === 'turn/interrupt' || m['method'] === 'thread/archive') reply(m['id'], {});
     }
@@ -41,9 +41,9 @@ const setup = async (scenario = 'uncertain', started = true) => {
   const parent = policy.sessions.get('parent')!; parent.prompt = 'p'; parent.controller = new AbortController(); parent.tokens = 500000;
   await policy.nativeHook({ hook_event_name: 'UserPromptSubmit', session_id: 'parent', prompt: 'Investigate and return a result' });
   cleanups.push(() => { rpc.close(); input.destroy(); output.destroy(); rmSync(root, { recursive: true, force: true }); });
-  const launch = () => rpc.onRequest({ id: 'call', method: 'item/tool/call', params: { threadId: 'parent', callId: 'dispatch', tool: 'jev_agent', arguments: { subagent_type: 'jev-gate:worker', prompt: 'Investigate and return a result' } } });
-  const terminal = (status = 'completed') => {
-    notify('item/completed', { threadId: 'worker', item: { id: 'final', type: 'agentMessage', phase: 'final_answer', text: 'worker observation kept' } });
+  const launch = (background = false) => rpc.onRequest({ id: 'call', method: 'item/tool/call', params: { threadId: 'parent', callId: 'dispatch', tool: 'jev_agent', arguments: { run_in_background: background, subagent_type: scenario === 'planner' ? 'jev-gate:planner' : 'jev-gate:worker', prompt: 'Investigate and return a result' } } });
+  const terminal = (status = 'completed', text = 'worker observation kept') => {
+    notify('item/completed', { threadId: 'worker', item: { id: 'final', type: 'agentMessage', phase: 'final_answer', text } });
     notify('turn/completed', { threadId: 'worker', turn: { id: 'turn-w', status } });
   };
   const job = () => { const r = readJob(stateEnv, 'parent'); if (!r.ok || !r.value) throw new Error('state missing'); return r.value; };
@@ -51,6 +51,38 @@ const setup = async (scenario = 'uncertain', started = true) => {
   return { policy, rpc, parent, sent, launch, terminal, job, stateEnv, root, returned, started: () => start !== undefined, lateResponse: () => { if (start) reply(start['id'], { turn: { id: 'turn-w' } }); } };
 };
 describe('Codex genuine terminal settlement (#139)', () => {
+  it('returns a background launch immediately, preserves it across a new question and collects its original result', async () => {
+    const f = await setup('normal'); await f.launch(true);
+    expect(JSON.stringify(f.returned())).toContain('launch receipt'); expect(f.job().current.receipts).toHaveLength(0);
+    f.parent.controller!.abort(); f.parent.controller = new AbortController(); f.parent.prompt = 'question';
+    const answer = await f.policy.nativeHook({ hook_event_name: 'UserPromptSubmit', session_id: 'parent', prompt: 'Explain this feature while the worker runs.' });
+    expect(JSON.stringify(answer)).toContain('answer the user'); expect(f.job().current.prompt_id).toBe('p');
+    await f.policy.nativeHook({ hook_event_name: 'Stop', session_id: 'parent' });
+    expect(f.job().current.outcome).toBeNull(); expect(f.sent.some(m => m['method'] === 'turn/interrupt')).toBe(false);
+    f.terminal('completed', JSON.stringify({ status: 'done', summary: 'original result', changed_files: [], interfaces: [], checks: [], blockers: [] }));
+    await vi.waitFor(() => expect(f.job().current.receipts[0]?.verdict).toBe('accept'));
+    expect(f.job().current.active).toEqual({}); expect(f.job().current.background_context).toContain('original result');
+    await f.rpc.onRequest({ id: 'status', method: 'item/tool/call', params: { threadId: 'parent', tool: 'jev_agent', arguments: { action: 'status', agent_id: 'worker' } } });
+    expect(JSON.stringify(f.sent.find(m => m['id'] === 'status'))).toContain('original result');
+    f.terminal(); expect(f.job().current.receipts).toHaveLength(1);
+  });
+  it('collects a committed background planner result without requiring a worker receipt', async () => {
+    const f = await setup('planner'); await f.launch(true);
+    f.terminal('completed', JSON.stringify({ status: 'ready', goal: 'Original goal', constraints: [], tasks: [{ id: 't1', outcome: 'Implement the goal', depends_on: [], deliverables: ['src/file'], constraints: [], checks: [{ id: 'c1', description: 'Check the outcome', required: true, command: 'vitest run' }] }] }));
+    await vi.waitFor(() => expect(f.policy.sessions.has('worker')).toBe(false));
+    expect(f.job().current.phase).toBe('planned'); expect(f.job().current.plan?.tasks[0]?.id).toBe('t1'); expect(f.job().current.active).toEqual({});
+    expect(f.job().current.background_context).toContain('rev=1');
+    await f.rpc.onRequest({ id: 'status', method: 'item/tool/call', params: { threadId: 'parent', tool: 'jev_agent', arguments: { action: 'status', agent_id: 'worker' } } });
+    expect(JSON.stringify(f.sent.find(m => m['id'] === 'status'))).toContain('Original goal');
+  });
+  it('keeps cancellation ACK protected until the owned worker actually ends', async () => {
+    const f = await setup('normal'); await f.launch(true);
+    await f.rpc.onRequest({ id: 'cancel', method: 'item/tool/call', params: { threadId: 'parent', tool: 'jev_agent', arguments: { action: 'cancel', agent_id: 'worker' } } });
+    expect(f.sent.filter(m => m['method'] === 'turn/interrupt')).toHaveLength(1);
+    expect(f.job().current.active['dispatch']).toBeDefined(); expect(f.job().current.receipts).toHaveLength(0);
+    f.terminal('interrupted'); await vi.waitFor(() => expect(f.job().current.active).toEqual({}));
+    expect(f.job().current.receipts[0]?.verdict).not.toBe('accept');
+  });
   it('releases a definite failure before user turn/start and allows the next dispatch', async () => {
     const f = await setup('pre-failure'); await f.launch();
     expect(f.sent.some(m => m['method'] === 'turn/start')).toBe(false);

@@ -20,7 +20,7 @@ export const DIRECT_MODE_SENTENCE: Record<RoutingMode, string> = {
 /** T5: the dispatch sentence states the configured cap, so the guidance can never ask for more workers than will run. */
 export const renderDispatchRule = (cap: number): string =>
   cap <= 1
-    ? 'Follow the plan: dispatch one ready task at a time and wait for its result. This build runs one worker at a time; a second concurrent dispatch is denied.'
+    ? 'Follow the plan: dispatch one ready task at a time in the background; answer new user questions while awaiting its terminal result. This build runs one worker at a time; a second concurrent dispatch is denied.'
     : `Follow the plan: dispatch a task whose dependencies are already accepted. At most ${cap} workers run at once, so send at most ${cap} ready tasks with disjoint deliverables in one message and hold the rest.`;
 
 /**
@@ -65,8 +65,11 @@ export const MCP_SENTENCE =
 export const DISPATCH_FIRST_SENTENCE =
   'Dispatch first: do not read or search the repository before the dispatch. Every turn you take re-reads this whole session, and the worker reads what it needs in its own context.';
 
+export const BACKGROUND_GUIDANCE = 'Owned executions run in the background by default. Answer new user messages in the main conversation while they work. A launch receipt is not completion: accept only the original contract result after native terminal evidence. Do not duplicate active work or edit its files. Explicit user cancellation remains authoritative.';
+
 export const orchestrationRules = (cap: number, workerIsolation: WorkerIsolation = 'none', allowTools: readonly string[] = [], allowMcp = false): string[] => [
   'You do not implement this request yourself; you coordinate.',
+  BACKGROUND_GUIDANCE,
   renderToolRule('Agent calls to jev-gate:planner and the jev-gate worker roles', allowTools, allowMcp),
   'Planner first: call jev-gate:planner with no model argument. Give it the exact request, the relevant earlier user constraints, and factual observations about this repository. It is read-only and returns the plan.',
   renderDispatchRule(cap),
@@ -86,6 +89,7 @@ export const orchestrationRules = (cap: number, workerIsolation: WorkerIsolation
  */
 export const singleRules = (allowTools: readonly string[] = [], allowMcp = false): string[] => [
   'You do not implement this request yourself; you coordinate.',
+  BACKGROUND_GUIDANCE,
   renderToolRule('one Agent call to the jev-gate worker role', allowTools, allowMcp),
   'Dispatch this request once, whole, to jev-gate:worker. There is no plan for this request: jev-gate:planner is denied, and splitting the work across several workers is not what this shape does.',
   DISPATCH_FIRST_SENTENCE,
@@ -161,7 +165,7 @@ export const GUARD_DENY_REASON =
 
 /** A single job has no planner, marker or task contract. Its guard must describe the actual dispatch. */
 export const SINGLE_GUARD_DENY_REASON =
-  'Jev Gate single-worker execution is active for this request. Dispatch the whole request once to jev-gate:worker as a foreground call; the hook appends the original request. No planner or JEV_TASK marker is required. Nothing was changed by this call.';
+  'Jev Gate single-worker execution is active for this request. Dispatch the whole request once to jev-gate:worker as a background call; the hook appends the original request. No planner or JEV_TASK marker is required. Nothing was changed by this call.';
 
 export const SINGLE_STOP_REASON =
   'Jev Gate: the main session repeatedly tried to implement this admitted request directly instead of dispatching its single worker. Nothing further will run for this request. Relaunch with JEV_GATE_MODE=off to work without delegation.';
@@ -172,7 +176,7 @@ export const STOP_REASON =
 const DISPATCH_DENY_TEXT: Record<DenyReason, string> = {
   guard_denied: GUARD_DENY_REASON,
   dispatch_ineligible:
-    'This owned agent call cannot be validated as a planned dispatch while orchestration is active. Dispatch a planned task as a foreground call with no resume, team, fork or isolation field, and with a well-formed prompt within the size bound.',
+    'This owned agent call cannot be validated as a planned dispatch while orchestration is active. Dispatch a planned task as a background call with no resume, team, fork or isolation field, and with a well-formed prompt within the size bound.',
   no_marker: 'This worker prompt has no [JEV_TASK rev=<n> id=<id>] marker on its first line. Dispatch a planned task, or call jev-gate:planner first.',
   unknown_task: 'The marker names a task id that is not in the current plan. Use an id from the current plan revision.',
   stale_rev: 'The marker names an older plan revision. Re-read the current plan revision and dispatch its task ids.',
@@ -209,7 +213,7 @@ const DISPATCH_DENY_TEXT: Record<DenyReason, string> = {
  * blocks its own tools if it does.
  */
 export const renderLeanRecommendation = (marker: string, omitted: number): string =>
-  `Jev Gate (lean): this request can run in one fresh jev-gate:executor that starts with the current request plus the earlier conversation it still needs; ${omitted} earlier interaction group${omitted === 1 ? '' : 's'} would be left out. To use it, make one foreground Agent call with subagent_type "jev-gate:executor", no model argument, and this marker on its own line in the prompt: ${marker}\nThe plugin attaches the conversation source to that call. Ignoring this and working here is fine; nothing is blocked either way.`;
+  `Jev Gate (lean): this request can run in one fresh jev-gate:executor that starts with the current request plus the earlier conversation it still needs; ${omitted} earlier interaction group${omitted === 1 ? '' : 's'} would be left out. To use it, make one background Agent call with subagent_type "jev-gate:executor", no model argument, and this marker on its own line in the prompt: ${marker}\nThe plugin attaches the conversation source to that call. Ignoring this and working here is fine; nothing is blocked either way.`;
 
 /** Planner-reported text is bounded before it reaches the coordinator; the plugin never forwards unbounded child output. */
 const bounded = (detail: string): string => (detail.length > 1000 ? `${detail.slice(0, 1000)}…` : detail);

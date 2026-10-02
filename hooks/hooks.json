@@ -24,7 +24,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "^Agent$",
+        "matcher": "^(Agent|TaskStop)$",
         "hooks": [
           {
             "type": "command",
@@ -75,6 +75,18 @@
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/worktree-cli.js\"",
             "timeout": 120
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "^jev-gate:(?:worker(?:-fast|-deep|-frontier)?|planner(?:-frontier)?|executor)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/entry.js\"",
+            "timeout": 5
           }
         ]
       }

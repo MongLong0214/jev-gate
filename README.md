@@ -19,7 +19,7 @@ The marketplace installs [the latest release](https://github.com/MongLong0214/je
 
 The [native Codex plugin](plugins/codex/README.md) connects **Gate A/B, planning, contract acceptance, root guard, Lean, Router and Compact** to ordinary native Codex through its local connection, alongside Evidence, Output and recording. Owned workers use the official Codex App Server; native login and permissions remain authoritative. Automatic connection was tested with Codex CLI 0.159.3 and Node 22.15+.
 
-For an installation without a build step, download **`jev-gate-codex-0.8.1.zip`** from the [v0.8.1 release](https://github.com/MongLong0214/jev-gate/releases/tag/v0.8.1), extract it, and register the extracted directory:
+For an installation without a build step, download **`jev-gate-codex-0.8.2.zip`** from the [v0.8.2 release](https://github.com/MongLong0214/jev-gate/releases/tag/v0.8.2), extract it, and register the extracted directory:
 
 ```sh
 codex plugin marketplace add /absolute/path/to/extracted-plugin
@@ -62,9 +62,17 @@ Then enter your **Jev API key** in the local screen that opens automatically. Th
 
 A TypeSafe key is not a Claude login. TypeSafe charges and limits are separate from a Claude subscription. With a key, Gate, the Router, and an Evidence semantic search can send a request or some source text to TypeSafe. They do not upload the repository as a whole. Compact and Output do not call Jev. Exact-symbol lookups and Evidence read-backs are not sent.
 
-The plugin prepares missing Function Hooks and foreground-worker launch settings, trace/debug directories, and disables enabled obsolete `jev-gate-compact/-router/-output/-evidence` entries in user settings. It preserves unrelated settings, native permissions and explicit owner overrides. Foreground workers and parallel snapshot worktrees are prepared automatically.
+The plugin prepares missing Function Hooks and background-worker launch settings, trace/debug directories, and disables enabled obsolete `jev-gate-compact/-router/-output/-evidence` entries in user settings. It preserves unrelated settings, native permissions and explicit owner overrides. Responsive background workers and parallel snapshot worktrees are prepared automatically.
 
 Claude Code reads some execution settings before loading plugins. On a fresh installation, the startup notice asks for **one host restart** after automatic preparation; no settings editing is needed. Already-open Codex hosts likewise need a fresh host to load a new provider, and Codex may require native hook trust approval. These are host lifecycle/security requirements, not extra Jev configuration. An explicit conflicting owner setting is reported and preserved.
+
+### Ask questions while workers run
+
+Owned planners, workers and Lean executors run in the background by default. The main conversation returns after dispatch, so you can ask another question while work continues. A new message keeps the original job and contracts; it does not cancel or replace them. Completion is checked against that original contract, even if several conversation turns arrived meanwhile. A start notification is not a completed or accepted result.
+
+Claude Code delivers native completion notifications. In Codex, `jev_agent` supports `action: "status"` with the returned `agent_id` for an immediate result lookup, and `action: "cancel"` for explicit cancellation. These are coordinator tools; normal users continue using the same chat. Cancellation releases ownership only after an observed terminal event. An interrupted main turn does not cancel an already running background worker.
+
+On upgrade, the complete old Jev-generated foreground profile is migrated automatically. Restart Claude Code once when the notice asks, because an already running host retains its launch environment. Customized owner overrides remain unchanged. If Claude is briefly busy with a main tool call, use its native **Send now** shortcut (Ctrl+Enter, or Ctrl+X then Ctrl+S); ordinary Enter can queue that message. See [Claude Code interactive mode](https://code.claude.com/docs/en/interactive-mode).
 
 The key is stored under `$XDG_CONFIG_HOME/jev-gate/auth/credentials.json`, or `~/.config/jev-gate/auth/credentials.json`, with a private directory and file (0700/0600). It is never put in a project, URL, command argument or diagnostic log. Both hosts read it; Evidence and Codex accept a newly saved key without an MCP restart. Existing explicit environment/plugin keys take precedence. Saving checks the key's format, not account validity, quota or API availability. Until a key exists, Gate/Lean/Router preserve native behavior and Evidence searches locally.
 
@@ -245,7 +253,7 @@ claude plugin validate . --strict
 
 A saving claim needs the paired A/B bench (`node dist/bench/ab.js`, see `docs/bench-ab.md`), not a within-session estimate. `npm test` uses fake HTTP and a fake CLI. It does not need a key or a login. The bench is not part of installing or of changing the plugin. Do not send secrets or raw transcripts.
 
-`claude --plugin-dir .` loads this tree as the plugin. One part can be loaded from `mods/compact`, `mods/output`, `mods/router`, or `plugins/evidence`; option names differ, and those READMEs say how. Gate and lean settings, foreground and worktree conditions, and `node dist/cli.js explain` are in [Advanced usage](docs/advanced-usage.md).
+`claude --plugin-dir .` loads this tree as the plugin. One part can be loaded from `mods/compact`, `mods/output`, `mods/router`, or `plugins/evidence`; option names differ, and those READMEs say how. Gate and lean settings, background execution and worktree conditions, and `node dist/cli.js explain` are in [Advanced usage](docs/advanced-usage.md).
 
 ## Older work
 

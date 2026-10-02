@@ -14,7 +14,7 @@ export const claudeTraceDir = (env: Env): string => env['JEV_GATE_TRACE_DIR'] ??
 export const claudeDefaults = (env: Env): Record<string, string> => ({
   CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: '1',
   CLAUDE_CODE_FORK_SUBAGENT: '0',
-  CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1',
+  CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '0',
   JEV_GATE_TRACE_DIR: claudeTraceDir(env),
   CLAUDE_CODE_DEBUG_LOGS_DIR: join(claudeConfigDir(env), 'debug'),
 });
@@ -62,6 +62,12 @@ export const prepareClaude = (env: Env): ClaudeSetup => {
     const defaults = claudeDefaults(env);
     const conflicts: string[] = [];
     let changed = false;
+    // Upgrade the exact launch profile written by older Jev installs. Customized host profiles stay owner-owned.
+    const legacy = { ...defaults, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' };
+    if (Object.entries(legacy).every(([name, expected]) => launch[name] === expected) &&
+        (env['CLAUDE_CODE_DISABLE_BACKGROUND_TASKS'] === undefined || env['CLAUDE_CODE_DISABLE_BACKGROUND_TASKS'] === '1')) {
+      launch['CLAUDE_CODE_DISABLE_BACKGROUND_TASKS'] = '0'; changed = true;
+    }
     for (const [name, fallback] of Object.entries(defaults)) {
       if (launch[name] === undefined && (env[name] === undefined || env[name] === fallback)) { launch[name] = fallback; changed = true; }
       else if (name.startsWith('CLAUDE_CODE_') && (launch[name] ?? env[name]) !== fallback) conflicts.push(name);
@@ -92,7 +98,7 @@ export const prepareClaude = (env: Env): ClaudeSetup => {
 export const claudeSetupMessage = (result: ClaudeSetup): string | null => {
   return result.error === 'initialization_busy' ? null : result.error ? 'Jev Gate could not prepare Claude Code settings. Run the installed plugin doctor.'
     : result.conflicts.length ? `Jev Gate preserved explicit host settings that conflict with automatic delegation: ${result.conflicts.join(', ')}. Run the installed plugin doctor.`
-    : result.restartRequired ? 'Jev Gate prepared its required settings automatically. Restart Claude Code once to load Function Hooks and foreground workers; no settings file editing is needed.' : null;
+    : result.restartRequired ? 'Jev Gate prepared its required settings automatically. Restart Claude Code to load Function Hooks and responsive background workers; no settings file editing is needed. Existing workers keep running in their current session.' : null;
 };
 export const claudeSetupNotice = (env: Env): string | null => {
   const text = claudeSetupMessage(prepareClaude(env));

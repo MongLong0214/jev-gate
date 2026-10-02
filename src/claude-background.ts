@@ -1,0 +1,36 @@
+import { closeSync, constants, fstatSync, lstatSync, openSync, readSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { subagentTranscriptPath } from './verify.js';
+import type { HookInput } from './types.js';
+
+export const dispatchMarker = (token: string): string => `\n\n[JEV_DISPATCH token=${token}]`;
+
+/** Native terminal evidence, never a launch receipt or a string taken from a newer root prompt. */
+export const claudeTerminal = (input: HookInput): { token: string | null; text: string; model: string | null; completed: boolean } | null => {
+  if (!input.session_id || !input.agent_id || !input.transcript_path || !input.agent_transcript_path) return null;
+  const expected = subagentTranscriptPath(input.transcript_path, input.session_id, input.agent_id);
+  if (!expected || resolve(expected) !== resolve(input.agent_transcript_path)) return null;
+  let fd: number | undefined;
+  try {
+    for (const path of [dirname(expected), dirname(dirname(expected))]) if (lstatSync(path).isSymbolicLink()) return null;
+    fd = openSync(expected, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const st = fstatSync(fd); if (!st.isFile()) return null;
+    // Only the opening dispatch identity and the final assistant message are needed. No full transcript export.
+    const head = Buffer.alloc(Math.min(st.size, 128 * 1024)); readSync(fd, head, 0, head.length, 0);
+    const start = Math.max(0, st.size - 768 * 1024);
+    const tail = Buffer.alloc(st.size - start); readSync(fd, tail, 0, tail.length, start);
+    const rows = (text: string) => text.split('\n').flatMap(line => { try { return [JSON.parse(line) as Record<string, unknown>]; } catch { return []; } });
+    const first = rows(head.toString()).find(r => r['type'] === 'user');
+    const content = (first?.['message'] as { content?: unknown } | undefined)?.content;
+    const tokens = (typeof content === 'string' ? content : JSON.stringify(content ?? '')).match(/\[JEV_DISPATCH token=([a-f0-9-]{36})\]/g) ?? [];
+    const last = rows(tail.toString()).filter(r => r['type'] === 'assistant').at(-1);
+    const message = last?.['message'] as { content?: Array<{ type: string; text?: string }>; stop_reason?: string; model?: string } | undefined;
+    if (!last || last['agentId'] !== input.agent_id || last['sessionId'] !== input.session_id || !Array.isArray(message?.content)) return null;
+    const text = message.content.filter(c => c.type === 'text').map(c => c.text ?? '').join('\n');
+    if (typeof input.last_assistant_message !== 'string' || text !== input.last_assistant_message) return null;
+    return { token: tokens.length === 1 ? /token=([a-f0-9-]{36})/.exec(tokens[0]!)![1]! : null, text,
+      model: typeof message.model === 'string' ? message.model : null,
+      completed: last['isApiErrorMessage'] !== true && message.stop_reason === 'end_turn' };
+  } catch { return null; }
+  finally { if (fd !== undefined) closeSync(fd); }
+};

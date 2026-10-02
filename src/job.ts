@@ -256,7 +256,7 @@ export const newGeneration = (prev: JobState | null, sessionId: string, promptId
 /** Unsettled native executions are never evicted to satisfy a history count; the existing byte cap still applies. */
 export const retainHistory = (history: JobGeneration[]): JobGeneration[] => {
   let ordinary = 0;
-  return history.filter(g => Object.values(g.active).some(r => r.codex_execution) || ordinary++ < MAX_HISTORY);
+  return history.filter(g => Object.values(g.active).some(r => r.codex_execution || r.background_execution) || ordinary++ < MAX_HISTORY);
 };
 
 /** Existing job files own conflict protection, including after adapter/connection close. */
@@ -363,7 +363,7 @@ const agedOut = (file: string, now: number): boolean => {
     const read = readRaw(file, claimed);
     if (!read.ok || read.value === null) return false;
     const state = read.value;
-    if ([state.current, ...state.history].some(g => Object.values(g.active).some(r => r.codex_execution))) return false;
+    if ([state.current, ...state.history].some(g => Object.values(g.active).some(r => r.codex_execution || r.background_execution))) return false;
     if (Object.values(state.current.active).some((r) => now - Date.parse(r.started_at) < ACTIVE_GRACE_MS)) return false;
     /**
      * A session can be resumed after any length of time, and its admitted lean identities are what stop an old

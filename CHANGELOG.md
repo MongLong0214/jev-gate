@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.8.2 — 2026-10-02 — Responsive background workers
+
+- Owned planners, workers and Lean executors run in the background by default. Main conversation questions retain the original job and contracts while work continues; launch receipts do not count as completion.
+- Claude accepts results only after matching native execution identity, profile and transcript termination. Successful native TaskStop ends ownership without accepting success. Main wait interruptions, malformed terminal evidence and connection uncertainty preserve reservations; retired results cannot advance a new job.
+- Codex supports nonblocking `jev_agent` status/result collection and explicit cancellation. Native terminal events commit results against the original contract. Root interruption leaves background workers running, and planner/Lean terminal settlement uses its own result path.
+- The complete old Jev-generated foreground setup migrates automatically. Customized host overrides and permissions stay authoritative; an already running Claude host needs a restart to load the new launch environment.
+- Dashboard metadata connects background preparation, actual launch, continued conversation and termination to the original execution. README and native Codex guidance explain the interaction and its observed limits.
+- Verification includes real installed Claude and Codex processes with delayed local fixture models and native check commands. These tests establish lifecycle behavior, not paid-account availability, long-term reliability, speed or savings.
+
 ## v0.8.1 — 2026-10-01 — Recorded execution circuit and automatic dashboard
 
 - The execution circuit leads the first screen, separates Gate's direct/worker/planned paths from independent policies and Lean, and adapts without horizontal scrolling. Selecting a stage opens a local inspector; selecting an execution scopes the circuit and its recorded transitions.

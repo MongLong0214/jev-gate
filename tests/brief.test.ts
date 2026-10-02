@@ -43,11 +43,11 @@ describe('checkEligibility', () => {
     expect(checkEligibility(hook({ model: 'opus' }), env, config)).toMatchObject({ eligible: true, pinned: true });
   });
 
-  it('treats an absent run_in_background as foreground only under the documented launch profile', () => {
+  it('accepts a fresh native background call with an omitted background field', () => {
     const input = hook();
     delete (input.tool_input as Record<string, unknown>)['run_in_background'];
     expect(checkEligibility(input, env, config)).toMatchObject({ eligible: true });
-    expect(checkEligibility(input, {}, config)).toEqual({ eligible: false, code: 'not_foreground' });
+    expect(checkEligibility(input, {}, config)).toMatchObject({ eligible: true });
   });
 
   it.each([
@@ -55,7 +55,7 @@ describe('checkEligibility', () => {
     ['another agent', hook({ subagent_type: 'Explore' }), env, config, 'role_not_owned'],
     ['a child caller', hook({}, { agent_id: 'child' }), env, config, 'child_caller'],
     ['a custom agent session', hook({}, { agent_type: 'custom' }), env, config, 'custom_agent_session'],
-    ['a background call', hook({ run_in_background: true }), env, config, 'not_foreground'],
+    ['an invalid background value', hook({ run_in_background: 'invalid' }), env, config, 'not_foreground'],
     ['an execution control field', hook({ resume: 'agent-1' }), env, config, 'execution_control_present'],
     ['a blank prompt', hook({ prompt: '   ' }), env, config, 'bad_tool_input'],
     ['a concrete subagent override', hook(), { ...env, CLAUDE_CODE_SUBAGENT_MODEL: 'haiku' }, config, 'subagent_model_override'],

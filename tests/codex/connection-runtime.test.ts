@@ -34,13 +34,13 @@ describe.skipIf(process.env['JEV_CODEX_E2E'] !== '1')('ordinary native Codex aut
       if (mode === 'gate') {
         step++;
         if (step === 2) item = fn('exec_command', { cmd: 'touch guard-must-not-exist', login: false });
-        if (step === 3) item = fn('jev_agent', { subagent_type: 'jev-gate:worker', prompt: 'Investigate the fixture and run vitest run.' });
+        if (step === 3) item = fn('jev_agent', { run_in_background: false, subagent_type: 'jev-gate:worker', prompt: 'Investigate the fixture and run vitest run.' });
         if (step === 4) item = fn('exec_command', { cmd: 'vitest run', login: false, max_output_tokens: 8000 });
         if (step === 5) item = final('```json\n' + JSON.stringify({ status: 'done', summary: 'Fixture checked', changed_files: [], interfaces: [], checks: [{ check_id: 'vitest run', result: 'pass', note: 'observed check' }], blockers: [] }) + '\n```');
       } else if (mode === 'lean') {
         step++;
         if (step === 1) item = final('Old unrelated narrative. '.repeat(300));
-        if (step === 2) item = fn('jev_agent', { subagent_type: 'jev-gate:executor', prompt: JSON.stringify(input['input']).match(/jev-lean-[a-f0-9]{16}/)?.[0] ?? 'missing marker' });
+        if (step === 2) item = fn('jev_agent', { run_in_background: false, subagent_type: 'jev-gate:executor', prompt: JSON.stringify(input['input']).match(/jev-lean-[a-f0-9]{16}/)?.[0] ?? 'missing marker' });
         if (step === 3) item = fn('exec_command', { cmd: 'vitest run', login: false, max_output_tokens: 8000 });
       } else if (mode === 'compact') { step++; if (step === 1) item = final('Old unrelated narrative. '.repeat(6000)); }
       res.writeHead(200, { 'content-type': 'text/event-stream' });
