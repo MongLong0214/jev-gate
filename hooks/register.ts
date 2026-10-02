@@ -17,6 +17,7 @@ export const OPTION_NAMES = {
   output: { enabled: 'outputEnabled' },
   router: {
     enabled: 'routerEnabled',
+    allowFable: 'routerAllowFable',
     routeSubagentModel: 'routeSubagentModel',
     routeExplicitSpawnModel: 'routeExplicitSpawnModel',
     routeSubagentEffort: 'routeSubagentEffort',
@@ -74,5 +75,6 @@ export const register: Register = (on, options) => {
   });
   if (compact.ok) registerCompact(on, compact.config);
   if (output.ok) registerOutput(on, output.config);
-  if (router.ok) registerRouter(on, router.config);
+  if (router.ok) registerRouter(on, router.config, true);
+  else { const fallback = resolveConfig({ enabled: false, allowFable: false }); if (fallback.ok) registerRouter(on, fallback.config, true); }
 };

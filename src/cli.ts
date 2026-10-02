@@ -308,6 +308,7 @@ const checkEnv = (mode: Mode | null): void => {
   if (debugDir) say('ok', `CLAUDE_CODE_DEBUG_LOGS_DIR=${debugDir}: Router/Compact/Output decisions are recorded there for the dashboard`);
   else say('info', 'Claude debug logs are optional; independent Jev metadata recording is available without --debug');
   const key = resolveApiKey({ ...env, TYPESAFE_API_KEY: launch('TYPESAFE_API_KEY') });
+  say('info', 'Router automatic Fable default: off; active routerAllowFable is controlled by the host plugin options. Capabilities do not establish account access; missing response model/effort remains unknown.');
   say(key ? 'ok' : 'warn', key ? 'Jev API key available from the plugin option, environment or shared private store (value not shown)' : 'Jev API key missing: the installed plugin opens a local key-entry screen; Gate/Lean/Router remain native until a key is supplied');
   if (existsSync(join(process.cwd(), '.env'))) say('info', '.env in cwd is NOT auto-loaded by the hook; export the variable in the shell that starts Claude Code');
 };

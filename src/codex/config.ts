@@ -7,7 +7,7 @@ import type { CodexModel } from './router.js';
 
 export interface CodexPolicyConfig {
   gate: ConfigV5;
-  router: { enabled: boolean; model: boolean; effort: boolean; minUpgradeConfidence: number; minDowngradeConfidence: number; timeoutMs: number };
+  router: { enabled: boolean; model: boolean; effort: boolean; allowAstra: boolean; minUpgradeConfidence: number; minDowngradeConfidence: number; timeoutMs: number };
   compact: { enabled: boolean; manual: boolean; budgetChars: number };
 }
 export const catalogTierModels = (baseline: string, catalog: readonly CodexModel[]): Record<Tier, string> => {
@@ -41,8 +41,19 @@ export const loadCodexPolicy = (env: Env, catalog: readonly CodexModel[] = []): 
     for (const k of Object.keys(defaults)) if (typeof out[k] !== typeof defaults[k]) throw new Error(`invalid Codex ${key} config`);
     return out;
   };
-  const router = section('router', { enabled: true, model: true, effort: true, minUpgradeConfidence: 0.8, minDowngradeConfidence: 0.6, timeoutMs: 800 }) as unknown as CodexPolicyConfig['router'];
+  const router = section('router', { enabled: true, model: true, effort: true, allowAstra: false, minUpgradeConfidence: 0.8, minDowngradeConfidence: 0.6, timeoutMs: 800 }) as unknown as CodexPolicyConfig['router'];
   const compact = section('compact', { enabled: true, manual: true, budgetChars: 40000 }) as unknown as CodexPolicyConfig['compact'];
   if (![router.minUpgradeConfidence, router.minDowngradeConfidence].every(n => Number.isFinite(n) && n > .5 && n <= 1) || !Number.isInteger(router.timeoutMs) || router.timeoutMs < 50 || router.timeoutMs > 3500 || !Number.isInteger(compact.budgetChars) || compact.budgetChars < 8000 || compact.budgetChars > 400000) throw new Error('invalid Codex policy bounds');
   return { gate: checked.config, router, compact };
+};
+
+/** Runtime failures preserve the owner's root and disable every new policy dispatch. Doctor still reports the loader error. */
+export const runtimeCodexPolicy = (env: Env, catalog: readonly CodexModel[] = []): CodexPolicyConfig => {
+  try { return loadCodexPolicy(env, catalog); }
+  catch {
+    const model = env['JEV_CODEX_MODEL'] ?? 'native-session-model';
+    const checked = validateConfig({ version: 5, mode: 'off', models: { fast: model, standard: model, deep: model, frontier: model } });
+    if (!checked.ok) throw new Error('native baseline unavailable');
+    return { gate: checked.config, router: { enabled: false, model: false, effort: false, allowAstra: false, minUpgradeConfidence: .8, minDowngradeConfidence: .6, timeoutMs: 800 }, compact: { enabled: false, manual: false, budgetChars: 40000 } };
+  }
 };

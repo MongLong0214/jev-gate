@@ -41,7 +41,7 @@ export const codexDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: str
   lines.push('[info] No source was scanned and no request was sent.');
   lines.push(`[info] hooks: ${env['JEV_CODEX_ENABLED'] === '0' ? 'disabled by JEV_CODEX_ENABLED=0' : 'enabled by configuration; use /hooks in Codex to review trust and execution'}`);
   lines.push(`[info] output folding: ${env['JEV_CODEX_OUTPUT'] === 'off' ? 'off' : 'on'}`);
-  try { const policy = loadCodexPolicy(env); check(true, `policy: Gate ${policy.gate.mode}; Router ${policy.router.enabled ? 'on' : 'off'}; Compact ${policy.compact.enabled ? 'on' : 'off'}`); }
+  try { const policy = loadCodexPolicy(env); check(true, `policy: Gate ${policy.gate.mode}; Router ${policy.router.enabled ? 'on' : 'off'}; Compact ${policy.compact.enabled ? 'on' : 'off'}`); lines.push(`[info] Router automatic Astra: ${policy.router.allowAstra ? 'opted in' : 'off (default)'}; model/effort: ${policy.router.model ? 'on' : 'off'}/${policy.router.effort ? 'on' : 'off'}`); lines.push('[info] Account model candidates: unknown until native model/list is observed; role preferences do not limit all eligible candidates. Submitted request values do not confirm the response model or actual effort.'); }
   catch { check(false, 'policy: invalid Codex policy configuration'); }
   lines.push('[info] The installed plugin connects ordinary Codex automatically; a host that already loaded its provider needs a fresh native session. Hook trust and authentication remain native. Doctor readiness is not proof of policy execution.');
   for (const [feature, capability] of Object.entries(CODEX_CAPABILITIES)) lines.push(`[${capability.mode}] ${feature}: ${capability.en}`);

@@ -68,7 +68,8 @@ const modSources = () =>
       .map((n) => `mods/${m}/hooks/${n}`),
   );
 const EVIDENCE_IN_PLUGIN = [`${EVIDENCE}/dist/server.mjs`, `${EVIDENCE}/skills/evidence/SKILL.md`];
-const shared = () => [...(profile === 'legacy' ? ['hooks/register.ts', ...modSources()] : []), ...EVIDENCE_IN_PLUGIN];
+const ROUTER_SHARED = ['router-answers', 'router-selection', 'router-context', 'router-secret', 'claude-models', 'claude-candidates'].map(n => `src/${n}.ts`);
+const shared = () => [...(profile === 'legacy' ? ['hooks/register.ts', ...modSources(), ...ROUTER_SHARED] : []), ...EVIDENCE_IN_PLUGIN];
 // Install paths the root README links (#95, #98). Not a link crawl: bench/ and HANDOFF stay out. The logo is the
 // README's image. hero.svg, pilot.svg, and v4-flow.svg are not packed; the README no longer embeds them.
 const INSTALL_DOCS = [
@@ -99,6 +100,7 @@ const entries =
           .filter((n) => n !== 'hooks.json')
           .map((n) => [`${ROUTER}/hooks/${n}`, `hooks/${n}`]),
         [`${ROUTER}/README.md`, 'README.md'],
+        ...ROUTER_SHARED.map(f => [f, f]),
       ]
     : [
         ['.claude-plugin/plugin.json', '.claude-plugin/plugin.json'],
@@ -199,7 +201,7 @@ const zipBytes = (files) => {
 const files = entries
   .map(([src, dest]) => {
     const abs = join(root, src);
-    return { name: dest, data: readFileSync(abs), mode: statSync(abs).mode & 0o111 ? 0o755 : 0o644 };
+    return { name: dest, data: profile === 'router' && src.startsWith(`${ROUTER}/hooks/`) && src.endsWith('.ts') ? Buffer.from(readFileSync(abs, 'utf8').replaceAll('../../../src/', '../src/')) : readFileSync(abs), mode: statSync(abs).mode & 0o111 ? 0o755 : 0o644 };
   })
   .sort((a, b) => Buffer.compare(Buffer.from(a.name), Buffer.from(b.name)));
 mkdirSync(outDir, { recursive: true });

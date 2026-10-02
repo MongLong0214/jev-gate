@@ -12,15 +12,18 @@ import type { Env } from '../config.js';
 import { codexTraceDir } from '../codex-paths.js';
 import { openTraceDir, type TraceWriter } from '../trace.js';
 import { CodexRpc, RpcRequestError } from './rpc.js';
-import { loadCodexPolicy, type CodexPolicyConfig } from './config.js';
+import { runtimeCodexPolicy, type CodexPolicyConfig } from './config.js';
 import { codexSource, codexObservation, textInput, obj, type Obj } from './source.js';
 import { AGENT_TOOL, CODEX_PROFILES, codexGuidance } from './profiles.js';
-import { routeCodex, type CodexModel } from './router.js';
+import { routeCodex, codexCandidates, type CodexModel } from './router.js';
 import { capturedPermissions } from './permissions.js';
 import { codexCallerWorkspace } from './workspace.js';
 import { selectRecentPrompts } from '../recent-prompts.js';
 import { wireSource } from './wire.js';
+import { normalizeCatalog, codexTargetAllowed, generalCodexModel } from './catalog.js';
+import { applyEffort, type PairPatch } from '../../mods/router/hooks/selection.ts';
 
+export interface CodexSubmission { prompt: string | null; model: string; effort: string | null; requestId: string }
 interface WorkerDispatch {
   parent: Session; prompt: string; tool: string; input: Obj; signal: AbortSignal;
   worktree: WorkerWorktree | null; startedAt: number; attempted: boolean;
@@ -34,7 +37,9 @@ interface Session {
   commands: Map<string, string>;
   requestModel?: string; requestEffort?: string;
   compactAllowed?: boolean; eligible?: boolean; terminal?: boolean;
-  role?: string; parent?: string; done?: (turn: Obj) => void; route?: { model?: string; effort?: string };
+  role?: string; parent?: string; done?: (turn: Obj) => void; route?: PairPatch; routePending?: Promise<void>; routeDeadline?: number; routeConfig?: string;
+  previousReply?: string; completedReply?: string; turnReply?: string; lastSubmitted?: CodexSubmission;
+  starting?: { prompt: string; controller: AbortController };
   external?: boolean; task?: string; routed?: string; stop?: string;
   wire?: unknown[];
   wirePending?: boolean;
@@ -54,6 +59,9 @@ const safeGitEnv = (env: Env): Env => Object.fromEntries(Object.entries(env).fil
 export class CodexPolicy {
   readonly sessions = new Map<string, Session>();
   catalog: CodexModel[] = [];
+  catalogComplete = false;
+  catalogExcluded: Record<string, number> = {};
+  private catalogEpoch = 0;
   private catalogReady: Promise<void> = Promise.resolve();
   private trace: TraceWriter | undefined;
   private env: Env;
@@ -66,7 +74,7 @@ export class CodexPolicy {
     this.env['JEV_GATE_TRACE_DIR'] = codexTraceDir(env);
     this.env['JEV_GATE_STATE_DIR'] = join(stateRoot(env), 'codex');
     const trace = openTraceDir(this.env['JEV_GATE_TRACE_DIR'], this.env);
-    if (trace.ok) this.trace = trace.writer;
+    if (trace.ok) this.trace = { write: (phase, data) => { try { return trace.writer.write(phase, data); } catch { return { ok: false, error: 'recording_failed' }; } } };
     rpc.onResponse = (r, m, p) => this.response(r, m, p);
     rpc.onClose = () => this.close();
     rpc.onNotification = m => this.notification(m);
@@ -92,7 +100,7 @@ export class CodexPolicy {
       if (!this.sessions.has(id)) {
         const items = Array.isArray(thread?.['turns']) ? thread!['turns'].flatMap((t: unknown) => Array.isArray(obj(t)?.['items']) ? obj(t)!['items'] as Obj[] : []) : [];
         this.sessions.set(id, { id, settings: { ...result, sandboxPolicy: result['sandbox'], effort: result['reasoningEffort'] }, baseline: { model: result['model'], effort: typeof result['reasoningEffort'] === 'string' ? result['reasoningEffort'] : null },
-          policy: loadCodexPolicy({ ...this.env, JEV_CODEX_MODEL: result['model'] }, this.catalog), prompt: null, turn: null, items, complete: method === 'thread/start', epoch: 'initial', tokens: method === 'thread/start' ? 0 : null, window: null, controller: null, commands: new Map() });
+          policy: runtimeCodexPolicy({ ...this.env, JEV_CODEX_MODEL: result['model'] }, this.catalog), prompt: null, turn: null, items, complete: method === 'thread/start', epoch: 'initial', tokens: method === 'thread/start' ? 0 : null, window: null, controller: null, commands: new Map() });
         if (method !== 'thread/start') await this.hydrate(id);
       }
     }
@@ -110,18 +118,33 @@ export class CodexPolicy {
     return result;
   }
   private async loadCatalog(): Promise<void> {
+    const epoch = ++this.catalogEpoch; const raw: unknown[] = []; const cursors = new Set<string>();
+    this.catalog = []; this.catalogComplete = false;
+    let complete = false;
     try {
-      const catalog: CodexModel[] = []; let cursor: unknown = null;
-      const deadline = Date.now() + 3000;
+      let cursor: string | null = null; const deadline = Date.now() + 3000;
       for (let page = 0; page < 20 && Date.now() < deadline; page++) {
         const r = await this.rpc.request('model/list', { ...(cursor ? { cursor } : {}), includeHidden: true }, Math.max(1, deadline - Date.now()));
-        if (!Array.isArray(r['data'])) return;
-        for (const m of r['data']) if (obj(m) && typeof m['model'] === 'string' && Array.isArray(m['supportedReasoningEfforts'])) catalog.push(m as CodexModel);
-        cursor = r['nextCursor']; if (!cursor) { this.catalog = catalog; return; }
+        if (!Array.isArray(r['data'])) break;
+        raw.push(...r['data']);
+        const next = r['nextCursor'];
+        if (next === null || next === undefined || next === '') { complete = true; break; }
+        if (typeof next !== 'string' || cursors.has(next)) break;
+        cursors.add(next); cursor = next;
       }
-    } catch { /* Unknown catalog preserves the original model and effort. */ }
+    } catch { /* Retain compatible candidates from completed pages without claiming a complete catalog. */ }
+    if (epoch !== this.catalogEpoch) return;
+    const result = normalizeCatalog(raw, complete);
+    this.catalog = result.models; this.catalogComplete = result.complete; this.catalogExcluded = result.excluded;
+    for (const session of this.sessions.values()) delete session.route;
   }
   async initialize(): Promise<void> { this.catalogReady = this.loadCatalog(); await this.catalogReady; }
+  private async waitCatalog(deadline: number): Promise<void> {
+    const remaining = deadline - Date.now(); if (remaining <= 0) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try { await Promise.race([this.catalogReady, new Promise<void>(resolve => { timer = setTimeout(resolve, remaining); })]); }
+    finally { if (timer) clearTimeout(timer); }
+  }
   supplyKey(key: string): void { if (key.length > 0 && key.length <= 8192 && !/[\r\n\0]/.test(key)) this.env['TYPESAFE_API_KEY'] = key; }
 
   /** Native plugin hooks register ordinary app/CLI/IDE roots. The sidecar owns only its child App Server. */
@@ -132,7 +155,7 @@ export class CodexPolicy {
     if (input['agent_id'] && (!session || session.external)) return {};
     if (!session && event === 'SessionStart' && typeof input['cwd'] === 'string' && isAbsolute(input['cwd']) && typeof input['model'] === 'string' && this.sessions.size < 256) {
       const model = input['model'];
-      session = { id, external: true, settings: { cwd: input['cwd'], model, approvalPolicy: 'never' }, baseline: { model, effort: null }, policy: loadCodexPolicy({ ...this.env, JEV_CODEX_MODEL: model }, this.catalog), prompt: null, turn: null, items: [], complete: false, epoch: 'native-wire', tokens: null, window: null, controller: null, commands: new Map() };
+      session = { id, external: true, settings: { cwd: input['cwd'], model, approvalPolicy: 'never' }, baseline: { model, effort: null }, policy: runtimeCodexPolicy({ ...this.env, JEV_CODEX_MODEL: model }, this.catalog), prompt: null, turn: null, items: [], complete: false, epoch: 'native-wire', tokens: null, window: null, controller: null, commands: new Map() };
       this.sessions.set(id, session);
     }
     if (!session?.external) return this.nativeHook(input, signal);
@@ -142,6 +165,8 @@ export class CodexPolicy {
       session.controller?.abort(); session.controller = new AbortController();
       session.prompt = typeof input['turn_id'] === 'string' && input['turn_id'] !== session.prompt ? input['turn_id'] : randomUUID();
       session.turn = session.prompt; session.task = input['prompt']; session.eligible = true;
+      if (session.completedReply) session.previousReply = session.completedReply; else delete session.previousReply;
+      delete session.routePending; delete session.routeDeadline;
       delete session.stop; delete session.routed; delete session.route;
     }
     if (event === 'Interrupt' || event === 'SessionEnd') {
@@ -159,40 +184,81 @@ export class CodexPolicy {
     const session = this.sessions.get(id);
     if (!session?.external || !session.prompt || !session.task || !this.hooked.has(id)) return { request };
     if (session.stop) return { request, stop: session.stop };
-    const source = wireSource(request['input'], session.task, session.prompt);
+    const requestPrompt = session.prompt;
+    const requestController = session.controller;
+    const source = wireSource(request['input'], session.task, requestPrompt);
+    // Capture completed context before replacing the previous source with current-turn wire items.
+    if (session.routed !== session.prompt && !session.routePending) {
+      const current = source.items.findIndex(i => i['type'] === 'userMessage' && i['clientId'] === session.prompt);
+      const prefix = current >= 0 ? source.items.slice(0, current) : [];
+      const prior = prefix.findLast(i => i['type'] === 'agentMessage' && ['final', 'final_answer'].includes(String(i['phase'])) && typeof i['text'] === 'string');
+      if (!session.previousReply && prior) session.previousReply = String(prior['text']);
+    }
     session.items = source.items; session.complete = source.complete && !request['previous_response_id'];
     if (session.complete && Array.isArray(request['input'])) session.wire = request['input']; else delete session.wire;
     const model = request['model']; const effort = obj(request['reasoning'])?.['effort'];
     if (typeof model !== 'string') return { request };
-    if (session.routed !== session.prompt) {
+    if (session.routed !== session.prompt && !session.routePending) {
       session.baseline = { model, effort: typeof effort === 'string' ? effort : null };
-      session.policy = loadCodexPolicy({ ...this.env, JEV_CODEX_MODEL: model }, this.catalog);
-      const prompt = session.prompt; session.routed = prompt;
-      await this.catalogReady;
-      session.policy = loadCodexPolicy({ ...this.env, JEV_CODEX_MODEL: model }, this.catalog);
-      // Ultra is a native selection that Codex resolves before the provider request. A proxy cannot invent that mapping.
-      const catalog = this.catalog.map(m => ({ ...m, supportedReasoningEfforts: m.supportedReasoningEfforts.filter(e => e.reasoningEffort !== 'ultra') }));
-      const patch = await routeCodex({ ...session.baseline, task: session.task, session: id, prompt, catalog, config: session.policy, env: this.env, ...(this.trace ? { trace: this.trace } : {}), signal: session.controller ? AbortSignal.any([signal, session.controller.signal]) : signal, ...(this.fetchImpl ? { fetchImpl: this.fetchImpl } : {}) });
-      if (signal.aborted || session.controller?.signal.aborted || session.prompt !== prompt) throw new Error('interrupted policy');
-      session.route = patch;
+      const prompt = session.prompt;
+      session.routed = prompt;
+      session.routeDeadline = Date.now() + session.policy.router.timeoutMs;
+      const deadline = session.routeDeadline;
+      const task = session.task; const previousReply = session.previousReply; const baseline = { ...session.baseline };
+      const pending = (async () => {
+        await this.waitCatalog(deadline);
+        const epoch = this.catalogEpoch;
+        const config = runtimeCodexPolicy({ ...this.env, JEV_CODEX_MODEL: model }, this.catalog);
+        session.policy = config; session.routeConfig = JSON.stringify(config.router);
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) { if (session.prompt === prompt) session.routed = prompt; return; }
+        // Host control modes are not raw Responses API efforts.
+        const catalog = this.catalog.map(m => { const out = { ...m, supportedReasoningEfforts: m.supportedReasoningEfforts.filter(e => !['ultra', 'ultracode', 'auto', 'ultrafast'].includes(e.reasoningEffort)) };
+          if (out.defaultReasoningEffort && !out.supportedReasoningEfforts.some(e => e.reasoningEffort === out.defaultReasoningEffort)) delete out.defaultReasoningEffort; return out; });
+        const patch = await routeCodex({ ...baseline, task, ...(previousReply ? { previousReply } : {}),
+          recentRequests: session.recentRequests ?? [], session: id, prompt, catalog, catalogComplete: this.catalogComplete, catalogExcluded: this.catalogExcluded,
+          config: { ...config, router: { ...config.router, timeoutMs: remaining } }, env: this.env,
+          ...(this.trace ? { trace: this.trace } : {}), signal: requestController ? AbortSignal.any([signal, requestController.signal]) : signal,
+          ...(this.fetchImpl ? { fetchImpl: this.fetchImpl } : {}) });
+        if (!signal.aborted && !requestController?.signal.aborted && session.prompt === prompt && this.catalogEpoch === epoch) { session.route = patch; session.routed = prompt; }
+      })().finally(() => { if (session.routePending === pending) delete session.routePending; });
+      session.routePending = pending;
     }
-    // A native settings change during the turn takes precedence over a previous route.
-    if (model !== session.baseline.model || (typeof effort === 'string' ? effort : null) !== session.baseline.effort) delete session.route;
-    const selected = { ...request, ...(session.route?.model ? { model: session.route.model } : {}), ...(session.route?.effort ? { reasoning: { ...obj(request['reasoning']), effort: session.route.effort } } : {}) };
-    session.requestModel = String(selected['model']); session.requestEffort = String(obj(selected['reasoning'])?.['effort'] ?? '');
-    if (session.route && Object.keys(session.route).length) this.trace?.write('codex_route_applied', { host: 'codex', session_id: id, prompt_id: session.prompt, stage: 'model_request', observed_model: selected['model'], observed_effort: obj(selected['reasoning'])?.['effort'] ?? null, observed_host_effort: effort ?? null, selected_model: selected['model'], selected_effort: obj(selected['reasoning'])?.['effort'] ?? null, effort_resolution: 'provider_request', applied: true });
+    if (session.routePending) await session.routePending;
+    if (signal.aborted || requestController?.signal.aborted || session.prompt !== requestPrompt) throw new Error('interrupted policy');
+    const current = runtimeCodexPolicy({ ...this.env, JEV_CODEX_MODEL: model }, this.catalog);
+    if (session.routeConfig !== JSON.stringify(current.router)) delete session.route;
+    const nativeEffort = typeof effort === 'string' ? effort : null;
+    // A plugin-applied value is not a manual edit. A genuinely new native value wins for this turn.
+    if (model !== session.baseline.model && model !== session.route?.model || nativeEffort !== session.baseline.effort && nativeEffort !== session.route?.effort && !(session.route?.effortEdit?.kind === 'omit' && nativeEffort === null)) delete session.route;
+    if (session.route?.model && !codexTargetAllowed(session.route.model, current.router.allowAstra)) delete session.route;
+    const reasoning = applyEffort(obj(request['reasoning']) ?? {}, session.route?.effortEdit);
+    const selected = { ...request, ...(session.route?.model ? { model: session.route.model } : {}), ...(session.route?.effortEdit && session.route.effortEdit.kind !== 'keep' ? { reasoning } : {}) };
     return { request: selected };
   }
-  observeUsage(id: string, response: Obj): void {
+  observeUsage(id: string, response: Obj, submitted?: CodexSubmission): void {
     const session = this.sessions.get(id); const input = obj(response['usage'])?.['input_tokens'];
-    if (session?.external) {
+    const binding = submitted ?? session?.lastSubmitted;
+    if (session && binding) {
+      const model = typeof response['model'] === 'string' ? response['model'] : null;
+      const effort = obj(response['reasoning'])?.['effort'];
+      this.trace?.write('codex_router_response', { host: 'codex', session_id: id, prompt_id: binding.prompt, request_id: binding.requestId, stage: 'response',
+        selected_model: binding.model, selected_effort: binding.effort, observed_model: model, observed_effort: typeof effort === 'string' ? effort : 'unknown',
+        reason: model === null ? 'response_unconfirmed' : model !== binding.model ? 'mismatch' : 'response_model_confirmed' });
+    }
+    if (session?.external && (!binding || binding.prompt === session.prompt)) {
       session.tokens = Number.isSafeInteger(input) && Number(input) >= 0 ? Number(input) : null;
       if (session.wire && session.task && session.prompt && Array.isArray(response['output'])) {
         const source = wireSource([...session.wire, ...response['output']], session.task, session.prompt);
         session.wirePending = !source.complete;
         // A just-issued current-turn tool call does not alter the prefix a Lean packet references.
         // Keep that prefix for dispatch, but forbid using a pending source for a subsequent prompt.
-        if (source.complete) { session.items = source.items; session.complete = true; }
+        if (source.complete) { session.items = source.items; session.complete = true;
+          if (response['status'] === 'completed' && !response['output'].some((i: unknown) => ['function_call', 'custom_tool_call'].includes(String(obj(i)?.['type'])))) {
+            const final = wireSource(response['output'], '', '').items.findLast(i => i['type'] === 'agentMessage' && i['phase'] !== 'commentary' && typeof i['text'] === 'string');
+            if (final) session.completedReply = String(final['text']);
+          }
+        }
       } else session.complete = false;
     }
   }
@@ -230,7 +296,8 @@ export class CodexPolicy {
       source: b => codexSource(session.items, b, session.epoch, session.complete),
       observation: id => { const worker = id ? this.sessions.get(id) : undefined; return worker ? codexObservation(worker.items, worker.complete, worker.commands) : null; },
     };
-    return runHook({ stdin: (async function* () { yield JSON.stringify(input); })(), env: this.env, host,
+    return runHook({ stdin: (async function* () { yield JSON.stringify(input); })(), env: this.env, host, allocation: { candidates: baseline => codexCandidates(this.catalog, session.policy.router.allowAstra, baseline).filter(c => codexTargetAllowed(c.id, session.policy.router.allowAstra)),
+        allowed: model => this.catalog.some(m => m.model === model && generalCodexModel(m)) && codexTargetAllowed(model, session.policy.router.allowAstra), inheritedModel: session.requestModel ?? session.baseline.model },
       ...((signal || session.controller) ? { signal: signal && session.controller ? AbortSignal.any([signal, session.controller.signal]) : signal ?? session.controller!.signal } : {}), ...(this.fetchImpl ? { fetchImpl: this.fetchImpl } : {}) });
   }
   async client(message: Obj): Promise<void> {
@@ -250,38 +317,61 @@ export class CodexPolicy {
     if (session && method === 'turn/start' && Array.isArray(params['input']) && params['input'].length) {
       // An active turn is steering, not a fresh policy generation. Preserve that host contract.
       if (session.turn) { this.rpc.forward(message); return; }
+      if (session.starting && params['clientUserMessageId'] === session.starting.prompt) {
+        if ('id' in message) this.rpc.emit({ id: message['id'], error: { code: -32800, message: 'This turn is already being prepared. No duplicate turn started.' } });
+        return;
+      }
       // Codex runs SessionStart when the first turn starts, not when thread/start returns.
       session.controller?.abort(); session.controller = new AbortController();
+      const controller = session.controller;
       const prompt = typeof params['clientUserMessageId'] === 'string' ? params['clientUserMessageId'] : randomUUID();
-      session.prompt = prompt;
+      const starting = { prompt, controller }; session.starting = starting;
+      try {
+      session.prompt = prompt; session.terminal = false; delete session.turnReply;
+      const deadline = Date.now() + session.policy.router.timeoutMs;
       const collaboration = obj(params['collaborationMode']);
       const modeSettings = obj(collaboration?.['settings']);
       const selectedModel = typeof modeSettings?.['model'] === 'string' ? modeSettings['model'] : typeof params['model'] === 'string' ? params['model'] : session.baseline.model;
       const selectedEffort = modeSettings && 'reasoning_effort' in modeSettings ? modeSettings['reasoning_effort'] : 'effort' in params ? params['effort'] : session.baseline.effort;
       session.baseline = { model: selectedModel, effort: typeof selectedEffort === 'string' ? selectedEffort : null };
-      session.policy = loadCodexPolicy({ ...this.env, JEV_CODEX_MODEL: session.baseline.model }, this.catalog);
+      const baseline = { ...session.baseline };
+      session.policy = runtimeCodexPolicy({ ...this.env, JEV_CODEX_MODEL: session.baseline.model }, this.catalog);
       const task = textInput(params['input']);
       session.eligible = task !== null;
       // Non-text and malformed input is preserved. No image or attachment is silently dropped to enable Jev.
       if (task === null || this.env['JEV_CODEX_ENABLED'] === '0' || collaboration && collaboration['mode'] !== 'default') { session.eligible = false; this.rpc.forward(message); return; }
-      await this.catalogReady;
-      session.policy = loadCodexPolicy({ ...this.env, JEV_CODEX_MODEL: session.baseline.model }, this.catalog);
-      const previousReply = [...session.items].reverse().find(i => i['type'] === 'agentMessage' && typeof i['text'] === 'string')?.['text'];
-      const patch = await routeCodex({ model: session.baseline.model, effort: session.baseline.effort,
-        task, ...(typeof previousReply === 'string' ? { previousReply } : {}), session: session.id, prompt, catalog: this.catalog, config: session.policy, env: this.env,
-        ...(this.trace ? { trace: this.trace } : {}), signal: session.controller.signal, ...(this.fetchImpl ? { fetchImpl: this.fetchImpl } : {}) });
-      if (session.controller.signal.aborted || session.prompt !== prompt) {
+      await this.waitCatalog(deadline);
+      session.policy = runtimeCodexPolicy({ ...this.env, JEV_CODEX_MODEL: session.baseline.model }, this.catalog);
+      const previousReply = session.completedReply;
+      const recentRequests = selectRecentPrompts(session.items.filter(i => i['type'] === 'userMessage').flatMap(i => { const t = textInput(i['content']); return t ? [t] : []; }));
+      const catalogEpoch = this.catalogEpoch;
+      const patch = Date.now() >= deadline ? {} : await routeCodex({ model: session.baseline.model, effort: session.baseline.effort,
+        task, recentRequests, catalogComplete: this.catalogComplete, catalogExcluded: this.catalogExcluded, ...(typeof previousReply === 'string' ? { previousReply } : {}), session: session.id, prompt, catalog: this.catalog, config: { ...session.policy, router: { ...session.policy.router, timeoutMs: Math.max(1, deadline - Date.now()) } }, env: this.env,
+        ...(this.trace ? { trace: this.trace } : {}), signal: controller.signal, ...(this.fetchImpl ? { fetchImpl: this.fetchImpl } : {}) });
+      if (controller.signal.aborted || session.controller !== controller || session.prompt !== prompt) {
         if ('id' in message) this.rpc.emit({ id: message['id'], error: { code: -32800, message: 'Turn interrupted before Jev policy completed.' } });
         return;
       }
+      const current = runtimeCodexPolicy({ ...this.env, JEV_CODEX_MODEL: session.baseline.model }, this.catalog);
+      if (session.baseline.model !== baseline.model || session.baseline.effort !== baseline.effort) {
+        delete session.route;
+        const ownerEffort = session.baseline.effort === null ? { kind: 'omit' as const } : { kind: 'set' as const, value: session.baseline.effort };
+        this.rpc.forward({ ...message, params: { ...applyEffort({ ...params, model: session.baseline.model }, ownerEffort),
+          ...(collaboration && modeSettings ? { collaborationMode: { ...collaboration, settings: applyEffort({ ...modeSettings, model: session.baseline.model }, ownerEffort, 'reasoning_effort') } } : {}), clientUserMessageId: prompt } });
+        return;
+      }
+      if (this.catalogEpoch !== catalogEpoch || JSON.stringify(current.router) !== JSON.stringify(session.policy.router) || Date.now() >= deadline) { this.rpc.forward({ ...message, params: { ...params, clientUserMessageId: prompt } }); return; }
       session.route = patch;
       // The hook gets the exact submitted request later, from Codex itself. Its policy uses the assigned client id.
-      this.rpc.forward({ ...message, params: { ...params, ...patch,
-        ...(collaboration && modeSettings ? { collaborationMode: { ...collaboration, settings: { ...modeSettings, ...(patch.model ? { model: patch.model } : {}), ...(patch.effort ? { reasoning_effort: patch.effort } : {}) } } } : {}), clientUserMessageId: prompt } }); return;
+      const routedParams = applyEffort({ ...params, ...(patch.model ? { model: patch.model } : {}) }, patch.effortEdit);
+      this.rpc.forward({ ...message, params: { ...routedParams,
+        ...(collaboration && modeSettings ? { collaborationMode: { ...collaboration, settings: applyEffort({ ...modeSettings, ...(patch.model ? { model: patch.model } : {}) }, patch.effortEdit, 'reasoning_effort') } } : {}), clientUserMessageId: prompt } }); return;
+      } finally { if (session.starting === starting) delete session.starting; }
     }
     this.rpc.forward(message);
   }
   private notification(message: Obj): void {
+    if (['account/updated', 'account/login/completed'].includes(String(message['method']))) { this.catalogReady = this.loadCatalog(); }
     const p = obj(message['params']) ?? {}; const session = this.sessions.get(String(p['threadId']));
     if (!session) return;
     if (message['method'] === 'thread/settings/updated') {
@@ -298,6 +388,7 @@ export class CodexPolicy {
     }
     if (message['method'] === 'item/started' || message['method'] === 'item/completed') {
       const item = obj(p['item']); if (!item) return;
+      if (message['method'] === 'item/completed' && item['type'] === 'agentMessage' && item['phase'] !== 'commentary' && typeof item['text'] === 'string' && p['turnId'] === session.turn) session.turnReply = item['text'];
       const ix = session.items.findIndex(i => i['id'] === item['id']);
       if (ix < 0) session.items.push(item); else session.items[ix] = item;
       if (Buffer.byteLength(JSON.stringify(session.items)) > 8 * 1024 * 1024) { session.complete = false; session.items = session.items.slice(-100); }
@@ -307,6 +398,9 @@ export class CodexPolicy {
       const turn = obj(p['turn']) ?? {};
       if (session.dispatch && (session.dispatch.ended || session.turn && turn['id'] !== session.turn || !['completed', 'interrupted', 'failed'].includes(String(turn['status'])))) return;
       session.turn = null; session.terminal = true;
+      if (!session.parent && turn['status'] === 'completed') {
+        if (session.turnReply) session.completedReply = session.turnReply; else delete session.completedReply;
+      }
       if (session.dispatch) { session.dispatch.ended = turn; session.done?.(turn); void this.settleWorker(session).catch(() => undefined); }
       else session.done?.(turn);
       if (!session.parent && turn['status'] !== 'completed') { session.controller?.abort(); void this.interruptChildren(session); }
@@ -419,6 +513,8 @@ export class CodexPolicy {
     const conversationPrompt = session.prompt;
     const toolId = String(p['callId']);
     const input = { ...original, run_in_background: background };
+    const dispatchEpoch = this.catalogEpoch;
+    const dispatchConfig = JSON.stringify(runtimeCodexPolicy({ ...this.env, JEV_CODEX_MODEL: parent.requestModel ?? parent.baseline.model }, this.catalog).router);
     const pre = await this.hook(parent, { hook_event_name: 'PreToolUse', session_id: parent.id, prompt_id: promptId, tool_name: 'Agent', tool_use_id: toolId, tool_input: input, cwd: String(parent.settings['cwd']) }, parentSignal);
     if (pre.kind === 'deny') return codexGuidance(String(obj(obj(JSON.parse(pre.stdout))?.['hookSpecificOutput'])?.['permissionDecisionReason'] ?? 'Dispatch denied'));
     if (parentSignal.aborted || session.prompt !== conversationPrompt) { await this.failure(parent, promptId, toolId, input, 'dispatch_cancelled'); return 'Dispatch cancelled; no worker started.'; }
@@ -449,6 +545,16 @@ export class CodexPolicy {
       const permissions = obj(parent.settings['activePermissionProfile'])?.['id'];
       const customPermissions = typeof permissions === 'string' && !permissions.startsWith(':');
       if (parent.external ? !captured : typeof permissions !== 'string' && !['dangerFullAccess', 'readOnly', 'workspaceWrite'].includes(String(sandbox?.['type']))) throw new Error('parent permissions unavailable');
+      const currentPolicy = runtimeCodexPolicy({ ...this.env, JEV_CODEX_MODEL: parent.requestModel ?? parent.baseline.model }, this.catalog);
+      if (this.catalogEpoch !== dispatchEpoch || JSON.stringify(currentPolicy.router) !== dispatchConfig || !codexTargetAllowed(model, currentPolicy.router.allowAstra) || !codexCandidates(this.catalog, currentPolicy.router.allowAstra, model).some(m => m.id === model)) {
+        updateJob(this.env, parent.id, prev => {
+          const r = prev ? own(prev.current.active, toolId) : undefined;
+          if (!prev || !r || r.codex_execution || r.background_execution?.agent_id) return null;
+          const { [toolId]: _removed, ...active } = prev.current.active;
+          return { ...prev, current: { ...prev.current, active, root_fallback: true, root_fallback_reason: 'delivery_failed', background_context: 'No eligible automatic child model. Continue in the main session; no child started.' } };
+        });
+        throw new Error('automatic child unavailable');
+      }
       const child = await this.rpc.request('thread/start', { model, modelProvider: parent.settings['modelProvider'], cwd, ephemeral: true,
         approvalPolicy: parent.settings['approvalPolicy'], approvalsReviewer: parent.settings['approvalsReviewer'],
         ...(captured ? { permissions: captured.permissions } : planner && !customPermissions ? { sandbox: 'read-only' } : typeof permissions === 'string' ? { permissions } : { sandbox: sandbox?.['type'] === 'dangerFullAccess' ? 'danger-full-access' : sandbox?.['type'] === 'readOnly' ? 'read-only' : 'workspace-write' }),
@@ -461,9 +567,12 @@ export class CodexPolicy {
       dispatch = { parent, prompt: promptId, tool: toolId, input: { ...applied }, signal: background ? new AbortController().signal : parentSignal, worktree, startedAt: t0, attempted: false, background };
       worker.dispatch = dispatch;
       if (parentSignal.aborted || session.prompt !== conversationPrompt) throw new Error('cancelled');
-      const desired = OWNED_AGENT_PROFILES.find(p => p.name === role)?.effort ?? parent.requestEffort ?? parent.settings['effort'];
+      const pairState = readJob(this.env, parent.id);
+      const pair = pairState.ok ? own(pairState.value?.current.active ?? {}, toolId)?.allocation_pair : null;
+      const desired = pair?.effort_edit.kind === 'set' ? pair.effort_edit.value : OWNED_AGENT_PROFILES.find(p => p.name === role)?.effort ?? parent.requestEffort ?? parent.settings['effort'];
       const offered = this.catalog.find(m => m.model === model)?.supportedReasoningEfforts.map(e => e.reasoningEffort) ?? [];
-      const effort = typeof desired === 'string' && offered.includes(desired) ? desired : typeof parent.baseline.effort === 'string' && offered.includes(parent.baseline.effort) ? parent.baseline.effort : null;
+      const effort = pair?.effort_edit.kind === 'omit' ? null : typeof desired === 'string' && offered.includes(desired) ? desired : typeof parent.baseline.effort === 'string' && offered.includes(parent.baseline.effort) ? parent.baseline.effort : null;
+      if (this.catalogEpoch !== dispatchEpoch || JSON.stringify(runtimeCodexPolicy({ ...this.env, JEV_CODEX_MODEL: parent.requestModel ?? parent.baseline.model }, this.catalog).router) !== dispatchConfig || pair?.effort_edit.kind === 'set' && effort !== pair.effort_edit.value) throw new Error('allocated pair unavailable before turn/start');
       // The durable reservation owns write protection before any user execution can be attempted.
       let registered = false;
       const saved = updateJob(this.env, parent.id, prev => {
@@ -621,25 +730,28 @@ export class CodexPolicy {
     }
     return typeof affinity === 'string' && this.sessions.has(affinity) ? affinity : null;
   }
-  observeRequest(sessionId: string, request: Obj): void {
+  observeRequest(sessionId: string, request: Obj): CodexSubmission | undefined {
     const session = this.sessions.get(sessionId);
     if (!session) return;
     const effort = obj(request['reasoning'])?.['effort'];
     if (typeof request['model'] === 'string') session.requestModel = request['model'];
-    if (typeof effort === 'string') session.requestEffort = effort;
-    if (!session.route || !Object.keys(session.route).length) return;
+    if (typeof effort === 'string') session.requestEffort = effort; else delete session.requestEffort;
+    const submitted = { prompt: session.prompt, model: String(request['model']), effort: typeof effort === 'string' ? effort : null, requestId: randomUUID() };
+    session.lastSubmitted = submitted;
+    if (!session.route || !Object.keys(session.route).length) return submitted;
     const selectedModel = session.route.model ?? session.baseline.model;
-    const selectedEffort = session.route.effort ?? session.baseline.effort;
+    const selectedEffort = session.route.effortEdit?.kind === 'omit' ? null : session.route.effort ?? session.baseline.effort;
     // Ultra is a native host selection, resolved by the model to an inference effort.
     // Confirm the official host selection and observe its wire value; never rewrite it.
     const nativeUltra = selectedEffort === 'ultra' && session.settings['effort'] === 'ultra'
       && typeof effort === 'string' && effort !== 'ultra'
       && this.catalog.find(m => m.model === selectedModel)?.supportedReasoningEfforts.some(e => e.reasoningEffort === effort) === true;
-    this.trace?.write('codex_route_applied', { host: 'codex', session_id: session.id, prompt_id: session.prompt, stage: 'model_request',
-      observed_model: request['model'], observed_effort: effort ?? null, observed_host_effort: session.settings['effort'] ?? null,
+    this.trace?.write('codex_route_applied', { host: 'codex', session_id: session.id, prompt_id: session.prompt, stage: 'submitted',
+      request_id: submitted.requestId, submitted_model: request['model'], submitted_effort: effort ?? null, observed_model: null, observed_effort: 'unknown', observed_host_effort: session.settings['effort'] ?? null,
+      boundary: 'provider_request', scope: session.role ?? 'root',
       selected_model: selectedModel, selected_effort: selectedEffort, effort_resolution: nativeUltra ? 'native_ultra' : 'direct',
-      applied: request['model'] === selectedModel && (!session.route.effort || effort === selectedEffort || nativeUltra) });
-    delete session.route;
+      reason: 'request_applied', applied: request['model'] === selectedModel && (session.route.effortEdit?.kind === 'omit' ? effort === undefined : !session.route.effort || effort === selectedEffort || nativeUltra) });
+    return submitted;
   }
   previousCompact(session: string): string | undefined { return this.sessions.get(session)?.lastCompactSummary; }
   canCompact(session: string): boolean { return this.sessions.get(session)?.compactAllowed === true; }

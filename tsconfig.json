@@ -14,7 +14,9 @@
     "noFallthroughCasesInSwitch": true,
     "skipLibCheck": true,
     "sourceMap": false,
-    "declaration": false
+    "declaration": false,
+    "rewriteRelativeImportExtensions": true,
+    "allowImportingTsExtensions": true
   },
   "include": ["src"],
   "exclude": ["src/evidence", "src/codex"]

@@ -45,7 +45,7 @@ describe('the marketplace', () => {
   it('loads a hooks module whose imports all resolve inside the files the archive carries', () => {
     // The archive holds hooks/ and mods/<mod>/hooks/*.ts (scripts/pack.mjs), so an import outside them breaks the installed copy.
     const specifier = /(?:^|\n)\s*(?:import|export)\b[^'"]*?\bfrom\s+['"]([^'"]+)['"]|\bimport\(\s*['"]([^'"]+)['"]\s*\)/g;
-    const shipped = (rel: string) => /^(hooks|mods\/(compact|output|router)\/hooks)\/[a-z-]+\.ts$/.test(rel);
+    const shipped = (rel: string) => /^src\/(?:router-(?:answers|selection|context|secret)|claude-(?:models|candidates))\.ts$/.test(rel) || /^(hooks|mods\/(compact|output|router)\/hooks)\/[a-z-]+\.ts$/.test(rel);
     const hooks = readJson(join(root, 'hooks', 'hooks.json')) as { modules: string[] };
     expect(hooks.modules).toEqual(['./register.ts']);
     const seen = new Set<string>();

@@ -1,6 +1,12 @@
 # Changelog
 
-## v0.8.2 — 2026-10-02 — Responsive background workers
+## v0.8.2 — 2026-10-02 — Full-catalog Router and responsive background workers
+
+- Router v2 (#143–151): actual model IDs across the full eligible catalog, candidate-local effort questions in one bounded batch, max/none/omit semantics, independent pins and preservation of the original root execution.
+- Automatic Astra/Fable targets now require the existing host-specific boolean opt-in (default OFF), enforced on ordinary children, Gate B, retries and Lean inheritance even with Router disabled. Manual restricted roots remain usable.
+- Managed and ordinary Codex share bounded completed-answer/human context. Unsent settings/catalog changes cancel stale patches; submitted values and actual response observations are separate. Optional recording failure cannot change execution.
+- Gate B allocates actual model/effort pairs in its existing call. Added native Function Hooks and Codex scripted-provider regression coverage, packaged shared policy sources, doctor diagnostics and updated user documentation.
+
 
 - Owned planners, workers and Lean executors run in the background by default. Main conversation questions retain the original job and contracts while work continues; launch receipts do not count as completion.
 - Claude accepts results only after matching native execution identity, profile and transcript termination. Successful native TaskStop ends ownership without accepting success. Main wait interruptions, malformed terminal evidence and connection uncertainty preserve reservations; retired results cannot advance a new job.

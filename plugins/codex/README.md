@@ -44,12 +44,12 @@ The older `node <plugin>/dist/cli.mjs codex` managed terminal remains available 
 | Feature | Automatic connected session |
 | --- | --- |
 | Gate A | Reads observed native context usage; Jev judges context and cost support; code chooses direct, single-worker or planned delegation and enforces the depth floor |
-| Gate B | Applies shared tier policy to the exact owned dispatch; checks account model availability |
+| Gate B | Adds actual model/effort candidates to the existing Gate B batch; rechecks eligibility before owned dispatch |
 | Planning | Only on the planned path: runs the existing read-only planner instructions in a native Codex thread and validates the returned task graph |
 | Workers / acceptance | Runs real native Codex workers in the background by default; compares reports with observed command exits and edits. The current shared core does not call Gate C; acceptance is owned by code on both hosts. |
 | Root guard | Enforces the shared root allowlist while a job is admitted; never returns an allow decision |
 | Lean | Uses attributed App Server items; retains user constraints, selects optional groups with Jev, and applies a packet to one executor; no Gate or plan runs on this path |
-| Router | Uses shared ordered probabilities and the live account catalog; routes the actual native Responses request and records the applied model/effort separately from selection |
+| Router | Uses a nominal actual-ID model choice and candidate-local ordered effort scores; routes the original root request and separates selection, submission and actual response observation |
 | Compact | Produces the shared extractive digest on automatic local compaction; Codex installs it through its own state machine; unsupported extraction falls back to native compaction |
 | Output | Folds only identical consecutive lines in complete passing Vitest output; preserves failures, truncation and unknown formats |
 | Evidence | Same local search, Jev judgments, pagination, cache and exact source read-back as Claude Code |
@@ -76,7 +76,11 @@ Use `JEV_CODEX_CONFIG=/absolute/codex.json`, otherwise `~/.config/jev-gate/codex
 
 ### Current Codex models and efforts
 
-The router reads the complete native `model/list` catalog. It has no model-name whitelist and does not pin GPT-5.5. Default worker mappings follow the selected native session model; use Codex `/model` or `--model` to choose it. Model changes require your explicit tier mapping and `router.model: true`.
+The router retains the complete native `model/list` catalog and considers every eligible coding candidate, including IDs outside the four role preferences. A malformed or conflicting entry excludes only that candidate; incomplete pagination retains partial discovery and marks it incomplete. Initialization and account changes refresh the bounded catalog without paid probes.
+
+Codex `/model`, `--model`, and ordinary model configuration establish a baseline. They do not permanently pin it. Router defaults to model and effort selection on the same root request, preserving tools, provider, authentication and permissions. Independent switches/pins and a manual mid-turn change take precedence. Effort is scored separately for each candidate; a B answer is never reused for A.
+
+Automatic Astra targets default to **OFF**, including Gate/Lean children even when Router is off. A manual Astra root remains usable. To opt in, set `{"router":{"allowAstra":true}}` in this host’s optional policy file; only boolean true is valid. Claude has separate `routerAllowFable` (combined) and `allowFable` (standalone) settings. No file or model mapping is required for ordinary eligible models.
 
 Observed in Codex CLI 0.159.2 on 2026-09-30:
 
@@ -87,7 +91,7 @@ Observed in Codex CLI 0.159.2 on 2026-09-30:
 | `gpt-5.6-terra`, `gpt-5.6-sol` | low, medium, high, xhigh, max, ultra |
 | `gpt-5.6-luna` | low, medium, high, xhigh, max |
 
-Terra, older models and account-specific models remain usable when the live catalog supports them. Availability and defaults depend on your account and host; the table is an observation, not a permanent allowlist. Effort questions offer only the current model's supported levels. Unknown efforts preserve native settings. Unsupported model/effort combinations are refused; the highest effort is not selected simply because it exists.
+Terra, older models and account-specific models remain usable when the live catalog supports them. Availability and defaults depend on your account and host; the table is an observation, not a permanent allowlist. Each effort question offers that candidate’s own supported levels, including max when available. Unknown efforts preserve native settings. Keep, literal none and effort omission remain distinct. Unsupported model/effort combinations are preserved or refused at the automatic-child boundary; the highest effort is not selected simply because it exists.
 
 `ultra` is a native Codex selection. Codex resolves it to the model's ordinary inference effort (observed as `xhigh` or `max`, depending on the model's live catalog), rather than sending a literal `ultra` API value. A native user selection remains authoritative. Automatic Router offers actual provider efforts and excludes `ultra`, which is resolved by Codex before the request reaches the connection; the optional managed connection can pass an official native `ultra` selection. The dashboard records the selected effort, the official host setting and the observed inference request separately; no `ultra` request is fabricated.
 

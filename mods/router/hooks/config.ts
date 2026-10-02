@@ -9,6 +9,7 @@ import { TIER_ORDER } from './policy.ts';
  */
 export interface RouterConfig {
   enabled: boolean;
+  allowFable: boolean;
   routeSubagentModel: boolean;
   /** Route the model even when the Agent call names one: the caller's `model` is a default, not a requirement. */
   routeExplicitSpawnModel: boolean;
@@ -56,6 +57,8 @@ export const resolveConfig = (options: Options): ConfigResult => {
 
   const enabled = bool('enabled', true);
   if (enabled === null) return { ok: false, field: 'enabled' };
+  const allowFable = bool('allowFable', false);
+  if (allowFable === null) return { ok: false, field: 'allowFable' };
   const routeSubagentModel = bool('routeSubagentModel', true);
   if (routeSubagentModel === null) return { ok: false, field: 'routeSubagentModel' };
   const routeExplicitSpawnModel = bool('routeExplicitSpawnModel', true);
@@ -104,22 +107,19 @@ export const resolveConfig = (options: Options): ConfigResult => {
     }
     candidate[tier] = value;
   }
-  // Two profiles naming one model family make every rank lookup a guess, so none is made.
-  const families = Object.values(candidate).map((v) => factsOf(v)?.family ?? aliasFamily(v));
-  const ambiguous = new Set(families).size !== families.length;
-  if (ambiguous) for (const tier of TIER_ORDER.filter((t) => candidate[t] !== undefined)) tierIssues.push({ tier, reason: 'ambiguous' });
 
   return {
     ok: true,
     config: {
       enabled,
+      allowFable,
       routeSubagentModel,
       routeExplicitSpawnModel,
       routeSubagentEffort,
       routeMainEffort,
       routeMainModel,
       explicitKey,
-      tiers: ambiguous ? {} : candidate,
+      tiers: candidate,
       tierIssues,
       minUpgradeConfidence,
       minDowngradeConfidence,
