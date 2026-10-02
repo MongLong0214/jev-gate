@@ -106,9 +106,15 @@ export const explicitlyForbidsDelegation = (request: string): boolean =>
  * and `guardAllowMcp` applies only to the root guard.
  */
 export const ADMISSION_FACT_QUESTIONS = {
-  bounded_tool_work: requestFact(
-    'The complete requested outcome is a bounded repository lookup, file or symbol search, listing, or mechanical edit with stated focused checks. It needs tools but no unresolved design, proof, broad audit or investigation. A conversational answer or an isolated file read that is only one step of a larger unresolved task is not this.',
-  ),
+  bounded_tool_work: {
+    type: 'choice' as const,
+    instructions: `${REQUEST_FACT_GUARD} Classify the COMPLETE requested outcome, not an individual tool step. The agent can discover the current repository, branch, PR, files and diff with native workspace tools. Judge the work shape, not permissions, cost, model quality or whether the target exists. Checks needed to verify a lookup or a mechanical update are part of that outcome; the user need not name test commands.`,
+    criteria: {
+      bounded: 'One complete repository lookup, file/symbol search, listing, or mechanical update of existing files, documentation or metadata against an existing source of truth. Updating the current PR description or README to reflect the code is one bounded documentation update. No new design decision, broad audit, proof or open-ended diagnosis is requested.',
+      other: 'A conversational reply, implementation requiring new behavior or design, broad audit, proof, open-ended diagnosis, multiple independent outcomes, or a small lookup that is only one step of that larger requested outcome.',
+      unclear: 'The requested outcome cannot be identified well enough to distinguish these shapes.',
+    },
+  },
   forbids_delegation: requestFact(
     'The request says this work must not be handed to a subagent, assistant or other worker. Restrictions on how to do the work, or on what not to change, are not this.',
   ),
@@ -149,10 +155,10 @@ export const ADMISSION_CONTEXT_SUPPORT = 0.8;
 export const ADMISSION_COST_SUPPORT = 0.8;
 export const TASK_CONTEXT_QUESTION = {
   type: 'choice' as const,
-  instructions: `${REQUEST_FACT_GUARD} Can the target and requested outcome be identified from request? Distinguish ordinary investigation using code, files, URLs or connected tools from a missing earlier decision, list or target that defines what to do. Do not judge solutions, permissions, success probability or amount of work. Unknown code or a required MCP is not missing context.`,
+  instructions: `${REQUEST_FACT_GUARD} Can the target and requested outcome be identified from request? Distinguish ordinary investigation using code, files, URLs or connected tools from a missing earlier decision, list or target that defines what to do. The agent runs in the current native workspace and can use its existing repository and connected tools to discover the current branch, its PR, files and diff. "Current PR", "this branch", "current code" and "the repository" name discoverable workspace targets; they do not require an earlier conversational decision. Do not assume a PR or file exists: checking whether it exists is ordinary investigation. An unnamed item from an earlier list or an earlier design choice still needs context. Do not judge solutions, permissions, success probability or amount of work. Unknown code or a required MCP is not missing context.`,
   criteria: {
     self_contained:
-      'The target and outcome are identifiable; ordinary investigation can determine the solution. A concrete src/a.ts change, investigating a login refresh bug, or comparing a supplied Figma URL/node with a named screen qualifies.',
+      'The target and outcome are identifiable; ordinary investigation can determine the solution. A concrete src/a.ts change, investigating a login refresh bug, or comparing a supplied Figma URL/node with a named screen qualifies. Updating the current branch\'s PR description to match its code, listing repository files, and locating a symbol in this repository qualify even without a PR URL or file list.',
     needs_context:
       'An essential earlier decision, list or target defining the work is absent from request. "Use the second earlier option" without that option does not define the work.',
     unclear: 'The supplied request does not establish which of these applies; a bare acknowledgement does not identify a target.',
@@ -300,7 +306,9 @@ export const decideAdmissionAtomic = (
   const size = config.admittedShape === 'auto' && config.maxParallelWorkers > 1 ? scoreValue(answers['size'], SIZE_MAX_SCORE) : 0;
   // Bounded tool outcomes use one fresh fast worker even when the legacy coordinator estimate
   // cannot pay. This is execution policy, not a measured token saving. Keep explicit hierarchy and every veto.
-  if (config.admittedShape !== 'hierarchy' && (noulValue(answers['bounded_tool_work']) ?? 0) >= ADMISSION_CONTEXT_SUPPORT &&
+  const bounded = validateChoice(answers['bounded_tool_work'], Object.keys(ADMISSION_FACT_QUESTIONS.bounded_tool_work.criteria));
+  if (config.admittedShape !== 'hierarchy' && bounded?.choice === 'bounded' && topChoices(bounded).length === 1 &&
+      bounded.probabilities.bounded! >= ADMISSION_CONTEXT_SUPPORT &&
       parallel !== null && parallel < FACT_TRUE && size !== null && size < SIZE_PROJECT &&
       calls.normalized[1]! + calls.normalized[2]! + Number.EPSILON * 8 >= ADMISSION_COST_SUPPORT)
     return { shape: 'orchestrated', execution: 'single', decided: true, reason: null, answer: null, estimate, preference: 'bounded_tool_worker' };

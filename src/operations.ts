@@ -379,6 +379,8 @@ const debugStep = (row: DebugRecord, now: number, closed: Set<string>): Operatio
     const exclusions = field(r, 'excluded');
     if (exclusions) details.push(text(...Object.entries(exclusions).flatMap(([reason, value]) => number(value) ? [`excluded ${token(reason) ?? '?'} ${n(number(value))}`] : [])));
     details.push(text(`요청 변경 모델 ${token(patch?.['model']) ?? '?'}`, `요청 변경 effort ${token(patch?.['effort']) ?? token(r['patch']) ?? '?'}`));
+    const heldEffort = token(r['held_for_cache']);
+    if (heldEffort) details.push(text('캐시 재사용을 위해 effort 유지', `Jev 제안 ${heldEffort}`, `요청 설정 ${token(patch?.['effort']) ?? token(from?.['effort']) ?? '?'}`));
     details.push(text(`모델 이유 ${token(reasons?.['model']) ?? '?'}`, `effort 이유 ${token(reasons?.['effort']) ?? '?'}`, `실제 적용 effort ${token(applied?.['effort']) ?? '?'}`, `관측 모델 ${token(r['observed']) ?? '?'}`));
     const usage = field(r, 'usage');
     if (usage) details.push(text(`입력 ${n(number(usage['input']))}`, `출력 ${n(number(usage['output']))}`, `cache read ${n(number(usage['cache_read']))}`, `cache write ${n(number(usage['cache_creation']))}`));

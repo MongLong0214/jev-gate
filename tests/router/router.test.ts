@@ -1282,7 +1282,7 @@ describe('root effort and the prompt cache', () => {
     expect(await turn('t1', ['medium', 0.95], 0)).toBe('medium');
     // Ten minutes on, lower work is held at the effort the cache was written at.
     expect(await turn('t2', ['low', 0.95], 10 * 60_000)).toBe('medium');
-    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root', turn: 't2', patch: expect.objectContaining({ effort: 'medium' }), held_for_cache: 'low' }));
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root', turn: 't2', proposed_patch: expect.objectContaining({ effort: 'low' }), patch: expect.objectContaining({ effort: 'medium' }), held_for_cache: 'low', reasons: expect.objectContaining({ effort: 'cache_preserved' }) }));
     // Exceptional work rises to the baseline, paying the rewrite.
     expect(await turn('t3', ['xhigh', 0.95], 60_000)).toBe('xhigh');
     // Held at the baseline, nothing is sent.

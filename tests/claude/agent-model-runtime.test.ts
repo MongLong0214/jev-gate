@@ -12,6 +12,7 @@ import { readJob } from '../../src/job.js';
 describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude Gate B model dispatch', () => {
   it.each([
     { scope: 'worker', selected: '__keep__', actual: 'claude-haiku-4-5', effort: undefined, allowFable: false, admission: true },
+    { scope: 'worker', selected: '__keep__', actual: 'claude-haiku-4-5', effort: undefined, allowFable: false, admission: true, documentation: true },
     { scope: 'worker', selected: '__keep__', actual: 'claude-sonnet-5-5', effort: 'high', allowFable: false },
     { scope: 'worker', selected: 'claude-opus-5', actual: 'claude-opus-5', effort: 'high', allowFable: false },
     { scope: 'worker', selected: 'claude-opus-5-5', actual: 'claude-opus-5-5', effort: 'max', allowFable: false },
@@ -51,8 +52,11 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude Gate B 
     saveApiKey(env, 'fake-local-jev-key');
     if (scenario.scope === 'root') env.JEV_GATE_MODE = 'off';
     if (scenario.admission) { delete env.JEV_GATE_EXPERIMENT_ADMISSION; mkdirSync(join(temp, 'src')); writeFileSync(join(temp, 'src/lookup.ts'), 'export function parseRecord() {}\nparseRecord();\n'); }
+    if (scenario.documentation) writeFileSync(join(temp, 'PR.md'), 'Obsolete PR description\n');
     // Fable authorization must propagate from the native plugin option, not a fixture-only env override.
     const allocations: Record<string, unknown>[] = []; const admissions: Record<string, unknown>[] = []; const workerRequests: Array<{ model: string; output_config?: { effort?: string } }> = []; const toolResults: unknown[] = []; let mainCalls = 0; let output = '';
+    const documentWrite = `node -e 'const fs=require("node:fs");const source=fs.readFileSync("src/lookup.ts","utf8");if(!source.includes("export function parseRecord"))throw new Error("source mismatch");fs.writeFileSync("PR.md","Documents parseRecord in src/lookup.ts; no API behavior changes.\\n");process.stdout.write(fs.readFileSync("PR.md","utf8"))'`;
+    const documentCheck = `node -e 'const fs=require("node:fs");if(!fs.readFileSync("src/lookup.ts","utf8").includes("export function parseRecord")||fs.readFileSync("PR.md","utf8")!=="Documents parseRecord in src/lookup.ts; no API behavior changes.\\n")throw new Error("description mismatch");console.log("PR description verified")'`;
     const answer = (res: ServerResponse, model: string, text: string, tool?: unknown) => {
       res.writeHead(200, { 'content-type': 'text/event-stream' }); const event = (type: string, data: unknown) => res.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
       event('message_start', { type: 'message_start', message: { id: 'msg_fixture', type: 'message', role: 'assistant', model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 0 } } });
@@ -68,7 +72,7 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude Gate B 
         if (body.questions.bounded_tool_work) admissions.push(body);
         const selection = scenario.sequence?.[allocations.length - 1] ?? scenario;
         const answers = Object.fromEntries(Object.entries(body.questions as Record<string, any>).map(([name, q]) => {
-          if (q.type === 'noul') return [name, { type: 'noul', noul: name === 'bounded_tool_work' ? .99 : .1 }];
+          if (q.type === 'noul') return [name, { type: 'noul', noul: .1 }];
           if (name === 'tool_calls') return [name, { type: 'score', score: 1, confidence: 1, probabilities: Object.fromEntries(q.criteria.map((_: string, i: number) => [i, i === 1 ? 1 : 0])) }];
           if (q.type === 'choice') return [name, choice(Object.keys(q.criteria), [name === 'model' ? selection.selected in q.criteria ? selection.selected : '__keep__' : name === 'control' ? 'task_clear' : name === 'action_risk' ? 'ordinary' : Object.keys(q.criteria)[0]!, name === 'model' ? scenario.probability ?? .99 : .99])];
           const at = (q.criteria as string[]).findIndex(s => s.startsWith(selection.effort === 'max' ? 'Maximum sustained' : selection.effort === 'medium' ? 'Ordinary reasoning' : 'Strong reasoning'));
@@ -84,7 +88,11 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude Gate B 
         if (scenario.actual.includes('haiku')) expect(body.thinking?.type).not.toBe('adaptive');
         answer(res, body.model, 'MAIN_FINISHED', ++mainCalls % 2 === 1 ? { command: "printf 'observed fixture\\n'", description: 'Observe a real tool step' } : undefined);
       }
-      else if (JSON.stringify(body.messages?.[0]).includes('AGENT_MODEL_FIXTURE')) { workerRequests.push(body as { model: string; output_config?: { effort?: string } }); answer(res, body.model, JSON.stringify({ status: 'done', summary: 'src/lookup.ts:1 declaration, src/lookup.ts:2 caller', changed_files: [], interfaces: [], checks: [], blockers: [] }), scenario.admission && workerRequests.length === 1 ? { command: "rg -n --with-filename 'parseRecord' src/lookup.ts", description: 'Find exact declarations and callers' } : undefined); }
+      else if (JSON.stringify(body.messages?.[0]).includes('AGENT_MODEL_FIXTURE')) {
+        workerRequests.push(body as { model: string; output_config?: { effort?: string } });
+        const tool = !scenario.admission ? undefined : scenario.documentation ? workerRequests.length === 1 ? { command: documentWrite, description: 'Update the local PR description fixture against current source' } : workerRequests.length === 2 ? { command: documentCheck, description: 'Verify the updated description after the write' } : undefined : workerRequests.length === 1 ? { command: "rg -n --with-filename 'parseRecord' src/lookup.ts", description: 'Find exact declarations and callers' } : undefined;
+        answer(res, body.model, JSON.stringify({ status: 'done', summary: scenario.documentation ? 'Updated PR.md against src/lookup.ts' : 'src/lookup.ts:1 declaration, src/lookup.ts:2 caller', changed_files: scenario.documentation ? ['PR.md'] : [], interfaces: [], checks: scenario.documentation ? [{ check_id: documentCheck, result: 'pass' }] : [], blockers: [] }), tool);
+      }
       else if (scenario.admission && mainCalls === 0) { mainCalls++; answer(res, body.model, 'PRIMED'); }
       else answer(res, body.model, 'MAIN_FINISHED', ++mainCalls === (scenario.admission ? 2 : 1) ? { subagent_type: scenario.admission ? 'jev-gate:worker-fast' : 'jev-gate:worker', description: 'Native model allocation', prompt: 'AGENT_MODEL_FIXTURE', run_in_background: false } : undefined);
     });
@@ -94,7 +102,7 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude Gate B 
     const routerClient = join(plugin, 'mods/router/hooks/client.ts'); writeFileSync(routerClient, readFileSync(routerClient, 'utf8').replace('https://api.typesafe.ai/v1/systemone', url + '/jev'));
     try {
       const code = await new Promise<number | null>((resolve, reject) => {
-        const prompt = scenario.admission ? 'Find all parseRecord declarations and callers in src/lookup.ts. Return paths and line numbers. Do not edit.' : scenario.scope === 'root' ? 'Run the stated local printf check and explain the result.' : 'Use the worker for this fixture.';
+        const prompt = scenario.documentation ? 'PR 본문 지금 코드에 맞게 고쳐줘' : scenario.admission ? 'Find all parseRecord declarations and callers in src/lookup.ts. Return paths and line numbers. Do not edit.' : scenario.scope === 'root' ? 'Run the stated local printf check and explain the result.' : 'Use the worker for this fixture.';
         const child = spawn('claude', ['--plugin-dir', plugin, '-p', ...(scenario.sequence || scenario.admission ? ['--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose'] : [prompt]), '--model', 'claude-opus-5-5', '--effort', scenario.incoming ?? 'xhigh', '--max-turns', '4', '--allowedTools', scenario.scope === 'root' ? 'Bash' : scenario.admission ? 'Agent,Bash' : 'Agent'], { env: { ...env, ANTHROPIC_API_KEY: 'fake-local-model-key', ANTHROPIC_BASE_URL: url }, cwd: temp });
         let buffered = ''; let completed = 0;
         const send = (text: string) => child.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: text } }) + '\n');
@@ -108,11 +116,14 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude Gate B 
       });
       const traces = readdirSync(trace).filter(f => f.endsWith('.json')).map(f => JSON.parse(readFileSync(join(trace, f), 'utf8')));
       const diagnostic = JSON.stringify({ output, toolResults, workers: workerRequests.map(r => ({ model: r.model, effort: r.output_config?.effort })), traces: traces.filter(r => r.phase === 'mod_router' || r.phase === 'pre_result' || r.phase === 'admission_result' || r.phase.startsWith('background_')) });
-      expect(code, diagnostic).toBe(0); expect(allocations, diagnostic).toHaveLength(scenario.sequence?.length ?? 1); expect(workerRequests, diagnostic).toHaveLength(scenario.sequence ? 6 : scenario.scope === 'root' || scenario.admission ? 2 : 1);
+      expect(code, diagnostic).toBe(0); expect(allocations, diagnostic).toHaveLength(scenario.sequence?.length ?? 1); expect(workerRequests, diagnostic).toHaveLength(scenario.documentation ? 3 : scenario.sequence ? 6 : scenario.scope === 'root' || scenario.admission ? 2 : 1);
       for (const [i, request] of workerRequests.entries()) { const expected = scenario.sequence?.[Math.floor(i / 2)] ?? scenario; expect(request.model, diagnostic).toBe(expected.actual); expect(request.output_config?.effort, diagnostic).toBe(expected.effort); }
       if (scenario.admission) {
         expect(admissions, diagnostic).toHaveLength(1);
-        expect(JSON.stringify(toolResults), diagnostic).toContain('src/lookup.ts:1:'); expect(JSON.stringify(toolResults), diagnostic).toContain('src/lookup.ts:2:');
+        if (scenario.documentation) {
+          expect(readFileSync(join(temp, 'PR.md'), 'utf8'), diagnostic).toBe('Documents parseRecord in src/lookup.ts; no API behavior changes.\n');
+          expect(JSON.stringify(toolResults), diagnostic).toContain('Documents parseRecord');
+        } else { expect(JSON.stringify(toolResults), diagnostic).toContain('src/lookup.ts:1:'); expect(JSON.stringify(toolResults), diagnostic).toContain('src/lookup.ts:2:'); }
         const admission = traces.find(r => r.phase === 'admission_result' && r.attempted);
         expect(admission, diagnostic).toMatchObject({ policy_basis: 'bounded_tool_worker', selected_execution: 'single', attempted: true });
         expect(traces, diagnostic).toContainEqual(expect.objectContaining({ phase: 'background_terminal', status: 'completed', execution_prompt_id: admission.prompt_id }));

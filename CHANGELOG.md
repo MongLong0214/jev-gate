@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.8.4 — 2026-10-02 — Discoverable workspace targets and fast-worker admission
+
+- Treat the current repository, branch, PR and diff as targets discoverable through native workspace tools. Gate A and the shared Router question no longer require a supplied PR URL or file list for those targets. Missing earlier decisions still preserve native execution.
+- Classify complete bounded tool outcomes with typed `bounded` / `other` / `unclear` choices instead of a compound truth statement requiring user-specified checks. Keep the existing 0.8 support, context/delegation/depth checks and one-worker execution. Mechanical PR description updates and complete lookups can use Claude Haiku or Codex Luna through the fast profile.
+- Record the proposed Router patch separately from the final cache-preserving patch and explain retained root effort in both dashboard languages. Cache protection and the current Claude root-Haiku compatibility limitation are unchanged.
+- Verify the reported Korean PR-description request with live Jev classification and actual Claude CLI/scripted-provider execution: fresh Haiku requests omit effort, write a local description fixture, run a check after the edit and reach contract acceptance. Verify native Codex fast-worker execution and root denial. Scripted-provider checks do not establish paid-provider performance or measured savings.
+
 ## v0.8.3 — 2026-10-02 — Native dispatch repair and cache-aware routing
 
 - Route self-contained bounded searches and mechanical tool outcomes to one fast worker without a planner, using one extra fact in the existing Gate A batch. Preserve context, no-delegation, shape and depth constraints. Negative legacy cost estimates remain visible; this execution preference is not a measured saving. Native Claude coverage observes an automatically admitted Haiku worker running an actual repository search with no effort parameter.

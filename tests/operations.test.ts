@@ -8,6 +8,11 @@ const base = { written_at: at, session_id: 's1', prompt_id: 'p1', mode: 'auto', 
 const row = (component: DebugRecord['component'], rec: Record<string, unknown>, time = at): DebugRecord => ({ at: time, component, rec });
 
 describe('operations display model', () => {
+  it('shows a proposed effort downgrade held by the cache separately from the final request setting', () => {
+    const view = buildOperations([], [row('router', { event: 'root', turn: 'warm', from: { model: 'claude-opus-5-5', effort: 'xhigh' }, proposed_patch: { effort: 'low' }, patch: {}, held_for_cache: 'low', reasons: { model: 'same_value', effort: 'cache_preserved' } })], new Date(later), { trace: false, debug: true });
+    expect(view.feed[0]?.details.join(' ')).toContain('캐시 재사용을 위해 effort 유지 · Jev 제안 low · 요청 설정 xhigh');
+    expect(view.feed[0]?.model?.forwardedEffort).not.toBe('low');
+  });
   it('keeps host dispatch effort, wire request effort and missing response effort as different facts', () => {
     const report = buildOperations([
       { phase: 'codex_router_response', host: 'codex', session_id: 'codex', prompt_id: 'p1', written_at: at, selected_model: 'gpt-6.1-sol', observed_model: 'gpt-6.1-sol', selected_effort: 'low', submitted_effort: 'low', observed_effort: 'unknown' },

@@ -64,7 +64,7 @@ const fakeJev = (opts: FakeAnswers = {}): ReturnType<typeof vi.fn> =>
     if (questions.includes('execution')) answers['execution'] = choice(ADMISSION_ANSWERS, opts.execution ?? 'orchestrated');
     // Gate A is atomic by default since 2026-09-19, so the double answers its read-offs the way an admitted job reads.
     if (questions.includes('forbids_delegation')) {
-      if (opts.boundedToolWork !== undefined) answers['bounded_tool_work'] = { type: 'noul', noul: opts.boundedToolWork };
+      if (opts.boundedToolWork !== undefined) answers['bounded_tool_work'] = { type: 'choice', choice: 'bounded', confidence: opts.boundedToolWork, probabilities: { bounded: opts.boundedToolWork, other: 1 - opts.boundedToolWork, unclear: 0 } };
       answers['forbids_delegation'] = { type: 'noul', noul: opts.forbidsDelegation ?? 0.05 };
       answers['external_tools'] = { type: 'noul', noul: opts.externalTools ?? 0.05 };
       answers['plan_only'] = { type: 'noul', noul: 0.05 };
@@ -3476,15 +3476,17 @@ describe('full candidate pair in the existing Gate B batch', () => {
   });
 });
 
-it('admits a shallow bounded lookup to the fast worker using one Gate A batch and preserves the full request', async () => {
+it.each([
+  'Find all parseRecord declarations and callers in src/ and return file paths and line numbers. Do not edit.',
+  'PR 본문 지금 코드에 맞게 고쳐줘',
+])('admits one shallow bounded outcome to the fast worker using one Gate A batch and preserves the full request: %s', async prompt => {
   const cfg = join(tmp, 'bounded-tool.json'); writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', delegationDepthFloor: 0, admittedShape: 'auto', workerIsolation: 'none', maxParallelWorkers: 1 }));
   const env = makeEnv({ JEV_GATE_CONFIG: cfg });
-  const prompt = 'Find all parseRecord declarations and callers in src/ and return file paths and line numbers. Do not edit.';
   const fetchImpl = fakeJev({ toolCalls: 1, boundedToolWork: .99, parallelOutcomes: .05 });
   const result = await run(env, promptEvent({ prompt, transcript_path: transcriptAt(1000) }), fetchImpl);
   expect(result.kind).toBe('guidance'); expect(result.stdout).toContain('jev-gate:worker-fast'); expect(result.stdout).not.toContain('Planner first');
   expect(fetchImpl).toHaveBeenCalledOnce(); expect(state(env).current).toMatchObject({ execution: 'single', request: prompt });
-  const worker = await run(env, preEvent('Agent', { ...agentInput(), subagent_type: 'jev-gate:worker-fast', prompt: 'Return every match with file and line.' }), fakeJev({ route: 'fast' }));
+  const worker = await run(env, preEvent('Agent', { ...agentInput(), subagent_type: 'jev-gate:worker-fast', prompt: 'Complete the requested bounded outcome and verify it against the current source.' }), fakeJev({ route: 'fast' }));
   expect(worker.kind).toBe('patch'); expect(updatedInput(worker).model).toBeUndefined(); expect(updatedInput(worker).prompt).toContain(prompt);
   // The requested fast profile is already Haiku; preserve native frontmatter rather than add a redundant model pin.
 });
