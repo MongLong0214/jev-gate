@@ -8,6 +8,17 @@ const base = { written_at: at, session_id: 's1', prompt_id: 'p1', mode: 'auto', 
 const row = (component: DebugRecord['component'], rec: Record<string, unknown>, time = at): DebugRecord => ({ at: time, component, rec });
 
 describe('operations display model', () => {
+  it('connects background launches, questions and terminals to the original job without treating launch as completion', () => {
+    const launch = { ...base, phase: 'background_launch', tool_use_id: 'd', status: 'running' };
+    const question = { ...base, phase: 'background_conversation', prompt_id: 'q', execution_prompt_id: 'p1', active: 1 };
+    const active = buildOperations([launch, question], [], new Date(later), { trace: true, debug: false });
+    expect(active.runs).toHaveLength(1); expect(active.runs[0]?.state).toBe('active');
+    expect(active.feed.some(s => s.summary.includes('질문 가능'))).toBe(true);
+    const terminal = { ...base, written_at: later, phase: 'background_terminal', tool_use_id: 'd', prompt_id: 'q', execution_prompt_id: 'p1', status: 'completed' };
+    const done = buildOperations([launch, question, terminal], [], new Date(later), { trace: true, debug: false });
+    expect(done.runs).toHaveLength(1); expect(done.runs[0]?.state).toBe('done');
+    expect(done.feed.some(s => s.summary.includes('별도 검사'))).toBe(true);
+  });
   it('preserves native variant IDs and the Router identity confirmation without reclassifying dated aliases', () => {
     const view = buildOperations([], [
       row('router', { event: 'root_result', turn: 'variant', requested: 'claude-opus-5-5[1m]', observed: 'claude-opus-5-5[1m]', confirmation: 'confirmed' }),

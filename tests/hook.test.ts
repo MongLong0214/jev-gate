@@ -115,6 +115,7 @@ const makeEnv = (over: Env = {}): Env => ({
   JEV_GATE_MODE: 'auto',
   JEV_GATE_STATE_DIR: mkdtempSync(join(tmp, 'state-')),
   CLAUDE_CODE_FORK_SUBAGENT: '0',
+  CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1',
   ...over,
 });
 
@@ -763,8 +764,8 @@ describe('#48: a session whose Agent calls can only run in the background', () =
     const r = await run(makeEnv(backgroundOnly), { hook_event_name: 'SessionStart', session_id: 's1' });
     expect(r).toMatchObject({ kind: 'notice', code: 'host_unsupported' });
     const body = JSON.parse(r.stdout as string) as Record<string, unknown>;
-    expect(String(body['systemMessage'])).toContain('can only run in the background');
-    expect(String(body['systemMessage'])).toContain('CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1');
+    expect(String(body['systemMessage'])).toContain('no verified fresh owned Agent profile');
+    expect(String(body['systemMessage'])).toContain('CLAUDE_CODE_FORK_SUBAGENT=0');
     expect(body).not.toHaveProperty('hookSpecificOutput');
   });
 
@@ -1605,10 +1606,10 @@ describe('worker dispatch', () => {
     const fetchImpl = fakeJev();
     await seedPlanned(env, PLAN_REPLY, fetchImpl);
     const before = fetchImpl.mock.calls.length;
-    for (const over of [{ run_in_background: true }, { resume: 'agent-1' }, { prompt: '  ' }]) {
+    for (const over of [{ run_in_background: 'invalid' }, { resume: 'agent-1' }, { prompt: '  ' }]) {
       const r = await run(env, preEvent('Agent', agentInput(over)), fetchImpl);
       expect(r, JSON.stringify(over)).toMatchObject({ kind: 'deny', code: 'dispatch_ineligible' });
-      expect(String(hookOutput(r)['permissionDecisionReason'])).toContain('foreground call');
+      expect(String(hookOutput(r)['permissionDecisionReason'])).toContain('background call');
     }
     expect(fetchImpl.mock.calls.length).toBe(before);
     expect(state(env).current.active).toEqual({});
@@ -2605,7 +2606,7 @@ describe('dist/hook.js (process)', () => {
     // imports dist/hook.js only once it knows the gate might be on (src/entry.ts). SessionStart (#48 P2) is the
     // liveness warning; the `^Grep$` group was the withdrawn search filter's, and nothing registers it any more --
     // adding one back would run this hook on every search result.
-    expect(Object.keys(hooks.hooks).sort()).toEqual(['PostToolUse', 'PostToolUseFailure', 'PreToolUse', 'SessionStart', 'Stop', 'UserPromptSubmit', 'WorktreeCreate']);
+    expect(Object.keys(hooks.hooks).sort()).toEqual(['PostToolUse', 'PostToolUseFailure', 'PreToolUse', 'SessionStart', 'Stop', 'SubagentStop', 'UserPromptSubmit', 'WorktreeCreate']);
     for (const event of ['UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'Stop', 'SessionStart']) {
       expect(hooks.hooks[event], event).toHaveLength(1);
       for (const group of hooks.hooks[event]!) expect(group.hooks).toEqual([{ type: 'command', command: 'node "${CLAUDE_PLUGIN_ROOT}/dist/entry.js"', timeout: 5 }]);
@@ -2614,7 +2615,7 @@ describe('dist/hook.js (process)', () => {
     expect(hooks.hooks['PreToolUse']![0]!.matcher).toBeUndefined();
     expect(hooks.hooks['Stop']![0]!.matcher).toBeUndefined();
     expect(hooks.hooks['SessionStart']![0]!.matcher).toBeUndefined();
-    expect(hooks.hooks['PostToolUse']!.map((g) => g.matcher)).toEqual(['^Agent$']);
+    expect(hooks.hooks['PostToolUse']!.map((g) => g.matcher)).toEqual(['^(Agent|TaskStop)$']);
     const resolved = hooks.hooks['PreToolUse']![0]!.hooks[0]!.command.replace('${CLAUDE_PLUGIN_ROOT}', dist);
     const r = spawnSync(resolved, {
       shell: true,

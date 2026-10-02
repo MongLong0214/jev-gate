@@ -3,7 +3,7 @@
     "UserPromptSubmit": [
       {
         "hooks": [
-          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/entry.js\" --lean", "timeout": 5 }
+          {"type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/entry.js\" --lean", "timeout": 5}
         ]
       }
     ],
@@ -11,15 +11,15 @@
       {
         "matcher": "^Agent$",
         "hooks": [
-          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/entry.js\" --lean", "timeout": 5 }
+          {"type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/entry.js\" --lean", "timeout": 5}
         ]
       }
     ],
     "PostToolUse": [
       {
-        "matcher": "^Agent$",
+        "matcher": "^(Agent|TaskStop)$",
         "hooks": [
-          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/entry.js\" --lean", "timeout": 5 }
+          {"type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/entry.js\" --lean", "timeout": 5}
         ]
       }
     ],
@@ -27,7 +27,15 @@
       {
         "matcher": "^Agent$",
         "hooks": [
-          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/entry.js\" --lean", "timeout": 5 }
+          {"type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/entry.js\" --lean", "timeout": 5}
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "^jev-gate:(?:worker(?:-fast|-deep|-frontier)?|planner(?:-frontier)?|executor)$",
+        "hooks": [
+          {"type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/entry.js\" --lean", "timeout": 5}
         ]
       }
     ]

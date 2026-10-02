@@ -34,6 +34,10 @@ export type TracePhase =
   | 'failure'
   | 'plan'
   | 'stop'
+  | 'background_dispatch'
+  | 'background_launch'
+  | 'background_terminal'
+  | 'background_conversation'
   /** A23: the plan-interpretation pair, joined by a shared `request_id` like every other gate call. */
   | 'interpretation_intent'
   | 'interpretation_result'

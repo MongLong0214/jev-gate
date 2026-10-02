@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { readJob } from '../../src/job.js';
 import { loadActivity } from '../../src/activity.js';
 import { WebSocket } from 'ws';
 import { startCodexSession } from '../../src/codex/launch.js';
@@ -84,12 +85,15 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
     installed = true;
   }, 60_000);
 
-  it.each(['single', 'failed', 'permission-boundary', 'edit-after-check', 'worktree', 'hierarchy', 'lean', 'cancelled', 'budget', 'compact-manual', 'compact-auto', 'routing-gpt-6.1-sol', 'routing-gpt-6-astra', 'routing-gpt-6-sol', 'routing-gpt-6-luna', 'routing-gpt-5.6-terra', 'routing-model-terra', 'routing-auto-model'])('runs automatic native Codex policies: %s', async scenario => {
+  it.each(['background', 'single', 'failed', 'permission-boundary', 'edit-after-check', 'worktree', 'hierarchy', 'lean', 'cancelled', 'budget', 'compact-manual', 'compact-auto', 'routing-gpt-6.1-sol', 'routing-gpt-6-astra', 'routing-gpt-6-sol', 'routing-gpt-6-luna', 'routing-gpt-5.6-terra', 'routing-model-terra', 'routing-auto-model'])('runs automatic native Codex policies: %s', async scenario => {
     const routing = scenario.startsWith('routing-');
     const baselineModel = routing && !['routing-model-terra', 'routing-auto-model'].includes(scenario) ? scenario.slice('routing-'.length) : 'gpt-6.1-sol';
     const targetEffort = baselineModel.endsWith('luna') ? 'max' : 'ultra';
     const requests: Rec[] = []; const headerKeys: string[][]=[];
     const trace = join(tmp, `managed ${scenario} traces`);
+    let releaseBackground: () => void = () => {};
+    const backgroundHold = new Promise<void>(resolve => { releaseBackground = resolve; });
+    let backgroundRootRequests = 0; let backgroundWorkerRequests = 0; let backgroundWorkerId = '';
     const server = createServer(async (req, res) => {
       if (req.method === 'GET') { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"models":[]}'); return; }
       const chunks: Buffer[] = []; for await (const part of req) chunks.push(Buffer.from(part));
@@ -98,9 +102,23 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
       const request = JSON.parse(body.toString()) as Rec; requests.push(request); headerKeys.push(Object.keys(req.headers));
       const index=requests.length;
       const final=(text:string):Rec=>({id:`msg_${index}`,type:'message',role:'assistant',phase:'final_answer',content:[{type:'output_text',text,annotations:[]}]});
-      const fn=(name:string,args:Rec):Rec=>requestFunctions(request).some(t=>t['name']===name) ? {id:`fc_${index}`,type:'function_call',call_id:`call_${index}`,name,arguments:JSON.stringify(args)} : {id:`fc_${index}`,type:'custom_tool_call',call_id:`call_${index}`,name:'exec',input:`const result = await tools.${name}(${JSON.stringify(args)}); text(result);`};
+      const fn=(name:string,args:Rec):Rec=>requestFunctions(request).some(t=>t['name']===name) ? {id:`fc_${index}`,type:'function_call',call_id:`call_${index}`,name,arguments:JSON.stringify(name==='jev_agent' && scenario!=='background'?{...args,run_in_background:false}:args)} : {id:`fc_${index}`,type:'custom_tool_call',call_id:`call_${index}`,name:'exec',input:`const result = await tools.${name}(${JSON.stringify(name==='jev_agent' && scenario!=='background'?{...args,run_in_background:false}:args)}); text(result);`};
       let item = index===2 ? fn('exec_command',{cmd:'touch guard-must-not-exist',login:false}) : index===3 ? fn('jev_agent',{subagent_type:'jev-gate:worker',prompt:'Investigate the fixture and run vitest run.'}) : index===4 ? fn('exec_command',{cmd:'vitest run',login:false,max_output_tokens:8000}) : index===5 ? final('```json\n'+JSON.stringify({status:'done',summary:'Fixture checked',changed_files:[],interfaces:[],checks:[{check_id:'vitest run',result:'pass',note:'actual run'}],blockers:[]})+'\n```') : final('managed native complete');
       const report=(check:string):string=>'```json\n'+JSON.stringify({status:'done',summary:'Fixture checked',changed_files:[],interfaces:[],checks:[{check_id:check,result:'pass',note:'actual run'}],blockers:[]})+'\n```';
+      if (scenario === 'background') {
+        const worker = Array.isArray(request['input']) && request['input'].some(i => (i as Rec)?.['role'] === 'user' && JSON.stringify(i).includes('JEV_BG_NATIVE_WORKER'));
+        if (worker) {
+          backgroundWorkerRequests++;
+          if (backgroundWorkerRequests === 1) { await backgroundHold; item = fn('exec_command', { cmd: 'vitest run', login: false, max_output_tokens: 8000 }); }
+          else item = final(report('vitest run'));
+        } else {
+          backgroundRootRequests++;
+          item = backgroundRootRequests === 2 ? fn('exec_command', { cmd: 'touch guard-must-not-exist', login: false })
+            : backgroundRootRequests === 3 ? fn('jev_agent', { subagent_type: 'jev-gate:worker', prompt: 'JEV_BG_NATIVE_WORKER Investigate the fixture and run vitest run.' })
+            : backgroundRootRequests === 6 ? fn('jev_agent', { action: 'status', agent_id: backgroundWorkerId })
+            : final(backgroundRootRequests === 5 ? 'The main answered the new question while the worker is still active.' : 'managed native complete');
+        }
+      }
       if(scenario==='failed' && index===4) item=fn('exec_command',{cmd:'vitest run fail',login:false,max_output_tokens:8000});
       if(scenario==='failed' && index===5) item=final(report('vitest run fail'));
       if(scenario==='permission-boundary' && index===4) item=fn('exec_command',{cmd:'touch worker-must-not-exist',login:false});
@@ -234,6 +252,31 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
       }
       const end=Date.now()+20000; while(!messages.slice(before).some(m=>m['method']==='turn/completed' && (m['params'] as Rec)['threadId']===id) && Date.now()<end) await new Promise(r=>setTimeout(r,20));
       const all=readdirSync(trace).map(f=>JSON.parse(readFileSync(join(trace,f),'utf8')) as Rec);
+      if (scenario === 'background') {
+        const stateEnv = { JEV_GATE_STATE_DIR: join(tmp, `managed ${scenario} state`, 'codex') };
+        const job = () => { const r = readJob(stateEnv, id); if (!r.ok || !r.value) throw new Error('missing native job'); return r.value; };
+        expect(backgroundRootRequests).toBe(4);
+        await vi.waitFor(() => expect(backgroundWorkerRequests).toBe(1), { timeout: 10000 });
+        const original = job().current.prompt_id; const originalHistory = job().history.map(g => g.prompt_id);
+        backgroundWorkerId = Object.values(job().current.active)[0]!.codex_execution!.thread_id;
+        expect(job().current.receipts).toHaveLength(0);
+        const questionAt = messages.length;
+        await call('turn/start', { threadId: id, input: [{ type: 'text', text: 'Explain how this feature works while the original worker continues.', text_elements: [] }] });
+        await vi.waitFor(() => expect(messages.slice(questionAt).some(m => m['method'] === 'turn/completed' && (m['params'] as Rec)['threadId'] === id)).toBe(true), { timeout: 15000 });
+        expect(backgroundRootRequests).toBe(5); expect(backgroundWorkerRequests).toBe(1);
+        expect(job().current.prompt_id).toBe(original); expect(job().history.map(g => g.prompt_id)).toEqual(originalHistory); expect(job().current.receipts).toHaveLength(0);
+        expect(Object.keys(job().current.active)).toHaveLength(1); expect(job().current.outcome).toBeNull();
+        releaseBackground();
+        await vi.waitFor(() => expect(job().current.receipts[0]?.verdict).toBe('accept'), { timeout: 15000 });
+        expect(job().current.active).toEqual({}); expect(job().current.receipts).toHaveLength(1);
+        const collectAt = messages.length;
+        await call('turn/start', { threadId: id, input: [{ type: 'text', text: 'Collect and explain the original result.', text_elements: [] }] });
+        await vi.waitFor(() => expect(messages.slice(collectAt).some(m => m['method'] === 'turn/completed' && (m['params'] as Rec)['threadId'] === id)).toBe(true), { timeout: 15000 });
+        expect(backgroundRootRequests).toBe(7);
+        expect(JSON.stringify(requests.at(-1)!['input'])).toContain('Fixture checked');
+        expect(backgroundWorkerRequests).toBe(2);
+        return;
+      }
       if(scenario==='edit-after-check') {
         expect(readFileSync(join(workspace,'changed.ts'),'utf8')).toContain('observedEdit');
         const posts=all.filter(r=>r['phase']==='post').sort((a,b)=>String(a['written_at']).localeCompare(String(b['written_at'])));
@@ -254,6 +297,7 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
       expect(existsSync(join(workspace,'guard-must-not-exist'))).toBe(false);
       if(scenario==='lean') {
         expect(all.some(r=>r['phase']==='lean_dispatch'),JSON.stringify(all)).toBe(true);
+        await vi.waitFor(() => expect(session.policy.sessions.size).toBe(1), { timeout: 3000 });
         expect(all.some(r=>['admission_intent','pre_intent','guard','plan'].includes(String(r['phase'])))).toBe(false);
         expect(JSON.stringify(requests[2]!['input'])).not.toContain('Old unrelated narrative');
         expect(JSON.stringify(requests[2]!['input'])).toContain('Investigate the repository fixture');
@@ -269,10 +313,11 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
         if(scenario==='hierarchy'||scenario==='worktree') {
           expect(all.filter(r=>r['phase']==='dispatch' && r['role']==='worker').length).toBe(2);
           expect(all.some(r=>r['phase']==='post' && r['plan_complete']===true),JSON.stringify(all)).toBe(true);
+          await vi.waitFor(() => expect(session.policy.sessions.size).toBe(1), { timeout: 3000 });
           expect(JSON.stringify(requests[6]!['input'])).toContain('[Jev Gate task contract]');
         }
       }
-    } finally { socket.terminate(); await session.close(); server.closeAllConnections(); await new Promise<void>(r=>server.close(()=>r())); }
+    } finally { releaseBackground(); socket.terminate(); await session.close(); server.closeAllConnections(); await new Promise<void>(r=>server.close(()=>r())); }
   }, 60000);
 
   const run = async (trust: boolean, scenario = 'passing'): Promise<{ requests: Rec[]; output: string; code: number | null; trace: string }> => {

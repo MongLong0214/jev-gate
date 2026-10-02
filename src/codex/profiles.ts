@@ -5,12 +5,13 @@ export const CODEX_PROFILES: Record<string, string> = typeof __JEV_AGENT_INSTRUC
 
 export const AGENT_TOOL = {
   type: 'function', name: 'jev_agent',
-  description: 'Run a foreground Jev Gate planner, contracted worker or Lean executor in a fresh native Codex thread. Jev policies select the execution input and model; code checks the returned plan or task. Use the exact profile and marker from the current Jev guidance. Native permissions still apply. Do not spawn a second coordinator.',
+  description: 'Start a Jev planner, contracted worker or Lean executor in a fresh native Codex thread. Background execution is the default: return immediately and answer new user messages while it works. Use action=status with agent_id to collect the observed result without waiting, or action=cancel for explicit user cancellation. Completion is accepted only by the original contract. Use the exact current profile and marker. Native permissions still apply.',
   inputSchema: {
     type: 'object', properties: {
       subagent_type: { type: 'string', enum: [...OWNED_AGENT_NAMES, LEAN_EXECUTOR_AGENT] },
       prompt: { type: 'string', minLength: 1, maxLength: 65536 }, description: { type: 'string' }, model: { type: 'string' },
-    }, required: ['subagent_type', 'prompt'], additionalProperties: false,
+      run_in_background: { type: 'boolean', default: true }, action: { type: 'string', enum: ['status', 'cancel'] }, agent_id: { type: 'string' },
+    }, anyOf: [{ required: ['subagent_type', 'prompt'] }, { required: ['action', 'agent_id'] }], additionalProperties: false,
   },
 };
 export const codexGuidance = (s: string): string => s.replace(/\bAgent\b/g, 'jev_agent');

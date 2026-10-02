@@ -25,6 +25,7 @@ interface WorkerDispatch {
   parent: Session; prompt: string; tool: string; input: Obj; signal: AbortSignal;
   worktree: WorkerWorktree | null; startedAt: number; attempted: boolean;
   ended?: Obj; settling?: Promise<string>; settled?: boolean; output?: string; interruptSent?: boolean; cancel?: () => void;
+  background?: boolean;
 }
 interface Session {
   id: string; settings: Obj; baseline: { model: string; effort: string | null }; policy: CodexPolicyConfig;
@@ -58,6 +59,7 @@ export class CodexPolicy {
   private env: Env;
   private hooked = new Set<string>();
   private compactPending = new Map<string, { summary: string; run: string; before: number; after: number }>();
+  private backgroundResults = new Map<string, { parent: string; output: string }>();
   constructor(readonly rpc: CodexRpc, env: Env, private fetchImpl?: typeof fetch, private profiles = CODEX_PROFILES, private bypassHookTrust = false) {
     // Claude launch settings cannot pin or alter a Codex thread.
     this.env = Object.fromEntries(Object.entries(env).filter(([k]) => !k.startsWith('CLAUDE_')));
@@ -143,7 +145,7 @@ export class CodexPolicy {
       delete session.stop; delete session.routed; delete session.route;
     }
     if (event === 'Interrupt' || event === 'SessionEnd') {
-      session.controller?.abort(); await this.interruptChildren(session);
+      session.controller?.abort(); await this.interruptChildren(session, event === 'SessionEnd');
       if (event === 'SessionEnd') { this.sessions.delete(id); this.hooked.delete(id); this.compactPending.delete(id); }
       return {};
     }
@@ -224,6 +226,7 @@ export class CodexPolicy {
       depth: () => session.tokens === null ? { ok: false, reason: 'depth_unknown', bytesRead: 0, durationMs: 0 }
         : { ok: true, tokens: session.tokens, model: session.requestModel ?? String(session.settings['model'] ?? session.baseline.model), modelSwitched: false, bytesRead: 0, durationMs: 0 },
       recentRequests: () => session.recentRequests ?? [],
+      terminal: id => !!this.sessions.get(id)?.dispatch?.ended,
       source: b => codexSource(session.items, b, session.epoch, session.complete),
       observation: id => { const worker = id ? this.sessions.get(id) : undefined; return worker ? codexObservation(worker.items, worker.complete, worker.commands) : null; },
     };
@@ -373,8 +376,8 @@ export class CodexPolicy {
     }
     return output;
   }
-  private async interruptChildren(parent: Session): Promise<void> {
-    await Promise.all([...this.sessions.values()].filter(s => s.parent === parent.id && s.turn).map(async s => {
+  private async interruptChildren(parent: Session, includeBackground = false): Promise<void> {
+    await Promise.all([...this.sessions.values()].filter(s => s.parent === parent.id && s.turn && (includeBackground || !s.dispatch?.background)).map(async s => {
       try { if (s.dispatch) this.interruptWorker(s); else await this.rpc.request('turn/interrupt', { threadId: s.id, turnId: s.turn }, 1000); } catch { /* No terminal event means no successful release. */ }
     }));
   }
@@ -398,16 +401,27 @@ export class CodexPolicy {
   }
   private async agent(p: Obj): Promise<string> {
     const session = this.sessions.get(String(p['threadId'])); const original = obj(p['arguments']);
+    if (session && !session.role && original && (original['action'] === 'status' || original['action'] === 'cancel')) {
+      if (Object.keys(original).some(k => !['action', 'agent_id'].includes(k)) || typeof original['agent_id'] !== 'string') return 'Invalid background operation.';
+      const id = original['agent_id']; const worker = this.sessions.get(id);
+      const result = this.backgroundResults.get(id);
+      if (!worker?.dispatch?.background || worker.parent !== session.id) return result?.parent === session.id ? result.output : 'No owned background execution with this identity.';
+      if (original['action'] === 'cancel') { this.interruptWorker(worker); return 'Cancellation requested. Acceptance and release still require an observed terminal event.'; }
+      return worker.dispatch.ended ? this.settleWorker(worker) : 'The original worker is still running. No terminal result or acceptance is available. Answer the user here; do not wait synchronously or duplicate its work.';
+    }
     if (!session || session.role || session.eligible === false || this.env['JEV_CODEX_ENABLED'] === '0' || !session.prompt || !session.controller || session.controller.signal.aborted || !original) return 'No active root Jev job.';
-    if (typeof original['subagent_type'] !== 'string' || !this.profiles[original['subagent_type']] || typeof original['prompt'] !== 'string' || Object.keys(original).some(k => !['subagent_type', 'prompt', 'description', 'model'].includes(k))) return 'Invalid owned Agent input. Use the exact current Jev profile and marker.';
+    if (typeof original['subagent_type'] !== 'string' || !this.profiles[original['subagent_type']] || typeof original['prompt'] !== 'string' || original['run_in_background'] !== undefined && typeof original['run_in_background'] !== 'boolean' || Object.keys(original).some(k => !['subagent_type', 'prompt', 'description', 'model', 'run_in_background'].includes(k))) return 'Invalid owned Agent input. Use the exact current Jev profile and marker.';
+    const background = original['run_in_background'] !== false;
     const parentSignal = session.controller.signal;
     const parent: Session = { ...session, settings: { ...session.settings }, controller: null };
-    const promptId = session.prompt;
+    const state = readJob(this.env, session.id);
+    const promptId = state.ok && state.value?.current.background_job && state.value.current.outcome === null ? state.value.current.prompt_id ?? session.prompt : session.prompt;
+    const conversationPrompt = session.prompt;
     const toolId = String(p['callId']);
-    const input = { ...original, run_in_background: false };
+    const input = { ...original, run_in_background: background };
     const pre = await this.hook(parent, { hook_event_name: 'PreToolUse', session_id: parent.id, prompt_id: promptId, tool_name: 'Agent', tool_use_id: toolId, tool_input: input, cwd: String(parent.settings['cwd']) }, parentSignal);
     if (pre.kind === 'deny') return codexGuidance(String(obj(obj(JSON.parse(pre.stdout))?.['hookSpecificOutput'])?.['permissionDecisionReason'] ?? 'Dispatch denied'));
-    if (parentSignal.aborted || session.prompt !== promptId) { await this.failure(parent, promptId, toolId, input, 'dispatch_cancelled'); return 'Dispatch cancelled; no worker started.'; }
+    if (parentSignal.aborted || session.prompt !== conversationPrompt) { await this.failure(parent, promptId, toolId, input, 'dispatch_cancelled'); return 'Dispatch cancelled; no worker started.'; }
     const updated = pre.kind === 'patch' ? obj(obj(JSON.parse(pre.stdout))?.['hookSpecificOutput'])?.['updatedInput'] : input;
     const applied = obj(updated); if (!applied) return 'Dispatch input unavailable.';
     const role = String(applied['subagent_type']); const profile = OWNED_AGENTS[role];
@@ -444,9 +458,9 @@ export class CodexPolicy {
       if (!worker) throw new Error('worker unavailable');
       worker.role = role; worker.parent = session.id;
       const terminal = new Promise<Obj>(resolve => { worker!.done = resolve; });
-      dispatch = { parent, prompt: promptId, tool: toolId, input: { ...applied }, signal: parentSignal, worktree, startedAt: t0, attempted: false };
+      dispatch = { parent, prompt: promptId, tool: toolId, input: { ...applied }, signal: background ? new AbortController().signal : parentSignal, worktree, startedAt: t0, attempted: false, background };
       worker.dispatch = dispatch;
-      if (parentSignal.aborted || session.prompt !== promptId) throw new Error('cancelled');
+      if (parentSignal.aborted || session.prompt !== conversationPrompt) throw new Error('cancelled');
       const desired = OWNED_AGENT_PROFILES.find(p => p.name === role)?.effort ?? parent.requestEffort ?? parent.settings['effort'];
       const offered = this.catalog.find(m => m.model === model)?.supportedReasoningEfforts.map(e => e.reasoningEffort) ?? [];
       const effort = typeof desired === 'string' && offered.includes(desired) ? desired : typeof parent.baseline.effort === 'string' && offered.includes(parent.baseline.effort) ? parent.baseline.effort : null;
@@ -457,12 +471,12 @@ export class CodexPolicy {
         if (!prev || !r) return null;
         if (this.writeConflict(String(parent.settings['cwd']), 'Agent', {}, r.deliverables)) throw new Error('worker write conflict');
         registered = true;
-        return { ...prev, current: { ...prev.current, active: { ...prev.current.active, [toolId]: { ...r, codex_execution: { thread_id: worker!.id, turn_id: null, cwd, root_cwd: String(parent.settings['cwd']) } } } } };
+        return { ...prev, current: { ...prev.current, ...(background ? { background_job: true as const } : {}), active: { ...prev.current.active, [toolId]: { ...r, codex_execution: { thread_id: worker!.id, turn_id: null, cwd, root_cwd: String(parent.settings['cwd']) } } } } };
       }, { refuseUnreadable: true });
       if (!saved.ok || !registered) throw new Error('execution reservation unavailable');
       const cancel = (): void => this.interruptWorker(worker!);
       dispatch.cancel = cancel;
-      parentSignal.addEventListener('abort', cancel, { once: true });
+      if (!background) parentSignal.addEventListener('abort', cancel, { once: true });
       try {
         dispatch.attempted = true;
         try {
@@ -475,7 +489,11 @@ export class CodexPolicy {
           if (!dispatch.ended) await this.recoverWorker(worker, terminal);
           if (!dispatch.ended) return 'Worker termination unconfirmed. Its reservation, files and write-scope protection remain active. No replacement execution or acceptance is claimed.';
         }
-        if (parentSignal.aborted) cancel();
+        if (background && !dispatch.ended) {
+          this.trace?.write('background_launch', { host: 'codex', session_id: parent.id, prompt_id: promptId, tool_use_id: toolId, agent_id: worker.id, status: 'running', role: profile?.role ?? 'executor' });
+          return `Worker started in the background. Internal execution identity: ${worker.id}. This is a launch receipt, not a completed result. Answer new user messages in the main session while it works; do not duplicate its files or work. Use jev_agent with action=status and agent_id to collect its result without waiting. Use action=cancel only for explicit user cancellation.`;
+        }
+        if (!background && parentSignal.aborted) cancel();
         if (!dispatch.ended) {
           const ended = await terminal;
           if (ended['localClose']) return 'Worker termination unconfirmed after local connection close. Reservation and files remain protected.';
@@ -549,11 +567,18 @@ export class CodexPolicy {
       } else await this.failure(d.parent, d.prompt, d.tool, d.input, 'worker_not_completed');
       const state = readJob(this.env, d.parent.id);
       const gen = state.ok && state.value ? [state.value.current, ...state.value.history].find(g => g.prompt_id === d.prompt) : null;
-      if (!gen || own(gen.active, d.tool) || !gen.receipts.some(r => r.tool_use_id === d.tool)) return 'Worker terminal observed; settlement pending. Reservation and files remain protected. Retry status/settlement without restarting execution.';
+      const committed = gen && (gen.receipts.some(r => r.tool_use_id === d.tool) || (d.input['subagent_type'] === 'jev-gate:executor' ? gen.lean?.outcome === 'dispatched' : OWNED_AGENTS[String(d.input['subagent_type'])]?.role === 'planner' && guidance.length > 0));
+      if (!gen || own(gen.active, d.tool) || !committed) return 'Worker terminal observed; settlement pending. Reservation and files remain protected. Retry status/settlement without restarting execution.';
       d.output = d.ended!['status'] === 'completed'
         ? `${final?.['text'] ?? 'No worker final output.'}\n\n${guidance}${d.worktree ? `\nWorker worktree: ${d.worktree.path}\nBranch: ${d.worktree.branch}\nSnapshot baseline: ${d.worktree.baseline}. Apply only the diff from this baseline to the worker branch in the root; this result does not integrate it.` : ''}`
         : 'Worker interrupted or failed. No completion or acceptance is claimed.';
       d.settled = true;
+      if (d.background) {
+        this.backgroundResults.set(worker.id, { parent: d.parent.id, output: d.output });
+        while (this.backgroundResults.size > 64) this.backgroundResults.delete(this.backgroundResults.keys().next().value!);
+        updateJob(this.env, d.parent.id, prev => prev?.current.prompt_id === d.prompt ? { ...prev, current: { ...prev.current, background_context: d.output!, ...(d.interruptSent && d.ended!['status'] !== 'completed' && Object.keys(prev.current.active).length === 0 ? { outcome: 'incomplete' as const } : {}) } } : null);
+        this.trace?.write('background_terminal', { host: 'codex', session_id: d.parent.id, prompt_id: d.prompt, tool_use_id: d.tool, agent_id: worker.id, status: String(d.ended!['status']) });
+      }
       if (d.cancel) d.signal.removeEventListener('abort', d.cancel);
       await this.cleanupWorker(worker);
       return d.output;

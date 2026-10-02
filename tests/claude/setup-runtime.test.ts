@@ -45,11 +45,11 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude initial
       const run = (extra: string[] = []) => spawnSync('claude', ['--plugin-dir', plugin, ...extra, '--init-only'], { env, cwd: project, encoding: 'utf8', timeout: 25_000 });
       const first = run(); expect(first.status, first.stderr).toBe(0);
       const settings = JSON.parse(readFileSync(join(config, 'settings.json'), 'utf8'));
-      expect(settings).toMatchObject({ permissions: { deny: ['Read(.env)'] }, model: 'sonnet', worktree: { baseRef: 'head' }, env: { CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: '1', CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' } });
+      expect(settings).toMatchObject({ permissions: { deny: ['Read(.env)'] }, model: 'sonnet', worktree: { baseRef: 'head' }, env: { CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: '1', CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '0' } });
       saveApiKey(env, 'fake-claude-shared-key');
       const second = run(); expect(second.status, second.stderr).toBe(0);
       const rows = readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line));
-      expect(rows.at(-1)).toEqual({ functions: '1', fork: '0', background: '1', key: true });
+      expect(rows.at(-1)).toEqual({ functions: '1', fork: '0', background: '0', key: true });
       expect(first.stdout + first.stderr + second.stdout + second.stderr + readFileSync(log, 'utf8')).not.toContain('fake-claude-shared-key');
       // --init-only exits before worktree creation. Exercise Agent isolation after the plugin loads, with an explicit fixture Agent permission.
       let modelCalls = 0; const nativeModels: string[] = []; const toolNames: unknown[] = []; const toolResults: unknown[] = []; const paths: unknown[] = [];

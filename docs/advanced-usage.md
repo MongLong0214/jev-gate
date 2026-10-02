@@ -1,6 +1,6 @@
 # Advanced usage
 
-Install, the five parts, and what a normal session sends are in the [README](../README.md). This page is Gate and lean configuration, the foreground and worktree conditions, and a checkout. It is not a benchmark report. Older measurements are linked at the bottom and are not restated as current results.
+Install, the five parts, and what a normal session sends are in the [README](../README.md). This page is Gate and lean configuration, background execution and worktree conditions, and a checkout. It is not a benchmark report. Older measurements are linked at the bottom and are not restated as current results.
 
 Option names and defaults for Compact, Output, the Router, and Evidence stay in their own pages: [Compact](../mods/compact/README.md), [Output](../mods/output/README.md), [Router](../mods/router/README.md), [Evidence](../plugins/evidence/README.md). The manifest is [plugin.json](../.claude-plugin/plugin.json).
 
@@ -29,10 +29,10 @@ New automatic atomic jobs carry the user request verbatim. If the request or com
 
 ## When auto still sends nothing
 
-A missing key, a missing Function Hooks flag, and a foreground block are different. The flag does not affect Gate.
+A missing key, a missing Function Hooks flag, and an unsupported fork profile are different. The flag does not affect Gate.
 
 - No `prompt_id`, a slash command, a child caller, or blank input: no admission request.
-- The session cannot run a foreground worker, or a concrete `CLAUDE_CODE_SUBAGENT_MODEL` / `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` is set: `auto` and `lean` stay native (`host_unsupported`) and do not send. [Foreground](#foreground-and-worktrees).
+- The session cannot run a fresh owned worker, or a concrete `CLAUDE_CODE_SUBAGENT_MODEL` / `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` is set: `auto` and `lean` stay native (`host_unsupported`) and do not send. [Background execution](#background-execution-and-worktrees).
 - Depth below the floor: the turn stays direct and Gate A is not asked. [Floor](#depth-floor).
 - The composed answer says the turn is not worth delegating, forbids delegation, or is otherwise not admitted: direct, no planner, no guard.
 - Invalid config, other than an explicit `off`: the hook reports the error and preserves the call. It is not treated as "no file".
@@ -100,17 +100,13 @@ The window is read from `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, then managed settings
 
 The map this replaced, and the withdrawn savings claims attached to an earlier floor, are in the [v0.6.3 README](https://github.com/MongLong0214/jev-gate/blob/931e8367e8b8f27536e14da1ed41baed1f83e22e/README.md#results) and the files under [Recorded runs](#recorded-runs). Those files are not edited to match the live map.
 
-## Foreground and worktrees
+## Background execution and worktrees
 
-A worker brief is eligible only when the Agent call is in the foreground. An interactive session defaults to fork mode, where the host omits `run_in_background`. Without a foreground profile every brief is `not_foreground`: an admitted job would not reach a worker, while the guard would still refuse the root's own edits. So `auto` and `lean` do not ask.
+Ordinary installation prepares `CLAUDE_CODE_FORK_SUBAGENT=0` and `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=0`. Owned planner, worker and Lean reservations dispatch with `run_in_background: true`, preserving the complete patched input and native permissions. Explicit owner profiles stay authoritative: fork mode remains unsupported, and a manually disabled background setting remains foreground. The complete old Jev-generated foreground profile is migrated automatically; restart once when the initialization notice asks. No environment editing is needed for ordinary use.
 
-Ordinary installations prepare both settings automatically. On first startup, restart the host once if the initialization notice asks; do not edit an `env` block. These variables remain useful for explicit advanced launches. Forcing the foreground means subagents in that session do not run in the background. Explicit owner overrides are preserved: `CLAUDE_CODE_FORK_SUBAGENT=1` is refused. `CLAUDE_CODE_FORK_SUBAGENT=0` is enough for a call that says `run_in_background: false`. `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` also treats a call that says nothing as foreground.
+A background job keeps its original prompt identity and contracts across subsequent main conversation questions. `async_launched` records a running worker and keeps ownership. Claude `SubagentStop` must match the native agent identity or private dispatch token, profile and bounded native transcript terminal before the original result is checked. An observed successful `TaskStop` releases that exact execution without accepting it. A main tool failure, unknown termination, or cancellation request alone keeps ownership. Late results from retired jobs are recorded as unknown and cannot advance a newer plan.
 
-```sh
-CLAUDE_CODE_FORK_SUBAGENT=0 \
-CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 \
-claude --plugin-dir /path/to/jev-gate
-```
+Codex `jev_agent` defaults to background execution. `action: "status", agent_id: "<returned identity>"` collects its result without waiting; `action: "cancel"` requests explicit cancellation. Native worker `turn/completed` owns terminal settlement. Main interruption leaves background work running; ending the native session requests child interruption. Connection loss preserves unconfirmed reservations and file protection. Advanced callers can explicitly request `run_in_background: false` for a synchronous execution.
 
 `workerIsolation` defaults to `worktree`. Patched planned workers receive `isolation: "worktree"`; planners and single executors stay in the root. The integrated Claude plugin uses its `WorktreeCreate` hook, and Codex creates the same snapshot inside the captured native permission scope. Each snapshot includes staged, unstaged and untracked working files and excludes ignored files. A private Git index leaves the root HEAD, index and files intact. Record the worker's initial HEAD as its snapshot baseline; after checks, commit worker changes and apply only `git diff --binary <baseline> <worker-branch>` with `git apply` in the root. Integrate predecessors before creating dependent workers. Conflicting root changes require resolution; do not merge the snapshot commit. Explicit native worktree settings are preserved; the integrated snapshot hook selects its own baseline.
 
@@ -120,7 +116,7 @@ In `auto`, the normal path sends two kinds of text to TypeSafe: the user request
 
 `native` and `off` send no Gate request. They do not stop the Router or Evidence. Those switches are in the [README](../README.md#settings-data-and-what-leaves-the-machine).
 
-Optional traces (`JEV_GATE_TRACE_DIR`) are local per-phase JSON: lengths, hashes, decisions, Jev usage, and the reported model. The writer is not given the key. Current records store a prompt's length and hash, not its text. They are not uploaded. Job state is one file per session. The directory is `<stateRoot>/jev-gate/jobs/`, where `stateRoot` is `JEV_GATE_STATE_DIR` when that is set, otherwise `XDG_STATE_HOME`, otherwise `~/.local/state`. The file holds the plan and the request. A file older than 7 days is removed when it has no worker started in the last day and no lean identity, including a record that one was lost. This plugin has no command that deletes job files, traces, credentials, or transcripts.
+Optional traces (`JEV_GATE_TRACE_DIR`) are local per-phase JSON: lengths, hashes, decisions, Jev usage, and the reported model. The writer is not given the key. Current records store a prompt's length and hash, not its text. They are not uploaded. Job state is one file per session. The directory is `<stateRoot>/jev-gate/jobs/`, where `stateRoot` is `JEV_GATE_STATE_DIR` when that is set, otherwise `XDG_STATE_HOME`, otherwise `~/.local/state`. The file holds the plan and the request. A file older than 7 days is removed only when cleanup can establish no retained executor identity or unsettled native execution. Background reservations remain protected across age and history limits until termination is observed. This plugin has no command that deletes job files, traces, credentials, or transcripts.
 
 `node dist/cli.js explain <trace-dir>` reads those records. A missing record means nothing was recorded, not that nothing happened. A worker verdict is what the worker reported. A model after `ran` is what the host reported, not a check that a patch took effect.
 

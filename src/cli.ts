@@ -111,8 +111,9 @@ const checkPluginFiles = (): Map<string, string> => {
     const expected: Array<[string, string | null]> = [
       ['UserPromptSubmit', null],
       ['PreToolUse', null],
-      ['PostToolUse', '^Agent$'],
+      ['PostToolUse', '^(Agent|TaskStop)$'],
       ['PostToolUseFailure', '^Agent$'],
+      ['SubagentStop', '^jev-gate:(?:worker(?:-fast|-deep|-frontier)?|planner(?:-frontier)?|executor)$'],
       ['Stop', null],
       ['SessionStart', null],
     ];
@@ -293,12 +294,13 @@ const checkEnv = (mode: Mode | null): void => {
   else say('ok', 'no CLAUDE_CODE_SUBAGENT_MODEL override');
   const fork = launch('CLAUDE_CODE_FORK_SUBAGENT');
   const bg = launch('CLAUDE_CODE_DISABLE_BACKGROUND_TASKS');
-  if (fork === '0' && bg === '1') say('ok', 'launch profile: CLAUDE_CODE_FORK_SUBAGENT=0 and CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 (foreground Agent calls; not a global scheduler)');
+  if (fork === '0' && bg !== '1') say('ok', 'launch profile: responsive background owned agents enabled (fork=0; background tasks enabled)');
+  else if (fork === '0' && bg === '1') say('warn', 'launch profile: CLAUDE_CODE_FORK_SUBAGENT=0 and CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 (foreground Agent calls; not a global scheduler)');
   else if (gated && !foregroundDispatchPossible({ CLAUDE_CODE_FORK_SUBAGENT: fork, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: bg })) {
-    say('fail', `mode=${mode} but Agent calls can only run in the background (fork=${fork ?? 'unset'}, disable_background=${bg ?? 'unset'}, read from this shell and the managed, project and user settings env): every prompt stays native as host_unsupported and sends no Jev request. Start Claude Code with CLAUDE_CODE_FORK_SUBAGENT=0 CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1, or set mode to off. A variable only the launcher sets is not visible here.`);
+    say('fail', `mode=${mode} but a fresh owned Agent profile is unavailable (fork=${fork ?? 'unset'}, disable_background=${bg ?? 'unset'}, read from this shell and the managed, project and user settings env): every prompt stays native as host_unsupported and sends no Jev request. Start Claude Code with CLAUDE_CODE_FORK_SUBAGENT=0, or set mode to off. A variable only the launcher sets is not visible here.`);
   } else if (fork === '1') say('warn', 'CLAUDE_CODE_FORK_SUBAGENT=1: Agent calls run in the background and lack run_in_background; eligible calls are preserved');
-  else if (fork === '0' || bg === '1') say('ok', `launch profile: fork=${fork ?? 'unset'}, disable_background=${bg ?? 'unset'} (an Agent call can run in the foreground)`);
-  else say('info', `launch profile not set (fork=${fork ?? 'unset'}, disable_background=${bg ?? 'unset'}): interactive sessions default to fork mode, where Agent calls omit run_in_background and V4 preserves them. Start with CLAUDE_CODE_FORK_SUBAGENT=0 CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`);
+  else if (fork === '0' || bg === '1') say('ok', `launch profile: fork=${fork ?? 'unset'}, disable_background=${bg ?? 'unset'} (fresh owned Agent calls supported; background execution supported when disable_background is 0 or unset)`);
+  else say('info', `launch profile not set (fork=${fork ?? 'unset'}, disable_background=${bg ?? 'unset'}): interactive sessions default to fork mode, where Agent calls omit run_in_background and V4 preserves them. Start with CLAUDE_CODE_FORK_SUBAGENT=0`);
   if (env['CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS'] === '1') say('info', 'agent teams enabled: a named Agent call becomes a teammate; the coordinator guidance asks for no teammate name');
   const recording = recordingStatus(env);
   say(recording.error ? 'warn' : 'ok', `Jev local recording ${recording.enabled ? 'on (default)' : 'off'}: Router/Compact/Output do not require --debug; toggle with recording on|off${recording.error ? ` (${recording.error})` : ''}`);
@@ -352,8 +354,8 @@ const main = (): void => {
   checkEnv(loaded.ok ? loaded.config.mode : null);
   checkUserSettings();
   checkLiveness();
-  say('info', `in Claude Code: /hooks should list six jev-gate entries (UserPromptSubmit, PreToolUse with no matcher, PostToolUse on ^Agent$, PostToolUseFailure on ^Agent$, Stop, SessionStart); the @agent- typeahead should show ${Object.keys(OWNED_AGENTS).join(', ')} once each`);
-  say('info', `start: JEV_GATE_MODE=auto CLAUDE_CODE_FORK_SUBAGENT=0 CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude --model sonnet --plugin-dir "${root}"  (doctor performed no inference; a passing doctor is not proof of patch support, effort support or model access)`);
+  say('info', `in Claude Code: /hooks should list seven jev-gate lifecycle entries (UserPromptSubmit, PreToolUse with no matcher, PostToolUse on ^(Agent|TaskStop)$, PostToolUseFailure on ^Agent$, Stop, SessionStart, owned SubagentStop); the @agent- typeahead should show ${Object.keys(OWNED_AGENTS).join(', ')} once each`);
+  say('info', `start: JEV_GATE_MODE=auto CLAUDE_CODE_FORK_SUBAGENT=0 claude --model sonnet --plugin-dir "${root}"  (doctor performed no inference; a passing doctor is not proof of patch support, effort support or model access)`);
   for (const [level, text] of lines) process.stdout.write(`[${level}] ${text}\n`);
   process.exitCode = lines.some(([l]) => l === 'fail') ? 1 : 0;
 };

@@ -58,12 +58,12 @@ describe('the one plugin’s hooks module', () => {
     }
   });
 
-  it('sets missing foreground defaults and shares the configured key without changing explicit host settings', async () => {
+  it('sets missing background defaults and shares the configured key without changing explicit host settings', async () => {
     const hooks = await registered({ typesafeApiKey: 'fake-configured-key' });
     const env: Record<string, string | undefined> = { CLAUDE_CODE_FORK_SUBAGENT: '1' };
     const input = { cwd: '/r' };
     await hooks.get('session.start')!({ env: { get: async (name: string) => env[name], set: async (name: string, value: string | undefined) => { env[name] = value; } } }, input, async (e: unknown) => e);
-    expect(env).toEqual({ CLAUDE_CODE_FORK_SUBAGENT: '1', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1', TYPESAFE_API_KEY: 'fake-configured-key' });
+    expect(env).toEqual({ CLAUDE_CODE_FORK_SUBAGENT: '1', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '0', TYPESAFE_API_KEY: 'fake-configured-key' });
   });
 
   it('writes every unusable option from one session-start hook and keeps the other Mods', async () => {

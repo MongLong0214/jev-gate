@@ -164,7 +164,7 @@ const traceFeature = (phase: string): FeatureId | null => {
   if (phase.startsWith('admission_')) return 'admission';
   if (phase.startsWith('pre_')) return 'allocation';
   if (phase.startsWith('interpretation_') || phase === 'plan') return 'planning';
-  if (phase === 'dispatch' || phase === 'post' || phase === 'failure' || phase === 'stop') return 'workers';
+  if (phase.startsWith('background_') || phase === 'dispatch' || phase === 'post' || phase === 'failure' || phase === 'stop') return 'workers';
   if (phase === 'guard') return 'guard';
   if (phase.startsWith('lean_')) return 'lean';
   if (phase.startsWith('evidence_')) return 'evidence';
@@ -176,6 +176,7 @@ const traceTitle = (phase: string, r: Rec): string => ({
   pre_intent: 'Gate B · Jev 요청', pre_result: 'Gate B · 등급 결정',
   interpretation_intent: '계획 해석 · Jev 요청', interpretation_result: '계획 해석 · 자문',
   plan: '플래너 결과 · 작업 그래프', dispatch: token(r['role']) === 'planner' ? '플래너 호출' : '워커 호출',
+  background_dispatch: '백그라운드 실행 준비', background_launch: '백그라운드 워커 실행', background_conversation: '메인 대화 계속', background_terminal: '백그라운드 워커 종료',
   post: '워커 결과 · 수락 판정', failure: '호스트 호출 실패', stop: '턴 종료', guard: '루트 도구 가드',
   lean_intent: 'Lean · Jev 요청', lean_result: 'Lean · 문맥 선택', lean_dispatch: 'Lean · packet 적용', lean_post: 'Lean · executor 결과',
   evidence_start: 'Evidence · 근거 검색 시작', evidence_jev_intent: 'Evidence · Jev 판정 요청', evidence_jev_result: 'Evidence · Jev 판정 결과', evidence_cache: 'Evidence · 판정 캐시', evidence_result: 'Evidence · 근거 결과',
@@ -275,6 +276,13 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
     const planner = field(r, 'planner_model');
     if (planner) details.push(text(`요청 모델 ${token(planner['requested']) ?? '?'}`, `실행 모델 ${token(planner['observed']) ?? '?'}`, token(planner['agreement'])));
     if (token(r['worker_isolation'])) details.push(`워커 격리 ${token(r['worker_isolation'])}`);
+  } else if (phase.startsWith('background_')) {
+    lane = phase === 'background_dispatch' || phase === 'background_conversation' ? 'policy' : 'host';
+    const closed = resultIds.has(`background:${token(r['session_id'])}:${token(r['execution_prompt_id']) ?? token(r['prompt_id'])}:${token(r['tool_use_id'])}`);
+    if (phase === 'background_dispatch') { summary = '원래 작업에 실행 예약 연결 · 시작 확인 대기'; state = closed ? 'done' : 'unconfirmed'; }
+    if (phase === 'background_launch') { summary = closed ? '시작과 실제 종료 연결됨' : '워커 실행 중 · 메인에서 질문 가능'; state = closed ? 'done' : age >= 0 && age < 30_000 ? 'active' : 'unconfirmed'; details.push('시작 알림은 완료·수락 결과가 아닙니다'); }
+    if (phase === 'background_conversation') summary = `원래 작업 유지 · 종료 결과 대기 ${n(number(r['active']))}개`;
+    if (phase === 'background_terminal') { summary = token(r['status']) === 'completed' ? '호스트에서 실제 종료 확인 · 계약 수락은 별도 검사' : '호스트에서 중단·실패 확인 · 성공 수락 없음'; state = token(r['status']) === 'completed' ? 'done' : 'interrupted'; if (r['orphaned'] === true) details.push('이전 작업 결과 · 현재 계획 미진행'); }
   } else if (phase === 'dispatch') {
     lane = 'host';
     summary = text(token(r['role']), token(r['task_id']), token(r['selection']), `요청 등급 ${token(r['requested_tier']) ?? '?'}`);
@@ -320,7 +328,7 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
     : phase === 'post' || phase === 'failure' ? modelObservation(r['requested_model'], r['resolved_model']) : undefined;
   if (model?.status === 'mismatch' || phase === 'codex_route_applied' && r['applied'] === false) state = 'error';
   return { id: id(ownId), at, feature, state, lane, title: traceTitle(phase, r), summary, details: details.filter(Boolean), ...(model ? { model } : {}),
-    ...(phase === 'stop' ? { lifecycle: true } : {}),
+    ...(['stop', 'background_conversation'].includes(phase) ? { lifecycle: true } : {}),
     ...(phase === 'admission_result' && ['direct', 'orchestrated'].includes(String(field(r, 'decision')?.['shape'])) ? { executionPath: field(r, 'decision')!['shape'] as 'direct' | 'orchestrated' } : {}),
     ...(duration !== null && duration >= 0 ? { durationMs: duration } : {}),
     ...(elapsed !== null && elapsed >= 0 ? { elapsedMs: elapsed } : {}),
@@ -383,7 +391,7 @@ const gateGroup = (r: Rec): string => {
   if (phase.startsWith('evidence_')) return `evidence:${token(r['parent_request_id']) ?? token(r['request_id']) ?? token(r['invocation_id']) ?? 'unknown'}`;
   if (phase.startsWith('codex_router_') || phase === 'codex_route_applied') return `router:${token(r['session_id']) ?? 'unknown'}:${token(r['prompt_id']) ?? 'unknown'}`;
   if (phase === 'codex_compact') return `compact:${token(r['session_id']) ?? 'unknown'}:${token(r['run_id']) ?? 'unknown'}`;
-  return `gate:${token(r['session_id']) ?? 'unknown'}:${token(r['prompt_id']) ?? 'unknown'}`;
+  return `gate:${token(r['session_id']) ?? 'unknown'}:${token(r['execution_prompt_id']) ?? token(r['prompt_id']) ?? 'unknown'}`;
 };
 const debugGroup = (row: DebugRecord): string => row.component === 'router'
   ? `router:${token(row.rec['session_id']) ?? 'legacy'}:${token(row.rec['turn']) ?? token(row.rec['tool_use_id']) ?? 'session'}`
@@ -391,6 +399,7 @@ const debugGroup = (row: DebugRecord): string => row.component === 'router'
 
 export const buildOperations = (records: Rec[], debug: DebugRecord[], now: Date, availability: { trace: boolean; debug: boolean; host?: Host }): OperationsView => {
   const resultIds = new Set(records.flatMap((r) => token(r['request_id']) && token(r['phase']) ? [`${token(r['request_id'])}:${token(r['phase'])}`] : []));
+  for (const r of records) if (r['phase'] === 'background_terminal') resultIds.add(`background:${token(r['session_id'])}:${token(r['execution_prompt_id']) ?? token(r['prompt_id'])}:${token(r['tool_use_id'])}`);
   for (const r of records) if (r['phase'] === 'codex_compact' && r['applied'] === true && token(r['run_id'])) resultIds.add(`codex_compact:${token(r['run_id'])}`);
   const intents = new Map(records.flatMap((r): Array<[string, string]> => {
     const phase = token(r['phase']); const requestId = token(r['request_id']); const at = iso(r['written_at']);
@@ -409,7 +418,7 @@ export const buildOperations = (records: Rec[], debug: DebugRecord[], now: Date,
     const host = r['host'] === 'codex' ? 'codex' : 'claude';
     const source = gateGroup(r).split(':')[0] as OperationRun['source'];
     const key = `${host}:${gateGroup(r)}`;
-    const session = token(r['session_id']); const prompt = token(r['prompt_id']);
+    const session = token(r['session_id']); const prompt = token(r['execution_prompt_id']) ?? token(r['prompt_id']);
     const group = grouped.get(key) ?? { source, host, mode: token(r['mode']) ?? 'unknown',
       ...(session && prompt && source !== 'evidence' ? { executionId: id(`execution:${host}:${session}:${prompt}`) } : {}), steps: [] };
     const phase = token(r['phase']);

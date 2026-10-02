@@ -200,6 +200,8 @@ export interface HookInput {
   permission_mode?: string;
   agent_id?: string;
   agent_type?: string;
+  agent_transcript_path?: string;
+  last_assistant_message?: string;
   effort?: string;
   prompt?: string;
   tool_name?: string;
@@ -326,6 +328,8 @@ export interface Reservation {
   orphaned?: true;
   /** Native execution survives local RPC timeout and generation retirement until terminal settlement commits. */
   codex_execution?: { thread_id: string; turn_id: string | null; cwd: string; root_cwd: string };
+  /** A launch receipt is not a terminal result. Native identity remains reserved until observed completion. */
+  background_execution?: { token: string; agent_id: string | null; subagent_type: string; resolved_model: string | null };
 }
 
 /** What a worker's own transcript showed about the checks it reported as passing (src/verify.ts). */
@@ -400,6 +404,11 @@ export interface JobGeneration {
   admission_revision?: 'atomic-context-v1';
   /** JGL-03: at most one pending lean packet per generation. Null once consumed, superseded or never produced. */
   lean?: LeanPending | null;
+  /** Conversation turns can advance while this original execution contract stays current. */
+  background_job?: true;
+  interactive_prompt_id?: string;
+  /** Terminal policy guidance delivered to the root, rather than to a SubagentStop child context. */
+  background_context?: string;
 }
 
 /**

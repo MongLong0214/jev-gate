@@ -58,15 +58,7 @@ export type Eligibility =
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const nonEmpty = (v: unknown): v is string => typeof v === 'string' && v.length > 0;
 
-/**
- * Whether any Agent call this session makes can pass checkEligibility's foreground test, read from the launch
- * environment alone. Unless CLAUDE_CODE_FORK_SUBAGENT=0, an interactive session runs in the host's fork mode, whose
- * Agent tool has no `run_in_background` field at all; without CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 every brief there
- * is `not_foreground`, and forced forking is refused outright. #48: on such a host an admitted job never reaches a
- * worker, while its guard still refuses the main session's own edits, so admission must not be paid for at all.
- * The gate stays native there rather than asking for the variable to be set globally: forcing the foreground in every
- * session would end the background subagents that #48 P1-2 names as what sped delivery up.
- */
+/** Fresh owned agents are supported with forking disabled; background execution no longer blocks admission. */
 export const foregroundDispatchPossible = (env: Env): boolean =>
   env['CLAUDE_CODE_FORK_SUBAGENT'] !== '1' &&
   (env['CLAUDE_CODE_DISABLE_BACKGROUND_TASKS'] === '1' || env['CLAUDE_CODE_FORK_SUBAGENT'] === '0');
@@ -103,8 +95,7 @@ export const checkEligibility = (hook: HookInput, env: Env, config: ConfigV5): E
   // Host observation (Claude Code 2.1.275): with CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 the host forces every Agent call
   // into the foreground and strips `run_in_background`, so an explicit false is never delivered there.
   const bg = input['run_in_background'];
-  const forcedForeground = bg === undefined && env['CLAUDE_CODE_DISABLE_BACKGROUND_TASKS'] === '1';
-  if (bg !== false && !forcedForeground) return { eligible: false, code: 'not_foreground' };
+  if (bg !== undefined && typeof bg !== 'boolean') return { eligible: false, code: 'not_foreground' };
   if (EXECUTION_CONTROL_KEYS.some((k) => Object.prototype.hasOwnProperty.call(input, k))) return { eligible: false, code: 'execution_control_present' };
   const override = subagentModelOverride(env);
   if (override.concrete || override.force) return { eligible: false, code: 'subagent_model_override' };

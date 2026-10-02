@@ -65,7 +65,7 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     try {
       if (await $.env.get('CLAUDE_CODE_FORK_SUBAGENT') === undefined) await $.env.set('CLAUDE_CODE_FORK_SUBAGENT', '0');
-      if (await $.env.get('CLAUDE_CODE_DISABLE_BACKGROUND_TASKS') === undefined) await $.env.set('CLAUDE_CODE_DISABLE_BACKGROUND_TASKS', '1');
+      if (await $.env.get('CLAUDE_CODE_DISABLE_BACKGROUND_TASKS') === undefined) await $.env.set('CLAUDE_CODE_DISABLE_BACKGROUND_TASKS', '0');
       const key = router.ok && router.config.explicitKey.kind === 'valid' ? router.config.explicitKey.value : undefined;
       if (key && !await $.env.get('TYPESAFE_API_KEY')) await $.env.set('TYPESAFE_API_KEY', key);
     } catch { /* Initialization cannot interrupt the host. Command hooks also resolve the shared key. */ }
