@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { choice } from '../router/fake-engine.js';
 import { saveApiKey } from '../../src/credentials.js';
+import { readJob } from '../../src/job.js';
 
 // Exercise the real Agent validator BEFORE the native agent.spawn boundary. A direct Function Hooks kit call misses it.
 describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude Gate B model dispatch', () => {
@@ -40,10 +41,13 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude Gate B 
     manifest.userConfig.routerEnabled.default = scenario.scope === 'root'; manifest.userConfig.routerAllowFable.default = scenario.allowFable;
     if (scenario.scope === 'root') manifest.userConfig.gateMode.default = 'off';
     writeFileSync(manifestPath, JSON.stringify(manifest));
-    writeFileSync(join(home, '.claude/settings.json'), JSON.stringify({ env: { CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' } }));
+    // Automatic admission uses the supported background runtime. Pinning the legacy foreground
+    // environment here can race the host's settings reload and miss Gate's dispatch ownership.
+    const backgroundDisabled = scenario.admission ? '0' : '1';
+    writeFileSync(join(home, '.claude/settings.json'), JSON.stringify({ env: { CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: backgroundDisabled } }));
     const cfg = join(temp, 'config.json'); writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', delegationDepthFloor: 0, admittedShape: 'single', workerIsolation: 'none', maxParallelWorkers: 1, guardAllowTools: [] }));
     const trace = join(temp, 'trace'); const env: NodeJS.ProcessEnv = Object.fromEntries(Object.entries(process.env).filter(([n]) => !/^(CLAUDE_|ANTHROPIC_|TYPESAFE_|JEV_|XDG_)/.test(n)));
-    Object.assign(env, { HOME: home, CLAUDE_CONFIG_DIR: join(home, '.claude'), JEV_GATE_CONFIG: cfg, JEV_GATE_STATE_DIR: join(temp, 'state'), JEV_GATE_MODE: 'auto', JEV_GATE_EXPERIMENT_ADMISSION: 'orchestrated', JEV_GATE_ONBOARDING: '0', JEV_DASHBOARD_NO_OPEN: '1', JEV_GATE_TRACE_DIR: trace, TYPESAFE_API_KEY: 'fake-local-jev-key', CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: '1', CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' });
+    Object.assign(env, { HOME: home, CLAUDE_CONFIG_DIR: join(home, '.claude'), JEV_GATE_CONFIG: cfg, JEV_GATE_STATE_DIR: join(temp, 'state'), JEV_GATE_MODE: 'auto', JEV_GATE_EXPERIMENT_ADMISSION: 'orchestrated', JEV_GATE_ONBOARDING: '0', JEV_DASHBOARD_NO_OPEN: '1', JEV_GATE_TRACE_DIR: trace, TYPESAFE_API_KEY: 'fake-local-jev-key', CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: '1', CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: backgroundDisabled });
     saveApiKey(env, 'fake-local-jev-key');
     if (scenario.scope === 'root') env.JEV_GATE_MODE = 'off';
     if (scenario.admission) { delete env.JEV_GATE_EXPERIMENT_ADMISSION; mkdirSync(join(temp, 'src')); writeFileSync(join(temp, 'src/lookup.ts'), 'export function parseRecord() {}\nparseRecord();\n'); }
@@ -97,16 +101,26 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude Gate B 
         if (scenario.sequence || scenario.admission) send(scenario.admission ? 'Reply READY.' : prompt); else child.stdin.end();
         child.stdout.on('data', c => { output += c; if (!scenario.sequence && !scenario.admission) return; buffered += String(c); let end: number;
           while ((end = buffered.indexOf('\n')) >= 0) { const line = buffered.slice(0, end); buffered = buffered.slice(end + 1); let row: any; try { row = JSON.parse(line); } catch { continue; }
-            if (row.type === 'result') { if (scenario.admission) { if (++completed === 1) send(prompt); else child.stdin.end(); continue; } if (++completed < scenario.sequence!.length) send(completed === 1 ? 'Continue: locate the exact file and run the local printf check.' : 'Continue: investigate the concurrency failure while preserving the API; run the local printf check.'); else child.stdin.end(); }
+            if (row.type === 'result') { if (scenario.admission) { if (++completed === 1) send(prompt); else { const job = readJob(env, row.session_id); if (job.ok && job.value?.current.outcome === 'completed') child.stdin.end(); } continue; } if (++completed < scenario.sequence!.length) send(completed === 1 ? 'Continue: locate the exact file and run the local printf check.' : 'Continue: investigate the concurrency failure while preserving the API; run the local printf check.'); else child.stdin.end(); }
           }
         }); child.stderr.on('data', c => { output += c; }); const timer = setTimeout(() => child.kill('SIGKILL'), 25_000);
         child.on('error', e => { clearTimeout(timer); reject(e); }); child.on('close', code => { clearTimeout(timer); resolve(code); });
       });
       const traces = readdirSync(trace).filter(f => f.endsWith('.json')).map(f => JSON.parse(readFileSync(join(trace, f), 'utf8')));
-      const diagnostic = JSON.stringify({ output, toolResults, workers: workerRequests.map(r => ({ model: r.model, effort: r.output_config?.effort })), traces: traces.filter(r => r.phase === 'mod_router' || r.phase === 'pre_result') });
+      const diagnostic = JSON.stringify({ output, toolResults, workers: workerRequests.map(r => ({ model: r.model, effort: r.output_config?.effort })), traces: traces.filter(r => r.phase === 'mod_router' || r.phase === 'pre_result' || r.phase === 'admission_result' || r.phase.startsWith('background_')) });
       expect(code, diagnostic).toBe(0); expect(allocations, diagnostic).toHaveLength(scenario.sequence?.length ?? 1); expect(workerRequests, diagnostic).toHaveLength(scenario.sequence ? 6 : scenario.scope === 'root' || scenario.admission ? 2 : 1);
       for (const [i, request] of workerRequests.entries()) { const expected = scenario.sequence?.[Math.floor(i / 2)] ?? scenario; expect(request.model, diagnostic).toBe(expected.actual); expect(request.output_config?.effort, diagnostic).toBe(expected.effort); }
-      if (scenario.admission) { expect(admissions, diagnostic).toHaveLength(1); expect(JSON.stringify(toolResults), diagnostic).toContain('src/lookup.ts:1:'); expect(JSON.stringify(toolResults), diagnostic).toContain('src/lookup.ts:2:'); expect(traces, diagnostic).toContainEqual(expect.objectContaining({ phase: 'admission_result', policy_basis: 'bounded_tool_worker', selected_execution: 'single', attempted: true })); }
+      if (scenario.admission) {
+        expect(admissions, diagnostic).toHaveLength(1);
+        expect(JSON.stringify(toolResults), diagnostic).toContain('src/lookup.ts:1:'); expect(JSON.stringify(toolResults), diagnostic).toContain('src/lookup.ts:2:');
+        const admission = traces.find(r => r.phase === 'admission_result' && r.attempted);
+        expect(admission, diagnostic).toMatchObject({ policy_basis: 'bounded_tool_worker', selected_execution: 'single', attempted: true });
+        expect(traces, diagnostic).toContainEqual(expect.objectContaining({ phase: 'background_terminal', status: 'completed', execution_prompt_id: admission.prompt_id }));
+        const job = readJob(env, admission.session_id);
+        expect(job.ok && job.value?.current.prompt_id, diagnostic).toBe(admission.prompt_id);
+        expect(job.ok && job.value?.current.active, diagnostic).toEqual({});
+        expect(job.ok && job.value?.current.receipts, diagnostic).toEqual([expect.objectContaining({ verdict: 'accept' })]);
+      }
       if (scenario.scope === 'root') {
         const router = traces.filter(r => r.phase === 'mod_router');
         expect(router.filter(r => r.event === 'root'), diagnostic).toHaveLength(scenario.sequence?.length ?? 1);
