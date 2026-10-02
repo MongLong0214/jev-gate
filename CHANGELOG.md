@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.8.5 — 2026-10-02 — Direct worker execution and routing parity
+
+- Track bounded owned worker calls in direct conversations in the shared hook. Claude and Codex now reserve the execution before Gate B, apply the selected exact model/effort pair, keep background questions responsive and settle the original subtask once. The main request stays direct and is not marked complete by a subtask receipt.
+- Derive Codex product roles from account-listed model descriptions. Known Luna/Terra downgrades use the same existing confidence and consequential-risk rules as Claude; workhorse/frontier upgrades retain the stricter floor, unknown roles remain unknown and Astra stays opt-in. Supported effort still comes from the actual account catalog.
+- Distinguish explicit model/effort pins from read-only, file, API, permission and check constraints in the shared Jev question. Live Jev probes now select a fresh Haiku/Luna worker for a bounded read-only lookup while respecting explicit pins; uncertain upgrades still preserve the original pair.
+- Return execution identities for uncertain Codex termination/settlement. Status can recover foreground and background results after a state commit fails without restarting execution; parent ownership and terminal-before-release protections remain enforced.
+- Reuse unchanged trace records and share dashboard scans across viewers instead of repeatedly reading full history for each connection. Keep immediate file notifications, fallback rescans, symlink rejection and explicit malformed-record reporting. Fix recent-period measurements, visible feature search, source-unavailable wording, English copy and filter accessibility. Retain recent Jev observations through busy tool/policy loops and avoid claiming an old launch is still running. Remove repeated latency cards/charts and the duplicated execution strip.
+- Add native CLI/scripted-provider regressions for direct Haiku/Luna execution and shared threshold/risk boundaries, plus state-write failure and result recovery. Re-run both native host suites, responsive workers, permission/cancellation paths and the browser dashboard. Scripted inference is separate from live Jev classification and does not prove paid-provider quality or savings. The current Claude root-Haiku host limitation remains explicit.
+
 ## v0.8.4 — 2026-10-02 — Discoverable workspace targets and fast-worker admission
 
 - Treat the current repository, branch, PR and diff as targets discoverable through native workspace tools. Gate A and the shared Router question no longer require a supplied PR URL or file list for those targets. Missing earlier decisions still preserve native execution.

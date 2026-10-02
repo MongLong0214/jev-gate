@@ -75,6 +75,7 @@ import {
   renderOrchestrationGuidance,
   renderSingleGuidance,
   renderSingleResult,
+  renderAdhocResult,
   renderSingleRouteNote,
   renderPlannedContext,
   renderPlannerModelNote,
@@ -1874,6 +1875,25 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     /** A preserve leaves the model exactly as the coordinator called it. That is all it leaves alone. */
     const preserveAdhoc = (code: ErrorCode | null, tier: Tier = eligibility.tier): HookResult =>
       carriedRequest === null ? preserve(code) : emitWorkerPatch({ prompt: composed + note(tier) }, code);
+    // Direct conversations may still delegate a bounded subtask. Track that dispatch without
+    // converting the entire user request into an orchestrated job or a single-worker contract.
+    let adhocTracked = false;
+    const adhocState = single === null && input.session_id ? readJob(deps.env, input.session_id) : null;
+    if (single === null && input.session_id && input.prompt_id && adhocState?.ok && adhocState.value?.current.shape === 'direct' && adhocState.value.current.prompt_id === input.prompt_id && adhocState.value.current.outcome === null) {
+      let reserved = false;
+      let conflict = false;
+      const saved = updateJob(deps.env, input.session_id, prev => {
+        if (!prev || prev.current.prompt_id !== input.prompt_id || prev.current.shape !== 'direct' || prev.current.outcome !== null) return null;
+        if (Object.keys(prev.current.active).length) { conflict = true; return null; }
+        reserved = true;
+        return { ...prev, current: reserve(prev.current, eligibility.toolUseId, {
+          role: 'worker', taskId: null, contractHash: '', rev: null, tier: eligibility.tier, attempt: 1, deliverables: [],
+        }) };
+      }, { refuseUnreadable: true });
+      if (!saved.ok || !reserved) return emitDeny(conflict ? 'task_active' : 'stale_generation',
+        conflict ? 'An owned execution is still active. Collect its result before starting another bounded worker.' : 'Direct worker ownership could not be committed. No worker started; continue in the main session.', null);
+      adhocTracked = true;
+    }
     if (single !== null) {
       // A4: reserved before any HTTP call, and before the routing outcome, so every single dispatch is recorded --
       // reserving only the patched dispatches was rejected: a preserved call still runs a worker, and would leave
@@ -1974,6 +1994,12 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     // The lock is not held across the HTTP call, so the generation this dispatch belongs to is re-confirmed here.
     if (single !== null && !confirmOwnership(single.sessionId, single.gen, null, eligibility.toolUseId)) {
       return emitDeny('stale_generation', renderDispatchDeny('stale_generation'), null);
+    }
+    if (adhocTracked && input.session_id && input.prompt_id) {
+      const state = readJob(deps.env, input.session_id);
+      if (deps.signal?.aborted || !state.ok || state.value?.current.prompt_id !== input.prompt_id || !own(state.value.current.active, eligibility.toolUseId)) {
+        return emitDeny('stale_generation', renderDispatchDeny('stale_generation'), null);
+      }
     }
     if ('blocked' in gate) return preserveAdhoc(gate.blocked);
     if (!gate.outcome.ok) return preserveAdhoc(gate.outcome.code);
@@ -2234,15 +2260,17 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     const task = gen.plan?.tasks.find((t) => t.id === taskId) ?? null;
     // A19: the single shape has no plan, so a missing task is what this path expects rather than a stale reference.
     const isSingle = gen.execution === 'single';
+    const isAdhoc = gen.shape === 'direct' && reservation.task_id === null;
+    const unplanned = isSingle || isAdhoc;
     const status = responseStatus(input.tool_response);
-    const parsed = status === 'completed' ? parseWorkerReply(replyText(input.tool_response), { freeCheckIds: isSingle }) : null;
+    const parsed = status === 'completed' ? parseWorkerReply(replyText(input.tool_response), { freeCheckIds: unplanned }) : null;
     let finalVerdict: Receipt['verdict'] = 'unknown';
     let reason: string | null = null;
     if (parsed === null) reason = `the call reported status ${String(status)}`;
     else if (!parsed.ok) {
       finalVerdict = 'invalid';
       reason = parsed.error;
-    } else if (isSingle) {
+    } else if (unplanned) {
       const reported = reportedSingleVerdict(parsed.value);
       finalVerdict = reported.verdict;
       reason = reported.reason;
@@ -2270,7 +2298,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       // On the single shape the check_id is the command itself, which can carry anything a shell line can: it is
       // matched but never stored, and the trace and the reason name the check by its position in the reply instead.
       // On a planned task only the required checks decide acceptance, so only they are judged.
-      const claims = isSingle
+      const claims = unplanned
         ? passed.map((c) => ({ id: `#${parsed.value.checks.indexOf(c) + 1}`, command: c.check_id }))
         : passed.flatMap((c) => {
             const declared = task?.checks.find((k) => k.id === c.check_id && k.required);
@@ -2290,7 +2318,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       // may have nothing to run.
       const changed = parsed.value.changed_files.length > 0 || (observation?.lastWrite ?? null) !== null;
       const refused =
-        refusalReason(verification) ?? (isSingle && claims.length === 0 && changed ? 'the worker changed files but reported no passing check it ran' : null);
+        refusalReason(verification) ?? (unplanned && claims.length === 0 && changed ? 'the worker changed files but reported no passing check it ran' : null);
       if (finalVerdict === 'accept' && refused !== null) {
         finalVerdict = 'incomplete';
         reason = refused;
@@ -2332,7 +2360,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       // T1: the receipt is appended, so the latest attempt is the one that decides; earlier ones stay in the array.
       next = { ...next, receipts: [...next.receipts.filter((r) => r.tool_use_id !== toolUseId), receipt] };
       const acceptedHandoff =
-        status === 'completed' && finalVerdict === 'accept' && Object.keys(next.active).length === 0 && (isSingle || planComplete(next));
+        !isAdhoc && status === 'completed' && finalVerdict === 'accept' && Object.keys(next.active).length === 0 && (isSingle || planComplete(next));
       const rootFallback = acceptedHandoff || (isSingle && finalVerdict !== 'accept' && boundExhausted(next, 'task', SINGLE_TASK_ID));
       const rootFallbackReason = acceptedHandoff ? ('accepted' as const) : ('attempt_cap' as const);
       if (rootFallback) next = { ...next, root_fallback: true, root_fallback_reason: rootFallbackReason };
@@ -2343,7 +2371,9 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       const checks = verification
         ? `Check evidence: reported pass ${passedCount}; confirmed command pass ${confirmedCount}; transcript ${verification.transcript}; contradicted ${verification.contradicted.length}; stale ${verification.stale.length}; unobserved ${verification.unobserved.length}. Confirmation covers matched command runs and observed edit timing only; this does not establish requirement coverage.`
         : `Check evidence: reported pass ${passedCount}; observation disabled or unavailable. No verified pass is claimed.`;
-      if (isSingle) {
+      if (isAdhoc) {
+        context = renderAdhocResult(finalVerdict, reason ?? '', checks);
+      } else if (isSingle) {
         // A19: rework and replan are hierarchy verdicts; this path only ever produces the four below.
         const shown = finalVerdict === 'accept' || finalVerdict === 'invalid' || finalVerdict === 'unknown' ? finalVerdict : 'incomplete';
         context = renderSingleResult(shown, reason ?? '', { formatHint, rootFallback, rootFallbackReason, checks });
@@ -2362,7 +2392,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       else if (finalVerdict === 'unknown') context = renderWorkerUnknown(taskId);
       else if (finalVerdict === 'invalid') context = renderWorkerInvalid(taskId, reason ?? 'unparsable reply');
       else context = renderWorkerIncomplete(taskId, reason ?? 'the reported checks do not satisfy the contract');
-      if (!isSingle && finalVerdict !== 'accept') context += ` ${checks}`;
+      if (!unplanned && finalVerdict !== 'accept') context += ` ${checks}`;
       trace?.write('post', {
         ...base,
         task_id: taskId,
@@ -2377,8 +2407,8 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
             not_run: parsed.value.checks.filter((check) => check.result === 'not_run').length,
           }
           : null,
-        ready_task_ids: finalVerdict === 'accept' && !isSingle ? readyForDispatch(next) : [],
-        plan_complete: !isSingle && planComplete(next),
+        ready_task_ids: finalVerdict === 'accept' && !unplanned ? readyForDispatch(next) : [],
+        plan_complete: !unplanned && planComplete(next),
         evidence_format_only: formatOnly,
         root_fallback: rootFallback,
         ...(rootFallback ? { root_fallback_reason: rootFallbackReason } : {}),
@@ -2559,7 +2589,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     updateJob(deps.env, sessionId, (prev) => {
       if (!prev || prev.current.outcome !== null) return null;
       const gen = prev.current;
-      if (gen.background_job && (Object.keys(gen.active).length > 0 || gen.phase !== 'blocked' && !gen.root_fallback && (gen.execution === 'single' ? gen.receipts.filter(r => r.task_id === SINGLE_TASK_ID).at(-1)?.verdict !== 'accept' : !planComplete(gen)))) return null;
+      if (gen.background_job && (Object.keys(gen.active).length > 0 || gen.shape !== 'direct' && gen.phase !== 'blocked' && !gen.root_fallback && (gen.execution === 'single' ? gen.receipts.filter(r => r.task_id === SINGLE_TASK_ID).at(-1)?.verdict !== 'accept' : !planComplete(gen)))) return null;
       const allAccepted = planComplete(gen);
       // A19: the single shape has no plan to complete, so its completion is the latest receipt of the one dispatch it
       // makes. That receipt is the worker's own report (reportedSingleVerdict), so `completed` is a weaker statement

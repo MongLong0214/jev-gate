@@ -2,12 +2,58 @@ import { describe, expect, it } from 'vitest';
 import { offerPairs, selectPair, applyEffort, type RouteCandidate } from '../../mods/router/hooks/selection.ts';
 import { routingContext } from '../../mods/router/hooks/context.ts';
 import { normalizeCatalog, isAstra } from '../../src/codex/catalog.js';
+import { codexCandidates } from '../../src/codex/router.js';
 import { claudeCandidates } from '../../mods/router/hooks/candidates.ts';
 import { claudeAgentToolModel, MODEL_FACTS } from '../../src/claude-models.ts';
 import { choice } from './fake-engine.ts';
 import type { PairOffer } from '../../src/router-selection.ts';
 const claudeOffer = (baseline = 'claude-opus-5-5', effort: string | null = 'high', mutable = true) => offerPairs({ baseline: { model: baseline, effort }, candidates: claudeCandidates({ baseline, aliases: {}, allowFable: false }), model: true, effort: mutable, upgrade: .8, downgrade: .6 })!;
 const exactAnswers = (o: PairOffer, selected = 'claude-sonnet-5-5', probability = .7, risk = 'ordinary', control = 1) => Object.fromEntries(Object.entries(o.questions).map(([name, q]) => [name, q.type === 'choice' ? { type: 'choice', choice: name === 'model' ? selected : name === 'control' ? 'task_clear' : risk, confidence: name === 'model' ? probability : name === 'control' ? control : 1, probabilities: Object.fromEntries(Object.keys(q.criteria).map(k => [k, name === 'model' ? k === selected ? probability : k === '__keep__' ? 1 - probability : 0 : k === (name === 'control' ? 'task_clear' : risk) ? name === 'control' ? control : 1 : k === 'unclear' && name === 'control' ? 1 - control : 0])) } : { type: 'score', probabilities: Object.fromEntries(q.criteria.map((s, i) => [i, s.startsWith('Strong reasoning') ? 1 : 0])) }]));
+describe('Claude and Codex routing role parity', () => {
+  const native = [
+    { model: 'gpt-6.1-sol', description: 'Latest workhorse model for coding and everyday work.' },
+    { model: 'gpt-6-luna', description: 'Fast and affordable model for easier tasks.' },
+    { model: 'gpt-5.6-terra', description: 'Older balanced model for straightforward work.' },
+    { model: 'gpt-6-astra', description: 'Frontier intelligence for the most demanding work.' },
+  ].map(m => ({ ...m, supportedReasoningEfforts: ['low', 'medium', 'high', 'max'].map(reasoningEffort => ({ reasoningEffort })) }));
+  it.each([.59, .6, .7, .8, 1])('uses the same downward floor in both adapters: %s', probability => {
+    const claude = claudeOffer();
+    const codex = offerPairs({ baseline: { model: 'gpt-6.1-sol', effort: 'high' }, candidates: codexCandidates(native, false), model: true, effort: true, upgrade: .8, downgrade: .6 })!;
+    for (const [o, target] of [[claude, 'claude-sonnet-5-5'], [codex, 'gpt-6-luna']] as const) {
+      const result = selectPair(o, exactAnswers(o, target, probability));
+      expect(result.patch.model).toBe(probability >= .6 ? target : undefined);
+      expect(result.diagnostics).toMatchObject({ direction: 'downgrade', threshold: .6 });
+    }
+  });
+  it.each(['ordinary', 'consequential', 'unclear'])('applies the same risk rule to Luna and Terra: %s', risk => {
+    const o = offerPairs({ baseline: { model: 'gpt-6.1-sol', effort: 'high' }, candidates: codexCandidates(native, false), model: true, effort: true, upgrade: .8, downgrade: .6 })!;
+    for (const target of ['gpt-6-luna', 'gpt-5.6-terra']) {
+      const result = selectPair(o, exactAnswers(o, target, .99, risk));
+      expect(result.patch.model).toBe(risk === 'ordinary' ? target : undefined);
+      expect(result.reasons.model).toBe(risk === 'ordinary' ? 'selected' : 'risk_blocks_downgrade');
+    }
+    expect(o.candidates.some(c => c.id === 'gpt-6-astra')).toBe(false);
+  });
+  it.each([.79, .8])('uses .8 to return from Luna to the workhorse: %s', probability => {
+    const o = offerPairs({ baseline: { model: 'gpt-6-luna', effort: 'high' }, candidates: codexCandidates(native, false), model: true, effort: true, upgrade: .8, downgrade: .6 })!;
+    expect(selectPair(o, exactAnswers(o, 'gpt-6.1-sol', probability)).patch.model).toBe(probability >= .8 ? 'gpt-6.1-sol' : undefined);
+  });
+  it('keeps unknown model roles unknown and does not infer rank from a name', () => {
+    expect(codexCandidates([{ ...native[0]!, description: 'General coding model' }], false)[0]).not.toHaveProperty('rank');
+    expect(codexCandidates(native, true).find(c => c.id === 'gpt-6-astra')?.rank).toBe(3);
+  });
+  it('preserves both explicitly pinned dimensions in both adapters even when an alternative is supported', () => {
+    const offers = [claudeOffer(), offerPairs({ baseline: { model: 'gpt-6.1-sol', effort: 'high' }, candidates: codexCandidates(native, false), model: true, effort: true, upgrade: .8, downgrade: .6 })!];
+    for (const [index, o] of offers.entries()) {
+      const target = index === 0 ? 'claude-sonnet-5-5' : 'gpt-6-luna';
+      const data: Record<string, unknown> = exactAnswers(o, target, .99); const q = o.questions.control!;
+      expect(selectPair(o, data).patch).toMatchObject({ model: target });
+      if (q.type !== 'choice') throw Error('control absent');
+      data.control = choice(Object.keys(q.criteria), ['explicit_lock', 1]);
+      expect(selectPair(o, data).patch).toEqual({});
+    }
+  });
+});
 describe('documented Claude role thresholds and target effort resolution', () => {
   it.each([[.7, true], [.59, false]] as const)('uses the existing .6 downward floor, not .8: %s', (probability, selected) => {
     const o = claudeOffer(); const result = selectPair(o, exactAnswers(o, 'claude-sonnet-5-5', probability));

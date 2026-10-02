@@ -29,3 +29,13 @@ export const codexTargetAllowed = (id: string, allowAstra: boolean): boolean => 
 export const generalCodexModel = (m: CodexModel): boolean => !m.hidden &&
   !/cybersecurity|automatic.*review|specialist/i.test(m.description ?? '') &&
   (!m.inputModalities || m.inputModalities.includes('text'));
+
+/** Product roles from the account's descriptions, not inferred prices or a version performance ranking. */
+export const codexModelRole = (m: CodexModel): { rank: number; description: string } | undefined => {
+  const text = m.description ?? '';
+  if (/frontier|most demanding|most intelligent/i.test(text)) return { rank: 3, description: 'frontier: exceptional unresolved foundational reasoning.' };
+  if (/fast|efficient|affordable|easier|lightweight/i.test(text)) return { rank: 0, description: 'fast: prioritize for file discovery, lookup, listing and mechanical edits with clear checks.' };
+  if (/balanced|straightforward|everyday/i.test(text) && !/workhorse|advanced.*reasoning/i.test(text)) return { rank: 1, description: 'standard: ordinary implementation under established contracts.' };
+  if (/workhorse|advanced.*reasoning|coding.*reasoning|reasoning.*coding/i.test(text)) return { rank: 2, description: 'deep: hard debugging, competing design constraints or subtle correctness.' };
+  return undefined;
+};

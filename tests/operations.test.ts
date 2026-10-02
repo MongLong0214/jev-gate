@@ -27,6 +27,8 @@ describe('operations display model', () => {
     const active = buildOperations([launch, question], [], new Date(later), { trace: true, debug: false });
     expect(active.runs).toHaveLength(1); expect(active.runs[0]?.state).toBe('active');
     expect(active.feed.some(s => s.summary.includes('질문 가능'))).toBe(true);
+    const stale = buildOperations([launch], [], new Date(Date.parse(at) + 31_000), { trace: true, debug: false });
+    expect(stale.feed[0]?.summary).toBe('시작 기록 있음 · 종료 결과 미관측'); expect(stale.runs[0]?.state).toBe('unconfirmed');
     const terminal = { ...base, written_at: later, phase: 'background_terminal', tool_use_id: 'd', prompt_id: 'q', execution_prompt_id: 'p1', status: 'completed' };
     const done = buildOperations([launch, question, terminal], [], new Date(later), { trace: true, debug: false });
     expect(done.runs).toHaveLength(1); expect(done.runs[0]?.state).toBe('done');
@@ -135,10 +137,10 @@ describe('operations display model', () => {
     expect(view.feed[0]?.model).toMatchObject({ selected: 'sonnet', observed: 'claude-sonnet-5', status: 'confirmed', selectedEffort: 'low' });
   });
 
-  it('keeps a Jev judgment visible after a busy native loop and correlates the known turn', () => {
+  it.each(['codex_event', 'guard'])('keeps a Jev judgment visible after a busy %s loop and correlates the known turn', phase => {
     const records: Array<Record<string, unknown>> = [
       { ...base, host: 'codex', phase: 'admission_result', request_id: 'a', attempted: true, decision: { shape: 'direct' } },
-      ...Array.from({ length: 200 }, (_, i) => ({ ...base, written_at: later, host: 'codex', phase: 'codex_event', event: 'PostToolUse', tool_use_id: `c${i}`, invocation_id: `i${i}` })),
+      ...Array.from({ length: 200 }, (_, i) => ({ ...base, written_at: later, host: 'codex', phase, event: 'PostToolUse', allow: true, tool_use_id: `c${i}`, invocation_id: `i${i}` })),
     ];
     const view = buildOperations(records, [], new Date(later), { trace: true, debug: false });
     expect(view.runs).toHaveLength(1);

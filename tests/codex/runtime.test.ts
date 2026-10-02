@@ -85,7 +85,7 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
     installed = true;
   }, 60_000);
 
-  it.each(['bounded-lookup', 'background', 'single', 'failed', 'permission-boundary', 'edit-after-check', 'worktree', 'hierarchy', 'lean', 'cancelled', 'budget', 'compact-manual', 'compact-auto', 'routing-gpt-6.1-sol', 'routing-gpt-6-astra', 'routing-gpt-6-sol', 'routing-gpt-6-luna', 'routing-gpt-5.6-terra', 'routing-model-terra', 'routing-auto-model', 'routing-root-keep', 'routing-root-effort', 'routing-root-model', 'routing-root-both'])('runs automatic native Codex policies: %s', async scenario => {
+  it.each(['bounded-lookup', 'direct-lookup', 'background', 'single', 'failed', 'permission-boundary', 'edit-after-check', 'worktree', 'hierarchy', 'lean', 'cancelled', 'budget', 'compact-manual', 'compact-auto', 'routing-gpt-6.1-sol', 'routing-gpt-6-astra', 'routing-gpt-6-sol', 'routing-gpt-6-luna', 'routing-gpt-5.6-terra', 'routing-model-terra', 'routing-auto-model', 'routing-root-keep', 'routing-root-effort', 'routing-root-model', 'routing-root-both'])('runs automatic native Codex policies: %s', async scenario => {
     const routing = scenario.startsWith('routing-');
     const rootPair = scenario.startsWith('routing-root-');
     const baselineEffort = rootPair ? 'high' : 'medium';
@@ -111,6 +111,11 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
         if (index === 3) item = fn('jev_agent', { subagent_type: 'jev-gate:worker-fast', prompt: 'Find runtimeEvidenceNeedle in source.ts and return its exact line. Run rg -n runtimeEvidenceNeedle source.ts.' });
         if (index === 4) item = fn('exec_command', { cmd: 'rg -n runtimeEvidenceNeedle source.ts', login: false });
         if (index === 5) item = final(report('rg -n runtimeEvidenceNeedle source.ts'));
+      }
+      if (scenario === 'direct-lookup') {
+        item = index === 2 ? fn('jev_agent', { subagent_type: 'jev-gate:worker-fast', prompt: 'Find runtimeEvidenceNeedle in source.ts and run rg -n runtimeEvidenceNeedle source.ts.' })
+          : index === 3 ? fn('exec_command', { cmd: 'rg -n runtimeEvidenceNeedle source.ts', login: false })
+          : index === 4 ? final(report('rg -n runtimeEvidenceNeedle source.ts')) : final('managed native complete');
       }
       if (scenario === 'background') {
         const worker = Array.isArray(request['input']) && request['input'].some(i => (i as Rec)?.['role'] === 'user' && JSON.stringify(i).includes('JEV_BG_NATIVE_WORKER'));
@@ -175,6 +180,7 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
     const policyFile = join(tmp, `policy ${scenario}.json`);
     writeFileSync(policyFile, JSON.stringify({
       gate: { mode: scenario.startsWith('compact') || routing ? 'off' : scenario === 'lean' ? 'lean' : 'auto',
+        ...(scenario === 'direct-lookup' ? { delegationDepthFloor: 999999 } : {}),
         admittedShape: scenario === 'hierarchy' || scenario === 'worktree' ? 'hierarchy' : 'auto',
         ...(scenario === 'worktree' ? {} : { workerIsolation: 'none', maxParallelWorkers: 1, guardAllowTools: [], planInterpretation: false }),
         ...(scenario === 'routing-model-terra' ? { models: { fast: 'gpt-6-luna', standard: 'gpt-5.6-terra', deep: 'gpt-6.1-sol', frontier: 'gpt-6-astra' } } : {}) },
@@ -186,7 +192,7 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
       fetchImpl: (async (_url, init) => {
         const parsed=JSON.parse(String(init?.body)); const q = parsed.questions;
         const bounded = scenario === 'bounded-lookup' && JSON.stringify(parsed.state).includes('runtimeEvidenceNeedle');
-        return new Response(JSON.stringify({ model: parsed.model, answers: Object.fromEntries(Object.keys(q).map(k => { const score=routing && k.startsWith('effort_')?rootPair?q[k].criteria.findIndex((v:string)=>v.startsWith(targetEffort==='max'?'Maximum':targetEffort==='low'?'Light':'Strong')):q[k].criteria.length-1:k==='tool_calls'?(scenario==='bounded-lookup'?(bounded?1:0):4):k==='size'?2:0; const picks:Record<string,string>={work_shape:'sustained_task',handoff_scope:'self_contained'}; const pick=k==='bounded_tool_work'?(bounded?'bounded':'other'):k.startsWith('relation_')?'omit':k==='model' && scenario==='bounded-lookup' ? 'gpt-6-luna' : k==='model' && routing ? scenario==='routing-auto-model'?'gpt-6-astra':scenario==='routing-model-terra' || rootPair && (scenario.endsWith('model') || scenario.endsWith('both'))?'gpt-5.6-terra':'__keep__' : picks[k] ?? Object.keys(q[k].criteria ?? {})[0]; return [k, q[k].type === 'score' ? { type: 'score', score, confidence:1, probabilities: Object.fromEntries(q[k].criteria.map((_:unknown,i:number)=>[i,i===score?1:0])) } : q[k].type === 'noul' ? { type:'noul',noul:0 } : { type: 'choice', choice: pick, confidence: 1, probabilities: Object.fromEntries(Object.keys(q[k].criteria).map(v=>[v,v===pick?1:0])) }]; })) }), { headers: { 'content-type': 'application/json' } });
+        return new Response(JSON.stringify({ model: parsed.model, answers: Object.fromEntries(Object.keys(q).map(k => { const score=routing && k.startsWith('effort_')?rootPair?q[k].criteria.findIndex((v:string)=>v.startsWith(targetEffort==='max'?'Maximum':targetEffort==='low'?'Light':'Strong')):q[k].criteria.length-1:k==='tool_calls'?(scenario==='bounded-lookup'?(bounded?1:0):4):k==='size'?2:0; const picks:Record<string,string>={work_shape:'sustained_task',handoff_scope:'self_contained'}; const pick=k==='bounded_tool_work'?(bounded?'bounded':'other'):k.startsWith('relation_')?'omit':k==='model' && ['bounded-lookup','direct-lookup'].includes(scenario) ? 'gpt-6-luna' : k==='model' && routing ? scenario==='routing-auto-model'?'gpt-6-astra':scenario==='routing-model-terra' || rootPair && (scenario.endsWith('model') || scenario.endsWith('both'))?'gpt-5.6-terra':'__keep__' : picks[k] ?? Object.keys(q[k].criteria ?? {})[0]; return [k, q[k].type === 'score' ? { type: 'score', score, confidence:1, probabilities: Object.fromEntries(q[k].criteria.map((_:unknown,i:number)=>[i,i===score?1:0])) } : q[k].type === 'noul' ? { type:'noul',noul:0 } : { type: 'choice', choice: pick, confidence: 1, probabilities: Object.fromEntries(Object.keys(q[k].criteria).map(v=>[v,v===pick?1:0])) }]; })) }), { headers: { 'content-type': 'application/json' } });
       }) as typeof fetch });
     const socket = new WebSocket(session.url, { headers: { Authorization: `Bearer ${session.token}` } });
     const opened = new Promise<void>((resolve,reject)=>{socket.once('open',resolve);socket.once('error',reject);});
@@ -268,6 +274,15 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
       }
       const end=Date.now()+20000; while(!messages.slice(before).some(m=>m['method']==='turn/completed' && (m['params'] as Rec)['threadId']===id) && Date.now()<end) await new Promise(r=>setTimeout(r,20));
       const all=readdirSync(trace).map(f=>JSON.parse(readFileSync(join(trace,f),'utf8')) as Rec);
+      if (scenario === 'direct-lookup') {
+        expect(requests).toHaveLength(5); expect(requests[2]!['model']).toBe('gpt-6-luna');
+        expect(JSON.stringify(requests[3]!['input'])).toContain('1:export const runtimeEvidenceNeedle = 42;');
+        expect(all.some(r => r['phase'] === 'post' && r['verdict'] === 'accept' && r['root_fallback'] === false)).toBe(true);
+        const job = readJob({ JEV_GATE_STATE_DIR: join(tmp, `managed ${scenario} state`, 'codex') }, id);
+        expect(job.ok && job.value?.current.shape).toBe('direct'); expect(job.ok && job.value?.current.active).toEqual({});
+        await vi.waitFor(() => expect(session.policy.sessions.size).toBe(1), { timeout: 3000 });
+        return;
+      }
       if (scenario === 'background') {
         const stateEnv = { JEV_GATE_STATE_DIR: join(tmp, `managed ${scenario} state`, 'codex') };
         const job = () => { const r = readJob(stateEnv, id); if (!r.ok || !r.value) throw new Error('missing native job'); return r.value; };

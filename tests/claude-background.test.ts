@@ -7,7 +7,7 @@ import { claudeDefaults, prepareClaude } from '../src/claude-setup.js';
 
 const roots: string[] = [];
 afterEach(() => roots.splice(0).forEach(p => rmSync(p, { recursive: true, force: true })));
-const fixture = async () => {
+const fixture = async (direct = false) => {
   const root = mkdtempSync('/tmp/jev-bg-unit-'); roots.push(root);
   const cfg = join(root, 'config.json');
   writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'native', admittedShape: 'single', workerIsolation: 'none', maxParallelWorkers: 1, guardAllowTools: [] }));
@@ -15,6 +15,7 @@ const fixture = async () => {
   const parent = join(root, 's.jsonl'); writeFileSync(parent, '');
   const run = (event: Record<string, unknown>) => runHook({ env, stdin: (async function* () { yield JSON.stringify({ session_id: 's', transcript_path: parent, ...event }); })() });
   await run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'original', prompt: 'Implement the original request.' });
+  if (direct) updateJob(env, 's', prev => newGeneration(prev, 's', 'original', 'direct').state);
   const pre = await run({ hook_event_name: 'PreToolUse', prompt_id: 'original', tool_name: 'Agent', tool_use_id: 'dispatch', tool_input: { subagent_type: 'jev-gate:worker', prompt: 'Do the original work.', description: 'work', model: 'sonnet', run_in_background: false } });
   expect(pre.kind).toBe('patch');
   const input = JSON.parse(pre.stdout!).hookSpecificOutput.updatedInput;
@@ -31,6 +32,21 @@ const fixture = async () => {
 };
 
 describe('responsive native background contracts', () => {
+  it('tracks a bounded direct worker without orchestrating or completing the overall request', async () => {
+    const f = await fixture(true);
+    expect(f.job().current.shape).toBe('direct'); expect(f.job().current.execution).toBeUndefined();
+    await f.launch(); await f.run({ hook_event_name: 'Stop', prompt_id: 'original' });
+    expect(f.job().current.outcome).toBeNull();
+    const question = await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'question', prompt: 'Explain while the subtask runs.' });
+    expect(question.stdout).toContain('answer the user'); expect(f.job().current.prompt_id).toBe('original');
+    const duplicate = await f.run({ hook_event_name: 'PreToolUse', prompt_id: 'original', tool_name: 'Agent', tool_use_id: 'duplicate', tool_input: { subagent_type: 'jev-gate:worker', prompt: 'Do not duplicate.', description: 'duplicate' } });
+    expect(duplicate.kind).toBe('deny'); expect(Object.keys(f.job().current.active)).toEqual(['dispatch']);
+    f.transcript(); await f.terminal(); await f.terminal();
+    expect(f.job().current.receipts).toHaveLength(1); expect(f.job().current.receipts[0]?.verdict).toBe('accept');
+    expect(f.job().current.active).toEqual({}); expect(f.job().current.root_fallback).not.toBe(true);
+    expect(f.job().current.background_context).toContain('overall user request remains yours');
+    await f.run({ hook_event_name: 'Stop', prompt_id: 'question' }); expect(f.job().current.outcome).toBe('completed');
+  });
   it('answers new questions without superseding the worker and accepts its genuine result exactly once', async () => {
     const f = await fixture(); expect(f.input).toMatchObject({ run_in_background: true, model: 'sonnet' });
     await f.launch(); expect(f.job().current.receipts).toHaveLength(0);

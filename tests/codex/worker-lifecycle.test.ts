@@ -11,13 +11,13 @@ const cleanups: (() => void)[] = [];
 afterEach(() => { cleanups.splice(0).forEach(f => f()); vi.restoreAllMocks(); });
 const setup = async (scenario = 'uncertain', started = true) => {
   const root = mkdtempSync(join(tmpdir(), 'jev-worker-')); const config = join(root, 'config.json');
-  writeFileSync(config, JSON.stringify({ gate: { mode: 'native', admittedShape: scenario === 'planner' ? 'hierarchy' : 'single', maxParallelWorkers: 1, workerIsolation: 'none', guardAllowTools: ['*'], models: { fast: 'gpt-6.1-sol', standard: 'gpt-6.1-sol', deep: 'gpt-6.1-sol', frontier: 'gpt-6.1-sol' } }, router: { enabled: false } }));
+  writeFileSync(config, JSON.stringify({ gate: { mode: scenario === 'adhoc' ? 'auto' : 'native', admittedShape: scenario === 'planner' ? 'hierarchy' : 'single', maxParallelWorkers: 1, workerIsolation: 'none', guardAllowTools: ['*'], models: { fast: 'gpt-6.1-sol', standard: 'gpt-6.1-sol', deep: 'gpt-6.1-sol', frontier: 'gpt-6.1-sol' } }, router: { enabled: false } }));
   const input = new PassThrough(); const output = new PassThrough();
   const rpc = new CodexRpc(input, output); const sent: Obj[] = [];
   const reply = (id: unknown, result: Obj) => input.write(JSON.stringify({ id, result }) + '\n');
   const notify = (method: string, params: Obj) => input.write(JSON.stringify({ method, params }) + '\n');
   let start: Obj | undefined;
-  const env = { HOME: root, JEV_CODEX_CONFIG: config, JEV_CODEX_TRACE_DIR: join(root, 'trace'), JEV_GATE_STATE_DIR: join(root, 'state'), JEV_GATE_EXPERIMENT_ADMISSION: 'orchestrated' };
+  const env = { HOME: root, JEV_CODEX_CONFIG: config, JEV_CODEX_TRACE_DIR: join(root, 'trace'), JEV_GATE_STATE_DIR: join(root, 'state'), ...(scenario !== 'adhoc' ? { JEV_GATE_EXPERIMENT_ADMISSION: 'orchestrated' } : {}) };
   const stateEnv = { JEV_GATE_STATE_DIR: join(env.JEV_GATE_STATE_DIR, 'codex') };
   const policy = new CodexPolicy(rpc, env, undefined, { 'jev-gate:worker': 'Return a result', 'jev-gate:planner': 'Return a plan' }, true);
   const nativeRequest = rpc.request.bind(rpc);
@@ -31,7 +31,7 @@ const setup = async (scenario = 'uncertain', started = true) => {
         if (scenario === 'pre-failure') input.write(JSON.stringify({ id: m['id'], error: { code: -1 } }) + '\n');
         else reply(m['id'], { model: 'gpt-6.1-sol', cwd: root, sandbox: { type: 'dangerFullAccess' }, thread: { id: 'worker' } });
       }
-      if (m['method'] === 'turn/start') { start = m; if (started) notify('turn/started', { threadId: 'worker', turn: { id: 'turn-w' } }); if (scenario === 'normal' || scenario === 'planner') reply(m['id'], { turn: { id: 'turn-w' } }); }
+      if (m['method'] === 'turn/start') { start = m; if (started) notify('turn/started', { threadId: 'worker', turn: { id: 'turn-w' } }); if (['normal', 'planner', 'adhoc'].includes(scenario)) reply(m['id'], { turn: { id: 'turn-w' } }); }
       if (m['method'] === 'thread/read') reply(m['id'], { thread: { id: 'worker', turns: [] } });
       if (m['method'] === 'turn/interrupt' || m['method'] === 'thread/archive') reply(m['id'], {});
     }
@@ -51,6 +51,18 @@ const setup = async (scenario = 'uncertain', started = true) => {
   return { policy, rpc, parent, sent, launch, terminal, job, stateEnv, root, returned, started: () => start !== undefined, lateResponse: () => { if (start) reply(start['id'], { turn: { id: 'turn-w' } }); } };
 };
 describe('Codex genuine terminal settlement (#139)', () => {
+  it('runs a bounded direct worker and settles its subtask while keeping the main conversation direct', async () => {
+    const f = await setup('adhoc'); expect(f.job().current.shape).toBe('direct');
+    await f.launch(true); expect(JSON.stringify(f.returned())).toContain('launch receipt');
+    expect(f.sent.filter(m => m['method'] === 'turn/start')).toHaveLength(1);
+    f.parent.prompt = 'question'; f.parent.controller = new AbortController();
+    expect(JSON.stringify(await f.policy.nativeHook({ hook_event_name: 'UserPromptSubmit', session_id: 'parent', prompt: 'Explain while the bounded lookup runs.' }))).toContain('answer the user');
+    f.terminal('completed', JSON.stringify({ status: 'done', summary: 'bounded lookup result', changed_files: [], interfaces: [], checks: [], blockers: [] }));
+    await vi.waitFor(() => expect(f.job().current.receipts[0]?.verdict).toBe('accept'));
+    expect(f.job().current.shape).toBe('direct'); expect(f.job().current.root_fallback).not.toBe(true);
+    await f.rpc.onRequest({ id: 'status', method: 'item/tool/call', params: { threadId: 'parent', tool: 'jev_agent', arguments: { action: 'status', agent_id: 'worker' } } });
+    expect(JSON.stringify(f.sent.find(m => m['id'] === 'status'))).toContain('bounded lookup result');
+  });
   it('returns a background launch immediately, preserves it across a new question and collects its original result', async () => {
     const f = await setup('normal'); await f.launch(true);
     expect(JSON.stringify(f.returned())).toContain('launch receipt'); expect(f.job().current.receipts).toHaveLength(0);
@@ -93,6 +105,7 @@ describe('Codex genuine terminal settlement (#139)', () => {
     const f = await setup('uncertain', started); const t = Date.now(); await f.launch();
     expect(Date.now() - t).toBeLessThan(1600);
     expect(JSON.stringify(f.returned())).toContain('termination unconfirmed');
+    expect(JSON.stringify(f.returned())).toContain('Internal execution identity: worker');
     expect(f.job().current.active['dispatch']?.codex_execution?.thread_id).toBe('worker');
     expect(f.sent.filter(m => m['method'] === 'turn/start')).toHaveLength(1);
     const write = await f.policy.nativeHook({ hook_event_name: 'PreToolUse', session_id: 'parent', tool_name: 'Write', tool_input: { file_path: join(f.root, 'src/file') } });
@@ -103,6 +116,8 @@ describe('Codex genuine terminal settlement (#139)', () => {
     expect(f.job().current.receipts).toHaveLength(1);
     expect(f.job().current.receipts[0]!.verdict).not.toBe('accept');
     f.terminal(); f.lateResponse(); expect(f.job().current.receipts).toHaveLength(1);
+    await f.rpc.onRequest({ id: 'recovered', method: 'item/tool/call', params: { threadId: 'parent', tool: 'jev_agent', arguments: { action: 'status', agent_id: 'worker' } } });
+    expect(JSON.stringify(f.sent.find(m => m['id'] === 'recovered'))).toContain('worker observation kept');
   });
   it('preserves a terminal arriving before the start response and settles exactly once', async () => {
     const f = await setup(); const run = f.launch(); await vi.waitFor(() => expect(f.started()).toBe(true));
@@ -137,6 +152,16 @@ describe('Codex genuine terminal settlement (#139)', () => {
     await f.policy.nativeHook({ hook_event_name: 'PreToolUse', session_id: 'parent', tool_name: 'Read', tool_input: { file_path: 'src/file' } });
     expect(f.job().current.receipts).toHaveLength(1); expect(Object.keys(f.job().current.active)).toHaveLength(0);
     expect(f.sent.filter(m => m['method'] === 'turn/start')).toHaveLength(1);
+  });
+  it('returns a recoverable identity if a foreground terminal cannot be committed, then collects without re-execution', async () => {
+    const f = await setup('normal'); const run = f.launch(); await vi.waitFor(() => expect(f.started()).toBe(true));
+    const path = jobPath(f.stateEnv, 'parent'); mkdirSync(`${path}.lock`); writeFileSync(join(`${path}.lock`, 'owner'), String(process.pid));
+    f.terminal(); await run;
+    expect(JSON.stringify(f.returned())).toContain('agent_id=worker'); expect(f.job().current.active['dispatch']).toBeDefined();
+    rmSync(`${path}.lock`, { recursive: true });
+    await f.rpc.onRequest({ id: 'recover', method: 'item/tool/call', params: { threadId: 'parent', tool: 'jev_agent', arguments: { action: 'status', agent_id: 'worker' } } });
+    expect(JSON.stringify(f.sent.find(m => m['id'] === 'recover'))).toContain('worker observation kept');
+    expect(f.sent.filter(m => m['method'] === 'turn/start')).toHaveLength(1); expect(f.job().current.receipts).toHaveLength(1);
   });
   it.each(['completed', 'failed', 'interrupted'])('settles normal observed %s without the uncertainty recovery budget', async status => {
     const f = await setup('normal'); const run = f.launch(); await vi.waitFor(() => expect(f.started()).toBe(true)); f.terminal(status); await run;

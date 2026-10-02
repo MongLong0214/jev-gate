@@ -305,6 +305,9 @@ export const renderSingleResult = (
   return result + (opts.checks ? ` ${opts.checks}` : '') + handoff + format;
 };
 
+export const renderAdhocResult = (verdict: string, reason: string, checks: string): string =>
+  `[Jev Gate result] The bounded worker ended with verdict ${verdict}${reason ? ` (${bounded(reason)})` : ''}. Integrate this subtask result in the main session; the overall user request remains yours to complete. ${checks}`;
+
 export interface WorkerAcceptedOptions {
   workerIsolation?: WorkerIsolation;
   /** #48 P2-1: repeated only when `isLastTask` -- the packet's proxy for this is "nothing else is ready to dispatch". */

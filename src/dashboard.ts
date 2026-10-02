@@ -15,6 +15,7 @@ import { readSettingsEnvVar } from './host-window.js';
 import { recordingStatus, setRecording } from './recording.js';
 import { dashboardStatus, setDashboard } from './dashboard-settings.js';
 import { JEV_FAVICON } from './dashboard-brand.js';
+import type { TraceCache } from './explain.js';
 
 const PAGE = DASHBOARD_PAGE;
 
@@ -75,11 +76,21 @@ export const readVersions = (env: Env, host?: Host): DashboardVersions => {
   return { running, installed };
 };
 
-const snapshot = (sources: DashboardSources) => ({ ...loadActivity({ ...sources, now: new Date() }), version: readVersions(sources.env, sources.host), recording: recordingStatus(sources.env), dashboard: dashboardStatus(sources.env) });
-
 export const startDashboard = (sources: DashboardSources, port: number, runtime: { token?: string } = {}): Promise<{ url: string; port: number; close: () => Promise<void> }> =>
   new Promise((resolve, reject) => {
     const sockets = new Set<Socket>();
+    // All viewers share one bounded-age scan. File notifications invalidate it immediately;
+    // the fallback scan still detects missed events, new directories and time-based unknown states.
+    const traceCache: TraceCache = new Map();
+    let activity: ActivitySnapshot | null = null;
+    let scannedAt = 0;
+    const snapshot = () => {
+      if (!activity || Date.now() - scannedAt >= 2000) {
+        activity = loadActivity({ ...sources, traceCache, now: new Date() });
+        scannedAt = Date.now();
+      }
+      return { ...activity, version: readVersions(sources.env, sources.host), recording: recordingStatus(sources.env), dashboard: dashboardStatus(sources.env) };
+    };
     const server: Server = createServer(async (req, res) => {
       if (!/^127\.0\.0\.1:\d+$/.test(req.headers.host ?? '')) { res.writeHead(403); res.end(); return; }
       res.setHeader('x-content-type-options', 'nosniff');
@@ -113,7 +124,7 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
         return;
       }
       if (req.method === 'GET' && path === '/api/snapshot') {
-        const body = JSON.stringify(snapshot(sources));
+        const body = JSON.stringify(snapshot());
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
         res.end(body);
         return;
@@ -130,7 +141,7 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
         const publish = (): void => {
           if (closed) return;
           try {
-            const body = snapshot(sources);
+            const body = snapshot();
             const next = `${body.live.sig}:${body.operations.sig}:${body.unreadable}:${JSON.stringify(body.version)}:${JSON.stringify(body.recording)}:${JSON.stringify(body.dashboard)}`;
             if (next === last) return;
             last = next;
@@ -140,6 +151,7 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
           }
         };
         const kick = (): void => {
+          scannedAt = 0;
           if (timer) clearTimeout(timer);
           timer = setTimeout(publish, 16);
         };

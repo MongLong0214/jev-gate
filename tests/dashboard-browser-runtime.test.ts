@@ -117,4 +117,18 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
   it('honors reduced motion and keyboard navigation without inventing traffic',async()=>{
     push([run('c','claude',[step('a','admission')])]);const p=await page(390,844);await p.emulateMedia({reducedMotion:'reduce'});push([run('c','claude',[step('a','admission'),step('b','allocation')])]);await p.waitForSelector('.wire-packet',{state:'attached'});expect(await p.locator('.wire-packet').evaluate(e=>getComputedStyle(e).opacity)).toBe('0');await p.locator('.circuit-node[data-feature=allocation]').focus();await p.keyboard.press('Enter');expect(await p.locator('.circuit-node[data-feature=allocation]').getAttribute('aria-pressed')).toBe('true');expect(await p.locator('#circuit-inspector h3').textContent()).toBe('Gate B');await p.close();
   });
+  it('reconnects the real event stream and preserves theme/language after a reload', async () => {
+    push([run('reconnect', 'claude', [step('a', 'admission')])]); const p = await page();
+    await p.locator('#theme').click(); await p.locator('#language').click();
+    expect(await p.locator('html').getAttribute('data-theme')).toBe('light');
+    for (const client of clients) client.end();
+    await p.waitForFunction(() => document.getElementById('connection')!.textContent === 'Reconnecting');
+    await p.waitForFunction(() => document.getElementById('connection')!.textContent === 'Live connection', undefined, { timeout: 10000 });
+    expect(await p.locator('.wire-packet').count()).toBe(0);
+    await p.reload(); await p.waitForSelector('.circuit-node');
+    expect(await p.locator('html').getAttribute('lang')).toBe('en');
+    expect(await p.locator('html').getAttribute('data-theme')).toBe('light');
+    expect(await p.locator('#latest').count()).toBe(1);
+    expect(await p.locator('.metric').count()).toBe(4); await p.close();
+  });
 });

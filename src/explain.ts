@@ -1,5 +1,5 @@
-import { closeSync, constants, fstatSync, openSync, readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readFileSync, type Stats } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 /**
  * Reads a `JEV_GATE_TRACE_DIR` and says what the gate did, in the order it did it.
@@ -25,29 +25,47 @@ export interface TraceRead {
   unreadable: number;
 }
 
-export const readTraceRecords = (dir: string): TraceRead => {
+export type TraceCache = Map<string, { signature: string; record: Rec }>;
+const signature = (stat: Stats): string => [stat.dev, stat.ino, stat.size, stat.mtimeMs, stat.ctimeMs].join(':');
+
+export const readTraceRecords = (dir: string, cache?: TraceCache): TraceRead => {
+  const directory = join(dir, '.');
   const records: Rec[] = [];
   let unreadable = 0;
   let names: string[];
   try {
     names = readdirSync(dir);
   } catch {
+    if (cache) for (const path of cache.keys()) if (dirname(path) === directory) cache.delete(path);
     return { records, unreadable };
+  }
+  if (cache) {
+    const present = new Set(names.map(name => join(dir, name)));
+    for (const path of cache.keys()) if (dirname(path) === directory && !present.has(path)) cache.delete(path);
   }
   for (const name of names.sort()) {
     if (!name.endsWith('.json') || name.startsWith('.')) continue;
+    const path = join(dir, name);
     let fd: number | undefined;
     try {
-      fd = openSync(join(dir, name), constants.O_RDONLY | constants.O_NOFOLLOW);
+      if (cache) {
+        const stat = lstatSync(path);
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 512_000) { cache.delete(path); unreadable++; continue; }
+        const previous = cache.get(path);
+        if (previous?.signature === signature(stat)) { records.push(previous.record); continue; }
+        cache.delete(path);
+      }
+      fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
       const stat = fstatSync(fd);
       if (!stat.isFile() || stat.size > 512_000) {
         unreadable++;
         continue;
       }
       const parsed: unknown = JSON.parse(readFileSync(fd, 'utf8'));
-      if (isRecord(parsed)) records.push(parsed);
+      if (isRecord(parsed)) { records.push(parsed); cache?.set(path, { signature: signature(stat), record: parsed }); }
       else unreadable++;
     } catch {
+      cache?.delete(path);
       unreadable++;
     } finally {
       if (fd !== undefined) closeSync(fd);

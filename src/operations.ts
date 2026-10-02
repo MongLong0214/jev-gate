@@ -283,7 +283,7 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
     lane = phase === 'background_dispatch' || phase === 'background_conversation' ? 'policy' : 'host';
     const closed = resultIds.has(`background:${token(r['session_id'])}:${token(r['execution_prompt_id']) ?? token(r['prompt_id'])}:${token(r['tool_use_id'])}`);
     if (phase === 'background_dispatch') { summary = '원래 작업에 실행 예약 연결 · 시작 확인 대기'; state = closed ? 'done' : 'unconfirmed'; }
-    if (phase === 'background_launch') { summary = closed ? '시작과 실제 종료 연결됨' : '워커 실행 중 · 메인에서 질문 가능'; state = closed ? 'done' : age >= 0 && age < 30_000 ? 'active' : 'unconfirmed'; details.push('시작 알림은 완료·수락 결과가 아닙니다'); }
+    if (phase === 'background_launch') { state = closed ? 'done' : age >= 0 && age < 30_000 ? 'active' : 'unconfirmed'; summary = closed ? '시작과 실제 종료 연결됨' : state === 'active' ? '워커 실행 중 · 메인에서 질문 가능' : '시작 기록 있음 · 종료 결과 미관측'; details.push('시작 알림은 완료·수락 결과가 아닙니다'); }
     if (phase === 'background_conversation') summary = `원래 작업 유지 · 종료 결과 대기 ${n(number(r['active']))}개`;
     if (phase === 'background_terminal') { summary = token(r['status']) === 'completed' ? '호스트에서 실제 종료 확인 · 계약 수락은 별도 검사' : '호스트에서 중단·실패 확인 · 성공 수락 없음'; state = token(r['status']) === 'completed' ? 'done' : 'interrupted'; if (r['orphaned'] === true) details.push('이전 작업 결과 · 현재 계획 미진행'); }
   } else if (phase === 'dispatch') {
@@ -513,9 +513,14 @@ export const buildOperations = (records: Rec[], debug: DebugRecord[], now: Date,
     .sort((a, b) => b.at.localeCompare(a.at)).slice(0, 16).reverse().map((s) => ({ at: s.at, ms: s.durationMs! }));
   const latency = { measured: durations.length, p50: percentile(.5), p95: percentile(.95), fastest: durations[0] ?? null, latest, recent };
   const newestFirst = (a: typeof all[number], b: typeof all[number]) => b.at.localeCompare(a.at) || b.id.localeCompare(a.id);
-  // Busy native tool loops must not evict the last Jev judgment from the feature view.
-  const feed = [...all.filter(s => !s.lifecycle).sort(newestFirst).slice(0, 140),
-    ...all.filter(s => s.lifecycle).sort(newestFirst).slice(0, 20)].sort(newestFirst);
+  // Tool and policy loops must not evict the most recent recorded Jev call for either host/feature.
+  const latestJev = new Map<string, typeof all[number]>();
+  for (const step of all.filter(s => s.lane === 'jev' && s.state !== 'active').sort(newestFirst)) {
+    const key = `${step.host}:${step.feature}`;
+    if (!latestJev.has(key)) latestJev.set(key, step);
+  }
+  const feed = [...new Set([...all.filter(s => !s.lifecycle).sort(newestFirst).slice(0, 120),
+    ...all.filter(s => s.lifecycle).sort(newestFirst).slice(0, 20), ...latestJev.values()])].sort(newestFirst);
   const sig = createHash('sha256').update(JSON.stringify({ runs, features, requests, latency })).digest('hex').slice(0, 24);
   return { runs, features, feed, active: runs.filter((r) => r.state === 'active').length, attention: runs.filter((r) => r.state === 'attention').length, requests, latency, sig };
 };

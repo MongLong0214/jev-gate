@@ -13,6 +13,7 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude Gate B 
   it.each([
     { scope: 'worker', selected: '__keep__', actual: 'claude-haiku-4-5', effort: undefined, allowFable: false, admission: true },
     { scope: 'worker', selected: '__keep__', actual: 'claude-haiku-4-5', effort: undefined, allowFable: false, admission: true, documentation: true },
+    { scope: 'worker', selected: 'claude-haiku-4-5-20251001', actual: 'claude-haiku-4-5-20251001', effort: undefined, allowFable: false, adhoc: true },
     { scope: 'worker', selected: '__keep__', actual: 'claude-sonnet-5-5', effort: 'high', allowFable: false },
     { scope: 'worker', selected: 'claude-opus-5', actual: 'claude-opus-5', effort: 'high', allowFable: false },
     { scope: 'worker', selected: 'claude-opus-5-5', actual: 'claude-opus-5-5', effort: 'max', allowFable: false },
@@ -51,6 +52,7 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude Gate B 
     Object.assign(env, { HOME: home, CLAUDE_CONFIG_DIR: join(home, '.claude'), JEV_GATE_CONFIG: cfg, JEV_GATE_STATE_DIR: join(temp, 'state'), JEV_GATE_MODE: 'auto', JEV_GATE_EXPERIMENT_ADMISSION: 'orchestrated', JEV_GATE_ONBOARDING: '0', JEV_DASHBOARD_NO_OPEN: '1', JEV_GATE_TRACE_DIR: trace, TYPESAFE_API_KEY: 'fake-local-jev-key', CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: '1', CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: backgroundDisabled });
     saveApiKey(env, 'fake-local-jev-key');
     if (scenario.scope === 'root') env.JEV_GATE_MODE = 'off';
+    if (scenario.adhoc) { delete env.JEV_GATE_EXPERIMENT_ADMISSION; writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', delegationDepthFloor: 999999, workerIsolation: 'none', maxParallelWorkers: 1 })); }
     if (scenario.admission) { delete env.JEV_GATE_EXPERIMENT_ADMISSION; mkdirSync(join(temp, 'src')); writeFileSync(join(temp, 'src/lookup.ts'), 'export function parseRecord() {}\nparseRecord();\n'); }
     if (scenario.documentation) writeFileSync(join(temp, 'PR.md'), 'Obsolete PR description\n');
     // Fable authorization must propagate from the native plugin option, not a fixture-only env override.
@@ -131,6 +133,14 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude Gate B 
         expect(job.ok && job.value?.current.prompt_id, diagnostic).toBe(admission.prompt_id);
         expect(job.ok && job.value?.current.active, diagnostic).toEqual({});
         expect(job.ok && job.value?.current.receipts, diagnostic).toEqual([expect.objectContaining({ verdict: 'accept' })]);
+      }
+      if (scenario.adhoc) {
+        const post = traces.find(r => r.phase === 'post' && r.verdict === 'accept');
+        expect(post, diagnostic).toBeDefined();
+        expect(post.root_fallback, diagnostic).toBe(false); expect(post.plan_complete, diagnostic).toBe(false);
+        const job = readJob(env, post.session_id);
+        expect(job.ok && job.value?.current.shape, diagnostic).toBe('direct');
+        expect(job.ok && job.value?.current.active, diagnostic).toEqual({});
       }
       if (scenario.scope === 'root') {
         const router = traces.filter(r => r.phase === 'mod_router');

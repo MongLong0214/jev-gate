@@ -7,7 +7,7 @@ import { callJev } from '../jev.js';
 import type { Env } from '../config.js';
 import type { TraceWriter } from '../trace.js';
 import type { CodexPolicyConfig } from './config.js';
-import { codexTargetAllowed, generalCodexModel, normalizeCatalog } from './catalog.js';
+import { codexTargetAllowed, generalCodexModel, normalizeCatalog, codexModelRole } from './catalog.js';
 
 export interface CodexModel {
   model: string; displayName?: string; description?: string; isDefault?: boolean; hidden?: boolean;
@@ -19,12 +19,16 @@ export interface CodexModel {
 }
 const supported = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
 export const codexCandidates = (catalog: readonly CodexModel[], allowAstra: boolean, baseline?: string): RouteCandidate[] =>
-  normalizeCatalog(catalog, true).models.filter(m => m.model === baseline || generalCodexModel(m) && codexTargetAllowed(m.model, allowAstra)).map(m => ({
-    id: m.model, description: ((m.description ?? m.displayName ?? 'Account-listed coding model; performance and price rank unknown.') +
-      (/^gpt-\d+(?:\.\d+)?-luna(?:-\d{4}-\d{2}-\d{2})?$/.test(m.model) ? ' Product fast-role preference: file discovery, lookup, listing and mechanical edits with clear checks.' : '')).slice(0, 1200),
-    efforts: supported.filter(e => m.supportedReasoningEfforts.some(v => v.reasoningEffort === e)),
-    omitEffort: true,
-  }));
+  normalizeCatalog(catalog, true).models.filter(m => m.model === baseline || generalCodexModel(m) && codexTargetAllowed(m.model, allowAstra)).map(m => {
+    const role = codexModelRole(m);
+    return {
+      id: m.model, description: ((m.description ?? m.displayName ?? 'Account-listed coding model; performance and price rank unknown.') +
+        (role ? ` Product role ${role.description}` : '')).slice(0, 1200),
+      ...(role ? { rank: role.rank } : {}),
+      efforts: supported.filter(e => m.supportedReasoningEfforts.some(v => v.reasoningEffort === e)),
+      omitEffort: true,
+    };
+  });
 
 /** Actual candidate IDs and their own effort contracts; one bounded POST, independent of optional recording. */
 export const routeCodex = async (args: {

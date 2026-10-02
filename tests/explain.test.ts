@@ -1,9 +1,9 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 
-import { EXPLAIN_CAVEATS, explainDir, explainRecords, readTraceRecords } from '../src/explain.js';
+import { EXPLAIN_CAVEATS, explainDir, explainRecords, readTraceRecords, type TraceCache } from '../src/explain.js';
 
 // What the gate did was already recorded; only reading it was missing. These drive the real reader over real record
 // shapes, so a rendered line is only ever a field that was written.
@@ -25,6 +25,20 @@ const post = (at: number, toolUseId: string, resolvedModel: string | null, extra
 const render = (records: Rec[]): string => explainRecords({ records, unreadable: 0 }).join('\n');
 
 describe('explain (2026-09-20)', () => {
+  it('reuses unchanged records while noticing replacements, deletion, malformed writes and symlink substitution', () => {
+    const dir = mkdtempSync(join(tmp, 'cached-')), path = join(dir, 'event.json'), cache: TraceCache = new Map();
+    writeFileSync(path, JSON.stringify(base('admission_intent', 1)));
+    const first = readTraceRecords(dir, cache); expect(first.records).toHaveLength(1);
+    expect(readTraceRecords(dir, cache).records[0]).toBe(first.records[0]);
+    writeFileSync(path, JSON.stringify(base('admission_result', 2)));
+    expect(readTraceRecords(dir, cache).records[0]?.phase).toBe('admission_result');
+    writeFileSync(path, '{'); expect(readTraceRecords(dir, cache)).toEqual({ records: [], unreadable: 1 }); expect(cache.size).toBe(0);
+    writeFileSync(path, JSON.stringify(base('stop', 3))); expect(readTraceRecords(dir, cache).records).toHaveLength(1);
+    rmSync(path); symlinkSync(join(tmp, 'outside.json'), path);
+    writeFileSync(join(tmp, 'outside.json'), JSON.stringify({ secret: 'outside' }));
+    expect(readTraceRecords(dir, cache)).toEqual({ records: [], unreadable: 1 }); expect(cache.size).toBe(0);
+    rmSync(path); expect(readTraceRecords(dir + '/', cache)).toEqual({ records: [], unreadable: 0 }); expect(cache.size).toBe(0);
+  });
   it('says why a turn stayed native, with the confidence that decided it', () => {
     const out = render([admission(1, { attempted: true, context_tokens: 193553, http: { status: 200, code: null, duration_ms: 555, request_bytes: 800 }, answers: { execution: { type: 'choice', choice: 'direct', confidence: 0.39 } }, decision: { shape: 'direct', decided: true, reason: 'admission_low_confidence', changed_default: false } })]);
     expect(out).toContain('gate A   direct');
