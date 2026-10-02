@@ -3,7 +3,41 @@ import { offerPairs, selectPair, applyEffort, type RouteCandidate } from '../../
 import { routingContext } from '../../mods/router/hooks/context.ts';
 import { normalizeCatalog, isAstra } from '../../src/codex/catalog.js';
 import { claudeCandidates } from '../../mods/router/hooks/candidates.ts';
+import { claudeAgentToolModel, MODEL_FACTS } from '../../src/claude-models.ts';
 import { choice } from './fake-engine.ts';
+import type { PairOffer } from '../../src/router-selection.ts';
+const claudeOffer = (baseline = 'claude-opus-5-5', effort: string | null = 'high', mutable = true) => offerPairs({ baseline: { model: baseline, effort }, candidates: claudeCandidates({ baseline, aliases: {}, allowFable: false }), model: true, effort: mutable, upgrade: .8, downgrade: .6 })!;
+const exactAnswers = (o: PairOffer, selected = 'claude-sonnet-5-5', probability = .7, risk = 'ordinary', control = 1) => Object.fromEntries(Object.entries(o.questions).map(([name, q]) => [name, q.type === 'choice' ? { type: 'choice', choice: name === 'model' ? selected : name === 'control' ? 'task_clear' : risk, confidence: name === 'model' ? probability : name === 'control' ? control : 1, probabilities: Object.fromEntries(Object.keys(q.criteria).map(k => [k, name === 'model' ? k === selected ? probability : k === '__keep__' ? 1 - probability : 0 : k === (name === 'control' ? 'task_clear' : risk) ? name === 'control' ? control : 1 : k === 'unclear' && name === 'control' ? 1 - control : 0])) } : { type: 'score', probabilities: Object.fromEntries(q.criteria.map((s, i) => [i, s.startsWith('Strong reasoning') ? 1 : 0])) }]));
+describe('documented Claude role thresholds and target effort resolution', () => {
+  it.each([[.7, true], [.59, false]] as const)('uses the existing .6 downward floor, not .8: %s', (probability, selected) => {
+    const o = claudeOffer(); const result = selectPair(o, exactAnswers(o, 'claude-sonnet-5-5', probability));
+    expect(result.patch.model).toBe(selected ? 'claude-sonnet-5-5' : undefined); expect(result.diagnostics).toMatchObject({ direction: 'downgrade', threshold: .6, probability });
+  });
+  it('requires .8 for a known upgrade, same-role version switch and unknown rank', () => {
+    for (const [baseline, target] of [['claude-sonnet-5-5', 'claude-opus-5-5'], ['claude-sonnet-5-5', 'claude-sonnet-5']]) {
+      const o = claudeOffer(baseline!); expect(selectPair(o, exactAnswers(o, target!, .7)).patch.model).toBeUndefined();
+    }
+    const o = claudeOffer(); o.candidates = o.candidates.map(({ rank: _rank, ...candidate }) => candidate); delete o.baselineCandidate;
+    const result = selectPair(o, exactAnswers(o)); expect(result.patch.model).toBeUndefined(); expect(result.diagnostics).toMatchObject({ direction: 'unknown', threshold: .8 });
+  });
+  it.each(['consequential', 'unclear'])('retains the downgrade risk guard: %s', risk => {
+    const o = claudeOffer(); expect(selectPair(o, exactAnswers(o, 'claude-sonnet-5-5', .95, risk)).reasons.model).toBe('risk_blocks_downgrade');
+    expect(selectPair(o, exactAnswers(o, 'claude-sonnet-5-5', .95, 'ordinary', .59)).patch.model).toBeUndefined();
+  });
+  it('keeps Sonnet versions separate and never adds their choice probabilities', () => {
+    const o = claudeOffer(); const a = exactAnswers(o); const q = o.questions.model!;
+    if (q.type !== 'choice') throw Error('model question absent');
+    a.model = { type: 'choice', choice: 'claude-sonnet-5-5', confidence: .46, probabilities: Object.fromEntries(Object.keys(q.criteria).map(k => [k, k === 'claude-sonnet-5-5' ? .46 : k === 'claude-sonnet-5' ? .44 : k === '__keep__' ? .1 : 0])) };
+    expect(selectPair(o, a).patch.model).toBeUndefined();
+  });
+  it('uses a target-model .8 quantile for max not on its scale, while a real max pin excludes it', () => {
+    const o = claudeOffer('claude-opus-5-5', 'max'); const a = exactAnswers(o, 'claude-sonnet-5-5', .95); const name = o.effortQuestions.get('claude-sonnet-5-5')!.name;
+    a[name] = { type: 'score', probabilities: { 0: 0, 1: .45, 2: .55 } };
+    expect(selectPair(o, a)).toMatchObject({ patch: { model: 'claude-sonnet-5-5', effort: 'high' }, diagnostics: { effort_policy: 'target_quantile' } });
+    const pinned = claudeOffer('claude-opus-5-5', 'max', false); expect(pinned).toBeNull();
+    delete a[name]; const invalid = selectPair(o, a); expect(invalid.patch).toEqual({}); expect(invalid.reasons.effort).toBe('target_effort_unresolved'); expect(invalid.diagnostics.pair_valid).toBe(false);
+  });
+});
 const candidates: RouteCandidate[] = [
   { id: 'fixture-A', description: 'coding model A', efforts: ['low', 'high'], omitEffort: false },
   { id: 'fixture-B', description: 'coding model B', efforts: ['high', 'max'], omitEffort: false },
@@ -45,6 +79,20 @@ describe('candidate-local pair selection', () => {
   });
 });
 describe('bounded context and truthful discovery', () => {
+  it.each([undefined, NaN, Infinity, -1, 136_000, 200_000])('keeps smaller-window roots out when context cannot fit: %s', contextTokens => {
+    const cs = claudeCandidates({ baseline: 'claude-opus-5-5', aliases: {}, allowFable: false, ...(contextTokens !== undefined ? { inputUpperBound: contextTokens, requestCompatible: true } : {}) });
+    expect(cs.some(c => c.id.includes('haiku'))).toBe(false);
+  });
+  it('offers Haiku from a large-window root when the complete request bound and maximum output fit, with its published role', () => {
+    const cs = claudeCandidates({ baseline: 'claude-opus-5-5', aliases: {}, allowFable: false, inputUpperBound: 22_000, requestCompatible: true });
+    expect(cs.find(c => c.id.includes('haiku'))).toMatchObject({ omitEffort: true, efforts: [], description: expect.stringContaining('Fastest model') });
+    expect(cs.find(c => c.id === 'claude-sonnet-5-5')?.description).toContain('daily coding');
+  });
+  it('encodes every documented ID and variant for the Agent enum without interpreting unknown IDs', () => {
+    for (const fact of MODEL_FACTS) for (const id of fact.ids) for (const suffix of ['', ...fact.suffixes]) expect(claudeAgentToolModel(id + suffix)).toBe(fact.family);
+    for (const family of ['opus', 'sonnet', 'haiku', 'fable']) expect(claudeAgentToolModel(family)).toBe(family);
+    expect(claudeAgentToolModel('custom-provider-model')).toBeNull(); expect(claudeAgentToolModel('claude-opus-5-5[unknown]')).toBeNull();
+  });
   it('screens whole prior text before truncating and never truncates the current task', () => {
     const s = routingContext('x'.repeat(8000), 'a'.repeat(2100), ['prior']); expect(s.task.text).toHaveLength(8000); expect(s.task.previous_reply).toHaveLength(2000); expect(s.task.previous_reply_truncated).toBe(true);
     expect(routingContext('task', 'Authorization: Bearer sk-live-secret1234567890' + 'a'.repeat(3000)).task).not.toHaveProperty('previous_reply');

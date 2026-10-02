@@ -20,6 +20,8 @@ export interface PairOffer {
   effortEnabled: boolean;
   upgrade: number;
   downgrade: number;
+  /** Comparison metadata survives pair eligibility filtering; it does not authorize execution. */
+  baselineCandidate?: RouteCandidate;
 }
 const KEEP = '__keep__';
 const ABSTAIN = '__abstain__';
@@ -53,6 +55,7 @@ export const offerPairs = (args: {
   baseline: PairOffer['baseline']; candidates: readonly RouteCandidate[]; model: boolean; effort: boolean;
   upgrade: number; downgrade: number;
 }): PairOffer | null => {
+  const baselineCandidate = args.candidates.find(c => c.id === args.baseline.model);
   const candidates = args.candidates.filter(c => c.id !== KEEP && c.id !== ABSTAIN &&
     (args.effort || pairValidFor(c, { kind: 'keep' }, args.baseline.effort)));
   const alternatives = args.model ? candidates.filter(c => c.id !== args.baseline.model) : [];
@@ -60,14 +63,14 @@ export const offerPairs = (args: {
   const questions: Record<string, Question> = {};
   const effortQuestions = new Map<string, { name: string; values: readonly string[] }>();
   if (alternatives.length) questions['model'] = {
-    type: 'choice', instructions: `${CONTEXT} Choose the actual model ID best suited to the work. Model names and catalog order do not establish capability, price or rank. Keep the current root when no alternative is justified; abstain on uncertainty.`,
-    criteria: Object.fromEntries([[KEEP, `Keep current model ${args.baseline.model}.`], [ABSTAIN, 'Insufficient evidence; preserve the native request.'],
+    type: 'choice', instructions: `${CONTEXT} Choose a model sufficient to complete the ENTIRE requested outcome, preserving its files, checks and constraints. Prefer a documented fast role for file discovery, lookup, listing or mechanical edits with clear checks; use a standard role for ordinary implementation, and deeper reasoning only when the task requires it. When execution.cache is present, consider the previous response's cached prefix and age: changing the root model can require rebuilding the entire conversation cache. Prefer keeping a large cached root for short follow-ups whose isolated work can use a fresh worker. Do not assume a smaller model lowers total cost, that cache transfers across models, or that past usage proves the current request fits. Model names and catalog order do not establish capability, price or rank. Keep the current root when no alternative is justified; abstain on uncertainty.`,
+    criteria: Object.fromEntries([[KEEP, `Keep current model ${args.baseline.model}: ${baselineCandidate?.description ?? 'native capability unknown'}.`], [ABSTAIN, 'Insufficient evidence; preserve the native request.'],
       ...alternatives.map(c => [c.id, `Use this candidate for the task: ${c.description}`])]),
   };
   if (args.effort) for (const [i, c] of offered.entries()) {
     if (c.efforts.length <= 1) continue;
     const name = `effort_${i}`;
-    questions[name] = { type: 'score', instructions: `${CONTEXT} Conditional question: IF using model ${c.id}, how much reasoning does this task require ON THAT MODEL? Do not use this answer for another model.`,
+    questions[name] = { type: 'score', instructions: `${CONTEXT} Conditional question: IF using model ${c.id}, how much reasoning does completing the entire task require ON THAT MODEL? The ordered distribution describes required effort levels, not competing model probabilities. Do not use this answer for another model.`,
       criteria: c.efforts.map(e => EFFORT_TEXT[e] ?? `The host-supported reasoning effort ${e}.`) };
     effortQuestions.set(c.id, { name, values: c.efforts });
   }
@@ -78,13 +81,14 @@ export const offerPairs = (args: {
   questions['action_risk'] = { type: 'choice', instructions: `${CONTEXT} Does the requested work itself operate a live system, transfer money or make an irreversible change? Writing/testing code about these is ordinary.`, criteria: {
     ordinary: 'The requested work itself makes no live or irreversible change.', consequential: 'The requested work itself makes a consequential live or irreversible change.', unclear: 'The supplied task and context do not establish the risk.',
   } };
-  return { ...args, candidates: offered, questions, effortQuestions, modelAsked: alternatives.length > 0, effortEnabled: args.effort };
+  return { ...args, ...(baselineCandidate ? { baselineCandidate } : {}), candidates: offered, questions, effortQuestions, modelAsked: alternatives.length > 0, effortEnabled: args.effort };
 };
 
-export const selectPair = (offer: PairOffer, raw: unknown): { patch: PairPatch; reasons: { model: string; effort: string } } => {
+export const selectPair = (offer: PairOffer, raw: unknown): { patch: PairPatch; reasons: { model: string; effort: string }; diagnostics: { direction: string; threshold: number | null; probability: number | null; effort_policy: string; pair_valid: boolean } } => {
   const answers = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
   const reasons = { model: offer.modelAsked ? 'answer_invalid' : 'not_asked', effort: offer.effortEnabled ? 'answer_invalid' : 'not_asked' };
-  const native = (): { patch: PairPatch; reasons: typeof reasons } => ({ patch: {}, reasons });
+  const diagnostics = { direction: 'unknown', threshold: null as number | null, probability: null as number | null, effort_policy: 'keep', pair_valid: true };
+  const native = (): { patch: PairPatch; reasons: typeof reasons; diagnostics: typeof diagnostics } => ({ patch: {}, reasons, diagnostics });
   const control = validateChoice(answers['control'], Object.keys(CONTROLS));
   const floor = Math.max(offer.upgrade, offer.downgrade);
   if (!control || (control.probabilities[control.choice] ?? 0) < Math.min(offer.upgrade, offer.downgrade) || ['explicit_lock', 'needs_context', 'unclear'].includes(control.choice)) {
@@ -96,9 +100,11 @@ export const selectPair = (offer: PairOffer, raw: unknown): { patch: PairPatch; 
     const answer = q && q.type === 'choice' ? validateChoice(answers['model'], Object.keys(q.criteria)) : null;
     if (answer && answer.choice !== KEEP && answer.choice !== ABSTAIN) {
       const target = offer.candidates.find(c => c.id === answer.choice);
-      const base = offer.candidates.find(c => c.id === model);
+      const base = offer.baselineCandidate ?? offer.candidates.find(c => c.id === model);
       const down = target?.rank !== undefined && base?.rank !== undefined && target.rank < base.rank;
       const threshold = target?.rank !== undefined && base?.rank !== undefined ? down ? offer.downgrade : offer.upgrade : floor;
+      diagnostics.direction = target?.rank === undefined || base?.rank === undefined ? 'unknown' : down ? 'downgrade' : target.rank > base.rank ? 'upgrade' : 'same_role';
+      diagnostics.threshold = threshold; diagnostics.probability = answer.probabilities[answer.choice] ?? null;
       const risk = validateChoice(answers['action_risk'], ['ordinary', 'consequential', 'unclear']);
       if ((answer.probabilities[answer.choice] ?? 0) < threshold || (control.probabilities[control.choice] ?? 0) < threshold) reasons.model = 'low_confidence';
       else if (down && (!risk || risk.choice !== 'ordinary' || (risk.probabilities['ordinary'] ?? 0) < offer.downgrade)) reasons.model = 'risk_blocks_downgrade';
@@ -109,8 +115,8 @@ export const selectPair = (offer: PairOffer, raw: unknown): { patch: PairPatch; 
   if (!target) { reasons.model = 'candidate_unavailable'; return native(); }
   let edit: EffortEdit = { kind: 'keep' };
   if (offer.effortEnabled && control.choice !== 'effort_lock') {
-    if (target.omitEffort && !target.efforts.length) { edit = { kind: 'omit' }; reasons.effort = 'selected'; }
-    else if (target.efforts.length === 1 && target.efforts[0] !== offer.baseline.effort) { edit = { kind: 'set', value: target.efforts[0]! }; reasons.effort = 'selected'; }
+    if (target.omitEffort && !target.efforts.length) { edit = { kind: 'omit' }; reasons.effort = 'selected'; diagnostics.effort_policy = 'omit'; }
+    else if (target.efforts.length === 1 && target.efforts[0] !== offer.baseline.effort) { edit = { kind: 'set', value: target.efforts[0]! }; reasons.effort = 'selected'; diagnostics.effort_policy = 'single'; }
     else {
       const q = offer.effortQuestions.get(model);
       const score = q ? validateScore(answers[q.name], q.values.length) : null;
@@ -119,6 +125,7 @@ export const selectPair = (offer: PairOffer, raw: unknown): { patch: PairPatch; 
         let index = -1;
         let down = false;
         if (from >= 0) {
+          diagnostics.effort_policy = 'ordered_move';
           // Existing ordered policy: cumulative lower/upper mass, not a nominal argmax.
           let mass = 0;
           for (let i = 0; i < from; i++) { mass += score.levels[i]!; if (mass >= offer.downgrade) { index = i; down = true; break; } }
@@ -127,9 +134,9 @@ export const selectPair = (offer: PairOffer, raw: unknown): { patch: PairPatch; 
             for (let i = q.values.length - 1; i > from; i--) { mass += score.levels[i]!; if (mass >= offer.upgrade) { index = i; break; } }
           }
         } else {
-          const max = Math.max(...score.levels);
-          const indices = score.levels.flatMap((v, i) => Math.abs(v - max) <= 1e-6 ? [i] : []);
-          if (indices.length === 1 && max >= floor) index = indices[0]!;
+          diagnostics.effort_policy = 'target_quantile';
+          let mass = 0;
+          for (let i = 0; i < q.values.length; i++) { mass += score.levels[i]!; if (mass + 1e-9 >= floor) { index = i; break; } }
         }
         const value = q.values[index];
         const risk = validateChoice(answers['action_risk'], ['ordinary', 'consequential', 'unclear']);
@@ -141,8 +148,8 @@ export const selectPair = (offer: PairOffer, raw: unknown): { patch: PairPatch; 
       }
     }
   } else if (control.choice === 'effort_lock') reasons.effort = 'control_lock';
-  if (!pairValidFor(target, edit, offer.baseline.effort)) { reasons.model = reasons.effort = 'pair_invalid'; return native(); }
-  return { patch: { ...(model !== offer.baseline.model ? { model } : {}), ...(edit.kind !== 'keep' ? { effortEdit: edit } : {}), ...(edit.kind === 'set' ? { effort: edit.value } : {}) }, reasons };
+  if (!pairValidFor(target, edit, offer.baseline.effort)) { diagnostics.pair_valid = false; if (reasons.effort === 'answer_invalid') reasons.effort = 'target_effort_unresolved'; reasons.model = 'pair_invalid'; return native(); }
+  return { patch: { ...(model !== offer.baseline.model ? { model } : {}), ...(edit.kind !== 'keep' ? { effortEdit: edit } : {}), ...(edit.kind === 'set' ? { effort: edit.value } : {}) }, reasons, diagnostics };
 };
 
 /** Apply omission by deleting only effort, keeping all unrelated host fields. */

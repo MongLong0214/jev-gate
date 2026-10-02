@@ -5,23 +5,29 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { readJob } from '../../src/job.js';
+import { saveApiKey } from '../../src/credentials.js';
+import { choice } from '../router/fake-engine.js';
 
 // Native CLI, native background completion and a real local Bash check. The only model is a local fixture HTTP server.
 describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('responsive installed Claude worker', () => {
-  it.each(['complete', 'cancel'])('answers a second user prompt before the delayed worker finishes, then settles the original result: %s', async scenario => {
+  it.each([{ scenario: 'complete', functions: false }, { scenario: 'cancel', functions: false }, { scenario: 'complete', functions: true }, { scenario: 'cancel', functions: true }])('answers a second prompt during a delayed worker and settles its original result: $scenario / native policies $functions', async ({ scenario, functions }) => {
     const temp = mkdtempSync('/tmp/jev-background-runtime-');
     const home = join(temp, 'home'); const plugin = join(temp, 'plugin'); mkdirSync(home); mkdirSync(plugin); mkdirSync(join(home, '.claude'));
     const root = join(__dirname, '../..');
     const pack = spawnSync(process.execPath, [join(root, 'scripts/pack.mjs'), temp], { encoding: 'utf8' }); expect(pack.status, pack.stderr).toBe(0);
     const version = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;
     expect(spawnSync('unzip', ['-q', join(temp, `jev-gate-${version}.zip`), '-d', plugin]).status).toBe(0);
+    const manifestPath = join(plugin, '.claude-plugin/plugin.json'); const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')); manifest.userConfig.routerEnabled.default = false; writeFileSync(manifestPath, JSON.stringify(manifest));
     writeFileSync(join(home, '.claude/settings.json'), JSON.stringify({ env: { CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '0' } }));
-    const cfg = join(temp, 'config.json'); writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'native', admittedShape: 'single', workerIsolation: 'none', maxParallelWorkers: 1, guardAllowTools: [] }));
+    const mode = functions ? 'auto' : 'native';
+    const cfg = join(temp, 'config.json'); writeFileSync(cfg, JSON.stringify({ version: 5, mode, admittedShape: 'single', workerIsolation: 'none', maxParallelWorkers: 1, guardAllowTools: [] }));
     const env: NodeJS.ProcessEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(CLAUDE_|ANTHROPIC_|TYPESAFE_|JEV_|XDG_)/.test(name)));
-    Object.assign(env, { HOME: home, CLAUDE_CONFIG_DIR: join(home, '.claude'), JEV_GATE_CONFIG: cfg, JEV_GATE_STATE_DIR: join(temp, 'state'), JEV_GATE_MODE: 'native', JEV_GATE_EXPERIMENT_ADMISSION: 'orchestrated', JEV_GATE_ONBOARDING: '0', JEV_DASHBOARD_NO_OPEN: '1', CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: '0' });
+    Object.assign(env, { HOME: home, CLAUDE_CONFIG_DIR: join(home, '.claude'), JEV_GATE_CONFIG: cfg, JEV_GATE_STATE_DIR: join(temp, 'state'), JEV_GATE_MODE: mode, JEV_GATE_EXPERIMENT_ADMISSION: 'orchestrated', JEV_GATE_ONBOARDING: '0', JEV_DASHBOARD_NO_OPEN: '1', CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: functions ? '1' : '0' });
+    if (functions) saveApiKey(env, 'fake-local-background-jev-key');
     const command = "printf 'worker evidence\\n'";
     const report = JSON.stringify({ status: 'done', summary: 'original work verified', changed_files: [], interfaces: [], checks: [{ check_id: command, result: 'pass', note: 'observed command' }], blockers: [] });
-    let mainCalls = 0; let workerCalls = 0; let held: { res: ServerResponse; model: string } | undefined;
+    let mainCalls = 0; let workerCalls = 0; let allocationCalls = 0; let held: { res: ServerResponse; model: string } | undefined;
+    const pairs: Array<{ model: unknown; effort: unknown }> = [];
     let output = ''; let session = ''; let originalPrompt: string | null = null; let questionSeenWhileRunning = false;
     let child: ReturnType<typeof spawn> | undefined;
     const answer = (res: ServerResponse, model: string, text: string, tool?: { name: string; id: string; input: unknown }) => {
@@ -38,11 +44,18 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('responsive installed Cla
       const chunks: Buffer[] = []; for await (const chunk of req) chunks.push(Buffer.from(chunk)); let raw = Buffer.concat(chunks);
       if (req.headers['content-encoding'] === 'gzip') raw = gunzipSync(raw);
       let body: Record<string, unknown>; try { body = JSON.parse(raw.toString()); } catch { res.end('{}'); return; }
+      if (req.url === '/jev') {
+        const questions = body['questions'] as Record<string, { type: string; criteria: string[] | Record<string, string> }>;
+        if (questions['model']) allocationCalls++;
+        const answers = Object.fromEntries(Object.entries(questions).map(([name, q]) => [name, q.type === 'noul' ? { type: 'noul', noul: .1 } : q.type === 'choice' ? choice(Object.keys(q.criteria), [name === 'model' ? '__keep__' : name === 'control' ? 'task_clear' : name === 'action_risk' ? 'ordinary' : Object.keys(q.criteria)[0]!, .99]) : { type: 'score', probabilities: Object.fromEntries((q.criteria as string[]).map((s, i) => [i, s.startsWith('Strong reasoning') ? 1 : 0])) }]));
+        res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ model: body['model'], answers })); return;
+      }
       if (req.url?.includes('count_tokens')) { res.end('{"input_tokens":10}'); return; }
       if (!req.url?.includes('/v1/messages')) { res.end('{}'); return; }
       const model = String(body['model']);
       const worker = JSON.stringify((body['messages'] as unknown[])?.[0]).includes('BACKGROUND_WORKER_FIXTURE');
       if (worker) {
+        pairs.push({ model, effort: (body['output_config'] as Record<string, unknown>)?.['effort'] });
         if (++workerCalls === 1) held = { res, model };
         else answer(res, model, report);
         return;
@@ -64,6 +77,7 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('responsive installed Cla
       } else { answer(res, model, scenario === 'cancel' ? 'ORIGINAL_WORKER_CANCELLED' : 'ORIGINAL_RESULT_ACCEPTED'); setTimeout(() => child!.stdin!.end(), 100); }
     });
     await new Promise<void>(r => api.listen(0, '127.0.0.1', r));
+    const client = join(plugin, 'dist/jev.js'); writeFileSync(client, readFileSync(client, 'utf8').replace('https://api.typesafe.ai/v1/systemone', `http://127.0.0.1:${(api.address() as { port: number }).port}/jev`));
     try {
       const result = await new Promise<number | null>((resolve, reject) => {
         child = spawn('claude', ['--plugin-dir', plugin, '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--model', 'claude-sonnet-5', '--allowedTools', 'Agent', 'Bash', 'TaskStop'], { env: { ...env, ANTHROPIC_API_KEY: 'fake-local-model-key', ANTHROPIC_BASE_URL: `http://127.0.0.1:${(api.address() as { port: number }).port}` }, cwd: temp });
@@ -73,7 +87,8 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('responsive installed Cla
         const timer = setTimeout(() => child!.kill('SIGKILL'), 30_000);
         child.on('error', e => { clearTimeout(timer); reject(e); }); child.on('close', code => { clearTimeout(timer); resolve(code); });
       });
-      expect(result, output.slice(-8000)).toBe(0); expect(questionSeenWhileRunning, output.slice(-8000)).toBe(true);
+      expect(result, output.slice(-8000)).toBe(0); expect(questionSeenWhileRunning, JSON.stringify({ output: output.slice(0, 16000) })).toBe(true);
+      if (functions) { expect(allocationCalls).toBe(1); expect(pairs.length).toBeGreaterThan(0); for (const pair of pairs) expect(pair).toEqual({ model: 'claude-sonnet-5-5', effort: 'high' }); }
       const state = readJob(env, session); expect(state.ok && state.value).toBeTruthy(); if (!state.ok || !state.value) throw new Error('state absent');
       expect(state.value.current.prompt_id).toBe(originalPrompt); expect(state.value.current.receipts).toHaveLength(1);
       if (scenario === 'cancel') {

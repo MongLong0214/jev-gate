@@ -8,8 +8,8 @@ import type { Answers, Baseline, PolicyOptions, RoutedEffort, RoutingPatch } fro
 import { choosePatch, EFFORT_LEVEL_TARGETS, offerableEfforts, pairValid } from './policy.ts';
 import { looksSecret } from './secret.ts';
 import { offerPairs, selectPair, pairReceipt, applyEffort, type PairOffer, type EffortEdit } from './selection.ts';
-import { routingContext } from './context.ts';
-import { claudeCandidates, claudeModelAllowed, resolveClaudeModel, type ModelAliases } from './candidates.ts';
+import { routingContext, type RoutingCache } from './context.ts';
+import { claudeCandidates, claudeContextFits, claudeModelAllowed, resolveClaudeModel, type ModelAliases } from './candidates.ts';
 import { claudeTargetAllowed } from './models.ts';
 
 /**
@@ -36,6 +36,8 @@ export interface RouterEngine extends Transport {
   dispatchPair?: (tool: string, model: string, allowFable: boolean, agent: string, eligible?: boolean, unstartedToken?: string) => Promise<{ model?: string; effort_edit?: EffortEdit; deny?: string } | null>;
   modelAliases?: () => Promise<ModelAliases>;
   currentEffort?: () => Promise<SymbolicEffort | number | undefined>;
+  /** Optional current complete-request bound. A /context estimate is never this evidence. */
+  currentContextBound?: (turnId: string, index: number) => Promise<{ turnId: string; index: number; inputUpperBound: number; compatible: boolean } | undefined>;
   availableModels: () => Promise<readonly string[] | undefined>;
   /** The host's release (`SessionVersion.base`), or undefined when it is not spelled as one. */
   hostBase: () => Promise<string | undefined>;
@@ -91,6 +93,8 @@ type NextLike<E, R> = ((e: E) => Promise<R>) & { readonly signal: AbortSignal };
  * carry no model, Plan is `inherit`, Explore is `inherit` capped at opus outside haiku..opus.
  */
 export const VERIFIED_HOST = '2.1.282';
+/** Identifies this loaded hook source, independently of a manifest updated on disk. */
+export const ROUTER_HOOK_VERSION = '0.8.3';
 
 /**
  * Later 2.1 releases are accepted too. Pinned to one release, spawn routing went native after every host update: the
@@ -246,6 +250,8 @@ type KeyState = { key: string } | { reason: 'key_missing' | 'key_invalid' };
 
 interface TurnRouting {
   baseline: Baseline;
+  incomingEffort: TurnStepEvent['effort'];
+  effortSource: 'event' | 'host_effective' | 'unknown';
   controller: AbortController;
   pending: Promise<void> | null;
   deadline: number;
@@ -327,9 +333,10 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
   };
   /** Last completed root answer, never an intermediate tool-loop reply. */
   let lastReply: string | null = null;
+  let currentRootTurn: string | null = null;
   const recentRequests: string[] = [];
   /** The last root request that got a response: when, on which model, and at which effort. */
-  let lastRoot: { at: number; model: string; effort: SymbolicEffort | null } | null = null;
+  let lastRoot: { at: number; model: string; effort: SymbolicEffort | null; cache: RoutingCache } | null = null;
   /** The effort the last root turn arrived with, before any patch; null before the session's first turn. */
   let lastIncoming: { effort: TurnStepEvent['effort'] } | null = null;
   const turnTexts = bounded<string, string>(MAX_TURNS);
@@ -465,36 +472,50 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
 
   const rootAssessment = async (engine: RouterEngine, turnId: string, t: TurnRouting, text: string, context: string | null, live: AbortSignal): Promise<void> => {
     try {
-      if (!config.routeMainModel && (!isSymbolicEffort(t.baseline.effort) || !factsOf(t.baseline.model)?.unconditionalEffort.length)) { t.stopped = true; log(engine, { event: 'root', turn: turnId, skipped: 'nothing_to_change' }); return; }
+      if (!config.routeMainModel && t.incomingEffort !== undefined && (!isSymbolicEffort(t.incomingEffort) || !factsOf(t.baseline.model)?.unconditionalEffort.length)) { t.stopped = true; log(engine, { event: 'root', turn: turnId, skipped: 'nothing_to_change' }); return; }
       const key = await keyFor(engine, live); if (key === ABORTED) throw ENDED;
       if (!('key' in key)) { t.stopped = true; log(engine, { event: 'root', turn: turnId, skipped: key.reason }); return; }
       const pins = await within(pinsOf(engine, 'root', live), live);
       const aliases = await within(aliasesOf(engine), live);
       const available = config.routeMainModel && !pins.mainModel ? await within(engine.availableModels().catch(() => []), live) : undefined;
       const hostBase = await versionFor(engine, live);
+      if (t.incomingEffort === undefined && engine.currentEffort) {
+        const effective = await within(engine.currentEffort().catch(() => undefined), live);
+        if (effective !== undefined) { t.baseline.effort = effective; t.effortSource = 'host_effective'; }
+      }
+      const explicitEffort = isSymbolicEffort(t.baseline.effort) || t.incomingEffort === undefined && t.baseline.effort === undefined && hostSupported(hostBase);
+      const baselineFacts = { hook_version: ROUTER_HOOK_VERSION, effort_field_present: t.incomingEffort !== undefined, effective_effort: t.baseline.effort ?? null, effort_source: t.effortSource, host_version: hostBase ?? null,
+        baseline_source: 'turn.step', model_pin: pins.mainModel, effort_pin: pins.mainEffort, pin_source: 'host_effective_environment', pin_origin: 'unknown', model_enabled: config.routeMainModel, effort_enabled: config.routeMainEffort };
+      const effortNotAsked = pins.mainEffort ? 'effort_pinned' : !config.routeMainEffort ? 'routing_off' : typeof t.baseline.effort === 'number' ? 'numeric_effort' : !explicitEffort ? 'effort_unresolved' : 'no_alternative';
+      if (!config.routeMainModel && (!explicitEffort || !factsOf(t.baseline.model)?.unconditionalEffort.length)) { t.stopped = true; log(engine, { event: 'root', turn: turnId, skipped: 'nothing_to_change', ...baselineFacts, effort_not_asked: effortNotAsked }); return; }
+      const bound = await within(engine.currentContextBound?.(turnId, 0).catch(() => undefined) ?? Promise.resolve(undefined), live);
+      const currentBound = bound?.turnId === turnId && bound.index === 0 ? bound : undefined;
+      const excluded: Record<string, number> = {};
       const candidates = claudeCandidates({ baseline: t.baseline.model, aliases, allowFable: config.allowFable,
+        ...(currentBound ? { inputUpperBound: currentBound.inputUpperBound, requestCompatible: currentBound.compatible } : {}), excluded,
         ...(available !== undefined ? { available } : {}), ...(hostBase ? { hostBase } : {}), preferences: Object.values(config.tiers), ...(rootSwitches ? { switches: rootSwitches } : {}) });
       const offer = offerPairs({ baseline: { model: resolveClaudeModel(t.baseline.model, aliases) ?? t.baseline.model, effort: t.baseline.effort ?? null }, candidates,
-        model: config.routeMainModel && !pins.mainModel, effort: config.routeMainEffort && !pins.mainEffort && !t.effortChanged && isSymbolicEffort(t.baseline.effort),
+        model: config.routeMainModel && !pins.mainModel, effort: config.routeMainEffort && !pins.mainEffort && !t.effortChanged && explicitEffort,
         upgrade: config.minUpgradeConfidence, downgrade: config.minDowngradeConfidence });
-      if (!offer) { t.stopped = true; log(engine, { event: 'root', scope: 'root', turn: turnId, skipped: !resolveClaudeModel(t.baseline.model, aliases) ? 'capability_unknown' : 'no_alternative', ...(t.effortChanged ? { effort_kept: 'incoming_changed' } : {}), model_withheld: 'no_applicable_target', model_asked: false, effort_asked: false }); return; }
+      if (!offer) { t.stopped = true; log(engine, { event: 'root', scope: 'root', turn: turnId, skipped: !resolveClaudeModel(t.baseline.model, aliases) ? 'capability_unknown' : 'no_alternative', ...(t.effortChanged ? { effort_kept: 'incoming_changed' } : {}), ...baselineFacts, candidates: candidates.slice(0, 16).map(c => c.id), excluded, model_withheld: 'no_applicable_target', model_asked: false, effort_asked: false, effort_not_asked: effortNotAsked }); return; }
       void diagnose(engine, live);
       const started = engine.now();
-      const result = await client.assess(engine, key.key, routingContext(text, context ?? undefined, recentRequests.slice(0, -1)), offer.questions, live,
+      const cache = lastRoot ? { ...lastRoot.cache, ageMs: Math.max(0, engine.now() - lastRoot.at) } : undefined;
+      const result = await client.assess(engine, key.key, routingContext(text, context ?? undefined, recentRequests.slice(0, -1), cache), offer.questions, live,
         usage => log(engine, { event: 'late', scope: 'root', turn: turnId, usage: loggable(usage) }), () => log(engine, { event: 'request', scope: 'root', turn: turnId, sent: true }));
-      const decision = result.ok ? selectPair(offer, result.answers) : { patch: {}, reasons: { model: 'not_asked', effort: 'not_asked' } };
+      const decision = result.ok ? selectPair(offer, result.answers) : { patch: {}, reasons: { model: 'not_asked', effort: 'not_asked' }, diagnostics: null };
       const cached = cachePatch(t.baseline, t.warmEffort, decision.patch as RoutingPatch);
       if (!live.aborted && !t.stopped) t.patch = cached.patch;
       if (!Object.keys(t.patch).length) t.stopped = true;
       log(engine, { event: 'root', scope: 'root', boundary: 'host_hook', turn: turnId, context_chars: context?.length ?? 0, from: { model: t.baseline.model, effort: t.baseline.effort ?? null },
         assessment: result.ok ? 'ok' : result.reason, sent: result.ok || result.sent, duration_ms: Math.max(0, engine.now() - started), usage: loggable(result.usage),
         discovered_count: MODEL_FACTS.length, eligible_count: candidates.length, offered_count: offer.candidates.length, catalog_complete: false,
-        model_asked: offer.modelAsked, effort_asked: offer.effortQuestions.size > 0, allow_fable: config.allowFable, model_pin: pins.mainModel, effort_pin: pins.mainEffort,
-        model_enabled: config.routeMainModel, effort_enabled: config.routeMainEffort,
+        model_asked: offer.modelAsked, effort_asked: offer.effortQuestions.size > 0, allow_fable: config.allowFable,
+        ...baselineFacts,
         model_not_asked: offer.modelAsked ? null : pins.mainModel ? 'model_pinned' : !config.routeMainModel ? 'routing_off' : 'no_alternative',
-        effort_not_asked: offer.effortQuestions.size ? null : pins.mainEffort ? 'effort_pinned' : !config.routeMainEffort ? 'routing_off' : 'no_alternative',
-        excluded: { fable_disabled_by_config: config.allowFable ? 0 : MODEL_FACTS.filter(f => f.family === 'fable' && !f.ids.includes(offer.baseline.model)).length },
-        patch: t.patch, ...(cached.held ? { held_for_cache: cached.held } : {}), reasons: decision.reasons, answers: result.ok ? pairReceipt(offer, result.answers) : null });
+        effort_not_asked: offer.effortQuestions.size ? null : effortNotAsked,
+        excluded: { ...excluded, effort_incompatible: candidates.length - offer.candidates.length }, candidates: offer.candidates.slice(0, 16).map(c => c.id), host_version: hostBase ?? null,
+        patch: t.patch, ...(cached.held ? { held_for_cache: cached.held } : {}), reasons: decision.reasons, selection: decision.diagnostics, answers: result.ok ? pairReceipt(offer, result.answers) : null });
     } catch (error) { t.stopped = true; log(engine, { event: 'root', turn: turnId, skipped: error === ENDED ? 'turn_retired' : 'internal_error' }); }
   };
 
@@ -505,7 +526,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
   const applyStored = async (engine: RouterEngine, t: TurnRouting, e: TurnStepEvent, live: AbortSignal): Promise<RoutingPatch | null> => {
     if (t.stopped) return null;
     const effectiveEffort = t.patch.effortEdit?.kind === 'omit' ? undefined : t.patch.effort ?? t.baseline.effort;
-    if (e.model !== t.baseline.model && e.model !== t.patch.model || e.effort !== t.baseline.effort && e.effort !== effectiveEffort) {
+    if (e.model !== t.baseline.model && e.model !== t.patch.model || e.effort !== t.incomingEffort && e.effort !== t.baseline.effort && e.effort !== effectiveEffort) {
       t.stopped = true; log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: 'incoming_divergence' }); return null;
     }
     const available = await within(engine.availableModels().catch(() => []), live);
@@ -517,6 +538,10 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     if (model && (!claudeTargetAllowed(model, config.allowFable) || !claudeModelAllowed(model, available, aliases))) { model = undefined; t.modelStopped = true; log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: 'model_not_allowed' }); }
     // An effort selected conditionally for B can never be reused on A after B was suppressed.
     if (t.patch.model && !model) return null;
+    if (model && factsOf(model)!.contextTokens < (factsOf(t.baseline.model)?.contextTokens ?? 0)) {
+      const bound = await within(engine.currentContextBound?.(e.turnId, e.index).catch(() => undefined) ?? Promise.resolve(undefined), live);
+      if (!bound?.compatible || bound.turnId !== e.turnId || bound.index !== e.index || !claudeContextFits(t.baseline.model, model, bound.inputUpperBound)) { t.stopped = true; log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: 'context_unverified' }); return null; }
+    }
     const edit = !t.effortStopped ? t.patch.effortEdit : undefined;
     const effort = edit?.kind === 'set' && isSymbolicEffort(edit.value) ? edit.value : !t.effortStopped ? t.patch.effort : undefined;
     if (model && edit?.kind !== 'omit' && !pairValid(model, effort ?? e.effort)) { log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: 'pair_invalid' }); return null; }
@@ -558,6 +583,8 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     if (e.index !== 0) return null;
     const t: TurnRouting = {
       baseline: { model: e.model, ...(e.effort !== undefined ? { effort: e.effort } : {}) },
+      incomingEffort: e.effort,
+      effortSource: e.effort !== undefined ? 'event' : 'unknown',
       controller: new AbortController(),
       pending: null,
       deadline,
@@ -566,7 +593,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       modelStopped: false,
       effortStopped: false,
       warmEffort: lastRoot && lastRoot.model === e.model && engine.now() - lastRoot.at < WARM_MS ? lastRoot.effort : null,
-      effortChanged: lastIncoming !== null && lastIncoming.effort !== e.effort && lastRoot?.effort !== e.effort,
+      effortChanged: lastIncoming !== null && lastIncoming.effort !== e.effort && (lastRoot?.effort ?? undefined) !== e.effort,
     };
     lastIncoming = { effort: e.effort };
     // sessionEnd retires every turn, which aborts its controller: no session listener is needed here.
@@ -766,12 +793,16 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
         usage: result ? loggable(countsOf(result.usage)) : null,
       });
     }
-    if (e.agentId === undefined && !own.aborted) {
+    if (e.agentId === undefined && !own.aborted && currentRootTurn === e.turnId) {
       const sent = patch?.effortEdit?.kind === 'omit' ? undefined : patch?.effort ?? e.effort;
       const asked = patch?.model ?? e.model;
       const seen = typeof result?.usage?.model === 'string' ? result.usage.model : null;
       // Only a response the asked model gave wrote the cache a later turn on that model reads.
-      if (seen !== null && answeredBy(asked, seen)) lastRoot = { at: engine.now(), model: asked, effort: isSymbolicEffort(sent) ? sent : null };
+      if (seen !== null && answeredBy(asked, seen)) {
+        const counts = countsOf(result?.usage);
+        lastRoot = { at: engine.now(), model: asked, effort: isSymbolicEffort(sent) ? sent : null,
+          cache: { model: asked, ageMs: 0, input: counts?.['input_tokens'] ?? null, read: counts?.['cache_read_input_tokens'] ?? null, write: counts?.['cache_creation_input_tokens'] ?? null } };
+      }
     }
     return result;
   }
@@ -969,12 +1000,15 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     spawnEnabled,
     stepEnabled,
     turnStart: <E extends TurnStartEvent>(e: E): void => {
-      if (rootEnabled) { turnTexts.put(e.turnId, e.text); recentRequests.push(e.text); if (recentRequests.length > 4) recentRequests.shift(); }
+      if (rootEnabled) { if (currentRootTurn !== null && currentRootTurn !== e.turnId) retire(currentRootTurn); currentRootTurn = e.turnId; turnTexts.put(e.turnId, e.text); recentRequests.push(e.text); if (recentRequests.length > 4) recentRequests.shift(); }
     },
     turnStep,
     /** A child's completion carries its agentId and never retires the root's turn. */
     turnComplete: <E extends TurnEndEvent>(e: E): void => {
-      if (e.agentId === undefined) { lastReply = e.reason === 'answer' && e.answer?.trim() && !looksSecret(e.answer) ? e.answer : null; retire(e.turnId); }
+      if (e.agentId === undefined) {
+        if (currentRootTurn === e.turnId) { lastReply = e.reason === 'answer' && e.answer?.trim() && !looksSecret(e.answer) ? e.answer : null; currentRootTurn = null; }
+        retire(e.turnId);
+      }
       else {
         const c = children.get(e.agentId);
         if (c) c.stopped = true;
@@ -995,7 +1029,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       children.clear();
       nativeChildren.clear();
       childHistoryFull = false;
-      lastReply = null; recentRequests.length = 0;
+      lastReply = null; currentRootTurn = null; recentRequests.length = 0;
       lastRoot = null;
       lastIncoming = null;
       keyWait = null;

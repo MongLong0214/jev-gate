@@ -39,6 +39,45 @@ const fixture = async (external: boolean, model: string, effort: string, wait?: 
   return {rpc,policy,forward,emitted,fetchImpl,sent,request,start};
 };
 describe('original Codex root execution boundaries', () => {
+  it.each([false, true].flatMap(external => ['default', 'echo'].map(mode => [external, mode] as const)))('reassesses three turns in one native root external=%s baseline=%s', async (external, mode) => {
+    const f = await fixture(external, 'fixture-B', 'max'); let phase = 0;
+    f.fetchImpl.mockImplementation(async (_url, init) => {
+      const req = JSON.parse(String(init?.body)); f.sent.push(req);
+      const target = phase < 2 ? 'fixture-B' : 'fixture-A';
+      const selected = target in req.questions.model.criteria ? target : '__keep__';
+      return new Response(JSON.stringify({ model: req.model, answers: answers(req, selected, phase < 2 ? 'max' : 'high') }), { headers: { 'content-type': 'application/json' } });
+    });
+    for (phase = 0; phase < 3; phase++) {
+      const baseline = phase === 0 || mode === 'default' ? 'fixture-A' : 'fixture-B';
+      const effort = phase === 0 || mode === 'default' ? 'high' : 'max';
+      if (external) {
+        await f.policy.externalHook({ hook_event_name: 'UserPromptSubmit', session_id: 'root', turn_id: `turn-${phase}`, prompt: 'Continue the clear fixture.' });
+        for (let step = 0; step < 2; step++) {
+          const routed = await f.policy.externalRequest('root', { ...f.request, model: baseline, reasoning: { ...f.request.reasoning, effort } }, new AbortController().signal);
+          expect(routed.request.model).toBe(phase < 2 ? 'fixture-B' : 'fixture-A');
+          expect(routed.request.reasoning).toMatchObject({ effort: phase < 2 ? 'max' : 'high' });
+          const binding = f.policy.observeRequest('root', routed.request);
+          f.policy.observeUsage('root', { status: 'completed', model: routed.request.model, output: [] }, binding);
+        }
+      } else {
+        await f.policy.client({ ...f.start, id: phase + 1, params: { ...f.start.params, clientUserMessageId: `turn-${phase}`, model: baseline, effort, collaborationMode: { ...f.start.params.collaborationMode, settings: { ...f.start.params.collaborationMode.settings, model: baseline, reasoning_effort: effort } } } });
+        expect(f.forward.mock.calls[phase]?.[0]).toMatchObject({ params: { threadId: 'root', model: phase < 2 ? 'fixture-B' : 'fixture-A', effort: phase < 2 ? 'max' : 'high' } });
+      }
+      expect(f.sent).toHaveLength(phase + 1); expect(f.policy.sessions.size).toBe(1);
+    }
+    f.rpc.close();
+  });
+  it('passes real prior response cache counts into the next decision without locking its model', async () => {
+    const f = await fixture(true, 'fixture-B', 'max');
+    const first = await f.policy.externalRequest('root', f.request, new AbortController().signal);
+    const binding = f.policy.observeRequest('root', first.request);
+    f.policy.observeUsage('root', { status: 'completed', model: 'fixture-B', output: [], usage: { input_tokens: 42_000, input_tokens_details: { cached_tokens: 40_000, cache_write_tokens: 1000 } } }, binding);
+    await f.policy.externalHook({ hook_event_name: 'UserPromptSubmit', session_id: 'root', turn_id: 'new-prompt', prompt: 'Diagnose and fix the next failure.' });
+    const second = await f.policy.externalRequest('root', f.request, new AbortController().signal);
+    expect(f.sent).toHaveLength(2);
+    expect(f.sent[1]?.['state']).toMatchObject({ execution: { cache: { source: 'provider_response_usage', previous_model: 'fixture-B', input_tokens: 42_000, cache_read_tokens: 40_000, cache_write_tokens: 1000, cross_model_reuse_proven: false, current_fit_proven: false } } });
+    expect(second.request.model).toBe('fixture-B'); expect(f.policy.sessions.size).toBe(1); f.rpc.close();
+  });
   it.each([false,true].flatMap(external => [['__keep__','high'],['__keep__','low'],['fixture-B','high'],['fixture-B','max']].map(([model,effort])=>[external,model!,effort!] as const)))('same root keep/effort/model/both external=%s %s/%s',async(external,model,effort)=>{
     const f = await fixture(external,model,effort);
     const wantedModel = model === '__keep__' ? 'fixture-A' : model;

@@ -69,6 +69,7 @@ export const register: Register = (on, options) => {
       if (await $.env.get('CLAUDE_CODE_DISABLE_BACKGROUND_TASKS') === undefined) await $.env.set('CLAUDE_CODE_DISABLE_BACKGROUND_TASKS', '0');
       const key = router.ok && router.config.explicitKey.kind === 'valid' ? router.config.explicitKey.value : undefined;
       if (key && !await $.env.get('TYPESAFE_API_KEY')) await $.env.set('TYPESAFE_API_KEY', key);
+      await $.env.set('CLAUDE_PLUGIN_OPTION_ROUTERALLOWFABLE', String(router.ok && router.config.allowFable));
     } catch { /* Initialization cannot interrupt the host. Command hooks also resolve the shared key. */ }
     for (const [mod, field] of invalid) quietly(() => $.ui.log(`jev-${mod} ${JSON.stringify({ event: mod, disabled: 'invalid_option', field })}`, { to: 'debug' }));
     return next(e);

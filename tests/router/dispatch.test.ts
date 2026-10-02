@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -6,6 +7,15 @@ import { dispatchPolicy } from '../../src/dispatch-policy.js';
 import { newGeneration, readJob, reserve, updateJob } from '../../src/job.js';
 import { OWNED_AGENTS, type Reservation } from '../../src/types.js';
 describe('shared automatic child eligibility and ownership', () => {
+  it('runs the packaged policy entrypoint through a symlink and keeps the exact allocated pair', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'jev-dispatch-entry-')); const env = { ...process.env, JEV_GATE_STATE_DIR: dir };
+    try {
+      updateJob(env, 'root', () => { const state = newGeneration(null, 'root', 'prompt', 'orchestrated').state; const current = reserve(state.current, 'tool', { role: 'worker', taskId: null, contractHash: null, rev: null, tier: 'standard', attempt: 1, deliverables: [] }); return { ...state, current: { ...current, active: { tool: { ...current.active.tool!, allocation_pair: { model: 'claude-opus-5', effort_edit: { kind: 'set', value: 'high' } } } } } }; });
+      const link = join(dir, 'installed plugin'); symlinkSync(join(__dirname, '../..'), link);
+      const result = spawnSync(process.execPath, [join(link, 'dist/dispatch-policy.js'), 'root', 'tool', 'opus', 'false', 'jev-gate:worker', 'true', ''], { env, encoding: 'utf8' });
+      expect(result.status, result.stderr).toBe(0); expect(JSON.parse(result.stdout)).toEqual({ model: 'claude-opus-5', effort_edit: { kind: 'set', value: 'high' } });
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
   it.each(Object.keys(OWNED_AGENTS))('does not inherit a restricted model in %s',agent=>{
     const dir=mkdtempSync(join(tmpdir(),'jev-dispatch-')); const env={JEV_GATE_STATE_DIR:dir};
     try {

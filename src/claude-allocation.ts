@@ -1,7 +1,7 @@
 import type { Env } from './config.js';
 import type { DispatchAllocation } from './dispatch-allocation.js';
 import { claudeCandidates, resolveClaudeModel } from './claude-candidates.js';
-import { claudeTargetAllowed } from './claude-models.js';
+import { claudeAgentToolModel, claudeTargetAllowed } from './claude-models.js';
 /** Command hooks use launch environment facts. Native Function Hooks recheck effective settings at dispatch. */
 export const claudeAllocation = (env: Env): DispatchAllocation => {
   const allowFable = env['CLAUDE_PLUGIN_OPTION_ROUTERALLOWFABLE'] === 'true';
@@ -12,6 +12,7 @@ export const claudeAllocation = (env: Env): DispatchAllocation => {
     ...(env['ANTHROPIC_DEFAULT_FABLE_MODEL'] || api ? { fable: env['ANTHROPIC_DEFAULT_FABLE_MODEL'] || 'claude-fable-5-1' } : {}) };
   return {
     canonical: model => resolveClaudeModel(model, aliases),
+    toolModel: claudeAgentToolModel,
     candidates: baseline => claudeCandidates({ baseline, aliases, allowFable, scope: 'spawn' }).filter(c => claudeTargetAllowed(c.id, allowFable)),
     allowed: model => { const id = resolveClaudeModel(model, aliases); return id !== null && claudeTargetAllowed(id, allowFable); },
   };

@@ -35,6 +35,7 @@ interface FakeAnswers {
   externalTools?: number;
   /** Gate A's tool-call read-off; 4 prices an admitted job at the depths these tests run. */
   toolCalls?: number;
+  boundedToolWork?: number;
   /** 0.95 reads as separate outcomes, so `admittedShape: auto` runs the hierarchy these tests were written for. */
   parallelOutcomes?: number;
   size?: number;
@@ -63,6 +64,7 @@ const fakeJev = (opts: FakeAnswers = {}): ReturnType<typeof vi.fn> =>
     if (questions.includes('execution')) answers['execution'] = choice(ADMISSION_ANSWERS, opts.execution ?? 'orchestrated');
     // Gate A is atomic by default since 2026-09-19, so the double answers its read-offs the way an admitted job reads.
     if (questions.includes('forbids_delegation')) {
+      if (opts.boundedToolWork !== undefined) answers['bounded_tool_work'] = { type: 'noul', noul: opts.boundedToolWork };
       answers['forbids_delegation'] = { type: 'noul', noul: opts.forbidsDelegation ?? 0.05 };
       answers['external_tools'] = { type: 'noul', noul: opts.externalTools ?? 0.05 };
       answers['plan_only'] = { type: 'noul', noul: 0.05 };
@@ -586,7 +588,7 @@ describe('Gate A admission', () => {
       return await (reply as unknown as typeof fetch)(url, init);
     });
     const r = await run(env, promptEvent(), fetchImpl);
-    expect(asked).toEqual(['forbids_delegation', 'task_context', 'tool_calls']);
+    expect(asked).toEqual(['forbids_delegation', 'task_context', 'tool_calls', 'bounded_tool_work']);
     expect(context(r)).toContain('Dispatch this request once');
     expect(state(env).current).toMatchObject({ shape: 'orchestrated', execution: 'single', admission_revision: 'atomic-context-v1' });
     const record = readdirSync(dir)
@@ -920,7 +922,7 @@ describe('single executor (A19)', () => {
     await run(env, promptEvent(), fetchImpl);
     const denied = await run(env, plannerPre(), fetchImpl);
     expect(denied).toMatchObject({ kind: 'deny', code: 'single_shape' });
-    expect(String(hookOutput(denied)['permissionDecisionReason'])).toContain('Dispatch the whole request once to jev-gate:worker');
+    expect(String(hookOutput(denied)['permissionDecisionReason'])).toContain('worker role selected in coordinator guidance');
     expect(state(env).current.plan).toBeNull();
   });
 
@@ -1260,14 +1262,14 @@ describe('planner dispatch', () => {
     const frontierEnv = makeEnv({ CLAUDE_PLUGIN_OPTION_ROUTERALLOWFABLE: 'true' });
     await run(frontierEnv, promptEvent(), fakeJev());
     const frontier = await run(frontierEnv, plannerPre(), fakeJev({ planning_tier: 'frontier' }));
-    expect(updatedInput(frontier)).toMatchObject({ subagent_type: 'jev-gate:planner-frontier', model: 'claude-fable-5-1' });
+    expect(updatedInput(frontier)).toMatchObject({ subagent_type: 'jev-gate:planner-frontier', model: 'fable' });
 
     const cfg = join(tmp, 'frontier-default.json');
     writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', ...SERIAL_POLICY, admittedShape: 'hierarchy', plannerDefaultTier: 'frontier' }));
     const defaulted = makeEnv({ JEV_GATE_CONFIG: cfg, CLAUDE_PLUGIN_OPTION_ROUTERALLOWFABLE: 'true' });
     await run(defaulted, promptEvent(), fakeJev());
     const abstained = await run(defaulted, plannerPre(), fakeJev({ planning_tier: 'abstain' }));
-    expect(updatedInput(abstained)).toMatchObject({ subagent_type: 'jev-gate:planner-frontier', model: 'claude-fable-5-1' });
+    expect(updatedInput(abstained)).toMatchObject({ subagent_type: 'jev-gate:planner-frontier', model: 'fable' });
     expect(abstained.code).toBe('route_abstain');
   });
 
@@ -3467,9 +3469,32 @@ describe('full candidate pair in the existing Gate B batch', () => {
       }
       return new Response(JSON.stringify(body));
     });
-    const allocation = { candidates: () => ['A','B','C','D','E','F'].map(n=>({id:`fixture-${n}`,description:'fixture coding model',efforts:['high','max'],omitEffort:false})), allowed: (model:string)=>model.startsWith('fixture-') };
+    const allocation = { candidates: () => ['A','B','C','D','E','F'].map(n=>({id:`fixture-${n}`,description:'fixture coding model',efforts:['high','max'],omitEffort:false})), allowed: (model:string)=>model.startsWith('fixture-') || model === 'opus', toolModel: () => 'opus' };
     const result = await run(env, role === 'planner' ? plannerPre() : preEvent('Agent',agentInput()), fetchImpl, {allocation});
-    expect(result.kind).toBe('patch'); expect(updatedInput(result).model).toBe('fixture-F'); expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(result.kind).toBe('patch'); expect(updatedInput(result).model).toBe('opus'); expect(fetchImpl).toHaveBeenCalledOnce();
     expect(state(env).current.active[role === 'planner' ? 'toolu_plan' : 'toolu_1']?.allocation_pair).toEqual({model:'fixture-F',effort_edit:{kind:'set',value:'max'}});
   });
+});
+
+it('admits a shallow bounded lookup to the fast worker using one Gate A batch and preserves the full request', async () => {
+  const cfg = join(tmp, 'bounded-tool.json'); writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', delegationDepthFloor: 0, admittedShape: 'auto', workerIsolation: 'none', maxParallelWorkers: 1 }));
+  const env = makeEnv({ JEV_GATE_CONFIG: cfg });
+  const prompt = 'Find all parseRecord declarations and callers in src/ and return file paths and line numbers. Do not edit.';
+  const fetchImpl = fakeJev({ toolCalls: 1, boundedToolWork: .99, parallelOutcomes: .05 });
+  const result = await run(env, promptEvent({ prompt, transcript_path: transcriptAt(1000) }), fetchImpl);
+  expect(result.kind).toBe('guidance'); expect(result.stdout).toContain('jev-gate:worker-fast'); expect(result.stdout).not.toContain('Planner first');
+  expect(fetchImpl).toHaveBeenCalledOnce(); expect(state(env).current).toMatchObject({ execution: 'single', request: prompt });
+  const worker = await run(env, preEvent('Agent', { ...agentInput(), subagent_type: 'jev-gate:worker-fast', prompt: 'Return every match with file and line.' }), fakeJev({ route: 'fast' }));
+  expect(worker.kind).toBe('patch'); expect(updatedInput(worker).model).toBeUndefined(); expect(updatedInput(worker).prompt).toContain(prompt);
+  // The requested fast profile is already Haiku; preserve native frontmatter rather than add a redundant model pin.
+});
+
+it.each(['Do not delegate or use a subagent.', "Don't use workers.", 'No delegation.', '위임하지 마.', '워커를 사용하지 마.', '서브 에이전트 사용 금지.'])('honors an explicit delegation veto before HTTP even if forced or Jev would admit: %s', async veto => {
+  for (const forced of [false, true]) {
+    const env = makeEnv(forced ? { JEV_GATE_EXPERIMENT_ADMISSION: 'orchestrated' } : {});
+    const fetchImpl = fakeJev({ boundedToolWork: .99, forbidsDelegation: .48 });
+    const result = await run(env, promptEvent({ prompt: `Find parseRecord in src/lookup.ts. ${veto}` }), fetchImpl);
+    expect(result.code).toBe('admission_forbids_delegation'); expect(result.stdout).toContain('without a worker'); expect(result.stdout).not.toContain('jev-gate:worker-fast');
+    expect(fetchImpl).not.toHaveBeenCalled(); expect(state(env).current.shape).toBe('direct');
+  }
 });

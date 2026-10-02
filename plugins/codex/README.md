@@ -2,7 +2,7 @@
 
 Automatic Gate, Lean, Router and Compact connect to **ordinary native Codex** after the plugin starts. The plugin supplies hooks, Evidence MCP, Output folding and an authenticated local connection. Your login, permissions, terminal and official execution engine stay in Codex.
 
-Requires **Node 22.15+**. Automatic connection was tested with **Codex CLI 0.159.3**. The optional managed terminal connection was also tested on 0.158.0. An already open session retains its original provider until a new session loads the automatic settings. Local Codex app/IDE sessions must use this Codex home and support the same native plugin, hook and provider APIs; a remote managed coding session is a separate host.
+Requires **Node 22.15+**. Automatic connection was tested with **Codex CLI 0.160.0**. The optional managed terminal connection was also tested on 0.158.0. An already open session retains its original provider until a new session loads the automatic settings. Local Codex app/IDE sessions must use this Codex home and support the same native plugin, hook and provider APIs; a remote managed coding session is a separate host.
 
 ## Install
 
@@ -43,7 +43,7 @@ The older `node <plugin>/dist/cli.mjs codex` managed terminal remains available 
 
 | Feature | Automatic connected session |
 | --- | --- |
-| Gate A | Reads observed native context usage; Jev judges context and cost support; code chooses direct, single-worker or planned delegation and enforces the depth floor |
+| Gate A | Reads observed native context usage; Jev judges context, cost support and bounded tool work; code chooses direct, one fast worker or planned delegation and enforces the depth floor |
 | Gate B | Adds actual model/effort candidates to the existing Gate B batch; rechecks eligibility before owned dispatch |
 | Planning | Only on the planned path: runs the existing read-only planner instructions in a native Codex thread and validates the returned task graph |
 | Workers / acceptance | Runs real native Codex workers in the background by default; compares reports with observed command exits and edits. The current shared core does not call Gate C; acceptance is owned by code on both hosts. |
@@ -57,6 +57,8 @@ The older `node <plugin>/dist/cli.mjs codex` managed terminal remains available 
 Native permissions remain authoritative for root and workers. Owned workers inherit the calling tool’s captured native filesystem grants and denies. Planners narrow those grants to reads and disable network. An unrepresentable permission snapshot refuses dispatch instead of guessing broader access. Workers cannot create another coordinator. Worktree isolation creates a separate branch and leaves it for inspection and integration; it does not silently merge changes.
 
 The defaults enable up to 16 snapshot worktree workers, up to 64 planned tasks, no depth floor, and plan interpretation. Jev chooses single or planned delegation from the request. Each planned worker sees staged, unstaged and untracked working files; ignored files stay excluded. Code acceptance is followed by root integration and reporting. Apply only the diff from each returned snapshot baseline to the worker branch; the snapshot commit itself is not a root commit.
+
+A complete bounded lookup or mechanical edit can use one account-listed Luna worker without a planner even when the older delegation-cost estimate is negative. This preference shares Gate A's existing Jev request and respects missing context, explicit no-delegation, shape and depth constraints. Workers handle whole outcomes, not each individual file read; the main integrates the result.
 
 Missing source, unknown checks and a worker's self-reported pass never become observed success. Check verification sees native command exits and file-change events; shell-based edits and external editor writes are not established by those events. Encrypted reasoning, media, pending calls or an oversized mandatory context cannot be guessed; these cases use native compaction/handoff behavior. Digest bytes are not measured token or billing savings. Manual and automatic Compact are both enabled by default.
 

@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.8.3 — 2026-10-02 — Native dispatch repair and cache-aware routing
+
+- Route self-contained bounded searches and mechanical tool outcomes to one fast worker without a planner, using one extra fact in the existing Gate A batch. Preserve context, no-delegation, shape and depth constraints. Negative legacy cost estimates remain visible; this execution preference is not a measured saving. Native Claude coverage observes an automatically admitted Haiku worker running an actual repository search with no effort parameter.
+- Recognized explicit English/Korean no-delegation phrases keep the request in the main session before Jev or forced benchmark admission; other wording retains semantic judgment and native user authority. Guard reminders preserve the worker role selected in coordinator guidance.
+
+- Fix Claude Agent schema failures: command hooks send a valid family token, while native inference receives the exact Gate B model ID and conditional effort. Connect dispatch through the native plugin directory API, handle symlinked plugin entrypoints, and propagate Fable authorization from the actual plugin option, including when Router is off.
+- Connect documented Claude product roles to existing direction thresholds: known downgrades use 0.6 with control/risk checks; upgrades, same-role version changes and unknown relationships retain the stricter floor. Prefer Haiku for bounded simple workers and account-listed Luna for Codex's fast role. Versions remain separate candidates.
+- Resolve missing effort through effective host settings; preserve numeric controls and explicit pins. When the current effort is outside the chosen model's scale, use its conditional distribution's existing strict-confidence quantile. Haiku omission no longer blocks a subsequent Opus/Sonnet turn. Each new user turn reassesses; tool steps reuse only that turn's valid result. Retired root responses and delayed completion cannot overwrite newer cache observations or completed visible context.
+- Supply observed previous-request cache counts and age to the existing Jev batch. Model choice considers the cost of rebuilding a long root prefix; cached input is not a current context-fit proof. No extra inference, paid token-count probe, cross-turn decision cache or global model setting is added. Actual cost savings have not been measured.
+- A smaller-window root requires a current complete-request upper bound, output room and compatible host transformation. Claude 2.1.287's context summary is only an estimate, so Opus/Sonnet to Haiku root switching remains limited; fresh Haiku workers are verified separately. Synthetic compatibility tests are not live Haiku root support.
+- Explain baseline/pins, actual loaded hook version, exclusions, direction/threshold and effort interpretation in existing records/doctor. Dashboard separates selected, dispatched/requested and response-reported effort; missing response effort is explained and explicit omission is retained.
+- Add actual isolated Claude CLI/scripted-provider regressions for Agent validation, all four families, exact versions, effort omission, Opus-to-Sonnet root requests, successive root turns, and main responsiveness during delayed worker completion/cancellation. Retain native Codex, packaged Function Hooks and browser regression coverage. These checks do not establish paid-account coverage, Jev classification quality or token savings.
+
 ## v0.8.2 — 2026-10-02 — Full-catalog Router and responsive background workers
 
 - Router v2 (#143–151): actual model IDs across the full eligible catalog, candidate-local effort questions in one bounded batch, max/none/omit semantics, independent pins and preservation of the original root execution.

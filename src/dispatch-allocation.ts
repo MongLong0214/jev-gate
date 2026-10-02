@@ -3,6 +3,8 @@ import { offerPairs, selectPair, type PairOffer, type PairPatch, type RouteCandi
 export interface DispatchAllocation {
   candidates: (baseline: string) => readonly RouteCandidate[];
   canonical?: (model: string) => string | null;
+  /** A tool's model schema may differ from the native inference boundary. Null preserves its original field. */
+  toolModel?: (model: string) => string | null;
   allowed: (model: string) => boolean;
   inheritedModel?: string;
 }

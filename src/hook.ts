@@ -16,6 +16,7 @@ import {
   decideAdmission,
   decideAdmissionAtomic,
   delegationModel,
+  explicitlyForbidsDelegation,
   resolveAdmittedShape,
   type AdmissionDecision,
   type AdmissionEstimate,
@@ -488,15 +489,21 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
   };
 
   const emitPatch = (original: AgentInput, patch: Parameters<typeof patchAgentInput>[1], code: ErrorCode | null): HookResult => {
-    const applied = patchAgentInput(original, { ...patch, ...(allocationPatch && allocationOffer ? { model: allocationPatch.model ?? allocationOffer.baseline.model } : {}) });
-    if (allocationPatch && input.session_id && input.tool_use_id) {
+    const selectedModel = allocationPatch && allocationOffer ? allocationPatch.model ?? allocationOffer.baseline.model : patch.model;
+    const toolModel = selectedModel === undefined ? undefined : allocation?.toolModel ? allocation.toolModel(selectedModel) : selectedModel;
+    const { model: _model, ...rest } = patch;
+    const applied = patchAgentInput(original, { ...rest, ...(toolModel ? { model: toolModel } : {}) });
+    // Keep the actual ID for agent.spawn; putting it into Claude's Agent.model fails before that hook can run.
+    const pairModel = allocationPatch && allocationOffer ? selectedModel :
+      selectedModel !== undefined && toolModel !== null && selectedModel !== toolModel ? allocation?.canonical?.(selectedModel) ?? selectedModel : undefined;
+    if (pairModel !== undefined && input.session_id && input.tool_use_id) {
       let owner = false;
       const saved = updateJob(deps.env, input.session_id, prev => {
         const r = prev ? own(prev.current.active, input.tool_use_id!) : undefined;
         if (!prev || !r) return null;
         owner = true;
         return { ...prev, current: { ...prev.current, active: { ...prev.current.active, [input.tool_use_id!]: { ...r, allocation_pair: {
-          model: String(applied['model']), effort_edit: allocationPatch!.effortEdit ?? { kind: 'keep' },
+          model: pairModel, effort_edit: allocationPatch?.effortEdit ?? { kind: 'keep' },
         } } } } };
       });
       if (owner && !saved.ok) return emitDeny('dispatch_ineligible', 'Allocation ownership could not be committed. No worker started; continue in the main session.', null);
@@ -1003,7 +1010,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     const agent = input.tool_input['subagent_type'];
     if (typeof agent !== 'string' || (!(agent in OWNED_AGENTS) && agent !== LEAN_EXECUTOR_AGENT)) return result;
     const applied = result.stdout && result.kind === 'patch' ? JSON.parse(result.stdout)?.hookSpecificOutput?.updatedInput : input.tool_input;
-    const model = agent === LEAN_EXECUTOR_AGENT ? allocation.inheritedModel : isRecord(applied) ? requestedModelFor(applied) : null;
+    const model = agent === LEAN_EXECUTOR_AGENT ? allocation.inheritedModel : allocationPatch && allocationOffer ? allocationPatch.model ?? allocationOffer.baseline.model : isRecord(applied) ? requestedModelFor(applied) : null;
     // Claude Lean's inherited model is checked by the native agent.spawn boundary where it is observable.
     if (!model || allocation.allowed(model)) return result;
     const saved = updateJob(deps.env, input.session_id, prev => {
@@ -1199,6 +1206,11 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
      * The refusals that need no depth come before the transcript read, so a turn that can never be admitted pays no
      * scan for it. Native without the forced arm is the control arm and keeps its depth record, so it is not refused.
      */
+    if (explicitlyForbidsDelegation(prompt)) {
+      trace?.write('admission_result', { ...base, attempted: false, known_not_sent: true, decision: { shape: 'direct', decided: true, reason: 'admission_forbids_delegation', changed_default: false } });
+      if (mode === 'auto') appendLiveness(deps.env, { at: nowIso(), attempted: false, reason: 'admission_forbids_delegation' });
+      return emitContext('UserPromptSubmit', renderDirectGuidance(mode, true), 'admission_forbids_delegation');
+    }
     if (blocker !== null && (mode === 'auto' || forcedRequested)) {
       trace?.write('admission_result', {
         ...base,
@@ -1247,6 +1259,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     // Gate A's read-offs, kept for `admittedShape: auto`; null on every path that asked nothing (forced, native).
     let admissionAnswers: Record<string, unknown> | null = null;
     let selectedExecution: 'single' | 'hierarchy' | null = null;
+    let preferFastWorker = false;
     const contextTokens = depth.ok ? depth.tokens : null;
     const depthFacts = {
       context_tokens: contextTokens,
@@ -1311,7 +1324,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         // The explicit return type is what lets one call site carry both shapes: callGate cannot infer Q from a union.
         const admissionRequest = (text: string): JevRequest<AdmissionState, Record<string, unknown>> =>
           atomicAdmission ? buildAtomicAdmissionRequest(text, config) : buildAdmissionRequest(text, config);
-        let admitted: (AdmissionDecision & { estimate?: AdmissionEstimate | null; execution?: 'single' | 'hierarchy' | null }) | null =
+        let admitted: (AdmissionDecision & { estimate?: AdmissionEstimate | null; execution?: 'single' | 'hierarchy' | null; preference?: 'bounded_tool_worker' }) | null =
           null;
         const askGateA = (text: string, facts: Record<string, unknown>): ReturnType<typeof callGate> => {
           if (!currentAdmission()) return Promise.resolve({ blocked: 'aborted' });
@@ -1331,6 +1344,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
             if (atomicAdmission && admitted.execution === 'single' && !minimumSingleFits)
               admitted = { ...admitted, shape: 'direct', execution: null, decided: false, reason: 'admission_delivery_failed' };
             selectedExecution = admitted.execution ?? null;
+            preferFastWorker = admitted.preference === 'bounded_tool_worker';
             // A17 item 7: without Jev this turn would have been one native conversation.
             return {
               forced: false,
@@ -1344,7 +1358,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
               // turn actually took.
               ...(admitted.estimate ? { estimate: admitted.estimate } : {}),
               // Selected policy is not application evidence; only the successful state write below installs it.
-              ...(atomicAdmission ? { selected_execution: selectedExecution, policy_revision: 'atomic-context-v1' } : {}),
+              ...(atomicAdmission ? { selected_execution: selectedExecution, policy_basis: preferFastWorker ? 'bounded_tool_worker' : 'cost_model', policy_revision: 'atomic-context-v1' } : {}),
             };
           },
           admissionDeadline,
@@ -1419,7 +1433,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     // A newer prompt owns the session now; this turn does not get to turn orchestration on behind it.
     if (stale) return currentAdmission() ? emitContext('UserPromptSubmit', renderDirectGuidance(mode), 'deadline_exhausted') : skip(deps.signal?.aborted ? 'aborted' : 'generation_changed');
     if (!applied.ok) return emitContext('UserPromptSubmit', renderDirectGuidance(mode), applied.code);
-    if (executed === 'single') return emitContext('UserPromptSubmit', renderSingleGuidance({ mode, confidence, superseded, guardAllowTools: config.guardAllowTools, guardAllowMcp: config.guardAllowMcp }), reason);
+    if (executed === 'single') return emitContext('UserPromptSubmit', renderSingleGuidance({ mode, confidence, superseded, preferFastWorker, guardAllowTools: config.guardAllowTools, guardAllowMcp: config.guardAllowMcp }), reason);
     return emitContext(
       'UserPromptSubmit',
       renderOrchestrationGuidance({ mode, confidence, superseded, maxParallelWorkers: config.maxParallelWorkers, workerIsolation: config.workerIsolation, guardAllowTools: config.guardAllowTools, guardAllowMcp: config.guardAllowMcp }),

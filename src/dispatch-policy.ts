@@ -2,7 +2,8 @@ import { readJob, updateJob, own, release } from './job.js';
 import { DEFAULT_CONFIG } from './config.js';
 import { claudeAllocation } from './claude-allocation.js';
 import { OWNED_AGENTS } from './types.js';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { realpathSync } from 'node:fs';
 
 /** Called at native agent.spawn, before next. Reuses the existing atomic job writer; never creates a new state store. */
 export const dispatchPolicy = (session: string, tool: string, proposed: string, allowFable: boolean, env = process.env, agent = '', eligible = true, unstartedToken = ''): unknown => {
@@ -28,7 +29,11 @@ export const dispatchPolicy = (session: string, tool: string, proposed: string, 
   }
   return { deny: 'No eligible automatic child model. Continue in the main session; no child started.' };
 };
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+const isMain = (): boolean => {
+  try { return !!process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); }
+  catch { return false; }
+};
+if (isMain()) {
   const [session = '', tool = '', model = '', allow = 'false', agent = '', eligible = 'true', token = ''] = process.argv.slice(2);
   try { process.stdout.write(JSON.stringify(dispatchPolicy(session, tool, model, allow === 'true', process.env, agent, eligible === 'true', token))); }
   catch { process.stdout.write(JSON.stringify({ deny: 'Dispatch policy unavailable; no child started.' })); }

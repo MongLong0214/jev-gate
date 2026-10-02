@@ -74,7 +74,8 @@ const engineOf = ($: EngineInterface, log: RouterEngine['log']): RouterEngine =>
     return Array.isArray(v) && v.every((x): x is string => typeof x === 'string') ? v : [];
   },
   currentEffort: async () => {
-    const value = (await $.settings.read())['effortLevel'];
+    const override = await $.env.get('CLAUDE_CODE_EFFORT_LEVEL');
+    const value = override?.trim() ? override : (await $.settings.read())['effortLevel'];
     return typeof value === 'number' || ['low', 'medium', 'high', 'xhigh', 'max'].includes(String(value)) ? value as 'low' | 'medium' | 'high' | 'xhigh' | 'max' | number : undefined;
   },
   modelAliases: async () => {
@@ -91,8 +92,8 @@ const engineOf = ($: EngineInterface, log: RouterEngine['log']): RouterEngine =>
       ...(haiku || api ? { haiku: haiku || 'claude-haiku-4-5' } : {}), ...(fable || api ? { fable: fable || 'claude-fable-5-1' } : {}) };
   },
   dispatchPair: async (tool, model, allowFable, agent, eligible = true, token = '') => {
-    const root = await $.env.get('CLAUDE_PLUGIN_ROOT');
-    if (!root) return null;
+    // CLAUDE_PLUGIN_ROOT is injected into command hooks, not native Function Hooks. The host owns this path.
+    const root = $.plugin.root;
     const path = root + '/dist/dispatch-policy.js';
     if (!await $.fs.exists(path)) return null; // Standalone Router has no owned Gate state.
     const result = await $.process.run(['node', path, await $.session.id(), tool, model, String(allowFable), agent, String(eligible), token], { timeoutMs: 500 });

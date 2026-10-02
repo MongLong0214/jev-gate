@@ -17,9 +17,9 @@ The marketplace installs [the latest release](https://github.com/MongLong0214/je
 
 ## Codex native plugin
 
-The [native Codex plugin](plugins/codex/README.md) connects **Gate A/B, planning, contract acceptance, root guard, Lean, Router and Compact** to ordinary native Codex through its local connection, alongside Evidence, Output and recording. Owned workers use the official Codex App Server; native login and permissions remain authoritative. Automatic connection was tested with Codex CLI 0.159.3 and Node 22.15+.
+The [native Codex plugin](plugins/codex/README.md) connects **Gate A/B, planning, contract acceptance, root guard, Lean, Router and Compact** to ordinary native Codex through its local connection, alongside Evidence, Output and recording. Owned workers use the official Codex App Server; native login and permissions remain authoritative. Automatic connection was tested with Codex CLI 0.160.0 and Node 22.15+.
 
-For an installation without a build step, download **`jev-gate-codex-0.8.2.zip`** from the [v0.8.2 release](https://github.com/MongLong0214/jev-gate/releases/tag/v0.8.2), extract it, and register the extracted directory:
+For an installation without a build step, download **`jev-gate-codex-0.8.3.zip`** from the [v0.8.3 release](https://github.com/MongLong0214/jev-gate/releases/tag/v0.8.3), extract it, and register the extracted directory:
 
 ```sh
 codex plugin marketplace add /absolute/path/to/extracted-plugin
@@ -39,7 +39,7 @@ Open ordinary **Codex** in your project. The installed plugin discovers the call
 
 When the installed plugin starts, it opens a local **Jev API key** screen if no key is available. Enter the key once; Claude Code and Codex share the same private local credential. No shell export or policy file is required. Existing `TYPESAFE_API_KEY` and the Claude plugin's key option remain supported.
 
-Codex owns login and hook trust: review/trust installed hooks in `/hooks` when the host requests it. Keep exactly one Jev Gate installation enabled in `/plugins`. Installation never forges a trust approval. A host already open during installation keeps its original model provider; start a fresh native host after the automatic connection is ready. Requires Node 22.15+; automatic connection was tested on Codex CLI 0.159.3. Build before installing a source checkout.
+Codex owns login and hook trust: review/trust installed hooks in `/hooks` when the host requests it. Keep exactly one Jev Gate installation enabled in `/plugins`. Installation never forges a trust approval. A host already open during installation keeps its original model provider; start a fresh native host after the automatic connection is ready. Requires Node 22.15+; automatic connection was tested on Codex CLI 0.160.0. Build before installing a source checkout.
 
 The dashboard opens automatically when the installed plugin starts. Claude Code and Codex share one local browser dashboard, with host filters and private recording enabled by default. No dashboard terminal, port selection, trace directory or `--debug` flag is needed.
 
@@ -78,7 +78,21 @@ The key is stored under `$XDG_CONFIG_HOME/jev-gate/auth/credentials.json`, or `~
 
 Every feature defaults to on, including main model routing, manual Compact and remote Evidence. Automatic Astra/Fable targets are the exception: they require the host-specific opt-in below. The root tool allow-list is `["*"]`: Jev imposes no extra restriction on native tools, while the host still decides execution permissions. That does not mean every prompt is compacted, folded, routed, or delegated. The defaults enable up to 16 isolated workers, plans of up to 64 tasks, a depth floor of 0 and plan interpretation. Workers receive the current working files through private snapshots. Jev facts are batched into one request per eligible gate event. Router bounds all preparation to 800ms by default and skips requests that cannot change the final settings. The dashboard shows recorded Jev response times; these rules do not guarantee end-to-end speed or token savings.
 
-Gate stays native for a direct admission, a missing key, or no `prompt_id`; none of those is a failure of the install. The default depth floor of 0 permits assessment even in a fresh session. `gateMode` `off` does not turn the other parts off. There is no master switch and no `evidenceEnabled` option.
+### Model routing and cache reuse
+
+Starting with Opus establishes the incoming baseline. Every new user turn is assessed again; selecting Sonnet on one turn does not lock later difficult work to Sonnet. Normal tool steps reuse that turn's result, without another Jev assessment or an Opus warm-up call. `ANTHROPIC_MODEL` explicitly pins the model; `CLAUDE_CODE_EFFORT_LEVEL` explicitly pins effort. Those dimensions remain independent. A missing effort field can resolve from the host's effective default; it does not mean routing is disabled. A real max pin is preserved, while unpinned max can use a valid target-model effort selected from its own distribution.
+
+Simple search, lookup, listing and mechanical worker tasks prefer **Haiku in Claude / account-listed Luna in Codex**. Main-model changes still evaluate the complete requested outcome and actual model capabilities. Known Claude downgrades use the existing 0.6 confidence/control/risk criteria; upgrades and unknown relationships retain the stricter 0.8 default. Those probabilities are policy inputs, not measured success rates.
+
+For a self-contained bounded tool outcome, Gate A can choose one fast worker without a planner even when the older delegation-cost estimate is negative. This preference is judged in the existing Jev batch; it does not spawn a worker for each file read. The main integrates the result and remains available during background execution. Conversation-only replies, missing context, explicit no-delegation and configured depth floors retain their native behavior. The dashboard identifies this fast-worker preference separately from the cost estimate.
+
+Root model changes can rebuild the full conversation prefix on another model. The Router supplies observed previous-request cache read/write counts and age to Jev so short follow-ups can keep a useful cached root while isolated workers handle bounded work. This is cost information for the new judgment, not a hidden model lock. Stable system/tool prefixes and each turn's reused decision preserve native cache opportunities. No paid cache warmer, extra token-count request or cache of old decisions is installed. Cache read/write and output usage are separate; changing model is not free and savings have not been measured.
+
+**Claude 2.1.287 limitation:** its context summary estimates tokens but does not provide a safe upper bound for the complete current request or prove a retained thinking/tool continuation is Haiku-compatible. Opus/Sonnet to Haiku root switching therefore remains `context_unverified`. Fresh Haiku workers are verified and receive no effort parameter. The existing candidate path can accept a genuine current request bound plus compatibility evidence; synthetic tests of that path do not prove this host supports it.
+
+Root records show incoming/effective effort and source, model/effort pins, candidate exclusions, selection direction/threshold, and the actual loaded `hook_version`. The dashboard shows selected values, the request boundary, and response observations separately. An Opus session header can coexist with a Sonnet request. Updating installed files does not replace an already running host's hook/provider: start a fresh host after upgrading.
+
+Gate stays native for a direct admission, a missing key, or no `prompt_id`; none of those is a failure of the install. The default depth floor of 0 permits assessment as soon as the host reports native context usage. The first Claude prompt has no usage yet and keeps native execution; direct guidance can still recommend a bounded fast worker. `gateMode` `off` does not turn the other parts off. There is no master switch and no `evidenceEnabled` option.
 
 Gate workers, planners, and the lean executor inherit the tools and connected MCPs that Claude Code provides to their session. A worker can inspect a linked Figma file or use an available browser or other MCP directly when its task needs one. Pass the target URL or ID and any restrictions in the brief. Host permissions still apply; `guardAllowMcp` controls only the admitted root session's guard, not a worker's tools.
 
@@ -89,6 +103,8 @@ The API key screen belongs to the existing MCP process and stops with it. In a h
 The installed plugin opens one shared local dashboard automatically. Its execution circuit shows Gate's direct, single-worker and planned branches, independent Lean handoff, Router / Compact / Output policies, and Evidence search. Select a stage or execution to inspect Jev judgments, measured response time, code policy, model application and host outcomes. The host filter lets you view Claude Code, Codex or both. Korean/English and light/dark controls are in the top right.
 
 Recording defaults to on and does **not** require `claude --debug`. Both hosts record private metadata under `~/.local/state/jev-gate/{claude,codex}/traces` (or `$XDG_STATE_HOME`). An existing explicit trace/debug path remains supported. The dashboard shows metadata only; it does not send requests to Jev or expose prompts, source bodies, tool output or API keys.
+
+Model verification shows three separate effort facts: **Jev's selection**, **the host dispatch or API request value**, and **the response's reported value**. Claude's native result hook reports the response model but does not report response effort. Codex records `reasoning.effort` from the outgoing API request; a response may omit it. “Not reported by host” does not mean routing failed. A dispatched/requested effort is shown with its source rather than presented as provider-confirmed internal computation. Haiku takes no effort parameter, so its explicit omission is displayed as “No explicit value.”
 
 The settings panel has independent switches for **execution recording** and **automatic dashboard opening**. Both default to on and apply to both hosts. Turning recording off leaves Jev features running. Turning automatic opening off stops the automatically managed server; a manually started view stays available. The same settings can be changed with either host's CLI:
 
