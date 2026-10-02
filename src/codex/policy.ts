@@ -512,7 +512,7 @@ export class CodexPolicy {
       if (Object.keys(original).some(k => !['action', 'agent_id'].includes(k)) || typeof original['agent_id'] !== 'string') return 'Invalid background operation.';
       const id = original['agent_id']; const worker = this.sessions.get(id);
       const result = this.backgroundResults.get(id);
-      if (!worker?.dispatch?.background || worker.parent !== session.id) return result?.parent === session.id ? result.output : 'No owned background execution with this identity.';
+      if (!worker?.dispatch || worker.parent !== session.id) return result?.parent === session.id ? result.output : 'No owned execution with this identity.';
       if (original['action'] === 'cancel') { this.interruptWorker(worker); return 'Cancellation requested. Acceptance and release still require an observed terminal event.'; }
       return worker.dispatch.ended ? this.settleWorker(worker) : 'The original worker is still running. No terminal result or acceptance is available. Answer the user here; do not wait synchronously or duplicate its work.';
     }
@@ -609,7 +609,7 @@ export class CodexPolicy {
         } catch (error) {
           if (error instanceof RpcRequestError && !error.attempted && !worker.turn && !dispatch.ended) { dispatch.attempted = false; throw error; }
           if (!dispatch.ended) await this.recoverWorker(worker, terminal);
-          if (!dispatch.ended) return 'Worker termination unconfirmed. Its reservation, files and write-scope protection remain active. No replacement execution or acceptance is claimed.';
+          if (!dispatch.ended) return `Worker termination unconfirmed. Internal execution identity: ${worker.id}. Its reservation, files and write-scope protection remain active. No replacement execution or acceptance is claimed.`;
         }
         if (background && !dispatch.ended) {
           this.trace?.write('background_launch', { host: 'codex', session_id: parent.id, prompt_id: promptId, tool_use_id: toolId, agent_id: worker.id, status: 'running', role: profile?.role ?? 'executor' });
@@ -618,7 +618,7 @@ export class CodexPolicy {
         if (!background && parentSignal.aborted) cancel();
         if (!dispatch.ended) {
           const ended = await terminal;
-          if (ended['localClose']) return 'Worker termination unconfirmed after local connection close. Reservation and files remain protected.';
+          if (ended['localClose']) return `Worker termination unconfirmed after local connection close. Internal execution identity: ${worker.id}. Reservation and files remain protected.`;
         }
         return await this.settleWorker(worker);
       } finally {
@@ -626,7 +626,7 @@ export class CodexPolicy {
         if (dispatch.settled || !dispatch.attempted) parentSignal.removeEventListener('abort', cancel);
       }
     } catch {
-      if (dispatch?.attempted) return 'Worker termination or settlement unconfirmed. Its reservation and files are preserved.';
+      if (dispatch?.attempted) return `Worker termination or settlement unconfirmed. Internal execution identity: ${worker!.id}. Its reservation and files are preserved.`;
       if (worker && dispatch) {
         // Definite pre-send failure is non-execution evidence, even if its first state write fails.
         dispatch.ended = { status: 'failed', notExecuted: true };
@@ -690,14 +690,15 @@ export class CodexPolicy {
       const state = readJob(this.env, d.parent.id);
       const gen = state.ok && state.value ? [state.value.current, ...state.value.history].find(g => g.prompt_id === d.prompt) : null;
       const committed = gen && (gen.receipts.some(r => r.tool_use_id === d.tool) || (d.input['subagent_type'] === 'jev-gate:executor' ? gen.lean?.outcome === 'dispatched' : OWNED_AGENTS[String(d.input['subagent_type'])]?.role === 'planner' && guidance.length > 0));
-      if (!gen || own(gen.active, d.tool) || !committed) return 'Worker terminal observed; settlement pending. Reservation and files remain protected. Retry status/settlement without restarting execution.';
+      if (!gen || own(gen.active, d.tool) || !committed) return `Worker terminal observed; settlement pending. Internal execution identity: ${worker.id}. Reservation and files remain protected. Retry jev_agent with action=status and agent_id=${worker.id} without restarting execution.`;
       d.output = d.ended!['status'] === 'completed'
         ? `${final?.['text'] ?? 'No worker final output.'}\n\n${guidance}${d.worktree ? `\nWorker worktree: ${d.worktree.path}\nBranch: ${d.worktree.branch}\nSnapshot baseline: ${d.worktree.baseline}. Apply only the diff from this baseline to the worker branch in the root; this result does not integrate it.` : ''}`
         : 'Worker interrupted or failed. No completion or acceptance is claimed.';
       d.settled = true;
+      // An uncertain foreground call also needs its terminal output available by the returned identity.
+      this.backgroundResults.set(worker.id, { parent: d.parent.id, output: d.output });
+      while (this.backgroundResults.size > 64) this.backgroundResults.delete(this.backgroundResults.keys().next().value!);
       if (d.background) {
-        this.backgroundResults.set(worker.id, { parent: d.parent.id, output: d.output });
-        while (this.backgroundResults.size > 64) this.backgroundResults.delete(this.backgroundResults.keys().next().value!);
         updateJob(this.env, d.parent.id, prev => prev?.current.prompt_id === d.prompt ? { ...prev, current: { ...prev.current, background_context: d.output!, ...(d.interruptSent && d.ended!['status'] !== 'completed' && Object.keys(prev.current.active).length === 0 ? { outcome: 'incomplete' as const } : {}) } } : null);
         this.trace?.write('background_terminal', { host: 'codex', session_id: d.parent.id, prompt_id: d.prompt, tool_use_id: d.tool, agent_id: worker.id, status: String(d.ended!['status']) });
       }

@@ -2,7 +2,7 @@ import { lstatSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 import type { Env } from './config.js';
-import { readTraceRecords } from './explain.js';
+import { readTraceRecords, type TraceCache } from './explain.js';
 import { readLiveness } from './liveness.js';
 import { buildOperations, type DebugRecord, type OperationsView } from './operations.js';
 import type { Host } from './host-support.js';
@@ -535,7 +535,7 @@ const buildLive = (records: Rec[], routerRows: Array<{ at: string; rec: Rec }>, 
   };
 };
 
-export const loadActivity = (opts: { traceDir: string | null; traceDirs?: readonly { host: Host; dir: string }[] | undefined; debugDir: string | null; env: Env; now?: Date; host?: Host }): ActivitySnapshot => {
+export const loadActivity = (opts: { traceDir: string | null; traceDirs?: readonly { host: Host; dir: string }[] | undefined; debugDir: string | null; env: Env; now?: Date; host?: Host; traceCache?: TraceCache }): ActivitySnapshot => {
   const notes = [...NOTES];
   const events: ActivityEvent[] = [];
   const gateRecords: Rec[] = [];
@@ -554,7 +554,7 @@ export const loadActivity = (opts: { traceDir: string | null; traceDirs?: readon
 
   for (const source of traceDirs) {
     if (isSymlink(source.dir)) { notes.push('추적 디렉터리가 심볼릭 링크라 읽지 않습니다.'); continue; }
-    const read = readTraceRecords(source.dir);
+    const read = readTraceRecords(source.dir, opts.traceCache);
     traceFiles += read.records.length;
     unreadable += read.unreadable;
     if (read.unreadable > 0) notes.push(`추적 파일 ${read.unreadable}개는 읽지 못했습니다.`);

@@ -48,6 +48,22 @@ describe('dashboard live interactions', () => {
     expect(p.w.document.querySelectorAll('.wire-packet.arriving,.circuit-node.flash')).toHaveLength(0);
     expect(p.w.document.querySelector('[data-host="codex"]')?.getAttribute('aria-pressed')).toBe('true');
   });
+  it('excludes earlier steps from a recent time range even when their execution has a recent event', () => {
+    const p = page(); const old = new Date(Date.now() - 7_200_000).toISOString();
+    p.push(snapshot([run('mixed-age', 'claude', [step('old', 'admission', 'jev', { at: old, durationMs: 900 }), step('recent', 'router', 'jev', { durationMs: 80 })])]));
+    const range = p.get('window'); (range as unknown as { value: string }).value = '3600000'; range.dispatchEvent(new p.w.Event('change'));
+    expect(p.get('p50').textContent).toBe('80 ms'); expect(p.get('measured').textContent).toBe('1');
+    expect(p.get('trace').textContent).not.toContain('admission outcome');
+  });
+  it('searches visible feature names, exposes filter state and distinguishes a missing source from an idle feature', () => {
+    const p = page(); const s = snapshot([run('searchable', 'claude', [step('allocation', 'allocation', 'jev')])]);
+    s.operations.features.find(f => f.id === 'lean')!.state = 'unavailable'; p.push(s);
+    const search = p.get('search'); (search as unknown as { value: string }).value = 'Gate B'; search.dispatchEvent(new p.w.Event('input'));
+    expect(p.get('runs').textContent).toContain('claude execution'); expect(p.get('coverage').textContent).toContain('기록원 읽기 불가');
+    p.click('[data-state=unconfirmed]'); expect(p.w.document.querySelector('[data-state=unconfirmed]')?.getAttribute('aria-pressed')).toBe('true');
+    p.click('#language'); expect(p.get('coverage').textContent).toContain('Source unavailable');
+    expect(p.w.document.querySelectorAll('#latest')).toHaveLength(1);
+  });
   it('only pulses an edge for a newly observed linked stage in the same execution', () => {
     const p = page(); const a = step('a', 'admission', 'jev', { durationMs: 60 });p.push(snapshot([run('one', 'claude', [a])]));
     p.push(snapshot([run('one', 'claude', [a, step('b', 'allocation', 'jev', { durationMs: 80 })])]));
@@ -77,6 +93,15 @@ describe('dashboard live interactions', () => {
     const p = page(); p.push(snapshot([run('codex', 'codex', [step('wire', 'router', 'host', { model: { selected: 'gpt-6.1-sol', observed: 'gpt-6.1-sol', status: 'confirmed', selectedEffort: 'low', observedEffort: null, forwardedEffort: 'low', effortSource: 'provider_request' } })])]));
     expect(p.get('model-proof').textContent).toContain('API 전송 effort low'); expect(p.get('model-proof').textContent).toContain('호스트 응답에 미제공');
     p.click('#language'); expect(p.get('model-proof').textContent).toContain('API request effort low'); expect(p.get('model-proof').textContent).toContain('Not reported by host');
+  });
+  it('fully translates model confirmation and decision evidence without changing model IDs', () => {
+    const p = page(); const r = run('translated', 'codex', [step('observed', 'router', 'host', {
+      title: 'Router · root_result', summary: '선택 모델과 실제 모델 일치 · gpt-6.1-sol', details: ['기존 모델 gpt-6.1-sol'],
+      model: { selected: 'gpt-6.1-sol', observed: 'gpt-6.1-sol', status: 'confirmed', selectedEffort: null, observedEffort: null },
+    })], { title: 'Codex 실행' }); p.push(snapshot([r])); p.click('#language');
+    const text = ['runs', 'signal', 'detail', 'circuit-inspector'].map(id => p.get(id).textContent).join(' ');
+    expect(text).not.toMatch(/[가-힣]/); expect(text).toContain('Selected and observed models match');
+    expect(text).toContain('Decision evidence'); expect(text).toContain('gpt-6.1-sol');
   });
   it('renders metadata as text and supports searching, feature selection and attention drill-down', () => {
     const p = page();const hostile = '<img src=x onerror="alert(1)">';

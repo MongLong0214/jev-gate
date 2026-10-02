@@ -19,7 +19,7 @@ The marketplace installs [the latest release](https://github.com/MongLong0214/je
 
 The [native Codex plugin](plugins/codex/README.md) connects **Gate A/B, planning, contract acceptance, root guard, Lean, Router and Compact** to ordinary native Codex through its local connection, alongside Evidence, Output and recording. Owned workers use the official Codex App Server; native login and permissions remain authoritative. Automatic connection was tested with Codex CLI 0.160.0 and Node 22.15+.
 
-For an installation without a build step, download **`jev-gate-codex-0.8.4.zip`** from the [v0.8.4 release](https://github.com/MongLong0214/jev-gate/releases/tag/v0.8.4), extract it, and register the extracted directory:
+For an installation without a build step, download **`jev-gate-codex-0.8.5.zip`** from the [v0.8.5 release](https://github.com/MongLong0214/jev-gate/releases/tag/v0.8.5), extract it, and register the extracted directory:
 
 ```sh
 codex plugin marketplace add /absolute/path/to/extracted-plugin
@@ -44,8 +44,6 @@ Codex owns login and hook trust: review/trust installed hooks in `/hooks` when t
 The dashboard opens automatically when the installed plugin starts. Claude Code and Codex share one local browser dashboard, with host filters and private recording enabled by default. No dashboard terminal, port selection, trace directory or `--debug` flag is needed.
 
 For diagnostics, run `node /absolute/jev-gate/plugins/codex/dist/cli.mjs doctor`. Manual `dashboard --port 4733` remains available for development or a second view.
-
-The Codex dashboard shows all ten feature stages and separates Jev selection from actual host application. With up to 16 isolated workers enabled by default, Jev chooses a single worker or a planner and dependency graph for independent outcomes. Ordinary native sessions use the automatic local connection for policies. The dashboard distinguishes a recorded policy decision from its observed application; an open session using its previous provider does not become connected retroactively.
 
 [Native feature support, configuration, environment inheritance and troubleshooting →](plugins/codex/README.md)
 
@@ -82,7 +80,9 @@ Every feature defaults to on, including main model routing, manual Compact and r
 
 Starting with Opus establishes the incoming baseline. Every new user turn is assessed again; selecting Sonnet on one turn does not lock later difficult work to Sonnet. Normal tool steps reuse that turn's result, without another Jev assessment or an Opus warm-up call. `ANTHROPIC_MODEL` explicitly pins the model; `CLAUDE_CODE_EFFORT_LEVEL` explicitly pins effort. Those dimensions remain independent. A missing effort field can resolve from the host's effective default; it does not mean routing is disabled. A real max pin is preserved, while unpinned max can use a valid target-model effort selected from its own distribution.
 
-Simple search, lookup, listing and mechanical worker tasks prefer **Haiku in Claude / account-listed Luna in Codex**. Main-model changes still evaluate the complete requested outcome and actual model capabilities. Known Claude downgrades use the existing 0.6 confidence/control/risk criteria; upgrades and unknown relationships retain the stricter 0.8 default. Those probabilities are policy inputs, not measured success rates.
+Simple search, lookup, listing and mechanical worker tasks prefer **Haiku in Claude / account-listed Luna in Codex**. Main-model changes still evaluate the complete requested outcome and actual model capabilities. Known product-role downgrades in both hosts use the existing 0.6 confidence/control/risk criteria; upgrades and unknown relationships retain the stricter 0.8 default. Those probabilities are policy inputs, not measured success rates.
+
+“Do not edit,” “preserve the API” and required checks constrain the work; they do not pin a model or effort. An explicit instruction to keep Opus, keep xhigh, or disable delegation does. Both hosts use the same distinction. Codex uses the current account's model descriptions and effort list, including Luna and Terra when available.
 
 For a self-contained bounded tool outcome, Gate A can choose one fast worker without a planner even when the older delegation-cost estimate is negative. Current-workspace targets such as the current branch's PR, its diff and repository symbols can be discovered with native tools; you do not need to supply a PR URL, file list or test command for a mechanical documentation update. Jev classifies the whole requested outcome as bounded, other or unclear, using the existing support threshold. Missing earlier choices and broad investigations still preserve the normal path. This preference is judged in the existing Jev batch; it does not spawn a worker for each file read. The main integrates the result and remains available during background execution. Conversation-only replies, missing context, explicit no-delegation and configured depth floors retain their native behavior. The dashboard identifies this fast-worker preference separately from the cost estimate.
 
@@ -91,6 +91,8 @@ Root model changes can rebuild the full conversation prefix on another model. Th
 **Claude 2.1.287 limitation:** its context summary estimates tokens but does not provide a safe upper bound for the complete current request or prove a retained thinking/tool continuation is Haiku-compatible. Opus/Sonnet to Haiku root switching therefore remains `context_unverified`. Fresh Haiku workers are verified and receive no effort parameter. The existing candidate path can accept a genuine current request bound plus compatibility evidence; synthetic tests of that path do not prove this host supports it.
 
 Root records show incoming/effective effort and source, model/effort pins, candidate exclusions, selection direction/threshold, and the actual loaded `hook_version`. The dashboard shows selected values, the request boundary, and response observations separately. An Opus session header can coexist with a Sonnet request. Updating installed files does not replace an already running host's hook/provider: start a fresh host after upgrading.
+
+A direct main conversation can delegate one bounded subtask to an owned worker. Both hosts reserve that execution, apply Gate B once when eligible, keep the main responsive and collect its terminal result. The subtask receipt does not complete or orchestrate the overall user request. Codex returns the execution identity when termination or settlement is uncertain so status can collect the original result without launching another worker.
 
 Gate stays native for a direct admission, a missing key, or no `prompt_id`; none of those is a failure of the install. The default depth floor of 0 permits assessment as soon as the host reports native context usage. The first Claude prompt has no usage yet and keeps native execution; direct guidance can still recommend a bounded fast worker. `gateMode` `off` does not turn the other parts off. There is no master switch and no `evidenceEnabled` option.
 
@@ -101,6 +103,12 @@ The API key screen belongs to the existing MCP process and stops with it. In a h
 ## See it work live · Claude Code and Codex
 
 The installed plugin opens one shared local dashboard automatically. Its execution circuit shows Gate's direct, single-worker and planned branches, independent Lean handoff, Router / Compact / Output policies, and Evidence search. Select a stage or execution to inspect Jev judgments, measured response time, code policy, model application and host outcomes. The host filter lets you view Claude Code, Codex or both. Korean/English and light/dark controls are in the top right.
+
+1. Ask in your normal session, for example: **“Find this function's declaration and callers. Report paths and lines; do not edit.”**
+2. Select the host and execution in the dashboard. Gate A shows the chosen path; Gate B and Worker show any delegation; Router shows the selected and submitted model/effort. Some requests legitimately stay direct.
+3. Select a stage for its explanation, judgment and result. Use the execution timeline to inspect checks, dependencies, errors or unobserved outcomes. Search accepts the feature names displayed on screen.
+
+**“Waiting for the next call's event” means the live connection is open and no newer feature event has arrived.** It is not a queued job or an API call running continuously. Pause freezes the view; it does not stop workers. Reconnecting means the browser's event stream is disconnected and will retry automatically.
 
 Recording defaults to on and does **not** require `claude --debug`. Both hosts record private metadata under `~/.local/state/jev-gate/{claude,codex}/traces` (or `$XDG_STATE_HOME`). An existing explicit trace/debug path remains supported. The dashboard shows metadata only; it does not send requests to Jev or expose prompts, source bodies, tool output or API keys.
 
@@ -125,6 +133,8 @@ The dashboard preference is `~/.config/jev-gate/dashboard/config.json` (`$XDG_CO
 | **Model mismatch** | Selected and observed models differ. Both values are shown. |
 
 Circuit lines explain possible paths. A moving light requires a new connected event in the same recorded execution. Charts use measured Jev response times; quiet screens stay quiet. Missing usage remains unknown. Compact and Output run locally without Jev, and packet size is not measured token savings. See [recording details and limits](docs/advanced-usage.md#doctor-and-explain).
+
+The execution list keeps the latest 200 runs. Unfiltered counters cover readable recorded history; host/time filters recompute measurements from the displayed runs and exclude steps outside the selected period. File changes trigger live updates. Unchanged trace files are reused across browser viewers, with a periodic rescan for missed notifications and time-based unknown states.
 
 ## The five parts
 
@@ -283,7 +293,7 @@ claude plugin validate . --strict
 
 A saving claim needs the paired A/B bench (`node dist/bench/ab.js`, see `docs/bench-ab.md`), not a within-session estimate. `npm test` uses fake HTTP and a fake CLI. It does not need a key or a login. The bench is not part of installing or of changing the plugin. Do not send secrets or raw transcripts.
 
-`claude --plugin-dir .` loads this tree as the plugin. One part can be loaded from `mods/compact`, `mods/output`, `mods/router`, or `plugins/evidence`; option names differ, and those READMEs say how. Gate and lean settings, background execution and worktree conditions, and `node dist/cli.js explain` are in [Advanced usage](docs/advanced-usage.md).
+`claude --plugin-dir .` loads the built checkout as the combined plugin. Individual parts use their own option names; see their READMEs. Standalone Router development requires the packaged `router` profile so its shared sources stay inside the plugin root. Gate and lean settings, background execution and worktree conditions, and `node dist/cli.js explain` are in [Advanced usage](docs/advanced-usage.md).
 
 ## Older work
 
