@@ -29,9 +29,11 @@ const FLOOR = costModelFloor(MODEL);
 const DEEP = 406_000;
 
 const answers = (over: Record<string, number> = {}): Record<string, unknown> => {
-  const { size = 3, tool_calls = 4, ...facts } = { forbids_delegation: 0.05, external_tools: 0.05, plan_only: 0.05, parallel_outcomes: 0.05, ...over };
+  const { bounded_tool_work, ...other } = over;
+  const { size = 3, tool_calls = 4, ...facts } = { forbids_delegation: 0.05, external_tools: 0.05, plan_only: 0.05, parallel_outcomes: 0.05, ...other };
   return {
     ...Object.fromEntries(Object.entries(facts).map(([k, v]) => [k, { type: 'noul', noul: v }])),
+    ...(bounded_tool_work === undefined ? {} : { bounded_tool_work: { type: 'choice', choice: 'bounded', confidence: bounded_tool_work, probabilities: { bounded: bounded_tool_work, other: 1 - bounded_tool_work, unclear: 0 } } }),
     size: { type: 'score', score: size, confidence: 0.9 },
     task_context: {
       type: 'choice',
@@ -400,8 +402,17 @@ describe('bounded fast-worker preference', () => {
     expect(result.estimate?.saving_tokens).toBeLessThan(0);
   });
   it.each([undefined, .79, NaN, 1.1])('does not create a preference from absent, uncertain or invalid facts: %s', value => {
-    const a = answers({ tool_calls: 1 }); if (value !== undefined) a.bounded_tool_work = { type: 'noul', noul: value };
+    const a = answers({ tool_calls: 1, ...(value === undefined ? {} : { bounded_tool_work: value }) });
     expect(decide(a)).toMatchObject({ shape: 'direct', reason: 'admission_not_worth' });
+  });
+  it('requires the asked choice type, a unique bounded choice and the unchanged .8 support', () => {
+    for (const bounded_tool_work of [
+      { type: 'noul', noul: 1 },
+      { type: 'choice', choice: 'unknown', confidence: 1, probabilities: { unknown: 1 } },
+      { type: 'choice', choice: 'bounded', confidence: 1, probabilities: { bounded: .5, other: .5, unclear: 0 } },
+      { type: 'choice', choice: 'other', confidence: 1, probabilities: { bounded: 0, other: 1, unclear: 0 } },
+    ]) expect(decide({ ...answers({ tool_calls: 1 }), bounded_tool_work }).shape).toBe('direct');
+    expect(decide(answers({ tool_calls: 1, bounded_tool_work: .8 })).preference).toBe('bounded_tool_worker');
   });
   it('preserves no-delegation, missing context, conversational answers, broad work and explicit hierarchy', () => {
     const base = answers({ tool_calls: 1, bounded_tool_work: .99 });

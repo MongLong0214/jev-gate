@@ -94,7 +94,7 @@ type NextLike<E, R> = ((e: E) => Promise<R>) & { readonly signal: AbortSignal };
  */
 export const VERIFIED_HOST = '2.1.282';
 /** Identifies this loaded hook source, independently of a manifest updated on disk. */
-export const ROUTER_HOOK_VERSION = '0.8.3';
+export const ROUTER_HOOK_VERSION = '0.8.4';
 
 /**
  * Later 2.1 releases are accepted too. Pinned to one release, spawn routing went native after every host update: the
@@ -515,7 +515,9 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
         model_not_asked: offer.modelAsked ? null : pins.mainModel ? 'model_pinned' : !config.routeMainModel ? 'routing_off' : 'no_alternative',
         effort_not_asked: offer.effortQuestions.size ? null : effortNotAsked,
         excluded: { ...excluded, effort_incompatible: candidates.length - offer.candidates.length }, candidates: offer.candidates.slice(0, 16).map(c => c.id), host_version: hostBase ?? null,
-        patch: t.patch, ...(cached.held ? { held_for_cache: cached.held } : {}), reasons: decision.reasons, selection: decision.diagnostics, answers: result.ok ? pairReceipt(offer, result.answers) : null });
+        proposed_patch: decision.patch, patch: t.patch, ...(cached.held ? { held_for_cache: cached.held } : {}),
+        reasons: { ...decision.reasons, ...(cached.held ? { effort: 'cache_preserved' } : {}) },
+        selection: decision.diagnostics, answers: result.ok ? pairReceipt(offer, result.answers) : null });
     } catch (error) { t.stopped = true; log(engine, { event: 'root', turn: turnId, skipped: error === ENDED ? 'turn_retired' : 'internal_error' }); }
   };
 
