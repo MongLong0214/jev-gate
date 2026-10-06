@@ -1,4 +1,5 @@
 import { claudeAllocation } from './claude-allocation.js';
+import { sameModel } from './claude-models.js';
 import { prepareDispatchAllocation, selectedDispatchPair, type DispatchAllocation } from './dispatch-allocation.js';
 import { OWNED_AGENT_PROFILES } from './agents.js';
 import type { PairOffer, PairPatch } from './router-selection.js';
@@ -1057,16 +1058,18 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     const state = readJob(deps.env, input.session_id);
     if (!state.ok || !state.value || ![state.value.current, ...state.value.history].some(g => own(g.active, input.tool_use_id!)?.background_execution)) return null;
     let executionPrompt: string | null = null;
+    let requestedModel = requestedModelFor(input.tool_input);
     updateJob(deps.env, input.session_id, prev => {
       if (!prev) return null;
       const change = (gen: JobGeneration): JobGeneration => {
         const r = own(gen.active, input.tool_use_id!); if (!r?.background_execution || r.background_execution.agent_id && r.background_execution.agent_id !== agentId) return gen;
         executionPrompt = gen.prompt_id;
+        requestedModel = r.allocation_pair?.model ?? requestedModel;
         return { ...gen, active: { ...gen.active, [input.tool_use_id!]: { ...r, background_execution: { ...r.background_execution, agent_id: agentId, resolved_model: observedModel(input.tool_response) } } } };
       };
       return { ...prev, current: change(prev.current), history: prev.history.map(change) };
     });
-    trace?.write('background_launch', { ...base, execution_prompt_id: executionPrompt, agent_id: agentId, status: 'running', resolved_model: observedModel(input.tool_response) });
+    trace?.write('background_launch', { ...base, execution_prompt_id: executionPrompt, agent_id: agentId, requested_model: requestedModel, status: 'running', resolved_model: observedModel(input.tool_response) });
     return skip();
   };
 
@@ -1080,7 +1083,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         if (g.prompt_id !== owner.gen.prompt_id || !r?.background_execution || r.background_execution.token !== owner.r.background_execution?.token) return g;
         const receipt: Receipt = { task_id: r.task_id ?? '', contract_hash: r.contract_hash ?? '', rev: r.rev ?? 0, attempt: r.attempt, tool_use_id: owner.id,
           provenance: 'worker_reported', reply: null, verdict: 'unknown', verdict_reason: 'generation_changed', advisory: null,
-          observed_model: observed.model, root_effort: null, recorded_at: new Date().toISOString() };
+          requested_model: r.allocation_pair?.model ?? null, observed_model: observed.model, root_effort: null, recorded_at: new Date().toISOString() };
         return { ...release(g, owner.id), receipts: [...g.receipts, receipt] };
       }) } : null);
       trace?.write('background_terminal', { ...base, execution_prompt_id: owner.gen.prompt_id, tool_use_id: owner.id, orphaned: true, accepted: false, status: observed.completed ? 'completed' : 'failed' });
@@ -1110,7 +1113,15 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
 
   const backgroundStop = async (): Promise<HookResult> => {
     if (!input.session_id || !input.agent_id) return skip('missing_ids');
-    const observed = claudeTerminal(input);
+    // Claude can fire SubagentStop before its buffered final assistant row reaches
+    // disk. Wait briefly for the exact native message; never accept the hook text
+    // alone or substitute the preceding tool-use row as terminal evidence.
+    let observed = claudeTerminal(input);
+    for (let retry = 0; !observed && retry < 8; retry++) {
+      if (deps.signal?.aborted) return skip('aborted');
+      await new Promise(resolve => setTimeout(resolve, 50));
+      observed = claudeTerminal(input);
+    }
     const state = readJob(deps.env, input.session_id);
     if (!state.ok || !state.value) return skip('no_state');
     const found = [state.value.current, ...state.value.history].flatMap(gen => Object.entries(gen.active).flatMap(([id, r]) => r.background_execution && (r.background_execution.agent_id === input.agent_id || observed?.token === r.background_execution.token) ? [{ gen, id, r }] : []));
@@ -2109,7 +2120,11 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     const status = responseStatus(input.tool_response);
     const text = replyText(input.tool_response);
     const parsed = status === 'completed' ? parsePlannerReply(text, config.maxTasksPerPlan) : null;
-    const agreement = plannerModelAgreement(gen.planner_tier, observedModel(input.tool_response));
+    const allocated = own(gen.active, toolUseId)?.allocation_pair?.model;
+    const observed = observedModel(input.tool_response);
+    const agreement: ModelAgreement = allocated
+      ? observed === null ? 'unverified' : (deps.host ? allocated === observed : sameModel(allocated, observed)) ? 'match' : 'mismatch'
+      : plannerModelAgreement(gen.planner_tier, observed);
     // #53 review: every plan record, whatever the outcome, names the agent that ran and both models, as the post
     // records do for unmatched calls; an agreement label alone does not say which agent or model ran.
     // A pinned or native planner call is never patched, so it has no tier; what it asked for is its own pin or its
@@ -2117,7 +2132,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     const plannerFacts = {
       subagent_type: str(isRecord(input.tool_input) ? input.tool_input['subagent_type'] : null),
       planner_model: {
-        requested: gen.planner_tier === null ? requestedModelFor(input.tool_input) : config.models[gen.planner_tier],
+        requested: allocated ?? (gen.planner_tier === null ? requestedModelFor(input.tool_input) : config.models[gen.planner_tier]),
         observed: observedModel(input.tool_response),
         agreement,
       },
@@ -2254,6 +2269,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     reservation.contract_hash ?? task?.contract_hash ?? '';
 
   const handleWorkerResult = (sessionId: string, gen: JobGeneration, toolUseId: string, reservation: Reservation): HookResult => {
+    const requestedModel = reservation.allocation_pair?.model ?? requestedModelFor(input.tool_input);
     const taskId = reservation.task_id ?? '';
     const rev = reservation.rev ?? 0;
     const attempt = reservation.attempt;
@@ -2355,7 +2371,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         ...(verification ? { verification } : {}),
         ...(formatOnly ? { evidence_format_only: true as const } : {}),
         requested_tier: (dispatchedType ? OWNED_AGENTS[dispatchedType]?.tier : null) ?? reservation.tier,
-        requested_model: requestedModelFor(input.tool_input),
+        requested_model: requestedModel,
       };
       // T1: the receipt is appended, so the latest attempt is the one that decides; earlier ones stay in the array.
       next = { ...next, receipts: [...next.receipts.filter((r) => r.tool_use_id !== toolUseId), receipt] };
@@ -2418,7 +2434,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         // to. `subagent_type` here is the dispatched one (tool_input reflects the patched call), not the tier the
         // coordinator originally called.
         subagent_type: dispatchedType,
-        requested_model: requestedModelFor(input.tool_input),
+        requested_model: requestedModel,
         resolved_model: observedModel(input.tool_response),
         tool_response: whitelistToolResponse(input.tool_response),
         root_effort: input.effort ?? null,
@@ -2480,14 +2496,15 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     const reservation = input.prompt_id == null || job.current.prompt_id === input.prompt_id ? own(job.current.active, toolUseId) : undefined;
     if (!reservation) {
       // A2: a late result belongs to its own generation only; it is recorded and never advances the current plan.
-      const orphaned = job.history.some((h) => own(h.active, toolUseId) !== undefined);
+      const retiredReservation = job.history.map(h => own(h.active, toolUseId)).find(r => r !== undefined);
+      const orphaned = retiredReservation !== undefined;
       trace?.write('post', {
         ...base,
         matched: false,
         orphaned,
         job_state: 'present',
         subagent_type: str(isRecord(input.tool_input) ? input.tool_input['subagent_type'] : null),
-        requested_model: requestedModelFor(input.tool_input),
+        requested_model: retiredReservation?.allocation_pair?.model ?? requestedModelFor(input.tool_input),
         resolved_model: observedModel(input.tool_response),
         tool_response: whitelistToolResponse(input.tool_response),
       });
@@ -2503,10 +2520,12 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     const sessionId = input.session_id;
     const toolUseId = input.tool_use_id;
     const error = input.error ?? '';
+    let requestedModel = requestedModelFor(input.tool_input);
     if (sessionId && toolUseId) {
       const old = readJob(deps.env, sessionId);
+      if (old.ok && old.value) requestedModel = [old.value.current, ...old.value.history].map(g => own(g.active, toolUseId)?.allocation_pair?.model).find(Boolean) ?? requestedModel;
       if (old.ok && old.value && [old.value.current, ...old.value.history].some(g => own(g.active, toolUseId)?.background_execution)) {
-        trace?.write('failure', { ...base, release_unconfirmed: true, is_interrupt: input.is_interrupt ?? null });
+        trace?.write('failure', { ...base, requested_model: requestedModel, resolved_model: observedModel(input.tool_response), release_unconfirmed: true, is_interrupt: input.is_interrupt ?? null });
         return skip();
       }
       if (input.prompt_id != null && old.ok && old.value && old.value.current.prompt_id !== input.prompt_id) return settleRetiredCodex(sessionId, toolUseId);
@@ -2527,6 +2546,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
           reply: null,
           verdict: 'unknown',
           verdict_reason: 'the call failed before a reply was returned',
+          requested_model: reservation.allocation_pair?.model ?? requestedModel,
           advisory: null,
           observed_model: null,
           root_effort: input.effort ?? null,
@@ -2542,7 +2562,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       // #48 P0-2: same fields as the 'post' phase's no-job branch, for the same reason -- a native call that fails
       // is still a dispatch of some subagent_type, requested at some model, and this is the one record of it.
       subagent_type: str(isRecord(input.tool_input) ? input.tool_input['subagent_type'] : null),
-      requested_model: requestedModelFor(input.tool_input),
+      requested_model: requestedModel,
       resolved_model: observedModel(input.tool_response),
       error_first_line: error.split('\n')[0]?.slice(0, 200) ?? null,
       error_len: error.length,

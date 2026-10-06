@@ -47,18 +47,21 @@ export const ensureDashboard = async (root: string, env: Env, options: { launch?
     writeFileSync(fd, String(process.pid));
     const previous = readPrivateJson(runtimePath(env));
     const version = versionAt(root);
+    let reusePort: number | undefined;
     if (previous && await healthy(previous)) {
       const parts = (v: unknown): number[] => typeof v === 'string' && /^\d+\.\d+\.\d+$/.test(v) ? v.split('.').map(Number) : [];
       const before = parts(previous['version']); const current = parts(version);
       const newer = current.length === 3 && before.length === 3 && current.some((n, i) => n > before[i]! && current.slice(0, i).every((p, j) => p === before[j]));
       if (previous['version'] === version || before.length && current.length && !newer) return true;
       // Authenticated loopback shutdown updates the running build without signalling an arbitrary PID.
-      await fetch(`${previous['url']}api/shutdown`, { method: 'POST', headers: { authorization: `Bearer ${previous['token']}` }, signal: AbortSignal.timeout(300) }).catch(() => undefined);
+      const shutdown = await fetch(`${previous['url']}api/shutdown`, { method: 'POST', headers: { authorization: `Bearer ${previous['token']}` }, signal: AbortSignal.timeout(300) }).catch(() => null);
+      if (!shutdown?.ok) return false;
+      reusePort = Number(new URL(String(previous['url'])).port);
     }
     const token = randomBytes(16).toString('hex');
     const entry = join(root, 'dist', existsSync(join(root, '.codex-plugin/plugin.json')) ? 'cli.mjs' : 'cli.js');
     if (!existsSync(entry)) return false;
-    writePrivateJson(runtimePath(env), { token, version, startingAt: Date.now(), pid: process.pid });
+    writePrivateJson(runtimePath(env), { token, version, startingAt: Date.now(), pid: process.pid, ...(reusePort ? { reusePort } : {}) });
     if (options.launch) options.launch(entry, token);
     else {
       const child = spawn(process.execPath, [entry, 'dashboard-serve', token], { env: { ...env }, stdio: 'ignore', detached: true });
@@ -76,10 +79,12 @@ export const ensureDashboard = async (root: string, env: Env, options: { launch?
 };
 
 export const serveAutomaticDashboard = async (root: string, env: Env, token: string): Promise<void> => {
-  if (!tokenOf(token) || readPrivateJson(runtimePath(env))?.['token'] !== token || !dashboardStatus(env).enabled) return;
-  const server = await startDashboard(dashboardSources(env), 0, { token });
+  const launch = readPrivateJson(runtimePath(env));
+  if (!tokenOf(token) || launch?.['token'] !== token || !dashboardStatus(env).enabled) return;
+  const reusePort = typeof launch['reusePort'] === 'number' && Number.isInteger(launch['reusePort']) && launch['reusePort'] > 0 && launch['reusePort'] <= 65535 ? launch['reusePort'] : 0;
+  const server = await startDashboard(dashboardSources(env), reusePort, { token });
   writePrivateJson(runtimePath(env), { token, version: versionAt(root), url: server.url, pid: process.pid });
-  if (env['JEV_DASHBOARD_NO_OPEN'] !== '1') openSetupBrowser(server.url);
+  if (!reusePort && env['JEV_DASHBOARD_NO_OPEN'] !== '1') openSetupBrowser(server.url);
   let closing = false;
   const stop = (): void => {
     if (closing) return; closing = true; clearInterval(check);

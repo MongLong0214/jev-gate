@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 
-import { EXPLAIN_CAVEATS, explainDir, explainRecords, readTraceRecords, type TraceCache } from '../src/explain.js';
+import { TraceDirectoryReader, allocatedTraceRecords, EXPLAIN_CAVEATS, explainDir, explainRecords, readTraceRecords, type TraceCache } from '../src/explain.js';
 
 // What the gate did was already recorded; only reading it was missing. These drive the real reader over real record
 // shapes, so a rendered line is only ever a field that was written.
@@ -235,5 +235,62 @@ describe('explain (2026-09-20)', () => {
 
   it('an absent or empty directory reads as no records, not as a crash', () => {
     expect(explainDir(join(tmp, 'does-not-exist'))).toEqual(['no trace records found']);
+  });
+});
+
+
+describe('final host allocation diagnostics', () => {
+  it.each(['claude', 'codex'])('joins selected models by exact host/session/tool identity without changing original records (%s)', host => {
+    const selected = host === 'claude' ? 'claude-sonnet-5-5' : 'gpt-6.1-sol';
+    const records = [dispatch(1, 'tool', { host, allocation: { selected_model: selected, effort_edit: { kind: 'set', value: 'high' } }, decision: { tier: 'deep', model: 'opus', action: 'patch' } }),
+      base('post', 2, { host, tool_use_id: 'tool', requested_model: 'opus', resolved_model: selected }),
+      base('failure', 3, { host, tool_use_id: 'tool', requested_model: 'opus' }),
+      base('plan', 4, { host, tool_use_id: 'tool', planner_model: { requested: 'opus', observed: selected, agreement: 'mismatch' } }),
+      base('post', 5, { host, session_id: 'other', tool_use_id: 'tool', requested_model: 'opus' })];
+    const joined = allocatedTraceRecords(records);
+    expect(joined[1]?.requested_model).toBe(selected);
+    expect(joined[2]?.requested_model).toBe(selected);
+    expect(joined[3]?.planner_model).toEqual({ requested: selected, observed: selected, agreement: 'match' });
+    expect(joined[4]?.requested_model).toBe('opus');
+    expect(records[1]?.requested_model).toBe('opus');
+    const out = render(records);
+    expect(out).toContain(`selected ${selected} / high`);
+    expect(out).not.toContain(`not the ${selected}`);
+  });
+});
+
+describe('incremental directory reconciliation', () => {
+  it('reuses idle results, reads changed names, and recovers missed additions, deletions and replacements', () => {
+    const dir = mkdtempSync(join(tmp, 'incremental-')), reader = new TraceDirectoryReader(100), file = join(dir, 'event.json');
+    writeFileSync(file, JSON.stringify(base('pre_result', 1)));
+    const initial = reader.read(dir, 1000);
+    expect(reader.read(dir, 1001)).toBe(initial);
+    writeFileSync(file, JSON.stringify(base('post', 2))); reader.invalidate(dir, 'event.json');
+    expect(reader.read(dir, 1002).records[0]?.phase).toBe('post');
+    writeFileSync(join(dir, 'missed.json'), JSON.stringify(base('failure', 3)));
+    expect(reader.read(dir, 1003).records).toHaveLength(1);
+    expect(reader.read(dir, 1100).records).toHaveLength(2);
+    rmSync(file); reader.invalidate(dir, 'event.json');
+    expect(reader.read(dir, 1101).records).toHaveLength(1);
+    writeFileSync(join(dir, 'missed.json'), '{'); reader.invalidate(dir, 'missed.json');
+    expect(reader.read(dir, 1102)).toEqual({ records: [], unreadable: 1 });
+    rmSync(join(dir, 'missed.json'));
+    expect(reader.read(dir, 1200)).toEqual({ records: [], unreadable: 0 });
+    writeFileSync(file, JSON.stringify(base('post', 4))); reader.invalidate(dir);
+    expect(reader.read(dir, 1201).records).toHaveLength(1);
+    rmSync(dir, { recursive: true }); mkdirSync(dir);
+    expect(reader.read(dir, 1202)).toEqual({ records: [], unreadable: 0 });
+  });
+  it('rejects substituted file and directory symlinks and oversized records, and discovers a newly created directory', () => {
+    const dir = join(tmp, 'later-reader'), outside = mkdtempSync(join(tmp, 'outside-reader-')), reader = new TraceDirectoryReader(100);
+    expect(reader.read(dir, 1000).records).toEqual([]); mkdirSync(dir);
+    const external = join(outside, 'private.json'); writeFileSync(external, JSON.stringify({ secret: 'never shown' }));
+    const file = join(dir, 'event.json'); symlinkSync(external, file);
+    writeFileSync(join(dir, 'large.json'), JSON.stringify({ value: 'x'.repeat(512001) }));
+    expect(reader.read(dir, 1001)).toEqual({ records: [], unreadable: 2 });
+    rmSync(file); writeFileSync(file, JSON.stringify(base('post', 1))); reader.invalidate(dir, 'event.json');
+    expect(reader.read(dir, 1002).records).toHaveLength(1);
+    rmSync(dir, { recursive: true }); symlinkSync(outside, dir);
+    expect(reader.read(dir, 1003)).toEqual({ records: [], unreadable: 0 });
   });
 });

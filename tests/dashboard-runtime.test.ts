@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { describe, expect, it, vi } from 'vitest';
 import { ensureDashboard } from '../src/dashboard-launch.js';
 import { setDashboard } from '../src/dashboard-settings.js';
-import { credentialsDir, readPrivateJson } from '../src/credentials.js';
+import { credentialsDir, readPrivateJson, writePrivateJson } from '../src/credentials.js';
 
 // Packaged detached child + native browser opener. Isolated homes, no owner's browser or credentials.
 describe.skipIf(process.env['JEV_DASHBOARD_E2E'] !== '1')('packaged automatic dashboard', () => {
@@ -29,6 +29,13 @@ describe.skipIf(process.env['JEV_DASHBOARD_E2E'] !== '1')('packaged automatic da
       await vi.waitFor(()=>expect(existsSync(opened)).toBe(true));expect(readFileSync(opened,'utf8').trim().split('\n')).toHaveLength(1);
       expect(await ensureDashboard(join(temp,'codex'),env)).toBe(true);expect(readPrivateJson(runtime)?.['token']).toBe(first['token']);
       const page=await fetch(String(first['url']));expect(page.status).toBe(200);expect(await page.text()).toContain('now-strip');
+      expect(readFileSync(opened,'utf8').trim().split('\n')).toHaveLength(1);
+      writePrivateJson(runtime, { ...first, version: '0.0.0' });
+      expect(await ensureDashboard(join(temp,'legacy'),env)).toBe(true);
+      const upgraded = readPrivateJson(runtime)!;
+      expect(upgraded['token']).not.toBe(first['token']);
+      expect(upgraded['url']).toBe(first['url']);
+      await new Promise(resolve => setTimeout(resolve, 150));
       expect(readFileSync(opened,'utf8').trim().split('\n')).toHaveLength(1);
       setDashboard(env,false);await vi.waitFor(()=>expect(readPrivateJson(runtime)).toBeNull(),{timeout:5000});
       expect(await ensureDashboard(join(temp,'legacy'),env)).toBe(false);

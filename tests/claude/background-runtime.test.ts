@@ -90,7 +90,7 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('responsive installed Cla
       expect(result, output.slice(-8000)).toBe(0); expect(questionSeenWhileRunning, JSON.stringify({ output: output.slice(0, 16000) })).toBe(true);
       if (functions) { expect(allocationCalls).toBe(1); expect(pairs.length).toBeGreaterThan(0); for (const pair of pairs) expect(pair).toEqual({ model: 'claude-sonnet-5-5', effort: 'high' }); }
       const state = readJob(env, session); expect(state.ok && state.value).toBeTruthy(); if (!state.ok || !state.value) throw new Error('state absent');
-      expect(state.value.current.prompt_id).toBe(originalPrompt); expect(state.value.current.receipts).toHaveLength(1);
+      expect(state.value.current.prompt_id).toBe(originalPrompt); expect(state.value.current.receipts, JSON.stringify({ state: state.value.current, output: output.slice(-18000) })).toHaveLength(1);
       if (scenario === 'cancel') {
         expect(state.value.current.receipts[0]?.verdict).not.toBe('accept'); expect(state.value.current.active).toEqual({}); expect(state.value.current.outcome).toBe('incomplete'); return;
       }

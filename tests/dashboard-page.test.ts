@@ -118,3 +118,28 @@ describe('dashboard live interactions', () => {
     expect(fetch.mock.calls[0]?.[0]).toBe('/api/recording');p.click('#dashboard-auto');await vi.waitFor(()=>expect(p.get('notice').textContent).toContain('저장하지 못했습니다'));expect(p.get('dashboard-auto').getAttribute('aria-checked')).toBe('true');
   });
 });
+
+
+it('shows a rejected Terra proposal with its probability and threshold in both languages', () => {
+  const p = page(); p.push(snapshot([run('proposal-proof', 'codex', [step('response', 'router', 'host', {
+    routing: { scope: 'root', baseline: 'gpt-6.1-sol', modelReason: 'low_confidence', effortReason: 'selected', proposedModel: 'gpt-5.6-terra', probability: .55, threshold: .6 },
+    model: { selected: 'gpt-6.1-sol', observed: 'gpt-6.1-sol', status: 'confirmed', selectedEffort: 'medium', observedEffort: null },
+  })])]));
+  p.click('.circuit-node[data-feature="router"]');
+  let text = p.get('circuit-inspector').textContent;
+  expect(text).toContain('Jev 제안 모델'); expect(text).toContain('gpt-5.6-terra'); expect(text).toContain('55%'); expect(text).toContain('60%'); expect(text).toContain('변경 기준 미충족');
+  p.click('#language'); text = p.get('circuit-inspector').textContent;
+  expect(text).toContain('Jev proposed model'); expect(text).toContain('Proposal probability'); expect(text).toContain('Change threshold'); expect(text).not.toMatch(/[가-힣]/);
+});
+
+it('shows routing scope, baseline and keep reasons next to the observed response in both languages', () => {
+  const p = page(); p.push(snapshot([run('route-proof', 'claude', [step('response', 'router', 'host', {
+    routing: { scope: 'root', baseline: 'claude-opus-5-5', modelReason: 'same_value', effortReason: 'cache_preserved' },
+    model: { selected: 'claude-opus-5-5', observed: 'claude-opus-5-5', status: 'confirmed', selectedEffort: 'xhigh', observedEffort: null, forwardedEffort: 'xhigh', effortSource: 'host_hook' },
+  })])]));
+  p.click('.circuit-node[data-feature="router"]');
+  let text = p.get('circuit-inspector').textContent;
+  expect(text).toContain('메인 턴'); expect(text).toContain('기존 모델'); expect(text).toContain('현재 모델·설정 유지'); expect(text).toContain('캐시 재사용을 위해 유지'); expect(text).toContain('호스트 응답에 미제공');
+  p.click('#language'); text = p.get('circuit-inspector').textContent;
+  expect(text).toContain('Main turn'); expect(text).toContain('Baseline model'); expect(text).toContain('Kept for cache reuse'); expect(text).toContain('Not reported by host'); expect(text).not.toMatch(/[가-힣]/);
+});

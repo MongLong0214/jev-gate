@@ -1,4 +1,4 @@
-import { StringDecoder } from 'node:string_decoder';
+import { observeResponseStream } from './response-stream.js';
 import { createServer, request as httpRequest, type IncomingMessage } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
@@ -133,18 +133,8 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
       const upstream = (base.protocol === 'https:' ? httpsRequest : httpRequest)(base, { method: req.method, headers }, response => {
         const output = Object.fromEntries(Object.entries(response.headers).filter(([k]) => !['connection', 'transfer-encoding'].includes(k)));
         res.writeHead(response.statusCode ?? 502, output); response.pipe(res);
-        if (sessionId && response.statusCode === 200 && String(response.headers['content-type']).includes('text/event-stream')) {
-          let buffer = ''; const decoder = new StringDecoder('utf8');
-          response.on('data', chunk => {
-            buffer += decoder.write(Buffer.from(chunk));
-            if (Buffer.byteLength(buffer) > 4 * 1024 * 1024) { buffer = ''; return; }
-            let end: number;
-            while ((end = buffer.indexOf('\n\n')) >= 0) {
-              const event = buffer.slice(0, end); buffer = buffer.slice(end + 2);
-              const data = event.split('\n').filter(line => line.startsWith('data:')).map(line => line.slice(5).trim()).join('\n');
-              try { const value = obj(JSON.parse(data)); if (value?.['type'] === 'response.completed') policy?.observeUsage(sessionId, obj(value['response']) ?? {}, submitted); } catch { /* Unknown events are forwarded unchanged. */ }
-            }
-          });
+        if (sessionId && response.statusCode === 200 && req.method === 'POST' && path === '/responses') {
+          observeResponseStream(response, value => policy?.observeUsage(sessionId, value, submitted));
         }
       });
       requests.add(upstream); upstream.once('close', () => requests.delete(upstream));

@@ -1,4 +1,5 @@
 import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readFileSync, type Stats } from 'node:fs';
+import { sameModel } from './claude-models.js';
 import { dirname, join } from 'node:path';
 
 /**
@@ -25,55 +26,136 @@ export interface TraceRead {
   unreadable: number;
 }
 
+/** Historical Gate B records can contain a legacy tier and a different final host allocation.
+ * Join only the exact host/session/tool identity; never infer the model the host actually used. */
+export const allocatedTraceRecords = (records: Rec[]): Rec[] => {
+  const key = (r: Rec): string | null => typeof r['session_id'] === 'string' && typeof r['tool_use_id'] === 'string'
+    ? JSON.stringify([r['host'] ?? 'claude', r['session_id'], r['tool_use_id']]) : null;
+  const models = new Map<string, string>();
+  for (const r of records) {
+    const identity = key(r), model = sub(r, 'allocation')?.['selected_model'];
+    if (r['phase'] === 'pre_result' && identity && typeof model === 'string') models.set(identity, model);
+  }
+  return records.map(r => {
+    const identity = key(r), model = identity ? models.get(identity) : undefined;
+    if (!model) return r;
+    const planner = sub(r, 'planner_model');
+    if (planner) {
+      const observed = str(planner['observed']);
+      const agreement = !observed ? 'unverified' : (r['host'] === 'codex' ? model === observed : sameModel(model, observed)) ? 'match' : 'mismatch';
+      return { ...r, planner_model: { ...planner, requested: model, agreement } };
+    }
+    return r['phase'] === 'post' || r['phase'] === 'failure' || r['phase'] === 'background_launch' ? { ...r, requested_model: model } : r;
+  });
+};
+
 export type TraceCache = Map<string, { signature: string; record: Rec }>;
 const signature = (stat: Stats): string => [stat.dev, stat.ino, stat.size, stat.mtimeMs, stat.ctimeMs].join(':');
 
+const traceName = (name: string): boolean => name.endsWith('.json') && !name.startsWith('.');
+const sortedRecords = (records: Rec[]): Rec[] => records.sort((a, b) => (str(a['written_at']) ?? '').localeCompare(str(b['written_at']) ?? ''));
+
+const readTraceFile = (path: string, cache?: TraceCache, existingStat?: Stats): Rec | null => {
+  let fd: number | undefined;
+  try {
+    if (cache) {
+      const stat = existingStat ?? lstatSync(path);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 512_000) { cache.delete(path); return null; }
+      const previous = cache.get(path);
+      if (previous?.signature === signature(stat)) return previous.record;
+      cache.delete(path);
+    }
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.size > 512_000) return null;
+    const parsed: unknown = JSON.parse(readFileSync(fd, 'utf8'));
+    if (!isRecord(parsed)) return null;
+    cache?.set(path, { signature: signature(stat), record: parsed });
+    return parsed;
+  } catch { cache?.delete(path); return null; }
+  finally { if (fd !== undefined) closeSync(fd); }
+};
+
 export const readTraceRecords = (dir: string, cache?: TraceCache): TraceRead => {
   const directory = join(dir, '.');
-  const records: Rec[] = [];
-  let unreadable = 0;
   let names: string[];
-  try {
-    names = readdirSync(dir);
-  } catch {
+  try { names = readdirSync(dir); }
+  catch {
     if (cache) for (const path of cache.keys()) if (dirname(path) === directory) cache.delete(path);
-    return { records, unreadable };
+    return { records: [], unreadable: 0 };
   }
   if (cache) {
     const present = new Set(names.map(name => join(dir, name)));
     for (const path of cache.keys()) if (dirname(path) === directory && !present.has(path)) cache.delete(path);
   }
+  const records: Rec[] = [];
+  let unreadable = 0;
   for (const name of names.sort()) {
-    if (!name.endsWith('.json') || name.startsWith('.')) continue;
-    const path = join(dir, name);
-    let fd: number | undefined;
-    try {
-      if (cache) {
-        const stat = lstatSync(path);
-        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 512_000) { cache.delete(path); unreadable++; continue; }
-        const previous = cache.get(path);
-        if (previous?.signature === signature(stat)) { records.push(previous.record); continue; }
-        cache.delete(path);
-      }
-      fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-      const stat = fstatSync(fd);
-      if (!stat.isFile() || stat.size > 512_000) {
-        unreadable++;
-        continue;
-      }
-      const parsed: unknown = JSON.parse(readFileSync(fd, 'utf8'));
-      if (isRecord(parsed)) { records.push(parsed); cache?.set(path, { signature: signature(stat), record: parsed }); }
-      else unreadable++;
-    } catch {
-      cache?.delete(path);
-      unreadable++;
-    } finally {
-      if (fd !== undefined) closeSync(fd);
-    }
+    if (!traceName(name)) continue;
+    const record = readTraceFile(join(dir, name), cache);
+    if (record) records.push(record); else unreadable++;
   }
-  // `written_at` is an ISO string, so lexical order is chronological; the read order breaks ties stably.
-  return { records: records.map((r, i) => ({ r, i })).sort((a, b) => (str(a.r['written_at']) ?? '').localeCompare(str(b.r['written_at']) ?? '') || a.i - b.i).map((x) => x.r), unreadable };
+  return { records: sortedRecords(records), unreadable };
 };
+
+/** Watch notifications name changed files; a bounded full reconciliation recovers lost events.
+ * Directory identity is checked on every read so replaced or symlinked roots cannot expose stale data. */
+export class TraceDirectoryReader {
+  private cache: TraceCache = new Map();
+  private dirs = new Map<string, { identity: string; scanned: number; values: Map<string, Rec | null>; dirty: Set<string>; full: boolean; result: TraceRead }>();
+  constructor(private reconciliationMs = 30_000) {}
+  invalidate(dir: string, name?: string): void {
+    const state = this.dirs.get(join(dir, '.'));
+    if (!state) return;
+    if (!name || name.includes('/') || name.includes('\\')) state.full = true;
+    else if (traceName(name)) state.dirty.add(name);
+  }
+  read(dir: string, now = Date.now()): TraceRead {
+    const key = join(dir, '.');
+    let identity: string;
+    try {
+      const stat = lstatSync(key);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('not a directory');
+      identity = `${stat.dev}:${stat.ino}`;
+    } catch {
+      this.dirs.delete(key);
+      for (const path of this.cache.keys()) if (dirname(path) === key) this.cache.delete(path);
+      return { records: [], unreadable: 0 };
+    }
+    let state = this.dirs.get(key);
+    if (!state || state.identity !== identity) {
+      state = { identity, scanned: 0, values: new Map(), dirty: new Set(), full: true, result: { records: [], unreadable: 0 } };
+      this.dirs.set(key, state);
+    }
+    if (state.full || now - state.scanned >= this.reconciliationMs) {
+      let names: string[];
+      try { names = readdirSync(key).filter(traceName).sort(); }
+      catch { this.dirs.delete(key); return { records: [], unreadable: 0 }; }
+      const present = new Set(names);
+      for (const name of state.values.keys()) if (!present.has(name)) { state.values.delete(name); this.cache.delete(join(key, name)); }
+      for (const name of names) state.dirty.add(name);
+      state.scanned = now; state.full = false;
+    }
+    if (state.dirty.size) {
+      for (const name of state.dirty) {
+        const path = join(key, name);
+        // A removed name is not an unreadable file. A broken symlink is.
+        let stat: Stats;
+        try { stat = lstatSync(path); } catch { state.values.delete(name); this.cache.delete(path); continue; }
+        state.values.set(name, readTraceFile(path, this.cache, stat));
+      }
+      state.dirty.clear();
+      const values = [...state.values].sort(([a], [b]) => a.localeCompare(b)).map(([, r]) => r);
+      state.result = { records: sortedRecords(values.filter((r): r is Rec => r !== null)), unreadable: values.filter(r => r === null).length };
+    } else if (!state.values.size) state.result = { records: [], unreadable: 0 };
+    // A full reconciliation can delete the last record without leaving a dirty name.
+    if (state.result.records.length + state.result.unreadable !== state.values.size) {
+      const values = [...state.values.values()];
+      state.result = { records: sortedRecords(values.filter((r): r is Rec => r !== null)), unreadable: values.filter(r => r === null).length };
+    }
+    return state.result;
+  }
+}
 
 const jevCall = (r: Rec): string => {
   const http = sub(r, 'http');
@@ -125,8 +207,11 @@ const dispatchLine = (r: Rec, post: Rec | null): string => {
    * `model` is what the hook asked for. A record written before the field existed has none, and the map it would be
    * read back through may since have changed, so the tier is named alone rather than guessed into a model.
    */
-  const model = d ? str(d['model']) : null;
-  const target = action === 'preserve' ? `preserve ${tier} (the model the coordinator called)` : `${action} ${tier}${model ? ` (${model})` : ' (model not recorded)'}`;
+  const allocation = sub(r, 'allocation');
+  const model = str(allocation?.['selected_model']) ?? (d ? str(d['model']) : null);
+  const edit = allocation ? sub(allocation, 'effort_edit') : null;
+  const target = allocation ? `selected ${model ?? '?'} / ${edit?.['kind'] === 'set' ? str(edit['value']) ?? '?' : edit?.['kind'] === 'omit' ? 'effort omitted' : 'effort kept'} (execution observed separately)`
+    : action === 'preserve' ? `preserve ${tier} (the model the coordinator called)` : `${action} ${tier}${model ? ` (${model})` : ' (model not recorded)'}`;
   /**
    * Asked and ran are separate facts, and the alias the config names is not the id the host reports, so a bare string
    * comparison would call every patch a disagreement. The requested id appearing inside the resolved one is the same
@@ -348,7 +433,7 @@ export const explainRecords = (read: TraceRead): string[] => {
     return out;
   }
   const bySession = new Map<string, Rec[]>();
-  for (const r of read.records) {
+  for (const r of allocatedTraceRecords(read.records)) {
     const key = str(r['session_id']) ?? '(no session id)';
     const list = bySession.get(key);
     if (list) list.push(r);

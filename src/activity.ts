@@ -2,7 +2,7 @@ import { lstatSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 import type { Env } from './config.js';
-import { readTraceRecords, type TraceCache } from './explain.js';
+import { readTraceRecords, type TraceDirectoryReader, type TraceCache } from './explain.js';
 import { readLiveness } from './liveness.js';
 import { buildOperations, type DebugRecord, type OperationsView } from './operations.js';
 import type { Host } from './host-support.js';
@@ -196,7 +196,13 @@ const gateEvent = (r: Rec): ActivityEvent | null => {
     const role = token(r['role']) === 'planner' ? '플래너' : `작업 ${token(r['task_id']) ?? '?'}`;
     const why = decision ? reasonText(decision['reason']) : null;
     let used: string;
-    if (action === 'preserve') used = `${role}: 호출된 ${called ?? tier ?? '?'} 등급을 유지합니다`;
+    const allocation = sub(r, 'allocation');
+    const selected = token(allocation?.['selected_model']);
+    if (selected) {
+      const edit = allocation ? sub(allocation, 'effort_edit') : null;
+      used = `${role}: ${selected} 선택 · ${edit?.['kind'] === 'set' ? `effort ${token(edit['value']) ?? '미관측'}` : edit?.['kind'] === 'omit' ? 'effort 필드 생략' : 'effort 유지'} · 실행 확인은 별도`;
+    }
+    else if (action === 'preserve') used = `${role}: 호출된 ${called ?? tier ?? '?'} 등급을 유지합니다`;
     else if (action === 'patch' && tier && called && tier !== called) used = `${role}: ${called}에서 ${tier}로 바꿉니다${model ? ` (${model})` : ''}`;
     else if (action === 'patch') used = `${role}: ${tier ?? '?'} 등급으로 호출합니다${model ? ` (${model})` : ''}`;
     else used = `${role}: ${action ?? '결정 없음'} ${tier ?? ''}`.trim();
@@ -255,7 +261,7 @@ const gateEvent = (r: Rec): ActivityEvent | null => {
 
 const ROUTER_TITLE: Record<string, string> = {
   router: '라우터 준비',
-  prepared: '라우터 · 요청 준비 완료',
+  prepared: '라우터 · 요청 전달 준비',
   budget_timeout: '라우터 · 준비 예산 종료',
   root: '라우터 · 루트 턴',
   root_result: '라우터 · 루트 턴 결과',
@@ -265,6 +271,7 @@ const ROUTER_TITLE: Record<string, string> = {
   spawn: '라우터 · 스폰',
   spawn_stop: '라우터 · 스폰 유지',
   spawn_result: '라우터 · 스폰 결과',
+  spawn_native_result: '라우터 · 기존 설정 생성 결과',
   child_result: '라우터 · 실제 서브에이전트 응답',
   late: '라우터 · 늦은 응답',
 };
@@ -297,6 +304,7 @@ const routerEvent = (r: Rec, at: string): ActivityEvent | null => {
   const reasons = sub(r, 'reasons');
   const applied = isRecord(r['applied']) ? r['applied'] : null;
   const bits: string[] = [];
+  if (event === 'prepared') bits.push('요청 전 점검 기록 · 실행 완료와 적용 성공은 아직 확인되지 않음');
   if (num(r['preparation_ms']) !== null) bits.push(`Router 준비 ${num(r['preparation_ms'])}ms · Jev 응답 시간과 별도`);
   const fromModel = from ? token(from['model']) : null;
   const fromEffort = from ? token(from['effort']) : null;
@@ -470,13 +478,19 @@ const buildLive = (records: Rec[], routerRows: Array<{ at: string; rec: Rec }>, 
       turn: turnKey(r),
     });
   }
+  const routerClosures = new Map<string, string>();
+  const routerIdentity = (row: { rec: Rec }): string => JSON.stringify([row.rec['session_id'] ?? 'legacy', row.rec['turn']]);
+  for (const row of routerRows) if (ROUTER_CLOSE.has(token(row.rec['event']) ?? '') && token(row.rec['turn'])) {
+    const key = routerIdentity(row);
+    if ((routerClosures.get(key) ?? '') < row.at) routerClosures.set(key, row.at);
+  }
   for (const row of routerRows) {
     const event = token(row.rec['event']);
     const ev = event ? routerEvent(row.rec, row.at) : null;
     if (!event || !ev) continue;
     const turnToken = token(row.rec['turn']);
     const turnId = turnToken ?? row.at;
-    const closed = turnToken !== null && ROUTER_OPEN.has(event) && routerRows.some((other) => token(other.rec['turn']) === turnToken && other.at >= row.at && ROUTER_CLOSE.has(token(other.rec['event']) ?? ''));
+    const closed = turnToken !== null && ROUTER_OPEN.has(event) && (routerClosures.get(routerIdentity(row)) ?? '') >= row.at;
     const open = ROUTER_OPEN.has(event) && row.rec['sent'] === true && !closed && fresh(row.at, now);
     steps.push({
       id: `router:${turnId}:${event}:${row.at}`,
@@ -535,7 +549,7 @@ const buildLive = (records: Rec[], routerRows: Array<{ at: string; rec: Rec }>, 
   };
 };
 
-export const loadActivity = (opts: { traceDir: string | null; traceDirs?: readonly { host: Host; dir: string }[] | undefined; debugDir: string | null; env: Env; now?: Date; host?: Host; traceCache?: TraceCache }): ActivitySnapshot => {
+export const loadActivity = (opts: { traceDir: string | null; traceDirs?: readonly { host: Host; dir: string }[] | undefined; debugDir: string | null; env: Env; now?: Date; host?: Host; traceCache?: TraceCache; traceReader?: TraceDirectoryReader }): ActivitySnapshot => {
   const notes = [...NOTES];
   const events: ActivityEvent[] = [];
   const gateRecords: Rec[] = [];
@@ -554,7 +568,7 @@ export const loadActivity = (opts: { traceDir: string | null; traceDirs?: readon
 
   for (const source of traceDirs) {
     if (isSymlink(source.dir)) { notes.push('추적 디렉터리가 심볼릭 링크라 읽지 않습니다.'); continue; }
-    const read = readTraceRecords(source.dir, opts.traceCache);
+    const read = opts.traceReader ? opts.traceReader.read(source.dir) : readTraceRecords(source.dir, opts.traceCache);
     traceFiles += read.records.length;
     unreadable += read.unreadable;
     if (read.unreadable > 0) notes.push(`추적 파일 ${read.unreadable}개는 읽지 못했습니다.`);

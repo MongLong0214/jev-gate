@@ -1046,7 +1046,8 @@ describe('spawn model', () => {
       f.pins.subagentModel = true;
       held.resolve(answering({ ...CLEAR, tier: [pick, 0.95] })(f.sent[0]!) as HttpReply);
       await run;
-      expect(f.logs.some((l) => l['event'] === 'spawn_native_result' || l['event'] === 'spawn_suspended'), pick).toBe(false);
+      expect(f.logs.some(l => l['event'] === 'spawn_suspended'), pick).toBe(false);
+      expect(f.logs.find(l => l['event'] === 'spawn_native_result')).toMatchObject({ requested: null, observed: 'claude-haiku-4-5', confirmation: 'unobserved' });
     }
   });
 
@@ -1055,7 +1056,8 @@ describe('spawn model', () => {
     const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['fast', 0.95] }), pins: { subagentModel: true } });
     router.agentOffer(OFFER_BUILT_IN('general-purpose'));
     await router.agentSpawn(f.engine, spawn(), spawnNext(() => ({ model: 'claude-haiku-4-5' })).next);
-    expect(f.logs.some((l) => l['event'] === 'spawn_native_result' || l['event'] === 'spawn_suspended')).toBe(false);
+    expect(f.logs.some(l => l['event'] === 'spawn_suspended')).toBe(false);
+    expect(f.logs.find(l => l['event'] === 'spawn_native_result')).toMatchObject({ requested: null, observed: 'claude-haiku-4-5', confirmation: 'unobserved' });
     f.pins.subagentModel = false;
     router.agentOffer(OFFER_BUILT_IN('general-purpose'));
     const n = spawnNext(() => ({ model: 'claude-haiku-4-5' }));
@@ -1265,6 +1267,22 @@ describe('subagent effort and named models', () => {
 });
 
 describe('root effort and the prompt cache', () => {
+  it('does not suppress an effort downgrade after the host explicitly reports no cache read or creation', async () => {
+    const router = createRouter(configOf(EFFORT_ONLY));
+    let effort: [string, number] = ['xhigh', .95];
+    const f = fakeEngine({ respond: req => answering({ ...CLEAR, effort })(req) });
+    router.turnStart({ turnId: 'uncached-first', text: TEXT });
+    await drain(router.turnStep(f.engine, step({ turnId: 'uncached-first', effort: 'xhigh' }), streamNext<TurnStepEvent>(e => e.model, { input_tokens: 123, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }).next));
+    router.turnComplete({ turnId: 'uncached-first' });
+    effort = ['low', .95];
+    router.turnStart({ turnId: 'uncached-followup', text: TEXT });
+    const next = streamNext<TurnStepEvent>();
+    await drain(router.turnStep(f.engine, step({ turnId: 'uncached-followup', effort: 'xhigh' }), next.next));
+    expect(next.calls[0]?.effort).toBe('low');
+    expect(f.logs.some(r => r.turn === 'uncached-followup' && r.reasons && (r.reasons as Record<string, unknown>).effort === 'cache_preserved')).toBe(false);
+    expect(f.sent).toHaveLength(2);
+  });
+
   it('lowers effort only on a cold cache, holds it on a warm one, and always lets it rise', async () => {
     const router = createRouter(configOf(EFFORT_ONLY));
     let pick: [string, number] = ['medium', 0.95];
@@ -1995,4 +2013,21 @@ describe('bounded child history question feasibility (#140)', () => {
     expect(f.logs.find(l => l['event'] === 'spawn')?.['assessment']).toBe('ok');
   });
 
+});
+
+
+describe('native spawn outcome observability', () => {
+  it.each(['pinned', 'fork', 'custom', 'denied', 'mismatch'])('records %s without changing the input or spawning twice', async scenario => {
+    const router = createRouter(configOf({ ...SPAWN_ONLY, routeExplicitSpawnModel: false, routeSubagentEffort: false }));
+    const f = fakeEngine(); router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    const e = spawn(scenario === 'custom' ? { subagentType: 'custom-worker', provider: { plugin: 'user', tier: 'local' } } : scenario === 'fork' ? { fork: true } : { model: 'claude-opus-5-5' });
+    const outcome: SpawnOutcome = scenario === 'denied' ? { deny: 'native refusal' } : { model: scenario === 'mismatch' ? 'claude-sonnet-5-5' : 'claude-opus-5-5', agentId: 'child' };
+    const n = spawnNext(() => outcome);
+    expect(await router.agentSpawn(f.engine, e, n.next)).toBe(outcome);
+    expect(n.calls).toEqual([e]); expect(f.sent).toHaveLength(0);
+    const record = f.logs.find(r => r.event === 'spawn_native_result');
+    expect(record).toBeDefined();
+    if (scenario === 'denied') expect(record).toMatchObject({ denied: true });
+    else expect(record).toMatchObject({ observed: outcome.model, agent_id: 'child', requested: null, confirmation: 'unobserved' });
+  });
 });

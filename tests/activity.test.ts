@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { loadActivity } from '../src/activity.js';
+import { loadActivity, type ActivitySnapshot } from '../src/activity.js';
 import { startDashboard, readVersions } from '../src/dashboard.js';
 import { DASHBOARD_PAGE } from '../src/dashboard-page.js';
 
@@ -286,3 +286,36 @@ describe('dashboard server', () => {
     }
   });
 });
+
+
+it('updates all viewers from shared directory notifications and reattaches after directory replacement', async () => {
+  const parent = make(), trace = join(parent, 'trace'); mkdirSync(trace);
+  const server = await startDashboard({ traceDir: trace, debugDir: null, env: { HOME: make(), JEV_GATE_STATE_DIR: make() } }, 0);
+  const controllers = [new AbortController(), new AbortController()];
+  const readers: Array<ReadableStreamDefaultReader<Uint8Array>> = [];
+  try {
+    for (const controller of controllers) {
+      const response = await fetch(`${server.url}api/live`, { signal: controller.signal });
+      const reader = response.body!.getReader(); readers.push(reader); await reader.read();
+    }
+    writeFileSync(join(trace, 'event.json'), JSON.stringify({ phase: 'admission_result', session_id: 's', prompt_id: 'p', written_at: new Date().toISOString(), attempted: true, decision: { shape: 'direct' } }));
+    for (const reader of readers) {
+      const chunk = await Promise.race([reader.read(), new Promise<never>((_, reject) => setTimeout(() => reject(new Error('shared viewer update timed out')), 5000))]);
+      expect(new TextDecoder().decode(chunk.value)).toContain('"traceFiles":1');
+    }
+    rmSync(trace, { recursive: true }); mkdirSync(trace);
+    writeFileSync(join(trace, 'replacement.json'), JSON.stringify({ phase: 'post', session_id: 's2', tool_use_id: 't2', written_at: new Date().toISOString(), requested_model: 'sonnet', resolved_model: 'claude-sonnet-5-5' }));
+    await new Promise(resolve => setTimeout(resolve, 2100));
+    let snapshot = await (await fetch(`${server.url}api/snapshot`)).json() as ActivitySnapshot;
+    expect(snapshot.traceFiles).toBe(1);
+    expect(snapshot.operations.runs.some(r => r.steps.some(s => s.model?.selected === 'sonnet'))).toBe(true);
+    writeFileSync(join(trace, 'second.json'), JSON.stringify({ phase: 'failure', session_id: 's2', written_at: new Date().toISOString() }));
+    await new Promise(resolve => setTimeout(resolve, 300));
+    snapshot = await (await fetch(`${server.url}api/snapshot`)).json() as ActivitySnapshot;
+    expect(snapshot.traceFiles).toBe(2);
+  } finally {
+    for (const controller of controllers) controller.abort();
+    for (const reader of readers) await reader.cancel().catch(() => undefined);
+    await server.close();
+  }
+}, 10000);
