@@ -43,9 +43,10 @@ describe.skipIf(process.env['JEV_CODEX_E2E'] !== '1')('ordinary native Codex aut
         if (step === 2) item = fn('jev_agent', { run_in_background: false, subagent_type: 'jev-gate:executor', prompt: JSON.stringify(input['input']).match(/jev-lean-[a-f0-9]{16}/)?.[0] ?? 'missing marker' });
         if (step === 3) item = fn('exec_command', { cmd: 'vitest run', login: false, max_output_tokens: 8000 });
       } else if (mode === 'compact') { step++; if (step === 1) item = final('Old unrelated narrative. '.repeat(6000)); }
-      res.writeHead(200, { 'content-type': 'text/event-stream' });
-      for (const event of [{ type: 'response.created', response: { id, status: 'in_progress', output: [] } }, { type: 'response.output_item.added', output_index: 0, item }, { type: 'response.output_item.done', output_index: 0, item }, { type: 'response.completed', response: { id, status: 'completed', output: [item], usage: { input_tokens: 150000, output_tokens: 3, total_tokens: 150003 } } }]) res.write(`data: ${JSON.stringify(event)}\n\n`);
-      res.end();
+      const events = [{ type: 'response.created', response: { id, status: 'in_progress', output: [] } }, { type: 'response.output_item.added', output_index: 0, item }, { type: 'response.output_item.done', output_index: 0, item }, { type: 'response.completed', response: { id, status: 'completed', output: [item], usage: { input_tokens: 150000, output_tokens: 3, total_tokens: 150003 } } }];
+      // Actual native responses can omit Content-Type. Exercise this through the real transport.
+      const bytes = Buffer.from(events.map(event => `data: ${JSON.stringify(event)}\r\n\r\n`).join(''));
+      res.writeHead(200); res.end(bytes);
     });
     await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
     const base = `http://127.0.0.1:${(upstream.address() as { port: number }).port}/v1`;
@@ -88,6 +89,7 @@ describe.skipIf(process.env['JEV_CODEX_E2E'] !== '1')('ordinary native Codex aut
       expect(requests.slice(at).some(r => (r['reasoning'] as Obj)?.['effort'] === 'low'), JSON.stringify({ requests: requests.slice(at), output: connected.output })).toBe(true);
       const rows = readdirSync(trace).map(f => JSON.parse(readFileSync(join(trace, f), 'utf8')) as Obj);
       expect(rows.some(r => r['phase'] === 'codex_route_applied' && r['applied'] === true)).toBe(true);
+      expect(rows.some(r => r['phase'] === 'codex_router_response' && r['reason'] === 'response_unconfirmed')).toBe(true);
       expect(JSON.stringify(rows)).not.toContain('fake-local-');
       const previousOwner = JSON.parse(readFileSync(ownerPath, 'utf8')) as { pid: number };
       process.kill(previousOwner.pid, 'SIGKILL');

@@ -94,7 +94,7 @@ type NextLike<E, R> = ((e: E) => Promise<R>) & { readonly signal: AbortSignal };
  */
 export const VERIFIED_HOST = '2.1.282';
 /** Identifies this loaded hook source, independently of a manifest updated on disk. */
-export const ROUTER_HOOK_VERSION = '0.8.6';
+export const ROUTER_HOOK_VERSION = '0.8.7';
 
 /**
  * Later 2.1 releases are accepted too. Pinned to one release, spawn routing went native after every host update: the
@@ -292,6 +292,7 @@ interface ChildRouting {
 
 /** What a spawn's assessment decided: its model, and the answer its subagent's steps read their effort from. */
 interface SpawnPlan {
+  nativeRequested?: string | null;
   target: string | null;
   answers: Answers | null;
   pair?: { offer: PairOffer; raw: unknown };
@@ -594,7 +595,10 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       stopped: false,
       modelStopped: false,
       effortStopped: false,
-      warmEffort: lastRoot && lastRoot.model === e.model && engine.now() - lastRoot.at < WARM_MS ? lastRoot.effort : null,
+      // Explicit zero cache usage is cold. Missing usage remains unknown; it
+      // must not be converted to zero or waive the existing cache protection.
+      warmEffort: lastRoot && lastRoot.model === e.model && engine.now() - lastRoot.at < WARM_MS &&
+        !(lastRoot.cache.read === 0 && lastRoot.cache.write === 0) ? lastRoot.effort : null,
       effortChanged: lastIncoming !== null && lastIncoming.effort !== e.effort && (lastRoot?.effort ?? undefined) !== e.effort,
     };
     lastIncoming = { effort: e.effort };
@@ -761,6 +765,8 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     log(engine, {
       event: 'prepared',
       turn: e.turnId,
+      index: e.index,
+      agent_id: e.agentId ?? null,
       scope: e.agentId === undefined ? 'root' : 'child',
       preparation_ms: Math.max(0, engine.now() - startedAt),
       budget_ms: config.timeoutMs,
@@ -903,7 +909,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     log(engine, { event: 'spawn', scope: 'subagent', boundary: 'host_hook', tool_use_id: e.tool_use_id, type: typeLabel(e), from: baselineModel, assessment: 'ok', sent: true,
       usage: loggable(result.usage), explicit: explicit !== null, patch: selected.patch, reasons: selected.reasons, model_asked: offer.modelAsked, effort_asked: offer.effortQuestions.size > 0,
       discovered_count: MODEL_FACTS.length, eligible_count: candidates.length, offered_count: offer.candidates.length, catalog_complete: false, allow_fable: config.allowFable });
-    return { target, answers: {}, pair: { offer, raw: result.answers } };
+    return { target, nativeRequested: nowPins.subagentModel ? null : baselineModel, answers: {}, pair: { offer, raw: result.answers } };
   };
 
   /**
@@ -988,6 +994,12 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
           });
           // Response diagnostics never invalidate unrelated dispatches.
         }
+      } else {
+        const requested = plan?.nativeRequested ?? null;
+        log(engine, result.deny !== undefined
+          ? { event: 'spawn_native_result', tool_use_id: e.tool_use_id, caller_model: e.model ?? null, requested, denied: true }
+          : { event: 'spawn_native_result', tool_use_id: e.tool_use_id, caller_model: e.model ?? null, requested, observed: result.model, agent_id: result.agentId ?? null,
+              confirmation: requested === null ? 'unobserved' : sameModel(requested, result.model) ? 'confirmed' : 'mismatch' });
       }
     } catch {
       // Observation only.

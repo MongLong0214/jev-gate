@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.8.7 — 2026-10-06 — Routing evidence and responsive dashboard
+
+- Observe completed Codex Responses even when the native upstream omits Content-Type. Decode compressed observation streams and handle all SSE line endings and split UTF-8 without altering native bytes; missing response models remain unknown (#173).
+
+- Re-read exact native terminal evidence briefly when Claude fires SubagentStop before the final transcript row is flushed. Settle the original background reservation without accepting launch receipts or unverified hook text (#168).
+- Allow a valid effort downgrade after the host explicitly reports zero cache read and zero cache creation. Positive and unknown cache usage retain the existing cache protection; no quality or savings claim is inferred from this policy repair (#172).
+- Use the final reserved Gate B model for planner agreement, worker receipts, failures and background launch observations. Historical trace views prefer the recorded final allocation over legacy tier labels; actual response models remain separate and real mismatches remain visible (#164).
+- Show Router scope, baseline and keep/change reasons beside the matching response. Distinguish cache-preserved effort from proposed effort, and host-forwarded effort from unreported response effort. Treat `prepared` as request preparation metadata, not a new Jev judgment or completed model response (#166).
+- Match request preparation to the same child identity as well as session, turn and loop index. A sibling response cannot close a pending root or child preparation (#171).
+- Show a Codex proposal that was not applied separately from the final model, with its recorded probability and change threshold. A session that already used Luna is not counted as an automatic downgrade (#169).
+- Record native agent creation outcomes when Router keeps the original request. Preserve native pins, refusals and unknown effective requests without inferring a model or spawning twice (#167).
+- Share dashboard watchers across viewers, update changed trace files incrementally, and reconcile missed notifications and directory replacements periodically. Remove quadratic Router closure lookup, retain complete historical totals, and keep malformed/oversized/symlink records excluded (#165). Synthetic performance checks do not establish paid-provider savings.
+- Replace an authenticated older dashboard at its existing loopback address without opening another browser tab. Require successful shutdown before starting the replacement (#170).
+
 ## v0.8.6 — 2026-10-02 — Routing instruction clarity
 
 - Clarify that no-delegation instructions keep work in the main session without pinning the main model or effort. Explicit model and effort pins remain independent. This corrects the v0.8.5 README; execution policies are unchanged.

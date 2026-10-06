@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { allocatedTraceRecords } from './explain.js';
 import { codexOperations } from './codex-operations.js';
 import { operationState } from './operation-state.js';
 import { CODEX_CAPABILITIES, CODEX_PLUGIN_CAPABILITIES, type HostCapability, type Host } from './host-support.js';
@@ -13,7 +14,7 @@ export interface OperationStep {
   id: string;
   at: string;
   feature: FeatureId;
-  /** Generic native session/tool events are not evidence that a Jev feature executed. */
+  /** Lifecycle and preparation-only records do not establish a Jev decision or host response. */
   lifecycle?: boolean;
   /** Recorded Gate A policy path, independent of request transmission and host completion. */
   executionPath?: 'direct' | 'orchestrated';
@@ -23,6 +24,7 @@ export interface OperationStep {
   summary: string;
   details: string[];
   model?: { selected: string | null; observed: string | null; status: 'confirmed' | 'mismatch' | 'unobserved'; selectedEffort: string | null; observedEffort: string | null; forwardedEffort?: string | null; effortSource?: 'host_hook' | 'provider_request' };
+  routing?: { scope: 'root' | 'spawn' | 'child' | 'owned'; baseline: string | null; modelReason: string | null; effortReason: string | null; proposedModel?: string; probability?: number; threshold?: number };
   /** Timings are measured by the caller or paired recorded events, never estimated from usage. */
   durationMs?: number;
   elapsedMs?: number;
@@ -233,7 +235,15 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
       if (number(estimate?.['cost_support']) !== null) details.push(`비용 정책 지지 ${(number(estimate?.['cost_support'])! * 100).toFixed(1)}% · 실제 절감 확률 아님`);
       if (number(estimate?.['turns']) !== null) details.push(`계산에 사용한 루트 턴 ${n(number(estimate?.['turns']))}회`);
     }
-    if (phase === 'pre_result') details.push(text(`요청 ${token(r['called_tier']) ?? '?'}`, `적용 ${tier ?? '원래 프로필'}`, token(decision?.['model'])));
+    if (phase === 'pre_result') {
+      const allocation = field(r, 'allocation');
+      const selected = token(allocation?.['selected_model']);
+      if (selected) {
+        const edit = field(allocation, 'effort_edit');
+        summary = text(`선택 모델 ${selected}`, edit?.['kind'] === 'set' ? `effort ${token(edit['value']) ?? '미관측'}` : edit?.['kind'] === 'omit' ? 'effort 필드 생략' : 'effort 유지');
+        details.push(summary, '최종 배정 선택 · 실제 전송과 응답 모델은 별도 관측');
+      } else details.push(text(`요청 ${token(r['called_tier']) ?? '?'}`, `적용 ${tier ?? '원래 프로필'}`, token(decision?.['model'])));
+    }
     if (estimate && number(estimate['saving_tokens']) !== null) details.push(`위임 가격 계산 ${n(number(estimate['saving_tokens']))} 토큰 · 측정된 절감 아님`);
     if (phase === 'lean_result') {
       summary = text(action, reason, number(decision?.['retained']) === null ? null : `유지 ${n(number(decision?.['retained']))}그룹`, number(decision?.['omitted']) === null ? null : `생략 ${n(number(decision?.['omitted']))}그룹`);
@@ -329,7 +339,20 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
   const elapsed = sentAt ? Date.parse(at) - Date.parse(sentAt) : null;
   const model = phase === 'codex_router_response' ? modelObservation(r['selected_model'], r['observed_model'], r['selected_effort'], r['observed_effort'], undefined, 'submitted_effort' in r ? { value: r['submitted_effort'], source: 'provider_request' } : undefined)
     : phase === 'codex_route_applied' ? modelObservation(r['selected_model'], null, r['selected_effort'], null, 'unobserved', 'submitted_effort' in r ? { value: r['submitted_effort'], source: 'provider_request' } : undefined)
-    : phase === 'post' || phase === 'failure' ? modelObservation(r['requested_model'], r['resolved_model']) : undefined;
+    : phase === 'pre_result' && field(r, 'allocation') ? modelObservation(field(r, 'allocation')?.['selected_model'], null, field(field(r, 'allocation'), 'effort_edit')?.['value'])
+    : phase === 'plan' && field(r, 'planner_model') ? modelObservation(field(r, 'planner_model')?.['requested'], field(r, 'planner_model')?.['observed'])
+    : phase === 'post' || phase === 'failure' || phase === 'background_launch' ? modelObservation(r['requested_model'], r['resolved_model']) : undefined;
+  const routing: OperationStep['routing'] = phase.startsWith('codex_router_') || phase === 'codex_route_applied' ? { scope: 'root', baseline: token(r['baseline_model']), modelReason: token(field(r, 'reasons')?.['model']), effortReason: token(field(r, 'reasons')?.['effort']) } : phase === 'pre_result' && field(r, 'allocation') ? { scope: 'owned', baseline: token(field(r, 'allocation')?.['baseline_model']), modelReason: 'gate_allocated', effortReason: 'gate_allocated' } : undefined;
+  const proposal = field(field(r, 'answers'), 'model');
+  const proposedModel = token(proposal?.['choice']);
+  if (routing && proposedModel && !['__keep__', '__abstain__'].includes(proposedModel)) {
+    routing.proposedModel = proposedModel;
+    const selection = field(r, 'selection');
+    const probability = number(selection?.['probability']) ?? number(field(proposal, 'probabilities')?.[proposedModel]);
+    const threshold = number(selection?.['threshold']);
+    if (probability !== null && probability >= 0 && probability <= 1) routing.probability = probability;
+    if (threshold !== null && threshold >= 0 && threshold <= 1) routing.threshold = threshold;
+  }
   if (phase.startsWith('codex_router_')) {
     details.push(text(`baseline ${token(r['baseline_model']) ?? '?'}`, token(r['baseline_effort'])));
     if (number(r['discovered_count']) !== null) details.push(text(`발견 ${n(number(r['discovered_count']))}`, `적격 ${n(number(r['eligible_count']))}`, `제시 ${n(number(r['offered_count']))}`, r['catalog_complete'] === true ? '목록 완전' : '목록 부분/미확인'));
@@ -339,7 +362,7 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
     if (exclusions) details.push(text(...Object.entries(exclusions).flatMap(([reason, value]) => number(value) ? [`제외 ${reason} ${n(number(value))}`] : [])));
   }
   if (model?.status === 'mismatch' || phase === 'codex_route_applied' && r['applied'] === false) state = 'error';
-  return { id: id(ownId), at, feature, state, lane, title: traceTitle(phase, r), summary, details: details.filter(Boolean), ...(model ? { model } : {}),
+  return { id: id(ownId), at, feature, state, lane, title: traceTitle(phase, r), summary, details: details.filter(Boolean), ...(routing ? { routing } : {}), ...(model ? { model } : {}),
     ...(['stop', 'background_conversation'].includes(phase) ? { lifecycle: true } : {}),
     ...(phase === 'admission_result' && ['direct', 'orchestrated'].includes(String(field(r, 'decision')?.['shape'])) ? { executionPath: field(r, 'decision')!['shape'] as 'direct' | 'orchestrated' } : {}),
     ...(duration !== null && duration >= 0 ? { durationMs: duration } : {}),
@@ -348,8 +371,47 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
     ...(graph ? { graph } : {}) };
 };
 
-const debugStep = (row: DebugRecord, now: number, closed: Set<string>): OperationStep | null => {
+/** Join decisions to responses only within the recorded session and execution identity. */
+const routedDebugRecords = (debug: DebugRecord[], records: Rec[]): DebugRecord[] => {
+  const identity = (r: Rec, key: string): string | null => token(r[key]) ? JSON.stringify([r['session_id'] ?? 'legacy', r[key]]) : null;
+  const owned = new Map<string, Rec>();
+  for (const r of records) {
+    const key = identity(r, 'tool_use_id');
+    if (r['host'] !== 'codex' && r['phase'] === 'pre_result' && key && field(r, 'allocation')) owned.set(key, r);
+  }
+  const turns = new Map<string, Rec>(), spawns = new Map<string, Rec>(), children = new Map<string, NonNullable<OperationStep['routing']>>();
+  return [...debug].sort((a, b) => a.at.localeCompare(b.at)).map(row => {
+    if (row.component !== 'router') return row;
+    const r = row.rec, event = r['event'], turn = identity(r, 'turn'), tool = identity(r, 'tool_use_id'), agent = identity(r, 'agent_id');
+    let routing: OperationStep['routing'];
+    const gate = tool ? owned.get(tool) : undefined;
+    const decision = event === 'root_result' && turn ? turns.get(turn) : ['spawn_result', 'spawn_native_result'].includes(String(event)) && tool ? spawns.get(tool) : undefined;
+    if (gate) {
+      const allocation = field(gate, 'allocation');
+      const edit = field(allocation, 'effort_edit');
+      routing = { scope: 'owned', baseline: token(allocation?.['baseline_model']), modelReason: 'gate_allocated', effortReason: token(edit?.['kind']) === 'keep' ? 'same_value' : 'gate_allocated' };
+    } else if (decision || event === 'root' || event === 'spawn') {
+      const d = decision ?? r, reasons = field(d, 'reasons');
+      routing = { scope: event === 'root_result' || event === 'root' ? 'root' : 'spawn', baseline: token(field(d, 'from')?.['model']) ?? token(d['from']), modelReason: token(reasons?.['model']) ?? token(d['skipped']) ?? token(d['assessment']), effortReason: token(reasons?.['effort']) };
+    }
+    if (event === 'root' && turn && (field(r, 'reasons') || field(r, 'from'))) turns.set(turn, r);
+    if (event === 'spawn' && tool) spawns.set(tool, r);
+    if (['spawn_result', 'spawn_native_result'].includes(String(event)) && agent && routing) children.set(agent, routing);
+    if (event === 'child_result' && agent) {
+      const origin = children.get(agent);
+      if (origin) routing = { ...origin, scope: 'child' };
+    }
+    return routing ? { ...row, rec: { ...r, routing_decision: routing } } : row;
+  });
+};
+
+const routerResponseKey = (r: Rec, index: unknown = r['index'] ?? null): string =>
+  JSON.stringify([r['session_id'] ?? 'legacy', r['tool_use_id'] ?? r['turn'], r['agent_id'] ?? (r['scope'] === 'child' ? 'unknown-child' : null), index]);
+
+const debugStep = (row: DebugRecord, now: number, closed: Set<string>, responses: Map<string, string>): OperationStep | null => {
   const r = row.rec;
+  const route = field(r, 'routing_decision'), scope = token(route?.['scope']);
+  const routing: OperationStep['routing'] = scope && ['root', 'spawn', 'child', 'owned'].includes(scope) ? { scope: scope as NonNullable<OperationStep['routing']>['scope'], baseline: token(route?.['baseline']), modelReason: token(route?.['modelReason']), effortReason: token(route?.['effortReason']) } : undefined;
   const event = token(r['event']);
   if (!event || !row.at) return null;
   const feature = row.component;
@@ -403,10 +465,17 @@ const debugStep = (row: DebugRecord, now: number, closed: Set<string>): Operatio
     ? modelObservation(r['requested'] ?? field(r, 'applied')?.['model'] ?? r['assumed'], r['observed'], r['requested_effort'] ?? field(r, 'applied')?.['effort'], r['observed_effort'], r['confirmation'], 'requested_effort' in r ? { value: r['requested_effort'], source: 'host_hook' } : undefined) : undefined;
   if (model) {
     if (model.status === 'mismatch') state = 'error';
-    lane = 'host'; summary = text(model.status === 'confirmed' ? '선택 모델과 실제 모델 일치' : model.status === 'mismatch' ? '선택 모델과 실제 모델 불일치' : '실제 응답 모델 미관측', model.selected, model.observed);
+    lane = 'host'; summary = text(model.status === 'confirmed' ? '선택 모델과 실제 모델 일치' : model.status === 'mismatch' ? '선택 모델과 실제 모델 불일치' : model.observed ? '실제 모델 관측 · 요청 모델 미확인' : '실제 응답 모델 미관측', model.selected, model.observed);
   }
+  if (event === 'prepared') {
+    const responseKey = routerResponseKey(r);
+    state = (responses.get(responseKey) ?? '') >= row.at ? 'done' : 'unconfirmed';
+    summary = r['routed'] === true ? '변경 설정 전달 준비 · 실행 응답 확인은 별도' : '기존 설정 전달 준비 · 실행 응답 확인은 별도';
+    details.push('요청 전 점검만 기록됨 · Jev 새 호출이나 실제 모델 응답 완료를 뜻하지 않음');
+  }
+  if (r['denied'] === true) { state = 'skipped'; summary = '호스트가 에이전트 생성을 거부함 · 실행되지 않음'; }
   const duration = number(r['duration_ms']);
-  return { id: id(`${row.component}:${row.at}:${key}:${event}:${started ? 'start' : 'result'}`), at: row.at, feature, state, lane, title: { router: 'Router · ' + event, compact: 'Compact · 압축', output: 'Output · 로그 접기' }[feature], summary, details: details.filter(Boolean), ...(model ? { model } : {}), ...(lane === 'jev' && duration !== null && duration >= 0 ? { durationMs: duration } : {}) };
+  return { id: id(`${row.component}:${row.at}:${key}:${event}:${started ? 'start' : 'result'}`), at: row.at, feature, state, lane, ...(event === 'prepared' ? { lifecycle: true as const } : {}), title: { router: event === 'prepared' ? 'Router · 요청 전달 준비' : 'Router · ' + event, compact: 'Compact · 압축', output: 'Output · 로그 접기' }[feature], summary, details: details.filter(Boolean), ...(routing ? { routing } : {}), ...(model ? { model } : {}), ...(lane === 'jev' && duration !== null && duration >= 0 ? { durationMs: duration } : {}) };
 };
 
 const gateGroup = (r: Rec): string => {
@@ -421,6 +490,15 @@ const debugGroup = (row: DebugRecord): string => row.component === 'router'
   : `${row.component}:${token(row.rec['session_id']) ?? 'legacy'}:${token(row.rec['run_id']) ?? row.at}`;
 
 export const buildOperations = (records: Rec[], debug: DebugRecord[], now: Date, availability: { trace: boolean; debug: boolean; host?: Host }): OperationsView => {
+  records = allocatedTraceRecords(records);
+  const codexDecisions = new Map<string, Rec>();
+  const codexKey = (r: Rec): string | null => r['host'] === 'codex' && token(r['session_id']) && token(r['prompt_id']) ? JSON.stringify([r['session_id'], r['prompt_id']]) : null;
+  for (const r of records) { const key = codexKey(r); if (key && r['phase'] === 'codex_router_result') codexDecisions.set(key, r); }
+  records = records.map(r => {
+    const key = codexKey(r), decision = key ? codexDecisions.get(key) : undefined;
+    return decision && iso(decision['written_at']) <= iso(r['written_at']) && ['codex_route_applied', 'codex_router_response'].includes(String(r['phase'])) ? { ...r, reasons: decision['reasons'], baseline_model: r['baseline_model'] ?? decision['baseline_model'], answers: decision['answers'], selection: decision['selection'] } : r;
+  });
+  debug = routedDebugRecords(debug, records);
   const resultIds = new Set(records.flatMap((r) => token(r['request_id']) && token(r['phase']) ? [`${token(r['request_id'])}:${token(r['phase'])}`] : []));
   for (const r of records) if (r['phase'] === 'background_terminal') resultIds.add(`background:${token(r['session_id'])}:${token(r['execution_prompt_id']) ?? token(r['prompt_id'])}:${token(r['tool_use_id'])}`);
   for (const r of records) if (r['phase'] === 'codex_compact' && r['applied'] === true && token(r['run_id'])) resultIds.add(`codex_compact:${token(r['run_id'])}`);
@@ -434,6 +512,14 @@ export const buildOperations = (records: Rec[], debug: DebugRecord[], now: Date,
     const key = `${token(row.rec['session_id']) ?? 'legacy'}:${own}`;
     return row.component === 'router' ? row.rec['event'] === 'request' ? [] : [`router:${key}`] : row.rec['stage'] === 'started' ? [] : [`${row.component}:${key}`];
   }));
+  const responses = new Map<string, string>();
+  for (const row of debug) if (['root_result', 'child_result', 'spawn_result', 'spawn_native_result'].includes(String(row.rec['event']))) {
+    // Older prepared records have no loop index. A later response in that exact turn still closes them.
+    for (const index of [row.rec['index'] ?? null, null]) {
+      const key = routerResponseKey(row.rec, index);
+      if ((responses.get(key) ?? '') < row.at) responses.set(key, row.at);
+    }
+  }
   const grouped = new Map<string, { source: OperationRun['source']; host: Host; mode: string; executionId?: string; steps: OperationStep[] }>();
   for (const r of records) {
     const step = traceStep(r, now.getTime(), resultIds, intents);
@@ -457,7 +543,7 @@ export const buildOperations = (records: Rec[], debug: DebugRecord[], now: Date,
     grouped.set(key, group);
   }
   for (const row of debug) {
-    const step = debugStep(row, now.getTime(), closed);
+    const step = debugStep(row, now.getTime(), closed, responses);
     if (!step) continue;
     const key = debugGroup(row);
     const group = grouped.get(key) ?? { source: row.component, host: 'claude' as const, mode: row.component, steps: [] };

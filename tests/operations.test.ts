@@ -169,3 +169,99 @@ describe('operations display model', () => {
     expect(view.latency).toMatchObject({ measured: 1, p50: 247, p95: 247 });
   });
 });
+
+
+it.each(['claude', 'codex'])('renders the final Gate B selection and keeps real mismatches and unobserved execution (%s)', host => {
+  const selected = host === 'claude' ? 'claude-sonnet-5-5' : 'gpt-6.1-sol';
+  const pre = { ...base, host, phase: 'pre_result', tool_use_id: 't', attempted: true, called_tier: 'standard', decision: { tier: 'deep', model: 'opus', action: 'patch' }, allocation: { selected_model: selected, effort_edit: { kind: 'set', value: 'high' } } };
+  const result = { ...base, host, phase: 'post', tool_use_id: 't', requested_model: 'opus', resolved_model: selected };
+  const view = buildOperations([pre, result], [], new Date(at), { trace: true, debug: false });
+  const steps = view.runs.flatMap(r => r.steps);
+  expect(steps.some(s => s.model?.status === 'mismatch')).toBe(false);
+  expect(steps.find(s => s.lane === 'policy')?.summary).toContain(selected);
+  expect(steps.find(s => s.model?.status === 'confirmed')?.model).toMatchObject({ selected, observed: selected });
+  expect(steps.find(s => s.model?.status === 'unobserved')?.model).toMatchObject({ selected, observed: null, selectedEffort: 'high' });
+  const mismatch = buildOperations([pre, { ...result, resolved_model: 'claude-opus-5-5' }], [], new Date(at), { trace: true, debug: false });
+  expect(mismatch.feed.some(s => s.model?.status === 'mismatch')).toBe(true);
+});
+
+
+it('links Router keep/change reasons to the exact root response and preserves cache-held effort', () => {
+  const decision = { event: 'root', session_id: 's', turn: 't', from: { model: 'claude-opus-5-5', effort: 'xhigh' }, patch: {}, held_for_cache: 'high', reasons: { model: 'same_value', effort: 'cache_preserved' } };
+  const response = { event: 'root_result', session_id: 's', turn: 't', requested: 'claude-opus-5-5', requested_effort: 'xhigh', observed: 'claude-opus-5-5', confirmation: 'confirmed', observed_effort: 'unknown' };
+  const view = buildOperations([], [row('router', decision), { ...row('router', response), at: later }, { ...row('router', { ...response, session_id: 'other' }), at: later }], new Date(later), { trace: true, debug: true });
+  const responses = view.runs.flatMap(r => r.steps).filter(s => s.model);
+  expect(responses.filter(s => s.routing)).toHaveLength(1);
+  expect(responses.find(s => s.routing)?.routing).toEqual({ scope: 'root', baseline: 'claude-opus-5-5', modelReason: 'same_value', effortReason: 'cache_preserved' });
+  expect(responses.find(s => s.routing)?.model).toMatchObject({ selectedEffort: 'xhigh', forwardedEffort: 'xhigh', observedEffort: null });
+});
+
+it('identifies Gate-owned spawn and child decisions using recorded tool and agent identities', () => {
+  const gate = { ...base, phase: 'pre_result', tool_use_id: 'tool', allocation: { selected_model: 'claude-sonnet-5-5', effort_edit: { kind: 'set', value: 'high' } } };
+  const spawn = { event: 'spawn_result', session_id: base.session_id, tool_use_id: 'tool', agent_id: 'child', requested: 'claude-sonnet-5-5', observed: 'claude-sonnet-5-5' };
+  const response = { event: 'child_result', session_id: base.session_id, agent_id: 'child', turn: 'ct', requested: 'claude-sonnet-5-5', observed: 'claude-sonnet-5-5' };
+  const view = buildOperations([gate], [row('router', spawn), { ...row('router', response), at: later }], new Date(later), { trace: true, debug: true });
+  const steps = view.runs.flatMap(r => r.steps);
+  expect(steps.find(s => s.title.endsWith('spawn_result'))?.routing).toMatchObject({ scope: 'owned', modelReason: 'gate_allocated' });
+  expect(steps.find(s => s.title.endsWith('child_result'))?.routing).toMatchObject({ scope: 'child', modelReason: 'gate_allocated' });
+});
+
+
+it('joins Codex Router reasons to matching provider responses without inferring reported effort', () => {
+  const decision = { ...base, host: 'codex', phase: 'codex_router_result', baseline_model: 'gpt-6.1-sol', reasons: { model: 'same_value', effort: 'cache_preserved' } };
+  const response = { ...base, host: 'codex', phase: 'codex_router_response', written_at: later, selected_model: 'gpt-6.1-sol', observed_model: 'gpt-6.1-sol', selected_effort: 'high', observed_effort: 'unknown' };
+  const view = buildOperations([decision, response, { ...response, session_id: 'other' }], [], new Date(later), { trace: true, debug: false });
+  const responses = view.runs.flatMap(r => r.steps).filter(s => s.model?.observed);
+  expect(responses.filter(s => s.routing?.modelReason === 'same_value')).toHaveLength(1);
+  expect(responses.find(s => s.routing?.modelReason)?.model?.observedEffort).toBeNull();
+});
+
+it('shows a rejected Codex model proposal separately from the final model and only on its matching response', () => {
+  const decision = { ...base, host: 'codex', phase: 'codex_router_result', baseline_model: 'gpt-6.1-sol',
+    reasons: { model: 'low_confidence', effort: 'selected' }, answers: { model: { choice: 'gpt-5.6-terra', probabilities: { 'gpt-5.6-terra': .55 } } }, selection: { probability: .55, threshold: .6 } };
+  const response = { ...base, host: 'codex', phase: 'codex_router_response', written_at: later, selected_model: 'gpt-6.1-sol', observed_model: 'gpt-6.1-sol' };
+  const steps = buildOperations([decision, response, { ...response, session_id: 'other' }], [], new Date(later), { trace: true, debug: false }).runs.flatMap(r => r.steps);
+  const matched = steps.find(s => s.model?.observed && s.routing?.proposedModel);
+  expect(matched?.routing).toMatchObject({ baseline: 'gpt-6.1-sol', proposedModel: 'gpt-5.6-terra', probability: .55, threshold: .6 });
+  expect(matched?.model?.selected).toBe('gpt-6.1-sol');
+  expect(steps.filter(s => s.model?.observed && s.routing?.proposedModel)).toHaveLength(1);
+  const invalid = buildOperations([{ ...decision, selection: { probability: 2, threshold: -1 }, answers: { model: { choice: '__keep__' } } }], [], new Date(later), { trace: true, debug: false }).runs.flatMap(r => r.steps);
+  expect(invalid[0]?.routing?.proposedModel).toBeUndefined();
+});
+
+
+it('treats prepared as preparation metadata, not a completed host response or a new Jev call', () => {
+  const prep = { event: 'prepared', session_id: 's', turn: 't', index: 0, scope: 'root', routed: false, preparation_ms: 2 };
+  const view = buildOperations([], [row('router', prep)], new Date(at), { trace: true, debug: true });
+  expect(view.requests).toBe(0);
+  expect(view.features.find(f => f.id === 'router')?.count).toBe(0);
+  expect(view.runs[0]?.steps[0]).toMatchObject({ lifecycle: true, state: 'unconfirmed', title: 'Router · 요청 전달 준비' });
+  expect(view.runs[0]?.steps[0]?.summary).toContain('실행 응답 확인은 별도');
+  const response = { event: 'root_result', session_id: 's', turn: 't', index: 0, requested: 'claude-opus-5-5', observed: 'claude-opus-5-5' };
+  const done = buildOperations([], [row('router', prep), { ...row('router', response), at: later }], new Date(later), { trace: true, debug: true });
+  expect(done.runs[0]?.steps.find(s => s.lifecycle)?.state).toBe('done');
+});
+
+
+it('closes historical preparations without an index but never closes a newer request with an earlier response', () => {
+  const prep = { event: 'prepared', session_id: 's', turn: 't', scope: 'root' };
+  const response = { event: 'root_result', session_id: 's', turn: 't', index: 0, requested: 'opus', observed: 'claude-opus-5-5' };
+  const view = buildOperations([], [row('router', prep), { ...row('router', response), at: later }], new Date(later), { trace: true, debug: true });
+  expect(view.runs[0]?.steps.find(s => s.lifecycle)?.state).toBe('done');
+  const pending = buildOperations([], [row('router', response), { ...row('router', { ...prep, index: 1 }), at: later }], new Date(later), { trace: true, debug: true });
+  expect(pending.runs[0]?.steps.find(s => s.lifecycle)?.state).toBe('unconfirmed');
+});
+
+it('does not close root or sibling preparations with another agent response in the same turn and loop index', () => {
+  const common = { session_id: 's', turn: 't', index: 0 };
+  const pending = [
+    row('router', { ...common, event: 'prepared', scope: 'root', agent_id: null }),
+    row('router', { ...common, event: 'prepared', scope: 'child', agent_id: 'waiting' }),
+  ];
+  const response = row('router', { ...common, event: 'child_result', agent_id: 'finished', requested: 'sonnet', observed: 'claude-sonnet-5-5' }, later);
+  const view = buildOperations([], [...pending, response], new Date(later), { trace: true, debug: true });
+  expect(view.runs.flatMap(r => r.steps).filter(s => s.lifecycle).map(s => s.state)).toEqual(['unconfirmed', 'unconfirmed']);
+  const matching = row('router', { ...common, event: 'child_result', agent_id: 'waiting', requested: 'sonnet', observed: 'claude-sonnet-5-5' }, later);
+  const settled = buildOperations([], [...pending, response, matching], new Date(later), { trace: true, debug: true });
+  expect(settled.runs.flatMap(r => r.steps).filter(s => s.lifecycle).map(s => s.state).sort()).toEqual(['done', 'unconfirmed']);
+});

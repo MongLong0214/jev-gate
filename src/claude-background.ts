@@ -28,6 +28,9 @@ export const claudeTerminal = (input: HookInput): { token: string | null; text: 
     if (!last || last['agentId'] !== input.agent_id || last['sessionId'] !== input.session_id || !Array.isArray(message?.content)) return null;
     const text = message.content.filter(c => c.type === 'text').map(c => c.text ?? '').join('\n');
     if (typeof input.last_assistant_message !== 'string' || text !== input.last_assistant_message) return null;
+    // The host may flush the text before it flushes the completed message row.
+    // An absent stop reason is pending evidence, not a failed execution.
+    if (message.stop_reason == null && last['isApiErrorMessage'] !== true) return null;
     return { token: tokens.length === 1 ? /token=([a-f0-9-]{36})/.exec(tokens[0]!)![1]! : null, text,
       model: typeof message.model === 'string' ? message.model : null,
       completed: last['isApiErrorMessage'] !== true && message.stop_reason === 'end_turn' };

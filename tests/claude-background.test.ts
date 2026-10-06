@@ -32,6 +32,14 @@ const fixture = async (direct = false) => {
 };
 
 describe('responsive native background contracts', () => {
+  it.each(['tool_use', null])('settles a native stop whose final transcript row is flushed after the hook starts (%s)', async stopReason => {
+    const f = await fixture(); await f.launch();
+    writeFileSync(f.path, JSON.stringify({ type: 'assistant', agentId: 'worker', sessionId: 's', message: { stop_reason: stopReason, content: [{ type: 'text', text: stopReason === null ? f.report : '' }] } }) + '\n');
+    const flush = setTimeout(() => f.transcript(), 80);
+    try { await f.terminal(); } finally { clearTimeout(flush); }
+    expect(f.job().current.active).toEqual({});
+    expect(f.job().current.receipts).toEqual([expect.objectContaining({ verdict: 'accept' })]);
+  });
   it('tracks a bounded direct worker without orchestrating or completing the overall request', async () => {
     const f = await fixture(true);
     expect(f.job().current.shape).toBe('direct'); expect(f.job().current.execution).toBeUndefined();

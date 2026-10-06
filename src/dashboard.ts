@@ -1,5 +1,5 @@
 import { createServer, type Server } from 'node:http';
-import { readFileSync, watch, type FSWatcher } from 'node:fs';
+import { readFileSync, lstatSync, watch, type FSWatcher } from 'node:fs';
 import type { Socket } from 'node:net';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -15,7 +15,7 @@ import { readSettingsEnvVar } from './host-window.js';
 import { recordingStatus, setRecording } from './recording.js';
 import { dashboardStatus, setDashboard } from './dashboard-settings.js';
 import { JEV_FAVICON } from './dashboard-brand.js';
-import type { TraceCache } from './explain.js';
+import { TraceDirectoryReader, traceDirectoryIdentity } from './explain.js';
 
 const PAGE = DASHBOARD_PAGE;
 
@@ -79,17 +79,55 @@ export const readVersions = (env: Env, host?: Host): DashboardVersions => {
 export const startDashboard = (sources: DashboardSources, port: number, runtime: { token?: string } = {}): Promise<{ url: string; port: number; close: () => Promise<void> }> =>
   new Promise((resolve, reject) => {
     const sockets = new Set<Socket>();
-    // All viewers share one bounded-age scan. File notifications invalidate it immediately;
-    // the fallback scan still detects missed events, new directories and time-based unknown states.
-    const traceCache: TraceCache = new Map();
+    const traceReader = new TraceDirectoryReader();
+    const subscribers = new Set<() => void>();
+    const watchers = new Map<string, { watcher: FSWatcher; identity: string }>();
+    const directoryIdentities = new Map<string, string | null>();
+    const directories = new Set([sources.traceDir, ...(sources.traceDirs?.map(source => source.dir) ?? []), sources.debugDir].filter((dir): dir is string => !!dir).map(dir => join(dir, '.')));
     let activity: ActivitySnapshot | null = null;
     let scannedAt = 0;
+    let changed = false;
+    let watchedAt = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const broadcast = (): void => { for (const publish of subscribers) publish(); };
+    const kick = (dir: string, name?: string): void => {
+      traceReader.invalidate(dir, name); changed = true;
+      if (!timer) timer = setTimeout(() => { timer = null; broadcast(); }, 100);
+    };
+    const syncWatchers = (): void => {
+      if (Date.now() - watchedAt < 2000) return;
+      watchedAt = Date.now();
+      for (const dir of directories) {
+        let identity: string | null = null;
+        try { const stat = lstatSync(dir); if (stat.isDirectory() && !stat.isSymbolicLink()) identity = traceDirectoryIdentity(stat); } catch { /* It may appear later. */ }
+        const existing = watchers.get(dir);
+        if (existing?.identity === identity) continue;
+        if (existing) { existing.watcher.close(); watchers.delete(dir); }
+        if (directoryIdentities.get(dir) !== identity) { directoryIdentities.set(dir, identity); kick(dir); }
+        if (identity) try {
+          const watcher = watch(dir, (_event, name) => kick(dir, name?.toString()));
+          watcher.on('error', () => { watcher.close(); watchers.delete(dir); kick(dir); });
+          watchers.set(dir, { watcher, identity });
+        } catch { /* Retry on the next poll; reconciliation still reads available files. */ }
+      }
+    };
     const snapshot = () => {
-      if (!activity || Date.now() - scannedAt >= 2000) {
-        activity = loadActivity({ ...sources, traceCache, now: new Date() });
-        scannedAt = Date.now();
+      syncWatchers();
+      const time = Date.now();
+      const pending = activity?.live.mode === 'working' || activity?.operations.feed.some(step => step.state === 'active');
+      if (!activity || changed && time - scannedAt >= 100 || time - scannedAt >= (pending ? 2000 : 30_000)) {
+        activity = loadActivity({ ...sources, traceReader, now: new Date() });
+        scannedAt = Date.now(); changed = false;
       }
       return { ...activity, version: readVersions(sources.env, sources.host), recording: recordingStatus(sources.env), dashboard: dashboardStatus(sources.env) };
+    };
+    const scan = setInterval(broadcast, 400);
+    scan.unref();
+    const dispose = (): void => {
+      if (timer) clearTimeout(timer);
+      clearInterval(scan);
+      for (const { watcher } of watchers.values()) watcher.close();
+      watchers.clear(); subscribers.clear();
     };
     const server: Server = createServer(async (req, res) => {
       if (!/^127\.0\.0\.1:\d+$/.test(req.headers.host ?? '')) { res.writeHead(403); res.end(); return; }
@@ -136,7 +174,6 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
           connection: 'keep-alive',
         });
         let last = '';
-        let timer: ReturnType<typeof setTimeout> | null = null;
         let closed = false;
         const publish = (): void => {
           if (closed) return;
@@ -150,29 +187,12 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
             // A bad directory read skips this tick. The next one tries again.
           }
         };
-        const kick = (): void => {
-          scannedAt = 0;
-          if (timer) clearTimeout(timer);
-          timer = setTimeout(publish, 16);
-        };
-        const watchers: FSWatcher[] = [];
-        for (const dir of [sources.traceDir, ...(sources.traceDirs?.map(source => source.dir) ?? []), sources.debugDir]) {
-          if (!dir) continue;
-          try {
-            watchers.push(watch(dir, kick));
-          } catch {
-            // The backup scan below still notices new files.
-          }
-        }
-        const scan = setInterval(publish, 400);
-        scan.unref();
+        subscribers.add(publish);
         publish();
         const stop = (): void => {
           if (closed) return;
           closed = true;
-          if (timer) clearTimeout(timer);
-          clearInterval(scan);
-          for (const w of watchers) w.close();
+          subscribers.delete(publish);
         };
         req.on('close', stop);
         res.on('error', stop);
@@ -190,7 +210,8 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
       sockets.add(socket);
       socket.on('close', () => sockets.delete(socket));
     });
-    server.on('error', reject);
+    server.on('close', dispose);
+    server.on('error', err => { dispose(); reject(err); });
     // Loopback only. The records stay on this machine.
     server.listen(port, '127.0.0.1', () => {
       const address = server.address();

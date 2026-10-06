@@ -3500,3 +3500,26 @@ it.each(['Do not delegate or use a subagent.', "Don't use workers.", 'No delegat
     expect(fetchImpl).not.toHaveBeenCalled(); expect(state(env).current.shape).toBe('direct');
   }
 });
+
+
+describe('final allocation execution receipts', () => {
+  it.each(['worker', 'planner', 'failure'])('records the reserved host model for %s, even if the legacy profile is different', async role => {
+    const dir = mkdtempSync(join(tmp, 'final-pair-trace-')), env = makeEnv({ JEV_GATE_TRACE_DIR: dir });
+    const fetchImpl = fakeJev();
+    if (role === 'planner') { await run(env, promptEvent(), fetchImpl); await run(env, plannerPre(), fetchImpl); }
+    else { await seedPlanned(env, PLAN_REPLY, fetchImpl); await run(env, preEvent('Agent', agentInput()), fetchImpl); }
+    const tool = role === 'planner' ? 'toolu_plan' : 'toolu_1';
+    updateJob(env, 's1', prev => prev ? { ...prev, current: { ...prev.current, active: { ...prev.current.active, [tool]: { ...prev.current.active[tool]!, allocation_pair: { model: 'claude-sonnet-5-5', effort_edit: { kind: 'set', value: 'high' } } } } } } : null);
+    if (role === 'planner') await run(env, plannerPost(PLAN_REPLY, { tool_response: { status: 'completed', resolvedModel: 'claude-sonnet-5-5', content: [{ type: 'text', text: fence(PLAN_REPLY) }] } }), fetchImpl);
+    else if (role === 'failure') await run(env, { ...preEvent('Agent', agentInput()), hook_event_name: 'PostToolUseFailure', error: 'test failure' }, fetchImpl);
+    else await run(env, workerPost(tool, workerReply()), fetchImpl);
+    const records = readdirSync(dir).filter(name => name.endsWith('.json')).map(name => JSON.parse(readFileSync(join(dir, name), 'utf8')));
+    if (role === 'planner') {
+      expect(state(env).current.planner_model).toBe('match');
+      expect(records.find(r => r.phase === 'plan')?.planner_model).toMatchObject({ requested: 'claude-sonnet-5-5', agreement: 'match' });
+    } else {
+      expect(state(env).current.receipts.at(-1)?.requested_model).toBe('claude-sonnet-5-5');
+      expect(records.find(r => r.phase === (role === 'failure' ? 'failure' : 'post'))?.requested_model).toBe('claude-sonnet-5-5');
+    }
+  });
+});

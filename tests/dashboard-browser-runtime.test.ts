@@ -41,7 +41,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
   const page = async (width=1440,height=900) => {const p=await browser.newPage({viewport:{width,height}});p.on('pageerror',e=>errors.push(e.message));await p.goto(url);await p.waitForSelector('.circuit-node');return p;};
   beforeAll(async()=>{mkdirSync(output,{recursive:true});await new Promise<void>(r=>server.listen(0,'127.0.0.1',r));url=`http://127.0.0.1:${(server.address() as {port:number}).port}`;
     const local='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';browser=await chromium.launch({headless:true,...(process.env['JEV_CHROMIUM_PATH']?{executablePath:process.env['JEV_CHROMIUM_PATH']}:existsSync(local)?{executablePath:local}:{} )});});
-  afterAll(async()=>{await browser?.close();for(const res of clients)res.end();server.closeAllConnections();await new Promise<void>(r=>server.close(()=>r()));expect(errors).toEqual([]);});
+  afterAll(async()=>{for(const res of clients)res.end();server.closeAllConnections();try{await new Promise<void>(r=>server.close(()=>r()));}finally{await browser?.close();}expect(errors).toEqual([]);});
   const settle = (p: Page) => p.evaluate(()=>new Promise<void>(r=>requestAnimationFrame(()=>requestAnimationFrame(()=>r()))));
 
   it('renders empty and long mixed-host metadata in 28 viewport/theme/language states without overflow or overlap',async()=>{
