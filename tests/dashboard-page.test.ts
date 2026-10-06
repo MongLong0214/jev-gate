@@ -40,6 +40,14 @@ describe('dashboard live interactions', () => {
     expect(p.w.document.querySelector('.run-diagnosis')).toBeNull();
     expect(p.get('signal').textContent).not.toContain('오류·설정 불일치 기록');
   });
+  it('shows Compact selection evidence and identifies historic request-purpose gaps without inventing a missing hook', () => {
+    const p = page();
+    p.push(snapshot([run('historic', 'codex', [step('unknown', 'router', 'host', { state: 'unconfirmed', issue: 'request_unconfirmed', summary: 'API 설정 관측 · 요청 종류 미확인' })], { state: 'unconfirmed' }), run('compact', 'claude', [step('selection', 'compact', 'jev', { durationMs: 220, details: ['후보 8/16 · 필수 근거 3', 'Jev 작업 의존 근거 선택'] })])]));
+    expect(p.get('trace').textContent).toContain('요청 종류 미확인');
+    expect(p.get('trace').textContent).not.toContain('호스트 훅에서 결과 이벤트가 빠진');
+    p.click('#nav [data-feature=compact]');
+    expect(p.get('circuit-inspector').textContent).toContain('후보 8/16 · 필수 근거 3');
+  });
   it('renders all ten real feature states, keeps Lean separate and never invents activity on first load', () => {
     const p = page(); p.push(snapshot([run('c', 'claude', [step('a', 'admission', 'jev', { durationMs: 70 })]), run('x', 'codex', [step('l', 'workers', 'host', { lifecycle: true })])]));
     expect(p.w.document.querySelectorAll('.circuit-node')).toHaveLength(10);

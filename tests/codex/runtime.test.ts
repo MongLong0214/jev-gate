@@ -265,7 +265,7 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
       }
       expect((requests[0]!['reasoning'] as Rec)['effort'],JSON.stringify(rows)).toBe('low');
       expect(rows.some(r=>r['phase']==='codex_router_result'),JSON.stringify(rows)).toBe(true);
-      expect(rows.some(r=>r['phase']==='codex_route_applied' && r['applied']===true),JSON.stringify({rows,headerKeys,hookCount:(hookList['data'] as Rec[]).length})).toBe(true);
+      expect(rows.some(r=>r['phase']==='codex_route_applied' && r['request_kind']==='root_response' && r['applied']===true),JSON.stringify({rows,headerKeys,hookCount:(hookList['data'] as Rec[]).length})).toBe(true);
       const before=messages.length;
       await call('turn/start',{threadId:id,collaborationMode:{mode:'default',settings:{model:baselineModel,reasoning_effort:'medium',developer_instructions:null}},input:[{type:'text',text:scenario === 'bounded-lookup' ? 'Find runtimeEvidenceNeedle in source.ts and return the exact line. Do not edit.' : 'Investigate the repository fixture and check it using vitest run.',text_elements:[]}]});
       if(scenario==='cancelled') {

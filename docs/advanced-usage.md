@@ -114,7 +114,7 @@ Codex `jev_agent` defaults to background execution. `action: "status", agent_id:
 
 In `auto`, the normal path sends two kinds of text to TypeSafe: the user request at admission, and the composed task contract with the relevant predecessor summaries at each eligible planner or worker dispatch. That text can include source excerpts, file names, and earlier constraints. The hook does not independently upload the repository, the transcript, or the environment. There is no secret scrubber and no zero-retention promise. Enable `auto` only for data you are allowed to send.
 
-`native` and `off` send no Gate request. They do not stop the Router or Evidence. Those switches are in the [README](../README.md#settings-data-and-what-leaves-the-machine).
+`native` and `off` send no Gate request. They do not stop the Router or Evidence. Those switches are in the [README](../README.md#settings-and-data).
 
 Optional traces (`JEV_GATE_TRACE_DIR`) are local per-phase JSON: lengths, hashes, decisions, Jev usage, and the reported model. The writer is not given the key. Current records store a prompt's length and hash, not its text. They are not uploaded. Job state is one file per session. The directory is `<stateRoot>/jev-gate/jobs/`, where `stateRoot` is `JEV_GATE_STATE_DIR` when that is set, otherwise `XDG_STATE_HOME`, otherwise `~/.local/state`. The file holds the plan and the request. A file older than 7 days is removed only when cleanup can establish no retained executor identity or unsettled native execution. Background reservations remain protected across age and history limits until termination is observed. This plugin has no command that deletes job files, traces, credentials, or transcripts.
 
@@ -175,4 +175,4 @@ The numbers in these files are the runs as published at v0.6.3 (`931e8367e8b8f27
 - [Lean scope probe](https://github.com/MongLong0214/jev-gate/tree/931e8367e8b8f27536e14da1ed41baed1f83e22e/bench/results/v5-lean-scope-probe-2026-09-25). The hierarchy failure that motivated `planInterpretation` is [v5-context-vs-decomposition-s1](https://github.com/MongLong0214/jev-gate/tree/931e8367e8b8f27536e14da1ed41baed1f83e22e/bench/results/v5-context-vs-decomposition-s1-2026-09-19).
 - [HANDOFF.md](https://github.com/MongLong0214/jev-gate/blob/931e8367e8b8f27536e14da1ed41baed1f83e22e/HANDOFF.md) is a snapshot of remaining engineering notes at that commit, not a plan for this install.
 
-Closed product issues are history. The list is in the [README](../README.md#older-work). The cancelled future-bench plan that used to sit under the V5 results is in that same v0.6.3 README section and is not revived here.
+Closed product issues are history. The list is in the [README](../README.md#development). The cancelled future-bench plan that used to sit under the V5 results is in that same v0.6.3 README section and is not revived here.

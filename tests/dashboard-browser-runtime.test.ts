@@ -122,7 +122,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
   it('separates errors, missing results and interruption; failed settings writes retain the saved state',async()=>{
     push([run('c','claude',[step('m','workers',{lane:'host',state:'error',summary:'actual model mismatch',model:{selected:'opus',observed:'sonnet',status:'mismatch',selectedEffort:null,observedEffort:null}})],{state:'attention'}),run('x','codex',[step('u','router',{state:'unconfirmed'})],{state:'unconfirmed'}),run('stop','codex',[step('stop','output',{state:'interrupted'})],{state:'interrupted'})]);const p=await page();
     await p.locator('.circuit-node[data-feature=workers]').click();expect(await p.locator('.inspector-record').textContent()).toContain('불일치');expect(await p.locator('.inspector-record.error').count()).toBe(1);
-    await p.locator('.review-shortcut[data-review=unconfirmed]').click();expect(await p.locator('#runs .run-row').count()).toBe(1);expect(await p.locator('#trace').textContent()).toContain('성공·실패는 알 수 없습니다');
+    await p.locator('.review-shortcut[data-review=unconfirmed]').click();expect(await p.locator('#runs .run-row').count()).toBe(1);expect(await p.locator('#trace').textContent()).toContain('판단·요청·실행 중 확인되지 않은 항목');
     await p.locator('#recording').click();await p.waitForFunction(()=>document.getElementById('notice')!.textContent!.includes('저장하지 못했습니다'));expect(await p.locator('#recording').getAttribute('aria-checked')).toBe('true');await p.locator('#language').click();expect(await p.locator('html').getAttribute('lang')).toBe('en');await p.close();
   });
 

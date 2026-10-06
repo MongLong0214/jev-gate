@@ -8,6 +8,9 @@
 - Native Codex code-mode terminal command results are recognized without executing or evaluating their scripts; ongoing, compound, forged and unknown results stay whole. Oversized selection batches offer fewer complete candidates and record coverage (#177).
 - Diagnose API request model/effort discrepancies separately from response-model mismatches, Jev errors and native failures. Show event counts and times, and exclude historical errors outside the selected time range (#178). Keep forwarded native Compact requests separate from root Router model/effort observations and cache/context accounting; a native summarizer request is not evidence of a root route mismatch.
 
+- Review the dashboard across desktop/mobile, both themes and languages, live updates and keyboard navigation. Show Compact selection evidence in the circuit inspector, describe missing request facts accurately, contain long summaries, and keep the four metrics in balanced rows. Simplify installation and operational guidance in README.
+- Build the Lean package test in its own temporary source tree so it cannot delete the distribution used by concurrent host tests.
+
 ## v0.8.7 — 2026-10-06 — Routing evidence and responsive dashboard
 
 - Observe completed Codex Responses even when the native upstream omits Content-Type. Decode compressed observation streams and handle all SSE line endings and split UTF-8 without altering native bytes; missing response models remain unknown (#173).
