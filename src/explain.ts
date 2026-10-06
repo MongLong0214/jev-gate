@@ -51,6 +51,8 @@ export const allocatedTraceRecords = (records: Rec[]): Rec[] => {
 
 export type TraceCache = Map<string, { signature: string; record: Rec }>;
 const signature = (stat: Stats): string => [stat.dev, stat.ino, stat.size, stat.mtimeMs, stat.ctimeMs].join(':');
+/** Inodes can be reused immediately after a directory is deleted (observed on Linux CI). */
+export const traceDirectoryIdentity = (stat: Stats): string => `${stat.dev}:${stat.ino}:${stat.birthtimeMs}`;
 
 const traceName = (name: string): boolean => name.endsWith('.json') && !name.startsWith('.');
 const sortedRecords = (records: Rec[]): Rec[] => records.sort((a, b) => (str(a['written_at']) ?? '').localeCompare(str(b['written_at']) ?? ''));
@@ -116,7 +118,7 @@ export class TraceDirectoryReader {
     try {
       const stat = lstatSync(key);
       if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('not a directory');
-      identity = `${stat.dev}:${stat.ino}`;
+      identity = traceDirectoryIdentity(stat);
     } catch {
       this.dirs.delete(key);
       for (const path of this.cache.keys()) if (dirname(path) === key) this.cache.delete(path);

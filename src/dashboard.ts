@@ -15,7 +15,7 @@ import { readSettingsEnvVar } from './host-window.js';
 import { recordingStatus, setRecording } from './recording.js';
 import { dashboardStatus, setDashboard } from './dashboard-settings.js';
 import { JEV_FAVICON } from './dashboard-brand.js';
-import { TraceDirectoryReader } from './explain.js';
+import { TraceDirectoryReader, traceDirectoryIdentity } from './explain.js';
 
 const PAGE = DASHBOARD_PAGE;
 
@@ -99,7 +99,7 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
       watchedAt = Date.now();
       for (const dir of directories) {
         let identity: string | null = null;
-        try { const stat = lstatSync(dir); if (stat.isDirectory() && !stat.isSymbolicLink()) identity = `${stat.dev}:${stat.ino}`; } catch { /* It may appear later. */ }
+        try { const stat = lstatSync(dir); if (stat.isDirectory() && !stat.isSymbolicLink()) identity = traceDirectoryIdentity(stat); } catch { /* It may appear later. */ }
         const existing = watchers.get(dir);
         if (existing?.identity === identity) continue;
         if (existing) { existing.watcher.close(); watchers.delete(dir); }
