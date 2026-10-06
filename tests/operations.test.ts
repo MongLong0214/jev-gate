@@ -8,6 +8,23 @@ const base = { written_at: at, session_id: 's1', prompt_id: 'p1', mode: 'auto', 
 const row = (component: DebugRecord['component'], rec: Record<string, unknown>, time = at): DebugRecord => ({ at: time, component, rec });
 
 describe('operations display model', () => {
+  it('identifies a request effort mismatch without inventing a response model mismatch', () => {
+    const rows = [
+      { ...base, host: 'codex', phase: 'codex_route_applied', request_kind: 'root_response', selected_model: 'gpt-6.1-sol', submitted_model: 'gpt-6.1-sol', selected_effort: 'high', submitted_effort: 'xhigh', applied: false },
+      { ...base, host: 'codex', prompt_id: 'model', phase: 'codex_route_applied', request_kind: 'root_response', selected_model: 'gpt-6-luna', submitted_model: 'gpt-6.1-sol', selected_effort: 'low', submitted_effort: 'low', applied: false },
+      { ...base, host: 'codex', prompt_id: 'legacy', phase: 'codex_route_applied', selected_model: 'gpt-6.1-sol', applied: false },
+    ];
+    const view = buildOperations(rows, [], new Date(later), { trace: true, debug: false });
+    expect(view.feed.find(s => s.issue === 'request_effort')).toMatchObject({ state: 'error', summary: '선택 effort와 API 전송 effort 불일치 · 선택 high · 전송 xhigh', model: { status: 'unobserved', observed: null } });
+    expect(view.feed.some(s => s.issue === 'request_model')).toBe(true);
+    expect(view.feed.some(s => s.issue === 'request_unconfirmed')).toBe(true);
+    expect(view.attention).toBe(2);
+  });
+  it('keeps legacy request discrepancies unconfirmed when the request purpose was not recorded', () => {
+    const view = buildOperations([{ ...base, host: 'codex', phase: 'codex_route_applied', selected_model: 'gpt-6.1-sol', submitted_model: 'gpt-6.1-sol', selected_effort: 'high', submitted_effort: 'xhigh', applied: false }], [], new Date(later), { trace: true, debug: false });
+    expect(view.feed[0]).toMatchObject({ state: 'unconfirmed', issue: 'request_unconfirmed', summary: 'API 설정 관측 · 요청 종류 미확인 · gpt-6.1-sol · gpt-6.1-sol · xhigh' });
+    expect(view.attention).toBe(0);
+  });
   it('shows a proposed effort downgrade held by the cache separately from the final request setting', () => {
     const view = buildOperations([], [row('router', { event: 'root', turn: 'warm', from: { model: 'claude-opus-5-5', effort: 'xhigh' }, proposed_patch: { effort: 'low' }, patch: {}, held_for_cache: 'low', reasons: { model: 'same_value', effort: 'cache_preserved' } })], new Date(later), { trace: false, debug: true });
     expect(view.feed[0]?.details.join(' ')).toContain('캐시 재사용을 위해 effort 유지 · Jev 제안 low · 요청 설정 xhigh');
@@ -264,4 +281,27 @@ it('does not close root or sibling preparations with another agent response in t
   const matching = row('router', { ...common, event: 'child_result', agent_id: 'waiting', requested: 'sonnet', observed: 'claude-sonnet-5-5' }, later);
   const settled = buildOperations([], [...pending, response, matching], new Date(later), { trace: true, debug: true });
   expect(settled.runs.flatMap(r => r.steps).filter(s => s.lifecycle).map(s => s.state).sort()).toEqual(['done', 'unconfirmed']);
+});
+
+
+it('reports actual Compact Jev calls in both hosts separately from local packing and installation', () => {
+  const records = [
+    { phase: 'codex_compact', host: 'codex', session_id: 'c', run_id: 'r', stage: 'selected', applied: false, jev_sent: true, jev_ms: 310, candidates: 16, available: 20, dependencies: 1, selection: 'current_dependencies', written_at: at },
+    { phase: 'codex_compact', host: 'codex', session_id: 'c', run_id: 'r', stage: 'installed', applied: true, written_at: later },
+  ];
+  const debug = [row('compact', { event: 'compact', session_id: 's', run_id: 'r', stage: 'jev', jev_sent: true, jev_ms: 220, candidates: 4, available: 4, dependencies: 1, selection: 'current_dependencies' }), row('compact', { event: 'compact', session_id: 's', run_id: 'r', applied: true }, later)];
+  const view = buildOperations(records, debug, new Date(later), { trace: true, debug: true });
+  expect(view.requests).toBe(2); expect(view.latency.measured).toBe(2);
+  expect(view.feed.filter(s => s.lane === 'jev')).toHaveLength(2);
+  expect(view.feed.some(s => s.summary.includes('Jev 작업 의존 근거 선택'))).toBe(true);
+  expect(view.feed.find(s => s.lane === 'host')?.summary).toContain('설치 확인');
+});
+
+
+it('shows a forwarded native Compact request without a Router mismatch or claimed digest installation', () => {
+  const view = buildOperations([{ phase: 'codex_compact', host: 'codex', session_id: 'c', run_id: 'n', stage: 'native_submitted', applied: false, summarizer_request: true, submitted_model: 'gpt-6.1-sol', submitted_effort: 'xhigh', written_at: at }], [], new Date(later), { trace: true, debug: false, host: 'codex' });
+  expect(view.feed).toHaveLength(1);
+  expect(view.feed[0]).toMatchObject({ feature: 'compact', lane: 'host', state: 'unconfirmed', summary: expect.stringContaining('호스트 요약 모델') });
+  expect(view.feed[0]?.issue).toBeUndefined();
+  expect(view.feed[0]?.details.join(' ')).toContain('설치 미관측');
 });

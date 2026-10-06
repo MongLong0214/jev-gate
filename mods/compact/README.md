@@ -4,16 +4,18 @@ A Claude Code Function Hooks module that answers the host's auto compaction itse
 tail becomes one built user message (the digest): the previous summary, every earlier user-role message and failed
 call whole, and a log of earlier steps with each tool call's input and, while room lasts, an excerpt of its output. The tail stays as the engine has it,
 except a last message that answers tool calls, which is handed up rebuilt with a closing line after its results (below).
-No model is asked, so a compaction sends no summarizer request and takes milliseconds instead of a minute or more.
+No generative summarizer is asked when the digest applies. A bounded Jev judgment can prioritize optional older successful evidence for the current task.
 
-**It calls no Jev.** Jev was tried in two places and neither earned it (below): ranking which tool exchanges to keep, and
-deciding when a digest should fall back to the engine's own summary.
+**Jev dependency selection is on by default.** One batch asks whether each of at most 16 omitted older successful results contains a concrete dependency for the current task. Only `required` results receive budget priority; Jev never writes a summary or decides success, permissions or failure resolution. Mandatory user text, failure/unknown evidence and the paired native tail retain their existing rules. Keys are used only in the Authorization header. A full secret-bearing candidate is withheld before excerpting; a secret-bearing task skips the call. This is pattern screening, not a DLP guarantee.
+
+The wait defaults to 1,000ms, without retry. Missing keys, invalid answers, timeout, cancellation and key-access errors keep local compaction; cancelled or superseded turns never apply a late judgment. Calls that time out can still consume provider usage. Selection records expose sent/unknown, candidate coverage, selected dependency count, duration and observed usage without storing task or result text. Older candidates beyond the cap are unassessed. Turning selection off restores local-only compaction.
+
+The historical experiments below used future relevance and sufficiency, not the new current-task dependency question. Four fixed synthetic cases recovered an aged dependency missed by recency at the same 8,000-character budget. This is a fact-retention proxy, not measured production speed, quality or billing savings.
 
 ## Enable
 
 It ships inside the `jev-gate` plugin (v0.6.0; until v0.5.1 it was its own `jev-gate-compact`). Function Hooks are
-gated in the host, so `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` must be in the environment Claude Code starts in (for
-example under `env` in `~/.claude/settings.json`):
+enabled by installed startup initialization; normal onboarding requires only installation and the shared Jev key:
 
 ```sh
 claude plugin marketplace add MongLong0214/jev-gate
@@ -33,10 +35,12 @@ On by default (v0.6.3), in `active` mode; off registers no hook at all. Options 
 | `compactMode` | `active` | `shadow` builds and logs the digest and lets the engine compact, logging how long that took and what its summarizer used. `active` answers the compaction with the digest. |
 | `compactBudgetChars` | `40000` | Target characters for the digest and the kept tail together, 8000–400000. See the ceiling below. |
 | `compactSubagents` | `true` | Also answer a subagent's own auto compactions. |
+| `compactJevEnabled` | `true` | Current-task dependency selection. Off keeps local extraction. |
+| `compactJevTimeoutMs` | `1000` | Selection deadline in milliseconds, 50–3500. |
 | `compactManual` | `true` | Also answer `/compact` typed without instructions. A command with explicit instructions stays native. |
 
 An option it cannot use turns it off and logs the field name once per session. Every compaction it is asked about logs
-one `jev-compact {...}` debug line: why it deferred to the engine, or the sizes, the fallback reason, and in shadow the
+`jev-compact {...}` metadata without requiring `--debug`: why it deferred to the engine, or the sizes, the fallback reason, and in shadow the
 engine's time and usage. A failure of its own (`error`) leaves that compaction to the engine once; the engine's own
 failure or cancellation is passed up and never retried, and a log that throws changes nothing.
 
@@ -69,7 +73,7 @@ failure or cancellation is passed up and never retried, and a log that throws ch
 - **The digest** gets the rest, and never less than 30%. Mandatory first and whole: the previous summary, every
   earlier user-role message, and every failed or interrupted call. None of them is cut to a length; when they do not
   fit beside the tail, the engine compacts instead (`mandatory_overflow`), rather than the budget growing or a limit
-  in the middle of a message being cut. What is left goes to each earlier assistant message, newest first, its
+  in the middle of a message being cut. Jev-selected current-task dependencies receive the remaining budget first. What is left goes to each earlier assistant message, newest first, its
   narration (400) and tool inputs (240 each), then result excerpts (1,200 each), newest first. Pieces are printed
   oldest first.
 - **User-role messages** are quoted whole, beside tool results too. The host joins a message's text blocks and does

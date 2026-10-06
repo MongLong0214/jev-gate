@@ -23,6 +23,8 @@ export interface OperationStep {
   title: string;
   summary: string;
   details: string[];
+  /** Concrete recorded failure category; an effort mismatch is not a response-model mismatch. */
+  issue?: 'request_model' | 'request_effort' | 'request_unconfirmed' | 'response_model' | 'jev' | 'host' | 'evidence';
   model?: { selected: string | null; observed: string | null; status: 'confirmed' | 'mismatch' | 'unobserved'; selectedEffort: string | null; observedEffort: string | null; forwardedEffort?: string | null; effortSource?: 'host_hook' | 'provider_request' };
   routing?: { scope: 'root' | 'spawn' | 'child' | 'owned'; baseline: string | null; modelReason: string | null; effortReason: string | null; proposedModel?: string; probability?: number; threshold?: number };
   /** Timings are measured by the caller or paired recorded events, never estimated from usage. */
@@ -184,6 +186,19 @@ const traceTitle = (phase: string, r: Rec): string => ({
   evidence_start: 'Evidence · 근거 검색 시작', evidence_jev_intent: 'Evidence · Jev 판정 요청', evidence_jev_result: 'Evidence · Jev 판정 결과', evidence_cache: 'Evidence · 판정 캐시', evidence_result: 'Evidence · 근거 결과',
 } as Record<string, string>)[phase] ?? phase;
 
+const compactSelectionReason = (value: unknown): string | null => ({
+  current_dependencies: '현재 작업에 필요한 근거 선택', recency_kept: '기존 최근순 유지', no_candidates: '선별할 과거 결과 없음',
+  no_key: 'Jev API 키 없음', disabled: 'Jev 선별 꺼짐', not_eligible: '로컬 추출 조건 미충족 · Jev 선별 미실행', input_secret: '민감정보 감지 · 로컬 유지', input_too_large: '판정 입력 한도 초과 · 로컬 유지',
+  timeout: 'Jev 응답 시간 초과 · 로컬 유지', invalid_answers: '유효하지 않은 판정 · 로컬 유지', aborted: '중단 · 판정 미적용',
+  superseded: '새 턴으로 변경 · 판정 미적용', unauthorized: 'Jev 인증 실패 · 로컬 유지', credential_refused: 'Jev 인증 확인 필요 · 로컬 유지',
+  error: '선별 오류 · 로컬 유지', network: 'Jev 연결 오류 · 로컬 유지', saturated: '실행 중인 Jev 요청 한도 · 로컬 유지',
+} as Record<string, string>)[String(value)] ?? token(value);
+const compactUsage = (r: Rec): string => {
+  const usage = field(r, 'usage');
+  const count = (key: string) => number(usage?.[key]) === null ? '미확인' : n(number(usage?.[key]));
+  return `Jev 입력 ${count('input_tokens')} / 출력 ${count('output_tokens')} 토큰`;
+};
+
 const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<string, string>): OperationStep | null => {
   const phase = token(r['phase']);
   if (!phase) return null;
@@ -205,6 +220,7 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
     : r['known_not_sent'] === true || r['attempted'] === false ? 'skipped'
       : r['is_error'] === true || r['ok'] === false || failedAssessment || phase === 'failure' ? 'error' : 'done';
   const details: string[] = [];
+  let issue: OperationStep['issue'];
   let summary = '';
   let lane: StepLane = 'policy';
   let graph: OperationStep['graph'];
@@ -264,9 +280,18 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
     lane = 'host'; summary = text('Codex 응답 관측', token(r['observed_model']) ?? '모델 미확인', r['observed_effort'] === 'unknown' ? 'effort 미확인' : token(r['observed_effort']));
     details.push('응답이 보고한 값만 표시');
   } else if (phase === 'codex_compact') {
-    lane = r['applied'] === true ? 'host' : 'local';
-    summary = r['applied'] === true ? '추출형 digest 설치 확인 · 요약 모델 호출 대체' : '추출형 digest 생성 · 호스트 설치 대기';
+    lane = r['applied'] === true ? 'host' : r['jev_sent'] === true ? 'jev' : 'local';
+    summary = r['stage'] === 'deferred' ? text('호스트 압축으로 넘김', compactSelectionReason(r['fallback'])) : r['applied'] === true ? '추출형 digest 설치 확인 · 요약 모델 호출 대체' : '추출형 digest 생성 · 호스트 설치 대기';
+    if (r['stage'] === 'deferred') state = 'skipped';
+    if ('jev_sent' in r) details.push(text(r['jev_sent'] === true ? 'Jev 작업 의존 근거 선택' : r['jev_sent'] === false ? 'Jev 전송 없음' : 'Jev 전송 여부 미확인', compactSelectionReason(r['selection']), `후보 ${n(number(r['candidates']))}/${n(number(r['available']))}`, `필수 근거 ${n(number(r['dependencies']))}`));
+    if (r['jev_sent'] === true) details.push(compactUsage(r));
     details.push(text(`압축 전 ${n(number(r['before_bytes']))}B`, `digest ${n(number(r['after_bytes']))}B`, '바이트 크기 · 측정된 토큰 절감 아님'));
+    if (r['stage'] === 'native_submitted') {
+      lane = 'host'; state = 'unconfirmed';
+      summary = text('호스트 요약 모델에 압축 요청 전송', token(r['submitted_model']), token(r['submitted_effort']));
+      details.length = 0;
+      details.push('Compact 전용 요청 · 일반 실행 Router 선택과 비교하지 않음', '요약 응답·호스트 설치 미관측');
+    }
   } else if (phase === 'evidence_result') {
     lane = 'local';
     summary = text(token(r['status']), token(r['backend']), `근거 ${n(number(r['items']))}건`, `Jev 호출 ${n(number(r['remote_calls']))}건`, `캐시 ${n(number(r['cache_hits']))}건`);
@@ -298,7 +323,7 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
     if (phase === 'background_terminal') { summary = token(r['status']) === 'completed' ? '호스트에서 실제 종료 확인 · 계약 수락은 별도 검사' : '호스트에서 중단·실패 확인 · 성공 수락 없음'; state = token(r['status']) === 'completed' ? 'done' : 'interrupted'; if (r['orphaned'] === true) details.push('이전 작업 결과 · 현재 계획 미진행'); }
   } else if (phase === 'dispatch') {
     lane = 'host';
-    summary = text(token(r['role']), token(r['task_id']), token(r['selection']), `요청 등급 ${token(r['requested_tier']) ?? '?'}`);
+    summary = text(token(r['role']), token(r['task_id']), compactSelectionReason(r['selection']), `요청 등급 ${token(r['requested_tier']) ?? '?'}`);
     details.push(text(`호출 모델 ${token(r['requested_model']) ?? '미기록'}`, r['pinned'] === true ? '모델 고정' : null, list(r['depends_on']).length ? `선행 작업 ${list(r['depends_on']).join(', ')}` : null));
     if (token(r['worker_isolation'])) details.push(`워커 격리 ${token(r['worker_isolation'])}`);
   } else if (phase === 'post') {
@@ -334,7 +359,7 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
     details.push(text(`요청 모델 ${token(r['requested_model']) ?? '미기록'}`, `실행 모델 ${token(r['resolved_model']) ?? '미관측'}`));
   }
   const measured = number(http?.['duration_ms']);
-  const duration = measured !== null && measured >= 0 ? measured : phase === 'evidence_result' ? number(r['duration_ms']) : null;
+  const duration = measured !== null && measured >= 0 ? measured : phase === 'evidence_result' ? number(r['duration_ms']) : phase === 'codex_compact' && lane === 'jev' ? number(r['jev_ms']) : null;
   const sentAt = requestId && phase.endsWith('_result') ? intents.get(`${requestId}:${phase.replace(/_result$/, '_intent')}`) : undefined;
   const elapsed = sentAt ? Date.parse(at) - Date.parse(sentAt) : null;
   const model = phase === 'codex_router_response' ? modelObservation(r['selected_model'], r['observed_model'], r['selected_effort'], r['observed_effort'], undefined, 'submitted_effort' in r ? { value: r['submitted_effort'], source: 'provider_request' } : undefined)
@@ -361,8 +386,26 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
     const exclusions = field(r, 'excluded');
     if (exclusions) details.push(text(...Object.entries(exclusions).flatMap(([reason, value]) => number(value) ? [`제외 ${reason} ${n(number(value))}`] : [])));
   }
-  if (model?.status === 'mismatch' || phase === 'codex_route_applied' && r['applied'] === false) state = 'error';
+  if (model?.status === 'mismatch') { state = 'error'; issue = 'response_model'; }
+  if (phase === 'codex_route_applied' && r['applied'] === false) {
+    const submittedModel = token(r['submitted_model']), submittedEffort = token(r['submitted_effort']);
+    const selectedModel = token(r['selected_model']);
+    if (r['request_kind'] !== 'root_response') {
+      state = 'unconfirmed'; issue = 'request_unconfirmed';
+      summary = text('API 설정 관측 · 요청 종류 미확인', selectedModel, submittedModel, r['submitted_effort'] === null ? '전송 effort 생략' : submittedEffort);
+      details.push('루트 실행 요청인지 호스트 요약 요청인지 기록이 없어 선택값 적용 실패로 단정할 수 없음', '실제 응답 모델·effort 미관측');
+    } else {
+    state = 'error';
+    issue = submittedModel && selectedModel && submittedModel !== selectedModel ? 'request_model'
+      : submittedModel && selectedModel && submittedModel === selectedModel && 'submitted_effort' in r ? 'request_effort' : 'request_unconfirmed';
+    summary = issue === 'request_effort' ? text('선택 effort와 API 전송 effort 불일치', `선택 ${token(r['selected_effort']) ?? '생략'}`, `전송 ${submittedEffort ?? '생략'}`)
+      : issue === 'request_model' ? text('선택 모델과 API 전송 모델 불일치', selectedModel, submittedModel) : '선택 설정 적용 실패 기록 · 불일치 항목 미확인';
+    details.push('API 요청 설정의 비교 · 실제 응답 모델이나 실행 실패를 뜻하지 않음');
+    }
+  }
+  if (state === 'error' && !issue) issue = lane === 'jev' ? 'jev' : feature === 'evidence' ? 'evidence' : 'host';
   return { id: id(ownId), at, feature, state, lane, title: traceTitle(phase, r), summary, details: details.filter(Boolean), ...(routing ? { routing } : {}), ...(model ? { model } : {}),
+    ...(issue ? { issue } : {}),
     ...(['stop', 'background_conversation'].includes(phase) ? { lifecycle: true } : {}),
     ...(phase === 'admission_result' && ['direct', 'orchestrated'].includes(String(field(r, 'decision')?.['shape'])) ? { executionPath: field(r, 'decision')!['shape'] as 'direct' | 'orchestrated' } : {}),
     ...(duration !== null && duration >= 0 ? { durationMs: duration } : {}),
@@ -453,7 +496,12 @@ const debugStep = (row: DebugRecord, now: number, closed: Set<string>, responses
       if (levels) details.push(text(`${name} 점수`, ...Object.entries(levels).slice(0, 8).flatMap(([level, value]) => token(level) && number(value) !== null ? [`${level} ${n(number(value))}`] : [])));
     }
   } else if (feature === 'compact') {
-    summary = started ? '대화 압축 시작' : r['deferred'] ? text('호스트 압축으로 넘김', token(r['deferred'])) : r['applied'] === true ? '로컬 digest 적용 · 요약 모델 호출 대체' : text('호스트 압축 사용', token(r['fallback']), r['coreSkip'] === true ? '호스트 건너뜀' : null);
+    if (r['stage'] === 'jev') {
+      lane = r['jev_sent'] === true ? 'jev' : 'local';
+      summary = text(r['jev_sent'] === true ? 'Jev 작업 의존 근거 선택' : r['jev_sent'] === false ? 'Jev 전송 없음' : 'Jev 전송 여부 미확인', compactSelectionReason(r['selection']));
+      if (r['jev_sent'] === true) details.push(compactUsage(r));
+      details.push(text(`후보 ${n(number(r['candidates']))}/${n(number(r['available']))}`, `필수 근거 ${n(number(r['dependencies']))}`, number(r['jev_ms']) === null ? null : `${n(number(r['jev_ms']))}ms`));
+    } else summary = started ? '대화 압축 시작' : r['deferred'] ? text('호스트 압축으로 넘김', token(r['deferred'])) : r['applied'] === true ? '로컬 digest 적용 · 요약 모델 호출 대체' : text('호스트 압축 사용', token(r['fallback']), r['coreSkip'] === true ? '호스트 건너뜀' : null);
     details.push(text(`모드 ${token(r['mode']) ?? '?'}`, `트리거 ${token(r['trigger']) ?? '?'}`, r['subagent'] === true ? '서브에이전트' : '루트', `메시지 ${n(number(r['messages']))}개`));
     details.push(text(number(r['digestChars']) === null ? null : `digest ${n(number(r['digestChars']))}자`, number(r['tailChars']) === null ? null : `tail ${n(number(r['tailChars']))}자`, number(r['buildMs']) === null ? null : `빌드 ${n(number(r['buildMs']))}ms`));
     if (number(r['tokensBefore']) !== null || number(r['tokensAfter']) !== null) details.push(`호스트 보고 압축 전 ${n(number(r['tokensBefore']))} / 후 ${n(number(r['tokensAfter']))} 토큰`);
@@ -474,7 +522,7 @@ const debugStep = (row: DebugRecord, now: number, closed: Set<string>, responses
     details.push('요청 전 점검만 기록됨 · Jev 새 호출이나 실제 모델 응답 완료를 뜻하지 않음');
   }
   if (r['denied'] === true) { state = 'skipped'; summary = '호스트가 에이전트 생성을 거부함 · 실행되지 않음'; }
-  const duration = number(r['duration_ms']);
+  const duration = number(r['duration_ms'] ?? (lane === 'jev' ? r['jev_ms'] : undefined));
   return { id: id(`${row.component}:${row.at}:${key}:${event}:${started ? 'start' : 'result'}`), at: row.at, feature, state, lane, ...(event === 'prepared' ? { lifecycle: true as const } : {}), title: { router: event === 'prepared' ? 'Router · 요청 전달 준비' : 'Router · ' + event, compact: 'Compact · 압축', output: 'Output · 로그 접기' }[feature], summary, details: details.filter(Boolean), ...(routing ? { routing } : {}), ...(model ? { model } : {}), ...(lane === 'jev' && duration !== null && duration >= 0 ? { durationMs: duration } : {}) };
 };
 
@@ -582,12 +630,14 @@ export const buildOperations = (records: Rec[], debug: DebugRecord[], now: Date,
   const jevRequests = new Set<string>();
   for (const r of records) {
     const phase = token(r['phase']) ?? '';
+    if (phase === 'codex_compact' && r['jev_sent'] === true) { jevRequests.add(`compact:codex:${token(r['session_id'])}:${token(r['run_id'])}`); continue; }
     if (!['admission_intent', 'pre_intent', 'interpretation_intent', 'lean_intent', 'evidence_jev_intent', 'codex_router_intent'].includes(phase)
       && !(r['attempted'] === true && ['admission_result', 'pre_result', 'interpretation_result', 'lean_result', 'evidence_jev_result', 'codex_router_result'].includes(phase))) continue;
     const kind = phase.replace(/_(intent|result)$/, '');
     jevRequests.add(`${kind}:${token(r['request_id']) ?? token(r['invocation_id']) ?? iso(r['written_at'])}`);
   }
   for (const row of debug) {
+    if (row.component === 'compact' && row.rec['jev_sent'] === true) { jevRequests.add(`compact:claude:${token(row.rec['session_id']) ?? 'legacy'}:${token(row.rec['run_id']) ?? row.at}`); continue; }
     if (row.component !== 'router' || (row.rec['event'] !== 'request' && row.rec['sent'] !== true)) continue;
     jevRequests.add(`router:${token(row.rec['session_id']) ?? 'legacy'}:${token(row.rec['turn']) ?? token(row.rec['tool_use_id']) ?? row.at}`);
   }

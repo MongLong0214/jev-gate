@@ -1,6 +1,6 @@
 {
   "name": "jev-gate",
-  "version": "0.8.7",
+  "version": "0.8.8",
   "description": "Jev Gate in one plugin: the orchestration gate, the extractive compactor, the Vitest log folder, the Jev effort and model router and the jev_evidence tool. Every part is on by default; each has its own on/off option.",
   "author": {
     "name": "MongLong0214",
@@ -163,6 +163,18 @@
       "title": "Router: Router: Allow automatic Fable selection",
       "description": "Opt in to new automatic Fable model targets, including owned planners and workers. A manually selected root remains usable when off.",
       "default": false
+    },
+    "compactJevEnabled": {
+      "title": "Compact: Jev task dependencies",
+      "description": "Prioritize optional old successful results needed for the current task, within the same digest budget. Failures preserve local compaction.",
+      "type": "boolean",
+      "default": true
+    },
+    "compactJevTimeoutMs": {
+      "title": "Compact: Jev deadline (ms)",
+      "description": "Maximum selection wait, 50 to 3500ms; timeout keeps the local digest without retry.",
+      "type": "number",
+      "default": 1000
     }
   }
 }

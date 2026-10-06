@@ -8,7 +8,7 @@ import type { CodexModel } from './router.js';
 export interface CodexPolicyConfig {
   gate: ConfigV5;
   router: { enabled: boolean; model: boolean; effort: boolean; allowAstra: boolean; minUpgradeConfidence: number; minDowngradeConfidence: number; timeoutMs: number };
-  compact: { enabled: boolean; manual: boolean; budgetChars: number };
+  compact: { enabled: boolean; manual: boolean; budgetChars: number; jevEnabled?: boolean; jevTimeoutMs?: number };
 }
 export const catalogTierModels = (baseline: string, catalog: readonly CodexModel[]): Record<Tier, string> => {
   // Use this account's model descriptions, never invented IDs or hidden specialist/review models.
@@ -42,8 +42,9 @@ export const loadCodexPolicy = (env: Env, catalog: readonly CodexModel[] = []): 
     return out;
   };
   const router = section('router', { enabled: true, model: true, effort: true, allowAstra: false, minUpgradeConfidence: 0.8, minDowngradeConfidence: 0.6, timeoutMs: 800 }) as unknown as CodexPolicyConfig['router'];
-  const compact = section('compact', { enabled: true, manual: true, budgetChars: 40000 }) as unknown as CodexPolicyConfig['compact'];
+  const compact = section('compact', { enabled: true, manual: true, budgetChars: 40000, jevEnabled: true, jevTimeoutMs: 1000 }) as unknown as CodexPolicyConfig['compact'];
   if (![router.minUpgradeConfidence, router.minDowngradeConfidence].every(n => Number.isFinite(n) && n > .5 && n <= 1) || !Number.isInteger(router.timeoutMs) || router.timeoutMs < 50 || router.timeoutMs > 3500 || !Number.isInteger(compact.budgetChars) || compact.budgetChars < 8000 || compact.budgetChars > 400000) throw new Error('invalid Codex policy bounds');
+  if (!Number.isInteger(compact.jevTimeoutMs) || compact.jevTimeoutMs! < 50 || compact.jevTimeoutMs! > 3500) throw new Error('invalid Codex compact deadline');
   return { gate: checked.config, router, compact };
 };
 

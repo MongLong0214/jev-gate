@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.8.8 — 2026-10-06 — Task-aware compaction
+
+- Compact in Claude Code and Codex now uses one bounded Jev current-task dependency batch before extractive packing. It prioritizes at most 16 optional old successful observations at the same configured budget; mandatory text, failed/unknown results and the paired native tail retain their existing rules.
+- Selection defaults on with a 1,000ms deadline and explicit on/off controls. Invalid judgment, missing keys, secret input and optional key-read errors preserve local extraction; cancelled and superseded generations do not apply late selection.
+- The dashboard distinguishes Compact's actual Jev calls, candidate coverage, selected dependencies and latency from local packing and native installation. No general quality, latency or billing savings are inferred from digest size.
+- Native Codex code-mode terminal command results are recognized without executing or evaluating their scripts; ongoing, compound, forged and unknown results stay whole. Oversized selection batches offer fewer complete candidates and record coverage (#177).
+- Diagnose API request model/effort discrepancies separately from response-model mismatches, Jev errors and native failures. Show event counts and times, and exclude historical errors outside the selected time range (#178). Keep forwarded native Compact requests separate from root Router model/effort observations and cache/context accounting; a native summarizer request is not evidence of a root route mismatch.
+
 ## v0.8.7 — 2026-10-06 — Routing evidence and responsive dashboard
 
 - Observe completed Codex Responses even when the native upstream omits Content-Type. Decode compressed observation streams and handle all SSE line endings and split UTF-8 without altering native bytes; missing response models remain unknown (#173).

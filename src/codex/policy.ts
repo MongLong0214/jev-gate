@@ -1,3 +1,4 @@
+import { resolveApiKey } from '../credentials.js';
 import { randomUUID } from 'node:crypto';
 import { join, isAbsolute, resolve, relative } from 'node:path';
 import { mkdirSync, realpathSync } from 'node:fs';
@@ -37,6 +38,7 @@ interface Session {
   tokens: number | null; window: number | null; controller: AbortController | null;
   commands: Map<string, string>;
   requestModel?: string; requestEffort?: string;
+  requestKind?: 'root_response';
   compactAllowed?: boolean; eligible?: boolean; terminal?: boolean;
   role?: string; parent?: string; done?: (turn: Obj) => void; route?: PairPatch; routePending?: Promise<void>; routeDeadline?: number; routeConfig?: string;
   previousReply?: string; completedReply?: string; turnReply?: string; lastSubmitted?: CodexSubmission;
@@ -187,6 +189,7 @@ export class CodexPolicy {
     if (!session?.external || !session.prompt || !session.task || !this.hooked.has(id)) return { request };
     if (session.stop) return { request, stop: session.stop };
     const requestPrompt = session.prompt;
+    session.requestKind = 'root_response';
     const requestController = session.controller;
     const source = wireSource(request['input'], session.task, requestPrompt);
     // Capture completed context before replacing the previous source with current-turn wire items.
@@ -335,7 +338,7 @@ export class CodexPolicy {
       const prompt = typeof params['clientUserMessageId'] === 'string' ? params['clientUserMessageId'] : randomUUID();
       const starting = { prompt, controller }; session.starting = starting;
       try {
-      session.prompt = prompt; session.terminal = false; delete session.turnReply;
+      session.prompt = prompt; session.terminal = false; delete session.turnReply; session.requestKind = 'root_response';
       const deadline = Date.now() + session.policy.router.timeoutMs;
       const collaboration = obj(params['collaborationMode']);
       const modeSettings = obj(collaboration?.['settings']);
@@ -764,9 +767,11 @@ export class CodexPolicy {
       request_id: submitted.requestId, submitted_model: request['model'], submitted_effort: effort ?? null, observed_model: null, observed_effort: 'unknown', observed_host_effort: session.settings['effort'] ?? null,
       boundary: 'provider_request', scope: session.role ?? 'root',
       selected_model: selectedModel, selected_effort: selectedEffort, effort_resolution: nativeUltra ? 'native_ultra' : 'direct',
+      request_kind: session.requestKind ?? 'unknown',
       reason: 'request_applied', applied: request['model'] === selectedModel && (session.route.effortEdit?.kind === 'omit' ? effort === undefined : !session.route.effort || effort === selectedEffort || nativeUltra) });
     return submitted;
   }
+  compactKey(): string | undefined { return resolveApiKey(this.env); }
   previousCompact(session: string): string | undefined { return this.sessions.get(session)?.lastCompactSummary; }
   canCompact(session: string): boolean { return this.sessions.get(session)?.compactAllowed === true; }
   close(): void { for (const s of this.sessions.values()) { s.controller?.abort(); s.done?.({localClose:true}); } }

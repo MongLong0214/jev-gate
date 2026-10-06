@@ -118,6 +118,21 @@ describe.skipIf(process.env['JEV_CODEX_E2E'] !== '1')('ordinary native Codex aut
           expect(events.slice(at).some(m => m['method'] === 'turn/completed' && (m['params'] as Obj)['threadId'] === id), nativeErrors).toBe(true);
         };
         const start = async (): Promise<string> => String(((await rpc.request('thread/start', { cwd: workspace, ephemeral: true, approvalPolicy: 'never', sandbox: 'read-only' }))['thread'] as Obj)['id']);
+        // Reproduce #178 through a normal App Server: root is routed low, while native compaction keeps host high.
+        writeFileSync(policyFile, JSON.stringify({ gate: { mode: 'off' }, compact: { manual: false } }));
+        mode = 'compact'; step = 0; const nativeCompact = await start();
+        await turn(nativeCompact, 'Preserve the exact nativeCompactConstraint.'); await turn(nativeCompact, 'Give a short answer.');
+        const beforeNative = requests.length;
+        await rpc.request('thread/compact/start', { threadId: nativeCompact });
+        const nativeUntil = Date.now() + 10_000;
+        while (!readdirSync(trace).some(f => f.startsWith('codex_compact') && JSON.parse(readFileSync(join(trace, f), 'utf8')).stage === 'native_submitted') && Date.now() < nativeUntil) await new Promise<void>(resolve => setTimeout(resolve, 20));
+        expect(requests.length).toBe(beforeNative + 1);
+        expect((requests.at(-1)!['reasoning'] as Obj)['effort']).toBe('high');
+        const nativeRows = readdirSync(trace).map(f => JSON.parse(readFileSync(join(trace, f), 'utf8')) as Obj).filter(r => r['session_id'] === nativeCompact);
+        expect(nativeRows.some(r => r['phase'] === 'codex_route_applied' && r['selected_effort'] === 'low' && r['applied'] === true)).toBe(true);
+        expect(nativeRows.some(r => r['phase'] === 'codex_compact' && r['stage'] === 'native_submitted' && r['submitted_effort'] === 'high')).toBe(true);
+        expect(nativeRows.some(r => r['phase'] === 'codex_route_applied' && r['applied'] === false)).toBe(false);
+        writeFileSync(policyFile, '{}');
         mode = 'gate'; step = 0; const gate = await start();
         await turn(gate, 'Seed the native context.');
         await turn(gate, 'Investigate the fixture and run vitest run.');

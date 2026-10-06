@@ -1,7 +1,7 @@
 {
   "name": "jev-gate-compact",
-  "version": "0.8.7",
-  "description": "Answers auto compactions with an extractive digest and the recent tail, so compacting sends no summarizer request and has no wait; on by default.",
+  "version": "0.8.8",
+  "description": "Task-aware extractive compaction with bounded Jev dependency selection and the native recent tail; on by default.",
   "author": {
     "name": "MongLong0214",
     "url": "https://github.com/MongLong0214"
@@ -42,6 +42,18 @@
       "description": "Also answer /compact typed without instructions. Off leaves /compact the engine's.",
       "type": "boolean",
       "default": true
+    },
+    "jevEnabled": {
+      "title": "Jev task dependencies",
+      "description": "Prioritize optional old successful results needed for the current task, within the same digest budget. Failures preserve local compaction.",
+      "type": "boolean",
+      "default": true
+    },
+    "jevTimeoutMs": {
+      "title": "Jev deadline (ms)",
+      "description": "Maximum selection wait, 50 to 3500ms; timeout keeps the local digest without retry.",
+      "type": "number",
+      "default": 1000
     }
   }
 }
