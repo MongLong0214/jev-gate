@@ -13,7 +13,7 @@ const load = async (): Promise<RegisterFn> =>
 
 const hooksFor = async (options: Record<string, unknown>) => {
   const hooks = new Map<string, Hook>();
-  (await load())((name, hook) => hooks.set(name, hook), options);
+  (await load())((name, hook) => hooks.set(name, hook), { jevEnabled: false, ...options });
   return hooks;
 };
 
@@ -41,7 +41,7 @@ const nextSpy = () => {
 
 describe('resolveCompactConfig', () => {
   it('defaults to on, active, 40000 characters, subagents and manual compaction on', () => {
-    expect(resolveCompactConfig(undefined)).toEqual({ ok: true, config: { enabled: true, mode: 'active', budgetChars: 40000, subagents: true, manual: true } });
+    expect(resolveCompactConfig(undefined)).toEqual({ ok: true, config: { enabled: true, mode: 'active', budgetChars: 40000, subagents: true, manual: true, jevEnabled: true, jevTimeoutMs: 1000 } });
   });
   it('names the field it cannot use', () => {
     expect(resolveCompactConfig({ mode: 'fast' })).toEqual({ ok: false, field: 'mode' });
@@ -150,5 +150,23 @@ describe('register', () => {
       expect(await on($, { trigger: 'auto', messages: lone }, async () => { asked++; return skipped; })).toBe(skipped);
       expect(asked).toBe(3);
     }
+  });
+});
+
+
+describe('optional Jev failure does not discard the local digest', () => {
+  it('keeps active local compaction when credential access throws', async () => {
+    const hook = (await hooksFor({ enabled: true, jevEnabled: true })).get('session.compact')!;
+    const { next, calls } = nextSpy();
+    const engine = { ...$, session: { id: async () => 'fixture' }, env: { get: async (name: string) => { if (name === 'TYPESAFE_API_KEY') throw new Error('unavailable'); return undefined; } } };
+    const result = await hook(engine, { trigger: 'auto', messages: conversation() }, next) as { messages: Array<{ text: string }> };
+    expect(result.messages[0]!.text).toContain('[jev-gate compact]'); expect(calls).toEqual([]);
+  });
+  it('forwards cancellation once instead of installing a digest', async () => {
+    const hook = (await hooksFor({ enabled: true, jevEnabled: false })).get('session.compact')!;
+    const controller = new AbortController(); controller.abort();
+    const { next, calls } = nextSpy(); Object.assign(next, { signal: controller.signal });
+    const event = { trigger: 'auto', messages: conversation() };
+    expect(await hook($, event, next)).toBe(CORE); expect(calls).toEqual([event]);
   });
 });

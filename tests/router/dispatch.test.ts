@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,7 +11,12 @@ describe('shared automatic child eligibility and ownership', () => {
     const dir = mkdtempSync(join(tmpdir(), 'jev-dispatch-entry-')); const env = { ...process.env, JEV_GATE_STATE_DIR: dir };
     try {
       updateJob(env, 'root', () => { const state = newGeneration(null, 'root', 'prompt', 'orchestrated').state; const current = reserve(state.current, 'tool', { role: 'worker', taskId: null, contractHash: null, rev: null, tier: 'standard', attempt: 1, deliverables: [] }); return { ...state, current: { ...current, active: { tool: { ...current.active.tool!, allocation_pair: { model: 'claude-opus-5', effort_edit: { kind: 'set', value: 'high' } } } } } }; });
-      const link = join(dir, 'installed plugin'); symlinkSync(join(__dirname, '../..'), link);
+      const root = join(__dirname, '../..');
+      const staged = join(dir, 'package'); mkdirSync(staged);
+      writeFileSync(join(staged, 'package.json'), '{"type":"module"}');
+      const build = spawnSync(process.execPath, [join(root, 'node_modules/typescript/bin/tsc'), '-p', join(root, 'tsconfig.json'), '--outDir', join(staged, 'dist')], { encoding: 'utf8' });
+      expect(build.status, build.stdout + build.stderr).toBe(0);
+      const link = join(dir, 'installed plugin'); symlinkSync(staged, link);
       const result = spawnSync(process.execPath, [join(link, 'dist/dispatch-policy.js'), 'root', 'tool', 'opus', 'false', 'jev-gate:worker', 'true', ''], { env, encoding: 'utf8' });
       expect(result.status, result.stderr).toBe(0); expect(JSON.parse(result.stdout)).toEqual({ model: 'claude-opus-5', effort_edit: { kind: 'set', value: 'high' } });
     } finally { rmSync(dir, { recursive: true, force: true }); }

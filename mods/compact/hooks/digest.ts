@@ -1,7 +1,7 @@
 /**
  * The extractive compaction: the conversation before a recent tail becomes one built user message (the digest), and
  * the tail stays as the engine has it (by handle), its last message rebuilt when it answers calls (CLOSING). No model
- * is asked, so a compaction costs no request and no wait.
+ * is asked by this packer; optional Jev dependency selection happens before it.
  *
  * The shape is structural so the Node tests and the offline evaluation drive the same function the host runs; the
  * host's `SessionMessage` satisfies it.
@@ -34,6 +34,8 @@ export interface DigestOptions {
    * engine compacts. Either way the result must come to at most half of what it replaces.
    */
   readonly budgetChars: number;
+  /** Current-task dependencies selected by Jev; only optional successful results can be prioritized. */
+  readonly priorityResults?: readonly { message: number; tool: number }[];
 }
 
 export interface DigestResult {
@@ -403,14 +405,26 @@ export const buildDigest = (messages: readonly DigestMessage[], options: DigestO
   ].map((p) => ({ ...p, text: keep(p.text, REQUEST_PREFIX.length + 1) }));
   if (left < 0) return { ok: false, reason: 'mandatory_overflow' };
 
-  // Steps: this stretch's inputs and narration, then its result excerpts, newest first; then carried steps. Recency
-  // orders them rather than a Jev relevance score, which over 40 real compactions kept no more of what the next turns
-  // used (0.783 against 0.788).
+  // Selected optional dependencies use the same budget first. The remaining inputs/narration and result excerpts
+  // follow recency, then carried steps; every rendered piece retains its original chronological provenance.
   const log: Piece[] = [];
+  const prioritized = new Set<string>();
+  for (const p of options.priorityResults ?? []) {
+    if (!Number.isInteger(p.message) || !Number.isInteger(p.tool)) continue;
+    const m = head[p.message]; const u = m?.role === 'assistant' ? m.toolUses[p.tool] : undefined;
+    const key = `${p.message}:${p.tool}`;
+    if (!u?.text || failed(u) || prioritized.has(key)) continue;
+    prioritized.add(key);
+    const input = take(inputText(u), INPUT_CHARS, 3);
+    if (input) log.push({ at: p.message, sub: 1 + 2 * p.tool, text: `[${input}]` });
+    const result = take(u.text.trim(), RESULT_CHARS, 5);
+    if (result) log.push({ at: p.message, sub: 2 + 2 * p.tool, text: `  → ${result}` });
+  }
   for (let i = head.length - 1; i >= 0 && left > 0; i--) {
     const m = head[i]!;
     if (m.role !== 'assistant') continue;
     m.toolUses.forEach((u, j) => {
+      if (prioritized.has(`${i}:${j}`)) return;
       const t = take(inputText(u), INPUT_CHARS, 3);
       if (t) log.push({ at: i, sub: 1 + 2 * j, text: `[${t}]` });
     });
@@ -423,6 +437,7 @@ export const buildDigest = (messages: readonly DigestMessage[], options: DigestO
     const m = head[i]!;
     if (m.role !== 'assistant') continue;
     m.toolUses.forEach((u, j) => {
+      if (prioritized.has(`${i}:${j}`)) return;
       if (!u.text || failed(u)) return;
       const t = take(u.text.trim(), RESULT_CHARS, 5);
       if (t) log.push({ at: i, sub: 2 + 2 * j, text: `  → ${t}` });

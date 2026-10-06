@@ -44,6 +44,18 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
   afterAll(async()=>{for(const res of clients)res.end();server.closeAllConnections();try{await new Promise<void>(r=>server.close(()=>r()));}finally{await browser?.close();}expect(errors).toEqual([]);});
   const settle = (p: Page) => p.evaluate(()=>new Promise<void>(r=>requestAnimationFrame(()=>requestAnimationFrame(()=>r()))));
 
+  it('labels request effort discrepancies precisely and hides out-of-range historical warnings', async () => {
+    const old = new Date(Date.now() - 7_200_000).toISOString();
+    push([run('effort', 'codex', [step('old', 'router', { at: old, lane: 'host', state: 'error', issue: 'request_effort', summary: '선택 high · 전송 xhigh' }), step('recent', 'router', { lane: 'host' })], { state: 'attention' })]);
+    const p = await page();
+    expect(await p.locator('.run-diagnosis').textContent()).toContain('API 전송 effort 불일치 1건');
+    expect(await p.locator('.run-diagnosis').textContent()).toContain('선택 high · 전송 xhigh');
+    await p.selectOption('#window', '3600000');
+    expect(await p.locator('.run-diagnosis').count()).toBe(0);
+    expect(await p.locator('.review-shortcut[data-review=true]').count()).toBe(0);
+    await p.close();
+  });
+
   it('renders empty and long mixed-host metadata in 28 viewport/theme/language states without overflow or overlap',async()=>{
     const a=step('a','admission',{durationMs:63}),b=step('b','allocation',{durationMs:88}),w=step('w','workers',{lane:'host',summary:'long '.repeat(180),model:{selected:'claude-opus-5-5',observed:'claude-sonnet-5',status:'mismatch',selectedEffort:null,observedEffort:null}});
     push([run('c','claude',[a,b,w]),run('x','codex',[step('r','router',{durationMs:91}),step('e','evidence',{lane:'local',summary:'<img src=x onerror="alert(1)">'})])]);
@@ -110,7 +122,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
   it('separates errors, missing results and interruption; failed settings writes retain the saved state',async()=>{
     push([run('c','claude',[step('m','workers',{lane:'host',state:'error',summary:'actual model mismatch',model:{selected:'opus',observed:'sonnet',status:'mismatch',selectedEffort:null,observedEffort:null}})],{state:'attention'}),run('x','codex',[step('u','router',{state:'unconfirmed'})],{state:'unconfirmed'}),run('stop','codex',[step('stop','output',{state:'interrupted'})],{state:'interrupted'})]);const p=await page();
     await p.locator('.circuit-node[data-feature=workers]').click();expect(await p.locator('.inspector-record').textContent()).toContain('불일치');expect(await p.locator('.inspector-record.error').count()).toBe(1);
-    await p.locator('.review-shortcut[data-review=unconfirmed]').click();expect(await p.locator('#runs .run-row').count()).toBe(1);expect(await p.locator('#trace').textContent()).toContain('성공·실패는 알 수 없습니다');
+    await p.locator('.review-shortcut[data-review=unconfirmed]').click();expect(await p.locator('#runs .run-row').count()).toBe(1);expect(await p.locator('#trace').textContent()).toContain('판단·요청·실행 중 확인되지 않은 항목');
     await p.locator('#recording').click();await p.waitForFunction(()=>document.getElementById('notice')!.textContent!.includes('저장하지 못했습니다'));expect(await p.locator('#recording').getAttribute('aria-checked')).toBe('true');await p.locator('#language').click();expect(await p.locator('html').getAttribute('lang')).toBe('en');await p.close();
   });
 

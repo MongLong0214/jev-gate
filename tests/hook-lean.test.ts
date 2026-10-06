@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -834,8 +834,15 @@ describe('lean — the installed entrypoint, not just the unit', () => {
   const build = (): void => {
     if (existsSync(join(packed, 'dist', 'hook.js'))) return;
     const out = mkdtempSync(join(tmp, 'zip-'));
-    expect(spawnSync('npm', ['run', 'build'], { cwd: process.cwd(), encoding: 'utf8' }).status).toBe(0);
-    expect(spawnSync('node', ['scripts/pack.mjs', out, '--profile', 'lean'], { cwd: process.cwd(), encoding: 'utf8' }).status).toBe(0);
+    const root = join(__dirname, '..');
+    const staged = join(tmp, 'source');
+    // Build only this fixture. Rebuilding the checkout deletes dist used by concurrent native-host tests.
+    for (const rel of ['.claude-plugin', 'hooks', 'agents', 'README.md', 'AGENTS.md', '.env.example', 'package.json', 'CHANGELOG.md', 'docs', 'bench/ab/tasks.example.json', 'plugins/evidence/README.md', 'plugins/evidence/skills', 'plugins/codex/README.md', 'mods/compact/README.md', 'mods/output/README.md', 'mods/router/README.md', 'assets/readme/jev-gate-logo.svg']) {
+      cpSync(join(root, rel), join(staged, rel), { recursive: true });
+    }
+    expect(spawnSync(process.execPath, [join(root, 'node_modules/typescript/bin/tsc'), '-p', join(root, 'tsconfig.json'), '--outDir', join(staged, 'dist')], { encoding: 'utf8' }).status).toBe(0);
+    expect(spawnSync(process.execPath, [join(root, 'scripts/build-evidence.mjs'), join(staged, 'plugins/evidence/dist/server.mjs')], { encoding: 'utf8' }).status).toBe(0);
+    expect(spawnSync(process.execPath, [join(root, 'scripts/pack.mjs'), out, '--profile', 'lean', '--root', staged], { encoding: 'utf8' }).status).toBe(0);
     mkdirSync(packed, { recursive: true });
     expect(spawnSync('unzip', ['-q', '-o', join(out, readdirSync(out)[0] as string), '-d', packed], { encoding: 'utf8' }).status).toBe(0);
   };

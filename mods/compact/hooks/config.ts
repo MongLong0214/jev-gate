@@ -6,6 +6,8 @@ export interface CompactConfig {
   budgetChars: number;
   subagents: boolean;
   manual: boolean;
+  jevEnabled?: boolean;
+  jevTimeoutMs?: number;
 }
 
 export type CompactConfigResult = { ok: true; config: CompactConfig } | { ok: false; field: string };
@@ -29,5 +31,9 @@ export const resolveCompactConfig = (options: Options | undefined): CompactConfi
   if (subagents === null) return { ok: false, field: 'compactSubagents' };
   const manual = bool('compactManual', true);
   if (manual === null) return { ok: false, field: 'compactManual' };
-  return { ok: true, config: { enabled, mode, budgetChars: budget, subagents, manual } };
+  const jevEnabled = bool('jevEnabled', true);
+  if (jevEnabled === null) return { ok: false, field: 'jevEnabled' };
+  const jevTimeoutMs = o['jevTimeoutMs'] ?? 1000;
+  if (typeof jevTimeoutMs !== 'number' || !Number.isInteger(jevTimeoutMs) || jevTimeoutMs < 50 || jevTimeoutMs > 3500) return { ok: false, field: 'jevTimeoutMs' };
+  return { ok: true, config: { enabled, mode, budgetChars: budget, subagents, manual, jevEnabled, jevTimeoutMs } };
 };

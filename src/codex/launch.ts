@@ -1,3 +1,4 @@
+import { createCompactSelector } from '../../mods/compact/hooks/selection.ts';
 import { observeResponseStream } from './response-stream.js';
 import { createServer, request as httpRequest, type IncomingMessage } from 'node:http';
 import { request as httpsRequest } from 'node:https';
@@ -10,7 +11,7 @@ import { CodexRpc } from './rpc.js';
 import { CodexPolicy } from './policy.js';
 import { obj } from './source.js';
 import { runtimeCodexPolicy } from './config.js';
-import { extractCodexCompact, isCodexCompactRequest, compactResponse } from './compact.js';
+import { selectCodexCompact, isCodexCompactRequest, compactResponse } from './compact.js';
 import { codexTraceDir } from '../codex-paths.js';
 import { openTraceDir } from '../trace.js';
 import type { Env } from '../config.js';
@@ -43,6 +44,7 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
   const token = options.connection?.token ?? randomBytes(32).toString('hex');
   const marker = options.connection?.marker ?? `[jev-gate compact ${randomBytes(24).toString('hex')}] Produce a factual compaction summary of the preceding conversation.`;
   const config = runtimeCodexPolicy(options.env);
+  const selectCompact = createCompactSelector(config.compact.jevTimeoutMs ?? 1000);
   const trace = openTraceDir(codexTraceDir(options.env), options.env);
   let child: ChildProcessWithoutNullStreams | undefined;
   let rpc: CodexRpc | undefined; let policy: CodexPolicy | undefined; let client: WebSocket | undefined;
@@ -92,6 +94,7 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
       const sessionId = policy?.requestSession(req.headers['x-codex-turn-metadata'], req.headers['session-id']) ?? null;
       let payload = raw;
       let modified = false;
+      const nativeCompact = req.method === 'POST' && (path === '/responses/compact' || path === '/responses' && isCodexCompactRequest(obj(JSON.parse(decoded.toString('utf8')))?.['input'], marker));
       if (req.method === 'POST' && (path === '/responses' || path === '/responses/compact')) {
         if ((!sessionId || !policy?.hooksReady(sessionId)) && !options.connection) { res.writeHead(412); res.end('Trust the installed Jev Gate hooks in Codex /hooks before starting a managed session.'); return; }
         if (sessionId && policy) {
@@ -106,13 +109,41 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
       }
       if (config.compact.enabled && req.method === 'POST' && path === '/responses') {
         const parsed = obj(JSON.parse(decoded.toString('utf8')));
-        const compact = extractCodexCompact(parsed?.['input'], marker, config.compact.budgetChars, sessionId ? policy?.previousCompact(sessionId) : undefined);
-        if (compact.ok && sessionId && policy?.canCompact(sessionId)) {
+        if (sessionId && policy?.canCompact(sessionId) && isCodexCompactRequest(parsed?.['input'], marker)) {
           const session = sessionId;
+          const captured = policy.sessions.get(session);
+          const prompt = captured?.prompt, epoch = captured?.epoch, controller = captured?.controller;
+          const cancelled = new AbortController();
+          const abort = () => { if (!res.writableEnded) cancelled.abort(); };
+          res.once('close', abort);
+          const signal = controller ? AbortSignal.any([controller.signal, cancelled.signal]) : cancelled.signal;
+          let key: string | undefined;
+          try { key = config.compact.jevEnabled === false ? undefined : policy.compactKey(); } catch { /* local baseline */ }
           const run = `${Date.now()}-${randomBytes(4).toString('hex')}`;
-          if (trace.ok) trace.writer.write('codex_compact', { host: 'codex', session_id: session, run_id: run, stage: 'selected', applied: false, before_bytes: compact.before, after_bytes: compact.after, summarizer_request: false });
-          if (session) policy?.selectedCompact(session, compact.summary, run, compact.before, compact.after);
-          res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' }); res.end(compactResponse(compact.summary)); return;
+          const { compact, selection } = await selectCodexCompact(parsed?.['input'], marker, config.compact.budgetChars, {
+            previousSummary: policy.previousCompact(session), key, select: selectCompact, signal,
+            transport: {
+              fetch: async (url, init) => { const reply = await (options.fetchImpl ?? fetch)(url, init); return { status: reply.status, text: await reply.text() }; },
+              sleep: (ms, signal) => new Promise((resolve, reject) => {
+                const done = () => { signal.removeEventListener('abort', stop); resolve(); };
+                const timer = setTimeout(done, ms);
+                const stop = () => { clearTimeout(timer); signal.removeEventListener('abort', stop); reject(new Error('aborted')); };
+                if (signal.aborted) stop(); else signal.addEventListener('abort', stop, { once: true });
+              }),
+            },
+          });
+          res.removeListener('close', abort);
+          const selectionFields = { host: 'codex', session_id: session, prompt_id: prompt, run_id: run, applied: false, summarizer_request: false,
+            jev_sent: selection?.sent ?? (compact.ok ? null : false), jev_ms: selection?.durationMs ?? null, usage: selection?.usage ?? null, candidates: selection?.candidates ?? null, available: selection?.available ?? null, dependencies: selection?.priorities.length ?? null, selection: config.compact.jevEnabled === false ? 'disabled' : selection?.reason ?? (compact.ok ? 'error' : 'not_eligible') };
+          if (cancelled.signal.aborted) { if (trace.ok) trace.writer.write('codex_compact', { ...selectionFields, stage: 'deferred', fallback: 'aborted' }); return; }
+          const current = policy.sessions.get(session);
+          const fresh = current === captured && current?.prompt === prompt && current?.epoch === epoch && current?.controller === controller && !signal.aborted;
+          if (compact.ok && fresh && policy.canCompact(session)) {
+            if (trace.ok) trace.writer.write('codex_compact', { ...selectionFields, stage: 'selected', before_bytes: compact.before, after_bytes: compact.after });
+            policy.selectedCompact(session, compact.summary, run, compact.before, compact.after);
+            res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' }); res.end(compactResponse(compact.summary)); return;
+          }
+          if (trace.ok) trace.writer.write('codex_compact', { ...selectionFields, stage: 'deferred', fallback: !fresh ? signal.aborted ? 'aborted' : 'superseded' : compact.ok ? 'not_allowed' : compact.reason });
         }
       }
       // Authorization goes only to the fixed native OpenAI endpoints, or the explicit owner's compatible endpoint.
@@ -133,14 +164,19 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
       const upstream = (base.protocol === 'https:' ? httpsRequest : httpRequest)(base, { method: req.method, headers }, response => {
         const output = Object.fromEntries(Object.entries(response.headers).filter(([k]) => !['connection', 'transfer-encoding'].includes(k)));
         res.writeHead(response.statusCode ?? 502, output); response.pipe(res);
-        if (sessionId && response.statusCode === 200 && req.method === 'POST' && path === '/responses') {
+        if (!nativeCompact && sessionId && response.statusCode === 200 && req.method === 'POST' && path === '/responses') {
           observeResponseStream(response, value => policy?.observeUsage(sessionId, value, submitted));
         }
       });
       requests.add(upstream); upstream.once('close', () => requests.delete(upstream));
       upstream.on('error', () => { if (!res.headersSent) res.writeHead(502); res.end(); });
       res.on('close', () => { if (!res.writableEnded) upstream.destroy(); });
-      if (req.method === 'POST' && path === '/responses' && sessionId && policy) {
+      if (nativeCompact && sessionId && trace.ok) {
+        const request = obj(JSON.parse(decoded.toString('utf8'))) ?? {};
+        trace.writer.write('codex_compact', { host: 'codex', session_id: sessionId, run_id: randomBytes(12).toString('hex'), stage: 'native_submitted', applied: false,
+          summarizer_request: true, submitted_model: request['model'] ?? null, submitted_effort: obj(request['reasoning'])?.['effort'] ?? null });
+      }
+      if (!nativeCompact && req.method === 'POST' && path === '/responses' && sessionId && policy) {
         try { submitted = policy.observeRequest(sessionId, obj(JSON.parse((modified ? payload : decoded).toString('utf8'))) ?? {}); } catch { /* Observation does not block sending. */ }
       }
       upstream.end(payload);

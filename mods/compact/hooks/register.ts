@@ -4,6 +4,8 @@ import type { CompactConfig } from './config.ts';
 import { resolveCompactConfig } from './config.ts';
 import { assemble, buildDigest } from './digest.ts';
 import { createRecorder } from './recording.ts';
+import { createCompactSelector } from './selection.ts';
+import { installedKeyPath, parseInstalledKey } from '../../router/hooks/key.ts';
 
 let sequence = 0;
 
@@ -31,7 +33,7 @@ const quietly = (f: () => void): void => {
 };
 
 /**
- * Off by default, and off registers no hook at all. `shadow` builds the digest, logs its size and lets the engine
+ * On by default; off registers no hook at all. `shadow` builds the digest, logs its size and lets the engine
  * compact as usual (logging how long that took and what its summarizer used); `active` answers the compaction with
  * the digest and the kept tail, so no summarizer request runs. `/compact` stays the engine's unless `compactManual`.
  */
@@ -51,6 +53,7 @@ export const register: Register = (on, options) => {
 /** The hooks for a resolved config; the combined jev-gate module (hooks/register.ts) calls this directly. */
 export const registerCompact = (on: On, config: CompactConfig): void => {
   if (!config.enabled) return;
+  const select = createCompactSelector(config.jevTimeoutMs ?? 1000);
 
   on('session.compact', async ($, e, next) => {
     const recorder = recorderOf($);
@@ -73,6 +76,27 @@ export const registerCompact = (on: On, config: CompactConfig): void => {
     let answer: SessionMessage[] | null = null;
     try {
       outcome = buildDigest(e.messages, { budgetChars: config.budgetChars });
+      if (outcome.ok && config.jevEnabled !== false) {
+        try {
+          let key = await $.env.get('TYPESAFE_API_KEY');
+          if (!key) {
+            const path = installedKeyPath(await $.env.get('HOME'), await $.env.get('XDG_CONFIG_HOME'));
+            if (path && await $.fs.exists(path)) key = parseInstalledKey(await $.fs.read(path));
+          }
+          const selection = await select(e.messages, outcome.result, key,
+            { fetch: (url, init) => $.http.fetch(url, init), sleep: (ms, signal) => $.clock.sleep(ms, { signal }) }, next.signal);
+          log({ stage: 'jev', jev_sent: selection.sent, jev_ms: selection.durationMs, usage: selection.usage, candidates: selection.candidates, available: selection.available, dependencies: selection.priorities.length, selection: selection.reason });
+          if (next.signal?.aborted) return next(e);
+          if (selection.priorities.length) {
+            const enhanced = buildDigest(e.messages, { budgetChars: config.budgetChars, priorityResults: selection.priorities });
+            if (enhanced.ok) outcome = enhanced;
+          }
+        } catch {
+          // Optional judgment/key access must never invalidate the already-built local digest.
+          log({ stage: 'jev', selection: 'error', jev_sent: null });
+        }
+      }
+      if (next.signal?.aborted) return next(e);
       if (config.mode === 'active' && outcome.ok) answer = assemble(e.messages, outcome.result);
     } catch {
       outcome = null;

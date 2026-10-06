@@ -13,7 +13,7 @@ import { registerRouter } from '../mods/router/hooks/register.ts';
  * gate's, carries the Mod's prefix; tests/plugin-modules.test.ts holds plugin.json's userConfig to this table.
  */
 export const OPTION_NAMES = {
-  compact: { enabled: 'compactEnabled', mode: 'compactMode', budgetChars: 'compactBudgetChars', compactSubagents: 'compactSubagents', compactManual: 'compactManual' },
+  compact: { enabled: 'compactEnabled', mode: 'compactMode', budgetChars: 'compactBudgetChars', compactSubagents: 'compactSubagents', compactManual: 'compactManual', jevEnabled: 'compactJevEnabled', jevTimeoutMs: 'compactJevTimeoutMs' },
   output: { enabled: 'outputEnabled' },
   router: {
     enabled: 'routerEnabled',

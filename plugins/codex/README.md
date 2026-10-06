@@ -50,7 +50,7 @@ The older `node <plugin>/dist/cli.mjs codex` managed terminal remains available 
 | Root guard | Enforces the shared root allowlist while a job is admitted; never returns an allow decision |
 | Lean | Uses attributed App Server items; retains user constraints, selects optional groups with Jev, and applies a packet to one executor; no Gate or plan runs on this path |
 | Router | Uses a nominal actual-ID model choice and candidate-local ordered effort scores; routes the original root request and separates selection, submission and actual response observation |
-| Compact | Produces the shared extractive digest on automatic local compaction; Codex installs it through its own state machine; unsupported extraction falls back to native compaction |
+| Compact | Prioritizes current-task dependencies with a bounded Jev batch, then produces the shared extractive digest; Codex installs it through its own state machine; unsupported extraction falls back to native compaction |
 | Output | Folds only identical consecutive lines in complete passing Vitest output; preserves failures, truncation and unknown formats |
 | Evidence | Same local search, Jev judgments, pagination, cache and exact source read-back as Claude Code |
 
@@ -60,7 +60,7 @@ The defaults enable up to 16 snapshot worktree workers, up to 64 planned tasks, 
 
 A complete bounded lookup or mechanical edit can use one account-listed Luna worker without a planner even when the older delegation-cost estimate is negative. This preference shares Gate A's existing Jev request and respects missing context, explicit no-delegation, shape and depth constraints. Workers handle whole outcomes, not each individual file read; the main integrates the result.
 
-Missing source, unknown checks and a worker's self-reported pass never become observed success. Check verification sees native command exits and file-change events; shell-based edits and external editor writes are not established by those events. Encrypted reasoning, media, pending calls or an oversized mandatory context cannot be guessed; these cases use native compaction/handoff behavior. Digest bytes are not measured token or billing savings. Manual and automatic Compact are both enabled by default.
+Missing source, unknown checks and a worker's self-reported pass never become observed success. Check verification sees native command exits and file-change events; shell-based edits and external editor writes are not established by those events. Encrypted reasoning, media, pending calls or an oversized mandatory context cannot be guessed; these cases use native compaction/handoff behavior. Digest bytes are not measured token or billing savings. Manual and automatic Compact, including Jev dependency selection, are enabled by default. Selection uses at most 16 omitted older successful results and a 1,000ms wait without retry. No key, invalid/secret input, timeout and optional key-access errors retain local extraction. Cancellation and a superseded native generation never apply late results; usage can remain unknown after a timeout. The recent tail, mandatory user text and failure evidence keep their existing rules. Switch `compact.jevEnabled` off for local-only extraction.
 
 ## Policy settings
 
@@ -70,7 +70,7 @@ Use `JEV_CODEX_CONFIG=/absolute/codex.json`, otherwise `~/.config/jev-gate/codex
 {
   "gate": {"mode":"auto"},
   "router": {"enabled":true,"model":true,"effort":true,"timeoutMs":800},
-  "compact": {"enabled":true,"manual":true,"budgetChars":40000}
+  "compact": {"enabled":true,"manual":true,"budgetChars":40000,"jevEnabled":true,"jevTimeoutMs":1000}
 }
 ```
 
