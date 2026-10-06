@@ -140,7 +140,9 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
       }
       if (path === '/api/shutdown' && req.method === 'POST') {
         if (!runtime.token || req.headers.authorization !== `Bearer ${runtime.token}`) { res.writeHead(403); res.end(); return; }
-        res.end(); setTimeout(() => { for (const socket of sockets) socket.destroy(); server.close(); }, 25); return;
+        // Release the listener before the shutdown receipt lets a replacement reuse its port.
+        // Existing streams get a short response flush window without accepting new connections.
+        res.end(); server.close(); setTimeout(() => { for (const socket of sockets) socket.destroy(); }, 25); return;
       }
       if ((path === '/api/recording' || path === '/api/dashboard') && req.method === 'POST') {
         // Preferences require an explicit same-origin local UI action.

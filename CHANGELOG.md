@@ -5,6 +5,7 @@
 - Execution list, timeline and selected-result panels share their desktop height and scroll independently. Tablet panels align within each row, while mobile sections retain bounded readable scrolling.
 - Model facts follow the selected timeline stage and identify their event/time. Selection-only and submitted-request records explain why a response model is unavailable; another stage cannot supply a fabricated match.
 - Inspecting timeline stages preserves keyboard focus and scroll position, including stages deep inside long executions.
+- Dashboard upgrades release the listening port before acknowledging shutdown, avoiding a replacement server startup race while reusing the existing browser tab.
 
 ## v0.8.8 — 2026-10-06 — Task-aware compaction
 
