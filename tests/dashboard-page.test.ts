@@ -31,6 +31,21 @@ function page() {
 }
 
 describe('dashboard live interactions', () => {
+  it('shows model facts from the selected stage without turning another response into its observed model', () => {
+    const p = page();
+    const selected = { selected: 'gpt-6-luna', observed: null, status: 'unobserved' as const, selectedEffort: 'low', observedEffort: null };
+    p.push(snapshot([run('models', 'codex', [step('response', 'router', 'host', { model: { ...selected, selected: 'gpt-6.1-sol', observed: 'gpt-6.1-sol', status: 'confirmed' } }), step('request', 'router', 'host', { model: selected })])]));
+    p.click('[data-step="response"]');
+    expect(p.get('model-proof').textContent).toContain('선택한 단계');
+    expect(p.get('model-proof').textContent).toContain('선택과 실제 실행 일치');
+    p.click('[data-step="request"]');
+    expect(p.get('model-proof').textContent).toContain('gpt-6-luna');
+    expect(p.get('model-proof').textContent).toContain('이 단계에 응답 모델 기록 없음');
+    expect(p.get('model-proof').textContent).not.toContain('gpt-6.1-sol');
+    expect(p.get('model-proof').textContent).not.toContain('확인 대기');
+    p.click('#language');
+    expect(p.get('model-proof').textContent).toContain('No response model in this stage');
+  });
   it('shows the actual warning category and clears historical errors outside the selected window', () => {
     const p = page(); const old = new Date(Date.now() - 7_200_000).toISOString();
     p.push(snapshot([run('effort', 'codex', [step('old', 'router', 'host', { at: old, state: 'error', issue: 'request_effort', summary: '선택 high · 전송 xhigh' }), step('recent', 'router', 'host')], { state: 'attention' })]));

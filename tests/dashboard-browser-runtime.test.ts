@@ -41,7 +41,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
   const page = async (width=1440,height=900) => {const p=await browser.newPage({viewport:{width,height}});p.on('pageerror',e=>errors.push(e.message));await p.goto(url);await p.waitForSelector('.circuit-node');return p;};
   beforeAll(async()=>{mkdirSync(output,{recursive:true});await new Promise<void>(r=>server.listen(0,'127.0.0.1',r));url=`http://127.0.0.1:${(server.address() as {port:number}).port}`;
     const local='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';browser=await chromium.launch({headless:true,...(process.env['JEV_CHROMIUM_PATH']?{executablePath:process.env['JEV_CHROMIUM_PATH']}:existsSync(local)?{executablePath:local}:{} )});});
-  afterAll(async()=>{for(const res of clients)res.end();server.closeAllConnections();try{await new Promise<void>(r=>server.close(()=>r()));}finally{await browser?.close();}expect(errors).toEqual([]);});
+  afterAll(async()=>{const closed=new Promise<void>(r=>server.close(()=>r()));for(const res of clients)res.end();server.closeAllConnections();try{await browser?.close();}finally{await closed;}expect(errors).toEqual([]);});
   const settle = (p: Page) => p.evaluate(()=>new Promise<void>(r=>requestAnimationFrame(()=>requestAnimationFrame(()=>r()))));
 
   it('labels request effort discrepancies precisely and hides out-of-range historical warnings', async () => {
@@ -53,6 +53,43 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     await p.selectOption('#window', '3600000');
     expect(await p.locator('.run-diagnosis').count()).toBe(0);
     expect(await p.locator('.review-shortcut[data-review=true]').count()).toBe(0);
+    await p.close();
+  });
+
+  it('aligns workspace panel bottoms and fills their bodies with independent accessible scrolling', async () => {
+    const steps = Array.from({ length: 80 }, (_, i) => step('stage-'+i, 'router', { lane: 'host', details: Array(40).fill('Long readable recorded evidence for this step.'), model: { selected: 'gpt-6.1-sol', observed: 'gpt-6.1-sol', status: 'confirmed', selectedEffort: 'high', observedEffort: null } }));
+    push(Array.from({ length: 60 }, (_, i) => run('execution-'+i, 'codex', i === 0 ? steps : [steps[0]!])));
+    for (const width of [1920,1440,1280,1024,768,390,320]) {
+      const p = await page(width,900); await settle(p);
+      const layout = await p.evaluate(() => {
+        const panels = [...document.querySelectorAll<HTMLElement>('.workspace>.pane')].map(e => { const r=e.getBoundingClientRect();return { top:r.top,bottom:r.bottom,height:r.height }; });
+        const list = document.getElementById('runs')! as HTMLElement; const trace = document.getElementById('trace')!;
+        const spans = trace.querySelector<HTMLElement>('.span-list')!;
+        const detail = document.querySelector<HTMLElement>('.detail-scroll')!;
+        return { panels, overflow:document.documentElement.scrollWidth>innerWidth, listScrollable:list.scrollHeight>list.clientHeight, spansScrollable:spans.scrollHeight>spans.clientHeight, detailScrollable:detail.scrollHeight>detail.clientHeight, listBottom:list.getBoundingClientRect().bottom };
+      });
+      expect(layout.overflow,String(width)).toBe(false);
+      if(width>700){expect(Math.abs(layout.panels[0]!.bottom-layout.panels[1]!.bottom),String(width)).toBeLessThan(1);expect(Math.abs(layout.listBottom-layout.panels[0]!.bottom)).toBeLessThan(1);}
+      if(width>1250)expect(Math.abs(layout.panels[0]!.bottom-layout.panels[2]!.bottom),String(width)).toBeLessThan(1);
+      expect(layout.listScrollable,String(width)).toBe(true);expect(layout.spansScrollable,String(width)).toBe(true);expect(layout.detailScrollable,String(width)).toBe(true);
+      await p.locator('#runs .run-row').first().focus();await p.keyboard.press('End');
+      await p.screenshot({path:join(output,`workspace-${width}.png`),fullPage:true});await p.close();
+    }
+  },60000);
+
+  it('keeps timeline scroll and keyboard focus when inspecting an offscreen stage', async () => {
+    const model = { selected: 'gpt-6-luna', observed: null, status: 'unobserved' as const, selectedEffort: 'low', observedEffort: null };
+    push([run('inspection', 'codex', Array.from({length:80}, (_, i) => step('stage-'+i, 'router', {model})))]);
+    const p = await page();
+    const row = p.locator('[data-step="stage-60"]');
+    await row.focus();
+    const before = await p.locator('.span-list').evaluate(e => e.scrollTop);
+    expect(before).toBeGreaterThan(0);
+    await p.keyboard.press('Enter');
+    expect(await row.evaluate(e => e === document.activeElement)).toBe(true);
+    expect(await p.locator('.span-list').evaluate(e => e.scrollTop)).toBeCloseTo(before, 0);
+    expect(await p.locator('#model-proof').textContent()).toContain('선택한 단계');
+    expect(await p.locator('#model-proof').textContent()).toContain('gpt-6-luna');
     await p.close();
   });
 

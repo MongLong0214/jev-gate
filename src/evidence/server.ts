@@ -21,7 +21,7 @@ import { startOnboarding } from '../onboarding.js';
 import { ensureDashboard } from '../dashboard-launch.js';
 
 export const TOOL_NAME = 'jev_evidence';
-export const SERVER_VERSION = '0.8.8';
+export const SERVER_VERSION = '0.8.9';
 
 const strings = (description: string) => ({ type: 'array', items: { type: 'string', minLength: 1 }, minItems: 1, maxItems: LIMITS.arrayItems, description });
 const HEX64 = { type: 'string', pattern: '^[0-9a-f]{64}$' };

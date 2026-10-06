@@ -137,6 +137,22 @@ describe('loadActivity', () => {
 });
 
 describe('dashboard server', () => {
+  it('releases its listening port before an authenticated shutdown response permits a replacement', async () => {
+    const sources = { traceDir: null, debugDir: null, env: { HOME: make(), JEV_GATE_STATE_DIR: make() } };
+    const token = 'a'.repeat(32);
+    const first = await startDashboard(sources, 0, { token });
+    let replacement: Awaited<ReturnType<typeof startDashboard>> | undefined;
+    try {
+      const reply = await fetch(`${first.url}api/shutdown`, { method: 'POST', headers: { authorization: `Bearer ${token}` } });
+      expect(reply.ok).toBe(true);
+      replacement = await startDashboard(sources, first.port);
+      expect(replacement.url).toBe(first.url);
+      expect((await fetch(`${replacement.url}api/health`)).ok).toBe(true);
+    } finally {
+      await replacement?.close();
+      await first.close().catch(() => undefined);
+    }
+  });
   it.each(['ko', 'en'])('renders unknown and mismatched versions without interrupting live rendering (%s)', lang => {
     const functionBody = DASHBOARD_PAGE.split('\n').find(line => line.startsWith('function versionLine('))!;
     const render = (version: { running: string; installed: string | null }) => runInNewContext(`${functionBody}\nversionLine(version)[0]`, {

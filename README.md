@@ -86,7 +86,7 @@ The plugin opens **one shared local browser dashboard** automatically. Starting 
 | Interrupted | User interruption was observed |
 | No execution record | No matching event is available for this feature and range |
 
-**Router · Request preparation** means pre-request checks finished. It is neither a new Jev judgment nor a completed model response. The dashboard distinguishes **selected model/effort**, **host dispatch or API request**, and **observed response**. Missing response effort stays unknown. A native Codex Compact summary request is recorded separately from root Router requests; its different effort is not a root routing failure. Older records without request purpose remain unconfirmed.
+**Router · Request preparation** means pre-request checks finished. It is neither a new Jev judgment nor a completed model response. The dashboard distinguishes **selected model/effort**, **host dispatch or API request**, and **observed response**. The model card follows the selected timeline stage and names its record/time. A selection or submitted request alone cannot prove which model answered. Missing response effort stays unknown. A native Codex Compact summary request is recorded separately from root Router requests; its different effort is not a root routing failure. Older records without request purpose remain unconfirmed.
 
 Circuit lines show possible paths. Moving lights require new connected records in the same execution. Response charts use measured Jev latency, not animations as a speed claim. Pause freezes the view; workers keep running. Reconnecting means the browser's event stream will retry. The latest 200 executions are listed; filters recompute displayed measurements and exclude earlier steps outside the range.
 
