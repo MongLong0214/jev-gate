@@ -27,7 +27,7 @@ function page() {
   w.document.write(html! + '</body></html>'); w.eval(tail!.split('</script>')[0]!);
   const get = (id: string) => w.document.getElementById(id)!;
   const click = (selector: string) => { const e = w.document.querySelector(selector); if (!e) throw Error('Missing selector: ' + selector); (e as unknown as { click(): void }).click(); };
-  return { w, get, click, push: (s: ReturnType<typeof snapshot>) => stream!.onmessage!({ data: JSON.stringify(s) }) };
+  return { w, get, click, disconnect: () => stream!.onerror!(), push: (s: ReturnType<typeof snapshot>) => stream!.onmessage!({ data: JSON.stringify(s) }) };
 }
 
 describe('dashboard live interactions', () => {
@@ -256,4 +256,39 @@ it('renders typed decision probabilities once while retaining other decision evi
   expect(p.get('detail').querySelectorAll('.distribution')).toHaveLength(1);
   expect(p.get('detail').textContent).not.toContain('control: task_clear');
   expect(p.get('detail').textContent).toContain('기존 모델 claude-opus-5-5');
+});
+
+it('shows directional receipts for quick independent calls without inventing them on load or filter changes', () => {
+  const p=page(), first=step('r1','router','jev',{durationMs:65});
+  p.push(snapshot([run('r','claude',[first])]));
+  expect(p.w.document.querySelector('[data-receipt]')).toBeNull();
+  p.push(snapshot([run('r','claude',[first,step('r2','router','jev',{state:'active'})])]));
+  expect(p.w.document.querySelector('[data-receipt="router-in"]')).not.toBeNull();
+  p.push(snapshot([run('r','claude',[first,step('r2','router','jev',{durationMs:54})])]));
+  expect(p.w.document.querySelector('[data-receipt="router-out"]')).not.toBeNull();
+  p.click('[data-host="claude"]');expect(p.w.document.querySelector('[data-receipt]')).toBeNull();
+  p.click('[data-circuit-mode="run"]');expect(p.w.document.querySelector('[data-receipt]')).toBeNull();
+});
+it('makes connection loss explicit and freezes the displayed clock at disconnect rather than snapshot time', () => {
+  const p=page();p.push(snapshot([run('r','claude',[step('r','router','jev',{state:'active',at:new Date(Date.now()-5000).toISOString()})])]));
+  const before=p.get('now').querySelector('[data-live-since]')!.textContent;
+  p.disconnect();
+  expect(p.get('pipeline-state').textContent).toContain('연결 끊김');
+  expect(p.get('now').querySelector('[data-live-since]')!.textContent).toBe(before);
+});
+it('preserves setting-save failures through incoming snapshots', async () => {
+  const p=page();Object.assign(p.w,{fetch:async()=>({ok:false})});
+  const value=snapshot([]);p.push(value);p.click('#recording');
+  await new Promise(resolve=>setTimeout(resolve,0));
+  expect(p.get('notice').textContent).toContain('설정을 저장하지 못했습니다');
+  p.push(value);expect(p.get('notice').textContent).toContain('설정을 저장하지 못했습니다');
+});
+
+it('does not animate a completed Gate path because an unrelated host tool remains active', () => {
+  const p=page();p.push(snapshot([run('r','codex',[
+    step('a','admission','jev'),step('b','allocation','jev'),step('w','workers','host'),
+    step('tool','workers','host',{lifecycle:true,state:'active'})
+  ])]));
+  expect(p.w.document.querySelector('.gate-grid .wire-flow')).toBeNull();
+  expect(p.get('now').querySelector('.running')).not.toBeNull();
 });
