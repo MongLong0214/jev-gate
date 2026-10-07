@@ -142,7 +142,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     const a=step('a','admission'),r=step('r','router');push([run('c','claude',[a]),run('x','codex',[r])]);const p=await page();
     await p.locator('.circuit-node[data-feature=router]').click();expect(await p.locator('#circuit-inspector').textContent()).toContain('Codex');expect(await p.locator('#runs .run-row').count()).toBe(2);
     await p.locator('.circuit-node[data-feature=router]').focus();push([run('c','claude',[a]),run('x','codex',[r,step('r2','router',{summary:'new receipt'})])]);await p.waitForFunction(()=>document.getElementById('circuit-inspector')!.textContent!.includes('new receipt'));expect(await p.locator('.circuit-node[data-feature=router]').evaluate(e=>e===document.activeElement)).toBe(true);
-    await p.locator('#circuit-run').focus();push([run('c','claude',[a,step('b','allocation')]),run('x','codex',[r])]);await settle(p);expect(await p.locator('#circuit-run').evaluate(e=>e===document.activeElement)).toBe(true);
+    await p.locator('[data-circuit-mode=run]').click();await p.locator('#circuit-run').focus();push([run('c','claude',[a,step('b','allocation')]),run('x','codex',[r])]);await settle(p);expect(await p.locator('#circuit-run').evaluate(e=>e===document.activeElement)).toBe(true);
     await p.selectOption('#circuit-run','x');await p.locator('.circuit-node[data-feature=allocation]').click();expect(await p.locator('#circuit-inspector').textContent()).toContain('이 실행에는');expect(await p.locator('.wire.in-run').count()).toBe(0);
     await p.selectOption('#circuit-run','c');await settle(p);expect(await p.locator('.wire.in-run').count()).toBe(1);await p.locator('.inspector-action').click();expect(await p.locator('#runs .run-row').count()).toBe(1);expect(await p.locator('#search').evaluate(e=>e===document.activeElement)).toBe(true);await p.close();
   });
@@ -178,7 +178,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     await p.locator('#pause').click();expect(await edge.evaluate(e=>getComputedStyle(e).animationPlayState)).toBe('paused');
     await p.locator('#pause').click();await p.emulateMedia({reducedMotion:'reduce'});
     expect(await edge.evaluate(e=>getComputedStyle(e).animationName)).toBe('none');
-    await p.emulateMedia({reducedMotion:'no-preference'});await p.selectOption('#circuit-run','flow');await settle(p);
+    await p.emulateMedia({reducedMotion:'no-preference'});await p.locator('[data-circuit-mode=run]').click();await p.selectOption('#circuit-run','flow');await settle(p);
     expect(await p.locator('#pipeline .wire-flow').count()).toBe(0);
     await p.locator('[data-circuit-mode=live]').click();expect(await edge.count()).toBe(1);
     for(const client of clients)client.end();clients.clear();
@@ -194,7 +194,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     const a = step('a', 'admission'), b = step('b', 'allocation');
     push([run('one', 'claude', [a, b]), run('two', 'codex', [step('x', 'admission')])]);
     const p = await page();
-    await p.locator('#circuit-run').focus();
+    await p.locator('[data-circuit-mode=run]').click();await p.locator('#circuit-run').focus();
     await p.selectOption('#circuit-run', 'one');
     expect(await p.locator('#circuit-run').evaluate(e => e === document.activeElement)).toBe(true);
     await p.locator('.circuit-node[data-feature=admission]').click();
@@ -206,7 +206,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     expect(await p.locator('.wire-packet').count()).toBe(0);
     push([run('direct', 'claude', [step('direct', 'admission', { executionPath: 'direct', lane: 'jev', summary: 'direct · selected' })])]);
     await p.waitForSelector('.circuit-direct.recorded');
-    await p.selectOption('#circuit-run', 'direct');
+    await p.locator('[data-circuit-mode=run]').click();await p.selectOption('#circuit-run', 'direct');
     await settle(p);
     expect(await p.locator('.wire.in-run[data-edge="admission:direct"]').count()).toBe(1);
     expect(await p.locator('.wire.in-run[data-edge="admission:allocation"]').count()).toBe(0);
@@ -219,6 +219,25 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     await p.locator('.circuit-node[data-feature=workers]').click();expect(await p.locator('.inspector-record').textContent()).toContain('불일치');expect(await p.locator('.inspector-record.error').count()).toBe(1);
     await p.locator('.review-shortcut[data-review=unconfirmed]').click();expect(await p.locator('#runs .run-row').count()).toBe(1);expect(await p.locator('#trace').textContent()).toContain('판단·요청·실행 중 확인되지 않은 항목');
     await p.locator('#recording').click();await p.waitForFunction(()=>document.getElementById('notice')!.textContent!.includes('저장하지 못했습니다'));expect(await p.locator('#recording').getAttribute('aria-checked')).toBe('true');await p.locator('#language').click();expect(await p.locator('html').getAttribute('lang')).toBe('en');await p.close();
+  });
+
+  it('renders rapid independent receipts at 60 Hz and keeps mobile inspection visible',async()=>{
+    const initial=step('initial','router',{durationMs:58});push([run('rapid','codex',[initial])]);const p=await page(390,844);
+    expect(await p.locator('[data-receipt]').count()).toBe(0);
+    push([run('rapid','codex',[initial,step('fast','router',{durationMs:43})])]);
+    const packet=p.locator('[data-receipt="router-out"]');await packet.waitFor({state:'attached'});await settle(p);
+    const d=await packet.getAttribute('d');expect(d).toMatch(/^M/);
+    const offsets:number[]=[];for(let frame=0;frame<=51;frame++)offsets.push(await packet.evaluate((e,t)=>{const animation=e.getAnimations()[0]!;animation.pause();animation.currentTime=t;return parseFloat(getComputedStyle(e).strokeDashoffset);},frame*1000/60));
+    expect(new Set(offsets.map(v=>v.toFixed(3))).size).toBeGreaterThan(45);
+    await p.locator('.circuit-node[data-feature=router]').click();
+    expect(await p.locator('#circuit-inspector').evaluate(e=>e===document.activeElement)).toBe(true);
+    expect(await p.locator('#circuit-inspector').evaluate(e=>e.getBoundingClientRect().top)).toBeLessThan(100);
+    await p.screenshot({path:join(output,'mobile-stage-inspection.png')});
+    await p.locator('#circuit-back').click();expect(await p.locator('.circuit-node[data-feature=router]').evaluate(e=>e===document.activeElement)).toBe(true);
+    await p.locator('#recording').click();await p.waitForFunction(()=>document.getElementById('notice')!.textContent!.includes('저장하지 못했습니다'));
+    push([run('rapid','codex',[initial,step('later','compact',{durationMs:39})])]);await settle(p);
+    expect(await p.locator('#notice').textContent()).toContain('저장하지 못했습니다');
+    await p.close();
   });
 
   it('honors reduced motion and keyboard navigation without inventing traffic',async()=>{

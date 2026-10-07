@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.8.11 — 2026-10-07 — Readable real-time traffic
+
+- Show directional receipts for observed requests and responses in independent feature channels, including calls that complete quickly. Strengthen active signal contrast and retain motion phase through updates. Completed Gate paths no longer animate because of an unrelated active host tool.
+- Separate live feature overview from selected execution. Identify disconnected snapshots, freeze clocks at pause/disconnect without jumping backward, and preserve failed settings-save notices through updates.
+- Improve circuit typography, touch targets and mobile stage inspection with a return control. Correct the observed English translation gap and remove repeated elapsed-time screen-reader announcements. Verify responsive layouts, themes, languages, keyboard access, reduced motion and 60 Hz signal samples.
+
 ## v0.8.10 — 2026-10-07 — Live host progress and shared frontier routing
 
 - Redesign the execution circuit as a decision tree and independent feature lanes. Move signals continuously along observed active paths, preserve their phase across live updates, and pulse newly recorded transitions. Show each host’s current work and elapsed time; consolidate Jev latency into one strip and remove repeated stage summaries, event ribbons, receipts and metric cards. Keep all widths free of horizontal scrolling; pause, disconnection and reduced-motion preferences stop animation.
