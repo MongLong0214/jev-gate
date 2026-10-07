@@ -41,8 +41,35 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
   const page = async (width=1440,height=900) => {const p=await browser.newPage({viewport:{width,height}});p.on('pageerror',e=>errors.push(e.message));await p.goto(url);await p.waitForSelector('.circuit-node');return p;};
   beforeAll(async()=>{mkdirSync(output,{recursive:true});await new Promise<void>(r=>server.listen(0,'127.0.0.1',r));url=`http://127.0.0.1:${(server.address() as {port:number}).port}`;
     const local='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';browser=await chromium.launch({headless:true,...(process.env['JEV_CHROMIUM_PATH']?{executablePath:process.env['JEV_CHROMIUM_PATH']}:existsSync(local)?{executablePath:local}:{} )});});
-  afterAll(async()=>{const closed=new Promise<void>(r=>server.close(()=>r()));for(const res of clients)res.end();server.closeAllConnections();try{await browser?.close();}finally{await closed;}expect(errors).toEqual([]);});
+  afterAll(async()=>{const closed=new Promise<void>(r=>server.close(()=>r()));for(const res of clients)res.end();server.closeAllConnections();try{await browser?.close();}finally{await closed;}expect(errors).toEqual([]);}, 30_000);
   const settle = (p: Page) => p.evaluate(()=>new Promise<void>(r=>requestAnimationFrame(()=>requestAnimationFrame(()=>r()))));
+
+  it('shows both hosts and fast measured judgments at the top without overflow', async () => {
+    push([run('live-claude','claude',[step('judgment','router',{durationMs:92}),step('request','router',{lane:'host',lifecycle:true,state:'active',title:'모델 · 응답 대기'})]),run('live-codex','codex',[step('other','router',{durationMs:181})])]);
+    for(const width of [1440,768,390,320]) {
+      const p=await page(width);await settle(p);
+      expect(await p.locator('.live-event-ribbon').count()).toBe(0);
+      expect(await p.locator('.circuit-scroll').evaluate(e=>e.scrollWidth>e.clientWidth+1)).toBe(false);
+      expect(await p.locator('[data-progress-host]').count()).toBe(2);
+      expect(await p.locator('#now [data-live-since]').count()).toBe(1);expect(await p.locator('#signal').textContent()).toContain('181 ms');
+      expect(await p.locator('[data-progress-host=codex] .signal-tick').count()).toBe(1);
+      expect(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth)).toBe(false);
+      expect(await p.locator('#now').evaluate(e=>e.getBoundingClientRect().top)).toBeLessThan(600);
+      await p.emulateMedia({reducedMotion:'reduce'});
+      expect(await p.locator('.running .progress-head').evaluate(e=>(getComputedStyle as unknown as (node: unknown, pseudo: string) => {animationName:string})(e,'::before').animationName)).toBe('none');
+      await p.screenshot({path:join(output,`progress-${width}.png`),fullPage:true});await p.close();
+    }
+  });
+
+  it('keeps header activity consistent with old in-flight work outside the recent feed', async () => {
+    push([run('old-active','codex',[step('old-tool','workers',{lifecycle:true,lane:'host',state:'active',startedAt:stamp})]),run('new','claude',[step('new-output','output')])]);
+    current.operations.feed=current.operations.feed.filter(event=>event.id!=='old-tool');
+    const p=await page();await settle(p);
+    expect(await p.locator('#pipeline-state').textContent()).toBe('1개 단계 진행 중');
+    expect(await p.locator('[data-progress-host="codex"].running .wire-flow').count()).toBe(1);
+    await p.locator('[data-host="claude"]').click();expect(await p.locator('#pipeline-state').textContent()).toBe('대기');
+    await p.close();
+  });
 
   it('labels request effort discrepancies precisely and hides out-of-range historical warnings', async () => {
     const old = new Date(Date.now() - 7_200_000).toISOString();
@@ -100,7 +127,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
       const p=await page(width,height);
       for(const theme of ['dark','light'])for(const lang of ['ko','en']){
         await p.evaluate(({theme,lang})=>{document.documentElement.dataset.theme=theme;if(document.documentElement.lang!==lang)(document.getElementById('language') as HTMLElement).click();},{theme,lang});await settle(p);
-        const problems=await p.evaluate(()=>{const out:string[]=[];if(document.documentElement.scrollWidth>innerWidth)out.push('document overflow');const cards=[...document.querySelectorAll<HTMLElement>('.circuit-node')];
+        const problems=await p.evaluate(()=>{const out:string[]=[];if(document.documentElement.scrollWidth>innerWidth)out.push('document overflow');for(const e of document.querySelectorAll<HTMLElement>('.live-event-ribbon,.circuit-scroll,.circuit-workbench'))if(e.scrollWidth>e.clientWidth+1)out.push('circuit horizontal overflow');const cards=[...document.querySelectorAll<HTMLElement>('.circuit-node')];
           for(const c of cards){const r=c.getBoundingClientRect();if(r.width<115)out.push('unreadable card width');if(c.scrollWidth>c.clientWidth+1||c.scrollHeight>c.clientHeight+1)out.push('card content clipped');if(r.left<0||r.right>innerWidth+1)out.push('offscreen card');}
           for(let i=0;i<cards.length;i++)for(let j=i+1;j<cards.length;j++){const a=cards[i]!.getBoundingClientRect(),b=cards[j]!.getBoundingClientRect();if(a.left<b.right&&a.right>b.left&&a.top<b.bottom&&a.bottom>b.top)out.push('overlapping nodes');}
           for(const path of document.querySelectorAll<SVGPathElement>('.wire')){const matrix=path.getScreenCTM();if(!matrix)continue;const length=path.getTotalLength();for(let i=1;i<40;i++){const point=path.getPointAtLength(length*i/40).matrixTransform(matrix);if(cards.some(c=>{const r=c.getBoundingClientRect();return point.x>r.left+1&&point.x<r.right-1&&point.y>r.top+1&&point.y<r.bottom-1}))out.push('wire crosses node '+path.getAttribute('data-edge'));}}
@@ -123,12 +150,43 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
   it('animates only observed consecutive transitions, detects same-ID state changes and pauses/resumes safely',async()=>{
     const a=step('a','admission',{state:'active'});push([run('c','claude',[a],{state:'active'})]);const p=await page();expect(await p.locator('.wire-packet').count()).toBe(0);
     const done={...a,state:'done' as const,durationMs:70};push([run('c','claude',[done,step('b','allocation',{state:'active'})],{state:'active'})]);await p.waitForSelector('.wire-packet.arriving',{state:'attached'});await settle(p);
-    expect(await p.locator('.wire-packet').count()).toBe(1);const d=await p.locator('.wire-packet').getAttribute('d');expect(d).toMatch(/^M[\d.]+ [\d.]+ H[\d.]+$/);
+    expect(await p.locator('.wire-packet').count()).toBe(1);const d=await p.locator('.wire-packet').getAttribute('d');expect(d).toMatch(/^M[\d.]+ [\d.]+ V[\d.]+$/);
     // Capture every 60 Hz sample across the 850 ms transfer. No dependency on wall-clock capture cadence.
     for(let frame=0;frame<=51;frame++){const values=await p.evaluate(t=>{const paths=[...document.querySelectorAll<SVGPathElement>('.wire-packet')];const animations=paths.flatMap(e=>e.getAnimations());for(const a of animations){a.pause();a.currentTime=t;}return paths.map(e=>({offset:parseFloat(getComputedStyle(e).strokeDashoffset),opacity:Number(getComputedStyle(e).opacity),d:e.getAttribute('d')}));},frame*1000/60);expect(values.every(v=>Number.isFinite(v.offset)&&Number.isFinite(v.opacity)&&v.d===d),JSON.stringify(values)).toBe(true);if(frame%6===0||frame===51)await p.locator('.gate-grid').screenshot({path:join(output,`transfer-${String(frame).padStart(2,'0')}.png`)});}
     await p.locator('#pause').click();push([run('c','claude',[done,step('b','allocation',{durationMs:95})])]);expect(await p.locator('#latest').textContent()).toBe('70 ms');await p.locator('#pause').click();await p.waitForFunction(()=>document.getElementById('latest')!.textContent==='95 ms');
     push([run('c','claude',[done,step('b','allocation',{durationMs:95})]),run('x','codex',[step('w','workers',{lane:'host'})])]);await settle(p);expect(await p.locator('.wire-packet[data-edge="allocation:workers"]').count()).toBe(0);
     await p.locator('[data-host=codex]').click();expect(await p.locator('.wire-packet').count()).toBe(0);await p.close();
+  });
+
+  it('keeps active signals moving across redraws and stops them on completion, history, pause and disconnection', async () => {
+    const a=step('flow-a','admission',{durationMs:60}),b=step('flow-b','allocation',{state:'active'}),r=step('flow-r','router',{state:'active'});
+    push([run('flow','claude',[a,b,r],{state:'active'})]);const p=await page();await settle(p);
+    const edge=p.locator('.gate-grid .wire-flow');expect(await edge.count()).toBe(1);
+    expect(await edge.getAttribute('data-edge')).toBe('admission:allocation');
+    expect(await p.locator('[data-channel="router-in"]').count()).toBe(1);
+    expect(await p.locator('[data-channel="compact-in"]').count()).toBe(0);
+    // Inspect an entire repeat, including its wrap, at 60 Hz. Redraws inherit wall-clock phase.
+    const geometry=await edge.getAttribute('d');const offsets:number[]=[];
+    for(let frame=0;frame<=72;frame++){
+      const offset=await edge.evaluate((e,t)=>{const animation=e.getAnimations()[0]!;animation.pause();animation.currentTime=t;return parseFloat(getComputedStyle(e).strokeDashoffset);},frame*1000/60);
+      expect(Number.isFinite(offset)).toBe(true);offsets.push(offset);
+      expect(await edge.getAttribute('d')).toBe(geometry);
+    }
+    expect(new Set(offsets.map(v=>v.toFixed(3))).size).toBeGreaterThan(60);
+    push([run('flow','claude',[a,b,r,step('receipt','output')],{state:'active'})]);await settle(p);
+    expect(Number(await edge.evaluate(e=>e.style.animationDelay.replace('s','')))).toBeLessThan(0);
+    await p.locator('#pause').click();expect(await edge.evaluate(e=>getComputedStyle(e).animationPlayState)).toBe('paused');
+    await p.locator('#pause').click();await p.emulateMedia({reducedMotion:'reduce'});
+    expect(await edge.evaluate(e=>getComputedStyle(e).animationName)).toBe('none');
+    await p.emulateMedia({reducedMotion:'no-preference'});await p.selectOption('#circuit-run','flow');await settle(p);
+    expect(await p.locator('#pipeline .wire-flow').count()).toBe(0);
+    await p.locator('[data-circuit-mode=live]').click();expect(await edge.count()).toBe(1);
+    for(const client of clients)client.end();clients.clear();
+    await p.waitForFunction(()=>document.body.classList.contains('dashboard-offline'));
+    expect(await edge.evaluate(e=>getComputedStyle(e).animationPlayState)).toBe('paused');
+    push([run('flow','claude',[a,{...b,state:'done',durationMs:80},{...r,state:'done',durationMs:95}])]);
+    await p.waitForFunction(()=>document.querySelectorAll('.wire-flow').length===0);
+    await p.close();
   });
 
 
@@ -153,7 +211,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     expect(await p.locator('.wire.in-run[data-edge="admission:direct"]').count()).toBe(1);
     expect(await p.locator('.wire.in-run[data-edge="admission:allocation"]').count()).toBe(0);
     expect(await p.locator('.circuit-node[data-feature=admission]').textContent()).toContain('루트에서 직접 처리');
-    expect(await p.locator('.circuit-direct').textContent()).toContain('실행 완료와 별도');
+    expect(await p.locator('.circuit-direct').textContent()).toContain('직접 처리 선택');
     await p.close();
   });
   it('separates errors, missing results and interruption; failed settings writes retain the saved state',async()=>{
@@ -178,6 +236,6 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     expect(await p.locator('html').getAttribute('lang')).toBe('en');
     expect(await p.locator('html').getAttribute('data-theme')).toBe('light');
     expect(await p.locator('#latest').count()).toBe(1);
-    expect(await p.locator('.metric').count()).toBe(4); await p.close();
+    expect(await p.locator('.signal-stat').count()).toBe(3);expect(await p.locator('.metric').count()).toBe(0); await p.close();
   });
 });

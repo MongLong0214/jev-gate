@@ -38,6 +38,7 @@ describe('validateConfig', () => {
       config: {
         ...V5,
         mode: 'auto',
+        frontierEnabled: false,
         routeQuestionShape: 'atomic',
         delegationDepthFloor: 0,
         delegationDepthFraction: 0.6,

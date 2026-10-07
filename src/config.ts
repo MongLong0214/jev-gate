@@ -1,14 +1,15 @@
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
 
 import type { AdmissionQuestionShape, AdmittedShape, ConfigV5, Mode, PlannerTier, RouteQuestionShape, Tier, WorkerIsolation } from './types.js';
 import { costModelFloor, delegationModel } from './admission.js';
 import { ADMITTED_SHAPES, MODES, PLANNER_TIERS, ROUTE_QUESTION_SHAPES, TIERS, WORKER_ISOLATIONS } from './types.js';
+import { frontierConfigPath } from './frontier-routing.js';
 
 export const DEFAULT_CONFIG: ConfigV5 = {
   version: 5,
   mode: 'off',
+  frontierEnabled: false,
   jevModel: 'jev-1.13.0',
   requestDeadlineMs: 3000,
   admissionConfidenceFloor: 0.8,
@@ -84,6 +85,7 @@ export const TOOL_NAME_RE = /^[A-Za-z_][A-Za-z0-9_:-]{0,63}$/;
 const V5_KEYS = new Set<string>([
   'version',
   'mode',
+  'frontierEnabled',
   'jevModel',
   'requestDeadlineMs',
   'admissionConfidenceFloor',
@@ -130,9 +132,7 @@ export type Env = Record<string, string | undefined>;
 export type ConfigResult = { ok: true; config: ConfigV5; source: string } | { ok: false; error: string; source: string };
 
 export const resolveConfigPath = (env: Env): string =>
-  env['JEV_GATE_CONFIG'] && env['JEV_GATE_CONFIG'].length > 0
-    ? env['JEV_GATE_CONFIG']
-    : join(env['HOME'] && env['HOME'].length > 0 ? env['HOME'] : homedir(), '.config', 'jev-gate', 'config.json');
+  frontierConfigPath(env['HOME'] || homedir(), env['XDG_CONFIG_HOME'], env['JEV_GATE_CONFIG'])!;
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
@@ -236,7 +236,7 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
   if (typeof workerTokens !== 'number' || !Number.isInteger(workerTokens) || workerTokens < 1 || workerTokens > 1_000_000) {
     return { ok: false, error: 'delegationWorkerTokensPerCall must be an integer in [1, 1000000]' };
   }
-  for (const key of ['guardAllowMcp', 'verifyWorkerChecks'] as const) {
+  for (const key of ['guardAllowMcp', 'verifyWorkerChecks', 'frontierEnabled'] as const) {
     if (typeof c[key] !== 'boolean') return { ok: false, error: `${key} must be a boolean` };
   }
 
@@ -260,6 +260,7 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
     ok: true,
     config: {
       version: 5,
+      frontierEnabled: c['frontierEnabled'] as boolean,
       mode: mode as Mode,
       jevModel,
       requestDeadlineMs: deadline,
@@ -320,7 +321,8 @@ export const loadConfig = (env: Env, readFile: (path: string) => string = (p) =>
     } catch {
       return { ok: false, error: 'config is not valid JSON', source: path };
     }
-    const v = validateConfig(parsed);
+    // A shared feature-only file must retain the caller's native/plugin mode default.
+    const v = validateConfig(isRecord(parsed) && !('mode' in parsed) ? { ...parsed, mode: defaultMode } : parsed);
     if (!v.ok) return { ok: false, error: v.error, source: path };
     base = v.config;
     source = path;

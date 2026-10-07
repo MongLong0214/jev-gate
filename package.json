@@ -1,6 +1,6 @@
 {
   "name": "jev-gate",
-  "version": "0.8.9",
+  "version": "0.8.10",
   "private": true,
   "description": "Jev policies for Claude Code and native Codex: task routing, observed contract checks, evidence, compaction, output folding and a live dashboard.",
   "type": "module",

@@ -48,13 +48,23 @@ Both hosts share one private key and dashboard. Installing from source is for de
 | Evidence | Returns verified source windows, paths, lines, hashes, and pagination. | Semantic candidates; exact symbols and read-back stay local |
 | Dashboard | Shows both hosts' recorded judgments, requests, and outcomes live. | Reads local metadata; makes no Jev requests |
 
-Gate, Router, Compact, Output, remote Evidence, recording, and automatic dashboard opening default to **on**. Lean is a separate selectable mode; it does not run Gate A/B or the planner. Automatic Astra/Fable targets require a host-specific opt-in; manually selecting a root model does not enable automatic restricted children. [Router options](mods/router/README.md).
+Gate, Router, Compact, Output, remote Evidence, recording, and automatic dashboard opening default to **on**. Lean is a separate selectable mode; it does not run Gate A/B or the planner. Automatic Astra/Fable targets default to off; enable both hosts with `frontierEnabled: true` in `~/.config/jev-gate/config.json`; manually selecting a root model does not enable automatic restricted children. [Router options](mods/router/README.md).
 
 Default Gate settings permit native tools (`guardAllowTools: ["*"]`), up to 16 isolated workers, 64 planned tasks, a depth floor of 0, and plan interpretation. Worktree snapshots include current working files. Native permissions remain authoritative. Missing keys, invalid judgments, timeouts, or unavailable host facts preserve the native call.
 
 Enabled does not mean every prompt delegates, routes, or compacts. The first Claude prompt may lack context usage for Gate admission. Simple bounded work can use a fast worker; broad or unclear tasks may remain direct. Jev probabilities are policy inputs, not measured success rates. No general speed, cost, or token saving is guaranteed.
 
-### Keep talking while workers run
+Set the shared frontier switch in the ordinary config (merge this field into an existing file):
+
+```json
+{ "version": 5, "frontierEnabled": false }
+```
+
+`true` makes Claude Fable and Codex Astra eligible for automatic routing at their supported efforts. Jev still selects the model/effort pair for the task; explicit host pins remain authoritative. An explicit `false` overrides legacy `routerAllowFable` / `allowAstra` options. If the field is absent, legacy opt-ins remain compatible. The switch is reread at policy boundaries; an already selected manual root model is preserved.
+
+The dashboard shows each host's current operation in a short live lane. Gate's decision tree and Router, Compact, Output, and Evidence's independent channels show how work proceeds. Signals move continuously along a recorded path while its destination is active; a brief pulse marks a newly recorded transition. Historical and idle channels remain static. One response strip contains latest latency, median, p95, and measured call count. Stage details and the execution timeline hold the decision evidence. All layouts fit without horizontal scrolling. Pause, disconnected streams, and reduced-motion preferences stop movement; signal motion is an active-work indicator, not a count of Jev calls.
+
+## Keep talking while workers run
 
 Owned workers, planners, and Lean executors dispatch in the background by default. New messages steer the main conversation without replacing the original job or its contracts. A launch receipt is separate from completion and contract acceptance.
 

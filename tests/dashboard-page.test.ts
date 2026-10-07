@@ -164,6 +164,24 @@ it('shows a rejected Terra proposal with its probability and threshold in both l
   expect(text).toContain('Jev proposed model'); expect(text).toContain('Proposal probability'); expect(text).toContain('Change threshold'); expect(text).not.toMatch(/[가-힣]/);
 });
 
+it.each([
+  ['control_invalid', '요청 해석 응답 검증 실패', 'Invalid control assessment'],
+  ['control_low_confidence', '요청 해석 기준 미충족', 'Low control confidence'],
+  ['control_unclear', '요청 해석 불명확', 'Unclear request'],
+  ['context_missing', '판단할 문맥 부족', 'Insufficient context'],
+])('does not show a user pin for an unconfirmed routing assessment: %s', (reason, korean, english) => {
+  const p = page(); p.push(snapshot([run('control-proof', 'claude', [step('response', 'router', 'host', {
+    routing: { scope: 'root', baseline: 'claude-fable-5-1', modelReason: reason, effortReason: reason },
+    model: { selected: 'claude-fable-5-1', observed: 'claude-fable-5-1', status: 'confirmed', selectedEffort: 'xhigh', observedEffort: null },
+  })])]));
+  p.click('.circuit-node[data-feature="router"]');
+  expect(p.get('circuit-inspector').textContent).toContain(korean);
+  expect(p.get('circuit-inspector').textContent).not.toContain('사용자가 고정');
+  p.click('#language');
+  expect(p.get('circuit-inspector').textContent).toContain(english);
+  expect(p.get('circuit-inspector').textContent).not.toContain('User locked');
+});
+
 it('shows routing scope, baseline and keep reasons next to the observed response in both languages', () => {
   const p = page(); p.push(snapshot([run('route-proof', 'claude', [step('response', 'router', 'host', {
     routing: { scope: 'root', baseline: 'claude-opus-5-5', modelReason: 'same_value', effortReason: 'cache_preserved' },
@@ -174,4 +192,68 @@ it('shows routing scope, baseline and keep reasons next to the observed response
   expect(text).toContain('메인 턴'); expect(text).toContain('기존 모델'); expect(text).toContain('현재 모델·설정 유지'); expect(text).toContain('캐시 재사용을 위해 유지'); expect(text).toContain('호스트 응답에 미제공');
   p.click('#language'); text = p.get('circuit-inspector').textContent;
   expect(text).toContain('Main turn'); expect(text).toContain('Baseline model'); expect(text).toContain('Kept for cache reuse'); expect(text).toContain('Not reported by host'); expect(text).not.toMatch(/[가-힣]/);
+});
+
+
+describe('host progress overview', () => {
+  it('separates simultaneous host activity and measured Jev speed', () => {
+    const p=page();
+    p.push(snapshot([
+      run('claude-live','claude',[step('j','router','jev',{durationMs:481}),step('wait','router','host',{lifecycle:true,state:'active',title:'모델 · 응답 대기',summary:'모델 응답 대기'})]),
+      run('codex-live','codex',[step('cj','router','jev',{durationMs:123,state:'done'})])
+    ]));
+    const cards=p.get('now').querySelectorAll('[data-progress-host]');expect(cards).toHaveLength(2);
+    expect(p.get('latest').textContent).toContain('123');expect(cards[0]!.querySelector('[data-live-since]')).not.toBeNull();
+    expect(cards[1]!.querySelectorAll('.signal-tick')).toHaveLength(1);expect(cards[1]!.querySelector('[data-live-since]')).toBeNull();
+    expect(cards[0]!.querySelectorAll('.progress-stage')).toHaveLength(0);expect(p.w.document.querySelectorAll('#p50')).toHaveLength(1);expect(p.w.document.querySelectorAll('.metrics,.live-event-ribbon')).toHaveLength(0);
+    p.click('[data-host="codex"]');expect(p.get('now').querySelectorAll('[data-progress-host]')).toHaveLength(1);
+  });
+  it('shows elapsed time for the active host tool instead of an earlier completed event', () => {
+    const p=page();p.push(snapshot([run('tools','codex',[
+      step('old','router','host',{lifecycle:true,state:'done'}),
+      step('tool','workers','host',{lifecycle:true,state:'active',startedAt:new Date().toISOString()})
+    ])]));
+    expect(p.get('now').querySelector('.running [data-live-since]')).not.toBeNull();
+  });
+  it('animates new observations only and stops motion when paused', () => {
+    const p=page();p.push(snapshot([run('r','claude',[step('one','router','jev',{durationMs:90})])]));
+    expect(p.get('now').querySelector('.event-arrival')).toBeNull();
+    p.push(snapshot([run('r','claude',[step('one','router','jev',{durationMs:90}),step('two','router','jev',{state:'active'})])]));
+    expect(p.get('now').querySelector('.event-arrival')).not.toBeNull();
+    p.click('#pause');expect(p.get('now').querySelector('.event-arrival')).toBeNull();
+    expect(p.get('now').querySelector('.paused')).not.toBeNull();
+  });
+});
+
+
+it('distinguishes verified Codex request settings from an unobserved response model', () => {
+  const p=page();p.push(snapshot([run('codex','codex',[step('s','router','host',{model:{selected:'gpt-6-luna',observed:null,status:'unobserved',selectedEffort:'low',observedEffort:null,requestApplied:true}})])]));
+  expect(p.get('model-proof').textContent).toContain('API 전송 설정 일치 확인');
+  expect(p.get('model-proof').textContent).toContain('이 단계에 응답 모델 기록 없음');
+});
+
+
+it('counts active work outside the bounded event feed and keeps host and header status consistent', () => {
+  const p=page();const s=snapshot([run('ongoing','codex',[step('tool','workers','host',{lifecycle:true,state:'active',startedAt:stamp})]),run('recent','claude',[step('done','output','local')])]);
+  s.operations.feed=s.operations.feed.filter(event=>event.id!=='tool');p.push(s);
+  expect(p.get('pipeline-state').textContent).toBe('1개 단계 진행 중');
+  expect(p.get('now').querySelector('[data-progress-host="codex"].running')).not.toBeNull();
+  p.click('[data-host="claude"]');expect(p.get('pipeline-state').textContent).toBe('대기');
+});
+
+it('shows verified request settings while the circuit inspector awaits a reported response', () => {
+  const p=page();p.push(snapshot([run('request-live','codex',[step('waiting','router','host',{lifecycle:true,state:'active',title:'모델 · 응답 대기',model:{selected:'gpt-6-luna',observed:null,status:'unobserved',selectedEffort:'low',observedEffort:null,requestApplied:true}})])]));
+  p.click('.circuit-node[data-feature="router"]');
+  expect(p.get('circuit-inspector').textContent).toContain('API 전송 설정일치 확인');
+  expect(p.get('circuit-inspector').textContent).toContain('응답 모델응답 대기');
+  expect(p.get('circuit-inspector').textContent).not.toContain('적용 확인미관측');
+  p.click('#language');expect(p.get('circuit-inspector').textContent).toContain('API request settingsVerified match');
+  expect(p.get('circuit-inspector').textContent).toContain('Response modelAwaiting response');
+});
+
+it('renders typed decision probabilities once while retaining other decision evidence', () => {
+  const p=page();p.push(snapshot([run('decision','claude',[step('assess','router','jev',{judgements:[{question:'control',value:'task_clear',confidence:.8,probabilities:[{label:'task_clear',value:.8},{label:'unclear',value:.2}]}],details:['control: task_clear · 확신 80% · task_clear 80% / unclear 20%','기존 모델 claude-opus-5-5']})])]));
+  expect(p.get('detail').querySelectorAll('.distribution')).toHaveLength(1);
+  expect(p.get('detail').textContent).not.toContain('control: task_clear');
+  expect(p.get('detail').textContent).toContain('기존 모델 claude-opus-5-5');
 });

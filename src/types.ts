@@ -92,6 +92,8 @@ export const agentForTier = (role: OwnedRole, tier: Tier): string => {
 };
 
 export interface ConfigV5 {
+  /** Opt in to host-supported frontier targets across Router and owned dispatches. */
+  frontierEnabled: boolean;
   version: 5;
   mode: Mode;
   jevModel: string;

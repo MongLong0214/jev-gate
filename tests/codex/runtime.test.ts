@@ -219,7 +219,7 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
       expect(requests.length).toBe(semantic ? 21 : 1);
       expect(JSON.stringify(requests[0])).toContain('jev_agent');
       expect(JSON.stringify(requests[0])).toContain('Jev Gate');
-      const rows=readdirSync(trace).map(f=>JSON.parse(readFileSync(join(trace,f),'utf8')) as Rec);
+      const rows=readdirSync(trace).filter(f=>f.endsWith('.json')).map(f=>JSON.parse(readFileSync(join(trace,f),'utf8')) as Rec);
       if(scenario.startsWith('compact')) {
         const waitTurn=async(at:number)=>{ const end=Date.now()+15000; while(!messages.slice(at).some(m=>m['method']==='turn/completed' && (m['params'] as Rec)['threadId']===id) && Date.now()<end) await new Promise(r=>setTimeout(r,20)); };
         const second=messages.length;
@@ -232,7 +232,7 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
         }
         const third=messages.length;
         await call('turn/start',{threadId:id,collaborationMode:{mode:'default',settings:{model:baselineModel,reasoning_effort:'medium',developer_instructions:null}},input:[{type:'text',text:'Continue and preserve the original user constraints.',text_elements:[]}]}); await waitTurn(third);
-        const all=readdirSync(trace).map(f=>JSON.parse(readFileSync(join(trace,f),'utf8')) as Rec);
+        const all=readdirSync(trace).filter(f=>f.endsWith('.json')).map(f=>JSON.parse(readFileSync(join(trace,f),'utf8')) as Rec);
         expect(all.some(r=>r['phase']==='codex_compact' && r['stage']==='installed' && r['applied']===true),JSON.stringify({all:all.filter(r => r['phase']==='codex_compact'),count:requests.length,items: (requests.at(-2)?.['input'] as Rec[] | undefined)?.filter(i => String(i['type']).includes('call')).slice(0,4)}).slice(0,4000)).toBe(true);
         expect(requests.length).toBe(semantic ? 23 : 3);
         expect(JSON.stringify(requests[semantic ? 22 : 2]!['input'])).toContain('[jev-gate compact]');
@@ -276,14 +276,14 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
         await call('turn/interrupt',{threadId:id,turnId:((active!['params'] as Rec)['turn'] as Rec)['id']});
         const end=Date.now()+10000;
         while(!readdirSync(trace).some(f=>f.startsWith('failure-')) && Date.now()<end) await new Promise(r=>setTimeout(r,20));
-        const all=readdirSync(trace).map(f=>JSON.parse(readFileSync(join(trace,f),'utf8')) as Rec);
+        const all=readdirSync(trace).filter(f=>f.endsWith('.json')).map(f=>JSON.parse(readFileSync(join(trace,f),'utf8')) as Rec);
         expect(all.some(r=>r['phase']==='failure'),JSON.stringify(all)).toBe(true);
         expect(all.some(r=>r['phase']==='post' && r['verdict']==='accept')).toBe(false);
         await vi.waitFor(() => expect(session.policy.sessions.size).toBe(1), { timeout: 3000 });
         return;
       }
       const end=Date.now()+20000; while(!messages.slice(before).some(m=>m['method']==='turn/completed' && (m['params'] as Rec)['threadId']===id) && Date.now()<end) await new Promise(r=>setTimeout(r,20));
-      const all=readdirSync(trace).map(f=>JSON.parse(readFileSync(join(trace,f),'utf8')) as Rec);
+      const all=readdirSync(trace).filter(f=>f.endsWith('.json')).map(f=>JSON.parse(readFileSync(join(trace,f),'utf8')) as Rec);
       if (scenario === 'direct-lookup') {
         expect(requests).toHaveLength(5); expect(requests[2]!['model']).toBe('gpt-6-luna');
         expect(JSON.stringify(requests[3]!['input'])).toContain('1:export const runtimeEvidenceNeedle = 42;');

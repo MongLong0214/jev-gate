@@ -28,6 +28,7 @@ const fakeHost = (world: World = {}) => {
   const version = world.version ?? { version: '2.1.282+build.7f3c', base: '2.1.282' };
   const $ = {
     fs: {
+      exists: async (path: string) => path in (world.files ?? {}),
       read: async (path: string) => {
         const text = world.files?.[path];
         if (text === undefined) throw new Error('ENOENT');
@@ -130,6 +131,18 @@ describe('register', () => {
     expect([...(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false, routeSubagentEffort: false })).keys()].sort()).toEqual(['agent.offer', 'agent.spawn', 'session.end']);
     expect([...(await registered({ enabled: true, routeSubagentModel: false })).keys()].sort()).toEqual(['agent.offer', 'agent.spawn', 'session.end', 'turn.complete', 'turn.start', 'turn.step']);
     expect([...(await registered({ enabled: true, routeSubagentModel: false, routeSubagentEffort: false })).keys()].sort()).toEqual(['session.end', 'turn.complete', 'turn.start', 'turn.step']);
+  });
+
+  it.each([false, true])('reads the common frontier switch through Function Hooks: %s', async enabled => {
+    const host = fakeHost({ env: { HOME:'/owner', TYPESAFE_API_KEY:FAKE_KEY }, files:{'/owner/.config/jev-gate/config.json':JSON.stringify({version:5,frontierEnabled:enabled})} });
+    let offered=false;
+    const fetch=host.$.http.fetch;
+    host.$.http.fetch=async (url, init) => {
+      offered=init.body.includes('claude-fable-5-1');
+      return fetch(url,init);
+    };
+    await spawnThrough(await registered({enabled:true,allowFable:!enabled}),host);
+    expect(offered).toBe(enabled);
   });
 
   it('routes a spawn through the host adapter with the environment key, sent only in the header', async () => {

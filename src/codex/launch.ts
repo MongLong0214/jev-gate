@@ -164,12 +164,13 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
       const upstream = (base.protocol === 'https:' ? httpsRequest : httpRequest)(base, { method: req.method, headers }, response => {
         const output = Object.fromEntries(Object.entries(response.headers).filter(([k]) => !['connection', 'transfer-encoding'].includes(k)));
         res.writeHead(response.statusCode ?? 502, output); response.pipe(res);
+        if (sessionId && (response.statusCode ?? 502) >= 400) policy?.observeRequestFailure(sessionId, submitted);
         if (!nativeCompact && sessionId && response.statusCode === 200 && req.method === 'POST' && path === '/responses') {
           observeResponseStream(response, value => policy?.observeUsage(sessionId, value, submitted));
         }
       });
       requests.add(upstream); upstream.once('close', () => requests.delete(upstream));
-      upstream.on('error', () => { if (!res.headersSent) res.writeHead(502); res.end(); });
+      upstream.on('error', () => { if (sessionId) policy?.observeRequestFailure(sessionId, submitted); if (!res.headersSent) res.writeHead(502); res.end(); });
       res.on('close', () => { if (!res.writableEnded) upstream.destroy(); });
       if (nativeCompact && sessionId && trace.ok) {
         const request = obj(JSON.parse(decoded.toString('utf8'))) ?? {};
