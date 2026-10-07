@@ -41,6 +41,9 @@ export type TracePhase =
   | 'background_launch'
   | 'background_terminal'
   | 'background_conversation'
+  | 'dispatch_denied'
+  | 'worktree_start'
+  | 'worktree_result'
   /** A23: the plan-interpretation pair, joined by a shared `request_id` like every other gate call. */
   | 'interpretation_intent'
   | 'interpretation_result'

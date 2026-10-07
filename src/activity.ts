@@ -6,6 +6,7 @@ import { readTraceRecords, type TraceDirectoryReader, type TraceCache } from './
 import { readLiveness } from './liveness.js';
 import { buildOperations, type DebugRecord, type OperationsView } from './operations.js';
 import type { Host } from './host-support.js';
+import { ClaudeWorkerActivityReader, type WorkerActivityView } from './claude-worker-activity.js';
 
 /**
  * A local view of calls the gate and the router already recorded. It whitelists short tokens from those records.
@@ -70,6 +71,7 @@ export interface ActivitySnapshot {
   routerChanges: number;
   events: ActivityEvent[];
   operations: OperationsView;
+  workerActivity?: WorkerActivityView;
   /** The turn on screen. An intent with no result yet is `working` until the result file appears. */
   live: LiveBoard;
   notes: string[];
@@ -549,7 +551,7 @@ const buildLive = (records: Rec[], routerRows: Array<{ at: string; rec: Rec }>, 
   };
 };
 
-export const loadActivity = (opts: { traceDir: string | null; traceDirs?: readonly { host: Host; dir: string }[] | undefined; debugDir: string | null; env: Env; now?: Date; host?: Host; traceCache?: TraceCache; traceReader?: TraceDirectoryReader }): ActivitySnapshot => {
+export const loadActivity = (opts: { traceDir: string | null; traceDirs?: readonly { host: Host; dir: string }[] | undefined; debugDir: string | null; env: Env; now?: Date; host?: Host; traceCache?: TraceCache; traceReader?: TraceDirectoryReader; workerReader?: ClaudeWorkerActivityReader }): ActivitySnapshot => {
   const notes = [...NOTES];
   const events: ActivityEvent[] = [];
   const gateRecords: Rec[] = [];
@@ -638,6 +640,7 @@ export const loadActivity = (opts: { traceDir: string | null; traceDirs?: readon
     routerChanges,
     events: events.slice(0, MAX_EVENTS),
     operations,
+    workerActivity: (opts.workerReader ?? new ClaudeWorkerActivityReader()).read(gateRecords, opts.env, now),
     live: buildLive(gateRecords, routerRows, now.getTime()),
     notes,
   };

@@ -487,6 +487,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
   const emitDeny = (reason: DenyReason, text: string, stopReason: string | null): HookResult => {
     const stdout = renderPreToolUseOutput({ kind: 'deny', reason: text, stopReason });
     if (stdout === null) return skip('output_too_large');
+    trace?.write('dispatch_denied', { ...base, reason, tool_name: input.tool_name ?? null });
     return { kind: 'deny', code: reason, stdout };
   };
 
@@ -1146,6 +1147,19 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     return result;
   };
 
+  // Some native models persist their final text without stop_reason. The later, host-authored
+  // completion notification still proves termination; reconcile it before admission/dispatch.
+  if (input.session_id && input.transcript_path && ['UserPromptSubmit', 'PreToolUse', 'Stop'].includes(input.hook_event_name)) {
+    const state = readJob(deps.env, input.session_id);
+    if (state.ok && state.value) for (const gen of [state.value.current, ...state.value.history]) {
+      for (const [id, r] of Object.entries(gen.active)) {
+        const execution = r.background_execution;
+        if (!execution?.agent_id) continue;
+        const observed = claudeTerminal({ ...input, agent_id: execution.agent_id }, true);
+        if (observed?.token === execution.token) await backgroundResult({ gen, id, r }, observed, execution.agent_id);
+      }
+    }
+  }
   if (input.hook_event_name === 'SubagentStop') return backgroundStop();
   if (input.hook_event_name === 'PostToolUse' && input.tool_name === 'TaskStop') return backgroundCancel();
   if (input.hook_event_name === 'PostToolUse') { const launch = backgroundLaunch(); if (launch) return launch; }

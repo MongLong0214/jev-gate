@@ -1,4 +1,4 @@
-import { Window } from 'happy-dom';
+import { Window, type HTMLElement } from 'happy-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DASHBOARD_PAGE } from '../src/dashboard-page.js';
 import type { OperationRun, OperationStep, OperationsView } from '../src/operations.js';
@@ -25,12 +25,31 @@ function page() {
   Object.assign(w, { EventSource: Stream });
   const [html, tail] = DASHBOARD_PAGE.split('<script>');
   w.document.write(html! + '</body></html>'); w.eval(tail!.split('</script>')[0]!);
-  const get = (id: string) => w.document.getElementById(id)!;
+  const get = (id: string) => w.document.getElementById(id)! as HTMLElement;
   const click = (selector: string) => { const e = w.document.querySelector(selector); if (!e) throw Error('Missing selector: ' + selector); (e as unknown as { click(): void }).click(); };
-  return { w, get, click, disconnect: () => stream!.onerror!(), push: (s: ReturnType<typeof snapshot>) => stream!.onmessage!({ data: JSON.stringify(s) }) };
+  return { w, get, click, disconnect: () => stream!.onerror!(), push: (s: unknown) => stream!.onmessage!({ data: JSON.stringify(s) }) };
 }
 
 describe('dashboard live interactions', () => {
+  it('shows internal worker work in the released layout and updates only from observed tool evidence', () => {
+    const p=page(),w={sessionId:'session',agentId:'agent',role:'worker',taskId:'t1',state:'active',lastAt:stamp,coverage:'recent',selectedModel:'claude-opus-5-5',observedModel:null,selectedEffort:'high',modelRequestAt:stamp,modelResponseAt:stamp,tools:[{id:'read',name:'Read',action:'read',target:'src/app.ts',state:'active',startedAt:stamp,endedAt:null,durationMs:null}]};
+    const s={...snapshot([]),workerActivity:{items:[w],limited:false,sig:'first'}};p.push(s);
+    expect(p.get('worker-internals').hidden).toBe(false);expect(p.get('worker-internals').querySelectorAll('.worker-entry')).toHaveLength(1);
+    expect(p.get('worker-internals').textContent).toContain('워커 t1');expect(p.get('worker-internals').textContent).toContain('읽기 · Read');expect(p.get('worker-internals').textContent).toContain('src/app.ts');
+    expect(p.get('worker-internals').textContent).toContain('요청 opus-5-5 · high');expect(p.get('worker-internals').textContent).toContain('응답 미관측');expect(p.get('worker-internals').querySelector('[data-live-since]')).not.toBeNull();
+    expect(p.get('pipeline').querySelector('.circuit-node')).not.toBeNull();expect(p.get('worker-internals').querySelector('details')).toBeNull();
+    const next=structuredClone(s);Object.assign(next.workerActivity.items[0]!.tools[0]!,{state:'error',endedAt:stamp,durationMs:420});p.push(next);
+    expect(p.get('worker-internals').querySelector('.worker-stage-state.error')?.textContent).toBe('오류');expect(p.get('worker-internals').textContent).toContain('420 ms');
+    p.click('#pause');p.push(s);expect(p.get('worker-internals').querySelector('.worker-stage-state.error')).not.toBeNull();p.click('#pause');expect(p.get('worker-internals').querySelector('.worker-stage-state.error')).toBeNull();
+    p.click('[data-host=codex]');expect(p.get('worker-internals').hidden).toBe(true);p.click('[data-host=claude]');expect(p.get('worker-internals').hidden).toBe(false);
+    p.click('#language');expect(p.get('worker-internals').textContent).toContain('Worker internal work');
+  });
+  it('keeps every active worker visible and limits only recent endings, with state-specific phases', () => {
+    const p=page(),old=new Date(Date.parse(stamp)-7_200_000).toISOString(),workers=Array.from({length:18},(_,i)=>({sessionId:'s',agentId:'a'+i,role:'worker',taskId:'t'+i,state:i<16?'active':'completed',lastAt:old,coverage:'complete',selectedModel:null,observedModel:null,selectedEffort:null,modelRequestAt:old,modelResponseAt:null,jevRequestAt:i===0?stamp:null,jevResponseAt:null,tools:[]}));
+    p.push({...snapshot([]),workerActivity:{items:workers,limited:false,sig:'many'}});const window=p.get('window') as unknown as {value:string;dispatchEvent(e:unknown):void};window.value='3600000';window.dispatchEvent(new p.w.Event('change'));
+    expect(p.get('worker-internals').querySelectorAll('.worker-entry')).toHaveLength(16);expect(p.get('worker-internals').textContent).toContain('Jev · 다음 모델 선택');expect(p.get('worker-internals').textContent).toContain('모델 추론 · 응답 대기');
+    p.push(snapshot([]));expect(p.get('worker-internals').hidden).toBe(true);
+  });
   it('shows model facts from the selected stage without turning another response into its observed model', () => {
     const p = page();
     const selected = { selected: 'gpt-6-luna', observed: null, status: 'unobserved' as const, selectedEffort: 'low', observedEffort: null };
@@ -96,13 +115,15 @@ describe('dashboard live interactions', () => {
     p.click('#language'); expect(p.get('coverage').textContent).toContain('Source unavailable');
     expect(p.w.document.querySelectorAll('#latest')).toHaveLength(1);
   });
-  it('only pulses an edge for a newly observed linked stage in the same execution', () => {
+  it('pulses independent feature receipts and never joins unrelated execution tracks', () => {
     const p = page(); const a = step('a', 'admission', 'jev', { durationMs: 60 });p.push(snapshot([run('one', 'claude', [a])]));
     p.push(snapshot([run('one', 'claude', [a, step('b', 'allocation', 'jev', { durationMs: 80 })])]));
     expect(p.w.document.querySelectorAll('.wire-packet.arriving')).toHaveLength(1);
     p.push(snapshot([run('one', 'claude', [a, step('b', 'allocation', 'jev', { durationMs: 80 })]), run('other', 'codex', [step('w', 'workers', 'host')])]));
-    // The first transfer continues at its original offset; unrelated worker traffic adds no second edge.
-    expect(p.w.document.querySelectorAll('.wire-packet.arriving')).toHaveLength(1);
+    // Each actual feature arrival has its own receipt; no cross-execution link is drawn.
+    expect(p.w.document.querySelectorAll('.wire-packet.arriving')).toHaveLength(2);
+    expect(p.w.document.querySelectorAll('[data-edge]')).toHaveLength(0);
+    expect(p.w.document.querySelectorAll('[data-rail-actor]')).toHaveLength(2);
     expect(p.w.document.querySelector('.circuit-node[data-feature="workers"]')?.classList.contains('flash')).toBe(true);
   });
   it('preserves keyboard focus and circuit scroll when a live snapshot replaces children', () => {
@@ -291,4 +312,40 @@ it('does not animate a completed Gate path because an unrelated host tool remain
   ])]));
   expect(p.w.document.querySelector('.gate-grid .wire-flow')).toBeNull();
   expect(p.get('now').querySelector('.running')).not.toBeNull();
+});
+
+it('keeps old active work on the live rails while removing completed historical steps from the time filter', () => {
+  const p=page(),old=new Date(Date.now()-7_200_000).toISOString();
+  p.push(snapshot([run('old-active','codex',[step('old-pending','workers','host',{lifecycle:true,state:'active',at:old,startedAt:old})],{lastAt:old}),run('new','claude',[step('new','router','jev')])]));
+  const range=p.get('window') as unknown as {value:string;dispatchEvent(e:unknown):void};range.value='3600000';range.dispatchEvent(new p.w.Event('change'));
+  expect(p.w.document.querySelector('[data-rail-actor="run:old-active"] .worker-stage-state.active')).not.toBeNull();
+  expect(p.get('pipeline-state').textContent).toContain('1개 단계 진행 중');
+});
+
+it('pages a ten-thousand-step execution with live following and preserves a manually selected historical page', () => {
+  const p=page(),steps=Array.from({length:10001},(_,i)=>step('cycle'+i,'router','host',{summary:'cycle '+i}));p.push(snapshot([run('large','codex',steps)]));
+  expect(p.get('rail-history').querySelectorAll('.rail-record')).toHaveLength(1);
+  expect(p.get('rail-history').textContent).toContain('cycle 10000');p.click('[data-rail-page="-1"]');
+  expect(p.get('rail-history').querySelectorAll('.rail-record')).toHaveLength(100);expect(p.get('rail-follow').getAttribute('aria-pressed')).toBe('false');
+  p.push(snapshot([run('large','codex',[...steps,step('cycle10001','router','host',{summary:'latest cycle'})])]));
+  expect(p.get('rail-history').textContent).not.toContain('latest cycle');p.click('#rail-follow');expect(p.get('rail-history').textContent).toContain('latest cycle');
+  expect(p.get('rail-history').querySelectorAll('.rail-record')).toHaveLength(2);
+});
+
+it('shows native inference cycles without tool calls and pages the complete worker tool history', async () => {
+  const p=page(),tools=Array.from({length:231},(_,i)=>({id:'tool'+i,name:'Read',action:'read',target:'src/file'+i+'.ts',state:'done',startedAt:stamp,endedAt:stamp,durationMs:20})),models=[{id:'model0',at:stamp,model:'claude-opus-5-5',tools:[]},{id:'model1',at:stamp,model:'claude-sonnet-5',tools:['tool230']}],worker={sessionId:'s',agentId:'a',role:'worker',taskId:'t1',state:'active',lastAt:stamp,coverage:'recent',selectedModel:'claude-sonnet-5',observedModel:null,selectedEffort:'low',modelRequestAt:stamp,modelResponseAt:stamp,tools:tools.slice(-40)};
+  const fetch=vi.fn(async (url:string)=>{const offset=Number(new URL(url,'http://localhost').searchParams.get('offset'));return{ok:true,json:async()=>({worker,tools:tools.slice(offset,offset+100),models:offset===0?models:[models[1]],coverage:'complete',skippedRows:0,total:231,next:offset+100<231?offset+100:null})}});Object.assign(p.w,{fetch});
+  p.push({...snapshot([]),workerActivity:{items:[worker],limited:false,sig:'full'}});
+  await vi.waitFor(()=>expect(p.get('rail-history').textContent).toContain('201–231 / 231'));
+  expect(p.get('rail-history').querySelectorAll('.rail-record')).toHaveLength(31);expect(p.get('rail-history').textContent).toContain('src/file230.ts');expect(p.get('rail-history').textContent).toContain('추론 모델 sonnet-5');
+  p.click('[data-rail-page="-1"]');await vi.waitFor(()=>expect(p.get('rail-history').textContent).toContain('101–200 / 231'));expect(p.get('rail-history').querySelectorAll('.rail-record')).toHaveLength(100);
+  p.click('[data-history-kind="models"]');await vi.waitFor(()=>expect(p.get('rail-history').textContent).toContain('도구 호출 0개'));expect(p.get('rail-history').textContent).toContain('응답 모델 opus-5-5');expect(p.get('rail-history').textContent).toContain('응답 모델 sonnet-5');
+});
+
+it('ignores a late history response from a previously selected worker', async () => {
+  const p=page(),worker=(id:string)=>({sessionId:'s',agentId:id,role:'worker',taskId:id,state:'active',lastAt:stamp,coverage:'recent',selectedModel:null,observedModel:null,selectedEffort:null,modelRequestAt:null,modelResponseAt:null,tools:[]});
+  let resolve:(v:unknown)=>void=()=>{};const fetch=vi.fn().mockImplementationOnce(()=>new Promise(r=>{resolve=r})).mockResolvedValue({ok:true,json:async()=>({tools:[],models:[],total:0,coverage:'complete'})});Object.assign(p.w,{fetch});
+  p.push({...snapshot([]),workerActivity:{items:[worker('a'),worker('b')],limited:false,sig:'both'}});p.click('[data-actor="worker:s:b"]');
+  await vi.waitFor(()=>expect(p.get('rail-history').textContent).toContain('워커 b'));resolve({ok:true,json:async()=>({tools:[{name:'POISON',state:'done',startedAt:stamp}],models:[],total:1,coverage:'complete'})});await new Promise(r=>setTimeout(r,0));
+  expect(p.get('rail-history').textContent).toContain('워커 b');expect(p.get('rail-history').textContent).not.toContain('POISON');
 });

@@ -20,10 +20,15 @@ const versionAt = (root: string): string => {
 const healthy = async (state: Record<string, unknown> | null): Promise<boolean> => {
   if (!state || !urlOf(state['url']) || !tokenOf(state['token'])) return false;
   try {
-    const reply = await fetch(`${state['url']}api/health`, { signal: AbortSignal.timeout(300) });
+    const reply = await fetch(`${state['url']}api/health`, { signal: AbortSignal.timeout(3000) });
     const body = await reply.json() as Record<string, unknown>;
     return reply.ok && body['service'] === 'jev-gate-dashboard' && body['token'] === state['token'];
   } catch { return false; }
+};
+const ownerAlive = (state: Record<string, unknown> | null): boolean => {
+  const pid = state?.['pid'];
+  if (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid < 1) return false;
+  try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code !== 'ESRCH'; }
 };
 
 /** One shared local dashboard, launched by either installed host. Repeated sessions do not open more tabs. */
@@ -52,11 +57,20 @@ export const ensureDashboard = async (root: string, env: Env, options: { launch?
       const parts = (v: unknown): number[] => typeof v === 'string' && /^\d+\.\d+\.\d+$/.test(v) ? v.split('.').map(Number) : [];
       const before = parts(previous['version']); const current = parts(version);
       const newer = current.length === 3 && before.length === 3 && current.some((n, i) => n > before[i]! && current.slice(0, i).every((p, j) => p === before[j]));
-      if (previous['version'] === version || before.length && current.length && !newer) return true;
+      if (previous['version'] === version || before.length && current.length && !newer) {
+        // The owner knows whether a browser is connected; callers must not each open a tab.
+        const opened = await fetch(`${previous['url']}api/open`, { method: 'POST', headers: { authorization: `Bearer ${previous['token']}` }, signal: AbortSignal.timeout(3000) }).catch(() => null);
+        return opened?.ok === true;
+      }
       // Authenticated loopback shutdown updates the running build without signalling an arbitrary PID.
-      const shutdown = await fetch(`${previous['url']}api/shutdown`, { method: 'POST', headers: { authorization: `Bearer ${previous['token']}` }, signal: AbortSignal.timeout(300) }).catch(() => null);
+      const shutdown = await fetch(`${previous['url']}api/shutdown`, { method: 'POST', headers: { authorization: `Bearer ${previous['token']}` }, signal: AbortSignal.timeout(3000) }).catch(() => null);
       if (!shutdown?.ok) return false;
       reusePort = Number(new URL(String(previous['url'])).port);
+    } else if (ownerAlive(previous)) {
+      // A busy event loop is not a dead dashboard. Never replace a live owner on a probe timeout.
+      return false;
+    } else if (previous && urlOf(previous['url']) && tokenOf(previous['token'])) {
+      reusePort = Number(new URL(previous['url']).port);
     }
     const token = randomBytes(16).toString('hex');
     const entry = join(root, 'dist', existsSync(join(root, '.codex-plugin/plugin.json')) ? 'cli.mjs' : 'cli.js');
@@ -82,12 +96,14 @@ export const serveAutomaticDashboard = async (root: string, env: Env, token: str
   const launch = readPrivateJson(runtimePath(env));
   if (!tokenOf(token) || launch?.['token'] !== token || !dashboardStatus(env).enabled) return;
   const reusePort = typeof launch['reusePort'] === 'number' && Number.isInteger(launch['reusePort']) && launch['reusePort'] > 0 && launch['reusePort'] <= 65535 ? launch['reusePort'] : 0;
-  const server = await startDashboard(dashboardSources(env), reusePort, { token });
+  const server = await startDashboard(dashboardSources(env), reusePort, { token, reconnectGraceMs: reusePort ? 30_000 : 0,
+    ...(env['JEV_DASHBOARD_NO_OPEN'] !== '1' ? { openBrowser: openSetupBrowser } : {}) });
   writePrivateJson(runtimePath(env), { token, version: versionAt(root), url: server.url, pid: process.pid });
-  if (!reusePort && env['JEV_DASHBOARD_NO_OPEN'] !== '1') openSetupBrowser(server.url);
+  // Existing EventSource clients reconnect to the reused address before deciding to open a tab.
+  const opening = setTimeout(server.ensureOpen, 0); opening.unref();
   let closing = false;
   const stop = (): void => {
-    if (closing) return; closing = true; clearInterval(check);
+    if (closing) return; closing = true; clearInterval(check); clearTimeout(opening);
     void server.close().finally(() => {
       if (readPrivateJson(runtimePath(env))?.['token'] === token) rmSync(runtimePath(env), { force: true });
     });

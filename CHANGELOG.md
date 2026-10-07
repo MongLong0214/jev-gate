@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.8.12 — 2026-10-07 — Live worker execution rails
+
+- Rebuild the execution circuit within the existing dashboard design: ten feature stations, independent execution and worker rails, observed request/response pulses, and explicit current stages. Active executions remain visible outside the selected time window. Pause, disconnection and reduced motion stop animation; historical selection and scroll survive live updates.
+- Show Claude worker internals from exact trace-observed native identities. Display safe tool names, action labels, file targets, timing, errors and response model metadata. Paginate full tool and inference history, including responses with no tool calls. Keep large histories out of the live DOM and mark partial or unavailable evidence explicitly. Conversation text, command arguments, source, tool output and thinking are not copied into dashboard snapshots.
+- Keep one automatic dashboard owner and reuse its browser connection. Concurrent startups, reloads, reconnects and same-port upgrades do not open duplicate tabs; the owner opens a replacement when its last viewer leaves. A slow health probe cannot replace a live owner.
+- Reassess Claude workers before each subsequent model inference with Jev, using their original contract and recent tool outcome labels. The first inference retains Gate B or spawn allocation; tool execution itself does not invoke a model. Preserve native pins, unknown context compatibility, cancellation and timeout fallback. Lean remains eligibility-only. Record each selection separately from the actual submitted request and response model.
+- Reconcile verified host-authored completion notifications when a Claude child transcript omits its final stop reason. Release the original reservation without treating a launch receipt or copied notification as completion. Record denied dispatches and worktree creation in the execution history.
+
 ## v0.8.11 — 2026-10-07 — Readable real-time traffic
 
 - Show directional receipts for observed requests and responses in independent feature channels, including calls that complete quickly. Strengthen active signal contrast and retain motion phase through updates. Completed Gate paths no longer animate because of an unrelated active host tool.

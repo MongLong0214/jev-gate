@@ -86,7 +86,7 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     const list = spawnSync('unzip', ['-Z1', join(outDir, archive!)], { encoding: 'utf8' }).stdout.trim().split('\n');
     const agents = ['worker-fast', 'worker', 'worker-deep', 'worker-frontier', 'planner', 'planner-frontier', 'executor'].map((a) => `agents/${a}.md`);
     for (const must of ['dist/entry.js', 'dist/hook.js', 'dist/jev.js', 'dist/brief.js', 'dist/cli.js', 'dist/job.js', 'dist/plan.js', 'hooks/hooks.json', ...agents, '.claude-plugin/plugin.json', ...INSTALL_DOCS]) expect(list, must).toContain(must);
-    expect(list.some((f) => f.startsWith('src/') && !/^src\/(?:frontier-routing|router-(?:answers|selection|context|secret)|claude-(?:models|candidates))\.ts$/.test(f) || f.includes('/tests/') || f.startsWith('tests/') || f.startsWith('node_modules/') || f.startsWith('bench/') && f !== 'bench/ab/tasks.example.json' || f === 'HANDOFF.md' || f.includes('.env') && !f.endsWith('.env.example'))).toBe(false);
+    expect(list.some((f) => f.startsWith('src/') && !/^src\/(?:frontier-routing|router-(?:answers|selection|context|child-context|secret)|claude-(?:models|candidates))\.ts$/.test(f) || f.includes('/tests/') || f.startsWith('tests/') || f.startsWith('node_modules/') || f.startsWith('bench/') && f !== 'bench/ab/tasks.example.json' || f === 'HANDOFF.md' || f.includes('.env') && !f.endsWith('.env.example'))).toBe(false);
     // v0.6.0: the one plugin carries the three Mods from their source, the module that loads them, and the evidence
     // server with its skill, at the paths plugin.json and hooks/register.ts name; no Mod manifest, test or declaration.
     // #95 adds the feature READMEs beside that source, not the Mod tests.
@@ -215,7 +215,7 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     const list = spawnSync('unzip', ['-Z1', join(outDir, `jev-gate-router-${manifest.version}.zip`)], { encoding: 'utf8' }).stdout.trim().split('\n');
     const modules = readdirSync(join(root, 'mods', 'router', 'hooks')).filter((n) => n.endsWith('.ts'));
     const files = list.filter((f) => !f.endsWith('/')).sort();
-    expect(files).toEqual(['.claude-plugin/plugin.json', 'README.md', 'hooks/hooks.json', ...modules.map((n) => `hooks/${n}`), ...['router-answers','router-selection','router-context','router-secret','claude-models','claude-candidates','frontier-routing'].map(n => `src/${n}.ts`)].sort());
+    expect(files).toEqual(['.claude-plugin/plugin.json', 'README.md', 'hooks/hooks.json', ...modules.map((n) => `hooks/${n}`), ...['router-answers','router-selection','router-context','router-child-context','router-secret','claude-models','claude-candidates','frontier-routing'].map(n => `src/${n}.ts`)].sort());
     // Declarations, host tests, compiled Lean and the executor stay out: Router-only exposes no Lean executor or history reader.
     expect(list.some((f) => /^(types|tests|dist|agents)\//.test(f))).toBe(false);
     const dest = join(tmp, 'router installed', 'jev router');

@@ -349,3 +349,26 @@ it('confirms Codex request settings separately and joins only the exact observed
   expect(build([req,response]).model).toMatchObject({requestApplied:true,status:'confirmed',observed:'gpt-6-luna'});
   expect(build([req,{...response,session_id:'other'}]).model?.status).toBe('unobserved');
 });
+
+it('counts child Jev steps separately, closes only the exact decision and binds each model response', () => {
+  const child = { session_id: 's1', turn: 'child-turn', agent_id: 'worker', scope: 'child' };
+  const make = (event: string, index: number, extra: Record<string, unknown> = {}, time = at) => row('router', { ...child, event, index, ...extra }, time);
+  const records = [make('request', 1, { sent: true }), make('child_route', 1, { sent: true, assessment: 'ok', from: { model: 'claude-opus-5-5' }, reasons: { model: 'selected', effort: 'selected' }, patch: { model: 'claude-sonnet-5-5', effort: 'low' } }, later),
+    make('model_request', 1, { requested: 'claude-sonnet-5-5', requested_effort: 'low' }, later),
+    make('child_result', 1, { requested: 'claude-sonnet-5-5', observed: 'claude-sonnet-5-5', confirmation: 'confirmed' }, later),
+    make('request', 2, { sent: true }, '2026-09-29T06:00:02.000Z')];
+  const view = buildOperations([], records, new Date('2026-09-29T06:00:03.000Z'), { trace: false, debug: true });
+  expect(view.requests).toBe(2);
+  const requests = view.feed.filter(s => s.title === 'Router · request');
+  expect(requests.map(s => s.state).sort()).toEqual(['active', 'done']);
+  expect(view.feed.find(s => s.title === 'Router · child_result')).toMatchObject({ agentId: 'worker', routing: { scope: 'child', modelReason: 'selected', effortReason: 'selected' } });
+  expect(view.feed.find(s => s.title === '모델 · 응답 대기')?.model?.selected).toBe('claude-sonnet-5-5');
+});
+
+
+it('retains every active execution beyond the recent completed-turn window', () => {
+  const records: Record<string, unknown>[] = [{...base,phase:'admission_intent',request_id:'pending',prompt_id:'pending'}];
+  for(let i=0;i<220;i++)records.push({...base,phase:'admission_result',written_at:later,request_id:'finished-'+i,prompt_id:'finished-'+i,invocation_id:'finished-'+i,attempted:false});
+  const view=buildOperations(records,[],new Date(later),{trace:true,debug:false});
+  expect(view.runs).toHaveLength(201);expect(view.runs.flatMap(r=>r.steps).some(s=>s.state==='active')).toBe(true);
+});

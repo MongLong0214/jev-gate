@@ -2,6 +2,57 @@ import { describe, expect, mock, test, tier } from 'claude-code/testing';
 
 tier('user');
 
+test('child tool steps use fresh assessments in the real host engine', async ($, on) => {
+  mock.env(on, { TYPESAFE_API_KEY: 'sk-router-testonlynotakey' });
+  mock.clock(on);
+  on('session.version', () => ({ value: { version: '2.1.292', base: '2.1.292' } }));
+  on('session.id', () => ({ value: 'child-fixture' }));
+  on('settings.read', () => ({ value: { effortLevel: 'high' } }));
+  on('fs.exists', () => ({ value: false }));
+  const logs: string[] = [];
+  on('ui.log', ($, e) => { logs.push(e.text); return { value: undefined }; });
+  const contexts: Array<string | undefined> = [];
+  on('session.messages', ($, e) => {
+    contexts.push(e.agentId);
+    return { value: [{ role: 'assistant', text: 'PRIVATE RESULT', toolUses: [{ tool_use_id: 'read', tool: 'Read', input: {}, text: 'PRIVATE SOURCE' }] }] };
+  });
+  let phase = 0, calls = 0;
+  const sent: Array<{ model: string; effort?: string | number }> = [];
+  on('http.fetch', ($, e) => {
+    calls++;
+    const body = JSON.parse(e.init?.body ?? '{}');
+    expect(e.init?.body).not.toContain('PRIVATE');
+    const target = phase === 0 ? '__keep__' : phase === 1 ? 'claude-sonnet-5-5' : 'claude-opus-5-5';
+    const answers = Object.fromEntries(Object.entries(body.questions).map(([name, raw]) => {
+      const q = raw as { type: string; criteria: string[] | Record<string, string> };
+      if (q.type === 'choice') {
+        const value = name === 'model' ? target : name === 'control' ? 'task_clear' : 'ordinary';
+        return [name, { type: 'choice', choice: value, confidence: 1, probabilities: Object.fromEntries(Object.keys(q.criteria).map(k => [k, k === value ? 1 : 0])) }];
+      }
+      const levels = q.criteria as string[];
+      const at = levels.findIndex(s => s.startsWith(phase === 1 ? 'Light reasoning' : 'Strong reasoning'));
+      return [name, { type: 'score', score: at, confidence: 1, probabilities: Object.fromEntries(levels.map((_, i) => [i, i === at ? 1 : 0])) }];
+    }));
+    return { value: { ok: true, status: 200, headers: {}, text: JSON.stringify({ model: body.model, answers }) } };
+  });
+  on('agent.spawn', () => ({ agentId: 'child', model: 'claude-opus-5-5' }));
+  on('agent.offer', () => ({ isOffered: true }));
+  on('turn.step', async function* ($, e) {
+    sent.push({ model: e.model, ...(e.effort !== undefined ? { effort: e.effort } : {}) });
+    return { turnId: e.turnId, index: e.index, answer: 'fixture', toolUses: [], stopReason: 'end_turn', usage: null };
+  });
+  await $.agent.offer({ agent: 'general-purpose', description: 'general purpose', source: 'built-in', provider: { plugin: 'engine', tier: 'core' } });
+  await $.agent.spawn({ tool_use_id: 'spawn-child', prompt: 'Find the failing test and repair it.', description: 'repair test', subagentType: 'general-purpose', provider: { plugin: 'engine', tier: 'core' }, parentModel: 'claude-opus-5-5', background: false, fork: false });
+  expect(calls).toBe(1);
+  for (phase = 0; phase < 3; phase++) {
+    const stream = $.turn.step({ agentId: 'child', turnId: 'child-turn', index: phase, model: 'claude-opus-5-5', effort: 'high', messageCount: phase + 1 });
+    while (!(await stream.next()).done) { /* preserve the host stream */ }
+    expect({ calls, logs: calls === phase + 1 ? [] : logs, sent: calls === phase + 1 ? [] : sent }).toEqual({ calls: phase + 1, logs: [], sent: [] });
+  }
+  expect(sent).toEqual([{ model: 'claude-opus-5-5', effort: 'high' }, { model: 'claude-sonnet-5-5', effort: 'low' }, { model: 'claude-opus-5-5', effort: 'high' }]);
+  expect(contexts).toEqual(['child', 'child']);
+});
+
 describe('register', () => {
   test('without a key: a spawn reaches the engine unchanged and nothing is fetched', async ($, on) => {
     const fetched: string[] = [];
