@@ -46,9 +46,11 @@ Root assessment sees the exact current human request, the previous **completed v
 
 The existing batch includes prior observed cache counts/model/age when available. These inform rebuilding cost without proving current fit or cache transfer between models. A cached root plus a bounded fresh worker can be preferable for a short task. No extra cache warm-up inference, token-count probe or cross-turn decision memoization is added. Each new turn still uses its own judgment.
 
-Assessment runs once at the first request of a user turn. Concurrent entry shares the pending assessment. The validated patch persists across later tool steps; the next user turn is assessed again. A manual model/effort change wins, while a value applied by Router itself is not mistaken for a manual pin. Settings and catalog changes invalidate an unsent patch. Requests already sent are not replayed or cancelled by a settings refresh.
+Root assessment runs once at the first request of a user turn. Concurrent entry shares the pending assessment. The validated patch persists across later tool steps; the next user turn is assessed again. A manual model/effort change wins, while a value applied by Router itself is not mistaken for a manual pin. Settings and catalog changes invalidate an unsent patch. Requests already sent are not replayed or cancelled by a settings refresh.
 
 The default 800ms budget covers preparation, Jev and final application checks. Timeout continues the native request once when it is still wanted. Cancellation before native dispatch sends nothing. Native stream errors propagate without a second request. Late Jev usage remains attributed to the original assessment.
+
+Claude workers are assessed again before each inference after their initial spawn allocation. The existing native conversation stays intact: each decision uses the child contract and recent tool names/outcome labels, without copying tool arguments, output, repository text or thinking. The first step keeps Gate B or spawn allocation; subsequent steps may choose another eligible model and effort. A smaller context window requires a complete current-request bound, so a short task alone never establishes Haiku compatibility. Concurrent delivery of one step shares its assessment. A timeout or invalid judgment preserves that step and the next step is assessed again. Native stream failures stop further overrides without replaying the request. Unknown or already running loops without a verified spawn mapping stay native. Lean remains eligibility-only.
 
 Gate B adds candidate-local allocation questions to its existing batch, not a second classifier call. Lean performs eligibility checks only. Optional recording and dashboard failures do not change execution. Durable worker ownership and cancellation remain required for safe dispatch and acceptance.
 
@@ -62,7 +64,7 @@ The standalone names omit the `router` prefix where listed below. Existing names
 | `routeMainModel` | same | true | Root model selection |
 | `routeMainEffort` | same | true | Root effort selection |
 | `routeSubagentModel` | same | true | Automatic child model selection |
-| `routeSubagentEffort` | same | true | Apply allocated effort to child steps |
+| `routeSubagentEffort` | same | true | Child inference effort selection |
 | `routeExplicitSpawnModel` | same | true | Treat an ordinary Agent model argument as a routable default |
 | `routerAllowFable` | `allowFable` | false | Restricted automatic family opt-in |
 | `typesafeApiKey` | same | unset | Sensitive key; explicit value takes precedence |

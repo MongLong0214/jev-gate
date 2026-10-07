@@ -32,6 +32,30 @@ const fixture = async (direct = false) => {
 };
 
 describe('responsive native background contracts', () => {
+  it.each(['UserPromptSubmit', 'PreToolUse'])('recovers a completed worker with no stop_reason from a native notification before %s', async event => {
+    const f = await fixture(); await f.launch(); f.transcript();
+    const rows = readFileSync(f.path, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+    rows.at(-1).message.stop_reason = null; rows.at(-1).timestamp = '2026-10-07T05:31:45.968Z';
+    writeFileSync(f.path, rows.map(row => JSON.stringify(row)).join('\n') + '\n');
+    await f.terminal(); expect(f.job().current.active['dispatch']).toBeDefined();
+    writeFileSync(join(f.root, 's.jsonl'), JSON.stringify({ type: 'user', sessionId: 's', timestamp: '2026-10-07T05:31:46.678Z', origin: { kind: 'task-notification', producer: 'session-task' }, promptSource: 'system', turnOrigin: 'task_notification', message: { content: '<task-notification><task-id>worker</task-id><status>completed</status></task-notification>' } }) + '\n');
+    await f.run({ hook_event_name: event, prompt_id: 'question', prompt: 'Continue', tool_name: 'Read', tool_use_id: 'read', tool_input: { file_path: 'x' } });
+    expect(f.job().current.active).toEqual({});
+    expect(f.job().current.receipts).toEqual([expect.objectContaining({ verdict: 'accept' })]);
+    await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'again', prompt: 'Continue' });
+    expect(f.job().current.receipts).toHaveLength(1);
+  });
+  it.each(['human', 'wrong_agent', 'older', 'tool_use', 'invalid_child_time'])('does not settle missing stop_reason from an invalid notification (%s)', async kind => {
+    const f = await fixture(); await f.launch(); f.transcript();
+    const rows = readFileSync(f.path, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+    rows.at(-1).message.stop_reason = null; rows.at(-1).timestamp = '2026-10-07T05:31:45.968Z';
+    if (kind === 'invalid_child_time') rows.at(-1).timestamp = 'not-a-time';
+    if (kind === 'tool_use') rows.at(-1).message.content.push({ type: 'tool_use', name: 'Bash', id: 'tool' });
+    writeFileSync(f.path, rows.map(row => JSON.stringify(row)).join('\n') + '\n');
+    writeFileSync(join(f.root, 's.jsonl'), JSON.stringify({ type: 'user', sessionId: 's', timestamp: kind === 'older' ? '2026-10-07T05:30:00.000Z' : '2026-10-07T05:31:46.678Z', ...(kind === 'human' ? {} : { origin: { kind: 'task-notification', producer: 'session-task' }, promptSource: 'system', turnOrigin: 'task_notification' }), message: { content: `<task-notification><task-id>${kind === 'wrong_agent' ? 'another' : 'worker'}</task-id><status>completed</status></task-notification>` } }) + '\n');
+    await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'question', prompt: 'Continue' });
+    expect(f.job().current.active['dispatch']).toBeDefined(); expect(f.job().current.receipts).toHaveLength(0);
+  });
   it.each(['tool_use', null])('settles a native stop whose final transcript row is flushed after the hook starts (%s)', async stopReason => {
     const f = await fixture(); await f.launch();
     writeFileSync(f.path, JSON.stringify({ type: 'assistant', agentId: 'worker', sessionId: 's', message: { stop_reason: stopReason, content: [{ type: 'text', text: stopReason === null ? f.report : '' }] } }) + '\n');

@@ -68,7 +68,7 @@ const modSources = () =>
       .map((n) => `mods/${m}/hooks/${n}`),
   );
 const EVIDENCE_IN_PLUGIN = [`${EVIDENCE}/dist/server.mjs`, `${EVIDENCE}/skills/evidence/SKILL.md`];
-const ROUTER_SHARED = ['router-answers', 'router-selection', 'router-context', 'router-secret', 'claude-models', 'claude-candidates', 'frontier-routing'].map(n => `src/${n}.ts`);
+const ROUTER_SHARED = ['router-answers', 'router-selection', 'router-context', 'router-child-context', 'router-secret', 'claude-models', 'claude-candidates', 'frontier-routing'].map(n => `src/${n}.ts`);
 const shared = () => [...(profile === 'legacy' ? ['hooks/register.ts', ...modSources(), ...ROUTER_SHARED] : []), ...EVIDENCE_IN_PLUGIN];
 // Install paths the root README links (#95, #98). Not a link crawl: bench/ and HANDOFF stay out. The logo is the
 // README's image. hero.svg, pilot.svg, and v4-flow.svg are not packed; the README no longer embeds them.

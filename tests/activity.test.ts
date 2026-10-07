@@ -24,6 +24,28 @@ const write = (dir: string, name: string, body: unknown): void => {
 };
 
 describe('loadActivity', () => {
+  it('closes a native spawn prepared before the response had an agent id without joining another call', () => {
+    const trace = make();
+    for (const [name, fields] of [
+      ['prepared', { event: 'prepared', tool_use_id: 'tool', scope: 'spawn', written_at: '2026-10-07T05:27:20.000Z' }],
+      ['other', { event: 'prepared', tool_use_id: 'other', scope: 'spawn', written_at: '2026-10-07T05:27:20.000Z' }],
+      ['response', { event: 'spawn_native_result', tool_use_id: 'tool', agent_id: 'agent', requested: 'claude-opus-5-5', observed: 'claude-opus-5-5', confirmation: 'confirmed', written_at: '2026-10-07T05:27:21.000Z' }],
+    ] as const) write(trace, name + '.json', { phase: 'mod_router', session_id: 's', ...fields });
+    const s = loadActivity({ traceDir: trace, debugDir: null, env: { HOME: make() } });
+    const prepared = s.operations.runs.flatMap(r => r.steps).filter(t => t.title === 'Router · 요청 전달 준비');
+    expect(prepared.map(t => t.state).sort()).toEqual(['done', 'unconfirmed']);
+  });
+  it('shows denied dispatches and worktree lifecycle as policy and local events', () => {
+    const trace = make();
+    write(trace, 'deny.json', { phase: 'dispatch_denied', session_id: 's', reason: 'workers_active', written_at: '2026-10-07T05:27:20.000Z' });
+    write(trace, 'start.json', { phase: 'worktree_start', session_id: 's', request_id: 'w', written_at: '2026-10-07T05:27:20.000Z' });
+    write(trace, 'result.json', { phase: 'worktree_result', session_id: 's', request_id: 'w', ok: true, written_at: '2026-10-07T05:27:21.000Z' });
+    const s = loadActivity({ traceDir: trace, debugDir: null, env: { HOME: make() } });
+    const steps = s.operations.runs.flatMap(r => r.steps);
+    expect(steps.find(t => t.title === 'Agent 호출 거절')).toMatchObject({ state: 'skipped', lane: 'policy', summary: '기존 워커 종료 대기 · 재계획 거절' });
+    expect(steps.find(t => t.title === 'Worktree · 생성 시작')).toMatchObject({ state: 'done', lane: 'local' });
+    expect(steps.find(t => t.title === 'Worktree · 생성 결과')).toMatchObject({ state: 'done', lane: 'local' });
+  });
   it('says a Gate A call stayed direct, and drops prompt text and keys', () => {
     const trace = make();
     const debug = make();

@@ -7,6 +7,7 @@ import { createRouter } from './router.ts';
 import { installedKeyPath, parseInstalledKey } from './key.ts';
 import { frontierConfigPath, parseFrontierRouting } from '../../../src/frontier-routing.ts';
 import { createRecorder } from './recording.ts';
+import { childStepContext } from '../../../src/router-child-context.ts';
 
 const set = (v: string | undefined): boolean => v !== undefined && v.trim() !== '';
 
@@ -112,6 +113,10 @@ const engineOf = ($: EngineInterface, log: RouterEngine['log']): RouterEngine =>
     return out && typeof out === 'object' ? out : { deny: 'Dispatch ownership unavailable; no child started.' };
   },
   hostBase: async () => (await $.session.version()).base,
+  childContext: async agentId => {
+    const rows = await $.session.messages({ agentId });
+    return Array.isArray(rows) ? childStepContext(rows) : undefined;
+  },
   log,
 });
 

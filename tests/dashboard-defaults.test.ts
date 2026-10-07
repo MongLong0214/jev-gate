@@ -2,7 +2,8 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Script } from 'node:vm';
-import { afterEach, describe, expect, it } from 'vitest';
+import { createServer } from 'node:http';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { dashboardSources, startDashboard } from '../src/dashboard.js';
 import { ensureDashboard } from '../src/dashboard-launch.js';
 import { dashboardStatus, setDashboard } from '../src/dashboard-settings.js';
@@ -44,6 +45,75 @@ describe('automatic shared dashboard',()=>{
     const launch=(_entry:string,token:string)=>{launches++;void startDashboard(dashboardSources(env),0,{token}).then(s=>{servers.push(s);writePrivateJson(join(credentialsDir(env),'dashboard-runtime.json'),{token,version:'0.8.1',url:s.url,pid:process.pid})})};
     const results=await Promise.all([ensureDashboard(root,env,{launch}),ensureDashboard(root,env,{launch})]);
     expect(results.some(Boolean)).toBe(true);expect(launches).toBe(1);
+  });
+  it('keeps a busy live owner instead of replacing it when a health check times out', async () => {
+    const env = environment(); const token = 'b'.repeat(32); let launches = 0;
+    const owner = createServer((req, res) => {
+      if (req.url === '/api/health') setTimeout(() => res.end(JSON.stringify({ service: 'jev-gate-dashboard', token })), 500);
+      else res.end();
+    });
+    await new Promise<void>(resolve => owner.listen(0, '127.0.0.1', resolve));
+    servers.push({ close: () => new Promise<void>(resolve => { owner.closeAllConnections(); owner.close(() => resolve()); }) });
+    const address = owner.address(); if (!address || typeof address === 'string') throw Error('Missing address');
+    const runtime = join(credentialsDir(env), 'dashboard-runtime.json');
+    const previous = { token, version: '0.8.1', url: `http://127.0.0.1:${address.port}/`, pid: process.pid };
+    writePrivateJson(runtime, previous);
+    const launch = () => { launches++; };
+    expect(await ensureDashboard(plugin(), env, { launch })).toBe(true);
+    expect(launches).toBe(0);
+    // Even an entirely unresponsive listener must not steal a live owner's token or spawn a second server.
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new Error('timeout'));
+    try { expect(await ensureDashboard(plugin(), env, { launch })).toBe(false); }
+    finally { fetchMock.mockRestore(); }
+    expect(launches).toBe(0); expect(readPrivateJson(runtime)).toEqual(previous);
+  });
+  it('opens once with no viewers, reuses connected tabs and reopens only after the last tab closes', async () => {
+    const env = environment(); const token = 'c'.repeat(32); const opened: string[] = [];
+    const server = await startDashboard(dashboardSources(env), 0, { token, openBrowser: url => opened.push(url) }); servers.push(server);
+    const open = () => fetch(server.url + 'api/open', { method: 'POST', headers: { authorization: `Bearer ${token}` } });
+    expect((await fetch(server.url + 'api/open', { method: 'POST' })).status).toBe(403);
+    await Promise.all([open(), open(), open()]); expect(opened).toEqual([server.url]);
+    const first = 'a'.repeat(36), second = 'b'.repeat(36); const a = new AbortController(), b = new AbortController();
+    await fetch(server.url + 'api/live?viewer=' + first, { signal: a.signal });
+    await fetch(server.url + 'api/live?viewer=' + second, { signal: b.signal });
+    await open(); expect(opened).toHaveLength(1);
+    const close = (id: string) => fetch(server.url + 'api/viewer-close?viewer=' + id, { method: 'POST', headers: { origin: server.url.slice(0, -1) } });
+    a.abort(); await close(first); await open(); expect(opened).toHaveLength(1);
+    b.abort(); await close(second);
+    await vi.waitFor(() => expect(opened).toHaveLength(2), { timeout: 2500 });
+    await open(); expect(opened).toHaveLength(2);
+  });
+  it('does not confuse a reload or stream reconnect with the last tab closing', async () => {
+    const env = environment(); const token = 'd'.repeat(32); const opened: string[] = [];
+    const server = await startDashboard(dashboardSources(env), 0, { token, openBrowser: url => opened.push(url) }); servers.push(server);
+    const id = 'a'.repeat(36), controller = new AbortController();
+    await fetch(server.url + 'api/live?viewer=' + id, { signal: controller.signal });
+    controller.abort();
+    await fetch(server.url + 'api/open', { method: 'POST', headers: { authorization: `Bearer ${token}` } });
+    expect(opened).toHaveLength(0);
+    await fetch(server.url + 'api/viewer-close?viewer=' + id, { method: 'POST', headers: { origin: server.url.slice(0, -1) } });
+    await fetch(server.url); // Reload is in progress, before the new script has connected.
+    await new Promise(resolve => setTimeout(resolve, 1100)); expect(opened).toHaveLength(0);
+    await fetch(server.url + 'api/live?viewer=' + 'b'.repeat(36));
+    await fetch(server.url + 'api/open', { method: 'POST', headers: { authorization: `Bearer ${token}` } });
+    expect(opened).toHaveLength(0);
+  });
+  it('waits for existing tabs after a restart even when another host requests opening', async () => {
+    const env = environment(), token = 'e'.repeat(32), opened: string[] = [];
+    const server = await startDashboard(dashboardSources(env), 0, { token, reconnectGraceMs: 150, openBrowser: url => opened.push(url) }); servers.push(server);
+    const open = () => fetch(server.url + 'api/open', { method: 'POST', headers: { authorization: `Bearer ${token}` } });
+    await Promise.all([open(), open()]); expect(opened).toHaveLength(0);
+    const controller = new AbortController();
+    await fetch(server.url + 'api/live?viewer=' + 'c'.repeat(36), { signal: controller.signal });
+    await new Promise(resolve => setTimeout(resolve, 200));
+    await open(); expect(opened).toHaveLength(0); controller.abort();
+  });
+  it('opens after the restart grace expires if no existing tab reconnects', async () => {
+    const env = environment(), opened: string[] = [];
+    const server = await startDashboard(dashboardSources(env), 0, { reconnectGraceMs: 80, openBrowser: url => opened.push(url) }); servers.push(server);
+    server.ensureOpen(); expect(opened).toHaveLength(0);
+    await vi.waitFor(() => expect(opened).toEqual([server.url]), { timeout: 1000 });
+    server.ensureOpen(); expect(opened).toHaveLength(1);
   });
   it('accepts preference writes only from the same loopback origin and shutdown only from its owner',async()=>{
     const env=environment();const token='a'.repeat(32);const server=await startDashboard(dashboardSources(env),0,{token});servers.push(server);

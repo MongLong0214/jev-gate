@@ -16,6 +16,7 @@ import { recordingStatus, setRecording } from './recording.js';
 import { dashboardStatus, setDashboard } from './dashboard-settings.js';
 import { JEV_FAVICON } from './dashboard-brand.js';
 import { TraceDirectoryReader, traceDirectoryIdentity } from './explain.js';
+import { ClaudeWorkerActivityReader } from './claude-worker-activity.js';
 
 const PAGE = DASHBOARD_PAGE;
 
@@ -76,11 +77,39 @@ export const readVersions = (env: Env, host?: Host): DashboardVersions => {
   return { running, installed };
 };
 
-export const startDashboard = (sources: DashboardSources, port: number, runtime: { token?: string } = {}): Promise<{ url: string; port: number; close: () => Promise<void> }> =>
+export const startDashboard = (sources: DashboardSources, port: number, runtime: { token?: string; openBrowser?: (url: string) => void; reconnectGraceMs?: number } = {}): Promise<{ url: string; port: number; close: () => Promise<void>; ensureOpen: () => void }> =>
   new Promise((resolve, reject) => {
     const sockets = new Set<Socket>();
     const traceReader = new TraceDirectoryReader();
+    const workerReader = new ClaudeWorkerActivityReader();
     const subscribers = new Set<() => void>();
+    const viewers = new Map<string, number>(); // Infinity while connected; a short lease during reconnect.
+    let viewerSequence = 0;
+    let openingUntil = 0;
+    let loadingUntil = runtime.reconnectGraceMs ? Date.now() + runtime.reconnectGraceMs : 0;
+    let openTimer: ReturnType<typeof setTimeout> | undefined;
+    let disposed = false;
+    let url = '';
+    const scheduleOpen = (delay: number): void => {
+      if (!runtime.openBrowser || disposed) return;
+      clearTimeout(openTimer); openTimer = setTimeout(ensureOpen, delay); openTimer.unref();
+    };
+    const ensureOpen = (): void => {
+      if (!runtime.openBrowser || disposed || !dashboardStatus(sources.env).enabled) return;
+      if (subscribers.size) return;
+      const now = Date.now();
+      for (const [id, expires] of viewers) if (expires <= now) viewers.delete(id);
+      if (viewers.size) {
+        const expires = Math.min(...viewers.values());
+        if (Number.isFinite(expires)) scheduleOpen(Math.max(1, expires - now));
+        return;
+      }
+      if (loadingUntil > now) { scheduleOpen(loadingUntil - now); return; }
+      if (openingUntil > now) return;
+      // One owner reserves an in-flight launch, including simultaneous host startup requests.
+      openingUntil = now + 30_000;
+      runtime.openBrowser(url);
+    };
     const watchers = new Map<string, { watcher: FSWatcher; identity: string }>();
     const directoryIdentities = new Map<string, string | null>();
     const directories = new Set([sources.traceDir, ...(sources.traceDirs?.map(source => source.dir) ?? []), sources.debugDir].filter((dir): dir is string => !!dir).map(dir => join(dir, '.')));
@@ -94,10 +123,12 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
       traceReader.invalidate(dir, name); changed = true;
       if (!timer) timer = setTimeout(() => { timer = null; broadcast(); }, 100);
     };
-    const syncWatchers = (): void => {
-      if (Date.now() - watchedAt < 2000) return;
+    const syncWatchers = (force = false): void => {
+      if (!force && Date.now() - watchedAt < 2000) return;
       watchedAt = Date.now();
-      for (const dir of directories) {
+      const currentDirectories = new Set([...directories, ...workerReader.directories()]);
+      for (const [dir, { watcher }] of watchers) if (!currentDirectories.has(dir)) { watcher.close(); watchers.delete(dir); directoryIdentities.delete(dir); }
+      for (const dir of currentDirectories) {
         let identity: string | null = null;
         try { const stat = lstatSync(dir); if (stat.isDirectory() && !stat.isSymbolicLink()) identity = traceDirectoryIdentity(stat); } catch { /* It may appear later. */ }
         const existing = watchers.get(dir);
@@ -114,20 +145,22 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
     const snapshot = () => {
       syncWatchers();
       const time = Date.now();
-      const pending = activity?.live.mode === 'working' || activity?.operations.feed.some(step => step.state === 'active');
+      const pending = activity?.live.mode === 'working' || activity?.operations.feed.some(step => step.state === 'active') || activity?.workerActivity?.items.some(worker => worker.state === 'active');
       if (!activity || changed && time - scannedAt >= 100 || time - scannedAt >= (pending ? 2000 : 30_000)) {
-        activity = loadActivity({ ...sources, traceReader, now: new Date() });
+        activity = loadActivity({ ...sources, traceReader, workerReader, now: new Date() });
         scannedAt = Date.now(); changed = false;
+        syncWatchers(true);
       }
       return { ...activity, version: readVersions(sources.env, sources.host), recording: recordingStatus(sources.env), dashboard: dashboardStatus(sources.env) };
     };
     const scan = setInterval(broadcast, 400);
     scan.unref();
     const dispose = (): void => {
+      disposed = true; clearTimeout(openTimer);
       if (timer) clearTimeout(timer);
       clearInterval(scan);
       for (const { watcher } of watchers.values()) watcher.close();
-      watchers.clear(); subscribers.clear();
+      watchers.clear(); subscribers.clear(); viewers.clear();
     };
     const server: Server = createServer(async (req, res) => {
       if (!/^127\.0\.0\.1:\d+$/.test(req.headers.host ?? '')) { res.writeHead(403); res.end(); return; }
@@ -138,11 +171,21 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
         res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
         res.end(JSON.stringify({ service: 'jev-gate-dashboard', token: runtime.token ?? null })); return;
       }
+      if (path === '/api/open' && req.method === 'POST') {
+        if (!runtime.token || req.headers.authorization !== `Bearer ${runtime.token}`) { res.writeHead(403); res.end(); return; }
+        ensureOpen(); res.end(); return;
+      }
+      if (path === '/api/viewer-close' && req.method === 'POST') {
+        if (req.headers.origin !== `http://${req.headers.host}`) { res.writeHead(403); res.end(); return; }
+        const viewer = new URL(req.url!, `http://${req.headers.host}`).searchParams.get('viewer');
+        if (viewer) viewers.delete(viewer);
+        scheduleOpen(1000); res.end(); return;
+      }
       if (path === '/api/shutdown' && req.method === 'POST') {
         if (!runtime.token || req.headers.authorization !== `Bearer ${runtime.token}`) { res.writeHead(403); res.end(); return; }
         // Release the listener before the shutdown receipt lets a replacement reuse its port.
         // Existing streams get a short response flush window without accepting new connections.
-        res.end(); server.close(); setTimeout(() => { for (const socket of sockets) socket.destroy(); }, 25); return;
+        dispose(); res.end(); server.close(); setTimeout(() => { for (const socket of sockets) socket.destroy(); }, 25); return;
       }
       if ((path === '/api/recording' || path === '/api/dashboard') && req.method === 'POST') {
         // Preferences require an explicit same-origin local UI action.
@@ -169,21 +212,47 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
         res.end(body);
         return;
       }
+      if (req.method === 'GET' && path === '/api/worker-history') {
+        const query = new URL(req.url!, `http://${req.headers.host}`).searchParams;
+        const rawOffset = query.get('offset') ?? '0', offset = Number(rawOffset);
+        if (!/^\d{1,12}$/.test(rawOffset) || !Number.isSafeInteger(offset)) { res.writeHead(400); res.end(); return; }
+        snapshot(); // Refresh the set of identities already observed by Jev Gate.
+        const session = query.get('session'), agent = query.get('agent');
+        if (Boolean(session) !== Boolean(agent) || session && !/^[A-Za-z0-9_-]{1,100}$/.test(session) || agent && !/^[A-Za-z0-9_-]{1,100}$/.test(agent)) { res.writeHead(400); res.end(); return; }
+        const controller = new AbortController();
+        res.once('close', () => { if (!res.writableEnded) controller.abort(); });
+        const body = session && agent ? await workerReader.history(session, agent, offset, sources.env, new Date(), controller.signal) : workerReader.list(offset, new Date());
+        if (controller.signal.aborted) return;
+        res.writeHead(body ? 200 : 404, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+        res.end(JSON.stringify(body ?? { error: 'unobserved_agent' })); return;
+      }
       if (req.method === 'GET' && path === '/api/live') {
+        const identity = new URL(req.url!, `http://${req.headers.host}`).searchParams.get('viewer');
+        const viewer = identity && /^[a-f0-9-]{36}$/.test(identity) ? identity : `legacy-${++viewerSequence}`;
+        viewers.set(viewer, Infinity); openingUntil = 0; loadingUntil = 0; clearTimeout(openTimer);
         res.writeHead(200, {
           'content-type': 'text/event-stream; charset=utf-8',
           'cache-control': 'no-store',
           connection: 'keep-alive',
         });
+        res.write('retry: 500\n');
         let last = '';
+        let heartbeatAt = Date.now();
         let closed = false;
         const publish = (): void => {
           if (closed) return;
           try {
             const body = snapshot();
-            const next = `${body.live.sig}:${body.operations.sig}:${body.unreadable}:${JSON.stringify(body.version)}:${JSON.stringify(body.recording)}:${JSON.stringify(body.dashboard)}`;
-            if (next === last) return;
+            const next = `${body.live.sig}:${body.operations.sig}:${body.workerActivity?.sig}:${body.unreadable}:${JSON.stringify(body.version)}:${JSON.stringify(body.recording)}:${JSON.stringify(body.dashboard)}`;
+            if (next === last) {
+              if (Date.now() - heartbeatAt >= 5000) {
+                heartbeatAt = Date.now();
+                res.write(`event: heartbeat\ndata: ${JSON.stringify({ at: new Date(heartbeatAt).toISOString() })}\n\n`);
+              }
+              return;
+            }
             last = next;
+            heartbeatAt = Date.now();
             res.write(`data: ${JSON.stringify(body)}\n\n`);
           } catch {
             // A bad directory read skips this tick. The next one tries again.
@@ -195,12 +264,16 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
           if (closed) return;
           closed = true;
           subscribers.delete(publish);
+          if (viewers.has(viewer)) viewers.set(viewer, Date.now() + 15_000);
+          scheduleOpen(viewers.has(viewer) ? 15_000 : 1000);
         };
         req.on('close', stop);
         res.on('error', stop);
         return;
       }
       if (req.method === 'GET' && (path === '/' || path === '/index.html')) {
+        // A reload may close its stream before the replacement page has started its script.
+        loadingUntil = Date.now() + 10_000;
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-security-policy': "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'" });
         res.end(PAGE);
         return;
@@ -218,11 +291,14 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
     server.listen(port, '127.0.0.1', () => {
       const address = server.address();
       const actual = typeof address === 'object' && address !== null ? address.port : port;
+      url = `http://127.0.0.1:${actual}/`;
       resolve({
-        url: `http://127.0.0.1:${actual}/`,
+        url,
         port: actual,
+        ensureOpen,
         close: () =>
           new Promise((done, fail) => {
+            dispose();
             for (const socket of sockets) socket.destroy();
             server.close((err) => (err ? fail(err) : done()));
           }),

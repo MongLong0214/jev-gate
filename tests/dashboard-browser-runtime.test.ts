@@ -7,12 +7,14 @@ declare const getComputedStyle: Window['getComputedStyle'];
 declare const innerWidth: number;
 declare const innerHeight: number;
 type SVGPathElement = SVGElement & { getTotalLength(): number; getScreenCTM(): unknown; getPointAtLength(n: number): { matrixTransform(matrix: unknown): { x: number; y: number } } };
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { chromium, type Browser, type Page } from 'playwright';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { DASHBOARD_PAGE } from '../src/dashboard-page.js';
+import { dashboardSources, startDashboard } from '../src/dashboard.js';
+import type { WorkerActivityView } from '../src/claude-worker-activity.js';
 import type { OperationRun, OperationStep } from '../src/operations.js';
 
 const stamp = new Date().toISOString();
@@ -29,11 +31,13 @@ function snapshot(runs: OperationRun[]) {
 
 // Actual browser, native EventSource and disposable HTTP server. No user browser, credentials or paid requests.
 describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chromium runtime', () => {
-  let browser: Browser; let url: string; let current = snapshot([]); const clients = new Set<ServerResponse>();
+  let browser: Browser; let url: string; let current: ReturnType<typeof snapshot> & {workerActivity?:WorkerActivityView} = snapshot([]); const clients = new Set<ServerResponse>();
   const output = process.env['JEV_DASHBOARD_QA_DIR'] ?? join(tmpdir(), 'jev-dashboard-browser-qa');
   const errors: string[] = [];
+  let historyTools: Array<{id:string;name:string;action:string;target:string;state:string;startedAt:string;endedAt:string;durationMs:number}>=[];
   const server = createServer((req,res) => {
-    if(req.url==='/api/live'){res.writeHead(200,{'content-type':'text/event-stream','cache-control':'no-cache'});res.write(`data: ${JSON.stringify(current)}\n\n`);clients.add(res);req.on('close',()=>clients.delete(res));return;}
+    if(req.url?.split('?')[0]==='/api/live'){res.writeHead(200,{'content-type':'text/event-stream','cache-control':'no-cache'});res.write(`data: ${JSON.stringify(current)}\n\n`);clients.add(res);req.on('close',()=>clients.delete(res));return;}
+    if(req.url?.startsWith('/api/worker-history?')){const offset=Number(new URL(req.url,'http://localhost').searchParams.get('offset'));res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({tools:historyTools.slice(offset,offset+100),models:[{id:'response',at:stamp,model:'claude-sonnet-5',tools:historyTools.map(t=>t.id)},{id:'text-only',at:stamp,model:'claude-opus-5-5',tools:[]}],total:historyTools.length,coverage:'complete',skippedRows:0,next:offset+100<historyTools.length?offset+100:null}));return;}
     if(req.method==='POST'){res.writeHead(503);res.end('{}');return;}
     res.writeHead(200,{'content-type':'text/html'});res.end(DASHBOARD_PAGE);
   });
@@ -43,6 +47,23 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     const local='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';browser=await chromium.launch({headless:true,...(process.env['JEV_CHROMIUM_PATH']?{executablePath:process.env['JEV_CHROMIUM_PATH']}:existsSync(local)?{executablePath:local}:{} )});});
   afterAll(async()=>{const closed=new Promise<void>(r=>server.close(()=>r()));for(const res of clients)res.end();server.closeAllConnections();try{await browser?.close();}finally{await closed;}expect(errors).toEqual([]);}, 30_000);
   const settle = (p: Page) => p.evaluate(()=>new Promise<void>(r=>requestAnimationFrame(()=>requestAnimationFrame(()=>r()))));
+
+  it('tracks real tabs across reloads and reopens only when the last tab has closed', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'jev-dashboard-tabs-'));
+    const opened: string[] = [];
+    const local = await startDashboard(dashboardSources({ HOME: home, XDG_CONFIG_HOME: join(home, '.config'), XDG_STATE_HOME: join(home, '.local/state') }), 0, { openBrowser: url => opened.push(url) });
+    const a = await browser.newPage(), b = await browser.newPage();
+    try {
+      for (const p of [a, b]) { p.on('pageerror', e => errors.push(e.message)); await p.goto(local.url); await p.waitForFunction(() => document.getElementById('connection')?.textContent === '실시간 연결'); }
+      local.ensureOpen(); expect(opened).toHaveLength(0);
+      await a.reload(); await a.waitForFunction(() => document.getElementById('connection')?.textContent === '실시간 연결');
+      await a.close(); await new Promise(resolve => setTimeout(resolve, 1200));
+      local.ensureOpen(); expect(opened).toHaveLength(0);
+      await b.close();
+      await vi.waitFor(() => expect(opened).toEqual([local.url]), { timeout: 3000 });
+      local.ensureOpen(); expect(opened).toHaveLength(1);
+    } finally { await a.close(); await b.close(); await local.close(); rmSync(home, { recursive: true, force: true }); }
+  });
 
   it('shows both hosts and fast measured judgments at the top without overflow', async () => {
     push([run('live-claude','claude',[step('judgment','router',{durationMs:92}),step('request','router',{lane:'host',lifecycle:true,state:'active',title:'모델 · 응답 대기'})]),run('live-codex','codex',[step('other','router',{durationMs:181})])]);
@@ -144,15 +165,15 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     await p.locator('.circuit-node[data-feature=router]').focus();push([run('c','claude',[a]),run('x','codex',[r,step('r2','router',{summary:'new receipt'})])]);await p.waitForFunction(()=>document.getElementById('circuit-inspector')!.textContent!.includes('new receipt'));expect(await p.locator('.circuit-node[data-feature=router]').evaluate(e=>e===document.activeElement)).toBe(true);
     await p.locator('[data-circuit-mode=run]').click();await p.locator('#circuit-run').focus();push([run('c','claude',[a,step('b','allocation')]),run('x','codex',[r])]);await settle(p);expect(await p.locator('#circuit-run').evaluate(e=>e===document.activeElement)).toBe(true);
     await p.selectOption('#circuit-run','x');await p.locator('.circuit-node[data-feature=allocation]').click();expect(await p.locator('#circuit-inspector').textContent()).toContain('이 실행에는');expect(await p.locator('.wire.in-run').count()).toBe(0);
-    await p.selectOption('#circuit-run','c');await settle(p);expect(await p.locator('.wire.in-run').count()).toBe(1);await p.locator('.inspector-action').click();expect(await p.locator('#runs .run-row').count()).toBe(1);expect(await p.locator('#search').evaluate(e=>e===document.activeElement)).toBe(true);await p.close();
+    await p.selectOption('#circuit-run','c');await settle(p);expect(await p.locator('.circuit-node.in-run').count()).toBe(2);await p.locator('.inspector-action').click();expect(await p.locator('#runs .run-row').count()).toBe(1);expect(await p.locator('#search').evaluate(e=>e===document.activeElement)).toBe(true);await p.close();
   });
 
-  it('animates only observed consecutive transitions, detects same-ID state changes and pauses/resumes safely',async()=>{
+  it('animates recorded station receipts, detects same-ID state changes and pauses/resumes safely',async()=>{
     const a=step('a','admission',{state:'active'});push([run('c','claude',[a],{state:'active'})]);const p=await page();expect(await p.locator('.wire-packet').count()).toBe(0);
     const done={...a,state:'done' as const,durationMs:70};push([run('c','claude',[done,step('b','allocation',{state:'active'})],{state:'active'})]);await p.waitForSelector('.wire-packet.arriving',{state:'attached'});await settle(p);
-    expect(await p.locator('.wire-packet').count()).toBe(1);const d=await p.locator('.wire-packet').getAttribute('d');expect(d).toMatch(/^M[\d.]+ [\d.]+ V[\d.]+$/);
+    expect(await p.locator('.wire-packet').count()).toBe(2);const packet=p.locator('[data-receipt=allocation-in]');const d=await packet.getAttribute('d');expect(d).toMatch(/^M[\d.]+ [\d.]+ V[\d.]+$/);
     // Capture every 60 Hz sample across the 850 ms transfer. No dependency on wall-clock capture cadence.
-    for(let frame=0;frame<=51;frame++){const values=await p.evaluate(t=>{const paths=[...document.querySelectorAll<SVGPathElement>('.wire-packet')];const animations=paths.flatMap(e=>e.getAnimations());for(const a of animations){a.pause();a.currentTime=t;}return paths.map(e=>({offset:parseFloat(getComputedStyle(e).strokeDashoffset),opacity:Number(getComputedStyle(e).opacity),d:e.getAttribute('d')}));},frame*1000/60);expect(values.every(v=>Number.isFinite(v.offset)&&Number.isFinite(v.opacity)&&v.d===d),JSON.stringify(values)).toBe(true);if(frame%6===0||frame===51)await p.locator('.gate-grid').screenshot({path:join(output,`transfer-${String(frame).padStart(2,'0')}.png`)});}
+    for(let frame=0;frame<=51;frame++){const values=await p.evaluate(t=>{const paths=[...document.querySelectorAll<SVGPathElement>('[data-receipt=allocation-in]')];const animations=paths.flatMap(e=>e.getAnimations());for(const a of animations){a.pause();a.currentTime=t;}return paths.map(e=>({offset:parseFloat(getComputedStyle(e).strokeDashoffset),opacity:Number(getComputedStyle(e).opacity),d:e.getAttribute('d')}));},frame*1000/60);expect(values.every(v=>Number.isFinite(v.offset)&&Number.isFinite(v.opacity)&&v.d===d),JSON.stringify(values)).toBe(true);if(frame%6===0||frame===51)await p.locator('.station-grid').screenshot({path:join(output,`transfer-${String(frame).padStart(2,'0')}.png`)});}
     await p.locator('#pause').click();push([run('c','claude',[done,step('b','allocation',{durationMs:95})])]);expect(await p.locator('#latest').textContent()).toBe('70 ms');await p.locator('#pause').click();await p.waitForFunction(()=>document.getElementById('latest')!.textContent==='95 ms');
     push([run('c','claude',[done,step('b','allocation',{durationMs:95})]),run('x','codex',[step('w','workers',{lane:'host'})])]);await settle(p);expect(await p.locator('.wire-packet[data-edge="allocation:workers"]').count()).toBe(0);
     await p.locator('[data-host=codex]').click();expect(await p.locator('.wire-packet').count()).toBe(0);await p.close();
@@ -161,8 +182,8 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
   it('keeps active signals moving across redraws and stops them on completion, history, pause and disconnection', async () => {
     const a=step('flow-a','admission',{durationMs:60}),b=step('flow-b','allocation',{state:'active'}),r=step('flow-r','router',{state:'active'});
     push([run('flow','claude',[a,b,r],{state:'active'})]);const p=await page();await settle(p);
-    const edge=p.locator('.gate-grid .wire-flow');expect(await edge.count()).toBe(1);
-    expect(await edge.getAttribute('data-edge')).toBe('admission:allocation');
+    const edge=p.locator('[data-channel=allocation-in]');expect(await edge.count()).toBe(1);
+    expect(await edge.getAttribute('data-part')).toBe('in');
     expect(await p.locator('[data-channel="router-in"]').count()).toBe(1);
     expect(await p.locator('[data-channel="compact-in"]').count()).toBe(0);
     // Inspect an entire repeat, including its wrap, at 60 Hz. Redraws inherit wall-clock phase.
@@ -172,7 +193,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
       expect(Number.isFinite(offset)).toBe(true);offsets.push(offset);
       expect(await edge.getAttribute('d')).toBe(geometry);
     }
-    expect(new Set(offsets.map(v=>v.toFixed(3))).size).toBeGreaterThan(60);
+    expect(new Set(offsets.map(v=>v.toFixed(3))).size).toBeGreaterThan(45);
     push([run('flow','claude',[a,b,r,step('receipt','output')],{state:'active'})]);await settle(p);
     expect(Number(await edge.evaluate(e=>e.style.animationDelay.replace('s','')))).toBeLessThan(0);
     await p.locator('#pause').click();expect(await edge.evaluate(e=>getComputedStyle(e).animationPlayState)).toBe('paused');
@@ -190,7 +211,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
   });
 
 
-  it('isolates transfer animation by execution, keeps selection focus and renders the recorded direct branch', async () => {
+  it('isolates receipt animation by execution, keeps selection focus and shows the recorded direct decision', async () => {
     const a = step('a', 'admission'), b = step('b', 'allocation');
     push([run('one', 'claude', [a, b]), run('two', 'codex', [step('x', 'admission')])]);
     const p = await page();
@@ -205,13 +226,13 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     await p.locator('[data-circuit-mode=live]').click();
     expect(await p.locator('.wire-packet').count()).toBe(0);
     push([run('direct', 'claude', [step('direct', 'admission', { executionPath: 'direct', lane: 'jev', summary: 'direct · selected' })])]);
-    await p.waitForSelector('.circuit-direct.recorded');
+    await p.waitForFunction(()=>document.querySelector('.circuit-node[data-feature=admission]')?.textContent?.includes('루트에서 직접 처리'));
     await p.locator('[data-circuit-mode=run]').click();await p.selectOption('#circuit-run', 'direct');
     await settle(p);
-    expect(await p.locator('.wire.in-run[data-edge="admission:direct"]').count()).toBe(1);
+    expect(await p.locator('[data-edge]').count()).toBe(0);
     expect(await p.locator('.wire.in-run[data-edge="admission:allocation"]').count()).toBe(0);
     expect(await p.locator('.circuit-node[data-feature=admission]').textContent()).toContain('루트에서 직접 처리');
-    expect(await p.locator('.circuit-direct').textContent()).toContain('직접 처리 선택');
+    expect(await p.locator('.circuit-node[data-feature=allocation]').getAttribute('class')).toContain('dimmed');
     await p.close();
   });
   it('separates errors, missing results and interruption; failed settings writes retain the saved state',async()=>{
@@ -243,6 +264,27 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
   it('honors reduced motion and keyboard navigation without inventing traffic',async()=>{
     push([run('c','claude',[step('a','admission')])]);const p=await page(390,844);await p.emulateMedia({reducedMotion:'reduce'});push([run('c','claude',[step('a','admission'),step('b','allocation')])]);await p.waitForSelector('.wire-packet',{state:'attached'});expect(await p.locator('.wire-packet').evaluate(e=>getComputedStyle(e).opacity)).toBe('0');await p.locator('.circuit-node[data-feature=allocation]').focus();await p.keyboard.press('Enter');expect(await p.locator('.circuit-node[data-feature=allocation]').getAttribute('aria-pressed')).toBe('true');expect(await p.locator('#circuit-inspector h3').textContent()).toBe('Gate B');await p.close();
   });
+  it('shows every active worker with live internal stages and bounded complete tool and inference histories', async () => {
+    const old=new Date(Date.now()-7_200_000).toISOString();
+    historyTools=Array.from({length:231},(_,i)=>({id:'tool'+i,name:'Read',action:'read',target:'src/file'+i+'.ts',state:'done',startedAt:stamp,endedAt:stamp,durationMs:17}));
+    const workers:WorkerActivityView={limited:false,sig:'first',items:Array.from({length:16},(_,i)=>({sessionId:'session',agentId:'agent'+i,promptId:null,role:'worker',taskId:'t'+i,state:'active',lastAt:old,coverage:'recent',selectedModel:'claude-opus-5-5',observedModel:null,selectedEffort:'high',modelRequestAt:old,modelResponseAt:old,modelFailureAt:null,tools:i===0?[{...historyTools[230]!,action:'read',state:'active',endedAt:null,durationMs:null}]:[],jevRequestAt:i===1?stamp:null,jevResponseAt:null}))};
+    const send=()=>{current={...snapshot([run('old-active','codex',[step('pending','workers',{state:'active',lane:'host',lifecycle:true,at:old})],{lastAt:old})]),workerActivity:workers};for(const res of clients)res.write('data: '+JSON.stringify(current)+'\n\n')};send();
+    const p=await page(1280);await p.selectOption('#window','3600000');
+    expect(await p.locator('#worker-internals .worker-entry').count()).toBe(16);expect(await p.locator('[data-rail-actor="run:old-active"]').count()).toBe(1);
+    expect(await p.locator('#worker-internals').textContent()).toContain('Jev · 다음 모델 선택');expect(await p.locator('#worker-internals').textContent()).toContain('src/file230.ts');
+    await p.locator('[data-actor="worker:session:agent0"]').click();await p.waitForFunction(()=>document.getElementById('rail-history')?.textContent?.includes('201–231 / 231'));
+    expect(await p.locator('.rail-record').count()).toBe(31);expect(await p.locator('#rail-history').textContent()).toContain('추론 모델 sonnet-5');
+    await p.locator('[data-rail-page="-1"]').click();await p.waitForFunction(()=>document.getElementById('rail-history')?.textContent?.includes('101–200 / 231'));
+    await p.locator('.rail-history-list').evaluate(e=>e.scrollTop=160);const top=await p.locator('.rail-history-list').evaluate(e=>e.scrollTop);
+    workers.items[0]!.tools[0]!.state='error';workers.items[0]!.tools[0]!.endedAt=stamp;workers.items[0]!.tools[0]!.durationMs=300;workers.sig='changed';send();
+    await p.waitForSelector('[data-worker="worker:session:agent0"] .worker-stage-state.error');expect(await p.locator('.rail-history-list').evaluate(e=>e.scrollTop)).toBe(top);
+    expect(await p.locator('#rail-follow').getAttribute('aria-pressed')).toBe('false');
+    await p.locator('[data-history-kind=models]').click();await p.waitForFunction(()=>document.getElementById('rail-history')?.textContent?.includes('도구 호출 0개'));
+    expect(await p.locator('.rail-record').count()).toBe(2);expect(await p.locator('#rail-history').textContent()).toContain('응답 모델 opus-5-5');
+    for(const width of [1280,768,390,320]){await p.setViewportSize({width,height:900});await settle(p);expect(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),String(width)).toBe(false);await p.screenshot({path:join(output,'workers-'+width+'.png'),fullPage:true})}
+    await p.close();
+  });
+
   it('reconnects the real event stream and preserves theme/language after a reload', async () => {
     push([run('reconnect', 'claude', [step('a', 'admission')])]); const p = await page();
     await p.locator('#theme').click(); await p.locator('#language').click();

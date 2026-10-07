@@ -16,6 +16,10 @@ export interface OperationStep {
   feature: FeatureId;
   /** Lifecycle and preparation-only records do not establish a Jev decision or host response. */
   lifecycle?: boolean;
+  /** Exact native child identity, when the lifecycle record supplies it. */
+  agentId?: string;
+  sessionId?: string;
+  callId?: string;
   /** Recorded Gate A policy path, independent of request transmission and host completion. */
   executionPath?: 'direct' | 'orchestrated';
   state: StepState;
@@ -168,7 +172,7 @@ const traceFeature = (phase: string): FeatureId | null => {
   if (phase.startsWith('admission_')) return 'admission';
   if (phase.startsWith('pre_')) return 'allocation';
   if (phase.startsWith('interpretation_') || phase === 'plan') return 'planning';
-  if (phase.startsWith('background_') || phase === 'dispatch' || phase === 'post' || phase === 'failure' || phase === 'stop') return 'workers';
+  if (phase.startsWith('background_') || phase.startsWith('worktree_') || phase === 'dispatch_denied' || phase === 'dispatch' || phase === 'post' || phase === 'failure' || phase === 'stop') return 'workers';
   if (phase === 'guard') return 'guard';
   if (phase.startsWith('lean_')) return 'lean';
   if (phase.startsWith('evidence_')) return 'evidence';
@@ -182,7 +186,7 @@ const traceTitle = (phase: string, r: Rec): string => ({
   interpretation_intent: '계획 해석 · Jev 요청', interpretation_result: '계획 해석 · 자문',
   plan: '플래너 결과 · 작업 그래프', dispatch: token(r['role']) === 'planner' ? '플래너 호출' : '워커 호출',
   background_dispatch: '백그라운드 실행 준비', background_launch: '백그라운드 워커 실행', background_conversation: '메인 대화 계속', background_terminal: '백그라운드 워커 종료',
-  post: '워커 결과 · 수락 판정', failure: '호스트 호출 실패', stop: '턴 종료', guard: '루트 도구 가드',
+  worktree_start: 'Worktree · 생성 시작', worktree_result: 'Worktree · 생성 결과', dispatch_denied: 'Agent 호출 거절', post: '워커 결과 · 수락 판정', failure: '호스트 호출 실패', stop: '턴 종료', guard: '루트 도구 가드',
   lean_intent: 'Lean · Jev 요청', lean_result: 'Lean · 문맥 선택', lean_dispatch: 'Lean · packet 적용', lean_post: 'Lean · executor 결과',
   evidence_start: 'Evidence · 근거 검색 시작', evidence_jev_intent: 'Evidence · Jev 판정 요청', evidence_jev_result: 'Evidence · Jev 판정 결과', evidence_cache: 'Evidence · 판정 캐시', evidence_result: 'Evidence · 근거 결과',
 } as Record<string, string>)[phase] ?? phase;
@@ -213,8 +217,8 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
   if (!at) return null;
   const requestId = token(r['request_id']);
   const ownId = token(r['invocation_id']) ?? `${phase}:${at}:${requestId ?? ''}`;
-  const isIntent = phase.endsWith('_intent') || phase === 'evidence_start';
-  const expected = phase === 'evidence_start' ? 'evidence_result' : phase.replace(/_intent$/, '_result');
+  const isIntent = phase.endsWith('_intent') || phase === 'evidence_start' || phase === 'worktree_start';
+  const expected = phase.endsWith('_start') ? phase.replace(/_start$/, '_result') : phase.replace(/_intent$/, '_result');
   const hasResult = requestId !== null && resultIds.has(`${requestId}:${expected}`);
   const age = now - Date.parse(at);
   const compactWaiting = phase === 'codex_compact' && r['stage'] === 'selected' && !resultIds.has(`codex_compact:${token(r['run_id'])}`);
@@ -230,9 +234,12 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
   let lane: StepLane = 'policy';
   let graph: OperationStep['graph'];
   if (isIntent) {
-    lane = phase === 'evidence_start' ? 'local' : 'jev';
+    lane = phase.endsWith('_start') ? 'local' : 'jev';
     summary = phase === 'evidence_start' ? text(token(r['kind']), token(r['mode']), r['remote_configured'] === true ? '원격 판정 허용' : '로컬만') : hasResult ? '응답 기록과 연결됨' : state === 'active' ? '응답을 기다리는 중' : '응답 기록 없음 · 진행 여부 미확인';
     if (phase === 'evidence_jev_intent') summary = text(`후보 ${n(number(r['candidates']))}개`, summary);
+  } else if (phase === 'worktree_result') {
+    lane = 'local'; summary = r['ok'] === true ? '워커 격리 작업 공간 생성 완료' : '워커 격리 작업 공간 생성 실패';
+    details.push(text(token(r['branch']), token(r['baseline']), token(r['reason'])));
   } else if (phase.endsWith('_result') && phase !== 'evidence_result') {
     lane = r['attempted'] === false || r['known_not_sent'] === true ? 'policy' : 'jev';
     details.push(...callDetails(r), ...relation(r));
@@ -326,6 +333,10 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
     if (phase === 'background_launch') { state = closed ? 'done' : age >= 0 && age < 30_000 ? 'active' : 'unconfirmed'; summary = closed ? '시작과 실제 종료 연결됨' : state === 'active' ? '워커 실행 중 · 메인에서 질문 가능' : '시작 기록 있음 · 종료 결과 미관측'; details.push('시작 알림은 완료·수락 결과가 아닙니다'); }
     if (phase === 'background_conversation') summary = `원래 작업 유지 · 종료 결과 대기 ${n(number(r['active']))}개`;
     if (phase === 'background_terminal') { summary = token(r['status']) === 'completed' ? '호스트에서 실제 종료 확인 · 계약 수락은 별도 검사' : '호스트에서 중단·실패 확인 · 성공 수락 없음'; state = token(r['status']) === 'completed' ? 'done' : 'interrupted'; if (r['orphaned'] === true) details.push('이전 작업 결과 · 현재 계획 미진행'); }
+  } else if (phase === 'dispatch_denied') {
+    lane = 'policy'; state = 'skipped';
+    summary = ({ workers_active: '기존 워커 종료 대기 · 재계획 거절', planner_active: '기존 플래너 실행 중 · 중복 호출 거절' } as Record<string, string>)[String(r['reason'])] ?? text('호출 거절', token(r['reason']));
+    details.push(text(token(r['tool_name']), token(r['reason'])), '이 호출은 실행되지 않았습니다');
   } else if (phase === 'dispatch') {
     lane = 'host';
     summary = text(token(r['role']), token(r['task_id']), compactSelectionReason(r['selection']), `요청 등급 ${token(r['requested_tier']) ?? '?'}`);
@@ -418,7 +429,7 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
   }
   if (phase === 'codex_model_failure') { state = 'error'; lane = 'host'; summary = '호스트 모델 요청 실패'; }
   if (state === 'error' && !issue) issue = lane === 'jev' ? 'jev' : feature === 'evidence' ? 'evidence' : 'host';
-  return { id: id(ownId), at, feature, state, lane, title: traceTitle(phase, r), summary, details: details.filter(Boolean), ...(routing ? { routing } : {}), ...(model ? { model } : {}),
+  return { id: id(ownId), at, feature, state, lane, ...(token(r['session_id']) ? { sessionId: token(r['session_id'])! } : {}), ...(token(r['agent_id']) ? { agentId: token(r['agent_id'])! } : {}), ...(token(r['tool_use_id']) ? { callId: token(r['tool_use_id'])! } : {}), title: traceTitle(phase, r), summary, details: details.filter(Boolean), ...(routing ? { routing } : {}), ...(model ? { model } : {}),
     ...(issue ? { issue } : {}),
     ...(['stop', 'background_conversation', 'codex_model_request', 'codex_model_failure'].includes(phase) ? { lifecycle: true } : {}),
     ...(phase === 'admission_result' && ['direct', 'orchestrated'].includes(String(field(r, 'decision')?.['shape'])) ? { executionPath: field(r, 'decision')!['shape'] as 'direct' | 'orchestrated' } : {}),
@@ -437,34 +448,38 @@ const routedDebugRecords = (debug: DebugRecord[], records: Rec[]): DebugRecord[]
     const key = identity(r, 'tool_use_id');
     if (r['host'] !== 'codex' && r['phase'] === 'pre_result' && key && field(r, 'allocation')) owned.set(key, r);
   }
-  const turns = new Map<string, Rec>(), spawns = new Map<string, Rec>(), children = new Map<string, NonNullable<OperationStep['routing']>>();
+  const turns = new Map<string, Rec>(), spawns = new Map<string, Rec>(), childSteps = new Map<string, Rec>(), children = new Map<string, NonNullable<OperationStep['routing']>>();
   return [...debug].sort((a, b) => a.at.localeCompare(b.at)).map(row => {
     if (row.component !== 'router') return row;
     const r = row.rec, event = r['event'], turn = identity(r, 'turn'), tool = identity(r, 'tool_use_id'), agent = identity(r, 'agent_id');
     let routing: OperationStep['routing'];
     const gate = tool ? owned.get(tool) : undefined;
-    const decision = ['root_result', 'model_request', 'model_failure'].includes(String(event)) && !agent && turn ? turns.get(turn) : ['spawn_result', 'spawn_native_result'].includes(String(event)) && tool ? spawns.get(tool) : undefined;
+    const childDecision = agent ? childSteps.get(routerResponseKey(r)) : undefined;
+    const decision = childDecision ?? (['root_result', 'model_request', 'model_failure'].includes(String(event)) && !agent && turn ? turns.get(turn) : ['spawn_result', 'spawn_native_result'].includes(String(event)) && tool ? spawns.get(tool) : undefined);
     if (gate) {
       const allocation = field(gate, 'allocation');
       const edit = field(allocation, 'effort_edit');
       routing = { scope: 'owned', baseline: token(allocation?.['baseline_model']), modelReason: 'gate_allocated', effortReason: token(edit?.['kind']) === 'keep' ? 'same_value' : 'gate_allocated' };
-    } else if (decision || event === 'root' || event === 'spawn') {
+    } else if (decision || event === 'root' || event === 'spawn' || event === 'child_route') {
       const d = decision ?? r, reasons = field(d, 'reasons');
-      routing = { scope: ['root_result', 'root', 'model_request', 'model_failure'].includes(String(event)) ? 'root' : 'spawn', baseline: token(field(d, 'from')?.['model']) ?? token(d['from']), modelReason: token(reasons?.['model']) ?? token(d['skipped']) ?? token(d['assessment']), effortReason: token(reasons?.['effort']) };
+      routing = { scope: agent ? 'child' : ['root_result', 'root', 'model_request', 'model_failure'].includes(String(event)) ? 'root' : 'spawn', baseline: token(field(d, 'from')?.['model']) ?? token(d['from']), modelReason: token(reasons?.['model']) ?? token(d['skipped']) ?? token(d['assessment']), effortReason: token(reasons?.['effort']) };
     }
     if (event === 'root' && turn && (field(r, 'reasons') || field(r, 'from'))) turns.set(turn, r);
     if (event === 'spawn' && tool) spawns.set(tool, r);
+    if (event === 'child_route' && agent) childSteps.set(routerResponseKey(r), r);
     if (['spawn_result', 'spawn_native_result'].includes(String(event)) && agent && routing) children.set(agent, routing);
     if (event === 'child_result' && agent) {
       const origin = children.get(agent);
-      if (origin) routing = { ...origin, scope: 'child' };
+      if (origin && !childDecision) routing = { ...origin, scope: 'child' };
     }
     return routing ? { ...row, rec: { ...r, routing_decision: routing } } : row;
   });
 };
 
 const routerResponseKey = (r: Rec, index: unknown = r['index'] ?? null): string =>
-  JSON.stringify([r['session_id'] ?? 'legacy', r['tool_use_id'] ?? r['turn'], r['agent_id'] ?? (r['scope'] === 'child' ? 'unknown-child' : null), index]);
+  JSON.stringify([r['session_id'] ?? 'legacy', r['tool_use_id'] ?? r['turn'], token(r['tool_use_id']) ? null : r['agent_id'] ?? (r['scope'] === 'child' ? 'unknown-child' : null), index]);
+
+const routerDecisionKey = (r: Rec): string => JSON.stringify([r['session_id'] ?? 'legacy', r['turn'] ?? r['tool_use_id'] ?? '', r['agent_id'] ?? null, r['agent_id'] ? r['index'] ?? null : null]);
 
 const debugStep = (row: DebugRecord, now: number, closed: Set<string>, responses: Map<string, string>): OperationStep | null => {
   const r = row.rec;
@@ -474,7 +489,7 @@ const debugStep = (row: DebugRecord, now: number, closed: Set<string>, responses
   if (!event || !row.at) return null;
   const feature = row.component;
   const runId = token(r['run_id']);
-  const key = `${token(r['session_id']) ?? 'legacy'}:${row.component === 'router' ? token(r['turn']) ?? token(r['tool_use_id']) ?? '' : runId ?? ''}`;
+  const key = row.component === 'router' ? routerDecisionKey(r) : `${token(r['session_id']) ?? 'legacy'}:${runId ?? ''}`;
   const started = (row.component === 'router' && event === 'request') || r['stage'] === 'started';
   const failedAssessment = row.component === 'router' && r['sent'] === true && token(r['assessment']) !== null && r['assessment'] !== 'ok';
   const age = now - Date.parse(row.at);
@@ -488,6 +503,7 @@ const debugStep = (row: DebugRecord, now: number, closed: Set<string>, responses
     summary = event === 'request' ? 'Jev 요청 전송 · 응답 대기' : text(event, r['sent'] === true ? 'Jev 응답' : r['sent'] === false ? '전송 안 함' : null, token(r['skipped']), token(r['reason']));
     if (failedAssessment) summary = text('Jev 판정 실패 · 원래 호스트 설정 유지', token(r['assessment']));
     details.push(text(`기존 모델 ${token(from?.['model']) ?? token(r['from']) ?? '?'}`, `기존 effort ${token(from?.['effort']) ?? '?'}`));
+    if (r['scope'] === 'child') details.push(text('워커 단계별 Jev 라우팅', `단계 ${n(number(r['index']))}`, `워커 ${token(r['agent_id']) ?? '?'}`));
     if (number(r['preparation_ms']) !== null) details.push(`Router 준비 ${n(number(r['preparation_ms']))}ms · Jev 응답 시간과 별도 · 예산 ${n(number(r['budget_ms']))}ms`);
     if (number(r['discovered_count']) !== null) details.push(text(`발견 ${n(number(r['discovered_count']))}`, `적격 ${n(number(r['eligible_count']))}`, `제시 ${n(number(r['offered_count']))}`, r['catalog_complete'] === true ? '목록 완전' : '목록 부분/미확인'));
     if (typeof r['allow_fable'] === 'boolean') details.push(`Fable 자동 선택 ${r['allow_fable'] ? 'ON' : 'OFF'}`);
@@ -524,7 +540,7 @@ const debugStep = (row: DebugRecord, now: number, closed: Set<string>, responses
     summary = started ? 'Vitest Bash 실행 중' : r['applied'] === true ? 'Vitest 로그 접기 적용' : text('원본 출력 유지', token(r['skipped']), token(r['disabled']));
     details.push(text(`파서 ${token(r['parser']) ?? '?'}`, number(r['runs']) === null ? null : `실행 ${n(number(r['runs']))}건`));
   }
-  const model = feature === 'router' && ['root_result', 'spawn_result', 'spawn_native_result', 'child_result'].includes(event)
+  const model = feature === 'router' && ['root_result', 'spawn_result', 'spawn_native_result', 'child_result', 'model_request'].includes(event)
     ? modelObservation(r['requested'] ?? field(r, 'applied')?.['model'] ?? r['assumed'], r['observed'], r['requested_effort'] ?? field(r, 'applied')?.['effort'], r['observed_effort'], r['confirmation'], 'requested_effort' in r ? { value: r['requested_effort'], source: 'host_hook' } : undefined) : undefined;
   if (model) {
     if (model.status === 'mismatch') state = 'error';
@@ -548,7 +564,7 @@ const debugStep = (row: DebugRecord, now: number, closed: Set<string>, responses
   if (event === 'model_failure') { state = 'error'; lane = 'host'; summary = '호스트 모델 요청 실패'; }
   if (r['denied'] === true) { state = 'skipped'; summary = '호스트가 에이전트 생성을 거부함 · 실행되지 않음'; }
   const duration = number(r['duration_ms'] ?? (lane === 'jev' ? r['jev_ms'] : undefined));
-  return { id: id(`${row.component}:${row.at}:${key}:${event}:${started ? 'start' : 'result'}`), at: row.at, feature, state, lane, ...(['prepared', 'model_request', 'model_failure'].includes(event) ? { lifecycle: true as const } : {}), title: { router: event === 'prepared' ? 'Router · 요청 전달 준비' : event === 'model_request' ? '모델 · 응답 대기' : event === 'model_failure' ? '모델 · 요청 실패' : 'Router · ' + event, compact: 'Compact · 압축', output: 'Output · 로그 접기' }[feature], summary, details: details.filter(Boolean), ...(routing ? { routing } : {}), ...(model ? { model } : {}), ...(lane === 'jev' && duration !== null && duration >= 0 ? { durationMs: duration } : {}), ...(event === 'model_request' && state === 'active' ? { startedAt: row.at, elapsedMs: Math.max(0, age) } : {}) };
+  return { id: id(`${row.component}:${row.at}:${key}:${event}:${started ? 'start' : 'result'}`), at: row.at, feature, state, lane, ...(token(r['agent_id']) ? { agentId: token(r['agent_id'])!, ...(token(r['session_id']) ? { sessionId: token(r['session_id'])! } : {}) } : {}), ...(['prepared', 'model_request', 'model_failure'].includes(event) ? { lifecycle: true as const } : {}), title: { router: event === 'prepared' ? 'Router · 요청 전달 준비' : event === 'model_request' ? '모델 · 응답 대기' : event === 'model_failure' ? '모델 · 요청 실패' : 'Router · ' + event, compact: 'Compact · 압축', output: 'Output · 로그 접기' }[feature], summary, details: details.filter(Boolean), ...(routing ? { routing } : {}), ...(model ? { model } : {}), ...(lane === 'jev' && duration !== null && duration >= 0 ? { durationMs: duration } : {}), ...(event === 'model_request' && state === 'active' ? { startedAt: row.at, elapsedMs: Math.max(0, age) } : {}) };
 };
 
 const gateGroup = (r: Rec): string => {
@@ -596,8 +612,8 @@ export const buildOperations = (records: Rec[], debug: DebugRecord[], now: Date,
   const closed = new Set(debug.flatMap((row) => {
     const own = row.component === 'router' ? token(row.rec['turn']) ?? token(row.rec['tool_use_id']) : token(row.rec['run_id']);
     if (!own) return [];
-    const key = `${token(row.rec['session_id']) ?? 'legacy'}:${own}`;
-    return row.component === 'router' ? row.rec['event'] === 'request' ? [] : [`router:${key}`] : row.rec['stage'] === 'started' ? [] : [`${row.component}:${key}`];
+    const key = row.component === 'router' ? routerDecisionKey(row.rec) : `${token(row.rec['session_id']) ?? 'legacy'}:${own}`;
+    return row.component === 'router' ? ['root', 'spawn', 'child_route'].includes(String(row.rec['event'])) ? [`router:${key}`] : [] : row.rec['stage'] === 'started' ? [] : [`${row.component}:${key}`];
   }));
   const responses = new Map<string, string>();
   for (const row of debug) if (['root_result', 'child_result', 'spawn_result', 'spawn_native_result', 'model_failure'].includes(String(row.rec['event']))) {
@@ -653,7 +669,9 @@ export const buildOperations = (records: Rec[], debug: DebugRecord[], now: Date,
     executions.set(key, { ...primary, id: key, steps, firstAt: steps[0]!.at, lastAt: steps.at(-1)!.at, state: operationState(steps) });
   }
   const allRuns = [...executions.values()].sort((a, b) => b.lastAt.localeCompare(a.lastAt));
-  const runs = allRuns.slice(0, 200);
+  // A busy, older execution must remain visible even when newer completed turns fill the recent window.
+  const recentIds = new Set(allRuns.slice(0, 200).map(run => run.id));
+  const runs = allRuns.filter(run => recentIds.has(run.id) || run.steps.some(step => step.state === 'active'));
   const all = allRuns.flatMap((run) => run.steps.map((step) => ({ ...step, runId: run.id, runTitle: run.title, host: run.host })));
   const features = FEATURES.map((f): FeatureView => {
     const steps = all.filter((s) => s.feature === f.id && !s.lifecycle);
@@ -678,7 +696,7 @@ export const buildOperations = (records: Rec[], debug: DebugRecord[], now: Date,
   for (const row of debug) {
     if (row.component === 'compact' && row.rec['jev_sent'] === true) { jevRequests.add(`compact:claude:${token(row.rec['session_id']) ?? 'legacy'}:${token(row.rec['run_id']) ?? row.at}`); continue; }
     if (row.component !== 'router' || (row.rec['event'] !== 'request' && row.rec['sent'] !== true)) continue;
-    jevRequests.add(`router:${token(row.rec['session_id']) ?? 'legacy'}:${token(row.rec['turn']) ?? token(row.rec['tool_use_id']) ?? row.at}`);
+    jevRequests.add(`router:${routerDecisionKey(row.rec)}`);
   }
   const requests = jevRequests.size;
   const durations = all.filter((s) => s.lane === 'jev' && s.durationMs !== undefined).map((s) => s.durationMs!).sort((a, b) => a - b);
