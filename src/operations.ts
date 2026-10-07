@@ -25,7 +25,7 @@ export interface OperationStep {
   details: string[];
   /** Concrete recorded failure category; an effort mismatch is not a response-model mismatch. */
   issue?: 'request_model' | 'request_effort' | 'request_unconfirmed' | 'response_model' | 'jev' | 'host' | 'evidence';
-  model?: { selected: string | null; observed: string | null; status: 'confirmed' | 'mismatch' | 'unobserved'; selectedEffort: string | null; observedEffort: string | null; forwardedEffort?: string | null; effortSource?: 'host_hook' | 'provider_request' };
+  model?: { selected: string | null; observed: string | null; status: 'confirmed' | 'mismatch' | 'unobserved'; selectedEffort: string | null; observedEffort: string | null; forwardedEffort?: string | null; effortSource?: 'host_hook' | 'provider_request'; requestApplied?: boolean };
   routing?: { scope: 'root' | 'spawn' | 'child' | 'owned'; baseline: string | null; modelReason: string | null; effortReason: string | null; proposedModel?: string; probability?: number; threshold?: number };
   /** Timings are measured by the caller or paired recorded events, never estimated from usage. */
   durationMs?: number;
@@ -163,7 +163,7 @@ const callDetails = (r: Rec): string[] => {
 };
 
 const traceFeature = (phase: string): FeatureId | null => {
-  if (phase === 'codex_router_intent' || phase === 'codex_router_result' || phase === 'codex_router_skipped' || phase === 'codex_route_applied' || phase === 'codex_router_response') return 'router';
+  if (phase === 'codex_model_request' || phase === 'codex_model_failure' || phase === 'codex_router_intent' || phase === 'codex_router_result' || phase === 'codex_router_skipped' || phase === 'codex_route_applied' || phase === 'codex_router_response') return 'router';
   if (phase === 'codex_compact') return 'compact';
   if (phase.startsWith('admission_')) return 'admission';
   if (phase.startsWith('pre_')) return 'allocation';
@@ -175,6 +175,7 @@ const traceFeature = (phase: string): FeatureId | null => {
   return null;
 };
 const traceTitle = (phase: string, r: Rec): string => ({
+  codex_model_request: '모델 · 응답 대기', codex_model_failure: '모델 · 요청 실패',
   codex_router_intent: 'Router · Jev 요청', codex_router_result: 'Router · 턴 설정 결정', codex_router_skipped: 'Router · Jev 호출 생략', codex_router_response: 'Router · Codex 응답 관측', codex_route_applied: 'Router · Codex 요청 전송', codex_compact: 'Compact · Codex digest',
   admission_intent: 'Gate A · Jev 요청', admission_result: 'Gate A · 실행 형태',
   pre_intent: 'Gate B · Jev 요청', pre_result: 'Gate B · 등급 결정',
@@ -199,7 +200,11 @@ const compactUsage = (r: Rec): string => {
   return `Jev 입력 ${count('input_tokens')} / 출력 ${count('output_tokens')} 토큰`;
 };
 
-const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<string, string>): OperationStep | null => {
+const modelRequestKey = (r: Rec): string | null => {
+  const values = [token(r['session_id']), token(r['prompt_id']), token(r['request_id'])];
+  return values.every(Boolean) ? JSON.stringify(values) : null;
+};
+const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<string, string>, modelTerminals: Map<string, string>): OperationStep | null => {
   const phase = token(r['phase']);
   if (!phase) return null;
   const feature = phase === 'dispatch' && r['role'] === 'planner' ? 'planning' : traceFeature(phase);
@@ -363,10 +368,11 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
   const sentAt = requestId && phase.endsWith('_result') ? intents.get(`${requestId}:${phase.replace(/_result$/, '_intent')}`) : undefined;
   const elapsed = sentAt ? Date.parse(at) - Date.parse(sentAt) : null;
   const model = phase === 'codex_router_response' ? modelObservation(r['selected_model'], r['observed_model'], r['selected_effort'], r['observed_effort'], undefined, 'submitted_effort' in r ? { value: r['submitted_effort'], source: 'provider_request' } : undefined)
-    : phase === 'codex_route_applied' ? modelObservation(r['selected_model'], null, r['selected_effort'], null, 'unobserved', 'submitted_effort' in r ? { value: r['submitted_effort'], source: 'provider_request' } : undefined)
+    : phase === 'codex_route_applied' ? modelObservation(r['selected_model'], r['observed_model'], r['selected_effort'], r['observed_effort'], undefined, 'submitted_effort' in r ? { value: r['submitted_effort'], source: 'provider_request' } : undefined)
     : phase === 'pre_result' && field(r, 'allocation') ? modelObservation(field(r, 'allocation')?.['selected_model'], null, field(field(r, 'allocation'), 'effort_edit')?.['value'])
     : phase === 'plan' && field(r, 'planner_model') ? modelObservation(field(r, 'planner_model')?.['requested'], field(r, 'planner_model')?.['observed'])
     : phase === 'post' || phase === 'failure' || phase === 'background_launch' ? modelObservation(r['requested_model'], r['resolved_model']) : undefined;
+  if (model && phase === 'codex_route_applied' && r['request_kind'] === 'root_response' && typeof r['applied'] === 'boolean') model.requestApplied = r['applied'];
   const routing: OperationStep['routing'] = phase.startsWith('codex_router_') || phase === 'codex_route_applied' ? { scope: 'root', baseline: token(r['baseline_model']), modelReason: token(field(r, 'reasons')?.['model']), effortReason: token(field(r, 'reasons')?.['effort']) } : phase === 'pre_result' && field(r, 'allocation') ? { scope: 'owned', baseline: token(field(r, 'allocation')?.['baseline_model']), modelReason: 'gate_allocated', effortReason: 'gate_allocated' } : undefined;
   const proposal = field(field(r, 'answers'), 'model');
   const proposedModel = token(proposal?.['choice']);
@@ -403,13 +409,22 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
     details.push('API 요청 설정의 비교 · 실제 응답 모델이나 실행 실패를 뜻하지 않음');
     }
   }
+  if (phase === 'codex_model_request') {
+    const binding = modelRequestKey(r), terminalAt = binding ? modelTerminals.get(binding) : undefined;
+    const settled = terminalAt !== undefined && terminalAt >= at;
+    lane = 'host'; state = settled ? 'done' : 'active';
+    summary = settled ? '모델 요청 종료 기록 확인' : '모델 응답 대기';
+    details.push(`전달 모델 ${token(r['submitted_model']) ?? '?'}`);
+  }
+  if (phase === 'codex_model_failure') { state = 'error'; lane = 'host'; summary = '호스트 모델 요청 실패'; }
   if (state === 'error' && !issue) issue = lane === 'jev' ? 'jev' : feature === 'evidence' ? 'evidence' : 'host';
   return { id: id(ownId), at, feature, state, lane, title: traceTitle(phase, r), summary, details: details.filter(Boolean), ...(routing ? { routing } : {}), ...(model ? { model } : {}),
     ...(issue ? { issue } : {}),
-    ...(['stop', 'background_conversation'].includes(phase) ? { lifecycle: true } : {}),
+    ...(['stop', 'background_conversation', 'codex_model_request', 'codex_model_failure'].includes(phase) ? { lifecycle: true } : {}),
     ...(phase === 'admission_result' && ['direct', 'orchestrated'].includes(String(field(r, 'decision')?.['shape'])) ? { executionPath: field(r, 'decision')!['shape'] as 'direct' | 'orchestrated' } : {}),
     ...(duration !== null && duration >= 0 ? { durationMs: duration } : {}),
     ...(elapsed !== null && elapsed >= 0 ? { elapsedMs: elapsed } : {}),
+    ...(phase === 'codex_model_request' && state === 'active' ? { startedAt: at, elapsedMs: Math.max(0, age) } : {}),
     ...(phase.endsWith('_result') && judgements(r) ? { judgements: judgements(r)! } : {}),
     ...(graph ? { graph } : {}) };
 };
@@ -428,14 +443,14 @@ const routedDebugRecords = (debug: DebugRecord[], records: Rec[]): DebugRecord[]
     const r = row.rec, event = r['event'], turn = identity(r, 'turn'), tool = identity(r, 'tool_use_id'), agent = identity(r, 'agent_id');
     let routing: OperationStep['routing'];
     const gate = tool ? owned.get(tool) : undefined;
-    const decision = event === 'root_result' && turn ? turns.get(turn) : ['spawn_result', 'spawn_native_result'].includes(String(event)) && tool ? spawns.get(tool) : undefined;
+    const decision = ['root_result', 'model_request', 'model_failure'].includes(String(event)) && !agent && turn ? turns.get(turn) : ['spawn_result', 'spawn_native_result'].includes(String(event)) && tool ? spawns.get(tool) : undefined;
     if (gate) {
       const allocation = field(gate, 'allocation');
       const edit = field(allocation, 'effort_edit');
       routing = { scope: 'owned', baseline: token(allocation?.['baseline_model']), modelReason: 'gate_allocated', effortReason: token(edit?.['kind']) === 'keep' ? 'same_value' : 'gate_allocated' };
     } else if (decision || event === 'root' || event === 'spawn') {
       const d = decision ?? r, reasons = field(d, 'reasons');
-      routing = { scope: event === 'root_result' || event === 'root' ? 'root' : 'spawn', baseline: token(field(d, 'from')?.['model']) ?? token(d['from']), modelReason: token(reasons?.['model']) ?? token(d['skipped']) ?? token(d['assessment']), effortReason: token(reasons?.['effort']) };
+      routing = { scope: ['root_result', 'root', 'model_request', 'model_failure'].includes(String(event)) ? 'root' : 'spawn', baseline: token(field(d, 'from')?.['model']) ?? token(d['from']), modelReason: token(reasons?.['model']) ?? token(d['skipped']) ?? token(d['assessment']), effortReason: token(reasons?.['effort']) };
     }
     if (event === 'root' && turn && (field(r, 'reasons') || field(r, 'from'))) turns.set(turn, r);
     if (event === 'spawn' && tool) spawns.set(tool, r);
@@ -521,15 +536,25 @@ const debugStep = (row: DebugRecord, now: number, closed: Set<string>, responses
     summary = r['routed'] === true ? '변경 설정 전달 준비 · 실행 응답 확인은 별도' : '기존 설정 전달 준비 · 실행 응답 확인은 별도';
     details.push('요청 전 점검만 기록됨 · Jev 새 호출이나 실제 모델 응답 완료를 뜻하지 않음');
   }
+  if (event === 'model_request') {
+    const responseAt = responses.get(routerResponseKey(r));
+    const settled = responseAt !== undefined && responseAt >= row.at;
+    // A slow host response is still in flight; elapsed time alone is not a failure.
+    state = settled ? 'done' : 'active';
+    lane = 'host';
+    summary = settled ? '모델 요청 종료 기록 확인' : state === 'active' ? '모델 응답 대기' : '모델 요청 시작됨 · 종료 결과 미관측';
+    details.push(text(`전달 모델 ${token(r['requested']) ?? '?'}`, `전달 effort ${token(r['requested_effort']) ?? '호스트 기본값'}`), '호스트 호출 시작 관측 · 실제 모델과 effort 확인은 응답 기록과 별도');
+  }
+  if (event === 'model_failure') { state = 'error'; lane = 'host'; summary = '호스트 모델 요청 실패'; }
   if (r['denied'] === true) { state = 'skipped'; summary = '호스트가 에이전트 생성을 거부함 · 실행되지 않음'; }
   const duration = number(r['duration_ms'] ?? (lane === 'jev' ? r['jev_ms'] : undefined));
-  return { id: id(`${row.component}:${row.at}:${key}:${event}:${started ? 'start' : 'result'}`), at: row.at, feature, state, lane, ...(event === 'prepared' ? { lifecycle: true as const } : {}), title: { router: event === 'prepared' ? 'Router · 요청 전달 준비' : 'Router · ' + event, compact: 'Compact · 압축', output: 'Output · 로그 접기' }[feature], summary, details: details.filter(Boolean), ...(routing ? { routing } : {}), ...(model ? { model } : {}), ...(lane === 'jev' && duration !== null && duration >= 0 ? { durationMs: duration } : {}) };
+  return { id: id(`${row.component}:${row.at}:${key}:${event}:${started ? 'start' : 'result'}`), at: row.at, feature, state, lane, ...(['prepared', 'model_request', 'model_failure'].includes(event) ? { lifecycle: true as const } : {}), title: { router: event === 'prepared' ? 'Router · 요청 전달 준비' : event === 'model_request' ? '모델 · 응답 대기' : event === 'model_failure' ? '모델 · 요청 실패' : 'Router · ' + event, compact: 'Compact · 압축', output: 'Output · 로그 접기' }[feature], summary, details: details.filter(Boolean), ...(routing ? { routing } : {}), ...(model ? { model } : {}), ...(lane === 'jev' && duration !== null && duration >= 0 ? { durationMs: duration } : {}), ...(event === 'model_request' && state === 'active' ? { startedAt: row.at, elapsedMs: Math.max(0, age) } : {}) };
 };
 
 const gateGroup = (r: Rec): string => {
   const phase = token(r['phase']) ?? '';
   if (phase.startsWith('evidence_')) return `evidence:${token(r['parent_request_id']) ?? token(r['request_id']) ?? token(r['invocation_id']) ?? 'unknown'}`;
-  if (phase.startsWith('codex_router_') || phase === 'codex_route_applied') return `router:${token(r['session_id']) ?? 'unknown'}:${token(r['prompt_id']) ?? 'unknown'}`;
+  if (phase.startsWith('codex_router_') || phase.startsWith('codex_model_') || phase === 'codex_route_applied') return `router:${token(r['session_id']) ?? 'unknown'}:${token(r['prompt_id']) ?? 'unknown'}`;
   if (phase === 'codex_compact') return `compact:${token(r['session_id']) ?? 'unknown'}:${token(r['run_id']) ?? 'unknown'}`;
   return `gate:${token(r['session_id']) ?? 'unknown'}:${token(r['execution_prompt_id']) ?? token(r['prompt_id']) ?? 'unknown'}`;
 };
@@ -546,6 +571,20 @@ export const buildOperations = (records: Rec[], debug: DebugRecord[], now: Date,
     const key = codexKey(r), decision = key ? codexDecisions.get(key) : undefined;
     return decision && iso(decision['written_at']) <= iso(r['written_at']) && ['codex_route_applied', 'codex_router_response'].includes(String(r['phase'])) ? { ...r, reasons: decision['reasons'], baseline_model: r['baseline_model'] ?? decision['baseline_model'], answers: decision['answers'], selection: decision['selection'] } : r;
   });
+  // A request row can display the actual response only when its exact binding has a later response.
+  const responseBindings = new Map<string, Rec>();
+  const modelTerminals = new Map<string, string>();
+  for (const r of records) {
+    const key = modelRequestKey(r); if (!key) continue;
+    const at = iso(r['written_at']);
+    if (['codex_router_response', 'codex_model_failure'].includes(String(r['phase'])) && at && at >= (modelTerminals.get(key) ?? '')) modelTerminals.set(key, at);
+    if (r['phase'] === 'codex_router_response' && at && at >= iso(responseBindings.get(key)?.['written_at'])) responseBindings.set(key, r);
+  }
+  records = records.map(r => {
+    const key = modelRequestKey(r);
+    const response = r['phase'] === 'codex_route_applied' && key ? responseBindings.get(key) : undefined;
+    return response && iso(response['written_at']) >= iso(r['written_at']) ? { ...r, observed_model: response['observed_model'], observed_effort: response['observed_effort'] } : r;
+  });
   debug = routedDebugRecords(debug, records);
   const resultIds = new Set(records.flatMap((r) => token(r['request_id']) && token(r['phase']) ? [`${token(r['request_id'])}:${token(r['phase'])}`] : []));
   for (const r of records) if (r['phase'] === 'background_terminal') resultIds.add(`background:${token(r['session_id'])}:${token(r['execution_prompt_id']) ?? token(r['prompt_id'])}:${token(r['tool_use_id'])}`);
@@ -561,7 +600,7 @@ export const buildOperations = (records: Rec[], debug: DebugRecord[], now: Date,
     return row.component === 'router' ? row.rec['event'] === 'request' ? [] : [`router:${key}`] : row.rec['stage'] === 'started' ? [] : [`${row.component}:${key}`];
   }));
   const responses = new Map<string, string>();
-  for (const row of debug) if (['root_result', 'child_result', 'spawn_result', 'spawn_native_result'].includes(String(row.rec['event']))) {
+  for (const row of debug) if (['root_result', 'child_result', 'spawn_result', 'spawn_native_result', 'model_failure'].includes(String(row.rec['event']))) {
     // Older prepared records have no loop index. A later response in that exact turn still closes them.
     for (const index of [row.rec['index'] ?? null, null]) {
       const key = routerResponseKey(row.rec, index);
@@ -570,7 +609,7 @@ export const buildOperations = (records: Rec[], debug: DebugRecord[], now: Date,
   }
   const grouped = new Map<string, { source: OperationRun['source']; host: Host; mode: string; executionId?: string; steps: OperationStep[] }>();
   for (const r of records) {
-    const step = traceStep(r, now.getTime(), resultIds, intents);
+    const step = traceStep(r, now.getTime(), resultIds, intents, modelTerminals);
     if (!step) continue;
     const host = r['host'] === 'codex' ? 'codex' : 'claude';
     const source = gateGroup(r).split(':')[0] as OperationRun['source'];

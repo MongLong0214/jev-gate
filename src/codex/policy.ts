@@ -242,6 +242,10 @@ export class CodexPolicy {
     const selected = { ...request, ...(session.route?.model ? { model: session.route.model } : {}), ...(session.route?.effortEdit && session.route.effortEdit.kind !== 'keep' ? { reasoning } : {}) };
     return { request: selected };
   }
+  observeRequestFailure(id: string, submitted: CodexSubmission | undefined): void {
+    if (!submitted) return;
+    this.trace?.write('codex_model_failure', { host: 'codex', session_id: id, prompt_id: submitted.prompt, request_id: submitted.requestId, reason: 'host_request_failed' });
+  }
   observeUsage(id: string, response: Obj, submitted?: CodexSubmission): void {
     const session = this.sessions.get(id); const input = obj(response['usage'])?.['input_tokens'];
     const binding = submitted ?? session?.lastSubmitted;
@@ -755,6 +759,8 @@ export class CodexPolicy {
     if (typeof effort === 'string') session.requestEffort = effort; else delete session.requestEffort;
     const submitted = { prompt: session.prompt, model: String(request['model']), effort: typeof effort === 'string' ? effort : null, requestId: randomUUID() };
     session.lastSubmitted = submitted;
+    this.trace?.write('codex_model_request', { host: 'codex', session_id: session.id, prompt_id: session.prompt, request_id: submitted.requestId,
+      submitted_model: submitted.model, submitted_effort: submitted.effort, scope: session.role ?? 'root' });
     if (!session.route || !Object.keys(session.route).length) return submitted;
     const selectedModel = session.route.model ?? session.baseline.model;
     const selectedEffort = session.route.effortEdit?.kind === 'omit' ? null : session.route.effort ?? session.baseline.effort;

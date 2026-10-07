@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.8.10 — 2026-10-07 — Live host progress and shared frontier routing
+
+- Redesign the execution circuit as a decision tree and independent feature lanes. Move signals continuously along observed active paths, preserve their phase across live updates, and pulse newly recorded transitions. Show each host’s current work and elapsed time; consolidate Jev latency into one strip and remove repeated stage summaries, event ribbons, receipts and metric cards. Keep all widths free of horizontal scrolling; pause, disconnection and reduced-motion preferences stop animation.
+- Record actual model-request starts and host failures, including Codex requests whose routing preserves the baseline. Match termination by request identity rather than a short elapsed-time threshold.
+- Separate verified API request settings from observed response models. Join later Codex responses only to the exact session, prompt and request, and leave missing response facts unknown.
+- Add a shared `frontierEnabled` switch, default off, for automatic Fable and Astra routing at supported efforts. Explicit OFF overrides legacy host opt-ins, and policy boundaries recheck it before submission. Feature-only config files retain the host's default Gate mode.
+- Report unclear, invalid and low-confidence Router decisions accurately instead of calling them user model locks (#194). Refresh README and verify dashboard layouts in both languages, themes and mobile widths.
+
 ## v0.8.9 — 2026-10-06 — Aligned execution panels
 
 - Execution list, timeline and selected-result panels share their desktop height and scroll independently. Tablet panels align within each row, while mobile sections retain bounded readable scrolling.

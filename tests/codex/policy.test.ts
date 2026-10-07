@@ -170,8 +170,8 @@ describe('native transport authority', () => {
     expect(session.settings['effort']).toBe('ultra');
     expect(session.requestEffort).toBe('max');
     const rows = readdirSync(trace).map(f => JSON.parse(readFileSync(join(trace, f), 'utf8')));
-    expect(rows.find(r => r.prompt_id === 'unconfirmed')).toMatchObject({ applied: false, selected_effort: 'ultra', submitted_effort: 'max', observed_effort: 'unknown' });
-    expect(rows.find(r => r.prompt_id === 'confirmed')).toMatchObject({ applied: true, selected_effort: 'ultra', observed_host_effort: 'ultra', submitted_effort: 'max', observed_effort: 'unknown', effort_resolution: 'native_ultra' });
+    expect(rows.find(r => r.prompt_id === 'unconfirmed' && r.phase === 'codex_route_applied')).toMatchObject({ applied: false, selected_effort: 'ultra', submitted_effort: 'max', observed_effort: 'unknown' });
+    expect(rows.find(r => r.prompt_id === 'confirmed' && r.phase === 'codex_route_applied')).toMatchObject({ applied: true, selected_effort: 'ultra', observed_host_effort: 'ultra', submitted_effort: 'max', observed_effort: 'unknown', effort_resolution: 'native_ultra' });
     rpc.close();
   });
   it('refuses duplicate active Jev installations before registering a thread', async () => {

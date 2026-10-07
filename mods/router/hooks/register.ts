@@ -5,6 +5,7 @@ import { anyRouting, resolveConfig } from './config.ts';
 import type { HostPins, RouterEngine } from './router.ts';
 import { createRouter } from './router.ts';
 import { installedKeyPath, parseInstalledKey } from './key.ts';
+import { frontierConfigPath, parseFrontierRouting } from '../../../src/frontier-routing.ts';
 import { createRecorder } from './recording.ts';
 
 const set = (v: string | undefined): boolean => v !== undefined && v.trim() !== '';
@@ -40,6 +41,15 @@ const recorderOf = ($: EngineInterface) => createRecorder({
  * so every variable is spelled out here and nowhere else.
  */
 const engineOf = ($: EngineInterface, log: RouterEngine['log']): RouterEngine => ({
+  frontierEnabled: async () => {
+    try {
+      const path = frontierConfigPath(await $.env.get('HOME'), await $.env.get('XDG_CONFIG_HOME'), await $.env.get('JEV_GATE_CONFIG'));
+      if (!path || !await $.fs.exists(path)) return undefined;
+      const stat = await $.fs.stat(path);
+      if (stat.isLink || stat.kind !== 'file' || stat.size > 64 * 1024) return false;
+      return parseFrontierRouting(await $.fs.read(path));
+    } catch { return false; }
+  },
   fetch: (url, init) => $.http.fetch(url, init),
   sleep: (ms, signal) => $.clock.sleep(ms, { signal }),
   now: () => Date.now(),

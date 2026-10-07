@@ -305,3 +305,47 @@ it('shows a forwarded native Compact request without a Router mismatch or claime
   expect(view.feed[0]?.issue).toBeUndefined();
   expect(view.feed[0]?.details.join(' ')).toContain('설치 미관측');
 });
+
+
+describe('actual model request lifecycle', () => {
+  it('keeps a slow request active and matches response by session, turn, agent and loop index', () => {
+    const request={session_id:'s',turn:'t',index:2,event:'model_request',requested:'claude-opus-5-5'};
+    const now=new Date('2026-09-29T06:02:00.000Z');
+    const build=(extra:DebugRecord[]=[])=>buildOperations([], [row('router',request),...extra],now,{trace:false,debug:true});
+    expect(build().feed.find(s=>s.lifecycle)).toMatchObject({state:'active',elapsedMs:120000});
+    expect(build([row('router',{...request,index:1,event:'root_result'},later)]).feed.find(s=>s.title==='모델 · 응답 대기')?.state).toBe('active');
+    expect(build([row('router',{...request,event:'root_result',observed:'claude-opus-5-5'},later)]).feed.find(s=>s.title==='모델 · 응답 대기')?.state).toBe('done');
+    const failed=build([row('router',{...request,event:'model_failure'},later)]);
+    expect(failed.feed.find(s=>s.title==='모델 · 응답 대기')?.state).toBe('done');
+    expect(failed.feed.find(s=>s.title==='모델 · 요청 실패')?.state).toBe('error');
+  });
+});
+
+
+it('shows Codex model requests in flight even when Router preserves the baseline', () => {
+  const req={...base,host:'codex',phase:'codex_model_request',request_id:'model-1',submitted_model:'gpt-6.1-sol'};
+  const now=new Date('2026-09-29T06:02:00.000Z');
+  const view=buildOperations([req],[],now,{trace:true,debug:false});
+  expect(view.feed[0]).toMatchObject({state:'active',lifecycle:true,elapsedMs:120000,title:'모델 · 응답 대기'});
+  const ended=buildOperations([req,{...base,written_at:later,host:'codex',phase:'codex_model_failure',request_id:'model-1'}],[],now,{trace:true,debug:false});
+  expect(ended.feed.find(s=>s.title==='모델 · 응답 대기')?.state).toBe('done');
+  expect(ended.feed.find(s=>s.title==='모델 · 요청 실패')?.state).toBe('error');
+});
+
+it('does not terminate a Codex request from an earlier result or another session or prompt', () => {
+  const req={...base,written_at:later,host:'codex',phase:'codex_model_request',request_id:'model-1'};
+  const failure={...req,written_at:'2026-09-29T06:00:02.000Z',phase:'codex_model_failure'};
+  const build=(record:Record<string,unknown>)=>buildOperations([req,record],[],new Date('2026-09-29T06:02:00.000Z'),{trace:true,debug:false}).feed.find(s=>s.title==='모델 · 응답 대기')!;
+  for(const record of [{...failure,session_id:'other'},{...failure,prompt_id:'other'},{...failure,written_at:at}])expect(build(record).state).toBe('active');
+  expect(build(failure).state).toBe('done');
+});
+
+
+it('confirms Codex request settings separately and joins only the exact observed response', () => {
+  const req={...base,host:'codex',phase:'codex_route_applied',request_id:'req',request_kind:'root_response',selected_model:'gpt-6-luna',submitted_model:'gpt-6-luna',selected_effort:'low',submitted_effort:'low',applied:true};
+  const response={...base,written_at:later,host:'codex',phase:'codex_router_response',request_id:'req',selected_model:'gpt-6-luna',observed_model:'gpt-6-luna'};
+  const build=(records:Record<string,unknown>[])=>buildOperations(records,[],new Date(later),{trace:true,debug:false}).feed.find(s=>s.title==='Router · Codex 요청 전송')!;
+  expect(build([req]).model).toMatchObject({requestApplied:true,status:'unobserved',observed:null});
+  expect(build([req,response]).model).toMatchObject({requestApplied:true,status:'confirmed',observed:'gpt-6-luna'});
+  expect(build([req,{...response,session_id:'other'}]).model?.status).toBe('unobserved');
+});

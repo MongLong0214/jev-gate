@@ -43,7 +43,7 @@ describe.skipIf(process.env['JEV_CODEX_E2E'] !== '1')('ordinary native Codex aut
         if (step === 2) item = fn('jev_agent', { run_in_background: false, subagent_type: 'jev-gate:executor', prompt: JSON.stringify(input['input']).match(/jev-lean-[a-f0-9]{16}/)?.[0] ?? 'missing marker' });
         if (step === 3) item = fn('exec_command', { cmd: 'vitest run', login: false, max_output_tokens: 8000 });
       } else if (mode === 'compact') { step++; if (step === 1) item = final('Old unrelated narrative. '.repeat(6000)); }
-      const events = [{ type: 'response.created', response: { id, status: 'in_progress', output: [] } }, { type: 'response.output_item.added', output_index: 0, item }, { type: 'response.output_item.done', output_index: 0, item }, { type: 'response.completed', response: { id, status: 'completed', output: [item], usage: { input_tokens: 150000, output_tokens: 3, total_tokens: 150003 } } }];
+      const events = [{ type: 'response.created', response: { id, status: 'in_progress', output: [] } }, { type: 'response.output_item.added', output_index: 0, item }, { type: 'response.output_item.done', output_index: 0, item }, { type: 'response.completed', response: { id, model: input['model'], status: 'completed', output: [item], usage: { input_tokens: 150000, output_tokens: 3, total_tokens: 150003 } } }];
       // Actual native responses can omit Content-Type. Exercise this through the real transport.
       const bytes = Buffer.from(events.map(event => `data: ${JSON.stringify(event)}\r\n\r\n`).join(''));
       res.writeHead(200); res.end(bytes);
@@ -87,9 +87,10 @@ describe.skipIf(process.env['JEV_CODEX_E2E'] !== '1')('ordinary native Codex aut
       expect(readFileSync(config, 'utf8')).toContain('model_provider = "jev-gate-native"');
       const at = requests.length; const connected = await run(); expect(connected.code, connected.output).toBe(0);
       expect(requests.slice(at).some(r => (r['reasoning'] as Obj)?.['effort'] === 'low'), JSON.stringify({ requests: requests.slice(at), output: connected.output })).toBe(true);
-      const rows = readdirSync(trace).map(f => JSON.parse(readFileSync(join(trace, f), 'utf8')) as Obj);
+      const rows = readdirSync(trace).filter(f => f.endsWith('.json')).map(f => JSON.parse(readFileSync(join(trace, f), 'utf8')) as Obj);
       expect(rows.some(r => r['phase'] === 'codex_route_applied' && r['applied'] === true)).toBe(true);
-      expect(rows.some(r => r['phase'] === 'codex_router_response' && r['reason'] === 'response_unconfirmed')).toBe(true);
+      expect(rows.some(r => r['phase'] === 'codex_router_response' && r['reason'] === 'response_model_confirmed' && r['observed_model'] === 'gpt-6.1-sol')).toBe(true);
+      expect(rows.some(r => r['phase'] === 'codex_model_request')).toBe(true);
       expect(JSON.stringify(rows)).not.toContain('fake-local-');
       const previousOwner = JSON.parse(readFileSync(ownerPath, 'utf8')) as { pid: number };
       process.kill(previousOwner.pid, 'SIGKILL');
@@ -128,7 +129,7 @@ describe.skipIf(process.env['JEV_CODEX_E2E'] !== '1')('ordinary native Codex aut
         while (!readdirSync(trace).some(f => f.startsWith('codex_compact') && JSON.parse(readFileSync(join(trace, f), 'utf8')).stage === 'native_submitted') && Date.now() < nativeUntil) await new Promise<void>(resolve => setTimeout(resolve, 20));
         expect(requests.length).toBe(beforeNative + 1);
         expect((requests.at(-1)!['reasoning'] as Obj)['effort']).toBe('high');
-        const nativeRows = readdirSync(trace).map(f => JSON.parse(readFileSync(join(trace, f), 'utf8')) as Obj).filter(r => r['session_id'] === nativeCompact);
+        const nativeRows = readdirSync(trace).filter(f => f.endsWith('.json')).map(f => JSON.parse(readFileSync(join(trace, f), 'utf8')) as Obj).filter(r => r['session_id'] === nativeCompact);
         expect(nativeRows.some(r => r['phase'] === 'codex_route_applied' && r['selected_effort'] === 'low' && r['applied'] === true)).toBe(true);
         expect(nativeRows.some(r => r['phase'] === 'codex_compact' && r['stage'] === 'native_submitted' && r['submitted_effort'] === 'high')).toBe(true);
         expect(nativeRows.some(r => r['phase'] === 'codex_route_applied' && r['applied'] === false)).toBe(false);
@@ -137,13 +138,13 @@ describe.skipIf(process.env['JEV_CODEX_E2E'] !== '1')('ordinary native Codex aut
         await turn(gate, 'Seed the native context.');
         await turn(gate, 'Investigate the fixture and run vitest run.');
         expect(existsSync(join(workspace, 'guard-must-not-exist'))).toBe(false);
-        const gateRows = readdirSync(trace).map(f => JSON.parse(readFileSync(join(trace, f), 'utf8')) as Obj);
+        const gateRows = readdirSync(trace).filter(f => f.endsWith('.json')).map(f => JSON.parse(readFileSync(join(trace, f), 'utf8')) as Obj);
         expect(gateRows.some(r => r['phase'] === 'post'), nativeErrors).toBe(true);
         expect(JSON.stringify(requests.at(-1)?.['input']), nativeErrors).toContain('confirmed command pass 1');
         writeFileSync(policyFile, JSON.stringify({ gate: { mode: 'lean' } }));
         mode = 'lean'; step = 0; const lean = await start();
         await turn(lean, 'Seed the prior context.'); await turn(lean, 'Implement the fixture check in a fresh executor.');
-        const leanRows = readdirSync(trace).map(f => JSON.parse(readFileSync(join(trace, f), 'utf8')) as Obj);
+        const leanRows = readdirSync(trace).filter(f => f.endsWith('.json')).map(f => JSON.parse(readFileSync(join(trace, f), 'utf8')) as Obj);
         expect(leanRows.some(r => r['session_id'] === lean && r['phase'] === 'lean_dispatch' && r['applied'] === true), nativeErrors).toBe(true);
         writeFileSync(policyFile, JSON.stringify({ gate: { mode: 'off' }, router: { enabled: false }, compact: { manual: true } }));
         mode = 'compact'; step = 0; const compact = await start();

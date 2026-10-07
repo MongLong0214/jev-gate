@@ -91,9 +91,14 @@ export const selectPair = (offer: PairOffer, raw: unknown): { patch: PairPatch; 
   const native = (): { patch: PairPatch; reasons: typeof reasons; diagnostics: typeof diagnostics } => ({ patch: {}, reasons, diagnostics });
   const control = validateChoice(answers['control'], Object.keys(CONTROLS));
   const floor = Math.max(offer.upgrade, offer.downgrade);
-  if (!control || (control.probabilities[control.choice] ?? 0) < Math.min(offer.upgrade, offer.downgrade) || ['explicit_lock', 'needs_context', 'unclear'].includes(control.choice)) {
-    reasons.model = reasons.effort = control?.choice === 'needs_context' ? 'context_missing' : 'control_lock'; return native();
-  }
+  // Preserve the same baseline, but report the evidence that actually prevented a move.
+  // Missing, ambiguous or low-confidence control is not an explicit user model/effort lock.
+  if (!control) { reasons.model = reasons.effort = 'control_invalid'; return native(); }
+  const controlReason = (control.probabilities[control.choice] ?? 0) < Math.min(offer.upgrade, offer.downgrade) ? 'control_low_confidence'
+    : control.choice === 'explicit_lock' ? 'control_lock'
+    : control.choice === 'needs_context' ? 'context_missing'
+    : control.choice === 'unclear' ? 'control_unclear' : null;
+  if (controlReason) { reasons.model = reasons.effort = controlReason; return native(); }
   let model = offer.baseline.model;
   if (offer.modelAsked && control.choice !== 'model_lock') {
     const q = offer.questions['model'];

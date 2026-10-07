@@ -2031,3 +2031,15 @@ describe('native spawn outcome observability', () => {
     else expect(record).toMatchObject({ observed: outcome.model, agent_id: 'child', requested: null, confirmation: 'unobserved' });
   });
 });
+
+
+it('rechecks the common frontier switch before delivering a prepared Fable root patch', async () => {
+  const router=createRouter(configOf({routeMainModel:true,routeMainEffort:false,routeSubagentModel:false}));
+  const f=fakeEngine({respond:answering({...CLEAR,tier:['frontier',.99]})});
+  let reads=0;f.engine.frontierEnabled=async()=>++reads===1;
+  router.turnStart({turnId:'t1',text:TEXT});const n=streamNext<TurnStepEvent>();
+  await drain(router.turnStep(f.engine,step({model:'claude-sonnet-5'}),n.next));
+  expect(f.sent[0]?.questions.model?.criteria).toHaveProperty('claude-fable-5-1');
+  expect(n.calls[0]?.model).toBe('claude-sonnet-5');
+  expect(f.logs).toContainEqual(expect.objectContaining({event:'root_stop',reason:'model_not_allowed'}));
+});

@@ -53,6 +53,26 @@ describe('Claude and Codex routing role parity', () => {
       expect(selectPair(o, data).patch).toEqual({});
     }
   });
+  it.each([
+    ['missing', 'control_invalid'],
+    ['invalid', 'control_invalid'],
+    ['low_confidence', 'control_low_confidence'],
+    ['needs_context', 'context_missing'],
+    ['unclear', 'control_unclear'],
+    ['explicit_lock', 'control_lock'],
+  ])('reports the actual reason for preserving both adapters: %s', (state, reason) => {
+    const offers = [claudeOffer(), offerPairs({ baseline: { model: 'gpt-6.1-sol', effort: 'high' }, candidates: codexCandidates(native, false), model: true, effort: true, upgrade: .8, downgrade: .6 })!];
+    for (const [index, o] of offers.entries()) {
+      const data: Record<string, unknown> = exactAnswers(o, index === 0 ? 'claude-sonnet-5-5' : 'gpt-6-luna', .99);
+      const q = o.questions.control!;
+      if (q.type !== 'choice') throw Error('control absent');
+      if (state === 'missing') delete data.control;
+      else if (state === 'invalid') data.control = { type: 'choice', choice: 'task_clear', probabilities: { task_clear: 2 } };
+      else if (state === 'low_confidence') data.control = { type: 'choice', choice: 'task_clear', probabilities: { task_clear: .52, model_lock: .01, effort_lock: 0, explicit_lock: 0, needs_context: .33, unclear: .14 }, confidence: .41 };
+      else data.control = choice(Object.keys(q.criteria), [state, 1]);
+      expect(selectPair(o, data)).toMatchObject({ patch: {}, reasons: { model: reason, effort: reason } });
+    }
+  });
 });
 describe('documented Claude role thresholds and target effort resolution', () => {
   it.each([[.7, true], [.59, false]] as const)('uses the existing .6 downward floor, not .8: %s', (probability, selected) => {
