@@ -11,14 +11,15 @@ import { recordingCommand } from '../recording.js';
 import { launchCodex } from './launch.js';
 import { loadCodexPolicy } from './config.js';
 import { connectionDiagnostic, serveConnection } from './connection.js';
-import { withApiKey, validApiKey } from '../credentials.js';
+import { withApiKey, validApiKey, apiKeyOverride } from '../credentials.js';
 import { doctorChecks, finishDoctor, renderDoctor, readableFile, storageIssue, dashboardDiagnostic, versionDiagnostic, type DoctorReport } from '../doctor.js';
 import { compatibilityChecks } from '../doctor-models.js';
 import { codexModelInventory, codexCompatibility } from './doctor-models.js';
 import { checkRelease, unknownRelease, packageVersion } from '../release-info.js';
 
 export const codexDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: string, options: { checkUpdate?: boolean } = {}): Promise<{ ok: boolean; lines: string[]; report: DoctorReport }> => {
-  const invalidKey = !!env['TYPESAFE_API_KEY']?.trim() && !validApiKey(env['TYPESAFE_API_KEY']);
+  const overrideKey = apiKeyOverride(env);
+  const invalidKey = overrideKey !== undefined && !validApiKey(overrideKey);
   env = withApiKey(env);
   const diagnosis = doctorChecks(), say = diagnosis.say;
   const check = (pass: boolean, text: string): void => say(pass ? 'ok' : 'fail', text);

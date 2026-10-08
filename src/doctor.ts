@@ -1,5 +1,5 @@
-import { constants, accessSync, lstatSync } from 'node:fs';
-import { dirname, isAbsolute, join } from 'node:path';
+import { constants, accessSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import type { Env } from './config.js';
 import { credentialsDir, readPrivateJson } from './credentials.js';
 import { packageVersion, type ReleaseInfo, unknownRelease, compareVersions } from './release-info.js';
@@ -46,7 +46,7 @@ export const renderDoctor = (report: DoctorReport, verbose = false): string => {
   }
   return out.join('\n') + '\n';
 };
-/** Inspect without mkdir, chmod, probing writes, or following a symlink in the path. */
+/** Inspect without mkdir, chmod or probing writes; reject the inspected directory's symlink. */
 export const storageIssue = (path: string, privatePath = false): string | null => {
   if (!isAbsolute(path)) return 'path must be absolute';
   let current = path;
@@ -64,6 +64,27 @@ export const storageIssue = (path: string, privatePath = false): string | null =
   }
 };
 export const readableFile = (path: string): boolean => { try { const stat = lstatSync(path); if (!stat.isFile()) return false; accessSync(path, constants.R_OK); return true; } catch { return false; } };
+/** Read packaged local imports only. Do not execute modules or inspect workspace source. */
+export const moduleIssues = (root: string, entry: string): string[] => {
+  const canonicalRoot = realpathSync(root);
+  const pending = [resolve(root, entry)], visited = new Set<string>(), issues: string[] = [];
+  while (pending.length) {
+    let file = pending.pop()!;
+    const rel = relative(root, file);
+    if (rel.startsWith('..') || isAbsolute(rel)) { issues.push('relative module import escapes the plugin'); continue; }
+    if (!readableFile(file) && file.endsWith('.js') && readableFile(file.slice(0, -3) + '.ts')) file = file.slice(0, -3) + '.ts';
+    if (visited.has(file)) continue; visited.add(file);
+    if (visited.size > 256) { issues.push('module dependency limit exceeded'); break; }
+    try {
+      if (!readableFile(file) || lstatSync(file).size > 512 * 1024) { issues.push(`${relative(root, file)} missing, unreadable or oversized`); continue; }
+      const canonicalRel = relative(canonicalRoot, realpathSync(file));
+      if (canonicalRel.startsWith('..') || isAbsolute(canonicalRel)) { issues.push(`${rel}: relative module import escapes the plugin`); continue; }
+      const text = readFileSync(file, 'utf8');
+      for (const match of text.matchAll(/(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s*)(["'])(\.[^"']+)\1/g)) pending.push(resolve(dirname(file), match[2]!));
+    } catch { issues.push(`${relative(root, file)} unreadable`); }
+  }
+  return issues;
+};
 /** Dashboard health is bounded and read-only. Tokens and raw error bodies never enter the report. */
 export const dashboardDiagnostic = async (env: Env): Promise<{ level: DoctorLevel; message: string }> => {
   let path: string; try { path = join(credentialsDir(env), 'dashboard-runtime.json'); } catch { return { level: 'fail', message: 'Dashboard runtime: invalid shared configuration path' }; }

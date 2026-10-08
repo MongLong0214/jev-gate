@@ -173,6 +173,12 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     expect(spawnSync('unzip', ['-q', join(outDir, archive!), '-d', dest], { encoding: 'utf8' }).status).toBe(0);
     expectInstallDocs(dest);
     const env = { PATH: process.env['PATH'] ?? '', HOME: join(tmp, 'lean home'), JEV_GATE_MODE: 'lean' };
+    const diagnosis = spawnSync(process.execPath, [join(dest, 'dist/cli.js'), 'doctor', '--json'], { cwd: otherCwd, encoding: 'utf8', env: { ...env, PATH: '/nonexistent', CLAUDE_CODE_FORK_SUBAGENT: '0' } });
+    expect(diagnosis.status, diagnosis.stdout + diagnosis.stderr).toBe(0);
+    const report = JSON.parse(diagnosis.stdout);
+    expect(report.checks.filter((c: {group:string;level:string}) => c.group === 'package' && c.level === 'fail')).toEqual([]);
+    expect(report.models.compatibility).toEqual([]);
+    expect(report.models.source).toContain('Lean');
     // No key: the installed lean entrypoint reads no source, sends nothing and prints nothing.
     const quiet = spawnSync(process.execPath, [join(dest, 'dist', 'hook.js'), '--lean'], { cwd: otherCwd, encoding: 'utf8', env, input: JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 's', prompt_id: 'p', prompt: 'add a test' }) });
     expect(quiet).toMatchObject({ status: 0, stdout: '', stderr: 'jev-gate: key_missing\n' });

@@ -22,7 +22,7 @@ beforeAll(() => {
   out = join(root, 'dist');
   const r = spawnSync(process.execPath, [join(__dirname, '..', 'node_modules', 'typescript', 'bin', 'tsc'), '-p', join(__dirname, '..', 'tsconfig.json'), '--outDir', out], { encoding: 'utf8' });
   expect(r.status, r.stdout + r.stderr).toBe(0);
-  for (const d of ['.claude-plugin', 'hooks', 'agents']) cpSync(join(__dirname, '..', d), join(root, d), { recursive: true });
+  for (const d of ['.claude-plugin', 'hooks', 'agents', 'mods', 'src', 'plugins/evidence/dist', 'plugins/evidence/skills']) cpSync(join(__dirname, '..', d), join(root, d), { recursive: true });
 }, 60_000);
 
 let seq = 0;

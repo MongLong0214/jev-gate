@@ -213,14 +213,17 @@ describe('dashboard server', () => {
   it('pushes a Compact event even when the legacy single-turn signature is unchanged', async () => {
     const trace = make();
     const debug = make();
-    const server = await startDashboard({ traceDir: trace, debugDir: debug, env: { JEV_GATE_STATE_DIR: make() } }, 0);
+    const server = await startDashboard({ traceDir: trace, debugDir: debug, env: { HOME: make(), JEV_GATE_STATE_DIR: make() } }, 0);
     const response = await fetch(`${server.url}api/live`);
     const reader = response.body!.getReader();
     const read = async (): Promise<{ live: { sig: string }; operations: { features: Array<{ id: string; count: number }> } }> => {
       const result = await Promise.race([
         reader.read(),
         new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error('SSE timed out')), 2500)),
-      ]);
+      ]).catch(async error => {
+        const snapshot = await (await fetch(`${server.url}api/snapshot`)).json() as { operations: { features: Array<{ id: string; count: number }> } };
+        throw new Error(`${String(error)}; compact snapshot count=${snapshot.operations.features.find(f => f.id === 'compact')?.count ?? 'missing'}`);
+      });
       if (result.done) throw new Error('SSE ended');
       const line = new TextDecoder().decode(result.value).split('\n').find((s) => s.startsWith('data: '));
       if (!line) throw new Error('missing SSE data');

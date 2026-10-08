@@ -42,11 +42,16 @@ export const writePrivateJson = (path: string, value: Record<string, unknown>): 
 };
 
 /** Explicit input is authoritative, including an invalid value: never silently use another owner's key. */
-export const resolveApiKey = (env: Env): string | undefined => {
+export const apiKeyOverride = (env: Env): string | undefined => {
   for (const name of ['CLAUDE_PLUGIN_OPTION_TYPESAFEAPIKEY', 'TYPESAFE_API_KEY']) {
     const key = env[name];
-    if (key !== undefined && key.trim() !== '') return validApiKey(key) ? key : undefined;
+    if (key !== undefined && key.trim() !== '') return key;
   }
+  return undefined;
+};
+export const resolveApiKey = (env: Env): string | undefined => {
+  const override = apiKeyOverride(env);
+  if (override !== undefined) return validApiKey(override) ? override : undefined;
   try { const key = readPrivateJson(credentialsPath(env))?.['apiKey']; return validApiKey(key) ? key : undefined; }
   catch { return undefined; }
 };

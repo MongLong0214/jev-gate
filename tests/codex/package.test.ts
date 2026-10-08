@@ -15,7 +15,7 @@ const staged = join(tmp, 'source');
 const installed = join(tmp, 'installed plugin');
 const project = join(tmp, 'workspace');
 const traces = join(tmp, 'records');
-const shellEnv = { PATH: process.env['PATH'] ?? '', XDG_CONFIG_HOME: join(tmp, 'config'), JEV_GATE_ONBOARDING: '0', JEV_DASHBOARD_NO_OPEN: '1', JEV_CODEX_TRACE_DIR: traces, JEV_CODEX_WORKSPACE: project, JEV_CODEX_AUTO_CONNECT: '0' };
+const shellEnv = { PATH: process.env['PATH'] ?? '', HOME: tmp, CODEX_HOME: join(tmp, 'codex-home'), XDG_CONFIG_HOME: join(tmp, 'config'), XDG_STATE_HOME: join(tmp, 'state'), JEV_GATE_TRACE_DIR: join(tmp, 'claude-records'), JEV_GATE_ONBOARDING: '0', JEV_DASHBOARD_NO_OPEN: '1', JEV_CODEX_TRACE_DIR: traces, JEV_CODEX_WORKSPACE: project, JEV_CODEX_AUTO_CONNECT: '0' };
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
 beforeAll(() => {

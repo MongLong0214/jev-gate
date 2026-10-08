@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import type { Env } from './config.js';
-import { MODEL_FACTS, factsOf, sameIdentity, type SymbolicEffort } from './claude-models.js';
+import { MODEL_FACTS, factsOf, sameIdentity, splitModelId, type SymbolicEffort } from './claude-models.js';
 import type { DoctorCheck } from './doctor.js';
 
 export interface HostModel { id: string; alias?: string; efforts: string[] | null }
@@ -10,18 +10,23 @@ const record = (v: unknown): v is Record<string, unknown> => typeof v === 'objec
 /** Claude's SDK initialize response is a CLI capability inventory, not a paid model request. */
 export const parseClaudeInventory = (value: unknown): ModelInventory => {
   if (!Array.isArray(value) || value.length > 256) return { models: [], complete: false, error: 'invalid_response' };
-  const models: HostModel[] = []; const ids = new Set<string>();
+  const models: HostModel[] = []; const ids = new Set<string>(); const conflicts = new Set<string>(); let invalid = false;
   for (const row of value) {
     if (!record(row) || typeof row['value'] !== 'string' || !/^[A-Za-z0-9._:\/@\[\]-]{1,160}$/.test(row['value'])) return { models, complete: false, error: 'invalid_response' };
+    if (row['resolvedModel'] !== undefined && typeof row['resolvedModel'] !== 'string' || row['supportsEffort'] !== undefined && typeof row['supportsEffort'] !== 'boolean') return { models, complete: false, error: 'invalid_response' };
     const id = typeof row['resolvedModel'] === 'string' ? row['resolvedModel'] : row['value'];
     if (!/^[A-Za-z0-9._:\/@\[\]-]{1,160}$/.test(id)) return { models, complete: false, error: 'invalid_response' };
     const raw = row['supportedEffortLevels'];
+    if (raw !== undefined && (!Array.isArray(raw) || raw.some(e => typeof e !== 'string' || !/^[a-z]{1,24}$/.test(e)) || new Set(raw).size !== raw.length || row['supportsEffort'] === false && raw.length > 0)) return { models, complete: false, error: 'invalid_response' };
     const efforts = row['supportsEffort'] === false ? [] : Array.isArray(raw) && raw.every(e => typeof e === 'string' && /^[a-z]{1,24}$/.test(e)) ? raw as string[] : null;
     const key = row['value'];
-    if (ids.has(key)) return { models, complete: false, error: 'invalid_response' }; ids.add(key);
+    if (ids.has(key)) { invalid = true; conflicts.add(id); for (const previous of models.filter(m => m.alias === key)) conflicts.add(previous.id); } ids.add(key);
+    const prior = models.find(m => m.id === id || sameIdentity(m.id, id));
+    if (prior && JSON.stringify(prior.efforts?.slice().sort() ?? null) !== JSON.stringify(efforts?.slice().sort() ?? null)) { invalid = true; conflicts.add(id); conflicts.add(prior.id); }
     models.push({ id, alias: row['value'], efforts });
   }
-  return { models, complete: models.length > 0, error: models.length ? null : 'invalid_response' };
+  const safe = models.filter(m => !conflicts.has(m.id) && ![...conflicts].some(id => sameIdentity(id, m.id)));
+  return { models: safe, complete: !invalid && safe.length > 0, error: !invalid && safe.length ? null : 'invalid_response' };
 };
 export const claudeModelInventory = (env: Env, cwd: string): Promise<ModelInventory> => new Promise(resolve => {
   const child = spawn('claude', ['--print', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--no-session-persistence', '--safe-mode', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}'], { env, cwd, stdio: ['pipe', 'pipe', 'ignore'] });
@@ -54,15 +59,17 @@ export const claudeCompatibility = (inventory: ModelInventory, version: string |
     const facts = factsOf(model) ?? (alias ? MODEL_FACTS.find(f => f.family === alias && !f.legacy) : null);
     const minimum = facts?.minimumHostRelease;
     const found = inventory.models.find(m => m.id === model || sameIdentity(model, m.id) || alias !== null && m.alias === alias);
+    const baseOnly = !found && facts && splitModelId(model).suffix ? inventory.models.find(m => factsOf(m.id) === facts && splitModelId(m.id).suffix === '') : undefined;
     const efforts = [...effortSet]; const unsupported = found?.efforts ? efforts.filter(e => !found.efforts!.includes(e)) : [];
     let state: ModelCompatibility['state'] = 'unverified', reason = 'CLI inventory unavailable or incomplete';
     if (facts?.family === 'fable' && !allowFable && !configured.some(c => c.model === model)) { state = 'excluded'; reason = 'automatic Fable selection is off'; }
     else if (facts?.legacy) { state = 'incompatible'; reason = 'retired model is not a new automatic routing target'; }
     else if (supportedHost(minimum) === false) { state = 'incompatible'; reason = `requires Claude Code 2.1.${minimum} or newer; run claude update`; }
+    else if (baseOnly) { reason = 'CLI advertises the base model but not this context variant; variant support remains unverified'; }
     else if (!found && inventory.complete) { state = 'incompatible'; reason = 'model is absent from this CLI capability inventory (account access is separately unverified)'; }
     else if (found && alias && facts && !sameIdentity(facts.ids[0]!, found.id)) { state = 'incompatible'; reason = `alias resolves to ${found.id}; expected the current ${facts.ids[0]}`; }
     else if (unsupported.length) { state = 'incompatible'; reason = `CLI does not advertise effort: ${unsupported.join(', ')}`; }
-    else if (found && found.efforts !== null) { state = 'compatible'; reason = 'CLI advertises this model and all offered efforts; provider/account execution remains unverified'; }
+    else if (found && found.efforts !== null && inventory.error === null) { state = 'compatible'; reason = 'CLI advertises this model and all offered efforts; provider/account execution remains unverified'; }
     return { model, resolved: found?.id ?? null, requestedEfforts: efforts, hostEfforts: found?.efforts ?? null, unsupportedEfforts: unsupported, state, reason };
   });
 };

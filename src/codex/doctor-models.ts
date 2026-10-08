@@ -43,7 +43,7 @@ export const codexCompatibility = (inventory: CodexInventory, env: Env): ModelCo
   return [...targets].map(([model, efforts]) => {
     const found = inventory.catalog.find(m => m.model === model);
     const unsupported = found ? efforts.filter(e => !found.supportedReasoningEfforts.some(v => v.reasoningEffort === e)) : [];
-    const state: ModelCompatibility['state'] = !found ? inventory.complete ? 'incompatible' : 'unverified' : !generalCodexModel(found) || !codexTargetAllowed(model, policy.router.allowAstra) ? 'excluded' : unsupported.length ? 'incompatible' : 'compatible';
+    const state: ModelCompatibility['state'] = !found ? inventory.complete ? 'incompatible' : 'unverified' : !generalCodexModel(found) || !codexTargetAllowed(model, policy.router.allowAstra) ? 'excluded' : inventory.error !== null ? 'unverified' : unsupported.length ? 'incompatible' : 'compatible';
     return { model, resolved: found?.model ?? null, requestedEfforts: [...efforts], hostEfforts: found?.supportedReasoningEfforts.map(e => e.reasoningEffort) ?? null, unsupportedEfforts: unsupported, state,
       reason: state === 'compatible' ? 'native model/list advertises all routing efforts; provider/account execution remains unverified' : state === 'excluded' ? 'hidden, specialist, retired or frontier opt-in policy excludes this automatic target' : state === 'incompatible' ? unsupported.length ? `configured owned profile effort not advertised: ${unsupported.join(', ')} (runtime preserves or inherits a valid native effort)` : 'configured target absent from complete native model/list' : 'catalog unavailable or incomplete; absent target is unverified' };
   });
