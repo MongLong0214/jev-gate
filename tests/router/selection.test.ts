@@ -4,7 +4,7 @@ import { routingContext } from '../../mods/router/hooks/context.ts';
 import { normalizeCatalog, isAstra } from '../../src/codex/catalog.js';
 import { codexCandidates } from '../../src/codex/router.js';
 import { claudeCandidates } from '../../mods/router/hooks/candidates.ts';
-import { claudeAgentToolModel, MODEL_FACTS } from '../../src/claude-models.ts';
+import { claudeAgentToolModel, factsOf, sameModel, MODEL_FACTS } from '../../src/claude-models.ts';
 import { choice } from './fake-engine.ts';
 import type { PairOffer } from '../../src/router-selection.ts';
 const claudeOffer = (baseline = 'claude-opus-5-5', effort: string | null = 'high', mutable = true) => offerPairs({ baseline: { model: baseline, effort }, candidates: claudeCandidates({ baseline, aliases: {}, allowFable: false }), model: true, effort: mutable, upgrade: .8, downgrade: .6 })!;
@@ -13,7 +13,7 @@ describe('Claude and Codex routing role parity', () => {
   const native = [
     { model: 'gpt-6.1-sol', description: 'Latest workhorse model for coding and everyday work.' },
     { model: 'gpt-6-luna', description: 'Fast and affordable model for easier tasks.' },
-    { model: 'gpt-5.6-terra', description: 'Older balanced model for straightforward work.' },
+    { model: 'fixture-balanced', description: 'Balanced model for straightforward work.' },
     { model: 'gpt-6-astra', description: 'Frontier intelligence for the most demanding work.' },
   ].map(m => ({ ...m, supportedReasoningEfforts: ['low', 'medium', 'high', 'max'].map(reasoningEffort => ({ reasoningEffort })) }));
   it.each([.59, .6, .7, .8, 1])('uses the same downward floor in both adapters: %s', probability => {
@@ -25,9 +25,9 @@ describe('Claude and Codex routing role parity', () => {
       expect(result.diagnostics).toMatchObject({ direction: 'downgrade', threshold: .6 });
     }
   });
-  it.each(['ordinary', 'consequential', 'unclear'])('applies the same risk rule to Luna and Terra: %s', risk => {
+  it.each(['ordinary', 'consequential', 'unclear'])('applies the same risk rule to Luna and a balanced candidate: %s', risk => {
     const o = offerPairs({ baseline: { model: 'gpt-6.1-sol', effort: 'high' }, candidates: codexCandidates(native, false), model: true, effort: true, upgrade: .8, downgrade: .6 })!;
-    for (const target of ['gpt-6-luna', 'gpt-5.6-terra']) {
+    for (const target of ['gpt-6-luna', 'fixture-balanced']) {
       const result = selectPair(o, exactAnswers(o, target, .99, risk));
       expect(result.patch.model).toBe(risk === 'ordinary' ? target : undefined);
       expect(result.reasons.model).toBe(risk === 'ordinary' ? 'selected' : 'risk_blocks_downgrade');
@@ -147,12 +147,35 @@ describe('candidate-local pair selection', () => {
 describe('bounded context and truthful discovery', () => {
   it.each([undefined, NaN, Infinity, -1, 136_000, 200_000])('keeps smaller-window roots out when context cannot fit: %s', contextTokens => {
     const cs = claudeCandidates({ baseline: 'claude-opus-5-5', aliases: {}, allowFable: false, ...(contextTokens !== undefined ? { inputUpperBound: contextTokens, requestCompatible: true } : {}) });
-    expect(cs.some(c => c.id.includes('haiku'))).toBe(false);
+    expect(cs.some(c => c.id.includes('haiku-4-5'))).toBe(false);
   });
-  it('offers Haiku from a large-window root when the complete request bound and maximum output fit, with its published role', () => {
+  it('excludes legacy Haiku even with a fitting bound and offers current Haiku with its published role', () => {
     const cs = claudeCandidates({ baseline: 'claude-opus-5-5', aliases: {}, allowFable: false, inputUpperBound: 22_000, requestCompatible: true });
-    expect(cs.find(c => c.id.includes('haiku'))).toMatchObject({ omitEffort: true, efforts: [], description: expect.stringContaining('Fastest model') });
-    expect(cs.find(c => c.id === 'claude-sonnet-5-5')?.description).toContain('daily coding');
+    expect(cs.some(c => c.id.includes('haiku-4-5'))).toBe(false);
+    expect(cs.find(c => c.id === 'claude-haiku-5-5')).toMatchObject({ efforts: ['low', 'medium', 'high'], description: expect.stringContaining('latency-sensitive') });
+    expect(cs.find(c => c.id === 'claude-sonnet-5-5')?.description).toContain('combination of speed and intelligence');
+  });
+  it('offers account-allowed Haiku 5.5 to a 1M root without a smaller-window bound, using its own effort contract', () => {
+    const args = { baseline: 'claude-opus-5-5', aliases: {}, allowFable: false, hostBase: '2.1.293', available: ['claude-opus-5-5', 'claude-haiku-5-5'] };
+    const cs = claudeCandidates(args);
+    expect(cs.map(c => c.id)).toEqual(['claude-opus-5-5', 'claude-haiku-5-5']);
+    expect(cs[1]).toMatchObject({ rank: 0, efforts: ['low', 'medium', 'high'], omitEffort: false });
+    const o = offerPairs({ baseline: { model: args.baseline, effort: 'xhigh' }, candidates: cs, model: true, effort: true, upgrade: .8, downgrade: .6 })!;
+    const a = exactAnswers(o, 'claude-haiku-5-5', .7);
+    const q = o.effortQuestions.get('claude-haiku-5-5')!;
+    a[q.name] = { type: 'score', probabilities: { 0: 0, 1: 1, 2: 0 } };
+    expect(selectPair(o, a)).toMatchObject({ patch: { model: 'claude-haiku-5-5', effort: 'medium' }, diagnostics: { direction: 'downgrade', threshold: .6, pair_valid: true } });
+    expect(claudeCandidates({ ...args, available: ['claude-opus-5-5'] }).some(c => c.id === 'claude-haiku-5-5')).toBe(false);
+    const excluded: Record<string, number> = {};
+    expect(claudeCandidates({ ...args, hostBase: '2.1.292', excluded }).some(c => c.id === 'claude-haiku-5-5')).toBe(false);
+    expect(excluded.host_unverified).toBe(1);
+  });
+  it('recognizes documented Haiku 5.5 IDs and the native family without guessing dates or variants', () => {
+    expect(factsOf('claude-haiku-5-5')).toMatchObject({ contextTokens: 1_000_000, maxOutputTokens: 128_000, unconditionalEffort: ['low', 'medium', 'high'], conditionalEffort: ['xhigh', 'max'] });
+    expect(sameModel('haiku', 'claude-haiku-5-5')).toBe(true);
+    expect(sameModel('claude-haiku-5-5', 'anthropic.claude-haiku-5-5')).toBe(true);
+    expect(sameModel('claude-haiku-4-5', 'claude-haiku-5-5')).toBe(false);
+    for (const id of ['claude-haiku-5-5-20261007', 'claude-haiku-5-5[1m]', 'claude-haiku-5-5-preview']) expect(factsOf(id)).toBeNull();
   });
   it('encodes every documented ID and variant for the Agent enum without interpreting unknown IDs', () => {
     for (const fact of MODEL_FACTS) for (const id of fact.ids) for (const suffix of ['', ...fact.suffixes]) expect(claudeAgentToolModel(id + suffix)).toBe(fact.family);

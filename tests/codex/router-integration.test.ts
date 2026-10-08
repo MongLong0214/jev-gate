@@ -39,6 +39,13 @@ const fixture = async (external: boolean, model: string, effort: string, wait?: 
   return {rpc,policy,forward,emitted,fetchImpl,sent,request,start};
 };
 describe('original Codex root execution boundaries', () => {
+  it('drops a stored target that the live catalog now marks as a previous generation', async () => {
+    const f = await fixture(true, 'fixture-B', 'max');
+    expect((await f.policy.externalRequest('root', f.request, new AbortController().signal)).request.model).toBe('fixture-B');
+    f.policy.catalog = catalog.map(m => m.model === 'fixture-B' ? { ...m, description: 'Previous generation workhorse model.' } : m);
+    expect((await f.policy.externalRequest('root', f.request, new AbortController().signal)).request).toEqual(f.request);
+    expect(f.fetchImpl).toHaveBeenCalledOnce(); f.rpc.close();
+  });
   it.each([false, true].flatMap(external => ['default', 'echo'].map(mode => [external, mode] as const)))('reassesses three turns in one native root external=%s baseline=%s', async (external, mode) => {
     const f = await fixture(external, 'fixture-B', 'max'); let phase = 0;
     f.fetchImpl.mockImplementation(async (_url, init) => {

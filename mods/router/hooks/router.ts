@@ -10,7 +10,7 @@ import { looksSecret } from './secret.ts';
 import { offerPairs, selectPair, pairReceipt, applyEffort, type PairOffer, type EffortEdit } from './selection.ts';
 import { routingContext, type RoutingCache } from './context.ts';
 import { claudeCandidates, claudeContextFits, claudeModelAllowed, resolveClaudeModel, type ModelAliases } from './candidates.ts';
-import { claudeTargetAllowed } from './models.ts';
+import { claudeTargetAllowed, currentClaudeModel } from './models.ts';
 import type { ChildStepContext } from '../../../src/router-child-context.ts';
 
 /**
@@ -99,7 +99,7 @@ type NextLike<E, R> = ((e: E) => Promise<R>) & { readonly signal: AbortSignal };
  */
 export const VERIFIED_HOST = '2.1.282';
 /** Identifies this loaded hook source, independently of a manifest updated on disk. */
-export const ROUTER_HOOK_VERSION = '0.8.12';
+export const ROUTER_HOOK_VERSION = '0.8.13';
 
 /**
  * Later 2.1 releases are accepted too. Pinned to one release, spawn routing went native after every host update: the
@@ -476,7 +476,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     turnTexts.delete(turnId);
   };
 
-  const aliasesOf = (engine: RouterEngine): Promise<ModelAliases> => engine.modelAliases ? engine.modelAliases().catch(() => ({})) : Promise.resolve({ haiku: 'claude-haiku-4-5', sonnet: 'claude-sonnet-5', opus: 'claude-opus-5-5' });
+  const aliasesOf = (engine: RouterEngine): Promise<ModelAliases> => engine.modelAliases ? engine.modelAliases().catch(() => ({})) : Promise.resolve({ haiku: currentClaudeModel('haiku'), sonnet: currentClaudeModel('sonnet'), opus: currentClaudeModel('opus') });
   const frontierFor = async (engine: RouterEngine): Promise<boolean> => engine.frontierEnabled ? await engine.frontierEnabled().catch(() => false) ?? config.allowFable : config.allowFable;
 
   const rootAssessment = async (engine: RouterEngine, turnId: string, t: TurnRouting, text: string, context: string | null, live: AbortSignal): Promise<void> => {
@@ -993,14 +993,15 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     const explicit = e.model?.trim() ? e.model : null;
     const inheritance = explicit ? null : inheritSkip(e);
     if (!explicit && inheritance && (!config.routeSubagentEffort || childHistoryFull)) return spawnSkip(engine, e, inheritance);
-    if (!hostSupported(await versionFor(engine, live))) return spawnSkip(engine, e, 'host_unverified');
+    const hostBase = await versionFor(engine, live);
+    if (!hostSupported(hostBase)) return spawnSkip(engine, e, 'host_unverified');
     const pins = await within(pinsOf(engine, 'spawn', live), live);
     if (pins.aliasRemap && !engine.modelAliases) return spawnSkip(engine, e, 'alias_remapped');
     const aliases = await within(aliasesOf(engine), live);
     const available = await within(engine.availableModels().catch(() => []), live);
     const baselineModel = aliases[explicit ?? e.parentModel] ?? explicit ?? e.parentModel;
     const candidates = claudeCandidates({ baseline: baselineModel, aliases, allowFable,
-      ...(available !== undefined ? { available } : {}), scope: 'spawn', preferences: Object.values(config.tiers) }).filter(c => claudeTargetAllowed(c.id, allowFable));
+      ...(available !== undefined ? { available } : {}), ...(hostBase ? { hostBase } : {}), scope: 'spawn', preferences: Object.values(config.tiers) }).filter(c => claudeTargetAllowed(c.id, allowFable));
     if (!candidates.length) return { target: null, answers: null, deny: 'No eligible automatic child model. Continue in the main session; no child started.' };
     const inheritedEffort = engine.currentEffort ? await within(engine.currentEffort().catch(() => undefined), live) : lastRoot?.effort ?? lastIncoming?.effort;
     const offer = offerPairs({ baseline: { model: baselineModel, effort: inheritedEffort ?? null }, candidates,

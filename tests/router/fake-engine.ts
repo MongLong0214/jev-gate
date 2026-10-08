@@ -79,7 +79,7 @@ export const fakeEngine = (o: FakeEngineOptions = {}) => {
       return allowed.models;
     },
     currentEffort: async () => 'high',
-    hostBase: async () => ('hostBase' in o ? o.hostBase : '2.1.282'),
+    hostBase: async () => ('hostBase' in o ? o.hostBase : '2.1.293'),
     now: () => clock.ms,
     log: (line) => {
       if (!line.startsWith('jev-router ')) throw new Error(`unprefixed log line: ${line}`);
@@ -139,7 +139,7 @@ export const answering =
           if (!pick) return [];
           if (name === 'model' && !Array.isArray(q.criteria)) {
             const family = ({ fast: 'haiku', standard: 'sonnet', deep: 'opus', frontier: 'fable' } as Record<string, string>)[pick[0]];
-            const preferred = ({ fast: 'claude-haiku-4-5-20251001', standard: 'claude-sonnet-5', deep: 'claude-opus-5-5', frontier: 'claude-fable-5-1' } as Record<string, string>)[pick[0]];
+            const preferred = ({ fast: 'claude-haiku-5-5', standard: 'claude-sonnet-5-5', deep: 'claude-opus-5-5', frontier: 'claude-fable-5-1' } as Record<string, string>)[pick[0]];
             const id = preferred && preferred in q.criteria ? preferred : Object.keys(q.criteria).find(id => id.startsWith(preferred + '[')) ?? '__keep__';
             return [[name, choice(Object.keys(q.criteria), [id, pick[1]])]];
           }

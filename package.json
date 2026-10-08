@@ -1,6 +1,6 @@
 {
   "name": "jev-gate",
-  "version": "0.8.12",
+  "version": "0.8.13",
   "private": true,
   "description": "Jev policies for Claude Code and native Codex: task routing, observed contract checks, evidence, compaction, output folding and a live dashboard.",
   "type": "module",
@@ -15,7 +15,9 @@
     "pack": "node scripts/pack.mjs",
     "release:pin": "npm run build && node scripts/release.mjs pin",
     "release:check": "npm run build && node scripts/release.mjs check",
-    "gen:agents": "node scripts/gen-agents.mjs"
+    "gen:agents": "node scripts/gen-agents.mjs",
+    "models:check": "node scripts/model-sync.mjs --check",
+    "models:update": "node scripts/model-sync.mjs --write"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.30.1",

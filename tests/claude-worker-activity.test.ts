@@ -59,6 +59,23 @@ describe('local Claude worker activity', () => {
     const result = f.reader.read([dispatch, launch, { phase: 'background_terminal', session_id: 'session', tool_use_id: 'parent', status: 'completed', written_at: end }], f.env, now);
     expect(result.items[0]).toMatchObject({ state: 'completed', tools: [expect.objectContaining({ state: 'unconfirmed' })] });
   });
+  it('keeps a launched worker active when its parent call fails without confirmed termination', async () => {
+    const f = fixture([row('assistant', [{ type: 'tool_use', id: 'read', name: 'Read', input: {} }])]);
+    const failure = { phase: 'failure', session_id: 'session', tool_use_id: 'parent', release_unconfirmed: true, written_at: end };
+    expect(f.reader.read([dispatch, launch, failure], f.env, now).items[0]).toMatchObject({ state: 'active', tools: [expect.objectContaining({ state: 'active' })] });
+    expect(f.reader.list(0, now).items[0]?.state).toBe('active');
+    expect((await f.reader.history('session', 'agent', 0, f.env, now))?.worker.state).toBe('active');
+  });
+  it.each(['completed', 'failed'])('preserves native %s termination after an unconfirmed parent failure', status => {
+    const f = fixture([]);
+    const terminal = { phase: 'background_terminal', session_id: 'session', tool_use_id: 'parent', status, written_at: end };
+    const failure = { phase: 'failure', session_id: 'session', tool_use_id: 'parent', release_unconfirmed: true, written_at: '2026-10-07T05:27:21.500Z' };
+    expect(f.reader.read([dispatch, launch, terminal, failure], f.env, now).items[0]?.state).toBe(status);
+  });
+  it('still marks a confirmed Agent call failure as failed', () => {
+    const f = fixture([]);
+    expect(f.reader.read([dispatch, launch, { phase: 'failure', session_id: 'session', tool_use_id: 'parent', written_at: end }], f.env, now).items[0]?.state).toBe('failed');
+  });
   it('keeps model request failures separate from received responses', () => {
     const f = fixture([]);
     const view = f.reader.read([dispatch, launch,
@@ -108,6 +125,20 @@ describe('local Claude worker activity', () => {
     expect(await f.reader.history('../other', 'agent', 0, f.env, now)).toBeNull();
     rmSync(f.path); symlinkSync('/etc/passwd', f.path);
     expect(await f.reader.history('session', 'agent', 0, f.env, now)).toMatchObject({ coverage: 'unavailable', tools: [] });
+  });
+  it.each(['background', 'native'])('retains an old %s worker with fresh unfinished tool activity beyond the inactive limit', kind => {
+    const recent = '2026-10-07T05:59:59.000Z', later = new Date('2026-10-07T06:00:00.000Z');
+    const f = fixture([row('assistant', [{ type: 'tool_use', id: 'ongoing', name: 'Read', input: {} }], recent)]);
+    const ongoing = kind === 'background' ? [launch] : [
+      { ...launch, phase: 'mod_router', event: 'model_request' },
+      { ...launch, phase: 'mod_router', event: 'child_result', written_at: end },
+    ];
+    const finished = Array.from({ length: 16 }, (_, i) => ({ ...launch, agent_id: 'finished'+i, tool_use_id: 'finished-call'+i, written_at: end }));
+    const terminals = finished.map(r => ({ ...r, phase: 'background_terminal', status: 'completed' }));
+    const view = f.reader.read([dispatch, ...ongoing, ...finished, ...terminals], f.env, later);
+    expect(view).toMatchObject({ total: 17, limited: false });
+    expect(view.items.find(w => w.agentId === 'agent')).toMatchObject({ state: 'active', lastAt: recent, tools: [expect.objectContaining({ state: 'active' })] });
+    expect(f.reader.list(0, later).items.find(w => w.agentId === 'agent')?.state).toBe('active');
   });
   it('preserves each native model response across tools and deduplicates streamed blocks without copying payloads', async () => {
     const response=(id:string,model:string,content:unknown[],at=start)=>({...row('assistant',content,at),message:{id,model,content}});

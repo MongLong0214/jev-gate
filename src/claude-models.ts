@@ -1,6 +1,6 @@
 /**
  * Exact-model facts the policy is allowed to rely on. Source: the Claude platform model overview and effort pages,
- * read 2026-10-02. https://platform.claude.com/docs/en/models/overview and https://platform.claude.com/docs/en/build-with-claude/effort. A model absent from this table has unknown rank, capacity and effort support, and nothing here
+ * read 2026-10-08. https://platform.claude.com/docs/en/models/overview and https://platform.claude.com/docs/en/build-with-claude/effort. A model absent from this table has unknown rank, capacity and effort support, and nothing here
  * guesses them: its model and effort stay native.
  */
 export type SymbolicEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
@@ -22,11 +22,17 @@ export interface ModelFacts {
    */
   suffixes: readonly string[];
   family: Family;
+  /** Historical identity remains readable, but it is never a new automatic target. */
+  legacy?: boolean;
+  /** First supported Claude Code 2.1 release for this model's native request conversion. */
+  minimumHostRelease?: number;
   contextTokens: number;
   /** Documented output limit, used to reserve the entire possible response when switching to a smaller window. */
   maxOutputTokens?: number;
   /** Published model role; omitted for legacy versions without a current description. */
   role?: string;
+  /** Published API default; independent of the effort selected for a particular task. */
+  defaultEffort?: SymbolicEffort;
   /** Levels valid under every thinking mode the model accepts. Empty when the model takes no effort at all. */
   unconditionalEffort: readonly SymbolicEffort[];
   /**
@@ -37,17 +43,22 @@ export interface ModelFacts {
 }
 
 export const MODEL_FACTS: readonly ModelFacts[] = [
-  { ids: ['claude-fable-5'], suffixes: ['[1m]'], family: 'fable', contextTokens: 1_000_000, unconditionalEffort: ['low', 'medium', 'high', 'xhigh', 'max'], conditionalEffort: [] },
-  { ids: ['claude-sonnet-5-5', 'anthropic.claude-sonnet-5-5'], suffixes: ['[1m]'], family: 'sonnet', contextTokens: 1_000_000, role: 'Fast model combining speed and intelligence; daily coding and bounded implementation.', unconditionalEffort: ['low', 'medium', 'high'], conditionalEffort: ['xhigh', 'max'] },
-  // Adaptive thinking is always on, so no thinking-disabled request exists to make xhigh or max invalid.
-  { ids: ['claude-fable-5-1', 'anthropic.claude-fable-5-1'], suffixes: [], family: 'fable', contextTokens: 1_000_000, role: 'Demanding reasoning and long-horizon agentic work, when Opus at higher effort is insufficient.', unconditionalEffort: ['low', 'medium', 'high', 'xhigh', 'max'], conditionalEffort: [] },
-  { ids: ['claude-opus-5-5', 'anthropic.claude-opus-5-5'], suffixes: ['[1m]'], family: 'opus', contextTokens: 1_000_000, role: 'Long-running agentic coding, complex reasoning and knowledge work.', unconditionalEffort: ['low', 'medium', 'high', 'xhigh', 'max'], conditionalEffort: [] },
-  // Opus 5 permits thinking-disabled requests, which reject xhigh/max (official opus-5/overview).
-  { ids: ['claude-opus-5', 'anthropic.claude-opus-5'], suffixes: [], family: 'opus', contextTokens: 1_000_000, unconditionalEffort: ['low', 'medium', 'high'], conditionalEffort: ['xhigh', 'max'] },
-  { ids: ['claude-sonnet-5'], suffixes: ['[1m]'], family: 'sonnet', contextTokens: 1_000_000, unconditionalEffort: ['low', 'medium', 'high'], conditionalEffort: ['xhigh', 'max'] },
-  // No effort parameter at all.
-  { ids: ['claude-haiku-4-5-20251001', 'claude-haiku-4-5', 'anthropic.claude-haiku-4-5', 'claude-haiku-4-5@20251001'], suffixes: [], family: 'haiku', contextTokens: 200_000, maxOutputTokens: 64_000, role: 'Fastest model; simple tasks, lookup and mechanical transformations with clear checks.', unconditionalEffort: [], conditionalEffort: [] },
+  { ids: ["claude-fable-5"], suffixes: ["[1m]"], family: "fable", legacy: true, contextTokens: 1000000, unconditionalEffort: ["low", "medium", "high", "xhigh", "max"], conditionalEffort: [] },
+  { ids: ["claude-sonnet-5-5", "anthropic.claude-sonnet-5-5"], suffixes: ["[1m]"], family: "sonnet", minimumHostRelease: 284, contextTokens: 1000000, maxOutputTokens: 128000, role: "The best combination of speed and intelligence", defaultEffort: "high", unconditionalEffort: ["low", "medium", "high"], conditionalEffort: ["xhigh", "max"] },
+  { ids: ["claude-fable-5-1", "anthropic.claude-fable-5-1"], suffixes: [], family: "fable", contextTokens: 1000000, maxOutputTokens: 128000, role: "For demanding reasoning and long-horizon agentic work", defaultEffort: "high", unconditionalEffort: ["low", "medium", "high", "xhigh", "max"], conditionalEffort: [] },
+  { ids: ["claude-opus-5-5", "anthropic.claude-opus-5-5"], suffixes: ["[1m]"], family: "opus", contextTokens: 1000000, maxOutputTokens: 128000, role: "For long-running agentic coding and knowledge work", defaultEffort: "medium", unconditionalEffort: ["low", "medium", "high", "xhigh", "max"], conditionalEffort: [] },
+  { ids: ["claude-opus-5", "anthropic.claude-opus-5"], suffixes: [], family: "opus", legacy: true, contextTokens: 1000000, unconditionalEffort: ["low", "medium", "high"], conditionalEffort: ["xhigh", "max"] },
+  { ids: ["claude-sonnet-5"], suffixes: ["[1m]"], family: "sonnet", legacy: true, contextTokens: 1000000, unconditionalEffort: ["low", "medium", "high"], conditionalEffort: ["xhigh", "max"] },
+  { ids: ["claude-haiku-5-5", "anthropic.claude-haiku-5-5"], suffixes: [], family: "haiku", minimumHostRelease: 293, contextTokens: 1000000, maxOutputTokens: 128000, role: "For high-volume, latency-sensitive tasks such as classification, extraction, and routing", defaultEffort: "medium", unconditionalEffort: ["low", "medium", "high"], conditionalEffort: ["xhigh", "max"] },
+  { ids: ["claude-haiku-4-5-20251001", "claude-haiku-4-5", "anthropic.claude-haiku-4-5", "claude-haiku-4-5@20251001"], suffixes: [], family: "haiku", legacy: true, contextTokens: 200000, maxOutputTokens: 64000, role: "Fastest model; simple tasks, lookup and mechanical transformations with clear checks.", unconditionalEffort: [], conditionalEffort: [] },
 ];
+
+/** One current automatic version per family; historical facts only explain older recorded executions. */
+export const currentClaudeModel = (family: Family): string => {
+  const current = MODEL_FACTS.filter(f => f.family === family && !f.legacy);
+  if (current.length !== 1) throw new Error(`ambiguous current Claude family: ${family}`);
+  return current[0]!.ids[0]!;
+};
 
 /** The aliases the Agent tool resolves itself. Root requests never receive one of these. */
 const SPAWN_ALIASES: Readonly<Record<string, Family>> = { haiku: 'haiku', sonnet: 'sonnet', opus: 'opus' };
@@ -112,4 +123,4 @@ export interface RootSwitch {
 
 /** Restricted automatic family, including known canonical versions; unrelated strings never match. */
 export const isFable = (id: string): boolean => factsOf(id)?.family === 'fable' || /^(?:anthropic\.)?claude-fable-\d+(?:-\d+)*(?:@\d{8})?(?:\[1m\])?$/.test(id);
-export const claudeTargetAllowed = (id: string, allowFable: boolean): boolean => allowFable || !isFable(id);
+export const claudeTargetAllowed = (id: string, allowFable: boolean): boolean => factsOf(id)?.legacy !== true && (allowFable || !isFable(id));

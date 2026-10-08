@@ -5,7 +5,7 @@ import { createRouter, type TurnStepEvent } from '../../mods/router/hooks/router
 import { childStepContext } from '../../src/router-child-context.ts';
 import { choice, deferred, drain, fakeEngine, streamNext, type SentRequest, type Responder } from './fake-engine.ts';
 
-const OPUS = 'claude-opus-5-5', SONNET = 'claude-sonnet-5-5', HAIKU = 'claude-haiku-4-5-20251001';
+const OPUS = 'claude-opus-5-5', SONNET = 'claude-sonnet-5-5', HAIKU = 'claude-haiku-5-5';
 const reply = (req: SentRequest, target: string, effort = 'low') => ({ status: 200, text: JSON.stringify({ model: JEV_MODEL,
   answers: Object.fromEntries(Object.entries(req.questions).map(([name, q]) => [name, q.type === 'choice'
     ? choice(Object.keys(q.criteria), [name === 'model' ? target : name === 'control' ? 'task_clear' : 'ordinary', .99])
@@ -16,7 +16,7 @@ async function setup(options: Record<string, boolean> = {}, respond: Responder =
   const resolved = resolveConfig({ enabled: true, routeMainModel: false, routeMainEffort: false, allowFable: false, ...switches });
   if (!resolved.ok) throw Error(resolved.field);
   const router = createRouter(resolved.config, undefined, true);
-  const f = fakeEngine({ hostBase: '2.1.292', respond });
+  const f = fakeEngine({ hostBase: '2.1.293', respond });
   f.engine.modelAliases = async () => ({ opus: OPUS, sonnet: SONNET, haiku: HAIKU });
   f.engine.childContext = async () => ({ messages: 8, coverage: 'available', tools: [{ name: 'Read', state: 'done' }] });
   f.engine.dispatchPair = async () => ({ model: OPUS, effort_edit: { kind: 'set', value: 'high' } });
@@ -44,18 +44,19 @@ describe('native worker inference routing', () => {
     expect(f.sent[0]?.state).toMatchObject({ task: { source: 'child_contract' }, execution: { scope: 'child', step_index: 1, cache: { cross_model_reuse_proven: false } } });
   });
 
-  it('does not reduce a context window from task size or partial transcript evidence', async () => {
+  it('offers current 1M Haiku without inventing a smaller-window bound and excludes legacy Haiku', async () => {
     const { router, f } = await setup();
     await drain(router.turnStep(f.engine, step(1), streamNext<TurnStepEvent>().next));
-    expect(f.sent[0]?.questions.model?.criteria).not.toHaveProperty(HAIKU);
-    expect(f.logs.find(r => r.event === 'child_route')).toMatchObject({ excluded: { context_unverified: expect.any(Number) } });
+    expect(f.sent[0]?.questions.model?.criteria).toHaveProperty(HAIKU);
+    expect(f.sent[0]?.questions.model?.criteria).not.toHaveProperty('claude-haiku-4-5-20251001');
+    expect(f.logs.find(r => r.event === 'child_route')).toMatchObject({ excluded: { legacy_model: expect.any(Number) } });
   });
 
-  it('omits effort for a proven-compatible Haiku request and checks the current step bound', async () => {
+  it('sends current Haiku with its selected supported effort', async () => {
     const { router, f } = await setup({}, req => reply(req, HAIKU));
     f.engine.currentContextBound = async (turnId, index) => ({ turnId, index, inputUpperBound: 20_000, compatible: true });
     const n = streamNext<TurnStepEvent>(); await drain(router.turnStep(f.engine, step(1), n.next));
-    expect(n.calls).toEqual([{ agentId: 'child', turnId: 'child-turn', index: 1, model: HAIKU }]);
+    expect(n.calls).toEqual([{ agentId: 'child', turnId: 'child-turn', index: 1, model: HAIKU, effort: 'low' }]);
   });
 
   it.each(['failure', 'invalid', 'no_context'] as const)('keeps native on %s and reassesses a later step', async mode => {
@@ -97,7 +98,7 @@ describe('native worker inference routing', () => {
 
   it('keeps unexpected native changes and continuation turns native', async () => {
     const { router, f } = await setup();
-    const n = streamNext<TurnStepEvent>(); const changed = step(1, { model: 'claude-sonnet-5' });
+    const n = streamNext<TurnStepEvent>(); const changed = step(1, { model: 'claude-sonnet-5-5' });
     await drain(router.turnStep(f.engine, changed, n.next)); expect(n.calls).toEqual([changed]); expect(f.sent).toHaveLength(0);
   });
 
