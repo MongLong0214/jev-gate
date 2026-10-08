@@ -206,6 +206,8 @@ export interface HookInput {
   last_assistant_message?: string;
   effort?: string;
   prompt?: string;
+  /** Native UserPromptSubmit author provenance; older payloads may omit it. */
+  source?: 'user' | 'sdk' | 'system' | 'loop_wakeup' | 'schedule_wakeup' | 'poll_event';
   tool_name?: string;
   tool_use_id?: string;
   tool_input?: unknown;
@@ -410,6 +412,10 @@ export interface JobGeneration {
   /** Conversation turns can advance while this original execution contract stays current. */
   background_job?: true;
   interactive_prompt_id?: string;
+  /** Time the last owned reservation was released; absence in older state remains unknown. */
+  background_idle_since?: string;
+  /** Exact stored result delivered after all native executions ended; unrelated prompts can then supersede. */
+  background_delivery?: { result: string; prompt_id: string; stalled_since: string };
   /** Terminal policy guidance delivered to the root, rather than to a SubagentStop child context. */
   background_context?: string;
 }

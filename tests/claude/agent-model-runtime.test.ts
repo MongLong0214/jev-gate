@@ -13,6 +13,10 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude Gate B 
   it.each([
     { scope: 'worker', selected: '__keep__', actual: 'claude-haiku-5-5', effort: 'high', allowFable: false, admission: true },
     { scope: 'worker', selected: '__keep__', actual: 'claude-haiku-5-5', effort: 'high', allowFable: false, admission: true, documentation: true },
+    { scope: 'worker', selected: '__keep__', actual: 'claude-haiku-5-5', effort: 'high', allowFable: false, admission: true, documentation: true, childSteps: [
+      { selected: 'claude-sonnet-5-5', actual: 'claude-sonnet-5-5', effort: 'low' },
+      { selected: 'claude-opus-5-5', actual: 'claude-opus-5-5', effort: 'medium' },
+    ] },
     { scope: 'worker', selected: 'claude-haiku-5-5', actual: 'claude-haiku-5-5', effort: 'medium', allowFable: false, adhoc: true },
     { scope: 'worker', selected: '__keep__', actual: 'claude-sonnet-5-5', effort: 'high', allowFable: false },
     { scope: 'worker', selected: 'claude-opus-5-5', actual: 'claude-opus-5-5', effort: 'high', allowFable: false },
@@ -41,7 +45,8 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude Gate B 
     const version = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;
     expect(spawnSync('unzip', ['-q', join(temp, `jev-gate-${version}.zip`), '-d', plugin]).status).toBe(0);
     const manifestPath = join(plugin, '.claude-plugin/plugin.json'); const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
-    manifest.userConfig.routerEnabled.default = scenario.scope === 'root'; manifest.userConfig.routerAllowFable.default = scenario.allowFable;
+    manifest.userConfig.routerEnabled.default = scenario.scope === 'root' || !!scenario.childSteps;
+    if (scenario.childSteps) { manifest.userConfig.routeMainModel.default = false; manifest.userConfig.routeMainEffort.default = false; } manifest.userConfig.routerAllowFable.default = scenario.allowFable;
     if (scenario.scope === 'root') manifest.userConfig.gateMode.default = 'off';
     writeFileSync(manifestPath, JSON.stringify(manifest));
     // Automatic admission uses the supported background runtime. Pinning the legacy foreground
@@ -73,12 +78,12 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude Gate B 
       if (req.url === '/jev') {
         if (body.questions.model) allocations.push(body);
         if (body.questions.bounded_tool_work) admissions.push(body);
-        const selection = scenario.sequence?.[allocations.length - 1] ?? scenario;
+        const selection = scenario.childSteps?.[allocations.length - 2] ?? scenario.sequence?.[allocations.length - 1] ?? scenario;
         const answers = Object.fromEntries(Object.entries(body.questions as Record<string, any>).map(([name, q]) => {
           if (q.type === 'noul') return [name, { type: 'noul', noul: .1 }];
           if (name === 'tool_calls') return [name, { type: 'score', score: 1, confidence: 1, probabilities: Object.fromEntries(q.criteria.map((_: string, i: number) => [i, i === 1 ? 1 : 0])) }];
           if (q.type === 'choice') return [name, choice(Object.keys(q.criteria), [name === 'model' ? selection.selected in q.criteria ? selection.selected : '__keep__' : name === 'control' ? 'task_clear' : name === 'action_risk' ? 'ordinary' : Object.keys(q.criteria)[0]!, name === 'model' ? scenario.probability ?? .99 : .99])];
-          const at = (q.criteria as string[]).findIndex(s => s.startsWith(selection.effort === 'max' ? 'Maximum sustained' : selection.effort === 'medium' ? 'Ordinary reasoning' : 'Strong reasoning'));
+          const at = (q.criteria as string[]).findIndex(s => s.startsWith(selection.effort === 'max' ? 'Maximum sustained' : selection.effort === 'low' ? 'Light reasoning' : selection.effort === 'medium' ? 'Ordinary reasoning' : 'Strong reasoning'));
           if (scenario.splitEffort) return [name, { type: 'score', probabilities: Object.fromEntries(q.criteria.map((s: string, i: number) => [i, s.startsWith('Ordinary reasoning') ? .45 : i === at ? .55 : 0])) }];
           return [name, { type: 'score', probabilities: Object.fromEntries(q.criteria.map((_: string, i: number) => [i, i === at ? 1 : 0])) }];
         })); res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ model: body.model, answers, usage: { input_tokens: 30, output_tokens: 10 } })); return;
@@ -106,7 +111,7 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude Gate B 
     try {
       const code = await new Promise<number | null>((resolve, reject) => {
         const prompt = scenario.documentation ? 'PR 본문 지금 코드에 맞게 고쳐줘' : scenario.admission ? 'Find all parseRecord declarations and callers in src/lookup.ts. Return paths and line numbers. Do not edit.' : scenario.scope === 'root' ? 'Run the stated local printf check and explain the result.' : 'Use the worker for this fixture.';
-        const child = spawn('claude', ['--plugin-dir', plugin, '-p', ...(scenario.sequence || scenario.admission ? ['--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose'] : [prompt]), '--model', 'claude-opus-5-5', '--effort', scenario.incoming ?? 'xhigh', '--max-turns', '4', '--allowedTools', scenario.scope === 'root' ? 'Bash' : scenario.admission ? 'Agent,Bash' : 'Agent'], { env: { ...env, ANTHROPIC_API_KEY: 'fake-local-model-key', ANTHROPIC_BASE_URL: url }, cwd: temp });
+        const child = spawn('claude', ['--debug-file', join(temp, 'native-debug.log'), '--plugin-dir', plugin, '-p', ...(scenario.sequence || scenario.admission ? ['--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose'] : [prompt]), '--model', 'claude-opus-5-5', '--effort', scenario.incoming ?? 'xhigh', '--max-turns', '4', '--allowedTools', scenario.scope === 'root' ? 'Bash' : scenario.admission ? 'Agent,Bash' : 'Agent'], { env: { ...env, ANTHROPIC_API_KEY: 'fake-local-model-key', ANTHROPIC_BASE_URL: url }, cwd: temp });
         let buffered = ''; let completed = 0;
         const send = (text: string) => child.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: text } }) + '\n');
         if (scenario.sequence || scenario.admission) send(scenario.admission ? 'Reply READY.' : prompt); else child.stdin.end();
@@ -118,9 +123,9 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude Gate B 
         child.on('error', e => { clearTimeout(timer); reject(e); }); child.on('close', code => { clearTimeout(timer); resolve(code); });
       });
       const traces = readdirSync(trace).filter(f => f.endsWith('.json')).map(f => JSON.parse(readFileSync(join(trace, f), 'utf8')));
-      const diagnostic = JSON.stringify({ output, toolResults, workers: workerRequests.map(r => ({ model: r.model, effort: r.output_config?.effort })), traces: traces.filter(r => r.phase === 'mod_router' || r.phase === 'pre_result' || r.phase === 'admission_result' || r.phase.startsWith('background_')) });
-      expect(code, diagnostic).toBe(0); expect(allocations, diagnostic).toHaveLength(scenario.sequence?.length ?? 1); expect(workerRequests, diagnostic).toHaveLength(scenario.documentation ? 3 : scenario.sequence ? 6 : scenario.scope === 'root' || scenario.admission ? 2 : 1);
-      for (const [i, request] of workerRequests.entries()) { const expected = scenario.sequence?.[Math.floor(i / 2)] ?? scenario; expect(request.model, diagnostic).toBe(expected.actual); expect(request.output_config?.effort, diagnostic).toBe(expected.effort); }
+      const diagnostic = JSON.stringify({ debug: readFileSync(join(temp, 'native-debug.log'), 'utf8').split('\n').filter(l => /jev-gate|failed to load|\[ERROR\]/i.test(l)).slice(-30), output, toolResults, workers: workerRequests.map(r => ({ model: r.model, effort: r.output_config?.effort, messageEfforts: ((r as any).messages ?? []).map((m: any) => ({ role: m.role, effort: m.effort, metadata: m.metadata, extra: Object.keys(m).filter(k => !['role','content'].includes(k)) })) })), traces: traces.filter(r => r.phase === 'mod_router' || r.phase === 'pre_result' || r.phase === 'admission_result' || r.phase.startsWith('background_')) });
+      expect(code, diagnostic).toBe(0); expect(allocations, diagnostic).toHaveLength(scenario.childSteps ? 3 : scenario.sequence?.length ?? 1); expect(workerRequests, diagnostic).toHaveLength(scenario.documentation ? 3 : scenario.sequence ? 6 : scenario.scope === 'root' || scenario.admission ? 2 : 1);
+      for (const [i, request] of workerRequests.entries()) { const expected = scenario.childSteps?.[i - 1] ?? scenario.sequence?.[Math.floor(i / 2)] ?? scenario; expect(request.model, diagnostic).toBe(expected.actual); expect(request.output_config?.effort, diagnostic).toBe(expected.effort); }
       if (scenario.admission) {
         expect(admissions, diagnostic).toHaveLength(1);
         if (scenario.documentation) {
@@ -134,6 +139,11 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude Gate B 
         expect(job.ok && job.value?.current.prompt_id, diagnostic).toBe(admission.prompt_id);
         expect(job.ok && job.value?.current.active, diagnostic).toEqual({});
         expect(job.ok && job.value?.current.receipts, diagnostic).toEqual([expect.objectContaining({ verdict: 'accept' })]);
+      }
+      if (scenario.childSteps) {
+        for (const payload of allocations.slice(1)) { expect(JSON.stringify(payload), diagnostic).toContain('NEXT inference'); expect(JSON.stringify(payload), diagnostic).not.toContain('ENTIRE requested outcome'); }
+        expect(traces.filter(r => r.phase === 'mod_router' && r.event === 'child_route' && r.sent).length, diagnostic).toBe(2);
+        expect(new Set(traces.filter(r => r.phase === 'mod_router' && r.event === 'child_result').map(r => r.agent_id)).size, diagnostic).toBe(1);
       }
       if (scenario.adhoc) {
         const post = traces.find(r => r.phase === 'post' && r.verdict === 'accept');

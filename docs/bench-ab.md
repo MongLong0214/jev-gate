@@ -13,10 +13,10 @@ node dist/bench/ab.js report --out ~/.jev-gate/bench/2026-09-30 [--trace ~/.jev-
 | | |
 | --- | --- |
 | Conditions | A everything off (baseline), B Gate only, C Compact only, D everything on (shipped defaults). Written as `--settings` plugin options; `JEV_GATE_MODE` is set to match because it overrides the option. |
-| Two turns per cell | Turn 1 primes the context with the same prompt for every condition. Name the files to read explicitly: given only a directory, some model/effort pairs give up after one call (#134). Turn 2 (`--resume`) is the task and the only turn measured. A headless first prompt has no transcript, so Gate A reads `depth_unknown` and never asks Jev (#114); without priming, condition B and D would be A. |
+| Turns per cell | Turn 1 primes the context with the same prompt for every condition. Name the files to read explicitly: given only a directory, some model/effort pairs give up after one call (#134). Turn 2 (`--resume`) is the task. Session cost includes priming plus task; task cost subtracts prime cost from the cumulative resume bill. Optional frozen `followups` append resumed human turns, with optional `waitMs` for TTL boundaries. Session cost is the final cumulative bill; task cost covers all turns after priming. Session and task tokens are reported separately. A headless first prompt has no transcript, so Gate A reads `depth_unknown` and never asks Jev (#114); without priming, condition B and D would be A. |
 | Order | Rotated one position per repetition (ABCD, BCDA, CDAB, DABC) so prompt-cache warming does not favour one condition. |
 | Environment | The child inherits nothing named `CLAUDE_*` or `JEV_GATE_*` from the shell. |
-| Model | `--model` is required and passed to both turns. A headless session otherwise follows `~/.claude/settings.json`, which another session's `/model` can change mid-sweep; two cells of the first sweep ran on a different model that way (#133). `report` reads the model each cell actually ran on from the transcript and excludes a cell whose model is not the pinned one (`model_mismatch`). |
+| Model | `--model` is required and passed to every turn. A headless session otherwise follows `~/.claude/settings.json`, which another session's `/model` can change mid-sweep; two cells of the first sweep ran on a different model that way (#133). `report` reads actual models from the transcript. A non-baseline response is accepted only in D when its exact request ID matches a confirmed Router response and decision. A session-wide model match is insufficient. Hooks without request identity leave these cells unverified and excluded from savings, with `model_mismatch` set. |
 | Editing tasks | `base` checks that commit out in a fresh git worktree under `--out/wt/`, with the main checkout's `node_modules` linked. Worktrees are removed by `git worktree remove --force` (#126). |
 | Timeout | Every `claude -p` and every check command gets `--timeout-ms` (default 1 h) and is killed past it; the cell is recorded `timed_out` and excluded (#121). |
 | Resume | A cell whose result file exists is skipped, so an interrupted sweep continues where it stopped. Progress is read from the files (`started_at`, `wall_s`, and `report` lists cells with a prime but no result), never from a remembered start time (#127). |
@@ -38,7 +38,8 @@ node dist/bench/ab.js report --out ~/.jev-gate/bench/2026-09-30 [--trace ~/.jev-
 - `_prime` must list the files to read one per line. "Read the 30 files under `<dir>`" is read reliably only by some
   model/effort pairs; others answer that Read cannot open a directory and stop after one call, which leaves that cell's
   context 40K smaller than its neighbours' and skews the comparison (#134). `prime_tools` per cell shows whether it worked.
-- `check` runs in `/bin/sh` inside the task's cwd after the task; exit 0 passes. Jest path patterns are **regular
+- `followups` freezes later prompts and optional waits before any cell runs. Missing or failed follow-ups invalidate the cell; native errors and timed-out cells remain in the planned denominator.
+- `check` receives `JEV_BENCH_RESULT_PATH`, the full task result JSON, for a checker frozen before execution. It runs in `/bin/sh` inside the task's cwd after the task; exit 0 passes. Jest path patterns are **regular
   expressions**: `(routes)` and `[projectPk]` are metacharacters and match nothing as written; use a fragment such as
   `'data-transfer./downloads/'` or escape them (#122).
 - `resultPattern` is a case-insensitive regex the final result text must match. It is a weak gate: a run that passed it
@@ -46,10 +47,9 @@ node dist/bench/ab.js report --out ~/.jev-gate/bench/2026-09-30 [--trace ~/.jev-
 
 ## Reading the report
 
-The first table is one row per cell. The second is medians per task x condition over `ok` cells only, the ratio to A,
-and a **paired sign** column: `3/3 below A → effect` means the condition used fewer task-turn tokens than A in every
-repetition where both were ok. Anything less is reported as `k/n below A` and is not an effect, whatever the medians
-say. Cache creation and cache read are separate columns because they price differently and warm differently.
+The first table includes every planned cell, including failed, interrupted and missing results. `cost` is the cumulative session bill (priming plus task); `task_cost` subtracts the priming bill, and is unknown for inconsistent or missing counters. `session_tokens` uses the same session scope. Task input, cache read, cache writes and output remain auxiliary columns.
+
+The headline compares session cost medians and publishes every planned pair's cost ratio. Unknown or failed pairs remain in the denominator and are never wins. `tok/A` and token paired-sign remain diagnostic; fewer tokens alone do not establish lower cost or preserved quality. TTL-specific writes, thinking (already included in output), and Jev input/output are separate columns. Absent counters are unknown. Jev cost remains unknown without observed billing; an API list estimate is not subscription credits or a net saving.
 
 `prime_tools` is how many tool calls the priming turn made, so "read 30 files" is a checked fact per cell (#123).
 

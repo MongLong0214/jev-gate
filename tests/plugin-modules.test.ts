@@ -47,8 +47,8 @@ describe('the one plugin’s hooks module', () => {
 
   it('keeps owned dispatch eligibility with all Mods off and reads only plugin option names', async () => {
     const off = { compactEnabled: false, outputEnabled: false, routerEnabled: false };
-    expect([...(await registered(off)).keys()]).toEqual(['session.start', 'turn.complete', 'turn.step', 'agent.offer', 'agent.spawn', 'session.end']);
-    expect([...(await registered({ ...off, enabled: true })).keys()]).toEqual(['session.start', 'turn.complete', 'turn.step', 'agent.offer', 'agent.spawn', 'session.end']);
+    expect([...(await registered(off)).keys()]).toEqual(['session.start', 'turn.complete', 'turn.step', 'agent.offer', 'agent.spawn', 'session.end', 'session.compact']);
+    expect([...(await registered({ ...off, enabled: true })).keys()]).toEqual(['session.start', 'turn.complete', 'turn.step', 'agent.offer', 'agent.spawn', 'session.end', 'session.compact']);
   });
 
   it('registers each event once with every option at its default, all three Mods on', async () => {
@@ -68,7 +68,7 @@ describe('the one plugin’s hooks module', () => {
 
   it('writes every unusable option from one session-start hook and keeps the other Mods', async () => {
     const hooks = await registered({ compactEnabled: true, compactMode: 'fast', outputEnabled: 'yes', routerEnabled: true });
-    expect([...hooks.keys()].filter((k) => !k.startsWith('turn.') && !k.startsWith('agent.'))).toEqual(['session.start', 'session.end']);
+    expect([...hooks.keys()].filter((k) => !k.startsWith('turn.') && !k.startsWith('agent.'))).toEqual(['session.start', 'session.end', 'session.compact']);
     const logs: string[] = [];
     const e = { cwd: '/r' };
     expect(await hooks.get('session.start')!({ ui: { log: (t: string) => logs.push(t) } }, e, async (x: unknown) => x)).toBe(e);

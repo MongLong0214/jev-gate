@@ -56,6 +56,11 @@ const engineOf = ($: EngineInterface, log: RouterEngine['log']): RouterEngine =>
   sleep: (ms, signal) => $.clock.sleep(ms, { signal }),
   now: () => Date.now(),
   envKey: () => installedKey($),
+  cacheCapability: async () => {
+    const [auth, version, betas, base] = await Promise.all([$.session.authorize(), $.session.version(), $.env.get('CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS'), $.env.get('ANTHROPIC_BASE_URL')]);
+    // No API here exposes organization HIPAA status. Runtime hit observations can establish preservation.
+    return { host: version.base, connection: auth?.kind ?? 'unknown', excluded: betas === '1' || !!base && base !== 'https://api.anthropic.com', hipaa: null };
+  },
   pins: async (scope = 'spawn'): Promise<HostPins> => {
     if (scope === 'effort')
       return { mainModel: false, mainEffort: set(await $.env.get('CLAUDE_CODE_EFFORT_LEVEL')), subagentModel: false, aliasRemap: false };
@@ -144,13 +149,22 @@ export const register: Register = (on, options) => {
     });
     return;
   }
-  registerRouter(on, resolved.config);
+  if (!anyRouting(resolved.config)) return;
+  const observer: ContextObserver = {};
+  registerRouter(on, resolved.config, false, observer);
+  on('session.compact', async ($, e, next) => {
+    const result = await next(e);
+    if (result.skip === undefined) observer.contextChanged?.(e.agentId);
+    return result;
+  });
 };
 
 /** The hooks for a resolved config; the combined jev-gate module (hooks/register.ts) calls this directly. */
-export const registerRouter = (on: On, config: RouterConfig, ownedDispatch = false): void => {
-  if (!ownedDispatch && !anyRouting(config)) return;
+export interface ContextObserver { contextChanged?: (agentId?: string) => void }
+export const registerRouter = (on: On, config: RouterConfig, ownedDispatch = false, observer?: ContextObserver): void => {
   const router = createRouter(config, undefined, ownedDispatch);
+  if (observer) observer.contextChanged = router.contextChanged;
+  if (!ownedDispatch && !anyRouting(config)) return;
 
   if (router.rootEnabled) {
     on('turn.start', ($, e, next) => {
@@ -187,4 +201,5 @@ export const registerRouter = (on: On, config: RouterConfig, ownedDispatch = fal
     quietly(() => router.sessionEnd());
     return next(e);
   });
+
 };

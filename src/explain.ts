@@ -409,6 +409,10 @@ const lineFor = (r: Rec, posts: Map<string, Rec>): string | null => {
     }
     case 'stop':
       return `stop     ${str(r['outcome']) ?? 'no outcome recorded'}`;
+    case 'background_stalled':
+      return `background stalled: no active worker; policy delivered, Gate A resumes after this turn (${str(r['reason']) ?? 'unknown'})`;
+    case 'background_policy_delivery':
+      return `background policy delivered: no active worker; next human prompt resumes Gate A (${str(r['reason']) ?? 'unknown'})`;
     case 'guard': {
       if (r['allow'] !== false) return null;
       const denials = num(r['denials']);

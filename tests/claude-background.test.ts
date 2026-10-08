@@ -7,20 +7,29 @@ import { claudeDefaults, prepareClaude } from '../src/claude-setup.js';
 
 const roots: string[] = [];
 afterEach(() => roots.splice(0).forEach(p => rmSync(p, { recursive: true, force: true })));
-const fixture = async (direct = false) => {
+const fixture = async (direct = false, hierarchy = false) => {
   const root = mkdtempSync('/tmp/jev-bg-unit-'); roots.push(root);
   const cfg = join(root, 'config.json');
-  writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'native', admittedShape: 'single', workerIsolation: 'none', maxParallelWorkers: 1, guardAllowTools: [] }));
+  writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'native', admittedShape: hierarchy ? 'hierarchy' : 'single', workerIsolation: 'none', maxParallelWorkers: 1, guardAllowTools: [] }));
   const env = { HOME: root, JEV_GATE_CONFIG: cfg, JEV_GATE_STATE_DIR: join(root, 'state'), CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '0', JEV_GATE_EXPERIMENT_ADMISSION: 'orchestrated' };
   const parent = join(root, 's.jsonl'); writeFileSync(parent, '');
-  const run = (event: Record<string, unknown>) => runHook({ env, stdin: (async function* () { yield JSON.stringify({ session_id: 's', transcript_path: parent, ...event }); })() });
+  const run = (event: Record<string, unknown>, fetchImpl?: typeof fetch) => runHook({ env, ...(fetchImpl ? { fetchImpl } : {}), stdin: (async function* () { yield JSON.stringify({ session_id: 's', transcript_path: parent, ...event }); })() });
   await run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'original', prompt: 'Implement the original request.' });
   if (direct) updateJob(env, 's', prev => newGeneration(prev, 's', 'original', 'direct').state);
-  const pre = await run({ hook_event_name: 'PreToolUse', prompt_id: 'original', tool_name: 'Agent', tool_use_id: 'dispatch', tool_input: { subagent_type: 'jev-gate:worker', prompt: 'Do the original work.', description: 'work', model: 'sonnet', run_in_background: false } });
-  expect(pre.kind).toBe('patch');
+  const plan = { status: 'ready', goal: 'Original request', chain_depth: 2, assumptions: [], constraints: [], tasks: ['t1', 't2', 't3'].map(id => ({ id, outcome: `Deliver ${id}`, depends_on: id === 't3' ? ['t1'] : [], context: '', constraints: [], deliverables: [`${id}.ts`], checks: [{ id: 'check', description: 'Required fixture check', required: true, command: null }], replan_if: ['The declared interface is absent.'] })) };
+  if (hierarchy) {
+    const planner = { subagent_type: 'jev-gate:planner', prompt: 'Plan the original request.', description: 'plan', model: 'opus', run_in_background: false };
+    expect((await run({ hook_event_name: 'PreToolUse', prompt_id: 'original', tool_name: 'Agent', tool_use_id: 'plan', tool_input: planner })).kind).toBe('patch');
+    const accepted = await run({ hook_event_name: 'PostToolUse', prompt_id: 'original', tool_name: 'Agent', tool_use_id: 'plan', tool_input: planner, tool_response: { status: 'completed', content: [{ type: 'text', text: JSON.stringify(plan) }] } });
+    expect(accepted.kind).toBe('context');
+    const state = readJob(env, 's');
+    expect(state.ok && state.value?.current.phase, JSON.stringify(accepted)).toBe('planned');
+  }
+  const pre = await run({ hook_event_name: 'PreToolUse', prompt_id: 'original', tool_name: 'Agent', tool_use_id: 'dispatch', tool_input: { subagent_type: 'jev-gate:worker', prompt: hierarchy ? '[JEV_TASK rev=1 id=t1]\nDo the original work.' : 'Do the original work.', description: 'work', model: 'sonnet', run_in_background: false } });
+  expect(pre.kind, JSON.stringify(pre)).toBe('patch');
   const input = JSON.parse(pre.stdout!).hookSpecificOutput.updatedInput;
   const path = join(root, 's', 'subagents', 'agent-worker.jsonl'); mkdirSync(join(root, 's', 'subagents'), { recursive: true });
-  const report = JSON.stringify({ status: 'done', summary: 'original result', changed_files: [], interfaces: [], checks: [], blockers: [] });
+  const report = JSON.stringify({ status: hierarchy ? 'replan' : 'done', summary: hierarchy ? 'The declared interface is absent.' : 'original result', changed_files: [], interfaces: [], checks: [], blockers: [] });
   const transcript = (error = false) => writeFileSync(path, [
     { type: 'user', agentId: 'worker', sessionId: 's', message: { content: input.prompt } },
     { type: 'assistant', agentId: 'worker', sessionId: 's', isApiErrorMessage: error, message: { model: 'claude-sonnet-5', stop_reason: 'end_turn', content: [{ type: 'text', text: report }] } },
@@ -28,10 +37,115 @@ const fixture = async (direct = false) => {
   const terminal = (over = {}) => run({ hook_event_name: 'SubagentStop', prompt_id: 'question', agent_id: 'worker', agent_type: 'jev-gate:worker', agent_transcript_path: path, last_assistant_message: report, ...over });
   const launch = () => run({ hook_event_name: 'PostToolUse', prompt_id: 'original', tool_name: 'Agent', tool_use_id: 'dispatch', tool_input: input, tool_response: { status: 'async_launched', isAsync: true, agentId: 'worker', resolvedModel: 'claude-sonnet-5' } });
   const job = () => { const r = readJob(env, 's'); if (!r.ok || !r.value) throw new Error('missing job'); return r.value; };
-  return { root, env, run, pre, input, path, report, transcript, terminal, launch, job };
+  return { root, cfg, parent, env, run, pre, input, path, report, transcript, terminal, launch, job };
 };
 
 describe('responsive native background contracts', () => {
+  it.each(['completed', 'incomplete'] as const)('admits a human prompt after an older closed generation without a delivery marker (%s)', async outcome => {
+    const f = await fixture(); await f.launch();
+    updateJob(f.env, 's', prev => prev ? { ...prev, current: { ...prev.current, active: {}, outcome, background_context: 'Historical policy result.' } } : null);
+    const next = await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'human-after-old-state', prompt: 'Add a new README section.' });
+    expect(f.job().current.prompt_id).toBe('human-after-old-state'); expect(next.stdout).not.toContain('background completion notice');
+  });
+  it.each([true, false])('records idle policy delivery without a false admission block and reports closure (accepted=%s)', async accepted => {
+    const f = await fixture(); const trace = join(f.root, 'trace'); Object.assign(f.env, { JEV_GATE_TRACE_DIR: trace });
+    await f.launch(); f.transcript(!accepted); await f.terminal();
+    const idleSince = f.job().current.background_idle_since;
+    expect(idleSince).toMatch(/^\d{4}-/);
+    await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'delivery', prompt: 'Explain the result.' });
+    const delivery = f.job().current.background_delivery;
+    expect(delivery?.stalled_since).toBe(idleSince);
+    await f.run({ hook_event_name: 'Stop', prompt_id: 'delivery' });
+    const records = readdirSync(trace).map(file => JSON.parse(readFileSync(join(trace, file), 'utf8')));
+    expect(records.filter(r => r.phase === 'background_stalled')).toHaveLength(0);
+    expect(records).toContainEqual(expect.objectContaining({ phase: 'background_policy_delivery', admission_blocked: false, stalled_since: idleSince, stalled_since_basis: 'reservation_release' }));
+    const stopped = records.find(r => r.phase === 'stop' && r.prompt_id === 'delivery');
+    expect(stopped?.outcome).toBe(accepted ? 'completed' : 'incomplete');
+    if (!accepted) expect(stopped?.closed_reason).toBe('no_active_execution_after_policy_delivery');
+  });
+  it('permits replanning in the idle delivery turn and retains the revision and attempt bounds', async () => {
+    const f = await fixture(false, true); await f.launch(); f.transcript(); await f.terminal();
+    expect(f.job().current.active).toEqual({}); expect(f.job().current.receipts.at(-1)?.verdict).toBe('replan');
+    await f.run({ hook_event_name: 'Stop', prompt_id: 'original' });
+    expect(f.job().current.outcome).toBeNull();
+    expect((await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'delivery', prompt: 'Continue with the violated assumption.' })).stdout).toContain('policy result');
+    const planner = { subagent_type: 'jev-gate:planner', prompt: 'Replan: the declared interface is absent.', description: 'replan', model: 'opus', run_in_background: false };
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const result = await f.run({ hook_event_name: 'PreToolUse', prompt_id: 'delivery', tool_name: 'Agent', tool_use_id: `replan-${attempt}`, tool_input: planner });
+      expect(result.kind, JSON.stringify(result)).toBe('patch'); expect(f.job().current.background_delivery).toBeUndefined();
+      const agent = `planner-${attempt}`;
+      const patched = JSON.parse(result.stdout!).hookSpecificOutput.updatedInput;
+      await f.run({ hook_event_name: 'PostToolUse', prompt_id: 'delivery', tool_name: 'Agent', tool_use_id: `replan-${attempt}`, tool_input: patched, tool_response: { status: 'async_launched', isAsync: true, agentId: agent } });
+      const path = join(f.root, 's', 'subagents', `agent-${agent}.jsonl`);
+      const reply = JSON.stringify({ status: 'blocked', reason: 'No replacement interface exists.', findings: [] });
+      writeFileSync(path, [
+        { type: 'user', agentId: agent, sessionId: 's', message: { content: patched.prompt } },
+        { type: 'assistant', agentId: agent, sessionId: 's', message: { model: 'claude-opus-5-5', stop_reason: 'end_turn', content: [{ type: 'text', text: reply }] } },
+      ].map(row => JSON.stringify(row)).join('\n') + '\n');
+      await f.run({ hook_event_name: 'SubagentStop', prompt_id: 'delivery', agent_id: agent, agent_type: 'jev-gate:planner', agent_transcript_path: path, last_assistant_message: reply });
+      expect(f.job().current.attempts).toMatchObject({ planner: 1, replans: attempt });
+      expect(f.job().current.plan?.rev).toBe(1);
+    }
+    expect(await f.run({ hook_event_name: 'PreToolUse', prompt_id: 'delivery', tool_name: 'Agent', tool_use_id: 'replan-3', tool_input: planner })).toMatchObject({ kind: 'deny', code: 'bounds_exhausted' });
+  });
+  it.each(['system', undefined] as const)('delivers an idle incomplete policy once, closes on Stop, and admits unrelated prompts (source=%s)', async source => {
+    const f = await fixture(); await f.launch(); f.transcript(true); await f.terminal();
+    await f.run({ hook_event_name: 'Stop', prompt_id: 'original' });
+    expect(f.job().current.outcome).toBeNull(); // Stop before delivery retains the policy.
+    const delivered = await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'delivery', prompt: 'Explain the result.' });
+    expect(delivered.stdout).toContain('policy result');
+    const prompt = '<task-notification>completed</task-notification>';
+    writeFileSync(f.parent, JSON.stringify({ type: 'user', sessionId: 's', promptId: 'duplicate', origin: { kind: 'task-notification', producer: 'session-task' }, promptSource: 'system', turnOrigin: 'task_notification', message: { content: prompt } }) + '\n');
+    const notice = await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'duplicate', source, prompt });
+    expect(notice.stdout).toBeNull();
+    await f.run({ hook_event_name: 'Stop', prompt_id: 'delivery' });
+    expect(f.job().current.outcome).toBe('incomplete');
+    for (let i = 0; i < 3; i++) {
+      await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: `new-${i}`, prompt: 'An unrelated request.' });
+      expect(f.job().current.prompt_id).toBe(`new-${i}`);
+    }
+    expect(f.job().history.find(g => g.prompt_id === 'original')?.outcome).toBe('incomplete');
+  });
+  it.each(['user', 'sdk', undefined] as const)('does not suppress copied notification XML from a human source %s', async source => {
+    const f = await fixture(); await f.launch(); f.transcript(true); await f.terminal();
+    await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'delivery', prompt: 'Explain the result.' });
+    await f.run({ hook_event_name: 'Stop', prompt_id: 'delivery' });
+    await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'human-next', source, prompt: '<task-notification>Example</task-notification>\nFix this parser.' });
+    expect(f.job().current.prompt_id).toBe('human-next');
+    expect(f.job().history.find(g => g.prompt_id === 'original')?.outcome).toBe('incomplete');
+  });
+  it('preserves a genuine machine notification delivered before its transcript flush', async () => {
+    const f = await fixture(); await f.launch(); f.transcript(true); await f.terminal();
+    await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'delivery', prompt: 'Explain the result.' });
+    await f.run({ hook_event_name: 'Stop', prompt_id: 'delivery' });
+    const result = await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'native-notice', source: 'system', prompt: '<task-notification>completed</task-notification>' });
+    expect(result.stdout).toBeNull(); expect(f.job().current.prompt_id).toBe('original');
+    await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'new-human', source: 'user', prompt: 'Continue with new work.' });
+    expect(f.job().current.prompt_id).toBe('new-human');
+  });
+  it('returns three unrelated human prompts to fresh Gate A after one idle policy delivery', async () => {
+    const f = await fixture(); await f.launch(); f.transcript(true); await f.terminal();
+    await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'notice', prompt: '<task-notification>completed</task-notification>' });
+    const trace = join(f.root, 'trace'); Object.assign(f.env, { TYPESAFE_API_KEY: 'fixture-key', JEV_GATE_TRACE_DIR: trace });
+    delete (f.env as Record<string, string>)['JEV_GATE_EXPERIMENT_ADMISSION'];
+    writeFileSync(f.cfg, JSON.stringify({ version: 5, mode: 'auto', delegationDepthFloor: 0, admittedShape: 'single', workerIsolation: 'none', maxParallelWorkers: 1 }));
+    writeFileSync(f.parent, JSON.stringify({ type: 'assistant', message: { model: 'claude-opus-5-5', usage: { input_tokens: 100000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } }) + '\n');
+    let calls = 0;
+    const fetchImpl: typeof fetch = async (_url, init) => {
+      calls++; const request = JSON.parse(String(init?.body));
+      const answers = Object.fromEntries(Object.entries(request.questions as Record<string, any>).map(([name, q]) => [name,
+        q.type === 'noul' ? { type: 'noul', noul: 0 } : q.type === 'choice' ? { type: 'choice', choice: name === 'task_context' ? 'self_contained' : 'other', confidence: 1, probabilities: Object.fromEntries(Object.keys(q.criteria).map(k => [k, k === (name === 'task_context' ? 'self_contained' : 'other') ? 1 : 0])) } : { type: 'score', score: 0, confidence: 1, probabilities: { 0: 1 } }]));
+      return new Response(JSON.stringify({ model: request.model, answers }), { headers: { 'content-type': 'application/json' } });
+    };
+    for (let i = 0; i < 3; i++) {
+      const result = await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: `fresh-${i}`, prompt: 'Explain a separate bounded question.' }, fetchImpl);
+      expect(result.stdout ?? '').not.toContain('policy result'); expect(f.job().current.prompt_id).toBe(`fresh-${i}`);
+    }
+    expect(calls).toBe(3);
+    const intents = readdirSync(trace).map(file => JSON.parse(readFileSync(join(trace, file), 'utf8'))).filter(r => r.phase === 'admission_intent');
+    expect(intents.map(r => r.prompt_id).sort()).toEqual(['fresh-0', 'fresh-1', 'fresh-2']);
+    expect(f.job().history.find(g => g.prompt_id === 'original')?.outcome).toBe('superseded');
+  });
   it.each(['UserPromptSubmit', 'PreToolUse'])('recovers a completed worker with no stop_reason from a native notification before %s', async event => {
     const f = await fixture(); await f.launch(); f.transcript();
     const rows = readFileSync(f.path, 'utf8').trim().split('\n').map(line => JSON.parse(line));
@@ -43,7 +157,7 @@ describe('responsive native background contracts', () => {
     expect(f.job().current.active).toEqual({});
     expect(f.job().current.receipts).toEqual([expect.objectContaining({ verdict: 'accept' })]);
     await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'again', prompt: 'Continue' });
-    expect(f.job().current.receipts).toHaveLength(1);
+    expect([f.job().current, ...f.job().history].find(g => g.prompt_id === 'original')?.receipts).toHaveLength(1);
   });
   it.each(['human', 'wrong_agent', 'older', 'tool_use', 'invalid_child_time'])('does not settle missing stop_reason from an invalid notification (%s)', async kind => {
     const f = await fixture(); await f.launch(); f.transcript();
@@ -77,6 +191,7 @@ describe('responsive native background contracts', () => {
     expect(f.job().current.receipts).toHaveLength(1); expect(f.job().current.receipts[0]?.verdict).toBe('accept');
     expect(f.job().current.active).toEqual({}); expect(f.job().current.root_fallback).not.toBe(true);
     expect(f.job().current.background_context).toContain('overall user request remains yours');
+    await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'notice', prompt: '<task-notification>completed</task-notification>' });
     await f.run({ hook_event_name: 'Stop', prompt_id: 'question' }); expect(f.job().current.outcome).toBe('completed');
   });
   it('answers new questions without superseding the worker and accepts its genuine result exactly once', async () => {
@@ -128,9 +243,16 @@ describe('responsive native background contracts', () => {
     expect(f.job().current.receipts).toHaveLength(settled ? 1 : 0);
     expect(f.job().current.receipts.some(r => r.verdict === 'accept')).toBe(false);
     if (settled) {
-      await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'notice', prompt: '<task-notification>native cancellation notice</task-notification>' });
+      await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'notice', source: 'system', prompt: '<task-notification>native cancellation notice</task-notification>' });
       expect(f.job().current.prompt_id).toBe('original'); expect(f.job().current.outcome).toBe('incomplete');
     }
+  });
+  it('admits the first ordinary prompt immediately after native TaskStop, before any notification delivery', async () => {
+    const f = await fixture(); await f.launch();
+    await f.run({ hook_event_name: 'PostToolUse', prompt_id: 'original', tool_name: 'TaskStop', tool_input: { task_id: 'worker' }, tool_response: { message: 'Successfully stopped task: worker (work)', task_id: 'worker', task_type: 'local_agent' } });
+    expect(f.job().current.outcome).toBe('incomplete'); expect(f.job().current.background_delivery).toBeUndefined();
+    const next = await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'next-human', prompt: 'Implement a different request.' });
+    expect(f.job().current.prompt_id).toBe('next-human'); expect(next.stdout).not.toContain('background completion notice');
   });
   it.each([true, false])('releases a Lean executor only after a proven terminal (completed=%s)', async completed => {
     const f = await fixture(); await f.launch();
@@ -138,6 +260,9 @@ describe('responsive native background contracts', () => {
     f.transcript(!completed); await f.terminal({ agent_type: 'jev-gate:executor' });
     expect(f.job().current.active).toEqual({}); expect(f.job().current.outcome).toBe(completed ? 'completed' : 'incomplete');
     expect(f.job().current.receipts).toHaveLength(0);
+    expect(f.job().current.background_delivery).toBeUndefined();
+    const next = await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'next-human', prompt: 'Implement a different request.' });
+    expect(f.job().current.prompt_id).toBe('next-human'); expect(next.stdout).not.toContain('background completion notice');
   });
   it.each(['SubagentStop', 'PostToolUse'])('does not report a Lean release when its state write fails (%s)', async hook => {
     const f = await fixture(); await f.launch();

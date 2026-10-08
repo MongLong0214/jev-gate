@@ -2359,6 +2359,16 @@ describe('Stop', () => {
 });
 
 describe('traces', () => {
+  it('does not price an Agent aggregate as one long-context request', async () => {
+    const dir = mkdtempSync(join(tmp, 'aggregate-trace-'));
+    const env = makeEnv({ JEV_GATE_MODE: 'native', JEV_GATE_TRACE_DIR: dir });
+    await run(env, { hook_event_name: 'PostToolUse', session_id: 's', prompt_id: 'p', tool_name: 'Agent', tool_use_id: 'call',
+      tool_input: { subagent_type: 'general-purpose', model: 'haiku', prompt: 'bounded work' },
+      tool_response: { status: 'completed', resolvedModel: 'claude-haiku-5-5', modelsUsed: ['claude-haiku-5-5'],
+        usage: { input_tokens: 150000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 3000 } } });
+    const post = readdirSync(dir).map(file => JSON.parse(readFileSync(join(dir, file), 'utf8'))).find(r => r.phase === 'post');
+    expect(post.tool_response).toMatchObject({ accounting_scope: 'agent_aggregate', accounting: { input: 150000, output: 3000 }, cost: { usd: null, reason: 'aggregate_request_prices_unknown' } });
+  });
   it('records both gate phases, the guard and the plan without the prompt or the key', async () => {
     const dir = join(tmp, 'trace-full');
     const env = makeEnv({ JEV_GATE_TRACE_DIR: dir });
@@ -3227,7 +3237,14 @@ describe('receipt selection and observation keys (2026-09-20)', () => {
     expect(answers['tool_calls']).toMatchObject({ type: 'score', score: 3.6, choice: null });
     expect(answers['forbids_delegation']).toMatchObject({ type: 'noul', noul: 0.07 });
     expect(answers['external_tools']).toBeUndefined();
-    expect(record?.['estimate']).toEqual({ turns: 41.5, saving_tokens: (41.5 - 11) * 406_000 - 41.5 * 40_000, cost_support: 1 });
+    expect(record?.['estimate']).toMatchObject({ turns: 41.5, cost_basis: 'tokens', saving_tokens: (41.5 - 11) * 406_000 - 41.5 * 40_000, cost_support: 1 });
+  });
+
+  it('records available Claude price components from native depth while keeping unobserved delegation costs unknown', async () => {
+    const dir = join(tmp, 'trace-claude-partial-prices'); const env = makeEnv({ JEV_GATE_TRACE_DIR: dir });
+    await run(env, promptEvent({ transcript_path: transcriptAt(406000, 'claude-opus-5-5[1m]') }), fakeJev());
+    const record = readdirSync(dir).map(f => JSON.parse(readFileSync(join(dir, f), 'utf8'))).find(r => r.phase === 'admission_result');
+    expect(record?.estimate).toMatchObject({ cost_basis: 'tokens', cost: { savingUsd: null, components: { m1: expect.any(Number), m2: null, m3: null, m4: null, m5: null } } });
   });
 });
 

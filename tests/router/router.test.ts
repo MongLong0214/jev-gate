@@ -65,7 +65,8 @@ describe('root window compatibility at the current request', () => {
       router.turnComplete({ turnId, reason: 'answer', answer: 'Observed result.' });
     }
     expect(f.logs.filter(l => l.event === 'root').map(l => l.turn)).toEqual(['turn-0', 'turn-1', 'turn-2']);
-    expect(f.sent[1]?.state).toMatchObject({ execution: { cache: { source: 'provider_response_usage', cross_model_reuse_proven: false, current_fit_proven: false } } });
+    if (mode.endsWith('default')) expect(f.sent[1]?.state).not.toHaveProperty('execution');
+    else expect(f.sent[1]?.state).toMatchObject({ execution: { cache: { source: 'provider_response_usage', cross_model_reuse_proven: false, current_fit_proven: false } } });
     expect(f.logs.filter(l => l.event === 'root')[2]).toMatchObject({ selection: { direction: mode.endsWith('default') ? 'unknown' : 'upgrade' }, reasons: { model: mode.endsWith('default') ? 'same_value' : 'selected' } });
   });
   it('does not let a late retired root response or completion replace newer cache and visible context', async () => {
@@ -676,7 +677,7 @@ describe('root model', () => {
     router.turnStart({ turnId: 't1', text: TEXT });
     const counts = { input_tokens: 1200, output_tokens: 80, cache_read_input_tokens: 40000, cache_creation_input_tokens: 0, note: 'dropped' };
     await drain(router.turnStep(f.engine, step({ model: 'claude-sonnet-5-5' }), streamNext<TurnStepEvent>(undefined, counts).next));
-    expect(f.logs).toContainEqual({
+    expect(f.logs).toContainEqual(expect.objectContaining({
       event: 'root_result',
       turn: 't1',
       index: 0,
@@ -687,7 +688,7 @@ describe('root model', () => {
       applied: { model: 'claude-opus-5-5' },
       observed: 'claude-opus-5-5',
       usage: { input: 1200, output: 80, cache_read: 40000, cache_creation: 0 },
-    });
+    }));
   });
 
   it('resolves default aliases to exact root identifiers and enables the frontier tier', async () => {
@@ -1262,6 +1263,19 @@ describe('subagent effort and named models', () => {
 });
 
 describe('root effort and the prompt cache', () => {
+  it('keeps the original model pair when an observed priced switch has a strictly positive cost floor', async () => {
+    let tier = 'standard'; const router = createRouter(configOf(MODEL_ONLY), SWITCHES);
+    const f = fakeEngine({ respond: req => answering({ ...CLEAR, tier: [tier, .99] })(req) });
+    const turn = async (id: string, model: string, ttl: 'ephemeral_5m_input_tokens' | 'ephemeral_1h_input_tokens') => {
+      router.turnStart({ turnId: id, text: TEXT });
+      const n = streamNext<TurnStepEvent>(undefined, { input_tokens: 0, output_tokens: 100, cache_read_input_tokens: 99000, cache_creation_input_tokens: 1000, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0, [ttl]: 1000 } });
+      await drain(router.turnStep(f.engine, step({ turnId: id, model }), n.next)); router.turnComplete({ turnId: id }); return n.calls[0];
+    };
+    await turn('target-write', 'claude-sonnet-5-5', 'ephemeral_5m_input_tokens');
+    f.clock.ms += 300001; tier = 'deep'; await turn('baseline-write', 'claude-opus-5-5', 'ephemeral_1h_input_tokens');
+    tier = 'standard'; expect((await turn('held', 'claude-opus-5-5', 'ephemeral_1h_input_tokens'))?.model).toBe('claude-opus-5-5');
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root', turn: 'held', cost_reason: 'cost_hold', proposed_patch: expect.objectContaining({ model: 'claude-sonnet-5-5' }), patch: {} }));
+  });
   it('does not suppress an effort downgrade after the host explicitly reports no cache read or creation', async () => {
     const router = createRouter(configOf(EFFORT_ONLY));
     let effort: [string, number] = ['xhigh', .95];
@@ -1278,11 +1292,55 @@ describe('root effort and the prompt cache', () => {
     expect(f.sent).toHaveLength(2);
   });
 
+  it.each(['hit', 'miss', 'unknown'] as const)('checks capability-preserving effort changes and restores the warm floor only on a known miss (%s)', async outcome => {
+    const router = createRouter(configOf(EFFORT_ONLY)); let wanted = 'high';
+    const f = fakeEngine({ respond: req => answering({ ...CLEAR, effort: [wanted, .99] })(req) });
+    f.engine.cacheCapability = async () => ({ host: '2.1.288', connection: 'api-key', excluded: false, hipaa: false });
+    const turn = async (id: string, effort: string, usage: Record<string, unknown>) => {
+      wanted = effort; router.turnStart({ turnId: id, text: TEXT });
+      const next = streamNext<TurnStepEvent>(undefined, usage); await drain(router.turnStep(f.engine, step({ turnId: id, effort: 'xhigh' }), next.next)); router.turnComplete({ turnId: id }); return next.calls[0]?.effort;
+    };
+    const writes = { input_tokens: 2, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 10000 };
+    await turn('warm', 'high', writes);
+    expect(await turn('change', 'low', outcome === 'unknown' ? {} : { ...writes, cache_read_input_tokens: outcome === 'hit' ? 9800 : 0 })).toBe('low');
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'effort_cache', turn: 'change', hit: outcome === 'unknown' ? null : outcome === 'hit', floor_restored: outcome === 'miss' }));
+    await turn('upgrade', 'high', { ...writes, cache_read_input_tokens: 30000 });
+    const final = await turn('again', 'low', writes);
+    expect(final).toBe(outcome === 'miss' ? 'high' : 'low');
+    router.contextChanged(); expect(await turn('compacted', 'low', writes)).toBe('low');
+  });
+  it.each(['claude-opus-5-5', 'claude-opus-5-5[1m]'])('restores the floor after a native four-counter hit followed by a miss (%s)', async model => {
+    const router = createRouter(configOf(EFFORT_ONLY)); let wanted = 'high';
+    const f = fakeEngine({ respond: req => answering({ ...CLEAR, effort: [wanted, .99] })(req) });
+    f.engine.cacheCapability = async () => ({ host: '2.1.288', connection: 'bearer', excluded: false, hipaa: null });
+    const turn = async (id: string, effort: string, read: number) => {
+      wanted = effort; router.turnStart({ turnId: id, text: TEXT });
+      const n = streamNext<TurnStepEvent>(undefined, { input_tokens: 2, output_tokens: 2, cache_read_input_tokens: read, cache_creation_input_tokens: 10000 });
+      await drain(router.turnStep(f.engine, step({ turnId: id, effort: 'xhigh', model }), n.next)); router.turnComplete({ turnId: id }); return n.calls[0]?.effort;
+    };
+    await turn('warm', 'medium', 0);
+    expect(await turn('hit', 'xhigh', 10000)).toBe('xhigh');
+    await turn('miss', 'high', 0);
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'effort_cache', turn: 'miss', hit: false, floor_restored: true }));
+    expect(await turn('after-miss', 'low', 0)).toBe('high');
+    expect(f.sent.at(-1)?.state).toMatchObject({ execution: { cache: { cache_write_tokens: 10000 } } });
+  });
+  it('bounds the legacy floor when native usage does not expose TTL, without claiming a known cache expiry', async () => {
+    const router = createRouter(configOf(EFFORT_ONLY)); let wanted = 'high';
+    const f = fakeEngine({ respond: req => answering({ ...CLEAR, effort: [wanted, .99] })(req) });
+    const turn = async (id: string) => {
+      router.turnStart({ turnId: id, text: TEXT }); const n = streamNext<TurnStepEvent>(undefined, { input_tokens: 2, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 10000 });
+      await drain(router.turnStep(f.engine, step({ turnId: id, effort: 'xhigh' }), n.next)); router.turnComplete({ turnId: id }); return n.calls[0]?.effort;
+    };
+    await turn('warm'); wanted = 'low'; f.clock.ms += 55 * 60_000 + 1;
+    expect(await turn('expired-guard')).toBe('low');
+    expect(f.sent.at(-1)?.state).toMatchObject({ execution: { cache: { ttl_ms: null } } });
+  });
   it('lowers effort only on a cold cache, holds it on a warm one, and always lets it rise', async () => {
     const router = createRouter(configOf(EFFORT_ONLY));
     let pick: [string, number] = ['medium', 0.95];
     const f = fakeEngine({ respond: (req) => answering({ ...CLEAR, effort: pick })(req) });
-    const n = streamNext<TurnStepEvent>();
+    const n = streamNext<TurnStepEvent>(undefined, { input_tokens: 2, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 4000, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 4000 } });
     const turn = async (id: string, effort: [string, number], afterMs: number) => {
       pick = effort;
       f.clock.ms += afterMs;
@@ -1311,7 +1369,7 @@ describe('root effort and the prompt cache', () => {
   it('keeps the effort of a turn that arrives at another one than the turn before, which may be a change by hand (#81)', async () => {
     const router = createRouter(configOf(EFFORT_ONLY));
     const f = fakeEngine({ respond: answering({ ...CLEAR, effort: ['medium', 0.95] }) });
-    const n = streamNext<TurnStepEvent>();
+    const n = streamNext<TurnStepEvent>(undefined, { input_tokens: 2, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 4000, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 4000 } });
     const turn = async (id: string, effort: SymbolicEffort) => {
       f.clock.ms += 60 * 60_000;
       router.turnStart({ turnId: id, text: TEXT });

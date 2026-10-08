@@ -1,12 +1,12 @@
 import { resolveApiKey } from '../credentials.js';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { join, isAbsolute, resolve, relative } from 'node:path';
 import { mkdirSync, realpathSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createWorkerWorktree, type WorkerWorktree } from '../worktree.js';
 import { runHook, type HookDeps } from '../hook.js';
-import { stateRoot, readJob, updateJob, own, codexExecutions } from '../job.js';
+import { stateRoot, readJob, updateJob, own, codexExecutions, pendingBackgroundPolicy } from '../job.js';
 import { OWNED_AGENTS, LEAN_EXECUTOR_AGENT, type HookInput } from '../types.js';
 import { OWNED_AGENT_PROFILES } from '../agents.js';
 import type { Env } from '../config.js';
@@ -21,11 +21,16 @@ import { capturedPermissions } from './permissions.js';
 import { codexCallerWorkspace } from './workspace.js';
 import { selectRecentPrompts } from '../recent-prompts.js';
 import { wireSource } from './wire.js';
+import { normalizeUsage, usageCost, ModelCache } from '../cost.js';
+import { providerPrice, providerContextLimit } from '../provider-prices.js';
+import { workerStepContext, requestStepKey } from './worker-step.js';
+import { requestedUpdateEffort } from './effort-update.js';
+import { observedDelegationPrices } from '../delegation-prices.js';
 import { normalizeCatalog, codexTargetAllowed, generalCodexModel } from './catalog.js';
 import { applyEffort, type PairPatch } from '../../mods/router/hooks/selection.ts';
 import type { RoutingCache } from '../../mods/router/hooks/context.ts';
 
-export interface CodexSubmission { prompt: string | null; model: string; effort: string | null; requestId: string }
+export interface CodexSubmission { prompt: string | null; model: string; effort: string | null; requestId: string; epoch: string; index: number | null; scope: 'root' | 'child'; parent: string | null }
 interface WorkerDispatch {
   parent: Session; prompt: string; tool: string; input: Obj; signal: AbortSignal;
   worktree: WorkerWorktree | null; startedAt: number; attempted: boolean;
@@ -38,7 +43,7 @@ interface Session {
   tokens: number | null; window: number | null; controller: AbortController | null;
   commands: Map<string, string>;
   requestModel?: string; requestEffort?: string;
-  requestKind?: 'root_response';
+  requestKind?: 'root_response' | 'child_response';
   compactAllowed?: boolean; eligible?: boolean; terminal?: boolean;
   role?: string; parent?: string; done?: (turn: Obj) => void; route?: PairPatch; routePending?: Promise<void>; routeDeadline?: number; routeConfig?: string;
   previousReply?: string; completedReply?: string; turnReply?: string; lastSubmitted?: CodexSubmission;
@@ -51,6 +56,10 @@ interface Session {
   dispatch?: WorkerDispatch;
   lastCompactSummary?: string;
   cache?: RoutingCache & { at: number };
+  modelCache?: ModelCache;
+  stepRoutes?: Map<string, { index: number; model: string; effort: string | null; patch: PairPatch; config?: string; catalogEpoch?: number; settingsEpoch?: number; pending?: Promise<void> }>;
+  stepIndex?: number;
+  settingsEpoch?: number;
 }
 const contextOf = (result: { stdout: string | null }): string => {
   if (!result.stdout) return '';
@@ -72,6 +81,7 @@ export class CodexPolicy {
   private hooked = new Set<string>();
   private compactPending = new Map<string, { summary: string; run: string; before: number; after: number }>();
   private backgroundResults = new Map<string, { parent: string; output: string }>();
+  private workerStarts = new Map<string, { range: [number, number]; writeRate: number }>();
   constructor(readonly rpc: CodexRpc, env: Env, private fetchImpl?: typeof fetch, private profiles = CODEX_PROFILES, private bypassHookTrust = false) {
     // Claude launch settings cannot pin or alter a Codex thread.
     this.env = Object.fromEntries(Object.entries(env).filter(([k]) => !k.startsWith('CLAUDE_')));
@@ -115,6 +125,7 @@ export class CodexPolicy {
     if (method === 'thread/settings/update') {
       const session = this.sessions.get(String(params['threadId']));
       if (session) {
+        session.settingsEpoch = (session.settingsEpoch ?? 0) + 1;
         if (typeof params['model'] === 'string') session.baseline.model = params['model'];
         if (typeof params['effort'] === 'string' || params['effort'] === null) session.baseline.effort = params['effort'] as string | null;
       }
@@ -186,6 +197,14 @@ export class CodexPolicy {
   /** Selection is made once from the actual submitted prompt; every original Responses field is preserved. */
   async externalRequest(id: string, request: Obj, signal: AbortSignal): Promise<{ request: Obj; stop?: string }> {
     const session = this.sessions.get(id);
+    if (requestedUpdateEffort(request).present) {
+      this.trace?.write('codex_router_skipped', { host: 'codex', session_id: id, prompt_id: session?.prompt ?? null, reason: 'configuration_update_native_history', known_not_sent: true, effective_effort: 'unknown' });
+      return { request }; // Preserve opaque native updates, their positions and top-level values.
+    }
+    if (session?.role && session.dispatch) {
+      if (session.role === LEAN_EXECUTOR_AGENT) return { request };
+      return this.workerRequest(session, request, signal);
+    }
     if (!session?.external || !session.prompt || !session.task || !this.hooked.has(id)) return { request };
     if (session.stop) return { request, stop: session.stop };
     const requestPrompt = session.prompt;
@@ -221,7 +240,7 @@ export class CodexPolicy {
         const catalog = this.catalog.map(m => { const out = { ...m, supportedReasoningEfforts: m.supportedReasoningEfforts.filter(e => !['ultra', 'ultracode', 'auto', 'ultrafast'].includes(e.reasoningEffort)) };
           if (out.defaultReasoningEffort && !out.supportedReasoningEfforts.some(e => e.reasoningEffort === out.defaultReasoningEffort)) delete out.defaultReasoningEffort; return out; });
         const patch = await routeCodex({ ...baseline, task, ...(previousReply ? { previousReply } : {}),
-          recentRequests: session.recentRequests ?? [], session: id, prompt, catalog, catalogComplete: this.catalogComplete, catalogExcluded: this.catalogExcluded,
+          recentRequests: session.recentRequests ?? [], session: id, prompt, ...(session.modelCache ? { modelCache: session.modelCache, epoch: session.epoch } : {}), catalog, catalogComplete: this.catalogComplete, catalogExcluded: this.catalogExcluded,
           ...(session.cache ? { cache: { ...session.cache, ageMs: Math.max(0, Date.now() - session.cache.at) } } : {}),
           config: { ...config, router: { ...config.router, timeoutMs: remaining } }, env: this.env,
           ...(this.trace ? { trace: this.trace } : {}), signal: requestController ? AbortSignal.any([signal, requestController.signal]) : signal,
@@ -242,26 +261,105 @@ export class CodexPolicy {
     const selected = { ...request, ...(session.route?.model ? { model: session.route.model } : {}), ...(session.route?.effortEdit && session.route.effortEdit.kind !== 'keep' ? { reasoning } : {}) };
     return { request: selected };
   }
+  /** Gate B owns the first inference; each new observed native continuation gets one batched decision. */
+  private async workerRequest(session: Session, request: Obj, signal: AbortSignal): Promise<{ request: Obj }> {
+    const d = session.dispatch!;
+    if (d.ended || session.controller?.signal.aborted || signal.aborted || typeof request['model'] !== 'string') return { request };
+    const model = request['model'], effort = obj(request['reasoning'])?.['effort'];
+    const nativeEffort = typeof effort === 'string' ? effort : null;
+    const key = createHash('sha256').update(JSON.stringify([session.epoch, requestStepKey(request)])).digest('hex');
+    const steps = session.stepRoutes ??= new Map();
+    let step = steps.get(key);
+    if (!step) {
+      // Never evict identities into another paid assessment. A filled execution stays native.
+      if (steps.size >= 128) {
+        this.trace?.write('codex_router_skipped', { host: 'codex', session_id: session.id, prompt_id: session.prompt, scope: 'child', agent_id: session.id, index: null, reason: 'child_step_limit', known_not_sent: true });
+        return { request };
+      }
+      step = { index: session.stepIndex === undefined ? 0 : session.stepIndex + 1, model, effort: nativeEffort, patch: {} }; steps.set(key, step); session.stepIndex = step.index;
+      if (step.index > 0) {
+        const context = workerStepContext(request['input']);
+        const opaque = !!request['previous_response_id'] || Array.isArray(request['input']) && request['input'].some((raw: unknown) => { const item = obj(raw); return item?.['type'] === 'reasoning' && typeof item['encrypted_content'] === 'string'; });
+        if (context && context.pending === 0 && typeof d.input['prompt'] === 'string') {
+          const owned = step;
+          const epoch = this.catalogEpoch, sourceEpoch = session.epoch;
+          owned.pending = (async () => {
+            const config = runtimeCodexPolicy({ ...this.env, JEV_CODEX_MODEL: model }, this.catalog);
+            owned.config = JSON.stringify(config.router); owned.catalogEpoch = epoch; owned.settingsEpoch = session.settingsEpoch ?? 0;
+            const catalog = this.catalog.map(m => ({ ...m, supportedReasoningEfforts: m.supportedReasoningEfforts.filter(e => !['ultra', 'ultracode', 'auto', 'ultrafast'].includes(e.reasoningEffort)) }));
+            const bound = Buffer.byteLength(JSON.stringify(request));
+            const patch = await routeCodex({ model, effort: nativeEffort, task: d.input['prompt'] as string, session: session.id, prompt: session.prompt ?? d.prompt,
+              child: { agentId: session.id, step: owned.index, context }, catalog, catalogComplete: this.catalogComplete, config: opaque ? { ...config, router: { ...config.router, model: false } } : config, env: this.env,
+              epoch: session.epoch, ...(session.modelCache ? { modelCache: session.modelCache } : {}),
+              ...(session.cache ? { cache: { ...session.cache, ageMs: Math.max(0, Date.now() - session.cache.at) } } : {}),
+              ...(this.trace ? { trace: this.trace } : {}), signal: AbortSignal.any([signal, d.signal]), ...(this.fetchImpl ? { fetchImpl: this.fetchImpl } : {}) });
+            // Exact owner, catalog and source epoch must still match after HTTP; permissions stay native.
+            const target = patch.model;
+            if (!d.ended && !signal.aborted && !d.signal.aborted && this.sessions.get(session.id) === session && this.catalogEpoch === epoch && session.epoch === sourceEpoch &&
+              (!target || providerContextLimit('codex', target) !== null && bound <= providerContextLimit('codex', target)! && this.catalog.some(m => m.model === target && generalCodexModel(m)) && codexTargetAllowed(target, config.router.allowAstra))) owned.patch = patch;
+          })().catch(() => undefined).finally(() => { delete owned.pending; });
+        } else this.trace?.write('codex_router_skipped', { host: 'codex', session_id: session.id, prompt_id: session.prompt, scope: 'child', agent_id: session.id, index: step.index, reason: 'child_context_unavailable', known_not_sent: true });
+      }
+    }
+    if (step.pending) await step.pending;
+    if (signal.aborted || d.signal.aborted || d.ended || session.controller?.signal.aborted || this.sessions.get(session.id) !== session || model !== step.model || nativeEffort !== step.effort) return { request };
+    if (Object.keys(step.patch).length) {
+      const current = runtimeCodexPolicy({ ...this.env, JEV_CODEX_MODEL: model }, this.catalog);
+      const target = step.patch.model ?? model;
+      const candidate = codexCandidates(this.catalog, current.router.allowAstra, model).find(c => c.id === target);
+      const selectedEffort = step.patch.effortEdit?.kind === 'omit' ? null : step.patch.effort ?? nativeEffort;
+      const valid = this.env['JEV_CODEX_ENABLED'] !== '0' && current.router.enabled && step.config === JSON.stringify(current.router) &&
+        step.catalogEpoch === this.catalogEpoch && step.settingsEpoch === (session.settingsEpoch ?? 0) && candidate &&
+        (!step.patch.model || codexTargetAllowed(target, current.router.allowAstra) && this.catalog.some(m => m.model === target && generalCodexModel(m)) &&
+          providerContextLimit('codex', target) !== null && Buffer.byteLength(JSON.stringify(request)) <= providerContextLimit('codex', target)!) &&
+        (selectedEffort === null ? candidate.omitEffort : !['ultra', 'ultracode', 'auto', 'ultrafast'].includes(selectedEffort) && candidate.efforts.includes(selectedEffort));
+      if (!valid) {
+        step.patch = {};
+        this.trace?.write('codex_router_skipped', { host: 'codex', session_id: session.id, prompt_id: session.prompt, scope: 'child', agent_id: session.id, index: step.index, reason: 'child_pair_changed_before_submission', known_not_sent: false });
+      }
+    }
+    session.requestKind = 'child_response'; session.route = step.patch;
+    session.baseline = { model, effort: nativeEffort };
+    const reasoning = applyEffort(obj(request['reasoning']) ?? {}, step.patch.effortEdit);
+    return { request: { ...request, ...(step.patch.model ? { model: step.patch.model } : {}), ...(step.patch.effortEdit && step.patch.effortEdit.kind !== 'keep' ? { reasoning } : {}) } };
+  }
   observeRequestFailure(id: string, submitted: CodexSubmission | undefined): void {
     if (!submitted) return;
     this.trace?.write('codex_model_failure', { host: 'codex', session_id: id, prompt_id: submitted.prompt, request_id: submitted.requestId, reason: 'host_request_failed' });
   }
   observeUsage(id: string, response: Obj, submitted?: CodexSubmission): void {
     const session = this.sessions.get(id); const input = obj(response['usage'])?.['input_tokens'];
-    const binding = submitted ?? session?.lastSubmitted;
-    if (session && binding) {
+    const binding = submitted; // A later response is never joined to the nearest submission.
+    if (!binding) {
+      const model = typeof response['model'] === 'string' ? response['model'] : null;
+      const usage = normalizeUsage('codex', response['usage']);
+      const tier = typeof response['service_tier'] === 'string' ? response['service_tier'] : null;
+      this.trace?.write('codex_router_response', { host: 'codex', session_id: id, prompt_id: null, request_id: null, scope: 'unknown',
+        response_id: typeof response['id'] === 'string' ? response['id'] : null, observed_model: model, observed_effort: 'unknown', effective_effort: 'unknown',
+        usage, cost: usageCost(usage, model ? providerPrice('codex', model, typeof input === 'number' ? input : null, tier) : null),
+        reason: 'request_identity_unknown', subscription_cost: 'unknown' });
+    }
+    if (binding) {
       const model = typeof response['model'] === 'string' ? response['model'] : null;
       const effort = obj(response['reasoning'])?.['effort'];
-      if (binding.prompt === session.prompt && model === binding.model) {
-        const usage = obj(response['usage']); const counts = obj(usage?.['input_tokens_details']);
-        const count = (v: unknown): number | null => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? v : null;
-        session.cache = { model, input: count(usage?.['input_tokens']), read: count(counts?.['cached_tokens']), write: count(counts?.['cache_write_tokens']), ageMs: 0, at: Date.now(), source: 'provider_response_usage' };
+      const usage = normalizeUsage('codex', response['usage']);
+      const price = providerPrice('codex', model ?? binding.model, typeof input === 'number' ? input : null, typeof response['service_tier'] === 'string' ? response['service_tier'] : null);
+      if (binding.scope === 'child' && binding.index === 0 && model === binding.model && usage.coverage === 'complete' && typeof input === 'number' && price?.write !== undefined) {
+        const previous = this.workerStarts.get(model);
+        this.workerStarts.set(model, { range: [Math.min(previous?.range[0] ?? input, input), Math.max(previous?.range[1] ?? input, input)], writeRate: price.write });
+        while (this.workerStarts.size > 16) this.workerStarts.delete(this.workerStarts.keys().next().value!);
+      }
+      if (session && binding.prompt === session.prompt && binding.epoch === session.epoch && session.lastSubmitted?.requestId === binding.requestId && model === binding.model) {
+        session.cache = { model, input: usage.input, read: usage.read, write: usage.write, ageMs: 0, at: Date.now(), source: 'provider_response_usage' };
+        (session.modelCache ??= new ModelCache()).observe({ model, epoch: session.epoch, at: Date.now(), input: usage.input, ttlIsMinimum: true, ttlMs: usage.write !== null && usage.write > 0 ? 1_800_000 : null, read: usage.read, write: usage.write, output: usage.output });
       }
       this.trace?.write('codex_router_response', { host: 'codex', session_id: id, prompt_id: binding.prompt, request_id: binding.requestId, stage: 'response',
+        scope: binding.scope, agent_id: binding.scope === 'child' ? id : null, parent_session_id: binding.parent, index: binding.index,
         selected_model: binding.model, selected_effort: binding.effort, submitted_effort: binding.effort, observed_model: model, observed_effort: typeof effort === 'string' ? effort : 'unknown',
+        response_id: typeof response['id'] === 'string' ? response['id'] : null, usage, cost: usageCost(usage, price), provider_reported_cost: typeof response['cost_usd'] === 'number' && Number.isFinite(response['cost_usd']) && response['cost_usd'] >= 0 ? response['cost_usd'] : null, subscription_cost: 'unknown', service_tier: response['service_tier'] ?? null, effective_effort: 'unknown',
         reason: model === null ? 'response_unconfirmed' : model !== binding.model ? 'mismatch' : 'response_model_confirmed' });
     }
-    if (session?.external && (!binding || binding.prompt === session.prompt)) {
+    if (session?.external && binding && binding.prompt === session.prompt && binding.epoch === session.epoch && session.lastSubmitted?.requestId === binding.requestId) {
       session.tokens = Number.isSafeInteger(input) && Number(input) >= 0 ? Number(input) : null;
       if (session.wire && session.task && session.prompt && Array.isArray(response['output'])) {
         const source = wireSource([...session.wire, ...response['output']], session.task, session.prompt);
@@ -311,7 +409,9 @@ export class CodexPolicy {
       source: b => codexSource(session.items, b, session.epoch, session.complete),
       observation: id => { const worker = id ? this.sessions.get(id) : undefined; return worker ? codexObservation(worker.items, worker.complete, worker.commands) : null; },
     };
-    return runHook({ stdin: (async function* () { yield JSON.stringify(input); })(), env: this.env, host, allocation: { candidates: baseline => codexCandidates(this.catalog, session.policy.router.allowAstra, baseline).filter(c => codexTargetAllowed(c.id, session.policy.router.allowAstra)),
+    return runHook({ stdin: (async function* () { yield JSON.stringify(input); })(), env: this.env, host,
+      delegationPrices: () => session.tokens === null ? undefined : observedDelegationPrices('codex', session.requestModel ?? session.baseline.model, session.policy.gate.models.standard, session.tokens, this.workerStarts.get(session.policy.gate.models.standard) ?? null),
+      allocation: { candidates: baseline => codexCandidates(this.catalog, session.policy.router.allowAstra, baseline).filter(c => codexTargetAllowed(c.id, session.policy.router.allowAstra)),
         allowed: model => this.catalog.some(m => m.model === model && generalCodexModel(m)) && codexTargetAllowed(model, session.policy.router.allowAstra), inheritedModel: session.requestModel ?? session.baseline.model },
       ...((signal || session.controller) ? { signal: signal && session.controller ? AbortSignal.any([signal, session.controller.signal]) : signal ?? session.controller!.signal } : {}), ...(this.fetchImpl ? { fetchImpl: this.fetchImpl } : {}) });
   }
@@ -391,7 +491,11 @@ export class CodexPolicy {
     const p = obj(message['params']) ?? {}; const session = this.sessions.get(String(p['threadId']));
     if (!session) return;
     if (message['method'] === 'thread/settings/updated') {
-      const settings = obj(p['threadSettings']); if (settings) session.settings = { ...session.settings, ...settings };
+      const settings = obj(p['threadSettings']);
+      if (settings) {
+        session.settingsEpoch = (session.settingsEpoch ?? 0) + 1;
+        session.settings = { ...session.settings, ...settings };
+      }
     }
     if (message['method'] === 'turn/started' && !session.terminal) {
       session.turn = String(obj(p['turn'])?.['id'] ?? '');
@@ -412,7 +516,7 @@ export class CodexPolicy {
       const ix = session.items.findIndex(i => i['id'] === item['id']);
       if (ix < 0) session.items.push(item); else session.items[ix] = item;
       if (Buffer.byteLength(JSON.stringify(session.items)) > 8 * 1024 * 1024) { session.complete = false; session.items = session.items.slice(-100); }
-      if (item['type'] === 'contextCompaction') { session.complete = false; session.epoch = String(item['id']); session.tokens = null; }
+      if (item['type'] === 'contextCompaction') { session.complete = false; session.epoch = String(item['id']); session.tokens = null; session.modelCache?.clear(); delete session.cache; session.stepRoutes?.forEach(v => { v.patch = {}; }); }
     }
     if (message['method'] === 'turn/completed') {
       const turn = obj(p['turn']) ?? {};
@@ -582,7 +686,7 @@ export class CodexPolicy {
       await this.response(child, 'thread/start', {});
       worker = this.sessions.get(String(obj(child['thread'])?.['id'])) ?? null;
       if (!worker) throw new Error('worker unavailable');
-      worker.role = role; worker.parent = session.id;
+      worker.role = role; worker.parent = session.id; worker.prompt = promptId;
       const terminal = new Promise<Obj>(resolve => { worker!.done = resolve; });
       dispatch = { parent, prompt: promptId, tool: toolId, input: { ...applied }, signal: background ? new AbortController().signal : parentSignal, worktree, startedAt: t0, attempted: false, background };
       worker.dispatch = dispatch;
@@ -600,7 +704,7 @@ export class CodexPolicy {
         if (!prev || !r) return null;
         if (this.writeConflict(String(parent.settings['cwd']), 'Agent', {}, r.deliverables)) throw new Error('worker write conflict');
         registered = true;
-        return { ...prev, current: { ...prev.current, ...(background ? { background_job: true as const } : {}), active: { ...prev.current.active, [toolId]: { ...r, codex_execution: { thread_id: worker!.id, turn_id: null, cwd, root_cwd: String(parent.settings['cwd']) } } } } };
+        return { ...prev, current: { ...pendingBackgroundPolicy(prev.current), ...(background ? { background_job: true as const } : {}), active: { ...prev.current.active, [toolId]: { ...r, codex_execution: { thread_id: worker!.id, turn_id: null, cwd, root_cwd: String(parent.settings['cwd']) } } } } };
       }, { refuseUnreadable: true });
       if (!saved.ok || !registered) throw new Error('execution reservation unavailable');
       const cancel = (): void => this.interruptWorker(worker!);
@@ -706,7 +810,7 @@ export class CodexPolicy {
       this.backgroundResults.set(worker.id, { parent: d.parent.id, output: d.output });
       while (this.backgroundResults.size > 64) this.backgroundResults.delete(this.backgroundResults.keys().next().value!);
       if (d.background) {
-        updateJob(this.env, d.parent.id, prev => prev?.current.prompt_id === d.prompt ? { ...prev, current: { ...prev.current, background_context: d.output!, ...(d.interruptSent && d.ended!['status'] !== 'completed' && Object.keys(prev.current.active).length === 0 ? { outcome: 'incomplete' as const } : {}) } } : null);
+        updateJob(this.env, d.parent.id, prev => prev?.current.prompt_id === d.prompt ? { ...prev, current: { ...pendingBackgroundPolicy(prev.current), background_context: d.output!, ...(d.interruptSent && d.ended!['status'] !== 'completed' && Object.keys(prev.current.active).length === 0 ? { outcome: 'incomplete' as const } : {}) } } : null);
         this.trace?.write('background_terminal', { host: 'codex', session_id: d.parent.id, prompt_id: d.prompt, tool_use_id: d.tool, agent_id: worker.id, status: String(d.ended!['status']) });
       }
       if (d.cancel) d.signal.removeEventListener('abort', d.cancel);
@@ -754,27 +858,31 @@ export class CodexPolicy {
   observeRequest(sessionId: string, request: Obj): CodexSubmission | undefined {
     const session = this.sessions.get(sessionId);
     if (!session) return;
+    const step = session.role ? session.stepRoutes?.get(createHash('sha256').update(JSON.stringify([session.epoch, requestStepKey(request)])).digest('hex')) : undefined;
+    const route = requestedUpdateEffort(request).present ? undefined : session.role ? step?.patch : session.route;
+    const baseline = step ?? session.baseline;
     const effort = obj(request['reasoning'])?.['effort'];
     if (typeof request['model'] === 'string') session.requestModel = request['model'];
     if (typeof effort === 'string') session.requestEffort = effort; else delete session.requestEffort;
-    const submitted = { prompt: session.prompt, model: String(request['model']), effort: typeof effort === 'string' ? effort : null, requestId: randomUUID() };
+    const submitted = { prompt: session.prompt, model: String(request['model']), effort: typeof effort === 'string' ? effort : null, requestId: randomUUID(), epoch: session.epoch, index: step?.index ?? null, scope: session.role ? 'child' as const : 'root' as const, parent: session.parent ?? null };
     session.lastSubmitted = submitted;
     this.trace?.write('codex_model_request', { host: 'codex', session_id: session.id, prompt_id: session.prompt, request_id: submitted.requestId,
-      submitted_model: submitted.model, submitted_effort: submitted.effort, scope: session.role ?? 'root' });
-    if (!session.route || !Object.keys(session.route).length) return submitted;
-    const selectedModel = session.route.model ?? session.baseline.model;
-    const selectedEffort = session.route.effortEdit?.kind === 'omit' ? null : session.route.effort ?? session.baseline.effort;
+      requested_update_effort: requestedUpdateEffort(request).effort, effective_effort: 'unknown', effort_cache: 'native_configuration_update_unverified',
+      submitted_model: submitted.model, submitted_effort: submitted.effort, scope: session.role ? 'child' : 'root', agent_id: session.role ? session.id : null, parent_session_id: session.parent ?? null, index: submitted.index });
+    if (!route || !Object.keys(route).length) return submitted;
+    const selectedModel = route.model ?? baseline.model;
+    const selectedEffort = route.effortEdit?.kind === 'omit' ? null : route.effort ?? baseline.effort;
     // Ultra is a native host selection, resolved by the model to an inference effort.
     // Confirm the official host selection and observe its wire value; never rewrite it.
     const nativeUltra = selectedEffort === 'ultra' && session.settings['effort'] === 'ultra'
       && typeof effort === 'string' && effort !== 'ultra'
       && this.catalog.find(m => m.model === selectedModel)?.supportedReasoningEfforts.some(e => e.reasoningEffort === effort) === true;
     this.trace?.write('codex_route_applied', { host: 'codex', session_id: session.id, prompt_id: session.prompt, stage: 'submitted',
-      request_id: submitted.requestId, submitted_model: request['model'], submitted_effort: effort ?? null, observed_model: null, observed_effort: 'unknown', observed_host_effort: session.settings['effort'] ?? null,
-      boundary: 'provider_request', scope: session.role ?? 'root',
+      request_id: submitted.requestId, scope: session.role ? 'child' : 'root', agent_id: session.role ? session.id : null, index: submitted.index, submitted_model: request['model'], submitted_effort: effort ?? null, observed_model: null, observed_effort: 'unknown', observed_host_effort: session.settings['effort'] ?? null,
+      boundary: 'provider_request',
       selected_model: selectedModel, selected_effort: selectedEffort, effort_resolution: nativeUltra ? 'native_ultra' : 'direct',
       request_kind: session.requestKind ?? 'unknown',
-      reason: 'request_applied', applied: request['model'] === selectedModel && (session.route.effortEdit?.kind === 'omit' ? effort === undefined : !session.route.effort || effort === selectedEffort || nativeUltra) });
+      reason: 'request_applied', applied: request['model'] === selectedModel && (route.effortEdit?.kind === 'omit' ? effort === undefined : !route.effort || effort === selectedEffort || nativeUltra) });
     return submitted;
   }
   compactKey(): string | undefined { return resolveApiKey(this.env); }

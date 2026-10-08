@@ -5,7 +5,7 @@ import { registerCompact } from '../mods/compact/hooks/register.ts';
 import { resolveOutputConfig } from '../mods/output/hooks/config.ts';
 import { registerOutput } from '../mods/output/hooks/register.ts';
 import { resolveConfig } from '../mods/router/hooks/config.ts';
-import { registerRouter } from '../mods/router/hooks/register.ts';
+import { registerRouter, type ContextObserver } from '../mods/router/hooks/register.ts';
 
 
 /**
@@ -74,8 +74,13 @@ export const register: Register = (on, options) => {
     for (const [mod, field] of invalid) quietly(() => $.ui.log(`jev-${mod} ${JSON.stringify({ event: mod, disabled: 'invalid_option', field })}`, { to: 'debug' }));
     return next(e);
   });
-  if (compact.ok) registerCompact(on, compact.config);
+
   if (output.ok) registerOutput(on, output.config);
-  if (router.ok) registerRouter(on, router.config, true);
-  else { const fallback = resolveConfig({ enabled: false, allowFable: false }); if (fallback.ok) registerRouter(on, fallback.config, true); }
+  const fallback = resolveConfig({ enabled: false, allowFable: false });
+  const observer: ContextObserver = {};
+  if (router.ok) registerRouter(on, router.config, true, observer);
+  else if (fallback.ok) registerRouter(on, fallback.config, true, observer);
+  const compactFallback = resolveCompactConfig({ enabled: false });
+  if (compact.ok) registerCompact(on, compact.config, observer);
+  else if (compactFallback.ok) registerCompact(on, compactFallback.config, observer);
 };

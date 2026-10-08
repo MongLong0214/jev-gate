@@ -28,6 +28,19 @@ async function setup(options: Record<string, boolean> = {}, respond: Responder =
 }
 
 describe('native worker inference routing', () => {
+  it('restores child effort protection after native four-counter cache reuse followed by a miss', async () => {
+    let effort = 'high';
+    const { router, f } = await setup({ routeSubagentModel: false }, req => reply(req, OPUS, effort));
+    const turn = async (index: number, wanted: string, read: number) => {
+      effort = wanted;
+      const n = streamNext<TurnStepEvent>(undefined, { input_tokens: 2, output_tokens: 2, cache_read_input_tokens: read, cache_creation_input_tokens: 10000 });
+      await drain(router.turnStep(f.engine, step(index), n.next)); return n.calls[0]?.effort;
+    };
+    await turn(1, 'high', 0); expect(await turn(2, 'low', 10000)).toBe('low'); await turn(3, 'high', 0);
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'effort_cache', scope: 'child', index: 3, hit: false, floor_restored: true }));
+    expect(await turn(4, 'low', 0)).toBe('high');
+    f.clock.ms += 55 * 60_000 + 1; expect(await turn(5, 'low', 0)).toBe('low');
+  });
   it('keeps the initial Gate B batch, then reassesses each inference and observes the actual model', async () => {
     let phase = 0;
     const { router, f, first } = await setup({}, req => reply(req, ++phase === 1 ? SONNET : OPUS, phase === 1 ? 'low' : 'high'));

@@ -125,12 +125,12 @@ describe('register', () => {
   });
 
   it('registers the root hooks and the spawn hooks their switches ask for', async () => {
-    expect([...(await registered({ enabled: true })).keys()].sort()).toEqual(['agent.offer', 'agent.spawn', 'session.end', 'turn.complete', 'turn.start', 'turn.step']);
+    expect([...(await registered({ enabled: true })).keys()].sort()).toEqual(['agent.offer', 'agent.spawn', 'session.compact', 'session.end', 'turn.complete', 'turn.start', 'turn.step']);
     // A subagent's effort is set on its own loop's steps, so turn.step stays without the root switches.
-    expect([...(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false })).keys()].sort()).toEqual(['agent.offer', 'agent.spawn', 'session.end', 'turn.complete', 'turn.step']);
-    expect([...(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false, routeSubagentEffort: false })).keys()].sort()).toEqual(['agent.offer', 'agent.spawn', 'session.end', 'turn.complete', 'turn.step']);
-    expect([...(await registered({ enabled: true, routeSubagentModel: false })).keys()].sort()).toEqual(['agent.offer', 'agent.spawn', 'session.end', 'turn.complete', 'turn.start', 'turn.step']);
-    expect([...(await registered({ enabled: true, routeSubagentModel: false, routeSubagentEffort: false })).keys()].sort()).toEqual(['session.end', 'turn.complete', 'turn.start', 'turn.step']);
+    expect([...(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false })).keys()].sort()).toEqual(['agent.offer', 'agent.spawn', 'session.compact', 'session.end', 'turn.complete', 'turn.step']);
+    expect([...(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false, routeSubagentEffort: false })).keys()].sort()).toEqual(['agent.offer', 'agent.spawn', 'session.compact', 'session.end', 'turn.complete', 'turn.step']);
+    expect([...(await registered({ enabled: true, routeSubagentModel: false })).keys()].sort()).toEqual(['agent.offer', 'agent.spawn', 'session.compact', 'session.end', 'turn.complete', 'turn.start', 'turn.step']);
+    expect([...(await registered({ enabled: true, routeSubagentModel: false, routeSubagentEffort: false })).keys()].sort()).toEqual(['session.compact', 'session.end', 'turn.complete', 'turn.start', 'turn.step']);
   });
 
   it.each([false, true])('reads the common frontier switch through Function Hooks: %s', async enabled => {

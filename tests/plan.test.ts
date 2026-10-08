@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   acceptedReceipt,
   composeTaskPrompt,
+  composeSingleWorkerPrompt,
   contractHash,
   currentReceipt,
   deliverableOverlap,
@@ -31,6 +32,13 @@ import {
   ROUTING_TARGET_MARK,
   requiredCheckIds,
 } from '../src/plan.js';
+
+it('removes a repeated admitted request only with the same-source assertion and retains separate provenance', () => {
+  const request = 'Preserve the original constraints exactly.';
+  expect(composeSingleWorkerPrompt(request, request, true, true).split(request)).toHaveLength(2);
+  expect(composeSingleWorkerPrompt(request, request, true).split(request)).toHaveLength(3);
+  expect(composeSingleWorkerPrompt(request, request + ' New constraint.', true, true)).toContain(request + ' New constraint.');
+});
 import type { Plan, PlannedTask, Receipt, TaskSpec, WorkerReply } from '../src/types.js';
 
 const SPEC: TaskSpec = {

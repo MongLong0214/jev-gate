@@ -14,7 +14,7 @@ const observe = async (bytes: Buffer, encoding?: string, split = false) => {
   if (split) for (const byte of bytes) (input as unknown as PassThrough).write(Buffer.from([byte]));
   (input as unknown as PassThrough).end(split ? undefined : bytes);
   await new Promise<void>(resolve => setTimeout(resolve, 20));
-  expect(Buffer.concat(native)).toEqual(bytes);
+  expect(Buffer.concat(native).equals(bytes)).toBe(true);
   return completed;
 };
 
@@ -47,6 +47,6 @@ describe('native Responses observation without required Content-Type', () => {
     const native: Buffer[] = []; input.on('data', chunk => native.push(Buffer.from(chunk)));
     observeResponseStream(input, () => { throw new Error('trace unavailable'); });
     const bytes = Buffer.from(event('\n')); (input as unknown as PassThrough).end(bytes);
-    expect(Buffer.concat(native)).toEqual(bytes);
+    expect(Buffer.concat(native).equals(bytes)).toBe(true);
   });
 });
