@@ -1,6 +1,6 @@
 {
   "name": "jev-gate-router",
-  "version": "0.8.13",
+  "version": "0.8.14",
   "description": "Routes the main thread's effort and each subagent's model and effort with one TypeSafe Jev assessment; on by default, native on any doubt.",
   "author": {
     "name": "MongLong0214",

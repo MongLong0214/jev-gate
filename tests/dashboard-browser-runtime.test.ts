@@ -15,7 +15,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { DASHBOARD_PAGE } from '../src/dashboard-page.js';
 import { dashboardSources, startDashboard } from '../src/dashboard.js';
 import type { WorkerActivityView } from '../src/claude-worker-activity.js';
-import type { OperationRun, OperationStep } from '../src/operations.js';
+import { buildOperations, type OperationRun, type OperationStep } from '../src/operations.js';
 
 const stamp = new Date().toISOString();
 const step = (id: string, feature: OperationStep['feature'], extra: Partial<OperationStep> = {}): OperationStep => ({ id, feature, lane: 'jev', at: stamp, state: 'done', title: `${feature} recorded result`, summary: 'Recorded result', details: [], ...extra });
@@ -89,6 +89,25 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     expect(await p.locator('#pipeline-state').textContent()).toBe('1개 단계 진행 중');
     expect(await p.locator('[data-progress-host="codex"].running .wire-flow').count()).toBe(1);
     await p.locator('[data-host="claude"]').click();expect(await p.locator('#pipeline-state').textContent()).toBe('대기');
+    await p.close();
+  });
+
+  it('settles promptless native Codex requests in the live circuit only after their exact response', async () => {
+    const request = { host: 'codex', session_id: 'native-session', prompt_id: null, request_id: 'native-request', written_at: stamp, phase: 'codex_model_request', submitted_model: 'gpt-6-luna' };
+    const response = { ...request, written_at: new Date(Date.parse(stamp) + 100).toISOString(), phase: 'codex_router_response', selected_model: 'gpt-6-luna', observed_model: 'gpt-6-luna' };
+    const show = (records: Record<string, unknown>[]) => push(buildOperations(records, [], new Date(), { trace: true, debug: false }).runs);
+    show([request]);
+    const p = await page();
+    expect(await p.locator('#pipeline-state').textContent()).toBe('1개 단계 진행 중');
+    expect(await p.locator('[data-progress-host="codex"].running .wire-flow').count()).toBe(1);
+    show([request, { ...response, request_id: 'another-request' }]);
+    await p.waitForFunction(() => document.getElementById('model-proof')?.textContent?.includes('선택과 실제 실행 일치'));
+    expect(await p.locator('#pipeline-state').textContent()).toBe('1개 단계 진행 중');
+    show([request, response]);
+    await p.waitForFunction(() => document.getElementById('pipeline-state')?.textContent === '대기');
+    expect(await p.locator('[data-progress-host="codex"].running .wire-flow').count()).toBe(0);
+    expect(await p.locator('#model-proof').textContent()).toContain('gpt-6-luna');
+    expect(await p.locator('#model-proof').textContent()).toContain('선택과 실제 실행 일치');
     await p.close();
   });
 

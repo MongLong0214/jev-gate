@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.8.14 — Unreleased — Exact native request completion
+
+- Match native Codex model responses to their exact session and request even when the host provides no prompt ID. Completed requests stop appearing as active, and submitted model rows can display their observed response model. Known and unknown prompts remain separate; unrelated and earlier responses do not settle a request.
+
 ## v0.8.13 — 2026-10-08 — Current models and PR freshness checks
 
 - Add Haiku 5.5 with its documented 1M context, output limit and effort support. Resolve the API Haiku alias on Claude Code 2.1.293 and later, and check the host version and account allowlist before root, spawn and worker-step switches. Offer only effort levels valid under the retained thinking mode.

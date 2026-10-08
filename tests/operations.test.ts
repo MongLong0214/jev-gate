@@ -341,6 +341,30 @@ it('does not terminate a Codex request from an earlier result or another session
 });
 
 
+it.each([null, undefined])('settles observed Codex responses without a prompt identity (%s)', prompt => {
+  const requests = Array.from({ length: 7 }, (_, i) => ({ ...base, host: 'codex', prompt_id: prompt, phase: 'codex_model_request', request_id: 'model-' + i, submitted_model: 'gpt-6-luna' }));
+  const responses = requests.map(request => ({ ...request, phase: 'codex_router_response', written_at: later, observed_model: 'gpt-6-luna' }));
+  const view = buildOperations([...requests, ...responses], [], new Date('2026-09-29T08:00:00.000Z'), { trace: true, debug: false });
+  expect(view.active).toBe(0);
+  expect(view.runs.flatMap(run => run.steps).filter(step => step.title === '모델 · 응답 대기')).toEqual(requests.map(() => expect.objectContaining({ state: 'done', summary: '모델 요청 종료 기록 확인' })));
+});
+
+it('keeps unknown-prompt requests separate from other sessions, requests and known prompts', () => {
+  const request = { ...base, host: 'codex', prompt_id: null, phase: 'codex_model_request', request_id: 'model-1' };
+  const response = { ...request, phase: 'codex_router_response', written_at: later, observed_model: 'gpt-6-luna' };
+  const build = (record: Record<string, unknown>) => buildOperations([request, record], [], new Date('2026-09-29T08:00:00.000Z'), { trace: true, debug: false }).feed.find(step => step.title === '모델 · 응답 대기')!;
+  for (const other of [{ ...response, session_id: 'other' }, { ...response, request_id: 'other' }, { ...response, prompt_id: 'known' }, { ...response, written_at: '2026-09-29T05:00:00.000Z' }]) expect(build(other).state).toBe('active');
+  expect(build(response).state).toBe('done');
+});
+
+it('joins actual Codex model evidence for an exact request with an unknown prompt', () => {
+  const request = { ...base, host: 'codex', prompt_id: null, phase: 'codex_route_applied', request_id: 'model-1', request_kind: 'root_response', selected_model: 'gpt-6-luna', submitted_model: 'gpt-6-luna', applied: true };
+  const response = { ...request, phase: 'codex_router_response', written_at: later, observed_model: 'gpt-6-luna' };
+  const build = (record: Record<string, unknown>) => buildOperations([request, record], [], new Date(later), { trace: true, debug: false }).feed.find(step => step.title === 'Router · Codex 요청 전송')!.model;
+  expect(build(response)).toMatchObject({ requestApplied: true, observed: 'gpt-6-luna', status: 'confirmed' });
+  expect(build({ ...response, prompt_id: 'known' })).toMatchObject({ requestApplied: true, observed: null, status: 'unobserved' });
+});
+
 it('confirms Codex request settings separately and joins only the exact observed response', () => {
   const req={...base,host:'codex',phase:'codex_route_applied',request_id:'req',request_kind:'root_response',selected_model:'gpt-6-luna',submitted_model:'gpt-6-luna',selected_effort:'low',submitted_effort:'low',applied:true};
   const response={...base,written_at:later,host:'codex',phase:'codex_router_response',request_id:'req',selected_model:'gpt-6-luna',observed_model:'gpt-6-luna'};

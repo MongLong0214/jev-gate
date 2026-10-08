@@ -1,6 +1,6 @@
 {
   "name": "jev-gate-compact",
-  "version": "0.8.13",
+  "version": "0.8.14",
   "description": "Task-aware extractive compaction with bounded Jev dependency selection and the native recent tail; on by default.",
   "author": {
     "name": "MongLong0214",

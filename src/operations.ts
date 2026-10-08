@@ -206,7 +206,9 @@ const compactUsage = (r: Rec): string => {
 
 const modelRequestKey = (r: Rec): string | null => {
   const values = [token(r['session_id']), token(r['prompt_id']), token(r['request_id'])];
-  return values.every(Boolean) ? JSON.stringify(values) : null;
+  // Native requests can have no prompt identity. Their exact session/request pair
+  // still binds a response; null remains distinct from every known prompt.
+  return values[0] && values[2] ? JSON.stringify(values) : null;
 };
 const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<string, string>, modelTerminals: Map<string, string>): OperationStep | null => {
   const phase = token(r['phase']);
