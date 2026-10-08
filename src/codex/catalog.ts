@@ -27,7 +27,7 @@ export const normalizeCatalog = (raw: readonly unknown[], complete: boolean): Ca
 export const isAstra = (id: string): boolean => /^(?:gpt-\d+(?:\.\d+)?-astra|astra(?:-\d+(?:\.\d+)?)?)(?:-\d{4}-\d{2}-\d{2})?$/.test(id);
 export const codexTargetAllowed = (id: string, allowAstra: boolean): boolean => allowAstra || !isAstra(id);
 export const generalCodexModel = (m: CodexModel): boolean => !m.hidden &&
-  !/cybersecurity|automatic.*review|specialist/i.test(m.description ?? '') &&
+  !/cybersecurity|automatic.*review|specialist|\b(?:older|previous generation|legacy)\b/i.test(m.description ?? '') &&
   (!m.inputModalities || m.inputModalities.includes('text'));
 
 /** Product roles from the account's descriptions, not inferred prices or a version performance ranking. */

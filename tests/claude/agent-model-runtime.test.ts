@@ -11,15 +11,16 @@ import { readJob } from '../../src/job.js';
 // Exercise the real Agent validator BEFORE the native agent.spawn boundary. A direct Function Hooks kit call misses it.
 describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude Gate B model dispatch', () => {
   it.each([
-    { scope: 'worker', selected: '__keep__', actual: 'claude-haiku-4-5', effort: undefined, allowFable: false, admission: true },
-    { scope: 'worker', selected: '__keep__', actual: 'claude-haiku-4-5', effort: undefined, allowFable: false, admission: true, documentation: true },
-    { scope: 'worker', selected: 'claude-haiku-4-5-20251001', actual: 'claude-haiku-4-5-20251001', effort: undefined, allowFable: false, adhoc: true },
+    { scope: 'worker', selected: '__keep__', actual: 'claude-haiku-5-5', effort: 'high', allowFable: false, admission: true },
+    { scope: 'worker', selected: '__keep__', actual: 'claude-haiku-5-5', effort: 'high', allowFable: false, admission: true, documentation: true },
+    { scope: 'worker', selected: 'claude-haiku-5-5', actual: 'claude-haiku-5-5', effort: 'medium', allowFable: false, adhoc: true },
     { scope: 'worker', selected: '__keep__', actual: 'claude-sonnet-5-5', effort: 'high', allowFable: false },
-    { scope: 'worker', selected: 'claude-opus-5', actual: 'claude-opus-5', effort: 'high', allowFable: false },
+    { scope: 'worker', selected: 'claude-opus-5-5', actual: 'claude-opus-5-5', effort: 'high', allowFable: false },
     { scope: 'worker', selected: 'claude-opus-5-5', actual: 'claude-opus-5-5', effort: 'max', allowFable: false },
-    { scope: 'worker', selected: 'claude-haiku-4-5-20251001', actual: 'claude-haiku-4-5-20251001', effort: undefined, allowFable: false },
+    { scope: 'worker', selected: 'claude-haiku-5-5', actual: 'claude-haiku-5-5', effort: 'medium', allowFable: false },
     { scope: 'worker', selected: 'claude-fable-5-1', actual: 'claude-fable-5-1', effort: 'max', allowFable: true },
     { scope: 'root', selected: 'claude-sonnet-5-5', actual: 'claude-sonnet-5-5', effort: 'high', allowFable: false },
+    { scope: 'root', selected: 'claude-haiku-5-5', actual: 'claude-haiku-5-5', effort: 'medium', allowFable: false },
     { scope: 'root', selected: 'claude-sonnet-5-5', actual: 'claude-sonnet-5-5', effort: 'high', allowFable: false, probability: .7 },
     { scope: 'root', selected: 'claude-sonnet-5-5', actual: 'claude-sonnet-5-5', effort: 'high', allowFable: false, incoming: 'max', splitEffort: true },
     { scope: 'root', selected: 'claude-haiku-4-5-20251001', actual: 'claude-opus-5-5', effort: 'high', allowFable: false },
@@ -30,7 +31,7 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude Gate B 
     ] },
     { scope: 'root', selected: 'claude-sonnet-5-5', actual: 'claude-sonnet-5-5', effort: 'medium', allowFable: false, sequence: [
       { selected: 'claude-sonnet-5-5', actual: 'claude-sonnet-5-5', effort: 'medium' },
-      { selected: 'claude-haiku-4-5-20251001', actual: 'claude-opus-5-5', effort: 'high' },
+      { selected: 'claude-haiku-5-5', actual: 'claude-haiku-5-5', effort: 'medium' },
       { selected: 'claude-opus-5-5', actual: 'claude-opus-5-5', effort: 'max' },
     ] },
   ])('sends the selected pair through the native $scope boundary: $selected', async scenario => {
@@ -87,7 +88,7 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude Gate B 
       for (const message of body.messages ?? []) for (const block of Array.isArray(message.content) ? message.content : []) if (block.type === 'tool_result') toolResults.push(block.content);
       if (scenario.scope === 'root') {
         workerRequests.push(body as { model: string; output_config?: { effort?: string } });
-        if (scenario.actual.includes('haiku')) expect(body.thinking?.type).not.toBe('adaptive');
+        if (scenario.actual.includes('haiku-4-5')) expect(body.thinking?.type).not.toBe('adaptive');
         answer(res, body.model, 'MAIN_FINISHED', ++mainCalls % 2 === 1 ? { command: "printf 'observed fixture\\n'", description: 'Observe a real tool step' } : undefined);
       }
       else if (JSON.stringify(body.messages?.[0]).includes('AGENT_MODEL_FIXTURE')) {

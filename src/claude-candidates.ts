@@ -43,6 +43,7 @@ export const claudeCandidates = (args: {
     let reason = '';
     if (id !== baseId) {
       if (!base && args.scope !== 'spawn') reason = 'baseline_unknown';
+      else if (f.legacy) reason = 'legacy_model';
       else if (!claudeTargetAllowed(id, args.allowFable)) reason = 'fable_disabled_by_config';
       else if (!claudeModelAllowed(id, args.available, args.aliases)) reason = 'model_not_allowed';
       else if (args.scope !== 'spawn' && base && f.contextTokens < base.contextTokens) {
@@ -51,7 +52,7 @@ export const claudeCandidates = (args: {
       }
       if (!reason && args.switches && !args.switches.some(s => s.from === args.baseline && s.to === id)) reason = 'switch_not_allowed';
     }
-    if (!reason && id === 'claude-sonnet-5-5' && args.hostBase && /^2\.1\.(\d+)$/.test(args.hostBase) && Number(args.hostBase.split('.')[2]) < 284) reason = 'host_unverified';
+    if (!reason && f.minimumHostRelease && args.hostBase && /^2\.1\.(\d+)$/.test(args.hostBase) && Number(args.hostBase.split('.')[2]) < f.minimumHostRelease) reason = 'host_unverified';
     if (reason) { if (args.excluded) args.excluded[reason] = (args.excluded[reason] ?? 0) + 1; continue; }
     out.push({ id, rank: ROLES[f.family].rank, description: `${f.family} model ${id}; ${f.role ?? 'Legacy version; no comparative performance is established here.'} Product role ${ROLES[f.family].text} Documented context ${f.contextTokens} tokens. Account entitlement is not inferred.`,
       efforts: f.unconditionalEffort, omitEffort: f.unconditionalEffort.length === 0 && f.conditionalEffort.length === 0 });

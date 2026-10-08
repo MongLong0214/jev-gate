@@ -86,15 +86,15 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
     installed = true;
   }, 60_000);
 
-  it.each(['bounded-lookup', 'direct-lookup', 'background', 'single', 'failed', 'permission-boundary', 'edit-after-check', 'worktree', 'hierarchy', 'lean', 'cancelled', 'budget', 'compact-manual', 'compact-auto', 'compact-semantic', 'routing-gpt-6.1-sol', 'routing-gpt-6-astra', 'routing-gpt-6-sol', 'routing-gpt-6-luna', 'routing-gpt-5.6-terra', 'routing-model-terra', 'routing-auto-model', 'routing-root-keep', 'routing-root-effort', 'routing-root-model', 'routing-root-both'])('runs automatic native Codex policies: %s', async scenario => {
+  it.each(['bounded-lookup', 'direct-lookup', 'background', 'single', 'failed', 'permission-boundary', 'edit-after-check', 'worktree', 'hierarchy', 'lean', 'cancelled', 'budget', 'compact-manual', 'compact-auto', 'compact-semantic', 'routing-gpt-6.1-sol', 'routing-gpt-6-astra', 'routing-gpt-6-sol', 'routing-gpt-6-luna', 'routing-gpt-5.6-terra', 'routing-model-luna', 'routing-auto-model', 'routing-root-keep', 'routing-root-effort', 'routing-root-model', 'routing-root-both'])('runs automatic native Codex policies: %s', async scenario => {
     const semanticBatches: Rec[] = [];
     const semantic = scenario === 'compact-semantic';
     if (semantic) for (let i = 1; i <= 20; i++) writeFileSync(join(workspace, `compact-note${i}.txt`), i === 3 ? dependencyFact : (`Unrelated completed archive ${i}. `).repeat(100));
     const routing = scenario.startsWith('routing-');
     const rootPair = scenario.startsWith('routing-root-');
     const baselineEffort = rootPair ? 'high' : 'medium';
-    const baselineModel = routing && !rootPair && !['routing-model-terra', 'routing-auto-model'].includes(scenario) ? scenario.slice('routing-'.length) : 'gpt-6.1-sol';
-    const targetEffort = rootPair ? scenario.endsWith('both') ? 'max' : scenario.endsWith('effort') ? 'low' : 'high' : baselineModel.endsWith('luna') ? 'max' : 'ultra';
+    const baselineModel = routing && !rootPair && !['routing-model-luna', 'routing-auto-model'].includes(scenario) ? scenario.slice('routing-'.length) : 'gpt-6.1-sol';
+    const targetEffort = rootPair ? scenario.endsWith('both') ? 'max' : scenario.endsWith('effort') ? 'low' : 'high' : baselineModel.endsWith('luna') || scenario === 'routing-model-luna' ? 'max' : 'ultra';
     const requests: Rec[] = []; const headerKeys: string[][]=[];
     const trace = join(tmp, `managed ${scenario} traces`);
     let releaseBackground: () => void = () => {};
@@ -187,8 +187,8 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
         ...(scenario === 'direct-lookup' ? { delegationDepthFloor: 999999 } : {}),
         admittedShape: scenario === 'hierarchy' || scenario === 'worktree' ? 'hierarchy' : 'auto',
         ...(scenario === 'worktree' ? {} : { workerIsolation: 'none', maxParallelWorkers: 1, guardAllowTools: [], planInterpretation: false }),
-        ...(scenario === 'routing-model-terra' ? { models: { fast: 'gpt-6-luna', standard: 'gpt-5.6-terra', deep: 'gpt-6.1-sol', frontier: 'gpt-6-astra' } } : {}) },
-      router: { model: rootPair || ['routing-model-terra', 'routing-auto-model'].includes(scenario), ...(scenario === 'routing-auto-model' ? { allowAstra: true } : {}) },
+        ...(scenario === 'routing-model-luna' ? { models: { fast: 'gpt-6-luna', standard: 'gpt-6-luna', deep: 'gpt-6.1-sol', frontier: 'gpt-6-astra' } } : {}) },
+      router: { model: rootPair || ['routing-model-luna', 'routing-auto-model'].includes(scenario), ...(scenario === 'routing-auto-model' ? { allowAstra: true } : {}) },
       compact: { manual: scenario === 'compact-manual' || semantic, ...(semantic ? { budgetChars: 8000 } : {}) },
     }));
     const profiles=Object.fromEntries(['planner','planner-frontier','worker-fast','worker','worker-deep','worker-frontier','executor'].map(n=>[`jev-gate:${n}`,readFileSync(join(root,'agents',n+'.md'),'utf8').replace(/^---[\s\S]*?---\s*/, '')]));
@@ -196,7 +196,7 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
       fetchImpl: (async (_url, init) => {
         const parsed=JSON.parse(String(init?.body)); const q = parsed.questions; if (semantic && Object.keys(q).some(k => /^m\d+t\d+$/.test(k))) semanticBatches.push(parsed);
         const bounded = scenario === 'bounded-lookup' && JSON.stringify(parsed.state).includes('runtimeEvidenceNeedle');
-        return new Response(JSON.stringify({ model: parsed.model, answers: Object.fromEntries(Object.keys(q).map(k => { const score=routing && k.startsWith('effort_')?rootPair?q[k].criteria.findIndex((v:string)=>v.startsWith(targetEffort==='max'?'Maximum':targetEffort==='low'?'Light':'Strong')):q[k].criteria.length-1:k==='tool_calls'?(scenario==='bounded-lookup'?(bounded?1:0):4):k==='size'?2:0; const picks:Record<string,string>={work_shape:'sustained_task',handoff_scope:'self_contained'}; const pick=/^m\d+t\d+$/.test(k) ? (parsed.state.candidates.find((c:Rec)=>c['id']===k)?.result.includes(dependencyFact) ? 'required' : 'unrelated') : k==='bounded_tool_work'?(bounded?'bounded':'other'):k.startsWith('relation_')?'omit':k==='model' && ['bounded-lookup','direct-lookup'].includes(scenario) ? 'gpt-6-luna' : k==='model' && routing ? scenario==='routing-auto-model'?'gpt-6-astra':scenario==='routing-model-terra' || rootPair && (scenario.endsWith('model') || scenario.endsWith('both'))?'gpt-5.6-terra':'__keep__' : picks[k] ?? Object.keys(q[k].criteria ?? {})[0]; return [k, q[k].type === 'score' ? { type: 'score', score, confidence:1, probabilities: Object.fromEntries(q[k].criteria.map((_:unknown,i:number)=>[i,i===score?1:0])) } : q[k].type === 'noul' ? { type:'noul',noul:0 } : { type: 'choice', choice: pick, confidence: 1, probabilities: Object.fromEntries(Object.keys(q[k].criteria).map(v=>[v,v===pick?1:0])) }]; })) }), { headers: { 'content-type': 'application/json' } });
+        return new Response(JSON.stringify({ model: parsed.model, answers: Object.fromEntries(Object.keys(q).map(k => { const score=routing && k.startsWith('effort_')?rootPair?q[k].criteria.findIndex((v:string)=>v.startsWith(targetEffort==='max'?'Maximum':targetEffort==='low'?'Light':'Strong')):q[k].criteria.length-1:k==='tool_calls'?(scenario==='bounded-lookup'?(bounded?1:0):4):k==='size'?2:0; const picks:Record<string,string>={work_shape:'sustained_task',handoff_scope:'self_contained'}; const pick=/^m\d+t\d+$/.test(k) ? (parsed.state.candidates.find((c:Rec)=>c['id']===k)?.result.includes(dependencyFact) ? 'required' : 'unrelated') : k==='bounded_tool_work'?(bounded?'bounded':'other'):k.startsWith('relation_')?'omit':k==='model' && ['bounded-lookup','direct-lookup'].includes(scenario) ? 'gpt-6-luna' : k==='model' && routing ? scenario==='routing-auto-model'?'gpt-6-astra':scenario==='routing-model-luna' || rootPair && (scenario.endsWith('model') || scenario.endsWith('both'))?'gpt-6-luna':'__keep__' : picks[k] ?? Object.keys(q[k].criteria ?? {})[0]; return [k, q[k].type === 'score' ? { type: 'score', score, confidence:1, probabilities: Object.fromEntries(q[k].criteria.map((_:unknown,i:number)=>[i,i===score?1:0])) } : q[k].type === 'noul' ? { type:'noul',noul:0 } : { type: 'choice', choice: pick, confidence: 1, probabilities: Object.fromEntries(Object.keys(q[k].criteria).map(v=>[v,v===pick?1:0])) }]; })) }), { headers: { 'content-type': 'application/json' } });
       }) as typeof fetch });
     const socket = new WebSocket(session.url, { headers: { Authorization: `Bearer ${session.token}` } });
     const opened = new Promise<void>((resolve,reject)=>{socket.once('open',resolve);socket.once('error',reject);});
@@ -248,7 +248,7 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
       }
       if (rootPair) {
         const changedModel=scenario.endsWith('model') || scenario.endsWith('both');
-        expect(requests[0]!['model']).toBe(changedModel?'gpt-5.6-terra':baselineModel);
+        expect(requests[0]!['model']).toBe(changedModel?'gpt-6-luna':baselineModel);
         expect((requests[0]!['reasoning'] as Rec)['effort']).toBe(targetEffort);
         expect(session.policy.sessions.size).toBe(1);
         expect(rows.filter(r=>r['phase']==='codex_router_intent')).toHaveLength(1);
@@ -259,7 +259,7 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
         const wireEffort = (requests[0]!['reasoning'] as Rec)['effort'];
         if (targetEffort === 'ultra') expect(['low', 'medium', 'high', 'xhigh', 'max']).toContain(wireEffort);
         else expect(wireEffort).toBe(targetEffort);
-        expect(requests[0]!['model']).toBe(scenario === 'routing-model-terra' ? 'gpt-5.6-terra' : scenario === 'routing-auto-model' ? 'gpt-6-astra' : baselineModel);
+        expect(requests[0]!['model']).toBe(scenario === 'routing-model-luna' ? 'gpt-6-luna' : scenario === 'routing-auto-model' ? 'gpt-6-astra' : baselineModel);
         expect(rows.some(r => r['phase'] === 'codex_route_applied' && r['selected_effort'] === targetEffort && r['observed_host_effort'] === targetEffort && r['submitted_effort'] === wireEffort && r['observed_effort'] === 'unknown' && r['applied'] === true), JSON.stringify(rows)).toBe(true);
         return;
       }

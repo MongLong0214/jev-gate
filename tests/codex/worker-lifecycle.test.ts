@@ -51,6 +51,13 @@ const setup = async (scenario = 'uncertain', started = true) => {
   return { policy, rpc, parent, sent, launch, terminal, job, stateEnv, root, returned, started: () => start !== undefined, lateResponse: () => { if (start) reply(start['id'], { turn: { id: 'turn-w' } }); } };
 };
 describe('Codex genuine terminal settlement (#139)', () => {
+  it('does not start a new owned worker on a catalog-declared previous generation', async () => {
+    const f = await setup('normal');
+    f.policy.catalog = f.policy.catalog.map(m => ({ ...m, description: 'Previous generation workhorse model.' }));
+    await f.launch(true);
+    expect(f.sent.some(m => m['method'] === 'thread/start' || m['method'] === 'turn/start')).toBe(false);
+    expect(f.job().current.active).toEqual({});
+  });
   it('runs a bounded direct worker and settles its subtask while keeping the main conversation direct', async () => {
     const f = await setup('adhoc'); expect(f.job().current.shape).toBe('direct');
     await f.launch(true); expect(JSON.stringify(f.returned())).toContain('launch receipt');

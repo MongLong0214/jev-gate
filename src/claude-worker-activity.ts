@@ -43,7 +43,7 @@ export interface WorkerActivity {
   jevResponseAt?: string | null;
 }
 export interface WorkerActivityView { items: WorkerActivity[]; limited: boolean; total?: number; sig: string }
-interface Candidate extends Omit<WorkerActivity, 'tools' | 'coverage' | 'state'> { terminal: 'completed' | 'failed' | null; launched: boolean }
+interface Candidate extends Omit<WorkerActivity, 'tools' | 'coverage' | 'state'> { terminal: 'completed' | 'failed' | null; launched: boolean; pendingTool?: boolean }
 type WorkerSummary = Omit<WorkerActivity, 'tools' | 'coverage'>;
 export interface WorkerModelCycle { id: string; at: string; model: string | null; tools: string[] }
 export interface WorkerHistory { worker: WorkerSummary; models: WorkerModelCycle[]; tools: WorkerToolActivity[]; coverage: WorkerActivity['coverage']; skippedRows: number; total: number; next: number | null }
@@ -94,10 +94,10 @@ export class ClaudeWorkerActivityReader {
   }
 
   private summary(c: Candidate, now: Date): WorkerSummary {
-    const { terminal, launched, ...base } = c;
+    const { terminal, launched, pendingTool, ...base } = c;
     const age = now.getTime() - Date.parse(c.lastAt);
     const pending = c.modelRequestAt && c.modelRequestAt > [c.modelResponseAt ?? '', c.modelFailureAt ?? ''].sort().at(-1)! || c.jevRequestAt && c.jevRequestAt > (c.jevResponseAt ?? '');
-    return { ...base, state: terminal ?? ((launched || pending) && age >= 0 && age < 120_000 ? 'active' : 'unknown') };
+    return { ...base, state: terminal ?? ((launched || pending || pendingTool) && age >= 0 && age < 120_000 ? 'active' : 'unknown') };
   }
 
   private locate(c: Candidate, env: Env): string | null {
@@ -192,7 +192,8 @@ export class ClaudeWorkerActivityReader {
     for (const r of records) {
       if (r['host'] === 'codex') continue;
       if (r['phase'] === 'dispatch' || r['phase'] === 'background_dispatch') dispatch.set(callKey(r), r);
-      if (r['phase'] === 'background_terminal' || r['phase'] === 'failure') terminals.set(callKey(r), r);
+      // A parent call can fail while its native background execution remains reserved.
+      if (r['phase'] === 'background_terminal' || r['phase'] === 'failure' && r['release_unconfirmed'] !== true) terminals.set(callKey(r), r);
     }
     for (const r of records.filter(r => r['agent_id'] && ['background_launch', 'mod_router', 'claude_router'].includes(String(r['phase']))).sort((a, b) => String(a['written_at'] ?? '').localeCompare(String(b['written_at'] ?? '')))) {
       if (r['host'] === 'codex') continue;
@@ -217,13 +218,22 @@ export class ClaudeWorkerActivityReader {
         launched: r['phase'] === 'background_launch' || previous?.launched === true,
         lastAt: [at, terminalAt ?? '', previous?.lastAt ?? ''].sort().at(-1)! });
     }
-    const all = [...candidates.values()].sort((a, b) => b.lastAt.localeCompare(a.lastAt));
+    const all = [...candidates.values()];
+    // An old launch can still have fresh native work. Read unsettled activity before
+    // applying the inactive display cap, including children without a launch trace.
+    for (const c of all) {
+      if (c.terminal) continue;
+      const path = this.locate(c, env), read = path ? this.readFile(`${c.sessionId}:${c.agentId}`, path) : null;
+      c.lastAt = [c.lastAt, read?.lastAt ?? ''].sort().at(-1)!;
+      c.pendingTool = read?.tools.some(t => !t.endedAt) ?? false;
+    }
+    all.sort((a, b) => b.lastAt.localeCompare(a.lastAt));
     this.candidates = all;
     // Never evict a trace-observed active agent merely because another agent emitted a newer event.
     const active = all.filter(c => this.summary(c, now).state === 'active');
     const activeKeys = new Set(active.map(c => `${c.sessionId}:${c.agentId}`));
     const selected = [...active, ...all.filter(c => !activeKeys.has(`${c.sessionId}:${c.agentId}`)).slice(0, MAX_AGENTS)];
-    const retained = new Set(selected.map(c => `${c.sessionId}:${c.agentId}`));
+    const retained = new Set([...selected, ...all.filter(c => !c.terminal)].map(c => `${c.sessionId}:${c.agentId}`));
     for (const key of this.paths.keys()) if (!retained.has(key)) { this.paths.delete(key); this.cache.delete(key); }
     const items = selected.map(c => {
       const key = `${c.sessionId}:${c.agentId}`;
@@ -234,7 +244,7 @@ export class ClaudeWorkerActivityReader {
       const pending = c.modelRequestAt && c.modelRequestAt > [c.modelResponseAt ?? '', c.modelFailureAt ?? ''].sort().at(-1)! || c.jevRequestAt && c.jevRequestAt > (c.jevResponseAt ?? '');
       const state: WorkerActivity['state'] = c.terminal ?? (recent && (c.launched || pending || read?.tools.some(t => !t.endedAt)) ? 'active' : 'unknown');
       const tools = (read?.tools ?? []).map(t => ({ ...t, state: t.endedAt ? t.state : state === 'active' ? 'active' as const : 'unconfirmed' as const }));
-      const { terminal: _terminal, launched: _launched, ...base } = c;
+      const { terminal: _terminal, launched: _launched, pendingTool: _pendingTool, ...base } = c;
       return { ...base, lastAt, state, coverage: read?.coverage ?? 'unavailable' as const, tools };
     });
     const view = { items, limited: all.length > selected.length, total: all.length };

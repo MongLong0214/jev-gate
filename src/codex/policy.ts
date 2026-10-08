@@ -237,7 +237,7 @@ export class CodexPolicy {
     const nativeEffort = typeof effort === 'string' ? effort : null;
     // A plugin-applied value is not a manual edit. A genuinely new native value wins for this turn.
     if (model !== session.baseline.model && model !== session.route?.model || nativeEffort !== session.baseline.effort && nativeEffort !== session.route?.effort && !(session.route?.effortEdit?.kind === 'omit' && nativeEffort === null)) delete session.route;
-    if (session.route?.model && !codexTargetAllowed(session.route.model, current.router.allowAstra)) delete session.route;
+    if (session.route?.model && (!codexTargetAllowed(session.route.model, current.router.allowAstra) || !this.catalog.some(m => m.model === session.route!.model && generalCodexModel(m)))) delete session.route;
     const reasoning = applyEffort(obj(request['reasoning']) ?? {}, session.route?.effortEdit);
     const selected = { ...request, ...(session.route?.model ? { model: session.route.model } : {}), ...(session.route?.effortEdit && session.route.effortEdit.kind !== 'keep' ? { reasoning } : {}) };
     return { request: selected };
@@ -566,7 +566,7 @@ export class CodexPolicy {
       const customPermissions = typeof permissions === 'string' && !permissions.startsWith(':');
       if (parent.external ? !captured : typeof permissions !== 'string' && !['dangerFullAccess', 'readOnly', 'workspaceWrite'].includes(String(sandbox?.['type']))) throw new Error('parent permissions unavailable');
       const currentPolicy = runtimeCodexPolicy({ ...this.env, JEV_CODEX_MODEL: parent.requestModel ?? parent.baseline.model }, this.catalog);
-      if (this.catalogEpoch !== dispatchEpoch || JSON.stringify(currentPolicy.router) !== dispatchConfig || !codexTargetAllowed(model, currentPolicy.router.allowAstra) || !codexCandidates(this.catalog, currentPolicy.router.allowAstra, model).some(m => m.id === model)) {
+      if (this.catalogEpoch !== dispatchEpoch || JSON.stringify(currentPolicy.router) !== dispatchConfig || !codexTargetAllowed(model, currentPolicy.router.allowAstra) || !this.catalog.some(m => m.model === model && generalCodexModel(m))) {
         updateJob(this.env, parent.id, prev => {
           const r = prev ? own(prev.current.active, toolId) : undefined;
           if (!prev || !r || r.codex_execution || r.background_execution?.agent_id) return null;

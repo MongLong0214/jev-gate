@@ -8,6 +8,7 @@ import { installedKeyPath, parseInstalledKey } from './key.ts';
 import { frontierConfigPath, parseFrontierRouting } from '../../../src/frontier-routing.ts';
 import { createRecorder } from './recording.ts';
 import { childStepContext } from '../../../src/router-child-context.ts';
+import { currentClaudeModel, factsOf } from './models.ts';
 
 const set = (v: string | undefined): boolean => v !== undefined && v.trim() !== '';
 
@@ -97,10 +98,11 @@ const engineOf = ($: EngineInterface, log: RouterEngine['log']): RouterEngine =>
     ]);
     // Provider-specific deployments without an explicit verified mapping remain unresolved.
     const api = !set(bedrock) && !set(vertex) && !set(foundry) && !set(mantle);
-    const modernSonnet = /^2\.1\.(\d+)$/.test(version.base ?? '') && Number(version.base?.split('.')[2]) >= 284;
-    return { ...(opus || api ? { opus: opus || 'claude-opus-5-5' } : {}),
-      ...(sonnet || api ? { sonnet: sonnet || (modernSonnet ? 'claude-sonnet-5-5' : 'claude-sonnet-5') } : {}),
-      ...(haiku || api ? { haiku: haiku || 'claude-haiku-4-5' } : {}), ...(fable || api ? { fable: fable || 'claude-fable-5-1' } : {}) };
+    const release = /^2\.1\.(\d+)$/.exec(version.base ?? '');
+    const supports = (family: 'sonnet' | 'haiku'): boolean => release !== null && Number(release[1]) >= (factsOf(currentClaudeModel(family))?.minimumHostRelease ?? Infinity);
+    return { ...(opus || api ? { opus: opus || currentClaudeModel('opus') } : {}),
+      ...(sonnet || api ? { sonnet: sonnet || (supports('sonnet') ? currentClaudeModel('sonnet') : 'claude-sonnet-5') } : {}),
+      ...(haiku || api ? { haiku: haiku || (supports('haiku') ? currentClaudeModel('haiku') : 'claude-haiku-4-5') } : {}), ...(fable || api ? { fable: fable || currentClaudeModel('fable') } : {}) };
   },
   dispatchPair: async (tool, model, allowFable, agent, eligible = true, token = '') => {
     // CLAUDE_PLUGIN_ROOT is injected into command hooks, not native Function Hooks. The host owns this path.

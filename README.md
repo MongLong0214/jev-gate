@@ -42,7 +42,7 @@ Both hosts share one private key and dashboard. Installing from source is for de
 | Feature | Behavior | Jev usage |
 | --- | --- | --- |
 | Gate | Chooses direct execution, one background worker, or a plan with worker tasks. Code checks contracts and passing checks. | Eligible admission and allocation judgments; optional plan interpretation |
-| Router | Selects model and effort from supported candidates for the root or eligible agents. Explicit pins are respected. | A task assessment when settings can change; steps reuse the task decision |
+| Router | Selects model and effort from supported candidates for the root or eligible agents. Explicit pins are respected. | Root turns are assessed once; mapped Claude workers are assessed again at each inference after spawn |
 | Compact | Builds an extractive digest plus recent context. Jev prioritizes older successful results needed for the current task within the existing size budget. | One bounded candidate batch by default; timeout/invalid output keeps local selection |
 | Output | Folds repeated successful Vitest output in Claude, and supported repeated tool output in Codex. | Local deterministic processing |
 | Evidence | Returns verified source windows, paths, lines, hashes, and pagination. | Semantic candidates; exact symbols and read-back stay local |
@@ -72,9 +72,11 @@ Claude sends native completion notifications. Codex's coordinator can query `jev
 
 ### Understand model routing
 
-The model picker establishes the baseline. Router reassesses each new task; selecting Sonnet once does not lock future tasks to Sonnet. Routine child steps reuse their existing assessment. Gate B owns the final model allocation for Jev workers; eligible ordinary agents use Router.
+The model picker establishes the baseline. Router reassesses each new root task; selecting Sonnet once does not lock future tasks to Sonnet. Claude workers with a known native identity receive a fresh assessment before each inference after spawn, including inference following tool results. Codex reuses the current task assessment. Gate B owns the initial allocation for Jev workers; eligible ordinary agents use Router.
 
-Simple lookup and mechanical worker tasks prefer Haiku in Claude or account-listed Luna in Codex. Codex candidates come from the account's actual `model/list`, including Terra when available. Claude root switching to Haiku can remain `context_unverified` where the host cannot prove request compatibility; fresh Haiku workers use no effort field.
+Simple lookup and mechanical worker tasks prefer current Haiku in Claude or current account-listed Luna in Codex. New automatic targets exclude previous generations. Haiku 5.5 requires Claude Code 2.1.293 or later and supports effort; `xhigh`/`max` depend on thinking mode, so hooks offer its universally valid `low`/`medium`/`high` levels. Native host pins and account availability remain authoritative.
+
+Every PR runs the `models` CI job against the official Claude model/effort documentation, Claude Code changelog, and OpenAI Codex catalog. Stale Claude facts fail CI and produce a `model-update-<PR>` patch artifact (`git apply model-update.patch`); unknown schemas, missing metadata, changed Codex roles or unsupported effort levels also fail. `npm run models:check` checks locally; `npm run models:update` updates the existing Claude fact table, retires superseded versions and requires a verified host release for new IDs. Codex uses the account's live catalog; CI exercises the same production selectors against the official public catalog. Review changes and run the normal checks before merging. This check runs on PRs only and does not publish a release.
 
 “Do not edit” constrains work. “Do not delegate” keeps it in the main session. Neither pins a model or effort. Explicit model/effort instructions and host pins remain authoritative. Router also considers observed cache usage; a proposal can be held to preserve a useful cache. [Model, cache, and pin behavior](mods/router/README.md).
 

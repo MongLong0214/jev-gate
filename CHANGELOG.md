@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.8.13 — 2026-10-08 — Current models and PR freshness checks
+
+- Add Haiku 5.5 with its documented 1M context, output limit and effort support. Resolve the API Haiku alias on Claude Code 2.1.293 and later, and check the host version and account allowlist before root, spawn and worker-step switches. Offer only effort levels valid under the retained thinking mode.
+- Exclude previous generations from new automatic Claude targets and Codex targets/tier defaults. Preserve historical identity records and native pins. Recheck stored Codex routes and owned worker dispatches against the current catalog before execution.
+- Check official Claude model/effort metadata and the OpenAI Codex catalog on every PR. Stale metadata fails CI and produces an update patch; missing sources, unknown schemas, roles or effort support fail explicitly. Validate the plugin and current Haiku request pairs with the latest native Claude CLI using isolated scripted APIs. No scheduled runs or automatic releases.
+- Keep background worker activity open after an unconfirmed parent-call failure. Read unfinished child tool activity before applying the inactive-worker history cap, so fresh work does not disappear behind older trace timestamps.
+
 ## v0.8.12 — 2026-10-07 — Live worker execution rails
 
 - Rebuild the execution circuit within the existing dashboard design: ten feature stations, independent execution and worker rails, observed request/response pulses, and explicit current stages. Active executions remain visible outside the selected time window. Pause, disconnection and reduced motion stop animation; historical selection and scroll survive live updates.

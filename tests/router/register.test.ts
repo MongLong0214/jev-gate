@@ -25,7 +25,7 @@ const fakeHost = (world: World = {}) => {
   const requests: Array<{ url: string; headers: Record<string, string> }> = [];
   const logs: string[] = [];
   // The full version differs from its release base, so reading the wrong field cannot pass.
-  const version = world.version ?? { version: '2.1.282+build.7f3c', base: '2.1.282' };
+  const version = world.version ?? { version: '2.1.293+build.7f3c', base: '2.1.293' };
   const $ = {
     fs: {
       exists: async (path: string) => path in (world.files ?? {}),
@@ -148,11 +148,46 @@ describe('register', () => {
   it('routes a spawn through the host adapter with the environment key, sent only in the header', async () => {
     const host = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY } });
     const asked = await spawnThrough(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false }), host);
-    expect(asked).toBe('claude-haiku-4-5-20251001');
+    expect(asked).toBe('claude-haiku-5-5');
     expect(host.requests).toHaveLength(1);
     expect(host.requests[0]?.headers['authorization']).toBe(`Bearer ${FAKE_KEY}`);
     expect(host.logs.join('\n')).not.toContain(FAKE_KEY);
     expect(host.logs.every((l) => l.startsWith('jev-router '))).toBe(true);
+  });
+  it.each([
+    ['2.1.293', {}, 'claude-haiku-5-5'],
+    ['2.1.293', { ANTHROPIC_DEFAULT_HAIKU_MODEL: 'claude-haiku-5-5' }, 'claude-haiku-5-5'],
+  ])('resolves the native Haiku baseline for host %s and preserves an explicit alias override', async (base, overrides, expected) => {
+    const host = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY, ...overrides }, version: { version: base, base } });
+    const offered: string[][] = [];
+    host.$.http.fetch = async (_url, init) => {
+      const req = JSON.parse(init.body);
+      offered.push(Object.keys(req.questions.model.criteria));
+      return { status: 200, text: JSON.stringify({ model: JEV_MODEL, answers: Object.fromEntries(Object.entries(req.questions).map(([name, q]) => [name, (q as { type: string }).type === 'choice' ? choice(Object.keys((q as { criteria: object }).criteria), [name === 'model' ? '__keep__' : name === 'control' ? 'task_clear' : 'ordinary', .99]) : { type: 'score', probabilities: { 0: 0, 1: 0, 2: 1 } }])) }) };
+    };
+    const hooks = await registered({ enabled: true, routeMainModel: false, routeMainEffort: false, routeSubagentEffort: false });
+    let calls = 0;
+    await hooks.get('agent.spawn')?.(host.$, { ...SPAWN, model: 'haiku' }, withSignal(async (e: { model?: string }) => { calls++; expect(e.model).toBe('haiku'); return { model: expected }; }));
+    expect(calls).toBe(1);
+    expect(offered).toHaveLength(1);
+    expect(offered[0]).not.toContain(expected);
+    expect(offered[0]?.includes('claude-haiku-5-5')).toBe(base === '2.1.293' && expected !== 'claude-haiku-5-5');
+    expect(host.logs.join('\n')).not.toContain('"confirmation":"mismatch"');
+  });
+  it.each([
+    ['2.1.292', {}],
+    ['2.1.293', { ANTHROPIC_DEFAULT_HAIKU_MODEL: 'claude-haiku-4-5' }],
+  ])('does not start an outdated native Haiku fallback on %s', async (base, overrides) => {
+    const host = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY, ...overrides }, version: { version: base, base } });
+    host.$.http.fetch = async (_url, init) => {
+      const req = JSON.parse(init.body);
+      return { status: 200, text: JSON.stringify({ model: JEV_MODEL, answers: Object.fromEntries(Object.entries(req.questions).map(([name, q]) => [name, choice(Object.keys((q as { criteria: object }).criteria), [name === 'model' ? '__keep__' : name === 'control' ? 'task_clear' : 'ordinary', .99])])) }) };
+    };
+    const hooks = await registered({ enabled: true, routeMainModel: false, routeMainEffort: false, routeSubagentEffort: false });
+    let calls = 0;
+    const out = await hooks.get('agent.spawn')?.(host.$, { ...SPAWN, model: 'haiku' }, withSignal(async () => { calls++; return { model: 'claude-haiku-4-5' }; }));
+    expect(calls).toBe(0);
+    expect(out).toMatchObject({ deny: expect.any(String) });
   });
 
   it('routes with the shared saved key without a shell export and preserves invalid explicit input', async () => {
@@ -162,7 +197,7 @@ describe('register', () => {
     ] as const) {
       const files = { [path]: JSON.stringify({ version: 1, apiKey: FAKE_KEY }) };
       const host = fakeHost({ env, files });
-      expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false }), host)).toBe('claude-haiku-4-5-20251001');
+      expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false }), host)).toBe('claude-haiku-5-5');
       expect(host.requests[0]?.headers['authorization']).toBe(`Bearer ${FAKE_KEY}`);
       expect(host.logs.join('\n')).not.toContain(FAKE_KEY);
       const invalid = fakeHost({ env: { ...env, TYPESAFE_API_KEY: 'invalid key' }, files });
@@ -185,7 +220,7 @@ describe('register', () => {
       yield 'chunk';
       return { usage: { model: e.model } };
     });
-    const gen = hooks.get('turn.step')?.($, { turnId: 'c1', index: 0, model: 'claude-haiku-4-5', agentId: 'a1', messageCount: 1 }, stepNext) as AsyncGenerator<string, unknown>;
+    const gen = hooks.get('turn.step')?.($, { turnId: 'c1', index: 0, model: 'claude-haiku-5-5', agentId: 'a1', messageCount: 1 }, stepNext) as AsyncGenerator<string, unknown>;
     expect((await drain(gen)).chunks).toEqual(['chunk']);
     expect([spawns, steps]).toEqual([1, 1]);
     expect(nouns.has('agent')).toBe(false);
@@ -205,17 +240,17 @@ describe('register', () => {
 
   it('keeps model pins independent from effort, and resolves aliases without treating them as pins', async () => {
     for (const name of ['CLAUDE_CODE_SUBAGENT_MODEL', 'CLAUDE_CODE_SUBAGENT_MODEL_FORCE']) {
-      const host = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY, [name]: 'claude-sonnet-5' } });
+      const host = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY, [name]: 'claude-sonnet-5-5' } });
       expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false, routeSubagentEffort: false }), host)).toBeUndefined();
       expect(host.requests).toHaveLength(0);
-      const effort = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY, [name]: 'claude-sonnet-5' } });
+      const effort = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY, [name]: 'claude-sonnet-5-5' } });
       expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false }), effort)).toBeUndefined();
       expect(effort.requests).toHaveLength(1);
       expect(effort.logs.join('\n')).toContain('"effort_asked":true');
     }
     for (const name of ['ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL']) {
-      const host = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY, [name]: 'claude-sonnet-5' } });
-      expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false }), host)).toBe('claude-haiku-4-5-20251001');
+      const host = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY, [name]: 'claude-sonnet-5-5' } });
+      expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false }), host)).toBe('claude-haiku-5-5');
       expect(host.requests).toHaveLength(1);
       expect(host.logs.join('\n')).toContain('"model_asked":true');
     }
@@ -229,7 +264,7 @@ describe('register', () => {
     expect(malformed.requests).toHaveLength(0);
 
     const allowed = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY }, settings: { availableModels: ['haiku', 'sonnet', 'opus'] } });
-    expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false }), allowed)).toBe('claude-haiku-4-5-20251001');
+    expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false }), allowed)).toBe('claude-haiku-5-5');
 
     for (const version of [{ version: '2.1.282-dev.20260920', base: '2.1.282-dev' }, { version: 'local' }]) {
       const host = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY }, version });

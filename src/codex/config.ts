@@ -5,6 +5,7 @@ import { validateConfig, type Env } from '../config.js';
 import type { ConfigV5, Tier } from '../types.js';
 import type { CodexModel } from './router.js';
 import { frontierRoutingEnabled } from '../frontier-config.js';
+import { generalCodexModel } from './catalog.js';
 
 export interface CodexPolicyConfig {
   gate: ConfigV5;
@@ -13,7 +14,7 @@ export interface CodexPolicyConfig {
 }
 export const catalogTierModels = (baseline: string, catalog: readonly CodexModel[]): Record<Tier, string> => {
   // Use this account's model descriptions, never invented IDs or hidden specialist/review models.
-  const general = catalog.filter(m => !m.hidden && !/cybersecurity|automatic.*review|specialist/i.test(m.description ?? ''));
+  const general = catalog.filter(generalCodexModel);
   const pick = (pattern: RegExp, fallback: string): string => general.find(m => pattern.test(m.description ?? ''))?.model ?? fallback;
   const deep = general.some(m => m.model === baseline && /workhorse|coding.*reasoning|reasoning.*coding/i.test(m.description ?? ''))
     ? baseline : pick(/latest.*workhorse|most.*capable.*coding|advanced.*reasoning/i, baseline);

@@ -10,7 +10,7 @@ describe('shared automatic child eligibility and ownership', () => {
   it('runs the packaged policy entrypoint through a symlink and keeps the exact allocated pair', () => {
     const dir = mkdtempSync(join(tmpdir(), 'jev-dispatch-entry-')); const env = { ...process.env, JEV_GATE_STATE_DIR: dir };
     try {
-      updateJob(env, 'root', () => { const state = newGeneration(null, 'root', 'prompt', 'orchestrated').state; const current = reserve(state.current, 'tool', { role: 'worker', taskId: null, contractHash: null, rev: null, tier: 'standard', attempt: 1, deliverables: [] }); return { ...state, current: { ...current, active: { tool: { ...current.active.tool!, allocation_pair: { model: 'claude-opus-5', effort_edit: { kind: 'set', value: 'high' } } } } } }; });
+      updateJob(env, 'root', () => { const state = newGeneration(null, 'root', 'prompt', 'orchestrated').state; const current = reserve(state.current, 'tool', { role: 'worker', taskId: null, contractHash: null, rev: null, tier: 'standard', attempt: 1, deliverables: [] }); return { ...state, current: { ...current, active: { tool: { ...current.active.tool!, allocation_pair: { model: 'claude-opus-5-5', effort_edit: { kind: 'set', value: 'high' } } } } } }; });
       const root = join(__dirname, '../..');
       const staged = join(dir, 'package'); mkdirSync(staged);
       writeFileSync(join(staged, 'package.json'), '{"type":"module"}');
@@ -18,7 +18,7 @@ describe('shared automatic child eligibility and ownership', () => {
       expect(build.status, build.stdout + build.stderr).toBe(0);
       const link = join(dir, 'installed plugin'); symlinkSync(staged, link);
       const result = spawnSync(process.execPath, [join(link, 'dist/dispatch-policy.js'), 'root', 'tool', 'opus', 'false', 'jev-gate:worker', 'true', ''], { env, encoding: 'utf8' });
-      expect(result.status, result.stderr).toBe(0); expect(JSON.parse(result.stdout)).toEqual({ model: 'claude-opus-5', effort_edit: { kind: 'set', value: 'high' } });
+      expect(result.status, result.stderr).toBe(0); expect(JSON.parse(result.stdout)).toEqual({ model: 'claude-opus-5-5', effort_edit: { kind: 'set', value: 'high' } });
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
   it.each(Object.keys(OWNED_AGENTS))('does not inherit a restricted model in %s',agent=>{
