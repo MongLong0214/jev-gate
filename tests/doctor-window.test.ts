@@ -27,7 +27,7 @@ beforeAll(() => {
 
 let seq = 0;
 const doctorRun = (env: Record<string, string | undefined>, cwd: string = mktemp()): { status: number | null; stdout: string } => {
-  const r = spawnSync(process.execPath, [join(out, 'cli.js'), 'doctor'], {
+  const r = spawnSync(process.execPath, [join(out, 'cli.js'), 'doctor', '--verbose'], {
     cwd,
     encoding: 'utf8',
     // PATH: /nonexistent keeps checkClaude from finding a real `claude` binary on this machine.

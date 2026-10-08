@@ -1,0 +1,107 @@
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import { claudeCompatibility, claudeModelInventory, parseClaudeInventory } from '../src/doctor-models.js';
+import { codexCompatibility, codexModelInventory } from '../src/codex/doctor-models.js';
+import { claudeDoctor, parseFrontmatter } from '../src/cli.js';
+import { codexDoctor } from '../src/codex/cli.js';
+import { storageIssue, renderDoctor } from '../src/doctor.js';
+
+const dirs: string[] = [];
+afterEach(() => dirs.splice(0).forEach(dir => rmSync(dir, { recursive: true, force: true })));
+const temporary = () => { const path = mkdtempSync(join(tmpdir(), 'jev-doctor-test-')); dirs.push(path); return path; };
+const claudeModels = [{ value: 'haiku', resolvedModel: 'claude-haiku-5-5', supportsEffort: true, supportedEffortLevels: ['low', 'medium', 'high'] }];
+const codexModel = (model = 'gpt-6-luna', efforts = ['low', 'medium', 'high', 'xhigh', 'max']) => ({ model, description: 'Fast and affordable model for easier tasks', supportedReasoningEfforts: efforts.map(reasoningEffort => ({ reasoningEffort })) });
+function fixture(host: 'claude' | 'codex', rows: unknown[]) {
+  const dir = temporary(), log = join(dir, 'rpc.log');
+  const script = `#!${process.execPath}\nconst fs=require('node:fs'),readline=require('node:readline');const rows=${JSON.stringify(rows)};readline.createInterface({input:process.stdin}).on('line',line=>{const r=JSON.parse(line);fs.appendFileSync(process.env.PROBE_LOG,JSON.stringify(r)+'\\n');if(r.type==='control_request')process.stdout.write(JSON.stringify({type:'control_response',response:{subtype:'success',request_id:r.request_id,response:{models:rows}}})+'\\n');else if(r.id)process.stdout.write(JSON.stringify({id:r.id,result:r.method==='initialize'?{}:{data:rows,nextCursor:null}})+'\\n')});`;
+  writeFileSync(join(dir, host), script); chmodSync(join(dir, host), 0o700);
+  return { dir, log, env: { PATH: `${dir}:${dirname(process.execPath)}`, HOME: dir, CODEX_HOME: dir, PROBE_LOG: log } };
+}
+describe('Doctor native model and effort compatibility', () => {
+  it('rejects Haiku 5.5 on a pre-2.1.293 CLI even if a synthetic inventory advertises it', () => {
+    const row = claudeCompatibility(parseClaudeInventory(claudeModels), '2.1.292', [], false).find(v => v.model === 'claude-haiku-5-5')!;
+    expect(row.state).toBe('incompatible'); expect(row.reason).toContain('2.1.293');
+  });
+  it('detects a stale haiku alias resolving to 4.5 and does not approve its effort', () => {
+    const inventory = parseClaudeInventory([{ value: 'haiku', resolvedModel: 'claude-haiku-4-5', supportsEffort: false }]);
+    const row = claudeCompatibility(inventory, '2.1.294', [{ model: 'haiku', effort: 'low' }], false).find(v => v.model === 'haiku')!;
+    expect(row.state).toBe('incompatible'); expect(row.reason).toContain('resolves to claude-haiku-4-5'); expect(row.unsupportedEfforts).toEqual(['low']);
+  });
+  it('checks every offered effort and keeps missing capability fields unknown', () => {
+    const inventory = parseClaudeInventory(claudeModels);
+    const row = claudeCompatibility(inventory, '2.1.294', [{ model: 'claude-haiku-5-5', effort: 'max' }], false).find(v => v.model === 'claude-haiku-5-5')!;
+    expect(row.unsupportedEfforts).toEqual(['max']); expect(row.state).toBe('incompatible');
+    const unknown = parseClaudeInventory([{ value: 'haiku', resolvedModel: 'claude-haiku-5-5' }]);
+    expect(claudeCompatibility(unknown, '2.1.294', [], false).find(v => v.model === 'claude-haiku-5-5')?.state).toBe('unverified');
+  });
+  it('marks missing targets as incompatible only in a complete inventory', () => {
+    expect(claudeCompatibility(parseClaudeInventory(claudeModels), '2.1.294', [], false).find(v => v.model === 'claude-opus-5-5')?.state).toBe('incompatible');
+    expect(claudeCompatibility({ models: [], complete: false, error: 'unavailable' }, '2.1.294', [], false).find(v => v.model === 'claude-opus-5-5')?.state).toBe('unverified');
+  });
+  it('checks current Opus and Fable host introductions from the shared model table', () => {
+    const rows = claudeCompatibility({ models: [], complete: false, error: 'unavailable' }, '2.1.256', [{ model: 'claude-fable-5-1', effort: 'max' }], true);
+    expect(rows.find(r => r.model === 'claude-opus-5-5')?.reason).toContain('2.1.280');
+    expect(rows.find(r => r.model === 'claude-fable-5-1')?.reason).toContain('2.1.257');
+  });
+  it('queries actual Claude control protocol without a user message or permission change', async () => {
+    const fake = fixture('claude', claudeModels), inventory = await claudeModelInventory(fake.env, fake.dir);
+    expect(inventory.complete).toBe(true); expect(inventory.models[0]).toEqual({ alias: 'haiku', id: 'claude-haiku-5-5', efforts: ['low', 'medium', 'high'] });
+    const requests = readFileSync(fake.log, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+    expect(requests).toEqual([{ type: 'control_request', request_id: 'jev-doctor-models', request: { subtype: 'initialize' } }]);
+  });
+  it('queries Codex only with initialize/model-list RPCs and enumerates all supported efforts', async () => {
+    const fake = fixture('codex', [codexModel()]), inventory = await codexModelInventory(fake.env, fake.dir);
+    expect(inventory.complete).toBe(true); expect(inventory.models[0]?.efforts).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+    expect(readFileSync(fake.log, 'utf8').trim().split('\n').map(line => JSON.parse(line).method)).toEqual(['initialize', 'initialized', 'model/list']);
+    expect(codexCompatibility(inventory, fake.env).find(v => v.model === 'gpt-6-luna')?.state).toBe('compatible');
+  });
+  it('rejects unavailable explicit Codex targets and unsupported owned-profile efforts', () => {
+    const dir = temporary(), config = join(dir, 'codex.json');
+    writeFileSync(config, JSON.stringify({ gate: { models: { fast: 'missing-luna', deep: 'gpt-6-luna' } } }));
+    const catalog = [codexModel('gpt-6-luna', ['low', 'medium'])];
+    const rows = codexCompatibility({ catalog, models: [], complete: true, error: null }, { HOME: dir, JEV_CODEX_CONFIG: config });
+    expect(rows.find(r => r.model === 'missing-luna')?.state).toBe('incompatible');
+    expect(rows.find(r => r.model === 'gpt-6-luna')?.unsupportedEfforts).toContain('high');
+    expect(rows.find(r => r.model === 'gpt-6-luna')?.state).toBe('incompatible');
+  });
+  it('never turns missing binaries, malformed catalogs or duplicate entries into an empty successful inventory', async () => {
+    const dir = temporary(), env = { HOME: dir, PATH: '/nonexistent' };
+    expect((await claudeModelInventory(env, dir)).complete).toBe(false);
+    expect((await codexModelInventory(env, dir)).complete).toBe(false);
+    expect(parseClaudeInventory([...claudeModels, ...claudeModels]).complete).toBe(false);
+    expect(parseClaudeInventory('secret payload').error).toBe('invalid_response');
+  });
+});
+describe('Doctor reports', () => {
+  it('diagnoses invalid explicit keys on both hosts without printing them', async () => {
+    const dir = temporary(), env = { HOME: dir, PATH: '/nonexistent', TYPESAFE_API_KEY: 'bad\nsecret', CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: '0' };
+    const claude = await claudeDoctor(join(__dirname, '..'), env, dir);
+    const codex = (await codexDoctor(join(__dirname, '../plugins/codex'), env, dir)).report;
+    for (const report of [claude, codex]) {
+      expect(report.checks.some(c => c.group === 'credentials' && c.level === 'fail' && c.message.includes('invalid format'))).toBe(true);
+      expect(JSON.stringify(report)).not.toContain('secret');
+    }
+    expect(claude.checks.some(c => c.group === 'configuration' && c.level === 'warn' && c.message.includes('Function Hooks explicitly disabled'))).toBe(true);
+  });
+  it('is reentrant and returns actionable JSON facts without key values or directory creation', async () => {
+    const dir = temporary(), env = { HOME: dir, PATH: '/nonexistent', TYPESAFE_API_KEY: 'private-key-do-not-print', JEV_GATE_TRACE_DIR: join(dir, 'traces') };
+    const first = await claudeDoctor(join(__dirname, '..'), env, dir), second = await claudeDoctor(join(__dirname, '..'), env, dir);
+    expect(second.checks).toHaveLength(first.checks.length); expect(first.counts).toEqual(second.counts);
+    expect(JSON.stringify(first)).not.toContain(env.TYPESAFE_API_KEY); expect(renderDoctor(first)).not.toContain(env.TYPESAFE_API_KEY);
+    expect(first.checks.filter(c => c.level === 'fail' || c.level === 'warn').every(c => c.action)).toBe(true);
+    expect(first.models?.complete).toBe(false);
+  });
+  it('accepts CRLF and rejects duplicate or false closing delimiters in frontmatter', () => {
+    expect(parseFrontmatter('---\r\nname: worker\r\n---\r\n').fields.name).toBe('worker');
+    expect(parseFrontmatter('---\nmodel: opus\nmodel: haiku\n---\n').error).toContain('duplicate');
+    expect(parseFrontmatter('---\nmodel: opus\n---oops\n').error).toBe('unterminated frontmatter');
+  });
+  it('rejects a file masquerading as storage and a relative path without mutating either', () => {
+    const dir = temporary(), file = join(dir, 'file'); writeFileSync(file, 'unchanged');
+    expect(storageIssue(file)).toContain('not a directory'); expect(storageIssue('relative')).toContain('absolute');
+    expect(readFileSync(file, 'utf8')).toBe('unchanged');
+    expect(storageIssue(join(dir, 'not-created', 'trace'))).toBeNull();
+  });
+});

@@ -117,7 +117,7 @@ describe('doctor: checkModelAuthority (#48 P0-2)', () => {
     const home = mkdtempSync(join(tmpdir(), 'jev-cli-doctor-home-'));
     // PATH=/nonexistent (as tests/pack.test.ts also does): `claude` is not found, so checkClaude() warns cleanly
     // instead of running a real CLI, and no network or auth call happens.
-    const r = spawnSync(process.execPath, [join(pluginRoot, 'dist', 'cli.js'), 'doctor'], { encoding: 'utf8', env: { PATH: '/nonexistent', HOME: home, ...extraEnv } });
+    const r = spawnSync(process.execPath, [join(pluginRoot, 'dist', 'cli.js'), 'doctor', '--verbose'], { encoding: 'utf8', env: { PATH: '/nonexistent', HOME: home, ...extraEnv } });
     return { status: r.status, stdout: r.stdout };
   };
 

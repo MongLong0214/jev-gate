@@ -131,9 +131,9 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
       input: JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 's', prompt: 'add a test' }),
     });
     expect(offViaConfig).toMatchObject({ status: 0, stdout: '', stderr: 'jev-gate: mode_off\n' });
-    const doctor = spawnSync(process.execPath, [join(dest, 'dist', 'cli.js'), 'doctor'], { cwd: otherCwd, encoding: 'utf8', env: { ...env, PATH: '/nonexistent' } });
-    expect(doctor.stdout).toMatch(/\[ok\] dist\/entry\.js present/);
-    expect(doctor.stdout).toMatch(/\[ok\] dist\/hook\.js present/);
+    const doctor = spawnSync(process.execPath, [join(dest, 'dist', 'cli.js'), 'doctor', '--verbose'], { cwd: otherCwd, encoding: 'utf8', env: { ...env, PATH: '/nonexistent' } });
+    expect(doctor.stdout).toMatch(/\[ok\] dist\/entry\.js readable file/);
+    expect(doctor.stdout).toMatch(/\[ok\] dist\/hook\.js readable file/);
     expect(doctor.stdout).toMatch(/hooks\.json PreToolUse \(no matcher\): 1 command hook/);
     expect(doctor.stdout).toMatch(/hooks\.json Stop \(no matcher\): 1 command hook/);
     // #48 P2: SessionStart is the sixth registered event, wired to the same dist/entry.js command.
@@ -141,7 +141,7 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     for (const agent of agents) expect(existsSync(join(dest, agent)), agent).toBe(true);
     // v0.3.0 shipped without agents/executor.md and doctor failed on the installed archive; the lines above only
     // sampled its output. With the host able to run Agent calls in the foreground, doctor on the archive fails nothing.
-    const whole = spawnSync(process.execPath, [join(dest, 'dist', 'cli.js'), 'doctor'], {
+    const whole = spawnSync(process.execPath, [join(dest, 'dist', 'cli.js'), 'doctor', '--verbose'], {
       cwd: otherCwd,
       encoding: 'utf8',
       env: { ...env, PATH: '/nonexistent', CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' },

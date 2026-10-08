@@ -19,6 +19,17 @@ const shellEnv = { PATH: process.env['PATH'] ?? '', XDG_CONFIG_HOME: join(tmp, '
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
 beforeAll(() => {
+  const bin = join(tmp, 'fake-bin'); mkdirSync(bin);
+  writeFileSync(join(bin, 'codex'), `#!${process.execPath}
+if (process.argv.includes('--version')) { console.log('codex-cli 0.158.0'); process.exit(0); }
+const readline = require('node:readline');
+readline.createInterface({ input: process.stdin }).on('line', line => {
+  const row = JSON.parse(line); if (row.id === undefined) return;
+  const result = row.method === 'model/list' ? { data: [{ model: 'gpt-6.1-sol', description: 'Latest workhorse for coding and reasoning', isDefault: true, supportedReasoningEfforts: ['low','medium','high','xhigh','max'].map(reasoningEffort => ({ reasoningEffort, description: reasoningEffort })) }], nextCursor: null } : {};
+  console.log(JSON.stringify({ id: row.id, result }));
+});
+`, { mode: 0o700 });
+  shellEnv.PATH = `${bin}:${shellEnv.PATH}`;
   cpSync(join(root, 'plugins/codex'), join(staged, 'plugins/codex'), { recursive: true, filter: p => !p.includes('/dist/') && !p.endsWith('/dist') });
   cpSync(join(root, 'package.json'), join(staged, 'package.json'));
   const built = spawnSync(process.execPath, [join(root, 'scripts/build-codex.mjs'), join(staged, 'plugins/codex/dist')], { encoding: 'utf8' });
@@ -53,11 +64,14 @@ describe('installed Codex archive', () => {
   });
   it('runs doctor without starting an MCP transport or writing records', () => {
     const empty = join(tmp, 'doctor-only');
-    const result = spawnSync(process.execPath, [join(installed, 'dist/cli.mjs'), 'doctor'], { cwd: project, env: { ...shellEnv, JEV_CODEX_TRACE_DIR: empty }, encoding: 'utf8', timeout: 5000 });
+    const result = spawnSync(process.execPath, [join(installed, 'dist/cli.mjs'), 'doctor', '--json'], { cwd: project, env: { ...shellEnv, JEV_CODEX_TRACE_DIR: empty }, encoding: 'utf8', timeout: 5000 });
     expect(result.stderr).toBe('');
     expect(existsSync(empty)).toBe(false);
-    expect(result.stdout).toContain('No source was scanned and no request was sent.');
-    expect(result.stdout).toContain('[active] router:');
+    const report = JSON.parse(result.stdout);
+    expect(report.host).toBe('codex');
+    expect(report.models.source).toContain('model/list');
+    expect(report.checks.some((c: { message: string }) => c.message.includes('No source was scanned and no inference was performed'))).toBe(true);
+    expect(report.models.accountAccess).toBe('unverified');
   });
   it('reports the running Codex archive version in its actual dashboard', async () => {
     const child = spawn(process.execPath, [join(installed, 'dist/cli.mjs'), 'dashboard', '--port', '0'], { cwd: project, env: { ...shellEnv, JEV_DASHBOARD_NO_OPEN: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -70,7 +84,7 @@ describe('installed Codex archive', () => {
       });
       const snapshot = await (await fetch(`${url}api/snapshot`)).json() as { version: { running: string; installed: null } };
       const manifest = JSON.parse(readFileSync(join(installed, '.codex-plugin/plugin.json'), 'utf8'));
-      expect(snapshot.version).toEqual({ running: manifest.version, installed: null });
+      expect(snapshot.version).toEqual({ running: manifest.version, installed: null, release: { latest: null, checkedAt: null, error: null, source: 'https://github.com/MongLong0214/jev-gate/releases/latest' } });
     } finally { child.kill(); }
   });
   it('runs the actual hook from a path with spaces and preserves execution on invalid input', () => {

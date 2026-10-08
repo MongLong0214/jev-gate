@@ -152,7 +152,7 @@ Restart the host after upgrading to load new hooks/provider code. Old separate J
 | Evidence `stale` | Search again; continue only with returned `next.offset` and `next.expectedSnapshot` |
 | Settings seem ignored | Use user-level plugin options and start a fresh host |
 
-Run `node "<plugin path>/dist/cli.js" doctor` (Codex: `cli.mjs`). A passing doctor checks local readiness; it does not prove API availability, model access, source accuracy, or performance. [Advanced usage](docs/advanced-usage.md).
+Run `node "<plugin path>/dist/cli.js" doctor` (Codex: `cli.mjs`). It groups failures and warnings with next actions and checks native CLI model/effort capabilities, including alias resolutions and minimum host versions. Use `--json` for structured facts, `--verbose` for every local check, or `--check-update` to compare with the public GitHub release. Model inventories perform no inference; advertised capabilities do not prove account access or provider execution. The dashboard header shows its running version, release status and installed Claude version mismatches. A passing doctor checks local readiness; it does not prove API availability, model access, source accuracy, or performance. [Advanced usage](docs/advanced-usage.md).
 
 ## Development
 

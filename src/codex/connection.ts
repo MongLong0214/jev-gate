@@ -94,6 +94,13 @@ const healthy = async (state: Connection): Promise<boolean> => {
     return response.ok && obj(await response.json())?.['ready'] === true;
   } catch { return false; }
 };
+/** Doctor never provisions credentials, starts a helper, edits config or grants hook trust. */
+export const connectionDiagnostic = async (env: Env): Promise<{ state: 'disabled' | 'absent' | 'invalid' | 'ready' | 'unreachable'; version: string | null }> => {
+  if (!enabled(env)) return { state: 'disabled', version: null };
+  const state = read(env);
+  if (!state) return { state: existsSync(statePath(env)) ? 'invalid' : 'absent', version: null };
+  return { state: await healthy(state) ? 'ready' : 'unreachable', version: (await import('../release-info.js')).packageVersion(state.root, 'codex') };
+};
 const enabled = (env: Env): boolean => env['JEV_CODEX_AUTO_CONNECT'] !== '0' && env['JEV_CODEX_ENABLED'] !== '0' && !env['JEV_CODEX_BRIDGE_URL'];
 const packageVersion = (root: string): number => {
   try { const v = obj(JSON.parse(readFileSync(join(root, '.codex-plugin', 'plugin.json'), 'utf8')))?.['version']; const m = typeof v === 'string' && /^(\d+)\.(\d+)\.(\d+)$/.exec(v); return m ? Number(m[1]) * 1_000_000 + Number(m[2]) * 1000 + Number(m[3]) : -1; }

@@ -176,15 +176,18 @@ describe('dashboard server', () => {
     }
   });
   it.each(['ko', 'en'])('renders unknown and mismatched versions without interrupting live rendering (%s)', lang => {
-    const functionBody = DASHBOARD_PAGE.split('\n').find(line => line.startsWith('function versionLine('))!;
-    const render = (version: { running: string; installed: string | null }) => runInNewContext(`${functionBody}\nversionLine(version)[0]`, {
-      lang, version, el: (_tag: string, _className: string, text: string) => ({ textContent: text, style: {} }),
-    }) as { textContent: string; style: { color?: string } };
-    expect(render({ running: '0.7.1', installed: null }).textContent).toBe(lang === 'ko'
-      ? '대시보드 v0.7.1 · 설치된 플러그인 확인 불가' : 'Dashboard v0.7.1 · Installed plugin unavailable');
+    const functions = DASHBOARD_PAGE.split('\n').filter(line => line.startsWith('function versionLine(') || line.startsWith('function versionState(')).join('\n');
+    const render = (version: { running: string; installed: string | null }) => runInNewContext(`${functions}\nversionLine(version)`, {
+      lang, version, label: (ko: string, en: string) => lang === 'ko' ? ko : en,
+      el: (_tag: string, _className: string, text: string) => ({ textContent: text, style: {} }),
+    }) as Array<{ textContent: string }>;
+    const unknown = render({ running: '0.7.1', installed: null });
+    expect(unknown[0]!.textContent).toBe(lang === 'ko'
+      ? '대시보드 v0.7.1 · 설치된 Claude 플러그인 확인 불가' : 'Dashboard v0.7.1 · Installed Claude plugin unknown');
+    expect(unknown[1]!.textContent).toContain(lang === 'ko' ? '최신 여부 미확인' : 'Update status unknown');
     const mismatch = render({ running: '0.7.0', installed: '0.7.1' });
-    expect(mismatch.textContent).toContain(lang === 'ko' ? '재시작하세요' : 'Restart the dashboard');
-    expect(mismatch.style.color).toBeDefined();
+    expect(mismatch[1]!.textContent).toContain(lang === 'ko' ? '설치 버전 다름' : 'Installed version differs');
+    expect(mismatch[2]!.textContent).toContain(lang === 'ko' ? '기존 세션은 이전 훅' : 'Existing sessions can retain older hooks');
   });
 
   it('notifies connected clients when only the installed plugin version changes', async () => {

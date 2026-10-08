@@ -48,6 +48,22 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
   afterAll(async()=>{const closed=new Promise<void>(r=>server.close(()=>r()));for(const res of clients)res.end();server.closeAllConnections();try{await browser?.close();}finally{await closed;}expect(errors).toEqual([]);}, 30_000);
   const settle = (p: Page) => p.evaluate(()=>new Promise<void>(r=>requestAnimationFrame(()=>requestAnimationFrame(()=>r()))));
 
+  it('shows live version status without overflow in the actual browser', async () => {
+    push([]);
+    for (const width of [1440, 390, 320]) {
+      const p = await browser.newPage({ viewport: { width, height: 900 } });
+      p.on('pageerror', e => errors.push(e.message));
+      await p.route('**/api/version', route => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ running: '0.8.14', installed: '0.8.14', release: { latest: '0.8.15', checkedAt: stamp, source: 'https://github.com/MongLong0214/jev-gate/releases/latest', error: null } }) }));
+      await p.goto(url);
+      await p.waitForFunction(() => document.getElementById('version-badge')?.textContent?.includes('0.8.15'));
+      expect(await p.locator('#version-badge').getAttribute('data-state')).toBe('update');
+      expect(await p.locator('#version-badge').textContent()).toContain('0.8.14');
+      expect(await p.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+      await p.screenshot({ path: join(output, `version-${width}.png`), fullPage: true });
+      await p.close();
+    }
+  });
+
   it('tracks real tabs across reloads and reopens only when the last tab has closed', async () => {
     const home = mkdtempSync(join(tmpdir(), 'jev-dashboard-tabs-'));
     const opened: string[] = [];
