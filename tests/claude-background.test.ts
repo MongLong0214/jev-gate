@@ -41,6 +41,28 @@ const fixture = async (direct = false, hierarchy = false) => {
 };
 
 describe('responsive native background contracts', () => {
+  it.each(['completed', 'incomplete'] as const)('admits a human prompt after an older closed generation without a delivery marker (%s)', async outcome => {
+    const f = await fixture(); await f.launch();
+    updateJob(f.env, 's', prev => prev ? { ...prev, current: { ...prev.current, active: {}, outcome, background_context: 'Historical policy result.' } } : null);
+    const next = await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'human-after-old-state', prompt: 'Add a new README section.' });
+    expect(f.job().current.prompt_id).toBe('human-after-old-state'); expect(next.stdout).not.toContain('background completion notice');
+  });
+  it.each([true, false])('records idle policy delivery without a false admission block and reports closure (accepted=%s)', async accepted => {
+    const f = await fixture(); const trace = join(f.root, 'trace'); Object.assign(f.env, { JEV_GATE_TRACE_DIR: trace });
+    await f.launch(); f.transcript(!accepted); await f.terminal();
+    const idleSince = f.job().current.background_idle_since;
+    expect(idleSince).toMatch(/^\d{4}-/);
+    await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'delivery', prompt: 'Explain the result.' });
+    const delivery = f.job().current.background_delivery;
+    expect(delivery?.stalled_since).toBe(idleSince);
+    await f.run({ hook_event_name: 'Stop', prompt_id: 'delivery' });
+    const records = readdirSync(trace).map(file => JSON.parse(readFileSync(join(trace, file), 'utf8')));
+    expect(records.filter(r => r.phase === 'background_stalled')).toHaveLength(0);
+    expect(records).toContainEqual(expect.objectContaining({ phase: 'background_policy_delivery', admission_blocked: false, stalled_since: idleSince, stalled_since_basis: 'reservation_release' }));
+    const stopped = records.find(r => r.phase === 'stop' && r.prompt_id === 'delivery');
+    expect(stopped?.outcome).toBe(accepted ? 'completed' : 'incomplete');
+    if (!accepted) expect(stopped?.closed_reason).toBe('no_active_execution_after_policy_delivery');
+  });
   it('permits replanning in the idle delivery turn and retains the revision and attempt bounds', async () => {
     const f = await fixture(false, true); await f.launch(); f.transcript(); await f.terminal();
     expect(f.job().current.active).toEqual({}); expect(f.job().current.receipts.at(-1)?.verdict).toBe('replan');
@@ -221,9 +243,16 @@ describe('responsive native background contracts', () => {
     expect(f.job().current.receipts).toHaveLength(settled ? 1 : 0);
     expect(f.job().current.receipts.some(r => r.verdict === 'accept')).toBe(false);
     if (settled) {
-      await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'notice', prompt: '<task-notification>native cancellation notice</task-notification>' });
+      await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'notice', source: 'system', prompt: '<task-notification>native cancellation notice</task-notification>' });
       expect(f.job().current.prompt_id).toBe('original'); expect(f.job().current.outcome).toBe('incomplete');
     }
+  });
+  it('admits the first ordinary prompt immediately after native TaskStop, before any notification delivery', async () => {
+    const f = await fixture(); await f.launch();
+    await f.run({ hook_event_name: 'PostToolUse', prompt_id: 'original', tool_name: 'TaskStop', tool_input: { task_id: 'worker' }, tool_response: { message: 'Successfully stopped task: worker (work)', task_id: 'worker', task_type: 'local_agent' } });
+    expect(f.job().current.outcome).toBe('incomplete'); expect(f.job().current.background_delivery).toBeUndefined();
+    const next = await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'next-human', prompt: 'Implement a different request.' });
+    expect(f.job().current.prompt_id).toBe('next-human'); expect(next.stdout).not.toContain('background completion notice');
   });
   it.each([true, false])('releases a Lean executor only after a proven terminal (completed=%s)', async completed => {
     const f = await fixture(); await f.launch();
@@ -231,6 +260,9 @@ describe('responsive native background contracts', () => {
     f.transcript(!completed); await f.terminal({ agent_type: 'jev-gate:executor' });
     expect(f.job().current.active).toEqual({}); expect(f.job().current.outcome).toBe(completed ? 'completed' : 'incomplete');
     expect(f.job().current.receipts).toHaveLength(0);
+    expect(f.job().current.background_delivery).toBeUndefined();
+    const next = await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'next-human', prompt: 'Implement a different request.' });
+    expect(f.job().current.prompt_id).toBe('next-human'); expect(next.stdout).not.toContain('background completion notice');
   });
   it.each(['SubagentStop', 'PostToolUse'])('does not report a Lean release when its state write fails (%s)', async hook => {
     const f = await fixture(); await f.launch();

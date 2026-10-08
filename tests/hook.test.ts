@@ -3239,6 +3239,13 @@ describe('receipt selection and observation keys (2026-09-20)', () => {
     expect(answers['external_tools']).toBeUndefined();
     expect(record?.['estimate']).toMatchObject({ turns: 41.5, cost_basis: 'tokens', saving_tokens: (41.5 - 11) * 406_000 - 41.5 * 40_000, cost_support: 1 });
   });
+
+  it('records available Claude price components from native depth while keeping unobserved delegation costs unknown', async () => {
+    const dir = join(tmp, 'trace-claude-partial-prices'); const env = makeEnv({ JEV_GATE_TRACE_DIR: dir });
+    await run(env, promptEvent({ transcript_path: transcriptAt(406000, 'claude-opus-5-5[1m]') }), fakeJev());
+    const record = readdirSync(dir).map(f => JSON.parse(readFileSync(join(dir, f), 'utf8'))).find(r => r.phase === 'admission_result');
+    expect(record?.estimate).toMatchObject({ cost_basis: 'tokens', cost: { savingUsd: null, components: { m1: expect.any(Number), m2: null, m3: null, m4: null, m5: null } } });
+  });
 });
 
 // -----------------------------------------------------------------------------------------------------------------

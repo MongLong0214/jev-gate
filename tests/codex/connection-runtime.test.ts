@@ -43,7 +43,8 @@ describe.skipIf(process.env['JEV_CODEX_E2E'] !== '1')('ordinary native Codex aut
         if (step === 2) item = fn('jev_agent', { run_in_background: false, subagent_type: 'jev-gate:executor', prompt: JSON.stringify(input['input']).match(/jev-lean-[a-f0-9]{16}/)?.[0] ?? 'missing marker' });
         if (step === 3) item = fn('exec_command', { cmd: 'vitest run', login: false, max_output_tokens: 8000 });
       } else if (mode === 'compact') { step++; if (step === 1) item = final('Old unrelated narrative. '.repeat(6000)); }
-      const events = [{ type: 'response.created', response: { id, status: 'in_progress', output: [] } }, { type: 'response.output_item.added', output_index: 0, item }, { type: 'response.output_item.done', output_index: 0, item }, { type: 'response.completed', response: { id, model: input['model'], status: 'completed', output: [item], usage: { input_tokens: 150000, output_tokens: 3, total_tokens: 150003 } } }];
+      const output = mode === 'gate' && step === 4 ? [{ type: 'reasoning', id: `${id}_reasoning`, summary: [], encrypted_content: 'opaque-native-fixture' }, item] : [item];
+      const events = [{ type: 'response.created', response: { id, status: 'in_progress', output: [] } }, ...output.flatMap((part, output_index) => [{ type: 'response.output_item.added', output_index, item: part }, { type: 'response.output_item.done', output_index, item: part }]), { type: 'response.completed', response: { id, model: input['model'], status: 'completed', output, usage: { input_tokens: 150000, output_tokens: 3, total_tokens: 150003 } } }];
       // Actual native responses can omit Content-Type. Exercise this through the real transport.
       const bytes = Buffer.from(events.map(event => `data: ${JSON.stringify(event)}\r\n\r\n`).join(''));
       res.writeHead(200); res.end(bytes);
@@ -145,6 +146,7 @@ describe.skipIf(process.env['JEV_CODEX_E2E'] !== '1')('ordinary native Codex aut
         expect(childRequests, nativeErrors).toHaveLength(2);
         expect(childRequests.map(r => r['index']), nativeErrors).toEqual([0, 1]);
         expect(childRequests.map(r => r['submitted_effort']), nativeErrors).toEqual(['low', 'high']);
+        expect(requests.slice(gateStart).some(r => (r['reasoning'] as Obj)?.['effort'] === 'high' && Array.isArray(r['input']) && r['input'].some((i: Obj) => i['type'] === 'reasoning' && i['encrypted_content'] === 'opaque-native-fixture')), nativeErrors).toBe(true);
         const childResponses = gateRows.filter(r => r['phase'] === 'codex_router_response' && childRequests.some(c => c['request_id'] === r['request_id']));
         expect(childResponses, nativeErrors).toHaveLength(2);
         for (const response of childResponses) {

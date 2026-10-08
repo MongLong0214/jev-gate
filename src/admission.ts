@@ -230,23 +230,25 @@ export interface DelegationPrices {
   startupRange: readonly [number, number] | null;
   reexploreRange: readonly [number, number] | null;
   outputRange: readonly [number, number] | null;
-  residualContext: number; horizon: number | null;
+  /** Additional root tokens left by direct work compared with delegation, not the shared existing depth. */
+  residualContext: number | null; horizon: number | null;
   overheadUsd: readonly [number, number] | null;
   provenance: string;
 }
 /** M1..M5 are scenarios; no missing consumption or future horizon is replaced with zero. */
 export const delegationCost = (turns: number, depth: number, model: DelegationCostModel) => {
   const p = model.prices;
-  if (!p) return { basis: 'tokens' as const, savingUsd: null, components: { m1: null, m2: null, m3: null, m4: 0, m5: null, overhead: null, horizon: null, provenance: 'price_or_observation_unknown', root_revision: null, worker_revision: null }, reason: 'price_or_observation_unknown' };
+  if (!p) return { basis: 'tokens' as const, savingUsd: null, components: { m1: null, m2: null, m3: null, m4: null, m5: null, overhead: null, horizon: null, provenance: 'price_or_observation_unknown', root_revision: null, worker_revision: null }, reason: 'price_or_observation_unknown' };
   const range = (v: readonly [number, number] | null) => v !== null && v.every(n => Number.isFinite(n) && n >= 0) && v[0] <= v[1];
   const m1 = (turns - model.coordinatorTurns) * depth * p.root.read / 1e6 - turns * model.workerTokensPerCall * p.worker.read / 1e6;
   const m2 = range(p.startupRange) && p.workerWriteRate !== null ? p.startupRange!.map(n => n * p.workerWriteRate! / 1e6) : null;
-  const m3 = range(p.reexploreRange) ? p.reexploreRange!.map(n => n * p.worker.read / 1e6) : null;
-  const m4 = p.horizon === null ? 0 : p.horizon * Math.max(0, depth - p.residualContext) * p.root.read / 1e6;
+  // Reintroduced source is a cold write; its later reads belong to M1's worker traffic scenario.
+  const m3 = range(p.reexploreRange) && p.workerWriteRate !== null ? p.reexploreRange!.map(n => n * p.workerWriteRate! / 1e6) : null;
+  const m4 = p.horizon === 0 ? 0 : p.horizon !== null && p.residualContext !== null && p.residualContext >= 0 ? p.horizon * p.residualContext * p.root.read / 1e6 : null;
   const m5 = range(p.outputRange) ? p.outputRange!.map(n => n * (p.root.output - p.worker.output) / 1e6).sort((a, b) => a - b) : null;
-  const ratesValid = [p.root.read, p.root.output, p.worker.read, p.worker.output, p.workerWriteRate, p.residualContext].every(n => n !== null && Number.isFinite(n) && n >= 0) && (p.horizon === null || Number.isSafeInteger(p.horizon) && p.horizon >= 0);
-  const known = ratesValid && m2 && m3 && m5 && range(p.overheadUsd) && [m1, m4].every(Number.isFinite);
-  const savingUsd = known ? [m1 + m4 + m5![0]! - m2![1]! - m3![1]! - p.overheadUsd![1], m1 + m4 + m5![1]! - m2![0]! - m3![0]! - p.overheadUsd![0]] : null;
+  const ratesValid = [p.root.read, p.root.output, p.worker.read, p.worker.output, p.workerWriteRate].every(n => n !== null && Number.isFinite(n) && n >= 0) && (p.horizon === null || Number.isSafeInteger(p.horizon) && p.horizon >= 0);
+  const known = ratesValid && m2 && m3 && m5 && range(p.overheadUsd) && [m1, m4].every(n => n !== null && Number.isFinite(n));
+  const savingUsd = known ? [m1 + m4! + m5![0]! - m2![1]! - m3![1]! - p.overheadUsd![1], m1 + m4! + m5![1]! - m2![0]! - m3![0]! - p.overheadUsd![0]] : null;
   return { basis: savingUsd ? 'api_list_estimate' as const : 'tokens' as const, savingUsd,
     components: { m1, m2, m3, m4, m5, overhead: p.overheadUsd, horizon: p.horizon, provenance: p.provenance, root_revision: p.root.revision, worker_revision: p.worker.revision }, reason: savingUsd ? null : 'cost_observation_unknown' };
 };

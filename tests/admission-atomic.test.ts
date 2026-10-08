@@ -149,7 +149,7 @@ describe('decideAdmissionAtomic', () => {
       decided: true,
       reason: null,
       answer: null,
-      estimate: { turns: 51.5, saving_tokens: (51.5 - 11) * DEEP - 51.5 * 40_000, cost_support: 1, cost_basis: 'tokens', cost: { basis: 'tokens', savingUsd: null, components: { m1: null, m2: null, m3: null, m4: 0, m5: null, overhead: null, horizon: null, provenance: 'price_or_observation_unknown', root_revision: null, worker_revision: null }, reason: 'price_or_observation_unknown' } },
+      estimate: { turns: 51.5, saving_tokens: (51.5 - 11) * DEEP - 51.5 * 40_000, cost_support: 1, cost_basis: 'tokens', cost: { basis: 'tokens', savingUsd: null, components: { m1: null, m2: null, m3: null, m4: null, m5: null, overhead: null, horizon: null, provenance: 'price_or_observation_unknown', root_revision: null, worker_revision: null }, reason: 'price_or_observation_unknown' } },
     });
   });
 

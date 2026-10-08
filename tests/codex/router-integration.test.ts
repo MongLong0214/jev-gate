@@ -54,6 +54,32 @@ const ownedFixture = async (wait?: Promise<void>) => {
   return { ...f, child, signal, next };
 };
 describe('original Codex root execution boundaries', () => {
+  it('routes effort after encrypted native reasoning without changing the model or encrypted history', async () => {
+    const f = await ownedFixture();
+    const request = { ...f.next, input: [{ type: 'reasoning', id: 'native-reasoning', encrypted_content: 'opaque-provider-bytes', summary: [] }, ...f.next.input] };
+    const routed = (await f.policy.externalRequest(f.child.id, request, f.signal.signal)).request;
+    expect(routed.model).toBe(request.model); expect(routed.reasoning).toMatchObject({ effort: 'low' }); expect(routed.input).toBe(request.input);
+    expect(f.fetchImpl).toHaveBeenCalledOnce(); expect(f.sent[0]?.questions).not.toHaveProperty('model');
+    expect(JSON.stringify(f.sent[0])).not.toContain('opaque-provider-bytes'); f.rpc.close();
+  });
+  it('preserves every Lean executor continuation without a worker-step assessment', async () => {
+    const f = await ownedFixture(); f.child.role = 'jev-gate:executor';
+    expect((await f.policy.externalRequest(f.child.id, f.next, f.signal.signal)).request).toBe(f.next);
+    expect(f.fetchImpl).not.toHaveBeenCalled(); f.rpc.close();
+  });
+  it('records the worker step limit and never attributes its native request to the previous route', async () => {
+    const f = await ownedFixture(); const selected = (await f.policy.externalRequest(f.child.id, f.next, f.signal.signal)).request;
+    f.policy.observeRequest(f.child.id, selected);
+    const steps = f.child.stepRoutes!; const previous = [...steps.values()].at(-1)!;
+    while (steps.size < 128) steps.set(`bounded-${steps.size}`, { ...previous, index: steps.size });
+    const request = { ...f.next, input: [...f.next.input, { role: 'user', content: 'Next bounded step' }] };
+    expect((await f.policy.externalRequest(f.child.id, request, f.signal.signal)).request).toBe(request);
+    const submitted = f.policy.observeRequest(f.child.id, request)!;
+    const rows = readdirSync(join(dir, 'trace')).map(file => JSON.parse(readFileSync(join(dir, 'trace', file), 'utf8')));
+    expect(rows.filter(r => r.phase === 'codex_route_applied' && r.request_id === submitted.requestId)).toHaveLength(0);
+    expect(rows).toContainEqual(expect.objectContaining({ phase: 'codex_router_skipped', reason: 'child_step_limit', known_not_sent: true }));
+    expect(f.fetchImpl).toHaveBeenCalledOnce(); f.rpc.close();
+  });
   it.each(['config', 'settings', 'settings_notification'] as const)('preserves a worker request when %s changes during assessment', async kind => {
     let release!: () => void;
     const f = await ownedFixture(new Promise<void>(resolve => { release = resolve; }));

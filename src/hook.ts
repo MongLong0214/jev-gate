@@ -6,6 +6,7 @@ import type { PairOffer, PairPatch } from './router-selection.js';
 import { integratedClaudePlugin } from './claude-setup.js';
 import { claudeTerminal, dispatchMarker, isNativeTaskNotification } from './claude-background.js';
 import { hasWorktreeHead } from './worktree.js';
+import { observedDelegationPrices } from './delegation-prices.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, realpathSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -1009,23 +1010,24 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     if (caller.agent_id || caller.agent_type || !input.session_id || !input.prompt_id) return null;
     let gen: JobGeneration | null = null;
     const notification = isNativeTaskNotification(input);
+    const deliveredAt = new Date().toISOString();
     let delivered = false;
     const written = updateJob(deps.env, input.session_id, prev => {
-      if (!prev || !prev.current.background_job || prev.current.outcome !== null && !notification && !!prev.current.background_delivery) return null;
+      if (!prev || !prev.current.background_job || prev.current.outcome !== null && !notification) return null;
       const current = prev.current;
       const idle = Object.keys(current.active).length === 0;
       const result = createHash('sha256').update(JSON.stringify([current.receipts.length, current.plan?.rev, current.background_context ?? ''])).digest('hex');
       // Repeated notifications are not new work. An ordinary prompt after delivery resumes Gate A/A2.
       if (idle && current.background_delivery?.result === result) { delivered = notification; return null; }
       gen = prev.current;
-      return { ...prev, current: { ...current, interactive_prompt_id: input.prompt_id!, ...(idle ? { background_delivery: { result, prompt_id: input.prompt_id!, stalled_since: new Date().toISOString() } } : {}) } };
+      return { ...prev, current: { ...current, interactive_prompt_id: input.prompt_id!, ...(idle ? { background_delivery: { result, prompt_id: input.prompt_id!, stalled_since: current.background_idle_since ?? deliveredAt } } : {}) } };
     });
     if (written.ok && delivered) return skip();
     if (!written.ok || gen === null) return null;
     const current: JobGeneration = gen;
     const active = Object.keys(current.active).length;
     trace?.write('background_conversation', { ...base, active, execution_prompt_id: current.prompt_id });
-    if (!active && current.outcome === null) trace?.write('background_stalled', { ...base, execution_prompt_id: current.prompt_id, reason: 'policy_delivered_no_active_execution', stalled_since: new Date().toISOString(), admission_blocked: true });
+    if (!active && current.outcome === null) trace?.write('background_policy_delivery', { ...base, execution_prompt_id: current.prompt_id, reason: 'policy_delivered_no_active_execution', stalled_since: current.background_idle_since ?? deliveredAt, stalled_since_basis: current.background_idle_since ? 'reservation_release' : 'first_policy_delivery', admission_blocked: false });
     if (current.outcome !== null) return emitContext('UserPromptSubmit', `Jev Gate: this background completion notice does not start or replace a job. The original job's recorded outcome is ${current.outcome}; use its stored policy result below. A notification is not new work or acceptance.\n${current.background_context ?? ''}`, null);
     return emitContext('UserPromptSubmit', `Jev Gate: answer the user's new message in the main session. The original background job and its contracts remain current; this message does not cancel or replace them. ${active ? `${active} owned execution(s) still have no terminal result. Do not wait synchronously, duplicate their work, or edit their files. Continue answering questions here; native permissions and explicit user cancellation remain authoritative.` : 'The previous execution has ended; use the policy result below before continuing the original job.'}\n${current.background_context ?? ''}`, null);
   };
@@ -1375,7 +1377,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
           atomicAdmission ? buildAtomicAdmissionRequest(text, config) : buildAdmissionRequest(text, config);
         let admitted: (AdmissionDecision & { estimate?: AdmissionEstimate | null; execution?: 'single' | 'hierarchy' | null; preference?: 'bounded_tool_worker' }) | null =
           null;
-        const suppliedPrices = deps.delegationPrices?.();
+        const suppliedPrices = deps.delegationPrices?.() ?? (!deps.host && depth.ok ? observedDelegationPrices('claude', depth.model, allocation?.canonical?.(config.models.standard) ?? config.models.standard, depth.tokens) : undefined);
         const askGateA = (text: string, facts: Record<string, unknown>): ReturnType<typeof callGate> => {
           if (!currentAdmission()) return Promise.resolve({ blocked: 'aborted' });
           const request = admissionRequest(text);

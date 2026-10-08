@@ -201,7 +201,10 @@ export class CodexPolicy {
       this.trace?.write('codex_router_skipped', { host: 'codex', session_id: id, prompt_id: session?.prompt ?? null, reason: 'configuration_update_native_history', known_not_sent: true, effective_effort: 'unknown' });
       return { request }; // Preserve opaque native updates, their positions and top-level values.
     }
-    if (session?.role && session.dispatch) return this.workerRequest(session, request, signal);
+    if (session?.role && session.dispatch) {
+      if (session.role === LEAN_EXECUTOR_AGENT) return { request };
+      return this.workerRequest(session, request, signal);
+    }
     if (!session?.external || !session.prompt || !session.task || !this.hooked.has(id)) return { request };
     if (session.stop) return { request, stop: session.stop };
     const requestPrompt = session.prompt;
@@ -269,12 +272,15 @@ export class CodexPolicy {
     let step = steps.get(key);
     if (!step) {
       // Never evict identities into another paid assessment. A filled execution stays native.
-      if (steps.size >= 128) return { request };
+      if (steps.size >= 128) {
+        this.trace?.write('codex_router_skipped', { host: 'codex', session_id: session.id, prompt_id: session.prompt, scope: 'child', agent_id: session.id, index: null, reason: 'child_step_limit', known_not_sent: true });
+        return { request };
+      }
       step = { index: session.stepIndex === undefined ? 0 : session.stepIndex + 1, model, effort: nativeEffort, patch: {} }; steps.set(key, step); session.stepIndex = step.index;
       if (step.index > 0) {
         const context = workerStepContext(request['input']);
         const opaque = !!request['previous_response_id'] || Array.isArray(request['input']) && request['input'].some((raw: unknown) => { const item = obj(raw); return item?.['type'] === 'reasoning' && typeof item['encrypted_content'] === 'string'; });
-        if (context && context.pending === 0 && !opaque && typeof d.input['prompt'] === 'string') {
+        if (context && context.pending === 0 && typeof d.input['prompt'] === 'string') {
           const owned = step;
           const epoch = this.catalogEpoch, sourceEpoch = session.epoch;
           owned.pending = (async () => {
@@ -283,7 +289,7 @@ export class CodexPolicy {
             const catalog = this.catalog.map(m => ({ ...m, supportedReasoningEfforts: m.supportedReasoningEfforts.filter(e => !['ultra', 'ultracode', 'auto', 'ultrafast'].includes(e.reasoningEffort)) }));
             const bound = Buffer.byteLength(JSON.stringify(request));
             const patch = await routeCodex({ model, effort: nativeEffort, task: d.input['prompt'] as string, session: session.id, prompt: session.prompt ?? d.prompt,
-              child: { agentId: session.id, step: owned.index, context }, catalog, catalogComplete: this.catalogComplete, config, env: this.env,
+              child: { agentId: session.id, step: owned.index, context }, catalog, catalogComplete: this.catalogComplete, config: opaque ? { ...config, router: { ...config.router, model: false } } : config, env: this.env,
               epoch: session.epoch, ...(session.modelCache ? { modelCache: session.modelCache } : {}),
               ...(session.cache ? { cache: { ...session.cache, ageMs: Math.max(0, Date.now() - session.cache.at) } } : {}),
               ...(this.trace ? { trace: this.trace } : {}), signal: AbortSignal.any([signal, d.signal]), ...(this.fetchImpl ? { fetchImpl: this.fetchImpl } : {}) });
@@ -292,7 +298,7 @@ export class CodexPolicy {
             if (!d.ended && !signal.aborted && !d.signal.aborted && this.sessions.get(session.id) === session && this.catalogEpoch === epoch && session.epoch === sourceEpoch &&
               (!target || providerContextLimit('codex', target) !== null && bound <= providerContextLimit('codex', target)! && this.catalog.some(m => m.model === target && generalCodexModel(m)) && codexTargetAllowed(target, config.router.allowAstra))) owned.patch = patch;
           })().catch(() => undefined).finally(() => { delete owned.pending; });
-        } else this.trace?.write('codex_router_skipped', { host: 'codex', session_id: session.id, prompt_id: session.prompt, scope: 'child', agent_id: session.id, index: step.index, reason: opaque ? 'child_context_opaque' : 'child_context_unavailable', known_not_sent: true });
+        } else this.trace?.write('codex_router_skipped', { host: 'codex', session_id: session.id, prompt_id: session.prompt, scope: 'child', agent_id: session.id, index: step.index, reason: 'child_context_unavailable', known_not_sent: true });
       }
     }
     if (step.pending) await step.pending;

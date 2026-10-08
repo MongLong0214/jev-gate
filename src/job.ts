@@ -19,6 +19,7 @@ export const MAX_HISTORY = 8;
 /** A new execution or terminal policy must be delivered before the idle generation can close. */
 export const pendingBackgroundPolicy = (gen: JobGeneration): JobGeneration => {
   const { background_delivery: _delivered, ...rest } = gen;
+  if (Object.keys(gen.active).length > 0) delete rest.background_idle_since;
   return rest;
 };
 /**
@@ -312,7 +313,7 @@ export const reserve = (gen: JobGeneration, toolUseId: string, input: Reservatio
 export const release = (gen: JobGeneration, toolUseId: string): JobGeneration => {
   const active = Object.assign(emptyMap<Reservation>(), gen.active);
   delete active[toolUseId];
-  return { ...gen, active };
+  return { ...gen, active, ...(gen.background_job && own(gen.active, toolUseId) && Object.keys(active).length === 0 ? { background_idle_since: new Date().toISOString() } : {}) };
 };
 
 export const activeWorkers = (gen: JobGeneration): Reservation[] => Object.values(gen.active).filter((r) => r.role === 'worker');
