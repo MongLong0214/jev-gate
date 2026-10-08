@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { claudeCompatibility, claudeModelInventory, parseClaudeInventory } from '../src/doctor-models.js';
-import { codexCompatibility, codexModelInventory } from '../src/codex/doctor-models.js';
+import { codexCompatibility, codexModelInventory, type CodexInventory } from '../src/codex/doctor-models.js';
 import { claudeDoctor, parseFrontmatter } from '../src/cli.js';
 import { codexDoctor } from '../src/codex/cli.js';
 import { storageIssue, moduleIssues, renderDoctor } from '../src/doctor.js';
@@ -15,7 +15,7 @@ const claudeModels = [{ value: 'haiku', resolvedModel: 'claude-haiku-5-5', suppo
 const codexModel = (model = 'gpt-6-luna', efforts = ['low', 'medium', 'high', 'xhigh', 'max']) => ({ model, description: 'Fast and affordable model for easier tasks', supportedReasoningEfforts: efforts.map(reasoningEffort => ({ reasoningEffort })) });
 function fixture(host: 'claude' | 'codex', rows: unknown[], delayedVersion = false) {
   const dir = temporary(), log = join(dir, 'rpc.log');
-  const script = `#!${process.execPath}\nif(process.argv.includes('--version')&&${delayedVersion}){setTimeout(()=>{},60000)}else{const fs=require('node:fs'),readline=require('node:readline');const rows=${JSON.stringify(rows)};readline.createInterface({input:process.stdin}).on('line',line=>{const r=JSON.parse(line);fs.appendFileSync(process.env.PROBE_LOG,JSON.stringify(r)+'\\n');if(r.type==='control_request')process.stdout.write(JSON.stringify({type:'control_response',response:{subtype:'success',request_id:r.request_id,response:{models:rows}}})+'\\n');else if(r.id)process.stdout.write(JSON.stringify({id:r.id,result:r.method==='initialize'?{}:{data:rows,nextCursor:null}})+'\\n')});}`;
+  const script = `#!${process.execPath}\nif(process.argv.includes('--version')){if(${delayedVersion})setTimeout(()=>{},60000);else console.log('${host === 'claude' ? '2.1.294 (Claude Code)' : 'codex-cli 0.161.0'}')}else if(process.argv[2]==='auth'){console.log(JSON.stringify({loggedIn:true,authMethod:'claude.ai'}))}else{const fs=require('node:fs'),readline=require('node:readline');const rows=${JSON.stringify(rows)};readline.createInterface({input:process.stdin}).on('line',line=>{const r=JSON.parse(line);fs.appendFileSync(process.env.PROBE_LOG,JSON.stringify(r)+'\\n');if(r.type==='control_request')process.stdout.write(JSON.stringify({type:'control_response',response:{subtype:'success',request_id:r.request_id,response:{models:rows}}})+'\\n');else if(r.id)process.stdout.write(JSON.stringify({id:r.id,result:r.method==='initialize'?{}:{data:rows,nextCursor:null}})+'\\n')});}`;
   writeFileSync(join(dir, host), script); chmodSync(join(dir, host), 0o700);
   return { dir, log, env: { PATH: `${dir}:${dirname(process.execPath)}`, HOME: dir, CODEX_HOME: dir, XDG_STATE_HOME: join(dir, 'state'), PROBE_LOG: log } };
 }
@@ -111,6 +111,33 @@ describe('Doctor native model and effort compatibility', () => {
   });
 });
 describe('Doctor reports', () => {
+  it.each(['claude-haiku-4-5', 'unavailable-legacy-fast'])('ignores inactive Claude Lean Gate mapping %s and still checks Router pins', async model => {
+    const efforts = ['low', 'medium', 'high', 'xhigh', 'max'];
+    const rows = ['haiku', 'sonnet', 'opus', 'fable'].map(value => ({ value, resolvedModel: value === 'fable' ? 'claude-fable-5-1' : `claude-${value}-5-5`, supportedEffortLevels: efforts }));
+    const fake = fixture('claude', rows), config = join(fake.dir, 'config.json');
+    writeFileSync(config, JSON.stringify({ version: 5, mode: 'lean', models: { fast: model } }));
+    const env = { ...fake.env, JEV_GATE_CONFIG: config };
+    const lean = await claudeDoctor(join(__dirname, '..'), env, fake.dir);
+    expect(lean.models?.complete).toBe(true);
+    expect(lean.checks.filter(c => c.group === 'models' && c.level === 'fail')).toEqual([]);
+    expect(lean.models?.compatibility.some(c => c.model === model)).toBe(false);
+    const pinned = await claudeDoctor(join(__dirname, '..'), { ...env, CLAUDE_PLUGIN_OPTION_ROUTERFASTMODEL: model }, fake.dir);
+    expect(pinned.checks.some(c => c.group === 'models' && c.level === 'fail' && c.message.startsWith(model))).toBe(true);
+    writeFileSync(config, JSON.stringify({ version: 5, mode: 'auto', models: { fast: model } }));
+    const active = await claudeDoctor(join(__dirname, '..'), env, fake.dir);
+    expect(active.models?.compatibility.find(c => c.model === model)?.state).toBe('incompatible');
+  });
+  it('ignores inactive Codex Lean Gate mappings while checking the active catalog', () => {
+    const dir = temporary(), config = join(dir, 'codex.json');
+    const catalog = [codexModel('gpt-6-sol'), codexModel()];
+    const inventory: CodexInventory = { catalog, models: [], complete: true, error: null };
+    for (const mode of ['lean', 'auto']) {
+      writeFileSync(config, JSON.stringify({ gate: { mode, models: { fast: 'unavailable-legacy-fast' } } }));
+      const rows = codexCompatibility(inventory, { HOME: dir, JEV_CODEX_CONFIG: config });
+      expect(rows.find(c => c.model === 'gpt-6-luna')?.state).toBe('compatible');
+      expect(rows.find(c => c.model === 'unavailable-legacy-fast')?.state).toBe(mode === 'lean' ? undefined : 'incompatible');
+    }
+  });
   it.each(['hooks/register.ts', 'mods/router/hooks/config.ts', 'src/provider-prices-data.ts', 'plugins/evidence/dist/server.mjs', 'plugins/evidence/skills/evidence/SKILL.md'])('rejects a missing declared package dependency: %s', async missing => {
     const dir = temporary(), root = join(dir, 'plugin'); mkdirSync(root);
     for (const file of ['.claude-plugin', 'hooks', 'agents', 'mods', 'src', 'plugins/evidence/skills']) cpSync(join(__dirname, '..', file), join(root, file), { recursive: true });

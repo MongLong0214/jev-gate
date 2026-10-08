@@ -38,8 +38,10 @@ export const codexCompatibility = (inventory: CodexInventory, env: Env): ModelCo
   const policy = loadCodexPolicy(env, inventory.catalog);
   const candidates = codexCandidates(inventory.catalog, policy.router.allowAstra);
   const targets = new Map(candidates.map(c => [c.id, c.efforts.filter(e => !['ultra', 'ultracode', 'auto', 'ultrafast'].includes(e))]));
-  for (const model of Object.values(policy.gate.models)) if (model !== 'native-session-model' && !targets.has(model)) targets.set(model, []);
-  if (policy.gate.mode !== 'lean') for (const profile of OWNED_AGENT_PROFILES) { const model = policy.gate.models[profile.tier]; if (profile.effort && model !== 'native-session-model') { const efforts = targets.get(model) ?? []; if (!efforts.includes(profile.effort)) targets.set(model, [...efforts, profile.effort]); } }
+  if (policy.gate.mode !== 'lean') {
+    for (const model of Object.values(policy.gate.models)) if (model !== 'native-session-model' && !targets.has(model)) targets.set(model, []);
+    for (const profile of OWNED_AGENT_PROFILES) { const model = policy.gate.models[profile.tier]; if (profile.effort && model !== 'native-session-model') { const efforts = targets.get(model) ?? []; if (!efforts.includes(profile.effort)) targets.set(model, [...efforts, profile.effort]); } }
+  }
   return [...targets].map(([model, efforts]) => {
     const found = inventory.catalog.find(m => m.model === model);
     const unsupported = found ? efforts.filter(e => !found.supportedReasoningEfforts.some(v => v.reasoningEffort === e)) : [];

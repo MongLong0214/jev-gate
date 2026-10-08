@@ -6,6 +6,8 @@
 - Read native Claude SDK initialization metadata and Codex App Server model/list without submitting user messages, threads or inference turns. Check current routing targets, configured owned profiles, CLI alias resolutions and every offered effort; missing or incomplete inventories remain unverified. CLI capability compatibility does not prove account access or paid execution.
 - Share Claude minimum-host introduction facts for Opus 5.5, Fable 5.1, Sonnet 5.5 and Haiku 5.5 with the Router and PR model synchronization. Never approve a retired alias merely because its family matches.
 - Inspect packaged hook/MCP definitions, readable files, storage paths and bounded local dashboard/connection health without restarting workers or changing native trust. Preserve unknown runtime/application state and keep credentials out of reports.
+- Keep Lean diagnostics independent of inactive Gate floors and tier models on both hosts, while retaining active Router capability checks. Malformed or conflicting native catalog rows remain unverified rather than becoming false compatibility or incompatibility.
+- Absorb native Claude cancellation notices delivered before transcript flush using the exact queued envelope, prior turn identity and structured background launch receipt. Copied XML and subsequent human work still enter normal admission. Verify completion and cancellation with the latest native Claude CLI on every PR.
 - Keep the running dashboard version visible at the top with official latest-release status and installed Claude version mismatches. Bound and cache public GitHub checks; offline, invalid and rate-limited results remain unknown. Doctor checks updates only with --check-update.
 
 ## v0.8.14 — 2026-10-08 — Cache accounting and worker recovery

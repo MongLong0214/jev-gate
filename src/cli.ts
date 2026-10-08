@@ -397,7 +397,7 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
   report.group('host');
   const hostVersion = checkClaude();
   const inventory = leanPackage ? missingInventory() : await claudeModelInventory(env, cwd);
-  const configured = loaded.ok ? OWNED_AGENT_PROFILES.map(profile => ({ model: loaded.config.models[profile.tier], effort: profile.effort as SymbolicEffort | null })) : [];
+  const configured = loaded.ok && loaded.config.mode !== 'lean' ? OWNED_AGENT_PROFILES.map(profile => ({ model: loaded.config.models[profile.tier], effort: profile.effort as SymbolicEffort | null })) : [];
   for (const name of ['FAST', 'STANDARD', 'DEEP', 'FRONTIER']) { const model = env[`CLAUDE_PLUGIN_OPTION_ROUTER${name}MODEL`]; if (model?.trim()) configured.push({ model, effort: null }); }
   const compatibility = leanPackage ? [] : claudeCompatibility(inventory, hostVersion, configured, env['CLAUDE_PLUGIN_OPTION_ROUTERALLOWFABLE'] === 'true');
   report.checks.push(...compatibilityChecks(compatibility));
