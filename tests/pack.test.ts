@@ -173,11 +173,14 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     expect(spawnSync('unzip', ['-q', join(outDir, archive!), '-d', dest], { encoding: 'utf8' }).status).toBe(0);
     expectInstallDocs(dest);
     const env = { PATH: process.env['PATH'] ?? '', HOME: join(tmp, 'lean home'), JEV_GATE_MODE: 'lean' };
-    const diagnosis = spawnSync(process.execPath, [join(dest, 'dist/cli.js'), 'doctor', '--json'], { cwd: otherCwd, encoding: 'utf8', env: { ...env, PATH: '/nonexistent', CLAUDE_CODE_FORK_SUBAGENT: '0' } });
+    const leanConfig = join(tmp, 'lean-doctor-config.json');
+    writeFileSync(leanConfig, JSON.stringify({ version: 5, mode: 'lean', delegationDepthFloor: 300000 }));
+    const diagnosis = spawnSync(process.execPath, [join(dest, 'dist/cli.js'), 'doctor', '--json'], { cwd: otherCwd, encoding: 'utf8', env: { ...env, PATH: '/nonexistent', JEV_GATE_CONFIG: leanConfig, CLAUDE_CODE_AUTO_COMPACT_WINDOW: '200000', CLAUDE_CODE_FORK_SUBAGENT: '0' } });
     expect(diagnosis.status, diagnosis.stdout + diagnosis.stderr).toBe(0);
     const report = JSON.parse(diagnosis.stdout);
     expect(report.checks.filter((c: {group:string;level:string}) => c.group === 'package' && c.level === 'fail')).toEqual([]);
     expect(report.models.compatibility).toEqual([]);
+    expect(report.checks.some((c: {message:string}) => c.message.includes('effective depth floor'))).toBe(false);
     expect(report.models.source).toContain('Lean');
     // No key: the installed lean entrypoint reads no source, sends nothing and prints nothing.
     const quiet = spawnSync(process.execPath, [join(dest, 'dist', 'hook.js'), '--lean'], { cwd: otherCwd, encoding: 'utf8', env, input: JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 's', prompt_id: 'p', prompt: 'add a test' }) });

@@ -106,7 +106,9 @@ describe('doctor: checkModelAuthority (#48 P0-2)', () => {
     const pluginRoot = join(tmp, `case-${String(caseNum++)}`);
     mkdirSync(pluginRoot, { recursive: true });
     cpSync(sharedDist, join(pluginRoot, 'dist'), { recursive: true });
-    for (const rel of ['.claude-plugin', 'hooks', 'agents', 'mods', 'src', 'plugins/evidence/dist', 'plugins/evidence/skills']) cpSync(join(root, rel), join(pluginRoot, rel), { recursive: true });
+    for (const rel of ['.claude-plugin', 'hooks', 'agents', 'mods', 'src', 'plugins/evidence/skills']) cpSync(join(root, rel), join(pluginRoot, rel), { recursive: true });
+    mkdirSync(join(pluginRoot, 'plugins/evidence/dist'), { recursive: true });
+    writeFileSync(join(pluginRoot, 'plugins/evidence/dist/server.mjs'), '// Fake packaged entry; Doctor does not execute it.\n');
     if (mutate) writeFileSync(join(pluginRoot, 'agents', mutate.file), mutate.content);
     return pluginRoot;
   };

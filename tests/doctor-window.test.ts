@@ -22,7 +22,9 @@ beforeAll(() => {
   out = join(root, 'dist');
   const r = spawnSync(process.execPath, [join(__dirname, '..', 'node_modules', 'typescript', 'bin', 'tsc'), '-p', join(__dirname, '..', 'tsconfig.json'), '--outDir', out], { encoding: 'utf8' });
   expect(r.status, r.stdout + r.stderr).toBe(0);
-  for (const d of ['.claude-plugin', 'hooks', 'agents', 'mods', 'src', 'plugins/evidence/dist', 'plugins/evidence/skills']) cpSync(join(__dirname, '..', d), join(root, d), { recursive: true });
+  for (const d of ['.claude-plugin', 'hooks', 'agents', 'mods', 'src', 'plugins/evidence/skills']) cpSync(join(__dirname, '..', d), join(root, d), { recursive: true });
+  mkdirSync(join(root, 'plugins/evidence/dist'), { recursive: true });
+  writeFileSync(join(root, 'plugins/evidence/dist/server.mjs'), '// Fake packaged entry; Doctor does not execute it.\n');
 }, 60_000);
 
 let seq = 0;
@@ -49,6 +51,14 @@ const configFile = (body: unknown): string => {
 };
 
 describe('doctor: effective depth floor (#48 P0-1)', () => {
+  it('does not apply Gate A depth or tier authority to Lean mode', () => {
+    const cfg = configFile({ version: 5, mode: 'lean', delegationDepthFloor: 300000, models: { frontier: 'sonnet' } });
+    const report = doctorRun({ JEV_GATE_CONFIG: cfg, CLAUDE_CODE_AUTO_COMPACT_WINDOW: '200000', CLAUDE_CODE_FORK_SUBAGENT: '0' });
+    expect(report.status, report.stdout).toBe(0);
+    expect(report.stdout).not.toContain('effective depth floor');
+    expect(report.stdout).not.toContain('a gated dispatch of');
+    expect(report.stdout).toContain('Lean: no Gate A/B/C');
+  });
   it('prints the cost model floor for the shipped atomic gate, whatever the window', () => {
     const stdout = doctor({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '300000', JEV_GATE_CONFIG: configFile({ version: 5 }) });
     expect(stdout).toMatch(/\[info\].*effective depth floor: 50865 \(cost_model\).*could repay the coordinator/);

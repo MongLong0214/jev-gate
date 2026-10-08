@@ -204,6 +204,16 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
       return;
     }
     const c = loaded.config;
+    if (c.mode === 'lean' || leanPackage) {
+      say('ok', `config ${loaded.source}: mode=${c.mode} jevModel=${c.jevModel} deadline=${c.requestDeadlineMs}ms`);
+      say('info', 'Lean: no Gate A/B/C, no planner, no task graph, no depth floor and no root guard. The executor inherits native model and effort.');
+      if (c.mode === 'lean') {
+        say('info', 'lean needs a readable host transcript for this session; without one it stays native (source_unavailable), which is not the same as an empty history');
+        if (env['JEV_GATE_BENCH_RECENT'] === '1') say('warn', 'JEV_GATE_BENCH_RECENT=1 is set: the deterministic no-Jev comparison arm is active. This is a benchmark dependency, not a product mode');
+      } else if (c.mode === 'off') say('warn', 'mode=off still starts a node process for every matched hook event (hooks.json/lean.json registration is unconditional): to remove that cost too, disable the plugin with `claude plugin disable jev-gate@<marketplace>`');
+      say('info', `job state directory: ${jobsDir(env)} (0700, one 0600 file per session, removed after 7 days)`);
+      return;
+    }
     say('ok', `config ${loaded.source}: mode=${c.mode} jevModel=${c.jevModel} deadline=${c.requestDeadlineMs}ms floors={admission:${c.admissionConfidenceFloor},route:${c.routeConfidenceFloor},result:${c.resultConfidenceFloor}} plannerDefaultTier=${c.plannerDefaultTier} models=${JSON.stringify(c.models)} maxParallelWorkers=${c.maxParallelWorkers} guardAllowTools=${JSON.stringify(c.guardAllowTools)} routeQuestionShape=${c.routeQuestionShape} admissionQuestionShape=${c.admissionQuestionShape} delegationDepthFloor=${c.delegationDepthFloor === null ? 'null (derived)' : c.delegationDepthFloor} delegationDepthFraction=${c.delegationDepthFraction} maxTasksPerPlan=${c.maxTasksPerPlan} admittedShape=${c.admittedShape} delegationCoordinatorTurns=${c.delegationCoordinatorTurns} delegationWorkerTokensPerCall=${c.delegationWorkerTokensPerCall} guardAllowMcp=${c.guardAllowMcp} verifyWorkerChecks=${c.verifyWorkerChecks}`);
     if (c.admissionQuestionShape === 'atomic') {
       say(
@@ -252,11 +262,6 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
     }
     if (c.mode === 'native') say('info', 'mode=native: guidance + owned profiles + job state and guard when orchestration starts, no Jev request');
     if (c.mode === 'auto') say('info', 'mode=auto: admission, allocation and result gates send the request, the planned task and the worker reply to TypeSafe (may include source excerpts and prior constraints)');
-    if (c.mode === 'lean') {
-      say('info', 'mode=lean: no Gate A/B/C, no planner, no task graph, no depth floor and no root guard. One request may send the current prompt, the mandatory conversation layer and complete prior interaction groups to TypeSafe, and one jev-gate:executor may be recommended for it');
-      say('info', 'lean needs a readable host transcript for this session; without one it stays native (source_unavailable), which is not the same as an empty history');
-      if (env['JEV_GATE_BENCH_RECENT'] === '1') say('warn', 'JEV_GATE_BENCH_RECENT=1 is set: the deterministic no-Jev comparison arm is active. This is a benchmark dependency, not a product mode');
-    }
     say('info', `job state directory: ${jobsDir(env)} (0700, one 0600 file per session, removed after 7 days)`);
     if (env['JEV_GATE_EXPERIMENT_ADMISSION'] === 'orchestrated') say('warn', `JEV_GATE_EXPERIMENT_ADMISSION=orchestrated is set: every prompt starts an orchestrated job in ${c.mode} mode without a Gate A request (recorded as forced/admission_forced); allocation and result gates are unaffected`);
     if (c.workerIsolation === 'worktree') {
@@ -336,11 +341,13 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
     const overrideKey = apiKeyOverride(keyEnv);
     if (overrideKey?.trim() && !validApiKey(overrideKey)) say('fail', 'Jev API key override has an invalid format (value hidden)', 'Correct or remove the explicit key override; it takes precedence over the private credential store.');
     const key = resolveApiKey(keyEnv);
-    say('info', 'Router automatic Fable default: off; active routerAllowFable is controlled by the host plugin options. Capabilities do not establish account access; missing response model/effort remains unknown.');
-    say('info', `Router launch pins: model=${launch('ANTHROPIC_MODEL')?.trim() ? 'present' : 'absent'}; effort=${launch('CLAUDE_CODE_EFFORT_LEVEL')?.trim() ? 'present' : 'absent'} (values hidden; injector source unknown). Starting with /model or --model establishes a baseline, not a permanent routing pin.`);
-    let installed = 'unknown'; try { const manifest = JSON.parse(readFileSync(join(root, '.claude-plugin/plugin.json'), 'utf8')); if (typeof manifest.version === 'string' && /^\d+\.\d+\.\d+$/.test(manifest.version)) installed = manifest.version; } catch { /* metadata unknown */ }
-    say('info', `Router installed package=${installed}; loaded hook version=unknown to doctor. The active root record reports hook_version, host_version, incoming/effective effort, pins, candidate exclusions and selection threshold. Restart an already open host after updating; the installed manifest does not prove its loaded hook version.`);
-    say('info', '/context summaries and previous cache usage do not establish the current request size. Unsupported or unobserved model/effort combinations preserve the native baseline.');
+    if (!leanPackage) {
+      say('info', 'Router automatic Fable default: off; active routerAllowFable is controlled by the host plugin options. Capabilities do not establish account access; missing response model/effort remains unknown.');
+      say('info', `Router launch pins: model=${launch('ANTHROPIC_MODEL')?.trim() ? 'present' : 'absent'}; effort=${launch('CLAUDE_CODE_EFFORT_LEVEL')?.trim() ? 'present' : 'absent'} (values hidden; injector source unknown). Starting with /model or --model establishes a baseline, not a permanent routing pin.`);
+      let installed = 'unknown'; try { const manifest = JSON.parse(readFileSync(join(root, '.claude-plugin/plugin.json'), 'utf8')); if (typeof manifest.version === 'string' && /^\d+\.\d+\.\d+$/.test(manifest.version)) installed = manifest.version; } catch { /* metadata unknown */ }
+      say('info', `Router installed package=${installed}; loaded hook version=unknown to doctor. The active root record reports hook_version, host_version, incoming/effective effort, pins, candidate exclusions and selection threshold. Restart an already open host after updating; the installed manifest does not prove its loaded hook version.`);
+      say('info', '/context summaries and previous cache usage do not establish the current request size. Unsupported or unobserved model/effort combinations preserve the native baseline.');
+    }
     say(key ? 'ok' : 'warn', key ? 'Jev API key available from the plugin option, environment or shared private store (value not shown)' : 'Jev API key missing: the installed plugin opens a local key-entry screen; Gate/Lean/Router remain native until a key is supplied');
     if (existsSync(join(cwd, '.env'))) say('info', '.env in cwd is NOT auto-loaded by the hook; export the variable in the shell that starts Claude Code');
   };
@@ -386,7 +393,7 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
   const loaded = loadConfig(env);
   inspect('configuration', () => checkConfig(loaded));
   if (leanPackage && loaded.ok && !['lean', 'off'].includes(loaded.config.mode)) say('fail', 'Lean package supports only lean/off mode; legacy Gate and tier routing are not present');
-  if (loaded.ok) checkModelAuthority(loaded.config.models, installedModels);
+  if (loaded.ok && loaded.config.mode !== 'lean' && !leanPackage) checkModelAuthority(loaded.config.models, installedModels);
   report.group('host');
   const hostVersion = checkClaude();
   const inventory = leanPackage ? missingInventory() : await claudeModelInventory(env, cwd);

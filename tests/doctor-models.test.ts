@@ -100,12 +100,23 @@ describe('Doctor native model and effort compatibility', () => {
     expect(inventory.complete).toBe(false); expect(inventory.error).toBe('invalid_response');
     expect(claudeCompatibility(inventory, '2.1.294', [], false).find(c => c.model === 'claude-haiku-5-5')?.state).toBe('unverified');
   });
+  it('never turns conflicting rows and a malformed tail into order-dependent failures', () => {
+    const low = { value: 'haiku', resolvedModel: 'claude-haiku-5-5', supportedEffortLevels: ['low'] };
+    const high = { ...low, value: 'default', supportedEffortLevels: ['low', 'medium', 'high'] };
+    for (const rows of [[low, high, {}], [high, low, {}], [{}, low, high], [low, {}]]) {
+      const inventory = parseClaudeInventory(rows);
+      expect(inventory.error).toBe('invalid_response');
+      expect(claudeCompatibility(inventory, '2.1.294', [], false).find(c => c.model === low.resolvedModel)?.state).toBe('unverified');
+    }
+  });
 });
 describe('Doctor reports', () => {
   it.each(['hooks/register.ts', 'mods/router/hooks/config.ts', 'src/provider-prices-data.ts', 'plugins/evidence/dist/server.mjs', 'plugins/evidence/skills/evidence/SKILL.md'])('rejects a missing declared package dependency: %s', async missing => {
     const dir = temporary(), root = join(dir, 'plugin'); mkdirSync(root);
-    for (const file of ['.claude-plugin', 'hooks', 'agents', 'mods', 'src', 'plugins/evidence/dist', 'plugins/evidence/skills']) cpSync(join(__dirname, '..', file), join(root, file), { recursive: true });
+    for (const file of ['.claude-plugin', 'hooks', 'agents', 'mods', 'src', 'plugins/evidence/skills']) cpSync(join(__dirname, '..', file), join(root, file), { recursive: true });
     mkdirSync(join(root, 'dist')); for (const file of ['entry.js', 'hook.js']) writeFileSync(join(root, 'dist', file), '');
+    mkdirSync(join(root, 'plugins/evidence/dist'), { recursive: true });
+    writeFileSync(join(root, 'plugins/evidence/dist/server.mjs'), '// Fake packaged entry; Doctor does not execute it.\n');
     const env = { HOME: dir, PATH: '/nonexistent', XDG_STATE_HOME: join(dir, 'state') };
     const before = await claudeDoctor(root, env, dir);
     expect(before.checks.filter(c => c.group === 'package' && c.level === 'fail')).toEqual([]);
@@ -123,8 +134,10 @@ describe('Doctor reports', () => {
   });
   it.each(['missing-server', 'wrong-command', 'wrong-skills'])('rejects a broken Evidence discovery declaration: %s', async broken => {
     const dir = temporary(), root = join(dir, 'plugin'); mkdirSync(root);
-    for (const file of ['.claude-plugin', 'hooks', 'agents', 'mods', 'src', 'plugins/evidence/dist', 'plugins/evidence/skills']) cpSync(join(__dirname, '..', file), join(root, file), { recursive: true });
+    for (const file of ['.claude-plugin', 'hooks', 'agents', 'mods', 'src', 'plugins/evidence/skills']) cpSync(join(__dirname, '..', file), join(root, file), { recursive: true });
     mkdirSync(join(root, 'dist')); for (const file of ['entry.js', 'hook.js']) writeFileSync(join(root, 'dist', file), '');
+    mkdirSync(join(root, 'plugins/evidence/dist'), { recursive: true });
+    writeFileSync(join(root, 'plugins/evidence/dist/server.mjs'), '// Fake packaged entry; Doctor does not execute it.\n');
     const path = join(root, '.claude-plugin/plugin.json'), manifest = JSON.parse(readFileSync(path, 'utf8'));
     if (broken === 'missing-server') delete manifest.mcpServers.evidence;
     else if (broken === 'wrong-command') manifest.mcpServers.evidence.command = 'missing-runtime';

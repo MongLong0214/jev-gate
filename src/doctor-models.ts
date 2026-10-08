@@ -12,12 +12,12 @@ export const parseClaudeInventory = (value: unknown): ModelInventory => {
   if (!Array.isArray(value) || value.length > 256) return { models: [], complete: false, error: 'invalid_response' };
   const models: HostModel[] = []; const ids = new Set<string>(); const conflicts = new Set<string>(); let invalid = false;
   for (const row of value) {
-    if (!record(row) || typeof row['value'] !== 'string' || !/^[A-Za-z0-9._:\/@\[\]-]{1,160}$/.test(row['value'])) return { models, complete: false, error: 'invalid_response' };
-    if (row['resolvedModel'] !== undefined && typeof row['resolvedModel'] !== 'string' || row['supportsEffort'] !== undefined && typeof row['supportsEffort'] !== 'boolean') return { models, complete: false, error: 'invalid_response' };
+    if (!record(row) || typeof row['value'] !== 'string' || !/^[A-Za-z0-9._:\/@\[\]-]{1,160}$/.test(row['value'])) { invalid = true; continue; }
+    if (row['resolvedModel'] !== undefined && typeof row['resolvedModel'] !== 'string' || row['supportsEffort'] !== undefined && typeof row['supportsEffort'] !== 'boolean') { invalid = true; continue; }
     const id = typeof row['resolvedModel'] === 'string' ? row['resolvedModel'] : row['value'];
-    if (!/^[A-Za-z0-9._:\/@\[\]-]{1,160}$/.test(id)) return { models, complete: false, error: 'invalid_response' };
+    if (!/^[A-Za-z0-9._:\/@\[\]-]{1,160}$/.test(id)) { invalid = true; continue; }
     const raw = row['supportedEffortLevels'];
-    if (raw !== undefined && (!Array.isArray(raw) || raw.some(e => typeof e !== 'string' || !/^[a-z]{1,24}$/.test(e)) || new Set(raw).size !== raw.length || row['supportsEffort'] === false && raw.length > 0)) return { models, complete: false, error: 'invalid_response' };
+    if (raw !== undefined && (!Array.isArray(raw) || raw.some(e => typeof e !== 'string' || !/^[a-z]{1,24}$/.test(e)) || new Set(raw).size !== raw.length || row['supportsEffort'] === false && raw.length > 0)) { invalid = true; continue; }
     const efforts = row['supportsEffort'] === false ? [] : Array.isArray(raw) && raw.every(e => typeof e === 'string' && /^[a-z]{1,24}$/.test(e)) ? raw as string[] : null;
     const key = row['value'];
     if (ids.has(key)) { invalid = true; conflicts.add(id); for (const previous of models.filter(m => m.alias === key)) conflicts.add(previous.id); } ids.add(key);
@@ -65,6 +65,7 @@ export const claudeCompatibility = (inventory: ModelInventory, version: string |
     if (facts?.family === 'fable' && !allowFable && !configured.some(c => c.model === model)) { state = 'excluded'; reason = 'automatic Fable selection is off'; }
     else if (facts?.legacy) { state = 'incompatible'; reason = 'retired model is not a new automatic routing target'; }
     else if (supportedHost(minimum) === false) { state = 'incompatible'; reason = `requires Claude Code 2.1.${minimum} or newer; run claude update`; }
+    else if (inventory.error !== null) { reason = 'CLI inventory is unavailable or invalid; conflicting capabilities remain unverified'; }
     else if (baseOnly) { reason = 'CLI advertises the base model but not this context variant; variant support remains unverified'; }
     else if (!found && inventory.complete) { state = 'incompatible'; reason = 'model is absent from this CLI capability inventory (account access is separately unverified)'; }
     else if (found && alias && facts && !sameIdentity(facts.ids[0]!, found.id)) { state = 'incompatible'; reason = `alias resolves to ${found.id}; expected the current ${facts.ids[0]}`; }
