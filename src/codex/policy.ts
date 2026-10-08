@@ -57,8 +57,9 @@ interface Session {
   lastCompactSummary?: string;
   cache?: RoutingCache & { at: number };
   modelCache?: ModelCache;
-  stepRoutes?: Map<string, { index: number; model: string; effort: string | null; patch: PairPatch; pending?: Promise<void> }>;
+  stepRoutes?: Map<string, { index: number; model: string; effort: string | null; patch: PairPatch; config?: string; catalogEpoch?: number; settingsEpoch?: number; pending?: Promise<void> }>;
   stepIndex?: number;
+  settingsEpoch?: number;
 }
 const contextOf = (result: { stdout: string | null }): string => {
   if (!result.stdout) return '';
@@ -124,6 +125,7 @@ export class CodexPolicy {
     if (method === 'thread/settings/update') {
       const session = this.sessions.get(String(params['threadId']));
       if (session) {
+        session.settingsEpoch = (session.settingsEpoch ?? 0) + 1;
         if (typeof params['model'] === 'string') session.baseline.model = params['model'];
         if (typeof params['effort'] === 'string' || params['effort'] === null) session.baseline.effort = params['effort'] as string | null;
       }
@@ -277,6 +279,7 @@ export class CodexPolicy {
           const epoch = this.catalogEpoch, sourceEpoch = session.epoch;
           owned.pending = (async () => {
             const config = runtimeCodexPolicy({ ...this.env, JEV_CODEX_MODEL: model }, this.catalog);
+            owned.config = JSON.stringify(config.router); owned.catalogEpoch = epoch; owned.settingsEpoch = session.settingsEpoch ?? 0;
             const catalog = this.catalog.map(m => ({ ...m, supportedReasoningEfforts: m.supportedReasoningEfforts.filter(e => !['ultra', 'ultracode', 'auto', 'ultrafast'].includes(e.reasoningEffort)) }));
             const bound = Buffer.byteLength(JSON.stringify(request));
             const patch = await routeCodex({ model, effort: nativeEffort, task: d.input['prompt'] as string, session: session.id, prompt: session.prompt ?? d.prompt,
@@ -293,7 +296,22 @@ export class CodexPolicy {
       }
     }
     if (step.pending) await step.pending;
-    if (signal.aborted || d.signal.aborted || d.ended || model !== step.model || nativeEffort !== step.effort) return { request };
+    if (signal.aborted || d.signal.aborted || d.ended || session.controller?.signal.aborted || this.sessions.get(session.id) !== session || model !== step.model || nativeEffort !== step.effort) return { request };
+    if (Object.keys(step.patch).length) {
+      const current = runtimeCodexPolicy({ ...this.env, JEV_CODEX_MODEL: model }, this.catalog);
+      const target = step.patch.model ?? model;
+      const candidate = codexCandidates(this.catalog, current.router.allowAstra, model).find(c => c.id === target);
+      const selectedEffort = step.patch.effortEdit?.kind === 'omit' ? null : step.patch.effort ?? nativeEffort;
+      const valid = this.env['JEV_CODEX_ENABLED'] !== '0' && current.router.enabled && step.config === JSON.stringify(current.router) &&
+        step.catalogEpoch === this.catalogEpoch && step.settingsEpoch === (session.settingsEpoch ?? 0) && candidate &&
+        (!step.patch.model || codexTargetAllowed(target, current.router.allowAstra) && this.catalog.some(m => m.model === target && generalCodexModel(m)) &&
+          providerContextLimit('codex', target) !== null && Buffer.byteLength(JSON.stringify(request)) <= providerContextLimit('codex', target)!) &&
+        (selectedEffort === null ? candidate.omitEffort : !['ultra', 'ultracode', 'auto', 'ultrafast'].includes(selectedEffort) && candidate.efforts.includes(selectedEffort));
+      if (!valid) {
+        step.patch = {};
+        this.trace?.write('codex_router_skipped', { host: 'codex', session_id: session.id, prompt_id: session.prompt, scope: 'child', agent_id: session.id, index: step.index, reason: 'child_pair_changed_before_submission', known_not_sent: false });
+      }
+    }
     session.requestKind = 'child_response'; session.route = step.patch;
     session.baseline = { model, effort: nativeEffort };
     const reasoning = applyEffort(obj(request['reasoning']) ?? {}, step.patch.effortEdit);
@@ -831,7 +849,7 @@ export class CodexPolicy {
     const session = this.sessions.get(sessionId);
     if (!session) return;
     const step = session.role ? session.stepRoutes?.get(createHash('sha256').update(JSON.stringify([session.epoch, requestStepKey(request)])).digest('hex')) : undefined;
-    const route = step?.patch ?? session.route;
+    const route = requestedUpdateEffort(request).present ? undefined : session.role ? step?.patch : session.route;
     const baseline = step ?? session.baseline;
     const effort = obj(request['reasoning'])?.['effort'];
     if (typeof request['model'] === 'string') session.requestModel = request['model'];

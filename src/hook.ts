@@ -4,7 +4,7 @@ import { prepareDispatchAllocation, selectedDispatchPair, type DispatchAllocatio
 import { OWNED_AGENT_PROFILES } from './agents.js';
 import type { PairOffer, PairPatch } from './router-selection.js';
 import { integratedClaudePlugin } from './claude-setup.js';
-import { claudeTerminal, dispatchMarker } from './claude-background.js';
+import { claudeTerminal, dispatchMarker, isNativeTaskNotification } from './claude-background.js';
 import { hasWorktreeHead } from './worktree.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, realpathSync } from 'node:fs';
@@ -147,8 +147,7 @@ import { evidenceFormatOnly, nearestFormatCommands, readWorkerObservation, refus
 import type { CheckVerification, ConfigV5, DenyReason, ErrorCode, ExecutionShape, HookInput, JobGeneration, JobState, LeanPending, ModelAgreement, Plan, PlannedTask, Receipt, Reservation, RoutingMode, Tier } from './types.js';
 import { agentForTier, LEAN_EXECUTOR_AGENT, OWNED_AGENTS, TIERS } from './types.js';
 import { EXECUTION_CONTROL_KEYS, MAX_PROMPT_BYTES } from './brief.js';
-import { normalizeUsage, usageCost } from './cost.js';
-import { providerPrice } from './provider-prices.js';
+import { normalizeUsage } from './cost.js';
 import { subagentModelOverride } from './auth.js';
 
 export const MAX_STDIN_BYTES = 256 * 1024;
@@ -230,6 +229,7 @@ const parseInput = (text: string): HookInput | { code: ErrorCode } => {
     const v = str(parsed[k]);
     if (v !== null) out[k] = v;
   }
+  if (typeof parsed['source'] === 'string' && ['user', 'sdk', 'system', 'loop_wakeup', 'schedule_wakeup', 'poll_event'].includes(parsed['source'])) out.source = parsed['source'] as NonNullable<HookInput['source']>;
   if ('tool_input' in parsed) out.tool_input = parsed['tool_input'];
   if ('tool_response' in parsed) out.tool_response = parsed['tool_response'];
   // Host finding (v5-host-1): effort arrives as { level: "high" }, not a string; a string form is accepted too.
@@ -265,13 +265,11 @@ const whitelistToolResponse = (r: unknown): Record<string, unknown> | null => {
   if (!isRecord(r)) return null;
   const usage = isRecord(r['usage']) ? r['usage'] : {};
   const accounting = normalizeUsage('claude', usage);
-  const models = Array.isArray(r['modelsUsed']) ? [...new Set(r['modelsUsed'].filter((m): m is string => typeof m === 'string'))] : [];
-  const model = models.length > 1 ? null : models[0] ?? str(r['resolvedModel']);
-  const prompt = accounting.input !== null && accounting.read !== null && accounting.write !== null ? accounting.input + accounting.read + accounting.write : null;
   const creation = isRecord(usage['cache_creation']) ? usage['cache_creation'] : {};
   return {
     accounting_scope: 'agent_aggregate', accounting,
-    cost: usageCost(accounting, model ? providerPrice('claude', model, prompt, str(usage['service_tier'])) : null),
+    // Aggregate input cannot establish each request's price band or service tier.
+    cost: { usd: null, basis: 'api_list_estimate', revision: null, reason: 'aggregate_request_prices_unknown' },
     provider_reported_cost: null, subscription_cost: 'unknown',
     status: str(r['status']),
     agentId: str(r['agentId']),
@@ -1010,7 +1008,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
   const interactivePrompt = (): HookResult | null => {
     if (caller.agent_id || caller.agent_type || !input.session_id || !input.prompt_id) return null;
     let gen: JobGeneration | null = null;
-    const notification = /^\s*<task-notification>/.test(input.prompt ?? '');
+    const notification = isNativeTaskNotification(input);
     let delivered = false;
     const written = updateJob(deps.env, input.session_id, prev => {
       if (!prev || !prev.current.background_job || prev.current.outcome !== null && !notification && !!prev.current.background_delivery) return null;

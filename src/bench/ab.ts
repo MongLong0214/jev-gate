@@ -264,6 +264,7 @@ export interface TranscriptLine {
   type?: string;
   uuid?: string;
   timestamp?: string;
+  requestId?: string;
   /** The host writes the effort each assistant request ran with; this is how a Router change is seen (#132). */
   effort?: string;
   isMeta?: boolean;
@@ -319,13 +320,13 @@ const extraUsage = (lines: TranscriptLine[]): { write5m: number | null; write1h:
     thinking: sum(u => isRecord(u['output_tokens_details']) ? u['output_tokens_details']['thinking_tokens'] : undefined) };
 };
 
-export const sessionFacts = (traceDir: string, sid: string): { routed: Set<string>; jevInput: number | null; jevOutput: number | null; jevRequests: number } => {
-  const routed = new Set<string>(); let jevInput: number | null = 0, jevOutput: number | null = 0, jevRequests = 0;
+export const sessionFacts = (traceDir: string, sid: string): { routed: Map<string, string>; jevInput: number | null; jevOutput: number | null; jevRequests: number } => {
+  const routed = new Map<string, string>(); let jevInput: number | null = 0, jevOutput: number | null = 0, jevRequests = 0;
   const calls = new Map<string, { input: number | null; output: number | null }>();
   const records = (existsSync(traceDir) ? readdirSync(traceDir) : []).map(file => readJson(join(traceDir, file))).filter((r): r is Record<string, unknown> => isRecord(r) && r['session_id'] === sid);
   const decisions = new Map(records.filter(r => r['phase'] === 'mod_router' && r['event'] === 'root' && isRecord(r['patch']) && typeof r['patch']['model'] === 'string').map(r => [r['turn'], (r['patch'] as Record<string, unknown>)['model']]));
   for (const r of records) {
-    if (r['phase'] === 'mod_router' && r['event'] === 'root_result' && r['confirmation'] === 'confirmed' && typeof r['observed'] === 'string' && decisions.get(r['turn']) === r['observed']) routed.add(r['observed']);
+    if (r['phase'] === 'mod_router' && r['event'] === 'root_result' && r['confirmation'] === 'confirmed' && typeof r['request_id'] === 'string' && typeof r['observed'] === 'string' && decisions.get(r['turn']) === r['observed']) routed.set(r['request_id'], r['observed']);
     const hook = typeof r['request_id'] === 'string' && (String(r['phase']).endsWith('_intent') || r['attempted'] === true);
     const router = r['phase'] === 'mod_router' && (r['sent'] === true || r['event'] === 'late');
     const compact = r['phase'] === 'mod_compact' && r['stage'] === 'jev' && r['jev_sent'] === true;
@@ -463,7 +464,8 @@ export const rowOf = (r: CellResult, file: TasksFile | null, transcript: string 
   const seen = observedOf(main);
   // A pinned model that the transcript contradicts, or a task turn that ran on more than one model, is not this cell.
   const facts = sessionFacts(traceDir, r.sid);
-  const modelMismatch = seen.models.length === 0 || seen.models.some(model => r.model !== undefined && model !== r.model && !(r.cond === 'D' && facts.routed.has(model)));
+  const modelMismatch = seen.models.length === 0 || main.some(e => e.type === 'assistant' && typeof e.message?.model === 'string' && r.model !== undefined && e.message.model !== r.model &&
+    !(r.cond === 'D' && typeof e.requestId === 'string' && facts.routed.get(e.requestId) === e.message.model));
   const nativeLines = [...main];
   const su: UsageSum = { input: 0, cache_create: 0, cache_read: 0, output: 0, requests: 0, tools: 0, complete: true };
   const primeSubs: UsageSum = { input: 0, cache_create: 0, cache_read: 0, output: 0, requests: 0, tools: 0, complete: true };
@@ -611,7 +613,7 @@ export const report = (argv: string[]): void => {
   console.log('Cost pairs include every planned repetition; unknown or failed cells are not wins. Token paired-sign is auxiliary, not a cost-saving verdict.');
   console.log('A lower effort next to a saving means less work was done, not the same work for less (#132). gate_turns vs tools shows how far Gate A\'s estimate was from the measured tool calls (#135).');
   const mismatched = rows.filter((r) => r.model_mismatch);
-  if (mismatched.length) console.log(`${mismatched.length} cell(s) ran on a model other than the pinned one and are excluded: ${mismatched.map((r) => `${r.id}=${r.model}`).join(', ')} (#133).`);
+  if (mismatched.length) console.log(`${mismatched.length} cell(s) have non-pinned models without an exact request-bound route confirmation and are excluded: ${mismatched.map((r) => `${r.id}=${r.model}`).join(', ')} (#133). A hook without request identity cannot establish this binding.`);
   const planned = isRecord(plan) && Array.isArray(plan['tasks']) && Array.isArray(plan['conds']) && typeof plan['reps'] === 'number' ? plan['tasks'].length * plan['conds'].length * plan['reps'] : null;
   if (planned !== null) console.log(`planned cells ${planned}, result files ${resultCount}: a missing file is unknown, not a zero or proof that it never started.`);
   const stale = rows.filter((r) => r.missing).length;

@@ -2359,6 +2359,16 @@ describe('Stop', () => {
 });
 
 describe('traces', () => {
+  it('does not price an Agent aggregate as one long-context request', async () => {
+    const dir = mkdtempSync(join(tmp, 'aggregate-trace-'));
+    const env = makeEnv({ JEV_GATE_MODE: 'native', JEV_GATE_TRACE_DIR: dir });
+    await run(env, { hook_event_name: 'PostToolUse', session_id: 's', prompt_id: 'p', tool_name: 'Agent', tool_use_id: 'call',
+      tool_input: { subagent_type: 'general-purpose', model: 'haiku', prompt: 'bounded work' },
+      tool_response: { status: 'completed', resolvedModel: 'claude-haiku-5-5', modelsUsed: ['claude-haiku-5-5'],
+        usage: { input_tokens: 150000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 3000 } } });
+    const post = readdirSync(dir).map(file => JSON.parse(readFileSync(join(dir, file), 'utf8'))).find(r => r.phase === 'post');
+    expect(post.tool_response).toMatchObject({ accounting_scope: 'agent_aggregate', accounting: { input: 150000, output: 3000 }, cost: { usd: null, reason: 'aggregate_request_prices_unknown' } });
+  });
   it('records both gate phases, the guard and the plan without the prompt or the key', async () => {
     const dir = join(tmp, 'trace-full');
     const env = makeEnv({ JEV_GATE_TRACE_DIR: dir });

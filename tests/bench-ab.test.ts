@@ -8,6 +8,28 @@ import { CONDITIONS, cleanEnv, conditionSettings, grid, median, parseRunArgs, ro
 const row = (over: Partial<Row>): Row => ({ id: 'S-A-1', task: 'S', cond: 'A', rep: 1, ok: true, wall_s: 10, cost: 1, prime_cost: 1, prime_tools: 30, model: 'm', model_mismatch: false, prime_effort: 'xhigh', effort: 'xhigh', gate_turns: '-', total_tokens: 100, cache_create: 10, cache_read: 80, output: 10, requests: 3, tools: 5, subs: 0, compacts: 0, shapes: '', ...over });
 
 describe('bench ab (#130)', () => {
+  it('requires each non-pinned task response to have its own exact route confirmation', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ab-route-')), trace = join(dir, 'trace'); mkdirSync(trace);
+    const model = 'claude-haiku-5-5', transcript = join(dir, 'sid.jsonl');
+    const usage = { input_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1 };
+    const save = (name: string, value: object) => writeFileSync(join(trace, name), JSON.stringify({ session_id: 'sid', ...value }));
+    save('prime.json', { phase: 'mod_router', event: 'root', turn: 'prime-turn', patch: { model } });
+    save('prime-result.json', { phase: 'mod_router', event: 'root_result', turn: 'prime-turn', request_id: 'prime-request', confirmation: 'confirmed', observed: model });
+    writeFileSync(transcript, [
+      { type: 'user', message: { content: 'prime' } },
+      { type: 'assistant', requestId: 'prime-request', message: { id: 'prime', model, usage } },
+      { type: 'user', message: { content: 'task' } },
+      { type: 'assistant', requestId: 'task-request', message: { id: 'task', model, usage } },
+    ].map(v => JSON.stringify(v)).join('\n'));
+    const cell: CellResult = { id: 'S-D-1', task: 'S', cond: 'D', rep: 1, sid: 'sid', cwd: dir, model: 'claude-opus-5-5', started_at: '', prime_wall_s: 1, wall_s: 2, prime_rc: 0, rc: 0, timed_out: false, check_rc: null, prime: {}, harness: {}, result_head: 'ok' };
+    expect(rowOf(cell, null, transcript, trace)).toMatchObject({ ok: false, model_mismatch: true });
+    save('task.json', { phase: 'mod_router', event: 'root', turn: 'task-turn', patch: { model } });
+    save('task-result.json', { phase: 'mod_router', event: 'root_result', turn: 'task-turn', confirmation: 'confirmed', observed: model });
+    expect(rowOf(cell, null, transcript, trace)).toMatchObject({ ok: false, model_mismatch: true });
+    save('task-result.json', { phase: 'mod_router', event: 'root_result', turn: 'task-turn', request_id: 'task-request', confirmation: 'confirmed', observed: model });
+    expect(rowOf(cell, null, transcript, trace)).toMatchObject({ ok: true, model_mismatch: false });
+    rmSync(dir, { recursive: true });
+  });
   it('counts exact Jev intent/result bindings once and retains unobserved consumption as unknown', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ab-jev-'));
     const records = [

@@ -1,8 +1,14 @@
 # Changelog
 
-## v0.8.14 — Unreleased — Exact native request completion
+## v0.8.14 — 2026-10-08 — Cache accounting and worker recovery
 
 - Match native Codex model responses to their exact session and request even when the host provides no prompt ID. Completed requests stop appearing as active, and submitted model rows can display their observed response model. Known and unknown prompts remain separate; unrelated and earlier responses do not settle a request.
+- Track bounded per-model cache observations and provider-specific input, cache and output accounting. Preserve unknown TTL, thinking and request identity; separate API list estimates from subscription billing. Check official price revisions on every PR. Aggregate worker usage cannot establish per-request price bands and remains unpriced.
+- Route owned Codex worker continuations after closed native tool pairs against their original contract and NEXT inference. The first request retains Gate B. Retries reuse an exact decision while rechecking current configuration, catalog, native settings and effort compatibility; changed or opaque paths preserve the native request. Native effort updates retain their original history and do not inherit an earlier route's application record.
+- Deliver an idle background result once, then close a generation if its delivery turn ends without another dispatch. New human requests return to Gate A; copied notification markup does not suppress them. Active reservations and native terminal requirements remain unchanged.
+- Remove duplicated single-worker handoff text only when admitted-source provenance agrees. Record delegation cost components and model-switch cost scenarios; missing future output, reread, startup or horizon evidence preserves the existing policy rather than inventing a saving.
+- Load checked-in price facts through TypeScript in native Claude Function Hooks and register session compaction once in the integrated plugin. Keep live dashboard timeline rendering bounded to its latest 100 events with existing paginated history.
+- Extend the paired benchmark with frozen follow-up turns and cache waits. Compare session cost separately from task tokens, deduplicate exact Jev intent/result bindings and require request-bound confirmation for nonbaseline models. Unbound cells remain diagnostic; this release does not establish measured net savings or close the paid acceptance criteria in #202–#205.
 
 ## v0.8.13 — 2026-10-08 — Current models and PR freshness checks
 

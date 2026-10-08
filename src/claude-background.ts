@@ -5,6 +5,31 @@ import type { HookInput } from './types.js';
 
 export const dispatchMarker = (token: string): string => `\n\n[JEV_DISPATCH token=${token}]`;
 
+/** Suppress host-authored notice turns; this never establishes worker termination. */
+export const isNativeTaskNotification = (input: HookInput): boolean => {
+  if (input.source !== undefined && input.source !== 'system' || !input.session_id || !input.prompt_id || !input.transcript_path || !/^\s*<task-notification>/.test(input.prompt ?? '')) return false;
+  // The documented author field is available before transcript flush. Require the whole machine envelope.
+  if (input.source === 'system' && /^\s*<task-notification>[\s\S]*<\/task-notification>\s*$/.test(input.prompt ?? '')) return true;
+  // Older payloads lack source: only exact identity plus native transcript provenance can establish it.
+  let fd: number | undefined;
+  try {
+    fd = openSync(input.transcript_path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const st = fstatSync(fd); if (!st.isFile()) return false;
+    const offset = Math.max(0, st.size - 1024 * 1024), buffer = Buffer.alloc(st.size - offset);
+    readSync(fd, buffer, 0, buffer.length, offset);
+    return buffer.toString().split('\n').some(line => {
+      try {
+        const row = JSON.parse(line) as Record<string, unknown>, origin = row['origin'] as { kind?: unknown; producer?: unknown } | undefined;
+        if (row['type'] !== 'user' || row['sessionId'] !== input.session_id || row['promptSource'] !== 'system' || row['turnOrigin'] !== 'task_notification' || origin?.kind !== 'task-notification' || origin.producer !== 'session-task' || row['promptId'] !== input.prompt_id && row['uuid'] !== input.prompt_id) return false;
+        const content = (row['message'] as { content?: unknown } | undefined)?.content;
+        const text = typeof content === 'string' ? content : Array.isArray(content) && content.every(c => c?.type === 'text' && typeof c.text === 'string') ? content.map(c => c.text).join('\n') : null;
+        return text === input.prompt;
+      } catch { return false; }
+    });
+  } catch { return false; }
+  finally { if (fd !== undefined) closeSync(fd); }
+};
+
 /** Native terminal evidence, never a launch receipt or a string taken from a newer root prompt. */
 export const claudeTerminal = (input: HookInput, nativeNotification = false): { token: string | null; text: string; model: string | null; completed: boolean } | null => {
   if (!input.session_id || !input.agent_id || !input.transcript_path || !nativeNotification && !input.agent_transcript_path) return null;

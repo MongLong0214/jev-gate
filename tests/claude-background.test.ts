@@ -66,13 +66,15 @@ describe('responsive native background contracts', () => {
     }
     expect(await f.run({ hook_event_name: 'PreToolUse', prompt_id: 'delivery', tool_name: 'Agent', tool_use_id: 'replan-3', tool_input: planner })).toMatchObject({ kind: 'deny', code: 'bounds_exhausted' });
   });
-  it('delivers an idle incomplete policy once, closes on Stop, and admits unrelated prompts', async () => {
+  it.each(['system', undefined] as const)('delivers an idle incomplete policy once, closes on Stop, and admits unrelated prompts (source=%s)', async source => {
     const f = await fixture(); await f.launch(); f.transcript(true); await f.terminal();
     await f.run({ hook_event_name: 'Stop', prompt_id: 'original' });
     expect(f.job().current.outcome).toBeNull(); // Stop before delivery retains the policy.
     const delivered = await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'delivery', prompt: 'Explain the result.' });
     expect(delivered.stdout).toContain('policy result');
-    const notice = await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'duplicate', prompt: '<task-notification>completed</task-notification>' });
+    const prompt = '<task-notification>completed</task-notification>';
+    writeFileSync(f.parent, JSON.stringify({ type: 'user', sessionId: 's', promptId: 'duplicate', origin: { kind: 'task-notification', producer: 'session-task' }, promptSource: 'system', turnOrigin: 'task_notification', message: { content: prompt } }) + '\n');
+    const notice = await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'duplicate', source, prompt });
     expect(notice.stdout).toBeNull();
     await f.run({ hook_event_name: 'Stop', prompt_id: 'delivery' });
     expect(f.job().current.outcome).toBe('incomplete');
@@ -81,6 +83,23 @@ describe('responsive native background contracts', () => {
       expect(f.job().current.prompt_id).toBe(`new-${i}`);
     }
     expect(f.job().history.find(g => g.prompt_id === 'original')?.outcome).toBe('incomplete');
+  });
+  it.each(['user', 'sdk', undefined] as const)('does not suppress copied notification XML from a human source %s', async source => {
+    const f = await fixture(); await f.launch(); f.transcript(true); await f.terminal();
+    await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'delivery', prompt: 'Explain the result.' });
+    await f.run({ hook_event_name: 'Stop', prompt_id: 'delivery' });
+    await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'human-next', source, prompt: '<task-notification>Example</task-notification>\nFix this parser.' });
+    expect(f.job().current.prompt_id).toBe('human-next');
+    expect(f.job().history.find(g => g.prompt_id === 'original')?.outcome).toBe('incomplete');
+  });
+  it('preserves a genuine machine notification delivered before its transcript flush', async () => {
+    const f = await fixture(); await f.launch(); f.transcript(true); await f.terminal();
+    await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'delivery', prompt: 'Explain the result.' });
+    await f.run({ hook_event_name: 'Stop', prompt_id: 'delivery' });
+    const result = await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'native-notice', source: 'system', prompt: '<task-notification>completed</task-notification>' });
+    expect(result.stdout).toBeNull(); expect(f.job().current.prompt_id).toBe('original');
+    await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'new-human', source: 'user', prompt: 'Continue with new work.' });
+    expect(f.job().current.prompt_id).toBe('new-human');
   });
   it('returns three unrelated human prompts to fresh Gate A after one idle policy delivery', async () => {
     const f = await fixture(); await f.launch(); f.transcript(true); await f.terminal();

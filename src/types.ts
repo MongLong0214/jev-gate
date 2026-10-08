@@ -206,6 +206,8 @@ export interface HookInput {
   last_assistant_message?: string;
   effort?: string;
   prompt?: string;
+  /** Native UserPromptSubmit author provenance; older payloads may omit it. */
+  source?: 'user' | 'sdk' | 'system' | 'loop_wakeup' | 'schedule_wakeup' | 'poll_event';
   tool_name?: string;
   tool_use_id?: string;
   tool_input?: unknown;
