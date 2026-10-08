@@ -93,6 +93,7 @@ import {
 } from './coordinator.js';
 import { buildPlanInterpretationRequest, classifyInterpretation, type PlanInterpretation } from './interpretation.js';
 import { callJev, MAX_REQUEST_BYTES, type JevOutcome, type JevRequest } from './jev.js';
+import { pendingBackgroundPolicy } from './job.js';
 import type { BoundKind } from './job.js';
 import {
   activeDeliverables,
@@ -146,6 +147,8 @@ import { evidenceFormatOnly, nearestFormatCommands, readWorkerObservation, refus
 import type { CheckVerification, ConfigV5, DenyReason, ErrorCode, ExecutionShape, HookInput, JobGeneration, JobState, LeanPending, ModelAgreement, Plan, PlannedTask, Receipt, Reservation, RoutingMode, Tier } from './types.js';
 import { agentForTier, LEAN_EXECUTOR_AGENT, OWNED_AGENTS, TIERS } from './types.js';
 import { EXECUTION_CONTROL_KEYS, MAX_PROMPT_BYTES } from './brief.js';
+import { normalizeUsage, usageCost } from './cost.js';
+import { providerPrice } from './provider-prices.js';
 import { subagentModelOverride } from './auth.js';
 
 export const MAX_STDIN_BYTES = 256 * 1024;
@@ -162,6 +165,8 @@ export interface HookDeps {
   startedAt?: number;
   /** Host facts supplied by an execution adapter. No policy is reimplemented here. */
   allocation?: DispatchAllocation;
+  /** Observations supplied locally by the host adapter; never classifier-generated forecasts. */
+  delegationPrices?: () => import('./admission.js').DelegationPrices | undefined;
   host?: {
     id: 'codex';
     recentRequests?: () => readonly string[];
@@ -259,7 +264,15 @@ const whitelistAnswers = (answers: Record<string, unknown>, keys: readonly strin
 const whitelistToolResponse = (r: unknown): Record<string, unknown> | null => {
   if (!isRecord(r)) return null;
   const usage = isRecord(r['usage']) ? r['usage'] : {};
+  const accounting = normalizeUsage('claude', usage);
+  const models = Array.isArray(r['modelsUsed']) ? [...new Set(r['modelsUsed'].filter((m): m is string => typeof m === 'string'))] : [];
+  const model = models.length > 1 ? null : models[0] ?? str(r['resolvedModel']);
+  const prompt = accounting.input !== null && accounting.read !== null && accounting.write !== null ? accounting.input + accounting.read + accounting.write : null;
+  const creation = isRecord(usage['cache_creation']) ? usage['cache_creation'] : {};
   return {
+    accounting_scope: 'agent_aggregate', accounting,
+    cost: usageCost(accounting, model ? providerPrice('claude', model, prompt, str(usage['service_tier'])) : null),
+    provider_reported_cost: null, subscription_cost: 'unknown',
     status: str(r['status']),
     agentId: str(r['agentId']),
     resolvedModel: str(r['resolvedModel']),
@@ -272,6 +285,9 @@ const whitelistToolResponse = (r: unknown): Record<string, unknown> | null => {
       output_tokens: num(usage['output_tokens']),
       cache_creation_input_tokens: num(usage['cache_creation_input_tokens']),
       cache_read_input_tokens: num(usage['cache_read_input_tokens']),
+      cache_creation: { ephemeral_5m_input_tokens: num(creation['ephemeral_5m_input_tokens']), ephemeral_1h_input_tokens: num(creation['ephemeral_1h_input_tokens']) },
+      thinking_tokens: num(isRecord(usage['output_tokens_details']) ? usage['output_tokens_details']['thinking_tokens'] : null),
+      service_tier: str(usage['service_tier']),
     },
   };
 };
@@ -994,15 +1010,24 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
   const interactivePrompt = (): HookResult | null => {
     if (caller.agent_id || caller.agent_type || !input.session_id || !input.prompt_id) return null;
     let gen: JobGeneration | null = null;
+    const notification = /^\s*<task-notification>/.test(input.prompt ?? '');
+    let delivered = false;
     const written = updateJob(deps.env, input.session_id, prev => {
-      if (!prev || !prev.current.background_job || prev.current.outcome !== null && !/^\s*<task-notification>/.test(input.prompt ?? '')) return null;
+      if (!prev || !prev.current.background_job || prev.current.outcome !== null && !notification && !!prev.current.background_delivery) return null;
+      const current = prev.current;
+      const idle = Object.keys(current.active).length === 0;
+      const result = createHash('sha256').update(JSON.stringify([current.receipts.length, current.plan?.rev, current.background_context ?? ''])).digest('hex');
+      // Repeated notifications are not new work. An ordinary prompt after delivery resumes Gate A/A2.
+      if (idle && current.background_delivery?.result === result) { delivered = notification; return null; }
       gen = prev.current;
-      return { ...prev, current: { ...prev.current, interactive_prompt_id: input.prompt_id! } };
+      return { ...prev, current: { ...current, interactive_prompt_id: input.prompt_id!, ...(idle ? { background_delivery: { result, prompt_id: input.prompt_id!, stalled_since: new Date().toISOString() } } : {}) } };
     });
+    if (written.ok && delivered) return skip();
     if (!written.ok || gen === null) return null;
     const current: JobGeneration = gen;
     const active = Object.keys(current.active).length;
     trace?.write('background_conversation', { ...base, active, execution_prompt_id: current.prompt_id });
+    if (!active && current.outcome === null) trace?.write('background_stalled', { ...base, execution_prompt_id: current.prompt_id, reason: 'policy_delivered_no_active_execution', stalled_since: new Date().toISOString(), admission_blocked: true });
     if (current.outcome !== null) return emitContext('UserPromptSubmit', `Jev Gate: this background completion notice does not start or replace a job. The original job's recorded outcome is ${current.outcome}; use its stored policy result below. A notification is not new work or acceptance.\n${current.background_context ?? ''}`, null);
     return emitContext('UserPromptSubmit', `Jev Gate: answer the user's new message in the main session. The original background job and its contracts remain current; this message does not cancel or replace them. ${active ? `${active} owned execution(s) still have no terminal result. Do not wait synchronously, duplicate their work, or edit their files. Continue answering questions here; native permissions and explicit user cancellation remain authoritative.` : 'The previous execution has ended; use the policy result below before continuing the original job.'}\n${current.background_context ?? ''}`, null);
   };
@@ -1045,7 +1070,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       const owner = prev?.current.prompt_id === gen.prompt_id ? own(prev.current.active, input.tool_use_id!) : undefined;
       if (!prev || !owner) return null;
       registered = true;
-      return { ...prev, current: { ...prev.current, background_job: true, active: { ...prev.current.active, [input.tool_use_id!]: { ...owner, background_execution: { token, agent_id: null, subagent_type: String(patched['subagent_type']), resolved_model: null } } } } };
+      return { ...prev, current: { ...pendingBackgroundPolicy(prev.current), background_job: true, active: { ...prev.current.active, [input.tool_use_id!]: { ...owner, background_execution: { token, agent_id: null, subagent_type: String(patched['subagent_type']), resolved_model: null } } } } };
     });
     if (!saved.ok || !registered) return emitDeny('dispatch_ineligible', 'Background execution reservation unavailable; no worker started.', null);
     trace?.write('background_dispatch', { ...base, execution_prompt_id: gen.prompt_id, role: r.role, task_id: r.task_id });
@@ -1106,7 +1131,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         tool_response: { status: observed.completed ? 'completed' : 'failed', agentId, resolvedModel: observed.model, content: [{ type: 'text', text: observed.text }] } };
       const result = await runHook({ ...deps, stdin: (async function* () { yield JSON.stringify(event); })() });
       const context = result.stdout ? JSON.parse(result.stdout)?.hookSpecificOutput?.additionalContext : null;
-      if (typeof context === 'string') updateJob(deps.env, sessionId, prev => prev?.current.prompt_id === owner.gen.prompt_id ? { ...prev, current: { ...prev.current, background_context: context } } : null);
+      if (typeof context === 'string') updateJob(deps.env, sessionId, prev => prev?.current.prompt_id === owner.gen.prompt_id ? { ...prev, current: { ...pendingBackgroundPolicy(prev.current), background_context: context } } : null);
     }
     trace?.write('background_terminal', { ...base, execution_prompt_id: owner.gen.prompt_id, tool_use_id: owner.id, task_id: owner.r.task_id, status: observed.completed ? 'completed' : 'failed' });
     return skip();
@@ -1352,6 +1377,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
           atomicAdmission ? buildAtomicAdmissionRequest(text, config) : buildAdmissionRequest(text, config);
         let admitted: (AdmissionDecision & { estimate?: AdmissionEstimate | null; execution?: 'single' | 'hierarchy' | null; preference?: 'bounded_tool_worker' }) | null =
           null;
+        const suppliedPrices = deps.delegationPrices?.();
         const askGateA = (text: string, facts: Record<string, unknown>): ReturnType<typeof callGate> => {
           if (!currentAdmission()) return Promise.resolve({ blocked: 'aborted' });
           const request = admissionRequest(text);
@@ -1365,7 +1391,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
             if (!outcome.ok) return { forced: false, decision: { shape: 'direct', decided: false, reason: outcome.code, changed_default: false } };
             if (atomicAdmission) admissionAnswers = outcome.response.answers;
             admitted = atomicAdmission
-              ? decideAdmissionAtomic(outcome.response.answers, contextTokens, floor, delegationModel(config), config)
+              ? decideAdmissionAtomic(outcome.response.answers, contextTokens, floor, { ...delegationModel(config), ...(suppliedPrices ? { prices: suppliedPrices } : {}) }, config)
               : decideAdmission(outcome.response.answers, config.admissionConfidenceFloor);
             if (atomicAdmission && admitted.execution === 'single' && !minimumSingleFits)
               admitted = { ...admitted, shape: 'direct', execution: null, decided: false, reason: 'admission_delivery_failed' };
@@ -1829,7 +1855,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
      */
     let carried: string | 'omitted' | null = carriedRequest;
     const requiredRequest = single?.gen.admission_revision === 'atomic-context-v1';
-    let composed = composeSingleWorkerPrompt(eligibility.prompt, carried, requiredRequest);
+    let composed = composeSingleWorkerPrompt(eligibility.prompt, carried, requiredRequest, single !== null && carried === single.gen.request);
     if (requiredRequest) {
       const fits =
         typeof single?.gen.request === 'string' &&
@@ -2620,10 +2646,12 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     const sessionId = input.session_id;
     if (!sessionId) return skip('missing_ids');
     let outcome: JobState['current']['outcome'] = null;
+    let idleBackground = false;
     updateJob(deps.env, sessionId, (prev) => {
       if (!prev || prev.current.outcome !== null) return null;
       const gen = prev.current;
-      if (gen.background_job && (Object.keys(gen.active).length > 0 || gen.shape !== 'direct' && gen.phase !== 'blocked' && !gen.root_fallback && (gen.execution === 'single' ? gen.receipts.filter(r => r.task_id === SINGLE_TASK_ID).at(-1)?.verdict !== 'accept' : !planComplete(gen)))) return null;
+      if (gen.background_job && (Object.keys(gen.active).length > 0 || !gen.background_delivery)) return null;
+      idleBackground = gen.background_job === true;
       const allAccepted = planComplete(gen);
       // A19: the single shape has no plan to complete, so its completion is the latest receipt of the one dispatch it
       // makes. That receipt is the worker's own report (reportedSingleVerdict), so `completed` is a weaker statement
@@ -2635,7 +2663,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       outcome = gen.phase === 'blocked' ? 'blocked' : gen.shape === 'direct' || allAccepted || singleDone ? 'completed' : 'incomplete';
       return { ...prev, current: { ...gen, outcome } };
     });
-    trace?.write('stop', { ...base, outcome });
+    trace?.write('stop', { ...base, outcome, ...(idleBackground && outcome === 'incomplete' ? { closed_reason: 'no_active_execution_after_policy_delivery' } : {}) });
     return skip();
   };
 

@@ -325,6 +325,7 @@ it('keeps old active work on the live rails while removing completed historical 
 it('pages a ten-thousand-step execution with live following and preserves a manually selected historical page', () => {
   const p=page(),steps=Array.from({length:10001},(_,i)=>step('cycle'+i,'router','host',{summary:'cycle '+i}));p.push(snapshot([run('large','codex',steps)]));
   expect(p.get('rail-history').querySelectorAll('.rail-record')).toHaveLength(1);
+  expect(p.get('trace').querySelectorAll('.span-row')).toHaveLength(100);
   expect(p.get('rail-history').textContent).toContain('cycle 10000');p.click('[data-rail-page="-1"]');
   expect(p.get('rail-history').querySelectorAll('.rail-record')).toHaveLength(100);expect(p.get('rail-follow').getAttribute('aria-pressed')).toBe('false');
   p.push(snapshot([run('large','codex',[...steps,step('cycle10001','router','host',{summary:'latest cycle'})])]));

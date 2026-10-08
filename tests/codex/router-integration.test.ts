@@ -1,5 +1,5 @@
 import { PassThrough } from 'node:stream';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
@@ -39,6 +39,65 @@ const fixture = async (external: boolean, model: string, effort: string, wait?: 
   return {rpc,policy,forward,emitted,fetchImpl,sent,request,start};
 };
 describe('original Codex root execution boundaries', () => {
+  it('preserves native effort update positions and does not treat the reported top-level effort as effective', async () => {
+    const f = await fixture(true, 'fixture-B', 'max');
+    const request = { ...f.request, input: [{ type: 'configuration_update', reasoning: { effort: 'low' } }, ...f.request.input] };
+    expect((await f.policy.externalRequest('root', request, new AbortController().signal)).request).toBe(request);
+    expect(f.fetchImpl).not.toHaveBeenCalled();
+    f.rpc.close();
+  });
+  it('records exact late and unbound consumption without overwriting a newer request cache', async () => {
+    const f = await fixture(true, 'fixture-B', 'max');
+    const before = f.policy.observeRequest('root', f.request)!;
+    const current = f.policy.observeRequest('root', f.request)!;
+    const response = { id: 'native-response', model: 'fixture-A', status: 'completed', output: [], usage: { input_tokens: 100, input_tokens_details: { cached_tokens: 80, cache_write_tokens: 10 }, output_tokens: 5 } };
+    f.policy.observeUsage('root', response, current);
+    expect(f.policy.sessions.get('root')?.cache?.read).toBe(80);
+    f.policy.observeUsage('root', { ...response, usage: { ...response.usage, input_tokens_details: { cached_tokens: 1, cache_write_tokens: 10 } } }, before);
+    expect(f.policy.sessions.get('root')?.cache?.read).toBe(80);
+    f.policy.sessions.delete('root'); f.policy.observeUsage('root', response, before); f.policy.observeUsage('root', response);
+    const records = readdirSync(join(dir, 'trace')).map(file => JSON.parse(readFileSync(join(dir, 'trace', file), 'utf8'))).filter(r => r.phase === 'codex_router_response');
+    expect(records.filter(r => r.request_id === before.requestId)).toHaveLength(2);
+    expect(records).toContainEqual(expect.objectContaining({ request_id: null, prompt_id: null, scope: 'unknown', reason: 'request_identity_unknown', usage: expect.objectContaining({ read: 80 }) }));
+    f.rpc.close();
+  });
+  it('routes each owned worker NEXT step once after a closed native tool pair, retaining the original contract', async () => {
+    const f = await fixture(false, 'gpt-6-luna', 'low');
+    f.policy.catalog = [
+      { model: 'gpt-6.1-sol', description: 'Latest workhorse model for coding and everyday work.', supportedReasoningEfforts: ['low', 'high'].map(reasoningEffort => ({ reasoningEffort })) },
+      { model: 'gpt-6-luna', description: 'Fast and affordable model for easier tasks.', supportedReasoningEfforts: ['low', 'high'].map(reasoningEffort => ({ reasoningEffort })) },
+    ];
+    const parent = f.policy.sessions.get('root')!;
+    const signal = new AbortController();
+    const child = { ...parent, id: 'owned-child', prompt: 'parent-prompt', role: 'jev-gate:worker', parent: 'root',
+      dispatch: { parent, prompt: 'parent-prompt', tool: 'dispatch', input: { prompt: 'Keep this complete contract. Investigate, edit and verify.' }, signal: signal.signal, worktree: null, startedAt: Date.now(), attempted: true } };
+    f.policy.sessions.set(child.id, child);
+    const first = { ...f.request, model: 'gpt-6.1-sol' };
+    expect((await f.policy.externalRequest(child.id, first, signal.signal)).request).toEqual(first);
+    expect(f.fetchImpl).not.toHaveBeenCalled();
+    const next = { ...first, input: [...first.input, { type: 'function_call', call_id: 'exact-tool', name: 'exec_command', arguments: 'PRIVATE_ARGUMENT' }, { type: 'function_call_output', call_id: 'exact-tool', output: 'PRIVATE_RESULT' }] };
+    const selected = (await f.policy.externalRequest(child.id, next, signal.signal)).request;
+    expect(selected).toMatchObject({ model: 'gpt-6-luna', reasoning: { effort: 'low', summary: 'auto' }, metadata: { original: true } });
+    expect(selected.input).toEqual(next.input);
+    await f.policy.externalRequest(child.id, next, signal.signal);
+    expect(f.fetchImpl).toHaveBeenCalledOnce();
+    expect(JSON.stringify(f.sent[0])).toContain('NEXT inference');
+    expect(JSON.stringify(f.sent[0])).toContain('Keep this complete contract');
+    expect(JSON.stringify(f.sent[0])).not.toMatch(/PRIVATE_ARGUMENT|PRIVATE_RESULT/);
+    const third = { ...next, input: [...next.input, { role: 'user', content: 'A new native suffix.' }] };
+    await f.policy.externalRequest(child.id, third, signal.signal);
+    expect(f.fetchImpl).toHaveBeenCalledTimes(2);
+    // A retry/late submission of step 1 must not take step 2's identity or rewind the counter.
+    const retried = (await f.policy.externalRequest(child.id, next, signal.signal)).request;
+    expect(f.policy.observeRequest(child.id, retried)?.index).toBe(1);
+    expect(f.policy.observeRequest(child.id, third)?.index).toBe(2);
+    const fourth = { ...third, input: [...third.input, { role: 'user', content: 'Another exact native suffix.' }] };
+    const last = (await f.policy.externalRequest(child.id, fourth, signal.signal)).request;
+    expect(f.policy.observeRequest(child.id, last)?.index).toBe(3);
+    signal.abort();
+    expect((await f.policy.externalRequest(child.id, third, signal.signal)).request).toEqual(third);
+    f.rpc.close();
+  });
   it('drops a stored target that the live catalog now marks as a previous generation', async () => {
     const f = await fixture(true, 'fixture-B', 'max');
     expect((await f.policy.externalRequest('root', f.request, new AbortController().signal)).request.model).toBe('fixture-B');
@@ -82,7 +141,7 @@ describe('original Codex root execution boundaries', () => {
     await f.policy.externalHook({ hook_event_name: 'UserPromptSubmit', session_id: 'root', turn_id: 'new-prompt', prompt: 'Diagnose and fix the next failure.' });
     const second = await f.policy.externalRequest('root', f.request, new AbortController().signal);
     expect(f.sent).toHaveLength(2);
-    expect(f.sent[1]?.['state']).toMatchObject({ execution: { cache: { source: 'provider_response_usage', previous_model: 'fixture-B', input_tokens: 42_000, cache_read_tokens: 40_000, cache_write_tokens: 1000, cross_model_reuse_proven: false, current_fit_proven: false } } });
+    expect(f.sent[1]?.['state']).toMatchObject({ execution: { cache: { source: 'provider_response_usage', previous_model: 'fixture-B', input_tokens: 1000, cache_read_tokens: 40_000, cache_write_tokens: 1000, cross_model_reuse_proven: false, current_fit_proven: false } } });
     expect(second.request.model).toBe('fixture-B'); expect(f.policy.sessions.size).toBe(1); f.rpc.close();
   });
   it.each([false,true].flatMap(external => [['__keep__','high'],['__keep__','low'],['fixture-B','high'],['fixture-B','max']].map(([model,effort])=>[external,model!,effort!] as const)))('same root keep/effort/model/both external=%s %s/%s',async(external,model,effort)=>{

@@ -21,8 +21,8 @@ jobs:
         id: models
         run: |
           npm run models:update
-          git diff --binary -- src/claude-models.ts > "$RUNNER_TEMP/model-update.patch"
-          git diff --exit-code -- src/claude-models.ts
+          git diff --binary -- src/claude-models.ts src/provider-prices-data.ts > "$RUNNER_TEMP/model-update.patch"
+          git diff --exit-code -- src/claude-models.ts src/provider-prices-data.ts
       - name: Save the proposed metadata update
         if: failure() && steps.models.outcome == 'failure'
         uses: actions/upload-artifact@v4

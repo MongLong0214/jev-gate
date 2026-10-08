@@ -54,6 +54,7 @@ export const pairValidFor = (c: RouteCandidate, edit: EffortEdit, current: strin
 export const offerPairs = (args: {
   baseline: PairOffer['baseline']; candidates: readonly RouteCandidate[]; model: boolean; effort: boolean;
   upgrade: number; downgrade: number;
+  scope?: 'root' | 'child';
 }): PairOffer | null => {
   const baselineCandidate = args.candidates.find(c => c.id === args.baseline.model);
   const candidates = args.candidates.filter(c => c.id !== KEEP && c.id !== ABSTAIN &&
@@ -81,8 +82,18 @@ export const offerPairs = (args: {
   questions['action_risk'] = { type: 'choice', instructions: `${CONTEXT} Does the requested work itself operate a live system, transfer money or make an irreversible change? Writing/testing code about these is ordinary.`, criteria: {
     ordinary: 'The requested work itself makes no live or irreversible change.', consequential: 'The requested work itself makes a consequential live or irreversible change.', unclear: 'The supplied task and context do not establish the risk.',
   } };
+  if (args.scope === 'child') {
+    for (const question of Object.values(questions)) question.instructions = question.instructions
+      .replace('complete the ENTIRE requested outcome', 'perform the NEXT inference after the observed tool outcomes')
+      .replace('completing the entire task require', 'performing the NEXT inference require')
+      .replace('Prefer keeping a large cached root for short follow-ups whose isolated work can use a fresh worker.', 'Keep the original worker and its contract; this decision does not spawn another worker.')
+      .replaceAll('current root', 'current worker');
+  }
   return { ...args, ...(baselineCandidate ? { baselineCandidate } : {}), candidates: offered, questions, effortQuestions, modelAsked: alternatives.length > 0, effortEnabled: args.effort };
 };
+
+/** Holding a model reuses ONLY that model's conditional effort answer from the same batch. */
+export const keepModelPair = (offer: PairOffer, raw: unknown): ReturnType<typeof selectPair> => selectPair({ ...offer, modelAsked: false }, raw);
 
 export const selectPair = (offer: PairOffer, raw: unknown): { patch: PairPatch; reasons: { model: string; effort: string }; diagnostics: { direction: string; threshold: number | null; probability: number | null; effort_policy: string; pair_valid: boolean } } => {
   const answers = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : {};

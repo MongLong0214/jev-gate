@@ -1,0 +1,1760 @@
+{
+  "revision": "claude-code-observed-list-estimate-2026-10-08",
+  "source": "https://github.com/MongLong0214/jev-gate/issues/202",
+  "note": "Numeric aggregates only. Observed Sonnet read rate 0.20 differs from the current official 0.10; this fixture is not the production price table. All observed writes were 1h.",
+  "prices": {
+    "claude-opus-5-5": {
+      "input": 4,
+      "read": 0.2,
+      "write1h": 8,
+      "write5m": 5,
+      "output": 20
+    },
+    "claude-sonnet-5-5": {
+      "input": 2,
+      "read": 0.2,
+      "write1h": 4,
+      "write5m": 2.5,
+      "output": 10
+    },
+    "claude-haiku-5-5": {
+      "input": 0.1,
+      "read": 0.01,
+      "write1h": 0.2,
+      "write5m": 0.125,
+      "output": 0.5
+    }
+  },
+  "rows": [
+    {
+      "cell": "personal-F-A-1.prime.json",
+      "cost_usd": 0.6848544,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 67712,
+            "cache_creation_input_tokens": 73532,
+            "output_tokens": 4152,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 73532
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "personal-F-A-1.raw.json",
+      "cost_usd": 1.1616724,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 26,
+            "cache_read_input_tokens": 1122882,
+            "cache_creation_input_tokens": 92004,
+            "output_tokens": 10048,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 92004
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "personal-F-A-2.prime.json",
+      "cost_usd": 0.6859024,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 67712,
+            "cache_creation_input_tokens": 73528,
+            "output_tokens": 4206,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 73528
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "personal-F-A-2.raw.json",
+      "cost_usd": 1.1401341999999999,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 22,
+            "cache_read_input_tokens": 942891,
+            "cache_creation_input_tokens": 94471,
+            "output_tokens": 9785,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 94471
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "personal-F-A-3.prime.json",
+      "cost_usd": 0.6844944,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 67712,
+            "cache_creation_input_tokens": 73587,
+            "output_tokens": 4112,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 73587
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "personal-F-A-3.raw.json",
+      "cost_usd": 1.0667246000000001,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 22,
+            "cache_read_input_tokens": 920943,
+            "cache_creation_input_tokens": 88356,
+            "output_tokens": 8780,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 88356
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "personal-F-B-1.prime.json",
+      "cost_usd": 0.687478,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 68030,
+            "cache_creation_input_tokens": 73902,
+            "output_tokens": 4132,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 73902
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "personal-F-B-1.raw.json",
+      "cost_usd": 1.1200852000000001,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 20,
+            "cache_read_input_tokens": 849046,
+            "cache_creation_input_tokens": 94307,
+            "output_tokens": 9787,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 94307
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "personal-F-B-2.prime.json",
+      "cost_usd": 0.7298499999999999,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 68030,
+            "cache_creation_input_tokens": 74116,
+            "output_tokens": 6165,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 74116
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "personal-F-B-2.raw.json",
+      "cost_usd": 1.1667727999999997,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 22,
+            "cache_read_input_tokens": 955844,
+            "cache_creation_input_tokens": 94697,
+            "output_tokens": 10897,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 94697
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "personal-F-B-3.prime.json",
+      "cost_usd": 0.6892659999999999,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 68030,
+            "cache_creation_input_tokens": 73918,
+            "output_tokens": 4215,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 73918
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "personal-F-B-3.raw.json",
+      "cost_usd": 1.1467906,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 24,
+            "cache_read_input_tokens": 1049053,
+            "cache_creation_input_tokens": 93533,
+            "output_tokens": 9431,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 93533
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "personal-F-D-1.prime.json",
+      "cost_usd": 0.020319700000000003,
+      "models": [
+        {
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 56800,
+            "cache_creation_input_tokens": 86829,
+            "output_tokens": 4771,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 86829
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "personal-F-D-1.raw.json",
+      "cost_usd": 0.8671739,
+      "models": [
+        {
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 56800,
+            "cache_creation_input_tokens": 86829,
+            "output_tokens": 4771,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 86829
+            }
+          }
+        },
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 12,
+            "cache_read_input_tokens": 487691,
+            "cache_creation_input_tokens": 86896,
+            "output_tokens": 2705,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 86896
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "personal-F-D-2.prime.json",
+      "cost_usd": 0.0173853,
+      "models": [
+        {
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 68030,
+            "cache_creation_input_tokens": 74023,
+            "output_tokens": 3800,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 74023
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "personal-F-D-2.raw.json",
+      "cost_usd": 0.9175035000000001,
+      "models": [
+        {
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 68030,
+            "cache_creation_input_tokens": 74023,
+            "output_tokens": 3800,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 74023
+            }
+          }
+        },
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 14,
+            "cache_read_input_tokens": 597371,
+            "cache_creation_input_tokens": 90091,
+            "output_tokens": 2993,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 90091
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "personal-F-D-3.prime.json",
+      "cost_usd": 0.0182902,
+      "models": [
+        {
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 68030,
+            "cache_creation_input_tokens": 74075,
+            "output_tokens": 5589,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 74075
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "personal-F-D-3.raw.json",
+      "cost_usd": 1.0119270000000002,
+      "models": [
+        {
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 68030,
+            "cache_creation_input_tokens": 74075,
+            "output_tokens": 5589,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 74075
+            }
+          }
+        },
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 20,
+            "cache_read_input_tokens": 890444,
+            "cache_creation_input_tokens": 90846,
+            "output_tokens": 4435,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 90846
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "personal-R-A-1.prime.json",
+      "cost_usd": 0.6958806,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 66083,
+            "cache_creation_input_tokens": 75211,
+            "output_tokens": 4048,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 75211
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "personal-R-A-1.raw.json",
+      "cost_usd": 2.3260084,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 54,
+            "cache_read_input_tokens": 3012182,
+            "cache_creation_input_tokens": 133742,
+            "output_tokens": 32671,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 133742
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "personal-R-A-2.prime.json",
+      "cost_usd": 0.6833704,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 67712,
+            "cache_creation_input_tokens": 73544,
+            "output_tokens": 4073,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 73544
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "personal-R-A-2.raw.json",
+      "cost_usd": 2.223316,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 46,
+            "cache_read_input_tokens": 2544000,
+            "cache_creation_input_tokens": 134024,
+            "output_tokens": 32107,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 134024
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "personal-R-A-3.prime.json",
+      "cost_usd": 0.691722,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 69170,
+            "cache_creation_input_tokens": 73544,
+            "output_tokens": 4476,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 73544
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "personal-R-A-3.raw.json",
+      "cost_usd": 2.330665,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 62,
+            "cache_read_input_tokens": 3495685,
+            "cache_creation_input_tokens": 126770,
+            "output_tokens": 30856,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 126770
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "personal-R-B-1.prime.json",
+      "cost_usd": 0.6921896000000001,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 69488,
+            "cache_creation_input_tokens": 73872,
+            "output_tokens": 4365,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 73872
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "personal-R-B-1.raw.json",
+      "cost_usd": 2.24949,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 18,
+            "cache_read_input_tokens": 761059,
+            "cache_creation_input_tokens": 95990,
+            "output_tokens": 13479,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 95990
+            }
+          }
+        },
+        {
+          "model": "claude-sonnet-5-5",
+          "usage": {
+            "input_tokens": 40,
+            "cache_read_input_tokens": 1664421,
+            "cache_creation_input_tokens": 127298,
+            "output_tokens": 21755,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 127298
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "personal-R-B-2.prime.json",
+      "cost_usd": 0.68457,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 68030,
+            "cache_creation_input_tokens": 74001,
+            "output_tokens": 3947,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 74001
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "personal-R-B-2.raw.json",
+      "cost_usd": 2.9115750000000005,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 16,
+            "cache_read_input_tokens": 654492,
+            "cache_creation_input_tokens": 100683,
+            "output_tokens": 14770,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 100683
+            }
+          }
+        },
+        {
+          "model": "claude-sonnet-5-5",
+          "usage": {
+            "input_tokens": 58,
+            "cache_read_input_tokens": 2199393,
+            "cache_creation_input_tokens": 214796,
+            "output_tokens": 38057,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 214796
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "personal-R-B-3.prime.json",
+      "cost_usd": 0.688878,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 68030,
+            "cache_creation_input_tokens": 73987,
+            "output_tokens": 4168,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 73987
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "personal-R-B-3.raw.json",
+      "cost_usd": 2.341646,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 16,
+            "cache_read_input_tokens": 658027,
+            "cache_creation_input_tokens": 98096,
+            "output_tokens": 15005,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 98096
+            }
+          }
+        },
+        {
+          "model": "claude-sonnet-5-5",
+          "usage": {
+            "input_tokens": 46,
+            "cache_read_input_tokens": 1942013,
+            "cache_creation_input_tokens": 123966,
+            "output_tokens": 24075,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 123966
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "personal-R-D-1.prime.json",
+      "cost_usd": 0.0172185,
+      "models": [
+        {
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 68030,
+            "cache_creation_input_tokens": 74009,
+            "output_tokens": 3472,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 74009
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "personal-R-D-1.raw.json",
+      "cost_usd": 2.7850846999999987,
+      "models": [
+        {
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 68030,
+            "cache_creation_input_tokens": 74009,
+            "output_tokens": 3472,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 74009
+            }
+          }
+        },
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 12,
+            "cache_read_input_tokens": 505042,
+            "cache_creation_input_tokens": 97805,
+            "output_tokens": 7450,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 97805
+            }
+          }
+        },
+        {
+          "model": "claude-sonnet-5-5",
+          "usage": {
+            "input_tokens": 70,
+            "cache_read_input_tokens": 2677749,
+            "cache_creation_input_tokens": 204975,
+            "output_tokens": 37978,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 204975
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "personal-R-D-2.prime.json",
+      "cost_usd": 0.017244879999999997,
+      "models": [
+        {
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 69488,
+            "cache_creation_input_tokens": 73948,
+            "output_tokens": 3520,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 73948
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "personal-R-D-2.raw.json",
+      "cost_usd": 2.1256552799999997,
+      "models": [
+        {
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 69488,
+            "cache_creation_input_tokens": 73948,
+            "output_tokens": 3520,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 73948
+            }
+          }
+        },
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 10,
+            "cache_read_input_tokens": 392489,
+            "cache_creation_input_tokens": 91124,
+            "output_tokens": 7801,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 91124
+            }
+          }
+        },
+        {
+          "model": "claude-sonnet-5-5",
+          "usage": {
+            "input_tokens": 48,
+            "cache_read_input_tokens": 1649733,
+            "cache_creation_input_tokens": 152407,
+            "output_tokens": 20519,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 152407
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "personal-R-D-3.prime.json",
+      "cost_usd": 0.0173371,
+      "models": [
+        {
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 68030,
+            "cache_creation_input_tokens": 74177,
+            "output_tokens": 3642,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 74177
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "personal-R-D-3.raw.json",
+      "cost_usd": 2.0265421,
+      "models": [
+        {
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 68030,
+            "cache_creation_input_tokens": 74177,
+            "output_tokens": 3642,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 74177
+            }
+          }
+        },
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 12,
+            "cache_read_input_tokens": 494304,
+            "cache_creation_input_tokens": 90539,
+            "output_tokens": 6639,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 90539
+            }
+          }
+        },
+        {
+          "model": "claude-sonnet-5-5",
+          "usage": {
+            "input_tokens": 36,
+            "cache_read_input_tokens": 1223131,
+            "cache_creation_input_tokens": 152919,
+            "output_tokens": 19683,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 152919
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "clean-F-A-1.prime.json",
+      "cost_usd": 0.487217,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 43205,
+            "cache_creation_input_tokens": 50595,
+            "output_tokens": 3690,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 50595
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "clean-F-A-1.raw.json",
+      "cost_usd": 0.71695,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 16,
+            "cache_read_input_tokens": 445890,
+            "cache_creation_input_tokens": 62161,
+            "output_tokens": 6521,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 62161
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "clean-F-A-2.prime.json",
+      "cost_usd": 0.4800348,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 44834,
+            "cache_creation_input_tokens": 48939,
+            "output_tokens": 3977,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 48939
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "clean-F-A-2.raw.json",
+      "cost_usd": 0.7354189999999999,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 18,
+            "cache_read_input_tokens": 521995,
+            "cache_creation_input_tokens": 61126,
+            "output_tokens": 7097,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 61126
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "clean-F-A-3.prime.json",
+      "cost_usd": 0.48277079999999994,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 44834,
+            "cache_creation_input_tokens": 49011,
+            "output_tokens": 4085,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 49011
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "clean-F-A-3.raw.json",
+      "cost_usd": 0.7175431999999999,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 16,
+            "cache_read_input_tokens": 447396,
+            "cache_creation_input_tokens": 60500,
+            "output_tokens": 7200,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 60500
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "clean-F-A-4.prime.json",
+      "cost_usd": 0.4778468,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 44834,
+            "cache_creation_input_tokens": 48958,
+            "output_tokens": 3860,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 48958
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "clean-F-A-4.raw.json",
+      "cost_usd": 0.7185262,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 16,
+            "cache_read_input_tokens": 457011,
+            "cache_creation_input_tokens": 62520,
+            "output_tokens": 6345,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 62520
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "clean-F-A-5.prime.json",
+      "cost_usd": 0.47968679999999997,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 44834,
+            "cache_creation_input_tokens": 48968,
+            "output_tokens": 3948,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 48968
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "clean-F-A-5.raw.json",
+      "cost_usd": 0.7273069999999999,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 18,
+            "cache_read_input_tokens": 518835,
+            "cache_creation_input_tokens": 60916,
+            "output_tokens": 6807,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 60916
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "clean-F-D-1.prime.json",
+      "cost_usd": 0.01452901,
+      "models": [
+        {
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 33051,
+            "cache_creation_input_tokens": 62278,
+            "output_tokens": 3485,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 62278
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "clean-F-D-1.raw.json",
+      "cost_usd": 0.65189761,
+      "models": [
+        {
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 33051,
+            "cache_creation_input_tokens": 62278,
+            "output_tokens": 3485,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 62278
+            }
+          }
+        },
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 14,
+            "cache_read_input_tokens": 429143,
+            "cache_creation_input_tokens": 61628,
+            "output_tokens": 2923,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 61628
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "clean-F-D-2.prime.json",
+      "cost_usd": 0.01231544,
+      "models": [
+        {
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 45514,
+            "cache_creation_input_tokens": 49907,
+            "output_tokens": 3757,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 49907
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "clean-F-D-2.raw.json",
+      "cost_usd": 0.57669424,
+      "models": [
+        {
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 45514,
+            "cache_creation_input_tokens": 49907,
+            "output_tokens": 3757,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 49907
+            }
+          }
+        },
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 8,
+            "cache_read_input_tokens": 215074,
+            "cache_creation_input_tokens": 59629,
+            "output_tokens": 2215,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 59629
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "clean-F-D-3.prime.json",
+      "cost_usd": 0.01173144,
+      "models": [
+        {
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 45514,
+            "cache_creation_input_tokens": 49057,
+            "output_tokens": 2929,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 49057
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "clean-F-D-3.raw.json",
+      "cost_usd": 0.62337024,
+      "models": [
+        {
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 45514,
+            "cache_creation_input_tokens": 49057,
+            "output_tokens": 2929,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 49057
+            }
+          }
+        },
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 14,
+            "cache_read_input_tokens": 421494,
+            "cache_creation_input_tokens": 58858,
+            "output_tokens": 2821,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 58858
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "clean-F-D-4.prime.json",
+      "cost_usd": 0.01239974,
+      "models": [
+        {
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 45514,
+            "cache_creation_input_tokens": 50001,
+            "output_tokens": 3888,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 50001
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "clean-F-D-4.raw.json",
+      "cost_usd": 0.64413834,
+      "models": [
+        {
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 45514,
+            "cache_creation_input_tokens": 50001,
+            "output_tokens": 3888,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 50001
+            }
+          }
+        },
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 14,
+            "cache_read_input_tokens": 430733,
+            "cache_creation_input_tokens": 62077,
+            "output_tokens": 2446,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 62077
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "clean-F-D-5.prime.json",
+      "cost_usd": 0.012214140000000002,
+      "models": [
+        {
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 45514,
+            "cache_creation_input_tokens": 49803,
+            "output_tokens": 3596,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 49803
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "clean-F-D-5.raw.json",
+      "cost_usd": 0.57688394,
+      "models": [
+        {
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 45514,
+            "cache_creation_input_tokens": 49803,
+            "output_tokens": 3596,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 49803
+            }
+          }
+        },
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 10,
+            "cache_read_input_tokens": 282969,
+            "cache_creation_input_tokens": 58092,
+            "output_tokens": 2165,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 58092
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "clean-R-A-1.prime.json",
+      "cost_usd": 0.488945,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 43205,
+            "cache_creation_input_tokens": 50596,
+            "output_tokens": 3776,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 50596
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "clean-R-A-1.raw.json",
+      "cost_usd": 1.2790334,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 36,
+            "cache_read_input_tokens": 1337227,
+            "cache_creation_input_tokens": 83773,
+            "output_tokens": 17063,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 83773
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "clean-R-A-2.prime.json",
+      "cost_usd": 0.4821668,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 44834,
+            "cache_creation_input_tokens": 48993,
+            "output_tokens": 4062,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 48993
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "clean-R-A-2.raw.json",
+      "cost_usd": 0.9925904000000001,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 24,
+            "cache_read_input_tokens": 761212,
+            "cache_creation_input_tokens": 69929,
+            "output_tokens": 14041,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 69929
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "clean-R-A-3.prime.json",
+      "cost_usd": 0.47752680000000003,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 44834,
+            "cache_creation_input_tokens": 49063,
+            "output_tokens": 3802,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 49063
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "clean-R-A-3.raw.json",
+      "cost_usd": 0.9926104,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 22,
+            "cache_read_input_tokens": 684832,
+            "cache_creation_input_tokens": 70867,
+            "output_tokens": 14431,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 70867
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "clean-R-A-4.prime.json",
+      "cost_usd": 0.47751479999999996,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 44834,
+            "cache_creation_input_tokens": 48959,
+            "output_tokens": 3843,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 48959
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "clean-R-A-4.raw.json",
+      "cost_usd": 1.0474223999999999,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 26,
+            "cache_read_input_tokens": 837352,
+            "cache_creation_input_tokens": 71991,
+            "output_tokens": 15196,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 71991
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "clean-R-A-5.prime.json",
+      "cost_usd": 0.4765388,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 44834,
+            "cache_creation_input_tokens": 48957,
+            "output_tokens": 3795,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 48957
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "clean-R-A-5.raw.json",
+      "cost_usd": 1.1947401999999998,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 30,
+            "cache_read_input_tokens": 1052661,
+            "cache_creation_input_tokens": 79221,
+            "output_tokens": 17516,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 79221
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "clean-R-D-1.prime.json",
+      "cost_usd": 0.01169154,
+      "models": [
+        {
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 45514,
+            "cache_creation_input_tokens": 49085,
+            "output_tokens": 2838,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 49085
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "clean-R-D-1.raw.json",
+      "cost_usd": 1.1048487400000002,
+      "models": [
+        {
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 45514,
+            "cache_creation_input_tokens": 49085,
+            "output_tokens": 2838,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 49085
+            }
+          }
+        },
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 20,
+            "cache_read_input_tokens": 720586,
+            "cache_creation_input_tokens": 85135,
+            "output_tokens": 13394,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 85135
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "clean-R-D-2.prime.json",
+      "cost_usd": 0.01240034,
+      "models": [
+        {
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 45514,
+            "cache_creation_input_tokens": 50079,
+            "output_tokens": 3858,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 50079
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "clean-R-D-2.raw.json",
+      "cost_usd": 1.09911314,
+      "models": [
+        {
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 45514,
+            "cache_creation_input_tokens": 50079,
+            "output_tokens": 3858,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 50079
+            }
+          }
+        },
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 26,
+            "cache_read_input_tokens": 962484,
+            "cache_creation_input_tokens": 79989,
+            "output_tokens": 12710,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 79989
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "clean-R-D-3.prime.json",
+      "cost_usd": 0.01295624,
+      "models": [
+        {
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 45514,
+            "cache_creation_input_tokens": 50056,
+            "output_tokens": 4979,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 50056
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "clean-R-D-3.raw.json",
+      "cost_usd": 1.1941236400000002,
+      "models": [
+        {
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 45514,
+            "cache_creation_input_tokens": 50056,
+            "output_tokens": 4979,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 50056
+            }
+          }
+        },
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 28,
+            "cache_read_input_tokens": 1097157,
+            "cache_creation_input_tokens": 88323,
+            "output_tokens": 12752,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 88323
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "clean-R-D-4.prime.json",
+      "cost_usd": 0.012246940000000001,
+      "models": [
+        {
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 45514,
+            "cache_creation_input_tokens": 49897,
+            "output_tokens": 3624,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 49897
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "clean-R-D-4.raw.json",
+      "cost_usd": 1.0900943400000003,
+      "models": [
+        {
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 45514,
+            "cache_creation_input_tokens": 49897,
+            "output_tokens": 3624,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 49897
+            }
+          }
+        },
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 26,
+            "cache_read_input_tokens": 975237,
+            "cache_creation_input_tokens": 81927,
+            "output_tokens": 11364,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 81927
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "clean-R-D-5.prime.json",
+      "cost_usd": 0.01237144,
+      "models": [
+        {
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 45514,
+            "cache_creation_input_tokens": 50092,
+            "output_tokens": 3795,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 50092
+            }
+          }
+        }
+      ]
+    },
+    {
+      "cell": "clean-R-D-5.raw.json",
+      "cost_usd": 1.0964656400000004,
+      "models": [
+        {
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input_tokens": 4,
+            "cache_read_input_tokens": 45514,
+            "cache_creation_input_tokens": 50092,
+            "output_tokens": 3795,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 50092
+            }
+          }
+        },
+        {
+          "model": "claude-opus-5-5",
+          "usage": {
+            "input_tokens": 22,
+            "cache_read_input_tokens": 803491,
+            "cache_creation_input_tokens": 80921,
+            "output_tokens": 13797,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 80921
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

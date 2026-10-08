@@ -410,6 +410,8 @@ export interface JobGeneration {
   /** Conversation turns can advance while this original execution contract stays current. */
   background_job?: true;
   interactive_prompt_id?: string;
+  /** Exact stored result delivered after all native executions ended; unrelated prompts can then supersede. */
+  background_delivery?: { result: string; prompt_id: string; stalled_since: string };
   /** Terminal policy guidance delivered to the root, rather than to a SubagentStop child context. */
   background_context?: string;
 }

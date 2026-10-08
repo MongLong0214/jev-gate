@@ -254,6 +254,8 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
     summary = text(shape, action, tier, reason) || (state === 'skipped' ? '전송 없이 원래 경로 유지' : '응답 기록됨');
     if (phase === 'codex_router_result') {
       summary = text(token(r['selected_model']), token(r['selected_effort']), token(r['reason']));
+      if (r['scope'] === 'child') details.push(`워커 다음 추론 · 단계 ${n(number(r['index']))}`);
+      const costs = field(r, 'cost'); if (costs) details.push(`전환 비용 ${token(costs['reason']) ?? 'unknown'} · 미래 출력 미확인`);
       const reasons = field(r, 'reasons');
       details.push(text(`모델 ${token(reasons?.['model']) ?? token(reasons?.['tier']) ?? '유지'}`, `effort ${token(reasons?.['effort']) ?? '유지'}`, '선택 결과 · 전송과 응답 확인은 별도 기록'));
     }
@@ -386,7 +388,7 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
     : phase === 'plan' && field(r, 'planner_model') ? modelObservation(field(r, 'planner_model')?.['requested'], field(r, 'planner_model')?.['observed'])
     : phase === 'post' || phase === 'failure' || phase === 'background_launch' ? modelObservation(r['requested_model'], r['resolved_model']) : undefined;
   if (model && phase === 'codex_route_applied' && r['request_kind'] === 'root_response' && typeof r['applied'] === 'boolean') model.requestApplied = r['applied'];
-  const routing: OperationStep['routing'] = phase.startsWith('codex_router_') || phase === 'codex_route_applied' ? { scope: 'root', baseline: token(r['baseline_model']), modelReason: token(field(r, 'reasons')?.['model']), effortReason: token(field(r, 'reasons')?.['effort']) } : phase === 'pre_result' && field(r, 'allocation') ? { scope: 'owned', baseline: token(field(r, 'allocation')?.['baseline_model']), modelReason: 'gate_allocated', effortReason: 'gate_allocated' } : undefined;
+  const routing: OperationStep['routing'] = phase.startsWith('codex_router_') || phase === 'codex_route_applied' ? { scope: r['scope'] === 'child' ? 'child' : 'root', baseline: token(r['baseline_model']), modelReason: token(field(r, 'reasons')?.['model']), effortReason: token(field(r, 'reasons')?.['effort']) } : phase === 'pre_result' && field(r, 'allocation') ? { scope: 'owned', baseline: token(field(r, 'allocation')?.['baseline_model']), modelReason: 'gate_allocated', effortReason: 'gate_allocated' } : undefined;
   const proposal = field(field(r, 'answers'), 'model');
   const proposedModel = token(proposal?.['choice']);
   if (routing && proposedModel && !['__keep__', '__abstain__'].includes(proposedModel)) {
@@ -583,7 +585,7 @@ const debugGroup = (row: DebugRecord): string => row.component === 'router'
 export const buildOperations = (records: Rec[], debug: DebugRecord[], now: Date, availability: { trace: boolean; debug: boolean; host?: Host }): OperationsView => {
   records = allocatedTraceRecords(records);
   const codexDecisions = new Map<string, Rec>();
-  const codexKey = (r: Rec): string | null => r['host'] === 'codex' && token(r['session_id']) && token(r['prompt_id']) ? JSON.stringify([r['session_id'], r['prompt_id']]) : null;
+  const codexKey = (r: Rec): string | null => r['host'] === 'codex' && token(r['session_id']) && token(r['prompt_id']) ? JSON.stringify([r['session_id'], r['prompt_id'], r['scope'] === 'child' ? r['agent_id'] : null, r['scope'] === 'child' ? r['index'] ?? null : null]) : null;
   for (const r of records) { const key = codexKey(r); if (key && r['phase'] === 'codex_router_result') codexDecisions.set(key, r); }
   records = records.map(r => {
     const key = codexKey(r), decision = key ? codexDecisions.get(key) : undefined;

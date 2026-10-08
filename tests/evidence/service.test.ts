@@ -153,7 +153,7 @@ describe('bounds', () => {
     const files: Record<string, string> = { 'huge/big.ts': 'x'.repeat(LIMITS.fileBytes + 1) };
     for (let i = 0; i < 205; i++) files[`many/f${String(i).padStart(3, '0')}.ts`] = numbered(240);
     const root = repo(files);
-    const capped = await run(await local(root), { goal: 'x', mode: 'audit', roots: ['many'], limit: 1 });
+    const capped = await run(createEvidenceService(await config(root), { apiKey: null, now: () => 0 }), { goal: 'x', mode: 'audit', roots: ['many'], limit: 1 });
     expect(capped.coverage).toMatchObject({ inventoryComplete: true, filesTotal: 205, readFiles: LIMITS.files, candidates: LIMITS.candidates, sourceIncomplete: true });
     expect(capped).toMatchObject({ status: 'partial', reasonCodes: ['source_limit', 'remote_disabled'] });
     const big = await run(await local(root), { goal: 'x', mode: 'audit', roots: ['huge'] });

@@ -1,6 +1,7 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
+import { createHash } from 'node:crypto';
 import ts from 'typescript';
 import { build } from 'esbuild';
 
@@ -10,6 +11,10 @@ export const SOURCES = {
   effort: 'https://platform.claude.com/docs/en/build-with-claude/effort.md',
   releases: 'https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md',
   codex: 'https://raw.githubusercontent.com/openai/codex/main/codex-rs/models-manager/models.json',
+  caching: 'https://platform.claude.com/docs/en/build-with-claude/prompt-caching.md',
+  sol: 'https://developers.openai.com/api/docs/models/gpt-6.1-sol.md',
+  luna: 'https://developers.openai.com/api/docs/models/gpt-6-luna.md',
+  astra: 'https://developers.openai.com/api/docs/models/gpt-6-astra.md',
 };
 const FAMILIES = ['fable', 'opus', 'sonnet', 'haiku'];
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
@@ -166,6 +171,40 @@ export function replaceFacts(source, facts) {
   return source.slice(0, node.getStart(file)) + literal + source.slice(node.end);
 }
 
+export function priceMetadata(raw, official) {
+  const result = [];
+  const add = (host, model, source, bands) => result.push({ host, model, source,
+    revision: createHash('sha256').update(JSON.stringify(bands)).digest('hex').slice(0, 16), bands });
+  for (const model of official) {
+    const [, family, ...version] = model.ids[0].split('-');
+    const name = `Claude ${family[0].toUpperCase() + family.slice(1)} ${version.join('.')}`;
+    const lines = raw.caching.split('\n').filter(l => l.startsWith('| ' + name + ' ') && l.includes('$'));
+    requireFact(lines.length > 0, `Missing official cache pricing: ${name}`);
+    const bands = lines.map(line => {
+      const values = [...line.matchAll(/\$(\d+(?:\.\d+)?)/g)].map(m => Number(m[1]));
+      requireFact(values.length === 5 && values.every(v => Number.isFinite(v) && v >= 0), `Ambiguous cache rates: ${name}`);
+      const bound = /up to ([\d,]+) tokens/.exec(line);
+      requireFact(!/prompts/.test(line) || bound || /over [\d,]+ tokens/.test(line), `Unknown long-context band: ${name}`);
+      return { maxPrompt: bound ? Number(bound[1].replaceAll(',', '')) : model.contextTokens,
+        input: values[0], write5m: values[1], write1h: values[2], read: values[3], output: values[4] };
+    }).sort((a, b) => a.maxPrompt - b.maxPrompt);
+    add('claude', model.ids[0], SOURCES.caching.replace(/\.md$/, ''), bands);
+  }
+  for (const key of ['sol', 'luna', 'astra']) {
+    const text = raw[key];
+    const model = /Model ID: `([^`]+)`/.exec(text)?.[1];
+    const value = name => Number(new RegExp('^\\| ' + name + ' \\| \\$(\\d+(?:\\.\\d+)?) \\| 1M tokens \\|$', 'm').exec(text)?.[1]);
+    const context = /Maximum input tokens: ([\d,]+)/.exec(text)?.[1];
+    const base = { input: value('Input'), read: value('Cached input'), write: value('Cache writes'), output: value('Output') };
+    requireFact(model && context && Object.values(base).every(v => Number.isFinite(v) && v >= 0), `Unknown OpenAI price contract: ${key}`);
+    const limit = Number(context.replaceAll(',', ''));
+    const long = /Prompts with more than (\d+)K input tokens are priced at 2x input and cache rates and 1\.5x output/.exec(text);
+    const bands = long ? [{ ...base, maxPrompt: Number(long[1]) * 1000 }, { maxPrompt: limit, input: base.input * 2, read: base.read * 2, write: base.write * 2, output: base.output * 1.5 }] : [{ ...base, maxPrompt: limit }];
+    add('codex', model, SOURCES[key].replace(/\.md$/, ''), bands);
+  }
+  return result;
+}
+
 export async function run(mode, root = resolve(import.meta.dirname, '..')) {
   requireFact(['--check', '--write'].includes(mode), 'Usage: node scripts/model-sync.mjs --check|--write');
   const entries = await Promise.all(Object.entries(SOURCES).map(async ([key, url]) => [key, await fetchSource(url)]));
@@ -177,14 +216,20 @@ export async function run(mode, root = resolve(import.meta.dirname, '..')) {
   const facts = await import('data:text/javascript;base64,' + Buffer.from(compiled.outputFiles[0].contents).toString('base64'));
   const codex = verifyCodex(parseCodex(JSON.parse(raw.codex)), facts);
   const next = synchronizeClaude(facts.MODEL_FACTS, official, raw.releases);
+  const prices = priceMetadata(raw, official);
+  for (const model of new Set(Object.values(codex))) requireFact(prices.some(p => p.host === 'codex' && p.model === model), `Current Codex model has no verified price source: ${model}`);
+  const pricesPath = resolve(root, 'src/provider-prices-data.ts');
+  const priceContent = '// Generated from official provider metadata by scripts/model-sync.mjs.\nexport default ' + JSON.stringify(prices, null, 2) + ';\n';
+  const priceChanged = await readFile(pricesPath, 'utf8') !== priceContent;
   const changed = JSON.stringify(next) !== JSON.stringify(facts.MODEL_FACTS);
+  if (priceChanged && mode === '--write') await writeFile(pricesPath, priceContent);
   if (changed && mode === '--write') {
     const path = resolve(root, 'src/claude-models.ts');
     const source = await readFile(path, 'utf8');
     await writeFile(path, replaceFacts(source, next).replace(/read \d{4}-\d{2}-\d{2}\./, `read ${new Date().toISOString().slice(0, 10)}.`));
   }
-  console.log(JSON.stringify({ changed, claude: official.map(m => ({ model: m.ids[0], default: m.defaultEffort, efforts: m.unconditionalEffort, conditional: m.conditionalEffort })), codex, sources: SOURCES }, null, 2));
-  requireFact(mode !== '--check' || !changed, 'Claude model metadata is stale. Run npm run models:update, rebuild, and review the diff.');
+  console.log(JSON.stringify({ changed, priceChanged, claude: official.map(m => ({ model: m.ids[0], default: m.defaultEffort, efforts: m.unconditionalEffort, conditional: m.conditionalEffort })), codex, sources: SOURCES }, null, 2));
+  requireFact(mode !== '--check' || !changed && !priceChanged, 'Model or price metadata is stale. Run npm run models:update, rebuild, and review the diff.');
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

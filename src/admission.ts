@@ -3,6 +3,7 @@ import type { JevRequest } from './jev.js';
 import { topChoices, validateChoice, validateScore } from './jev.js';
 import type { AdmissionAnswer, AdmittedShape, ChoiceAnswer, ConfigV5, ExecutionShape, PreserveReason } from './types.js';
 import { ADMISSION_ANSWERS } from './types.js';
+import type { PriceFacts } from './cost.js';
 
 /** Gate A asks one question at the least informative moment of the turn, so it only chooses a shape (D1). */
 export const EXECUTION_QUESTION = {
@@ -220,7 +221,35 @@ export interface DelegationCostModel {
   coordinatorTurns: number;
   /** What one worker turn reads, in tokens: the worker's own context, which starts near empty. */
   workerTokensPerCall: number;
+  prices?: DelegationPrices;
 }
+
+export interface DelegationPrices {
+  root: PriceFacts; worker: PriceFacts;
+  workerWriteRate: number | null;
+  startupRange: readonly [number, number] | null;
+  reexploreRange: readonly [number, number] | null;
+  outputRange: readonly [number, number] | null;
+  residualContext: number; horizon: number | null;
+  overheadUsd: readonly [number, number] | null;
+  provenance: string;
+}
+/** M1..M5 are scenarios; no missing consumption or future horizon is replaced with zero. */
+export const delegationCost = (turns: number, depth: number, model: DelegationCostModel) => {
+  const p = model.prices;
+  if (!p) return { basis: 'tokens' as const, savingUsd: null, components: { m1: null, m2: null, m3: null, m4: 0, m5: null, overhead: null, horizon: null, provenance: 'price_or_observation_unknown', root_revision: null, worker_revision: null }, reason: 'price_or_observation_unknown' };
+  const range = (v: readonly [number, number] | null) => v !== null && v.every(n => Number.isFinite(n) && n >= 0) && v[0] <= v[1];
+  const m1 = (turns - model.coordinatorTurns) * depth * p.root.read / 1e6 - turns * model.workerTokensPerCall * p.worker.read / 1e6;
+  const m2 = range(p.startupRange) && p.workerWriteRate !== null ? p.startupRange!.map(n => n * p.workerWriteRate! / 1e6) : null;
+  const m3 = range(p.reexploreRange) ? p.reexploreRange!.map(n => n * p.worker.read / 1e6) : null;
+  const m4 = p.horizon === null ? 0 : p.horizon * Math.max(0, depth - p.residualContext) * p.root.read / 1e6;
+  const m5 = range(p.outputRange) ? p.outputRange!.map(n => n * (p.root.output - p.worker.output) / 1e6).sort((a, b) => a - b) : null;
+  const ratesValid = [p.root.read, p.root.output, p.worker.read, p.worker.output, p.workerWriteRate, p.residualContext].every(n => n !== null && Number.isFinite(n) && n >= 0) && (p.horizon === null || Number.isSafeInteger(p.horizon) && p.horizon >= 0);
+  const known = ratesValid && m2 && m3 && m5 && range(p.overheadUsd) && [m1, m4].every(Number.isFinite);
+  const savingUsd = known ? [m1 + m4 + m5![0]! - m2![1]! - m3![1]! - p.overheadUsd![1], m1 + m4 + m5![1]! - m2![0]! - m3![0]! - p.overheadUsd![0]] : null;
+  return { basis: savingUsd ? 'api_list_estimate' as const : 'tokens' as const, savingUsd,
+    components: { m1, m2, m3, m4, m5, overhead: p.overheadUsd, horizon: p.horizon, provenance: p.provenance, root_revision: p.root.revision, worker_revision: p.worker.revision }, reason: savingUsd ? null : 'cost_observation_unknown' };
+};
 
 export const delegationModel = (config: ConfigV5): DelegationCostModel => ({
   coordinatorTurns: config.delegationCoordinatorTurns,
@@ -253,6 +282,8 @@ export interface AdmissionEstimate {
   turns: number;
   saving_tokens: number;
   cost_support: number;
+  cost_basis?: 'tokens' | 'api_list_estimate';
+  cost?: ReturnType<typeof delegationCost>;
 }
 
 /**
@@ -295,11 +326,13 @@ export const decideAdmissionAtomic = (
   if (!calls) return fallback('admission_invalid');
   const turns = estimatedTurns(calls.score);
   const saving = delegationSaving(turns, depth, model);
-  const bins = TOOL_CALL_TURNS.map((t) => Math.round(delegationSaving(t, depth, model)));
+  const priced = delegationCost(turns, depth, model);
+  const bins = TOOL_CALL_TURNS.map((t) => priced.savingUsd ? delegationCost(t, depth, model).savingUsd![0]! : Math.round(delegationSaving(t, depth, model)));
   if (!Number.isFinite(saving) || bins.some((n) => !Number.isFinite(n))) return fallback('admission_invalid');
   const estimate = {
     turns,
     saving_tokens: Math.round(saving),
+    cost_basis: priced.basis, cost: priced,
     cost_support: calls.normalized.reduce((n, p, i) => n + (bins[i]! > 0 ? p : 0), 0),
   };
   const parallel = config.admittedShape === 'auto' && config.maxParallelWorkers > 1 ? noulValue(answers['parallel_outcomes']) : 0;
@@ -312,7 +345,7 @@ export const decideAdmissionAtomic = (
       parallel !== null && parallel < FACT_TRUE && size !== null && size < SIZE_PROJECT &&
       calls.normalized[1]! + calls.normalized[2]! + Number.EPSILON * 8 >= ADMISSION_COST_SUPPORT)
     return { shape: 'orchestrated', execution: 'single', decided: true, reason: null, answer: null, estimate, preference: 'bounded_tool_worker' };
-  if (estimate.saving_tokens <= 0) return fallback('admission_not_worth', estimate);
+  if ((priced.savingUsd ? priced.savingUsd[0]! : estimate.saving_tokens) <= 0) return fallback('admission_not_worth', estimate);
   if (estimate.cost_support + Number.EPSILON * 8 < ADMISSION_COST_SUPPORT) return fallback('admission_low_confidence', estimate);
   let execution: 'single' | 'hierarchy';
   if (config.admittedShape !== 'auto') execution = config.admittedShape;

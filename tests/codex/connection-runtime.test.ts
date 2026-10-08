@@ -50,7 +50,7 @@ describe.skipIf(process.env['JEV_CODEX_E2E'] !== '1')('ordinary native Codex aut
     });
     await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
     const base = `http://127.0.0.1:${(upstream.address() as { port: number }).port}/v1`;
-    writeFileSync(preload, `const original=globalThis.fetch;globalThis.fetch=async(url,init)=>{if(String(url)!=='https://api.typesafe.ai/v1/systemone')return original(url,init);const r=JSON.parse(init.body);const answers={};for(const [k,q] of Object.entries(r.questions)){const score=k==='tool_calls'?4:k==='size'?2:0;const picks={work_shape:'sustained_task',handoff_scope:'self_contained',control:'task_clear',action_risk:'ordinary'};const pick=k.startsWith('relation_')?'omit':picks[k]??Object.keys(q.criteria??{})[0];answers[k]=q.type==='score'?{type:'score',score,confidence:1,probabilities:Object.fromEntries(q.criteria.map((_,i)=>[i,i===score?1:0]))}:q.type==='noul'?{type:'noul',noul:0}:{type:'choice',choice:pick,confidence:1,probabilities:Object.fromEntries(Object.keys(q.criteria).map(v=>[v,v===pick?1:0]))};}return new Response(JSON.stringify({model:r.model,answers}),{headers:{'content-type':'application/json'}})};`);
+    writeFileSync(preload, `const original=globalThis.fetch;globalThis.fetch=async(url,init)=>{if(String(url)!=='https://api.typesafe.ai/v1/systemone')return original(url,init);const r=JSON.parse(init.body);const answers={};for(const [k,q] of Object.entries(r.questions)){const score=k==='tool_calls'?4:k==='size'?2:r.state?.execution?.scope==='child'&&k.startsWith('effort_')?q.criteria.findIndex(v=>v.startsWith('Strong reasoning')):0;const picks={work_shape:'sustained_task',handoff_scope:'self_contained',control:'task_clear',action_risk:'ordinary'};const pick=k.startsWith('relation_')?'omit':picks[k]??Object.keys(q.criteria??{})[0];answers[k]=q.type==='score'?{type:'score',score,confidence:1,probabilities:Object.fromEntries(q.criteria.map((_,i)=>[i,i===score?1:0]))}:q.type==='noul'?{type:'noul',noul:0}:{type:'choice',choice:pick,confidence:1,probabilities:Object.fromEntries(Object.keys(q.criteria).map(v=>[v,v===pick?1:0]))};}return new Response(JSON.stringify({model:r.model,answers}),{headers:{'content-type':'application/json'}})};`);
     cpSync(join(root, 'plugins/codex'), plugin, { recursive: true, filter: p => !p.includes('/dist/') && !p.endsWith('/dist') });
     const built = spawnSync(process.execPath, [join(root, 'scripts/build-codex.mjs'), join(plugin, 'dist')], { encoding: 'utf8' });
     expect(built.status, built.stderr).toBe(0);
@@ -134,13 +134,25 @@ describe.skipIf(process.env['JEV_CODEX_E2E'] !== '1')('ordinary native Codex aut
         expect(nativeRows.some(r => r['phase'] === 'codex_compact' && r['stage'] === 'native_submitted' && r['submitted_effort'] === 'high')).toBe(true);
         expect(nativeRows.some(r => r['phase'] === 'codex_route_applied' && r['applied'] === false)).toBe(false);
         writeFileSync(policyFile, '{}');
-        mode = 'gate'; step = 0; const gate = await start();
+        mode = 'gate'; step = 0; const gateStart = requests.length; const gate = await start();
         await turn(gate, 'Seed the native context.');
         await turn(gate, 'Investigate the fixture and run vitest run.');
         expect(existsSync(join(workspace, 'guard-must-not-exist'))).toBe(false);
         const gateRows = readdirSync(trace).filter(f => f.endsWith('.json')).map(f => JSON.parse(readFileSync(join(trace, f), 'utf8')) as Obj);
         expect(gateRows.some(r => r['phase'] === 'post'), nativeErrors).toBe(true);
         expect(JSON.stringify(requests.at(-1)?.['input']), nativeErrors).toContain('confirmed command pass 1');
+        const childRequests = gateRows.filter(r => r['phase'] === 'codex_model_request' && r['scope'] === 'child' && r['parent_session_id'] === gate).sort((a, b) => Number(a['index']) - Number(b['index']));
+        expect(childRequests, nativeErrors).toHaveLength(2);
+        expect(childRequests.map(r => r['index']), nativeErrors).toEqual([0, 1]);
+        expect(childRequests.map(r => r['submitted_effort']), nativeErrors).toEqual(['low', 'high']);
+        const childResponses = gateRows.filter(r => r['phase'] === 'codex_router_response' && childRequests.some(c => c['request_id'] === r['request_id']));
+        expect(childResponses, nativeErrors).toHaveLength(2);
+        for (const response of childResponses) {
+          const nativeRequest = requests[Number(String(response['response_id']).replace('response_', '')) - 1];
+          expect(nativeRequest, nativeErrors).toBeDefined();
+          expect((nativeRequest!['reasoning'] as Obj)['effort'], nativeErrors).toBe(childRequests.find(c => c['request_id'] === response['request_id'])!['submitted_effort']);
+        }
+        expect(requests.slice(gateStart).length, nativeErrors).toBeGreaterThanOrEqual(5);
         writeFileSync(policyFile, JSON.stringify({ gate: { mode: 'lean' } }));
         mode = 'lean'; step = 0; const lean = await start();
         await turn(lean, 'Seed the prior context.'); await turn(lean, 'Implement the fixture check in a fresh executor.');

@@ -51,11 +51,17 @@ export const register: Register = (on, options) => {
 };
 
 /** The hooks for a resolved config; the combined jev-gate module (hooks/register.ts) calls this directly. */
-export const registerCompact = (on: On, config: CompactConfig): void => {
-  if (!config.enabled) return;
+export const registerCompact = (on: On, config: CompactConfig, observer?: { contextChanged?: (agentId?: string) => void }): void => {
+  if (!config.enabled && !observer) return;
   const select = createCompactSelector(config.jevTimeoutMs ?? 1000);
 
   on('session.compact', async ($, e, next) => {
+    const forward = async (input: typeof e) => {
+      const result = await next(input);
+      if (result.skip === undefined) observer?.contextChanged?.(e.agentId);
+      return result;
+    };
+    if (!config.enabled) return forward(e);
     const recorder = recorderOf($);
     try {
     const runId = `${Date.now()}-${++sequence}`;
@@ -65,7 +71,7 @@ export const registerCompact = (on: On, config: CompactConfig): void => {
     const deferred = !handled ? 'trigger' : e.agentId !== undefined && !config.subagents ? 'subagent' : e.trigger === 'manual' && e.instructions ? 'instructions' : null;
     if (deferred) {
       log({ deferred });
-      return next(e);
+      return forward(e);
     }
 
     log({ stage: 'started', messages: e.messages.length });
@@ -86,7 +92,7 @@ export const registerCompact = (on: On, config: CompactConfig): void => {
           const selection = await select(e.messages, outcome.result, key,
             { fetch: (url, init) => $.http.fetch(url, init), sleep: (ms, signal) => $.clock.sleep(ms, { signal }) }, next.signal);
           log({ stage: 'jev', jev_sent: selection.sent, jev_ms: selection.durationMs, usage: selection.usage, candidates: selection.candidates, available: selection.available, dependencies: selection.priorities.length, selection: selection.reason });
-          if (next.signal?.aborted) return next(e);
+          if (next.signal?.aborted) return forward(e);
           if (selection.priorities.length) {
             const enhanced = buildDigest(e.messages, { budgetChars: config.budgetChars, priorityResults: selection.priorities });
             if (enhanced.ok) outcome = enhanced;
@@ -96,7 +102,7 @@ export const registerCompact = (on: On, config: CompactConfig): void => {
           log({ stage: 'jev', selection: 'error', jev_sent: null });
         }
       }
-      if (next.signal?.aborted) return next(e);
+      if (next.signal?.aborted) return forward(e);
       if (config.mode === 'active' && outcome.ok) answer = assemble(e.messages, outcome.result);
     } catch {
       outcome = null;
@@ -107,12 +113,13 @@ export const registerCompact = (on: On, config: CompactConfig): void => {
 
     if (answer) {
       log({ applied: true, messages: e.messages.length, ...built });
+      observer?.contextChanged?.(e.agentId);
       return { messages: answer };
     }
     const t1 = Date.now();
     // The engine can refuse too (a lone exchange it cannot summarize), or be cancelled; the line is still written, the
     // rejection passes up, and the engine is not asked again.
-    const result = await next(e).catch((err: unknown) => {
+    const result = await forward(e).catch((err: unknown) => {
       log({ applied: false, messages: e.messages.length, ...built, coreMs: Date.now() - t1, coreError: true });
       throw err;
     });

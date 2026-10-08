@@ -40,6 +40,7 @@ export type TracePhase =
   | 'background_dispatch'
   | 'background_launch'
   | 'background_terminal'
+  | 'background_stalled'
   | 'background_conversation'
   | 'dispatch_denied'
   | 'worktree_start'

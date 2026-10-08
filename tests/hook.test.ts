@@ -3227,7 +3227,7 @@ describe('receipt selection and observation keys (2026-09-20)', () => {
     expect(answers['tool_calls']).toMatchObject({ type: 'score', score: 3.6, choice: null });
     expect(answers['forbids_delegation']).toMatchObject({ type: 'noul', noul: 0.07 });
     expect(answers['external_tools']).toBeUndefined();
-    expect(record?.['estimate']).toEqual({ turns: 41.5, saving_tokens: (41.5 - 11) * 406_000 - 41.5 * 40_000, cost_support: 1 });
+    expect(record?.['estimate']).toMatchObject({ turns: 41.5, cost_basis: 'tokens', saving_tokens: (41.5 - 11) * 406_000 - 41.5 * 40_000, cost_support: 1 });
   });
 });
 

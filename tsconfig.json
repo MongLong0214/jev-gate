@@ -16,7 +16,8 @@
     "sourceMap": false,
     "declaration": false,
     "rewriteRelativeImportExtensions": true,
-    "allowImportingTsExtensions": true
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true
   },
   "include": ["src"],
   "exclude": ["src/evidence", "src/codex"]

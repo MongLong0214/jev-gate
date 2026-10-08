@@ -7,11 +7,15 @@ import { aliasFamily, answeredBy, effortIndex, factsOf, isSymbolicEffort, MODEL_
 import type { Answers, Baseline, PolicyOptions, RoutedEffort, RoutingPatch } from './policy.ts';
 import { choosePatch, EFFORT_LEVEL_TARGETS, offerableEfforts, pairValid } from './policy.ts';
 import { looksSecret } from './secret.ts';
-import { offerPairs, selectPair, pairReceipt, applyEffort, type PairOffer, type EffortEdit } from './selection.ts';
+import { offerPairs, selectPair, keepModelPair, pairReceipt, applyEffort, type PairOffer, type EffortEdit } from './selection.ts';
 import { routingContext, type RoutingCache } from './context.ts';
 import { claudeCandidates, claudeContextFits, claudeModelAllowed, resolveClaudeModel, type ModelAliases } from './candidates.ts';
 import { claudeTargetAllowed, currentClaudeModel } from './models.ts';
 import type { ChildStepContext } from '../../../src/router-child-context.ts';
+import { normalizeUsage, usageCost, observedTtl, ModelCache } from '../../../src/cost.ts';
+import { providerPrice } from '../../../src/provider-prices.ts';
+import { routeCost } from '../../../src/route-cost.ts';
+import { claudeEffortCache, effortCacheHit, type ClaudeCacheCapability } from '../../../src/claude-cache.ts';
 
 /**
  * The Router's handlers over a structural engine. register.ts adapts the host's `$` to RouterEngine (the environment
@@ -41,6 +45,7 @@ export interface RouterEngine extends Transport {
   currentContextBound?: (turnId: string, index: number) => Promise<{ turnId: string; index: number; inputUpperBound: number; compatible: boolean } | undefined>;
   /** Exact native child conversation, reduced to tool names and outcome labels by the host adapter. */
   childContext?: (agentId: string) => Promise<ChildStepContext | undefined>;
+  cacheCapability?: () => Promise<ClaudeCacheCapability>;
   availableModels: () => Promise<readonly string[] | undefined>;
   /** Shared frontierEnabled; undefined preserves a legacy host-specific opt-in. */
   frontierEnabled?: () => Promise<boolean | undefined>;
@@ -133,7 +138,7 @@ const MAX_CHILDREN = 64;
  * How long a root request's cached prefix is taken as still warm: under the host's one-hour cache lifetime (every cache
  * write in the owner's transcripts, 2026-09-26..28, was `ephemeral_1h`), with a margin.
  */
-const WARM_MS = 55 * 60_000;
+// TTL is taken from an exact response when available; absent TTL remains unknown.
 
 /** The four counts a response reports, and nothing else of it. Per step; overlapping totals are #45's to normalize. */
 const COUNTS = ['input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'] as const;
@@ -293,6 +298,9 @@ interface ChildRouting {
   stepContract?: { text: string; modelEnabled: boolean; effortEnabled: boolean };
   lastApplied?: Baseline;
   cache?: RoutingCache & { at: number };
+  cacheEffort?: string | number;
+  cachePreserved?: boolean;
+  cacheMiss?: boolean;
   step?: { index: number; model: string; effort: TurnStepEvent['effort']; pending: Promise<RoutingPatch | null> };
   controller: AbortController;
 }
@@ -346,6 +354,10 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
   /** The last root request that got a response: when, on which model, and at which effort. */
   let lastRoot: { at: number; model: string; effort: SymbolicEffort | null; cache: RoutingCache } | null = null;
   /** The effort the last root turn arrived with, before any patch; null before the session's first turn. */
+  const rootCaches = new ModelCache();
+  const preservedEffortModels = new Set<string>();
+  const missedEffortModels = new Set<string>();
+  let cacheEpoch = 0;
   let lastIncoming: { effort: TurnStepEvent['effort'] } | null = null;
   const turnTexts = bounded<string, string>(MAX_TURNS);
   const turns = bounded<string, TurnRouting>(MAX_TURNS, (t) => t.controller.abort());
@@ -510,11 +522,19 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       if (!offer) { t.stopped = true; log(engine, { event: 'root', scope: 'root', turn: turnId, skipped: !resolveClaudeModel(t.baseline.model, aliases) ? 'capability_unknown' : 'no_alternative', ...(t.effortChanged ? { effort_kept: 'incoming_changed' } : {}), ...baselineFacts, candidates: candidates.slice(0, 16).map(c => c.id), excluded, model_withheld: 'no_applicable_target', model_asked: false, effort_asked: false, effort_not_asked: effortNotAsked }); return; }
       void diagnose(engine, live);
       const started = engine.now();
-      const cache = lastRoot ? { ...lastRoot.cache, ageMs: Math.max(0, engine.now() - lastRoot.at) } : undefined;
+      const observedCache = rootCaches.get(offer.baseline.model, String(cacheEpoch));
+      const cache = observedCache ? { ...observedCache, input: observedCache.input ?? null, ageMs: Math.max(0, engine.now() - observedCache.at) } : undefined;
       const result = await client.assess(engine, key.key, routingContext(text, context ?? undefined, recentRequests.slice(0, -1), cache), offer.questions, live,
         usage => log(engine, { event: 'late', scope: 'root', turn: turnId, usage: loggable(usage) }), () => log(engine, { event: 'request', scope: 'root', turn: turnId, sent: true }));
-      const decision = result.ok ? selectPair(offer, result.answers) : { patch: {}, reasons: { model: 'not_asked', effort: 'not_asked' }, diagnostics: null };
-      const cached = cachePatch(t.baseline, t.warmEffort, decision.patch as RoutingPatch);
+      const decision = result.ok ? selectPair(offer, result.answers) : { patch: {} as RoutingPatch, reasons: { model: 'not_asked', effort: 'not_asked' }, diagnostics: null };
+      const cost = decision.patch.model ? routeCost('claude', offer.baseline.model, decision.patch.model, rootCaches, String(cacheEpoch), engine.now()) : null;
+      const baseRank = offer.baselineCandidate?.rank, targetRank = offer.candidates.find(c => c.id === decision.patch.model)?.rank;
+      const hold = cost?.hold && baseRank !== undefined && targetRank !== undefined && targetRank < baseRank;
+      const chosen = hold && result.ok ? keepModelPair(offer, result.answers).patch : decision.patch;
+      const capability = engine.cacheCapability ? await within(engine.cacheCapability().catch(() => undefined), live) : undefined;
+      const capabilityReason = capability ? claudeEffortCache(offer.baseline.model, capability) : 'capability_unknown';
+      const preserves = !missedEffortModels.has(offer.baseline.model) && (preservedEffortModels.has(offer.baseline.model) || capabilityReason === 'supported');
+      const cached = cachePatch(t.baseline, preserves ? null : t.warmEffort, chosen as RoutingPatch);
       if (!live.aborted && !t.stopped) t.patch = cached.patch;
       if (!Object.keys(t.patch).length) t.stopped = true;
       log(engine, { event: 'root', scope: 'root', boundary: 'host_hook', turn: turnId, context_chars: context?.length ?? 0, from: { model: t.baseline.model, effort: t.baseline.effort ?? null },
@@ -525,7 +545,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
         model_not_asked: offer.modelAsked ? null : pins.mainModel ? 'model_pinned' : !config.routeMainModel ? 'routing_off' : 'no_alternative',
         effort_not_asked: offer.effortQuestions.size ? null : effortNotAsked,
         excluded: { ...excluded, effort_incompatible: candidates.length - offer.candidates.length }, candidates: offer.candidates.slice(0, 16).map(c => c.id), host_version: hostBase ?? null,
-        proposed_patch: decision.patch, patch: t.patch, ...(cached.held ? { held_for_cache: cached.held } : {}),
+        proposed_patch: decision.patch, patch: t.patch, cost, cost_reason: hold ? 'cost_hold' : cost?.reason ?? 'same_model', effort_cache: preserves ? 'cache_preserved' : missedEffortModels.has(offer.baseline.model) ? 'observed_miss_floor_restored' : capabilityReason, ...(cached.held ? { held_for_cache: cached.held } : {}),
         reasons: { ...decision.reasons, ...(cached.held ? { effort: 'cache_preserved' } : {}) },
         selection: decision.diagnostics, answers: result.ok ? pairReceipt(offer, result.answers) : null });
     } catch (error) { t.stopped = true; log(engine, { event: 'root', turn: turnId, skipped: error === ENDED ? 'turn_retired' : 'internal_error' }); }
@@ -607,8 +627,8 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       effortStopped: false,
       // Explicit zero cache usage is cold. Missing usage remains unknown; it
       // must not be converted to zero or waive the existing cache protection.
-      warmEffort: lastRoot && lastRoot.model === e.model && engine.now() - lastRoot.at < WARM_MS &&
-        !(lastRoot.cache.read === 0 && lastRoot.cache.write === 0) ? lastRoot.effort : null,
+      warmEffort: (() => { const v = rootCaches.get(factsOf(e.model)?.ids[0] ?? e.model, String(cacheEpoch));
+        return v && (v.ttlMs === null || engine.now() - v.at < v.ttlMs) && !(v.read === 0 && v.write === 0) ? isSymbolicEffort(v.effort) ? v.effort : null : null; })(),
       effortChanged: lastIncoming !== null && lastIncoming.effort !== e.effort && (lastRoot?.effort ?? undefined) !== e.effort,
     };
     lastIncoming = { effort: e.effort };
@@ -653,7 +673,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       ...(currentBound ? { inputUpperBound: currentBound.inputUpperBound, requestCompatible: currentBound.compatible } : {}), preferences: Object.values(config.tiers) });
     const explicitEffort = e.effort === undefined || isSymbolicEffort(e.effort);
     const offer = offerPairs({ baseline: { model: resolveClaudeModel(e.model, aliases) ?? e.model, effort: e.effort ?? null }, candidates,
-      model: contract.modelEnabled && !pins.subagentModel,
+      scope: 'child', model: contract.modelEnabled && !pins.subagentModel,
       effort: contract.effortEnabled && !pins.mainEffort && explicitEffort,
       upgrade: config.minUpgradeConfidence, downgrade: config.minDowngradeConfidence });
     if (!offer) return skip('no_alternative');
@@ -666,8 +686,9 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     const result = await client.assess(engine, key.key, state, offer.questions, live,
       usage => log(engine, { event: 'late', ...binding, usage: loggable(usage) }),
       () => log(engine, { event: 'request', ...binding, sent: true }));
-    const decision = result.ok ? selectPair(offer, result.answers) : { patch: {}, reasons: { model: 'not_asked', effort: 'not_asked' }, diagnostics: null };
+    const decision = result.ok ? selectPair(offer, result.answers) : { patch: {} as RoutingPatch, reasons: { model: 'not_asked', effort: 'not_asked' }, diagnostics: null };
     let patch = decision.patch as RoutingPatch;
+    if (!c.cachePreserved && c.cacheMiss) patch = cachePatch({ model: e.model, ...(e.effort !== undefined ? { effort: e.effort } : {}) }, isSymbolicEffort(c.cacheEffort) ? c.cacheEffort : null, patch).patch;
     if (live.aborted || c.stopped || children.get(id) !== c) return null;
     const [nowPins, nowAliases, nowAllowed, nowFrontier] = await Promise.all([
       within(pinsOf(engine, 'spawn', live), live), within(aliasesOf(engine), live),
@@ -816,6 +837,9 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
         confirmation: seen === null ? 'unobserved' : patch?.model !== undefined ? sameModel(patch.model, seen) ? 'confirmed' : 'mismatch' : answeredBy(e.model, seen) ? 'confirmed' : 'mismatch',
         observed_effort: 'unknown',
         usage: result ? loggable(countsOf(result.usage)) : null,
+        accounting: result ? normalizeUsage('claude', result.usage) : null,
+        cost: usageCost(normalizeUsage('claude', result?.usage), providerPrice('claude', seen ?? requested, (() => { const u = normalizeUsage('claude', result?.usage); return u.input !== null && u.read !== null && u.write !== null ? u.input + u.read + u.write : null; })())),
+        native_identity_coverage: 'unavailable_in_turn_step_api',
       });
 
     } catch {
@@ -904,9 +928,21 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
         requested, observed, requested_effort: patch?.effortEdit?.kind === 'omit' ? null : patch?.effort ?? e.effort ?? null, observed_effort: 'unknown',
         confirmation: observed === null ? 'unobserved' : patch?.model ? sameModel(requested, observed) ? 'confirmed' : 'mismatch' : answeredBy(requested, observed) ? 'confirmed' : 'mismatch',
         usage: result ? loggable(countsOf(result.usage)) : null,
+        accounting: result ? normalizeUsage('claude', result.usage) : null, native_identity_coverage: 'unavailable_in_turn_step_api',
       });
       const child = children.get(e.agentId);
       if (child && !own.aborted && observed !== null && answeredBy(requested, observed)) {
+        const u = normalizeUsage('claude', result?.usage);
+        const effort = patch?.effort ?? e.effort;
+        if (child.cache && child.cacheEffort !== effort) {
+          // TurnStep does not expose cache expiry: a positive reuse is observable, a miss cause is unknown.
+          const measured = effortCacheHit(child.cache, u);
+          const hit = measured === false ? null : measured;
+          if (hit === true && !child.cacheMiss) child.cachePreserved = true;
+          if (measured === false && child.cachePreserved) { child.cachePreserved = false; }
+          log(engine, { event: 'effort_cache', scope: 'child', agent_id: e.agentId, turn: e.turnId, index: e.index, hit, floor_restored: false });
+        }
+        if (effort !== undefined) child.cacheEffort = effort; else delete child.cacheEffort;
         const counts = countsOf(result?.usage);
         child.cache = { at: engine.now(), model: requested, ageMs: 0, input: counts?.['input_tokens'] ?? null,
           read: counts?.['cache_read_input_tokens'] ?? null, write: counts?.['cache_creation_input_tokens'] ?? null };
@@ -918,9 +954,21 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       const seen = typeof result?.usage?.model === 'string' ? result.usage.model : null;
       // Only a response the asked model gave wrote the cache a later turn on that model reads.
       if (seen !== null && answeredBy(asked, seen)) {
+        const id = factsOf(asked)?.ids[0] ?? asked;
+        const previous = rootCaches.get(id, String(cacheEpoch));
+        const nextUsage = normalizeUsage('claude', result?.usage);
+        if (previous && previous.effort !== (sent ?? null) && (previous.ttlMs === null || engine.now() - previous.at < previous.ttlMs)) {
+          const measured = effortCacheHit(previous, nextUsage);
+          const hit = measured === false && previous.ttlMs === null ? null : measured;
+          if (hit === true && !missedEffortModels.has(id)) preservedEffortModels.add(id);
+          if (hit === false) { missedEffortModels.add(id); preservedEffortModels.delete(id); }
+          log(engine, { event: 'effort_cache', scope: 'root', turn: e.turnId, index: e.index, model: id, hit, floor_restored: hit === false, ttl_known: previous.ttlMs !== null });
+        }
         const counts = countsOf(result?.usage);
+        const u = normalizeUsage('claude', result?.usage);
+        rootCaches.observe({ model: factsOf(asked)?.ids[0] ?? asked, epoch: String(cacheEpoch), at: engine.now(), ttlMs: observedTtl(u), input: u.input, read: u.read, write: u.write, output: u.output, effort: isSymbolicEffort(sent) ? sent : null });
         lastRoot = { at: engine.now(), model: asked, effort: isSymbolicEffort(sent) ? sent : null,
-          cache: { model: asked, ageMs: 0, input: counts?.['input_tokens'] ?? null, read: counts?.['cache_read_input_tokens'] ?? null, write: counts?.['cache_creation_input_tokens'] ?? null } };
+          cache: { model: asked, ageMs: 0, epoch: String(cacheEpoch), ttlMs: observedTtl(normalizeUsage('claude', result?.usage)), output: normalizeUsage('claude', result?.usage).output, input: counts?.['input_tokens'] ?? null, read: counts?.['cache_read_input_tokens'] ?? null, write: counts?.['cache_creation_input_tokens'] ?? null } };
       }
     }
     return result;
@@ -1164,12 +1212,16 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       nativeChildren.clear();
       childHistoryFull = false;
       lastReply = null; currentRootTurn = null; recentRequests.length = 0;
-      lastRoot = null;
+      lastRoot = null; rootCaches.clear(); preservedEffortModels.clear(); missedEffortModels.clear(); cacheEpoch++;
       lastIncoming = null;
       keyWait = null;
       versionWait = null;
       pinReads.clear();
       diagnosed = false;
+    },
+    contextChanged: (agentId?: string): void => {
+      if (agentId) { const c = children.get(agentId); if (c) { c.controller.abort(); c.controller = new AbortController(); delete c.cache; delete c.step; delete c.cacheEffort; c.cachePreserved = false; } }
+      else { cacheEpoch++; rootCaches.clear(); lastRoot = null; for (const t of turns.values()) { t.stopped = true; t.controller.abort(); } }
     },
     inFlight: client.inFlight,
   };
