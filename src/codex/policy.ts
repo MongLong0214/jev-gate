@@ -485,7 +485,11 @@ export class CodexPolicy {
     const p = obj(message['params']) ?? {}; const session = this.sessions.get(String(p['threadId']));
     if (!session) return;
     if (message['method'] === 'thread/settings/updated') {
-      const settings = obj(p['threadSettings']); if (settings) session.settings = { ...session.settings, ...settings };
+      const settings = obj(p['threadSettings']);
+      if (settings) {
+        session.settingsEpoch = (session.settingsEpoch ?? 0) + 1;
+        session.settings = { ...session.settings, ...settings };
+      }
     }
     if (message['method'] === 'turn/started' && !session.terminal) {
       session.turn = String(obj(p['turn'])?.['id'] ?? '');

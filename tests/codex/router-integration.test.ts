@@ -54,22 +54,25 @@ const ownedFixture = async (wait?: Promise<void>) => {
   return { ...f, child, signal, next };
 };
 describe('original Codex root execution boundaries', () => {
-  it.each(['config', 'settings'] as const)('preserves a worker request when %s changes during assessment', async kind => {
+  it.each(['config', 'settings', 'settings_notification'] as const)('preserves a worker request when %s changes during assessment', async kind => {
     let release!: () => void;
     const f = await ownedFixture(new Promise<void>(resolve => { release = resolve; }));
     const pending = f.policy.externalRequest(f.child.id, f.next, f.signal.signal);
     await vi.waitFor(() => expect(f.sent).toHaveLength(1));
     if (kind === 'config') saveConfig({ enabled: false });
+    else if (kind === 'settings_notification') f.rpc.onNotification({ method: 'thread/settings/updated', params: { threadId: f.child.id, threadSettings: { model: 'gpt-6.1-sol', effort: 'high' } } });
     else await f.rpc.onResponse({}, 'thread/settings/update', { threadId: f.child.id, model: 'gpt-6.1-sol', effort: 'high' });
     release();
     expect((await pending).request).toEqual(f.next);
     expect((await f.policy.externalRequest(f.child.id, f.next, f.signal.signal)).request).toEqual(f.next);
     expect(f.fetchImpl).toHaveBeenCalledOnce(); f.rpc.close();
   });
-  it.each(['removed', 'effort', 'previous_generation', 'config'] as const)('preserves a cached worker retry after %s invalidates its pair', async kind => {
+  it.each(['removed', 'effort', 'previous_generation', 'config', 'settings', 'settings_notification'] as const)('preserves a cached worker retry after %s invalidates its pair', async kind => {
     const f = await ownedFixture();
     expect((await f.policy.externalRequest(f.child.id, f.next, f.signal.signal)).request.model).toBe('gpt-6-luna');
     if (kind === 'config') saveConfig({ model: false });
+    else if (kind === 'settings_notification') f.rpc.onNotification({ method: 'thread/settings/updated', params: { threadId: f.child.id, threadSettings: { model: 'gpt-6.1-sol', effort: 'high' } } });
+    else if (kind === 'settings') await f.rpc.onResponse({}, 'thread/settings/update', { threadId: f.child.id, model: 'gpt-6.1-sol', effort: 'high' });
     else if (kind === 'removed') f.policy.catalog = f.policy.catalog.filter(m => m.model !== 'gpt-6-luna');
     else f.policy.catalog = f.policy.catalog.map(m => m.model !== 'gpt-6-luna' ? m : kind === 'effort' ? { ...m, supportedReasoningEfforts: [{ reasoningEffort: 'high' }] } : { ...m, description: 'Previous generation model.' });
     expect((await f.policy.externalRequest(f.child.id, f.next, f.signal.signal)).request).toEqual(f.next);
