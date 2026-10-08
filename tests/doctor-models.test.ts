@@ -13,11 +13,11 @@ afterEach(() => dirs.splice(0).forEach(dir => rmSync(dir, { recursive: true, for
 const temporary = () => { const path = mkdtempSync(join(tmpdir(), 'jev-doctor-test-')); dirs.push(path); return path; };
 const claudeModels = [{ value: 'haiku', resolvedModel: 'claude-haiku-5-5', supportsEffort: true, supportedEffortLevels: ['low', 'medium', 'high'] }];
 const codexModel = (model = 'gpt-6-luna', efforts = ['low', 'medium', 'high', 'xhigh', 'max']) => ({ model, description: 'Fast and affordable model for easier tasks', supportedReasoningEfforts: efforts.map(reasoningEffort => ({ reasoningEffort })) });
-function fixture(host: 'claude' | 'codex', rows: unknown[]) {
+function fixture(host: 'claude' | 'codex', rows: unknown[], delayedVersion = false) {
   const dir = temporary(), log = join(dir, 'rpc.log');
-  const script = `#!${process.execPath}\nconst fs=require('node:fs'),readline=require('node:readline');const rows=${JSON.stringify(rows)};readline.createInterface({input:process.stdin}).on('line',line=>{const r=JSON.parse(line);fs.appendFileSync(process.env.PROBE_LOG,JSON.stringify(r)+'\\n');if(r.type==='control_request')process.stdout.write(JSON.stringify({type:'control_response',response:{subtype:'success',request_id:r.request_id,response:{models:rows}}})+'\\n');else if(r.id)process.stdout.write(JSON.stringify({id:r.id,result:r.method==='initialize'?{}:{data:rows,nextCursor:null}})+'\\n')});`;
+  const script = `#!${process.execPath}\nif(process.argv.includes('--version')&&${delayedVersion}){setTimeout(()=>{},60000)}else{const fs=require('node:fs'),readline=require('node:readline');const rows=${JSON.stringify(rows)};readline.createInterface({input:process.stdin}).on('line',line=>{const r=JSON.parse(line);fs.appendFileSync(process.env.PROBE_LOG,JSON.stringify(r)+'\\n');if(r.type==='control_request')process.stdout.write(JSON.stringify({type:'control_response',response:{subtype:'success',request_id:r.request_id,response:{models:rows}}})+'\\n');else if(r.id)process.stdout.write(JSON.stringify({id:r.id,result:r.method==='initialize'?{}:{data:rows,nextCursor:null}})+'\\n')});}`;
   writeFileSync(join(dir, host), script); chmodSync(join(dir, host), 0o700);
-  return { dir, log, env: { PATH: `${dir}:${dirname(process.execPath)}`, HOME: dir, CODEX_HOME: dir, PROBE_LOG: log } };
+  return { dir, log, env: { PATH: `${dir}:${dirname(process.execPath)}`, HOME: dir, CODEX_HOME: dir, XDG_STATE_HOME: join(dir, 'state'), PROBE_LOG: log } };
 }
 describe('Doctor native model and effort compatibility', () => {
   it('rejects Haiku 5.5 on a pre-2.1.293 CLI even if a synthetic inventory advertises it', () => {
@@ -75,8 +75,16 @@ describe('Doctor native model and effort compatibility', () => {
   });
 });
 describe('Doctor reports', () => {
+  it('keeps a timed-out Codex version unknown while independently checking its native catalog', async () => {
+    const fake = fixture('codex', [codexModel()], true);
+    const report = (await codexDoctor(join(__dirname, '../plugins/codex'), fake.env, fake.dir)).report;
+    expect(report.checks.find(c => c.group === 'host')?.level).toBe('warn');
+    expect(report.checks.find(c => c.group === 'host')?.message).toContain('unverified');
+    expect(report.models?.complete).toBe(true);
+    expect(report.models?.compatibility.find(c => c.model === 'gpt-6-luna')?.state).toBe('compatible');
+  });
   it('diagnoses invalid explicit keys on both hosts without printing them', async () => {
-    const dir = temporary(), env = { HOME: dir, PATH: '/nonexistent', TYPESAFE_API_KEY: 'bad\nsecret', CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: '0' };
+    const dir = temporary(), env = { HOME: dir, PATH: '/nonexistent', XDG_STATE_HOME: join(dir, 'state'), TYPESAFE_API_KEY: 'bad\nsecret', CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: '0' };
     const claude = await claudeDoctor(join(__dirname, '..'), env, dir);
     const codex = (await codexDoctor(join(__dirname, '../plugins/codex'), env, dir)).report;
     for (const report of [claude, codex]) {

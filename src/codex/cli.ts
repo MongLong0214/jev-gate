@@ -28,7 +28,9 @@ export const codexDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: str
   diagnosis.group('host');
   const version = spawnSync('codex', ['--version'], { env, encoding: 'utf8', timeout: 3000, maxBuffer: 64 * 1024 });
   const v = /^codex-cli (\d+)\.(\d+)\.(\d+)(?:\s|$)/.exec((version.stdout ?? '').trim());
-  check(version.status === 0 && !!v && (Number(v[1]) > 0 || Number(v[2]) >= 158), `Codex ${v ? v.slice(1).join('.') : 'unavailable'} (minimum native integration version 0.158.0; detected version does not prove hook trust or policy application)`);
+  const versionError = (version.error as NodeJS.ErrnoException | undefined)?.code;
+  if (versionError === 'ETIMEDOUT' || versionError === 'ENOBUFS' || version.status === 0 && !v) say('warn', 'Codex version unverified: version probe timed out or returned an unrecognized response; this does not establish an unsupported CLI');
+  else check(version.status === 0 && !!v && (Number(v[1]) > 0 || Number(v[2]) >= 158), `Codex ${v ? v.slice(1).join('.') : 'unavailable'} (minimum native integration version 0.158.0; detected version does not prove hook trust or policy application)`);
   diagnosis.group('package');
   for (const path of ['.codex-plugin/plugin.json', '.mcp.json', 'hooks/hooks.json', 'dist/cli.mjs', 'dist/hook.mjs', 'dist/server.mjs', 'skills/jev-gate/SKILL.md']) check(readableFile(join(root, path)), `${path}: readable regular file required`);
   const obj = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
