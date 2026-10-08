@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { runHook } from '../src/hook.js';
 import { jobPath, newGeneration, readJob, updateJob } from '../src/job.js';
 import { claudeDefaults, prepareClaude } from '../src/claude-setup.js';
+import { isNativeTaskNotification } from '../src/claude-background.js';
 
 const roots: string[] = [];
 afterEach(() => roots.splice(0).forEach(p => rmSync(p, { recursive: true, force: true })));
@@ -41,6 +42,34 @@ const fixture = async (direct = false, hierarchy = false) => {
 };
 
 describe('responsive native background contracts', () => {
+  it('absorbs a queued native cancellation before transcript flush with a reused human prompt ID', async () => {
+    const f = await fixture(); await f.launch();
+    updateJob(f.env, 's', prev => prev ? { ...prev, current: { ...prev.current, active: {}, outcome: 'incomplete' } } : null);
+    const prompt = '<task-notification>\n<task-id>worker</task-id>\n<tool-use-id>dispatch</tool-use-id>\n<output-file>/tmp/worker.output</output-file>\n<status>killed</status>\n</task-notification>';
+    const rows = [
+      { type: 'user', sessionId: 's', toolUseResult: { status: 'async_launched', agentId: 'worker', outputFile: '/tmp/worker.output' }, message: { content: [{ type: 'tool_result', tool_use_id: 'dispatch' }] } },
+      { type: 'user', sessionId: 's', promptId: 'cancel-turn', promptSource: 'sdk', turnOrigin: 'sdk', message: { content: 'Cancel the original worker now.' }, timestamp: '2026-10-08T09:27:47.477Z' },
+      { type: 'queue-operation', operation: 'enqueue', sessionId: 's', content: prompt, timestamp: '2026-10-08T09:27:47.689Z' },
+    ];
+    const input = { hook_event_name: 'UserPromptSubmit', session_id: 's', transcript_path: f.parent, prompt_id: 'cancel-turn', prompt };
+    writeFileSync(f.parent, rows.map(r => JSON.stringify(r)).join('\n') + '\n');
+    expect(isNativeTaskNotification(input)).toBe(true);
+    await f.run(input); expect(f.job().current.prompt_id).toBe('original');
+    // User/Sdk provenance, an unrelated ID, a copied user message, or unbound queue data cannot authenticate XML.
+    for (const source of ['user', 'sdk'] as const) expect(isNativeTaskNotification({ ...input, source })).toBe(false);
+    expect(isNativeTaskNotification({ ...input, prompt_id: 'new-human' })).toBe(false);
+    for (const variant of [
+      [rows[0], { ...rows[1], message: { content: prompt } }, rows[2]],
+      [rows[0], rows[1], { ...rows[2], sessionId: 'other' }],
+      [{ ...rows[0], toolUseResult: { status: 'async_launched', agentId: 'another', outputFile: '/tmp/worker.output' } }, rows[1], rows[2]],
+      [{ ...rows[0], message: { content: [{ type: 'tool_result', tool_use_id: 'another' }] } }, rows[1], rows[2]],
+      [{ ...rows[0], toolUseResult: { status: 'async_launched', agentId: 'worker', outputFile: '/tmp/another.output' } }, rows[1], rows[2]],
+      [rows[0], rows[1]],
+      [rows[0], rows[2], rows[1]],
+    ]) { writeFileSync(f.parent, variant.map(r => JSON.stringify(r)).join('\n') + '\n'); expect(isNativeTaskNotification(input)).toBe(false); }
+    await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'human-after-cancel', prompt: 'Add a README section.' });
+    expect(f.job().current.prompt_id).toBe('human-after-cancel');
+  });
   it.each(['completed', 'incomplete'] as const)('admits a human prompt after an older closed generation without a delivery marker (%s)', async outcome => {
     const f = await fixture(); await f.launch();
     updateJob(f.env, 's', prev => prev ? { ...prev, current: { ...prev.current, active: {}, outcome, background_context: 'Historical policy result.' } } : null);

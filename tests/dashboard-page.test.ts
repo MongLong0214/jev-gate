@@ -31,6 +31,18 @@ function page() {
 }
 
 describe('dashboard live interactions', () => {
+  it('always shows running version and honest latest-release status at the top in both languages', () => {
+    const p = page(), release = { latest: '0.8.15', checkedAt: stamp, error: null };
+    p.push({ ...snapshot([]), version: { running: '0.8.14', installed: '0.8.14', release } });
+    expect(p.get('version-badge').textContent).toContain('v0.8.14'); expect(p.get('version-badge').dataset.state).toBe('update');
+    p.push({ ...snapshot([]), version: { running: '0.8.15', installed: '0.8.15', release } });
+    expect(p.get('version-badge').dataset.state).toBe('current'); expect(p.get('version-badge').textContent).toContain('최신');
+    p.click('#language'); expect(p.get('version-badge').textContent).toContain('Current');
+    p.push({ ...snapshot([]), version: { running: '0.8.15', installed: '0.8.15', release: { ...release, latest: null, error: 'offline' } } });
+    expect(p.get('version-badge').dataset.state).toBe('unknown'); expect(p.get('version-badge').textContent).toContain('unknown');
+    p.push({ ...snapshot([]), version: { running: '0.8.14', installed: '0.8.15', release } });
+    expect(p.get('version-badge').dataset.state).toBe('mismatch');
+  });
   it('shows internal worker work in the released layout and updates only from observed tool evidence', () => {
     const p=page(),w={sessionId:'session',agentId:'agent',role:'worker',taskId:'t1',state:'active',lastAt:stamp,coverage:'recent',selectedModel:'claude-opus-5-5',observedModel:null,selectedEffort:'high',modelRequestAt:stamp,modelResponseAt:stamp,tools:[{id:'read',name:'Read',action:'read',target:'src/app.ts',state:'active',startedAt:stamp,endedAt:null,durationMs:null}]};
     const s={...snapshot([]),workerActivity:{items:[w],limited:false,sig:'first'}};p.push(s);

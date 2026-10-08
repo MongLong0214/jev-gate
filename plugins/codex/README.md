@@ -143,7 +143,7 @@ The settings panel controls recording and automatic opening independently. Both 
 
 Records default to `$XDG_STATE_HOME/jev-gate/codex/traces` or `~/.local/state/jev-gate/codex/traces`. Private atomic metadata records contain no raw prompts, source, tool output, credentials or transcript paths. Missing records mean unknown. No simulated activity or inferred token savings is shown. Old records are not automatically deleted.
 
-If no policy runs, check automatic connection readiness, `/hooks` trust, enablement and key; start a fresh native host if the current host loaded the old provider. The default depth floor is 0, so a fresh turn is eligible for assessment; Jev can still choose direct execution. `doctor` checks local readiness and configured Evidence scope, not login, hook execution or product effect.
+If no policy runs, check automatic connection readiness, `/hooks` trust, enablement and key; start a fresh native host if the current host loaded the old provider. The default depth floor is 0, so a fresh turn is eligible for assessment; Jev can still choose direct execution. `doctor` checks package definitions, configured Evidence scope, local connection health and the native `model/list` inventory. It enumerates each routing target and effort and reports invalid configured models or unsupported owned-profile efforts. Use `--json`, `--verbose` and optional `--check-update`. No thread or inference turn is created. An advertised model is not proof of account access, hook execution or product effect.
 
 ## Verification and implementation references
 

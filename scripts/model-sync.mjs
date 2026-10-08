@@ -96,7 +96,7 @@ export function synchronizeClaude(existing, official, changelog) {
     const index = result.findIndex(m => m.ids.includes(facts.ids[0]));
     if (index >= 0) {
       requireFact(!result[index].legacy, `Official table points back to a retired Claude model: ${facts.ids[0]}`);
-      result[index] = { ...result[index], ...facts, suffixes: result[index].suffixes };
+      result[index] = { ...result[index], ...facts, suffixes: result[index].suffixes, minimumHostRelease: result[index].minimumHostRelease ?? hostRelease(changelog, facts.ids[0]) };
     } else {
       const previous = result.find(m => m.family === facts.family && !m.legacy);
       const version = id => id.split('-').slice(2).map(Number);

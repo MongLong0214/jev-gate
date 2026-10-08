@@ -87,9 +87,7 @@ describe('parseFrontmatter', () => {
   });
 });
 
-// `doctor` is not exported (it accumulates into module-level state and reads real dist/agents/hooks files relative to
-// its own compiled location), so its FAIL/OK behavior is exercised the same way scripts/pack.mjs's install output is
-// in tests/pack.test.ts: build once, then run the compiled dist/cli.js as a real subprocess against a prepared root.
+// Exercise installed CLI behavior, including its exit status, against disposable complete plugin roots.
 describe('doctor: checkModelAuthority (#48 P0-2)', () => {
   let tmp: string;
   let sharedDist: string;
@@ -108,7 +106,9 @@ describe('doctor: checkModelAuthority (#48 P0-2)', () => {
     const pluginRoot = join(tmp, `case-${String(caseNum++)}`);
     mkdirSync(pluginRoot, { recursive: true });
     cpSync(sharedDist, join(pluginRoot, 'dist'), { recursive: true });
-    for (const rel of ['.claude-plugin', 'hooks', 'agents']) cpSync(join(root, rel), join(pluginRoot, rel), { recursive: true });
+    for (const rel of ['.claude-plugin', 'hooks', 'agents', 'mods', 'src', 'plugins/evidence/skills']) cpSync(join(root, rel), join(pluginRoot, rel), { recursive: true });
+    mkdirSync(join(pluginRoot, 'plugins/evidence/dist'), { recursive: true });
+    writeFileSync(join(pluginRoot, 'plugins/evidence/dist/server.mjs'), '// Fake packaged entry; Doctor does not execute it.\n');
     if (mutate) writeFileSync(join(pluginRoot, 'agents', mutate.file), mutate.content);
     return pluginRoot;
   };
@@ -117,7 +117,7 @@ describe('doctor: checkModelAuthority (#48 P0-2)', () => {
     const home = mkdtempSync(join(tmpdir(), 'jev-cli-doctor-home-'));
     // PATH=/nonexistent (as tests/pack.test.ts also does): `claude` is not found, so checkClaude() warns cleanly
     // instead of running a real CLI, and no network or auth call happens.
-    const r = spawnSync(process.execPath, [join(pluginRoot, 'dist', 'cli.js'), 'doctor'], { encoding: 'utf8', env: { PATH: '/nonexistent', HOME: home, ...extraEnv } });
+    const r = spawnSync(process.execPath, [join(pluginRoot, 'dist', 'cli.js'), 'doctor', '--verbose'], { encoding: 'utf8', env: { PATH: '/nonexistent', HOME: home, ...extraEnv } });
     return { status: r.status, stdout: r.stdout };
   };
 

@@ -176,15 +176,18 @@ describe('dashboard server', () => {
     }
   });
   it.each(['ko', 'en'])('renders unknown and mismatched versions without interrupting live rendering (%s)', lang => {
-    const functionBody = DASHBOARD_PAGE.split('\n').find(line => line.startsWith('function versionLine('))!;
-    const render = (version: { running: string; installed: string | null }) => runInNewContext(`${functionBody}\nversionLine(version)[0]`, {
-      lang, version, el: (_tag: string, _className: string, text: string) => ({ textContent: text, style: {} }),
-    }) as { textContent: string; style: { color?: string } };
-    expect(render({ running: '0.7.1', installed: null }).textContent).toBe(lang === 'ko'
-      ? '대시보드 v0.7.1 · 설치된 플러그인 확인 불가' : 'Dashboard v0.7.1 · Installed plugin unavailable');
+    const functions = DASHBOARD_PAGE.split('\n').filter(line => line.startsWith('function versionLine(') || line.startsWith('function versionState(')).join('\n');
+    const render = (version: { running: string; installed: string | null }) => runInNewContext(`${functions}\nversionLine(version)`, {
+      lang, version, label: (ko: string, en: string) => lang === 'ko' ? ko : en,
+      el: (_tag: string, _className: string, text: string) => ({ textContent: text, style: {} }),
+    }) as Array<{ textContent: string }>;
+    const unknown = render({ running: '0.7.1', installed: null });
+    expect(unknown[0]!.textContent).toBe(lang === 'ko'
+      ? '대시보드 v0.7.1 · 설치된 Claude 플러그인 확인 불가' : 'Dashboard v0.7.1 · Installed Claude plugin unknown');
+    expect(unknown[1]!.textContent).toContain(lang === 'ko' ? '최신 여부 미확인' : 'Update status unknown');
     const mismatch = render({ running: '0.7.0', installed: '0.7.1' });
-    expect(mismatch.textContent).toContain(lang === 'ko' ? '재시작하세요' : 'Restart the dashboard');
-    expect(mismatch.style.color).toBeDefined();
+    expect(mismatch[1]!.textContent).toContain(lang === 'ko' ? '설치 버전 다름' : 'Installed version differs');
+    expect(mismatch[2]!.textContent).toContain(lang === 'ko' ? '기존 세션은 이전 훅' : 'Existing sessions can retain older hooks');
   });
 
   it('notifies connected clients when only the installed plugin version changes', async () => {
@@ -210,14 +213,17 @@ describe('dashboard server', () => {
   it('pushes a Compact event even when the legacy single-turn signature is unchanged', async () => {
     const trace = make();
     const debug = make();
-    const server = await startDashboard({ traceDir: trace, debugDir: debug, env: { JEV_GATE_STATE_DIR: make() } }, 0);
+    const server = await startDashboard({ traceDir: trace, debugDir: debug, env: { HOME: make(), JEV_GATE_STATE_DIR: make() } }, 0);
     const response = await fetch(`${server.url}api/live`);
     const reader = response.body!.getReader();
     const read = async (): Promise<{ live: { sig: string }; operations: { features: Array<{ id: string; count: number }> } }> => {
       const result = await Promise.race([
         reader.read(),
         new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error('SSE timed out')), 2500)),
-      ]);
+      ]).catch(async error => {
+        const snapshot = await (await fetch(`${server.url}api/snapshot`)).json() as { operations: { features: Array<{ id: string; count: number }> } };
+        throw new Error(`${String(error)}; compact snapshot count=${snapshot.operations.features.find(f => f.id === 'compact')?.count ?? 'missing'}`);
+      });
       if (result.done) throw new Error('SSE ended');
       const line = new TextDecoder().decode(result.value).split('\n').find((s) => s.startsWith('data: '));
       if (!line) throw new Error('missing SSE data');

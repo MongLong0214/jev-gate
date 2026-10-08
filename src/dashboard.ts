@@ -17,6 +17,7 @@ import { dashboardStatus, setDashboard } from './dashboard-settings.js';
 import { JEV_FAVICON } from './dashboard-brand.js';
 import { TraceDirectoryReader, traceDirectoryIdentity } from './explain.js';
 import { ClaudeWorkerActivityReader } from './claude-worker-activity.js';
+import { releaseChecker, type ReleaseInfo } from './release-info.js';
 
 const PAGE = DASHBOARD_PAGE;
 
@@ -54,6 +55,7 @@ const readJson = (path: string): unknown => {
 export interface DashboardVersions {
   running: string | null;
   installed: string | null;
+  release?: ReleaseInfo;
 }
 const PLUGIN_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const ownAtStartup = ['.claude-plugin', '.codex-plugin'].map(kind => readJson(join(PLUGIN_ROOT, kind, 'plugin.json')))
@@ -70,18 +72,24 @@ export const readVersions = (env: Env, host?: Host): DashboardVersions => {
   if (isRecord(plugins)) {
     for (const [key, entries] of Object.entries(plugins)) {
       if (!key.startsWith('jev-gate@') || !Array.isArray(entries)) continue;
-      const first = entries.find((e) => isRecord(e) && typeof e['version'] === 'string');
-      if (isRecord(first)) installed = first['version'] as string;
+      const versions = entries.flatMap(e => isRecord(e) && typeof e['version'] === 'string' ? [e['version']] : []);
+      // Conflicting scopes must not silently select a different installed package.
+      for (const version of versions) {
+        if (installed !== null && installed !== version) return { running, installed: null };
+        installed = version;
+      }
     }
   }
   return { running, installed };
 };
 
-export const startDashboard = (sources: DashboardSources, port: number, runtime: { token?: string; openBrowser?: (url: string) => void; reconnectGraceMs?: number } = {}): Promise<{ url: string; port: number; close: () => Promise<void>; ensureOpen: () => void }> =>
+export const startDashboard = (sources: DashboardSources, port: number, runtime: { token?: string; openBrowser?: (url: string) => void; reconnectGraceMs?: number; releaseFetch?: typeof fetch } = {}): Promise<{ url: string; port: number; close: () => Promise<void>; ensureOpen: () => void }> =>
   new Promise((resolve, reject) => {
     const sockets = new Set<Socket>();
     const traceReader = new TraceDirectoryReader();
     const workerReader = new ClaudeWorkerActivityReader();
+    const releases = releaseChecker(runtime.releaseFetch);
+    const versions = (): DashboardVersions => ({ ...readVersions(sources.env, sources.host), release: releases.current() });
     const subscribers = new Set<() => void>();
     const viewers = new Map<string, number>(); // Infinity while connected; a short lease during reconnect.
     let viewerSequence = 0;
@@ -151,7 +159,7 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
         scannedAt = Date.now(); changed = false;
         syncWatchers(true);
       }
-      return { ...activity, version: readVersions(sources.env, sources.host), recording: recordingStatus(sources.env), dashboard: dashboardStatus(sources.env) };
+      return { ...activity, version: versions(), recording: recordingStatus(sources.env), dashboard: dashboardStatus(sources.env) };
     };
     const scan = setInterval(broadcast, 400);
     scan.unref();
@@ -167,6 +175,11 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
       res.setHeader('x-content-type-options', 'nosniff');
       res.setHeader('referrer-policy', 'no-referrer');
       const path = req.url?.split('?')[0];
+      if (path === '/api/version' && req.method === 'GET') {
+        await releases.refresh();
+        res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+        res.end(JSON.stringify(versions())); return;
+      }
       if (path === '/api/health' && req.method === 'GET') {
         res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
         res.end(JSON.stringify({ service: 'jev-gate-dashboard', token: runtime.token ?? null })); return;

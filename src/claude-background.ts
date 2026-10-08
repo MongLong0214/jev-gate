@@ -17,14 +17,33 @@ export const isNativeTaskNotification = (input: HookInput): boolean => {
     const st = fstatSync(fd); if (!st.isFile()) return false;
     const offset = Math.max(0, st.size - 1024 * 1024), buffer = Buffer.alloc(st.size - offset);
     readSync(fd, buffer, 0, buffer.length, offset);
-    return buffer.toString().split('\n').some(line => {
-      try {
-        const row = JSON.parse(line) as Record<string, unknown>, origin = row['origin'] as { kind?: unknown; producer?: unknown } | undefined;
+    const rows = buffer.toString().split('\n').flatMap(line => { try { const row: unknown = JSON.parse(line); return row && typeof row === 'object' && !Array.isArray(row) ? [row as Record<string, unknown>] : []; } catch { return []; } });
+    const textOf = (row: Record<string, unknown>): string | null => {
+      const content = (row['message'] as { content?: unknown } | undefined)?.content;
+      return typeof content === 'string' ? content : Array.isArray(content) && content.every(c => c?.type === 'text' && typeof c.text === 'string') ? content.map(c => c.text).join('\n') : null;
+    };
+    if (rows.some(row => {
+        const origin = row['origin'] as { kind?: unknown; producer?: unknown } | undefined;
         if (row['type'] !== 'user' || row['sessionId'] !== input.session_id || row['promptSource'] !== 'system' || row['turnOrigin'] !== 'task_notification' || origin?.kind !== 'task-notification' || origin.producer !== 'session-task' || row['promptId'] !== input.prompt_id && row['uuid'] !== input.prompt_id) return false;
-        const content = (row['message'] as { content?: unknown } | undefined)?.content;
-        const text = typeof content === 'string' ? content : Array.isArray(content) && content.every(c => c?.type === 'text' && typeof c.text === 'string') ? content.map(c => c.text).join('\n') : null;
-        return text === input.prompt;
-      } catch { return false; }
+        return textOf(row) === input.prompt;
+    })) return true;
+    // Native 2.1.293 can run the notice hook before flushing its user row, reusing the
+    // preceding human turn's ID and omitting source. Authenticate the host queue against
+    // that different human turn AND the structured native launch receipt, never XML alone.
+    if (!/^\s*<task-notification>[\s\S]*<\/task-notification>\s*$/.test(input.prompt ?? '')) return false;
+    const field = (name: string): string | null => { const matches = [...(input.prompt ?? '').matchAll(new RegExp(`<${name}>([^<>]+)</${name}>`, 'g'))]; return matches.length === 1 ? matches[0]![1]! : null; };
+    const agent = field('task-id'), tool = field('tool-use-id'), output = field('output-file'), status = field('status');
+    if (!agent || !tool || !output || !/^[\w-]{1,160}$/.test(agent) || !/^[\w-]{1,160}$/.test(tool) || !['completed', 'failed', 'killed'].includes(status ?? '')) return false;
+    const humanIndex = rows.findLastIndex(row => row['type'] === 'user' && row['sessionId'] === input.session_id && row['isSidechain'] !== true && textOf(row) !== null);
+    const human = rows[humanIndex];
+    if (!human || human['promptId'] !== input.prompt_id || !['user', 'sdk'].includes(String(human['promptSource'])) || textOf(human) === input.prompt) return false;
+    const queuedIndex = rows.findLastIndex(row => row['type'] === 'queue-operation' && row['operation'] === 'enqueue' && row['sessionId'] === input.session_id && row['content'] === input.prompt);
+    const queued = rows[queuedIndex];
+    if (!queued || queuedIndex <= humanIndex || typeof queued['timestamp'] !== 'string' || typeof human['timestamp'] !== 'string' || !Number.isFinite(Date.parse(queued['timestamp'])) || !Number.isFinite(Date.parse(human['timestamp'])) || Date.parse(queued['timestamp']) < Date.parse(human['timestamp'])) return false;
+    return rows.slice(0, queuedIndex).some(row => {
+      const result = row['toolUseResult'] as Record<string, unknown> | undefined;
+      const content = (row['message'] as { content?: unknown } | undefined)?.content;
+      return row['type'] === 'user' && row['sessionId'] === input.session_id && row['isSidechain'] !== true && result?.['status'] === 'async_launched' && result['agentId'] === agent && result['outputFile'] === output && Array.isArray(content) && content.some(c => c?.type === 'tool_result' && c.tool_use_id === tool);
     });
   } catch { return false; }
   finally { if (fd !== undefined) closeSync(fd); }

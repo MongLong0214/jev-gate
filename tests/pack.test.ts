@@ -131,9 +131,9 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
       input: JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 's', prompt: 'add a test' }),
     });
     expect(offViaConfig).toMatchObject({ status: 0, stdout: '', stderr: 'jev-gate: mode_off\n' });
-    const doctor = spawnSync(process.execPath, [join(dest, 'dist', 'cli.js'), 'doctor'], { cwd: otherCwd, encoding: 'utf8', env: { ...env, PATH: '/nonexistent' } });
-    expect(doctor.stdout).toMatch(/\[ok\] dist\/entry\.js present/);
-    expect(doctor.stdout).toMatch(/\[ok\] dist\/hook\.js present/);
+    const doctor = spawnSync(process.execPath, [join(dest, 'dist', 'cli.js'), 'doctor', '--verbose'], { cwd: otherCwd, encoding: 'utf8', env: { ...env, PATH: '/nonexistent' } });
+    expect(doctor.stdout).toMatch(/\[ok\] dist\/entry\.js readable file/);
+    expect(doctor.stdout).toMatch(/\[ok\] dist\/hook\.js readable file/);
     expect(doctor.stdout).toMatch(/hooks\.json PreToolUse \(no matcher\): 1 command hook/);
     expect(doctor.stdout).toMatch(/hooks\.json Stop \(no matcher\): 1 command hook/);
     // #48 P2: SessionStart is the sixth registered event, wired to the same dist/entry.js command.
@@ -141,7 +141,7 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     for (const agent of agents) expect(existsSync(join(dest, agent)), agent).toBe(true);
     // v0.3.0 shipped without agents/executor.md and doctor failed on the installed archive; the lines above only
     // sampled its output. With the host able to run Agent calls in the foreground, doctor on the archive fails nothing.
-    const whole = spawnSync(process.execPath, [join(dest, 'dist', 'cli.js'), 'doctor'], {
+    const whole = spawnSync(process.execPath, [join(dest, 'dist', 'cli.js'), 'doctor', '--verbose'], {
       cwd: otherCwd,
       encoding: 'utf8',
       env: { ...env, PATH: '/nonexistent', CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' },
@@ -173,6 +173,15 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     expect(spawnSync('unzip', ['-q', join(outDir, archive!), '-d', dest], { encoding: 'utf8' }).status).toBe(0);
     expectInstallDocs(dest);
     const env = { PATH: process.env['PATH'] ?? '', HOME: join(tmp, 'lean home'), JEV_GATE_MODE: 'lean' };
+    const leanConfig = join(tmp, 'lean-doctor-config.json');
+    writeFileSync(leanConfig, JSON.stringify({ version: 5, mode: 'lean', delegationDepthFloor: 300000 }));
+    const diagnosis = spawnSync(process.execPath, [join(dest, 'dist/cli.js'), 'doctor', '--json'], { cwd: otherCwd, encoding: 'utf8', env: { ...env, PATH: '/nonexistent', JEV_GATE_CONFIG: leanConfig, CLAUDE_CODE_AUTO_COMPACT_WINDOW: '200000', CLAUDE_CODE_FORK_SUBAGENT: '0' } });
+    expect(diagnosis.status, diagnosis.stdout + diagnosis.stderr).toBe(0);
+    const report = JSON.parse(diagnosis.stdout);
+    expect(report.checks.filter((c: {group:string;level:string}) => c.group === 'package' && c.level === 'fail')).toEqual([]);
+    expect(report.models.compatibility).toEqual([]);
+    expect(report.checks.some((c: {message:string}) => c.message.includes('effective depth floor'))).toBe(false);
+    expect(report.models.source).toContain('Lean');
     // No key: the installed lean entrypoint reads no source, sends nothing and prints nothing.
     const quiet = spawnSync(process.execPath, [join(dest, 'dist', 'hook.js'), '--lean'], { cwd: otherCwd, encoding: 'utf8', env, input: JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 's', prompt_id: 'p', prompt: 'add a test' }) });
     expect(quiet).toMatchObject({ status: 0, stdout: '', stderr: 'jev-gate: key_missing\n' });
