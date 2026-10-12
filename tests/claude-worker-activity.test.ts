@@ -21,6 +21,7 @@ describe('local Claude worker activity', () => {
   it('tracks a child Jev request and an ordinary child tool, and preserves omitted effort', () => {
     const f = fixture([row('assistant', [{ type: 'tool_use', id: 'read', name: 'Read', input: { file_path: 'src/app.ts' } }])]);
     const records = [{ phase: 'mod_router', session_id: 'session', agent_id: 'agent', event: 'request', scope: 'child', index: 1, turn: 'child', written_at: start }];
+    expect(f.reader.read([{ ...records[0]!, event: 'turn_end', reason: 'answer' }], f.env, now).items).toEqual([]);
     expect(f.reader.read(records, f.env, now).items[0]).toMatchObject({ state: 'active', jevRequestAt: start, jevResponseAt: null });
     records.push({ ...records[0]!, event: 'child_route', written_at: end });
     const result = f.reader.read([...records, { ...records[0], event: 'model_request', requested: 'claude-haiku-4-5', requested_effort: null, written_at: end }, { ...records[0], event: 'child_result', written_at: end }], f.env, now).items[0];

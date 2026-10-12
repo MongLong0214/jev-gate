@@ -198,7 +198,8 @@ export class ClaudeWorkerActivityReader {
     for (const r of records.filter(r => r['agent_id'] && ['background_launch', 'mod_router', 'claude_router'].includes(String(r['phase']))).sort((a, b) => String(a['written_at'] ?? '').localeCompare(String(b['written_at'] ?? '')))) {
       if (r['host'] === 'codex') continue;
       const sessionId = token(r['session_id']), agentId = token(r['agent_id']), at = stamp(r['written_at']);
-      if (!sessionId || !agentId || !at || !['background_launch', 'mod_router', 'claude_router'].includes(String(r['phase']))) continue;
+      // A loop end bounds Router request rows only; it is not worker activity.
+      if (!sessionId || !agentId || !at || !['background_launch', 'mod_router', 'claude_router'].includes(String(r['phase'])) || r['event'] === 'turn_end') continue;
       const key = `${sessionId}:${agentId}`, previous = candidates.get(key), d = dispatch.get(callKey(r));
       const terminal = terminals.get(callKey(r));
       const terminalAt = stamp(terminal?.['written_at']);

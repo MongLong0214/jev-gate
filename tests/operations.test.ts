@@ -321,6 +321,76 @@ describe('actual model request lifecycle', () => {
   });
 });
 
+describe('unanswered model requests (#212)', () => {
+  const sent = '2026-10-08T00:00:00.000Z', minute = (n: number) => new Date(Date.parse(sent) + n * 60_000).toISOString();
+  const child = { session_id: 's', turn: 'child-turn', agent_id: 'worker', scope: 'child', index: 3 };
+  const request = row('router', { ...child, event: 'model_request', requested: 'claude-sonnet-5-5' }, sent);
+  const claude = (extra: DebugRecord[], now: string) => {
+    const view = buildOperations([], [request, ...extra], new Date(now), { trace: false, debug: true });
+    return { view, step: view.runs.flatMap(r => r.steps).find(s => s.title === '모델 · 응답 대기')! };
+  };
+  const others = (rec: Record<string, unknown>, at: string) => [{ ...rec, agent_id: 'sibling' }, { ...rec, agent_id: null, scope: 'root' }, { ...rec, session_id: 'other' }].map(r => row('router', r, at));
+
+  it('stops counting a days-old request as running without concluding it, and settles a late response', () => {
+    const old = claude([], '2026-10-12T03:13:00.000Z');
+    expect(old.step).toMatchObject({ state: 'unconfirmed', summary: '모델 응답 기록 없음 · 현재 활동 미관측' });
+    expect(old.step.elapsedMs).toBeUndefined(); expect(old.step.startedAt).toBeUndefined();
+    expect(old.view).toMatchObject({ active: 0, attention: 0 }); expect(old.view.runs[0]?.state).toBe('unconfirmed');
+    expect(claude([], minute(2)).step).toMatchObject({ state: 'active', summary: '모델 응답 대기', elapsedMs: 120_000, startedAt: sent });
+    expect(claude([], minute(2)).view.active).toBe(1);
+    const late = claude([row('router', { ...child, event: 'child_result', requested: 'claude-sonnet-5-5', observed: 'claude-sonnet-5-5', confirmation: 'confirmed' }, minute(5000))], '2026-10-12T03:13:00.000Z');
+    expect(late.step).toMatchObject({ state: 'done', summary: '모델 요청 종료 기록 확인' }); expect(late.view.active).toBe(0);
+  });
+
+  it('keeps a slow request live only on activity from its exact loop and never closes it from elsewhere', () => {
+    const alive = claude([row('router', { ...child, event: 'late', usage: { input: 1 } }, minute(15))], minute(20));
+    expect(alive.step).toMatchObject({ state: 'active', elapsedMs: 20 * 60_000 }); expect(alive.view.active).toBe(1);
+    for (const other of others({ ...child, event: 'late' }, minute(15))) expect(claude([other], minute(20)).step.state).toBe('unconfirmed');
+    for (const other of others({ ...child, event: 'child_result', observed: 'claude-sonnet-5-5' }, minute(1))) expect(claude([other], minute(2)).step.state).toBe('active');
+    for (const other of [...others({ ...child, event: 'turn_end', reason: 'aborted' }, minute(1)), ...others({ event: 'session_end', session_id: 's' }, minute(1)).slice(2), row('router', { event: 'session_end' }, minute(1))]) expect(claude([other], minute(2)).step.state).toBe('active');
+  });
+
+  it('links an exact turn, child or session end without synthesizing a response', () => {
+    const end = (rec: Record<string, unknown>, at = minute(1)) => claude([row('router', rec, at)], minute(2)).step;
+    expect(end({ ...child, event: 'turn_end', reason: 'answer' })).toMatchObject({ state: 'unconfirmed', summary: '턴 또는 세션 종료 · 이 호출의 결과 이벤트는 미관측' });
+    expect(end({ ...child, event: 'turn_end', reason: 'aborted' })).toMatchObject({ state: 'interrupted' });
+    expect(end({ event: 'session_end', session_id: 's' })).toMatchObject({ state: 'unconfirmed' });
+    expect(end({ ...child, event: 'turn_end', reason: 'aborted' }, '2026-10-07T23:59:00.000Z').state).toBe('active');
+    const root = { session_id: 's', turn: 'root-turn', agent_id: null, scope: 'root', index: 0 };
+    const rootView = buildOperations([], [row('router', { ...root, event: 'model_request' }, sent), row('router', { ...root, event: 'turn_end', reason: 'aborted' }, minute(1)), request], new Date(minute(2)), { trace: false, debug: true });
+    expect(rootView.runs.flatMap(r => r.steps).filter(s => s.title === '모델 · 응답 대기').map(s => s.state).sort()).toEqual(['active', 'interrupted']);
+    expect(rootView.feed.some(s => s.title.includes('turn_end'))).toBe(false);
+    const answered = claude([row('router', { ...child, event: 'turn_end', reason: 'aborted' }, minute(1)), row('router', { ...child, event: 'model_failure' }, minute(1))], minute(2));
+    expect(answered.step.state).toBe('done'); expect(answered.view.attention).toBe(1);
+  });
+
+  it('applies the same evidence to Codex requests', () => {
+    const req = { ...base, written_at: sent, host: 'codex', phase: 'codex_model_request', session_id: 'cx', prompt_id: 'turn-1', request_id: 'm1', submitted_model: 'gpt-6.1-sol' };
+    const event = (name: string, extra: Record<string, unknown> = {}, at = minute(1)) => ({ host: 'codex', phase: 'codex_event', event: name, session_id: 'cx', prompt_id: 'turn-1', written_at: at, ...extra });
+    const build = (extra: Record<string, unknown>[], now: string) => {
+      const view = buildOperations([req, ...extra], [], new Date(now), { trace: true, debug: false, host: 'codex' });
+      return { view, step: view.runs.flatMap(r => r.steps).find(s => s.title === '모델 · 응답 대기')! };
+    };
+    expect(build([], '2026-10-12T03:13:00.000Z')).toMatchObject({ view: { active: 0 }, step: { state: 'unconfirmed', summary: '모델 응답 기록 없음 · 현재 활동 미관측' } });
+    expect(build([], minute(2)).step.state).toBe('active');
+    expect(build([event('PreToolUse', {}, minute(15))], minute(20)).step).toMatchObject({ state: 'active', elapsedMs: 20 * 60_000 });
+    for (const other of [event('PreToolUse', { session_id: 'other' }, minute(15)), event('PreToolUse', { prompt_id: 'turn-2' }, minute(15))]) expect(build([other], minute(20)).step.state).toBe('unconfirmed');
+    expect(build([event('Stop')], minute(2)).step.state).toBe('unconfirmed');
+    expect(build([event('Interrupt')], minute(2)).step.state).toBe('interrupted');
+    expect(build([event('SessionEnd', { prompt_id: null })], minute(2)).step.state).toBe('unconfirmed');
+    for (const other of [event('Stop', { session_id: 'other' }), event('Stop', { prompt_id: 'turn-2' }), event('SessionEnd', { session_id: 'other' }), event('Stop', {}, '2026-10-07T23:59:00.000Z')]) expect(build([other], minute(2)).step.state).toBe('active');
+    expect(build([event('Stop'), { ...req, phase: 'codex_router_response', written_at: minute(5000), observed_model: 'gpt-6.1-sol' }], '2026-10-12T03:13:00.000Z').step.state).toBe('done');
+  });
+
+  it('keeps past responses and their usage while an orphaned request is no longer running', () => {
+    const usage = { input: 1200, output: 340, cache_read: 9000, cache_creation: 0 };
+    const view = buildOperations([], [row('router', { ...child, index: 2, event: 'model_request' }, minute(-1)), row('router', { ...child, index: 2, event: 'child_result', observed: 'claude-sonnet-5-5', usage }, minute(-1)), request, row('router', { ...child, event: 'request', sent: true }, minute(-2))], new Date('2026-10-12T03:13:00.000Z'), { trace: false, debug: true });
+    expect(view.active).toBe(0); expect(view.requests).toBe(1);
+    expect(view.runs.flatMap(r => r.steps).find(s => s.title === 'Router · child_result')?.details).toContain('입력 1,200 · 출력 340 · cache read 9,000 · cache write 0');
+    expect(view.runs.flatMap(r => r.steps).filter(s => s.title === '모델 · 응답 대기').map(s => s.state).sort()).toEqual(['done', 'unconfirmed']);
+  });
+});
+
 
 it('shows Codex model requests in flight even when Router preserves the baseline', () => {
   const req={...base,host:'codex',phase:'codex_model_request',request_id:'model-1',submitted_model:'gpt-6.1-sol'};
@@ -353,7 +423,7 @@ it('keeps unknown-prompt requests separate from other sessions, requests and kno
   const request = { ...base, host: 'codex', prompt_id: null, phase: 'codex_model_request', request_id: 'model-1' };
   const response = { ...request, phase: 'codex_router_response', written_at: later, observed_model: 'gpt-6-luna' };
   const build = (record: Record<string, unknown>) => buildOperations([request, record], [], new Date('2026-09-29T08:00:00.000Z'), { trace: true, debug: false }).feed.find(step => step.title === '모델 · 응답 대기')!;
-  for (const other of [{ ...response, session_id: 'other' }, { ...response, request_id: 'other' }, { ...response, prompt_id: 'known' }, { ...response, written_at: '2026-09-29T05:00:00.000Z' }]) expect(build(other).state).toBe('active');
+  for (const other of [{ ...response, session_id: 'other' }, { ...response, request_id: 'other' }, { ...response, prompt_id: 'known' }, { ...response, written_at: '2026-09-29T05:00:00.000Z' }]) expect(build(other).state).toBe('unconfirmed');
   expect(build(response).state).toBe('done');
 });
 

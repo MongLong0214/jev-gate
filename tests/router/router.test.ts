@@ -518,14 +518,18 @@ describe('root effort', () => {
     const f = fakeEngine({ respond: answering({ ...CLEAR, effort: ['low', 0.95] }) });
     router.turnStart({ turnId: 't1', text: TEXT });
     await drain(router.turnStep(f.engine, step(), streamNext<TurnStepEvent>().next));
-    router.turnComplete({ turnId: 't1', agentId: 'child' });
+    router.turnComplete({ turnId: 't1', agentId: 'child' }, f.engine);
     const kept = streamNext<TurnStepEvent>();
     await drain(router.turnStep(f.engine, step({ index: 1 }), kept.next));
     expect(kept.calls[0]?.effort).toBe('low');
-    router.turnComplete({ turnId: 't1' });
+    router.turnComplete({ turnId: 't1', reason: 'answer', answer: 'SECRET ANSWER' }, f.engine);
     const gone = streamNext<TurnStepEvent>();
     await drain(router.turnStep(f.engine, step({ index: 2 }), gone.next));
     expect(gone.calls).toEqual([step({ index: 2 })]);
+    router.sessionEnd(f.engine);
+    // Ends are recorded with their exact loop so an unanswered request can be bounded; the answer itself never is.
+    expect(f.logs.filter(l => ['turn_end', 'session_end'].includes(String(l.event)))).toEqual([{ event: 'turn_end', turn: 't1', agent_id: 'child', scope: 'child', reason: null }, { event: 'turn_end', turn: 't1', agent_id: null, scope: 'root', reason: 'answer' }, { event: 'session_end' }]);
+    expect(JSON.stringify(f.logs)).not.toContain('SECRET ANSWER');
   });
 });
 

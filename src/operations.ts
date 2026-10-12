@@ -214,7 +214,19 @@ const modelRequestKey = (r: Rec): string | null => {
   // still binds a response; null remains distinct from every known prompt.
   return values[0] && values[2] ? JSON.stringify(values) : null;
 };
-const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<string, string>, modelTerminals: Map<string, string>): OperationStep | null => {
+/** Latest record and recorded turn/child/session ends per exact loop or session; never a sibling's, the root's or another session's. */
+interface Liveness { now: number; seen: Map<string, string>; ends: Map<string, Array<{ at: string; interrupted: boolean }>> }
+// Same bound as an unclosed native Codex span: a quiet loop is no longer asserted live, and nothing is concluded.
+const MODEL_IDLE_MS = 600_000;
+/** Elapsed time is never terminal evidence. Only an exact response or failure settles a request. */
+const modelRequestState = (at: string, settledAt: string | undefined, loop: string, session: string, live: Liveness): Pick<OperationStep, 'state' | 'summary'> => {
+  if (settledAt !== undefined && settledAt >= at) return { state: 'done', summary: '모델 요청 종료 기록 확인' };
+  const end = [...live.ends.get(loop) ?? [], ...live.ends.get(session) ?? []].filter(e => e.at >= at).sort((a, b) => a.at.localeCompare(b.at))[0];
+  if (end) return end.interrupted ? { state: 'interrupted', summary: '사용자 중단 관측 · 성공이나 기능 오류로 분류하지 않음' } : { state: 'unconfirmed', summary: '턴 또는 세션 종료 · 이 호출의 결과 이벤트는 미관측' };
+  return live.now - Date.parse(live.seen.get(loop) ?? at) < MODEL_IDLE_MS ? { state: 'active', summary: '모델 응답 대기' } : { state: 'unconfirmed', summary: '모델 응답 기록 없음 · 현재 활동 미관측' };
+};
+const codexLoop = (r: Rec): string => JSON.stringify(['codex', r['session_id'], token(r['prompt_id'])]);
+const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<string, string>, modelTerminals: Map<string, string>, live: Liveness): OperationStep | null => {
   const phase = token(r['phase']);
   if (!phase) return null;
   const feature = phase === 'dispatch' && r['role'] === 'planner' ? 'planning' : traceFeature(phase);
@@ -430,10 +442,9 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
     }
   }
   if (phase === 'codex_model_request') {
-    const binding = modelRequestKey(r), terminalAt = binding ? modelTerminals.get(binding) : undefined;
-    const settled = terminalAt !== undefined && terminalAt >= at;
-    lane = 'host'; state = settled ? 'done' : 'active';
-    summary = settled ? '모델 요청 종료 기록 확인' : '모델 응답 대기';
+    const binding = modelRequestKey(r);
+    ({ state, summary } = modelRequestState(at, binding ? modelTerminals.get(binding) : undefined, codexLoop(r), JSON.stringify(['codex', r['session_id']]), live));
+    lane = 'host';
     details.push(`전달 모델 ${token(r['submitted_model']) ?? '?'}`);
   }
   if (phase === 'codex_model_failure') { state = 'error'; lane = 'host'; summary = '호스트 모델 요청 실패'; }
@@ -490,12 +501,13 @@ const routerResponseKey = (r: Rec, index: unknown = r['index'] ?? null): string 
 
 const routerDecisionKey = (r: Rec): string => JSON.stringify([r['session_id'] ?? 'legacy', r['turn'] ?? r['tool_use_id'] ?? '', r['agent_id'] ?? null, r['agent_id'] ? r['index'] ?? null : null]);
 
-const debugStep = (row: DebugRecord, now: number, closed: Set<string>, responses: Map<string, string>): OperationStep | null => {
+const debugStep = (row: DebugRecord, now: number, closed: Set<string>, responses: Map<string, string>, live: Liveness): OperationStep | null => {
   const r = row.rec;
   const route = field(r, 'routing_decision'), scope = token(route?.['scope']);
   const routing: OperationStep['routing'] = scope && ['root', 'spawn', 'child', 'owned'].includes(scope) ? { scope: scope as NonNullable<OperationStep['routing']>['scope'], baseline: token(route?.['baseline']), modelReason: token(route?.['modelReason']), effortReason: token(route?.['effortReason']) } : undefined;
   const event = token(r['event']);
-  if (!event || !row.at) return null;
+  // Turn and session ends only bound the requests of their own loop; they are not routing steps.
+  if (!event || !row.at || event === 'turn_end' || event === 'session_end') return null;
   const feature = row.component;
   const runId = token(r['run_id']);
   const key = row.component === 'router' ? routerDecisionKey(r) : `${token(r['session_id']) ?? 'legacy'}:${runId ?? ''}`;
@@ -562,12 +574,8 @@ const debugStep = (row: DebugRecord, now: number, closed: Set<string>, responses
     details.push('요청 전 점검만 기록됨 · Jev 새 호출이나 실제 모델 응답 완료를 뜻하지 않음');
   }
   if (event === 'model_request') {
-    const responseAt = responses.get(routerResponseKey(r));
-    const settled = responseAt !== undefined && responseAt >= row.at;
-    // A slow host response is still in flight; elapsed time alone is not a failure.
-    state = settled ? 'done' : 'active';
+    ({ state, summary } = modelRequestState(row.at, responses.get(routerResponseKey(r)), routerResponseKey(r, 'loop'), JSON.stringify(['claude', r['session_id']]), live));
     lane = 'host';
-    summary = settled ? '모델 요청 종료 기록 확인' : state === 'active' ? '모델 응답 대기' : '모델 요청 시작됨 · 종료 결과 미관측';
     details.push(text(`전달 모델 ${token(r['requested']) ?? '?'}`, `전달 effort ${token(r['requested_effort']) ?? '호스트 기본값'}`), '호스트 호출 시작 관측 · 실제 모델과 effort 확인은 응답 기록과 별도');
   }
   if (event === 'model_failure') { state = 'error'; lane = 'host'; summary = '호스트 모델 요청 실패'; }
@@ -605,6 +613,23 @@ export const buildOperations = (records: Rec[], debug: DebugRecord[], now: Date,
     if (['codex_router_response', 'codex_model_failure'].includes(String(r['phase'])) && at && at >= (modelTerminals.get(key) ?? '')) modelTerminals.set(key, at);
     if (r['phase'] === 'codex_router_response' && at && at >= iso(responseBindings.get(key)?.['written_at'])) responseBindings.set(key, r);
   }
+  const live: Liveness = { now: now.getTime(), seen: new Map(), ends: new Map() };
+  const observe = (loop: string, at: string, end?: { key: string; interrupted: boolean }) => {
+    if (at > (live.seen.get(loop) ?? '')) live.seen.set(loop, at);
+    if (end) live.ends.set(end.key, [...live.ends.get(end.key) ?? [], { at, interrupted: end.interrupted }]);
+  };
+  for (const r of records) {
+    const at = iso(r['written_at']), event = r['phase'] === 'codex_event' ? r['event'] : null;
+    if (r['host'] !== 'codex' || !token(r['session_id']) || !at) continue;
+    observe(codexLoop(r), at, (event === 'Stop' || event === 'Interrupt') && token(r['prompt_id']) ? { key: codexLoop(r), interrupted: event === 'Interrupt' }
+      : event === 'SessionEnd' ? { key: JSON.stringify(['codex', r['session_id']]), interrupted: false } : undefined);
+  }
+  for (const row of debug) if (row.component === 'router' && row.at) {
+    const r = row.rec, loop = routerResponseKey(r, 'loop');
+    // Host debug mirrors carry no session; an unidentified session end cannot end anything.
+    observe(loop, row.at, r['event'] === 'turn_end' && token(r['turn']) ? { key: loop, interrupted: r['reason'] === 'aborted' }
+      : r['event'] === 'session_end' && token(r['session_id']) ? { key: JSON.stringify(['claude', r['session_id']]), interrupted: false } : undefined);
+  }
   records = records.map(r => {
     const key = modelRequestKey(r);
     const response = r['phase'] === 'codex_route_applied' && key ? responseBindings.get(key) : undefined;
@@ -634,7 +659,7 @@ export const buildOperations = (records: Rec[], debug: DebugRecord[], now: Date,
   }
   const grouped = new Map<string, { source: OperationRun['source']; host: Host; mode: string; executionId?: string; steps: OperationStep[] }>();
   for (const r of records) {
-    const step = traceStep(r, now.getTime(), resultIds, intents, modelTerminals);
+    const step = traceStep(r, now.getTime(), resultIds, intents, modelTerminals, live);
     if (!step) continue;
     const host = r['host'] === 'codex' ? 'codex' : 'claude';
     const source = gateGroup(r).split(':')[0] as OperationRun['source'];
@@ -655,7 +680,7 @@ export const buildOperations = (records: Rec[], debug: DebugRecord[], now: Date,
     grouped.set(key, group);
   }
   for (const row of debug) {
-    const step = debugStep(row, now.getTime(), closed, responses);
+    const step = debugStep(row, now.getTime(), closed, responses, live);
     if (!step) continue;
     const key = debugGroup(row);
     const group = grouped.get(key) ?? { source: row.component, host: 'claude' as const, mode: row.component, steps: [] };
