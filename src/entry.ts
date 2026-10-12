@@ -4,9 +4,9 @@ import { fileURLToPath } from 'node:url';
 import { hookDefaultMode, loadConfig, type Env } from './config.js';
 
 /**
- * #48 P2: idle cost. `hooks.json` and `lean.json` point every event at this file instead of `dist/hook.js` directly.
- * hook.ts's own static import graph pulls in admission, allocation, coordinator, jev, job, plan, trace, lean,
- * lean-source, depth, interpretation, brief, auth, liveness and host-window before it ever reads a byte of stdin --
+ * #48 P2: idle cost. `hooks.json` points every event at this file instead of `dist/hook.js` directly.
+ * hook.ts's own static import graph pulls in admission, allocation, coordinator, jev, job, plan, trace, depth,
+ * interpretation, brief, auth, liveness and host-window before it ever reads a byte of stdin --
  * paid on every single invocation, including the common case of a fresh install or `JEV_GATE_MODE=off`, where none
  * of that work does anything. This file imports only the lightweight config loader -- no admission, routing or
  * network logic lives in `config.ts`, so it is not one of the modules this exists to avoid -- decides with the same
@@ -18,8 +18,8 @@ import { hookDefaultMode, loadConfig, type Env } from './config.js';
  * runs it, not a second copy of it here. A wrong "not off" costs one extra dynamic import; a wrong "off" would
  * silently disable the gate, which is why only the unambiguous case takes the shortcut.
  */
-export const isDefinitelyOff = (env: Env, argv: readonly string[] = []): boolean => {
-  const loaded = loadConfig(env, undefined, hookDefaultMode(env, argv));
+export const isDefinitelyOff = (env: Env): boolean => {
+  const loaded = loadConfig(env, undefined, hookDefaultMode(env));
   return loaded.ok && loaded.config.mode === 'off';
 };
 
@@ -36,7 +36,7 @@ const drainStdin = async (stdin: AsyncIterable<Uint8Array | string>): Promise<vo
 };
 
 export const run = async (): Promise<void> => {
-  if (isDefinitelyOff(process.env, process.argv)) {
+  if (isDefinitelyOff(process.env)) {
     await drainStdin(process.stdin);
     // Matches runHook's own skip('mode_off')/preserve('mode_off'): no stdout, this stderr line, exit 0.
     process.stderr.write('jev-gate: mode_off\n');

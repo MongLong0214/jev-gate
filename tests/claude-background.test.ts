@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { runHook } from '../src/hook.js';
-import { jobPath, newGeneration, readJob, updateJob } from '../src/job.js';
+import { newGeneration, readJob, updateJob } from '../src/job.js';
 import { claudeDefaults, prepareClaude } from '../src/claude-setup.js';
 import { isNativeTaskNotification } from '../src/claude-background.js';
 
@@ -282,31 +282,6 @@ describe('responsive native background contracts', () => {
     expect(f.job().current.outcome).toBe('incomplete'); expect(f.job().current.background_delivery).toBeUndefined();
     const next = await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'next-human', prompt: 'Implement a different request.' });
     expect(f.job().current.prompt_id).toBe('next-human'); expect(next.stdout).not.toContain('background completion notice');
-  });
-  it.each([true, false])('releases a Lean executor only after a proven terminal (completed=%s)', async completed => {
-    const f = await fixture(); await f.launch();
-    updateJob(f.env, 's', prev => prev ? { ...prev, current: { ...prev.current, active: { dispatch: { ...prev.current.active['dispatch']!, role: 'executor', background_execution: { ...prev.current.active['dispatch']!.background_execution!, subagent_type: 'jev-gate:executor' } } } } } : null);
-    f.transcript(!completed); await f.terminal({ agent_type: 'jev-gate:executor' });
-    expect(f.job().current.active).toEqual({}); expect(f.job().current.outcome).toBe(completed ? 'completed' : 'incomplete');
-    expect(f.job().current.receipts).toHaveLength(0);
-    expect(f.job().current.background_delivery).toBeUndefined();
-    const next = await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'next-human', prompt: 'Implement a different request.' });
-    expect(f.job().current.prompt_id).toBe('next-human'); expect(next.stdout).not.toContain('background completion notice');
-  });
-  it.each(['SubagentStop', 'PostToolUse'])('does not report a Lean release when its state write fails (%s)', async hook => {
-    const f = await fixture(); await f.launch();
-    updateJob(f.env, 's', prev => prev ? { ...prev, current: { ...prev.current, active: { dispatch: { ...prev.current.active['dispatch']!, role: 'executor', background_execution: { ...prev.current.active['dispatch']!.background_execution!, subagent_type: 'jev-gate:executor' } } } } } : null);
-    const traceDir = join(f.root, 'trace'); Object.assign(f.env, { JEV_GATE_MODE: 'lean', JEV_GATE_TRACE_DIR: traceDir });
-    // A directory at the atomic writer's temporary path fails after the release mutator has run.
-    const blocked = `${jobPath(f.env, 's')}.${process.pid}.tmp`; mkdirSync(blocked);
-    f.transcript();
-    const terminal = () => hook === 'SubagentStop' ? f.terminal({ agent_type: 'jev-gate:executor' }) : f.run({ hook_event_name: 'PostToolUse', prompt_id: 'original', tool_name: 'Agent', tool_use_id: 'dispatch', tool_response: { status: 'completed' } });
-    await terminal();
-    expect(Object.keys(f.job().current.active)).toEqual(['dispatch']); expect(f.job().current.outcome).toBeNull();
-    const post = readdirSync(traceDir).filter(p => p.startsWith('lean_post-')).map(p => JSON.parse(readFileSync(join(traceDir, p), 'utf8')))[0];
-    expect(post).toMatchObject({ released: false, release_unconfirmed: true });
-    rmSync(blocked, { recursive: true }); await terminal();
-    expect(f.job().current.active).toEqual({}); expect(f.job().current.outcome).toBe('completed');
   });
   it('upgrades only the complete old Jev launch profile without changing host permissions', () => {
     const root = mkdtempSync('/tmp/jev-bg-setup-'); roots.push(root); mkdirSync(join(root, '.claude'));

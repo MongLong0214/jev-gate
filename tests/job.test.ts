@@ -106,18 +106,16 @@ describe('updateJob', () => {
 });
 
 describe('updateJob over an unreadable file', () => {
-  it('refuses when asked to, and otherwise records on the new state that any lean identities were lost', () => {
+  it('refuses when asked to, and otherwise replaces it with the new state', () => {
     const env = freshEnv();
     mkdirSync(jobsDir(env), { recursive: true });
     writeFileSync(jobPath(env, 's1'), '{"version":5,');
     const fresh = (prev: JobState | null): JobState => newGeneration(prev, 's1', 'p1', 'direct').state;
     expect(updateJob(env, 's1', fresh, { refuseUnreadable: true })).toEqual({ ok: false, code: 'state_corrupt' });
     expect(readFileSync(jobPath(env, 's1'), 'utf8')).toBe('{"version":5,');
-    const recovered = updateJob(env, 's1', fresh);
-    expect(recovered.ok && recovered.value?.lean_seen_lost).toBe(true);
+    expect(updateJob(env, 's1', fresh)).toMatchObject({ ok: true, value: { current: { prompt_id: 'p1' } } });
     updateJob(env, 's1', (prev) => (prev ? newGeneration(prev, 's1', 'p2', 'direct').state : null));
     const later = readJob(env, 's1');
-    expect(later.ok && later.value?.lean_seen_lost).toBe(true);
     expect(later.ok && later.value?.current.prompt_id).toBe('p2');
   });
 });
@@ -206,12 +204,10 @@ describe('cleanupJobs', () => {
     expect(cleanupJobs({ JEV_GATE_STATE_DIR: join(tmp, 'never-created') }, now)).toBe(0);
   });
 
-  it('removes a file only under its own lock, and never one readJob would refuse or that records lost identities', () => {
+  it('removes a file only under its own lock, and never one readJob would refuse', () => {
     const env = freshEnv();
     const now = Date.now();
     seed(env, 'in-use');
-    seed(env, 'lost');
-    updateJob(env, 'lost', (prev) => (prev ? { ...prev, lean_seen_lost: true } : null));
     writeFileSync(jobPath(env, 'unreadable'), '{"version":5,');
     // Valid JSON that readJob still refuses: no active map, or another session's state under this session's name.
     writeFileSync(jobPath(env, 'no-active'), JSON.stringify({ version: 5, session_id: 'no-active', current: {} }));
@@ -227,7 +223,7 @@ describe('cleanupJobs', () => {
     // A live holder: no owner file, so the lock is not stale and cleanup does not wait for it.
     mkdirSync(`${jobPath(env, 'in-use')}.lock`);
     const past = (now - RETENTION_MS - 60_000) / 1000;
-    const kept = ['in-use', 'lost', 'unreadable', 'no-active', 'misnamed', 'oversize'];
+    const kept = ['in-use', 'unreadable', 'no-active', 'misnamed', 'oversize'];
     for (const id of kept) utimesSync(jobPath(env, id), past, past);
     expect(cleanupJobs(env, now)).toBe(0);
     for (const id of kept) expect(existsSync(jobPath(env, id))).toBe(true);
@@ -237,24 +233,16 @@ describe('cleanupJobs', () => {
     expect(existsSync(`${jobPath(env, 'in-use')}.lock`)).toBe(false);
   });
 
-  it('never ages out a file holding admitted lean identities: a resumed session still recognises an old request', () => {
+  it('reads and ages out a state file written with the withdrawn Lean fields like any other (#217)', () => {
     const env = freshEnv();
     const now = Date.now();
-    seed(env, 'lean-session');
-    updateJob(env, 'lean-session', (prev) => (prev ? { ...prev, lean_seen: ['p1'] } : null));
-    seed(env, 'plain-session');
+    seed(env, 'old');
+    const old = JSON.parse(readFileSync(jobPath(env, 'old'), 'utf8'));
+    writeFileSync(jobPath(env, 'old'), JSON.stringify({ ...old, lean_seen: ['p1'], lean_seen_lost: true, current: { ...old.current, lean: null } }));
+    expect(readJob(env, 'old')).toMatchObject({ ok: true, value: { session_id: 'old' } });
     const past = (now - RETENTION_MS - 60_000) / 1000;
-    utimesSync(jobPath(env, 'lean-session'), past, past);
-    utimesSync(jobPath(env, 'plain-session'), past, past);
-    // An entry lean does not read as an identity does not hold the file either.
-    seed(env, 'null-seen');
-    writeFileSync(jobPath(env, 'null-seen'), JSON.stringify({ ...JSON.parse(readFileSync(jobPath(env, 'null-seen'), 'utf8')), lean_seen: [null] }));
-    expect(readJob(env, 'null-seen')).toMatchObject({ ok: true, value: { lean_seen: [] } });
-    utimesSync(jobPath(env, 'null-seen'), past, past);
-    expect(cleanupJobs(env, now)).toBe(2);
-    expect(existsSync(jobPath(env, 'plain-session'))).toBe(false);
-    expect(existsSync(jobPath(env, 'null-seen'))).toBe(false);
-    const kept = readJob(env, 'lean-session');
-    expect(kept.ok && kept.value?.lean_seen).toEqual(['p1']);
+    utimesSync(jobPath(env, 'old'), past, past);
+    expect(cleanupJobs(env, now)).toBe(1);
+    expect(existsSync(jobPath(env, 'old'))).toBe(false);
   });
 });

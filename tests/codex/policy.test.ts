@@ -3,7 +3,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'n
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
-import { codexSource, codexObservation, type Obj } from '../../src/codex/source.js';
+import { codexObservation, type Obj } from '../../src/codex/source.js';
 import { catalogTierModels, loadCodexPolicy } from '../../src/codex/config.js';
 import { routeCodex } from '../../src/codex/router.js';
 import { CodexRpc } from '../../src/codex/rpc.js';
@@ -35,6 +35,11 @@ describe('Codex ordered routing and recorded application', () => {
     expect(loadCodexPolicy({ JEV_CODEX_CONFIG: serial }).gate.workerIsolation).toBe('none');
     const override = join(tmp, 'explicit-models.json'); writeFileSync(override, JSON.stringify({ gate: { models: { fast: 'owner-model' } } }));
     expect(loadCodexPolicy({ JEV_CODEX_CONFIG: override, JEV_CODEX_MODEL: 'account-workhorse' }, available).gate.models).toEqual({ ...models, fast: 'owner-model' });
+  });
+  it('runs a Codex policy or JEV_GATE_MODE that still selects the withdrawn lean mode as auto (#217)', () => {
+    const lean = join(tmp, 'lean-policy.json'); writeFileSync(lean, JSON.stringify({ gate: { mode: 'lean' } }));
+    expect(loadCodexPolicy({ JEV_CODEX_CONFIG: lean }).gate.mode).toBe('auto');
+    expect(loadCodexPolicy({ JEV_CODEX_CONFIG: join(tmp, 'policy.json'), JEV_GATE_MODE: 'lean' }).gate.mode).toBe('auto');
   });
   const answersFor = (request: Obj, model = '__keep__', effort = 'low', control = 'task_clear'): Obj => {
     const questions = request['questions'] as Record<string, { type: string; criteria: Record<string, string> | string[] }>;
@@ -107,20 +112,7 @@ describe('native workspace authentication routing', () => {
   it.each(['http://workspace.example.invalid', 'https://user:secret@workspace.example.invalid', 'https://workspace.example.invalid/path', 'https://workspace.example.invalid/?x=1', 'https://workspace.example.invalid/#x'])('refuses an invalid native origin: %s', origin => expect(() => nativeWorkspaceUpstream(result(origin), 'same-workspace')).toThrow());
   it('refuses routing discovered for a different workspace', () => expect(() => nativeWorkspaceUpstream(result(undefined, 'other'), 'same-workspace')).toThrow());
 });
-describe('native source integrity and check evidence', () => {
-  const binding = { sessionId: 's', promptId: 'p', request: 'current request', phase: 'dispatch' as const };
-  const current = { id: 'u2', type: 'userMessage', clientId: 'p', content: [{ type: 'text', text: 'current request' }] };
-  const items = [{ id: 'u1', type: 'userMessage', content: [{ type: 'text', text: 'keep my constraint' }] }, { id: 'a1', type: 'agentMessage', text: 'old irrelevant narrative' }, current];
-  it('preserves human constraints and binds to the exact request; later human input invalidates recency', () => {
-    const source = codexSource(items, binding, 'epoch', true);
-    expect(source).toMatchObject({ ok: true, source: { requestRecorded: true, newerHumanText: false, groups: [{ mandatory: true, origin: 'human' }, { mandatory: false, origin: 'assistant_tool' }] } });
-    expect(codexSource([...items, { ...current, id: 'u3', clientId: 'next' }], binding, 'epoch', true)).toMatchObject({ ok: true, source: { newerHumanText: true } });
-    expect(codexSource(items, { ...binding, request: 'different' }, 'epoch', true)).toMatchObject({ ok: false, reason: 'source_identity_mismatch' });
-  });
-  it.each([
-    [false, items, 'source_incomplete'], [true, [...items.slice(0, -1), { ...current, content: [{ type: 'image', url: 'x' }] }], 'source_identity_mismatch'],
-    [true, [{ id: 'opaque', type: 'contextCompaction' }, current], 'source_unsupported'], [true, [{ id: 'pending', type: 'commandExecution', status: 'inProgress' }, current], 'source_incomplete'],
-  ] as const)('falls back for an incomplete or opaque source (%#)', (complete, source, reason) => expect(codexSource(source, binding, 'epoch', complete)).toMatchObject({ ok: false, reason }));
+describe('native check evidence', () => {
   it('never treats a reported pass or a successful shell wrapper with extra commands as observed pass', () => {
     const commands = new Map([['c1', 'vitest run'], ['c2', 'vitest run']]);
     const observation = codexObservation([{ id: 'c1', type: 'commandExecution', command: "/bin/zsh -c 'vitest run'", status: 'failed', exitCode: 1 }, { id: 'w', type: 'fileChange', status: 'inProgress' }, { id: 'c2', type: 'commandExecution', command: "/bin/zsh -c 'vitest run; true'", status: 'completed', exitCode: 0 }], false, commands);

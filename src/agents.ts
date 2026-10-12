@@ -30,8 +30,7 @@ const EFFORT: Record<string, string | null> = {
   'jev-gate:planner-frontier': 'xhigh',
 };
 
-/** The six tiered profiles. JGL-01's lean executor is deliberately not here: it is `inherit`, not tiered, and it is
- * not a key of OWNED_AGENTS either -- see `LEAN_EXECUTOR_AGENT` in types.ts. */
+/** The six tiered profiles. */
 export const OWNED_AGENT_PROFILES: readonly OwnedAgentProfile[] = OWNED_AGENT_NAMES.map((name) => {
   const owned = OWNED_AGENTS[name];
   if (!owned || !(name in EFFORT)) throw new Error(`agents.ts: OWNED_AGENTS and EFFORT must agree on ${name}`);

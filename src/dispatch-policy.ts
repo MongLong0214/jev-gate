@@ -11,7 +11,7 @@ export const dispatchPolicy = (session: string, tool: string, proposed: string, 
   const loaded = readJob(env, session); if (!loaded.ok) return { deny: 'Dispatch ownership unavailable; no child started.' };
   const owner = own(loaded.value?.current.active ?? {}, tool);
   const adapter = claudeAllocation({ ...env, CLAUDE_PLUGIN_OPTION_ROUTERALLOWFABLE: String(allowFable) });
-  const model = owner?.allocation_pair?.model ?? (owner?.role === 'executor' ? proposed : proposed || (owner?.tier ? DEFAULT_CONFIG.models[owner.tier] : OWNED_AGENTS[agent] ? DEFAULT_CONFIG.models[OWNED_AGENTS[agent]!.tier] : ''));
+  const model = owner?.allocation_pair?.model ?? (proposed || (owner?.tier ? DEFAULT_CONFIG.models[owner.tier] : OWNED_AGENTS[agent] ? DEFAULT_CONFIG.models[OWNED_AGENTS[agent]!.tier] : ''));
   const canonical = adapter.canonical?.(model) ?? model;
   if (eligible && adapter.allowed(canonical)) return owner?.allocation_pair ? { ...owner.allocation_pair, model: canonical } : { model: canonical, effort_edit: { kind: 'keep' } };
   if (owner) {

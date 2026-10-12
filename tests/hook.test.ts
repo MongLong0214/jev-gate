@@ -809,7 +809,7 @@ describe('#48: a subagent model override every owned Agent call refuses', () => 
   it.each([
     ['a concrete model', { CLAUDE_CODE_SUBAGENT_MODEL: 'opus' }],
     ['the force flag', { CLAUDE_CODE_SUBAGENT_MODEL_FORCE: '1' }],
-  ])('stays direct before Gate A under %s, as lean already does', async (_label, override) => {
+  ])('stays direct before Gate A under %s', async (_label, override) => {
     const dir = join(tmp, `trace-override-${Object.keys(override)[0]}`);
     const env = makeEnv({ ...override, JEV_GATE_TRACE_DIR: dir });
     const fetchImpl = fakeJev({ execution: 'orchestrated' });
@@ -875,12 +875,6 @@ describe('SessionStart liveness warning (#48 P2)', () => {
 
   it('never checks in native mode, whatever the ring says', async () => {
     const env = makeEnv({ JEV_GATE_MODE: 'native' });
-    fillRing(env, LIVENESS_WINDOW, false);
-    expect(await run(env, sessionStart())).toMatchObject({ kind: 'skip', stdout: null });
-  });
-
-  it('never checks in lean mode', async () => {
-    const env = makeEnv({ JEV_GATE_MODE: 'lean' });
     fillRing(env, LIVENESS_WINDOW, false);
     expect(await run(env, sessionStart())).toMatchObject({ kind: 'skip', stdout: null });
   });
@@ -2657,10 +2651,7 @@ describe('sources', () => {
   });
 
   it('keeps every agent definition in step with OWNED_AGENTS', () => {
-    const all = readdirSync(join(__dirname, '..', 'agents')).filter((f) => f.endsWith('.md'));
-    // JGL-04: `executor.md` belongs to lean, which shares no role, tier or reply format with these six.
-    const files = all.filter((f) => f !== 'executor.md');
-    expect(all.sort()).toEqual(['executor.md', 'planner-frontier.md', 'planner.md', 'worker-deep.md', 'worker-fast.md', 'worker-frontier.md', 'worker.md']);
+    const files = readdirSync(join(__dirname, '..', 'agents')).filter((f) => f.endsWith('.md'));
     expect(files.sort()).toEqual(['planner-frontier.md', 'planner.md', 'worker-deep.md', 'worker-fast.md', 'worker-frontier.md', 'worker.md']);
     const workerBodies = new Set<string>();
     for (const f of files) {
@@ -2672,17 +2663,6 @@ describe('sources', () => {
       expect(body.match(/```json\n/g), f).toHaveLength(1);
     }
     expect(workerBodies.size).toBe(1);
-  });
-
-  it('keeps the lean executor out of the legacy contract: inherited model, no reply format, a fail-safe', () => {
-    const text = readFileSync(join(__dirname, '..', 'agents', 'executor.md'), 'utf8');
-    expect(text).toContain('model: inherit');
-    expect(text).not.toMatch(/^tools:|^disallowedTools:/m);
-    expect(text).toContain('background: false');
-    // No WorkerReply JSON, no check_id list, no length quota: the executor reports in prose.
-    expect(text).not.toContain('```json');
-    expect(text).not.toContain('check_id');
-    expect(text).toContain('handoff_unavailable');
   });
 });
 

@@ -58,9 +58,9 @@ export const handleCodexEvent = (input: Rec, env: CodexHookDeps['env'], trace?: 
     if (folded.applied) return { continue: false, stopReason: folded.text };
   }
   if (event === 'SessionStart' && env['JEV_CODEX_BRIDGE_URL']) return { hookSpecificOutput: { hookEventName: event, additionalContext:
-    'Jev Gate is connected to the native Codex session adapter. Gate A/B, plans, contract acceptance, root guard and Lean use the shared policies; Router uses official turn settings; Compact uses the native compaction lifecycle. Follow the current turn guidance and use jev_agent for owned dispatches. Native permissions and the user request remain authoritative. Do not claim unobserved policies or savings ran.' } };
+    'Jev Gate is connected to the native Codex session adapter. Gate A/B, plans, contract acceptance and root guard use the shared policies; Router uses official turn settings; Compact uses the native compaction lifecycle. Follow the current turn guidance and use jev_agent for owned dispatches. Native permissions and the user request remain authoritative. Do not claim unobserved policies or savings ran.' } };
   if (event === 'SessionStart') return { hookSpecificOutput: { hookEventName: event, additionalContext:
-    'Jev Gate native Codex plugin: jev_evidence provides repository evidence and hooks record lifecycle metadata and fold complete passing Vitest logs. The installed plugin connects ordinary native Codex automatically. A session already open during installation retains its previous provider; use a fresh native session once connection is ready. This startup notice does not establish actual Gate, Lean, Router or Compact application; inspect recorded requests and never claim unobserved policies ran. See the Jev Gate skill for setup.' } };
+    'Jev Gate native Codex plugin: jev_evidence provides repository evidence and hooks record lifecycle metadata and fold complete passing Vitest logs. The installed plugin connects ordinary native Codex automatically. A session already open during installation retains its previous provider; use a fresh native session once connection is ready. This startup notice does not establish actual Gate, Router or Compact application; inspect recorded requests and never claim unobserved policies ran. See the Jev Gate skill for setup.' } };
   return {};
 };
 
@@ -85,7 +85,7 @@ export const runCodexHook = async (deps: CodexHookDeps): Promise<Rec> => {
       if (input['hook_event_name'] === 'SessionStart' && typeof input['model'] === 'string' && typeof input['cwd'] === 'string') await ensureConnection(dirname(dirname(fileURLToPath(import.meta.url))), deps.env);
       const policy = await connectionRequest(deps.env, '/hook', input, AbortSignal.timeout(4200));
       if (policy && Object.keys(policy).length) return policy;
-      if (input['hook_event_name'] === 'SessionStart' && policy) return { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: 'Jev Gate native hooks and jev_agent dispatch are available. Follow the current Gate or Lean guidance and use jev_agent for owned dispatches. Router and Compact apply only when actual model requests pass through the local connection; a host already running before installation retains its previous provider until restarted. Native permissions and user constraints remain authoritative. Do not claim unobserved policies ran.' } };
+      if (input['hook_event_name'] === 'SessionStart' && policy) return { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: 'Jev Gate native hooks and jev_agent dispatch are available. Follow the current Gate guidance and use jev_agent for owned dispatches. Router and Compact apply only when actual model requests pass through the local connection; a host already running before installation retains its previous provider until restarted. Native permissions and user constraints remain authoritative. Do not claim unobserved policies ran.' } };
       return recorded;
     }
     const url = new URL(bridge);

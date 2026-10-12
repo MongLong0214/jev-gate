@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { obj, type Obj } from './source.js';
 
 const text = (v: unknown): string | null => typeof v === 'string' ? v : Array.isArray(v) && v.every(p => ['input_text', 'output_text'].includes(String(obj(p)?.['type'])) && typeof obj(p)?.['text'] === 'string') ? v.map(p => obj(p)!['text']).join('\n') : null;
-/** Only the complete plaintext input actually sent by Codex can be a Lean source. Opaque/incremental context stays native. */
+/** Only the complete plaintext input actually sent by Codex can be a source. Opaque/incremental context stays native. */
 export const wireSource = (input: unknown, task: string, prompt: string): { items: Obj[]; complete: boolean } => {
   if (!Array.isArray(input) || Buffer.byteLength(JSON.stringify(input)) > 8 * 1024 * 1024) return { items: [], complete: false };
   const items: Obj[] = []; const pending = new Map<string, Obj>(); let own = false;

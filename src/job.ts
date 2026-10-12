@@ -23,17 +23,6 @@ export const pendingBackgroundPolicy = (gen: JobGeneration): JobGeneration => {
   return rest;
 };
 /**
- * Every lean prompt identity a session admitted, never evicted: an identity that fell out of this list could be
- * redelivered after compaction removed its record and be admitted, and charged, a second time. A session that fills
- * it admits no further lean requests (`lean_seen_full`) and runs natively instead.
- */
-export const LEAN_SEEN_MAX = 512;
-/** Every rewrite of the state keeps the lean identities it read, and that it lost some; only a lean registration adds. */
-export const leanSeenOf = (prev: JobState | null | undefined): Pick<JobState, 'lean_seen' | 'lean_seen_lost'> => ({
-  ...(prev?.lean_seen ? { lean_seen: prev.lean_seen } : {}),
-  ...(prev?.lean_seen_lost ? { lean_seen_lost: true as const } : {}),
-});
-/**
  * A17: the request is stored whole or not at all. A prompt past this bound is recorded as absent, because a worker
  * that reads half a specification as if it were the whole one is worse off than one told the text did not fit.
  */
@@ -132,16 +121,12 @@ const parseState = (text: string, sessionId: string): JobState | null => {
   const current = parsed['current'] as unknown as JobGeneration;
   if (!isRecord(current['active']) || !Array.isArray(current['receipts'])) return null;
   const history = Array.isArray(parsed['history']) ? (parsed['history'] as JobGeneration[]) : [];
-  const seen = parsed['lean_seen'];
-  const leanSeen = Array.isArray(seen) ? seen.filter((p): p is string => typeof p === 'string').slice(0, LEAN_SEEN_MAX) : null;
   return {
     version: 5,
     session_id: sessionId,
     updated_at: typeof parsed['updated_at'] === 'string' ? parsed['updated_at'] : '',
     current,
     history,
-    ...(leanSeen ? { lean_seen: leanSeen } : {}),
-    ...(parsed['lean_seen_lost'] === true ? { lean_seen_lost: true as const } : {}),
   };
 };
 
@@ -213,8 +198,7 @@ export const updateJob = (
     if (!prev.ok && opts.refuseUnreadable) return { ok: false, code: prev.code };
     const next = fn(prev.ok ? prev.value : null);
     if (next === null) return prev.ok ? { ok: true, value: prev.value } : { ok: false, code: prev.code };
-    // Replacing a file that could not be read forgets any lean identities in it, and the new state has to say so.
-    return writeAtomic(file, prev.ok ? next : { ...next, lean_seen_lost: true });
+    return writeAtomic(file, next);
   } finally {
     releaseLock(locked.lock);
   }
@@ -254,7 +238,7 @@ export const newGeneration = (prev: JobState | null, sessionId: string, promptId
     active: Object.fromEntries(Object.entries(old.active).map(([id, r]) => [id, { ...r, orphaned: true as const }])),
   };
   return {
-    state: { version: 5, session_id: sessionId, updated_at: now.toISOString(), current, history: retainHistory([retired, ...prev.history]), ...leanSeenOf(prev) },
+    state: { version: 5, session_id: sessionId, updated_at: now.toISOString(), current, history: retainHistory([retired, ...prev.history]) },
     superseded: unfinished,
   };
 };
@@ -354,11 +338,9 @@ export const countAttempt = (gen: JobGeneration, kind: BoundKind, taskId: string
 };
 
 /**
- * Whether a state file may be aged out: older than retention, readable, no active younger than 24 h, and no lean
- * identities (or record of having lost some) in it. A file that cannot be read is never a candidate, and "read" is
- * `readRaw` itself for the session the file is named after, not a copy of its checks: lean refuses to admit over a
- * state it cannot read, and deleting that state would turn the refusal into an empty ledger. Two reviews in a row
- * found a check the copy had missed, the structure and then the size.
+ * Whether a state file may be aged out: older than retention, readable, and no active younger than 24 h. A file that
+ * cannot be read is never a candidate, and "read" is `readRaw` itself for the session the file is named after, not a
+ * copy of its checks. Two reviews in a row found a check the copy had missed, the structure and then the size.
  */
 const agedOut = (file: string, now: number): boolean => {
   try {
@@ -370,13 +352,7 @@ const agedOut = (file: string, now: number): boolean => {
     if (!read.ok || read.value === null) return false;
     const state = read.value;
     if ([state.current, ...state.history].some(g => Object.values(g.active).some(r => r.codex_execution || r.background_execution))) return false;
-    if (Object.values(state.current.active).some((r) => now - Date.parse(r.started_at) < ACTIVE_GRACE_MS)) return false;
-    /**
-     * A session can be resumed after any length of time, and its admitted lean identities are what stop an old
-     * request's redelivery from being charged again once compaction has removed its record. So a file that holds
-     * them is never aged out, and neither is one that records having lost them. Both are read as lean reads them.
-     */
-    return !(state.lean_seen !== undefined && state.lean_seen.length > 0) && state.lean_seen_lost !== true;
+    return !Object.values(state.current.active).some((r) => now - Date.parse(r.started_at) < ACTIVE_GRACE_MS);
   } catch {
     return false;
   }
@@ -384,8 +360,8 @@ const agedOut = (file: string, now: number): boolean => {
 
 /**
  * Opportunistic retention. The unlocked look only rules files out; a file is removed only under its own lock and after
- * a second look, because a writer may have atomically replaced it in between, and that replacement can be the first
- * record of a lean identity. A held lock means the session is in use, and the file is left for a later pass.
+ * a second look, because a writer may have atomically replaced it in between. A held lock means the session is in
+ * use, and the file is left for a later pass.
  */
 export const cleanupJobs = (env: Env, now = Date.now()): number => {
   const dir = jobsDir(env);

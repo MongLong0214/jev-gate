@@ -67,7 +67,7 @@ export const foregroundDispatchPossible = (env: Env): boolean =>
  * Why no owned Agent call this session makes could reach a worker, or null when one could. A subagent model override
  * is refused by checkEligibility just as a background-only call is, so an orchestrated job is locked out either way:
  * its guard refuses the main session's edits while every brief is declined. Both are fixed at launch, so admission,
- * the forced arm, lean and the SessionStart notice all read this one answer.
+ * the forced arm and the SessionStart notice all read this one answer.
  */
 export const dispatchBlocker = (env: Env): 'background_only' | 'subagent_model_override' | null => {
   if (!foregroundDispatchPossible(env)) return 'background_only';

@@ -7,14 +7,14 @@ import { fileURLToPath } from 'node:url';
 import { createWorkerWorktree, type WorkerWorktree } from '../worktree.js';
 import { runHook, type HookDeps } from '../hook.js';
 import { stateRoot, readJob, updateJob, own, codexExecutions, pendingBackgroundPolicy } from '../job.js';
-import { OWNED_AGENTS, LEAN_EXECUTOR_AGENT, type HookInput } from '../types.js';
+import { OWNED_AGENTS, type HookInput } from '../types.js';
 import { OWNED_AGENT_PROFILES } from '../agents.js';
 import type { Env } from '../config.js';
 import { codexTraceDir } from '../codex-paths.js';
 import { openTraceDir, type TraceWriter } from '../trace.js';
 import { CodexRpc, RpcRequestError } from './rpc.js';
 import { runtimeCodexPolicy, type CodexPolicyConfig } from './config.js';
-import { codexSource, codexObservation, textInput, obj, type Obj } from './source.js';
+import { codexObservation, textInput, obj, type Obj } from './source.js';
 import { AGENT_TOOL, CODEX_PROFILES, codexGuidance } from './profiles.js';
 import { routeCodex, codexCandidates, type CodexModel } from './router.js';
 import { capturedPermissions } from './permissions.js';
@@ -68,7 +68,7 @@ const contextOf = (result: { stdout: string | null }): string => {
 const deny = (reason: string): Obj => ({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason } });
 const safeGitEnv = (env: Env): Env => Object.fromEntries(Object.entries(env).filter(([k]) => !k.startsWith('GIT_')));
 
-/** A Codex execution adapter over the existing Gate/Lean state machine. No policy decisions are delegated to prose. */
+/** A Codex execution adapter over the existing Gate state machine. No policy decisions are delegated to prose. */
 export class CodexPolicy {
   readonly sessions = new Map<string, Session>();
   catalog: CodexModel[] = [];
@@ -201,10 +201,7 @@ export class CodexPolicy {
       this.trace?.write('codex_router_skipped', { host: 'codex', session_id: id, prompt_id: session?.prompt ?? null, reason: 'configuration_update_native_history', known_not_sent: true, effective_effort: 'unknown' });
       return { request }; // Preserve opaque native updates, their positions and top-level values.
     }
-    if (session?.role && session.dispatch) {
-      if (session.role === LEAN_EXECUTOR_AGENT) return { request };
-      return this.workerRequest(session, request, signal);
-    }
+    if (session?.role && session.dispatch) return this.workerRequest(session, request, signal);
     if (!session?.external || !session.prompt || !session.task || !this.hooked.has(id)) return { request };
     if (session.stop) return { request, stop: session.stop };
     const requestPrompt = session.prompt;
@@ -364,8 +361,7 @@ export class CodexPolicy {
       if (session.wire && session.task && session.prompt && Array.isArray(response['output'])) {
         const source = wireSource([...session.wire, ...response['output']], session.task, session.prompt);
         session.wirePending = !source.complete;
-        // A just-issued current-turn tool call does not alter the prefix a Lean packet references.
-        // Keep that prefix for dispatch, but forbid using a pending source for a subsequent prompt.
+        // A just-issued current-turn tool call leaves the source pending; a subsequent prompt must not use it.
         if (source.complete) { session.items = source.items; session.complete = true;
           if (response['status'] === 'completed' && !response['output'].some((i: unknown) => ['function_call', 'custom_tool_call'].includes(String(obj(i)?.['type'])))) {
             const final = wireSource(response['output'], '', '').items.findLast(i => i['type'] === 'agentMessage' && i['phase'] !== 'commentary' && typeof i['text'] === 'string');
@@ -406,7 +402,6 @@ export class CodexPolicy {
         : { ok: true, tokens: session.tokens, model: session.requestModel ?? String(session.settings['model'] ?? session.baseline.model), modelSwitched: false, bytesRead: 0, durationMs: 0 },
       recentRequests: () => session.recentRequests ?? [],
       terminal: id => !!this.sessions.get(id)?.dispatch?.ended,
-      source: b => codexSource(session.items, b, session.epoch, session.complete),
       observation: id => { const worker = id ? this.sessions.get(id) : undefined; return worker ? codexObservation(worker.items, worker.complete, worker.commands) : null; },
     };
     return runHook({ stdin: (async function* () { yield JSON.stringify(input); })(), env: this.env, host,
@@ -645,7 +640,7 @@ export class CodexPolicy {
     const updated = pre.kind === 'patch' ? obj(obj(JSON.parse(pre.stdout))?.['hookSpecificOutput'])?.['updatedInput'] : input;
     const applied = obj(updated); if (!applied) return 'Dispatch input unavailable.';
     const role = String(applied['subagent_type']); const profile = OWNED_AGENTS[role];
-    const model = typeof applied['model'] === 'string' ? applied['model'] : role === LEAN_EXECUTOR_AGENT ? parent.requestModel ?? String(parent.settings['model'] ?? parent.baseline.model) : parent.policy.gate.models[profile?.tier ?? 'standard'];
+    const model = typeof applied['model'] === 'string' ? applied['model'] : parent.policy.gate.models[profile?.tier ?? 'standard'];
     if (!this.catalog.some(m => m.model === model)) { await this.failure(parent, promptId, toolId, applied, 'requested_model_unavailable'); return 'The requested worker model is absent from Codex model/list. Native execution remains available; configure accessible tier models.'; }
     let cwd = String(parent.settings['cwd']); let worktree: WorkerWorktree | null = null;
     let worker: Session | null = null;
@@ -723,7 +718,7 @@ export class CodexPolicy {
           if (!dispatch.ended) return `Worker termination unconfirmed. Internal execution identity: ${worker.id}. Its reservation, files and write-scope protection remain active. No replacement execution or acceptance is claimed.`;
         }
         if (background && !dispatch.ended) {
-          this.trace?.write('background_launch', { host: 'codex', session_id: parent.id, prompt_id: promptId, tool_use_id: toolId, agent_id: worker.id, status: 'running', role: profile?.role ?? 'executor' });
+          this.trace?.write('background_launch', { host: 'codex', session_id: parent.id, prompt_id: promptId, tool_use_id: toolId, agent_id: worker.id, status: 'running', role: profile?.role ?? null });
           return `Worker started in the background. Internal execution identity: ${worker.id}. This is a launch receipt, not a completed result. Answer new user messages in the main session while it works; do not duplicate its files or work. Use jev_agent with action=status and agent_id to collect its result without waiting. Use action=cancel only for explicit user cancellation.`;
         }
         if (!background && parentSignal.aborted) cancel();
@@ -800,7 +795,7 @@ export class CodexPolicy {
       } else await this.failure(d.parent, d.prompt, d.tool, d.input, 'worker_not_completed');
       const state = readJob(this.env, d.parent.id);
       const gen = state.ok && state.value ? [state.value.current, ...state.value.history].find(g => g.prompt_id === d.prompt) : null;
-      const committed = gen && (gen.receipts.some(r => r.tool_use_id === d.tool) || (d.input['subagent_type'] === 'jev-gate:executor' ? gen.lean?.outcome === 'dispatched' : OWNED_AGENTS[String(d.input['subagent_type'])]?.role === 'planner' && guidance.length > 0));
+      const committed = gen && (gen.receipts.some(r => r.tool_use_id === d.tool) || OWNED_AGENTS[String(d.input['subagent_type'])]?.role === 'planner' && guidance.length > 0);
       if (!gen || own(gen.active, d.tool) || !committed) return `Worker terminal observed; settlement pending. Internal execution identity: ${worker.id}. Reservation and files remain protected. Retry jev_agent with action=status and agent_id=${worker.id} without restarting execution.`;
       d.output = d.ended!['status'] === 'completed'
         ? `${final?.['text'] ?? 'No worker final output.'}\n\n${guidance}${d.worktree ? `\nWorker worktree: ${d.worktree.path}\nBranch: ${d.worktree.branch}\nSnapshot baseline: ${d.worktree.baseline}. Apply only the diff from this baseline to the worker branch in the root; this result does not integrate it.` : ''}`

@@ -37,11 +37,6 @@ describe.skipIf(process.env['JEV_CODEX_E2E'] !== '1')('ordinary native Codex aut
         if (step === 3) item = fn('jev_agent', { run_in_background: false, subagent_type: 'jev-gate:worker', prompt: 'Investigate the fixture and run vitest run.' });
         if (step === 4) item = fn('exec_command', { cmd: 'vitest run', login: false, max_output_tokens: 8000 });
         if (step === 5) item = final('```json\n' + JSON.stringify({ status: 'done', summary: 'Fixture checked', changed_files: [], interfaces: [], checks: [{ check_id: 'vitest run', result: 'pass', note: 'observed check' }], blockers: [] }) + '\n```');
-      } else if (mode === 'lean') {
-        step++;
-        if (step === 1) item = final('Old unrelated narrative. '.repeat(300));
-        if (step === 2) item = fn('jev_agent', { run_in_background: false, subagent_type: 'jev-gate:executor', prompt: JSON.stringify(input['input']).match(/jev-lean-[a-f0-9]{16}/)?.[0] ?? 'missing marker' });
-        if (step === 3) item = fn('exec_command', { cmd: 'vitest run', login: false, max_output_tokens: 8000 });
       } else if (mode === 'compact') { step++; if (step === 1) item = final('Old unrelated narrative. '.repeat(6000)); }
       const output = mode === 'gate' && step === 4 ? [{ type: 'reasoning', id: `${id}_reasoning`, summary: [], encrypted_content: 'opaque-native-fixture' }, item] : [item];
       const events = [{ type: 'response.created', response: { id, status: 'in_progress', output: [] } }, ...output.flatMap((part, output_index) => [{ type: 'response.output_item.added', output_index, item: part }, { type: 'response.output_item.done', output_index, item: part }]), { type: 'response.completed', response: { id, model: input['model'], status: 'completed', output, usage: { input_tokens: 150000, output_tokens: 3, total_tokens: 150003 } } }];
@@ -155,11 +150,6 @@ describe.skipIf(process.env['JEV_CODEX_E2E'] !== '1')('ordinary native Codex aut
           expect((nativeRequest!['reasoning'] as Obj)['effort'], nativeErrors).toBe(childRequests.find(c => c['request_id'] === response['request_id'])!['submitted_effort']);
         }
         expect(requests.slice(gateStart).length, nativeErrors).toBeGreaterThanOrEqual(5);
-        writeFileSync(policyFile, JSON.stringify({ gate: { mode: 'lean' } }));
-        mode = 'lean'; step = 0; const lean = await start();
-        await turn(lean, 'Seed the prior context.'); await turn(lean, 'Implement the fixture check in a fresh executor.');
-        const leanRows = readdirSync(trace).filter(f => f.endsWith('.json')).map(f => JSON.parse(readFileSync(join(trace, f), 'utf8')) as Obj);
-        expect(leanRows.some(r => r['session_id'] === lean && r['phase'] === 'lean_dispatch' && r['applied'] === true), nativeErrors).toBe(true);
         writeFileSync(policyFile, JSON.stringify({ gate: { mode: 'off' }, router: { enabled: false }, compact: { manual: true } }));
         mode = 'compact'; step = 0; const compact = await start();
         await turn(compact, 'Preserve the exact userConstraintNeedle.'); await turn(compact, 'Give a short answer.');

@@ -106,7 +106,7 @@
     },
     "typesafeApiKey": {
       "title": "Jev API key (all features)",
-      "description": "One key for Gate, Lean, Router and Evidence, shared with Codex. Blank opens the local key-entry screen when no environment or saved key is available.",
+      "description": "One key for Gate, Router and Evidence, shared with Codex. Blank opens the local key-entry screen when no environment or saved key is available.",
       "type": "string",
       "sensitive": true
     },
