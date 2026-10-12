@@ -120,7 +120,7 @@ Set the shared frontier switch in the ordinary config (merge this field into an 
 
 `true` makes Claude Fable and Codex Astra eligible for automatic routing at their supported efforts. Jev still selects the model/effort pair for the task; explicit host pins remain authoritative. An explicit `false` overrides legacy `routerAllowFable` / `allowAstra` options. If the field is absent, legacy opt-ins remain compatible. The switch is reread at policy boundaries; an already selected manual root model is preserved.
 
-The dashboard shows each host's current operation in a short live lane. Gate's decision tree and Router, Compact, and Evidence's independent channels show how work proceeds. Signals move continuously along a recorded path while its destination is active, and each newly recorded transition sends one packet along its wire. Every node shows a 60-second strip with one tick per recorded record at its recorded time, plus its records per minute; the Jev response strip does the same for Jev calls (tick height follows latency) and keeps latest latency, median, p95, and measured call count as smaller text. One recorded record is one mark: nothing moves without a record behind it, and the rates are plain text. Historical and idle channels remain static. Stage details and the execution timeline hold the decision evidence. All layouts fit without horizontal scrolling. Pause, disconnected streams, and reduced-motion preferences stop movement; ticks then stay where the last frame placed them and the numbers stay.
+The dashboard is a live run monitor for both hosts. An eight-node circuit (Gate A, Gate B, plan, workers, tool guard, Router, Compact, Evidence) hangs off a Jev rail: each recorded Jev call travels from the rail to the node it decided and back, and the node's latest decision updates in place. The run list, the Jev call log (one row per call) and the run detail change in the same frame. Every node keeps a 60-second strip with one tick per record at its recorded time. One recorded record is one mark: nothing moves without a record behind it. Pause, disconnected streams and reduced-motion preferences stop all movement and keep the numbers. All layouts fit without horizontal page scrolling.
 
 ## Keep talking while workers run
 
@@ -142,10 +142,18 @@ Every PR runs the `models` CI job against the official Claude model/effort docum
 
 The plugin opens **one shared local browser dashboard** automatically. Starting another Claude or Codex session reuses it instead of opening duplicate tabs. Select **Claude + Codex**, **Claude Code**, or **Codex** to inspect each host.
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="./assets/readme/dashboard-dark.svg">
+    <img src="./assets/readme/dashboard.svg" width="100%" alt="Jev Gate run monitor with sample data: header KPIs, an eight-node circuit on a Jev rail, the run list, the Jev call log, Jev response latency with a list-price cost estimate, and one run's step detail">
+  </picture>
+</p>
+
 1. Start a task in your normal coding session.
-2. Read the current activity strip and execution circuit at the top. Select a stage to see its decision and latest result; it also filters the execution list and timeline to that feature, and selecting it again shows all.
-3. Choose an execution to follow its route, timeline, model observations, checks, and failures.
-4. Use host/time filters and search to narrow records. Korean/English and light/dark controls are available.
+2. Read the circuit at the top. Select a node to see its latest decision, confidence and Jev reply time in the step detail; it also filters the run list to that feature, and selecting it again shows all.
+3. Choose a run to open its run detail: every step with its time, duration and result, expandable to the recorded question, choice, actual reply, confidence, tokens and estimated cost.
+4. Read the Jev call log and Jev response panel for the latest calls, latency median and p95, today's call count and a list-price cost estimate. Billed credit is not returned by the Jev API, so the cost is an estimate only. **Pause** on the call log holds its rows while new calls are counted.
+5. Use the host switch, run filters and search to narrow records. Korean/English and light/dark controls are available.
 
 | Record | Meaning |
 | --- | --- |
