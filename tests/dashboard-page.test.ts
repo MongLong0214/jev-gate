@@ -214,16 +214,16 @@ it.each([
   expect(p.get('circuit-inspector').textContent).not.toContain('User locked');
 });
 
-it('shows routing scope, baseline and keep reasons next to the observed response in both languages', () => {
+it('shows routing scope, baseline and keep reasons in the circuit inspector in both languages', () => {
   const p = page(); p.push(snapshot([run('route-proof', 'claude', [step('response', 'router', 'host', {
     routing: { scope: 'root', baseline: 'claude-opus-5-5', modelReason: 'same_value', effortReason: 'cache_preserved' },
     model: { selected: 'claude-opus-5-5', observed: 'claude-opus-5-5', status: 'confirmed', selectedEffort: 'xhigh', observedEffort: null, forwardedEffort: 'xhigh', effortSource: 'host_hook' },
   })])]));
   p.click('.circuit-node[data-feature="router"]');
   let text = p.get('circuit-inspector').textContent;
-  expect(text).toContain('메인 턴'); expect(text).toContain('기존 모델'); expect(text).toContain('현재 모델·설정 유지'); expect(text).toContain('캐시 재사용을 위해 유지'); expect(text).toContain('호스트 응답에 미제공');
+  expect(text).toContain('메인 턴'); expect(text).toContain('기존 모델'); expect(text).toContain('현재 모델·설정 유지'); expect(text).toContain('캐시 재사용을 위해 유지');
   p.click('#language'); text = p.get('circuit-inspector').textContent;
-  expect(text).toContain('Main turn'); expect(text).toContain('Baseline model'); expect(text).toContain('Kept for cache reuse'); expect(text).toContain('Not reported by host'); expect(text).not.toMatch(/[가-힣]/);
+  expect(text).toContain('Main turn'); expect(text).toContain('Baseline model'); expect(text).toContain('Kept for cache reuse'); expect(text).not.toMatch(/[가-힣]/);
 });
 
 
@@ -273,14 +273,15 @@ it('counts active work outside the bounded event feed and keeps host and header 
   p.click('[data-host="claude"]');expect(p.get('pipeline-state').textContent).toBe('대기');
 });
 
-it('shows verified request settings while the circuit inspector awaits a reported response', () => {
+it('keeps model and effort rows out of the circuit inspector and shows verified request settings only in the model record', () => {
   const p=page();p.push(snapshot([run('request-live','codex',[step('waiting','router','host',{lifecycle:true,state:'active',title:'모델 · 응답 대기',model:{selected:'gpt-6-luna',observed:null,status:'unobserved',selectedEffort:'low',observedEffort:null,requestApplied:true}})])]));
   p.click('.circuit-node[data-feature="router"]');
-  expect(p.get('circuit-inspector').textContent).toContain('API 전송 설정일치 확인');
-  expect(p.get('circuit-inspector').textContent).toContain('응답 모델응답 대기');
-  expect(p.get('circuit-inspector').textContent).not.toContain('적용 확인미관측');
-  p.click('#language');expect(p.get('circuit-inspector').textContent).toContain('API request settingsVerified match');
-  expect(p.get('circuit-inspector').textContent).toContain('Response modelAwaiting response');
+  const inspector=()=>p.get('circuit-inspector').textContent||'';
+  for(const row of ['선택 모델','응답 모델','선택·응답 비교','선택 effort','응답 effort','API 전송 설정'])expect(inspector()).not.toContain(row);
+  expect(p.get('model-proof').textContent).toContain('API 전송 설정 일치 확인');expect(p.get('model-proof').textContent).toContain('응답 대기');
+  p.click('#language');
+  for(const row of ['Selected model','Response model','Selection / response','Selected effort','Response effort','API request settings'])expect(inspector()).not.toContain(row);
+  expect(p.get('model-proof').textContent).toContain('API request settings verified');expect(p.get('model-proof').textContent).toContain('Awaiting response');
 });
 
 it('renders typed decision probabilities once while retaining other decision evidence', () => {
