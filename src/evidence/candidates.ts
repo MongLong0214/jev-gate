@@ -212,9 +212,10 @@ interface Collected {
  * line order; locate then score-sorts only that bounded set, so a capped page is not the repository's global top.
  * audit: every window, in path order. exact: windows around literal, case-sensitive occurrences. locate: windows
  * around term hits, ranked by the weight of the distinct terms they hold (and their path holds), ties in path and
- * line order. Short queries with no queryTerms keep that scoring.
+ * line order. Short queries with no queryTerms keep that scoring. `firstFrom`: lines 1..firstFrom of the first file were
+ * searched by an earlier set (a continuation that stopped inside it), so its windows start after them.
  */
-export const buildCandidates = async (files: readonly SourceFile[], query: CandidateQuery, budget: CandidateBudget): Promise<CandidateSet> => {
+export const buildCandidates = async (files: readonly SourceFile[], query: CandidateQuery, budget: CandidateBudget, firstFrom = 0): Promise<CandidateSet> => {
   const set = blank();
   const lexical = planLexical(query);
   if (lexical.overflow) {
@@ -252,7 +253,7 @@ export const buildCandidates = async (files: readonly SourceFile[], query: Candi
     let scanned = 0;
     for (const f of files) {
       if (cancelled()) return finish(scanned);
-      if (!(await windowsAll(run, windowing(f), set, (c) => take(c, 0)))) return finish(scanned);
+      if (!(await windowsAll(run, windowing(f), set, (c) => take(c, 0), scanned === 0 ? firstFrom : 0))) return finish(scanned);
       scanned++;
     }
     return finish(scanned);
@@ -262,7 +263,7 @@ export const buildCandidates = async (files: readonly SourceFile[], query: Candi
     let scanned = 0;
     for (const f of files) {
       if (cancelled()) return finish(scanned);
-      const matched = await windowsAround(run, windowing(f), (line) => query.exactSymbols.some((s) => line.includes(s)), set, (c) => take(c, 0), LIMITS.exactWindowLines, 3, false);
+      const matched = await windowsAround(run, windowing(f), (line) => query.exactSymbols.some((s) => line.includes(s)), set, (c) => take(c, 0), LIMITS.exactWindowLines, 3, false, scanned === 0 ? firstFrom : 0);
       if (!matched) return finish(scanned);
       scanned++;
     }
@@ -292,6 +293,7 @@ export const buildCandidates = async (files: readonly SourceFile[], query: Candi
       LIMITS.windowLines,
       8,
       pathScore > 0,
+      scanned === 0 ? firstFrom : 0,
     );
     if (!matched) return finish(scanned);
     scanned++;
@@ -310,9 +312,9 @@ const blank = (): CandidateSet => ({
 });
 
 /** Every line in reading order, in consecutive windows. Stops at the cap or the budget instead of buffering the file. */
-const windowsAll = async (run: Run, w: Windowing, set: CandidateSet, take: (c: Candidate) => boolean): Promise<boolean> => {
+const windowsAll = async (run: Run, w: Windowing, set: CandidateSet, take: (c: Candidate) => boolean, from: number): Promise<boolean> => {
   const n = lineCount(w);
-  let start = 1;
+  let start = from + 1;
   while (start <= n) {
     const gate = tick(run);
     if (gate !== true && !(await gate)) return false;
@@ -347,8 +349,9 @@ const windowsAround = async (
   span: number,
   lead: number,
   pathOnly: boolean,
+  from: number,
 ): Promise<boolean> => {
-  let covered = 0;
+  let covered = from;
   let hits = 0;
   const n = lineCount(w);
   const offer = (h: number): boolean => {
@@ -362,7 +365,7 @@ const windowsAround = async (
     covered = placed.end;
     return take(candidate(w, placed.start, placed.end));
   };
-  for (let i = 1; i <= n; i++) {
+  for (let i = from + 1; i <= n; i++) {
     const gate = tick(run);
     if (gate !== true && !(await gate)) return false;
     const raw = isHit(sliceLines(w.file.text, w.starts, i, i));
@@ -400,6 +403,8 @@ export interface SnapshotInput {
   inventoryComplete: boolean;
   /** Anything that bounded what was read: a cap, a skipped file, the deadline. Not a timestamp. */
   incomplete: readonly string[];
+  /** Where a continuation cursor started this set (matched-list index, last line already searched); null for a first search. */
+  from: { index: number; line: number } | null;
   /** How many read files the candidate scan finished. A time stop changes this, not a clock value. */
   scannedFiles: number;
   files: ReadonlyArray<{ path: string; sha256: string }>;
@@ -413,7 +418,7 @@ export interface SnapshotInput {
 export const snapshotId = (s: SnapshotInput): string =>
   sha256Hex(
     JSON.stringify([
-      'jev-evidence-candidates-2',
+      'jev-evidence-candidates-3',
       s.projectRoot,
       s.scope,
       s.excludeGlobs,
@@ -424,6 +429,7 @@ export const snapshotId = (s: SnapshotInput): string =>
       s.query.exactSymbols,
       s.inventoryComplete,
       s.incomplete,
+      s.from && [s.from.index, s.from.line],
       s.scannedFiles,
       s.files.map((f) => [f.path, f.sha256]),
       s.candidates.map((c) => [c.path, c.startLine, c.endLine]),

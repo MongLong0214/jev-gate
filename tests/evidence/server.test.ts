@@ -80,7 +80,10 @@ describe('jev_evidence over stdio (#77)', () => {
     const manifest = JSON.parse(readFileSync(join(root, 'plugins', 'evidence', '.claude-plugin', 'plugin.json'), 'utf8')) as { name: string; version: string };
     expect(manifest).toMatchObject({ name: 'jev-gate-evidence', version: SERVER_VERSION });
     expect((JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { version: string }).version).toBe(SERVER_VERSION);
-    expect(readFileSync(join(root, 'plugins', 'evidence', 'skills', 'evidence', 'SKILL.md'), 'utf8')).toMatch(/^disable-model-invocation: true$/m);
+    // The model may invoke the skill: its description is how a Claude Code session learns the deferred tool exists.
+    const skill = readFileSync(join(root, 'plugins', 'evidence', 'skills', 'evidence', 'SKILL.md'), 'utf8');
+    expect(skill).not.toMatch(/^disable-model-invocation:/m);
+    expect(skill).toMatch(/^description: .*jev_evidence.*ToolSearch/m);
   });
 
   it('lists exactly one read-only tool and answers search, next page and exact read-back from the unpacked archive', async () => {
@@ -95,6 +98,7 @@ describe('jev_evidence over stdio (#77)', () => {
     expect(tools[0]!.description).toContain('not an operating-system or network guarantee');
     const schema = tools[0]!.inputSchema as unknown as { properties: { queryTerms: { description: string } } };
     expect(schema.properties.queryTerms.description).toContain('Narrowing roots does not');
+    expect((tools[0]!.inputSchema as unknown as { properties: Record<string, unknown> }).properties).toHaveProperty('cursor');
 
     const first = await call(client, { goal: 'where is findMe used', exactSymbols: ['findMe'], limit: 1 });
     expect(first.isError).toBe(false);
@@ -139,10 +143,11 @@ describe('jev_evidence over stdio (#77)', () => {
   });
 
   it('aborts one scanning call on a timer without cancelling another, then answers the next', async () => {
-    // Large enough that a locate still running term comparisons is in progress when the timer fires. The lines do not
-    // contain the terms, so the scan does not end early at the candidate cap. Under the term cap and the read caps.
+    // Large enough that a locate still running term comparisons is in progress when the timer fires. Only each file's
+    // last line holds a term: Git's narrowing keeps every file, and the scan does not end early at the candidate cap.
+    // Under the term cap and the read caps.
     const files: Record<string, string> = { 'src/mark.ts': 'MARKER\n' };
-    for (let i = 0; i < 24; i++) files[`src/f${i}.ts`] = `${'c'.repeat(3500)}\n`.repeat(70);
+    for (let i = 0; i < 24; i++) files[`src/f${i}.ts`] = `${`${'c'.repeat(3500)}\n`.repeat(70)}cccc0000\n`;
     const heavyRoot = realpathSync(repo(files));
     const heavyCfg = configFile({ projectRoot: heavyRoot, allowedRoots: ['src'], remote: false });
     const client = await connect({ JEV_EVIDENCE_CONFIG: heavyCfg });
