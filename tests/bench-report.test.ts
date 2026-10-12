@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 
-import { buildReport, compare, compareEpisodes, concludeRun, FRONTIER_PREFERRED, gateV5Of, plannedCells, renderMarkdown, summarizeArm, summarizeLean, toRowView, type ArmSummary } from '../src/bench/report.js';
+import { buildReport, compare, FRONTIER_PREFERRED, gateV5Of, plannedCells, renderMarkdown, summarizeArm, toRowView } from '../src/bench/report.js';
 import { parseModelUsage, safeSum, tokenCount, familyTokens } from '../src/bench/usage.js';
 
 const tmp = mkdtempSync(join(tmpdir(), 'jev-report-'));
@@ -405,110 +405,34 @@ describe('diagnostic arm (A16)', () => {
 });
 
 
-describe('lean conclusion (JGL-05)', () => {
-  const leanArm = (over: Record<string, unknown> = {}): ArmSummary =>
-    ({
-      arm: 'jev_lean',
-      diagnostic: false,
-      planned: 2,
-      by_status: { completed: 2, timed_out: 0, cancelled: 0, not_started: 0, intent_only: 0, missing_record: 0 },
-      pass: 0,
-      fail: 0,
-      unknown: 2,
-      gate_v5: { rows_observed: 2 },
-      lean: { ...summarizeLean([]), selections: 2, jev_attempts: 2, http_codes: { http_200: 2 }, reasons: { scope_unusable: 2 }, ...over },
-    }) as unknown as ArmSummary;
-
-  it('does not read a successful call as a failed one', () => {
-    // The client records no error code on success, so the ingest labels it by status. Reading anything that is not
-    // `null` as a failure turned a fully answered run into "every attempt failed", which is the opposite of true.
-    const c = concludeRun([leanArm()], []);
-    expect(c.reason).not.toMatch(/failed/);
-    expect(c.category).toBe('no dispatch exposure');
-    expect(c.reason).toContain('scope_unusable');
-  });
-
-  it('does report a run whose calls really did fail', () => {
-    const c = concludeRun([leanArm({ http_codes: { http_400: 2 }, reasons: { http_other: 2 } })], []);
-    expect(c.category).toBe('no selection exposure');
-    expect(c.reason).toContain('failed');
-  });
-
-  it('never reports on jev_hierarchy when a lean run never planned it', () => {
-    expect(concludeRun([leanArm()], []).reason).not.toContain('jev_hierarchy');
+/** #214: a case with a follow-up, through a cell file and the report. */
+describe('follow-up cost', () => {
+  it('splits each prompt out of the cumulative totals and charges the follow-up only when the cell’s Jev spend is known', () => {
+    const fu = (over: Record<string, unknown> = {}): Record<string, unknown> =>
+      cell('A', 'sonnet_native', { prime_sha256: ['p1', 'p2'], follow_up_sha256: 'fu', turn_totals_usd: [0.2, 0.5, 0.8, 1], follow_up_grade: { quality: 'pass', reason: null }, ...over });
+    const row = buildReport(writeRun('fu-known', [{ job: 'A', arms: ['sonnet_native'] }], [fu()])).rows[0]!;
+    expect(row.request_costs_usd!.map((x) => +x.toFixed(2))).toEqual([0.2, 0.3, 0.3, 0.2]);
+    expect(row.follow_up_cost_usd).toBeCloseTo(0.2);
+    expect(row.follow_up_quality).toBe('pass');
+    const unknown = buildReport(writeRun('fu-unknown', [{ job: 'A', arms: ['sonnet_native'] }], [fu({ gate: { ...(cell('A', 'sonnet_native')['gate'] as Record<string, unknown>), jev_cost_usd: null } })])).rows[0]!;
+    expect(unknown.follow_up_cost_usd).toBeNull();
   });
 });
 
-/** #214: the pre-registered episode comparison (bench/results/lean-vs-native-2026-09-27), through cell files and the report. */
-describe('episode comparison', () => {
-  const ARMS = ['native_auto', 'recent_packet', 'jev_lean'];
-  // Cumulative totals after each of 2 earlier requests, the measured request and the follow-up.
-  const ep = (job: string, arm: string, rep: number, claude: number, over: Record<string, unknown> = {}): Record<string, unknown> => ({
-    ...cell(job, arm), repetition: rep, mode: arm === 'native_auto' ? null : 'lean', plugin_expected: arm !== 'native_auto',
-    init: { model: 'claude-sonnet-5', plugins: arm === 'native_auto' ? [] : ['jev-gate'], jev_gate_loaded: arm !== 'native_auto' },
-    prime_sha256: ['p1', 'p2'], follow_up_sha256: 'fu', turn_totals_usd: [claude * 0.2, claude * 0.5, claude * 0.8, claude],
-    result: { subtype: 'success', is_error: false, duration_ms: 900, num_turns: 9, total_cost_usd: claude, model_usage: usage('claude-sonnet-5', 1000, claude), usage_status: 'ok', permission_denials: 0 },
-    ...(arm === 'jev_lean' ? { lean: { accounting: 2, jev_cost_usd: 0.02, jev_cost_by_request: { fu: 0.01, mreq: 0.01 } } } : arm === 'recent_packet' ? { lean: { accounting: 2, jev_cost_usd: 0 } } : {}),
-    grade: { quality: 'pass', reason: null }, follow_up_grade: { quality: 'pass', reason: null }, ...over,
-  });
-  const run = (name: string, cells: Array<Record<string, unknown>>): string => {
-    const dir = join(tmp, name);
-    const jobs = [...new Set(cells.map((c) => String(c['job'])))];
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, 'plan.json'), JSON.stringify({ schema: 5, rows: jobs.flatMap((job) => [1, 2].map((repetition) => ({ job, group: job, repetition, arms: ARMS }))), planned_cells: jobs.length * 6 }));
-    for (const c of cells) {
-      const d = join(dir, 'cells', String(c['job']), String(c['arm']), String(c['repetition']));
-      mkdirSync(d, { recursive: true });
-      writeFileSync(join(d, 'cell.json'), JSON.stringify(c));
-    }
-    return dir;
-  };
-  const all = (claude: Record<string, number>, over: (job: string, arm: string, rep: number) => Record<string, unknown> = () => ({})): Array<Record<string, unknown>> =>
-    ['E1', 'E2', 'E3'].flatMap((job) => ARMS.flatMap((arm) => [1, 2].map((rep) => ep(job, arm, rep, claude[arm]!, over(job, arm, rep)))));
-
-  it('charges the whole episode with lean Jev spend and splits the follow-up out, from the cumulative totals', () => {
-    const r = buildReport(run('ep-split', all({ native_auto: 1, recent_packet: 1, jev_lean: 1 })));
+describe('withdrawn Lean mode (#217)', () => {
+  it('still reports a historical run with Lean arms, and a lean-mode cell’s Jev cost is unknown, never zero', () => {
+    const run = writeRun('lean-history', [{ job: 'A', arms: ['native_auto', 'jev_lean', 'sonnet_native'] }], [
+      cell('A', 'native_auto'),
+      cell('A', 'jev_lean', { mode: 'lean', plugin_expected: true, lean: { accounting: 2, selections: 1, jev_attempts: 1, jev_cost_usd: 0.02, jev_cost_by_request: { fu: 0.01 } } }),
+      cell('A', 'sonnet_native'),
+    ]);
+    const r = buildReport(run);
+    expect(r.planned_rows).toBe(3);
     const lean = r.rows.find((x) => x.arm === 'jev_lean')!;
-    expect(lean.total_cost_usd).toBeCloseTo(1.02);
-    expect(lean.request_costs_usd!.map((x) => +x.toFixed(2))).toEqual([0.2, 0.3, 0.3, 0.2]);
-    expect(lean.follow_up_cost_usd).toBeCloseTo(0.21);
-    expect(r.rows.find((x) => x.arm === 'native_auto')!.follow_up_cost_usd).toBeCloseTo(0.2);
-  });
-
-  it('reports a saving above 15% and quotes it; a smaller one is not quoted', () => {
-    const big = buildReport(run('ep-big', all({ native_auto: 2, recent_packet: 1.9, jev_lean: 1.2 }))).episodes;
-    const vsNative = big.find((e) => e.treatment === 'jev_lean' && e.control === 'native_auto')!;
-    expect(vsNative.adjudicated).toBe(true);
-    expect(vsNative.median_cost_saving).toBeCloseTo(1 - 1.22 / 2);
-    expect(vsNative.quoted).toBe(true);
-    expect(vsNative.verdict).toMatch(/^jev_lean cost 39\.0% less than native_auto/);
-    const small = buildReport(run('ep-small', all({ native_auto: 1, recent_packet: 1, jev_lean: 0.95 }))).episodes.find((e) => e.control === 'native_auto' && e.treatment === 'jev_lean')!;
-    expect(small.quoted).toBe(false);
-    expect(small.verdict).toBe('jev_lean did not cost more than 15% less than native_auto on these episodes');
-    expect(renderMarkdown(buildReport(run('ep-small-md', all({ native_auto: 1, recent_packet: 1, jev_lean: 0.95 }))))).toContain('below 15%, not quoted');
-  });
-
-  it('needs two of three valid episodes: a failed checker, an unknown cost or a partial session removes an episode', () => {
-    const fail = (job: string) => (j: string, arm: string, rep: number): Record<string, unknown> => (j === job && arm === 'jev_lean' && rep === 2 ? { follow_up_grade: { quality: 'fail', reason: 'x' } } : {});
-    const one = buildReport(run('ep-one-bad', all({ native_auto: 2, recent_packet: 2, jev_lean: 1 }, fail('E1')))).episodes.find((e) => e.control === 'native_auto' && e.treatment === 'jev_lean')!;
-    expect(one.adjudicated).toBe(true);
-    expect(one.per_episode.find((e) => e.episode === 'E1')).toMatchObject({ valid: false, cost_saving: null, treatment_quality_loss: true });
-    expect(one.verdict).toContain('failed a checker where every native_auto cell passed on E1');
-    const two = buildReport(run('ep-two-bad', all({ native_auto: 2, recent_packet: 2, jev_lean: 1 }, (j, arm, rep) => ({
-      ...fail('E1')(j, arm, rep),
-      ...(j === 'E2' && arm === 'native_auto' && rep === 1 ? { turn_totals_usd: [0.4, 1, 1.6] } : {}),
-    })))).episodes.find((e) => e.control === 'native_auto' && e.treatment === 'jev_lean')!;
-    expect(two.per_episode.find((e) => e.episode === 'E2')!.excluded.join()).toMatch(/cost unknown/);
-    expect(two.adjudicated).toBe(false);
-    expect(two.median_cost_saving).toBeNull();
-    expect(two.verdict).toBe('not adjudicated: 1 of 3 episodes pass the rules, 2 needed');
-    // A pair without the treatment arm in it is not touched by that arm's failures.
-    expect(compareEpisodes(buildReport(run('ep-two-bad-2', all({ native_auto: 2, recent_packet: 1.5, jev_lean: 1 }, fail('E1')))).rows, 'recent_packet', 'native_auto').adjudicated).toBe(true);
-  });
-
-  it('leaves a run without follow-ups with no episode section', () => {
-    const r = buildReport(writeRun('ep-none', [{ job: 'A', arms: ['native_auto', 'jev_lean'] }], [cell('A', 'native_auto'), cell('A', 'jev_lean', { mode: 'lean', lean: { accounting: 2, jev_cost_usd: 0 } })]));
-    expect(r.episodes).toEqual([]);
-    expect(renderMarkdown(r)).not.toContain('## episodes');
+    expect(lean.status).toBe('completed');
+    expect(lean.jev_cost_usd).toBeNull();
+    expect(lean.total_cost_usd).toBeNull();
+    expect(r.rows.find((x) => x.arm === 'native_auto')!.jev_cost_usd).toBe(0);
+    expect(renderMarkdown(r)).toContain('jev_lean');
   });
 });

@@ -31,7 +31,7 @@ up, so rows that add up to the cap reach it rather than falling a float rounding
 
 ## Router arms (#45)
 
-`--arms router` selects exactly three arms, not mixed into the default set or `lean`:
+`--arms router` selects exactly three arms, not mixed into the default set:
 
 - `router_native` — plain host, no plugin: the frontier root (`--frontier-model`) at `--base-effort`. This is the
   session the Router is meant to make cheaper, so it is ordinary Claude as the owner runs it, not a Sonnet session
@@ -60,7 +60,7 @@ per-cell `--settings <cell dir>/router-settings.json`
 <cell dir>/router-debug.log`. The TypeSafe key never goes in that file — it reaches the plugin only through the
 `TYPESAFE_API_KEY` env var. All four flags (`--plugin-dir`, `--settings`, `--debug-file`, `--effort`) are verified
 against `claude --help` on Claude Code 2.1.283. The Router options and both efforts are frozen in the plan's
-`cli.router_policy` before anything executes, the same convention as `lean_packet_policy`. The Router runs from source,
+`cli.router_policy` before anything executes. The Router runs from source,
 so the source is frozen too: `mods/router` is copied to `<out>/inputs/router-plugin` before the first cell, with its
 hash in `frozen_inputs.router_sha256`, and every Router cell loads that copy.
 
@@ -69,8 +69,8 @@ debug line, and a malformed or truncated last line, is tolerated and counted in 
 dropped silently or failing the cell). It keeps, per cell: every root step's assessed/proposed/applied/observed
 model and effort with skip and stop reasons and their counts, every spawn's requested/resolved model, denial and
 `model_mismatch` count, and the Router's own Jev request usage (`jev_attempts`, `jev_responses_known`,
-`jev_input_tokens`, `jev_cost_usd`) — a **third** cost producer alongside the legacy gate and Lean, summed once and
-never double-counted.
+`jev_input_tokens`, `jev_cost_usd`) — a second cost producer alongside the legacy gate, summed once and never
+double-counted.
 
 **What stays unknown.** The Router's Jev usage is carried on its `root`/`spawn`/`late` debug-log records only when the
 Jev HTTP response body itself included a `usage` object (`mods/router/hooks/client.ts`'s `parseUsage`) — it is never
