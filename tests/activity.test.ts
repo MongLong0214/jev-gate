@@ -37,7 +37,7 @@ describe('credit exhaustion', () => {
   });
   it('shows the alert in the page only when the snapshot says so', () => {
     expect(DASHBOARD_PAGE).toContain('id="credit"');
-    expect(DASHBOARD_PAGE).toContain("$('credit').hidden=!credit?.exhausted");
+    expect(DASHBOARD_PAGE).toContain("c.className='credit'+(credit?.exhausted?' er':'')");
   });
 });
 
@@ -204,18 +204,18 @@ describe('dashboard server', () => {
     }
   });
   it.each(['ko', 'en'])('renders unknown and mismatched versions without interrupting live rendering (%s)', lang => {
-    const functions = DASHBOARD_PAGE.split('\n').filter(line => line.startsWith('function versionLine(') || line.startsWith('function versionState(')).join('\n');
-    const render = (version: { running: string; installed: string | null }) => runInNewContext(`${functions}\nversionLine(version)`, {
-      lang, version, label: (ko: string, en: string) => lang === 'ko' ? ko : en,
-      el: (_tag: string, _className: string, text: string) => ({ textContent: text, style: {} }),
-    }) as Array<{ textContent: string }>;
+    const functions = DASHBOARD_PAGE.split('\n').filter(line => line.startsWith('function showVersion(') || line.startsWith('function versionState(')).join('\n');
+    const render = (version: { running: string; installed: string | null }) => {
+      const badge = { dataset: {} as Record<string, string>, hidden: true, textContent: '', title: '' };
+      runInNewContext(`${functions}\nshowVersion(version)`, { lang, version, $: () => badge, date: (s: string) => s, label: (ko: string, en: string) => lang === 'ko' ? ko : en });
+      return badge;
+    };
     const unknown = render({ running: '0.7.1', installed: null });
-    expect(unknown[0]!.textContent).toBe(lang === 'ko'
-      ? '대시보드 v0.7.1 · 설치된 Claude 플러그인 확인 불가' : 'Dashboard v0.7.1 · Installed Claude plugin unknown');
-    expect(unknown[1]!.textContent).toContain(lang === 'ko' ? '최신 여부 미확인' : 'Update status unknown');
+    expect(unknown.hidden).toBe(false); expect(unknown.textContent).toBe(lang === 'ko' ? 'v0.7.1 · 최신 여부 미확인' : 'v0.7.1 · Update status unknown');
+    expect(unknown.title).toContain(lang === 'ko' ? '설치된 Claude 플러그인: 미확인' : 'Installed Claude plugin: unknown');
     const mismatch = render({ running: '0.7.0', installed: '0.7.1' });
-    expect(mismatch[1]!.textContent).toContain(lang === 'ko' ? '설치 버전 다름' : 'Installed version differs');
-    expect(mismatch[2]!.textContent).toContain(lang === 'ko' ? '기존 세션은 이전 훅' : 'Existing sessions can retain older hooks');
+    expect(mismatch.textContent).toContain(lang === 'ko' ? '설치 버전 다름' : 'Installed version differs');
+    expect(mismatch.title).toContain(lang === 'ko' ? '기존 세션은 이전 훅' : 'Existing sessions can retain older hooks');
   });
 
   it('notifies connected clients when only the installed plugin version changes', async () => {
@@ -277,7 +277,7 @@ describe('dashboard server', () => {
       const page = await fetch(server.url);
       expect(page.status).toBe(200);
       const html = await page.text();
-      expect(html).toContain('전체 기능 파이프라인');
+      expect(html).toContain('실행 회로');
       expect(html).toContain('id="theme"');
       expect(html).toContain('id="language"');
       const body = (await (await fetch(`${server.url}api/snapshot`)).json()) as { events: Array<{ title: string; used: string }> };
