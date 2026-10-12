@@ -23,6 +23,24 @@ const write = (dir: string, name: string, body: unknown): void => {
   writeFileSync(join(dir, name), JSON.stringify(body));
 };
 
+describe('credit exhaustion', () => {
+  const credit = (...rows: Array<[string, string, boolean]>) => {
+    const trace = make();
+    rows.forEach(([assessment, at, sent], i) => write(trace, `r${i}.json`, { phase: 'mod_router', session_id: 's', event: 'root', turn: `t${i}`, sent, assessment, written_at: at }));
+    return loadActivity({ traceDir: trace, debugDir: null, env: { HOME: make() } }).credit;
+  };
+  it('flags a 402 and keeps the flag through refused follow-ups until a request succeeds', () => {
+    expect(credit(['payment_required', '2026-10-07T05:00:00.000Z', true]).exhausted).toBe(true);
+    expect(credit(['payment_required', '2026-10-07T05:00:00.000Z', true], ['credential_refused', '2026-10-07T05:01:00.000Z', false]).exhausted).toBe(true);
+    expect(credit(['payment_required', '2026-10-07T05:00:00.000Z', true], ['ok', '2026-10-07T05:02:00.000Z', true]).exhausted).toBe(false);
+    expect(credit(['timeout', '2026-10-07T05:00:00.000Z', true]).exhausted).toBe(false);
+  });
+  it('shows the alert in the page only when the snapshot says so', () => {
+    expect(DASHBOARD_PAGE).toContain('id="credit"');
+    expect(DASHBOARD_PAGE).toContain("$('credit').hidden=!credit?.exhausted");
+  });
+});
+
 describe('loadActivity', () => {
   it('closes a native spawn prepared before the response had an agent id without joining another call', () => {
     const trace = make();

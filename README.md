@@ -1,11 +1,14 @@
 <div align="center">
 
-<img src="./assets/readme/jev-gate-logo.svg" width="100%" alt="Jev Gate — the right model and effort for every turn">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./assets/readme/jev-gate-logo-dark.svg">
+  <img src="./assets/readme/jev-gate-logo.svg" width="560" alt="Jev Gate — the right model and effort for every turn">
+</picture>
 
-<br>
+<br><br>
 
 [![CI](https://github.com/MongLong0214/jev-gate/actions/workflows/ci.yml/badge.svg)](https://github.com/MongLong0214/jev-gate/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/MongLong0214/jev-gate?color=6366F1&label=release)](https://github.com/MongLong0214/jev-gate/releases/latest)
+[![Release](https://img.shields.io/github/v/release/MongLong0214/jev-gate?color=BD254E&label=release)](https://github.com/MongLong0214/jev-gate/releases/latest)
 [![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-D97757)](#claude-code)
 [![Codex](https://img.shields.io/badge/Codex-plugin-10A37F)](#codex)
 [![Node 22+](https://img.shields.io/badge/node-22%2B-3FB950)](package.json)
@@ -15,6 +18,17 @@
 [Install](#install) · [Results](#results) · [How it works](#how-it-works) · [Dashboard](#read-the-live-dashboard) · [Data and privacy](#settings-and-data) · [Troubleshoot](#update-and-troubleshoot)
 
 </div>
+
+<h3 align="center">About half the cost. Same quality. Measured on real work.</h3>
+
+<p align="center">
+  <a href="#results"><picture>
+    <source media="(prefers-color-scheme: dark)" srcset="./assets/readme/results-dark.svg">
+    <img src="./assets/readme/results.svg" width="100%" alt="Claude Code with Jev Gate versus alone: cost $19.65 instead of $42.81 (−54%), tokens 41.3 M instead of 111.7 M (−63%), agent time 65 instead of 124 minutes (−47%), blind-graded quality 21 of 23 for both">
+  </picture></a>
+</p>
+
+<p align="center"><sub><i>Two real feature tasks, each a 17-turn Claude Code 2.1.294 session on Opus 5.5 (xhigh), with and without Jev Gate v0.8.15 defaults. Cost is the host's own total and includes Jev's requests; quality is blind-graded against the merged PRs. One pair per task: a pilot that shows a direction, not a guarantee — <a href="#results">method and limits</a>.</i></sub></p>
 
 # Jev Gate
 
@@ -26,19 +40,25 @@ Jev Gate fixes the allocation, not the work. **Jev judges each turn; code applie
 
 ## Results
 
-Two real feature tasks from a private production TypeScript frontend, each re-implemented from its parent commit in a 17-turn session (task prompt + 16 fixed follow-ups: checks, tests, review, an idle gap, PR draft). Claude Code 2.1.294, `claude-opus-5-5` at `xhigh`, identical settings; the only difference is the plugin (v0.8.15, defaults).
+### Cost, tokens, time and quality — measured
 
-| | Native Claude Code | With Jev Gate | Ratio |
+| | Claude Code alone | With Jev Gate | Change |
 | --- | ---: | ---: | ---: |
-| **Cost** (host-reported, incl. Jev requests) | $42.81 | **$19.65** | **0.46×** |
-| **Tokens** | 111.7 M | **41.3 M** | **0.37×** |
-| **Peak main context** | 442 K / 673 K | **206 K / 353 K** | ~0.5× |
-| **Agent time** | 124 min | **65 min** | 0.53× |
-| **Quality** (blind rubric, 23 points) | 21 | **21** | same |
+| **Cost** (host-reported, incl. Jev requests) | $42.81 | **$19.65** | **−54%** |
+| **Tokens** (all models and subagents) | 111.7 M | **41.3 M** | **−63%** |
+| **Agent time** | 124 min | **65 min** | **−47%** |
+| **Peak main context** | 442 K / 673 K | **206 K / 353 K** | about −50% |
+| **Quality** (blind rubric, 23 points) | 21 | **21** | **same** |
 
-Both tasks pointed the same way (cost 0.50× and 0.44×). Quality was graded against the merged pull requests with a rubric frozen before any diff was read, by two graders who did not know the arm; every cell had zero new type or lint errors and passed its own tests.
+**Per task** (cost, native → Jev Gate): feature with a strict backend contract **$15.58 → $7.76** (−50%); async UI interaction **$27.24 → $11.89** (−56%). Both pointed the same way. Even pricing Jev's own routing requests at Claude Opus rates, the savings stay at −42% and −54%.
 
-> **This is a pilot: one pair per task.** It shows a direction, not a guarantee — session-to-session variance can be large, and your savings depend on your tasks, settings and host. A multi-pair run is planned. [Method, per-cell data and limits →](https://github.com/MongLong0214/jev-gate/tree/main/bench/results/long-session-pilot-2026-10-12)
+**Quality is not traded for the saving.** Output was graded against the merged pull requests with a rubric frozen before any diff was read, by two graders who did not know which arm produced it. Every run had zero new type or lint errors and passed its own tests. The two arms were within half a point on each task, each ahead on one.
+
+**Why it is cheaper.** The native sessions kept growing one main context (up to 673 K tokens) and re-read it from cache on every request — cache reads were 98 % of their tokens. With Jev Gate, exploration, test and review work went to Sonnet and Haiku subagents, which kept the main context at about half the size and cut cache reads to roughly a third.
+
+**How it was run.** Two real tasks from a private production TypeScript frontend, each re-implemented from its parent commit: a form option with a strict backend contract, and a click-to-add-row interaction that waits for asynchronous recalculation. Each session is one task prompt plus 16 fixed follow-ups (checks, tests, review, an idle gap, a PR draft). Claude Code 2.1.294, `claude-opus-5-5` at `xhigh`, identical settings; the only difference is the plugin (v0.8.15, defaults). Cost is the host's own reported total, cross-checked against transcript token counts.
+
+> **Read this before quoting a number.** This is a **pilot: one pair per task**. It shows a direction, not a guarantee. Session-to-session variance can be large, and savings depend on your tasks, settings and host. A multi-pair run is planned. [Method, per-cell data and deviations →](https://github.com/MongLong0214/jev-gate/tree/main/bench/results/long-session-pilot-2026-10-12)
 
 ## How it works
 

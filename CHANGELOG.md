@@ -3,7 +3,9 @@
 ## v0.8.16 — 2026-10-12 — README, pilot results and dashboard header
 
 - Rebuild the README around installation, a measured long-session pilot and how the features fit together. The pilot (two real tasks, 17-turn sessions, one pair each, blind-graded) is reported with its method, per-cell data and limits in `bench/results/long-session-pilot-2026-10-12`; it is a direction, not a guaranteed saving.
-- Replace the README logo with a self-contained hero banner that renders the same on light and dark pages and stops moving under reduced-motion preferences.
+- Lead the README with a results chart (`assets/readme/results.svg`, with a dark variant) and a one-paragraph summary of the pilot, so the measured outcome is the first thing a reader sees.
+- Replace the brand mark with a router mark (one line in, three lanes out, the chosen lane in the accent color) in the README, the dashboard rail and the favicon. The README hero stacks mark, name and tagline centered, ships light and dark variants, animates briefly and holds a static frame under reduced-motion preferences.
+- Show a "Jev credit exhausted" badge in the dashboard header when Jev answered 402 and no request has succeeded since; it clears on the next successful answer. Jev 402 responses are reported as `http_402` and labelled as exhausted credit in run steps instead of a generic failure.
 - Align the dashboard header: breadcrumb, host label, version badge and connection status sit on one baseline with consistent spacing and pill shapes. The version badge no longer touches the host label.
 
 ## v0.8.15 — 2026-10-08 — Doctor and native model compatibility

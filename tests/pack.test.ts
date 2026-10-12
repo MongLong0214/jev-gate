@@ -26,6 +26,9 @@ const INSTALL_DOCS = [
   'mods/output/README.md',
   'mods/router/README.md',
   'assets/readme/jev-gate-logo.svg',
+  'assets/readme/jev-gate-logo-dark.svg',
+  'assets/readme/results.svg',
+  'assets/readme/results-dark.svg',
 ];
 
 const relativeReadmeLinks = (markdown: string): string[] => {

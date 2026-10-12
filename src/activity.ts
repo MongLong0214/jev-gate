@@ -66,6 +66,8 @@ export interface ActivitySnapshot {
   unreadable: number;
   liveness: { recorded: number; attempted: number; lastReason: string | null } | null;
   jevCalls: number;
+  /** Jev answered 402 and nothing has succeeded since: the account is out of credit. */
+  credit: { exhausted: boolean; at: string | null };
   direct: number;
   orchestrated: number;
   routerChanges: number;
@@ -621,6 +623,13 @@ export const loadActivity = (opts: { traceDir: string | null; traceDirs?: readon
   const liveness = opts.host === 'codex' ? null : readLiveness(opts.env);
   const hosts = new Set(gateRecords.map(r => r['host'] === 'codex' ? 'codex' : 'claude'));
   const host = opts.host ?? (hosts.size > 1 ? 'mixed' : hosts.has('codex') ? 'codex' : 'claude');
+  // 새 요청이 막히면 같은 활성 구간의 이후 호출은 네트워크 없이 credential_refused 가 되므로, 성공(ok)이 나올 때까지 소진 상태를 유지한다.
+  let credit: ActivitySnapshot['credit'] = { exhausted: false, at: null };
+  for (const row of [...debugRows].filter(row => row.component === 'router').sort((a, b) => b.at.localeCompare(a.at))) {
+    const assessment = row.rec['assessment'];
+    if (assessment === 'ok') break;
+    if (assessment === 'payment_required') { credit = { exhausted: true, at: row.at }; break; }
+  }
   const operations = buildOperations(gateRecords, debugRows, now, {
     trace: traceAvailable,
     debug: debugAvailable,
@@ -635,6 +644,7 @@ export const loadActivity = (opts: { traceDir: string | null; traceDirs?: readon
     unreadable,
     liveness: liveness ? { recorded: liveness.recent.length, attempted: liveness.recent.filter((e) => e.attempted).length, lastReason: token(liveness.recent.at(-1)?.reason ?? null) } : null,
     jevCalls,
+    credit,
     direct,
     orchestrated,
     routerChanges,

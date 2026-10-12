@@ -195,7 +195,7 @@ const compactSelectionReason = (value: unknown): string | null => ({
   current_dependencies: '현재 작업에 필요한 근거 선택', recency_kept: '기존 최근순 유지', no_candidates: '선별할 과거 결과 없음',
   no_key: 'Jev API 키 없음', disabled: 'Jev 선별 꺼짐', not_eligible: '로컬 추출 조건 미충족 · Jev 선별 미실행', input_secret: '민감정보 감지 · 로컬 유지', input_too_large: '판정 입력 한도 초과 · 로컬 유지',
   timeout: 'Jev 응답 시간 초과 · 로컬 유지', invalid_answers: '유효하지 않은 판정 · 로컬 유지', aborted: '중단 · 판정 미적용',
-  superseded: '새 턴으로 변경 · 판정 미적용', unauthorized: 'Jev 인증 실패 · 로컬 유지', credential_refused: 'Jev 인증 확인 필요 · 로컬 유지',
+  superseded: '새 턴으로 변경 · 판정 미적용', unauthorized: 'Jev 인증 실패 · 로컬 유지', payment_required: 'Jev 크레딧 소진 · 로컬 유지', credential_refused: 'Jev 인증 확인 필요 · 로컬 유지',
   error: '선별 오류 · 로컬 유지', network: 'Jev 연결 오류 · 로컬 유지', saturated: '실행 중인 Jev 요청 한도 · 로컬 유지',
 } as Record<string, string>)[String(value)] ?? token(value);
 const compactUsage = (r: Rec): string => {
@@ -506,7 +506,7 @@ const debugStep = (row: DebugRecord, now: number, closed: Set<string>, responses
     lane = event === 'request' || r['sent'] === true ? 'jev' : 'policy';
     const from = field(r, 'from'); const patch = field(r, 'patch'); const reasons = field(r, 'reasons'); const applied = field(r, 'applied');
     summary = event === 'request' ? 'Jev 요청 전송 · 응답 대기' : text(event, r['sent'] === true ? 'Jev 응답' : r['sent'] === false ? '전송 안 함' : null, token(r['skipped']), token(r['reason']));
-    if (failedAssessment) summary = text('Jev 판정 실패 · 원래 호스트 설정 유지', token(r['assessment']));
+    if (failedAssessment) summary = r['assessment'] === 'payment_required' ? 'Jev 크레딧 소진 · 원래 호스트 설정 유지' : text('Jev 판정 실패 · 원래 호스트 설정 유지', token(r['assessment']));
     details.push(text(`기존 모델 ${token(from?.['model']) ?? token(r['from']) ?? '?'}`, `기존 effort ${token(from?.['effort']) ?? '?'}`));
     if (r['scope'] === 'child') details.push(text('워커 단계별 Jev 라우팅', `단계 ${n(number(r['index']))}`, `워커 ${token(r['agent_id']) ?? '?'}`));
     if (number(r['preparation_ms']) !== null) details.push(`Router 준비 ${n(number(r['preparation_ms']))}ms · Jev 응답 시간과 별도 · 예산 ${n(number(r['budget_ms']))}ms`);

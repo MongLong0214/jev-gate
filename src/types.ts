@@ -532,6 +532,7 @@ export type SkipCode =
 
 export type HttpCode =
   | 'http_401'
+  | 'http_402'
   | 'http_422'
   | 'http_429'
   | 'http_529'

@@ -83,6 +83,7 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 
 const statusToCode = (status: number): HttpCode => {
   if (status === 401) return 'http_401';
+  if (status === 402) return 'http_402';
   if (status === 422) return 'http_422';
   if (status === 429) return 'http_429';
   if (status === 529) return 'http_529';
