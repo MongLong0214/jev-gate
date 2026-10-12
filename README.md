@@ -108,7 +108,7 @@ Both hosts share one private key and dashboard. Installing from source is for de
 | Router | Selects model and effort from supported candidates for the root or eligible agents. Explicit pins are respected. | Root turns are assessed once; mapped Claude workers are assessed again at each inference after spawn |
 | Compact | Builds an extractive digest plus recent context. Jev prioritizes older successful results needed for the current task within the existing size budget. | One bounded candidate batch by default; timeout/invalid output keeps local selection |
 | Output | Folds repeated successful Vitest output in Claude, and supported repeated tool output in Codex. | Local deterministic processing |
-| Evidence | Returns verified source windows, paths, lines, hashes, and pagination. | Semantic candidates; exact symbols and read-back stay local |
+| Evidence | Returns verified source windows, paths, lines, hashes, and a continuation cursor. Searches the whole worktree by narrowing to matching files first; credential-like windows are returned as references only. | Semantic candidates; exact symbols and read-back stay local |
 | Dashboard | Shows both hosts' recorded judgments, requests, and outcomes live. | Reads local metadata; makes no Jev requests |
 
 Gate, Router, Compact, Output, remote Evidence, recording, and automatic dashboard opening default to **on**. Lean is a separate selectable mode; it does not run Gate A/B or the planner. Automatic Astra/Fable targets default to off; enable both hosts with `frontierEnabled: true` in `~/.config/jev-gate/config.json`; manually selecting a root model does not enable automatic restricted children. [Router options](mods/router/README.md).
@@ -213,6 +213,7 @@ Restart the host after upgrading to load new hooks/provider code. Old separate J
 | Worker dispatch denied | The Router records `spawn_denied` with a reason code (for example `policy_unavailable`, `no_eligible_model`, `subagent_model_pinned`); fix that cause, or check pins and `frontierEnabled` |
 | Model/effort warning | Inspect selected, submitted, and observed values; distinguish request mismatch from missing response facts |
 | Evidence `partial` / empty | Check coverage and reason codes; an incomplete empty page is not proof of absence |
+| Evidence not used in Claude Code | Claude loads `jev_evidence` with ToolSearch when the Evidence plugin is enabled; check that the plugin and its MCP server are enabled with doctor |
 | Evidence `stale` | Search again; continue only with every field of the returned `next` |
 | Settings seem ignored | Use user-level plugin options and start a fresh host |
 
