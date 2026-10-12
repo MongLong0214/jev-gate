@@ -6,7 +6,7 @@ Router chooses a model and reasoning effort for the request the host is about to
 
 Router ships in the combined `jev-gate` plugin and defaults to on. Install the plugin and enter your Jev key once. No role mapping or project file is required. Configure Claude options in `/plugin` → jev-gate → configure; Codex uses its optional `codex.json` policy.
 
-Turning `routerEnabled` off stops ordinary routing. In the combined plugin, automatic Gate and Lean dispatches still enforce model eligibility; turning Router off cannot bypass that boundary. The standalone Router registers no policy hooks when disabled.
+Turning `routerEnabled` off stops ordinary routing. In the combined plugin, automatic Gate dispatches still enforce model eligibility; turning Router off cannot bypass that boundary. The standalone Router registers no policy hooks when disabled.
 
 ## What a request can do
 
@@ -16,7 +16,7 @@ Model and effort are independent. A model pin leaves effort open; an effort pin 
 
 ### Restricted automatic models
 
-Astra in Codex and Fable in Claude are **excluded from automatic targets by default**, including ordinary subagents, Gate planners/workers, retries and Lean inheritance. A manual root selection remains usable and can still have its effort routed. It does not authorize automatic children to inherit that restricted model. An ineligible child falls back to main-session work; ownership of an already launched or uncertain worker remains protected.
+Astra in Codex and Fable in Claude are **excluded from automatic targets by default**, including ordinary subagents, Gate planners/workers and retries. A manual root selection remains usable and can still have its effort routed. It does not authorize automatic children to inherit that restricted model. An ineligible child falls back to main-session work; ownership of an already launched or uncertain worker remains protected.
 
 Only the literal boolean `true` enables the respective option. Null, strings and numbers are invalid. These are independent host/package settings, with no shared master switch:
 
@@ -52,7 +52,7 @@ The default 800ms budget covers preparation, Jev and final application checks. T
 
 Claude workers are assessed again before each inference after their initial spawn allocation. The existing native conversation stays intact: each decision uses the child contract and recent tool names/outcome labels, without copying tool arguments, output, repository text or thinking. The first step keeps Gate B or spawn allocation; subsequent steps may choose another eligible model and effort. A smaller context window requires a complete current-request bound, so a short task alone never establishes Haiku compatibility. Concurrent delivery of one step shares its assessment. A timeout or invalid judgment preserves that step and the next step is assessed again. Native stream failures stop further overrides without replaying the request. Unknown or already running loops without a verified spawn mapping stay native. Lean remains eligibility-only.
 
-Gate B adds candidate-local allocation questions to its existing batch, not a second classifier call. Lean performs eligibility checks only. Optional recording and dashboard failures do not change execution. Durable worker ownership and cancellation remain required for safe dispatch and acceptance.
+Gate B adds candidate-local allocation questions to its existing batch, not a second classifier call. Optional recording and dashboard failures do not change execution. Durable worker ownership and cancellation remain required for safe dispatch and acceptance.
 
 ## Claude options
 

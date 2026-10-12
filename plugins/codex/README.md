@@ -1,6 +1,6 @@
 # Jev Gate for Codex
 
-Automatic Gate, Lean, Router and Compact connect to **ordinary native Codex** after the plugin starts. The plugin supplies hooks, Evidence MCP, Output folding and an authenticated local connection. Your login, permissions, terminal and official execution engine stay in Codex.
+Automatic Gate, Router and Compact connect to **ordinary native Codex** after the plugin starts. The plugin supplies hooks, Evidence MCP, Output folding and an authenticated local connection. Your login, permissions, terminal and official execution engine stay in Codex.
 
 Requires **Node 22.15+**. Automatic connection was tested with **Codex CLI 0.160.0**. The optional managed terminal connection was also tested on 0.158.0. An already open session retains its original provider until a new session loads the automatic settings. Local Codex app/IDE sessions must use this Codex home and support the same native plugin, hook and provider APIs; a remote managed coding session is a separate host.
 
@@ -33,7 +33,7 @@ codex
 codex --model gpt-6.1-sol --sandbox workspace-write
 ```
 
-If a session was open before installation, start a new native session after connection readiness. The plugin cannot change a model provider already loaded by that host. `jev_agent` is installed as an MCP tool; only a current Gate/Lean dispatch can start an owned worker. Invalid judgments, missing keys, unsupported input and unknown depth preserve native execution.
+If a session was open before installation, start a new native session after connection readiness. The plugin cannot change a model provider already loaded by that host. `jev_agent` is installed as an MCP tool; only a current Gate dispatch can start an owned worker. Invalid judgments, missing keys, unsupported input and unknown depth preserve native execution.
 
 Active plugin clients restart a failed helper. Disabling/removing the plugin restores only settings that still match Jev’s installed values; owner edits are retained. No OS login service is installed. To keep Evidence/Output without automatic provider integration, use `JEV_CODEX_AUTO_CONNECT=0` before plugin startup. Existing native login and configured `openai_base_url` / `OPENAI_BASE_URL` are preserved in the forwarding path. `JEV_CODEX_UPSTREAM` is an explicit compatible endpoint override.
 
@@ -48,7 +48,6 @@ The older `node <plugin>/dist/cli.mjs codex` managed terminal remains available 
 | Planning | Only on the planned path: runs the existing read-only planner instructions in a native Codex thread and validates the returned task graph |
 | Workers / acceptance | Runs real native Codex workers in the background by default; compares reports with observed command exits and edits. Acceptance is owned by code on both hosts. |
 | Root guard | Enforces the shared root allowlist while a job is admitted; never returns an allow decision |
-| Lean | Uses attributed App Server items; retains user constraints, selects optional groups with Jev, and applies a packet to one executor; no Gate or plan runs on this path |
 | Router | Uses a nominal actual-ID model choice and candidate-local ordered effort scores; routes the original root request and separates selection, submission and actual response observation |
 | Compact | Prioritizes current-task dependencies with a bounded Jev batch, then produces the shared extractive digest; Codex installs it through its own state machine; unsupported extraction falls back to native compaction |
 | Output | Folds only identical consecutive lines in complete passing Vitest output; preserves failures, truncation and unknown formats |
@@ -74,7 +73,7 @@ Use `JEV_CODEX_CONFIG=/absolute/codex.json`, otherwise `~/.config/jev-gate/codex
 }
 ```
 
-`gate` accepts the shared V5 options, including `mode: "lean"`, depth floors, budgets, checks and `workerIsolation`. Without a model mapping, the adapter selects accessible tiers from live `model/list` descriptions. Explicit `models` entries override only those tiers. Main model and effort routing are both enabled by default. Router has the same directional probability thresholds (upgrade 0.8, downgrade 0.6). `JEV_GATE_MODE` overrides the Gate mode only; `gate.mode: "off"` does not disable Router or Compact.
+`gate` accepts the shared V5 options, including depth floors, budgets, checks and `workerIsolation`. Without a model mapping, the adapter selects accessible tiers from live `model/list` descriptions. Explicit `models` entries override only those tiers. Main model and effort routing are both enabled by default. Router has the same directional probability thresholds (upgrade 0.8, downgrade 0.6). `JEV_GATE_MODE` overrides the Gate mode only; `gate.mode: "off"` does not disable Router or Compact. A policy `gate.mode` of `lean` still loads and runs as `auto` (withdrawn in #217).
 
 ### Current Codex models and efforts
 
@@ -84,7 +83,7 @@ Codex `/model`, `--model`, and ordinary model configuration establish a baseline
 
 An eligible direct conversation can delegate one bounded subtask without starting a plan. The shared hook reserves that worker before Gate B, applies its model/effort pair, and settles the original execution once. Its result does not complete the whole main request. Background questions stay in the main conversation. If termination or state settlement is uncertain, the returned execution identity supports `jev_agent` status recovery for either foreground or background work; do not start a replacement.
 
-Automatic Astra targets default to **OFF**, including Gate/Lean children even when Router is off. A manual Astra root remains usable. To opt in, set `{"router":{"allowAstra":true}}` in this host’s optional policy file; only boolean true is valid. Claude has separate `routerAllowFable` (combined) and `allowFable` (standalone) settings. No file or model mapping is required for ordinary eligible models.
+Automatic Astra targets default to **OFF**, including Gate children even when Router is off. A manual Astra root remains usable. To opt in, set `{"router":{"allowAstra":true}}` in this host’s optional policy file; only boolean true is valid. Claude has separate `routerAllowFable` (combined) and `allowFable` (standalone) settings. No file or model mapping is required for ordinary eligible models.
 
 Observed in Codex CLI 0.159.2 on 2026-09-30:
 

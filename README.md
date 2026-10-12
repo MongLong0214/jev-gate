@@ -60,9 +60,9 @@ Jev Gate fixes the allocation, not the work. **Jev judges each turn; code applie
 
 > **Read this before quoting a number.** This is a **pilot: one pair per task**. It shows a direction, not a guarantee. Session-to-session variance can be large, and savings depend on your tasks, settings and host. A multi-pair run is planned. [Method, per-cell data and deviations →](https://github.com/MongLong0214/jev-gate/tree/main/bench/results/long-session-pilot-2026-10-12)
 
-### Lean mode — measured, to be removed
+### Lean mode — measured and withdrawn
 
-Lean (hand the task to a fresh executor with a selected context packet) was compared with native auto-compact in a pre-registered run: three five-request episodes, two repetitions each, every cell passing its checkers. Lean cost **2.6–8.2 % more** per episode median and took about 18 % longer; no episode reached the 15 % saving threshold. Jev chose not to hand off in all 24 selections, so the run measured Lean's overhead, not a handoff. The contexts were small (about 30–35 K tokens), so long sessions are not covered. An offline upper bound on real usage traces agreed: on Claude, every threshold policy cost more, and even an oracle that hands off only the turns that profit saved at most 7.7 %. **`auto` is unchanged, and Lean will be removed in a following release ([#217](https://github.com/MongLong0214/jev-gate/issues/217)).** [Pre-registration, per-cell data and limits →](https://github.com/MongLong0214/jev-gate/tree/main/bench/results/lean-vs-native-2026-09-27)
+Lean (hand the task to a fresh executor with a selected context packet) was compared with native auto-compact in a pre-registered run: three five-request episodes, two repetitions each, every cell passing its checkers. Lean cost **2.6–8.2 % more** per episode median and took about 18 % longer; no episode reached the 15 % saving threshold. Jev chose not to hand off in all 24 selections, so the run measured Lean's overhead, not a handoff. The contexts were small (about 30–35 K tokens). An offline replay of real usage bounded the possible saving at ≤7.7 % even with an oracle on Claude, and it was negative for every threshold policy. **Lean was removed on both hosts in #217; `auto` is unchanged.** [Pre-registration, per-cell data and limits →](https://github.com/MongLong0214/jev-gate/tree/main/bench/results/lean-vs-native-2026-09-27)
 
 ## How it works
 
@@ -111,7 +111,7 @@ Both hosts share one private key and dashboard. Installing from source is for de
 | Evidence | Returns verified source windows, paths, lines, hashes, and a continuation cursor. Searches the whole worktree by narrowing to matching files first; credential-like windows are returned as references only. | Semantic candidates; exact symbols and read-back stay local |
 | Dashboard | Shows both hosts' recorded judgments, requests, and outcomes live. | Reads local metadata; makes no Jev requests |
 
-Gate, Router, Compact, Output, remote Evidence, recording, and automatic dashboard opening default to **on**. Lean is a separate selectable mode; it does not run Gate A/B or the planner. Automatic Astra/Fable targets default to off; enable both hosts with `frontierEnabled: true` in `~/.config/jev-gate/config.json`; manually selecting a root model does not enable automatic restricted children. [Router options](mods/router/README.md).
+Gate, Router, Compact, Output, remote Evidence, recording, and automatic dashboard opening default to **on**. Automatic Astra/Fable targets default to off; enable both hosts with `frontierEnabled: true` in `~/.config/jev-gate/config.json`; manually selecting a root model does not enable automatic restricted children. [Router options](mods/router/README.md).
 
 Default Gate settings permit native tools (`guardAllowTools: ["*"]`), up to 16 isolated workers, 64 planned tasks, a depth floor of 0, and plan interpretation. Worktree snapshots include current working files. Native permissions remain authoritative. Missing keys, invalid judgments, timeouts, or unavailable host facts preserve the native call.
 
@@ -129,7 +129,7 @@ The dashboard shows each host's current operation in a short live lane. Gate's d
 
 ## Keep talking while workers run
 
-Owned workers, planners, and Lean executors dispatch in the background by default. New messages steer the main conversation without replacing the original job or its contracts. A launch receipt is separate from completion and contract acceptance.
+Owned workers and planners dispatch in the background by default. New messages steer the main conversation without replacing the original job or its contracts. A launch receipt is separate from completion and contract acceptance.
 
 Claude sends native completion notifications. Codex's coordinator can query `jev_agent` with `action: "status"` or explicitly cancel with `action: "cancel"` and the returned `agent_id`. Interrupting the main turn does not cancel an already running background worker. If Claude is busy with a foreground tool, use its native **Send now** shortcut; ordinary Enter may queue a message. [Background and host details](docs/advanced-usage.md).
 
@@ -185,12 +185,12 @@ The key is stored in `~/.config/jev-gate/auth/credentials.json` (0700 directory/
 
 When enabled and eligible, these inputs can leave the machine:
 
-- **Gate/Lean:** the request, composed task contracts, predecessor summaries, or selected prior-context groups. A needs-context retry can include recent user turns.
+- **Gate:** the request, composed task contracts, or predecessor summaries. A needs-context retry can include recent user turns.
 - **Router:** the task text and routing/cache facts used for its judgment.
 - **Compact:** the current task and a bounded set of older successful-result excerpts. Sensitive candidates are filtered before sending. Mandatory preservation and final size limits remain local.
 - **Evidence:** semantic goals, constraints, and candidate source windows. Exact-symbol queries and verified read-back do not call Jev.
 
-The plugin does not upload the whole repository. Filters are not a DLP or retention guarantee. To disable remote Evidence, set `remote: false` in its optional config. That does not disable Gate, Router, Lean, or Compact's Jev selection. Output and the dashboard are local. [Evidence configuration](plugins/evidence/README.md#configure).
+The plugin does not upload the whole repository. Filters are not a DLP or retention guarantee. To disable remote Evidence, set `remote: false` in its optional config. That does not disable Gate, Router, or Compact's Jev selection. Output and the dashboard are local. [Evidence configuration](plugins/evidence/README.md#configure).
 
 Recording stores private metadata under `~/.local/state/jev-gate/{claude,codex}/traces` (`$XDG_STATE_HOME` supported). Existing trace/debug paths remain supported. Prompt text, source bodies, tool output, and keys do not appear in the dashboard.
 
