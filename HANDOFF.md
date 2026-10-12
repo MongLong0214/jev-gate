@@ -710,7 +710,7 @@ table and the rules.
 | File | What it owns |
 | --- | --- |
 | `src/admission.ts` | Gate A question and decision |
-| `src/allocation.ts` | Gate B only (planner tier, worker tier + upgrade basis). The Gate C question, request builder and decision function are gone; `ResultVerdict` stays as the type of the `advisory` field on stored receipts |
+| `src/allocation.ts` | Gate B only (planner tier, worker tier + upgrade basis). The Gate C question, request builder, decision function and `ResultVerdict` type are gone (#213); an `advisory` left on an old stored receipt is read as history only |
 | `src/plan.ts` | plan/reply JSON parsing, `contract_hash`, `[JEV_TASK …]` marker, contract composition, deterministic acceptance |
 | `src/job.ts` | per-(session, prompt) state file, reservations, bounds, history |
 | `src/coordinator.ts` | every fixed text: guidance, deny reasons, context messages |
