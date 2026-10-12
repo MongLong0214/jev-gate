@@ -52,11 +52,13 @@ process.stdout.write(s.url + '\\n');`;
     const watch = async (): Promise<Viewer> => {
       const reader = (await fetch(`${url}api/live`)).body!.getReader(), viewer: Viewer = { frames: [], reader };
       void (async () => {
+        // One streaming decoder per viewer: a multibyte character can span two reads.
         let buffer = '';
+        const decoder = new TextDecoder();
         for (;;) {
           const { done, value } = await reader.read().catch(() => ({ done: true, value: undefined }));
           if (done) return;
-          buffer += new TextDecoder().decode(value);
+          buffer += decoder.decode(value, { stream: true });
           for (let end = buffer.indexOf('\n\n'); end >= 0; end = buffer.indexOf('\n\n')) {
             const data = buffer.slice(0, end).split('\n').find(line => line.startsWith('data: '));
             if (data && !buffer.slice(0, end).includes('event: heartbeat')) viewer.frames.push(data.slice(6));
