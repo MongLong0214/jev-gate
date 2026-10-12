@@ -61,7 +61,7 @@ header{display:flex;align-items:center;gap:16px;min-height:60px;border-bottom:1p
 .set{display:flex;flex-wrap:wrap;gap:12px 24px;padding:12px 16px;font-size:13px;color:var(--muted);align-items:center}.set-t{color:var(--ink);font-weight:600}.pref{display:inline-flex;align-items:center;white-space:nowrap}
 .switch{appearance:none;border:0;padding:0;width:26px;height:15px;border-radius:8px;background:var(--line);position:relative;margin-left:8px}.switch:after{content:"";position:absolute;left:2px;top:2px;width:11px;height:11px;border-radius:50%;background:#fff;transition:left .15s}.switch[aria-checked=true]{background:var(--accent)}.switch[aria-checked=true]:after{left:13px}
 .still .comm i,.still .strip i,.still .ct i,.still .st.run i::after,.still .jc .spk i.now,.still .conn:before{animation-play-state:paused}
-@media (max-width:1180px){.rgrid{grid-template-columns:92px minmax(150px,1fr) minmax(150px,1fr) minmax(150px,1fr) 108px 60px;column-gap:16px}.rgrid>.c-du{display:none}}
+@media (max-width:1180px){.two,.jev{grid-template-columns:minmax(0,1fr)}.stat .sep{display:none}#k-today{display:block}.rgrid{grid-template-columns:92px minmax(150px,1fr) minmax(150px,1fr) minmax(150px,1fr) 108px 60px;column-gap:16px}.rgrid>.c-du{display:none}}
 @media (max-width:900px){.two,.jev{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,minmax(0,1fr));row-gap:16px}.stat:nth-child(3){border-left:0;padding-left:0}
  .rhead{display:none}.runs .ch .sp{display:none}.rq{width:auto;flex:1 1 100%;order:3}.fl{order:4;max-width:100%;overflow-x:auto}
  .row{height:auto;padding:12px 16px;display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"nm ac" "md md" "st jc" "stg stg";row-gap:8px;column-gap:12px}
@@ -77,7 +77,7 @@ ${CIRCUIT_CSS}
 <main id="main"><div id="notice" class="notice" role="status"></div>
 <dl class="stats">
 <div class="stat"><dt data-i18n="kRuns">진행 중인 실행</dt><dd><span class="v n" id="k-active">0</span><span class="u" id="k-active-u">개</span></dd><dd class="s" id="k-hosts"></dd></div>
-<div class="stat"><dt data-i18n="kComm">Jev 통신</dt><dd><div class="comm" id="comm" aria-hidden="true"></div></dd><dd class="s"><span id="k-last"></span> · <span id="k-today"></span></dd></div>
+<div class="stat"><dt data-i18n="kComm">Jev 통신</dt><dd><div class="comm" id="comm" aria-hidden="true"></div></dd><dd class="s"><span id="k-last"></span><span class="sep"> · </span><span id="k-today"></span></dd></div>
 <div class="stat"><dt data-i18n="kMedian">Jev 응답 중앙값</dt><dd><span class="v n" id="k-p50">–</span><span class="u">ms</span></dd><dd class="s" id="k-p95"></dd></div>
 <div class="stat"><dt data-i18n="attention">확인 필요</dt><dd><span class="v n" id="k-att">0</span><span class="u" id="k-att-u">건</span></dd><dd class="s" id="k-diag"></dd></div>
 </dl>
@@ -210,7 +210,7 @@ function jevPanel(ops,calls){const today=todayCalls(ops),credit=data.credit,c=$(
   $('j-p50').textContent=num(ops.latency.p50);$('j-unit').textContent=label('ms 중앙값','ms median');$('j-latest').textContent=ms(ops.latency.latest);$('j-p95').textContent=ms(ops.latency.p95);$('j-today').textContent=today.calls.toLocaleString()+label('회','');
   ticks($('ct'),calls,ACTIVITY_MS,(i,s)=>{i.style.height=barHeight(s.durationMs,ops);const t=tone(s.receipt);if(t)i.classList.add(t)});
   $('j-cost').textContent=today.calls>today.unpriced?usd(today.costUsd).replace('≈$','≈ $'):'–';
-  $('j-cost-note').textContent=label('오늘 입력 토큰 기준 정가 추정입니다 ('+price+'). 실제 차감 크레딧은 API가 알려주지 않습니다.','List-price estimate from input tokens recorded today ('+price+'). The API does not report the credit actually charged.')+(today.unpriced?label(' 가격을 알 수 없는 응답 '+today.unpriced+'회는 제외했습니다.',' '+today.unpriced+' responses without a known price are excluded.'):'');
+  $('j-cost-note').textContent=label('오늘 입력 토큰 기준 정가 추정입니다 ('+price+'). 실제 차감 크레딧은 API가 알려주지 않습니다.','List-price estimate from input tokens recorded today ('+price+'). The API does not report the credit actually charged.')+(today.unpriced?label(' 가격을 알 수 없는 응답 '+today.unpriced+'회는 제외했습니다.',' Responses without a known price are excluded ('+today.unpriced+').'):'');
   c.className='credit'+(credit?.exhausted?' er':'');c.textContent=credit?.exhausted?label('크레딧 소진','Credit exhausted'):ops.latency.measured?label('크레딧 정상','Credit OK'):'';c.title=credit?.exhausted?tr('Jev가 402(결제 필요)를 반환했습니다. 충전 후 다음 요청부터 자동으로 풀립니다.'):''}
 function effortProof(m){const parts=[];if(m.selectedEffort)parts.push(label('선택 effort ','Selected effort ')+m.selectedEffort);if(m.effortSource)parts.push((m.effortSource==='provider_request'?label('API 전송 effort ','API request effort '):label('호스트 전달 effort ','Host dispatch effort '))+(m.forwardedEffort||label('명시 값 없음','No explicit value')));parts.push(label('응답 effort: ','Response effort: ')+(m.observedEffort||label('호스트 응답에 미제공','Not reported by host')));return parts.join(' · ')}
 function issueKind(s){return s.issue||(s.model?.status==='mismatch'?'response_model':s.lane==='jev'?'jev':s.feature==='evidence'?'evidence':'host')}
@@ -256,7 +256,7 @@ function tick(){const ref=frozenAt??Date.now(),k=$('k-last'),last=ref-Date.parse
   for(const e of document.querySelectorAll('[data-at]'))e.textContent=e.dataset.at?fmt(ref-Date.parse(e.dataset.at)):e.dataset.none||'–';
   for(const e of document.querySelectorAll('[data-since]'))e.textContent=dur(ref-Date.parse(e.dataset.since));
   for(const b of document.querySelectorAll('#pipeline .node')){const live=ref-Date.parse(b.querySelector('.ago').dataset.at||'')<ACTIVITY_MS;b.classList.toggle('live',live);b.classList.toggle('idle',!live)}
-  k.textContent=Number.isFinite(last)?label('마지막 응답 ','Last response ')+(last<2000?label(Math.max(0,last/1000).toFixed(1)+'초 전',Math.max(0,last/1000).toFixed(1)+'s ago'):fmt(last)):label('응답 기록 없음','No response yet')}
+  k.textContent=Number.isFinite(last)?label('마지막 응답 ','Last reply ')+(last<2000?label(Math.max(0,last/1000).toFixed(1)+'초 전',Math.max(0,last/1000).toFixed(1)+'s ago'):fmt(last)):label('응답 기록 없음','No response yet')}
 // Freezing and resuming redraw once; a resumed view rebuilds its sliding ticks at their true ages.
 const connection=(ok,text)=>{const was=frozenAt;frozenAt=!ok||paused?(frozenAt??Date.now()):null;$('connection').className='conn'+(ok?'':' warn');$('connection').dataset.label=text;$('connection').textContent=tr(text);if((was===null)!==(frozenAt===null)){if(frozenAt===null)resetTicks();if(data)draw(data)}tick()};
 $('pipeline').addEventListener('click',e=>{const b=e.target.closest('button[data-feature]');if(!b||!data)return;circuitFeature=b.dataset.feature;if(circuitMode==='live')selectedFeature=selectedFeature===circuitFeature?'all':circuitFeature;draw(data);if(matchMedia('(max-width:900px)').matches)$('circuit-inspector').scrollIntoView({block:'start',behavior:'instant'})});
