@@ -1,4 +1,4 @@
-import { lstatSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { lstatSync, opendirSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 import type { Env } from './config.js';
@@ -136,7 +136,8 @@ const readableDir = (path: string | null): boolean => {
   if (path === null || isSymlink(path)) return false;
   try {
     if (!statSync(path).isDirectory()) return false;
-    readdirSync(path);
+    // Opening is the readability check; listing a long history on every refresh is not.
+    opendirSync(path).closeSync();
     return true;
   } catch {
     return false;
@@ -517,8 +518,8 @@ const buildLive = (records: Rec[], routerRows: Array<{ at: string; rec: Rec }>, 
   });
   if (steps.length === 0) return idle('아직 기록이 없습니다');
 
-  const newest = [...steps].sort((a, b) => b.at.localeCompare(a.at) || b.id.localeCompare(a.id))[0];
-  if (!newest) return idle('아직 기록이 없습니다');
+  // The first of a stable newest-first sort, in one pass.
+  const newest = steps.reduce((best, s) => (s.at.localeCompare(best.at) || s.id.localeCompare(best.id)) > 0 ? s : best, steps[0]!);
   const active = steps.filter((s) => s.state === 'active').sort((a, b) => b.at.localeCompare(a.at));
   const turn = active[0]?.turn ?? newest.turn;
   const mine = steps.filter((s) => s.turn === turn).sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id));

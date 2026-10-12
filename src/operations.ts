@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { allocatedTraceRecords } from './explain.js';
-import { codexOperations } from './codex-operations.js';
+import { codexOperations, firstRow } from './codex-operations.js';
 import { operationState } from './operation-state.js';
 import { memo } from './memo.js';
 import { CODEX_CAPABILITIES, CODEX_PLUGIN_CAPABILITIES, type HostCapability, type Host } from './host-support.js';
@@ -595,7 +595,25 @@ const debugGroup = (row: DebugRecord): string => row.component === 'router'
   ? `router:${token(row.rec['session_id']) ?? 'legacy'}:${token(row.rec['turn']) ?? token(row.rec['tool_use_id']) ?? 'session'}`
   : `${row.component}:${token(row.rec['session_id']) ?? 'legacy'}:${token(row.rec['run_id']) ?? row.at}`;
 
-export const buildOperations = (records: Rec[], debug: DebugRecord[], now: Date, availability: { trace: boolean; debug: boolean; host?: Host }): OperationsView => {
+/** The first `k` of a stable sort by `order`, without sorting everything. */
+const firstSorted = <T>(items: T[], k: number, order: (a: T, b: T) => number): T[] => {
+  const top: T[] = [];
+  for (const item of items) {
+    if (top.length === k && order(item, top[k - 1]!) >= 0) continue;
+    let i = top.length;
+    while (i > 0 && order(item, top[i - 1]!) < 0) i--;
+    top.splice(i, 0, item);
+    if (top.length > k) top.pop();
+  }
+  return top;
+};
+
+/** Where one pass over the whole recording first inserts a run: records in order, then debug rows by time, then native Codex rows by time. */
+type Rank = { cls: 0 | 1 | 2; at: string; index: number };
+interface Part { runs: OperationRun[]; ranks: Rank[]; requests: string[]; managed: boolean }
+
+/** The executions of records that join nothing outside them (see `parts`). */
+const buildPart = (records: Rec[], debug: DebugRecord[], now: Date): Part => {
   records = allocatedTraceRecords(records);
   const codexDecisions = new Map<string, Rec>();
   const codexKey = (r: Rec): string | null => r['host'] === 'codex' && token(r['session_id']) && token(r['prompt_id']) ? JSON.stringify([r['session_id'], r['prompt_id'], r['scope'] === 'child' ? r['agent_id'] : null, r['scope'] === 'child' ? r['index'] ?? null : null]) : null;
@@ -635,6 +653,8 @@ export const buildOperations = (records: Rec[], debug: DebugRecord[], now: Date,
     const response = r['phase'] === 'codex_route_applied' && key ? responseBindings.get(key) : undefined;
     return response && iso(response['written_at']) >= iso(r['written_at']) ? { ...r, observed_model: response['observed_model'], observed_effort: response['observed_effort'] } : r;
   });
+  // routedDebugRecords visits rows in this stable time order.
+  const order = debug.map((_, i) => i).sort((a, b) => debug[a]!.at.localeCompare(debug[b]!.at));
   debug = routedDebugRecords(debug, records);
   const resultIds = new Set(records.flatMap((r) => token(r['request_id']) && token(r['phase']) ? [`${token(r['request_id'])}:${token(r['phase'])}`] : []));
   for (const r of records) if (r['phase'] === 'background_terminal') resultIds.add(`background:${token(r['session_id'])}:${token(r['execution_prompt_id']) ?? token(r['prompt_id'])}:${token(r['tool_use_id'])}`);
@@ -657,8 +677,8 @@ export const buildOperations = (records: Rec[], debug: DebugRecord[], now: Date,
       if ((responses.get(key) ?? '') < row.at) responses.set(key, row.at);
     }
   }
-  const grouped = new Map<string, { source: OperationRun['source']; host: Host; mode: string; executionId?: string; steps: OperationStep[] }>();
-  for (const r of records) {
+  const grouped = new Map<string, { source: OperationRun['source']; host: Host; mode: string; executionId?: string; steps: OperationStep[]; rank: Rank }>();
+  for (const [index, r] of records.entries()) {
     const step = traceStep(r, now.getTime(), resultIds, intents, modelTerminals, live);
     if (!step) continue;
     const host = r['host'] === 'codex' ? 'codex' : 'claude';
@@ -666,7 +686,7 @@ export const buildOperations = (records: Rec[], debug: DebugRecord[], now: Date,
     const key = `${host}:${gateGroup(r)}`;
     const session = token(r['session_id']); const prompt = token(r['execution_prompt_id']) ?? token(r['prompt_id']);
     const group = grouped.get(key) ?? { source, host, mode: token(r['mode']) ?? 'unknown',
-      ...(session && prompt && source !== 'evidence' ? { executionId: id(`execution:${host}:${session}:${prompt}`) } : {}), steps: [] };
+      ...(session && prompt && source !== 'evidence' ? { executionId: id(`execution:${host}:${session}:${prompt}`) } : {}), steps: [], rank: { cls: 0, at: '', index } };
     const phase = token(r['phase']);
     if (r['attempted'] === true && ['admission_result', 'pre_result', 'interpretation_result', 'lean_result', 'codex_router_result'].includes(phase ?? '')) {
       const { durationMs: _duration, elapsedMs: _elapsed, judgements: _judgements, ...rest } = step;
@@ -679,30 +699,111 @@ export const buildOperations = (records: Rec[], debug: DebugRecord[], now: Date,
     if (group.mode === 'unknown' && token(r['mode'])) group.mode = token(r['mode'])!;
     grouped.set(key, group);
   }
-  for (const row of debug) {
+  for (const [position, row] of debug.entries()) {
     const step = debugStep(row, now.getTime(), closed, responses, live);
     if (!step) continue;
     const key = debugGroup(row);
-    const group = grouped.get(key) ?? { source: row.component, host: 'claude' as const, mode: row.component, steps: [] };
+    const group = grouped.get(key) ?? { source: row.component, host: 'claude' as const, mode: row.component, steps: [], rank: { cls: 1, at: row.at, index: order[position]! } };
     group.steps.push(step);
     grouped.set(key, group);
   }
-  const separate: OperationRun[] = [...grouped].map(([key, group]): OperationRun => {
+  const separate = [...grouped].map(([key, group]): { run: OperationRun; rank: Rank } => {
     const steps = group.steps.sort((a, b) => a.at.localeCompare(b.at) || (a.lane === 'policy' ? 1 : 0) - (b.lane === 'policy' ? 1 : 0) || a.id.localeCompare(b.id));
     const state = operationState(steps);
     const title = ({ gate: group.mode === 'lean' ? 'Lean 세션' : '게이트 세션', router: 'Router 실행', compact: 'Compact 실행', output: 'Output 실행', evidence: 'Evidence 검색', codex: 'Codex 실행' } as const)[group.source];
-    return { id: id(key), ...(group.executionId ? { executionId: group.executionId } : {}), host: group.host, title, source: group.source, mode: group.mode, firstAt: steps[0]?.at ?? '', lastAt: steps.at(-1)?.at ?? '', state, steps };
-  }).concat(codexOperations(records, now));
+    return { run: { id: id(key), ...(group.executionId ? { executionId: group.executionId } : {}), host: group.host, title, source: group.source, mode: group.mode, firstAt: steps[0]?.at ?? '', lastAt: steps.at(-1)?.at ?? '', state, steps }, rank: group.rank };
+  });
+  const native = codexOperations(records, now);
+  const position = new Map<Rec, number>(native.length ? records.map((r, i) => [r, i]) : []);
+  for (const run of native) separate.push({ run, rank: { cls: 2, at: run.firstAt, index: position.get(firstRow.get(run)!)! } });
   // Display the whole known turn rather than three unrelated Router/Gate/native cards.
-  const executions = new Map<string, OperationRun>();
-  for (const run of separate) {
-    const key = run.executionId ?? run.id; const existing = executions.get(key);
-    if (!existing) { executions.set(key, { ...run, id: key }); continue; }
+  const executions = new Map<string, { run: OperationRun; rank: Rank }>();
+  for (const { run, rank } of separate) {
+    const key = run.executionId ?? run.id; const entry = executions.get(key);
+    if (!entry) { executions.set(key, { run: { ...run, id: key }, rank }); continue; }
+    const existing = entry.run;
     const primary = existing.source === 'gate' ? existing : run.source === 'gate' ? run : existing.source !== 'codex' ? existing : run;
     const steps = [...existing.steps, ...run.steps].sort((a, b) => a.at.localeCompare(b.at) || (a.lane === 'policy' ? 1 : 0) - (b.lane === 'policy' ? 1 : 0) || a.id.localeCompare(b.id));
-    executions.set(key, { ...primary, id: key, steps, firstAt: steps[0]!.at, lastAt: steps.at(-1)!.at, state: operationState(steps) });
+    entry.run = { ...primary, id: key, steps, firstAt: steps[0]!.at, lastAt: steps.at(-1)!.at, state: operationState(steps) };
   }
-  const allRuns = [...executions.values()].sort((a, b) => b.lastAt.localeCompare(a.lastAt));
+  const requests = new Set<string>();
+  for (const r of records) {
+    const phase = token(r['phase']) ?? '';
+    if (phase === 'codex_compact' && r['jev_sent'] === true) { requests.add(`compact:codex:${token(r['session_id'])}:${token(r['run_id'])}`); continue; }
+    if (!['admission_intent', 'pre_intent', 'interpretation_intent', 'lean_intent', 'evidence_jev_intent', 'codex_router_intent'].includes(phase)
+      && !(r['attempted'] === true && ['admission_result', 'pre_result', 'interpretation_result', 'lean_result', 'evidence_jev_result', 'codex_router_result'].includes(phase))) continue;
+    const kind = phase.replace(/_(intent|result)$/, '');
+    requests.add(`${kind}:${token(r['request_id']) ?? token(r['invocation_id']) ?? iso(r['written_at'])}`);
+  }
+  for (const row of debug) {
+    if (row.component === 'compact' && row.rec['jev_sent'] === true) { requests.add(`compact:claude:${token(row.rec['session_id']) ?? 'legacy'}:${token(row.rec['run_id']) ?? row.at}`); continue; }
+    if (row.component !== 'router' || (row.rec['event'] !== 'request' && row.rec['sent'] !== true)) continue;
+    requests.add(`router:${routerDecisionKey(row.rec)}`);
+  }
+  const managed = records.some(r => r['host'] === 'codex' && (r['managed'] === true || traceFeature(String(r['phase'])) !== null && r['phase'] !== 'evidence_result' && !String(r['phase']).startsWith('evidence_')));
+  return { runs: [...executions.values()].map(e => e.run), ranks: [...executions.values()].map(e => e.rank), requests: [...requests], managed };
+};
+
+// No age threshold in buildPart exceeds this, so a part whose newest time is older reads the same at every later time.
+const SETTLED_MS = 600_000;
+// Keys fall back to these for a missing session, so records carrying them can meet any session-less record.
+const NO_SESSION = new Set(['unknown', 'legacy', 'null', 'undefined']);
+const joinKeys = new WeakMap<object, string[]>();
+/** Every value through which a key in buildPart relates an item to another: its session or the shared pool, its run group, and its request and run ids. */
+const joins = (item: object, rec: Rec, group: () => string): string[] => {
+  let keys = joinKeys.get(item);
+  if (!keys) {
+    const session = token(rec['session_id']);
+    keys = [session && !NO_SESSION.has(session) ? `session:${session}` : 'pool', `group:${group()}`,
+      ...['request_id', 'parent_request_id', 'invocation_id', 'run_id'].flatMap(k => typeof rec[k] === 'string' ? [`${k}:${rec[k]}`] : [])];
+    joinKeys.set(item, keys);
+  }
+  return keys;
+};
+let partCache = new Map<string, { records: Rec[]; debug: DebugRecord[]; at: number; settled: boolean; part: Part }>();
+const sameItems = <T>(a: T[], b: T[]): boolean => a.length === b.length && a.every((v, i) => v === b[i]);
+/** Connected parts of the recording. A settled part with the same records is reused instead of rebuilt. */
+const parts = (records: Rec[], debug: DebugRecord[], now: Date): Array<{ part: Part; recordIndex: number[]; debugIndex: number[] }> => {
+  const keys = [...records.map(r => joins(r, r, () => `${r['host'] === 'codex' ? 'codex' : 'claude'}:${gateGroup(r)}`)), ...debug.map(row => joins(row, row.rec, () => debugGroup(row)))];
+  const parent = keys.map((_, i) => i);
+  const find = (i: number): number => { while (parent[i] !== i) i = parent[i] = parent[parent[i]!]!; return i; };
+  const owner = new Map<string, number>();
+  keys.forEach((list, i) => { for (const key of list) { const j = owner.get(key); if (j === undefined) owner.set(key, i); else parent[find(i)] = find(j); } });
+  const groups = new Map<number, { key: string; records: Rec[]; recordIndex: number[]; debug: DebugRecord[]; debugIndex: number[] }>();
+  keys.forEach((list, i) => {
+    const root = find(i); let group = groups.get(root);
+    if (!group) groups.set(root, group = { key: list[0]!, records: [], recordIndex: [], debug: [], debugIndex: [] });
+    if (i < records.length) { group.records.push(records[i]!); group.recordIndex.push(i); } else { group.debug.push(debug[i - records.length]!); group.debugIndex.push(i - records.length); }
+  });
+  const at = now.getTime(), next: typeof partCache = new Map();
+  const result = [...groups.values()].map(group => {
+    const cached = partCache.get(group.key);
+    let entry = cached && cached.settled && at >= cached.at && sameItems(cached.records, group.records) && sameItems(cached.debug, group.debug) ? cached : undefined;
+    if (!entry) {
+      let newest = -Infinity;
+      for (const r of group.records) if (typeof r['written_at'] === 'string') newest = Math.max(newest, Date.parse(r['written_at']) || -Infinity);
+      for (const row of group.debug) newest = Math.max(newest, Date.parse(row.at) || -Infinity);
+      entry = { records: group.records, debug: group.debug, at, settled: at - newest > SETTLED_MS, part: buildPart(group.records, group.debug, now) };
+    }
+    next.set(group.key, entry);
+    return { part: entry.part, recordIndex: group.recordIndex, debugIndex: group.debugIndex };
+  });
+  partCache = next;
+  return result;
+};
+
+/** `whole` builds the recording in one pass with no reuse: the reference the split build must equal. */
+export const buildOperations = (records: Rec[], debug: DebugRecord[], now: Date, availability: { trace: boolean; debug: boolean; host?: Host }, whole = false): OperationsView => {
+  const entries: Array<{ run: OperationRun } & Rank> = [];
+  const jevRequests = new Set<string>();
+  let managed = false;
+  for (const { part, recordIndex, debugIndex } of whole ? [{ part: buildPart(records, debug, now), recordIndex: null, debugIndex: null }] : parts(records, debug, now)) {
+    part.runs.forEach((run, i) => { const rank = part.ranks[i]!; entries.push({ run, ...rank, index: (rank.cls === 1 ? debugIndex : recordIndex)?.[rank.index] ?? rank.index }); });
+    for (const key of part.requests) jevRequests.add(key);
+    managed ||= part.managed;
+  }
+  const later = (a: { run: OperationRun }, b: { run: OperationRun }) => b.run.lastAt.localeCompare(a.run.lastAt);
+  const allRuns = entries.sort(whole ? later : (a, b) => later(a, b) || a.cls - b.cls || a.at.localeCompare(b.at) || a.index - b.index).map(e => e.run);
   // A busy, older execution must remain visible even when newer completed turns fill the recent window.
   const recentIds = new Set(allRuns.slice(0, 200).map(run => run.id));
   const runs = allRuns.filter(run => recentIds.has(run.id) || run.steps.some(step => step.state === 'active'));
@@ -710,7 +811,6 @@ export const buildOperations = (records: Rec[], debug: DebugRecord[], now: Date,
   const features = FEATURES.map((f): FeatureView => {
     const steps = all.filter((s) => s.feature === f.id && !s.lifecycle);
     if (availability.host === 'codex') {
-      const managed = records.some(r => r['host'] === 'codex' && (r['managed'] === true || traceFeature(String(r['phase'])) !== null && r['phase'] !== 'evidence_result' && !String(r['phase']).startsWith('evidence_')));
       const capability = (managed ? CODEX_CAPABILITIES : CODEX_PLUGIN_CAPABILITIES)[f.id];
       return { ...f, source: 'trace', capability,
         count: steps.length, lastAt: steps.length ? steps.map(s => s.at).sort().at(-1)! : null,
@@ -718,20 +818,6 @@ export const buildOperations = (records: Rec[], debug: DebugRecord[], now: Date,
     }
     return { ...f, count: steps.length, lastAt: steps.length ? steps.map((s) => s.at).sort().at(-1)! : null, state: steps.length ? 'observed' : availability[f.source] ? 'waiting' : 'unavailable' };
   });
-  const jevRequests = new Set<string>();
-  for (const r of records) {
-    const phase = token(r['phase']) ?? '';
-    if (phase === 'codex_compact' && r['jev_sent'] === true) { jevRequests.add(`compact:codex:${token(r['session_id'])}:${token(r['run_id'])}`); continue; }
-    if (!['admission_intent', 'pre_intent', 'interpretation_intent', 'lean_intent', 'evidence_jev_intent', 'codex_router_intent'].includes(phase)
-      && !(r['attempted'] === true && ['admission_result', 'pre_result', 'interpretation_result', 'lean_result', 'evidence_jev_result', 'codex_router_result'].includes(phase))) continue;
-    const kind = phase.replace(/_(intent|result)$/, '');
-    jevRequests.add(`${kind}:${token(r['request_id']) ?? token(r['invocation_id']) ?? iso(r['written_at'])}`);
-  }
-  for (const row of debug) {
-    if (row.component === 'compact' && row.rec['jev_sent'] === true) { jevRequests.add(`compact:claude:${token(row.rec['session_id']) ?? 'legacy'}:${token(row.rec['run_id']) ?? row.at}`); continue; }
-    if (row.component !== 'router' || (row.rec['event'] !== 'request' && row.rec['sent'] !== true)) continue;
-    jevRequests.add(`router:${routerDecisionKey(row.rec)}`);
-  }
   const requests = jevRequests.size;
   const durations = all.filter((s) => s.lane === 'jev' && s.durationMs !== undefined).map((s) => s.durationMs!).sort((a, b) => a - b);
   const latest = all.filter((s) => s.lane === 'jev' && s.durationMs !== undefined).sort((a, b) => b.at.localeCompare(a.at))[0]?.durationMs ?? null;
@@ -746,8 +832,8 @@ export const buildOperations = (records: Rec[], debug: DebugRecord[], now: Date,
     const key = `${step.host}:${step.feature}`;
     if (!latestJev.has(key)) latestJev.set(key, step);
   }
-  const feed = [...new Set([...all.filter(s => !s.lifecycle).sort(newestFirst).slice(0, 120),
-    ...all.filter(s => s.lifecycle).sort(newestFirst).slice(0, 20), ...latestJev.values()])].sort(newestFirst);
+  const feed = [...new Set([...firstSorted(all.filter(s => !s.lifecycle), 120, newestFirst),
+    ...firstSorted(all.filter(s => s.lifecycle), 20, newestFirst), ...latestJev.values()])].sort(newestFirst);
   const sig = createHash('sha256').update(JSON.stringify({ runs, features, requests, latency })).digest('hex').slice(0, 24);
   return { runs, features, feed, active: runs.filter((r) => r.state === 'active').length, attention: runs.filter((r) => r.state === 'attention').length, requests, latency, sig };
 };

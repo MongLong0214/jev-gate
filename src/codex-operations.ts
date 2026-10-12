@@ -27,6 +27,9 @@ const spanKey = (r: Rec, event: string): string | null => {
   return token(r['prompt_id']) ? JSON.stringify([session, event, r['prompt_id']]) : null;
 };
 
+/** The first row of each run, so runs built from separate parts can be put back in one pass's order. */
+export const firstRow = new WeakMap<OperationRun, Rec>();
+
 /** Native host spans are never counted as Jev requests, routed workers, or accepted contracts. */
 export const codexOperations = (records: Rec[], now: Date): OperationRun[] => {
   const rows = records.filter(r => r['host'] === 'codex' && ['codex_event', 'codex_output'].includes(String(r['phase'])) && token(r['session_id']) && at(r))
@@ -57,6 +60,7 @@ export const codexOperations = (records: Rec[], now: Date): OperationRun[] => {
     }
   }
   const groups = new Map<string, OperationStep[]>();
+  const firsts = new Map<string, Rec>();
   for (const r of rows) {
     const event = token(r['event']) ?? '';
     const output = r['phase'] === 'codex_output';
@@ -95,11 +99,16 @@ export const codexOperations = (records: Rec[], now: Date): OperationRun[] => {
       ...(isStart ? { startedAt: at(r) } : {}),
     };
     const steps = groups.get(key) ?? []; steps.push(step); groups.set(key, steps);
+    if (!firsts.has(key)) firsts.set(key, r);
   }
-  return [...groups].map(([key, steps]) => ({
-    id: hash(key), host: 'codex', source: 'codex', title: 'Codex 실행', mode: 'native',
-    ...(!key.includes(':agent:') && key.endsWith(':session') === false ? { executionId: hash(`execution:${key}`) } : {}),
-    firstAt: steps[0]!.at, lastAt: steps.at(-1)!.at, steps,
-    state: operationState(steps),
-  }));
+  return [...groups].map(([key, steps]) => {
+    const run: OperationRun = {
+      id: hash(key), host: 'codex', source: 'codex', title: 'Codex 실행', mode: 'native',
+      ...(!key.includes(':agent:') && key.endsWith(':session') === false ? { executionId: hash(`execution:${key}`) } : {}),
+      firstAt: steps[0]!.at, lastAt: steps.at(-1)!.at, steps,
+      state: operationState(steps),
+    };
+    firstRow.set(run, firsts.get(key)!);
+    return run;
+  });
 };
