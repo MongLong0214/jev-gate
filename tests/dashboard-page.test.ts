@@ -91,7 +91,7 @@ describe('dashboard live interactions', () => {
     p.push(snapshot([run('historic', 'codex', [step('unknown', 'router', 'host', { state: 'unconfirmed', issue: 'request_unconfirmed', summary: 'API 설정 관측 · 요청 종류 미확인' })], { state: 'unconfirmed' }), run('compact', 'claude', [step('selection', 'compact', 'jev', { durationMs: 220, details: ['후보 8/16 · 필수 근거 3', 'Jev 작업 의존 근거 선택'] })])]));
     expect(p.get('trace').textContent).toContain('요청 종류 미확인');
     expect(p.get('trace').textContent).not.toContain('호스트 훅에서 결과 이벤트가 빠진');
-    p.click('#nav [data-feature=compact]');
+    p.click('.circuit-node[data-feature=compact]');
     expect(p.get('circuit-inspector').textContent).toContain('후보 8/16 · 필수 근거 3');
   });
   it('renders all eight real feature states and never invents activity on first load', () => {
@@ -173,8 +173,21 @@ describe('dashboard live interactions', () => {
     expect(p.get('feed').textContent).toContain(hostile);expect(p.get('feed').querySelector('img')).toBeNull();
     p.click('.review-shortcut');expect(p.get('runs').textContent).not.toContain('claude execution');
     p.click('[data-state="all"]');p.click('.circuit-node[data-feature="admission"]');expect(p.get('circuit-inspector').textContent).toContain(hostile);p.click('.inspector-action');expect(p.get('runs').textContent).toContain('claude execution');expect(p.get('runs').textContent).not.toContain('codex execution');
-    p.click('#nav [data-feature="all"]');const search=p.get('search') as unknown as { value: string; dispatchEvent(e: unknown): void };search.value='codex';search.dispatchEvent(new p.w.Event('input'));
+    p.click('.circuit-node[data-feature="admission"]');expect(p.get('runs').textContent).toContain('codex execution');expect(p.get('runs').textContent).toContain('claude execution');const search=p.get('search') as unknown as { value: string; dispatchEvent(e: unknown): void };search.value='codex';search.dispatchEvent(new p.w.Event('input'));
     expect(p.get('runs').textContent).toContain('codex execution');expect(p.get('runs').textContent).not.toContain('claude execution');
+  });
+  it('filters runs, the run count and the timeline from a circuit node and clears on a second click', () => {
+    const p = page();
+    p.push(snapshot([run('one', 'claude', [step('a', 'admission', 'jev')]), run('two', 'codex', [step('r', 'router', 'policy')])]));
+    expect(p.w.document.getElementById('nav')).toBeNull();expect(p.w.document.querySelector('aside.rail')).toBeNull();
+    expect(p.get('runs').querySelectorAll('.run-row')).toHaveLength(2);expect(p.get('run-count').textContent).toBe('2건');
+    p.click('.circuit-node[data-feature="router"]');
+    expect(p.get('runs').querySelectorAll('.run-row')).toHaveLength(1);expect(p.get('runs').textContent).toContain('codex execution');expect(p.get('run-count').textContent).toBe('1건 · Router');
+    expect(p.get('circuit-inspector').textContent).toContain('Router');
+    p.click('.circuit-node[data-feature="router"]');
+    expect(p.get('runs').querySelectorAll('.run-row')).toHaveLength(2);expect(p.get('run-count').textContent).toBe('2건');
+    p.click('[data-circuit-mode="run"]');p.click('.circuit-node[data-feature="admission"]');
+    expect(p.get('runs').querySelectorAll('.run-row')).toHaveLength(2);
   });
   it('saves independent shared preferences and surfaces a failed write without changing its switch', async () => {
     const p = page();p.push(snapshot([]));const fetch=vi.fn().mockResolvedValueOnce({ ok:true, json:async()=>({enabled:false}) }).mockResolvedValueOnce({ok:false});Object.assign(p.w,{fetch});

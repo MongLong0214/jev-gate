@@ -143,7 +143,7 @@ Every PR runs the `models` CI job against the official Claude model/effort docum
 The plugin opens **one shared local browser dashboard** automatically. Starting another Claude or Codex session reuses it instead of opening duplicate tabs. Select **Claude + Codex**, **Claude Code**, or **Codex** to inspect each host.
 
 1. Start a task in your normal coding session.
-2. Read the current activity strip and execution circuit at the top. Select a stage to see its decision and latest result.
+2. Read the current activity strip and execution circuit at the top. Select a stage to see its decision and latest result; it also filters the execution list and timeline to that feature, and selecting it again shows all.
 3. Choose an execution to follow its route, timeline, model observations, checks, and failures.
 4. Use host/time filters and search to narrow records. Korean/English and light/dark controls are available.
 

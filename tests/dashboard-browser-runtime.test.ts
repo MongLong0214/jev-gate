@@ -197,9 +197,9 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     push([]);const p=await page();expect(await p.locator('.circuit-node').count()).toBe(8);expect(await p.locator('.wire-packet').count()).toBe(0);expect(await p.locator('#circuit-inspector').textContent()).toContain('아직 실행 기록');await p.close();
   },60000);
 
-  it('keeps stage inspection local, switches run scope and preserves focused controls across updates',async()=>{
+  it('filters runs from a stage, switches run scope and preserves focused controls across updates',async()=>{
     const a=step('a','admission'),r=step('r','router');push([run('c','claude',[a]),run('x','codex',[r])]);const p=await page();
-    await p.locator('.circuit-node[data-feature=router]').click();expect(await p.locator('#circuit-inspector').textContent()).toContain('Codex');expect(await p.locator('#runs .run-row').count()).toBe(2);
+    await p.locator('.circuit-node[data-feature=router]').click();expect(await p.locator('#circuit-inspector').textContent()).toContain('Codex');expect(await p.locator('#runs .run-row').count()).toBe(1);expect(await p.locator('#run-count').textContent()).toBe('1건 · Router');await p.locator('.circuit-node[data-feature=router]').click();expect(await p.locator('#runs .run-row').count()).toBe(2);
     await p.locator('.circuit-node[data-feature=router]').focus();push([run('c','claude',[a]),run('x','codex',[r,step('r2','router',{summary:'new receipt'})])]);await p.waitForFunction(()=>document.getElementById('circuit-inspector')!.textContent!.includes('new receipt'));expect(await p.locator('.circuit-node[data-feature=router]').evaluate(e=>e===document.activeElement)).toBe(true);
     await p.locator('[data-circuit-mode=run]').click();await p.locator('#circuit-run').focus();push([run('c','claude',[a,step('b','allocation')]),run('x','codex',[r])]);await settle(p);expect(await p.locator('#circuit-run').evaluate(e=>e===document.activeElement)).toBe(true);
     await p.selectOption('#circuit-run','x');await p.locator('.circuit-node[data-feature=allocation]').click();expect(await p.locator('#circuit-inspector').textContent()).toContain('이 실행에는');expect(await p.locator('.wire.in-run').count()).toBe(0);
