@@ -1,6 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { JEV_MODEL } from '../../mods/router/hooks/client.ts';
+import { dispatchMarker } from '../../src/claude-background.js';
+import { newGeneration, readJob, reserve, updateJob } from '../../src/job.js';
+import { OWNED_AGENTS } from '../../src/types.js';
 import { answering, CLEAR, choice, drain, FAKE_KEY, score } from './fake-engine.ts';
 
 /**
@@ -272,5 +279,96 @@ describe('register', () => {
       expect(host.logs.join('\n')).toContain('"host_unverified"');
       expect(host.requests).toHaveLength(0);
     }
+  });
+});
+
+describe('owned dispatch through the packaged policy process (#211)', () => {
+  const TOOL = 'toolu_owned'; const TOKEN = '0b1f5c2e-8a4d-4f6e-9c3b-2d7e1a5f4c8b';
+  const NO_MODEL = 'No eligible automatic child model. Continue in the main session; no child started.';
+  const PROTECTED = 'No child started. Ownership cleanup pending; reservations remain protected.';
+  // As the command hook leaves it at background_dispatch: the alias in Agent.model, the marker ending the prompt.
+  const OWNED = { ...SPAWN, tool_use_id: TOOL, prompt: 'Complete the outcome.' + dispatchMarker(TOKEN), description: 'outcome', subagentType: 'jev-gate:worker-fast', provider: { plugin: 'jev-gate', tier: 'user' }, model: 'haiku' as string | undefined, background: true };
+  let dir = ''; let root = '';
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), 'jev-owned-spawn-')); root = join(dir, 'plugin'); mkdirSync(root);
+    writeFileSync(join(root, 'package.json'), '{"type":"module"}');
+    const repo = join(__dirname, '../..');
+    const build = spawnSync(process.execPath, [join(repo, 'node_modules/typescript/bin/tsc'), '-p', join(repo, 'tsconfig.json'), '--outDir', join(root, 'dist')], { encoding: 'utf8' });
+    if (build.status !== 0) throw new Error(build.stdout + build.stderr);
+  }, 120_000);
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  type Failure = 'timeout' | 'exit' | 'malformed' | { deny: string } | undefined;
+  /** One Gate B reservation and the real policy entrypoint behind `$.process.run`; `fail` replaces one answer. */
+  const dispatch = async (o: { event?: typeof OWNED; agent?: string; pair?: string; options?: Record<string, unknown>; env?: Record<string, string>; files?: Record<string, string>; fail?: (eligible: boolean) => Failure; delayMs?: number } = {}) => {
+    const agent = o.agent ?? 'jev-gate:worker-fast'; const state = mkdtempSync(join(dir, 'state-'));
+    const env = { PATH: process.env['PATH'] ?? '', HOME: state, JEV_GATE_STATE_DIR: state };
+    updateJob(env, 'root', () => {
+      const s = newGeneration(null, 'root', 'prompt', 'orchestrated').state;
+      const current = reserve(s.current, TOOL, { role: 'worker', taskId: null, contractHash: null, rev: null, tier: OWNED_AGENTS[agent]!.tier, attempt: 1, deliverables: [] });
+      return { ...s, current: { ...current, background_job: true, active: { [TOOL]: { ...current.active[TOOL]!, allocation_pair: { model: o.pair ?? 'claude-haiku-5-5', effort_edit: { kind: 'set', value: 'medium' } },
+        background_execution: { token: TOKEN, agent_id: null, subagent_type: agent, resolved_model: null } } } } };
+    });
+    const host = fakeHost({ env: { HOME: '/owner', ...o.env }, files: { [root + '/dist/dispatch-policy.js']: '', ...o.files }, version: { version: '2.1.296', base: '2.1.296' } });
+    const runs: boolean[] = [];
+    Object.assign(host.$.session, { id: async () => 'root' });
+    Object.assign(host.$, { plugin: { root }, process: { run: async (argv: string[]) => {
+      const eligible = argv[7] === 'true'; runs.push(eligible);
+      const failure = o.fail?.(eligible);
+      if (failure === 'timeout') throw new Error('still running at its timeout');
+      if (failure === 'exit') return { exitCode: 1, stdout: '', stderr: 'failed' };
+      if (failure === 'malformed') return { exitCode: 0, stdout: '{"model":', stderr: '' };
+      if (o.delayMs) await new Promise(r => setTimeout(r, o.delayMs));
+      if (failure) return { exitCode: 0, stdout: JSON.stringify(failure), stderr: '' };
+      const r = spawnSync(process.execPath, argv.slice(1), { env, encoding: 'utf8' });
+      return { exitCode: r.status ?? 1, stdout: r.stdout, stderr: r.stderr };
+    } } });
+    const hooks = await registered({ enabled: true, routeMainEffort: false, routeMainModel: false, timeoutMs: 30_000, ...o.options });
+    const calls: Array<string | undefined> = [];
+    const out = await hooks.get('agent.spawn')?.(host.$, o.event ?? { ...OWNED, subagentType: agent }, withSignal(async (e: { model?: string }) => (calls.push(e.model), { model: e.model ?? 'claude-opus-5-5', agentId: 'child' })));
+    const job = readJob(env, 'root'); const current = job.ok ? job.value?.current : undefined;
+    const denials = host.logs.filter(l => l.includes('"spawn_denied"')).map(l => JSON.parse(l.slice('jev-router '.length)) as unknown);
+    return { out, calls, runs, current, kept: current?.active[TOOL]?.background_execution?.token === TOKEN, denials, logs: host.logs.join('\n') };
+  };
+  const denial = (reason: string, type = 'jev-gate:worker-fast') => [{ event: 'spawn_denied', tool_use_id: TOOL, type, reason }];
+
+  it('delivers an eligible owned worker-fast dispatch whose model Gate B kept, with its allocated pair', async () => {
+    const r = await dispatch();
+    expect(r.out).toEqual({ model: 'claude-haiku-5-5', agentId: 'child' });
+    expect([r.calls, r.runs, r.denials, r.kept]).toEqual([['claude-haiku-5-5'], [true], [], true]);
+  });
+
+  it.each(['timeout', 'exit', 'malformed'] as const)('denies on a policy %s, releasing the unstarted reservation once and recording no completion', async kind => {
+    const r = await dispatch({ fail: eligible => eligible ? kind : undefined });
+    expect(r.out).toEqual({ deny: 'Dispatch ownership unavailable; no child started.' });
+    expect([r.calls, r.runs, r.denials, r.kept]).toEqual([[], [true, false], denial('policy_unavailable'), false]);
+    expect(r.current).toMatchObject({ root_fallback: true, receipts: [] });
+    expect(r.logs).not.toContain('Complete the outcome');
+  });
+
+  it.each([
+    ['past the spawn budget', { options: { timeoutMs: 50 }, delayMs: 80 }],
+    ['over a restricted parent baseline', { event: { ...OWNED, model: undefined, parentModel: 'claude-fable-5-1' } }],
+  ])('keeps a concrete policy denial %s', async (_, o) => {
+    const r = await dispatch({ ...o, fail: eligible => eligible ? { deny: PROTECTED } : undefined });
+    expect(r.out).toEqual({ deny: PROTECTED });
+    expect([r.calls, r.runs, r.denials, r.kept]).toEqual([[], [true], denial('policy_denied'), true]);
+  });
+
+  it.each([
+    ['answers', undefined, NO_MODEL, false],
+    // 0.8.14 let this throw past its cleanup and named it "could not be verified"; the reservation stays protected.
+    ['times out', 'timeout' as const, 'Automatic child unavailable; continue in the main session.', true],
+  ])('keeps a user subagent pin and releases once when the cleanup %s', async (_, failure, deny, kept) => {
+    const r = await dispatch({ env: { CLAUDE_CODE_SUBAGENT_MODEL: 'claude-sonnet-5-5' }, fail: eligible => eligible ? undefined : failure });
+    expect(r.out).toEqual({ deny });
+    expect([r.calls, r.runs, r.denials, r.kept]).toEqual([[], [true, false], denial('subagent_model_pinned'), kept]);
+  });
+
+  it.each([false, true])('keeps the frontier opt-in for an owned frontier pair: %s', async enabled => {
+    const r = await dispatch({ agent: 'jev-gate:worker-frontier', pair: 'claude-fable-5-1', event: { ...OWNED, subagentType: 'jev-gate:worker-frontier', model: undefined },
+      files: { '/owner/.config/jev-gate/config.json': JSON.stringify({ version: 5, frontierEnabled: enabled }) } });
+    expect(r.out).toEqual(enabled ? { model: 'claude-fable-5-1', agentId: 'child' } : { deny: NO_MODEL });
+    expect([r.calls, r.runs, r.denials, r.kept]).toEqual(enabled ? [['claude-fable-5-1'], [true], [], true] : [[], [true], denial('policy_denied', 'jev-gate:worker-frontier'), false]);
   });
 });
