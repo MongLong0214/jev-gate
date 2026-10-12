@@ -60,6 +60,10 @@ Jev Gate fixes the allocation, not the work. **Jev judges each turn; code applie
 
 > **Read this before quoting a number.** This is a **pilot: one pair per task**. It shows a direction, not a guarantee. Session-to-session variance can be large, and savings depend on your tasks, settings and host. A multi-pair run is planned. [Method, per-cell data and deviations →](https://github.com/MongLong0214/jev-gate/tree/main/bench/results/long-session-pilot-2026-10-12)
 
+### Lean mode — measured, kept opt-in
+
+Lean (hand the task to a fresh executor with a selected context packet) was compared with native auto-compact in a pre-registered run: three five-request episodes, two repetitions each, every cell passing its checkers. Lean cost **2.6–8.2 % more** per episode median and took about 18 % longer; no episode reached the 15 % saving threshold. Jev chose not to hand off in all 24 selections, so the run measured Lean's overhead, not a handoff. The contexts were small (about 30–35 K tokens), so long sessions are not covered. **`auto` is unchanged and Lean stays a selectable mode.** [Pre-registration, per-cell data and limits →](https://github.com/MongLong0214/jev-gate/tree/main/bench/results/lean-vs-native-2026-09-27)
+
 ## How it works
 
 1. **Gate** reads a new request and decides: answer directly, hand it to one background worker, or plan worker tasks with contracts and checks.
@@ -206,6 +210,7 @@ Restart the host after upgrading to load new hooks/provider code. Old separate J
 | No Jev calls | Check key, feature mode, pins, and eligibility in the stage detail and doctor |
 | Compact/Router/Output absent | Restart after automatic setup; check preserved overrides with doctor |
 | Dashboard absent | Check `dashboard status`, recording, and the local service with doctor |
+| Worker dispatch denied | The Router records `spawn_denied` with a reason code (for example `policy_unavailable`, `no_eligible_model`, `subagent_model_pinned`); fix that cause, or check pins and `frontierEnabled` |
 | Model/effort warning | Inspect selected, submitted, and observed values; distinguish request mismatch from missing response facts |
 | Evidence `partial` / empty | Check coverage and reason codes; an incomplete empty page is not proof of absence |
 | Evidence `stale` | Search again; continue only with returned `next.offset` and `next.expectedSnapshot` |
