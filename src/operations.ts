@@ -801,8 +801,10 @@ export const buildOperations = (records: Rec[], mods: ModRecord[], now: Date, av
   const durations = all.filter((s) => s.lane === 'jev' && s.durationMs !== undefined).map((s) => s.durationMs!).sort((a, b) => a - b);
   const latest = all.filter((s) => s.lane === 'jev' && s.durationMs !== undefined).sort((a, b) => b.at.localeCompare(a.at))[0]?.durationMs ?? null;
   const percentile = (p: number): number | null => durations.length ? durations[Math.ceil(p * durations.length) - 1]! : null;
+  const sinceMs = now.getTime() - ACTIVITY_WINDOW_MS;
+  // ponytail: past ACTIVITY_CAP records in one minute only the newest ones are kept, so a burst that large would under-count.
   const recent = all.filter((s) => s.lane === 'jev' && s.durationMs !== undefined)
-    .sort((a, b) => b.at.localeCompare(a.at)).slice(0, 16).reverse().map((s) => ({ at: s.at, ms: s.durationMs! }));
+    .sort((a, b) => b.at.localeCompare(a.at)).filter((s, i) => i < 16 || Date.parse(s.at) >= sinceMs).slice(0, ACTIVITY_CAP).reverse().map((s) => ({ at: s.at, ms: s.durationMs! }));
   const latency = { measured: durations.length, p50: percentile(.5), p95: percentile(.95), fastest: durations[0] ?? null, latest, recent };
   const newestFirst = (a: typeof all[number], b: typeof all[number]) => b.at.localeCompare(a.at) || b.id.localeCompare(a.id);
   // Tool and policy loops must not evict the most recent recorded Jev call for either host/feature.
@@ -811,9 +813,7 @@ export const buildOperations = (records: Rec[], mods: ModRecord[], now: Date, av
     const key = `${step.host}:${step.feature}`;
     if (!latestJev.has(key)) latestJev.set(key, step);
   }
-  // The newest-120 cut must not drop a record of the last minute.
-  // ponytail: past ACTIVITY_CAP records in one minute only the newest ones are kept, so a burst that large would under-count.
-  const sinceMs = now.getTime() - ACTIVITY_WINDOW_MS;
+  // The newest-120 cut must not drop a record of the last minute; the same cap as `latency.recent` applies.
   const feed = [...new Set([...firstSorted(all.filter(s => !s.lifecycle), 120, newestFirst),
     ...firstSorted(all.filter(s => !s.lifecycle && Date.parse(s.at) >= sinceMs), ACTIVITY_CAP, newestFirst),
     ...firstSorted(all.filter(s => s.lifecycle), 20, newestFirst), ...latestJev.values()])].sort(newestFirst);

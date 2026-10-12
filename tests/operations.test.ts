@@ -486,11 +486,12 @@ it('rebuilds only the sessions that changed or are still recent, and equals one 
   expect(third!.runs.filter(run => second!.runs.includes(run)).map(run => run.title).sort()).toEqual(['Evidence 검색', 'Router 실행', '게이트 세션']);
 });
 
-it('keeps every record of the last minute in the feed, past the newest-120 cut', () => {
+it('keeps every record and Jev call of the last minute in the feed, past the newest-120 and newest-16 cuts', () => {
   const now = new Date('2026-09-29T06:10:00.000Z');
   const call = (run_id: string, time: Date) => row('compact', { event: 'compact', session_id: 's', run_id, stage: 'jev', jev_sent: true, jev_ms: 100, candidates: 1, available: 1, dependencies: 0, selection: 'current_dependencies' }, time.toISOString());
   const rows = [...Array.from({ length: 150 }, (_, i) => call(`r${i}`, new Date(now.getTime() - i * 300))), call('old', new Date(now.getTime() - 5 * 60_000))];
   const view = buildOperations([], rows, now, { trace: true });
   const inWindow = (s: { at: string }) => Date.parse(s.at) >= now.getTime() - 60_000;
   expect(view.feed.filter(s => s.feature === 'compact' && !s.lifecycle && inWindow(s))).toHaveLength(150);
+  expect(view.latency.recent).toHaveLength(150);
 });

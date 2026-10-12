@@ -386,6 +386,8 @@ it('draws one tick per record of the last minute with its rate, and one packet p
   expect(node().querySelector('.activity-rate')!.textContent).toBe('분당 3회');
   expect(node().getAttribute('aria-label')).toContain('분당 3회');
   expect(node().querySelector('.activity-strip')!.getAttribute('aria-hidden')).toBe('true');
+  expect(p.get('jev-rate').textContent).toBe('분당 3회');
+  expect(p.get('signal').querySelectorAll('.activity-drift i')).toHaveLength(3);
   expect(p.w.document.querySelectorAll('.wire-packet')).toHaveLength(0);
   // Four new records are four packets, evenly spaced across the frame interval.
   p.push(snapshot([run('r', 'claude', [old, ...records(7)])]));

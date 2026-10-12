@@ -273,6 +273,18 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     expect(await p.locator('.circuit-node[data-feature=allocation]').getAttribute('class')).toContain('dimmed');
     await p.close();
   });
+  it('places activity ticks at their recorded age, moves them by transform only and holds them still when paused or under reduced motion',async()=>{
+    const fresh=new Date().toISOString(),half=new Date(Date.now()-30_000).toISOString(),old=new Date(Date.now()-90_000).toISOString();
+    push([run('c','claude',[step('a','admission',{at:half,durationMs:63}),step('b','admission',{at:fresh,durationMs:70}),step('o','admission',{at:old,durationMs:50})])]);const p=await page();
+    type Animated={getAnimations():Array<{playState:string;effect:{getKeyframes():Array<Record<string,unknown>>}}>};
+    const drift='.circuit-node[data-feature=admission] .activity-drift';
+    expect(await p.locator(drift+' i').count()).toBe(2);expect(await p.locator('.circuit-node[data-feature=admission] .activity-rate').textContent()).toBe('분당 2회');expect(await p.locator('#jev-rate').textContent()).toBe('분당 2회');
+    const left=await p.locator(drift+' i').evaluateAll(es=>es.map(e=>parseFloat((e as unknown as HTMLElement).style.left)).sort((x,y)=>x-y));expect(left[0]).toBeGreaterThan(44);expect(left[0]).toBeLessThan(56);expect(left[1]).toBeGreaterThan(95);
+    expect(await p.locator(drift).evaluate(e=>(e as unknown as Animated).getAnimations().map(a=>Object.keys(a.effect.getKeyframes().at(-1)!).filter(k=>['transform','left','width','margin'].includes(k))))).toEqual([['transform']]);
+    expect(await p.locator('.activity-strip').first().getAttribute('aria-hidden')).toBe('true');
+    await p.locator('#pause').click();expect(await p.locator(drift).evaluate(e=>(e as unknown as Animated).getAnimations().map(a=>a.playState))).toEqual(['paused']);await p.locator('#pause').click();
+    await p.emulateMedia({reducedMotion:'reduce'});expect(await p.locator(drift).evaluate(e=>(e as unknown as Animated).getAnimations().length)).toBe(0);await p.close();
+  });
   it('separates errors, missing results and interruption; failed settings writes retain the saved state',async()=>{
     push([run('c','claude',[step('m','workers',{lane:'host',state:'error',summary:'actual model mismatch',model:{selected:'opus',observed:'sonnet',status:'mismatch',selectedEffort:null,observedEffort:null}})],{state:'attention'}),run('x','codex',[step('u','router',{state:'unconfirmed'})],{state:'unconfirmed'}),run('stop','codex',[step('stop','compact',{state:'interrupted'})],{state:'interrupted'})]);const p=await page();
     await p.locator('.circuit-node[data-feature=workers]').click();expect(await p.locator('.inspector-record').textContent()).toContain('actual model mismatch');expect(await p.locator('#model-proof').textContent()).toContain('불일치');expect(await p.locator('.inspector-record.error').count()).toBe(1);
@@ -335,6 +347,6 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     expect(await p.locator('html').getAttribute('lang')).toBe('en');
     expect(await p.locator('html').getAttribute('data-theme')).toBe('light');
     expect(await p.locator('#latest').count()).toBe(1);
-    expect(await p.locator('.signal-stat').count()).toBe(3);expect(await p.locator('.metric').count()).toBe(0); await p.close();
+    expect(await p.locator('.signal-stat').count()).toBe(4);expect(await p.locator('.metric').count()).toBe(0); await p.close();
   });
 });

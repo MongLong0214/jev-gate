@@ -96,6 +96,7 @@ button,summary,select{touch-action:manipulation}.run-list,.span-list{overscroll-
 .activity-drift{position:absolute;inset:0;animation:activity-drift 60s linear forwards}
 .activity-drift i{position:absolute;bottom:0;width:2px;height:100%;margin-left:-2px;border-radius:1px;background:var(--accent)}
 .circuit-node .activity-strip{margin-top:auto}.circuit-node .activity-rate{font-size:10px;line-height:1.4;color:var(--muted);font-variant-numeric:tabular-nums}.station-grid .circuit-node{height:100%}
+.signal-speed{align-items:center}@media(max-width:700px){.signal-speed{flex-wrap:wrap}}.signal-speed .signal-kicker{white-space:nowrap}.signal-speed .response-number{font-size:22px}.jev-strip{flex:1 1 140px;max-width:260px;height:28px}.signal-stat{font-size:10px}.signal-stat strong{font-size:11px;font-weight:400;color:var(--muted)}
 @keyframes activity-drift{to{transform:translateX(-100%)}}
 .activity-strip.still .activity-drift,.dashboard-offline .activity-drift{animation-play-state:paused}
 @media(prefers-reduced-motion:reduce){.activity-drift{animation:none}}
