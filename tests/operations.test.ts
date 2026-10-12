@@ -455,6 +455,13 @@ it('counts child Jev steps separately, closes only the exact decision and binds 
 });
 
 
+it('hides native child routing skips and labels the other child skips', () => {
+  const make = (agent: string, skipped: string) => row('router', { session_id: 's1', turn: 't', agent_id: agent, scope: 'child', event: 'child_route', index: 1, sent: false, skipped }, at);
+  const feed = buildOperations([], [make('a', 'native_child'), make('b', 'child_unregistered'), make('c', 'child_stopped')], new Date(later), { trace: true }).feed;
+  expect(feed.some(s => s.agentId === 'a')).toBe(false);
+  expect(feed.find(s => s.agentId === 'b')?.summary).toBe('등록되지 않은 하위 실행 · 원래 설정 유지');
+  expect(feed.find(s => s.agentId === 'c')?.summary).toBe('라우팅이 멈춘 하위 실행 · 원래 설정 유지');
+});
 it('retains every active execution beyond the recent completed-turn window', () => {
   const records: Record<string, unknown>[] = [{...base,phase:'admission_intent',request_id:'pending',prompt_id:'pending'}];
   for(let i=0;i<220;i++)records.push({...base,phase:'admission_result',written_at:later,request_id:'finished-'+i,prompt_id:'finished-'+i,invocation_id:'finished-'+i,attempted:false});

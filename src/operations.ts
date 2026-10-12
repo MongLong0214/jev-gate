@@ -517,7 +517,8 @@ const modStep = (row: ModRecord, now: number, closed: Set<string>, responses: Ma
     lane = event === 'request' || r['sent'] === true ? 'jev' : 'policy';
     const from = field(r, 'from'); const patch = field(r, 'patch'); const reasons = field(r, 'reasons'); const applied = field(r, 'applied');
     if (r['sent'] === true && !failedAssessment) choice = text(token(patch?.['model']) ?? token(from?.['model']) ?? token(r['from']), token(patch?.['effort']) ?? token(from?.['effort'])) || null;
-    summary = event === 'request' ? 'Jev 요청 전송 · 응답 대기' : text(event, r['sent'] === true ? 'Jev 응답' : r['sent'] === false ? '전송 안 함' : null, token(r['skipped']), token(r['reason']));
+    const skip = ({ child_unregistered: '등록되지 않은 하위 실행 · 원래 설정 유지', child_stopped: '라우팅이 멈춘 하위 실행 · 원래 설정 유지' } as Record<string, string>)[String(r['skipped'])];
+    summary = event === 'request' ? 'Jev 요청 전송 · 응답 대기' : skip ?? text(event, r['sent'] === true ? 'Jev 응답' : r['sent'] === false ? '전송 안 함' : null, token(r['skipped']), token(r['reason']));
     if (failedAssessment) summary = r['assessment'] === 'payment_required' ? 'Jev 크레딧 소진 · 원래 호스트 설정 유지' : text('Jev 판정 실패 · 원래 호스트 설정 유지', token(r['assessment']));
     details.push(text(`기존 모델 ${token(from?.['model']) ?? token(r['from']) ?? '?'}`, `기존 effort ${token(from?.['effort']) ?? '?'}`));
     if (r['scope'] === 'child') details.push(text('워커 단계별 Jev 라우팅', `단계 ${n(number(r['index']))}`, `워커 ${token(r['agent_id']) ?? '?'}`));
@@ -794,6 +795,8 @@ const parts = (records: Rec[], mods: ModRecord[], now: Date): Array<{ part: Part
 
 /** `whole` builds the recording in one pass with no reuse: the reference the split build must equal. */
 export const buildOperations = (records: Rec[], mods: ModRecord[], now: Date, availability: { trace: boolean; host?: Host }, whole = false): OperationsView => {
+  // A native child skips routing on every model step; one row per step would bury the run list.
+  mods = mods.filter(m => !(m.component === 'router' && m.rec['event'] === 'child_route' && m.rec['skipped'] === 'native_child'));
   const entries: Array<{ run: OperationRun } & Rank> = [];
   const jevRequests = new Set<string>();
   let managed = false;
