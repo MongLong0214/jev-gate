@@ -755,8 +755,7 @@ export interface DeterministicResult {
 
 /**
  * A1: acceptance is code-owned. done, no blockers, and every required check reported pass exactly once.
- * Anything else is incomplete and dependents stay locked. A17: Gate C may demote this accept to rework or
- * replan, but it is never asked about anything it could promote.
+ * Anything else is incomplete and dependents stay locked.
  */
 export const deterministicVerdict = (task: PlannedTask, reply: WorkerReply): DeterministicResult => {
   if (reply.status !== 'done') return { verdict: 'incomplete', reason: `worker reported status ${reply.status}` };
@@ -799,9 +798,9 @@ export const reportedSingleVerdict = (reply: WorkerReply): DeterministicResult =
 };
 
 /**
- * T11: Gate C no longer runs, so a verdict past plain incompleteness comes from the worker's own report. `replan` is
- * the status the worker itself returned; `rework` is a required check it says it ran and observed fail. Neither can
- * promote anything: both are reached only after the deterministic judgement already refused to accept.
+ * A verdict past plain incompleteness comes from the worker's own report. `replan` is the status the worker itself
+ * returned; `rework` is a required check it says it ran and observed fail. Neither can promote anything:
+ * both are reached only after the deterministic judgement already refused to accept.
  */
 export const reportedRecovery = (task: PlannedTask, reply: WorkerReply): 'rework' | 'replan' | null => {
   if (reply.status === 'replan') return 'replan';

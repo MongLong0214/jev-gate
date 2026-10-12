@@ -199,7 +199,7 @@ if (process.env.FAKE_CLAUDE_EPISODE === '1') {
       }
     }
 
-    // ---- workers: mixed tiers, one incomplete receipt, one advisory rework, one unknown status
+    // ---- workers: mixed tiers, one incomplete receipt, one historical advisory rework, one unknown status
     const COST = { 'claude-haiku-5': 0.004, 'claude-sonnet-5': 0.02, 'claude-opus-5': 0.05 };
     const workers = [
       { agent: 'jev-gate:worker-fast', tier: 'fast', task: 't1', base: 'claude-haiku-5', routed: 'claude-haiku-5', route: 'fast', start: 6000, end: 16000, duration: 9000, status: 'completed', verdict: 'accept', advisory: null, effort: null },
@@ -250,7 +250,7 @@ if (process.env.FAKE_CLAUDE_EPISODE === '1') {
         // A17 (historical): only a run that still called Gate C could bring an accepted receipt back demoted.
         tool_use_id: id, task_id: w.task, rev: 1, attempt: 1, verdict: historicalGates && w.tightened ? w.tightened : w.verdict,
         verdict_reason: w.verdict === 'accept' ? null : `the call reported status ${w.status}`,
-        advisory: historicalGates ? w.advisory : null, root_effort: w.effort,
+        ...(historicalGates ? { advisory: w.advisory } : {}), root_effort: w.effort,
         tool_response: { status: w.status, agentId: `a-${w.task}`, resolvedModel: observed, modelsUsed: [observed], totalDurationMs: w.duration, totalToolUseCount: 3, totalTokens: 999, usage: { input_tokens: 5, output_tokens: 6, cache_creation_input_tokens: 7, cache_read_input_tokens: 8 } },
         written_at: at(w.end),
       });
