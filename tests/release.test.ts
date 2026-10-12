@@ -57,9 +57,9 @@ describe('scripts/release.mjs', () => {
         { name: 'jev-gate', source: { source: 'archive', url: 'https://example.invalid/x.zip', sha256: '0'.repeat(64) } },
       ],
     });
-    // The jev-gate archive carries all three Mods' hook sources and the module that loads them (v0.6.0), plus the
+    // The jev-gate archive carries both Mods' hook sources and the module that loads them (v0.6.0), plus the
     // install docs pack.mjs lists (#95). Stubs are enough: the archive only requires the paths to exist.
-    for (const m of ['compact', 'router', 'output']) {
+    for (const m of ['compact', 'router']) {
       write(`mods/${m}/hooks/register.ts`, 'export default () => {};\n');
       write(`mods/${m}/README.md`, `# ${m}\n`);
     }

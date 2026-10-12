@@ -19,7 +19,7 @@ export const CODEX_CAPABILITIES: Record<FeatureId, HostCapability> = {
   evidence: { mode: 'active', ko: '동일한 Evidence MCP를 사용합니다. 로컬 검색과 Jev 판정, 페이지·캐시·근거 읽기를 지원합니다.', en: 'Uses the same Evidence MCP: local search, Jev judgments, pagination, cache and evidence reads.' },
 };
 export const CODEX_PLUGIN_CAPABILITIES: Record<FeatureId, HostCapability> = Object.fromEntries(Object.entries(CODEX_CAPABILITIES).map(([id, capability]) => [id,
-  ['output', 'evidence'].includes(id) ? capability : ['workers', 'compact'].includes(id)
+  id === 'evidence' ? capability : ['workers', 'compact'].includes(id)
     ? { mode: 'observe', ko: '호스트 이벤트를 관측합니다. 자동 연결 후 새 네이티브 세션의 실제 정책 적용 기록을 기다립니다.', en: 'Observes host events. After automatic connection, a fresh native session records actual policy application.' }
     : { mode: 'connect', ko: '플러그인이 일반 Codex를 자동 연결합니다. 실제 정책 요청 기록이 들어오면 적용 상태를 표시합니다.', en: 'The plugin connects ordinary Codex automatically. Actual policy request records establish application.' },
 ])) as Record<FeatureId, HostCapability>;
