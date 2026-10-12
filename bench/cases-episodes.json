@@ -1,0 +1,47 @@
+{
+  "version": 5,
+  "cases": [
+    {
+      "id": "ep-inventory",
+      "group": "episode-inventory",
+      "fixtureDir": "fixtures/ep-inventory",
+      "prime": [
+        "src/inventory.mjs 의 addItem 이 같은 sku 를 두 번 넣으면 수량을 덮어써. 누적되게 고쳐줘. 그리고 수량이 양의 정수가 아니면 RangeError('inventory: invalid qty') 를 던지게 해. test/ 에 테스트 추가하고 npm test 로 확인해줘.",
+        "removeItem(sku, qty) 도 추가해줘. 가진 것보다 많이 빼려 하면 RangeError('inventory: insufficient stock') 를 던지고 아무것도 바꾸지 마. 수량이 0 이 되면 list() 에서 빠져야 해. 수량 검사는 addItem 과 똑같이. 테스트 추가하고 돌려줘.",
+        "src/report.mjs 의 toCsv 가 sku 에 쉼표나 따옴표가 들어가면 CSV 가 깨져. 필요한 필드만 큰따옴표로 감싸고 안의 큰따옴표는 두 번 쓰게 고쳐줘. 테스트도 추가해줘."
+      ],
+      "request": "이제 창고 간 이동이 필요해. src/transfer.mjs 에 transfer(from, to, sku, qty) 를 만들어줘. from, to 는 createInventory() 로 만든 재고야. 앞에서 정한 재고 규칙(수량 검사, 부족하면 에러, 0 이 되면 목록에서 빠짐)을 그대로 따르고, 실패하면 양쪽 재고 모두 그대로여야 해. 테스트 추가하고 전체 테스트 통과시켜줘.",
+      "followUp": "하나만 더. 같은 재고끼리 transfer 하면 RangeError('inventory: same location') 를 던지고 아무것도 바꾸지 않게 해줘. 테스트도 추가해줘.",
+      "checkFile": "checkers/ep-inventory.mjs",
+      "followUpCheckFile": "checkers/ep-inventory-followup.mjs"
+    },
+    {
+      "id": "ep-durations",
+      "group": "episode-durations",
+      "fixtureDir": "fixtures/ep-durations",
+      "prime": [
+        "parseDuration in src/parse-duration.mjs only accepts a single unit like 30s. Make it accept compound values with units in descending order, such as 1h30m, 2m15s and 1500ms (units h, m, s and ms, each at most once, in that order). Anything else, including the empty string or a wrong order like 30m1h, must still throw TypeError('invalid duration: <text>'). Add tests and run npm test.",
+        "paginate in src/paginate.mjs is zero-based, but our callers pass page numbers starting at 1. Make it 1-based, and throw RangeError('page must be at least 1') for a page below 1 and RangeError('size must be positive') for a size of 0 or less. Update the tests.",
+        "Add src/format-duration.mjs exporting formatDuration(ms), the inverse of parseDuration: largest units first and zero parts left out, so 5400000 is '1h30m', 61000 is '1m1s', 3600001 is '1h1ms', and 0 is '0ms'. Add tests."
+      ],
+      "request": "Now add src/cli-options.mjs exporting parseTimeoutOption(value) for our --timeout flag. It accepts the same duration syntax as parseDuration and returns milliseconds. Zero must throw RangeError('timeout must be positive'). Anything longer than one hour must throw RangeError('timeout too long: <value>'), with the value written the way formatDuration writes it (so 61m reports 1h1m). Exactly one hour is allowed. Bad syntax keeps parseDuration's TypeError. Add a test and make the whole suite pass.",
+      "followUp": "One small change: old configs pass a bare number for --timeout, meaning seconds. Make parseTimeoutOption accept a plain integer string as seconds ('90' is 90 seconds) with the same limits and messages, and keep the duration syntax working. Add a test.",
+      "checkFile": "checkers/ep-durations.mjs",
+      "followUpCheckFile": "checkers/ep-durations-followup.mjs"
+    },
+    {
+      "id": "ep-slugs",
+      "group": "episode-slugs",
+      "fixtureDir": "fixtures/ep-slugs",
+      "prime": [
+        "src/slugify.mjs 가 한글 제목을 전부 지워버려. 한글(가-힣)도 영문·숫자처럼 남기고 나머지 규칙은 그대로 둬. 테스트 추가하고 npm test 돌려줘.",
+        "slug 가 너무 길어. 최대 50자로 제한하는데, 단어 중간에서 자르지 말고 50자 안의 마지막 '-' 에서 잘라줘. 50자 안에 '-' 가 하나도 없으면 그냥 50자에서 자르고. 이 자르기 규칙은 다른 데서도 쓰게 export 해둬. 테스트도 추가해줘.",
+        "src/csv-parse.mjs 의 parseCsvLine 이 큰따옴표로 감싼 필드 안의 쉼표에서 깨져. 따옴표 필드와 \"\" 이스케이프를 지원하게 고쳐줘. 테스트도 추가해줘."
+      ],
+      "request": "src/unique-slug.mjs 에 uniqueSlug(title, existing) 를 만들어줘. existing 은 이미 쓰인 slug 들의 Set 이야. slugify 결과가 안 쓰였으면 그대로 쓰고, 쓰였으면 -2, -3 … 중에서 가장 작은 빈 번호를 붙여. 번호를 붙여도 앞에서 정한 길이 제한과 자르기 규칙을 지켜야 해. 테스트 추가하고 전체 테스트 통과시켜줘.",
+      "followUp": "existing 을 배열로 넘기는 호출부도 있어. uniqueSlug 가 Set 과 배열 둘 다 받게 해줘. 테스트도 추가해줘.",
+      "checkFile": "checkers/ep-slugs.mjs",
+      "followUpCheckFile": "checkers/ep-slugs-followup.mjs"
+    }
+  ]
+}

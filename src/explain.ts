@@ -126,7 +126,7 @@ export const readTraceRecords = (dir: string, cache?: TraceCache): TraceRead => 
 
 /** Watch notifications name changed files; a bounded full reconciliation recovers lost events.
  * Directory identity is checked on every read so replaced or symlinked roots cannot expose stale data. */
-type DirectoryState = { identity: string; scanned: number; values: Map<string, Rec | null>; dirty: Set<string>; full: boolean; stale: boolean; result: TraceRead };
+type DirectoryState = { identity: string; scanned: number; values: Map<string, Rec | null>; dirty: Set<string>; full: boolean; stale: boolean; result: TraceRead; appended: string[]; replaced: boolean };
 export class TraceDirectoryReader {
   private cache: TraceCache = new Map();
   private dirs = new Map<string, DirectoryState>();
@@ -151,7 +151,7 @@ export class TraceDirectoryReader {
     let state = this.dirs.get(key);
     if (!state || state.identity !== identity) {
       if (state) this.forget(key);
-      state = { identity, scanned: 0, values: new Map(), dirty: new Set(), full: true, stale: true, result: { records: [], unreadable: 0 } };
+      state = { identity, scanned: 0, values: new Map(), dirty: new Set(), full: true, stale: true, result: { records: [], unreadable: 0 }, appended: [], replaced: false };
       this.dirs.set(key, state);
     }
     if (state.full || now - state.scanned >= this.reconciliationMs) {
@@ -159,7 +159,7 @@ export class TraceDirectoryReader {
       try { names = readdirSync(key).filter(traceName).sort(); }
       catch { this.forget(key); return null; }
       const present = new Set(names);
-      for (const name of state.values.keys()) if (!present.has(name)) { state.values.delete(name); this.cache.delete(join(key, name)); state.stale = true; }
+      for (const name of state.values.keys()) if (!present.has(name)) { state.values.delete(name); this.cache.delete(join(key, name)); state.stale = true; state.replaced = true; }
       for (const name of names) state.dirty.add(name);
       state.scanned = now; state.full = false;
     }
@@ -171,8 +171,9 @@ export class TraceDirectoryReader {
   }
   private store(key: string, state: DirectoryState, name: string, value: Rec | null | undefined): void {
     // undefined: the name was removed. A removed name is not an unreadable file. A broken symlink is.
-    if (value === undefined) { if (state.values.delete(name)) state.stale = true; this.cache.delete(join(key, name)); return; }
-    if (!state.values.has(name) || state.values.get(name) !== value) state.stale = true;
+    if (value === undefined) { if (state.values.delete(name)) { state.stale = true; state.replaced = true; } this.cache.delete(join(key, name)); return; }
+    if (!state.values.has(name)) { state.stale = true; state.appended.push(name); }
+    else if (state.values.get(name) !== value) { state.stale = true; state.replaced = true; }
     state.values.set(name, value);
   }
   /** Reads pending files with concurrent I/O, leaving read() only the names that changed meanwhile. */
@@ -207,9 +208,17 @@ export class TraceDirectoryReader {
     state.dirty.clear();
     // Rebuild only when a value changed; an unchanged reconciliation keeps the sorted result.
     if (state.stale || state.result.records.length + state.result.unreadable !== state.values.size) {
-      const values = [...state.values].sort(([a], [b]) => a.localeCompare(b)).map(([, r]) => r);
-      state.result = { records: sortedRecords(values.filter((r): r is Rec => r !== null)), unreadable: values.filter(r => r === null).length };
-      state.stale = false;
+      // New files all newer than the sorted history extend it, as a full sort would; anything else sorts again.
+      const added = [...state.appended].sort((a, b) => a.localeCompare(b)).map(name => state.values.get(name) ?? null);
+      const records = sortedRecords(added.filter((r): r is Rec => r !== null)), last = state.result.records.at(-1);
+      if (!state.replaced && state.result.records.length + state.result.unreadable + added.length === state.values.size
+        && (!last || !records[0] || (str(records[0]['written_at']) ?? '').localeCompare(str(last['written_at']) ?? '') > 0)) {
+        state.result = { records: [...state.result.records, ...records], unreadable: state.result.unreadable + added.length - records.length };
+      } else {
+        const values = [...state.values].sort(([a], [b]) => a.localeCompare(b)).map(([, r]) => r);
+        state.result = { records: sortedRecords(values.filter((r): r is Rec => r !== null)), unreadable: values.filter(r => r === null).length };
+      }
+      state.stale = false; state.appended = []; state.replaced = false;
     }
     return state.result;
   }

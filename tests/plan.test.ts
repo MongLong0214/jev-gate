@@ -81,7 +81,6 @@ const receipt = (task: PlannedTask, verdict: Receipt['verdict'] = 'accept'): Rec
   reply: null,
   verdict,
   verdict_reason: null,
-  advisory: null,
   observed_model: null,
   root_effort: null,
   recorded_at: new Date().toISOString(),

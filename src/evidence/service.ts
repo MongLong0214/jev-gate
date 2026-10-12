@@ -1,8 +1,22 @@
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+
+import { looksSecret } from '../lean-source.js';
 import type { ChoiceAnswer } from '../types.js';
 import { createJudgementCache, type JudgementCache } from './cache.js';
 import { buildCandidates, LEXICAL_TERM_DETAIL, lineStarts, planLexical, sliceLines, snapshotId, yieldToEventLoop, type Candidate, type SourceFile } from './candidates.js';
 import { selectPage, type EvidenceRemoteEvent, type Selection } from './selector.js';
-import { excluded, exists, globToRegExp, listFiles as listProjectFiles, normalizeRelative, readSource as readProjectFile, within, type ReadOutcome } from './source.js';
+import {
+  excluded,
+  exists,
+  globToRegExp,
+  grepFiles as grepProjectFiles,
+  listFiles as listProjectFiles,
+  normalizeRelative,
+  readSource as readProjectFile,
+  sha256Hex,
+  within,
+  type ReadOutcome,
+} from './source.js';
 import {
   LIMITS,
   MODES,
@@ -29,6 +43,7 @@ interface SearchInput {
   limit: number;
   offset: number;
   expectedSnapshot: string | null;
+  cursor: string | null;
 }
 interface SourcesInput {
   kind: 'sources';
@@ -40,7 +55,9 @@ export type ParsedRequest = { ok: true; input: SearchInput | SourcesInput } | { 
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const HEX64 = /^[0-9a-f]{64}$/;
-const REQUEST_KEYS = new Set(['goal', 'roots', 'mode', 'queryTerms', 'exactSymbols', 'constraints', 'limit', 'offset', 'expectedSnapshot', 'sources']);
+/** A sealed cursor: base64url of its body, a dot, and its 64-hex MAC. The body is a path and three hashes. */
+const CURSOR = /^[A-Za-z0-9_-]{1,8192}\.[0-9a-f]{64}$/;
+const REQUEST_KEYS = new Set(['goal', 'roots', 'mode', 'queryTerms', 'exactSymbols', 'constraints', 'limit', 'offset', 'expectedSnapshot', 'cursor', 'sources']);
 const SOURCE_ONLY_KEYS = new Set(['goal', 'constraints', 'sources']);
 const SOURCE_REF_KEYS = ['path', 'startLine', 'endLine', 'fileSha256'];
 const safeInt = (v: unknown, min: number, max = Number.MAX_SAFE_INTEGER): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= min && v <= max;
@@ -105,6 +122,8 @@ export const parseRequest = (raw: unknown): ParsedRequest => {
   const expected = raw['expectedSnapshot'];
   if (expected !== undefined && (typeof expected !== 'string' || !HEX64.test(expected))) return bad('expectedSnapshot must be 64 lowercase hex digits');
   if (offset > 0 && expected === undefined) return bad('offset > 0 needs the expectedSnapshot of the first page');
+  const cursor = raw['cursor'];
+  if (cursor !== undefined && (typeof cursor !== 'string' || !CURSOR.test(cursor))) return bad('cursor must be next.cursor of an earlier page, unchanged');
   return {
     ok: true,
     input: {
@@ -118,6 +137,7 @@ export const parseRequest = (raw: unknown): ParsedRequest => {
       limit,
       offset,
       expectedSnapshot: (expected as string | undefined) ?? null,
+      cursor: (cursor as string | undefined) ?? null,
     },
   };
 };
@@ -125,6 +145,7 @@ export const parseRequest = (raw: unknown): ParsedRequest => {
 const emptyCoverage = (): Coverage => ({
   inventoryComplete: false,
   filesTotal: null,
+  filesMatched: null,
   readFiles: 0,
   skippedFiles: 0,
   candidates: 0,
@@ -212,6 +233,48 @@ const bucket = (a: ChoiceAnswer<Judgement> | undefined): number => {
 const rounded = (p: Record<Judgement, number>): Record<Judgement, number> =>
   Object.fromEntries(Object.entries(p).map(([k, v]) => [k, Math.round(v * 1000) / 1000])) as Record<Judgement, number>;
 
+/** Where a set starts: the matched list's file at `index`, past its lines 1..`line`. */
+interface Position {
+  index: number;
+  line: number;
+  /** The hash of that file when `line` > 0: lines are only skipped in the very content that was searched. */
+  sha?: string;
+}
+interface CursorBody extends Position {
+  /** The request it continues (everything but the page) and the matched-file list it walks. */
+  request: string;
+  list: string;
+}
+
+/** Per process: a cursor resumes only on the server that issued it, and any edit to it fails the MAC. */
+const CURSOR_KEY = randomBytes(32);
+const mac = (data: string): string => createHmac('sha256', CURSOR_KEY).update(data).digest('hex');
+const sealCursor = (body: CursorBody): string => {
+  const data = Buffer.from(JSON.stringify(body), 'utf8').toString('base64url');
+  return `${data}.${mac(data)}`;
+};
+const openCursor = (token: string): CursorBody | null => {
+  const [data, tag] = token.split('.') as [string, string];
+  if (!timingSafeEqual(Buffer.from(tag), Buffer.from(mac(data)))) return null;
+  try {
+    const b: unknown = JSON.parse(Buffer.from(data, 'base64url').toString('utf8'));
+    if (!isRecord(b) || typeof b['request'] !== 'string' || typeof b['list'] !== 'string' || !safeInt(b['index'], 0) || !safeInt(b['line'], 0)) return null;
+    if (b['line'] > 0 && (typeof b['sha'] !== 'string' || !HEX64.test(b['sha']))) return null;
+    return b as unknown as CursorBody;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Whether `git grep -F` finds every file the line matcher below would: no pattern spans a line break, and case is
+ * folded only where Git and `toLowerCase` agree (ASCII; Hangul, Han and kana have no case). Otherwise the whole listing
+ * is read in order, as before narrowing existed.
+ * ponytail: a line whose own lowercasing yields ASCII (U+212A KELVIN SIGN, U+0130) can match a term Git does not see.
+ */
+const narrowable = (patterns: readonly string[], ignoreCase: boolean): boolean =>
+  patterns.every((p) => !/[\r\n]/.test(p) && (!ignoreCase || [...p].every((c) => c <= '\x7f' || c.toUpperCase() === c)));
+
 export interface EvidenceServiceDeps {
   /** TYPESAFE_API_KEY as the process received it; null when absent. */
   apiKey: string | null;
@@ -225,6 +288,7 @@ export interface EvidenceServiceDeps {
   cache?: JudgementCache;
   /** Source I/O. Defaults are the real readers. Tests pass counters; not MCP arguments. */
   listFiles?: typeof listProjectFiles;
+  grepFiles?: typeof grepProjectFiles;
   readSource?: typeof readProjectFile;
   /** Shared by a server serving several native workspaces; scope-specific services cannot multiply the I/O limits. */
   concurrency?: { active: number; http: { active: number } };
@@ -236,13 +300,15 @@ export interface EvidenceService {
 
 /**
  * The service behind `jev_evidence`. It reads only files the owner's config admits, never writes one, runs no
- * command but a fixed-argument `git ls-files`, and sends source to Jev only when the config says `remote: true`, a
- * key is present and the call is a semantic search. At most two calls run at once; a third is refused as busy.
+ * command but `git ls-files` and `git grep` with argument arrays, and sends source to Jev only when the config says
+ * `remote: true`, a key is present and the call is a semantic search. At most two calls run at once; a third is
+ * refused as busy.
  */
 export const createEvidenceService = (config: EvidenceConfig | null, deps: EvidenceServiceDeps): EvidenceService => {
   const now = deps.now ?? Date.now;
   const cache = deps.cache ?? createJudgementCache(now);
   const listFiles = deps.listFiles ?? listProjectFiles;
+  const grepFiles = deps.grepFiles ?? grepProjectFiles;
   const readSource = deps.readSource ?? readProjectFile;
   const concurrency = deps.concurrency ?? { active: 0, http: { active: 0 } };
   const http = concurrency.http;
@@ -265,12 +331,50 @@ export const createEvidenceService = (config: EvidenceConfig | null, deps: Evide
 
     // Term policy before any scan or HTTP. Audit, exact, and sources do not reach here with an unused goal vocabulary.
     const query = { mode: input.mode, goal: input.goal, queryTerms: input.queryTerms, exactSymbols: input.exactSymbols };
-    if (planLexical(query).overflow) return refuse(root, 'invalid_input', LEXICAL_TERM_DETAIL);
+    const lexical = planLexical(query);
+    if (lexical.overflow) return refuse(root, 'invalid_input', LEXICAL_TERM_DETAIL);
+
+    // A cursor continues the same request over the same matched list, from where the previous set stopped. One this
+    // process did not seal for these arguments is refused before anything is listed or read.
+    const requestKey = sha256Hex(JSON.stringify([root, scope, cfg.excludeGlobs, query, input.constraints]));
+    const from = input.cursor === null ? null : openCursor(input.cursor);
+    if (input.cursor !== null && (!from || from.request !== requestKey)) return refuse(root, 'invalid_input', 'cursor was not issued by this server process for these arguments; search again without it');
 
     const inventory = await listFiles(root, scope, readBy - now());
     if (signal.aborted) return cancelled();
     if (!inventory) return refuse(root, 'unsupported_inventory', 'git could not list the project files');
     const eligible = inventory.paths.filter((p) => scope.some((s) => within(p, s)) && !excluded(p, globs));
+
+    // The whole scope is narrowed before anything is read: only a file holding an exact symbol or a term (in locate,
+    // also one whose path names a term) can yield a candidate. Exact symbols are one class; a term's class is its
+    // weight, and files are read heaviest class first, then in path order, so a capped set starts from the files that
+    // hold the caller's own terms. Audit reads everything; when Git cannot answer for these files the listing is read in
+    // order. Git out of time is not that: the list would then depend on the clock, so nothing is read.
+    let list = eligible;
+    let matched: number | null = null;
+    let narrowingTimedOut = false;
+    if (input.mode === 'locate') {
+      const classes = new Map<number, string[]>();
+      if (semantic) for (const [t, w] of lexical.terms!) classes.set(w, [...(classes.get(w) ?? []), t]);
+      else classes.set(1, input.exactSymbols);
+      const weights = [...classes.keys()].sort((x, y) => y - x);
+      const hits = weights.every((w) => narrowable(classes.get(w)!, semantic))
+        ? await Promise.all(weights.map((w) => grepFiles(root, scope, classes.get(w)!, semantic, readBy - now())))
+        : [null];
+      if (signal.aborted) return cancelled();
+      narrowingTimedOut = hits.includes('timeout');
+      if (hits.every((h) => h instanceof Set)) {
+        const sets = hits as Array<Set<string>>;
+        const weightOf = (p: string): number => {
+          const lower = p.toLowerCase();
+          const k = weights.findIndex((w, i) => sets[i]!.has(p) || (semantic && classes.get(w)!.some((t) => lower.includes(t))));
+          return k < 0 ? 0 : weights[k]!;
+        };
+        // Stable: within one class the listing's path order stays.
+        list = eligible.map((p) => ({ p, w: weightOf(p) })).filter((x) => x.w > 0).sort((x, y) => y.w - x.w).map((x) => x.p);
+        matched = list.length;
+      }
+    }
 
     const reasons: ReasonCode[] = [];
     const reason = (r: ReasonCode): void => {
@@ -282,23 +386,58 @@ export const createEvidenceService = (config: EvidenceConfig | null, deps: Evide
       incomplete.push('inventory');
     }
     const files: SourceFile[] = [];
+    /** The list index of each file in `files`. */
+    const readAt: number[] = [];
     let readBytes = 0;
     let skipped = inventory.unreadable;
-    for (const [i, p] of eligible.entries()) {
+    const coverageOf = (candidates: number): Coverage => ({
+      ...emptyCoverage(),
+      inventoryComplete: inventory.complete,
+      filesTotal: inventory.complete ? eligible.length : null,
+      filesMatched: matched,
+      readFiles: files.length,
+      skippedFiles: skipped,
+      candidates,
+      sourceIncomplete: incomplete.length > 0,
+    });
+    /** No set to page: nothing is restarted or spliced, and no continuation is offered. */
+    const halted = (why: ReasonCode, candidates: number): EvidenceReply => ({
+      result: finish({ projectRoot: root, items: [], snapshotId: null, next: null, coverage: coverageOf(candidates), reasons: [why, ...reasons], partial: true }, []),
+      isError: false,
+    });
+    // The set a continuation was cut from no longer exists.
+    const changed = (candidates: number): EvidenceReply => halted('source_changed', candidates);
+    if (narrowingTimedOut) {
+      // Nothing was searched: the same call, sent again, starts where this one would have.
+      incomplete.push('deadline@narrowing');
+      return halted('deadline', 0);
+    }
+
+    const listKey = sha256Hex(list.join('\0'));
+    if (from && from.list !== listKey) return changed(0);
+    const start = Math.min(from?.index ?? 0, list.length);
+    const startLine = from?.line ?? 0;
+
+    let stopAt = list.length;
+    for (let i = start; i < list.length; i++) {
+      const p = list[i]!;
       if (signal.aborted) return cancelled();
       const stop: ReasonCode | null =
         files.length >= LIMITS.files || readBytes + LIMITS.fileBytes > LIMITS.totalReadBytes - LIMITS.verifyReserveBytes ? 'source_limit' : now() >= readBy ? 'deadline' : null;
       if (stop) {
         reason(stop);
         incomplete.push(`${stop}@${i}`);
+        stopAt = i;
         break;
       }
       const r = await readSource(root, p);
       // A read already in flight is allowed to finish; cancellation still starts nothing else.
       if (signal.aborted) return cancelled();
       readBytes += r.bytes;
-      if (r.ok) files.push({ path: p, text: r.text, sha256: r.sha256 });
-      else {
+      if (r.ok) {
+        files.push({ path: p, text: r.text, sha256: r.sha256 });
+        readAt.push(i);
+      } else {
         skipped++;
         if (r.kind === 'incomplete') {
           reason(r.why === 'too_large' ? 'source_limit' : 'source_unverified');
@@ -307,8 +446,11 @@ export const createEvidenceService = (config: EvidenceConfig | null, deps: Evide
       }
     }
     if (signal.aborted) return cancelled();
+    // Lines already searched are skipped only in the very content that was searched.
+    const skip = readAt[0] === start ? startLine : 0;
+    if (skip > 0 && files[0]!.sha256 !== from!.sha) return changed(0);
 
-    const set = await buildCandidates(files, query, { now, until: readBy, signal, yield: deps.yield ?? yieldToEventLoop });
+    const set = await buildCandidates(files, query, { now, until: readBy, signal, yield: deps.yield ?? yieldToEventLoop }, skip);
     if (set.overflow) return refuse(root, 'invalid_input', LEXICAL_TERM_DETAIL);
     if (set.stopped === 'cancelled' || signal.aborted) return cancelled();
     if (set.longLines.length > 0) {
@@ -324,6 +466,15 @@ export const createEvidenceService = (config: EvidenceConfig | null, deps: Evide
       reason('source_limit');
       incomplete.push('candidates');
     }
+    // Where the following set starts: inside the file the scan left mid-way, after its last kept window; else at the
+    // first file not read. A call that moved no line forward offers no cursor.
+    const cut = files[set.scannedFiles];
+    const resume: Position | null = cut
+      ? { index: readAt[set.scannedFiles]!, line: Math.max(set.scannedFiles === 0 ? skip : 0, ...set.candidates.filter((c) => c.path === cut.path).map((c) => c.endLine)), sha: cut.sha256 }
+      : stopAt < list.length
+        ? { index: stopAt, line: 0 }
+        : null;
+    const advanced = resume !== null && (resume.index !== start || resume.line !== startLine);
     const snapshot = snapshotId({
       projectRoot: root,
       scope,
@@ -332,23 +483,13 @@ export const createEvidenceService = (config: EvidenceConfig | null, deps: Evide
       constraints: input.constraints,
       inventoryComplete: inventory.complete,
       incomplete,
+      from: from && { index: from.index, line: from.line },
       scannedFiles: set.scannedFiles,
       files,
       candidates: set.candidates,
     });
-    const coverage: Coverage = {
-      ...emptyCoverage(),
-      inventoryComplete: inventory.complete,
-      filesTotal: inventory.complete ? eligible.length : null,
-      readFiles: files.length,
-      skippedFiles: skipped,
-      candidates: set.candidates.length,
-      sourceIncomplete: incomplete.length > 0,
-    };
-    if (input.expectedSnapshot !== null && input.expectedSnapshot !== snapshot) {
-      // The set this continuation was cut from no longer exists; nothing is restarted or spliced.
-      return { result: finish({ projectRoot: root, items: [], snapshotId: null, next: null, coverage, reasons: ['source_changed', ...reasons], partial: true }, []), isError: false };
-    }
+    const coverage = coverageOf(set.candidates.length);
+    if (input.expectedSnapshot !== null && input.expectedSnapshot !== snapshot) return changed(set.candidates.length);
     if (set.candidates.length === 0) reason('no_candidate');
     const page = set.candidates.slice(input.offset, input.offset + input.limit);
 
@@ -395,10 +536,20 @@ export const createEvidenceService = (config: EvidenceConfig | null, deps: Evide
         reason('source_unverified');
         return { source, textState: 'omitted_budget', ...judged };
       }
+      if (looksSecret(c.text)) {
+        reason('source_secret');
+        return { source, textState: 'omitted_secret', ...judged };
+      }
       if (input.mode === 'locate' && b === 2) return { source, textState: 'omitted_irrelevant', ...judged };
       return { source, text: c.text, textState: 'included', ...judged };
     });
-    const next = input.offset + page.length < set.candidates.length ? { offset: input.offset + page.length, expectedSnapshot: snapshot } : null;
+    // The rest of this set first, then the next set; a cursor this call was given stays part of its set's arguments.
+    const next: EvidenceResult['next'] =
+      input.offset + page.length < set.candidates.length
+        ? { offset: input.offset + page.length, expectedSnapshot: snapshot, ...(input.cursor ? { cursor: input.cursor } : {}) }
+        : advanced
+          ? { offset: 0, cursor: sealCursor({ ...resume!, request: requestKey, list: listKey }) }
+          : null;
     const partial = coverage.sourceIncomplete || next !== null || reasons.some((r) => REMOTE_SHORTFALL.includes(r) || r === 'source_changed' || r === 'source_unverified');
     const result = fitResult({ projectRoot: root, items, snapshotId: snapshot, next, coverage, reasons, partial });
     return result ? { result, isError: false } : refuse(root, 'output_limit', 'the result metadata does not fit in 64 KiB; use a smaller limit');
@@ -453,6 +604,11 @@ export const createEvidenceService = (config: EvidenceConfig | null, deps: Evide
       if (s.endLine > starts.length - 1) return refuse(root, 'invalid_input', `sources[${i}] ends past the file's last line`);
       const text = sliceLines(r.text, starts, s.startLine, s.endLine);
       if (Buffer.byteLength(text, 'utf8') > LIMITS.windowBytes) return refuse(root, 'range_too_large', `sources[${i}] is over 8 KiB; ask for a smaller range or use Read`);
+      if (looksSecret(text)) {
+        reason('source_secret');
+        items.push({ source: s, textState: 'omitted_secret', origin: 'local', judgement: 'unjudged' });
+        continue;
+      }
       items.push({ source: s, text, textState: 'included', origin: 'local', judgement: 'unjudged' });
     }
     const coverage: Coverage = {

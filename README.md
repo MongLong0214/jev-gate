@@ -60,6 +60,10 @@ Jev Gate fixes the allocation, not the work. **Jev judges each turn; code applie
 
 > **Read this before quoting a number.** This is a **pilot: one pair per task**. It shows a direction, not a guarantee. Session-to-session variance can be large, and savings depend on your tasks, settings and host. A multi-pair run is planned. [Method, per-cell data and deviations →](https://github.com/MongLong0214/jev-gate/tree/main/bench/results/long-session-pilot-2026-10-12)
 
+### Lean mode — measured, to be removed
+
+Lean (hand the task to a fresh executor with a selected context packet) was compared with native auto-compact in a pre-registered run: three five-request episodes, two repetitions each, every cell passing its checkers. Lean cost **2.6–8.2 % more** per episode median and took about 18 % longer; no episode reached the 15 % saving threshold. Jev chose not to hand off in all 24 selections, so the run measured Lean's overhead, not a handoff. The contexts were small (about 30–35 K tokens), so long sessions are not covered. An offline upper bound on real usage traces agreed: on Claude, every threshold policy cost more, and even an oracle that hands off only the turns that profit saved at most 7.7 %. **`auto` is unchanged, and Lean will be removed in a following release ([#217](https://github.com/MongLong0214/jev-gate/issues/217)).** [Pre-registration, per-cell data and limits →](https://github.com/MongLong0214/jev-gate/tree/main/bench/results/lean-vs-native-2026-09-27)
+
 ## How it works
 
 1. **Gate** reads a new request and decides: answer directly, hand it to one background worker, or plan worker tasks with contracts and checks.
@@ -104,7 +108,7 @@ Both hosts share one private key and dashboard. Installing from source is for de
 | Router | Selects model and effort from supported candidates for the root or eligible agents. Explicit pins are respected. | Root turns are assessed once; mapped Claude workers are assessed again at each inference after spawn |
 | Compact | Builds an extractive digest plus recent context. Jev prioritizes older successful results needed for the current task within the existing size budget. | One bounded candidate batch by default; timeout/invalid output keeps local selection |
 | Output | Folds repeated successful Vitest output in Claude, and supported repeated tool output in Codex. | Local deterministic processing |
-| Evidence | Returns verified source windows, paths, lines, hashes, and pagination. | Semantic candidates; exact symbols and read-back stay local |
+| Evidence | Returns verified source windows, paths, lines, hashes, and a continuation cursor. Searches the whole worktree by narrowing to matching files first; credential-like windows are returned as references only. | Semantic candidates; exact symbols and read-back stay local |
 | Dashboard | Shows both hosts' recorded judgments, requests, and outcomes live. | Reads local metadata; makes no Jev requests |
 
 Gate, Router, Compact, Output, remote Evidence, recording, and automatic dashboard opening default to **on**. Lean is a separate selectable mode; it does not run Gate A/B or the planner. Automatic Astra/Fable targets default to off; enable both hosts with `frontierEnabled: true` in `~/.config/jev-gate/config.json`; manually selecting a root model does not enable automatic restricted children. [Router options](mods/router/README.md).
@@ -206,9 +210,11 @@ Restart the host after upgrading to load new hooks/provider code. Old separate J
 | No Jev calls | Check key, feature mode, pins, and eligibility in the stage detail and doctor |
 | Compact/Router/Output absent | Restart after automatic setup; check preserved overrides with doctor |
 | Dashboard absent | Check `dashboard status`, recording, and the local service with doctor |
+| Worker dispatch denied | The Router records `spawn_denied` with a reason code (for example `policy_unavailable`, `no_eligible_model`, `subagent_model_pinned`); fix that cause, or check pins and `frontierEnabled` |
 | Model/effort warning | Inspect selected, submitted, and observed values; distinguish request mismatch from missing response facts |
 | Evidence `partial` / empty | Check coverage and reason codes; an incomplete empty page is not proof of absence |
-| Evidence `stale` | Search again; continue only with returned `next.offset` and `next.expectedSnapshot` |
+| Evidence not used in Claude Code | Claude loads `jev_evidence` with ToolSearch when the Evidence plugin is enabled; check that the plugin and its MCP server are enabled with doctor |
+| Evidence `stale` | Search again; continue only with every field of the returned `next` |
 | Settings seem ignored | Use user-level plugin options and start a fresh host |
 
 Run `node "<plugin path>/dist/cli.js" doctor` (Codex: `cli.mjs`). It groups failures and warnings with next actions and checks native CLI model/effort capabilities, including alias resolutions and minimum host versions. Use `--json` for structured facts, `--verbose` for every local check, or `--check-update` to compare with the public GitHub release. Model inventories perform no inference; advertised capabilities do not prove account access or provider execution. The dashboard header shows its running version, release status and installed Claude version mismatches. A passing doctor checks local readiness; it does not prove API availability, model access, source accuracy, or performance. [Advanced usage](docs/advanced-usage.md).

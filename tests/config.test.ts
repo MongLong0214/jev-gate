@@ -15,7 +15,6 @@ const V5 = {
   requestDeadlineMs: 3000,
   admissionConfidenceFloor: 0.8,
   routeConfidenceFloor: 0.8,
-  resultConfidenceFloor: 0.8,
   plannerDefaultTier: 'deep',
   models: { fast: 'haiku', standard: 'sonnet', deep: 'opus', frontier: 'fable' },
   maxParallelWorkers: 3,
@@ -82,9 +81,14 @@ describe('validateConfig', () => {
       ok: true,
       config: { admittedShape: 'hierarchy', guardAllowMcp: false, verifyWorkerChecks: false, delegationCoordinatorTurns: 17, delegationWorkerTokensPerCall: 60_000 },
     });
-    // T11: a deployed file that still sets resultConfidenceFloor keeps loading; nothing reads it any more.
-    const deprecated = validateConfig({ version: 5, mode: 'auto', resultConfidenceFloor: 0.95 });
-    expect(deprecated).toMatchObject({ ok: true, config: { resultConfidenceFloor: 0.95 } });
+    // #213: a deployed file that still sets the withdrawn Gate C floor loads whatever its value, and the floor is dropped.
+    for (const floor of [0.95, 'high']) {
+      const old = validateConfig({ ...V5, resultConfidenceFloor: floor });
+      expect(old).toMatchObject({ ok: true, config: { admissionConfidenceFloor: 0.8, routeConfidenceFloor: 0.8 } });
+      if (old.ok) expect(old.config).not.toHaveProperty('resultConfidenceFloor');
+    }
+    expect(MIGRATION_SAMPLE).not.toContain('resultConfidenceFloor');
+    expect(DEFAULT_CONFIG).not.toHaveProperty('resultConfidenceFloor');
   });
 
   it.each([
@@ -109,7 +113,6 @@ describe('validateConfig', () => {
     ['deadline over the hook timeout', { version: 5, requestDeadlineMs: 9000 }, 'requestDeadlineMs must be'],
     ['floor of zero', { version: 5, routeConfidenceFloor: 0 }, 'routeConfidenceFloor must be'],
     ['admission floor above one', { version: 5, admissionConfidenceFloor: 1.2 }, 'admissionConfidenceFloor must be'],
-    ['result floor type', { version: 5, resultConfidenceFloor: 'high' }, 'resultConfidenceFloor must be'],
     ['planner tier', { version: 5, plannerDefaultTier: 'standard' }, 'plannerDefaultTier must be deep|frontier'],
     ['model name', { version: 5, models: { deep: 'opus; echo' } }, 'models.deep must match'],
     ['parallel cap', { version: 5, maxParallelWorkers: 0 }, 'maxParallelWorkers must be'],

@@ -149,6 +149,14 @@ export interface CodingCase {
    * write time to land.
    */
   prime: string[];
+  /**
+   * #214 episodes: one ordinary request sent after `request` in the same session and graded by its own checker.
+   * `request` is then graded on the snapshot taken when its turn ended, before this one was sent: moving detail out of
+   * the root can move cost and mistakes into the next request, so the next request is part of what is measured.
+   */
+  followUp: string | null;
+  followUpCheckFile: string | null;
+  followUpCheckFileRel: string | null;
   setup: string[][];
   evaluationSetup: string[][];
   checkFile: string;
@@ -217,7 +225,6 @@ export interface AgentCall {
   target_model_match: 'match' | 'mismatch' | 'unknown';
   /** T6: whether the final policy moved the call off the model its original profile would have used. */
   target_model_changed: boolean | null;
-  result_gate: Record<string, unknown> | null;
   plan: Record<string, unknown> | null;
 }
 
@@ -269,6 +276,11 @@ export interface LeanV5 {
   /** Every request's cost, or null when any charged count, model price or possibly sent request is unknown. */
   jev_cost_usd: number | null;
   jev_cost_known_subtotal: number;
+  /**
+   * #214: the cost of each sent request by the prompt it decided (`request_sha256`), so one prompt of an episode can be
+   * charged its own Jev spend. Null for a request whose cost is unknown; absent on cells ingested before it existed.
+   */
+  jev_cost_by_request?: Record<string, number | null>;
   /** Repeated records of one request, collapsed into it rather than counted as more requests. */
   duplicate_records: number;
   http_codes: Record<string, number>;
@@ -299,7 +311,6 @@ export interface GateV5 {
   planner_calls: { requested: number; completed: number; tier_proposed: string | null; model_observed: string | null; plan_status: string | null; rev: number | null };
   worker_calls: Record<string, WorkerTierRecord>;
   receipts: { accept: number; incomplete: number; invalid: number; unknown: number; rework: number; replan: number };
-  advisory: { accept: number; rework: number; replan: number; abstain: number; none: number };
   parallel: { reservation_overlap_max: number; observed_overlap_max: number };
   jev_requests: { admission: JevPhaseUsage; allocation: JevPhaseUsage; result: JevPhaseUsage; scope: JevPhaseUsage };
   outcome: string | null;
@@ -401,6 +412,8 @@ export interface CellRecord {
   request_sha256: string;
   /** Set only for a primed case: the priming prompts sent before the job prompt in the same session. */
   prime_sha256: string[];
+  /** #214: the follow-up sent after the job prompt, or null. Absent on a cell written before follow-ups existed. */
+  follow_up_sha256?: string | null;
   /**
    * Primed cases only. `context_at_job_prompt` is the main session's context when the job prompt was submitted --
    * the number the depth gate reads, observed from the stream rather than claimed. `turn_totals_usd` is each turn's
@@ -476,8 +489,12 @@ export interface CellRecord {
   /** #45: the Router path's own observations, read from the cell's debug log. Empty on an arm that never ran it. */
   router: RouterV5;
   final_snapshot: (SnapshotReport & { path: string }) | null;
+  /** #214: the work tree when the job prompt's turn ended, before the follow-up; `grade` reads it when there is one. */
+  measured_snapshot?: (SnapshotReport & { path: string }) | null;
   grade: Grade | null;
-  grade_history: Array<{ at: string; grade: Grade | null }>;
+  /** #214: the follow-up's checker on the final snapshot; null when the case has no follow-up or none was graded. */
+  follow_up_grade?: Grade | null;
+  grade_history: Array<{ at: string; grade: Grade | null; follow_up_grade?: Grade | null }>;
 }
 
 const root = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
@@ -613,7 +630,12 @@ export const loadManifest = (path: string): { cases: CodingCase[]; manifestDir: 
     const primeRaw = raw['prime'] ?? [];
     if (!Array.isArray(primeRaw) || primeRaw.some((x) => typeof x !== 'string' || x.length === 0)) throw new Error(`case ${id}: prime must be an array of non-empty strings`);
     const prime = primeRaw as string[];
-    return { id, group: s('group'), fixtureDir, request: s('request'), prime, setup: cmds('setup'), evaluationSetup: cmds('evaluationSetup'), checkFile, checkFileRel: relative(base, checkFile) };
+    // Both or neither: a follow-up with no checker would be charged and never graded.
+    if ((raw['followUp'] === undefined) !== (raw['followUpCheckFile'] === undefined)) throw new Error(`case ${id}: followUp and followUpCheckFile go together`);
+    const followUp = raw['followUp'] === undefined ? null : s('followUp');
+    const followUpCheckFile = raw['followUpCheckFile'] === undefined ? null : resolve(base, s('followUpCheckFile'));
+    if (followUpCheckFile !== null && (!isInside(base, followUpCheckFile) || !existsSync(followUpCheckFile))) throw new Error(`case ${id}: followUpCheckFile must exist under the manifest directory`);
+    return { id, group: s('group'), fixtureDir, request: s('request'), prime, followUp, followUpCheckFile, followUpCheckFileRel: followUpCheckFile === null ? null : relative(base, followUpCheckFile), setup: cmds('setup'), evaluationSetup: cmds('evaluationSetup'), checkFile, checkFileRel: relative(base, checkFile) };
   });
   return { cases, manifestDir: base, version: parsed['version'] as number };
 };
@@ -652,7 +674,7 @@ export interface Plan {
   execute: boolean;
   manifest: string;
   manifest_version: number;
-  cases: Array<{ id: string; group: string; fixtureDir: string; checkFile: string; setup: string[][]; evaluationSetup: string[][]; request: string; request_sha256: string; prime: string[]; prime_sha256: string[] }>;
+  cases: Array<{ id: string; group: string; fixtureDir: string; checkFile: string; setup: string[][]; evaluationSetup: string[][]; request: string; request_sha256: string; prime: string[]; prime_sha256: string[]; follow_up: string | null; follow_up_sha256: string | null; follow_up_check_file: string | null }>;
   arms: ArmSpec[];
   repetitions: number;
   rows: PlanRow[];
@@ -688,7 +710,7 @@ export const buildPlan = (o: Options, cases: CodingCase[], manifestVersion: numb
     execute: o.execute,
     manifest: resolve(o.cases),
     manifest_version: manifestVersion,
-    cases: cases.map((c) => ({ id: c.id, group: c.group, fixtureDir: c.fixtureDir, checkFile: c.checkFile, setup: c.setup, evaluationSetup: c.evaluationSetup, request: c.request, request_sha256: sha256(c.request), prime: c.prime, prime_sha256: c.prime.map((t) => sha256(t)) })),
+    cases: cases.map((c) => ({ id: c.id, group: c.group, fixtureDir: c.fixtureDir, checkFile: c.checkFile, setup: c.setup, evaluationSetup: c.evaluationSetup, request: c.request, request_sha256: sha256(c.request), prime: c.prime, prime_sha256: c.prime.map((t) => sha256(t)), follow_up: c.followUp, follow_up_sha256: c.followUp === null ? null : sha256(c.followUp), follow_up_check_file: c.followUpCheckFile })),
     arms: o.arms.map((a) => specs[a]),
     repetitions: o.repetitions,
     rows,
@@ -899,7 +921,6 @@ const emptyGateV5 = (): GateV5 => ({
   planner_calls: { requested: 0, completed: 0, tier_proposed: null, model_observed: null, plan_status: null, rev: null },
   worker_calls: {},
   receipts: { accept: 0, incomplete: 0, invalid: 0, unknown: 0, rework: 0, replan: 0 },
-  advisory: { accept: 0, rework: 0, replan: 0, abstain: 0, none: 0 },
   parallel: { reservation_overlap_max: 0, observed_overlap_max: 0 },
   jev_requests: { admission: emptyJevPhase(), allocation: emptyJevPhase(), result: emptyJevPhase(), scope: emptyJevPhase() },
   outcome: null,
@@ -926,6 +947,7 @@ export const emptyCell = (cs: CodingCase, spec: ArmSpec, repetition: number): Ce
   state_dir: null,
   request_sha256: sha256(cs.request),
   prime_sha256: cs.prime.map((t) => sha256(t)),
+  follow_up_sha256: cs.followUp === null ? null : sha256(cs.followUp),
   context_at_job_prompt: null,
   turn_totals_usd: [],
   turn_totals_stream: [],
@@ -952,7 +974,9 @@ export const emptyCell = (cs: CodingCase, spec: ArmSpec, repetition: number): Ce
   lean: emptyLeanV5(),
   router: emptyRouterV5(),
   final_snapshot: null,
+  measured_snapshot: null,
   grade: null,
+  follow_up_grade: null,
   grade_history: [],
 });
 
@@ -982,7 +1006,6 @@ const emptyAgentCall = (toolUseId: string): AgentCall => ({
   target_model: null,
   target_model_match: 'unknown',
   target_model_changed: null,
-  result_gate: null,
   plan: null,
 });
 
@@ -1318,6 +1341,7 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
   }
   const tokens: Array<number | null> = [];
   const costs: Array<number | null> = [];
+  L.jev_cost_by_request = {};
   for (const r of sent) {
     const http = isRecord(r['http']) ? r['http'] : null;
     bump(L.http_codes, http ? (str(http['code']) ?? `http_${String(num(http['status']) ?? 'none')}`) : 'unrecorded');
@@ -1325,7 +1349,13 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
     const usage = jev && isRecord(jev['usage']) ? jev['usage'] : null;
     const input = usage ? tokenCount(usage['input_tokens']) : null;
     tokens.push(input);
-    costs.push(estimateJevCostUsd(jev ? str(jev['model']) : null, input));
+    const cost = estimateJevCostUsd(jev ? str(jev['model']) : null, input);
+    costs.push(cost);
+    const prompt = str(r['request_sha256']);
+    if (prompt !== null) {
+      const prev = L.jev_cost_by_request[prompt];
+      L.jev_cost_by_request[prompt] = prev === undefined ? cost : prev === null || cost === null ? null : prev + cost;
+    }
   }
   const knownTokens = tokens.filter((t): t is number => t !== null);
   const knownCosts = costs.filter((c): c is number => c !== null);
@@ -1509,9 +1539,8 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
     call.pre_intent = intents[0] ?? null;
     call.post = posts[0] ?? null;
     call.failure = byId('failure', id)[0] ?? null;
-    call.result_gate = byId('result_result', id)[0] ?? null;
     call.plan = byId('plan', id)[0] ?? null;
-    call.from_records = call.from_records || Boolean(call.pre ?? call.pre_intent ?? call.post ?? call.failure ?? call.result_gate ?? call.plan);
+    call.from_records = call.from_records || Boolean(call.pre ?? call.pre_intent ?? call.post ?? call.failure ?? call.plan);
     const owned = call.subagent_type !== null ? OWNED_AGENTS[call.subagent_type] : undefined;
     const intent = call.pre ?? call.pre_intent;
     const role = owned ? owned.role : (str(intent?.['role'] ?? null) ?? (call.plan ? 'planner' : null));
@@ -1526,12 +1555,8 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
       call.orphaned = call.post['matched'] === false;
       if (call.orphaned) g.orphan_records++;
       const verdict = str(call.post['verdict']);
-      // A17: Gate C may demote an accept, so every receipt verdict has a bucket and the totals still add up.
+      // Every receipt verdict has a bucket, so the totals still add up.
       if (verdict !== null && Object.prototype.hasOwnProperty.call(g.receipts, verdict)) g.receipts[verdict as keyof typeof g.receipts]++;
-      const gateC = isRecord(call.result_gate?.['decision']) ? (call.result_gate?.['decision'] as Record<string, unknown>) : null;
-      const advisory = gateC ? (str(gateC['verdict']) ?? (str(gateC['reason']) === 'result_abstain' ? 'abstain' : 'none')) : str(call.post['advisory']);
-      if (advisory === 'accept' || advisory === 'rework' || advisory === 'replan' || advisory === 'abstain') g.advisory[advisory]++;
-      else if (verdict !== null) g.advisory.none++;
       const observedEnd = timeOf(call.post);
       const duration = num(tr['totalDurationMs']);
       if (observedEnd !== null && duration !== null) observedIntervals.push([observedEnd - duration, observedEnd]);
@@ -1621,6 +1646,8 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
   }
 
   account(records.filter((r) => r['phase'] === 'pre_result'), phase('pre_intent'), g.jev_requests.allocation);
+  // #213: only traces written before Gate C was withdrawn carry result_*; their paid calls stay counted. Remove with the
+  // last such trace directory.
   account(records.filter((r) => r['phase'] === 'result_result'), phase('result_intent'), g.jev_requests.result);
   // A17: the plan scope gate is a real request per plan, so its consumption is counted like every other gate. #55 review:
   // A23's plan interpretation is the live plan-level request that replaced it, and it is billed too, so it is counted
@@ -1883,7 +1910,7 @@ const runClaudeCell = (cs: CodingCase, spec: ArmSpec, o: Options, pluginDir: str
      * read depth_unknown and 0 bytes; without it the second prompt reads a real depth. Every arm of a given case gets
      * the same profile, so the comparison inside a case never mixes the two.
      */
-    const primed = cs.prime.length > 0;
+    const primed = cs.prime.length > 0 || cs.followUp !== null;
     const argv = [o.claude, '-p', '--model', spec.rootModel, '--input-format', primed ? 'stream-json' : 'text', '--output-format', 'stream-json', '--verbose', '--max-turns', String(o.maxTurns), '--permission-mode', o.permissionMode, '--allowedTools', o.allowedTools, '--setting-sources', o.settingSources];
     if (primed) argv.push('--replay-user-messages');
     else argv.push('--no-session-persistence');
@@ -1934,9 +1961,11 @@ const runClaudeCell = (cs: CodingCase, spec: ArmSpec, o: Options, pluginDir: str
      * submitted at a fresh session's depth. That run recorded context_at_job_prompt 27-28K for a case built to reach
      * 406K, and its arms disagreed on whether the job was even in scope.
      */
-    const queued = primed ? [...cs.prime.slice(1), cs.request] : [];
-    if (primed) child.stdin.write(userMessage(cs.prime[0] as string));
+    const turns = [...cs.prime, cs.request, ...(cs.followUp === null ? [] : [cs.followUp])];
+    const queued = primed ? turns.slice(1) : [];
+    if (primed) child.stdin.write(userMessage(turns[0] as string));
     else child.stdin.end(cs.request);
+    let results = 0;
     const rl = createInterface({ input: child.stdout });
     rl.on('line', (line) => {
       streamOut.write(line + '\n');
@@ -1949,6 +1978,15 @@ const runClaudeCell = (cs: CodingCase, spec: ArmSpec, o: Options, pluginDir: str
         cell.unparsed_lines++;
       }
       if (!primed || !isRecord(parsed) || parsed['type'] !== 'result') return;
+      results++;
+      // #214: the job prompt's turn has ended and the follow-up is not sent yet, so this tree is what it produced.
+      if (cs.followUp !== null && results === cs.prime.length + 1) {
+        try {
+          cell.measured_snapshot = { ...copyTree(work, join(cellDir, 'measured'), { keepGit: true, forbiddenRoots: [] }), path: join(cellDir, 'measured') };
+        } catch {
+          cell.measured_snapshot = null;
+        }
+      }
       const next = queued.shift();
       if (next === undefined) child.stdin.end();
       else child.stdin.write(userMessage(next));
@@ -1996,9 +2034,9 @@ export const checkerIdentity = (checkFile: string): string => {
   return `sha256:${h.digest('hex').slice(0, 16)}`;
 };
 
-const grade = (cs: CodingCase, checkFile: string, cellDir: string, timeoutMs: number, checkerId: string): Grade => {
-  const finalDir = join(cellDir, 'final');
-  const empty: Grade = { quality: 'unknown', reason: 'no final snapshot', required: [], checks: [], environmentError: null, describe: null, run: null, evaluationSetup: [], checkerId };
+const grade = (cs: CodingCase, checkFile: string, cellDir: string, timeoutMs: number, checkerId: string, snapshot: 'final' | 'measured' = 'final'): Grade => {
+  const finalDir = join(cellDir, snapshot);
+  const empty: Grade = { quality: 'unknown', reason: `no ${snapshot} snapshot`, required: [], checks: [], environmentError: null, describe: null, run: null, evaluationSetup: [], checkerId };
   if (!existsSync(finalDir)) return empty;
   let n = 1;
   while (existsSync(join(cellDir, `eval-${n}`))) n++;
@@ -2035,8 +2073,21 @@ const freezeInputs = (o: Options, cases: CodingCase[], manifestDir: string, out:
   const configText = JSON.stringify(config, null, 2) + '\n';
   writeFileSync(configCopy, configText, { encoding: 'utf8', mode: 0o600 });
   const checkerIds: Record<string, string> = {};
-  for (const cs of cases) checkerIds[cs.id] = checkerIdentity(cs.checkFile);
+  for (const cs of cases) {
+    checkerIds[cs.id] = checkerIdentity(cs.checkFile);
+    if (cs.followUpCheckFile !== null) checkerIds[`${cs.id}#follow_up`] = checkerIdentity(cs.followUpCheckFile);
+  }
   return { config_copy: configCopy, config_sha256: sha256(configText), config: { ...config }, bench_copy: manifestCopy, bench_sha256: benchReport.sha256, bench_files: benchReport.files, bench_skipped: benchReport.skipped, plugin_copy: pluginCopy, plugin_hook_sha256: pluginCopy === null ? null : createHash('sha256').update(readFileSync(join(pluginCopy, 'dist', 'hook.js'))).digest('hex'), router_copy: routerCopy, router_sha256: routerReport?.sha256 ?? null, router_files: routerReport?.files ?? null, checker_ids: checkerIds };
+};
+
+/**
+ * #214: a case with a follow-up grades its job prompt on the snapshot taken before the follow-up was sent, and the
+ * follow-up on the final tree. A cell that timed out or was cancelled may have stopped mid-write, so both are unknown.
+ */
+const gradeCell = (cs: CodingCase, cell: CellRecord, cellDir: string, checkFile: string, followUpCheckFile: string | null, checkerId: (followUp: boolean) => string, timeoutMs: number): void => {
+  const stopped = (g: Grade): Grade => (cell.timed_out || cell.cancelled ? { ...g, quality: 'unknown', reason: `${cell.timed_out ? 'timed out' : 'cancelled'}; snapshot may be incomplete (${g.reason ?? g.quality})` } : g);
+  cell.grade = stopped(grade(cs, checkFile, cellDir, timeoutMs, checkerId(false), cs.followUp === null ? 'final' : 'measured'));
+  cell.follow_up_grade = followUpCheckFile === null ? null : stopped(grade(cs, followUpCheckFile, cellDir, timeoutMs, checkerId(true)));
 };
 
 export const regrade = (o: Options): number => {
@@ -2060,12 +2111,12 @@ export const regrade = (o: Options): number => {
         count++;
         if (!cell.started || !cs) continue;
         const checkFile = useFrozen ? join(frozenBench, cs.checkFileRel) : cs.checkFile;
-        const checkerId = `${checkerIdentity(checkFile)}${useFrozen ? '' : ' (current source, frozen copy missing)'}`;
+        const followUpCheckFile = cs.followUpCheckFileRel === null ? null : useFrozen ? join(frozenBench, cs.followUpCheckFileRel) : cs.followUpCheckFile;
+        const label = useFrozen ? '' : ' (current source, frozen copy missing)';
         const before = cell.grade;
-        let next = grade(cs, checkFile, cellDir, o.timeoutMs, checkerId);
-        if (cell.timed_out || cell.cancelled) next = { ...next, quality: 'unknown', reason: `${cell.timed_out ? 'timed out' : 'cancelled'}; snapshot may be incomplete (${next.reason ?? next.quality})` };
-        cell.grade_history = [...(cell.grade_history ?? []), { at: stamp, grade: before }];
-        cell.grade = next;
+        cell.grade_history = [...(cell.grade_history ?? []), { at: stamp, grade: before, ...(cell.follow_up_grade !== undefined ? { follow_up_grade: cell.follow_up_grade } : {}) }];
+        gradeCell(cs, cell, cellDir, checkFile, followUpCheckFile, (f) => `${checkerIdentity(f ? followUpCheckFile! : checkFile)}${label}`, o.timeoutMs);
+        const next = cell.grade!;
         writeJsonAtomic(cellPath, cell);
         if (before?.quality !== next.quality) changed++;
         process.stdout.write(`    ${job} ${armDir} r${repDir}: ${before?.quality ?? 'none'} → ${next.quality}${next.reason ? ` (${next.reason})` : ''}\n`);
@@ -2215,12 +2266,11 @@ export const main = async (argv: string[]): Promise<number> => {
     const cell = JSON.parse(readFileSync(cellPath, 'utf8')) as CellRecord;
     if (!cell.started) continue;
     const cs = cases.find((c) => c.id === cell.job)!;
-    const checkFile = join(frozenBench, cs.checkFileRel);
-    const checkerId = String((plan.frozen_inputs['checker_ids'] as Record<string, string>)[cs.id]);
-    cell.grade = grade(cs, checkFile, cellDir, o.timeoutMs, checkerId);
-    if (cell.timed_out || cell.cancelled) cell.grade = { ...cell.grade, quality: 'unknown', reason: `${cell.timed_out ? 'timed out' : 'cancelled'}; snapshot may be incomplete (${cell.grade.reason ?? cell.grade.quality})` };
+    const ids = plan.frozen_inputs['checker_ids'] as Record<string, string>;
+    gradeCell(cs, cell, cellDir, join(frozenBench, cs.checkFileRel), cs.followUpCheckFileRel === null ? null : join(frozenBench, cs.followUpCheckFileRel), (f) => String(ids[f ? `${cs.id}#follow_up` : cs.id]), o.timeoutMs);
     writeJsonAtomic(cellPath, cell);
-    process.stdout.write(`    ${cell.job} r${cell.repetition} ${cell.arm}: ${cell.grade.quality}${cell.grade.reason ? ` (${cell.grade.reason})` : ''}\n`);
+    const g = cell.grade!;
+    process.stdout.write(`    ${cell.job} r${cell.repetition} ${cell.arm}: ${g.quality}${g.reason ? ` (${g.reason})` : ''}${cell.follow_up_grade ? ` · follow-up ${cell.follow_up_grade.quality}` : ''}\n`);
   }
   writeJsonAtomic(join(out, 'summary.json'), {
     schema: 5,

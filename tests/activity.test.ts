@@ -174,6 +174,18 @@ describe('loadActivity', () => {
     expect(shut.live.steps[0]?.line).not.toContain('기다리는 중');
     expect(JSON.stringify(shut)).not.toContain('SUPER_SECRET_PROMPT_TEXT');
   });
+  it('#213: still loads a trace written while Gate C ran, and shows the recorded verdict, not the advisory', () => {
+    const trace = make();
+    const base = { session_id: 's', prompt_id: 'p1', tool_use_id: 'toolu_1', task_id: 't1', rev: 1 };
+    write(trace, 'result_intent-1.json', { ...base, phase: 'result_intent', request_id: 'r1', written_at: '2026-09-29T05:59:58.000Z' });
+    write(trace, 'result_result-1.json', { ...base, phase: 'result_result', request_id: 'r1', attempted: true, decision: { verdict: 'rework', applied: false }, written_at: '2026-09-29T05:59:58.500Z' });
+    write(trace, 'post-1.json', { ...base, phase: 'post', verdict: 'accept', advisory: 'rework', written_at: '2026-09-29T05:59:59.000Z' });
+    const snap = loadActivity({ traceDir: trace, debugDir: null, env: { JEV_GATE_STATE_DIR: make() }, now: new Date('2026-09-29T06:00:00.000Z') });
+    expect(snap.traceFiles).toBe(3);
+    expect(snap.events.find((e) => e.title === '워커 결과')?.used).toContain('워커 보고 accept');
+    expect(JSON.stringify(snap)).not.toContain('rework');
+  });
+
 });
 
 describe('dashboard server', () => {

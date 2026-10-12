@@ -86,3 +86,38 @@ describe('behavioral regression-test checks', () => {
     expect(g.environmentError).toBeNull();
   });
 });
+
+/**
+ * #214 episodes: the measured checker fails the fixture and passes the measured reference (earlier requests and the
+ * measured request applied); the follow-up checker fails that state and passes it with the follow-up reference on top.
+ */
+describe('bench/cases-episodes.json', () => {
+  const { cases, manifestDir } = loadManifest(join(root, 'bench', 'cases-episodes.json'));
+  const graded = (check: string, dir: string, want: 'fail' | 'pass'): void => {
+    const g = gradeDir(check, dir, opts);
+    expect(g.quality, JSON.stringify(g)).toBe(want);
+    if (want === 'pass') expect(g.required.sort()).toEqual(g.checks.map((c) => c.id).sort());
+  };
+
+  it('has three episodes, each with earlier requests and a follow-up', () => {
+    expect(cases).toHaveLength(3);
+    for (const cs of cases) {
+      expect(cs.prime.length).toBeGreaterThanOrEqual(2);
+      expect(cs.prime.length).toBeLessThanOrEqual(4);
+      expect(cs.followUp).not.toBeNull();
+      // #29: a history carrying a delegation ban cannot measure a handoff.
+      expect([...cs.prime, cs.request, cs.followUp].join('\n')).not.toMatch(/서브에이전트|워커|subagent|delegate/i);
+    }
+  });
+
+  it.each(cases.map((c) => [c.id, c] as const))('%s: both checkers fail before and pass after their reference', (id, cs) => {
+    const dir = join(tmp, 'episodes', id);
+    cpSync(cs.fixtureDir, dir, { recursive: true });
+    graded(cs.checkFile, dir, 'fail');
+    cpSync(join(manifestDir, 'reference', id, 'measured'), dir, { recursive: true });
+    graded(cs.checkFile, dir, 'pass');
+    graded(cs.followUpCheckFile!, dir, 'fail');
+    cpSync(join(manifestDir, 'reference', id, 'followup'), dir, { recursive: true });
+    graded(cs.followUpCheckFile!, dir, 'pass');
+  });
+});

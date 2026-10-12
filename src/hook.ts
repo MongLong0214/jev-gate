@@ -614,7 +614,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
   // ---------------------------------------------------------------- lean (JGL-01/02/03)
   //
   // A separate path. It shares the dispatcher, the state file, the lock, the trace and the TypeSafe client with the
-  // legacy modes, and none of their decisions: no Gate A/B/C, no depth reading, no planner, no task graph, no tier
+  // legacy modes, and none of their decisions: no Gate A/B, no depth reading, no planner, no task graph, no tier
   // routing, no root guard and no plan interpretation runs here.
 
   const MARKER_RE = /jev-lean-[0-9a-f]{16}/;
@@ -1108,7 +1108,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         const r = own(g.active, owner.id);
         if (g.prompt_id !== owner.gen.prompt_id || !r?.background_execution || r.background_execution.token !== owner.r.background_execution?.token) return g;
         const receipt: Receipt = { task_id: r.task_id ?? '', contract_hash: r.contract_hash ?? '', rev: r.rev ?? 0, attempt: r.attempt, tool_use_id: owner.id,
-          provenance: 'worker_reported', reply: null, verdict: 'unknown', verdict_reason: 'generation_changed', advisory: null,
+          provenance: 'worker_reported', reply: null, verdict: 'unknown', verdict_reason: 'generation_changed',
           requested_model: r.allocation_pair?.model ?? null, observed_model: observed.model, root_effort: null, recorded_at: new Date().toISOString() };
         return { ...release(g, owner.id), receipts: [...g.receipts, receipt] };
       }) } : null);
@@ -2403,8 +2403,6 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         reply: parsed && parsed.ok ? parsed.value : null,
         verdict: finalVerdict,
         verdict_reason: reason,
-        // T11: Gate C is not called, so nothing advises on a receipt any more; stored records may still carry one.
-        advisory: null,
         observed_model: observedModel(input.tool_response),
         root_effort: input.effort ?? null,
         recorded_at: new Date().toISOString(),
@@ -2468,7 +2466,6 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         evidence_format_only: formatOnly,
         root_fallback: rootFallback,
         ...(rootFallback ? { root_fallback_reason: rootFallbackReason } : {}),
-        advisory: null,
         // #48 P0-2: the same two fields the native no-job branch above records, so an orchestrated dispatch and an
         // unrecorded native one read the same way in `explain` -- what subagent_type ran, and what model it resolved
         // to. `subagent_type` here is the dispatched one (tool_input reflects the patched call), not the tier the
@@ -2497,7 +2494,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         changed = true;
         const next = release(gen, toolUseId);
         const receipt: Receipt = { task_id: r.task_id ?? '', contract_hash: r.contract_hash ?? '', rev: r.rev ?? 0, attempt: r.attempt, tool_use_id: toolUseId,
-          provenance: 'worker_reported', reply: null, verdict: 'unknown', verdict_reason: 'generation_changed', advisory: null,
+          provenance: 'worker_reported', reply: null, verdict: 'unknown', verdict_reason: 'generation_changed',
           observed_model: observedModel(input.tool_response), root_effort: input.effort ?? null, recorded_at: new Date().toISOString() };
         return { ...next, receipts: [...next.receipts, receipt] };
       });
@@ -2587,7 +2584,6 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
           verdict: 'unknown',
           verdict_reason: 'the call failed before a reply was returned',
           requested_model: reservation.allocation_pair?.model ?? requestedModel,
-          advisory: null,
           observed_model: null,
           root_effort: input.effort ?? null,
           recorded_at: new Date().toISOString(),
