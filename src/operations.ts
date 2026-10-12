@@ -571,6 +571,9 @@ const modGroup = (row: ModRecord): string => row.component === 'router'
   ? `router:${token(row.rec['session_id']) ?? 'legacy'}:${token(row.rec['turn']) ?? token(row.rec['tool_use_id']) ?? 'session'}`
   : `${row.component}:${token(row.rec['session_id']) ?? 'legacy'}:${token(row.rec['run_id']) ?? row.at}`;
 
+/** The dashboard's activity strips and per-minute rates read the last minute of records, so no cut below may drop one of them. */
+const ACTIVITY_WINDOW_MS = 60_000, ACTIVITY_CAP = 1000;
+
 /** The first `k` of a stable sort by `order`, without sorting everything. */
 const firstSorted = <T>(items: T[], k: number, order: (a: T, b: T) => number): T[] => {
   const top: T[] = [];
@@ -808,7 +811,11 @@ export const buildOperations = (records: Rec[], mods: ModRecord[], now: Date, av
     const key = `${step.host}:${step.feature}`;
     if (!latestJev.has(key)) latestJev.set(key, step);
   }
+  // The newest-120 cut must not drop a record of the last minute.
+  // ponytail: past ACTIVITY_CAP records in one minute only the newest ones are kept, so a burst that large would under-count.
+  const sinceMs = now.getTime() - ACTIVITY_WINDOW_MS;
   const feed = [...new Set([...firstSorted(all.filter(s => !s.lifecycle), 120, newestFirst),
+    ...firstSorted(all.filter(s => !s.lifecycle && Date.parse(s.at) >= sinceMs), ACTIVITY_CAP, newestFirst),
     ...firstSorted(all.filter(s => s.lifecycle), 20, newestFirst), ...latestJev.values()])].sort(newestFirst);
   const sig = createHash('sha256').update(JSON.stringify({ runs, features, requests, latency })).digest('hex').slice(0, 24);
   return { runs, features, feed, active: runs.filter((r) => r.state === 'active').length, attention: runs.filter((r) => r.state === 'attention').length, requests, latency, sig };

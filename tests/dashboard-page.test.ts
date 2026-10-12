@@ -376,20 +376,27 @@ it('ignores a late history response from a previously selected worker', async ()
   expect(p.get('rail-history').textContent).toContain('워커 b');expect(p.get('rail-history').textContent).not.toContain('POISON');
 });
 
-it('sends one packet per new record, evenly spaced over the frame interval, up to 12 per channel and frame', () => {
+it('draws one tick per record of the last minute with its rate, and one packet per new record up to the cap', () => {
+  const old = step('old', 'router', 'jev', { at: new Date(Date.now() - 90_000).toISOString(), durationMs: 40 });
   const records = (n: number) => Array.from({ length: n }, (_, i) => step(`r${i}`, 'router', 'jev', { durationMs: 50 + i }));
-  const p = page();
-  p.push(snapshot([run('r', 'claude', records(3))]));
-  // The first frame invents no packet; four new records are four packets.
+  const p = page(), node = () => p.w.document.querySelector('.circuit-node[data-feature="router"]')!;
+  p.push(snapshot([run('r', 'claude', [old, ...records(3)])]));
+  // The record from 90 seconds ago is neither a tick nor part of the rate; the first frame invents no packet.
+  expect(node().querySelectorAll('.activity-drift i')).toHaveLength(3);
+  expect(node().querySelector('.activity-rate')!.textContent).toBe('분당 3회');
+  expect(node().getAttribute('aria-label')).toContain('분당 3회');
+  expect(node().querySelector('.activity-strip')!.getAttribute('aria-hidden')).toBe('true');
   expect(p.w.document.querySelectorAll('.wire-packet')).toHaveLength(0);
-  p.push(snapshot([run('r', 'claude', records(7))]));
+  // Four new records are four packets, evenly spaced across the frame interval.
+  p.push(snapshot([run('r', 'claude', [old, ...records(7)])]));
   const delays = [...p.w.document.querySelectorAll('[data-receipt="router-out"]')].map(e => parseFloat((e as unknown as SVGElement).style.animationDelay)).sort((a, b) => a - b);
   expect(delays).toHaveLength(4);
   expect(delays[0]).toBeCloseTo(0, 1);
   expect(delays[2]! - delays[1]!).toBeCloseTo(delays[1]! - delays[0]!, 3);
-  // A burst is capped at 12 packets per frame and channel.
+  // A burst is capped at 12 packets per frame and channel; the rate still counts every record.
   const burst = page();
-  burst.push(snapshot([run('r', 'claude', records(1))]));
+  burst.push(snapshot([run('r', 'claude', [records(1)[0]!])]));
   burst.push(snapshot([run('r', 'claude', records(40))]));
   expect(burst.w.document.querySelectorAll('[data-receipt="router-out"]')).toHaveLength(12);
+  expect(burst.w.document.querySelector('.circuit-node[data-feature="router"] .activity-rate')!.textContent).toBe('분당 40회');
 });

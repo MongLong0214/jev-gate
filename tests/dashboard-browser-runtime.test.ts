@@ -180,8 +180,8 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
   });
 
   it('renders empty and long mixed-host metadata in 28 viewport/theme/language states without overflow or overlap',async()=>{
-    const a=step('a','admission',{durationMs:63}),b=step('b','allocation',{durationMs:88}),w=step('w','workers',{lane:'host',summary:'long '.repeat(180),model:{selected:'claude-opus-5-5',observed:'claude-sonnet-5',status:'mismatch',selectedEffort:null,observedEffort:null}});
-    push([run('c','claude',[a,b,w]),run('x','codex',[step('r','router',{durationMs:91}),step('e','evidence',{lane:'local',summary:'<img src=x onerror="alert(1)">'})])]);
+    const at=new Date().toISOString(),a=step('a','admission',{at,durationMs:63}),b=step('b','allocation',{at,durationMs:88}),w=step('w','workers',{at,lane:'host',summary:'long '.repeat(180),model:{selected:'claude-opus-5-5',observed:'claude-sonnet-5',status:'mismatch',selectedEffort:null,observedEffort:null}});
+    push([run('c','claude',[a,b,w]),run('x','codex',[step('r','router',{at,durationMs:91}),step('e','evidence',{at,lane:'local',summary:'<img src=x onerror="alert(1)">'})])]);
     for(const [width,height] of [[1920,1080],[1440,900],[1280,800],[1024,768],[768,1024],[390,844],[320,740]]){
       const p=await page(width,height);
       for(const theme of ['dark','light'])for(const lang of ['ko','en']){
