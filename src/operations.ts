@@ -3,6 +3,7 @@ import { allocatedTraceRecords } from './explain.js';
 import { codexOperations, firstRow } from './codex-operations.js';
 import { operationState } from './operation-state.js';
 import { memo } from './memo.js';
+import { estimateJevCostUsd } from './bench/usage.js';
 import { CODEX_CAPABILITIES, CODEX_PLUGIN_CAPABILITIES, type HostCapability, type Host } from './host-support.js';
 
 /** A display model made only from named metadata fields. Raw prompts and source text never leave here. */
@@ -39,7 +40,11 @@ export interface OperationStep {
   startedAt?: string;
   judgements?: Array<{ question: string; value: string; confidence: number | null; probabilities: Array<{ label: string; value: number }> }>;
   graph?: Array<{ id: string; dependsOn: string[]; checks: number }>;
+  /** The recorded exchange behind one measured Jev response. Every absent value stays null; cost is a list-price estimate, never a billed amount. */
+  receipt?: JevReceipt;
 }
+
+export interface JevReceipt { status: number | null; code: string | null; model: string | null; input: number | null; output: number | null; costUsd: number | null; choice: string | null; confidence: number | null; threshold: number | null; direction: string | null }
 
 export interface OperationRun {
   id: string;
@@ -72,7 +77,9 @@ export interface OperationsView {
   attention: number;
   /** Derived from recorded intent or explicit attempted result, not from an absent usage field. */
   requests: number;
-  latency: { measured: number; p50: number | null; p95: number | null; fastest: number | null; latest: number | null; recent: Array<{ at: string; ms: number }> };
+  latency: { measured: number; p50: number | null; p95: number | null; fastest: number | null; latest: number | null; recent: Array<{ at: string; ms: number }>;
+    /** Measured Jev responses whose record date is the local today, per host. Cost sums only responses with a recorded, priced model. */
+    today: Partial<Record<Host, { calls: number; input: number; costUsd: number; unpriced: number }>> };
   sig: string;
 }
 
@@ -148,6 +155,10 @@ const judgements = (r: Rec): OperationStep['judgements'] => {
     return [{ question, value, confidence: number(a['confidence']), probabilities: distribution }];
   });
   return out.length ? out : undefined;
+};
+const jevReceipt = (status: number | null, code: string | null, model: string | null, usage: Rec | null, choice: string | null, confidence: number | null, threshold: number | null, direction: string | null): JevReceipt => {
+  const input = number(usage?.['input_tokens'] ?? usage?.['input']); const output = number(usage?.['output_tokens'] ?? usage?.['output']);
+  return { status, code, model, input, output, costUsd: estimateJevCostUsd(model, input), choice, confidence, threshold, direction };
 };
 const callDetails = (r: Rec): string[] => {
   if (r['known_not_sent'] === true || r['attempted'] === false) return [text('Jev 전송 없음', token(r['skip_code']))];
@@ -428,6 +439,10 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
   }
   if (phase === 'codex_model_failure') { state = 'error'; lane = 'host'; summary = '호스트 모델 요청 실패'; }
   if (state === 'error' && !issue) issue = lane === 'jev' ? 'jev' : feature === 'evidence' ? 'evidence' : 'host';
+  const decided = field(r, 'decision'), selection = field(r, 'selection'), answered = judgements(r)?.find(j => j.confidence !== null);
+  const receipt = lane === 'jev' && duration !== null && duration >= 0 && !isIntent ? jevReceipt(number(http?.['status']), token(http?.['code']), token(field(r, 'jev')?.['model']), field(field(r, 'jev'), 'usage') ?? field(r, 'usage'),
+    phase === 'codex_router_result' ? text(token(r['selected_model']), token(r['selected_effort'])) || null : phase === 'codex_compact' ? number(r['dependencies']) === null ? null : `${n(number(r['dependencies']))} / ${n(number(r['candidates']))}` : token(decided?.['shape']) ?? token(field(r, 'allocation')?.['selected_model']) ?? token(decided?.['tier']) ?? token(decided?.['action']),
+    routing?.probability ?? answered?.confidence ?? null, routing?.threshold ?? null, token(selection?.['direction'])) : undefined;
   return { id: id(ownId), at, feature, state, lane, ...(token(r['session_id']) ? { sessionId: token(r['session_id'])! } : {}), ...(token(r['agent_id']) ? { agentId: token(r['agent_id'])! } : {}), ...(token(r['tool_use_id']) ? { callId: token(r['tool_use_id'])! } : {}), title: traceTitle(phase, r), summary, details: details.filter(Boolean), ...(routing ? { routing } : {}), ...(model ? { model } : {}),
     ...(issue ? { issue } : {}),
     ...(['stop', 'background_conversation', 'codex_model_request', 'codex_model_failure'].includes(phase) ? { lifecycle: true } : {}),
@@ -436,7 +451,7 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
     ...(elapsed !== null && elapsed >= 0 ? { elapsedMs: elapsed } : {}),
     ...(phase === 'codex_model_request' && state === 'active' ? { startedAt: at, elapsedMs: Math.max(0, age) } : {}),
     ...(phase.endsWith('_result') && judgements(r) ? { judgements: judgements(r)! } : {}),
-    ...(graph ? { graph } : {}) };
+    ...(graph ? { graph } : {}), ...(receipt ? { receipt } : {}) };
 };
 
 /** Join decisions to responses only within the recorded session and execution identity. */
@@ -497,9 +512,11 @@ const modStep = (row: ModRecord, now: number, closed: Set<string>, responses: Ma
   const details: string[] = [];
   let summary = '';
   let lane: StepLane = 'local';
+  let choice: string | null = null;
   if (feature === 'router') {
     lane = event === 'request' || r['sent'] === true ? 'jev' : 'policy';
     const from = field(r, 'from'); const patch = field(r, 'patch'); const reasons = field(r, 'reasons'); const applied = field(r, 'applied');
+    if (r['sent'] === true && !failedAssessment) choice = text(token(patch?.['model']) ?? token(from?.['model']) ?? token(r['from']), token(patch?.['effort']) ?? token(from?.['effort'])) || null;
     summary = event === 'request' ? 'Jev 요청 전송 · 응답 대기' : text(event, r['sent'] === true ? 'Jev 응답' : r['sent'] === false ? '전송 안 함' : null, token(r['skipped']), token(r['reason']));
     if (failedAssessment) summary = r['assessment'] === 'payment_required' ? 'Jev 크레딧 소진 · 원래 호스트 설정 유지' : text('Jev 판정 실패 · 원래 호스트 설정 유지', token(r['assessment']));
     details.push(text(`기존 모델 ${token(from?.['model']) ?? token(r['from']) ?? '?'}`, `기존 effort ${token(from?.['effort']) ?? '?'}`));
@@ -531,6 +548,7 @@ const modStep = (row: ModRecord, now: number, closed: Set<string>, responses: Ma
       lane = r['jev_sent'] === true ? 'jev' : 'local';
       summary = text(r['jev_sent'] === true ? 'Jev 작업 의존 근거 선택' : r['jev_sent'] === false ? 'Jev 전송 없음' : 'Jev 전송 여부 미확인', compactSelectionReason(r['selection']));
       if (r['jev_sent'] === true) details.push(compactUsage(r));
+      if (number(r['dependencies']) !== null) choice = `${n(number(r['dependencies']))} / ${n(number(r['candidates']))}`;
       details.push(text(`후보 ${n(number(r['candidates']))}/${n(number(r['available']))}`, `필수 근거 ${n(number(r['dependencies']))}`, number(r['jev_ms']) === null ? null : `${n(number(r['jev_ms']))}ms`));
     } else summary = started ? '대화 압축 시작' : r['deferred'] ? text('호스트 압축으로 넘김', token(r['deferred'])) : r['applied'] === true ? '로컬 digest 적용 · 요약 모델 호출 대체' : text('호스트 압축 사용', token(r['fallback']), r['coreSkip'] === true ? '호스트 건너뜀' : null);
     details.push(text(`모드 ${token(r['mode']) ?? '?'}`, `트리거 ${token(r['trigger']) ?? '?'}`, r['subagent'] === true ? '서브에이전트' : '루트', `메시지 ${n(number(r['messages']))}개`));
@@ -557,6 +575,9 @@ const modStep = (row: ModRecord, now: number, closed: Set<string>, responses: Ma
   if (event === 'model_failure') { state = 'error'; lane = 'host'; summary = '호스트 모델 요청 실패'; }
   if (r['denied'] === true) { state = 'skipped'; summary = '호스트가 에이전트 생성을 거부함 · 실행되지 않음'; }
   const duration = number(r['duration_ms'] ?? (lane === 'jev' ? r['jev_ms'] : undefined));
+  const selection = field(r, 'selection');
+  const receipt = lane === 'jev' && !started && duration !== null && duration >= 0 ? jevReceipt(null, token(r['assessment'] ?? (r['stage'] === 'jev' ? r['selection'] : null)), token(r['jev_model']), field(r, 'usage'), choice,
+    number(selection?.['probability']), number(selection?.['threshold']), token(selection?.['direction'])) : undefined;
   return { id: id(`${row.component}:${row.at}:${key}:${event}:${started ? 'start' : 'result'}`), at: row.at, feature, state, lane, ...(token(r['agent_id']) ? { agentId: token(r['agent_id'])!, ...(token(r['session_id']) ? { sessionId: token(r['session_id'])! } : {}) } : {}), ...(['prepared', 'model_request', 'model_failure'].includes(event) ? { lifecycle: true as const } : {}), title: { router: event === 'prepared' ? 'Router · 요청 전달 준비' : event === 'model_request' ? '모델 · 응답 대기' : event === 'model_failure' ? '모델 · 요청 실패' : 'Router · ' + event, compact: 'Compact · 압축', output: 'Output · 로그 접기' }[feature], summary, details: details.filter(Boolean), ...(routing ? { routing } : {}), ...(model ? { model } : {}), ...(lane === 'jev' && duration !== null && duration >= 0 ? { durationMs: duration } : {}), ...(event === 'model_request' && state === 'active' ? { startedAt: row.at, elapsedMs: Math.max(0, age) } : {}) };
 };
 
@@ -668,7 +689,7 @@ const buildPart = (records: Rec[], mods: ModRecord[], now: Date): Part => {
       ...(session && prompt && source !== 'evidence' ? { executionId: id(`execution:${host}:${session}:${prompt}`) } : {}), steps: [], rank: { cls: 0, at: '', index } };
     const phase = token(r['phase']);
     if (r['attempted'] === true && ['admission_result', 'pre_result', 'interpretation_result', 'codex_router_result'].includes(phase ?? '')) {
-      const { durationMs: _duration, elapsedMs: _elapsed, judgements: _judgements, ...rest } = step;
+      const { durationMs: _duration, elapsedMs: _elapsed, judgements: _judgements, receipt: _receipt, ...rest } = step;
       const { executionPath: _executionPath, ...response } = step;
       group.steps.push({ ...response, title: step.title.replace(/ · .+$/, ' · Jev 응답'), summary: step.state === 'error' ? 'Jev 판정 실패 · 원래 호출 유지' : step.judgements?.length
         ? `${step.judgements.length}개 선택형 응답 · 코드가 정책 판정에 사용`
@@ -805,7 +826,13 @@ export const buildOperations = (records: Rec[], mods: ModRecord[], now: Date, av
   // ponytail: past ACTIVITY_CAP records in one minute only the newest ones are kept, so a burst that large would under-count.
   const recent = all.filter((s) => s.lane === 'jev' && s.durationMs !== undefined)
     .sort((a, b) => b.at.localeCompare(a.at)).filter((s, i) => i < 16 || Date.parse(s.at) >= sinceMs).slice(0, ACTIVITY_CAP).reverse().map((s) => ({ at: s.at, ms: s.durationMs! }));
-  const latency = { measured: durations.length, p50: percentile(.5), p95: percentile(.95), fastest: durations[0] ?? null, latest, recent };
+  const today: OperationsView['latency']['today'] = {}, day = now.toDateString();
+  for (const s of all) if (s.lane === 'jev' && s.durationMs !== undefined && new Date(s.at).toDateString() === day) {
+    const sum = today[s.host ?? 'claude'] ??= { calls: 0, input: 0, costUsd: 0, unpriced: 0 };
+    sum.calls++; sum.input += s.receipt?.input ?? 0;
+    if (s.receipt?.costUsd != null) sum.costUsd += s.receipt.costUsd; else sum.unpriced++;
+  }
+  const latency = { measured: durations.length, p50: percentile(.5), p95: percentile(.95), fastest: durations[0] ?? null, latest, recent, today };
   const newestFirst = (a: typeof all[number], b: typeof all[number]) => b.at.localeCompare(a.at) || b.id.localeCompare(a.id);
   // Tool and policy loops must not evict the most recent recorded Jev call for either host/feature.
   const latestJev = new Map<string, typeof all[number]>();
