@@ -172,7 +172,7 @@ describe('accounting helpers', () => {
     expect(parseUsage(undefined)).toBeNull();
   });
 
-  it('estimates tokens as Lean does: ASCII at 1.5 characters, anything else a whole token', () => {
+  it('estimates tokens at the calibrated rate: ASCII at 1.5 characters, anything else a whole token', () => {
     expect(estimateTokens('abc')).toBe(2);
     expect(estimateTokens('가나')).toBe(2);
     expect(estimateTokens('ab가')).toBe(3);

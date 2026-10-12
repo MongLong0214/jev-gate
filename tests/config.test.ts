@@ -91,6 +91,13 @@ describe('validateConfig', () => {
     expect(DEFAULT_CONFIG).not.toHaveProperty('resultConfidenceFloor');
   });
 
+  it('refuses an unknown mode from JEV_GATE_MODE, the gateMode option or a file instead of mapping it', () => {
+    const p = write('old-mode.json', { ...V5, mode: 'lean' });
+    expect(loadConfig({ JEV_GATE_CONFIG: p })).toMatchObject({ ok: false, source: p });
+    expect(loadConfig({ JEV_GATE_MODE: 'lean' })).toMatchObject({ ok: false, source: 'env' });
+    expect(loadConfig({ CLAUDE_PLUGIN_OPTION_GATEMODE: 'lean' })).toMatchObject({ ok: false, source: 'env' });
+  });
+
   it.each([
     ['V4 file', { version: 4, mode: 'auto', routeConfidenceFloor: 0.8, models: { sonnet: 'sonnet', opus: 'opus', fable: 'fable' } }],
     ['V3 file', { version: 3, mode: 'enrich', uncertainTier: 'opus' }],
@@ -107,6 +114,8 @@ describe('validateConfig', () => {
   it.each([
     ['unknown key', { version: 5, nope: 1 }, 'unknown config keys'],
     ['mode', { version: 5, mode: 'enrich2' }, 'mode must be'],
+    // A mode from an older release is refused like any unknown mode; nothing maps it to another mode.
+    ['mode from an older release', { version: 5, mode: 'lean' }, 'mode must be'],
     // The withdrawn search filter's mode: a deployed file that still sets it is refused with the reason, not crashed.
     ['withdrawn context mode', { version: 5, mode: 'context' }, 'the `context` search filter was withdrawn'],
     ['jevModel', { version: 5, jevModel: 'jev 1;rm -rf' }, 'jevModel must match'],
@@ -213,9 +222,8 @@ describe('loadConfig', () => {
   it('runs a plugin hook auto with no setup; the gateMode option and JEV_GATE_MODE override it, a file decides otherwise', () => {
     const home = join(tmp, 'nonexistent');
     const plugin = { HOME: home, CLAUDE_PLUGIN_ROOT: '/p' };
-    expect(hookDefaultMode(plugin, [])).toBe('auto');
-    expect(hookDefaultMode(plugin, ['--lean'])).toBe('off');
-    expect(hookDefaultMode({ HOME: home }, [])).toBe('off');
+    expect(hookDefaultMode(plugin)).toBe('auto');
+    expect(hookDefaultMode({ HOME: home })).toBe('off');
     expect(loadConfig(plugin)).toEqual({ ok: true, config: DEFAULT_CONFIG, source: 'defaults' });
     expect(loadConfig(plugin, undefined, 'auto')).toEqual({ ok: true, config: { ...DEFAULT_CONFIG, mode: 'auto' }, source: 'defaults' });
     expect(loadConfig({ ...plugin, CLAUDE_PLUGIN_OPTION_GATEMODE: 'off' }, undefined, 'auto')).toMatchObject({ ok: true, source: 'env:off' });
@@ -232,30 +240,28 @@ describe('gateMode precedence when the plugin option is unset (#96)', () => {
   // Stub env. An absent CLAUDE_PLUGIN_OPTION_GATEMODE is the resolver input, not evidence that a host omits it.
   const home = join(tmp, 'nonexistent-96');
   const plugin = { HOME: home, CLAUDE_PLUGIN_ROOT: '/plugin' };
-  const legacyArgv = ['node', 'entry.js'];
-  const leanArgv = ['node', 'entry.js', '--lean'];
   const file = (mode: string): string => write(`p96-${mode}.json`, { ...V5, mode });
   const unread = (): string => {
     throw new Error('config must not be read');
   };
 
   it('keeps the file mode when the plugin option is unset', () => {
-    for (const mode of ['off', 'native', 'lean']) {
+    for (const mode of ['off', 'native']) {
       const path = file(mode);
       const env = { ...plugin, JEV_GATE_CONFIG: path };
-      expect(loadConfig(env, undefined, hookDefaultMode(env, legacyArgv))).toMatchObject({ ok: true, config: { mode }, source: path });
+      expect(loadConfig(env, undefined, hookDefaultMode(env))).toMatchObject({ ok: true, config: { mode }, source: path });
     }
   });
 
   it('stays auto for a legacy plugin hook with no file and no plugin option', () => {
-    expect(hookDefaultMode(plugin, legacyArgv)).toBe('auto');
-    expect(loadConfig(plugin, undefined, hookDefaultMode(plugin, legacyArgv))).toEqual({ ok: true, config: { ...DEFAULT_CONFIG, mode: 'auto' }, source: 'defaults' });
+    expect(hookDefaultMode(plugin)).toBe('auto');
+    expect(loadConfig(plugin, undefined, hookDefaultMode(plugin))).toEqual({ ok: true, config: { ...DEFAULT_CONFIG, mode: 'auto' }, source: 'defaults' });
   });
 
   it('lets an explicit plugin auto override a file off', () => {
     const path = file('off');
     const env = { ...plugin, JEV_GATE_CONFIG: path, CLAUDE_PLUGIN_OPTION_GATEMODE: 'auto' };
-    expect(loadConfig(env, undefined, hookDefaultMode(env, legacyArgv))).toMatchObject({ ok: true, config: { mode: 'auto' }, source: path });
+    expect(loadConfig(env, undefined, hookDefaultMode(env))).toMatchObject({ ok: true, config: { mode: 'auto' }, source: path });
   });
 
   it('keeps the off fast path for an explicit plugin off before an unreadable config', () => {
@@ -280,18 +286,14 @@ describe('gateMode precedence when the plugin option is unset (#96)', () => {
     expect(loadConfig(env, undefined, 'auto')).toMatchObject({ ok: true, config: { mode: 'native' }, source: path });
   });
 
-  it('stays off for --lean, doctor, and a bare node when nothing overrides and no file exists', () => {
-    expect(hookDefaultMode(plugin, leanArgv)).toBe('off');
-    expect(loadConfig(plugin, undefined, hookDefaultMode(plugin, leanArgv))).toEqual({ ok: true, config: DEFAULT_CONFIG, source: 'defaults' });
+  it('stays off for doctor and a bare node when nothing overrides and no file exists', () => {
     // doctor and a bare node call loadConfig without hookDefaultMode, so a plugin root alone does not select auto.
     expect(loadConfig(plugin)).toEqual({ ok: true, config: DEFAULT_CONFIG, source: 'defaults' });
     expect(loadConfig({ HOME: home })).toEqual({ ok: true, config: DEFAULT_CONFIG, source: 'defaults' });
   });
 
-  it('follows a valid config file for --lean and for doctor', () => {
+  it('follows a valid config file for doctor', () => {
     const path = file('native');
-    const lean = { ...plugin, JEV_GATE_CONFIG: path };
-    expect(loadConfig(lean, undefined, hookDefaultMode(lean, leanArgv))).toMatchObject({ ok: true, config: { mode: 'native' }, source: path });
     expect(loadConfig({ HOME: home, JEV_GATE_CONFIG: path })).toMatchObject({ ok: true, config: { mode: 'native' }, source: path });
   });
 

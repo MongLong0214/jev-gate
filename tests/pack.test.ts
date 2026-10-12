@@ -23,12 +23,13 @@ const INSTALL_DOCS = [
   'plugins/evidence/README.md',
   'plugins/codex/README.md',
   'mods/compact/README.md',
-  'mods/output/README.md',
   'mods/router/README.md',
   'assets/readme/jev-gate-logo.svg',
   'assets/readme/jev-gate-logo-dark.svg',
   'assets/readme/results.svg',
   'assets/readme/results-dark.svg',
+  'assets/readme/dashboard.svg',
+  'assets/readme/dashboard-dark.svg',
 ];
 
 const relativeReadmeLinks = (markdown: string): string[] => {
@@ -87,14 +88,15 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     const archive = readdirSync(outDir).find((f) => /^jev-gate-.*\.zip$/.test(f));
     expect(archive).toBeDefined();
     const list = spawnSync('unzip', ['-Z1', join(outDir, archive!)], { encoding: 'utf8' }).stdout.trim().split('\n');
-    const agents = ['worker-fast', 'worker', 'worker-deep', 'worker-frontier', 'planner', 'planner-frontier', 'executor'].map((a) => `agents/${a}.md`);
+    const agents = ['worker-fast', 'worker', 'worker-deep', 'worker-frontier', 'planner', 'planner-frontier'].map((a) => `agents/${a}.md`);
     for (const must of ['dist/entry.js', 'dist/hook.js', 'dist/jev.js', 'dist/brief.js', 'dist/cli.js', 'dist/job.js', 'dist/plan.js', 'hooks/hooks.json', ...agents, '.claude-plugin/plugin.json', ...INSTALL_DOCS]) expect(list, must).toContain(must);
+    expect(list.filter((f) => f.startsWith('agents/'))).toEqual([...agents].sort());
     expect(list.some((f) => f.startsWith('src/') && !/^src\/(?:cost|provider-prices(?:-data)?|route-cost|claude-cache|frontier-routing|router-(?:answers|selection|context|child-context|secret)|claude-(?:models|candidates))\.ts$/.test(f) || f.includes('/tests/') || f.startsWith('tests/') || f.startsWith('node_modules/') || f.startsWith('bench/') && f !== 'bench/ab/tasks.example.json' || f === 'HANDOFF.md' || f.includes('.env') && !f.endsWith('.env.example'))).toBe(false);
-    // v0.6.0: the one plugin carries the three Mods from their source, the module that loads them, and the evidence
+    // v0.6.0: the one plugin carries the two Mods from their source, the module that loads them, and the evidence
     // server with its skill, at the paths plugin.json and hooks/register.ts name; no Mod manifest, test or declaration.
     // #95 adds the feature READMEs beside that source, not the Mod tests.
-    for (const must of ['hooks/register.ts', 'mods/compact/hooks/register.ts', 'mods/output/hooks/filter.ts', 'mods/router/hooks/router.ts', 'plugins/evidence/dist/server.mjs', 'plugins/evidence/skills/evidence/SKILL.md']) expect(list, must).toContain(must);
-    expect(list.filter((f) => f.startsWith('mods/') && !/^mods\/(compact|output|router)\/(?:hooks\/[a-z-]+\.ts|README\.md)$/.test(f))).toEqual([]);
+    for (const must of ['hooks/register.ts', 'mods/compact/hooks/register.ts', 'mods/router/hooks/router.ts', 'plugins/evidence/dist/server.mjs', 'plugins/evidence/skills/evidence/SKILL.md']) expect(list, must).toContain(must);
+    expect(list.filter((f) => f.startsWith('mods/') && !/^mods\/(compact|router)\/(?:hooks\/[a-z-]+\.ts|README\.md)$/.test(f))).toEqual([]);
     expect(list.filter((f) => f.startsWith('plugins/'))).toEqual(['plugins/codex/README.md', 'plugins/evidence/README.md', 'plugins/evidence/dist/server.mjs', 'plugins/evidence/skills/evidence/SKILL.md']);
 
     const dest = join(tmp, 'installed here', 'jev gate');
@@ -142,7 +144,7 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     // #48 P2: SessionStart is the sixth registered event, wired to the same dist/entry.js command.
     expect(doctor.stdout).toMatch(/hooks\.json SessionStart \(no matcher\): 1 command hook/);
     for (const agent of agents) expect(existsSync(join(dest, agent)), agent).toBe(true);
-    // v0.3.0 shipped without agents/executor.md and doctor failed on the installed archive; the lines above only
+    // v0.3.0 shipped without an agent file doctor requires and doctor failed on the installed archive; the lines above only
     // sampled its output. With the host able to run Agent calls in the foreground, doctor on the archive fails nothing.
     const whole = spawnSync(process.execPath, [join(dest, 'dist', 'cli.js'), 'doctor', '--verbose'], {
       cwd: otherCwd,
@@ -151,49 +153,6 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     });
     expect(whole.stdout.split('\n').filter((l) => l.startsWith('[fail]'))).toEqual([]);
     expect(whole.status).toBe(0);
-  }, 60_000);
-
-  it('packs a lean profile with one executor, the lean hook set and no stale compiled modules', () => {
-    const outDir = join(tmp, 'pack lean out');
-    const otherCwd = join(tmp, 'other lean cwd');
-    mkdirSync(otherCwd, { recursive: true });
-    const pack = spawnSync(process.execPath, [join(root, 'scripts', 'pack.mjs'), outDir, '--root', pluginRoot, '--profile', 'lean'], { cwd: otherCwd, encoding: 'utf8' });
-    expect(pack.status, pack.stderr).toBe(0);
-    const archive = readdirSync(outDir).find((f) => /^jev-gate-lean-.*\.zip$/.test(f));
-    expect(archive).toBeDefined();
-    const list = spawnSync('unzip', ['-Z1', join(outDir, archive!)], { encoding: 'utf8' }).stdout.trim().split('\n');
-    expect(list.filter((f) => f.startsWith('agents/') && f.endsWith('.md'))).toEqual(['agents/executor.md']);
-    for (const must of ['dist/entry.js', 'dist/hook.js', 'dist/lean.js', 'dist/lean-source.js', 'hooks/hooks.json', '.claude-plugin/plugin.json', ...INSTALL_DOCS]) expect(list, must).toContain(must);
-    // The build clears dist, so a module deleted from src cannot reappear in an archive.
-    expect(list).not.toContain('dist/context.js');
-    expect(list.some((f) => f.startsWith('src/') || f.startsWith('tests/') || f.startsWith('bench/') && f !== 'bench/ab/tasks.example.json')).toBe(false);
-    // No Mod is loaded: register.ts and hook sources stay out. The shared README's feature docs are files only (#95).
-    expect(list.filter((f) => f.startsWith('mods/') || f === 'hooks/register.ts')).toEqual(['mods/compact/README.md', 'mods/output/README.md', 'mods/router/README.md']);
-    expect(list.filter((f) => f.startsWith('plugins/'))).toEqual(['plugins/codex/README.md', 'plugins/evidence/README.md', 'plugins/evidence/dist/server.mjs', 'plugins/evidence/skills/evidence/SKILL.md']);
-
-    const dest = join(tmp, 'lean installed', 'jev gate');
-    mkdirSync(dest, { recursive: true });
-    expect(spawnSync('unzip', ['-q', join(outDir, archive!), '-d', dest], { encoding: 'utf8' }).status).toBe(0);
-    expectInstallDocs(dest);
-    const env = { PATH: process.env['PATH'] ?? '', HOME: join(tmp, 'lean home'), JEV_GATE_MODE: 'lean' };
-    const leanConfig = join(tmp, 'lean-doctor-config.json');
-    writeFileSync(leanConfig, JSON.stringify({ version: 5, mode: 'lean', delegationDepthFloor: 300000 }));
-    const diagnosis = spawnSync(process.execPath, [join(dest, 'dist/cli.js'), 'doctor', '--json'], { cwd: otherCwd, encoding: 'utf8', env: { ...env, PATH: '/nonexistent', JEV_GATE_CONFIG: leanConfig, CLAUDE_CODE_AUTO_COMPACT_WINDOW: '200000', CLAUDE_CODE_FORK_SUBAGENT: '0' } });
-    expect(diagnosis.status, diagnosis.stdout + diagnosis.stderr).toBe(0);
-    const report = JSON.parse(diagnosis.stdout);
-    expect(report.checks.filter((c: {group:string;level:string}) => c.group === 'package' && c.level === 'fail')).toEqual([]);
-    expect(report.models.compatibility).toEqual([]);
-    expect(report.checks.some((c: {message:string}) => c.message.includes('effective depth floor'))).toBe(false);
-    expect(report.models.source).toContain('Lean');
-    // No key: the installed lean entrypoint reads no source, sends nothing and prints nothing.
-    const quiet = spawnSync(process.execPath, [join(dest, 'dist', 'hook.js'), '--lean'], { cwd: otherCwd, encoding: 'utf8', env, input: JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 's', prompt_id: 'p', prompt: 'add a test' }) });
-    expect(quiet).toMatchObject({ status: 0, stdout: '', stderr: 'jev-gate: key_missing\n' });
-    // A legacy mode under the lean artifact is diagnosed, not turned into a guard for roles it does not ship.
-    const mismatch = spawnSync(process.execPath, [join(dest, 'dist', 'hook.js'), '--lean'], { cwd: otherCwd, encoding: 'utf8', env: { ...env, JEV_GATE_MODE: 'auto' }, input: JSON.stringify({ hook_event_name: 'PreToolUse', session_id: 's', tool_use_id: 't', tool_name: 'Bash', tool_input: { command: 'ls' } }) });
-    expect(mismatch).toMatchObject({ status: 0, stdout: '', stderr: 'jev-gate: profile_mode_mismatch\n' });
-    // #48 P2: lean.json's real command is dist/entry.js --lean; this is the one lean check that goes through it.
-    const quietViaEntry = spawnSync(process.execPath, [join(dest, 'dist', 'entry.js'), '--lean'], { cwd: otherCwd, encoding: 'utf8', env, input: JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 's', prompt_id: 'p', prompt: 'add a test' }) });
-    expect(quietViaEntry).toMatchObject({ status: 0, stdout: '', stderr: 'jev-gate: key_missing\n' });
   }, 60_000);
 
   it('packs the same bytes every time, whatever the timestamps of its files', () => {
@@ -215,7 +174,7 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     for (const row of rows) expect(row).toMatch(/ stor 80-Jan-01 00:00 /);
   });
 
-  it('packs the router Mod from its source, at its own version, with nothing of Lean or legacy', () => {
+  it('packs the router Mod from its source, at its own version, with nothing of legacy', () => {
     const outDir = join(tmp, 'pack router out');
     const otherCwd = join(tmp, 'other router cwd');
     mkdirSync(otherCwd, { recursive: true });
@@ -228,7 +187,7 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     const modules = readdirSync(join(root, 'mods', 'router', 'hooks')).filter((n) => n.endsWith('.ts'));
     const files = list.filter((f) => !f.endsWith('/')).sort();
     expect(files).toEqual(['.claude-plugin/plugin.json', 'README.md', 'hooks/hooks.json', ...modules.map((n) => `hooks/${n}`), ...['cost','provider-prices','provider-prices-data','route-cost','claude-cache','router-answers','router-selection','router-context','router-child-context','router-secret','claude-models','claude-candidates','frontier-routing'].map(n => `src/${n}.ts`)].sort());
-    // Declarations, host tests, compiled Lean and the executor stay out: Router-only exposes no Lean executor or history reader.
+    // Declarations, host tests, compiled modules and agents stay out.
     expect(list.some((f) => /^(types|tests|dist|agents)\//.test(f))).toBe(false);
     const dest = join(tmp, 'router installed', 'jev router');
     mkdirSync(dest, { recursive: true });

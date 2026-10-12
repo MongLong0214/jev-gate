@@ -19,7 +19,7 @@ node dist/bench/report.js --run /outside/repo/run-1                             
 **Spend stop.** `--max-cost-usd <dollars>` stops a run on its spend, not only on its session count. Before each cell
 starts, the runner sums the complete cost of every cell it has already run, read back from that cell's `cell.json`
 through the report's own row view (Claude plus every Jev producer), and starts no further cell once the sum reaches
-the cap. A cell whose complete cost is unknown (no result, a timeout, an unread Router log) stops the run too: an
+the cap. A cell whose complete cost is unknown (no result, a timeout, unread Router records) stops the run too: an
 unknown is not a zero, and the cap may already be passed. Cells that do not start keep their rows, with
 `not_started_reason` `max_cost_reached` or `cost_unknown`, and `summary.json` records `spend: {max_cost_usd, known_usd,
 unknown_cell, stopped}`. A primed session that stopped before its last turn reported a result counts as unknown too:
@@ -31,7 +31,7 @@ up, so rows that add up to the cap reach it rather than falling a float rounding
 
 ## Router arms (#45)
 
-`--arms router` selects exactly three arms, not mixed into the default set or `lean`:
+`--arms router` selects exactly three arms, not mixed into the default set:
 
 - `router_native` — plain host, no plugin: the frontier root (`--frontier-model`) at `--base-effort`. This is the
   session the Router is meant to make cheaper, so it is ordinary Claude as the owner runs it, not a Sonnet session
@@ -56,28 +56,26 @@ node dist/bench/run.js --cases bench/cases.json --out /outside/repo/run-2 \
 
 The `router` arm launches with `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`, `--plugin-dir <out>/inputs/router-plugin`, a
 per-cell `--settings <cell dir>/router-settings.json`
-(`{"pluginConfigs":{"jev-gate-router@inline":{"options":{"enabled":true,"logDecisions":true}}}}`) and `--debug-file
-<cell dir>/router-debug.log`. The TypeSafe key never goes in that file — it reaches the plugin only through the
-`TYPESAFE_API_KEY` env var. All four flags (`--plugin-dir`, `--settings`, `--debug-file`, `--effort`) are verified
+(`{"pluginConfigs":{"jev-gate-router@inline":{"options":{"enabled":true,"logDecisions":true}}}}`) and a per-cell
+`JEV_GATE_TRACE_DIR` that receives the Router's decision records. The TypeSafe key never goes in that file — it reaches
+the plugin only through the `TYPESAFE_API_KEY` env var. The flags (`--plugin-dir`, `--settings`, `--effort`) are verified
 against `claude --help` on Claude Code 2.1.283. The Router options and both efforts are frozen in the plan's
-`cli.router_policy` before anything executes, the same convention as `lean_packet_policy`. The Router runs from source,
+`cli.router_policy` before anything executes. The Router runs from source,
 so the source is frozen too: `mods/router` is copied to `<out>/inputs/router-plugin` before the first cell, with its
 hash in `frozen_inputs.router_sha256`, and every Router cell loads that copy.
 
-**What is ingested.** The runner parses `jev-router {json}` lines out of each cell's `router-debug.log` (any other
-debug line, and a malformed or truncated last line, is tolerated and counted in `unparsable_lines` rather than
-dropped silently or failing the cell). It keeps, per cell: every root step's assessed/proposed/applied/observed
+**What is ingested.** The runner reads the `mod_router-*.json` records in each cell's trace directory (a record that
+does not parse is counted in `unparsable_lines` rather than dropped silently or failing the cell). It keeps, per cell: every root step's assessed/proposed/applied/observed
 model and effort with skip and stop reasons and their counts, every spawn's requested/resolved model, denial and
 `model_mismatch` count, and the Router's own Jev request usage (`jev_attempts`, `jev_responses_known`,
-`jev_input_tokens`, `jev_cost_usd`) — a **third** cost producer alongside the legacy gate and Lean, summed once and
-never double-counted.
+`jev_input_tokens`, `jev_cost_usd`) — a second cost producer alongside the legacy gate, summed once and never
+double-counted.
 
-**What stays unknown.** The Router's Jev usage is carried on its `root`/`spawn`/`late` debug-log records only when the
+**What stays unknown.** The Router's Jev usage is carried on its `root`/`spawn`/`late` records only when the
 Jev HTTP response body itself included a `usage` object (`mods/router/hooks/client.ts`'s `parseUsage`) — it is never
-invented when absent. A Router cell whose complete log shows no Jev request reports a **known** zero. Its total is
-**unknown**, not zero, when a sent request's usage never arrived, when the log is missing or unreadable, when a Router
-line did not parse, when the log's last line has no closing newline (a write cut short, which may be too short even
-to carry the `jev-router ` prefix), when the session ended by the timeout or a cancel, or when the report reads a
+invented when absent. A Router cell whose complete records show no Jev request reports a **known** zero. Its total is
+**unknown**, not zero, when a sent request's usage never arrived, when the trace directory is missing or unreadable, when a Router
+record did not parse, when the session ended by the timeout or a cancel, or when the report reads a
 Router cell the runner never ingested. The known part is kept as a subtotal, and any such cell shows the Router table
 on its own, with no activity to count.
 `root_result`'s own `usage` field is the *routed Claude call's* token counts (never priced as Jev cost) — kept only as a
@@ -88,8 +86,5 @@ host outside this bench (`bench/results/host-obs-2026-09-27/`, `HANDOFF.md`). No
 though: nothing here executes anything, so the Router table in the report still carries only a mechanism/cost reading of
 whatever a real `--execute` run captures — there is no savings headline for these arms.
 
-Also new in PR #49: the host's debug log redacts the value of any key containing "token" to a bare `[REDACTED]`,
-which breaks JSON parsing outright, so the Router logs `input`/`output`/`cache_read`/`cache_creation` instead of the
-`_tokens`-suffixed names. `ingestRouterLog` reads the new names and treats a `[REDACTED]` line as unparsable JSON
-(counted in `unparsable_lines`), never as zero usage; the old key names are still read as a fallback for a line that
-happens to parse as JSON under them, which a genuinely redacted line never does.
+Also new in PR #49: the Router records `input`/`output`/`cache_read`/`cache_creation` instead of the
+`_tokens`-suffixed names. `ingestRouterRecords` reads the new names; the old key names are still read as a fallback.

@@ -27,7 +27,7 @@ describe('credit exhaustion', () => {
   const credit = (...rows: Array<[string, string, boolean]>) => {
     const trace = make();
     rows.forEach(([assessment, at, sent], i) => write(trace, `r${i}.json`, { phase: 'mod_router', session_id: 's', event: 'root', turn: `t${i}`, sent, assessment, written_at: at }));
-    return loadActivity({ traceDir: trace, debugDir: null, env: { HOME: make() } }).credit;
+    return loadActivity({ traceDir: trace, env: { HOME: make() } }).credit;
   };
   it('flags a 402 and keeps the flag through refused follow-ups until a request succeeds', () => {
     expect(credit(['payment_required', '2026-10-07T05:00:00.000Z', true]).exhausted).toBe(true);
@@ -37,7 +37,7 @@ describe('credit exhaustion', () => {
   });
   it('shows the alert in the page only when the snapshot says so', () => {
     expect(DASHBOARD_PAGE).toContain('id="credit"');
-    expect(DASHBOARD_PAGE).toContain("$('credit').hidden=!credit?.exhausted");
+    expect(DASHBOARD_PAGE).toContain("c.className='credit'+(credit?.exhausted?' er':'')");
   });
 });
 
@@ -49,7 +49,7 @@ describe('loadActivity', () => {
       ['other', { event: 'prepared', tool_use_id: 'other', scope: 'spawn', written_at: '2026-10-07T05:27:20.000Z' }],
       ['response', { event: 'spawn_native_result', tool_use_id: 'tool', agent_id: 'agent', requested: 'claude-opus-5-5', observed: 'claude-opus-5-5', confirmation: 'confirmed', written_at: '2026-10-07T05:27:21.000Z' }],
     ] as const) write(trace, name + '.json', { phase: 'mod_router', session_id: 's', ...fields });
-    const s = loadActivity({ traceDir: trace, debugDir: null, env: { HOME: make() } });
+    const s = loadActivity({ traceDir: trace, env: { HOME: make() } });
     const prepared = s.operations.runs.flatMap(r => r.steps).filter(t => t.title === 'Router · 요청 전달 준비');
     expect(prepared.map(t => t.state).sort()).toEqual(['done', 'unconfirmed']);
   });
@@ -58,7 +58,7 @@ describe('loadActivity', () => {
     write(trace, 'deny.json', { phase: 'dispatch_denied', session_id: 's', reason: 'workers_active', written_at: '2026-10-07T05:27:20.000Z' });
     write(trace, 'start.json', { phase: 'worktree_start', session_id: 's', request_id: 'w', written_at: '2026-10-07T05:27:20.000Z' });
     write(trace, 'result.json', { phase: 'worktree_result', session_id: 's', request_id: 'w', ok: true, written_at: '2026-10-07T05:27:21.000Z' });
-    const s = loadActivity({ traceDir: trace, debugDir: null, env: { HOME: make() } });
+    const s = loadActivity({ traceDir: trace, env: { HOME: make() } });
     const steps = s.operations.runs.flatMap(r => r.steps);
     expect(steps.find(t => t.title === 'Agent 호출 거절')).toMatchObject({ state: 'skipped', lane: 'policy', summary: '기존 워커 종료 대기 · 재계획 거절' });
     expect(steps.find(t => t.title === 'Worktree · 생성 시작')).toMatchObject({ state: 'done', lane: 'local' });
@@ -66,7 +66,6 @@ describe('loadActivity', () => {
   });
   it('says a Gate A call stayed direct, and drops prompt text and keys', () => {
     const trace = make();
-    const debug = make();
     write(trace, 'admission_result-1.json', {
       phase: 'admission_result',
       written_at: '2026-09-29T05:40:48.363Z',
@@ -78,12 +77,11 @@ describe('loadActivity', () => {
       decision: { shape: 'direct', reason: 'admission_not_worth' },
       estimate: { turns: 13.9, saving_tokens: -187992 },
     });
-    writeFileSync(
-      join(debug, 'session.txt'),
-      `2026-09-28T03:09:41.216Z [DEBUG] jev-router ${JSON.stringify({ event: 'router', key: 'sk-live-secret-value', root_effort: true })}\n` +
-        `2026-09-28T03:09:42.000Z [DEBUG] jev-router ${JSON.stringify({ event: 'root', sent: true, from: { model: 'claude-sonnet-5', effort: 'xhigh' }, patch: { effort: 'low' }, reasons: { model: 'not_asked', effort: 'applied' }, usage: { input: 941, output: 105 }, prompt: 'SUPER_SECRET_PROMPT_TEXT' })}\n`,
-    );
-    const snap = loadActivity({ traceDir: trace, debugDir: debug, env: { JEV_GATE_STATE_DIR: make() }, now: new Date('2026-09-29T06:00:00.000Z') });
+    const mod = (name: string, at: string, fields: Record<string, unknown>): void =>
+      write(trace, name, { ...fields, host: 'claude', session_id: 's1', phase: 'mod_router', version: 5, invocation_id: name, written_at: at });
+    mod('mod_router-1.json', '2026-09-28T03:09:41.216Z', { event: 'router', key: 'sk-live-secret-value', root_effort: true });
+    mod('mod_router-2.json', '2026-09-28T03:09:42.000Z', { event: 'root', sent: true, from: { model: 'claude-sonnet-5', effort: 'xhigh' }, patch: { effort: 'low' }, reasons: { model: 'not_asked', effort: 'applied' }, usage: { input: 941, output: 105 }, prompt: 'SUPER_SECRET_PROMPT_TEXT' });
+    const snap = loadActivity({ traceDir: trace, env: { JEV_GATE_STATE_DIR: make() }, now: new Date('2026-09-29T06:00:00.000Z') });
     const raw = JSON.stringify(snap);
     expect(raw).not.toContain('SUPER_SECRET_PROMPT_TEXT');
     expect(raw).not.toContain('sk-live');
@@ -109,7 +107,7 @@ describe('loadActivity', () => {
     const link = join(linkParent, 'trace');
     write(real, 'admission_result-1.json', { phase: 'admission_result', written_at: '2026-09-29T00:00:00.000Z', attempted: true, decision: { shape: 'orchestrated', reason: null } });
     symlinkSync(real, link);
-    const snap = loadActivity({ traceDir: link, debugDir: null, env: { JEV_GATE_STATE_DIR: make() } });
+    const snap = loadActivity({ traceDir: link, env: { JEV_GATE_STATE_DIR: make() } });
     expect(snap.traceFiles).toBe(0);
     expect(snap.jevCalls).toBe(0);
     expect(snap.notes.some((n) => n.includes('심볼릭 링크'))).toBe(true);
@@ -119,7 +117,7 @@ describe('loadActivity', () => {
   it('does not label configured but unreadable record sources as waiting', () => {
     const parent = make();
     const missing = join(parent, 'missing');
-    const snap = loadActivity({ traceDir: missing, debugDir: missing, env: { JEV_GATE_STATE_DIR: make() } });
+    const snap = loadActivity({ traceDir: missing, env: { JEV_GATE_STATE_DIR: make() } });
     expect(snap.operations.features.every((f) => f.state === 'unavailable')).toBe(true);
   });
 
@@ -134,7 +132,7 @@ describe('loadActivity', () => {
       prompt_id: 'p1',
       prompt: 'SUPER_SECRET_PROMPT_TEXT',
     });
-    const open = loadActivity({ traceDir: trace, debugDir: null, env, now: new Date('2026-09-29T06:00:00.000Z') });
+    const open = loadActivity({ traceDir: trace, env, now: new Date('2026-09-29T06:00:00.000Z') });
     expect(open.live.mode).toBe('working');
     expect(open.live.headline).toBe('Jev에 묻는 중');
     expect(open.live.stage).toBe('게이트 A');
@@ -150,7 +148,7 @@ describe('loadActivity', () => {
       session_id: 'sess',
       prompt_id: 'old',
     });
-    const stale = loadActivity({ traceDir: trace, debugDir: null, env, now: new Date('2026-09-29T06:00:00.000Z') });
+    const stale = loadActivity({ traceDir: trace, env, now: new Date('2026-09-29T06:00:00.000Z') });
     const old = stale.live.earlier.find((row) => row.detail.includes('응답 기록이 없습니다'));
     expect(old).toBeTruthy();
 
@@ -166,7 +164,7 @@ describe('loadActivity', () => {
       jev: { model: 'jev-1.13.0', usage: { input_tokens: 10, output_tokens: 4 } },
       decision: { shape: 'direct', reason: 'admission_not_worth' },
     });
-    const shut = loadActivity({ traceDir: trace, debugDir: null, env, now: new Date('2026-09-29T06:00:01.000Z') });
+    const shut = loadActivity({ traceDir: trace, env, now: new Date('2026-09-29T06:00:01.000Z') });
     expect(shut.live.mode).toBe('waiting');
     expect(shut.live.steps).toHaveLength(1);
     expect(shut.live.steps[0]?.state).toBe('done');
@@ -180,7 +178,7 @@ describe('loadActivity', () => {
     write(trace, 'result_intent-1.json', { ...base, phase: 'result_intent', request_id: 'r1', written_at: '2026-09-29T05:59:58.000Z' });
     write(trace, 'result_result-1.json', { ...base, phase: 'result_result', request_id: 'r1', attempted: true, decision: { verdict: 'rework', applied: false }, written_at: '2026-09-29T05:59:58.500Z' });
     write(trace, 'post-1.json', { ...base, phase: 'post', verdict: 'accept', advisory: 'rework', written_at: '2026-09-29T05:59:59.000Z' });
-    const snap = loadActivity({ traceDir: trace, debugDir: null, env: { JEV_GATE_STATE_DIR: make() }, now: new Date('2026-09-29T06:00:00.000Z') });
+    const snap = loadActivity({ traceDir: trace, env: { JEV_GATE_STATE_DIR: make() }, now: new Date('2026-09-29T06:00:00.000Z') });
     expect(snap.traceFiles).toBe(3);
     expect(snap.events.find((e) => e.title === '워커 결과')?.used).toContain('워커 보고 accept');
     expect(JSON.stringify(snap)).not.toContain('rework');
@@ -190,7 +188,7 @@ describe('loadActivity', () => {
 
 describe('dashboard server', () => {
   it('releases its listening port before an authenticated shutdown response permits a replacement', async () => {
-    const sources = { traceDir: null, debugDir: null, env: { HOME: make(), JEV_GATE_STATE_DIR: make() } };
+    const sources = { traceDir: null, env: { HOME: make(), JEV_GATE_STATE_DIR: make() } };
     const token = 'a'.repeat(32);
     const first = await startDashboard(sources, 0, { token });
     let replacement: Awaited<ReturnType<typeof startDashboard>> | undefined;
@@ -206,18 +204,18 @@ describe('dashboard server', () => {
     }
   });
   it.each(['ko', 'en'])('renders unknown and mismatched versions without interrupting live rendering (%s)', lang => {
-    const functions = DASHBOARD_PAGE.split('\n').filter(line => line.startsWith('function versionLine(') || line.startsWith('function versionState(')).join('\n');
-    const render = (version: { running: string; installed: string | null }) => runInNewContext(`${functions}\nversionLine(version)`, {
-      lang, version, label: (ko: string, en: string) => lang === 'ko' ? ko : en,
-      el: (_tag: string, _className: string, text: string) => ({ textContent: text, style: {} }),
-    }) as Array<{ textContent: string }>;
+    const functions = DASHBOARD_PAGE.split('\n').filter(line => line.startsWith('function showVersion(') || line.startsWith('function versionState(')).join('\n');
+    const render = (version: { running: string; installed: string | null }) => {
+      const badge = { dataset: {} as Record<string, string>, hidden: true, textContent: '', title: '' };
+      runInNewContext(`${functions}\nshowVersion(version)`, { lang, version, $: () => badge, date: (s: string) => s, label: (ko: string, en: string) => lang === 'ko' ? ko : en });
+      return badge;
+    };
     const unknown = render({ running: '0.7.1', installed: null });
-    expect(unknown[0]!.textContent).toBe(lang === 'ko'
-      ? '대시보드 v0.7.1 · 설치된 Claude 플러그인 확인 불가' : 'Dashboard v0.7.1 · Installed Claude plugin unknown');
-    expect(unknown[1]!.textContent).toContain(lang === 'ko' ? '최신 여부 미확인' : 'Update status unknown');
+    expect(unknown.hidden).toBe(false); expect(unknown.textContent).toBe(lang === 'ko' ? 'v0.7.1 · 최신 여부 미확인' : 'v0.7.1 · Update status unknown');
+    expect(unknown.title).toContain(lang === 'ko' ? '설치된 Claude 플러그인: 미확인' : 'Installed Claude plugin: unknown');
     const mismatch = render({ running: '0.7.0', installed: '0.7.1' });
-    expect(mismatch[1]!.textContent).toContain(lang === 'ko' ? '설치 버전 다름' : 'Installed version differs');
-    expect(mismatch[2]!.textContent).toContain(lang === 'ko' ? '기존 세션은 이전 훅' : 'Existing sessions can retain older hooks');
+    expect(mismatch.textContent).toContain(lang === 'ko' ? '설치 버전 다름' : 'Installed version differs');
+    expect(mismatch.title).toContain(lang === 'ko' ? '기존 세션은 이전 훅' : 'Existing sessions can retain older hooks');
   });
 
   it('notifies connected clients when only the installed plugin version changes', async () => {
@@ -226,7 +224,7 @@ describe('dashboard server', () => {
     const set = (version: string): void => writeFileSync(registry, JSON.stringify({ plugins: { 'jev-gate@jev-gate': [{ version }] } }));
     set('0.7.0');
     expect(readVersions({ HOME: home }, 'codex').installed).toBeNull();
-    const server = await startDashboard({ traceDir: null, debugDir: null, env: { HOME: home, JEV_GATE_STATE_DIR: make() } }, 0);
+    const server = await startDashboard({ traceDir: null, env: { HOME: home, JEV_GATE_STATE_DIR: make() } }, 0);
     const response = await fetch(`${server.url}api/live`); const reader = response.body!.getReader();
     const read = async (): Promise<{ version: { running: string; installed: string } }> => {
       const chunk = await Promise.race([reader.read(), new Promise<never>((_, reject) => setTimeout(() => reject(new Error('version SSE timed out')), 2500))]);
@@ -242,8 +240,7 @@ describe('dashboard server', () => {
 
   it('pushes a Compact event even when the legacy single-turn signature is unchanged', async () => {
     const trace = make();
-    const debug = make();
-    const server = await startDashboard({ traceDir: trace, debugDir: debug, env: { HOME: make(), JEV_GATE_STATE_DIR: make() } }, 0);
+    const server = await startDashboard({ traceDir: trace, env: { HOME: make(), JEV_GATE_STATE_DIR: make() } }, 0);
     const response = await fetch(`${server.url}api/live`);
     const reader = response.body!.getReader();
     const read = async (): Promise<{ live: { sig: string }; operations: { features: Array<{ id: string; count: number }> } }> => {
@@ -261,7 +258,7 @@ describe('dashboard server', () => {
     };
     try {
       const first = await read();
-      writeFileSync(join(debug, 'host.log'), `${new Date().toISOString()} [DEBUG] jev-compact ${JSON.stringify({ event: 'compact', run_id: 'live-1', mode: 'active', stage: 'started' })}\n`);
+      write(trace, 'mod_compact-1.json', { event: 'compact', run_id: 'live-1', mode: 'active', stage: 'started', host: 'claude', session_id: 's1', phase: 'mod_compact', version: 5, invocation_id: 'c1', written_at: new Date().toISOString() });
       const changed = await read();
       expect(changed.live.sig).toBe(first.live.sig);
       expect(changed.operations.features.find((f) => f.id === 'compact')?.count).toBe(1);
@@ -275,12 +272,12 @@ describe('dashboard server', () => {
     const trace = make();
     write(trace, 'stop-1.json', { phase: 'stop', written_at: '2026-09-29T01:00:00.000Z', outcome: 'incomplete' });
     write(trace, 'stop-2.json', { phase: 'stop', written_at: '2026-09-29T02:00:00.000Z', outcome: 'completed' });
-    const server = await startDashboard({ traceDir: trace, debugDir: null, env: { JEV_GATE_STATE_DIR: make() } }, 0);
+    const server = await startDashboard({ traceDir: trace, env: { JEV_GATE_STATE_DIR: make() } }, 0);
     try {
       const page = await fetch(server.url);
       expect(page.status).toBe(200);
       const html = await page.text();
-      expect(html).toContain('전체 기능 파이프라인');
+      expect(html).toContain('실행 회로');
       expect(html).toContain('id="theme"');
       expect(html).toContain('id="language"');
       const body = (await (await fetch(`${server.url}api/snapshot`)).json()) as { events: Array<{ title: string; used: string }> };
@@ -295,7 +292,7 @@ describe('dashboard server', () => {
 
   it('pushes the open call and replaces it when the result file appears', async () => {
     const trace = make();
-    const server = await startDashboard({ traceDir: trace, debugDir: null, env: { JEV_GATE_STATE_DIR: make() } }, 0);
+    const server = await startDashboard({ traceDir: trace, env: { JEV_GATE_STATE_DIR: make() } }, 0);
     const res = await fetch(`${server.url}api/live`);
     expect(res.headers.get('content-type')).toContain('text/event-stream');
     const reader = res.body?.getReader();
@@ -364,7 +361,7 @@ describe('dashboard server', () => {
 
 it('updates all viewers from shared directory notifications and reattaches after directory replacement', async () => {
   const parent = make(), trace = join(parent, 'trace'); mkdirSync(trace);
-  const server = await startDashboard({ traceDir: trace, debugDir: null, env: { HOME: make(), JEV_GATE_STATE_DIR: make() } }, 0);
+  const server = await startDashboard({ traceDir: trace, env: { HOME: make(), JEV_GATE_STATE_DIR: make() } }, 0);
   const controllers = [new AbortController(), new AbortController()];
   const readers: Array<ReadableStreamDefaultReader<Uint8Array>> = [];
   try {

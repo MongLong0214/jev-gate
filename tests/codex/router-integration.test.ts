@@ -62,11 +62,6 @@ describe('original Codex root execution boundaries', () => {
     expect(f.fetchImpl).toHaveBeenCalledOnce(); expect(f.sent[0]?.questions).not.toHaveProperty('model');
     expect(JSON.stringify(f.sent[0])).not.toContain('opaque-provider-bytes'); f.rpc.close();
   });
-  it('preserves every Lean executor continuation without a worker-step assessment', async () => {
-    const f = await ownedFixture(); f.child.role = 'jev-gate:executor';
-    expect((await f.policy.externalRequest(f.child.id, f.next, f.signal.signal)).request).toBe(f.next);
-    expect(f.fetchImpl).not.toHaveBeenCalled(); f.rpc.close();
-  });
   it('records the worker step limit and never attributes its native request to the previous route', async () => {
     const f = await ownedFixture(); const selected = (await f.policy.externalRequest(f.child.id, f.next, f.signal.signal)).request;
     f.policy.observeRequest(f.child.id, selected);

@@ -33,12 +33,12 @@ describe('dashboard activity thread (#210)', () => {
     const traceReader = new TraceDirectoryReader();
     await traceReader.prepare(trace);
     const started = performance.now();
-    loadActivity({ traceDir: trace, debugDir: null, env, traceReader });
+    loadActivity({ traceDir: trace, env, traceReader });
     const blocking = performance.now() - started;
 
     const script = `import { monitorEventLoopDelay } from 'node:perf_hooks';
 const { startDashboard } = await import(${JSON.stringify(join(dist, 'dashboard.js'))});
-const s = await startDashboard({ traceDir: ${JSON.stringify(trace)}, debugDir: null, env: ${JSON.stringify(env)} }, 0, { token: 't' });
+const s = await startDashboard({ traceDir: ${JSON.stringify(trace)}, env: ${JSON.stringify(env)} }, 0, { token: 't' });
 // Measured from the first request on, not over module loading.
 const h = monitorEventLoopDelay({ resolution: 5 }); h.enable();
 process.on('exit', () => process.stderr.write('delay ' + (h.max / 1e6) + '\\n'));

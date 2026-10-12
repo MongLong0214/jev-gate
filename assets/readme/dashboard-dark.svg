@@ -1,0 +1,1324 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="1842" viewBox="0 0 1280 1842" role="img" aria-labelledby="jg-dash-title jg-dash-desc">
+<title id="jg-dash-title">Jev Gate run monitor</title>
+<desc id="jg-dash-desc">Animated sample of the Jev Gate run monitor. Jev calls travel from the gate stages and independent features (Tool guard, Router, Compact, Evidence) to the Jev rail and back; each reply flashes its node, updates the matching run row and adds a row to the Jev call log. Median Jev latency 248 ms.</desc>
+<style>text{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;font-variant-numeric:tabular-nums}.m{font-family:ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace}.ink{fill:#ecebee}.mu{fill:#a09ea8}.fa{fill:#76747e}.ac{fill:#ff6b88}.ok{fill:#6fcfa9}.wa{fill:#e9bd7e}.cl{fill:#e0a070}.an{animation-duration:10s;animation-timing-function:linear;animation-iteration-count:infinite}.ring{transform-box:fill-box;transform-origin:center}.beat{animation:beat 1s ease-out infinite}.halo{transform-box:fill-box;transform-origin:center;animation:halo 1.25s ease-out infinite}.tw0{animation:tw .4s 0.0s infinite}.tw1{animation:tw .4s -0.1s infinite}.tw2{animation:tw .4s -0.2s infinite}.tw3{animation:tw .4s -0.3s infinite}@keyframes beat{0%,100%{opacity:1}60%{opacity:.35}}@keyframes halo{from{transform:scale(.5);opacity:.9}to{transform:scale(1.4);opacity:0}}@keyframes tw{0%,100%{opacity:1}50%{opacity:.3}}@keyframes k0{0%{transform:translateX(0px)}100%{transform:translateX(-220px)}}@keyframes k1{0%{opacity:1}2.4%{opacity:1}2.5%{opacity:0}92.3%{opacity:0}92.4%{opacity:1}100%{opacity:1}}@keyframes k2{0%{opacity:0}2.4%{opacity:0}2.5%{opacity:1}5.7%{opacity:1}5.8%{opacity:0}100%{opacity:0}}@keyframes k3{0%{opacity:0}5.7%{opacity:0}5.8%{opacity:1}8.4%{opacity:1}8.5%{opacity:0}100%{opacity:0}}@keyframes k4{0%{opacity:0}8.4%{opacity:0}8.5%{opacity:1}10.6%{opacity:1}10.7%{opacity:0}100%{opacity:0}}@keyframes k5{0%{opacity:0}10.6%{opacity:0}10.7%{opacity:1}13.4%{opacity:1}13.5%{opacity:0}50%{opacity:0}50.1%{opacity:1}53.2%{opacity:1}53.3%{opacity:0}100%{opacity:0}}@keyframes k6{0%{opacity:0}13.4%{opacity:0}13.5%{opacity:1}16.1%{opacity:1}16.2%{opacity:0}100%{opacity:0}}@keyframes k7{0%{opacity:0}16.1%{opacity:0}16.2%{opacity:1}18.3%{opacity:1}18.4%{opacity:0}100%{opacity:0}}@keyframes k8{0%{opacity:0}18.3%{opacity:0}18.4%{opacity:1}21.3%{opacity:1}21.4%{opacity:0}100%{opacity:0}}@keyframes k9{0%{opacity:0}21.3%{opacity:0}21.4%{opacity:1}24.1%{opacity:1}24.2%{opacity:0}100%{opacity:0}}@keyframes k10{0%{opacity:0}24.1%{opacity:0}24.2%{opacity:1}27%{opacity:1}27.1%{opacity:0}100%{opacity:0}}@keyframes k11{0%{opacity:0}27%{opacity:0}27.1%{opacity:1}29.1%{opacity:1}29.2%{opacity:0}100%{opacity:0}}@keyframes k12{0%{opacity:0}29.1%{opacity:0}29.2%{opacity:1}32%{opacity:1}32.1%{opacity:0}100%{opacity:0}}@keyframes k13{0%{opacity:0}32%{opacity:0}32.1%{opacity:1}34.6%{opacity:1}34.7%{opacity:0}100%{opacity:0}}@keyframes k14{0%{opacity:0}34.6%{opacity:0}34.7%{opacity:1}37%{opacity:1}37.1%{opacity:0}55.6%{opacity:0}55.7%{opacity:1}58.1%{opacity:1}58.2%{opacity:0}100%{opacity:0}}@keyframes k15{0%{opacity:0}37%{opacity:0}37.1%{opacity:1}39.4%{opacity:1}39.5%{opacity:0}100%{opacity:0}}@keyframes k16{0%{opacity:0}39.4%{opacity:0}39.5%{opacity:1}42.4%{opacity:1}42.5%{opacity:0}68.3%{opacity:0}68.4%{opacity:1}71.1%{opacity:1}71.2%{opacity:0}100%{opacity:0}}@keyframes k17{0%{opacity:0}42.4%{opacity:0}42.5%{opacity:1}44.8%{opacity:1}44.9%{opacity:0}100%{opacity:0}}@keyframes k18{0%{opacity:0}44.8%{opacity:0}44.9%{opacity:1}47.6%{opacity:1}47.7%{opacity:0}100%{opacity:0}}@keyframes k19{0%{opacity:0}47.6%{opacity:0}47.7%{opacity:1}50%{opacity:1}50.1%{opacity:0}100%{opacity:0}}@keyframes k20{0%{opacity:0}53.2%{opacity:0}53.3%{opacity:1}55.6%{opacity:1}55.7%{opacity:0}100%{opacity:0}}@keyframes k21{0%{opacity:0}58.1%{opacity:0}58.2%{opacity:1}60.7%{opacity:1}60.8%{opacity:0}100%{opacity:0}}@keyframes k22{0%{opacity:0}60.7%{opacity:0}60.8%{opacity:1}63.5%{opacity:1}63.6%{opacity:0}100%{opacity:0}}@keyframes k23{0%{opacity:0}63.5%{opacity:0}63.6%{opacity:1}66.2%{opacity:1}66.3%{opacity:0}100%{opacity:0}}@keyframes k24{0%{opacity:0}66.2%{opacity:0}66.3%{opacity:1}68.3%{opacity:1}68.4%{opacity:0}87%{opacity:0}87.1%{opacity:1}89.6%{opacity:1}89.7%{opacity:0}100%{opacity:0}}@keyframes k25{0%{opacity:0}71.1%{opacity:0}71.2%{opacity:1}73.9%{opacity:1}74%{opacity:0}100%{opacity:0}}@keyframes k26{0%{opacity:0}73.9%{opacity:0}74%{opacity:1}76.5%{opacity:1}76.6%{opacity:0}100%{opacity:0}}@keyframes k27{0%{opacity:0}76.5%{opacity:0}76.6%{opacity:1}78.6%{opacity:1}78.7%{opacity:0}100%{opacity:0}}@keyframes k28{0%{opacity:0}78.6%{opacity:0}78.7%{opacity:1}81.7%{opacity:1}81.8%{opacity:0}100%{opacity:0}}@keyframes k29{0%{opacity:0}81.7%{opacity:0}81.8%{opacity:1}84.6%{opacity:1}84.7%{opacity:0}100%{opacity:0}}@keyframes k30{0%{opacity:0}84.6%{opacity:0}84.7%{opacity:1}87%{opacity:1}87.1%{opacity:0}100%{opacity:0}}@keyframes k31{0%{opacity:0}89.6%{opacity:0}89.7%{opacity:1}92.3%{opacity:1}92.4%{opacity:0}100%{opacity:0}}@keyframes k32{0%{opacity:0}41.8%{opacity:0}41.9%{opacity:.16}43.5%{opacity:.16}48.5%{opacity:0}65.9%{opacity:0}66%{opacity:.16}67.6%{opacity:.16}72.6%{opacity:0}84%{opacity:0}84.1%{opacity:.16}85.7%{opacity:.16}90.7%{opacity:0}100%{opacity:0}}@keyframes k33{0%{opacity:1;fill:#ecebee}41.8%{fill:#ecebee}41.9%{fill:#ff6b88}49.9%{fill:#ecebee}65.9%{fill:#ecebee}66%{fill:#ff6b88}74%{fill:#ecebee}84%{fill:#ecebee}84.1%{fill:#ff6b88}92.1%{fill:#ecebee}100%{opacity:1;fill:#ecebee}}@keyframes k34{0%{opacity:1}4%{opacity:1}4.1%{opacity:0}41.8%{opacity:0}41.9%{opacity:1}61.8%{opacity:1}61.9%{opacity:0}65.9%{opacity:0}66%{opacity:1}100%{opacity:1}}@keyframes k35{0%{opacity:0}4%{opacity:0}4.1%{opacity:1}14%{opacity:1}14.1%{opacity:0}61.8%{opacity:0}61.9%{opacity:1}65.9%{opacity:1}66%{opacity:0}100%{opacity:0}}@keyframes k36{0%{opacity:0}14%{opacity:0}14.1%{opacity:1}24%{opacity:1}24.1%{opacity:0}100%{opacity:0}}@keyframes k37{0%{opacity:0}24%{opacity:0}24.1%{opacity:1}34%{opacity:1}34.1%{opacity:0}100%{opacity:0}}@keyframes k38{0%{opacity:0}34%{opacity:0}34.1%{opacity:1}41.8%{opacity:1}41.9%{opacity:0}100%{opacity:0}}@keyframes k39{0%{transform:translateX(0px)}100%{transform:translateX(-213.5px)}}@keyframes k40{0%{transform:translateY(410px);opacity:0}37.6%{opacity:0}37.7%{transform:translateY(410px);opacity:1}39.5%{transform:translateY(434px)}40.1%{transform:translateY(434px)}41.8%{opacity:1}41.9%{transform:translateY(410px);opacity:0}61.7%{opacity:0}61.8%{transform:translateY(410px);opacity:1}63.6%{transform:translateY(434px)}64.2%{transform:translateY(434px)}65.9%{opacity:1}66%{transform:translateY(410px);opacity:0}79.9%{opacity:0}80%{transform:translateY(410px);opacity:1}81.8%{transform:translateY(434px)}82.3%{transform:translateY(434px)}84%{opacity:1}84.1%{transform:translateY(410px);opacity:0}100%{transform:translateY(410px);opacity:0}}@keyframes k41{0%{opacity:0}39.4%{opacity:0}39.5%{opacity:1}45.5%{opacity:0}63.5%{opacity:0}63.6%{opacity:1}69.6%{opacity:0}81.7%{opacity:0}81.8%{opacity:1}87.8%{opacity:0}100%{opacity:0}}@keyframes k42{0%{transform:scale(3.4);opacity:0}39.4%{transform:scale(3.4);opacity:0}39.5%{transform:scale(1);opacity:.7}45.5%{transform:scale(3.4);opacity:0}63.5%{transform:scale(3.4);opacity:0}63.6%{transform:scale(1);opacity:.7}69.6%{transform:scale(3.4);opacity:0}81.7%{transform:scale(3.4);opacity:0}81.8%{transform:scale(1);opacity:.7}87.8%{transform:scale(3.4);opacity:0}100%{transform:scale(3.4);opacity:0}}@keyframes k43{0%{opacity:0}7.9%{opacity:0}8%{opacity:.16}9.6%{opacity:.16}14.6%{opacity:0}44.6%{opacity:0}44.7%{opacity:.16}46.3%{opacity:.16}51.3%{opacity:0}100%{opacity:0}}@keyframes k44{0%{opacity:1;fill:#ecebee}7.9%{fill:#ecebee}8%{fill:#ff6b88}16%{fill:#ecebee}44.6%{fill:#ecebee}44.7%{fill:#ff6b88}52.7%{fill:#ecebee}100%{opacity:1;fill:#ecebee}}@keyframes k45{0%{opacity:1}4.6%{opacity:1}4.7%{opacity:0}94.6%{opacity:0}94.7%{opacity:1}100%{opacity:1}}@keyframes k46{0%{opacity:0}4.6%{opacity:0}4.7%{opacity:1}7.9%{opacity:1}8%{opacity:0}100%{opacity:0}}@keyframes k47{0%{opacity:0}7.9%{opacity:0}8%{opacity:1}27.9%{opacity:1}28%{opacity:0}44.6%{opacity:0}44.7%{opacity:1}64.6%{opacity:1}64.7%{opacity:0}100%{opacity:0}}@keyframes k48{0%{opacity:0}27.9%{opacity:0}28%{opacity:1}37.9%{opacity:1}38%{opacity:0}64.6%{opacity:0}64.7%{opacity:1}74.6%{opacity:1}74.7%{opacity:0}100%{opacity:0}}@keyframes k49{0%{opacity:0}37.9%{opacity:0}38%{opacity:1}44.6%{opacity:1}44.7%{opacity:0}74.6%{opacity:0}74.7%{opacity:1}84.6%{opacity:1}84.7%{opacity:0}100%{opacity:0}}@keyframes k50{0%{opacity:0}84.6%{opacity:0}84.7%{opacity:1}94.6%{opacity:1}94.7%{opacity:0}100%{opacity:0}}@keyframes k51{0%{transform:translateX(0px)}100%{transform:translateX(-213.5px)}}@keyframes k52{0%{transform:translateY(410px);opacity:0}3.9%{opacity:0}4%{transform:translateY(410px);opacity:1}5.8%{transform:translateY(434px)}6.2%{transform:translateY(434px)}7.9%{opacity:1}8%{transform:translateY(410px);opacity:0}40.6%{opacity:0}40.7%{transform:translateY(410px);opacity:1}42.5%{transform:translateY(434px)}42.9%{transform:translateY(434px)}44.6%{opacity:1}44.7%{transform:translateY(410px);opacity:0}100%{transform:translateY(410px);opacity:0}}@keyframes k53{0%{opacity:0}5.7%{opacity:0}5.8%{opacity:1}11.8%{opacity:0}42.4%{opacity:0}42.5%{opacity:1}48.5%{opacity:0}100%{opacity:0}}@keyframes k54{0%{transform:scale(3.4);opacity:0}5.7%{transform:scale(3.4);opacity:0}5.8%{transform:scale(1);opacity:.7}11.8%{transform:scale(3.4);opacity:0}42.4%{transform:scale(3.4);opacity:0}42.5%{transform:scale(1);opacity:.7}48.5%{transform:scale(3.4);opacity:0}100%{transform:scale(3.4);opacity:0}}@keyframes k55{0%{opacity:0}49.8%{opacity:0}49.9%{opacity:.16}51.5%{opacity:.16}56.5%{opacity:0}60.4%{opacity:0}60.5%{opacity:.16}62.1%{opacity:.16}67.1%{opacity:0}100%{opacity:0}}@keyframes k56{0%{opacity:1;fill:#ecebee}49.8%{opacity:1}49.9%{opacity:0}60.4%{opacity:0;fill:#ecebee}60.5%{opacity:1;fill:#ff6b88}68.5%{fill:#ecebee}100%{opacity:1;fill:#ecebee}}@keyframes k57{0%{opacity:0;fill:#ecebee}49.8%{opacity:0;fill:#ecebee}49.9%{opacity:1;fill:#ff6b88}57.9%{fill:#ecebee}60.4%{opacity:1}60.5%{opacity:0}100%{opacity:0;fill:#ecebee}}@keyframes k58{0%{opacity:1}.4%{opacity:1}.5%{opacity:0}90.4%{opacity:0}90.5%{opacity:1}100%{opacity:1}}@keyframes k59{0%{opacity:0}.4%{opacity:0}.5%{opacity:1}10.4%{opacity:1}10.5%{opacity:0}100%{opacity:0}}@keyframes k60{0%{opacity:0}10.4%{opacity:0}10.5%{opacity:1}20.4%{opacity:1}20.5%{opacity:0}100%{opacity:0}}@keyframes k61{0%{opacity:0}20.4%{opacity:0}20.5%{opacity:1}30.4%{opacity:1}30.5%{opacity:0}100%{opacity:0}}@keyframes k62{0%{opacity:0}30.4%{opacity:0}30.5%{opacity:1}40.4%{opacity:1}40.5%{opacity:0}100%{opacity:0}}@keyframes k63{0%{opacity:0}40.4%{opacity:0}40.5%{opacity:1}49.8%{opacity:1}49.9%{opacity:0}100%{opacity:0}}@keyframes k64{0%{opacity:0}49.8%{opacity:0}49.9%{opacity:1}80.4%{opacity:1}80.5%{opacity:0}100%{opacity:0}}@keyframes k65{0%{opacity:0}80.4%{opacity:0}80.5%{opacity:1}90.4%{opacity:1}90.5%{opacity:0}100%{opacity:0}}@keyframes k66{0%{transform:translateX(0px)}100%{transform:translateX(-213.5px)}}@keyframes k67{0%{transform:translateY(410px);opacity:0}45.8%{opacity:0}45.9%{transform:translateY(410px);opacity:1}47.7%{transform:translateY(434px)}48.1%{transform:translateY(434px)}49.8%{opacity:1}49.9%{transform:translateY(410px);opacity:0}56.3%{opacity:0}56.4%{transform:translateY(410px);opacity:1}58.2%{transform:translateY(434px)}58.7%{transform:translateY(434px)}60.4%{opacity:1}60.5%{transform:translateY(410px);opacity:0}100%{transform:translateY(410px);opacity:0}}@keyframes k68{0%{opacity:0}47.6%{opacity:0}47.7%{opacity:1}53.7%{opacity:0}58.1%{opacity:0}58.2%{opacity:1}64.2%{opacity:0}100%{opacity:0}}@keyframes k69{0%{transform:scale(3.4);opacity:0}47.6%{transform:scale(3.4);opacity:0}47.7%{transform:scale(1);opacity:.7}53.7%{transform:scale(3.4);opacity:0}58.1%{transform:scale(3.4);opacity:0}58.2%{transform:scale(1);opacity:.7}64.2%{transform:scale(3.4);opacity:0}100%{transform:scale(3.4);opacity:0}}@keyframes k70{0%{opacity:.04}1.4%{opacity:0}70.7%{opacity:0}70.8%{opacity:.16}72.4%{opacity:.16}77.4%{opacity:0}94.7%{opacity:0}94.8%{opacity:.16}96.4%{opacity:.16}100%{opacity:.04}}@keyframes k71{0%{opacity:1;fill:#f3beca}2.8%{fill:#ecebee}70.7%{fill:#ecebee}70.8%{fill:#ff6b88}78.8%{fill:#ecebee}94.7%{fill:#ecebee}94.8%{fill:#ff6b88}100%{opacity:1;fill:#f3beca}}@keyframes k72{0%{opacity:1}14.7%{opacity:1}14.8%{opacity:0}70.7%{opacity:0}70.8%{opacity:1}90.7%{opacity:1}90.8%{opacity:0}94.7%{opacity:0}94.8%{opacity:1}100%{opacity:1}}@keyframes k73{0%{opacity:0}14.7%{opacity:0}14.8%{opacity:1}24.7%{opacity:1}24.8%{opacity:0}90.7%{opacity:0}90.8%{opacity:1}94.7%{opacity:1}94.8%{opacity:0}100%{opacity:0}}@keyframes k74{0%{opacity:0}24.7%{opacity:0}24.8%{opacity:1}34.7%{opacity:1}34.8%{opacity:0}100%{opacity:0}}@keyframes k75{0%{opacity:0}34.7%{opacity:0}34.8%{opacity:1}44.7%{opacity:1}44.8%{opacity:0}100%{opacity:0}}@keyframes k76{0%{opacity:0}44.7%{opacity:0}44.8%{opacity:1}54.7%{opacity:1}54.8%{opacity:0}100%{opacity:0}}@keyframes k77{0%{opacity:0}54.7%{opacity:0}54.8%{opacity:1}64.7%{opacity:1}64.8%{opacity:0}100%{opacity:0}}@keyframes k78{0%{opacity:0}64.7%{opacity:0}64.8%{opacity:1}70.7%{opacity:1}70.8%{opacity:0}100%{opacity:0}}@keyframes k79{0%{transform:translateX(0px)}100%{transform:translateX(-213.5px)}}@keyframes k80{0%{transform:translateY(410px);opacity:0}66.5%{opacity:0}66.6%{transform:translateY(410px);opacity:1}68.4%{transform:translateY(434px)}69%{transform:translateY(434px)}70.7%{opacity:1}70.8%{transform:translateY(410px);opacity:0}90.5%{opacity:0}90.6%{transform:translateY(410px);opacity:1}92.4%{transform:translateY(434px)}93%{transform:translateY(434px)}94.7%{opacity:1}94.8%{transform:translateY(410px);opacity:0}100%{transform:translateY(410px);opacity:0}}@keyframes k81{0%{opacity:0}68.3%{opacity:0}68.4%{opacity:1}74.4%{opacity:0}92.3%{opacity:0}92.4%{opacity:1}98.4%{opacity:0}100%{opacity:0}}@keyframes k82{0%{transform:scale(3.4);opacity:0}68.3%{transform:scale(3.4);opacity:0}68.4%{transform:scale(1);opacity:.7}74.4%{transform:scale(3.4);opacity:0}92.3%{transform:scale(3.4);opacity:0}92.4%{transform:scale(1);opacity:.7}98.4%{transform:scale(3.4);opacity:0}100%{transform:scale(3.4);opacity:0}}@keyframes k83{0%{opacity:0}10.6%{opacity:0}10.7%{opacity:.16}12.3%{opacity:.16}17.3%{opacity:0}18.4%{opacity:0}18.5%{opacity:.16}20.1%{opacity:.16}25.1%{opacity:0}34.3%{opacity:0}34.4%{opacity:.16}36%{opacity:.16}41%{opacity:0}73.5%{opacity:0}73.6%{opacity:.16}75.2%{opacity:.16}78.8%{opacity:.04}78.9%{opacity:.16}80.5%{opacity:.16}85.5%{opacity:0}92%{opacity:0}92.1%{opacity:.16}93.7%{opacity:.16}98.7%{opacity:0}100%{opacity:0}}@keyframes k84{0%{opacity:1;fill:#ece9ed}.1%{fill:#ecebee}10.6%{fill:#ecebee}10.7%{fill:#ff6b88}18.4%{fill:#ede6ea}18.5%{fill:#ff6b88}18.7%{fill:#ff6e8b}26.5%{fill:#ecebee}34.3%{fill:#ecebee}34.4%{fill:#ff6b88}42.4%{fill:#ecebee}73.5%{fill:#ecebee}73.6%{fill:#ff6b88}78.8%{fill:#f3beca}78.9%{fill:#ff6b88}81.6%{fill:#f996aa}86.9%{fill:#ecebee}92%{fill:#ecebee}92.1%{fill:#ff6b88}100%{opacity:1;fill:#ece9ed}}@keyframes k85{0%{opacity:1}54.3%{opacity:1}54.4%{opacity:0}73.5%{opacity:0}73.6%{opacity:1}100%{opacity:1}}@keyframes k86{0%{opacity:0}54.3%{opacity:0}54.4%{opacity:1}64.3%{opacity:1}64.4%{opacity:0}100%{opacity:0}}@keyframes k87{0%{opacity:0}64.3%{opacity:0}64.4%{opacity:1}73.5%{opacity:1}73.6%{opacity:0}100%{opacity:0}}@keyframes k88{0%{transform:translateX(0px)}100%{transform:translateX(-213.5px)}}@keyframes k89{0%{transform:translateY(474px);opacity:0}6.6%{opacity:0}6.7%{transform:translateY(474px);opacity:1}8.5%{transform:translateY(434px)}8.9%{transform:translateY(434px)}10.6%{opacity:1}10.7%{transform:translateY(474px);opacity:0}14.3%{opacity:0}14.4%{transform:translateY(474px);opacity:1}16.2%{transform:translateY(434px)}16.7%{transform:translateY(434px)}18.4%{opacity:1}18.5%{transform:translateY(474px);opacity:0}30.2%{opacity:0}30.3%{transform:translateY(474px);opacity:1}32.1%{transform:translateY(434px)}32.6%{transform:translateY(434px)}34.3%{opacity:1}34.4%{transform:translateY(474px);opacity:0}69.3%{opacity:0}69.4%{transform:translateY(474px);opacity:1}71.2%{transform:translateY(434px)}71.8%{transform:translateY(434px)}73.5%{opacity:1}73.6%{transform:translateY(474px);opacity:0}74.7%{opacity:0}74.8%{transform:translateY(474px);opacity:1}76.6%{transform:translateY(434px)}77.1%{transform:translateY(434px)}78.8%{opacity:1}78.9%{transform:translateY(474px);opacity:0}87.8%{opacity:0}87.9%{transform:translateY(474px);opacity:1}89.7%{transform:translateY(434px)}90.3%{transform:translateY(434px)}92%{opacity:1}92.1%{transform:translateY(474px);opacity:0}100%{transform:translateY(474px);opacity:0}}@keyframes k90{0%{opacity:0}8.4%{opacity:0}8.5%{opacity:1}14.5%{opacity:0}16.1%{opacity:0}16.2%{opacity:1}22.2%{opacity:0}32%{opacity:0}32.1%{opacity:1}38.1%{opacity:0}71.1%{opacity:0}71.2%{opacity:1}76.5%{opacity:.12}76.6%{opacity:1}82.6%{opacity:0}89.6%{opacity:0}89.7%{opacity:1}95.7%{opacity:0}100%{opacity:0}}@keyframes k91{0%{transform:scale(3.4);opacity:0}8.4%{transform:scale(3.4);opacity:0}8.5%{transform:scale(1);opacity:.7}14.5%{transform:scale(3.4);opacity:0}16.1%{transform:scale(3.4);opacity:0}16.2%{transform:scale(1);opacity:.7}22.2%{transform:scale(3.4);opacity:0}32%{transform:scale(3.4);opacity:0}32.1%{transform:scale(1);opacity:.7}38.1%{transform:scale(3.4);opacity:0}71.1%{transform:scale(3.4);opacity:0}71.2%{transform:scale(1);opacity:.7}76.5%{transform:scale(3.12);opacity:.08}76.6%{transform:scale(1);opacity:.7}82.6%{transform:scale(3.4);opacity:0}89.6%{transform:scale(3.4);opacity:0}89.7%{transform:scale(1);opacity:.7}95.7%{transform:scale(3.4);opacity:0}100%{transform:scale(3.4);opacity:0}}@keyframes k92{0%{opacity:0}5.4%{opacity:0}5.5%{opacity:.16}7.1%{opacity:.16}12.1%{opacity:0}13%{opacity:0}13.1%{opacity:.16}14.7%{opacity:.16}19.7%{opacity:0}20.8%{opacity:0}20.9%{opacity:.16}22.5%{opacity:.16}26.3%{opacity:.04}26.4%{opacity:.16}28%{opacity:.16}31.5%{opacity:.05}31.6%{opacity:.16}33.2%{opacity:.16}38.2%{opacity:0}39.3%{opacity:0}39.4%{opacity:.16}41%{opacity:.16}46%{opacity:0}47.2%{opacity:0}47.3%{opacity:.16}48.9%{opacity:.16}53.9%{opacity:0}55.4%{opacity:0}55.5%{opacity:.16}57.1%{opacity:.16}62.1%{opacity:0}63.1%{opacity:0}63.2%{opacity:.16}64.8%{opacity:.16}68.4%{opacity:.04}68.5%{opacity:.16}70.1%{opacity:.16}75.1%{opacity:0}76.3%{opacity:0}76.4%{opacity:.16}78%{opacity:.16}81.1%{opacity:.06}81.2%{opacity:.16}82.8%{opacity:.16}87.8%{opacity:0}89.2%{opacity:0}89.3%{opacity:.16}90.9%{opacity:.16}95.9%{opacity:0}100%{opacity:0}}@keyframes k93{0%{opacity:1;fill:#ecebee}5.4%{opacity:1}5.5%{opacity:0}20.8%{opacity:0;fill:#ecebee}20.9%{opacity:1;fill:#ff6b88}26.3%{fill:#f2c1cd}26.4%{fill:#ff6b88}28.9%{fill:#f993a8}31.5%{opacity:1}31.6%{opacity:0}34.4%{fill:#ecebee}39.3%{opacity:0;fill:#ecebee}39.4%{opacity:1;fill:#ff6b88}47.2%{opacity:1}47.3%{opacity:0}47.4%{fill:#ecebee}55.4%{opacity:0;fill:#ecebee}55.5%{opacity:1;fill:#ff6b88}63.1%{fill:#ede5e9}63.2%{fill:#ff6b88}63.5%{fill:#fe708c}68.4%{fill:#f3beca}68.5%{fill:#ff6b88}71.2%{fill:#f996aa}76.3%{opacity:1}76.4%{opacity:0}76.5%{fill:#ecebee}89.2%{opacity:0;fill:#ecebee}89.3%{opacity:1;fill:#ff6b88}97.3%{fill:#ecebee}100%{opacity:1;fill:#ecebee}}@keyframes k94{0%{opacity:0;fill:#ecebee}5.4%{opacity:0;fill:#ecebee}5.5%{opacity:1;fill:#ff6b88}13%{opacity:1}13.1%{opacity:0}13.5%{fill:#ecebee}47.2%{opacity:0;fill:#ecebee}47.3%{opacity:1;fill:#ff6b88}55.3%{fill:#ecebee}55.4%{opacity:1}55.5%{opacity:0}76.3%{opacity:0;fill:#ecebee}76.4%{opacity:1;fill:#ff6b88}81.1%{fill:#f4b6c4}81.2%{fill:#ff6b88}84.4%{fill:#f79eb1}89.2%{opacity:1;fill:#ecebee}89.3%{opacity:0}100%{opacity:0;fill:#ecebee}}@keyframes k95{0%{opacity:0;fill:#ecebee}13%{opacity:0;fill:#ecebee}13.1%{opacity:1;fill:#ff6b88}20.8%{opacity:1}20.9%{opacity:0}21.1%{fill:#ecebee}31.5%{opacity:0;fill:#ecebee}31.6%{opacity:1;fill:#ff6b88}39.3%{opacity:1}39.4%{opacity:0}39.6%{fill:#ecebee}100%{opacity:0;fill:#ecebee}}@keyframes k96{0%{opacity:1}100%{opacity:1}}@keyframes k97{0%{transform:translateX(0px)}100%{transform:translateX(-213.5px)}}@keyframes k98{0%{transform:translateY(474px);opacity:0}.6%{opacity:0}.7%{transform:translateY(474px);opacity:1}2.5%{transform:translateY(434px)}3.7%{transform:translateY(434px)}5.4%{opacity:1}5.5%{transform:translateY(474px);opacity:0}8.8%{opacity:0}8.9%{transform:translateY(474px);opacity:1}10.7%{transform:translateY(434px)}11.3%{transform:translateY(434px)}13%{opacity:1}13.1%{transform:translateY(474px);opacity:0}16.5%{opacity:0}16.6%{transform:translateY(474px);opacity:1}18.4%{transform:translateY(434px)}19.1%{transform:translateY(434px)}20.8%{opacity:1}20.9%{transform:translateY(474px);opacity:0}22.3%{opacity:0}22.4%{transform:translateY(474px);opacity:1}24.2%{transform:translateY(434px)}24.6%{transform:translateY(434px)}26.3%{opacity:1}26.4%{transform:translateY(474px);opacity:0}27.3%{opacity:0}27.4%{transform:translateY(474px);opacity:1}29.2%{transform:translateY(434px)}29.8%{transform:translateY(434px)}31.5%{opacity:1}31.6%{transform:translateY(474px);opacity:0}35.2%{opacity:0}35.3%{transform:translateY(474px);opacity:1}37.1%{transform:translateY(434px)}37.6%{transform:translateY(434px)}39.3%{opacity:1}39.4%{transform:translateY(474px);opacity:0}43%{opacity:0}43.1%{transform:translateY(474px);opacity:1}44.9%{transform:translateY(434px)}45.5%{transform:translateY(434px)}47.2%{opacity:1}47.3%{transform:translateY(474px);opacity:0}51.4%{opacity:0}51.5%{transform:translateY(474px);opacity:1}53.3%{transform:translateY(434px)}53.7%{transform:translateY(434px)}55.4%{opacity:1}55.5%{transform:translateY(474px);opacity:0}58.9%{opacity:0}59%{transform:translateY(474px);opacity:1}60.8%{transform:translateY(434px)}61.4%{transform:translateY(434px)}63.1%{opacity:1}63.2%{transform:translateY(474px);opacity:0}64.4%{opacity:0}64.5%{transform:translateY(474px);opacity:1}66.3%{transform:translateY(434px)}66.7%{transform:translateY(434px)}68.4%{opacity:1}68.5%{transform:translateY(474px);opacity:0}72.1%{opacity:0}72.2%{transform:translateY(474px);opacity:1}74%{transform:translateY(434px)}74.6%{transform:translateY(434px)}76.3%{opacity:1}76.4%{transform:translateY(474px);opacity:0}76.8%{opacity:0}76.9%{transform:translateY(474px);opacity:1}78.7%{transform:translateY(434px)}79.4%{transform:translateY(434px)}81.1%{opacity:1}81.2%{transform:translateY(474px);opacity:0}85.2%{opacity:0}85.3%{transform:translateY(474px);opacity:1}87.1%{transform:translateY(434px)}87.5%{transform:translateY(434px)}89.2%{opacity:1}89.3%{transform:translateY(474px);opacity:0}100%{transform:translateY(474px);opacity:0}}@keyframes k99{0%{opacity:0}2.4%{opacity:0}2.5%{opacity:1}8.5%{opacity:0}10.6%{opacity:0}10.7%{opacity:1}16.7%{opacity:0}18.3%{opacity:0}18.4%{opacity:1}24.1%{opacity:.05}24.2%{opacity:1}29.1%{opacity:.18}29.2%{opacity:1}35.2%{opacity:0}37%{opacity:0}37.1%{opacity:1}43.1%{opacity:0}44.8%{opacity:0}44.9%{opacity:1}50.9%{opacity:0}53.2%{opacity:0}53.3%{opacity:1}59.3%{opacity:0}60.7%{opacity:0}60.8%{opacity:1}66.2%{opacity:.1}66.3%{opacity:1}72.3%{opacity:0}73.9%{opacity:0}74%{opacity:1}78.6%{opacity:.23}78.7%{opacity:1}84.7%{opacity:0}87%{opacity:0}87.1%{opacity:1}93.1%{opacity:0}100%{opacity:0}}@keyframes k100{0%{transform:scale(3.4);opacity:0}2.4%{transform:scale(3.4);opacity:0}2.5%{transform:scale(1);opacity:.7}8.5%{transform:scale(3.4);opacity:0}10.6%{transform:scale(3.4);opacity:0}10.7%{transform:scale(1);opacity:.7}16.7%{transform:scale(3.4);opacity:0}18.3%{transform:scale(3.4);opacity:0}18.4%{transform:scale(1);opacity:.7}24.1%{transform:scale(3.28);opacity:.04}24.2%{transform:scale(1);opacity:.7}29.1%{transform:scale(2.96);opacity:.13}29.2%{transform:scale(1);opacity:.7}35.2%{transform:scale(3.4);opacity:0}37%{transform:scale(3.4);opacity:0}37.1%{transform:scale(1);opacity:.7}43.1%{transform:scale(3.4);opacity:0}44.8%{transform:scale(3.4);opacity:0}44.9%{transform:scale(1);opacity:.7}50.9%{transform:scale(3.4);opacity:0}53.2%{transform:scale(3.4);opacity:0}53.3%{transform:scale(1);opacity:.7}59.3%{transform:scale(3.4);opacity:0}60.7%{transform:scale(3.4);opacity:0}60.8%{transform:scale(1);opacity:.7}66.2%{transform:scale(3.16);opacity:.07}66.3%{transform:scale(1);opacity:.7}72.3%{transform:scale(3.4);opacity:0}73.9%{transform:scale(3.4);opacity:0}74%{transform:scale(1);opacity:.7}78.6%{transform:scale(2.84);opacity:.16}78.7%{transform:scale(1);opacity:.7}84.7%{transform:scale(3.4);opacity:0}87%{transform:scale(3.4);opacity:0}87.1%{transform:scale(1);opacity:.7}93.1%{transform:scale(3.4);opacity:0}100%{transform:scale(3.4);opacity:0}}@keyframes k101{0%{opacity:0}23.6%{opacity:0}23.7%{opacity:.16}25.3%{opacity:.16}30.3%{opacity:0}52.4%{opacity:0}52.5%{opacity:.16}54.1%{opacity:.16}57.8%{opacity:.04}57.9%{opacity:.16}59.5%{opacity:.16}64.5%{opacity:0}86.9%{opacity:0}87%{opacity:.16}88.6%{opacity:.16}93.6%{opacity:0}100%{opacity:0}}@keyframes k102{0%{opacity:1;fill:#ecebee}23.6%{fill:#ecebee}23.7%{fill:#ff6b88}31.7%{fill:#ecebee}52.4%{fill:#ecebee}52.5%{fill:#ff6b88}57.8%{fill:#f2c0cc}57.9%{fill:#ff6b88}60.5%{fill:#f995a9}65.9%{fill:#ecebee}86.9%{fill:#ecebee}87%{fill:#ff6b88}95%{fill:#ecebee}100%{opacity:1;fill:#ecebee}}@keyframes k103{0%{opacity:1}6.9%{opacity:1}7%{opacity:0}23.6%{opacity:0}23.7%{opacity:1}43.6%{opacity:1}43.7%{opacity:0}52.4%{opacity:0}52.5%{opacity:1}77.8%{opacity:1}77.9%{opacity:0}86.9%{opacity:0}87%{opacity:1}100%{opacity:1}}@keyframes k104{0%{opacity:0}6.9%{opacity:0}7%{opacity:1}16.9%{opacity:1}17%{opacity:0}43.6%{opacity:0}43.7%{opacity:1}52.4%{opacity:1}52.5%{opacity:0}77.8%{opacity:0}77.9%{opacity:1}86.9%{opacity:1}87%{opacity:0}100%{opacity:0}}@keyframes k105{0%{opacity:0}16.9%{opacity:0}17%{opacity:1}23.6%{opacity:1}23.7%{opacity:0}100%{opacity:0}}@keyframes k106{0%{transform:translateX(0px)}100%{transform:translateX(-213.5px)}}@keyframes k107{0%{transform:translateY(474px);opacity:0}19.5%{opacity:0}19.6%{transform:translateY(474px);opacity:1}21.4%{transform:translateY(434px)}21.9%{transform:translateY(434px)}23.6%{opacity:1}23.7%{transform:translateY(474px);opacity:0}48.2%{opacity:0}48.3%{transform:translateY(474px);opacity:1}50.1%{transform:translateY(434px)}50.7%{transform:translateY(434px)}52.4%{opacity:1}52.5%{transform:translateY(474px);opacity:0}53.8%{opacity:0}53.9%{transform:translateY(474px);opacity:1}55.7%{transform:translateY(434px)}56.1%{transform:translateY(434px)}57.8%{opacity:1}57.9%{transform:translateY(474px);opacity:0}82.8%{opacity:0}82.9%{transform:translateY(474px);opacity:1}84.7%{transform:translateY(434px)}85.2%{transform:translateY(434px)}86.9%{opacity:1}87%{transform:translateY(474px);opacity:0}100%{transform:translateY(474px);opacity:0}}@keyframes k108{0%{opacity:0}21.3%{opacity:0}21.4%{opacity:1}27.4%{opacity:0}50%{opacity:0}50.1%{opacity:1}55.6%{opacity:.08}55.7%{opacity:1}61.7%{opacity:0}84.6%{opacity:0}84.7%{opacity:1}90.7%{opacity:0}100%{opacity:0}}@keyframes k109{0%{transform:scale(3.4);opacity:0}21.3%{transform:scale(3.4);opacity:0}21.4%{transform:scale(1);opacity:.7}27.4%{transform:scale(3.4);opacity:0}50%{transform:scale(3.4);opacity:0}50.1%{transform:scale(1);opacity:.7}55.6%{transform:scale(3.2);opacity:.06}55.7%{transform:scale(1);opacity:.7}61.7%{transform:scale(3.4);opacity:0}84.6%{transform:scale(3.4);opacity:0}84.7%{transform:scale(1);opacity:.7}90.7%{transform:scale(3.4);opacity:0}100%{transform:scale(3.4);opacity:0}}@keyframes k110{0%{opacity:0}15.8%{opacity:0}15.9%{opacity:.16}17.5%{opacity:.16}22.5%{opacity:0}29.2%{opacity:0}29.3%{opacity:.16}30.9%{opacity:.16}35.9%{opacity:0}36.8%{opacity:0}36.9%{opacity:.16}38.5%{opacity:.16}43.5%{opacity:0}100%{opacity:0}}@keyframes k111{0%{opacity:1;fill:#ecebee}15.8%{opacity:1}15.9%{opacity:0}36.8%{opacity:0;fill:#ecebee}36.9%{opacity:1;fill:#ff6b88}44.9%{fill:#ecebee}100%{opacity:1;fill:#ecebee}}@keyframes k112{0%{opacity:0;fill:#ecebee}15.8%{opacity:0;fill:#ecebee}15.9%{opacity:1;fill:#ff6b88}23.9%{fill:#ecebee}29.2%{opacity:1}29.3%{opacity:0}100%{opacity:0;fill:#ecebee}}@keyframes k113{0%{opacity:0;fill:#ecebee}29.2%{opacity:0;fill:#ecebee}29.3%{opacity:1;fill:#ff6b88}36.8%{opacity:1}36.9%{opacity:0}37.3%{fill:#ecebee}100%{opacity:0;fill:#ecebee}}@keyframes k114{0%{opacity:1}6.8%{opacity:1}6.9%{opacity:0}96.8%{opacity:0}96.9%{opacity:1}100%{opacity:1}}@keyframes k115{0%{opacity:0}6.8%{opacity:0}6.9%{opacity:1}15.8%{opacity:1}15.9%{opacity:0}100%{opacity:0}}@keyframes k116{0%{opacity:0}15.8%{opacity:0}15.9%{opacity:1}56.8%{opacity:1}56.9%{opacity:0}100%{opacity:0}}@keyframes k117{0%{opacity:0}56.8%{opacity:0}56.9%{opacity:1}66.8%{opacity:1}66.9%{opacity:0}100%{opacity:0}}@keyframes k118{0%{opacity:0}66.8%{opacity:0}66.9%{opacity:1}76.8%{opacity:1}76.9%{opacity:0}100%{opacity:0}}@keyframes k119{0%{opacity:0}76.8%{opacity:0}76.9%{opacity:1}86.8%{opacity:1}86.9%{opacity:0}100%{opacity:0}}@keyframes k120{0%{opacity:0}86.8%{opacity:0}86.9%{opacity:1}96.8%{opacity:1}96.9%{opacity:0}100%{opacity:0}}@keyframes k121{0%{transform:translateX(0px)}100%{transform:translateX(-213.5px)}}@keyframes k122{0%{transform:translateY(474px);opacity:0}11.6%{opacity:0}11.7%{transform:translateY(474px);opacity:1}13.5%{transform:translateY(434px)}14.1%{transform:translateY(434px)}15.8%{opacity:1}15.9%{transform:translateY(474px);opacity:0}25.2%{opacity:0}25.3%{transform:translateY(474px);opacity:1}27.1%{transform:translateY(434px)}27.5%{transform:translateY(434px)}29.2%{opacity:1}29.3%{transform:translateY(474px);opacity:0}32.8%{opacity:0}32.9%{transform:translateY(474px);opacity:1}34.7%{transform:translateY(434px)}35.1%{transform:translateY(434px)}36.8%{opacity:1}36.9%{transform:translateY(474px);opacity:0}100%{transform:translateY(474px);opacity:0}}@keyframes k123{0%{opacity:0}13.4%{opacity:0}13.5%{opacity:1}19.5%{opacity:0}27%{opacity:0}27.1%{opacity:1}33.1%{opacity:0}34.6%{opacity:0}34.7%{opacity:1}40.7%{opacity:0}100%{opacity:0}}@keyframes k124{0%{transform:scale(3.4);opacity:0}13.4%{transform:scale(3.4);opacity:0}13.5%{transform:scale(1);opacity:.7}19.5%{transform:scale(3.4);opacity:0}27%{transform:scale(3.4);opacity:0}27.1%{transform:scale(1);opacity:.7}33.1%{transform:scale(3.4);opacity:0}34.6%{transform:scale(3.4);opacity:0}34.7%{transform:scale(1);opacity:.7}40.7%{transform:scale(3.4);opacity:0}100%{transform:scale(3.4);opacity:0}}@keyframes k125{0%{opacity:.04}2.4%{opacity:0}7.9%{opacity:0}8%{opacity:.09}9.6%{opacity:.09}15.6%{opacity:0}20.8%{opacity:0}20.9%{opacity:.09}22.5%{opacity:.09}26.3%{opacity:.03}26.4%{opacity:.09}28%{opacity:.09}34%{opacity:0}34.3%{opacity:0}34.4%{opacity:.09}36%{opacity:.09}39.3%{opacity:.04}39.4%{opacity:.09}41%{opacity:.09}44.6%{opacity:.04}44.7%{opacity:.09}46.3%{opacity:.09}52.3%{opacity:0}52.4%{opacity:0}52.5%{opacity:.09}54.1%{opacity:.09}55.4%{opacity:.07}55.5%{opacity:.09}57.1%{opacity:.09}63.1%{opacity:0}63.2%{opacity:.09}64.8%{opacity:.09}70.7%{opacity:0}70.8%{opacity:.09}72.4%{opacity:.09}78.4%{opacity:0}78.8%{opacity:0}78.9%{opacity:.09}80.5%{opacity:.09}84%{opacity:.04}84.1%{opacity:.09}85.7%{opacity:.09}89.2%{opacity:.04}89.3%{opacity:.09}90.9%{opacity:.09}94.7%{opacity:.03}94.8%{opacity:.09}96.4%{opacity:.09}100%{opacity:.04}}@keyframes k126{0%{fill:#202027}84%{fill:#202027}84.1%{fill:#ff6b88}88.6%{fill:#ff6b88}91%{fill:#202027}100%{fill:#202027}}@keyframes k127{0%{fill:#a09ea8}84%{fill:#a09ea8}84.1%{fill:#1a0d11}89.8%{fill:#1a0d11}89.9%{fill:#a09ea8}100%{fill:#a09ea8}}@keyframes k128{0%{fill:#202027}7.9%{fill:#202027}8%{fill:#ff6b88}12.5%{fill:#ff6b88}14.9%{fill:#202027}44.6%{fill:#202027}44.7%{fill:#ff6b88}49.2%{fill:#ff6b88}51.6%{fill:#202027}100%{fill:#202027}}@keyframes k129{0%{fill:#a09ea8}7.9%{fill:#a09ea8}8%{fill:#1a0d11}13.7%{fill:#1a0d11}13.8%{fill:#a09ea8}44.6%{fill:#a09ea8}44.7%{fill:#1a0d11}50.4%{fill:#1a0d11}50.5%{fill:#a09ea8}100%{fill:#a09ea8}}@keyframes k130{0%{fill:#be556c}1.7%{fill:#202027}70.7%{fill:#202027}70.8%{fill:#ff6b88}75.3%{fill:#ff6b88}77.7%{fill:#202027}94.7%{fill:#202027}94.8%{fill:#ff6b88}99.3%{fill:#ff6b88}100%{fill:#be556c}}@keyframes k131{0%{fill:#1a0d11}.5%{fill:#1a0d11}.6%{fill:#a09ea8}70.7%{fill:#a09ea8}70.8%{fill:#1a0d11}76.5%{fill:#1a0d11}76.6%{fill:#a09ea8}94.7%{fill:#a09ea8}94.8%{fill:#1a0d11}100%{fill:#1a0d11}}@keyframes k132{0%{fill:#202027}34.3%{fill:#202027}34.4%{fill:#ff6b88}38.9%{fill:#ff6b88}41.3%{fill:#202027}78.8%{fill:#202027}78.9%{fill:#ff6b88}83.4%{fill:#ff6b88}85.8%{fill:#202027}100%{fill:#202027}}@keyframes k133{0%{fill:#a09ea8}34.3%{fill:#a09ea8}34.4%{fill:#1a0d11}40.1%{fill:#1a0d11}40.2%{fill:#a09ea8}78.8%{fill:#a09ea8}78.9%{fill:#1a0d11}84.6%{fill:#1a0d11}84.7%{fill:#a09ea8}100%{fill:#a09ea8}}@keyframes k134{0%{fill:#202027}20.8%{fill:#202027}20.9%{fill:#ff6b88}25.4%{fill:#ff6b88}26.3%{fill:#ab4f64}26.4%{fill:#ff6b88}30.9%{fill:#ff6b88}33.3%{fill:#202027}39.3%{fill:#202027}39.4%{fill:#ff6b88}43.9%{fill:#ff6b88}46.3%{fill:#202027}55.4%{fill:#202027}55.5%{fill:#ff6b88}60%{fill:#ff6b88}62.4%{fill:#202027}63.1%{fill:#202027}63.2%{fill:#ff6b88}67.7%{fill:#ff6b88}70.1%{fill:#202027}89.2%{fill:#202027}89.3%{fill:#ff6b88}93.8%{fill:#ff6b88}96.2%{fill:#202027}100%{fill:#202027}}@keyframes k135{0%{fill:#a09ea8}20.8%{fill:#a09ea8}20.9%{fill:#1a0d11}32.1%{fill:#1a0d11}32.2%{fill:#a09ea8}39.3%{fill:#a09ea8}39.4%{fill:#1a0d11}45.1%{fill:#1a0d11}45.2%{fill:#a09ea8}55.4%{fill:#a09ea8}55.5%{fill:#1a0d11}61.2%{fill:#1a0d11}61.3%{fill:#a09ea8}63.1%{fill:#a09ea8}63.2%{fill:#1a0d11}68.9%{fill:#1a0d11}69%{fill:#a09ea8}89.2%{fill:#a09ea8}89.3%{fill:#1a0d11}95%{fill:#1a0d11}95.1%{fill:#a09ea8}100%{fill:#a09ea8}}@keyframes k136{0%{fill:#202027}52.4%{fill:#202027}52.5%{fill:#ff6b88}57%{fill:#ff6b88}59.4%{fill:#202027}100%{fill:#202027}}@keyframes k137{0%{fill:#a09ea8}52.4%{fill:#a09ea8}52.5%{fill:#1a0d11}58.2%{fill:#1a0d11}58.3%{fill:#a09ea8}100%{fill:#a09ea8}}@keyframes k138{0%{transform:translateY(22px);opacity:0}8%{transform:translateY(22px);opacity:0}9.6%{transform:translateY(0px);opacity:1}20.9%{transform:translateY(0px);opacity:1}22.5%{transform:translateY(22px);opacity:0}100%{transform:translateY(22px);opacity:0}}@keyframes k139{0%{transform:translateY(22px);opacity:0}20.9%{transform:translateY(22px);opacity:0}22.5%{transform:translateY(0px);opacity:1}26.4%{transform:translateY(0px);opacity:1}28%{transform:translateY(22px);opacity:0}100%{transform:translateY(22px);opacity:0}}@keyframes k140{0%{transform:translateY(22px);opacity:0}26.4%{transform:translateY(22px);opacity:0}28%{transform:translateY(0px);opacity:1}34.4%{transform:translateY(0px);opacity:1}36%{transform:translateY(22px);opacity:0}100%{transform:translateY(22px);opacity:0}}@keyframes k141{0%{transform:translateY(22px);opacity:0}34.4%{transform:translateY(22px);opacity:0}36%{transform:translateY(0px);opacity:1}39.4%{transform:translateY(0px);opacity:1}41%{transform:translateY(22px);opacity:0}100%{transform:translateY(22px);opacity:0}}@keyframes k142{0%{transform:translateY(22px);opacity:0}39.4%{transform:translateY(22px);opacity:0}41%{transform:translateY(0px);opacity:1}44.7%{transform:translateY(0px);opacity:1}46.3%{transform:translateY(22px);opacity:0}100%{transform:translateY(22px);opacity:0}}@keyframes k143{0%{transform:translateY(22px);opacity:0}44.7%{transform:translateY(22px);opacity:0}46.3%{transform:translateY(0px);opacity:1}52.5%{transform:translateY(0px);opacity:1}54.1%{transform:translateY(22px);opacity:0}100%{transform:translateY(22px);opacity:0}}@keyframes k144{0%{transform:translateY(22px);opacity:0}52.5%{transform:translateY(22px);opacity:0}54.1%{transform:translateY(0px);opacity:1}55.5%{transform:translateY(0px);opacity:1}57.1%{transform:translateY(22px);opacity:0}100%{transform:translateY(22px);opacity:0}}@keyframes k145{0%{transform:translateY(22px);opacity:0}55.5%{transform:translateY(22px);opacity:0}57.1%{transform:translateY(0px);opacity:1}63.2%{transform:translateY(0px);opacity:1}64.8%{transform:translateY(22px);opacity:0}100%{transform:translateY(22px);opacity:0}}@keyframes k146{0%{transform:translateY(22px);opacity:0}63.2%{transform:translateY(22px);opacity:0}64.8%{transform:translateY(0px);opacity:1}70.8%{transform:translateY(0px);opacity:1}72.4%{transform:translateY(22px);opacity:0}100%{transform:translateY(22px);opacity:0}}@keyframes k147{0%{transform:translateY(22px);opacity:0}70.8%{transform:translateY(22px);opacity:0}72.4%{transform:translateY(0px);opacity:1}78.9%{transform:translateY(0px);opacity:1}80.5%{transform:translateY(22px);opacity:0}100%{transform:translateY(22px);opacity:0}}@keyframes k148{0%{transform:translateY(22px);opacity:0}78.9%{transform:translateY(22px);opacity:0}80.5%{transform:translateY(0px);opacity:1}84.1%{transform:translateY(0px);opacity:1}85.7%{transform:translateY(22px);opacity:0}100%{transform:translateY(22px);opacity:0}}@keyframes k149{0%{transform:translateY(22px);opacity:0}84.1%{transform:translateY(22px);opacity:0}85.7%{transform:translateY(0px);opacity:1}89.3%{transform:translateY(0px);opacity:1}90.9%{transform:translateY(22px);opacity:0}100%{transform:translateY(22px);opacity:0}}@keyframes k150{0%{transform:translateY(22px);opacity:0}89.3%{transform:translateY(22px);opacity:0}90.9%{transform:translateY(0px);opacity:1}94.8%{transform:translateY(0px);opacity:1}96.4%{transform:translateY(22px);opacity:0}100%{transform:translateY(22px);opacity:0}}@keyframes k151{0%{transform:translateY(0px);opacity:1}8%{transform:translateY(0px);opacity:1}9.6%{transform:translateY(22px);opacity:0}94.8%{transform:translateY(22px);opacity:0}96.4%{transform:translateY(0px);opacity:1}100%{transform:translateY(0px);opacity:1}}@keyframes k152{0%{transform:translateX(0px)}8%{transform:translateX(0px)}9%{transform:translateX(-5.5px)}20.9%{transform:translateX(-5.5px)}21.9%{transform:translateX(-11px)}26.4%{transform:translateX(-11px)}27.4%{transform:translateX(-16.5px)}34.4%{transform:translateX(-16.5px)}35.4%{transform:translateX(-22px)}39.4%{transform:translateX(-22px)}40.4%{transform:translateX(-27.5px)}44.7%{transform:translateX(-27.5px)}45.7%{transform:translateX(-33px)}52.5%{transform:translateX(-33px)}53.5%{transform:translateX(-38.5px)}55.5%{transform:translateX(-38.5px)}56.5%{transform:translateX(-44px)}63.2%{transform:translateX(-44px)}64.2%{transform:translateX(-49.5px)}70.8%{transform:translateX(-49.5px)}71.8%{transform:translateX(-55px)}78.9%{transform:translateX(-55px)}79.9%{transform:translateX(-60.5px)}84.1%{transform:translateX(-60.5px)}85.1%{transform:translateX(-66px)}89.3%{transform:translateX(-66px)}90.3%{transform:translateX(-71.5px)}94.8%{transform:translateX(-71.5px)}95.8%{transform:translateX(-77px)}100%{transform:translateX(-77px)}}@keyframes k153{0%{opacity:1}7.9%{opacity:1}8%{opacity:0}94.7%{opacity:0}94.8%{opacity:1}100%{opacity:1}}@keyframes k154{0%{opacity:0}7.9%{opacity:0}8%{opacity:1}20.8%{opacity:1}20.9%{opacity:0}100%{opacity:0}}@keyframes k155{0%{opacity:0}20.8%{opacity:0}20.9%{opacity:1}26.3%{opacity:1}26.4%{opacity:0}100%{opacity:0}}@keyframes k156{0%{opacity:0}26.3%{opacity:0}26.4%{opacity:1}34.3%{opacity:1}34.4%{opacity:0}100%{opacity:0}}@keyframes k157{0%{opacity:0}34.3%{opacity:0}34.4%{opacity:1}39.3%{opacity:1}39.4%{opacity:0}100%{opacity:0}}@keyframes k158{0%{opacity:0}39.3%{opacity:0}39.4%{opacity:1}44.6%{opacity:1}44.7%{opacity:0}100%{opacity:0}}@keyframes k159{0%{opacity:0}44.6%{opacity:0}44.7%{opacity:1}52.4%{opacity:1}52.5%{opacity:0}100%{opacity:0}}@keyframes k160{0%{opacity:0}52.4%{opacity:0}52.5%{opacity:1}55.4%{opacity:1}55.5%{opacity:0}100%{opacity:0}}@keyframes k161{0%{opacity:0}55.4%{opacity:0}55.5%{opacity:1}63.1%{opacity:1}63.2%{opacity:0}100%{opacity:0}}@keyframes k162{0%{opacity:0}63.1%{opacity:0}63.2%{opacity:1}70.7%{opacity:1}70.8%{opacity:0}100%{opacity:0}}@keyframes k163{0%{opacity:0}70.7%{opacity:0}70.8%{opacity:1}78.8%{opacity:1}78.9%{opacity:0}100%{opacity:0}}@keyframes k164{0%{opacity:0}78.8%{opacity:0}78.9%{opacity:1}84%{opacity:1}84.1%{opacity:0}100%{opacity:0}}@keyframes k165{0%{opacity:0}84%{opacity:0}84.1%{opacity:1}89.2%{opacity:1}89.3%{opacity:0}100%{opacity:0}}@keyframes k166{0%{opacity:0}89.2%{opacity:0}89.3%{opacity:1}94.7%{opacity:1}94.8%{opacity:0}100%{opacity:0}}@keyframes k167{0%{opacity:1}7.9%{opacity:1}8%{opacity:0}99.9%{opacity:0}100%{opacity:1}}@keyframes k168{0%{opacity:0;fill:#ecebee}7.9%{opacity:0;fill:#ecebee}8%{opacity:1;fill:#ff6b88}9.2%{fill:#ff6b88}14.2%{fill:#ecebee}20.8%{opacity:1}20.9%{opacity:0}100%{opacity:0;fill:#ecebee}}@keyframes k169{0%{opacity:0;fill:#ecebee}20.8%{opacity:0;fill:#ecebee}20.9%{opacity:1;fill:#ff6b88}22.1%{fill:#ff6b88}26.3%{opacity:1}26.4%{opacity:0}27.1%{fill:#ecebee}100%{opacity:0;fill:#ecebee}}@keyframes k170{0%{opacity:0;fill:#ecebee}26.3%{opacity:0;fill:#ecebee}26.4%{opacity:1;fill:#ff6b88}27.6%{fill:#ff6b88}32.6%{fill:#ecebee}34.3%{opacity:1}34.4%{opacity:0}100%{opacity:0;fill:#ecebee}}@keyframes k171{0%{opacity:0;fill:#ecebee}34.3%{opacity:0;fill:#ecebee}34.4%{opacity:1;fill:#ff6b88}35.6%{fill:#ff6b88}39.3%{opacity:1}39.4%{opacity:0}40.6%{fill:#ecebee}100%{opacity:0;fill:#ecebee}}@keyframes k172{0%{opacity:0;fill:#ecebee}39.3%{opacity:0;fill:#ecebee}39.4%{opacity:1;fill:#ff6b88}40.6%{fill:#ff6b88}44.6%{opacity:1}44.7%{opacity:0}45.6%{fill:#ecebee}100%{opacity:0;fill:#ecebee}}@keyframes k173{0%{opacity:0;fill:#ecebee}44.6%{opacity:0;fill:#ecebee}44.7%{opacity:1;fill:#ff6b88}45.9%{fill:#ff6b88}50.9%{fill:#ecebee}52.4%{opacity:1}52.5%{opacity:0}100%{opacity:0;fill:#ecebee}}@keyframes k174{0%{opacity:0;fill:#ecebee}52.4%{opacity:0;fill:#ecebee}52.5%{opacity:1;fill:#ff6b88}53.7%{fill:#ff6b88}55.4%{opacity:1}55.5%{opacity:0}58.7%{fill:#ecebee}100%{opacity:0;fill:#ecebee}}@keyframes k175{0%{opacity:0;fill:#ecebee}55.4%{opacity:0;fill:#ecebee}55.5%{opacity:1;fill:#ff6b88}56.7%{fill:#ff6b88}61.7%{fill:#ecebee}63.1%{opacity:1}63.2%{opacity:0}100%{opacity:0;fill:#ecebee}}@keyframes k176{0%{opacity:0;fill:#ecebee}63.1%{opacity:0;fill:#ecebee}63.2%{opacity:1;fill:#ff6b88}64.4%{fill:#ff6b88}69.4%{fill:#ecebee}70.7%{opacity:1}70.8%{opacity:0}100%{opacity:0;fill:#ecebee}}@keyframes k177{0%{opacity:0;fill:#ecebee}70.7%{opacity:0;fill:#ecebee}70.8%{opacity:1;fill:#ff6b88}72%{fill:#ff6b88}77%{fill:#ecebee}78.8%{opacity:1}78.9%{opacity:0}100%{opacity:0;fill:#ecebee}}@keyframes k178{0%{opacity:0;fill:#ecebee}78.8%{opacity:0;fill:#ecebee}78.9%{opacity:1;fill:#ff6b88}80.1%{fill:#ff6b88}84%{opacity:1}84.1%{opacity:0}85.1%{fill:#ecebee}100%{opacity:0;fill:#ecebee}}@keyframes k179{0%{opacity:0;fill:#ecebee}84%{opacity:0;fill:#ecebee}84.1%{opacity:1;fill:#ff6b88}85.3%{fill:#ff6b88}89.2%{opacity:1}89.3%{opacity:0}90.3%{fill:#ecebee}100%{opacity:0;fill:#ecebee}}@keyframes k180{0%{opacity:0;fill:#ecebee}89.2%{opacity:0;fill:#ecebee}89.3%{opacity:1;fill:#ff6b88}90.5%{fill:#ff6b88}94.7%{opacity:1}94.8%{opacity:0}95.5%{fill:#ecebee}100%{opacity:0;fill:#ecebee}}@keyframes k181{0%{opacity:0;fill:#f0d1da}1%{fill:#ecebee}94.7%{opacity:0;fill:#ecebee}94.8%{opacity:1;fill:#ff6b88}96%{fill:#ff6b88}99.9%{opacity:1}100%{opacity:0;fill:#f0d1da}}@keyframes k182{0%{opacity:0}5.4%{opacity:0}5.5%{opacity:.09}7.1%{opacity:.09}10.6%{opacity:.04}10.7%{opacity:.09}12.3%{opacity:.09}15.8%{opacity:.04}15.9%{opacity:.09}17.5%{opacity:.09}23.5%{opacity:0}23.6%{opacity:0}23.7%{opacity:.09}25.3%{opacity:.09}29.2%{opacity:.03}29.3%{opacity:.09}30.9%{opacity:.09}36.8%{opacity:0}36.9%{opacity:.09}38.5%{opacity:.09}44.5%{opacity:0}47.2%{opacity:0}47.3%{opacity:.09}48.9%{opacity:.09}54.9%{opacity:0}57.8%{opacity:0}57.9%{opacity:.09}59.5%{opacity:.09}65.5%{opacity:0}68.4%{opacity:0}68.5%{opacity:.09}70.1%{opacity:.09}76.1%{opacity:0}76.3%{opacity:0}76.4%{opacity:.09}78%{opacity:.09}81.1%{opacity:.04}81.2%{opacity:.09}82.8%{opacity:.09}86.9%{opacity:.03}87%{opacity:.09}88.6%{opacity:.09}94.6%{opacity:0}100%{opacity:0}}@keyframes k183{0%{fill:#202027}10.6%{fill:#202027}10.7%{fill:#ff6b88}15.2%{fill:#ff6b88}17.6%{fill:#202027}100%{fill:#202027}}@keyframes k184{0%{fill:#a09ea8}10.6%{fill:#a09ea8}10.7%{fill:#1a0d11}16.4%{fill:#1a0d11}16.5%{fill:#a09ea8}100%{fill:#a09ea8}}@keyframes k185{0%{fill:#202027}5.4%{fill:#202027}5.5%{fill:#ff6b88}10%{fill:#ff6b88}12.4%{fill:#202027}47.2%{fill:#202027}47.3%{fill:#ff6b88}51.8%{fill:#ff6b88}54.2%{fill:#202027}68.4%{fill:#202027}68.5%{fill:#ff6b88}73%{fill:#ff6b88}75.4%{fill:#202027}76.3%{fill:#202027}76.4%{fill:#ff6b88}80.9%{fill:#ff6b88}81.1%{fill:#ec6580}81.2%{fill:#ff6b88}85.7%{fill:#ff6b88}88.1%{fill:#202027}100%{fill:#202027}}@keyframes k186{0%{fill:#a09ea8}5.4%{fill:#a09ea8}5.5%{fill:#1a0d11}11.2%{fill:#1a0d11}11.3%{fill:#a09ea8}47.2%{fill:#a09ea8}47.3%{fill:#1a0d11}53%{fill:#1a0d11}53.1%{fill:#a09ea8}68.4%{fill:#a09ea8}68.5%{fill:#1a0d11}74.2%{fill:#1a0d11}74.3%{fill:#a09ea8}76.3%{fill:#a09ea8}76.4%{fill:#1a0d11}86.9%{fill:#1a0d11}87%{fill:#a09ea8}100%{fill:#a09ea8}}@keyframes k187{0%{fill:#202027}23.6%{fill:#202027}23.7%{fill:#ff6b88}28.2%{fill:#ff6b88}30.6%{fill:#202027}57.8%{fill:#202027}57.9%{fill:#ff6b88}62.4%{fill:#ff6b88}64.8%{fill:#202027}86.9%{fill:#202027}87%{fill:#ff6b88}91.5%{fill:#ff6b88}93.9%{fill:#202027}100%{fill:#202027}}@keyframes k188{0%{fill:#a09ea8}23.6%{fill:#a09ea8}23.7%{fill:#1a0d11}29.4%{fill:#1a0d11}29.5%{fill:#a09ea8}57.8%{fill:#a09ea8}57.9%{fill:#1a0d11}63.6%{fill:#1a0d11}63.7%{fill:#a09ea8}86.9%{fill:#a09ea8}87%{fill:#1a0d11}92.7%{fill:#1a0d11}92.8%{fill:#a09ea8}100%{fill:#a09ea8}}@keyframes k189{0%{fill:#202027}15.8%{fill:#202027}15.9%{fill:#ff6b88}20.4%{fill:#ff6b88}22.8%{fill:#202027}29.2%{fill:#202027}29.3%{fill:#ff6b88}33.8%{fill:#ff6b88}36.2%{fill:#202027}36.8%{fill:#202027}36.9%{fill:#ff6b88}41.4%{fill:#ff6b88}43.8%{fill:#202027}100%{fill:#202027}}@keyframes k190{0%{fill:#a09ea8}15.8%{fill:#a09ea8}15.9%{fill:#1a0d11}21.6%{fill:#1a0d11}21.7%{fill:#a09ea8}29.2%{fill:#a09ea8}29.3%{fill:#1a0d11}35%{fill:#1a0d11}35.1%{fill:#a09ea8}36.8%{fill:#a09ea8}36.9%{fill:#1a0d11}42.6%{fill:#1a0d11}42.7%{fill:#a09ea8}100%{fill:#a09ea8}}@keyframes k191{0%{transform:translateY(22px);opacity:0}5.5%{transform:translateY(22px);opacity:0}7.1%{transform:translateY(0px);opacity:1}10.7%{transform:translateY(0px);opacity:1}12.3%{transform:translateY(22px);opacity:0}100%{transform:translateY(22px);opacity:0}}@keyframes k192{0%{transform:translateY(22px);opacity:0}10.7%{transform:translateY(22px);opacity:0}12.3%{transform:translateY(0px);opacity:1}15.9%{transform:translateY(0px);opacity:1}17.5%{transform:translateY(22px);opacity:0}100%{transform:translateY(22px);opacity:0}}@keyframes k193{0%{transform:translateY(22px);opacity:0}15.9%{transform:translateY(22px);opacity:0}17.5%{transform:translateY(0px);opacity:1}23.7%{transform:translateY(0px);opacity:1}25.3%{transform:translateY(22px);opacity:0}100%{transform:translateY(22px);opacity:0}}@keyframes k194{0%{transform:translateY(22px);opacity:0}23.7%{transform:translateY(22px);opacity:0}25.3%{transform:translateY(0px);opacity:1}29.3%{transform:translateY(0px);opacity:1}30.9%{transform:translateY(22px);opacity:0}100%{transform:translateY(22px);opacity:0}}@keyframes k195{0%{transform:translateY(22px);opacity:0}29.3%{transform:translateY(22px);opacity:0}30.9%{transform:translateY(0px);opacity:1}36.9%{transform:translateY(0px);opacity:1}38.5%{transform:translateY(22px);opacity:0}100%{transform:translateY(22px);opacity:0}}@keyframes k196{0%{transform:translateY(22px);opacity:0}36.9%{transform:translateY(22px);opacity:0}38.5%{transform:translateY(0px);opacity:1}47.3%{transform:translateY(0px);opacity:1}48.9%{transform:translateY(22px);opacity:0}100%{transform:translateY(22px);opacity:0}}@keyframes k197{0%{transform:translateY(22px);opacity:0}47.3%{transform:translateY(22px);opacity:0}48.9%{transform:translateY(0px);opacity:1}57.9%{transform:translateY(0px);opacity:1}59.5%{transform:translateY(22px);opacity:0}100%{transform:translateY(22px);opacity:0}}@keyframes k198{0%{transform:translateY(22px);opacity:0}57.9%{transform:translateY(22px);opacity:0}59.5%{transform:translateY(0px);opacity:1}68.5%{transform:translateY(0px);opacity:1}70.1%{transform:translateY(22px);opacity:0}100%{transform:translateY(22px);opacity:0}}@keyframes k199{0%{transform:translateY(22px);opacity:0}68.5%{transform:translateY(22px);opacity:0}70.1%{transform:translateY(0px);opacity:1}76.4%{transform:translateY(0px);opacity:1}78%{transform:translateY(22px);opacity:0}100%{transform:translateY(22px);opacity:0}}@keyframes k200{0%{transform:translateY(22px);opacity:0}76.4%{transform:translateY(22px);opacity:0}78%{transform:translateY(0px);opacity:1}81.2%{transform:translateY(0px);opacity:1}82.8%{transform:translateY(22px);opacity:0}100%{transform:translateY(22px);opacity:0}}@keyframes k201{0%{transform:translateY(22px);opacity:0}81.2%{transform:translateY(22px);opacity:0}82.8%{transform:translateY(0px);opacity:1}87%{transform:translateY(0px);opacity:1}88.6%{transform:translateY(22px);opacity:0}100%{transform:translateY(22px);opacity:0}}@keyframes k202{0%{transform:translateY(0px);opacity:1}5.5%{transform:translateY(0px);opacity:1}7.1%{transform:translateY(22px);opacity:0}87%{transform:translateY(22px);opacity:0}88.6%{transform:translateY(0px);opacity:1}100%{transform:translateY(0px);opacity:1}}@keyframes k203{0%{transform:translateX(0px)}5.5%{transform:translateX(0px)}6.5%{transform:translateX(-5.5px)}10.7%{transform:translateX(-5.5px)}11.7%{transform:translateX(-11px)}15.9%{transform:translateX(-11px)}16.9%{transform:translateX(-16.5px)}23.7%{transform:translateX(-16.5px)}24.7%{transform:translateX(-22px)}29.3%{transform:translateX(-22px)}30.3%{transform:translateX(-27.5px)}36.9%{transform:translateX(-27.5px)}37.9%{transform:translateX(-33px)}47.3%{transform:translateX(-33px)}48.3%{transform:translateX(-38.5px)}57.9%{transform:translateX(-38.5px)}58.9%{transform:translateX(-44px)}68.5%{transform:translateX(-44px)}69.5%{transform:translateX(-49.5px)}76.4%{transform:translateX(-49.5px)}77.4%{transform:translateX(-55px)}81.2%{transform:translateX(-55px)}82.2%{transform:translateX(-60.5px)}87%{transform:translateX(-60.5px)}88%{transform:translateX(-66px)}100%{transform:translateX(-66px)}}@keyframes k204{0%{opacity:1}5.4%{opacity:1}5.5%{opacity:0}86.9%{opacity:0}87%{opacity:1}100%{opacity:1}}@keyframes k205{0%{opacity:0}5.4%{opacity:0}5.5%{opacity:1}10.6%{opacity:1}10.7%{opacity:0}100%{opacity:0}}@keyframes k206{0%{opacity:0}10.6%{opacity:0}10.7%{opacity:1}15.8%{opacity:1}15.9%{opacity:0}100%{opacity:0}}@keyframes k207{0%{opacity:0}15.8%{opacity:0}15.9%{opacity:1}23.6%{opacity:1}23.7%{opacity:0}100%{opacity:0}}@keyframes k208{0%{opacity:0}23.6%{opacity:0}23.7%{opacity:1}29.2%{opacity:1}29.3%{opacity:0}100%{opacity:0}}@keyframes k209{0%{opacity:0}29.2%{opacity:0}29.3%{opacity:1}36.8%{opacity:1}36.9%{opacity:0}100%{opacity:0}}@keyframes k210{0%{opacity:0}36.8%{opacity:0}36.9%{opacity:1}47.2%{opacity:1}47.3%{opacity:0}100%{opacity:0}}@keyframes k211{0%{opacity:0}47.2%{opacity:0}47.3%{opacity:1}57.8%{opacity:1}57.9%{opacity:0}100%{opacity:0}}@keyframes k212{0%{opacity:0}57.8%{opacity:0}57.9%{opacity:1}68.4%{opacity:1}68.5%{opacity:0}100%{opacity:0}}@keyframes k213{0%{opacity:0}68.4%{opacity:0}68.5%{opacity:1}76.3%{opacity:1}76.4%{opacity:0}100%{opacity:0}}@keyframes k214{0%{opacity:0}76.3%{opacity:0}76.4%{opacity:1}81.1%{opacity:1}81.2%{opacity:0}100%{opacity:0}}@keyframes k215{0%{opacity:0}81.1%{opacity:0}81.2%{opacity:1}86.9%{opacity:1}87%{opacity:0}100%{opacity:0}}@keyframes k216{0%{opacity:1}5.4%{opacity:1}5.5%{opacity:0}99.9%{opacity:0}100%{opacity:1}}@keyframes k217{0%{opacity:0;fill:#ecebee}5.4%{opacity:0;fill:#ecebee}5.5%{opacity:1;fill:#ff6b88}6.7%{fill:#ff6b88}10.6%{opacity:1}10.7%{opacity:0}11.7%{fill:#ecebee}100%{opacity:0;fill:#ecebee}}@keyframes k218{0%{opacity:0;fill:#ecebee}10.6%{opacity:0;fill:#ecebee}10.7%{opacity:1;fill:#ff6b88}11.9%{fill:#ff6b88}15.8%{opacity:1}15.9%{opacity:0}16.9%{fill:#ecebee}100%{opacity:0;fill:#ecebee}}@keyframes k219{0%{opacity:0;fill:#ecebee}15.8%{opacity:0;fill:#ecebee}15.9%{opacity:1;fill:#ff6b88}17.1%{fill:#ff6b88}22.1%{fill:#ecebee}23.6%{opacity:1}23.7%{opacity:0}100%{opacity:0;fill:#ecebee}}@keyframes k220{0%{opacity:0;fill:#ecebee}23.6%{opacity:0;fill:#ecebee}23.7%{opacity:1;fill:#ff6b88}24.9%{fill:#ff6b88}29.2%{opacity:1}29.3%{opacity:0}29.9%{fill:#ecebee}100%{opacity:0;fill:#ecebee}}@keyframes k221{0%{opacity:0;fill:#ecebee}29.2%{opacity:0;fill:#ecebee}29.3%{opacity:1;fill:#ff6b88}30.5%{fill:#ff6b88}35.5%{fill:#ecebee}36.8%{opacity:1}36.9%{opacity:0}100%{opacity:0;fill:#ecebee}}@keyframes k222{0%{opacity:0;fill:#ecebee}36.8%{opacity:0;fill:#ecebee}36.9%{opacity:1;fill:#ff6b88}38.1%{fill:#ff6b88}43.1%{fill:#ecebee}47.2%{opacity:1}47.3%{opacity:0}100%{opacity:0;fill:#ecebee}}@keyframes k223{0%{opacity:0;fill:#ecebee}47.2%{opacity:0;fill:#ecebee}47.3%{opacity:1;fill:#ff6b88}48.5%{fill:#ff6b88}53.5%{fill:#ecebee}57.8%{opacity:1}57.9%{opacity:0}100%{opacity:0;fill:#ecebee}}@keyframes k224{0%{opacity:0;fill:#ecebee}57.8%{opacity:0;fill:#ecebee}57.9%{opacity:1;fill:#ff6b88}59.1%{fill:#ff6b88}64.1%{fill:#ecebee}68.4%{opacity:1}68.5%{opacity:0}100%{opacity:0;fill:#ecebee}}@keyframes k225{0%{opacity:0;fill:#ecebee}68.4%{opacity:0;fill:#ecebee}68.5%{opacity:1;fill:#ff6b88}69.7%{fill:#ff6b88}74.7%{fill:#ecebee}76.3%{opacity:1}76.4%{opacity:0}100%{opacity:0;fill:#ecebee}}@keyframes k226{0%{opacity:0;fill:#ecebee}76.3%{opacity:0;fill:#ecebee}76.4%{opacity:1;fill:#ff6b88}77.6%{fill:#ff6b88}81.1%{opacity:1}81.2%{opacity:0}82.6%{fill:#ecebee}100%{opacity:0;fill:#ecebee}}@keyframes k227{0%{opacity:0;fill:#ecebee}81.1%{opacity:0;fill:#ecebee}81.2%{opacity:1;fill:#ff6b88}82.4%{fill:#ff6b88}86.9%{opacity:1}87%{opacity:0}87.4%{fill:#ecebee}100%{opacity:0;fill:#ecebee}}@keyframes k228{0%{opacity:0;fill:#ecebee}86.9%{opacity:0;fill:#ecebee}87%{opacity:1;fill:#ff6b88}88.2%{fill:#ff6b88}93.2%{fill:#ecebee}99.9%{opacity:1}100%{opacity:0;fill:#ecebee}}@keyframes k229{0%{opacity:0}13%{opacity:0}13.1%{opacity:.09}14.7%{opacity:.09}18.4%{opacity:.03}18.5%{opacity:.09}20.1%{opacity:.09}26.1%{opacity:0}31.5%{opacity:0}31.6%{opacity:.09}33.2%{opacity:.09}39.2%{opacity:0}41.8%{opacity:0}41.9%{opacity:.09}43.5%{opacity:.09}49.5%{opacity:0}49.8%{opacity:0}49.9%{opacity:.09}51.5%{opacity:.09}57.5%{opacity:0}60.4%{opacity:0}60.5%{opacity:.09}62.1%{opacity:.09}65.9%{opacity:.03}66%{opacity:.09}67.6%{opacity:.09}73.5%{opacity:0}73.6%{opacity:.09}75.2%{opacity:.09}81.2%{opacity:0}92%{opacity:0}92.1%{opacity:.09}93.7%{opacity:.09}99.7%{opacity:0}100%{opacity:0}}@keyframes k230{0%{fill:#202027}41.8%{fill:#202027}41.9%{fill:#ff6b88}46.4%{fill:#ff6b88}48.8%{fill:#202027}65.9%{fill:#202027}66%{fill:#ff6b88}70.5%{fill:#ff6b88}72.9%{fill:#202027}100%{fill:#202027}}@keyframes k231{0%{fill:#a09ea8}41.8%{fill:#a09ea8}41.9%{fill:#1a0d11}47.6%{fill:#1a0d11}47.7%{fill:#a09ea8}65.9%{fill:#a09ea8}66%{fill:#1a0d11}71.7%{fill:#1a0d11}71.8%{fill:#a09ea8}100%{fill:#a09ea8}}@keyframes k232{0%{fill:#202027}49.8%{fill:#202027}49.9%{fill:#ff6b88}54.4%{fill:#ff6b88}56.8%{fill:#202027}60.4%{fill:#202027}60.5%{fill:#ff6b88}65%{fill:#ff6b88}67.4%{fill:#202027}100%{fill:#202027}}@keyframes k233{0%{fill:#a09ea8}49.8%{fill:#a09ea8}49.9%{fill:#1a0d11}55.6%{fill:#1a0d11}55.7%{fill:#a09ea8}60.4%{fill:#a09ea8}60.5%{fill:#1a0d11}66.2%{fill:#1a0d11}66.3%{fill:#a09ea8}100%{fill:#a09ea8}}@keyframes k234{0%{fill:#202027}18.4%{fill:#202027}18.5%{fill:#ff6b88}23%{fill:#ff6b88}25.4%{fill:#202027}73.5%{fill:#202027}73.6%{fill:#ff6b88}78.1%{fill:#ff6b88}80.5%{fill:#202027}92%{fill:#202027}92.1%{fill:#ff6b88}96.6%{fill:#ff6b88}99%{fill:#202027}100%{fill:#202027}}@keyframes k235{0%{fill:#a09ea8}18.4%{fill:#a09ea8}18.5%{fill:#1a0d11}24.2%{fill:#1a0d11}24.3%{fill:#a09ea8}73.5%{fill:#a09ea8}73.6%{fill:#1a0d11}79.3%{fill:#1a0d11}79.4%{fill:#a09ea8}92%{fill:#a09ea8}92.1%{fill:#1a0d11}97.8%{fill:#1a0d11}97.9%{fill:#a09ea8}100%{fill:#a09ea8}}@keyframes k236{0%{fill:#202027}13%{fill:#202027}13.1%{fill:#ff6b88}17.6%{fill:#ff6b88}20%{fill:#202027}31.5%{fill:#202027}31.6%{fill:#ff6b88}36.1%{fill:#ff6b88}38.5%{fill:#202027}100%{fill:#202027}}@keyframes k237{0%{fill:#a09ea8}13%{fill:#a09ea8}13.1%{fill:#1a0d11}18.8%{fill:#1a0d11}18.9%{fill:#a09ea8}31.5%{fill:#a09ea8}31.6%{fill:#1a0d11}37.3%{fill:#1a0d11}37.4%{fill:#a09ea8}100%{fill:#a09ea8}}@keyframes k238{0%{transform:translateY(22px);opacity:0}13.1%{transform:translateY(22px);opacity:0}14.7%{transform:translateY(0px);opacity:1}18.5%{transform:translateY(0px);opacity:1}20.1%{transform:translateY(22px);opacity:0}100%{transform:translateY(22px);opacity:0}}@keyframes k239{0%{transform:translateY(22px);opacity:0}18.5%{transform:translateY(22px);opacity:0}20.1%{transform:translateY(0px);opacity:1}31.6%{transform:translateY(0px);opacity:1}33.2%{transform:translateY(22px);opacity:0}100%{transform:translateY(22px);opacity:0}}@keyframes k240{0%{transform:translateY(22px);opacity:0}31.6%{transform:translateY(22px);opacity:0}33.2%{transform:translateY(0px);opacity:1}41.9%{transform:translateY(0px);opacity:1}43.5%{transform:translateY(22px);opacity:0}100%{transform:translateY(22px);opacity:0}}@keyframes k241{0%{transform:translateY(22px);opacity:0}41.9%{transform:translateY(22px);opacity:0}43.5%{transform:translateY(0px);opacity:1}49.9%{transform:translateY(0px);opacity:1}51.5%{transform:translateY(22px);opacity:0}100%{transform:translateY(22px);opacity:0}}@keyframes k242{0%{transform:translateY(22px);opacity:0}49.9%{transform:translateY(22px);opacity:0}51.5%{transform:translateY(0px);opacity:1}60.5%{transform:translateY(0px);opacity:1}62.1%{transform:translateY(22px);opacity:0}100%{transform:translateY(22px);opacity:0}}@keyframes k243{0%{transform:translateY(22px);opacity:0}60.5%{transform:translateY(22px);opacity:0}62.1%{transform:translateY(0px);opacity:1}66%{transform:translateY(0px);opacity:1}67.6%{transform:translateY(22px);opacity:0}100%{transform:translateY(22px);opacity:0}}@keyframes k244{0%{transform:translateY(22px);opacity:0}66%{transform:translateY(22px);opacity:0}67.6%{transform:translateY(0px);opacity:1}73.6%{transform:translateY(0px);opacity:1}75.2%{transform:translateY(22px);opacity:0}100%{transform:translateY(22px);opacity:0}}@keyframes k245{0%{transform:translateY(22px);opacity:0}73.6%{transform:translateY(22px);opacity:0}75.2%{transform:translateY(0px);opacity:1}92.1%{transform:translateY(0px);opacity:1}93.7%{transform:translateY(22px);opacity:0}100%{transform:translateY(22px);opacity:0}}@keyframes k246{0%{transform:translateY(0px);opacity:1}13.1%{transform:translateY(0px);opacity:1}14.7%{transform:translateY(22px);opacity:0}92.1%{transform:translateY(22px);opacity:0}93.7%{transform:translateY(0px);opacity:1}100%{transform:translateY(0px);opacity:1}}@keyframes k247{0%{transform:translateX(0px)}13.1%{transform:translateX(0px)}14.1%{transform:translateX(-5.5px)}18.5%{transform:translateX(-5.5px)}19.5%{transform:translateX(-11px)}31.6%{transform:translateX(-11px)}32.6%{transform:translateX(-16.5px)}41.9%{transform:translateX(-16.5px)}42.9%{transform:translateX(-22px)}49.9%{transform:translateX(-22px)}50.9%{transform:translateX(-27.5px)}60.5%{transform:translateX(-27.5px)}61.5%{transform:translateX(-33px)}66%{transform:translateX(-33px)}67%{transform:translateX(-38.5px)}73.6%{transform:translateX(-38.5px)}74.6%{transform:translateX(-44px)}92.1%{transform:translateX(-44px)}93.1%{transform:translateX(-49.5px)}100%{transform:translateX(-49.5px)}}@keyframes k248{0%{opacity:1}13%{opacity:1}13.1%{opacity:0}92%{opacity:0}92.1%{opacity:1}100%{opacity:1}}@keyframes k249{0%{opacity:0}13%{opacity:0}13.1%{opacity:1}18.4%{opacity:1}18.5%{opacity:0}100%{opacity:0}}@keyframes k250{0%{opacity:0}18.4%{opacity:0}18.5%{opacity:1}31.5%{opacity:1}31.6%{opacity:0}100%{opacity:0}}@keyframes k251{0%{opacity:0}31.5%{opacity:0}31.6%{opacity:1}41.8%{opacity:1}41.9%{opacity:0}100%{opacity:0}}@keyframes k252{0%{opacity:0}41.8%{opacity:0}41.9%{opacity:1}49.8%{opacity:1}49.9%{opacity:0}100%{opacity:0}}@keyframes k253{0%{opacity:0}49.8%{opacity:0}49.9%{opacity:1}60.4%{opacity:1}60.5%{opacity:0}100%{opacity:0}}@keyframes k254{0%{opacity:0}60.4%{opacity:0}60.5%{opacity:1}65.9%{opacity:1}66%{opacity:0}100%{opacity:0}}@keyframes k255{0%{opacity:0}65.9%{opacity:0}66%{opacity:1}73.5%{opacity:1}73.6%{opacity:0}100%{opacity:0}}@keyframes k256{0%{opacity:0}73.5%{opacity:0}73.6%{opacity:1}92%{opacity:1}92.1%{opacity:0}100%{opacity:0}}@keyframes k257{0%{opacity:1}13%{opacity:1}13.1%{opacity:0}99.9%{opacity:0}100%{opacity:1}}@keyframes k258{0%{opacity:0;fill:#ecebee}13%{opacity:0;fill:#ecebee}13.1%{opacity:1;fill:#ff6b88}14.3%{fill:#ff6b88}18.4%{opacity:1}18.5%{opacity:0}19.3%{fill:#ecebee}100%{opacity:0;fill:#ecebee}}@keyframes k259{0%{opacity:0;fill:#ecebee}18.4%{opacity:0;fill:#ecebee}18.5%{opacity:1;fill:#ff6b88}19.7%{fill:#ff6b88}24.7%{fill:#ecebee}31.5%{opacity:1}31.6%{opacity:0}100%{opacity:0;fill:#ecebee}}@keyframes k260{0%{opacity:0;fill:#ecebee}31.5%{opacity:0;fill:#ecebee}31.6%{opacity:1;fill:#ff6b88}32.8%{fill:#ff6b88}37.8%{fill:#ecebee}41.8%{opacity:1}41.9%{opacity:0}100%{opacity:0;fill:#ecebee}}@keyframes k261{0%{opacity:0;fill:#ecebee}41.8%{opacity:0;fill:#ecebee}41.9%{opacity:1;fill:#ff6b88}43.1%{fill:#ff6b88}48.1%{fill:#ecebee}49.8%{opacity:1}49.9%{opacity:0}100%{opacity:0;fill:#ecebee}}@keyframes k262{0%{opacity:0;fill:#ecebee}49.8%{opacity:0;fill:#ecebee}49.9%{opacity:1;fill:#ff6b88}51.1%{fill:#ff6b88}56.1%{fill:#ecebee}60.4%{opacity:1}60.5%{opacity:0}100%{opacity:0;fill:#ecebee}}@keyframes k263{0%{opacity:0;fill:#ecebee}60.4%{opacity:0;fill:#ecebee}60.5%{opacity:1;fill:#ff6b88}61.7%{fill:#ff6b88}65.9%{opacity:1}66%{opacity:0}66.7%{fill:#ecebee}100%{opacity:0;fill:#ecebee}}@keyframes k264{0%{opacity:0;fill:#ecebee}65.9%{opacity:0;fill:#ecebee}66%{opacity:1;fill:#ff6b88}67.2%{fill:#ff6b88}72.2%{fill:#ecebee}73.5%{opacity:1}73.6%{opacity:0}100%{opacity:0;fill:#ecebee}}@keyframes k265{0%{opacity:0;fill:#ecebee}73.5%{opacity:0;fill:#ecebee}73.6%{opacity:1;fill:#ff6b88}74.8%{fill:#ff6b88}79.8%{fill:#ecebee}92%{opacity:1}92.1%{opacity:0}100%{opacity:0;fill:#ecebee}}@keyframes k266{0%{opacity:0;fill:#ecebee}92%{opacity:0;fill:#ecebee}92.1%{opacity:1;fill:#ff6b88}93.3%{fill:#ff6b88}98.3%{fill:#ecebee}99.9%{opacity:1}100%{opacity:0;fill:#ecebee}}@keyframes k267{0%{opacity:.11}5.4%{opacity:.02}5.5%{opacity:.14}97.8%{opacity:.14}100%{opacity:.11}}@keyframes k268{0%{transform:translateY(0px)}5.5%{transform:translateY(0px)}6.7%{transform:translateY(35px)}8%{transform:translateY(35px)}9.2%{transform:translateY(70px)}10.7%{transform:translateY(70px)}11.9%{transform:translateY(105px)}13.1%{transform:translateY(105px)}14.3%{transform:translateY(140px)}15.9%{transform:translateY(140px)}17.1%{transform:translateY(175px)}18.5%{transform:translateY(175px)}19.7%{transform:translateY(210px)}20.9%{transform:translateY(210px)}22.1%{transform:translateY(245px)}23.7%{transform:translateY(245px)}24.9%{transform:translateY(280px)}26.4%{transform:translateY(280px)}27.6%{transform:translateY(315px)}29.3%{transform:translateY(315px)}30.5%{transform:translateY(350px)}31.6%{transform:translateY(350px)}32.8%{transform:translateY(385px)}34.4%{transform:translateY(385px)}35.6%{transform:translateY(420px)}36.9%{transform:translateY(420px)}38.1%{transform:translateY(455px)}39.4%{transform:translateY(455px)}40.6%{transform:translateY(490px)}41.9%{transform:translateY(490px)}43.1%{transform:translateY(525px)}44.7%{transform:translateY(525px)}45.9%{transform:translateY(560px)}47.3%{transform:translateY(560px)}48.5%{transform:translateY(595px)}49.9%{transform:translateY(595px)}51.1%{transform:translateY(630px)}52.5%{transform:translateY(630px)}53.7%{transform:translateY(665px)}55.5%{transform:translateY(665px)}56.7%{transform:translateY(700px)}57.9%{transform:translateY(700px)}59.1%{transform:translateY(735px)}60.5%{transform:translateY(735px)}61.7%{transform:translateY(770px)}63.2%{transform:translateY(770px)}64.4%{transform:translateY(805px)}66%{transform:translateY(805px)}67.2%{transform:translateY(840px)}68.5%{transform:translateY(840px)}69.7%{transform:translateY(875px)}70.8%{transform:translateY(875px)}72%{transform:translateY(910px)}73.6%{transform:translateY(910px)}74.8%{transform:translateY(945px)}76.4%{transform:translateY(945px)}77.6%{transform:translateY(980px)}78.9%{transform:translateY(980px)}80.1%{transform:translateY(1015px)}81.2%{transform:translateY(1015px)}82.4%{transform:translateY(1050px)}84.1%{transform:translateY(1050px)}85.3%{transform:translateY(1085px)}87%{transform:translateY(1085px)}88.2%{transform:translateY(1120px)}89.3%{transform:translateY(1120px)}90.5%{transform:translateY(1155px)}92.1%{transform:translateY(1155px)}93.3%{transform:translateY(1190px)}94.8%{transform:translateY(1190px)}96%{transform:translateY(1225px)}100%{transform:translateY(1225px)}}@keyframes k269{0%{opacity:1}5.4%{opacity:1}5.5%{opacity:0}94.7%{opacity:0}94.8%{opacity:1}100%{opacity:1}}@keyframes k270{0%{opacity:0}5.4%{opacity:0}5.5%{opacity:1}7.9%{opacity:1}8%{opacity:0}100%{opacity:0}}@keyframes k271{0%{opacity:0}7.9%{opacity:0}8%{opacity:1}10.6%{opacity:1}10.7%{opacity:0}100%{opacity:0}}@keyframes k272{0%{opacity:0}10.6%{opacity:0}10.7%{opacity:1}13%{opacity:1}13.1%{opacity:0}100%{opacity:0}}@keyframes k273{0%{opacity:0}13%{opacity:0}13.1%{opacity:1}15.8%{opacity:1}15.9%{opacity:0}52.4%{opacity:0}52.5%{opacity:1}55.4%{opacity:1}55.5%{opacity:0}100%{opacity:0}}@keyframes k274{0%{opacity:0}15.8%{opacity:0}15.9%{opacity:1}18.4%{opacity:1}18.5%{opacity:0}100%{opacity:0}}@keyframes k275{0%{opacity:0}18.4%{opacity:0}18.5%{opacity:1}20.8%{opacity:1}20.9%{opacity:0}100%{opacity:0}}@keyframes k276{0%{opacity:0}20.8%{opacity:0}20.9%{opacity:1}23.6%{opacity:1}23.7%{opacity:0}100%{opacity:0}}@keyframes k277{0%{opacity:0}23.6%{opacity:0}23.7%{opacity:1}26.3%{opacity:1}26.4%{opacity:0}100%{opacity:0}}@keyframes k278{0%{opacity:0}26.3%{opacity:0}26.4%{opacity:1}29.2%{opacity:1}29.3%{opacity:0}100%{opacity:0}}@keyframes k279{0%{opacity:0}29.2%{opacity:0}29.3%{opacity:1}31.5%{opacity:1}31.6%{opacity:0}100%{opacity:0}}@keyframes k280{0%{opacity:0}31.5%{opacity:0}31.6%{opacity:1}34.3%{opacity:1}34.4%{opacity:0}100%{opacity:0}}@keyframes k281{0%{opacity:0}34.3%{opacity:0}34.4%{opacity:1}36.8%{opacity:1}36.9%{opacity:0}100%{opacity:0}}@keyframes k282{0%{opacity:0}36.8%{opacity:0}36.9%{opacity:1}39.3%{opacity:1}39.4%{opacity:0}57.8%{opacity:0}57.9%{opacity:1}60.4%{opacity:1}60.5%{opacity:0}100%{opacity:0}}@keyframes k283{0%{opacity:0}39.3%{opacity:0}39.4%{opacity:1}41.8%{opacity:1}41.9%{opacity:0}100%{opacity:0}}@keyframes k284{0%{opacity:0}41.8%{opacity:0}41.9%{opacity:1}44.6%{opacity:1}44.7%{opacity:0}70.7%{opacity:0}70.8%{opacity:1}73.5%{opacity:1}73.6%{opacity:0}100%{opacity:0}}@keyframes k285{0%{opacity:0}44.6%{opacity:0}44.7%{opacity:1}47.2%{opacity:1}47.3%{opacity:0}100%{opacity:0}}@keyframes k286{0%{opacity:0}47.2%{opacity:0}47.3%{opacity:1}49.8%{opacity:1}49.9%{opacity:0}100%{opacity:0}}@keyframes k287{0%{opacity:0}49.8%{opacity:0}49.9%{opacity:1}52.4%{opacity:1}52.5%{opacity:0}100%{opacity:0}}@keyframes k288{0%{opacity:0}55.4%{opacity:0}55.5%{opacity:1}57.8%{opacity:1}57.9%{opacity:0}100%{opacity:0}}@keyframes k289{0%{opacity:0}60.4%{opacity:0}60.5%{opacity:1}63.1%{opacity:1}63.2%{opacity:0}100%{opacity:0}}@keyframes k290{0%{opacity:0}63.1%{opacity:0}63.2%{opacity:1}65.9%{opacity:1}66%{opacity:0}100%{opacity:0}}@keyframes k291{0%{opacity:0}65.9%{opacity:0}66%{opacity:1}68.4%{opacity:1}68.5%{opacity:0}100%{opacity:0}}@keyframes k292{0%{opacity:0}68.4%{opacity:0}68.5%{opacity:1}70.7%{opacity:1}70.8%{opacity:0}89.2%{opacity:0}89.3%{opacity:1}92%{opacity:1}92.1%{opacity:0}100%{opacity:0}}@keyframes k293{0%{opacity:0}73.5%{opacity:0}73.6%{opacity:1}76.3%{opacity:1}76.4%{opacity:0}100%{opacity:0}}@keyframes k294{0%{opacity:0}76.3%{opacity:0}76.4%{opacity:1}78.8%{opacity:1}78.9%{opacity:0}100%{opacity:0}}@keyframes k295{0%{opacity:0}78.8%{opacity:0}78.9%{opacity:1}81.1%{opacity:1}81.2%{opacity:0}100%{opacity:0}}@keyframes k296{0%{opacity:0}81.1%{opacity:0}81.2%{opacity:1}84%{opacity:1}84.1%{opacity:0}100%{opacity:0}}@keyframes k297{0%{opacity:0}84%{opacity:0}84.1%{opacity:1}86.9%{opacity:1}87%{opacity:0}100%{opacity:0}}@keyframes k298{0%{opacity:0}86.9%{opacity:0}87%{opacity:1}89.2%{opacity:1}89.3%{opacity:0}100%{opacity:0}}@keyframes k299{0%{opacity:0}92%{opacity:0}92.1%{opacity:1}94.7%{opacity:1}94.8%{opacity:0}100%{opacity:0}}@keyframes k300{0%{transform:translateX(0px)}100%{transform:translateX(-288px)}}@keyframes k301{0%{opacity:1}7.9%{opacity:1}8%{opacity:0}99.9%{opacity:0}100%{opacity:1}}@keyframes k302{0%{opacity:0;fill:#ecebee}7.9%{opacity:0;fill:#ecebee}8%{opacity:1;fill:#ff6b88}9.2%{fill:#ff6b88}14.2%{fill:#ecebee}20.8%{opacity:1}20.9%{opacity:0}100%{opacity:0;fill:#ecebee}}@keyframes k303{0%{opacity:0;fill:#ecebee}20.8%{opacity:0;fill:#ecebee}20.9%{opacity:1;fill:#ff6b88}22.1%{fill:#ff6b88}26.3%{opacity:1}26.4%{opacity:0}27.1%{fill:#ecebee}100%{opacity:0;fill:#ecebee}}@keyframes k304{0%{opacity:0;fill:#ecebee}26.3%{opacity:0;fill:#ecebee}26.4%{opacity:1;fill:#ff6b88}27.6%{fill:#ff6b88}32.6%{fill:#ecebee}34.3%{opacity:1}34.4%{opacity:0}100%{opacity:0;fill:#ecebee}}@keyframes k305{0%{opacity:0;fill:#ecebee}34.3%{opacity:0;fill:#ecebee}34.4%{opacity:1;fill:#ff6b88}35.6%{fill:#ff6b88}39.3%{opacity:1}39.4%{opacity:0}40.6%{fill:#ecebee}100%{opacity:0;fill:#ecebee}}@keyframes k306{0%{opacity:0;fill:#ecebee}39.3%{opacity:0;fill:#ecebee}39.4%{opacity:1;fill:#ff6b88}40.6%{fill:#ff6b88}44.6%{opacity:1}44.7%{opacity:0}45.6%{fill:#ecebee}100%{opacity:0;fill:#ecebee}}@keyframes k307{0%{opacity:0;fill:#ecebee}44.6%{opacity:0;fill:#ecebee}44.7%{opacity:1;fill:#ff6b88}45.9%{fill:#ff6b88}50.9%{fill:#ecebee}52.4%{opacity:1}52.5%{opacity:0}100%{opacity:0;fill:#ecebee}}@keyframes k308{0%{opacity:0;fill:#ecebee}52.4%{opacity:0;fill:#ecebee}52.5%{opacity:1;fill:#ff6b88}53.7%{fill:#ff6b88}55.4%{opacity:1}55.5%{opacity:0}58.7%{fill:#ecebee}100%{opacity:0;fill:#ecebee}}@keyframes k309{0%{opacity:0;fill:#ecebee}55.4%{opacity:0;fill:#ecebee}55.5%{opacity:1;fill:#ff6b88}56.7%{fill:#ff6b88}61.7%{fill:#ecebee}63.1%{opacity:1}63.2%{opacity:0}100%{opacity:0;fill:#ecebee}}@keyframes k310{0%{opacity:0;fill:#ecebee}63.1%{opacity:0;fill:#ecebee}63.2%{opacity:1;fill:#ff6b88}64.4%{fill:#ff6b88}69.4%{fill:#ecebee}70.7%{opacity:1}70.8%{opacity:0}100%{opacity:0;fill:#ecebee}}@keyframes k311{0%{opacity:0;fill:#ecebee}70.7%{opacity:0;fill:#ecebee}70.8%{opacity:1;fill:#ff6b88}72%{fill:#ff6b88}77%{fill:#ecebee}78.8%{opacity:1}78.9%{opacity:0}100%{opacity:0;fill:#ecebee}}@keyframes k312{0%{opacity:0;fill:#ecebee}78.8%{opacity:0;fill:#ecebee}78.9%{opacity:1;fill:#ff6b88}80.1%{fill:#ff6b88}84%{opacity:1}84.1%{opacity:0}85.1%{fill:#ecebee}100%{opacity:0;fill:#ecebee}}@keyframes k313{0%{opacity:0;fill:#ecebee}84%{opacity:0;fill:#ecebee}84.1%{opacity:1;fill:#ff6b88}85.3%{fill:#ff6b88}89.2%{opacity:1}89.3%{opacity:0}90.3%{fill:#ecebee}100%{opacity:0;fill:#ecebee}}@keyframes k314{0%{opacity:0;fill:#ecebee}89.2%{opacity:0;fill:#ecebee}89.3%{opacity:1;fill:#ff6b88}90.5%{fill:#ff6b88}94.7%{opacity:1}94.8%{opacity:0}95.5%{fill:#ecebee}100%{opacity:0;fill:#ecebee}}@keyframes k315{0%{opacity:0;fill:#f0d1da}1%{fill:#ecebee}94.7%{opacity:0;fill:#ecebee}94.8%{opacity:1;fill:#ff6b88}96%{fill:#ff6b88}99.9%{opacity:1}100%{opacity:0;fill:#f0d1da}}@media (prefers-reduced-motion:reduce){*{animation:none!important}}</style>
+<defs><clipPath id="cK"><rect x="352" y="102" width="220" height="34" fill="#000" /></clipPath><linearGradient id="gR"><stop offset="0" stop-color="#3a2530"/><stop offset=".5" stop-color="#5a2f3b"/><stop offset="1" stop-color="#3a2530"/></linearGradient><clipPath id="cN0"><rect x="41" y="395" width="211.5" height="14" fill="#000" /></clipPath><clipPath id="cN1"><rect x="264.5" y="395" width="211.5" height="14" fill="#000" /></clipPath><clipPath id="cN2"><rect x="488" y="395" width="211.5" height="14" fill="#000" /></clipPath><clipPath id="cN3"><rect x="711.5" y="395" width="211.5" height="14" fill="#000" /></clipPath><clipPath id="cN4"><rect x="41" y="583" width="211.5" height="14" fill="#000" /></clipPath><clipPath id="cN5"><rect x="264.5" y="583" width="211.5" height="14" fill="#000" /></clipPath><clipPath id="cN6"><rect x="488" y="583" width="211.5" height="14" fill="#000" /></clipPath><clipPath id="cN7"><rect x="711.5" y="583" width="211.5" height="14" fill="#000" /></clipPath><clipPath id="cR0"><rect x="698" y="740" width="240" height="24" fill="#000" /></clipPath><clipPath id="cS0"><rect x="972" y="740" width="59" height="24" fill="#000" /></clipPath><clipPath id="cR1"><rect x="698" y="804" width="240" height="24" fill="#000" /></clipPath><clipPath id="cS1"><rect x="972" y="804" width="59" height="24" fill="#000" /></clipPath><clipPath id="cR2"><rect x="698" y="868" width="240" height="24" fill="#000" /></clipPath><clipPath id="cS2"><rect x="972" y="868" width="59" height="24" fill="#000" /></clipPath><clipPath id="cL"><rect x="24" y="1114" width="896" height="280" fill="#000" /></clipPath><clipPath id="cT"><rect x="952" y="1200" width="288" height="52" fill="#000" /></clipPath></defs>
+<rect x=".5" y=".5" width="1279" height="1841" rx="12" fill="#0c0c0f" stroke="#25252c" />
+<text x="24" y="35" font-size="17" class="ink" font-weight="600">Jev Gate</text>
+<text x="107.24" y="35" font-size="17" class="fa">Run monitor</text>
+<rect x="214.05" y="17.5" width="101.04" height="22" rx="11" fill="none" stroke="#25252c" />
+<text x="264.57" y="33" font-size="12" class="mu" text-anchor="middle">v0.8.18 · latest</text>
+<circle cx="333.59" cy="29" r="3" fill="#6fcfa9" class="beat"/>
+<text x="342.59" y="33.5" font-size="13" class="ok">Live</text>
+<rect x="387.22" y="13.5" width="296.4" height="31" rx="7" fill="none" stroke="#25252c" />
+<rect x="387.72" y="14" width="124.76" height="30" rx="6" fill="#1a1a20" />
+<text x="449.35" y="34" font-size="14" class="ink" text-anchor="middle">Claude + Codex</text>
+<text x="564.81" y="34" font-size="14" class="mu" text-anchor="middle">Claude Code</text>
+<text x="650.38" y="34" font-size="14" class="mu" text-anchor="middle">Codex</text>
+<rect x="1204.21" y="15.5" width="51.29" height="27" rx="6" fill="none" stroke="#25252c" />
+<text x="1229.86" y="33.5" font-size="13" class="mu" text-anchor="middle">Light</text>
+<rect x="1137.55" y="15.5" width="57.66" height="27" rx="6" fill="none" stroke="#25252c" />
+<text x="1166.38" y="33.5" font-size="13" class="mu" text-anchor="middle">Pause</text>
+<path d="M24 58.5H1256" stroke="#25252c" stroke-width="1"/>
+<text x="24" y="91" font-size="13" class="fa">Active runs</text>
+<text x="24" y="130" font-size="33" class="ink" font-weight="600" letter-spacing="-.5">2</text>
+<text x="24" y="156" font-size="13" class="fa">Claude 1 · Codex 1</text>
+<path d="M332.5 78V160" stroke="#25252c" stroke-width="1"/>
+<text x="352" y="91" font-size="13" class="fa">Jev traffic</text>
+<text x="352" y="156" font-size="13" class="fa">Last reply 0.2 s ago · today 1,240</text>
+<path d="M640.5 78V160" stroke="#25252c" stroke-width="1"/>
+<text x="660" y="91" font-size="13" class="fa">Jev median</text>
+<text x="660" y="130" font-size="33" class="ink" font-weight="600" letter-spacing="-.5">248</text>
+<text x="728.96" y="130" font-size="14" class="mu">ms</text>
+<text x="660" y="156" font-size="13" class="fa">p95 346 ms · n 1,204</text>
+<path d="M948.5 78V160" stroke="#25252c" stroke-width="1"/>
+<text x="968" y="91" font-size="13" class="fa">Needs attention</text>
+<text x="968" y="130" font-size="33" class="ink" font-weight="600" letter-spacing="-.5">0</text>
+<text x="968" y="156" font-size="13" class="fa">No errors or mismatches</text>
+<path d="M352 136.5H572" stroke="#25252c" stroke-width="1"/>
+<g clip-path="url(#cK)"><g class="an" style="animation-name:k0" transform="translate(-118.8 0)">
+<rect x="584.1" y="110.4" width="2" height="25.6" rx=".5" fill="#ff6b88" class="tw0"/>
+<rect x="364.1" y="110.4" width="2" height="25.6" rx=".5" fill="#ff6b88" class="tw0"/>
+<rect x="589.6" y="109.1" width="2" height="26.9" rx=".5" fill="#ff6b88" class="tw1"/>
+<rect x="369.6" y="109.1" width="2" height="26.9" rx=".5" fill="#ff6b88" class="tw1"/>
+<rect x="595.54" y="127.3" width="2" height="8.7" rx=".5" fill="#ff6b88" class="tw2"/>
+<rect x="375.54" y="127.3" width="2" height="8.7" rx=".5" fill="#ff6b88" class="tw2"/>
+<rect x="600.82" y="107.3" width="2" height="28.7" rx=".5" fill="#ff6b88" class="tw3"/>
+<rect x="380.82" y="107.3" width="2" height="28.7" rx=".5" fill="#ff6b88" class="tw3"/>
+<rect x="606.98" y="124.8" width="2" height="11.2" rx=".5" fill="#ff6b88" class="tw0"/>
+<rect x="386.98" y="124.8" width="2" height="11.2" rx=".5" fill="#ff6b88" class="tw0"/>
+<rect x="612.7" y="120.2" width="2" height="15.8" rx=".5" fill="#ff6b88" class="tw1"/>
+<rect x="392.7" y="120.2" width="2" height="15.8" rx=".5" fill="#ff6b88" class="tw1"/>
+<rect x="617.98" y="117.1" width="2" height="18.9" rx=".5" fill="#ff6b88" class="tw2"/>
+<rect x="397.98" y="117.1" width="2" height="18.9" rx=".5" fill="#ff6b88" class="tw2"/>
+<rect x="624.14" y="124.8" width="2" height="11.2" rx=".5" fill="#ff6b88" class="tw3"/>
+<rect x="404.14" y="124.8" width="2" height="11.2" rx=".5" fill="#ff6b88" class="tw3"/>
+<rect x="630.08" y="126.7" width="2" height="9.3" rx=".5" fill="#ff6b88" class="tw0"/>
+<rect x="410.08" y="126.7" width="2" height="9.3" rx=".5" fill="#ff6b88" class="tw0"/>
+<rect x="636.46" y="111.8" width="2" height="24.2" rx=".5" fill="#ff6b88" class="tw1"/>
+<rect x="416.46" y="111.8" width="2" height="24.2" rx=".5" fill="#ff6b88" class="tw1"/>
+<rect x="641.52" y="111.8" width="2" height="24.2" rx=".5" fill="#ff6b88" class="tw2"/>
+<rect x="421.52" y="111.8" width="2" height="24.2" rx=".5" fill="#ff6b88" class="tw2"/>
+<rect x="647.68" y="123.2" width="2" height="12.8" rx=".5" fill="#ff6b88" class="tw3"/>
+<rect x="427.68" y="123.2" width="2" height="12.8" rx=".5" fill="#ff6b88" class="tw3"/>
+<rect x="653.18" y="122.2" width="2" height="13.8" rx=".5" fill="#ff6b88" class="tw0"/>
+<rect x="433.18" y="122.2" width="2" height="13.8" rx=".5" fill="#ff6b88" class="tw0"/>
+<rect x="658.68" y="117.1" width="2" height="18.9" rx=".5" fill="#ff6b88" class="tw1"/>
+<rect x="438.68" y="117.1" width="2" height="18.9" rx=".5" fill="#ff6b88" class="tw1"/>
+<rect x="664.18" y="125.9" width="2" height="10.1" rx=".5" fill="#ff6b88" class="tw2"/>
+<rect x="444.18" y="125.9" width="2" height="10.1" rx=".5" fill="#ff6b88" class="tw2"/>
+<rect x="670.34" y="118.5" width="2" height="17.5" rx=".5" fill="#ff6b88" class="tw3"/>
+<rect x="450.34" y="118.5" width="2" height="17.5" rx=".5" fill="#ff6b88" class="tw3"/>
+<rect x="676.06" y="110.2" width="2" height="25.8" rx=".5" fill="#ff6b88" class="tw0"/>
+<rect x="456.06" y="110.2" width="2" height="25.8" rx=".5" fill="#ff6b88" class="tw0"/>
+<rect x="681.78" y="118.1" width="2" height="17.9" rx=".5" fill="#ff6b88" class="tw1"/>
+<rect x="461.78" y="118.1" width="2" height="17.9" rx=".5" fill="#ff6b88" class="tw1"/>
+<rect x="687.5" y="108.3" width="2" height="27.7" rx=".5" fill="#ff6b88" class="tw2"/>
+<rect x="467.5" y="108.3" width="2" height="27.7" rx=".5" fill="#ff6b88" class="tw2"/>
+<rect x="694.1" y="123.6" width="2" height="12.4" rx=".5" fill="#ff6b88" class="tw3"/>
+<rect x="474.1" y="123.6" width="2" height="12.4" rx=".5" fill="#ff6b88" class="tw3"/>
+<rect x="699.38" y="121.4" width="2" height="14.6" rx=".5" fill="#ff6b88" class="tw0"/>
+<rect x="479.38" y="121.4" width="2" height="14.6" rx=".5" fill="#ff6b88" class="tw0"/>
+<rect x="705.1" y="114.2" width="2" height="21.8" rx=".5" fill="#ff6b88" class="tw1"/>
+<rect x="485.1" y="114.2" width="2" height="21.8" rx=".5" fill="#ff6b88" class="tw1"/>
+<rect x="711.04" y="117.1" width="2" height="18.9" rx=".5" fill="#ff6b88" class="tw2"/>
+<rect x="491.04" y="117.1" width="2" height="18.9" rx=".5" fill="#ff6b88" class="tw2"/>
+<rect x="717.2" y="117.3" width="2" height="18.7" rx=".5" fill="#ff6b88" class="tw3"/>
+<rect x="497.2" y="117.3" width="2" height="18.7" rx=".5" fill="#ff6b88" class="tw3"/>
+<rect x="722.7" y="119.3" width="2" height="16.7" rx=".5" fill="#ff6b88" class="tw0"/>
+<rect x="502.7" y="119.3" width="2" height="16.7" rx=".5" fill="#ff6b88" class="tw0"/>
+<rect x="727.76" y="117.1" width="2" height="18.9" rx=".5" fill="#ff6b88" class="tw1"/>
+<rect x="507.76" y="117.1" width="2" height="18.9" rx=".5" fill="#ff6b88" class="tw1"/>
+<rect x="733.92" y="108.3" width="2" height="27.7" rx=".5" fill="#ff6b88" class="tw2"/>
+<rect x="513.92" y="108.3" width="2" height="27.7" rx=".5" fill="#ff6b88" class="tw2"/>
+<rect x="740.08" y="117.1" width="2" height="18.9" rx=".5" fill="#ff6b88" class="tw3"/>
+<rect x="520.08" y="117.1" width="2" height="18.9" rx=".5" fill="#ff6b88" class="tw3"/>
+<rect x="745.58" y="121.8" width="2" height="14.2" rx=".5" fill="#ff6b88" class="tw0"/>
+<rect x="525.58" y="121.8" width="2" height="14.2" rx=".5" fill="#ff6b88" class="tw0"/>
+<rect x="750.64" y="114" width="2" height="22" rx=".5" fill="#ff6b88" class="tw1"/>
+<rect x="530.64" y="114" width="2" height="22" rx=".5" fill="#ff6b88" class="tw1"/>
+<rect x="757.02" y="116.9" width="2" height="19.1" rx=".5" fill="#ff6b88" class="tw2"/>
+<rect x="537.02" y="116.9" width="2" height="19.1" rx=".5" fill="#ff6b88" class="tw2"/>
+<rect x="763.4" y="124.8" width="2" height="11.2" rx=".5" fill="#ff6b88" class="tw3"/>
+<rect x="543.4" y="124.8" width="2" height="11.2" rx=".5" fill="#ff6b88" class="tw3"/>
+<rect x="768.46" y="118.5" width="2" height="17.5" rx=".5" fill="#ff6b88" class="tw0"/>
+<rect x="548.46" y="118.5" width="2" height="17.5" rx=".5" fill="#ff6b88" class="tw0"/>
+<rect x="774.62" y="118.7" width="2" height="17.3" rx=".5" fill="#ff6b88" class="tw1"/>
+<rect x="554.62" y="118.7" width="2" height="17.3" rx=".5" fill="#ff6b88" class="tw1"/>
+<rect x="780.56" y="120" width="2" height="16" rx=".5" fill="#ff6b88" class="tw2"/>
+<rect x="560.56" y="120" width="2" height="16" rx=".5" fill="#ff6b88" class="tw2"/>
+</g></g>
+<path d="M24 178.5H1256" stroke="#25252c" stroke-width="1"/>
+<rect x="24.5" y="196.5" width="915" height="417" rx="10" fill="#131318" stroke="#25252c" />
+<text x="40" y="226" font-size="15" class="ink" font-weight="600">Run circuit</text>
+<text x="129.27" y="226" font-size="13" class="fa">Select a node to see only that feature</text>
+<rect x="746.73" y="207.5" width="177.77" height="29" rx="7" fill="none" stroke="#25252c" />
+<rect x="747.23" y="208" width="79.34" height="28" rx="6" fill="#1a1a20" />
+<text x="786.16" y="226.5" font-size="13" class="ink" font-weight="500" text-anchor="middle">All recent</text>
+<text x="875.04" y="226.5" font-size="13" class="mu" font-weight="500" text-anchor="middle">Selected run</text>
+<path d="M24 248.5H940" stroke="#25252c" stroke-width="1"/>
+<text x="40" y="274" font-size="13" class="fa">Gate stages</text>
+<text x="40" y="464" font-size="13" class="fa">Independent features</text>
+<text x="40" y="438.5" font-size="13" class="ac" font-weight="600">Jev</text>
+<rect x="72" y="433" width="788" height="2" rx="1" fill="url(#gR)" />
+<text x="924" y="438.5" font-size="13" class="mu an" text-anchor="end" style="animation-name:k1" opacity="0">285 ms</text>
+<text x="924" y="438.5" font-size="13" class="mu an" text-anchor="end" style="animation-name:k2" opacity="0">612 ms</text>
+<text x="924" y="438.5" font-size="13" class="mu an" text-anchor="end" style="animation-name:k3" opacity="0">211 ms</text>
+<text x="924" y="438.5" font-size="13" class="mu an" text-anchor="end" style="animation-name:k4" opacity="0">225 ms</text>
+<text x="924" y="438.5" font-size="13" class="mu an" text-anchor="end" style="animation-name:k5" opacity="0">280 ms</text>
+<text x="924" y="438.5" font-size="13" class="mu an" text-anchor="end" style="animation-name:k6" opacity="0">323 ms</text>
+<text x="924" y="438.5" font-size="13" class="mu an" text-anchor="end" style="animation-name:k7" opacity="0">253 ms</text>
+<text x="924" y="438.5" font-size="13" class="mu an" text-anchor="end" style="animation-name:k8" opacity="0">339 ms</text>
+<text x="924" y="438.5" font-size="13" class="mu an" text-anchor="end" style="animation-name:k9" opacity="0">246 ms</text>
+<text x="924" y="438.5" font-size="13" class="mu an" text-anchor="end" style="animation-name:k10" opacity="0">200 ms</text>
+<text x="924" y="438.5" font-size="13" class="mu an" text-anchor="end" style="animation-name:k11" opacity="0">180 ms</text>
+<text x="924" y="438.5" font-size="13" class="mu an" text-anchor="end" style="animation-name:k12" opacity="0">321 ms</text>
+<text x="924" y="438.5" font-size="13" class="mu an" text-anchor="end" style="animation-name:k13" opacity="0">254 ms</text>
+<text x="924" y="438.5" font-size="13" class="mu an" text-anchor="end" style="animation-name:k14" opacity="0">210 ms</text>
+<text x="924" y="438.5" font-size="13" class="mu an" text-anchor="end" style="animation-name:k15" opacity="0">226 ms</text>
+<text x="924" y="438.5" font-size="13" class="mu an" text-anchor="end" style="animation-name:k16" opacity="0">318 ms</text>
+<text x="924" y="438.5" font-size="13" class="mu an" text-anchor="end" style="animation-name:k17" opacity="0">207 ms</text>
+<text x="924" y="438.5" font-size="13" class="mu an" text-anchor="end" style="animation-name:k18" opacity="0">311 ms</text>
+<text x="924" y="438.5" font-size="13" class="mu an" text-anchor="end" style="animation-name:k19" opacity="0">175 ms</text>
+<text x="924" y="438.5" font-size="13" class="mu an" text-anchor="end" style="animation-name:k20" opacity="1">196 ms</text>
+<text x="924" y="438.5" font-size="13" class="mu an" text-anchor="end" style="animation-name:k21" opacity="0">256 ms</text>
+<text x="924" y="438.5" font-size="13" class="mu an" text-anchor="end" style="animation-name:k22" opacity="0">295 ms</text>
+<text x="924" y="438.5" font-size="13" class="mu an" text-anchor="end" style="animation-name:k23" opacity="0">293 ms</text>
+<text x="924" y="438.5" font-size="13" class="mu an" text-anchor="end" style="animation-name:k24" opacity="0">204 ms</text>
+<text x="924" y="438.5" font-size="13" class="mu an" text-anchor="end" style="animation-name:k25" opacity="0">308 ms</text>
+<text x="924" y="438.5" font-size="13" class="mu an" text-anchor="end" style="animation-name:k26" opacity="0">300 ms</text>
+<text x="924" y="438.5" font-size="13" class="mu an" text-anchor="end" style="animation-name:k27" opacity="0">252 ms</text>
+<text x="924" y="438.5" font-size="13" class="mu an" text-anchor="end" style="animation-name:k28" opacity="0">327 ms</text>
+<text x="924" y="438.5" font-size="13" class="mu an" text-anchor="end" style="animation-name:k29" opacity="0">266 ms</text>
+<text x="924" y="438.5" font-size="13" class="mu an" text-anchor="end" style="animation-name:k30" opacity="0">230 ms</text>
+<text x="924" y="438.5" font-size="13" class="mu an" text-anchor="end" style="animation-name:k31" opacity="0">302 ms</text>
+<path d="M147.25 410V434" stroke="#25252c" stroke-width="1"/>
+<rect x="40.5" y="286.5" width="212.5" height="123" rx="8" fill="#0c0c0f" stroke="#25252c" />
+<rect x="41" y="287" width="211.5" height="122" rx="7.5" fill="#ff6b88" class="an" style="animation-name:k32" opacity="0"/>
+<circle cx="55" cy="306" r="3" fill="#ff6b88"/>
+<text x="64" y="311" font-size="14" class="ink" font-weight="600">Gate A</text>
+<text x="52" y="333" font-size="13" class="mu">Execution shape</text>
+<text x="52" y="355" font-size="13" class="mu">Shape</text>
+<text x="94.66" y="355" font-size="13" class="an" font-weight="500" style="animation-name:k33" opacity="1" fill="#ecebee">Direct</text>
+<text x="241.5" y="384" font-size="12" class="fa an" text-anchor="end" style="animation-name:k34" opacity="1">Just now</text>
+<text x="241.5" y="384" font-size="12" class="fa an" text-anchor="end" style="animation-name:k35" opacity="0">2 s ago</text>
+<text x="241.5" y="384" font-size="12" class="fa an" text-anchor="end" style="animation-name:k36" opacity="0">3 s ago</text>
+<text x="241.5" y="384" font-size="12" class="fa an" text-anchor="end" style="animation-name:k37" opacity="0">4 s ago</text>
+<text x="241.5" y="384" font-size="12" class="fa an" text-anchor="end" style="animation-name:k38" opacity="0">5 s ago</text>
+<path d="M41 394.5H252.5" stroke="#25252c" stroke-width="1"/>
+<g clip-path="url(#cN0)"><g class="an" style="animation-name:k39" transform="translate(-115.29 0)">
+<rect x="342.96" y="399" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw3"/>
+<rect x="129.46" y="399" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw3"/>
+<rect x="394.41" y="399" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw0"/>
+<rect x="180.91" y="399" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw0"/>
+<rect x="433.05" y="399" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw1"/>
+<rect x="219.55" y="399" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw1"/>
+</g></g>
+<circle cx="147.25" cy="0" r="3" fill="#ff6b88" class="an" style="animation-name:k40" transform="translate(0 410)" opacity="0"/>
+<circle cx="147.25" cy="434" r="4" fill="#ff6b88" class="an" style="animation-name:k41" opacity="0"/>
+<circle cx="147.25" cy="434" r="4" fill="none" stroke="#ff6b88" stroke-width="1.5" class="an ring" style="animation-name:k42" opacity="0"/>
+<path d="M370.75 410V434" stroke="#25252c" stroke-width="1"/>
+<rect x="264" y="286.5" width="212.5" height="123" rx="8" fill="#0c0c0f" stroke="#25252c" />
+<rect x="264.5" y="287" width="211.5" height="122" rx="7.5" fill="#ff6b88" class="an" style="animation-name:k43" opacity="0"/>
+<circle cx="278.5" cy="306" r="3" fill="#ff6b88"/>
+<text x="287.5" y="311" font-size="14" class="ink" font-weight="600">Gate B</text>
+<text x="275.5" y="333" font-size="13" class="mu">Tier assignment</text>
+<text x="275.5" y="355" font-size="13" class="mu">Tier</text>
+<text x="304.77" y="355" font-size="13" class="an" font-weight="500" style="animation-name:k44" opacity="1" fill="#ecebee">worker</text>
+<text x="465" y="384" font-size="12" class="fa an" text-anchor="end" style="animation-name:k45" opacity="0">5 s ago</text>
+<text x="465" y="384" font-size="12" class="fa an" text-anchor="end" style="animation-name:k46" opacity="0">6 s ago</text>
+<text x="465" y="384" font-size="12" class="fa an" text-anchor="end" style="animation-name:k47" opacity="1">Just now</text>
+<text x="465" y="384" font-size="12" class="fa an" text-anchor="end" style="animation-name:k48" opacity="0">2 s ago</text>
+<text x="465" y="384" font-size="12" class="fa an" text-anchor="end" style="animation-name:k49" opacity="0">3 s ago</text>
+<text x="465" y="384" font-size="12" class="fa an" text-anchor="end" style="animation-name:k50" opacity="0">4 s ago</text>
+<path d="M264.5 394.5H476" stroke="#25252c" stroke-width="1"/>
+<g clip-path="url(#cN1)"><g class="an" style="animation-name:k51" transform="translate(-115.29 0)">
+<rect x="494.08" y="399" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw0"/>
+<rect x="280.58" y="399" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw0"/>
+<rect x="572.43" y="399" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw3"/>
+<rect x="358.93" y="399" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw3"/>
+</g></g>
+<circle cx="370.75" cy="0" r="3" fill="#ff6b88" class="an" style="animation-name:k52" transform="translate(0 410)" opacity="0"/>
+<circle cx="370.75" cy="434" r="4" fill="#ff6b88" class="an" style="animation-name:k53" opacity="0"/>
+<circle cx="370.75" cy="434" r="4" fill="none" stroke="#ff6b88" stroke-width="1.5" class="an ring" style="animation-name:k54" opacity="0"/>
+<path d="M594.25 410V434" stroke="#25252c" stroke-width="1"/>
+<rect x="487.5" y="286.5" width="212.5" height="123" rx="8" fill="#0c0c0f" stroke="#25252c" />
+<rect x="488" y="287" width="211.5" height="122" rx="7.5" fill="#ff6b88" class="an" style="animation-name:k55" opacity="0"/>
+<circle cx="502" cy="306" r="3" fill="#ff6b88"/>
+<text x="511" y="311" font-size="14" class="ink" font-weight="600">Plan</text>
+<text x="499" y="333" font-size="13" class="mu">Dependency plan</text>
+<text x="499" y="355" font-size="13" class="mu">Steps</text>
+<text x="538.8" y="355" font-size="13" class="an" font-weight="500" style="animation-name:k56" opacity="0" fill="#ecebee">3 steps</text>
+<text x="538.8" y="355" font-size="13" class="an" font-weight="500" style="animation-name:k57" opacity="1" fill="#ecebee">4 steps</text>
+<text x="688.5" y="384" font-size="12" class="fa an" text-anchor="end" style="animation-name:k58" opacity="0">3 s ago</text>
+<text x="688.5" y="384" font-size="12" class="fa an" text-anchor="end" style="animation-name:k59" opacity="0">4 s ago</text>
+<text x="688.5" y="384" font-size="12" class="fa an" text-anchor="end" style="animation-name:k60" opacity="0">5 s ago</text>
+<text x="688.5" y="384" font-size="12" class="fa an" text-anchor="end" style="animation-name:k61" opacity="0">6 s ago</text>
+<text x="688.5" y="384" font-size="12" class="fa an" text-anchor="end" style="animation-name:k62" opacity="0">7 s ago</text>
+<text x="688.5" y="384" font-size="12" class="fa an" text-anchor="end" style="animation-name:k63" opacity="0">8 s ago</text>
+<text x="688.5" y="384" font-size="12" class="fa an" text-anchor="end" style="animation-name:k64" opacity="1">Just now</text>
+<text x="688.5" y="384" font-size="12" class="fa an" text-anchor="end" style="animation-name:k65" opacity="0">2 s ago</text>
+<path d="M488 394.5H699.5" stroke="#25252c" stroke-width="1"/>
+<g clip-path="url(#cN2)"><g class="an" style="animation-name:k66" transform="translate(-115.29 0)">
+<rect x="807.04" y="399" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw3"/>
+<rect x="593.54" y="399" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw3"/>
+<rect x="829.67" y="399" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw1"/>
+<rect x="616.17" y="399" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw1"/>
+</g></g>
+<circle cx="594.25" cy="0" r="3" fill="#ff6b88" class="an" style="animation-name:k67" transform="translate(0 410)" opacity="0"/>
+<circle cx="594.25" cy="434" r="4" fill="#ff6b88" class="an" style="animation-name:k68" opacity="0"/>
+<circle cx="594.25" cy="434" r="4" fill="none" stroke="#ff6b88" stroke-width="1.5" class="an ring" style="animation-name:k69" opacity="0"/>
+<path d="M817.75 410V434" stroke="#25252c" stroke-width="1"/>
+<rect x="711" y="286.5" width="212.5" height="123" rx="8" fill="#0c0c0f" stroke="#25252c" />
+<rect x="711.5" y="287" width="211.5" height="122" rx="7.5" fill="#ff6b88" class="an" style="animation-name:k70" opacity="0"/>
+<circle cx="725.5" cy="306" r="3" fill="#ff6b88"/>
+<text x="734.5" y="311" font-size="14" class="ink" font-weight="600">Workers</text>
+<text x="722.5" y="333" font-size="13" class="mu">Acceptance check</text>
+<text x="722.5" y="355" font-size="13" class="mu">Accept</text>
+<text x="769.32" y="355" font-size="13" class="an" font-weight="500" style="animation-name:k71" opacity="1" fill="#ecebee">Passed 3/3</text>
+<text x="912" y="384" font-size="12" class="fa an" text-anchor="end" style="animation-name:k72" opacity="0">Just now</text>
+<text x="912" y="384" font-size="12" class="fa an" text-anchor="end" style="animation-name:k73" opacity="0">2 s ago</text>
+<text x="912" y="384" font-size="12" class="fa an" text-anchor="end" style="animation-name:k74" opacity="0">3 s ago</text>
+<text x="912" y="384" font-size="12" class="fa an" text-anchor="end" style="animation-name:k75" opacity="0">4 s ago</text>
+<text x="912" y="384" font-size="12" class="fa an" text-anchor="end" style="animation-name:k76" opacity="1">5 s ago</text>
+<text x="912" y="384" font-size="12" class="fa an" text-anchor="end" style="animation-name:k77" opacity="0">6 s ago</text>
+<text x="912" y="384" font-size="12" class="fa an" text-anchor="end" style="animation-name:k78" opacity="0">7 s ago</text>
+<path d="M711.5 394.5H923" stroke="#25252c" stroke-width="1"/>
+<g clip-path="url(#cN3)"><g class="an" style="animation-name:k79" transform="translate(-115.29 0)">
+<rect x="1075.16" y="399" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw0"/>
+<rect x="861.66" y="399" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw0"/>
+<rect x="1126.4" y="399" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw0"/>
+<rect x="912.9" y="399" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw0"/>
+</g></g>
+<circle cx="817.75" cy="0" r="3" fill="#ff6b88" class="an" style="animation-name:k80" transform="translate(0 410)" opacity="0"/>
+<circle cx="817.75" cy="434" r="4" fill="#ff6b88" class="an" style="animation-name:k81" opacity="0"/>
+<circle cx="817.75" cy="434" r="4" fill="none" stroke="#ff6b88" stroke-width="1.5" class="an ring" style="animation-name:k82" opacity="0"/>
+<path d="M147.25 474V434" stroke="#25252c" stroke-width="1"/>
+<rect x="40.5" y="474.5" width="212.5" height="123" rx="8" fill="#0c0c0f" stroke="#25252c" />
+<rect x="41" y="475" width="211.5" height="122" rx="7.5" fill="#ff6b88" class="an" style="animation-name:k83" opacity="0"/>
+<circle cx="55" cy="494" r="3" fill="#ff6b88"/>
+<text x="64" y="499" font-size="14" class="ink" font-weight="600">Tool guard</text>
+<text x="52" y="521" font-size="13" class="mu">Root tool guard</text>
+<text x="52" y="543" font-size="13" class="mu">Tool</text>
+<text x="84.13" y="543" font-size="13" class="an" font-weight="500" style="animation-name:k84" opacity="1" fill="#ecebee">Allow</text>
+<text x="241.5" y="572" font-size="12" class="fa an" text-anchor="end" style="animation-name:k85" opacity="1">Just now</text>
+<text x="241.5" y="572" font-size="12" class="fa an" text-anchor="end" style="animation-name:k86" opacity="0">2 s ago</text>
+<text x="241.5" y="572" font-size="12" class="fa an" text-anchor="end" style="animation-name:k87" opacity="0">3 s ago</text>
+<path d="M41 582.5H252.5" stroke="#25252c" stroke-width="1"/>
+<g clip-path="url(#cN4)"><g class="an" style="animation-name:k88" transform="translate(-115.29 0)">
+<rect x="276.34" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw3"/>
+<rect x="62.84" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw3"/>
+<rect x="293" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw1"/>
+<rect x="79.5" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw1"/>
+<rect x="326.94" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw0"/>
+<rect x="113.44" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw0"/>
+<rect x="410.64" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw0"/>
+<rect x="197.14" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw0"/>
+<rect x="421.95" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw1"/>
+<rect x="208.45" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw1"/>
+<rect x="450.13" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw1"/>
+<rect x="236.63" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw1"/>
+</g></g>
+<circle cx="147.25" cy="0" r="3" fill="#ff6b88" class="an" style="animation-name:k89" transform="translate(0 474)" opacity="0"/>
+<circle cx="147.25" cy="434" r="4" fill="#ff6b88" class="an" style="animation-name:k90" opacity="0"/>
+<circle cx="147.25" cy="434" r="4" fill="none" stroke="#ff6b88" stroke-width="1.5" class="an ring" style="animation-name:k91" opacity="0"/>
+<path d="M370.75 474V434" stroke="#25252c" stroke-width="1"/>
+<rect x="264" y="474.5" width="212.5" height="123" rx="8" fill="#0c0c0f" stroke="#ff6b88" />
+<rect x="264.5" y="475" width="211.5" height="122" rx="7.5" fill="#ff6b88" class="an" style="animation-name:k92" opacity="0"/>
+<circle cx="278.5" cy="494" r="3" fill="#ff6b88"/>
+<text x="287.5" y="499" font-size="14" class="ink" font-weight="600">Router</text>
+<text x="275.5" y="521" font-size="13" class="mu">Model and effort</text>
+<text x="275.5" y="543" font-size="13" class="mu">Model</text>
+<text x="316.99" y="543" font-size="13" class="an" font-weight="500" style="animation-name:k93" opacity="0" fill="#ecebee">sonnet · high</text>
+<text x="316.99" y="543" font-size="13" class="an" font-weight="500" style="animation-name:k94" opacity="1" fill="#ecebee">haiku · low</text>
+<text x="316.99" y="543" font-size="13" class="an" font-weight="500" style="animation-name:k95" opacity="0" fill="#ecebee">gpt-6.1-sol · low</text>
+<text x="465" y="572" font-size="12" class="fa an" text-anchor="end" style="animation-name:k96" opacity="1">Just now</text>
+<path d="M264.5 582.5H476" stroke="#25252c" stroke-width="1"/>
+<g clip-path="url(#cN5)"><g class="an" style="animation-name:k97" transform="translate(-115.29 0)">
+<rect x="488.74" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw3"/>
+<rect x="275.24" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw3"/>
+<rect x="504.97" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw3"/>
+<rect x="291.47" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw3"/>
+<rect x="521.62" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw1"/>
+<rect x="308.12" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw1"/>
+<rect x="533.36" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw0"/>
+<rect x="319.86" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw0"/>
+<rect x="544.47" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw0"/>
+<rect x="330.97" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw0"/>
+<rect x="561.12" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw2"/>
+<rect x="347.62" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw2"/>
+<rect x="577.99" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw1"/>
+<rect x="364.49" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw1"/>
+<rect x="595.49" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw3"/>
+<rect x="381.99" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw3"/>
+<rect x="611.93" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw0"/>
+<rect x="398.43" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw0"/>
+<rect x="623.25" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw1"/>
+<rect x="409.75" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw1"/>
+<rect x="640.11" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw0"/>
+<rect x="426.61" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw0"/>
+<rect x="650.36" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw0"/>
+<rect x="436.86" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw0"/>
+<rect x="667.66" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw1"/>
+<rect x="454.16" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw1"/>
+</g></g>
+<circle cx="370.75" cy="0" r="3" fill="#ff6b88" class="an" style="animation-name:k98" transform="translate(0 440.67)" opacity="0"/>
+<circle cx="370.75" cy="434" r="4" fill="#ff6b88" class="an" style="animation-name:k99" opacity="0"/>
+<circle cx="370.75" cy="434" r="4" fill="none" stroke="#ff6b88" stroke-width="1.5" class="an ring" style="animation-name:k100" opacity="0"/>
+<path d="M594.25 474V434" stroke="#25252c" stroke-width="1"/>
+<rect x="487.5" y="474.5" width="212.5" height="123" rx="8" fill="#0c0c0f" stroke="#25252c" />
+<rect x="488" y="475" width="211.5" height="122" rx="7.5" fill="#ff6b88" class="an" style="animation-name:k101" opacity="0"/>
+<circle cx="502" cy="494" r="3" fill="#ff6b88"/>
+<text x="511" y="499" font-size="14" class="ink" font-weight="600">Compact</text>
+<text x="499" y="521" font-size="13" class="mu">Summary replacement</text>
+<text x="499" y="543" font-size="13" class="mu">Keep</text>
+<text x="534.64" y="543" font-size="13" class="an" font-weight="500" style="animation-name:k102" opacity="1" fill="#ecebee">8 / 31</text>
+<text x="688.5" y="572" font-size="12" class="fa an" text-anchor="end" style="animation-name:k103" opacity="1">Just now</text>
+<text x="688.5" y="572" font-size="12" class="fa an" text-anchor="end" style="animation-name:k104" opacity="0">2 s ago</text>
+<text x="688.5" y="572" font-size="12" class="fa an" text-anchor="end" style="animation-name:k105" opacity="0">3 s ago</text>
+<path d="M488 582.5H699.5" stroke="#25252c" stroke-width="1"/>
+<g clip-path="url(#cN6)"><g class="an" style="animation-name:k106" transform="translate(-115.29 0)">
+<rect x="751.1" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw1"/>
+<rect x="537.6" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw1"/>
+<rect x="812.59" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw1"/>
+<rect x="599.09" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw1"/>
+<rect x="824.12" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw3"/>
+<rect x="610.62" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw3"/>
+<rect x="886.25" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw2"/>
+<rect x="672.75" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw2"/>
+</g></g>
+<circle cx="594.25" cy="0" r="3" fill="#ff6b88" class="an" style="animation-name:k107" transform="translate(0 471.78)" opacity="0"/>
+<circle cx="594.25" cy="434" r="4" fill="#ff6b88" class="an" style="animation-name:k108" opacity="0"/>
+<circle cx="594.25" cy="434" r="4" fill="none" stroke="#ff6b88" stroke-width="1.5" class="an ring" style="animation-name:k109" opacity="0"/>
+<path d="M817.75 474V434" stroke="#25252c" stroke-width="1"/>
+<rect x="711" y="474.5" width="212.5" height="123" rx="8" fill="#0c0c0f" stroke="#25252c" />
+<rect x="711.5" y="475" width="211.5" height="122" rx="7.5" fill="#ff6b88" class="an" style="animation-name:k110" opacity="0"/>
+<circle cx="725.5" cy="494" r="3" fill="#ff6b88"/>
+<text x="734.5" y="499" font-size="14" class="ink" font-weight="600">Evidence</text>
+<text x="722.5" y="521" font-size="13" class="mu">Evidence check</text>
+<text x="722.5" y="543" font-size="13" class="mu">Evidence</text>
+<text x="782.71" y="543" font-size="13" class="an" font-weight="500" style="animation-name:k111" opacity="1" fill="#ecebee">4 items</text>
+<text x="782.71" y="543" font-size="13" class="an" font-weight="500" style="animation-name:k112" opacity="0" fill="#ecebee">2 items</text>
+<text x="782.71" y="543" font-size="13" class="an" font-weight="500" style="animation-name:k113" opacity="0" fill="#ecebee">3 items</text>
+<text x="912" y="572" font-size="12" class="fa an" text-anchor="end" style="animation-name:k114" opacity="0">6 s ago</text>
+<text x="912" y="572" font-size="12" class="fa an" text-anchor="end" style="animation-name:k115" opacity="0">7 s ago</text>
+<text x="912" y="572" font-size="12" class="fa an" text-anchor="end" style="animation-name:k116" opacity="1">Just now</text>
+<text x="912" y="572" font-size="12" class="fa an" text-anchor="end" style="animation-name:k117" opacity="0">2 s ago</text>
+<text x="912" y="572" font-size="12" class="fa an" text-anchor="end" style="animation-name:k118" opacity="0">3 s ago</text>
+<text x="912" y="572" font-size="12" class="fa an" text-anchor="end" style="animation-name:k119" opacity="0">4 s ago</text>
+<text x="912" y="572" font-size="12" class="fa an" text-anchor="end" style="animation-name:k120" opacity="0">5 s ago</text>
+<path d="M711.5 582.5H923" stroke="#25252c" stroke-width="1"/>
+<g clip-path="url(#cN7)"><g class="an" style="animation-name:k121" transform="translate(-115.29 0)">
+<rect x="957.95" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw3"/>
+<rect x="744.45" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw3"/>
+<rect x="986.56" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw1"/>
+<rect x="773.06" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw1"/>
+<rect x="1002.78" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw1"/>
+<rect x="789.28" y="587" width="1.5" height="7" rx=".5" fill="#ff6b88" class="tw1"/>
+</g></g>
+<circle cx="817.75" cy="0" r="3" fill="#ff6b88" class="an" style="animation-name:k122" transform="translate(0 474)" opacity="0"/>
+<circle cx="817.75" cy="434" r="4" fill="#ff6b88" class="an" style="animation-name:k123" opacity="0"/>
+<circle cx="817.75" cy="434" r="4" fill="none" stroke="#ff6b88" stroke-width="1.5" class="an ring" style="animation-name:k124" opacity="0"/>
+<rect x="956.5" y="196.5" width="299" height="417" rx="10" fill="#131318" stroke="#25252c" />
+<text x="972" y="226" font-size="15" class="ink" font-weight="600">Router</text>
+<text x="1030.43" y="226" font-size="13" class="fa">Step detail</text>
+<path d="M956 248.5H1256" stroke="#25252c" stroke-width="1"/>
+<rect x="972.5" y="266.5" width="49.08" height="19" rx="4" fill="none" stroke="#25252c" />
+<text x="997.04" y="280" font-size="12" class="cl" text-anchor="middle">Claude</text>
+<rect x="1027.58" y="266.5" width="39.36" height="19" rx="4" fill="none" stroke="#25252c" />
+<text x="1047.26" y="280" font-size="12" class="ok" text-anchor="middle">Done</text>
+<text x="1240" y="280" font-size="12.5" class="fa m" text-anchor="end">15:21:43</text>
+<text x="972" y="314" font-size="14" class="ink" font-weight="500">Model and effort for this turn</text>
+<text x="972" y="346" font-size="13" class="fa">Decision</text>
+<text x="1062" y="346" font-size="14" class="ink">sonnet · high</text>
+<text x="972" y="374" font-size="13" class="fa">Confidence</text>
+<text x="1062" y="374" font-size="14" class="ink">0.94</text>
+<text x="972" y="402" font-size="13" class="fa">Updated</text>
+<text x="1062" y="402" font-size="14" class="ink">Just now</text>
+<text x="972" y="430" font-size="13" class="fa">Jev reply</text>
+<text x="1062" y="430" font-size="14" class="ink">231 ms</text>
+<path d="M973 455l5 4.5-5 4.5z" fill="#a09ea8"/>
+<text x="985" y="464" font-size="13" class="mu">What this step does</text>
+<text x="972" y="496" font-size="13" class="ac">Reasoning and timeline for this run ↗</text>
+<rect x="24.5" y="630.5" width="1231" height="385" rx="10" fill="#131318" stroke="#25252c" />
+<text x="40" y="660" font-size="15" class="ink" font-weight="600">Runs</text>
+<text x="88.25" y="660" font-size="13" class="fa">Most recent first</text>
+<rect x="863.05" y="642.5" width="376.45" height="31" rx="8" fill="#0c0c0f" stroke="#25252c" />
+<rect x="865.55" y="645" width="52.95" height="26" rx="6" fill="#1a1a20" />
+<text x="876.55" y="662.5" font-size="12.5" class="ink" font-weight="500">All<tspan dx="5" class="mu" font-weight="400">4</tspan></text>
+<text x="929.5" y="662.5" font-size="12.5" class="mu" font-weight="500">Running<tspan dx="5" class="fa" font-weight="400">3</tspan></text>
+<text x="1013.74" y="662.5" font-size="12.5" class="mu" font-weight="500">Needs attention<tspan dx="5" class="fa" font-weight="400">0</tspan></text>
+<text x="1142.26" y="662.5" font-size="12.5" class="mu" font-weight="500">Unobserved<tspan dx="5" class="fa" font-weight="400">0</tspan></text>
+<rect x="601.05" y="643.5" width="252" height="29" rx="7" fill="#0c0c0f" stroke="#25252c" />
+<g fill="none" stroke="#76747e" stroke-width="1.5" stroke-linecap="round"><circle cx="617.55" cy="657" r="5"/><path d="M621.55 661l3.5 3.5"/></g>
+<text x="631.55" y="662.5" font-size="12.5" class="fa">Search runs, features, models</text>
+<rect x="826.05" y="649.5" width="17" height="17" rx="4" fill="none" stroke="#25252c" />
+<text x="834.55" y="662" font-size="11" class="fa m" text-anchor="middle">/</text>
+<path d="M24 686.5H1256" stroke="#25252c" stroke-width="1"/>
+<text x="44" y="708" font-size="12" class="fa">Status</text>
+<text x="154" y="708" font-size="12" class="fa">Run</text>
+<text x="442" y="708" font-size="12" class="fa">Features used</text>
+<text x="700" y="708" font-size="12" class="fa">Latest decision</text>
+<text x="1064" y="708" font-size="12" class="fa" text-anchor="end">Jev calls</text>
+<text x="1154" y="708" font-size="12" class="fa" text-anchor="end">Duration</text>
+<text x="1236" y="708" font-size="12" class="fa" text-anchor="end">Activity</text>
+<path d="M24 719.5H1256" stroke="#25252c" stroke-width="1"/>
+<rect x="25" y="720" width="1230" height="64" fill="#1a1a20" />
+<rect x="25" y="720" width="1230" height="64" fill="#ff6b88" class="an" style="animation-name:k125" opacity="0"/>
+<path d="M25 783.5H1255" stroke="#25252c" stroke-width="1"/>
+<circle cx="48" cy="752.0" r="4" fill="#ff6b88"/>
+<circle cx="48" cy="752.0" r="8" fill="none" stroke="#ff6b88" stroke-width="1.5" class="halo" opacity="0"/>
+<text x="60" y="756.5" font-size="13" class="ink">Running</text>
+<text x="154" y="749" font-size="14" class="ink" font-weight="600">v3_fe root 7f3a</text>
+<rect x="154" y="761.5" width="6" height="6" rx="2" fill="#e0a070" />
+<text x="165" y="768" font-size="12.5" class="fa"><tspan class="mu">Claude</tspan> · root · <tspan class="mu">sonnet · high</tspan></text>
+<rect x="442" y="730" width="50.48" height="20" rx="5" class="an" style="animation-name:k126" fill="#202027"/>
+<text x="449" y="744" font-size="12" class="an" style="animation-name:k127" fill="#a09ea8">Gate A</text>
+<rect x="496.48" y="730" width="50.48" height="20" rx="5" class="an" style="animation-name:k128" fill="#202027"/>
+<text x="503.48" y="744" font-size="12" class="an" style="animation-name:k129" fill="#a09ea8">Gate B</text>
+<rect x="550.96" y="730" width="57.68" height="20" rx="5" class="an" style="animation-name:k130" fill="#202027"/>
+<text x="557.96" y="744" font-size="12" class="an" style="animation-name:k131" fill="#a09ea8">Workers</text>
+<rect x="442" y="754" width="71.72" height="20" rx="5" class="an" style="animation-name:k132" fill="#202027"/>
+<text x="449" y="768" font-size="12" class="an" style="animation-name:k133" fill="#a09ea8">Tool guard</text>
+<rect x="517.72" y="754" width="49.04" height="20" rx="5" class="an" style="animation-name:k134" fill="#202027"/>
+<text x="524.72" y="768" font-size="12" class="an" style="animation-name:k135" fill="#a09ea8">Router</text>
+<rect x="570.76" y="754" width="61.76" height="20" rx="5" class="an" style="animation-name:k136" fill="#202027"/>
+<text x="577.76" y="768" font-size="12" class="an" style="animation-name:k137" fill="#a09ea8">Compact</text>
+<g clip-path="url(#cR0)">
+<g class="an" style="animation-name:k138" transform="translate(0 22)" opacity="0"><text x="700" y="756.5" font-size="13" class="fa">Gate B</text><text x="747.52" y="756.5" font-size="13" class="ink" font-weight="500">worker</text><text x="936" y="756.5" font-size="13" class="fa" text-anchor="end">211 ms</text></g>
+<g class="an" style="animation-name:k139" transform="translate(0 22)" opacity="0"><text x="700" y="756.5" font-size="13" class="fa">Router</text><text x="745.96" y="756.5" font-size="13" class="ink" font-weight="500">sonnet · high</text><text x="936" y="756.5" font-size="13" class="fa" text-anchor="end">339 ms</text></g>
+<g class="an" style="animation-name:k140" transform="translate(0 22)" opacity="0"><text x="700" y="756.5" font-size="13" class="fa">Router</text><text x="745.96" y="756.5" font-size="13" class="ink" font-weight="500">sonnet · high</text><text x="936" y="756.5" font-size="13" class="fa" text-anchor="end">200 ms</text></g>
+<g class="an" style="animation-name:k141" transform="translate(0 22)" opacity="0"><text x="700" y="756.5" font-size="13" class="fa">Tool guard</text><text x="770.53" y="756.5" font-size="13" class="ink" font-weight="500">Allow</text><text x="936" y="756.5" font-size="13" class="fa" text-anchor="end">254 ms</text></g>
+<g class="an" style="animation-name:k142" transform="translate(0 22)" opacity="0"><text x="700" y="756.5" font-size="13" class="fa">Router</text><text x="745.96" y="756.5" font-size="13" class="ink" font-weight="500">sonnet · high</text><text x="936" y="756.5" font-size="13" class="fa" text-anchor="end">226 ms</text></g>
+<g class="an" style="animation-name:k143" transform="translate(0 -20.62)" opacity=".06"><text x="700" y="756.5" font-size="13" class="fa">Gate B</text><text x="747.52" y="756.5" font-size="13" class="ink" font-weight="500">worker</text><text x="936" y="756.5" font-size="13" class="fa" text-anchor="end">207 ms</text></g>
+<g class="an" style="animation-name:k144" transform="translate(0 1.38)" opacity=".94"><text x="700" y="756.5" font-size="13" class="fa">Compact</text><text x="759.74" y="756.5" font-size="13" class="ink" font-weight="500">8 / 31</text><text x="936" y="756.5" font-size="13" class="fa" text-anchor="end">280 ms</text></g>
+<g class="an" style="animation-name:k145" transform="translate(0 22)" opacity="0"><text x="700" y="756.5" font-size="13" class="fa">Router</text><text x="745.96" y="756.5" font-size="13" class="ink" font-weight="500">sonnet · high</text><text x="936" y="756.5" font-size="13" class="fa" text-anchor="end">196 ms</text></g>
+<g class="an" style="animation-name:k146" transform="translate(0 22)" opacity="0"><text x="700" y="756.5" font-size="13" class="fa">Router</text><text x="745.96" y="756.5" font-size="13" class="ink" font-weight="500">sonnet · high</text><text x="936" y="756.5" font-size="13" class="fa" text-anchor="end">295 ms</text></g>
+<g class="an" style="animation-name:k147" transform="translate(0 22)" opacity="0"><text x="700" y="756.5" font-size="13" class="fa">Workers</text><text x="755.32" y="756.5" font-size="13" class="ink" font-weight="500">Passed 3/3</text><text x="936" y="756.5" font-size="13" class="fa" text-anchor="end">318 ms</text></g>
+<g class="an" style="animation-name:k148" transform="translate(0 22)" opacity="0"><text x="700" y="756.5" font-size="13" class="fa">Tool guard</text><text x="770.53" y="756.5" font-size="13" class="ink" font-weight="500">Allow</text><text x="936" y="756.5" font-size="13" class="fa" text-anchor="end">252 ms</text></g>
+<g class="an" style="animation-name:k149" transform="translate(0 22)" opacity="0"><text x="700" y="756.5" font-size="13" class="fa">Gate A</text><text x="747.52" y="756.5" font-size="13" class="ink" font-weight="500">Direct</text><text x="936" y="756.5" font-size="13" class="fa" text-anchor="end">266 ms</text></g>
+<g class="an" style="animation-name:k150" transform="translate(0 22)" opacity="0"><text x="700" y="756.5" font-size="13" class="fa">Router</text><text x="745.96" y="756.5" font-size="13" class="ink" font-weight="500">sonnet · high</text><text x="936" y="756.5" font-size="13" class="fa" text-anchor="end">204 ms</text></g>
+<g class="an" style="animation-name:k151" transform="translate(0 22)" opacity="0"><text x="700" y="756.5" font-size="13" class="fa">Workers</text><text x="755.32" y="756.5" font-size="13" class="ink" font-weight="500">Passed 3/3</text><text x="936" y="756.5" font-size="13" class="fa" text-anchor="end">285 ms</text></g>
+</g>
+<g clip-path="url(#cS0)"><g class="an" style="animation-name:k152" transform="translate(-38.5 0)">
+<rect x="972" y="749.9" width="3.5" height="12.1" rx="1" fill="#3a3a43" />
+<rect x="977.5" y="747.9" width="3.5" height="14.1" rx="1" fill="#3a3a43" />
+<rect x="983" y="748.9" width="3.5" height="13.1" rx="1" fill="#3a3a43" />
+<rect x="988.5" y="749.6" width="3.5" height="12.4" rx="1" fill="#3a3a43" />
+<rect x="994" y="747" width="3.5" height="15" rx="1" fill="#3a3a43" />
+<rect x="999.5" y="750" width="3.5" height="12" rx="1" fill="#3a3a43" />
+<rect x="1005" y="746.5" width="3.5" height="15.5" rx="1" fill="#3a3a43" />
+<rect x="1010.5" y="745.6" width="3.5" height="16.4" rx="1" fill="#3a3a43" />
+<rect x="1016" y="748" width="3.5" height="14" rx="1" fill="#3a3a43" />
+<rect x="1021.5" y="747.5" width="3.5" height="14.5" rx="1" fill="#3a3a43" />
+<rect x="1027" y="749.7" width="3.5" height="12.3" rx="1" fill="#3a3a43" />
+<rect x="1032.5" y="746.8" width="3.5" height="15.2" rx="1" fill="#3a3a43" />
+<rect x="1038" y="749.5" width="3.5" height="12.5" rx="1" fill="#3a3a43" />
+<rect x="1043.5" y="744.9" width="3.5" height="17.1" rx="1" fill="#3a3a43" />
+<rect x="1049" y="749.9" width="3.5" height="12.1" rx="1" fill="#3a3a43" />
+<rect x="1054.5" y="747.9" width="3.5" height="14.1" rx="1" fill="#3a3a43" />
+<rect x="1060" y="748.9" width="3.5" height="13.1" rx="1" fill="#3a3a43" />
+<rect x="1065.5" y="749.6" width="3.5" height="12.4" rx="1" fill="#3a3a43" />
+<rect x="1071" y="747" width="3.5" height="15" rx="1" fill="#3a3a43" />
+<rect x="1076.5" y="750" width="3.5" height="12" rx="1" fill="#3a3a43" />
+<rect x="1082" y="746.5" width="3.5" height="15.5" rx="1" fill="#3a3a43" />
+<rect x="1087.5" y="745.6" width="3.5" height="16.4" rx="1" fill="#3a3a43" />
+<rect x="1093" y="748" width="3.5" height="14" rx="1" fill="#3a3a43" />
+<rect x="1098.5" y="747.5" width="3.5" height="14.5" rx="1" fill="#3a3a43" />
+<rect x="1104" y="749.7" width="3.5" height="12.3" rx="1" fill="#3a3a43" />
+</g></g>
+<rect x="1032.5" y="746.8" width="3.5" height="15.2" rx="1" fill="#ff6b88" class="an" style="animation-name:k153" opacity="0"/>
+<rect x="1032.5" y="749.5" width="3.5" height="12.5" rx="1" fill="#ff6b88" class="an" style="animation-name:k154" opacity="0"/>
+<rect x="1032.5" y="744.9" width="3.5" height="17.1" rx="1" fill="#ff6b88" class="an" style="animation-name:k155" opacity="0"/>
+<rect x="1032.5" y="749.9" width="3.5" height="12.1" rx="1" fill="#ff6b88" class="an" style="animation-name:k156" opacity="0"/>
+<rect x="1032.5" y="747.9" width="3.5" height="14.1" rx="1" fill="#ff6b88" class="an" style="animation-name:k157" opacity="0"/>
+<rect x="1032.5" y="748.9" width="3.5" height="13.1" rx="1" fill="#ff6b88" class="an" style="animation-name:k158" opacity="0"/>
+<rect x="1032.5" y="749.6" width="3.5" height="12.4" rx="1" fill="#ff6b88" class="an" style="animation-name:k159" opacity="0"/>
+<rect x="1032.5" y="747" width="3.5" height="15" rx="1" fill="#ff6b88" class="an" style="animation-name:k160" opacity="1"/>
+<rect x="1032.5" y="750" width="3.5" height="12" rx="1" fill="#ff6b88" class="an" style="animation-name:k161" opacity="0"/>
+<rect x="1032.5" y="746.5" width="3.5" height="15.5" rx="1" fill="#ff6b88" class="an" style="animation-name:k162" opacity="0"/>
+<rect x="1032.5" y="745.6" width="3.5" height="16.4" rx="1" fill="#ff6b88" class="an" style="animation-name:k163" opacity="0"/>
+<rect x="1032.5" y="748" width="3.5" height="14" rx="1" fill="#ff6b88" class="an" style="animation-name:k164" opacity="0"/>
+<rect x="1032.5" y="747.5" width="3.5" height="14.5" rx="1" fill="#ff6b88" class="an" style="animation-name:k165" opacity="0"/>
+<rect x="1032.5" y="749.7" width="3.5" height="12.3" rx="1" fill="#ff6b88" class="an" style="animation-name:k166" opacity="0"/>
+<text x="1064" y="757" font-size="13.5" class="an" style="animation-name:k167" opacity="0" fill="#ecebee">18</text>
+<text x="1064" y="757" font-size="13.5" class="an" style="animation-name:k168" opacity="0" fill="#ecebee">19</text>
+<text x="1064" y="757" font-size="13.5" class="an" style="animation-name:k169" opacity="0" fill="#ecebee">20</text>
+<text x="1064" y="757" font-size="13.5" class="an" style="animation-name:k170" opacity="0" fill="#ecebee">21</text>
+<text x="1064" y="757" font-size="13.5" class="an" style="animation-name:k171" opacity="0" fill="#ecebee">22</text>
+<text x="1064" y="757" font-size="13.5" class="an" style="animation-name:k172" opacity="0" fill="#ecebee">23</text>
+<text x="1064" y="757" font-size="13.5" class="an" style="animation-name:k173" opacity="0" fill="#ecebee">24</text>
+<text x="1064" y="757" font-size="13.5" class="an" style="animation-name:k174" opacity="1" fill="#ecebee">25</text>
+<text x="1064" y="757" font-size="13.5" class="an" style="animation-name:k175" opacity="0" fill="#ecebee">26</text>
+<text x="1064" y="757" font-size="13.5" class="an" style="animation-name:k176" opacity="0" fill="#ecebee">27</text>
+<text x="1064" y="757" font-size="13.5" class="an" style="animation-name:k177" opacity="0" fill="#ecebee">28</text>
+<text x="1064" y="757" font-size="13.5" class="an" style="animation-name:k178" opacity="0" fill="#ecebee">29</text>
+<text x="1064" y="757" font-size="13.5" class="an" style="animation-name:k179" opacity="0" fill="#ecebee">30</text>
+<text x="1064" y="757" font-size="13.5" class="an" style="animation-name:k180" opacity="0" fill="#ecebee">31</text>
+<text x="1064" y="757" font-size="13.5" class="an" style="animation-name:k181" opacity="0" fill="#ecebee">32</text>
+<text x="1154" y="756.5" font-size="13" class="mu" text-anchor="end">1m 14s</text>
+<text x="1236" y="756.5" font-size="13" class="ink" font-weight="500" text-anchor="end">Just now</text>
+<rect x="25" y="784" width="1230" height="64" fill="#ff6b88" class="an" style="animation-name:k182" opacity="0"/>
+<path d="M25 847.5H1255" stroke="#25252c" stroke-width="1"/>
+<circle cx="48" cy="816.0" r="4" fill="#ff6b88"/>
+<circle cx="48" cy="816.0" r="8" fill="none" stroke="#ff6b88" stroke-width="1.5" class="halo" opacity="0"/>
+<text x="60" y="820.5" font-size="13" class="ink">Running</text>
+<text x="154" y="813" font-size="14" class="ink" font-weight="600">worker-fast</text>
+<rect x="154" y="825.5" width="6" height="6" rx="2" fill="#e0a070" />
+<text x="165" y="832" font-size="12.5" class="fa"><tspan class="mu">Claude</tspan> · subagent · 7f3a · <tspan class="mu">haiku · low</tspan></text>
+<rect x="442" y="794" width="71.72" height="20" rx="5" class="an" style="animation-name:k183" fill="#202027"/>
+<text x="449" y="808" font-size="12" class="an" style="animation-name:k184" fill="#a09ea8">Tool guard</text>
+<rect x="517.72" y="794" width="49.04" height="20" rx="5" class="an" style="animation-name:k185" fill="#202027"/>
+<text x="524.72" y="808" font-size="12" class="an" style="animation-name:k186" fill="#a09ea8">Router</text>
+<rect x="570.76" y="794" width="61.76" height="20" rx="5" class="an" style="animation-name:k187" fill="#202027"/>
+<text x="577.76" y="808" font-size="12" class="an" style="animation-name:k188" fill="#a09ea8">Compact</text>
+<rect x="442" y="818" width="64.04" height="20" rx="5" class="an" style="animation-name:k189" fill="#202027"/>
+<text x="449" y="832" font-size="12" class="an" style="animation-name:k190" fill="#a09ea8">Evidence</text>
+<g clip-path="url(#cR1)">
+<g class="an" style="animation-name:k191" transform="translate(0 22)" opacity="0"><text x="700" y="820.5" font-size="13" class="fa">Router</text><text x="745.96" y="820.5" font-size="13" class="ink" font-weight="500">haiku · low</text><text x="936" y="820.5" font-size="13" class="wa" text-anchor="end">612 ms</text></g>
+<g class="an" style="animation-name:k192" transform="translate(0 22)" opacity="0"><text x="700" y="820.5" font-size="13" class="fa">Tool guard</text><text x="770.53" y="820.5" font-size="13" class="ink" font-weight="500">Allow</text><text x="936" y="820.5" font-size="13" class="fa" text-anchor="end">225 ms</text></g>
+<g class="an" style="animation-name:k193" transform="translate(0 22)" opacity="0"><text x="700" y="820.5" font-size="13" class="fa">Evidence</text><text x="762.21" y="820.5" font-size="13" class="ink" font-weight="500">2 items</text><text x="936" y="820.5" font-size="13" class="fa" text-anchor="end">323 ms</text></g>
+<g class="an" style="animation-name:k194" transform="translate(0 22)" opacity="0"><text x="700" y="820.5" font-size="13" class="fa">Compact</text><text x="759.74" y="820.5" font-size="13" class="ink" font-weight="500">8 / 31</text><text x="936" y="820.5" font-size="13" class="fa" text-anchor="end">246 ms</text></g>
+<g class="an" style="animation-name:k195" transform="translate(0 22)" opacity="0"><text x="700" y="820.5" font-size="13" class="fa">Evidence</text><text x="762.21" y="820.5" font-size="13" class="ink" font-weight="500">3 items</text><text x="936" y="820.5" font-size="13" class="fa" text-anchor="end">180 ms</text></g>
+<g class="an" style="animation-name:k196" transform="translate(0 22)" opacity="0"><text x="700" y="820.5" font-size="13" class="fa">Evidence</text><text x="762.21" y="820.5" font-size="13" class="ink" font-weight="500">4 items</text><text x="936" y="820.5" font-size="13" class="fa" text-anchor="end">210 ms</text></g>
+<g class="an" style="animation-name:k197" opacity="1"><text x="700" y="820.5" font-size="13" class="fa">Router</text><text x="745.96" y="820.5" font-size="13" class="ink" font-weight="500">haiku · low</text><text x="936" y="820.5" font-size="13" class="fa" text-anchor="end">311 ms</text></g>
+<g class="an" style="animation-name:k198" transform="translate(0 22)" opacity="0"><text x="700" y="820.5" font-size="13" class="fa">Compact</text><text x="759.74" y="820.5" font-size="13" class="ink" font-weight="500">8 / 31</text><text x="936" y="820.5" font-size="13" class="fa" text-anchor="end">210 ms</text></g>
+<g class="an" style="animation-name:k199" transform="translate(0 22)" opacity="0"><text x="700" y="820.5" font-size="13" class="fa">Router</text><text x="745.96" y="820.5" font-size="13" class="ink" font-weight="500">sonnet · high</text><text x="936" y="820.5" font-size="13" class="fa" text-anchor="end">204 ms</text></g>
+<g class="an" style="animation-name:k200" transform="translate(0 22)" opacity="0"><text x="700" y="820.5" font-size="13" class="fa">Router</text><text x="745.96" y="820.5" font-size="13" class="ink" font-weight="500">haiku · low</text><text x="936" y="820.5" font-size="13" class="fa" text-anchor="end">300 ms</text></g>
+<g class="an" style="animation-name:k201" transform="translate(0 22)" opacity="0"><text x="700" y="820.5" font-size="13" class="fa">Router</text><text x="745.96" y="820.5" font-size="13" class="ink" font-weight="500">haiku · low</text><text x="936" y="820.5" font-size="13" class="fa" text-anchor="end">327 ms</text></g>
+<g class="an" style="animation-name:k202" transform="translate(0 22)" opacity="0"><text x="700" y="820.5" font-size="13" class="fa">Compact</text><text x="759.74" y="820.5" font-size="13" class="ink" font-weight="500">8 / 31</text><text x="936" y="820.5" font-size="13" class="fa" text-anchor="end">230 ms</text></g>
+</g>
+<g clip-path="url(#cS1)"><g class="an" style="animation-name:k203" transform="translate(-38.5 0)">
+<rect x="972" y="806" width="3.5" height="20" rx="1" fill="#3a3a43" />
+<rect x="977.5" y="813" width="3.5" height="13" rx="1" fill="#3a3a43" />
+<rect x="983" y="809.5" width="3.5" height="16.5" rx="1" fill="#3a3a43" />
+<rect x="988.5" y="812.2" width="3.5" height="13.8" rx="1" fill="#3a3a43" />
+<rect x="994" y="814.6" width="3.5" height="11.4" rx="1" fill="#3a3a43" />
+<rect x="999.5" y="813.5" width="3.5" height="12.5" rx="1" fill="#3a3a43" />
+<rect x="1005" y="809.9" width="3.5" height="16.1" rx="1" fill="#3a3a43" />
+<rect x="1010.5" y="813.5" width="3.5" height="12.5" rx="1" fill="#3a3a43" />
+<rect x="1016" y="813.7" width="3.5" height="12.3" rx="1" fill="#3a3a43" />
+<rect x="1021.5" y="810.3" width="3.5" height="15.7" rx="1" fill="#3a3a43" />
+<rect x="1027" y="809.3" width="3.5" height="16.7" rx="1" fill="#3a3a43" />
+<rect x="1032.5" y="812.8" width="3.5" height="13.2" rx="1" fill="#3a3a43" />
+<rect x="1038" y="806" width="3.5" height="20" rx="1" fill="#3a3a43" />
+<rect x="1043.5" y="813" width="3.5" height="13" rx="1" fill="#3a3a43" />
+<rect x="1049" y="809.5" width="3.5" height="16.5" rx="1" fill="#3a3a43" />
+<rect x="1054.5" y="812.2" width="3.5" height="13.8" rx="1" fill="#3a3a43" />
+<rect x="1060" y="814.6" width="3.5" height="11.4" rx="1" fill="#3a3a43" />
+<rect x="1065.5" y="813.5" width="3.5" height="12.5" rx="1" fill="#3a3a43" />
+<rect x="1071" y="809.9" width="3.5" height="16.1" rx="1" fill="#3a3a43" />
+<rect x="1076.5" y="813.5" width="3.5" height="12.5" rx="1" fill="#3a3a43" />
+<rect x="1082" y="813.7" width="3.5" height="12.3" rx="1" fill="#3a3a43" />
+<rect x="1087.5" y="810.3" width="3.5" height="15.7" rx="1" fill="#3a3a43" />
+<rect x="1093" y="809.3" width="3.5" height="16.7" rx="1" fill="#3a3a43" />
+</g></g>
+<rect x="1032.5" y="812.8" width="3.5" height="13.2" rx="1" fill="#ff6b88" class="an" style="animation-name:k204" opacity="0"/>
+<rect x="1032.5" y="806" width="3.5" height="20" rx="1" fill="#ff6b88" class="an" style="animation-name:k205" opacity="0"/>
+<rect x="1032.5" y="813" width="3.5" height="13" rx="1" fill="#ff6b88" class="an" style="animation-name:k206" opacity="0"/>
+<rect x="1032.5" y="809.5" width="3.5" height="16.5" rx="1" fill="#ff6b88" class="an" style="animation-name:k207" opacity="0"/>
+<rect x="1032.5" y="812.2" width="3.5" height="13.8" rx="1" fill="#ff6b88" class="an" style="animation-name:k208" opacity="0"/>
+<rect x="1032.5" y="814.6" width="3.5" height="11.4" rx="1" fill="#ff6b88" class="an" style="animation-name:k209" opacity="0"/>
+<rect x="1032.5" y="813.5" width="3.5" height="12.5" rx="1" fill="#ff6b88" class="an" style="animation-name:k210" opacity="0"/>
+<rect x="1032.5" y="809.9" width="3.5" height="16.1" rx="1" fill="#ff6b88" class="an" style="animation-name:k211" opacity="1"/>
+<rect x="1032.5" y="813.5" width="3.5" height="12.5" rx="1" fill="#ff6b88" class="an" style="animation-name:k212" opacity="0"/>
+<rect x="1032.5" y="813.7" width="3.5" height="12.3" rx="1" fill="#ff6b88" class="an" style="animation-name:k213" opacity="0"/>
+<rect x="1032.5" y="810.3" width="3.5" height="15.7" rx="1" fill="#ff6b88" class="an" style="animation-name:k214" opacity="0"/>
+<rect x="1032.5" y="809.3" width="3.5" height="16.7" rx="1" fill="#ff6b88" class="an" style="animation-name:k215" opacity="0"/>
+<text x="1064" y="821" font-size="13.5" class="an" style="animation-name:k216" opacity="0" fill="#ecebee">9</text>
+<text x="1064" y="821" font-size="13.5" class="an" style="animation-name:k217" opacity="0" fill="#ecebee">10</text>
+<text x="1064" y="821" font-size="13.5" class="an" style="animation-name:k218" opacity="0" fill="#ecebee">11</text>
+<text x="1064" y="821" font-size="13.5" class="an" style="animation-name:k219" opacity="0" fill="#ecebee">12</text>
+<text x="1064" y="821" font-size="13.5" class="an" style="animation-name:k220" opacity="0" fill="#ecebee">13</text>
+<text x="1064" y="821" font-size="13.5" class="an" style="animation-name:k221" opacity="0" fill="#ecebee">14</text>
+<text x="1064" y="821" font-size="13.5" class="an" style="animation-name:k222" opacity="0" fill="#ecebee">15</text>
+<text x="1064" y="821" font-size="13.5" class="an" style="animation-name:k223" opacity="1" fill="#ecebee">16</text>
+<text x="1064" y="821" font-size="13.5" class="an" style="animation-name:k224" opacity="0" fill="#ecebee">17</text>
+<text x="1064" y="821" font-size="13.5" class="an" style="animation-name:k225" opacity="0" fill="#ecebee">18</text>
+<text x="1064" y="821" font-size="13.5" class="an" style="animation-name:k226" opacity="0" fill="#ecebee">19</text>
+<text x="1064" y="821" font-size="13.5" class="an" style="animation-name:k227" opacity="0" fill="#ecebee">20</text>
+<text x="1064" y="821" font-size="13.5" class="an" style="animation-name:k228" opacity="0" fill="#ecebee">21</text>
+<text x="1154" y="820.5" font-size="13" class="mu" text-anchor="end">43 s</text>
+<text x="1236" y="820.5" font-size="13" class="ink" font-weight="500" text-anchor="end">Just now</text>
+<rect x="25" y="848" width="1230" height="64" fill="#ff6b88" class="an" style="animation-name:k229" opacity="0"/>
+<path d="M25 911.5H1255" stroke="#25252c" stroke-width="1"/>
+<circle cx="48" cy="880.0" r="4" fill="#ff6b88"/>
+<circle cx="48" cy="880.0" r="8" fill="none" stroke="#ff6b88" stroke-width="1.5" class="halo" opacity="0"/>
+<text x="60" y="884.5" font-size="13" class="ink">Running</text>
+<text x="154" y="877" font-size="14" class="ink" font-weight="600">jev-gate root</text>
+<rect x="154" y="889.5" width="6" height="6" rx="2" fill="#b4a2e6" />
+<text x="165" y="896" font-size="12.5" class="fa"><tspan class="mu">Codex</tspan> · root · <tspan class="mu">gpt-6.1-sol · medium</tspan></text>
+<rect x="442" y="858" width="50.48" height="20" rx="5" class="an" style="animation-name:k230" fill="#202027"/>
+<text x="449" y="872" font-size="12" class="an" style="animation-name:k231" fill="#a09ea8">Gate A</text>
+<rect x="496.98" y="858.5" width="95.44" height="19" rx="5" fill="none" stroke="#2f2f37" stroke-dasharray="3 2"/>
+<text x="503.48" y="872" font-size="12" class="fa">Gate B skipped</text>
+<rect x="596.92" y="858" width="38.12" height="20" rx="5" class="an" style="animation-name:k232" fill="#202027"/>
+<text x="603.92" y="872" font-size="12" class="an" style="animation-name:k233" fill="#a09ea8">Plan</text>
+<rect x="442" y="882" width="71.72" height="20" rx="5" class="an" style="animation-name:k234" fill="#202027"/>
+<text x="449" y="896" font-size="12" class="an" style="animation-name:k235" fill="#a09ea8">Tool guard</text>
+<rect x="517.72" y="882" width="49.04" height="20" rx="5" class="an" style="animation-name:k236" fill="#202027"/>
+<text x="524.72" y="896" font-size="12" class="an" style="animation-name:k237" fill="#a09ea8">Router</text>
+<rect x="570.76" y="882" width="64.04" height="20" rx="5" fill="#202027" />
+<text x="577.76" y="896" font-size="12" class="mu">Evidence</text>
+<g clip-path="url(#cR2)">
+<g class="an" style="animation-name:k238" transform="translate(0 22)" opacity="0"><text x="700" y="884.5" font-size="13" class="fa">Router</text><text x="745.96" y="884.5" font-size="13" class="ink" font-weight="500">gpt-6.1-sol · low</text><text x="936" y="884.5" font-size="13" class="fa" text-anchor="end">280 ms</text></g>
+<g class="an" style="animation-name:k239" transform="translate(0 22)" opacity="0"><text x="700" y="884.5" font-size="13" class="fa">Tool guard</text><text x="770.53" y="884.5" font-size="13" class="ink" font-weight="500">Allow</text><text x="936" y="884.5" font-size="13" class="fa" text-anchor="end">253 ms</text></g>
+<g class="an" style="animation-name:k240" transform="translate(0 22)" opacity="0"><text x="700" y="884.5" font-size="13" class="fa">Router</text><text x="745.96" y="884.5" font-size="13" class="ink" font-weight="500">gpt-6.1-sol · low</text><text x="936" y="884.5" font-size="13" class="fa" text-anchor="end">321 ms</text></g>
+<g class="an" style="animation-name:k241" transform="translate(0 22)" opacity="0"><text x="700" y="884.5" font-size="13" class="fa">Gate A</text><text x="747.52" y="884.5" font-size="13" class="ink" font-weight="500">Direct</text><text x="936" y="884.5" font-size="13" class="fa" text-anchor="end">318 ms</text></g>
+<g class="an" style="animation-name:k242" opacity="1"><text x="700" y="884.5" font-size="13" class="fa">Plan</text><text x="734.13" y="884.5" font-size="13" class="ink" font-weight="500">4 steps</text><text x="936" y="884.5" font-size="13" class="fa" text-anchor="end">175 ms</text></g>
+<g class="an" style="animation-name:k243" transform="translate(0 22)" opacity="0"><text x="700" y="884.5" font-size="13" class="fa">Plan</text><text x="734.13" y="884.5" font-size="13" class="ink" font-weight="500">3 steps</text><text x="936" y="884.5" font-size="13" class="fa" text-anchor="end">256 ms</text></g>
+<g class="an" style="animation-name:k244" transform="translate(0 22)" opacity="0"><text x="700" y="884.5" font-size="13" class="fa">Gate A</text><text x="747.52" y="884.5" font-size="13" class="ink" font-weight="500">Direct</text><text x="936" y="884.5" font-size="13" class="fa" text-anchor="end">293 ms</text></g>
+<g class="an" style="animation-name:k245" transform="translate(0 22)" opacity="0"><text x="700" y="884.5" font-size="13" class="fa">Tool guard</text><text x="770.53" y="884.5" font-size="13" class="ink" font-weight="500">Allow</text><text x="936" y="884.5" font-size="13" class="fa" text-anchor="end">308 ms</text></g>
+<g class="an" style="animation-name:k246" transform="translate(0 22)" opacity="0"><text x="700" y="884.5" font-size="13" class="fa">Tool guard</text><text x="770.53" y="884.5" font-size="13" class="ink" font-weight="500">Allow</text><text x="936" y="884.5" font-size="13" class="fa" text-anchor="end">302 ms</text></g>
+</g>
+<g clip-path="url(#cS2)"><g class="an" style="animation-name:k247" transform="translate(-27.5 0)">
+<rect x="972" y="874.5" width="3.5" height="15.5" rx="1" fill="#3a3a43" />
+<rect x="977.5" y="874" width="3.5" height="16" rx="1" fill="#3a3a43" />
+<rect x="983" y="874.2" width="3.5" height="15.8" rx="1" fill="#3a3a43" />
+<rect x="988.5" y="875" width="3.5" height="15" rx="1" fill="#3a3a43" />
+<rect x="994" y="876" width="3.5" height="14" rx="1" fill="#3a3a43" />
+<rect x="999.5" y="873.5" width="3.5" height="16.5" rx="1" fill="#3a3a43" />
+<rect x="1005" y="873.6" width="3.5" height="16.4" rx="1" fill="#3a3a43" />
+<rect x="1010.5" y="878.8" width="3.5" height="11.2" rx="1" fill="#3a3a43" />
+<rect x="1016" y="875.9" width="3.5" height="14.1" rx="1" fill="#3a3a43" />
+<rect x="1021.5" y="874.5" width="3.5" height="15.5" rx="1" fill="#3a3a43" />
+<rect x="1027" y="874" width="3.5" height="16" rx="1" fill="#3a3a43" />
+<rect x="1032.5" y="874.2" width="3.5" height="15.8" rx="1" fill="#3a3a43" />
+<rect x="1038" y="875" width="3.5" height="15" rx="1" fill="#3a3a43" />
+<rect x="1043.5" y="876" width="3.5" height="14" rx="1" fill="#3a3a43" />
+<rect x="1049" y="873.5" width="3.5" height="16.5" rx="1" fill="#3a3a43" />
+<rect x="1054.5" y="873.6" width="3.5" height="16.4" rx="1" fill="#3a3a43" />
+<rect x="1060" y="878.8" width="3.5" height="11.2" rx="1" fill="#3a3a43" />
+<rect x="1065.5" y="875.9" width="3.5" height="14.1" rx="1" fill="#3a3a43" />
+<rect x="1071" y="874.5" width="3.5" height="15.5" rx="1" fill="#3a3a43" />
+<rect x="1076.5" y="874" width="3.5" height="16" rx="1" fill="#3a3a43" />
+</g></g>
+<rect x="1032.5" y="874.2" width="3.5" height="15.8" rx="1" fill="#ff6b88" class="an" style="animation-name:k248" opacity="0"/>
+<rect x="1032.5" y="875" width="3.5" height="15" rx="1" fill="#ff6b88" class="an" style="animation-name:k249" opacity="0"/>
+<rect x="1032.5" y="876" width="3.5" height="14" rx="1" fill="#ff6b88" class="an" style="animation-name:k250" opacity="0"/>
+<rect x="1032.5" y="873.5" width="3.5" height="16.5" rx="1" fill="#ff6b88" class="an" style="animation-name:k251" opacity="0"/>
+<rect x="1032.5" y="873.6" width="3.5" height="16.4" rx="1" fill="#ff6b88" class="an" style="animation-name:k252" opacity="0"/>
+<rect x="1032.5" y="878.8" width="3.5" height="11.2" rx="1" fill="#ff6b88" class="an" style="animation-name:k253" opacity="1"/>
+<rect x="1032.5" y="875.9" width="3.5" height="14.1" rx="1" fill="#ff6b88" class="an" style="animation-name:k254" opacity="0"/>
+<rect x="1032.5" y="874.5" width="3.5" height="15.5" rx="1" fill="#ff6b88" class="an" style="animation-name:k255" opacity="0"/>
+<rect x="1032.5" y="874" width="3.5" height="16" rx="1" fill="#ff6b88" class="an" style="animation-name:k256" opacity="0"/>
+<text x="1064" y="885" font-size="13.5" class="an" style="animation-name:k257" opacity="0" fill="#ecebee">6</text>
+<text x="1064" y="885" font-size="13.5" class="an" style="animation-name:k258" opacity="0" fill="#ecebee">7</text>
+<text x="1064" y="885" font-size="13.5" class="an" style="animation-name:k259" opacity="0" fill="#ecebee">8</text>
+<text x="1064" y="885" font-size="13.5" class="an" style="animation-name:k260" opacity="0" fill="#ecebee">9</text>
+<text x="1064" y="885" font-size="13.5" class="an" style="animation-name:k261" opacity="0" fill="#ecebee">10</text>
+<text x="1064" y="885" font-size="13.5" class="an" style="animation-name:k262" opacity="1" fill="#ecebee">11</text>
+<text x="1064" y="885" font-size="13.5" class="an" style="animation-name:k263" opacity="0" fill="#ecebee">12</text>
+<text x="1064" y="885" font-size="13.5" class="an" style="animation-name:k264" opacity="0" fill="#ecebee">13</text>
+<text x="1064" y="885" font-size="13.5" class="an" style="animation-name:k265" opacity="0" fill="#ecebee">14</text>
+<text x="1064" y="885" font-size="13.5" class="an" style="animation-name:k266" opacity="0" fill="#ecebee">15</text>
+<text x="1154" y="884.5" font-size="13" class="mu" text-anchor="end">5m 14s</text>
+<text x="1236" y="884.5" font-size="13" class="ink" font-weight="500" text-anchor="end">Just now</text>
+<circle cx="48" cy="944.0" r="4" fill="#6fcfa9"/>
+<text x="60" y="948.5" font-size="13" class="mu">Done</text>
+<text x="154" y="941" font-size="14" class="ink" font-weight="600">planner</text>
+<rect x="154" y="953.5" width="6" height="6" rx="2" fill="#e0a070" />
+<text x="165" y="960" font-size="12.5" class="fa"><tspan class="mu">Claude</tspan> · subagent · 51ab · <tspan class="mu">sonnet · high</tspan></text>
+<rect x="442" y="934" width="50.48" height="20" rx="5" fill="#202027" />
+<text x="449" y="948" font-size="12" class="mu">Gate B</text>
+<rect x="496.48" y="934" width="38.12" height="20" rx="5" fill="#202027" />
+<text x="503.48" y="948" font-size="12" class="mu">Plan</text>
+<rect x="538.6" y="934" width="49.04" height="20" rx="5" fill="#202027" />
+<text x="545.6" y="948" font-size="12" class="mu">Router</text>
+<g ><text x="700" y="948.5" font-size="13" class="fa">Plan</text><text x="734.13" y="948.5" font-size="13" class="ink" font-weight="500">3 steps</text><text x="936" y="948.5" font-size="13" class="fa" text-anchor="end">288 ms</text></g>
+<rect x="1016" y="942" width="3.5" height="12" rx="1" fill="#3a3a43" />
+<rect x="1021.5" y="936" width="3.5" height="18" rx="1" fill="#3a3a43" />
+<rect x="1027" y="945" width="3.5" height="9" rx="1" fill="#3a3a43" />
+<rect x="1032.5" y="940" width="3.5" height="14" rx="1" fill="#3a3a43" />
+<text x="1064" y="949" font-size="13.5" class="ink">4</text>
+<text x="1154" y="948.5" font-size="13" class="mu" text-anchor="end">4m 40s</text>
+<text x="1236" y="948.5" font-size="13" class="fa" text-anchor="end">4 min ago</text>
+<path d="M25 976.5H1255" stroke="#25252c" stroke-width="1"/>
+<text x="44" y="1001" font-size="12.5" class="fa">Showing 4 runs</text>
+<rect x="24.5" y="1032.5" width="895" height="361" rx="10" fill="#131318" stroke="#25252c" />
+<text x="40" y="1062" font-size="15" class="ink" font-weight="600">Jev call log</text>
+<text x="137.06" y="1062" font-size="13" class="fa">1 call = 1 row</text>
+<rect x="845.84" y="1043.5" width="57.66" height="27" rx="6" fill="none" stroke="#25252c" />
+<text x="874.67" y="1061.5" font-size="13" class="mu" text-anchor="middle">Pause</text>
+<rect x="789.71" y="1043.5" width="47.13" height="27" rx="6" fill="none" stroke="#25252c" />
+<text x="813.27" y="1061.5" font-size="13" class="ok" text-anchor="middle">Live</text>
+<path d="M24 1080.5H920" stroke="#25252c" stroke-width="1"/>
+<text x="40" y="1102" font-size="12" class="fa">Time</text>
+<text x="118" y="1102" font-size="12" class="fa">Run</text>
+<text x="236" y="1102" font-size="12" class="fa">Feature</text>
+<text x="318" y="1102" font-size="12" class="fa">Question</text>
+<text x="466" y="1102" font-size="12" class="fa">Answer</text>
+<text x="666" y="1102" font-size="12" class="fa" text-anchor="end">Confidence</text>
+<text x="734" y="1102" font-size="12" class="fa" text-anchor="end">Latency</text>
+<text x="810" y="1102" font-size="12" class="fa" text-anchor="end">Tokens</text>
+<text x="904" y="1102" font-size="12" class="fa" text-anchor="end">Est. cost</text>
+<path d="M25 1113.5H919" stroke="#25252c" stroke-width="1"/>
+<rect x="25" y="1114" width="894" height="35" fill="#ff6b88" class="an" style="animation-name:k267" opacity="0"/>
+<path d="M25 1148.5H919" stroke="#25252c" stroke-width="1"/>
+<path d="M25 1183.5H919" stroke="#25252c" stroke-width="1"/>
+<path d="M25 1218.5H919" stroke="#25252c" stroke-width="1"/>
+<path d="M25 1253.5H919" stroke="#25252c" stroke-width="1"/>
+<path d="M25 1288.5H919" stroke="#25252c" stroke-width="1"/>
+<path d="M25 1323.5H919" stroke="#25252c" stroke-width="1"/>
+<path d="M25 1358.5H919" stroke="#25252c" stroke-width="1"/>
+<g clip-path="url(#cL)"><g class="an" style="animation-name:k268" transform="translate(0 665)">
+<text x="40" y="1381.5" font-size="12.5" class="ink m" font-weight="600">15:21:27</text>
+<text x="118" y="1381.5" font-size="13" class="ink">worker-fast</text>
+<text x="236" y="1381.5" font-size="13" class="mu">Router</text>
+<text x="318" y="1381.5" font-size="13" class="mu">Model for this turn?</text>
+<text x="466" y="1381.5" font-size="13" class="ink">haiku · low</text>
+<text x="666" y="1381.5" font-size="13" class="mu" text-anchor="end">0.92</text>
+<text x="734" y="1381.5" font-size="13" class="ink" text-anchor="end">300 ms</text>
+<text x="810" y="1381.5" font-size="13" class="mu" text-anchor="end">1.7K → 9</text>
+<text x="904" y="1381.5" font-size="13" class="mu" text-anchor="end">≈$0.00007</text>
+<text x="40" y="1346.5" font-size="12.5" class="ink m" font-weight="600">15:21:27</text>
+<text x="118" y="1346.5" font-size="13" class="ink">v3_fe root 7f3a</text>
+<text x="236" y="1346.5" font-size="13" class="mu">Tool guard</text>
+<text x="318" y="1346.5" font-size="13" class="mu">Allow tool?</text>
+<text x="466" y="1346.5" font-size="13" class="ink">Allow</text>
+<text x="666" y="1346.5" font-size="13" class="mu" text-anchor="end">0.94</text>
+<text x="734" y="1346.5" font-size="13" class="ink" text-anchor="end">252 ms</text>
+<text x="810" y="1346.5" font-size="13" class="mu" text-anchor="end">1.3K → 8</text>
+<text x="904" y="1346.5" font-size="13" class="mu" text-anchor="end">≈$0.00005</text>
+<text x="40" y="1311.5" font-size="12.5" class="ink m" font-weight="600">15:21:28</text>
+<text x="118" y="1311.5" font-size="13" class="ink">worker-fast</text>
+<text x="236" y="1311.5" font-size="13" class="mu">Router</text>
+<text x="318" y="1311.5" font-size="13" class="mu">Model for this turn?</text>
+<text x="466" y="1311.5" font-size="13" class="ink">haiku · low</text>
+<text x="666" y="1311.5" font-size="13" class="mu" text-anchor="end">0.86</text>
+<text x="734" y="1311.5" font-size="13" class="ink" text-anchor="end">327 ms</text>
+<text x="810" y="1311.5" font-size="13" class="mu" text-anchor="end">1.9K → 13</text>
+<text x="904" y="1311.5" font-size="13" class="mu" text-anchor="end">≈$0.00008</text>
+<text x="40" y="1276.5" font-size="12.5" class="ink m" font-weight="600">15:21:28</text>
+<text x="118" y="1276.5" font-size="13" class="ink">v3_fe root 7f3a</text>
+<text x="236" y="1276.5" font-size="13" class="mu">Gate A</text>
+<text x="318" y="1276.5" font-size="13" class="mu">Execution shape?</text>
+<text x="466" y="1276.5" font-size="13" class="ink">Direct</text>
+<text x="666" y="1276.5" font-size="13" class="mu" text-anchor="end">0.88</text>
+<text x="734" y="1276.5" font-size="13" class="ink" text-anchor="end">266 ms</text>
+<text x="810" y="1276.5" font-size="13" class="mu" text-anchor="end">2.5K → 14</text>
+<text x="904" y="1276.5" font-size="13" class="mu" text-anchor="end">≈$0.00010</text>
+<text x="40" y="1241.5" font-size="12.5" class="ink m" font-weight="600">15:21:28</text>
+<text x="118" y="1241.5" font-size="13" class="ink">worker-fast</text>
+<text x="236" y="1241.5" font-size="13" class="mu">Compact</text>
+<text x="318" y="1241.5" font-size="13" class="mu">Keep this chunk?</text>
+<text x="466" y="1241.5" font-size="13" class="ink">8 / 31</text>
+<text x="666" y="1241.5" font-size="13" class="mu" text-anchor="end">0.96</text>
+<text x="734" y="1241.5" font-size="13" class="ink" text-anchor="end">230 ms</text>
+<text x="810" y="1241.5" font-size="13" class="mu" text-anchor="end">4.2K → 40</text>
+<text x="904" y="1241.5" font-size="13" class="mu" text-anchor="end">≈$0.00018</text>
+<text x="40" y="1206.5" font-size="12.5" class="ink m" font-weight="600">15:21:28</text>
+<text x="118" y="1206.5" font-size="13" class="ink">v3_fe root 7f3a</text>
+<text x="236" y="1206.5" font-size="13" class="mu">Router</text>
+<text x="318" y="1206.5" font-size="13" class="mu">Model for this turn?</text>
+<text x="466" y="1206.5" font-size="13" class="ink">sonnet · high</text>
+<text x="666" y="1206.5" font-size="13" class="mu" text-anchor="end">0.97</text>
+<text x="734" y="1206.5" font-size="13" class="ink" text-anchor="end">204 ms</text>
+<text x="810" y="1206.5" font-size="13" class="mu" text-anchor="end">1.6K → 12</text>
+<text x="904" y="1206.5" font-size="13" class="mu" text-anchor="end">≈$0.00007</text>
+<text x="40" y="1171.5" font-size="12.5" class="ink m" font-weight="600">15:21:29</text>
+<text x="118" y="1171.5" font-size="13" class="ink">jev-gate root</text>
+<text x="236" y="1171.5" font-size="13" class="mu">Tool guard</text>
+<text x="318" y="1171.5" font-size="13" class="mu">Allow tool?</text>
+<text x="466" y="1171.5" font-size="13" class="ink">Allow</text>
+<text x="666" y="1171.5" font-size="13" class="mu" text-anchor="end">0.86</text>
+<text x="734" y="1171.5" font-size="13" class="ink" text-anchor="end">302 ms</text>
+<text x="810" y="1171.5" font-size="13" class="mu" text-anchor="end">1.2K → 10</text>
+<text x="904" y="1171.5" font-size="13" class="mu" text-anchor="end">≈$0.00005</text>
+<text x="40" y="1136.5" font-size="12.5" class="ink m" font-weight="600">15:21:29</text>
+<text x="118" y="1136.5" font-size="13" class="ink">v3_fe root 7f3a</text>
+<text x="236" y="1136.5" font-size="13" class="mu">Workers</text>
+<text x="318" y="1136.5" font-size="13" class="mu">Accept?</text>
+<text x="466" y="1136.5" font-size="13" class="ink">Passed 3/3</text>
+<text x="666" y="1136.5" font-size="13" class="mu" text-anchor="end">0.94</text>
+<text x="734" y="1136.5" font-size="13" class="ink" text-anchor="end">285 ms</text>
+<text x="810" y="1136.5" font-size="13" class="mu" text-anchor="end">2.2K → 10</text>
+<text x="904" y="1136.5" font-size="13" class="mu" text-anchor="end">≈$0.00009</text>
+<text x="40" y="1101.5" font-size="12.5" class="ink m" font-weight="600">15:21:30</text>
+<text x="118" y="1101.5" font-size="13" class="ink">worker-fast</text>
+<text x="236" y="1101.5" font-size="13" class="mu">Router</text>
+<text x="318" y="1101.5" font-size="13" class="mu">Model for this turn?</text>
+<text x="466" y="1101.5" font-size="13" class="ink">haiku · low</text>
+<text x="666" y="1101.5" font-size="13" class="mu" text-anchor="end">0.94</text>
+<text x="734" y="1101.5" font-size="13" class="wa" text-anchor="end">612 ms</text>
+<text x="810" y="1101.5" font-size="13" class="mu" text-anchor="end">1.7K → 14</text>
+<text x="904" y="1101.5" font-size="13" class="mu" text-anchor="end">≈$0.00007</text>
+<text x="40" y="1066.5" font-size="12.5" class="ink m" font-weight="600">15:21:30</text>
+<text x="118" y="1066.5" font-size="13" class="ink">v3_fe root 7f3a</text>
+<text x="236" y="1066.5" font-size="13" class="mu">Gate B</text>
+<text x="318" y="1066.5" font-size="13" class="mu">Tier?</text>
+<text x="466" y="1066.5" font-size="13" class="ink">worker</text>
+<text x="666" y="1066.5" font-size="13" class="mu" text-anchor="end">0.77</text>
+<text x="734" y="1066.5" font-size="13" class="ink" text-anchor="end">211 ms</text>
+<text x="810" y="1066.5" font-size="13" class="mu" text-anchor="end">3.1K → 12</text>
+<text x="904" y="1066.5" font-size="13" class="mu" text-anchor="end">≈$0.00013</text>
+<text x="40" y="1031.5" font-size="12.5" class="ink m" font-weight="600">15:21:31</text>
+<text x="118" y="1031.5" font-size="13" class="ink">worker-fast</text>
+<text x="236" y="1031.5" font-size="13" class="mu">Tool guard</text>
+<text x="318" y="1031.5" font-size="13" class="mu">Allow tool?</text>
+<text x="466" y="1031.5" font-size="13" class="ink">Allow</text>
+<text x="666" y="1031.5" font-size="13" class="mu" text-anchor="end">0.90</text>
+<text x="734" y="1031.5" font-size="13" class="ink" text-anchor="end">225 ms</text>
+<text x="810" y="1031.5" font-size="13" class="mu" text-anchor="end">0.9K → 11</text>
+<text x="904" y="1031.5" font-size="13" class="mu" text-anchor="end">≈$0.00004</text>
+<text x="40" y="996.5" font-size="12.5" class="ink m" font-weight="600">15:21:31</text>
+<text x="118" y="996.5" font-size="13" class="ink">jev-gate root</text>
+<text x="236" y="996.5" font-size="13" class="mu">Router</text>
+<text x="318" y="996.5" font-size="13" class="mu">Model for this turn?</text>
+<text x="466" y="996.5" font-size="13" class="ink">gpt-6.1-sol · low</text>
+<text x="666" y="996.5" font-size="13" class="mu" text-anchor="end">0.96</text>
+<text x="734" y="996.5" font-size="13" class="ink" text-anchor="end">280 ms</text>
+<text x="810" y="996.5" font-size="13" class="mu" text-anchor="end">1.6K → 10</text>
+<text x="904" y="996.5" font-size="13" class="mu" text-anchor="end">≈$0.00007</text>
+<text x="40" y="961.5" font-size="12.5" class="ink m" font-weight="600">15:21:31</text>
+<text x="118" y="961.5" font-size="13" class="ink">worker-fast</text>
+<text x="236" y="961.5" font-size="13" class="mu">Evidence</text>
+<text x="318" y="961.5" font-size="13" class="mu">Evidence enough?</text>
+<text x="466" y="961.5" font-size="13" class="ink">2 items</text>
+<text x="666" y="961.5" font-size="13" class="mu" text-anchor="end">0.90</text>
+<text x="734" y="961.5" font-size="13" class="ink" text-anchor="end">323 ms</text>
+<text x="810" y="961.5" font-size="13" class="mu" text-anchor="end">2.9K → 9</text>
+<text x="904" y="961.5" font-size="13" class="mu" text-anchor="end">≈$0.00012</text>
+<text x="40" y="926.5" font-size="12.5" class="ink m" font-weight="600">15:21:31</text>
+<text x="118" y="926.5" font-size="13" class="ink">jev-gate root</text>
+<text x="236" y="926.5" font-size="13" class="mu">Tool guard</text>
+<text x="318" y="926.5" font-size="13" class="mu">Allow tool?</text>
+<text x="466" y="926.5" font-size="13" class="ink">Allow</text>
+<text x="666" y="926.5" font-size="13" class="mu" text-anchor="end">0.92</text>
+<text x="734" y="926.5" font-size="13" class="ink" text-anchor="end">253 ms</text>
+<text x="810" y="926.5" font-size="13" class="mu" text-anchor="end">1.2K → 8</text>
+<text x="904" y="926.5" font-size="13" class="mu" text-anchor="end">≈$0.00005</text>
+<text x="40" y="891.5" font-size="12.5" class="ink m" font-weight="600">15:21:32</text>
+<text x="118" y="891.5" font-size="13" class="ink">v3_fe root 7f3a</text>
+<text x="236" y="891.5" font-size="13" class="mu">Router</text>
+<text x="318" y="891.5" font-size="13" class="mu">Model for this turn?</text>
+<text x="466" y="891.5" font-size="13" class="ink">sonnet · high</text>
+<text x="666" y="891.5" font-size="13" class="mu" text-anchor="end">0.90</text>
+<text x="734" y="891.5" font-size="13" class="ink" text-anchor="end">339 ms</text>
+<text x="810" y="891.5" font-size="13" class="mu" text-anchor="end">1.6K → 11</text>
+<text x="904" y="891.5" font-size="13" class="mu" text-anchor="end">≈$0.00007</text>
+<text x="40" y="856.5" font-size="12.5" class="ink m" font-weight="600">15:21:32</text>
+<text x="118" y="856.5" font-size="13" class="ink">worker-fast</text>
+<text x="236" y="856.5" font-size="13" class="mu">Compact</text>
+<text x="318" y="856.5" font-size="13" class="mu">Keep this chunk?</text>
+<text x="466" y="856.5" font-size="13" class="ink">8 / 31</text>
+<text x="666" y="856.5" font-size="13" class="mu" text-anchor="end">0.94</text>
+<text x="734" y="856.5" font-size="13" class="ink" text-anchor="end">246 ms</text>
+<text x="810" y="856.5" font-size="13" class="mu" text-anchor="end">4.3K → 40</text>
+<text x="904" y="856.5" font-size="13" class="mu" text-anchor="end">≈$0.00018</text>
+<text x="40" y="821.5" font-size="12.5" class="ink m" font-weight="600">15:21:32</text>
+<text x="118" y="821.5" font-size="13" class="ink">v3_fe root 7f3a</text>
+<text x="236" y="821.5" font-size="13" class="mu">Router</text>
+<text x="318" y="821.5" font-size="13" class="mu">Model for this turn?</text>
+<text x="466" y="821.5" font-size="13" class="ink">sonnet · high</text>
+<text x="666" y="821.5" font-size="13" class="mu" text-anchor="end">0.91</text>
+<text x="734" y="821.5" font-size="13" class="ink" text-anchor="end">200 ms</text>
+<text x="810" y="821.5" font-size="13" class="mu" text-anchor="end">1.6K → 9</text>
+<text x="904" y="821.5" font-size="13" class="mu" text-anchor="end">≈$0.00007</text>
+<text x="40" y="786.5" font-size="12.5" class="ink m" font-weight="600">15:21:32</text>
+<text x="118" y="786.5" font-size="13" class="ink">worker-fast</text>
+<text x="236" y="786.5" font-size="13" class="mu">Evidence</text>
+<text x="318" y="786.5" font-size="13" class="mu">Evidence enough?</text>
+<text x="466" y="786.5" font-size="13" class="ink">3 items</text>
+<text x="666" y="786.5" font-size="13" class="mu" text-anchor="end">0.91</text>
+<text x="734" y="786.5" font-size="13" class="ink" text-anchor="end">180 ms</text>
+<text x="810" y="786.5" font-size="13" class="mu" text-anchor="end">2.7K → 8</text>
+<text x="904" y="786.5" font-size="13" class="mu" text-anchor="end">≈$0.00011</text>
+<text x="40" y="751.5" font-size="12.5" class="ink m" font-weight="600">15:21:33</text>
+<text x="118" y="751.5" font-size="13" class="ink">jev-gate root</text>
+<text x="236" y="751.5" font-size="13" class="mu">Router</text>
+<text x="318" y="751.5" font-size="13" class="mu">Model for this turn?</text>
+<text x="466" y="751.5" font-size="13" class="ink">gpt-6.1-sol · low</text>
+<text x="666" y="751.5" font-size="13" class="mu" text-anchor="end">0.95</text>
+<text x="734" y="751.5" font-size="13" class="ink" text-anchor="end">321 ms</text>
+<text x="810" y="751.5" font-size="13" class="mu" text-anchor="end">1.8K → 8</text>
+<text x="904" y="751.5" font-size="13" class="mu" text-anchor="end">≈$0.00008</text>
+<text x="40" y="716.5" font-size="12.5" class="ink m" font-weight="600">15:21:33</text>
+<text x="118" y="716.5" font-size="13" class="ink">v3_fe root 7f3a</text>
+<text x="236" y="716.5" font-size="13" class="mu">Tool guard</text>
+<text x="318" y="716.5" font-size="13" class="mu">Allow tool?</text>
+<text x="466" y="716.5" font-size="13" class="ink">Allow</text>
+<text x="666" y="716.5" font-size="13" class="mu" text-anchor="end">0.88</text>
+<text x="734" y="716.5" font-size="13" class="ink" text-anchor="end">254 ms</text>
+<text x="810" y="716.5" font-size="13" class="mu" text-anchor="end">1.3K → 13</text>
+<text x="904" y="716.5" font-size="13" class="mu" text-anchor="end">≈$0.00005</text>
+<text x="40" y="681.5" font-size="12.5" class="ink m" font-weight="600">15:21:33</text>
+<text x="118" y="681.5" font-size="13" class="ink">worker-fast</text>
+<text x="236" y="681.5" font-size="13" class="mu">Evidence</text>
+<text x="318" y="681.5" font-size="13" class="mu">Evidence enough?</text>
+<text x="466" y="681.5" font-size="13" class="ink">4 items</text>
+<text x="666" y="681.5" font-size="13" class="mu" text-anchor="end">0.87</text>
+<text x="734" y="681.5" font-size="13" class="ink" text-anchor="end">210 ms</text>
+<text x="810" y="681.5" font-size="13" class="mu" text-anchor="end">2.9K → 10</text>
+<text x="904" y="681.5" font-size="13" class="mu" text-anchor="end">≈$0.00012</text>
+<text x="40" y="646.5" font-size="12.5" class="ink m" font-weight="600">15:21:33</text>
+<text x="118" y="646.5" font-size="13" class="ink">v3_fe root 7f3a</text>
+<text x="236" y="646.5" font-size="13" class="mu">Router</text>
+<text x="318" y="646.5" font-size="13" class="mu">Model for this turn?</text>
+<text x="466" y="646.5" font-size="13" class="ink">sonnet · high</text>
+<text x="666" y="646.5" font-size="13" class="mu" text-anchor="end">0.86</text>
+<text x="734" y="646.5" font-size="13" class="ink" text-anchor="end">226 ms</text>
+<text x="810" y="646.5" font-size="13" class="mu" text-anchor="end">2.0K → 9</text>
+<text x="904" y="646.5" font-size="13" class="mu" text-anchor="end">≈$0.00008</text>
+<text x="40" y="611.5" font-size="12.5" class="ink m" font-weight="600">15:21:34</text>
+<text x="118" y="611.5" font-size="13" class="ink">jev-gate root</text>
+<text x="236" y="611.5" font-size="13" class="mu">Gate A</text>
+<text x="318" y="611.5" font-size="13" class="mu">Execution shape?</text>
+<text x="466" y="611.5" font-size="13" class="ink">Direct</text>
+<text x="666" y="611.5" font-size="13" class="mu" text-anchor="end">0.92</text>
+<text x="734" y="611.5" font-size="13" class="ink" text-anchor="end">318 ms</text>
+<text x="810" y="611.5" font-size="13" class="mu" text-anchor="end">2.6K → 8</text>
+<text x="904" y="611.5" font-size="13" class="mu" text-anchor="end">≈$0.00011</text>
+<text x="40" y="576.5" font-size="12.5" class="ink m" font-weight="600">15:21:34</text>
+<text x="118" y="576.5" font-size="13" class="ink">v3_fe root 7f3a</text>
+<text x="236" y="576.5" font-size="13" class="mu">Gate B</text>
+<text x="318" y="576.5" font-size="13" class="mu">Tier?</text>
+<text x="466" y="576.5" font-size="13" class="ink">worker</text>
+<text x="666" y="576.5" font-size="13" class="mu" text-anchor="end">0.78</text>
+<text x="734" y="576.5" font-size="13" class="ink" text-anchor="end">207 ms</text>
+<text x="810" y="576.5" font-size="13" class="mu" text-anchor="end">2.9K → 12</text>
+<text x="904" y="576.5" font-size="13" class="mu" text-anchor="end">≈$0.00012</text>
+<text x="40" y="541.5" font-size="12.5" class="ink m" font-weight="600">15:21:34</text>
+<text x="118" y="541.5" font-size="13" class="ink">worker-fast</text>
+<text x="236" y="541.5" font-size="13" class="mu">Router</text>
+<text x="318" y="541.5" font-size="13" class="mu">Model for this turn?</text>
+<text x="466" y="541.5" font-size="13" class="ink">haiku · low</text>
+<text x="666" y="541.5" font-size="13" class="mu" text-anchor="end">0.90</text>
+<text x="734" y="541.5" font-size="13" class="ink" text-anchor="end">311 ms</text>
+<text x="810" y="541.5" font-size="13" class="mu" text-anchor="end">1.7K → 8</text>
+<text x="904" y="541.5" font-size="13" class="mu" text-anchor="end">≈$0.00007</text>
+<text x="40" y="506.5" font-size="12.5" class="ink m" font-weight="600">15:21:34</text>
+<text x="118" y="506.5" font-size="13" class="ink">jev-gate root</text>
+<text x="236" y="506.5" font-size="13" class="mu">Plan</text>
+<text x="318" y="506.5" font-size="13" class="mu">Plan steps?</text>
+<text x="466" y="506.5" font-size="13" class="ink">4 steps</text>
+<text x="666" y="506.5" font-size="13" class="mu" text-anchor="end">0.87</text>
+<text x="734" y="506.5" font-size="13" class="ink" text-anchor="end">175 ms</text>
+<text x="810" y="506.5" font-size="13" class="mu" text-anchor="end">3.4K → 13</text>
+<text x="904" y="506.5" font-size="13" class="mu" text-anchor="end">≈$0.00014</text>
+<text x="40" y="471.5" font-size="12.5" class="ink m" font-weight="600">15:21:35</text>
+<text x="118" y="471.5" font-size="13" class="ink">v3_fe root 7f3a</text>
+<text x="236" y="471.5" font-size="13" class="mu">Compact</text>
+<text x="318" y="471.5" font-size="13" class="mu">Keep this chunk?</text>
+<text x="466" y="471.5" font-size="13" class="ink">8 / 31</text>
+<text x="666" y="471.5" font-size="13" class="mu" text-anchor="end">0.88</text>
+<text x="734" y="471.5" font-size="13" class="ink" text-anchor="end">280 ms</text>
+<text x="810" y="471.5" font-size="13" class="mu" text-anchor="end">4.4K → 40</text>
+<text x="904" y="471.5" font-size="13" class="mu" text-anchor="end">≈$0.00018</text>
+<text x="40" y="436.5" font-size="12.5" class="ink m" font-weight="600">15:21:35</text>
+<text x="118" y="436.5" font-size="13" class="ink">v3_fe root 7f3a</text>
+<text x="236" y="436.5" font-size="13" class="mu">Router</text>
+<text x="318" y="436.5" font-size="13" class="mu">Model for this turn?</text>
+<text x="466" y="436.5" font-size="13" class="ink">sonnet · high</text>
+<text x="666" y="436.5" font-size="13" class="mu" text-anchor="end">0.90</text>
+<text x="734" y="436.5" font-size="13" class="ink" text-anchor="end">196 ms</text>
+<text x="810" y="436.5" font-size="13" class="mu" text-anchor="end">1.8K → 11</text>
+<text x="904" y="436.5" font-size="13" class="mu" text-anchor="end">≈$0.00008</text>
+<text x="40" y="401.5" font-size="12.5" class="ink m" font-weight="600">15:21:35</text>
+<text x="118" y="401.5" font-size="13" class="ink">worker-fast</text>
+<text x="236" y="401.5" font-size="13" class="mu">Compact</text>
+<text x="318" y="401.5" font-size="13" class="mu">Keep this chunk?</text>
+<text x="466" y="401.5" font-size="13" class="ink">8 / 31</text>
+<text x="666" y="401.5" font-size="13" class="mu" text-anchor="end">0.93</text>
+<text x="734" y="401.5" font-size="13" class="ink" text-anchor="end">210 ms</text>
+<text x="810" y="401.5" font-size="13" class="mu" text-anchor="end">4.2K → 40</text>
+<text x="904" y="401.5" font-size="13" class="mu" text-anchor="end">≈$0.00018</text>
+<text x="40" y="366.5" font-size="12.5" class="ink m" font-weight="600">15:21:36</text>
+<text x="118" y="366.5" font-size="13" class="ink">jev-gate root</text>
+<text x="236" y="366.5" font-size="13" class="mu">Plan</text>
+<text x="318" y="366.5" font-size="13" class="mu">Plan steps?</text>
+<text x="466" y="366.5" font-size="13" class="ink">3 steps</text>
+<text x="666" y="366.5" font-size="13" class="mu" text-anchor="end">0.89</text>
+<text x="734" y="366.5" font-size="13" class="ink" text-anchor="end">256 ms</text>
+<text x="810" y="366.5" font-size="13" class="mu" text-anchor="end">3.1K → 14</text>
+<text x="904" y="366.5" font-size="13" class="mu" text-anchor="end">≈$0.00013</text>
+<text x="40" y="331.5" font-size="12.5" class="ink m" font-weight="600">15:21:36</text>
+<text x="118" y="331.5" font-size="13" class="ink">v3_fe root 7f3a</text>
+<text x="236" y="331.5" font-size="13" class="mu">Router</text>
+<text x="318" y="331.5" font-size="13" class="mu">Model for this turn?</text>
+<text x="466" y="331.5" font-size="13" class="ink">sonnet · high</text>
+<text x="666" y="331.5" font-size="13" class="mu" text-anchor="end">0.92</text>
+<text x="734" y="331.5" font-size="13" class="ink" text-anchor="end">295 ms</text>
+<text x="810" y="331.5" font-size="13" class="mu" text-anchor="end">1.7K → 9</text>
+<text x="904" y="331.5" font-size="13" class="mu" text-anchor="end">≈$0.00007</text>
+<text x="40" y="296.5" font-size="12.5" class="ink m" font-weight="600">15:21:36</text>
+<text x="118" y="296.5" font-size="13" class="ink">jev-gate root</text>
+<text x="236" y="296.5" font-size="13" class="mu">Gate A</text>
+<text x="318" y="296.5" font-size="13" class="mu">Execution shape?</text>
+<text x="466" y="296.5" font-size="13" class="ink">Direct</text>
+<text x="666" y="296.5" font-size="13" class="mu" text-anchor="end">0.89</text>
+<text x="734" y="296.5" font-size="13" class="ink" text-anchor="end">293 ms</text>
+<text x="810" y="296.5" font-size="13" class="mu" text-anchor="end">2.2K → 12</text>
+<text x="904" y="296.5" font-size="13" class="mu" text-anchor="end">≈$0.00009</text>
+<text x="40" y="261.5" font-size="12.5" class="ink m" font-weight="600">15:21:36</text>
+<text x="118" y="261.5" font-size="13" class="ink">worker-fast</text>
+<text x="236" y="261.5" font-size="13" class="mu">Router</text>
+<text x="318" y="261.5" font-size="13" class="mu">Model for this turn?</text>
+<text x="466" y="261.5" font-size="13" class="ink">sonnet · high</text>
+<text x="666" y="261.5" font-size="13" class="mu" text-anchor="end">0.87</text>
+<text x="734" y="261.5" font-size="13" class="ink" text-anchor="end">204 ms</text>
+<text x="810" y="261.5" font-size="13" class="mu" text-anchor="end">1.5K → 12</text>
+<text x="904" y="261.5" font-size="13" class="mu" text-anchor="end">≈$0.00006</text>
+<text x="40" y="226.5" font-size="12.5" class="ink m" font-weight="600">15:21:37</text>
+<text x="118" y="226.5" font-size="13" class="ink">v3_fe root 7f3a</text>
+<text x="236" y="226.5" font-size="13" class="mu">Workers</text>
+<text x="318" y="226.5" font-size="13" class="mu">Accept?</text>
+<text x="466" y="226.5" font-size="13" class="ink">Passed 3/3</text>
+<text x="666" y="226.5" font-size="13" class="mu" text-anchor="end">0.94</text>
+<text x="734" y="226.5" font-size="13" class="ink" text-anchor="end">318 ms</text>
+<text x="810" y="226.5" font-size="13" class="mu" text-anchor="end">2.5K → 14</text>
+<text x="904" y="226.5" font-size="13" class="mu" text-anchor="end">≈$0.00010</text>
+<text x="40" y="191.5" font-size="12.5" class="ink m" font-weight="600">15:21:37</text>
+<text x="118" y="191.5" font-size="13" class="ink">jev-gate root</text>
+<text x="236" y="191.5" font-size="13" class="mu">Tool guard</text>
+<text x="318" y="191.5" font-size="13" class="mu">Allow tool?</text>
+<text x="466" y="191.5" font-size="13" class="ink">Allow</text>
+<text x="666" y="191.5" font-size="13" class="mu" text-anchor="end">0.86</text>
+<text x="734" y="191.5" font-size="13" class="ink" text-anchor="end">308 ms</text>
+<text x="810" y="191.5" font-size="13" class="mu" text-anchor="end">1.4K → 9</text>
+<text x="904" y="191.5" font-size="13" class="mu" text-anchor="end">≈$0.00006</text>
+<text x="40" y="156.5" font-size="12.5" class="ink m" font-weight="600">15:21:37</text>
+<text x="118" y="156.5" font-size="13" class="ink">worker-fast</text>
+<text x="236" y="156.5" font-size="13" class="mu">Router</text>
+<text x="318" y="156.5" font-size="13" class="mu">Model for this turn?</text>
+<text x="466" y="156.5" font-size="13" class="ink">haiku · low</text>
+<text x="666" y="156.5" font-size="13" class="mu" text-anchor="end">0.92</text>
+<text x="734" y="156.5" font-size="13" class="ink" text-anchor="end">300 ms</text>
+<text x="810" y="156.5" font-size="13" class="mu" text-anchor="end">1.7K → 9</text>
+<text x="904" y="156.5" font-size="13" class="mu" text-anchor="end">≈$0.00007</text>
+<text x="40" y="121.5" font-size="12.5" class="ink m" font-weight="600">15:21:37</text>
+<text x="118" y="121.5" font-size="13" class="ink">v3_fe root 7f3a</text>
+<text x="236" y="121.5" font-size="13" class="mu">Tool guard</text>
+<text x="318" y="121.5" font-size="13" class="mu">Allow tool?</text>
+<text x="466" y="121.5" font-size="13" class="ink">Allow</text>
+<text x="666" y="121.5" font-size="13" class="mu" text-anchor="end">0.94</text>
+<text x="734" y="121.5" font-size="13" class="ink" text-anchor="end">252 ms</text>
+<text x="810" y="121.5" font-size="13" class="mu" text-anchor="end">1.3K → 8</text>
+<text x="904" y="121.5" font-size="13" class="mu" text-anchor="end">≈$0.00005</text>
+<text x="40" y="86.5" font-size="12.5" class="ink m" font-weight="600">15:21:38</text>
+<text x="118" y="86.5" font-size="13" class="ink">worker-fast</text>
+<text x="236" y="86.5" font-size="13" class="mu">Router</text>
+<text x="318" y="86.5" font-size="13" class="mu">Model for this turn?</text>
+<text x="466" y="86.5" font-size="13" class="ink">haiku · low</text>
+<text x="666" y="86.5" font-size="13" class="mu" text-anchor="end">0.86</text>
+<text x="734" y="86.5" font-size="13" class="ink" text-anchor="end">327 ms</text>
+<text x="810" y="86.5" font-size="13" class="mu" text-anchor="end">1.9K → 13</text>
+<text x="904" y="86.5" font-size="13" class="mu" text-anchor="end">≈$0.00008</text>
+<text x="40" y="51.5" font-size="12.5" class="ink m" font-weight="600">15:21:38</text>
+<text x="118" y="51.5" font-size="13" class="ink">v3_fe root 7f3a</text>
+<text x="236" y="51.5" font-size="13" class="mu">Gate A</text>
+<text x="318" y="51.5" font-size="13" class="mu">Execution shape?</text>
+<text x="466" y="51.5" font-size="13" class="ink">Direct</text>
+<text x="666" y="51.5" font-size="13" class="mu" text-anchor="end">0.88</text>
+<text x="734" y="51.5" font-size="13" class="ink" text-anchor="end">266 ms</text>
+<text x="810" y="51.5" font-size="13" class="mu" text-anchor="end">2.5K → 14</text>
+<text x="904" y="51.5" font-size="13" class="mu" text-anchor="end">≈$0.00010</text>
+<text x="40" y="16.5" font-size="12.5" class="ink m" font-weight="600">15:21:38</text>
+<text x="118" y="16.5" font-size="13" class="ink">worker-fast</text>
+<text x="236" y="16.5" font-size="13" class="mu">Compact</text>
+<text x="318" y="16.5" font-size="13" class="mu">Keep this chunk?</text>
+<text x="466" y="16.5" font-size="13" class="ink">8 / 31</text>
+<text x="666" y="16.5" font-size="13" class="mu" text-anchor="end">0.96</text>
+<text x="734" y="16.5" font-size="13" class="ink" text-anchor="end">230 ms</text>
+<text x="810" y="16.5" font-size="13" class="mu" text-anchor="end">4.2K → 40</text>
+<text x="904" y="16.5" font-size="13" class="mu" text-anchor="end">≈$0.00018</text>
+<text x="40" y="-18.5" font-size="12.5" class="ink m" font-weight="600">15:21:38</text>
+<text x="118" y="-18.5" font-size="13" class="ink">v3_fe root 7f3a</text>
+<text x="236" y="-18.5" font-size="13" class="mu">Router</text>
+<text x="318" y="-18.5" font-size="13" class="mu">Model for this turn?</text>
+<text x="466" y="-18.5" font-size="13" class="ink">sonnet · high</text>
+<text x="666" y="-18.5" font-size="13" class="mu" text-anchor="end">0.97</text>
+<text x="734" y="-18.5" font-size="13" class="ink" text-anchor="end">204 ms</text>
+<text x="810" y="-18.5" font-size="13" class="mu" text-anchor="end">1.6K → 12</text>
+<text x="904" y="-18.5" font-size="13" class="mu" text-anchor="end">≈$0.00007</text>
+<text x="40" y="-53.5" font-size="12.5" class="ink m" font-weight="600">15:21:39</text>
+<text x="118" y="-53.5" font-size="13" class="ink">jev-gate root</text>
+<text x="236" y="-53.5" font-size="13" class="mu">Tool guard</text>
+<text x="318" y="-53.5" font-size="13" class="mu">Allow tool?</text>
+<text x="466" y="-53.5" font-size="13" class="ink">Allow</text>
+<text x="666" y="-53.5" font-size="13" class="mu" text-anchor="end">0.86</text>
+<text x="734" y="-53.5" font-size="13" class="ink" text-anchor="end">302 ms</text>
+<text x="810" y="-53.5" font-size="13" class="mu" text-anchor="end">1.2K → 10</text>
+<text x="904" y="-53.5" font-size="13" class="mu" text-anchor="end">≈$0.00005</text>
+<text x="40" y="-88.5" font-size="12.5" class="ink m" font-weight="600">15:21:39</text>
+<text x="118" y="-88.5" font-size="13" class="ink">v3_fe root 7f3a</text>
+<text x="236" y="-88.5" font-size="13" class="mu">Workers</text>
+<text x="318" y="-88.5" font-size="13" class="mu">Accept?</text>
+<text x="466" y="-88.5" font-size="13" class="ink">Passed 3/3</text>
+<text x="666" y="-88.5" font-size="13" class="mu" text-anchor="end">0.94</text>
+<text x="734" y="-88.5" font-size="13" class="ink" text-anchor="end">285 ms</text>
+<text x="810" y="-88.5" font-size="13" class="mu" text-anchor="end">2.2K → 10</text>
+<text x="904" y="-88.5" font-size="13" class="mu" text-anchor="end">≈$0.00009</text>
+</g></g>
+<rect x="936.5" y="1032.5" width="319" height="361" rx="10" fill="#131318" stroke="#25252c" />
+<text x="952" y="1062" font-size="15" class="ink" font-weight="600">Jev response</text>
+<text x="1240" y="1062" font-size="13" class="ok" text-anchor="end">Credit OK</text>
+<path d="M936 1080.5H1256" stroke="#25252c" stroke-width="1"/>
+<text x="952" y="1132" font-size="40" class="ink" font-weight="600" letter-spacing="-.8">248</text>
+<text x="1032.32" y="1132" font-size="14" class="mu">ms median</text>
+<text x="952" y="1160" font-size="13" class="fa">Last</text>
+<text x="1048" y="1160" font-size="13" class="fa">p95</text>
+<text x="1048" y="1182" font-size="17" class="ink" font-weight="500">346 ms</text>
+<text x="1144" y="1160" font-size="13" class="fa">Today</text>
+<text x="1144" y="1182" font-size="17" class="ink" font-weight="500">1,240 calls</text>
+<text x="952" y="1182" font-size="17" class="ink an" font-weight="500" style="animation-name:k269" opacity="0">285 ms</text>
+<text x="952" y="1182" font-size="17" class="ink an" font-weight="500" style="animation-name:k270" opacity="0">612 ms</text>
+<text x="952" y="1182" font-size="17" class="ink an" font-weight="500" style="animation-name:k271" opacity="0">211 ms</text>
+<text x="952" y="1182" font-size="17" class="ink an" font-weight="500" style="animation-name:k272" opacity="0">225 ms</text>
+<text x="952" y="1182" font-size="17" class="ink an" font-weight="500" style="animation-name:k273" opacity="1">280 ms</text>
+<text x="952" y="1182" font-size="17" class="ink an" font-weight="500" style="animation-name:k274" opacity="0">323 ms</text>
+<text x="952" y="1182" font-size="17" class="ink an" font-weight="500" style="animation-name:k275" opacity="0">253 ms</text>
+<text x="952" y="1182" font-size="17" class="ink an" font-weight="500" style="animation-name:k276" opacity="0">339 ms</text>
+<text x="952" y="1182" font-size="17" class="ink an" font-weight="500" style="animation-name:k277" opacity="0">246 ms</text>
+<text x="952" y="1182" font-size="17" class="ink an" font-weight="500" style="animation-name:k278" opacity="0">200 ms</text>
+<text x="952" y="1182" font-size="17" class="ink an" font-weight="500" style="animation-name:k279" opacity="0">180 ms</text>
+<text x="952" y="1182" font-size="17" class="ink an" font-weight="500" style="animation-name:k280" opacity="0">321 ms</text>
+<text x="952" y="1182" font-size="17" class="ink an" font-weight="500" style="animation-name:k281" opacity="0">254 ms</text>
+<text x="952" y="1182" font-size="17" class="ink an" font-weight="500" style="animation-name:k282" opacity="0">210 ms</text>
+<text x="952" y="1182" font-size="17" class="ink an" font-weight="500" style="animation-name:k283" opacity="0">226 ms</text>
+<text x="952" y="1182" font-size="17" class="ink an" font-weight="500" style="animation-name:k284" opacity="0">318 ms</text>
+<text x="952" y="1182" font-size="17" class="ink an" font-weight="500" style="animation-name:k285" opacity="0">207 ms</text>
+<text x="952" y="1182" font-size="17" class="ink an" font-weight="500" style="animation-name:k286" opacity="0">311 ms</text>
+<text x="952" y="1182" font-size="17" class="ink an" font-weight="500" style="animation-name:k287" opacity="0">175 ms</text>
+<text x="952" y="1182" font-size="17" class="ink an" font-weight="500" style="animation-name:k288" opacity="0">196 ms</text>
+<text x="952" y="1182" font-size="17" class="ink an" font-weight="500" style="animation-name:k289" opacity="0">256 ms</text>
+<text x="952" y="1182" font-size="17" class="ink an" font-weight="500" style="animation-name:k290" opacity="0">295 ms</text>
+<text x="952" y="1182" font-size="17" class="ink an" font-weight="500" style="animation-name:k291" opacity="0">293 ms</text>
+<text x="952" y="1182" font-size="17" class="ink an" font-weight="500" style="animation-name:k292" opacity="0">204 ms</text>
+<text x="952" y="1182" font-size="17" class="ink an" font-weight="500" style="animation-name:k293" opacity="0">308 ms</text>
+<text x="952" y="1182" font-size="17" class="ink an" font-weight="500" style="animation-name:k294" opacity="0">300 ms</text>
+<text x="952" y="1182" font-size="17" class="ink an" font-weight="500" style="animation-name:k295" opacity="0">252 ms</text>
+<text x="952" y="1182" font-size="17" class="ink an" font-weight="500" style="animation-name:k296" opacity="0">327 ms</text>
+<text x="952" y="1182" font-size="17" class="ink an" font-weight="500" style="animation-name:k297" opacity="0">266 ms</text>
+<text x="952" y="1182" font-size="17" class="ink an" font-weight="500" style="animation-name:k298" opacity="0">230 ms</text>
+<text x="952" y="1182" font-size="17" class="ink an" font-weight="500" style="animation-name:k299" opacity="0">302 ms</text>
+<path d="M952 1252.5H1240" stroke="#25252c" stroke-width="1"/>
+<g clip-path="url(#cT)"><g class="an" style="animation-name:k300" transform="translate(-155.52 0)">
+<rect x="1255.84" y="1202.3" width="2" height="49.7" fill="#e9bd7e" opacity=".85"/>
+<rect x="967.84" y="1202.3" width="2" height="49.7" fill="#e9bd7e" opacity=".85"/>
+<rect x="1263.04" y="1234.9" width="2" height="17.1" fill="#a09ea8" opacity=".85"/>
+<rect x="975.04" y="1234.9" width="2" height="17.1" fill="#a09ea8" opacity=".85"/>
+<rect x="1270.82" y="1233.7" width="2" height="18.3" fill="#a09ea8" opacity=".85"/>
+<rect x="982.82" y="1233.7" width="2" height="18.3" fill="#a09ea8" opacity=".85"/>
+<rect x="1277.73" y="1229.2" width="2" height="22.8" fill="#a09ea8" opacity=".85"/>
+<rect x="989.73" y="1229.2" width="2" height="22.8" fill="#a09ea8" opacity=".85"/>
+<rect x="1285.79" y="1225.8" width="2" height="26.2" fill="#a09ea8" opacity=".85"/>
+<rect x="997.79" y="1225.8" width="2" height="26.2" fill="#a09ea8" opacity=".85"/>
+<rect x="1293.28" y="1231.4" width="2" height="20.6" fill="#a09ea8" opacity=".85"/>
+<rect x="1005.28" y="1231.4" width="2" height="20.6" fill="#a09ea8" opacity=".85"/>
+<rect x="1300.19" y="1224.5" width="2" height="27.5" fill="#a09ea8" opacity=".85"/>
+<rect x="1012.19" y="1224.5" width="2" height="27.5" fill="#a09ea8" opacity=".85"/>
+<rect x="1308.26" y="1232" width="2" height="20" fill="#a09ea8" opacity=".85"/>
+<rect x="1020.26" y="1232" width="2" height="20" fill="#a09ea8" opacity=".85"/>
+<rect x="1316.03" y="1235.8" width="2" height="16.2" fill="#a09ea8" opacity=".85"/>
+<rect x="1028.03" y="1235.8" width="2" height="16.2" fill="#a09ea8" opacity=".85"/>
+<rect x="1324.38" y="1237.4" width="2" height="14.6" fill="#a09ea8" opacity=".85"/>
+<rect x="1036.38" y="1237.4" width="2" height="14.6" fill="#a09ea8" opacity=".85"/>
+<rect x="1331.01" y="1225.9" width="2" height="26.1" fill="#a09ea8" opacity=".85"/>
+<rect x="1043.01" y="1225.9" width="2" height="26.1" fill="#a09ea8" opacity=".85"/>
+<rect x="1339.07" y="1231.4" width="2" height="20.6" fill="#a09ea8" opacity=".85"/>
+<rect x="1051.07" y="1231.4" width="2" height="20.6" fill="#a09ea8" opacity=".85"/>
+<rect x="1346.27" y="1234.9" width="2" height="17.1" fill="#a09ea8" opacity=".85"/>
+<rect x="1058.27" y="1234.9" width="2" height="17.1" fill="#a09ea8" opacity=".85"/>
+<rect x="1353.47" y="1233.6" width="2" height="18.4" fill="#a09ea8" opacity=".85"/>
+<rect x="1065.47" y="1233.6" width="2" height="18.4" fill="#a09ea8" opacity=".85"/>
+<rect x="1360.67" y="1226.2" width="2" height="25.8" fill="#a09ea8" opacity=".85"/>
+<rect x="1072.67" y="1226.2" width="2" height="25.8" fill="#a09ea8" opacity=".85"/>
+<rect x="1368.74" y="1235.2" width="2" height="16.8" fill="#a09ea8" opacity=".85"/>
+<rect x="1080.74" y="1235.2" width="2" height="16.8" fill="#a09ea8" opacity=".85"/>
+<rect x="1376.22" y="1226.7" width="2" height="25.3" fill="#a09ea8" opacity=".85"/>
+<rect x="1088.22" y="1226.7" width="2" height="25.3" fill="#a09ea8" opacity=".85"/>
+<rect x="1383.71" y="1237.8" width="2" height="14.2" fill="#a09ea8" opacity=".85"/>
+<rect x="1095.71" y="1237.8" width="2" height="14.2" fill="#a09ea8" opacity=".85"/>
+<rect x="1391.2" y="1229.2" width="2" height="22.8" fill="#a09ea8" opacity=".85"/>
+<rect x="1103.2" y="1229.2" width="2" height="22.8" fill="#a09ea8" opacity=".85"/>
+<rect x="1399.84" y="1236.1" width="2" height="15.9" fill="#a09ea8" opacity=".85"/>
+<rect x="1111.84" y="1236.1" width="2" height="15.9" fill="#a09ea8" opacity=".85"/>
+<rect x="1406.75" y="1234.9" width="2" height="17.1" fill="#a09ea8" opacity=".85"/>
+<rect x="1118.75" y="1234.9" width="2" height="17.1" fill="#a09ea8" opacity=".85"/>
+<rect x="1414.24" y="1231.2" width="2" height="20.8" fill="#a09ea8" opacity=".85"/>
+<rect x="1126.24" y="1231.2" width="2" height="20.8" fill="#a09ea8" opacity=".85"/>
+<rect x="1422.02" y="1228" width="2" height="24" fill="#a09ea8" opacity=".85"/>
+<rect x="1134.02" y="1228" width="2" height="24" fill="#a09ea8" opacity=".85"/>
+<rect x="1430.08" y="1228.2" width="2" height="23.8" fill="#a09ea8" opacity=".85"/>
+<rect x="1142.08" y="1228.2" width="2" height="23.8" fill="#a09ea8" opacity=".85"/>
+<rect x="1437.28" y="1235.4" width="2" height="16.6" fill="#a09ea8" opacity=".85"/>
+<rect x="1149.28" y="1235.4" width="2" height="16.6" fill="#a09ea8" opacity=".85"/>
+<rect x="1443.9" y="1226.2" width="2" height="25.8" fill="#a09ea8" opacity=".85"/>
+<rect x="1155.9" y="1226.2" width="2" height="25.8" fill="#a09ea8" opacity=".85"/>
+<rect x="1451.97" y="1227" width="2" height="25" fill="#a09ea8" opacity=".85"/>
+<rect x="1163.97" y="1227" width="2" height="25" fill="#a09ea8" opacity=".85"/>
+<rect x="1460.03" y="1227.6" width="2" height="24.4" fill="#a09ea8" opacity=".85"/>
+<rect x="1172.03" y="1227.6" width="2" height="24.4" fill="#a09ea8" opacity=".85"/>
+<rect x="1467.23" y="1231.5" width="2" height="20.5" fill="#a09ea8" opacity=".85"/>
+<rect x="1179.23" y="1231.5" width="2" height="20.5" fill="#a09ea8" opacity=".85"/>
+<rect x="1473.86" y="1225.4" width="2" height="26.6" fill="#a09ea8" opacity=".85"/>
+<rect x="1185.86" y="1225.4" width="2" height="26.6" fill="#a09ea8" opacity=".85"/>
+<rect x="1482.21" y="1230.4" width="2" height="21.6" fill="#a09ea8" opacity=".85"/>
+<rect x="1194.21" y="1230.4" width="2" height="21.6" fill="#a09ea8" opacity=".85"/>
+<rect x="1490.56" y="1233.3" width="2" height="18.7" fill="#a09ea8" opacity=".85"/>
+<rect x="1202.56" y="1233.3" width="2" height="18.7" fill="#a09ea8" opacity=".85"/>
+<rect x="1497.18" y="1235.4" width="2" height="16.6" fill="#a09ea8" opacity=".85"/>
+<rect x="1209.18" y="1235.4" width="2" height="16.6" fill="#a09ea8" opacity=".85"/>
+<rect x="1505.25" y="1227.5" width="2" height="24.5" fill="#a09ea8" opacity=".85"/>
+<rect x="1217.25" y="1227.5" width="2" height="24.5" fill="#a09ea8" opacity=".85"/>
+<rect x="1513.02" y="1228.8" width="2" height="23.2" fill="#a09ea8" opacity=".85"/>
+<rect x="1225.02" y="1228.8" width="2" height="23.2" fill="#a09ea8" opacity=".85"/>
+</g></g>
+<text x="952" y="1270" font-size="12" class="fa">10 s ago</text>
+<text x="1096" y="1270" font-size="12" class="fa" text-anchor="middle">Bar height = latency</text>
+<text x="1240" y="1270" font-size="12" class="fa" text-anchor="end">Now</text>
+<path d="M952 1286.5H1240" stroke="#25252c" stroke-width="1"/>
+<text x="952" y="1314" font-size="19" class="ink" font-weight="600">≈ $0.10</text>
+<text x="952" y="1336" font-size="12.5" class="fa">List-price estimate (jev-1.13.0, $0.042 per</text>
+<text x="952" y="1353" font-size="12.5" class="fa">1M input tokens). Billed credit is not</text>
+<text x="952" y="1370" font-size="12.5" class="fa">returned by the API.</text>
+<rect x="24.5" y="1410.5" width="1231" height="397" rx="10" fill="#131318" stroke="#25252c" />
+<text x="40" y="1440" font-size="15" class="ink" font-weight="600">Run detail</text>
+<text x="124.19" y="1440" font-size="14" class="mu">v3_fe root 7f3a</text>
+<circle cx="239.63" cy="1435.5" r="4" fill="#ff6b88"/>
+<circle cx="239.63" cy="1435.5" r="8" fill="none" stroke="#ff6b88" stroke-width="1.5" class="halo" opacity="0"/>
+<text x="250.63" y="1440" font-size="13" class="ink" font-weight="500">Running</text>
+<text x="1240" y="1440" font-size="13" class="fa" text-anchor="end">Model<tspan dx="6" class="ink" font-weight="500">sonnet · high</tspan></text>
+<text x="1096.58" y="1440" font-size="13" class="an" font-weight="500" text-anchor="end" style="animation-name:k301" opacity="0" fill="#ecebee">18</text>
+<text x="1096.58" y="1440" font-size="13" class="an" font-weight="500" text-anchor="end" style="animation-name:k302" opacity="0" fill="#ecebee">19</text>
+<text x="1096.58" y="1440" font-size="13" class="an" font-weight="500" text-anchor="end" style="animation-name:k303" opacity="0" fill="#ecebee">20</text>
+<text x="1096.58" y="1440" font-size="13" class="an" font-weight="500" text-anchor="end" style="animation-name:k304" opacity="0" fill="#ecebee">21</text>
+<text x="1096.58" y="1440" font-size="13" class="an" font-weight="500" text-anchor="end" style="animation-name:k305" opacity="0" fill="#ecebee">22</text>
+<text x="1096.58" y="1440" font-size="13" class="an" font-weight="500" text-anchor="end" style="animation-name:k306" opacity="0" fill="#ecebee">23</text>
+<text x="1096.58" y="1440" font-size="13" class="an" font-weight="500" text-anchor="end" style="animation-name:k307" opacity="0" fill="#ecebee">24</text>
+<text x="1096.58" y="1440" font-size="13" class="an" font-weight="500" text-anchor="end" style="animation-name:k308" opacity="1" fill="#ecebee">25</text>
+<text x="1096.58" y="1440" font-size="13" class="an" font-weight="500" text-anchor="end" style="animation-name:k309" opacity="0" fill="#ecebee">26</text>
+<text x="1096.58" y="1440" font-size="13" class="an" font-weight="500" text-anchor="end" style="animation-name:k310" opacity="0" fill="#ecebee">27</text>
+<text x="1096.58" y="1440" font-size="13" class="an" font-weight="500" text-anchor="end" style="animation-name:k311" opacity="0" fill="#ecebee">28</text>
+<text x="1096.58" y="1440" font-size="13" class="an" font-weight="500" text-anchor="end" style="animation-name:k312" opacity="0" fill="#ecebee">29</text>
+<text x="1096.58" y="1440" font-size="13" class="an" font-weight="500" text-anchor="end" style="animation-name:k313" opacity="0" fill="#ecebee">30</text>
+<text x="1096.58" y="1440" font-size="13" class="an" font-weight="500" text-anchor="end" style="animation-name:k314" opacity="0" fill="#ecebee">31</text>
+<text x="1096.58" y="1440" font-size="13" class="an" font-weight="500" text-anchor="end" style="animation-name:k315" opacity="0" fill="#ecebee">32</text>
+<text x="1074.58" y="1440" font-size="13" class="fa" text-anchor="end">Jev calls</text>
+<text x="995.72" y="1440" font-size="13" class="fa" text-anchor="end">Duration<tspan dx="6" class="ink" font-weight="500">1m 17s</tspan></text>
+<text x="870.37" y="1440" font-size="13" class="fa" text-anchor="end">Started<tspan dx="6" class="ink" font-weight="500">15:20:31</tspan></text>
+<path d="M24 1458.5H1256" stroke="#25252c" stroke-width="1"/>
+<text x="44" y="1479" font-size="12" class="fa">Step</text>
+<text x="320" y="1479" font-size="12" class="fa">Time</text>
+<text x="1050" y="1479" font-size="12" class="fa" text-anchor="end">Duration</text>
+<text x="1236" y="1479" font-size="12" class="fa" text-anchor="end">Result</text>
+<path d="M25 1489.5H1255" stroke="#25252c" stroke-width="1"/>
+<path d="M46 1507.0l4 4-4 4" fill="none" stroke="#76747e" stroke-width="1.5"/>
+<text x="60" y="1515.5" font-size="13.5" class="ink">Gate A · Execution shape</text>
+<rect x="320" y="1508" width="650" height="6" rx="3" fill="#24242b" />
+<rect x="333" y="1508" width="78" height="6" rx="3" fill="#6fcfa9" />
+<text x="1050" y="1515.5" font-size="13.5" class="mu" text-anchor="end">246 ms</text>
+<text x="1236" y="1515.5" font-size="13" class="mu" text-anchor="end">Direct</text>
+<path d="M25 1531.5H1255" stroke="#25252c" stroke-width="1"/>
+<rect x="25" y="1532" width="1230" height="108" fill="#1a1a20" />
+<path d="M44 1550.5l4 4 4-4" fill="none" stroke="#76747e" stroke-width="1.5"/>
+<text x="60" y="1557.5" font-size="13.5" class="ink">Router · Model for this turn</text>
+<rect x="320" y="1550" width="650" height="6" rx="3" fill="#25252c" />
+<rect x="411" y="1550" width="65" height="6" rx="3" fill="#6fcfa9" />
+<text x="1050" y="1557.5" font-size="13.5" class="mu" text-anchor="end">231 ms</text>
+<text x="1236" y="1557.5" font-size="13" class="mu" text-anchor="end">sonnet · high · match</text>
+<text x="82" y="1590" font-size="12" class="fa">Question</text>
+<text x="82" y="1612" font-size="13.5" class="ink">Model and effort for this turn</text>
+<text x="332" y="1590" font-size="12" class="fa">Choice</text>
+<text x="332" y="1612" font-size="13.5" class="ink">sonnet · high</text>
+<text x="492" y="1590" font-size="12" class="fa">Actual reply</text>
+<text x="492" y="1612" font-size="13.5" class="ink">sonnet · high</text>
+<rect x="579.07" y="1598.5" width="45.36" height="18" rx="4" fill="none" stroke="#25252c" />
+<text x="585.07" y="1612" font-size="12" class="ok">match</text>
+<text x="682" y="1590" font-size="12" class="fa">Confidence</text>
+<text x="682" y="1612" font-size="13.5" class="ink">94% · switch at 80%</text>
+<text x="882" y="1590" font-size="12" class="fa">Tokens</text>
+<text x="882" y="1612" font-size="13.5" class="ink">1.8K → 12</text>
+<text x="1022" y="1590" font-size="12" class="fa">Est. cost</text>
+<text x="1022" y="1612" font-size="13.5" class="ink">≈ $0.00008</text>
+<path d="M25 1639.5H1255" stroke="#25252c" stroke-width="1"/>
+<path d="M46 1657.0l4 4-4 4" fill="none" stroke="#76747e" stroke-width="1.5"/>
+<text x="60" y="1665.5" font-size="13.5" class="ink">Tool guard · Bash</text>
+<rect x="320" y="1658" width="650" height="6" rx="3" fill="#24242b" />
+<rect x="489" y="1658" width="52" height="6" rx="3" fill="#6fcfa9" />
+<text x="1050" y="1665.5" font-size="13.5" class="mu" text-anchor="end">187 ms</text>
+<text x="1236" y="1665.5" font-size="13" class="mu" text-anchor="end">Allow</text>
+<path d="M25 1681.5H1255" stroke="#25252c" stroke-width="1"/>
+<path d="M46 1699.0l4 4-4 4" fill="none" stroke="#76747e" stroke-width="1.5"/>
+<text x="60" y="1707.5" font-size="13.5" class="ink">Compact · Summary replacement</text>
+<rect x="320" y="1700" width="650" height="6" rx="3" fill="#24242b" />
+<rect x="554" y="1700" width="91" height="6" rx="3" fill="#6fcfa9" />
+<text x="1050" y="1707.5" font-size="13.5" class="mu" text-anchor="end">318 ms</text>
+<text x="1236" y="1707.5" font-size="13" class="mu" text-anchor="end">8 / 31 kept</text>
+<path d="M25 1723.5H1255" stroke="#25252c" stroke-width="1"/>
+<path d="M46 1741.0l4 4-4 4" fill="none" stroke="#76747e" stroke-width="1.5"/>
+<text x="60" y="1749.5" font-size="13.5" class="ink">Router · Subagent model</text>
+<rect x="320" y="1742" width="650" height="6" rx="3" fill="#24242b" />
+<rect x="658" y="1742" width="169" height="6" rx="3" fill="#e9bd7e" />
+<text x="1050" y="1749.5" font-size="13.5" class="mu" text-anchor="end">612 ms</text>
+<text x="1236" y="1749.5" font-size="13" class="mu" text-anchor="end">haiku · low</text>
+<path d="M25 1765.5H1255" stroke="#25252c" stroke-width="1"/>
+<path d="M46 1783.0l4 4-4 4" fill="none" stroke="#76747e" stroke-width="1.5"/>
+<text x="60" y="1791.5" font-size="13.5" class="ink">Host · Tool run</text>
+<rect x="320" y="1784" width="650" height="6" rx="3" fill="#24242b" />
+<rect x="710" y="1784" width="247" height="6" rx="3" fill="#6fcfa9" />
+<text x="1050" y="1791.5" font-size="13.5" class="mu" text-anchor="end">4.1 s</text>
+<text x="1236" y="1791.5" font-size="13" class="mu" text-anchor="end">Done</text>
+<text x="1256" y="1830" font-size="12" class="fa" text-anchor="end" opacity=".75">Sample data</text>
+</svg>

@@ -51,14 +51,6 @@ const configFile = (body: unknown): string => {
 };
 
 describe('doctor: effective depth floor (#48 P0-1)', () => {
-  it('does not apply Gate A depth or tier authority to Lean mode', () => {
-    const cfg = configFile({ version: 5, mode: 'lean', delegationDepthFloor: 300000, models: { frontier: 'sonnet' } });
-    const report = doctorRun({ JEV_GATE_CONFIG: cfg, CLAUDE_CODE_AUTO_COMPACT_WINDOW: '200000', CLAUDE_CODE_FORK_SUBAGENT: '0' });
-    expect(report.status, report.stdout).toBe(0);
-    expect(report.stdout).not.toContain('effective depth floor');
-    expect(report.stdout).not.toContain('a gated dispatch of');
-    expect(report.stdout).toContain('Lean: no Gate A/B,');
-  });
   it('prints the cost model floor for the shipped atomic gate, whatever the window', () => {
     const stdout = doctor({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '300000', JEV_GATE_CONFIG: configFile({ version: 5 }) });
     expect(stdout).toMatch(/\[info\].*effective depth floor: 50865 \(cost_model\).*could repay the coordinator/);
@@ -229,10 +221,6 @@ describe('doctor: a launch profile that lets an admitted job reach a worker (#48
     const line = expectFail(doctorRun({ JEV_GATE_CONFIG: configFile({ version: 5, mode: 'auto' }) }));
     expect(line).toContain('mode=auto but a fresh owned Agent profile is unavailable (fork=unset, disable_background=unset');
     expect(line).toContain('host_unsupported and sends no Jev request');
-  });
-
-  it('fails in lean mode for the same reason', () => {
-    expect(expectFail(doctorRun({ JEV_GATE_CONFIG: configFile({ version: 5, mode: 'lean' }) }))).toContain('mode=lean but');
   });
 
   it.each([

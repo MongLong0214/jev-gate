@@ -1,5 +1,5 @@
 {
-  "description": "Codex-native metadata recorder and conservative Vitest output folding. No permission approval or input replacement.",
+  "description": "Codex-native metadata recorder. No permission approval or input replacement.",
   "hooks": {
     "SessionStart": [
       {

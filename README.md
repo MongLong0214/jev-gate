@@ -36,7 +36,7 @@ Long coding sessions get expensive in a quiet way: one main context keeps growin
 
 Jev Gate fixes the allocation, not the work. **Jev judges each turn; code applies the policy; your coding host executes it.** Simple, bounded work moves to a fast worker or a lighter model; hard reasoning stays where it belongs; old context is compacted to what the current task needs. One local dashboard shows every decision and its observed result for both hosts.
 
-**Install the plugin and enter your Jev API key.** No project config, shell exports, trace-directory setup, dashboard terminal or `claude --debug` flag is required. Node.js 22+ and your host's native login are required.
+**Install the plugin and enter your Jev API key.** No project config, shell exports, trace-directory setup or dashboard terminal is required. Node.js 22+ and your host's native login are required.
 
 ## Results
 
@@ -59,10 +59,6 @@ Jev Gate fixes the allocation, not the work. **Jev judges each turn; code applie
 **How it was run.** Two real tasks from a private production TypeScript frontend, each re-implemented from its parent commit: a form option with a strict backend contract, and a click-to-add-row interaction that waits for asynchronous recalculation. Each session is one task prompt plus 16 fixed follow-ups (checks, tests, review, an idle gap, a PR draft). Claude Code 2.1.294, `claude-opus-5-5` at `xhigh`, identical settings; the only difference is the plugin (v0.8.15, defaults). Cost is the host's own reported total, cross-checked against transcript token counts.
 
 > **Read this before quoting a number.** This is a **pilot: one pair per task**. It shows a direction, not a guarantee. Session-to-session variance can be large, and savings depend on your tasks, settings and host. A multi-pair run is planned. [Method, per-cell data and deviations →](https://github.com/MongLong0214/jev-gate/tree/main/bench/results/long-session-pilot-2026-10-12)
-
-### Lean mode — measured, to be removed
-
-Lean (hand the task to a fresh executor with a selected context packet) was compared with native auto-compact in a pre-registered run: three five-request episodes, two repetitions each, every cell passing its checkers. Lean cost **2.6–8.2 % more** per episode median and took about 18 % longer; no episode reached the 15 % saving threshold. Jev chose not to hand off in all 24 selections, so the run measured Lean's overhead, not a handoff. The contexts were small (about 30–35 K tokens), so long sessions are not covered. An offline upper bound on real usage traces agreed: on Claude, every threshold policy cost more, and even an oracle that hands off only the turns that profit saved at most 7.7 %. **`auto` is unchanged, and Lean will be removed in a following release ([#217](https://github.com/MongLong0214/jev-gate/issues/217)).** [Pre-registration, per-cell data and limits →](https://github.com/MongLong0214/jev-gate/tree/main/bench/results/lean-vs-native-2026-09-27)
 
 ## How it works
 
@@ -107,11 +103,10 @@ Both hosts share one private key and dashboard. Installing from source is for de
 | Gate | Chooses direct execution, one background worker, or a plan with worker tasks. Code checks contracts and passing checks. | Eligible admission and allocation judgments; optional plan interpretation |
 | Router | Selects model and effort from supported candidates for the root or eligible agents. Explicit pins are respected. | Root turns are assessed once; mapped Claude workers are assessed again at each inference after spawn |
 | Compact | Builds an extractive digest plus recent context. Jev prioritizes older successful results needed for the current task within the existing size budget. | One bounded candidate batch by default; timeout/invalid output keeps local selection |
-| Output | Folds repeated successful Vitest output in Claude, and supported repeated tool output in Codex. | Local deterministic processing |
 | Evidence | Returns verified source windows, paths, lines, hashes, and a continuation cursor. Searches the whole worktree by narrowing to matching files first; credential-like windows are returned as references only. | Semantic candidates; exact symbols and read-back stay local |
 | Dashboard | Shows both hosts' recorded judgments, requests, and outcomes live. | Reads local metadata; makes no Jev requests |
 
-Gate, Router, Compact, Output, remote Evidence, recording, and automatic dashboard opening default to **on**. Lean is a separate selectable mode; it does not run Gate A/B or the planner. Automatic Astra/Fable targets default to off; enable both hosts with `frontierEnabled: true` in `~/.config/jev-gate/config.json`; manually selecting a root model does not enable automatic restricted children. [Router options](mods/router/README.md).
+Gate, Router, Compact, remote Evidence, recording, and automatic dashboard opening default to **on**. Automatic Astra/Fable targets default to off; enable both hosts with `frontierEnabled: true` in `~/.config/jev-gate/config.json`; manually selecting a root model does not enable automatic restricted children. [Router options](mods/router/README.md).
 
 Default Gate settings permit native tools (`guardAllowTools: ["*"]`), up to 16 isolated workers, 64 planned tasks, a depth floor of 0, and plan interpretation. Worktree snapshots include current working files. Native permissions remain authoritative. Missing keys, invalid judgments, timeouts, or unavailable host facts preserve the native call.
 
@@ -125,11 +120,11 @@ Set the shared frontier switch in the ordinary config (merge this field into an 
 
 `true` makes Claude Fable and Codex Astra eligible for automatic routing at their supported efforts. Jev still selects the model/effort pair for the task; explicit host pins remain authoritative. An explicit `false` overrides legacy `routerAllowFable` / `allowAstra` options. If the field is absent, legacy opt-ins remain compatible. The switch is reread at policy boundaries; an already selected manual root model is preserved.
 
-The dashboard shows each host's current operation in a short live lane. Gate's decision tree and Router, Compact, Output, and Evidence's independent channels show how work proceeds. Signals move continuously along a recorded path while its destination is active; a brief pulse marks a newly recorded transition. Historical and idle channels remain static. One response strip contains latest latency, median, p95, and measured call count. Stage details and the execution timeline hold the decision evidence. All layouts fit without horizontal scrolling. Pause, disconnected streams, and reduced-motion preferences stop movement; signal motion is an active-work indicator, not a count of Jev calls.
+The dashboard is a live run monitor for both hosts. An eight-node circuit (Gate A, Gate B, plan, workers, tool guard, Router, Compact, Evidence) hangs off a Jev rail: each recorded Jev call travels from the rail to the node it decided and back, and the node's latest decision updates in place. The run list, the Jev call log (one row per call) and the run detail change in the same frame. Every node keeps a 60-second strip with one tick per record at its recorded time. One recorded record is one mark: nothing moves without a record behind it. Pause, disconnected streams and reduced-motion preferences stop all movement and keep the numbers. All layouts fit without horizontal page scrolling.
 
 ## Keep talking while workers run
 
-Owned workers, planners, and Lean executors dispatch in the background by default. New messages steer the main conversation without replacing the original job or its contracts. A launch receipt is separate from completion and contract acceptance.
+Owned workers and planners dispatch in the background by default. New messages steer the main conversation without replacing the original job or its contracts. A launch receipt is separate from completion and contract acceptance.
 
 Claude sends native completion notifications. Codex's coordinator can query `jev_agent` with `action: "status"` or explicitly cancel with `action: "cancel"` and the returned `agent_id`. Interrupting the main turn does not cancel an already running background worker. If Claude is busy with a foreground tool, use its native **Send now** shortcut; ordinary Enter may queue a message. [Background and host details](docs/advanced-usage.md).
 
@@ -147,10 +142,18 @@ Every PR runs the `models` CI job against the official Claude model/effort docum
 
 The plugin opens **one shared local browser dashboard** automatically. Starting another Claude or Codex session reuses it instead of opening duplicate tabs. Select **Claude + Codex**, **Claude Code**, or **Codex** to inspect each host.
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="./assets/readme/dashboard-dark.svg">
+    <img src="./assets/readme/dashboard.svg" width="100%" alt="Jev Gate run monitor with sample data: header KPIs, an eight-node circuit on a Jev rail, the run list, the Jev call log, Jev response latency with a list-price cost estimate, and one run's step detail">
+  </picture>
+</p>
+
 1. Start a task in your normal coding session.
-2. Read the current activity strip and execution circuit at the top. Select a stage to see its decision and latest result.
-3. Choose an execution to follow its route, timeline, model observations, checks, and failures.
-4. Use host/time filters and search to narrow records. Korean/English and light/dark controls are available.
+2. Read the circuit at the top. Select a node to see its latest decision, confidence and Jev reply time in the step detail; it also filters the run list to that feature, and selecting it again shows all.
+3. Choose a run to open its run detail: every step with its time, duration and result, expandable to the recorded question, choice, actual reply, confidence, tokens and estimated cost.
+4. Read the Jev call log and Jev response panel for the latest calls, latency median and p95, today's call count and a list-price cost estimate. Billed credit is not returned by the Jev API, so the cost is an estimate only. **Pause** on the call log holds its rows while new calls are counted.
+5. Use the host switch, run filters and search to narrow records. Korean/English and light/dark controls are available.
 
 | Record | Meaning |
 | --- | --- |
@@ -185,14 +188,14 @@ The key is stored in `~/.config/jev-gate/auth/credentials.json` (0700 directory/
 
 When enabled and eligible, these inputs can leave the machine:
 
-- **Gate/Lean:** the request, composed task contracts, predecessor summaries, or selected prior-context groups. A needs-context retry can include recent user turns.
+- **Gate:** the request, composed task contracts, or predecessor summaries. A needs-context retry can include recent user turns.
 - **Router:** the task text and routing/cache facts used for its judgment.
 - **Compact:** the current task and a bounded set of older successful-result excerpts. Sensitive candidates are filtered before sending. Mandatory preservation and final size limits remain local.
 - **Evidence:** semantic goals, constraints, and candidate source windows. Exact-symbol queries and verified read-back do not call Jev.
 
-The plugin does not upload the whole repository. Filters are not a DLP or retention guarantee. To disable remote Evidence, set `remote: false` in its optional config. That does not disable Gate, Router, Lean, or Compact's Jev selection. Output and the dashboard are local. [Evidence configuration](plugins/evidence/README.md#configure).
+The plugin does not upload the whole repository. Filters are not a DLP or retention guarantee. To disable remote Evidence, set `remote: false` in its optional config. That does not disable Gate, Router, or Compact's Jev selection. The dashboard is local. [Evidence configuration](plugins/evidence/README.md#configure).
 
-Recording stores private metadata under `~/.local/state/jev-gate/{claude,codex}/traces` (`$XDG_STATE_HOME` supported). Existing trace/debug paths remain supported. Prompt text, source bodies, tool output, and keys do not appear in the dashboard.
+Recording stores private metadata under `~/.local/state/jev-gate/{claude,codex}/traces` (`$XDG_STATE_HOME` supported). Prompt text, source bodies, tool output, and keys do not appear in the dashboard.
 
 ## Update and troubleshoot
 
@@ -208,7 +211,7 @@ Restart the host after upgrading to load new hooks/provider code. Old separate J
 | Symptom | Next step |
 | --- | --- |
 | No Jev calls | Check key, feature mode, pins, and eligibility in the stage detail and doctor |
-| Compact/Router/Output absent | Restart after automatic setup; check preserved overrides with doctor |
+| Compact/Router absent | Restart after automatic setup; check preserved overrides with doctor |
 | Dashboard absent | Check `dashboard status`, recording, and the local service with doctor |
 | Worker dispatch denied | The Router records `spawn_denied` with a reason code (for example `policy_unavailable`, `no_eligible_model`, `subagent_model_pinned`); fix that cause, or check pins and `frontierEnabled` |
 | Model/effort warning | Inspect selected, submitted, and observed values; distinguish request mismatch from missing response facts |

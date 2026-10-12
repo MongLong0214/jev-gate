@@ -1,10 +1,10 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 
-import { armSpecs, emptyCell, ingestRouterLog, ingestTraces, observeEvent, type Arm, type CellRecord } from '../src/bench/run.js';
-import { leanOf, renderMarkdown, summarizeArm, summarizeLean, toRowView, type Report, type RowView } from '../src/bench/report.js';
+import { armSpecs, emptyCell, ingestRouterRecords, ingestTraces, observeEvent, type Arm, type CellRecord } from '../src/bench/run.js';
+import { renderMarkdown, summarizeArm, toRowView, type Report, type RowView } from '../src/bench/report.js';
 import type { ConfigV5 } from '../src/types.js';
 
 // R08-R10: the observation and accounting defects (document sections T6 and T7), driven through the real
@@ -335,7 +335,7 @@ describe('turn_totals_stream (2026-09-20 metric defect)', () => {
   });
 
   it('scopes message identity by agent, so a root message and a child message are two reports', () => {
-    const cell = emptyCell({ id: 'job', group: 'g', fixtureDir: '', request: 'r', prime: [], followUp: null, followUpCheckFile: null, followUpCheckFileRel: null, setup: [], evaluationSetup: [], checkFile: '', checkFileRel: '' }, armSpecs('fable')['jev_lean'], 1);
+    const cell = emptyCell({ id: 'job', group: 'g', fixtureDir: '', request: 'r', prime: [], followUp: null, followUpCheckFile: null, followUpCheckFileRel: null, setup: [], evaluationSetup: [], checkFile: '', checkFileRel: '' }, armSpecs('fable')['jev_single'], 1);
     const u = { cache_read_input_tokens: 10, cache_creation_input_tokens: 0, input_tokens: 1, output_tokens: 2 };
     observeEvent(cell, { type: 'assistant', message: { id: 'msg_1', usage: u } });
     observeEvent(cell, { type: 'assistant', parent_tool_use_id: 'toolu_1', message: { id: 'msg_1', usage: u } });
@@ -346,7 +346,7 @@ describe('turn_totals_stream (2026-09-20 metric defect)', () => {
   });
 
   it('treats a fractional or unrepresentable counter as unknown rather than as a value', () => {
-    const cell = emptyCell({ id: 'job', group: 'g', fixtureDir: '', request: 'r', prime: [], followUp: null, followUpCheckFile: null, followUpCheckFileRel: null, setup: [], evaluationSetup: [], checkFile: '', checkFileRel: '' }, armSpecs('fable')['jev_lean'], 1);
+    const cell = emptyCell({ id: 'job', group: 'g', fixtureDir: '', request: 'r', prime: [], followUp: null, followUpCheckFile: null, followUpCheckFileRel: null, setup: [], evaluationSetup: [], checkFile: '', checkFileRel: '' }, armSpecs('fable')['jev_single'], 1);
     observeEvent(cell, usageMsg({ cache_read_input_tokens: 10.5, output_tokens: Number.MAX_SAFE_INTEGER + 2 }));
     observeEvent(cell, result(1));
     expect(cell.turn_totals_stream[0]).toMatchObject({ cache_read: 0, output: 0, messages: 1, incomplete: 1 });
@@ -366,128 +366,25 @@ describe('turn_totals_stream (2026-09-20 metric defect)', () => {
   });
 });
 
-describe('L6: every charged producer reaches the final report, once', () => {
-  // Chosen so the lean call prices at 0.125 USD to within a rounding of the list price.
-  const LEAN_TOKENS = 2_976_190;
-  const leanIntent = (id: string): Record<string, unknown> => ({ phase: 'lean_intent', request_id: id, request_bytes: 100, written_at: iso(1) });
-  const leanResult = (id: string, over: Record<string, unknown> = {}): Record<string, unknown> => ({
-    phase: 'lean_result', request_id: id, attempted: true, ...jevOk(LEAN_TOKENS), decision: { action: 'handoff' }, written_at: iso(2), ...over,
-  });
-  const leanCell = (records: Array<Record<string, unknown>>, name: string, claudeUsd = 2): CellRecord => {
-    const cell = cellFor('jev_lean');
-    cell.started = true;
-    observeEvent(cell, { type: 'system', subtype: 'init', model: 'claude-sonnet-5', plugins: [{ name: 'jev-gate' }], agents: [], permissionMode: 'default' });
-    observeEvent(cell, {
-      type: 'result', subtype: 'success', is_error: false, duration_ms: 10, num_turns: 1, total_cost_usd: claudeUsd,
-      modelUsage: { 'claude-sonnet-5': { inputTokens: 1000, outputTokens: 20, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: claudeUsd } }, permission_denials: [],
-    });
-    ingestTraces(cell, traceDir(name, records), MODELS);
-    return cell;
-  };
-  const planned = { job: 'mini', group: 'g', repetition: 1, arm: 'jev_lean', file: '' };
-  const rowOf = (cell: CellRecord): RowView => toRowView(planned, JSON.parse(JSON.stringify(cell)) as Record<string, unknown>);
-
-  it('reports Claude 2 + legacy gate 0 + Lean Jev 0.125 as 2.125, not 2', () => {
-    const cell = leanCell([leanIntent('q1'), leanResult('q1')], 'l6-total');
-    expect(cell.gate.jev_cost_usd).toBe(0);
-    expect(cell.lean.jev_cost_usd).toBeCloseTo(0.125, 6);
-    const row = rowOf(cell);
-    expect(row.jev_cost_by_producer.legacy).toBe(0);
-    expect(row.jev_cost_by_producer.lean).toBeCloseTo(0.125, 6);
-    expect(row.total_cost_usd).toBeCloseTo(2.125, 6);
-    const arm = summarizeArm('jev_lean', [row]);
-    expect(arm.jev_cost_usd).toBeCloseTo(0.125, 6);
-    expect(arm.total_cost_usd).toBeCloseTo(2.125, 6);
-  });
-
-  it('keeps a lean call the legacy producer stays zero for, even when the run timed out', () => {
-    const cell = leanCell([leanIntent('q1'), leanResult('q1')], 'l6-timeout');
-    cell.timed_out = true;
-    ingestTraces(cell, join(tmp, 'traces', 'l6-timeout'), MODELS);
-    expect(cell.gate.jev_cost_usd).toBe(0);
-  });
-
-  it('separates responses, the known token subtotal and the complete total', () => {
-    const cell = leanCell([leanIntent('q1'), leanResult('q1'), leanIntent('q2'), leanResult('q2', { jev: { model: 'jev-1.13.0', usage: { input_tokens: 40, output_tokens: 1 } } })], 'l6-split');
-    expect(cell.lean).toMatchObject({ jev_attempts: 2, jev_responses_known: 2, jev_input_tokens_known: LEAN_TOKENS + 40, jev_input_tokens: LEAN_TOKENS + 40, jev_attempt_unknown: 0 });
-  });
-
-  it('an intent with no result may have been billed: complete totals unknown, the known part kept beside them', () => {
-    const cell = leanCell([leanIntent('q1'), leanResult('q1'), leanIntent('q2')], 'l6-orphan');
-    expect(cell.lean).toMatchObject({ jev_attempts: 1, jev_attempt_unknown: 1, jev_input_tokens: null, jev_cost_usd: null, jev_input_tokens_known: LEAN_TOKENS });
-    expect(cell.lean.jev_cost_known_subtotal).toBeCloseTo(0.125, 6);
-    const row = rowOf(cell);
-    expect(row.jev_cost_usd).toBeNull();
-    expect(row.total_cost_usd).toBeNull();
-    expect(row.jev_cost_known_subtotal).toBeCloseTo(0.125, 6);
-    expect(summarizeArm('jev_lean', [row]).jev_cost_known_subtotal).toBeCloseTo(0.125, 6);
-  });
+describe('L6: the legacy producer reaches the final report, once', () => {
+  const planned = { job: 'mini', group: 'g', repetition: 1, arm: 'jev_hierarchy', file: '' };
 
   it('keeps the known legacy spend in the row subtotal when the legacy total is incomplete', () => {
-    const cell = JSON.parse(JSON.stringify(leanCell([leanIntent('q1'), leanResult('q1')], 'l6-legacy-known'))) as Record<string, unknown>;
-    cell['gate'] = { ...(cell['gate'] as Record<string, unknown>), jev_cost_usd: null, jev_input_tokens: null, jev_input_tokens_known: LEAN_TOKENS, jev_model: 'jev-1.13.0' };
+    const cell = JSON.parse(JSON.stringify(ranCleanly(cellFor('jev_hierarchy')))) as Record<string, unknown>;
+    // Chosen so the known input prices at 0.125 USD to within a rounding of the list price.
+    cell['gate'] = { ...(cell['gate'] as Record<string, unknown>), jev_cost_usd: null, jev_input_tokens: null, jev_input_tokens_known: 2_976_190, jev_model: 'jev-1.13.0' };
     const row = toRowView(planned, cell);
     expect(row.jev_cost_usd).toBeNull();
     expect(row.jev_cost_by_producer.legacy).toBeNull();
-    expect(row.jev_cost_known_subtotal).toBeCloseTo(0.25, 6);
+    expect(row.jev_cost_known_subtotal).toBeCloseTo(0.125, 6);
   });
 
-  it('counts a result with no intent of its own, and collapses a repeated record of one request', () => {
-    const cell = leanCell([leanResult('q1'), leanResult('q1'), leanIntent('q2'), leanIntent('q2'), leanResult('q2')], 'l6-dup');
-    expect(cell.lean).toMatchObject({ jev_attempts: 2, jev_attempt_unknown: 0, duplicate_records: 2, jev_input_tokens: 2 * LEAN_TOKENS });
-  });
-
-  it('never pairs records without a request identity by count: each is unknown and outside the known subtotal', () => {
-    const keyless = (r: Record<string, unknown>): Record<string, unknown> => {
-      const { request_id: _drop, ...rest } = r;
-      return rest;
-    };
-    // One lost result and one repeated result: paired by count, these two intents and two results would balance.
-    const cell = leanCell([leanIntent('q1'), leanResult('q1'), keyless(leanIntent('x')), keyless(leanIntent('y')), keyless(leanResult('y')), keyless(leanResult('y'))], 'l6-keyless');
-    expect(cell.lean).toMatchObject({ jev_attempts: 1, jev_attempt_unknown: 4, jev_input_tokens: null, jev_cost_usd: null, jev_input_tokens_known: LEAN_TOKENS });
-    expect(cell.lean.jev_cost_known_subtotal).toBeCloseTo(0.125, 6);
-  });
-
-  it('a confirmed local no-send is zero, and a timeout without usage keeps the total unknown', () => {
-    const noSend = leanCell([leanResult('q1', { attempted: false, known_not_sent: true, skip_code: 'deadline_exhausted', jev: undefined, http: undefined })], 'l6-nosend');
-    expect(noSend.lean).toMatchObject({ jev_attempts: 0, jev_input_tokens: 0, jev_cost_usd: 0 });
-    const timeout = leanCell([leanIntent('q1'), leanResult('q1', { http: { status: null, code: 'timeout' }, jev: null })], 'l6-timeout-call');
-    expect(timeout.lean).toMatchObject({ jev_attempts: 1, jev_responses_known: 0, jev_input_tokens: null, jev_cost_usd: null });
-  });
-
-  it('prices known input without a free output count, and leaves an unpriced model unknown', () => {
-    const noOutput = leanCell([leanIntent('q1'), leanResult('q1', { jev: { model: 'jev-1.13.0', usage: { input_tokens: LEAN_TOKENS } } })], 'l6-no-output');
-    expect(noOutput.lean.jev_cost_usd).toBeCloseTo(0.125, 6);
-    const unpriced = leanCell([leanIntent('q1'), leanResult('q1', { jev: { model: 'jev-9.9.9', usage: { input_tokens: 10, output_tokens: 1 } } })], 'l6-unpriced');
-    expect(unpriced.lean).toMatchObject({ jev_input_tokens: 10, jev_cost_usd: null, jev_cost_known_subtotal: 0 });
-  });
-
-  it('an unreadable record could be any producer’s call, so neither total is complete', () => {
-    const dir = traceDir('l6-corrupt', [leanIntent('q1'), leanResult('q1')]);
-    writeFileSync(join(dir, 'broken.json'), '{"version":5,"phase":"lean_int');
-    const cell = cellFor('jev_lean');
-    cell.started = true;
-    observeEvent(cell, { type: 'system', subtype: 'init', model: 'claude-sonnet-5', plugins: [{ name: 'jev-gate' }], agents: [], permissionMode: 'default' });
+  it('an unreadable record could be any call, so the legacy total is not complete', () => {
+    const dir = traceDir('l6-corrupt', []);
+    writeFileSync(join(dir, 'broken.json'), '{"version":5,"phase":"pre_int');
+    const cell = ranCleanly(cellFor('jev_hierarchy'));
     ingestTraces(cell, dir, MODELS);
-    expect(cell.lean.jev_cost_usd).toBeNull();
     expect(cell.gate.jev_cost_usd).toBeNull();
-  });
-
-  it('reads a lean block from before this accounting as a relabelled subtotal with no complete total', () => {
-    const old = { selections: 1, jev_attempts: 2, jev_input_tokens: 500, jev_input_tokens_known: 2, jev_cost_usd: 0.000021 };
-    const l = leanOf(old);
-    expect(l).toMatchObject({ accounting: 1, jev_responses_known: 2, jev_input_tokens_known: 500, jev_input_tokens: null, jev_cost_usd: null, jev_cost_known_subtotal: 0.000021 });
-    expect(summarizeLean([{ lean: l } as RowView]).rows_uncorrected).toBe(1);
-  });
-
-  it('a lean-mode row with no lean block at all is an unobserved producer, not a free one', () => {
-    const cell = JSON.parse(JSON.stringify(leanCell([], 'l6-absent'))) as Record<string, unknown>;
-    delete cell['lean'];
-    expect(toRowView(planned, cell).jev_cost_usd).toBeNull();
-    const native = JSON.parse(JSON.stringify(ranCleanly(cellFor('sonnet_native')))) as Record<string, unknown>;
-    delete native['lean'];
-    ingestTraces(cellFor('sonnet_native'), join(tmp, 'traces', 'none'), MODELS);
-    expect(toRowView({ ...planned, arm: 'sonnet_native' }, native).jev_cost_by_producer.lean).toBe(0);
   });
 });
 
@@ -517,21 +414,25 @@ describe('L6: a repeated stream message keeps its last complete cumulative usage
   });
 });
 
-describe('#45: Router producer ingestion (jev-router debug log)', () => {
+describe('#45: Router producer ingestion (mod_router trace records)', () => {
   let n45 = 0;
-  // The host ends every debug line with a newline; `truncated` leaves the last one unterminated, as a session cut
-  // short mid-write does.
-  const routerLog = (name: string, lines: string[], truncated = false): string => {
-    const file = join(tmp, 'router-logs', `${name}.log`);
-    mkdirSync(join(tmp, 'router-logs'), { recursive: true });
-    writeFileSync(file, lines.join('\n') + (truncated ? '' : '\n'));
-    return file;
+  // One `mod_router-N.json` record per `jev-router {json}` line, as the Router's recorder writes them. A payload that is
+  // not valid JSON is written as is, so it reaches the ingestion as a corrupt record.
+  const routerLog = (name: string, lines: string[]): string => {
+    const dir = join(tmp, 'router-logs', name);
+    mkdirSync(dir, { recursive: true });
+    lines.forEach((line, i) => {
+      const payload = line.slice('jev-router '.length);
+      let text = payload;
+      try { text = JSON.stringify({ ...(JSON.parse(payload) as object), phase: 'mod_router', written_at: new Date(Date.UTC(2026, 9, 12, 0, 0, i)).toISOString() }); } catch { /* A corrupt record stays as written. */ }
+      writeFileSync(join(dir, `mod_router-${i}.json`), text);
+    });
+    return dir;
   };
 
-  it('parses root/spawn/skip lines, tolerates other debug noise, and counts a truncated last line instead of dropping it', () => {
+  it('parses root/spawn/skip records and counts a corrupt record instead of dropping it', () => {
     const cell = cellFor('router');
     const log = routerLog('mixed', [
-      'plain host debug output that is not a Router line at all',
       'jev-router {"event":"router","root_effort":true,"root_model":false,"spawn_model":true,"key":"k1"}',
       'jev-router {"event":"root","turn":"t1","skipped":"host_version_mismatch"}',
       'jev-router {"event":"root","turn":"t2","patch":{"effort":"high"},"sent":true,"usage":{"input_tokens":120}}',
@@ -544,11 +445,9 @@ describe('#45: Router producer ingestion (jev-router debug log)', () => {
       'jev-router {"event":"spawn","tool_use_id":"tu3","patch":{"model":"opus"},"sent":true}',
       // A late reply, joined by identity (scope:id) to the still-unfilled "tu3" attempt above, never by count.
       'jev-router {"event":"late","scope":"spawn","tool_use_id":"tu3","usage":{"input_tokens":55}}',
-      'jev-router {this line has the prefix but is not valid JSON',
-      // Deliberately truncated: real content that fails to parse, at the very end of the file with no closing brace.
-      'jev-router {"event":"root","turn":"t5","sent":true,"usage":{"in',
-    ], true);
-    ingestRouterLog(cell, log);
+      'jev-router {this record is not valid JSON',
+    ]);
+    ingestRouterRecords(cell, log);
     const r = cell.router;
     expect(r.diagnostic).toEqual({ root_effort: true, root_model: false, spawn_model: true, key: 'k1' });
     expect(r.root_skip_reasons).toEqual({ host_version_mismatch: 1 });
@@ -568,28 +467,27 @@ describe('#45: Router producer ingestion (jev-router debug log)', () => {
     expect(r.spawn_denied).toBe(0);
     expect(r.spawn_model_mismatches).toBe(1);
     expect(r.late_events).toBe(1);
-    // Two malformed `jev-router `-prefixed lines: the mid-file non-JSON one and the truncated tail. Neither is dropped
-    // silently, and the plain noise line above (no prefix at all) contributes to neither count.
-    expect(r.unparsable_lines).toBe(2);
+    // The corrupt record is not dropped silently.
+    expect(r.unparsable_lines).toBe(1);
     // Jev attempts: root t2 (120), spawn tu1 (80), spawn tu3 (55 via the late join) -- all three resolved, so the
     // total is complete, priced at the dated list price, never conflated with root_result's routed-Claude usage.
     expect(r.jev_attempts).toBe(3);
     expect(r.jev_responses_known).toBe(3);
-    // A Router line that did not parse may have been a sent call, so the total is unknown; the known part is kept.
+    // A Router record that did not parse may have been a sent call, so the total is unknown; the known part is kept.
     expect(r.jev_input_tokens_known).toBe(255);
     expect(r.jev_input_tokens).toBeNull();
     expect(r.jev_cost_usd).toBeNull();
     expect(r.jev_cost_known_subtotal).toBeCloseTo((255 / 1_000_000) * 0.042, 10);
   });
 
-  it('PR #49: reads the redaction-safe usage keys (input/output/cache_read/cache_creation), never the old _tokens names, for pricing and for the routed call’s own per-step usage', () => {
+  it('PR #49: reads the short usage keys (input/output/cache_read/cache_creation) for pricing and for the routed call’s own per-step usage', () => {
     const cell = cellFor('router');
     const log = routerLog('new-keys', [
       'jev-router {"event":"root","turn":"t1","patch":{"effort":"high"},"sent":true,"usage":{"input":100,"output":5,"cache_read":0,"cache_creation":0}}',
       'jev-router {"event":"root_result","turn":"t1","index":0,"applied":{"effort":"high"},"observed":"claude-sonnet-5","usage":{"input":900,"output":30,"cache_read":10,"cache_creation":0}}',
       'jev-router {"event":"spawn","tool_use_id":"tuA","patch":{"model":"haiku"},"sent":true,"usage":{"input":40,"output":2,"cache_read":0,"cache_creation":0}}',
     ]);
-    ingestRouterLog(cell, log);
+    ingestRouterRecords(cell, log);
     const r = cell.router;
     expect(r.unparsable_lines).toBe(0);
     // root_result's usage is passed through raw for observation only, under whatever keys the log carries -- #49's
@@ -601,73 +499,40 @@ describe('#45: Router producer ingestion (jev-router debug log)', () => {
     expect(r.jev_cost_usd).toBeCloseTo((140 / 1_000_000) * 0.042, 10);
   });
 
-  it('PR #49: a line with a bare, unquoted [REDACTED] usage value -- the host’s own token redaction -- fails to parse and is counted unparsable, never read as a sent attempt or as zero usage', () => {
-    const cell = cellFor('router');
-    const log = routerLog('redacted', [
-      // This is exactly what the host's debug log produces for an old-format line: a bare, unquoted token, which is
-      // not valid JSON at all (JSON.parse throws on the bare `REDACTED`), unlike every other line in this suite.
-      'jev-router {"event":"spawn","tool_use_id":"tuR","patch":{"model":"haiku"},"sent":true,"usage":{"input_tokens":[REDACTED],"output_tokens":[REDACTED]}}',
-      'jev-router {"event":"root","turn":"t9","patch":{"effort":"high"},"sent":true,"usage":{"input":77}}',
-    ]);
-    ingestRouterLog(cell, log);
-    const r = cell.router;
-    expect(r.unparsable_lines).toBe(1);
-    // The redacted line's whole record failed to parse, so it never became a "sent" attempt at all -- not a zero, not
-    // an entry. Only the one valid line after it counts.
-    expect(r.spawn_assessed).toBe(0);
-    expect(r.jev_attempts).toBe(1);
-    expect(r.jev_input_tokens_known).toBe(77);
-    expect(r.jev_input_tokens).toBeNull();
-  });
-
   it('a sent attempt whose usage never comes back leaves the Router total unknown, not zero', () => {
     const cell = cellFor('router');
     const log = routerLog('unresolved', ['jev-router {"event":"spawn","tool_use_id":"tuX","patch":{"model":"haiku"},"sent":true}']);
-    ingestRouterLog(cell, log);
+    ingestRouterRecords(cell, log);
     expect(cell.router).toMatchObject({ jev_attempts: 1, jev_responses_known: 0, jev_input_tokens: null, jev_cost_usd: null, jev_cost_known_subtotal: 0 });
   });
 
-  it('a Router arm with no debug log has an unknown Jev cost, not zero; an arm without the Router stays at zero', () => {
-    const missing = join(tmp, 'router-logs', 'does-not-exist.log');
+  it('a Router arm with no trace records has an unknown Jev cost, not zero; an arm without the Router stays at zero', () => {
+    const missing = join(tmp, 'router-logs', 'does-not-exist');
     const cell = cellFor('router');
-    ingestRouterLog(cell, missing);
+    ingestRouterRecords(cell, missing);
     expect(cell.router).toMatchObject({ log: 'missing', jev_attempts: 0, jev_input_tokens: null, jev_cost_usd: null, jev_cost_known_subtotal: 0 });
-    for (const arm of ['router_native', 'router_fixed', 'native_auto'] as const) {
+    for (const arm of ['router_native', 'router_fixed', 'sonnet_native'] as const) {
       const other = cellFor(arm);
-      ingestRouterLog(other, missing);
+      ingestRouterRecords(other, missing);
       expect(other.router).toMatchObject({ jev_attempts: 0, jev_input_tokens: 0, jev_cost_usd: 0 });
     }
   });
 
-  it('an unterminated last line is a cut-short write and leaves the cost unknown, even when it is too short to carry the prefix', () => {
-    for (const [name, tail] of [['cut-prefix', 'jev-ro'], ['cut-noise', 'plain host debug out']] as const) {
-      const cell = cellFor('router');
-      ingestRouterLog(cell, routerLog(name, ['plain host debug output', tail], true));
-      expect(cell.router).toMatchObject({ log: 'read', unparsable_lines: 1, jev_attempts: 0, jev_input_tokens: null, jev_cost_usd: null, jev_cost_known_subtotal: 0 });
-    }
-    const whole = cellFor('router');
-    ingestRouterLog(whole, routerLog('whole-noise', ['plain host debug output', 'jev-ro']));
-    // Terminated, the same short line is ordinary host output: a complete log with no Router request is a known zero.
-    expect(whole.router).toMatchObject({ unparsable_lines: 0, jev_input_tokens: 0, jev_cost_usd: 0 });
-  });
-
-  it('a Router session ended by the timeout or a cancel has an unknown Jev cost, whatever its log shows', () => {
-    const logPath = join(tmp, 'router-logs', 'clean.log');
-    mkdirSync(dirname(logPath), { recursive: true });
-    writeFileSync(logPath, `jev-router ${JSON.stringify({ event: 'root', turn: 't1', sent: true, patch: {}, usage: { input: 40 } })}\n`);
+  it('a Router session ended by the timeout or a cancel has an unknown Jev cost, whatever its records show', () => {
+    const logPath = routerLog('clean', [`jev-router ${JSON.stringify({ event: 'root', turn: 't1', sent: true, patch: {}, usage: { input: 40 } })}`]);
     const clean = cellFor('router');
-    ingestRouterLog(clean, logPath);
+    ingestRouterRecords(clean, logPath);
     expect(clean.router).toMatchObject({ log: 'read', jev_input_tokens: 40 });
     for (const end of ['timed_out', 'cancelled'] as const) {
       const cell = cellFor('router');
       cell[end] = true;
-      ingestRouterLog(cell, logPath);
+      ingestRouterRecords(cell, logPath);
       expect(cell.router).toMatchObject({ jev_input_tokens_known: 40, jev_input_tokens: null, jev_cost_usd: null });
       expect(cell.router.jev_cost_known_subtotal).toBeGreaterThan(0);
     }
   });
 
-  describe('#45: producer accounting -- legacy + Lean + Router summed once, disjoint', () => {
+  describe('#45: producer accounting -- legacy + Router summed once, disjoint', () => {
     const planned = { job: 'mini', group: 'g', repetition: 1, arm: 'router', file: '' };
     const routerRow = (cell: CellRecord, arm: Arm = 'router'): RowView => toRowView({ ...planned, arm }, JSON.parse(JSON.stringify(cell)) as Record<string, unknown>);
     const ranRouterCell = (claudeUsd = 2, arm: Arm = 'router'): CellRecord => {
@@ -686,10 +551,10 @@ describe('#45: Router producer ingestion (jev-router debug log)', () => {
 
     it('Router cost known: Claude 2 + legacy gate 0 + Router Jev (known) sums to a complete total', () => {
       const cell = ranRouterCell(2);
-      ingestRouterLog(cell, routerLog('sum-known', ['jev-router {"event":"spawn","tool_use_id":"tuS","patch":{"model":"opus"},"sent":true,"usage":{"input_tokens":1000}}']));
+      ingestRouterRecords(cell, routerLog('sum-known', ['jev-router {"event":"spawn","tool_use_id":"tuS","patch":{"model":"opus"},"sent":true,"usage":{"input_tokens":1000}}']));
       const expectedRouterCost = (1000 / 1_000_000) * 0.042;
       const row = routerRow(cell);
-      expect(row.jev_cost_by_producer).toMatchObject({ legacy: 0, lean: 0 });
+      expect(row.jev_cost_by_producer).toMatchObject({ legacy: 0 });
       expect(row.jev_cost_by_producer.router).toBeCloseTo(expectedRouterCost, 10);
       expect(row.jev_cost_usd).toBeCloseTo(expectedRouterCost, 10);
       expect(row.total_cost_usd).toBeCloseTo(2 + expectedRouterCost, 10);
@@ -700,18 +565,18 @@ describe('#45: Router producer ingestion (jev-router debug log)', () => {
 
     it('Router enabled but unobserved: the row and the arm total go null, never zero', () => {
       const cell = ranRouterCell(2);
-      ingestRouterLog(cell, routerLog('sum-unobserved', ['jev-router {"event":"spawn","tool_use_id":"tuU","patch":{"model":"haiku"},"sent":true}']));
+      ingestRouterRecords(cell, routerLog('sum-unobserved', ['jev-router {"event":"spawn","tool_use_id":"tuU","patch":{"model":"haiku"},"sent":true}']));
       const row = routerRow(cell);
       expect(row.jev_cost_by_producer.router).toBeNull();
       expect(row.jev_cost_usd).toBeNull();
       expect(row.total_cost_usd).toBeNull();
-      // The reason lives in the Router block itself, the same way an unresolved Lean intent carries its own reason.
+      // The reason lives in the Router block itself.
       expect(row.router).toMatchObject({ jev_attempts: 1, jev_responses_known: 0 });
       expect(summarizeArm('router', [row]).total_cost_usd).toBeNull();
     });
 
     it('known-disabled Router on a non-router arm contributes zero, not unknown', () => {
-      // No ingestRouterLog call at all: this arm never turns the Router on (router_expected is false from armSpecs).
+      // No ingestRouterRecords call at all: this arm never turns the Router on (router_expected is false from armSpecs).
       const cell = ranRouterCell(2, 'sonnet_native');
       const row = routerRow(cell, 'sonnet_native');
       expect(row.jev_cost_by_producer.router).toBe(0);
@@ -745,7 +610,7 @@ describe('#45: Router producer ingestion (jev-router debug log)', () => {
       type: 'result', subtype: 'success', is_error: false, duration_ms: 10, num_turns: 1, total_cost_usd: 1,
       modelUsage: { 'claude-sonnet-5': { inputTokens: 100, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: 1 } }, permission_denials: [],
     });
-    ingestRouterLog(cell, routerLog('render', [
+    ingestRouterRecords(cell, routerLog('render', [
       'jev-router {"event":"spawn","tool_use_id":"tuR","patch":{"model":"opus"},"sent":true,"usage":{"input_tokens":50}}',
       'jev-router {"event":"spawn_result","tool_use_id":"tuR","requested":"opus","observed":"sonnet","reason":"model_mismatch","agent_id":"a1"}',
     ]));
@@ -753,7 +618,7 @@ describe('#45: Router producer ingestion (jev-router debug log)', () => {
     const arm = summarizeArm('router', [row]);
     const report: Report = {
       schema: 5, accounting: 2, run: 'test-run', generated_at: new Date().toISOString(), plan_schema: 5, planned_rows: 1,
-      independent_units: { jobs: 1, groups: 1 }, arms: [arm], per_job: [{ job: 'mini', arms: [arm] }], comparisons: [], episodes: [],
+      independent_units: { jobs: 1, groups: 1 }, arms: [arm], per_job: [{ job: 'mini', arms: [arm] }], comparisons: [],
       conclusion: { category: 'exploratory router reading', reason: 'test' }, rows: [row], notes: [],
     };
     const md = renderMarkdown(report);
@@ -766,13 +631,13 @@ describe('#45: Router producer ingestion (jev-router debug log)', () => {
   it('renders the Router table for a sole Router cell whose log is missing, with its cost as unknown', () => {
     const cell = cellFor('router');
     cell.started = true;
-    ingestRouterLog(cell, join(tmp, 'router-logs', 'never-written.log'));
+    ingestRouterRecords(cell, join(tmp, 'router-logs', 'never-written'));
     const row = toRowView({ job: 'mini', group: 'g', repetition: 1, arm: 'router', file: '' }, JSON.parse(JSON.stringify(cell)) as Record<string, unknown>);
     const arm = summarizeArm('router', [row]);
     expect(arm.router).toMatchObject({ jev_attempts: 0, rows_cost_unknown: 1, jev_cost_usd: null });
     const report: Report = {
       schema: 5, accounting: 2, run: 'test-run', generated_at: new Date().toISOString(), plan_schema: 5, planned_rows: 1,
-      independent_units: { jobs: 1, groups: 1 }, arms: [arm], per_job: [{ job: 'mini', arms: [arm] }], comparisons: [], episodes: [],
+      independent_units: { jobs: 1, groups: 1 }, arms: [arm], per_job: [{ job: 'mini', arms: [arm] }], comparisons: [],
       conclusion: { category: 'exploratory router reading', reason: 'test' }, rows: [row], notes: [],
     };
     const md = renderMarkdown(report);

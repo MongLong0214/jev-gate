@@ -16,7 +16,6 @@ export const claudeDefaults = (env: Env): Record<string, string> => ({
   CLAUDE_CODE_FORK_SUBAGENT: '0',
   CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '0',
   JEV_GATE_TRACE_DIR: claudeTraceDir(env),
-  CLAUDE_CODE_DEBUG_LOGS_DIR: join(claudeConfigDir(env), 'debug'),
 });
 export const integratedClaudePlugin = (env: Env): boolean => {
   try {

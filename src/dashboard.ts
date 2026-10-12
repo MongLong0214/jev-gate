@@ -9,7 +9,7 @@ import { activityEngine, type LoadedActivity } from './activity-engine.js';
 import { DASHBOARD_PAGE } from './dashboard-page.js';
 import type { Env } from './config.js';
 import type { Host } from './host-support.js';
-import { claudeConfigDir, claudeTraceDir } from './claude-setup.js';
+import { claudeTraceDir } from './claude-setup.js';
 import { codexTraceDir } from './codex-paths.js';
 import { readSettingsEnvVar } from './host-window.js';
 import { recordingStatus, setRecording } from './recording.js';
@@ -24,7 +24,6 @@ export interface DashboardSources {
   host?: Host;
   traceDir: string | null;
   traceDirs?: readonly { host: Host; dir: string }[] | undefined;
-  debugDir: string | null;
   env: Env;
 }
 
@@ -37,8 +36,7 @@ export const dashboardSources = (env: Env, host?: Host): DashboardSources => {
   const claude = configured('JEV_GATE_TRACE_DIR') || claudeTraceDir(env);
   const codex = codexTraceDir({ ...env, JEV_GATE_TRACE_DIR: undefined });
   return { env, ...(host ? { host } : {}), traceDir: null,
-    traceDirs: [{ host: 'claude' as const, dir: claude }, { host: 'codex' as const, dir: codex }].filter(source => !host || source.host === host),
-    debugDir: host === 'codex' ? null : configured('CLAUDE_CODE_DEBUG_LOGS_DIR') || join(claudeConfigDir(env), 'debug') };
+    traceDirs: [{ host: 'claude' as const, dir: claude }, { host: 'codex' as const, dir: codex }].filter(source => !host || source.host === host) };
 };
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -118,7 +116,7 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
     };
     const watchers = new Map<string, { watcher: FSWatcher; identity: string }>();
     const directoryIdentities = new Map<string, string | null>();
-    const directories = new Set([sources.traceDir, ...(sources.traceDirs?.map(source => source.dir) ?? []), sources.debugDir].filter((dir): dir is string => !!dir).map(dir => join(dir, '.')));
+    const directories = new Set([sources.traceDir, ...(sources.traceDirs?.map(source => source.dir) ?? [])].filter((dir): dir is string => !!dir).map(dir => join(dir, '.')));
     let loaded: LoadedActivity | null = null;
     let loading: Promise<void> | null = null;
     let scannedAt = 0;

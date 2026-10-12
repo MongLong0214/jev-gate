@@ -86,7 +86,7 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
     installed = true;
   }, 60_000);
 
-  it.each(['bounded-lookup', 'direct-lookup', 'background', 'single', 'failed', 'permission-boundary', 'edit-after-check', 'worktree', 'hierarchy', 'lean', 'cancelled', 'budget', 'compact-manual', 'compact-auto', 'compact-semantic', 'routing-gpt-6.1-sol', 'routing-gpt-6-astra', 'routing-gpt-6-sol', 'routing-gpt-6-luna', 'routing-gpt-5.6-terra', 'routing-model-luna', 'routing-auto-model', 'routing-root-keep', 'routing-root-effort', 'routing-root-model', 'routing-root-both'])('runs automatic native Codex policies: %s', async scenario => {
+  it.each(['bounded-lookup', 'direct-lookup', 'background', 'single', 'failed', 'permission-boundary', 'edit-after-check', 'worktree', 'hierarchy', 'cancelled', 'budget', 'compact-manual', 'compact-auto', 'compact-semantic', 'routing-gpt-6.1-sol', 'routing-gpt-6-astra', 'routing-gpt-6-sol', 'routing-gpt-6-luna', 'routing-gpt-5.6-terra', 'routing-model-luna', 'routing-auto-model', 'routing-root-keep', 'routing-root-effort', 'routing-root-model', 'routing-root-both'])('runs automatic native Codex policies: %s', async scenario => {
     const semanticBatches: Rec[] = [];
     const semantic = scenario === 'compact-semantic';
     if (semantic) for (let i = 1; i <= 20; i++) writeFileSync(join(workspace, `compact-note${i}.txt`), i === 3 ? dependencyFact : (`Unrelated completed archive ${i}. `).repeat(100));
@@ -162,12 +162,6 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
         else if(index===7 || index===10) item=fn('exec_command',{cmd:'vitest run',login:false,max_output_tokens:8000});
         else if(index===8 || index===11) item=final(report('c1'));
       }
-      if(scenario==='lean') {
-        if(index===1) item=final('Old unrelated narrative. '.repeat(300));
-        else if(index===2) { const marker=JSON.stringify(request['input']).match(/jev-lean-[a-f0-9]{16}/)?.[0]; item=fn('jev_agent',{subagent_type:'jev-gate:executor',prompt:marker ?? 'missing marker'}); }
-        else if(index===3) item=fn('exec_command',{cmd:'vitest run',login:false,max_output_tokens:8000});
-        else if(index===4) item=final(report('vitest run'));
-      }
       if(scenario.startsWith('compact')) item=semantic && index <= 20 ? fn('exec_command', { cmd: `cat compact-note${index}.txt`, login: false, max_output_tokens: 4000 }) : final(index === (semantic ? 21 : 1) ? 'Old unrelated narrative. '.repeat(6000) : 'managed native complete');
       const response = { id: `resp_${requests.length}`, status: 'completed', output: [item], usage: { input_tokens: scenario === 'bounded-lookup' ? 10 : scenario==='compact-auto' && index===2 ? 300000 : 150000, output_tokens: 1, total_tokens: scenario === 'bounded-lookup' ? 11 : scenario==='compact-auto' && index===2 ? 300001 : 150001 } };
       res.writeHead(200, { 'content-type': 'text/event-stream' });
@@ -183,7 +177,7 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
     // Serial and restrictive scenarios explicitly select that policy; worktree and automatic-model cases exercise the new defaults.
     const policyFile = join(tmp, `policy ${scenario}.json`);
     writeFileSync(policyFile, JSON.stringify({
-      gate: { mode: scenario.startsWith('compact') || routing ? 'off' : scenario === 'lean' ? 'lean' : 'auto',
+      gate: { mode: scenario.startsWith('compact') || routing ? 'off' : 'auto',
         ...(scenario === 'direct-lookup' ? { delegationDepthFloor: 999999 } : {}),
         admittedShape: scenario === 'hierarchy' || scenario === 'worktree' ? 'hierarchy' : 'auto',
         ...(scenario === 'worktree' ? {} : { workerIsolation: 'none', maxParallelWorkers: 1, guardAllowTools: [], planInterpretation: false }),
@@ -191,7 +185,7 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
       router: { model: rootPair || ['routing-model-luna', 'routing-auto-model'].includes(scenario), ...(scenario === 'routing-auto-model' ? { allowAstra: true } : {}) },
       compact: { manual: scenario === 'compact-manual' || semantic, ...(semantic ? { budgetChars: 8000 } : {}) },
     }));
-    const profiles=Object.fromEntries(['planner','planner-frontier','worker-fast','worker','worker-deep','worker-frontier','executor'].map(n=>[`jev-gate:${n}`,readFileSync(join(root,'agents',n+'.md'),'utf8').replace(/^---[\s\S]*?---\s*/, '')]));
+    const profiles=Object.fromEntries(['planner','planner-frontier','worker-fast','worker','worker-deep','worker-frontier'].map(n=>[`jev-gate:${n}`,readFileSync(join(root,'agents',n+'.md'),'utf8').replace(/^---[\s\S]*?---\s*/, '')]));
     const session = await startCodexSession({ cwd: workspace, env: { ...runtimeEnv, PATH:`${join(workspace,'.bin')}:${process.env['PATH'] ?? ''}`, JEV_CODEX_CONFIG:policyFile, JEV_CODEX_TRACE_DIR: trace, JEV_GATE_STATE_DIR: join(tmp, `managed ${scenario} state`), JEV_CODEX_UPSTREAM: `http://127.0.0.1:${(server.address() as {port:number}).port}/v1`, TYPESAFE_API_KEY: 'fixture-key' }, serverArgs: config.flatMap(c => ['-c', c]), bypassHookTrust: true, nativeAuth: false, profiles,
       fetchImpl: (async (_url, init) => {
         const parsed=JSON.parse(String(init?.body)); const q = parsed.questions; if (semantic && Object.keys(q).some(k => /^m\d+t\d+$/.test(k))) semanticBatches.push(parsed);
@@ -334,37 +328,29 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
         expect(messages.slice(before).some(m=>m['method']==='turn/completed' && ((m['params'] as Rec)['turn'] as Rec)['status']==='interrupted')).toBe(true);
         return;
       }
-      expect(requests.length,JSON.stringify({all,turns:messages.slice(before).filter(m=>m['method']==='turn/completed')})).toBe(scenario==='hierarchy'||scenario==='worktree'?12:scenario==='lean'?5:6);
+      expect(requests.length,JSON.stringify({all,turns:messages.slice(before).filter(m=>m['method']==='turn/completed')})).toBe(scenario==='hierarchy'||scenario==='worktree'?12:6);
       expect(existsSync(join(workspace,'guard-must-not-exist'))).toBe(false);
-      if(scenario==='lean') {
-        expect(all.some(r=>r['phase']==='lean_dispatch'),JSON.stringify(all)).toBe(true);
+      if(scenario!=='worktree') expect(JSON.stringify(requests[semantic ? 22 : 2]!['input'])).toContain('denied');
+      if (scenario === 'bounded-lookup') {
+        expect(requests[3]!['model']).toBe('gpt-6-luna');
+        expect(JSON.stringify(requests[4]!['input'])).toContain('1:export const runtimeEvidenceNeedle = 42;');
+        const admissions = all.filter(r => r['phase'] === 'admission_result' && r['attempted'] === true);
+        expect(admissions).toHaveLength(2); // one batch for each of the two native root prompts, never per tool step
+        expect(new Set(admissions.map(r => r['prompt_id'])).size).toBe(2);
+        expect(all.some(r => r['phase'] === 'admission_result' && r['policy_basis'] === 'bounded_tool_worker' && ((r['estimate'] as Rec)['saving_tokens'] as number) < 0)).toBe(true);
+      }
+      if(scenario==='permission-boundary') expect(existsSync(join(workspace,'worker-must-not-exist'))).toBe(false);
+      if(scenario==='worktree') {
+        expect(JSON.stringify(requests[6]!['input'])).toContain('worktrees/jev-worker-');
+        expect(all.some(r=>r['phase']==='post' && r['verdict']==='accept'),JSON.stringify(all)).toBe(true);
+      }
+      expect(all.some(r=>r['phase']==='admission_result' && (r['decision'] as Rec)?.['shape']==='orchestrated'),JSON.stringify(all)).toBe(true);
+      expect(all.some(r=>r['phase']==='post' && r['verdict']===(['failed','permission-boundary'].includes(scenario)?'incomplete':'accept')),JSON.stringify(all.filter(r=>r['phase']==='post'))).toBe(true);
+      if(scenario==='hierarchy'||scenario==='worktree') {
+        expect(all.filter(r=>r['phase']==='dispatch' && r['role']==='worker').length).toBe(2);
+        expect(all.some(r=>r['phase']==='post' && r['plan_complete']===true),JSON.stringify(all)).toBe(true);
         await vi.waitFor(() => expect(session.policy.sessions.size).toBe(1), { timeout: 3000 });
-        expect(all.some(r=>['admission_intent','pre_intent','guard','plan'].includes(String(r['phase'])))).toBe(false);
-        expect(JSON.stringify(requests[semantic ? 22 : 2]!['input'])).not.toContain('Old unrelated narrative');
-        expect(JSON.stringify(requests[semantic ? 22 : 2]!['input'])).toContain('Investigate the repository fixture');
-      } else {
-        if(scenario!=='worktree') expect(JSON.stringify(requests[semantic ? 22 : 2]!['input'])).toContain('denied');
-        if (scenario === 'bounded-lookup') {
-          expect(requests[3]!['model']).toBe('gpt-6-luna');
-          expect(JSON.stringify(requests[4]!['input'])).toContain('1:export const runtimeEvidenceNeedle = 42;');
-          const admissions = all.filter(r => r['phase'] === 'admission_result' && r['attempted'] === true);
-          expect(admissions).toHaveLength(2); // one batch for each of the two native root prompts, never per tool step
-          expect(new Set(admissions.map(r => r['prompt_id'])).size).toBe(2);
-          expect(all.some(r => r['phase'] === 'admission_result' && r['policy_basis'] === 'bounded_tool_worker' && ((r['estimate'] as Rec)['saving_tokens'] as number) < 0)).toBe(true);
-        }
-        if(scenario==='permission-boundary') expect(existsSync(join(workspace,'worker-must-not-exist'))).toBe(false);
-        if(scenario==='worktree') {
-          expect(JSON.stringify(requests[6]!['input'])).toContain('worktrees/jev-worker-');
-          expect(all.some(r=>r['phase']==='post' && r['verdict']==='accept'),JSON.stringify(all)).toBe(true);
-        }
-        expect(all.some(r=>r['phase']==='admission_result' && (r['decision'] as Rec)?.['shape']==='orchestrated'),JSON.stringify(all)).toBe(true);
-        expect(all.some(r=>r['phase']==='post' && r['verdict']===(['failed','permission-boundary'].includes(scenario)?'incomplete':'accept')),JSON.stringify(all.filter(r=>r['phase']==='post'))).toBe(true);
-        if(scenario==='hierarchy'||scenario==='worktree') {
-          expect(all.filter(r=>r['phase']==='dispatch' && r['role']==='worker').length).toBe(2);
-          expect(all.some(r=>r['phase']==='post' && r['plan_complete']===true),JSON.stringify(all)).toBe(true);
-          await vi.waitFor(() => expect(session.policy.sessions.size).toBe(1), { timeout: 3000 });
-          expect(JSON.stringify(requests[6]!['input'])).toContain('[Jev Gate task contract]');
-        }
+        expect(JSON.stringify(requests[6]!['input'])).toContain('[Jev Gate task contract]');
       }
     } finally { releaseBackground(); socket.terminate(); await session.close(); server.closeAllConnections(); await new Promise<void>(r=>server.close(()=>r())); }
   }, 60000);
@@ -417,7 +403,7 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
     ];
     const args = ['--no-daemon', ...(trust ? ['--dangerously-bypass-hook-trust'] : []), 'exec', '--ignore-rules', '--skip-git-repo-check', '--ephemeral', '--json', '-C', workspace, ...config.flatMap(c => ['-c', c]), 'Run the local fixture tools, then finish.'];
     let output = '';
-    const child = spawn('codex', args, { cwd: workspace, env: { HOME: runtimeEnv.HOME, XDG_CONFIG_HOME: runtimeEnv.XDG_CONFIG_HOME, XDG_STATE_HOME: runtimeEnv.XDG_STATE_HOME, JEV_GATE_ONBOARDING: '0', JEV_DASHBOARD_NO_OPEN: '1', CODEX_HOME: runtimeEnv.CODEX_HOME, PATH: `${join(workspace, '.bin')}:${process.env['PATH'] ?? ''}`, JEV_CODEX_AUTO_CONNECT: '0', JEV_CODEX_TRACE_DIR: trace, ...(scenario === 'missing-workspace' ? {} : { JEV_CODEX_WORKSPACE: workspace }), JEV_CODEX_ENABLED: scenario === 'hooks-disabled' ? '0' : '1', JEV_CODEX_OUTPUT: scenario === 'disabled' ? 'off' : 'on', CLAUDE_PROJECT_DIR: '/wrong-workspace', PWD: '/wrong-workspace' } });
+    const child = spawn('codex', args, { cwd: workspace, env: { HOME: runtimeEnv.HOME, XDG_CONFIG_HOME: runtimeEnv.XDG_CONFIG_HOME, XDG_STATE_HOME: runtimeEnv.XDG_STATE_HOME, JEV_GATE_ONBOARDING: '0', JEV_DASHBOARD_NO_OPEN: '1', CODEX_HOME: runtimeEnv.CODEX_HOME, PATH: `${join(workspace, '.bin')}:${process.env['PATH'] ?? ''}`, JEV_CODEX_AUTO_CONNECT: '0', JEV_CODEX_TRACE_DIR: trace, ...(scenario === 'missing-workspace' ? {} : { JEV_CODEX_WORKSPACE: workspace }), JEV_CODEX_ENABLED: scenario === 'hooks-disabled' ? '0' : '1', CLAUDE_PROJECT_DIR: '/wrong-workspace', PWD: '/wrong-workspace' } });
     child.stdin.end(); child.stdout.on('data', b => { output += String(b); }); child.stderr.on('data', b => { output += String(b); });
     const timer = setTimeout(() => child.kill('SIGTERM'), 40_000);
     try {
@@ -426,49 +412,45 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
     } finally { clearTimeout(timer); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
   };
 
-  it('loads plugin MCP and trusted hooks, folds the actual model-visible result and records both paths', async () => {
+  it('loads plugin MCP and trusted hooks, leaves the model-visible result native and records both paths', async () => {
     const result = await run(true);
     expect(result.code, result.output).toBe(0);
     expect(result.requests.length, result.output).toBeGreaterThanOrEqual(3);
     expect(functions(result.requests[0]!['tools']).some(t => String(t['name']).endsWith('jev_evidence')), result.output).toBe(true);
     expect(JSON.stringify(result.requests[0])).toContain('Read-only source evidence from the one project this server was configured for');
     const second = JSON.stringify(result.requests[1]!['input']);
-    expect(second.includes('100 times in a row'), JSON.stringify({records: existsSync(result.trace) ? readdirSync(result.trace).map(f => JSON.parse(readFileSync(join(result.trace, f), 'utf8'))) : [], errors: result.output.split('\n').filter(l => /hook|ERROR|WARN/i.test(l))})).toBe(true);
-    expect(second).toContain('[jev-gate output]');
+    expect(second).not.toContain('[jev-gate output]');
+    expect(second.split('fixture repeat detail').length - 1).toBe(100);
     const last = JSON.stringify(result.requests.at(-1)!['input']);
     expect(last).toContain('runtimeEvidenceNeedle');
     expect(last).not.toContain('/wrong-workspace');
     const records = readdirSync(result.trace).map(f => JSON.parse(readFileSync(join(result.trace, f), 'utf8')) as Rec);
     expect(records.some(r => r['phase'] === 'evidence_result')).toBe(true);
-    expect(records.some(r => r['phase'] === 'codex_output' && r['applied'] === true)).toBe(true);
     for (const event of ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop']) expect(records.some(r => r['event'] === event), event).toBe(true);
-    const snapshot = loadActivity({ traceDir: result.trace, debugDir: null, env: {}, host: 'codex' });
+    const snapshot = loadActivity({ traceDir: result.trace, env: {}, host: 'codex' });
     expect(snapshot.operations.features.find(f => f.id === 'evidence')?.state).toBe('observed');
     expect(snapshot.operations.features.find(f => f.id === 'admission')?.capability?.mode).toBe('connect');
     expect(JSON.stringify(records)).not.toContain('runtimeEvidenceNeedle');
     expect(JSON.stringify(snapshot)).not.toContain('fixture repeat detail');
   }, 60_000);
 
-  it('honors Codex hook trust: untrusted hooks do not fold or manufacture execution records', async () => {
+  it('honors Codex hook trust: untrusted hooks do not manufacture execution records', async () => {
     const result = await run(false);
     expect(result.code, result.output).toBe(0);
-    expect(JSON.stringify(result.requests[1]?.['input'])).not.toContain('100 times in a row');
-    const snapshot = loadActivity({ traceDir: result.trace, debugDir: null, env: {}, host: 'codex' });
-    expect(snapshot.operations.features.find(f => f.id === 'output')?.count).toBe(0);
+    const snapshot = loadActivity({ traceDir: result.trace, env: {}, host: 'codex' });
     expect(snapshot.operations.features.find(f => f.id === 'workers')?.count).toBe(0);
   }, 60_000);
 
-  it.each(['failed', 'disabled'])('preserves actual model-visible output when %s', async scenario => {
-    const result = await run(true, scenario);
+  it('preserves actual model-visible output when the command failed', async () => {
+    const result = await run(true, 'failed');
     expect(result.code, result.output).toBe(0);
     const input = JSON.stringify(result.requests[1]?.['input']);
     expect(input).not.toContain('[jev-gate output]');
     expect(input.split('fixture repeat detail').length - 1).toBe(100);
-    if (scenario === 'failed') expect(input).toContain('Process exited with code 1');
-    const snapshot = loadActivity({ traceDir: result.trace, debugDir: null, env: {}, host: 'codex' });
+    expect(input).toContain('Process exited with code 1');
+    const snapshot = loadActivity({ traceDir: result.trace, env: {}, host: 'codex' });
     expect(snapshot.operations.features.find(f => f.id === 'workers')?.count).toBe(0);
     expect(snapshot.operations.feed.some(s => s.lifecycle)).toBe(true);
-    expect(snapshot.operations.features.find(f => f.id === 'output')?.count).toBe(scenario === 'disabled' ? 0 : 1);
   }, 60_000);
 
   it('binds Evidence to the actual native workspace with no environment setting or launcher', async () => {

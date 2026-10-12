@@ -1,16 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { wireSource } from '../../src/codex/wire.js';
-import { codexSource } from '../../src/codex/source.js';
 
 const message = (role: string, text: string) => ({ type: 'message', role, content: [{ type: role === 'assistant' ? 'output_text' : 'input_text', text }] });
 describe('actual native request source', () => {
-  it('keeps stable provenance when native transport ids, phase and content encoding change', () => {
-    const previous = wireSource([message('user', 'prior'), { ...message('assistant', 'old answer'), id: 'response-message', phase: 'final_answer' }], 'prior', 'old');
-    const current = wireSource([message('developer', 'new hook guidance'), message('user', 'prior'), { ...message('assistant', 'old answer'), id: 'next-input-message', content: [{ type: 'input_text', text: 'old answer' }] }, message('user', 'current')], 'current', 'new');
-    const before = codexSource(previous.items.map(({ clientId: _old, ...v }) => v), { sessionId: 's', promptId: 'new', request: 'current', phase: 'prompt' }, 'wire', true);
-    const after = codexSource(current.items, { sessionId: 's', promptId: 'new', request: 'current', phase: 'dispatch' }, 'wire', current.complete);
-    expect(before.ok && after.ok && before.source.prefixDigest === after.source.prefixDigest).toBe(true);
-  });
   it('binds repeated identical prompts to the last native user input', () => {
     const result = wireSource([message('user', 'same'), message('assistant', 'prior'), message('user', 'same')], 'same', 'current');
     expect(result.complete).toBe(true);

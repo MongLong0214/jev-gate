@@ -1,6 +1,6 @@
 {
   "name": "jev-gate-router",
-  "version": "0.8.17",
+  "version": "0.8.18",
   "description": "Routes the main thread's effort and each subagent's model and effort with one TypeSafe Jev assessment; on by default, native on any doubt.",
   "author": {
     "name": "MongLong0214",
@@ -100,7 +100,7 @@
     },
     "logDecisions": {
       "title": "Log decisions",
-      "description": "Write one metadata-only line per decision to the debug log. Never task text or the key.",
+      "description": "Record one metadata-only trace record per decision. Never task text or the key.",
       "type": "boolean",
       "default": true
     },

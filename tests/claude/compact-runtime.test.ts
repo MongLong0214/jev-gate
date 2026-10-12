@@ -60,7 +60,7 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('Claude manual compaction
       writeFileSync(join(config, 'settings.json'), JSON.stringify({ model: 'claude-sonnet-5', permissions: { allow: ['Read'] }, pluginConfigs: { 'jev-gate@inline': { options: { compactBudgetChars: semantic ? 8000 : 40000, compactJevEnabled: semantic, routerEnabled: false } } } }));
       const session = randomUUID();
       const run = (extra: string[], prompt: string) => new Promise<{ code: number | null; output: string }>((resolve, reject) => {
-        const child = spawn('claude', ['--debug-file', join(temp, 'debug.log'), '--plugin-dir', plugin, '--model', 'claude-sonnet-5', '--permission-mode', 'default', '--allowedTools', 'Read', ...extra, '-p', prompt], { cwd, env });
+        const child = spawn('claude', ['--plugin-dir', plugin, '--model', 'claude-sonnet-5', '--permission-mode', 'default', '--allowedTools', 'Read', ...extra, '-p', prompt], { cwd, env });
         child.stdin.end(); let output = '';
         child.stdout.on('data', chunk => { output += chunk; }); child.stderr.on('data', chunk => { output += chunk; });
         const timer = setTimeout(() => child.kill('SIGKILL'), 25_000);
@@ -79,7 +79,7 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('Claude manual compaction
       const after = requests.filter(r => r.phase === 'resume').at(-1)!.messages;
       expect(after).toContain('[jev-gate compact]'); expect(after).not.toContain('FIXTURE_OLD_END_0');
       expect(after.length).toBeLessThan(original.length / 2);
-      if (semantic) { expect(jevCalls, readFileSync(join(temp, 'debug.log'), 'utf8').split('\n').filter(l => /jev-compact|error|Error/.test(l)).join('\n').slice(-4000)).toBe(1); expect(after).toContain(dependencyFact); } else expect(jevCalls).toBe(0);
+      if (semantic) { expect(jevCalls).toBe(1); expect(after).toContain(dependencyFact); } else expect(jevCalls).toBe(0);
     } finally {
       api.closeAllConnections(); await new Promise<void>(resolve => api.close(() => resolve()));
       rmSync(temp, { recursive: true, force: true });

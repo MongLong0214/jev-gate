@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 const root = join(__dirname, '..');
-const AGENTS = ['worker-fast', 'worker', 'worker-deep', 'worker-frontier', 'planner', 'planner-frontier', 'executor'];
+const AGENTS = ['worker-fast', 'worker', 'worker-deep', 'worker-frontier', 'planner', 'planner-frontier'];
 let repo: string;
 
 const write = (rel: string, text: string) => {
@@ -31,7 +31,6 @@ const setVersion = (v: string) => {
     ['.claude-plugin/plugin.json', 'jev-gate'],
     ['mods/compact/.claude-plugin/plugin.json', 'jev-gate-compact'],
     ['mods/router/.claude-plugin/plugin.json', 'jev-gate-router'],
-    ['mods/output/.claude-plugin/plugin.json', 'jev-gate-output'],
     ['plugins/evidence/.claude-plugin/plugin.json', 'jev-gate-evidence'],
     ['plugins/codex/.codex-plugin/plugin.json', 'jev-gate'],
   ] as const) json(rel, { name, version: v, type: 'module' });
@@ -58,17 +57,17 @@ describe('scripts/release.mjs', () => {
         { name: 'jev-gate', source: { source: 'archive', url: 'https://example.invalid/x.zip', sha256: '0'.repeat(64) } },
       ],
     });
-    // The jev-gate archive carries all three Mods' hook sources and the module that loads them (v0.6.0), plus the
+    // The jev-gate archive carries both Mods' hook sources and the module that loads them (v0.6.0), plus the
     // install docs pack.mjs lists (#95). Stubs are enough: the archive only requires the paths to exist.
-    for (const m of ['compact', 'router', 'output']) {
+    for (const m of ['compact', 'router']) {
       write(`mods/${m}/hooks/register.ts`, 'export default () => {};\n');
       write(`mods/${m}/README.md`, `# ${m}\n`);
     }
-    for (const name of ['jev-gate-logo.svg', 'jev-gate-logo-dark.svg', 'results.svg', 'results-dark.svg']) write(`assets/readme/${name}`, '<svg xmlns="http://www.w3.org/2000/svg"></svg>\n');
+    for (const name of ['jev-gate-logo.svg', 'jev-gate-logo-dark.svg', 'results.svg', 'results-dark.svg', 'dashboard.svg', 'dashboard-dark.svg']) write(`assets/readme/${name}`, '<svg xmlns="http://www.w3.org/2000/svg"></svg>\n');
     write('plugins/codex/README.md', '# Native Codex usage\n');
     write('docs/bench-ab.md', '# Paired benchmark usage\n');
     write('bench/ab/tasks.example.json', '{}\n');
-    write('docs/advanced-usage.md', '# Advanced usage\n\nGate and lean settings for a checkout.\n');
+    write('docs/advanced-usage.md', '# Advanced usage\n\nGate settings for a checkout.\n');
     write('hooks/hooks.json', '{}\n');
     write('hooks/register.ts', 'export {};\n');
     for (const name of ['cost','provider-prices','provider-prices-data','route-cost','claude-cache','router-answers','router-selection','router-context','router-child-context','router-secret','claude-models','claude-candidates','frontier-routing']) write(`src/${name}.ts`, 'export {};\n');
@@ -165,15 +164,15 @@ describe('scripts/release.mjs', () => {
   it('refuses a served marketplace that lists another entry at this version, source directory or archive', () => {
     const m = JSON.parse(readFileSync(join(repo, '.claude-plugin', 'marketplace.json'), 'utf8'));
     git('switch', '-q', '-c', 'served');
-    json('.claude-plugin/marketplace.json', { ...m, plugins: [...m.plugins, { name: 'jev-gate-output', source: './mods/output' }] });
+    json('.claude-plugin/marketplace.json', { ...m, plugins: [...m.plugins, { name: 'jev-gate-extra', source: './mods/extra' }] });
     commit('served lists one more');
     git('switch', '-q', '-');
-    expect(release('check', '--against', 'served').stderr).toMatch(/served serves entries jev-gate, jev-gate-compact, jev-gate-output, jev-gate-router, this tree lists jev-gate, jev-gate-compact, jev-gate-router/);
+    expect(release('check', '--against', 'served').stderr).toMatch(/served serves entries jev-gate, jev-gate-compact, jev-gate-extra, jev-gate-router, this tree lists jev-gate, jev-gate-compact, jev-gate-router/);
     git('switch', '-q', 'served');
-    json('.claude-plugin/marketplace.json', { ...m, plugins: m.plugins.map((p: { name: string }) => (p.name === 'jev-gate-compact' ? { ...p, source: './mods/output' } : p)) });
+    json('.claude-plugin/marketplace.json', { ...m, plugins: m.plugins.map((p: { name: string }) => (p.name === 'jev-gate-compact' ? { ...p, source: './mods/extra' } : p)) });
     commit('served moves a source directory');
     git('switch', '-q', '-');
-    expect(release('check', '--against', 'served').stderr).toMatch(/served serves "\.\/mods\/output", not this entry "\.\/mods\/compact"/);
+    expect(release('check', '--against', 'served').stderr).toMatch(/served serves "\.\/mods\/extra", not this entry "\.\/mods\/compact"/);
   });
 
   it('publishes only the entry the served marketplace pins', () => {

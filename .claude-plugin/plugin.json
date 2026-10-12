@@ -1,7 +1,7 @@
 {
   "name": "jev-gate",
-  "version": "0.8.17",
-  "description": "Jev Gate in one plugin: the orchestration gate, the extractive compactor, the Vitest log folder, the Jev effort and model router and the jev_evidence tool. Every part is on by default; each has its own on/off option.",
+  "version": "0.8.18",
+  "description": "Jev Gate in one plugin: the orchestration gate, the extractive compactor, the Jev effort and model router and the jev_evidence tool. Every part is on by default; each has its own on/off option.",
   "author": {
     "name": "MongLong0214",
     "url": "https://github.com/MongLong0214"
@@ -62,12 +62,6 @@
       "type": "boolean",
       "default": true
     },
-    "outputEnabled": {
-      "title": "Output: Enable output folding",
-      "description": "Off registers no hook at all. Every Bash result is the host's own.",
-      "type": "boolean",
-      "default": true
-    },
     "routerEnabled": {
       "title": "Router: Enable the Router",
       "description": "Off registers no hook at all. Every request keeps its native model and effort.",
@@ -106,7 +100,7 @@
     },
     "typesafeApiKey": {
       "title": "Jev API key (all features)",
-      "description": "One key for Gate, Lean, Router and Evidence, shared with Codex. Blank opens the local key-entry screen when no environment or saved key is available.",
+      "description": "One key for Gate, Router and Evidence, shared with Codex. Blank opens the local key-entry screen when no environment or saved key is available.",
       "type": "string",
       "sensitive": true
     },
@@ -154,7 +148,7 @@
     },
     "routerLogDecisions": {
       "title": "Router: Log decisions",
-      "description": "Write one metadata-only line per decision to the debug log. Never task text or the key.",
+      "description": "Record one metadata-only trace record per decision. Never task text or the key.",
       "type": "boolean",
       "default": true
     },

@@ -14,7 +14,7 @@ const fixture = () => {
   const env = { HOME: root, JEV_GATE_STATE_DIR: root, TYPESAFE_API_KEY: 'fake', JEV_GATE_MODE: 'auto' };
   const controller = new AbortController();
   const host: NonNullable<HookDeps['host']> = { id: 'codex', config: { ...DEFAULT_CONFIG, mode: 'auto', maxParallelWorkers: 1, workerIsolation: 'none', admittedShape: 'single', delegationDepthFloor: 0 },
-    depth: () => ({ ok: true, tokens: 500000, model: null, modelSwitched: false, bytesRead: 0, durationMs: 0 }), compactWindow: null, recentRequests: () => ['implement the feature'], source: () => ({ ok: false, reason: 'source_unavailable', detail: 'fixture', bytesRead: 0, durationMs: 0 }), observation: () => null };
+    depth: () => ({ ok: true, tokens: 500000, model: null, modelSwitched: false, bytesRead: 0, durationMs: 0 }), compactWindow: null, recentRequests: () => ['implement the feature'], observation: () => null };
   const reply = (context = 'self_contained') => new Response(JSON.stringify({ answers: { forbids_delegation: { type: 'noul', noul: 0 }, task_context: { type: 'choice', choice: context, confidence: 1, probabilities: { self_contained: context === 'self_contained' ? 1 : 0, needs_context: context === 'needs_context' ? 1 : 0, unclear: 0 } }, tool_calls: { type: 'score', score: 4, confidence: 1, probabilities: { 0: 0, 1: 0, 2: 0, 3: 0, 4: 1 } } } }));
   const run = (fetchImpl: typeof fetch) => runHook({ env, host, startedAt: 100000, signal: controller.signal, fetchImpl, stdin: (async function* () { yield JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 's', prompt_id: 'p', prompt: 'continue' }); })() });
   return { env, host, run, reply, controller, time: () => now, advance: (ms: number) => { now += ms; } };

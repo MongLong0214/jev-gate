@@ -27,14 +27,6 @@ describe('committed agents/*.md match OWNED_AGENT_PROFILES + DEFAULT_CONFIG.mode
     });
   }
 
-  it('lean executor also inherits all host tools', () => {
-    const fm = parseFrontmatter(readFileSync(join(root, 'agents/executor.md'), 'utf8'));
-    expect(fm.error).toBeNull();
-    expect(fm.fields['model']).toBe('inherit');
-    expect(fm.fields['tools']).toBeUndefined();
-    expect(fm.fields['disallowedTools']).toBeUndefined();
-  });
-
   it('enables the frontier profile by default under the open policy', () => {
     expect(DEFAULT_CONFIG.models.frontier).toBe('claude-fable-5-1');
   });

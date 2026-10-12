@@ -9,8 +9,6 @@ test('child tool steps use fresh assessments in the real host engine', async ($,
   on('session.id', () => ({ value: 'child-fixture' }));
   on('settings.read', () => ({ value: { effortLevel: 'high' } }));
   on('fs.exists', () => ({ value: false }));
-  const logs: string[] = [];
-  on('ui.log', ($, e) => { logs.push(e.text); return { value: undefined }; });
   const contexts: Array<string | undefined> = [];
   on('session.messages', ($, e) => {
     contexts.push(e.agentId);
@@ -47,7 +45,7 @@ test('child tool steps use fresh assessments in the real host engine', async ($,
   for (phase = 0; phase < 3; phase++) {
     const stream = $.turn.step({ agentId: 'child', turnId: 'child-turn', index: phase, model: 'claude-opus-5-5', effort: 'high', messageCount: phase + 1 });
     while (!(await stream.next()).done) { /* preserve the host stream */ }
-    expect({ calls, logs: calls === phase + 1 ? [] : logs, sent: calls === phase + 1 ? [] : sent }).toEqual({ calls: phase + 1, logs: [], sent: [] });
+    expect({ calls, sent: calls === phase + 1 ? [] : sent }).toEqual({ calls: phase + 1, sent: [] });
   }
   expect(sent).toEqual([{ model: 'claude-opus-5-5', effort: 'high' }, { model: 'claude-sonnet-5-5', effort: 'low' }, { model: 'claude-opus-5-5', effort: 'high' }]);
   expect(contexts).toEqual(['child', 'child']);
@@ -92,7 +90,6 @@ for (const mode of ['keep', 'effort', 'model', 'both'] as const) {
     on('session.id', () => ({ value: 'root-fixture' }));
     on('settings.read', () => ({ value: { effortLevel: 'high' } }));
     on('fs.exists', () => ({ value: false }));
-    on('ui.log', () => ({ value: undefined }));
     const sent: Array<{ model: string; effort?: string | number }> = [];
     let calls = 0;
     on('http.fetch', ($, e) => {
@@ -134,7 +131,6 @@ for (const baselineMode of ['default', 'echo'] as const) {
     on('session.id', () => ({ value: 'same-root-fixture' }));
     on('settings.read', () => ({ value: { effortLevel: 'high' } }));
     on('fs.exists', () => ({ value: false }));
-    on('ui.log', () => ({ value: undefined }));
     let phase = 0; let calls = 0; let children = 0;
     const sent: Array<{ turnId: string; model: string; effort?: string | number }> = [];
     on('agent.spawn', () => { children++; throw new Error('Root routing must not spawn a child'); });

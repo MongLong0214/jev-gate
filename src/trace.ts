@@ -16,7 +16,6 @@ import { recordingStatus } from './recording.js';
 export type TracePhase =
   | 'mod_router'
   | 'mod_compact'
-  | 'mod_output'
   | 'codex_router_intent'
   | 'codex_router_result'
   | 'codex_router_skipped'
@@ -26,7 +25,6 @@ export type TracePhase =
   | 'codex_route_applied'
   | 'codex_compact'
   | 'codex_event'
-  | 'codex_output'
   | 'admission_intent'
   | 'admission_result'
   | 'guard'
@@ -49,11 +47,6 @@ export type TracePhase =
   /** A23: the plan-interpretation pair, joined by a shared `request_id` like every other gate call. */
   | 'interpretation_intent'
   | 'interpretation_result'
-  /** JGL: the lean selection pair, the local decision that needed no call, and the owned dispatch and its result. */
-  | 'lean_intent'
-  | 'lean_result'
-  | 'lean_dispatch'
-  | 'lean_post'
   /** The evidence MCP server records only bounded metadata; source text and goals stay out. */
   | 'evidence_start'
   | 'evidence_jev_intent'

@@ -6,7 +6,7 @@ import { resolveConfig } from '../../mods/router/hooks/config.ts';
 import type { SymbolicEffort } from '../../mods/router/hooks/models.ts';
 import { offerableEfforts, TIER_LEVELS } from '../../mods/router/hooks/policy.ts';
 import type { SpawnEvent, SpawnOutcome, TurnStepEvent } from '../../mods/router/hooks/router.ts';
-import { cachePatch, createRouter, hostSupported, VERIFIED_HOST } from '../../mods/router/hooks/router.ts';
+import { cachePatch, createRouter, hostSupported, ROUTER_HOOK_VERSION, VERIFIED_HOST } from '../../mods/router/hooks/router.ts';
 import { answering, choice, CLEAR, deferred, drain, FAKE_KEY, fakeEngine, streamNext } from './fake-engine.ts';
 
 const configOf = (options: Record<string, string | number | boolean>) => {
@@ -362,8 +362,8 @@ describe('root effort', () => {
     await drain(router.turnStep(f.engine, step({ index: 1 }), later.next));
     expect(later.calls).toEqual([step({ index: 1 })]);
     expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root', assessment: 'timeout', sent: true }));
-    // What the late reply cost is still recorded, against the turn that asked, under keys the host's debug log does not
-    // redact (it blanks any key containing "token").
+    // What the late reply cost is still recorded, against the turn that asked, under the short trace keys (`input`, not
+    // `input_tokens`).
     expect(f.logs).toContainEqual({ event: 'late', scope: 'root', turn: 't1', usage: { input: 900, output: 40 } });
   });
 
@@ -757,7 +757,6 @@ describe('spawn model', () => {
       ['host_unverified', spawn(), { hostBase: '2.1.283-dev' }, true],
       ['host_unverified', spawn(), { hostBase: undefined }, true],
       ['baseline_unknown', spawn({ subagentType: 'Explore', parentModel: 'claude-fable-5-1' }), {}, true],
-      ['lean_marker', spawn({ prompt: 'Execute packet jev-lean-0123456789abcdef now.' }), {}, true],
       ['gate_routed', spawn({ subagentType: 'jev-gate:worker' }), {}, true],
       ['gate_routed', spawn({ subagentType: 'jev-gate:planner' }), {}, true],
       ['gate_routed', spawn({ prompt: 'Fix it.\n\n[Jev Gate route note] Tier: fast. Precedence: ...' }), {}, true],
@@ -1069,6 +1068,69 @@ describe('spawn model', () => {
 const CHILD = { routeMainEffort: false, routeMainModel: false, routeSubagentModel: true, routeSubagentEffort: true, routeExplicitSpawnModel: true };
 /** A subagent loop's step: its own agentId and turn, on the model and effort it resolved to. */
 const childStep = (over: Partial<TurnStepEvent> = {}): TurnStepEvent => step({ agentId: 'a1', turnId: 'c1', effort: 'xhigh', ...over });
+
+describe('child routing gap diagnostics (#219)', () => {
+  it('records an unregistered child and its later native steps without changing or repeating requests', async () => {
+    const router = createRouter(configOf(CHILD));
+    const f = fakeEngine();
+    const n = streamNext<TurnStepEvent>();
+    const first = childStep({ index: 26 });
+    const later = childStep({ index: 27 });
+    await drain(router.turnStep(f.engine, first, n.next));
+    await drain(router.turnStep(f.engine, later, n.next));
+    expect(n.calls).toEqual([first, later]);
+    expect(f.sent).toHaveLength(0);
+    expect(f.logs.filter(l => l.event === 'child_route')).toEqual([
+      { event: 'child_route', scope: 'child', agent_id: 'a1', turn: 'c1', index: 26,
+        hook_version: ROUTER_HOOK_VERSION, sent: false, skipped: 'child_unregistered' },
+      { event: 'child_route', scope: 'child', agent_id: 'a1', turn: 'c1', index: 27,
+        hook_version: ROUTER_HOOK_VERSION, sent: false, skipped: 'native_child' },
+    ]);
+    expect(f.logs.filter(l => l.event === 'prepared' || l.event === 'model_request')).toHaveLength(4);
+    for (const record of f.logs.filter(l => l.event === 'prepared' || l.event === 'model_request')) {
+      expect(record).toMatchObject({ hook_version: ROUTER_HOOK_VERSION, agent_id: 'a1', turn: 'c1' });
+    }
+    expect(JSON.stringify(f.logs)).not.toContain(FAKE_KEY);
+  });
+
+  it('exposes registration loss after session teardown without reusing the old child allocation', async () => {
+    const router = createRouter(configOf(CHILD));
+    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', .95], effort: ['low', .95] }) });
+    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    await router.agentSpawn(f.engine, spawn(), spawnNext(() => ({ model: 'claude-opus-5-5', agentId: 'a1' })).next);
+    const first = streamNext<TurnStepEvent>();
+    await drain(router.turnStep(f.engine, childStep(), first.next));
+    expect(first.calls).toEqual([childStep({ effort: 'low' })]);
+    expect(f.sent).toHaveLength(1);
+    router.sessionEnd();
+    const continuation = childStep({ index: 1 });
+    const after = streamNext<TurnStepEvent>();
+    await drain(router.turnStep(f.engine, continuation, after.next));
+    expect(after.calls).toEqual([continuation]);
+    expect(f.sent).toHaveLength(1);
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'child_route', agent_id: 'a1', index: 1,
+      hook_version: ROUTER_HOOK_VERSION, skipped: 'child_unregistered', sent: false }));
+    expect(JSON.stringify(f.logs)).not.toContain(TEXT);
+  });
+
+  it('distinguishes a stopped registration from a missing one and tolerates a broken recorder', async () => {
+    const router = createRouter(configOf(CHILD));
+    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', .95], effort: ['low', .95] }) });
+    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    await router.agentSpawn(f.engine, spawn(), spawnNext(() => ({ model: 'claude-opus-5-5', agentId: 'a1' })).next);
+    const n = streamNext<TurnStepEvent>();
+    await drain(router.turnStep(f.engine, childStep(), n.next));
+    await drain(router.turnStep(f.engine, childStep({ turnId: 'c2' }), n.next));
+    await drain(router.turnStep(f.engine, childStep({ turnId: 'c2', index: 1 }), n.next));
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'child_route', skipped: 'child_stopped', sent: false }));
+    f.engine.log = () => { throw new Error('recorder unavailable'); };
+    const unchanged = childStep({ turnId: 'c2', index: 2 });
+    await drain(router.turnStep(f.engine, unchanged, n.next));
+    expect(n.calls).toEqual([childStep({ effort: 'low' }), childStep({ turnId: 'c2' }),
+      childStep({ turnId: 'c2', index: 1 }), unchanged]);
+    expect(f.sent).toHaveLength(1);
+  });
+});
 
 describe('subagent effort and named models', () => {
   it("sets a subagent's effort from its spawn's one answer, on every step of its loop", async () => {
@@ -1585,18 +1647,6 @@ describe('#42 and #43: handler cases the issues list', () => {
       expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn', assessment: 'input_secret', sent: false }));
       expect(JSON.stringify(f.logs)).not.toContain(secret);
     }
-  });
-
-  it('leaves a spawn native when only its description carries a Lean marker', async () => {
-    const router = createRouter(configOf(SPAWN_ONLY));
-    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['fast', 0.95] }) });
-    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
-    const n = spawnNext();
-    const e = spawn({ description: 'execute jev-lean-0123456789abcdef' });
-    await router.agentSpawn(f.engine, e, n.next);
-    expect(n.calls).toEqual([e]);
-    expect(f.sent).toHaveLength(0);
-    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn', skipped: 'lean_marker' }));
   });
 
   it('records an effort-only root decision with the step it came from, its Jev usage and its result', async () => {

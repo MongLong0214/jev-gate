@@ -30,8 +30,8 @@ describe('the one plugin’s hooks module', () => {
   it('offers every Mod option under its plugin name, with the Mod’s type and default', async () => {
     const { OPTION_NAMES } = await load();
     const expected: Record<string, unknown> = {};
-    const label = { compact: 'Compact', output: 'Output', router: 'Router' } as const;
-    for (const mod of ['compact', 'output', 'router'] as const) {
+    const label = { compact: 'Compact', router: 'Router' } as const;
+    for (const mod of ['compact', 'router'] as const) {
       const own = readJson(`mods/${mod}/.claude-plugin/plugin.json`).userConfig!;
       expect(Object.keys(OPTION_NAMES[mod]!).sort(), mod).toEqual(Object.keys(own).sort());
       for (const [key, option] of Object.entries(own)) expected[OPTION_NAMES[mod]![key]!] = { ...option, title: `${label[mod]}: ${option.title}` };
@@ -46,15 +46,15 @@ describe('the one plugin’s hooks module', () => {
   });
 
   it('keeps owned dispatch eligibility with all Mods off and reads only plugin option names', async () => {
-    const off = { compactEnabled: false, outputEnabled: false, routerEnabled: false };
+    const off = { compactEnabled: false, routerEnabled: false };
     expect([...(await registered(off)).keys()]).toEqual(['session.start', 'turn.complete', 'turn.step', 'agent.offer', 'agent.spawn', 'session.end', 'session.compact']);
     expect([...(await registered({ ...off, enabled: true })).keys()]).toEqual(['session.start', 'turn.complete', 'turn.step', 'agent.offer', 'agent.spawn', 'session.end', 'session.compact']);
   });
 
-  it('registers each event once with every option at its default, all three Mods on', async () => {
+  it('registers each event once with every option at its default, both Mods on', async () => {
     const defaults = Object.fromEntries(Object.entries(readJson('.claude-plugin/plugin.json').userConfig!).map(([k, v]) => [k, (v as { default?: unknown }).default]));
     for (const options of [{}, defaults]) {
-      expect([...(await registered(options)).keys()].sort()).toEqual(['session.start', 'agent.offer', 'agent.spawn', 'session.compact', 'session.end', 'tool.call {"tool":"Bash"}', 'turn.complete', 'turn.start', 'turn.step'].sort());
+      expect([...(await registered(options)).keys()].sort()).toEqual(['session.start', 'agent.offer', 'agent.spawn', 'session.compact', 'session.end', 'turn.complete', 'turn.start', 'turn.step'].sort());
     }
   });
 
@@ -66,15 +66,12 @@ describe('the one plugin’s hooks module', () => {
     expect(env).toEqual({ CLAUDE_CODE_FORK_SUBAGENT: '1', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '0', TYPESAFE_API_KEY: 'fake-configured-key', CLAUDE_PLUGIN_OPTION_ROUTERALLOWFABLE: 'false' });
   });
 
-  it('writes every unusable option from one session-start hook and keeps the other Mods', async () => {
-    const hooks = await registered({ compactEnabled: true, compactMode: 'fast', outputEnabled: 'yes', routerEnabled: true });
-    expect([...hooks.keys()].filter((k) => !k.startsWith('turn.') && !k.startsWith('agent.'))).toEqual(['session.start', 'session.end', 'session.compact']);
-    const logs: string[] = [];
-    const e = { cwd: '/r' };
-    expect(await hooks.get('session.start')!({ ui: { log: (t: string) => logs.push(t) } }, e, async (x: unknown) => x)).toBe(e);
-    expect(logs).toEqual([
-      'jev-compact {"event":"compact","disabled":"invalid_option","field":"compactMode"}',
-      'jev-output {"event":"output","disabled":"invalid_option","field":"outputEnabled"}',
-    ]);
+  it('keeps the other Mod when one option is unusable, and ignores an option no Mod owns any more', async () => {
+    // A removed Mod's option, or a Mod option with a bad value, never throws or turns off the Mod beside it.
+    const compactOff = await registered({ compactEnabled: true, compactMode: 'fast', routerEnabled: true });
+    expect([...compactOff.keys()].filter((k) => !k.startsWith('turn.') && !k.startsWith('agent.'))).toEqual(['session.start', 'session.end', 'session.compact']);
+    expect([...compactOff.keys()]).toContain('turn.step');
+    const ignored = await registered({ compactEnabled: true, routerEnabled: true, outputEnabled: true });
+    expect([...ignored.keys()].sort()).toEqual([...(await registered({ compactEnabled: true, routerEnabled: true })).keys()].sort());
   });
 });

@@ -105,7 +105,7 @@ export interface EvidenceConfig {
 
 /**
  * Every bound in one place (ADR D7). Initial policy values chosen for ordinary requests, not measured optima; the
- * token figure is the estimate `src/lean.ts` calibrated, not a provider count.
+ * token figure is the calibrated estimate in `src/outbound-text.ts`, not a provider count.
  */
 export const LIMITS = {
   inputBytes: 16 * 1024,

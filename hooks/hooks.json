@@ -81,7 +81,7 @@
     ],
     "SubagentStop": [
       {
-        "matcher": "^jev-gate:(?:worker(?:-fast|-deep|-frontier)?|planner(?:-frontier)?|executor)$",
+        "matcher": "^jev-gate:(?:worker(?:-fast|-deep|-frontier)?|planner(?:-frontier)?)$",
         "hooks": [
           {
             "type": "command",

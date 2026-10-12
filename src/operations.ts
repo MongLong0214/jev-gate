@@ -3,11 +3,12 @@ import { allocatedTraceRecords } from './explain.js';
 import { codexOperations, firstRow } from './codex-operations.js';
 import { operationState } from './operation-state.js';
 import { memo } from './memo.js';
+import { estimateJevCostUsd } from './bench/usage.js';
 import { CODEX_CAPABILITIES, CODEX_PLUGIN_CAPABILITIES, type HostCapability, type Host } from './host-support.js';
 
-/** A display model made only from named metadata fields. Raw prompts, source and debug text never leave here. */
+/** A display model made only from named metadata fields. Raw prompts and source text never leave here. */
 type Rec = Record<string, unknown>;
-export type FeatureId = 'admission' | 'allocation' | 'planning' | 'workers' | 'guard' | 'lean' | 'router' | 'compact' | 'output' | 'evidence';
+export type FeatureId = 'admission' | 'allocation' | 'planning' | 'workers' | 'guard' | 'router' | 'compact' | 'evidence';
 export type StepState = 'active' | 'done' | 'skipped' | 'error' | 'unconfirmed' | 'interrupted';
 export type StepLane = 'jev' | 'policy' | 'host' | 'local';
 
@@ -39,7 +40,11 @@ export interface OperationStep {
   startedAt?: string;
   judgements?: Array<{ question: string; value: string; confidence: number | null; probabilities: Array<{ label: string; value: number }> }>;
   graph?: Array<{ id: string; dependsOn: string[]; checks: number }>;
+  /** The recorded exchange behind one measured Jev response. Every absent value stays null; cost is a list-price estimate, never a billed amount. */
+  receipt?: JevReceipt;
 }
+
+export interface JevReceipt { status: number | null; code: string | null; model: string | null; input: number | null; output: number | null; costUsd: number | null; choice: string | null; confidence: number | null; threshold: number | null; direction: string | null }
 
 export interface OperationRun {
   id: string;
@@ -47,7 +52,7 @@ export interface OperationRun {
   executionId?: string;
   host?: Host;
   title: string;
-  source: 'gate' | 'router' | 'compact' | 'output' | 'evidence' | 'codex';
+  source: 'gate' | 'router' | 'compact' | 'evidence' | 'codex';
   mode: string;
   firstAt: string;
   lastAt: string;
@@ -58,7 +63,6 @@ export interface OperationRun {
 export interface FeatureView {
   id: FeatureId;
   label: string;
-  source: 'trace' | 'debug';
   count: number;
   lastAt: string | null;
   state: 'observed' | 'waiting' | 'unavailable' | 'unsupported';
@@ -73,23 +77,23 @@ export interface OperationsView {
   attention: number;
   /** Derived from recorded intent or explicit attempted result, not from an absent usage field. */
   requests: number;
-  latency: { measured: number; p50: number | null; p95: number | null; fastest: number | null; latest: number | null; recent: Array<{ at: string; ms: number }> };
+  latency: { measured: number; p50: number | null; p95: number | null; fastest: number | null; latest: number | null; recent: Array<{ at: string; ms: number }>;
+    /** Measured Jev responses whose record date is the local today, per host. Cost sums only responses with a recorded, priced model. */
+    today: Partial<Record<Host, { calls: number; input: number; costUsd: number; unpriced: number }>> };
   sig: string;
 }
 
-export interface DebugRecord { at: string; component: 'router' | 'compact' | 'output'; rec: Rec }
+export interface ModRecord { at: string; component: 'router' | 'compact'; rec: Rec }
 
-const FEATURES: Array<{ id: FeatureId; label: string; source: 'trace' | 'debug' }> = [
-  { id: 'admission', label: 'Gate A · 실행 형태', source: 'trace' },
-  { id: 'allocation', label: 'Gate B · 등급 배정', source: 'trace' },
-  { id: 'planning', label: '계획 · 의존성', source: 'trace' },
-  { id: 'workers', label: '워커 · 수락 검사', source: 'trace' },
-  { id: 'guard', label: '루트 도구 가드', source: 'trace' },
-  { id: 'lean', label: 'Lean · 문맥 인계', source: 'trace' },
-  { id: 'router', label: 'Router · 모델과 effort', source: 'debug' },
-  { id: 'compact', label: 'Compact · 요약 대체', source: 'debug' },
-  { id: 'output', label: 'Output · 로그 접기', source: 'debug' },
-  { id: 'evidence', label: 'Evidence · 근거 판정', source: 'trace' },
+const FEATURES: Array<{ id: FeatureId; label: string }> = [
+  { id: 'admission', label: 'Gate A · 실행 형태' },
+  { id: 'allocation', label: 'Gate B · 등급 배정' },
+  { id: 'planning', label: '계획 · 의존성' },
+  { id: 'workers', label: '워커 · 수락 검사' },
+  { id: 'guard', label: '루트 도구 가드' },
+  { id: 'router', label: 'Router · 모델과 effort' },
+  { id: 'compact', label: 'Compact · 요약 대체' },
+  { id: 'evidence', label: 'Evidence · 근거 판정' },
 ];
 const TOKEN = /^[A-Za-z0-9_.:/+@-]{1,80}(?:\[[A-Za-z0-9_-]{1,16}\])?$/;
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
@@ -152,6 +156,10 @@ const judgements = (r: Rec): OperationStep['judgements'] => {
   });
   return out.length ? out : undefined;
 };
+const jevReceipt = (status: number | null, code: string | null, model: string | null, usage: Rec | null, choice: string | null, confidence: number | null, threshold: number | null, direction: string | null): JevReceipt => {
+  const input = number(usage?.['input_tokens'] ?? usage?.['input']); const output = number(usage?.['output_tokens'] ?? usage?.['output']);
+  return { status, code, model, input, output, costUsd: estimateJevCostUsd(model, input), choice, confidence, threshold, direction };
+};
 const callDetails = (r: Rec): string[] => {
   if (r['known_not_sent'] === true || r['attempted'] === false) return [text('Jev 전송 없음', token(r['skip_code']))];
   if (r['attempted'] !== true && !String(r['phase']).endsWith('_intent')) return ['전송 여부 기록 없음'];
@@ -178,7 +186,6 @@ const traceFeature = (phase: string): FeatureId | null => {
   if (phase.startsWith('interpretation_') || phase === 'plan') return 'planning';
   if (phase.startsWith('background_') || phase.startsWith('worktree_') || phase === 'dispatch_denied' || phase === 'dispatch' || phase === 'post' || phase === 'failure' || phase === 'stop') return 'workers';
   if (phase === 'guard') return 'guard';
-  if (phase.startsWith('lean_')) return 'lean';
   if (phase.startsWith('evidence_')) return 'evidence';
   return null;
 };
@@ -191,7 +198,6 @@ const traceTitle = (phase: string, r: Rec): string => ({
   plan: '플래너 결과 · 작업 그래프', dispatch: token(r['role']) === 'planner' ? '플래너 호출' : '워커 호출',
   background_dispatch: '백그라운드 실행 준비', background_launch: '백그라운드 워커 실행', background_conversation: '메인 대화 계속', background_terminal: '백그라운드 워커 종료', background_policy_delivery: '종료 정책 전달',
   worktree_start: 'Worktree · 생성 시작', worktree_result: 'Worktree · 생성 결과', dispatch_denied: 'Agent 호출 거절', post: '워커 결과 · 수락 판정', failure: '호스트 호출 실패', stop: '턴 종료', guard: '루트 도구 가드',
-  lean_intent: 'Lean · Jev 요청', lean_result: 'Lean · 문맥 선택', lean_dispatch: 'Lean · packet 적용', lean_post: 'Lean · executor 결과',
   evidence_start: 'Evidence · 근거 검색 시작', evidence_jev_intent: 'Evidence · Jev 판정 요청', evidence_jev_result: 'Evidence · Jev 판정 결과', evidence_cache: 'Evidence · 판정 캐시', evidence_result: 'Evidence · 근거 결과',
 } as Record<string, string>)[phase] ?? phase;
 
@@ -293,14 +299,6 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
       } else details.push(text(`요청 ${token(r['called_tier']) ?? '?'}`, `적용 ${tier ?? '원래 프로필'}`, token(decision?.['model'])));
     }
     if (estimate && number(estimate['saving_tokens']) !== null) details.push(`위임 가격 계산 ${n(number(estimate['saving_tokens']))} 토큰 · 측정된 절감 아님`);
-    if (phase === 'lean_result') {
-      summary = text(action, reason, number(decision?.['retained']) === null ? null : `유지 ${n(number(decision?.['retained']))}그룹`, number(decision?.['omitted']) === null ? null : `생략 ${n(number(decision?.['omitted']))}그룹`);
-      const source = field(r, 'source');
-      const groups = field(r, 'groups');
-      if (source) details.push(text(`전사 범위 ${token(source['coverage']) ?? '미확인'}`, `미판정 ${n(number(source['unassessed']))}그룹`, `호스트 문맥 ${n(number(source['host_context']))}건`, `버린 분기 ${n(number(source['abandoned']))}건`));
-      if (groups) details.push(text(`필수 ${n(number(groups['mandatory']))}그룹`, `선택 질문 ${n(number(groups['optional_asked']))}그룹`, `읽은 요청 ${n(number(groups['request_bytes']))}B`));
-      details.push('packet 크기와 실제 토큰 절감은 다른 사실입니다');
-    }
   } else if (phase === 'codex_router_skipped') {
     lane = 'policy';
     summary = ({ disabled: 'Jev 기능이 꺼져 있음', router_disabled: 'Router가 꺼져 있음', key_missing: 'Jev API 키 없음', aborted: '턴 중단으로 판단 생략', model_catalog_missing: '호스트 모델 목록에서 현재 모델을 확인할 수 없음', nothing_to_change: '변경 가능한 모델·effort 없음' } as Record<string, string>)[String(r['reason'])] ?? '원래 호스트 설정 유지';
@@ -376,14 +374,6 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
     if (r['evidence_format_only'] === true) details.push('검사 명령 형식만 불일치 · 한 번의 무료 재검증 가능');
     if (r['root_fallback'] === true) details.push(r['root_fallback_reason'] === 'accepted' ? '종료된 작업 수락 · 루트에서 남은 확인 가능 · 전체 요구사항 검증과는 다름' : r['root_fallback_reason'] === 'delivery_failed' ? '필수 원문 전달 불가 · 루트 복귀' : '단일 워커 시도 상한 · 루트 도구 가드 해제');
     if (r['orphaned'] === true) details.push('이전 세대의 늦은 결과 · 현재 계획 미진행');
-  } else if (phase === 'lean_dispatch') {
-    lane = 'policy';
-    summary = r['applied'] === true ? 'executor에 packet 적용' : token(r['reason']) === 'packet_proposed' ? 'packet 제안 · 아직 적용 전' : text('packet 미적용', token(r['reason']));
-    details.push(text(`유지 ${n(number(r['retained_groups']))}그룹`, `생략 ${n(number(r['omitted_groups']))}그룹`, number(r['composed_bytes']) === null ? null : `${n(number(r['composed_bytes']))}B 합성`));
-  } else if (phase === 'lean_post') {
-    lane = 'host';
-    summary = text(token(r['status']), r['released'] === true ? 'executor 예약 해제' : r['release_unconfirmed'] === true ? '종료 미확인 · 예약 유지' : '일치하는 예약 없음');
-    details.push(text(`실행 모델 ${token(r['observed_model']) ?? '미관측'}`, token(r['failure'])));
   } else if (phase === 'guard') {
     lane = 'policy';
     summary = text(token(r['tool_name']) ?? '도구', r['allow'] === false ? '거절' : '가드 통과', r['stopped'] === true ? '예산 소진 · 턴 중단' : null);
@@ -449,6 +439,10 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
   }
   if (phase === 'codex_model_failure') { state = 'error'; lane = 'host'; summary = '호스트 모델 요청 실패'; }
   if (state === 'error' && !issue) issue = lane === 'jev' ? 'jev' : feature === 'evidence' ? 'evidence' : 'host';
+  const decided = field(r, 'decision'), selection = field(r, 'selection'), answered = judgements(r)?.find(j => j.confidence !== null);
+  const receipt = lane === 'jev' && duration !== null && duration >= 0 && !isIntent ? jevReceipt(number(http?.['status']), token(http?.['code']), token(field(r, 'jev')?.['model']), field(field(r, 'jev'), 'usage') ?? field(r, 'usage'),
+    phase === 'codex_router_result' ? text(token(r['selected_model']), token(r['selected_effort'])) || null : phase === 'codex_compact' ? number(r['dependencies']) === null ? null : `${n(number(r['dependencies']))} / ${n(number(r['candidates']))}` : token(decided?.['shape']) ?? token(field(r, 'allocation')?.['selected_model']) ?? token(decided?.['tier']) ?? token(decided?.['action']),
+    routing?.probability ?? answered?.confidence ?? null, routing?.threshold ?? null, token(selection?.['direction'])) : undefined;
   return { id: id(ownId), at, feature, state, lane, ...(token(r['session_id']) ? { sessionId: token(r['session_id'])! } : {}), ...(token(r['agent_id']) ? { agentId: token(r['agent_id'])! } : {}), ...(token(r['tool_use_id']) ? { callId: token(r['tool_use_id'])! } : {}), title: traceTitle(phase, r), summary, details: details.filter(Boolean), ...(routing ? { routing } : {}), ...(model ? { model } : {}),
     ...(issue ? { issue } : {}),
     ...(['stop', 'background_conversation', 'codex_model_request', 'codex_model_failure'].includes(phase) ? { lifecycle: true } : {}),
@@ -457,11 +451,11 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
     ...(elapsed !== null && elapsed >= 0 ? { elapsedMs: elapsed } : {}),
     ...(phase === 'codex_model_request' && state === 'active' ? { startedAt: at, elapsedMs: Math.max(0, age) } : {}),
     ...(phase.endsWith('_result') && judgements(r) ? { judgements: judgements(r)! } : {}),
-    ...(graph ? { graph } : {}) };
+    ...(graph ? { graph } : {}), ...(receipt ? { receipt } : {}) };
 };
 
 /** Join decisions to responses only within the recorded session and execution identity. */
-const routedDebugRecords = (debug: DebugRecord[], records: Rec[]): DebugRecord[] => {
+const routedModRecords = (mods: ModRecord[], records: Rec[]): ModRecord[] => {
   const identity = (r: Rec, key: string): string | null => token(r[key]) ? JSON.stringify([r['session_id'] ?? 'legacy', r[key]]) : null;
   const owned = new Map<string, Rec>();
   for (const r of records) {
@@ -469,7 +463,7 @@ const routedDebugRecords = (debug: DebugRecord[], records: Rec[]): DebugRecord[]
     if (r['host'] !== 'codex' && r['phase'] === 'pre_result' && key && field(r, 'allocation')) owned.set(key, r);
   }
   const turns = new Map<string, Rec>(), spawns = new Map<string, Rec>(), childSteps = new Map<string, Rec>(), children = new Map<string, NonNullable<OperationStep['routing']>>();
-  return [...debug].sort((a, b) => a.at.localeCompare(b.at)).map(row => {
+  return [...mods].sort((a, b) => a.at.localeCompare(b.at)).map(row => {
     if (row.component !== 'router') return row;
     const r = row.rec, event = r['event'], turn = identity(r, 'turn'), tool = identity(r, 'tool_use_id'), agent = identity(r, 'agent_id');
     let routing: OperationStep['routing'];
@@ -501,7 +495,7 @@ const routerResponseKey = (r: Rec, index: unknown = r['index'] ?? null): string 
 
 const routerDecisionKey = (r: Rec): string => JSON.stringify([r['session_id'] ?? 'legacy', r['turn'] ?? r['tool_use_id'] ?? '', r['agent_id'] ?? null, r['agent_id'] ? r['index'] ?? null : null]);
 
-const debugStep = (row: DebugRecord, now: number, closed: Set<string>, responses: Map<string, string>, live: Liveness): OperationStep | null => {
+const modStep = (row: ModRecord, now: number, closed: Set<string>, responses: Map<string, string>, live: Liveness): OperationStep | null => {
   const r = row.rec;
   const route = field(r, 'routing_decision'), scope = token(route?.['scope']);
   const routing: OperationStep['routing'] = scope && ['root', 'spawn', 'child', 'owned'].includes(scope) ? { scope: scope as NonNullable<OperationStep['routing']>['scope'], baseline: token(route?.['baseline']), modelReason: token(route?.['modelReason']), effortReason: token(route?.['effortReason']) } : undefined;
@@ -518,10 +512,13 @@ const debugStep = (row: DebugRecord, now: number, closed: Set<string>, responses
   const details: string[] = [];
   let summary = '';
   let lane: StepLane = 'local';
+  let choice: string | null = null;
   if (feature === 'router') {
     lane = event === 'request' || r['sent'] === true ? 'jev' : 'policy';
     const from = field(r, 'from'); const patch = field(r, 'patch'); const reasons = field(r, 'reasons'); const applied = field(r, 'applied');
-    summary = event === 'request' ? 'Jev 요청 전송 · 응답 대기' : text(event, r['sent'] === true ? 'Jev 응답' : r['sent'] === false ? '전송 안 함' : null, token(r['skipped']), token(r['reason']));
+    if (r['sent'] === true && !failedAssessment) choice = text(token(patch?.['model']) ?? token(from?.['model']) ?? token(r['from']), token(patch?.['effort']) ?? token(from?.['effort'])) || null;
+    const skip = ({ child_unregistered: '등록되지 않은 하위 실행 · 원래 설정 유지', child_stopped: '라우팅이 멈춘 하위 실행 · 원래 설정 유지' } as Record<string, string>)[String(r['skipped'])];
+    summary = event === 'request' ? 'Jev 요청 전송 · 응답 대기' : skip ?? text(event, r['sent'] === true ? 'Jev 응답' : r['sent'] === false ? '전송 안 함' : null, token(r['skipped']), token(r['reason']));
     if (failedAssessment) summary = r['assessment'] === 'payment_required' ? 'Jev 크레딧 소진 · 원래 호스트 설정 유지' : text('Jev 판정 실패 · 원래 호스트 설정 유지', token(r['assessment']));
     details.push(text(`기존 모델 ${token(from?.['model']) ?? token(r['from']) ?? '?'}`, `기존 effort ${token(from?.['effort']) ?? '?'}`));
     if (r['scope'] === 'child') details.push(text('워커 단계별 Jev 라우팅', `단계 ${n(number(r['index']))}`, `워커 ${token(r['agent_id']) ?? '?'}`));
@@ -547,19 +544,17 @@ const debugStep = (row: DebugRecord, now: number, closed: Set<string>, responses
       const levels = field(answers, name);
       if (levels) details.push(text(`${name} 점수`, ...Object.entries(levels).slice(0, 8).flatMap(([level, value]) => token(level) && number(value) !== null ? [`${level} ${n(number(value))}`] : [])));
     }
-  } else if (feature === 'compact') {
+  } else {
     if (r['stage'] === 'jev') {
       lane = r['jev_sent'] === true ? 'jev' : 'local';
       summary = text(r['jev_sent'] === true ? 'Jev 작업 의존 근거 선택' : r['jev_sent'] === false ? 'Jev 전송 없음' : 'Jev 전송 여부 미확인', compactSelectionReason(r['selection']));
       if (r['jev_sent'] === true) details.push(compactUsage(r));
+      if (number(r['dependencies']) !== null) choice = `${n(number(r['dependencies']))} / ${n(number(r['candidates']))}`;
       details.push(text(`후보 ${n(number(r['candidates']))}/${n(number(r['available']))}`, `필수 근거 ${n(number(r['dependencies']))}`, number(r['jev_ms']) === null ? null : `${n(number(r['jev_ms']))}ms`));
     } else summary = started ? '대화 압축 시작' : r['deferred'] ? text('호스트 압축으로 넘김', token(r['deferred'])) : r['applied'] === true ? '로컬 digest 적용 · 요약 모델 호출 대체' : text('호스트 압축 사용', token(r['fallback']), r['coreSkip'] === true ? '호스트 건너뜀' : null);
     details.push(text(`모드 ${token(r['mode']) ?? '?'}`, `트리거 ${token(r['trigger']) ?? '?'}`, r['subagent'] === true ? '서브에이전트' : '루트', `메시지 ${n(number(r['messages']))}개`));
     details.push(text(number(r['digestChars']) === null ? null : `digest ${n(number(r['digestChars']))}자`, number(r['tailChars']) === null ? null : `tail ${n(number(r['tailChars']))}자`, number(r['buildMs']) === null ? null : `빌드 ${n(number(r['buildMs']))}ms`));
     if (number(r['tokensBefore']) !== null || number(r['tokensAfter']) !== null) details.push(`호스트 보고 압축 전 ${n(number(r['tokensBefore']))} / 후 ${n(number(r['tokensAfter']))} 토큰`);
-  } else {
-    summary = started ? 'Vitest Bash 실행 중' : r['applied'] === true ? 'Vitest 로그 접기 적용' : text('원본 출력 유지', token(r['skipped']), token(r['disabled']));
-    details.push(text(`파서 ${token(r['parser']) ?? '?'}`, number(r['runs']) === null ? null : `실행 ${n(number(r['runs']))}건`));
   }
   const model = feature === 'router' && ['root_result', 'spawn_result', 'spawn_native_result', 'child_result', 'model_request'].includes(event)
     ? modelObservation(r['requested'] ?? field(r, 'applied')?.['model'] ?? r['assumed'], r['observed'], r['requested_effort'] ?? field(r, 'applied')?.['effort'], r['observed_effort'], r['confirmation'], 'requested_effort' in r ? { value: r['requested_effort'], source: 'host_hook' } : undefined) : undefined;
@@ -581,6 +576,9 @@ const debugStep = (row: DebugRecord, now: number, closed: Set<string>, responses
   if (event === 'model_failure') { state = 'error'; lane = 'host'; summary = '호스트 모델 요청 실패'; }
   if (r['denied'] === true) { state = 'skipped'; summary = '호스트가 에이전트 생성을 거부함 · 실행되지 않음'; }
   const duration = number(r['duration_ms'] ?? (lane === 'jev' ? r['jev_ms'] : undefined));
+  const selection = field(r, 'selection');
+  const receipt = lane === 'jev' && !started && duration !== null && duration >= 0 ? jevReceipt(null, token(r['assessment'] ?? (r['stage'] === 'jev' ? r['selection'] : null)), token(r['jev_model']), field(r, 'usage'), choice,
+    number(selection?.['probability']), number(selection?.['threshold']), token(selection?.['direction'])) : undefined;
   return { id: id(`${row.component}:${row.at}:${key}:${event}:${started ? 'start' : 'result'}`), at: row.at, feature, state, lane, ...(token(r['agent_id']) ? { agentId: token(r['agent_id'])!, ...(token(r['session_id']) ? { sessionId: token(r['session_id'])! } : {}) } : {}), ...(['prepared', 'model_request', 'model_failure'].includes(event) ? { lifecycle: true as const } : {}), title: { router: event === 'prepared' ? 'Router · 요청 전달 준비' : event === 'model_request' ? '모델 · 응답 대기' : event === 'model_failure' ? '모델 · 요청 실패' : 'Router · ' + event, compact: 'Compact · 압축', output: 'Output · 로그 접기' }[feature], summary, details: details.filter(Boolean), ...(routing ? { routing } : {}), ...(model ? { model } : {}), ...(lane === 'jev' && duration !== null && duration >= 0 ? { durationMs: duration } : {}), ...(event === 'model_request' && state === 'active' ? { startedAt: row.at, elapsedMs: Math.max(0, age) } : {}) };
 };
 
@@ -591,9 +589,12 @@ const gateGroup = (r: Rec): string => {
   if (phase === 'codex_compact') return `compact:${token(r['session_id']) ?? 'unknown'}:${token(r['run_id']) ?? 'unknown'}`;
   return `gate:${token(r['session_id']) ?? 'unknown'}:${token(r['execution_prompt_id']) ?? token(r['prompt_id']) ?? 'unknown'}`;
 };
-const debugGroup = (row: DebugRecord): string => row.component === 'router'
+const modGroup = (row: ModRecord): string => row.component === 'router'
   ? `router:${token(row.rec['session_id']) ?? 'legacy'}:${token(row.rec['turn']) ?? token(row.rec['tool_use_id']) ?? 'session'}`
   : `${row.component}:${token(row.rec['session_id']) ?? 'legacy'}:${token(row.rec['run_id']) ?? row.at}`;
+
+/** The dashboard's activity strips and per-minute rates read the last minute of records, so no cut below may drop one of them. */
+const ACTIVITY_WINDOW_MS = 60_000, ACTIVITY_CAP = 1000;
 
 /** The first `k` of a stable sort by `order`, without sorting everything. */
 const firstSorted = <T>(items: T[], k: number, order: (a: T, b: T) => number): T[] => {
@@ -608,12 +609,12 @@ const firstSorted = <T>(items: T[], k: number, order: (a: T, b: T) => number): T
   return top;
 };
 
-/** Where one pass over the whole recording first inserts a run: records in order, then debug rows by time, then native Codex rows by time. */
+/** Where one pass over the whole recording first inserts a run: records in order, then Router and Compact rows by time, then native Codex rows by time. */
 type Rank = { cls: 0 | 1 | 2; at: string; index: number };
 interface Part { runs: OperationRun[]; ranks: Rank[]; requests: string[]; managed: boolean }
 
 /** The executions of records that join nothing outside them (see `parts`). */
-const buildPart = (records: Rec[], debug: DebugRecord[], now: Date): Part => {
+const buildPart = (records: Rec[], mods: ModRecord[], now: Date): Part => {
   records = allocatedTraceRecords(records);
   const codexDecisions = new Map<string, Rec>();
   const codexKey = (r: Rec): string | null => r['host'] === 'codex' && token(r['session_id']) && token(r['prompt_id']) ? JSON.stringify([r['session_id'], r['prompt_id'], r['scope'] === 'child' ? r['agent_id'] : null, r['scope'] === 'child' ? r['index'] ?? null : null]) : null;
@@ -642,9 +643,9 @@ const buildPart = (records: Rec[], debug: DebugRecord[], now: Date): Part => {
     observe(codexLoop(r), at, (event === 'Stop' || event === 'Interrupt') && token(r['prompt_id']) ? { key: codexLoop(r), interrupted: event === 'Interrupt' }
       : event === 'SessionEnd' ? { key: JSON.stringify(['codex', r['session_id']]), interrupted: false } : undefined);
   }
-  for (const row of debug) if (row.component === 'router' && row.at) {
+  for (const row of mods) if (row.component === 'router' && row.at) {
     const r = row.rec, loop = routerResponseKey(r, 'loop');
-    // Host debug mirrors carry no session; an unidentified session end cannot end anything.
+    // Recorded Router rows may carry no session; an unidentified session end cannot end anything.
     observe(loop, row.at, r['event'] === 'turn_end' && token(r['turn']) ? { key: loop, interrupted: r['reason'] === 'aborted' }
       : r['event'] === 'session_end' && token(r['session_id']) ? { key: JSON.stringify(['claude', r['session_id']]), interrupted: false } : undefined);
   }
@@ -653,9 +654,9 @@ const buildPart = (records: Rec[], debug: DebugRecord[], now: Date): Part => {
     const response = r['phase'] === 'codex_route_applied' && key ? responseBindings.get(key) : undefined;
     return response && iso(response['written_at']) >= iso(r['written_at']) ? { ...r, observed_model: response['observed_model'], observed_effort: response['observed_effort'] } : r;
   });
-  // routedDebugRecords visits rows in this stable time order.
-  const order = debug.map((_, i) => i).sort((a, b) => debug[a]!.at.localeCompare(debug[b]!.at));
-  debug = routedDebugRecords(debug, records);
+  // routedModRecords visits rows in this stable time order.
+  const order = mods.map((_, i) => i).sort((a, b) => mods[a]!.at.localeCompare(mods[b]!.at));
+  mods = routedModRecords(mods, records);
   const resultIds = new Set(records.flatMap((r) => token(r['request_id']) && token(r['phase']) ? [`${token(r['request_id'])}:${token(r['phase'])}`] : []));
   for (const r of records) if (r['phase'] === 'background_terminal') resultIds.add(`background:${token(r['session_id'])}:${token(r['execution_prompt_id']) ?? token(r['prompt_id'])}:${token(r['tool_use_id'])}`);
   for (const r of records) if (r['phase'] === 'codex_compact' && r['applied'] === true && token(r['run_id'])) resultIds.add(`codex_compact:${token(r['run_id'])}`);
@@ -663,14 +664,14 @@ const buildPart = (records: Rec[], debug: DebugRecord[], now: Date): Part => {
     const phase = token(r['phase']); const requestId = token(r['request_id']); const at = iso(r['written_at']);
     return phase?.endsWith('_intent') && requestId && at ? [[`${requestId}:${phase}`, at]] : [];
   }));
-  const closed = new Set(debug.flatMap((row) => {
+  const closed = new Set(mods.flatMap((row) => {
     const own = row.component === 'router' ? token(row.rec['turn']) ?? token(row.rec['tool_use_id']) : token(row.rec['run_id']);
     if (!own) return [];
     const key = row.component === 'router' ? routerDecisionKey(row.rec) : `${token(row.rec['session_id']) ?? 'legacy'}:${own}`;
     return row.component === 'router' ? ['root', 'spawn', 'child_route'].includes(String(row.rec['event'])) ? [`router:${key}`] : [] : row.rec['stage'] === 'started' ? [] : [`${row.component}:${key}`];
   }));
   const responses = new Map<string, string>();
-  for (const row of debug) if (['root_result', 'child_result', 'spawn_result', 'spawn_native_result', 'model_failure'].includes(String(row.rec['event']))) {
+  for (const row of mods) if (['root_result', 'child_result', 'spawn_result', 'spawn_native_result', 'model_failure'].includes(String(row.rec['event']))) {
     // Older prepared records have no loop index. A later response in that exact turn still closes them.
     for (const index of [row.rec['index'] ?? null, null]) {
       const key = routerResponseKey(row.rec, index);
@@ -688,8 +689,8 @@ const buildPart = (records: Rec[], debug: DebugRecord[], now: Date): Part => {
     const group = grouped.get(key) ?? { source, host, mode: token(r['mode']) ?? 'unknown',
       ...(session && prompt && source !== 'evidence' ? { executionId: id(`execution:${host}:${session}:${prompt}`) } : {}), steps: [], rank: { cls: 0, at: '', index } };
     const phase = token(r['phase']);
-    if (r['attempted'] === true && ['admission_result', 'pre_result', 'interpretation_result', 'lean_result', 'codex_router_result'].includes(phase ?? '')) {
-      const { durationMs: _duration, elapsedMs: _elapsed, judgements: _judgements, ...rest } = step;
+    if (r['attempted'] === true && ['admission_result', 'pre_result', 'interpretation_result', 'codex_router_result'].includes(phase ?? '')) {
+      const { durationMs: _duration, elapsedMs: _elapsed, judgements: _judgements, receipt: _receipt, ...rest } = step;
       const { executionPath: _executionPath, ...response } = step;
       group.steps.push({ ...response, title: step.title.replace(/ · .+$/, ' · Jev 응답'), summary: step.state === 'error' ? 'Jev 판정 실패 · 원래 호출 유지' : step.judgements?.length
         ? `${step.judgements.length}개 선택형 응답 · 코드가 정책 판정에 사용`
@@ -699,10 +700,10 @@ const buildPart = (records: Rec[], debug: DebugRecord[], now: Date): Part => {
     if (group.mode === 'unknown' && token(r['mode'])) group.mode = token(r['mode'])!;
     grouped.set(key, group);
   }
-  for (const [position, row] of debug.entries()) {
-    const step = debugStep(row, now.getTime(), closed, responses, live);
+  for (const [position, row] of mods.entries()) {
+    const step = modStep(row, now.getTime(), closed, responses, live);
     if (!step) continue;
-    const key = debugGroup(row);
+    const key = modGroup(row);
     const group = grouped.get(key) ?? { source: row.component, host: 'claude' as const, mode: row.component, steps: [], rank: { cls: 1, at: row.at, index: order[position]! } };
     group.steps.push(step);
     grouped.set(key, group);
@@ -710,7 +711,7 @@ const buildPart = (records: Rec[], debug: DebugRecord[], now: Date): Part => {
   const separate = [...grouped].map(([key, group]): { run: OperationRun; rank: Rank } => {
     const steps = group.steps.sort((a, b) => a.at.localeCompare(b.at) || (a.lane === 'policy' ? 1 : 0) - (b.lane === 'policy' ? 1 : 0) || a.id.localeCompare(b.id));
     const state = operationState(steps);
-    const title = ({ gate: group.mode === 'lean' ? 'Lean 세션' : '게이트 세션', router: 'Router 실행', compact: 'Compact 실행', output: 'Output 실행', evidence: 'Evidence 검색', codex: 'Codex 실행' } as const)[group.source];
+    const title = ({ gate: '게이트 세션', router: 'Router 실행', compact: 'Compact 실행', evidence: 'Evidence 검색', codex: 'Codex 실행' } as const)[group.source];
     return { run: { id: id(key), ...(group.executionId ? { executionId: group.executionId } : {}), host: group.host, title, source: group.source, mode: group.mode, firstAt: steps[0]?.at ?? '', lastAt: steps.at(-1)?.at ?? '', state, steps }, rank: group.rank };
   });
   const native = codexOperations(records, now);
@@ -730,12 +731,12 @@ const buildPart = (records: Rec[], debug: DebugRecord[], now: Date): Part => {
   for (const r of records) {
     const phase = token(r['phase']) ?? '';
     if (phase === 'codex_compact' && r['jev_sent'] === true) { requests.add(`compact:codex:${token(r['session_id'])}:${token(r['run_id'])}`); continue; }
-    if (!['admission_intent', 'pre_intent', 'interpretation_intent', 'lean_intent', 'evidence_jev_intent', 'codex_router_intent'].includes(phase)
-      && !(r['attempted'] === true && ['admission_result', 'pre_result', 'interpretation_result', 'lean_result', 'evidence_jev_result', 'codex_router_result'].includes(phase))) continue;
+    if (!['admission_intent', 'pre_intent', 'interpretation_intent', 'evidence_jev_intent', 'codex_router_intent'].includes(phase)
+      && !(r['attempted'] === true && ['admission_result', 'pre_result', 'interpretation_result', 'evidence_jev_result', 'codex_router_result'].includes(phase))) continue;
     const kind = phase.replace(/_(intent|result)$/, '');
     requests.add(`${kind}:${token(r['request_id']) ?? token(r['invocation_id']) ?? iso(r['written_at'])}`);
   }
-  for (const row of debug) {
+  for (const row of mods) {
     if (row.component === 'compact' && row.rec['jev_sent'] === true) { requests.add(`compact:claude:${token(row.rec['session_id']) ?? 'legacy'}:${token(row.rec['run_id']) ?? row.at}`); continue; }
     if (row.component !== 'router' || (row.rec['event'] !== 'request' && row.rec['sent'] !== true)) continue;
     requests.add(`router:${routerDecisionKey(row.rec)}`);
@@ -760,45 +761,47 @@ const joins = (item: object, rec: Rec, group: () => string): string[] => {
   }
   return keys;
 };
-let partCache = new Map<string, { records: Rec[]; debug: DebugRecord[]; at: number; settled: boolean; part: Part }>();
+let partCache = new Map<string, { records: Rec[]; mods: ModRecord[]; at: number; settled: boolean; part: Part }>();
 const sameItems = <T>(a: T[], b: T[]): boolean => a.length === b.length && a.every((v, i) => v === b[i]);
 /** Connected parts of the recording. A settled part with the same records is reused instead of rebuilt. */
-const parts = (records: Rec[], debug: DebugRecord[], now: Date): Array<{ part: Part; recordIndex: number[]; debugIndex: number[] }> => {
-  const keys = [...records.map(r => joins(r, r, () => `${r['host'] === 'codex' ? 'codex' : 'claude'}:${gateGroup(r)}`)), ...debug.map(row => joins(row, row.rec, () => debugGroup(row)))];
+const parts = (records: Rec[], mods: ModRecord[], now: Date): Array<{ part: Part; recordIndex: number[]; modIndex: number[] }> => {
+  const keys = [...records.map(r => joins(r, r, () => `${r['host'] === 'codex' ? 'codex' : 'claude'}:${gateGroup(r)}`)), ...mods.map(row => joins(row, row.rec, () => modGroup(row)))];
   const parent = keys.map((_, i) => i);
   const find = (i: number): number => { while (parent[i] !== i) i = parent[i] = parent[parent[i]!]!; return i; };
   const owner = new Map<string, number>();
   keys.forEach((list, i) => { for (const key of list) { const j = owner.get(key); if (j === undefined) owner.set(key, i); else parent[find(i)] = find(j); } });
-  const groups = new Map<number, { key: string; records: Rec[]; recordIndex: number[]; debug: DebugRecord[]; debugIndex: number[] }>();
+  const groups = new Map<number, { key: string; records: Rec[]; recordIndex: number[]; mods: ModRecord[]; modIndex: number[] }>();
   keys.forEach((list, i) => {
     const root = find(i); let group = groups.get(root);
-    if (!group) groups.set(root, group = { key: list[0]!, records: [], recordIndex: [], debug: [], debugIndex: [] });
-    if (i < records.length) { group.records.push(records[i]!); group.recordIndex.push(i); } else { group.debug.push(debug[i - records.length]!); group.debugIndex.push(i - records.length); }
+    if (!group) groups.set(root, group = { key: list[0]!, records: [], recordIndex: [], mods: [], modIndex: [] });
+    if (i < records.length) { group.records.push(records[i]!); group.recordIndex.push(i); } else { group.mods.push(mods[i - records.length]!); group.modIndex.push(i - records.length); }
   });
   const at = now.getTime(), next: typeof partCache = new Map();
   const result = [...groups.values()].map(group => {
     const cached = partCache.get(group.key);
-    let entry = cached && cached.settled && at >= cached.at && sameItems(cached.records, group.records) && sameItems(cached.debug, group.debug) ? cached : undefined;
+    let entry = cached && cached.settled && at >= cached.at && sameItems(cached.records, group.records) && sameItems(cached.mods, group.mods) ? cached : undefined;
     if (!entry) {
       let newest = -Infinity;
       for (const r of group.records) if (typeof r['written_at'] === 'string') newest = Math.max(newest, Date.parse(r['written_at']) || -Infinity);
-      for (const row of group.debug) newest = Math.max(newest, Date.parse(row.at) || -Infinity);
-      entry = { records: group.records, debug: group.debug, at, settled: at - newest > SETTLED_MS, part: buildPart(group.records, group.debug, now) };
+      for (const row of group.mods) newest = Math.max(newest, Date.parse(row.at) || -Infinity);
+      entry = { records: group.records, mods: group.mods, at, settled: at - newest > SETTLED_MS, part: buildPart(group.records, group.mods, now) };
     }
     next.set(group.key, entry);
-    return { part: entry.part, recordIndex: group.recordIndex, debugIndex: group.debugIndex };
+    return { part: entry.part, recordIndex: group.recordIndex, modIndex: group.modIndex };
   });
   partCache = next;
   return result;
 };
 
 /** `whole` builds the recording in one pass with no reuse: the reference the split build must equal. */
-export const buildOperations = (records: Rec[], debug: DebugRecord[], now: Date, availability: { trace: boolean; debug: boolean; host?: Host }, whole = false): OperationsView => {
+export const buildOperations = (records: Rec[], mods: ModRecord[], now: Date, availability: { trace: boolean; host?: Host }, whole = false): OperationsView => {
+  // A native child skips routing on every model step; one row per step would bury the run list.
+  mods = mods.filter(m => !(m.component === 'router' && m.rec['event'] === 'child_route' && m.rec['skipped'] === 'native_child'));
   const entries: Array<{ run: OperationRun } & Rank> = [];
   const jevRequests = new Set<string>();
   let managed = false;
-  for (const { part, recordIndex, debugIndex } of whole ? [{ part: buildPart(records, debug, now), recordIndex: null, debugIndex: null }] : parts(records, debug, now)) {
-    part.runs.forEach((run, i) => { const rank = part.ranks[i]!; entries.push({ run, ...rank, index: (rank.cls === 1 ? debugIndex : recordIndex)?.[rank.index] ?? rank.index }); });
+  for (const { part, recordIndex, modIndex } of whole ? [{ part: buildPart(records, mods, now), recordIndex: null, modIndex: null }] : parts(records, mods, now)) {
+    part.runs.forEach((run, i) => { const rank = part.ranks[i]!; entries.push({ run, ...rank, index: (rank.cls === 1 ? modIndex : recordIndex)?.[rank.index] ?? rank.index }); });
     for (const key of part.requests) jevRequests.add(key);
     managed ||= part.managed;
   }
@@ -812,19 +815,27 @@ export const buildOperations = (records: Rec[], debug: DebugRecord[], now: Date,
     const steps = all.filter((s) => s.feature === f.id && !s.lifecycle);
     if (availability.host === 'codex') {
       const capability = (managed ? CODEX_CAPABILITIES : CODEX_PLUGIN_CAPABILITIES)[f.id];
-      return { ...f, source: 'trace', capability,
+      return { ...f, capability,
         count: steps.length, lastAt: steps.length ? steps.map(s => s.at).sort().at(-1)! : null,
         state: capability.mode === 'unsupported' ? 'unsupported' : steps.length ? 'observed' : availability.trace ? 'waiting' : 'unavailable' };
     }
-    return { ...f, count: steps.length, lastAt: steps.length ? steps.map((s) => s.at).sort().at(-1)! : null, state: steps.length ? 'observed' : availability[f.source] ? 'waiting' : 'unavailable' };
+    return { ...f, count: steps.length, lastAt: steps.length ? steps.map((s) => s.at).sort().at(-1)! : null, state: steps.length ? 'observed' : availability.trace ? 'waiting' : 'unavailable' };
   });
   const requests = jevRequests.size;
   const durations = all.filter((s) => s.lane === 'jev' && s.durationMs !== undefined).map((s) => s.durationMs!).sort((a, b) => a - b);
   const latest = all.filter((s) => s.lane === 'jev' && s.durationMs !== undefined).sort((a, b) => b.at.localeCompare(a.at))[0]?.durationMs ?? null;
   const percentile = (p: number): number | null => durations.length ? durations[Math.ceil(p * durations.length) - 1]! : null;
+  const sinceMs = now.getTime() - ACTIVITY_WINDOW_MS;
+  // ponytail: past ACTIVITY_CAP records in one minute only the newest ones are kept, so a burst that large would under-count.
   const recent = all.filter((s) => s.lane === 'jev' && s.durationMs !== undefined)
-    .sort((a, b) => b.at.localeCompare(a.at)).slice(0, 16).reverse().map((s) => ({ at: s.at, ms: s.durationMs! }));
-  const latency = { measured: durations.length, p50: percentile(.5), p95: percentile(.95), fastest: durations[0] ?? null, latest, recent };
+    .sort((a, b) => b.at.localeCompare(a.at)).filter((s, i) => i < 16 || Date.parse(s.at) >= sinceMs).slice(0, ACTIVITY_CAP).reverse().map((s) => ({ at: s.at, ms: s.durationMs! }));
+  const today: OperationsView['latency']['today'] = {}, day = now.toDateString();
+  for (const s of all) if (s.lane === 'jev' && s.durationMs !== undefined && new Date(s.at).toDateString() === day) {
+    const sum = today[s.host ?? 'claude'] ??= { calls: 0, input: 0, costUsd: 0, unpriced: 0 };
+    sum.calls++; sum.input += s.receipt?.input ?? 0;
+    if (s.receipt?.costUsd != null) sum.costUsd += s.receipt.costUsd; else sum.unpriced++;
+  }
+  const latency = { measured: durations.length, p50: percentile(.5), p95: percentile(.95), fastest: durations[0] ?? null, latest, recent, today };
   const newestFirst = (a: typeof all[number], b: typeof all[number]) => b.at.localeCompare(a.at) || b.id.localeCompare(a.id);
   // Tool and policy loops must not evict the most recent recorded Jev call for either host/feature.
   const latestJev = new Map<string, typeof all[number]>();
@@ -832,7 +843,9 @@ export const buildOperations = (records: Rec[], debug: DebugRecord[], now: Date,
     const key = `${step.host}:${step.feature}`;
     if (!latestJev.has(key)) latestJev.set(key, step);
   }
+  // The newest-120 cut must not drop a record of the last minute; the same cap as `latency.recent` applies.
   const feed = [...new Set([...firstSorted(all.filter(s => !s.lifecycle), 120, newestFirst),
+    ...firstSorted(all.filter(s => !s.lifecycle && Date.parse(s.at) >= sinceMs), ACTIVITY_CAP, newestFirst),
     ...firstSorted(all.filter(s => s.lifecycle), 20, newestFirst), ...latestJev.values()])].sort(newestFirst);
   const sig = createHash('sha256').update(JSON.stringify({ runs, features, requests, latency })).digest('hex').slice(0, 24);
   return { runs, features, feed, active: runs.filter((r) => r.state === 'active').length, attention: runs.filter((r) => r.state === 'attention').length, requests, latency, sig };

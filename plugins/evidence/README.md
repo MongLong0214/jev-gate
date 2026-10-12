@@ -114,7 +114,7 @@ inside, changed since is `source_changed`. A time stop can fall at a different p
 says where this one fell. A read-back of a file that changed returns `stale` without text rather than the new text
 under the old reference.
 
-A window whose text matches the credential patterns Lean and the Router use (private keys, `sk-…`, `ghp_…`, `AKIA…`,
+A window whose text matches the credential patterns the Router uses (private keys, `sk-…`, `ghp_…`, `AKIA…`,
 JWTs, quoted `password`/`api_key` values, `Authorization` headers, …) is returned as `omitted_secret` with its
 reference only, in searches and read-backs alike, and the call reports `source_secret`.
 

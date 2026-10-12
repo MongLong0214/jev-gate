@@ -104,7 +104,7 @@ type NextLike<E, R> = ((e: E) => Promise<R>) & { readonly signal: AbortSignal };
  */
 export const VERIFIED_HOST = '2.1.282';
 /** Identifies this loaded hook source, independently of a manifest updated on disk. */
-export const ROUTER_HOOK_VERSION = '0.8.17';
+export const ROUTER_HOOK_VERSION = '0.8.18';
 
 /**
  * Later 2.1 releases are accepted too. Pinned to one release, spawn routing went native after every host update: the
@@ -119,8 +119,6 @@ export const hostSupported = (base: string | undefined): boolean => {
 };
 const INHERITING_BUILT_INS = new Set(['general-purpose', 'claude', 'Plan', 'Explore']);
 const EXPLORE_FAMILIES = new Set(['haiku', 'sonnet', 'opus']);
-/** A Lean executor prompt: its packet is not visible here, so its model is Lean's and native's to decide (#44). */
-const LEAN_MARKER = /jev-lean-[0-9a-f]{16}/;
 /**
  * A jev-gate dispatch: Gate B already chose its model and effort (the tier's agent profile), so routing it again here
  * overrode the gate's answer with a second one. Its planner and workers are the plugin's own agents, and a worker the
@@ -152,11 +150,7 @@ const countsOf = (usage: unknown): Record<string, number> | null => {
   return Object.fromEntries(COUNTS.flatMap((k) => (typeof u[k] === 'number' && Number.isFinite(u[k]) ? [[k, u[k]]] : [])));
 };
 
-/**
- * Usage under key names the host's debug log keeps: it redacts the value of any key containing "token", so on 2.1.283
- * every `input_tokens` reached the log as a bare [REDACTED] and neither Jev's nor a step's usage could be read back.
- * `input_tokens` → `input`, `cache_read_input_tokens` → `cache_read`.
- */
+/** Usage recorded under short key names: `input_tokens` → `input`, `cache_read_input_tokens` → `cache_read`. */
 const loggable = (counts: object | null): Record<string, unknown> | null =>
   counts === null ? null : Object.fromEntries(Object.entries(counts).map(([k, v]) => [k.replace(/(_input)?_tokens$/, ''), v]));
 
@@ -729,6 +723,9 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
   const childStep = async (engine: RouterEngine, e: TurnStepEvent, id: string, signal: AbortSignal): Promise<Prepared | null> => {
     let c = children.get(id);
     if (!c || nativeChildren.has(id) || c.stopped) {
+      log(engine, { event: 'child_route', scope: 'child', agent_id: id, turn: e.turnId, index: e.index,
+        hook_version: ROUTER_HOOK_VERSION, sent: false,
+        skipped: c?.stopped ? 'child_stopped' : nativeChildren.has(id) ? 'native_child' : 'child_unregistered' });
       rememberNativeChild(id);
       return null;
     }
@@ -895,6 +892,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     }
     log(engine, {
       event: 'prepared',
+      hook_version: ROUTER_HOOK_VERSION,
       turn: e.turnId,
       index: e.index,
       agent_id: e.agentId ?? null,
@@ -910,7 +908,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       const applied = patch ? applyEffort({ ...e, ...(patch.model ? { model: patch.model } : {}), ...(patch.effort ? { effort: patch.effort } : {}) }, patch.effortEdit) : e;
       const child = e.agentId ? children.get(e.agentId) : undefined;
       if (child && !own.aborted) child.lastApplied = { model: applied.model, ...(applied.effort !== undefined ? { effort: applied.effort } : {}) };
-      log(engine, { event: 'model_request', turn: e.turnId, index: e.index, agent_id: e.agentId ?? null,
+      log(engine, { event: 'model_request', hook_version: ROUTER_HOOK_VERSION, turn: e.turnId, index: e.index, agent_id: e.agentId ?? null,
         scope: e.agentId === undefined ? 'root' : 'child', requested: applied.model, requested_effort: applied.effort ?? null });
       result = yield* next(applied);
     } catch (err) {
@@ -1010,7 +1008,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
    */
   const spawnDecision = async (engine: RouterEngine, e: SpawnEvent, live: AbortSignal): Promise<SpawnPlan | null> => {
     const allowFable = await within(frontierFor(engine), live);
-    const owned = e.subagentType.startsWith(GATE_AGENT_PREFIX) || GATE_ROUTE_NOTE.test(e.prompt) || LEAN_MARKER.test(e.prompt) || LEAN_MARKER.test(e.description);
+    const owned = e.subagentType.startsWith(GATE_AGENT_PREFIX) || GATE_ROUTE_NOTE.test(e.prompt);
     if (owned) {
       const token = /\[JEV_DISPATCH token=([a-f0-9-]{36})\]$/.exec(e.prompt)?.[1] ?? '';
       // No child exists before next, so a refused or unanswered check releases this token's unstarted reservation once.
@@ -1019,9 +1017,9 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
         try { return engine.dispatchPair && !live.aborted ? (await within(engine.dispatchPair(e.tool_use_id, model, allowFable, e.subagentType, false, token), live))?.deny : undefined; }
         catch { return undefined; }
       };
-      // Eligibility and an already allocated effort only: Gate owns its single batch; Lean adds no policy call.
+      // Eligibility and an already allocated effort only: Gate owns its single batch.
       let pair;
-      try { pair = engine.dispatchPair ? await within(engine.dispatchPair(e.tool_use_id, e.model ?? (e.subagentType === 'jev-gate:executor' || LEAN_MARKER.test(e.prompt) ? e.parentModel : ''), allowFable, e.subagentType, true, token), live) : null; }
+      try { pair = engine.dispatchPair ? await within(engine.dispatchPair(e.tool_use_id, e.model ?? '', allowFable, e.subagentType, true, token), live) : null; }
       catch { await release(''); return denied('policy_unavailable', 'Dispatch ownership unavailable; no child started.'); }
       if (pair?.deny) return denied('policy_denied', pair.deny);
       if (pair?.model) {
@@ -1035,7 +1033,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       const id = e.model ?? e.parentModel;
       const resolved = aliases[id] ?? id;
       if (!claudeTargetAllowed(resolved, allowFable)) return denied('no_eligible_model', 'No eligible automatic child model. Continue in the main session; no child started.');
-      spawnSkip(engine, e, LEAN_MARKER.test(e.prompt) || LEAN_MARKER.test(e.description) ? 'lean_marker' : 'gate_routed');
+      spawnSkip(engine, e, 'gate_routed');
       return { target: null, answers: null };
     }
     if (!config.enabled) return null;
@@ -1123,7 +1121,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       log(engine, { event: 'budget_timeout', scope: 'spawn', tool_use_id: e.tool_use_id });
     }
     wait.dispose();
-    if (!plan?.deny && ((!plan && (e.subagentType.startsWith(GATE_AGENT_PREFIX) || GATE_ROUTE_NOTE.test(e.prompt) || LEAN_MARKER.test(e.prompt) || LEAN_MARKER.test(e.description))) || !baselineAllowed && !plan?.target))
+    if (!plan?.deny && ((!plan && (e.subagentType.startsWith(GATE_AGENT_PREFIX) || GATE_ROUTE_NOTE.test(e.prompt))) || !baselineAllowed && !plan?.target))
       plan = denied(baselineAllowed ? 'unverified' : 'restricted_baseline', 'Automatic dispatch could not be verified; continue in the main session. No child started.');
     // As on turn.step: the host has already spawned natively, so nothing here may spawn again.
     if (next.signal.aborted || own.aborted) throw new Error('jev-router: spawn dispatch abandoned before next');
@@ -1140,10 +1138,11 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     }
     const answers = own.aborted ? null : (plan?.answers ?? null);
     const owned = e.subagentType.startsWith(GATE_AGENT_PREFIX) || GATE_ROUTE_NOTE.test(e.prompt);
-    const perStep = config.enabled && !e.fork && e.subagentType !== 'jev-gate:executor' && !LEAN_MARKER.test(e.prompt) && !LEAN_MARKER.test(e.description) &&
+    const perStep = config.enabled && !e.fork &&
       (owned || inheritSkip(e) === null) && (config.routeSubagentModel || config.routeSubagentEffort) && !!engine.childContext;
     log(engine, {
       event: 'prepared',
+      hook_version: ROUTER_HOOK_VERSION,
       tool_use_id: e.tool_use_id,
       scope: 'spawn',
       preparation_ms: Math.max(0, engine.now() - startedAt),

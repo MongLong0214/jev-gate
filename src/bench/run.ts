@@ -8,8 +8,6 @@ import { fileURLToPath } from 'node:url';
 import { isSubscriptionOAuth, parseAuthStatus, subagentModelOverride, AUTH_CONFLICT_ENV, type CommandResult } from '../auth.js';
 import { DENIALS_BEFORE_STOP } from '../brief.js';
 import { DEFAULT_CONFIG, loadConfig } from '../config.js';
-import { LEAN_ACTION_CONFIDENCE, LEAN_COORDINATOR_RESERVE_BYTES, LEAN_OMISSION_CONFIDENCE, LEAN_PACKET_BUDGET_BYTES, LEAN_PACKET_MAX_BYTES } from '../lean.js';
-import { MAX_OPTIONAL_GROUPS, SOURCE_MAX_BYTES, SOURCE_MAX_MS } from '../lean-source.js';
 import { OWNED_AGENTS, type ConfigV5, type Tier } from '../types.js';
 import { gradeDir, type Grade } from './checker.js';
 import { toRowView } from './report.js';
@@ -30,15 +28,11 @@ export type Arm =
   | 'jev_hierarchy'
   | 'jev_single'
   | 'jev_forced_orchestration'
-  /** JGL-05: the three lean arms. Same model, same normal auto-compact, one packet budget shared by the last two. */
-  | 'native_auto'
-  | 'recent_packet'
-  | 'jev_lean'
   /**
-   * #45 offline part: the Router comparison. `router_native` is plain host with nothing enabled (identical to
-   * `native_auto`'s spec, kept as a separate name so a Router run reads as its own three-arm group); `router` loads
-   * the jev-gate-router plugin through Function Hooks; `router_fixed` is the no-Jev alternative, a fixed effort
-   * chosen up front with `--fixed-effort`, so a Router win is not just "effort changed".
+   * #45 offline part: the Router comparison. `router_native` is plain host with nothing enabled, kept as its own name
+   * so a Router run reads as its own three-arm group; `router` loads the jev-gate-router plugin through Function Hooks;
+   * `router_fixed` is the no-Jev alternative, a fixed effort chosen up front with `--fixed-effort`, so a Router win is
+   * not just "effort changed".
    */
   | 'router_native'
   | 'router'
@@ -49,13 +43,11 @@ export const KEEP_ENV: readonly string[] = ['PATH', 'HOME', 'USER', 'LOGNAME', '
 const KEEP_ENV_PREFIX = 'FAKE_CLAUDE_';
 const keepEnvVar = (key: string): boolean => KEEP_ENV.includes(key) || key.startsWith(KEEP_ENV_PREFIX);
 
-/** The legacy default. A lean run selects its own three arms with `--arms lean`; it is not mixed into this set. */
+/** The legacy default. A Router run selects its own three arms with `--arms router`; it is not mixed into this set. */
 export const ALL_ARMS: readonly Arm[] = ['sonnet_native', 'frontier_native', 'native_hierarchy', 'orchestrated_control', 'frontier_orchestrated', 'jev_hierarchy', 'jev_single', 'jev_forced_orchestration'];
-/** JGL-05: the three arms of the lean comparison. `--arms lean` is shorthand for exactly these. */
-export const LEAN_ARMS: readonly Arm[] = ['native_auto', 'recent_packet', 'jev_lean'];
-/** #45: the three arms of the Router comparison. `--arms router` is shorthand for exactly these; not in ALL_ARMS/LEAN_ARMS. */
+/** #45: the three arms of the Router comparison. `--arms router` is shorthand for exactly these; not in ALL_ARMS. */
 export const ROUTER_ARMS: readonly Arm[] = ['router_native', 'router', 'router_fixed'];
-export const KNOWN_ARMS: readonly Arm[] = [...ALL_ARMS, ...LEAN_ARMS, ...ROUTER_ARMS];
+export const KNOWN_ARMS: readonly Arm[] = [...ALL_ARMS, ...ROUTER_ARMS];
 
 /**
  * #45: the Router plugin options this runner turns on for the `router` arm, frozen here so the plan (buildPlan's
@@ -71,7 +63,7 @@ export interface ArmSpec {
   arm: Arm;
   rootModel: string;
   plugin: boolean;
-  mode: 'native' | 'auto' | 'lean' | null;
+  mode: 'native' | 'auto' | null;
   /** A9/A15/A16: forced orchestration through the same state, guard, profiles and cap. */
   experimentAdmission: 'orchestrated' | null;
   /**
@@ -89,14 +81,8 @@ export interface ArmSpec {
    */
   admittedShape?: 'single';
   /**
-   * JGL-05: the deterministic recency comparison. It is an explicitly enabled research dependency of this runner,
-   * not a product mode: the cell runs with no provider key at all, so the arm cannot make a Jev request even by
-   * accident, and nothing but this flag selects it.
-   */
-  benchRecent?: true;
-  /**
    * #45: this arm loads the jev-gate-router plugin through Function Hooks (env `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`,
-   * `--plugin-dir mods/router`, options via a per-cell `--settings` file, `--debug-file` for the decision log). It is
+   * `--plugin-dir mods/router`, options via a per-cell `--settings` file, a per-cell trace directory for the decision records). It is
    * a separate plugin from the legacy jev-gate one, so `plugin`/`mode` stay `false`/`null` for this arm.
    */
   routerEnabled?: true;
@@ -117,10 +103,6 @@ export const armSpecs = (frontierModel: string, fixedEffort: string | null = nul
   jev_hierarchy: { arm: 'jev_hierarchy', rootModel: 'sonnet', plugin: true, mode: 'auto', experimentAdmission: null, diagnostic: false },
   jev_single: { arm: 'jev_single', rootModel: 'sonnet', plugin: true, mode: 'auto', experimentAdmission: null, diagnostic: false, admittedShape: 'single' },
   jev_forced_orchestration: { arm: 'jev_forced_orchestration', rootModel: 'sonnet', plugin: true, mode: 'auto', experimentAdmission: 'orchestrated', diagnostic: true },
-  // JGL-05. The baseline keeps its own native delegation and helpers: crippling it would not be ordinary Claude.
-  native_auto: { arm: 'native_auto', rootModel: 'sonnet', plugin: false, mode: null, experimentAdmission: null, diagnostic: false },
-  recent_packet: { arm: 'recent_packet', rootModel: 'sonnet', plugin: true, mode: 'lean', experimentAdmission: null, diagnostic: false, benchRecent: true },
-  jev_lean: { arm: 'jev_lean', rootModel: 'sonnet', plugin: true, mode: 'lean', experimentAdmission: null, diagnostic: false },
   // #45. The frontier root at the owner's effort, with nothing else added: the native side of the Router comparison is
   // the session the Router is meant to make cheaper, rather than a Sonnet one it has little to lower from.
   router_native: { arm: 'router_native', rootModel: frontierModel, plugin: false, mode: null, experimentAdmission: null, diagnostic: false, ...(baseEffort !== null ? { effort: baseEffort } : {}) },
@@ -246,63 +228,6 @@ export interface WorkerTierRecord {
   pinned: number;
 }
 
-/**
- * JGL-05: what lean actually did in this cell, read from the hook's own records. Every field is an observation.
- * `selections` counts admission events that got as far as a decision; `jev_attempts` counts requests actually sent,
- * which is not the same number and never becomes zero because a request failed.
- */
-export interface LeanV5 {
-  /**
-   * L6 accounting revision. Cells ingested before it carry no field, and their token fields meant something else:
-   * `jev_input_tokens` was the known subtotal and `jev_input_tokens_known` counted responses. The report reads such
-   * a block as revision 1: its known subtotal relabelled, its complete totals unknown.
-   */
-  accounting: 1 | 2;
-  selections: number;
-  policy: Record<string, number>;
-  /** Requests actually sent, one per request identity however many records repeat it. */
-  jev_attempts: number;
-  /**
-   * An intent with no result, possibly sent and billed, plus every record with no request identity, which can be
-   * neither joined nor de-duplicated. Any of them leaves the complete totals unknown.
-   */
-  jev_attempt_unknown: number;
-  /** Responses whose charged input count came back -- a count of responses, not of tokens. */
-  jev_responses_known: number;
-  /** The input tokens of those responses; null only when the safe sum overflowed. */
-  jev_input_tokens_known: number | null;
-  /** Every request's input tokens, or null when any is unknown. Never replaced by the subtotal. */
-  jev_input_tokens: number | null;
-  /** Every request's cost, or null when any charged count, model price or possibly sent request is unknown. */
-  jev_cost_usd: number | null;
-  jev_cost_known_subtotal: number;
-  /**
-   * #214: the cost of each sent request by the prompt it decided (`request_sha256`), so one prompt of an episode can be
-   * charged its own Jev spend. Null for a request whose cost is unknown; absent on cells ingested before it existed.
-   */
-  jev_cost_by_request?: Record<string, number | null>;
-  /** Repeated records of one request, collapsed into it rather than counted as more requests. */
-  duplicate_records: number;
-  http_codes: Record<string, number>;
-  action: Record<string, number>;
-  reasons: Record<string, number>;
-  packets_proposed: number;
-  packets_dispatched: number;
-  dispatch_denied: Record<string, number>;
-  recommendation_not_taken: number;
-  retained_groups: number;
-  omitted_groups: number;
-  unassessed: number;
-  mandatory_bytes: number | null;
-  optional_bytes: number | null;
-  source_bytes_read: number | null;
-  coverage: Record<string, number>;
-  packet_bytes_max: number | null;
-  composed_bytes_max: number | null;
-  observed_model: Record<string, number>;
-  terminal_status: Record<string, number>;
-}
-
 /** Schema 5 additions (#28, ADR A13). Every field is observed; nothing is inferred from agent frontmatter. */
 export interface GateV5 {
   admission: { attempted: boolean; known_not_sent: boolean; forced: boolean; decided: boolean | null; choice: string | null; confidence: number | null; decision: string | null; reason: string | null };
@@ -343,8 +268,8 @@ export interface RouterSpawnResult {
 }
 
 /**
- * #45: what the Router actually did in this cell, read from `jev-router {json}` lines in the cell's debug log
- * (`ingestRouterLog`). `root_assessed`/`spawn_assessed` count every non-skipped decision attempt (Jev was consulted,
+ * #45: what the Router actually did in this cell, read from the `mod_router` records in the cell's trace directory
+ * (`ingestRouterRecords`). `root_assessed`/`spawn_assessed` count every non-skipped decision attempt (Jev was consulted,
  * whatever it answered); `root_applied`/`spawn_applied` are the ones that ever reached the host as a step-changing
  * request -- a step can be assessed and proposed and still never applied (`root_stop`/`spawn_stop`).
  *
@@ -355,11 +280,11 @@ export interface RouterSpawnResult {
  * an ingestion bug.
  */
 export interface RouterV5 {
-  /** Accounting revision, mirroring LeanV5's pattern for a future migration; this bench has produced only 1. */
+  /** Accounting revision, kept so a future migration can tell old blocks apart; this bench has produced only 1. */
   accounting: 1;
-  /** `jev-router `-prefixed lines whose JSON payload failed to parse (truncated tail, corruption, noise). */
+  /** `mod_router` record files that failed to parse as a JSON object. */
   unparsable_lines: number;
-  /** The cell's debug log: `read`, `missing` or `unreadable`; null before ingestion. */
+  /** The cell's trace directory: `read`, `missing` or `unreadable`; null before ingestion. */
   log: 'read' | 'missing' | 'unreadable' | null;
   diagnostic: { root_effort: boolean; root_model: boolean; spawn_model: boolean; key: string | null } | null;
   root_assessed: number;
@@ -400,7 +325,7 @@ export interface CellRecord {
   plugin_expected: boolean;
   /** #45: whether this arm's spec turned the Router on. Read by the report to tell "disabled" from "unobserved". */
   router_expected: boolean;
-  mode: 'native' | 'auto' | 'lean' | null;
+  mode: 'native' | 'auto' | null;
   /** Retired V4 field, kept so a reader that knows only V4 cells still parses a V5 one. */
   experimental_allocation: string | null;
   experiment_admission: 'orchestrated' | null;
@@ -484,9 +409,7 @@ export interface CellRecord {
     /** T6: calls whose required or observed model could not be normalized; neither a match nor a mismatch. */
     target_model_unknown: number;
   } & GateV5;
-  /** JGL-05: the lean path's own observations. Empty on an arm that never ran lean. */
-  lean: LeanV5;
-  /** #45: the Router path's own observations, read from the cell's debug log. Empty on an arm that never ran it. */
+  /** #45: the Router path's own observations, read from the cell's trace records. Empty on an arm that never ran it. */
   router: RouterV5;
   final_snapshot: (SnapshotReport & { path: string }) | null;
   /** #214: the work tree when the job prompt's turn ended, before the follow-up; `grade` reads it when there is one. */
@@ -552,11 +475,11 @@ export const parseArgs = (argv: string[]): Options => {
     else if (a === '--allow-env-conflicts') o.allowEnvConflicts = true;
     else if (a === '--arms') {
       const raw = next().trim();
-      // `--arms lean`/`--arms router` are profile shorthands: the three arms of that comparison and nothing else.
-      // `router` is also a single arm's own name, but the profile wins here, exactly as `lean` does for JGL-05.
-      const arms = raw === 'lean' ? [...LEAN_ARMS] : raw === 'router' ? [...ROUTER_ARMS] : raw.split(',').map((s) => s.trim()).filter(Boolean);
+      // `--arms router` is a profile shorthand: the three arms of that comparison and nothing else. `router` is also a
+      // single arm's own name, but the profile wins here.
+      const arms = raw === 'router' ? [...ROUTER_ARMS] : raw.split(',').map((s) => s.trim()).filter(Boolean);
       const bad = arms.filter((x) => !(KNOWN_ARMS as readonly string[]).includes(x));
-      if (bad.length || arms.length === 0 || new Set(arms).size !== arms.length) throw new Error(`--arms must be \`lean\`, \`router\`, or a unique subset of ${KNOWN_ARMS.join(',')}`);
+      if (bad.length || arms.length === 0 || new Set(arms).size !== arms.length) throw new Error(`--arms must be \`router\` or a unique subset of ${KNOWN_ARMS.join(',')}`);
       o.arms = arms as Arm[];
     } else if (a === '--fixed-effort') {
       const level = next().trim();
@@ -730,24 +653,8 @@ export const buildPlan = (o: Options, cases: CodingCase[], manifestVersion: numb
       launch_env: { CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' },
       effective_config_nonsecret: effective.ok ? { ...effective.config, source: effective.source } : { error: effective.error },
       /**
-       * JGL-05: the packet policy, frozen in the plan before anything is executed. `recent_packet` and `jev_lean`
-       * fill the SAME budget, and recording it here is what stops it being adjusted after Jev's retained size is
-       * known. These are code constants, not configuration, so the plan records the values actually compiled in.
-       */
-      lean_packet_policy: {
-        packet_budget_bytes: LEAN_PACKET_BUDGET_BYTES,
-        packet_max_bytes: LEAN_PACKET_MAX_BYTES,
-        coordinator_reserve_bytes: LEAN_COORDINATOR_RESERVE_BYTES,
-        max_optional_groups: MAX_OPTIONAL_GROUPS,
-        source_max_bytes: SOURCE_MAX_BYTES,
-        source_max_ms: SOURCE_MAX_MS,
-        action_confidence: LEAN_ACTION_CONFIDENCE,
-        omission_confidence: LEAN_OMISSION_CONFIDENCE,
-        note: 'Uncalibrated development constants, identical for recent_packet and jev_lean. Recency fills this budget newest-first with no requirement to omit anything.',
-      },
-      /**
-       * #45: the Router options and the two efforts, frozen before anything is executed, exactly like the lean packet
-       * policy above. router_native carries no options: it is the plain host at base_effort.
+       * #45: the Router options and the two efforts, frozen before anything is executed, so neither can be adjusted
+       * after a result is known. router_native carries no options: it is the plain host at base_effort.
        */
       router_policy: {
         // The source copied to inputs/router-plugin at execution; frozen_inputs.router_sha256 is what ran.
@@ -812,9 +719,8 @@ export const preflight = (o: Options, needsJev: boolean): Preflight => {
   for (const k of observed) env_observed[k] = process.env[k] ?? null;
   const typesafe_key_present = Boolean(process.env['TYPESAFE_API_KEY']);
   if (needsJev && !typesafe_key_present) errors.push('TYPESAFE_API_KEY not set: the Jev treatment arms would only exercise key_missing preservation');
-  // The agent definition each selected arm actually needs: the lean arms ship one executor and none of the six roles.
   const specs = armSpecs(o.frontierModel, o.fixedEffort, o.baseEffort);
-  const needed = [...new Set(o.arms.filter((a) => specs[a].plugin).map((a) => (specs[a].mode === 'lean' ? 'executor.md' : 'worker.md')))];
+  const needed = o.arms.some((a) => specs[a].plugin) ? ['worker.md'] : [];
   // #45: a run of Router arms alone loads no legacy plugin, so it neither needs nor checks one.
   const plugin_hook_present =
     needed.length === 0 ||
@@ -852,38 +758,6 @@ export const toNanoUsd = (usd: number): number => Math.ceil(usd * NANO_PER_USD);
 export const capReached = (knownNanoUsd: number, capUsd: number): boolean => knownNanoUsd >= toNanoUsd(capUsd);
 
 const emptyJevPhase = (): JevPhaseUsage => ({ attempts: 0, tokens: null, tokens_known: 0, cost_usd: null });
-
-export const emptyLeanV5 = (): LeanV5 => ({
-  accounting: 2,
-  selections: 0,
-  policy: {},
-  jev_attempts: 0,
-  jev_attempt_unknown: 0,
-  jev_responses_known: 0,
-  jev_input_tokens_known: 0,
-  jev_input_tokens: 0,
-  jev_cost_usd: 0,
-  jev_cost_known_subtotal: 0,
-  duplicate_records: 0,
-  http_codes: {},
-  action: {},
-  reasons: {},
-  packets_proposed: 0,
-  packets_dispatched: 0,
-  dispatch_denied: {},
-  recommendation_not_taken: 0,
-  retained_groups: 0,
-  omitted_groups: 0,
-  unassessed: 0,
-  mandatory_bytes: null,
-  optional_bytes: null,
-  source_bytes_read: null,
-  coverage: {},
-  packet_bytes_max: null,
-  composed_bytes_max: null,
-  observed_model: {},
-  terminal_status: {},
-});
 
 export const emptyRouterV5 = (): RouterV5 => ({
   accounting: 1,
@@ -971,7 +845,6 @@ export const emptyCell = (cs: CodingCase, spec: ArmSpec, repetition: number): Ce
   api_retries: 0,
   result: null,
   gate: { prompt_injections: 0, agent_calls: 0, owned_calls: 0, pinned: 0, eligible_attempted: 0, patched: 0, preserved: 0, preserve_reasons: {}, skipped: {}, attempt_unknown: 0, missing_pre_records: 0, jev_model: null, jev_input_tokens: null, jev_input_tokens_known: 0, jev_cost_usd: null, gate_ms_total: null, hint_delivered: 0, target_model_matches: 0, target_model_mismatches: 0, target_model_unknown: 0, ...emptyGateV5() },
-  lean: emptyLeanV5(),
   router: emptyRouterV5(),
   final_snapshot: null,
   measured_snapshot: null,
@@ -1259,8 +1132,6 @@ const emptyTier = (): WorkerTierRecord => ({ calls: 0, proposed: {}, observed_mo
  */
 export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<Tier, string> = DEFAULT_CONFIG.models): void => {
   const records: Array<Record<string, unknown>> = [];
-  // A record that cannot be read could belong to any producer, so it leaves every producer's complete total unknown.
-  let unreadable = 0;
   if (existsSync(traceDir)) {
     for (const f of readdirSync(traceDir).filter((x) => x.endsWith('.json')).sort()) {
       try {
@@ -1268,127 +1139,11 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
         if (isRecord(r) && r['version'] === 5 && typeof r['phase'] === 'string') records.push(r);
       } catch {
         cell.gate.attempt_unknown++;
-        unreadable++;
       }
     }
   }
   const g = cell.gate;
   const phase = (p: string): Array<Record<string, unknown>> => records.filter((r) => r['phase'] === p);
-
-  /**
-   * JGL-05: lean writes its own phases and shares none of the gate ones, so it is read separately. Nothing here is
-   * inferred: an attempt with no usage stays unknown, a proposed packet is not a dispatch, and a dispatched packet
-   * is not a checked task.
-   */
-  const L = cell.lean;
-  const maxOf = (cur: number | null, v: number | null): number | null => (v === null ? cur : cur === null ? v : Math.max(cur, v));
-  for (const r of phase('lean_result')) {
-    L.selections += 1;
-    bump(L.policy, str(r['policy']) ?? 'jev');
-    const src = isRecord(r['source']) ? r['source'] : null;
-    const groups = isRecord(r['groups']) ? r['groups'] : null;
-    if (src) {
-      bump(L.coverage, str(src['coverage']) ?? 'unknown');
-      L.unassessed += num(src['unassessed']) ?? 0;
-      L.source_bytes_read = maxOf(L.source_bytes_read, num(src['bytes_read']));
-    }
-    if (groups) {
-      L.mandatory_bytes = maxOf(L.mandatory_bytes, num(groups['mandatory_bytes']));
-      L.optional_bytes = maxOf(L.optional_bytes, num(groups['optional_bytes']));
-    }
-    const d = isRecord(r['decision']) ? r['decision'] : null;
-    if (d) {
-      bump(L.action, str(d['action']) ?? 'unknown');
-      const reason = str(d['reason']);
-      if (reason) bump(L.reasons, reason);
-    }
-  }
-
-  /**
-   * L6: Jev spend is joined per actual request over the union of intents and results, by the `request_id` the hook
-   * writes into both. A result alone still counts. An intent with no result may have been sent and billed, so it
-   * leaves the complete totals unknown. A confirmed local no-send is zero. A repeated record of one request is one
-   * request. The hook writes its intent before sending and does not send when it cannot, so with this cell's trace
-   * directory set, a request with no intent was not sent. Money needs only the charged input count and a known
-   * price: output is free, so an unknown output count never makes a known cost unknown.
-   *
-   * A record with no `request_id` can be neither joined nor de-duplicated: pairing keyless intents and results by
-   * count would let a lost result and a repeated one cancel out. Each is counted unknown and kept out of the known
-   * subtotal, so the subtotal stays a lower bound and the complete totals are null.
-   */
-  const leanRequests = new Map<string, { intent: boolean; result: Record<string, unknown> | null }>();
-  let keylessRecords = 0;
-  for (const r of records) {
-    if (r['phase'] !== 'lean_intent' && r['phase'] !== 'lean_result') continue;
-    const k = str(r['request_id']);
-    if (k === null) {
-      if (r['phase'] === 'lean_intent' || r['attempted'] === true) keylessRecords += 1;
-      continue;
-    }
-    const entry = leanRequests.get(k) ?? { intent: false, result: null };
-    if (r['phase'] === 'lean_intent') {
-      if (entry.intent) L.duplicate_records += 1;
-      entry.intent = true;
-    } else if (entry.result === null) entry.result = r;
-    else L.duplicate_records += 1;
-    leanRequests.set(k, entry);
-  }
-  const sent: Array<Record<string, unknown>> = [];
-  let possiblySent = keylessRecords;
-  for (const { result } of leanRequests.values()) {
-    if (result === null) possiblySent += 1;
-    else if (result['attempted'] === true) sent.push(result);
-  }
-  const tokens: Array<number | null> = [];
-  const costs: Array<number | null> = [];
-  L.jev_cost_by_request = {};
-  for (const r of sent) {
-    const http = isRecord(r['http']) ? r['http'] : null;
-    bump(L.http_codes, http ? (str(http['code']) ?? `http_${String(num(http['status']) ?? 'none')}`) : 'unrecorded');
-    const jev = isRecord(r['jev']) ? r['jev'] : null;
-    const usage = jev && isRecord(jev['usage']) ? jev['usage'] : null;
-    const input = usage ? tokenCount(usage['input_tokens']) : null;
-    tokens.push(input);
-    const cost = estimateJevCostUsd(jev ? str(jev['model']) : null, input);
-    costs.push(cost);
-    const prompt = str(r['request_sha256']);
-    if (prompt !== null) {
-      const prev = L.jev_cost_by_request[prompt];
-      L.jev_cost_by_request[prompt] = prev === undefined ? cost : prev === null || cost === null ? null : prev + cost;
-    }
-  }
-  const knownTokens = tokens.filter((t): t is number => t !== null);
-  const knownCosts = costs.filter((c): c is number => c !== null);
-  const complete = possiblySent === 0 && unreadable === 0;
-  L.jev_attempts = sent.length;
-  L.jev_attempt_unknown = possiblySent;
-  L.jev_responses_known = knownTokens.length;
-  L.jev_input_tokens_known = safeSum(knownTokens);
-  L.jev_input_tokens = complete ? safeSum(tokens) : null;
-  L.jev_cost_known_subtotal = knownCosts.reduce((a, b) => a + b, 0);
-  L.jev_cost_usd = complete && knownCosts.length === costs.length ? L.jev_cost_known_subtotal : null;
-  for (const r of phase('lean_dispatch')) {
-    const reason = str(r['reason']);
-    if (r['applied'] === true) {
-      L.packets_dispatched += 1;
-      L.retained_groups += num(r['retained_groups']) ?? 0;
-      L.omitted_groups += num(r['omitted_groups']) ?? 0;
-      L.composed_bytes_max = maxOf(L.composed_bytes_max, num(r['composed_bytes']));
-    } else if (reason === 'packet_proposed') {
-      L.packets_proposed += 1;
-      L.packet_bytes_max = maxOf(L.packet_bytes_max, num(r['packet_bytes']));
-    } else if (reason === 'recommendation_not_taken') {
-      L.recommendation_not_taken += 1;
-    } else if (reason) {
-      bump(L.dispatch_denied, reason);
-    }
-  }
-  for (const r of phase('lean_post')) {
-    bump(L.terminal_status, str(r['status']) ?? 'unrecorded');
-    const m = str(r['observed_model']);
-    if (m) bump(L.observed_model, m);
-  }
-
   const byId = (p: string, id: string): Array<Record<string, unknown>> => records.filter((r) => r['phase'] === p && r['tool_use_id'] === id);
   const answer = (r: Record<string, unknown> | null, key: string): Record<string, unknown> | null => {
     const answers = r && isRecord(r['answers']) ? r['answers'] : null;
@@ -1684,17 +1439,13 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
   g.jev_cost_usd = g.jev_input_tokens === null ? null : g.jev_input_tokens === 0 ? 0 : estimateJevCostUsd(g.jev_model ?? 'jev-1.13.0', g.jev_input_tokens);
 };
 
-const ROUTER_LOG_PREFIX = 'jev-router ';
 /** The Jev model the Router calls (mods/router/hooks/client.ts JEV_MODEL) -- fixed, never per-record. */
 const ROUTER_JEV_MODEL = 'jev-1.13.0';
 
 /**
- * #45: reads a cell's `--debug-file` output and folds every `jev-router {json}` line into `cell.router`. The debug
- * log is plain host debug text, not the `trace/*.json` records `ingestTraces` reads, so this is a separate ingestion
- * over a separate file. Every other debug line -- another category's output, blank lines, a truncated final write --
- * is tolerated and simply skipped; a line that carries the Router's own prefix but fails to parse as JSON is counted
- * in `unparsable_lines` rather than silently dropped, so a corrupt log is visible as a fact rather than read as zero
- * activity.
+ * #45: reads a cell's `mod_router-*.json` trace records (the Router's recorder writes one per decision) and folds them
+ * into `cell.router`, in `written_at` order. A file that is not a JSON object is counted in `unparsable_lines`
+ * rather than silently dropped, so a corrupt trace is visible as a fact rather than read as zero activity.
  *
  * Two different `usage` fields exist in these records and this function never conflates them: `root`/`spawn`/`late`
  * events carry Router's OWN Jev assessment usage (parsed from the Jev HTTP response body in client.ts) and are the
@@ -1702,58 +1453,38 @@ const ROUTER_JEV_MODEL = 'jev-1.13.0';
  * counts of the ROUTED Claude call (already priced as ordinary Claude spend elsewhere) and is kept only as a raw
  * per-step observation in `root_applied`, per mods/router/README.md: "these are per-step records, not a saving."
  *
- * PR #49 (`mods/router/hooks/router.ts` `loggable()`): the host's debug log redacts the value of any key containing
- * "token" to a bare, unquoted `[REDACTED]`, which is not valid JSON -- so on 2.1.283 every old-format usage line
- * failed `JSON.parse` outright and was already being counted in `unparsable_lines`, never misread as zero. The
- * Router now logs `input`/`output`/`cache_read`/`cache_creation` instead of `input_tokens`/`output_tokens`/
- * `cache_read_input_tokens`/`cache_creation_input_tokens`. `readUsage` below reads the new key first and falls back
- * to the old one only for a line that still parses as JSON under it (never true for a real redacted log line, but
- * costs nothing to keep for an older cached log or a hand-built fixture).
+ * The Router records `input`/`output`/`cache_read`/`cache_creation`. `readUsage` below reads that key first and
+ * falls back to `input_tokens` for an older cached record or a hand-built fixture.
  */
-export const ingestRouterLog = (cell: CellRecord, logPath: string): void => {
+export const ingestRouterRecords = (cell: CellRecord, traceDir: string): void => {
   const r = cell.router;
-  let raw: string;
+  const records: Array<Record<string, unknown>> = [];
   try {
-    if (!existsSync(logPath)) {
-      r.log = 'missing';
-      raw = '';
-    } else raw = readFileSync(logPath, 'utf8');
+    if (!existsSync(traceDir)) r.log = 'missing';
+    else {
+      for (const f of readdirSync(traceDir).filter((x) => x.startsWith('mod_router-') && x.endsWith('.json'))) {
+        try {
+          const rec = JSON.parse(readFileSync(join(traceDir, f), 'utf8')) as unknown;
+          if (isRecord(rec)) records.push(rec); else r.unparsable_lines++;
+        } catch {
+          r.unparsable_lines++;
+        }
+      }
+      records.sort((a, b) => (str(a['written_at']) ?? '').localeCompare(str(b['written_at']) ?? ''));
+    }
   } catch {
     r.log = 'unreadable';
-    raw = '';
   }
-  // Outside a Router arm the file is not expected and the Router is a producer known disabled: zero, as initialised.
+  // Outside a Router arm the directory is not expected and the Router is a producer known disabled: zero, as initialised.
   if (r.log !== null && !cell.router_expected) return;
   if (r.log === null) r.log = 'read';
-  const lines = raw.split('\n');
-  // The host ends every debug line with a newline (all eight host-obs-2026-09-27 logs do), so a last element that is
-  // not empty is a write the session never finished. It is counted as unparsable without being read, rather than
-  // tested for the `jev-router ` prefix: cut short, it can lack even the full prefix (`jev-ro`), and a prefix-only
-  // test would pass it over as host chatter and let a sent request's missing line read as a known zero.
-  const tail = lines.pop();
-  if (tail !== undefined && tail !== '') r.unparsable_lines++;
   // A `late` reply's usage belongs to the sent attempt that asked it, joined by (scope, id) -- the same identity the
   // hook logs under, never by count: two attempts under one key are two entries, and only the most recent of them
   // still missing usage is filled in, so a lost reply and a late one can never be swapped for each other.
   const sent: Array<{ key: string; tokens: number | null }> = [];
-  // `input` is PR #49's key; `input_tokens` is read only as a fallback for a line that still parses as JSON under
-  // the pre-#49 name (never true for a genuinely redacted log line -- that fails JSON.parse above and is already
-  // counted in `unparsable_lines`, not read here as zero).
+  // `input` is the Router's key; `input_tokens` is read only as a fallback for a record written under the older name.
   const readUsage = (v: unknown): { input_tokens: number | null } | null => (isRecord(v) ? { input_tokens: tokenCount(v['input']) ?? tokenCount(v['input_tokens']) } : null);
-  for (const line of lines) {
-    const idx = line.indexOf(ROUTER_LOG_PREFIX);
-    if (idx === -1) continue; // Not a Router line -- other debug output, blank lines, host chatter.
-    let rec: unknown;
-    try {
-      rec = JSON.parse(line.slice(idx + ROUTER_LOG_PREFIX.length));
-    } catch {
-      r.unparsable_lines++;
-      continue;
-    }
-    if (!isRecord(rec)) {
-      r.unparsable_lines++;
-      continue;
-    }
+  for (const rec of records) {
     const event = str(rec['event']);
     // PR #49 adds `answers` (Jev's decision receipt: control/task_clear/ordinary/tier/effort) to `root` and `spawn`
     // records. It is deliberately ignored here -- never priced, and out of #45's scope, which is cost and mechanism
@@ -1825,9 +1556,9 @@ export const ingestRouterLog = (cell: CellRecord, logPath: string): void => {
   const known = sent.filter((s) => s.tokens !== null);
   r.jev_responses_known = known.length;
   r.jev_input_tokens_known = safeSum(known.map((s) => s.tokens));
-  // The log is the only record of the Router's Jev calls, so the total is unknown, never zero, whenever it may be
-  // missing one: no readable log, a Router line that did not parse (it may have been a sent call), or a session ended
-  // by the timeout or a cancel while a request may still have been waiting for its line. The known part is kept.
+  // The records are the only account of the Router's Jev calls, so the total is unknown, never zero, whenever one may be
+  // missing: no readable directory, a record that did not parse (it may have been a sent call), or a session ended
+  // by the timeout or a cancel while a request may still have been waiting for its record. The known part is kept.
   const complete = r.log === 'read' && r.unparsable_lines === 0 && !cell.timed_out && !cell.cancelled;
   r.jev_input_tokens = !complete ? null : sent.length === 0 ? 0 : known.length === sent.length ? r.jev_input_tokens_known : null;
   r.jev_cost_known_subtotal = r.jev_input_tokens_known !== null ? (estimateJevCostUsd(ROUTER_JEV_MODEL, r.jev_input_tokens_known) ?? 0) : 0;
@@ -1891,12 +1622,6 @@ const runClaudeCell = (cs: CodingCase, spec: ArmSpec, o: Options, pluginDir: str
         env['JEV_GATE_EXPERIMENT_ADMISSION'] = spec.experimentAdmission;
         envAdded.push('JEV_GATE_EXPERIMENT_ADMISSION');
       }
-      if (spec.benchRecent) {
-        env['JEV_GATE_BENCH_RECENT'] = '1';
-        // No credential reaches this cell, so "this arm made no Jev request" is a property of the process, not a policy.
-        delete env['TYPESAFE_API_KEY'];
-        envAdded.push('JEV_GATE_BENCH_RECENT');
-      }
       mkdirSync(traceDir, { recursive: true, mode: 0o700 });
       mkdirSync(stateDir, { recursive: true, mode: 0o700 });
     } else {
@@ -1918,8 +1643,8 @@ const runClaudeCell = (cs: CodingCase, spec: ArmSpec, o: Options, pluginDir: str
     /**
      * #45: the `router` arm loads jev-gate-router -- its own plugin, separate from the legacy jev-gate one above, so
      * `spec.plugin` stays false and none of the JEV_GATE_* branch above runs for it. Every flag here is verified
-     * against `claude --help` on Claude Code 2.1.283 (see bench/README.md): `--plugin-dir`, `--settings` and
-     * `--debug-file` all exist as documented. The options are ROUTER_OPTIONS, frozen in the plan's
+     * against `claude --help` on Claude Code 2.1.283 (see bench/README.md): `--plugin-dir` and `--settings`
+     * exist as documented. The options are ROUTER_OPTIONS, frozen in the plan's
      * `cli.router_policy` before anything is executed, so this file can never disagree with what the plan recorded.
      * The TypeSafe key is never written into this file -- it reaches the plugin only through the TYPESAFE_API_KEY
      * env var, already in KEEP_ENV.
@@ -1928,11 +1653,14 @@ const runClaudeCell = (cs: CodingCase, spec: ArmSpec, o: Options, pluginDir: str
       if (routerDir === null) throw new Error('a Router arm ran without a frozen Router copy');
       env['CLAUDE_CODE_ENABLE_FUNCTION_HOOKS'] = '1';
       envAdded.push('CLAUDE_CODE_ENABLE_FUNCTION_HOOKS');
+      // The Router's recorder writes its decision records here; ingestRouterRecords reads them back.
+      env['JEV_GATE_TRACE_DIR'] = traceDir;
+      envAdded.push('JEV_GATE_TRACE_DIR');
+      mkdirSync(traceDir, { recursive: true, mode: 0o700 });
       argv.push('--plugin-dir', routerDir);
       const settingsPath = join(cellDir, 'router-settings.json');
       writeFileSync(settingsPath, JSON.stringify({ pluginConfigs: { [ROUTER_SETTINGS_KEY]: { options: ROUTER_OPTIONS } } }, null, 2) + '\n', 'utf8');
       argv.push('--settings', settingsPath);
-      argv.push('--debug-file', join(cellDir, 'router-debug.log'));
     }
     // #45: router_fixed's frozen no-Jev alternative -- the host's own --effort flag, chosen up front (parseArgs
     // refuses this arm without one) so the comparison is not just "effort changed" relative to router_native.
@@ -2149,7 +1877,7 @@ export const main = async (argv: string[]): Promise<number> => {
   if (existsSync(out)) throw new Error(`--out ${out} already exists; execute creates a new result directory exclusively`);
   const pf = preflight(o, o.arms.some((a) => {
     const spec = armSpecs(o.frontierModel, o.fixedEffort, o.baseEffort)[a];
-    return spec.mode === 'auto' || (spec.mode === 'lean' && spec.benchRecent !== true) || spec.routerEnabled === true;
+    return spec.mode === 'auto' || spec.routerEnabled === true;
   }));
   plan.preflight = pf;
   // T8: a plugin arm without a loadable configuration would run on defaults while the plan claimed otherwise.
@@ -2252,9 +1980,9 @@ export const main = async (argv: string[]): Promise<number> => {
       }
       // T8: the accounting and the model-match comparison read the same frozen configuration the child ran on.
       ingestTraces(cell, join(cellDir, 'trace'), frozenConfig.models);
-      // #45: a separate file, a separate parser -- the Router's decision log is host debug text, not a trace/*.json
-      // record. Called unconditionally like ingestTraces above; on an arm that never wrote this file it is a no-op.
-      ingestRouterLog(cell, join(cellDir, 'router-debug.log'));
+      // #45: a separate parser for the Router's own `mod_router` records. Called unconditionally like ingestTraces
+      // above; on an arm that never ran the Router it is a no-op.
+      ingestRouterRecords(cell, join(cellDir, 'trace'));
       writeJsonAtomic(join(cellDir, 'cell.json'), cell);
       addSpend(row, arm, cellDir);
       process.stdout.write(`    exit=${String(cell.exit_code)} elapsed=${String(cell.elapsed_ms)}ms timed_out=${cell.timed_out} model=${cell.init?.model ?? 'unknown'} plugins=${cell.init?.plugins.join(',') || '-'} agents=${cell.agent_calls.map((c) => `${c.subagent_type}${c.has_model ? `(pin:${c.model_param})` : ''}`).join(',') || '-'} jev: attempted=${cell.gate.eligible_attempted} patched=${cell.gate.patched} preserved=${cell.gate.preserved}\n`);

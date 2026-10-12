@@ -22,7 +22,7 @@ import { LIVENESS_WINDOW, livenessPath, readLiveness } from './liveness.js';
 import { OWNED_AGENTS, type Mode, type Tier } from './types.js';
 import { doctorChecks, finishDoctor, renderDoctor, readableFile, storageIssue, moduleIssues, dashboardDiagnostic, versionDiagnostic, type DoctorReport } from './doctor.js';
 import { checkRelease, unknownRelease, packageVersion } from './release-info.js';
-import { claudeModelInventory, claudeCompatibility, compatibilityChecks, missingInventory } from './doctor-models.js';
+import { claudeModelInventory, claudeCompatibility, compatibilityChecks } from './doctor-models.js';
 import { type SymbolicEffort } from './claude-models.js';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -57,15 +57,10 @@ export const parseFrontmatter = (text: string): Frontmatter => {
  * #48 P0-2: derived, not hand-copied. The six owned rows come from `OWNED_AGENT_PROFILES` (src/agents.ts) with
  * `model` read off `DEFAULT_CONFIG.models[tier]` -- the same table `gen-agents.mjs` writes frontmatter from -- so
  * this expectation and the packaged frontmatter can only agree or both be visibly wrong, never quietly disagree.
- * `executor.md` is added by hand because it is lean's one untiered agent and is deliberately not in that table.
  */
-const AGENT_EXPECTATIONS: Record<string, { model: string; effort: string | null }> = {
-  ...Object.fromEntries(
-    OWNED_AGENT_PROFILES.map((p) => [p.file, { model: DEFAULT_CONFIG.models[p.tier], effort: p.effort }]),
-  ),
-  // JGL-01: lean's one agent. `inherit` is the point of it: a saving from a cheaper model would not be this feature's.
-  'executor.md': { model: 'inherit', effort: null },
-};
+const AGENT_EXPECTATIONS: Record<string, { model: string; effort: string | null }> = Object.fromEntries(
+  OWNED_AGENT_PROFILES.map((p) => [p.file, { model: DEFAULT_CONFIG.models[p.tier], effort: p.effort }]),
+);
 
 /** haiku|sonnet|opus|fable, case-insensitive substring match; `null` when the string names none of them. */
 const MODEL_FAMILIES = ['haiku', 'sonnet', 'opus', 'fable'] as const;
@@ -90,15 +85,12 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
   const report = doctorChecks();
   const say = report.say;
   const inspect = (name: string, fn: () => void): void => { try { fn(); } catch { say('fail', `${name}: unreadable or invalid local configuration; remaining checks continue`); } };
-  let leanPackage = false;
-  try { const hooks = JSON.parse(readFileSync(join(root, 'hooks/hooks.json'), 'utf8')); leanPackage = hooks?.hooks?.UserPromptSubmit?.[0]?.hooks?.[0]?.command === 'node "${CLAUDE_PLUGIN_ROOT}/dist/entry.js" --lean'; } catch { /* Invalid definitions are reported by package checks. */ }
-  const agentExpectations = leanPackage ? { 'executor.md': AGENT_EXPECTATIONS['executor.md']! } : AGENT_EXPECTATIONS;
   /** Maps an owned agent's file (e.g. `worker-frontier.md`) to the `model:` frontmatter it actually has installed. */
   const checkPluginFiles = (): Map<string, string> => {
     const installedModels = new Map<string, string>();
-    // #48 P2: hooks.json/lean.json now command dist/entry.js, which dynamically imports dist/hook.js only when the
+    // #48 P2: hooks.json now commands dist/entry.js, which dynamically imports dist/hook.js only when the
     // gate might be on (src/entry.ts) -- both files have to exist for that indirection to work.
-    for (const rel of ['dist/entry.js', 'dist/hook.js', '.claude-plugin/plugin.json', 'hooks/hooks.json', ...Object.keys(agentExpectations).map((f) => `agents/${f}`)]) {
+    for (const rel of ['dist/entry.js', 'dist/hook.js', '.claude-plugin/plugin.json', 'hooks/hooks.json', ...Object.keys(AGENT_EXPECTATIONS).map((f) => `agents/${f}`)]) {
       const valid = readableFile(join(root, rel)); say(valid ? 'ok' : 'fail', `${rel} ${valid ? 'readable file' : 'missing or unreadable file'}`);
     }
     try {
@@ -115,29 +107,26 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
       say(isRecord(manifest) && manifest['skills'] === './plugins/evidence/skills/' ? 'ok' : 'fail', 'Evidence skill: packaged discovery path');
       const hooks = JSON.parse(readFileSync(join(root, 'hooks/hooks.json'), 'utf8')) as unknown;
       const modules = isRecord(hooks) ? hooks['modules'] : undefined;
-      if (leanPackage) say(modules === undefined ? 'ok' : 'fail', 'Lean package: no Function Hooks modules or tier routing');
-      else {
-        if (JSON.stringify(modules) !== JSON.stringify(['./register.ts'])) say('fail', 'Function Hooks: exactly one packaged hooks/register.ts module required');
-        const issues = moduleIssues(root, 'hooks/register.ts');
-        say(issues.length ? 'fail' : 'ok', `Function Hooks module dependencies: ${issues.length ? issues.join('; ') : 'packaged entry and relative imports readable'}`);
-      }
+      if (JSON.stringify(modules) !== JSON.stringify(['./register.ts'])) say('fail', 'Function Hooks: exactly one packaged hooks/register.ts module required');
+      const issues = moduleIssues(root, 'hooks/register.ts');
+      say(issues.length ? 'fail' : 'ok', `Function Hooks module dependencies: ${issues.length ? issues.join('; ') : 'packaged entry and relative imports readable'}`);
       const table = isRecord(hooks) && isRecord(hooks['hooks']) ? hooks['hooks'] : {};
       // V5: PreToolUse guards every root tool, so it is registered once with no matcher; Stop records the terminal
-      // outcome. SessionStart (#48 P2) is the liveness warning -- also no matcher, and also native/auto only in
-      // practice, but hooks.json registers it unconditionally the same as the others; the hook itself no-ops in lean.
+      // outcome. SessionStart (#48 P2) is the liveness warning -- also no matcher, and registered unconditionally the
+      // same as the others.
       const expected: Array<[string, string | null]> = [
         ['UserPromptSubmit', null],
-        ['PreToolUse', leanPackage ? '^Agent$' : null],
+        ['PreToolUse', null],
         ['PostToolUse', '^(Agent|TaskStop)$'],
         ['PostToolUseFailure', '^Agent$'],
-        ['SubagentStop', '^jev-gate:(?:worker(?:-fast|-deep|-frontier)?|planner(?:-frontier)?|executor)$'],
+        ['SubagentStop', '^jev-gate:(?:worker(?:-fast|-deep|-frontier)?|planner(?:-frontier)?)$'],
         ['Stop', null],
         ['SessionStart', null],
       ];
-      for (const [event, matcher] of expected.filter(([event]) => !leanPackage || !['Stop', 'SessionStart'].includes(event))) {
+      for (const [event, matcher] of expected) {
         const groups = Array.isArray(table[event]) ? (table[event] as unknown[]) : [];
         const handlers = groups.flatMap((g) => isRecord(g) && Array.isArray(g['hooks']) ? g['hooks'] : []);
-        const ours = handlers.filter((h) => isRecord(h) && h['type'] === 'command' && h['command'] === 'node "${CLAUDE_PLUGIN_ROOT}/dist/entry.js"' + (leanPackage ? ' --lean' : ''));
+        const ours = handlers.filter((h) => isRecord(h) && h['type'] === 'command' && h['command'] === 'node "${CLAUDE_PLUGIN_ROOT}/dist/entry.js"');
         const valid = groups.length === 1 && isRecord(groups[0]) && (matcher === null ? !('matcher' in groups[0]) : groups[0]['matcher'] === matcher) && handlers.length === 1 && ours.length === 1;
         say(valid ? 'ok' : 'fail', `hooks.json ${event}${matcher ? ` (${matcher})` : ' (no matcher)'}: ${ours.length} command hook(s) → dist/entry.js (expect 1 with the exact command and matcher)`);
         const timeout = ours[0] && isRecord(ours[0]) ? ours[0]['timeout'] : undefined;
@@ -148,9 +137,9 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
     }
     const agentsDir = join(root, 'agents');
     let files: string[] = []; try { files = readdirSync(agentsDir).filter((f) => f.endsWith('.md')); } catch { say('fail', 'agents/ is missing or unreadable'); }
-    const extra = files.filter((f) => !(f in agentExpectations));
+    const extra = files.filter((f) => !(f in AGENT_EXPECTATIONS));
     if (extra.length) say('warn', `agents/ contains extra definitions (${extra.join(', ')}); only the six owned profiles are V5 roles`);
-    for (const [file, exp] of Object.entries(agentExpectations)) {
+    for (const [file, exp] of Object.entries(AGENT_EXPECTATIONS)) {
       const p = join(agentsDir, file);
       if (!existsSync(p)) continue;
       let text: string; try { text = readFileSync(p, 'utf8'); } catch { say('fail', `agents/${file}: not a readable file`); continue; }
@@ -204,16 +193,6 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
       return;
     }
     const c = loaded.config;
-    if (c.mode === 'lean' || leanPackage) {
-      say('ok', `config ${loaded.source}: mode=${c.mode} jevModel=${c.jevModel} deadline=${c.requestDeadlineMs}ms`);
-      say('info', 'Lean: no Gate A/B, no planner, no task graph, no depth floor and no root guard. The executor inherits native model and effort.');
-      if (c.mode === 'lean') {
-        say('info', 'lean needs a readable host transcript for this session; without one it stays native (source_unavailable), which is not the same as an empty history');
-        if (env['JEV_GATE_BENCH_RECENT'] === '1') say('warn', 'JEV_GATE_BENCH_RECENT=1 is set: the deterministic no-Jev comparison arm is active. This is a benchmark dependency, not a product mode');
-      } else if (c.mode === 'off') say('warn', 'mode=off still starts a node process for every matched hook event (hooks.json/lean.json registration is unconditional): to remove that cost too, disable the plugin with `claude plugin disable jev-gate@<marketplace>`');
-      say('info', `job state directory: ${jobsDir(env)} (0700, one 0600 file per session, removed after 7 days)`);
-      return;
-    }
     say('ok', `config ${loaded.source}: mode=${c.mode} jevModel=${c.jevModel} deadline=${c.requestDeadlineMs}ms floors={admission:${c.admissionConfidenceFloor},route:${c.routeConfidenceFloor}} plannerDefaultTier=${c.plannerDefaultTier} models=${JSON.stringify(c.models)} maxParallelWorkers=${c.maxParallelWorkers} guardAllowTools=${JSON.stringify(c.guardAllowTools)} routeQuestionShape=${c.routeQuestionShape} admissionQuestionShape=${c.admissionQuestionShape} delegationDepthFloor=${c.delegationDepthFloor === null ? 'null (derived)' : c.delegationDepthFloor} delegationDepthFraction=${c.delegationDepthFraction} maxTasksPerPlan=${c.maxTasksPerPlan} admittedShape=${c.admittedShape} delegationCoordinatorTurns=${c.delegationCoordinatorTurns} delegationWorkerTokensPerCall=${c.delegationWorkerTokensPerCall} guardAllowMcp=${c.guardAllowMcp} verifyWorkerChecks=${c.verifyWorkerChecks}`);
     if (c.admissionQuestionShape === 'atomic') {
       say(
@@ -258,7 +237,7 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
       say('info', 'mode=off: no guidance, no Jev, no job state, no trace writes. Loaded agent definitions still exist; remove the plugin for the absent-plugin condition');
       // #48 P2 Task 4.4: dist/entry.js's short-circuit removes the gate's *own* import/admission cost, not the host's
       // per-hook-event process spawn -- that cost is the plugin being registered at all, and only disabling it removes it.
-      say('warn', 'mode=off still starts a node process for every matched hook event (hooks.json/lean.json registration is unconditional): to remove that cost too, disable the plugin with `claude plugin disable jev-gate@<marketplace>`');
+      say('warn', 'mode=off still starts a node process for every matched hook event (hooks.json registration is unconditional): to remove that cost too, disable the plugin with `claude plugin disable jev-gate@<marketplace>`');
     }
     if (c.mode === 'native') say('info', 'mode=native: guidance + owned profiles + job state and guard when orchestration starts, no Jev request');
     if (c.mode === 'auto') say('info', 'mode=auto: admission and allocation gates send the request, the planned task and summaries of earlier worker replies to TypeSafe (may include source excerpts and prior constraints)');
@@ -309,12 +288,10 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
       const found = readSettingsEnvVar(env, cwd, k);
       return found !== null && !('ambiguous' in found) ? found.value : env[k];
     };
-    if (!leanPackage) {
-      const functionHooks = launch('CLAUDE_CODE_ENABLE_FUNCTION_HOOKS');
-      say(functionHooks === '0' ? 'warn' : 'info', functionHooks === '0' ? 'Function Hooks explicitly disabled: Router, Compact and Output cannot register' : `Function Hooks launch setting: ${functionHooks === '1' ? 'enabled' : 'unknown/default'}; registration and execution require native records`);
-    }
-    // #48: auto and lean refuse admission as host_unsupported under both conditions below, so the gate can never act.
-    const gated = mode === 'auto' || mode === 'lean';
+    const functionHooks = launch('CLAUDE_CODE_ENABLE_FUNCTION_HOOKS');
+    say(functionHooks === '0' ? 'warn' : 'info', functionHooks === '0' ? 'Function Hooks explicitly disabled: Router and Compact cannot register' : `Function Hooks launch setting: ${functionHooks === '1' ? 'enabled' : 'unknown/default'}; registration and execution require native records`);
+    // #48: auto refuses admission as host_unsupported under both conditions below, so the gate can never act.
+    const gated = mode === 'auto';
     const o = subagentModelOverride({ CLAUDE_CODE_SUBAGENT_MODEL: launch('CLAUDE_CODE_SUBAGENT_MODEL'), CLAUDE_CODE_SUBAGENT_MODEL_FORCE: launch('CLAUDE_CODE_SUBAGENT_MODEL_FORCE') });
     const overrideEffect = gated ? `mode=${mode} stays native on every prompt as host_unsupported and sends no Jev request` : 'eligible calls are preserved (no routing)';
     if (o.force) say(gated ? 'fail' : 'warn', `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1: every subagent model is overridden; ${overrideEffect}`);
@@ -332,23 +309,18 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
     else say('info', `launch profile not set (fork=${fork ?? 'unset'}, disable_background=${bg ?? 'unset'}): interactive sessions default to fork mode, where Agent calls omit run_in_background and V4 preserves them. Start with CLAUDE_CODE_FORK_SUBAGENT=0`);
     if (env['CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS'] === '1') say('info', 'agent teams enabled: a named Agent call becomes a teammate; the coordinator guidance asks for no teammate name');
     const recording = recordingStatus(env);
-    say(recording.error ? 'warn' : 'ok', `Jev local recording ${recording.enabled ? 'on (default)' : 'off'}: Router/Compact/Output do not require --debug; toggle with recording on|off${recording.error ? ` (${recording.error})` : ''}`);
-    const debugDir = launch('CLAUDE_CODE_DEBUG_LOGS_DIR');
-    if (debugDir) say('ok', `CLAUDE_CODE_DEBUG_LOGS_DIR=${debugDir}: Router/Compact/Output decisions are recorded there for the dashboard`);
-    else say('info', 'Claude debug logs are optional; independent Jev metadata recording is available without --debug');
+    say(recording.error ? 'warn' : 'ok', `Jev local recording ${recording.enabled ? 'on (default)' : 'off'}: toggle with recording on|off${recording.error ? ` (${recording.error})` : ''}`);
     report.group('credentials');
     const keyEnv = { ...env, TYPESAFE_API_KEY: launch('TYPESAFE_API_KEY') };
     const overrideKey = apiKeyOverride(keyEnv);
     if (overrideKey?.trim() && !validApiKey(overrideKey)) say('fail', 'Jev API key override has an invalid format (value hidden)', 'Correct or remove the explicit key override; it takes precedence over the private credential store.');
     const key = resolveApiKey(keyEnv);
-    if (!leanPackage) {
-      say('info', 'Router automatic Fable default: off; active routerAllowFable is controlled by the host plugin options. Capabilities do not establish account access; missing response model/effort remains unknown.');
-      say('info', `Router launch pins: model=${launch('ANTHROPIC_MODEL')?.trim() ? 'present' : 'absent'}; effort=${launch('CLAUDE_CODE_EFFORT_LEVEL')?.trim() ? 'present' : 'absent'} (values hidden; injector source unknown). Starting with /model or --model establishes a baseline, not a permanent routing pin.`);
-      let installed = 'unknown'; try { const manifest = JSON.parse(readFileSync(join(root, '.claude-plugin/plugin.json'), 'utf8')); if (typeof manifest.version === 'string' && /^\d+\.\d+\.\d+$/.test(manifest.version)) installed = manifest.version; } catch { /* metadata unknown */ }
-      say('info', `Router installed package=${installed}; loaded hook version=unknown to doctor. The active root record reports hook_version, host_version, incoming/effective effort, pins, candidate exclusions and selection threshold. Restart an already open host after updating; the installed manifest does not prove its loaded hook version.`);
-      say('info', '/context summaries and previous cache usage do not establish the current request size. Unsupported or unobserved model/effort combinations preserve the native baseline.');
-    }
-    say(key ? 'ok' : 'warn', key ? 'Jev API key available from the plugin option, environment or shared private store (value not shown)' : 'Jev API key missing: the installed plugin opens a local key-entry screen; Gate/Lean/Router remain native until a key is supplied');
+    say('info', 'Router automatic Fable default: off; active routerAllowFable is controlled by the host plugin options. Capabilities do not establish account access; missing response model/effort remains unknown.');
+    say('info', `Router launch pins: model=${launch('ANTHROPIC_MODEL')?.trim() ? 'present' : 'absent'}; effort=${launch('CLAUDE_CODE_EFFORT_LEVEL')?.trim() ? 'present' : 'absent'} (values hidden; injector source unknown). Starting with /model or --model establishes a baseline, not a permanent routing pin.`);
+    let installed = 'unknown'; try { const manifest = JSON.parse(readFileSync(join(root, '.claude-plugin/plugin.json'), 'utf8')); if (typeof manifest.version === 'string' && /^\d+\.\d+\.\d+$/.test(manifest.version)) installed = manifest.version; } catch { /* metadata unknown */ }
+    say('info', `Router installed package=${installed}; loaded hook version=unknown to doctor. The active root record reports hook_version, host_version, incoming/effective effort, pins, candidate exclusions and selection threshold. Restart an already open host after updating; the installed manifest does not prove its loaded hook version.`);
+    say('info', '/context summaries and previous cache usage do not establish the current request size. Unsupported or unobserved model/effort combinations preserve the native baseline.');
+    say(key ? 'ok' : 'warn', key ? 'Jev API key available from the plugin option, environment or shared private store (value not shown)' : 'Jev API key missing: the installed plugin opens a local key-entry screen; Gate/Router remain native until a key is supplied');
     if (existsSync(join(cwd, '.env'))) say('info', '.env in cwd is NOT auto-loaded by the hook; export the variable in the shell that starts Claude Code');
   };
 
@@ -392,26 +364,24 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
   report.group('configuration');
   const loaded = loadConfig(env);
   inspect('configuration', () => checkConfig(loaded));
-  if (leanPackage && loaded.ok && !['lean', 'off'].includes(loaded.config.mode)) say('fail', 'Lean package supports only lean/off mode; legacy Gate and tier routing are not present');
-  if (loaded.ok && loaded.config.mode !== 'lean' && !leanPackage) checkModelAuthority(loaded.config.models, installedModels);
+  if (loaded.ok) checkModelAuthority(loaded.config.models, installedModels);
   report.group('host');
   const hostVersion = checkClaude();
-  const inventory = leanPackage ? missingInventory() : await claudeModelInventory(env, cwd);
-  const configured = loaded.ok && loaded.config.mode !== 'lean' ? OWNED_AGENT_PROFILES.map(profile => ({ model: loaded.config.models[profile.tier], effort: profile.effort as SymbolicEffort | null })) : [];
+  const inventory = await claudeModelInventory(env, cwd);
+  const configured = loaded.ok ? OWNED_AGENT_PROFILES.map(profile => ({ model: loaded.config.models[profile.tier], effort: profile.effort as SymbolicEffort | null })) : [];
   for (const name of ['FAST', 'STANDARD', 'DEEP', 'FRONTIER']) { const model = env[`CLAUDE_PLUGIN_OPTION_ROUTER${name}MODEL`]; if (model?.trim()) configured.push({ model, effort: null }); }
-  const compatibility = leanPackage ? [] : claudeCompatibility(inventory, hostVersion, configured, env['CLAUDE_PLUGIN_OPTION_ROUTERALLOWFABLE'] === 'true');
+  const compatibility = claudeCompatibility(inventory, hostVersion, configured, env['CLAUDE_PLUGIN_OPTION_ROUTERALLOWFABLE'] === 'true');
   report.checks.push(...compatibilityChecks(compatibility));
   report.group('models');
-  if (leanPackage) say('info', 'Lean executor inherits native model and effort; no tier routing targets or native catalog probe');
-  else if (!inventory.complete) say('warn', `Native Claude model inventory is incomplete or unavailable (${inventory.error ?? 'unknown'}); unsupported or unobserved capabilities remain unverified`);
+  if (!inventory.complete) say('warn', `Native Claude model inventory is incomplete or unavailable (${inventory.error ?? 'unknown'}); unsupported or unobserved capabilities remain unverified`);
   report.group('configuration');
   inspect('environment', () => checkEnv(loaded.ok ? loaded.config.mode : null));
   report.group('configuration');
   inspect('host settings', checkUserSettings);
   report.group('activity');
-  if (!leanPackage) inspect('liveness', checkLiveness);
-  say('info', leanPackage ? 'Lean /hooks: UserPromptSubmit, Agent PreToolUse/PostToolUse/Failure and owned SubagentStop only; executor inherits native selection. No Gate A/B or tier routing.' : `in Claude Code: /hooks should list seven jev-gate lifecycle entries (UserPromptSubmit, PreToolUse with no matcher, PostToolUse on ^(Agent|TaskStop)$, PostToolUseFailure on ^Agent$, Stop, SessionStart, owned SubagentStop); the @agent- typeahead should show ${Object.keys(OWNED_AGENTS).join(', ')} once each`);
-  say('info', `start: JEV_GATE_MODE=${leanPackage ? 'lean' : 'auto'} CLAUDE_CODE_FORK_SUBAGENT=0 claude --model sonnet --plugin-dir "${root}"  (doctor performed no inference; a passing doctor is not proof of patch support, effort support or model access)`);
+  inspect('liveness', checkLiveness);
+  say('info', `in Claude Code: /hooks should list seven jev-gate lifecycle entries (UserPromptSubmit, PreToolUse with no matcher, PostToolUse on ^(Agent|TaskStop)$, PostToolUseFailure on ^Agent$, Stop, SessionStart, owned SubagentStop); the @agent- typeahead should show ${Object.keys(OWNED_AGENTS).join(', ')} once each`);
+  say('info', `start: JEV_GATE_MODE=auto CLAUDE_CODE_FORK_SUBAGENT=0 claude --model sonnet --plugin-dir "${root}"  (doctor performed no inference; a passing doctor is not proof of patch support, effort support or model access)`);
   report.group('storage');
   inspect('storage', () => { for (const path of [jobsDir(env), claudeTraceDir(env)]) { const issue = storageIssue(path); say(issue ? 'fail' : 'ok', `storage: ${path}: ${issue ?? 'readable/writable or creatable (not created by doctor)'}`); } });
   report.group('activity');
@@ -419,7 +389,7 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
   report.group('version');
   const release = options.checkUpdate ? await checkRelease() : unknownRelease();
   const version = versionDiagnostic(root, 'claude', release); say(version.level, version.message);
-  return { ...finishDoctor('claude', root, report.checks, release), models: { source: leanPackage ? 'Lean executor inherits native selection; no routing catalog requested' : 'native Claude SDK initialize (safe mode, no user message)', complete: inventory.complete, accountAccess: 'unverified', compatibility } };
+  return { ...finishDoctor('claude', root, report.checks, release), models: { source: 'native Claude SDK initialize (safe mode, no user message)', complete: inventory.complete, accountAccess: 'unverified', compatibility } };
 };
 
 
@@ -455,7 +425,6 @@ const configuredDir = (flag: string | undefined, key: string): string | null => 
   const found = readSettingsEnvVar(process.env, process.cwd(), key);
   if (found && 'value' in found && found.value.length > 0) return found.value;
   if (key === 'JEV_GATE_TRACE_DIR') return claudeTraceDir(process.env);
-  if (key === 'CLAUDE_CODE_DEBUG_LOGS_DIR') return join(claudeConfigDir(process.env), 'debug');
   return null;
 };
 
@@ -482,8 +451,7 @@ const dashboard = async (argv: string[]): Promise<void> => {
   }
   const started = await startDashboard(
     { ...dashboardSources(process.env, host as 'codex' | 'claude' | undefined),
-      ...(flagValue(argv, '--trace') ? { traceDir: flagValue(argv, '--trace')!, traceDirs: undefined } : {}),
-      ...(flagValue(argv, '--debug') ? { debugDir: flagValue(argv, '--debug')! } : {}) },
+      ...(flagValue(argv, '--trace') ? { traceDir: flagValue(argv, '--trace')!, traceDirs: undefined } : {}) },
     port,
   );
   process.stdout.write(`dashboard: ${started.url}\n`);
@@ -515,7 +483,7 @@ if (isMainModule()) {
       process.exitCode = 1;
     });
   } else {
-    process.stdout.write('usage: node dist/cli.js doctor [--json|--verbose] [--check-update]\n       node dist/cli.js explain [trace-dir]   (default: $JEV_GATE_TRACE_DIR)\n       node dist/cli.js dashboard [on|off|status] [--port 4731] [--trace dir] [--debug dir]\n       node dist/cli.js recording on|off|status\n');
+    process.stdout.write('usage: node dist/cli.js doctor [--json|--verbose] [--check-update]\n       node dist/cli.js explain [trace-dir]   (default: $JEV_GATE_TRACE_DIR)\n       node dist/cli.js dashboard [on|off|status] [--port 4731] [--trace dir]\n       node dist/cli.js recording on|off|status\n');
     process.exitCode = 2;
   }
 }

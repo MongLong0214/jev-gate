@@ -1,21 +1,20 @@
 # Advanced usage
 
-Install, the five parts, and what a normal session sends are in the [README](../README.md). This page is Gate and lean configuration, background execution and worktree conditions, and a checkout. It is not a benchmark report. Older measurements are linked at the bottom and are not restated as current results.
+Install, the five parts, and what a normal session sends are in the [README](../README.md). This page is Gate configuration, background execution and worktree conditions, and a checkout. It is not a benchmark report. Older measurements are linked at the bottom and are not restated as current results.
 
-Option names and defaults for Compact, Output, the Router, and Evidence stay in their own pages: [Compact](../mods/compact/README.md), [Output](../mods/output/README.md), [Router](../mods/router/README.md), [Evidence](../plugins/evidence/README.md). The manifest is [plugin.json](../.claude-plugin/plugin.json).
+Option names and defaults for Compact, the Router, and Evidence stay in their own pages: [Compact](../mods/compact/README.md), [Router](../mods/router/README.md), [Evidence](../plugins/evidence/README.md). The manifest is [plugin.json](../.claude-plugin/plugin.json).
 
 ## Gate modes
 
-`gateMode` does not turn Compact, Output, the Router, or Evidence off.
+`gateMode` does not turn Compact, the Router, or Evidence off.
 
 | Mode | What runs | Gate request |
 |---|---|---|
 | `off` | No admission, no guidance, no guard, no Gate state or trace write. The host still starts the hook process. Agent definitions stay installed. | None |
 | `native` | The same roles, guard, and contracts if you start them. The session decides whether to call the planner and which worker profile to name. | None |
 | `auto` | Gate A on an eligible root prompt. An admitted turn is single or orchestrated, below. Gate B on an eligible planner or worker dispatch. | At most one per eligible gate event. No retry |
-| `lean` | Not Gate A, not the planner, not the guard. One judgement over prior history, then at most one `jev-gate:executor` on the inherited model. | One batch, or none if a local check stops it. [Below](#lean) |
 
-`auto` is the manifest default and the call-path default of a legacy plugin hook with no config file. `off` is the call-path default for `--lean`, doctor, and a bare `node`. `lean` is opt-in.
+`auto` is the manifest default and the call-path default of a legacy plugin hook with no config file. `off` is the call-path default for doctor and a bare `node`. A config file, `JEV_GATE_MODE` or `gateMode` with any other value is invalid config: the Gate does nothing for that call, `doctor` reports the value, and Router, Compact and Evidence are unaffected.
 
 An admitted turn is one of two shapes. `single` (the usual one under `admittedShape: "auto"`) dispatches the request once to a worker and does not run the planner. `hierarchy` runs a planner, then workers. Gate A calls the second shape orchestrated. Both are admitted jobs: the root is told to coordinate, and the guard below is on until terminal acceptance with no active work. Then the root can do remaining checks, integration and reporting under its native permissions. Reuse the observed checks for the same state; new edits, merges and explicitly requested independent reviews still need their own checks. Command success does not prove all requirements were met. A direct admission does not start a job or the guard.
 
@@ -32,7 +31,7 @@ New automatic atomic jobs carry the user request verbatim. If the request or com
 A missing key, a missing Function Hooks flag, and an unsupported fork profile are different. The flag does not affect Gate.
 
 - No `prompt_id`, a slash command, a child caller, or blank input: no admission request.
-- The session cannot run a fresh owned worker, or a concrete `CLAUDE_CODE_SUBAGENT_MODEL` / `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` is set: `auto` and `lean` stay native (`host_unsupported`) and do not send. [Background execution](#background-execution-and-worktrees).
+- The session cannot run a fresh owned worker, or a concrete `CLAUDE_CODE_SUBAGENT_MODEL` / `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` is set: `auto` stays native (`host_unsupported`) and do not send. [Background execution](#background-execution-and-worktrees).
 - Depth below the floor: the turn stays direct and Gate A is not asked. [Floor](#depth-floor).
 - The composed answer says the turn is not worth delegating, forbids delegation, or is otherwise not admitted: direct, no planner, no guard.
 - Invalid config, other than an explicit `off`: the hook reports the error and preserves the call. It is not treated as "no file".
@@ -41,9 +40,9 @@ A missing key, a missing Function Hooks flag, and an unsupported fork profile ar
 
 Checked on Claude Code 2.1.284 only (native install). Not checked on any other version or install.
 
-An unset `gateMode` is not exported. It does not override a config file. A valid explicit `JEV_GATE_MODE` wins, then an explicit `gateMode`, then a valid config file, then the call-path default (`auto` only for a legacy plugin hook with no file; `off` for `--lean`, doctor, and a bare `node`).
+An unset `gateMode` is not exported. It does not override a config file. A valid explicit `JEV_GATE_MODE` wins, then an explicit `gateMode`, then a valid config file, then the call-path default (`auto` only for a legacy plugin hook with no file; `off` for doctor and a bare `node`).
 
-`JEV_GATE_MODE=off` returns before the file is read. `--lean`, doctor, and a bare `node` still keep a valid file's mode when nothing overrides it. A bad or unreadable explicit config, with no `off` override, is an error (`missing file`, invalid JSON, or `EACCES`), not `auto`.
+`JEV_GATE_MODE=off` returns before the file is read. Doctor and a bare `node` still keep a valid file's mode when nothing overrides it. A bad or unreadable explicit config, with no `off` override, is an error (`missing file`, invalid JSON, or `EACCES`), not `auto`.
 
 `pluginConfigs` are read from user settings, an explicit `--settings` file, and managed settings. The same key in project settings or in project `.claude/settings.local.json` is ignored. On 2.1.284 the explicit value was seen from user settings and from `--settings`. Managed settings are the same contract and were not part of that check. `env` in a project settings file is a different contract.
 
@@ -101,7 +100,7 @@ The map this replaced, and the withdrawn savings claims attached to an earlier f
 
 ## Background execution and worktrees
 
-Ordinary installation prepares `CLAUDE_CODE_FORK_SUBAGENT=0` and `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=0`. Owned planner, worker and Lean reservations dispatch with `run_in_background: true`, preserving the complete patched input and native permissions. Explicit owner profiles stay authoritative: fork mode remains unsupported, and a manually disabled background setting remains foreground. The complete old Jev-generated foreground profile is migrated automatically; restart once when the initialization notice asks. No environment editing is needed for ordinary use.
+Ordinary installation prepares `CLAUDE_CODE_FORK_SUBAGENT=0` and `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=0`. Owned planner and worker reservations dispatch with `run_in_background: true`, preserving the complete patched input and native permissions. Explicit owner profiles stay authoritative: fork mode remains unsupported, and a manually disabled background setting remains foreground. The complete old Jev-generated foreground profile is migrated automatically; restart once when the initialization notice asks. No environment editing is needed for ordinary use.
 
 A background job keeps its original prompt identity and contracts across subsequent main conversation questions. `async_launched` records a running worker and keeps ownership. Claude `SubagentStop` must match the native agent identity or private dispatch token, profile and bounded native transcript terminal before the original result is checked. An observed successful `TaskStop` releases that exact execution without accepting it. A main tool failure, unknown termination, or cancellation request alone keeps ownership. Late results from retired jobs are recorded as unknown and cannot advance a newer plan.
 
@@ -121,29 +120,17 @@ Optional traces (`JEV_GATE_TRACE_DIR`) are local per-phase JSON: lengths, hashes
 
 When Gate A answers `needs_context` for the prompt alone, it is asked once more with the last three turns the user typed in this session attached as context (#115). Tool results, host and hook messages, `/commands`, subagent turns and any turn that looks like a credential are never included. The second `admission_result` record carries `context_turns`. A second `needs_context` is final and the turn stays direct.
 
-## Lean
-
-`lean` shares the dispatcher, state files, locks, trace, and TypeSafe client with the other modes. It does not run Gate A, Gate B, the planner, the task graph, tier routing, the depth floor, the root guard, or plan interpretation. Set it with `gateMode` or `JEV_GATE_MODE`. The marketplace plugin already includes `agents/executor.md`. You do not install a second plugin.
-
-On an ordinary request, one batched Jev request can carry the current request, the mandatory layer (the current words, every active human turn, and the supported compact summary), and enumerated earlier groups. The questions are work shape, handoff scope, and keep or omit per group. Credential screening is a local pattern check. It is a filter, not a DLP and not a no-retention promise. If the request or a required turn matches, nothing is sent and the turn stays native. An optional group that matches is withheld. Groups that do not fit the provider bound are left unassessed, not sliced.
-
-No optional group, no key, or an unreadable transcript: native, and no request. A short, unclear, forbidden, or needs-context answer, or a packet that omits nothing: native. The request is still paid for when it was sent. Otherwise the hook can hand one executor a packet. The packet is not placed in the root's additional context. There is no root guard in `lean`. The recommendation can be ignored. An explicit request not to delegate is not reliably classified as forbidden; for work that must not be delegated, leave `lean` off. The probe behind that limit is in [Recorded runs](#recorded-runs).
-
-A smaller packet is not a measured saving. The comparisons that were specified are ordinary Claude with auto-compact, and a deterministic recency packet. No product saving is claimed.
-
-The separate lean archive (`node scripts/pack.mjs --profile lean` from a checkout) ships only the executor. Selecting `auto` or `native` there is `profile_mode_mismatch`, not a guard for roles the archive does not contain.
-
 ## Doctor and explain
 
 From a built checkout, `node dist/cli.js doctor` reads this tree. From an installed bundle, `node <plugin-dir>/dist/cli.js doctor` reads that bundle. Evidence is the other program: `node <plugin-dir>/plugins/evidence/dist/server.mjs --doctor`. A passing doctor is not model access, not source accuracy, and not a performance guarantee.
 
 Doctor reports the launch profile, key presence (not validity), the role files, a model-family mismatch between config and installed frontmatter, the compaction window, the effective floor, and liveness. Liveness is `<stateRoot>/jev-gate/liveness.json`, a ring of the last 50 auto-mode admission decisions. Doctor warns when all 50 never attempted Gate A. In `off`, doctor warns that the hook process still starts; `claude plugin disable jev-gate@jev-gate` is what stops that. Explain is `node dist/cli.js explain`. Neither command calls Jev.
 
-Use `--json` for structured checks, `--verbose` for all local details, and `--check-update` to check the official GitHub release. Claude's SDK initialization and Codex's App Server model list check current routing models and efforts without inference. Complete inventories can identify unavailable targets; missing, conflicting or incomplete evidence remains unverified. Lean skips unused Gate floors and tier mappings, while the combined plugin still checks independent Router targets. A standalone Lean package inherits native selection and does not query a routing catalog. The dashboard header shows running and latest versions; unavailable release checks stay unknown.
+Use `--json` for structured checks, `--verbose` for all local details, and `--check-update` to check the official GitHub release. Claude's SDK initialization and Codex's App Server model list check current routing models and efforts without inference. Complete inventories can identify unavailable targets; missing, conflicting or incomplete evidence remains unverified. The dashboard header shows running and latest versions; unavailable release checks stay unknown.
 
-The installed plugin opens one shared dashboard automatically for Claude Code and Codex. Recording is on by default and Router, Compact and Output write independent Jev metadata without `--debug`. The UI and `recording on|off|status` / `dashboard on|off|status` CLI commands control shared recording and automatic opening independently. The default directories are `$XDG_STATE_HOME/jev-gate/{claude,codex}/traces` or `~/.local/state/jev-gate/{claude,codex}/traces`. Explicit `JEV_GATE_TRACE_DIR`, `JEV_CODEX_TRACE_DIR` and optional Claude debug logs remain supported. `node dist/cli.js dashboard --port 4733` opens a manual development view; `--trace` and `--debug` override sources. Missing records mean unknown. Selected models, observed response models and observed effort are separate facts.
+The installed plugin opens one shared dashboard automatically for Claude Code and Codex. Recording is on by default and Router and Compact write independent Jev metadata. The UI and `recording on|off|status` / `dashboard on|off|status` CLI commands control shared recording and automatic opening independently. The default directories are `$XDG_STATE_HOME/jev-gate/{claude,codex}/traces` or `~/.local/state/jev-gate/{claude,codex}/traces`. Explicit `JEV_GATE_TRACE_DIR`, and `JEV_CODEX_TRACE_DIR` are supported. `node dist/cli.js dashboard --port 4733` opens a manual development view; `--trace` overrides the source. Missing records mean unknown. Selected models, observed response models and observed effort are separate facts.
 
-The page keeps concurrent runs separate and shows the decision path in time order: Gate A admission and context floor, planner and Gate B tier choice, task dependencies, worker dispatch and reported checks, root guard decisions, or the separate Lean packet path. Router separates selected pairs, submitted request values and reported response models; missing observed effort remains unknown; Compact shows the bounded Jev dependency judgment (actual dispatch, candidate coverage, selected dependencies, latency and observed usage), local digest packing and native installation or fallback separately; Output shows whether a Vitest log was folded; Evidence shows local search, Jev batches, cache reuse, and result coverage. Jev intent and result are separate. A sent request without a result becomes unconfirmed, and a missing usage counter stays unknown. The page reads only named metadata, not prompts, source bodies, job state, credentials, or transcript text. It makes no Jev request and grants no tool permission. Existing v0.6.5 trace and debug records can appear where their fields suffice; events that version never wrote cannot be reconstructed.
+The page keeps concurrent runs separate and shows the decision path in time order: Gate A admission and context floor, planner and Gate B tier choice, task dependencies, worker dispatch and reported checks, root guard decisions. Router separates selected pairs, submitted request values and reported response models; missing observed effort remains unknown; Compact shows the bounded Jev dependency judgment (actual dispatch, candidate coverage, selected dependencies, latency and observed usage), local digest packing and native installation or fallback separately; Evidence shows local search, Jev batches, cache reuse, and result coverage. Jev intent and result are separate. A sent request without a result becomes unconfirmed, and a missing usage counter stays unknown. The page reads only named metadata, not prompts, source bodies, job state, credentials, or transcript text. It makes no Jev request and grants no tool permission. Existing v0.6.5 trace records can appear where their fields suffice; events that version never wrote cannot be reconstructed.
 
 ## Checkout
 
@@ -159,7 +146,7 @@ node dist/cli.js doctor
 
 `npm run typecheck`, `npm test`, and `claude plugin validate . --strict` are the checks in [AGENTS.md](../AGENTS.md). Tests are offline. Do not put a key in the repository, an issue, or a chat log, and do not attach raw transcripts.
 
-`npm run pack` writes `dist-pack/jev-gate-<version>.zip` for the integrated plugin. `--profile lean`, `--profile router`, and `--profile evidence` write the single-part archives used for development. The bench is not part of that. `npm run release:check` rebuilds the integrated archive and compares it with the pin; it fails on a released version whose bytes changed, which is the point of the check. Do not publish from a documentation edit.
+`npm run pack` writes `dist-pack/jev-gate-<version>.zip` for the integrated plugin. `--profile router` and `--profile evidence` write the single-part archives used for development. The bench is not part of that. `npm run release:check` rebuilds the integrated archive and compares it with the pin; it fails on a released version whose bytes changed, which is the point of the check. Do not publish from a documentation edit.
 
 Load the checkout with `claude --plugin-dir .` after the build. It performs the same automatic initialization as the installed archive; start a fresh host after a first-start notice.
 

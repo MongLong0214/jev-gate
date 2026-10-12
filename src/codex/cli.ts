@@ -67,7 +67,6 @@ export const codexDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: str
     say('info', load.ok ? `Evidence scope: ${load.config.projectRoot}` : `Invalid explicit override; current directory ${cwd} is not substituted.`);
   }
   say('info', `hooks: ${env['JEV_CODEX_ENABLED'] === '0' ? 'disabled by JEV_CODEX_ENABLED=0' : 'enabled by configuration; use /hooks in Codex to review trust and execution'}`);
-  say('info', `output folding: ${env['JEV_CODEX_OUTPUT'] === 'off' ? 'off' : 'on'}`);
   try {
     const policy = loadCodexPolicy(env);
     check(true, `policy: Gate ${policy.gate.mode}; Router ${policy.router.enabled ? 'on' : 'off'}; Compact ${policy.compact.enabled ? 'on' : 'off'}`);

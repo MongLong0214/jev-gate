@@ -151,7 +151,7 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
   // An explicitly serial deployed file keeps its shared checkout; a fresh/minimal file gets the open defaults.
   if (raw['maxParallelWorkers'] === 1 && !('workerIsolation' in raw)) c['workerIsolation'] = 'none';
   const mode = c['mode'];
-  if (typeof mode !== 'string' || !MODES.includes(mode as Mode)) return { ok: false, error: 'mode must be off|native|auto|lean (the `context` search filter was withdrawn and its code removed; see bench/results/v5-context-viability-2026-09-18)' };
+  if (typeof mode !== 'string' || !MODES.includes(mode as Mode)) return { ok: false, error: 'mode must be off|native|auto (the `context` search filter was withdrawn and its code removed; see bench/results/v5-context-viability-2026-09-18)' };
   const jevModel = c['jevModel'];
   if (typeof jevModel !== 'string' || !MODEL_NAME_RE.test(jevModel)) return { ok: false, error: `jevModel must match ${MODEL_NAME_RE.source}` };
   const deadline = c['requestDeadlineMs'];
@@ -287,9 +287,9 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
 /**
  * The mode with no config file. The host exports the plugin's `gateMode` option to hooks only once the user sets it, so
  * its manifest default is applied here: a legacy hook under the plugin (`CLAUDE_PLUGIN_ROOT`) runs `auto` with no
- * setup. The lean artifact (`--lean`) stays opt-in, and every other caller (doctor, bench, a bare `node`) stays `off`.
+ * setup. Every other caller (doctor, bench, a bare `node`) stays `off`.
  */
-export const hookDefaultMode = (env: Env, argv: readonly string[]): Mode => (env['CLAUDE_PLUGIN_ROOT'] && !argv.includes('--lean') ? 'auto' : 'off');
+export const hookDefaultMode = (env: Env): Mode => (env['CLAUDE_PLUGIN_ROOT'] ? 'auto' : 'off');
 
 /**
  * Explicit JEV_GATE_MODE=off returns before any file is read, so a broken config can never enable routing.
@@ -299,7 +299,7 @@ export const hookDefaultMode = (env: Env, argv: readonly string[]): Mode => (env
 export const loadConfig = (env: Env, readFile: (path: string) => string = (p) => readFileSync(p, 'utf8'), defaultMode: Mode = 'off'): ConfigResult => {
   const modeEnv = env['JEV_GATE_MODE'] || env['CLAUDE_PLUGIN_OPTION_GATEMODE'];
   if (modeEnv === 'off') return { ok: true, config: { ...DEFAULT_CONFIG, mode: 'off' }, source: 'env:off' };
-  if (modeEnv !== undefined && modeEnv !== '' && !MODES.includes(modeEnv as Mode)) return { ok: false, error: 'JEV_GATE_MODE (or the gateMode option) must be off|native|auto|lean', source: 'env' };
+  if (modeEnv !== undefined && modeEnv !== '' && !MODES.includes(modeEnv as Mode)) return { ok: false, error: 'JEV_GATE_MODE (or the gateMode option) must be off|native|auto', source: 'env' };
   const path = resolveConfigPath(env);
   let text: string | null = null;
   try {
@@ -324,7 +324,7 @@ export const loadConfig = (env: Env, readFile: (path: string) => string = (p) =>
     base = v.config;
     source = path;
   }
-  if (modeEnv === 'native' || modeEnv === 'auto' || modeEnv === 'lean') return { ok: true, config: { ...base, mode: modeEnv }, source };
+  if (modeEnv === 'native' || modeEnv === 'auto') return { ok: true, config: { ...base, mode: modeEnv }, source };
   return { ok: true, config: base, source };
 };
 

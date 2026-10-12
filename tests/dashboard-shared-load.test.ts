@@ -28,7 +28,7 @@ describe('dashboard rebuild sharing (#210)', () => {
   it('computes once for simultaneous viewers and once more per change', async () => {
     const trace = make();
     writeFileSync(join(trace, 'a.json'), JSON.stringify({ phase: 'stop', session_id: 's', written_at: new Date().toISOString(), outcome: 'completed' }));
-    const server = await startDashboard({ traceDir: trace, debugDir: null, env: { HOME: make(), JEV_GATE_STATE_DIR: make() } }, 0);
+    const server = await startDashboard({ traceDir: trace, env: { HOME: make(), JEV_GATE_STATE_DIR: make() } }, 0);
     const readers: Array<ReadableStreamDefaultReader<Uint8Array>> = [];
     const frame = async (reader: ReadableStreamDefaultReader<Uint8Array>): Promise<string> => {
       for (;;) {
@@ -72,7 +72,7 @@ describe('dashboard snapshot latency (#215)', () => {
   it('answers with the loaded frame during a slow rebuild, and waits only for the first load', async () => {
     const trace = make();
     record(trace, 'a.json');
-    const server = await startDashboard({ traceDir: trace, debugDir: null, env: { HOME: make(), JEV_GATE_STATE_DIR: make() } }, 0);
+    const server = await startDashboard({ traceDir: trace, env: { HOME: make(), JEV_GATE_STATE_DIR: make() } }, 0);
     let release = (): void => undefined;
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     try {
@@ -108,7 +108,7 @@ describe('dashboard snapshot latency (#215)', () => {
   it('brings the frame up to date when no viewer keeps it current', async () => {
     const trace = make();
     record(trace, 'a.json');
-    const server = await startDashboard({ traceDir: trace, debugDir: null, env: { HOME: make(), JEV_GATE_STATE_DIR: make() } }, 0);
+    const server = await startDashboard({ traceDir: trace, env: { HOME: make(), JEV_GATE_STATE_DIR: make() } }, 0);
     try {
       expect(await files(await fetch(`${server.url}api/snapshot`))).toBe(1);
       record(trace, 'b.json');
@@ -121,7 +121,7 @@ describe('dashboard snapshot latency (#215)', () => {
 
   it('answers 503 while nothing has loaded', async () => {
     gate.fail = true;
-    const server = await startDashboard({ traceDir: make(), debugDir: null, env: { HOME: make(), JEV_GATE_STATE_DIR: make() } }, 0);
+    const server = await startDashboard({ traceDir: make(), env: { HOME: make(), JEV_GATE_STATE_DIR: make() } }, 0);
     try {
       const response = await fetch(`${server.url}api/snapshot`);
       expect(response.status).toBe(503);

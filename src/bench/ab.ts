@@ -31,10 +31,10 @@ export type Condition = (typeof CONDITIONS)[number];
 
 /** A = everything off (baseline), B = Gate only, C = Compact only, D = everything on (the shipped defaults). */
 export const CONDITION_OPTIONS: Record<Condition, { options: Record<string, unknown>; mode: 'off' | 'auto' }> = {
-  A: { options: { gateMode: 'off', compactEnabled: false, routerEnabled: false, outputEnabled: false }, mode: 'off' },
-  B: { options: { gateMode: 'auto', compactEnabled: false, routerEnabled: false, outputEnabled: false }, mode: 'auto' },
-  C: { options: { gateMode: 'off', compactEnabled: true, compactMode: 'active', routerEnabled: false, outputEnabled: false }, mode: 'off' },
-  D: { options: { gateMode: 'auto', compactEnabled: true, compactMode: 'active', routerEnabled: true, outputEnabled: true }, mode: 'auto' },
+  A: { options: { gateMode: 'off', compactEnabled: false, routerEnabled: false }, mode: 'off' },
+  B: { options: { gateMode: 'auto', compactEnabled: false, routerEnabled: false }, mode: 'auto' },
+  C: { options: { gateMode: 'off', compactEnabled: true, compactMode: 'active', routerEnabled: false }, mode: 'off' },
+  D: { options: { gateMode: 'auto', compactEnabled: true, compactMode: 'active', routerEnabled: true }, mode: 'auto' },
 };
 
 export const conditionSettings = (cond: Condition, pluginKey = 'jev-gate@jev-gate'): string =>
@@ -189,7 +189,6 @@ export const runCell = (o: RunOptions, file: TasksFile, task: string, cond: Cond
   const env = cleanEnv(process.env, CONDITION_OPTIONS[cond].mode);
   env['JEV_GATE_STATE_DIR'] = join(o.out, 'state', id);
   env['JEV_GATE_TRACE_DIR'] = join(o.out, 'trace');
-  env['CLAUDE_CODE_DEBUG_LOGS_DIR'] = join(o.out, 'debug', id);
   const sid = crypto.randomUUID();
   const claude = (args: string[]): ReturnType<typeof spawnSync> =>
     // #121: a real timeout, from node itself; `timeout`/`gtimeout` are not on macOS.

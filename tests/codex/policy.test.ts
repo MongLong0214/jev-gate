@@ -3,8 +3,8 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'n
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
-import { codexSource, codexObservation, type Obj } from '../../src/codex/source.js';
-import { catalogTierModels, loadCodexPolicy } from '../../src/codex/config.js';
+import { codexObservation, type Obj } from '../../src/codex/source.js';
+import { catalogTierModels, loadCodexPolicy, runtimeCodexPolicy } from '../../src/codex/config.js';
 import { routeCodex } from '../../src/codex/router.js';
 import { CodexRpc } from '../../src/codex/rpc.js';
 import { CodexPolicy } from '../../src/codex/policy.js';
@@ -36,6 +36,23 @@ describe('Codex ordered routing and recorded application', () => {
     const override = join(tmp, 'explicit-models.json'); writeFileSync(override, JSON.stringify({ gate: { models: { fast: 'owner-model' } } }));
     expect(loadCodexPolicy({ JEV_CODEX_CONFIG: override, JEV_CODEX_MODEL: 'account-workhorse' }, available).gate.models).toEqual({ ...models, fast: 'owner-model' });
   });
+  it('turns off only the Gate for a mode it no longer knows, from the policy file or JEV_GATE_MODE, and keeps Router and Compact', () => {
+    const old = join(tmp, 'old-mode-policy.json'); writeFileSync(old, JSON.stringify({ gate: { mode: 'lean' }, router: { allowAstra: true }, compact: { budgetChars: 9000 } }));
+    const fromFile = runtimeCodexPolicy({ JEV_CODEX_CONFIG: old });
+    expect(fromFile.gate.mode).toBe('off');
+    expect(fromFile.router).toMatchObject({ enabled: true, model: true, effort: true });
+    expect(fromFile.compact).toMatchObject({ enabled: true, manual: true, budgetChars: 9000 });
+    const fromEnv = runtimeCodexPolicy({ JEV_CODEX_CONFIG: join(tmp, 'policy.json'), JEV_GATE_MODE: 'lean' });
+    expect(fromEnv.gate.mode).toBe('off');
+    expect(fromEnv.router.enabled).toBe(true);
+    expect(fromEnv.compact.enabled).toBe(true);
+    // Doctor still reports the value, and a different invalid section still disables every dispatch.
+    expect(() => loadCodexPolicy({ JEV_CODEX_CONFIG: old })).toThrow('invalid Codex gate config');
+    const broken = join(tmp, 'broken-section.json'); writeFileSync(broken, JSON.stringify({ router: { enabled: 'yes' } }));
+    expect(runtimeCodexPolicy({ JEV_CODEX_CONFIG: broken })).toMatchObject({ gate: { mode: 'off' }, router: { enabled: false }, compact: { enabled: false } });
+    // JEV_CODEX_OUTPUT belonged to the removed Codex Output fold; nothing reads it.
+    expect(runtimeCodexPolicy({ JEV_CODEX_CONFIG: join(tmp, 'policy.json'), JEV_CODEX_OUTPUT: 'off' })).toEqual(runtimeCodexPolicy({ JEV_CODEX_CONFIG: join(tmp, 'policy.json') }));
+  });
   const answersFor = (request: Obj, model = '__keep__', effort = 'low', control = 'task_clear'): Obj => {
     const questions = request['questions'] as Record<string, { type: string; criteria: Record<string, string> | string[] }>;
     return Object.fromEntries(Object.entries(questions).map(([name, q]) => {
@@ -65,7 +82,7 @@ describe('Codex ordered routing and recorded application', () => {
     const { patch, rows } = await invoke();
     expect(patch).toEqual({ effort: 'low', effortEdit: { kind: 'set', value: 'low' } });
     expect(JSON.stringify(rows)).not.toMatch(/PRIVATE_REQUEST|PRIVATE_KEY/);
-    const view = buildOperations([...rows, { phase: 'codex_route_applied', host: 'codex', session_id: 's', prompt_id: 'p', written_at: '2026-09-30T01:00:01Z', applied: true, selected_model: 'gpt-6.1-sol', submitted_model: 'gpt-6.1-sol', submitted_effort: 'low' }], [], new Date('2026-09-30T01:00:02Z'), { trace: true, debug: false, host: 'codex' });
+    const view = buildOperations([...rows, { phase: 'codex_route_applied', host: 'codex', session_id: 's', prompt_id: 'p', written_at: '2026-09-30T01:00:01Z', applied: true, selected_model: 'gpt-6.1-sol', submitted_model: 'gpt-6.1-sol', submitted_effort: 'low' }], [], new Date('2026-09-30T01:00:02Z'), { trace: true, host: 'codex' });
     expect(view.requests).toBe(1); expect(view.latency.measured).toBe(1);
     expect(view.feed.find(s => s.lane === 'host')?.model?.status).toBe('unobserved');
     expect(view.feed.some(s => s.judgements?.length)).toBe(true);
@@ -107,20 +124,7 @@ describe('native workspace authentication routing', () => {
   it.each(['http://workspace.example.invalid', 'https://user:secret@workspace.example.invalid', 'https://workspace.example.invalid/path', 'https://workspace.example.invalid/?x=1', 'https://workspace.example.invalid/#x'])('refuses an invalid native origin: %s', origin => expect(() => nativeWorkspaceUpstream(result(origin), 'same-workspace')).toThrow());
   it('refuses routing discovered for a different workspace', () => expect(() => nativeWorkspaceUpstream(result(undefined, 'other'), 'same-workspace')).toThrow());
 });
-describe('native source integrity and check evidence', () => {
-  const binding = { sessionId: 's', promptId: 'p', request: 'current request', phase: 'dispatch' as const };
-  const current = { id: 'u2', type: 'userMessage', clientId: 'p', content: [{ type: 'text', text: 'current request' }] };
-  const items = [{ id: 'u1', type: 'userMessage', content: [{ type: 'text', text: 'keep my constraint' }] }, { id: 'a1', type: 'agentMessage', text: 'old irrelevant narrative' }, current];
-  it('preserves human constraints and binds to the exact request; later human input invalidates recency', () => {
-    const source = codexSource(items, binding, 'epoch', true);
-    expect(source).toMatchObject({ ok: true, source: { requestRecorded: true, newerHumanText: false, groups: [{ mandatory: true, origin: 'human' }, { mandatory: false, origin: 'assistant_tool' }] } });
-    expect(codexSource([...items, { ...current, id: 'u3', clientId: 'next' }], binding, 'epoch', true)).toMatchObject({ ok: true, source: { newerHumanText: true } });
-    expect(codexSource(items, { ...binding, request: 'different' }, 'epoch', true)).toMatchObject({ ok: false, reason: 'source_identity_mismatch' });
-  });
-  it.each([
-    [false, items, 'source_incomplete'], [true, [...items.slice(0, -1), { ...current, content: [{ type: 'image', url: 'x' }] }], 'source_identity_mismatch'],
-    [true, [{ id: 'opaque', type: 'contextCompaction' }, current], 'source_unsupported'], [true, [{ id: 'pending', type: 'commandExecution', status: 'inProgress' }, current], 'source_incomplete'],
-  ] as const)('falls back for an incomplete or opaque source (%#)', (complete, source, reason) => expect(codexSource(source, binding, 'epoch', complete)).toMatchObject({ ok: false, reason }));
+describe('native check evidence', () => {
   it('never treats a reported pass or a successful shell wrapper with extra commands as observed pass', () => {
     const commands = new Map([['c1', 'vitest run'], ['c2', 'vitest run']]);
     const observation = codexObservation([{ id: 'c1', type: 'commandExecution', command: "/bin/zsh -c 'vitest run'", status: 'failed', exitCode: 1 }, { id: 'w', type: 'fileChange', status: 'inProgress' }, { id: 'c2', type: 'commandExecution', command: "/bin/zsh -c 'vitest run; true'", status: 'completed', exitCode: 0 }], false, commands);
@@ -131,10 +135,10 @@ describe('native compaction contract', () => {
   it('shows a digest waiting for installation and closes only on the native installed record', () => {
     const selected = { host: 'codex', phase: 'codex_compact', session_id: 's', run_id: 'c', stage: 'selected', applied: false, written_at: '2026-09-30T01:00:00Z' };
     const now = new Date('2026-09-30T01:00:01Z');
-    const open = buildOperations([selected], [], now, { trace: true, debug: false, host: 'codex' });
+    const open = buildOperations([selected], [], now, { trace: true, host: 'codex' });
     expect(open.runs.find(r => r.source === 'compact')).toMatchObject({ state: 'active', title: expect.stringContaining('Compact') });
     const installed = { ...selected, stage: 'installed', applied: true, written_at: '2026-09-30T01:00:01Z' };
-    expect(buildOperations([selected, installed], [], now, { trace: true, debug: false, host: 'codex' }).runs.find(r => r.source === 'compact')?.state).toBe('done');
+    expect(buildOperations([selected, installed], [], now, { trace: true, host: 'codex' }).runs.find(r => r.source === 'compact')?.state).toBe('done');
   });
   const message = (role: string, text: string) => ({ type: 'message', role, content: [{ type: role === 'assistant' ? 'output_text' : 'input_text', text }] });
   const input = [message('user', 'Preserve this exact constraint.'), message('assistant', 'irrelevant narrative '.repeat(4000)), message('user', 'New question'), message('assistant', 'new reply'), message('user', 'compact-marker')];

@@ -1,10 +1,9 @@
-import { lstatSync, opendirSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { lstatSync, opendirSync, statSync } from 'node:fs';
 
 import type { Env } from './config.js';
 import { readTraceRecords, type TraceDirectoryReader, type TraceCache } from './explain.js';
 import { readLiveness } from './liveness.js';
-import { buildOperations, type DebugRecord, type OperationsView } from './operations.js';
+import { buildOperations, type ModRecord, type OperationsView } from './operations.js';
 import type { Host } from './host-support.js';
 import { ClaudeWorkerActivityReader, type WorkerActivityView } from './claude-worker-activity.js';
 import { memo } from './memo.js';
@@ -14,11 +13,9 @@ import { memo } from './memo.js';
  * Prompt text, job files and anything that looks like a key never become a field of the snapshot.
  */
 
-const MAX_DEBUG_BYTES = 2_000_000;
 const MAX_EVENTS = 120;
 const TOKEN = /^[A-Za-z0-9_.:/+@-]{1,80}$/;
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
-const DEBUG_PREFIX = /jev-(router|compact|output) /;
 
 const REASON: Record<string, string> = {
   admission_not_worth: '위임해도 계산상 이득이 없어 이 세션이 직접 처리합니다',
@@ -62,7 +59,6 @@ export interface ActivitySnapshot {
   host: Host | 'mixed';
   at: string;
   traceDir: string | null;
-  debugDir: string | null;
   traceFiles: number;
   unreadable: number;
   liveness: { recorded: number; attempted: number; lastReason: string | null } | null;
@@ -252,13 +248,6 @@ const gateEvent = (r: Rec): ActivityEvent | null => {
   if (phase === 'guard' && r['allow'] === false) {
     return { at, kind: 'follow', title: '도구 거절', call: 'Jev 호출이 아닙니다', used: `${token(r['tool_name']) ?? '도구'} 호출을 거절했습니다` };
   }
-  if (phase === 'lean_result') {
-    const call = jevCall(r);
-    const decision = sub(r, 'decision');
-    const action = decision ? token(decision['action']) : null;
-    const why = decision ? reasonText(decision['reason']) : null;
-    return { at, kind: call.kind, title: 'lean', call: call.call, used: [action ? `선택 ${action}` : null, why].filter((x): x is string => x !== null).join('. ') || '기록된 선택이 없습니다' };
-  }
   return null;
 };
 
@@ -337,67 +326,10 @@ const routerChanged = (r: Rec): boolean => {
   return false;
 };
 
-const readRouter = (dir: string): { rows: Array<{ at: string; rec: Rec }>; all: DebugRecord[]; notes: string[] } => {
-  const notes: string[] = [];
-  if (isSymlink(dir)) return { rows: [], all: [], notes: ['호스트 디버그 디렉터리가 심볼릭 링크라 읽지 않습니다'] };
-  let names: string[];
-  try {
-    names = readdirSync(dir);
-  } catch {
-    return { rows: [], all: [], notes: ['호스트 디버그 디렉터리를 열 수 없습니다'] };
-  }
-  const rows: Array<{ at: string; rec: Rec }> = [];
-  const all: DebugRecord[] = [];
-  let unparsed = 0;
-  let skippedLarge = 0;
-  for (const name of names) {
-    if (name.startsWith('.')) continue;
-    const path = join(dir, name);
-    if (isSymlink(path)) continue;
-    let st: ReturnType<typeof statSync>;
-    try {
-      st = statSync(path);
-    } catch {
-      continue;
-    }
-    if (!st.isFile()) continue;
-    if (st.size > MAX_DEBUG_BYTES) {
-      skippedLarge++;
-      continue;
-    }
-    let text: string;
-    try {
-      text = readFileSync(path, 'utf8');
-    } catch {
-      continue;
-    }
-    for (const line of text.split('\n')) {
-      const atMatch = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)/.exec(line);
-      const at = atMatch?.[1] ?? '';
-      const match = DEBUG_PREFIX.exec(line);
-      if (!match || !match[1]) continue;
-      const component = match[1] as DebugRecord['component'];
-      try {
-        const parsed: unknown = JSON.parse(line.slice(match.index + match[0].length));
-        if (isRecord(parsed)) {
-          all.push({ at, component, rec: parsed });
-          if (component === 'router') rows.push({ at, rec: parsed });
-        }
-        else unparsed++;
-      } catch {
-        unparsed++;
-      }
-    }
-  }
-  if (skippedLarge > 0) notes.push(`라우터 디버그 ${skippedLarge}개는 ${MAX_DEBUG_BYTES}바이트를 넘겨 건너뛰었습니다`);
-  if (unparsed > 0) notes.push(`라우터 줄 ${unparsed}개는 JSON으로 읽지 못했습니다`);
-  return { rows, all, notes };
-};
-
 const NOTES = [
   '프롬프트 원문, API 키, 작업 파일은 읽지 않습니다.',
   '가격의 토큰 수는 게이트가 위임을 고를 때 쓴 계산이고, 측정된 절감이나 청구액이 아닙니다.',
-  'Evidence·Compact·Output·Router는 기본 로컬 기록을 사용합니다. 호스트 디버그 로그는 선택적으로 함께 읽습니다.',
+  'Evidence·Compact·Router는 기본 로컬 기록을 사용합니다.',
 ];
 
 /** A result file is written after the HTTP call. Past this, an intent with no result is not still in flight. */
@@ -407,7 +339,6 @@ const INTENT_RESULT: Record<string, string> = {
   admission_intent: 'admission_result',
   pre_intent: 'pre_result',
   interpretation_intent: 'interpretation_result',
-  lean_intent: 'lean_result',
 };
 
 const ROUTER_OPEN = new Set(['root', 'child', 'spawn']);
@@ -426,7 +357,6 @@ const phaseTitle = (r: Rec): string => {
   const phase = token(r['phase']);
   if (phase === 'admission_intent' || phase === 'admission_result') return '게이트 A';
   if (phase === 'pre_intent' || phase === 'pre_result') return token(r['role']) === 'planner' ? '플래너 등급' : '워커 등급';
-  if (phase?.startsWith('lean')) return 'lean';
   if (phase?.startsWith('interpretation')) return '계획 해석';
   return phase ?? '기록';
 };
@@ -559,24 +489,14 @@ const withHost = (original: Rec, host: Host): Rec => {
   if (cached && cached['host'] === value) return cached;
   const r = { ...original, host: value }; hosted.set(original, r); return r;
 };
-const modRows = new WeakMap<Rec, DebugRecord>();
-const fingerprints = new WeakMap<DebugRecord, string>();
-// A native record and its optional debug mirror describe one event: compare every field but the session.
-const fingerprint = (row: DebugRecord): string => {
-  let key = fingerprints.get(row);
-  if (key === undefined) {
-    key = JSON.stringify([row.component, Object.entries(row.rec).filter(([k]) => k !== 'session_id').sort(([a], [b]) => a.localeCompare(b))]);
-    fingerprints.set(row, key);
-  }
-  return key;
-};
+const modRows = new WeakMap<Rec, ModRecord>();
 
-export const loadActivity = (opts: { traceDir: string | null; traceDirs?: readonly { host: Host; dir: string }[] | undefined; debugDir: string | null; env: Env; now?: Date; host?: Host; traceCache?: TraceCache; traceReader?: TraceDirectoryReader; workerReader?: ClaudeWorkerActivityReader }): ActivitySnapshot => {
+export const loadActivity = (opts: { traceDir: string | null; traceDirs?: readonly { host: Host; dir: string }[] | undefined; env: Env; now?: Date; host?: Host; traceCache?: TraceCache; traceReader?: TraceDirectoryReader; workerReader?: ClaudeWorkerActivityReader }): ActivitySnapshot => {
   const notes = [...NOTES];
   const events: ActivityEvent[] = [];
   const gateRecords: Rec[] = [];
   const routerRows: Array<{ at: string; rec: Rec }> = [];
-  const debugRows: DebugRecord[] = [];
+  const modRecords: ModRecord[] = [];
   let traceFiles = 0;
   let unreadable = 0;
   let jevCalls = 0;
@@ -585,8 +505,6 @@ export const loadActivity = (opts: { traceDir: string | null; traceDirs?: readon
   let routerChanges = 0;
   const traceDirs = opts.traceDirs ?? (opts.traceDir ? [{ host: opts.host ?? 'claude', dir: opts.traceDir }] : []);
   const traceAvailable = traceDirs.some(source => readableDir(source.dir));
-  const debugAvailable = readableDir(opts.debugDir) || traceAvailable;
-  const recordedMods: DebugRecord[] = [];
 
   for (const source of traceDirs) {
     if (isSymlink(source.dir)) { notes.push('추적 디렉터리가 심볼릭 링크라 읽지 않습니다.'); continue; }
@@ -599,14 +517,14 @@ export const loadActivity = (opts: { traceDir: string | null; traceDirs?: readon
       if (opts.host && (r['host'] === 'codex' ? 'codex' : 'claude') !== opts.host) continue;
       gateRecords.push(r);
       const phase = token(r['phase']);
-      if (phase && ['mod_router', 'mod_compact', 'mod_output', 'claude_router', 'claude_compact', 'claude_output'].includes(phase)) {
+      if (phase && ['mod_router', 'mod_compact', 'claude_router', 'claude_compact'].includes(phase)) {
         let row = modRows.get(r);
         if (!row) {
           const { host: _host, session_id: _session, phase: _phase, version: _version, invocation_id: _id, written_at: _at, ...fields } = r;
-          row = { component: phase.replace(/^(mod|claude)_/, '') as DebugRecord['component'], at: token(r['written_at']) ?? String(r['written_at'] ?? ''), rec: { ...fields, session_id: r['session_id'] } };
+          row = { component: phase.replace(/^(mod|claude)_/, '') as ModRecord['component'], at: token(r['written_at']) ?? String(r['written_at'] ?? ''), rec: { ...fields, session_id: r['session_id'] } };
           modRows.set(r, row);
         }
-        recordedMods.push(row);
+        modRecords.push(row);
         continue;
       }
       if (phase === 'admission_result') {
@@ -614,25 +532,13 @@ export const loadActivity = (opts: { traceDir: string | null; traceDirs?: readon
         const shape = token(sub(r, 'decision')?.['shape']);
         if (shape === 'direct') direct++;
         else if (shape === 'orchestrated') orchestrated++;
-      } else if ((phase === 'pre_result' || phase === 'lean_result') && r['attempted'] === true) jevCalls++;
+      } else if (phase === 'pre_result' && r['attempted'] === true) jevCalls++;
       const event = gateEvent(r);
       if (event) events.push(event);
     }
   }
 
-  if (opts.debugDir !== null && opts.host !== 'codex') {
-    const router = readRouter(opts.debugDir);
-    notes.push(...router.notes);
-    // Prefer the independent recorder over the debug mirror of the same event.
-    const remaining = new Map<string, number>();
-    for (const row of recordedMods) { const key = fingerprint(row); remaining.set(key, (remaining.get(key) ?? 0) + 1); }
-    for (const row of router.all) {
-      const key = fingerprint(row); const matches = remaining.get(key) ?? 0;
-      if (matches > 0) remaining.set(key, matches - 1); else debugRows.push(row);
-    }
-  }
-  debugRows.push(...recordedMods);
-  for (const row of debugRows.filter(row => row.component === 'router')) {
+  for (const row of modRecords.filter(row => row.component === 'router')) {
     routerRows.push({ at: row.at, rec: row.rec });
     if (row.rec['sent'] === true) jevCalls++;
     if (routerChanged(row.rec)) routerChanges++;
@@ -647,21 +553,19 @@ export const loadActivity = (opts: { traceDir: string | null; traceDirs?: readon
   const host = opts.host ?? (hosts.size > 1 ? 'mixed' : hosts.has('codex') ? 'codex' : 'claude');
   // After a 402 the router refuses later calls locally (credential_refused), so exhaustion holds until a call succeeds.
   let credit: ActivitySnapshot['credit'] = { exhausted: false, at: null };
-  for (const row of [...debugRows].filter(row => row.component === 'router').sort((a, b) => b.at.localeCompare(a.at))) {
+  for (const row of [...modRecords].filter(row => row.component === 'router').sort((a, b) => b.at.localeCompare(a.at))) {
     const assessment = row.rec['assessment'];
     if (assessment === 'ok') break;
     if (assessment === 'payment_required') { credit = { exhausted: true, at: row.at }; break; }
   }
-  const operations = buildOperations(gateRecords, debugRows, now, {
+  const operations = buildOperations(gateRecords, modRecords, now, {
     trace: traceAvailable,
-    debug: debugAvailable,
     ...(host === 'codex' ? { host } : {}),
   });
   return {
     host,
     at: now.toISOString(),
     traceDir: opts.traceDir,
-    debugDir: opts.debugDir,
     traceFiles,
     unreadable,
     liveness: liveness ? { recorded: liveness.recent.length, attempted: liveness.recent.filter((e) => e.attempted).length, lastReason: token(liveness.recent.at(-1)?.reason ?? null) } : null,
