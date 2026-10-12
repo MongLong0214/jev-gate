@@ -729,6 +729,9 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
   const childStep = async (engine: RouterEngine, e: TurnStepEvent, id: string, signal: AbortSignal): Promise<Prepared | null> => {
     let c = children.get(id);
     if (!c || nativeChildren.has(id) || c.stopped) {
+      log(engine, { event: 'child_route', scope: 'child', agent_id: id, turn: e.turnId, index: e.index,
+        hook_version: ROUTER_HOOK_VERSION, sent: false,
+        skipped: c?.stopped ? 'child_stopped' : nativeChildren.has(id) ? 'native_child' : 'child_unregistered' });
       rememberNativeChild(id);
       return null;
     }
@@ -895,6 +898,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     }
     log(engine, {
       event: 'prepared',
+      hook_version: ROUTER_HOOK_VERSION,
       turn: e.turnId,
       index: e.index,
       agent_id: e.agentId ?? null,
@@ -910,7 +914,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       const applied = patch ? applyEffort({ ...e, ...(patch.model ? { model: patch.model } : {}), ...(patch.effort ? { effort: patch.effort } : {}) }, patch.effortEdit) : e;
       const child = e.agentId ? children.get(e.agentId) : undefined;
       if (child && !own.aborted) child.lastApplied = { model: applied.model, ...(applied.effort !== undefined ? { effort: applied.effort } : {}) };
-      log(engine, { event: 'model_request', turn: e.turnId, index: e.index, agent_id: e.agentId ?? null,
+      log(engine, { event: 'model_request', hook_version: ROUTER_HOOK_VERSION, turn: e.turnId, index: e.index, agent_id: e.agentId ?? null,
         scope: e.agentId === undefined ? 'root' : 'child', requested: applied.model, requested_effort: applied.effort ?? null });
       result = yield* next(applied);
     } catch (err) {
@@ -1144,6 +1148,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       (owned || inheritSkip(e) === null) && (config.routeSubagentModel || config.routeSubagentEffort) && !!engine.childContext;
     log(engine, {
       event: 'prepared',
+      hook_version: ROUTER_HOOK_VERSION,
       tool_use_id: e.tool_use_id,
       scope: 'spawn',
       preparation_ms: Math.max(0, engine.now() - startedAt),
