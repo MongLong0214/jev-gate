@@ -91,15 +91,11 @@ describe('validateConfig', () => {
     expect(DEFAULT_CONFIG).not.toHaveProperty('resultConfidenceFloor');
   });
 
-  it('runs a deployed file, JEV_GATE_MODE or gateMode option that still selects the withdrawn lean mode as auto (#217)', () => {
-    expect(validateConfig({ ...V5, mode: 'lean' })).toMatchObject({ ok: true, config: { mode: 'auto' } });
-    expect(validateConfig({ version: 5, mode: 'lean' })).toMatchObject({ ok: true, config: { mode: 'auto' } });
-    const p = write('lean-217.json', { ...V5, mode: 'lean' });
-    expect(loadConfig({ JEV_GATE_CONFIG: p })).toMatchObject({ ok: true, config: { mode: 'auto' }, source: p });
-    const off = write('off-217.json', { ...V5, mode: 'off' });
-    expect(loadConfig({ JEV_GATE_CONFIG: off, JEV_GATE_MODE: 'lean' })).toMatchObject({ ok: true, config: { mode: 'auto' }, source: off });
-    expect(loadConfig({ JEV_GATE_CONFIG: off, CLAUDE_PLUGIN_OPTION_GATEMODE: 'lean' })).toMatchObject({ ok: true, config: { mode: 'auto' }, source: off });
-    expect(loadConfig({ JEV_GATE_CONFIG: off, JEV_GATE_MODE: 'off', CLAUDE_PLUGIN_OPTION_GATEMODE: 'lean' })).toMatchObject({ ok: true, source: 'env:off' });
+  it('refuses an unknown mode from JEV_GATE_MODE, the gateMode option or a file instead of mapping it', () => {
+    const p = write('old-mode.json', { ...V5, mode: 'lean' });
+    expect(loadConfig({ JEV_GATE_CONFIG: p })).toMatchObject({ ok: false, source: p });
+    expect(loadConfig({ JEV_GATE_MODE: 'lean' })).toMatchObject({ ok: false, source: 'env' });
+    expect(loadConfig({ CLAUDE_PLUGIN_OPTION_GATEMODE: 'lean' })).toMatchObject({ ok: false, source: 'env' });
   });
 
   it.each([
@@ -118,6 +114,8 @@ describe('validateConfig', () => {
   it.each([
     ['unknown key', { version: 5, nope: 1 }, 'unknown config keys'],
     ['mode', { version: 5, mode: 'enrich2' }, 'mode must be'],
+    // A mode from an older release is refused like any unknown mode; nothing maps it to another mode.
+    ['mode from an older release', { version: 5, mode: 'lean' }, 'mode must be'],
     // The withdrawn search filter's mode: a deployed file that still sets it is refused with the reason, not crashed.
     ['withdrawn context mode', { version: 5, mode: 'context' }, 'the `context` search filter was withdrawn'],
     ['jevModel', { version: 5, jevModel: 'jev 1;rm -rf' }, 'jevModel must match'],

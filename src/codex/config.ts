@@ -22,7 +22,8 @@ export const catalogTierModels = (baseline: string, catalog: readonly CodexModel
   return { fast: pick(/fast|efficient|affordable|easier|lightweight/i, standard), standard, deep,
     frontier: pick(/frontier|most demanding|most intelligent/i, deep) };
 };
-export const loadCodexPolicy = (env: Env, catalog: readonly CodexModel[] = []): CodexPolicyConfig => {
+/** `gateOffOnInvalid`: a Gate value that does not validate turns only the Gate off, so Router and Compact keep their own settings. */
+export const loadCodexPolicy = (env: Env, catalog: readonly CodexModel[] = [], gateOffOnInvalid = false): CodexPolicyConfig => {
   let raw: Record<string, unknown> = {};
   const path = env['JEV_CODEX_CONFIG'] ?? join(env['XDG_CONFIG_HOME'] ?? join(env['HOME'] || homedir(), '.config'), 'jev-gate', 'codex.json');
   try { raw = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>; }
@@ -34,7 +35,8 @@ export const loadCodexPolicy = (env: Env, catalog: readonly CodexModel[] = []): 
   // Never run Claude aliases in Codex or guess what models the current account can execute.
   const baseline = env['JEV_CODEX_MODEL'] ?? 'native-session-model';
   const models = catalogTierModels(baseline, catalog);
-  const checked = validateConfig({ version: 5, mode: 'auto', ...gateRaw, ...(env['JEV_GATE_MODE'] ? { mode: env['JEV_GATE_MODE'] } : {}), models: { ...models, ...(gateRaw as Record<string, unknown>)['models'] as object } });
+  const gate = validateConfig({ version: 5, mode: 'auto', ...gateRaw, ...(env['JEV_GATE_MODE'] ? { mode: env['JEV_GATE_MODE'] } : {}), models: { ...models, ...(gateRaw as Record<string, unknown>)['models'] as object } });
+  const checked = gate.ok || !gateOffOnInvalid ? gate : validateConfig({ version: 5, mode: 'off', models });
   if (!checked.ok) throw new Error('invalid Codex gate config');
   const section = (key: string, defaults: Record<string, unknown>): Record<string, unknown> => {
     const v = raw[key] ?? {};
@@ -51,9 +53,9 @@ export const loadCodexPolicy = (env: Env, catalog: readonly CodexModel[] = []): 
   return { gate: checked.config, router, compact };
 };
 
-/** Runtime failures preserve the owner's root and disable every new policy dispatch. Doctor still reports the loader error. */
+/** A Gate value that does not validate turns off only the Gate. Any other runtime failure preserves the owner's root and disables every new policy dispatch. Doctor still reports the loader error. */
 export const runtimeCodexPolicy = (env: Env, catalog: readonly CodexModel[] = []): CodexPolicyConfig => {
-  try { return loadCodexPolicy(env, catalog); }
+  try { return loadCodexPolicy(env, catalog, true); }
   catch {
     const model = env['JEV_CODEX_MODEL'] ?? 'native-session-model';
     const checked = validateConfig({ version: 5, mode: 'off', models: { fast: model, standard: model, deep: model, frontier: model } });

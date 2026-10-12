@@ -76,9 +76,6 @@ describe('plan', () => {
     expect(retired.status).toBe(1);
     expect(retired.stderr).toMatch(/--arms must be `router` or a unique subset/);
     expect(bench(['--arms', 'jev_hierarchy,jev_hierarchy']).status).toBe(1);
-    // #217: the withdrawn Lean profile and its arms are refused, not silently planned.
-    expect(bench(['--arms', 'lean']).status).toBe(1);
-    expect(bench(['--arms', 'jev_lean']).status).toBe(1);
     expect(bench(['--regrade', '--execute', '--max-sessions', '8']).status).toBe(1);
     expect(bench(['--execute']).stderr).toMatch(/--max-sessions/);
     const badManifest = join(tmp, 'bad.json');

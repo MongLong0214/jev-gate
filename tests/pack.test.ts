@@ -89,9 +89,7 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     const list = spawnSync('unzip', ['-Z1', join(outDir, archive!)], { encoding: 'utf8' }).stdout.trim().split('\n');
     const agents = ['worker-fast', 'worker', 'worker-deep', 'worker-frontier', 'planner', 'planner-frontier'].map((a) => `agents/${a}.md`);
     for (const must of ['dist/entry.js', 'dist/hook.js', 'dist/jev.js', 'dist/brief.js', 'dist/cli.js', 'dist/job.js', 'dist/plan.js', 'hooks/hooks.json', ...agents, '.claude-plugin/plugin.json', ...INSTALL_DOCS]) expect(list, must).toContain(must);
-    // #217: the withdrawn Lean mode ships no agent, hook set or module.
     expect(list.filter((f) => f.startsWith('agents/'))).toEqual([...agents].sort());
-    expect(list.filter((f) => /^(?:hooks\/lean\.json|dist\/lean(?:-source)?\.js)$/.test(f))).toEqual([]);
     expect(list.some((f) => f.startsWith('src/') && !/^src\/(?:cost|provider-prices(?:-data)?|route-cost|claude-cache|frontier-routing|router-(?:answers|selection|context|child-context|secret)|claude-(?:models|candidates))\.ts$/.test(f) || f.includes('/tests/') || f.startsWith('tests/') || f.startsWith('node_modules/') || f.startsWith('bench/') && f !== 'bench/ab/tasks.example.json' || f === 'HANDOFF.md' || f.includes('.env') && !f.endsWith('.env.example'))).toBe(false);
     // v0.6.0: the one plugin carries the three Mods from their source, the module that loads them, and the evidence
     // server with its skill, at the paths plugin.json and hooks/register.ts name; no Mod manifest, test or declaration.
@@ -155,11 +153,6 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     expect(whole.stdout.split('\n').filter((l) => l.startsWith('[fail]'))).toEqual([]);
     expect(whole.status).toBe(0);
   }, 60_000);
-
-  it('refuses the withdrawn lean profile (#217)', () => {
-    const pack = spawnSync(process.execPath, [join(root, 'scripts', 'pack.mjs'), join(tmp, 'pack lean out'), '--root', pluginRoot, '--profile', 'lean'], { encoding: 'utf8' });
-    expect(pack).toMatchObject({ status: 1, stderr: 'pack: unknown profile lean\n' });
-  });
 
   it('packs the same bytes every time, whatever the timestamps of its files', () => {
     const sha = (dir: string) => {

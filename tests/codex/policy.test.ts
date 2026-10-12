@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { codexObservation, type Obj } from '../../src/codex/source.js';
-import { catalogTierModels, loadCodexPolicy } from '../../src/codex/config.js';
+import { catalogTierModels, loadCodexPolicy, runtimeCodexPolicy } from '../../src/codex/config.js';
 import { routeCodex } from '../../src/codex/router.js';
 import { CodexRpc } from '../../src/codex/rpc.js';
 import { CodexPolicy } from '../../src/codex/policy.js';
@@ -36,10 +36,22 @@ describe('Codex ordered routing and recorded application', () => {
     const override = join(tmp, 'explicit-models.json'); writeFileSync(override, JSON.stringify({ gate: { models: { fast: 'owner-model' } } }));
     expect(loadCodexPolicy({ JEV_CODEX_CONFIG: override, JEV_CODEX_MODEL: 'account-workhorse' }, available).gate.models).toEqual({ ...models, fast: 'owner-model' });
   });
-  it('runs a Codex policy or JEV_GATE_MODE that still selects the withdrawn lean mode as auto (#217)', () => {
-    const lean = join(tmp, 'lean-policy.json'); writeFileSync(lean, JSON.stringify({ gate: { mode: 'lean' } }));
-    expect(loadCodexPolicy({ JEV_CODEX_CONFIG: lean }).gate.mode).toBe('auto');
-    expect(loadCodexPolicy({ JEV_CODEX_CONFIG: join(tmp, 'policy.json'), JEV_GATE_MODE: 'lean' }).gate.mode).toBe('auto');
+  it('turns off only the Gate for a mode it no longer knows, from the policy file or JEV_GATE_MODE, and keeps Router and Compact', () => {
+    const old = join(tmp, 'old-mode-policy.json'); writeFileSync(old, JSON.stringify({ gate: { mode: 'lean' }, router: { allowAstra: true }, compact: { budgetChars: 9000 } }));
+    const fromFile = runtimeCodexPolicy({ JEV_CODEX_CONFIG: old });
+    expect(fromFile.gate.mode).toBe('off');
+    expect(fromFile.router).toMatchObject({ enabled: true, model: true, effort: true });
+    expect(fromFile.compact).toMatchObject({ enabled: true, manual: true, budgetChars: 9000 });
+    const fromEnv = runtimeCodexPolicy({ JEV_CODEX_CONFIG: join(tmp, 'policy.json'), JEV_GATE_MODE: 'lean' });
+    expect(fromEnv.gate.mode).toBe('off');
+    expect(fromEnv.router.enabled).toBe(true);
+    expect(fromEnv.compact.enabled).toBe(true);
+    // Doctor still reports the value, and a different invalid section still disables every dispatch.
+    expect(() => loadCodexPolicy({ JEV_CODEX_CONFIG: old })).toThrow('invalid Codex gate config');
+    const broken = join(tmp, 'broken-section.json'); writeFileSync(broken, JSON.stringify({ router: { enabled: 'yes' } }));
+    expect(runtimeCodexPolicy({ JEV_CODEX_CONFIG: broken })).toMatchObject({ gate: { mode: 'off' }, router: { enabled: false }, compact: { enabled: false } });
+    // JEV_CODEX_OUTPUT belonged to the removed Codex Output fold; nothing reads it.
+    expect(runtimeCodexPolicy({ JEV_CODEX_CONFIG: join(tmp, 'policy.json'), JEV_CODEX_OUTPUT: 'off' })).toEqual(runtimeCodexPolicy({ JEV_CODEX_CONFIG: join(tmp, 'policy.json') }));
   });
   const answersFor = (request: Obj, model = '__keep__', effort = 'low', control = 'task_clear'): Obj => {
     const questions = request['questions'] as Record<string, { type: string; criteria: Record<string, string> | string[] }>;
@@ -70,7 +82,7 @@ describe('Codex ordered routing and recorded application', () => {
     const { patch, rows } = await invoke();
     expect(patch).toEqual({ effort: 'low', effortEdit: { kind: 'set', value: 'low' } });
     expect(JSON.stringify(rows)).not.toMatch(/PRIVATE_REQUEST|PRIVATE_KEY/);
-    const view = buildOperations([...rows, { phase: 'codex_route_applied', host: 'codex', session_id: 's', prompt_id: 'p', written_at: '2026-09-30T01:00:01Z', applied: true, selected_model: 'gpt-6.1-sol', submitted_model: 'gpt-6.1-sol', submitted_effort: 'low' }], [], new Date('2026-09-30T01:00:02Z'), { trace: true, debug: false, host: 'codex' });
+    const view = buildOperations([...rows, { phase: 'codex_route_applied', host: 'codex', session_id: 's', prompt_id: 'p', written_at: '2026-09-30T01:00:01Z', applied: true, selected_model: 'gpt-6.1-sol', submitted_model: 'gpt-6.1-sol', submitted_effort: 'low' }], [], new Date('2026-09-30T01:00:02Z'), { trace: true, host: 'codex' });
     expect(view.requests).toBe(1); expect(view.latency.measured).toBe(1);
     expect(view.feed.find(s => s.lane === 'host')?.model?.status).toBe('unobserved');
     expect(view.feed.some(s => s.judgements?.length)).toBe(true);
@@ -123,10 +135,10 @@ describe('native compaction contract', () => {
   it('shows a digest waiting for installation and closes only on the native installed record', () => {
     const selected = { host: 'codex', phase: 'codex_compact', session_id: 's', run_id: 'c', stage: 'selected', applied: false, written_at: '2026-09-30T01:00:00Z' };
     const now = new Date('2026-09-30T01:00:01Z');
-    const open = buildOperations([selected], [], now, { trace: true, debug: false, host: 'codex' });
+    const open = buildOperations([selected], [], now, { trace: true, host: 'codex' });
     expect(open.runs.find(r => r.source === 'compact')).toMatchObject({ state: 'active', title: expect.stringContaining('Compact') });
     const installed = { ...selected, stage: 'installed', applied: true, written_at: '2026-09-30T01:00:01Z' };
-    expect(buildOperations([selected, installed], [], now, { trace: true, debug: false, host: 'codex' }).runs.find(r => r.source === 'compact')?.state).toBe('done');
+    expect(buildOperations([selected, installed], [], now, { trace: true, host: 'codex' }).runs.find(r => r.source === 'compact')?.state).toBe('done');
   });
   const message = (role: string, text: string) => ({ type: 'message', role, content: [{ type: role === 'assistant' ? 'output_text' : 'input_text', text }] });
   const input = [message('user', 'Preserve this exact constraint.'), message('assistant', 'irrelevant narrative '.repeat(4000)), message('user', 'New question'), message('assistant', 'new reply'), message('user', 'compact-marker')];

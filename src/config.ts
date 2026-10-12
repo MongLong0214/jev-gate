@@ -109,8 +109,6 @@ const V5_KEYS = new Set<string>([
 const LEGACY_MARKERS = ['uncertainTier', 'opusModel', 'frontierModel', 'confidenceFloor'];
 /** #213: the withdrawn Gate C floor. A deployed file may still set it, so it loads and is dropped unread; remove at the next config version. */
 const IGNORED_KEY = 'resultConfidenceFloor';
-/** #217: the withdrawn Lean mode. A deployed file or option may still select it, so it runs as `auto`; remove at the next config version. */
-const WITHDRAWN_MODE = 'lean';
 const FLOOR_KEYS = ['admissionConfidenceFloor', 'routeConfidenceFloor'] as const;
 
 export const MIGRATION_SAMPLE = `{
@@ -152,7 +150,6 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
   const c: Record<string, unknown> = { ...DEFAULT_CONFIG, ...raw };
   // An explicitly serial deployed file keeps its shared checkout; a fresh/minimal file gets the open defaults.
   if (raw['maxParallelWorkers'] === 1 && !('workerIsolation' in raw)) c['workerIsolation'] = 'none';
-  if (c['mode'] === WITHDRAWN_MODE) c['mode'] = 'auto';
   const mode = c['mode'];
   if (typeof mode !== 'string' || !MODES.includes(mode as Mode)) return { ok: false, error: 'mode must be off|native|auto (the `context` search filter was withdrawn and its code removed; see bench/results/v5-context-viability-2026-09-18)' };
   const jevModel = c['jevModel'];
@@ -300,8 +297,7 @@ export const hookDefaultMode = (env: Env): Mode => (env['CLAUDE_PLUGIN_ROOT'] ? 
  * overrides just the mode. With no file the mode is `defaultMode` (see hookDefaultMode).
  */
 export const loadConfig = (env: Env, readFile: (path: string) => string = (p) => readFileSync(p, 'utf8'), defaultMode: Mode = 'off'): ConfigResult => {
-  const rawModeEnv = env['JEV_GATE_MODE'] || env['CLAUDE_PLUGIN_OPTION_GATEMODE'];
-  const modeEnv = rawModeEnv === WITHDRAWN_MODE ? 'auto' : rawModeEnv;
+  const modeEnv = env['JEV_GATE_MODE'] || env['CLAUDE_PLUGIN_OPTION_GATEMODE'];
   if (modeEnv === 'off') return { ok: true, config: { ...DEFAULT_CONFIG, mode: 'off' }, source: 'env:off' };
   if (modeEnv !== undefined && modeEnv !== '' && !MODES.includes(modeEnv as Mode)) return { ok: false, error: 'JEV_GATE_MODE (or the gateMode option) must be off|native|auto', source: 'env' };
   const path = resolveConfigPath(env);

@@ -419,20 +419,3 @@ describe('follow-up cost', () => {
   });
 });
 
-describe('withdrawn Lean mode (#217)', () => {
-  it('still reports a historical run with Lean arms, and a lean-mode cell’s Jev cost is unknown, never zero', () => {
-    const run = writeRun('lean-history', [{ job: 'A', arms: ['native_auto', 'jev_lean', 'sonnet_native'] }], [
-      cell('A', 'native_auto'),
-      cell('A', 'jev_lean', { mode: 'lean', plugin_expected: true, lean: { accounting: 2, selections: 1, jev_attempts: 1, jev_cost_usd: 0.02, jev_cost_by_request: { fu: 0.01 } } }),
-      cell('A', 'sonnet_native'),
-    ]);
-    const r = buildReport(run);
-    expect(r.planned_rows).toBe(3);
-    const lean = r.rows.find((x) => x.arm === 'jev_lean')!;
-    expect(lean.status).toBe('completed');
-    expect(lean.jev_cost_usd).toBeNull();
-    expect(lean.total_cost_usd).toBeNull();
-    expect(r.rows.find((x) => x.arm === 'native_auto')!.jev_cost_usd).toBe(0);
-    expect(renderMarkdown(r)).toContain('jev_lean');
-  });
-});

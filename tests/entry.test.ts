@@ -23,8 +23,8 @@ describe('isDefinitelyOff (#48 P2)', () => {
     expect(isDefinitelyOff({ HOME, JEV_GATE_MODE: 'off' } as Env)).toBe(true);
   });
 
-  it('is not off for native, auto or the withdrawn lean (#217, runs auto) via env', () => {
-    for (const mode of ['native', 'auto', 'lean']) expect(isDefinitelyOff({ HOME, JEV_GATE_MODE: mode } as Env)).toBe(false);
+  it('is not off for native or auto via env', () => {
+    for (const mode of ['native', 'auto']) expect(isDefinitelyOff({ HOME, JEV_GATE_MODE: mode } as Env)).toBe(false);
   });
 
   it('is not off when no env and no config file exist at all (defaults to off, so this IS off)', () => {
@@ -73,8 +73,8 @@ describe('isDefinitelyOff gateMode precedence (#96)', () => {
     expect(isDefinitelyOff({ ...plugin, JEV_GATE_CONFIG: cfg })).toBe(true);
   });
 
-  it('is not off when the plugin option is unset and the file is native or the withdrawn lean (#217, runs auto)', () => {
-    for (const mode of ['native', 'lean']) {
+  it('is not off when the plugin option is unset and the file is native', () => {
+    for (const mode of ['native']) {
       const cfg = configFile({ version: 5, mode });
       expect(isDefinitelyOff({ ...plugin, JEV_GATE_CONFIG: cfg })).toBe(false);
     }

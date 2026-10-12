@@ -292,9 +292,7 @@ export const toRowView = (p: PlannedCell, c: Record<string, unknown> | null): Ro
   // A Router arm's cost is known only from a log the runner read: a block still at its initial zero (a partial run
   // reported before ingestion, `log: null`) is unobserved, not free.
   const routerCost = c && c['router_expected'] === true ? (router && router.log === 'read' ? router.jev_cost_usd : null) : router ? router.jev_cost_usd : 0;
-  // Cells from the withdrawn Lean mode (#217) carried their own Jev spend, which is no longer read: unknown, never zero.
-  const withdrawn = c !== null && c['mode'] === 'lean';
-  const jev = !withdrawn && legacyCost !== null && routerCost !== null ? legacyCost + routerCost : null;
+  const jev = legacyCost !== null && routerCost !== null ? legacyCost + routerCost : null;
   // An incomplete legacy total still has a known part; the known subtotal keeps it, priced as the total would be.
   const legacyKnownTokens = money(gate['jev_input_tokens_known']);
   const legacyKnownCost =

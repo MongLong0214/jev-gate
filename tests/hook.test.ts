@@ -354,6 +354,26 @@ const seedPlanned = async (env: Env, reply: unknown = PLAN_REPLY, fetchImpl: unk
   await run(env, plannerPost(reply), fetchImpl);
 };
 
+describe('a mode the Gate does not know', () => {
+  // A deployed file, JEV_GATE_MODE or the gateMode option may still hold a value from an older release. It is refused as
+  // invalid config: the Gate does nothing (no request, no job state, the host's own Agent call untouched) and never throws.
+  const old = join(tmp, 'old-mode.json');
+  writeFileSync(old, JSON.stringify({ version: 5, mode: 'lean' }));
+  it.each([
+    ['JEV_GATE_MODE', { JEV_GATE_MODE: 'lean' }],
+    ['the gateMode option', { JEV_GATE_MODE: undefined, CLAUDE_PLUGIN_OPTION_GATEMODE: 'lean' }],
+    ['the config file', { JEV_GATE_MODE: undefined, JEV_GATE_CONFIG: old }],
+  ] as Array<[string, Env]>)('skips every event for %s and preserves the Agent call', async (_name, over) => {
+    const env = makeEnv(over);
+    const fetchImpl = fakeJev();
+    expect(await run(env, promptEvent(), fetchImpl)).toMatchObject({ kind: 'skip', code: 'config_invalid', stdout: null });
+    expect(await run(env, preEvent('Bash', { command: 'ls' }), fetchImpl)).toMatchObject({ kind: 'skip', code: 'config_invalid', stdout: null });
+    expect(await run(env, preEvent('Agent', agentInput()), fetchImpl)).toMatchObject({ kind: 'preserve', code: 'config_invalid', stdout: null });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(existsSync(jobPath(env, 's1'))).toBe(false);
+  });
+});
+
 describe('mode off', () => {
   it('makes no request and never touches job state', async () => {
     const env = makeEnv({ JEV_GATE_MODE: 'off' });
