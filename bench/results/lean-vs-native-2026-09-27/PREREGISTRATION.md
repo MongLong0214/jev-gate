@@ -150,3 +150,30 @@ cells**, capped by rule 7. That is an estimate and has not been measured.
 5. **The owner's own approval for this run as written, given directly.** It covers these 18 cells and the spend
    stop. It does not cover a relaxed rule, another cap, a second attempt after a bad result, or any default change,
    release or tag.
+
+## Addendum — frozen inputs (2026-10-12, before the first cell)
+
+Written before any cell exists. Nothing above is changed.
+
+- **Build:** `e3dad54` (preconditions 1–3: episode cases, the runner's follow-up turn with per-request cost and the
+  episode comparison in the report; the spend stop already existed). Gates green on it: typecheck, 2114 tests, build.
+- **Packet cap:** `LEAN_PACKET_MAX_BYTES` 65536, budget `LEAN_PACKET_BUDGET_BYTES` = 65536 less
+  `LEAN_COORDINATOR_RESERVE_BYTES` (`src/lean.ts`), the same for `recent_packet` and `jev_lean`.
+- **Plan-only run:** 18 cells (3 jobs × 2 repetitions × 3 arms), `--max-cost-usd 30`, nothing executed.
+- **Episodes:** `ep-inventory` (Korean), `ep-durations` (English), `ep-slugs` (Korean); three earlier requests, the
+  measured request and one follow-up each, none mentioning delegation. Each checker fails the fixture and passes its
+  reference (`tests/bench-fixtures.test.ts`).
+- **Owner approval (precondition 5):** given directly on 2026-10-12 ("사전 측정부터 하고 통합했을시 얻을 수 있는 이점이
+  명확하면 전면 통합해줘"), for these 18 cells under the $30 stop. Whether to integrate is decided by the rules above.
+
+| file | sha256 |
+|---|---|
+| `bench/cases-episodes.json` | `9033b0b50573874edd8c1fc97ab2f97320cca6eb85822e952170c372de0f1724` |
+| `bench/checkers/_lib.mjs` | `66548d612d5fe7f52f74867a3ee008b450eac67d9eb8aeebe3ec07d0bea889a7` |
+| `bench/checkers/_episode.mjs` | `29093d93c1b12fcc46d9afc2a9cc12a40617cc8d9239490206c2cee4844417d9` |
+| `bench/checkers/ep-inventory.mjs` | `4d177401586ff85f95dbbdce46cdcdb23b137d4f43df101d7b03f5890fdfbdf5` |
+| `bench/checkers/ep-inventory-followup.mjs` | `ca55429fec5f9b9310fdbed654318d34d37196b2817b96e928887a2a32b4bb6f` |
+| `bench/checkers/ep-durations.mjs` | `2c134731ec465def62cca1a76fac67af65000e9f448f3c4e82078b482da99bc0` |
+| `bench/checkers/ep-durations-followup.mjs` | `b8d16fb34c4fe0a22b13c8b67a1b46240f45257743f966e96a7724f984ab6ecd` |
+| `bench/checkers/ep-slugs.mjs` | `480a3af661e0864b8c268c159013a2b675019ac222380f6a037111c703cc16e7` |
+| `bench/checkers/ep-slugs-followup.mjs` | `97a5667b0a3fc23a0c56ad4acb12929ad625ef05e5632c57b0315d90d56f8330` |
