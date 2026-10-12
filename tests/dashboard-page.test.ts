@@ -170,7 +170,7 @@ describe('dashboard live interactions', () => {
   it('renders metadata as text and supports searching, feature selection and attention drill-down', () => {
     const p = page();const hostile = '<img src=x onerror="alert(1)">';
     p.push(snapshot([run('one', 'claude', [step('a', 'admission', 'jev', { summary: hostile })]),run('other', 'codex', [step('r', 'router', 'policy', { state: 'unconfirmed' })], { state: 'attention' })]));
-    expect(p.get('feed').textContent).toContain(hostile);expect(p.get('feed').querySelector('img')).toBeNull();
+    expect(p.get('detail').textContent).toContain(hostile);expect(p.get('detail').querySelector('img')).toBeNull();expect(p.w.document.getElementById('feed')).toBeNull();
     p.click('.review-shortcut');expect(p.get('runs').textContent).not.toContain('claude execution');
     p.click('[data-state="all"]');p.click('.circuit-node[data-feature="admission"]');expect(p.get('circuit-inspector').textContent).toContain(hostile);p.click('.inspector-action');expect(p.get('runs').textContent).toContain('claude execution');expect(p.get('runs').textContent).not.toContain('codex execution');
     p.click('.circuit-node[data-feature="admission"]');expect(p.get('runs').textContent).toContain('codex execution');expect(p.get('runs').textContent).toContain('claude execution');const search=p.get('search') as unknown as { value: string; dispatchEvent(e: unknown): void };search.value='codex';search.dispatchEvent(new p.w.Event('input'));
