@@ -177,3 +177,15 @@ Written before any cell exists. Nothing above is changed.
 | `bench/checkers/ep-durations-followup.mjs` | `b8d16fb34c4fe0a22b13c8b67a1b46240f45257743f966e96a7724f984ab6ecd` |
 | `bench/checkers/ep-slugs.mjs` | `480a3af661e0864b8c268c159013a2b675019ac222380f6a037111c703cc16e7` |
 | `bench/checkers/ep-slugs-followup.mjs` | `97a5667b0a3fc23a0c56ad4acb12929ad625ef05e5632c57b0315d90d56f8330` |
+
+ ## Addendum — run 1 aborted by the host, run 2 is the run of record (2026-10-12)
+
+Written after run 2 started and before any of its results were read. Nothing above is changed.
+
+- **Run 1** (`~/jev-gate-runs/lean-vs-native-2026-09-27`) completed four cells, all on `ep-inventory`. From the
+  fifth cell on, every request returned HTTP 429 `usage_limit_reached` (the Claude subscription's session limit).
+  The runner kept starting cells that failed within seconds, so it was stopped by hand. Run 1 spent $1.22.
+- Run 1 is not a result. It was stopped by the host. No arm was compared, and no verdict was read before the
+  decision to run again. Its rows are kept and are not pooled with run 2.
+- **Run 2** (`~/jev-gate-runs/lean-vs-native-2026-09-27-r2`) is the same frozen build (`10ff6b7`), the same 18 cells
+  and the same seed. Its spend stop is `--max-cost-usd 28.75`, so the two runs together stay under rule 7's $30.
