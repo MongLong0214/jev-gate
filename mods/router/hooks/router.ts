@@ -317,6 +317,8 @@ interface SpawnPlan {
   pair?: { offer: PairOffer; raw: unknown };
   allocation?: EffortEdit;
   deny?: string;
+  /** A closed category for the denial record; never the deny text, the prompt or a path. */
+  reason?: string;
 }
 
 /** Apply the cache floor without raising effort above the native baseline. Missing proposals stay missing. */
@@ -981,8 +983,9 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
 
   // ---------------------------------------------------------------------------------------------- spawn
 
-  /** A type the Router does not route is caller text: it is never logged, only named as other. */
-  const typeLabel = (e: SpawnEvent): string => (INHERITING_BUILT_INS.has(e.subagentType) ? e.subagentType : 'other');
+  /** A type the Router does not route is caller text: it is never logged, only named as other. Owned names are this plugin's. */
+  const typeLabel = (e: SpawnEvent): string => (INHERITING_BUILT_INS.has(e.subagentType) || e.subagentType.startsWith(GATE_AGENT_PREFIX) ? e.subagentType : 'other');
+  const denied = (reason: string, deny: string): SpawnPlan => ({ target: null, answers: null, deny, reason });
 
   const spawnSkip = (engine: RouterEngine, e: SpawnEvent, reason: string): null => {
     log(engine, { event: 'spawn', tool_use_id: e.tool_use_id, type: typeLabel(e), skipped: reason });
@@ -1010,24 +1013,28 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     const owned = e.subagentType.startsWith(GATE_AGENT_PREFIX) || GATE_ROUTE_NOTE.test(e.prompt) || LEAN_MARKER.test(e.prompt) || LEAN_MARKER.test(e.description);
     if (owned) {
       const token = /\[JEV_DISPATCH token=([a-f0-9-]{36})\]$/.exec(e.prompt)?.[1] ?? '';
+      // No child exists before next, so a refused or unanswered check releases this token's unstarted reservation once.
+      // A failed release leaves the reservation protected; a wait already ended releases nothing.
+      const release = async (model: string): Promise<string | undefined> => {
+        try { return engine.dispatchPair && !live.aborted ? (await within(engine.dispatchPair(e.tool_use_id, model, allowFable, e.subagentType, false, token), live))?.deny : undefined; }
+        catch { return undefined; }
+      };
       // Eligibility and an already allocated effort only: Gate owns its single batch; Lean adds no policy call.
       let pair;
       try { pair = engine.dispatchPair ? await within(engine.dispatchPair(e.tool_use_id, e.model ?? (e.subagentType === 'jev-gate:executor' || LEAN_MARKER.test(e.prompt) ? e.parentModel : ''), allowFable, e.subagentType, true, token), live) : null; }
-      catch { return { target: null, answers: null, deny: 'Dispatch ownership unavailable; no child started.' }; }
-      if (pair?.deny) return { target: null, answers: null, deny: pair.deny };
+      catch { await release(''); return denied('policy_unavailable', 'Dispatch ownership unavailable; no child started.'); }
+      if (pair?.deny) return denied('policy_denied', pair.deny);
       if (pair?.model) {
         const [aliases, available, pins, hostBase] = await Promise.all([within(aliasesOf(engine), live), within(engine.availableModels().catch(() => []), live), within(pinsOf(engine, 'spawn', live), live), versionFor(engine, live)]);
         const candidate = claudeCandidates({ baseline: pair.model, aliases, allowFable, ...(available !== undefined ? { available } : {}), ...(hostBase ? { hostBase } : {}), scope: 'spawn' }).find(c => c.id === pair.model);
-        if (!candidate || !claudeTargetAllowed(pair.model, allowFable) || !claudeModelAllowed(pair.model, available, aliases) || pins.subagentModel) {
-          const cleanup = engine.dispatchPair ? await within(engine.dispatchPair(e.tool_use_id, pair.model, allowFable, e.subagentType, false, token), live) : null;
-          return { target: null, answers: null, deny: cleanup?.deny ?? 'Automatic child unavailable; continue in the main session.' };
-        }
+        const refused = !candidate ? 'target_unsupported' : !claudeTargetAllowed(pair.model, allowFable) ? 'target_restricted' : !claudeModelAllowed(pair.model, available, aliases) ? 'target_not_allowed' : pins.subagentModel ? 'subagent_model_pinned' : null;
+        if (refused) return denied(refused, await release(pair.model) ?? 'Automatic child unavailable; continue in the main session.');
         return { target: pair.model, answers: {}, ...(pair.effort_edit && !pins.mainEffort ? { allocation: pair.effort_edit } : {}) };
       }
       const aliases = await within(aliasesOf(engine), live);
       const id = e.model ?? e.parentModel;
       const resolved = aliases[id] ?? id;
-      if (!claudeTargetAllowed(resolved, allowFable)) return { target: null, answers: null, deny: 'No eligible automatic child model. Continue in the main session; no child started.' };
+      if (!claudeTargetAllowed(resolved, allowFable)) return denied('no_eligible_model', 'No eligible automatic child model. Continue in the main session; no child started.');
       spawnSkip(engine, e, LEAN_MARKER.test(e.prompt) || LEAN_MARKER.test(e.description) ? 'lean_marker' : 'gate_routed');
       return { target: null, answers: null };
     }
@@ -1041,7 +1048,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     const key = await keyFor(engine, live); if (key === ABORTED) throw ENDED;
     if (!('key' in key)) {
       const aliases = await within(aliasesOf(engine), live);
-      return !claudeTargetAllowed(aliases[e.model ?? e.parentModel] ?? e.model ?? e.parentModel, allowFable) ? { target: null, answers: null, deny: 'Restricted automatic child disabled; continue in the main session.' } : spawnSkip(engine, e, key.reason);
+      return !claudeTargetAllowed(aliases[e.model ?? e.parentModel] ?? e.model ?? e.parentModel, allowFable) ? denied('restricted_baseline', 'Restricted automatic child disabled; continue in the main session.') : spawnSkip(engine, e, key.reason);
     }
     const explicit = e.model?.trim() ? e.model : null;
     const inheritance = explicit ? null : inheritSkip(e);
@@ -1055,20 +1062,20 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     const baselineModel = aliases[explicit ?? e.parentModel] ?? explicit ?? e.parentModel;
     const candidates = claudeCandidates({ baseline: baselineModel, aliases, allowFable,
       ...(available !== undefined ? { available } : {}), ...(hostBase ? { hostBase } : {}), scope: 'spawn', preferences: Object.values(config.tiers) }).filter(c => claudeTargetAllowed(c.id, allowFable));
-    if (!candidates.length) return { target: null, answers: null, deny: 'No eligible automatic child model. Continue in the main session; no child started.' };
+    if (!candidates.length) return denied('no_eligible_model', 'No eligible automatic child model. Continue in the main session; no child started.');
     const inheritedEffort = engine.currentEffort ? await within(engine.currentEffort().catch(() => undefined), live) : lastRoot?.effort ?? lastIncoming?.effort;
     const offer = offerPairs({ baseline: { model: baselineModel, effort: inheritedEffort ?? null }, candidates,
       model: config.routeSubagentModel && !pins.subagentModel && (!explicit || config.routeExplicitSpawnModel) && !inheritance,
       effort: config.routeSubagentEffort && !pins.mainEffort && !childHistoryFull,
       upgrade: config.minUpgradeConfidence, downgrade: config.minDowngradeConfidence });
-    if (!offer) return !claudeTargetAllowed(baselineModel, allowFable) ? { target: null, answers: null, deny: 'Restricted automatic child disabled; continue in the main session.' } : spawnSkip(engine, e, 'no_alternative');
+    if (!offer) return !claudeTargetAllowed(baselineModel, allowFable) ? denied('restricted_baseline', 'Restricted automatic child disabled; continue in the main session.') : spawnSkip(engine, e, 'no_alternative');
     const state = routingContext(e.prompt); Object.assign(state.task, { description: e.description, subagent_type: e.subagentType, source: 'child_contract' });
     const result = await client.assess(engine, key.key, state, offer.questions, live, usage => log(engine, { event: 'late', scope: 'spawn', tool_use_id: e.tool_use_id, usage: loggable(usage) }));
-    if (!result.ok) { log(engine, { event: 'spawn', tool_use_id: e.tool_use_id, type: typeLabel(e), assessment: result.reason, sent: result.sent, usage: loggable(result.usage) }); return !claudeTargetAllowed(baselineModel, allowFable) ? { target: null, answers: null, deny: 'Restricted automatic child disabled; continue in the main session.' } : null; }
+    if (!result.ok) { log(engine, { event: 'spawn', tool_use_id: e.tool_use_id, type: typeLabel(e), assessment: result.reason, sent: result.sent, usage: loggable(result.usage) }); return !claudeTargetAllowed(baselineModel, allowFable) ? denied('restricted_baseline', 'Restricted automatic child disabled; continue in the main session.') : null; }
     const selected = selectPair(offer, result.answers);
     let target = selected.patch.model ?? null;
     if (childHistoryFull && target && !candidates.find(c => c.id === target)?.efforts.includes(String(inheritedEffort))) target = null;
-    if (!target && !claudeTargetAllowed(baselineModel, allowFable)) return { target: null, answers: null, deny: 'Restricted automatic child disabled; continue in the main session.' };
+    if (!target && !claudeTargetAllowed(baselineModel, allowFable)) return denied('restricted_baseline', 'Restricted automatic child disabled; continue in the main session.');
     const nowAvailable = await within(engine.availableModels().catch(() => []), live);
     const nowPins = await within(pinsOf(engine, 'spawn', live), live);
     if (target && (nowPins.subagentModel || nowPins.aliasRemap && !engine.modelAliases || !claudeTargetAllowed(target, await within(frontierFor(engine), live)) || !claudeModelAllowed(target, nowAvailable, aliases))) { log(engine, { event: 'spawn_stop', tool_use_id: e.tool_use_id, requested: target, reason: nowPins.subagentModel ? 'subagent_model_pinned' : nowPins.aliasRemap && !engine.modelAliases ? 'alias_remapped' : 'target_not_allowed' }); return null; }
@@ -1111,14 +1118,19 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       plan = null;
     }
     if (wait.expired.aborted || engine.now() >= deadline) {
-      plan = null;
+      // A denial already decided needs no budget; only an unfinished or allowing plan is unverified.
+      if (!plan?.deny) plan = null;
       log(engine, { event: 'budget_timeout', scope: 'spawn', tool_use_id: e.tool_use_id });
     }
     wait.dispose();
-    if ((!plan && (e.subagentType.startsWith(GATE_AGENT_PREFIX) || GATE_ROUTE_NOTE.test(e.prompt) || LEAN_MARKER.test(e.prompt) || LEAN_MARKER.test(e.description))) || !baselineAllowed && !plan?.target) plan = { target: null, answers: null, deny: 'Automatic dispatch could not be verified; continue in the main session. No child started.' };
+    if (!plan?.deny && ((!plan && (e.subagentType.startsWith(GATE_AGENT_PREFIX) || GATE_ROUTE_NOTE.test(e.prompt) || LEAN_MARKER.test(e.prompt) || LEAN_MARKER.test(e.description))) || !baselineAllowed && !plan?.target))
+      plan = denied(baselineAllowed ? 'unverified' : 'restricted_baseline', 'Automatic dispatch could not be verified; continue in the main session. No child started.');
     // As on turn.step: the host has already spawned natively, so nothing here may spawn again.
     if (next.signal.aborted || own.aborted) throw new Error('jev-router: spawn dispatch abandoned before next');
-    if (plan?.deny) return { deny: plan.deny } as R;
+    if (plan?.deny) {
+      log(engine, { event: 'spawn_denied', tool_use_id: e.tool_use_id, type: typeLabel(e), reason: plan.reason ?? 'unverified' });
+      return { deny: plan.deny } as R;
+    }
     let target = plan?.target ?? null;
     // Nothing is awaited between these checks and next: a session that ended meanwhile gets nothing from this dispatch,
     // and neither does one whose routing another spawn's result suspended while this one waited.

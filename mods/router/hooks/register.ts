@@ -115,9 +115,10 @@ const engineOf = ($: EngineInterface, log: RouterEngine['log']): RouterEngine =>
     const path = root + '/dist/dispatch-policy.js';
     if (!await $.fs.exists(path)) return null; // Standalone Router has no owned Gate state.
     const result = await $.process.run(['node', path, await $.session.id(), tool, model, String(allowFable), agent, String(eligible), token], { timeoutMs: 500 });
-    if (result.exitCode !== 0) return { deny: 'Dispatch ownership unavailable; no child started.' };
-    const out = JSON.parse(result.stdout);
-    return out && typeof out === 'object' ? out : { deny: 'Dispatch ownership unavailable; no child started.' };
+    const out = result.exitCode === 0 ? JSON.parse(result.stdout) : null;
+    // Like a timeout, a failed or malformed answer is no answer: the Router denies and releases at its own boundary.
+    if (!out || typeof out !== 'object') throw new Error('dispatch policy unavailable');
+    return out;
   },
   hostBase: async () => (await $.session.version()).base,
   childContext: async agentId => {
