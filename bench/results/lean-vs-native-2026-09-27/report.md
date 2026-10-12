@@ -1,6 +1,6 @@
 # jev-gate bench report (schema 5)
 
-run: /Users/isaac/jev-gate-runs/lean-vs-native-2026-09-27-r2
+run: ~/jev-gate-runs/lean-vs-native-2026-09-27-r2
 generated: 2026-10-12T05:23:40.680Z
 plan schema: 5 · planned rows: 18 · independent units: 3 jobs / 3 groups
 
@@ -191,4 +191,4 @@ plan schema: 5 · planned rows: 18 · independent units: 3 jobs / 3 groups
 - Reservation overlap needs the dispatch record a Jev call writes, so arms without Gate B report observed overlap only (post timestamp minus tool_response.totalDurationMs).
 - A recorded Gate B decision is authoritative; decision mismatch counts the calls whose observed model family contradicts it, as a cross-check rather than a correction.
 - An arm marked diagnostic (A16: jev_forced_orchestration, which skips Gate A and still calls Gate B and C) answers a mechanism question; it carries no product claim and the conclusion category is read from jev_hierarchy.
-wrote /Users/isaac/jev-gate-runs/lean-vs-native-2026-09-27-r2/reports/report-1.md and /Users/isaac/jev-gate-runs/lean-vs-native-2026-09-27-r2/reports/report-1.json
+wrote ~/jev-gate-runs/lean-vs-native-2026-09-27-r2/reports/report-1.md and ~/jev-gate-runs/lean-vs-native-2026-09-27-r2/reports/report-1.json
