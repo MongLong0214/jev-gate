@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { allocatedTraceRecords } from './explain.js';
 import { codexOperations } from './codex-operations.js';
 import { operationState } from './operation-state.js';
+import { memo } from './memo.js';
 import { CODEX_CAPABILITIES, CODEX_PLUGIN_CAPABILITIES, type HostCapability, type Host } from './host-support.js';
 
 /** A display model made only from named metadata fields. Raw prompts, source and debug text never leave here. */
@@ -94,12 +95,15 @@ const TOKEN = /^[A-Za-z0-9_.:/+@-]{1,80}(?:\[[A-Za-z0-9_-]{1,16}\])?$/;
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
 const rec = (v: unknown): Rec | null => typeof v === 'object' && v !== null && !Array.isArray(v) ? v as Rec : null;
 const field = (r: Rec | null, key: string): Rec | null => r ? rec(r[key]) : null;
-const token = (v: unknown): string | null => typeof v === 'string' && TOKEN.test(v) && !v.toLowerCase().includes('sk-') && !v.toLowerCase().includes('jv_live_') ? v : null;
+const safeToken = memo((v: string): string | null => TOKEN.test(v) && !v.toLowerCase().includes('sk-') && !v.toLowerCase().includes('jv_live_') ? v : null);
+const token = (v: unknown): string | null => typeof v === 'string' ? safeToken(v) : null;
 const number = (v: unknown): number | null => typeof v === 'number' && Number.isFinite(v) ? v : null;
 const iso = (v: unknown): string => typeof v === 'string' && ISO.test(v) ? v : '';
 const list = (v: unknown, cap = 16): string[] => Array.isArray(v) ? v.slice(0, cap).map(token).filter((x): x is string => x !== null) : [];
-const id = (v: string): string => createHash('sha256').update(v).digest('hex').slice(0, 12);
-const n = (v: number | null): string => v === null ? '?' : Number(v.toFixed(2)).toLocaleString('en-US');
+const id = memo((v: string): string => createHash('sha256').update(v).digest('hex').slice(0, 12));
+// Same output as toLocaleString('en-US'), without building a formatter per call.
+const EN = new Intl.NumberFormat('en-US');
+const n = (v: number | null): string => v === null ? '?' : EN.format(Number(v.toFixed(2)));
 const text = (...parts: Array<string | null | undefined | false>): string => parts.filter((x): x is string => typeof x === 'string' && x.length > 0).join(' · ');
 const modelObservation = (selected: unknown, observed: unknown, selectedEffort?: unknown, observedEffort?: unknown, confirmation?: unknown, submission?: { value: unknown; source: 'host_hook' | 'provider_request' }): OperationStep['model'] => {
   const wanted = token(selected); const actual = token(observed);
@@ -195,7 +199,7 @@ const compactSelectionReason = (value: unknown): string | null => ({
   current_dependencies: '현재 작업에 필요한 근거 선택', recency_kept: '기존 최근순 유지', no_candidates: '선별할 과거 결과 없음',
   no_key: 'Jev API 키 없음', disabled: 'Jev 선별 꺼짐', not_eligible: '로컬 추출 조건 미충족 · Jev 선별 미실행', input_secret: '민감정보 감지 · 로컬 유지', input_too_large: '판정 입력 한도 초과 · 로컬 유지',
   timeout: 'Jev 응답 시간 초과 · 로컬 유지', invalid_answers: '유효하지 않은 판정 · 로컬 유지', aborted: '중단 · 판정 미적용',
-  superseded: '새 턴으로 변경 · 판정 미적용', unauthorized: 'Jev 인증 실패 · 로컬 유지', credential_refused: 'Jev 인증 확인 필요 · 로컬 유지',
+  superseded: '새 턴으로 변경 · 판정 미적용', unauthorized: 'Jev 인증 실패 · 로컬 유지', payment_required: 'Jev 크레딧 소진 · 로컬 유지', credential_refused: 'Jev 인증 확인 필요 · 로컬 유지',
   error: '선별 오류 · 로컬 유지', network: 'Jev 연결 오류 · 로컬 유지', saturated: '실행 중인 Jev 요청 한도 · 로컬 유지',
 } as Record<string, string>)[String(value)] ?? token(value);
 const compactUsage = (r: Rec): string => {
@@ -506,7 +510,7 @@ const debugStep = (row: DebugRecord, now: number, closed: Set<string>, responses
     lane = event === 'request' || r['sent'] === true ? 'jev' : 'policy';
     const from = field(r, 'from'); const patch = field(r, 'patch'); const reasons = field(r, 'reasons'); const applied = field(r, 'applied');
     summary = event === 'request' ? 'Jev 요청 전송 · 응답 대기' : text(event, r['sent'] === true ? 'Jev 응답' : r['sent'] === false ? '전송 안 함' : null, token(r['skipped']), token(r['reason']));
-    if (failedAssessment) summary = text('Jev 판정 실패 · 원래 호스트 설정 유지', token(r['assessment']));
+    if (failedAssessment) summary = r['assessment'] === 'payment_required' ? 'Jev 크레딧 소진 · 원래 호스트 설정 유지' : text('Jev 판정 실패 · 원래 호스트 설정 유지', token(r['assessment']));
     details.push(text(`기존 모델 ${token(from?.['model']) ?? token(r['from']) ?? '?'}`, `기존 effort ${token(from?.['effort']) ?? '?'}`));
     if (r['scope'] === 'child') details.push(text('워커 단계별 Jev 라우팅', `단계 ${n(number(r['index']))}`, `워커 ${token(r['agent_id']) ?? '?'}`));
     if (number(r['preparation_ms']) !== null) details.push(`Router 준비 ${n(number(r['preparation_ms']))}ms · Jev 응답 시간과 별도 · 예산 ${n(number(r['budget_ms']))}ms`);

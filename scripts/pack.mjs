@@ -55,7 +55,7 @@ const routerHooks = () =>
 // The evidence archive is the plugin directory with its one bundled server: nothing of dist/, hooks or agents.
 const EVIDENCE = 'plugins/evidence';
 const EVIDENCE_FILES = ['.claude-plugin/plugin.json', 'dist/server.mjs', 'skills/evidence/SKILL.md', 'README.md'];
-const CODEX_FILES = ['.codex-plugin/plugin.json', '.agents/plugins/marketplace.json', '.mcp.json', 'hooks/hooks.json', 'dist/hook.mjs', 'dist/server.mjs', 'dist/cli.mjs', 'skills/jev-gate/SKILL.md', 'README.md'];
+const CODEX_FILES = ['.codex-plugin/plugin.json', '.agents/plugins/marketplace.json', '.mcp.json', 'hooks/hooks.json', 'dist/hook.mjs', 'dist/server.mjs', 'dist/cli.mjs', 'dist/activity-worker.mjs', 'skills/jev-gate/SKILL.md', 'README.md'];
 
 // The one jev-gate plugin (v0.6.0) also carries the three Mods, loaded through hooks/register.ts from their source, and
 // the evidence server with its skill, at the paths the manifest and that module name. Lean's hook set loads no Mod, but
@@ -70,8 +70,8 @@ const modSources = () =>
 const EVIDENCE_IN_PLUGIN = [`${EVIDENCE}/dist/server.mjs`, `${EVIDENCE}/skills/evidence/SKILL.md`];
 const ROUTER_SHARED = ['cost', 'provider-prices', 'provider-prices-data', 'route-cost', 'claude-cache', 'router-answers', 'router-selection', 'router-context', 'router-child-context', 'router-secret', 'claude-models', 'claude-candidates', 'frontier-routing'].map(n => `src/${n}.ts`);
 const shared = () => [...(profile === 'legacy' ? ['hooks/register.ts', ...modSources(), ...ROUTER_SHARED] : []), ...EVIDENCE_IN_PLUGIN];
-// Install paths the root README links (#95, #98). Not a link crawl: bench/ and HANDOFF stay out. The logo is the
-// README's image. hero.svg, pilot.svg, and v4-flow.svg are not packed; the README no longer embeds them.
+// Install paths the root README links (#95, #98). Not a link crawl: bench/ and HANDOFF stay out. The logo and results banner are the
+// README's images, each with its dark-theme variant. hero.svg, pilot.svg, and v4-flow.svg are not packed; the README no longer embeds them.
 const INSTALL_DOCS = [
   'CHANGELOG.md',
   'docs/advanced-usage.md',
@@ -83,6 +83,9 @@ const INSTALL_DOCS = [
   'mods/output/README.md',
   'mods/router/README.md',
   'assets/readme/jev-gate-logo.svg',
+  'assets/readme/jev-gate-logo-dark.svg',
+  'assets/readme/results.svg',
+  'assets/readme/results-dark.svg',
 ];
 
 // [source path relative to root, path inside the archive]. The hook set is the only file that is renamed.

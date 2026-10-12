@@ -1,0 +1,5 @@
+task	arm	rep	turns	failed_turns	host_cost_usd	jev_requests	jev_input	jev_output	jev_cost_usd	total_tokens	input	cache_write_1h	cache_read	output	max_context	subagents	requests	agent_wall_s	new_tsc_errors	eslint_errors	own_tests_passed	quality_score	quality_max
+DL	native	1	17	0	15.5779	0	0	0	0.0000	37341276	312	431292	36670059	239613	442362	0	156	2986	0	0	69	10	12
+DL	jev_gate	1	17	0	7.7492	66	257990	14715	0.0108	13211884	276	1019374	12066443	125791	205503	7	138	1468	0	0	55	10.5	12
+DY	native	1	17	0	27.2364	0	0	0	0.0000	74373434	386	661645	73347798	363605	672715	0	193	4434	0	0	111	11	11
+DY	jev_gate	1	17	0	11.8835	40	132138	8919	0.0055	28056001	288	1099102	26789893	166718	353018	4	144	2452	0	0	89	10.5	11

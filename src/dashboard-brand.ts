@@ -1,4 +1,5 @@
-/** Jev's forward-cut gate mark. A single silhouette stays legible at favicon size. */
-export const JEV_MARK_PATH = 'M25 3h10l-9 21c-3 7-7 11-14 11H5l4-8h4c3 0 5-2 6-5zM4 7h16l-4 7H0zM3 18h11l-3 7H0z';
-export const JEV_MARK = `<svg viewBox="0 0 38 38" fill="currentColor" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="${JEV_MARK_PATH}"/></svg>`;
-export const JEV_FAVICON = `<svg viewBox="0 0 38 38" fill="#ff627e" xmlns="http://www.w3.org/2000/svg"><path d="${JEV_MARK_PATH}"/></svg>`;
+/** Jev's router mark: one line in, three lanes out, the chosen lane in the accent color. Stays legible at favicon size. */
+const LANES = 'M4 24H18M18 24C26 24 26 10 34 10M18 24H34M18 24C26 24 26 38 34 38';
+const SVG = 'viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg"';
+export const JEV_MARK = `<svg ${SVG} aria-hidden="true"><path d="${LANES}" fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round"/><circle cx="38" cy="10" r="4" fill="currentColor"/><circle cx="38" cy="38" r="4" fill="currentColor"/><circle class="mark-dot" cx="38" cy="24" r="6"/></svg>`;
+export const JEV_FAVICON = `<svg ${SVG}><style>.l{fill:none;stroke:#24212c;stroke-width:4.5;stroke-linecap:round}.n{fill:#24212c}.d{fill:#bd254e}@media(prefers-color-scheme:dark){.l{stroke:#f0f0f5}.n{fill:#f0f0f5}.d{fill:#ff6b88}}</style><path class="l" d="${LANES}"/><circle class="n" cx="38" cy="10" r="4"/><circle class="n" cx="38" cy="38" r="4"/><circle class="d" cx="38" cy="24" r="6"/></svg>`;

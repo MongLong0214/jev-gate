@@ -1,10 +1,12 @@
 import { createHash } from 'node:crypto';
 import type { OperationRun, OperationStep } from './operations.js';
 import { operationState } from './operation-state.js';
+import { memo } from './memo.js';
 
 type Rec = Record<string, unknown>;
-const token = (v: unknown): string | null => typeof v === 'string' && /^[A-Za-z0-9_.:/+@-]{1,160}$/.test(v) && !/(sk-|jv_live_)/i.test(v) ? v : null;
-const hash = (v: string): string => createHash('sha256').update(v).digest('hex').slice(0, 12);
+const safeToken = memo((v: string): string | null => /^[A-Za-z0-9_.:/+@-]{1,160}$/.test(v) && !/(sk-|jv_live_)/i.test(v) ? v : null);
+const token = (v: unknown): string | null => typeof v === 'string' ? safeToken(v) : null;
+const hash = memo((v: string): string => createHash('sha256').update(v).digest('hex').slice(0, 12));
 const at = (r: Rec): string => typeof r['written_at'] === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z$/.test(r['written_at']) ? r['written_at'] : '';
 const START_END: Record<string, string[]> = {
   UserPromptSubmit: ['Stop', 'Interrupt', 'SessionEnd'], PreToolUse: ['PostToolUse'],

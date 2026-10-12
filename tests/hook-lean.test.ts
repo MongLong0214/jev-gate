@@ -837,7 +837,7 @@ describe('lean — the installed entrypoint, not just the unit', () => {
     const root = join(__dirname, '..');
     const staged = join(tmp, 'source');
     // Build only this fixture. Rebuilding the checkout deletes dist used by concurrent native-host tests.
-    for (const rel of ['.claude-plugin', 'hooks', 'agents', 'README.md', 'AGENTS.md', '.env.example', 'package.json', 'CHANGELOG.md', 'docs', 'bench/ab/tasks.example.json', 'plugins/evidence/README.md', 'plugins/evidence/skills', 'plugins/codex/README.md', 'mods/compact/README.md', 'mods/output/README.md', 'mods/router/README.md', 'assets/readme/jev-gate-logo.svg']) {
+    for (const rel of ['.claude-plugin', 'hooks', 'agents', 'README.md', 'AGENTS.md', '.env.example', 'package.json', 'CHANGELOG.md', 'docs', 'bench/ab/tasks.example.json', 'plugins/evidence/README.md', 'plugins/evidence/skills', 'plugins/codex/README.md', 'mods/compact/README.md', 'mods/output/README.md', 'mods/router/README.md', 'assets/readme/jev-gate-logo.svg', 'assets/readme/jev-gate-logo-dark.svg', 'assets/readme/results.svg', 'assets/readme/results-dark.svg']) {
       cpSync(join(root, rel), join(staged, rel), { recursive: true });
     }
     expect(spawnSync(process.execPath, [join(root, 'node_modules/typescript/bin/tsc'), '-p', join(root, 'tsconfig.json'), '--outDir', join(staged, 'dist')], { encoding: 'utf8' }).status).toBe(0);
