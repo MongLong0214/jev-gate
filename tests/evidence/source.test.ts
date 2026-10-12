@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createEvidenceService } from '../../src/evidence/service.js';
-import { loadConfig } from '../../src/evidence/source.js';
+import { grepFiles, loadConfig } from '../../src/evidence/source.js';
 import { config, configFile, git, live, repo, tmp, write } from './repo.js';
 
 const SYMBOL = 'parseWidget';
@@ -54,8 +54,9 @@ describe('inventory and access', () => {
     expect(result.projectRoot).toBe(realpathSync(root));
     expect(result.items.map((i) => i.source.path).sort()).toEqual(['src-old/app.ts', 'src/-dash.ts', 'src/app.ts', 'src/new\nline.ts', 'src/untracked.ts', 'src/with space.ts'].sort());
     expect(result.items.every((i) => i.text === body && i.origin === 'local' && i.judgement === 'unjudged' && i.probabilities === undefined)).toBe(true);
-    // Listed and eligible: .gitignore, the six hits, bin.dat, latin1.ts, link.ts, linkdir. Skipped: those four and nested/.
-    expect(result.coverage).toMatchObject({ inventoryComplete: true, filesTotal: 11, readFiles: 7, skippedFiles: 5, sourceIncomplete: false });
+    // Listed and eligible: .gitignore, the six hits, bin.dat, latin1.ts, link.ts, linkdir. Git's narrowing names the
+    // eight that hold the symbol without following either link; bin.dat and latin1.ts are then skipped, as is nested/.
+    expect(result.coverage).toMatchObject({ inventoryComplete: true, filesTotal: 11, filesMatched: 8, readFiles: 6, skippedFiles: 3, sourceIncomplete: false });
     expect(result).toMatchObject({ status: 'ok', backend: 'local', reasonCodes: [], next: null });
     expect(fetchImpl).not.toHaveBeenCalled();
 
@@ -64,6 +65,19 @@ describe('inventory and access', () => {
     expect(narrowed.items.map((i) => i.source.path)).not.toContain('src-old/app.ts');
     expect(narrowed.items).toHaveLength(5);
     expect(git(root, 'status', '--porcelain', '-uall')).toBe(before);
+  });
+
+  it('names the matching files Git lists, never an ignored, linked or nested one, and says when Git ran out of time', async () => {
+    const root = realpathSync(fixture());
+    const found = await grepFiles(root, ['src'], [SYMBOL], false, 5000);
+    // Credential names are Git's to list and the service's to exclude; ignored files, links and nested/ are never named.
+    expect([...(found as Set<string>)].sort()).toEqual(['src/-dash.ts', 'src/.env', 'src/.env.local', 'src/app.ts', 'src/bin.dat', 'src/deploy.pem', 'src/id_rsa', 'src/latin1.ts', 'src/new\nline.ts', 'src/untracked.ts', 'src/with space.ts'].sort());
+    const everywhere = [...((await grepFiles(root, [''], [SYMBOL], false, 5000)) as Set<string>)];
+    for (const never of ['src/ignored.ts', 'src/link.ts', 'src/linkdir/secret.ts', 'nested/inner.ts']) expect(everywhere).not.toContain(never);
+    expect(everywhere).toContain('src-old/app.ts');
+    expect(await grepFiles(root, ['src'], ['no such text anywhere'], false, 5000)).toEqual(new Set());
+    expect(await grepFiles(root, ['src'], [SYMBOL.toUpperCase()], true, 5000)).toEqual(found);
+    expect(await grepFiles(root, [''], [SYMBOL], false, 1)).toBe('timeout');
   });
 
   it('refuses traversal, roots outside the allowed ones, excluded roots and sources that escape', async () => {

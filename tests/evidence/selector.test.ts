@@ -101,14 +101,15 @@ describe('requests', () => {
     expect(r.reasonCodes).toContain('remote_budget');
   });
 
-  it('never sends a candidate that looks like a credential', async () => {
+  it('never sends a candidate that looks like a credential, nor returns its text', async () => {
     const root = repo({ [widget(1)]: 'widget handler 1\n', [widget(2)]: 'widget key = sk-abcdefghijklmnopqrstuv\n' });
     const fake = jev(() => choice('relevant', 0.9));
     const r = (await (await remote(root, { fetchImpl: fake.fetchImpl })).run({ goal: 'widget' }, live())).result;
     expect(JSON.stringify(fake.requests)).not.toContain('sk-abcdefghijklmnopqrstuv');
     expect(fake.requests[0]!.state.candidates.map((c) => c.path)).toEqual([widget(1)]);
-    expect(r.items.find((i) => i.source.path === widget(2))).toMatchObject({ origin: 'local', judgement: 'unjudged', textState: 'included' });
-    expect(r).toMatchObject({ status: 'partial', reasonCodes: ['remote_secret'] });
+    expect(r.items.find((i) => i.source.path === widget(2))).toEqual({ source: expect.objectContaining({ path: widget(2) }), origin: 'local', judgement: 'unjudged', textState: 'omitted_secret' });
+    expect(JSON.stringify(r)).not.toContain('sk-abcdefghijklmnopqrstuv');
+    expect(r).toMatchObject({ status: 'partial', reasonCodes: ['remote_secret', 'source_secret'] });
   });
 });
 

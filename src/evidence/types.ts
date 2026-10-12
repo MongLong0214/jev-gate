@@ -19,13 +19,15 @@ export interface EvidenceRequest {
   limit?: number;
   offset?: number;
   expectedSnapshot?: string;
+  /** next.cursor of the previous page: where reading resumes once that page's set is exhausted. */
+  cursor?: string;
   sources?: SourceRef[];
 }
 
 export const JUDGEMENTS = ['relevant', 'unrelated', 'needs_context'] as const;
 export type Judgement = (typeof JUDGEMENTS)[number];
 
-export type TextState = 'included' | 'omitted_irrelevant' | 'omitted_budget' | 'stale';
+export type TextState = 'included' | 'omitted_irrelevant' | 'omitted_budget' | 'omitted_secret' | 'stale';
 
 export interface EvidenceItem {
   source: SourceRef;
@@ -39,6 +41,8 @@ export interface EvidenceItem {
 export interface Coverage {
   inventoryComplete: boolean;
   filesTotal: number | null;
+  /** In-scope files that hold a term or exact symbol (repository-wide, before reading). Null: audit, or no narrowing. */
+  filesMatched: number | null;
   readFiles: number;
   skippedFiles: number;
   candidates: number;
@@ -63,6 +67,7 @@ export const REASON_CODES = [
   'source_changed',
   'source_missing',
   'source_unverified',
+  'source_secret',
   'missing_key',
   'remote_disabled',
   'remote_secret',
@@ -81,7 +86,11 @@ export interface EvidenceResult {
   backend: 'local' | 'jev' | 'mixed';
   items: EvidenceItem[];
   snapshotId: string | null;
-  next: { offset: number; expectedSnapshot: string } | null;
+  /**
+   * More of this set: offset + expectedSnapshot (+ the cursor this call was given). This set done but files remain
+   * unread: offset 0 and a new cursor, with no snapshot to expect yet.
+   */
+  next: { offset: number; expectedSnapshot?: string; cursor?: string } | null;
   coverage: Coverage;
   reasonCodes: ReasonCode[];
 }

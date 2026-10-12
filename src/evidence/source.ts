@@ -182,20 +182,16 @@ export interface Inventory {
   unreadable: number;
 }
 
-/**
- * Tracked plus non-ignored untracked files under the given literal pathspecs, NUL-separated. The caller's strings
- * are arguments after `--`, never a shell line. Null: not a Git worktree here, or Git failed outright.
- */
-export const listFiles = async (root: string, pathspecs: readonly string[], timeoutMs: number): Promise<Inventory | null> => {
-  const specs = pathspecs.map((p) => (p === '' ? '.' : p));
-  const run = await git(root, ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', ...specs], LIMITS.inventoryBytes, Math.max(1, timeoutMs));
-  const truncated = run.error?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' || run.killed;
-  if (run.error && !truncated) return null;
-  const fields = run.stdout.toString('latin1').split('\0');
+/** The order every listing and continuation uses: UTF-8 bytes, so it never depends on locale or UTF-16 units. */
+export const byteOrder = (a: string, b: string): number => Buffer.compare(Buffer.from(a), Buffer.from(b));
+
+/** NUL-separated names as Git printed them. A name that is not UTF-8, or that names a nested repository (`dir/`), is never readable here. */
+const names = (stdout: Buffer): { paths: Set<string>; unreadable: number } => {
+  const fields = stdout.toString('latin1').split('\0');
   // The last field is either the empty string after a final NUL or, when the output was cut, a partial name.
   fields.pop();
   const decoder = new TextDecoder('utf-8', { fatal: true });
-  const seen = new Set<string>();
+  const paths = new Set<string>();
   let unreadable = 0;
   for (const f of fields) {
     let name: string;
@@ -206,9 +202,40 @@ export const listFiles = async (root: string, pathspecs: readonly string[], time
       continue;
     }
     if (name.endsWith('/')) unreadable++;
-    else seen.add(name);
+    else paths.add(name);
   }
-  return { paths: [...seen].sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b))), complete: !truncated, unreadable };
+  return { paths, unreadable };
+};
+
+/**
+ * Tracked plus non-ignored untracked files under the given literal pathspecs, NUL-separated. The caller's strings
+ * are arguments after `--`, never a shell line. Null: not a Git worktree here, or Git failed outright.
+ */
+export const listFiles = async (root: string, pathspecs: readonly string[], timeoutMs: number): Promise<Inventory | null> => {
+  const specs = pathspecs.map((p) => (p === '' ? '.' : p));
+  const run = await git(root, ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', ...specs], LIMITS.inventoryBytes, Math.max(1, timeoutMs));
+  const truncated = run.error?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' || run.killed;
+  if (run.error && !truncated) return null;
+  const { paths, unreadable } = names(run.stdout);
+  return { paths: [...paths].sort(byteOrder), complete: !truncated, unreadable };
+};
+
+/**
+ * The files under the same pathspecs as `listFiles` that hold at least one of the literal patterns, found by one
+ * `git grep` over the whole scope before any file is read here. Each pattern is its own `-e` argument, never a shell
+ * word or an option. `ignoreCase` folds ASCII only. Only names come back: no file text leaves Git. `timeout` when Git
+ * did not finish in time, which another call may not repeat; null when it failed or printed more than the inventory
+ * bound, which the same files repeat, so the caller can read the listing in order instead.
+ */
+export const grepFiles = async (root: string, pathspecs: readonly string[], patterns: readonly string[], ignoreCase: boolean, timeoutMs: number): Promise<Set<string> | 'timeout' | null> => {
+  const specs = pathspecs.map((p) => (p === '' ? '.' : p));
+  const args = ['grep', '--untracked', '--no-color', '-z', '-l', '-F', ...(ignoreCase ? ['-i'] : []), ...patterns.flatMap((p) => ['-e', p]), '--', ...specs];
+  const run = await git(root, args, LIMITS.inventoryBytes, Math.max(1, timeoutMs));
+  // Exit status 1 is Git's "no file matched"; any other failure, a cut output included, is no answer at all.
+  if (run.error?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') return null;
+  if (run.killed) return 'timeout';
+  if (run.error) return (run.error.code as unknown) === 1 ? new Set() : null;
+  return names(run.stdout).paths;
 };
 
 /** Whether anything is at the path, without reading it or following a final symlink. */

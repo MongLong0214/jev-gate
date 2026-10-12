@@ -497,3 +497,141 @@ describe('snapshots', () => {
     expect(again.snapshotId).toBe(capped.snapshotId);
   });
 });
+
+describe('repository-wide narrowing and continuation (#216)', () => {
+  /** Every page of one search, following `next` whatever it carries, until there is none. */
+  const follow = async (svc: EvidenceService, q: Record<string, unknown>, max = 80): Promise<EvidenceResult[]> => {
+    const pages: EvidenceResult[] = [];
+    let page = await run(svc, q);
+    for (pages.push(page); page.next && pages.length < max; pages.push(page)) page = await run(svc, { ...q, ...page.next });
+    return pages;
+  };
+
+  it('finds an exact symbol in the last of 6,000 files without roots, inside the deadline, reading one file', async () => {
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 6000; i++) files[`app/m${String(i).padStart(4, '0')}.ts`] = `export const value${i} = ${i};\n`;
+    files['zz/notification/handle-mutate-toast.ts'] = `${numbered(50)}export const handleMutateSuccess = () => {};\n`;
+    const root = repo(files);
+    git(root, 'add', '-A');
+    const q = { goal: 'where is handleMutateSuccess defined', exactSymbols: ['export const handleMutateSuccess'] };
+
+    const t0 = Date.now();
+    const r = await run(await local(root), q);
+    expect(Date.now() - t0).toBeLessThan(LIMITS.deadlineMs);
+    expect(r.items.map((i) => [i.source.path, i.textState])).toEqual([['zz/notification/handle-mutate-toast.ts', 'included']]);
+    expect(r.items[0]!.text).toContain('export const handleMutateSuccess');
+    expect(r).toMatchObject({ status: 'ok', reasonCodes: [], next: null, coverage: { filesTotal: 6001, filesMatched: 1, readFiles: 1 } });
+    exact(root, r);
+
+    // Without Git's answer (a failed or oversized grep) the listing is read in order, as before #216: the cap stops it
+    // long before the target, and the cursor it returns moves on to the next files instead of ending the search.
+    const ordered = createEvidenceService(await config(root), { apiKey: null, grepFiles: async () => null });
+    const first = await run(ordered, q);
+    expect(first).toMatchObject({ status: 'partial', items: [], reasonCodes: ['source_limit', 'no_candidate'], coverage: { filesMatched: null, readFiles: LIMITS.files } });
+    expect(first.next).toEqual({ offset: 0, cursor: expect.any(String) });
+    const second = await run(ordered, { ...q, ...first.next });
+    expect(second).toMatchObject({ coverage: { readFiles: LIMITS.files }, next: { offset: 0, cursor: expect.any(String) } });
+    expect(second.next!.cursor).not.toBe(first.next!.cursor);
+
+    // Git out of time is not that fallback: which files are read would depend on the clock, so none is, the call says
+    // deadline, and a cursor it was given is neither consumed nor reported as changed.
+    const late = createEvidenceService(await config(root), { apiKey: null, grepFiles: async () => 'timeout' });
+    for (const raw of [q, { ...q, ...first.next }]) {
+      expect(await run(late, raw)).toMatchObject({ status: 'partial', items: [], next: null, reasonCodes: ['deadline'], coverage: { readFiles: 0, filesMatched: null, sourceIncomplete: true } });
+    }
+  }, 60_000);
+
+  it('resumes a capped search with the cursor: every match once, in order, across sets and pages', async () => {
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 450; i++) files[`src/f${String(i).padStart(3, '0')}.ts`] = `const a = 1;\nexport const needle${i} = 'needle';\n`;
+    files['src/other.ts'] = 'nothing here\n';
+    const root = repo(files);
+    const svc = await local(root);
+    const q = { goal: 'needle', exactSymbols: ["= 'needle'"], limit: 16 };
+    const pages = await follow(svc, q);
+    const seen = pages.flatMap((p) => p.items.map((i) => i.source.path));
+    expect(seen).toEqual(Object.keys(files).filter((p) => p !== 'src/other.ts').sort());
+    expect(pages.at(-1)).toMatchObject({ status: 'ok', next: null });
+    expect(pages[0]).toMatchObject({ coverage: { filesMatched: 450, readFiles: LIMITS.files }, reasonCodes: ['source_limit'] });
+    // A set reached by a cursor pages like any other: the cursor stays in `next` beside offset and snapshot.
+    const second = pages.find((p) => p.items[0]?.source.path === 'src/f200.ts')!;
+    expect(second.next).toEqual({ offset: 16, expectedSnapshot: second.snapshotId, cursor: expect.any(String) });
+  });
+
+  it('resumes inside a file the candidate cap cut, and refuses a cursor that was edited, reused for other arguments or outlived its files', async () => {
+    const lines = 40 * LIMITS.candidates + 100;
+    const root = repo({ 'src/a.ts': 'a\n'.repeat(lines), 'src/b.ts': 'b\n' });
+    const svc = await local(root);
+    const q = { goal: 'review', mode: 'audit', roots: ['src'], limit: 16 };
+    const first = await run(svc, q);
+    expect(first.coverage).toMatchObject({ candidates: LIMITS.candidates, sourceIncomplete: true });
+    let page = first;
+    while (page.next?.expectedSnapshot) page = await run(svc, { ...q, ...page.next });
+    const cursor = page.next!.cursor!;
+    expect(page.next).toEqual({ offset: 0, cursor });
+    const rest = await run(svc, { ...q, cursor });
+    expect(rest.items.map((i) => [i.source.path, i.source.startLine, i.source.endLine])).toEqual([
+      ['src/a.ts', 40 * LIMITS.candidates + 1, 40 * LIMITS.candidates + 40],
+      ['src/a.ts', 40 * LIMITS.candidates + 41, 40 * LIMITS.candidates + 80],
+      ['src/a.ts', 40 * LIMITS.candidates + 81, lines],
+      ['src/b.ts', 1, 1],
+    ]);
+    expect(rest).toMatchObject({ status: 'ok', next: null });
+    exact(root, rest);
+
+    const tampered = `${cursor.slice(0, 4)}${cursor[4] === 'A' ? 'B' : 'A'}${cursor.slice(5)}`;
+    for (const raw of [{ ...q, cursor: tampered }, { ...q, goal: 'another question', cursor }, { ...q, roots: ['.'], cursor }]) {
+      expect(await svc.run(raw, live())).toMatchObject({ isError: true, result: { reasonCodes: ['invalid_input'] } });
+    }
+    expect((await svc.run({ ...q, cursor: '../../etc/passwd' }, live())).result.reasonCodes).toEqual(['invalid_input']);
+    // The file the cursor stops inside changed: its lines are not skipped in other content.
+    write(root, 'src/a.ts', 'c\n'.repeat(lines));
+    expect(await run(svc, { ...q, cursor })).toMatchObject({ status: 'partial', items: [], next: null, reasonCodes: ['source_changed'] });
+  });
+
+  it('refuses a cursor whose matched files changed, and continues a deadline stop', async () => {
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 12; i++) files[`src/f${String(i).padStart(2, '0')}.ts`] = 'export const marker = 1;\n';
+    const root = repo(files);
+    // Each clock read moves 500 ms: reading stops at the budget with a cursor, and an ordinary call resumes from it.
+    let t = 0;
+    const slow = createEvidenceService(await config(root), { apiKey: null, now: () => (t += 500) });
+    const q = { goal: 'marker', exactSymbols: ['export const marker'], limit: 16 };
+    const stopped = (await slow.run(q, live())).result;
+    expect(stopped.reasonCodes).toContain('deadline');
+    expect(stopped.coverage.readFiles).toBeLessThan(12);
+    const svc = await local(root);
+    const rest = await follow(svc, { ...q, ...stopped.next });
+    // What the stopped call scanned keeps its references (unverified text is omitted_budget); the rest is not re-read.
+    expect([...stopped.items, ...rest.flatMap((p) => p.items)].map((i) => i.source.path)).toEqual(Object.keys(files).sort());
+    expect(rest.reduce((n, p) => n + p.coverage.readFiles, stopped.coverage.readFiles)).toBe(12);
+
+    const again = (await slow.run(q, live())).result;
+    write(root, 'src/f99.ts', 'export const marker = 2;\n');
+    expect(await run(svc, { ...q, ...again.next })).toMatchObject({ status: 'partial', items: [], next: null, reasonCodes: ['source_changed'] });
+  });
+
+  it('omits a credential-looking window from search results and read-backs, by reference only', async () => {
+    const root = repo({ 'src/a.ts': 'export const widget = 1;\n', 'src/b.ts': "export const widget = 'sk-abcdefghijklmnopqrstuv';\n" });
+    const svc = await local(root);
+    const r = await run(svc, { goal: 'widget', exactSymbols: ['export const widget'] });
+    expect(r.items.map((i) => [i.source.path, i.textState])).toEqual([['src/a.ts', 'included'], ['src/b.ts', 'omitted_secret']]);
+    expect(r).toMatchObject({ status: 'partial', reasonCodes: ['source_secret'] });
+    const back = await run(svc, { goal: 'widget', sources: [r.items[1]!.source] });
+    expect(back.items).toEqual([{ source: r.items[1]!.source, textState: 'omitted_secret', origin: 'local', judgement: 'unjudged' }]);
+    expect(JSON.stringify([r, back])).not.toContain('sk-abcdefghijklmnopqrstuv');
+  });
+
+  it('passes symbols to Git as data, never as options or shell words, and narrows only where Git folds case as it is matched', async () => {
+    const odd = ['--output=pwned', '$(touch pwned)', '`touch pwned`', '-e'];
+    const root = repo({ 'src/a.ts': `${odd.join('\n')}\n`, 'src/b.ts': 'nothing\n', 'src/c.ts': '사용자 검색어\n', 'src/d.ts': 'STRASSE und straße\n' });
+    const svc = await local(root);
+    const r = await run(svc, { goal: 'odd', exactSymbols: odd });
+    expect(r.items.map((i) => i.source.path)).toEqual(['src/a.ts']);
+    expect(r.coverage).toMatchObject({ filesMatched: 1, readFiles: 1 });
+    expect(git(root, 'status', '--porcelain', '-uall').split('\n').filter(Boolean).sort()).toEqual(['?? src/a.ts', '?? src/b.ts', '?? src/c.ts', '?? src/d.ts']);
+    // Hangul has no case: Git's -i and the matcher agree. ß has an uppercase Git does not fold: every file is read.
+    expect((await run(svc, { goal: '검색어', queryTerms: ['검색어'] })).coverage).toMatchObject({ filesMatched: 1, readFiles: 1 });
+    expect((await run(svc, { goal: 'straße', queryTerms: ['straße'] })).coverage).toMatchObject({ filesMatched: null, readFiles: 4 });
+  });
+});

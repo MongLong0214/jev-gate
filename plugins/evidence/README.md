@@ -6,9 +6,10 @@ whole file, a page at a time. A returned reference can be sent back to read exac
 on and a TypeSafe key, a semantic page is judged by Jev: windows are ordered relevant first, and in `locate` a clearly
 unrelated window keeps its reference and judgement but not its text.
 
-It reads only files under the roots you allow, never writes one, and runs no command but a fixed-argument
-`git ls-files`. Source leaves the machine only when `remote` is `true`, the key is present and the call is a semantic
-search; exact-symbol lookups and read-backs never send anything.
+It reads only files under the roots you allow, never writes one, and runs no command but `git ls-files` and
+`git grep`, each started with an argument list (no shell; every symbol or term is its own `-e` argument after `-F`).
+Source leaves the machine only when `remote` is `true`, the key is present and the call is a semantic search;
+exact-symbol lookups and read-backs never send anything.
 
 ## Configure
 
@@ -64,14 +65,18 @@ MCP SDK inside it; it needs Node 22 or later and nothing else. To turn it off, d
 
 ## Use
 
-The manual skill `/jev-gate:evidence <question>` asks Claude to answer with this tool. It runs only when you
-type it; nothing else in a session calls the tool unless Claude chooses to.
+The skill `evidence` (`/jev-gate:evidence <question>`) asks Claude to answer with this tool. Claude may
+also load it on its own when it needs repository evidence: its description is how a session learns the deferred tool
+exists. The owned worker and planner definitions name the tool too, to use when the host lists it. Claude Code defers
+MCP tools, so the tool is loaded through ToolSearch (`select:mcp__plugin_jev-gate_evidence__jev_evidence`) before
+its first call. Disabling the `evidence` server in `/mcp` removes the tool; the skill then tells Claude to use Read and
+Grep.
 
 | Need | Arguments | Jev |
 |---|---|---|
 | Where a name occurs | `{ "goal": "…", "exactSymbols": ["parseRequest"] }` | never |
 | Code for a question in other words | `{ "goal": "압축 digest 예산 배분", "queryTerms": ["buildDigest", "budget"], "roots": ["mods/compact/hooks"] }` | when remote |
-| The next page | the same arguments plus `"offset"` and `"expectedSnapshot"` from `next` | when remote |
+| The next page | the same arguments plus every field of `next` (`offset`, and `expectedSnapshot` and/or `cursor`) | when remote |
 | A window back, exactly | `{ "goal": "…", "sources": [{ "path": "<path>", "startLine": 1, "endLine": 16, "fileSha256": "<64 lowercase hex digits>" }] }` | never |
 | More lines around a hit | the same `path` and `fileSha256` with a wider `startLine`/`endLine` (≤ 40 lines) in `sources` | never |
 | Every window in a small scope | `{ "goal": "…", "mode": "audit", "roots": ["src/evidence"] }` | when remote, never folded |
@@ -85,18 +90,39 @@ for semantic judgement, along with `constraints`. Without `queryTerms`, locate t
 128 unique terms is an input error (`invalid_input`): pass short `queryTerms` or a narrower question. Narrowing
 `roots` does not raise that cap. Exact-symbol, audit, and `sources` reads are not rejected for unused words in the goal.
 
+Before any file is read, one `git grep -F -l` over the whole scope (tracked and non-ignored untracked files, like the
+listing) names the files that hold an exact symbol or, in locate, a term; a locate file whose path names a term also
+counts. Only those files are read: `coverage.filesMatched` is their number. Locate reads files holding a whole
+`queryTerm` first, then a goal word, then a part of an identifier, each group in path order. Audit is not narrowed.
+Where Git's case folding could differ from the matcher (a term with non-ASCII letters that have case, like `ß`), or
+Git fails or prints more than 2 MiB of names, the listing is read in path order as before and `filesMatched` is
+`null`. If Git does not finish within the call's budget (a heavily loaded machine), nothing is read: the call returns
+`deadline` with no `next`, and the same call can simply be sent again.
+
 `status: "partial"` means something was not read, judged or included; `coverage` and `reasonCodes` say what. A page
-stopped by the 1,024-candidate cap or by the cooperative search budget is the prefix collected in file and line order
-(locate then scores only that prefix), not the repository's global top. An empty page is not proof of absence, and an
-audit page is not a completed audit. Continuing requires the same snapshot (`next.offset` and `next.expectedSnapshot`).
-A stop that depends on time can differ between calls; there is no cursor for it. A read-back of a file that changed
-returns `stale` without text rather than the new text under the old reference.
+stopped by the 200-file cap, the 1,024-candidate cap or the cooperative search budget is the prefix collected in file
+and line order (locate then scores only that prefix), not the repository's global top. An empty page is not proof of
+absence, and an audit page is not a completed audit.
+
+`next` continues a search. While the current set has more candidates it carries `offset` and `expectedSnapshot` (and
+the `cursor` this call was given): the same set, paged. When the set is done but a cap or the deadline stopped reading,
+it carries `offset: 0` and a new `cursor`: the next call reads on from the first file not read, or from the line after
+the last window of a file the candidate cap cut. A cursor is sealed with a key held by this server process and bound to
+the request (everything but `limit`, `offset` and the cursor) and to the matched file list: an edited cursor, one from a
+restarted server or one sent with other arguments is `invalid_input`; one whose matched files, or the file it stops
+inside, changed since is `source_changed`. A time stop can fall at a different place on each call, so the cursor
+says where this one fell. A read-back of a file that changed returns `stale` without text rather than the new text
+under the old reference.
+
+A window whose text matches the credential patterns Lean and the Router use (private keys, `sk-…`, `ghp_…`, `AKIA…`,
+JWTs, quoted `password`/`api_key` values, `Authorization` headers, …) is returned as `omitted_secret` with its
+reference only, in searches and read-backs alike, and the call reports `source_secret`.
 
 ## Bounds
 
-At most 200 files, 256 KiB per file and 16 MiB read per call, 128 unique lexical terms, 1,024 candidates, a page of
-16, and one 3-second cooperative budget for the whole call — reading, candidate generation and at most 1.5 seconds of
-Jev share it. That budget is cooperative: it is not an operating-system or network guarantee. Two Jev requests of
+At most 200 files, 256 KiB per file and 16 MiB read per call, 2 MiB of names from each `git ls-files` and
+`git grep`, 128 unique lexical terms, 1,024 candidates, a page of 16, and one 3-second cooperative budget for the whole
+call — listing, narrowing, reading, candidate generation and at most 1.5 seconds of Jev share it. That budget is cooperative: it is not an operating-system or network guarantee. Two Jev requests of
 eight candidates per call with no retry, two calls and four Jev requests at once per server (a third call is refused
 as `busy`), and 64 KiB per result. Jev judgements of a completed page are cached in memory for 10 minutes, keyed by
 the exact text sent. A page stopped because candidate generation ran out of budget is not sent to Jev; the files
