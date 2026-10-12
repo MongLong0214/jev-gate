@@ -466,3 +466,27 @@ it('retains every active execution beyond the recent completed-turn window', () 
   const view=buildOperations(records,[],new Date(later),{trace:true,debug:false});
   expect(view.runs).toHaveLength(201);expect(view.runs.flatMap(r=>r.steps).some(s=>s.state==='active')).toBe(true);
 });
+
+it('rebuilds only the sessions that changed or are still recent, and equals one pass over the whole recording (#215)', () => {
+  const old = '2026-09-29T05:00:00.000Z', avail = { trace: true, debug: true };
+  const settled: Record<string, unknown>[] = [
+    { ...base, written_at: old, phase: 'admission_intent', request_id: 'a1' },
+    { ...base, written_at: old, phase: 'admission_result', request_id: 'a1', attempted: true, decision: { shape: 'direct' } },
+    { written_at: old, phase: 'evidence_jev_intent', request_id: 'e1:1', parent_request_id: 'e1' },
+    { ...base, session_id: 's2', written_at: old, phase: 'background_launch', tool_use_id: 'd' },
+  ];
+  const debug = [row('router', { session_id: 's1', event: 'root', turn: 't1' }, old), row('router', { event: 'root_result', turn: 't2', requested: 'claude-opus-5-5', observed: 'claude-opus-5-5', confirmation: 'confirmed' }, old)];
+  const live = { ...base, session_id: 'live', phase: 'admission_intent', request_id: 'b1' };
+  const answered = [...settled, live, { ...live, written_at: later, phase: 'admission_result', attempted: true, decision: { shape: 'direct' } }];
+  const steps: Array<[Record<string, unknown>[], Date]> = [[[...settled, live], new Date(later)], [answered, new Date(later)],
+    [[...answered, { ...settled[0], written_at: at, request_id: 'a2' }], new Date(Date.parse(later) + 31_000)]];
+  const [first, second, third] = steps.map(([records, now]) => {
+    const view = buildOperations(records, debug, now, avail);
+    expect(view).toEqual(buildOperations(records, debug, now, avail, true));
+    return view;
+  });
+  expect(first!.runs[0]?.state).toBe('active'); expect(second!.runs[0]?.state).toBe('done');
+  // Only the recording session is rebuilt; then s1 changes, and the session-less pool and s2 stay as they were.
+  expect(second!.runs.filter(run => first!.runs.includes(run))).toEqual(second!.runs.slice(1));
+  expect(third!.runs.filter(run => second!.runs.includes(run)).map(run => run.title).sort()).toEqual(['Evidence 검색', 'Router 실행', '게이트 세션']);
+});

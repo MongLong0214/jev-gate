@@ -281,6 +281,16 @@ describe('incremental directory reconciliation', () => {
     rmSync(dir, { recursive: true }); mkdirSync(dir);
     expect(reader.read(dir, 1202)).toEqual({ records: [], unreadable: 0 });
   });
+  it('orders added files as a full read does, whether they extend the history or land inside it (#215)', () => {
+    const dir = mkdtempSync(join(tmp, 'append-')), reader = new TraceDirectoryReader(60_000);
+    writeFileSync(join(dir, 'b.json'), JSON.stringify(base('post', 2)));
+    reader.read(dir, 1000);
+    for (const [name, at] of [['a.json', 3], ['c.json', 1], ['d.json', 3]] as const) {
+      writeFileSync(join(dir, name), JSON.stringify(base('post', at, { name }))); reader.invalidate(dir, name);
+      expect(reader.read(dir, 1001)).toEqual(readTraceRecords(dir));
+    }
+    expect(reader.read(dir, 1001).records.map(r => r['name'] ?? 'b.json')).toEqual(['c.json', 'b.json', 'a.json', 'd.json']);
+  });
   it('rejects substituted file and directory symlinks and oversized records, and discovers a newly created directory', () => {
     const dir = join(tmp, 'later-reader'), outside = mkdtempSync(join(tmp, 'outside-reader-')), reader = new TraceDirectoryReader(100);
     expect(reader.read(dir, 1000).records).toEqual([]); mkdirSync(dir);

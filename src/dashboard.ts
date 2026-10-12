@@ -178,13 +178,18 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
     /** Rebuilds run on the activity thread, one at a time, and every caller shares the one in flight. A rebuild after new
      * records waits as long as the previous one took (at most a second, since a cold first read is slower than the rest),
      * so a stream of records cannot keep that thread busy without pause. */
+    const wait = (): number => Math.max(100, Math.min(1000, loaded?.ms ?? 0));
     const refresh = (): Promise<void> => {
       syncWatchers();
       const elapsed = Date.now() - scannedAt;
-      if (!loading && (!scannedAt || changed && elapsed >= Math.max(100, Math.min(1000, loaded?.ms ?? 0)) || elapsed >= (loaded?.pending ? 2000 : 30_000))) {
+      if (!loading && (!scannedAt || changed && elapsed >= wait() || elapsed >= (loaded?.pending ? 2000 : 30_000))) {
         changed = false; flush();
         loading = engine.load().then(next => { loaded = next; }, () => { changed = true; /* The last snapshot stays; retry after the wait. */ })
-          .finally(() => { scannedAt = Date.now(); loading = null; syncWatchers(true); broadcast(); });
+          .finally(() => {
+            scannedAt = Date.now(); loading = null; syncWatchers(true); broadcast();
+            // Records that arrived meanwhile start the next rebuild when its wait ends, not at a later tick.
+            if (changed) setTimeout(() => { if (!disposed) broadcast(); }, wait()).unref();
+          });
       }
       return loading ?? Promise.resolve();
     };
@@ -248,7 +253,9 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
         return;
       }
       if (req.method === 'GET' && path === '/api/snapshot') {
-        await refresh();
+        // An open stream keeps the frame current, so answer with it at once; its `at` tells when it was built. Waiting for
+        // the rebuild in flight held the answer for up to a whole rebuild while records kept arriving (#215).
+        if (!loaded || !subscribers.size) await refresh();
         const body = frame();
         res.writeHead(body ? 200 : 503, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
         res.end(body?.data ?? JSON.stringify({ error: 'activity_unavailable' }));
