@@ -173,9 +173,11 @@ export const registerRouter = (on: On, config: RouterConfig, ownedDispatch = fal
     });
   }
   if (router.stepEnabled) {
-    on('turn.complete', ($, e, next) => {
-      quietly(() => router.turnComplete(e));
-      return next(e);
+    on('turn.complete', async ($, e, next) => {
+      const recorder = recorderOf($);
+      quietly(() => router.turnComplete(e, { log: recorder.log }));
+      try { return await next(e); }
+      finally { await recorder.flush(); }
     });
   }
   // Root turns and subagent loops both step here.
@@ -197,9 +199,11 @@ export const registerRouter = (on: On, config: RouterConfig, ownedDispatch = fal
       finally { await recorder.flush(); }
     });
   }
-  on('session.end', ($, e, next) => {
-    quietly(() => router.sessionEnd());
-    return next(e);
+  on('session.end', async ($, e, next) => {
+    const recorder = recorderOf($);
+    quietly(() => router.sessionEnd({ log: recorder.log }));
+    try { return await next(e); }
+    finally { await recorder.flush(); }
   });
 
 };

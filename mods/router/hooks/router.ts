@@ -371,7 +371,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
   let diagnosed = false;
   let versionWait: ReturnType<typeof sharedRead<string | undefined>> | null = null;
   const pinReads = new Map<string, ReturnType<typeof sharedRead<HostPins>>>();
-  const log = (engine: RouterEngine, record: Record<string, unknown>): void => {
+  const log = (engine: Pick<RouterEngine, 'log'>, record: Record<string, unknown>): void => {
     if (!config.logDecisions) return;
     try {
       engine.log(`jev-router ${JSON.stringify(record)}`);
@@ -1190,7 +1190,9 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     },
     turnStep,
     /** A child's completion carries its agentId and never retires the root's turn. */
-    turnComplete: <E extends TurnEndEvent>(e: E): void => {
+    turnComplete: <E extends TurnEndEvent>(e: E, engine?: Pick<RouterEngine, 'log'>): void => {
+      // The exact end of a loop bounds a request whose response never arrived; the answer is never recorded.
+      if (engine) log(engine, { event: 'turn_end', turn: e.turnId, agent_id: e.agentId ?? null, scope: e.agentId === undefined ? 'root' : 'child', reason: e.reason ?? null });
       if (e.agentId === undefined) {
         if (currentRootTurn === e.turnId) { lastReply = e.reason === 'answer' && e.answer?.trim() && !looksSecret(e.answer) ? e.answer : null; currentRootTurn = null; }
         retire(e.turnId);
@@ -1206,7 +1208,8 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       if (spawnEnabled) offers.put(e.agent, e.source === 'built-in' && e.provider.plugin === 'engine' && e.provider.tier === 'core');
     },
     agentSpawn,
-    sessionEnd: (): void => {
+    sessionEnd: (engine?: Pick<RouterEngine, 'log'>): void => {
+      if (engine && stepEnabled) log(engine, { event: 'session_end' });
       session.abort();
       session = new AbortController();
       for (const id of [...turns.keys()]) retire(id);
