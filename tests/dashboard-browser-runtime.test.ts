@@ -22,7 +22,7 @@ const step = (id: string, feature: OperationStep['feature'], extra: Partial<Oper
 const run = (id: string, host: 'claude' | 'codex', steps: OperationStep[], extra: Partial<OperationRun> = {}): OperationRun => ({ id, host, title: `${host} execution ${id}`, source: 'gate', mode: 'auto', firstAt: stamp, lastAt: stamp, state: 'done', steps, ...extra });
 function snapshot(runs: OperationRun[]) {
   const feed = runs.flatMap(r => r.steps.map(s => ({ ...s, host: r.host, runId: r.id, runTitle: r.title }))).sort((a,b) => b.at.localeCompare(a.at));
-  const ids = ['admission','allocation','planning','workers','guard','router','compact','output','evidence'] as const;
+  const ids = ['admission','allocation','planning','workers','guard','router','compact','evidence'] as const;
   const latency = feed.filter(s => s.lane==='jev' && s.durationMs!==undefined).map(s => ({ at:s.at, ms:s.durationMs! }));
   return { at:stamp, host:'mixed', unreadable:0, recording:{enabled:true}, dashboard:{enabled:true}, operations:{runs,feed,active:runs.filter(r=>r.state==='active').length,attention:0,requests:latency.length,
     features:ids.map(id=>({id,label:id,source:'trace',count:feed.filter(s=>!s.lifecycle&&s.feature===id).length,lastAt:feed.find(s=>!s.lifecycle&&s.feature===id)?.at??null,state:feed.some(s=>!s.lifecycle&&s.feature===id)?'observed':'waiting'})),
@@ -102,7 +102,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
   });
 
   it('keeps header activity consistent with old in-flight work outside the recent feed', async () => {
-    push([run('old-active','codex',[step('old-tool','workers',{lifecycle:true,lane:'host',state:'active',startedAt:stamp})]),run('new','claude',[step('new-output','output')])]);
+    push([run('old-active','codex',[step('old-tool','workers',{lifecycle:true,lane:'host',state:'active',startedAt:stamp})]),run('new','claude',[step('new-output','compact')])]);
     current.operations.feed=current.operations.feed.filter(event=>event.id!=='old-tool');
     const p=await page();await settle(p);
     expect(await p.locator('#pipeline-state').textContent()).toBe('1개 단계 진행 중');
@@ -232,7 +232,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
       expect(await edge.getAttribute('d')).toBe(geometry);
     }
     expect(new Set(offsets.map(v=>v.toFixed(3))).size).toBeGreaterThan(45);
-    push([run('flow','claude',[a,b,r,step('receipt','output')],{state:'active'})]);await settle(p);
+    push([run('flow','claude',[a,b,r,step('receipt','compact')],{state:'active'})]);await settle(p);
     expect(Number(await edge.evaluate(e=>e.style.animationDelay.replace('s','')))).toBeLessThan(0);
     await p.locator('#pause').click();expect(await edge.evaluate(e=>getComputedStyle(e).animationPlayState)).toBe('paused');
     await p.locator('#pause').click();await p.emulateMedia({reducedMotion:'reduce'});
@@ -274,7 +274,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     await p.close();
   });
   it('separates errors, missing results and interruption; failed settings writes retain the saved state',async()=>{
-    push([run('c','claude',[step('m','workers',{lane:'host',state:'error',summary:'actual model mismatch',model:{selected:'opus',observed:'sonnet',status:'mismatch',selectedEffort:null,observedEffort:null}})],{state:'attention'}),run('x','codex',[step('u','router',{state:'unconfirmed'})],{state:'unconfirmed'}),run('stop','codex',[step('stop','output',{state:'interrupted'})],{state:'interrupted'})]);const p=await page();
+    push([run('c','claude',[step('m','workers',{lane:'host',state:'error',summary:'actual model mismatch',model:{selected:'opus',observed:'sonnet',status:'mismatch',selectedEffort:null,observedEffort:null}})],{state:'attention'}),run('x','codex',[step('u','router',{state:'unconfirmed'})],{state:'unconfirmed'}),run('stop','codex',[step('stop','compact',{state:'interrupted'})],{state:'interrupted'})]);const p=await page();
     await p.locator('.circuit-node[data-feature=workers]').click();expect(await p.locator('.inspector-record').textContent()).toContain('불일치');expect(await p.locator('.inspector-record.error').count()).toBe(1);
     await p.locator('.review-shortcut[data-review=unconfirmed]').click();expect(await p.locator('#runs .run-row').count()).toBe(1);expect(await p.locator('#trace').textContent()).toContain('판단·요청·실행 중 확인되지 않은 항목');
     await p.locator('#recording').click();await p.waitForFunction(()=>document.getElementById('notice')!.textContent!.includes('저장하지 못했습니다'));expect(await p.locator('#recording').getAttribute('aria-checked')).toBe('true');await p.locator('#language').click();expect(await p.locator('html').getAttribute('lang')).toBe('en');await p.close();

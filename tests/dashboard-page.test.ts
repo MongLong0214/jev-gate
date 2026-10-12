@@ -10,7 +10,7 @@ const step = (id: string, feature: OperationStep['feature'], lane: OperationStep
 const run = (id: string, host: 'claude' | 'codex', steps: OperationStep[], extra: Partial<OperationRun> = {}): OperationRun => ({ id, host, title: `${host} execution`, source: 'gate', mode: 'auto', firstAt: stamp, lastAt: stamp, state: 'done', steps, ...extra });
 const snapshot = (runs: OperationRun[]) => {
   const all = runs.flatMap(r => r.steps.map(s => ({ ...s, host: r.host, runId: r.id, runTitle: r.title })));
-  const ids = ['admission', 'allocation', 'planning', 'workers', 'guard', 'router', 'compact', 'output', 'evidence'] as const;
+  const ids = ['admission', 'allocation', 'planning', 'workers', 'guard', 'router', 'compact', 'evidence'] as const;
   const values = all.filter(s => s.lane === 'jev' && s.durationMs !== undefined).map(s => ({ at: s.at, ms: s.durationMs! }));
   const operations: OperationsView = { runs, feed: all.slice().reverse(), active: 0, attention: 0, requests: values.length,
     features: ids.map(id => ({ id, label: id, source: 'trace', count: all.filter(s => !s.lifecycle && s.feature === id).length, lastAt: all.some(s => !s.lifecycle && s.feature === id) ? stamp : null, state: all.some(s => !s.lifecycle && s.feature === id) ? 'observed' : 'waiting' })),
@@ -94,10 +94,9 @@ describe('dashboard live interactions', () => {
     p.click('#nav [data-feature=compact]');
     expect(p.get('circuit-inspector').textContent).toContain('후보 8/16 · 필수 근거 3');
   });
-  it('renders all nine real feature states and never invents activity on first load', () => {
+  it('renders all eight real feature states and never invents activity on first load', () => {
     const p = page(); p.push(snapshot([run('c', 'claude', [step('a', 'admission', 'jev', { durationMs: 70 })]), run('x', 'codex', [step('l', 'workers', 'host', { lifecycle: true })])]));
-    expect(p.w.document.querySelectorAll('.circuit-node')).toHaveLength(9);
-    expect(p.w.document.querySelector('.circuit-node[data-feature="lean"]')).toBeNull();
+    expect(p.w.document.querySelectorAll('.circuit-node')).toHaveLength(8);
     expect(p.w.document.querySelector('.circuit-node[data-feature="workers"]')?.classList.contains('waiting')).toBe(true);
     expect(p.w.document.querySelectorAll('.wire-packet.arriving,.circuit-node.flash')).toHaveLength(0);
     expect(p.get('latest').textContent).toBe('70 ms');
@@ -120,7 +119,7 @@ describe('dashboard live interactions', () => {
   });
   it('searches visible feature names, exposes filter state and distinguishes a missing source from an idle feature', () => {
     const p = page(); const s = snapshot([run('searchable', 'claude', [step('allocation', 'allocation', 'jev')])]);
-    s.operations.features.find(f => f.id === 'output')!.state = 'unavailable'; p.push(s);
+    s.operations.features.find(f => f.id === 'compact')!.state = 'unavailable'; p.push(s);
     const search = p.get('search'); (search as unknown as { value: string }).value = 'Gate B'; search.dispatchEvent(new p.w.Event('input'));
     expect(p.get('runs').textContent).toContain('claude execution'); expect(p.get('coverage').textContent).toContain('기록원 읽기 불가');
     p.click('[data-state=unconfirmed]'); expect(p.w.document.querySelector('[data-state=unconfirmed]')?.getAttribute('aria-pressed')).toBe('true');
@@ -267,7 +266,7 @@ it('distinguishes verified Codex request settings from an unobserved response mo
 
 
 it('counts active work outside the bounded event feed and keeps host and header status consistent', () => {
-  const p=page();const s=snapshot([run('ongoing','codex',[step('tool','workers','host',{lifecycle:true,state:'active',startedAt:stamp})]),run('recent','claude',[step('done','output','local')])]);
+  const p=page();const s=snapshot([run('ongoing','codex',[step('tool','workers','host',{lifecycle:true,state:'active',startedAt:stamp})]),run('recent','claude',[step('done','compact','local')])]);
   s.operations.feed=s.operations.feed.filter(event=>event.id!=='tool');p.push(s);
   expect(p.get('pipeline-state').textContent).toBe('1개 단계 진행 중');
   expect(p.get('now').querySelector('[data-progress-host="codex"].running')).not.toBeNull();
