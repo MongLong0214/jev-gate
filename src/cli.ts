@@ -206,7 +206,7 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
     const c = loaded.config;
     if (c.mode === 'lean' || leanPackage) {
       say('ok', `config ${loaded.source}: mode=${c.mode} jevModel=${c.jevModel} deadline=${c.requestDeadlineMs}ms`);
-      say('info', 'Lean: no Gate A/B/C, no planner, no task graph, no depth floor and no root guard. The executor inherits native model and effort.');
+      say('info', 'Lean: no Gate A/B, no planner, no task graph, no depth floor and no root guard. The executor inherits native model and effort.');
       if (c.mode === 'lean') {
         say('info', 'lean needs a readable host transcript for this session; without one it stays native (source_unavailable), which is not the same as an empty history');
         if (env['JEV_GATE_BENCH_RECENT'] === '1') say('warn', 'JEV_GATE_BENCH_RECENT=1 is set: the deterministic no-Jev comparison arm is active. This is a benchmark dependency, not a product mode');
@@ -214,7 +214,7 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
       say('info', `job state directory: ${jobsDir(env)} (0700, one 0600 file per session, removed after 7 days)`);
       return;
     }
-    say('ok', `config ${loaded.source}: mode=${c.mode} jevModel=${c.jevModel} deadline=${c.requestDeadlineMs}ms floors={admission:${c.admissionConfidenceFloor},route:${c.routeConfidenceFloor},result:${c.resultConfidenceFloor}} plannerDefaultTier=${c.plannerDefaultTier} models=${JSON.stringify(c.models)} maxParallelWorkers=${c.maxParallelWorkers} guardAllowTools=${JSON.stringify(c.guardAllowTools)} routeQuestionShape=${c.routeQuestionShape} admissionQuestionShape=${c.admissionQuestionShape} delegationDepthFloor=${c.delegationDepthFloor === null ? 'null (derived)' : c.delegationDepthFloor} delegationDepthFraction=${c.delegationDepthFraction} maxTasksPerPlan=${c.maxTasksPerPlan} admittedShape=${c.admittedShape} delegationCoordinatorTurns=${c.delegationCoordinatorTurns} delegationWorkerTokensPerCall=${c.delegationWorkerTokensPerCall} guardAllowMcp=${c.guardAllowMcp} verifyWorkerChecks=${c.verifyWorkerChecks}`);
+    say('ok', `config ${loaded.source}: mode=${c.mode} jevModel=${c.jevModel} deadline=${c.requestDeadlineMs}ms floors={admission:${c.admissionConfidenceFloor},route:${c.routeConfidenceFloor}} plannerDefaultTier=${c.plannerDefaultTier} models=${JSON.stringify(c.models)} maxParallelWorkers=${c.maxParallelWorkers} guardAllowTools=${JSON.stringify(c.guardAllowTools)} routeQuestionShape=${c.routeQuestionShape} admissionQuestionShape=${c.admissionQuestionShape} delegationDepthFloor=${c.delegationDepthFloor === null ? 'null (derived)' : c.delegationDepthFloor} delegationDepthFraction=${c.delegationDepthFraction} maxTasksPerPlan=${c.maxTasksPerPlan} admittedShape=${c.admittedShape} delegationCoordinatorTurns=${c.delegationCoordinatorTurns} delegationWorkerTokensPerCall=${c.delegationWorkerTokensPerCall} guardAllowMcp=${c.guardAllowMcp} verifyWorkerChecks=${c.verifyWorkerChecks}`);
     if (c.admissionQuestionShape === 'atomic') {
       say(
         'info',
@@ -261,9 +261,9 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
       say('warn', 'mode=off still starts a node process for every matched hook event (hooks.json/lean.json registration is unconditional): to remove that cost too, disable the plugin with `claude plugin disable jev-gate@<marketplace>`');
     }
     if (c.mode === 'native') say('info', 'mode=native: guidance + owned profiles + job state and guard when orchestration starts, no Jev request');
-    if (c.mode === 'auto') say('info', 'mode=auto: admission, allocation and result gates send the request, the planned task and the worker reply to TypeSafe (may include source excerpts and prior constraints)');
+    if (c.mode === 'auto') say('info', 'mode=auto: admission and allocation gates send the request, the planned task and summaries of earlier worker replies to TypeSafe (may include source excerpts and prior constraints)');
     say('info', `job state directory: ${jobsDir(env)} (0700, one 0600 file per session, removed after 7 days)`);
-    if (env['JEV_GATE_EXPERIMENT_ADMISSION'] === 'orchestrated') say('warn', `JEV_GATE_EXPERIMENT_ADMISSION=orchestrated is set: every prompt starts an orchestrated job in ${c.mode} mode without a Gate A request (recorded as forced/admission_forced); allocation and result gates are unaffected`);
+    if (env['JEV_GATE_EXPERIMENT_ADMISSION'] === 'orchestrated') say('warn', `JEV_GATE_EXPERIMENT_ADMISSION=orchestrated is set: every prompt starts an orchestrated job in ${c.mode} mode without a Gate A request (recorded as forced/admission_forced); allocation is unaffected`);
     if (c.workerIsolation === 'worktree') {
       let snapshot = false;
       try { snapshot = JSON.stringify(JSON.parse(readFileSync(join(root, 'hooks', 'hooks.json'), 'utf8'))?.hooks?.WorktreeCreate).includes('/dist/worktree-cli.js'); } catch { /* Standalone/legacy adapters retain the native baseRef behavior. */ }
@@ -410,7 +410,7 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
   inspect('host settings', checkUserSettings);
   report.group('activity');
   if (!leanPackage) inspect('liveness', checkLiveness);
-  say('info', leanPackage ? 'Lean /hooks: UserPromptSubmit, Agent PreToolUse/PostToolUse/Failure and owned SubagentStop only; executor inherits native selection. No Gate A/B/C or tier routing.' : `in Claude Code: /hooks should list seven jev-gate lifecycle entries (UserPromptSubmit, PreToolUse with no matcher, PostToolUse on ^(Agent|TaskStop)$, PostToolUseFailure on ^Agent$, Stop, SessionStart, owned SubagentStop); the @agent- typeahead should show ${Object.keys(OWNED_AGENTS).join(', ')} once each`);
+  say('info', leanPackage ? 'Lean /hooks: UserPromptSubmit, Agent PreToolUse/PostToolUse/Failure and owned SubagentStop only; executor inherits native selection. No Gate A/B or tier routing.' : `in Claude Code: /hooks should list seven jev-gate lifecycle entries (UserPromptSubmit, PreToolUse with no matcher, PostToolUse on ^(Agent|TaskStop)$, PostToolUseFailure on ^Agent$, Stop, SessionStart, owned SubagentStop); the @agent- typeahead should show ${Object.keys(OWNED_AGENTS).join(', ')} once each`);
   say('info', `start: JEV_GATE_MODE=${leanPackage ? 'lean' : 'auto'} CLAUDE_CODE_FORK_SUBAGENT=0 claude --model sonnet --plugin-dir "${root}"  (doctor performed no inference; a passing doctor is not proof of patch support, effort support or model access)`);
   report.group('storage');
   inspect('storage', () => { for (const path of [jobsDir(env), claudeTraceDir(env)]) { const issue = storageIssue(path); say(issue ? 'fail' : 'ok', `storage: ${path}: ${issue ?? 'readable/writable or creatable (not created by doctor)'}`); } });

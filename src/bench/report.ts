@@ -188,7 +188,6 @@ export interface GateV5Summary {
   plan_status: Record<string, number>;
   worker_calls: Record<string, WorkerTierRecord>;
   receipts: { accept: number; incomplete: number; invalid: number; unknown: number; rework: number; replan: number };
-  advisory: { accept: number; rework: number; replan: number; abstain: number; none: number };
   parallel: { reservation_overlap_max: number; observed_overlap_max: number };
   jev_requests: { admission: JevPhaseUsage; allocation: JevPhaseUsage; result: JevPhaseUsage; scope: JevPhaseUsage };
   outcomes: Record<string, number>;
@@ -422,7 +421,6 @@ const jevPhase = (v: unknown): JevPhaseUsage => {
 };
 
 const RECEIPT_KEYS = ['accept', 'incomplete', 'invalid', 'unknown', 'rework', 'replan'] as const;
-const ADVISORY_KEYS = ['accept', 'rework', 'replan', 'abstain', 'none'] as const;
 
 /** Reads the schema-5 gate block defensively; a V3/V4 cell returns null so its observation stays unknown, not zero. */
 export const gateV5Of = (gate: Record<string, unknown>): GateV5 | null => {
@@ -456,7 +454,6 @@ export const gateV5Of = (gate: Record<string, unknown>): GateV5 | null => {
     planner_calls: { requested: int(planner['requested']), completed: int(planner['completed']), tier_proposed: text(planner['tier_proposed']), model_observed: text(planner['model_observed']), plan_status: text(planner['plan_status']), rev: money(planner['rev']) },
     worker_calls: workers,
     receipts: counters(gate['receipts'], RECEIPT_KEYS) as GateV5['receipts'],
-    advisory: counters(gate['advisory'], ADVISORY_KEYS) as GateV5['advisory'],
     parallel: { reservation_overlap_max: int(parallel['reservation_overlap_max']), observed_overlap_max: int(parallel['observed_overlap_max']) },
     jev_requests: { admission: jevPhase(jev['admission']), allocation: jevPhase(jev['allocation']), result: jevPhase(jev['result']), scope: jevPhase(jev['scope']) },
     influence: { judgments: int(influence['judgments']), changed_default: int(influence['changed_default']) },
@@ -485,7 +482,6 @@ const emptyGateV5Summary = (): GateV5Summary => ({
   plan_status: {},
   worker_calls: {},
   receipts: { accept: 0, incomplete: 0, invalid: 0, unknown: 0, rework: 0, replan: 0 },
-  advisory: { accept: 0, rework: 0, replan: 0, abstain: 0, none: 0 },
   parallel: { reservation_overlap_max: 0, observed_overlap_max: 0 },
   jev_requests: {
     admission: { attempts: 0, tokens: 0, tokens_known: 0, cost_usd: 0 },
@@ -681,7 +677,6 @@ export const summarizeGateV5 = (rows: RowView[]): GateV5Summary => {
       addCounts(into.root_effort, w.root_effort);
     }
     for (const k of RECEIPT_KEYS) out.receipts[k] += v.receipts[k];
-    for (const k of ADVISORY_KEYS) out.advisory[k] += v.advisory[k];
     out.parallel.reservation_overlap_max = Math.max(out.parallel.reservation_overlap_max, v.parallel.reservation_overlap_max);
     out.parallel.observed_overlap_max = Math.max(out.parallel.observed_overlap_max, v.parallel.observed_overlap_max);
     addJevPhase(out.jev_requests.admission, v.jev_requests.admission);
@@ -1034,13 +1029,13 @@ const tierCounts = (w: Record<string, WorkerTierRecord>): string =>
     .map(([tier, t]) => `${tier}:${t.calls}(patched ${t.patched}, preserved ${t.preserved}, pinned ${t.pinned})`)
     .join(' ') || '-';
 
-const V5_HEADER = ['| arm | rows with records | admission | guard denials (continue false) | planner req/done | planner tier proposed | planner model | plan status | worker tiers | receipts | advisory | parallel res/obs | outcomes | orphan records | decision mismatch |', '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|'];
+const V5_HEADER = ['| arm | rows with records | admission | guard denials (continue false) | planner req/done | planner tier proposed | planner model | plan status | worker tiers | receipts | parallel res/obs | outcomes | orphan records | decision mismatch |', '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|'];
 
 const v5Table = (arms: ArmSummary[]): string[] => [
   ...V5_HEADER,
   ...arms.map((a) => {
     const v = a.gate_v5;
-    return `| ${a.arm} | ${v.rows_observed} | ${counts(v.admission)} | ${v.guard_denials} (${v.continue_false}) | ${v.planner_requested}/${v.planner_completed} | ${counts(v.planner_tier_proposed)} | ${counts(v.planner_model_observed)} | ${counts(v.plan_status)} | ${tierCounts(v.worker_calls)} | ${counts(v.receipts)} | ${counts(v.advisory)} | ${v.parallel.reservation_overlap_max}/${v.parallel.observed_overlap_max} | ${counts(v.outcomes)} | ${v.orphan_records} | ${v.decision_mismatch} |`;
+    return `| ${a.arm} | ${v.rows_observed} | ${counts(v.admission)} | ${v.guard_denials} (${v.continue_false}) | ${v.planner_requested}/${v.planner_completed} | ${counts(v.planner_tier_proposed)} | ${counts(v.planner_model_observed)} | ${counts(v.plan_status)} | ${tierCounts(v.worker_calls)} | ${counts(v.receipts)} | ${v.parallel.reservation_overlap_max}/${v.parallel.observed_overlap_max} | ${counts(v.outcomes)} | ${v.orphan_records} | ${v.decision_mismatch} |`;
   }),
 ];
 
@@ -1101,7 +1096,7 @@ export const renderMarkdown = (r: Report): string => {
       '- A model-mismatch count is the host’s own `model_mismatch` reason code on a stop/spawn_result line, never inferred from the requested/observed pair by this ingestion.',
     );
   }
-  L.push('', '## Jev requests per arm (attempts / input tokens / est $ at the dated price)', '', '| arm | admission | allocation | result | plan (scope or interpretation) | influence (changed/judged) |', '|---|---|---|---|---|---|');
+  L.push('', '## Jev requests per arm (attempts / input tokens / est $ at the dated price)', '', '| arm | admission | allocation | result (pre-#213 traces) | plan (scope or interpretation) | influence (changed/judged) |', '|---|---|---|---|---|---|');
   for (const a of r.arms) {
     const j = (p: JevPhaseUsage): string => `${p.attempts} / ${p.tokens === null ? `null (known ${p.tokens_known})` : p.tokens} / ${fmt(p.cost_usd, 6)}`;
     const inf = a.gate_v5.influence;

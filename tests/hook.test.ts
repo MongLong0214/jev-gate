@@ -2137,7 +2137,7 @@ describe('receipts', () => {
     const r = await run(env, workerPost('toolu_1', workerReply({ checks: [{ check_id: 'c1', result: 'fail', note: '' }] })), fetchImpl);
     // T11: the worker's own report of a failed required check is the verdict; no request was made to reach it.
     expect(context(r)).toContain('reported a required check as failed');
-    expect(state(env).current.receipts[0]).toMatchObject({ verdict: 'rework', advisory: null });
+    expect(state(env).current.receipts[0]).toMatchObject({ verdict: 'rework' });
     expect(await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t3]\nwork' }), { tool_use_id: 'toolu_3' }), fetchImpl)).toMatchObject({ code: 'deps_incomplete' });
   });
 
@@ -2156,7 +2156,7 @@ describe('receipts', () => {
   });
 
   /** T11: the result gate is gone from the normal path. No result verdict is ever requested, whatever the outcome. */
-  it('R14: makes no Gate C request on accept, incomplete, invalid or unknown, and still enforces the checks', async () => {
+  it('R14: makes no result request on accept, incomplete, invalid or unknown, and still enforces the checks', async () => {
     const env = makeEnv();
     const sets: string[][] = [];
     const fetchImpl = fakeJev({ onCall: (q) => sets.push(q) });
@@ -2166,13 +2166,14 @@ describe('receipts', () => {
     await run(env, preEvent('Agent', agentInput()), fetchImpl);
     const accepted = await run(env, workerPost('toolu_1', workerReply()), fetchImpl);
     expect(context(accepted)).toContain('Task t1 accepted');
-    expect(state(env).current.receipts[0]).toMatchObject({ verdict: 'accept', advisory: null });
+    expect(state(env).current.receipts[0]).toMatchObject({ verdict: 'accept' });
+    expect(state(env).current.receipts[0]).not.toHaveProperty('advisory');
 
     // incomplete: a required check reported not_run is still refused, exactly as before.
     await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t2]\nwork' }), { tool_use_id: 'toolu_2' }), fetchImpl);
     const incomplete = await run(env, workerPost('toolu_2', workerReply({ checks: [{ check_id: 'c1', result: 'not_run', note: '' }] })), fetchImpl);
     expect(context(incomplete)).toContain('Task t2 is incomplete');
-    expect(state(env).current.receipts[1]).toMatchObject({ verdict: 'incomplete', advisory: null });
+    expect(state(env).current.receipts[1]).toMatchObject({ verdict: 'incomplete' });
 
     // invalid
     await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t2 attempt=2]\nredo' }), { tool_use_id: 'toolu_3' }), fetchImpl);
@@ -2198,7 +2199,7 @@ describe('receipts', () => {
     await run(env, preEvent('Agent', agentInput()), fetchImpl);
     const reworked = await run(env, workerPost('toolu_1', workerReply({ checks: [{ check_id: 'c1', result: 'fail', note: 'ordering' }] })), fetchImpl);
     expect(context(reworked)).toContain('reported a required check as failed');
-    expect(state(env).current.receipts[0]).toMatchObject({ verdict: 'rework', advisory: null });
+    expect(state(env).current.receipts[0]).toMatchObject({ verdict: 'rework' });
 
     await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t2]\nwork' }), { tool_use_id: 'toolu_2' }), fetchImpl);
     const replanned = await run(env, workerPost('toolu_2', workerReply({ status: 'replan', checks: [] })), fetchImpl);
@@ -3022,6 +3023,22 @@ describe('R15: the simple paths this change must not break', () => {
     // The historical advisory is preserved as it was recorded, not rewritten.
     expect(state(env).current.receipts[0]).toMatchObject({ advisory: 'accept', verdict: 'accept' });
   });
+  it('#213: a stored Gate C advisory never changes the stored verdict that gates dependents', async () => {
+    for (const [verdict, advisory, expected] of [['accept', 'rework', 'patch'], ['incomplete', 'accept', 'deny']] as const) {
+      const env = makeEnv();
+      await seedPlanned(env, PLAN_REPLY, fakeJev());
+      const current = state(env).current;
+      const receipts = (current.plan?.tasks ?? []).filter((t) => t.id !== 't3').map((t) => ({
+        task_id: t.id, contract_hash: t.contract_hash, rev: 1, attempt: 1, tool_use_id: `toolu_old_${t.id}`, provenance: 'worker_reported',
+        reply: null, verdict, verdict_reason: null, advisory, observed_model: null, root_effort: null, recorded_at: new Date().toISOString(),
+      }));
+      writeFileSync(jobPath(env, 's1'), JSON.stringify({ version: 5, session_id: 's1', updated_at: new Date().toISOString(), current: { ...current, receipts }, history: [] }));
+      const r = await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t3]\nwork' }), { tool_use_id: 'toolu_3' }), fakeJev());
+      expect(r.kind, verdict).toBe(expected);
+      if (expected === 'deny') expect(r).toMatchObject({ code: 'deps_incomplete' });
+    }
+  });
+
 });
 
 /**

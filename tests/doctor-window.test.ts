@@ -57,7 +57,7 @@ describe('doctor: effective depth floor (#48 P0-1)', () => {
     expect(report.status, report.stdout).toBe(0);
     expect(report.stdout).not.toContain('effective depth floor');
     expect(report.stdout).not.toContain('a gated dispatch of');
-    expect(report.stdout).toContain('Lean: no Gate A/B/C');
+    expect(report.stdout).toContain('Lean: no Gate A/B,');
   });
   it('prints the cost model floor for the shipped atomic gate, whatever the window', () => {
     const stdout = doctor({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '300000', JEV_GATE_CONFIG: configFile({ version: 5 }) });

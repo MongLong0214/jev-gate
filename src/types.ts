@@ -49,8 +49,6 @@ export type AdmissionAnswer = 'direct' | 'orchestrated' | 'needs_context' | 'abs
 export type RouteAnswer = Tier | 'abstain';
 export type PlannerRouteAnswer = PlannerTier | 'abstain';
 export type UpgradeBasis = 'unresolved_contract_reasoning' | 'observed_reasoning_failure' | 'no_specific_basis' | 'unknown';
-/** Historical only (T11): Gate C no longer runs, so this union types stored advisories, never a live request. */
-export type ResultVerdict = 'accept' | 'rework' | 'replan' | 'abstain';
 
 export const TIERS: readonly Tier[] = ['fast', 'standard', 'deep', 'frontier'];
 export const PLANNER_TIERS: readonly PlannerTier[] = ['deep', 'frontier'];
@@ -100,8 +98,6 @@ export interface ConfigV5 {
   requestDeadlineMs: number;
   admissionConfidenceFloor: number;
   routeConfidenceFloor: number;
-  /** Deprecated no-op (T11): accepted so a deployed config still loads; no gate reads it and it triggers no request. */
-  resultConfidenceFloor: number;
   plannerDefaultTier: PlannerTier;
   models: Record<Tier, string>;
   maxParallelWorkers: number;
@@ -358,8 +354,6 @@ export interface Receipt {
   reply: WorkerReply | null;
   verdict: ReceiptVerdict;
   verdict_reason: string | null;
-  /** Historical only (T11): Gate C is not called, so new receipts always record null here. */
-  advisory: ResultVerdict | null;
   observed_model: string | null;
   root_effort: string | null;
   recorded_at: string;

@@ -46,7 +46,7 @@ The older `node <plugin>/dist/cli.mjs codex` managed terminal remains available 
 | Gate A | Reads observed native context usage; Jev judges context, cost support and bounded tool work; code chooses direct, one fast worker or planned delegation and enforces the depth floor |
 | Gate B | Adds actual model/effort candidates to the existing Gate B batch; rechecks eligibility before owned dispatch |
 | Planning | Only on the planned path: runs the existing read-only planner instructions in a native Codex thread and validates the returned task graph |
-| Workers / acceptance | Runs real native Codex workers in the background by default; compares reports with observed command exits and edits. The current shared core does not call Gate C; acceptance is owned by code on both hosts. |
+| Workers / acceptance | Runs real native Codex workers in the background by default; compares reports with observed command exits and edits. Acceptance is owned by code on both hosts. |
 | Root guard | Enforces the shared root allowlist while a job is admitted; never returns an allow decision |
 | Lean | Uses attributed App Server items; retains user constraints, selects optional groups with Jev, and applies a packet to one executor; no Gate or plan runs on this path |
 | Router | Uses a nominal actual-ID model choice and candidate-local ordered effort scores; routes the original root request and separates selection, submission and actual response observation |

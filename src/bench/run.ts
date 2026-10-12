@@ -217,7 +217,6 @@ export interface AgentCall {
   target_model_match: 'match' | 'mismatch' | 'unknown';
   /** T6: whether the final policy moved the call off the model its original profile would have used. */
   target_model_changed: boolean | null;
-  result_gate: Record<string, unknown> | null;
   plan: Record<string, unknown> | null;
 }
 
@@ -299,7 +298,6 @@ export interface GateV5 {
   planner_calls: { requested: number; completed: number; tier_proposed: string | null; model_observed: string | null; plan_status: string | null; rev: number | null };
   worker_calls: Record<string, WorkerTierRecord>;
   receipts: { accept: number; incomplete: number; invalid: number; unknown: number; rework: number; replan: number };
-  advisory: { accept: number; rework: number; replan: number; abstain: number; none: number };
   parallel: { reservation_overlap_max: number; observed_overlap_max: number };
   jev_requests: { admission: JevPhaseUsage; allocation: JevPhaseUsage; result: JevPhaseUsage; scope: JevPhaseUsage };
   outcome: string | null;
@@ -899,7 +897,6 @@ const emptyGateV5 = (): GateV5 => ({
   planner_calls: { requested: 0, completed: 0, tier_proposed: null, model_observed: null, plan_status: null, rev: null },
   worker_calls: {},
   receipts: { accept: 0, incomplete: 0, invalid: 0, unknown: 0, rework: 0, replan: 0 },
-  advisory: { accept: 0, rework: 0, replan: 0, abstain: 0, none: 0 },
   parallel: { reservation_overlap_max: 0, observed_overlap_max: 0 },
   jev_requests: { admission: emptyJevPhase(), allocation: emptyJevPhase(), result: emptyJevPhase(), scope: emptyJevPhase() },
   outcome: null,
@@ -982,7 +979,6 @@ const emptyAgentCall = (toolUseId: string): AgentCall => ({
   target_model: null,
   target_model_match: 'unknown',
   target_model_changed: null,
-  result_gate: null,
   plan: null,
 });
 
@@ -1509,9 +1505,8 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
     call.pre_intent = intents[0] ?? null;
     call.post = posts[0] ?? null;
     call.failure = byId('failure', id)[0] ?? null;
-    call.result_gate = byId('result_result', id)[0] ?? null;
     call.plan = byId('plan', id)[0] ?? null;
-    call.from_records = call.from_records || Boolean(call.pre ?? call.pre_intent ?? call.post ?? call.failure ?? call.result_gate ?? call.plan);
+    call.from_records = call.from_records || Boolean(call.pre ?? call.pre_intent ?? call.post ?? call.failure ?? call.plan);
     const owned = call.subagent_type !== null ? OWNED_AGENTS[call.subagent_type] : undefined;
     const intent = call.pre ?? call.pre_intent;
     const role = owned ? owned.role : (str(intent?.['role'] ?? null) ?? (call.plan ? 'planner' : null));
@@ -1526,12 +1521,8 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
       call.orphaned = call.post['matched'] === false;
       if (call.orphaned) g.orphan_records++;
       const verdict = str(call.post['verdict']);
-      // A17: Gate C may demote an accept, so every receipt verdict has a bucket and the totals still add up.
+      // Every receipt verdict has a bucket, so the totals still add up.
       if (verdict !== null && Object.prototype.hasOwnProperty.call(g.receipts, verdict)) g.receipts[verdict as keyof typeof g.receipts]++;
-      const gateC = isRecord(call.result_gate?.['decision']) ? (call.result_gate?.['decision'] as Record<string, unknown>) : null;
-      const advisory = gateC ? (str(gateC['verdict']) ?? (str(gateC['reason']) === 'result_abstain' ? 'abstain' : 'none')) : str(call.post['advisory']);
-      if (advisory === 'accept' || advisory === 'rework' || advisory === 'replan' || advisory === 'abstain') g.advisory[advisory]++;
-      else if (verdict !== null) g.advisory.none++;
       const observedEnd = timeOf(call.post);
       const duration = num(tr['totalDurationMs']);
       if (observedEnd !== null && duration !== null) observedIntervals.push([observedEnd - duration, observedEnd]);
@@ -1621,6 +1612,8 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
   }
 
   account(records.filter((r) => r['phase'] === 'pre_result'), phase('pre_intent'), g.jev_requests.allocation);
+  // #213: only traces written before Gate C was withdrawn carry result_*; their paid calls stay counted. Remove with the
+  // last such trace directory.
   account(records.filter((r) => r['phase'] === 'result_result'), phase('result_intent'), g.jev_requests.result);
   // A17: the plan scope gate is a real request per plan, so its consumption is counted like every other gate. #55 review:
   // A23's plan interpretation is the live plan-level request that replaced it, and it is billed too, so it is counted

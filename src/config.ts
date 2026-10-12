@@ -14,7 +14,6 @@ export const DEFAULT_CONFIG: ConfigV5 = {
   requestDeadlineMs: 3000,
   admissionConfidenceFloor: 0.8,
   routeConfidenceFloor: 0.8,
-  resultConfidenceFloor: 0.8,
   plannerDefaultTier: 'deep',
   // The owner requested all routing tiers enabled, including the known frontier profile.
   models: { fast: 'haiku', standard: 'sonnet', deep: 'opus', frontier: 'claude-fable-5-1' },
@@ -90,7 +89,6 @@ const V5_KEYS = new Set<string>([
   'requestDeadlineMs',
   'admissionConfidenceFloor',
   'routeConfidenceFloor',
-  'resultConfidenceFloor',
   'plannerDefaultTier',
   'models',
   'maxParallelWorkers',
@@ -109,8 +107,9 @@ const V5_KEYS = new Set<string>([
   'verifyWorkerChecks',
 ]);
 const LEGACY_MARKERS = ['uncertainTier', 'opusModel', 'frontierModel', 'confidenceFloor'];
-/** `resultConfidenceFloor` is a deprecated no-op (T11): it is still validated so a deployed file loads, and read by nothing. */
-const FLOOR_KEYS = ['admissionConfidenceFloor', 'routeConfidenceFloor', 'resultConfidenceFloor'] as const;
+/** #213: the withdrawn Gate C floor. A deployed file may still set it, so it loads and is dropped unread; remove at the next config version. */
+const IGNORED_KEY = 'resultConfidenceFloor';
+const FLOOR_KEYS = ['admissionConfidenceFloor', 'routeConfidenceFloor'] as const;
 
 export const MIGRATION_SAMPLE = `{
   "version": 5,
@@ -119,7 +118,6 @@ export const MIGRATION_SAMPLE = `{
   "requestDeadlineMs": 3000,
   "admissionConfidenceFloor": 0.8,
   "routeConfidenceFloor": 0.8,
-  "resultConfidenceFloor": 0.8,
   "plannerDefaultTier": "deep",
   "models": { "fast": "haiku", "standard": "sonnet", "deep": "opus", "frontier": "claude-fable-5-1" },
   "maxParallelWorkers": 16,
@@ -147,7 +145,7 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
     };
   }
   if (raw['version'] !== 5) return { ok: false, error: `config version must be 5 (got ${String(raw['version'])}). Sample:\n${MIGRATION_SAMPLE}` };
-  const unknown = Object.keys(raw).filter((k) => !V5_KEYS.has(k));
+  const unknown = Object.keys(raw).filter((k) => !V5_KEYS.has(k) && k !== IGNORED_KEY);
   if (unknown.length) return { ok: false, error: `unknown config keys: ${unknown.join(',')}` };
   const c: Record<string, unknown> = { ...DEFAULT_CONFIG, ...raw };
   // An explicitly serial deployed file keeps its shared checkout; a fresh/minimal file gets the open defaults.
@@ -266,7 +264,6 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
       requestDeadlineMs: deadline,
       admissionConfidenceFloor: floors['admissionConfidenceFloor'] as number,
       routeConfidenceFloor: floors['routeConfidenceFloor'] as number,
-      resultConfidenceFloor: floors['resultConfidenceFloor'] as number,
       plannerDefaultTier: plannerDefaultTier as PlannerTier,
       models,
       maxParallelWorkers: cap,

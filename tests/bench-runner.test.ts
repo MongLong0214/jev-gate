@@ -291,7 +291,6 @@ describe('execute', () => {
       expect(g.continue_false, a).toBe(1);
       expect(g.planner_calls, a).toMatchObject({ requested: 1, completed: 1, plan_status: 'ready', rev: 1, model_observed: 'claude-opus-5', tier_proposed: null });
       expect(g.receipts, a).toEqual({ accept: 2, incomplete: 1, invalid: 0, unknown: 1, rework: 0, replan: 0 });
-      expect(g.advisory, a).toEqual({ accept: 0, rework: 0, replan: 0, abstain: 0, none: 4 });
       expect(g.outcome, a).toBe('incomplete');
       expect(g.jev_input_tokens, a).toBe(0);
       expect(Object.fromEntries(Object.entries(g.worker_calls).map(([t, w]) => [t, w.calls])), a).toEqual({ fast: 3, standard: 1, deep: 1 });
@@ -306,12 +305,11 @@ describe('execute', () => {
     expect(jev.admission).toMatchObject({ attempted: true, known_not_sent: false, forced: false, decided: true, choice: 'orchestrated', confidence: 0.93, decision: 'orchestrated', reason: null });
     expect(jev.guard_denials).toBe(0);
     expect(jev.planner_calls).toMatchObject({ requested: 1, completed: 1, tier_proposed: 'deep', model_observed: 'claude-opus-5', plan_status: 'ready', rev: 1 });
-    // T11: the current policy runs no Gate C, so a deterministic accept is the receipt that stands.
+    // A deterministic accept is the receipt that stands.
     expect(jev.receipts).toEqual({ accept: 2, incomplete: 1, invalid: 0, unknown: 1, rework: 0, replan: 0 });
-    expect(jev.advisory).toEqual({ accept: 0, rework: 0, replan: 0, abstain: 0, none: 4 });
     expect(jev.jev_requests.admission).toMatchObject({ attempts: 1, tokens: 300 });
     expect(jev.jev_requests.allocation).toMatchObject({ attempts: 7, tokens: 2620 });
-    // T11: no Gate C and no plan-scope request on the current path; the buckets stay readable and stay at zero.
+    // No result or plan-scope request on the current path; the historical buckets stay readable and stay at zero.
     expect(jev.jev_requests.result).toMatchObject({ attempts: 0, tokens: 0 });
     expect(jev.jev_requests.scope).toMatchObject({ attempts: 0, tokens: 0 });
     expect(jev.jev_input_tokens).toBe(2920);
@@ -350,7 +348,6 @@ describe('execute', () => {
     expect(forcedJev.jev_input_tokens).toBe(2620);
     // A16: Gate A is not asked here, so the forced admission is never counted as a judgment or as influence.
     expect(forcedJev.influence).toEqual({ judgments: 7, changed_default: 2 });
-    expect(forcedJev.advisory.rework).toBe(0);
     expect(forcedJev.patched).toBe(5);
     expect(forcedJev.parallel.reservation_overlap_max).toBe(2);
     expect(forcedJev.guard_denials).toBe(0);
@@ -451,7 +448,7 @@ describe('overlap arithmetic', () => {
 });
 
 describe('historical runs recorded under the earlier policy', () => {
-  it('still reads the plan-scope gate, Gate C and its advisory, and counts them in the arm totals', () => {
+  it('still reads the plan-scope gate and Gate C records, counts their paid calls and ignores the advisory', () => {
     // T11 removed both gates from the live path. A run recorded before that is a fact about that run, so the reader
     // keeps parsing it; this is the only place those records are asserted.
     const r = bench(['--execute', '--max-sessions', '1', '--arms', 'jev_hierarchy', '--timeout-ms', '60000'], { FAKE_CLAUDE_HISTORICAL_GATES: '1' });
@@ -459,9 +456,10 @@ describe('historical runs recorded under the earlier policy', () => {
     const g = readCell(r.out, 'jev_hierarchy').gate;
     expect(g.jev_requests.scope).toMatchObject({ attempts: 1, tokens: 150 });
     expect(g.jev_requests.result).toMatchObject({ attempts: 1, tokens: 200 });
-    // Gate C demoted t3, so that accepted receipt reads as a rework and the totals still cover every dispatch.
+    // t3 reads as the rework that run recorded; the totals still cover every dispatch.
     expect(g.receipts).toEqual({ accept: 1, incomplete: 1, invalid: 0, unknown: 1, rework: 1, replan: 0 });
-    expect(g.advisory).toEqual({ accept: 0, rework: 1, replan: 0, abstain: 0, none: 3 });
+    // #213: a stored advisory is history, not a current judgment, so no bucket reports it.
+    expect(g).not.toHaveProperty('advisory');
     expect(g.influence).toEqual({ judgments: 10, changed_default: 5 });
     expect(g.jev_input_tokens).toBe(3270);
     expect(g.jev_cost_usd).toBeCloseTo((3270 * 0.042) / 1_000_000, 12);
