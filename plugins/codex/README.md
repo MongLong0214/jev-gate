@@ -1,6 +1,6 @@
 # Jev Gate for Codex
 
-Automatic Gate, Router and Compact connect to **ordinary native Codex** after the plugin starts. The plugin supplies hooks, Evidence MCP, Output folding and an authenticated local connection. Your login, permissions, terminal and official execution engine stay in Codex.
+Automatic Gate, Router and Compact connect to **ordinary native Codex** after the plugin starts. The plugin supplies hooks, Evidence MCP and an authenticated local connection. Your login, permissions, terminal and official execution engine stay in Codex.
 
 Requires **Node 22.15+**. Automatic connection was tested with **Codex CLI 0.160.0**. The optional managed terminal connection was also tested on 0.158.0. An already open session retains its original provider until a new session loads the automatic settings. Local Codex app/IDE sessions must use this Codex home and support the same native plugin, hook and provider APIs; a remote managed coding session is a separate host.
 
@@ -35,7 +35,7 @@ codex --model gpt-6.1-sol --sandbox workspace-write
 
 If a session was open before installation, start a new native session after connection readiness. The plugin cannot change a model provider already loaded by that host. `jev_agent` is installed as an MCP tool; only a current Gate dispatch can start an owned worker. Invalid judgments, missing keys, unsupported input and unknown depth preserve native execution.
 
-Active plugin clients restart a failed helper. Disabling/removing the plugin restores only settings that still match Jev’s installed values; owner edits are retained. No OS login service is installed. To keep Evidence/Output without automatic provider integration, use `JEV_CODEX_AUTO_CONNECT=0` before plugin startup. Existing native login and configured `openai_base_url` / `OPENAI_BASE_URL` are preserved in the forwarding path. `JEV_CODEX_UPSTREAM` is an explicit compatible endpoint override.
+Active plugin clients restart a failed helper. Disabling/removing the plugin restores only settings that still match Jev’s installed values; owner edits are retained. No OS login service is installed. To keep Evidence without automatic provider integration, use `JEV_CODEX_AUTO_CONNECT=0` before plugin startup. Existing native login and configured `openai_base_url` / `OPENAI_BASE_URL` are preserved in the forwarding path. `JEV_CODEX_UPSTREAM` is an explicit compatible endpoint override.
 
 The older `node <plugin>/dist/cli.mjs codex` managed terminal remains available for explicit connection and diagnostics. It is optional; ordinary use does not require it.
 
@@ -50,7 +50,6 @@ The older `node <plugin>/dist/cli.mjs codex` managed terminal remains available 
 | Root guard | Enforces the shared root allowlist while a job is admitted; never returns an allow decision |
 | Router | Uses a nominal actual-ID model choice and candidate-local ordered effort scores; routes the original root request and separates selection, submission and actual response observation |
 | Compact | Prioritizes current-task dependencies with a bounded Jev batch, then produces the shared extractive digest; Codex installs it through its own state machine; unsupported extraction falls back to native compaction |
-| Output | Folds only identical consecutive lines in complete passing Vitest output; preserves failures, truncation and unknown formats |
 | Evidence | Same local search, Jev judgments, pagination, cache and exact source read-back as Claude Code |
 
 Native permissions remain authoritative for root and workers. Owned workers inherit the calling tool’s captured native filesystem grants and denies. Planners narrow those grants to reads and disable network. An unrepresentable permission snapshot refuses dispatch instead of guessing broader access. Workers cannot create another coordinator. Worktree isolation creates a separate branch and leaves it for inspection and integration; it does not silently merge changes.
@@ -73,7 +72,7 @@ Use `JEV_CODEX_CONFIG=/absolute/codex.json`, otherwise `~/.config/jev-gate/codex
 }
 ```
 
-`gate` accepts the shared V5 options, including depth floors, budgets, checks and `workerIsolation`. Without a model mapping, the adapter selects accessible tiers from live `model/list` descriptions. Explicit `models` entries override only those tiers. Main model and effort routing are both enabled by default. Router has the same directional probability thresholds (upgrade 0.8, downgrade 0.6). `JEV_GATE_MODE` overrides the Gate mode only; `gate.mode: "off"` does not disable Router or Compact. A policy `gate.mode` of `lean` still loads and runs as `auto` (withdrawn in #217).
+`gate` accepts the shared V5 options, including depth floors, budgets, checks and `workerIsolation`. Without a model mapping, the adapter selects accessible tiers from live `model/list` descriptions. Explicit `models` entries override only those tiers. Main model and effort routing are both enabled by default. Router has the same directional probability thresholds (upgrade 0.8, downgrade 0.6). `JEV_GATE_MODE` overrides the Gate mode only; `gate.mode: "off"` does not disable Router or Compact. A `gate.mode` or `JEV_GATE_MODE` other than `off|native|auto` turns off the Gate only; Router and Compact keep their own settings, and `doctor` reports the value.
 
 ### Current Codex models and efforts
 
@@ -117,9 +116,8 @@ Native ChatGPT requests follow the official App Server's workspace backend and r
 | `JEV_GATE_NO_BROWSER=1` | Headless runs: print the local key-entry URL without opening a browser |
 | `JEV_GATE_ONBOARDING=0` | Disable automatic key entry for unattended runs |
 | `JEV_CODEX_CONFIG` | Absolute Codex policy JSON path |
-| `JEV_CODEX_AUTO_CONNECT=0` | Keep Evidence/Output without starting automatic provider integration |
+| `JEV_CODEX_AUTO_CONNECT=0` | Keep Evidence without starting automatic provider integration |
 | `JEV_CODEX_ENABLED=0` | Disable hooks and connected automatic policies; the separate Evidence MCP remains available |
-| `JEV_CODEX_OUTPUT=off` | Preserve original tool output; lifecycle recording continues |
 | `JEV_CODEX_TRACE_DIR` | Absolute recording directory; overrides `JEV_GATE_TRACE_DIR` |
 | `JEV_DASHBOARD_NO_OPEN=1` | Suppress the automatic dashboard for unattended runs; manual dashboard prints its URL without opening a browser |
 | `JEV_CODEX_UPSTREAM` | Owner-selected OpenAI-compatible Responses base URL; HTTPS or loopback HTTP only |
@@ -136,7 +134,7 @@ Explicit scope changes require MCP restart. Desktop apps do not need to inherit 
 
 ## Live dashboard
 
-The installed plugin opens the shared dashboard automatically, with recording on. Claude Code and Codex appear in one view with host filters; no separate dashboard command or `--debug` flag is required. The execution circuit, real response chart, latest judgment panel, execution timeline and model receipts distinguish selection from observed application. Korean/English and light/dark controls are at the top right.
+The installed plugin opens the shared dashboard automatically, with recording on. Claude Code and Codex appear in one view with host filters; no separate dashboard command is required. The execution circuit, real response chart, latest judgment panel, execution timeline and model receipts distinguish selection from observed application. Korean/English and light/dark controls are at the top right.
 
 The settings panel controls recording and automatic opening independently. Both default to on. CLI equivalents are `node <plugin>/dist/cli.mjs recording on|off|status` and `node <plugin>/dist/cli.mjs dashboard on|off|status`. A manual development view remains available with `dashboard --port 4733`. Its terminal must stay running; the automatic dashboard manages its own lifecycle.
 
@@ -154,7 +152,7 @@ claude plugin validate . --strict
 JEV_CODEX_E2E=1 npx vitest run tests/codex/runtime.test.ts tests/codex/connection-runtime.test.ts
 ```
 
-Ordinary tests use fake HTTP/CLI and no credentials. The native runtime suite installs a uniquely named disposable plugin and drives **real Codex processes** with a scripted local Responses provider. It verifies guarded root calls, workers, failed-check rejection, an actual file edit invalidating an earlier check followed by a successful recheck, plan dependencies, cancellation, denial budgets, read-only permissions, planned-worker worktrees, automatic/manual digest installation, native Output, Evidence, GPT-6/6.1 and Terra model/effort application, and dashboard records; the temporary installation is removed afterwards. The ordinary-native connection test additionally verifies no launcher/workspace export, crash recovery, concurrent sessions, actual Gate worker checks, native compaction installation and restoration of owner settings. This establishes those execution paths, not every future host version or measured product savings.
+Ordinary tests use fake HTTP/CLI and no credentials. The native runtime suite installs a uniquely named disposable plugin and drives **real Codex processes** with a scripted local Responses provider. It verifies guarded root calls, workers, failed-check rejection, an actual file edit invalidating an earlier check followed by a successful recheck, plan dependencies, cancellation, denial budgets, read-only permissions, planned-worker worktrees, automatic/manual digest installation, Evidence, GPT-6/6.1 and Terra model/effort application, and dashboard records; the temporary installation is removed afterwards. The ordinary-native connection test additionally verifies no launcher/workspace export, crash recovery, concurrent sessions, actual Gate worker checks, native compaction installation and restoration of owner settings. This establishes those execution paths, not every future host version or measured product savings.
 
 The design was checked against the [official App Server](https://developers.openai.com/codex/app-server), [native hooks](https://learn.chatgpt.com/docs/hooks), [CaMe's native terminal connection](https://github.com/IlBig/CaMe), [jev-router's native Responses integration](https://github.com/gargpratyush/jev-router), [jev-use](https://github.com/shitianfang/jev-use), and [fast-jev-compaction-codex](https://github.com/Li-ship-dot/fast-jev-compaction-codex). These are architectural references, not a copied alternate execution engine. The [0.158.0 loader](https://github.com/openai/codex/blob/main/codex-rs/core-plugins/src/loader.rs) uses the compatibility manifest and `.mcp.json`; root portable manifests currently omit plugin hooks.
 

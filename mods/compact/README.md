@@ -39,8 +39,8 @@ On by default (v0.6.3), in `active` mode; off registers no hook at all. Options 
 | `compactJevTimeoutMs` | `1000` | Selection deadline in milliseconds, 50–3500. |
 | `compactManual` | `true` | Also answer `/compact` typed without instructions. A command with explicit instructions stays native. |
 
-An option it cannot use turns it off and logs the field name once per session. Every compaction it is asked about logs
-`jev-compact {...}` metadata without requiring `--debug`: why it deferred to the engine, or the sizes, the fallback reason, and in shadow the
+An option it cannot use turns it off. Every compaction it is asked about records
+metadata in the local trace: why it deferred to the engine, or the sizes, the fallback reason, and in shadow the
 engine's time and usage. A failure of its own (`error`) leaves that compaction to the engine once; the engine's own
 failure or cancellation is passed up and never retried, and a log that throws changes nothing.
 
