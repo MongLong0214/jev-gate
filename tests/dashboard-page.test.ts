@@ -1,4 +1,4 @@
-import { Window, type HTMLElement } from 'happy-dom';
+import { Window, type HTMLElement, type SVGElement } from 'happy-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DASHBOARD_PAGE } from '../src/dashboard-page.js';
 import type { OperationRun, OperationStep, OperationsView } from '../src/operations.js';
@@ -374,4 +374,22 @@ it('ignores a late history response from a previously selected worker', async ()
   p.push({...snapshot([]),workerActivity:{items:[worker('a'),worker('b')],limited:false,sig:'both'}});p.click('[data-actor="worker:s:b"]');
   await vi.waitFor(()=>expect(p.get('rail-history').textContent).toContain('워커 b'));resolve({ok:true,json:async()=>({tools:[{name:'POISON',state:'done',startedAt:stamp}],models:[],total:1,coverage:'complete'})});await new Promise(r=>setTimeout(r,0));
   expect(p.get('rail-history').textContent).toContain('워커 b');expect(p.get('rail-history').textContent).not.toContain('POISON');
+});
+
+it('sends one packet per new record, evenly spaced over the frame interval, up to 12 per channel and frame', () => {
+  const records = (n: number) => Array.from({ length: n }, (_, i) => step(`r${i}`, 'router', 'jev', { durationMs: 50 + i }));
+  const p = page();
+  p.push(snapshot([run('r', 'claude', records(3))]));
+  // The first frame invents no packet; four new records are four packets.
+  expect(p.w.document.querySelectorAll('.wire-packet')).toHaveLength(0);
+  p.push(snapshot([run('r', 'claude', records(7))]));
+  const delays = [...p.w.document.querySelectorAll('[data-receipt="router-out"]')].map(e => parseFloat((e as unknown as SVGElement).style.animationDelay)).sort((a, b) => a - b);
+  expect(delays).toHaveLength(4);
+  expect(delays[0]).toBeCloseTo(0, 1);
+  expect(delays[2]! - delays[1]!).toBeCloseTo(delays[1]! - delays[0]!, 3);
+  // A burst is capped at 12 packets per frame and channel.
+  const burst = page();
+  burst.push(snapshot([run('r', 'claude', records(1))]));
+  burst.push(snapshot([run('r', 'claude', records(40))]));
+  expect(burst.w.document.querySelectorAll('[data-receipt="router-out"]')).toHaveLength(12);
 });
