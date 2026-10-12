@@ -58,9 +58,9 @@ describe('bench ab (#130)', () => {
 
   it('writes plugin options under the installed plugin key, A all off and D all on', () => {
     const a = JSON.parse(conditionSettings('A')) as { pluginConfigs: Record<string, { options: Record<string, unknown> }> };
-    expect(a.pluginConfigs['jev-gate@jev-gate']!.options).toMatchObject({ gateMode: 'off', compactEnabled: false, routerEnabled: false, outputEnabled: false });
+    expect(a.pluginConfigs['jev-gate@jev-gate']!.options).toMatchObject({ gateMode: 'off', compactEnabled: false, routerEnabled: false });
     const d = JSON.parse(conditionSettings('D')) as { pluginConfigs: Record<string, { options: Record<string, unknown> }> };
-    expect(d.pluginConfigs['jev-gate@jev-gate']!.options).toMatchObject({ gateMode: 'auto', compactEnabled: true, routerEnabled: true, outputEnabled: true });
+    expect(d.pluginConfigs['jev-gate@jev-gate']!.options).toMatchObject({ gateMode: 'auto', compactEnabled: true, routerEnabled: true });
   });
 
   it('strips the parent CLAUDE_*/JEV_GATE_* environment and sets only the mode', () => {

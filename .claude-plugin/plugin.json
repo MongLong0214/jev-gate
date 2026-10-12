@@ -1,7 +1,7 @@
 {
   "name": "jev-gate",
   "version": "0.8.17",
-  "description": "Jev Gate in one plugin: the orchestration gate, the extractive compactor, the Vitest log folder, the Jev effort and model router and the jev_evidence tool. Every part is on by default; each has its own on/off option.",
+  "description": "Jev Gate in one plugin: the orchestration gate, the extractive compactor, the Jev effort and model router and the jev_evidence tool. Every part is on by default; each has its own on/off option.",
   "author": {
     "name": "MongLong0214",
     "url": "https://github.com/MongLong0214"
@@ -59,12 +59,6 @@
     "compactManual": {
       "title": "Compact: Also /compact",
       "description": "Also answer /compact typed without instructions. Off leaves /compact the engine's.",
-      "type": "boolean",
-      "default": true
-    },
-    "outputEnabled": {
-      "title": "Output: Enable output folding",
-      "description": "Off registers no hook at all. Every Bash result is the host's own.",
       "type": "boolean",
       "default": true
     },

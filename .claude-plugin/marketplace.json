@@ -4,7 +4,7 @@
     "name": "MongLong0214",
     "url": "https://github.com/MongLong0214"
   },
-  "description": "One Claude Code plugin from the jev-gate repository: evidence search, extractive compaction, Vitest log folding, a Jev effort and model router, and an orchestration gate. Gate, Compact, Output, and the Router are on by default, and each of those four has a switch. Evidence has no switch. gateMode off does not turn the others off.",
+  "description": "One Claude Code plugin from the jev-gate repository: evidence search, extractive compaction, a Jev effort and model router, and an orchestration gate. Gate, Compact, and the Router are on by default, and each of those three has a switch. Evidence has no switch. gateMode off does not turn the others off.",
   "plugins": [
     {
       "name": "jev-gate",
@@ -14,7 +14,7 @@
         "sha256": "a8cc3003f4bd25b037d496def5f5707f1af9ca80234cbb5db449a511b1859da1"
       },
       "displayName": "Jev Gate",
-      "description": "Evidence search, extractive compaction, Vitest log folding, a Jev effort and model router, and an orchestration gate, in one install. Gate, Compact, Output, and the Router are on by default, and each of those four has a switch. Evidence has no switch. Needs Node 22. A TypeSafe key is separate from a Claude login. The plugin configures Function Hooks automatically for compaction, folding, and routing.",
+      "description": "Evidence search, extractive compaction, a Jev effort and model router, and an orchestration gate, in one install. Gate, Compact, and the Router are on by default, and each of those three has a switch. Evidence has no switch. Needs Node 22. A TypeSafe key is separate from a Claude login. The plugin configures Function Hooks automatically for compaction and routing.",
       "homepage": "https://github.com/MongLong0214/jev-gate#readme",
       "category": "productivity",
       "tags": [

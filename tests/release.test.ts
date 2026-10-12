@@ -31,7 +31,6 @@ const setVersion = (v: string) => {
     ['.claude-plugin/plugin.json', 'jev-gate'],
     ['mods/compact/.claude-plugin/plugin.json', 'jev-gate-compact'],
     ['mods/router/.claude-plugin/plugin.json', 'jev-gate-router'],
-    ['mods/output/.claude-plugin/plugin.json', 'jev-gate-output'],
     ['plugins/evidence/.claude-plugin/plugin.json', 'jev-gate-evidence'],
     ['plugins/codex/.codex-plugin/plugin.json', 'jev-gate'],
   ] as const) json(rel, { name, version: v, type: 'module' });
@@ -165,15 +164,15 @@ describe('scripts/release.mjs', () => {
   it('refuses a served marketplace that lists another entry at this version, source directory or archive', () => {
     const m = JSON.parse(readFileSync(join(repo, '.claude-plugin', 'marketplace.json'), 'utf8'));
     git('switch', '-q', '-c', 'served');
-    json('.claude-plugin/marketplace.json', { ...m, plugins: [...m.plugins, { name: 'jev-gate-output', source: './mods/output' }] });
+    json('.claude-plugin/marketplace.json', { ...m, plugins: [...m.plugins, { name: 'jev-gate-extra', source: './mods/extra' }] });
     commit('served lists one more');
     git('switch', '-q', '-');
-    expect(release('check', '--against', 'served').stderr).toMatch(/served serves entries jev-gate, jev-gate-compact, jev-gate-output, jev-gate-router, this tree lists jev-gate, jev-gate-compact, jev-gate-router/);
+    expect(release('check', '--against', 'served').stderr).toMatch(/served serves entries jev-gate, jev-gate-compact, jev-gate-extra, jev-gate-router, this tree lists jev-gate, jev-gate-compact, jev-gate-router/);
     git('switch', '-q', 'served');
-    json('.claude-plugin/marketplace.json', { ...m, plugins: m.plugins.map((p: { name: string }) => (p.name === 'jev-gate-compact' ? { ...p, source: './mods/output' } : p)) });
+    json('.claude-plugin/marketplace.json', { ...m, plugins: m.plugins.map((p: { name: string }) => (p.name === 'jev-gate-compact' ? { ...p, source: './mods/extra' } : p)) });
     commit('served moves a source directory');
     git('switch', '-q', '-');
-    expect(release('check', '--against', 'served').stderr).toMatch(/served serves "\.\/mods\/output", not this entry "\.\/mods\/compact"/);
+    expect(release('check', '--against', 'served').stderr).toMatch(/served serves "\.\/mods\/extra", not this entry "\.\/mods\/compact"/);
   });
 
   it('publishes only the entry the served marketplace pins', () => {

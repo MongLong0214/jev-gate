@@ -1,7 +1,7 @@
 // Builds a distributable local plugin archive (#18): compiled hook + modules, manifest, hooks, agents, docs.
 // Usage: node scripts/pack.mjs [outDir] [--root <pluginRoot>] [--profile legacy|router|evidence|codex]
 //   legacy (default) → <outDir>/jev-gate-<version>.zip         six routing roles, the V5 hook set,
-//                                                              the three Mods and the evidence server (the one plugin)
+//                                                              the two Mods and the evidence server (the one plugin)
 //   router (JGR-01)  → <outDir>/jev-gate-router-<version>.zip  the Function Hooks Mod in mods/router, at its own version
 //   evidence (JGE-03) → <outDir>/jev-gate-evidence-<version>.zip the bundled jev_evidence MCP server in plugins/evidence
 //   codex → <outDir>/jev-gate-codex-<version>.zip native Codex hooks, Evidence MCP, skills and dashboard
@@ -52,10 +52,10 @@ const EVIDENCE = 'plugins/evidence';
 const EVIDENCE_FILES = ['.claude-plugin/plugin.json', 'dist/server.mjs', 'skills/evidence/SKILL.md', 'README.md'];
 const CODEX_FILES = ['.codex-plugin/plugin.json', '.agents/plugins/marketplace.json', '.mcp.json', 'hooks/hooks.json', 'dist/hook.mjs', 'dist/server.mjs', 'dist/cli.mjs', 'dist/activity-worker.mjs', 'skills/jev-gate/SKILL.md', 'README.md'];
 
-// The one jev-gate plugin (v0.6.0) also carries the three Mods, loaded through hooks/register.ts from their source, and
+// The one jev-gate plugin (v0.6.0) also carries the two Mods, loaded through hooks/register.ts from their source, and
 // the evidence server with its skill, at the paths the manifest and that module name.
 const modSources = () =>
-  ['compact', 'output', 'router'].flatMap((m) =>
+  ['compact', 'router'].flatMap((m) =>
     readdirSync(join(root, 'mods', m, 'hooks'))
       .filter((n) => n.endsWith('.ts'))
       .sort()
@@ -74,7 +74,6 @@ const INSTALL_DOCS = [
   'plugins/evidence/README.md',
   'plugins/codex/README.md',
   'mods/compact/README.md',
-  'mods/output/README.md',
   'mods/router/README.md',
   'assets/readme/jev-gate-logo.svg',
   'assets/readme/jev-gate-logo-dark.svg',

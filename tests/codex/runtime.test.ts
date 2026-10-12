@@ -403,7 +403,7 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
     ];
     const args = ['--no-daemon', ...(trust ? ['--dangerously-bypass-hook-trust'] : []), 'exec', '--ignore-rules', '--skip-git-repo-check', '--ephemeral', '--json', '-C', workspace, ...config.flatMap(c => ['-c', c]), 'Run the local fixture tools, then finish.'];
     let output = '';
-    const child = spawn('codex', args, { cwd: workspace, env: { HOME: runtimeEnv.HOME, XDG_CONFIG_HOME: runtimeEnv.XDG_CONFIG_HOME, XDG_STATE_HOME: runtimeEnv.XDG_STATE_HOME, JEV_GATE_ONBOARDING: '0', JEV_DASHBOARD_NO_OPEN: '1', CODEX_HOME: runtimeEnv.CODEX_HOME, PATH: `${join(workspace, '.bin')}:${process.env['PATH'] ?? ''}`, JEV_CODEX_AUTO_CONNECT: '0', JEV_CODEX_TRACE_DIR: trace, ...(scenario === 'missing-workspace' ? {} : { JEV_CODEX_WORKSPACE: workspace }), JEV_CODEX_ENABLED: scenario === 'hooks-disabled' ? '0' : '1', JEV_CODEX_OUTPUT: scenario === 'disabled' ? 'off' : 'on', CLAUDE_PROJECT_DIR: '/wrong-workspace', PWD: '/wrong-workspace' } });
+    const child = spawn('codex', args, { cwd: workspace, env: { HOME: runtimeEnv.HOME, XDG_CONFIG_HOME: runtimeEnv.XDG_CONFIG_HOME, XDG_STATE_HOME: runtimeEnv.XDG_STATE_HOME, JEV_GATE_ONBOARDING: '0', JEV_DASHBOARD_NO_OPEN: '1', CODEX_HOME: runtimeEnv.CODEX_HOME, PATH: `${join(workspace, '.bin')}:${process.env['PATH'] ?? ''}`, JEV_CODEX_AUTO_CONNECT: '0', JEV_CODEX_TRACE_DIR: trace, ...(scenario === 'missing-workspace' ? {} : { JEV_CODEX_WORKSPACE: workspace }), JEV_CODEX_ENABLED: scenario === 'hooks-disabled' ? '0' : '1', CLAUDE_PROJECT_DIR: '/wrong-workspace', PWD: '/wrong-workspace' } });
     child.stdin.end(); child.stdout.on('data', b => { output += String(b); }); child.stderr.on('data', b => { output += String(b); });
     const timer = setTimeout(() => child.kill('SIGTERM'), 40_000);
     try {
@@ -412,49 +412,45 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
     } finally { clearTimeout(timer); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
   };
 
-  it('loads plugin MCP and trusted hooks, folds the actual model-visible result and records both paths', async () => {
+  it('loads plugin MCP and trusted hooks, leaves the model-visible result native and records both paths', async () => {
     const result = await run(true);
     expect(result.code, result.output).toBe(0);
     expect(result.requests.length, result.output).toBeGreaterThanOrEqual(3);
     expect(functions(result.requests[0]!['tools']).some(t => String(t['name']).endsWith('jev_evidence')), result.output).toBe(true);
     expect(JSON.stringify(result.requests[0])).toContain('Read-only source evidence from the one project this server was configured for');
     const second = JSON.stringify(result.requests[1]!['input']);
-    expect(second.includes('100 times in a row'), JSON.stringify({records: existsSync(result.trace) ? readdirSync(result.trace).map(f => JSON.parse(readFileSync(join(result.trace, f), 'utf8'))) : [], errors: result.output.split('\n').filter(l => /hook|ERROR|WARN/i.test(l))})).toBe(true);
-    expect(second).toContain('[jev-gate output]');
+    expect(second).not.toContain('[jev-gate output]');
+    expect(second.split('fixture repeat detail').length - 1).toBe(100);
     const last = JSON.stringify(result.requests.at(-1)!['input']);
     expect(last).toContain('runtimeEvidenceNeedle');
     expect(last).not.toContain('/wrong-workspace');
     const records = readdirSync(result.trace).map(f => JSON.parse(readFileSync(join(result.trace, f), 'utf8')) as Rec);
     expect(records.some(r => r['phase'] === 'evidence_result')).toBe(true);
-    expect(records.some(r => r['phase'] === 'codex_output' && r['applied'] === true)).toBe(true);
     for (const event of ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop']) expect(records.some(r => r['event'] === event), event).toBe(true);
-    const snapshot = loadActivity({ traceDir: result.trace, debugDir: null, env: {}, host: 'codex' });
+    const snapshot = loadActivity({ traceDir: result.trace, env: {}, host: 'codex' });
     expect(snapshot.operations.features.find(f => f.id === 'evidence')?.state).toBe('observed');
     expect(snapshot.operations.features.find(f => f.id === 'admission')?.capability?.mode).toBe('connect');
     expect(JSON.stringify(records)).not.toContain('runtimeEvidenceNeedle');
     expect(JSON.stringify(snapshot)).not.toContain('fixture repeat detail');
   }, 60_000);
 
-  it('honors Codex hook trust: untrusted hooks do not fold or manufacture execution records', async () => {
+  it('honors Codex hook trust: untrusted hooks do not manufacture execution records', async () => {
     const result = await run(false);
     expect(result.code, result.output).toBe(0);
-    expect(JSON.stringify(result.requests[1]?.['input'])).not.toContain('100 times in a row');
-    const snapshot = loadActivity({ traceDir: result.trace, debugDir: null, env: {}, host: 'codex' });
-    expect(snapshot.operations.features.find(f => f.id === 'output')?.count).toBe(0);
+    const snapshot = loadActivity({ traceDir: result.trace, env: {}, host: 'codex' });
     expect(snapshot.operations.features.find(f => f.id === 'workers')?.count).toBe(0);
   }, 60_000);
 
-  it.each(['failed', 'disabled'])('preserves actual model-visible output when %s', async scenario => {
-    const result = await run(true, scenario);
+  it('preserves actual model-visible output when the command failed', async () => {
+    const result = await run(true, 'failed');
     expect(result.code, result.output).toBe(0);
     const input = JSON.stringify(result.requests[1]?.['input']);
     expect(input).not.toContain('[jev-gate output]');
     expect(input.split('fixture repeat detail').length - 1).toBe(100);
-    if (scenario === 'failed') expect(input).toContain('Process exited with code 1');
-    const snapshot = loadActivity({ traceDir: result.trace, debugDir: null, env: {}, host: 'codex' });
+    expect(input).toContain('Process exited with code 1');
+    const snapshot = loadActivity({ traceDir: result.trace, env: {}, host: 'codex' });
     expect(snapshot.operations.features.find(f => f.id === 'workers')?.count).toBe(0);
     expect(snapshot.operations.feed.some(s => s.lifecycle)).toBe(true);
-    expect(snapshot.operations.features.find(f => f.id === 'output')?.count).toBe(scenario === 'disabled' ? 0 : 1);
   }, 60_000);
 
   it('binds Evidence to the actual native workspace with no environment setting or launcher', async () => {

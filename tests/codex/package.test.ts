@@ -123,7 +123,7 @@ describe('installed Codex archive', () => {
   });
 
   it('streams real hook records to the dashboard and explains how to connect automatic policies', async () => {
-    const server = await startDashboard({ traceDir: traces, debugDir: null, env: {}, host: 'codex' }, 0);
+    const server = await startDashboard({ traceDir: traces, env: {}, host: 'codex' }, 0);
     const abort = new AbortController();
     try {
       const response = await fetch(`${server.url}api/live`, { signal: abort.signal });

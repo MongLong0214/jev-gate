@@ -16,7 +16,6 @@ import { recordingStatus } from './recording.js';
 export type TracePhase =
   | 'mod_router'
   | 'mod_compact'
-  | 'mod_output'
   | 'codex_router_intent'
   | 'codex_router_result'
   | 'codex_router_skipped'
@@ -26,7 +25,6 @@ export type TracePhase =
   | 'codex_route_applied'
   | 'codex_compact'
   | 'codex_event'
-  | 'codex_output'
   | 'admission_intent'
   | 'admission_result'
   | 'guard'

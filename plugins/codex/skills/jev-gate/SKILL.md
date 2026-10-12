@@ -15,7 +15,7 @@ Use the plugin's `jev_evidence` MCP tool for repository evidence. Its descriptio
 
 Owned dispatches run in the background by default. End the main turn after dispatch and answer new user messages while they work. Use `jev_agent` with `action: "status"` and the returned `agent_id` for a nonblocking result lookup; use `action: "cancel"` only for explicit user cancellation. A launch receipt is not a completed worker.
 
-The native hooks record lifecycle metadata and fold only repeated identical lines in complete passing Vitest output. A spawn receipt is not a completed worker. A stop event is not Jev contract acceptance. Missing events mean unknown; no fake activity is generated.
+The native hooks record lifecycle metadata. A spawn receipt is not a completed worker. A stop event is not Jev contract acceptance. Missing events mean unknown; no fake activity is generated.
 
 The installed plugin automatically connects ordinary native Codex sessions. No Jev terminal or workspace export is required. Codex owns hook trust and authentication; review/trust the hooks when prompted and start a new native session if the current host loaded its provider before installation. Never forge trust or claim connection merely from installation.
 

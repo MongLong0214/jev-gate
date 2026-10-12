@@ -2,8 +2,6 @@ import type { PluginOptions, Register } from 'claude-code';
 
 import { resolveCompactConfig } from '../mods/compact/hooks/config.ts';
 import { registerCompact } from '../mods/compact/hooks/register.ts';
-import { resolveOutputConfig } from '../mods/output/hooks/config.ts';
-import { registerOutput } from '../mods/output/hooks/register.ts';
 import { resolveConfig } from '../mods/router/hooks/config.ts';
 import { registerRouter, type ContextObserver } from '../mods/router/hooks/register.ts';
 
@@ -14,7 +12,6 @@ import { registerRouter, type ContextObserver } from '../mods/router/hooks/regis
  */
 export const OPTION_NAMES = {
   compact: { enabled: 'compactEnabled', mode: 'compactMode', budgetChars: 'compactBudgetChars', compactSubagents: 'compactSubagents', compactManual: 'compactManual', jevEnabled: 'compactJevEnabled', jevTimeoutMs: 'compactJevTimeoutMs' },
-  output: { enabled: 'outputEnabled' },
   router: {
     enabled: 'routerEnabled',
     allowFable: 'routerAllowFable',
@@ -38,31 +35,15 @@ export const OPTION_NAMES = {
 const rename = (o: PluginOptions, names: Readonly<Record<string, string>>): PluginOptions =>
   Object.fromEntries(Object.entries(names).flatMap(([own, merged]) => (o[merged] === undefined ? [] : [[own, o[merged]]])));
 
-/** Bookkeeping never stands between the host and its own event. */
-const quietly = (f: () => void): void => {
-  try {
-    f();
-  } catch {
-    // The event goes on unchanged.
-  }
-};
-
 /**
  * The host loads one hooks module per plugin, and a second registration of one event fails that whole module. The
- * Mods' own hooks never share an event; only their diagnostic for an option they cannot use would (each registers
- * `session.start` for it), so this module resolves the options itself and writes those lines from one hook. A Mod
+ * Mods' own hooks never share an event, so this module resolves the options itself and registers each Mod once. A Mod
  * with an unusable option stays off, as it does alone, and the others run.
  */
 export const register: Register = (on, options) => {
   const o = options ?? {};
   const compact = resolveCompactConfig(rename(o, OPTION_NAMES.compact));
-  const output = resolveOutputConfig(rename(o, OPTION_NAMES.output));
   const router = resolveConfig(rename(o, OPTION_NAMES.router));
-  const invalid = [
-    ...(compact.ok ? [] : [['compact', OPTION_NAMES.compact[compact.field as keyof typeof OPTION_NAMES.compact] ?? compact.field]]),
-    ...(output.ok ? [] : [['output', OPTION_NAMES.output[output.field as keyof typeof OPTION_NAMES.output] ?? output.field]]),
-    ...(router.ok ? [] : [['router', OPTION_NAMES.router[router.field as keyof typeof OPTION_NAMES.router] ?? router.field]]),
-  ];
   on('session.start', async ($, e, next) => {
     try {
       if (await $.env.get('CLAUDE_CODE_FORK_SUBAGENT') === undefined) await $.env.set('CLAUDE_CODE_FORK_SUBAGENT', '0');
@@ -71,11 +52,9 @@ export const register: Register = (on, options) => {
       if (key && !await $.env.get('TYPESAFE_API_KEY')) await $.env.set('TYPESAFE_API_KEY', key);
       await $.env.set('CLAUDE_PLUGIN_OPTION_ROUTERALLOWFABLE', String(router.ok && router.config.allowFable));
     } catch { /* Initialization cannot interrupt the host. Command hooks also resolve the shared key. */ }
-    for (const [mod, field] of invalid) quietly(() => $.ui.log(`jev-${mod} ${JSON.stringify({ event: mod, disabled: 'invalid_option', field })}`, { to: 'debug' }));
     return next(e);
   });
 
-  if (output.ok) registerOutput(on, output.config);
   const fallback = resolveConfig({ enabled: false, allowFable: false });
   const observer: ContextObserver = {};
   if (router.ok) registerRouter(on, router.config, true, observer);

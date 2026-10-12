@@ -23,7 +23,6 @@ const INSTALL_DOCS = [
   'plugins/evidence/README.md',
   'plugins/codex/README.md',
   'mods/compact/README.md',
-  'mods/output/README.md',
   'mods/router/README.md',
   'assets/readme/jev-gate-logo.svg',
   'assets/readme/jev-gate-logo-dark.svg',
@@ -91,11 +90,11 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     for (const must of ['dist/entry.js', 'dist/hook.js', 'dist/jev.js', 'dist/brief.js', 'dist/cli.js', 'dist/job.js', 'dist/plan.js', 'hooks/hooks.json', ...agents, '.claude-plugin/plugin.json', ...INSTALL_DOCS]) expect(list, must).toContain(must);
     expect(list.filter((f) => f.startsWith('agents/'))).toEqual([...agents].sort());
     expect(list.some((f) => f.startsWith('src/') && !/^src\/(?:cost|provider-prices(?:-data)?|route-cost|claude-cache|frontier-routing|router-(?:answers|selection|context|child-context|secret)|claude-(?:models|candidates))\.ts$/.test(f) || f.includes('/tests/') || f.startsWith('tests/') || f.startsWith('node_modules/') || f.startsWith('bench/') && f !== 'bench/ab/tasks.example.json' || f === 'HANDOFF.md' || f.includes('.env') && !f.endsWith('.env.example'))).toBe(false);
-    // v0.6.0: the one plugin carries the three Mods from their source, the module that loads them, and the evidence
+    // v0.6.0: the one plugin carries the two Mods from their source, the module that loads them, and the evidence
     // server with its skill, at the paths plugin.json and hooks/register.ts name; no Mod manifest, test or declaration.
     // #95 adds the feature READMEs beside that source, not the Mod tests.
-    for (const must of ['hooks/register.ts', 'mods/compact/hooks/register.ts', 'mods/output/hooks/filter.ts', 'mods/router/hooks/router.ts', 'plugins/evidence/dist/server.mjs', 'plugins/evidence/skills/evidence/SKILL.md']) expect(list, must).toContain(must);
-    expect(list.filter((f) => f.startsWith('mods/') && !/^mods\/(compact|output|router)\/(?:hooks\/[a-z-]+\.ts|README\.md)$/.test(f))).toEqual([]);
+    for (const must of ['hooks/register.ts', 'mods/compact/hooks/register.ts', 'mods/router/hooks/router.ts', 'plugins/evidence/dist/server.mjs', 'plugins/evidence/skills/evidence/SKILL.md']) expect(list, must).toContain(must);
+    expect(list.filter((f) => f.startsWith('mods/') && !/^mods\/(compact|router)\/(?:hooks\/[a-z-]+\.ts|README\.md)$/.test(f))).toEqual([]);
     expect(list.filter((f) => f.startsWith('plugins/'))).toEqual(['plugins/codex/README.md', 'plugins/evidence/README.md', 'plugins/evidence/dist/server.mjs', 'plugins/evidence/skills/evidence/SKILL.md']);
 
     const dest = join(tmp, 'installed here', 'jev gate');

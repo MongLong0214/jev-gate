@@ -3,7 +3,6 @@ import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { codexTraceDir } from '../codex-paths.js';
 import { openTraceDir, type TraceWriter } from '../trace.js';
-import { foldCodexOutput } from './output.js';
 import { connectionRequest, ensureConnection } from './connection.js';
 
 type Rec = Record<string, unknown>;
@@ -46,21 +45,10 @@ export const handleCodexEvent = (input: Rec, env: CodexHookDeps['env'], trace?: 
   };
   const eventRecord = trace?.write('codex_event', base);
   if (!eventRecord || !eventRecord.ok && eventRecord.error !== 'recording_disabled') return {};
-  if (event === 'PostToolUse' && tool === 'Bash' && env['JEV_CODEX_OUTPUT'] !== 'off') {
-    const folded = foldCodexOutput(record(input['tool_input'])?.['command'], input['tool_response']);
-    // Unrelated commands do not create a misleading Output run.
-    if (!folded.applied && folded.reason === 'command') return {};
-    const recorded = trace!.write('codex_output', { ...base, applied: folded.applied, ...(folded.applied
-      ? { before_bytes: folded.before, after_bytes: folded.after, runs: folded.runs }
-      : { reason: folded.reason }) });
-    if (!recorded.ok && recorded.error !== 'recording_disabled') return {};
-    // Native PostToolUse replaces the completed tool result with stopReason and continues the model.
-    if (folded.applied) return { continue: false, stopReason: folded.text };
-  }
   if (event === 'SessionStart' && env['JEV_CODEX_BRIDGE_URL']) return { hookSpecificOutput: { hookEventName: event, additionalContext:
     'Jev Gate is connected to the native Codex session adapter. Gate A/B, plans, contract acceptance and root guard use the shared policies; Router uses official turn settings; Compact uses the native compaction lifecycle. Follow the current turn guidance and use jev_agent for owned dispatches. Native permissions and the user request remain authoritative. Do not claim unobserved policies or savings ran.' } };
   if (event === 'SessionStart') return { hookSpecificOutput: { hookEventName: event, additionalContext:
-    'Jev Gate native Codex plugin: jev_evidence provides repository evidence and hooks record lifecycle metadata and fold complete passing Vitest logs. The installed plugin connects ordinary native Codex automatically. A session already open during installation retains its previous provider; use a fresh native session once connection is ready. This startup notice does not establish actual Gate, Router or Compact application; inspect recorded requests and never claim unobserved policies ran. See the Jev Gate skill for setup.' } };
+    'Jev Gate native Codex plugin: jev_evidence provides repository evidence and hooks record lifecycle metadata. The installed plugin connects ordinary native Codex automatically. A session already open during installation retains its previous provider; use a fresh native session once connection is ready. This startup notice does not establish actual Gate, Router or Compact application; inspect recorded requests and never claim unobserved policies ran. See the Jev Gate skill for setup.' } };
   return {};
 };
 

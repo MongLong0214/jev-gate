@@ -28,7 +28,6 @@ const MANIFESTS = [
   '.claude-plugin/plugin.json',
   'mods/compact/.claude-plugin/plugin.json',
   'mods/router/.claude-plugin/plugin.json',
-  'mods/output/.claude-plugin/plugin.json',
   'plugins/evidence/.claude-plugin/plugin.json',
   'plugins/codex/.codex-plugin/plugin.json',
 ];
