@@ -208,7 +208,7 @@ Restart the host after upgrading to load new hooks/provider code. Old separate J
 | Dashboard absent | Check `dashboard status`, recording, and the local service with doctor |
 | Model/effort warning | Inspect selected, submitted, and observed values; distinguish request mismatch from missing response facts |
 | Evidence `partial` / empty | Check coverage and reason codes; an incomplete empty page is not proof of absence |
-| Evidence `stale` | Search again; continue only with returned `next.offset` and `next.expectedSnapshot` |
+| Evidence `stale` | Search again; continue only with every field of the returned `next` |
 | Settings seem ignored | Use user-level plugin options and start a fresh host |
 
 Run `node "<plugin path>/dist/cli.js" doctor` (Codex: `cli.mjs`). It groups failures and warnings with next actions and checks native CLI model/effort capabilities, including alias resolutions and minimum host versions. Use `--json` for structured facts, `--verbose` for every local check, or `--check-update` to compare with the public GitHub release. Model inventories perform no inference; advertised capabilities do not prove account access or provider execution. The dashboard header shows its running version, release status and installed Claude version mismatches. A passing doctor checks local readiness; it does not prove API availability, model access, source accuracy, or performance. [Advanced usage](docs/advanced-usage.md).
