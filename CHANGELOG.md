@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.8.17 — 2026-10-12 — Owned dispatch, Gate C removal, Evidence and dashboard latency
+
+- Deliver eligible owned worker dispatches instead of denying them with a generic "could not be verified" message (#211). A dispatch policy that exits non-zero or prints malformed output is reported as unavailable, an unstarted reservation is released once, and a concrete denial survives budget expiry and the baseline check. Every Router denial is recorded as a `spawn_denied` event with a categorical reason (`policy_unavailable`, `policy_denied`, `target_unsupported`, `target_restricted`, `target_not_allowed`, `subagent_model_pinned`, `no_eligible_model`, `restricted_baseline`, `unverified`).
+- Stop showing past model requests as running when no response was recorded (#212). A request without its exact response is closed by a later turn or session end of its own loop: an aborted turn shows as interrupted, any other end as unconfirmed. A loop that has been quiet for ten minutes is no longer asserted live. Sibling, root and other-session ends never close a request, and elapsed time alone is never treated as a failure. Claude and Codex share the rule; Router turn and session ends are now flushed to the debug log.
+- Remove the remaining Gate C code (#213). Worker acceptance is deterministic: the worker reports done, raises no blockers and every required check ran and passed exactly once. The Gate C question, request builder, decision function and `ResultVerdict` type are gone. `resultConfidenceFloor` is no longer a setting; an existing config file that still sets it loads and the key is ignored. An `advisory` on an old stored receipt is read as history only.
+- Publish the pre-registered Lean-versus-native episode comparison (#214) in `bench/results/lean-vs-native-2026-09-27`. On three episodes with follow-up turns, Lean cost 2.6–8.2 % more than native Claude Code and took about 18 % longer; no episode reached the 15 % saving threshold. Lean stays opt-in and `auto` is unchanged. The contexts were small (about 30–35K tokens), so the result does not cover long sessions.
+
 ## v0.8.16 — 2026-10-12 — README, pilot results, dashboard header and responsiveness
 
 - Rebuild the README around installation, a measured long-session pilot and how the features fit together. The pilot (two real tasks, 17-turn sessions, one pair each, blind-graded) is reported with its method, per-cell data and limits in `bench/results/long-session-pilot-2026-10-12`; it is a direction, not a guaranteed saving.
