@@ -12,8 +12,7 @@ const reply = (req: SentRequest, target: string, effort = 'low') => ({ status: 2
     : { type: 'score', probabilities: Object.fromEntries((q.criteria as string[]).map((text, i) => [i, text.startsWith(effort === 'high' ? 'Strong reasoning' : 'Light reasoning') ? 1 : 0])) }])) }) });
 const step = (index: number, over: Partial<TurnStepEvent> = {}): TurnStepEvent => ({ agentId: 'child', turnId: 'child-turn', index, model: OPUS, effort: 'high', ...over });
 async function setup(options: Record<string, boolean> = {}, respond: Responder = req => reply(req, SONNET), prompt = 'Find the cause of the failing test and repair it; preserve the public API.') {
-  const { lean, ...switches } = options;
-  const resolved = resolveConfig({ enabled: true, routeMainModel: false, routeMainEffort: false, allowFable: false, ...switches });
+  const resolved = resolveConfig({ enabled: true, routeMainModel: false, routeMainEffort: false, allowFable: false, ...options });
   if (!resolved.ok) throw Error(resolved.field);
   const router = createRouter(resolved.config, undefined, true);
   const f = fakeEngine({ hostBase: '2.1.293', respond });
@@ -21,7 +20,7 @@ async function setup(options: Record<string, boolean> = {}, respond: Responder =
   f.engine.childContext = async () => ({ messages: 8, coverage: 'available', tools: [{ name: 'Read', state: 'done' }] });
   f.engine.dispatchPair = async () => ({ model: OPUS, effort_edit: { kind: 'set', value: 'high' } });
   const next = Object.assign(async (e: { model?: string }) => ({ agentId: 'child', model: e.model ?? OPUS }), { signal: new AbortController().signal });
-  await router.agentSpawn(f.engine, { tool_use_id: 'spawn', prompt, description: 'repair test', subagentType: lean ? 'jev-gate:executor' : 'jev-gate:worker', provider: { plugin: 'jev-gate', tier: 'plugin' }, parentModel: OPUS, fork: false }, next);
+  await router.agentSpawn(f.engine, { tool_use_id: 'spawn', prompt, description: 'repair test', subagentType: 'jev-gate:worker', provider: { plugin: 'jev-gate', tier: 'plugin' }, parentModel: OPUS, fork: false }, next);
   const first = streamNext<TurnStepEvent>();
   await drain(router.turnStep(f.engine, step(0), first.next));
   return { router, f, first };
@@ -113,12 +112,6 @@ describe('native worker inference routing', () => {
     const { router, f } = await setup();
     const n = streamNext<TurnStepEvent>(); const changed = step(1, { model: 'claude-sonnet-5-5' });
     await drain(router.turnStep(f.engine, changed, n.next)); expect(n.calls).toEqual([changed]); expect(f.sent).toHaveLength(0);
-  });
-
-  it('does not assess Lean executor steps', async () => {
-    const { router, f } = await setup({ lean: true });
-    await drain(router.turnStep(f.engine, step(1), streamNext<TurnStepEvent>().next));
-    expect(f.sent).toHaveLength(0);
   });
 
   it('discards a pending decision when the exact child finishes', async () => {

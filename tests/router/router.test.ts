@@ -757,7 +757,6 @@ describe('spawn model', () => {
       ['host_unverified', spawn(), { hostBase: '2.1.283-dev' }, true],
       ['host_unverified', spawn(), { hostBase: undefined }, true],
       ['baseline_unknown', spawn({ subagentType: 'Explore', parentModel: 'claude-fable-5-1' }), {}, true],
-      ['lean_marker', spawn({ prompt: 'Execute packet jev-lean-0123456789abcdef now.' }), {}, true],
       ['gate_routed', spawn({ subagentType: 'jev-gate:worker' }), {}, true],
       ['gate_routed', spawn({ subagentType: 'jev-gate:planner' }), {}, true],
       ['gate_routed', spawn({ prompt: 'Fix it.\n\n[Jev Gate route note] Tier: fast. Precedence: ...' }), {}, true],
@@ -1585,18 +1584,6 @@ describe('#42 and #43: handler cases the issues list', () => {
       expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn', assessment: 'input_secret', sent: false }));
       expect(JSON.stringify(f.logs)).not.toContain(secret);
     }
-  });
-
-  it('leaves a spawn native when only its description carries a Lean marker', async () => {
-    const router = createRouter(configOf(SPAWN_ONLY));
-    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['fast', 0.95] }) });
-    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
-    const n = spawnNext();
-    const e = spawn({ description: 'execute jev-lean-0123456789abcdef' });
-    await router.agentSpawn(f.engine, e, n.next);
-    expect(n.calls).toEqual([e]);
-    expect(f.sent).toHaveLength(0);
-    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn', skipped: 'lean_marker' }));
   });
 
   it('records an effort-only root decision with the step it came from, its Jev usage and its result', async () => {

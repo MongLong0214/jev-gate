@@ -10,8 +10,8 @@ export const JEV_MODEL = 'jev-1.13.0';
 /** The existing serialized-request cap, questions and JSON escaping included. */
 export const MAX_REQUEST_BYTES = 128 * 1024;
 /**
- * The provider bounds tokens, not bytes: 64K in total and 32K for state plus the longest question. This is Lean's
- * calibrated estimate and cap (src/lean.ts, 2026-09-21): ASCII at 1.5 characters per token, every other character a
+ * The provider bounds tokens, not bytes: 64K in total and 32K for state plus the longest question. This is the
+ * calibrated estimate and cap measured 2026-09-21 (src/outbound-text.ts keeps the same estimate): ASCII at 1.5 characters per token, every other character a
  * whole token, 25,000 on the whole serialized request. It over-counts prose and is not a tokenizer; a request it lets
  * through can still be refused, and that refusal is kept as `rejected_input`, not retried.
  */
