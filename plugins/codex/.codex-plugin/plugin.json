@@ -1,7 +1,7 @@
 {
   "name": "jev-gate",
-  "version": "0.8.17",
-  "description": "Jev Gate, Router, Compact, Output and Evidence for native Codex.",
+  "version": "0.8.18",
+  "description": "Jev Gate, Router, Compact and Evidence for native Codex.",
   "hooks": "./hooks/hooks.json",
   "mcpServers": "./.mcp.json"
 }

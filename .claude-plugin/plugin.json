@@ -1,6 +1,6 @@
 {
   "name": "jev-gate",
-  "version": "0.8.17",
+  "version": "0.8.18",
   "description": "Jev Gate in one plugin: the orchestration gate, the extractive compactor, the Jev effort and model router and the jev_evidence tool. Every part is on by default; each has its own on/off option.",
   "author": {
     "name": "MongLong0214",
@@ -148,7 +148,7 @@
     },
     "routerLogDecisions": {
       "title": "Router: Log decisions",
-      "description": "Write one metadata-only line per decision to the debug log. Never task text or the key.",
+      "description": "Record one metadata-only trace record per decision. Never task text or the key.",
       "type": "boolean",
       "default": true
     },
