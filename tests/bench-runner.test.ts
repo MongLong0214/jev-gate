@@ -663,6 +663,30 @@ describe('the spend stop (--max-cost-usd)', () => {
     expect(summary(out).spend).toMatchObject({ stopped: 'cost_unknown', known_usd: 0 });
   }, 120_000);
 
+  it('#214: sends the follow-up after the job prompt, grades the job prompt before it and charges each request', () => {
+    const dir = join(tmp, 'episode-mini');
+    cpSync(join(__dirname, 'fixtures', 'mini'), dir, { recursive: true });
+    writeFileSync(join(dir, 'followup.mjs'), "import { runChecker } from './_lib.mjs';\nawait runChecker(['extra_is_1'], async ({ check, importModule }) => { await check('extra_is_1', async () => (await importModule('src/extra.mjs')).extra() === 1); });\n");
+    const manifest = JSON.parse(readFileSync(join(dir, 'cases.json'), 'utf8')) as { cases: Array<Record<string, unknown>> };
+    Object.assign(manifest.cases[0]!, { prime: ['먼저 README 를 읽어줘.'], followUp: 'extra() 도 추가해줘.', followUpCheckFile: 'followup.mjs' });
+    writeFileSync(join(dir, 'cases.json'), JSON.stringify(manifest));
+    const out = join(tmp, `run-${n++}`);
+    const r = spawnSync(process.execPath, [join(dist, 'bench', 'run.js'), '--cases', join(dir, 'cases.json'), '--out', out, '--claude', fake, '--plugin-dir', pluginDir, '--execute', '--arms', 'sonnet_native', '--repetitions', '2', '--max-sessions', '2', '--max-cost-usd', '100', '--timeout-ms', '60000'], { encoding: 'utf8', env: { ...baseEnv(), FAKE_CLAUDE_EPISODE: '1' }, timeout: 120_000 });
+    expect(r.status, r.stderr + r.stdout).toBe(0);
+    for (const c of cells(out, 'sonnet_native')) {
+      expect(c.turn_totals_usd).toEqual([0.1, 0.2, 0.3]);
+      expect(c.follow_up_sha256).toBe(createHash('sha256').update('extra() 도 추가해줘.').digest('hex'));
+      // The final tree has answer() back at 43: a pass here can only come from the snapshot between the two turns.
+      expect(c.grade?.quality, JSON.stringify(c.grade)).toBe('pass');
+      expect(c.follow_up_grade?.quality, JSON.stringify(c.follow_up_grade)).toBe('pass');
+    }
+    const row = report(out).rows[0]!;
+    expect(row.request_costs_usd!.map((x) => +x.toFixed(2))).toEqual([0.1, 0.1, 0.1]);
+    expect(row.follow_up_cost_usd).toBeCloseTo(0.1);
+    expect(row.follow_up_quality).toBe('pass');
+    expect(summary(out).spend).toMatchObject({ known_usd: 0.6, stopped: null });
+  }, 120_000);
+
   it('changes nothing without the flag: an unknown row does not stop a run that set no cap', () => {
     const r = bench(['--execute', '--arms', 'frontier_native', '--repetitions', '2', '--max-sessions', '2', '--timeout-ms', '1500'], { FAKE_CLAUDE_HANG: '1' });
     expect(r.status, r.stderr).toBe(0);

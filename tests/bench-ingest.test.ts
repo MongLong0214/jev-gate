@@ -26,7 +26,7 @@ const traceDir = (name: string, records: Array<Record<string, unknown>>): string
   return dir;
 };
 const cellFor = (arm: Arm): CellRecord =>
-  emptyCell({ id: 'mini', group: 'g', fixtureDir: '', request: 'r', prime: [], setup: [], evaluationSetup: [], checkFile: '', checkFileRel: '' }, armSpecs('fable')[arm], 1);
+  emptyCell({ id: 'mini', group: 'g', fixtureDir: '', request: 'r', prime: [], followUp: null, followUpCheckFile: null, followUpCheckFileRel: null, setup: [], evaluationSetup: [], checkFile: '', checkFileRel: '' }, armSpecs('fable')[arm], 1);
 /** A started session whose host init and final usage were both observed, so only the gate records are in question. */
 const ranCleanly = (cell: CellRecord): CellRecord => {
   cell.started = true;
@@ -294,7 +294,7 @@ describe('turn_totals_stream (2026-09-20 metric defect)', () => {
   const result = (cost: number): Record<string, unknown> => ({ type: 'result', subtype: 'success', total_cost_usd: cost, num_turns: 1 });
 
   it('accumulates every message carrying usage and snapshots cumulatively at each result', () => {
-    const cell = emptyCell({ id: 'job', group: 'g', fixtureDir: '', request: 'r', prime: [], setup: [], evaluationSetup: [], checkFile: '', checkFileRel: '' }, armSpecs('fable')['sonnet_native'], 1);
+    const cell = emptyCell({ id: 'job', group: 'g', fixtureDir: '', request: 'r', prime: [], followUp: null, followUpCheckFile: null, followUpCheckFileRel: null, setup: [], evaluationSetup: [], checkFile: '', checkFileRel: '' }, armSpecs('fable')['sonnet_native'], 1);
     observeEvent(cell, usageMsg({ cache_read_input_tokens: 100, cache_creation_input_tokens: 10, input_tokens: 1, output_tokens: 5 }));
     observeEvent(cell, result(1));
     observeEvent(cell, usageMsg({ cache_read_input_tokens: 400, output_tokens: 20 }));
@@ -316,7 +316,7 @@ describe('turn_totals_stream (2026-09-20 metric defect)', () => {
    * zero, nothing quoted from it can claim to be de-duplicated -- so the run counts them and the sums do not move.
    */
   it('counts a repeated message id and an unreadable counter without changing the totals', () => {
-    const cell = emptyCell({ id: 'job', group: 'g', fixtureDir: '', request: 'r', prime: [], setup: [], evaluationSetup: [], checkFile: '', checkFileRel: '' }, armSpecs('fable')['sonnet_native'], 1);
+    const cell = emptyCell({ id: 'job', group: 'g', fixtureDir: '', request: 'r', prime: [], followUp: null, followUpCheckFile: null, followUpCheckFileRel: null, setup: [], evaluationSetup: [], checkFile: '', checkFileRel: '' }, armSpecs('fable')['sonnet_native'], 1);
     const withId = (id: string, u: Record<string, number>): Record<string, unknown> => ({ type: 'assistant', message: { id, usage: u } });
     const full = { cache_read_input_tokens: 10, cache_creation_input_tokens: 2, input_tokens: 1, output_tokens: 3 };
     observeEvent(cell, withId('msg_1', full));
@@ -335,7 +335,7 @@ describe('turn_totals_stream (2026-09-20 metric defect)', () => {
   });
 
   it('scopes message identity by agent, so a root message and a child message are two reports', () => {
-    const cell = emptyCell({ id: 'job', group: 'g', fixtureDir: '', request: 'r', prime: [], setup: [], evaluationSetup: [], checkFile: '', checkFileRel: '' }, armSpecs('fable')['jev_lean'], 1);
+    const cell = emptyCell({ id: 'job', group: 'g', fixtureDir: '', request: 'r', prime: [], followUp: null, followUpCheckFile: null, followUpCheckFileRel: null, setup: [], evaluationSetup: [], checkFile: '', checkFileRel: '' }, armSpecs('fable')['jev_lean'], 1);
     const u = { cache_read_input_tokens: 10, cache_creation_input_tokens: 0, input_tokens: 1, output_tokens: 2 };
     observeEvent(cell, { type: 'assistant', message: { id: 'msg_1', usage: u } });
     observeEvent(cell, { type: 'assistant', parent_tool_use_id: 'toolu_1', message: { id: 'msg_1', usage: u } });
@@ -346,14 +346,14 @@ describe('turn_totals_stream (2026-09-20 metric defect)', () => {
   });
 
   it('treats a fractional or unrepresentable counter as unknown rather than as a value', () => {
-    const cell = emptyCell({ id: 'job', group: 'g', fixtureDir: '', request: 'r', prime: [], setup: [], evaluationSetup: [], checkFile: '', checkFileRel: '' }, armSpecs('fable')['jev_lean'], 1);
+    const cell = emptyCell({ id: 'job', group: 'g', fixtureDir: '', request: 'r', prime: [], followUp: null, followUpCheckFile: null, followUpCheckFileRel: null, setup: [], evaluationSetup: [], checkFile: '', checkFileRel: '' }, armSpecs('fable')['jev_lean'], 1);
     observeEvent(cell, usageMsg({ cache_read_input_tokens: 10.5, output_tokens: Number.MAX_SAFE_INTEGER + 2 }));
     observeEvent(cell, result(1));
     expect(cell.turn_totals_stream[0]).toMatchObject({ cache_read: 0, output: 0, messages: 1, incomplete: 1 });
   });
 
   it('counts subagent messages as work and ignores messages with no usable usage', () => {
-    const cell = emptyCell({ id: 'job', group: 'g', fixtureDir: '', request: 'r', prime: [], setup: [], evaluationSetup: [], checkFile: '', checkFileRel: '' }, armSpecs('fable')['jev_single'], 1);
+    const cell = emptyCell({ id: 'job', group: 'g', fixtureDir: '', request: 'r', prime: [], followUp: null, followUpCheckFile: null, followUpCheckFileRel: null, setup: [], evaluationSetup: [], checkFile: '', checkFileRel: '' }, armSpecs('fable')['jev_single'], 1);
     observeEvent(cell, { type: 'assistant', parent_tool_use_id: 'toolu_1', message: { usage: { cache_read_input_tokens: 70, output_tokens: 3 } } });
     observeEvent(cell, { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_1' }] } });
     observeEvent(cell, usageMsg({ cache_read_input_tokens: -5, output_tokens: 2 }));
@@ -753,7 +753,7 @@ describe('#45: Router producer ingestion (jev-router debug log)', () => {
     const arm = summarizeArm('router', [row]);
     const report: Report = {
       schema: 5, accounting: 2, run: 'test-run', generated_at: new Date().toISOString(), plan_schema: 5, planned_rows: 1,
-      independent_units: { jobs: 1, groups: 1 }, arms: [arm], per_job: [{ job: 'mini', arms: [arm] }], comparisons: [],
+      independent_units: { jobs: 1, groups: 1 }, arms: [arm], per_job: [{ job: 'mini', arms: [arm] }], comparisons: [], episodes: [],
       conclusion: { category: 'exploratory router reading', reason: 'test' }, rows: [row], notes: [],
     };
     const md = renderMarkdown(report);
@@ -772,7 +772,7 @@ describe('#45: Router producer ingestion (jev-router debug log)', () => {
     expect(arm.router).toMatchObject({ jev_attempts: 0, rows_cost_unknown: 1, jev_cost_usd: null });
     const report: Report = {
       schema: 5, accounting: 2, run: 'test-run', generated_at: new Date().toISOString(), plan_schema: 5, planned_rows: 1,
-      independent_units: { jobs: 1, groups: 1 }, arms: [arm], per_job: [{ job: 'mini', arms: [arm] }], comparisons: [],
+      independent_units: { jobs: 1, groups: 1 }, arms: [arm], per_job: [{ job: 'mini', arms: [arm] }], comparisons: [], episodes: [],
       conclusion: { category: 'exploratory router reading', reason: 'test' }, rows: [row], notes: [],
     };
     const md = renderMarkdown(report);

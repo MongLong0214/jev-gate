@@ -4,6 +4,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { createInterface } from 'node:readline';
 
 const argv = process.argv.slice(2);
 const out = (o) => process.stdout.write(JSON.stringify(o) + '\n');
@@ -22,7 +23,7 @@ const traceDir = process.env.JEV_GATE_TRACE_DIR;
 const forced = process.env.JEV_GATE_EXPERIMENT_ADMISSION === 'orchestrated';
 const cwd = process.cwd();
 // A primed session keeps stdin open for its next prompt, so reading it to the end would never return.
-const prompt = process.env.FAKE_CLAUDE_PRIMED_HANG === '1' ? '' : readFileSync(0, 'utf8');
+const prompt = process.env.FAKE_CLAUDE_PRIMED_HANG === '1' || process.env.FAKE_CLAUDE_EPISODE === '1' ? '' : readFileSync(0, 'utf8');
 const sid = randomUUID();
 const promptId = randomUUID();
 const modelId = model === 'fable' ? 'claude-fable-5-1' : model === 'opus' ? 'claude-opus-5' : 'claude-sonnet-5';
@@ -71,7 +72,25 @@ if (process.env.FAKE_CLAUDE_MUTATE_CONFIG) {
 
 out({ type: 'system', subtype: 'init', session_id: sid, cwd, model: modelId, tools: ['Read', 'Edit', 'Write', 'Bash', 'Agent'], permissionMode: opt('--permission-mode') ?? 'default', plugins: pluginDir ? [{ name: 'jev-gate', path: pluginDir }] : [], agents: pluginDir ? ['Explore', 'jev-gate:planner', 'jev-gate:worker', 'jev-gate:worker-fast', 'jev-gate:worker-deep'] : ['Explore'] });
 
-if (process.env.FAKE_CLAUDE_PRIMED_HANG === '1') {
+if (process.env.FAKE_CLAUDE_EPISODE === '1') {
+  // #214: an episode's prompts arrive one turn at a time. The job prompt makes answer() 42; the follow-up adds extra()
+  // and breaks answer() again, so only a snapshot taken between the two turns still grades the job prompt as passing.
+  const usage = { [modelId]: { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: 0, contextWindow: 200000 } };
+  let turn = 0;
+  createInterface({ input: process.stdin }).on('line', (line) => {
+    const text = String(JSON.parse(line).message?.content ?? '');
+    turn++;
+    if (/answer/.test(text)) writeFileSync(join(cwd, 'src', 'answer.mjs'), 'export const answer = () => 42;\n');
+    if (/extra/.test(text)) {
+      writeFileSync(join(cwd, 'src', 'extra.mjs'), 'export const extra = () => 1;\n');
+      writeFileSync(join(cwd, 'src', 'answer.mjs'), 'export const answer = () => 43;\n');
+    }
+    const u = usage[modelId];
+    usage[modelId] = { ...u, inputTokens: u.inputTokens + 1000, outputTokens: u.outputTokens + 100, costUSD: +(u.costUSD + 0.1).toFixed(2) };
+    out({ type: 'assistant', parent_tool_use_id: null, session_id: sid, message: { id: `msg_${randomUUID()}`, model: modelId, role: 'assistant', content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 1000, output_tokens: 100 } } });
+    out({ type: 'result', subtype: 'success', is_error: false, duration_ms: 100, duration_api_ms: 80, num_turns: turn, result: 'ok', session_id: sid, total_cost_usd: usage[modelId].costUSD, usage: { input_tokens: 1000, output_tokens: 100 }, modelUsage: usage, permission_denials: [] });
+  });
+} else if (process.env.FAKE_CLAUDE_PRIMED_HANG === '1') {
   // A primed session that answers its first turn with a cumulative total, then never reports the next one.
   process.on('SIGINT', () => process.exit(130));
   process.on('SIGTERM', () => process.exit(143));

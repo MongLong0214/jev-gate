@@ -21,6 +21,15 @@ export interface RowView {
   not_started_reason: string | null;
   quality: 'pass' | 'fail' | 'unknown' | null;
   grade_reason: string | null;
+  /** #214: the follow-up's checker, or null for a case that has none. */
+  follow_up_quality: 'pass' | 'fail' | 'unknown' | null;
+  /**
+   * #214: Claude's cost of each prompt the session was sent, in order, from the cumulative totals; null when the
+   * session did not report every turn. Lean's Jev spend is not in these; `follow_up_cost_usd` adds the follow-up's.
+   */
+  request_costs_usd: number[] | null;
+  /** #214: the follow-up prompt's complete cost (Claude plus the Jev request it caused), or null when unknown. */
+  follow_up_cost_usd: number | null;
   elapsed_ms: number | null;
   claude_cost_usd: number | null;
   /** L6: every producer's Jev cost for this row, or null when any enabled producer's is unknown. */
@@ -233,9 +242,49 @@ export interface Report {
   arms: ArmSummary[];
   per_job: Array<{ job: string; arms: ArmSummary[] }>;
   comparisons: Comparison[];
+  /** #214: the pre-registered episode comparison (lean-vs-native-2026-09-27), present when a run has follow-ups. */
+  episodes: EpisodeComparison[];
   conclusion: { category: string; reason: string };
   rows: RowView[];
   notes: string[];
+}
+
+/** #214 rule 5: no difference below this is quoted, in either direction. */
+export const EPISODE_QUOTE_FLOOR = 0.15;
+
+export interface EpisodeArm {
+  cells: number;
+  cost_usd: number | null;
+  follow_up_cost_usd: number | null;
+  tokens: { input: number; cache_creation: number; cache_read: number; output: number } | null;
+  elapsed_ms: number | null;
+}
+
+export interface EpisodeComparison {
+  treatment: string;
+  control: string;
+  per_episode: Array<{
+    episode: string;
+    valid: boolean;
+    /** Why a pair is not reported on this episode, by rules 1-3; empty when valid. */
+    excluded: string[];
+    treatment: EpisodeArm;
+    control: EpisodeArm;
+    /** 1 - treatment/control on the medians; positive is cheaper. Null on an episode the rules exclude. */
+    cost_saving: number | null;
+    paired_cost_differences_usd: Array<number | null>;
+    /** Rule-free record: a treatment cell failing a checker where every control cell passed both. */
+    treatment_quality_loss: boolean;
+  }>;
+  adjudicated: boolean;
+  adjudication_reason: string;
+  /** Median of the valid episodes' savings; quoted only when its magnitude reaches the floor. */
+  median_cost_saving: number | null;
+  median_token_saving: number | null;
+  median_time_saving: number | null;
+  median_follow_up_increase: number | null;
+  quoted: boolean;
+  verdict: string;
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -337,7 +386,8 @@ export const toRowView = (p: PlannedCell, c: Record<string, unknown> | null): Ro
   // stopped before its last turn's result, by a timeout, a cancel or a crash, keeps an earlier turn's total, which
   // leaves out what the unreported turn spent: that is a subtotal, so the cost and usage are unknown rather than it.
   const turnsReported = c && Array.isArray(c['turn_totals_usd']) ? c['turn_totals_usd'].length : null;
-  const turnsSent = c && Array.isArray(c['prime_sha256']) ? c['prime_sha256'].length + 1 : null;
+  const followUpSha = c && typeof c['follow_up_sha256'] === 'string' ? c['follow_up_sha256'] : null;
+  const turnsSent = c && Array.isArray(c['prime_sha256']) ? c['prime_sha256'].length + 1 + (followUpSha === null ? 0 : 1) : null;
   const partialSession = turnsReported !== null && turnsSent !== null && turnsReported > 0 && turnsReported < turnsSent;
   const { usage, status: usageStatus } = !c ? { usage: null, status: null } : partialSession ? { usage: null, status: 'partial_session' } : usageOf(c);
   const result = c && isRecord(c['result']) ? c['result'] : null;
@@ -362,6 +412,12 @@ export const toRowView = (p: PlannedCell, c: Record<string, unknown> | null): Ro
       : 0);
   const init = c && isRecord(c['init']) ? c['init'] : null;
   const pluginExpected = c ? c['plugin_expected'] : null;
+  const totals = c && Array.isArray(c['turn_totals_usd']) ? c['turn_totals_usd'].map(money) : [];
+  const requestCosts = !partialSession && turnsSent !== null && totals.length === turnsSent && totals.every((t) => t !== null) ? (totals as number[]).map((t, i) => t - (i === 0 ? 0 : (totals[i - 1] as number))) : null;
+  // The follow-up's Jev spend is the request lean sent for that very prompt; none sent for it is zero only when the
+  // cell's lean total is known, since an unjoined attempt could be it.
+  const followUpJev = followUpSha === null ? null : leanCost === 0 && !lean ? 0 : lean && lean.jev_cost_usd !== null ? (lean.jev_cost_by_request?.[followUpSha] ?? 0) : null;
+  const followUpGrade = c && isRecord(c['follow_up_grade']) ? c['follow_up_grade'] : null;
   const rec = (v: unknown): Record<string, number> => (isRecord(v) ? Object.fromEntries(Object.entries(v).filter(([, n]) => typeof n === 'number')) as Record<string, number> : {});
   const agentCalls = c && Array.isArray(c['agent_calls']) ? (c['agent_calls'] as Array<Record<string, unknown>>) : [];
   return {
@@ -373,6 +429,9 @@ export const toRowView = (p: PlannedCell, c: Record<string, unknown> | null): Ro
     not_started_reason: c && typeof c['not_started_reason'] === 'string' ? (c['not_started_reason'] as string) : null,
     quality: grade && (grade['quality'] === 'pass' || grade['quality'] === 'fail' || grade['quality'] === 'unknown') ? (grade['quality'] as 'pass' | 'fail' | 'unknown') : status === 'missing_record' ? null : 'unknown',
     grade_reason: grade && typeof grade['reason'] === 'string' ? (grade['reason'] as string) : null,
+    follow_up_quality: followUpSha === null ? null : followUpGrade && ['pass', 'fail', 'unknown'].includes(String(followUpGrade['quality'])) ? (followUpGrade['quality'] as 'pass' | 'fail' | 'unknown') : 'unknown',
+    request_costs_usd: requestCosts,
+    follow_up_cost_usd: requestCosts && followUpJev !== null ? (requestCosts[requestCosts.length - 1] as number) + followUpJev : null,
     elapsed_ms: c ? money(c['elapsed_ms']) : null,
     claude_cost_usd: claude,
     jev_cost_usd: jev,
@@ -972,6 +1031,114 @@ export const concludeRun = (arms: ArmSummary[], comparisons: Comparison[]): { ca
   return { category: 'mechanism only', reason: 'the gates ran and were recorded, but no declared criterion was met on this cohort' };
 };
 
+const medianOf = (xs: number[]): number | null => {
+  if (!xs.length) return null;
+  const v = [...xs].sort((a, b) => a - b);
+  const mid = Math.floor(v.length / 2);
+  return v.length % 2 ? v[mid]! : (v[mid - 1]! + v[mid]!) / 2;
+};
+
+const episodeTokens = (u: ModelUsage | null): EpisodeArm['tokens'] => {
+  if (u === null) return null;
+  const t = { input: 0, cache_creation: 0, cache_read: 0, output: 0 };
+  for (const e of Object.values(u)) {
+    t.input += e.inputTokens;
+    t.cache_creation += e.cacheCreationInputTokens;
+    t.cache_read += e.cacheReadInputTokens;
+    t.output += e.outputTokens;
+  }
+  return t;
+};
+
+const episodeArm = (rows: RowView[]): EpisodeArm => {
+  const known = <T>(xs: Array<T | null>): T[] | null => (xs.length && xs.every((x) => x !== null) ? (xs as T[]) : null);
+  const costs = known(rows.map((r) => r.total_cost_usd));
+  const followUps = known(rows.map((r) => r.follow_up_cost_usd));
+  const tokens = known(rows.map((r) => episodeTokens(r.model_usage)));
+  const times = known(rows.map((r) => r.elapsed_ms));
+  const all = (t: NonNullable<EpisodeArm['tokens']>): number => t.input + t.cache_creation + t.cache_read + t.output;
+  const mid = tokens ? medianOf(tokens.map(all)) : null;
+  return {
+    cells: rows.length,
+    cost_usd: costs ? medianOf(costs) : null,
+    follow_up_cost_usd: followUps ? medianOf(followUps) : null,
+    tokens: tokens && mid !== null ? tokens.find((t) => all(t) === mid) ?? tokens.slice().sort((a, b) => all(a) - all(b))[Math.floor(tokens.length / 2)]! : null,
+    elapsed_ms: times ? medianOf(times) : null,
+  };
+};
+
+/**
+ * #214, pre-registered in bench/results/lean-vs-native-2026-09-27: the whole episode is charged, a pair is reported on
+ * an episode only when every cell of both arms completed with a known complete cost and passed both checkers (rules
+ * 1-3), the headline needs two of three episodes (rule 4), and nothing under 15% is quoted (rule 5).
+ */
+export const compareEpisodes = (rows: RowView[], treatment: string, control: string): EpisodeComparison => {
+  const episodes = [...new Set(rows.filter((r) => r.follow_up_quality !== null).map((r) => r.job))];
+  const per = episodes.map((episode) => {
+    const T = rows.filter((r) => r.job === episode && r.arm === treatment);
+    const C = rows.filter((r) => r.job === episode && r.arm === control);
+    const excluded: string[] = [];
+    for (const r of [...T, ...C]) {
+      const id = `${r.arm} r${r.repetition}`;
+      if (r.status !== 'completed') excluded.push(`${id} ${r.status}`);
+      else if (r.quality !== 'pass' || r.follow_up_quality !== 'pass') excluded.push(`${id} checker ${r.quality}/${r.follow_up_quality}`);
+      else if (r.total_cost_usd === null) excluded.push(`${id} cost unknown`);
+    }
+    if (!T.length || !C.length) excluded.push('arm not planned');
+    const t = episodeArm(T);
+    const c = episodeArm(C);
+    const valid = excluded.length === 0;
+    const bothPass = (r: RowView): boolean => r.status === 'completed' && r.quality === 'pass' && r.follow_up_quality === 'pass';
+    return {
+      episode,
+      valid,
+      excluded,
+      treatment: t,
+      control: c,
+      cost_saving: valid && t.cost_usd !== null && c.cost_usd ? 1 - t.cost_usd / c.cost_usd : null,
+      paired_cost_differences_usd: T.map((x) => {
+        const y = C.find((r) => r.repetition === x.repetition);
+        return y && x.total_cost_usd !== null && y.total_cost_usd !== null ? x.total_cost_usd - y.total_cost_usd : null;
+      }),
+      treatment_quality_loss: C.length > 0 && C.every(bothPass) && T.some((r) => !bothPass(r)),
+    };
+  });
+  const valid = per.filter((e) => e.valid);
+  const need = Math.max(2, Math.ceil((episodes.length * 2) / 3));
+  const adjudicated = valid.length >= need;
+  const saving = (pick: (a: EpisodeArm) => number | null): number | null => {
+    const xs = valid.map((e) => {
+      const a = pick(e.treatment);
+      const b = pick(e.control);
+      return a === null || !b ? null : 1 - a / b;
+    });
+    return adjudicated && xs.every((x) => x !== null) ? medianOf(xs as number[]) : null;
+  };
+  const all = (a: EpisodeArm): number | null => (a.tokens ? a.tokens.input + a.tokens.cache_creation + a.tokens.cache_read + a.tokens.output : null);
+  const median = saving((a) => a.cost_usd);
+  const followUp = saving((a) => a.follow_up_cost_usd);
+  const quoted = median !== null && Math.abs(median) >= EPISODE_QUOTE_FLOOR;
+  const loss = per.filter((e) => e.treatment_quality_loss).map((e) => e.episode);
+  const verdict = !adjudicated
+    ? `not adjudicated: ${valid.length} of ${episodes.length} episodes pass the rules, ${need} needed`
+    : `${median !== null && median > EPISODE_QUOTE_FLOOR ? `${treatment} cost ${(median * 100).toFixed(1)}% less than ${control}` : `${treatment} did not cost more than 15% less than ${control} on these episodes`}${followUp !== null && followUp < -EPISODE_QUOTE_FLOOR ? `; its follow-up requests cost ${(-followUp * 100).toFixed(1)}% more` : ''}${loss.length ? `; ${treatment} failed a checker where every ${control} cell passed on ${loss.join(', ')}` : ''}`;
+  return {
+    treatment,
+    control,
+    per_episode: per,
+    adjudicated,
+    adjudication_reason: `${valid.length} of ${episodes.length} episodes valid under rules 1-3; ${need} needed`,
+    median_cost_saving: median,
+    median_token_saving: saving(all),
+    median_time_saving: saving((a) => a.elapsed_ms),
+    median_follow_up_increase: followUp === null ? null : -followUp,
+    quoted,
+    verdict,
+  };
+};
+
+const EPISODE_PAIRS: Array<[string, string]> = [['jev_lean', 'native_auto'], ['jev_lean', 'recent_packet'], ['recent_packet', 'native_auto']];
+
 export const buildReport = (runDir: string): Report => {
   const planPath = join(runDir, 'plan.json');
   const plan = existsSync(planPath) ? (JSON.parse(readFileSync(planPath, 'utf8')) as unknown) : null;
@@ -985,6 +1152,7 @@ export const buildReport = (runDir: string): Report => {
     return { job, arms: [...new Set(jobRows.map((r) => r.arm))].map((a) => summarizeArm(a, jobRows)) };
   });
   const comparisons = COMPARISONS.filter(([t, c]) => arms.includes(t) && arms.includes(c)).map(([t, c, kind]) => compare(rows, t, c, kind));
+  const episodes = rows.some((r) => r.follow_up_quality !== null) ? EPISODE_PAIRS.filter(([t, c]) => arms.includes(t) && arms.includes(c)).map(([t, c]) => compareEpisodes(rows, t, c)) : [];
   const notes = [
     'Rows come from plan.json. missing_record means the planned cell has no saved file; it is not "not started" and never cost zero.',
     'Claude total_cost_usd is an API-equivalent estimate (whole tree incl. children), not subscription billing or quota; Jev cost is list price × input tokens, null when any attempt has unknown usage.',
@@ -1012,6 +1180,7 @@ export const buildReport = (runDir: string): Report => {
     arms: armSummaries,
     per_job: perJob,
     comparisons,
+    episodes,
     conclusion: concludeRun(armSummaries, comparisons),
     rows,
     notes,
@@ -1118,6 +1287,11 @@ export const renderMarkdown = (r: Report): string => {
     const d = c.complete_case_diagnostic;
     L.push(`| ${c.treatment} vs ${c.control} | ${c.criterion} | ${c.verdict} | ${c.verdict_reason} | ${c.intended_rows} | ${c.pass_treatment}/${c.pass_control} | ${c.absolute_success_difference === null ? 'null' : (c.absolute_success_difference * 100).toFixed(1) + ' pts'} | ${c.cost_known ? pct(c.relative_cost_reduction) : 'null (unknown spend)'} | ${c.runtime_known ? pct(c.relative_runtime_reduction) : 'null (unknown runtime)'} | ${c.validity}${c.validity_reasons.length ? ` (${c.validity_reasons.join('; ')})` : ''} | ${d ? `${d.included.length}/${c.intended_rows} rows: cost ${pct(d.relative_cost_reduction)}, runtime ${pct(d.relative_runtime_reduction)}, pass ${d.pass_treatment}/${d.pass_control}${d.excluded.length ? `; excluded ${d.excluded.map((e) => `${e.row} (${e.reason})`).join(', ')}` : ''}` : '-'} |`);
   }
+  for (const e of r.episodes) {
+    const tk = (a: EpisodeArm): string => (a.tokens ? `in ${a.tokens.input} / create ${a.tokens.cache_creation} / read ${a.tokens.cache_read} / out ${a.tokens.output}` : 'null');
+    L.push('', `## episodes: ${e.treatment} vs ${e.control} (pre-registered rules)`, '', `**${e.verdict}** — ${e.adjudication_reason}. Median cost saving ${e.quoted ? pct(e.median_cost_saving) : e.median_cost_saving === null ? 'null' : 'below 15%, not quoted'}; tokens ${e.median_token_saving === null ? 'null' : Math.abs(e.median_token_saving) >= EPISODE_QUOTE_FLOOR ? pct(e.median_token_saving) : 'below 15%'}; time ${e.median_time_saving === null ? 'null' : Math.abs(e.median_time_saving) >= EPISODE_QUOTE_FLOOR ? pct(e.median_time_saving) : 'below 15%'}; follow-up cost increase ${e.median_follow_up_increase === null ? 'null' : Math.abs(e.median_follow_up_increase) >= EPISODE_QUOTE_FLOOR ? pct(e.median_follow_up_increase) : 'below 15%'}.`, '', '| episode | valid | excluded | T $ (median) | C $ (median) | saving | paired Δ$ by rep | T follow-up $ | C follow-up $ | T tokens | C tokens | T s | C s | T quality loss |', '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|');
+    for (const x of e.per_episode) L.push(`| ${x.episode} | ${x.valid} | ${x.excluded.join('; ') || '-'} | ${fmt(x.treatment.cost_usd, 4)} | ${fmt(x.control.cost_usd, 4)} | ${pct(x.cost_saving)} | ${x.paired_cost_differences_usd.map((d) => fmt(d, 4)).join(', ')} | ${fmt(x.treatment.follow_up_cost_usd, 4)} | ${fmt(x.control.follow_up_cost_usd, 4)} | ${tk(x.treatment)} | ${tk(x.control)} | ${x.treatment.elapsed_ms === null ? 'null' : (x.treatment.elapsed_ms / 1000).toFixed(0)} | ${x.control.elapsed_ms === null ? 'null' : (x.control.elapsed_ms / 1000).toFixed(0)} | ${x.treatment_quality_loss} |`);
+  }
   L.push('', '## cost by model family (API-equivalent) and Jev cost', '');
   for (const a of r.arms) {
     const families = Object.entries(a.claude_cost_by_family).map(([f, v]) => `${f} ${fmt(v, 4)}`).join(', ') || (a.usage_complete ? 'none' : 'incomplete usage');
@@ -1125,8 +1299,8 @@ export const renderMarkdown = (r: Report): string => {
   }
   L.push('', '## per-model tokens', '');
   for (const a of r.arms) L.push(`- ${a.arm}: ${a.model_usage ? Object.entries(a.model_usage).map(([m, e]) => `${m} in=${e.inputTokens} out=${e.outputTokens} cacheRead=${e.cacheReadInputTokens} cacheCreate=${e.cacheCreationInputTokens}`).join('; ') : 'incomplete'}`);
-  L.push('', '## rows', '', '| job | rep | arm | status | quality | reason | elapsed s | Claude $ | Jev $ | Fable tokens | init model | Agent calls (owned/pinned) | attempted/patched/preserved | hint | mismatches |', '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|');
-  for (const x of r.rows) L.push(`| ${x.job} | ${x.repetition} | ${x.arm} | ${x.status}${x.not_started_reason ? ` (${x.not_started_reason})` : ''} | ${x.quality ?? '-'} | ${x.grade_reason ?? '-'} | ${x.elapsed_ms === null ? 'null' : (x.elapsed_ms / 1000).toFixed(1)} | ${fmt(x.claude_cost_usd, 4)} | ${fmt(x.jev_cost_usd, 6)} | ${x.fable_tokens ?? 'null'} | ${x.init_model ?? 'null'} | ${x.agent_calls} (${x.owned_calls}/${x.pinned}) | ${x.eligible_attempted}/${x.patched}/${x.preserved} | ${x.hint_delivered} | ${x.target_model_mismatches} |`);
+  L.push('', '## rows', '', '| job | rep | arm | status | quality (follow-up) | reason | elapsed s | Claude $ | Jev $ | Fable tokens | init model | Agent calls (owned/pinned) | attempted/patched/preserved | hint | mismatches |', '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|');
+  for (const x of r.rows) L.push(`| ${x.job} | ${x.repetition} | ${x.arm} | ${x.status}${x.not_started_reason ? ` (${x.not_started_reason})` : ''} | ${x.quality ?? '-'}${x.follow_up_quality ? ` (${x.follow_up_quality})` : ''} | ${x.grade_reason ?? '-'} | ${x.elapsed_ms === null ? 'null' : (x.elapsed_ms / 1000).toFixed(1)} | ${fmt(x.claude_cost_usd, 4)} | ${fmt(x.jev_cost_usd, 6)} | ${x.fable_tokens ?? 'null'} | ${x.init_model ?? 'null'} | ${x.agent_calls} (${x.owned_calls}/${x.pinned}) | ${x.eligible_attempted}/${x.patched}/${x.preserved} | ${x.hint_delivered} | ${x.target_model_mismatches} |`);
   L.push('', '## notes', '', ...r.notes.map((n) => `- ${n}`), '');
   return L.join('\n');
 };
