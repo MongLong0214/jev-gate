@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 const root = join(__dirname, '..');
-const AGENTS = ['worker-fast', 'worker', 'worker-deep', 'worker-frontier', 'planner', 'planner-frontier', 'executor'];
+const AGENTS = ['worker-fast', 'worker', 'worker-deep', 'worker-frontier', 'planner', 'planner-frontier'];
 let repo: string;
 
 const write = (rel: string, text: string) => {
@@ -68,7 +68,7 @@ describe('scripts/release.mjs', () => {
     write('plugins/codex/README.md', '# Native Codex usage\n');
     write('docs/bench-ab.md', '# Paired benchmark usage\n');
     write('bench/ab/tasks.example.json', '{}\n');
-    write('docs/advanced-usage.md', '# Advanced usage\n\nGate and lean settings for a checkout.\n');
+    write('docs/advanced-usage.md', '# Advanced usage\n\nGate settings for a checkout.\n');
     write('hooks/hooks.json', '{}\n');
     write('hooks/register.ts', 'export {};\n');
     for (const name of ['cost','provider-prices','provider-prices-data','route-cost','claude-cache','router-answers','router-selection','router-context','router-child-context','router-secret','claude-models','claude-candidates','frontier-routing']) write(`src/${name}.ts`, 'export {};\n');
