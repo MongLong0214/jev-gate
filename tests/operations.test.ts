@@ -93,9 +93,6 @@ describe('operations display model', () => {
       { ...base, phase: 'dispatch', role: 'worker', task_id: 't1', requested_tier: 'standard', requested_model: 'sonnet' },
       { ...base, phase: 'guard', tool_name: 'Read', allow: false, denials: 1 },
       { ...base, phase: 'post', task_id: 't1', verdict: 'accepted', requested_model: 'sonnet', resolved_model: 'claude-sonnet-5', reported_checks: { pass: 1, fail: 0, not_run: 0 } },
-      { ...base, phase: 'lean_intent', request_id: 'l1' },
-      { ...base, phase: 'lean_result', request_id: 'l1', attempted: true, decision: { action: 'select', retained: 3, omitted: 2 } },
-      { ...base, phase: 'lean_dispatch', applied: true, retained_groups: 3, omitted_groups: 2 },
       { written_at: at, phase: 'evidence_start', request_id: 'e1', kind: 'search', mode: 'locate' },
       { written_at: at, phase: 'evidence_jev_intent', request_id: 'e1:1', parent_request_id: 'e1', candidates: 4 },
       { written_at: later, phase: 'evidence_jev_result', request_id: 'e1:1', parent_request_id: 'e1', attempted: true, http: { status: 200 }, jev: { usage: { input_tokens: 20, output_tokens: 3 } } },
@@ -110,9 +107,9 @@ describe('operations display model', () => {
       row('output', { event: 'output', run_id: 'o1', applied: true, runs: 1 }, later),
     ];
     const view = buildOperations(records, debug, new Date('2026-09-29T06:00:02.000Z'), { trace: true, debug: true });
-    expect(view.features.map((f) => f.id)).toEqual(['admission', 'allocation', 'planning', 'workers', 'guard', 'lean', 'router', 'compact', 'output', 'evidence']);
+    expect(view.features.map((f) => f.id)).toEqual(['admission', 'allocation', 'planning', 'workers', 'guard', 'router', 'compact', 'output', 'evidence']);
     expect(view.features.every((f) => f.state === 'observed')).toBe(true);
-    expect(view.requests).toBe(5);
+    expect(view.requests).toBe(4);
     expect(view.runs.map((r) => r.source).sort()).toEqual(['compact', 'evidence', 'gate', 'output', 'router']);
     const gate = view.runs.find((r) => r.source === 'gate')!;
     expect(gate.steps.find((s) => s.feature === 'planning')?.graph).toEqual([
@@ -121,6 +118,22 @@ describe('operations display model', () => {
     expect(gate.steps.find((s) => s.title.includes('워커 결과'))?.details.join(' ')).toContain('claude-sonnet-5');
     expect(JSON.stringify(view)).not.toContain('PRIVATE_PROMPT');
     expect(JSON.stringify(view)).not.toContain('sk-private-value');
+  });
+
+  it('loads withdrawn Lean records as history: still counted as Jev calls, no Lean feature or step', () => {
+    const records = [
+      { ...base, phase: 'admission_intent', request_id: 'a1' },
+      { ...base, phase: 'admission_result', request_id: 'a1', attempted: true, decision: { shape: 'direct' } },
+      { ...base, phase: 'lean_intent', request_id: 'l1' },
+      { ...base, phase: 'lean_result', request_id: 'l1', attempted: true, decision: { action: 'select', retained: 3, omitted: 2 } },
+      { ...base, phase: 'lean_dispatch', applied: true, retained_groups: 3, omitted_groups: 2 },
+      { ...base, phase: 'lean_post', status: 'completed', released: true },
+    ];
+    const view = buildOperations(records, [], new Date('2026-09-29T06:00:02.000Z'), { trace: true, debug: false });
+    expect(view.requests).toBe(2);
+    expect(view.features.map((f) => f.id)).not.toContain('lean');
+    expect(view.runs.flatMap((r) => r.steps.map((s) => s.title)).filter((t) => /lean/i.test(t))).toEqual([]);
+    expect(view.runs.find((r) => r.source === 'gate')?.steps.some((s) => s.feature === 'admission')).toBe(true);
   });
 
   it('marks a sent request without a receipt as unconfirmed, never as zero usage', () => {

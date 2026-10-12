@@ -7,7 +7,7 @@ import { CODEX_CAPABILITIES, CODEX_PLUGIN_CAPABILITIES, type HostCapability, typ
 
 /** A display model made only from named metadata fields. Raw prompts, source and debug text never leave here. */
 type Rec = Record<string, unknown>;
-export type FeatureId = 'admission' | 'allocation' | 'planning' | 'workers' | 'guard' | 'lean' | 'router' | 'compact' | 'output' | 'evidence';
+export type FeatureId = 'admission' | 'allocation' | 'planning' | 'workers' | 'guard' | 'router' | 'compact' | 'output' | 'evidence';
 export type StepState = 'active' | 'done' | 'skipped' | 'error' | 'unconfirmed' | 'interrupted';
 export type StepLane = 'jev' | 'policy' | 'host' | 'local';
 
@@ -85,12 +85,13 @@ const FEATURES: Array<{ id: FeatureId; label: string; source: 'trace' | 'debug' 
   { id: 'planning', label: '계획 · 의존성', source: 'trace' },
   { id: 'workers', label: '워커 · 수락 검사', source: 'trace' },
   { id: 'guard', label: '루트 도구 가드', source: 'trace' },
-  { id: 'lean', label: 'Lean · 문맥 인계', source: 'trace' },
   { id: 'router', label: 'Router · 모델과 effort', source: 'debug' },
   { id: 'compact', label: 'Compact · 요약 대체', source: 'debug' },
   { id: 'output', label: 'Output · 로그 접기', source: 'debug' },
   { id: 'evidence', label: 'Evidence · 근거 판정', source: 'trace' },
 ];
+// #217: records from the withdrawn Lean mode were real Jev calls, so history totals still count them.
+export const LEGACY_LEAN_JEV = { intent: 'lean_intent', result: 'lean_result' } as const;
 const TOKEN = /^[A-Za-z0-9_.:/+@-]{1,80}(?:\[[A-Za-z0-9_-]{1,16}\])?$/;
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
 const rec = (v: unknown): Rec | null => typeof v === 'object' && v !== null && !Array.isArray(v) ? v as Rec : null;
@@ -178,7 +179,6 @@ const traceFeature = (phase: string): FeatureId | null => {
   if (phase.startsWith('interpretation_') || phase === 'plan') return 'planning';
   if (phase.startsWith('background_') || phase.startsWith('worktree_') || phase === 'dispatch_denied' || phase === 'dispatch' || phase === 'post' || phase === 'failure' || phase === 'stop') return 'workers';
   if (phase === 'guard') return 'guard';
-  if (phase.startsWith('lean_')) return 'lean';
   if (phase.startsWith('evidence_')) return 'evidence';
   return null;
 };
@@ -191,7 +191,6 @@ const traceTitle = (phase: string, r: Rec): string => ({
   plan: '플래너 결과 · 작업 그래프', dispatch: token(r['role']) === 'planner' ? '플래너 호출' : '워커 호출',
   background_dispatch: '백그라운드 실행 준비', background_launch: '백그라운드 워커 실행', background_conversation: '메인 대화 계속', background_terminal: '백그라운드 워커 종료', background_policy_delivery: '종료 정책 전달',
   worktree_start: 'Worktree · 생성 시작', worktree_result: 'Worktree · 생성 결과', dispatch_denied: 'Agent 호출 거절', post: '워커 결과 · 수락 판정', failure: '호스트 호출 실패', stop: '턴 종료', guard: '루트 도구 가드',
-  lean_intent: 'Lean · Jev 요청', lean_result: 'Lean · 문맥 선택', lean_dispatch: 'Lean · packet 적용', lean_post: 'Lean · executor 결과',
   evidence_start: 'Evidence · 근거 검색 시작', evidence_jev_intent: 'Evidence · Jev 판정 요청', evidence_jev_result: 'Evidence · Jev 판정 결과', evidence_cache: 'Evidence · 판정 캐시', evidence_result: 'Evidence · 근거 결과',
 } as Record<string, string>)[phase] ?? phase;
 
@@ -293,14 +292,6 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
       } else details.push(text(`요청 ${token(r['called_tier']) ?? '?'}`, `적용 ${tier ?? '원래 프로필'}`, token(decision?.['model'])));
     }
     if (estimate && number(estimate['saving_tokens']) !== null) details.push(`위임 가격 계산 ${n(number(estimate['saving_tokens']))} 토큰 · 측정된 절감 아님`);
-    if (phase === 'lean_result') {
-      summary = text(action, reason, number(decision?.['retained']) === null ? null : `유지 ${n(number(decision?.['retained']))}그룹`, number(decision?.['omitted']) === null ? null : `생략 ${n(number(decision?.['omitted']))}그룹`);
-      const source = field(r, 'source');
-      const groups = field(r, 'groups');
-      if (source) details.push(text(`전사 범위 ${token(source['coverage']) ?? '미확인'}`, `미판정 ${n(number(source['unassessed']))}그룹`, `호스트 문맥 ${n(number(source['host_context']))}건`, `버린 분기 ${n(number(source['abandoned']))}건`));
-      if (groups) details.push(text(`필수 ${n(number(groups['mandatory']))}그룹`, `선택 질문 ${n(number(groups['optional_asked']))}그룹`, `읽은 요청 ${n(number(groups['request_bytes']))}B`));
-      details.push('packet 크기와 실제 토큰 절감은 다른 사실입니다');
-    }
   } else if (phase === 'codex_router_skipped') {
     lane = 'policy';
     summary = ({ disabled: 'Jev 기능이 꺼져 있음', router_disabled: 'Router가 꺼져 있음', key_missing: 'Jev API 키 없음', aborted: '턴 중단으로 판단 생략', model_catalog_missing: '호스트 모델 목록에서 현재 모델을 확인할 수 없음', nothing_to_change: '변경 가능한 모델·effort 없음' } as Record<string, string>)[String(r['reason'])] ?? '원래 호스트 설정 유지';
@@ -376,14 +367,6 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
     if (r['evidence_format_only'] === true) details.push('검사 명령 형식만 불일치 · 한 번의 무료 재검증 가능');
     if (r['root_fallback'] === true) details.push(r['root_fallback_reason'] === 'accepted' ? '종료된 작업 수락 · 루트에서 남은 확인 가능 · 전체 요구사항 검증과는 다름' : r['root_fallback_reason'] === 'delivery_failed' ? '필수 원문 전달 불가 · 루트 복귀' : '단일 워커 시도 상한 · 루트 도구 가드 해제');
     if (r['orphaned'] === true) details.push('이전 세대의 늦은 결과 · 현재 계획 미진행');
-  } else if (phase === 'lean_dispatch') {
-    lane = 'policy';
-    summary = r['applied'] === true ? 'executor에 packet 적용' : token(r['reason']) === 'packet_proposed' ? 'packet 제안 · 아직 적용 전' : text('packet 미적용', token(r['reason']));
-    details.push(text(`유지 ${n(number(r['retained_groups']))}그룹`, `생략 ${n(number(r['omitted_groups']))}그룹`, number(r['composed_bytes']) === null ? null : `${n(number(r['composed_bytes']))}B 합성`));
-  } else if (phase === 'lean_post') {
-    lane = 'host';
-    summary = text(token(r['status']), r['released'] === true ? 'executor 예약 해제' : r['release_unconfirmed'] === true ? '종료 미확인 · 예약 유지' : '일치하는 예약 없음');
-    details.push(text(`실행 모델 ${token(r['observed_model']) ?? '미관측'}`, token(r['failure'])));
   } else if (phase === 'guard') {
     lane = 'policy';
     summary = text(token(r['tool_name']) ?? '도구', r['allow'] === false ? '거절' : '가드 통과', r['stopped'] === true ? '예산 소진 · 턴 중단' : null);
@@ -688,7 +671,7 @@ const buildPart = (records: Rec[], debug: DebugRecord[], now: Date): Part => {
     const group = grouped.get(key) ?? { source, host, mode: token(r['mode']) ?? 'unknown',
       ...(session && prompt && source !== 'evidence' ? { executionId: id(`execution:${host}:${session}:${prompt}`) } : {}), steps: [], rank: { cls: 0, at: '', index } };
     const phase = token(r['phase']);
-    if (r['attempted'] === true && ['admission_result', 'pre_result', 'interpretation_result', 'lean_result', 'codex_router_result'].includes(phase ?? '')) {
+    if (r['attempted'] === true && ['admission_result', 'pre_result', 'interpretation_result', 'codex_router_result'].includes(phase ?? '')) {
       const { durationMs: _duration, elapsedMs: _elapsed, judgements: _judgements, ...rest } = step;
       const { executionPath: _executionPath, ...response } = step;
       group.steps.push({ ...response, title: step.title.replace(/ · .+$/, ' · Jev 응답'), summary: step.state === 'error' ? 'Jev 판정 실패 · 원래 호출 유지' : step.judgements?.length
@@ -710,7 +693,7 @@ const buildPart = (records: Rec[], debug: DebugRecord[], now: Date): Part => {
   const separate = [...grouped].map(([key, group]): { run: OperationRun; rank: Rank } => {
     const steps = group.steps.sort((a, b) => a.at.localeCompare(b.at) || (a.lane === 'policy' ? 1 : 0) - (b.lane === 'policy' ? 1 : 0) || a.id.localeCompare(b.id));
     const state = operationState(steps);
-    const title = ({ gate: group.mode === 'lean' ? 'Lean 세션' : '게이트 세션', router: 'Router 실행', compact: 'Compact 실행', output: 'Output 실행', evidence: 'Evidence 검색', codex: 'Codex 실행' } as const)[group.source];
+    const title = ({ gate: '게이트 세션', router: 'Router 실행', compact: 'Compact 실행', output: 'Output 실행', evidence: 'Evidence 검색', codex: 'Codex 실행' } as const)[group.source];
     return { run: { id: id(key), ...(group.executionId ? { executionId: group.executionId } : {}), host: group.host, title, source: group.source, mode: group.mode, firstAt: steps[0]?.at ?? '', lastAt: steps.at(-1)?.at ?? '', state, steps }, rank: group.rank };
   });
   const native = codexOperations(records, now);
@@ -730,8 +713,8 @@ const buildPart = (records: Rec[], debug: DebugRecord[], now: Date): Part => {
   for (const r of records) {
     const phase = token(r['phase']) ?? '';
     if (phase === 'codex_compact' && r['jev_sent'] === true) { requests.add(`compact:codex:${token(r['session_id'])}:${token(r['run_id'])}`); continue; }
-    if (!['admission_intent', 'pre_intent', 'interpretation_intent', 'lean_intent', 'evidence_jev_intent', 'codex_router_intent'].includes(phase)
-      && !(r['attempted'] === true && ['admission_result', 'pre_result', 'interpretation_result', 'lean_result', 'evidence_jev_result', 'codex_router_result'].includes(phase))) continue;
+    if (!['admission_intent', 'pre_intent', 'interpretation_intent', LEGACY_LEAN_JEV.intent, 'evidence_jev_intent', 'codex_router_intent'].includes(phase)
+      && !(r['attempted'] === true && ['admission_result', 'pre_result', 'interpretation_result', LEGACY_LEAN_JEV.result, 'evidence_jev_result', 'codex_router_result'].includes(phase))) continue;
     const kind = phase.replace(/_(intent|result)$/, '');
     requests.add(`${kind}:${token(r['request_id']) ?? token(r['invocation_id']) ?? iso(r['written_at'])}`);
   }

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import type { Env } from './config.js';
 import { readTraceRecords, type TraceDirectoryReader, type TraceCache } from './explain.js';
 import { readLiveness } from './liveness.js';
-import { buildOperations, type DebugRecord, type OperationsView } from './operations.js';
+import { buildOperations, LEGACY_LEAN_JEV, type DebugRecord, type OperationsView } from './operations.js';
 import type { Host } from './host-support.js';
 import { ClaudeWorkerActivityReader, type WorkerActivityView } from './claude-worker-activity.js';
 import { memo } from './memo.js';
@@ -252,13 +252,6 @@ const gateEvent = (r: Rec): ActivityEvent | null => {
   if (phase === 'guard' && r['allow'] === false) {
     return { at, kind: 'follow', title: '도구 거절', call: 'Jev 호출이 아닙니다', used: `${token(r['tool_name']) ?? '도구'} 호출을 거절했습니다` };
   }
-  if (phase === 'lean_result') {
-    const call = jevCall(r);
-    const decision = sub(r, 'decision');
-    const action = decision ? token(decision['action']) : null;
-    const why = decision ? reasonText(decision['reason']) : null;
-    return { at, kind: call.kind, title: 'lean', call: call.call, used: [action ? `선택 ${action}` : null, why].filter((x): x is string => x !== null).join('. ') || '기록된 선택이 없습니다' };
-  }
   return null;
 };
 
@@ -407,7 +400,6 @@ const INTENT_RESULT: Record<string, string> = {
   admission_intent: 'admission_result',
   pre_intent: 'pre_result',
   interpretation_intent: 'interpretation_result',
-  lean_intent: 'lean_result',
 };
 
 const ROUTER_OPEN = new Set(['root', 'child', 'spawn']);
@@ -426,7 +418,6 @@ const phaseTitle = (r: Rec): string => {
   const phase = token(r['phase']);
   if (phase === 'admission_intent' || phase === 'admission_result') return '게이트 A';
   if (phase === 'pre_intent' || phase === 'pre_result') return token(r['role']) === 'planner' ? '플래너 등급' : '워커 등급';
-  if (phase?.startsWith('lean')) return 'lean';
   if (phase?.startsWith('interpretation')) return '계획 해석';
   return phase ?? '기록';
 };
@@ -614,7 +605,7 @@ export const loadActivity = (opts: { traceDir: string | null; traceDirs?: readon
         const shape = token(sub(r, 'decision')?.['shape']);
         if (shape === 'direct') direct++;
         else if (shape === 'orchestrated') orchestrated++;
-      } else if ((phase === 'pre_result' || phase === 'lean_result') && r['attempted'] === true) jevCalls++;
+      } else if ((phase === 'pre_result' || phase === LEGACY_LEAN_JEV.result) && r['attempted'] === true) jevCalls++;
       const event = gateEvent(r);
       if (event) events.push(event);
     }

@@ -22,7 +22,7 @@ const step = (id: string, feature: OperationStep['feature'], extra: Partial<Oper
 const run = (id: string, host: 'claude' | 'codex', steps: OperationStep[], extra: Partial<OperationRun> = {}): OperationRun => ({ id, host, title: `${host} execution ${id}`, source: 'gate', mode: 'auto', firstAt: stamp, lastAt: stamp, state: 'done', steps, ...extra });
 function snapshot(runs: OperationRun[]) {
   const feed = runs.flatMap(r => r.steps.map(s => ({ ...s, host: r.host, runId: r.id, runTitle: r.title }))).sort((a,b) => b.at.localeCompare(a.at));
-  const ids = ['admission','allocation','planning','workers','guard','lean','router','compact','output','evidence'] as const;
+  const ids = ['admission','allocation','planning','workers','guard','router','compact','output','evidence'] as const;
   const latency = feed.filter(s => s.lane==='jev' && s.durationMs!==undefined).map(s => ({ at:s.at, ms:s.durationMs! }));
   return { at:stamp, host:'mixed', unreadable:0, recording:{enabled:true}, dashboard:{enabled:true}, operations:{runs,feed,active:runs.filter(r=>r.state==='active').length,attention:0,requests:latency.length,
     features:ids.map(id=>({id,label:id,source:'trace',count:feed.filter(s=>!s.lifecycle&&s.feature===id).length,lastAt:feed.find(s=>!s.lifecycle&&s.feature===id)?.at??null,state:feed.some(s=>!s.lifecycle&&s.feature===id)?'observed':'waiting'})),
@@ -194,7 +194,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
         if(width===320)await p.screenshot({path:join(output,`320-${theme}-${lang}-viewport.png`)});await p.screenshot({path:join(output,`${width}-${theme}-${lang}.png`),fullPage:true});expect(problems,`${width} ${theme} ${lang}`).toEqual([]);
       }await p.close();
     }
-    push([]);const p=await page();expect(await p.locator('.circuit-node').count()).toBe(10);expect(await p.locator('.wire-packet').count()).toBe(0);expect(await p.locator('#circuit-inspector').textContent()).toContain('아직 실행 기록');await p.close();
+    push([]);const p=await page();expect(await p.locator('.circuit-node').count()).toBe(9);expect(await p.locator('.wire-packet').count()).toBe(0);expect(await p.locator('#circuit-inspector').textContent()).toContain('아직 실행 기록');await p.close();
   },60000);
 
   it('keeps stage inspection local, switches run scope and preserves focused controls across updates',async()=>{

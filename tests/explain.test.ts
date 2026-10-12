@@ -39,6 +39,13 @@ describe('explain (2026-09-20)', () => {
     expect(readTraceRecords(dir, cache)).toEqual({ records: [], unreadable: 1 }); expect(cache.size).toBe(0);
     rmSync(path); expect(readTraceRecords(dir + '/', cache)).toEqual({ records: [], unreadable: 0 }); expect(cache.size).toBe(0);
   });
+  it('reads withdrawn Lean records as history without a line of their own (#217)', () => {
+    const lean = { mode: 'lean', prompt_id: 'p-lean' };
+    const records = [base('lean_intent', 1, { ...lean, request_id: 'l1' }), base('lean_result', 2, { ...lean, request_id: 'l1', attempted: true, decision: { action: 'select' } }), base('lean_dispatch', 3, { ...lean, applied: true }), base('lean_post', 4, { ...lean, status: 'completed' }), base('stop', 5, { outcome: 'aborted' })];
+    const out = render(records);
+    expect(out).toContain('stop     aborted');
+    expect(out).not.toMatch(/^\s+(lean|packet|dispatch executor|result {3}executor)/m);
+  });
   it('says why a turn stayed native, with the confidence that decided it', () => {
     const out = render([admission(1, { attempted: true, context_tokens: 193553, http: { status: 200, code: null, duration_ms: 555, request_bytes: 800 }, answers: { execution: { type: 'choice', choice: 'direct', confidence: 0.39 } }, decision: { shape: 'direct', decided: true, reason: 'admission_low_confidence', changed_default: false } })]);
     expect(out).toContain('gate A   direct');
