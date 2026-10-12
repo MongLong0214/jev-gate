@@ -248,7 +248,9 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
         return;
       }
       if (req.method === 'GET' && path === '/api/snapshot') {
-        await refresh();
+        // An open stream keeps the frame current, so answer with it at once; its `at` tells when it was built. Waiting for
+        // the rebuild in flight held the answer for up to a whole rebuild while records kept arriving (#215).
+        if (!loaded || !subscribers.size) await refresh();
         const body = frame();
         res.writeHead(body ? 200 : 503, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
         res.end(body?.data ?? JSON.stringify({ error: 'activity_unavailable' }));
