@@ -1,6 +1,6 @@
 import { constants, closeSync, fstatSync, openSync, readSync } from 'node:fs';
 
-import { looksSecret } from './lean-source.js';
+import { looksSecret } from './outbound-text.js';
 
 /**
  * #115: the last few things the user typed, read from the host transcript for one purpose -- when Gate A answers

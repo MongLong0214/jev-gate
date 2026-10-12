@@ -1,6 +1,5 @@
 import { callJev, topChoices, validateChoice, type JevRequest } from '../jev.js';
-import { estimateTokens } from '../lean.js';
-import { looksSecret } from '../lean-source.js';
+import { estimateTokens, looksSecret } from '../outbound-text.js';
 import type { ChoiceAnswer } from '../types.js';
 import type { JevUsage } from '../types.js';
 import type { JudgementCache } from './cache.js';

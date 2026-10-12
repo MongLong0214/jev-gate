@@ -1,5 +1,5 @@
 /**
- * The credential screen, copied from `src/lean-source.ts` because a Function Hooks module cannot import from the
+ * The credential screen, copied from `src/outbound-text.ts` because a Function Hooks module cannot import from the
  * Node side of the repository. `tests/router/secret-parity.test.ts` fails when the two lists drift.
  */
 export const SECRET_PATTERNS: readonly RegExp[] = [

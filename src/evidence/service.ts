@@ -1,6 +1,6 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
-import { looksSecret } from '../lean-source.js';
+import { looksSecret } from '../outbound-text.js';
 import type { ChoiceAnswer } from '../types.js';
 import { createJudgementCache, type JudgementCache } from './cache.js';
 import { buildCandidates, LEXICAL_TERM_DETAIL, lineStarts, planLexical, sliceLines, snapshotId, yieldToEventLoop, type Candidate, type SourceFile } from './candidates.js';
