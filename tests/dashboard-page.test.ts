@@ -333,15 +333,11 @@ it('keeps old active work on the live rails while removing completed historical 
   expect(p.get('pipeline-state').textContent).toContain('1개 단계 진행 중');
 });
 
-it('pages a ten-thousand-step execution with live following and preserves a manually selected historical page', () => {
+it('shows a ten-thousand-step execution only in the time axis, with no second paginated record list', () => {
   const p=page(),steps=Array.from({length:10001},(_,i)=>step('cycle'+i,'router','host',{summary:'cycle '+i}));p.push(snapshot([run('large','codex',steps)]));
-  expect(p.get('rail-history').querySelectorAll('.rail-record')).toHaveLength(1);
+  expect(p.get('rail-history').hidden).toBe(true);expect(p.get('rail-history').querySelectorAll('.rail-record')).toHaveLength(0);
+  expect(p.w.document.querySelector('[data-rail-page]')).toBeNull();expect(p.w.document.getElementById('rail-follow')).toBeNull();
   expect(p.get('trace').querySelectorAll('.span-row')).toHaveLength(100);
-  expect(p.get('rail-history').textContent).toContain('cycle 10000');p.click('[data-rail-page="-1"]');
-  expect(p.get('rail-history').querySelectorAll('.rail-record')).toHaveLength(100);expect(p.get('rail-follow').getAttribute('aria-pressed')).toBe('false');
-  p.push(snapshot([run('large','codex',[...steps,step('cycle10001','router','host',{summary:'latest cycle'})])]));
-  expect(p.get('rail-history').textContent).not.toContain('latest cycle');p.click('#rail-follow');expect(p.get('rail-history').textContent).toContain('latest cycle');
-  expect(p.get('rail-history').querySelectorAll('.rail-record')).toHaveLength(2);
 });
 
 it('shows native inference cycles without tool calls and pages the complete worker tool history', async () => {
