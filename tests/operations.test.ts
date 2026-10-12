@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildOperations, type DebugRecord } from '../src/operations.js';
+import { buildOperations, type ModRecord } from '../src/operations.js';
 
 const at = '2026-09-29T06:00:00.000Z';
 const later = '2026-09-29T06:00:01.000Z';
 const base = { written_at: at, session_id: 's1', prompt_id: 'p1', mode: 'auto', prompt: 'PRIVATE_PROMPT', api_key: 'sk-private-value' };
-const row = (component: DebugRecord['component'], rec: Record<string, unknown>, time = at): DebugRecord => ({ at: time, component, rec });
+const row = (component: ModRecord['component'], rec: Record<string, unknown>, time = at): ModRecord => ({ at: time, component, rec });
 
 describe('operations display model', () => {
   it('identifies a request effort mismatch without inventing a response model mismatch', () => {
@@ -14,26 +14,26 @@ describe('operations display model', () => {
       { ...base, host: 'codex', prompt_id: 'model', phase: 'codex_route_applied', request_kind: 'root_response', selected_model: 'gpt-6-luna', submitted_model: 'gpt-6.1-sol', selected_effort: 'low', submitted_effort: 'low', applied: false },
       { ...base, host: 'codex', prompt_id: 'legacy', phase: 'codex_route_applied', selected_model: 'gpt-6.1-sol', applied: false },
     ];
-    const view = buildOperations(rows, [], new Date(later), { trace: true, debug: false });
+    const view = buildOperations(rows, [], new Date(later), { trace: true });
     expect(view.feed.find(s => s.issue === 'request_effort')).toMatchObject({ state: 'error', summary: '선택 effort와 API 전송 effort 불일치 · 선택 high · 전송 xhigh', model: { status: 'unobserved', observed: null } });
     expect(view.feed.some(s => s.issue === 'request_model')).toBe(true);
     expect(view.feed.some(s => s.issue === 'request_unconfirmed')).toBe(true);
     expect(view.attention).toBe(2);
   });
   it('keeps legacy request discrepancies unconfirmed when the request purpose was not recorded', () => {
-    const view = buildOperations([{ ...base, host: 'codex', phase: 'codex_route_applied', selected_model: 'gpt-6.1-sol', submitted_model: 'gpt-6.1-sol', selected_effort: 'high', submitted_effort: 'xhigh', applied: false }], [], new Date(later), { trace: true, debug: false });
+    const view = buildOperations([{ ...base, host: 'codex', phase: 'codex_route_applied', selected_model: 'gpt-6.1-sol', submitted_model: 'gpt-6.1-sol', selected_effort: 'high', submitted_effort: 'xhigh', applied: false }], [], new Date(later), { trace: true });
     expect(view.feed[0]).toMatchObject({ state: 'unconfirmed', issue: 'request_unconfirmed', summary: 'API 설정 관측 · 요청 종류 미확인 · gpt-6.1-sol · gpt-6.1-sol · xhigh' });
     expect(view.attention).toBe(0);
   });
   it('shows a proposed effort downgrade held by the cache separately from the final request setting', () => {
-    const view = buildOperations([], [row('router', { event: 'root', turn: 'warm', from: { model: 'claude-opus-5-5', effort: 'xhigh' }, proposed_patch: { effort: 'low' }, patch: {}, held_for_cache: 'low', reasons: { model: 'same_value', effort: 'cache_preserved' } })], new Date(later), { trace: false, debug: true });
+    const view = buildOperations([], [row('router', { event: 'root', turn: 'warm', from: { model: 'claude-opus-5-5', effort: 'xhigh' }, proposed_patch: { effort: 'low' }, patch: {}, held_for_cache: 'low', reasons: { model: 'same_value', effort: 'cache_preserved' } })], new Date(later), { trace: true });
     expect(view.feed[0]?.details.join(' ')).toContain('캐시 재사용을 위해 effort 유지 · Jev 제안 low · 요청 설정 xhigh');
     expect(view.feed[0]?.model?.forwardedEffort).not.toBe('low');
   });
   it('keeps host dispatch effort, wire request effort and missing response effort as different facts', () => {
     const report = buildOperations([
       { phase: 'codex_router_response', host: 'codex', session_id: 'codex', prompt_id: 'p1', written_at: at, selected_model: 'gpt-6.1-sol', observed_model: 'gpt-6.1-sol', selected_effort: 'low', submitted_effort: 'low', observed_effort: 'unknown' },
-    ], [row('router', { event: 'root_result', turn: 't1', requested: 'claude-opus-5-5', requested_effort: 'high', observed: 'claude-opus-5-5', observed_effort: 'unknown', confirmation: 'confirmed' })], new Date(at), { trace: true, debug: true });
+    ], [row('router', { event: 'root_result', turn: 't1', requested: 'claude-opus-5-5', requested_effort: 'high', observed: 'claude-opus-5-5', observed_effort: 'unknown', confirmation: 'confirmed' })], new Date(at), { trace: true });
     const models = report.runs.flatMap(r => r.steps).filter(s => s.model).map(s => s.model!);
     expect(models).toContainEqual(expect.objectContaining({ effortSource: 'host_hook', forwardedEffort: 'high', observedEffort: null }));
     expect(models).toContainEqual(expect.objectContaining({ effortSource: 'provider_request', forwardedEffort: 'low', observedEffort: null }));
@@ -41,13 +41,13 @@ describe('operations display model', () => {
   it('connects background launches, questions and terminals to the original job without treating launch as completion', () => {
     const launch = { ...base, phase: 'background_launch', tool_use_id: 'd', status: 'running' };
     const question = { ...base, phase: 'background_conversation', prompt_id: 'q', execution_prompt_id: 'p1', active: 1 };
-    const active = buildOperations([launch, question], [], new Date(later), { trace: true, debug: false });
+    const active = buildOperations([launch, question], [], new Date(later), { trace: true });
     expect(active.runs).toHaveLength(1); expect(active.runs[0]?.state).toBe('active');
     expect(active.feed.some(s => s.summary.includes('질문 가능'))).toBe(true);
-    const stale = buildOperations([launch], [], new Date(Date.parse(at) + 31_000), { trace: true, debug: false });
+    const stale = buildOperations([launch], [], new Date(Date.parse(at) + 31_000), { trace: true });
     expect(stale.feed[0]?.summary).toBe('시작 기록 있음 · 종료 결과 미관측'); expect(stale.runs[0]?.state).toBe('unconfirmed');
     const terminal = { ...base, written_at: later, phase: 'background_terminal', tool_use_id: 'd', prompt_id: 'q', execution_prompt_id: 'p1', status: 'completed' };
-    const done = buildOperations([launch, question, terminal], [], new Date(later), { trace: true, debug: false });
+    const done = buildOperations([launch, question, terminal], [], new Date(later), { trace: true });
     expect(done.runs).toHaveLength(1); expect(done.runs[0]?.state).toBe('done');
     expect(done.feed.some(s => s.summary.includes('별도 검사'))).toBe(true);
   });
@@ -56,21 +56,21 @@ describe('operations display model', () => {
       row('router', { event: 'root_result', turn: 'variant', requested: 'claude-opus-5-5[1m]', observed: 'claude-opus-5-5[1m]', confirmation: 'confirmed' }),
       row('router', { event: 'spawn_result', tool_use_id: 'dated', requested: 'claude-haiku-4-5', observed: 'claude-haiku-4-5-20251001', confirmation: 'confirmed' }),
       row('router', { event: 'root_result', turn: 'mismatch', requested: 'claude-opus-5-5[1m]', observed: 'claude-opus-5-5', confirmation: 'mismatch' }),
-    ], new Date(later), { trace: false, debug: true });
+    ], new Date(later), { trace: true });
     expect(view.feed.find(s => s.model?.selected === 'claude-haiku-4-5')?.model?.status).toBe('confirmed');
     expect(view.feed.filter(s => s.model?.selected === 'claude-opus-5-5[1m]').map(s => s.model?.status).sort()).toEqual(['confirmed', 'mismatch']);
   });
   it('reports a failed Jev Router assessment separately from preserving native execution', () => {
-    const view = buildOperations([{ ...base, host: 'codex', phase: 'codex_router_result', attempted: true, ok: false, reason: 'timeout', http: { code: 'timeout', duration_ms: 500 } }], [], new Date(later), { trace: true, debug: false });
+    const view = buildOperations([{ ...base, host: 'codex', phase: 'codex_router_result', attempted: true, ok: false, reason: 'timeout', http: { code: 'timeout', duration_ms: 500 } }], [], new Date(later), { trace: true });
     expect(view.runs[0]?.state).toBe('attention');
     expect(view.feed.find(s => s.lane === 'jev')?.state).toBe('error');
-    const claude = buildOperations([], [row('router', { event: 'root', turn: 'failed', sent: true, assessment: 'timeout' })], new Date(later), { trace: false, debug: true });
+    const claude = buildOperations([], [row('router', { event: 'root', turn: 'failed', sent: true, assessment: 'timeout' })], new Date(later), { trace: true });
     expect(claude.runs[0]?.state).toBe('attention');
-    const gate = buildOperations([{ ...base, phase: 'admission_result', attempted: true, http: { code: 'deadline', duration_ms: 500 }, decision: { shape: 'direct' } }], [], new Date(later), { trace: true, debug: false });
+    const gate = buildOperations([{ ...base, phase: 'admission_result', attempted: true, http: { code: 'deadline', duration_ms: 500 }, decision: { shape: 'direct' } }], [], new Date(later), { trace: true });
     expect(gate.feed.find(s => s.lane === 'jev')?.state).toBe('error');
   });
   it('does not present a direct turn ending or a planner dispatch as observed worker execution', () => {
-    const view = buildOperations([{ ...base, phase: 'stop', outcome: 'completed' }, { ...base, phase: 'dispatch', role: 'planner' }], [], new Date(later), { trace: true, debug: false, host: 'codex' });
+    const view = buildOperations([{ ...base, phase: 'stop', outcome: 'completed' }, { ...base, phase: 'dispatch', role: 'planner' }], [], new Date(later), { trace: true, host: 'codex' });
     expect(view.features.find(f => f.id === 'workers')).toMatchObject({ count: 0, state: 'waiting' });
     expect(view.features.find(f => f.id === 'planning')).toMatchObject({ count: 1, state: 'observed' });
     expect(view.feed.some(s => s.title === '턴 종료' && s.lifecycle === true)).toBe(true);
@@ -80,7 +80,7 @@ describe('operations display model', () => {
       { ...base, phase: 'admission_result', attempted: true, decision: { shape: 'direct' } },
       { ...base, prompt_id: 'p2', request_id: 'second', phase: 'admission_result', attempted: false, decision: { shape: 'orchestrated' } },
       { ...base, prompt_id: 'p3', request_id: 'third', phase: 'admission_result', decision: { shape: 'abstain' } },
-    ], [], new Date(later), { trace: true, debug: false });
+    ], [], new Date(later), { trace: true });
     expect(view.feed.map(s => s.executionPath).filter(Boolean).sort()).toEqual(['direct', 'orchestrated']);
   });
   it('shows every installed runtime feature and keeps Jev, policy and host facts separate', () => {
@@ -98,19 +98,17 @@ describe('operations display model', () => {
       { written_at: later, phase: 'evidence_jev_result', request_id: 'e1:1', parent_request_id: 'e1', attempted: true, http: { status: 200 }, jev: { usage: { input_tokens: 20, output_tokens: 3 } } },
       { written_at: later, phase: 'evidence_result', request_id: 'e1', status: 'ok', backend: 'jev', items: 4, remote_calls: 1, cache_hits: 0 },
     ];
-    const debug = [
+    const mods = [
       row('router', { event: 'request', turn: 'r1', sent: true }),
       row('router', { event: 'root', turn: 'r1', sent: true, patch: { effort: 'low' }, applied: { effort: 'low' } }, later),
       row('compact', { event: 'compact', run_id: 'c1', stage: 'started', mode: 'active' }),
       row('compact', { event: 'compact', run_id: 'c1', applied: true, digestChars: 100 }, later),
-      row('output', { event: 'output', run_id: 'o1', stage: 'started', parser: 'vitest' }),
-      row('output', { event: 'output', run_id: 'o1', applied: true, runs: 1 }, later),
     ];
-    const view = buildOperations(records, debug, new Date('2026-09-29T06:00:02.000Z'), { trace: true, debug: true });
-    expect(view.features.map((f) => f.id)).toEqual(['admission', 'allocation', 'planning', 'workers', 'guard', 'router', 'compact', 'output', 'evidence']);
+    const view = buildOperations(records, mods, new Date('2026-09-29T06:00:02.000Z'), { trace: true });
+    expect(view.features.map((f) => f.id)).toEqual(['admission', 'allocation', 'planning', 'workers', 'guard', 'router', 'compact', 'evidence']);
     expect(view.features.every((f) => f.state === 'observed')).toBe(true);
     expect(view.requests).toBe(4);
-    expect(view.runs.map((r) => r.source).sort()).toEqual(['compact', 'evidence', 'gate', 'output', 'router']);
+    expect(view.runs.map((r) => r.source).sort()).toEqual(['compact', 'evidence', 'gate', 'router']);
     const gate = view.runs.find((r) => r.source === 'gate')!;
     expect(gate.steps.find((s) => s.feature === 'planning')?.graph).toEqual([
       { id: 't1', dependsOn: [], checks: 1 }, { id: 't2', dependsOn: ['t1'], checks: 2 },
@@ -120,35 +118,19 @@ describe('operations display model', () => {
     expect(JSON.stringify(view)).not.toContain('sk-private-value');
   });
 
-  it('loads withdrawn Lean records as history: still counted as Jev calls, no Lean feature or step', () => {
-    const records = [
-      { ...base, phase: 'admission_intent', request_id: 'a1' },
-      { ...base, phase: 'admission_result', request_id: 'a1', attempted: true, decision: { shape: 'direct' } },
-      { ...base, phase: 'lean_intent', request_id: 'l1' },
-      { ...base, phase: 'lean_result', request_id: 'l1', attempted: true, decision: { action: 'select', retained: 3, omitted: 2 } },
-      { ...base, phase: 'lean_dispatch', applied: true, retained_groups: 3, omitted_groups: 2 },
-      { ...base, phase: 'lean_post', status: 'completed', released: true },
-    ];
-    const view = buildOperations(records, [], new Date('2026-09-29T06:00:02.000Z'), { trace: true, debug: false });
-    expect(view.requests).toBe(2);
-    expect(view.features.map((f) => f.id)).not.toContain('lean');
-    expect(view.runs.flatMap((r) => r.steps.map((s) => s.title)).filter((t) => /lean/i.test(t))).toEqual([]);
-    expect(view.runs.find((r) => r.source === 'gate')?.steps.some((s) => s.feature === 'admission')).toBe(true);
-  });
-
   it('marks a sent request without a receipt as unconfirmed, never as zero usage', () => {
     const records = [{ ...base, phase: 'admission_intent', request_id: 'lost' }];
-    const view = buildOperations(records, [], new Date('2026-09-29T06:01:00.000Z'), { trace: true, debug: false });
+    const view = buildOperations(records, [], new Date('2026-09-29T06:01:00.000Z'), { trace: true });
     expect(view.requests).toBe(1);
     expect(view.runs[0]?.state).toBe('unconfirmed');
     expect(view.runs[0]?.steps[0]?.state).toBe('unconfirmed');
-    expect(view.features.find((f) => f.id === 'router')?.state).toBe('unavailable');
+    expect(view.features.find((f) => f.id === 'router')?.state).toBe('waiting');
     expect(JSON.stringify(view)).not.toContain('입력 0');
   });
 
   it('counts an old attempted result when the intent record is missing', () => {
     const records = [{ ...base, phase: 'admission_result', request_id: 'old', attempted: true, decision: { shape: 'direct' } }];
-    const view = buildOperations(records, [], new Date(at), { trace: true, debug: true });
+    const view = buildOperations(records, [], new Date(at), { trace: true });
     expect(view.requests).toBe(1);
   });
 
@@ -156,14 +138,14 @@ describe('operations display model', () => {
     const view = buildOperations([
       { ...base, phase: 'admission_intent', request_id: 'pending' },
       { ...base, phase: 'post', requested_model: 'opus', resolved_model: 'claude-sonnet-5' },
-    ], [], new Date(later), { trace: true, debug: false });
+    ], [], new Date(later), { trace: true });
     expect(view.runs[0]?.state).toBe('attention');
     expect(view.feed.find(s => s.model)?.state).toBe('error');
   });
 
   it('uses root_result applied.model as the selected model and keeps missing response evidence unknown', () => {
-    const debug = [row('router', { event: 'root_result', turn: 'r', applied: { model: 'sonnet', effort: 'low' }, observed: 'claude-sonnet-5' })];
-    const view = buildOperations([], debug, new Date(later), { trace: false, debug: true });
+    const mods = [row('router', { event: 'root_result', turn: 'r', applied: { model: 'sonnet', effort: 'low' }, observed: 'claude-sonnet-5' })];
+    const view = buildOperations([], mods, new Date(later), { trace: true });
     expect(view.feed[0]?.model).toMatchObject({ selected: 'sonnet', observed: 'claude-sonnet-5', status: 'confirmed', selectedEffort: 'low' });
   });
 
@@ -172,7 +154,7 @@ describe('operations display model', () => {
       { ...base, host: 'codex', phase: 'admission_result', request_id: 'a', attempted: true, decision: { shape: 'direct' } },
       ...Array.from({ length: 200 }, (_, i) => ({ ...base, written_at: later, host: 'codex', phase, event: 'PostToolUse', allow: true, tool_use_id: `c${i}`, invocation_id: `i${i}` })),
     ];
-    const view = buildOperations(records, [], new Date(later), { trace: true, debug: false });
+    const view = buildOperations(records, [], new Date(later), { trace: true });
     expect(view.runs).toHaveLength(1);
     expect(view.runs[0]?.steps).toHaveLength(202);
     expect(view.feed.some(s => s.lane === 'jev')).toBe(true);
@@ -186,7 +168,7 @@ describe('operations display model', () => {
         decision: { shape: 'orchestrated' }, policy_basis: 'bounded_tool_worker', estimate: { saving_tokens: -245000, cost_support: 0 } },
       { ...base, written_at: later, phase: 'guard', tool_name: 'Bash', allow: false, denials: 1 },
     ];
-    const view = buildOperations(records, [], new Date(later), { trace: true, debug: false });
+    const view = buildOperations(records, [], new Date(later), { trace: true });
     const steps = view.runs[0]!.steps;
     const response = steps.find((s) => s.lane === 'jev' && s.durationMs === 247)!;
     expect(response.judgements?.[0]).toMatchObject({ question: 'need_worker', value: '참 확률 81%' });
@@ -205,13 +187,13 @@ it.each(['claude', 'codex'])('renders the final Gate B selection and keeps real 
   const selected = host === 'claude' ? 'claude-sonnet-5-5' : 'gpt-6.1-sol';
   const pre = { ...base, host, phase: 'pre_result', tool_use_id: 't', attempted: true, called_tier: 'standard', decision: { tier: 'deep', model: 'opus', action: 'patch' }, allocation: { selected_model: selected, effort_edit: { kind: 'set', value: 'high' } } };
   const result = { ...base, host, phase: 'post', tool_use_id: 't', requested_model: 'opus', resolved_model: selected };
-  const view = buildOperations([pre, result], [], new Date(at), { trace: true, debug: false });
+  const view = buildOperations([pre, result], [], new Date(at), { trace: true });
   const steps = view.runs.flatMap(r => r.steps);
   expect(steps.some(s => s.model?.status === 'mismatch')).toBe(false);
   expect(steps.find(s => s.lane === 'policy')?.summary).toContain(selected);
   expect(steps.find(s => s.model?.status === 'confirmed')?.model).toMatchObject({ selected, observed: selected });
   expect(steps.find(s => s.model?.status === 'unobserved')?.model).toMatchObject({ selected, observed: null, selectedEffort: 'high' });
-  const mismatch = buildOperations([pre, { ...result, resolved_model: 'claude-opus-5-5' }], [], new Date(at), { trace: true, debug: false });
+  const mismatch = buildOperations([pre, { ...result, resolved_model: 'claude-opus-5-5' }], [], new Date(at), { trace: true });
   expect(mismatch.feed.some(s => s.model?.status === 'mismatch')).toBe(true);
 });
 
@@ -219,7 +201,7 @@ it.each(['claude', 'codex'])('renders the final Gate B selection and keeps real 
 it('links Router keep/change reasons to the exact root response and preserves cache-held effort', () => {
   const decision = { event: 'root', session_id: 's', turn: 't', from: { model: 'claude-opus-5-5', effort: 'xhigh' }, patch: {}, held_for_cache: 'high', reasons: { model: 'same_value', effort: 'cache_preserved' } };
   const response = { event: 'root_result', session_id: 's', turn: 't', requested: 'claude-opus-5-5', requested_effort: 'xhigh', observed: 'claude-opus-5-5', confirmation: 'confirmed', observed_effort: 'unknown' };
-  const view = buildOperations([], [row('router', decision), { ...row('router', response), at: later }, { ...row('router', { ...response, session_id: 'other' }), at: later }], new Date(later), { trace: true, debug: true });
+  const view = buildOperations([], [row('router', decision), { ...row('router', response), at: later }, { ...row('router', { ...response, session_id: 'other' }), at: later }], new Date(later), { trace: true });
   const responses = view.runs.flatMap(r => r.steps).filter(s => s.model);
   expect(responses.filter(s => s.routing)).toHaveLength(1);
   expect(responses.find(s => s.routing)?.routing).toEqual({ scope: 'root', baseline: 'claude-opus-5-5', modelReason: 'same_value', effortReason: 'cache_preserved' });
@@ -230,7 +212,7 @@ it('identifies Gate-owned spawn and child decisions using recorded tool and agen
   const gate = { ...base, phase: 'pre_result', tool_use_id: 'tool', allocation: { selected_model: 'claude-sonnet-5-5', effort_edit: { kind: 'set', value: 'high' } } };
   const spawn = { event: 'spawn_result', session_id: base.session_id, tool_use_id: 'tool', agent_id: 'child', requested: 'claude-sonnet-5-5', observed: 'claude-sonnet-5-5' };
   const response = { event: 'child_result', session_id: base.session_id, agent_id: 'child', turn: 'ct', requested: 'claude-sonnet-5-5', observed: 'claude-sonnet-5-5' };
-  const view = buildOperations([gate], [row('router', spawn), { ...row('router', response), at: later }], new Date(later), { trace: true, debug: true });
+  const view = buildOperations([gate], [row('router', spawn), { ...row('router', response), at: later }], new Date(later), { trace: true });
   const steps = view.runs.flatMap(r => r.steps);
   expect(steps.find(s => s.title.endsWith('spawn_result'))?.routing).toMatchObject({ scope: 'owned', modelReason: 'gate_allocated' });
   expect(steps.find(s => s.title.endsWith('child_result'))?.routing).toMatchObject({ scope: 'child', modelReason: 'gate_allocated' });
@@ -240,7 +222,7 @@ it('identifies Gate-owned spawn and child decisions using recorded tool and agen
 it('joins Codex Router reasons to matching provider responses without inferring reported effort', () => {
   const decision = { ...base, host: 'codex', phase: 'codex_router_result', baseline_model: 'gpt-6.1-sol', reasons: { model: 'same_value', effort: 'cache_preserved' } };
   const response = { ...base, host: 'codex', phase: 'codex_router_response', written_at: later, selected_model: 'gpt-6.1-sol', observed_model: 'gpt-6.1-sol', selected_effort: 'high', observed_effort: 'unknown' };
-  const view = buildOperations([decision, response, { ...response, session_id: 'other' }], [], new Date(later), { trace: true, debug: false });
+  const view = buildOperations([decision, response, { ...response, session_id: 'other' }], [], new Date(later), { trace: true });
   const responses = view.runs.flatMap(r => r.steps).filter(s => s.model?.observed);
   expect(responses.filter(s => s.routing?.modelReason === 'same_value')).toHaveLength(1);
   expect(responses.find(s => s.routing?.modelReason)?.model?.observedEffort).toBeNull();
@@ -250,25 +232,25 @@ it('shows a rejected Codex model proposal separately from the final model and on
   const decision = { ...base, host: 'codex', phase: 'codex_router_result', baseline_model: 'gpt-6.1-sol',
     reasons: { model: 'low_confidence', effort: 'selected' }, answers: { model: { choice: 'gpt-5.6-terra', probabilities: { 'gpt-5.6-terra': .55 } } }, selection: { probability: .55, threshold: .6 } };
   const response = { ...base, host: 'codex', phase: 'codex_router_response', written_at: later, selected_model: 'gpt-6.1-sol', observed_model: 'gpt-6.1-sol' };
-  const steps = buildOperations([decision, response, { ...response, session_id: 'other' }], [], new Date(later), { trace: true, debug: false }).runs.flatMap(r => r.steps);
+  const steps = buildOperations([decision, response, { ...response, session_id: 'other' }], [], new Date(later), { trace: true }).runs.flatMap(r => r.steps);
   const matched = steps.find(s => s.model?.observed && s.routing?.proposedModel);
   expect(matched?.routing).toMatchObject({ baseline: 'gpt-6.1-sol', proposedModel: 'gpt-5.6-terra', probability: .55, threshold: .6 });
   expect(matched?.model?.selected).toBe('gpt-6.1-sol');
   expect(steps.filter(s => s.model?.observed && s.routing?.proposedModel)).toHaveLength(1);
-  const invalid = buildOperations([{ ...decision, selection: { probability: 2, threshold: -1 }, answers: { model: { choice: '__keep__' } } }], [], new Date(later), { trace: true, debug: false }).runs.flatMap(r => r.steps);
+  const invalid = buildOperations([{ ...decision, selection: { probability: 2, threshold: -1 }, answers: { model: { choice: '__keep__' } } }], [], new Date(later), { trace: true }).runs.flatMap(r => r.steps);
   expect(invalid[0]?.routing?.proposedModel).toBeUndefined();
 });
 
 
 it('treats prepared as preparation metadata, not a completed host response or a new Jev call', () => {
   const prep = { event: 'prepared', session_id: 's', turn: 't', index: 0, scope: 'root', routed: false, preparation_ms: 2 };
-  const view = buildOperations([], [row('router', prep)], new Date(at), { trace: true, debug: true });
+  const view = buildOperations([], [row('router', prep)], new Date(at), { trace: true });
   expect(view.requests).toBe(0);
   expect(view.features.find(f => f.id === 'router')?.count).toBe(0);
   expect(view.runs[0]?.steps[0]).toMatchObject({ lifecycle: true, state: 'unconfirmed', title: 'Router · 요청 전달 준비' });
   expect(view.runs[0]?.steps[0]?.summary).toContain('실행 응답 확인은 별도');
   const response = { event: 'root_result', session_id: 's', turn: 't', index: 0, requested: 'claude-opus-5-5', observed: 'claude-opus-5-5' };
-  const done = buildOperations([], [row('router', prep), { ...row('router', response), at: later }], new Date(later), { trace: true, debug: true });
+  const done = buildOperations([], [row('router', prep), { ...row('router', response), at: later }], new Date(later), { trace: true });
   expect(done.runs[0]?.steps.find(s => s.lifecycle)?.state).toBe('done');
 });
 
@@ -276,9 +258,9 @@ it('treats prepared as preparation metadata, not a completed host response or a 
 it('closes historical preparations without an index but never closes a newer request with an earlier response', () => {
   const prep = { event: 'prepared', session_id: 's', turn: 't', scope: 'root' };
   const response = { event: 'root_result', session_id: 's', turn: 't', index: 0, requested: 'opus', observed: 'claude-opus-5-5' };
-  const view = buildOperations([], [row('router', prep), { ...row('router', response), at: later }], new Date(later), { trace: true, debug: true });
+  const view = buildOperations([], [row('router', prep), { ...row('router', response), at: later }], new Date(later), { trace: true });
   expect(view.runs[0]?.steps.find(s => s.lifecycle)?.state).toBe('done');
-  const pending = buildOperations([], [row('router', response), { ...row('router', { ...prep, index: 1 }), at: later }], new Date(later), { trace: true, debug: true });
+  const pending = buildOperations([], [row('router', response), { ...row('router', { ...prep, index: 1 }), at: later }], new Date(later), { trace: true });
   expect(pending.runs[0]?.steps.find(s => s.lifecycle)?.state).toBe('unconfirmed');
 });
 
@@ -289,10 +271,10 @@ it('does not close root or sibling preparations with another agent response in t
     row('router', { ...common, event: 'prepared', scope: 'child', agent_id: 'waiting' }),
   ];
   const response = row('router', { ...common, event: 'child_result', agent_id: 'finished', requested: 'sonnet', observed: 'claude-sonnet-5-5' }, later);
-  const view = buildOperations([], [...pending, response], new Date(later), { trace: true, debug: true });
+  const view = buildOperations([], [...pending, response], new Date(later), { trace: true });
   expect(view.runs.flatMap(r => r.steps).filter(s => s.lifecycle).map(s => s.state)).toEqual(['unconfirmed', 'unconfirmed']);
   const matching = row('router', { ...common, event: 'child_result', agent_id: 'waiting', requested: 'sonnet', observed: 'claude-sonnet-5-5' }, later);
-  const settled = buildOperations([], [...pending, response, matching], new Date(later), { trace: true, debug: true });
+  const settled = buildOperations([], [...pending, response, matching], new Date(later), { trace: true });
   expect(settled.runs.flatMap(r => r.steps).filter(s => s.lifecycle).map(s => s.state).sort()).toEqual(['done', 'unconfirmed']);
 });
 
@@ -302,8 +284,8 @@ it('reports actual Compact Jev calls in both hosts separately from local packing
     { phase: 'codex_compact', host: 'codex', session_id: 'c', run_id: 'r', stage: 'selected', applied: false, jev_sent: true, jev_ms: 310, candidates: 16, available: 20, dependencies: 1, selection: 'current_dependencies', written_at: at },
     { phase: 'codex_compact', host: 'codex', session_id: 'c', run_id: 'r', stage: 'installed', applied: true, written_at: later },
   ];
-  const debug = [row('compact', { event: 'compact', session_id: 's', run_id: 'r', stage: 'jev', jev_sent: true, jev_ms: 220, candidates: 4, available: 4, dependencies: 1, selection: 'current_dependencies' }), row('compact', { event: 'compact', session_id: 's', run_id: 'r', applied: true }, later)];
-  const view = buildOperations(records, debug, new Date(later), { trace: true, debug: true });
+  const mods = [row('compact', { event: 'compact', session_id: 's', run_id: 'r', stage: 'jev', jev_sent: true, jev_ms: 220, candidates: 4, available: 4, dependencies: 1, selection: 'current_dependencies' }), row('compact', { event: 'compact', session_id: 's', run_id: 'r', applied: true }, later)];
+  const view = buildOperations(records, mods, new Date(later), { trace: true });
   expect(view.requests).toBe(2); expect(view.latency.measured).toBe(2);
   expect(view.feed.filter(s => s.lane === 'jev')).toHaveLength(2);
   expect(view.feed.some(s => s.summary.includes('Jev 작업 의존 근거 선택'))).toBe(true);
@@ -312,7 +294,7 @@ it('reports actual Compact Jev calls in both hosts separately from local packing
 
 
 it('shows a forwarded native Compact request without a Router mismatch or claimed digest installation', () => {
-  const view = buildOperations([{ phase: 'codex_compact', host: 'codex', session_id: 'c', run_id: 'n', stage: 'native_submitted', applied: false, summarizer_request: true, submitted_model: 'gpt-6.1-sol', submitted_effort: 'xhigh', written_at: at }], [], new Date(later), { trace: true, debug: false, host: 'codex' });
+  const view = buildOperations([{ phase: 'codex_compact', host: 'codex', session_id: 'c', run_id: 'n', stage: 'native_submitted', applied: false, summarizer_request: true, submitted_model: 'gpt-6.1-sol', submitted_effort: 'xhigh', written_at: at }], [], new Date(later), { trace: true, host: 'codex' });
   expect(view.feed).toHaveLength(1);
   expect(view.feed[0]).toMatchObject({ feature: 'compact', lane: 'host', state: 'unconfirmed', summary: expect.stringContaining('호스트 요약 모델') });
   expect(view.feed[0]?.issue).toBeUndefined();
@@ -324,7 +306,7 @@ describe('actual model request lifecycle', () => {
   it('keeps a slow request active and matches response by session, turn, agent and loop index', () => {
     const request={session_id:'s',turn:'t',index:2,event:'model_request',requested:'claude-opus-5-5'};
     const now=new Date('2026-09-29T06:02:00.000Z');
-    const build=(extra:DebugRecord[]=[])=>buildOperations([], [row('router',request),...extra],now,{trace:false,debug:true});
+    const build=(extra:ModRecord[]=[])=>buildOperations([], [row('router',request),...extra],now,{trace:true});
     expect(build().feed.find(s=>s.lifecycle)).toMatchObject({state:'active',elapsedMs:120000});
     expect(build([row('router',{...request,index:1,event:'root_result'},later)]).feed.find(s=>s.title==='모델 · 응답 대기')?.state).toBe('active');
     expect(build([row('router',{...request,event:'root_result',observed:'claude-opus-5-5'},later)]).feed.find(s=>s.title==='모델 · 응답 대기')?.state).toBe('done');
@@ -338,8 +320,8 @@ describe('unanswered model requests (#212)', () => {
   const sent = '2026-10-08T00:00:00.000Z', minute = (n: number) => new Date(Date.parse(sent) + n * 60_000).toISOString();
   const child = { session_id: 's', turn: 'child-turn', agent_id: 'worker', scope: 'child', index: 3 };
   const request = row('router', { ...child, event: 'model_request', requested: 'claude-sonnet-5-5' }, sent);
-  const claude = (extra: DebugRecord[], now: string) => {
-    const view = buildOperations([], [request, ...extra], new Date(now), { trace: false, debug: true });
+  const claude = (extra: ModRecord[], now: string) => {
+    const view = buildOperations([], [request, ...extra], new Date(now), { trace: true });
     return { view, step: view.runs.flatMap(r => r.steps).find(s => s.title === '모델 · 응답 대기')! };
   };
   const others = (rec: Record<string, unknown>, at: string) => [{ ...rec, agent_id: 'sibling' }, { ...rec, agent_id: null, scope: 'root' }, { ...rec, session_id: 'other' }].map(r => row('router', r, at));
@@ -370,7 +352,7 @@ describe('unanswered model requests (#212)', () => {
     expect(end({ event: 'session_end', session_id: 's' })).toMatchObject({ state: 'unconfirmed' });
     expect(end({ ...child, event: 'turn_end', reason: 'aborted' }, '2026-10-07T23:59:00.000Z').state).toBe('active');
     const root = { session_id: 's', turn: 'root-turn', agent_id: null, scope: 'root', index: 0 };
-    const rootView = buildOperations([], [row('router', { ...root, event: 'model_request' }, sent), row('router', { ...root, event: 'turn_end', reason: 'aborted' }, minute(1)), request], new Date(minute(2)), { trace: false, debug: true });
+    const rootView = buildOperations([], [row('router', { ...root, event: 'model_request' }, sent), row('router', { ...root, event: 'turn_end', reason: 'aborted' }, minute(1)), request], new Date(minute(2)), { trace: true });
     expect(rootView.runs.flatMap(r => r.steps).filter(s => s.title === '모델 · 응답 대기').map(s => s.state).sort()).toEqual(['active', 'interrupted']);
     expect(rootView.feed.some(s => s.title.includes('turn_end'))).toBe(false);
     const answered = claude([row('router', { ...child, event: 'turn_end', reason: 'aborted' }, minute(1)), row('router', { ...child, event: 'model_failure' }, minute(1))], minute(2));
@@ -381,7 +363,7 @@ describe('unanswered model requests (#212)', () => {
     const req = { ...base, written_at: sent, host: 'codex', phase: 'codex_model_request', session_id: 'cx', prompt_id: 'turn-1', request_id: 'm1', submitted_model: 'gpt-6.1-sol' };
     const event = (name: string, extra: Record<string, unknown> = {}, at = minute(1)) => ({ host: 'codex', phase: 'codex_event', event: name, session_id: 'cx', prompt_id: 'turn-1', written_at: at, ...extra });
     const build = (extra: Record<string, unknown>[], now: string) => {
-      const view = buildOperations([req, ...extra], [], new Date(now), { trace: true, debug: false, host: 'codex' });
+      const view = buildOperations([req, ...extra], [], new Date(now), { trace: true, host: 'codex' });
       return { view, step: view.runs.flatMap(r => r.steps).find(s => s.title === '모델 · 응답 대기')! };
     };
     expect(build([], '2026-10-12T03:13:00.000Z')).toMatchObject({ view: { active: 0 }, step: { state: 'unconfirmed', summary: '모델 응답 기록 없음 · 현재 활동 미관측' } });
@@ -397,7 +379,7 @@ describe('unanswered model requests (#212)', () => {
 
   it('keeps past responses and their usage while an orphaned request is no longer running', () => {
     const usage = { input: 1200, output: 340, cache_read: 9000, cache_creation: 0 };
-    const view = buildOperations([], [row('router', { ...child, index: 2, event: 'model_request' }, minute(-1)), row('router', { ...child, index: 2, event: 'child_result', observed: 'claude-sonnet-5-5', usage }, minute(-1)), request, row('router', { ...child, event: 'request', sent: true }, minute(-2))], new Date('2026-10-12T03:13:00.000Z'), { trace: false, debug: true });
+    const view = buildOperations([], [row('router', { ...child, index: 2, event: 'model_request' }, minute(-1)), row('router', { ...child, index: 2, event: 'child_result', observed: 'claude-sonnet-5-5', usage }, minute(-1)), request, row('router', { ...child, event: 'request', sent: true }, minute(-2))], new Date('2026-10-12T03:13:00.000Z'), { trace: true });
     expect(view.active).toBe(0); expect(view.requests).toBe(1);
     expect(view.runs.flatMap(r => r.steps).find(s => s.title === 'Router · child_result')?.details).toContain('입력 1,200 · 출력 340 · cache read 9,000 · cache write 0');
     expect(view.runs.flatMap(r => r.steps).filter(s => s.title === '모델 · 응답 대기').map(s => s.state).sort()).toEqual(['done', 'unconfirmed']);
@@ -408,9 +390,9 @@ describe('unanswered model requests (#212)', () => {
 it('shows Codex model requests in flight even when Router preserves the baseline', () => {
   const req={...base,host:'codex',phase:'codex_model_request',request_id:'model-1',submitted_model:'gpt-6.1-sol'};
   const now=new Date('2026-09-29T06:02:00.000Z');
-  const view=buildOperations([req],[],now,{trace:true,debug:false});
+  const view=buildOperations([req],[],now,{trace:true});
   expect(view.feed[0]).toMatchObject({state:'active',lifecycle:true,elapsedMs:120000,title:'모델 · 응답 대기'});
-  const ended=buildOperations([req,{...base,written_at:later,host:'codex',phase:'codex_model_failure',request_id:'model-1'}],[],now,{trace:true,debug:false});
+  const ended=buildOperations([req,{...base,written_at:later,host:'codex',phase:'codex_model_failure',request_id:'model-1'}],[],now,{trace:true});
   expect(ended.feed.find(s=>s.title==='모델 · 응답 대기')?.state).toBe('done');
   expect(ended.feed.find(s=>s.title==='모델 · 요청 실패')?.state).toBe('error');
 });
@@ -418,7 +400,7 @@ it('shows Codex model requests in flight even when Router preserves the baseline
 it('does not terminate a Codex request from an earlier result or another session or prompt', () => {
   const req={...base,written_at:later,host:'codex',phase:'codex_model_request',request_id:'model-1'};
   const failure={...req,written_at:'2026-09-29T06:00:02.000Z',phase:'codex_model_failure'};
-  const build=(record:Record<string,unknown>)=>buildOperations([req,record],[],new Date('2026-09-29T06:02:00.000Z'),{trace:true,debug:false}).feed.find(s=>s.title==='모델 · 응답 대기')!;
+  const build=(record:Record<string,unknown>)=>buildOperations([req,record],[],new Date('2026-09-29T06:02:00.000Z'),{trace:true}).feed.find(s=>s.title==='모델 · 응답 대기')!;
   for(const record of [{...failure,session_id:'other'},{...failure,prompt_id:'other'},{...failure,written_at:at}])expect(build(record).state).toBe('active');
   expect(build(failure).state).toBe('done');
 });
@@ -427,7 +409,7 @@ it('does not terminate a Codex request from an earlier result or another session
 it.each([null, undefined])('settles observed Codex responses without a prompt identity (%s)', prompt => {
   const requests = Array.from({ length: 7 }, (_, i) => ({ ...base, host: 'codex', prompt_id: prompt, phase: 'codex_model_request', request_id: 'model-' + i, submitted_model: 'gpt-6-luna' }));
   const responses = requests.map(request => ({ ...request, phase: 'codex_router_response', written_at: later, observed_model: 'gpt-6-luna' }));
-  const view = buildOperations([...requests, ...responses], [], new Date('2026-09-29T08:00:00.000Z'), { trace: true, debug: false });
+  const view = buildOperations([...requests, ...responses], [], new Date('2026-09-29T08:00:00.000Z'), { trace: true });
   expect(view.active).toBe(0);
   expect(view.runs.flatMap(run => run.steps).filter(step => step.title === '모델 · 응답 대기')).toEqual(requests.map(() => expect.objectContaining({ state: 'done', summary: '모델 요청 종료 기록 확인' })));
 });
@@ -435,7 +417,7 @@ it.each([null, undefined])('settles observed Codex responses without a prompt id
 it('keeps unknown-prompt requests separate from other sessions, requests and known prompts', () => {
   const request = { ...base, host: 'codex', prompt_id: null, phase: 'codex_model_request', request_id: 'model-1' };
   const response = { ...request, phase: 'codex_router_response', written_at: later, observed_model: 'gpt-6-luna' };
-  const build = (record: Record<string, unknown>) => buildOperations([request, record], [], new Date('2026-09-29T08:00:00.000Z'), { trace: true, debug: false }).feed.find(step => step.title === '모델 · 응답 대기')!;
+  const build = (record: Record<string, unknown>) => buildOperations([request, record], [], new Date('2026-09-29T08:00:00.000Z'), { trace: true }).feed.find(step => step.title === '모델 · 응답 대기')!;
   for (const other of [{ ...response, session_id: 'other' }, { ...response, request_id: 'other' }, { ...response, prompt_id: 'known' }, { ...response, written_at: '2026-09-29T05:00:00.000Z' }]) expect(build(other).state).toBe('unconfirmed');
   expect(build(response).state).toBe('done');
 });
@@ -443,7 +425,7 @@ it('keeps unknown-prompt requests separate from other sessions, requests and kno
 it('joins actual Codex model evidence for an exact request with an unknown prompt', () => {
   const request = { ...base, host: 'codex', prompt_id: null, phase: 'codex_route_applied', request_id: 'model-1', request_kind: 'root_response', selected_model: 'gpt-6-luna', submitted_model: 'gpt-6-luna', applied: true };
   const response = { ...request, phase: 'codex_router_response', written_at: later, observed_model: 'gpt-6-luna' };
-  const build = (record: Record<string, unknown>) => buildOperations([request, record], [], new Date(later), { trace: true, debug: false }).feed.find(step => step.title === 'Router · Codex 요청 전송')!.model;
+  const build = (record: Record<string, unknown>) => buildOperations([request, record], [], new Date(later), { trace: true }).feed.find(step => step.title === 'Router · Codex 요청 전송')!.model;
   expect(build(response)).toMatchObject({ requestApplied: true, observed: 'gpt-6-luna', status: 'confirmed' });
   expect(build({ ...response, prompt_id: 'known' })).toMatchObject({ requestApplied: true, observed: null, status: 'unobserved' });
 });
@@ -451,7 +433,7 @@ it('joins actual Codex model evidence for an exact request with an unknown promp
 it('confirms Codex request settings separately and joins only the exact observed response', () => {
   const req={...base,host:'codex',phase:'codex_route_applied',request_id:'req',request_kind:'root_response',selected_model:'gpt-6-luna',submitted_model:'gpt-6-luna',selected_effort:'low',submitted_effort:'low',applied:true};
   const response={...base,written_at:later,host:'codex',phase:'codex_router_response',request_id:'req',selected_model:'gpt-6-luna',observed_model:'gpt-6-luna'};
-  const build=(records:Record<string,unknown>[])=>buildOperations(records,[],new Date(later),{trace:true,debug:false}).feed.find(s=>s.title==='Router · Codex 요청 전송')!;
+  const build=(records:Record<string,unknown>[])=>buildOperations(records,[],new Date(later),{trace:true}).feed.find(s=>s.title==='Router · Codex 요청 전송')!;
   expect(build([req]).model).toMatchObject({requestApplied:true,status:'unobserved',observed:null});
   expect(build([req,response]).model).toMatchObject({requestApplied:true,status:'confirmed',observed:'gpt-6-luna'});
   expect(build([req,{...response,session_id:'other'}]).model?.status).toBe('unobserved');
@@ -464,7 +446,7 @@ it('counts child Jev steps separately, closes only the exact decision and binds 
     make('model_request', 1, { requested: 'claude-sonnet-5-5', requested_effort: 'low' }, later),
     make('child_result', 1, { requested: 'claude-sonnet-5-5', observed: 'claude-sonnet-5-5', confirmation: 'confirmed' }, later),
     make('request', 2, { sent: true }, '2026-09-29T06:00:02.000Z')];
-  const view = buildOperations([], records, new Date('2026-09-29T06:00:03.000Z'), { trace: false, debug: true });
+  const view = buildOperations([], records, new Date('2026-09-29T06:00:03.000Z'), { trace: true });
   expect(view.requests).toBe(2);
   const requests = view.feed.filter(s => s.title === 'Router · request');
   expect(requests.map(s => s.state).sort()).toEqual(['active', 'done']);
@@ -476,26 +458,26 @@ it('counts child Jev steps separately, closes only the exact decision and binds 
 it('retains every active execution beyond the recent completed-turn window', () => {
   const records: Record<string, unknown>[] = [{...base,phase:'admission_intent',request_id:'pending',prompt_id:'pending'}];
   for(let i=0;i<220;i++)records.push({...base,phase:'admission_result',written_at:later,request_id:'finished-'+i,prompt_id:'finished-'+i,invocation_id:'finished-'+i,attempted:false});
-  const view=buildOperations(records,[],new Date(later),{trace:true,debug:false});
+  const view=buildOperations(records,[],new Date(later),{trace:true});
   expect(view.runs).toHaveLength(201);expect(view.runs.flatMap(r=>r.steps).some(s=>s.state==='active')).toBe(true);
 });
 
 it('rebuilds only the sessions that changed or are still recent, and equals one pass over the whole recording (#215)', () => {
-  const old = '2026-09-29T05:00:00.000Z', avail = { trace: true, debug: true };
+  const old = '2026-09-29T05:00:00.000Z', avail = { trace: true };
   const settled: Record<string, unknown>[] = [
     { ...base, written_at: old, phase: 'admission_intent', request_id: 'a1' },
     { ...base, written_at: old, phase: 'admission_result', request_id: 'a1', attempted: true, decision: { shape: 'direct' } },
     { written_at: old, phase: 'evidence_jev_intent', request_id: 'e1:1', parent_request_id: 'e1' },
     { ...base, session_id: 's2', written_at: old, phase: 'background_launch', tool_use_id: 'd' },
   ];
-  const debug = [row('router', { session_id: 's1', event: 'root', turn: 't1' }, old), row('router', { event: 'root_result', turn: 't2', requested: 'claude-opus-5-5', observed: 'claude-opus-5-5', confirmation: 'confirmed' }, old)];
+  const mods = [row('router', { session_id: 's1', event: 'root', turn: 't1' }, old), row('router', { event: 'root_result', turn: 't2', requested: 'claude-opus-5-5', observed: 'claude-opus-5-5', confirmation: 'confirmed' }, old)];
   const live = { ...base, session_id: 'live', phase: 'admission_intent', request_id: 'b1' };
   const answered = [...settled, live, { ...live, written_at: later, phase: 'admission_result', attempted: true, decision: { shape: 'direct' } }];
   const steps: Array<[Record<string, unknown>[], Date]> = [[[...settled, live], new Date(later)], [answered, new Date(later)],
     [[...answered, { ...settled[0], written_at: at, request_id: 'a2' }], new Date(Date.parse(later) + 31_000)]];
   const [first, second, third] = steps.map(([records, now]) => {
-    const view = buildOperations(records, debug, now, avail);
-    expect(view).toEqual(buildOperations(records, debug, now, avail, true));
+    const view = buildOperations(records, mods, now, avail);
+    expect(view).toEqual(buildOperations(records, mods, now, avail, true));
     return view;
   });
   expect(first!.runs[0]?.state).toBe('active'); expect(second!.runs[0]?.state).toBe('done');

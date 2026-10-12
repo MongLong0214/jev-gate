@@ -5,9 +5,9 @@ import { operationState } from './operation-state.js';
 import { memo } from './memo.js';
 import { CODEX_CAPABILITIES, CODEX_PLUGIN_CAPABILITIES, type HostCapability, type Host } from './host-support.js';
 
-/** A display model made only from named metadata fields. Raw prompts, source and debug text never leave here. */
+/** A display model made only from named metadata fields. Raw prompts and source text never leave here. */
 type Rec = Record<string, unknown>;
-export type FeatureId = 'admission' | 'allocation' | 'planning' | 'workers' | 'guard' | 'router' | 'compact' | 'output' | 'evidence';
+export type FeatureId = 'admission' | 'allocation' | 'planning' | 'workers' | 'guard' | 'router' | 'compact' | 'evidence';
 export type StepState = 'active' | 'done' | 'skipped' | 'error' | 'unconfirmed' | 'interrupted';
 export type StepLane = 'jev' | 'policy' | 'host' | 'local';
 
@@ -47,7 +47,7 @@ export interface OperationRun {
   executionId?: string;
   host?: Host;
   title: string;
-  source: 'gate' | 'router' | 'compact' | 'output' | 'evidence' | 'codex';
+  source: 'gate' | 'router' | 'compact' | 'evidence' | 'codex';
   mode: string;
   firstAt: string;
   lastAt: string;
@@ -58,7 +58,6 @@ export interface OperationRun {
 export interface FeatureView {
   id: FeatureId;
   label: string;
-  source: 'trace' | 'debug';
   count: number;
   lastAt: string | null;
   state: 'observed' | 'waiting' | 'unavailable' | 'unsupported';
@@ -77,21 +76,18 @@ export interface OperationsView {
   sig: string;
 }
 
-export interface DebugRecord { at: string; component: 'router' | 'compact' | 'output'; rec: Rec }
+export interface ModRecord { at: string; component: 'router' | 'compact'; rec: Rec }
 
-const FEATURES: Array<{ id: FeatureId; label: string; source: 'trace' | 'debug' }> = [
-  { id: 'admission', label: 'Gate A · 실행 형태', source: 'trace' },
-  { id: 'allocation', label: 'Gate B · 등급 배정', source: 'trace' },
-  { id: 'planning', label: '계획 · 의존성', source: 'trace' },
-  { id: 'workers', label: '워커 · 수락 검사', source: 'trace' },
-  { id: 'guard', label: '루트 도구 가드', source: 'trace' },
-  { id: 'router', label: 'Router · 모델과 effort', source: 'debug' },
-  { id: 'compact', label: 'Compact · 요약 대체', source: 'debug' },
-  { id: 'output', label: 'Output · 로그 접기', source: 'debug' },
-  { id: 'evidence', label: 'Evidence · 근거 판정', source: 'trace' },
+const FEATURES: Array<{ id: FeatureId; label: string }> = [
+  { id: 'admission', label: 'Gate A · 실행 형태' },
+  { id: 'allocation', label: 'Gate B · 등급 배정' },
+  { id: 'planning', label: '계획 · 의존성' },
+  { id: 'workers', label: '워커 · 수락 검사' },
+  { id: 'guard', label: '루트 도구 가드' },
+  { id: 'router', label: 'Router · 모델과 effort' },
+  { id: 'compact', label: 'Compact · 요약 대체' },
+  { id: 'evidence', label: 'Evidence · 근거 판정' },
 ];
-// #217: records from the withdrawn Lean mode were real Jev calls, so history totals still count them.
-export const LEGACY_LEAN_JEV = { intent: 'lean_intent', result: 'lean_result' } as const;
 const TOKEN = /^[A-Za-z0-9_.:/+@-]{1,80}(?:\[[A-Za-z0-9_-]{1,16}\])?$/;
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
 const rec = (v: unknown): Rec | null => typeof v === 'object' && v !== null && !Array.isArray(v) ? v as Rec : null;
@@ -444,7 +440,7 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
 };
 
 /** Join decisions to responses only within the recorded session and execution identity. */
-const routedDebugRecords = (debug: DebugRecord[], records: Rec[]): DebugRecord[] => {
+const routedModRecords = (mods: ModRecord[], records: Rec[]): ModRecord[] => {
   const identity = (r: Rec, key: string): string | null => token(r[key]) ? JSON.stringify([r['session_id'] ?? 'legacy', r[key]]) : null;
   const owned = new Map<string, Rec>();
   for (const r of records) {
@@ -452,7 +448,7 @@ const routedDebugRecords = (debug: DebugRecord[], records: Rec[]): DebugRecord[]
     if (r['host'] !== 'codex' && r['phase'] === 'pre_result' && key && field(r, 'allocation')) owned.set(key, r);
   }
   const turns = new Map<string, Rec>(), spawns = new Map<string, Rec>(), childSteps = new Map<string, Rec>(), children = new Map<string, NonNullable<OperationStep['routing']>>();
-  return [...debug].sort((a, b) => a.at.localeCompare(b.at)).map(row => {
+  return [...mods].sort((a, b) => a.at.localeCompare(b.at)).map(row => {
     if (row.component !== 'router') return row;
     const r = row.rec, event = r['event'], turn = identity(r, 'turn'), tool = identity(r, 'tool_use_id'), agent = identity(r, 'agent_id');
     let routing: OperationStep['routing'];
@@ -484,7 +480,7 @@ const routerResponseKey = (r: Rec, index: unknown = r['index'] ?? null): string 
 
 const routerDecisionKey = (r: Rec): string => JSON.stringify([r['session_id'] ?? 'legacy', r['turn'] ?? r['tool_use_id'] ?? '', r['agent_id'] ?? null, r['agent_id'] ? r['index'] ?? null : null]);
 
-const debugStep = (row: DebugRecord, now: number, closed: Set<string>, responses: Map<string, string>, live: Liveness): OperationStep | null => {
+const modStep = (row: ModRecord, now: number, closed: Set<string>, responses: Map<string, string>, live: Liveness): OperationStep | null => {
   const r = row.rec;
   const route = field(r, 'routing_decision'), scope = token(route?.['scope']);
   const routing: OperationStep['routing'] = scope && ['root', 'spawn', 'child', 'owned'].includes(scope) ? { scope: scope as NonNullable<OperationStep['routing']>['scope'], baseline: token(route?.['baseline']), modelReason: token(route?.['modelReason']), effortReason: token(route?.['effortReason']) } : undefined;
@@ -530,7 +526,7 @@ const debugStep = (row: DebugRecord, now: number, closed: Set<string>, responses
       const levels = field(answers, name);
       if (levels) details.push(text(`${name} 점수`, ...Object.entries(levels).slice(0, 8).flatMap(([level, value]) => token(level) && number(value) !== null ? [`${level} ${n(number(value))}`] : [])));
     }
-  } else if (feature === 'compact') {
+  } else {
     if (r['stage'] === 'jev') {
       lane = r['jev_sent'] === true ? 'jev' : 'local';
       summary = text(r['jev_sent'] === true ? 'Jev 작업 의존 근거 선택' : r['jev_sent'] === false ? 'Jev 전송 없음' : 'Jev 전송 여부 미확인', compactSelectionReason(r['selection']));
@@ -540,9 +536,6 @@ const debugStep = (row: DebugRecord, now: number, closed: Set<string>, responses
     details.push(text(`모드 ${token(r['mode']) ?? '?'}`, `트리거 ${token(r['trigger']) ?? '?'}`, r['subagent'] === true ? '서브에이전트' : '루트', `메시지 ${n(number(r['messages']))}개`));
     details.push(text(number(r['digestChars']) === null ? null : `digest ${n(number(r['digestChars']))}자`, number(r['tailChars']) === null ? null : `tail ${n(number(r['tailChars']))}자`, number(r['buildMs']) === null ? null : `빌드 ${n(number(r['buildMs']))}ms`));
     if (number(r['tokensBefore']) !== null || number(r['tokensAfter']) !== null) details.push(`호스트 보고 압축 전 ${n(number(r['tokensBefore']))} / 후 ${n(number(r['tokensAfter']))} 토큰`);
-  } else {
-    summary = started ? 'Vitest Bash 실행 중' : r['applied'] === true ? 'Vitest 로그 접기 적용' : text('원본 출력 유지', token(r['skipped']), token(r['disabled']));
-    details.push(text(`파서 ${token(r['parser']) ?? '?'}`, number(r['runs']) === null ? null : `실행 ${n(number(r['runs']))}건`));
   }
   const model = feature === 'router' && ['root_result', 'spawn_result', 'spawn_native_result', 'child_result', 'model_request'].includes(event)
     ? modelObservation(r['requested'] ?? field(r, 'applied')?.['model'] ?? r['assumed'], r['observed'], r['requested_effort'] ?? field(r, 'applied')?.['effort'], r['observed_effort'], r['confirmation'], 'requested_effort' in r ? { value: r['requested_effort'], source: 'host_hook' } : undefined) : undefined;
@@ -574,7 +567,7 @@ const gateGroup = (r: Rec): string => {
   if (phase === 'codex_compact') return `compact:${token(r['session_id']) ?? 'unknown'}:${token(r['run_id']) ?? 'unknown'}`;
   return `gate:${token(r['session_id']) ?? 'unknown'}:${token(r['execution_prompt_id']) ?? token(r['prompt_id']) ?? 'unknown'}`;
 };
-const debugGroup = (row: DebugRecord): string => row.component === 'router'
+const modGroup = (row: ModRecord): string => row.component === 'router'
   ? `router:${token(row.rec['session_id']) ?? 'legacy'}:${token(row.rec['turn']) ?? token(row.rec['tool_use_id']) ?? 'session'}`
   : `${row.component}:${token(row.rec['session_id']) ?? 'legacy'}:${token(row.rec['run_id']) ?? row.at}`;
 
@@ -591,12 +584,12 @@ const firstSorted = <T>(items: T[], k: number, order: (a: T, b: T) => number): T
   return top;
 };
 
-/** Where one pass over the whole recording first inserts a run: records in order, then debug rows by time, then native Codex rows by time. */
+/** Where one pass over the whole recording first inserts a run: records in order, then Router and Compact rows by time, then native Codex rows by time. */
 type Rank = { cls: 0 | 1 | 2; at: string; index: number };
 interface Part { runs: OperationRun[]; ranks: Rank[]; requests: string[]; managed: boolean }
 
 /** The executions of records that join nothing outside them (see `parts`). */
-const buildPart = (records: Rec[], debug: DebugRecord[], now: Date): Part => {
+const buildPart = (records: Rec[], mods: ModRecord[], now: Date): Part => {
   records = allocatedTraceRecords(records);
   const codexDecisions = new Map<string, Rec>();
   const codexKey = (r: Rec): string | null => r['host'] === 'codex' && token(r['session_id']) && token(r['prompt_id']) ? JSON.stringify([r['session_id'], r['prompt_id'], r['scope'] === 'child' ? r['agent_id'] : null, r['scope'] === 'child' ? r['index'] ?? null : null]) : null;
@@ -625,9 +618,9 @@ const buildPart = (records: Rec[], debug: DebugRecord[], now: Date): Part => {
     observe(codexLoop(r), at, (event === 'Stop' || event === 'Interrupt') && token(r['prompt_id']) ? { key: codexLoop(r), interrupted: event === 'Interrupt' }
       : event === 'SessionEnd' ? { key: JSON.stringify(['codex', r['session_id']]), interrupted: false } : undefined);
   }
-  for (const row of debug) if (row.component === 'router' && row.at) {
+  for (const row of mods) if (row.component === 'router' && row.at) {
     const r = row.rec, loop = routerResponseKey(r, 'loop');
-    // Host debug mirrors carry no session; an unidentified session end cannot end anything.
+    // Recorded Router rows may carry no session; an unidentified session end cannot end anything.
     observe(loop, row.at, r['event'] === 'turn_end' && token(r['turn']) ? { key: loop, interrupted: r['reason'] === 'aborted' }
       : r['event'] === 'session_end' && token(r['session_id']) ? { key: JSON.stringify(['claude', r['session_id']]), interrupted: false } : undefined);
   }
@@ -636,9 +629,9 @@ const buildPart = (records: Rec[], debug: DebugRecord[], now: Date): Part => {
     const response = r['phase'] === 'codex_route_applied' && key ? responseBindings.get(key) : undefined;
     return response && iso(response['written_at']) >= iso(r['written_at']) ? { ...r, observed_model: response['observed_model'], observed_effort: response['observed_effort'] } : r;
   });
-  // routedDebugRecords visits rows in this stable time order.
-  const order = debug.map((_, i) => i).sort((a, b) => debug[a]!.at.localeCompare(debug[b]!.at));
-  debug = routedDebugRecords(debug, records);
+  // routedModRecords visits rows in this stable time order.
+  const order = mods.map((_, i) => i).sort((a, b) => mods[a]!.at.localeCompare(mods[b]!.at));
+  mods = routedModRecords(mods, records);
   const resultIds = new Set(records.flatMap((r) => token(r['request_id']) && token(r['phase']) ? [`${token(r['request_id'])}:${token(r['phase'])}`] : []));
   for (const r of records) if (r['phase'] === 'background_terminal') resultIds.add(`background:${token(r['session_id'])}:${token(r['execution_prompt_id']) ?? token(r['prompt_id'])}:${token(r['tool_use_id'])}`);
   for (const r of records) if (r['phase'] === 'codex_compact' && r['applied'] === true && token(r['run_id'])) resultIds.add(`codex_compact:${token(r['run_id'])}`);
@@ -646,14 +639,14 @@ const buildPart = (records: Rec[], debug: DebugRecord[], now: Date): Part => {
     const phase = token(r['phase']); const requestId = token(r['request_id']); const at = iso(r['written_at']);
     return phase?.endsWith('_intent') && requestId && at ? [[`${requestId}:${phase}`, at]] : [];
   }));
-  const closed = new Set(debug.flatMap((row) => {
+  const closed = new Set(mods.flatMap((row) => {
     const own = row.component === 'router' ? token(row.rec['turn']) ?? token(row.rec['tool_use_id']) : token(row.rec['run_id']);
     if (!own) return [];
     const key = row.component === 'router' ? routerDecisionKey(row.rec) : `${token(row.rec['session_id']) ?? 'legacy'}:${own}`;
     return row.component === 'router' ? ['root', 'spawn', 'child_route'].includes(String(row.rec['event'])) ? [`router:${key}`] : [] : row.rec['stage'] === 'started' ? [] : [`${row.component}:${key}`];
   }));
   const responses = new Map<string, string>();
-  for (const row of debug) if (['root_result', 'child_result', 'spawn_result', 'spawn_native_result', 'model_failure'].includes(String(row.rec['event']))) {
+  for (const row of mods) if (['root_result', 'child_result', 'spawn_result', 'spawn_native_result', 'model_failure'].includes(String(row.rec['event']))) {
     // Older prepared records have no loop index. A later response in that exact turn still closes them.
     for (const index of [row.rec['index'] ?? null, null]) {
       const key = routerResponseKey(row.rec, index);
@@ -682,10 +675,10 @@ const buildPart = (records: Rec[], debug: DebugRecord[], now: Date): Part => {
     if (group.mode === 'unknown' && token(r['mode'])) group.mode = token(r['mode'])!;
     grouped.set(key, group);
   }
-  for (const [position, row] of debug.entries()) {
-    const step = debugStep(row, now.getTime(), closed, responses, live);
+  for (const [position, row] of mods.entries()) {
+    const step = modStep(row, now.getTime(), closed, responses, live);
     if (!step) continue;
-    const key = debugGroup(row);
+    const key = modGroup(row);
     const group = grouped.get(key) ?? { source: row.component, host: 'claude' as const, mode: row.component, steps: [], rank: { cls: 1, at: row.at, index: order[position]! } };
     group.steps.push(step);
     grouped.set(key, group);
@@ -693,7 +686,7 @@ const buildPart = (records: Rec[], debug: DebugRecord[], now: Date): Part => {
   const separate = [...grouped].map(([key, group]): { run: OperationRun; rank: Rank } => {
     const steps = group.steps.sort((a, b) => a.at.localeCompare(b.at) || (a.lane === 'policy' ? 1 : 0) - (b.lane === 'policy' ? 1 : 0) || a.id.localeCompare(b.id));
     const state = operationState(steps);
-    const title = ({ gate: '게이트 세션', router: 'Router 실행', compact: 'Compact 실행', output: 'Output 실행', evidence: 'Evidence 검색', codex: 'Codex 실행' } as const)[group.source];
+    const title = ({ gate: '게이트 세션', router: 'Router 실행', compact: 'Compact 실행', evidence: 'Evidence 검색', codex: 'Codex 실행' } as const)[group.source];
     return { run: { id: id(key), ...(group.executionId ? { executionId: group.executionId } : {}), host: group.host, title, source: group.source, mode: group.mode, firstAt: steps[0]?.at ?? '', lastAt: steps.at(-1)?.at ?? '', state, steps }, rank: group.rank };
   });
   const native = codexOperations(records, now);
@@ -713,12 +706,12 @@ const buildPart = (records: Rec[], debug: DebugRecord[], now: Date): Part => {
   for (const r of records) {
     const phase = token(r['phase']) ?? '';
     if (phase === 'codex_compact' && r['jev_sent'] === true) { requests.add(`compact:codex:${token(r['session_id'])}:${token(r['run_id'])}`); continue; }
-    if (!['admission_intent', 'pre_intent', 'interpretation_intent', LEGACY_LEAN_JEV.intent, 'evidence_jev_intent', 'codex_router_intent'].includes(phase)
-      && !(r['attempted'] === true && ['admission_result', 'pre_result', 'interpretation_result', LEGACY_LEAN_JEV.result, 'evidence_jev_result', 'codex_router_result'].includes(phase))) continue;
+    if (!['admission_intent', 'pre_intent', 'interpretation_intent', 'evidence_jev_intent', 'codex_router_intent'].includes(phase)
+      && !(r['attempted'] === true && ['admission_result', 'pre_result', 'interpretation_result', 'evidence_jev_result', 'codex_router_result'].includes(phase))) continue;
     const kind = phase.replace(/_(intent|result)$/, '');
     requests.add(`${kind}:${token(r['request_id']) ?? token(r['invocation_id']) ?? iso(r['written_at'])}`);
   }
-  for (const row of debug) {
+  for (const row of mods) {
     if (row.component === 'compact' && row.rec['jev_sent'] === true) { requests.add(`compact:claude:${token(row.rec['session_id']) ?? 'legacy'}:${token(row.rec['run_id']) ?? row.at}`); continue; }
     if (row.component !== 'router' || (row.rec['event'] !== 'request' && row.rec['sent'] !== true)) continue;
     requests.add(`router:${routerDecisionKey(row.rec)}`);
@@ -743,45 +736,45 @@ const joins = (item: object, rec: Rec, group: () => string): string[] => {
   }
   return keys;
 };
-let partCache = new Map<string, { records: Rec[]; debug: DebugRecord[]; at: number; settled: boolean; part: Part }>();
+let partCache = new Map<string, { records: Rec[]; mods: ModRecord[]; at: number; settled: boolean; part: Part }>();
 const sameItems = <T>(a: T[], b: T[]): boolean => a.length === b.length && a.every((v, i) => v === b[i]);
 /** Connected parts of the recording. A settled part with the same records is reused instead of rebuilt. */
-const parts = (records: Rec[], debug: DebugRecord[], now: Date): Array<{ part: Part; recordIndex: number[]; debugIndex: number[] }> => {
-  const keys = [...records.map(r => joins(r, r, () => `${r['host'] === 'codex' ? 'codex' : 'claude'}:${gateGroup(r)}`)), ...debug.map(row => joins(row, row.rec, () => debugGroup(row)))];
+const parts = (records: Rec[], mods: ModRecord[], now: Date): Array<{ part: Part; recordIndex: number[]; modIndex: number[] }> => {
+  const keys = [...records.map(r => joins(r, r, () => `${r['host'] === 'codex' ? 'codex' : 'claude'}:${gateGroup(r)}`)), ...mods.map(row => joins(row, row.rec, () => modGroup(row)))];
   const parent = keys.map((_, i) => i);
   const find = (i: number): number => { while (parent[i] !== i) i = parent[i] = parent[parent[i]!]!; return i; };
   const owner = new Map<string, number>();
   keys.forEach((list, i) => { for (const key of list) { const j = owner.get(key); if (j === undefined) owner.set(key, i); else parent[find(i)] = find(j); } });
-  const groups = new Map<number, { key: string; records: Rec[]; recordIndex: number[]; debug: DebugRecord[]; debugIndex: number[] }>();
+  const groups = new Map<number, { key: string; records: Rec[]; recordIndex: number[]; mods: ModRecord[]; modIndex: number[] }>();
   keys.forEach((list, i) => {
     const root = find(i); let group = groups.get(root);
-    if (!group) groups.set(root, group = { key: list[0]!, records: [], recordIndex: [], debug: [], debugIndex: [] });
-    if (i < records.length) { group.records.push(records[i]!); group.recordIndex.push(i); } else { group.debug.push(debug[i - records.length]!); group.debugIndex.push(i - records.length); }
+    if (!group) groups.set(root, group = { key: list[0]!, records: [], recordIndex: [], mods: [], modIndex: [] });
+    if (i < records.length) { group.records.push(records[i]!); group.recordIndex.push(i); } else { group.mods.push(mods[i - records.length]!); group.modIndex.push(i - records.length); }
   });
   const at = now.getTime(), next: typeof partCache = new Map();
   const result = [...groups.values()].map(group => {
     const cached = partCache.get(group.key);
-    let entry = cached && cached.settled && at >= cached.at && sameItems(cached.records, group.records) && sameItems(cached.debug, group.debug) ? cached : undefined;
+    let entry = cached && cached.settled && at >= cached.at && sameItems(cached.records, group.records) && sameItems(cached.mods, group.mods) ? cached : undefined;
     if (!entry) {
       let newest = -Infinity;
       for (const r of group.records) if (typeof r['written_at'] === 'string') newest = Math.max(newest, Date.parse(r['written_at']) || -Infinity);
-      for (const row of group.debug) newest = Math.max(newest, Date.parse(row.at) || -Infinity);
-      entry = { records: group.records, debug: group.debug, at, settled: at - newest > SETTLED_MS, part: buildPart(group.records, group.debug, now) };
+      for (const row of group.mods) newest = Math.max(newest, Date.parse(row.at) || -Infinity);
+      entry = { records: group.records, mods: group.mods, at, settled: at - newest > SETTLED_MS, part: buildPart(group.records, group.mods, now) };
     }
     next.set(group.key, entry);
-    return { part: entry.part, recordIndex: group.recordIndex, debugIndex: group.debugIndex };
+    return { part: entry.part, recordIndex: group.recordIndex, modIndex: group.modIndex };
   });
   partCache = next;
   return result;
 };
 
 /** `whole` builds the recording in one pass with no reuse: the reference the split build must equal. */
-export const buildOperations = (records: Rec[], debug: DebugRecord[], now: Date, availability: { trace: boolean; debug: boolean; host?: Host }, whole = false): OperationsView => {
+export const buildOperations = (records: Rec[], mods: ModRecord[], now: Date, availability: { trace: boolean; host?: Host }, whole = false): OperationsView => {
   const entries: Array<{ run: OperationRun } & Rank> = [];
   const jevRequests = new Set<string>();
   let managed = false;
-  for (const { part, recordIndex, debugIndex } of whole ? [{ part: buildPart(records, debug, now), recordIndex: null, debugIndex: null }] : parts(records, debug, now)) {
-    part.runs.forEach((run, i) => { const rank = part.ranks[i]!; entries.push({ run, ...rank, index: (rank.cls === 1 ? debugIndex : recordIndex)?.[rank.index] ?? rank.index }); });
+  for (const { part, recordIndex, modIndex } of whole ? [{ part: buildPart(records, mods, now), recordIndex: null, modIndex: null }] : parts(records, mods, now)) {
+    part.runs.forEach((run, i) => { const rank = part.ranks[i]!; entries.push({ run, ...rank, index: (rank.cls === 1 ? modIndex : recordIndex)?.[rank.index] ?? rank.index }); });
     for (const key of part.requests) jevRequests.add(key);
     managed ||= part.managed;
   }
@@ -795,11 +788,11 @@ export const buildOperations = (records: Rec[], debug: DebugRecord[], now: Date,
     const steps = all.filter((s) => s.feature === f.id && !s.lifecycle);
     if (availability.host === 'codex') {
       const capability = (managed ? CODEX_CAPABILITIES : CODEX_PLUGIN_CAPABILITIES)[f.id];
-      return { ...f, source: 'trace', capability,
+      return { ...f, capability,
         count: steps.length, lastAt: steps.length ? steps.map(s => s.at).sort().at(-1)! : null,
         state: capability.mode === 'unsupported' ? 'unsupported' : steps.length ? 'observed' : availability.trace ? 'waiting' : 'unavailable' };
     }
-    return { ...f, count: steps.length, lastAt: steps.length ? steps.map((s) => s.at).sort().at(-1)! : null, state: steps.length ? 'observed' : availability[f.source] ? 'waiting' : 'unavailable' };
+    return { ...f, count: steps.length, lastAt: steps.length ? steps.map((s) => s.at).sort().at(-1)! : null, state: steps.length ? 'observed' : availability.trace ? 'waiting' : 'unavailable' };
   });
   const requests = jevRequests.size;
   const durations = all.filter((s) => s.lane === 'jev' && s.durationMs !== undefined).map((s) => s.durationMs!).sort((a, b) => a - b);

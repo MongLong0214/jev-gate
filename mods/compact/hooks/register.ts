@@ -19,7 +19,7 @@ const recorderOf = ($: EngineInterface) => createRecorder({
     return { home, state, config, trace, session };
   },
   stat: path => $.fs.stat(path), exists: path => $.fs.exists(path), read: path => $.fs.read(path),
-  write: (path, text) => $.fs.write(path, text), debug: line => $.ui.log(line, { to: 'debug' }),
+  write: (path, text) => $.fs.write(path, text),
   wait: (ms, signal) => $.clock.sleep(ms, { signal }),
 });
 
@@ -39,14 +39,7 @@ const quietly = (f: () => void): void => {
  */
 export const register: Register = (on, options) => {
   const resolved = resolveCompactConfig(options);
-  if (!resolved.ok) {
-    const field = resolved.field;
-    on('session.start', ($, e, next) => {
-      quietly(() => $.ui.log(`jev-compact ${JSON.stringify({ event: 'compact', disabled: 'invalid_option', field })}`, { to: 'debug' }));
-      return next(e);
-    });
-    return;
-  }
+  if (!resolved.ok) return;
   registerCompact(on, resolved.config);
 };
 

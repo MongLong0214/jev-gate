@@ -289,7 +289,7 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
       return found !== null && !('ambiguous' in found) ? found.value : env[k];
     };
     const functionHooks = launch('CLAUDE_CODE_ENABLE_FUNCTION_HOOKS');
-    say(functionHooks === '0' ? 'warn' : 'info', functionHooks === '0' ? 'Function Hooks explicitly disabled: Router, Compact and Output cannot register' : `Function Hooks launch setting: ${functionHooks === '1' ? 'enabled' : 'unknown/default'}; registration and execution require native records`);
+    say(functionHooks === '0' ? 'warn' : 'info', functionHooks === '0' ? 'Function Hooks explicitly disabled: Router and Compact cannot register' : `Function Hooks launch setting: ${functionHooks === '1' ? 'enabled' : 'unknown/default'}; registration and execution require native records`);
     // #48: auto refuses admission as host_unsupported under both conditions below, so the gate can never act.
     const gated = mode === 'auto';
     const o = subagentModelOverride({ CLAUDE_CODE_SUBAGENT_MODEL: launch('CLAUDE_CODE_SUBAGENT_MODEL'), CLAUDE_CODE_SUBAGENT_MODEL_FORCE: launch('CLAUDE_CODE_SUBAGENT_MODEL_FORCE') });
@@ -309,10 +309,7 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
     else say('info', `launch profile not set (fork=${fork ?? 'unset'}, disable_background=${bg ?? 'unset'}): interactive sessions default to fork mode, where Agent calls omit run_in_background and V4 preserves them. Start with CLAUDE_CODE_FORK_SUBAGENT=0`);
     if (env['CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS'] === '1') say('info', 'agent teams enabled: a named Agent call becomes a teammate; the coordinator guidance asks for no teammate name');
     const recording = recordingStatus(env);
-    say(recording.error ? 'warn' : 'ok', `Jev local recording ${recording.enabled ? 'on (default)' : 'off'}: Router/Compact/Output do not require --debug; toggle with recording on|off${recording.error ? ` (${recording.error})` : ''}`);
-    const debugDir = launch('CLAUDE_CODE_DEBUG_LOGS_DIR');
-    if (debugDir) say('ok', `CLAUDE_CODE_DEBUG_LOGS_DIR=${debugDir}: Router/Compact/Output decisions are recorded there for the dashboard`);
-    else say('info', 'Claude debug logs are optional; independent Jev metadata recording is available without --debug');
+    say(recording.error ? 'warn' : 'ok', `Jev local recording ${recording.enabled ? 'on (default)' : 'off'}: toggle with recording on|off${recording.error ? ` (${recording.error})` : ''}`);
     report.group('credentials');
     const keyEnv = { ...env, TYPESAFE_API_KEY: launch('TYPESAFE_API_KEY') };
     const overrideKey = apiKeyOverride(keyEnv);
@@ -428,7 +425,6 @@ const configuredDir = (flag: string | undefined, key: string): string | null => 
   const found = readSettingsEnvVar(process.env, process.cwd(), key);
   if (found && 'value' in found && found.value.length > 0) return found.value;
   if (key === 'JEV_GATE_TRACE_DIR') return claudeTraceDir(process.env);
-  if (key === 'CLAUDE_CODE_DEBUG_LOGS_DIR') return join(claudeConfigDir(process.env), 'debug');
   return null;
 };
 
@@ -455,8 +451,7 @@ const dashboard = async (argv: string[]): Promise<void> => {
   }
   const started = await startDashboard(
     { ...dashboardSources(process.env, host as 'codex' | 'claude' | undefined),
-      ...(flagValue(argv, '--trace') ? { traceDir: flagValue(argv, '--trace')!, traceDirs: undefined } : {}),
-      ...(flagValue(argv, '--debug') ? { debugDir: flagValue(argv, '--debug')! } : {}) },
+      ...(flagValue(argv, '--trace') ? { traceDir: flagValue(argv, '--trace')!, traceDirs: undefined } : {}) },
     port,
   );
   process.stdout.write(`dashboard: ${started.url}\n`);
@@ -488,7 +483,7 @@ if (isMainModule()) {
       process.exitCode = 1;
     });
   } else {
-    process.stdout.write('usage: node dist/cli.js doctor [--json|--verbose] [--check-update]\n       node dist/cli.js explain [trace-dir]   (default: $JEV_GATE_TRACE_DIR)\n       node dist/cli.js dashboard [on|off|status] [--port 4731] [--trace dir] [--debug dir]\n       node dist/cli.js recording on|off|status\n');
+    process.stdout.write('usage: node dist/cli.js doctor [--json|--verbose] [--check-update]\n       node dist/cli.js explain [trace-dir]   (default: $JEV_GATE_TRACE_DIR)\n       node dist/cli.js dashboard [on|off|status] [--port 4731] [--trace dir]\n       node dist/cli.js recording on|off|status\n');
     process.exitCode = 2;
   }
 }

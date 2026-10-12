@@ -150,11 +150,7 @@ const countsOf = (usage: unknown): Record<string, number> | null => {
   return Object.fromEntries(COUNTS.flatMap((k) => (typeof u[k] === 'number' && Number.isFinite(u[k]) ? [[k, u[k]]] : [])));
 };
 
-/**
- * Usage under key names the host's debug log keeps: it redacts the value of any key containing "token", so on 2.1.283
- * every `input_tokens` reached the log as a bare [REDACTED] and neither Jev's nor a step's usage could be read back.
- * `input_tokens` → `input`, `cache_read_input_tokens` → `cache_read`.
- */
+/** Usage recorded under short key names: `input_tokens` → `input`, `cache_read_input_tokens` → `cache_read`. */
 const loggable = (counts: object | null): Record<string, unknown> | null =>
   counts === null ? null : Object.fromEntries(Object.entries(counts).map(([k, v]) => [k.replace(/(_input)?_tokens$/, ''), v]));
 

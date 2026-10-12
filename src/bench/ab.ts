@@ -189,7 +189,6 @@ export const runCell = (o: RunOptions, file: TasksFile, task: string, cond: Cond
   const env = cleanEnv(process.env, CONDITION_OPTIONS[cond].mode);
   env['JEV_GATE_STATE_DIR'] = join(o.out, 'state', id);
   env['JEV_GATE_TRACE_DIR'] = join(o.out, 'trace');
-  env['CLAUDE_CODE_DEBUG_LOGS_DIR'] = join(o.out, 'debug', id);
   const sid = crypto.randomUUID();
   const claude = (args: string[]): ReturnType<typeof spawnSync> =>
     // #121: a real timeout, from node itself; `timeout`/`gtimeout` are not on macOS.

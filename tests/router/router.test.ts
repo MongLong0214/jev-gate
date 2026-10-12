@@ -362,8 +362,8 @@ describe('root effort', () => {
     await drain(router.turnStep(f.engine, step({ index: 1 }), later.next));
     expect(later.calls).toEqual([step({ index: 1 })]);
     expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root', assessment: 'timeout', sent: true }));
-    // What the late reply cost is still recorded, against the turn that asked, under keys the host's debug log does not
-    // redact (it blanks any key containing "token").
+    // What the late reply cost is still recorded, against the turn that asked, under the short trace keys (`input`, not
+    // `input_tokens`).
     expect(f.logs).toContainEqual({ event: 'late', scope: 'root', turn: 't1', usage: { input: 900, output: 40 } });
   });
 

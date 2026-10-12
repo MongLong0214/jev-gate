@@ -34,7 +34,7 @@ const recorderOf = ($: EngineInterface) => createRecorder({
     return { home, state, config, trace, session };
   },
   stat: path => $.fs.stat(path), exists: path => $.fs.exists(path), read: path => $.fs.read(path),
-  write: (path, text) => $.fs.write(path, text), debug: line => $.ui.log(line, { to: 'debug' }),
+  write: (path, text) => $.fs.write(path, text),
   wait: (ms, signal) => $.clock.sleep(ms, { signal }),
 });
 
@@ -138,18 +138,11 @@ const quietly = (f: () => void): void => {
 };
 
 /**
- * #40: off by default, and off means no hook at all. An option the Router cannot read turns it off too, with one
- * debug line naming the field when a session starts.
+ * #40: off by default, and off means no hook at all. An option the Router cannot read turns it off too.
  */
 export const register: Register = (on, options) => {
   const resolved = resolveConfig(options);
-  if (!resolved.ok) {
-    on('session.start', ($, e, next) => {
-      quietly(() => $.ui.log(`jev-router ${JSON.stringify({ event: 'router', disabled: 'invalid_option', field: resolved.field })}`, { to: 'debug' }));
-      return next(e);
-    });
-    return;
-  }
+  if (!resolved.ok) return;
   if (!anyRouting(resolved.config)) return;
   const observer: ContextObserver = {};
   registerRouter(on, resolved.config, false, observer);

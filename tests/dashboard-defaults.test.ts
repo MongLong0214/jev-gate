@@ -13,8 +13,6 @@ import { openTraceDir } from '../src/trace.js';
 import { loadActivity } from '../src/activity.js';
 import { DASHBOARD_PAGE } from '../src/dashboard-page.js';
 import { createRecorder } from '../mods/router/hooks/recording.ts';
-import { runCodexHook } from '../src/codex/hook.js';
-const passing = `\n RUN  v5.0.1 /test/project\n\n${'stdout: repeated test detail\n'.repeat(90)} ✓ src/a.test.ts (2 tests) 4ms\n\n Test Files  1 passed (1)\n      Tests  2 passed (2)\n   Start at  10:20:30\n   Duration  123ms\n`;
 
 const dirs: string[] = [];const servers: Array<{close:()=>Promise<void>}> = [];
 const temp = () => {const path=mkdtempSync(join(tmpdir(),'jev-dashboard-'));dirs.push(path);return path};
@@ -128,55 +126,52 @@ describe('automatic shared dashboard',()=>{
   });
 });
 
-describe('independent recording without --debug',()=>{
+describe('independent recording',()=>{
   it('does not hold native execution when recording I/O stalls and the host wait API throws', async () => {
     const recorder = createRecorder({ paths: async () => null as never, stat: async () => null as never,
       exists: async () => false, read: async () => '', write: async () => undefined,
-      debug: () => undefined, wait: () => { throw new Error('host clock unavailable'); } });
+      wait: () => { throw new Error('host clock unavailable'); } });
     // A stalled path lookup must remain optional even when the clock refuses the wait.
     const stalled = createRecorder({ paths: () => new Promise(() => undefined), stat: async () => null as never,
       exists: async () => false, read: async () => '', write: async () => undefined,
-      debug: () => undefined, wait: () => { throw new Error('host clock unavailable'); } });
+      wait: () => { throw new Error('host clock unavailable'); } });
     recorder.log('jev-router {"event":"request","sent":true}');
     await recorder.flush();
     stalled.log('jev-router {"event":"request","sent":true}');
     const result = await Promise.race([stalled.flush().then(() => 'released'), new Promise(resolve => setTimeout(() => resolve('blocked'), 200))]);
     expect(result).toBe('released');
   });
-  it('the live shared switch stops records while native Output keeps working',async()=>{
+  it('the live shared switch stops and resumes records',async()=>{
     const env=environment();const path=join(env.XDG_STATE_HOME,'traces');const opened=openTraceDir(path,env);if(!opened.ok)throw Error(opened.error);
     expect(opened.writer.write('codex_event',{host:'codex'}).ok).toBe(true);setRecording(env,false);
     expect(opened.writer.write('codex_event',{})).toEqual({ok:false,error:'recording_disabled'});
-    async function* stdin(){yield JSON.stringify({hook_event_name:'PostToolUse',session_id:'s',tool_name:'Bash',tool_input:{command:'vitest run'},tool_response:passing})}
-    const result=await runCodexHook({env:{...env,JEV_CODEX_TRACE_DIR:path,JEV_CODEX_AUTO_CONNECT:'0'},stdin:stdin()});
-    expect(result['stopReason']).toContain('90 times in a row');expect(readdirSync(path)).toHaveLength(1);
+    expect(readdirSync(path)).toHaveLength(1);
     setRecording(env,true);expect(opened.writer.write('codex_event',{}).ok).toBe(true);
   });
-  it('records all three Function Mods with the host fs API and applies preference changes live',async()=>{
+  it('records both Function Mods with the host fs API and applies preference changes live',async()=>{
     const env=environment();const dir=dashboardSources(env).traceDirs![0]!.dir;mkdirSync(dir,{recursive:true,mode:0o700});
-    const files=new Map<string,string>();const logs:string[]=[];
-    const host={env:{get:async(k:string)=>env[k as keyof typeof env]},session:{id:async()=> 'session'},fs:{stat:async(path:string)=>({kind:path===dir?'dir':'file',isLink:false,size:files.get(path)?.length??0}),exists:async(path:string)=>files.has(path),read:async(path:string)=>files.get(path),write:async(path:string,value:string)=>{files.set(path,value);writeFileSync(path,value)}},ui:{log:(s:string)=>logs.push(s)},clock:{sleep:async()=>new Promise<void>(()=>undefined)}};
-    const recorder=createRecorder({paths:async()=>({home:env.HOME,state:env.XDG_STATE_HOME,config:env.XDG_CONFIG_HOME,trace:undefined,session:'session'}),stat:host.fs.stat,exists:host.fs.exists,read:async path=>files.get(path)!,write:host.fs.write,debug:host.ui.log,wait:host.clock.sleep});
-    for(const component of ['router','compact','output'])recorder.log(`jev-${component} ${JSON.stringify({event:component,applied:true})}`);
-    await recorder.flush();expect(readdirSync(dir)).toHaveLength(3);expect(logs).toHaveLength(3);
+    const files=new Map<string,string>();
+    const host={env:{get:async(k:string)=>env[k as keyof typeof env]},session:{id:async()=> 'session'},fs:{stat:async(path:string)=>({kind:path===dir?'dir':'file',isLink:false,size:files.get(path)?.length??0}),exists:async(path:string)=>files.has(path),read:async(path:string)=>files.get(path),write:async(path:string,value:string)=>{files.set(path,value);writeFileSync(path,value)}},clock:{sleep:async()=>new Promise<void>(()=>undefined)}};
+    const recorder=createRecorder({paths:async()=>({home:env.HOME,state:env.XDG_STATE_HOME,config:env.XDG_CONFIG_HOME,trace:undefined,session:'session'}),stat:host.fs.stat,exists:host.fs.exists,read:async path=>files.get(path)!,write:host.fs.write,wait:host.clock.sleep});
+    for(const component of ['router','compact'])recorder.log(`jev-${component} ${JSON.stringify({event:component,applied:true})}`);
+    await recorder.flush();expect(readdirSync(dir)).toHaveLength(2);
     const setting=join(credentialsDir(env),'recording.json');files.set(setting,JSON.stringify({version:1,enabled:false}));
-    recorder.log('jev-router {"event":"request","sent":true}');await recorder.flush();expect(readdirSync(dir)).toHaveLength(3);
-    files.set(setting,JSON.stringify({version:1,enabled:true}));recorder.log('jev-router {"event":"root_result","observed":"haiku"}');await recorder.flush();expect(readdirSync(dir)).toHaveLength(4);
+    recorder.log('jev-router {"event":"request","sent":true}');await recorder.flush();expect(readdirSync(dir)).toHaveLength(2);
+    files.set(setting,JSON.stringify({version:1,enabled:true}));recorder.log('jev-router {"event":"root_result","observed":"haiku"}');await recorder.flush();expect(readdirSync(dir)).toHaveLength(3);
     expect(readFileSync(join(dir,readdirSync(dir)[0]!),'utf8')).toContain('session_id');
   });
-  it('merges both hosts without colliding sessions, debug mirrors or request counts',()=>{
+  it('merges both hosts without colliding sessions or request counts',()=>{
     const env=environment();const sources=dashboardSources(env);for(const source of sources.traceDirs!){mkdirSync(source.dir,{recursive:true});writeFileSync(join(source.dir,'record.json'),JSON.stringify({host:source.host,phase:'admission_result',session_id:'same',prompt_id:'same',request_id:source.host,attempted:true,written_at:new Date().toISOString(),http:{duration_ms:75},decision:{shape:'direct'}}))}
     const claude=sources.traceDirs![0]!.dir;const record={event:'root',turn:'same',sent:true,duration_ms:90,patch:{model:'haiku'}};
     writeFileSync(join(claude,'mod.json'),JSON.stringify({...record,phase:'claude_router',host:'claude',session_id:'same',written_at:new Date().toISOString()}));
-    const debug=temp();writeFileSync(join(debug,'mirror.log'),new Date().toISOString()+' [DEBUG] jev-router '+JSON.stringify(record)+'\n');
-    const snapshot=loadActivity({...sources,debugDir:debug});expect(snapshot.host).toBe('mixed');
+    const snapshot=loadActivity(sources);expect(snapshot.host).toBe('mixed');
     expect(snapshot.operations.runs.filter(r=>r.source==='gate')).toHaveLength(2);expect(new Set(snapshot.operations.runs.map(r=>r.id)).size).toBe(snapshot.operations.runs.length);
     expect(snapshot.operations.features.find(f=>f.id==='router')?.count).toBe(1);expect(snapshot.operations.latency.measured).toBe(3);
     expect(snapshot.operations.feed.every(s=>s.host==='claude'||s.host==='codex')).toBe(true);
   });
   it('shows model mismatch and missing observations explicitly and matches family aliases',()=>{
     const env=environment();const dir=temp();for(const [index,selected,observed]of [[0,'haiku','claude-haiku-4-5'],[1,'opus','claude-sonnet-5'],[2,'sonnet',null]] as const)writeFileSync(join(dir,`${index}.json`),JSON.stringify({phase:'claude_router',session_id:'s',event:'child_result',turn:String(index),requested:selected,observed,confirmation:index===0?'confirmed':index===1?'mismatch':'unobserved',written_at:new Date().toISOString()}));
-    const runs=loadActivity({traceDir:dir,debugDir:null,env}).operations.runs;
+    const runs=loadActivity({traceDir:dir,env}).operations.runs;
     expect(runs.flatMap(r=>r.steps.map(s=>s.model?.status)).sort()).toEqual(['confirmed','mismatch','unobserved']);
     expect(runs.filter(r=>r.state==='attention')).toHaveLength(1);expect(runs.filter(r=>r.state==='unconfirmed')).toHaveLength(1);
   });

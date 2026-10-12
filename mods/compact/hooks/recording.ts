@@ -1,15 +1,14 @@
 
-type Component = 'router' | 'compact' | 'output';
+type Component = 'router' | 'compact';
 const absolute = (path: string): boolean => path.startsWith('/') || /^[A-Za-z]:[\\/]/.test(path);
 
-/** Metadata emitted by the Mods, independent of --debug. Never given prompts, keys or model output. */
+/** Metadata emitted by the Mods. Never given prompts, keys or model output. */
 export interface RecorderIO {
   paths(): Promise<{ home: string | undefined; state: string | undefined; config: string | undefined; trace: string | undefined; session: string }>;
   stat(path: string): Promise<{ isLink: boolean; kind: string; size: number }>;
   exists(path: string): Promise<boolean>;
   read(path: string): Promise<string>;
   write(path: string, text: string): Promise<void>;
-  debug(line: string): void;
   wait(ms: number, signal: AbortSignal): Promise<void>;
 }
 export const createRecorder = (io: RecorderIO) => {
@@ -29,7 +28,7 @@ export const createRecorder = (io: RecorderIO) => {
     } catch { return null; }
   })();
   const log = (line: string): void => {
-    const match = /^jev-(router|compact|output) (\{.*\})$/.exec(line);
+    const match = /^jev-(router|compact) (\{.*\})$/.exec(line);
     if (!match) return;
     let fields: Record<string, unknown>;
     try { fields = JSON.parse(match[2]!); } catch { return; }
@@ -48,8 +47,6 @@ export const createRecorder = (io: RecorderIO) => {
           ...fields, host: 'claude', session_id: c.session, phase: `mod_${component}`, version: 5, invocation_id: id, written_at: at,
         }));
       }
-      // Keep explicit host debug logs compatible. Failure of either sink never retries a native operation.
-      try { io.debug(line); } catch { /* Optional host sink. */ }
     })().catch(() => undefined);
     pending.add(task); void task.finally(() => pending.delete(task));
   };

@@ -82,7 +82,7 @@ export interface ArmSpec {
   admittedShape?: 'single';
   /**
    * #45: this arm loads the jev-gate-router plugin through Function Hooks (env `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`,
-   * `--plugin-dir mods/router`, options via a per-cell `--settings` file, `--debug-file` for the decision log). It is
+   * `--plugin-dir mods/router`, options via a per-cell `--settings` file, a per-cell trace directory for the decision records). It is
    * a separate plugin from the legacy jev-gate one, so `plugin`/`mode` stay `false`/`null` for this arm.
    */
   routerEnabled?: true;
@@ -268,8 +268,8 @@ export interface RouterSpawnResult {
 }
 
 /**
- * #45: what the Router actually did in this cell, read from `jev-router {json}` lines in the cell's debug log
- * (`ingestRouterLog`). `root_assessed`/`spawn_assessed` count every non-skipped decision attempt (Jev was consulted,
+ * #45: what the Router actually did in this cell, read from the `mod_router` records in the cell's trace directory
+ * (`ingestRouterRecords`). `root_assessed`/`spawn_assessed` count every non-skipped decision attempt (Jev was consulted,
  * whatever it answered); `root_applied`/`spawn_applied` are the ones that ever reached the host as a step-changing
  * request -- a step can be assessed and proposed and still never applied (`root_stop`/`spawn_stop`).
  *
@@ -282,9 +282,9 @@ export interface RouterSpawnResult {
 export interface RouterV5 {
   /** Accounting revision, kept so a future migration can tell old blocks apart; this bench has produced only 1. */
   accounting: 1;
-  /** `jev-router `-prefixed lines whose JSON payload failed to parse (truncated tail, corruption, noise). */
+  /** `mod_router` record files that failed to parse as a JSON object. */
   unparsable_lines: number;
-  /** The cell's debug log: `read`, `missing` or `unreadable`; null before ingestion. */
+  /** The cell's trace directory: `read`, `missing` or `unreadable`; null before ingestion. */
   log: 'read' | 'missing' | 'unreadable' | null;
   diagnostic: { root_effort: boolean; root_model: boolean; spawn_model: boolean; key: string | null } | null;
   root_assessed: number;
@@ -409,7 +409,7 @@ export interface CellRecord {
     /** T6: calls whose required or observed model could not be normalized; neither a match nor a mismatch. */
     target_model_unknown: number;
   } & GateV5;
-  /** #45: the Router path's own observations, read from the cell's debug log. Empty on an arm that never ran it. */
+  /** #45: the Router path's own observations, read from the cell's trace records. Empty on an arm that never ran it. */
   router: RouterV5;
   final_snapshot: (SnapshotReport & { path: string }) | null;
   /** #214: the work tree when the job prompt's turn ended, before the follow-up; `grade` reads it when there is one. */
@@ -1439,17 +1439,13 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
   g.jev_cost_usd = g.jev_input_tokens === null ? null : g.jev_input_tokens === 0 ? 0 : estimateJevCostUsd(g.jev_model ?? 'jev-1.13.0', g.jev_input_tokens);
 };
 
-const ROUTER_LOG_PREFIX = 'jev-router ';
 /** The Jev model the Router calls (mods/router/hooks/client.ts JEV_MODEL) -- fixed, never per-record. */
 const ROUTER_JEV_MODEL = 'jev-1.13.0';
 
 /**
- * #45: reads a cell's `--debug-file` output and folds every `jev-router {json}` line into `cell.router`. The debug
- * log is plain host debug text, not the `trace/*.json` records `ingestTraces` reads, so this is a separate ingestion
- * over a separate file. Every other debug line -- another category's output, blank lines, a truncated final write --
- * is tolerated and simply skipped; a line that carries the Router's own prefix but fails to parse as JSON is counted
- * in `unparsable_lines` rather than silently dropped, so a corrupt log is visible as a fact rather than read as zero
- * activity.
+ * #45: reads a cell's `mod_router-*.json` trace records (the Router's recorder writes one per decision) and folds them
+ * into `cell.router`, in `written_at` order. A file that is not a JSON object is counted in `unparsable_lines`
+ * rather than silently dropped, so a corrupt trace is visible as a fact rather than read as zero activity.
  *
  * Two different `usage` fields exist in these records and this function never conflates them: `root`/`spawn`/`late`
  * events carry Router's OWN Jev assessment usage (parsed from the Jev HTTP response body in client.ts) and are the
@@ -1457,58 +1453,38 @@ const ROUTER_JEV_MODEL = 'jev-1.13.0';
  * counts of the ROUTED Claude call (already priced as ordinary Claude spend elsewhere) and is kept only as a raw
  * per-step observation in `root_applied`, per mods/router/README.md: "these are per-step records, not a saving."
  *
- * PR #49 (`mods/router/hooks/router.ts` `loggable()`): the host's debug log redacts the value of any key containing
- * "token" to a bare, unquoted `[REDACTED]`, which is not valid JSON -- so on 2.1.283 every old-format usage line
- * failed `JSON.parse` outright and was already being counted in `unparsable_lines`, never misread as zero. The
- * Router now logs `input`/`output`/`cache_read`/`cache_creation` instead of `input_tokens`/`output_tokens`/
- * `cache_read_input_tokens`/`cache_creation_input_tokens`. `readUsage` below reads the new key first and falls back
- * to the old one only for a line that still parses as JSON under it (never true for a real redacted log line, but
- * costs nothing to keep for an older cached log or a hand-built fixture).
+ * The Router records `input`/`output`/`cache_read`/`cache_creation`. `readUsage` below reads that key first and
+ * falls back to `input_tokens` for an older cached record or a hand-built fixture.
  */
-export const ingestRouterLog = (cell: CellRecord, logPath: string): void => {
+export const ingestRouterRecords = (cell: CellRecord, traceDir: string): void => {
   const r = cell.router;
-  let raw: string;
+  const records: Array<Record<string, unknown>> = [];
   try {
-    if (!existsSync(logPath)) {
-      r.log = 'missing';
-      raw = '';
-    } else raw = readFileSync(logPath, 'utf8');
+    if (!existsSync(traceDir)) r.log = 'missing';
+    else {
+      for (const f of readdirSync(traceDir).filter((x) => x.startsWith('mod_router-') && x.endsWith('.json'))) {
+        try {
+          const rec = JSON.parse(readFileSync(join(traceDir, f), 'utf8')) as unknown;
+          if (isRecord(rec)) records.push(rec); else r.unparsable_lines++;
+        } catch {
+          r.unparsable_lines++;
+        }
+      }
+      records.sort((a, b) => (str(a['written_at']) ?? '').localeCompare(str(b['written_at']) ?? ''));
+    }
   } catch {
     r.log = 'unreadable';
-    raw = '';
   }
-  // Outside a Router arm the file is not expected and the Router is a producer known disabled: zero, as initialised.
+  // Outside a Router arm the directory is not expected and the Router is a producer known disabled: zero, as initialised.
   if (r.log !== null && !cell.router_expected) return;
   if (r.log === null) r.log = 'read';
-  const lines = raw.split('\n');
-  // The host ends every debug line with a newline (all eight host-obs-2026-09-27 logs do), so a last element that is
-  // not empty is a write the session never finished. It is counted as unparsable without being read, rather than
-  // tested for the `jev-router ` prefix: cut short, it can lack even the full prefix (`jev-ro`), and a prefix-only
-  // test would pass it over as host chatter and let a sent request's missing line read as a known zero.
-  const tail = lines.pop();
-  if (tail !== undefined && tail !== '') r.unparsable_lines++;
   // A `late` reply's usage belongs to the sent attempt that asked it, joined by (scope, id) -- the same identity the
   // hook logs under, never by count: two attempts under one key are two entries, and only the most recent of them
   // still missing usage is filled in, so a lost reply and a late one can never be swapped for each other.
   const sent: Array<{ key: string; tokens: number | null }> = [];
-  // `input` is PR #49's key; `input_tokens` is read only as a fallback for a line that still parses as JSON under
-  // the pre-#49 name (never true for a genuinely redacted log line -- that fails JSON.parse above and is already
-  // counted in `unparsable_lines`, not read here as zero).
+  // `input` is the Router's key; `input_tokens` is read only as a fallback for a record written under the older name.
   const readUsage = (v: unknown): { input_tokens: number | null } | null => (isRecord(v) ? { input_tokens: tokenCount(v['input']) ?? tokenCount(v['input_tokens']) } : null);
-  for (const line of lines) {
-    const idx = line.indexOf(ROUTER_LOG_PREFIX);
-    if (idx === -1) continue; // Not a Router line -- other debug output, blank lines, host chatter.
-    let rec: unknown;
-    try {
-      rec = JSON.parse(line.slice(idx + ROUTER_LOG_PREFIX.length));
-    } catch {
-      r.unparsable_lines++;
-      continue;
-    }
-    if (!isRecord(rec)) {
-      r.unparsable_lines++;
-      continue;
-    }
+  for (const rec of records) {
     const event = str(rec['event']);
     // PR #49 adds `answers` (Jev's decision receipt: control/task_clear/ordinary/tier/effort) to `root` and `spawn`
     // records. It is deliberately ignored here -- never priced, and out of #45's scope, which is cost and mechanism
@@ -1580,9 +1556,9 @@ export const ingestRouterLog = (cell: CellRecord, logPath: string): void => {
   const known = sent.filter((s) => s.tokens !== null);
   r.jev_responses_known = known.length;
   r.jev_input_tokens_known = safeSum(known.map((s) => s.tokens));
-  // The log is the only record of the Router's Jev calls, so the total is unknown, never zero, whenever it may be
-  // missing one: no readable log, a Router line that did not parse (it may have been a sent call), or a session ended
-  // by the timeout or a cancel while a request may still have been waiting for its line. The known part is kept.
+  // The records are the only account of the Router's Jev calls, so the total is unknown, never zero, whenever one may be
+  // missing: no readable directory, a record that did not parse (it may have been a sent call), or a session ended
+  // by the timeout or a cancel while a request may still have been waiting for its record. The known part is kept.
   const complete = r.log === 'read' && r.unparsable_lines === 0 && !cell.timed_out && !cell.cancelled;
   r.jev_input_tokens = !complete ? null : sent.length === 0 ? 0 : known.length === sent.length ? r.jev_input_tokens_known : null;
   r.jev_cost_known_subtotal = r.jev_input_tokens_known !== null ? (estimateJevCostUsd(ROUTER_JEV_MODEL, r.jev_input_tokens_known) ?? 0) : 0;
@@ -1667,8 +1643,8 @@ const runClaudeCell = (cs: CodingCase, spec: ArmSpec, o: Options, pluginDir: str
     /**
      * #45: the `router` arm loads jev-gate-router -- its own plugin, separate from the legacy jev-gate one above, so
      * `spec.plugin` stays false and none of the JEV_GATE_* branch above runs for it. Every flag here is verified
-     * against `claude --help` on Claude Code 2.1.283 (see bench/README.md): `--plugin-dir`, `--settings` and
-     * `--debug-file` all exist as documented. The options are ROUTER_OPTIONS, frozen in the plan's
+     * against `claude --help` on Claude Code 2.1.283 (see bench/README.md): `--plugin-dir` and `--settings`
+     * exist as documented. The options are ROUTER_OPTIONS, frozen in the plan's
      * `cli.router_policy` before anything is executed, so this file can never disagree with what the plan recorded.
      * The TypeSafe key is never written into this file -- it reaches the plugin only through the TYPESAFE_API_KEY
      * env var, already in KEEP_ENV.
@@ -1677,11 +1653,14 @@ const runClaudeCell = (cs: CodingCase, spec: ArmSpec, o: Options, pluginDir: str
       if (routerDir === null) throw new Error('a Router arm ran without a frozen Router copy');
       env['CLAUDE_CODE_ENABLE_FUNCTION_HOOKS'] = '1';
       envAdded.push('CLAUDE_CODE_ENABLE_FUNCTION_HOOKS');
+      // The Router's recorder writes its decision records here; ingestRouterRecords reads them back.
+      env['JEV_GATE_TRACE_DIR'] = traceDir;
+      envAdded.push('JEV_GATE_TRACE_DIR');
+      mkdirSync(traceDir, { recursive: true, mode: 0o700 });
       argv.push('--plugin-dir', routerDir);
       const settingsPath = join(cellDir, 'router-settings.json');
       writeFileSync(settingsPath, JSON.stringify({ pluginConfigs: { [ROUTER_SETTINGS_KEY]: { options: ROUTER_OPTIONS } } }, null, 2) + '\n', 'utf8');
       argv.push('--settings', settingsPath);
-      argv.push('--debug-file', join(cellDir, 'router-debug.log'));
     }
     // #45: router_fixed's frozen no-Jev alternative -- the host's own --effort flag, chosen up front (parseArgs
     // refuses this arm without one) so the comparison is not just "effort changed" relative to router_native.
@@ -2001,9 +1980,9 @@ export const main = async (argv: string[]): Promise<number> => {
       }
       // T8: the accounting and the model-match comparison read the same frozen configuration the child ran on.
       ingestTraces(cell, join(cellDir, 'trace'), frozenConfig.models);
-      // #45: a separate file, a separate parser -- the Router's decision log is host debug text, not a trace/*.json
-      // record. Called unconditionally like ingestTraces above; on an arm that never wrote this file it is a no-op.
-      ingestRouterLog(cell, join(cellDir, 'router-debug.log'));
+      // #45: a separate parser for the Router's own `mod_router` records. Called unconditionally like ingestTraces
+      // above; on an arm that never ran the Router it is a no-op.
+      ingestRouterRecords(cell, join(cellDir, 'trace'));
       writeJsonAtomic(join(cellDir, 'cell.json'), cell);
       addSpend(row, arm, cellDir);
       process.stdout.write(`    exit=${String(cell.exit_code)} elapsed=${String(cell.elapsed_ms)}ms timed_out=${cell.timed_out} model=${cell.init?.model ?? 'unknown'} plugins=${cell.init?.plugins.join(',') || '-'} agents=${cell.agent_calls.map((c) => `${c.subagent_type}${c.has_model ? `(pin:${c.model_param})` : ''}`).join(',') || '-'} jev: attempted=${cell.gate.eligible_attempted} patched=${cell.gate.patched} preserved=${cell.gate.preserved}\n`);

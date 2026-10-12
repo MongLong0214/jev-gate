@@ -1,9 +1,9 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 
-import { armSpecs, emptyCell, ingestRouterLog, ingestTraces, observeEvent, type Arm, type CellRecord } from '../src/bench/run.js';
+import { armSpecs, emptyCell, ingestRouterRecords, ingestTraces, observeEvent, type Arm, type CellRecord } from '../src/bench/run.js';
 import { renderMarkdown, summarizeArm, toRowView, type Report, type RowView } from '../src/bench/report.js';
 import type { ConfigV5 } from '../src/types.js';
 
@@ -414,21 +414,25 @@ describe('L6: a repeated stream message keeps its last complete cumulative usage
   });
 });
 
-describe('#45: Router producer ingestion (jev-router debug log)', () => {
+describe('#45: Router producer ingestion (mod_router trace records)', () => {
   let n45 = 0;
-  // The host ends every debug line with a newline; `truncated` leaves the last one unterminated, as a session cut
-  // short mid-write does.
-  const routerLog = (name: string, lines: string[], truncated = false): string => {
-    const file = join(tmp, 'router-logs', `${name}.log`);
-    mkdirSync(join(tmp, 'router-logs'), { recursive: true });
-    writeFileSync(file, lines.join('\n') + (truncated ? '' : '\n'));
-    return file;
+  // One `mod_router-N.json` record per `jev-router {json}` line, as the Router's recorder writes them. A payload that is
+  // not valid JSON is written as is, so it reaches the ingestion as a corrupt record.
+  const routerLog = (name: string, lines: string[]): string => {
+    const dir = join(tmp, 'router-logs', name);
+    mkdirSync(dir, { recursive: true });
+    lines.forEach((line, i) => {
+      const payload = line.slice('jev-router '.length);
+      let text = payload;
+      try { text = JSON.stringify({ ...(JSON.parse(payload) as object), phase: 'mod_router', written_at: new Date(Date.UTC(2026, 9, 12, 0, 0, i)).toISOString() }); } catch { /* A corrupt record stays as written. */ }
+      writeFileSync(join(dir, `mod_router-${i}.json`), text);
+    });
+    return dir;
   };
 
-  it('parses root/spawn/skip lines, tolerates other debug noise, and counts a truncated last line instead of dropping it', () => {
+  it('parses root/spawn/skip records and counts a corrupt record instead of dropping it', () => {
     const cell = cellFor('router');
     const log = routerLog('mixed', [
-      'plain host debug output that is not a Router line at all',
       'jev-router {"event":"router","root_effort":true,"root_model":false,"spawn_model":true,"key":"k1"}',
       'jev-router {"event":"root","turn":"t1","skipped":"host_version_mismatch"}',
       'jev-router {"event":"root","turn":"t2","patch":{"effort":"high"},"sent":true,"usage":{"input_tokens":120}}',
@@ -441,11 +445,9 @@ describe('#45: Router producer ingestion (jev-router debug log)', () => {
       'jev-router {"event":"spawn","tool_use_id":"tu3","patch":{"model":"opus"},"sent":true}',
       // A late reply, joined by identity (scope:id) to the still-unfilled "tu3" attempt above, never by count.
       'jev-router {"event":"late","scope":"spawn","tool_use_id":"tu3","usage":{"input_tokens":55}}',
-      'jev-router {this line has the prefix but is not valid JSON',
-      // Deliberately truncated: real content that fails to parse, at the very end of the file with no closing brace.
-      'jev-router {"event":"root","turn":"t5","sent":true,"usage":{"in',
-    ], true);
-    ingestRouterLog(cell, log);
+      'jev-router {this record is not valid JSON',
+    ]);
+    ingestRouterRecords(cell, log);
     const r = cell.router;
     expect(r.diagnostic).toEqual({ root_effort: true, root_model: false, spawn_model: true, key: 'k1' });
     expect(r.root_skip_reasons).toEqual({ host_version_mismatch: 1 });
@@ -465,28 +467,27 @@ describe('#45: Router producer ingestion (jev-router debug log)', () => {
     expect(r.spawn_denied).toBe(0);
     expect(r.spawn_model_mismatches).toBe(1);
     expect(r.late_events).toBe(1);
-    // Two malformed `jev-router `-prefixed lines: the mid-file non-JSON one and the truncated tail. Neither is dropped
-    // silently, and the plain noise line above (no prefix at all) contributes to neither count.
-    expect(r.unparsable_lines).toBe(2);
+    // The corrupt record is not dropped silently.
+    expect(r.unparsable_lines).toBe(1);
     // Jev attempts: root t2 (120), spawn tu1 (80), spawn tu3 (55 via the late join) -- all three resolved, so the
     // total is complete, priced at the dated list price, never conflated with root_result's routed-Claude usage.
     expect(r.jev_attempts).toBe(3);
     expect(r.jev_responses_known).toBe(3);
-    // A Router line that did not parse may have been a sent call, so the total is unknown; the known part is kept.
+    // A Router record that did not parse may have been a sent call, so the total is unknown; the known part is kept.
     expect(r.jev_input_tokens_known).toBe(255);
     expect(r.jev_input_tokens).toBeNull();
     expect(r.jev_cost_usd).toBeNull();
     expect(r.jev_cost_known_subtotal).toBeCloseTo((255 / 1_000_000) * 0.042, 10);
   });
 
-  it('PR #49: reads the redaction-safe usage keys (input/output/cache_read/cache_creation), never the old _tokens names, for pricing and for the routed call’s own per-step usage', () => {
+  it('PR #49: reads the short usage keys (input/output/cache_read/cache_creation) for pricing and for the routed call’s own per-step usage', () => {
     const cell = cellFor('router');
     const log = routerLog('new-keys', [
       'jev-router {"event":"root","turn":"t1","patch":{"effort":"high"},"sent":true,"usage":{"input":100,"output":5,"cache_read":0,"cache_creation":0}}',
       'jev-router {"event":"root_result","turn":"t1","index":0,"applied":{"effort":"high"},"observed":"claude-sonnet-5","usage":{"input":900,"output":30,"cache_read":10,"cache_creation":0}}',
       'jev-router {"event":"spawn","tool_use_id":"tuA","patch":{"model":"haiku"},"sent":true,"usage":{"input":40,"output":2,"cache_read":0,"cache_creation":0}}',
     ]);
-    ingestRouterLog(cell, log);
+    ingestRouterRecords(cell, log);
     const r = cell.router;
     expect(r.unparsable_lines).toBe(0);
     // root_result's usage is passed through raw for observation only, under whatever keys the log carries -- #49's
@@ -498,67 +499,34 @@ describe('#45: Router producer ingestion (jev-router debug log)', () => {
     expect(r.jev_cost_usd).toBeCloseTo((140 / 1_000_000) * 0.042, 10);
   });
 
-  it('PR #49: a line with a bare, unquoted [REDACTED] usage value -- the host’s own token redaction -- fails to parse and is counted unparsable, never read as a sent attempt or as zero usage', () => {
-    const cell = cellFor('router');
-    const log = routerLog('redacted', [
-      // This is exactly what the host's debug log produces for an old-format line: a bare, unquoted token, which is
-      // not valid JSON at all (JSON.parse throws on the bare `REDACTED`), unlike every other line in this suite.
-      'jev-router {"event":"spawn","tool_use_id":"tuR","patch":{"model":"haiku"},"sent":true,"usage":{"input_tokens":[REDACTED],"output_tokens":[REDACTED]}}',
-      'jev-router {"event":"root","turn":"t9","patch":{"effort":"high"},"sent":true,"usage":{"input":77}}',
-    ]);
-    ingestRouterLog(cell, log);
-    const r = cell.router;
-    expect(r.unparsable_lines).toBe(1);
-    // The redacted line's whole record failed to parse, so it never became a "sent" attempt at all -- not a zero, not
-    // an entry. Only the one valid line after it counts.
-    expect(r.spawn_assessed).toBe(0);
-    expect(r.jev_attempts).toBe(1);
-    expect(r.jev_input_tokens_known).toBe(77);
-    expect(r.jev_input_tokens).toBeNull();
-  });
-
   it('a sent attempt whose usage never comes back leaves the Router total unknown, not zero', () => {
     const cell = cellFor('router');
     const log = routerLog('unresolved', ['jev-router {"event":"spawn","tool_use_id":"tuX","patch":{"model":"haiku"},"sent":true}']);
-    ingestRouterLog(cell, log);
+    ingestRouterRecords(cell, log);
     expect(cell.router).toMatchObject({ jev_attempts: 1, jev_responses_known: 0, jev_input_tokens: null, jev_cost_usd: null, jev_cost_known_subtotal: 0 });
   });
 
-  it('a Router arm with no debug log has an unknown Jev cost, not zero; an arm without the Router stays at zero', () => {
-    const missing = join(tmp, 'router-logs', 'does-not-exist.log');
+  it('a Router arm with no trace records has an unknown Jev cost, not zero; an arm without the Router stays at zero', () => {
+    const missing = join(tmp, 'router-logs', 'does-not-exist');
     const cell = cellFor('router');
-    ingestRouterLog(cell, missing);
+    ingestRouterRecords(cell, missing);
     expect(cell.router).toMatchObject({ log: 'missing', jev_attempts: 0, jev_input_tokens: null, jev_cost_usd: null, jev_cost_known_subtotal: 0 });
     for (const arm of ['router_native', 'router_fixed', 'sonnet_native'] as const) {
       const other = cellFor(arm);
-      ingestRouterLog(other, missing);
+      ingestRouterRecords(other, missing);
       expect(other.router).toMatchObject({ jev_attempts: 0, jev_input_tokens: 0, jev_cost_usd: 0 });
     }
   });
 
-  it('an unterminated last line is a cut-short write and leaves the cost unknown, even when it is too short to carry the prefix', () => {
-    for (const [name, tail] of [['cut-prefix', 'jev-ro'], ['cut-noise', 'plain host debug out']] as const) {
-      const cell = cellFor('router');
-      ingestRouterLog(cell, routerLog(name, ['plain host debug output', tail], true));
-      expect(cell.router).toMatchObject({ log: 'read', unparsable_lines: 1, jev_attempts: 0, jev_input_tokens: null, jev_cost_usd: null, jev_cost_known_subtotal: 0 });
-    }
-    const whole = cellFor('router');
-    ingestRouterLog(whole, routerLog('whole-noise', ['plain host debug output', 'jev-ro']));
-    // Terminated, the same short line is ordinary host output: a complete log with no Router request is a known zero.
-    expect(whole.router).toMatchObject({ unparsable_lines: 0, jev_input_tokens: 0, jev_cost_usd: 0 });
-  });
-
-  it('a Router session ended by the timeout or a cancel has an unknown Jev cost, whatever its log shows', () => {
-    const logPath = join(tmp, 'router-logs', 'clean.log');
-    mkdirSync(dirname(logPath), { recursive: true });
-    writeFileSync(logPath, `jev-router ${JSON.stringify({ event: 'root', turn: 't1', sent: true, patch: {}, usage: { input: 40 } })}\n`);
+  it('a Router session ended by the timeout or a cancel has an unknown Jev cost, whatever its records show', () => {
+    const logPath = routerLog('clean', [`jev-router ${JSON.stringify({ event: 'root', turn: 't1', sent: true, patch: {}, usage: { input: 40 } })}`]);
     const clean = cellFor('router');
-    ingestRouterLog(clean, logPath);
+    ingestRouterRecords(clean, logPath);
     expect(clean.router).toMatchObject({ log: 'read', jev_input_tokens: 40 });
     for (const end of ['timed_out', 'cancelled'] as const) {
       const cell = cellFor('router');
       cell[end] = true;
-      ingestRouterLog(cell, logPath);
+      ingestRouterRecords(cell, logPath);
       expect(cell.router).toMatchObject({ jev_input_tokens_known: 40, jev_input_tokens: null, jev_cost_usd: null });
       expect(cell.router.jev_cost_known_subtotal).toBeGreaterThan(0);
     }
@@ -583,7 +551,7 @@ describe('#45: Router producer ingestion (jev-router debug log)', () => {
 
     it('Router cost known: Claude 2 + legacy gate 0 + Router Jev (known) sums to a complete total', () => {
       const cell = ranRouterCell(2);
-      ingestRouterLog(cell, routerLog('sum-known', ['jev-router {"event":"spawn","tool_use_id":"tuS","patch":{"model":"opus"},"sent":true,"usage":{"input_tokens":1000}}']));
+      ingestRouterRecords(cell, routerLog('sum-known', ['jev-router {"event":"spawn","tool_use_id":"tuS","patch":{"model":"opus"},"sent":true,"usage":{"input_tokens":1000}}']));
       const expectedRouterCost = (1000 / 1_000_000) * 0.042;
       const row = routerRow(cell);
       expect(row.jev_cost_by_producer).toMatchObject({ legacy: 0 });
@@ -597,7 +565,7 @@ describe('#45: Router producer ingestion (jev-router debug log)', () => {
 
     it('Router enabled but unobserved: the row and the arm total go null, never zero', () => {
       const cell = ranRouterCell(2);
-      ingestRouterLog(cell, routerLog('sum-unobserved', ['jev-router {"event":"spawn","tool_use_id":"tuU","patch":{"model":"haiku"},"sent":true}']));
+      ingestRouterRecords(cell, routerLog('sum-unobserved', ['jev-router {"event":"spawn","tool_use_id":"tuU","patch":{"model":"haiku"},"sent":true}']));
       const row = routerRow(cell);
       expect(row.jev_cost_by_producer.router).toBeNull();
       expect(row.jev_cost_usd).toBeNull();
@@ -608,7 +576,7 @@ describe('#45: Router producer ingestion (jev-router debug log)', () => {
     });
 
     it('known-disabled Router on a non-router arm contributes zero, not unknown', () => {
-      // No ingestRouterLog call at all: this arm never turns the Router on (router_expected is false from armSpecs).
+      // No ingestRouterRecords call at all: this arm never turns the Router on (router_expected is false from armSpecs).
       const cell = ranRouterCell(2, 'sonnet_native');
       const row = routerRow(cell, 'sonnet_native');
       expect(row.jev_cost_by_producer.router).toBe(0);
@@ -642,7 +610,7 @@ describe('#45: Router producer ingestion (jev-router debug log)', () => {
       type: 'result', subtype: 'success', is_error: false, duration_ms: 10, num_turns: 1, total_cost_usd: 1,
       modelUsage: { 'claude-sonnet-5': { inputTokens: 100, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: 1 } }, permission_denials: [],
     });
-    ingestRouterLog(cell, routerLog('render', [
+    ingestRouterRecords(cell, routerLog('render', [
       'jev-router {"event":"spawn","tool_use_id":"tuR","patch":{"model":"opus"},"sent":true,"usage":{"input_tokens":50}}',
       'jev-router {"event":"spawn_result","tool_use_id":"tuR","requested":"opus","observed":"sonnet","reason":"model_mismatch","agent_id":"a1"}',
     ]));
@@ -663,7 +631,7 @@ describe('#45: Router producer ingestion (jev-router debug log)', () => {
   it('renders the Router table for a sole Router cell whose log is missing, with its cost as unknown', () => {
     const cell = cellFor('router');
     cell.started = true;
-    ingestRouterLog(cell, join(tmp, 'router-logs', 'never-written.log'));
+    ingestRouterRecords(cell, join(tmp, 'router-logs', 'never-written'));
     const row = toRowView({ job: 'mini', group: 'g', repetition: 1, arm: 'router', file: '' }, JSON.parse(JSON.stringify(cell)) as Record<string, unknown>);
     const arm = summarizeArm('router', [row]);
     expect(arm.router).toMatchObject({ jev_attempts: 0, rows_cost_unknown: 1, jev_cost_usd: null });

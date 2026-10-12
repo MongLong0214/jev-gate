@@ -27,6 +27,7 @@ interface World {
   version?: { version: string; base?: string };
 }
 
+const TRACE_DIR = '/trace';
 const fakeHost = (world: World = {}) => {
   const envReads: string[] = [];
   const requests: Array<{ url: string; headers: Record<string, string> }> = [];
@@ -41,7 +42,13 @@ const fakeHost = (world: World = {}) => {
         if (text === undefined) throw new Error('ENOENT');
         return text;
       },
+      write: async (_path: string, text: string) => {
+        // The Mod's records reach the trace as files; each one is read back as the line the Mod emitted.
+        const { host: _host, session_id: _session, phase, version: _version, invocation_id: _id, written_at: _at, ...fields } = JSON.parse(text) as Record<string, unknown>;
+        logs.push(`jev-${String(phase).slice(4)} ${JSON.stringify(fields)}`);
+      },
       stat: async (path: string) => {
+        if (path === TRACE_DIR) return { kind: 'dir', isLink: false, size: 0 };
         const text = world.files?.[path];
         if (text !== undefined) return { kind: 'file', isLink: false, size: text.length };
         if (Object.keys(world.files ?? {}).some(file => file.startsWith(path + '/'))) return { kind: 'dir', isLink: false, size: 0 };
@@ -51,12 +58,11 @@ const fakeHost = (world: World = {}) => {
     env: {
       get: async (name: string) => {
         envReads.push(name);
-        return world.env?.[name];
+        return world.env?.[name] ?? { HOME: '/home/test', JEV_GATE_TRACE_DIR: TRACE_DIR }[name];
       },
     },
     settings: { read: async () => ({ effortLevel: 'high', ...world.settings }) },
-    session: { version: async () => version },
-    ui: { log: (text: string) => logs.push(text) },
+    session: { id: async () => 'session', version: async () => version },
     clock: { sleep: (_ms: number, o?: { signal?: AbortSignal }) => new Promise<void>((_r, reject) => o?.signal?.addEventListener('abort', () => reject(new Error('aborted')))) },
     http: {
       fetch: async (url: string, init: { headers: Record<string, string>; body: string }) => {
@@ -114,21 +120,8 @@ describe('register', () => {
     expect([...(await registered({ enabled: true, routeSubagentModel: false, routeSubagentEffort: false, routeMainEffort: false, routeMainModel: false })).keys()]).toEqual([]);
   });
 
-  it('registers only a diagnostic for an option it cannot read, naming the field and never the value', async () => {
-    const hooks = await registered({ enabled: true, timeoutMs: 'soon' });
-    expect([...hooks.keys()]).toEqual(['session.start']);
-    const host = fakeHost();
-    const e = { cwd: '/w' };
-    const out = await hooks.get('session.start')?.(host.$, e, withSignal(async (x: unknown) => ({ passed: x })));
-    expect(out).toEqual({ passed: e });
-    expect(host.logs).toEqual(['jev-router {"event":"router","disabled":"invalid_option","field":"timeoutMs"}']);
-
-    // A logger that throws changes nothing: the event still goes on.
-    const broken = fakeHost();
-    broken.$.ui.log = () => {
-      throw new Error('log unavailable');
-    };
-    expect(await hooks.get('session.start')?.(broken.$, e, withSignal(async (x: unknown) => ({ passed: x })))).toEqual({ passed: e });
+  it('registers nothing for an option it cannot read', async () => {
+    expect([...(await registered({ enabled: true, timeoutMs: 'soon' })).keys()]).toEqual([]);
   });
 
   it('registers the root hooks and the spawn hooks their switches ask for', async () => {

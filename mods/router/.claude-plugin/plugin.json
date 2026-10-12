@@ -100,7 +100,7 @@
     },
     "logDecisions": {
       "title": "Log decisions",
-      "description": "Write one metadata-only line per decision to the debug log. Never task text or the key.",
+      "description": "Record one metadata-only trace record per decision. Never task text or the key.",
       "type": "boolean",
       "default": true
     },

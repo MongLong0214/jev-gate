@@ -114,7 +114,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
   it('settles promptless native Codex requests in the live circuit only after their exact response', async () => {
     const request = { host: 'codex', session_id: 'native-session', prompt_id: null, request_id: 'native-request', written_at: stamp, phase: 'codex_model_request', submitted_model: 'gpt-6-luna' };
     const response = { ...request, written_at: new Date(Date.parse(stamp) + 100).toISOString(), phase: 'codex_router_response', selected_model: 'gpt-6-luna', observed_model: 'gpt-6-luna' };
-    const show = (records: Record<string, unknown>[]) => push(buildOperations(records, [], new Date(), { trace: true, debug: false }).runs);
+    const show = (records: Record<string, unknown>[]) => push(buildOperations(records, [], new Date(), { trace: true }).runs);
     show([request]);
     const p = await page();
     expect(await p.locator('#pipeline-state').textContent()).toBe('1개 단계 진행 중');

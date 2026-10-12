@@ -17,8 +17,18 @@ const hooksFor = async (options: Record<string, unknown>) => {
   return hooks;
 };
 
+// The Mod's records reach the trace as files; each one is read back here as the line the Mod emitted.
 const logs: string[] = [];
-const $ = { ui: { log: (t: string) => logs.push(t) } };
+const hostWith = (write: (path: string, text: string) => Promise<void>) => ({
+  env: { get: async (name: string) => ({ HOME: '/h', JEV_GATE_TRACE_DIR: '/h/trace' } as Record<string, string>)[name] },
+  session: { id: async () => 's' },
+  fs: { stat: async () => ({ isLink: false, kind: 'dir', size: 0 }), exists: async () => false, read: async () => '', write },
+  clock: { sleep: () => new Promise<void>(() => undefined) },
+});
+const $ = hostWith(async (_path, text) => {
+  const { host: _host, session_id: _session, phase, version: _version, invocation_id: _id, written_at: _at, ...fields } = JSON.parse(text) as Record<string, unknown>;
+  logs.push(`jev-${String(phase).slice(4)} ${JSON.stringify(fields)}`);
+});
 
 const conversation = () => [
   { role: 'user', text: 'Rename parseRow.', toolUses: [], handle: 'h0' },
@@ -56,12 +66,8 @@ describe('register', () => {
     expect([...(await hooksFor({ enabled: false })).keys()]).toEqual([]);
   });
 
-  it('with an option it cannot use, registers only a session-start diagnostic naming the field', async () => {
-    const hooks = await hooksFor({ enabled: true, budgetChars: -1 });
-    expect([...hooks.keys()]).toEqual(['session.start']);
-    logs.length = 0;
-    await hooks.get('session.start')!($, {}, async () => 'went on');
-    expect(logs).toEqual(['jev-compact {"event":"compact","disabled":"invalid_option","field":"budgetChars"}']);
+  it('with an option it cannot use, registers nothing', async () => {
+    expect([...(await hooksFor({ enabled: true, budgetChars: -1 })).keys()]).toEqual([]);
   });
 
   it('shadow: the engine compacts; the digest size and the engine time and usage are logged', async () => {
@@ -120,9 +126,9 @@ describe('register', () => {
     expect(JSON.parse(logs.at(-1)!.replace(/^jev-compact /, ''))).toMatchObject({ applied: false, fallback: 'tail_too_large', coreError: true });
   });
 
-  it('a throwing log does not stand between the host and its compaction', async () => {
+  it('a failing recorder does not stand between the host and its compaction', async () => {
     const hook = (await hooksFor({ enabled: true, mode: 'active', compactManual: false })).get('session.compact')!;
-    const bad = { ui: { log: () => { throw new Error('log down'); } } };
+    const bad = hostWith(async () => { throw new Error('write down'); });
     const r = (await hook(bad, { trigger: 'auto', messages: conversation() }, nextSpy().next)) as { messages: unknown[] };
     expect(r.messages.length).toBeGreaterThan(1);
     const shadow = (await hooksFor({ enabled: true, mode: 'shadow' })).get('session.compact')!;
