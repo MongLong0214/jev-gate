@@ -4,8 +4,9 @@ export const CIRCUIT_CSS = `
 .node{position:relative;z-index:1;border:1px solid var(--line);border-radius:8px;padding:11px 12px 0;background:var(--bg);display:flex;flex-direction:column;gap:4px;min-height:132px;min-width:0;overflow:hidden;text-align:left;font:inherit;color:inherit;cursor:pointer;appearance:none;transition:background .5s,border-color .2s}
 .node:hover{border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}.node.sel{border-color:var(--accent)}.node.zap{background:color-mix(in srgb,var(--accent) 16%,var(--bg));transition:none}
 .node .t{font-size:13px;font-weight:600;display:flex;align-items:center;gap:6px;white-space:nowrap}.node .t i{width:6px;height:6px;border-radius:50%;background:var(--faint);flex:none}.node.live .t i{background:var(--accent)}.node.err .t i{background:var(--err)}
-.node .d{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.node .d b{font-weight:500;color:var(--ink);font-variant-numeric:tabular-nums;transition:color .8s}.node.idle .d b{color:var(--faint)}
-.node .dec b span{display:inline-block;margin-right:.45em}.node .dec b span:last-child{margin-right:0}.node[data-feature=router] .dec .s0{min-width:3.6em}.node[data-feature=router] .dec .s1{min-width:3.9em}
+.node .d{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.node .d b{font-weight:500;color:var(--ink);font-variant-numeric:tabular-nums;transition:color .8s}.node.idle .d b{color:var(--faint)}.node .dec.flash b{color:var(--accent);transition:none}
+.node .dec b span{display:inline-block;margin-right:.45em}.node .dec b span:last-child{margin-right:0}.node[data-feature=router] .dec .s0{min-width:3.3em}.node[data-feature=router] .dec .s1{min-width:3.9em}
+.node{container-type:inline-size}@container (max-width:150px){.node .dec b{display:block}}
 .node .foot{margin-top:auto;display:flex;align-items:center;gap:6px;font-size:11px;color:var(--faint)}.node .ago{margin-left:auto;min-width:44px;text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 .strip{position:relative;display:block;height:14px;margin:6px -12px 0;border-top:1px solid var(--line);overflow:hidden}.strip .tr{position:absolute;inset:0}
 .strip i{position:absolute;bottom:3px;width:1.5px;height:7px;background:var(--accent);border-radius:1px;animation:slide 60s linear forwards}.node.idle .strip i{background:var(--faint)}
@@ -32,7 +33,8 @@ const isCall=s=>s.lane==='jev'&&s.durationMs!==undefined&&!s.lifecycle;
 const ACTIVITY_MS=60000,MAX_TRIPS=24;
 let circuitMode='live',circuitFeature=null,held=new Set(),timers=new Set(),seenIds=null,seenScope='',frameData=null,frameAt=0,frameGap=1000;
 const motion=()=>!paused&&!$('connection').classList.contains('warn')&&!matchMedia('(prefers-reduced-motion: reduce)').matches;
-const modelName=v=>{const m=String(v||'').match(/(haiku|sonnet|opus|fable)/);return m?m[1]:String(v||'').replace(/^claude-/,'')};
+// A node names the model family, as Claude ids reduce to sonnet or opus; the full id stays in the stage detail.
+const modelName=v=>{const m=String(v||'').match(/(haiku|sonnet|opus|fable)|^gpt-[0-9.]+-([a-z]+)$/);return m?m[1]||m[2]:String(v||'').replace(/^claude-/,'')};
 const fmt=t=>{const s=Math.floor(t/1000);return !Number.isFinite(t)?'–':s<2?label('방금','now'):s<60?label(s+'초 전',s+'s ago'):s<3600?label(Math.floor(s/60)+'분 전',Math.floor(s/60)+'m ago'):label(Math.floor(s/3600)+'시간 전',Math.floor(s/3600)+'h ago')};
 const pct=v=>Math.round(v*100)+'%';
 const confRest=rc=>pct(rc.confidence)+(rc.threshold==null?'':' · '+label('변경 기준 ','change threshold ')+pct(rc.threshold)),confText=rc=>rc?.confidence==null?'–':label('확신 ','Confidence ')+confRest(rc);
@@ -78,8 +80,9 @@ function pipeline(ops,arrived){const root=$('pipeline');if(!root.querySelector('
     const ago=b.querySelector('.ago');ago.dataset.at=last?.at||'';ago.dataset.none=last?'':f?.state==='unsupported'?label('미지원','Unsupported'):f?.state==='unavailable'?label('기록원 없음','No source'):'–';
     b.classList.toggle('live',age<ACTIVITY_MS);b.classList.toggle('idle',!(age<ACTIVITY_MS));b.classList.toggle('err',last?.state==='error'||last?.model?.status==='mismatch');b.classList.toggle('sel',circuitFeature===id);b.setAttribute('aria-pressed',String(circuitFeature===id));
     ticks(b.querySelector('.strip .tr'),recent.filter(s=>s.feature===id),ACTIVITY_MS);
-    if(arrived?.feature===id&&(circuitMode==='live'||arrived.runId===selectedRun)){b.classList.add('zap');setTimeout(()=>b.classList.remove('zap'),160)}}
-  const latest=recent.find(isCall);if(!arrived||!isCall(arrived))root.querySelector('.lat').textContent=latest?ms(latest.durationMs):'–';
+    if(arrived?.feature===id&&(circuitMode==='live'||arrived.runId===selectedRun)){const d=b.querySelector('.dec');b.classList.add('zap');d.classList.add('flash');setTimeout(()=>b.classList.remove('zap'),160);requestAnimationFrame(()=>requestAnimationFrame(()=>d.classList.remove('flash')))}}
+  // While a trip is in flight its ping owns the latency label, so a redraw never steps it back to an older call.
+  const latest=recent.find(isCall);if(!held.size&&(!arrived||!isCall(arrived)))root.querySelector('.lat').textContent=latest?ms(latest.durationMs):'–';
   circuitInspector(ops,pool);requestAnimationFrame(wires)}
 function circuitInspector(ops,pool){const root=$('circuit-inspector'),id=circuitFeature||'admission',guide=GUIDE[id],i=lang==='en'?1:0,open=root.querySelector('details')?.open,last=pool.reduce((a,s)=>s.feature===id&&(!a||s.at>a.at)?s:a,null),run=last?ops.runs.find(r=>r.steps.some(s=>s.id===last.id)):null;root.replaceChildren();
   const head=el('div','ch');head.append(el('h2','',tr(featureInfo[id][0])),el('span','hint',label('단계 상세','Stage details')));const body=el('div','b');
