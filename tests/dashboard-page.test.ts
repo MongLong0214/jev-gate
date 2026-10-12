@@ -31,9 +31,13 @@ function page() {
 }
 
 describe('dashboard live interactions', () => {
-  it('always shows running version and honest latest-release status at the top in both languages', () => {
+  it('shows the running version and honest latest-release status only when a version is known, in both languages', () => {
     const p = page(), release = { latest: '0.8.15', checkedAt: stamp, error: null };
+    expect(p.get('version-badge').hidden).toBe(true);
+    p.push({ ...snapshot([]), version: { running: null, installed: null, release: null } });
+    expect(p.get('version-badge').hidden).toBe(true);
     p.push({ ...snapshot([]), version: { running: '0.8.14', installed: '0.8.14', release } });
+    expect(p.get('version-badge').hidden).toBe(false);
     expect(p.get('version-badge').textContent).toContain('v0.8.14'); expect(p.get('version-badge').dataset.state).toBe('update');
     p.push({ ...snapshot([]), version: { running: '0.8.15', installed: '0.8.15', release } });
     expect(p.get('version-badge').dataset.state).toBe('current'); expect(p.get('version-badge').textContent).toContain('최신');
