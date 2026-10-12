@@ -55,7 +55,7 @@ const routerHooks = () =>
 // The evidence archive is the plugin directory with its one bundled server: nothing of dist/, hooks or agents.
 const EVIDENCE = 'plugins/evidence';
 const EVIDENCE_FILES = ['.claude-plugin/plugin.json', 'dist/server.mjs', 'skills/evidence/SKILL.md', 'README.md'];
-const CODEX_FILES = ['.codex-plugin/plugin.json', '.agents/plugins/marketplace.json', '.mcp.json', 'hooks/hooks.json', 'dist/hook.mjs', 'dist/server.mjs', 'dist/cli.mjs', 'skills/jev-gate/SKILL.md', 'README.md'];
+const CODEX_FILES = ['.codex-plugin/plugin.json', '.agents/plugins/marketplace.json', '.mcp.json', 'hooks/hooks.json', 'dist/hook.mjs', 'dist/server.mjs', 'dist/cli.mjs', 'dist/activity-worker.mjs', 'skills/jev-gate/SKILL.md', 'README.md'];
 
 // The one jev-gate plugin (v0.6.0) also carries the three Mods, loaded through hooks/register.ts from their source, and
 // the evidence server with its skill, at the paths the manifest and that module name. Lean's hook set loads no Mod, but

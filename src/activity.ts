@@ -7,6 +7,7 @@ import { readLiveness } from './liveness.js';
 import { buildOperations, type DebugRecord, type OperationsView } from './operations.js';
 import type { Host } from './host-support.js';
 import { ClaudeWorkerActivityReader, type WorkerActivityView } from './claude-worker-activity.js';
+import { memo } from './memo.js';
 
 /**
  * A local view of calls the gate and the router already recorded. It whitelists short tokens from those records.
@@ -110,11 +111,8 @@ const sub = (r: Rec, k: string): Rec | null => (isRecord(r[k]) ? r[k] : null);
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
 /** A recorded token. Spaces and long text stay out, so a prompt cannot ride along in a reason field. */
-const token = (v: unknown): string | null => {
-  if (typeof v !== 'string' || !TOKEN.test(v)) return null;
-  if (v.toLowerCase().includes('sk-')) return null;
-  return v;
-};
+const safeToken = memo((v: string): string | null => TOKEN.test(v) && !v.toLowerCase().includes('sk-') ? v : null);
+const token = (v: unknown): string | null => typeof v === 'string' ? safeToken(v) : null;
 
 const iso = (v: unknown): string => (typeof v === 'string' && ISO.test(v) ? v : '');
 
@@ -553,6 +551,25 @@ const buildLive = (records: Rec[], routerRows: Array<{ at: string; rec: Rec }>, 
   };
 };
 
+// Reader records stay the same objects until their file changes, so the rows derived from them can be reused.
+const hosted = new WeakMap<Rec, Rec>();
+const withHost = (original: Rec, host: Host): Rec => {
+  const value = original['host'] ?? host, cached = hosted.get(original);
+  if (cached && cached['host'] === value) return cached;
+  const r = { ...original, host: value }; hosted.set(original, r); return r;
+};
+const modRows = new WeakMap<Rec, DebugRecord>();
+const fingerprints = new WeakMap<DebugRecord, string>();
+// A native record and its optional debug mirror describe one event: compare every field but the session.
+const fingerprint = (row: DebugRecord): string => {
+  let key = fingerprints.get(row);
+  if (key === undefined) {
+    key = JSON.stringify([row.component, Object.entries(row.rec).filter(([k]) => k !== 'session_id').sort(([a], [b]) => a.localeCompare(b))]);
+    fingerprints.set(row, key);
+  }
+  return key;
+};
+
 export const loadActivity = (opts: { traceDir: string | null; traceDirs?: readonly { host: Host; dir: string }[] | undefined; debugDir: string | null; env: Env; now?: Date; host?: Host; traceCache?: TraceCache; traceReader?: TraceDirectoryReader; workerReader?: ClaudeWorkerActivityReader }): ActivitySnapshot => {
   const notes = [...NOTES];
   const events: ActivityEvent[] = [];
@@ -577,13 +594,18 @@ export const loadActivity = (opts: { traceDir: string | null; traceDirs?: readon
     unreadable += read.unreadable;
     if (read.unreadable > 0) notes.push(`추적 파일 ${read.unreadable}개는 읽지 못했습니다.`);
     for (const original of read.records) {
-      const r: Rec = { ...original, host: original['host'] ?? source.host };
+      const r = withHost(original, source.host);
       if (opts.host && (r['host'] === 'codex' ? 'codex' : 'claude') !== opts.host) continue;
       gateRecords.push(r);
       const phase = token(r['phase']);
       if (phase && ['mod_router', 'mod_compact', 'mod_output', 'claude_router', 'claude_compact', 'claude_output'].includes(phase)) {
-        const { host: _host, session_id: _session, phase: _phase, version: _version, invocation_id: _id, written_at: _at, ...fields } = r;
-        recordedMods.push({ component: phase.replace(/^(mod|claude)_/, '') as DebugRecord['component'], at: token(r['written_at']) ?? String(r['written_at'] ?? ''), rec: { ...fields, session_id: r['session_id'] } });
+        let row = modRows.get(r);
+        if (!row) {
+          const { host: _host, session_id: _session, phase: _phase, version: _version, invocation_id: _id, written_at: _at, ...fields } = r;
+          row = { component: phase.replace(/^(mod|claude)_/, '') as DebugRecord['component'], at: token(r['written_at']) ?? String(r['written_at'] ?? ''), rec: { ...fields, session_id: r['session_id'] } };
+          modRows.set(r, row);
+        }
+        recordedMods.push(row);
         continue;
       }
       if (phase === 'admission_result') {
@@ -600,12 +622,11 @@ export const loadActivity = (opts: { traceDir: string | null; traceDirs?: readon
   if (opts.debugDir !== null && opts.host !== 'codex') {
     const router = readRouter(opts.debugDir);
     notes.push(...router.notes);
-    // A native record and its optional debug mirror describe one event. Prefer the independent recorder.
-    const fingerprint = (component: string, r: Rec) => JSON.stringify([component, Object.entries(r).filter(([key]) => key !== 'session_id').sort(([a], [b]) => a.localeCompare(b))]);
+    // Prefer the independent recorder over the debug mirror of the same event.
     const remaining = new Map<string, number>();
-    for (const row of recordedMods) { const key = fingerprint(row.component, row.rec); remaining.set(key, (remaining.get(key) ?? 0) + 1); }
+    for (const row of recordedMods) { const key = fingerprint(row); remaining.set(key, (remaining.get(key) ?? 0) + 1); }
     for (const row of router.all) {
-      const key = fingerprint(row.component, row.rec); const matches = remaining.get(key) ?? 0;
+      const key = fingerprint(row); const matches = remaining.get(key) ?? 0;
       if (matches > 0) remaining.set(key, matches - 1); else debugRows.push(row);
     }
   }
@@ -623,7 +644,7 @@ export const loadActivity = (opts: { traceDir: string | null; traceDirs?: readon
   const liveness = opts.host === 'codex' ? null : readLiveness(opts.env);
   const hosts = new Set(gateRecords.map(r => r['host'] === 'codex' ? 'codex' : 'claude'));
   const host = opts.host ?? (hosts.size > 1 ? 'mixed' : hosts.has('codex') ? 'codex' : 'claude');
-  // 새 요청이 막히면 같은 활성 구간의 이후 호출은 네트워크 없이 credential_refused 가 되므로, 성공(ok)이 나올 때까지 소진 상태를 유지한다.
+  // After a 402 the router refuses later calls locally (credential_refused), so exhaustion holds until a call succeeds.
   let credit: ActivitySnapshot['credit'] = { exhausted: false, at: null };
   for (const row of [...debugRows].filter(row => row.component === 'router').sort((a, b) => b.at.localeCompare(a.at))) {
     const assessment = row.rec['assessment'];

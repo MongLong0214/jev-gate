@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { allocatedTraceRecords } from './explain.js';
 import { codexOperations } from './codex-operations.js';
 import { operationState } from './operation-state.js';
+import { memo } from './memo.js';
 import { CODEX_CAPABILITIES, CODEX_PLUGIN_CAPABILITIES, type HostCapability, type Host } from './host-support.js';
 
 /** A display model made only from named metadata fields. Raw prompts, source and debug text never leave here. */
@@ -94,12 +95,15 @@ const TOKEN = /^[A-Za-z0-9_.:/+@-]{1,80}(?:\[[A-Za-z0-9_-]{1,16}\])?$/;
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
 const rec = (v: unknown): Rec | null => typeof v === 'object' && v !== null && !Array.isArray(v) ? v as Rec : null;
 const field = (r: Rec | null, key: string): Rec | null => r ? rec(r[key]) : null;
-const token = (v: unknown): string | null => typeof v === 'string' && TOKEN.test(v) && !v.toLowerCase().includes('sk-') && !v.toLowerCase().includes('jv_live_') ? v : null;
+const safeToken = memo((v: string): string | null => TOKEN.test(v) && !v.toLowerCase().includes('sk-') && !v.toLowerCase().includes('jv_live_') ? v : null);
+const token = (v: unknown): string | null => typeof v === 'string' ? safeToken(v) : null;
 const number = (v: unknown): number | null => typeof v === 'number' && Number.isFinite(v) ? v : null;
 const iso = (v: unknown): string => typeof v === 'string' && ISO.test(v) ? v : '';
 const list = (v: unknown, cap = 16): string[] => Array.isArray(v) ? v.slice(0, cap).map(token).filter((x): x is string => x !== null) : [];
-const id = (v: string): string => createHash('sha256').update(v).digest('hex').slice(0, 12);
-const n = (v: number | null): string => v === null ? '?' : Number(v.toFixed(2)).toLocaleString('en-US');
+const id = memo((v: string): string => createHash('sha256').update(v).digest('hex').slice(0, 12));
+// Same output as toLocaleString('en-US'), without building a formatter per call.
+const EN = new Intl.NumberFormat('en-US');
+const n = (v: number | null): string => v === null ? '?' : EN.format(Number(v.toFixed(2)));
 const text = (...parts: Array<string | null | undefined | false>): string => parts.filter((x): x is string => typeof x === 'string' && x.length > 0).join(' · ');
 const modelObservation = (selected: unknown, observed: unknown, selectedEffort?: unknown, observedEffort?: unknown, confirmation?: unknown, submission?: { value: unknown; source: 'host_hook' | 'provider_request' }): OperationStep['model'] => {
   const wanted = token(selected); const actual = token(observed);

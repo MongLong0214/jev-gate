@@ -10,6 +10,8 @@ await build({
     server: join(root, 'src/evidence/server.ts'),
     cli: join(root, 'src/codex/cli.ts'),
     worktree: join(root, 'src/worktree-cli.ts'),
+    // The dashboard rebuilds history on this thread; the CLI bundle starts it from its own directory.
+    'activity-worker': join(root, 'src/activity-worker.ts'),
   },
   outdir: process.argv[2] ?? join(root, 'plugins/codex/dist'),
   outExtension: { '.js': '.mjs' },

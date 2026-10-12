@@ -1,4 +1,5 @@
 import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readFileSync, type Stats } from 'node:fs';
+import { lstat, open, type FileHandle } from 'node:fs/promises';
 import { sameModel } from './claude-models.js';
 import { dirname, join } from 'node:path';
 
@@ -57,15 +58,21 @@ export const traceDirectoryIdentity = (stat: Stats): string => `${stat.dev}:${st
 const traceName = (name: string): boolean => name.endsWith('.json') && !name.startsWith('.');
 const sortedRecords = (records: Rec[]): Rec[] => records.sort((a, b) => (str(a['written_at']) ?? '').localeCompare(str(b['written_at']) ?? ''));
 
+/** The cached record when the file is unchanged, null when it cannot be a trace, undefined when it must be read. */
+const cachedTrace = (path: string, cache: TraceCache, stat: Stats): Rec | null | undefined => {
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 512_000) { cache.delete(path); return null; }
+  const previous = cache.get(path);
+  if (previous?.signature === signature(stat)) return previous.record;
+  cache.delete(path);
+  return undefined;
+};
+
 const readTraceFile = (path: string, cache?: TraceCache, existingStat?: Stats): Rec | null => {
   let fd: number | undefined;
   try {
     if (cache) {
-      const stat = existingStat ?? lstatSync(path);
-      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 512_000) { cache.delete(path); return null; }
-      const previous = cache.get(path);
-      if (previous?.signature === signature(stat)) return previous.record;
-      cache.delete(path);
+      const cached = cachedTrace(path, cache, existingStat ?? lstatSync(path));
+      if (cached !== undefined) return cached;
     }
     fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
     const stat = fstatSync(fd);
@@ -76,6 +83,23 @@ const readTraceFile = (path: string, cache?: TraceCache, existingStat?: Stats): 
     return parsed;
   } catch { cache?.delete(path); return null; }
   finally { if (fd !== undefined) closeSync(fd); }
+};
+
+/** The same checks as readTraceFile with asynchronous I/O, so many small files can be read concurrently. */
+const readTraceFileAsync = async (path: string, cache: TraceCache, stat: Stats): Promise<Rec | null> => {
+  const cached = cachedTrace(path, cache, stat);
+  if (cached !== undefined) return cached;
+  let handle: FileHandle | undefined;
+  try {
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const opened = await handle.stat();
+    if (!opened.isFile() || opened.size > 512_000) return null;
+    const parsed: unknown = JSON.parse(await handle.readFile('utf8'));
+    if (!isRecord(parsed)) return null;
+    cache.set(path, { signature: signature(opened), record: parsed });
+    return parsed;
+  } catch { cache.delete(path); return null; }
+  finally { await handle?.close().catch(() => undefined); }
 };
 
 export const readTraceRecords = (dir: string, cache?: TraceCache): TraceRead => {
@@ -102,9 +126,10 @@ export const readTraceRecords = (dir: string, cache?: TraceCache): TraceRead => 
 
 /** Watch notifications name changed files; a bounded full reconciliation recovers lost events.
  * Directory identity is checked on every read so replaced or symlinked roots cannot expose stale data. */
+type DirectoryState = { identity: string; scanned: number; values: Map<string, Rec | null>; dirty: Set<string>; full: boolean; stale: boolean; result: TraceRead };
 export class TraceDirectoryReader {
   private cache: TraceCache = new Map();
-  private dirs = new Map<string, { identity: string; scanned: number; values: Map<string, Rec | null>; dirty: Set<string>; full: boolean; result: TraceRead }>();
+  private dirs = new Map<string, DirectoryState>();
   constructor(private reconciliationMs = 30_000) {}
   invalidate(dir: string, name?: string): void {
     const state = this.dirs.get(join(dir, '.'));
@@ -112,48 +137,79 @@ export class TraceDirectoryReader {
     if (!name || name.includes('/') || name.includes('\\')) state.full = true;
     else if (traceName(name)) state.dirty.add(name);
   }
-  read(dir: string, now = Date.now()): TraceRead {
-    const key = join(dir, '.');
+  /** The current state of a directory, after its identity and a due reconciliation; null when it is not readable. */
+  private open(key: string, now: number): DirectoryState | null {
     let identity: string;
     try {
       const stat = lstatSync(key);
       if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('not a directory');
       identity = traceDirectoryIdentity(stat);
     } catch {
-      this.dirs.delete(key);
-      for (const path of this.cache.keys()) if (dirname(path) === key) this.cache.delete(path);
-      return { records: [], unreadable: 0 };
+      this.forget(key);
+      return null;
     }
     let state = this.dirs.get(key);
     if (!state || state.identity !== identity) {
-      state = { identity, scanned: 0, values: new Map(), dirty: new Set(), full: true, result: { records: [], unreadable: 0 } };
+      if (state) this.forget(key);
+      state = { identity, scanned: 0, values: new Map(), dirty: new Set(), full: true, stale: true, result: { records: [], unreadable: 0 } };
       this.dirs.set(key, state);
     }
     if (state.full || now - state.scanned >= this.reconciliationMs) {
       let names: string[];
       try { names = readdirSync(key).filter(traceName).sort(); }
-      catch { this.dirs.delete(key); return { records: [], unreadable: 0 }; }
+      catch { this.forget(key); return null; }
       const present = new Set(names);
-      for (const name of state.values.keys()) if (!present.has(name)) { state.values.delete(name); this.cache.delete(join(key, name)); }
+      for (const name of state.values.keys()) if (!present.has(name)) { state.values.delete(name); this.cache.delete(join(key, name)); state.stale = true; }
       for (const name of names) state.dirty.add(name);
       state.scanned = now; state.full = false;
     }
-    if (state.dirty.size) {
-      for (const name of state.dirty) {
-        const path = join(key, name);
-        // A removed name is not an unreadable file. A broken symlink is.
-        let stat: Stats;
-        try { stat = lstatSync(path); } catch { state.values.delete(name); this.cache.delete(path); continue; }
-        state.values.set(name, readTraceFile(path, this.cache, stat));
-      }
-      state.dirty.clear();
+    return state;
+  }
+  private forget(key: string): void {
+    this.dirs.delete(key);
+    for (const path of this.cache.keys()) if (dirname(path) === key) this.cache.delete(path);
+  }
+  private store(key: string, state: DirectoryState, name: string, value: Rec | null | undefined): void {
+    // undefined: the name was removed. A removed name is not an unreadable file. A broken symlink is.
+    if (value === undefined) { if (state.values.delete(name)) state.stale = true; this.cache.delete(join(key, name)); return; }
+    if (!state.values.has(name) || state.values.get(name) !== value) state.stale = true;
+    state.values.set(name, value);
+  }
+  /** Reads pending files with concurrent I/O, leaving read() only the names that changed meanwhile. */
+  async prepare(dir: string, now = Date.now()): Promise<void> {
+    const key = join(dir, '.');
+    for (let pass = 0; pass < 3; pass++) {
+      const state = this.open(key, now);
+      if (!state || !state.dirty.size) return;
+      const names = [...state.dirty]; state.dirty.clear();
+      let next = 0;
+      await Promise.all(Array.from({ length: Math.min(64, names.length) }, async () => {
+        while (next < names.length) {
+          const name = names[next++]!, path = join(key, name);
+          let stat: Stats;
+          try { stat = await lstat(path); } catch { this.store(key, state, name, undefined); continue; }
+          this.store(key, state, name, await readTraceFileAsync(path, this.cache, stat));
+        }
+      }));
+      if (this.dirs.get(key) !== state) return;
+    }
+  }
+  read(dir: string, now = Date.now()): TraceRead {
+    const key = join(dir, '.');
+    const state = this.open(key, now);
+    if (!state) return { records: [], unreadable: 0 };
+    for (const name of state.dirty) {
+      const path = join(key, name);
+      let stat: Stats;
+      try { stat = lstatSync(path); } catch { this.store(key, state, name, undefined); continue; }
+      this.store(key, state, name, readTraceFile(path, this.cache, stat));
+    }
+    state.dirty.clear();
+    // Rebuild only when a value changed; an unchanged reconciliation keeps the sorted result.
+    if (state.stale || state.result.records.length + state.result.unreadable !== state.values.size) {
       const values = [...state.values].sort(([a], [b]) => a.localeCompare(b)).map(([, r]) => r);
       state.result = { records: sortedRecords(values.filter((r): r is Rec => r !== null)), unreadable: values.filter(r => r === null).length };
-    } else if (!state.values.size) state.result = { records: [], unreadable: 0 };
-    // A full reconciliation can delete the last record without leaving a dirty name.
-    if (state.result.records.length + state.result.unreadable !== state.values.size) {
-      const values = [...state.values.values()];
-      state.result = { records: sortedRecords(values.filter((r): r is Rec => r !== null)), unreadable: values.filter(r => r === null).length };
+      state.stale = false;
     }
     return state.result;
   }

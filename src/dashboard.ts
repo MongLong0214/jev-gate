@@ -5,7 +5,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { loadActivity, type ActivitySnapshot } from './activity.js';
+import { activityEngine, type LoadedActivity } from './activity-engine.js';
 import { DASHBOARD_PAGE } from './dashboard-page.js';
 import type { Env } from './config.js';
 import type { Host } from './host-support.js';
@@ -15,8 +15,7 @@ import { readSettingsEnvVar } from './host-window.js';
 import { recordingStatus, setRecording } from './recording.js';
 import { dashboardStatus, setDashboard } from './dashboard-settings.js';
 import { JEV_FAVICON } from './dashboard-brand.js';
-import { TraceDirectoryReader, traceDirectoryIdentity } from './explain.js';
-import { ClaudeWorkerActivityReader } from './claude-worker-activity.js';
+import { traceDirectoryIdentity } from './explain.js';
 import { releaseChecker, type ReleaseInfo } from './release-info.js';
 
 const PAGE = DASHBOARD_PAGE;
@@ -86,11 +85,10 @@ export const readVersions = (env: Env, host?: Host): DashboardVersions => {
 export const startDashboard = (sources: DashboardSources, port: number, runtime: { token?: string; openBrowser?: (url: string) => void; reconnectGraceMs?: number; releaseFetch?: typeof fetch } = {}): Promise<{ url: string; port: number; close: () => Promise<void>; ensureOpen: () => void }> =>
   new Promise((resolve, reject) => {
     const sockets = new Set<Socket>();
-    const traceReader = new TraceDirectoryReader();
-    const workerReader = new ClaudeWorkerActivityReader();
+    const engine = activityEngine(sources);
     const releases = releaseChecker(runtime.releaseFetch);
     const versions = (): DashboardVersions => ({ ...readVersions(sources.env, sources.host), release: releases.current() });
-    const subscribers = new Set<() => void>();
+    const subscribers = new Set<(current: { key: string; data: string } | null) => void>();
     const viewers = new Map<string, number>(); // Infinity while connected; a short lease during reconnect.
     let viewerSequence = 0;
     let openingUntil = 0;
@@ -121,20 +119,45 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
     const watchers = new Map<string, { watcher: FSWatcher; identity: string }>();
     const directoryIdentities = new Map<string, string | null>();
     const directories = new Set([sources.traceDir, ...(sources.traceDirs?.map(source => source.dir) ?? []), sources.debugDir].filter((dir): dir is string => !!dir).map(dir => join(dir, '.')));
-    let activity: ActivitySnapshot | null = null;
+    let loaded: LoadedActivity | null = null;
+    let loading: Promise<void> | null = null;
     let scannedAt = 0;
     let changed = false;
     let watchedAt = 0;
     let timer: ReturnType<typeof setTimeout> | null = null;
-    const broadcast = (): void => { for (const publish of subscribers) publish(); };
+    let framed: { key: string; data: string } | null = null;
+    // Every viewer receives the same frame, so it is serialized once per change instead of once per viewer and tick.
+    const frame = (): { key: string; data: string } | null => {
+      if (!loaded) return null;
+      const extras = `"version":${JSON.stringify(versions())},"recording":${JSON.stringify(recordingStatus(sources.env))},"dashboard":${JSON.stringify(dashboardStatus(sources.env))}`;
+      const key = `${loaded.key}:${extras}`;
+      if (framed?.key !== key) framed = { key, data: `${loaded.json.slice(0, -1)},${extras}}` };
+      return framed;
+    };
+    const broadcast = (): void => {
+      if (!subscribers.size) return;
+      void refresh();
+      const current = frame();
+      for (const publish of subscribers) publish(current);
+    };
+    // Removing a large directory notifies once per file; the names go to the activity thread in one message.
+    const invalidations = new Map<string, Set<string> | null>(); // null: the whole directory
+    const flush = (): void => {
+      for (const [dir, names] of invalidations) engine.invalidate(dir, names ? [...names] : undefined).catch(() => { /* A replaced thread starts from a full read. */ });
+      invalidations.clear();
+    };
     const kick = (dir: string, name?: string): void => {
-      traceReader.invalidate(dir, name); changed = true;
+      if (disposed) return;
+      const names = invalidations.get(dir);
+      if (name === undefined) invalidations.set(dir, null);
+      else if (names !== null) invalidations.set(dir, (names ?? new Set<string>()).add(name));
+      changed = true;
       if (!timer) timer = setTimeout(() => { timer = null; broadcast(); }, 100);
     };
     const syncWatchers = (force = false): void => {
       if (!force && Date.now() - watchedAt < 2000) return;
       watchedAt = Date.now();
-      const currentDirectories = new Set([...directories, ...workerReader.directories()]);
+      const currentDirectories = new Set([...directories, ...loaded?.directories ?? []]);
       for (const [dir, { watcher }] of watchers) if (!currentDirectories.has(dir)) { watcher.close(); watchers.delete(dir); directoryIdentities.delete(dir); }
       for (const dir of currentDirectories) {
         let identity: string | null = null;
@@ -147,19 +170,23 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
           const watcher = watch(dir, (_event, name) => kick(dir, name?.toString()));
           watcher.on('error', () => { watcher.close(); watchers.delete(dir); kick(dir); });
           watchers.set(dir, { watcher, identity });
+          // A new watcher can miss changes made while the OS is still starting it; look at the whole directory once more.
+          setTimeout(() => kick(dir), 1000).unref();
         } catch { /* Retry on the next poll; reconciliation still reads available files. */ }
       }
     };
-    const snapshot = () => {
+    /** Rebuilds run on the activity thread, one at a time, and every caller shares the one in flight. A rebuild after new
+     * records waits as long as the previous one took (at most a second, since a cold first read is slower than the rest),
+     * so a stream of records cannot keep that thread busy without pause. */
+    const refresh = (): Promise<void> => {
       syncWatchers();
-      const time = Date.now();
-      const pending = activity?.live.mode === 'working' || activity?.operations.feed.some(step => step.state === 'active') || activity?.workerActivity?.items.some(worker => worker.state === 'active');
-      if (!activity || changed && time - scannedAt >= 100 || time - scannedAt >= (pending ? 2000 : 30_000)) {
-        activity = loadActivity({ ...sources, traceReader, workerReader, now: new Date() });
-        scannedAt = Date.now(); changed = false;
-        syncWatchers(true);
+      const elapsed = Date.now() - scannedAt;
+      if (!loading && (!scannedAt || changed && elapsed >= Math.max(100, Math.min(1000, loaded?.ms ?? 0)) || elapsed >= (loaded?.pending ? 2000 : 30_000))) {
+        changed = false; flush();
+        loading = engine.load().then(next => { loaded = next; }, () => { changed = true; /* The last snapshot stays; retry after the wait. */ })
+          .finally(() => { scannedAt = Date.now(); loading = null; syncWatchers(true); broadcast(); });
       }
-      return { ...activity, version: versions(), recording: recordingStatus(sources.env), dashboard: dashboardStatus(sources.env) };
+      return loading ?? Promise.resolve();
     };
     const scan = setInterval(broadcast, 400);
     scan.unref();
@@ -169,6 +196,7 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
       clearInterval(scan);
       for (const { watcher } of watchers.values()) watcher.close();
       watchers.clear(); subscribers.clear(); viewers.clear();
+      void engine.close();
     };
     const server: Server = createServer(async (req, res) => {
       if (!/^127\.0\.0\.1:\d+$/.test(req.headers.host ?? '')) { res.writeHead(403); res.end(); return; }
@@ -220,22 +248,25 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
         return;
       }
       if (req.method === 'GET' && path === '/api/snapshot') {
-        const body = JSON.stringify(snapshot());
-        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
-        res.end(body);
+        await refresh();
+        const body = frame();
+        res.writeHead(body ? 200 : 503, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+        res.end(body?.data ?? JSON.stringify({ error: 'activity_unavailable' }));
         return;
       }
       if (req.method === 'GET' && path === '/api/worker-history') {
         const query = new URL(req.url!, `http://${req.headers.host}`).searchParams;
         const rawOffset = query.get('offset') ?? '0', offset = Number(rawOffset);
         if (!/^\d{1,12}$/.test(rawOffset) || !Number.isSafeInteger(offset)) { res.writeHead(400); res.end(); return; }
-        snapshot(); // Refresh the set of identities already observed by Jev Gate.
+        await refresh(); // Refresh the set of identities already observed by Jev Gate.
         const session = query.get('session'), agent = query.get('agent');
         if (Boolean(session) !== Boolean(agent) || session && !/^[A-Za-z0-9_-]{1,100}$/.test(session) || agent && !/^[A-Za-z0-9_-]{1,100}$/.test(agent)) { res.writeHead(400); res.end(); return; }
-        const controller = new AbortController();
-        res.once('close', () => { if (!res.writableEnded) controller.abort(); });
-        const body = session && agent ? await workerReader.history(session, agent, offset, sources.env, new Date(), controller.signal) : workerReader.list(offset, new Date());
-        if (controller.signal.aborted) return;
+        let aborted = false;
+        res.once('close', () => { if (!res.writableEnded) aborted = true; });
+        let body: Awaited<ReturnType<typeof engine.history>> | Awaited<ReturnType<typeof engine.list>>;
+        try { body = session && agent ? await engine.history(session, agent, offset) : await engine.list(offset); }
+        catch { if (!aborted) { res.writeHead(500); res.end(); } return; }
+        if (aborted) return;
         res.writeHead(body ? 200 : 404, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
         res.end(JSON.stringify(body ?? { error: 'unobserved_agent' })); return;
       }
@@ -248,31 +279,29 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
           'cache-control': 'no-store',
           connection: 'keep-alive',
         });
-        res.write('retry: 500\n');
+        // The first frame may wait for a rebuild; the retry field goes out with it so a frame stays one chunk.
+        res.flushHeaders();
+        let prefix = 'retry: 500\n';
         let last = '';
         let heartbeatAt = Date.now();
         let closed = false;
-        const publish = (): void => {
+        const publish = (current: { key: string; data: string } | null): void => {
           if (closed) return;
-          try {
-            const body = snapshot();
-            const next = `${body.live.sig}:${body.operations.sig}:${body.workerActivity?.sig}:${body.unreadable}:${JSON.stringify(body.version)}:${JSON.stringify(body.recording)}:${JSON.stringify(body.dashboard)}`;
-            if (next === last) {
-              if (Date.now() - heartbeatAt >= 5000) {
-                heartbeatAt = Date.now();
-                res.write(`event: heartbeat\ndata: ${JSON.stringify({ at: new Date(heartbeatAt).toISOString() })}\n\n`);
-              }
-              return;
+          if (!current || current.key === last) {
+            // A first rebuild can take seconds; the heartbeat shows the stream is alive meanwhile.
+            if (Date.now() - heartbeatAt >= 5000) {
+              heartbeatAt = Date.now();
+              res.write(`${prefix}event: heartbeat\ndata: ${JSON.stringify({ at: new Date(heartbeatAt).toISOString() })}\n\n`); prefix = '';
             }
-            last = next;
-            heartbeatAt = Date.now();
-            res.write(`data: ${JSON.stringify(body)}\n\n`);
-          } catch {
-            // A bad directory read skips this tick. The next one tries again.
+            return;
           }
+          last = current.key;
+          heartbeatAt = Date.now();
+          res.write(`${prefix}data: ${current.data}\n\n`); prefix = '';
         };
         subscribers.add(publish);
-        publish();
+        void refresh();
+        publish(frame());
         const stop = (): void => {
           if (closed) return;
           closed = true;
