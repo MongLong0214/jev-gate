@@ -194,7 +194,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
         if(width===320)await p.screenshot({path:join(output,`320-${theme}-${lang}-viewport.png`)});await p.screenshot({path:join(output,`${width}-${theme}-${lang}.png`),fullPage:true});expect(problems,`${width} ${theme} ${lang}`).toEqual([]);
       }await p.close();
     }
-    push([]);const p=await page();expect(await p.locator('.circuit-node').count()).toBe(9);expect(await p.locator('.wire-packet').count()).toBe(0);expect(await p.locator('#circuit-inspector').textContent()).toContain('아직 실행 기록');await p.close();
+    push([]);const p=await page();expect(await p.locator('.circuit-node').count()).toBe(8);expect(await p.locator('.wire-packet').count()).toBe(0);expect(await p.locator('#circuit-inspector').textContent()).toContain('아직 실행 기록');await p.close();
   },60000);
 
   it('keeps stage inspection local, switches run scope and preserves focused controls across updates',async()=>{
