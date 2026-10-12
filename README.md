@@ -1,15 +1,54 @@
 <div align="center">
-<img src="./assets/readme/jev-gate-logo.svg" width="460" height="77" alt="Jev Gate">
+
+<img src="./assets/readme/jev-gate-logo.svg" width="100%" alt="Jev Gate — the right model and effort for every turn">
+
+<br>
+
+[![CI](https://github.com/MongLong0214/jev-gate/actions/workflows/ci.yml/badge.svg)](https://github.com/MongLong0214/jev-gate/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/MongLong0214/jev-gate?color=6366F1&label=release)](https://github.com/MongLong0214/jev-gate/releases/latest)
+[![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-D97757)](#claude-code)
+[![Codex](https://img.shields.io/badge/Codex-plugin-10A37F)](#codex)
+[![Node 22+](https://img.shields.io/badge/node-22%2B-3FB950)](package.json)
+
+**Jev-assisted model routing, delegation, evidence search and context compaction for Claude Code and native Codex.**
+
+[Install](#install) · [Results](#results) · [How it works](#how-it-works) · [Dashboard](#read-the-live-dashboard) · [Data and privacy](#settings-and-data) · [Troubleshoot](#update-and-troubleshoot)
+
+</div>
 
 # Jev Gate
 
-[![CI](https://github.com/MongLong0214/jev-gate/actions/workflows/ci.yml/badge.svg)](https://github.com/MongLong0214/jev-gate/actions/workflows/ci.yml)
-[![Node 22+](https://img.shields.io/badge/node-22%2B-3FB950)](package.json)
-</div>
+Long coding sessions get expensive in a quiet way: one main context keeps growing, every request re-reads it from cache on the most capable model, and routine work — searching, running checks, reviewing — pays the same price as the hard part.
 
-Jev-assisted model routing, delegation, evidence search, and context compaction for **Claude Code and native Codex**. Jev judges the task; code applies the policy; your coding host executes it. One local dashboard shows both hosts, their decisions, and observed results.
+Jev Gate fixes the allocation, not the work. **Jev judges each turn; code applies the policy; your coding host executes it.** Simple, bounded work moves to a fast worker or a lighter model; hard reasoning stays where it belongs; old context is compacted to what the current task needs. One local dashboard shows every decision and its observed result for both hosts.
 
-**Install the plugin and enter your Jev API key.** No project config, shell exports, trace-directory setup, dashboard terminal, or `claude --debug` flag is required. Node.js 22+ and your host's native login are required.
+**Install the plugin and enter your Jev API key.** No project config, shell exports, trace-directory setup, dashboard terminal or `claude --debug` flag is required. Node.js 22+ and your host's native login are required.
+
+## Results
+
+Two real feature tasks from a private production TypeScript frontend, each re-implemented from its parent commit in a 17-turn session (task prompt + 16 fixed follow-ups: checks, tests, review, an idle gap, PR draft). Claude Code 2.1.294, `claude-opus-5-5` at `xhigh`, identical settings; the only difference is the plugin (v0.8.15, defaults).
+
+| | Native Claude Code | With Jev Gate | Ratio |
+| --- | ---: | ---: | ---: |
+| **Cost** (host-reported, incl. Jev requests) | $42.81 | **$19.65** | **0.46×** |
+| **Tokens** | 111.7 M | **41.3 M** | **0.37×** |
+| **Peak main context** | 442 K / 673 K | **206 K / 353 K** | ~0.5× |
+| **Agent time** | 124 min | **65 min** | 0.53× |
+| **Quality** (blind rubric, 23 points) | 21 | **21** | same |
+
+Both tasks pointed the same way (cost 0.50× and 0.44×). Quality was graded against the merged pull requests with a rubric frozen before any diff was read, by two graders who did not know the arm; every cell had zero new type or lint errors and passed its own tests.
+
+> **This is a pilot: one pair per task.** It shows a direction, not a guarantee — session-to-session variance can be large, and your savings depend on your tasks, settings and host. A multi-pair run is planned. [Method, per-cell data and limits →](https://github.com/MongLong0214/jev-gate/tree/main/bench/results/long-session-pilot-2026-10-12)
+
+## How it works
+
+1. **Gate** reads a new request and decides: answer directly, hand it to one background worker, or plan worker tasks with contracts and checks.
+2. **Router** picks the model and effort for the main turn and for each eligible agent, from the candidates your host actually supports. Your explicit pins always win.
+3. **Compact** replaces stale context with an extractive digest that keeps what the current task needs.
+4. **Evidence** answers code questions with verified source windows instead of bulk file reads.
+5. **The dashboard** records each judgment, request and observed result, live.
+
+If a key is missing, a judgment is invalid or slow, or a host fact is unavailable, Jev Gate keeps the native call. It never upgrades low confidence into a more expensive tier.
 
 ## Install
 
@@ -37,7 +76,7 @@ Enter your key in the automatic local screen and use ordinary Codex in your proj
 
 Both hosts share one private key and dashboard. Installing from source is for development; run `npm ci` and `npm run build` before registering the checkout. [Codex configuration and troubleshooting](plugins/codex/README.md).
 
-## What runs automatically
+## Features
 
 | Feature | Behavior | Jev usage |
 | --- | --- | --- |

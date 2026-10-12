@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.8.16 — 2026-10-12 — README, pilot results and dashboard header
+
+- Rebuild the README around installation, a measured long-session pilot and how the features fit together. The pilot (two real tasks, 17-turn sessions, one pair each, blind-graded) is reported with its method, per-cell data and limits in `bench/results/long-session-pilot-2026-10-12`; it is a direction, not a guaranteed saving.
+- Replace the README logo with a self-contained hero banner that renders the same on light and dark pages and stops moving under reduced-motion preferences.
+- Align the dashboard header: breadcrumb, host label, version badge and connection status sit on one baseline with consistent spacing and pill shapes. The version badge no longer touches the host label.
+
 ## v0.8.15 — 2026-10-08 — Doctor and native model compatibility
 
 - Group Claude and Codex diagnostics by runtime, package, host, configuration, model/effort compatibility, credentials, storage and activity. Print concrete next actions, a concise summary, JSON or verbose details; repeated calls use independent reports.
