@@ -173,7 +173,7 @@ const tone=rc=>!rc?'':rc.status===402||rc.status>=500||/timeout|payment|5\\d\\d/
 const barHeight=(v,ops)=>Math.min(100,25+75*v/Math.max(420,(ops.latency.p95||0)*1.25)).toFixed(0)+'%';
 const todayCalls=ops=>Object.values(ops.latency.today||{}).reduce((a,t)=>({calls:a.calls+(t?.calls||0),costUsd:a.costUsd+(t?.costUsd||0),unpriced:a.unpriced+(t?.unpriced||0)}),{calls:0,costUsd:0,unpriced:0});
 // One recorded Jev response is one call everywhere: header strip, run list, call log and response panel.
-const callsOf=ops=>ops.runs.flatMap(r=>r.steps.filter(s=>isCall(s)&&!held.has(s.id)).map(s=>({...s,runId:r.id,runTitle:r.title,host:r.host}))).sort((a,b)=>b.at.localeCompare(a.at));
+const callsOf=ops=>ops.runs.flatMap(r=>r.steps.filter(s=>isCall(s)&&!isHeld(r.id,s.id)).map(s=>({...s,runId:r.id,runTitle:r.title,host:r.host}))).sort((a,b)=>b.at.localeCompare(a.at));
 // Text is written only when it changes, so a clock tick or a repeated frame leaves the DOM alone.
 const put=(e,v)=>{v=String(v);if(e.textContent!==v)e.textContent=v};
 // An active step carries its start; its elapsed time runs live from there.
@@ -202,12 +202,12 @@ function runs(ops){const base=baseRuns(ops),rows=base.filter(r=>stateFilter==='a
   for(const r of rows){let li=rowEls.get(r.id);if(!li){li=el('li');const b=el('button');b.type='button';b.dataset.run=r.id;li.append(b);rowEls.set(r.id,li)}
     const key=[r,r.id===selectedRun,lang,heldIn(r.id)];if(!li._key?.every((v,k)=>v===key[k]))fill(li,r);if(li===at)at=at.nextSibling;else root.insertBefore(li,at)}
   while(at){const next=at.nextSibling;at.remove();at=next}root.scrollTop=top}
-function fill(li,r,hit){const b=li.firstChild,mine=r.steps.filter(s=>isCall(s)&&!held.has(s.id)).reverse(),sel=r.id===selectedRun;li._key=[r,sel,lang,heldIn(r.id)];
+function fill(li,r,hit){const b=li.firstChild,mine=r.steps.filter(s=>isCall(s)&&!isHeld(r.id,s.id)).reverse(),sel=r.id===selectedRun;li._key=[r,sel,lang,heldIn(r.id)];
   b.className='row rgrid'+(sel?' sel':'')+(r.state==='active'?' live':'');b.setAttribute('aria-pressed',String(sel));b.setAttribute('aria-label',r.title+', '+tr(state[r.state])+', '+label('Jev 호출 '+mine.length+'회',mine.length+' Jev calls'));
   const st=el('span','c-st st '+RUNST[r.state]);st.append(pip(),tr(state[r.state]));
   const nm=el('span','c-nm nm'),small=el('small'),model=runModel(r);nm.append(el('b','',r.title),small);joined(small,[el('span','h '+(r.host==='codex'?'cx':'cl'),r.host==='codex'?'Codex':'Claude'),el('span','',source[r.source]||r.source),model&&el('span','mdl',model)]);
-  const fx=el('span','c-stg fx');for(const id of CIRCUIT){const steps=r.steps.filter(s=>circuitStep(s)&&s.feature===id&&!held.has(s.id));if(!steps.length)continue;const e=steps.some(s=>s.state==='error'),k=steps.every(s=>s.state==='skipped'),chip=el('span','f'+(e?' e':k?' k':''),tr(featureInfo[id][0])+(e?label(' 오류',' error'):k?label(' 생략',' skipped'):''));if(hit?.feature===id){chip.classList.add('hit');setTimeout(()=>chip.classList.remove('hit'),450)}fx.append(chip)}
-  const last=[...r.steps].reverse().find(s=>!s.lifecycle&&!held.has(s.id)&&CIRCUIT.includes(s.feature)),md=el('span','c-md md'+(last?'':' none'));
+  const fx=el('span','c-stg fx');for(const id of CIRCUIT){const steps=r.steps.filter(s=>circuitStep(s)&&s.feature===id&&!isHeld(r.id,s.id));if(!steps.length)continue;const e=steps.some(s=>s.state==='error'),k=steps.every(s=>s.state==='skipped'),chip=el('span','f'+(e?' e':k?' k':''),tr(featureInfo[id][0])+(e?label(' 오류',' error'):k?label(' 생략',' skipped'):''));if(hit?.feature===id){chip.classList.add('hit');setTimeout(()=>chip.classList.remove('hit'),450)}fx.append(chip)}
+  const last=[...r.steps].reverse().find(s=>!s.lifecycle&&!isHeld(r.id,s.id)&&CIRCUIT.includes(s.feature)),md=el('span','c-md md'+(last?'':' none'));
   if(last){const x={id:last.id,f:tr(featureInfo[last.feature][0]),v:valueText(last),m:isCall(last)?ms(last.durationMs):''},prev=lastRec.get(r.id);if(hit&&prev&&prev.id!==x.id&&motion()){const old=recSpan(prev,'out');old.addEventListener('animationend',()=>old.remove());md.append(old,recSpan(x,'in'))}else md.append(recSpan(x));lastRec.set(r.id,x)}else md.textContent='–';
   const jc=el('span','c-jc jc'),spk=el('span','spk'),n=el('span','n',mine.length),bars=mine.slice(0,12).reverse();spk.setAttribute('aria-hidden','true');
   for(let k=0;k<12;k++){const s=bars[k-12+bars.length],i=el('i');i.style.height=s?barHeight(s.durationMs,view):'0%';if(s)i.dataset.ms=s.durationMs;if(s&&hit?.id===s.id){i.className='now';setTimeout(()=>i.classList.remove('now'),900)}spk.append(i)}

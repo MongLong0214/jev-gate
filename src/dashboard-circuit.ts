@@ -38,6 +38,8 @@ const isCall=s=>s.lane==='jev'&&s.durationMs!==undefined&&!s.lifecycle;
 const isJev=s=>s.lane==='jev'&&!s.lifecycle;
 const ACTIVITY_MS=60000,COMM_MS=30000,MAX_TRIPS=24;
 // A held record waits for its arrival to play; it maps to its run so a row knows when it must redraw.
+// Step ids repeat across runs in real traces, so a hold is keyed by run and step.
+const isHeld=(runId,id)=>held.has(runId+' '+id);
 let circuitMode='live',circuitFeature=null,held=new Map(),timers=new Set(),seenRuns=null,seenScope='',frameData=null,frameAt=0,frameGap=1000;
 const motion=()=>!paused&&!$('connection').classList.contains('warn')&&!matchMedia('(prefers-reduced-motion: reduce)').matches;
 // A node names the model family, as Claude ids reduce to sonnet or opus; the full id stays in the stage detail.
@@ -69,8 +71,8 @@ function arrivals(ops){const scope=hostFilter+':'+circuitMode+':'+(circuitMode==
   if(seenRuns&&scope===seenScope&&motion())for(const r of ops.runs){const old=seenRuns.get(r.id);if(old===r)continue;const had=old&&new Set(old.steps.map(s=>s.id));for(const s of r.steps)if(CIRCUIT.includes(s.feature)&&(had?!had.has(s.id):ref-Date.parse(s.at)<ACTIVITY_MS))fresh.push({...s,runId:r.id,runTitle:r.title,host:r.host})}
   seenRuns=new Map(ops.runs.map(r=>[r.id,r]));if(scope!==seenScope)cancelMotion();seenScope=scope;
   fresh.sort((a,b)=>a.at.localeCompare(b.at)).splice(0,Math.max(0,fresh.length-MAX_TRIPS));const t0=Date.parse(fresh[0]?.at),span=Date.parse(fresh.at(-1)?.at)-t0,gap=Math.min(80,frameGap*.85/fresh.length);let at=-Infinity;
-  fresh.forEach((s,i)=>{at=Math.max(span>0?(Date.parse(s.at)-t0)/span*frameGap*.85:i*frameGap/fresh.length,at+gap);held.set(s.id,s.runId);later(()=>launch(s),at)})}
-function arrive(s){held.delete(s.id);if(data&&motion())land(s)}
+  fresh.forEach((s,i)=>{at=Math.max(span>0?(Date.parse(s.at)-t0)/span*frameGap*.85:i*frameGap/fresh.length,at+gap);held.set(s.runId+' '+s.id,s.runId);later(()=>launch(s),at)})}
+function arrive(s){held.delete(s.runId+' '+s.id);if(data&&motion())land(s)}
 function launch(s){const C=$('pipeline'),b=C.querySelector('[data-feature="'+s.feature+'"]'),ln=C.querySelector('.ln');if(!isCall(s)||!b||!ln||!motion()||(circuitMode==='run'&&s.runId!==selectedRun)){arrive(s);return}
   const c=C.getBoundingClientRect(),l=ln.getBoundingClientRect(),n=b.getBoundingClientRect(),x=n.left+n.width/2-c.left,y=l.top+1-c.top,ny=n.top<l.top?n.bottom-c.top:n.top-c.top;
   const dot=(y0,y1,done)=>{const d=el('i','trip');d.style.left=x+'px';d.style.top=y0+'px';C.append(d);if(!d.animate||matchMedia('(max-width:640px)').matches){later(()=>{d.remove();done()},120);return}d.animate([{top:y0+'px'},{top:y1+'px'}],{duration:120,easing:'ease-out'}).onfinish=()=>{d.remove();if(motion())done();else arrive(s)}};
@@ -81,7 +83,7 @@ function buildCircuit(root){const wire=svg('svg',{class:'wires','aria-hidden':'t
   const cells=ids=>{const g=el('div','cells8');for(const id of ids)g.append(node(id));return g};const rail=el('div','rail');const ln=el('div','ln');ln.setAttribute('aria-hidden','true');rail.append(el('span','nm','Jev'),ln,el('span','lat','–'));
   root.append(wire,el('div','grp gate-grp'),cells(CIRCUIT.slice(0,4)),rail,el('div','grp mod-grp'),cells(CIRCUIT.slice(4)));if(typeof ResizeObserver!=='undefined')new ResizeObserver(()=>requestAnimationFrame(wires)).observe(root)}
 // Recorded steps of the last window that have landed; a lifecycle record moves a strip even though it is no decision.
-const recent=(ops,win,ok)=>{const ref=frozenAt??Date.now(),out=[];for(const r of ops.runs)if(ref-Date.parse(r.lastAt)<win)for(const s of r.steps)if(ok(s,r)&&!held.has(s.id)&&ref-Date.parse(s.at)<win)out.push(s);return out};
+const recent=(ops,win,ok)=>{const ref=frozenAt??Date.now(),out=[];for(const r of ops.runs)if(ref-Date.parse(r.lastAt)<win)for(const s of r.steps)if(ok(s,r)&&!isHeld(r.id,s.id)&&ref-Date.parse(s.at)<win)out.push(s);return out};
 const strip=(ops,id)=>ticks($('pipeline').querySelector('[data-feature="'+id+'"] .strip .tr'),recent(ops,ACTIVITY_MS,(s,r)=>s.feature===id&&(circuitMode==='live'||r.id===selectedRun)),ACTIVITY_MS);
 function paint(b,last,f,ref){const age=last?ref-Date.parse(last.at):Infinity;b._last=last;setSeg(b.querySelector('.dec b'),last?valueText(last):'–');
   const ago=b.querySelector('.ago');ago.dataset.at=last?.at||'';ago.dataset.none=last?'':f?.state==='unsupported'?label('미지원','Unsupported'):f?.state==='unavailable'?label('기록원 없음','No source'):'–';
@@ -89,7 +91,7 @@ function paint(b,last,f,ref){const age=last?ref-Date.parse(last.at):Infinity;b._
 function pipeline(ops,calls){const root=$('pipeline');if(!root.querySelector('.node'))buildCircuit(root);
   root.querySelector('.gate-grp').textContent=label('Gate 단계','Gate stages');root.querySelector('.mod-grp').textContent=label('독립 기능','Independent features');
   for(const b of $('circuit-mode').querySelectorAll('button'))b.setAttribute('aria-pressed',String(b.dataset.circuitMode===circuitMode));
-  const ref=frozenAt??Date.now(),last={};for(const r of ops.runs)if(circuitMode==='live'||r.id===selectedRun)for(const s of r.steps)if(!s.lifecycle&&NODE[s.feature]&&!held.has(s.id)&&!(last[s.feature]?.at>=s.at))last[s.feature]=s;
+  const ref=frozenAt??Date.now(),last={};for(const r of ops.runs)if(circuitMode==='live'||r.id===selectedRun)for(const s of r.steps)if(!s.lifecycle&&NODE[s.feature]&&!isHeld(r.id,s.id)&&!(last[s.feature]?.at>=s.at))last[s.feature]=s;
   if(!circuitFeature)circuitFeature=CIRCUIT.reduce((a,id)=>last[id]&&!(last[a]?.at>=last[id].at)?id:a,null)||'admission';
   for(const id of CIRCUIT){const b=root.querySelector('[data-feature="'+id+'"]');
     b.querySelector('.nm').textContent=tr(featureInfo[id][0]);b.querySelector('.ds').textContent=label(...NODE[id][0]);b.querySelector('.dl').textContent=label(...NODE[id][1]);paint(b,last[id],ops.features.find(f=>f.id===id),ref);
