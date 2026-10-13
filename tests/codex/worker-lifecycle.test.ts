@@ -1,7 +1,7 @@
 import { PassThrough } from 'node:stream';
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CodexRpc, RpcRequestError } from '../../src/codex/rpc.js';
 import { CodexPolicy } from '../../src/codex/policy.js';
@@ -268,5 +268,87 @@ describe('Codex dispatch failure reason (#233)', () => {
     f.terminal(); await vi.waitFor(() => expect(f.job().current.active).toEqual({}));
     expect(await f.status('s2')).toContain('worker observation kept');
     expect(f.sent.filter(m => m['method'] === 'turn/start')).toHaveLength(1);
+  });
+});
+describe('Codex write scope from native tool targets (#234)', () => {
+  // Codex 0.162.1 hook shapes: apply_patch -> { command: patch }; exec_command -> Bash { command }, its workdir not reported.
+  const scoped = async () => {
+    const f = await setup(); await f.launch();
+    const other = mkdtempSync(join(tmpdir(), 'jev-unrelated-')); cleanups.push(() => rmSync(other, { recursive: true, force: true }));
+    const hook = (tool_name: string, tool_input: Obj, cwd = f.root) => f.policy.nativeHook({ hook_event_name: 'PreToolUse', session_id: 'parent', cwd, tool_name, tool_input });
+    const blocked = async (tool_name: string, tool_input: Obj, cwd?: string) => JSON.stringify(await hook(tool_name, tool_input, cwd)).includes('terminal settlement');
+    return { ...f, other, hook, blocked };
+  };
+  const patch = (...lines: string[]) => ({ command: `*** Begin Patch\n${lines.join('\n')}\n*** End Patch\n` });
+  const add = (path: string) => `*** Add File: ${path}\n+export const x = 1;`;
+  it('allows a patch or edit whose every target is unrelated and denies any overlapping target', async () => {
+    const f = await scoped();
+    expect(await f.hook('apply_patch', patch(add(join(f.other, 'a.ts')), add(join(f.other, 'nested/b.ts'))))).toEqual({});
+    expect(await f.blocked('apply_patch', patch(add(join(f.other, 'a.ts')), add(join(f.root, 'src/x.ts'))))).toBe(true);
+    expect(await f.blocked('apply_patch', patch(`*** Update File: ${join(f.other, 'a.ts')}`, `*** Move to: ${join(f.root, 'a.ts')}`, '@@', '-a', '+b'))).toBe(true);
+    expect(await f.blocked('apply_patch', patch('*** Delete File: gone.ts'))).toBe(true);
+    expect(await f.blocked('apply_patch', { command: 'not a patch' })).toBe(true);
+    expect(await f.blocked('Write', { file_path: join(f.root, 'src/x.ts') })).toBe(true);
+    // Relative targets resolve against the hook cwd, not against the protected root.
+    expect(await f.hook('apply_patch', patch('*** Delete File: gone.ts'), f.other)).toEqual({});
+    expect(await f.hook('Edit', { file_path: 'src/x.ts' }, f.other)).toEqual({});
+    expect(await f.blocked('Edit', { file_path: `../${basename(f.root)}/src/x.ts` }, f.other)).toBe(true);
+  });
+  it('compares symlink aliases and traversal by the paths they reach', async () => {
+    const f = await scoped();
+    mkdirSync(join(f.root, 'sub')); symlinkSync(f.root, join(f.other, 'alias')); symlinkSync(join(f.root, 'sub'), join(f.other, 'deep'));
+    expect(await f.blocked('apply_patch', patch(add(join(f.other, 'alias/new.ts'))))).toBe(true);
+    expect(await f.blocked('Write', { file_path: join(realpathSync(f.root), 'src/x.ts') }, f.other)).toBe(true);
+    // Lexically other/x.ts, but the kernel leaves the symlink target: root/x.ts.
+    expect(await f.blocked('apply_patch', patch(add(`${f.other}/deep/../x.ts`)), f.other)).toBe(true);
+    expect(await f.blocked('apply_patch', patch(add(`${f.other}/alias/missing/../x.ts`)), f.other)).toBe(true);
+    expect(await f.hook('apply_patch', patch(add(`${f.other}/alias/../unrelated.ts`), add(`${f.other}/plain/../unrelated.ts`)), f.other)).toEqual({});
+  });
+  it('keeps read/status diagnostics with quoted search patterns available inside the protected root', async () => {
+    const f = await scoped();
+    for (const command of ['ps aux', 'gh issue view 234 --repo MongLong0214/jev-gate --comments', 'gh pr list --state open', 'git status --short', 'git diff --check',
+      `rg -n "write|conflict; rm -rf src > hits" src`, `grep -rn 'a && b $(c)' ${f.root}`, 'ps aux | grep -i "codex" 2>/dev/null', `cd ${f.root} && git --no-pager log --oneline -3`,
+      `find . -name '*.ts' -not -path './node_modules/*'`, 'cat src/file | wc -l', 'pwd']) {
+      expect(await f.hook('Bash', { command }), command).toEqual({});
+    }
+    for (const command of ['rg foo $(cat list)', 'rg foo `cat list`', 'rg foo > hits.txt', 'git status; touch src/x', 'find . -name x -delete', 'find . -exec rm {} ;',
+      'git diff --output=change.diff', 'ps aux | tee ps.txt', 'gh pr merge 1', 'git -c core.pager=sh log', 'rg --pre ./run.sh foo', 'rg "foo', 'echo "$PATH"']) {
+      expect(await f.blocked('Bash', { command }), command).toBe(true);
+    }
+  });
+  it('confines an unknown shell command by its reported workdir, a leading absolute cd or the session cwd, and the paths it names', async () => {
+    const f = await scoped();
+    expect(await f.hook('exec_command', { cmd: 'npx vitest run tests/a.test.ts', workdir: f.other })).toEqual({});
+    expect(await f.hook('Bash', { command: `cd ${f.other} && npx vitest run tests/a.test.ts --reporter=dot` })).toEqual({});
+    expect(await f.hook('Bash', { command: `cd ${f.other} && cd nested && touch out.txt` })).toEqual({});
+    // Without a reported workdir the session cwd stands in, as before #234: a session outside every scope keeps its shell.
+    expect(await f.hook('Bash', { command: 'npx vitest run' }, f.other)).toEqual({});
+    expect(await f.hook('Bash', { command: 'cd nested && touch x' }, f.other)).toEqual({});
+    expect(await f.hook('write_stdin', { session_id: 1, chars: 'y\n' }, f.other)).toEqual({});
+    for (const [tool, input, cwd] of [
+      ['exec_command', { cmd: 'npx vitest run' }, f.root], ['exec_command', { cmd: 'touch x', workdir: join(f.root, 'src') }, f.other],
+      ['Bash', { command: 'npx vitest run' }, f.root], ['Bash', { command: 'cd nested && touch x' }, f.root],
+      ['Bash', { command: `cd ${f.other} && rm -rf ${join(f.root, 'src')}` }, f.root], ['Bash', { command: `cd ${f.other} && cp a.ts ../${basename(f.root)}/a.ts` }, f.root],
+      ['Bash', { command: `cd ${f.other} && touch --out=../${basename(f.root)}/x` }, f.root], ['Bash', { command: `cd ${f.other} && rm -rf ../*` }, f.root],
+      ['Bash', { command: `cd ${f.other} && touch "$HOME/x"` }, f.root], ['Bash', { command: `cd ${f.other} && bash -c 'cd ..; rm -rf x'` }, f.root],
+      ['Bash', { command: `cd ${f.other} && (cd .. && rm x)` }, f.root], ['Bash', { command: `cd ${f.other}; rm x` }, f.root], ['Bash', { command: `cd ${f.other} && touch ~/x` }, f.root],
+      ['write_stdin', { session_id: 1, chars: 'rm -rf src\n' }, f.root],
+    ] as const) expect(await f.blocked(tool, input, cwd), JSON.stringify(input)).toBe(true);
+  });
+  it('protects several managed workers by their own scopes and releases one only at its observed terminal settlement', async () => {
+    const f = await scoped(); const state = f.job(); const held = state.current.active['dispatch']!;
+    updateJob(f.stateEnv, 'holder', () => ({ ...state, session_id: 'holder', history: [], current: { ...state.current, active: { held: { ...held, deliverables: ['owned.ts'], codex_execution: { thread_id: 'held', turn_id: 'held-turn', cwd: f.other, root_cwd: f.other } } } } }));
+    expect(await f.blocked('Write', { file_path: join(f.other, 'owned.ts') }, f.other)).toBe(true);
+    expect(await f.blocked('Bash', { command: `cd ${f.other} && touch free.ts` })).toBe(true);
+    expect(await f.hook('Bash', { command: `cd ${join(f.other, 'nested')} && touch free.ts` })).toEqual({});
+    expect(await f.hook('Write', { file_path: join(f.other, 'free.ts') }, f.other)).toEqual({});
+    expect(await f.blocked('Write', { file_path: join(f.root, 'src/x.ts') }, f.other)).toBe(true);
+    // An unconfirmed execution keeps its reservation through status queries; only the observed terminal releases it.
+    expect(await f.status('s1')).toContain('termination unconfirmed');
+    expect(await f.blocked('Write', { file_path: join(f.root, 'src/x.ts') }, f.other)).toBe(true);
+    f.terminal(); await vi.waitFor(() => expect(f.job().current.active).toEqual({}));
+    expect(await f.hook('Write', { file_path: join(f.root, 'src/x.ts') }, f.other)).toEqual({});
+    expect(await f.blocked('Write', { file_path: join(f.other, 'owned.ts') }, f.other)).toBe(true);
+    expect(f.job().current.receipts).toHaveLength(1); expect(f.sent.filter(m => m['method'] === 'turn/start')).toHaveLength(1);
   });
 });
