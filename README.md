@@ -35,7 +35,7 @@
 <p align="center">
   <a href="#read-the-live-dashboard"><picture>
     <source media="(prefers-color-scheme: dark)" srcset="./assets/readme/dashboard-dark.svg">
-    <img src="./assets/readme/dashboard.svg" width="100%" alt="Jev Gate run monitor with sample data: header KPIs, an eight-node circuit on a Jev rail, the run list, the Jev call log, Jev response latency with a list-price cost estimate, and one run's step detail">
+    <img src="./assets/readme/dashboard.svg" width="100%" alt="Jev Gate dashboard with sample data: header KPIs, an eight-node execution circuit on a Jev rail, the execution list, the Jev call log, Jev response time with a list-price cost estimate, and one execution's detail">
   </picture></a>
 </p>
 
@@ -151,13 +151,13 @@ Every PR runs the `models` CI job against the official Claude model/effort docum
 
 The plugin opens **one shared local browser dashboard** automatically. Starting another Claude or Codex session reuses it instead of opening duplicate tabs. Select **Claude + Codex**, **Claude Code**, or **Codex** to inspect each host.
 
-An eight-node circuit (Gate A, Gate B, plan, workers, tool guard, Router, Compact, Evidence) hangs off a Jev rail. Every new record flashes its node, the node's 60-second strip and its run row in recorded order, including policy, host and lifecycle records; measured Jev responses travel the rail and set the latency readout. The **Jev traffic** bar covers the last 30 seconds: requests as short ticks, responses at their latency. Between records a soft sweep runs along the rail and the node wires flow to show the view is live; neither carries a record. The run list, the Jev call log (one row per call) and the run detail change in the same frame. Pause, disconnected streams and reduced-motion preferences stop all movement and keep the numbers. All layouts fit without horizontal page scrolling.
+An eight-node circuit (Gate A, Gate B, plan, workers, tool guard, Router, Compact, Evidence) hangs off a Jev rail. Every new record flashes its node, the node's 60-second strip and its execution row in recorded order, including policy, host and lifecycle records; measured Jev responses travel the rail and set the latency readout. The **Jev traffic** bar covers the last 30 seconds: requests as short ticks, responses at their latency. Between records a soft sweep runs along the rail and the node wires flow to show the view is live; neither carries a record. The execution list, the Jev call log (one row per call) and the execution detail change in the same frame. Pause, disconnected streams and reduced-motion preferences stop all movement and keep the numbers. All layouts fit without horizontal page scrolling.
 
 1. Start a task in your normal coding session.
-2. Read the circuit at the top. Select a node to see its latest decision, confidence and Jev reply time in the step detail; it also filters the run list to that feature, and selecting it again shows all.
-3. Choose a run to open its run detail: every step with its time, duration and result, expandable to the recorded question, choice, actual reply, confidence, tokens and estimated cost.
+2. Read the **Execution circuit** at the top. Select a node to see its latest decision, confidence and Jev response time in **Stage details**; it also filters the execution list to that feature, and selecting it again shows all.
+3. Choose an execution to open its **Execution detail**: every stage with its time, duration and result, expandable to the recorded question, answer, confidence, tokens, estimated cost, selected model and observed response.
 4. Read the Jev call log and Jev response panel for the latest calls, latency median and p95, today's call count and a list-price cost estimate. Billed credit is not returned by the Jev API, so the cost is an estimate only. **Pause** on the call log holds its rows while new calls are counted.
-5. Use the host switch, run filters and search to narrow records. Korean/English and light/dark controls are available.
+5. Use the host switch, the execution filters (All, Running, Needs review, Past errors, Unobserved) and search to narrow records. Korean/English and light/dark controls are available.
 
 | Record | Meaning |
 | --- | --- |
