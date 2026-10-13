@@ -146,7 +146,7 @@ describe('root effort', () => {
     expect(req?.questions['effort_0']).toMatchObject({ type: 'score', criteria: expect.arrayContaining([expect.stringContaining('Light reasoning'), expect.stringContaining('Maximum sustained')]) });
 
     const root = f.logs.find((l) => l['event'] === 'root');
-    expect(root).toMatchObject({ assessment: 'ok', sent: true, patch: { effort: 'low' }, reasons: { effort: 'selected', model: 'not_asked' } });
+    expect(root).toMatchObject({ assessment: 'ok', sent: true, jev_model: JEV_MODEL, patch: { effort: 'low' }, reasons: { effort: 'selected', model: 'not_asked' } });
     // The receipt: what the move was read from.
     expect(root?.['answers']).toMatchObject({ control: { choice: 'task_clear', probabilities: { task_clear: .97 } }, action_risk: { probabilities: { ordinary: .97 } } });
     expect((root?.['answers'] as { effort_0: { probabilities: Record<string, number> } }).effort_0.probabilities['0']).toBe(.95);

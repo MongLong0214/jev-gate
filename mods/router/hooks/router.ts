@@ -1,5 +1,5 @@
 import type { Transport, Usage } from './client.ts';
-import { createClient } from './client.ts';
+import { createClient, JEV_MODEL } from './client.ts';
 import type { RouterConfig } from './config.ts';
 import { validKey } from './config.ts';
 import type { RootSwitch, SymbolicEffort } from './models.ts';
@@ -539,7 +539,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       if (!live.aborted && !t.stopped) t.patch = cached.patch;
       if (!Object.keys(t.patch).length) t.stopped = true;
       log(engine, { event: 'root', scope: 'root', boundary: 'host_hook', turn: turnId, context_chars: context?.length ?? 0, from: { model: t.baseline.model, effort: t.baseline.effort ?? null },
-        assessment: result.ok ? 'ok' : result.reason, sent: result.ok || result.sent, duration_ms: Math.max(0, engine.now() - started), usage: loggable(result.usage),
+        assessment: result.ok ? 'ok' : result.reason, sent: result.ok || result.sent, duration_ms: Math.max(0, engine.now() - started), usage: loggable(result.usage), jev_model: result.ok ? JEV_MODEL : null,
         discovered_count: MODEL_FACTS.length, eligible_count: candidates.length, offered_count: offer.candidates.length, catalog_complete: false,
         model_asked: offer.modelAsked, effort_asked: offer.effortQuestions.size > 0, allow_fable: allowFable,
         ...baselineFacts,
@@ -708,7 +708,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       if (!latest?.compatible || latest.turnId !== e.turnId || latest.index !== e.index || !claudeContextFits(e.model, patch.model, latest.inputUpperBound)) patch = {};
     }
     log(engine, { event: 'child_route', ...binding, boundary: 'host_hook', hook_version: ROUTER_HOOK_VERSION, host_version: hostBase ?? null,
-      from: { model: e.model, effort: e.effort ?? null }, assessment: result.ok ? 'ok' : result.reason, sent: result.ok || result.sent,
+      from: { model: e.model, effort: e.effort ?? null }, assessment: result.ok ? 'ok' : result.reason, sent: result.ok || result.sent, jev_model: result.ok ? JEV_MODEL : null,
       duration_ms: Math.max(0, engine.now() - started), usage: loggable(result.usage), model_pin: nowPins.subagentModel, effort_pin: nowPins.mainEffort,
       eligible_count: candidates.length, offered_count: offer.candidates.length, catalog_complete: false, excluded,
       model_asked: offer.modelAsked, effort_asked: offer.effortQuestions.size > 0, allow_fable: allowFable,
@@ -1077,7 +1077,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     const nowAvailable = await within(engine.availableModels().catch(() => []), live);
     const nowPins = await within(pinsOf(engine, 'spawn', live), live);
     if (target && (nowPins.subagentModel || nowPins.aliasRemap && !engine.modelAliases || !claudeTargetAllowed(target, await within(frontierFor(engine), live)) || !claudeModelAllowed(target, nowAvailable, aliases))) { log(engine, { event: 'spawn_stop', tool_use_id: e.tool_use_id, requested: target, reason: nowPins.subagentModel ? 'subagent_model_pinned' : nowPins.aliasRemap && !engine.modelAliases ? 'alias_remapped' : 'target_not_allowed' }); return null; }
-    log(engine, { event: 'spawn', scope: 'subagent', boundary: 'host_hook', tool_use_id: e.tool_use_id, type: typeLabel(e), from: baselineModel, assessment: 'ok', sent: true,
+    log(engine, { event: 'spawn', scope: 'subagent', boundary: 'host_hook', tool_use_id: e.tool_use_id, type: typeLabel(e), from: baselineModel, assessment: 'ok', sent: true, jev_model: JEV_MODEL,
       usage: loggable(result.usage), explicit: explicit !== null, patch: selected.patch, reasons: selected.reasons, model_asked: offer.modelAsked, effort_asked: offer.effortQuestions.size > 0,
       discovered_count: MODEL_FACTS.length, eligible_count: candidates.length, offered_count: offer.candidates.length, catalog_complete: false, allow_fable: allowFable });
     return { target, nativeRequested: nowPins.subagentModel ? null : baselineModel, answers: {}, pair: { offer, raw: result.answers } };
