@@ -240,16 +240,15 @@ describe('dashboard server', () => {
     const server = await startDashboard({ traceDir: trace, env: { HOME: make(), JEV_GATE_STATE_DIR: make() } }, 0);
     const response = await fetch(`${server.url}api/live`);
     const reader = response.body!.getReader(), frames = liveFrames(reader);
-    type Frame = { live: { sig: string }; operations: { features: Array<{ id: string; count: number }> } };
+    type Frame = { operations: { features: Array<{ id: string; count: number }> } };
     const read = (): Promise<Frame> => frames.next<Frame>(2500, 'SSE').catch(async error => {
       const snapshot = await (await fetch(`${server.url}api/snapshot`)).json() as { operations: { features: Array<{ id: string; count: number }> } };
       throw new Error(`${String(error)}; compact snapshot count=${snapshot.operations.features.find(f => f.id === 'compact')?.count ?? 'missing'}`);
     });
     try {
-      const first = await read();
+      await read();
       write(trace, 'mod_compact-1.json', { event: 'compact', run_id: 'live-1', mode: 'active', stage: 'started', host: 'claude', session_id: 's1', phase: 'mod_compact', version: 5, invocation_id: 'c1', written_at: new Date().toISOString() });
       const changed = await read();
-      expect(changed.live.sig).toBe(first.live.sig);
       expect(changed.operations.features.find((f) => f.id === 'compact')?.count).toBe(1);
     } finally {
       await reader.cancel();
@@ -269,10 +268,10 @@ describe('dashboard server', () => {
       expect(html).toContain('실행 회로');
       expect(html).toContain('id="theme"');
       expect(html).toContain('id="language"');
-      const body = (await (await fetch(`${server.url}api/snapshot`)).json()) as { events: Array<{ title: string; used: string }> };
-      expect(body.events.map((e) => e.used).join('\n')).not.toContain('completed');
-      expect(body.events[0]?.title).toBe('턴 종료');
-      expect(body.events[0]?.used).toContain('incomplete');
+      const body = (await (await fetch(`${server.url}api/snapshot`)).json()) as Record<string, unknown> & { operations: { runs: unknown[] } };
+      expect(body.operations.runs).toEqual(expect.any(Array));
+      // The page draws the operations view; the event list, live board and worker activity stay on the server.
+      expect(body).not.toHaveProperty('events'); expect(body).not.toHaveProperty('live'); expect(body).not.toHaveProperty('workerActivity');
       expect((await fetch(`${server.url}nope`)).status).toBe(404);
     } finally {
       await server.close();
@@ -287,10 +286,11 @@ describe('dashboard server', () => {
     const reader = res.body?.getReader();
     if (!reader) throw new Error('no body');
     const frames = liveFrames(reader);
-    const pull = (): Promise<{ live: { mode: string; steps: Array<{ state: string; line: string }> } }> => frames.next(2500, 'live event');
+    type Step = { state: string; title: string; summary: string; executionPath?: string };
+    const pull = (): Promise<{ operations: { feed: Step[] } }> => frames.next(2500, 'live event');
     try {
       const first = await pull();
-      expect(first.live.mode).toBe('waiting');
+      expect(first.operations.feed).toEqual([]);
       write(trace, 'admission_intent-1.json', {
         phase: 'admission_intent',
         written_at: new Date().toISOString(),
@@ -301,9 +301,8 @@ describe('dashboard server', () => {
       });
       let working = first;
       const until = Date.now() + 2500;
-      while (working.live.mode !== 'working' && Date.now() < until) working = await pull();
-      expect(working.live.mode).toBe('working');
-      expect(working.live.steps[0]?.state).toBe('active');
+      while (!working.operations.feed.length && Date.now() < until) working = await pull();
+      expect(working.operations.feed[0]).toMatchObject({ state: 'active', title: 'Gate A · Jev 요청' });
       expect(JSON.stringify(working)).not.toContain('SUPER_SECRET_PROMPT_TEXT');
       write(trace, 'admission_result-1.json', {
         phase: 'admission_result',
@@ -318,9 +317,9 @@ describe('dashboard server', () => {
       });
       let shut = working;
       const untilDone = Date.now() + 2500;
-      while (!(shut.live.mode === 'waiting' && shut.live.steps.some((step) => step.line.includes('직접 처리'))) && Date.now() < untilDone) shut = await pull();
-      expect(shut.live.steps.some((step) => step.state === 'active')).toBe(false);
-      expect(shut.live.steps.map((step) => step.line).join('\n')).toContain('직접 처리');
+      while (!shut.operations.feed.some((step) => step.executionPath === 'direct') && Date.now() < untilDone) shut = await pull();
+      expect(shut.operations.feed.some((step) => step.state === 'active')).toBe(false);
+      expect(shut.operations.feed.find((step) => step.executionPath)).toMatchObject({ executionPath: 'direct', summary: 'direct · admission_not_worth' });
     } finally {
       await reader.cancel();
       await server.close();

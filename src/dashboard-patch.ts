@@ -6,6 +6,8 @@ import type { OperationRun } from './operations.js';
  * whole history. Keys advance only when content changes, so an unchanged rebuild sends nothing. */
 interface RunMemo { run: OperationRun; meta: string; steps: Map<string, string> | null }
 type Fields = Map<string, { value: unknown; json: string | undefined }>;
+/** What a frame carries: the snapshot fields the page draws. */
+export type FrameSnapshot = Partial<ActivitySnapshot> & Pick<ActivitySnapshot, 'operations'>;
 export interface FrameMemo { key: string; top: Fields; ops: Fields; order: string[]; runs: Map<string, RunMemo>; feed: Map<string, string> }
 
 /** The snapshot fields whose change alone is no news: the build time moves on every rebuild. */
@@ -22,7 +24,7 @@ const memoRun = (run: OperationRun): RunMemo & { fields: Omit<OperationRun, 'ste
 
 /** Compares a new snapshot with the last frame. `patch` is null when nothing but the build time changed; the memo then
  * stays at the last frame, so the next patch still applies to what viewers hold. */
-export const diffFrame = (prev: FrameMemo | null, snapshot: ActivitySnapshot, nextKey: () => string): { memo: FrameMemo; patch: string | null } => {
+export const diffFrame = (prev: FrameMemo | null, snapshot: FrameSnapshot, nextKey: () => string): { memo: FrameMemo; patch: string | null } => {
   const { operations, ...rest } = snapshot, { runs, feed, ...opsRest } = operations;
   const top = fields(rest), ops = fields(opsRest);
   const order = runs.map(run => run.id);

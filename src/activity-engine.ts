@@ -2,10 +2,10 @@ import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
-import { loadActivity, type ActivitySnapshot } from './activity.js';
+import { loadActivity } from './activity.js';
 import { ClaudeWorkerActivityReader } from './claude-worker-activity.js';
 import type { DashboardSources } from './dashboard.js';
-import { diffFrame, type FrameMemo } from './dashboard-patch.js';
+import { diffFrame, type FrameMemo, type FrameSnapshot } from './dashboard-patch.js';
 import { TraceDirectoryReader } from './explain.js';
 
 /** One rebuild. `key` advances only when content changed; `patch` turns the frame `base` into it. The whole frame is built
@@ -18,15 +18,17 @@ export const activityHandler = (sources: DashboardSources) => {
   const dirs = sources.traceDirs?.map(source => source.dir) ?? (sources.traceDir ? [sources.traceDir] : []);
   // A replacement thread starts a new key series, so no viewer can apply its patches to an older thread's frame.
   const epoch = randomUUID().slice(0, 8);
-  let sequence = 0, memo: FrameMemo | null = null, current: ActivitySnapshot | null = null, whole: { key: string; json: string } | null = null;
+  let sequence = 0, memo: FrameMemo | null = null, current: FrameSnapshot | null = null, whole: { key: string; json: string } | null = null;
   return {
     async load(): Promise<LoadedActivity> {
       const started = performance.now();
       for (const dir of dirs) await traceReader.prepare(dir);
       const activity = loadActivity({ ...sources, traceReader, workerReader, now: new Date() });
       const pending = activity.live.mode === 'working' || activity.operations.feed.some(step => step.state === 'active') || activity.workerActivity?.items.some(worker => worker.state === 'active') === true;
-      const base = memo?.key ?? null, diff = diffFrame(memo, activity, () => `${epoch}.${++sequence}`);
-      memo = diff.memo; current = activity; whole = null;
+      // The page draws neither the event list, the live board nor worker activity; they decide `pending` and stay here.
+      const { events: _events, live: _live, workerActivity: _workers, ...shown } = activity;
+      const base = memo?.key ?? null, diff = diffFrame(memo, shown, () => `${epoch}.${++sequence}`);
+      memo = diff.memo; current = shown; whole = null;
       return { key: memo.key, base: diff.patch ? base : null, patch: diff.patch, pending, directories: workerReader.directories(), ms: performance.now() - started };
     },
     full(): { key: string; json: string } | null {
