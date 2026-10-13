@@ -7,7 +7,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ErrorCode, ListToolsRequestSchema, McpError, type CallToolResult, type Tool } from '@modelcontextprotocol/sdk/types.js';
 
 import { createEvidenceService, parseRequest, refuse, type EvidenceReply, type EvidenceServiceDeps } from './service.js';
-import { openTraceDir, type TraceWriter } from '../trace.js';
+import { openTraceDir, pruneTraceDir, type TraceWriter } from '../trace.js';
 import { codexTraceDir } from '../codex-paths.js';
 import { loadConfig, type ConfigLoad } from './source.js';
 import { LIMITS, MODES, type EvidenceConfig } from './types.js';
@@ -241,6 +241,8 @@ const main = async (): Promise<void> => {
   supervisor?.unref();
   server.onclose = () => { if (supervisor) clearInterval(supervisor); void onboarding?.close(); };
   await server.connect(new StdioServerTransport());
+  // Once per host session, off the hook path and after the tools answer: the age limit for this host's records (#231).
+  if (opened?.ok && traceDir) void pruneTraceDir(traceDir);
 };
 
 const invokedDirectly = (() => {

@@ -67,7 +67,10 @@ const cachedTrace = (path: string, cache: TraceCache, stat: Stats): Rec | null |
   return undefined;
 };
 
-const readTraceFile = (path: string, cache?: TraceCache, existingStat?: Stats): Rec | null => {
+/** Undefined when the file was removed after it was listed (retention, #231): a removed name is not an unreadable file. */
+const gone = (err: unknown): undefined | null => (err as NodeJS.ErrnoException).code === 'ENOENT' ? undefined : null;
+
+const readTraceFile = (path: string, cache?: TraceCache, existingStat?: Stats): Rec | null | undefined => {
   let fd: number | undefined;
   try {
     if (cache) {
@@ -81,12 +84,12 @@ const readTraceFile = (path: string, cache?: TraceCache, existingStat?: Stats): 
     if (!isRecord(parsed)) return null;
     cache?.set(path, { signature: signature(stat), record: parsed });
     return parsed;
-  } catch { cache?.delete(path); return null; }
+  } catch (err) { cache?.delete(path); return gone(err); }
   finally { if (fd !== undefined) closeSync(fd); }
 };
 
 /** The same checks as readTraceFile with asynchronous I/O, so many small files can be read concurrently. */
-const readTraceFileAsync = async (path: string, cache: TraceCache, stat: Stats): Promise<Rec | null> => {
+const readTraceFileAsync = async (path: string, cache: TraceCache, stat: Stats): Promise<Rec | null | undefined> => {
   const cached = cachedTrace(path, cache, stat);
   if (cached !== undefined) return cached;
   let handle: FileHandle | undefined;
@@ -98,7 +101,7 @@ const readTraceFileAsync = async (path: string, cache: TraceCache, stat: Stats):
     if (!isRecord(parsed)) return null;
     cache.set(path, { signature: signature(opened), record: parsed });
     return parsed;
-  } catch { cache.delete(path); return null; }
+  } catch (err) { cache.delete(path); return gone(err); }
   finally { await handle?.close().catch(() => undefined); }
 };
 
@@ -119,7 +122,7 @@ export const readTraceRecords = (dir: string, cache?: TraceCache): TraceRead => 
   for (const name of names.sort()) {
     if (!traceName(name)) continue;
     const record = readTraceFile(join(dir, name), cache);
-    if (record) records.push(record); else unreadable++;
+    if (record) records.push(record); else if (record === null) unreadable++;
   }
   return { records: sortedRecords(records), unreadable };
 };

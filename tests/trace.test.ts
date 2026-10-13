@@ -1,9 +1,9 @@
-import { lstatSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, statSync } from 'node:fs';
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 
-import { openTraceDir } from '../src/trace.js';
+import { openTraceDir, pruneTraceDir } from '../src/trace.js';
 
 const tmp = mkdtempSync(join(tmpdir(), 'jev-trace-'));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
@@ -46,5 +46,64 @@ describe('openTraceDir', () => {
     if (!opened.ok) return;
     rmSync(join(tmp, 'w'), { recursive: true, force: true });
     expect(opened.writer.write('post', {})).toMatchObject({ ok: false });
+  });
+});
+
+describe('pruneTraceDir', () => {
+  const DAY = 86_400_000;
+  const now = Date.parse('2026-10-13T00:00:00Z');
+  const uuid = '0f8fad5b-d9cb-469f-a165-70867728950e';
+  const file = (dir: string, name: string, ageDays: number): string => {
+    const path = join(dir, name);
+    writeFileSync(path, '{}');
+    const at = (now - ageDays * DAY) / 1000;
+    utimesSync(path, at, at);
+    return path;
+  };
+
+  it('deletes only its own records older than 7 days and leaves everything else, including symlink targets', async () => {
+    const dir = join(tmp, 'prune'); mkdirSync(dir);
+    const outside = join(tmp, 'prune-outside'); mkdirSync(outside);
+    const target = file(outside, `post-${uuid}.json`, 30);
+    file(dir, `mod_router-${uuid}.json`, 8);
+    file(dir, `.pre_intent-${uuid}.tmp`, 8);
+    file(dir, `codex_event-${uuid.replace('0f', '1f')}.json`, 6);
+    file(dir, 'notes.json', 30);
+    file(dir, `post-${uuid}.json.bak`, 30);
+    mkdirSync(join(dir, 'sub'));
+    const nested = file(join(dir, 'sub'), `post-${uuid}.json`, 30);
+    mkdirSync(join(dir, `stop-${uuid}.json`));
+    symlinkSync(target, join(dir, `failure-${uuid}.json`));
+
+    expect(await pruneTraceDir(dir, now)).toBe(2);
+    expect(readdirSync(dir).sort()).toEqual(['.retention', `codex_event-${uuid.replace('0f', '1f')}.json`, `failure-${uuid}.json`, `post-${uuid}.json.bak`, 'notes.json', `stop-${uuid}.json`, 'sub'].sort());
+    expect(lstatSync(join(dir, `failure-${uuid}.json`)).isSymbolicLink()).toBe(true);
+    expect(readFileSync(target, 'utf8')).toBe('{}');
+    expect(readFileSync(nested, 'utf8')).toBe('{}');
+  });
+
+  it('runs at most once a day per directory', async () => {
+    const dir = join(tmp, 'prune-throttle'); mkdirSync(dir);
+    expect(await pruneTraceDir(dir, now)).toBe(0);
+    file(dir, `post-${uuid}.json`, 10);
+    expect(await pruneTraceDir(dir, now + DAY / 2)).toBe(0);
+    expect(readdirSync(dir)).toContain(`post-${uuid}.json`);
+    expect(await pruneTraceDir(dir, now + DAY + 1)).toBe(1);
+  });
+
+  it('never follows a symlinked directory or stamp, and swallows failures', async () => {
+    const real = join(tmp, 'prune-real'); mkdirSync(real);
+    const old = file(real, `post-${uuid}.json`, 30);
+    symlinkSync(real, join(tmp, 'prune-link'));
+    expect(await pruneTraceDir(join(tmp, 'prune-link'), now)).toBe(0);
+    symlinkSync(join(tmp, 'elsewhere'), join(real, '.retention'));
+    expect(await pruneTraceDir(real, now)).toBe(0);
+    expect(readFileSync(old, 'utf8')).toBe('{}');
+    expect(await pruneTraceDir(join(tmp, 'missing'), now)).toBe(0);
+    if (process.platform === 'win32' || process.getuid?.() === 0) return;
+    const locked = join(tmp, 'prune-locked'); mkdirSync(locked);
+    file(locked, `post-${uuid}.json`, 30);
+    chmodSync(locked, 0o500);
+    try { await expect(pruneTraceDir(locked, now)).resolves.toBe(0); } finally { chmodSync(locked, 0o700); }
   });
 });
