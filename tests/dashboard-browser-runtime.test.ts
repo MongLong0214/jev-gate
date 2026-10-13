@@ -69,6 +69,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     for(const e of document.querySelectorAll('#pipeline .node :is(.t,.dec)')){const box=e as unknown as {scrollWidth:number;clientWidth:number};if(box.scrollWidth>box.clientWidth+1)out.push('clipped node text: '+e.textContent);}
     for(const l of document.querySelectorAll('#pipeline svg.wires line')){const r=l.getBoundingClientRect();if(!r.height)continue;if(nodes.some(n=>r.left>n.left+1&&r.left<n.right-1&&r.top<n.bottom-1&&r.bottom>n.top+1))out.push('wire crosses a node');}
     if(nodes[0]!.top>innerHeight-100)out.push('circuit below the first viewport: '+Math.round(nodes[0]!.top));
+    for(const e of document.querySelectorAll('#runs .c-st')){const box=e as unknown as {scrollWidth:number;clientWidth:number};if(box.scrollWidth>box.clientWidth+1)out.push('run state wider than its column: '+e.textContent);}
     for(const e of document.querySelectorAll('.stat dd.s')){const box=e as unknown as {scrollWidth:number;clientWidth:number};if(box.scrollWidth>box.clientWidth+1)out.push('clipped header line: '+e.textContent);}
     // Below 900 px the call log cannot fit every column, as in the mock; it must then scroll inside its card rather than clip.
     for(const e of document.querySelectorAll('.tw')){const box=e as unknown as {scrollWidth:number;clientWidth:number};if(box.scrollWidth>box.clientWidth+1&&(innerWidth>900||getComputedStyle(e).overflowX!=='auto'))out.push('call log does not fit: '+box.scrollWidth+' > '+box.clientWidth);}
@@ -87,16 +88,16 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
 
   it('shows live version status without overflow in the actual browser', async () => {
     const home = mkdtempSync(join(tmpdir(), 'jev-dashboard-version-'));
-    const releaseFetch = (async () => new Response(JSON.stringify({ tag_name: 'v0.8.20', draft: false, prerelease: false, html_url: 'https://github.com/MongLong0214/jev-gate/releases/tag/v0.8.20' }))) as typeof fetch;
+    const releaseFetch = (async () => new Response(JSON.stringify({ tag_name: 'v0.8.21', draft: false, prerelease: false, html_url: 'https://github.com/MongLong0214/jev-gate/releases/tag/v0.8.21' }))) as typeof fetch;
     const local = await startDashboard(dashboardSources({ HOME: home, XDG_CONFIG_HOME: join(home, '.config'), XDG_STATE_HOME: join(home, '.local/state'), JEV_GATE_TRACE_DIR: join(home, 'claude-traces'), JEV_CODEX_TRACE_DIR: join(home, 'codex-traces') }), 0, { releaseFetch });
     try {
       for (const width of [1440, 390, 320]) {
         const p = await browser.newPage({ viewport: { width, height: 900 } });
         p.on('pageerror', e => errors.push(e.message));
         await p.goto(local.url);
-        await p.waitForFunction(() => document.getElementById('version-badge')?.textContent?.includes('0.8.20'));
+        await p.waitForFunction(() => document.getElementById('version-badge')?.textContent?.includes('0.8.21'));
         expect(await p.locator('#version-badge').getAttribute('data-state')).toBe('update');
-        expect(await p.locator('#version-badge').textContent()).toContain('0.8.19');
+        expect(await p.locator('#version-badge').textContent()).toContain('0.8.20');
         expect(await p.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
         await p.screenshot({ path: join(output, `version-${width}.png`), fullPage: true });
         await p.close();
@@ -335,7 +336,8 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
   it('renders empty and long mixed-host data in 28 viewport/theme/language states without overflow, overlap, character wrapping, rate text or accent bars',async()=>{
     const long='long '.repeat(60);
     push([run('c','claude',[call('a','admission',63,{executionPath:'direct'}),call('b','allocation',88,{},{choice:'claude-sonnet-5'}),step('w','workers',{lane:'host',summary:long,model:{selected:'claude-opus-5-5',observed:'claude-sonnet-5',status:'mismatch',selectedEffort:null,observedEffort:null}}),call('r','router',91,{},{choice:'sonnet · medium',threshold:0.6,direction:'downgrade'})],{title:'Claude '+long,state:'active'}),
-      run('x','codex',[call('xr','router',140,{},{choice:'gpt-6.1-sol · minimal'}),step('g','guard',{lane:'policy',summary:'허용'}),call('e','evidence',70,{summary:'<img src=x onerror="alert(1)">'},{status:402,code:'payment_required',costUsd:null}),call('k','compact',220)],{title:'Codex '+long,state:'attention'})]);
+      run('x','codex',[call('xr','router',140,{},{choice:'gpt-6.1-sol · minimal'}),step('g','guard',{lane:'policy',summary:'허용'}),call('e','evidence',70,{summary:'<img src=x onerror="alert(1)">'},{status:402,code:'payment_required',costUsd:null}),call('k','compact',220)],{title:'Codex '+long,state:'attention'}),
+      run('u','claude',[call('ur','router',80)],{title:'Router 실행',state:'unconfirmed'})]);
     const failures:string[]=[];
     for(const [width,height] of [[1920,1080],[1440,900],[1280,800],[1024,768],[768,1024],[390,844],[320,740]] as const){
       const p=await page(width,height);
@@ -434,6 +436,12 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     await p.locator('[data-state=unconfirmed]').click();expect(await p.locator('#runs li').allTextContents()).toEqual(['조건에 맞는 실행이 없습니다.']);expect(await p.locator('#runs .sel').count()).toBe(0);expect(await problems(p)).toEqual([]);
     await p.locator('[data-state=all]').click();await p.locator('#search').fill('zzz');expect(await p.locator('#runs li').allTextContents()).toEqual(['조건에 맞는 실행이 없습니다.']);
     await p.locator('#search').fill('');await p.keyboard.press('Escape');await p.locator('body').click({position:{x:2,y:2}});await p.keyboard.press('/');expect(await p.locator('#search').evaluate(e=>e===document.activeElement)).toBe(true);await p.close();
+  });
+
+  it('shows a generated run title in English in the run detail and the row label (#237)',async()=>{
+    push([run('t','claude',[call('tr','router',90)],{title:'Router 실행'})]);const p=await page(1280,800);await p.locator('#language').click();
+    await p.locator('#runs [data-run=t]').click();expect(await p.locator('#runs [data-run=t] .nm b').textContent()).toBe('Router run');
+    expect(await p.locator('#rd-name').textContent()).toBe('Router run');expect(await p.locator('#runs [data-run=t]').getAttribute('aria-label')).toMatch(/^Router run, /);await p.close();
   });
 
   it('opens one stage at a time in the run detail and keeps its scroll and keyboard focus', async () => {

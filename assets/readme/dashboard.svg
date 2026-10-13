@@ -7,7 +7,7 @@
 <text x="24" y="35" font-size="17" class="ink" font-weight="600">Jev Gate</text>
 <text x="107.24" y="35" font-size="17" class="fa">Execution overview</text>
 <rect x="267.82" y="17.5" width="101.04" height="22" rx="11" fill="none" stroke="#e4e0e8"/>
-<text x="318.34" y="33" font-size="12" class="mu" text-anchor="middle">v0.8.19 · latest</text>
+<text x="318.34" y="33" font-size="12" class="mu" text-anchor="middle">v0.8.20 · latest</text>
 <circle cx="387.36" cy="29" r="3" fill="#087d5b" class="beat"/>
 <text x="396.36" y="33.5" font-size="13" class="ok">Live connection</text>
 <rect x="511.96" y="13.5" width="296.4" height="31" rx="7" fill="none" stroke="#e4e0e8"/>

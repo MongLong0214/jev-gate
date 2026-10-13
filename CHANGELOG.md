@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.8.20 — 2026-10-13 — README dashboard, run list fixes
+
+- Put the live dashboard right under the results at the top of the README, and redraw its sample with the current English labels: Execution overview, Running executions, Needs review, the Past errors filter, Stage details and Execution detail. The README's dashboard guide and record table now name the same labels, the Past error state, refused worker contracts and host ends, and how to update the Codex plugin.
+- Keep long run states inside the State column (#236). "Outcome unobserved" and other long labels wrap in the run list instead of running over the execution title.
+- Show a generated run title in English in the Execution detail header and in the run row's accessible label, as the run list already does (#237).
+
 ## v0.8.19 — 2026-10-13 — Live dashboard, native spawn models, trace retention
 
 - Stream dashboard changes as patches (#227). The first frame is whole; after that only the runs, steps and fields that changed are sent, and a viewer whose base is stale reconnects for a whole frame. A running step carries its `startedAt` and the browser counts its elapsed time, so an unchanged step is no longer resent every 2 seconds.
