@@ -247,14 +247,17 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     write(codex, 'terminal', { ...x, phase: 'background_terminal', prompt_id: 'p', tool_use_id: 'haiku-call', invocation_id: 'x-terminal', written_at: ago(170_000), status: 'completed', agent_id: 'haiku-agent' });
     write(codex, 'stop', { ...x, phase: 'codex_event', event: 'SubagentStop', agent_id: 'haiku-agent', agent_type: 'jev-gate:worker', invocation_id: 'x-stop', written_at: ago(169_000) });
     const local = await startDashboard(dashboardSources({ HOME: home, XDG_CONFIG_HOME: join(home, '.config'), XDG_STATE_HOME: join(home, '.local/state'), JEV_GATE_TRACE_DIR: claude, JEV_CODEX_TRACE_DIR: codex }), 0);
-    type Snap = { operations: { attention: number; runs: Array<{ id: string; host: string; state: string; steps: Array<{ outcome?: string; cause?: string; details: string[]; impact?: { now: string } }> }> } };
+    type Snap = { operations: { attention: number; runs: Array<{ id: string; host: string; state: string; steps: Array<{ id: string; outcome?: string; cause?: string; details?: string[]; impact?: { now: string } }> }> } };
     const snap = async () => await (await fetch(new URL('/api/snapshot', local.url))).json() as Snap;
     try {
       let s = await snap();
       const refused = (cause: string) => s.operations.runs.find(r => r.steps.some(x => x.outcome === 'rejected' && x.cause === cause))!;
       expect(s.operations.attention).toBe(2); expect(refused('check_unobserved')).toMatchObject({ host: 'claude', state: 'attention' }); expect(refused('worker_blocked')).toMatchObject({ host: 'codex', state: 'attention' });
-      expect(refused('check_unobserved').steps.find(x => x.outcome === 'rejected')!.details).toContain('실행 기록 read · 미관측 #1');
-      expect(refused('worker_blocked').steps.find(x => x.outcome === 'rejected')!.details).toContain('worker 보고 pass 0 · fail 1 · 미실행 0');
+      // Frames omit step details; the full step comes from /api/step when a detail opens.
+      const details = async (cause: string) => { const r = refused(cause), x = r.steps.find(y => y.outcome === 'rejected')!;
+        return (await (await fetch(new URL(`/api/step?run=${encodeURIComponent(r.id)}&step=${encodeURIComponent(x.id)}`, local.url))).json() as { details: string[] }).details; };
+      expect(await details('check_unobserved')).toContain('실행 기록 read · 미관측 #1');
+      expect(await details('worker_blocked')).toContain('worker 보고 pass 0 · fail 1 · 미실행 0');
       expect(s.operations.runs.flatMap(r => r.steps).filter(x => x.outcome === 'host_ended')).toHaveLength(3);
       for (const secret of [unobserved, blocked, 'worker reply text', 'reply note', 'npm test']) expect(JSON.stringify(s)).not.toContain(secret);
       const p = await page();await p.goto(local.url);await p.waitForFunction(() => document.getElementById('k-att')?.textContent === '2');
@@ -264,6 +267,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
       await p.locator(`#runs [data-run="${id}"]`).click();
       // The host end shows as its own row, never as acceptance; the policy delivery after it stays a lifecycle record.
       expect(await marks()).toEqual(['계약 미충족', '호스트 종료']);
+      await p.waitForFunction(() => document.querySelector('#trace .sd:not([hidden])')?.textContent?.includes('미관측 #1'));
       for (const fact of ['single · 계약 미충족 · incomplete · 통과 보고 검사의 실행 미관측', '실행 기록 read · 미관측 #1', '원인check_unobserved', '현재 영향현재 영향 미확인', '세션claude-232']) expect(await detail()).toContain(fact);
       expect(await problems(p)).toEqual([]);
       await p.locator('#run-detail').screenshot({ path: join(output, '232-1440-dark-ko-detail-rejected.png') });

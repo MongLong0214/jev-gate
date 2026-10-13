@@ -281,9 +281,25 @@ it('preserves setting-save failures through incoming snapshots', async () => {
   p.push(value);expect(p.get('notice').textContent).toContain('설정을 저장하지 못했습니다');
 });
 
-it('shows a ten-thousand-step execution in a bounded timeline with one record list', () => {
+it('shows a ten-thousand-step execution in a bounded timeline with one record list, drawn in the task after its frame', async () => {
   const p = page(), steps = Array.from({ length: 10001 }, (_, i) => step('cycle' + i, 'router', 'host', { summary: 'cycle ' + i })); p.push(snapshot([run('large', 'codex', steps)]));
-  expect(p.get('trace').children).toHaveLength(100); expect(p.get('trace').querySelectorAll('[aria-expanded="true"]')).toHaveLength(1);
+  expect(p.get('trace').children).toHaveLength(0);
+  await vi.waitFor(() => expect(p.get('trace').children).toHaveLength(100)); expect(p.get('trace').querySelectorAll('[aria-expanded="true"]')).toHaveLength(1);
+  // A patch that arrives before that draw applies to the frame it follows and is drawn; the frame is not drawn over it later.
+  const next = frames(), q = page(), large = run('large', 'codex', steps), streams = q.streams();
+  q.push(next(snapshot([large]))); q.patch(next(snapshot([large, run('small', 'claude', [step('g', 'guard', 'policy')])])));
+  expect(rows(q)).toHaveLength(2);
+  await new Promise(resolve => setTimeout(resolve, 50));
+  expect(rows(q)).toHaveLength(2); expect(q.streams()).toBe(streams);
+});
+
+it('fills the first rows of a long list at once and the rest in later tasks, counting all of them', async () => {
+  const p = page(), many = Array.from({ length: 45 }, (_, i) => run('run' + i, 'claude', [step('a' + i, 'admission', 'jev', { durationMs: 60 })]));
+  p.push(snapshot(many));
+  const shown = () => [...rows(p)].map(b => b.textContent);
+  expect(shown()).toHaveLength(45); expect(shown().filter(Boolean)).toHaveLength(20);
+  expect(p.w.document.querySelector('#state-filters [data-state="all"] em')!.textContent).toBe('45'); expect(text(p, 'run-count')).toContain('45');
+  await vi.waitFor(() => expect(shown().every(Boolean)).toBe(true));
 });
 
 it('draws one strip tick per record of the last minute, caps a burst of trips and shows no per-minute rate', () => {
@@ -343,6 +359,32 @@ it('counts an active step live from its recorded start', async () => {
   expect(du()).toMatch(/^5\.\ds$/); expect(opened(p)).toMatch(/기록 사이 경과5\.\ds/);
   await new Promise(r => setTimeout(r, 1100));
   expect(Number.parseFloat(du())).toBeGreaterThanOrEqual(6); expect(opened(p)).toMatch(/기록 사이 경과[6-9]\.\ds/);
+});
+
+it('grows the bar of a running stage on the same tick as its duration', async () => {
+  const now = Date.now(), started = new Date(now - 2000).toISOString(), p = page();
+  p.push(snapshot([run('r', 'claude', [step('d', 'router', 'host', { at: new Date(now - 10_000).toISOString(), durationMs: 1000 }), step('m', 'router', 'host', { state: 'active', at: started, startedAt: started })], { state: 'active' })]));
+  const width = (id: string) => Number.parseFloat((p.get('trace').querySelector(`[data-step="${id}"] .bar i`) as HTMLElement).style.width);
+  const running = width('m'), settled = width('d');
+  await vi.waitFor(() => expect(width('m')).toBeGreaterThan(running + 1), { timeout: 3000 });
+  // The span grows with it, so the settled stage takes a smaller share.
+  expect(width('d')).toBeLessThan(settled);
+});
+
+it('fetches the detail fields a frame leaves out for the opened stage only, and keeps them while that stage is unchanged', async () => {
+  const next = frames(), p = page();
+  const full = step('s2', 'router', 'host', { details: ['baseline gpt-6.1-sol · xhigh'], sessionId: 'cx-9', routing: { scope: 'root', baseline: 'gpt-6.1-sol', modelReason: 'same_value', effortReason: 'same_value' } });
+  const fetch = vi.fn(async (url: string) => ({ ok: true, json: async () => url.endsWith('s2') ? full : { ...step('s1', 'router', 'host'), details: ['first stage evidence'] } }));
+  Object.assign(p.w, { fetch });
+  const { details: _details, sessionId: _session, routing: _routing, ...slim } = full, { details: _first, ...first } = step('s1', 'router', 'host');
+  const frame = (more: OperationRun[] = []) => snapshot([run('r/1', 'codex', [first, slim] as OperationStep[]), ...more]);
+  p.push(next(frame()));
+  expect(opened(p)).toContain('결과Recorded result'); expect(opened(p)).not.toContain('라우팅 대상'); expect(fetch.mock.calls.map(c => c[0])).toEqual(['/api/step?run=r%2F1&step=s2']);
+  await vi.waitFor(() => expect(opened(p)).toContain('라우팅 대상메인 턴')); expect(opened(p)).toContain('baseline gpt-6.1-sol · xhigh');
+  p.patch(next(frame([run('other', 'claude', [step('g', 'guard', 'policy')])])));
+  expect(opened(p)).toContain('baseline gpt-6.1-sol · xhigh'); expect(fetch).toHaveBeenCalledTimes(1);
+  p.click('[data-step="s1"]'); await vi.waitFor(() => expect(opened(p)).toContain('first stage evidence'));
+  expect(fetch.mock.calls.map(c => c[0])).toEqual(['/api/step?run=r%2F1&step=s2', '/api/step?run=r%2F1&step=s1']);
 });
 
 it('lands a recorded host step on its node, strip and run row without a Jev round trip', async () => {
