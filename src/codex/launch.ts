@@ -198,6 +198,7 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
     env: { ...options.env, JEV_CODEX_BRIDGE_URL: base, JEV_CODEX_BRIDGE_TOKEN: token }, stdio: ['pipe', 'pipe', 'pipe'] });
   rpc = new CodexRpc(child.stdout, child.stdin);
   policy = new CodexPolicy(rpc, options.env, options.fetchImpl, options.profiles, options.bypassHookTrust);
+  policy.hostPid = child.pid;
   child.stderr.pipe(process.stderr, { end: false });
   rpc.emit = message => { if (client?.readyState === WebSocket.OPEN) client.send(JSON.stringify(message)); };
   ws.on('connection', c => {

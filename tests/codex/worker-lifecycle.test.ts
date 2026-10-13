@@ -1,5 +1,6 @@
 import { PassThrough } from 'node:stream';
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -350,5 +351,57 @@ describe('Codex write scope from native tool targets (#234)', () => {
     expect(await f.hook('Write', { file_path: join(f.root, 'src/x.ts') }, f.other)).toEqual({});
     expect(await f.blocked('Write', { file_path: join(f.other, 'owned.ts') }, f.other)).toBe(true);
     expect(f.job().current.receipts).toHaveLength(1); expect(f.sent.filter(m => m['method'] === 'turn/start')).toHaveLength(1);
+  });
+});
+
+describe('Codex reservation across a host restart (#239)', () => {
+  const exitedPid = (): number => spawnSync(process.execPath, ['-e', '']).pid!;
+  type F = Awaited<ReturnType<typeof setup>>;
+  const write = (f: F) => f.policy.nativeHook({ hook_event_name: 'PreToolUse', session_id: 'parent', tool_name: 'Write', tool_input: { file_path: join(f.root, 'src/file') } });
+  // A new process never knew the worker; only its durable reservation and recorded host remain.
+  const restartHost = (f: F, hostPid: number | undefined) => {
+    f.policy.sessions.delete('worker');
+    updateJob(f.stateEnv, 'parent', prev => {
+      if (!prev) return null;
+      const r = prev.current.active['dispatch']!; const { host_pid: _recorded, ...e } = r.codex_execution!;
+      return { ...prev, current: { ...prev.current, active: { dispatch: { ...r, codex_execution: hostPid === undefined ? e : { ...e, host_pid: hostPid } } } } };
+    });
+  };
+  it('settles a worker whose app-server exited, stops protecting its scope and answers status with that result', async () => {
+    const f = await setup('uncertain'); f.policy.hostPid = process.pid; await f.launch();
+    expect(f.job().current.active['dispatch']?.codex_execution?.host_pid).toBe(process.pid);
+    expect(JSON.stringify(await write(f))).toContain('deny');
+    restartHost(f, exitedPid());
+    expect(JSON.stringify(await write(f))).not.toContain('deny');
+    expect(f.job().current.active).toEqual({});
+    expect(f.job().current.receipts).toHaveLength(1); expect(f.job().current.receipts[0]!.verdict).not.toBe('accept');
+    expect(f.traces('failure').filter(t => t['failure_category'] === 'interrupted' && t['failure_stage'] === 'turn')).toHaveLength(1);
+    expect(await f.status('s1')).toContain('app-server exited');
+    await write(f); expect(f.job().current.receipts).toHaveLength(1);
+  });
+  it('keeps protection while the recorded app-server still runs elsewhere; an exited host in another session never blocks and ages out', async () => {
+    const f = await setup('uncertain'); f.policy.hostPid = process.pid; await f.launch();
+    restartHost(f, process.ppid);
+    expect(JSON.stringify(await write(f))).toContain('deny');
+    expect(await f.status('s1')).toContain('still running');
+    expect(f.job().current.active['dispatch']).toBeDefined();
+    const state = f.job(); const held = state.current.active['dispatch']!;
+    updateJob(f.stateEnv, 'holder', () => ({ ...state, session_id: 'holder', history: [], current: { ...state.current, active: { held: { ...held, codex_execution: { ...held.codex_execution!, host_pid: exitedPid() } } } } }));
+    updateJob(f.stateEnv, 'parent', prev => prev && { ...prev, current: { ...prev.current, active: {} } });
+    expect(JSON.stringify(await write(f))).not.toContain('deny');
+    cleanupJobs(f.stateEnv, Date.now() + 100 * 24 * 3600000);
+    expect(existsSync(jobPath(f.stateEnv, 'holder'))).toBe(false);
+  });
+  it('keeps a reservation without a recorded host until an explicit cancel releases it', async () => {
+    const f = await setup('uncertain'); await f.launch();
+    expect(f.job().current.active['dispatch']?.codex_execution?.host_pid).toBeUndefined();
+    restartHost(f, undefined);
+    expect(JSON.stringify(await write(f))).toContain('deny');
+    expect(await f.status('s1')).toContain('did not record its Codex host');
+    expect(f.job().current.active['dispatch']).toBeDefined();
+    await f.rpc.onRequest({ id: 'cancel', method: 'item/tool/call', params: { threadId: 'parent', tool: 'jev_agent', arguments: { action: 'cancel', agent_id: 'worker' } } });
+    expect(JSON.stringify(f.sent.find(m => m['id'] === 'cancel'))).toContain('explicit user cancellation');
+    expect(f.job().current.active).toEqual({}); expect(f.job().current.receipts).toHaveLength(1);
+    expect(JSON.stringify(await write(f))).not.toContain('deny');
   });
 });

@@ -30,6 +30,17 @@
 
 <p align="center"><sub><i>Two real feature tasks, each a 17-turn Claude Code 2.1.294 session on Opus 5.5 (xhigh), with and without Jev Gate v0.8.15 defaults. Cost is the host's own total and includes Jev's requests; quality is blind-graded against the merged PRs. One pair per task: a pilot that shows a direction, not a guarantee — <a href="#results">method and limits</a>.</i></sub></p>
 
+<h3 align="center">Every decision and its result, live.</h3>
+
+<p align="center">
+  <a href="#read-the-live-dashboard"><picture>
+    <source media="(prefers-color-scheme: dark)" srcset="./assets/readme/dashboard-dark.svg">
+    <img src="./assets/readme/dashboard.svg" width="100%" alt="Jev Gate dashboard with sample data: header KPIs, an eight-node execution circuit on a Jev rail, the execution list, the Jev call log, Jev response time with a list-price cost estimate, and one execution's detail">
+  </picture></a>
+</p>
+
+<p align="center"><sub><i>Sample data. One local dashboard for Claude Code and Codex opens on its own: each Jev judgment lights the feature it decided, with its run, reply time and observed result — <a href="#read-the-live-dashboard">how to read it</a>.</i></sub></p>
+
 # Jev Gate
 
 Long coding sessions get expensive in a quiet way: one main context keeps growing, every request re-reads it from cache on the most capable model, and routine work — searching, running checks, reviewing — pays the same price as the hard part.
@@ -92,7 +103,7 @@ codex plugin marketplace add /absolute/path/to/extracted-plugin
 codex plugin add jev-gate@jev-gate-codex
 ```
 
-Enter your key in the automatic local screen and use ordinary Codex in your project. The plugin discovers the workspace and prepares a local connection. Start a fresh Codex host after installation or upgrade; a running host retains its previous provider. Review installed hooks in `/hooks` if Codex asks for native trust. Keep one Jev Gate installation enabled. Automatic connection was tested with Codex CLI 0.160.0 and Node 22.15+.
+Enter your key in the automatic local screen and use ordinary Codex in your project. The plugin discovers the workspace and prepares a local connection. Start a fresh Codex host after installation or upgrade; a running host retains its previous provider. Review installed hooks in `/hooks` if Codex asks for native trust. Keep one Jev Gate installation enabled. Automatic connection was tested with Codex CLI 0.162.1 and Node 22.15+.
 
 Both hosts share one private key and dashboard. Installing from source is for development; run `npm ci` and `npm run build` before registering the checkout. [Codex configuration and troubleshooting](plugins/codex/README.md).
 
@@ -120,8 +131,6 @@ Set the shared frontier switch in the ordinary config (merge this field into an 
 
 `true` makes Claude Fable and Codex Astra eligible for automatic routing at their supported efforts. Jev still selects the model/effort pair for the task; explicit host pins remain authoritative. An explicit `false` overrides legacy `routerAllowFable` / `allowAstra` options. If the field is absent, legacy opt-ins remain compatible. The switch is reread at policy boundaries; an already selected manual root model is preserved.
 
-The dashboard is a live run monitor for both hosts. An eight-node circuit (Gate A, Gate B, plan, workers, tool guard, Router, Compact, Evidence) hangs off a Jev rail: each recorded Jev call travels from the rail to the node it decided and back, and the node's latest decision updates in place. The run list, the Jev call log (one row per call) and the run detail change in the same frame. Every node keeps a 60-second strip with one tick per record at its recorded time. One recorded record is one mark: nothing moves without a record behind it. Pause, disconnected streams and reduced-motion preferences stop all movement and keep the numbers. All layouts fit without horizontal page scrolling.
-
 ## Keep talking while workers run
 
 Owned workers and planners dispatch in the background by default. New messages steer the main conversation without replacing the original job or its contracts. A launch receipt is separate from completion and contract acceptance.
@@ -142,18 +151,13 @@ Every PR runs the `models` CI job against the official Claude model/effort docum
 
 The plugin opens **one shared local browser dashboard** automatically. Starting another Claude or Codex session reuses it instead of opening duplicate tabs. Select **Claude + Codex**, **Claude Code**, or **Codex** to inspect each host.
 
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="./assets/readme/dashboard-dark.svg">
-    <img src="./assets/readme/dashboard.svg" width="100%" alt="Jev Gate run monitor with sample data: header KPIs, an eight-node circuit on a Jev rail, the run list, the Jev call log, Jev response latency with a list-price cost estimate, and one run's step detail">
-  </picture>
-</p>
+An eight-node circuit (Gate A, Gate B, plan, workers, tool guard, Router, Compact, Evidence) hangs off a Jev rail. Every new record flashes its node, the node's 60-second strip and its execution row in recorded order, including policy, host and lifecycle records; measured Jev responses travel the rail and set the latency readout. The **Jev traffic** bar covers the last 30 seconds: requests as short ticks, responses at their latency. Between records a soft sweep runs along the rail and the node wires flow to show the view is live; neither carries a record. The execution list, the Jev call log (one row per call) and the execution detail change in the same frame. Pause, disconnected streams and reduced-motion preferences stop all movement and keep the numbers. All layouts fit without horizontal page scrolling.
 
 1. Start a task in your normal coding session.
-2. Read the circuit at the top. Select a node to see its latest decision, confidence and Jev reply time in the step detail; it also filters the run list to that feature, and selecting it again shows all.
-3. Choose a run to open its run detail: every step with its time, duration and result, expandable to the recorded question, choice, actual reply, confidence, tokens and estimated cost.
+2. Read the **Execution circuit** at the top. Select a node to see its latest decision, confidence and Jev response time in **Stage details**; it also filters the execution list to that feature, and selecting it again shows all.
+3. Choose an execution to open its **Execution detail**: every stage with its time, duration and result, expandable to the recorded question, answer, confidence, tokens, estimated cost, selected model and observed response.
 4. Read the Jev call log and Jev response panel for the latest calls, latency median and p95, today's call count and a list-price cost estimate. Billed credit is not returned by the Jev API, so the cost is an estimate only. **Pause** on the call log holds its rows while new calls are counted.
-5. Use the host switch, run filters and search to narrow records. Korean/English and light/dark controls are available.
+5. Use the host switch, the execution filters (All, Running, Needs review, Past errors, Unobserved) and search to narrow records. Korean/English and light/dark controls are available.
 
 | Record | Meaning |
 | --- | --- |
@@ -162,11 +166,15 @@ The plugin opens **one shared local browser dashboard** automatically. Starting 
 | Error | A specific Jev, host, Evidence, request-setting, or observed-model error was recorded |
 | Unobserved | A needed fact is missing; success or failure cannot be inferred |
 | Interrupted | User interruption was observed |
+| Needs review | A failure that may still affect work: later records of the same operation also failed, or none followed yet (current impact unknown) |
+| Past error | A failure followed by a success of the same operation, or caused by the request's own arguments; it stays in the history and is never shown as resolved |
 | No execution record | No matching event is available for this feature and range |
+
+A refused worker contract is an error labelled **Contract not met**, with a closed reason and the check ids (`#n`) it concerns, never the raw reply. A later host end appears as its own **Host ended** row and does not mark the run done.
 
 **Router · Request preparation** means pre-request checks finished. It is neither a new Jev judgment nor a completed model response. The dashboard distinguishes **selected model/effort**, **host dispatch or API request**, and **observed response**. The model card follows the selected timeline stage and names its record/time. A selection or submitted request alone cannot prove which model answered. Missing response effort stays unknown. A native Codex Compact summary request is recorded separately from root Router requests; its different effort is not a root routing failure. Older records without request purpose remain unconfirmed.
 
-Circuit lines show possible paths. Moving lights require new connected records in the same execution. Response charts use measured Jev latency, not animations as a speed claim. Pause freezes the view; workers keep running. Reconnecting means the browser's event stream will retry. The latest 200 executions are listed; filters recompute displayed measurements and exclude earlier steps outside the range.
+Circuit lines show possible paths. Flashes and rail lights mark recorded events; the ambient sweep and flowing wires carry none. Response charts use measured Jev latency; motion is not a speed claim. Pause freezes the view; workers keep running. Reconnecting means the browser's event stream will retry. The latest 200 executions are listed; filters recompute displayed measurements and exclude earlier steps outside the range.
 
 Dashboard and recording controls are independent and default to on. Both hosts use the same preferences. Turning recording off leaves Jev features running. Turning automatic dashboard opening off stops the managed server; a manually started view remains available.
 
@@ -204,6 +212,12 @@ For Claude:
 ```sh
 claude plugin marketplace update jev-gate
 claude plugin update jev-gate@jev-gate
+```
+
+For Codex, replace the directory you registered with the new release's extracted **Codex ZIP** at the same path, then reinstall:
+
+```sh
+codex plugin add jev-gate@jev-gate-codex
 ```
 
 Restart the host after upgrading to load new hooks/provider code. Old separate Jev plugins are automatically disabled where user settings permit; customized or managed overrides are preserved. Disabling one feature does not disable the others. Uninstalling does not delete credentials, traces, or transcripts.
