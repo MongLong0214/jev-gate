@@ -267,6 +267,9 @@ export const codexExecutions = (env: Env): Reservation[] => {
   return result;
 };
 
+/** #239: a worker runs inside its app-server, so once that process is gone nothing can still write for it. A reused pid only keeps protection longer. */
+export const hostExited = (r: Reservation): boolean => r.codex_execution?.host_pid !== undefined && !pidAlive(r.codex_execution.host_pid);
+
 export interface ReservationInput {
   role: OwnedRole;
   taskId: string | null;
@@ -351,7 +354,7 @@ const agedOut = (file: string, now: number): boolean => {
     const read = readRaw(file, claimed);
     if (!read.ok || read.value === null) return false;
     const state = read.value;
-    if ([state.current, ...state.history].some(g => Object.values(g.active).some(r => r.codex_execution || r.background_execution))) return false;
+    if ([state.current, ...state.history].some(g => Object.values(g.active).some(r => r.codex_execution && !hostExited(r) || r.background_execution))) return false;
     return !Object.values(state.current.active).some((r) => now - Date.parse(r.started_at) < ACTIVE_GRACE_MS);
   } catch {
     return false;

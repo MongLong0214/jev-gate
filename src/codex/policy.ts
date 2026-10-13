@@ -6,8 +6,8 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createWorkerWorktree, type WorkerWorktree } from '../worktree.js';
 import { runHook, type HookDeps } from '../hook.js';
-import { stateRoot, readJob, updateJob, own, codexExecutions, pendingBackgroundPolicy } from '../job.js';
-import { OWNED_AGENTS, type CodexFailure, type HookInput } from '../types.js';
+import { stateRoot, readJob, updateJob, own, codexExecutions, hostExited, pendingBackgroundPolicy } from '../job.js';
+import { OWNED_AGENTS, agentForTier, type CodexFailure, type HookInput } from '../types.js';
 import { OWNED_AGENT_PROFILES } from '../agents.js';
 import type { Env } from '../config.js';
 import { codexTraceDir } from '../codex-paths.js';
@@ -95,6 +95,9 @@ export class CodexPolicy {
   private hooked = new Set<string>();
   private compactPending = new Map<string, { summary: string; run: string; before: number; after: number }>();
   private backgroundResults = new Map<string, { parent: string; output: string }>();
+  private settlingOrphans = new Set<string>();
+  /** #239: the app-server process that runs this policy's workers, recorded so a later process can tell they ended with it. */
+  hostPid: number | undefined;
   private workerStarts = new Map<string, { range: [number, number]; writeRate: number }>();
   constructor(readonly rpc: CodexRpc, env: Env, private fetchImpl?: typeof fetch, private profiles = CODEX_PROFILES, private bypassHookTrust = false) {
     // Claude launch settings cannot pin or alter a Codex thread.
@@ -547,6 +550,7 @@ export class CodexPolicy {
     if (!session) return {};
     const event = input['hook_event_name'];
     await this.retrySettlements();
+    if (!session.role) await this.settleOrphans(session);
     if (!session.role && event === 'PreToolUse' && this.writeConflict(String(input['cwd'] ?? session.settings['cwd']), String(input['tool_name']), obj(input['tool_input']) ?? {})) return deny('A managed Codex worker in this write scope has not completed terminal settlement. Read/status commands (git status/diff/log/show, rg, grep, ls, cat, head, tail, wc, find, ps, gh issue/pr view/list) and writes whose every target lies outside its scope remain available. Hooks do not report exec workdir, so start a shell command elsewhere with `cd <absolute dir> &&` and name its paths without variables.');
     if (event === 'PreCompact') { session.compactAllowed = session.policy.compact.enabled && (input['trigger'] === 'auto' || input['trigger'] === 'manual' && session.policy.compact.manual); return {}; }
     if (event === 'PreToolUse' && input['tool_name'] === 'Bash' && typeof input['tool_use_id'] === 'string' && typeof obj(input['tool_input'])?.['command'] === 'string') {
@@ -632,7 +636,11 @@ export class CodexPolicy {
       if (Object.keys(original).some(k => !['action', 'agent_id'].includes(k)) || typeof original['agent_id'] !== 'string') return 'Invalid background operation.';
       const id = original['agent_id']; const worker = this.sessions.get(id);
       const result = this.backgroundResults.get(id);
-      if (!worker?.dispatch || worker.parent !== session.id) return result?.parent === session.id ? result.output : 'No owned execution with this identity.';
+      if (!worker?.dispatch || worker.parent !== session.id) {
+        if (result?.parent !== session.id) await this.settleOrphans(session, original['action'] === 'cancel' ? id : undefined);
+        const settled = this.backgroundResults.get(id);
+        return settled?.parent === session.id ? settled.output : this.heldElsewhere(session.id, id) ?? 'No owned execution with this identity.';
+      }
       if (original['action'] === 'cancel') { this.interruptWorker(worker); return 'Cancellation requested. Acceptance and release still require an observed terminal event.'; }
       return worker.dispatch.ended ? this.settleWorker(worker) : worker.dispatch.unconfirmed ?? 'The original worker is still running. No terminal result or acceptance is available. Answer the user here; do not wait synchronously or duplicate its work.';
     }
@@ -719,7 +727,7 @@ export class CodexPolicy {
         if (!prev || !r) return null;
         if (this.writeConflict(String(parent.settings['cwd']), 'Agent', {}, r.deliverables)) { failed = { category: 'preflight_conflict', stage: 'reservation', not_executed: true }; throw new Error('worker write conflict'); }
         registered = true;
-        return { ...prev, current: { ...pendingBackgroundPolicy(prev.current), ...(background ? { background_job: true as const } : {}), active: { ...prev.current.active, [toolId]: { ...r, codex_execution: { thread_id: worker!.id, turn_id: null, cwd, root_cwd: String(parent.settings['cwd']) } } } } };
+        return { ...prev, current: { ...pendingBackgroundPolicy(prev.current), ...(background ? { background_job: true as const } : {}), active: { ...prev.current.active, [toolId]: { ...r, codex_execution: { thread_id: worker!.id, turn_id: null, cwd, root_cwd: String(parent.settings['cwd']), ...(this.hostPid ? { host_pid: this.hostPid } : {}) } } } } };
       }, { refuseUnreadable: true });
       if (!saved.ok || !registered) throw new Error('execution reservation unavailable');
       failed = { category: 'native_start_rejected', stage: 'turn_start', not_executed: true };
@@ -838,6 +846,42 @@ export class CodexPolicy {
     })();
     try { return await d.settling; } finally { delete d.settling; }
   }
+  /**
+   * #239: settles this session's reservations whose app-server has exited, and at an explicit cancel one written before
+   * hosts were recorded. Settlement happens in the process that sees it; the original process kept only memory.
+   */
+  private async settleOrphans(session: Session, cancelled?: string): Promise<void> {
+    const state = readJob(this.env, session.id);
+    if (!state.ok || !state.value) return;
+    for (const g of [state.value.current, ...state.value.history]) for (const [tool, r] of Object.entries(g.active)) {
+      const e = r.codex_execution; const exited = hostExited(r);
+      if (!e || g.prompt_id === null || this.settlingOrphans.has(e.thread_id) || !(exited || e.host_pid === undefined && e.thread_id === cancelled)) continue;
+      this.settlingOrphans.add(e.thread_id);
+      try {
+        const f: CodexFailure = { category: 'interrupted', stage: 'turn', not_executed: false };
+        await this.failure({ ...session, controller: null }, g.prompt_id, tool, { subagent_type: agentForTier(r.role, r.tier ?? 'standard') }, f, exited ? 'host_exited' : 'cancelled', Date.parse(r.started_at));
+        const after = readJob(this.env, session.id);
+        if (!after.ok || !after.value || [after.value.current, ...after.value.history].some(x => x.prompt_id === g.prompt_id && own(x.active, tool))) continue;
+        const output = `${failureHead(f)}. ${exited ? 'Its Codex app-server exited, so it is no longer running.' : 'Released at explicit user cancellation; its earlier host was not recorded, so its end was not observed.'} Inspect its files before retrying. No completion or acceptance is claimed.`;
+        this.backgroundResults.set(e.thread_id, { parent: session.id, output });
+        while (this.backgroundResults.size > 64) this.backgroundResults.delete(this.backgroundResults.keys().next().value!);
+        if (g.background_job) {
+          updateJob(this.env, session.id, prev => prev?.current.prompt_id === g.prompt_id ? { ...prev, current: { ...pendingBackgroundPolicy(prev.current), background_context: output, ...(cancelled && Object.keys(prev.current.active).length === 0 ? { outcome: 'incomplete' as const } : {}) } } : null);
+          this.trace?.write('background_terminal', { host: 'codex', session_id: session.id, prompt_id: g.prompt_id, tool_use_id: tool, agent_id: e.thread_id, status: 'interrupted',
+            failure_category: f.category, failure_stage: f.stage, not_executed: false, host_exited: exited });
+        }
+      } finally { this.settlingOrphans.delete(e.thread_id); }
+    }
+  }
+  /** #239: a durable reservation this process cannot observe or settle keeps protection; say why instead of denying it exists. */
+  private heldElsewhere(session: string, id: string): string | null {
+    const state = readJob(this.env, session);
+    const e = state.ok && state.value ? [state.value.current, ...state.value.history].flatMap(g => Object.values(g.active)).find(r => r.codex_execution?.thread_id === id)?.codex_execution : undefined;
+    if (!e) return null;
+    return e.host_pid !== undefined
+      ? 'The worker runs in an earlier Codex app-server that is still running, so its result cannot be collected here. Its reservation and write-scope protection remain until that process exits.'
+      : 'This worker was started by an earlier Jev Gate version that did not record its Codex host, so its end cannot be observed here. Its reservation and write-scope protection remain. Only if the user explicitly cancels it, use action=cancel with this agent_id to release them.';
+  }
   private async retrySettlements(): Promise<void> {
     await Promise.all([...this.sessions.values()].filter(s => s.dispatch?.ended && !s.dispatch.settled).map(s => this.settleWorker(s).catch(() => 'settlement pending')));
   }
@@ -850,6 +894,7 @@ export class CodexPolicy {
     const targets = deliverables ? (deliverables.length ? deliverables.map(p => resolve(cwd, p)) : [cwd]) : writeTargets(cwd, tool, input);
     if (!targets) return false;
     return codexExecutions(this.env).some(r => {
+      if (hostExited(r)) return false;
       const e = r.codex_execution!;
       // A worktree worker writes its deliverables in its own checkout and later into the root, so both copies are its scope.
       const bases = [...new Set([e.root_cwd, e.cwd])];

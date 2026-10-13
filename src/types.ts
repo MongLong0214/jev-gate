@@ -332,7 +332,11 @@ export interface Reservation {
   started_at: string;
   orphaned?: true;
   /** Native execution survives local RPC timeout and generation retirement until terminal settlement commits. */
-  codex_execution?: { thread_id: string; turn_id: string | null; cwd: string; root_cwd: string };
+  codex_execution?: {
+    thread_id: string; turn_id: string | null; cwd: string; root_cwd: string;
+    /** #239: the app-server process that runs the worker. Absent in reservations written before 0.8.20. */
+    host_pid?: number;
+  };
   /** A launch receipt is not a terminal result. Native identity remains reserved until observed completion. */
   allocation_pair?: { model: string; effort_edit: { kind: 'keep' } | { kind: 'set'; value: string } | { kind: 'omit' } };
   background_execution?: { token: string; agent_id: string | null; subagent_type: string; resolved_model: string | null };
