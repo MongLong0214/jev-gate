@@ -316,20 +316,23 @@ describe('Codex write scope from native tool targets (#234)', () => {
       expect(await f.blocked('Bash', { command }), command).toBe(true);
     }
   });
-  it('confines an unknown shell command only by a reported workdir or a leading absolute cd and the paths it names', async () => {
+  it('confines an unknown shell command by its reported workdir, a leading absolute cd or the session cwd, and the paths it names', async () => {
     const f = await scoped();
     expect(await f.hook('exec_command', { cmd: 'npx vitest run tests/a.test.ts', workdir: f.other })).toEqual({});
     expect(await f.hook('Bash', { command: `cd ${f.other} && npx vitest run tests/a.test.ts --reporter=dot` })).toEqual({});
     expect(await f.hook('Bash', { command: `cd ${f.other} && cd nested && touch out.txt` })).toEqual({});
+    // Without a reported workdir the session cwd stands in, as before #234: a session outside every scope keeps its shell.
+    expect(await f.hook('Bash', { command: 'npx vitest run' }, f.other)).toEqual({});
+    expect(await f.hook('Bash', { command: 'cd nested && touch x' }, f.other)).toEqual({});
+    expect(await f.hook('write_stdin', { session_id: 1, chars: 'y\n' }, f.other)).toEqual({});
     for (const [tool, input, cwd] of [
       ['exec_command', { cmd: 'npx vitest run' }, f.root], ['exec_command', { cmd: 'touch x', workdir: join(f.root, 'src') }, f.other],
-      // The hook cwd is not where a Codex exec runs: an unpinned command is unknown even from an unrelated cwd.
-      ['Bash', { command: 'npx vitest run' }, f.other], ['Bash', { command: 'cd nested && touch x' }, f.other],
+      ['Bash', { command: 'npx vitest run' }, f.root], ['Bash', { command: 'cd nested && touch x' }, f.root],
       ['Bash', { command: `cd ${f.other} && rm -rf ${join(f.root, 'src')}` }, f.root], ['Bash', { command: `cd ${f.other} && cp a.ts ../${basename(f.root)}/a.ts` }, f.root],
       ['Bash', { command: `cd ${f.other} && touch --out=../${basename(f.root)}/x` }, f.root], ['Bash', { command: `cd ${f.other} && rm -rf ../*` }, f.root],
       ['Bash', { command: `cd ${f.other} && touch "$HOME/x"` }, f.root], ['Bash', { command: `cd ${f.other} && bash -c 'cd ..; rm -rf x'` }, f.root],
       ['Bash', { command: `cd ${f.other} && (cd .. && rm x)` }, f.root], ['Bash', { command: `cd ${f.other}; rm x` }, f.root], ['Bash', { command: `cd ${f.other} && touch ~/x` }, f.root],
-      ['write_stdin', { session_id: 1, chars: 'rm -rf src\n' }, f.other],
+      ['write_stdin', { session_id: 1, chars: 'rm -rf src\n' }, f.root],
     ] as const) expect(await f.blocked(tool, input, cwd), JSON.stringify(input)).toBe(true);
   });
   it('protects several managed workers by their own scopes and releases one only at its observed terminal settlement', async () => {

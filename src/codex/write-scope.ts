@@ -110,10 +110,11 @@ export const writeTargets = (cwd: string, tool: string, input: Obj): string[] | 
   if (tool === 'Bash' || tool === 'exec_command') {
     const command = input['command'] ?? input['cmd'];
     if (typeof command === 'string' && readOnlyCommand(command)) return null;
-    // Codex reports exec_command to hooks as Bash without its workdir, so the hook cwd is not where such a command runs.
-    return shellTargets(workdir ?? (tool === 'Bash' ? null : cwd), command);
+    // Codex reports exec_command to hooks as Bash without its workdir. The session cwd stands in for it, as before #234, so
+    // a session outside every scope keeps its shell; a leading `cd` or a named path still decides where it writes.
+    return shellTargets(workdir ?? cwd, command);
   }
-  if (tool === 'write_stdin') return input['chars'] === '' ? null : ['/'];
+  if (tool === 'write_stdin') return input['chars'] === '' ? null : [workdir ?? cwd];
   return tool === 'Agent' ? [workdir ?? cwd] : null;
 };
 
