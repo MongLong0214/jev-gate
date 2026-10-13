@@ -397,6 +397,8 @@ it('shows a refused worker contract as its own failure through a later host end 
   p.click(`[data-run="${id}"]`);
   const marks = () => [...p.get('trace').querySelectorAll('.sx-r')].map(e => e.textContent);
   expect(marks()).toContain('계약 미충족'); expect(marks()).not.toContain('계약 수락');
+  // The later host end stays visible as its own row, never as acceptance.
+  expect(marks()).toContain('호스트 종료');
   for (const fact of ['single · 계약 미충족 · incomplete · 통과 보고 검사의 실행 미관측', '미관측 #1', '원인check_unobserved', '현재 영향현재 영향 미확인']) expect(opened(p)).toContain(fact);
   expect(text(p, 'trace')).not.toContain('transcript shows');
   p.click('.node[data-feature=workers]'); expect(text(p, 'circuit-inspector')).toContain('계약 미충족');

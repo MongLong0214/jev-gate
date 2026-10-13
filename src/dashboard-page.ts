@@ -261,7 +261,7 @@ function trace(r){const root=$('trace'),top=root.scrollTop,meta=$('rd-meta'),st=
   if(!r){root.append(el('li','empty','실행을 선택하면 시간축을 표시합니다.'));return}
   st.append(pip(),tr(state[r.state]));const end=r.state==='active'?(frozenAt??Date.now()):Date.parse(r.lastAt);
   for(const [k,v,since] of [[label('시작','Started'),time(r.firstAt)],[label('소요','Duration'),dur(end-Date.parse(r.firstAt)),r.state==='active'&&r.firstAt],[label('Jev 호출','Jev calls'),r.steps.filter(isCall).length+label('회','')],[label('모델','Model'),runModel(r)||'–']]){const d=el('div'),dd=el('dd','n',v);if(since)dd.dataset.since=since;d.append(el('dt','',k),dd);meta.append(d)}
-  const substantive=r.steps.filter(s=>!s.lifecycle||s.state==='error'||s.state==='active'),steps=substantive.length?substantive.slice(-100):r.steps.slice(-12);
+  const substantive=r.steps.filter(s=>!s.lifecycle||s.state==='error'||s.state==='active'||s.outcome==='host_ended'),steps=substantive.length?substantive.slice(-100):r.steps.slice(-12);
   const ref=frozenAt??Date.now(),took=s=>s.durationMs??s.elapsedMs??(runningSince(s)?ref-Date.parse(runningSince(s)):undefined),spanStart=s=>s.startedAt?Date.parse(s.startedAt):Date.parse(s.at)-(took(s)??0),spanEnd=s=>s.startedAt?Date.parse(s.startedAt)+(took(s)??0):Date.parse(s.at);
   const min=Math.min(...steps.map(spanStart)),range=Math.max(1,Math.max(...steps.map(spanEnd))-min);
   if(selectedStep===null||selectedStep&&!steps.some(s=>s.id===selectedStep)){const focus=selectedFeature==='all'?steps:steps.filter(s=>circuitStep(s)&&s.feature===selectedFeature),issue=[...steps].reverse().find(currentStep)||[...steps].reverse().find(failedStep);selectedStep=(issue||[...focus].reverse().find(s=>s.receipt||s.judgements?.length)||focus.at(-1))?.id||''}
