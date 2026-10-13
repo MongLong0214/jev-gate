@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ActivitySnapshot } from '../src/activity.js';
 import { DASHBOARD_PAGE } from '../src/dashboard-page.js';
 import { diffFrame, type FrameMemo } from '../src/dashboard-patch.js';
-import type { OperationRun, OperationStep, OperationsView } from '../src/operations.js';
+import { buildOperations, type OperationRun, type OperationStep, type OperationsView } from '../src/operations.js';
 
 const windows: Window[] = [];
 afterEach(async () => { for (const w of windows.splice(0)) await w.happyDOM.close(); });
@@ -380,4 +380,31 @@ it('counts only current failures at the top, keeps settled ones as past errors a
   p.click('[data-host="claude"]'); expect(text(p, 'k-att')).toBe('1'); expect(em('past_error')).toBe('0');
   p.click('#language'); p.click('[data-host="all"]'); p.click('[data-state="attention"]'); p.click('[data-run="mismatch"]');
   expect(text(p, 'k-diag')).toBe('Response model mismatch 1 recorded'); expect(opened(p)).toContain('Current impactCurrent impact unknown');
+});
+
+it('shows a refused worker contract as its own failure through a later host end and draws a later accept as a separate record (#232)', () => {
+  const t = (sec: number) => new Date(Date.now() - 60_000 + sec * 1000).toISOString(), own = { session_id: 'claude-232', mode: 'auto', version: '0.8.18' };
+  const post = (sec: number, verdict: string, reason: string | null, unobserved: string[]) => ({ ...own, phase: 'post', prompt_id: 'p', tool_use_id: `w${sec}`, invocation_id: `post-${sec}`, written_at: t(sec), task_id: 'single', attempt: 1,
+    verdict, verdict_reason: reason, reported_checks: { pass: 1, fail: 0, not_run: 0 }, requested_model: 'sonnet', resolved_model: 'claude-sonnet-5', subagent_type: 'jev-gate:worker',
+    tool_response: { status: 'completed' }, verification: { transcript: 'read', contradicted: [], unobserved, stale: [] } });
+  const records = [post(1, 'incomplete', "check #1 was reported pass, but the worker's own transcript shows no passing run of it", ['#1']),
+    { ...own, phase: 'background_terminal', prompt_id: 'q', execution_prompt_id: 'p', tool_use_id: 'w1', invocation_id: 'terminal-2', written_at: t(2), status: 'completed', task_id: 'single' },
+    { ...own, phase: 'background_policy_delivery', prompt_id: 'q', execution_prompt_id: 'p', invocation_id: 'delivery-3', written_at: t(3), reason: 'policy_delivered_no_active_execution' }];
+  const view = (rs: object[]) => ({ ...snapshot([]), operations: buildOperations(rs as never, [], new Date(), { trace: true }) }), next = frames(), p = page();
+  p.push(next(view(records)));
+  const id = p.get('runs').querySelector('button[data-run]')!.getAttribute('data-run')!, state = () => p.get('runs').querySelector(`[data-run="${id}"] .c-st`)!.textContent;
+  expect(rows(p)).toHaveLength(1); expect(text(p, 'k-att')).toBe('1'); expect(text(p, 'k-diag')).toBe('워커 계약 미충족 1건'); expect(state()).toBe('확인 필요');
+  p.click(`[data-run="${id}"]`);
+  const marks = () => [...p.get('trace').querySelectorAll('.sx-r')].map(e => e.textContent);
+  expect(marks()).toContain('계약 미충족'); expect(marks()).not.toContain('계약 수락');
+  for (const fact of ['single · 계약 미충족 · incomplete · 통과 보고 검사의 실행 미관측', '미관측 #1', '원인check_unobserved', '현재 영향현재 영향 미확인']) expect(opened(p)).toContain(fact);
+  expect(text(p, 'trace')).not.toContain('transcript shows');
+  p.click('.node[data-feature=workers]'); expect(text(p, 'circuit-inspector')).toContain('계약 미충족');
+  p.click('#language');
+  expect(marks()).toContain('Contract not met'); expect(text(p, 'k-diag')).toBe('Worker contract not met 1 recorded');
+  expect(opened(p)).toContain('Reported pass not seen in the worker transcript');
+  // A later accept of the same task arrives as a patch: the refusal stays recorded and only leaves the current count.
+  p.patch(next(view([...records, post(9, 'accept', null, [])])));
+  expect(text(p, 'k-att')).toBe('0'); expect(marks()).toEqual(expect.arrayContaining(['Contract not met', 'Contract accepted']));
+  p.click('#language'); expect(state()).toBe('지난 오류');
 });

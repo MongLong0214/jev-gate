@@ -30,12 +30,17 @@ export interface OperationStep {
   summary: string;
   details: string[];
   /** Concrete recorded failure category; an effort mismatch is not a response-model mismatch. */
-  issue?: 'request_model' | 'request_effort' | 'request_unconfirmed' | 'response_model' | 'jev' | 'host' | 'evidence';
+  issue?: 'request_model' | 'request_effort' | 'request_unconfirmed' | 'response_model' | 'jev' | 'host' | 'evidence' | 'contract';
   /** The failure reason code the record names, such as `invalid_input` or `timeout`. */
   cause?: string;
   /** On a failure only: what later settled records of the same operation on the same host show now. The failure itself stays
    * recorded as it was; a later success never turns it into one, and nothing here claims a recovery. */
   impact?: { now: 'ongoing' | 'unknown' | 'later_ok' | 'request_only'; lastAt: string; lastState: StepState };
+  /** Worker results only (#232). Only an accept receipt is `accepted`; an incomplete, invalid, rework or replan receipt is `rejected`;
+   * a receipt that reached no verdict is `unknown`; the host's own end of a call, which judges no contract, is `host_ended`. */
+  outcome?: 'host_ended' | 'accepted' | 'rejected' | 'unknown';
+  /** The task a contract receipt judged. A later accept of it in the same execution settles an earlier refusal. */
+  task?: string;
   model?: { selected: string | null; observed: string | null; status: 'confirmed' | 'mismatch' | 'unobserved'; selectedEffort: string | null; observedEffort: string | null; forwardedEffort?: string | null; effortSource?: 'host_hook' | 'provider_request'; requestApplied?: boolean };
   routing?: { scope: 'root' | 'spawn' | 'child' | 'owned'; baseline: string | null; modelReason: string | null; effortReason: string | null; proposedModel?: string; probability?: number; threshold?: number };
   /** Timings are measured by the caller or paired recorded events, never estimated from usage. */
@@ -219,6 +224,26 @@ const codexFailureReason = (r: Rec): string | null => ({
   preflight_conflict: '실행 전 점검 충돌', reservation_unavailable: '실행 예약 기록 불가', native_start_rejected: 'Codex 워커 시작 거부',
   native_failed_turn: 'Codex 워커 턴 실패', interrupted: '워커 중단', termination_unconfirmed: '워커 종료 미확인 · 예약 유지',
 } as Record<string, string>)[String(r['failure_category'])] ?? null;
+/** #232: the closed category of a refused or unreached verdict and its label. The recorded reason is free text that can quote a
+ * reply, so only the engine's own wording is matched (src/plan.ts, src/verify.ts, src/hook.ts) and never shown. */
+const verdictReason = (verdict: string, v: unknown): [string, string] | null => {
+  const reason = typeof v === 'string' ? v : '';
+  if (reason === 'generation_changed' || reason === 'the task is no longer in the current plan') return ['superseded', '새 계획으로 교체된 작업'];
+  if (verdict === 'invalid') return ['invalid_reply', '워커 응답 형식 오류'];
+  if (verdict === 'unknown') return /^the call (?:reported status|failed before)/.test(reason) ? ['no_reply', '워커 응답 없음'] : null;
+  if (/^check [^,]+(?:, [^,]+)* was reported pass, but its last run in the worker's own transcript failed$/.test(reason)) return ['check_contradicted', '통과 보고 검사가 실행 기록에서 실패'];
+  if (/^check [^,]+(?:, [^,]+)* was reported pass, but the (?:worker's own transcript|last [0-9.]+ MiB of the worker's transcript) shows no passing run|^check [^,]+(?:, [^,]+)* was reported pass, but the worker's transcript could not be read/.test(reason)) return ['check_unobserved', '통과 보고 검사의 실행 미관측'];
+  if (/^check .+: 마지막 관측 변경 이후의 검사 결과 필요$/.test(reason)) return ['check_stale', '마지막 변경 전의 통과 기록'];
+  if (/^worker reported (?:status |blockers )/.test(reason)) return ['worker_blocked', '워커가 차단·재계획 보고'];
+  if (/^(?:required check |unknown check id )|reported no passing check/.test(reason)) return ['check_report', '필수 검사 보고 미충족'];
+  return null;
+};
+const REFUSED = new Set(['incomplete', 'invalid', 'rework', 'replan']);
+/** Check ids named by their place in the reply (`#1`) are shown; any other id, a planned one included, only by count. */
+const checkIds = (v: unknown): string => {
+  const ids = Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+  return ids.every(x => /^#[0-9]{1,4}$/.test(x)) ? ids.slice(0, 16).join(', ') : `${n(ids.length)}개`;
+};
 const compactUsage = (r: Rec): string => {
   const usage = field(r, 'usage');
   const count = (key: string) => number(usage?.[key]) === null ? '미확인' : n(number(usage?.[key]));
@@ -268,6 +293,7 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
   let summary = '';
   let lane: StepLane = 'policy';
   let graph: OperationStep['graph'];
+  let outcome: OperationStep['outcome'], refusal: [string, string] | null = null;
   if (isIntent) {
     lane = phase.endsWith('_start') ? 'local' : 'jev';
     summary = phase === 'evidence_start' ? text(token(r['kind']), token(r['mode']), r['remote_configured'] === true ? '원격 판정 허용' : '로컬만') : hasResult ? '응답 기록과 연결됨' : state === 'active' ? '응답을 기다리는 중' : '응답 기록 없음 · 진행 여부 미확인';
@@ -362,7 +388,7 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
     if (phase === 'background_launch') { state = closed ? 'done' : age >= 0 && age < 30_000 ? 'active' : 'unconfirmed'; summary = closed ? '시작과 실제 종료 연결됨' : state === 'active' ? '워커 실행 중 · 메인에서 질문 가능' : '시작 기록 있음 · 종료 결과 미관측'; details.push('시작 알림은 완료·수락 결과가 아닙니다'); }
     if (phase === 'background_conversation') summary = `원래 작업 유지 · 종료 결과 대기 ${n(number(r['active']))}개`;
     if (phase === 'background_policy_delivery') { summary = '종료 정책 한 번 전달 · 다음 일반 요청은 Gate A 재개'; state = 'done'; }
-    if (phase === 'background_terminal') { summary = token(r['status']) === 'completed' ? '호스트에서 실제 종료 확인 · 계약 수락은 별도 검사' : codexFailureReason(r) ?? '호스트에서 중단·실패 확인 · 성공 수락 없음'; state = token(r['status']) === 'completed' ? 'done' : r['not_executed'] === true ? 'error' : 'interrupted'; if (r['not_executed'] === true) details.push('워커 미실행 · 완료 주장 없음'); if (r['orphaned'] === true) details.push('이전 작업 결과 · 현재 계획 미진행'); }
+    if (phase === 'background_terminal') { summary = token(r['status']) === 'completed' ? '호스트에서 실제 종료 확인 · 계약 수락은 별도 검사' : codexFailureReason(r) ?? '호스트에서 중단·실패 확인 · 성공 수락 없음'; state = token(r['status']) === 'completed' ? 'done' : r['not_executed'] === true ? 'error' : 'interrupted'; if (state === 'done') outcome = 'host_ended'; if (r['not_executed'] === true) details.push('워커 미실행 · 완료 주장 없음'); if (r['orphaned'] === true) details.push('이전 작업 결과 · 현재 계획 미진행'); }
   } else if (phase === 'dispatch_denied') {
     lane = 'policy'; state = 'skipped';
     summary = ({ workers_active: '기존 워커 종료 대기 · 재계획 거절', planner_active: '기존 플래너 실행 중 · 중복 호출 거절' } as Record<string, string>)[String(r['reason'])] ?? text('호출 거절', token(r['reason']));
@@ -374,12 +400,18 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
     if (token(r['worker_isolation'])) details.push(`워커 격리 ${token(r['worker_isolation'])}`);
   } else if (phase === 'post') {
     lane = 'host';
-    summary = text(token(r['task_id']), token(r['verdict']) ?? (r['matched'] === false ? '예약과 일치하지 않는 호출' : '결과 기록'), token(r['verdict_reason']));
+    // #232: only an accept receipt accepts a contract, and a refused one fails that worker's result. A row with no verdict is the host's own outcome.
+    const verdict = token(r['verdict']);
+    outcome = !verdict ? field(r, 'tool_response')?.['status'] === 'completed' ? 'host_ended' : undefined : verdict === 'accept' ? 'accepted' : REFUSED.has(verdict) ? 'rejected' : 'unknown';
+    refusal = verdict ? verdictReason(verdict, r['verdict_reason']) : null;
+    if (outcome === 'rejected') { state = 'error'; issue = 'contract'; } else if (outcome === 'unknown') state = 'unconfirmed';
+    summary = verdict ? text(token(r['task_id']), { accepted: '계약 수락', rejected: '계약 미충족', unknown: '판정 미확인' }[outcome as string], outcome === 'rejected' && verdict, refusal?.[1])
+      : text(token(r['task_id']), r['matched'] === false ? '예약과 일치하지 않는 호출' : '결과 기록', '계약 판정 없음');
     details.push(text(`요청 모델 ${token(r['requested_model']) ?? '미기록'}`, `실행 모델 ${token(r['resolved_model']) ?? '미관측'}`, token(r['subagent_type'])));
     const checks = field(r, 'reported_checks');
     if (checks) details.push(text(`worker 보고 pass ${n(number(checks['pass']))}`, `fail ${n(number(checks['fail']))}`, `미실행 ${n(number(checks['not_run']))}`));
     const verification = field(r, 'verification');
-    if (verification) details.push(text(`실행 기록 ${token(verification['transcript']) ?? '미확인'}`, list(verification['contradicted']).length ? `모순 ${list(verification['contradicted']).join(', ')}` : null, list(verification['unobserved']).length ? `미관측 ${list(verification['unobserved']).join(', ')}` : null));
+    if (verification) details.push(text(`실행 기록 ${token(verification['transcript']) ?? '미확인'}`, ...([['contradicted', '모순'], ['unobserved', '미관측'], ['stale', '변경 전 통과']] as const).map(([k, name]) => { const ids = checkIds(verification[k]); return ids && `${name} ${ids}`; })));
     if (list(r['ready_task_ids']).length) details.push(`다음 실행 가능: ${list(r['ready_task_ids']).join(', ')}`);
     if (r['plan_complete'] === true) details.push('계획의 모든 작업 수락');
     if (r['evidence_format_only'] === true) details.push('검사 명령 형식만 불일치 · 한 번의 무료 재검증 가능');
@@ -453,14 +485,16 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
   }
   if (phase === 'codex_model_failure') { state = 'error'; lane = 'host'; summary = '호스트 모델 요청 실패'; }
   if (state === 'error' && !issue) issue = lane === 'jev' ? 'jev' : feature === 'evidence' ? 'evidence' : 'host';
-  const cause = state !== 'error' ? null : phase === 'evidence_result' ? list(r['reason_codes'])[0] ?? null : token(http?.['code']) ?? token(r['reason']);
+  const cause = state !== 'error' ? null : phase === 'post' ? refusal?.[0] ?? null : phase === 'evidence_result' ? list(r['reason_codes'])[0] ?? null : token(http?.['code']) ?? token(r['reason']);
   const decided = field(r, 'decision'), selection = field(r, 'selection'), answered = judgements(r)?.find(j => j.confidence !== null);
   const receipt = lane === 'jev' && duration !== null && duration >= 0 && !isIntent ? jevReceipt(number(http?.['status']), token(http?.['code']), token(field(r, 'jev')?.['model']), field(field(r, 'jev'), 'usage') ?? field(r, 'usage'),
     phase === 'codex_router_result' ? text(token(r['selected_model']), token(r['selected_effort'])) || null : phase === 'codex_compact' ? number(r['dependencies']) === null ? null : `${n(number(r['dependencies']))} / ${n(number(r['candidates']))}` : token(decided?.['shape']) ?? token(field(r, 'allocation')?.['selected_model']) ?? token(decided?.['tier']) ?? token(decided?.['action']),
     routing?.probability ?? answered?.confidence ?? null, routing?.threshold ?? null, token(selection?.['direction'])) : undefined;
   return { id: id(ownId), at, feature, state, lane, ...(token(r['session_id']) ? { sessionId: token(r['session_id'])! } : {}), ...(token(r['agent_id']) ? { agentId: token(r['agent_id'])! } : {}), ...(token(r['tool_use_id']) ? { callId: token(r['tool_use_id'])! } : {}), title: traceTitle(phase, r), summary, details: details.filter(Boolean), ...(routing ? { routing } : {}), ...(model ? { model } : {}),
     ...(issue ? { issue } : {}), ...(cause ? { cause } : {}),
-    ...(['stop', 'background_conversation', 'codex_model_request', 'codex_model_failure'].includes(phase) ? { lifecycle: true } : {}),
+    ...(outcome ? { outcome } : {}), ...((outcome === 'accepted' || outcome === 'rejected') && token(r['task_id']) ? { task: token(r['task_id'])! } : {}),
+    // A host end and a policy delivery decide nothing, so a later one never stands in for the contract verdict before it.
+    ...(['stop', 'background_conversation', 'background_policy_delivery', 'codex_model_request', 'codex_model_failure'].includes(phase) || outcome === 'host_ended' && phase === 'background_terminal' ? { lifecycle: true } : {}),
     ...(phase === 'admission_result' && ['direct', 'orchestrated'].includes(String(field(r, 'decision')?.['shape'])) ? { executionPath: field(r, 'decision')!['shape'] as 'direct' | 'orchestrated' } : {}),
     ...(duration !== null && duration >= 0 ? { durationMs: duration } : {}),
     ...(elapsed !== null && elapsed >= 0 ? { elapsedMs: elapsed } : {}),
@@ -827,15 +861,17 @@ const REQUEST_CAUSES = new Set(['invalid_input', 'out_of_scope', 'range_too_larg
 const MODEL_ISSUES = new Set(['response_model', 'request_model', 'request_effort', 'request_unconfirmed']);
 const modelCheck = (s: OperationStep): 'model' | 'request' | null => s.issue === 'response_model' || !s.issue && s.model?.status === 'mismatch' ? 'model' : s.issue && MODEL_ISSUES.has(s.issue) ? 'request' : null;
 /** The operation a step belongs to on its host. A model is checked only by an observed model and a request setting only by
- * its recorded application; any other step by later records of its own kind. */
-const operationKey = (host: string, s: OperationStep, check = modelCheck(s)): string => check ? `${host}\n${s.feature}\n${check}` : `${host}\n${s.feature}\n${s.lane}\n${s.title}`;
+ * its recorded application; a worker contract only by a later receipt for the same task in the same execution (#232); any other
+ * step by later records of its own kind. */
+const operationKey = (host: string, run: string, s: OperationStep, check = modelCheck(s)): string => check ? `${host}\n${s.feature}\n${check}`
+  : s.outcome === 'accepted' || s.outcome === 'rejected' ? `${host}\n${run}\ncontract\n${s.task ?? ''}` : `${host}\n${s.feature}\n${s.lane}\n${s.title}`;
 /** What one settled step shows: [operation, worked]. A request-scoped refusal shows nothing about its operation. */
-const observations = (host: string, s: OperationStep): Array<[string, boolean]> => {
+const observations = (host: string, run: string, s: OperationStep): Array<[string, boolean]> => {
   if (s.cause && REQUEST_CAUSES.has(s.cause)) return [];
   const seen: Array<[string, boolean]> = [];
-  if (s.model && s.model.status !== 'unobserved') seen.push([operationKey(host, s, 'model'), s.model.status === 'confirmed']);
-  if (s.model?.requestApplied !== undefined) seen.push([operationKey(host, s, 'request'), s.model.requestApplied]);
-  if ((s.state === 'done' || s.state === 'error') && !modelCheck(s)) seen.push([operationKey(host, s, null), s.state === 'done']);
+  if (s.model && s.model.status !== 'unobserved') seen.push([operationKey(host, run, s, 'model'), s.model.status === 'confirmed']);
+  if (s.model?.requestApplied !== undefined) seen.push([operationKey(host, run, s, 'request'), s.model.requestApplied]);
+  if ((s.state === 'done' || s.state === 'error') && !modelCheck(s)) seen.push([operationKey(host, run, s, null), s.state === 'done']);
   return seen;
 };
 const impacts = new WeakMap<OperationRun, { sig: string; run: OperationRun }>();
@@ -843,7 +879,7 @@ const impacts = new WeakMap<OperationRun, { sig: string; run: OperationRun }>();
  * stays as recorded. An unchanged run keeps its object, so a live patch skips it. */
 const withImpact = (runs: OperationRun[]): OperationRun[] => {
   const seen = new Map<string, Array<{ at: string; ok: boolean }>>();
-  for (const run of runs) for (const s of run.steps) for (const [key, ok] of observations(run.host ?? 'claude', s)) {
+  for (const run of runs) for (const s of run.steps) for (const [key, ok] of observations(run.host ?? 'claude', run.id, s)) {
     let list = seen.get(key);
     if (!list) seen.set(key, list = []);
     list.push({ at: s.at, ok });
@@ -854,8 +890,9 @@ const withImpact = (runs: OperationRun[]): OperationRun[] => {
     const steps = run.steps.map((s): OperationStep => {
       if (!failed(s)) return s;
       // ponytail: a linear scan per failure; index the sorted lists if failures number in the thousands.
-      const later = (seen.get(operationKey(run.host ?? 'claude', s)) ?? []).filter(o => o.at > s.at), last = later.at(-1);
-      return { ...s, impact: { now: s.cause && REQUEST_CAUSES.has(s.cause) ? 'request_only' : later.some(o => o.ok) ? 'later_ok' : later.length ? 'ongoing' : 'unknown',
+      const later = (seen.get(operationKey(run.host ?? 'claude', run.id, s)) ?? []).filter(o => o.at > s.at), last = later.at(-1);
+      // A refused contract is about that worker's result, never a service: another refusal of the task is not an ongoing incident.
+      return { ...s, impact: { now: s.cause && REQUEST_CAUSES.has(s.cause) ? 'request_only' : later.some(o => o.ok) ? 'later_ok' : later.length && s.issue !== 'contract' ? 'ongoing' : 'unknown',
         lastAt: last?.at ?? s.at, lastState: last ? last.ok ? 'done' : 'error' : s.state } };
     });
     const sig = JSON.stringify(steps.map(s => s.impact ?? null)), cached = impacts.get(run);

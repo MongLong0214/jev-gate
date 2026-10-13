@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import { buildOperations, operationsStableUntil, type ModRecord } from '../src/operations.js';
+import { deterministicVerdict, parseWorkerReply, reportedSingleVerdict } from '../src/plan.js';
+import { refusalReason } from '../src/verify.js';
+import type { PlannedTask, WorkerReply } from '../src/types.js';
 
 const at = '2026-09-29T06:00:00.000Z';
 const later = '2026-09-29T06:00:01.000Z';
@@ -92,7 +95,7 @@ describe('operations display model', () => {
       { ...base, phase: 'plan', status: 'accepted', tasks: 2, graph: [{ id: 't1', depends_on: [], required_checks: 1 }, { id: 't2', depends_on: ['t1'], required_checks: 2 }] },
       { ...base, phase: 'dispatch', role: 'worker', task_id: 't1', requested_tier: 'standard', requested_model: 'sonnet' },
       { ...base, phase: 'guard', tool_name: 'Read', allow: false, denials: 1 },
-      { ...base, phase: 'post', task_id: 't1', verdict: 'accepted', requested_model: 'sonnet', resolved_model: 'claude-sonnet-5', reported_checks: { pass: 1, fail: 0, not_run: 0 } },
+      { ...base, phase: 'post', task_id: 't1', verdict: 'accept', requested_model: 'sonnet', resolved_model: 'claude-sonnet-5', reported_checks: { pass: 1, fail: 0, not_run: 0 } },
       { written_at: at, phase: 'evidence_start', request_id: 'e1', kind: 'search', mode: 'locate' },
       { written_at: at, phase: 'evidence_jev_intent', request_id: 'e1:1', parent_request_id: 'e1', candidates: 4 },
       { written_at: later, phase: 'evidence_jev_result', request_id: 'e1:1', parent_request_id: 'e1', attempted: true, http: { status: 200 }, jev: { usage: { input_tokens: 20, output_tokens: 3 } } },
@@ -614,5 +617,131 @@ describe('current incidents and past error records (#223)', () => {
     expect(second.runs.find(r => r.id === id)).toBe(first.runs.find(r => r.id === id));
     const third = buildOperations([...records, ok], [], now, avail);
     expect(third.runs.find(r => r.id === id)).toMatchObject({ state: 'past_error', steps: [{ impact: { now: 'later_ok' } }] });
+  });
+});
+
+describe('worker contract outcomes (#232)', () => {
+  const t = (s: number) => new Date(Date.parse(at) + s * 1000).toISOString(), now = new Date(t(60)), avail = { trace: true };
+  const build = (records: Record<string, unknown>[]) => {
+    const view = buildOperations(records, [], now, avail);
+    expect(view).toEqual(buildOperations(records, [], now, avail, true));
+    return view;
+  };
+  const verification = (over: Record<string, unknown> = {}) => ({ transcript: 'read', contradicted: [], unobserved: [], stale: [], ...over });
+  const unobserved = refusalReason(verification({ unobserved: ['#1'] }) as never)!;
+  // Field names and shapes of v0.8.18 records: Claude hook rows carry no host and name the execution prompt on background rows;
+  // Codex rows carry host and keep the dispatch prompt id. No row below is accepted unless its verdict is `accept`.
+  const rows = (host: 'claude' | 'codex', session = `${host}-s`) => {
+    const own = { ...(host === 'codex' ? { host } : {}), session_id: session, mode: 'auto', version: '0.8.18' };
+    const later = host === 'codex' ? { prompt_id: 'p' } : { prompt_id: 'q', execution_prompt_id: 'p' };
+    return {
+      post: (s: number, verdict: string | null, reason: string | null, over: Record<string, unknown> = {}) => ({ ...own, phase: 'post', prompt_id: 'p', tool_use_id: `w${s}`, invocation_id: `${host}-post-${s}`, written_at: t(s),
+        task_id: 'single', rev: 0, attempt: 1, verdict, verdict_reason: reason, reported_checks: { pass: 1, fail: 0, not_run: 0 }, ready_task_ids: [], plan_complete: false, evidence_format_only: false,
+        root_fallback: false, subagent_type: 'jev-gate:worker', requested_model: 'sonnet', resolved_model: 'claude-sonnet-5', tool_response: { status: 'completed', agentId: 'a1' }, root_effort: null,
+        verification: verification(verdict === 'incomplete' ? { unobserved: ['#1'] } : {}), advisory: null, ...over }),
+      terminal: (s: number, tool = 'w1', over: Record<string, unknown> = {}) => ({ ...own, ...later, phase: 'background_terminal', tool_use_id: tool, invocation_id: `${host}-terminal-${s}`, written_at: t(s), status: 'completed',
+        ...(host === 'codex' ? { agent_id: 'a1' } : { task_id: 'single' }), ...over }),
+      delivery: (s: number) => ({ ...own, ...later, phase: 'background_policy_delivery', execution_prompt_id: 'p', invocation_id: `${host}-delivery-${s}`, written_at: t(s), reason: 'policy_delivered_no_active_execution', admission_blocked: false }),
+      stop: (s: number) => ({ ...own, phase: 'stop', prompt_id: 'p', invocation_id: `${host}-stop-${s}`, written_at: t(s), outcome: 'incomplete' }),
+    };
+  };
+  const contract = (view: ReturnType<typeof build>, outcome: string) => view.runs.flatMap(r => r.steps).filter(s => s.outcome === outcome);
+
+  it.each(['claude', 'codex'] as const)('keeps a refused contract refused through a later host end, policy delivery and stop, with its reason class and check ids (%s)', host => {
+    const r = rows(host), view = build([r.post(1, 'incomplete', unobserved), r.terminal(2), r.delivery(3), r.stop(4)]);
+    expect(view.runs).toHaveLength(1); expect(view.runs[0]?.state).toBe('attention'); expect(view.attention).toBe(1);
+    const [refused] = contract(view, 'rejected');
+    expect(refused).toMatchObject({ state: 'error', issue: 'contract', cause: 'check_unobserved', task: 'single', impact: { now: 'unknown' }, summary: 'single · 계약 미충족 · incomplete · 통과 보고 검사의 실행 미관측' });
+    expect(refused?.details).toEqual(expect.arrayContaining(['실행 기록 read · 미관측 #1', 'worker 보고 pass 1 · fail 0 · 미실행 0']));
+    // The host end is recorded as such and, like the policy delivery and stop, decides nothing that could stand in for the verdict.
+    expect(contract(view, 'host_ended')).toEqual([expect.objectContaining({ state: 'done', lifecycle: true, summary: '호스트에서 실제 종료 확인 · 계약 수락은 별도 검사' })]);
+    expect(view.runs[0]?.steps.filter(s => s.feature === 'workers' && !s.lifecycle).map(s => s.outcome)).toEqual(['rejected']);
+    expect(contract(view, 'accepted')).toEqual([]);
+    expect(JSON.stringify(view)).not.toContain('was reported pass');
+  });
+
+  it('records the Codex SubagentStop hook of a refused worker as a host end that leaves the refusal current', () => {
+    const r = rows('codex'), stop = { host: 'codex', phase: 'codex_event', event: 'SubagentStop', session_id: 'codex-s', agent_id: 'a1', agent_type: 'jev-gate:worker', invocation_id: 'codex-agent-stop', written_at: t(2) };
+    const view = build([r.post(1, 'incomplete', unobserved), stop]);
+    const refusal = view.runs.find(x => x.steps.some(s => s.outcome === 'rejected'))!, hostRun = view.runs.find(x => x !== refusal)!;
+    expect(refusal.state).toBe('attention'); expect(view.attention).toBe(1);
+    expect(hostRun.steps).toEqual([expect.objectContaining({ outcome: 'host_ended', lifecycle: true, state: 'done', summary: '종료 훅 관측 · Jev 계약 수락 검사 없음' })]);
+  });
+
+  it.each(['claude', 'codex'] as const)('classifies each engine reason into a closed label and never passes the reason text or a reply on (%s)', host => {
+    const task: PlannedTask = { id: 't1', outcome: 'o', depends_on: [], context: '', constraints: [], deliverables: [], replan_if: [], contract_hash: 'h', checks: [{ id: 'unit', description: 'd', required: true, command: 'npm test' }] };
+    const reply = (over: Partial<WorkerReply>): WorkerReply => ({ status: 'done', summary: 'PRIVATE_SUMMARY', changed_files: [], interfaces: [], checks: [], blockers: [], ...over });
+    const invalid = parseWorkerReply('{"status":"PRIVATE_REPLY_TEXT"}');
+    const cases: Array<[string, string | null, string, string]> = [
+      ['incomplete', refusalReason(verification({ contradicted: ['#2'] }) as never), 'check_contradicted', '모순 #2'],
+      ['incomplete', refusalReason(verification({ transcript: 'truncated', unobserved: ['#1', '#3'] }) as never), 'check_unobserved', '미관측 #1, #3'],
+      ['incomplete', refusalReason(verification({ transcript: 'unavailable', unobserved: ['#1'] }) as never), 'check_unobserved', '미관측 #1'],
+      ['incomplete', refusalReason(verification({ stale: ['#1'] }) as never), 'check_stale', '변경 전 통과 #1'],
+      ['incomplete', reportedSingleVerdict(reply({ status: 'blocked', checks: [{ check_id: 'npm test -- PRIVATE_COMMAND', result: 'fail', note: '' }] })).reason, 'worker_blocked', ''],
+      ['incomplete', reportedSingleVerdict(reply({ blockers: ['PRIVATE_BLOCKER'] })).reason, 'worker_blocked', ''],
+      ['replan', deterministicVerdict(task, reply({ status: 'replan' })).reason, 'worker_blocked', ''],
+      ['incomplete', deterministicVerdict(task, reply({})).reason, 'check_report', ''],
+      ['rework', deterministicVerdict(task, reply({ checks: [{ check_id: 'unit', result: 'fail', note: 'PRIVATE_NOTE' }] })).reason, 'check_report', ''],
+      ['incomplete', deterministicVerdict(task, reply({ checks: [{ check_id: 'other', result: 'pass', note: '' }] })).reason, 'check_report', ''],
+      ['incomplete', 'the worker changed files but reported no passing check it ran', 'check_report', ''],
+      ['invalid', invalid.ok ? null : invalid.error, 'invalid_reply', ''],
+      ['invalid', 'the task is no longer in the current plan', 'superseded', ''],
+    ];
+    expect(invalid.ok).toBe(false);
+    const view = build(cases.map(([verdict, reason, , ids], i) => {
+      const over = ids ? { verification: verification({ [ids.startsWith('모순') ? 'contradicted' : ids.startsWith('변경') ? 'stale' : 'unobserved']: ids.replace(/^\S+ (전 통과 )?/, '').split(', ') }) } : {};
+      return rows(host, `${host}-${i}`).post(i + 1, verdict, reason, over);
+    }));
+    cases.forEach(([, reason, cause, ids], i) => {
+      const step = view.runs.flatMap(r => r.steps).find(s => s.sessionId === `${host}-${i}`)!;
+      expect(step, String(reason)).toMatchObject({ outcome: 'rejected', state: 'error', issue: 'contract', cause });
+      if (ids) expect(step.details).toContain(`실행 기록 read · ${ids}`);
+      expect(JSON.stringify(view)).not.toContain(String(reason));
+    });
+    expect(JSON.stringify(view)).not.toMatch(/PRIVATE/);
+    // A planned check id is counted, never named; only a reply position (#n) is shown.
+    const planned = build([rows(host).post(1, 'incomplete', refusalReason(verification({ unobserved: ['unit', 'lint'] }) as never), { task_id: 't1', verification: verification({ unobserved: ['unit', 'lint'] }) })]);
+    expect(contract(planned, 'rejected')[0]?.details).toContain('실행 기록 read · 미관측 2개');
+  });
+
+  it.each(['claude', 'codex'] as const)('keeps accept, an unknown verdict and native rows without a verdict apart (%s)', host => {
+    const r = rows(host, `${host}-a`), u = rows(host, `${host}-u`), nat = rows(host, `${host}-n`);
+    const view = build([
+      r.post(1, 'accept', null), r.terminal(2),
+      u.post(3, 'unknown', 'the call reported status failed', { reported_checks: null, verification: undefined, tool_response: { status: 'failed' } }), u.terminal(4, 'w3', { status: 'failed' }),
+      { ...nat.post(5, null, null), matched: false, job_state: 'absent', verdict: undefined, verdict_reason: undefined, task_id: undefined },
+      { ...nat.post(6, null, null), matched: false, job_state: 'absent', verdict: undefined, verdict_reason: undefined, task_id: undefined, tool_response: { status: 'async_launched' } },
+    ]);
+    const state = (session: string) => view.runs.find(x => x.steps.some(s => s.sessionId === session))?.state;
+    expect(contract(view, 'accepted')).toEqual([expect.objectContaining({ state: 'done', summary: 'single · 계약 수락', task: 'single' })]);
+    expect(state(`${host}-a`)).toBe('done');
+    expect(contract(view, 'unknown')).toEqual([expect.objectContaining({ state: 'unconfirmed', summary: 'single · 판정 미확인 · 워커 응답 없음' })]);
+    expect(contract(view, 'unknown')[0]).not.toHaveProperty('cause');
+    expect(state(`${host}-u`)).toBe('interrupted');
+    // A native outcome record is the host's own end of the call, never an accepted contract; a native launch is not even an end.
+    const native = view.runs.flatMap(x => x.steps).filter(s => s.sessionId === `${host}-n`);
+    expect(native.map(s => [s.state, s.outcome ?? null, s.summary])).toEqual([['done', 'host_ended', '예약과 일치하지 않는 호출 · 계약 판정 없음'], ['done', null, '예약과 일치하지 않는 호출 · 계약 판정 없음']]);
+    expect(view.attention).toBe(0);
+  });
+
+  it.each(['claude', 'codex'] as const)('settles a refusal only by a later accept of the same task in the same execution, without rewriting it (%s)', host => {
+    const r = rows(host), other = rows(host, `${host}-other`);
+    const refused = r.post(1, 'incomplete', unobserved), terminal = r.terminal(2);
+    // A late result of a replaced generation records no verdict: it is the host's own end of that call, never an accept, and settles nothing.
+    const late = { ...r.post(3, null, null), matched: false, orphaned: true, job_state: 'present', verdict: undefined, verdict_reason: undefined, task_id: undefined };
+    const lateTerminal = r.terminal(4, 'w0', { orphaned: true, accepted: false });
+    const elsewhere = [other.post(5, 'accept', null), r.post(6, 'accept', null, { task_id: 'other' })];
+    const pending = build([refused, terminal, late, lateTerminal, ...elsewhere]);
+    const first = pending.runs.find(x => x.steps.some(s => s.outcome === 'rejected'))!;
+    expect(first.state).toBe('attention'); expect(contract(pending, 'rejected')[0]?.impact).toMatchObject({ now: 'unknown', lastState: 'error' });
+    // Another refusal of the same task is still about that worker's result, never an ongoing incident.
+    const again = build([refused, terminal, r.post(7, 'incomplete', unobserved, { attempt: 2 })]);
+    expect(contract(again, 'rejected').map(s => s.impact?.now)).toEqual(['unknown', 'unknown']);
+    const retried = build([refused, terminal, late, lateTerminal, ...elsewhere, r.post(8, 'accept', null, { attempt: 2 }), r.terminal(9, 'w8')]);
+    const run = retried.runs.find(x => x.id === first.id)!;
+    expect(run.state).toBe('past_error'); expect(retried.attention).toBe(0);
+    const before = first.steps.find(s => s.outcome === 'rejected')!;
+    expect(run.steps.find(s => s.outcome === 'rejected')).toEqual({ ...before, impact: { now: 'later_ok', lastAt: t(8), lastState: 'done' } });
+    expect(run.steps.filter(s => s.feature === 'workers' && !s.lifecycle).map(s => s.outcome)).toEqual(['rejected', 'host_ended', 'accepted', 'accepted']);
   });
 });
