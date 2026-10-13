@@ -1,6 +1,8 @@
 import { Window, type HTMLElement, type SVGElement } from 'happy-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { ActivitySnapshot } from '../src/activity.js';
 import { DASHBOARD_PAGE } from '../src/dashboard-page.js';
+import { diffFrame, type FrameMemo } from '../src/dashboard-patch.js';
 import type { OperationRun, OperationStep, OperationsView } from '../src/operations.js';
 
 const windows: Window[] = [];
@@ -12,22 +14,23 @@ const snapshot = (runs: OperationRun[]) => {
   const all = runs.flatMap(r => r.steps.map(s => ({ ...s, host: r.host, runId: r.id, runTitle: r.title })));
   const ids = ['admission', 'allocation', 'planning', 'workers', 'guard', 'router', 'compact', 'evidence'] as const;
   const values = all.filter(s => s.lane === 'jev' && s.durationMs !== undefined).map(s => ({ at: s.at, ms: s.durationMs! }));
-  const operations: OperationsView = { runs, feed: all.slice().reverse(), active: 0, attention: 0, requests: values.length,
+  // The frame key replaced the operations signature; Omit keeps this fixture valid with or without the field.
+  const operations: Omit<OperationsView, 'sig'> = { runs, feed: all.slice().reverse(), active: 0, attention: 0, requests: values.length,
     features: ids.map(id => ({ id, label: id, source: 'trace', count: all.filter(s => !s.lifecycle && s.feature === id).length, lastAt: all.some(s => !s.lifecycle && s.feature === id) ? stamp : null, state: all.some(s => !s.lifecycle && s.feature === id) ? 'observed' : 'waiting' })),
-    latency: { measured: values.length, p50: values[0]?.ms ?? null, p95: values.at(-1)?.ms ?? null, fastest: values[0]?.ms ?? null, latest: values.at(-1)?.ms ?? null, recent: values, today: {} }, sig: 'fixture' };
+    latency: { measured: values.length, p50: values[0]?.ms ?? null, p95: values.at(-1)?.ms ?? null, fastest: values[0]?.ms ?? null, latest: values.at(-1)?.ms ?? null, recent: values, today: {} } };
   return { at: stamp, host: 'mixed', operations, unreadable: 0, version: { running: '0.8.1', installed: '0.8.1' }, recording: { enabled: true }, dashboard: { enabled: true } };
 };
 function page() {
   // Evaluate only the checked-in dashboard asset in this disposable DOM.
   const w = new Window({ url: 'http://127.0.0.1:4733/', settings: { enableJavaScriptEvaluation: true, suppressInsecureJavaScriptEnvironmentWarning: true } }); windows.push(w);
-  let stream: { onmessage?: (e: { data: string }) => void; onopen?: () => void; onerror?: () => void };
-  class Stream { constructor() { stream = this; } }
+  let stream: { onmessage?: (e: { data: string }) => void; onopen?: () => void; onerror?: () => void; patch?: (e: { data: string }) => void }, opened = 0;
+  class Stream { patch?: (e: { data: string }) => void; constructor() { stream = this; opened++; } addEventListener(type: string, f: (e: { data: string }) => void) { if (type === 'patch') this.patch = f; } close() {} }
   Object.assign(w, { EventSource: Stream });
   const [html, tail] = DASHBOARD_PAGE.split('<script>');
   w.document.write(html! + '</body></html>'); w.eval(tail!.split('</script>')[0]!);
   const get = (id: string) => w.document.getElementById(id)! as HTMLElement;
   const click = (selector: string) => { const e = w.document.querySelector(selector); if (!e) throw Error('Missing selector: ' + selector); (e as unknown as { click(): void }).click(); };
-  return { w, get, click, disconnect: () => stream!.onerror!(), push: (s: unknown) => stream!.onmessage!({ data: JSON.stringify(s) }) };
+  return { w, get, click, disconnect: () => stream!.onerror!(), push: (s: unknown) => stream!.onmessage!({ data: JSON.stringify(s) }), patch: (m: unknown) => stream!.patch!({ data: JSON.stringify(m) }), streams: () => opened };
 }
 
 const text = (p: ReturnType<typeof page>, id: string) => p.get(id).textContent ?? '';
@@ -293,4 +296,55 @@ it('draws one strip tick per record of the last minute, caps a burst of trips an
 
 it('marks selection with a tint or a border colour only, never an inset or left accent bar', () => {
   expect(DASHBOARD_PAGE).not.toMatch(/inset\s+\d+px\s+0\s+0[^;}]*accent|border-left:[^;}]*accent/);
+});
+
+// The server's own diff: the first snapshot is a whole frame with its key, each later one a patch against the last key.
+const frames = () => {
+  let memo: FrameMemo | null = null, n = 0;
+  return (s: ReturnType<typeof snapshot>) => {
+    const base = memo?.key, r = diffFrame(memo, s as unknown as ActivitySnapshot, () => 'f' + ++n); memo = r.memo;
+    return base === undefined ? { ...s, frame: memo.key } : { base, frame: memo.key, p: r.patch ? JSON.parse(r.patch) : undefined };
+  };
+};
+
+it('applies live patches to the frame it holds, to the pending frame while paused, and reconnects on a gap', async () => {
+  const next = frames(), a = step('a', 'admission', 'jev', { durationMs: 60 }), other = run('other', 'codex', [step('g', 'guard', 'policy')]);
+  const p = page(); p.push(next(snapshot([run('one', 'claude', [a]), other])));
+  p.patch(next(snapshot([run('one', 'claude', [a, step('b', 'allocation', 'jev', { durationMs: 80, at: new Date().toISOString() })]), other])));
+  await vi.waitFor(() => expect(filled(p)).toHaveLength(2), { timeout: 5000 });
+  expect(node(p, 'allocation').querySelector('.dec b')!.textContent).not.toBe('–'); expect(filled(p)[0]!.textContent).toContain('80ms');
+  p.click('#pause');
+  p.patch(next(snapshot([run('one', 'claude', [a, step('b', 'allocation', 'jev', { durationMs: 80 }), step('c', 'router', 'jev', { durationMs: 90, at: new Date().toISOString() })]), other])));
+  expect(filled(p)).toHaveLength(2);
+  p.click('#pause'); await vi.waitFor(() => expect(filled(p)).toHaveLength(3), { timeout: 5000 }); expect(filled(p)[0]!.textContent).toContain('90ms');
+  const streams = p.streams(); p.patch({ base: 'stale', frame: 'f99', p: { order: [] } });
+  expect(p.streams()).toBe(streams + 1); expect(rows(p)).toHaveLength(2);
+});
+
+it('keeps the row of an unchanged run as the same element when a patch changes another run', () => {
+  const next = frames(), other = run('other', 'codex', [step('g', 'guard', 'policy')]);
+  const p = page(); p.push(next(snapshot([run('one', 'claude', [step('a', 'admission', 'jev', { durationMs: 60 })]), other])));
+  const kept = p.get('runs').querySelector('[data-run="other"] .c-st'), changed = p.get('runs').querySelector('[data-run="one"] .c-st');
+  p.patch(next(snapshot([run('one', 'claude', [step('a', 'admission', 'jev', { durationMs: 60 }), step('b', 'allocation', 'jev', { durationMs: 80 })], { state: 'active' }), other])));
+  expect(p.get('runs').querySelector('[data-run="other"] .c-st')).toBe(kept);
+  expect(p.get('runs').querySelector('[data-run="one"] .c-st')).not.toBe(changed); expect(p.get('runs').querySelector('[data-run="one"]')!.textContent).toContain('진행 중');
+});
+
+it('counts an active step live from its recorded start', async () => {
+  const started = new Date(Date.now() - 5000).toISOString(), p = page();
+  p.push(snapshot([run('r', 'claude', [step('m', 'router', 'host', { state: 'active', at: started, startedAt: started })], { state: 'active', firstAt: started })]));
+  const du = () => p.get('trace').querySelector('[data-step="m"] .du2')!.textContent!;
+  expect(du()).toMatch(/^5\.\ds$/); expect(opened(p)).toMatch(/기록 사이 경과5\.\ds/);
+  await new Promise(r => setTimeout(r, 1100));
+  expect(Number.parseFloat(du())).toBeGreaterThanOrEqual(6); expect(opened(p)).toMatch(/기록 사이 경과[6-9]\.\ds/);
+});
+
+it('lands a recorded host step on its node, strip and run row without a Jev round trip', async () => {
+  const base = run('x', 'codex', [step('t0', 'workers', 'host', { lifecycle: true, title: 'Codex · 도구 시작', at: new Date(Date.now() - 2000).toISOString() })]);
+  const p = page(); p.push(snapshot([base])); p.push(snapshot([base]));
+  const ticks = () => node(p, 'workers').querySelectorAll('.strip .tr i').length; expect(ticks()).toBe(1);
+  p.push(snapshot([run('x', 'codex', [...base.steps, step('t1', 'workers', 'host', { lifecycle: true, title: 'Codex · 도구 결과', at: new Date().toISOString() })])]));
+  expect(ticks()).toBe(1);
+  await vi.waitFor(() => { expect(node(p, 'workers').classList.contains('zap')).toBe(true); expect(p.get('runs').querySelector('[data-run="x"]')!.classList.contains('zap')).toBe(true); }, { timeout: 3000, interval: 5 });
+  expect(ticks()).toBe(2); expect(p.w.document.querySelectorAll('.trip,.rail .ln b')).toHaveLength(0); expect(filled(p)).toHaveLength(0);
 });
