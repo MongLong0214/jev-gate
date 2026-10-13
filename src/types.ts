@@ -180,6 +180,16 @@ export interface JevUsage {
   output_tokens: number | null;
 }
 
+/**
+ * #233: why an owned Codex dispatch ended without completion, and where. Closed, so no raw error text, prompt or
+ * command reaches a trace or a tool result. `not_executed` is definite non-execution evidence, never a terminal.
+ */
+export type CodexFailureCategory = 'preflight_conflict' | 'reservation_unavailable' | 'native_start_rejected' | 'native_failed_turn' | 'interrupted' | 'termination_unconfirmed';
+export const CODEX_FAILURE_CATEGORIES: readonly CodexFailureCategory[] = ['preflight_conflict', 'reservation_unavailable', 'native_start_rejected', 'native_failed_turn', 'interrupted', 'termination_unconfirmed'];
+export type CodexFailureStage = 'preflight' | 'reservation' | 'thread_start' | 'turn_start' | 'turn';
+export const CODEX_FAILURE_STAGES: readonly CodexFailureStage[] = ['preflight', 'reservation', 'thread_start', 'turn_start', 'turn'];
+export interface CodexFailure { category: CodexFailureCategory; stage: CodexFailureStage; not_executed: boolean }
+
 /** Hook input as read from stdin. Only documented fields are typed; unknown fields are ignored, never forwarded. */
 export interface HookInput {
   hook_event_name: string;
@@ -204,6 +214,8 @@ export interface HookInput {
   error?: string;
   is_interrupt?: boolean;
   duration_ms?: number;
+  /** Set only by the Codex adapter's owned dispatch failure. */
+  codex_failure?: CodexFailure;
 }
 
 /** A1: checks carry stable local ids so receipt completeness is decided by code, not by the worker's prose. */

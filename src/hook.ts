@@ -129,8 +129,8 @@ import {
 import { openTraceDir, type TraceWriter } from './trace.js';
 import { appendLiveness, LIVENESS_WINDOW, readLiveness } from './liveness.js';
 import { evidenceFormatOnly, nearestFormatCommands, readWorkerObservation, refusalReason, subagentTranscriptPath, verifyChecks } from './verify.js';
-import type { CheckVerification, ConfigV5, DenyReason, ErrorCode, ExecutionShape, HookInput, JobGeneration, JobState, ModelAgreement, Plan, PlannedTask, Receipt, Reservation, RoutingMode, Tier } from './types.js';
-import { agentForTier, OWNED_AGENTS, TIERS } from './types.js';
+import type { CheckVerification, CodexFailure, ConfigV5, DenyReason, ErrorCode, ExecutionShape, HookInput, JobGeneration, JobState, ModelAgreement, Plan, PlannedTask, Receipt, Reservation, RoutingMode, Tier } from './types.js';
+import { agentForTier, CODEX_FAILURE_CATEGORIES, CODEX_FAILURE_STAGES, OWNED_AGENTS, TIERS } from './types.js';
 import { MAX_PROMPT_BYTES } from './brief.js';
 import { normalizeUsage } from './cost.js';
 
@@ -220,6 +220,10 @@ const parseInput = (text: string): HookInput | { code: ErrorCode } => {
   if (typeof parsed['is_interrupt'] === 'boolean') out.is_interrupt = parsed['is_interrupt'];
   const d = num(parsed['duration_ms']);
   if (d !== null) out.duration_ms = d;
+  const f = parsed['codex_failure'];
+  if (isRecord(f) && CODEX_FAILURE_CATEGORIES.some(c => c === f['category']) && CODEX_FAILURE_STAGES.some(c => c === f['stage']) && typeof f['not_executed'] === 'boolean') {
+    out.codex_failure = { category: f['category'] as CodexFailure['category'], stage: f['stage'] as CodexFailure['stage'], not_executed: f['not_executed'] };
+  }
   return out;
 };
 
@@ -2115,6 +2119,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       error_len: error.length,
       is_interrupt: input.is_interrupt ?? null,
       duration_ms: input.duration_ms ?? null,
+      ...(input.codex_failure ? { failure_category: input.codex_failure.category, failure_stage: input.codex_failure.stage, not_executed: input.codex_failure.not_executed } : {}),
     });
     return skip();
   };

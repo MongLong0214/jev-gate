@@ -208,6 +208,11 @@ const compactSelectionReason = (value: unknown): string | null => ({
   superseded: '새 턴으로 변경 · 판정 미적용', unauthorized: 'Jev 인증 실패 · 로컬 유지', payment_required: 'Jev 크레딧 소진 · 로컬 유지', credential_refused: 'Jev 인증 확인 필요 · 로컬 유지',
   error: '선별 오류 · 로컬 유지', network: 'Jev 연결 오류 · 로컬 유지', saturated: '실행 중인 Jev 요청 한도 · 로컬 유지',
 } as Record<string, string>)[String(value)] ?? token(value);
+/** #233: the closed Codex dispatch failure category, never the raw error. */
+const codexFailureReason = (r: Rec): string | null => ({
+  preflight_conflict: '실행 전 점검 충돌', reservation_unavailable: '실행 예약 기록 불가', native_start_rejected: 'Codex 워커 시작 거부',
+  native_failed_turn: 'Codex 워커 턴 실패', interrupted: '워커 중단', termination_unconfirmed: '워커 종료 미확인 · 예약 유지',
+} as Record<string, string>)[String(r['failure_category'])] ?? null;
 const compactUsage = (r: Rec): string => {
   const usage = field(r, 'usage');
   const count = (key: string) => number(usage?.[key]) === null ? '미확인' : n(number(usage?.[key]));
@@ -351,7 +356,7 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
     if (phase === 'background_launch') { state = closed ? 'done' : age >= 0 && age < 30_000 ? 'active' : 'unconfirmed'; summary = closed ? '시작과 실제 종료 연결됨' : state === 'active' ? '워커 실행 중 · 메인에서 질문 가능' : '시작 기록 있음 · 종료 결과 미관측'; details.push('시작 알림은 완료·수락 결과가 아닙니다'); }
     if (phase === 'background_conversation') summary = `원래 작업 유지 · 종료 결과 대기 ${n(number(r['active']))}개`;
     if (phase === 'background_policy_delivery') { summary = '종료 정책 한 번 전달 · 다음 일반 요청은 Gate A 재개'; state = 'done'; }
-    if (phase === 'background_terminal') { summary = token(r['status']) === 'completed' ? '호스트에서 실제 종료 확인 · 계약 수락은 별도 검사' : '호스트에서 중단·실패 확인 · 성공 수락 없음'; state = token(r['status']) === 'completed' ? 'done' : 'interrupted'; if (r['orphaned'] === true) details.push('이전 작업 결과 · 현재 계획 미진행'); }
+    if (phase === 'background_terminal') { summary = token(r['status']) === 'completed' ? '호스트에서 실제 종료 확인 · 계약 수락은 별도 검사' : codexFailureReason(r) ?? '호스트에서 중단·실패 확인 · 성공 수락 없음'; state = token(r['status']) === 'completed' ? 'done' : r['not_executed'] === true ? 'error' : 'interrupted'; if (r['not_executed'] === true) details.push('워커 미실행 · 완료 주장 없음'); if (r['orphaned'] === true) details.push('이전 작업 결과 · 현재 계획 미진행'); }
   } else if (phase === 'dispatch_denied') {
     lane = 'policy'; state = 'skipped';
     summary = ({ workers_active: '기존 워커 종료 대기 · 재계획 거절', planner_active: '기존 플래너 실행 중 · 중복 호출 거절' } as Record<string, string>)[String(r['reason'])] ?? text('호출 거절', token(r['reason']));
@@ -382,7 +387,10 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
   } else if (phase === 'stop') {
     lane = 'host'; summary = text('턴 종료', token(r['outcome']));
   } else if (phase === 'failure') {
-    lane = 'host'; summary = text('호스트 호출 실패', token(r['subagent_type']));
+    lane = 'host'; summary = text(codexFailureReason(r) ?? '호스트 호출 실패', token(r['subagent_type']));
+    if (r['not_executed'] === true) details.push('워커 미실행 · 완료 주장 없음');
+    if (r['failure_category'] === 'interrupted') state = 'interrupted';
+    if (r['failure_category'] === 'termination_unconfirmed') state = 'unconfirmed';
     details.push(text(`요청 모델 ${token(r['requested_model']) ?? '미기록'}`, `실행 모델 ${token(r['resolved_model']) ?? '미관측'}`));
   }
   const measured = number(http?.['duration_ms']);

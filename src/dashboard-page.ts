@@ -121,6 +121,7 @@ PHRASES.push(...[
 PHRASES.push(['선택 모델과 실제 모델 일치','Selected and observed models match'],['선택 모델과 실제 모델 불일치','Selected and observed models differ'],['결정 근거','Decision evidence'],['Codex 실행','Codex execution']);
 EN.skip='Skip to content';
 PHRASES.push(['API 설정 관측 · 요청 종류 미확인','API settings observed · request purpose unknown']);
+PHRASES.push(['실행 전 점검 충돌','Preflight conflict'],['실행 예약 기록 불가','Reservation unavailable'],['Codex 워커 시작 거부','Codex worker start rejected'],['Codex 워커 턴 실패','Codex worker turn failed'],['워커 중단','Worker interrupted'],['워커 종료 미확인 · 예약 유지','Worker termination unconfirmed · reservation kept'],['워커 미실행 · 완료 주장 없음','Worker not started · no completion claimed']);
 PHRASES.sort((a,b)=>b[0].length-a[0].length);
 PHRASES.push(['연결 중','Connecting']);PHRASES.sort((a,b)=>b[0].length-a[0].length);
 let lang='ko';
