@@ -348,3 +348,30 @@ it('lands a recorded host step on its node, strip and run row without a Jev roun
   await vi.waitFor(() => { expect(node(p, 'workers').classList.contains('zap')).toBe(true); expect(p.get('runs').querySelector('[data-run="x"]')!.classList.contains('zap')).toBe(true); }, { timeout: 3000, interval: 5 });
   expect(ticks()).toBe(2); expect(p.w.document.querySelectorAll('.trip,.rail .ln b')).toHaveLength(0); expect(filled(p)).toHaveLength(0);
 });
+
+it('counts only current failures at the top, keeps settled ones as past errors and redraws a reclassification from a patch (#223)', () => {
+  const day = new Date(Date.now() - 86_400_000).toISOString(), next = frames();
+  const outage = (now: 'unknown' | 'later_ok') => run('outage', 'codex', [step('cfg', 'evidence', 'local', { at: day, state: 'error', issue: 'evidence', cause: 'unavailable_config', sessionId: 'cx-session-1', title: 'Evidence · 근거 결과', impact: { now, lastAt: now === 'unknown' ? day : stamp, lastState: now === 'unknown' ? 'error' : 'done' } })], { state: now === 'unknown' ? 'attention' : 'past_error', title: 'Evidence 검색', source: 'evidence', firstAt: day, lastAt: day });
+  const refused = run('refused', 'codex', [step('bad', 'evidence', 'local', { at: day, state: 'error', issue: 'evidence', cause: 'invalid_input', sessionId: 'cx-session-2', title: 'Evidence · 근거 결과', impact: { now: 'request_only', lastAt: stamp, lastState: 'done' } })], { state: 'past_error', title: 'Evidence 검색', source: 'evidence', firstAt: day, lastAt: day });
+  const mismatch = run('mismatch', 'claude', [step('m', 'router', 'host', { state: 'error', model: { selected: 'claude-opus-5-5', observed: 'claude-sonnet-5', status: 'mismatch', selectedEffort: null, observedEffort: null }, impact: { now: 'unknown', lastAt: stamp, lastState: 'error' } })], { state: 'attention', source: 'router' });
+  const p = page(), em = (state: string) => p.w.document.querySelector(`#state-filters [data-state="${state}"] em`)!.textContent;
+  p.push(next(snapshot([mismatch, outage('unknown'), refused])));
+  expect(text(p, 'k-att')).toBe('2'); expect(text(p, 'k-diag')).toBe('실제 응답 모델 불일치 1건 · Evidence 사용 불가·오류 1건');
+  expect([em('attention'), em('past_error')]).toEqual(['2', '1']);
+  p.click('[data-run="outage"]');
+  for (const fact of ['원인unavailable_config', '현재 영향현재 영향 미확인', '호스트Codex', '세션cx-session-1']) expect(opened(p)).toContain(fact);
+  p.click('[data-run="refused"]');
+  expect(opened(p)).toContain('원인invalid_input · 요청 인자·범위 오류'); expect(opened(p)).toContain('현재 영향이 요청만 실패 · 서비스 장애 아님'); expect(opened(p)).toContain('마지막 관측');
+  // A later success arrives as a patch: the same row is redrawn as a past error and leaves the current count.
+  p.patch(next(snapshot([mismatch, outage('later_ok'), refused])));
+  expect(text(p, 'k-att')).toBe('1'); expect(text(p, 'k-diag')).toBe('실제 응답 모델 불일치 1건');
+  expect([em('attention'), em('past_error')]).toEqual(['1', '2']);
+  expect(p.get('runs').querySelector('[data-run="outage"] .c-st')!.textContent).toBe('지난 오류');
+  p.click('[data-run="outage"]'); expect(opened(p)).toContain('현재 영향이후 같은 작업 정상 기록'); expect(opened(p)).toContain('상태오류');
+  p.click('[data-host="codex"]');
+  expect(text(p, 'k-att')).toBe('0'); expect(text(p, 'k-diag')).toBe('지난 오류 2건');
+  p.click('[data-state="past_error"]'); expect(rows(p)).toHaveLength(2);
+  p.click('[data-host="claude"]'); expect(text(p, 'k-att')).toBe('1'); expect(em('past_error')).toBe('0');
+  p.click('#language'); p.click('[data-host="all"]'); p.click('[data-state="attention"]'); p.click('[data-run="mismatch"]');
+  expect(text(p, 'k-diag')).toBe('Response model mismatch 1 recorded'); expect(opened(p)).toContain('Current impactCurrent impact unknown');
+});

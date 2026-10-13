@@ -552,3 +552,67 @@ it('keeps every record and Jev call of the last minute in the feed, past the new
   expect(view.feed.filter(s => s.feature === 'compact' && !s.lifecycle && inWindow(s))).toHaveLength(150);
   expect(view.latency.recent).toHaveLength(150);
 });
+
+describe('current incidents and past error records (#223)', () => {
+  const yesterday = '2026-09-28T09:00:00.000Z', now = new Date('2026-09-29T06:00:05.000Z'), avail = { trace: true };
+  const evidence = (request_id: string, written_at: string, extra: Record<string, unknown>) => ({ host: 'codex', session_id: `s-${request_id}`, phase: 'evidence_result', request_id, written_at, backend: 'local', items: 0, remote_calls: 0, cache_hits: 0, duration_ms: 0, coverage: { read_files: 0, candidates: 0, unjudged_on_page: 0 }, ...extra });
+  const refused = evidence('old', yesterday, { status: 'unavailable', is_error: true, reason_codes: ['invalid_input'] });
+  const ok = evidence('new', at, { status: 'ok', is_error: false, items: 3, reason_codes: [] });
+  const failure = (view: ReturnType<typeof buildOperations>, id: string) => view.runs.find(r => r.steps.some(s => s.state === 'error' && s.at === id))!;
+  const build = (records: Record<string, unknown>[], mods: ModRecord[] = []) => {
+    const view = buildOperations(records, mods, now, avail);
+    expect(view).toEqual(buildOperations(records, mods, now, avail, true));
+    return view;
+  };
+
+  it('keeps an old invalid-input refusal as a past record of that request, never as an incident or a later success', () => {
+    const view = build([refused, ok]);
+    const old = failure(view, yesterday);
+    expect(old.state).toBe('past_error');
+    expect(old.steps[0]).toMatchObject({ state: 'error', issue: 'evidence', cause: 'invalid_input', sessionId: 's-old', impact: { now: 'request_only', lastAt: at, lastState: 'done' } });
+    expect(view.attention).toBe(0);
+    // Alone, it still affected only that request.
+    expect(build([refused]).runs[0]).toMatchObject({ state: 'past_error', steps: [{ impact: { now: 'request_only', lastAt: yesterday, lastState: 'error' } }] });
+  });
+
+  it('keeps a service failure in the current count until a later success of the same operation on the same host', () => {
+    const outage = (turn: string, time: string, assessment: string) => row('router', { session_id: `s-${turn}`, event: 'root', turn, sent: true, assessment }, time);
+    const first = build([], [outage('t1', yesterday, 'network'), outage('t2', at, 'http_401')]);
+    expect(first.attention).toBe(2);
+    expect(failure(first, yesterday).steps.find(s => s.state === 'error')).toMatchObject({ cause: 'network', sessionId: 's-t1', impact: { now: 'ongoing', lastAt: at, lastState: 'error' } });
+    expect(failure(first, at).steps.find(s => s.state === 'error')).toMatchObject({ cause: 'http_401', impact: { now: 'unknown', lastAt: at, lastState: 'error' } });
+    const recovered = build([], [outage('t1', yesterday, 'network'), outage('t2', at, 'http_401'), outage('t3', later, 'ok')]);
+    expect(recovered.attention).toBe(0);
+    expect(recovered.runs.filter(r => r.state === 'past_error')).toHaveLength(2);
+    expect(recovered.feed.filter(s => s.state === 'error').map(s => s.impact)).toEqual([{ now: 'later_ok', lastAt: later, lastState: 'done' }, { now: 'later_ok', lastAt: later, lastState: 'done' }]);
+    // A success on another host shows nothing about this one.
+    const config = evidence('cfg', yesterday, { status: 'unavailable', is_error: true, reason_codes: ['unavailable_config'] });
+    const elsewhere = build([config, { ...ok, host: 'claude' }]);
+    expect(failure(elsewhere, yesterday)).toMatchObject({ host: 'codex', state: 'attention', steps: [{ cause: 'unavailable_config', impact: { now: 'unknown' } }] });
+    expect(elsewhere.runs.filter(r => r.host === 'codex' && r.state === 'attention')).toHaveLength(1);
+    expect(elsewhere.runs.filter(r => r.host === 'claude' && r.state === 'attention')).toHaveLength(0);
+  });
+
+  it('keeps a verified model mismatch current until a later confirmed model, and an unobserved model settles nothing', () => {
+    const result = (turn: string, time: string, confirmation: string, observed: string | null) => row('router', { session_id: `s-${turn}`, event: 'root_result', turn, requested: 'claude-opus-5-5', observed, confirmation }, time);
+    const mismatch = result('m', yesterday, 'mismatch', 'claude-sonnet-5'), unobserved = result('u', at, 'unobserved', null);
+    const open = build([], [mismatch, unobserved]);
+    expect(open.attention).toBe(1);
+    expect(failure(open, yesterday).steps[0]).toMatchObject({ model: { status: 'mismatch' }, impact: { now: 'unknown', lastAt: yesterday } });
+    expect(open.runs.find(r => r.firstAt === at)).toMatchObject({ state: 'unconfirmed', steps: [{ state: 'unconfirmed', model: { status: 'unobserved' } }] });
+    expect(open.feed.filter(s => s.model?.status === 'mismatch')).toHaveLength(1);
+    const confirmed = build([], [mismatch, unobserved, result('c', later, 'confirmed', 'claude-opus-5-5')]);
+    expect(failure(confirmed, yesterday)).toMatchObject({ state: 'past_error', steps: [{ state: 'error', model: { status: 'mismatch' }, impact: { now: 'later_ok', lastAt: later, lastState: 'done' } }] });
+    expect(confirmed.attention).toBe(0);
+  });
+
+  it('keeps an unchanged failure run object across rebuilds and replaces it when its classification changes', () => {
+    const config = evidence('cfg', yesterday, { status: 'unavailable', is_error: true, reason_codes: ['unavailable_config'] });
+    const records = [config, { ...base, phase: 'admission_intent', request_id: 'a1' }];
+    const first = buildOperations(records, [], now, avail), id = failure(first, yesterday).id;
+    const second = buildOperations([...records, { ...base, session_id: 's9', phase: 'admission_intent', request_id: 'a9', written_at: later }], [], now, avail);
+    expect(second.runs.find(r => r.id === id)).toBe(first.runs.find(r => r.id === id));
+    const third = buildOperations([...records, ok], [], now, avail);
+    expect(third.runs.find(r => r.id === id)).toMatchObject({ state: 'past_error', steps: [{ impact: { now: 'later_ok' } }] });
+  });
+});

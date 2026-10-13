@@ -98,5 +98,25 @@ describe('dashboard frame patches', () => {
       rmSync(join(trace, 'p2.json'));
       next = load(); same(feed(next).held, next);
     });
+    it('carries a failure that a later success settles as a changed run state and step impact (#223)', () => {
+      const trace = mkdtempSync(join(tmpdir(), 'jev-patch-')); dirs.push(trace);
+      const write = (name: string, value: object) => writeFileSync(join(trace, name), JSON.stringify(value));
+      const at = (s: number) => new Date(Date.now() - 60_000 + s * 1000).toISOString();
+      const feed = stream(), env = { HOME: trace, JEV_GATE_STATE_DIR: trace }, load = () => loadActivity({ traceDir: trace, env });
+      const result = (request_id: string, written_at: string, extra: object) => ({ host: 'codex', session_id: `s-${request_id}`, phase: 'evidence_result', request_id, written_at, backend: 'local', items: 0, remote_calls: 0, cache_hits: 0, duration_ms: 0, ...extra });
+      write('e1.json', result('e1', at(1), { status: 'unavailable', is_error: true, reason_codes: ['unavailable_config'] }));
+      let next = load(); const failed = next.operations.runs[0]!;
+      expect(failed).toMatchObject({ state: 'attention', steps: [{ impact: { now: 'unknown' } }] }); expect(next.operations.attention).toBe(1);
+      feed(next);
+      write('e2.json', result('e2', at(2), { status: 'ok', is_error: false, items: 2, reason_codes: [] }));
+      next = load();
+      const { patch, held } = feed(next), sent = JSON.parse(patch!) as { ops: Record<string, unknown>; runs: Record<string, { meta: OperationRun; put: Record<string, OperationStep> }> };
+      expect(sent.ops['attention']).toBe(0);
+      expect(sent.runs[failed.id]!.meta.state).toBe('past_error');
+      expect(Object.values(sent.runs[failed.id]!.put)).toMatchObject([{ state: 'error', impact: { now: 'later_ok', lastState: 'done' } }]);
+      same(held, next);
+      const runs = (held['operations'] as { runs: OperationRun[] }).runs;
+      expect(runs.find(r => r.id === failed.id)).toMatchObject({ state: 'past_error', steps: [{ state: 'error', impact: { now: 'later_ok' } }] });
+    });
   });
 });
