@@ -7,6 +7,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { loadConfig } from '../../src/evidence/source.js';
 import { startDashboard } from '../../src/dashboard.js';
+import { liveFrames } from '../live-frames.js';
 import { resolveApiKey } from '../../src/credentials.js';
 
 const root = join(__dirname, '../..');
@@ -127,13 +128,11 @@ describe('installed Codex archive', () => {
     const abort = new AbortController();
     try {
       const response = await fetch(`${server.url}api/live`, { signal: abort.signal });
-      const reader = response.body!.getReader();
-      const first = await reader.read();
-      expect(new TextDecoder().decode(first.value)).toContain('"host":"codex"');
+      const reader = response.body!.getReader(), frames = liveFrames(reader);
+      expect(JSON.stringify(await frames.next())).toContain('"host":"codex"');
       const run = spawnSync(process.execPath, [join(installed, 'dist/hook.mjs')], { cwd: project, env: shellEnv, encoding: 'utf8', input: JSON.stringify({ hook_event_name: 'PreToolUse', session_id: 's2', turn_id: 't2', tool_use_id: 'tool', tool_name: 'Bash' }) });
       expect(run.status).toBe(0);
-      const changed = await reader.read();
-      const event = new TextDecoder().decode(changed.value);
+      const event = JSON.stringify(await frames.next());
       expect(event).toContain('Codex · 도구 시작');
       expect(event).toContain('"state":"active"');
       expect(event).toContain('"mode":"connect"');

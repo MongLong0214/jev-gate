@@ -1,5 +1,5 @@
 import type { Transport, Usage } from './client.ts';
-import { createClient } from './client.ts';
+import { createClient, JEV_MODEL } from './client.ts';
 import type { RouterConfig } from './config.ts';
 import { validKey } from './config.ts';
 import type { RootSwitch, SymbolicEffort } from './models.ts';
@@ -104,7 +104,7 @@ type NextLike<E, R> = ((e: E) => Promise<R>) & { readonly signal: AbortSignal };
  */
 export const VERIFIED_HOST = '2.1.282';
 /** Identifies this loaded hook source, independently of a manifest updated on disk. */
-export const ROUTER_HOOK_VERSION = '0.8.18';
+export const ROUTER_HOOK_VERSION = '0.8.19';
 
 /**
  * Later 2.1 releases are accepted too. Pinned to one release, spawn routing went native after every host update: the
@@ -305,7 +305,6 @@ interface ChildRouting {
 
 /** What a spawn's assessment decided: its model, and the answer its subagent's steps read their effort from. */
 interface SpawnPlan {
-  nativeRequested?: string | null;
   target: string | null;
   answers: Answers | null;
   pair?: { offer: PairOffer; raw: unknown };
@@ -539,7 +538,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       if (!live.aborted && !t.stopped) t.patch = cached.patch;
       if (!Object.keys(t.patch).length) t.stopped = true;
       log(engine, { event: 'root', scope: 'root', boundary: 'host_hook', turn: turnId, context_chars: context?.length ?? 0, from: { model: t.baseline.model, effort: t.baseline.effort ?? null },
-        assessment: result.ok ? 'ok' : result.reason, sent: result.ok || result.sent, duration_ms: Math.max(0, engine.now() - started), usage: loggable(result.usage),
+        assessment: result.ok ? 'ok' : result.reason, sent: result.ok || result.sent, duration_ms: Math.max(0, engine.now() - started), usage: loggable(result.usage), jev_model: result.ok ? JEV_MODEL : null,
         discovered_count: MODEL_FACTS.length, eligible_count: candidates.length, offered_count: offer.candidates.length, catalog_complete: false,
         model_asked: offer.modelAsked, effort_asked: offer.effortQuestions.size > 0, allow_fable: allowFable,
         ...baselineFacts,
@@ -708,7 +707,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       if (!latest?.compatible || latest.turnId !== e.turnId || latest.index !== e.index || !claudeContextFits(e.model, patch.model, latest.inputUpperBound)) patch = {};
     }
     log(engine, { event: 'child_route', ...binding, boundary: 'host_hook', hook_version: ROUTER_HOOK_VERSION, host_version: hostBase ?? null,
-      from: { model: e.model, effort: e.effort ?? null }, assessment: result.ok ? 'ok' : result.reason, sent: result.ok || result.sent,
+      from: { model: e.model, effort: e.effort ?? null }, assessment: result.ok ? 'ok' : result.reason, sent: result.ok || result.sent, jev_model: result.ok ? JEV_MODEL : null,
       duration_ms: Math.max(0, engine.now() - started), usage: loggable(result.usage), model_pin: nowPins.subagentModel, effort_pin: nowPins.mainEffort,
       eligible_count: candidates.length, offered_count: offer.candidates.length, catalog_complete: false, excluded,
       model_asked: offer.modelAsked, effort_asked: offer.effortQuestions.size > 0, allow_fable: allowFable,
@@ -1001,6 +1000,30 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
   };
 
   /**
+   * The model the host's own selection should run for a spawn this Router left native: the call's `model`, else the
+   * parent's for a fork or a verified inheriting built-in. Any other agent's profile model is not in the event, so it
+   * stays unknown here (null) rather than being read as the parent's.
+   */
+  const nativeExpected = (e: SpawnEvent): string | null => {
+    const explicit = e.fork ? null : e.model?.trim() || null;
+    return explicit ?? (e.fork || inheritSkip(e) === null ? e.parentModel : null);
+  };
+
+  /**
+   * Whether a differing model is really a mismatch: a model pin overrides every child model, and an alias remap changes
+   * what an alias names. Only a mismatch pays for these reads, bounded like the dispatch's own; unread, it stays unknown.
+   */
+  const nativeMismatch = async (engine: RouterEngine, requested: string, observed: string, own: AbortSignal): Promise<string | null> => {
+    const wait = budget(engine, engine.now() + config.timeoutMs, own);
+    try {
+      const [pins, aliases] = await within(Promise.all([pinsOf(engine, 'spawn', wait.signal), aliasesOf(engine)]), wait.signal);
+      const resolved = aliases[requested] ?? requested;
+      return pins.subagentModel ? null : resolved;
+    } catch { return null; }
+    finally { wait.dispose(); }
+  };
+
+  /**
    * A spawn is asked about its model, its subagent's effort, or both. The model moves for an inheriting built-in and,
    * unless configured otherwise, for any call that names one: `model: "opus"` on an Agent call is the caller's default,
    * and in a week of the owner's traffic 161 of 174 routable spawns named it. Effort is asked for every spawn but a
@@ -1077,10 +1100,10 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     const nowAvailable = await within(engine.availableModels().catch(() => []), live);
     const nowPins = await within(pinsOf(engine, 'spawn', live), live);
     if (target && (nowPins.subagentModel || nowPins.aliasRemap && !engine.modelAliases || !claudeTargetAllowed(target, await within(frontierFor(engine), live)) || !claudeModelAllowed(target, nowAvailable, aliases))) { log(engine, { event: 'spawn_stop', tool_use_id: e.tool_use_id, requested: target, reason: nowPins.subagentModel ? 'subagent_model_pinned' : nowPins.aliasRemap && !engine.modelAliases ? 'alias_remapped' : 'target_not_allowed' }); return null; }
-    log(engine, { event: 'spawn', scope: 'subagent', boundary: 'host_hook', tool_use_id: e.tool_use_id, type: typeLabel(e), from: baselineModel, assessment: 'ok', sent: true,
+    log(engine, { event: 'spawn', scope: 'subagent', boundary: 'host_hook', tool_use_id: e.tool_use_id, type: typeLabel(e), from: baselineModel, assessment: 'ok', sent: true, jev_model: JEV_MODEL,
       usage: loggable(result.usage), explicit: explicit !== null, patch: selected.patch, reasons: selected.reasons, model_asked: offer.modelAsked, effort_asked: offer.effortQuestions.size > 0,
       discovered_count: MODEL_FACTS.length, eligible_count: candidates.length, offered_count: offer.candidates.length, catalog_complete: false, allow_fable: allowFable });
-    return { target, nativeRequested: nowPins.subagentModel ? null : baselineModel, answers: {}, pair: { offer, raw: result.answers } };
+    return { target, answers: {}, pair: { offer, raw: result.answers } };
   };
 
   /**
@@ -1178,7 +1201,8 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
           // Response diagnostics never invalidate unrelated dispatches.
         }
       } else {
-        const requested = plan?.nativeRequested ?? null;
+        let requested = nativeExpected(e);
+        if (requested !== null && result.deny === undefined && !sameModel(requested, result.model)) requested = await nativeMismatch(engine, requested, result.model, own);
         log(engine, result.deny !== undefined
           ? { event: 'spawn_native_result', tool_use_id: e.tool_use_id, caller_model: e.model ?? null, requested, denied: true }
           : { event: 'spawn_native_result', tool_use_id: e.tool_use_id, caller_model: e.model ?? null, requested, observed: result.model, agent_id: result.agentId ?? null,

@@ -7,7 +7,7 @@ declare const getComputedStyle: Window['getComputedStyle'];
 declare const MutationObserver: Window['MutationObserver'];
 declare const innerWidth: number;
 declare const innerHeight: number;
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { chromium, type Browser, type Page } from 'playwright';
@@ -15,6 +15,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { DASHBOARD_PAGE } from '../src/dashboard-page.js';
 import { dashboardSources, startDashboard } from '../src/dashboard.js';
 import { buildOperations, type JevReceipt, type OperationRun, type OperationStep } from '../src/operations.js';
+import { reportedSingleVerdict } from '../src/plan.js';
+import { refusalReason } from '../src/verify.js';
 
 const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
 const step = (id: string, feature: OperationStep['feature'], extra: Partial<OperationStep> = {}): OperationStep => ({ id, feature, lane: 'jev', at: ago(0), state: 'done', title: `${feature} recorded result`, summary: 'Recorded result', details: [], ...extra });
@@ -30,7 +32,7 @@ function snapshot(runs: OperationRun[]) {
   for (const s of measured) { const t = today[s.host] ??= { calls:0, input:0, costUsd:0, unpriced:0 }; t.calls++; t.input += s.receipt?.input ?? 0; if (s.receipt?.costUsd != null) t.costUsd += s.receipt.costUsd; else t.unpriced++; }
   return { at:ago(0), host:'mixed', unreadable:0, recording:{enabled:true}, dashboard:{enabled:true}, operations:{runs,feed,active:runs.filter(r=>r.state==='active').length,attention:runs.filter(r=>r.state==='attention').length,requests:measured.length,
     features:ids.map(id=>({id,label:id,source:'trace',count:feed.filter(s=>!s.lifecycle&&s.feature===id).length,lastAt:feed.find(s=>!s.lifecycle&&s.feature===id)?.at??null,state:feed.some(s=>!s.lifecycle&&s.feature===id)?'observed':'waiting'})),
-    latency:{measured:values.length,p50:pct(.5),p95:pct(.95),fastest:values[0]??null,latest:measured[0]?.durationMs??null,recent:measured.map(s=>({at:s.at,ms:s.durationMs!})).reverse(),today},sig:JSON.stringify(runs)} };
+    latency:{measured:values.length,p50:pct(.5),p95:pct(.95),fastest:values[0]??null,latest:measured[0]?.durationMs??null,recent:measured.map(s=>({at:s.at,ms:s.durationMs!})).reverse(),today}} };
 }
 
 // Actual browser, native EventSource and disposable HTTP server. No user browser, credentials or paid requests.
@@ -85,16 +87,16 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
 
   it('shows live version status without overflow in the actual browser', async () => {
     const home = mkdtempSync(join(tmpdir(), 'jev-dashboard-version-'));
-    const releaseFetch = (async () => new Response(JSON.stringify({ tag_name: 'v0.8.19', draft: false, prerelease: false, html_url: 'https://github.com/MongLong0214/jev-gate/releases/tag/v0.8.19' }))) as typeof fetch;
+    const releaseFetch = (async () => new Response(JSON.stringify({ tag_name: 'v0.8.20', draft: false, prerelease: false, html_url: 'https://github.com/MongLong0214/jev-gate/releases/tag/v0.8.20' }))) as typeof fetch;
     const local = await startDashboard(dashboardSources({ HOME: home, XDG_CONFIG_HOME: join(home, '.config'), XDG_STATE_HOME: join(home, '.local/state'), JEV_GATE_TRACE_DIR: join(home, 'claude-traces'), JEV_CODEX_TRACE_DIR: join(home, 'codex-traces') }), 0, { releaseFetch });
     try {
       for (const width of [1440, 390, 320]) {
         const p = await browser.newPage({ viewport: { width, height: 900 } });
         p.on('pageerror', e => errors.push(e.message));
         await p.goto(local.url);
-        await p.waitForFunction(() => document.getElementById('version-badge')?.textContent?.includes('0.8.19'));
+        await p.waitForFunction(() => document.getElementById('version-badge')?.textContent?.includes('0.8.20'));
         expect(await p.locator('#version-badge').getAttribute('data-state')).toBe('update');
-        expect(await p.locator('#version-badge').textContent()).toContain('0.8.18');
+        expect(await p.locator('#version-badge').textContent()).toContain('0.8.19');
         expect(await p.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
         await p.screenshot({ path: join(output, `version-${width}.png`), fullPage: true });
         await p.close();
@@ -159,6 +161,134 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     expect(await p.locator('#trace .sd:not([hidden])').textContent()).toContain('일치');
     await p.close();
   });
+
+  it('separates current incidents from past error records in the header, filters and stage detail, and reclassifies them live (#223)', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'jev-dashboard-223-')), claude = join(home, 'claude-traces'), codex = join(home, 'codex-traces');
+    mkdirSync(claude); mkdirSync(codex);
+    const write = (dir: string, name: string, value: object) => writeFileSync(join(dir, `${name}.json`), JSON.stringify(value));
+    const evidence = (request_id: string, session_id: string, written_at: string, extra: object) => ({ phase: 'evidence_result', host: 'codex', session_id, request_id, written_at, backend: 'local', items: 0, remote_calls: 0, cache_hits: 0, duration_ms: 0, coverage: { read_files: 0, candidates: 0, unjudged_on_page: 0 }, ...extra });
+    const jev = (parent: string, session_id: string, written_at: string, code: string, status: number) => ({ phase: 'evidence_jev_result', host: 'codex', session_id, request_id: `${parent}:1`, parent_request_id: parent, written_at, attempted: true, candidates: 3, http: { status, code, duration_ms: 140 } });
+    const router = (turn: string, session_id: string, written_at: string, confirmation: string, observed: string | null) => ({ phase: 'claude_router', host: 'claude', session_id, event: 'root_result', turn, written_at, requested: 'claude-opus-5-5', observed, confirmation });
+    // The reported case: yesterday's Codex invalid-input refusal followed by successful Evidence, beside a current outage and a model check.
+    write(codex, 'ev-old', evidence('ev-old', 'codex-old-session', ago(26 * 3_600_000), { status: 'unavailable', is_error: true, reason_codes: ['invalid_input'] }));
+    write(codex, 'ev-ok', evidence('ev-ok', 'codex-new-session', ago(3_600_000), { status: 'ok', is_error: false, items: 3, remote_calls: 1, reason_codes: [] }));
+    write(codex, 'jev-1', jev('j1', 'codex-session-a', ago(1_800_000), 'http_401', 401));
+    write(codex, 'jev-2', jev('j2', 'codex-session-b', ago(300_000), 'http_401', 401));
+    write(claude, 'rt-mismatch', router('t1', 'claude-session-1', ago(7_200_000), 'mismatch', 'claude-sonnet-5'));
+    write(claude, 'rt-unobserved', router('t2', 'claude-session-2', ago(600_000), 'unobserved', null));
+    const local = await startDashboard(dashboardSources({ HOME: home, XDG_CONFIG_HOME: join(home, '.config'), XDG_STATE_HOME: join(home, '.local/state'), JEV_GATE_TRACE_DIR: claude, JEV_CODEX_TRACE_DIR: codex }), 0);
+    type Snap = { operations: { attention: number; runs: Array<{ id: string; host: string; state: string; steps: Array<{ cause?: string; impact?: { now: string } }> }> } };
+    const label: Record<string, string> = { attention: '확인 필요', past_error: '지난 오류', done: '완료', unconfirmed: '결과 미관측' };
+    const snap = async () => await (await fetch(new URL('/api/snapshot', local.url))).json() as Snap;
+    const runOf = (s: Snap, cause: string, now: string) => s.operations.runs.find(r => r.steps.some(x => x.cause === cause && x.impact?.now === now))!.id;
+    // The server snapshot, the frame the page holds from the live stream and what it shows must say the same thing.
+    const agree = async (p: Page, host: 'all' | 'claude' | 'codex' = 'all') => {
+      const s = await snap(), held = JSON.parse(await p.evaluate('JSON.stringify(data.operations.runs.map(r=>[r.id,r.state]))')) as Array<[string, string]>;
+      expect(held).toEqual(s.operations.runs.map(r => [r.id, r.state]));
+      const runs = s.operations.runs.filter(r => host === 'all' || r.host === host), count = (state: string) => String(runs.filter(r => r.state === state).length);
+      if (host === 'all') expect(String(s.operations.attention)).toBe(count('attention'));
+      expect(await p.locator('#k-att').textContent()).toBe(count('attention'));
+      expect(await p.locator('#state-filters [data-state=attention] em').textContent()).toBe(count('attention'));
+      expect(await p.locator('#state-filters [data-state=past_error] em').textContent()).toBe(count('past_error'));
+      await p.locator('#state-filters [data-state=all]').click();
+      for (const r of runs) expect(await p.locator(`#runs [data-run="${r.id}"] .c-st`).textContent()).toBe(label[r.state]);
+      return s;
+    };
+    try {
+      const p = await page();await p.goto(local.url);await p.waitForFunction(() => document.querySelectorAll('#runs .row').length === 6);
+      let s = await agree(p);
+      expect(await p.locator('#k-att').textContent()).toBe('3');
+      const diag = await p.locator('#k-diag').textContent();expect(diag).toContain('Jev 판정 오류 2건');expect(diag).toContain('실제 응답 모델 불일치 1건');expect(diag).not.toContain('Evidence');
+      await p.locator('[data-host=codex]').click();await agree(p, 'codex');await p.locator('[data-host=claude]').click();await agree(p, 'claude');await p.locator('[data-host=all]').click();
+      const outage = runOf(s, 'http_401', 'unknown'), refused = runOf(s, 'invalid_input', 'request_only');
+      await p.locator('[data-state=attention]').click();await p.locator(`#runs [data-run="${outage}"]`).click();
+      const detail = () => p.locator('#trace .sd:not([hidden])').textContent();
+      for (const fact of ['원인http_401', '현재 영향현재 영향 미확인', '호스트Codex', '세션codex-session-b', '마지막 관측']) expect(await detail()).toContain(fact);
+      expect(await problems(p)).toEqual([]);
+      await p.locator('.stats').screenshot({ path: join(output, '223-1440-dark-ko-top.png') });await p.locator('#run-detail').screenshot({ path: join(output, '223-1440-dark-ko-detail-current.png') });
+      await p.locator('[data-state=past_error]').click();await p.locator(`#runs [data-run="${refused}"]`).click();
+      for (const fact of ['상태오류', '원인invalid_input · 요청 인자·범위 오류', '현재 영향이 요청만 실패 · 서비스 장애 아님', '세션codex-old-session']) expect(await detail()).toContain(fact);
+      await p.locator('#run-detail').screenshot({ path: join(output, '223-1440-dark-ko-detail-past.png') });
+      // A later success of the same Jev call on the same host arrives on the open stream; both outage records become past errors.
+      await p.locator('[data-state=attention]').click();await p.locator(`#runs [data-run="${outage}"]`).click();
+      write(codex, 'jev-3', jev('j3', 'codex-session-c', ago(0), 'ok', 200));
+      await p.waitForFunction(() => document.getElementById('k-att')?.textContent === '1');
+      s = await agree(p);
+      expect(s.operations.runs.find(r => r.id === outage)).toMatchObject({ state: 'past_error', steps: [{ cause: 'http_401', impact: { now: 'later_ok' } }] });
+      expect(await p.locator('#k-diag').textContent()).toBe('실제 응답 모델 불일치 1건');
+      await p.locator('[data-state=past_error]').click();expect(await p.locator('#runs .row').count()).toBe(3);await p.locator(`#runs [data-run="${outage}"]`).click();
+      expect(await detail()).toContain('현재 영향이후 같은 작업 정상 기록');expect(await detail()).toContain('상태오류');
+      await p.locator('[data-host=codex]').click();expect(await p.locator('#k-diag').textContent()).toBe('지난 오류 3건');await agree(p, 'codex');
+      await p.locator('#language').click();expect(await p.locator('#k-diag').textContent()).toBe('3 past errors');await p.locator('#language').click();await p.close();
+      const phone = await browser.newPage({ viewport: { width: 390, height: 844 } });phone.on('pageerror', e => errors.push(e.message));await phone.goto(local.url);
+      await phone.waitForFunction(() => document.querySelectorAll('#runs .row').length === 7);await agree(phone);expect(await problems(phone)).toEqual([]);
+      await phone.locator('.stats').screenshot({ path: join(output, '223-390-top.png') });
+      await phone.locator('[data-state=attention]').click();await phone.locator('#run-detail').screenshot({ path: join(output, '223-390-detail-current.png') });
+      await phone.locator('[data-state=past_error]').click();await phone.locator(`#runs [data-run="${refused}"]`).click();await phone.locator('#run-detail').screenshot({ path: join(output, '223-390-detail-past.png') });
+      await phone.close();
+    } finally { await local.close(); rmSync(home, { recursive: true, force: true }); }
+  }, 60_000);
+
+  it('keeps refused worker contracts refused from real Claude and Codex trace files through a later host end, and shows a later accept separately (#232)', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'jev-dashboard-232-')), claude = join(home, 'claude-traces'), codex = join(home, 'codex-traces');
+    mkdirSync(claude); mkdirSync(codex);
+    const write = (dir: string, name: string, value: object) => writeFileSync(join(dir, `${name}.json`), JSON.stringify(value));
+    const unobserved = refusalReason({ transcript: 'read', contradicted: [], unobserved: ['#1'], stale: [] })!;
+    const blocked = reportedSingleVerdict({ status: 'blocked', summary: 'worker reply text', changed_files: [], interfaces: [], checks: [{ check_id: 'npm test', result: 'fail', note: 'reply note' }], blockers: [] }).reason!;
+    // The two reported receipts in the v0.8.18 shape: Claude hook rows carry no host, Codex rows do.
+    const post = (own: object, written_at: string, model: string, verdict: string, verdict_reason: string | null, checks: object, verification: object | null) => ({ ...own, phase: 'post', prompt_id: 'p', tool_use_id: `${model}-call`, invocation_id: `${model}-${written_at}`, written_at,
+      task_id: 'single', rev: 0, attempt: 1, verdict, verdict_reason, reported_checks: checks, ready_task_ids: [], plan_complete: false, evidence_format_only: false, root_fallback: false,
+      subagent_type: 'jev-gate:worker', requested_model: model, resolved_model: `claude-${model}-5`, tool_response: { status: 'completed', agentId: `${model}-agent` }, root_effort: null, ...(verification ? { verification } : {}), advisory: null });
+    const c = { session_id: 'claude-232', mode: 'auto', version: '0.8.18' }, x = { host: 'codex', session_id: 'codex-232', mode: 'auto', version: '0.8.18' };
+    write(claude, 'post', post(c, ago(240_000), 'sonnet', 'incomplete', unobserved, { pass: 1, fail: 0, not_run: 0 }, { transcript: 'read', contradicted: [], unobserved: ['#1'], stale: [] }));
+    write(claude, 'terminal', { ...c, phase: 'background_terminal', prompt_id: 'q', execution_prompt_id: 'p', tool_use_id: 'sonnet-call', invocation_id: 'c-terminal', written_at: ago(200_000), status: 'completed', task_id: 'single' });
+    write(claude, 'delivery', { ...c, phase: 'background_policy_delivery', prompt_id: 'q', execution_prompt_id: 'p', invocation_id: 'c-delivery', written_at: ago(190_000), reason: 'policy_delivered_no_active_execution', admission_blocked: false });
+    write(codex, 'post', post(x, ago(180_000), 'haiku', 'incomplete', blocked, { pass: 0, fail: 1, not_run: 0 }, null));
+    write(codex, 'terminal', { ...x, phase: 'background_terminal', prompt_id: 'p', tool_use_id: 'haiku-call', invocation_id: 'x-terminal', written_at: ago(170_000), status: 'completed', agent_id: 'haiku-agent' });
+    write(codex, 'stop', { ...x, phase: 'codex_event', event: 'SubagentStop', agent_id: 'haiku-agent', agent_type: 'jev-gate:worker', invocation_id: 'x-stop', written_at: ago(169_000) });
+    const local = await startDashboard(dashboardSources({ HOME: home, XDG_CONFIG_HOME: join(home, '.config'), XDG_STATE_HOME: join(home, '.local/state'), JEV_GATE_TRACE_DIR: claude, JEV_CODEX_TRACE_DIR: codex }), 0);
+    type Snap = { operations: { attention: number; runs: Array<{ id: string; host: string; state: string; steps: Array<{ id: string; outcome?: string; cause?: string; details?: string[]; impact?: { now: string } }> }> } };
+    const snap = async () => await (await fetch(new URL('/api/snapshot', local.url))).json() as Snap;
+    try {
+      let s = await snap();
+      const refused = (cause: string) => s.operations.runs.find(r => r.steps.some(x => x.outcome === 'rejected' && x.cause === cause))!;
+      expect(s.operations.attention).toBe(2); expect(refused('check_unobserved')).toMatchObject({ host: 'claude', state: 'attention' }); expect(refused('worker_blocked')).toMatchObject({ host: 'codex', state: 'attention' });
+      // Frames omit step details; the full step comes from /api/step when a detail opens.
+      const details = async (cause: string) => { const r = refused(cause), x = r.steps.find(y => y.outcome === 'rejected')!;
+        return (await (await fetch(new URL(`/api/step?run=${encodeURIComponent(r.id)}&step=${encodeURIComponent(x.id)}`, local.url))).json() as { details: string[] }).details; };
+      expect(await details('check_unobserved')).toContain('실행 기록 read · 미관측 #1');
+      expect(await details('worker_blocked')).toContain('worker 보고 pass 0 · fail 1 · 미실행 0');
+      expect(s.operations.runs.flatMap(r => r.steps).filter(x => x.outcome === 'host_ended')).toHaveLength(3);
+      for (const secret of [unobserved, blocked, 'worker reply text', 'reply note', 'npm test']) expect(JSON.stringify(s)).not.toContain(secret);
+      const p = await page();await p.goto(local.url);await p.waitForFunction(() => document.getElementById('k-att')?.textContent === '2');
+      expect(await p.locator('#k-diag').textContent()).toBe('워커 계약 미충족 2건');
+      for (const r of [refused('check_unobserved'), refused('worker_blocked')]) expect(await p.locator(`#runs [data-run="${r.id}"] .c-st`).textContent()).toBe('확인 필요');
+      const id = refused('check_unobserved').id, marks = () => p.locator('#trace .sx-r').allTextContents(), detail = () => p.locator('#trace .sd:not([hidden])').textContent();
+      await p.locator(`#runs [data-run="${id}"]`).click();
+      // The host end shows as its own row, never as acceptance; the policy delivery after it stays a lifecycle record.
+      expect(await marks()).toEqual(['계약 미충족', '호스트 종료']);
+      await p.waitForFunction(() => document.querySelector('#trace .sd:not([hidden])')?.textContent?.includes('미관측 #1'));
+      for (const fact of ['single · 계약 미충족 · incomplete · 통과 보고 검사의 실행 미관측', '실행 기록 read · 미관측 #1', '원인check_unobserved', '현재 영향현재 영향 미확인', '세션claude-232']) expect(await detail()).toContain(fact);
+      expect(await problems(p)).toEqual([]);
+      await p.locator('#run-detail').screenshot({ path: join(output, '232-1440-dark-ko-detail-rejected.png') });
+      await p.locator(`#runs [data-run="${refused('worker_blocked').id}"]`).click();
+      expect(await detail()).toContain('single · 계약 미충족 · incomplete · 워커가 차단·재계획 보고');
+      await p.locator('#run-detail').screenshot({ path: join(output, '232-1440-dark-ko-detail-blocked.png') });
+      // A genuine retry of the same task is accepted later on the open stream: it is its own record, and the refusal stays as it was.
+      write(claude, 'retry', post(c, ago(0), 'sonnet', 'accept', null, { pass: 1, fail: 0, not_run: 0 }, { transcript: 'read', contradicted: [], unobserved: [], stale: [] }));
+      await p.waitForFunction(() => document.getElementById('k-att')?.textContent === '1');
+      s = await snap();
+      const retried = s.operations.runs.find(r => r.id === id)!;
+      expect(retried.state).toBe('past_error'); expect(retried.steps.filter(x => x.outcome === 'rejected' || x.outcome === 'accepted').map(x => [x.outcome, x.impact?.now ?? null])).toEqual([['rejected', 'later_ok'], ['accepted', null]]);
+      await p.locator('[data-state=past_error]').click();await p.locator(`#runs [data-run="${id}"]`).click();
+      expect(await p.locator(`#runs [data-run="${id}"] .c-st`).textContent()).toBe('지난 오류');
+      expect(await marks()).toEqual(expect.arrayContaining(['계약 미충족', '계약 수락'])); expect(await detail()).toContain('현재 영향이후 같은 작업 정상 기록');
+      await p.locator('#run-detail').screenshot({ path: join(output, '232-1440-dark-ko-detail-retried.png') });
+      await p.locator('#language').click();expect(await marks()).toEqual(expect.arrayContaining(['Contract not met', 'Contract accepted']));
+      expect(await detail()).toContain('Reported pass not seen in the worker transcript');await p.locator('#language').click();
+      await p.close();
+    } finally { await local.close(); rmSync(home, { recursive: true, force: true }); }
+  }, 60_000);
 
   it('labels request effort discrepancies precisely in the header and the stage detail', async () => {
     push([run('effort', 'codex', [step('old', 'router', { at: ago(7_200_000), lane: 'host', state: 'error', issue: 'request_effort', summary: '선택 high · 전송 xhigh' }), step('recent', 'router', { lane: 'host' })], { state: 'attention' })]);

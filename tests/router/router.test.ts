@@ -146,7 +146,7 @@ describe('root effort', () => {
     expect(req?.questions['effort_0']).toMatchObject({ type: 'score', criteria: expect.arrayContaining([expect.stringContaining('Light reasoning'), expect.stringContaining('Maximum sustained')]) });
 
     const root = f.logs.find((l) => l['event'] === 'root');
-    expect(root).toMatchObject({ assessment: 'ok', sent: true, patch: { effort: 'low' }, reasons: { effort: 'selected', model: 'not_asked' } });
+    expect(root).toMatchObject({ assessment: 'ok', sent: true, jev_model: JEV_MODEL, patch: { effort: 'low' }, reasons: { effort: 'selected', model: 'not_asked' } });
     // The receipt: what the move was read from.
     expect(root?.['answers']).toMatchObject({ control: { choice: 'task_clear', probabilities: { task_clear: .97 } }, action_risk: { probabilities: { ordinary: .97 } } });
     expect((root?.['answers'] as { effort_0: { probabilities: Record<string, number> } }).effort_0.probabilities['0']).toBe(.95);
@@ -2125,18 +2125,69 @@ describe('bounded child history question feasibility (#140)', () => {
 
 
 describe('native spawn outcome observability', () => {
-  it.each(['pinned', 'fork', 'custom', 'denied', 'mismatch'])('records %s without changing the input or spawning twice', async scenario => {
-    const router = createRouter(configOf({ ...SPAWN_ONLY, routeExplicitSpawnModel: false, routeSubagentEffort: false }));
+  const NATIVE = { ...SPAWN_ONLY, routeExplicitSpawnModel: false, routeSubagentEffort: false };
+  const nativeRecord = async (e: SpawnEvent, observed: string, over: { pins?: Record<string, boolean>; offer?: string; cfg?: Partial<typeof NATIVE> } = {}) => {
+    const router = createRouter(configOf({ ...NATIVE, ...over.cfg }));
+    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['standard', 0.95] }), ...(over.pins ? { pins: over.pins } : {}) }); router.agentOffer(OFFER_BUILT_IN(over.offer ?? 'general-purpose'));
+    const n = spawnNext(() => ({ model: observed, agentId: 'child' }));
+    await router.agentSpawn(f.engine, e, n.next);
+    expect(n.calls).toEqual([e]);
+    return f.logs.find(r => r.event === 'spawn_native_result');
+  };
+
+  it('records a denial without changing the input or spawning twice', async () => {
+    const router = createRouter(configOf(NATIVE));
     const f = fakeEngine(); router.agentOffer(OFFER_BUILT_IN('general-purpose'));
-    const e = spawn(scenario === 'custom' ? { subagentType: 'custom-worker', provider: { plugin: 'user', tier: 'local' } } : scenario === 'fork' ? { fork: true } : { model: 'claude-opus-5-5' });
-    const outcome: SpawnOutcome = scenario === 'denied' ? { deny: 'native refusal' } : { model: scenario === 'mismatch' ? 'claude-sonnet-5-5' : 'claude-opus-5-5', agentId: 'child' };
+    const e = spawn({ model: 'claude-opus-5-5' }); const outcome: SpawnOutcome = { deny: 'native refusal' };
     const n = spawnNext(() => outcome);
     expect(await router.agentSpawn(f.engine, e, n.next)).toBe(outcome);
     expect(n.calls).toEqual([e]); expect(f.sent).toHaveLength(0);
-    const record = f.logs.find(r => r.event === 'spawn_native_result');
-    expect(record).toBeDefined();
-    if (scenario === 'denied') expect(record).toMatchObject({ denied: true });
-    else expect(record).toMatchObject({ observed: outcome.model, agent_id: 'child', requested: null, confirmation: 'unobserved' });
+    expect(f.logs.find(r => r.event === 'spawn_native_result')).toMatchObject({ denied: true });
+  });
+
+  it('confirms an explicit model, alias or id, against what the host ran', async () => {
+    expect(await nativeRecord(spawn({ model: 'claude-opus-5-5' }), 'claude-opus-5-5')).toMatchObject({ requested: 'claude-opus-5-5', confirmation: 'confirmed' });
+    expect(await nativeRecord(spawn({ model: 'sonnet' }), 'claude-sonnet-5-5')).toMatchObject({ confirmation: 'confirmed' });
+  });
+
+  it('flags a real mismatch of an explicit model', async () => {
+    expect(await nativeRecord(spawn({ model: 'claude-opus-5-5' }), 'claude-sonnet-5-5')).toMatchObject({ requested: 'claude-opus-5-5', observed: 'claude-sonnet-5-5', confirmation: 'mismatch' });
+  });
+
+  it('expects the parent for an inheriting built-in and for a fork', async () => {
+    expect(await nativeRecord(spawn({ subagentType: 'Plan' }), 'claude-opus-5-5', { offer: 'Plan', cfg: { routeSubagentModel: false, routeSubagentEffort: true } })).toMatchObject({ requested: 'claude-opus-5-5', confirmation: 'confirmed' });
+    expect(await nativeRecord(spawn({ subagentType: 'Plan' }), 'claude-sonnet-5-5', { offer: 'Plan', cfg: { routeSubagentModel: false, routeSubagentEffort: true } })).toMatchObject({ requested: 'claude-opus-5-5', confirmation: 'mismatch' });
+    expect(await nativeRecord(spawn({ fork: true }), 'claude-opus-5-5')).toMatchObject({ requested: 'claude-opus-5-5', confirmation: 'confirmed' });
+  });
+
+  it('does not read the parent as the request of an agent whose profile model is not known (#224)', async () => {
+    // A sonnet-profile agent under an opus parent with no model argument: the host ran its own profile's model.
+    const e = spawn({ subagentType: 'tester', provider: { plugin: 'user', tier: 'local' } });
+    for (const cfg of [{}, { routeSubagentEffort: true }]) {
+      const record = await nativeRecord(e, 'claude-sonnet-5-5', { cfg });
+      expect(record).toMatchObject({ requested: null, observed: 'claude-sonnet-5-5', confirmation: 'unobserved' });
+      expect(record).not.toHaveProperty('reason');
+    }
+  });
+
+  it('leaves a model pin unconfirmed whatever the call named', async () => {
+    expect(await nativeRecord(spawn({ model: 'claude-opus-5-5' }), 'claude-haiku-5-5', { pins: { subagentModel: true } })).toMatchObject({ requested: null, confirmation: 'unobserved' });
+  });
+
+  it('never holds the spawn result on a stalled pin read behind a mismatch', async () => {
+    const router = createRouter(configOf(NATIVE));
+    const f = fakeEngine(); f.engine.pins = () => new Promise(() => {}); router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    const run = router.agentSpawn(f.engine, spawn({ model: 'claude-opus-5-5' }), spawnNext(() => ({ model: 'claude-sonnet-5-5' })).next);
+    await settle(); f.expire(); await run;
+    expect(f.logs.find(r => r.event === 'spawn_native_result')).toMatchObject({ requested: null, observed: 'claude-sonnet-5-5', confirmation: 'unobserved' });
+  });
+
+  it('records a Router patch as a spawn result against the patched model, not as a native one', async () => {
+    const router = createRouter(configOf(SPAWN_ONLY));
+    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['fast', 0.95] }) }); router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    await router.agentSpawn(f.engine, spawn(), spawnNext(() => ({ model: 'claude-sonnet-5-5' })).next);
+    expect(f.logs.some(r => r.event === 'spawn_native_result')).toBe(false);
+    expect(f.logs.find(r => r.event === 'spawn_result')).toMatchObject({ requested: 'claude-haiku-5-5', observed: 'claude-sonnet-5-5', reason: 'model_mismatch' });
   });
 });
 

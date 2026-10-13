@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { buildDigest, assemble } from '../../mods/compact/hooks/digest.ts';
 import { compactCandidates, createCompactSelector } from '../../mods/compact/hooks/selection.ts';
+import { JEV_MODEL } from '../../mods/router/hooks/client.ts';
 import { dependencyConversation, dependencyFact, dependencyReply } from '../fixtures/compact-dependencies.ts';
 import type { Transport } from '../../mods/router/hooks/client.ts';
 const sleep: Transport['sleep'] = (ms, signal) => new Promise((resolve, reject) => {
@@ -17,7 +18,7 @@ describe('bounded current-task compaction dependency selection', () => {
   it('recovers an aged dependency at the same budget while preserving user text, tail and pairing', async () => {
     const s = setup(); expect(s.baseline.digest).not.toContain(dependencyFact);
     const result = await createCompactSelector(1000)(s.messages, s.baseline, 'key', s.transport);
-    expect(result).toMatchObject({ sent: true, reason: 'current_dependencies', priorities: [{ message: 5, tool: 0 }], usage: { input_tokens: 10, output_tokens: 2 } });
+    expect(result).toMatchObject({ sent: true, model: JEV_MODEL, reason: 'current_dependencies', priorities: [{ message: 5, tool: 0 }], usage: { input_tokens: 10, output_tokens: 2 } });
     expect(result.candidates).toBeLessThanOrEqual(16); expect(result.available).toBeGreaterThanOrEqual(result.candidates);
     const enhanced = buildDigest(s.messages, { budgetChars: 8000, priorityResults: result.priorities });
     expect(enhanced.ok).toBe(true); if (!enhanced.ok) return;
@@ -42,6 +43,8 @@ describe('bounded current-task compaction dependency selection', () => {
     });
     const result = await createCompactSelector(10)(s.messages, s.baseline, key, { fetch, sleep }, controller.signal);
     expect(result.priorities).toEqual([]); expect(result.reason).toBe(reason);
+    // Only a response the client accepted names the Jev model that priced it.
+    expect(result.model).toBe(reason === 'invalid_answers' ? JEV_MODEL : null);
     expect(fetch.mock.calls.length).toBeLessThanOrEqual(1);
   });
   it('withholds full secret-bearing and interrupted evidence before excerpting', () => {

@@ -9,6 +9,8 @@ export interface CompactSelection {
   priorities: Array<{ message: number; tool: number }>;
   reason: string;
   sent: boolean;
+  /** The Jev model of a response the client accepted; the client rejects any other. */
+  model: string | null;
   candidates: number;
   available: number | null;
   durationMs: number;
@@ -48,7 +50,7 @@ export const createCompactSelector = (timeoutMs: number): ((messages: readonly D
   let credential: string | undefined;
   return async (messages, baseline, key, transport, signal) => {
     const started = Date.now();
-    const result: CompactSelection = { priorities: [], reason: 'no_candidates', sent: false, candidates: 0, available: null, durationMs: 0, usage: null };
+    const result: CompactSelection = { priorities: [], reason: 'no_candidates', sent: false, model: null, candidates: 0, available: null, durationMs: 0, usage: null };
     if (!key) return { ...result, reason: 'no_key' };
     if (credential !== key) { client = createClient({ timeoutMs }); credential = key; }
     const input = compactCandidates(messages, baseline);
@@ -68,6 +70,7 @@ export const createCompactSelector = (timeoutMs: number): ((messages: readonly D
     result.durationMs = Math.max(0, Date.now() - started); result.usage = outcome.usage;
     if (signal?.aborted) return { ...result, reason: 'aborted' };
     if (!outcome.ok) return { ...result, reason: outcome.reason, sent: outcome.sent };
+    result.model = JEV_MODEL;
     const raw = outcome.answers;
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { ...result, reason: 'invalid_answers' };
     if (Object.keys(raw).length !== candidates.length) return { ...result, reason: 'invalid_answers' };

@@ -1,7 +1,9 @@
 import { Window, type HTMLElement, type SVGElement } from 'happy-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { ActivitySnapshot } from '../src/activity.js';
 import { DASHBOARD_PAGE } from '../src/dashboard-page.js';
-import type { OperationRun, OperationStep, OperationsView } from '../src/operations.js';
+import { diffFrame, type FrameMemo } from '../src/dashboard-patch.js';
+import { buildOperations, type OperationRun, type OperationStep, type OperationsView } from '../src/operations.js';
 
 const windows: Window[] = [];
 afterEach(async () => { for (const w of windows.splice(0)) await w.happyDOM.close(); });
@@ -12,22 +14,23 @@ const snapshot = (runs: OperationRun[]) => {
   const all = runs.flatMap(r => r.steps.map(s => ({ ...s, host: r.host, runId: r.id, runTitle: r.title })));
   const ids = ['admission', 'allocation', 'planning', 'workers', 'guard', 'router', 'compact', 'evidence'] as const;
   const values = all.filter(s => s.lane === 'jev' && s.durationMs !== undefined).map(s => ({ at: s.at, ms: s.durationMs! }));
+  // The frame key replaced the operations signature; Omit keeps this fixture valid with or without the field.
   const operations: OperationsView = { runs, feed: all.slice().reverse(), active: 0, attention: 0, requests: values.length,
     features: ids.map(id => ({ id, label: id, source: 'trace', count: all.filter(s => !s.lifecycle && s.feature === id).length, lastAt: all.some(s => !s.lifecycle && s.feature === id) ? stamp : null, state: all.some(s => !s.lifecycle && s.feature === id) ? 'observed' : 'waiting' })),
-    latency: { measured: values.length, p50: values[0]?.ms ?? null, p95: values.at(-1)?.ms ?? null, fastest: values[0]?.ms ?? null, latest: values.at(-1)?.ms ?? null, recent: values, today: {} }, sig: 'fixture' };
+    latency: { measured: values.length, p50: values[0]?.ms ?? null, p95: values.at(-1)?.ms ?? null, fastest: values[0]?.ms ?? null, latest: values.at(-1)?.ms ?? null, recent: values, today: {} } };
   return { at: stamp, host: 'mixed', operations, unreadable: 0, version: { running: '0.8.1', installed: '0.8.1' }, recording: { enabled: true }, dashboard: { enabled: true } };
 };
 function page() {
   // Evaluate only the checked-in dashboard asset in this disposable DOM.
   const w = new Window({ url: 'http://127.0.0.1:4733/', settings: { enableJavaScriptEvaluation: true, suppressInsecureJavaScriptEnvironmentWarning: true } }); windows.push(w);
-  let stream: { onmessage?: (e: { data: string }) => void; onopen?: () => void; onerror?: () => void };
-  class Stream { constructor() { stream = this; } }
+  let stream: { onmessage?: (e: { data: string }) => void; onopen?: () => void; onerror?: () => void; patch?: (e: { data: string }) => void }, opened = 0;
+  class Stream { patch?: (e: { data: string }) => void; constructor() { stream = this; opened++; } addEventListener(type: string, f: (e: { data: string }) => void) { if (type === 'patch') this.patch = f; } close() {} }
   Object.assign(w, { EventSource: Stream });
   const [html, tail] = DASHBOARD_PAGE.split('<script>');
   w.document.write(html! + '</body></html>'); w.eval(tail!.split('</script>')[0]!);
   const get = (id: string) => w.document.getElementById(id)! as HTMLElement;
   const click = (selector: string) => { const e = w.document.querySelector(selector); if (!e) throw Error('Missing selector: ' + selector); (e as unknown as { click(): void }).click(); };
-  return { w, get, click, disconnect: () => stream!.onerror!(), push: (s: unknown) => stream!.onmessage!({ data: JSON.stringify(s) }) };
+  return { w, get, click, disconnect: () => stream!.onerror!(), push: (s: unknown) => stream!.onmessage!({ data: JSON.stringify(s) }), patch: (m: unknown) => stream!.patch!({ data: JSON.stringify(m) }), streams: () => opened };
 }
 
 const text = (p: ReturnType<typeof page>, id: string) => p.get(id).textContent ?? '';
@@ -138,6 +141,12 @@ describe('dashboard live interactions', () => {
     const all = ['runs', 'trace', 'rd-meta', 'circuit-inspector', 'rc', 'pipeline'].map(id => text(p, id)).join(' ');
     expect(all).not.toMatch(/[가-힣]/); expect(all).toContain('Selected and observed models match');
     expect(all).toContain('Decision evidence'); expect(all).toContain('gpt-6.1-sol');
+  });
+  it.each([['실행 전 점검 충돌', 'Preflight conflict'], ['실행 예약 기록 불가', 'Reservation unavailable'], ['Codex 워커 시작 거부', 'Codex worker start rejected'], ['Codex 워커 턴 실패', 'Codex worker turn failed'], ['워커 중단', 'Worker interrupted'], ['워커 종료 미확인 · 예약 유지', 'Worker termination unconfirmed · reservation kept']])('translates the Codex dispatch failure reason %s (#233)', (ko, en) => {
+    const p = page(); p.push(snapshot([run('failed', 'codex', [step('f', 'workers', 'host', { title: '호스트 호출 실패', state: 'error', summary: `${ko} · jev-gate:worker`, details: ['워커 미실행 · 완료 주장 없음'] })], { title: 'Codex 실행' })]));
+    p.click('#language'); p.click('.node[data-feature=workers]');
+    const all = ['trace', 'circuit-inspector'].map(id => text(p, id)).join(' ');
+    expect(all).not.toMatch(/[가-힣]/); expect(all).toContain(`${en} · jev-gate:worker`); expect(all).toContain('Worker not started · no completion claimed');
   });
   it('renders metadata as text and supports attention filtering and inspector drill-down', () => {
     const p = page(); const hostile = '<img src=x onerror="alert(1)">';
@@ -272,9 +281,25 @@ it('preserves setting-save failures through incoming snapshots', async () => {
   p.push(value);expect(p.get('notice').textContent).toContain('설정을 저장하지 못했습니다');
 });
 
-it('shows a ten-thousand-step execution in a bounded timeline with one record list', () => {
+it('shows a ten-thousand-step execution in a bounded timeline with one record list, drawn in the task after its frame', async () => {
   const p = page(), steps = Array.from({ length: 10001 }, (_, i) => step('cycle' + i, 'router', 'host', { summary: 'cycle ' + i })); p.push(snapshot([run('large', 'codex', steps)]));
-  expect(p.get('trace').children).toHaveLength(100); expect(p.get('trace').querySelectorAll('[aria-expanded="true"]')).toHaveLength(1);
+  expect(p.get('trace').children).toHaveLength(0);
+  await vi.waitFor(() => expect(p.get('trace').children).toHaveLength(100)); expect(p.get('trace').querySelectorAll('[aria-expanded="true"]')).toHaveLength(1);
+  // A patch that arrives before that draw applies to the frame it follows and is drawn; the frame is not drawn over it later.
+  const next = frames(), q = page(), large = run('large', 'codex', steps), streams = q.streams();
+  q.push(next(snapshot([large]))); q.patch(next(snapshot([large, run('small', 'claude', [step('g', 'guard', 'policy')])])));
+  expect(rows(q)).toHaveLength(2);
+  await new Promise(resolve => setTimeout(resolve, 50));
+  expect(rows(q)).toHaveLength(2); expect(q.streams()).toBe(streams);
+});
+
+it('fills the first rows of a long list at once and the rest in later tasks, counting all of them', async () => {
+  const p = page(), many = Array.from({ length: 45 }, (_, i) => run('run' + i, 'claude', [step('a' + i, 'admission', 'jev', { durationMs: 60 })]));
+  p.push(snapshot(many));
+  const shown = () => [...rows(p)].map(b => b.textContent);
+  expect(shown()).toHaveLength(45); expect(shown().filter(Boolean)).toHaveLength(20);
+  expect(p.w.document.querySelector('#state-filters [data-state="all"] em')!.textContent).toBe('45'); expect(text(p, 'run-count')).toContain('45');
+  await vi.waitFor(() => expect(shown().every(Boolean)).toBe(true));
 });
 
 it('draws one strip tick per record of the last minute, caps a burst of trips and shows no per-minute rate', () => {
@@ -293,4 +318,137 @@ it('draws one strip tick per record of the last minute, caps a burst of trips an
 
 it('marks selection with a tint or a border colour only, never an inset or left accent bar', () => {
   expect(DASHBOARD_PAGE).not.toMatch(/inset\s+\d+px\s+0\s+0[^;}]*accent|border-left:[^;}]*accent/);
+});
+
+// The server's own diff: the first snapshot is a whole frame with its key, each later one a patch against the last key.
+const frames = () => {
+  let memo: FrameMemo | null = null, n = 0;
+  return (s: ReturnType<typeof snapshot>) => {
+    const base = memo?.key, r = diffFrame(memo, s as unknown as ActivitySnapshot, () => 'f' + ++n); memo = r.memo;
+    return base === undefined ? { ...s, frame: memo.key } : { base, frame: memo.key, p: r.patch ? JSON.parse(r.patch) : undefined };
+  };
+};
+
+it('applies live patches to the frame it holds, to the pending frame while paused, and reconnects on a gap', async () => {
+  const next = frames(), a = step('a', 'admission', 'jev', { durationMs: 60 }), other = run('other', 'codex', [step('g', 'guard', 'policy')]);
+  const p = page(); p.push(next(snapshot([run('one', 'claude', [a]), other])));
+  p.patch(next(snapshot([run('one', 'claude', [a, step('b', 'allocation', 'jev', { durationMs: 80, at: new Date().toISOString() })]), other])));
+  await vi.waitFor(() => expect(filled(p)).toHaveLength(2), { timeout: 5000 });
+  expect(node(p, 'allocation').querySelector('.dec b')!.textContent).not.toBe('–'); expect(filled(p)[0]!.textContent).toContain('80ms');
+  p.click('#pause');
+  p.patch(next(snapshot([run('one', 'claude', [a, step('b', 'allocation', 'jev', { durationMs: 80 }), step('c', 'router', 'jev', { durationMs: 90, at: new Date().toISOString() })]), other])));
+  expect(filled(p)).toHaveLength(2);
+  p.click('#pause'); await vi.waitFor(() => expect(filled(p)).toHaveLength(3), { timeout: 5000 }); expect(filled(p)[0]!.textContent).toContain('90ms');
+  const streams = p.streams(); p.patch({ base: 'stale', frame: 'f99', p: { order: [] } });
+  expect(p.streams()).toBe(streams + 1); expect(rows(p)).toHaveLength(2);
+});
+
+it('keeps the row of an unchanged run as the same element when a patch changes another run', () => {
+  const next = frames(), other = run('other', 'codex', [step('g', 'guard', 'policy')]);
+  const p = page(); p.push(next(snapshot([run('one', 'claude', [step('a', 'admission', 'jev', { durationMs: 60 })]), other])));
+  const kept = p.get('runs').querySelector('[data-run="other"] .c-st'), changed = p.get('runs').querySelector('[data-run="one"] .c-st');
+  p.patch(next(snapshot([run('one', 'claude', [step('a', 'admission', 'jev', { durationMs: 60 }), step('b', 'allocation', 'jev', { durationMs: 80 })], { state: 'active' }), other])));
+  expect(p.get('runs').querySelector('[data-run="other"] .c-st')).toBe(kept);
+  expect(p.get('runs').querySelector('[data-run="one"] .c-st')).not.toBe(changed); expect(p.get('runs').querySelector('[data-run="one"]')!.textContent).toContain('진행 중');
+});
+
+it('counts an active step live from its recorded start', async () => {
+  const started = new Date(Date.now() - 5000).toISOString(), p = page();
+  p.push(snapshot([run('r', 'claude', [step('m', 'router', 'host', { state: 'active', at: started, startedAt: started })], { state: 'active', firstAt: started })]));
+  const du = () => p.get('trace').querySelector('[data-step="m"] .du2')!.textContent!;
+  expect(du()).toMatch(/^5\.\ds$/); expect(opened(p)).toMatch(/기록 사이 경과5\.\ds/);
+  await new Promise(r => setTimeout(r, 1100));
+  expect(Number.parseFloat(du())).toBeGreaterThanOrEqual(6); expect(opened(p)).toMatch(/기록 사이 경과[6-9]\.\ds/);
+});
+
+it('grows the bar of a running stage on the same tick as its duration', async () => {
+  const now = Date.now(), started = new Date(now - 2000).toISOString(), p = page();
+  p.push(snapshot([run('r', 'claude', [step('d', 'router', 'host', { at: new Date(now - 10_000).toISOString(), durationMs: 1000 }), step('m', 'router', 'host', { state: 'active', at: started, startedAt: started })], { state: 'active' })]));
+  const width = (id: string) => Number.parseFloat((p.get('trace').querySelector(`[data-step="${id}"] .bar i`) as HTMLElement).style.width);
+  const running = width('m'), settled = width('d');
+  await vi.waitFor(() => expect(width('m')).toBeGreaterThan(running + 1), { timeout: 3000 });
+  // The span grows with it, so the settled stage takes a smaller share.
+  expect(width('d')).toBeLessThan(settled);
+});
+
+it('fetches the detail fields a frame leaves out for the opened stage only, and keeps them while that stage is unchanged', async () => {
+  const next = frames(), p = page();
+  const full = step('s2', 'router', 'host', { details: ['baseline gpt-6.1-sol · xhigh'], sessionId: 'cx-9', routing: { scope: 'root', baseline: 'gpt-6.1-sol', modelReason: 'same_value', effortReason: 'same_value' } });
+  const fetch = vi.fn(async (url: string) => ({ ok: true, json: async () => url.endsWith('s2') ? full : { ...step('s1', 'router', 'host'), details: ['first stage evidence'] } }));
+  Object.assign(p.w, { fetch });
+  const { details: _details, sessionId: _session, routing: _routing, ...slim } = full, { details: _first, ...first } = step('s1', 'router', 'host');
+  const frame = (more: OperationRun[] = []) => snapshot([run('r/1', 'codex', [first, slim] as OperationStep[]), ...more]);
+  p.push(next(frame()));
+  expect(opened(p)).toContain('결과Recorded result'); expect(opened(p)).not.toContain('라우팅 대상'); expect(fetch.mock.calls.map(c => c[0])).toEqual(['/api/step?run=r%2F1&step=s2']);
+  await vi.waitFor(() => expect(opened(p)).toContain('라우팅 대상메인 턴')); expect(opened(p)).toContain('baseline gpt-6.1-sol · xhigh');
+  p.patch(next(frame([run('other', 'claude', [step('g', 'guard', 'policy')])])));
+  expect(opened(p)).toContain('baseline gpt-6.1-sol · xhigh'); expect(fetch).toHaveBeenCalledTimes(1);
+  p.click('[data-step="s1"]'); await vi.waitFor(() => expect(opened(p)).toContain('first stage evidence'));
+  expect(fetch.mock.calls.map(c => c[0])).toEqual(['/api/step?run=r%2F1&step=s2', '/api/step?run=r%2F1&step=s1']);
+});
+
+it('lands a recorded host step on its node, strip and run row without a Jev round trip', async () => {
+  const base = run('x', 'codex', [step('t0', 'workers', 'host', { lifecycle: true, title: 'Codex · 도구 시작', at: new Date(Date.now() - 2000).toISOString() })]);
+  const p = page(); p.push(snapshot([base])); p.push(snapshot([base]));
+  const ticks = () => node(p, 'workers').querySelectorAll('.strip .tr i').length; expect(ticks()).toBe(1);
+  p.push(snapshot([run('x', 'codex', [...base.steps, step('t1', 'workers', 'host', { lifecycle: true, title: 'Codex · 도구 결과', at: new Date().toISOString() })])]));
+  expect(ticks()).toBe(1);
+  await vi.waitFor(() => { expect(node(p, 'workers').classList.contains('zap')).toBe(true); expect(p.get('runs').querySelector('[data-run="x"]')!.classList.contains('zap')).toBe(true); }, { timeout: 3000, interval: 5 });
+  expect(ticks()).toBe(2); expect(p.w.document.querySelectorAll('.trip,.rail .ln b')).toHaveLength(0); expect(filled(p)).toHaveLength(0);
+});
+
+it('counts only current failures at the top, keeps settled ones as past errors and redraws a reclassification from a patch (#223)', () => {
+  const day = new Date(Date.now() - 86_400_000).toISOString(), next = frames();
+  const outage = (now: 'unknown' | 'later_ok') => run('outage', 'codex', [step('cfg', 'evidence', 'local', { at: day, state: 'error', issue: 'evidence', cause: 'unavailable_config', sessionId: 'cx-session-1', title: 'Evidence · 근거 결과', impact: { now, lastAt: now === 'unknown' ? day : stamp, lastState: now === 'unknown' ? 'error' : 'done' } })], { state: now === 'unknown' ? 'attention' : 'past_error', title: 'Evidence 검색', source: 'evidence', firstAt: day, lastAt: day });
+  const refused = run('refused', 'codex', [step('bad', 'evidence', 'local', { at: day, state: 'error', issue: 'evidence', cause: 'invalid_input', sessionId: 'cx-session-2', title: 'Evidence · 근거 결과', impact: { now: 'request_only', lastAt: stamp, lastState: 'done' } })], { state: 'past_error', title: 'Evidence 검색', source: 'evidence', firstAt: day, lastAt: day });
+  const mismatch = run('mismatch', 'claude', [step('m', 'router', 'host', { state: 'error', model: { selected: 'claude-opus-5-5', observed: 'claude-sonnet-5', status: 'mismatch', selectedEffort: null, observedEffort: null }, impact: { now: 'unknown', lastAt: stamp, lastState: 'error' } })], { state: 'attention', source: 'router' });
+  const p = page(), em = (state: string) => p.w.document.querySelector(`#state-filters [data-state="${state}"] em`)!.textContent;
+  p.push(next(snapshot([mismatch, outage('unknown'), refused])));
+  expect(text(p, 'k-att')).toBe('2'); expect(text(p, 'k-diag')).toBe('실제 응답 모델 불일치 1건 · Evidence 사용 불가·오류 1건');
+  expect([em('attention'), em('past_error')]).toEqual(['2', '1']);
+  p.click('[data-run="outage"]');
+  for (const fact of ['원인unavailable_config', '현재 영향현재 영향 미확인', '호스트Codex', '세션cx-session-1']) expect(opened(p)).toContain(fact);
+  p.click('[data-run="refused"]');
+  expect(opened(p)).toContain('원인invalid_input · 요청 인자·범위 오류'); expect(opened(p)).toContain('현재 영향이 요청만 실패 · 서비스 장애 아님'); expect(opened(p)).toContain('마지막 관측');
+  // A later success arrives as a patch: the same row is redrawn as a past error and leaves the current count.
+  p.patch(next(snapshot([mismatch, outage('later_ok'), refused])));
+  expect(text(p, 'k-att')).toBe('1'); expect(text(p, 'k-diag')).toBe('실제 응답 모델 불일치 1건');
+  expect([em('attention'), em('past_error')]).toEqual(['1', '2']);
+  expect(p.get('runs').querySelector('[data-run="outage"] .c-st')!.textContent).toBe('지난 오류');
+  p.click('[data-run="outage"]'); expect(opened(p)).toContain('현재 영향이후 같은 작업 정상 기록'); expect(opened(p)).toContain('상태오류');
+  p.click('[data-host="codex"]');
+  expect(text(p, 'k-att')).toBe('0'); expect(text(p, 'k-diag')).toBe('지난 오류 2건');
+  p.click('[data-state="past_error"]'); expect(rows(p)).toHaveLength(2);
+  p.click('[data-host="claude"]'); expect(text(p, 'k-att')).toBe('1'); expect(em('past_error')).toBe('0');
+  p.click('#language'); p.click('[data-host="all"]'); p.click('[data-state="attention"]'); p.click('[data-run="mismatch"]');
+  expect(text(p, 'k-diag')).toBe('Response model mismatch 1 recorded'); expect(opened(p)).toContain('Current impactCurrent impact unknown');
+});
+
+it('shows a refused worker contract as its own failure through a later host end and draws a later accept as a separate record (#232)', () => {
+  const t = (sec: number) => new Date(Date.now() - 60_000 + sec * 1000).toISOString(), own = { session_id: 'claude-232', mode: 'auto', version: '0.8.18' };
+  const post = (sec: number, verdict: string, reason: string | null, unobserved: string[]) => ({ ...own, phase: 'post', prompt_id: 'p', tool_use_id: `w${sec}`, invocation_id: `post-${sec}`, written_at: t(sec), task_id: 'single', attempt: 1,
+    verdict, verdict_reason: reason, reported_checks: { pass: 1, fail: 0, not_run: 0 }, requested_model: 'sonnet', resolved_model: 'claude-sonnet-5', subagent_type: 'jev-gate:worker',
+    tool_response: { status: 'completed' }, verification: { transcript: 'read', contradicted: [], unobserved, stale: [] } });
+  const records = [post(1, 'incomplete', "check #1 was reported pass, but the worker's own transcript shows no passing run of it", ['#1']),
+    { ...own, phase: 'background_terminal', prompt_id: 'q', execution_prompt_id: 'p', tool_use_id: 'w1', invocation_id: 'terminal-2', written_at: t(2), status: 'completed', task_id: 'single' },
+    { ...own, phase: 'background_policy_delivery', prompt_id: 'q', execution_prompt_id: 'p', invocation_id: 'delivery-3', written_at: t(3), reason: 'policy_delivered_no_active_execution' }];
+  const view = (rs: object[]) => ({ ...snapshot([]), operations: buildOperations(rs as never, [], new Date(), { trace: true }) }), next = frames(), p = page();
+  p.push(next(view(records)));
+  const id = p.get('runs').querySelector('button[data-run]')!.getAttribute('data-run')!, state = () => p.get('runs').querySelector(`[data-run="${id}"] .c-st`)!.textContent;
+  expect(rows(p)).toHaveLength(1); expect(text(p, 'k-att')).toBe('1'); expect(text(p, 'k-diag')).toBe('워커 계약 미충족 1건'); expect(state()).toBe('확인 필요');
+  p.click(`[data-run="${id}"]`);
+  const marks = () => [...p.get('trace').querySelectorAll('.sx-r')].map(e => e.textContent);
+  expect(marks()).toContain('계약 미충족'); expect(marks()).not.toContain('계약 수락');
+  // The later host end stays visible as its own row, never as acceptance.
+  expect(marks()).toContain('호스트 종료');
+  for (const fact of ['single · 계약 미충족 · incomplete · 통과 보고 검사의 실행 미관측', '미관측 #1', '원인check_unobserved', '현재 영향현재 영향 미확인']) expect(opened(p)).toContain(fact);
+  expect(text(p, 'trace')).not.toContain('transcript shows');
+  p.click('.node[data-feature=workers]'); expect(text(p, 'circuit-inspector')).toContain('계약 미충족');
+  p.click('#language');
+  expect(marks()).toContain('Contract not met'); expect(text(p, 'k-diag')).toBe('Worker contract not met 1 recorded');
+  expect(opened(p)).toContain('Reported pass not seen in the worker transcript');
+  // A later accept of the same task arrives as a patch: the refusal stays recorded and only leaves the current count.
+  p.patch(next(view([...records, post(9, 'accept', null, [])])));
+  expect(text(p, 'k-att')).toBe('0'); expect(marks()).toEqual(expect.arrayContaining(['Contract not met', 'Contract accepted']));
+  p.click('#language'); expect(state()).toBe('지난 오류');
 });

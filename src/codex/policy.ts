@@ -1,13 +1,13 @@
 import { resolveApiKey } from '../credentials.js';
 import { randomUUID, createHash } from 'node:crypto';
-import { join, isAbsolute, resolve, relative } from 'node:path';
+import { join, isAbsolute, resolve } from 'node:path';
 import { mkdirSync, realpathSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createWorkerWorktree, type WorkerWorktree } from '../worktree.js';
 import { runHook, type HookDeps } from '../hook.js';
 import { stateRoot, readJob, updateJob, own, codexExecutions, pendingBackgroundPolicy } from '../job.js';
-import { OWNED_AGENTS, type HookInput } from '../types.js';
+import { OWNED_AGENTS, type CodexFailure, type HookInput } from '../types.js';
 import { OWNED_AGENT_PROFILES } from '../agents.js';
 import type { Env } from '../config.js';
 import { codexTraceDir } from '../codex-paths.js';
@@ -19,6 +19,7 @@ import { AGENT_TOOL, CODEX_PROFILES, codexGuidance } from './profiles.js';
 import { routeCodex, codexCandidates, type CodexModel } from './router.js';
 import { capturedPermissions } from './permissions.js';
 import { codexCallerWorkspace } from './workspace.js';
+import { writeTargets, writesInto } from './write-scope.js';
 import { selectRecentPrompts } from '../recent-prompts.js';
 import { wireSource } from './wire.js';
 import { normalizeUsage, usageCost, ModelCache } from '../cost.js';
@@ -36,6 +37,8 @@ interface WorkerDispatch {
   worktree: WorkerWorktree | null; startedAt: number; attempted: boolean;
   ended?: Obj; settling?: Promise<string>; settled?: boolean; output?: string; interruptSent?: boolean; cancel?: () => void;
   background?: boolean;
+  /** Definite pre-send evidence; a native terminal turn has none. */
+  failure?: CodexFailure; unconfirmed?: string;
 }
 interface Session {
   id: string; settings: Obj; baseline: { model: string; effort: string | null }; policy: CodexPolicyConfig;
@@ -67,6 +70,17 @@ const contextOf = (result: { stdout: string | null }): string => {
 };
 const deny = (reason: string): Obj => ({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason } });
 const safeGitEnv = (env: Env): Env => Object.fromEntries(Object.entries(env).filter(([k]) => !k.startsWith('GIT_')));
+// Fixed text per closed category: the original exception can carry paths, prompts or host payloads.
+const FAILURE_ADVICE: Record<CodexFailure['category'], string> = {
+  preflight_conflict: 'Its dispatch preconditions changed, or another managed worker still holds this write scope. Retry after that worker settles, or continue in the main session.',
+  reservation_unavailable: 'Job state could not record its execution reservation. Retry the dispatch, or continue in the main session.',
+  native_start_rejected: 'Codex did not start the worker. Retry the dispatch, or continue in the main session.',
+  native_failed_turn: 'Codex reported the worker turn as failed. Inspect its files before retrying.',
+  interrupted: 'The worker turn was interrupted.',
+  termination_unconfirmed: 'Its reservation, files and write-scope protection remain active. No replacement execution is claimed.',
+};
+const failureHead = (f: CodexFailure): string => `Worker ${f.not_executed ? 'not started' : f.category === 'termination_unconfirmed' ? 'termination unconfirmed' : 'did not complete'}: ${f.category} at ${f.stage}`;
+const PREFLIGHT: CodexFailure = { category: 'preflight_conflict', stage: 'preflight', not_executed: true };
 
 /** A Codex execution adapter over the existing Gate state machine. No policy decisions are delegated to prose. */
 export class CodexPolicy {
@@ -533,7 +547,7 @@ export class CodexPolicy {
     if (!session) return {};
     const event = input['hook_event_name'];
     await this.retrySettlements();
-    if (!session.role && event === 'PreToolUse' && this.writeConflict(String(input['cwd'] ?? session.settings['cwd']), String(input['tool_name']), obj(input['tool_input']) ?? {})) return deny('A managed Codex worker in this write scope has not completed terminal settlement. Read/status tools and unrelated paths remain available.');
+    if (!session.role && event === 'PreToolUse' && this.writeConflict(String(input['cwd'] ?? session.settings['cwd']), String(input['tool_name']), obj(input['tool_input']) ?? {})) return deny('A managed Codex worker in this write scope has not completed terminal settlement. Read/status commands (git status/diff/log/show, rg, grep, ls, cat, head, tail, wc, find, ps, gh issue/pr view/list) and writes whose every target lies outside its scope remain available. Hooks do not report exec workdir, so start a shell command elsewhere with `cd <absolute dir> &&` and name its paths without variables.');
     if (event === 'PreCompact') { session.compactAllowed = session.policy.compact.enabled && (input['trigger'] === 'auto' || input['trigger'] === 'manual' && session.policy.compact.manual); return {}; }
     if (event === 'PreToolUse' && input['tool_name'] === 'Bash' && typeof input['tool_use_id'] === 'string' && typeof obj(input['tool_input'])?.['command'] === 'string') {
       session.commands.set(input['tool_use_id'], String(obj(input['tool_input'])!['command']));
@@ -620,7 +634,7 @@ export class CodexPolicy {
       const result = this.backgroundResults.get(id);
       if (!worker?.dispatch || worker.parent !== session.id) return result?.parent === session.id ? result.output : 'No owned execution with this identity.';
       if (original['action'] === 'cancel') { this.interruptWorker(worker); return 'Cancellation requested. Acceptance and release still require an observed terminal event.'; }
-      return worker.dispatch.ended ? this.settleWorker(worker) : 'The original worker is still running. No terminal result or acceptance is available. Answer the user here; do not wait synchronously or duplicate its work.';
+      return worker.dispatch.ended ? this.settleWorker(worker) : worker.dispatch.unconfirmed ?? 'The original worker is still running. No terminal result or acceptance is available. Answer the user here; do not wait synchronously or duplicate its work.';
     }
     if (!session || session.role || session.eligible === false || this.env['JEV_CODEX_ENABLED'] === '0' || !session.prompt || !session.controller || session.controller.signal.aborted || !original) return 'No active root Jev job.';
     if (typeof original['subagent_type'] !== 'string' || !this.profiles[original['subagent_type']] || typeof original['prompt'] !== 'string' || original['run_in_background'] !== undefined && typeof original['run_in_background'] !== 'boolean' || Object.keys(original).some(k => !['subagent_type', 'prompt', 'description', 'model', 'run_in_background'].includes(k))) return 'Invalid owned Agent input. Use the exact current Jev profile and marker.';
@@ -636,15 +650,17 @@ export class CodexPolicy {
     const dispatchConfig = JSON.stringify(runtimeCodexPolicy({ ...this.env, JEV_CODEX_MODEL: parent.requestModel ?? parent.baseline.model }, this.catalog).router);
     const pre = await this.hook(parent, { hook_event_name: 'PreToolUse', session_id: parent.id, prompt_id: promptId, tool_name: 'Agent', tool_use_id: toolId, tool_input: input, cwd: String(parent.settings['cwd']) }, parentSignal);
     if (pre.kind === 'deny') return codexGuidance(String(obj(obj(JSON.parse(pre.stdout))?.['hookSpecificOutput'])?.['permissionDecisionReason'] ?? 'Dispatch denied'));
-    if (parentSignal.aborted || session.prompt !== conversationPrompt) { await this.failure(parent, promptId, toolId, input, 'dispatch_cancelled'); return 'Dispatch cancelled; no worker started.'; }
+    if (parentSignal.aborted || session.prompt !== conversationPrompt) { await this.failure(parent, promptId, toolId, input, PREFLIGHT, 'dispatch_cancelled'); return 'Dispatch cancelled; no worker started.'; }
     const updated = pre.kind === 'patch' ? obj(obj(JSON.parse(pre.stdout))?.['hookSpecificOutput'])?.['updatedInput'] : input;
     const applied = obj(updated); if (!applied) return 'Dispatch input unavailable.';
     const role = String(applied['subagent_type']); const profile = OWNED_AGENTS[role];
     const model = typeof applied['model'] === 'string' ? applied['model'] : parent.policy.gate.models[profile?.tier ?? 'standard'];
-    if (!this.catalog.some(m => m.model === model)) { await this.failure(parent, promptId, toolId, applied, 'requested_model_unavailable'); return 'The requested worker model is absent from Codex model/list. Native execution remains available; configure accessible tier models.'; }
+    if (!this.catalog.some(m => m.model === model)) { await this.failure(parent, promptId, toolId, applied, PREFLIGHT, 'requested_model_unavailable'); return 'The requested worker model is absent from Codex model/list. Native execution remains available; configure accessible tier models.'; }
     let cwd = String(parent.settings['cwd']); let worktree: WorkerWorktree | null = null;
     let worker: Session | null = null;
     let dispatch: WorkerDispatch | undefined;
+    // The stage in progress when anything below throws; the exception itself is never reported.
+    let failed = PREFLIGHT;
     const t0 = Date.now();
     try {
       const planner = profile?.role === 'planner';
@@ -674,10 +690,12 @@ export class CodexPolicy {
         });
         throw new Error('automatic child unavailable');
       }
+      const hooks = await this.hookConfig(cwd);
+      failed = { category: 'native_start_rejected', stage: 'thread_start', not_executed: true };
       const child = await this.rpc.request('thread/start', { model, modelProvider: parent.settings['modelProvider'], cwd, ephemeral: true,
         approvalPolicy: parent.settings['approvalPolicy'], approvalsReviewer: parent.settings['approvalsReviewer'],
         ...(captured ? { permissions: captured.permissions } : planner && !customPermissions ? { sandbox: 'read-only' } : typeof permissions === 'string' ? { permissions } : { sandbox: sandbox?.['type'] === 'dangerFullAccess' ? 'danger-full-access' : sandbox?.['type'] === 'readOnly' ? 'read-only' : 'workspace-write' }),
-        developerInstructions: this.profiles[role], config: { 'features.multi_agent': false, ...captured?.config, ...await this.hookConfig(cwd) }, dynamicTools: [] });
+        developerInstructions: this.profiles[role], config: { 'features.multi_agent': false, ...captured?.config, ...hooks }, dynamicTools: [] });
       await this.response(child, 'thread/start', {});
       worker = this.sessions.get(String(obj(child['thread'])?.['id'])) ?? null;
       if (!worker) throw new Error('worker unavailable');
@@ -685,6 +703,7 @@ export class CodexPolicy {
       const terminal = new Promise<Obj>(resolve => { worker!.done = resolve; });
       dispatch = { parent, prompt: promptId, tool: toolId, input: { ...applied }, signal: background ? new AbortController().signal : parentSignal, worktree, startedAt: t0, attempted: false, background };
       worker.dispatch = dispatch;
+      failed = PREFLIGHT;
       if (parentSignal.aborted || session.prompt !== conversationPrompt) throw new Error('cancelled');
       const pairState = readJob(this.env, parent.id);
       const pair = pairState.ok ? own(pairState.value?.current.active ?? {}, toolId)?.allocation_pair : null;
@@ -694,14 +713,16 @@ export class CodexPolicy {
       if (this.catalogEpoch !== dispatchEpoch || JSON.stringify(runtimeCodexPolicy({ ...this.env, JEV_CODEX_MODEL: parent.requestModel ?? parent.baseline.model }, this.catalog).router) !== dispatchConfig || pair?.effort_edit.kind === 'set' && effort !== pair.effort_edit.value) throw new Error('allocated pair unavailable before turn/start');
       // The durable reservation owns write protection before any user execution can be attempted.
       let registered = false;
+      failed = { category: 'reservation_unavailable', stage: 'reservation', not_executed: true };
       const saved = updateJob(this.env, parent.id, prev => {
         const r = prev?.current.prompt_id === promptId ? own(prev.current.active, toolId) : undefined;
         if (!prev || !r) return null;
-        if (this.writeConflict(String(parent.settings['cwd']), 'Agent', {}, r.deliverables)) throw new Error('worker write conflict');
+        if (this.writeConflict(String(parent.settings['cwd']), 'Agent', {}, r.deliverables)) { failed = { category: 'preflight_conflict', stage: 'reservation', not_executed: true }; throw new Error('worker write conflict'); }
         registered = true;
         return { ...prev, current: { ...pendingBackgroundPolicy(prev.current), ...(background ? { background_job: true as const } : {}), active: { ...prev.current.active, [toolId]: { ...r, codex_execution: { thread_id: worker!.id, turn_id: null, cwd, root_cwd: String(parent.settings['cwd']) } } } } };
       }, { refuseUnreadable: true });
       if (!saved.ok || !registered) throw new Error('execution reservation unavailable');
+      failed = { category: 'native_start_rejected', stage: 'turn_start', not_executed: true };
       const cancel = (): void => this.interruptWorker(worker!);
       dispatch.cancel = cancel;
       if (!background) parentSignal.addEventListener('abort', cancel, { once: true });
@@ -715,7 +736,7 @@ export class CodexPolicy {
         } catch (error) {
           if (error instanceof RpcRequestError && !error.attempted && !worker.turn && !dispatch.ended) { dispatch.attempted = false; throw error; }
           if (!dispatch.ended) await this.recoverWorker(worker, terminal);
-          if (!dispatch.ended) return `Worker termination unconfirmed. Internal execution identity: ${worker.id}. Its reservation, files and write-scope protection remain active. No replacement execution or acceptance is claimed.`;
+          if (!dispatch.ended) return this.unconfirmed(worker, 'turn_start');
         }
         if (background && !dispatch.ended) {
           this.trace?.write('background_launch', { host: 'codex', session_id: parent.id, prompt_id: promptId, tool_use_id: toolId, agent_id: worker.id, status: 'running', role: profile?.role ?? null });
@@ -724,7 +745,7 @@ export class CodexPolicy {
         if (!background && parentSignal.aborted) cancel();
         if (!dispatch.ended) {
           const ended = await terminal;
-          if (ended['localClose']) return `Worker termination unconfirmed after local connection close. Internal execution identity: ${worker.id}. Reservation and files remain protected.`;
+          if (ended['localClose']) return this.unconfirmed(worker, 'turn');
         }
         return await this.settleWorker(worker);
       } finally {
@@ -732,15 +753,15 @@ export class CodexPolicy {
         if (dispatch.settled || !dispatch.attempted) parentSignal.removeEventListener('abort', cancel);
       }
     } catch {
-      if (dispatch?.attempted) return `Worker termination or settlement unconfirmed. Internal execution identity: ${worker!.id}. Its reservation and files are preserved.`;
+      if (dispatch?.attempted) return this.unconfirmed(worker!, 'turn');
       if (worker && dispatch) {
         // Definite pre-send failure is non-execution evidence, even if its first state write fails.
-        dispatch.ended = { status: 'failed', notExecuted: true };
+        dispatch.failure = failed; dispatch.ended = { status: 'failed', notExecuted: true };
         return await this.settleWorker(worker);
       }
-      await this.failure(parent, promptId, toolId, applied, 'worker_dispatch_failed');
+      await this.failure(parent, promptId, toolId, applied, failed, failed.category, t0);
       if (worker) await this.cleanupWorker(worker);
-      return 'Worker could not start. Its files and any worktree are preserved. No acceptance is claimed.';
+      return `${failureHead(failed)}. ${FAILURE_ADVICE[failed.category]} Its files and any worktree are preserved. No completion or acceptance is claimed.`;
     }
   }
   private persistWorkerTurn(worker: Session): void {
@@ -788,25 +809,28 @@ export class CodexPolicy {
       const texts = worker.items.filter(i => i['type'] === 'agentMessage' && typeof i['text'] === 'string');
       const final = texts.filter(i => i['phase'] === 'final_answer').at(-1) ?? texts.at(-1);
       let guidance = '';
-      if (d.ended!['status'] === 'completed') {
+      const status = d.ended!['status'];
+      const failure: CodexFailure | null = status === 'completed' ? null : d.failure ?? { category: status === 'interrupted' ? 'interrupted' : 'native_failed_turn', stage: 'turn', not_executed: false };
+      if (!failure) {
         const response = { status: 'completed', agentId: worker.id, resolvedModel: worker.requestModel ?? worker.settings['model'], content: [{ type: 'text', text: String(final?.['text'] ?? '') }], totalDurationMs: Date.now() - d.startedAt };
         const post = await this.hook(d.parent, { hook_event_name: 'PostToolUse', session_id: d.parent.id, prompt_id: d.prompt, tool_name: 'Agent', tool_use_id: d.tool, tool_input: d.input, tool_response: response, cwd: String(d.parent.settings['cwd']) });
         guidance = codexGuidance(contextOf(post));
-      } else await this.failure(d.parent, d.prompt, d.tool, d.input, 'worker_not_completed');
+      } else await this.failure(d.parent, d.prompt, d.tool, d.input, failure, failure.category, d.startedAt);
       const state = readJob(this.env, d.parent.id);
       const gen = state.ok && state.value ? [state.value.current, ...state.value.history].find(g => g.prompt_id === d.prompt) : null;
       const committed = gen && (gen.receipts.some(r => r.tool_use_id === d.tool) || OWNED_AGENTS[String(d.input['subagent_type'])]?.role === 'planner' && guidance.length > 0);
-      if (!gen || own(gen.active, d.tool) || !committed) return `Worker terminal observed; settlement pending. Internal execution identity: ${worker.id}. Reservation and files remain protected. Retry jev_agent with action=status and agent_id=${worker.id} without restarting execution.`;
-      d.output = d.ended!['status'] === 'completed'
+      if (!gen || own(gen.active, d.tool) || !committed) return `${failure ? failureHead(failure) : 'Worker terminal observed'}; settlement pending. Internal execution identity: ${worker.id}. Reservation and files remain protected. Retry jev_agent with action=status and agent_id=${worker.id} without restarting execution.`;
+      d.output = !failure
         ? `${final?.['text'] ?? 'No worker final output.'}\n\n${guidance}${d.worktree ? `\nWorker worktree: ${d.worktree.path}\nBranch: ${d.worktree.branch}\nSnapshot baseline: ${d.worktree.baseline}. Apply only the diff from this baseline to the worker branch in the root; this result does not integrate it.` : ''}`
-        : 'Worker interrupted or failed. No completion or acceptance is claimed.';
+        : `${failureHead(failure)}. ${FAILURE_ADVICE[failure.category]} No completion or acceptance is claimed.`;
       d.settled = true;
       // An uncertain foreground call also needs its terminal output available by the returned identity.
       this.backgroundResults.set(worker.id, { parent: d.parent.id, output: d.output });
       while (this.backgroundResults.size > 64) this.backgroundResults.delete(this.backgroundResults.keys().next().value!);
       if (d.background) {
         updateJob(this.env, d.parent.id, prev => prev?.current.prompt_id === d.prompt ? { ...prev, current: { ...pendingBackgroundPolicy(prev.current), background_context: d.output!, ...(d.interruptSent && d.ended!['status'] !== 'completed' && Object.keys(prev.current.active).length === 0 ? { outcome: 'incomplete' as const } : {}) } } : null);
-        this.trace?.write('background_terminal', { host: 'codex', session_id: d.parent.id, prompt_id: d.prompt, tool_use_id: d.tool, agent_id: worker.id, status: String(d.ended!['status']) });
+        this.trace?.write('background_terminal', { host: 'codex', session_id: d.parent.id, prompt_id: d.prompt, tool_use_id: d.tool, agent_id: worker.id, status: String(d.ended!['status']),
+          ...(failure ? { failure_category: failure.category, failure_stage: failure.stage, not_executed: failure.not_executed } : {}) });
       }
       if (d.cancel) d.signal.removeEventListener('abort', d.cancel);
       await this.cleanupWorker(worker);
@@ -823,20 +847,25 @@ export class CodexPolicy {
     try { await this.rpc.request('thread/archive', { threadId: worker.id }, 1000); } catch { /* Files are preserved. */ }
   }
   private writeConflict(cwd: string, tool: string, input: Obj, deliverables?: string[]): boolean {
-    if (!/^(Agent|Bash|Edit|Write|MultiEdit|NotebookEdit|apply_patch|exec_command|write_stdin)$/.test(tool)) return false;
-    if (tool === 'Bash' && /^(?:git (?:status|diff|log|show)|(?:pwd|ls|cat|rg|head|tail)\b)[^;&|`]*$/.test(String(input['command'] ?? ''))) return false;
-    const paths = deliverables ?? [input['file_path'], input['path']].filter((p): p is string => typeof p === 'string');
-    const contains = (base: string, path: string) => { const r = relative(resolve(base), resolve(path)); return r === '' || !r.startsWith('..') && !isAbsolute(r); };
+    const targets = deliverables ? (deliverables.length ? deliverables.map(p => resolve(cwd, p)) : [cwd]) : writeTargets(cwd, tool, input);
+    if (!targets) return false;
     return codexExecutions(this.env).some(r => {
       const e = r.codex_execution!;
-      if (!contains(e.root_cwd, cwd) && !contains(e.cwd, cwd)) return false;
-      if (!paths.length) return true;
-      if (!r.deliverables.length) return paths.some(p => contains(e.root_cwd, resolve(cwd, p)) || contains(e.cwd, resolve(cwd, p)));
-      return paths.some(p => r.deliverables.some(q => contains(resolve(e.root_cwd, q), resolve(cwd, p)) || contains(resolve(cwd, p), resolve(e.root_cwd, q))));
+      // A worktree worker writes its deliverables in its own checkout and later into the root, so both copies are its scope.
+      const bases = [...new Set([e.root_cwd, e.cwd])];
+      return writesInto(targets, r.deliverables.length ? bases.flatMap(b => r.deliverables.map(q => resolve(b, q))) : bases);
     });
   }
-  private async failure(session: Session, prompt: string, tool: string, input: Obj, error: string): Promise<void> {
-    await this.hook(session, { hook_event_name: 'PostToolUseFailure', session_id: session.id, prompt_id: prompt, tool_name: 'Agent', tool_use_id: tool, tool_input: input, error });
+  private async failure(session: Session, prompt: string, tool: string, input: Obj, failure: CodexFailure, error: string = failure.category, startedAt?: number): Promise<void> {
+    await this.hook(session, { hook_event_name: 'PostToolUseFailure', session_id: session.id, prompt_id: prompt, tool_name: 'Agent', tool_use_id: tool, tool_input: input, error,
+      codex_failure: failure, is_interrupt: failure.category === 'interrupted', ...(startedAt === undefined ? {} : { duration_ms: Date.now() - startedAt }) });
+  }
+  /** Possibly still running: recorded without PostToolUseFailure, whose release would drop write protection. */
+  private unconfirmed(worker: Session, stage: CodexFailure['stage']): string {
+    const d = worker.dispatch!; const f: CodexFailure = { category: 'termination_unconfirmed', stage, not_executed: false };
+    this.trace?.write('failure', { host: 'codex', session_id: d.parent.id, prompt_id: d.prompt, tool_use_id: d.tool, agent_id: worker.id, subagent_type: String(d.input['subagent_type']),
+      error_first_line: f.category, is_interrupt: false, duration_ms: Date.now() - d.startedAt, failure_category: f.category, failure_stage: stage, not_executed: false, release_unconfirmed: true });
+    return d.unconfirmed = `${failureHead(f)}. Internal execution identity: ${worker.id}. ${FAILURE_ADVICE[f.category]} No completion or acceptance is claimed. Use jev_agent with action=status and agent_id=${worker.id} to collect its outcome without restarting execution.`;
   }
   selectedCompact(session: string, summary: string, run: string, before: number, after: number): void { this.compactPending.set(session, { summary, run, before, after }); }
   hooksReady(session: string): boolean { return this.env['JEV_CODEX_ENABLED'] === '0' || this.hooked.has(session); }

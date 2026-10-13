@@ -5,7 +5,6 @@ import { readTraceRecords, type TraceDirectoryReader, type TraceCache } from './
 import { readLiveness } from './liveness.js';
 import { buildOperations, type ModRecord, type OperationsView } from './operations.js';
 import type { Host } from './host-support.js';
-import { ClaudeWorkerActivityReader, type WorkerActivityView } from './claude-worker-activity.js';
 import { memo } from './memo.js';
 
 /**
@@ -70,7 +69,6 @@ export interface ActivitySnapshot {
   routerChanges: number;
   events: ActivityEvent[];
   operations: OperationsView;
-  workerActivity?: WorkerActivityView;
   /** The turn on screen. An intent with no result yet is `working` until the result file appears. */
   live: LiveBoard;
   notes: string[];
@@ -491,8 +489,10 @@ const withHost = (original: Rec, host: Host): Rec => {
 };
 const modRows = new WeakMap<Rec, ModRecord>();
 
-export const loadActivity = (opts: { traceDir: string | null; traceDirs?: readonly { host: Host; dir: string }[] | undefined; env: Env; now?: Date; host?: Host; traceCache?: TraceCache; traceReader?: TraceDirectoryReader; workerReader?: ClaudeWorkerActivityReader }): ActivitySnapshot => {
+export const loadActivity = (opts: { traceDir: string | null; traceDirs?: readonly { host: Host; dir: string }[] | undefined; env: Env; now?: Date; host?: Host; traceCache?: TraceCache; traceReader?: TraceDirectoryReader; feed?: boolean }): ActivitySnapshot => {
   const notes = [...NOTES];
+  // The dashboard draws neither the event list nor the live board, and both cost a pass over every record.
+  const feed = opts.feed !== false;
   const events: ActivityEvent[] = [];
   const gateRecords: Rec[] = [];
   const routerRows: Array<{ at: string; rec: Rec }> = [];
@@ -533,7 +533,7 @@ export const loadActivity = (opts: { traceDir: string | null; traceDirs?: readon
         if (shape === 'direct') direct++;
         else if (shape === 'orchestrated') orchestrated++;
       } else if (phase === 'pre_result' && r['attempted'] === true) jevCalls++;
-      const event = gateEvent(r);
+      const event = feed ? gateEvent(r) : null;
       if (event) events.push(event);
     }
   }
@@ -542,7 +542,7 @@ export const loadActivity = (opts: { traceDir: string | null; traceDirs?: readon
     routerRows.push({ at: row.at, rec: row.rec });
     if (row.rec['sent'] === true) jevCalls++;
     if (routerChanged(row.rec)) routerChanges++;
-    const event = routerEvent(row.rec, row.at);
+    const event = feed ? routerEvent(row.rec, row.at) : null;
     if (event) events.push(event);
   }
 
@@ -576,8 +576,7 @@ export const loadActivity = (opts: { traceDir: string | null; traceDirs?: readon
     routerChanges,
     events: events.slice(0, MAX_EVENTS),
     operations,
-    workerActivity: (opts.workerReader ?? new ClaudeWorkerActivityReader()).read(gateRecords, opts.env, now),
-    live: buildLive(gateRecords, routerRows, now.getTime()),
+    live: feed ? buildLive(gateRecords, routerRows, now.getTime()) : buildLive([], [], now.getTime()),
     notes,
   };
 };

@@ -7,7 +7,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ErrorCode, ListToolsRequestSchema, McpError, type CallToolResult, type Tool } from '@modelcontextprotocol/sdk/types.js';
 
 import { createEvidenceService, parseRequest, refuse, type EvidenceReply, type EvidenceServiceDeps } from './service.js';
-import { openTraceDir, type TraceWriter } from '../trace.js';
+import { openTraceDir, pruneTraceDir, type TraceWriter } from '../trace.js';
 import { codexTraceDir } from '../codex-paths.js';
 import { loadConfig, type ConfigLoad } from './source.js';
 import { LIMITS, MODES, type EvidenceConfig } from './types.js';
@@ -21,7 +21,7 @@ import { startOnboarding } from '../onboarding.js';
 import { ensureDashboard } from '../dashboard-launch.js';
 
 export const TOOL_NAME = 'jev_evidence';
-export const SERVER_VERSION = '0.8.18';
+export const SERVER_VERSION = '0.8.19';
 
 const strings = (description: string) => ({ type: 'array', items: { type: 'string', minLength: 1 }, minItems: 1, maxItems: LIMITS.arrayItems, description });
 const HEX64 = { type: 'string', pattern: '^[0-9a-f]{64}$' };
@@ -241,6 +241,8 @@ const main = async (): Promise<void> => {
   supervisor?.unref();
   server.onclose = () => { if (supervisor) clearInterval(supervisor); void onboarding?.close(); };
   await server.connect(new StdioServerTransport());
+  // Once per host session, off the hook path and after the tools answer: the age limit for this host's records (#231).
+  if (opened?.ok && traceDir) void pruneTraceDir(traceDir);
 };
 
 const invokedDirectly = (() => {

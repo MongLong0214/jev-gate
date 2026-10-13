@@ -2558,6 +2558,16 @@ describe('traces', () => {
     expect(failure).toMatchObject({ subagent_type: 'jev-gate:worker-frontier', requested_model: 'claude-fable-5-1', resolved_model: null });
   });
 
+  it('#233: records only a closed Codex failure category and stage, never an invented one', async () => {
+    const dir = join(tmp, 'trace-failure-codex-category');
+    const env = makeEnv({ JEV_GATE_TRACE_DIR: dir });
+    await run(env, { hook_event_name: 'PostToolUseFailure', session_id: 's1', tool_name: 'Agent', tool_use_id: 'ok', error: 'native_start_rejected', codex_failure: { category: 'native_start_rejected', stage: 'thread_start', not_executed: true } });
+    await run(env, { hook_event_name: 'PostToolUseFailure', session_id: 's1', tool_name: 'Agent', tool_use_id: 'raw', error: 'boom', codex_failure: { category: 'secret /home/user/path', stage: 'thread_start', not_executed: true } });
+    const records = readdirSync(dir).map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>).filter((rec) => rec['phase'] === 'failure');
+    expect(records.find((rec) => rec['tool_use_id'] === 'ok')).toMatchObject({ failure_category: 'native_start_rejected', failure_stage: 'thread_start', not_executed: true });
+    expect(records.find((rec) => rec['tool_use_id'] === 'raw')).not.toHaveProperty('failure_category');
+  });
+
   it('records subagent_type and resolved_model on an orchestrated worker-result post record too', async () => {
     const dir = join(tmp, 'trace-orchestrated-post');
     const env = makeEnv({ JEV_GATE_TRACE_DIR: dir });

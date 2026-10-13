@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { loadActivity, type ActivitySnapshot } from '../src/activity.js';
 import { startDashboard, readVersions } from '../src/dashboard.js';
 import { DASHBOARD_PAGE } from '../src/dashboard-page.js';
+import { liveFrames } from './live-frames.js';
 
 const dirs: string[] = [];
 const make = (): string => {
@@ -225,12 +226,8 @@ describe('dashboard server', () => {
     set('0.7.0');
     expect(readVersions({ HOME: home }, 'codex').installed).toBeNull();
     const server = await startDashboard({ traceDir: null, env: { HOME: home, JEV_GATE_STATE_DIR: make() } }, 0);
-    const response = await fetch(`${server.url}api/live`); const reader = response.body!.getReader();
-    const read = async (): Promise<{ version: { running: string; installed: string } }> => {
-      const chunk = await Promise.race([reader.read(), new Promise<never>((_, reject) => setTimeout(() => reject(new Error('version SSE timed out')), 2500))]);
-      if (chunk.done) throw new Error('SSE ended');
-      return JSON.parse(new TextDecoder().decode(chunk.value).split('data: ')[1]!.trim());
-    };
+    const response = await fetch(`${server.url}api/live`); const reader = response.body!.getReader(), frames = liveFrames(reader);
+    const read = (): Promise<{ version: { running: string; installed: string } }> => frames.next(2500, 'version SSE');
     try {
       const first = await read(); expect(first.version.installed).toBe('0.7.0');
       set('0.7.1'); const second = await read();
@@ -242,25 +239,16 @@ describe('dashboard server', () => {
     const trace = make();
     const server = await startDashboard({ traceDir: trace, env: { HOME: make(), JEV_GATE_STATE_DIR: make() } }, 0);
     const response = await fetch(`${server.url}api/live`);
-    const reader = response.body!.getReader();
-    const read = async (): Promise<{ live: { sig: string }; operations: { features: Array<{ id: string; count: number }> } }> => {
-      const result = await Promise.race([
-        reader.read(),
-        new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error('SSE timed out')), 2500)),
-      ]).catch(async error => {
-        const snapshot = await (await fetch(`${server.url}api/snapshot`)).json() as { operations: { features: Array<{ id: string; count: number }> } };
-        throw new Error(`${String(error)}; compact snapshot count=${snapshot.operations.features.find(f => f.id === 'compact')?.count ?? 'missing'}`);
-      });
-      if (result.done) throw new Error('SSE ended');
-      const line = new TextDecoder().decode(result.value).split('\n').find((s) => s.startsWith('data: '));
-      if (!line) throw new Error('missing SSE data');
-      return JSON.parse(line.slice(6));
-    };
+    const reader = response.body!.getReader(), frames = liveFrames(reader);
+    type Frame = { operations: { features: Array<{ id: string; count: number }> } };
+    const read = (): Promise<Frame> => frames.next<Frame>(2500, 'SSE').catch(async error => {
+      const snapshot = await (await fetch(`${server.url}api/snapshot`)).json() as { operations: { features: Array<{ id: string; count: number }> } };
+      throw new Error(`${String(error)}; compact snapshot count=${snapshot.operations.features.find(f => f.id === 'compact')?.count ?? 'missing'}`);
+    });
     try {
-      const first = await read();
+      await read();
       write(trace, 'mod_compact-1.json', { event: 'compact', run_id: 'live-1', mode: 'active', stage: 'started', host: 'claude', session_id: 's1', phase: 'mod_compact', version: 5, invocation_id: 'c1', written_at: new Date().toISOString() });
       const changed = await read();
-      expect(changed.live.sig).toBe(first.live.sig);
       expect(changed.operations.features.find((f) => f.id === 'compact')?.count).toBe(1);
     } finally {
       await reader.cancel();
@@ -280,11 +268,36 @@ describe('dashboard server', () => {
       expect(html).toContain('실행 회로');
       expect(html).toContain('id="theme"');
       expect(html).toContain('id="language"');
-      const body = (await (await fetch(`${server.url}api/snapshot`)).json()) as { events: Array<{ title: string; used: string }> };
-      expect(body.events.map((e) => e.used).join('\n')).not.toContain('completed');
-      expect(body.events[0]?.title).toBe('턴 종료');
-      expect(body.events[0]?.used).toContain('incomplete');
+      const body = (await (await fetch(`${server.url}api/snapshot`)).json()) as Record<string, unknown> & { operations: { runs: unknown[] } };
+      expect(body.operations.runs).toEqual(expect.any(Array));
+      // The page draws the operations view; the event list, live board and worker activity stay on the server.
+      expect(body).not.toHaveProperty('events'); expect(body).not.toHaveProperty('live'); expect(body).not.toHaveProperty('workerActivity');
       expect((await fetch(`${server.url}nope`)).status).toBe(404);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('leaves stage detail fields off frames and serves them for one step on loopback', async () => {
+    const trace = make();
+    write(trace, 'a1.json', { phase: 'admission_result', session_id: 's1', prompt_id: 'p1', request_id: 'r1', attempted: true, written_at: new Date().toISOString(), http: { status: 200, duration_ms: 210 }, decision: { shape: 'direct' } });
+    const server = await startDashboard({ traceDir: trace, env: { JEV_GATE_STATE_DIR: make() } }, 0);
+    try {
+      type Shown = Record<string, unknown>;
+      const body = await (await fetch(`${server.url}api/snapshot`)).json() as { operations: { runs: Array<{ id: string; steps: Shown[] }>; feed: Shown[] } };
+      const shown = [...body.operations.runs.flatMap(r => r.steps), ...body.operations.feed];
+      expect(shown.length).toBeGreaterThan(0);
+      for (const s of shown) for (const field of ['details', 'routing', 'sessionId', 'agentId']) expect(s).not.toHaveProperty(field);
+      const run = body.operations.runs[0]!, full: Shown[] = [];
+      for (const s of run.steps) {
+        const response = await fetch(`${server.url}api/step?run=${encodeURIComponent(run.id)}&step=${encodeURIComponent(String(s['id']))}`);
+        expect(response.status).toBe(200); expect(response.headers.get('cache-control')).toBe('no-store');
+        full.push(await response.json() as Shown);
+      }
+      // The fetched step is the frame step plus its detail fields.
+      full.forEach((f, i) => { expect(f).toMatchObject(run.steps[i]!); expect(f['details']).toEqual(expect.any(Array)); expect(f['sessionId']).toBe('s1'); });
+      expect(full.some(f => (f['details'] as string[]).length > 0)).toBe(true);
+      for (const query of [`run=${run.id}&step=missing`, `run=missing&step=${String(run.steps[0]!['id'])}`, 'run=&step=', '']) expect((await fetch(`${server.url}api/step?${query}`)).status).toBe(404);
     } finally {
       await server.close();
     }
@@ -297,30 +310,12 @@ describe('dashboard server', () => {
     expect(res.headers.get('content-type')).toContain('text/event-stream');
     const reader = res.body?.getReader();
     if (!reader) throw new Error('no body');
-    const dec = new TextDecoder();
-    let buf = '';
-    const pull = async (): Promise<{ live: { mode: string; steps: Array<{ state: string; line: string }> } }> => {
-      const deadline = Date.now() + 2500;
-      while (Date.now() < deadline) {
-        const cut = buf.indexOf('\n\n');
-        if (cut >= 0) {
-          const raw = buf.slice(0, cut);
-          buf = buf.slice(cut + 2);
-          const line = raw.split('\n').find((item) => item.startsWith('data: '));
-          if (line) return JSON.parse(line.slice(6)) as { live: { mode: string; steps: Array<{ state: string; line: string }> } };
-        }
-        const chunk = await Promise.race([
-          reader.read(),
-          new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error('live event timed out')), deadline - Date.now())),
-        ]);
-        if (chunk.done) break;
-        buf += dec.decode(chunk.value, { stream: true });
-      }
-      throw new Error('live event timed out');
-    };
+    const frames = liveFrames(reader);
+    type Step = { state: string; title: string; summary: string; executionPath?: string };
+    const pull = (): Promise<{ operations: { feed: Step[] } }> => frames.next(2500, 'live event');
     try {
       const first = await pull();
-      expect(first.live.mode).toBe('waiting');
+      expect(first.operations.feed).toEqual([]);
       write(trace, 'admission_intent-1.json', {
         phase: 'admission_intent',
         written_at: new Date().toISOString(),
@@ -331,9 +326,8 @@ describe('dashboard server', () => {
       });
       let working = first;
       const until = Date.now() + 2500;
-      while (working.live.mode !== 'working' && Date.now() < until) working = await pull();
-      expect(working.live.mode).toBe('working');
-      expect(working.live.steps[0]?.state).toBe('active');
+      while (!working.operations.feed.length && Date.now() < until) working = await pull();
+      expect(working.operations.feed[0]).toMatchObject({ state: 'active', title: 'Gate A · Jev 요청' });
       expect(JSON.stringify(working)).not.toContain('SUPER_SECRET_PROMPT_TEXT');
       write(trace, 'admission_result-1.json', {
         phase: 'admission_result',
@@ -348,9 +342,9 @@ describe('dashboard server', () => {
       });
       let shut = working;
       const untilDone = Date.now() + 2500;
-      while (!(shut.live.mode === 'waiting' && shut.live.steps.some((step) => step.line.includes('직접 처리'))) && Date.now() < untilDone) shut = await pull();
-      expect(shut.live.steps.some((step) => step.state === 'active')).toBe(false);
-      expect(shut.live.steps.map((step) => step.line).join('\n')).toContain('직접 처리');
+      while (!shut.operations.feed.some((step) => step.executionPath === 'direct') && Date.now() < untilDone) shut = await pull();
+      expect(shut.operations.feed.some((step) => step.state === 'active')).toBe(false);
+      expect(shut.operations.feed.find((step) => step.executionPath)).toMatchObject({ executionPath: 'direct', summary: 'direct · admission_not_worth' });
     } finally {
       await reader.cancel();
       await server.close();

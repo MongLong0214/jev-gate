@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { lstatSync, mkdirSync, openSync, closeSync, writeSync, renameSync, fsyncSync } from 'node:fs';
+import { constants, lstatSync, mkdirSync, openSync, closeSync, writeSync, renameSync, fsyncSync, futimesSync } from 'node:fs';
+import { lstat, readdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Env } from './config.js';
 import { recordingStatus } from './recording.js';
@@ -102,4 +103,39 @@ export const openTraceDir = (dir: string, env: Env = process.env): { ok: true; w
     },
   };
   return { ok: true, writer };
+};
+
+const DAY_MS = 86_400_000;
+export const TRACE_RETENTION_MS = 7 * DAY_MS;
+/** Only names this writer and the mods produce: `<phase>-<uuid>.json` and an abandoned `.<phase>-<uuid>.tmp`. */
+const OWN_TRACE = /^(?:[a-z][a-z_]*-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json|\.[a-z][a-z_]*-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.tmp)$/;
+
+/**
+ * Deletes this tool's trace files older than 7 days, directly in `dir`. At most once a day per directory across
+ * processes: the `.retention` stamp's mtime is the last run. Records are written once, so mtime is their write time;
+ * the file names carry no time. Symlinks, subdirectories and other names are never touched. Never throws.
+ */
+export const pruneTraceDir = async (dir: string, now = Date.now()): Promise<number> => {
+  let removed = 0;
+  try {
+    const root = await lstat(dir);
+    if (!root.isDirectory() || root.isSymbolicLink()) return 0;
+    const stamp = join(dir, '.retention');
+    try {
+      const last = await lstat(stamp);
+      if (!last.isFile() || now - last.mtimeMs < DAY_MS) return 0;
+    } catch (err) { if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return 0; }
+    // Claim the day before the slow part, so a concurrent start skips instead of repeating it.
+    const fd = openSync(stamp, constants.O_WRONLY | constants.O_CREAT | constants.O_NOFOLLOW, 0o600);
+    try { futimesSync(fd, now / 1000, now / 1000); } finally { closeSync(fd); }
+    for (const name of await readdir(dir)) {
+      if (!OWN_TRACE.test(name)) continue;
+      const path = join(dir, name);
+      try {
+        const stat = await lstat(path);
+        if (stat.isFile() && now - stat.mtimeMs > TRACE_RETENTION_MS) { await unlink(path); removed++; }
+      } catch { /* Removed meanwhile, or not ours to remove. */ }
+    }
+  } catch { /* Retention is housekeeping; it never fails its caller. */ }
+  return removed;
 };

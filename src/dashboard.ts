@@ -86,7 +86,7 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
     const engine = activityEngine(sources);
     const releases = releaseChecker(runtime.releaseFetch);
     const versions = (): DashboardVersions => ({ ...readVersions(sources.env, sources.host), release: releases.current() });
-    const subscribers = new Set<(current: { key: string; data: string } | null) => void>();
+    const subscribers = new Set<(extra: string) => void>();
     const viewers = new Map<string, number>(); // Infinity while connected; a short lease during reconnect.
     let viewerSequence = 0;
     let openingUntil = 0;
@@ -123,20 +123,23 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
     let changed = false;
     let watchedAt = 0;
     let timer: ReturnType<typeof setTimeout> | null = null;
-    let framed: { key: string; data: string } | null = null;
-    // Every viewer receives the same frame, so it is serialized once per change instead of once per viewer and tick.
-    const frame = (): { key: string; data: string } | null => {
-      if (!loaded) return null;
-      const extras = `"version":${JSON.stringify(versions())},"recording":${JSON.stringify(recordingStatus(sources.env))},"dashboard":${JSON.stringify(dashboardStatus(sources.env))}`;
-      const key = `${loaded.key}:${extras}`;
-      if (framed?.key !== key) framed = { key, data: `${loaded.json.slice(0, -1)},${extras}}` };
-      return framed;
+    let step: { base: string; key: string; patch: string } | null = null;
+    let whole: { key: string; json: string } | null = null, wholeLoading: Promise<void> | null = null;
+    const extras = (): string => `"version":${JSON.stringify(versions())},"recording":${JSON.stringify(recordingStatus(sources.env))},"dashboard":${JSON.stringify(dashboardStatus(sources.env))}`;
+    // A frame is the activity plus the preferences and versions shown beside it; both parts are in its key.
+    const frameKey = (activity: string, extra: string): string => `${activity}|${extra}`;
+    const wholeFrame = (extra: string): string | null => whole ? `${whole.json.slice(0, -1)},"frame":${JSON.stringify(frameKey(whole.key, extra))},${extra}}` : null;
+    /** The whole frame is serialized on the activity thread only when a viewer or a snapshot request needs it. */
+    const ensureWhole = (): Promise<void> => {
+      if (!loaded || whole?.key === loaded.key) return Promise.resolve();
+      return wholeLoading ??= engine.full().then(next => { if (next) whole = next; }, () => { /* The next rebuild retries. */ })
+        .finally(() => { wholeLoading = null; broadcast(); });
     };
     const broadcast = (): void => {
       if (!subscribers.size) return;
       void refresh();
-      const current = frame();
-      for (const publish of subscribers) publish(current);
+      const extra = extras();
+      for (const publish of subscribers) publish(extra);
     };
     // Removing a large directory notifies once per file; the names go to the activity thread in one message.
     const invalidations = new Map<string, Set<string> | null>(); // null: the whole directory
@@ -155,9 +158,7 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
     const syncWatchers = (force = false): void => {
       if (!force && Date.now() - watchedAt < 2000) return;
       watchedAt = Date.now();
-      const currentDirectories = new Set([...directories, ...loaded?.directories ?? []]);
-      for (const [dir, { watcher }] of watchers) if (!currentDirectories.has(dir)) { watcher.close(); watchers.delete(dir); directoryIdentities.delete(dir); }
-      for (const dir of currentDirectories) {
+      for (const dir of directories) {
         let identity: string | null = null;
         try { const stat = lstatSync(dir); if (stat.isDirectory() && !stat.isSymbolicLink()) identity = traceDirectoryIdentity(stat); } catch { /* It may appear later. */ }
         const existing = watchers.get(dir);
@@ -180,9 +181,12 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
     const refresh = (): Promise<void> => {
       syncWatchers();
       const elapsed = Date.now() - scannedAt;
-      if (!loading && (!scannedAt || changed && elapsed >= wait() || elapsed >= (loaded?.pending ? 2000 : 30_000))) {
+      if (!loading && (!scannedAt || changed && elapsed >= wait() || Date.now() >= (loaded?.until ?? 0) || elapsed >= 30_000)) {
         changed = false; flush();
-        loading = engine.load().then(next => { loaded = next; }, () => { changed = true; /* The last snapshot stays; retry after the wait. */ })
+        loading = engine.load().then(next => {
+          if (next.patch && next.base) step = { base: next.base, key: next.key, patch: next.patch };
+          loaded = next;
+        }, () => { changed = true; /* The last snapshot stays; retry after the wait. */ })
           .finally(() => {
             scannedAt = Date.now(); loading = null; syncWatchers(true); broadcast();
             // Records that arrived meanwhile start the next rebuild when its wait ends, not at a later tick.
@@ -254,26 +258,19 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
         // An open stream keeps the frame current, so answer with it at once; its `at` tells when it was built. Waiting for
         // the rebuild in flight held the answer for up to a whole rebuild while records kept arriving (#215).
         if (!loaded || !subscribers.size) await refresh();
-        const body = frame();
+        await ensureWhole();
+        const body = wholeFrame(extras());
         res.writeHead(body ? 200 : 503, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
-        res.end(body?.data ?? JSON.stringify({ error: 'activity_unavailable' }));
+        res.end(body ?? JSON.stringify({ error: 'activity_unavailable' }));
         return;
       }
-      if (req.method === 'GET' && path === '/api/worker-history') {
-        const query = new URL(req.url!, `http://${req.headers.host}`).searchParams;
-        const rawOffset = query.get('offset') ?? '0', offset = Number(rawOffset);
-        if (!/^\d{1,12}$/.test(rawOffset) || !Number.isSafeInteger(offset)) { res.writeHead(400); res.end(); return; }
-        await refresh(); // Refresh the set of identities already observed by Jev Gate.
-        const session = query.get('session'), agent = query.get('agent');
-        if (Boolean(session) !== Boolean(agent) || session && !/^[A-Za-z0-9_-]{1,100}$/.test(session) || agent && !/^[A-Za-z0-9_-]{1,100}$/.test(agent)) { res.writeHead(400); res.end(); return; }
-        let aborted = false;
-        res.once('close', () => { if (!res.writableEnded) aborted = true; });
-        let body: Awaited<ReturnType<typeof engine.history>> | Awaited<ReturnType<typeof engine.list>>;
-        try { body = session && agent ? await engine.history(session, agent, offset) : await engine.list(offset); }
-        catch { if (!aborted) { res.writeHead(500); res.end(); } return; }
-        if (aborted) return;
+      if (req.method === 'GET' && path === '/api/step') {
+        // The detail fields of the one stage a viewer opened; frames leave them out.
+        const query = new URL(req.url!, `http://${req.headers.host}`).searchParams, run = query.get('run') ?? '', id = query.get('step') ?? '';
+        const body = run && id && run.length <= 200 && id.length <= 200 ? await engine.step(run, id).catch(() => null) : null;
         res.writeHead(body ? 200 : 404, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
-        res.end(JSON.stringify(body ?? { error: 'unobserved_agent' })); return;
+        res.end(body ?? JSON.stringify({ error: 'step_unavailable' }));
+        return;
       }
       if (req.method === 'GET' && path === '/api/live') {
         const identity = new URL(req.url!, `http://${req.headers.host}`).searchParams.get('viewer');
@@ -287,26 +284,33 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
         // The first frame may wait for a rebuild; the retry field goes out with it so a frame stays one chunk.
         res.flushHeaders();
         let prefix = 'retry: 500\n';
-        let last = '';
+        // What this viewer holds: the activity key and the preference/version part of its frame.
+        let held: { activity: string; extra: string } | null = null;
         let heartbeatAt = Date.now();
         let closed = false;
-        const publish = (current: { key: string; data: string } | null): void => {
+        const send = (text: string): void => { heartbeatAt = Date.now(); res.write(`${prefix}${text}\n\n`); prefix = ''; };
+        const publish = (extra: string): void => {
           if (closed) return;
-          if (!current || current.key === last) {
-            // A first rebuild can take seconds; the heartbeat shows the stream is alive meanwhile.
-            if (Date.now() - heartbeatAt >= 5000) {
-              heartbeatAt = Date.now();
-              res.write(`${prefix}event: heartbeat\ndata: ${JSON.stringify({ at: new Date(heartbeatAt).toISOString() })}\n\n`); prefix = '';
+          const activity = loaded?.key;
+          if (activity && held && (held.activity === activity || step?.base === held.activity && step.key === activity)) {
+            if (held.activity === activity && held.extra === extra) {
+              // A first rebuild can take seconds; the heartbeat shows the stream is alive meanwhile.
+              if (Date.now() - heartbeatAt >= 5000) send(`event: heartbeat\ndata: ${JSON.stringify({ at: new Date().toISOString() })}`);
+              return;
             }
+            // Only the change goes out: a patch between consecutive rebuilds, and the preferences only when they moved.
+            const moved = held.activity !== activity;
+            send(`event: patch\ndata: {"base":${JSON.stringify(frameKey(held.activity, held.extra))},"frame":${JSON.stringify(frameKey(activity, extra))}${held.extra === extra ? '' : `,"extra":{${extra}}`}${moved ? `,"p":${step!.patch}` : ''}}`);
+            held = { activity, extra };
             return;
           }
-          last = current.key;
-          heartbeatAt = Date.now();
-          res.write(`${prefix}data: ${current.data}\n\n`); prefix = '';
+          if (activity && whole?.key === activity) { send(`data: ${wholeFrame(extra)}`); held = { activity, extra }; return; }
+          if (activity) void ensureWhole();
+          if (Date.now() - heartbeatAt >= 5000) send(`event: heartbeat\ndata: ${JSON.stringify({ at: new Date().toISOString() })}`);
         };
         subscribers.add(publish);
         void refresh();
-        publish(frame());
+        publish(extras());
         const stop = (): void => {
           if (closed) return;
           closed = true;
