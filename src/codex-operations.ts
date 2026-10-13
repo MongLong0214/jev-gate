@@ -87,7 +87,7 @@ export const codexOperations = (records: Rec[], now: Date): OperationRun[] => {
     const step: OperationStep = {
       id: hash(`${key}:${token(r['invocation_id']) ?? at(r)}:${event}`), at: at(r),
       feature: event.includes('Compact') ? 'compact' : 'workers',
-      lifecycle: true,
+      lifecycle: true, ...(state === 'error' && token(r['session_id']) ? { sessionId: token(r['session_id'])! } : {}),
       state, lane: 'host', title: TITLE[event]!, summary: detail,
       details: [...(state === 'unconfirmed' ? ['호스트 훅이 모든 도구 경로의 종료를 보장하지 않습니다. 원래 호스트에서 해당 도구 결과를 확인하세요.'] : []), ...(token(r['tool_use_id']) ? [`call: ${hash(String(r['tool_use_id']))}`] : [])],
       ...(measured !== undefined && Number.isFinite(measured) && measured >= 0 ? { durationMs: measured } : {}),

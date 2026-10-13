@@ -7,7 +7,7 @@ declare const getComputedStyle: Window['getComputedStyle'];
 declare const MutationObserver: Window['MutationObserver'];
 declare const innerWidth: number;
 declare const innerHeight: number;
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { chromium, type Browser, type Page } from 'playwright';
@@ -159,6 +159,73 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     expect(await p.locator('#trace .sd:not([hidden])').textContent()).toContain('일치');
     await p.close();
   });
+
+  it('separates current incidents from past error records in the header, filters and stage detail, and reclassifies them live (#223)', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'jev-dashboard-223-')), claude = join(home, 'claude-traces'), codex = join(home, 'codex-traces');
+    mkdirSync(claude); mkdirSync(codex);
+    const write = (dir: string, name: string, value: object) => writeFileSync(join(dir, `${name}.json`), JSON.stringify(value));
+    const evidence = (request_id: string, session_id: string, written_at: string, extra: object) => ({ phase: 'evidence_result', host: 'codex', session_id, request_id, written_at, backend: 'local', items: 0, remote_calls: 0, cache_hits: 0, duration_ms: 0, coverage: { read_files: 0, candidates: 0, unjudged_on_page: 0 }, ...extra });
+    const jev = (parent: string, session_id: string, written_at: string, code: string, status: number) => ({ phase: 'evidence_jev_result', host: 'codex', session_id, request_id: `${parent}:1`, parent_request_id: parent, written_at, attempted: true, candidates: 3, http: { status, code, duration_ms: 140 } });
+    const router = (turn: string, session_id: string, written_at: string, confirmation: string, observed: string | null) => ({ phase: 'claude_router', host: 'claude', session_id, event: 'root_result', turn, written_at, requested: 'claude-opus-5-5', observed, confirmation });
+    // The reported case: yesterday's Codex invalid-input refusal followed by successful Evidence, beside a current outage and a model check.
+    write(codex, 'ev-old', evidence('ev-old', 'codex-old-session', ago(26 * 3_600_000), { status: 'unavailable', is_error: true, reason_codes: ['invalid_input'] }));
+    write(codex, 'ev-ok', evidence('ev-ok', 'codex-new-session', ago(3_600_000), { status: 'ok', is_error: false, items: 3, remote_calls: 1, reason_codes: [] }));
+    write(codex, 'jev-1', jev('j1', 'codex-session-a', ago(1_800_000), 'http_401', 401));
+    write(codex, 'jev-2', jev('j2', 'codex-session-b', ago(300_000), 'http_401', 401));
+    write(claude, 'rt-mismatch', router('t1', 'claude-session-1', ago(7_200_000), 'mismatch', 'claude-sonnet-5'));
+    write(claude, 'rt-unobserved', router('t2', 'claude-session-2', ago(600_000), 'unobserved', null));
+    const local = await startDashboard(dashboardSources({ HOME: home, XDG_CONFIG_HOME: join(home, '.config'), XDG_STATE_HOME: join(home, '.local/state'), JEV_GATE_TRACE_DIR: claude, JEV_CODEX_TRACE_DIR: codex }), 0);
+    type Snap = { operations: { attention: number; runs: Array<{ id: string; host: string; state: string; steps: Array<{ cause?: string; impact?: { now: string } }> }> } };
+    const label: Record<string, string> = { attention: '확인 필요', past_error: '지난 오류', done: '완료', unconfirmed: '결과 미관측' };
+    const snap = async () => await (await fetch(new URL('/api/snapshot', local.url))).json() as Snap;
+    const runOf = (s: Snap, cause: string, now: string) => s.operations.runs.find(r => r.steps.some(x => x.cause === cause && x.impact?.now === now))!.id;
+    // The server snapshot, the frame the page holds from the live stream and what it shows must say the same thing.
+    const agree = async (p: Page, host: 'all' | 'claude' | 'codex' = 'all') => {
+      const s = await snap(), held = JSON.parse(await p.evaluate('JSON.stringify(data.operations.runs.map(r=>[r.id,r.state]))')) as Array<[string, string]>;
+      expect(held).toEqual(s.operations.runs.map(r => [r.id, r.state]));
+      const runs = s.operations.runs.filter(r => host === 'all' || r.host === host), count = (state: string) => String(runs.filter(r => r.state === state).length);
+      if (host === 'all') expect(String(s.operations.attention)).toBe(count('attention'));
+      expect(await p.locator('#k-att').textContent()).toBe(count('attention'));
+      expect(await p.locator('#state-filters [data-state=attention] em').textContent()).toBe(count('attention'));
+      expect(await p.locator('#state-filters [data-state=past_error] em').textContent()).toBe(count('past_error'));
+      await p.locator('#state-filters [data-state=all]').click();
+      for (const r of runs) expect(await p.locator(`#runs [data-run="${r.id}"] .c-st`).textContent()).toBe(label[r.state]);
+      return s;
+    };
+    try {
+      const p = await page();await p.goto(local.url);await p.waitForFunction(() => document.querySelectorAll('#runs .row').length === 6);
+      let s = await agree(p);
+      expect(await p.locator('#k-att').textContent()).toBe('3');
+      const diag = await p.locator('#k-diag').textContent();expect(diag).toContain('Jev 판정 오류 2건');expect(diag).toContain('실제 응답 모델 불일치 1건');expect(diag).not.toContain('Evidence');
+      await p.locator('[data-host=codex]').click();await agree(p, 'codex');await p.locator('[data-host=claude]').click();await agree(p, 'claude');await p.locator('[data-host=all]').click();
+      const outage = runOf(s, 'http_401', 'unknown'), refused = runOf(s, 'invalid_input', 'request_only');
+      await p.locator('[data-state=attention]').click();await p.locator(`#runs [data-run="${outage}"]`).click();
+      const detail = () => p.locator('#trace .sd:not([hidden])').textContent();
+      for (const fact of ['원인http_401', '현재 영향현재 영향 미확인', '호스트Codex', '세션codex-session-b', '마지막 관측']) expect(await detail()).toContain(fact);
+      expect(await problems(p)).toEqual([]);
+      await p.locator('.stats').screenshot({ path: join(output, '223-1440-dark-ko-top.png') });await p.locator('#run-detail').screenshot({ path: join(output, '223-1440-dark-ko-detail-current.png') });
+      await p.locator('[data-state=past_error]').click();await p.locator(`#runs [data-run="${refused}"]`).click();
+      for (const fact of ['상태오류', '원인invalid_input · 요청 인자·범위 오류', '현재 영향이 요청만 실패 · 서비스 장애 아님', '세션codex-old-session']) expect(await detail()).toContain(fact);
+      await p.locator('#run-detail').screenshot({ path: join(output, '223-1440-dark-ko-detail-past.png') });
+      // A later success of the same Jev call on the same host arrives on the open stream; both outage records become past errors.
+      await p.locator('[data-state=attention]').click();await p.locator(`#runs [data-run="${outage}"]`).click();
+      write(codex, 'jev-3', jev('j3', 'codex-session-c', ago(0), 'ok', 200));
+      await p.waitForFunction(() => document.getElementById('k-att')?.textContent === '1');
+      s = await agree(p);
+      expect(s.operations.runs.find(r => r.id === outage)).toMatchObject({ state: 'past_error', steps: [{ cause: 'http_401', impact: { now: 'later_ok' } }] });
+      expect(await p.locator('#k-diag').textContent()).toBe('실제 응답 모델 불일치 1건');
+      await p.locator('[data-state=past_error]').click();expect(await p.locator('#runs .row').count()).toBe(3);await p.locator(`#runs [data-run="${outage}"]`).click();
+      expect(await detail()).toContain('현재 영향이후 같은 작업 정상 기록');expect(await detail()).toContain('상태오류');
+      await p.locator('[data-host=codex]').click();expect(await p.locator('#k-diag').textContent()).toBe('지난 오류 3건');await agree(p, 'codex');
+      await p.locator('#language').click();expect(await p.locator('#k-diag').textContent()).toBe('3 past errors');await p.locator('#language').click();await p.close();
+      const phone = await browser.newPage({ viewport: { width: 390, height: 844 } });phone.on('pageerror', e => errors.push(e.message));await phone.goto(local.url);
+      await phone.waitForFunction(() => document.querySelectorAll('#runs .row').length === 7);await agree(phone);expect(await problems(phone)).toEqual([]);
+      await phone.locator('.stats').screenshot({ path: join(output, '223-390-top.png') });
+      await phone.locator('[data-state=attention]').click();await phone.locator('#run-detail').screenshot({ path: join(output, '223-390-detail-current.png') });
+      await phone.locator('[data-state=past_error]').click();await phone.locator(`#runs [data-run="${refused}"]`).click();await phone.locator('#run-detail').screenshot({ path: join(output, '223-390-detail-past.png') });
+      await phone.close();
+    } finally { await local.close(); rmSync(home, { recursive: true, force: true }); }
+  }, 60_000);
 
   it('labels request effort discrepancies precisely in the header and the stage detail', async () => {
     push([run('effort', 'codex', [step('old', 'router', { at: ago(7_200_000), lane: 'host', state: 'error', issue: 'request_effort', summary: '선택 high · 전송 xhigh' }), step('recent', 'router', { lane: 'host' })], { state: 'attention' })]);

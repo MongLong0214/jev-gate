@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { allocatedTraceRecords } from './explain.js';
 import { codexOperations, firstRow } from './codex-operations.js';
-import { operationState } from './operation-state.js';
+import { failed, operationState } from './operation-state.js';
 import { memo } from './memo.js';
 import { estimateJevCostUsd } from './bench/usage.js';
 import { CODEX_CAPABILITIES, CODEX_PLUGIN_CAPABILITIES, type HostCapability, type Host } from './host-support.js';
@@ -31,6 +31,11 @@ export interface OperationStep {
   details: string[];
   /** Concrete recorded failure category; an effort mismatch is not a response-model mismatch. */
   issue?: 'request_model' | 'request_effort' | 'request_unconfirmed' | 'response_model' | 'jev' | 'host' | 'evidence';
+  /** The failure reason code the record names, such as `invalid_input` or `timeout`. */
+  cause?: string;
+  /** On a failure only: what later settled records of the same operation on the same host show now. The failure itself stays
+   * recorded as it was; a later success never turns it into one, and nothing here claims a recovery. */
+  impact?: { now: 'ongoing' | 'unknown' | 'later_ok' | 'request_only'; lastAt: string; lastState: StepState };
   model?: { selected: string | null; observed: string | null; status: 'confirmed' | 'mismatch' | 'unobserved'; selectedEffort: string | null; observedEffort: string | null; forwardedEffort?: string | null; effortSource?: 'host_hook' | 'provider_request'; requestApplied?: boolean };
   routing?: { scope: 'root' | 'spawn' | 'child' | 'owned'; baseline: string | null; modelReason: string | null; effortReason: string | null; proposedModel?: string; probability?: number; threshold?: number };
   /** Timings are measured by the caller or paired recorded events, never estimated from usage. */
@@ -57,7 +62,8 @@ export interface OperationRun {
   mode: string;
   firstAt: string;
   lastAt: string;
-  state: 'active' | 'done' | 'attention' | 'unconfirmed' | 'interrupted';
+  /** `attention` holds a failure that may still affect work; `past_error` only failures later records or their own cause settled. */
+  state: 'active' | 'done' | 'attention' | 'past_error' | 'unconfirmed' | 'interrupted';
   steps: OperationStep[];
 }
 
@@ -447,12 +453,13 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
   }
   if (phase === 'codex_model_failure') { state = 'error'; lane = 'host'; summary = '호스트 모델 요청 실패'; }
   if (state === 'error' && !issue) issue = lane === 'jev' ? 'jev' : feature === 'evidence' ? 'evidence' : 'host';
+  const cause = state !== 'error' ? null : phase === 'evidence_result' ? list(r['reason_codes'])[0] ?? null : token(http?.['code']) ?? token(r['reason']);
   const decided = field(r, 'decision'), selection = field(r, 'selection'), answered = judgements(r)?.find(j => j.confidence !== null);
   const receipt = lane === 'jev' && duration !== null && duration >= 0 && !isIntent ? jevReceipt(number(http?.['status']), token(http?.['code']), token(field(r, 'jev')?.['model']), field(field(r, 'jev'), 'usage') ?? field(r, 'usage'),
     phase === 'codex_router_result' ? text(token(r['selected_model']), token(r['selected_effort'])) || null : phase === 'codex_compact' ? number(r['dependencies']) === null ? null : `${n(number(r['dependencies']))} / ${n(number(r['candidates']))}` : token(decided?.['shape']) ?? token(field(r, 'allocation')?.['selected_model']) ?? token(decided?.['tier']) ?? token(decided?.['action']),
     routing?.probability ?? answered?.confidence ?? null, routing?.threshold ?? null, token(selection?.['direction'])) : undefined;
   return { id: id(ownId), at, feature, state, lane, ...(token(r['session_id']) ? { sessionId: token(r['session_id'])! } : {}), ...(token(r['agent_id']) ? { agentId: token(r['agent_id'])! } : {}), ...(token(r['tool_use_id']) ? { callId: token(r['tool_use_id'])! } : {}), title: traceTitle(phase, r), summary, details: details.filter(Boolean), ...(routing ? { routing } : {}), ...(model ? { model } : {}),
-    ...(issue ? { issue } : {}),
+    ...(issue ? { issue } : {}), ...(cause ? { cause } : {}),
     ...(['stop', 'background_conversation', 'codex_model_request', 'codex_model_failure'].includes(phase) ? { lifecycle: true } : {}),
     ...(phase === 'admission_result' && ['direct', 'orchestrated'].includes(String(field(r, 'decision')?.['shape'])) ? { executionPath: field(r, 'decision')!['shape'] as 'direct' | 'orchestrated' } : {}),
     ...(duration !== null && duration >= 0 ? { durationMs: duration } : {}),
@@ -587,7 +594,8 @@ const modStep = (row: ModRecord, now: number, closed: Set<string>, responses: Ma
   const selection = field(r, 'selection');
   const receipt = lane === 'jev' && !started && duration !== null && duration >= 0 ? jevReceipt(null, token(r['assessment'] ?? (r['stage'] === 'jev' ? r['selection'] : null)), token(r['jev_model']), field(r, 'usage'), choice,
     number(selection?.['probability']), number(selection?.['threshold']), token(selection?.['direction'])) : undefined;
-  return { id: id(`${row.component}:${row.at}:${key}:${event}:${started ? 'start' : token(r['stage']) ?? 'result'}`), at: row.at, feature, state, lane, ...(token(r['agent_id']) ? { agentId: token(r['agent_id'])!, ...(token(r['session_id']) ? { sessionId: token(r['session_id'])! } : {}) } : {}), ...(['prepared', 'model_request', 'model_failure'].includes(event) ? { lifecycle: true as const } : {}), title: { router: event === 'prepared' ? 'Router · 요청 전달 준비' : event === 'model_request' ? '모델 · 응답 대기' : event === 'model_failure' ? '모델 · 요청 실패' : 'Router · ' + event, compact: 'Compact · 압축' }[feature], summary, details: details.filter(Boolean), ...(routing ? { routing } : {}), ...(model ? { model } : {}), ...(lane === 'jev' && duration !== null && duration >= 0 ? { durationMs: duration } : {}), ...(event === 'model_request' && state === 'active' ? { startedAt: row.at } : {}), ...(receipt ? { receipt } : {}) };
+  return { id: id(`${row.component}:${row.at}:${key}:${event}:${started ? 'start' : token(r['stage']) ?? 'result'}`), at: row.at, feature, state, lane, ...(token(r['agent_id']) ? { agentId: token(r['agent_id'])! } : {}), ...((token(r['agent_id']) || state === 'error') && token(r['session_id']) ? { sessionId: token(r['session_id'])! } : {}),
+    ...(failedAssessment && state === 'error' && token(r['assessment']) ? { cause: token(r['assessment'])! } : {}), ...(['prepared', 'model_request', 'model_failure'].includes(event) ? { lifecycle: true as const } : {}), title: { router: event === 'prepared' ? 'Router · 요청 전달 준비' : event === 'model_request' ? '모델 · 응답 대기' : event === 'model_failure' ? '모델 · 요청 실패' : 'Router · ' + event, compact: 'Compact · 압축' }[feature], summary, details: details.filter(Boolean), ...(routing ? { routing } : {}), ...(model ? { model } : {}), ...(lane === 'jev' && duration !== null && duration >= 0 ? { durationMs: duration } : {}), ...(event === 'model_request' && state === 'active' ? { startedAt: row.at } : {}), ...(receipt ? { receipt } : {}) };
 };
 
 const gateGroup = (r: Rec): string => {
@@ -814,6 +822,50 @@ const parts = (records: Rec[], mods: ModRecord[], now: Date): Array<{ part: Part
   return result;
 };
 
+/** Request-scoped refusals: the call's own arguments or bounds. They show nothing about the service, its key or the connection. */
+const REQUEST_CAUSES = new Set(['invalid_input', 'out_of_scope', 'range_too_large', 'output_limit', 'cancelled']);
+const MODEL_ISSUES = new Set(['response_model', 'request_model', 'request_effort', 'request_unconfirmed']);
+const modelCheck = (s: OperationStep): 'model' | 'request' | null => s.issue === 'response_model' || !s.issue && s.model?.status === 'mismatch' ? 'model' : s.issue && MODEL_ISSUES.has(s.issue) ? 'request' : null;
+/** The operation a step belongs to on its host. A model is checked only by an observed model and a request setting only by
+ * its recorded application; any other step by later records of its own kind. */
+const operationKey = (host: string, s: OperationStep, check = modelCheck(s)): string => check ? `${host}\n${s.feature}\n${check}` : `${host}\n${s.feature}\n${s.lane}\n${s.title}`;
+/** What one settled step shows: [operation, worked]. A request-scoped refusal shows nothing about its operation. */
+const observations = (host: string, s: OperationStep): Array<[string, boolean]> => {
+  if (s.cause && REQUEST_CAUSES.has(s.cause)) return [];
+  const seen: Array<[string, boolean]> = [];
+  if (s.model && s.model.status !== 'unobserved') seen.push([operationKey(host, s, 'model'), s.model.status === 'confirmed']);
+  if (s.model?.requestApplied !== undefined) seen.push([operationKey(host, s, 'request'), s.model.requestApplied]);
+  if ((s.state === 'done' || s.state === 'error') && !modelCheck(s)) seen.push([operationKey(host, s, null), s.state === 'done']);
+  return seen;
+};
+const impacts = new WeakMap<OperationRun, { sig: string; run: OperationRun }>();
+/** Marks each failure with what later records of its operation on the same host show now, across sessions. The failure itself
+ * stays as recorded. An unchanged run keeps its object, so a live patch skips it. */
+const withImpact = (runs: OperationRun[]): OperationRun[] => {
+  const seen = new Map<string, Array<{ at: string; ok: boolean }>>();
+  for (const run of runs) for (const s of run.steps) for (const [key, ok] of observations(run.host ?? 'claude', s)) {
+    let list = seen.get(key);
+    if (!list) seen.set(key, list = []);
+    list.push({ at: s.at, ok });
+  }
+  for (const list of seen.values()) list.sort((a, b) => a.at.localeCompare(b.at));
+  return runs.map(run => {
+    if (!run.steps.some(failed)) return run;
+    const steps = run.steps.map((s): OperationStep => {
+      if (!failed(s)) return s;
+      // ponytail: a linear scan per failure; index the sorted lists if failures number in the thousands.
+      const later = (seen.get(operationKey(run.host ?? 'claude', s)) ?? []).filter(o => o.at > s.at), last = later.at(-1);
+      return { ...s, impact: { now: s.cause && REQUEST_CAUSES.has(s.cause) ? 'request_only' : later.some(o => o.ok) ? 'later_ok' : later.length ? 'ongoing' : 'unknown',
+        lastAt: last?.at ?? s.at, lastState: last ? last.ok ? 'done' : 'error' : s.state } };
+    });
+    const sig = JSON.stringify(steps.map(s => s.impact ?? null)), cached = impacts.get(run);
+    if (cached?.sig === sig) return cached.run;
+    const marked = { ...run, steps, state: operationState(steps) };
+    impacts.set(run, { sig, run: marked });
+    return marked;
+  });
+};
+
 /** `whole` builds the recording in one pass with no reuse: the reference the split build must equal. */
 export const buildOperations = (records: Rec[], mods: ModRecord[], now: Date, availability: { trace: boolean; host?: Host }, whole = false): OperationsView => {
   // A native child skips routing on every model step; one row per step would bury the run list.
@@ -827,7 +879,7 @@ export const buildOperations = (records: Rec[], mods: ModRecord[], now: Date, av
     managed ||= part.managed;
   }
   const later = (a: { run: OperationRun }, b: { run: OperationRun }) => b.run.lastAt.localeCompare(a.run.lastAt);
-  const allRuns = entries.sort(whole ? later : (a, b) => later(a, b) || a.cls - b.cls || a.at.localeCompare(b.at) || a.index - b.index).map(e => e.run);
+  const allRuns = withImpact(entries.sort(whole ? later : (a, b) => later(a, b) || a.cls - b.cls || a.at.localeCompare(b.at) || a.index - b.index).map(e => e.run));
   // A busy, older execution must remain visible even when newer completed turns fill the recent window.
   const recentIds = new Set(allRuns.slice(0, 200).map(run => run.id));
   const runs = allRuns.filter(run => recentIds.has(run.id) || run.steps.some(step => step.state === 'active'));
