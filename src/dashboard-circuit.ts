@@ -15,6 +15,10 @@ export const CIRCUIT_CSS = `
 .rail .lat{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;min-width:52px;text-align:right}.rail .ln b{position:absolute;top:-3px;width:8px;height:8px;margin-left:-4px;border-radius:50%;background:var(--accent);animation:ping .6s ease-out forwards}
 @keyframes ping{from{box-shadow:0 0 0 0 color-mix(in srgb,var(--accent) 60%,transparent);opacity:1}to{box-shadow:0 0 0 10px transparent;opacity:0}}
 svg.wires{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible}svg.wires line{stroke:var(--line);stroke-width:1}
+/* Ambient flow only: a soft band and dashed wires that carry no record, never a dot like a Jev call. */
+.rail .ln:after{content:"";position:absolute;inset:-2px 0;border-radius:3px;filter:blur(1.5px);background:linear-gradient(90deg,transparent 44%,color-mix(in srgb,var(--accent) 35%,transparent) 48%,var(--accent) 50%,transparent 51%) no-repeat;background-size:300% 100%;animation:sweep 2.4s linear infinite}
+svg.wires line{stroke:var(--spark);stroke-dasharray:2 6;animation:flow 1.6s linear infinite}@keyframes sweep{from{background-position:100% 0}to{background-position:0 0}}@keyframes flow{to{stroke-dashoffset:-16}}
+.still .rail .ln:after{animation:none;opacity:0}.still svg.wires line{animation:none}
 .trip{position:absolute;z-index:2;width:6px;height:6px;margin:-3px 0 0 -3px;border-radius:50%;background:var(--accent);pointer-events:none}
 .insp .b{padding:14px 16px;display:flex;flex-direction:column;gap:12px}.insp-tags{display:flex;gap:8px;align-items:center}.insp-tags time{margin-left:auto;color:var(--faint)}.insp-desc{font-weight:500}
 .kv{display:grid;grid-template-columns:78px minmax(0,1fr);gap:8px 10px;font-size:13px;margin:0}.kv dt{color:var(--faint)}.kv dd{margin:0;min-width:0;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
