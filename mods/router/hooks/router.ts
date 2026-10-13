@@ -305,7 +305,6 @@ interface ChildRouting {
 
 /** What a spawn's assessment decided: its model, and the answer its subagent's steps read their effort from. */
 interface SpawnPlan {
-  nativeRequested?: string | null;
   target: string | null;
   answers: Answers | null;
   pair?: { offer: PairOffer; raw: unknown };
@@ -1001,6 +1000,30 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
   };
 
   /**
+   * The model the host's own selection should run for a spawn this Router left native: the call's `model`, else the
+   * parent's for a fork or a verified inheriting built-in. Any other agent's profile model is not in the event, so it
+   * stays unknown here (null) rather than being read as the parent's.
+   */
+  const nativeExpected = (e: SpawnEvent): string | null => {
+    const explicit = e.fork ? null : e.model?.trim() || null;
+    return explicit ?? (e.fork || inheritSkip(e) === null ? e.parentModel : null);
+  };
+
+  /**
+   * Whether a differing model is really a mismatch: a model pin overrides every child model, and an alias remap changes
+   * what an alias names. Only a mismatch pays for these reads, bounded like the dispatch's own; unread, it stays unknown.
+   */
+  const nativeMismatch = async (engine: RouterEngine, requested: string, observed: string, own: AbortSignal): Promise<string | null> => {
+    const wait = budget(engine, engine.now() + config.timeoutMs, own);
+    try {
+      const [pins, aliases] = await within(Promise.all([pinsOf(engine, 'spawn', wait.signal), aliasesOf(engine)]), wait.signal);
+      const resolved = aliases[requested] ?? requested;
+      return pins.subagentModel ? null : resolved;
+    } catch { return null; }
+    finally { wait.dispose(); }
+  };
+
+  /**
    * A spawn is asked about its model, its subagent's effort, or both. The model moves for an inheriting built-in and,
    * unless configured otherwise, for any call that names one: `model: "opus"` on an Agent call is the caller's default,
    * and in a week of the owner's traffic 161 of 174 routable spawns named it. Effort is asked for every spawn but a
@@ -1080,7 +1103,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     log(engine, { event: 'spawn', scope: 'subagent', boundary: 'host_hook', tool_use_id: e.tool_use_id, type: typeLabel(e), from: baselineModel, assessment: 'ok', sent: true, jev_model: JEV_MODEL,
       usage: loggable(result.usage), explicit: explicit !== null, patch: selected.patch, reasons: selected.reasons, model_asked: offer.modelAsked, effort_asked: offer.effortQuestions.size > 0,
       discovered_count: MODEL_FACTS.length, eligible_count: candidates.length, offered_count: offer.candidates.length, catalog_complete: false, allow_fable: allowFable });
-    return { target, nativeRequested: nowPins.subagentModel ? null : baselineModel, answers: {}, pair: { offer, raw: result.answers } };
+    return { target, answers: {}, pair: { offer, raw: result.answers } };
   };
 
   /**
@@ -1178,7 +1201,8 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
           // Response diagnostics never invalidate unrelated dispatches.
         }
       } else {
-        const requested = plan?.nativeRequested ?? null;
+        let requested = nativeExpected(e);
+        if (requested !== null && result.deny === undefined && !sameModel(requested, result.model)) requested = await nativeMismatch(engine, requested, result.model, own);
         log(engine, result.deny !== undefined
           ? { event: 'spawn_native_result', tool_use_id: e.tool_use_id, caller_model: e.model ?? null, requested, denied: true }
           : { event: 'spawn_native_result', tool_use_id: e.tool_use_id, caller_model: e.model ?? null, requested, observed: result.model, agent_id: result.agentId ?? null,
