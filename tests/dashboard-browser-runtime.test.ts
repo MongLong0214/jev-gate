@@ -262,8 +262,8 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
       for (const r of [refused('check_unobserved'), refused('worker_blocked')]) expect(await p.locator(`#runs [data-run="${r.id}"] .c-st`).textContent()).toBe('확인 필요');
       const id = refused('check_unobserved').id, marks = () => p.locator('#trace .sx-r').allTextContents(), detail = () => p.locator('#trace .sd:not([hidden])').textContent();
       await p.locator(`#runs [data-run="${id}"]`).click();
-      // The host end and the policy delivery after it are kept as lifecycle records; neither shows as a completed stage here.
-      expect(await marks()).toEqual(['계약 미충족']);
+      // The host end shows as its own row, never as acceptance; the policy delivery after it stays a lifecycle record.
+      expect(await marks()).toEqual(['계약 미충족', '호스트 종료']);
       for (const fact of ['single · 계약 미충족 · incomplete · 통과 보고 검사의 실행 미관측', '실행 기록 read · 미관측 #1', '원인check_unobserved', '현재 영향현재 영향 미확인', '세션claude-232']) expect(await detail()).toContain(fact);
       expect(await problems(p)).toEqual([]);
       await p.locator('#run-detail').screenshot({ path: join(output, '232-1440-dark-ko-detail-rejected.png') });
