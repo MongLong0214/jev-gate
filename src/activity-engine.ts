@@ -25,8 +25,7 @@ export const activityHandler = (sources: DashboardSources) => {
     async load(): Promise<LoadedActivity> {
       const started = performance.now();
       for (const dir of dirs) await traceReader.prepare(dir);
-      const activity = loadActivity({ ...sources, traceReader, now: new Date() });
-      // The page draws neither the event list nor the live board.
+      const activity = loadActivity({ ...sources, traceReader, now: new Date(), feed: false });
       const { events: _events, live: _live, ...rest } = activity, shown = { ...rest, operations: frameOperations(activity.operations) };
       const base = memo?.key ?? null, diff = diffFrame(memo, shown, () => `${epoch}.${++sequence}`);
       memo = diff.memo; current = shown; whole = null; operations = activity.operations;
