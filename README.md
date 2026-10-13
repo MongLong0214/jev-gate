@@ -195,7 +195,7 @@ When enabled and eligible, these inputs can leave the machine:
 
 The plugin does not upload the whole repository. Filters are not a DLP or retention guarantee. To disable remote Evidence, set `remote: false` in its optional config. That does not disable Gate, Router, or Compact's Jev selection. The dashboard is local. [Evidence configuration](plugins/evidence/README.md#configure).
 
-Recording stores private metadata under `~/.local/state/jev-gate/{claude,codex}/traces` (`$XDG_STATE_HOME` supported). Prompt text, source bodies, tool output, and keys do not appear in the dashboard.
+Recording stores private metadata under `~/.local/state/jev-gate/{claude,codex}/traces` (`$XDG_STATE_HOME` supported). Records older than 7 days are deleted automatically. Prompt text, source bodies, tool output, and keys do not appear in the dashboard.
 
 ## Update and troubleshoot
 
