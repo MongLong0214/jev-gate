@@ -514,6 +514,13 @@ it('reuses an unchanged recent session only until its next age edge, and equals 
   }
 });
 
+it('gives a Compact selection and its result written in the same millisecond their own step ids', () => {
+  const at = '2026-09-29T06:09:59.000Z', run = { event: 'compact', session_id: 's', run_id: 'c' };
+  const steps = buildOperations([], [row('compact', { ...run, stage: 'jev', jev_sent: true, jev_ms: 180 }, at), row('compact', { ...run, applied: true }, at)],
+    new Date('2026-09-29T06:10:00.000Z'), { trace: true }).runs.flatMap(r => r.steps);
+  expect(steps).toHaveLength(2); expect(new Set(steps.map(s => s.id)).size).toBe(2);
+});
+
 it('attaches the receipt of an answered Claude Router or Compact call, and never to a request, a skip or an unsent call (#225)', () => {
   const now = new Date('2026-09-29T06:10:00.000Z'), usage = { input: 1200, output: 30 };
   const steps = (rows: ModRecord[]) => buildOperations([], rows, now, { trace: true }).runs.flatMap(r => r.steps);
