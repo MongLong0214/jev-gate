@@ -264,6 +264,14 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
         res.end(body ?? JSON.stringify({ error: 'activity_unavailable' }));
         return;
       }
+      if (req.method === 'GET' && path === '/api/step') {
+        // The detail fields of the one stage a viewer opened; frames leave them out.
+        const query = new URL(req.url!, `http://${req.headers.host}`).searchParams, run = query.get('run') ?? '', id = query.get('step') ?? '';
+        const body = run && id && run.length <= 200 && id.length <= 200 ? await engine.step(run, id).catch(() => null) : null;
+        res.writeHead(body ? 200 : 404, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+        res.end(body ?? JSON.stringify({ error: 'step_unavailable' }));
+        return;
+      }
       if (req.method === 'GET' && path === '/api/live') {
         const identity = new URL(req.url!, `http://${req.headers.host}`).searchParams.get('viewer');
         const viewer = identity && /^[a-f0-9-]{36}$/.test(identity) ? identity : `legacy-${++viewerSequence}`;

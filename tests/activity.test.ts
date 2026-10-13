@@ -278,6 +278,31 @@ describe('dashboard server', () => {
     }
   });
 
+  it('leaves stage detail fields off frames and serves them for one step on loopback', async () => {
+    const trace = make();
+    write(trace, 'a1.json', { phase: 'admission_result', session_id: 's1', prompt_id: 'p1', request_id: 'r1', attempted: true, written_at: new Date().toISOString(), http: { status: 200, duration_ms: 210 }, decision: { shape: 'direct' } });
+    const server = await startDashboard({ traceDir: trace, env: { JEV_GATE_STATE_DIR: make() } }, 0);
+    try {
+      type Shown = Record<string, unknown>;
+      const body = await (await fetch(`${server.url}api/snapshot`)).json() as { operations: { runs: Array<{ id: string; steps: Shown[] }>; feed: Shown[] } };
+      const shown = [...body.operations.runs.flatMap(r => r.steps), ...body.operations.feed];
+      expect(shown.length).toBeGreaterThan(0);
+      for (const s of shown) for (const field of ['details', 'routing', 'sessionId', 'agentId']) expect(s).not.toHaveProperty(field);
+      const run = body.operations.runs[0]!, full: Shown[] = [];
+      for (const s of run.steps) {
+        const response = await fetch(`${server.url}api/step?run=${encodeURIComponent(run.id)}&step=${encodeURIComponent(String(s['id']))}`);
+        expect(response.status).toBe(200); expect(response.headers.get('cache-control')).toBe('no-store');
+        full.push(await response.json() as Shown);
+      }
+      // The fetched step is the frame step plus its detail fields.
+      full.forEach((f, i) => { expect(f).toMatchObject(run.steps[i]!); expect(f['details']).toEqual(expect.any(Array)); expect(f['sessionId']).toBe('s1'); });
+      expect(full.some(f => (f['details'] as string[]).length > 0)).toBe(true);
+      for (const query of [`run=${run.id}&step=missing`, `run=missing&step=${String(run.steps[0]!['id'])}`, 'run=&step=', '']) expect((await fetch(`${server.url}api/step?${query}`)).status).toBe(404);
+    } finally {
+      await server.close();
+    }
+  });
+
   it('pushes the open call and replaces it when the result file appears', async () => {
     const trace = make();
     const server = await startDashboard({ traceDir: trace, env: { JEV_GATE_STATE_DIR: make() } }, 0);

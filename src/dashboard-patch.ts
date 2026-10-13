@@ -1,13 +1,24 @@
 import type { ActivitySnapshot } from './activity.js';
-import type { OperationRun } from './operations.js';
+import type { OperationRun, OperationStep, OperationsView } from './operations.js';
 
 /** Live updates after the first frame carry only what changed. A run that is the same object as last time is skipped
  * without serializing it, and a changed run sends only its new or changed steps, so one new record costs bytes, not the
  * whole history. Keys advance only when content changes, so an unchanged rebuild sends nothing. */
-interface RunMemo { run: OperationRun; meta: string; steps: Map<string, string> | null }
+interface RunMemo { run: FrameRun; meta: string; steps: Map<string, string> | null }
 type Fields = Map<string, { value: unknown; json: string | undefined }>;
+/** Step fields only an opened stage detail shows. Frames leave them out, about half of a long history's bytes; the page
+ * fetches them for the one opened stage from `/api/step`. A step without `details` is such a frame step. */
+type DetailField = 'details' | 'routing' | 'sessionId' | 'agentId';
+export type FrameStep = Omit<OperationStep, DetailField>;
+export type FrameRun = Omit<OperationRun, 'steps'> & { steps: FrameStep[] };
+type FrameOperations = Omit<OperationsView, 'runs' | 'feed'> & { runs: FrameRun[]; feed: Array<FrameStep & { runId: string; runTitle: string; host?: OperationRun['host'] }> };
 /** What a frame carries: the snapshot fields the page draws. */
-export type FrameSnapshot = Partial<ActivitySnapshot> & Pick<ActivitySnapshot, 'operations'>;
+export type FrameSnapshot = Omit<Partial<ActivitySnapshot>, 'operations'> & { operations: FrameOperations };
+const frameStep = <T extends OperationStep>({ details: _details, routing: _routing, sessionId: _session, agentId: _agent, ...shown }: T): Omit<T, DetailField> => shown;
+// An unchanged run keeps its object across rebuilds, and so does its frame run, so the diff still skips it by identity.
+const frameRuns = new WeakMap<OperationRun, FrameRun>();
+const frameRun = (run: OperationRun): FrameRun => { let out = frameRuns.get(run); if (!out) frameRuns.set(run, out = { ...run, steps: run.steps.map(frameStep) }); return out; };
+export const frameOperations = (ops: OperationsView): FrameOperations => ({ ...ops, runs: ops.runs.map(frameRun), feed: ops.feed.map(frameStep) });
 export interface FrameMemo { key: string; top: Fields; ops: Fields; order: string[]; runs: Map<string, RunMemo>; feed: Map<string, string> }
 
 /** The snapshot fields whose change alone is no news: the build time moves on every rebuild. */
@@ -16,7 +27,7 @@ const feedKey = (s: { runId: string; id: string }): string => `${s.runId}\n${s.i
 const same = (a: readonly string[], b: readonly string[]): boolean => a.length === b.length && a.every((v, i) => v === b[i]);
 
 const fields = (o: object): Fields => new Map(Object.entries(o).map(([k, value]) => [k, { value, json: JSON.stringify(value) }]));
-const memoRun = (run: OperationRun): RunMemo & { fields: Omit<OperationRun, 'steps'> } => {
+const memoRun = (run: FrameRun): RunMemo & { fields: Omit<FrameRun, 'steps'> } => {
   const { steps, ...meta } = run, json = new Map<string, string>();
   for (const step of steps) json.set(step.id, JSON.stringify(step));
   return { run, fields: meta, meta: JSON.stringify(meta), steps: json.size === steps.length ? json : null };

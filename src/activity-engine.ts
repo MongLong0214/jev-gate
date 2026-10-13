@@ -4,9 +4,9 @@ import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
 import { loadActivity } from './activity.js';
 import type { DashboardSources } from './dashboard.js';
-import { diffFrame, type FrameMemo, type FrameSnapshot } from './dashboard-patch.js';
+import { diffFrame, frameOperations, type FrameMemo, type FrameSnapshot } from './dashboard-patch.js';
 import { TraceDirectoryReader } from './explain.js';
-import { operationsStableUntil } from './operations.js';
+import { operationsStableUntil, type OperationsView } from './operations.js';
 
 /** One rebuild. `key` advances only when content changed; `patch` turns the frame `base` into it. The whole frame is built
  * only when a viewer needs one (`full`), so a rebuild sends the changed part across the thread, not the history. Without new
@@ -20,20 +20,26 @@ export const activityHandler = (sources: DashboardSources) => {
   // A replacement thread starts a new key series, so no viewer can apply its patches to an older thread's frame.
   const epoch = randomUUID().slice(0, 8);
   let sequence = 0, memo: FrameMemo | null = null, current: FrameSnapshot | null = null, whole: { key: string; json: string } | null = null;
+  let operations: OperationsView | null = null;
   return {
     async load(): Promise<LoadedActivity> {
       const started = performance.now();
       for (const dir of dirs) await traceReader.prepare(dir);
       const activity = loadActivity({ ...sources, traceReader, now: new Date() });
       // The page draws neither the event list nor the live board.
-      const { events: _events, live: _live, ...shown } = activity;
+      const { events: _events, live: _live, ...rest } = activity, shown = { ...rest, operations: frameOperations(activity.operations) };
       const base = memo?.key ?? null, diff = diffFrame(memo, shown, () => `${epoch}.${++sequence}`);
-      memo = diff.memo; current = shown; whole = null;
+      memo = diff.memo; current = shown; whole = null; operations = activity.operations;
       return { key: memo.key, base: diff.patch ? base : null, patch: diff.patch, until: operationsStableUntil(), ms: performance.now() - started };
     },
     full(): { key: string; json: string } | null {
       if (!current || !memo) return null;
       return whole ??= { key: memo.key, json: JSON.stringify(current) };
+    },
+    /** One step as the last rebuild recorded it, with the detail fields frames leave out. */
+    step(runId: string, stepId: string): string | null {
+      const step = operations?.runs.find(run => run.id === runId)?.steps.find(step => step.id === stepId);
+      return step ? JSON.stringify(step) : null;
     },
     invalidate(dir: string, names?: string[]): void { if (names) for (const name of names) traceReader.invalidate(dir, name); else traceReader.invalidate(dir); },
   };
@@ -81,6 +87,7 @@ export const activityEngine = (sources: DashboardSources): ActivityEngine => {
   return {
     load: () => call({ op: 'load', args: [] }),
     full: () => call({ op: 'full', args: [] }),
+    step: (runId, stepId) => call({ op: 'step', args: [runId, stepId] }),
     invalidate: (dir, names) => call({ op: 'invalidate', args: [dir, names] }),
     close: async () => { const thread = worker; stop(); await thread?.terminate(); },
   };
