@@ -15,6 +15,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { DASHBOARD_PAGE } from '../src/dashboard-page.js';
 import { dashboardSources, startDashboard } from '../src/dashboard.js';
 import { buildOperations, type JevReceipt, type OperationRun, type OperationStep } from '../src/operations.js';
+import { reportedSingleVerdict } from '../src/plan.js';
+import { refusalReason } from '../src/verify.js';
 
 const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
 const step = (id: string, feature: OperationStep['feature'], extra: Partial<OperationStep> = {}): OperationStep => ({ id, feature, lane: 'jev', at: ago(0), state: 'done', title: `${feature} recorded result`, summary: 'Recorded result', details: [], ...extra });
@@ -224,6 +226,63 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
       await phone.locator('[data-state=attention]').click();await phone.locator('#run-detail').screenshot({ path: join(output, '223-390-detail-current.png') });
       await phone.locator('[data-state=past_error]').click();await phone.locator(`#runs [data-run="${refused}"]`).click();await phone.locator('#run-detail').screenshot({ path: join(output, '223-390-detail-past.png') });
       await phone.close();
+    } finally { await local.close(); rmSync(home, { recursive: true, force: true }); }
+  }, 60_000);
+
+  it('keeps refused worker contracts refused from real Claude and Codex trace files through a later host end, and shows a later accept separately (#232)', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'jev-dashboard-232-')), claude = join(home, 'claude-traces'), codex = join(home, 'codex-traces');
+    mkdirSync(claude); mkdirSync(codex);
+    const write = (dir: string, name: string, value: object) => writeFileSync(join(dir, `${name}.json`), JSON.stringify(value));
+    const unobserved = refusalReason({ transcript: 'read', contradicted: [], unobserved: ['#1'], stale: [] })!;
+    const blocked = reportedSingleVerdict({ status: 'blocked', summary: 'worker reply text', changed_files: [], interfaces: [], checks: [{ check_id: 'npm test', result: 'fail', note: 'reply note' }], blockers: [] }).reason!;
+    // The two reported receipts in the v0.8.18 shape: Claude hook rows carry no host, Codex rows do.
+    const post = (own: object, written_at: string, model: string, verdict: string, verdict_reason: string | null, checks: object, verification: object | null) => ({ ...own, phase: 'post', prompt_id: 'p', tool_use_id: `${model}-call`, invocation_id: `${model}-${written_at}`, written_at,
+      task_id: 'single', rev: 0, attempt: 1, verdict, verdict_reason, reported_checks: checks, ready_task_ids: [], plan_complete: false, evidence_format_only: false, root_fallback: false,
+      subagent_type: 'jev-gate:worker', requested_model: model, resolved_model: `claude-${model}-5`, tool_response: { status: 'completed', agentId: `${model}-agent` }, root_effort: null, ...(verification ? { verification } : {}), advisory: null });
+    const c = { session_id: 'claude-232', mode: 'auto', version: '0.8.18' }, x = { host: 'codex', session_id: 'codex-232', mode: 'auto', version: '0.8.18' };
+    write(claude, 'post', post(c, ago(240_000), 'sonnet', 'incomplete', unobserved, { pass: 1, fail: 0, not_run: 0 }, { transcript: 'read', contradicted: [], unobserved: ['#1'], stale: [] }));
+    write(claude, 'terminal', { ...c, phase: 'background_terminal', prompt_id: 'q', execution_prompt_id: 'p', tool_use_id: 'sonnet-call', invocation_id: 'c-terminal', written_at: ago(200_000), status: 'completed', task_id: 'single' });
+    write(claude, 'delivery', { ...c, phase: 'background_policy_delivery', prompt_id: 'q', execution_prompt_id: 'p', invocation_id: 'c-delivery', written_at: ago(190_000), reason: 'policy_delivered_no_active_execution', admission_blocked: false });
+    write(codex, 'post', post(x, ago(180_000), 'haiku', 'incomplete', blocked, { pass: 0, fail: 1, not_run: 0 }, null));
+    write(codex, 'terminal', { ...x, phase: 'background_terminal', prompt_id: 'p', tool_use_id: 'haiku-call', invocation_id: 'x-terminal', written_at: ago(170_000), status: 'completed', agent_id: 'haiku-agent' });
+    write(codex, 'stop', { ...x, phase: 'codex_event', event: 'SubagentStop', agent_id: 'haiku-agent', agent_type: 'jev-gate:worker', invocation_id: 'x-stop', written_at: ago(169_000) });
+    const local = await startDashboard(dashboardSources({ HOME: home, XDG_CONFIG_HOME: join(home, '.config'), XDG_STATE_HOME: join(home, '.local/state'), JEV_GATE_TRACE_DIR: claude, JEV_CODEX_TRACE_DIR: codex }), 0);
+    type Snap = { operations: { attention: number; runs: Array<{ id: string; host: string; state: string; steps: Array<{ outcome?: string; cause?: string; details: string[]; impact?: { now: string } }> }> } };
+    const snap = async () => await (await fetch(new URL('/api/snapshot', local.url))).json() as Snap;
+    try {
+      let s = await snap();
+      const refused = (cause: string) => s.operations.runs.find(r => r.steps.some(x => x.outcome === 'rejected' && x.cause === cause))!;
+      expect(s.operations.attention).toBe(2); expect(refused('check_unobserved')).toMatchObject({ host: 'claude', state: 'attention' }); expect(refused('worker_blocked')).toMatchObject({ host: 'codex', state: 'attention' });
+      expect(refused('check_unobserved').steps.find(x => x.outcome === 'rejected')!.details).toContain('실행 기록 read · 미관측 #1');
+      expect(refused('worker_blocked').steps.find(x => x.outcome === 'rejected')!.details).toContain('worker 보고 pass 0 · fail 1 · 미실행 0');
+      expect(s.operations.runs.flatMap(r => r.steps).filter(x => x.outcome === 'host_ended')).toHaveLength(3);
+      for (const secret of [unobserved, blocked, 'worker reply text', 'reply note', 'npm test']) expect(JSON.stringify(s)).not.toContain(secret);
+      const p = await page();await p.goto(local.url);await p.waitForFunction(() => document.getElementById('k-att')?.textContent === '2');
+      expect(await p.locator('#k-diag').textContent()).toBe('워커 계약 미충족 2건');
+      for (const r of [refused('check_unobserved'), refused('worker_blocked')]) expect(await p.locator(`#runs [data-run="${r.id}"] .c-st`).textContent()).toBe('확인 필요');
+      const id = refused('check_unobserved').id, marks = () => p.locator('#trace .sx-r').allTextContents(), detail = () => p.locator('#trace .sd:not([hidden])').textContent();
+      await p.locator(`#runs [data-run="${id}"]`).click();
+      // The host end and the policy delivery after it are kept as lifecycle records; neither shows as a completed stage here.
+      expect(await marks()).toEqual(['계약 미충족']);
+      for (const fact of ['single · 계약 미충족 · incomplete · 통과 보고 검사의 실행 미관측', '실행 기록 read · 미관측 #1', '원인check_unobserved', '현재 영향현재 영향 미확인', '세션claude-232']) expect(await detail()).toContain(fact);
+      expect(await problems(p)).toEqual([]);
+      await p.locator('#run-detail').screenshot({ path: join(output, '232-1440-dark-ko-detail-rejected.png') });
+      await p.locator(`#runs [data-run="${refused('worker_blocked').id}"]`).click();
+      expect(await detail()).toContain('single · 계약 미충족 · incomplete · 워커가 차단·재계획 보고');
+      await p.locator('#run-detail').screenshot({ path: join(output, '232-1440-dark-ko-detail-blocked.png') });
+      // A genuine retry of the same task is accepted later on the open stream: it is its own record, and the refusal stays as it was.
+      write(claude, 'retry', post(c, ago(0), 'sonnet', 'accept', null, { pass: 1, fail: 0, not_run: 0 }, { transcript: 'read', contradicted: [], unobserved: [], stale: [] }));
+      await p.waitForFunction(() => document.getElementById('k-att')?.textContent === '1');
+      s = await snap();
+      const retried = s.operations.runs.find(r => r.id === id)!;
+      expect(retried.state).toBe('past_error'); expect(retried.steps.filter(x => x.outcome === 'rejected' || x.outcome === 'accepted').map(x => [x.outcome, x.impact?.now ?? null])).toEqual([['rejected', 'later_ok'], ['accepted', null]]);
+      await p.locator('[data-state=past_error]').click();await p.locator(`#runs [data-run="${id}"]`).click();
+      expect(await p.locator(`#runs [data-run="${id}"] .c-st`).textContent()).toBe('지난 오류');
+      expect(await marks()).toEqual(expect.arrayContaining(['계약 미충족', '계약 수락'])); expect(await detail()).toContain('현재 영향이후 같은 작업 정상 기록');
+      await p.locator('#run-detail').screenshot({ path: join(output, '232-1440-dark-ko-detail-retried.png') });
+      await p.locator('#language').click();expect(await marks()).toEqual(expect.arrayContaining(['Contract not met', 'Contract accepted']));
+      expect(await detail()).toContain('Reported pass not seen in the worker transcript');await p.locator('#language').click();
+      await p.close();
     } finally { await local.close(); rmSync(home, { recursive: true, force: true }); }
   }, 60_000);
 

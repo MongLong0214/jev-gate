@@ -47,7 +47,9 @@ const modelName=v=>{const m=String(v||'').match(/(haiku|sonnet|opus|fable)|^gpt-
 const fmt=t=>{const s=Math.floor(t/1000);return !Number.isFinite(t)?'–':s<2?label('방금','now'):s<60?label(s+'초 전',s+'s ago'):s<3600?label(Math.floor(s/60)+'분 전',Math.floor(s/60)+'m ago'):label(Math.floor(s/3600)+'시간 전',Math.floor(s/3600)+'h ago')};
 const pct=v=>Math.round(v*100)+'%';
 const confRest=rc=>pct(rc.confidence)+(rc.threshold==null?'':' · '+label('변경 기준 ','change threshold ')+pct(rc.threshold)),confText=rc=>rc?.confidence==null?'–':label('확신 ','Confidence ')+confRest(rc);
-function decisionText(s){if(!s)return '–';const c=s.receipt?.choice;
+// #232: a worker result names its contract verdict; only an accept receipt reads as accepted, and a host end is not one.
+const OUTCOME={accepted:['계약 수락','Contract accepted'],rejected:['계약 미충족','Contract not met'],unknown:['판정 미확인','Verdict unknown'],host_ended:['호스트 종료','Host ended']};
+function decisionText(s){if(!s)return '–';if(s.outcome)return label(...OUTCOME[s.outcome]);const c=s.receipt?.choice;
   if(s.feature==='router'){const m=c||(s.model?[s.model.observed||s.model.selected,s.model.observedEffort||s.model.selectedEffort].filter(Boolean).join(' · '):'');return m?m.split(' · ').map((v,i)=>i?v:modelName(v)).join(' · '):tr(state[s.state])}
   const path=s.executionPath||(s.feature==='admission'?c:null);if(path==='direct')return label('직접','Direct');if(path==='orchestrated')return label('위임','Delegate');
   if(s.feature==='planning'&&s.graph?.length)return s.graph.length+label('단계',' steps');
