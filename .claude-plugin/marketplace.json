@@ -10,7 +10,7 @@
       "name": "jev-gate",
       "source": {
         "source": "archive",
-        "url": "https://github.com/MongLong0214/jev-gate/releases/download/v0.8.18/jev-gate-0.8.18.zip",
+        "url": "https://github.com/MongLong0214/jev-gate/releases/download/v0.8.19/jev-gate-0.8.19.zip",
         "sha256": "a0b3710569c173b5b02d97f527bad5b4bfb291b79cbfba9185624487ff9c7427"
       },
       "displayName": "Jev Gate",
