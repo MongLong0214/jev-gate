@@ -35,6 +35,7 @@ export interface OperationStep {
   routing?: { scope: 'root' | 'spawn' | 'child' | 'owned'; baseline: string | null; modelReason: string | null; effortReason: string | null; proposedModel?: string; probability?: number; threshold?: number };
   /** Timings are measured by the caller or paired recorded events, never estimated from usage. */
   durationMs?: number;
+  /** Time between two settled records. A running step carries `startedAt` instead, and the page counts from it. */
   elapsedMs?: number;
   /** Native host spans store their explicit start; other records are end-stamped measurements. */
   startedAt?: string;
@@ -80,7 +81,6 @@ export interface OperationsView {
   latency: { measured: number; p50: number | null; p95: number | null; fastest: number | null; latest: number | null; recent: Array<{ at: string; ms: number }>;
     /** Measured Jev responses whose record date is the local today, per host. Cost sums only responses with a recorded, priced model. */
     today: Partial<Record<Host, { calls: number; input: number; costUsd: number; unpriced: number }>> };
-  sig: string;
 }
 
 export interface ModRecord { at: string; component: 'router' | 'compact'; rec: Rec }
@@ -449,7 +449,7 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
     ...(phase === 'admission_result' && ['direct', 'orchestrated'].includes(String(field(r, 'decision')?.['shape'])) ? { executionPath: field(r, 'decision')!['shape'] as 'direct' | 'orchestrated' } : {}),
     ...(duration !== null && duration >= 0 ? { durationMs: duration } : {}),
     ...(elapsed !== null && elapsed >= 0 ? { elapsedMs: elapsed } : {}),
-    ...(phase === 'codex_model_request' && state === 'active' ? { startedAt: at, elapsedMs: Math.max(0, age) } : {}),
+    ...(phase === 'codex_model_request' && state === 'active' ? { startedAt: at } : {}),
     ...(phase.endsWith('_result') && judgements(r) ? { judgements: judgements(r)! } : {}),
     ...(graph ? { graph } : {}), ...(receipt ? { receipt } : {}) };
 };
@@ -579,7 +579,7 @@ const modStep = (row: ModRecord, now: number, closed: Set<string>, responses: Ma
   const selection = field(r, 'selection');
   const receipt = lane === 'jev' && !started && duration !== null && duration >= 0 ? jevReceipt(null, token(r['assessment'] ?? (r['stage'] === 'jev' ? r['selection'] : null)), token(r['jev_model']), field(r, 'usage'), choice,
     number(selection?.['probability']), number(selection?.['threshold']), token(selection?.['direction'])) : undefined;
-  return { id: id(`${row.component}:${row.at}:${key}:${event}:${started ? 'start' : 'result'}`), at: row.at, feature, state, lane, ...(token(r['agent_id']) ? { agentId: token(r['agent_id'])!, ...(token(r['session_id']) ? { sessionId: token(r['session_id'])! } : {}) } : {}), ...(['prepared', 'model_request', 'model_failure'].includes(event) ? { lifecycle: true as const } : {}), title: { router: event === 'prepared' ? 'Router · 요청 전달 준비' : event === 'model_request' ? '모델 · 응답 대기' : event === 'model_failure' ? '모델 · 요청 실패' : 'Router · ' + event, compact: 'Compact · 압축', output: 'Output · 로그 접기' }[feature], summary, details: details.filter(Boolean), ...(routing ? { routing } : {}), ...(model ? { model } : {}), ...(lane === 'jev' && duration !== null && duration >= 0 ? { durationMs: duration } : {}), ...(event === 'model_request' && state === 'active' ? { startedAt: row.at, elapsedMs: Math.max(0, age) } : {}) };
+  return { id: id(`${row.component}:${row.at}:${key}:${event}:${started ? 'start' : 'result'}`), at: row.at, feature, state, lane, ...(token(r['agent_id']) ? { agentId: token(r['agent_id'])!, ...(token(r['session_id']) ? { sessionId: token(r['session_id'])! } : {}) } : {}), ...(['prepared', 'model_request', 'model_failure'].includes(event) ? { lifecycle: true as const } : {}), title: { router: event === 'prepared' ? 'Router · 요청 전달 준비' : event === 'model_request' ? '모델 · 응답 대기' : event === 'model_failure' ? '모델 · 요청 실패' : 'Router · ' + event, compact: 'Compact · 압축' }[feature], summary, details: details.filter(Boolean), ...(routing ? { routing } : {}), ...(model ? { model } : {}), ...(lane === 'jev' && duration !== null && duration >= 0 ? { durationMs: duration } : {}), ...(event === 'model_request' && state === 'active' ? { startedAt: row.at } : {}), ...(receipt ? { receipt } : {}) };
 };
 
 const gateGroup = (r: Rec): string => {
@@ -745,8 +745,14 @@ const buildPart = (records: Rec[], mods: ModRecord[], now: Date): Part => {
   return { runs: [...executions.values()].map(e => e.run), ranks: [...executions.values()].map(e => e.rank), requests: [...requests], managed };
 };
 
-// No age threshold in buildPart exceeds this, so a part whose newest time is older reads the same at every later time.
-const SETTLED_MS = 600_000;
+/** The times at which buildPart's output can change without a new record: every age test there compares now with a record
+ * time `t` at `t` (age >= 0), `t + 30s`, `t + 600s` (`<`) or just past `t + 600s` (`>`). Output is the same until the first. */
+const AGE_EDGES = [0, 30_000, 600_000, 600_001];
+const nextEdge = (times: number[], now: number): number => {
+  let next = Infinity;
+  for (const t of times) for (const edge of AGE_EDGES) if (t + edge > now && t + edge < next) next = t + edge;
+  return next;
+};
 // Keys fall back to these for a missing session, so records carrying them can meet any session-less record.
 const NO_SESSION = new Set(['unknown', 'legacy', 'null', 'undefined']);
 const joinKeys = new WeakMap<object, string[]>();
@@ -761,9 +767,10 @@ const joins = (item: object, rec: Rec, group: () => string): string[] => {
   }
   return keys;
 };
-let partCache = new Map<string, { records: Rec[]; mods: ModRecord[]; at: number; settled: boolean; part: Part }>();
+let partCache = new Map<string, { records: Rec[]; mods: ModRecord[]; at: number; until: number; part: Part }>();
 const sameItems = <T>(a: T[], b: T[]): boolean => a.length === b.length && a.every((v, i) => v === b[i]);
-/** Connected parts of the recording. A settled part with the same records is reused instead of rebuilt. */
+/** Connected parts of the recording. A part with the same records is reused until one of its age edges passes, so a busy
+ * history rebuilds only the sessions that received records. */
 const parts = (records: Rec[], mods: ModRecord[], now: Date): Array<{ part: Part; recordIndex: number[]; modIndex: number[] }> => {
   const keys = [...records.map(r => joins(r, r, () => `${r['host'] === 'codex' ? 'codex' : 'claude'}:${gateGroup(r)}`)), ...mods.map(row => joins(row, row.rec, () => modGroup(row)))];
   const parent = keys.map((_, i) => i);
@@ -779,12 +786,12 @@ const parts = (records: Rec[], mods: ModRecord[], now: Date): Array<{ part: Part
   const at = now.getTime(), next: typeof partCache = new Map();
   const result = [...groups.values()].map(group => {
     const cached = partCache.get(group.key);
-    let entry = cached && cached.settled && at >= cached.at && sameItems(cached.records, group.records) && sameItems(cached.mods, group.mods) ? cached : undefined;
+    let entry = cached && at >= cached.at && at < cached.until && sameItems(cached.records, group.records) && sameItems(cached.mods, group.mods) ? cached : undefined;
     if (!entry) {
-      let newest = -Infinity;
-      for (const r of group.records) if (typeof r['written_at'] === 'string') newest = Math.max(newest, Date.parse(r['written_at']) || -Infinity);
-      for (const row of group.mods) newest = Math.max(newest, Date.parse(row.at) || -Infinity);
-      entry = { records: group.records, mods: group.mods, at, settled: at - newest > SETTLED_MS, part: buildPart(group.records, group.mods, now) };
+      const times: number[] = [];
+      for (const r of group.records) if (typeof r['written_at'] === 'string') { const t = Date.parse(r['written_at']); if (Number.isFinite(t)) times.push(t); }
+      for (const row of group.mods) { const t = Date.parse(row.at); if (Number.isFinite(t)) times.push(t); }
+      entry = { records: group.records, mods: group.mods, at, until: nextEdge(times, at), part: buildPart(group.records, group.mods, now) };
     }
     next.set(group.key, entry);
     return { part: entry.part, recordIndex: group.recordIndex, modIndex: group.modIndex };
@@ -847,6 +854,5 @@ export const buildOperations = (records: Rec[], mods: ModRecord[], now: Date, av
   const feed = [...new Set([...firstSorted(all.filter(s => !s.lifecycle), 120, newestFirst),
     ...firstSorted(all.filter(s => !s.lifecycle && Date.parse(s.at) >= sinceMs), ACTIVITY_CAP, newestFirst),
     ...firstSorted(all.filter(s => s.lifecycle), 20, newestFirst), ...latestJev.values()])].sort(newestFirst);
-  const sig = createHash('sha256').update(JSON.stringify({ runs, features, requests, latency })).digest('hex').slice(0, 24);
-  return { runs, features, feed, active: runs.filter((r) => r.state === 'active').length, attention: runs.filter((r) => r.state === 'attention').length, requests, latency, sig };
+  return { runs, features, feed, active: runs.filter((r) => r.state === 'active').length, attention: runs.filter((r) => r.state === 'attention').length, requests, latency };
 };

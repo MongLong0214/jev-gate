@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { loadActivity } from '../src/activity.js';
 import { TraceDirectoryReader } from '../src/explain.js';
+import { applyPatch } from './live-frames.js';
 
 // #210: the compiled dashboard rebuilds a long history on its activity thread, so health and live streams keep answering.
 describe('dashboard activity thread (#210)', () => {
@@ -53,15 +54,17 @@ process.stdout.write(s.url + '\\n');`;
       const reader = (await fetch(`${url}api/live`)).body!.getReader(), viewer: Viewer = { frames: [], reader };
       void (async () => {
         // One streaming decoder per viewer: a multibyte character can span two reads.
-        let buffer = '';
+        let buffer = '', state: Record<string, unknown> | null = null;
         const decoder = new TextDecoder();
         for (;;) {
           const { done, value } = await reader.read().catch(() => ({ done: true, value: undefined }));
           if (done) return;
           buffer += decoder.decode(value, { stream: true });
           for (let end = buffer.indexOf('\n\n'); end >= 0; end = buffer.indexOf('\n\n')) {
-            const data = buffer.slice(0, end).split('\n').find(line => line.startsWith('data: '));
-            if (data && !buffer.slice(0, end).includes('event: heartbeat')) viewer.frames.push(data.slice(6));
+            const lines = buffer.slice(0, end).split('\n'), data = lines.find(line => line.startsWith('data: '))?.slice(6);
+            // Later frames are patches; the viewer keeps what the page would hold after applying each one.
+            if (data && lines.includes('event: patch')) { state = applyPatch(state, JSON.parse(data)); viewer.frames.push(JSON.stringify(state)); }
+            else if (data && !lines.includes('event: heartbeat')) { state = JSON.parse(data) as Record<string, unknown>; viewer.frames.push(data); }
             buffer = buffer.slice(end + 2);
           }
         }

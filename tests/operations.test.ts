@@ -307,7 +307,8 @@ describe('actual model request lifecycle', () => {
     const request={session_id:'s',turn:'t',index:2,event:'model_request',requested:'claude-opus-5-5'};
     const now=new Date('2026-09-29T06:02:00.000Z');
     const build=(extra:ModRecord[]=[])=>buildOperations([], [row('router',request),...extra],now,{trace:true});
-    expect(build().feed.find(s=>s.lifecycle)).toMatchObject({state:'active',elapsedMs:120000});
+    // A running request carries its start; the page counts the elapsed time, so the record does not change every second.
+    expect(build().feed.find(s=>s.lifecycle)).toMatchObject({state:'active',startedAt:expect.any(String)}); expect(build().feed.find(s=>s.lifecycle)?.elapsedMs).toBeUndefined();
     expect(build([row('router',{...request,index:1,event:'root_result'},later)]).feed.find(s=>s.title==='모델 · 응답 대기')?.state).toBe('active');
     expect(build([row('router',{...request,event:'root_result',observed:'claude-opus-5-5'},later)]).feed.find(s=>s.title==='모델 · 응답 대기')?.state).toBe('done');
     const failed=build([row('router',{...request,event:'model_failure'},later)]);
@@ -331,7 +332,7 @@ describe('unanswered model requests (#212)', () => {
     expect(old.step).toMatchObject({ state: 'unconfirmed', summary: '모델 응답 기록 없음 · 현재 활동 미관측' });
     expect(old.step.elapsedMs).toBeUndefined(); expect(old.step.startedAt).toBeUndefined();
     expect(old.view).toMatchObject({ active: 0, attention: 0 }); expect(old.view.runs[0]?.state).toBe('unconfirmed');
-    expect(claude([], minute(2)).step).toMatchObject({ state: 'active', summary: '모델 응답 대기', elapsedMs: 120_000, startedAt: sent });
+    expect(claude([], minute(2)).step).toMatchObject({ state: 'active', summary: '모델 응답 대기', startedAt: sent }); expect(claude([], minute(2)).step.elapsedMs).toBeUndefined();
     expect(claude([], minute(2)).view.active).toBe(1);
     const late = claude([row('router', { ...child, event: 'child_result', requested: 'claude-sonnet-5-5', observed: 'claude-sonnet-5-5', confirmation: 'confirmed' }, minute(5000))], '2026-10-12T03:13:00.000Z');
     expect(late.step).toMatchObject({ state: 'done', summary: '모델 요청 종료 기록 확인' }); expect(late.view.active).toBe(0);
@@ -339,7 +340,7 @@ describe('unanswered model requests (#212)', () => {
 
   it('keeps a slow request live only on activity from its exact loop and never closes it from elsewhere', () => {
     const alive = claude([row('router', { ...child, event: 'late', usage: { input: 1 } }, minute(15))], minute(20));
-    expect(alive.step).toMatchObject({ state: 'active', elapsedMs: 20 * 60_000 }); expect(alive.view.active).toBe(1);
+    expect(alive.step).toMatchObject({ state: 'active', startedAt: expect.any(String) }); expect(alive.view.active).toBe(1);
     for (const other of others({ ...child, event: 'late' }, minute(15))) expect(claude([other], minute(20)).step.state).toBe('unconfirmed');
     for (const other of others({ ...child, event: 'child_result', observed: 'claude-sonnet-5-5' }, minute(1))) expect(claude([other], minute(2)).step.state).toBe('active');
     for (const other of [...others({ ...child, event: 'turn_end', reason: 'aborted' }, minute(1)), ...others({ event: 'session_end', session_id: 's' }, minute(1)).slice(2), row('router', { event: 'session_end' }, minute(1))]) expect(claude([other], minute(2)).step.state).toBe('active');
@@ -368,7 +369,7 @@ describe('unanswered model requests (#212)', () => {
     };
     expect(build([], '2026-10-12T03:13:00.000Z')).toMatchObject({ view: { active: 0 }, step: { state: 'unconfirmed', summary: '모델 응답 기록 없음 · 현재 활동 미관측' } });
     expect(build([], minute(2)).step.state).toBe('active');
-    expect(build([event('PreToolUse', {}, minute(15))], minute(20)).step).toMatchObject({ state: 'active', elapsedMs: 20 * 60_000 });
+    expect(build([event('PreToolUse', {}, minute(15))], minute(20)).step).toMatchObject({ state: 'active', startedAt: expect.any(String) });
     for (const other of [event('PreToolUse', { session_id: 'other' }, minute(15)), event('PreToolUse', { prompt_id: 'turn-2' }, minute(15))]) expect(build([other], minute(20)).step.state).toBe('unconfirmed');
     expect(build([event('Stop')], minute(2)).step.state).toBe('unconfirmed');
     expect(build([event('Interrupt')], minute(2)).step.state).toBe('interrupted');
@@ -391,7 +392,7 @@ it('shows Codex model requests in flight even when Router preserves the baseline
   const req={...base,host:'codex',phase:'codex_model_request',request_id:'model-1',submitted_model:'gpt-6.1-sol'};
   const now=new Date('2026-09-29T06:02:00.000Z');
   const view=buildOperations([req],[],now,{trace:true});
-  expect(view.feed[0]).toMatchObject({state:'active',lifecycle:true,elapsedMs:120000,title:'모델 · 응답 대기'});
+  expect(view.feed[0]).toMatchObject({state:'active',lifecycle:true,startedAt:base.written_at,title:'모델 · 응답 대기'}); expect(view.feed[0]?.elapsedMs).toBeUndefined();
   const ended=buildOperations([req,{...base,written_at:later,host:'codex',phase:'codex_model_failure',request_id:'model-1'}],[],now,{trace:true});
   expect(ended.feed.find(s=>s.title==='모델 · 응답 대기')?.state).toBe('done');
   expect(ended.feed.find(s=>s.title==='모델 · 요청 실패')?.state).toBe('error');
@@ -491,6 +492,46 @@ it('rebuilds only the sessions that changed or are still recent, and equals one 
   // Only the recording session is rebuilt; then s1 changes, and the session-less pool and s2 stay as they were.
   expect(second!.runs.filter(run => first!.runs.includes(run))).toEqual(second!.runs.slice(1));
   expect(third!.runs.filter(run => second!.runs.includes(run)).map(run => run.title).sort()).toEqual(['Evidence 검색', 'Router 실행', '게이트 세션']);
+});
+
+it('reuses an unchanged recent session only until its next age edge, and equals one pass at every time', () => {
+  const t0 = Date.parse('2026-09-29T07:00:00.000Z'), iso = (ms: number) => new Date(t0 + ms).toISOString(), avail = { trace: true };
+  const records: Record<string, unknown>[] = [
+    { ...base, written_at: iso(0), phase: 'admission_intent', request_id: 'open' },
+    { ...base, written_at: iso(2_000), phase: 'background_launch', tool_use_id: 'bg' },
+    { ...base, host: 'codex', written_at: iso(4_000), phase: 'codex_model_request', request_id: 'm1', submitted_model: 'gpt-6.1-sol' },
+    { host: 'codex', phase: 'codex_event', event: 'PreToolUse', session_id: 'cx', prompt_id: 'turn-1', tool_use_id: 'tool', tool_name: 'Bash', written_at: iso(6_000) },
+  ];
+  const mods = [row('router', { session_id: 's1', turn: 't', index: 1, event: 'model_request', requested: 'claude-opus-5-5' }, iso(8_000)),
+    row('compact', { event: 'compact', session_id: 's1', run_id: 'c1', stage: 'started' }, iso(10_000))];
+  let previous: ReturnType<typeof buildOperations> | null = null;
+  for (const offset of [0, 1, 15_000, 29_999, 30_000, 30_001, 31_000, 300_000, 599_999, 600_000, 600_001, 606_001, 610_001, 900_000, 900_001]) {
+    const now = new Date(t0 + offset), view = buildOperations(records, mods, now, avail);
+    expect(view, `at +${offset}ms`).toEqual(buildOperations(records, mods, now, avail, true));
+    // Between two edges nothing is rebuilt: the same run objects come back.
+    if (previous && offset === 31_000) expect(view.runs.every(run => previous!.runs.includes(run))).toBe(true);
+    previous = view;
+  }
+});
+
+it('attaches the receipt of an answered Claude Router or Compact call, and never to a request, a skip or an unsent call (#225)', () => {
+  const now = new Date('2026-09-29T06:10:00.000Z'), usage = { input: 1200, output: 30 };
+  const steps = (rows: ModRecord[]) => buildOperations([], rows, now, { trace: true }).runs.flatMap(r => r.steps);
+  const answered = steps([row('router', { session_id: 's', event: 'root', turn: 't1', sent: true, assessment: 'ok', duration_ms: 240, usage, jev_model: 'jev-1.13.0' })]).find(s => s.lane === 'jev')!;
+  expect(answered.receipt).toMatchObject({ model: 'jev-1.13.0', input: 1200, output: 30 });
+  expect(answered.receipt?.costUsd).toBeGreaterThan(0);
+  // Records written before the model was recorded keep their receipt, and stay unpriced.
+  const older = steps([row('router', { session_id: 's', event: 'root', turn: 't2', sent: true, assessment: 'ok', duration_ms: 240, usage })]).find(s => s.lane === 'jev')!;
+  expect(older.receipt).toMatchObject({ model: null, input: 1200, costUsd: null });
+  const compact = steps([row('compact', { event: 'compact', session_id: 's', run_id: 'c', stage: 'jev', jev_sent: true, jev_ms: 180, usage: { input_tokens: 900, output_tokens: 12 }, jev_model: 'jev-1.13.0', selection: 'current_dependencies' })]).find(s => s.lane === 'jev')!;
+  expect(compact.receipt).toMatchObject({ model: 'jev-1.13.0', input: 900, output: 12 });
+  const none = steps([
+    row('router', { session_id: 's', event: 'request', turn: 't3', sent: true }),
+    row('router', { session_id: 's', event: 'root', turn: 't4', sent: false, assessment: 'no_key', duration_ms: 1 }),
+    row('compact', { event: 'compact', session_id: 's', run_id: 'c2', stage: 'jev', jev_sent: false, jev_ms: 3 }),
+    row('compact', { event: 'compact', session_id: 's', run_id: 'c3', stage: 'started' }),
+  ]);
+  expect(none.filter(s => s.receipt)).toEqual([]);
 });
 
 it('keeps every record and Jev call of the last minute in the feed, past the newest-120 and newest-16 cuts', () => {

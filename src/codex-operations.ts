@@ -91,7 +91,6 @@ export const codexOperations = (records: Rec[], now: Date): OperationRun[] => {
       state, lane: 'host', title: TITLE[event]!, summary: detail,
       details: [...(state === 'unconfirmed' ? ['호스트 훅이 모든 도구 경로의 종료를 보장하지 않습니다. 원래 호스트에서 해당 도구 결과를 확인하세요.'] : []), ...(token(r['tool_use_id']) ? [`call: ${hash(String(r['tool_use_id']))}`] : [])],
       ...(measured !== undefined && Number.isFinite(measured) && measured >= 0 ? { durationMs: measured } : {}),
-      ...(state === 'active' ? { elapsedMs: elapsed } : {}),
       ...(isStart ? { startedAt: at(r) } : {}),
     };
     const steps = groups.get(key) ?? []; steps.push(step); groups.set(key, steps);

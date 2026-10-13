@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { loadActivity, type ActivitySnapshot } from '../src/activity.js';
 import { startDashboard, readVersions } from '../src/dashboard.js';
 import { DASHBOARD_PAGE } from '../src/dashboard-page.js';
+import { liveFrames } from './live-frames.js';
 
 const dirs: string[] = [];
 const make = (): string => {
@@ -225,12 +226,8 @@ describe('dashboard server', () => {
     set('0.7.0');
     expect(readVersions({ HOME: home }, 'codex').installed).toBeNull();
     const server = await startDashboard({ traceDir: null, env: { HOME: home, JEV_GATE_STATE_DIR: make() } }, 0);
-    const response = await fetch(`${server.url}api/live`); const reader = response.body!.getReader();
-    const read = async (): Promise<{ version: { running: string; installed: string } }> => {
-      const chunk = await Promise.race([reader.read(), new Promise<never>((_, reject) => setTimeout(() => reject(new Error('version SSE timed out')), 2500))]);
-      if (chunk.done) throw new Error('SSE ended');
-      return JSON.parse(new TextDecoder().decode(chunk.value).split('data: ')[1]!.trim());
-    };
+    const response = await fetch(`${server.url}api/live`); const reader = response.body!.getReader(), frames = liveFrames(reader);
+    const read = (): Promise<{ version: { running: string; installed: string } }> => frames.next(2500, 'version SSE');
     try {
       const first = await read(); expect(first.version.installed).toBe('0.7.0');
       set('0.7.1'); const second = await read();
@@ -242,20 +239,12 @@ describe('dashboard server', () => {
     const trace = make();
     const server = await startDashboard({ traceDir: trace, env: { HOME: make(), JEV_GATE_STATE_DIR: make() } }, 0);
     const response = await fetch(`${server.url}api/live`);
-    const reader = response.body!.getReader();
-    const read = async (): Promise<{ live: { sig: string }; operations: { features: Array<{ id: string; count: number }> } }> => {
-      const result = await Promise.race([
-        reader.read(),
-        new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error('SSE timed out')), 2500)),
-      ]).catch(async error => {
-        const snapshot = await (await fetch(`${server.url}api/snapshot`)).json() as { operations: { features: Array<{ id: string; count: number }> } };
-        throw new Error(`${String(error)}; compact snapshot count=${snapshot.operations.features.find(f => f.id === 'compact')?.count ?? 'missing'}`);
-      });
-      if (result.done) throw new Error('SSE ended');
-      const line = new TextDecoder().decode(result.value).split('\n').find((s) => s.startsWith('data: '));
-      if (!line) throw new Error('missing SSE data');
-      return JSON.parse(line.slice(6));
-    };
+    const reader = response.body!.getReader(), frames = liveFrames(reader);
+    type Frame = { live: { sig: string }; operations: { features: Array<{ id: string; count: number }> } };
+    const read = (): Promise<Frame> => frames.next<Frame>(2500, 'SSE').catch(async error => {
+      const snapshot = await (await fetch(`${server.url}api/snapshot`)).json() as { operations: { features: Array<{ id: string; count: number }> } };
+      throw new Error(`${String(error)}; compact snapshot count=${snapshot.operations.features.find(f => f.id === 'compact')?.count ?? 'missing'}`);
+    });
     try {
       const first = await read();
       write(trace, 'mod_compact-1.json', { event: 'compact', run_id: 'live-1', mode: 'active', stage: 'started', host: 'claude', session_id: 's1', phase: 'mod_compact', version: 5, invocation_id: 'c1', written_at: new Date().toISOString() });
@@ -297,27 +286,8 @@ describe('dashboard server', () => {
     expect(res.headers.get('content-type')).toContain('text/event-stream');
     const reader = res.body?.getReader();
     if (!reader) throw new Error('no body');
-    const dec = new TextDecoder();
-    let buf = '';
-    const pull = async (): Promise<{ live: { mode: string; steps: Array<{ state: string; line: string }> } }> => {
-      const deadline = Date.now() + 2500;
-      while (Date.now() < deadline) {
-        const cut = buf.indexOf('\n\n');
-        if (cut >= 0) {
-          const raw = buf.slice(0, cut);
-          buf = buf.slice(cut + 2);
-          const line = raw.split('\n').find((item) => item.startsWith('data: '));
-          if (line) return JSON.parse(line.slice(6)) as { live: { mode: string; steps: Array<{ state: string; line: string }> } };
-        }
-        const chunk = await Promise.race([
-          reader.read(),
-          new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error('live event timed out')), deadline - Date.now())),
-        ]);
-        if (chunk.done) break;
-        buf += dec.decode(chunk.value, { stream: true });
-      }
-      throw new Error('live event timed out');
-    };
+    const frames = liveFrames(reader);
+    const pull = (): Promise<{ live: { mode: string; steps: Array<{ state: string; line: string }> } }> => frames.next(2500, 'live event');
     try {
       const first = await pull();
       expect(first.live.mode).toBe('waiting');

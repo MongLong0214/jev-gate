@@ -43,15 +43,17 @@ export const diffFrame = (prev: FrameMemo | null, snapshot: ActivitySnapshot, ne
   const memo: FrameMemo = { key: prev?.key ?? '', top, ops, order, runs: memos, feed: feedJson };
   if (!prev) return { memo: { ...memo, key: nextKey() }, patch: null };
   const p: Record<string, unknown> = {};
-  // A field that became absent is sent as null and removed, as a whole frame would leave it out.
-  const changed = (now: Fields, before: Fields): Record<string, unknown> | null => {
-    const out: Record<string, unknown> = {};
-    for (const [k, { value, json }] of now) if (before.get(k)?.json !== json) out[k] = json === undefined ? null : value;
-    for (const [k, { json }] of before) if (json !== undefined && !now.has(k)) out[k] = null;
-    return Object.keys(out).length ? out : null;
+  // A field that became absent is listed for removal, as a whole frame would leave it out; null stays a value.
+  const changed = (now: Fields, before: Fields): { set: Record<string, unknown> | null; drop: string[] | null } => {
+    const set: Record<string, unknown> = {}, drop: string[] = [];
+    for (const [k, { value, json }] of now) if (before.get(k)?.json !== json) { if (json === undefined) drop.push(k); else set[k] = value; }
+    for (const [k, { json }] of before) if (json !== undefined && !now.has(k)) drop.push(k);
+    return { set: Object.keys(set).length ? set : null, drop: drop.length ? drop : null };
   };
-  const set = changed(top, prev.top), opsSet = changed(ops, prev.ops);
-  if (opsSet) p['ops'] = opsSet;
+  const { set, drop } = changed(top, prev.top), opsChange = changed(ops, prev.ops);
+  if (opsChange.set) p['ops'] = opsChange.set;
+  if (opsChange.drop) p['opsDrop'] = opsChange.drop;
+  if (drop) p['drop'] = drop;
   if (!same(order, prev.order)) p['order'] = order;
   if (Object.keys(runPatch).length) p['runs'] = runPatch;
   const feedKeys = [...feedJson.keys()];
@@ -72,8 +74,8 @@ export const diffFrame = (prev: FrameMemo | null, snapshot: ActivitySnapshot, ne
  * redrawing them by identity. */
 export const PATCH_SCRIPT = String.raw`
 function applyPatch(prev,m){if(!prev||!m||m.base!==prev.frame)return null;const next={...prev,frame:m.frame};if(m.extra)Object.assign(next,m.extra);const p=m.p;if(!p)return next;
-  if(p.set)for(const [k,v] of Object.entries(p.set))if(v===null)delete next[k];else next[k]=v;
-  if(p.ops||p.order||p.runs||p.feed){const o=prev.operations;if(!o)return null;const ops=next.operations={...o};if(p.ops)for(const [k,v] of Object.entries(p.ops))if(v===null)delete ops[k];else ops[k]=v;
+  if(p.set)Object.assign(next,p.set);if(p.drop)for(const k of p.drop)delete next[k];
+  if(p.ops||p.opsDrop||p.order||p.runs||p.feed){const o=prev.operations;if(!o)return null;const ops=next.operations={...o,...p.ops};if(p.opsDrop)for(const k of p.opsDrop)delete ops[k];
     if(p.order||p.runs){const old=new Map(o.runs.map(r=>[r.id,r]));let ok=true;
       ops.runs=(p.order||o.runs.map(r=>r.id)).map(id=>{const rp=p.runs&&p.runs[id];if(!rp){const r=old.get(id);if(!r)ok=false;return r}if(rp.run)return rp.run;const before=old.get(id);if(!before){ok=false;return null}const known=new Map(before.steps.map(s=>[s.id,s]));
         return {...rp.meta,steps:rp.steps.map(sid=>{const s=rp.put[sid]||known.get(sid);if(!s)ok=false;return s})}});if(!ok)return null}
