@@ -1,0 +1,81 @@
+import type { ActivitySnapshot } from './activity.js';
+import type { OperationRun } from './operations.js';
+
+/** Live updates after the first frame carry only what changed. A run that is the same object as last time is skipped
+ * without serializing it, and a changed run sends only its new or changed steps, so one new record costs bytes, not the
+ * whole history. Keys advance only when content changes, so an unchanged rebuild sends nothing. */
+interface RunMemo { run: OperationRun; meta: string; steps: Map<string, string> | null }
+type Fields = Map<string, { value: unknown; json: string | undefined }>;
+export interface FrameMemo { key: string; top: Fields; ops: Fields; order: string[]; runs: Map<string, RunMemo>; feed: Map<string, string> }
+
+/** The snapshot fields whose change alone is no news: the build time moves on every rebuild. */
+const QUIET = new Set(['at']);
+const feedKey = (s: { runId: string; id: string }): string => `${s.runId}\n${s.id}`;
+const same = (a: readonly string[], b: readonly string[]): boolean => a.length === b.length && a.every((v, i) => v === b[i]);
+
+const fields = (o: object): Fields => new Map(Object.entries(o).map(([k, value]) => [k, { value, json: JSON.stringify(value) }]));
+const memoRun = (run: OperationRun): RunMemo & { fields: Omit<OperationRun, 'steps'> } => {
+  const { steps, ...meta } = run, json = new Map<string, string>();
+  for (const step of steps) json.set(step.id, JSON.stringify(step));
+  return { run, fields: meta, meta: JSON.stringify(meta), steps: json.size === steps.length ? json : null };
+};
+
+/** Compares a new snapshot with the last frame. `patch` is null when nothing but the build time changed; the memo then
+ * stays at the last frame, so the next patch still applies to what viewers hold. */
+export const diffFrame = (prev: FrameMemo | null, snapshot: ActivitySnapshot, nextKey: () => string): { memo: FrameMemo; patch: string | null } => {
+  const { operations, ...rest } = snapshot, { runs, feed, ...opsRest } = operations;
+  const top = fields(rest), ops = fields(opsRest);
+  const order = runs.map(run => run.id);
+  const feedJson = new Map(feed.map(s => [feedKey(s), JSON.stringify(s)]));
+  const memos = new Map<string, RunMemo>();
+  const runPatch: Record<string, unknown> = {};
+  for (const run of runs) {
+    const old = prev?.runs.get(run.id);
+    if (old?.run === run) { memos.set(run.id, old); continue; }
+    const { fields: meta, ...memo } = memoRun(run); memos.set(run.id, memo);
+    if (!old || !memo.steps || !old.steps) { runPatch[run.id] = { run }; continue; }
+    const put: Record<string, unknown> = {};
+    for (const step of run.steps) if (old.steps.get(step.id) !== memo.steps.get(step.id)) put[step.id] = step;
+    const ids = run.steps.map(s => s.id);
+    if (memo.meta === old.meta && !Object.keys(put).length && same(ids, [...old.steps.keys()])) continue;
+    runPatch[run.id] = { meta, steps: ids, put };
+  }
+  const memo: FrameMemo = { key: prev?.key ?? '', top, ops, order, runs: memos, feed: feedJson };
+  if (!prev) return { memo: { ...memo, key: nextKey() }, patch: null };
+  const p: Record<string, unknown> = {};
+  // A field that became absent is sent as null and removed, as a whole frame would leave it out.
+  const changed = (now: Fields, before: Fields): Record<string, unknown> | null => {
+    const out: Record<string, unknown> = {};
+    for (const [k, { value, json }] of now) if (before.get(k)?.json !== json) out[k] = json === undefined ? null : value;
+    for (const [k, { json }] of before) if (json !== undefined && !now.has(k)) out[k] = null;
+    return Object.keys(out).length ? out : null;
+  };
+  const set = changed(top, prev.top), opsSet = changed(ops, prev.ops);
+  if (opsSet) p['ops'] = opsSet;
+  if (!same(order, prev.order)) p['order'] = order;
+  if (Object.keys(runPatch).length) p['runs'] = runPatch;
+  const feedKeys = [...feedJson.keys()];
+  if (feedJson.size !== feed.length) p['feed'] = { all: feed };
+  else if (!same(feedKeys, [...prev.feed.keys()]) || feedKeys.some(k => prev.feed.get(k) !== feedJson.get(k))) {
+    const put: Record<string, unknown> = {};
+    for (const s of feed) { const k = feedKey(s); if (prev.feed.get(k) !== feedJson.get(k)) put[k] = s; }
+    p['feed'] = { ids: feedKeys, put };
+  }
+  const news = Object.keys(p).length > 0 || set !== null && Object.keys(set).some(k => !QUIET.has(k));
+  if (!news) return { memo: prev, patch: null };
+  if (set) p['set'] = set;
+  return { memo: { ...memo, key: nextKey() }, patch: JSON.stringify(p) };
+};
+
+/** The page's half: `applyPatch(frame, message)` returns the next frame, or null when the message does not follow the frame
+ * it holds (the page then reconnects for a whole frame). Unchanged runs and steps keep their objects, so the page can skip
+ * redrawing them by identity. */
+export const PATCH_SCRIPT = String.raw`
+function applyPatch(prev,m){if(!prev||!m||m.base!==prev.frame)return null;const next={...prev,frame:m.frame};if(m.extra)Object.assign(next,m.extra);const p=m.p;if(!p)return next;
+  if(p.set)for(const [k,v] of Object.entries(p.set))if(v===null)delete next[k];else next[k]=v;
+  if(p.ops||p.order||p.runs||p.feed){const o=prev.operations;if(!o)return null;const ops=next.operations={...o};if(p.ops)for(const [k,v] of Object.entries(p.ops))if(v===null)delete ops[k];else ops[k]=v;
+    if(p.order||p.runs){const old=new Map(o.runs.map(r=>[r.id,r]));let ok=true;
+      ops.runs=(p.order||o.runs.map(r=>r.id)).map(id=>{const rp=p.runs&&p.runs[id];if(!rp){const r=old.get(id);if(!r)ok=false;return r}if(rp.run)return rp.run;const before=old.get(id);if(!before){ok=false;return null}const known=new Map(before.steps.map(s=>[s.id,s]));
+        return {...rp.meta,steps:rp.steps.map(sid=>{const s=rp.put[sid]||known.get(sid);if(!s)ok=false;return s})}});if(!ok)return null}
+    if(p.feed){if(p.feed.all)ops.feed=p.feed.all;else{const known=new Map(o.feed.map(s=>[s.runId+'\n'+s.id,s]));let ok=true;ops.feed=p.feed.ids.map(k=>{const s=p.feed.put[k]||known.get(k);if(!s)ok=false;return s});if(!ok)return null}}}
+  return next}`;
