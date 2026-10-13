@@ -158,9 +158,7 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
     const syncWatchers = (force = false): void => {
       if (!force && Date.now() - watchedAt < 2000) return;
       watchedAt = Date.now();
-      const currentDirectories = new Set([...directories, ...loaded?.directories ?? []]);
-      for (const [dir, { watcher }] of watchers) if (!currentDirectories.has(dir)) { watcher.close(); watchers.delete(dir); directoryIdentities.delete(dir); }
-      for (const dir of currentDirectories) {
+      for (const dir of directories) {
         let identity: string | null = null;
         try { const stat = lstatSync(dir); if (stat.isDirectory() && !stat.isSymbolicLink()) identity = traceDirectoryIdentity(stat); } catch { /* It may appear later. */ }
         const existing = watchers.get(dir);
@@ -183,7 +181,7 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
     const refresh = (): Promise<void> => {
       syncWatchers();
       const elapsed = Date.now() - scannedAt;
-      if (!loading && (!scannedAt || changed && elapsed >= wait() || elapsed >= (loaded?.pending ? 2000 : 30_000))) {
+      if (!loading && (!scannedAt || changed && elapsed >= wait() || Date.now() >= (loaded?.until ?? 0) || elapsed >= 30_000)) {
         changed = false; flush();
         loading = engine.load().then(next => {
           if (next.patch && next.base) step = { base: next.base, key: next.key, patch: next.patch };
@@ -265,22 +263,6 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
         res.writeHead(body ? 200 : 503, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
         res.end(body ?? JSON.stringify({ error: 'activity_unavailable' }));
         return;
-      }
-      if (req.method === 'GET' && path === '/api/worker-history') {
-        const query = new URL(req.url!, `http://${req.headers.host}`).searchParams;
-        const rawOffset = query.get('offset') ?? '0', offset = Number(rawOffset);
-        if (!/^\d{1,12}$/.test(rawOffset) || !Number.isSafeInteger(offset)) { res.writeHead(400); res.end(); return; }
-        await refresh(); // Refresh the set of identities already observed by Jev Gate.
-        const session = query.get('session'), agent = query.get('agent');
-        if (Boolean(session) !== Boolean(agent) || session && !/^[A-Za-z0-9_-]{1,100}$/.test(session) || agent && !/^[A-Za-z0-9_-]{1,100}$/.test(agent)) { res.writeHead(400); res.end(); return; }
-        let aborted = false;
-        res.once('close', () => { if (!res.writableEnded) aborted = true; });
-        let body: Awaited<ReturnType<typeof engine.history>> | Awaited<ReturnType<typeof engine.list>>;
-        try { body = session && agent ? await engine.history(session, agent, offset) : await engine.list(offset); }
-        catch { if (!aborted) { res.writeHead(500); res.end(); } return; }
-        if (aborted) return;
-        res.writeHead(body ? 200 : 404, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
-        res.end(JSON.stringify(body ?? { error: 'unobserved_agent' })); return;
       }
       if (req.method === 'GET' && path === '/api/live') {
         const identity = new URL(req.url!, `http://${req.headers.host}`).searchParams.get('viewer');

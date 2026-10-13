@@ -3,18 +3,19 @@ import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
 import { loadActivity } from './activity.js';
-import { ClaudeWorkerActivityReader } from './claude-worker-activity.js';
 import type { DashboardSources } from './dashboard.js';
 import { diffFrame, type FrameMemo, type FrameSnapshot } from './dashboard-patch.js';
 import { TraceDirectoryReader } from './explain.js';
+import { operationsStableUntil } from './operations.js';
 
 /** One rebuild. `key` advances only when content changed; `patch` turns the frame `base` into it. The whole frame is built
- * only when a viewer needs one (`full`), so a rebuild sends the changed part across the thread, not the history. */
-export interface LoadedActivity { key: string; base: string | null; patch: string | null; pending: boolean; directories: string[]; ms: number }
+ * only when a viewer needs one (`full`), so a rebuild sends the changed part across the thread, not the history. Without new
+ * records the frame stays the same until `until`, when a running step can turn unconfirmed. */
+export interface LoadedActivity { key: string; base: string | null; patch: string | null; until: number; ms: number }
 
 /** Owns the readers and their caches. It runs on the activity thread, or in process when that thread is unavailable. */
 export const activityHandler = (sources: DashboardSources) => {
-  const traceReader = new TraceDirectoryReader(), workerReader = new ClaudeWorkerActivityReader();
+  const traceReader = new TraceDirectoryReader();
   const dirs = sources.traceDirs?.map(source => source.dir) ?? (sources.traceDir ? [sources.traceDir] : []);
   // A replacement thread starts a new key series, so no viewer can apply its patches to an older thread's frame.
   const epoch = randomUUID().slice(0, 8);
@@ -23,21 +24,18 @@ export const activityHandler = (sources: DashboardSources) => {
     async load(): Promise<LoadedActivity> {
       const started = performance.now();
       for (const dir of dirs) await traceReader.prepare(dir);
-      const activity = loadActivity({ ...sources, traceReader, workerReader, now: new Date() });
-      const pending = activity.live.mode === 'working' || activity.operations.feed.some(step => step.state === 'active') || activity.workerActivity?.items.some(worker => worker.state === 'active') === true;
-      // The page draws neither the event list, the live board nor worker activity; they decide `pending` and stay here.
-      const { events: _events, live: _live, workerActivity: _workers, ...shown } = activity;
+      const activity = loadActivity({ ...sources, traceReader, now: new Date() });
+      // The page draws neither the event list nor the live board.
+      const { events: _events, live: _live, ...shown } = activity;
       const base = memo?.key ?? null, diff = diffFrame(memo, shown, () => `${epoch}.${++sequence}`);
       memo = diff.memo; current = shown; whole = null;
-      return { key: memo.key, base: diff.patch ? base : null, patch: diff.patch, pending, directories: workerReader.directories(), ms: performance.now() - started };
+      return { key: memo.key, base: diff.patch ? base : null, patch: diff.patch, until: operationsStableUntil(), ms: performance.now() - started };
     },
     full(): { key: string; json: string } | null {
       if (!current || !memo) return null;
       return whole ??= { key: memo.key, json: JSON.stringify(current) };
     },
     invalidate(dir: string, names?: string[]): void { if (names) for (const name of names) traceReader.invalidate(dir, name); else traceReader.invalidate(dir); },
-    list(offset: number) { return workerReader.list(offset, new Date()); },
-    history(session: string, agent: string, offset: number) { return workerReader.history(session, agent, offset, sources.env, new Date()); },
   };
 };
 
@@ -84,8 +82,6 @@ export const activityEngine = (sources: DashboardSources): ActivityEngine => {
     load: () => call({ op: 'load', args: [] }),
     full: () => call({ op: 'full', args: [] }),
     invalidate: (dir, names) => call({ op: 'invalidate', args: [dir, names] }),
-    list: (offset) => call({ op: 'list', args: [offset] }),
-    history: (session, agent, offset) => call({ op: 'history', args: [session, agent, offset] }),
     close: async () => { const thread = worker; stop(); await thread?.terminate(); },
   };
 };

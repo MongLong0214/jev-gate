@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildOperations, type ModRecord } from '../src/operations.js';
+import { buildOperations, operationsStableUntil, type ModRecord } from '../src/operations.js';
 
 const at = '2026-09-29T06:00:00.000Z';
 const later = '2026-09-29T06:00:01.000Z';
@@ -510,6 +510,8 @@ it('reuses an unchanged recent session only until its next age edge, and equals 
     expect(view, `at +${offset}ms`).toEqual(buildOperations(records, mods, now, avail, true));
     // Between two edges nothing is rebuilt: the same run objects come back.
     if (previous && offset === 31_000) expect(view.runs.every(run => previous!.runs.includes(run))).toBe(true);
+    // The dashboard rebuilds without new records only at the next edge: here the 30-second mark of the record at +2s.
+    if (offset === 31_000) expect(operationsStableUntil()).toBe(t0 + 32_000);
     previous = view;
   }
 });

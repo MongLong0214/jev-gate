@@ -768,6 +768,12 @@ const joins = (item: object, rec: Rec, group: () => string): string[] => {
   return keys;
 };
 let partCache = new Map<string, { records: Rec[]; mods: ModRecord[]; at: number; until: number; part: Part }>();
+/** The earliest time the last buildOperations output can change without a new record: its parts' next age edge. */
+export const operationsStableUntil = (): number => {
+  let next = Infinity;
+  for (const entry of partCache.values()) if (entry.until < next) next = entry.until;
+  return next;
+};
 const sameItems = <T>(a: T[], b: T[]): boolean => a.length === b.length && a.every((v, i) => v === b[i]);
 /** Connected parts of the recording. A part with the same records is reused until one of its age edges passes, so a busy
  * history rebuilds only the sessions that received records. */

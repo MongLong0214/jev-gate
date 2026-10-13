@@ -12,7 +12,7 @@ const step = (id: string, extra: Partial<OperationStep> = {}): OperationStep => 
 const run = (id: string, steps: OperationStep[], extra: Partial<OperationRun> = {}): OperationRun => ({ id, title: id, source: 'router', mode: 'm', firstAt: steps[0]?.at ?? '', lastAt: steps.at(-1)?.at ?? '', state: 'done', steps, ...extra });
 const snapshot = (runs: OperationRun[], extra: Record<string, unknown> = {}): ActivitySnapshot => ({
   host: 'claude', at: new Date().toISOString(), traceDir: null, traceFiles: 1, unreadable: 0, liveness: null, jevCalls: 0, credit: { exhausted: false, at: null }, direct: 0, orchestrated: 0, routerChanges: 0, events: [], notes: [],
-  live: { mode: 'waiting', sig: 'x' } as unknown as ActivitySnapshot['live'], workerActivity: null as unknown as ActivitySnapshot['workerActivity'],
+  live: { mode: 'waiting', sig: 'x' } as unknown as ActivitySnapshot['live'],
   operations: { runs, features: [], feed: runs.flatMap(r => r.steps.map(s => ({ ...s, runId: r.id, runTitle: r.title, host: 'claude' as const }))), active: 0, attention: 0, requests: 0,
     latency: { measured: 0, p50: null, p95: null, fastest: null, latest: null, recent: [], today: {} } },
   ...extra,
@@ -62,7 +62,7 @@ describe('dashboard frame patches', () => {
   it('follows new, removed and reordered runs, removed fields, duplicate step ids and the feed', () => {
     const feed = stream();
     const a = run('a', [step('a1')]), b = run('b', [step('b1')]), c = run('c', [step('c1')]);
-    feed({ ...snapshot([a, b]), workerActivity: { items: [], sig: 'w', limited: false, total: 0 } } as unknown as ActivitySnapshot);
+    feed({ ...snapshot([a, b]), retired: { items: [], sig: 'w' } } as unknown as ActivitySnapshot);
     const changes: ActivitySnapshot[] = [
       snapshot([c, b, a]),
       snapshot([b, c]),
