@@ -1,6 +1,6 @@
 import { resolveApiKey } from '../credentials.js';
 import { randomUUID, createHash } from 'node:crypto';
-import { join, isAbsolute, resolve, relative } from 'node:path';
+import { join, isAbsolute, resolve } from 'node:path';
 import { mkdirSync, realpathSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -19,6 +19,7 @@ import { AGENT_TOOL, CODEX_PROFILES, codexGuidance } from './profiles.js';
 import { routeCodex, codexCandidates, type CodexModel } from './router.js';
 import { capturedPermissions } from './permissions.js';
 import { codexCallerWorkspace } from './workspace.js';
+import { writeTargets, writesInto } from './write-scope.js';
 import { selectRecentPrompts } from '../recent-prompts.js';
 import { wireSource } from './wire.js';
 import { normalizeUsage, usageCost, ModelCache } from '../cost.js';
@@ -546,7 +547,7 @@ export class CodexPolicy {
     if (!session) return {};
     const event = input['hook_event_name'];
     await this.retrySettlements();
-    if (!session.role && event === 'PreToolUse' && this.writeConflict(String(input['cwd'] ?? session.settings['cwd']), String(input['tool_name']), obj(input['tool_input']) ?? {})) return deny('A managed Codex worker in this write scope has not completed terminal settlement. Read/status tools and unrelated paths remain available.');
+    if (!session.role && event === 'PreToolUse' && this.writeConflict(String(input['cwd'] ?? session.settings['cwd']), String(input['tool_name']), obj(input['tool_input']) ?? {})) return deny('A managed Codex worker in this write scope has not completed terminal settlement. Read/status commands (git status/diff/log/show, rg, grep, ls, cat, head, tail, wc, find, ps, gh issue/pr view/list) and writes whose every target lies outside its scope remain available. Hooks do not report exec workdir, so start a shell command elsewhere with `cd <absolute dir> &&` and name its paths without variables.');
     if (event === 'PreCompact') { session.compactAllowed = session.policy.compact.enabled && (input['trigger'] === 'auto' || input['trigger'] === 'manual' && session.policy.compact.manual); return {}; }
     if (event === 'PreToolUse' && input['tool_name'] === 'Bash' && typeof input['tool_use_id'] === 'string' && typeof obj(input['tool_input'])?.['command'] === 'string') {
       session.commands.set(input['tool_use_id'], String(obj(input['tool_input'])!['command']));
@@ -846,16 +847,13 @@ export class CodexPolicy {
     try { await this.rpc.request('thread/archive', { threadId: worker.id }, 1000); } catch { /* Files are preserved. */ }
   }
   private writeConflict(cwd: string, tool: string, input: Obj, deliverables?: string[]): boolean {
-    if (!/^(Agent|Bash|Edit|Write|MultiEdit|NotebookEdit|apply_patch|exec_command|write_stdin)$/.test(tool)) return false;
-    if (tool === 'Bash' && /^(?:git (?:status|diff|log|show)|(?:pwd|ls|cat|rg|head|tail)\b)[^;&|`]*$/.test(String(input['command'] ?? ''))) return false;
-    const paths = deliverables ?? [input['file_path'], input['path']].filter((p): p is string => typeof p === 'string');
-    const contains = (base: string, path: string) => { const r = relative(resolve(base), resolve(path)); return r === '' || !r.startsWith('..') && !isAbsolute(r); };
+    const targets = deliverables ? (deliverables.length ? deliverables.map(p => resolve(cwd, p)) : [cwd]) : writeTargets(cwd, tool, input);
+    if (!targets) return false;
     return codexExecutions(this.env).some(r => {
       const e = r.codex_execution!;
-      if (!contains(e.root_cwd, cwd) && !contains(e.cwd, cwd)) return false;
-      if (!paths.length) return true;
-      if (!r.deliverables.length) return paths.some(p => contains(e.root_cwd, resolve(cwd, p)) || contains(e.cwd, resolve(cwd, p)));
-      return paths.some(p => r.deliverables.some(q => contains(resolve(e.root_cwd, q), resolve(cwd, p)) || contains(resolve(cwd, p), resolve(e.root_cwd, q))));
+      // A worktree worker writes its deliverables in its own checkout and later into the root, so both copies are its scope.
+      const bases = [...new Set([e.root_cwd, e.cwd])];
+      return writesInto(targets, r.deliverables.length ? bases.flatMap(b => r.deliverables.map(q => resolve(b, q))) : bases);
     });
   }
   private async failure(session: Session, prompt: string, tool: string, input: Obj, failure: CodexFailure, error: string = failure.category, startedAt?: number): Promise<void> {
