@@ -295,3 +295,29 @@ describe('responsive native background contracts', () => {
     expect(JSON.parse(readFileSync(path, 'utf8')).env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS).toBe('1');
   });
 });
+
+describe('Gate A and host task notifications', () => {
+  it('never asks Gate A about a native notice and leaves the current generation in force', async () => {
+    const root = mkdtempSync('/tmp/jev-bg-notice-'); roots.push(root);
+    const cfg = join(root, 'config.json'); const trace = join(root, 'trace'); const parent = join(root, 's.jsonl');
+    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', delegationDepthFloor: 0, admittedShape: 'single', workerIsolation: 'none', maxParallelWorkers: 1 }));
+    writeFileSync(parent, JSON.stringify({ type: 'assistant', message: { model: 'claude-opus-5-5', usage: { input_tokens: 100000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } }) + '\n');
+    const env = { HOME: root, JEV_GATE_CONFIG: cfg, JEV_GATE_STATE_DIR: join(root, 'state'), JEV_GATE_TRACE_DIR: trace, TYPESAFE_API_KEY: 'fixture-key', CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '0' };
+    let calls = 0;
+    const fetchImpl: typeof fetch = async (_url, init) => {
+      calls++; const request = JSON.parse(String(init?.body));
+      const answers = Object.fromEntries(Object.entries(request.questions as Record<string, any>).map(([name, q]) => [name,
+        q.type === 'noul' ? { type: 'noul', noul: 0 } : q.type === 'choice' ? { type: 'choice', choice: name === 'task_context' ? 'self_contained' : 'other', confidence: 1, probabilities: Object.fromEntries(Object.keys(q.criteria).map(k => [k, k === (name === 'task_context' ? 'self_contained' : 'other') ? 1 : 0])) } : { type: 'score', score: 0, confidence: 1, probabilities: { 0: 1 } }]));
+      return new Response(JSON.stringify({ model: request.model, answers }), { headers: { 'content-type': 'application/json' } });
+    };
+    const run = (event: Record<string, unknown>) => runHook({ env, fetchImpl, stdin: (async function* () { yield JSON.stringify({ session_id: 's', transcript_path: parent, ...event }); })() });
+    await run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'human', source: 'user', prompt: 'Explain a separate bounded question.' });
+    const asked = calls; expect(asked).toBeGreaterThan(0);
+    const notice = await run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'notice', source: 'system', prompt: '<task-notification>\n<task-id>bash-1</task-id>\n<status>completed</status>\n</task-notification>' });
+    expect(notice.stdout).toBeNull();
+    expect(calls).toBe(asked);
+    const job = readJob(env, 's'); expect(job.ok && job.value?.current.prompt_id).toBe('human');
+    const results = readdirSync(trace).map(file => JSON.parse(readFileSync(join(trace, file), 'utf8'))).filter(r => r.phase === 'admission_result' && r.prompt_id === 'notice');
+    expect(results).toEqual([expect.objectContaining({ attempted: false, known_not_sent: true, decision: expect.objectContaining({ reason: 'task_notification' }) })]);
+  });
+});

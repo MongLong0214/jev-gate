@@ -484,6 +484,7 @@ export type PreserveReason =
   | 'depth_unknown'
   | 'depth_below_floor'
   | 'admission_forbids_delegation'
+  | 'task_notification'
   /** Historical only (before 0.4.0): stored traces carry these; no current decision produces them. */
   | 'admission_answer_only'
   | 'admission_too_small'

@@ -541,10 +541,14 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     return admissionExpired ? { blocked: deps.signal?.aborted ? 'aborted' : 'deadline_exhausted' } : { outcome };
   };
 
+  /** Read once: both the background path and Gate A ask it, and an older payload pays a transcript scan for it. */
+  let taskNotice: boolean | undefined;
+  const isTaskNotice = (): boolean => taskNotice ??= isNativeTaskNotification(input);
+
   const interactivePrompt = (): HookResult | null => {
     if (caller.agent_id || caller.agent_type || !input.session_id || !input.prompt_id) return null;
     let gen: JobGeneration | null = null;
-    const notification = isNativeTaskNotification(input);
+    const notification = isTaskNotice();
     const deliveredAt = new Date().toISOString();
     let delivered = false;
     const written = updateJob(deps.env, input.session_id, prev => {
@@ -733,6 +737,12 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       // what liveness exists to catch, so this counts even though it is not the depth/admission branch below.
       if (mode === 'auto') appendLiveness(deps.env, { at: new Date().toISOString(), attempted: false, reason: 'prompt_id_absent' });
       return emitContext('UserPromptSubmit', renderDirectGuidance(mode), 'prompt_id_absent');
+    }
+    // A host-authored completion notice is not a person's request: asking Gate A about it would spend two calls on
+    // machine text, and a new generation would push the job it reports on into history.
+    if (isTaskNotice()) {
+      trace?.write('admission_result', { ...base, attempted: false, known_not_sent: true, decision: { shape: 'direct', decided: false, reason: 'task_notification', changed_default: false } });
+      return skip('task_notification');
     }
 
     let shape: ExecutionShape = 'direct';

@@ -19,6 +19,8 @@ const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
 const REASON: Record<string, string> = {
   admission_not_worth: '위임해도 계산상 이득이 없어 이 세션이 직접 처리합니다',
   admission_forbids_delegation: '요청이 위임을 금해서 직접 처리합니다',
+  task_notification: '백그라운드 완료 알림이라 묻지 않습니다',
+  task_notification_without_request: '백그라운드 완료 알림 앞에 사용자 요청이 없어 묻지 않습니다',
   admission_external_tools: '이전 버전 규칙으로 커넥터 작업을 직접 처리했습니다',
   admission_needs_context: '요청만으로 범위를 정할 수 없어 직접 처리합니다',
   admission_abstain: 'Jev가 판단을 보류해서 직접 처리합니다',
