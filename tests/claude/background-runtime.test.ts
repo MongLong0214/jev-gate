@@ -46,8 +46,8 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('responsive installed Cla
       let body: Record<string, unknown>; try { body = JSON.parse(raw.toString()); } catch { res.end('{}'); return; }
       if (req.url === '/jev') {
         const questions = body['questions'] as Record<string, { type: string; criteria: string[] | Record<string, string> }>;
-        if (questions['model']) allocationCalls++;
-        const answers = Object.fromEntries(Object.entries(questions).map(([name, q]) => [name, q.type === 'noul' ? { type: 'noul', noul: .1 } : q.type === 'choice' ? choice(Object.keys(q.criteria), [name === 'model' ? '__keep__' : name === 'control' ? 'task_clear' : name === 'action_risk' ? 'ordinary' : Object.keys(q.criteria)[0]!, .99]) : { type: 'score', probabilities: Object.fromEntries((q.criteria as string[]).map((s, i) => [i, s.startsWith('Strong reasoning') ? 1 : 0])) }]));
+        if (questions['model'] || questions['capability']) allocationCalls++;
+        const answers = Object.fromEntries(Object.entries(questions).map(([name, q]) => [name, q.type === 'noul' ? { type: 'noul', noul: .1 } : q.type === 'choice' ? choice(Object.keys(q.criteria), [name === 'model' ? '__keep__' : name === 'capability' ? 'routine' : name === 'control' ? 'task_clear' : name === 'action_risk' ? 'ordinary' : Object.keys(q.criteria)[0]!, .99]) : { type: 'score', probabilities: Object.fromEntries((q.criteria as string[]).map((s, i) => [i, s.startsWith('Strong reasoning') ? 1 : 0])) }]));
         res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ model: body['model'], answers })); return;
       }
       if (req.url?.includes('count_tokens')) { res.end('{"input_tokens":10}'); return; }
