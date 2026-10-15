@@ -8,7 +8,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.json && node scripts/build-evidence.mjs && node scripts/build-codex.mjs",
+    "build": "rm -rf dist && tsc -p tsconfig.json && node scripts/build-evidence.mjs && node scripts/build-codex.mjs && node scripts/build-claude-compact.mjs",
     "typecheck": "tsc -p tsconfig.typecheck.json && tsc -p mods/tsconfig.json",
     "test": "vitest run",
     "test:codex:runtime": "JEV_CODEX_E2E=1 vitest run tests/codex/runtime.test.ts tests/codex/connection-runtime.test.ts",

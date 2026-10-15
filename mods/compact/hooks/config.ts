@@ -1,3 +1,6 @@
+/** The one plugin's option name for each option here (hooks/register.ts joins them with the router's); the command hooks read them as CLAUDE_PLUGIN_OPTION_<NAME>. */
+export const COMPACT_OPTION_NAMES = { enabled: 'compactEnabled', mode: 'compactMode', budgetChars: 'compactBudgetChars', compactSubagents: 'compactSubagents', compactManual: 'compactManual', jevEnabled: 'compactJevEnabled', jevTimeoutMs: 'compactJevTimeoutMs' } as const;
+
 export type CompactMode = 'shadow' | 'active';
 
 export interface CompactConfig {

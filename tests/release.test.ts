@@ -75,6 +75,7 @@ describe('scripts/release.mjs', () => {
     for (const f of ['README.md', 'AGENTS.md', '.env.example']) write(f, `${f}\n`);
     write('dist/hook.js', 'export {};\n');
     write('dist/entry.js', 'export {};\n');
+    write('dist/compact-hook.js', 'export {};\n');
     for (const f of ['dist/server.mjs', 'skills/evidence/SKILL.md', 'README.md']) write(`plugins/evidence/${f}`, `${f}\n`);
     git('init', '-q');
     expect(release('pin').status).toBe(0);
@@ -155,7 +156,7 @@ describe('scripts/release.mjs', () => {
     const shallow = join(repo, 'shallow');
     const clone = spawnSync('git', ['clone', '-q', '--depth', '1', `file://${repo}`, shallow], { encoding: 'utf8' });
     expect(clone.status, clone.stderr).toBe(0);
-    for (const rel of ['dist/hook.js', 'dist/entry.js']) copyFileSync(join(repo, rel), join(shallow, rel));
+    for (const rel of ['dist/hook.js', 'dist/entry.js', 'dist/compact-hook.js']) copyFileSync(join(repo, rel), join(shallow, rel));
     const check = spawnSync(process.execPath, [join(shallow, 'scripts', 'release.mjs'), 'check'], { cwd: shallow, encoding: 'utf8' });
     expect(check.status).toBe(1);
     expect(check.stderr).toContain('a shallow checkout cannot tell whether v0.3.0 is released');

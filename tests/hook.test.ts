@@ -2643,10 +2643,16 @@ describe('dist/hook.js (process)', () => {
     // imports dist/hook.js only once it knows the gate might be on (src/entry.ts). SessionStart (#48 P2) is the
     // liveness warning; the `^Grep$` group was the withdrawn search filter's, and nothing registers it any more --
     // adding one back would run this hook on every search result.
-    expect(Object.keys(hooks.hooks).sort()).toEqual(['PostToolUse', 'PostToolUseFailure', 'PreToolUse', 'SessionStart', 'Stop', 'SubagentStop', 'UserPromptSubmit', 'WorktreeCreate']);
+    expect(Object.keys(hooks.hooks).sort()).toEqual(['PostCompact', 'PostToolUse', 'PostToolUseFailure', 'PreCompact', 'PreToolUse', 'SessionStart', 'Stop', 'SubagentStop', 'UserPromptSubmit', 'WorktreeCreate']);
+    // The classic Compact hooks are a second entry point (dist/compact-hook.js), on PreCompact, PostCompact and
+    // SessionStart's `compact` source only; the gate's own SessionStart group is the other one.
+    for (const event of ['PreCompact', 'PostCompact']) expect(hooks.hooks[event], event).toEqual([{ hooks: [{ type: 'command', command: 'node "${CLAUDE_PLUGIN_ROOT}/dist/compact-hook.js"', timeout: 10 }] }]);
+    expect(hooks.hooks['SessionStart']).toHaveLength(2);
+    expect(hooks.hooks['SessionStart']!.find((g) => g.matcher === 'compact')).toEqual({ matcher: 'compact', hooks: [{ type: 'command', command: 'node "${CLAUDE_PLUGIN_ROOT}/dist/compact-hook.js"', timeout: 10 }] });
     for (const event of ['UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'Stop', 'SessionStart']) {
-      expect(hooks.hooks[event], event).toHaveLength(1);
-      for (const group of hooks.hooks[event]!) expect(group.hooks).toEqual([{ type: 'command', command: 'node "${CLAUDE_PLUGIN_ROOT}/dist/entry.js"', timeout: 5 }]);
+      const gate = hooks.hooks[event]!.filter((g) => g.matcher !== 'compact');
+      expect(gate, event).toHaveLength(1);
+      for (const group of gate) expect(group.hooks).toEqual([{ type: 'command', command: 'node "${CLAUDE_PLUGIN_ROOT}/dist/entry.js"', timeout: 5 }]);
     }
     expect(hooks.hooks['UserPromptSubmit']![0]!.matcher).toBeUndefined();
     expect(hooks.hooks['PreToolUse']![0]!.matcher).toBeUndefined();

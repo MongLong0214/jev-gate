@@ -19,13 +19,15 @@ const hooksFor = async (options: Record<string, unknown>) => {
 
 // The Mod's records reach the trace as files; each one is read back here as the line the Mod emitted.
 const logs: string[] = [];
+const marks: string[] = [];
 const hostWith = (write: (path: string, text: string) => Promise<void>) => ({
   env: { get: async (name: string) => ({ HOME: '/h', JEV_GATE_TRACE_DIR: '/h/trace' } as Record<string, string>)[name] },
   session: { id: async () => 's' },
   fs: { stat: async () => ({ isLink: false, kind: 'dir', size: 0 }), exists: async () => false, read: async () => '', write },
   clock: { sleep: () => new Promise<void>(() => undefined) },
 });
-const $ = hostWith(async (_path, text) => {
+const $ = hostWith(async (path, text) => {
+  if (path.endsWith('.asked')) { marks.push(path); return; }
   const { host: _host, session_id: _session, phase, version: _version, invocation_id: _id, written_at: _at, ...fields } = JSON.parse(text) as Record<string, unknown>;
   logs.push(`jev-${String(phase).slice(4)} ${JSON.stringify(fields)}`);
 });
@@ -62,6 +64,16 @@ describe('resolveCompactConfig', () => {
 });
 
 describe('register', () => {
+  it('leaves the marker the plugin\'s command hook reads, for every compaction it is asked about and defers', async () => {
+    const hook = (await hooksFor({ enabled: true, mode: 'shadow' })).get('session.compact')!;
+    marks.length = 0;
+    await hook($, { trigger: 'auto', messages: conversation() }, nextSpy().next);
+    expect(marks).toEqual(['/h/trace/compact_asked-s.asked']);
+    marks.length = 0;
+    await (await hooksFor({ enabled: true, mode: 'active', compactManual: false })).get('session.compact')!($, { trigger: 'manual', messages: conversation() }, nextSpy().next);
+    expect(marks).toEqual(['/h/trace/compact_asked-s.asked']);
+  });
+
   it('registers nothing when off', async () => {
     expect([...(await hooksFor({ enabled: false })).keys()]).toEqual([]);
   });

@@ -1,6 +1,6 @@
 import type { PluginOptions, Register } from 'claude-code';
 
-import { resolveCompactConfig } from '../mods/compact/hooks/config.ts';
+import { COMPACT_OPTION_NAMES, resolveCompactConfig } from '../mods/compact/hooks/config.ts';
 import { registerCompact } from '../mods/compact/hooks/register.ts';
 import { resolveConfig } from '../mods/router/hooks/config.ts';
 import { registerRouter, type ContextObserver } from '../mods/router/hooks/register.ts';
@@ -11,7 +11,7 @@ import { registerRouter, type ContextObserver } from '../mods/router/hooks/regis
  * gate's, carries the Mod's prefix; tests/plugin-modules.test.ts holds plugin.json's userConfig to this table.
  */
 export const OPTION_NAMES = {
-  compact: { enabled: 'compactEnabled', mode: 'compactMode', budgetChars: 'compactBudgetChars', compactSubagents: 'compactSubagents', compactManual: 'compactManual', jevEnabled: 'compactJevEnabled', jevTimeoutMs: 'compactJevTimeoutMs' },
+  compact: COMPACT_OPTION_NAMES,
   router: {
     enabled: 'routerEnabled',
     allowFable: 'routerAllowFable',

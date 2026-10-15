@@ -50,6 +50,11 @@ export const createRecorder = (io: RecorderIO) => {
     })().catch(() => undefined);
     pending.add(task); void task.finally(() => pending.delete(task));
   };
+  /** The marker `compact_asked-<session>.asked` beside the records, written whether or not recording is on: the plugin's command hook reads it. */
+  const touch = (): void => {
+    const task = (async () => { const c = await load(); if (c && /^[\w-]{1,128}$/.test(c.session)) await io.write(`${c.dir}/compact_asked-${c.session}.asked`, JSON.stringify({ at: Date.now() })); })().catch(() => undefined);
+    pending.add(task); void task.finally(() => pending.delete(task));
+  };
   const flush = async (): Promise<void> => {
     if (!pending.size) return;
     const done = Promise.allSettled([...pending]);
@@ -60,5 +65,5 @@ export const createRecorder = (io: RecorderIO) => {
     } catch { /* A rejected host clock cannot make optional recording block native execution. */ }
     finally { stop.abort(); }
   };
-  return { log, flush };
+  return { log, touch, flush };
 };
