@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { offerPairs, selectPair, keepModelPair, pairReceipt, type PairPatch, type RouteCandidate } from '../../mods/router/hooks/selection.ts';
+import { offerRoute, selectPair, keepModelPair, pairReceipt, type PairPatch, type RouteCandidate } from '../../mods/router/hooks/selection.ts';
 import { routingContext, type RoutingCache } from '../../mods/router/hooks/context.ts';
 import { looksSecret } from '../../mods/router/hooks/secret.ts';
 import { MAX_REQUEST_TOKENS, estimateTokens } from '../../mods/router/hooks/client.ts';
@@ -50,7 +50,7 @@ export const routeCodex = async (args: {
   if (looksSecret(args.task)) return skip('input_secret');
   const candidates = codexCandidates(args.catalog, config.router.allowAstra, args.model);
   const modelPin = args.modelPinned === true; const effortPin = args.effortPinned === true;
-  const offer = offerPairs({ baseline: { model: args.model, effort: args.effort }, candidates,
+  const offer = offerRoute({ baseline: { model: args.model, effort: args.effort }, candidates, prefer: Object.values(config.gate.models),
     ...(args.child ? { scope: 'child' as const } : {}), model: config.router.model && !modelPin, effort: config.router.effort && !effortPin,
     upgrade: config.router.minUpgradeConfidence, downgrade: config.router.minDowngradeConfidence });
   if (!offer) return skip('no_alternative');

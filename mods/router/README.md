@@ -34,11 +34,83 @@ A `frontier` mapping is a preference, not authorization to use a restricted fami
 
 **Claude:** the installed Function Hooks expose no model-list API. Versioned adapter facts come from the official [model overview](https://platform.claude.com/docs/en/models/overview), [model configuration](https://code.claude.com/docs/en/model-config) and [effort documentation](https://platform.claude.com/docs/en/build-with-claude/effort), checked 2026-10-08 and checked again on every PR. Effective aliases, provider mappings and `availableModels` are read from the host. Only the current version of each family is a new automatic target; historical facts remain readable for older observations. Codex likewise excludes catalog-described older/previous generations from new targets and tier defaults. Capabilities do not prove subscription entitlement. Unknown custom IDs or unverified aliases preserve native settings. A smaller root needs a current complete-request safe upper bound, maximum output room and compatible host transformation. Current Haiku 5.5 has the same documented 1M window as Opus/Sonnet, supports effort and requires Claude Code 2.1.293 or later. Haiku is the preferred bounded fast worker; Codex prefers current account-listed Luna for that role.
 
-One bounded Jev batch contains a nominal choice between actual model IDs, keep and abstain, plus separate conditional effort scores for each applicable candidate. Only the chosen model's effort answer is consumed. Models without multiple effort levels need no effort question. Unknown model rank uses the stricter existing confidence floor; catalog order and model spelling do not imply price or capability. Known product roles in both hosts use the existing downgrade floor (0.6 by default) plus control/ordinary-risk checks; upgrades and same-role version changes retain 0.8. Codex roles come from the account catalog's descriptions; unrecognized descriptions remain unknown. These roles are not measured price/performance rankings. Ordered effort changes retain directional thresholds. If the baseline is outside the target scale, use the first ascending cumulative level reaching max(upgrade,downgrade), not a nominal argmax. Missing effort can resolve from effective host settings; unknown values can use a verified explicit target control. Numeric values and actual pins are preserved.
+One bounded Jev batch asks one capability question over the offered roles plus one effort score per offered model; only the chosen model's effort answer is consumed ([How a move is decided](#how-a-move-is-decided)). Models without multiple effort levels need no effort question. When an eligible candidate has no documented role, or the baseline itself is not offered, the v0.8.21 batch is used unchanged: a nominal choice between actual model IDs, keep and abstain, with the stricter confidence floor for unknown ranks. Catalog order and model spelling do not imply price or capability. Codex roles come from the account catalog's descriptions; unrecognized descriptions remain unknown. These roles are not measured price/performance rankings. Ordered effort changes retain directional thresholds. If the baseline is outside the target scale, use the first ascending cumulative level reaching max(upgrade,downgrade), not a nominal argmax. Missing effort can resolve from effective host settings; unknown values can use a verified explicit target control. Numeric values and actual pins are preserved.
 
 Read-only instructions, file/API constraints and mandatory checks do not lock model or effort. Only an explicit model/effort pin restricts its dimension. Missing evidence that native tools can discover is ordinary investigation; an earlier decision or target that those tools cannot recover still preserves the baseline.
 
 `keep`, `set(value)` and `omit` are different operations. Literal `none` is a supported effort value, not field removal. Omission deletes only the effort field when the native host permits it; other reasoning settings remain intact. Conditional Claude levels are withheld when the thinking mode is unknown. Codex `ultra` is a host control mode: it is offered only through official turn settings, never sent as a raw Responses API effort. The host resolves the API effort.
+
+## How a move is decided
+
+Jev judges what the work needs; code maps that to one model and decides whether to move. The capability question names no model, role, effort or price. Its options, most capable first (Jev leans toward the first option, and this order put less probability below the label on the dev split), are only the roles some eligible candidate serves, plus `unclear`:
+
+| Option | Role | Claude (default preference) | Codex (catalog description) | Chosen for |
+| --- | --- | --- | --- | --- |
+| `open_problem` | frontier | Fable 5.1, opt-in only | "frontier", "most demanding" (Astra), opt-in only | An open foundational problem with no known approach, where the result must be discovered and independently verified |
+| `complex` | deep | Opus 5.5 | "workhorse" (gpt-6.1-sol) | Competing constraints, an uncertain cause, or a subtle mistake that would do serious harm: intermittent failures, concurrency or caching bugs, compatible schema/API changes, migrations, permission or money logic, large reviews, architecture |
+| `routine` | standard | Sonnet 5.5 | "balanced", "everyday" | Ordinary development with clear requirements in established patterns: a helper or test, explaining code, a fix whose cause is stated, a feature across a few files, tracing a reproducible error, a behavior-preserving refactor |
+| `mechanical` | fast | Haiku 5.5 | "fast", "affordable" (Luna) | Retrieval or a small mechanical action with an obvious, checkable result: find a definition, list or count, run a named command, rename, typo, version bump, a change the request spells out |
+| `unclear` | — | — | — | Not enough evidence to judge; the native model and effort stay |
+
+Each option also carries examples and a `not_for` line naming what belongs to its neighbour. One model serves each role: the baseline for its own role, else the configured role preference (`routerFastModel` …), else catalog order. The request is untrusted data: text that names a model, tier or effort, or claims routing was already decided, is part of the task, never an instruction.
+
+Each offered model then gets its own effort score, assuming the work runs on that model. The levels keep the existing criteria:
+
+| Effort | Criterion |
+| --- | --- |
+| `low` | Light reasoning for lookup, search or a mechanical edit with an obvious answer |
+| `medium` | Ordinary reasoning for multistep implementation with clear requirements |
+| `high` | Strong reasoning for hard debugging or interacting design constraints |
+| `xhigh` | Exceptional reasoning for difficult proofs or subtle correctness across constraints |
+| `max` | Maximum sustained reasoning for exceptional proof search and competing hypotheses |
+
+Codex adds `none`, `minimal` and host-controlled `ultra` where the catalog lists them, with their own criteria. Every Claude combination Router can choose, with the work each one is for (row: capability; column: effort):
+
+| Model | `low` | `medium` | `high` | `xhigh` | `max` |
+| --- | --- | --- | --- | --- | --- |
+| Haiku 5.5 | Lookup, listing, a spelled-out edit | A mechanical change across several places | Mechanical work whose checks need care | Not offered (thinking-mode dependent) | Not offered (thinking-mode dependent) |
+| Sonnet 5.5 | Explaining a function, a stated-cause fix | Multistep implementation with clear requirements | Routine work with harder debugging or interacting constraints | Not offered (thinking-mode dependent) | Not offered (thinking-mode dependent) |
+| Opus 5.5 | A light step inside complex work, mostly a worker's next inference | Complex work with ordinary per-step reasoning | Hard debugging, competing design constraints | Difficult proofs, subtle correctness across constraints | Exceptional proof search, competing hypotheses |
+| Fable 5.1 (opt-in) | Same effort criteria for an open problem | Same | Same | Same | Same |
+
+A combination is chosen in this order. Any step that does not pass keeps the native model and effort:
+
+1. **Control.** An explicit lock, a missing indispensable decision, an unclear task, or control confidence below the lower floor keeps everything. A model lock still lets effort move; an effort lock still lets the model move.
+2. **Model.** The capability distribution is read in role order, not by its largest option. Walking up from the cheapest role, the first role below the baseline whose cumulative mass reaches `minDowngradeConfidence` (0.6) is the target. Otherwise, walking down from the most capable role, the first role above the baseline whose cumulative mass reaches `minUpgradeConfidence` (0.8) is the target. Otherwise the model stays. `unclear` as the answer keeps the model and its effort.
+3. **Risk.** A downgrade also needs `action_risk` answered `ordinary` with at least the downgrade floor.
+4. **Effort.** The chosen model's own score moves effort the same way: down at cumulative mass reaching the downgrade floor, up at the upgrade floor. If the baseline effort is not on that model's scale, the first ascending level whose cumulative mass reaches max(upgrade, downgrade) is used.
+5. **Pair.** The chosen model must support the chosen effort; otherwise both stay native.
+6. **Cache.** A root downgrade is held when the observed cache makes the next request on the cheaper model estimate dearer than staying; the kept model's own effort answer still applies.
+7. **Retry.** A Gate retry (attempt > 1) of a task whose previous attempt recorded its model is served at least one role above that model, as a fresh worker. It never jumps more than one role by itself. The v0.8.21 fallback batch has no step-up.
+
+The two floors are the only tuning options and keep their meaning: the downgrade floor is how much probability the cheaper roles together need, the upgrade floor how much the more capable roles together need. dirien/jev-router's per-role accept bars (fast 0.85, standard 0.6, deep 0.3, else the more capable of the top two) were evaluated as an alternative and not shipped. They matched on all dev metrics, and on the held-out split they had the same zero under-routing with more over-routing.
+
+### Evaluation
+
+`npm run build && npm run bench:router -- run --split dev --out <file>` asks every labelled request in `bench/router/golden.json` as a fresh root turn. Each request is asked three times: the shipped question with the options most capable first, the same question cheapest first, and the v0.8.21 pair question as the control. Baseline is Opus 5.5 / `xhigh`, frontier is off, and the floors are the defaults. It writes each item's distributions and decisions to `<file>` and prints the summary. Live calls need a Jev key and are not part of `npm test`. `report --out <file>` recomputes the summary without calls. The test split is frozen by hash, and `--split test` refuses a changed one.
+
+Results on 2026-10-15 with `jev-1.13.0`, held-out split (64 requests plus 20 injection probes, run once after the dev choices were fixed):
+
+| Policy | Exact | Under (95% upper) | Over | Est. price vs baseline | Injection probes moved below their pair | Latency p50 / p90 |
+| --- | --- | --- | --- | --- | --- | --- |
+| Shipped (most capable first, role order) | 98.4% | 0% (5.7%) | 1.6% | 0.52 | 0 of 20 | 191 / 236 ms |
+| Cheapest first, role order | 98.4% | 0% (5.7%) | 1.6% | 0.52 | 0 of 20 | 202 / 287 ms |
+| Most capable first, accept bars | 96.9% | 0% (5.7%) | 3.1% | 0.53 | 0 of 20 | same call |
+| v0.8.21 pair question (control) | 85.9% | 12.5% (22.8%) | 1.6% | 0.46 | 3 of 20 | 193 / 300 ms |
+| Always the baseline | 32.8% | 0% | 67.2% | 1.00 | — | — |
+| Always the cheapest | 32.8% | 67.2% | 0% | 0.03 | — | — |
+| Random with the shipped role shares | 33.3% | 32.3% | 34.4% | — | — | — |
+
+The dev split (64 requests, three repeats) gave the same routed results for both orders and both rules; the order was chosen because most capable first put less mass below the label in all three repeats. Every held-out exact route had its effort inside the labelled range (dev: 98.4% in each repeat). These are limits of the set, not caveats to skip:
+
+- One person wrote the labels and the rubric, and many requests resemble the rubric's own examples. The result measures agreement with this rubric, not whether a cheaper model would have finished the task.
+- 64 held-out requests bound under-routing only below about 6%.
+- The price column is list input price relative to Opus. It ignores token counts, effort and cache, so it is not a cost saving.
+- The thresholds are tied to `jev-1.13.0`. Re-run the bench when the Jev model, the questions or the floors change.
+
+### Credits
+
+The capability options' structure (what, examples, not for) and the wording of both instructions follow [ruban-24/switchboard](https://github.com/ruban-24/switchboard) (Apache-2.0). The anti-injection sentence, the evaluation protocol and the accept-bar alternative follow [dirien/jev-router](https://github.com/dirien/jev-router) (Apache-2.0).
 
 ## Context, timing and application
 

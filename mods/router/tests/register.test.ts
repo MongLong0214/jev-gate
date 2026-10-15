@@ -20,11 +20,11 @@ test('child tool steps use fresh assessments in the real host engine', async ($,
     calls++;
     const body = JSON.parse(e.init?.body ?? '{}');
     expect(e.init?.body).not.toContain('PRIVATE');
-    const target = phase === 0 ? '__keep__' : phase === 1 ? 'claude-sonnet-5-5' : 'claude-opus-5-5';
+    const target = phase === 1 ? 'routine' : 'complex';
     const answers = Object.fromEntries(Object.entries(body.questions).map(([name, raw]) => {
       const q = raw as { type: string; criteria: string[] | Record<string, string> };
       if (q.type === 'choice') {
-        const value = name === 'model' ? target : name === 'control' ? 'task_clear' : 'ordinary';
+        const value = name === 'capability' ? target : name === 'control' ? 'task_clear' : 'ordinary';
         return [name, { type: 'choice', choice: value, confidence: 1, probabilities: Object.fromEntries(Object.keys(q.criteria).map(k => [k, k === value ? 1 : 0])) }];
       }
       const levels = q.criteria as string[];
@@ -98,11 +98,11 @@ for (const mode of ['keep', 'effort', 'model', 'both'] as const) {
       const answers = Object.fromEntries(Object.entries(body.questions).map(([name, raw]) => {
         const q = raw as { type: string; instructions: string; criteria: string[] | Record<string, string> };
         if (q.type === 'choice') {
-          const value = name === 'model' ? mode === 'model' || mode === 'both' ? 'claude-opus-5-5' : '__keep__' : name === 'control' ? 'task_clear' : 'ordinary';
+          const value = name === 'capability' ? mode === 'model' || mode === 'both' ? 'complex' : 'routine' : name === 'control' ? 'task_clear' : 'ordinary';
           return [name, { type: 'choice', choice: value, confidence: 1, probabilities: Object.fromEntries(Object.keys(q.criteria).map(k => [k, k === value ? 1 : 0])) }];
         }
         const levels = q.criteria as string[];
-        const target = mode === 'both' && q.instructions.includes('IF using model claude-opus-5-5,') ? levels.length - 1 : mode === 'effort' ? 0 : 2;
+        const target = mode === 'both' && q.instructions.includes('Work where competing constraints') ? levels.length - 1 : mode === 'effort' ? 0 : 2;
         return [name, { type: 'score', score: target, confidence: 1, probabilities: Object.fromEntries(levels.map((_, i) => [i, i === target ? 1 : 0])) }];
       }));
       return { value: { ok: true, status: 200, headers: {}, text: JSON.stringify({ model: body.model, answers }) } };
@@ -137,11 +137,11 @@ for (const baselineMode of ['default', 'echo'] as const) {
     on('http.fetch', ($, e) => {
       calls++;
       const body = JSON.parse(e.init?.body ?? '{}');
-      const target = phase < 2 ? 'claude-sonnet-5-5' : 'claude-opus-5-5';
+      const target = phase < 2 ? 'routine' : 'complex';
       const answers = Object.fromEntries(Object.entries(body.questions).map(([name, raw]) => {
         const q = raw as { type: string; criteria: string[] | Record<string, string> };
         if (q.type === 'choice') {
-          const value = name === 'model' ? target in q.criteria ? target : '__keep__' : name === 'control' ? 'task_clear' : 'ordinary';
+          const value = name === 'capability' ? target : name === 'control' ? 'task_clear' : 'ordinary';
           return [name, { type: 'choice', choice: value, confidence: 1, probabilities: Object.fromEntries(Object.keys(q.criteria).map(k => [k, k === value ? 1 : 0])) }];
         }
         const levels = q.criteria as string[];

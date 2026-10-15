@@ -3518,6 +3518,27 @@ describe('full candidate pair in the existing Gate B batch', () => {
     expect(result.kind).toBe('patch'); expect(updatedInput(result).model).toBe('opus'); expect(fetchImpl).toHaveBeenCalledOnce();
     expect(state(env).current.active[role === 'planner' ? 'toolu_plan' : 'toolu_1']?.allocation_pair).toEqual({model:'fixture-F',effort_edit:{kind:'set',value:'max'}});
   });
+  it('dispatches a retry one role above the model its failed attempt recorded, in the same batch', async () => {
+    const env = makeEnv();
+    await seedPlanned(env);
+    const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
+      const req = JSON.parse(String(init.body));
+      const old = await (fakeJev() as unknown as typeof fetch)(url, init); const body = await old.json() as {answers:Record<string,unknown>};
+      for (const [name, q] of Object.entries(req.questions) as Array<[string, {criteria:Record<string,unknown>|string[]}]>) {
+        if (name === 'capability' || name === 'control' || name === 'action_risk') body.answers[name] = choice(Object.keys(q.criteria), name === 'capability' ? 'mechanical' : name === 'control' ? 'task_clear' : 'ordinary', 1);
+        if (name.startsWith('effort_')) body.answers[name] = {type:'score', probabilities:Object.fromEntries((q.criteria as string[]).map((_,i)=>[i,i===0?1:0]))};
+      }
+      return new Response(JSON.stringify(body));
+    });
+    const ranks: Record<string, number> = { 'fixture-fast': 0, 'fixture-standard': 1, 'fixture-deep': 2 };
+    const allocation = { candidates: () => Object.entries(ranks).map(([id, rank]) => ({ id, rank, description: 'fixture', efforts: ['low', 'high'], omitEffort: false })),
+      canonical: (model: string) => model in ranks ? model : 'fixture-deep', allowed: () => true, toolModel: () => 'opus' };
+    await run(env, preEvent('Agent', agentInput()), fetchImpl, { allocation });
+    expect(state(env).current.active['toolu_1']?.allocation_pair?.model).toBe('fixture-fast');
+    await run(env, workerPost('toolu_1', workerReply({ status: 'blocked' })), fetchImpl);
+    await run(env, preEvent('Agent', agentInput({ prompt: '[JEV_TASK rev=1 id=t1 attempt=2]\nredo' }), { tool_use_id: 'toolu_2' }), fetchImpl, { allocation });
+    expect(state(env).current.active['toolu_2']?.allocation_pair?.model).toBe('fixture-standard');
+  });
 });
 
 it.each([
