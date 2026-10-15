@@ -75,6 +75,9 @@ beforeAll(() => {
   // The evidence bundle is build output, and the tests run before the build.
   const evidence = spawnSync(process.execPath, [join(root, 'scripts', 'build-evidence.mjs'), join(pluginRoot, 'plugins', 'evidence', 'dist', 'server.mjs')], { encoding: 'utf8' });
   expect(evidence.status, evidence.stderr).toBe(0);
+  // The classic Compact bundle is build output too (esbuild, outside tsc's rootDir).
+  const classic = spawnSync(process.execPath, [join(root, 'scripts', 'build-claude-compact.mjs'), join(pluginRoot, 'dist', 'compact-hook.js')], { encoding: 'utf8' });
+  expect(classic.status, classic.stderr).toBe(0);
 }, 60_000);
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
@@ -89,7 +92,7 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     expect(archive).toBeDefined();
     const list = spawnSync('unzip', ['-Z1', join(outDir, archive!)], { encoding: 'utf8' }).stdout.trim().split('\n');
     const agents = ['worker-fast', 'worker', 'worker-deep', 'worker-frontier', 'planner', 'planner-frontier'].map((a) => `agents/${a}.md`);
-    for (const must of ['dist/entry.js', 'dist/hook.js', 'dist/jev.js', 'dist/brief.js', 'dist/cli.js', 'dist/job.js', 'dist/plan.js', 'hooks/hooks.json', ...agents, '.claude-plugin/plugin.json', ...INSTALL_DOCS]) expect(list, must).toContain(must);
+    for (const must of ['dist/entry.js', 'dist/hook.js', 'dist/compact-hook.js', 'dist/jev.js', 'dist/brief.js', 'dist/cli.js', 'dist/job.js', 'dist/plan.js', 'hooks/hooks.json', ...agents, '.claude-plugin/plugin.json', ...INSTALL_DOCS]) expect(list, must).toContain(must);
     expect(list.filter((f) => f.startsWith('agents/'))).toEqual([...agents].sort());
     expect(list.some((f) => f.startsWith('src/') && !/^src\/(?:cost|provider-prices(?:-data)?|route-cost|claude-cache|frontier-routing|router-(?:answers|selection|context|child-context|secret)|claude-(?:models|candidates))\.ts$/.test(f) || f.includes('/tests/') || f.startsWith('tests/') || f.startsWith('node_modules/') || f.startsWith('bench/') && f !== 'bench/ab/tasks.example.json' || f === 'HANDOFF.md' || f.includes('.env') && !f.endsWith('.env.example'))).toBe(false);
     // v0.6.0: the one plugin carries the two Mods from their source, the module that loads them, and the evidence

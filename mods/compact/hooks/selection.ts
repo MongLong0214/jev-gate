@@ -18,7 +18,7 @@ export interface CompactSelection {
 }
 
 /** Only optional old successful results compete. Mandatory text and the complete tail are never offered for removal. */
-export const compactCandidates = (messages: readonly DigestMessage[], baseline: DigestResult): { task: string; candidates: CompactCandidate[]; available: number } | null => {
+export const compactCandidates = (messages: readonly DigestMessage[], baseline: DigestResult, newest = false): { task: string; candidates: CompactCandidate[]; available: number } | null => {
   const task = messages.findLast(m => m.role === 'user' && m.text.trim() && !m.text.startsWith(DIGEST_MARK))?.text;
   if (!task) return null;
   const candidates: CompactCandidate[] = [];
@@ -31,7 +31,8 @@ export const compactCandidates = (messages: readonly DigestMessage[], baseline: 
       candidates.push({ id: `m${message}t${tool}`, message, tool, input: `${u.tool} ${JSON.stringify(u.input)}`.slice(0, 240), result, excerpt: result.length < u.text.trim().length });
     });
   });
-  return candidates.length ? { task, candidates: candidates.slice(0, 16), available: candidates.length } : null;
+  // The digest drops the oldest results, so it offers the first 16; a supplement to the engine's summary drops nothing yet, so the newest are the ones to ask about.
+  return candidates.length ? { task, candidates: newest ? candidates.slice(-16) : candidates.slice(0, 16), available: candidates.length } : null;
 };
 
 export const compactQuestions = (candidates: readonly CompactCandidate[]): Record<string, unknown> => Object.fromEntries(candidates.map(c => [c.id, {
@@ -45,15 +46,15 @@ export const compactQuestions = (candidates: readonly CompactCandidate[]): Recor
   },
 }]));
 
-export const createCompactSelector = (timeoutMs: number): ((messages: readonly DigestMessage[], baseline: DigestResult, key: string | undefined, transport: Transport, signal?: AbortSignal) => Promise<CompactSelection>) => {
+export const createCompactSelector = (timeoutMs: number): ((messages: readonly DigestMessage[], baseline: DigestResult, key: string | undefined, transport: Transport, signal?: AbortSignal, newest?: boolean) => Promise<CompactSelection>) => {
   let client: JevClient = createClient({ timeoutMs });
   let credential: string | undefined;
-  return async (messages, baseline, key, transport, signal) => {
+  return async (messages, baseline, key, transport, signal, newest) => {
     const started = Date.now();
     const result: CompactSelection = { priorities: [], reason: 'no_candidates', sent: false, model: null, candidates: 0, available: null, durationMs: 0, usage: null };
     if (!key) return { ...result, reason: 'no_key' };
     if (credential !== key) { client = createClient({ timeoutMs }); credential = key; }
-    const input = compactCandidates(messages, baseline);
+    const input = compactCandidates(messages, baseline, newest);
     if (!input) return result;
     result.available = input.available;
     let candidates = input.candidates;

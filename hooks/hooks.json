@@ -66,6 +66,16 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/compact-hook.js\"",
+            "timeout": 10
+          }
+        ]
       }
     ],
     "WorktreeCreate": [
@@ -87,6 +97,28 @@
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/entry.js\"",
             "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/compact-hook.js\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/compact-hook.js\"",
+            "timeout": 10
           }
         ]
       }

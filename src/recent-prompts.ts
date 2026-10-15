@@ -31,7 +31,7 @@ const textOnly = (content: unknown): string | null => {
   return parts.join('\n');
 };
 
-const readTail = (path: string): string | null => {
+export const readTail = (path: string, bytes = TAIL_BYTES): string | null => {
   let fd: number;
   try {
     fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
@@ -41,7 +41,7 @@ const readTail = (path: string): string | null => {
   try {
     const stat = fstatSync(fd); if (!stat.isFile()) return null;
     const size = stat.size;
-    const len = Math.min(size, TAIL_BYTES);
+    const len = Math.min(size, bytes);
     const buf = Buffer.allocUnsafe(len);
     const n = readSync(fd, buf, 0, len, size - len);
     const text = buf.subarray(0, n).toString('utf8');

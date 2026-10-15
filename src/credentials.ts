@@ -18,11 +18,11 @@ export const privateDirectory = (path: string): void => {
   const stat = lstatSync(path);
   if (!stat.isDirectory() || stat.isSymbolicLink() || stat.mode & 0o077) throw new Error('Jev directory must be private');
 };
-export const readPrivateJson = (path: string): Record<string, unknown> | null => {
+export const readPrivateJson = (path: string, maxBytes = 16 * 1024): Record<string, unknown> | null => {
   try {
     const parent = lstatSync(dirname(path));
     const stat = lstatSync(path);
-    if (parent.isSymbolicLink() || !parent.isDirectory() || parent.mode & 0o077 || !stat.isFile() || stat.isSymbolicLink() || stat.mode & 0o077 || stat.size > 16 * 1024) return null;
+    if (parent.isSymbolicLink() || !parent.isDirectory() || parent.mode & 0o077 || !stat.isFile() || stat.isSymbolicLink() || stat.mode & 0o077 || stat.size > maxBytes) return null;
     const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
     try {
       const value: unknown = JSON.parse(readFileSync(fd, 'utf8'));
