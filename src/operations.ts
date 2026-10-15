@@ -116,6 +116,8 @@ const number = (v: unknown): number | null => typeof v === 'number' && Number.is
 const iso = (v: unknown): string => typeof v === 'string' && ISO.test(v) ? v : '';
 const list = (v: unknown, cap = 16): string[] => Array.isArray(v) ? v.slice(0, cap).map(token).filter((x): x is string => x !== null) : [];
 const id = memo((v: string): string => createHash('sha256').update(v).digest('hex').slice(0, 12));
+// Step texts repeat across the history; the kept builds share one copy of each.
+const intern = memo((v: string): string => v);
 // Same output as toLocaleString('en-US'), without building a formatter per call.
 const EN = new Intl.NumberFormat('en-US');
 const n = (v: number | null): string => v === null ? '?' : EN.format(Number(v.toFixed(2)));
@@ -717,18 +719,20 @@ const buildPart = (records: Rec[], mods: ModRecord[], now: Date, context?: PartC
   records = allocatedTraceRecords(records);
   const codexDecisions = new Map<string, Rec>();
   const codexKey = (r: Rec): string | null => r['host'] === 'codex' && token(r['session_id']) && token(r['prompt_id']) ? JSON.stringify([r['session_id'], r['prompt_id'], r['scope'] === 'child' ? r['agent_id'] : null, r['scope'] === 'child' ? r['index'] ?? null : null]) : null;
-  for (const r of records) { const key = codexKey(r); if (key && r['phase'] === 'codex_router_result') codexDecisions.set(key, r); }
-  records = records.map(r => {
-    const key = codexKey(r), decision = key ? codexDecisions.get(key) : undefined;
-    return decision && iso(decision['written_at']) <= iso(r['written_at']) && ['codex_route_applied', 'codex_router_response'].includes(String(r['phase'])) ? { ...r, reasons: decision['reasons'], baseline_model: r['baseline_model'] ?? decision['baseline_model'], answers: decision['answers'], selection: decision['selection'] } : r;
+  // Only a decision's own rows read a key; the other rows of a long turn need none.
+  for (const r of records) if (r['phase'] === 'codex_router_result') { const key = codexKey(r); if (key) codexDecisions.set(key, r); }
+  if (codexDecisions.size) records = records.map(r => {
+    const decision = ['codex_route_applied', 'codex_router_response'].includes(String(r['phase'])) ? codexDecisions.get(codexKey(r) ?? '') : undefined;
+    return decision && iso(decision['written_at']) <= iso(r['written_at']) ? { ...r, reasons: decision['reasons'], baseline_model: r['baseline_model'] ?? decision['baseline_model'], answers: decision['answers'], selection: decision['selection'] } : r;
   });
   // A request row can display the actual response only when its exact binding has a later response.
   const responseBindings = new Map<string, Rec>();
   const modelTerminals = new Map<string, string>();
   for (const r of records) {
+    if (!['codex_router_response', 'codex_model_failure'].includes(String(r['phase']))) continue;
     const key = modelRequestKey(r); if (!key) continue;
     const at = iso(r['written_at']);
-    if (['codex_router_response', 'codex_model_failure'].includes(String(r['phase'])) && at && at >= (modelTerminals.get(key) ?? '')) modelTerminals.set(key, at);
+    if (at && at >= (modelTerminals.get(key) ?? '')) modelTerminals.set(key, at);
     if (r['phase'] === 'codex_router_response' && at && at >= iso(responseBindings.get(key)?.['written_at'])) responseBindings.set(key, r);
   }
   const live: Liveness = { now: now.getTime(), seen: new Map(), ends: new Map(), sessions, read: context?.read ?? new Set(), until: Infinity };
@@ -746,9 +750,8 @@ const buildPart = (records: Rec[], mods: ModRecord[], now: Date, context?: PartC
     // Recorded Router rows may carry no session; an unidentified session end cannot end anything (`sessionEnd`).
     observe(loop, row.at, r['event'] === 'turn_end' && token(r['turn']) ? { key: loop, interrupted: r['reason'] === 'aborted' } : undefined);
   }
-  records = records.map(r => {
-    const key = modelRequestKey(r);
-    const response = r['phase'] === 'codex_route_applied' && key ? responseBindings.get(key) : undefined;
+  if (responseBindings.size) records = records.map(r => {
+    const response = r['phase'] === 'codex_route_applied' ? responseBindings.get(modelRequestKey(r) ?? '') : undefined;
     return response && iso(response['written_at']) >= iso(r['written_at']) ? { ...r, observed_model: response['observed_model'], observed_effort: response['observed_effort'] } : r;
   });
   // routedModRecords visits rows in this stable time order.
@@ -759,8 +762,9 @@ const buildPart = (records: Rec[], mods: ModRecord[], now: Date, context?: PartC
   for (const r of records) if (r['phase'] === 'background_terminal') resultIds.add(`background:${token(r['session_id'])}:${token(r['execution_prompt_id']) ?? token(r['prompt_id'])}:${token(r['tool_use_id'])}`);
   for (const r of records) if (r['phase'] === 'codex_compact' && r['applied'] === true && token(r['run_id'])) resultIds.add(`codex_compact:${token(r['run_id'])}`);
   const intents = new Map(records.flatMap((r): Array<[string, string]> => {
-    const phase = token(r['phase']); const requestId = token(r['request_id']); const at = iso(r['written_at']);
-    return phase?.endsWith('_intent') && requestId && at ? [[`${requestId}:${phase}`, at]] : [];
+    const phase = token(r['phase']); if (!phase?.endsWith('_intent')) return [];
+    const requestId = token(r['request_id']); const at = iso(r['written_at']);
+    return requestId && at ? [[`${requestId}:${phase}`, at]] : [];
   }));
   const closed = new Set(mods.flatMap((row) => {
     const own = row.component === 'router' ? token(row.rec['turn']) ?? token(row.rec['tool_use_id']) : token(row.rec['run_id']);
@@ -965,6 +969,8 @@ const summarize = (group: Group, part: Part, records: Node[], mods: Node[]): Bui
   });
   b.entries.sort(order).forEach((e, ord) => { e.ord = ord; });
   for (const e of b.entries) e.run.steps.forEach((s, i) => {
+    s.summary = intern(s.summary);
+    for (let k = 0; k < s.details.length; k++) s.details[k] = intern(s.details[k]!);
     if (!REGULAR.test(s.at)) b.regular = false;
     if (s.at > b.maxAt) b.maxAt = s.at;
     if (!s.lifecycle) { const f = b.features.get(s.feature); if (!f) b.features.set(s.feature, { count: 1, maxAt: s.at }); else { f.count++; if (s.at > f.maxAt) f.maxAt = s.at; } }

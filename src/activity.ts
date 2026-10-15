@@ -5,7 +5,7 @@ import { readTraceRecords, type TraceDirectoryReader, type TraceCache } from './
 import { readLiveness } from './liveness.js';
 import { buildOperations, type ModRecord, type OperationsView } from './operations.js';
 import type { Host } from './host-support.js';
-import { memo } from './memo.js';
+import { memo, memoGeneration } from './memo.js';
 
 /**
  * A local view of calls the gate and the router already recorded. It whitelists short tokens from those records.
@@ -482,12 +482,14 @@ const buildLive = (records: Rec[], routerRows: Array<{ at: string; rec: Rec }>, 
   };
 };
 
-// Reader records stay the same objects until their file changes, so the rows derived from them can be reused.
+// Reader records stay the same objects until their file changes, so the rows derived from them can be reused. Almost every
+// record names its host; only the others are copied, as a second copy of the history would be most of its memory.
 const hosted = new WeakMap<Rec, Rec>();
 const withHost = (original: Rec, host: Host): Rec => {
-  const value = original['host'] ?? host, cached = hosted.get(original);
-  if (cached && cached['host'] === value) return cached;
-  const r = { ...original, host: value }; hosted.set(original, r); return r;
+  if (original['host'] != null) return original;
+  let r = hosted.get(original);
+  if (r?.['host'] !== host) hosted.set(original, r = { ...original, host });
+  return r;
 };
 const modRows = new WeakMap<Rec, ModRecord>();
 
@@ -539,6 +541,7 @@ const deriveRows = (records: Rec[], host: Host, only: Host | undefined, feed: bo
 };
 
 export const loadActivity = (opts: { traceDir: string | null; traceDirs?: readonly { host: Host; dir: string }[] | undefined; env: Env; now?: Date; host?: Host; traceCache?: TraceCache; traceReader?: TraceDirectoryReader; feed?: boolean }): ActivitySnapshot => {
+  memoGeneration();
   const notes = [...NOTES];
   // The dashboard draws neither the event list nor the live board, and both cost a pass over every record.
   const feed = opts.feed !== false;

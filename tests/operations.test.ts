@@ -498,6 +498,30 @@ it('rebuilds only the sessions that changed or still wait on their age, and equa
   expect(third!.runs.filter(run => second!.runs.includes(run)).map(run => run.title).sort()).toEqual(['Evidence 검색', 'Router 실행', 'Router 실행', '게이트 세션', '게이트 세션']);
 });
 
+it('remakes only the steps a new row changes in a long Codex turn, and equals a fresh pass over copied records each time', () => {
+  const t0 = Date.parse('2026-09-29T06:00:00.000Z'), iso = (ms: number) => new Date(t0 + ms).toISOString(), avail = { trace: true };
+  const event = (name: string, i: number, call = i) => ({ host: 'codex', phase: 'codex_event', event: name, session_id: 'cx', prompt_id: 'turn', tool_use_id: `call-${call}`, tool_name: 'Bash', invocation_id: `${name}-${i}`, written_at: iso(i * 100) });
+  const records: Record<string, unknown>[] = [event('UserPromptSubmit', 0), ...Array.from({ length: 400 }, (_, i) => [event('PreToolUse', 2 * i + 1), event('PostToolUse', 2 * i + 2, 2 * i + 1)]).flat()];
+  const now = new Date(t0 + 90_000);
+  const turn = () => {
+    const view = buildOperations(records, [], now, avail);
+    // Copied rows share no cached step, so this one pass builds everything from the records.
+    expect(view).toEqual(buildOperations(records.map(r => ({ ...r })), [], now, avail, true));
+    return view.runs.find(run => run.host === 'codex')!.steps;
+  };
+  const kept = (before: unknown[], after: unknown[]) => { const old = new Set(before); return after.filter(s => old.has(s)).length; };
+  const first = turn();
+  records.push(event('PreToolUse', 801));
+  const opened = turn();
+  expect(kept(first, opened)).toBe(first.length);
+  expect(opened.at(-1)?.state).toBe('active');
+  // The result pairs with the open call: only that call's step is made again, and it is done.
+  records.push(event('PostToolUse', 802, 801));
+  const closed = turn();
+  expect(kept(opened, closed)).toBe(opened.length - 1);
+  expect(closed.find(s => s.at === iso(80_100))?.state).toBe('done');
+});
+
 it('rebuilds a child response when its spawn in another turn gains or loses a Gate record, and equals one pass each time', () => {
   const gate = { ...base, phase: 'pre_result', tool_use_id: 'tool', allocation: { selected_model: 'claude-sonnet-5-5', effort_edit: { kind: 'set', value: 'high' } } };
   const mods = [row('router', { event: 'spawn_result', session_id: base.session_id, turn: 't1', tool_use_id: 'tool', agent_id: 'child', requested: 'claude-sonnet-5-5', observed: 'claude-sonnet-5-5' }),

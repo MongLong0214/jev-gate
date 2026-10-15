@@ -169,14 +169,14 @@ describe('dashboard snapshot latency (#215)', () => {
 describe('dashboard rebuild pacing', () => {
   const record = (dir: string, name: string): void => writeFileSync(join(dir, name), JSON.stringify({ phase: 'stop', session_id: 's', written_at: new Date().toISOString(), outcome: 'completed' }));
 
-  it('waits three times the last rebuild, between one and four seconds', () => {
-    expect([0, 100, 400, 1000, 9000].map(rebuildWait)).toEqual([1000, 1000, 1200, 3000, 4000]);
+  it('waits four times the last rebuild from its start, between one and four seconds', () => {
+    expect([0, 100, 400, 1000, 9000].map(rebuildWait)).toEqual([1000, 1000, 1600, 4000, 4000]);
   });
 
   it('starts the first load at once, then keeps each pause and still shows a new record within seconds', async () => {
     const trace = make();
     record(trace, 'r0.json');
-    gate.ms = 400; // a 1.2-second pause after each rebuild
+    gate.ms = 400; // 1.6 seconds from one rebuild's start to the next
     const server = await startDashboard({ traceDir: trace, env: { HOME: make(), JEV_GATE_STATE_DIR: make() } }, 0);
     const opened = Date.now();
     const reader = (await fetch(`${server.url}api/live`)).body!.getReader();
@@ -195,13 +195,36 @@ describe('dashboard rebuild pacing', () => {
       await shows(last);
       expect(Date.now() - stopped).toBeLessThan(3000);
       expect(gate.starts.length).toBeGreaterThan(2);
-      for (let i = 1; i < gate.starts.length; i++) expect(gate.starts[i]! - gate.ends[i - 1]!).toBeGreaterThanOrEqual(rebuildWait(400) - 5);
+      for (let i = 1; i < gate.starts.length; i++) expect(gate.starts[i]! - gate.starts[i - 1]!).toBeGreaterThanOrEqual(rebuildWait(400) - 5);
     } finally {
       clearInterval(writer);
       await reader.cancel().catch(() => undefined);
       await server.close();
     }
   }, 15_000);
+
+  it('starts the rebuild for a record written after a slow one a second after that one started, not a second after it ended', async () => {
+    // The pause once counted from the end of a rebuild, so a record waited its whole length on top of the pause.
+    const trace = make();
+    record(trace, 'r0.json');
+    gate.ms = 0; gate.hold = new Promise(resolve => setTimeout(resolve, 800));
+    const server = await startDashboard({ traceDir: trace, env: { HOME: make(), JEV_GATE_STATE_DIR: make() } }, 0);
+    const reader = (await fetch(`${server.url}api/live`)).body!.getReader();
+    try {
+      let text = '';
+      const shows = async (files: number): Promise<void> => {
+        while (!text.includes(`"traceFiles":${files}`)) text += new TextDecoder().decode((await reader.read()).value);
+      };
+      await shows(1);
+      record(trace, 'r1.json');
+      await shows(2);
+      expect(gate.starts[1]! - gate.starts[0]!).toBeGreaterThanOrEqual(rebuildWait(0) - 5);
+      expect(gate.starts[1]! - gate.starts[0]!).toBeLessThan(1500);
+    } finally {
+      await reader.cancel().catch(() => undefined);
+      await server.close();
+    }
+  }, 10_000);
 });
 
 describe('dashboard viewer leases', () => {

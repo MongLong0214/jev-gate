@@ -34,9 +34,12 @@ export const allocatedTraceRecords = (records: Rec[]): Rec[] => {
     ? JSON.stringify([r['host'] ?? 'claude', r['session_id'], r['tool_use_id']]) : null;
   const models = new Map<string, string>();
   for (const r of records) {
+    if (r['phase'] !== 'pre_result') continue;
     const identity = key(r), model = sub(r, 'allocation')?.['selected_model'];
-    if (r['phase'] === 'pre_result' && identity && typeof model === 'string') models.set(identity, model);
+    if (identity && typeof model === 'string') models.set(identity, model);
   }
+  // Without an allocation every record stays as it is; a long native turn has none.
+  if (!models.size) return records;
   return records.map(r => {
     const identity = key(r), model = identity ? models.get(identity) : undefined;
     if (!model) return r;
@@ -59,22 +62,23 @@ const traceName = (name: string): boolean => name.endsWith('.json') && !name.sta
 const sortedRecords = (records: Rec[]): Rec[] => records.sort((a, b) => (str(a['written_at']) ?? '').localeCompare(str(b['written_at']) ?? ''));
 
 /** The cached record when the file is unchanged, null when it cannot be a trace, undefined when it must be read. */
-const cachedTrace = (path: string, cache: TraceCache, stat: Stats): Rec | null | undefined => {
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 512_000) { cache.delete(path); return null; }
-  const previous = cache.get(path);
+const cachedTrace = (key: string, cache: TraceCache, stat: Stats): Rec | null | undefined => {
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 512_000) { cache.delete(key); return null; }
+  const previous = cache.get(key);
   if (previous?.signature === signature(stat)) return previous.record;
-  cache.delete(path);
+  cache.delete(key);
   return undefined;
 };
 
 /** Undefined when the file was removed after it was listed (retention, #231): a removed name is not an unreadable file. */
 const gone = (err: unknown): undefined | null => (err as NodeJS.ErrnoException).code === 'ENOENT' ? undefined : null;
 
-const readTraceFile = (path: string, cache?: TraceCache, existingStat?: Stats): Rec | null | undefined => {
+/** `key` names the file in `cache`: its path, or its name in a cache of one directory. */
+const readTraceFile = (path: string, cache?: TraceCache, existingStat?: Stats, key = path): Rec | null | undefined => {
   let fd: number | undefined;
   try {
     if (cache) {
-      const cached = cachedTrace(path, cache, existingStat ?? lstatSync(path));
+      const cached = cachedTrace(key, cache, existingStat ?? lstatSync(path));
       if (cached !== undefined) return cached;
     }
     fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -82,15 +86,15 @@ const readTraceFile = (path: string, cache?: TraceCache, existingStat?: Stats): 
     if (!stat.isFile() || stat.size > 512_000) return null;
     const parsed: unknown = JSON.parse(readFileSync(fd, 'utf8'));
     if (!isRecord(parsed)) return null;
-    cache?.set(path, { signature: signature(stat), record: parsed });
+    cache?.set(key, { signature: signature(stat), record: parsed });
     return parsed;
-  } catch (err) { cache?.delete(path); return gone(err); }
+  } catch (err) { cache?.delete(key); return gone(err); }
   finally { if (fd !== undefined) closeSync(fd); }
 };
 
 /** The same checks as readTraceFile with asynchronous I/O, so many small files can be read concurrently. */
-const readTraceFileAsync = async (path: string, cache: TraceCache, stat: Stats): Promise<Rec | null | undefined> => {
-  const cached = cachedTrace(path, cache, stat);
+const readTraceFileAsync = async (path: string, cache: TraceCache, stat: Stats, key: string): Promise<Rec | null | undefined> => {
+  const cached = cachedTrace(key, cache, stat);
   if (cached !== undefined) return cached;
   let handle: FileHandle | undefined;
   try {
@@ -99,9 +103,9 @@ const readTraceFileAsync = async (path: string, cache: TraceCache, stat: Stats):
     if (!opened.isFile() || opened.size > 512_000) return null;
     const parsed: unknown = JSON.parse(await handle.readFile('utf8'));
     if (!isRecord(parsed)) return null;
-    cache.set(path, { signature: signature(opened), record: parsed });
+    cache.set(key, { signature: signature(opened), record: parsed });
     return parsed;
-  } catch (err) { cache.delete(path); return gone(err); }
+  } catch (err) { cache.delete(key); return gone(err); }
   finally { await handle?.close().catch(() => undefined); }
 };
 
@@ -130,9 +134,9 @@ export const readTraceRecords = (dir: string, cache?: TraceCache): TraceRead => 
 const NO_RECORDS: TraceRead = { records: [], unreadable: 0 };
 /** Watch notifications name changed files; a bounded full reconciliation recovers lost events.
  * Directory identity is checked on every read so replaced or symlinked roots cannot expose stale data. */
-type DirectoryState = { identity: string; scanned: number; values: Map<string, Rec | null>; dirty: Set<string>; full: boolean; stale: boolean; result: TraceRead; appended: string[]; replaced: boolean };
+/** `cache` is keyed by file name: the full paths of a long history would take more memory than its file signatures. */
+type DirectoryState = { identity: string; scanned: number; values: Map<string, Rec | null>; cache: TraceCache; dirty: Set<string>; full: boolean; stale: boolean; result: TraceRead; appended: string[]; replaced: boolean };
 export class TraceDirectoryReader {
-  private cache: TraceCache = new Map();
   private dirs = new Map<string, DirectoryState>();
   constructor(private reconciliationMs = 30_000) {}
   invalidate(dir: string, name?: string): void {
@@ -155,7 +159,7 @@ export class TraceDirectoryReader {
     let state = this.dirs.get(key);
     if (!state || state.identity !== identity) {
       if (state) this.forget(key);
-      state = { identity, scanned: 0, values: new Map(), dirty: new Set(), full: true, stale: true, result: { records: [], unreadable: 0 }, appended: [], replaced: false };
+      state = { identity, scanned: 0, values: new Map(), cache: new Map(), dirty: new Set(), full: true, stale: true, result: { records: [], unreadable: 0 }, appended: [], replaced: false };
       this.dirs.set(key, state);
     }
     if (state.full || now - state.scanned >= this.reconciliationMs) {
@@ -163,7 +167,7 @@ export class TraceDirectoryReader {
       try { names = readdirSync(key).filter(traceName).sort(); }
       catch { this.forget(key); return null; }
       const present = new Set(names);
-      for (const name of state.values.keys()) if (!present.has(name)) { state.values.delete(name); this.cache.delete(join(key, name)); state.stale = true; state.replaced = true; }
+      for (const name of state.values.keys()) if (!present.has(name)) { state.values.delete(name); state.cache.delete(name); state.stale = true; state.replaced = true; }
       // Records are written once under new names (trace.ts), so a periodic pass reads only names it has no record for;
       // an explicit full invalidation reads every file again.
       for (const name of names) if (state.full || !state.values.get(name)) state.dirty.add(name);
@@ -171,13 +175,10 @@ export class TraceDirectoryReader {
     }
     return state;
   }
-  private forget(key: string): void {
-    this.dirs.delete(key);
-    for (const path of this.cache.keys()) if (dirname(path) === key) this.cache.delete(path);
-  }
-  private store(key: string, state: DirectoryState, name: string, value: Rec | null | undefined): void {
+  private forget(key: string): void { this.dirs.delete(key); }
+  private store(state: DirectoryState, name: string, value: Rec | null | undefined): void {
     // undefined: the name was removed. A removed name is not an unreadable file. A broken symlink is.
-    if (value === undefined) { if (state.values.delete(name)) { state.stale = true; state.replaced = true; } this.cache.delete(join(key, name)); return; }
+    if (value === undefined) { if (state.values.delete(name)) { state.stale = true; state.replaced = true; } state.cache.delete(name); return; }
     if (!state.values.has(name)) { state.stale = true; state.appended.push(name); }
     else if (state.values.get(name) !== value) { state.stale = true; state.replaced = true; }
     state.values.set(name, value);
@@ -194,8 +195,8 @@ export class TraceDirectoryReader {
         while (next < names.length) {
           const name = names[next++]!, path = join(key, name);
           let stat: Stats;
-          try { stat = await lstat(path); } catch { this.store(key, state, name, undefined); continue; }
-          this.store(key, state, name, await readTraceFileAsync(path, this.cache, stat));
+          try { stat = await lstat(path); } catch { this.store(state, name, undefined); continue; }
+          this.store(state, name, await readTraceFileAsync(path, state.cache, stat, name));
         }
       }));
       if (this.dirs.get(key) !== state) return;
@@ -209,8 +210,8 @@ export class TraceDirectoryReader {
     for (const name of state.dirty) {
       const path = join(key, name);
       let stat: Stats;
-      try { stat = lstatSync(path); } catch { this.store(key, state, name, undefined); continue; }
-      this.store(key, state, name, readTraceFile(path, this.cache, stat));
+      try { stat = lstatSync(path); } catch { this.store(state, name, undefined); continue; }
+      this.store(state, name, readTraceFile(path, state.cache, stat, name));
     }
     state.dirty.clear();
     // Rebuild only when a value changed; an unchanged reconciliation keeps the sorted result.

@@ -8,6 +8,7 @@ import { loadActivity, type ActivitySnapshot } from '../src/activity.js';
 import { startDashboard, readVersions } from '../src/dashboard.js';
 import { DASHBOARD_PAGE } from '../src/dashboard-page.js';
 import { TraceDirectoryReader } from '../src/explain.js';
+import { memo } from '../src/memo.js';
 import { liveFrames } from './live-frames.js';
 
 const dirs: string[] = [];
@@ -75,6 +76,16 @@ describe('loadActivity', () => {
     expect(same().credit.exhausted).toBe(true);
     rmSync(join(trace, 'r0.json')); reader.invalidate(trace, 'r0.json');
     expect(same().jevCalls).toBe(4);
+  });
+  it('keeps across loads the memo results the last load used, and computes the others again', () => {
+    // Caches held every string the history ever had until a cap emptied them all at once.
+    const calls: string[] = [];
+    const upper = memo((v: string): string | null => { calls.push(v); return v === 'none' ? null : v.toUpperCase(); });
+    const load = () => loadActivity({ traceDir: null, env: { HOME: make() } });
+    upper('kept'); upper('dropped'); upper('none');
+    load(); upper('kept'); upper('none');
+    load(); upper('kept'); upper('none'); upper('dropped');
+    expect(calls).toEqual(['kept', 'dropped', 'none', 'dropped']);
   });
   it('shows denied dispatches and worktree lifecycle as policy and local events', () => {
     const trace = make();
@@ -397,8 +408,11 @@ it('updates all viewers from shared directory notifications and reattaches after
     expect(snapshot.traceFiles).toBe(1);
     expect(snapshot.operations.runs.some(r => r.steps.some(s => s.model?.selected === 'sonnet'))).toBe(true);
     writeFileSync(join(trace, 'second.json'), JSON.stringify({ phase: 'failure', session_id: 's2', written_at: new Date().toISOString() }));
-    await new Promise(resolve => setTimeout(resolve, 300));
-    snapshot = await (await fetch(`${server.url}api/snapshot`)).json() as ActivitySnapshot;
+    // The reattached watcher hears it: the next paced rebuild, at most a second after the last one began, shows it.
+    for (const deadline = Date.now() + 2500; snapshot.traceFiles !== 2 && Date.now() < deadline;) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+      snapshot = await (await fetch(`${server.url}api/snapshot`)).json() as ActivitySnapshot;
+    }
     expect(snapshot.traceFiles).toBe(2);
   } finally {
     for (const controller of controllers) controller.abort();
