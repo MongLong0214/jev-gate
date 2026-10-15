@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.8.21 — 2026-10-15 — Router model mass, task notices, unannounced compaction, Compact seat warning
+
+- Read the Router's model answer as ordered mass, as effort already is (#240). The cheapest role whose cumulative lower mass reaches the downgrade floor is chosen, else the highest role whose upper tail reaches the upgrade floor; a split vote such as keep .23 / Sonnet .34 / Haiku .41 now moves to Sonnet instead of holding on Opus. A tie is read the same way and holds as `low_confidence` instead of `answer_invalid`. Unknown roles and a crossing role held by more than one version keep the nominal reading; the floors, the control lock and the downgrade risk guard are unchanged. Replaying 72 hours of recorded answers with floors at .5 moves 93 of 387 root assessments (14 before) and 137 of 2,450 child steps (0 before); that is a policy replay, not a measured cost or quality effect.
+- Record the pair answers and selection diagnostics on every Router `spawn` record (#241).
+- Notice a compaction the host never announced (#242). On Claude Code 2.1.299+ the host's security default passes `session.compact` over for an installed plugin in Team and Enterprise organizations; a request that carries fewer messages than its loop's last one now resets that loop's cache state the same way, recorded as `context_reset`.
+- Route a `<task-notification>` turn as the continuation of the person's last request (#243). Its machine text is no longer sent to Jev or kept as a recent request; the root record says `turn_source: "task_notification"`.
+- Label a subagent whose spawn kept its effort with the pair's own reason instead of `answer_invalid` (#244).
+- Never ask Gate A about a host task notification (#245). It no longer costs Jev calls or opens a new generation that pushed the current job into history; `admission_result` records `task_notification`, outside liveness.
+- Doctor warns when Compact cannot run because Claude Code 2.1.299+ seats its built-in plugin security default for a Team or Enterprise organization or a machine with managed settings, and the Compact README shows the managed-settings fix (#246).
+
 ## v0.8.20 — 2026-10-13 — README dashboard, run list fixes, Codex restart recovery
 
 - Put the live dashboard right under the results at the top of the README, and redraw its sample with the current English labels: Execution overview, Running executions, Needs review, the Past errors filter, Stage details and Execution detail. The README's dashboard guide and record table now name the same labels, the Past error state, refused worker contracts and host ends, and how to update the Codex plugin.
