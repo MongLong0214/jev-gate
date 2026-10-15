@@ -18,6 +18,7 @@ vi.mock('../src/activity-engine.js', async (original) => {
   } };
 });
 const { startDashboard } = await import('../src/dashboard.js');
+const { activityHandler } = await import('../src/activity-engine.js');
 
 const dirs: string[] = [];
 afterEach(() => { gate.hold = null; gate.fail = false; for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
@@ -53,6 +54,21 @@ describe('dashboard rebuild sharing (#210)', () => {
       for (const reader of readers) await reader.cancel().catch(() => undefined);
       await server.close();
     }
+  });
+
+  it('does not rebuild without a new record before the next edge, even with a missing host directory', async () => {
+    // Open viewers ask for a rebuild at least every 30 seconds; with an unchanged history each one rebuilt the whole of it.
+    const trace = make(), handler = activityHandler({ traceDir: null, traceDirs: [{ host: 'claude', dir: trace }, { host: 'codex', dir: join(trace, 'missing') }], env: { HOME: make(), JEV_GATE_STATE_DIR: make() } });
+    writeFileSync(join(trace, 'a.json'), JSON.stringify({ phase: 'stop', session_id: 's', written_at: new Date().toISOString(), outcome: 'completed' }));
+    loads.count = 0;
+    const first = await handler.load(), again = await handler.load();
+    expect(loads.count).toBe(1);
+    expect(again).toMatchObject({ key: first.key, base: null, patch: null });
+    writeFileSync(join(trace, 'b.json'), JSON.stringify({ phase: 'stop', session_id: 's', written_at: new Date().toISOString(), outcome: 'completed' }));
+    handler.invalidate(trace, ['b.json']);
+    const changed = await handler.load();
+    expect(loads.count).toBe(2);
+    expect(changed.base).toBe(first.key);
   });
 });
 

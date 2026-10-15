@@ -257,7 +257,15 @@ const modelRequestKey = (r: Rec): string | null => {
   return values[0] && values[2] ? JSON.stringify(values) : null;
 };
 /** Latest record and recorded turn/child/session ends per exact loop or session; never a sibling's, the root's or another session's. */
-interface Liveness { now: number; seen: Map<string, string>; ends: Map<string, Array<{ at: string; interrupted: boolean }>> }
+interface Liveness { now: number; seen: Map<string, string>; ends: Map<string, Array<{ at: string; interrupted: boolean }>>; until: number }
+/** Notes the next time an age test's answer flips, so a part is rebuilt then and not at every record's age (`parts`). */
+const flipsAt = (live: Liveness, at: number): void => { if (at > live.now && at < live.until) live.until = at; };
+/** A step waiting for its result is active from its record time for 30 seconds. */
+const young = (live: Liveness, at: string): boolean => {
+  const t = Date.parse(at), age = live.now - t;
+  flipsAt(live, t); flipsAt(live, t + 30_000);
+  return age >= 0 && age < 30_000;
+};
 // Same bound as an unclosed native Codex span: a quiet loop is no longer asserted live, and nothing is concluded.
 const MODEL_IDLE_MS = 600_000;
 /** Elapsed time is never terminal evidence. Only an exact response or failure settles a request. */
@@ -265,10 +273,12 @@ const modelRequestState = (at: string, settledAt: string | undefined, loop: stri
   if (settledAt !== undefined && settledAt >= at) return { state: 'done', summary: '모델 요청 종료 기록 확인' };
   const end = [...live.ends.get(loop) ?? [], ...live.ends.get(session) ?? []].filter(e => e.at >= at).sort((a, b) => a.at.localeCompare(b.at))[0];
   if (end) return end.interrupted ? { state: 'interrupted', summary: '사용자 중단 관측 · 성공이나 기능 오류로 분류하지 않음' } : { state: 'unconfirmed', summary: '턴 또는 세션 종료 · 이 호출의 결과 이벤트는 미관측' };
-  return live.now - Date.parse(live.seen.get(loop) ?? at) < MODEL_IDLE_MS ? { state: 'active', summary: '모델 응답 대기' } : { state: 'unconfirmed', summary: '모델 응답 기록 없음 · 현재 활동 미관측' };
+  const seen = Date.parse(live.seen.get(loop) ?? at);
+  flipsAt(live, seen + MODEL_IDLE_MS);
+  return live.now - seen < MODEL_IDLE_MS ? { state: 'active', summary: '모델 응답 대기' } : { state: 'unconfirmed', summary: '모델 응답 기록 없음 · 현재 활동 미관측' };
 };
 const codexLoop = (r: Rec): string => JSON.stringify(['codex', r['session_id'], token(r['prompt_id'])]);
-const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<string, string>, modelTerminals: Map<string, string>, live: Liveness): OperationStep | null => {
+const traceStep = (r: Rec, resultIds: Set<string>, intents: Map<string, string>, modelTerminals: Map<string, string>, live: Liveness): OperationStep | null => {
   const phase = token(r['phase']);
   if (!phase) return null;
   const feature = phase === 'dispatch' && r['role'] === 'planner' ? 'planning' : traceFeature(phase);
@@ -280,12 +290,11 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
   const isIntent = phase.endsWith('_intent') || phase === 'evidence_start' || phase === 'worktree_start';
   const expected = phase.endsWith('_start') ? phase.replace(/_start$/, '_result') : phase.replace(/_intent$/, '_result');
   const hasResult = requestId !== null && resultIds.has(`${requestId}:${expected}`);
-  const age = now - Date.parse(at);
   const compactWaiting = phase === 'codex_compact' && r['stage'] === 'selected' && !resultIds.has(`codex_compact:${token(r['run_id'])}`);
   const http = field(r, 'http');
   const failedAssessment = r['attempted'] === true && token(http?.['code']) !== null && http?.['code'] !== 'ok';
-  let state: StepState = compactWaiting ? age >= 0 && age < 30_000 ? 'active' : 'unconfirmed'
-    : isIntent ? hasResult ? 'done' : age >= 0 && age < 30_000 ? 'active' : 'unconfirmed'
+  let state: StepState = compactWaiting ? young(live, at) ? 'active' : 'unconfirmed'
+    : isIntent ? hasResult ? 'done' : young(live, at) ? 'active' : 'unconfirmed'
     : r['known_not_sent'] === true || r['attempted'] === false ? 'skipped'
       : r['is_error'] === true || r['ok'] === false || failedAssessment || phase === 'failure' ? 'error' : 'done';
   const details: string[] = [];
@@ -385,7 +394,7 @@ const traceStep = (r: Rec, now: number, resultIds: Set<string>, intents: Map<str
     lane = phase === 'background_dispatch' || phase === 'background_conversation' || phase === 'background_policy_delivery' ? 'policy' : 'host';
     const closed = resultIds.has(`background:${token(r['session_id'])}:${token(r['execution_prompt_id']) ?? token(r['prompt_id'])}:${token(r['tool_use_id'])}`);
     if (phase === 'background_dispatch') { summary = '원래 작업에 실행 예약 연결 · 시작 확인 대기'; state = closed ? 'done' : 'unconfirmed'; }
-    if (phase === 'background_launch') { state = closed ? 'done' : age >= 0 && age < 30_000 ? 'active' : 'unconfirmed'; summary = closed ? '시작과 실제 종료 연결됨' : state === 'active' ? '워커 실행 중 · 메인에서 질문 가능' : '시작 기록 있음 · 종료 결과 미관측'; details.push('시작 알림은 완료·수락 결과가 아닙니다'); }
+    if (phase === 'background_launch') { state = closed ? 'done' : young(live, at) ? 'active' : 'unconfirmed'; summary = closed ? '시작과 실제 종료 연결됨' : state === 'active' ? '워커 실행 중 · 메인에서 질문 가능' : '시작 기록 있음 · 종료 결과 미관측'; details.push('시작 알림은 완료·수락 결과가 아닙니다'); }
     if (phase === 'background_conversation') summary = `원래 작업 유지 · 종료 결과 대기 ${n(number(r['active']))}개`;
     if (phase === 'background_policy_delivery') { summary = '종료 정책 한 번 전달 · 다음 일반 요청은 Gate A 재개'; state = 'done'; }
     if (phase === 'background_terminal') { summary = token(r['status']) === 'completed' ? '호스트에서 실제 종료 확인 · 계약 수락은 별도 검사' : codexFailureReason(r) ?? '호스트에서 중단·실패 확인 · 성공 수락 없음'; state = token(r['status']) === 'completed' ? 'done' : r['not_executed'] === true ? 'error' : 'interrupted'; if (state === 'done') outcome = 'host_ended'; if (r['not_executed'] === true) details.push('워커 미실행 · 완료 주장 없음'); if (r['orphaned'] === true) details.push('이전 작업 결과 · 현재 계획 미진행'); }
@@ -544,7 +553,7 @@ const routerResponseKey = (r: Rec, index: unknown = r['index'] ?? null): string 
 
 const routerDecisionKey = (r: Rec): string => JSON.stringify([r['session_id'] ?? 'legacy', r['turn'] ?? r['tool_use_id'] ?? '', r['agent_id'] ?? null, r['agent_id'] ? r['index'] ?? null : null]);
 
-const modStep = (row: ModRecord, now: number, closed: Set<string>, responses: Map<string, string>, live: Liveness): OperationStep | null => {
+const modStep = (row: ModRecord, closed: Set<string>, responses: Map<string, string>, live: Liveness): OperationStep | null => {
   const r = row.rec;
   const route = field(r, 'routing_decision'), scope = token(route?.['scope']);
   const routing: OperationStep['routing'] = scope && ['root', 'spawn', 'child', 'owned'].includes(scope) ? { scope: scope as NonNullable<OperationStep['routing']>['scope'], baseline: token(route?.['baseline']), modelReason: token(route?.['modelReason']), effortReason: token(route?.['effortReason']) } : undefined;
@@ -556,8 +565,7 @@ const modStep = (row: ModRecord, now: number, closed: Set<string>, responses: Ma
   const key = row.component === 'router' ? routerDecisionKey(r) : `${token(r['session_id']) ?? 'legacy'}:${runId ?? ''}`;
   const started = (row.component === 'router' && event === 'request') || r['stage'] === 'started';
   const failedAssessment = row.component === 'router' && r['sent'] === true && token(r['assessment']) !== null && r['assessment'] !== 'ok';
-  const age = now - Date.parse(row.at);
-  let state: StepState = started && !closed.has(`${row.component}:${key}`) ? age >= 0 && age < 30_000 ? 'active' : 'unconfirmed' : failedAssessment || r['confirmation'] === 'mismatch' || r['reason'] === 'model_mismatch' || r['coreError'] === true ? 'error' : r['confirmation'] === 'unobserved' ? 'unconfirmed' : r['skipped'] || r['deferred'] || r['disabled'] ? 'skipped' : 'done';
+  let state: StepState = started && !closed.has(`${row.component}:${key}`) ? young(live, row.at) ? 'active' : 'unconfirmed' : failedAssessment || r['confirmation'] === 'mismatch' || r['reason'] === 'model_mismatch' || r['coreError'] === true ? 'error' : r['confirmation'] === 'unobserved' ? 'unconfirmed' : r['skipped'] || r['deferred'] || r['disabled'] ? 'skipped' : 'done';
   const details: string[] = [];
   let summary = '';
   let lane: StepLane = 'local';
@@ -661,7 +669,8 @@ const firstSorted = <T>(items: T[], k: number, order: (a: T, b: T) => number): T
 
 /** Where one pass over the whole recording first inserts a run: records in order, then Router and Compact rows by time, then native Codex rows by time. */
 type Rank = { cls: 0 | 1 | 2; at: string; index: number };
-interface Part { runs: OperationRun[]; ranks: Rank[]; requests: string[]; managed: boolean }
+/** `until`: the first time an age test in it answers differently; it is the same output until then. */
+interface Part { runs: OperationRun[]; ranks: Rank[]; requests: string[]; managed: boolean; until: number }
 
 /** The executions of records that join nothing outside them (see `parts`). */
 const buildPart = (records: Rec[], mods: ModRecord[], now: Date): Part => {
@@ -682,7 +691,7 @@ const buildPart = (records: Rec[], mods: ModRecord[], now: Date): Part => {
     if (['codex_router_response', 'codex_model_failure'].includes(String(r['phase'])) && at && at >= (modelTerminals.get(key) ?? '')) modelTerminals.set(key, at);
     if (r['phase'] === 'codex_router_response' && at && at >= iso(responseBindings.get(key)?.['written_at'])) responseBindings.set(key, r);
   }
-  const live: Liveness = { now: now.getTime(), seen: new Map(), ends: new Map() };
+  const live: Liveness = { now: now.getTime(), seen: new Map(), ends: new Map(), until: Infinity };
   const observe = (loop: string, at: string, end?: { key: string; interrupted: boolean }) => {
     if (at > (live.seen.get(loop) ?? '')) live.seen.set(loop, at);
     if (end) live.ends.set(end.key, [...live.ends.get(end.key) ?? [], { at, interrupted: end.interrupted }]);
@@ -730,7 +739,7 @@ const buildPart = (records: Rec[], mods: ModRecord[], now: Date): Part => {
   }
   const grouped = new Map<string, { source: OperationRun['source']; host: Host; mode: string; executionId?: string; steps: OperationStep[]; rank: Rank }>();
   for (const [index, r] of records.entries()) {
-    const step = traceStep(r, now.getTime(), resultIds, intents, modelTerminals, live);
+    const step = traceStep(r, resultIds, intents, modelTerminals, live);
     if (!step) continue;
     const host = r['host'] === 'codex' ? 'codex' : 'claude';
     const source = gateGroup(r).split(':')[0] as OperationRun['source'];
@@ -751,7 +760,7 @@ const buildPart = (records: Rec[], mods: ModRecord[], now: Date): Part => {
     grouped.set(key, group);
   }
   for (const [position, row] of mods.entries()) {
-    const step = modStep(row, now.getTime(), closed, responses, live);
+    const step = modStep(row, closed, responses, live);
     if (!step) continue;
     const key = modGroup(row);
     const group = grouped.get(key) ?? { source: row.component, host: 'claude' as const, mode: row.component, steps: [], rank: { cls: 1, at: row.at, index: order[position]! } };
@@ -764,7 +773,7 @@ const buildPart = (records: Rec[], mods: ModRecord[], now: Date): Part => {
     const title = ({ gate: '게이트 세션', router: 'Router 실행', compact: 'Compact 실행', evidence: 'Evidence 검색', codex: 'Codex 실행' } as const)[group.source];
     return { run: { id: id(key), ...(group.executionId ? { executionId: group.executionId } : {}), host: group.host, title, source: group.source, mode: group.mode, firstAt: steps[0]?.at ?? '', lastAt: steps.at(-1)?.at ?? '', state, steps }, rank: group.rank };
   });
-  const native = codexOperations(records, now);
+  const native = codexOperations(records, now, at => flipsAt(live, at));
   const position = new Map<Rec, number>(native.length ? records.map((r, i) => [r, i]) : []);
   for (const run of native) separate.push({ run, rank: { cls: 2, at: run.firstAt, index: position.get(firstRow.get(run)!)! } });
   // Display the whole known turn rather than three unrelated Router/Gate/native cards.
@@ -792,17 +801,9 @@ const buildPart = (records: Rec[], mods: ModRecord[], now: Date): Part => {
     requests.add(`router:${routerDecisionKey(row.rec)}`);
   }
   const managed = records.some(r => r['host'] === 'codex' && (r['managed'] === true || traceFeature(String(r['phase'])) !== null && r['phase'] !== 'evidence_result' && !String(r['phase']).startsWith('evidence_')));
-  return { runs: [...executions.values()].map(e => e.run), ranks: [...executions.values()].map(e => e.rank), requests: [...requests], managed };
+  return { runs: [...executions.values()].map(e => e.run), ranks: [...executions.values()].map(e => e.rank), requests: [...requests], managed, until: live.until };
 };
 
-/** The times at which buildPart's output can change without a new record: every age test there compares now with a record
- * time `t` at `t` (age >= 0), `t + 30s`, `t + 600s` (`<`) or just past `t + 600s` (`>`). Output is the same until the first. */
-const AGE_EDGES = [0, 30_000, 600_000, 600_001];
-const nextEdge = (times: number[], now: number): number => {
-  let next = Infinity;
-  for (const t of times) for (const edge of AGE_EDGES) if (t + edge > now && t + edge < next) next = t + edge;
-  return next;
-};
 // Keys fall back to these for a missing session, so records carrying them can meet any session-less record.
 const NO_SESSION = new Set(['unknown', 'legacy', 'null', 'undefined']);
 const joinKeys = new WeakMap<object, string[]>();
@@ -818,14 +819,16 @@ const joins = (item: object, rec: Rec, group: () => string): string[] => {
   return keys;
 };
 let partCache = new Map<string, { records: Rec[]; mods: ModRecord[]; at: number; until: number; part: Part }>();
-/** The earliest time the last buildOperations output can change without a new record: its parts' next age edge. */
+let viewUntil = Infinity;
+/** The earliest time the last buildOperations output can change without a new record: a part's next age flip or a
+ * last-minute or today total moving on (`viewUntil`). */
 export const operationsStableUntil = (): number => {
-  let next = Infinity;
+  let next = viewUntil;
   for (const entry of partCache.values()) if (entry.until < next) next = entry.until;
   return next;
 };
 const sameItems = <T>(a: T[], b: T[]): boolean => a.length === b.length && a.every((v, i) => v === b[i]);
-/** Connected parts of the recording. A part with the same records is reused until one of its age edges passes, so a busy
+/** Connected parts of the recording. A part with the same records is reused until one of its age tests flips, so a busy
  * history rebuilds only the sessions that received records. */
 const parts = (records: Rec[], mods: ModRecord[], now: Date): Array<{ part: Part; recordIndex: number[]; modIndex: number[] }> => {
   const keys = [...records.map(r => joins(r, r, () => `${r['host'] === 'codex' ? 'codex' : 'claude'}:${gateGroup(r)}`)), ...mods.map(row => joins(row, row.rec, () => modGroup(row)))];
@@ -844,10 +847,8 @@ const parts = (records: Rec[], mods: ModRecord[], now: Date): Array<{ part: Part
     const cached = partCache.get(group.key);
     let entry = cached && at >= cached.at && at < cached.until && sameItems(cached.records, group.records) && sameItems(cached.mods, group.mods) ? cached : undefined;
     if (!entry) {
-      const times: number[] = [];
-      for (const r of group.records) if (typeof r['written_at'] === 'string') { const t = Date.parse(r['written_at']); if (Number.isFinite(t)) times.push(t); }
-      for (const row of group.mods) { const t = Date.parse(row.at); if (Number.isFinite(t)) times.push(t); }
-      entry = { records: group.records, mods: group.mods, at, until: nextEdge(times, at), part: buildPart(group.records, group.mods, now) };
+      const part = buildPart(group.records, group.mods, now);
+      entry = { records: group.records, mods: group.mods, at, until: part.until, part };
     }
     next.set(group.key, entry);
     return { part: entry.part, recordIndex: group.recordIndex, modIndex: group.modIndex };
@@ -878,21 +879,21 @@ const impacts = new WeakMap<OperationRun, { sig: string; run: OperationRun }>();
 /** Marks each failure with what later records of its operation on the same host show now, across sessions. The failure itself
  * stays as recorded. An unchanged run keeps its object, so a live patch skips it. */
 const withImpact = (runs: OperationRun[]): OperationRun[] => {
-  const seen = new Map<string, Array<{ at: string; ok: boolean }>>();
+  // Per operation only its last observation and its last success matter: a failure compares its own time with them.
+  const seen = new Map<string, { last: { at: string; ok: boolean }; okAt: string }>();
   for (const run of runs) for (const s of run.steps) for (const [key, ok] of observations(run.host ?? 'claude', run.id, s)) {
-    let list = seen.get(key);
-    if (!list) seen.set(key, list = []);
-    list.push({ at: s.at, ok });
+    const known = seen.get(key);
+    if (!known) { seen.set(key, { last: { at: s.at, ok }, okAt: ok ? s.at : '' }); continue; }
+    if (s.at >= known.last.at) known.last = { at: s.at, ok };
+    if (ok && s.at > known.okAt) known.okAt = s.at;
   }
-  for (const list of seen.values()) list.sort((a, b) => a.at.localeCompare(b.at));
   return runs.map(run => {
     if (!run.steps.some(failed)) return run;
     const steps = run.steps.map((s): OperationStep => {
       if (!failed(s)) return s;
-      // ponytail: a linear scan per failure; index the sorted lists if failures number in the thousands.
-      const later = (seen.get(operationKey(run.host ?? 'claude', run.id, s)) ?? []).filter(o => o.at > s.at), last = later.at(-1);
+      const known = seen.get(operationKey(run.host ?? 'claude', run.id, s)), last = known && known.last.at > s.at ? known.last : undefined;
       // A refused contract is about that worker's result, never a service: another refusal of the task is not an ongoing incident.
-      return { ...s, impact: { now: s.cause && REQUEST_CAUSES.has(s.cause) ? 'request_only' : later.some(o => o.ok) ? 'later_ok' : later.length && s.issue !== 'contract' ? 'ongoing' : 'unknown',
+      return { ...s, impact: { now: s.cause && REQUEST_CAUSES.has(s.cause) ? 'request_only' : known && known.okAt > s.at ? 'later_ok' : last && s.issue !== 'contract' ? 'ongoing' : 'unknown',
         lastAt: last?.at ?? s.at, lastState: last ? last.ok ? 'done' : 'error' : s.state } };
     });
     const sig = JSON.stringify(steps.map(s => s.impact ?? null)), cached = impacts.get(run);
@@ -937,8 +938,8 @@ export const buildOperations = (records: Rec[], mods: ModRecord[], now: Date, av
   const percentile = (p: number): number | null => durations.length ? durations[Math.ceil(p * durations.length) - 1]! : null;
   const sinceMs = now.getTime() - ACTIVITY_WINDOW_MS;
   // ponytail: past ACTIVITY_CAP records in one minute only the newest ones are kept, so a burst that large would under-count.
-  const recent = all.filter((s) => s.lane === 'jev' && s.durationMs !== undefined)
-    .sort((a, b) => b.at.localeCompare(a.at)).filter((s, i) => i < 16 || Date.parse(s.at) >= sinceMs).slice(0, ACTIVITY_CAP).reverse().map((s) => ({ at: s.at, ms: s.durationMs! }));
+  const timed = all.filter((s) => s.lane === 'jev' && s.durationMs !== undefined).sort((a, b) => b.at.localeCompare(a.at));
+  const recent = timed.filter((s, i) => i < 16 || Date.parse(s.at) >= sinceMs).slice(0, ACTIVITY_CAP).reverse().map((s) => ({ at: s.at, ms: s.durationMs! }));
   const today: OperationsView['latency']['today'] = {}, day = now.toDateString();
   for (const s of all) if (s.lane === 'jev' && s.durationMs !== undefined && new Date(s.at).toDateString() === day) {
     const sum = today[s.host ?? 'claude'] ??= { calls: 0, input: 0, costUsd: 0, unpriced: 0 };
@@ -954,8 +955,17 @@ export const buildOperations = (records: Rec[], mods: ModRecord[], now: Date, av
     if (!latestJev.has(key)) latestJev.set(key, step);
   }
   // The newest-120 cut must not drop a record of the last minute; the same cap as `latency.recent` applies.
-  const feed = [...new Set([...firstSorted(all.filter(s => !s.lifecycle), 120, newestFirst),
+  const newest = firstSorted(all.filter(s => !s.lifecycle), 120, newestFirst);
+  const feed = [...new Set([...newest,
     ...firstSorted(all.filter(s => !s.lifecycle && Date.parse(s.at) >= sinceMs), ACTIVITY_CAP, newestFirst),
     ...firstSorted(all.filter(s => s.lifecycle), 20, newestFirst), ...latestJev.values()])].sort(newestFirst);
+  if (!whole) {
+    // Today's totals restart at local midnight. A step leaves the last-minute lists just past a minute after it, which
+    // changes them only for a step past their newest 16 calls or 120 steps.
+    const midnight = new Date(now); midnight.setHours(24, 0, 0, 0); viewUntil = midnight.getTime();
+    const leaves = (s: { at: string }): void => { const left = Date.parse(s.at) + ACTIVITY_WINDOW_MS + 1; if (left > now.getTime() && left < viewUntil) viewUntil = left; };
+    for (const s of timed.slice(16)) leaves(s);
+    if (newest.length === 120) for (const s of all) if (!s.lifecycle && newestFirst(s, newest.at(-1)!) > 0) leaves(s);
+  }
   return { runs, features, feed, active: runs.filter((r) => r.state === 'active').length, attention: runs.filter((r) => r.state === 'attention').length, requests, latency };
 };

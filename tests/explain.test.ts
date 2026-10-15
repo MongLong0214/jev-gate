@@ -288,6 +288,24 @@ describe('incremental directory reconciliation', () => {
     rmSync(dir, { recursive: true }); mkdirSync(dir);
     expect(reader.read(dir, 1202)).toEqual({ records: [], unreadable: 0 });
   });
+  it('reads only unknown or unreadable names in a periodic pass, so an idle history is not read again; a full invalidation still is', () => {
+    const dir = mkdtempSync(join(tmp, 'periodic-')), reader = new TraceDirectoryReader(100);
+    writeFileSync(join(dir, 'a.json'), JSON.stringify(base('post', 1)));
+    writeFileSync(join(dir, 'bad.json'), '{');
+    const initial = reader.read(dir, 1000);
+    expect(initial.unreadable).toBe(1);
+    expect(reader.read(dir, 1100)).toBe(initial);
+    // Records are written once; a file changed in place without a notification is not read again by the periodic pass.
+    writeFileSync(join(dir, 'a.json'), JSON.stringify(base('failure', 2)));
+    writeFileSync(join(dir, 'bad.json'), JSON.stringify(base('post', 3)));
+    writeFileSync(join(dir, 'b.json'), JSON.stringify(base('post', 4)));
+    expect(reader.read(dir, 1200).records.map(r => r['phase'])).toEqual(['post', 'post', 'post']);
+    reader.invalidate(dir);
+    expect(reader.read(dir, 1201).records.map(r => r['phase'])).toEqual(['failure', 'post', 'post']);
+    // An unreadable directory reads as one shared result, so an unchanged missing directory is not a change.
+    rmSync(dir, { recursive: true });
+    expect(reader.read(dir, 1202)).toBe(reader.read(dir, 1300));
+  });
   it('orders added files as a full read does, whether they extend the history or land inside it (#215)', () => {
     const dir = mkdtempSync(join(tmp, 'append-')), reader = new TraceDirectoryReader(60_000);
     writeFileSync(join(dir, 'b.json'), JSON.stringify(base('post', 2)));

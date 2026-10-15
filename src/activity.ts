@@ -555,11 +555,10 @@ export const loadActivity = (opts: { traceDir: string | null; traceDirs?: readon
   const host = opts.host ?? (hosts.size > 1 ? 'mixed' : hosts.has('codex') ? 'codex' : 'claude');
   // After a 402 the router refuses later calls locally (credential_refused), so exhaustion holds until a call succeeds.
   let credit: ActivitySnapshot['credit'] = { exhausted: false, at: null };
-  for (const row of [...modRecords].filter(row => row.component === 'router').sort((a, b) => b.at.localeCompare(a.at))) {
-    const assessment = row.rec['assessment'];
-    if (assessment === 'ok') break;
-    if (assessment === 'payment_required') { credit = { exhausted: true, at: row.at }; break; }
-  }
+  // The newest assessed call decides; one pass finds it without sorting every Router row on each rebuild.
+  let assessed: ModRecord | null = null;
+  for (const row of modRecords) if (row.component === 'router' && ['ok', 'payment_required'].includes(String(row.rec['assessment'])) && (!assessed || row.at.localeCompare(assessed.at) > 0)) assessed = row;
+  if (assessed?.rec['assessment'] === 'payment_required') credit = { exhausted: true, at: assessed.at };
   const operations = buildOperations(gateRecords, modRecords, now, {
     trace: traceAvailable,
     ...(host === 'codex' ? { host } : {}),

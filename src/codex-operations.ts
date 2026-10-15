@@ -30,8 +30,9 @@ const spanKey = (r: Rec, event: string): string | null => {
 /** The first row of each run, so runs built from separate parts can be put back in one pass's order. */
 export const firstRow = new WeakMap<OperationRun, Rec>();
 
-/** Native host spans are never counted as Jev requests, routed workers, or accepted contracts. */
-export const codexOperations = (records: Rec[], now: Date): OperationRun[] => {
+/** Native host spans are never counted as Jev requests, routed workers, or accepted contracts. `flipsAt` hears when an open
+ * span stops being active, so the dashboard rebuilds then and not before. */
+export const codexOperations = (records: Rec[], now: Date, flipsAt?: (at: number) => void): OperationRun[] => {
   const rows = records.filter(r => r['host'] === 'codex' && r['phase'] === 'codex_event' && token(r['session_id']) && at(r))
     .sort((a, b) => at(a).localeCompare(at(b)));
   // Pair once in reverse order. Re-scanning the full recording for every start made live refresh quadratic.
@@ -71,6 +72,7 @@ export const codexOperations = (records: Rec[], now: Date): OperationRun[] => {
     const closing = ended.get(r);
     const isStart = !!ends;
     const elapsed = Math.max(0, now.getTime() - Date.parse(at(r)));
+    if (isStart && !end && !closing) flipsAt?.(Date.parse(at(r)) + 600_001);
     const failed = (v: Rec | undefined) => v?.['is_error'] === true || typeof v?.['exit_code'] === 'number' && v['exit_code'] !== 0;
     const state = failed(r) || failed(end) ? 'error'
       : event === 'Interrupt' || end?.['event'] === 'Interrupt' || !end && closing?.['event'] === 'Interrupt' ? 'interrupted'
