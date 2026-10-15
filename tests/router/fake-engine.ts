@@ -2,6 +2,7 @@ import type { HttpReply } from '../../mods/router/hooks/client.ts';
 import { JEV_MODEL } from '../../mods/router/hooks/client.ts';
 import type { ModelTier } from '../../mods/router/hooks/policy.ts';
 import { TIER_LEVELS } from '../../mods/router/hooks/policy.ts';
+import { CAPABILITY } from '../../mods/router/hooks/selection.ts';
 import type { HostPins, RouterEngine } from '../../mods/router/hooks/router.ts';
 
 /** Shaped like a key and matching nothing real. */
@@ -135,8 +136,14 @@ export const answering =
       model: JEV_MODEL,
       answers: Object.fromEntries(
         Object.entries(req.questions).flatMap(([name, q]) => {
-          const pick: Pick | undefined = picks[(name.startsWith('effort_') ? 'effort' : name === 'model' ? 'tier' : name) as keyof typeof picks];
+          const pick: Pick | undefined = picks[(name.startsWith('effort_') ? 'effort' : name === 'model' || name === 'capability' ? 'tier' : name) as keyof typeof picks];
           if (!pick) return [];
+          if (name === 'capability' && !Array.isArray(q.criteria)) {
+            // A role the offer lacks reads as the least capable offered option above it, as a sufficient answer would.
+            const rank = ({ fast: 0, standard: 1, deep: 2, frontier: 3 } as Record<string, number>)[pick[0]];
+            const option = rank === undefined ? pick[0] : CAPABILITY.slice(rank).find(c => c.option in q.criteria)?.option ?? CAPABILITY.findLast(c => c.option in q.criteria)!.option;
+            return [[name, choice(Object.keys(q.criteria), [option, pick[1]])]];
+          }
           if (name === 'model' && !Array.isArray(q.criteria)) {
             const family = ({ fast: 'haiku', standard: 'sonnet', deep: 'opus', frontier: 'fable' } as Record<string, string>)[pick[0]];
             const preferred = ({ fast: 'claude-haiku-5-5', standard: 'claude-sonnet-5-5', deep: 'claude-opus-5-5', frontier: 'claude-fable-5-1' } as Record<string, string>)[pick[0]];

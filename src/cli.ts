@@ -90,7 +90,7 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
     const installedModels = new Map<string, string>();
     // #48 P2: hooks.json now commands dist/entry.js, which dynamically imports dist/hook.js only when the
     // gate might be on (src/entry.ts) -- both files have to exist for that indirection to work.
-    for (const rel of ['dist/entry.js', 'dist/hook.js', '.claude-plugin/plugin.json', 'hooks/hooks.json', ...Object.keys(AGENT_EXPECTATIONS).map((f) => `agents/${f}`)]) {
+    for (const rel of ['dist/entry.js', 'dist/hook.js', 'dist/compact-hook.js', '.claude-plugin/plugin.json', 'hooks/hooks.json', ...Object.keys(AGENT_EXPECTATIONS).map((f) => `agents/${f}`)]) {
       const valid = readableFile(join(root, rel)); say(valid ? 'ok' : 'fail', `${rel} ${valid ? 'readable file' : 'missing or unreadable file'}`);
     }
     try {
@@ -114,23 +114,29 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
       // V5: PreToolUse guards every root tool, so it is registered once with no matcher; Stop records the terminal
       // outcome. SessionStart (#48 P2) is the liveness warning -- also no matcher, and registered unconditionally the
       // same as the others.
-      const expected: Array<[string, string | null]> = [
-        ['UserPromptSubmit', null],
-        ['PreToolUse', null],
-        ['PostToolUse', '^(Agent|TaskStop)$'],
-        ['PostToolUseFailure', '^Agent$'],
-        ['SubagentStop', '^jev-gate:(?:worker(?:-fast|-deep|-frontier)?|planner(?:-frontier)?)$'],
-        ['Stop', null],
-        ['SessionStart', null],
+      // The classic Compact hooks (PreCompact, SessionStart on source compact, PostCompact) are a second entry point,
+      // dist/compact-hook.js: the host runs them when the function Compact is passed over (Team/Enterprise seat).
+      const expected: Array<[string, string | null, string]> = [
+        ['UserPromptSubmit', null, 'entry'],
+        ['PreToolUse', null, 'entry'],
+        ['PostToolUse', '^(Agent|TaskStop)$', 'entry'],
+        ['PostToolUseFailure', '^Agent$', 'entry'],
+        ['SubagentStop', '^jev-gate:(?:worker(?:-fast|-deep|-frontier)?|planner(?:-frontier)?)$', 'entry'],
+        ['Stop', null, 'entry'],
+        ['SessionStart', null, 'entry'],
+        ['PreCompact', null, 'compact-hook'],
+        ['SessionStart', 'compact', 'compact-hook'],
+        ['PostCompact', null, 'compact-hook'],
       ];
-      for (const [event, matcher] of expected) {
-        const groups = Array.isArray(table[event]) ? (table[event] as unknown[]) : [];
+      for (const [event, matcher, script] of expected) {
+        const isCompact = (g: unknown): boolean => isRecord(g) && Array.isArray(g['hooks']) && g['hooks'].some((h) => isRecord(h) && typeof h['command'] === 'string' && h['command'].includes('compact-hook.js'));
+        const groups = (Array.isArray(table[event]) ? (table[event] as unknown[]) : []).filter((g) => isCompact(g) === (script === 'compact-hook'));
         const handlers = groups.flatMap((g) => isRecord(g) && Array.isArray(g['hooks']) ? g['hooks'] : []);
-        const ours = handlers.filter((h) => isRecord(h) && h['type'] === 'command' && h['command'] === 'node "${CLAUDE_PLUGIN_ROOT}/dist/entry.js"');
+        const ours = handlers.filter((h) => isRecord(h) && h['type'] === 'command' && h['command'] === `node "\${CLAUDE_PLUGIN_ROOT}/dist/${script}.js"`);
         const valid = groups.length === 1 && isRecord(groups[0]) && (matcher === null ? !('matcher' in groups[0]) : groups[0]['matcher'] === matcher) && handlers.length === 1 && ours.length === 1;
-        say(valid ? 'ok' : 'fail', `hooks.json ${event}${matcher ? ` (${matcher})` : ' (no matcher)'}: ${ours.length} command hook(s) → dist/entry.js (expect 1 with the exact command and matcher)`);
+        say(valid ? 'ok' : 'fail', `hooks.json ${event}${matcher ? ` (${matcher})` : ' (no matcher)'}: ${ours.length} command hook(s) → dist/${script}.js (expect 1 with the exact command and matcher)`);
         const timeout = ours[0] && isRecord(ours[0]) ? ours[0]['timeout'] : undefined;
-        if (ours.length === 1 && timeout !== NATIVE_HOOK_TIMEOUT_MS / 1000) say('warn', `${event} hook timeout ${String(timeout)}s (design assumes ${NATIVE_HOOK_TIMEOUT_MS / 1000}s)`);
+        if (ours.length === 1 && script === 'entry' && timeout !== NATIVE_HOOK_TIMEOUT_MS / 1000) say('warn', `${event} hook timeout ${String(timeout)}s (design assumes ${NATIVE_HOOK_TIMEOUT_MS / 1000}s)`);
       }
     } catch (err) {
       say('fail', 'cannot parse plugin files (invalid JSON or unreadable file)');
@@ -279,8 +285,10 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
 
   /**
    * Claude Code 2.1.299+ seats its built-in plugin security default outermost on a machine with managed settings and
-   * for Team and Enterprise organizations. It passes session.compact over for a plugin a person installs, so Compact
-   * never runs there unless an administrator makes jev-gate a managed plugin (managed `enabledPlugins`).
+   * for Team and Enterprise organizations. It passes session.compact over for a plugin a person installs, so the
+   * function Compact never runs there unless an administrator makes jev-gate a managed plugin (managed
+   * `enabledPlugins`). The plugin's own classic hooks (PreCompact, SessionStart(compact), PostCompact, bundle
+   * dist/compact-hook.js) run on that host instead: they guide and supplement the engine's summary, never replace it.
    */
   const checkCompactSeat = (hostVersion: string | null): void => {
     const [major = 0, minor = 0, patch = 0] = (hostVersion ?? '').split('.').map(Number);
@@ -295,8 +303,9 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
     const managedMachine = readManagedSetting(() => true) !== null;
     const seat = organization === 'claude_team' || organization === 'claude_enterprise' ? `a ${organization === 'claude_team' ? 'Team' : 'Enterprise'} organization` : managedMachine || remote !== null && Object.keys(remote).length > 0 ? 'a machine with managed settings' : null;
     if (seat === null) return;
-    if (readManagedSetting(ownsJevGate) !== null || remote !== null && ownsJevGate(remote)) say('ok', `Compact: jev-gate is a managed plugin, so Claude Code ${hostVersion}'s built-in security default lets it answer compaction`);
-    else say('warn', `Compact cannot run: Claude Code ${hostVersion} seats its built-in plugin security default for ${seat}, and it passes compaction over for a plugin a person installs. Gate and Router still run; Router reads a compaction from the shorter request instead. An administrator can let Compact run by enabling jev-gate@<marketplace> in managed settings ("enabledPlugins"); see mods/compact/README.md`);
+    if (readManagedSetting(ownsJevGate) !== null || remote !== null && ownsJevGate(remote)) say('ok', `Compact: jev-gate is a managed plugin, so Claude Code ${hostVersion}'s built-in security default lets the function compact answer; the classic hooks stay silent for a compaction it answered`);
+    else if (!existsSync(join(root, 'dist/compact-hook.js'))) say('warn', `Compact: host ${hostVersion} + ${seat} -> function compact unavailable (the built-in security default passes it over for an installed plugin), and the classic path's dist/compact-hook.js is missing from this install; native compaction is unchanged. Reinstall or update jev-gate`);
+    else say('warn', `Compact: host ${hostVersion} (>=2.1.299) + ${seat} -> function compact unavailable (the built-in security default passes it over for an installed plugin); classic path active (PreCompact steering, SessionStart restore, PostCompact record). It guides and supplements the native compaction and cannot replace it, so native summarization time remains. Gate and Router still run. If an administrator can enable jev-gate@<marketplace> in managed settings ("enabledPlugins"), the full function compact runs; see mods/compact/README.md`);
   };
 
   const checkEnv = (mode: Mode | null): void => {

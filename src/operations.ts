@@ -116,6 +116,8 @@ const number = (v: unknown): number | null => typeof v === 'number' && Number.is
 const iso = (v: unknown): string => typeof v === 'string' && ISO.test(v) ? v : '';
 const list = (v: unknown, cap = 16): string[] => Array.isArray(v) ? v.slice(0, cap).map(token).filter((x): x is string => x !== null) : [];
 const id = memo((v: string): string => createHash('sha256').update(v).digest('hex').slice(0, 12));
+// Step texts repeat across the history; the kept builds share one copy of each.
+const intern = memo((v: string): string => v);
 // Same output as toLocaleString('en-US'), without building a formatter per call.
 const EN = new Intl.NumberFormat('en-US');
 const n = (v: number | null): string => v === null ? '?' : EN.format(Number(v.toFixed(2)));
@@ -454,12 +456,16 @@ const traceStep = (r: Rec, resultIds: Set<string>, intents: Map<string, string>,
     : phase === 'post' || phase === 'failure' || phase === 'background_launch' ? modelObservation(r['requested_model'], r['resolved_model']) : undefined;
   if (model && phase === 'codex_route_applied' && r['request_kind'] === 'root_response' && typeof r['applied'] === 'boolean') model.requestApplied = r['applied'];
   const routing: OperationStep['routing'] = phase.startsWith('codex_router_') || phase === 'codex_route_applied' ? { scope: r['scope'] === 'child' ? 'child' : 'root', baseline: token(r['baseline_model']), modelReason: token(field(r, 'reasons')?.['model']), effortReason: token(field(r, 'reasons')?.['effort']) } : phase === 'pre_result' && field(r, 'allocation') ? { scope: 'owned', baseline: token(field(r, 'allocation')?.['baseline_model']), modelReason: 'gate_allocated', effortReason: 'gate_allocated' } : undefined;
-  const proposal = field(field(r, 'answers'), 'model');
-  const proposedModel = token(proposal?.['choice']);
-  if (routing && proposedModel && !['__keep__', '__abstain__'].includes(proposedModel)) {
+  const routerAnswers = field(r, 'answers');
+  const proposal = field(routerAnswers, 'model') ?? field(routerAnswers, 'capability');
+  const option = token(proposal?.['choice']);
+  const roles = field(r, 'selection')?.['roles'];
+  // A capability answer names a kind of work; the selection's role map names the one model that served it.
+  const proposedModel = field(routerAnswers, 'model') ? option : Array.isArray(roles) ? token(roles.map(rec).find((x) => x?.['option'] === option)?.['model']) : null;
+  if (routing && proposedModel && option && !['__keep__', '__abstain__'].includes(proposedModel)) {
     routing.proposedModel = proposedModel;
     const selection = field(r, 'selection');
-    const probability = number(selection?.['probability']) ?? number(field(proposal, 'probabilities')?.[proposedModel]);
+    const probability = number(selection?.['probability']) ?? number(field(proposal, 'probabilities')?.[option]);
     const threshold = number(selection?.['threshold']);
     if (probability !== null && probability >= 0 && probability <= 1) routing.probability = probability;
     if (threshold !== null && threshold >= 0 && threshold <= 1) routing.threshold = threshold;
@@ -616,7 +622,9 @@ const modStep = (row: ModRecord, closed: Set<string>, responses: Map<string, str
     const usage = field(r, 'usage');
     if (usage) details.push(text(`입력 ${n(number(usage['input']))}`, `출력 ${n(number(usage['output']))}`, `cache read ${n(number(usage['cache_read']))}`, `cache write ${n(number(usage['cache_creation']))}`));
     const answers = field(r, 'answers');
-    if (answers) details.push(text(`Jev 제어 ${token(answers['control']) ?? '?'}`, number(answers['task_clear']) === null ? null : `명확도 ${Math.round(number(answers['task_clear'])! * 100)}%`, number(answers['ordinary']) === null ? null : `일반 위험 ${Math.round(number(answers['ordinary'])! * 100)}%`));
+    if (answers) details.push(text(`Jev 제어 ${token(answers['control']) ?? token(field(answers, 'control')?.['choice']) ?? '?'}`, number(answers['task_clear']) === null ? null : `명확도 ${Math.round(number(answers['task_clear'])! * 100)}%`, number(answers['ordinary']) === null ? null : `일반 위험 ${Math.round(number(answers['ordinary'])! * 100)}%`));
+    const capability = field(answers, 'capability');
+    if (capability) details.push(text(`필요 역량 ${token(capability['choice']) ?? '?'}`, ...Object.entries(field(capability, 'probabilities') ?? {}).flatMap(([option, value]) => token(option) && number(value) !== null ? [`${option} ${n(number(value))}`] : [])));
     if (answers) for (const name of ['tier', 'effort']) {
       const levels = field(answers, name);
       if (levels) details.push(text(`${name} 점수`, ...Object.entries(levels).slice(0, 8).flatMap(([level, value]) => token(level) && number(value) !== null ? [`${level} ${n(number(value))}`] : [])));
@@ -707,6 +715,9 @@ interface PartContext { sessions: Ends; read: Set<string>; position: (item: Rec 
 
 /** The executions of records that join nothing outside them (see `sync`). */
 const buildPart = (records: Rec[], mods: ModRecord[], now: Date, context?: PartContext): Part => {
+  // A native child skips routing on every model step; one row per step would bury the run list. Each part drops its own,
+  // so a rebuild does not pass over every row of the history for them.
+  mods = mods.filter(m => !(m.component === 'router' && m.rec['event'] === 'child_route' && m.rec['skipped'] === 'native_child'));
   let sessions = context?.sessions;
   if (!sessions) {
     const own: Ends = sessions = new Map();
@@ -717,18 +728,20 @@ const buildPart = (records: Rec[], mods: ModRecord[], now: Date, context?: PartC
   records = allocatedTraceRecords(records);
   const codexDecisions = new Map<string, Rec>();
   const codexKey = (r: Rec): string | null => r['host'] === 'codex' && token(r['session_id']) && token(r['prompt_id']) ? JSON.stringify([r['session_id'], r['prompt_id'], r['scope'] === 'child' ? r['agent_id'] : null, r['scope'] === 'child' ? r['index'] ?? null : null]) : null;
-  for (const r of records) { const key = codexKey(r); if (key && r['phase'] === 'codex_router_result') codexDecisions.set(key, r); }
-  records = records.map(r => {
-    const key = codexKey(r), decision = key ? codexDecisions.get(key) : undefined;
-    return decision && iso(decision['written_at']) <= iso(r['written_at']) && ['codex_route_applied', 'codex_router_response'].includes(String(r['phase'])) ? { ...r, reasons: decision['reasons'], baseline_model: r['baseline_model'] ?? decision['baseline_model'], answers: decision['answers'], selection: decision['selection'] } : r;
+  // Only a decision's own rows read a key; the other rows of a long turn need none.
+  for (const r of records) if (r['phase'] === 'codex_router_result') { const key = codexKey(r); if (key) codexDecisions.set(key, r); }
+  if (codexDecisions.size) records = records.map(r => {
+    const decision = ['codex_route_applied', 'codex_router_response'].includes(String(r['phase'])) ? codexDecisions.get(codexKey(r) ?? '') : undefined;
+    return decision && iso(decision['written_at']) <= iso(r['written_at']) ? { ...r, reasons: decision['reasons'], baseline_model: r['baseline_model'] ?? decision['baseline_model'], answers: decision['answers'], selection: decision['selection'] } : r;
   });
   // A request row can display the actual response only when its exact binding has a later response.
   const responseBindings = new Map<string, Rec>();
   const modelTerminals = new Map<string, string>();
   for (const r of records) {
+    if (!['codex_router_response', 'codex_model_failure'].includes(String(r['phase']))) continue;
     const key = modelRequestKey(r); if (!key) continue;
     const at = iso(r['written_at']);
-    if (['codex_router_response', 'codex_model_failure'].includes(String(r['phase'])) && at && at >= (modelTerminals.get(key) ?? '')) modelTerminals.set(key, at);
+    if (at && at >= (modelTerminals.get(key) ?? '')) modelTerminals.set(key, at);
     if (r['phase'] === 'codex_router_response' && at && at >= iso(responseBindings.get(key)?.['written_at'])) responseBindings.set(key, r);
   }
   const live: Liveness = { now: now.getTime(), seen: new Map(), ends: new Map(), sessions, read: context?.read ?? new Set(), until: Infinity };
@@ -746,9 +759,8 @@ const buildPart = (records: Rec[], mods: ModRecord[], now: Date, context?: PartC
     // Recorded Router rows may carry no session; an unidentified session end cannot end anything (`sessionEnd`).
     observe(loop, row.at, r['event'] === 'turn_end' && token(r['turn']) ? { key: loop, interrupted: r['reason'] === 'aborted' } : undefined);
   }
-  records = records.map(r => {
-    const key = modelRequestKey(r);
-    const response = r['phase'] === 'codex_route_applied' && key ? responseBindings.get(key) : undefined;
+  if (responseBindings.size) records = records.map(r => {
+    const response = r['phase'] === 'codex_route_applied' ? responseBindings.get(modelRequestKey(r) ?? '') : undefined;
     return response && iso(response['written_at']) >= iso(r['written_at']) ? { ...r, observed_model: response['observed_model'], observed_effort: response['observed_effort'] } : r;
   });
   // routedModRecords visits rows in this stable time order.
@@ -759,8 +771,9 @@ const buildPart = (records: Rec[], mods: ModRecord[], now: Date, context?: PartC
   for (const r of records) if (r['phase'] === 'background_terminal') resultIds.add(`background:${token(r['session_id'])}:${token(r['execution_prompt_id']) ?? token(r['prompt_id'])}:${token(r['tool_use_id'])}`);
   for (const r of records) if (r['phase'] === 'codex_compact' && r['applied'] === true && token(r['run_id'])) resultIds.add(`codex_compact:${token(r['run_id'])}`);
   const intents = new Map(records.flatMap((r): Array<[string, string]> => {
-    const phase = token(r['phase']); const requestId = token(r['request_id']); const at = iso(r['written_at']);
-    return phase?.endsWith('_intent') && requestId && at ? [[`${requestId}:${phase}`, at]] : [];
+    const phase = token(r['phase']); if (!phase?.endsWith('_intent')) return [];
+    const requestId = token(r['request_id']); const at = iso(r['written_at']);
+    return requestId && at ? [[`${requestId}:${phase}`, at]] : [];
   }));
   const closed = new Set(mods.flatMap((row) => {
     const own = row.component === 'router' ? token(row.rec['turn']) ?? token(row.rec['tool_use_id']) : token(row.rec['run_id']);
@@ -965,6 +978,8 @@ const summarize = (group: Group, part: Part, records: Node[], mods: Node[]): Bui
   });
   b.entries.sort(order).forEach((e, ord) => { e.ord = ord; });
   for (const e of b.entries) e.run.steps.forEach((s, i) => {
+    s.summary = intern(s.summary);
+    for (let k = 0; k < s.details.length; k++) s.details[k] = intern(s.details[k]!);
     if (!REGULAR.test(s.at)) b.regular = false;
     if (s.at > b.maxAt) b.maxAt = s.at;
     if (!s.lifecycle) { const f = b.features.get(s.feature); if (!f) b.features.set(s.feature, { count: 1, maxAt: s.at }); else { f.count++; if (s.at > f.maxAt) f.maxAt = s.at; } }
@@ -1295,8 +1310,6 @@ const splitView = (now: Date, availability: { trace: boolean; host?: Host }): Op
 
 /** `whole` builds the recording in one pass with no reuse: the reference the split build must equal. */
 export const buildOperations = (records: Rec[], mods: ModRecord[], now: Date, availability: { trace: boolean; host?: Host }, whole = false): OperationsView => {
-  // A native child skips routing on every model step; one row per step would bury the run list.
-  mods = mods.filter(m => !(m.component === 'router' && m.rec['event'] === 'child_route' && m.rec['skipped'] === 'native_child'));
   if (whole || !sync(records, mods, now)) {
     const part = buildPart(records, mods, now);
     // An item listed twice cannot be split; the next rebuild builds the whole recording again.

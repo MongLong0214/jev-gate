@@ -41,9 +41,14 @@ On by default (v0.6.3), in `active` mode; off registers no hook at all. Options 
 
 **Organizations and managed machines (Claude Code 2.1.299+).** The host seats its built-in plugin security default
 (`cc-plugin-sec-default@builtin`) outermost for Team and Enterprise organizations and on any machine with managed
-settings. It passes `session.compact` over for a plugin a person installs, so there Compact is never asked and the
-engine compacts natively; Gate and Router are unaffected, and Router reads a compaction from the shorter next request.
-Doctor warns about this. To let Compact run, an administrator makes jev-gate a managed plugin in managed settings:
+settings. It passes `session.compact` over for a plugin a person installs, so there the function Compact described
+below is never asked. Nothing in this plugin changes that and nothing here works around it. What runs instead is the
+[classic path](#the-classic-path-team-enterprise-and-managed-machines): the plugin's own `hooks.json` hooks. It guides
+and supplements the engine's compaction; it cannot replace it, so the engine's summarization time remains. Doctor says
+which of the two applies ("host >=2.1.299 + Team/Enterprise seat -> function compact unavailable; classic path active").
+
+An administrator who can makes jev-gate a managed plugin in managed settings; the function Compact then runs as
+described on this page and the classic hooks stay silent for every compaction it answers:
 
 ```json
 {
@@ -52,13 +57,73 @@ Doctor warns about this. To let Compact run, an administrator makes jev-gate a m
 }
 ```
 
-Do not set `prependPlugins` without listing `cc-plugin-sec-default@builtin` in it: that removes the organization's own
-protection, not only jev-gate's restriction.
+This is optional and nobody is expected to have it. Do not set `prependPlugins` without listing
+`cc-plugin-sec-default@builtin` in it: that removes the organization's own protection, not only jev-gate's restriction.
 
 An option it cannot use turns it off. Every compaction it is asked about records
 metadata in the local trace: why it deferred to the engine, or the sizes, the fallback reason, and in shadow the
 engine's time and usage. A failure of its own (`error`) leaves that compaction to the engine once; the engine's own
 failure or cancellation is passed up and never retried, and a log that throws changes nothing.
+
+## The classic path (Team, Enterprise and managed machines)
+
+On a host that passes the function path over, the compaction is the engine's own: its summarizer model reads the whole
+conversation and writes the summary. The plugin cannot answer it (that is the seat above), and it uses only what the host
+gives any installed plugin: three command hooks in `hooks/hooks.json`, run through the bundle `dist/compact-hook.js`, with
+the same options as above (`compactEnabled`, `compactMode`, `compactBudgetChars`, `compactManual`, `compactJevEnabled`,
+`compactJevTimeoutMs`) and no settings written anywhere.
+
+1. **`PreCompact`** reads the transcript tail, asks Jev (the same one-call dependency selection, newest candidates first)
+   which earlier results this task depends on, and prints custom instructions for the summarizer: say nothing the restore
+   will carry, write no `<analysis>` section, keep the summary under a share of the budget, and state the task, decisions,
+   constraints, open problems and next step. It saves the restore for the next step. The summarizer is a model: the steering
+   shortens its output, it does not bind it.
+2. **`SessionStart` on `source: compact`** hands the saved restore to the model as additional context, once: the person's
+   latest requests verbatim, the latest failed calls, exact excerpts of the results Jev named, and the files read or
+   changed. The engine already keeps its last exchange, so none of that is restored.
+3. **`PostCompact`** records the summary's size against the budget. It cannot change the context (the host shows its
+   output to the person only, and at `SessionStart` time the summary is not yet in the transcript), so it is measurement.
+
+**No double context.** The summarizer's share is `clamp(budget × 0.3, 4000, 24000)` (12,000 at the default budget) and the restore is at most
+`min(9000, budget - summary share)`, so summary plus restore stay within `compactBudgetChars`. The 9,000 cap is the host's:
+`SessionStart` additional context over about 10,000 characters is not inlined (12,000 became a saved file and a 2 KB
+preview in a test). The restore carries only what the summary is likely to lose and is cut with a `[…]` mark, never
+over its share, and a saved restore over the share it is handed back under is dropped.
+
+`JEV_GATE_COMPACT=off` in the launch environment turns the classic hooks off for that launch (the plugin options turn them off persistently). Jev only selects which results are dependencies; it is never asked to summarize, and a failed or uncertain judgment leaves the restore without dependencies and the engine's compaction untouched.
+
+**Never both paths, never a block.** The function path writes a marker (`compact_asked-<session>.asked` in the trace
+directory) whenever the host asks it, before it answers or defers. The host runs `PreCompact` itself only when no
+function hook answered, so an answered compaction never reaches the classic hooks; when the function path was asked and
+deferred, a marker younger than two minutes keeps the classic hooks silent too. A `SessionStart` restore is not given
+when a marker is newer than the saved one. Every hook exits 0 and never uses the host's blocking forms (exit 2,
+`decision`, `continue: false`): garbage input, a missing transcript, an invalid option, an unwritable state directory, a
+Jev timeout or any exception leaves the engine's compaction exactly as it was. A manual `/compact` with instructions,
+and a subagent's compaction (the host gives it no instructions channel), stay native. Shadow mode records everything and
+says nothing to the engine or the model.
+
+**Measured (2026-10-15, Claude Code 2.1.300, a Team seat, `claude-haiku-5-5`, a 12-file read task, a 120,000-token
+compaction window; 3 runs of 2 compactions each per arm, a clean environment with only the project setting source).**
+These are a toy task on the smallest model, not a promise for a real session on a larger one.
+
+| | Native (engine only) | Classic path |
+|---|---|---|
+| Compaction duration | 9.34 s mean (8.87-9.92 s) | 5.64 s mean (4.40-7.08 s) |
+| Tokens after compaction | 9.74K mean | 10.85K mean (the restore adds about 1K) |
+| Whole run cost (list USD) | 0.0561-0.0562 | 0.0565-0.0570 |
+| Summary written | about 3.5K characters with an `<analysis>` block | 1.1-1.6K characters |
+| The 12 secret words after compaction | 12 of 12 each run | 12 of 12 each run |
+
+The classic path's own cost per compaction: 278-473 ms for the Jev call and 308-504 ms to build the restore. The saving
+is the shorter summary the summarizer writes; it is not a saving in tokens after compaction (they rose) or in cost (not
+measured to differ). A one-off 80-word steer in an earlier test made the model stop early, which is why the steering
+stays this size and asks for the content, not for terseness alone. Quality on long real sessions with a larger model has
+not been measured. The table used the earlier summary share (4,000 characters at the default budget); the share is now
+12,000 there so a long session's decisions and constraints fit, and that setting has not been re-measured.
+
+**Not measured.** The function path never runs on a Team seat, so its marker was only exercised against a fake host;
+a manual `/compact` and a subagent compaction were not run live; and the rate at which the engine's summarizer follows the
+steering on real work is unknown.
 
 ## What it keeps
 

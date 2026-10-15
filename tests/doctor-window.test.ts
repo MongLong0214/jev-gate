@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -25,6 +25,7 @@ beforeAll(() => {
   for (const d of ['.claude-plugin', 'hooks', 'agents', 'mods', 'src', 'plugins/evidence/skills']) cpSync(join(__dirname, '..', d), join(root, d), { recursive: true });
   mkdirSync(join(root, 'plugins/evidence/dist'), { recursive: true });
   writeFileSync(join(root, 'plugins/evidence/dist/server.mjs'), '// Fake packaged entry; Doctor does not execute it.\n');
+  writeFileSync(join(out, 'compact-hook.js'), '// Fake classic compact bundle; Doctor only checks that it is there.\n');
 }, 60_000);
 
 let seq = 0;
@@ -286,14 +287,24 @@ describe('doctor: Compact under the host security default', () => {
   };
   const config = () => configFile({ version: 5 });
 
-  it('warns that a Team organization on 2.1.299+ passes compaction over for an installed jev-gate', () => {
+  it('says plainly that a Team organization on 2.1.299+ has no function compact and runs the classic path, which supplements native compaction', () => {
     const stdout = doctor({ PATH: fakeClaude('2.1.300'), HOME: home('claude_team'), JEV_GATE_CONFIG: config() });
-    expect(stdout).toMatch(/\[warn\] Compact cannot run: Claude Code 2\.1\.300 seats its built-in plugin security default for a Team organization/);
+    expect(stdout).toMatch(/\[warn\] Compact: host 2\.1\.300 \(>=2\.1\.299\) \+ a Team organization -> function compact unavailable/);
+    expect(stdout).toContain('classic path active');
+    expect(stdout).toContain('cannot replace it, so native summarization time remains');
+    expect(stdout).not.toMatch(/prependPlugins/);
+  });
+  it('warns that the classic path itself is not installed when its bundle is missing', () => {
+    const bundle = join(out, 'compact-hook.js');
+    renameSync(bundle, `${bundle}.off`);
+    try {
+      expect(doctor({ PATH: fakeClaude('2.1.300'), HOME: home('claude_team'), JEV_GATE_CONFIG: config() })).toMatch(/\[warn\] Compact: .*dist\/compact-hook\.js is missing/);
+    } finally { renameSync(`${bundle}.off`, bundle); }
   });
   it('reports a managed jev-gate as able to compact, and says nothing for a personal account or an older host', () => {
     expect(doctor({ PATH: fakeClaude('2.1.300'), HOME: home('claude_enterprise', { enabledPlugins: { 'jev-gate@jev-gate': true } }), JEV_GATE_CONFIG: config() }))
       .toMatch(/\[ok\] Compact: jev-gate is a managed plugin/);
-    expect(doctor({ PATH: fakeClaude('2.1.300'), HOME: home('claude_max'), JEV_GATE_CONFIG: config() })).not.toMatch(/Compact cannot run|Compact: jev-gate/);
-    expect(doctor({ PATH: fakeClaude('2.1.298'), HOME: home('claude_team'), JEV_GATE_CONFIG: config() })).not.toMatch(/Compact cannot run|Compact: jev-gate/);
+    expect(doctor({ PATH: fakeClaude('2.1.300'), HOME: home('claude_max'), JEV_GATE_CONFIG: config() })).not.toMatch(/Compact: host|Compact: jev-gate/);
+    expect(doctor({ PATH: fakeClaude('2.1.298'), HOME: home('claude_team'), JEV_GATE_CONFIG: config() })).not.toMatch(/Compact: host|Compact: jev-gate/);
   });
 });

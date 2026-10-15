@@ -112,6 +112,8 @@ const missing = entries.map(([src]) => src).filter((rel) => !existsSync(join(roo
 if (hostsDist && !existsSync(join(root, 'dist/hook.js'))) missing.push('dist/hook.js');
 // #48 P2: hooks.json now commands dist/entry.js, which dynamically imports dist/hook.js -- both must ship.
 if (hostsDist && !existsSync(join(root, 'dist/entry.js'))) missing.push('dist/entry.js');
+// hooks.json also commands dist/compact-hook.js on PreCompact, SessionStart(compact) and PostCompact (the classic Compact path).
+if (hostsDist && !existsSync(join(root, 'dist/compact-hook.js'))) missing.push('dist/compact-hook.js');
 if (missing.length) {
   process.stderr.write(`pack: missing ${missing.join(', ')}${profile === 'router' ? '' : ' — run npm run build first'}\n`);
   process.exit(1);

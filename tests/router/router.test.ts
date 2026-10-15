@@ -38,14 +38,8 @@ describe('root window compatibility at the current request', () => {
     let phase = 0;
     const targets = ['claude-sonnet-5-5', mode.startsWith('conditional') ? 'claude-haiku-5-5' : 'claude-sonnet-5-5', 'claude-opus-5-5'];
     const router = createRouter(configOf({ routeMainModel: true, routeMainEffort: true, ...SUBAGENT_OFF }));
-    const f = fakeEngine({ hostBase: '2.1.293', respond: req => {
-      const target = targets[phase]!;
-      const q = req.questions.model?.criteria as Record<string, string> | undefined;
-      const pick = q && target in q ? target : '__keep__';
-      return { status: 200, text: JSON.stringify({ model: JEV_MODEL, answers: Object.fromEntries(Object.entries(req.questions).map(([name, q]) => [name,
-        q.type === 'choice' ? choice(Object.keys(q.criteria), [name === 'model' ? pick : name === 'control' ? 'task_clear' : 'ordinary', .99]) :
-          { type: 'score', probabilities: Object.fromEntries((q.criteria as string[]).map((s, i) => [i, s.startsWith(phase < 2 ? 'Light reasoning' : 'Strong reasoning') ? 1 : 0])) }])) }) };
-    } });
+    const roles = ['standard', mode.startsWith('conditional') ? 'fast' : 'standard', 'deep'];
+    const f = fakeEngine({ hostBase: '2.1.293', respond: req => answering({ control: ['task_clear', .99], action_risk: ['ordinary', .99], tier: [roles[phase]!, .99], effort: [phase < 2 ? 'low' : 'high', .99] })(req) });
     // A complete current-request bound and compatible transform are synthetic capabilities, not Claude host evidence.
     f.engine.currentContextBound = async (turnId, index) => ({ turnId, index, inputUpperBound: 20_000, compatible: true });
     f.engine.currentEffort = async () => undefined;
@@ -103,16 +97,15 @@ describe('root window compatibility at the current request', () => {
   });
   it.each(['fit', 'large', 'unknown', 'failure', 'grows', 'estimate_only', 'stale', 'incompatible'] as const)('never offers legacy Haiku even when a complete request bound fits: %s', async scenario => {
     const router = createRouter(configOf({ routeMainEffort: true, routeMainModel: true, ...SUBAGENT_OFF }));
-    const f = fakeEngine({ respond: req => {
-      expect(req.questions.model!.criteria).not.toHaveProperty('claude-haiku-4-5-20251001');
-      return answering({ ...CLEAR, tier: ['fast', .99], effort: ['low', .99] })(req);
-    } });
+    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['fast', .99], effort: ['low', .99] }) });
     if (scenario !== 'estimate_only') f.engine.currentContextBound = async (turnId, index) => { if (scenario === 'failure') throw new Error('bound unavailable'); return scenario === 'unknown' ? undefined : { turnId: scenario === 'stale' ? 'old-turn' : turnId, index, inputUpperBound: scenario === 'large' ? 180_000 : 22_000, compatible: scenario !== 'incompatible' }; };
     router.turnStart({ turnId: 't1', text: TEXT }); const first = streamNext<TurnStepEvent>();
     await drain(router.turnStep(f.engine, step({ effort: 'xhigh' }), first.next));
     expect(first.calls).toEqual([step({ model: 'claude-haiku-5-5', effort: 'low' })]);
     const later = streamNext<TurnStepEvent>(); await drain(router.turnStep(f.engine, step({ index: 1, effort: 'xhigh' }), later.next));
     expect(later.calls).toEqual([step({ index: 1, model: 'claude-haiku-5-5', effort: 'low' })]); expect(f.sent).toHaveLength(1);
+    expect(f.logs.find(l => l.event === 'root')?.['selection']).toMatchObject({ roles: expect.arrayContaining([{ role: 'fast', option: 'mechanical', model: 'claude-haiku-5-5' }]) });
+    expect(JSON.stringify(f.logs)).not.toContain('claude-haiku-4-5');
   });
 });
 /** Runs `f` after `hops` microtask turns, to land between two awaits of the code under test. */
@@ -542,7 +535,7 @@ describe('root model', () => {
     await drain(router.turnStep(f.engine, step({ model: 'claude-sonnet-5-5' }), n.next));
     expect(n.calls).toEqual([step({ model: 'claude-opus-5-5' })]);
     expect(f.sent).toHaveLength(1);
-    expect(f.sent[0]?.questions['model']).toBeDefined();
+    expect(f.sent[0]?.questions['capability']).toBeDefined();
   });
 
   it('moves to a stronger configured model on the upgrade floor, and offers only the targets a switch could reach', async () => {
@@ -553,7 +546,8 @@ describe('root model', () => {
     await drain(router.turnStep(f.engine, step({ model: 'claude-sonnet-5-5' }), n.next));
     expect(n.calls).toEqual([step({ model: 'claude-opus-5-5' })]);
     // Current Haiku has the same 1M window, so it is a valid alternative too.
-    expect(Object.keys(f.sent[0]?.questions['model']?.criteria ?? {})).toEqual(['__keep__', '__abstain__', 'claude-fable-5-1', 'claude-opus-5-5', 'claude-haiku-5-5']);
+    expect(f.logs.find(l => l.event === 'root')?.['selection']).toMatchObject({ roles: [{ role: 'fast', model: 'claude-haiku-5-5' }, { role: 'standard', model: 'claude-sonnet-5-5' }, { role: 'deep', model: 'claude-opus-5-5' }, { role: 'frontier', model: 'claude-fable-5-1' }] });
+    expect(JSON.stringify(f.sent[0]?.questions['capability'])).not.toMatch(/claude|haiku|sonnet|opus|fable/i);
   });
 
   it('refuses a pair the target rejects, and asks nothing when no other profile could be applied', async () => {
@@ -742,7 +736,7 @@ describe('spawn model', () => {
     expect(n.calls).toEqual([{ ...spawn(), model: 'claude-haiku-5-5' }]);
     expect(result).toEqual({ model: 'claude-haiku-5-5' });
     expect(f.sent[0]?.state).toMatchObject({ task: { text: spawn().prompt, description: spawn().description, subagent_type: 'general-purpose', source: 'child_contract', truncated: false } });
-    expect(Object.keys(f.sent[0]?.questions ?? {})).toContain('model');
+    expect(Object.keys(f.sent[0]?.questions ?? {})).toContain('capability');
   });
 
   it('stays native for every unverified case without a request', async () => {
@@ -1141,7 +1135,7 @@ describe('subagent effort and named models', () => {
     await router.agentSpawn(f.engine, spawn(), s.next);
     // Deep work keeps Opus: the spawn is left on the model it inherits.
     expect(s.calls).toEqual([spawn()]);
-    expect(Object.keys(f.sent[0]?.questions ?? {})).toEqual(expect.arrayContaining(['control', 'model', 'effort_0', 'action_risk']));
+    expect(Object.keys(f.sent[0]?.questions ?? {})).toEqual(expect.arrayContaining(['control', 'capability', 'effort_0', 'action_risk']));
     expect(f.logs.find((l) => l['event'] === 'spawn')).toMatchObject({ reasons: { model: 'same_value', effort: 'selected' } });
 
     const n = streamNext<TurnStepEvent>();
@@ -1164,7 +1158,7 @@ describe('subagent effort and named models', () => {
     router.agentOffer(OFFER_BUILT_IN('general-purpose'));
     await router.agentSpawn(f.engine, spawn(), spawnNext(() => ({ model: 'claude-opus-5-5', agentId: 'a1' })).next);
     const record = f.logs.find((l) => l['event'] === 'spawn');
-    expect(record).toMatchObject({ reasons: { effort: 'same_value' }, selection: expect.objectContaining({ effort_policy: 'ordered_move' }), answers: expect.objectContaining({ control: expect.anything(), model: expect.anything() }) });
+    expect(record).toMatchObject({ reasons: { effort: 'same_value' }, selection: expect.objectContaining({ effort_policy: 'ordered_move' }), answers: expect.objectContaining({ control: expect.anything(), capability: expect.anything() }) });
     // The child runs at the effort the pair kept, so its first step is left as it is.
     const kept = childStep({ effort: 'high' });
     const n = streamNext<TurnStepEvent>();
@@ -1722,16 +1716,17 @@ describe('#42 and #43: handler cases the issues list', () => {
     );
   });
 
-  it('#42: a known model that no profile names routes its effort and withholds only the model question', async () => {
-    // Opus is an exact model the table knows, so its efforts are known; no configured profile is Opus, so its rank is not.
+  it('#42: a known model that no profile names is still placed by its documented role and routed to a reachable target', async () => {
+    // Opus is an exact model the table knows, so its efforts and role are known; no configured profile needs to name it.
     const router = createRouter(configOf({ routeMainEffort: true, routeMainModel: true, routeSubagentModel: false, fastModel: 'claude-haiku-5-5', standardModel: 'claude-sonnet-5-5', deepModel: 'claude-fable-5-1' }), SWITCHES);
     const f = fakeEngine({ respond: answering({ ...CLEAR, effort: ['low', 0.95], tier: ['fast', 0.99] }) });
     router.turnStart({ turnId: 't1', text: TEXT });
     const n = streamNext<TurnStepEvent>();
     await drain(router.turnStep(f.engine, step(), n.next));
-    expect(n.calls).toEqual([{ ...step(), effort: 'low' }]);
+    // Fast work, and the switch table reaches only Sonnet: the least capable offered role serves it.
+    expect(n.calls).toEqual([{ ...step(), model: 'claude-sonnet-5-5', effort: 'low' }]);
     expect(f.sent).toHaveLength(1);
-    expect(f.sent[0]?.questions).toHaveProperty('model');
+    expect(f.sent[0]?.questions).toHaveProperty('capability');
     expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root', model_asked: true, patch: expect.objectContaining({ effort: 'low' }) }));
   });
 
@@ -2121,7 +2116,7 @@ describe('bounded child history question feasibility (#140)', () => {
     const n = spawnNext(e => ({ model: e.model ?? 'claude-opus-5-5', agentId: 'new-child' }));
     await router.agentSpawn(f.engine, spawn(), n.next);
     expect(f.sent).toHaveLength(1);
-    expect(Object.keys(f.sent[0]!.questions)).toEqual(['model', 'control', 'action_risk']);
+    expect(Object.keys(f.sent[0]!.questions)).toEqual(['capability', 'control', 'action_risk']);
     expect(n.calls[0]!.model).toBe('claude-sonnet-5-5');
   });
   it.each(['key', 'pins'])('rechecks saturation after pending %s preparation', async phase => {
@@ -2256,7 +2251,7 @@ it('rechecks the common frontier switch before delivering a prepared Fable root 
   let reads=0;f.engine.frontierEnabled=async()=>++reads===1;
   router.turnStart({turnId:'t1',text:TEXT});const n=streamNext<TurnStepEvent>();
   await drain(router.turnStep(f.engine,step({model:'claude-sonnet-5-5'}),n.next));
-  expect(f.sent[0]?.questions.model?.criteria).toHaveProperty('claude-fable-5-1');
+  expect(f.sent[0]?.questions.capability?.criteria).toHaveProperty('open_problem');
   expect(n.calls[0]?.model).toBe('claude-sonnet-5-5');
   expect(f.logs).toContainEqual(expect.objectContaining({event:'root_stop',reason:'model_not_allowed'}));
 });

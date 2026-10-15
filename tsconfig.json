@@ -20,5 +20,5 @@
     "resolveJsonModule": true
   },
   "include": ["src"],
-  "exclude": ["src/evidence", "src/codex"]
+  "exclude": ["src/evidence", "src/codex", "src/claude-compact.ts"]
 }

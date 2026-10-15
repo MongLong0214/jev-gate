@@ -7,7 +7,7 @@ import { aliasFamily, answeredBy, effortIndex, factsOf, isSymbolicEffort, MODEL_
 import type { Answers, Baseline, PolicyOptions, RoutedEffort, RoutingPatch } from './policy.ts';
 import { choosePatch, EFFORT_LEVEL_TARGETS, offerableEfforts, pairValid } from './policy.ts';
 import { looksSecret } from './secret.ts';
-import { offerPairs, selectPair, keepModelPair, pairReceipt, applyEffort, type PairOffer, type EffortEdit } from './selection.ts';
+import { offerRoute, selectPair, keepModelPair, pairReceipt, applyEffort, type PairOffer, type EffortEdit } from './selection.ts';
 import { routingContext, type RoutingCache } from './context.ts';
 import { claudeCandidates, claudeContextFits, claudeModelAllowed, resolveClaudeModel, type ModelAliases } from './candidates.ts';
 import { claudeTargetAllowed, currentClaudeModel } from './models.ts';
@@ -106,7 +106,7 @@ type NextLike<E, R> = ((e: E) => Promise<R>) & { readonly signal: AbortSignal };
  */
 export const VERIFIED_HOST = '2.1.282';
 /** Identifies this loaded hook source, independently of a manifest updated on disk. */
-export const ROUTER_HOOK_VERSION = '0.8.21';
+export const ROUTER_HOOK_VERSION = '0.8.22';
 
 /**
  * Later 2.1 releases are accepted too. Pinned to one release, spawn routing went native after every host update: the
@@ -503,6 +503,8 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
   };
 
   const aliasesOf = (engine: RouterEngine): Promise<ModelAliases> => engine.modelAliases ? engine.modelAliases().catch(() => ({})) : Promise.resolve({ haiku: currentClaudeModel('haiku'), sonnet: currentClaudeModel('sonnet'), opus: currentClaudeModel('opus') });
+  /** The configured tier models pick the one model that serves a role with several. */
+  const preferred = (aliases: ModelAliases): string[] => Object.values(config.tiers).map(v => resolveClaudeModel(v, aliases) ?? v);
   const frontierFor = async (engine: RouterEngine): Promise<boolean> => engine.frontierEnabled ? await engine.frontierEnabled().catch(() => false) ?? config.allowFable : config.allowFable;
 
   const rootAssessment = async (engine: RouterEngine, turnId: string, t: TurnRouting, text: string, context: string | null, live: AbortSignal): Promise<void> => {
@@ -530,7 +532,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       const candidates = claudeCandidates({ baseline: t.baseline.model, aliases, allowFable,
         ...(currentBound ? { inputUpperBound: currentBound.inputUpperBound, requestCompatible: currentBound.compatible } : {}), excluded,
         ...(available !== undefined ? { available } : {}), ...(hostBase ? { hostBase } : {}), preferences: Object.values(config.tiers), ...(rootSwitches ? { switches: rootSwitches } : {}) });
-      const offer = offerPairs({ baseline: { model: resolveClaudeModel(t.baseline.model, aliases) ?? t.baseline.model, effort: t.baseline.effort ?? null }, candidates,
+      const offer = offerRoute({ baseline: { model: resolveClaudeModel(t.baseline.model, aliases) ?? t.baseline.model, effort: t.baseline.effort ?? null }, candidates, prefer: preferred(aliases),
         model: config.routeMainModel && !pins.mainModel, effort: config.routeMainEffort && !pins.mainEffort && !t.effortChanged && explicitEffort,
         upgrade: config.minUpgradeConfidence, downgrade: config.minDowngradeConfidence });
       if (!offer) { t.stopped = true; log(engine, { event: 'root', scope: 'root', turn: turnId, skipped: !resolveClaudeModel(t.baseline.model, aliases) ? 'capability_unknown' : 'no_alternative', ...(t.effortChanged ? { effort_kept: 'incoming_changed' } : {}), ...baselineFacts, candidates: candidates.slice(0, 16).map(c => c.id), excluded, model_withheld: 'no_applicable_target', model_asked: false, effort_asked: false, effort_not_asked: effortNotAsked }); return; }
@@ -688,7 +690,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       ...(available !== undefined ? { available } : {}), ...(hostBase ? { hostBase } : {}),
       ...(currentBound ? { inputUpperBound: currentBound.inputUpperBound, requestCompatible: currentBound.compatible } : {}), preferences: Object.values(config.tiers) });
     const explicitEffort = e.effort === undefined || isSymbolicEffort(e.effort);
-    const offer = offerPairs({ baseline: { model: resolveClaudeModel(e.model, aliases) ?? e.model, effort: e.effort ?? null }, candidates,
+    const offer = offerRoute({ baseline: { model: resolveClaudeModel(e.model, aliases) ?? e.model, effort: e.effort ?? null }, candidates, prefer: preferred(aliases),
       scope: 'child', model: contract.modelEnabled && !pins.subagentModel,
       effort: contract.effortEnabled && !pins.mainEffort && explicitEffort,
       upgrade: config.minUpgradeConfidence, downgrade: config.minDowngradeConfidence });
@@ -1123,7 +1125,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       ...(available !== undefined ? { available } : {}), ...(hostBase ? { hostBase } : {}), scope: 'spawn', preferences: Object.values(config.tiers) }).filter(c => claudeTargetAllowed(c.id, allowFable));
     if (!candidates.length) return denied('no_eligible_model', 'No eligible automatic child model. Continue in the main session; no child started.');
     const inheritedEffort = engine.currentEffort ? await within(engine.currentEffort().catch(() => undefined), live) : lastRoot?.effort ?? lastIncoming?.effort;
-    const offer = offerPairs({ baseline: { model: baselineModel, effort: inheritedEffort ?? null }, candidates,
+    const offer = offerRoute({ baseline: { model: baselineModel, effort: inheritedEffort ?? null }, candidates, prefer: preferred(aliases), scope: 'spawn',
       model: config.routeSubagentModel && !pins.subagentModel && (!explicit || config.routeExplicitSpawnModel) && !inheritance,
       effort: config.routeSubagentEffort && !pins.mainEffort && !childHistoryFull,
       upgrade: config.minUpgradeConfidence, downgrade: config.minDowngradeConfidence });

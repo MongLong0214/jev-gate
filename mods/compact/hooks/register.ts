@@ -57,6 +57,9 @@ export const registerCompact = (on: On, config: CompactConfig, observer?: { cont
     if (!config.enabled) return forward(e);
     const recorder = recorderOf($);
     try {
+    // The engine's PreCompact that follows a deferral is this module's compaction too; its command-hook path reads this.
+    quietly(() => recorder.touch());
+    await recorder.flush();
     const runId = `${Date.now()}-${++sequence}`;
     const log = (fields: Record<string, unknown>): void =>
       quietly(() => recorder.log(`jev-compact ${JSON.stringify({ event: 'compact', run_id: runId, mode: config.mode, trigger: e.trigger, subagent: e.agentId !== undefined, ...fields })}`));

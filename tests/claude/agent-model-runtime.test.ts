@@ -76,12 +76,17 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude Gate B 
       const chunks: Buffer[] = []; for await (const part of req) chunks.push(Buffer.from(part)); let raw = Buffer.concat(chunks); if (req.headers['content-encoding'] === 'gzip') raw = gunzipSync(raw);
       let body: Record<string, any>; try { body = JSON.parse(raw.toString()); } catch { res.end('{}'); return; }
       if (req.url === '/jev') {
-        if (body.questions.model) allocations.push(body);
+        if (body.questions.model || body.questions.capability) allocations.push(body);
         if (body.questions.bounded_tool_work) admissions.push(body);
         const selection = scenario.childSteps?.[allocations.length - 2] ?? scenario.sequence?.[allocations.length - 1] ?? scenario;
         const answers = Object.fromEntries(Object.entries(body.questions as Record<string, any>).map(([name, q]) => {
           if (q.type === 'noul') return [name, { type: 'noul', noul: .1 }];
           if (name === 'tool_calls') return [name, { type: 'score', score: 1, confidence: 1, probabilities: Object.fromEntries(q.criteria.map((_: string, i: number) => [i, i === 1 ? 1 : 0])) }];
+          // A capability answer names the role of the model the scenario expects to run.
+          if (name === 'capability') {
+            const option = Object.entries({ haiku: 'mechanical', sonnet: 'routine', opus: 'complex', fable: 'open_problem' }).find(([family]) => selection.actual.includes(family))![1];
+            return [name, choice(Object.keys(q.criteria), [option, scenario.probability ?? .99])];
+          }
           if (q.type === 'choice') return [name, choice(Object.keys(q.criteria), [name === 'model' ? selection.selected in q.criteria ? selection.selected : '__keep__' : name === 'control' ? 'task_clear' : name === 'action_risk' ? 'ordinary' : Object.keys(q.criteria)[0]!, name === 'model' ? scenario.probability ?? .99 : .99])];
           const at = (q.criteria as string[]).findIndex(s => s.startsWith(selection.effort === 'max' ? 'Maximum sustained' : selection.effort === 'low' ? 'Light reasoning' : selection.effort === 'medium' ? 'Ordinary reasoning' : 'Strong reasoning'));
           if (scenario.splitEffort) return [name, { type: 'score', probabilities: Object.fromEntries(q.criteria.map((s: string, i: number) => [i, s.startsWith('Ordinary reasoning') ? .45 : i === at ? .55 : 0])) }];

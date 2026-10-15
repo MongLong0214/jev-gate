@@ -134,7 +134,7 @@ describe('Doctor reports', () => {
   it.each(['hooks/register.ts', 'mods/router/hooks/config.ts', 'src/provider-prices-data.ts', 'plugins/evidence/dist/server.mjs', 'plugins/evidence/skills/evidence/SKILL.md'])('rejects a missing declared package dependency: %s', async missing => {
     const dir = temporary(), root = join(dir, 'plugin'); mkdirSync(root);
     for (const file of ['.claude-plugin', 'hooks', 'agents', 'mods', 'src', 'plugins/evidence/skills']) cpSync(join(__dirname, '..', file), join(root, file), { recursive: true });
-    mkdirSync(join(root, 'dist')); for (const file of ['entry.js', 'hook.js']) writeFileSync(join(root, 'dist', file), '');
+    mkdirSync(join(root, 'dist')); for (const file of ['entry.js', 'hook.js', 'compact-hook.js']) writeFileSync(join(root, 'dist', file), '');
     mkdirSync(join(root, 'plugins/evidence/dist'), { recursive: true });
     writeFileSync(join(root, 'plugins/evidence/dist/server.mjs'), '// Fake packaged entry; Doctor does not execute it.\n');
     const env = { HOME: dir, PATH: '/nonexistent', XDG_STATE_HOME: join(dir, 'state') };
@@ -155,7 +155,7 @@ describe('Doctor reports', () => {
   it.each(['missing-server', 'wrong-command', 'wrong-skills'])('rejects a broken Evidence discovery declaration: %s', async broken => {
     const dir = temporary(), root = join(dir, 'plugin'); mkdirSync(root);
     for (const file of ['.claude-plugin', 'hooks', 'agents', 'mods', 'src', 'plugins/evidence/skills']) cpSync(join(__dirname, '..', file), join(root, file), { recursive: true });
-    mkdirSync(join(root, 'dist')); for (const file of ['entry.js', 'hook.js']) writeFileSync(join(root, 'dist', file), '');
+    mkdirSync(join(root, 'dist')); for (const file of ['entry.js', 'hook.js', 'compact-hook.js']) writeFileSync(join(root, 'dist', file), '');
     mkdirSync(join(root, 'plugins/evidence/dist'), { recursive: true });
     writeFileSync(join(root, 'plugins/evidence/dist/server.mjs'), '// Fake packaged entry; Doctor does not execute it.\n');
     const path = join(root, '.claude-plugin/plugin.json'), manifest = JSON.parse(readFileSync(path, 'utf8'));
