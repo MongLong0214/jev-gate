@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.8.21 — 2026-10-15 — Router model mass, task notices, unannounced compaction, Compact seat warning
+## v0.8.21 — 2026-10-15 — Router model mass, task notices, dashboard CPU, 3-day records
 
 - Read the Router's model answer as ordered mass, as effort already is (#240). The cheapest role whose cumulative lower mass reaches the downgrade floor is chosen, else the highest role whose upper tail reaches the upgrade floor; a split vote such as keep .23 / Sonnet .34 / Haiku .41 now moves to Sonnet instead of holding on Opus. A tie is read the same way and holds as `low_confidence` instead of `answer_invalid`. Unknown roles and a crossing role held by more than one version keep the nominal reading; the floors, the control lock and the downgrade risk guard are unchanged. Replaying 72 hours of recorded answers with floors at .5 moves 93 of 387 root assessments (14 before) and 137 of 2,450 child steps (0 before); that is a policy replay, not a measured cost or quality effect.
 - Record the pair answers and selection diagnostics on every Router `spawn` record (#241).
@@ -10,6 +10,7 @@
 - Never ask Gate A about a host task notification (#245). It no longer costs Jev calls or opens a new generation that pushed the current job into history; `admission_result` records `task_notification`, outside liveness.
 - Keep 3 days of trace records and dashboard history instead of 7. Older trace files are removed by the next retention pass after the update.
 - Doctor warns when Compact cannot run because Claude Code 2.1.299+ seats its built-in plugin security default for a Team or Enterprise organization or a machine with managed settings, and the Compact README shows the managed-settings fix (#246).
+- Make the dashboard cost what new records touch (#247). It no longer rebuilds without a new record: age and window edges count only where a shown answer changes, and the 30-second reconciliation reads only files it has no record for, since trace files are written once. Under a record stream a rebuild waits three times its own duration (one to four seconds), and rebuilds only the records' own group of related records, keeping totals and sorted lists in place; a viewer still sees a new record within about five seconds. Reconnect leases are capped at 64. On a copy of one machine's traces with viewers open and one record a second, the server's CPU went from 71% to 10% and its footprint from about 1.3 GB to about 620 MB; a single rebuild from about 0.6 s to about 25 ms. These are measurements of that copy, not a general guarantee.
 
 ## v0.8.20 — 2026-10-13 — README dashboard, run list fixes, Codex restart recovery
 
