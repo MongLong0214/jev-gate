@@ -96,6 +96,33 @@ describe('documented Claude role thresholds and target effort resolution', () =>
     a.model = { type: 'choice', choice: 'claude-sonnet-5-5', confidence: .46, probabilities: Object.fromEntries(Object.keys(q.criteria).map(k => [k, k === 'claude-sonnet-5-5' ? .46 : k === 'claude-sonnet-5' ? .44 : k === '__keep__' ? .1 : 0])) };
     expect(selectPair(o, a).patch.model).toBeUndefined();
   });
+  it('moves a split cheaper-role vote to the cheapest role its cumulative mass covers, keeping the risk guard', () => {
+    const o = claudeOffer(); const a = exactAnswers(o); const q = o.questions.model!;
+    if (q.type !== 'choice') throw Error('model question absent');
+    const split = (p: Record<string, number>) => ({ type: 'choice', choice: 'claude-haiku-5-5', confidence: .4, probabilities: Object.fromEntries(Object.keys(q.criteria).map(k => [k, p[k] ?? 0])) });
+    a.model = split({ __keep__: .23, 'claude-sonnet-5-5': .34, 'claude-haiku-5-5': .41, __abstain__: .02 });
+    expect(selectPair(o, a)).toMatchObject({ patch: { model: 'claude-sonnet-5-5' }, reasons: { model: 'selected' }, diagnostics: { direction: 'downgrade', threshold: .6, probability: .75 } });
+    a.model = split({ __keep__: .3, 'claude-sonnet-5-5': .05, 'claude-haiku-5-5': .65 });
+    expect(selectPair(o, a).patch.model).toBe('claude-haiku-5-5');
+    a.model = split({ __keep__: .45, 'claude-sonnet-5-5': .2, 'claude-haiku-5-5': .35 });
+    expect(selectPair(o, a).patch.model).toBeUndefined();
+    a.model = split({ __keep__: .23, 'claude-sonnet-5-5': .34, 'claude-haiku-5-5': .41 });
+    a.action_risk = { type: 'choice', choice: 'consequential', confidence: 1, probabilities: { ordinary: 0, consequential: 1, unclear: 0 } };
+    expect(selectPair(o, a).reasons.model).toBe('risk_blocks_downgrade');
+  });
+  it('reads a tied vote as ordered mass: it moves when the cumulative mass covers the floor and holds as low confidence otherwise', () => {
+    const o = claudeOffer(); const a = exactAnswers(o); const q = o.questions.model!;
+    if (q.type !== 'choice') throw Error('model question absent');
+    a.model = { type: 'choice', choice: 'claude-sonnet-5-5', confidence: .45, probabilities: Object.fromEntries(Object.keys(q.criteria).map(k => [k, ({ __keep__: .45, 'claude-sonnet-5-5': .45, 'claude-haiku-5-5': .1 } as Record<string, number>)[k] ?? 0])) };
+    const held = selectPair(o, a); expect(held.patch.model).toBeUndefined(); expect(held.reasons.model).toBe('low_confidence');
+    expect(selectPair({ ...o, downgrade: .5 }, a)).toMatchObject({ patch: { model: 'claude-sonnet-5-5' }, reasons: { model: 'selected' }, diagnostics: { direction: 'downgrade', probability: .55 } });
+  });
+  it('upgrades to the highest role whose upper tail reaches the upgrade floor', () => {
+    const o = claudeOffer('claude-haiku-5-5', 'medium'); const a = exactAnswers(o, 'claude-opus-5-5', .4); const q = o.questions.model!;
+    if (q.type !== 'choice') throw Error('model question absent');
+    a.model = { type: 'choice', choice: 'claude-sonnet-5-5', confidence: .45, probabilities: Object.fromEntries(Object.keys(q.criteria).map(k => [k, ({ __keep__: .15, 'claude-sonnet-5-5': .45, 'claude-opus-5-5': .4 } as Record<string, number>)[k] ?? 0])) };
+    expect(selectPair(o, a)).toMatchObject({ patch: { model: 'claude-sonnet-5-5' }, diagnostics: { direction: 'upgrade', threshold: .8 } });
+  });
   it('uses a target-model .8 quantile for max not on its scale, while a real max pin excludes it', () => {
     const o = claudeOffer('claude-opus-5-5', 'max'); const a = exactAnswers(o, 'claude-sonnet-5-5', .95); const name = o.effortQuestions.get('claude-sonnet-5-5')!.name;
     a[name] = { type: 'score', probabilities: { 0: 0, 1: .45, 2: .55 } };

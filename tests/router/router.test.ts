@@ -1157,6 +1157,23 @@ describe('subagent effort and named models', () => {
     expect(other.calls).toEqual([childStep({ agentId: 'a2' })]);
   });
 
+  it("records the spawn's answers and labels its child's kept effort with the pair's own reason", async () => {
+    const router = createRouter(configOf(CHILD));
+    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', 0.95], effort: ['high', 0.95] }) });
+    f.engine.currentEffort = async () => 'high';
+    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    await router.agentSpawn(f.engine, spawn(), spawnNext(() => ({ model: 'claude-opus-5-5', agentId: 'a1' })).next);
+    const record = f.logs.find((l) => l['event'] === 'spawn');
+    expect(record).toMatchObject({ reasons: { effort: 'same_value' }, selection: expect.objectContaining({ effort_policy: 'ordered_move' }), answers: expect.objectContaining({ control: expect.anything(), model: expect.anything() }) });
+    // The child runs at the effort the pair kept, so its first step is left as it is.
+    const kept = childStep({ effort: 'high' });
+    const n = streamNext<TurnStepEvent>();
+    await drain(router.turnStep(f.engine, kept, n.next));
+    expect(n.calls).toEqual([kept]);
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'child', agent_id: 'a1', patch: null, reason: 'same_value' }));
+    expect(f.logs.some((l) => l['event'] === 'child' && l['reason'] === 'answer_invalid')).toBe(false);
+  });
+
   it('asks only about effort when the model cannot move, and keeps an effort pin', async () => {
     const router = createRouter(configOf({ ...CHILD, routeSubagentModel: false }));
     const f = fakeEngine({ respond: answering({ ...CLEAR, effort: ['medium', 0.95] }) });
@@ -1401,6 +1418,47 @@ describe('root effort and the prompt cache', () => {
     await turn('warm'); wanted = 'low'; f.clock.ms += 55 * 60_000 + 1;
     expect(await turn('expired-guard')).toBe('low');
     expect(f.sent.at(-1)?.state).toMatchObject({ execution: { cache: { ttl_ms: null } } });
+  });
+  it('drops the cache floor when a request carries fewer messages and no session.compact announced it', async () => {
+    const router = createRouter(configOf(EFFORT_ONLY));
+    let pick: [string, number] = ['medium', 0.95];
+    const f = fakeEngine({ respond: (req) => answering({ ...CLEAR, effort: pick })(req) });
+    const n = streamNext<TurnStepEvent>(undefined, { input_tokens: 2, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 4000 });
+    const turn = async (id: string, effort: [string, number], messageCount: number) => {
+      pick = effort; f.clock.ms += 60_000;
+      router.turnStart({ turnId: id, text: TEXT });
+      await drain(router.turnStep(f.engine, step({ turnId: id, effort: 'xhigh', messageCount }), n.next));
+      router.turnComplete({ turnId: id });
+      return n.calls.at(-1)?.effort;
+    };
+    expect(await turn('t1', ['medium', 0.95], 40)).toBe('medium');
+    expect(await turn('t2', ['low', 0.95], 42)).toBe('medium');
+    expect(await turn('compacted', ['low', 0.95], 6)).toBe('low');
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'context_reset', scope: 'root', turn: 'compacted', messages_before: 42, messages_after: 6, announced: false }));
+    router.contextChanged();
+    expect(await turn('announced', ['low', 0.95], 3)).toBe('low');
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'context_reset', turn: 'announced', announced: true }));
+  });
+  it('routes a background task notification as the last request and never sends or remembers the notice', async () => {
+    const router = createRouter(configOf(EFFORT_ONLY));
+    const f = fakeEngine({ respond: (req) => answering({ ...CLEAR, effort: ['medium', 0.95] })(req) });
+    const NOTICE = '<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n<summary>Background agent finished</summary>\n</task-notification>';
+    const turn = async (id: string, text: string) => {
+      router.turnStart({ turnId: id, text });
+      await drain(router.turnStep(f.engine, step({ turnId: id, effort: 'xhigh' }), streamNext<TurnStepEvent>().next));
+      router.turnComplete({ turnId: id });
+    };
+    await turn('notice-first', NOTICE);
+    expect(f.sent).toHaveLength(0);
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root', turn: 'notice-first', skipped: 'task_notification_without_request' }));
+    await turn('human', TEXT);
+    await turn('notice', NOTICE);
+    expect(f.sent).toHaveLength(2);
+    expect(f.sent.at(-1)?.state).toMatchObject({ task: { text: TEXT, recent_requests: [] } });
+    expect(JSON.stringify(f.sent)).not.toContain('task-notification');
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root', turn: 'notice', turn_source: 'task_notification' }));
+    await turn('next', 'Now add a test for parseRecord.');
+    expect(f.sent.at(-1)?.state).toMatchObject({ task: { text: 'Now add a test for parseRecord.', recent_requests: [{ text: TEXT }] } });
   });
   it('lowers effort only on a cold cache, holds it on a warm one, and always lets it rise', async () => {
     const router = createRouter(configOf(EFFORT_ONLY));

@@ -66,6 +66,8 @@ export interface TurnStepEvent {
   model: string;
   effort?: SymbolicEffort | number;
   agentId?: string;
+  /** How many messages this loop's request carries; a host compaction shortens it. */
+  messageCount?: number;
 }
 export interface TurnStepOutcome {
   usage: { model: string } | null;
@@ -127,6 +129,8 @@ const EXPLORE_FAMILIES = new Set(['haiku', 'sonnet', 'opus']);
 const GATE_ROUTE_NOTE = /\[Jev Gate route note\] Tier: (?:fast|standard|deep|frontier)\./;
 const GATE_AGENT_PREFIX = 'jev-gate:';
 const MAX_TURNS = 16;
+/** The whole machine envelope Claude Code submits when a background task ends (src/claude-background.ts reads the same). */
+const TASK_NOTIFICATION = /^\s*<task-notification>[\s\S]*<\/task-notification>\s*$/;
 const MAX_OFFERS = 64;
 /** Subagents whose spawn answer is kept for their steps. */
 const MAX_CHILDREN = 64;
@@ -350,6 +354,8 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
   let lastReply: string | null = null;
   let currentRootTurn: string | null = null;
   const recentRequests: string[] = [];
+  /** Turns a host task notification started; never a person's request. */
+  const notices = bounded<string, true>(MAX_TURNS);
   /** The last root request that got a response: when, on which model, and at which effort. */
   let lastRoot: { at: number; model: string; effort: SymbolicEffort | null; cache: RoutingCache } | null = null;
   /** The effort the last root turn arrived with, before any patch; null before the session's first turn. */
@@ -357,6 +363,14 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
   const preservedEffortModels = new Set<string>();
   const missedEffortModels = new Set<string>();
   let cacheEpoch = 0;
+  /**
+   * The message count each loop last sent. Claude Code 2.1.299+ passes session.compact over for a plugin a person
+   * installs where an organization manages it, so a compaction can arrive with no event: a shorter request than the
+   * loop's last is the same reset. A compaction the Mod saw is announced, so the record tells the two apart.
+   * ponytail: a rewind also shortens the list and is read as a reset, which only drops the cache floor early.
+   */
+  const messageCounts = bounded<string, number>(MAX_CHILDREN + 1);
+  const announced = new Set<string>();
   let lastIncoming: { effort: TurnStepEvent['effort'] } | null = null;
   const turnTexts = bounded<string, string>(MAX_TURNS);
   const turns = bounded<string, TurnRouting>(MAX_TURNS, (t) => t.controller.abort());
@@ -485,6 +499,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       turns.delete(turnId);
     }
     turnTexts.delete(turnId);
+    notices.delete(turnId);
   };
 
   const aliasesOf = (engine: RouterEngine): Promise<ModelAliases> => engine.modelAliases ? engine.modelAliases().catch(() => ({})) : Promise.resolve({ haiku: currentClaudeModel('haiku'), sonnet: currentClaudeModel('sonnet'), opus: currentClaudeModel('opus') });
@@ -537,7 +552,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       const cached = cachePatch(t.baseline, preserves ? null : t.warmEffort, chosen as RoutingPatch);
       if (!live.aborted && !t.stopped) t.patch = cached.patch;
       if (!Object.keys(t.patch).length) t.stopped = true;
-      log(engine, { event: 'root', scope: 'root', boundary: 'host_hook', turn: turnId, context_chars: context?.length ?? 0, from: { model: t.baseline.model, effort: t.baseline.effort ?? null },
+      log(engine, { event: 'root', scope: 'root', boundary: 'host_hook', turn: turnId, ...(notices.has(turnId) ? { turn_source: 'task_notification' } : {}), context_chars: context?.length ?? 0, from: { model: t.baseline.model, effort: t.baseline.effort ?? null },
         assessment: result.ok ? 'ok' : result.reason, sent: result.ok || result.sent, duration_ms: Math.max(0, engine.now() - started), usage: loggable(result.usage), jev_model: result.ok ? JEV_MODEL : null,
         discovered_count: MODEL_FACTS.length, eligible_count: candidates.length, offered_count: offer.candidates.length, catalog_complete: false,
         model_asked: offer.modelAsked, effort_asked: offer.effortQuestions.size > 0, allow_fable: allowFable,
@@ -638,7 +653,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     const text = turnTexts.get(e.turnId);
     if (text === undefined || text.trim() === '') {
       t.stopped = true;
-      log(engine, { event: 'root', turn: e.turnId, skipped: 'no_task_text' });
+      log(engine, { event: 'root', turn: e.turnId, skipped: notices.has(e.turnId) ? 'task_notification_without_request' : 'no_task_text' });
       return null;
     }
     const assessmentLive = linked(signal, t.controller.signal);
@@ -761,20 +776,27 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     if (c.baseline === null) {
       c.baseline = { model: e.model, ...(e.effort !== undefined ? { effort: e.effort } : {}) };
       c.turnId = e.turnId;
+      // The spawn's own pair answer decides the child's effort, keep included; the legacy answers are empty then.
+      let pairReason: string | null = null;
       if (c.pair) {
         const selected = selectPair({ ...c.pair.offer, baseline: { model: e.model, effort: e.effort ?? null }, modelAsked: false }, c.pair.raw);
-        if (selected.patch.effortEdit) c.allocation = selected.patch.effortEdit;
+        c.allocation = selected.patch.effortEdit ?? { kind: 'keep' };
+        pairReason = selected.reasons.effort;
       }
       if (c.allocation) {
         const edit = c.allocation;
-        if (edit.kind === 'keep') { if (!c.stepContract || !engine.childContext) c.stopped = true; return null; }
+        if (edit.kind === 'keep') {
+          if (pairReason) log(engine, { event: 'child', agent_id: id, from: { model: e.model, effort: e.effort ?? null }, patch: null, reason: pairReason });
+          if (!c.stepContract || !engine.childContext) c.stopped = true;
+          return null;
+        }
         if (edit.kind === 'set' && !factsOf(e.model)?.unconditionalEffort.includes(edit.value as SymbolicEffort) || edit.kind === 'omit' && (factsOf(e.model)?.unconditionalEffort.length !== 0 || factsOf(e.model)?.conditionalEffort.length !== 0)) { c.stopped = true; return null; }
         c.effort = edit.kind === 'set' && isSymbolicEffort(edit.value) ? edit.value : null;
       }
       const efforts = c.allocation ? null : offerableEfforts(c.baseline);
       const decision = efforts ? choosePatch(c.answers, c.baseline, { tiers: null, efforts }, policy('spawn', undefined)) : null;
       if (!c.allocation) c.effort = decision?.patch.effort ?? null;
-      log(engine, { event: 'child', agent_id: id, from: { model: e.model, effort: e.effort ?? null }, patch: c.effort, reason: decision ? decision.effort : 'effort_unknown' });
+      log(engine, { event: 'child', agent_id: id, from: { model: e.model, effort: e.effort ?? null }, patch: c.effort, reason: pairReason ?? (decision ? decision.effort : 'effort_unknown') });
       if (c.effort === null && c.allocation?.kind !== 'omit') {
         if (!c.stepContract || !engine.childContext) c.stopped = true;
         return null;
@@ -851,12 +873,28 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     }
   };
 
+  const contextReset = (agentId?: string): void => {
+    if (agentId) { const c = children.get(agentId); if (c) { c.controller.abort(); c.controller = new AbortController(); delete c.cache; delete c.step; delete c.cacheEffort; c.cachePreserved = false; } }
+    else { cacheEpoch++; rootCaches.clear(); lastRoot = null; for (const t of turns.values()) { t.stopped = true; t.controller.abort(); } }
+  };
+  const noteMessages = (engine: RouterEngine, e: TurnStepEvent): void => {
+    if (typeof e.messageCount !== 'number') return;
+    const key = e.agentId ?? '';
+    const last = messageCounts.get(key);
+    messageCounts.put(key, e.messageCount);
+    if (last === undefined || e.messageCount >= last) return;
+    const seen = announced.delete(key);
+    log(engine, { event: 'context_reset', scope: e.agentId === undefined ? 'root' : 'child', agent_id: e.agentId ?? null, turn: e.turnId, index: e.index, messages_before: last, messages_after: e.messageCount, announced: seen });
+    if (!seen) contextReset(e.agentId);
+  };
+
   async function* turnStep<E extends TurnStepEvent, C, R extends TurnStepOutcome | void>(
     engine: RouterEngine,
     e: E,
     next: StreamNextLike<E, C, R>,
   ): AsyncGenerator<C, R | void> {
     const startedAt = engine.now();
+    noteMessages(engine, e);
     const own = session.signal;
     const known = e.agentId === undefined ? turns.get(e.turnId) : undefined;
     const deadline = known?.pending ? known.deadline : startedAt + config.timeoutMs;
@@ -1102,7 +1140,8 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     if (target && (nowPins.subagentModel || nowPins.aliasRemap && !engine.modelAliases || !claudeTargetAllowed(target, await within(frontierFor(engine), live)) || !claudeModelAllowed(target, nowAvailable, aliases))) { log(engine, { event: 'spawn_stop', tool_use_id: e.tool_use_id, requested: target, reason: nowPins.subagentModel ? 'subagent_model_pinned' : nowPins.aliasRemap && !engine.modelAliases ? 'alias_remapped' : 'target_not_allowed' }); return null; }
     log(engine, { event: 'spawn', scope: 'subagent', boundary: 'host_hook', tool_use_id: e.tool_use_id, type: typeLabel(e), from: baselineModel, assessment: 'ok', sent: true, jev_model: JEV_MODEL,
       usage: loggable(result.usage), explicit: explicit !== null, patch: selected.patch, reasons: selected.reasons, model_asked: offer.modelAsked, effort_asked: offer.effortQuestions.size > 0,
-      discovered_count: MODEL_FACTS.length, eligible_count: candidates.length, offered_count: offer.candidates.length, catalog_complete: false, allow_fable: allowFable });
+      discovered_count: MODEL_FACTS.length, eligible_count: candidates.length, offered_count: offer.candidates.length, catalog_complete: false, allow_fable: allowFable,
+      selection: selected.diagnostics, answers: pairReceipt(offer, result.answers) });
     return { target, answers: {}, pair: { offer, raw: result.answers } };
   };
 
@@ -1221,7 +1260,13 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     spawnEnabled,
     stepEnabled,
     turnStart: <E extends TurnStartEvent>(e: E): void => {
-      if (rootEnabled) { if (currentRootTurn !== null && currentRootTurn !== e.turnId) retire(currentRootTurn); currentRootTurn = e.turnId; turnTexts.put(e.turnId, e.text); recentRequests.push(e.text); if (recentRequests.length > 4) recentRequests.shift(); }
+      if (!rootEnabled) return;
+      if (currentRootTurn !== null && currentRootTurn !== e.turnId) retire(currentRootTurn);
+      currentRootTurn = e.turnId;
+      // A background completion notice continues the person's last request; it is routed as that request and is never
+      // sent or remembered as one.
+      if (TASK_NOTIFICATION.test(e.text)) { notices.put(e.turnId, true); const request = recentRequests.at(-1); if (request !== undefined) turnTexts.put(e.turnId, request); return; }
+      turnTexts.put(e.turnId, e.text); recentRequests.push(e.text); if (recentRequests.length > 4) recentRequests.shift();
     },
     turnStep,
     /** A child's completion carries its agentId and never retires the root's turn. */
@@ -1254,7 +1299,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       children.clear();
       nativeChildren.clear();
       childHistoryFull = false;
-      lastReply = null; currentRootTurn = null; recentRequests.length = 0;
+      lastReply = null; currentRootTurn = null; recentRequests.length = 0; notices.clear(); messageCounts.clear(); announced.clear();
       lastRoot = null; rootCaches.clear(); preservedEffortModels.clear(); missedEffortModels.clear(); cacheEpoch++;
       lastIncoming = null;
       keyWait = null;
@@ -1262,10 +1307,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       pinReads.clear();
       diagnosed = false;
     },
-    contextChanged: (agentId?: string): void => {
-      if (agentId) { const c = children.get(agentId); if (c) { c.controller.abort(); c.controller = new AbortController(); delete c.cache; delete c.step; delete c.cacheEffort; c.cachePreserved = false; } }
-      else { cacheEpoch++; rootCaches.clear(); lastRoot = null; for (const t of turns.values()) { t.stopped = true; t.controller.abort(); } }
-    },
+    contextChanged: (agentId?: string): void => { announced.add(agentId ?? ''); contextReset(agentId); },
     inFlight: client.inFlight,
   };
 };
