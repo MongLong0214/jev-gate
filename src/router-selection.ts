@@ -1,4 +1,4 @@
-import { validateChoice, validateScore } from './router-answers.ts';
+import { choiceDistribution, validateChoice, validateScore } from './router-answers.ts';
 export type Question = { type: 'choice'; instructions: string; criteria: Record<string, string> } | { type: 'score'; instructions: string; criteria: readonly string[] };
 
 /** A host's observed candidates. Vendor facts and account availability stay in the adapters. */
@@ -92,6 +92,28 @@ export const offerPairs = (args: {
   return { ...args, ...(baselineCandidate ? { baselineCandidate } : {}), candidates: offered, questions, effortQuestions, modelAsked: alternatives.length > 0, effortEnabled: args.effort };
 };
 
+/**
+ * Documented roles order models the way effort levels are ordered: the cheapest role whose cumulative lower mass
+ * reaches the downgrade floor, else the highest role whose upper tail reaches the upgrade floor. A split vote across
+ * cheaper roles (Haiku .41 + Sonnet .34 against keep .23) therefore moves to Sonnet instead of holding. Unknown
+ * roles, or a crossing role held by more than one version, fall back to the nominal choice.
+ */
+const orderedModel = (offer: PairOffer, base: RouteCandidate | undefined, p: Record<string, number>): { id: string; mass: number } | null => {
+  const from = base?.rank;
+  if (from === undefined || offer.candidates.some(c => c.rank === undefined)) return null;
+  const ranks = [...new Set(offer.candidates.map(c => c.rank!))].sort((a, b) => a - b);
+  const walk = (rs: number[], floor: number) => {
+    let mass = 0;
+    for (const r of rs) {
+      const at = offer.candidates.filter(c => c.rank === r);
+      mass += at.reduce((sum, c) => sum + (p[c.id] ?? 0), 0);
+      if (mass + 1e-9 >= floor) return at.length === 1 ? { id: at[0]!.id, mass } : null;
+    }
+    return null;
+  };
+  return walk(ranks.filter(r => r < from), offer.downgrade) ?? walk(ranks.filter(r => r > from).reverse(), offer.upgrade);
+};
+
 /** Holding a model reuses ONLY that model's conditional effort answer from the same batch. */
 export const keepModelPair = (offer: PairOffer, raw: unknown): ReturnType<typeof selectPair> => selectPair({ ...offer, modelAsked: false }, raw);
 
@@ -114,18 +136,23 @@ export const selectPair = (offer: PairOffer, raw: unknown): { patch: PairPatch; 
   if (offer.modelAsked && control.choice !== 'model_lock') {
     const q = offer.questions['model'];
     const answer = q && q.type === 'choice' ? validateChoice(answers['model'], Object.keys(q.criteria)) : null;
-    if (answer && answer.choice !== KEEP && answer.choice !== ABSTAIN) {
-      const target = offer.candidates.find(c => c.id === answer.choice);
-      const base = offer.baselineCandidate ?? offer.candidates.find(c => c.id === model);
+    const base = offer.baselineCandidate ?? offer.candidates.find(c => c.id === model);
+    const mass = answer?.probabilities ?? (q && q.type === 'choice' ? choiceDistribution(answers['model'], Object.keys(q.criteria)) : null);
+    const ordered = mass ? orderedModel(offer, base, mass) : null;
+    const pick = ordered?.id ?? answer?.choice;
+    if (pick && pick !== KEEP && pick !== ABSTAIN) {
+      const target = offer.candidates.find(c => c.id === pick);
+      const probability = ordered?.mass ?? answer?.probabilities[pick] ?? 0;
       const down = target?.rank !== undefined && base?.rank !== undefined && target.rank < base.rank;
       const threshold = target?.rank !== undefined && base?.rank !== undefined ? down ? offer.downgrade : offer.upgrade : floor;
       diagnostics.direction = target?.rank === undefined || base?.rank === undefined ? 'unknown' : down ? 'downgrade' : target.rank > base.rank ? 'upgrade' : 'same_role';
-      diagnostics.threshold = threshold; diagnostics.probability = answer.probabilities[answer.choice] ?? null;
+      diagnostics.threshold = threshold; diagnostics.probability = probability;
       const risk = validateChoice(answers['action_risk'], ['ordinary', 'consequential', 'unclear']);
-      if ((answer.probabilities[answer.choice] ?? 0) < threshold || (control.probabilities[control.choice] ?? 0) < threshold) reasons.model = 'low_confidence';
+      if (probability < threshold || (control.probabilities[control.choice] ?? 0) < threshold) reasons.model = 'low_confidence';
       else if (down && (!risk || risk.choice !== 'ordinary' || (risk.probabilities['ordinary'] ?? 0) < offer.downgrade)) reasons.model = 'risk_blocks_downgrade';
       else if (target) { model = target.id; reasons.model = 'selected'; }
     } else if (answer) reasons.model = answer.choice === KEEP ? 'same_value' : 'low_confidence';
+    else if (mass) reasons.model = 'low_confidence';
   } else if (control.choice === 'model_lock') reasons.model = 'control_lock';
   const target = offer.candidates.find(c => c.id === model);
   if (!target) { reasons.model = 'candidate_unavailable'; return native(); }

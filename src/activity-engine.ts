@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
 import { loadActivity } from './activity.js';
 import type { DashboardSources } from './dashboard.js';
 import { diffFrame, frameOperations, type FrameMemo, type FrameSnapshot } from './dashboard-patch.js';
-import { TraceDirectoryReader } from './explain.js';
+import { TraceDirectoryReader, type TraceRead } from './explain.js';
+import { livenessPath } from './liveness.js';
 import { operationsStableUntil, type OperationsView } from './operations.js';
 
 /** One rebuild. `key` advances only when content changed; `patch` turns the frame `base` into it. The whole frame is built
@@ -21,15 +22,26 @@ export const activityHandler = (sources: DashboardSources) => {
   const epoch = randomUUID().slice(0, 8);
   let sequence = 0, memo: FrameMemo | null = null, current: FrameSnapshot | null = null, whole: { key: string; json: string } | null = null;
   let operations: OperationsView | null = null;
+  let last: { loaded: LoadedActivity; reads: TraceRead[]; liveness: string } | null = null;
+  // The liveness ring is read on every rebuild; it is rewritten by rename, so a new inode or mtime marks a change.
+  const livenessFile = sources.host === 'codex' ? null : livenessPath(sources.env);
+  const livenessStamp = (): string => {
+    try { const stat = livenessFile ? statSync(livenessFile, { throwIfNoEntry: false }) : undefined; return stat ? `${stat.ino}:${stat.mtimeMs}:${stat.size}` : ''; } catch { return ''; }
+  };
   return {
     async load(): Promise<LoadedActivity> {
       const started = performance.now();
       for (const dir of dirs) await traceReader.prepare(dir);
+      // No record changed and no age or window edge passed: a rebuild would draw the same frame, so it is skipped.
+      const reads = dirs.map(dir => traceReader.read(dir)), liveness = livenessStamp();
+      if (last && Date.now() < last.loaded.until && liveness === last.liveness && reads.every((read, i) => read === last!.reads[i])) return { ...last.loaded, base: null, patch: null };
       const activity = loadActivity({ ...sources, traceReader, now: new Date(), feed: false });
       const { events: _events, live: _live, ...rest } = activity, shown = { ...rest, operations: frameOperations(activity.operations) };
       const base = memo?.key ?? null, diff = diffFrame(memo, shown, () => `${epoch}.${++sequence}`);
       memo = diff.memo; current = shown; whole = null; operations = activity.operations;
-      return { key: memo.key, base: diff.patch ? base : null, patch: diff.patch, until: operationsStableUntil(), ms: performance.now() - started };
+      const loaded = { key: memo.key, base: diff.patch ? base : null, patch: diff.patch, until: operationsStableUntil(), ms: performance.now() - started };
+      last = { loaded, reads, liveness };
+      return loaded;
     },
     full(): { key: string; json: string } | null {
       if (!current || !memo) return null;

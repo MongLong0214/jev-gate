@@ -16,7 +16,7 @@ import { ensureDashboard, serveAutomaticDashboard } from './dashboard-launch.js'
 import { dashboardPreferenceCommand } from './dashboard-settings.js';
 import { recordingCommand, recordingStatus } from './recording.js';
 import { explainDir } from './explain.js';
-import { HOST_WINDOW_MAX, readHostCompactWindow, readHostWorktreeBaseRef, readSettingsEnvVar, STANDARD_CONTEXT_WINDOW } from './host-window.js';
+import { HOST_WINDOW_MAX, readHostCompactWindow, readHostWorktreeBaseRef, readManagedSetting, readSettingsEnvVar, STANDARD_CONTEXT_WINDOW } from './host-window.js';
 import { jobsDir } from './job.js';
 import { LIVENESS_WINDOW, livenessPath, readLiveness } from './liveness.js';
 import { OWNED_AGENTS, type Mode, type Tier } from './types.js';
@@ -277,6 +277,28 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
     return detected;
   };
 
+  /**
+   * Claude Code 2.1.299+ seats its built-in plugin security default outermost on a machine with managed settings and
+   * for Team and Enterprise organizations. It passes session.compact over for a plugin a person installs, so Compact
+   * never runs there unless an administrator makes jev-gate a managed plugin (managed `enabledPlugins`).
+   */
+  const checkCompactSeat = (hostVersion: string | null): void => {
+    const [major = 0, minor = 0, patch = 0] = (hostVersion ?? '').split('.').map(Number);
+    if (major * 1e6 + minor * 1e3 + patch < 2_001_299) return;
+    const json = (path: string): Record<string, unknown> | null => { try { const v: unknown = JSON.parse(readFileSync(path, 'utf8')); return isRecord(v) ? v : null; } catch { return null; } };
+    const configDir = claudeConfigDir(env);
+    const account = json(env['CLAUDE_CONFIG_DIR'] ? join(configDir, '.claude.json') : join(env['HOME'] || homedir(), '.claude.json'))?.['oauthAccount'];
+    const organization = isRecord(account) ? account['organizationType'] : null;
+    const remote = json(join(configDir, 'remote-settings.json'));
+    const ownsJevGate = (settings: Record<string, unknown>): true | null =>
+      isRecord(settings['enabledPlugins']) && Object.entries(settings['enabledPlugins']).some(([id, on]) => id.startsWith('jev-gate@') && on === true) ? true : null;
+    const managedMachine = readManagedSetting(() => true) !== null;
+    const seat = organization === 'claude_team' || organization === 'claude_enterprise' ? `a ${organization === 'claude_team' ? 'Team' : 'Enterprise'} organization` : managedMachine || remote !== null && Object.keys(remote).length > 0 ? 'a machine with managed settings' : null;
+    if (seat === null) return;
+    if (readManagedSetting(ownsJevGate) !== null || remote !== null && ownsJevGate(remote)) say('ok', `Compact: jev-gate is a managed plugin, so Claude Code ${hostVersion}'s built-in security default lets it answer compaction`);
+    else say('warn', `Compact cannot run: Claude Code ${hostVersion} seats its built-in plugin security default for ${seat}, and it passes compaction over for a plugin a person installs. Gate and Router still run; Router reads a compaction from the shorter request instead. An administrator can let Compact run by enabling jev-gate@<marketplace> in managed settings ("enabledPlugins"); see mods/compact/README.md`);
+  };
+
   const checkEnv = (mode: Mode | null): void => {
     const conflicts = AUTH_CONFLICT_ENV.filter((k) => env[k]);
     say(conflicts.length ? 'warn' : 'ok', conflicts.length ? `auth-related env set: ${conflicts.join(', ')} (may replace subscription OAuth; jev-gate does not change it)` : 'no API-key/gateway/cloud env overrides detected');
@@ -367,6 +389,7 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
   if (loaded.ok) checkModelAuthority(loaded.config.models, installedModels);
   report.group('host');
   const hostVersion = checkClaude();
+  inspect('compact seat', () => checkCompactSeat(hostVersion));
   const inventory = await claudeModelInventory(env, cwd);
   const configured = loaded.ok ? OWNED_AGENT_PROFILES.map(profile => ({ model: loaded.config.models[profile.tier], effort: profile.effort as SymbolicEffort | null })) : [];
   for (const name of ['FAST', 'STANDARD', 'DEEP', 'FRONTIER']) { const model = env[`CLAUDE_PLUGIN_OPTION_ROUTER${name}MODEL`]; if (model?.trim()) configured.push({ model, effort: null }); }

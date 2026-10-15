@@ -106,12 +106,12 @@ export const openTraceDir = (dir: string, env: Env = process.env): { ok: true; w
 };
 
 const DAY_MS = 86_400_000;
-export const TRACE_RETENTION_MS = 7 * DAY_MS;
+export const TRACE_RETENTION_MS = 3 * DAY_MS;
 /** Only names this writer and the mods produce: `<phase>-<uuid>.json` and an abandoned `.<phase>-<uuid>.tmp`. */
 const OWN_TRACE = /^(?:[a-z][a-z_]*-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json|\.[a-z][a-z_]*-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.tmp)$/;
 
 /**
- * Deletes this tool's trace files older than 7 days, directly in `dir`. At most once a day per directory across
+ * Deletes this tool's trace files older than 3 days, directly in `dir`. At most once a day per directory across
  * processes: the `.retention` stamp's mtime is the last run. Records are written once, so mtime is their write time;
  * the file names carry no time. Symlinks, subdirectories and other names are never touched. Never throws.
  */

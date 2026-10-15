@@ -20,6 +20,23 @@ import { releaseChecker, type ReleaseInfo } from './release-info.js';
 
 const PAGE = DASHBOARD_PAGE;
 
+/** Reconnect leases kept at once. A stream opened without `?viewer=` gets a new id each time, so without a bound every
+ * reconnect left one lease behind until a browser launch check ran, and without `openBrowser` that check never ran. */
+export const VIEWER_LEASES = 64;
+/** Drops expired reconnect leases, and the oldest ones beyond `VIEWER_LEASES`. Connected viewers (Infinity) stay. A lease
+ * is set by deleting and re-adding its id, so map order is lease order. */
+export const pruneViewers = (viewers: Map<string, number>, now: number): void => {
+  let leases = 0;
+  for (const expires of viewers.values()) if (Number.isFinite(expires)) leases++;
+  for (const [id, expires] of viewers) {
+    if (Number.isFinite(expires) && (expires <= now || leases > VIEWER_LEASES)) { viewers.delete(id); leases--; }
+  }
+};
+/** The pause after a rebuild before records that arrived meanwhile start the next one. Three times the last rebuild keeps
+ * the activity thread at most a quarter busy under a continuous stream; the one-second floor lets a burst of records share
+ * one rebuild; the four-second ceiling keeps a new record on screen within about five seconds even after a slow cold read. */
+export const rebuildWait = (lastMs: number): number => Math.min(4000, Math.max(1000, 3 * lastMs));
+
 export interface DashboardSources {
   host?: Host;
   traceDir: string | null;
@@ -102,7 +119,7 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
       if (!runtime.openBrowser || disposed || !dashboardStatus(sources.env).enabled) return;
       if (subscribers.size) return;
       const now = Date.now();
-      for (const [id, expires] of viewers) if (expires <= now) viewers.delete(id);
+      pruneViewers(viewers, now);
       if (viewers.size) {
         const expires = Math.min(...viewers.values());
         if (Number.isFinite(expires)) scheduleOpen(Math.max(1, expires - now));
@@ -175,9 +192,8 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
       }
     };
     /** Rebuilds run on the activity thread, one at a time, and every caller shares the one in flight. A rebuild after new
-     * records waits as long as the previous one took (at most a second, since a cold first read is slower than the rest),
-     * so a stream of records cannot keep that thread busy without pause. */
-    const wait = (): number => Math.max(100, Math.min(1000, loaded?.ms ?? 0));
+     * records waits `rebuildWait` after the previous one ended, so a stream of records cannot keep that thread busy. */
+    const wait = (): number => rebuildWait(loaded?.ms ?? 0);
     const refresh = (): Promise<void> => {
       syncWatchers();
       const elapsed = Date.now() - scannedAt;
@@ -257,7 +273,11 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
       if (req.method === 'GET' && path === '/api/snapshot') {
         // An open stream keeps the frame current, so answer with it at once; its `at` tells when it was built. Waiting for
         // the rebuild in flight held the answer for up to a whole rebuild while records kept arriving (#215).
-        if (!loaded || !subscribers.size) await refresh();
+        if (!loaded || !subscribers.size) {
+          await refresh();
+          // Without a viewer nothing else catches up on new records, so the request waits out the rebuild pause once.
+          if (changed && loaded) { await new Promise(resolve => setTimeout(resolve, Math.max(0, scannedAt + wait() - Date.now()))); await refresh(); }
+        }
         await ensureWhole();
         const body = wholeFrame(extras());
         res.writeHead(body ? 200 : 503, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
@@ -275,7 +295,7 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
       if (req.method === 'GET' && path === '/api/live') {
         const identity = new URL(req.url!, `http://${req.headers.host}`).searchParams.get('viewer');
         const viewer = identity && /^[a-f0-9-]{36}$/.test(identity) ? identity : `legacy-${++viewerSequence}`;
-        viewers.set(viewer, Infinity); openingUntil = 0; loadingUntil = 0; clearTimeout(openTimer);
+        viewers.delete(viewer); viewers.set(viewer, Infinity); pruneViewers(viewers, Date.now()); openingUntil = 0; loadingUntil = 0; clearTimeout(openTimer);
         res.writeHead(200, {
           'content-type': 'text/event-stream; charset=utf-8',
           'cache-control': 'no-store',
@@ -315,8 +335,10 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
           if (closed) return;
           closed = true;
           subscribers.delete(publish);
-          if (viewers.has(viewer)) viewers.set(viewer, Date.now() + 15_000);
-          scheduleOpen(viewers.has(viewer) ? 15_000 : 1000);
+          const leased = viewers.delete(viewer);
+          if (leased) viewers.set(viewer, Date.now() + 15_000);
+          pruneViewers(viewers, Date.now());
+          scheduleOpen(leased ? 15_000 : 1000);
         };
         req.on('close', stop);
         res.on('error', stop);

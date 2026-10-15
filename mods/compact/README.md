@@ -39,6 +39,22 @@ On by default (v0.6.3), in `active` mode; off registers no hook at all. Options 
 | `compactJevTimeoutMs` | `1000` | Selection deadline in milliseconds, 50–3500. |
 | `compactManual` | `true` | Also answer `/compact` typed without instructions. A command with explicit instructions stays native. |
 
+**Organizations and managed machines (Claude Code 2.1.299+).** The host seats its built-in plugin security default
+(`cc-plugin-sec-default@builtin`) outermost for Team and Enterprise organizations and on any machine with managed
+settings. It passes `session.compact` over for a plugin a person installs, so there Compact is never asked and the
+engine compacts natively; Gate and Router are unaffected, and Router reads a compaction from the shorter next request.
+Doctor warns about this. To let Compact run, an administrator makes jev-gate a managed plugin in managed settings:
+
+```json
+{
+  "extraKnownMarketplaces": { "jev-gate": { "source": { "source": "github", "repo": "MongLong0214/jev-gate" } } },
+  "enabledPlugins": { "jev-gate@jev-gate": true }
+}
+```
+
+Do not set `prependPlugins` without listing `cc-plugin-sec-default@builtin` in it: that removes the organization's own
+protection, not only jev-gate's restriction.
+
 An option it cannot use turns it off. Every compaction it is asked about records
 metadata in the local trace: why it deferred to the engine, or the sizes, the fallback reason, and in shadow the
 engine's time and usage. A failure of its own (`error`) leaves that compaction to the engine once; the engine's own

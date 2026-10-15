@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { loadActivity, type ActivitySnapshot } from '../src/activity.js';
 import { startDashboard, readVersions } from '../src/dashboard.js';
 import { DASHBOARD_PAGE } from '../src/dashboard-page.js';
+import { TraceDirectoryReader } from '../src/explain.js';
 import { liveFrames } from './live-frames.js';
 
 const dirs: string[] = [];
@@ -53,6 +54,27 @@ describe('loadActivity', () => {
     const s = loadActivity({ traceDir: trace, env: { HOME: make() } });
     const prepared = s.operations.runs.flatMap(r => r.steps).filter(t => t.title === 'Router · 요청 전달 준비');
     expect(prepared.map(t => t.state).sort()).toEqual(['done', 'unconfirmed']);
+  });
+  it('with a reader, equals a fresh read as trace files arrive, change and go', () => {
+    const trace = make(), env = { HOME: make() }, now = new Date('2026-10-07T06:00:00.000Z'), reader = new TraceDirectoryReader();
+    const record = (i: number, extra: Record<string, unknown> = {}) => {
+      write(trace, `r${i}.json`, { phase: i % 2 ? 'mod_router' : 'admission_result', session_id: 's', event: 'root', turn: `t${i}`, sent: true, assessment: 'ok', attempted: true,
+        decision: { shape: 'direct' }, written_at: new Date(Date.parse('2026-10-07T05:00:00.000Z') + i * 1000).toISOString(), ...extra });
+      reader.invalidate(trace, `r${i}.json`);
+    };
+    const same = () => {
+      const cached = loadActivity({ traceDir: trace, env, now, traceReader: reader, feed: false });
+      expect(cached).toEqual(loadActivity({ traceDir: trace, env, now, feed: false }));
+      return cached;
+    };
+    for (let i = 0; i < 4; i++) record(i);
+    expect(same().jevCalls).toBe(4);
+    record(4);
+    expect(same().jevCalls).toBe(5);
+    record(3, { assessment: 'payment_required' });
+    expect(same().credit.exhausted).toBe(true);
+    rmSync(join(trace, 'r0.json')); reader.invalidate(trace, 'r0.json');
+    expect(same().jevCalls).toBe(4);
   });
   it('shows denied dispatches and worktree lifecycle as policy and local events', () => {
     const trace = make();

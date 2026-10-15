@@ -473,7 +473,7 @@ it('retains every active execution beyond the recent completed-turn window', () 
   expect(view.runs).toHaveLength(201);expect(view.runs.flatMap(r=>r.steps).some(s=>s.state==='active')).toBe(true);
 });
 
-it('rebuilds only the sessions that changed or are still recent, and equals one pass over the whole recording (#215)', () => {
+it('rebuilds only the sessions that changed or still wait on their age, and equals one pass over the whole recording (#215)', () => {
   const old = '2026-09-29T05:00:00.000Z', avail = { trace: true };
   const settled: Record<string, unknown>[] = [
     { ...base, written_at: old, phase: 'admission_intent', request_id: 'a1' },
@@ -492,9 +492,26 @@ it('rebuilds only the sessions that changed or are still recent, and equals one 
     return view;
   });
   expect(first!.runs[0]?.state).toBe('active'); expect(second!.runs[0]?.state).toBe('done');
-  // Only the recording session is rebuilt; then s1 changes, and the session-less pool and s2 stay as they were.
+  // Only the recording execution is rebuilt; then s1's Gate turn changes, and its Router turn, the answered session, the
+  // session-less rows and s2 stay as they were: past 30 seconds nothing in them waits on its age.
   expect(second!.runs.filter(run => first!.runs.includes(run))).toEqual(second!.runs.slice(1));
-  expect(third!.runs.filter(run => second!.runs.includes(run)).map(run => run.title).sort()).toEqual(['Evidence 검색', 'Router 실행', '게이트 세션']);
+  expect(third!.runs.filter(run => second!.runs.includes(run)).map(run => run.title).sort()).toEqual(['Evidence 검색', 'Router 실행', 'Router 실행', '게이트 세션', '게이트 세션']);
+});
+
+it('rebuilds a child response when its spawn in another turn gains or loses a Gate record, and equals one pass each time', () => {
+  const gate = { ...base, phase: 'pre_result', tool_use_id: 'tool', allocation: { selected_model: 'claude-sonnet-5-5', effort_edit: { kind: 'set', value: 'high' } } };
+  const mods = [row('router', { event: 'spawn_result', session_id: base.session_id, turn: 't1', tool_use_id: 'tool', agent_id: 'child', requested: 'claude-sonnet-5-5', observed: 'claude-sonnet-5-5' }),
+    row('router', { event: 'child_result', session_id: base.session_id, agent_id: 'child', turn: 'ct', requested: 'claude-sonnet-5-5', observed: 'claude-sonnet-5-5' }, later)];
+  const now = new Date(later), avail = { trace: true };
+  const reason = (records: Record<string, unknown>[]) => {
+    const view = buildOperations(records, mods, now, avail);
+    expect(view).toEqual(buildOperations(records, mods, now, avail, true));
+    return view.runs.flatMap(r => r.steps).find(s => s.title.endsWith('child_result'))?.routing?.modelReason;
+  };
+  expect(reason([])).not.toBe('gate_allocated');
+  expect(reason([gate])).toBe('gate_allocated');
+  // The Gate record ages out: its group dissolves and the child is built again from the spawn alone.
+  expect(reason([])).not.toBe('gate_allocated');
 });
 
 it('reuses an unchanged recent session only until its next age edge, and equals one pass at every time', () => {
@@ -517,6 +534,24 @@ it('reuses an unchanged recent session only until its next age edge, and equals 
     if (offset === 31_000) expect(operationsStableUntil()).toBe(t0 + 32_000);
     previous = view;
   }
+});
+
+it('has no age edge while nothing waits: a settled busy history is stable until a shown step leaves the last minute or the day ends', () => {
+  // A busy settled session used to schedule a rebuild at every record's 30-second and 10-minute mark (dashboard CPU).
+  const t0 = Date.parse('2026-09-29T07:00:00.000Z'), iso = (ms: number) => new Date(t0 + ms).toISOString(), avail = { trace: true };
+  const settled = (count: number, every: number) => Array.from({ length: count }, (_, i) => ({ ...base, prompt_id: `p${i}`, request_id: `r${i}`, written_at: iso(i * every), phase: 'admission_result', attempted: false }));
+  const midnight = (now: Date): number => { const next = new Date(now); next.setHours(24, 0, 0, 0); return next.getTime(); };
+  let now = new Date(t0 + 230_000);
+  const view = buildOperations(settled(200, 1000), [], now, avail);
+  expect(view.runs.flatMap(run => run.steps).some(step => step.state === 'active')).toBe(false);
+  expect(operationsStableUntil()).toBe(midnight(now));
+  // Past the newest 120 steps the feed keeps a step only for its minute, so its leaving is the next change.
+  now = new Date(t0 + 50_000);
+  buildOperations(settled(200, 250), [], now, avail);
+  expect(operationsStableUntil()).toBe(t0 + 60_001);
+  // A waiting intent changes at its own 30-second mark.
+  buildOperations([...settled(200, 1000), { ...base, prompt_id: 'q', request_id: 'q', written_at: iso(220_000), phase: 'admission_intent' }], [], new Date(t0 + 230_000), avail);
+  expect(operationsStableUntil()).toBe(t0 + 250_000);
 });
 
 it('gives a Compact selection and its result written in the same millisecond their own step ids', () => {

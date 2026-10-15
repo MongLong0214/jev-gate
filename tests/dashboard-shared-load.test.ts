@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -9,18 +9,25 @@ vi.mock('../src/activity.js', async (original) => {
   return { ...actual, loadActivity: (...args: Parameters<typeof actual.loadActivity>) => { loads.count++; return actual.loadActivity(...args); } };
 });
 // A held gate keeps a finished rebuild in flight, standing in for a long history; `fail` makes the next rebuilds fail.
-const gate = vi.hoisted(() => ({ hold: null as Promise<void> | null, fail: false, started: 0 }));
+// `ms` reports a rebuild as that long; `starts` and `ends` record when each rebuild began and finished.
+const gate = vi.hoisted(() => ({ hold: null as Promise<void> | null, fail: false, started: 0, ms: null as number | null, starts: [] as number[], ends: [] as number[] }));
 vi.mock('../src/activity-engine.js', async (original) => {
   const actual = await original<typeof import('../src/activity-engine.js')>();
   return { ...actual, activityEngine: (sources: Parameters<typeof actual.activityEngine>[0]) => {
     const engine = actual.activityEngine(sources);
-    return { ...engine, load: async () => { gate.started++; const value = await engine.load(); await gate.hold; if (gate.fail) throw new Error('unreadable'); return value; } };
+    return { ...engine, load: async () => {
+      gate.started++; gate.starts.push(Date.now());
+      const value = await engine.load(); await gate.hold; if (gate.fail) throw new Error('unreadable');
+      gate.ends.push(Date.now());
+      return gate.ms === null ? value : { ...value, ms: gate.ms };
+    } };
   } };
 });
-const { startDashboard } = await import('../src/dashboard.js');
+const { startDashboard, pruneViewers, rebuildWait, VIEWER_LEASES } = await import('../src/dashboard.js');
+const { activityHandler } = await import('../src/activity-engine.js');
 
 const dirs: string[] = [];
-afterEach(() => { gate.hold = null; gate.fail = false; for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
+afterEach(() => { gate.hold = null; gate.fail = false; gate.ms = null; gate.starts = []; gate.ends = []; for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 const make = (): string => { const dir = mkdtempSync(join(tmpdir(), 'jev-shared-load-')); dirs.push(dir); return dir; };
 
 // #210: concurrent viewers and snapshot requests share one rebuild instead of each computing the history.
@@ -53,6 +60,32 @@ describe('dashboard rebuild sharing (#210)', () => {
       for (const reader of readers) await reader.cancel().catch(() => undefined);
       await server.close();
     }
+  });
+
+  it('does not rebuild without a new record before the next edge, even with a missing host directory', async () => {
+    // Open viewers ask for a rebuild at least every 30 seconds; with an unchanged history each one rebuilt the whole of it.
+    const trace = make(), handler = activityHandler({ traceDir: null, traceDirs: [{ host: 'claude', dir: trace }, { host: 'codex', dir: join(trace, 'missing') }], env: { HOME: make(), JEV_GATE_STATE_DIR: make() } });
+    writeFileSync(join(trace, 'a.json'), JSON.stringify({ phase: 'stop', session_id: 's', written_at: new Date().toISOString(), outcome: 'completed' }));
+    loads.count = 0;
+    const first = await handler.load(), again = await handler.load();
+    expect(loads.count).toBe(1);
+    expect(again).toMatchObject({ key: first.key, base: null, patch: null });
+    writeFileSync(join(trace, 'b.json'), JSON.stringify({ phase: 'stop', session_id: 's', written_at: new Date().toISOString(), outcome: 'completed' }));
+    handler.invalidate(trace, ['b.json']);
+    const changed = await handler.load();
+    expect(loads.count).toBe(2);
+    expect(changed.base).toBe(first.key);
+  });
+
+  it('rebuilds when only the liveness ring changed', async () => {
+    const trace = make(), state = make(), handler = activityHandler({ traceDir: trace, env: { HOME: make(), JEV_GATE_STATE_DIR: state } });
+    writeFileSync(join(trace, 'a.json'), JSON.stringify({ phase: 'stop', session_id: 's', written_at: new Date().toISOString(), outcome: 'completed' }));
+    const first = await handler.load();
+    mkdirSync(join(state, 'jev-gate'));
+    writeFileSync(join(state, 'jev-gate', 'liveness.json'), JSON.stringify({ version: 1, recent: [{ at: new Date().toISOString(), attempted: true, reason: null }] }));
+    const changed = await handler.load();
+    expect(changed.base).toBe(first.key);
+    expect(changed.patch).toContain('"recorded":1');
   });
 });
 
@@ -129,5 +162,57 @@ describe('dashboard snapshot latency (#215)', () => {
     } finally {
       await server.close();
     }
+  });
+});
+
+// A stream of records once kept the activity thread rebuilding half the time: each pause lasted as long as the last rebuild.
+describe('dashboard rebuild pacing', () => {
+  const record = (dir: string, name: string): void => writeFileSync(join(dir, name), JSON.stringify({ phase: 'stop', session_id: 's', written_at: new Date().toISOString(), outcome: 'completed' }));
+
+  it('waits three times the last rebuild, between one and four seconds', () => {
+    expect([0, 100, 400, 1000, 9000].map(rebuildWait)).toEqual([1000, 1000, 1200, 3000, 4000]);
+  });
+
+  it('starts the first load at once, then keeps each pause and still shows a new record within seconds', async () => {
+    const trace = make();
+    record(trace, 'r0.json');
+    gate.ms = 400; // a 1.2-second pause after each rebuild
+    const server = await startDashboard({ traceDir: trace, env: { HOME: make(), JEV_GATE_STATE_DIR: make() } }, 0);
+    const opened = Date.now();
+    const reader = (await fetch(`${server.url}api/live`)).body!.getReader();
+    let written = 0;
+    const writer = setInterval(() => record(trace, `r${++written}.json`), 100);
+    try {
+      let text = '';
+      const shows = async (files: number): Promise<void> => {
+        while (!text.includes(`"traceFiles":${files}`)) text += new TextDecoder().decode((await reader.read()).value);
+      };
+      await shows(1);
+      expect(gate.starts[0]! - opened).toBeLessThan(500);
+      await new Promise(resolve => setTimeout(resolve, 3500));
+      clearInterval(writer);
+      const last = written + 1, stopped = Date.now();
+      await shows(last);
+      expect(Date.now() - stopped).toBeLessThan(3000);
+      expect(gate.starts.length).toBeGreaterThan(2);
+      for (let i = 1; i < gate.starts.length; i++) expect(gate.starts[i]! - gate.ends[i - 1]!).toBeGreaterThanOrEqual(rebuildWait(400) - 5);
+    } finally {
+      clearInterval(writer);
+      await reader.cancel().catch(() => undefined);
+      await server.close();
+    }
+  }, 15_000);
+});
+
+describe('dashboard viewer leases', () => {
+  it('drops expired reconnect leases and keeps at most VIEWER_LEASES, newest first', () => {
+    const viewers = new Map<string, number>([['open', Infinity], ['gone', 5]]);
+    for (let i = 0; i < 200; i++) viewers.set(`legacy-${i}`, 100 + i);
+    pruneViewers(viewers, 10);
+    expect(viewers.get('open')).toBe(Infinity);
+    expect(viewers.has('gone')).toBe(false);
+    expect(viewers.size).toBe(VIEWER_LEASES + 1);
+    expect(viewers.has('legacy-199')).toBe(true);
+    expect(viewers.has('legacy-0')).toBe(false);
   });
 });

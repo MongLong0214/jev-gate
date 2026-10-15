@@ -127,6 +127,7 @@ export const readTraceRecords = (dir: string, cache?: TraceCache): TraceRead => 
   return { records: sortedRecords(records), unreadable };
 };
 
+const NO_RECORDS: TraceRead = { records: [], unreadable: 0 };
 /** Watch notifications name changed files; a bounded full reconciliation recovers lost events.
  * Directory identity is checked on every read so replaced or symlinked roots cannot expose stale data. */
 type DirectoryState = { identity: string; scanned: number; values: Map<string, Rec | null>; dirty: Set<string>; full: boolean; stale: boolean; result: TraceRead; appended: string[]; replaced: boolean };
@@ -163,7 +164,9 @@ export class TraceDirectoryReader {
       catch { this.forget(key); return null; }
       const present = new Set(names);
       for (const name of state.values.keys()) if (!present.has(name)) { state.values.delete(name); this.cache.delete(join(key, name)); state.stale = true; state.replaced = true; }
-      for (const name of names) state.dirty.add(name);
+      // Records are written once under new names (trace.ts), so a periodic pass reads only names it has no record for;
+      // an explicit full invalidation reads every file again.
+      for (const name of names) if (state.full || !state.values.get(name)) state.dirty.add(name);
       state.scanned = now; state.full = false;
     }
     return state;
@@ -201,7 +204,8 @@ export class TraceDirectoryReader {
   read(dir: string, now = Date.now()): TraceRead {
     const key = join(dir, '.');
     const state = this.open(key, now);
-    if (!state) return { records: [], unreadable: 0 };
+    // One shared empty result: an unchanged unreadable directory reads as the same result, as an unchanged one does.
+    if (!state) return NO_RECORDS;
     for (const name of state.dirty) {
       const path = join(key, name);
       let stat: Stats;
@@ -216,7 +220,7 @@ export class TraceDirectoryReader {
       const records = sortedRecords(added.filter((r): r is Rec => r !== null)), last = state.result.records.at(-1);
       if (!state.replaced && state.result.records.length + state.result.unreadable + added.length === state.values.size
         && (!last || !records[0] || (str(records[0]['written_at']) ?? '').localeCompare(str(last['written_at']) ?? '') > 0)) {
-        state.result = { records: [...state.result.records, ...records], unreadable: state.result.unreadable + added.length - records.length };
+        state.result = { records: state.result.records.concat(records), unreadable: state.result.unreadable + added.length - records.length };
       } else {
         const values = [...state.values].sort(([a], [b]) => a.localeCompare(b)).map(([, r]) => r);
         state.result = { records: sortedRecords(values.filter((r): r is Rec => r !== null)), unreadable: values.filter(r => r === null).length };
