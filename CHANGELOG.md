@@ -8,6 +8,7 @@
 - Route a `<task-notification>` turn as the continuation of the person's last request (#243). Its machine text is no longer sent to Jev or kept as a recent request; the root record says `turn_source: "task_notification"`.
 - Label a subagent whose spawn kept its effort with the pair's own reason instead of `answer_invalid` (#244).
 - Never ask Gate A about a host task notification (#245). It no longer costs Jev calls or opens a new generation that pushed the current job into history; `admission_result` records `task_notification`, outside liveness.
+- Keep 3 days of trace records and dashboard history instead of 7. Older trace files are removed by the next retention pass after the update.
 - Doctor warns when Compact cannot run because Claude Code 2.1.299+ seats its built-in plugin security default for a Team or Enterprise organization or a machine with managed settings, and the Compact README shows the managed-settings fix (#246).
 
 ## v0.8.20 — 2026-10-13 — README dashboard, run list fixes, Codex restart recovery

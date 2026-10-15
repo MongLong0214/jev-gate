@@ -61,13 +61,13 @@ describe('pruneTraceDir', () => {
     return path;
   };
 
-  it('deletes only its own records older than 7 days and leaves everything else, including symlink targets', async () => {
+  it('deletes only its own records older than 3 days and leaves everything else, including symlink targets', async () => {
     const dir = join(tmp, 'prune'); mkdirSync(dir);
     const outside = join(tmp, 'prune-outside'); mkdirSync(outside);
     const target = file(outside, `post-${uuid}.json`, 30);
-    file(dir, `mod_router-${uuid}.json`, 8);
-    file(dir, `.pre_intent-${uuid}.tmp`, 8);
-    file(dir, `codex_event-${uuid.replace('0f', '1f')}.json`, 6);
+    file(dir, `mod_router-${uuid}.json`, 4);
+    file(dir, `.pre_intent-${uuid}.tmp`, 4);
+    file(dir, `codex_event-${uuid.replace('0f', '1f')}.json`, 2);
     file(dir, 'notes.json', 30);
     file(dir, `post-${uuid}.json.bak`, 30);
     mkdirSync(join(dir, 'sub'));
