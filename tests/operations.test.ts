@@ -244,6 +244,16 @@ it('shows a rejected Codex model proposal separately from the final model and on
   expect(invalid[0]?.routing?.proposedModel).toBeUndefined();
 });
 
+it('shows a capability answer as the model its role mapped to', () => {
+  const decision = { ...base, host: 'codex', phase: 'codex_router_result', baseline_model: 'gpt-6.1-sol', reasons: { model: 'selected', effort: 'selected' },
+    answers: { capability: { choice: 'routine', probabilities: { routine: .7, complex: .3 } } },
+    selection: { probability: .7, threshold: .6, policy: 'role', roles: [{ role: 'standard', option: 'routine', model: 'gpt-6-luna' }, { role: 'deep', option: 'complex', model: 'gpt-6.1-sol' }] } };
+  const steps = buildOperations([decision], [], new Date(later), { trace: true }).runs.flatMap(r => r.steps);
+  expect(steps[0]?.routing).toMatchObject({ proposedModel: 'gpt-6-luna', probability: .7, threshold: .6 });
+  const unclear = buildOperations([{ ...decision, answers: { capability: { choice: 'unclear' } } }], [], new Date(later), { trace: true }).runs.flatMap(r => r.steps);
+  expect(unclear[0]?.routing?.proposedModel).toBeUndefined();
+});
+
 
 it('treats prepared as preparation metadata, not a completed host response or a new Jev call', () => {
   const prep = { event: 'prepared', session_id: 's', turn: 't', index: 0, scope: 'root', routed: false, preparation_ms: 2 };

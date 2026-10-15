@@ -454,12 +454,16 @@ const traceStep = (r: Rec, resultIds: Set<string>, intents: Map<string, string>,
     : phase === 'post' || phase === 'failure' || phase === 'background_launch' ? modelObservation(r['requested_model'], r['resolved_model']) : undefined;
   if (model && phase === 'codex_route_applied' && r['request_kind'] === 'root_response' && typeof r['applied'] === 'boolean') model.requestApplied = r['applied'];
   const routing: OperationStep['routing'] = phase.startsWith('codex_router_') || phase === 'codex_route_applied' ? { scope: r['scope'] === 'child' ? 'child' : 'root', baseline: token(r['baseline_model']), modelReason: token(field(r, 'reasons')?.['model']), effortReason: token(field(r, 'reasons')?.['effort']) } : phase === 'pre_result' && field(r, 'allocation') ? { scope: 'owned', baseline: token(field(r, 'allocation')?.['baseline_model']), modelReason: 'gate_allocated', effortReason: 'gate_allocated' } : undefined;
-  const proposal = field(field(r, 'answers'), 'model');
-  const proposedModel = token(proposal?.['choice']);
-  if (routing && proposedModel && !['__keep__', '__abstain__'].includes(proposedModel)) {
+  const routerAnswers = field(r, 'answers');
+  const proposal = field(routerAnswers, 'model') ?? field(routerAnswers, 'capability');
+  const option = token(proposal?.['choice']);
+  const roles = field(r, 'selection')?.['roles'];
+  // A capability answer names a kind of work; the selection's role map names the one model that served it.
+  const proposedModel = field(routerAnswers, 'model') ? option : Array.isArray(roles) ? token(roles.map(rec).find((x) => x?.['option'] === option)?.['model']) : null;
+  if (routing && proposedModel && option && !['__keep__', '__abstain__'].includes(proposedModel)) {
     routing.proposedModel = proposedModel;
     const selection = field(r, 'selection');
-    const probability = number(selection?.['probability']) ?? number(field(proposal, 'probabilities')?.[proposedModel]);
+    const probability = number(selection?.['probability']) ?? number(field(proposal, 'probabilities')?.[option]);
     const threshold = number(selection?.['threshold']);
     if (probability !== null && probability >= 0 && probability <= 1) routing.probability = probability;
     if (threshold !== null && threshold >= 0 && threshold <= 1) routing.threshold = threshold;
@@ -616,7 +620,9 @@ const modStep = (row: ModRecord, closed: Set<string>, responses: Map<string, str
     const usage = field(r, 'usage');
     if (usage) details.push(text(`입력 ${n(number(usage['input']))}`, `출력 ${n(number(usage['output']))}`, `cache read ${n(number(usage['cache_read']))}`, `cache write ${n(number(usage['cache_creation']))}`));
     const answers = field(r, 'answers');
-    if (answers) details.push(text(`Jev 제어 ${token(answers['control']) ?? '?'}`, number(answers['task_clear']) === null ? null : `명확도 ${Math.round(number(answers['task_clear'])! * 100)}%`, number(answers['ordinary']) === null ? null : `일반 위험 ${Math.round(number(answers['ordinary'])! * 100)}%`));
+    if (answers) details.push(text(`Jev 제어 ${token(answers['control']) ?? token(field(answers, 'control')?.['choice']) ?? '?'}`, number(answers['task_clear']) === null ? null : `명확도 ${Math.round(number(answers['task_clear'])! * 100)}%`, number(answers['ordinary']) === null ? null : `일반 위험 ${Math.round(number(answers['ordinary'])! * 100)}%`));
+    const capability = field(answers, 'capability');
+    if (capability) details.push(text(`필요 역량 ${token(capability['choice']) ?? '?'}`, ...Object.entries(field(capability, 'probabilities') ?? {}).flatMap(([option, value]) => token(option) && number(value) !== null ? [`${option} ${n(number(value))}`] : [])));
     if (answers) for (const name of ['tier', 'effort']) {
       const levels = field(answers, name);
       if (levels) details.push(text(`${name} 점수`, ...Object.entries(levels).slice(0, 8).flatMap(([level, value]) => token(level) && number(value) !== null ? [`${level} ${n(number(value))}`] : [])));
