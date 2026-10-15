@@ -271,3 +271,29 @@ describe('doctor: a launch profile that lets an admitted job reach a worker (#48
     }
   });
 });
+
+describe('doctor: Compact under the host security default', () => {
+  const fakeClaude = (version: string): string => {
+    const dir = mktemp();
+    writeFileSync(join(dir, 'claude'), `#!/bin/sh\n[ "$1" = "--version" ] && echo "${version} (Claude Code)" && exit 0\nexit 1\n`, { mode: 0o755 });
+    return dir;
+  };
+  const home = (organizationType: string, remote?: unknown): string => {
+    const dir = mktemp();
+    writeFileSync(join(dir, '.claude.json'), JSON.stringify({ oauthAccount: { organizationType } }));
+    if (remote !== undefined) { mkdirSync(join(dir, '.claude'), { recursive: true }); writeFileSync(join(dir, '.claude', 'remote-settings.json'), JSON.stringify(remote)); }
+    return dir;
+  };
+  const config = () => configFile({ version: 5 });
+
+  it('warns that a Team organization on 2.1.299+ passes compaction over for an installed jev-gate', () => {
+    const stdout = doctor({ PATH: fakeClaude('2.1.300'), HOME: home('claude_team'), JEV_GATE_CONFIG: config() });
+    expect(stdout).toMatch(/\[warn\] Compact cannot run: Claude Code 2\.1\.300 seats its built-in plugin security default for a Team organization/);
+  });
+  it('reports a managed jev-gate as able to compact, and says nothing for a personal account or an older host', () => {
+    expect(doctor({ PATH: fakeClaude('2.1.300'), HOME: home('claude_enterprise', { enabledPlugins: { 'jev-gate@jev-gate': true } }), JEV_GATE_CONFIG: config() }))
+      .toMatch(/\[ok\] Compact: jev-gate is a managed plugin/);
+    expect(doctor({ PATH: fakeClaude('2.1.300'), HOME: home('claude_max'), JEV_GATE_CONFIG: config() })).not.toMatch(/Compact cannot run|Compact: jev-gate/);
+    expect(doctor({ PATH: fakeClaude('2.1.298'), HOME: home('claude_team'), JEV_GATE_CONFIG: config() })).not.toMatch(/Compact cannot run|Compact: jev-gate/);
+  });
+});

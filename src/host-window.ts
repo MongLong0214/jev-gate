@@ -103,6 +103,9 @@ const readManaged = <T>(dirs: readonly string[], pick: SettingsPick<T>): Found<T
   return found;
 };
 
+/** A value from the machine's managed scope alone (managed-settings.json and its drop-ins), for doctor. */
+export const readManagedSetting = <T>(pick: SettingsPick<T>, dirs: readonly string[] = defaultManagedDirs()): Found<T> | null => readManaged(dirs, pick);
+
 /** The host keeps local settings beside project settings when the root, or its `.git` or `.claude`, is not the user's own. */
 const ownedByUser = (root: string): boolean => {
   const uid = typeof process.getuid === 'function' ? process.getuid() : null;
