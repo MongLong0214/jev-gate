@@ -220,7 +220,7 @@ export class TraceDirectoryReader {
       const records = sortedRecords(added.filter((r): r is Rec => r !== null)), last = state.result.records.at(-1);
       if (!state.replaced && state.result.records.length + state.result.unreadable + added.length === state.values.size
         && (!last || !records[0] || (str(records[0]['written_at']) ?? '').localeCompare(str(last['written_at']) ?? '') > 0)) {
-        state.result = { records: [...state.result.records, ...records], unreadable: state.result.unreadable + added.length - records.length };
+        state.result = { records: state.result.records.concat(records), unreadable: state.result.unreadable + added.length - records.length };
       } else {
         const values = [...state.values].sort(([a], [b]) => a.localeCompare(b)).map(([, r]) => r);
         state.result = { records: sortedRecords(values.filter((r): r is Rec => r !== null)), unreadable: values.filter(r => r === null).length };

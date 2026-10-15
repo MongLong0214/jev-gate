@@ -491,20 +491,60 @@ const withHost = (original: Rec, host: Host): Rec => {
 };
 const modRows = new WeakMap<Rec, ModRecord>();
 
+/** One trace directory's share of a snapshot. A reader returns the same records while no file changed and extends them when
+ * new files arrive (`TraceDirectoryReader.read`), so a rebuild derives rows only for records it has not seen. */
+interface SourceRows {
+  records: Rec[]; host: Host; only: Host | undefined; feed: boolean;
+  gate: Rec[]; mods: ModRecord[]; gateEvents: ActivityEvent[]; routerEvents: ActivityEvent[];
+  jevCalls: number; direct: number; orchestrated: number; routerChanges: number; assessed: ModRecord | null; hosts: Set<Host>;
+}
+const sourceRows = new WeakMap<TraceDirectoryReader, Map<string, SourceRows>>();
+const deriveRows = (records: Rec[], host: Host, only: Host | undefined, feed: boolean, known: SourceRows | undefined): SourceRows => {
+  let rows = known && known.host === host && known.only === only && known.feed === feed && known.records.length <= records.length ? known : undefined;
+  if (rows && rows.records !== records) for (let i = 0; i < rows.records.length; i++) if (rows.records[i] !== records[i]) { rows = undefined; break; }
+  rows ??= { records: [], host, only, feed, gate: [], mods: [], gateEvents: [], routerEvents: [], jevCalls: 0, direct: 0, orchestrated: 0, routerChanges: 0, assessed: null, hosts: new Set() };
+  for (let i = rows.records.length; i < records.length; i++) {
+    const r = withHost(records[i]!, host), shown = r['host'] === 'codex' ? 'codex' : 'claude';
+    if (only && shown !== only) continue;
+    rows.gate.push(r); rows.hosts.add(shown);
+    const phase = token(r['phase']);
+    if (phase && ['mod_router', 'mod_compact', 'claude_router', 'claude_compact'].includes(phase)) {
+      let row = modRows.get(r);
+      if (!row) {
+        const { host: _host, session_id: _session, phase: _phase, version: _version, invocation_id: _id, written_at: _at, ...fields } = r;
+        row = { component: phase.replace(/^(mod|claude)_/, '') as ModRecord['component'], at: token(r['written_at']) ?? String(r['written_at'] ?? ''), rec: { ...fields, session_id: r['session_id'] } };
+        modRows.set(r, row);
+      }
+      rows.mods.push(row);
+      if (row.component !== 'router') continue;
+      if (row.rec['sent'] === true) rows.jevCalls++;
+      if (routerChanged(row.rec)) rows.routerChanges++;
+      // After a 402 the router refuses later calls locally (credential_refused), so exhaustion holds until a call succeeds.
+      if (['ok', 'payment_required'].includes(String(row.rec['assessment'])) && (!rows.assessed || row.at.localeCompare(rows.assessed.at) > 0)) rows.assessed = row;
+      const event = feed ? routerEvent(row.rec, row.at) : null;
+      if (event) rows.routerEvents.push(event);
+      continue;
+    }
+    if (phase === 'admission_result') {
+      if (r['attempted'] === true) rows.jevCalls++;
+      const shape = token(sub(r, 'decision')?.['shape']);
+      if (shape === 'direct') rows.direct++;
+      else if (shape === 'orchestrated') rows.orchestrated++;
+    } else if (phase === 'pre_result' && r['attempted'] === true) rows.jevCalls++;
+    const event = feed ? gateEvent(r) : null;
+    if (event) rows.gateEvents.push(event);
+  }
+  rows.records = records;
+  return rows;
+};
+
 export const loadActivity = (opts: { traceDir: string | null; traceDirs?: readonly { host: Host; dir: string }[] | undefined; env: Env; now?: Date; host?: Host; traceCache?: TraceCache; traceReader?: TraceDirectoryReader; feed?: boolean }): ActivitySnapshot => {
   const notes = [...NOTES];
   // The dashboard draws neither the event list nor the live board, and both cost a pass over every record.
   const feed = opts.feed !== false;
-  const events: ActivityEvent[] = [];
-  const gateRecords: Rec[] = [];
-  const routerRows: Array<{ at: string; rec: Rec }> = [];
-  const modRecords: ModRecord[] = [];
+  const sources: SourceRows[] = [];
   let traceFiles = 0;
   let unreadable = 0;
-  let jevCalls = 0;
-  let direct = 0;
-  let orchestrated = 0;
-  let routerChanges = 0;
   const traceDirs = opts.traceDirs ?? (opts.traceDir ? [{ host: opts.host ?? 'claude', dir: opts.traceDir }] : []);
   const traceAvailable = traceDirs.some(source => readableDir(source.dir));
 
@@ -514,50 +554,29 @@ export const loadActivity = (opts: { traceDir: string | null; traceDirs?: readon
     traceFiles += read.records.length;
     unreadable += read.unreadable;
     if (read.unreadable > 0) notes.push(`추적 파일 ${read.unreadable}개는 읽지 못했습니다.`);
-    for (const original of read.records) {
-      const r = withHost(original, source.host);
-      if (opts.host && (r['host'] === 'codex' ? 'codex' : 'claude') !== opts.host) continue;
-      gateRecords.push(r);
-      const phase = token(r['phase']);
-      if (phase && ['mod_router', 'mod_compact', 'claude_router', 'claude_compact'].includes(phase)) {
-        let row = modRows.get(r);
-        if (!row) {
-          const { host: _host, session_id: _session, phase: _phase, version: _version, invocation_id: _id, written_at: _at, ...fields } = r;
-          row = { component: phase.replace(/^(mod|claude)_/, '') as ModRecord['component'], at: token(r['written_at']) ?? String(r['written_at'] ?? ''), rec: { ...fields, session_id: r['session_id'] } };
-          modRows.set(r, row);
-        }
-        modRecords.push(row);
-        continue;
-      }
-      if (phase === 'admission_result') {
-        if (r['attempted'] === true) jevCalls++;
-        const shape = token(sub(r, 'decision')?.['shape']);
-        if (shape === 'direct') direct++;
-        else if (shape === 'orchestrated') orchestrated++;
-      } else if (phase === 'pre_result' && r['attempted'] === true) jevCalls++;
-      const event = feed ? gateEvent(r) : null;
-      if (event) events.push(event);
-    }
+    let known = opts.traceReader && sourceRows.get(opts.traceReader);
+    if (opts.traceReader && !known) sourceRows.set(opts.traceReader, known = new Map());
+    const rows = deriveRows(read.records, source.host, opts.host, feed, known?.get(source.dir));
+    known?.set(source.dir, rows);
+    sources.push(rows);
   }
-
-  for (const row of modRecords.filter(row => row.component === 'router')) {
-    routerRows.push({ at: row.at, rec: row.rec });
-    if (row.rec['sent'] === true) jevCalls++;
-    if (routerChanged(row.rec)) routerChanges++;
-    const event = feed ? routerEvent(row.rec, row.at) : null;
-    if (event) events.push(event);
+  // concat sizes each list once; the history is copied on every rebuild.
+  const gateRecords = ([] as Rec[]).concat(...sources.map(rows => rows.gate)), modRecords = ([] as ModRecord[]).concat(...sources.map(rows => rows.mods));
+  const events = ([] as ActivityEvent[]).concat(...sources.map(rows => rows.gateEvents), ...sources.map(rows => rows.routerEvents));
+  let jevCalls = 0, direct = 0, orchestrated = 0, routerChanges = 0, assessed: ModRecord | null = null;
+  const hosts = new Set<Host>();
+  for (const rows of sources) {
+    jevCalls += rows.jevCalls; direct += rows.direct; orchestrated += rows.orchestrated; routerChanges += rows.routerChanges;
+    for (const h of rows.hosts) hosts.add(h);
+    // The newest assessed call decides; the first source keeps a tie, as one pass over every Router row would.
+    if (rows.assessed && (!assessed || rows.assessed.at.localeCompare(assessed.at) > 0)) assessed = rows.assessed;
   }
 
   events.sort((a, b) => b.at.localeCompare(a.at));
   const now = opts.now ?? new Date();
   const liveness = opts.host === 'codex' ? null : readLiveness(opts.env);
-  const hosts = new Set(gateRecords.map(r => r['host'] === 'codex' ? 'codex' : 'claude'));
   const host = opts.host ?? (hosts.size > 1 ? 'mixed' : hosts.has('codex') ? 'codex' : 'claude');
-  // After a 402 the router refuses later calls locally (credential_refused), so exhaustion holds until a call succeeds.
   let credit: ActivitySnapshot['credit'] = { exhausted: false, at: null };
-  // The newest assessed call decides; one pass finds it without sorting every Router row on each rebuild.
-  let assessed: ModRecord | null = null;
-  for (const row of modRecords) if (row.component === 'router' && ['ok', 'payment_required'].includes(String(row.rec['assessment'])) && (!assessed || row.at.localeCompare(assessed.at) > 0)) assessed = row;
   if (assessed?.rec['assessment'] === 'payment_required') credit = { exhausted: true, at: assessed.at };
   const operations = buildOperations(gateRecords, modRecords, now, {
     trace: traceAvailable,
@@ -577,7 +596,7 @@ export const loadActivity = (opts: { traceDir: string | null; traceDirs?: readon
     routerChanges,
     events: events.slice(0, MAX_EVENTS),
     operations,
-    live: feed ? buildLive(gateRecords, routerRows, now.getTime()) : buildLive([], [], now.getTime()),
+    live: feed ? buildLive(gateRecords, modRecords.flatMap(row => row.component === 'router' ? [{ at: row.at, rec: row.rec }] : []), now.getTime()) : buildLive([], [], now.getTime()),
     notes,
   };
 };

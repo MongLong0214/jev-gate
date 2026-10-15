@@ -18,7 +18,7 @@ const TITLE: Record<string, string> = {
   SubagentStop: 'Codex · 에이전트 종료 이벤트', PreCompact: 'Codex · 압축 시작', PostCompact: 'Codex · 압축 종료',
   Stop: 'Codex · 턴 종료 이벤트', Interrupt: 'Codex · 사용자 중단',
 };
-const spanKey = (r: Rec, event: string): string | null => {
+export const codexSpanKey = (r: Rec, event: string): string | null => {
   const session = token(r['session_id']);
   if (event === 'SessionEnd') return JSON.stringify([session, 'session']);
   if (event === 'SubagentStop') return token(r['agent_id']) ? JSON.stringify([session, event, r['agent_id']]) : null;
@@ -29,12 +29,23 @@ const spanKey = (r: Rec, event: string): string | null => {
 
 /** The first row of each run, so runs built from separate parts can be put back in one pass's order. */
 export const firstRow = new WeakMap<OperationRun, Rec>();
+/** A native host row this view reads. */
+export const codexRow = (r: Rec): boolean => r['host'] === 'codex' && r['phase'] === 'codex_event' && !!token(r['session_id']) && !!at(r);
+/** The run a native row belongs to, or null when it shows no step. */
+export const codexRunKey = (r: Rec): string | null => {
+  const event = token(r['event']) ?? '';
+  if (!TITLE[event]) return null;
+  return `codex:${r['session_id']}:${event === 'SubagentStart' || event === 'SubagentStop' ? `agent:${token(r['agent_id']) ?? 'unknown'}` : token(r['prompt_id']) ?? 'session'}`;
+};
 
 /** Native host spans are never counted as Jev requests, routed workers, or accepted contracts. `flipsAt` hears when an open
- * span stops being active, so the dashboard rebuilds then and not before. */
-export const codexOperations = (records: Rec[], now: Date, flipsAt?: (at: number) => void): OperationRun[] => {
-  const rows = records.filter(r => r['host'] === 'codex' && r['phase'] === 'codex_event' && token(r['session_id']) && at(r))
-    .sort((a, b) => at(a).localeCompare(at(b)));
+ * span stops being active, so the dashboard rebuilds then and not before. `outside` holds session ends recorded with other
+ * rows of a split build: they close spans here but show no step; `position` orders them among these rows as one pass would. */
+export const codexOperations = (records: Rec[], now: Date, flipsAt?: (at: number) => void, outside?: { ends: Rec[]; position: (r: Rec) => number }): OperationRun[] => {
+  const own = records.filter(codexRow);
+  const rows = outside?.ends.length ? [...own, ...outside.ends].sort((a, b) => at(a).localeCompare(at(b)) || outside.position(a) - outside.position(b))
+    : own.sort((a, b) => at(a).localeCompare(at(b)));
+  const foreign = new Set(outside?.ends);
   // Pair once in reverse order. Re-scanning the full recording for every start made live refresh quadratic.
   const terminals = new Map<string, Rec>();
   const paired = new Map<Rec, Rec>();
@@ -43,20 +54,20 @@ export const codexOperations = (records: Rec[], now: Date, flipsAt?: (at: number
     if (row['phase'] !== 'codex_event') continue;
     const event = String(row['event']);
     const candidates = (START_END[event] ?? []).flatMap(end => {
-      const key = spanKey(row, end);
+      const key = codexSpanKey(row, end);
       const terminal = key ? terminals.get(key) : undefined;
       return terminal ? [terminal] : [];
     }).sort((a, b) => at(a).localeCompare(at(b)));
     if (candidates[0]) paired.set(row, candidates[0]);
     if (START_END[event]) {
       const closing = (event === 'SubagentStart' ? ['SessionEnd'] : ['Stop', 'Interrupt', 'SessionEnd']).flatMap(end => {
-        const key = spanKey(row, end); const terminal = key ? terminals.get(key) : undefined;
+        const key = codexSpanKey(row, end); const terminal = key ? terminals.get(key) : undefined;
         return terminal ? [terminal] : [];
       }).sort((a, b) => at(a).localeCompare(at(b)))[0];
       if (closing) ended.set(row, closing);
     }
     if (['PostToolUse', 'SubagentStop', 'PostCompact', 'Stop', 'Interrupt', 'SessionEnd'].includes(event)) {
-      const key = spanKey(row, event);
+      const key = codexSpanKey(row, event);
       if (key) terminals.set(key, row);
     }
   }
@@ -64,9 +75,8 @@ export const codexOperations = (records: Rec[], now: Date, flipsAt?: (at: number
   const firsts = new Map<string, Rec>();
   for (const r of rows) {
     const event = token(r['event']) ?? '';
-    if (!TITLE[event]) continue;
-    const isAgent = event === 'SubagentStart' || event === 'SubagentStop';
-    const key = `codex:${r['session_id']}:${isAgent ? `agent:${token(r['agent_id']) ?? 'unknown'}` : token(r['prompt_id']) ?? 'session'}`;
+    const key = foreign.has(r) ? null : codexRunKey(r);
+    if (!key) continue;
     const ends = START_END[event];
     const end = paired.get(r);
     const closing = ended.get(r);

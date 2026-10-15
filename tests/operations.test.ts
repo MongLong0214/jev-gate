@@ -492,10 +492,26 @@ it('rebuilds only the sessions that changed or still wait on their age, and equa
     return view;
   });
   expect(first!.runs[0]?.state).toBe('active'); expect(second!.runs[0]?.state).toBe('done');
-  // Only the recording session is rebuilt; then s1 changes, and the answered session, the session-less pool and s2 stay as
-  // they were: past 30 seconds nothing in them waits on its age.
+  // Only the recording execution is rebuilt; then s1's Gate turn changes, and its Router turn, the answered session, the
+  // session-less rows and s2 stay as they were: past 30 seconds nothing in them waits on its age.
   expect(second!.runs.filter(run => first!.runs.includes(run))).toEqual(second!.runs.slice(1));
-  expect(third!.runs.filter(run => second!.runs.includes(run)).map(run => run.title).sort()).toEqual(['Evidence 검색', 'Router 실행', '게이트 세션', '게이트 세션']);
+  expect(third!.runs.filter(run => second!.runs.includes(run)).map(run => run.title).sort()).toEqual(['Evidence 검색', 'Router 실행', 'Router 실행', '게이트 세션', '게이트 세션']);
+});
+
+it('rebuilds a child response when its spawn in another turn gains or loses a Gate record, and equals one pass each time', () => {
+  const gate = { ...base, phase: 'pre_result', tool_use_id: 'tool', allocation: { selected_model: 'claude-sonnet-5-5', effort_edit: { kind: 'set', value: 'high' } } };
+  const mods = [row('router', { event: 'spawn_result', session_id: base.session_id, turn: 't1', tool_use_id: 'tool', agent_id: 'child', requested: 'claude-sonnet-5-5', observed: 'claude-sonnet-5-5' }),
+    row('router', { event: 'child_result', session_id: base.session_id, agent_id: 'child', turn: 'ct', requested: 'claude-sonnet-5-5', observed: 'claude-sonnet-5-5' }, later)];
+  const now = new Date(later), avail = { trace: true };
+  const reason = (records: Record<string, unknown>[]) => {
+    const view = buildOperations(records, mods, now, avail);
+    expect(view).toEqual(buildOperations(records, mods, now, avail, true));
+    return view.runs.flatMap(r => r.steps).find(s => s.title.endsWith('child_result'))?.routing?.modelReason;
+  };
+  expect(reason([])).not.toBe('gate_allocated');
+  expect(reason([gate])).toBe('gate_allocated');
+  // The Gate record ages out: its group dissolves and the child is built again from the spawn alone.
+  expect(reason([])).not.toBe('gate_allocated');
 });
 
 it('reuses an unchanged recent session only until its next age edge, and equals one pass at every time', () => {

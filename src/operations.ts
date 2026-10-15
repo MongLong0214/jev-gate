@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { allocatedTraceRecords } from './explain.js';
-import { codexOperations, firstRow } from './codex-operations.js';
+import { codexOperations, codexRow, codexRunKey, codexSpanKey, firstRow } from './codex-operations.js';
 import { failed, operationState } from './operation-state.js';
 import { memo } from './memo.js';
 import { estimateJevCostUsd } from './bench/usage.js';
@@ -256,9 +256,11 @@ const modelRequestKey = (r: Rec): string | null => {
   // still binds a response; null remains distinct from every known prompt.
   return values[0] && values[2] ? JSON.stringify(values) : null;
 };
-/** Latest record and recorded turn/child/session ends per exact loop or session; never a sibling's, the root's or another session's. */
-interface Liveness { now: number; seen: Map<string, string>; ends: Map<string, Array<{ at: string; interrupted: boolean }>>; until: number }
-/** Notes the next time an age test's answer flips, so a part is rebuilt then and not at every record's age (`parts`). */
+type Ends = Map<string, Array<{ at: string; interrupted: boolean }>>;
+/** Latest record and recorded turn/child ends per exact loop, and session ends per session; never a sibling's, the root's or
+ * another session's. `read` collects the sessions whose ends an answer used. */
+interface Liveness { now: number; seen: Map<string, string>; ends: Ends; sessions: Ends; read: Set<string>; until: number }
+/** Notes the next time an age test's answer flips, so a part is rebuilt then and not at every record's age (`sync`). */
 const flipsAt = (live: Liveness, at: number): void => { if (at > live.now && at < live.until) live.until = at; };
 /** A step waiting for its result is active from its record time for 30 seconds. */
 const young = (live: Liveness, at: string): boolean => {
@@ -271,7 +273,8 @@ const MODEL_IDLE_MS = 600_000;
 /** Elapsed time is never terminal evidence. Only an exact response or failure settles a request. */
 const modelRequestState = (at: string, settledAt: string | undefined, loop: string, session: string, live: Liveness): Pick<OperationStep, 'state' | 'summary'> => {
   if (settledAt !== undefined && settledAt >= at) return { state: 'done', summary: '모델 요청 종료 기록 확인' };
-  const end = [...live.ends.get(loop) ?? [], ...live.ends.get(session) ?? []].filter(e => e.at >= at).sort((a, b) => a.at.localeCompare(b.at))[0];
+  live.read.add(session);
+  const end = [...live.ends.get(loop) ?? [], ...live.sessions.get(session) ?? []].filter(e => e.at >= at).sort((a, b) => a.at.localeCompare(b.at))[0];
   if (end) return end.interrupted ? { state: 'interrupted', summary: '사용자 중단 관측 · 성공이나 기능 오류로 분류하지 않음' } : { state: 'unconfirmed', summary: '턴 또는 세션 종료 · 이 호출의 결과 이벤트는 미관측' };
   const seen = Date.parse(live.seen.get(loop) ?? at);
   flipsAt(live, seen + MODEL_IDLE_MS);
@@ -512,15 +515,32 @@ const traceStep = (r: Rec, resultIds: Set<string>, intents: Map<string, string>,
     ...(graph ? { graph } : {}), ...(receipt ? { receipt } : {}) };
 };
 
-/** Join decisions to responses only within the recorded session and execution identity. */
-const routedModRecords = (mods: ModRecord[], records: Rec[]): ModRecord[] => {
+type Routing = NonNullable<OperationStep['routing']>;
+/** A Router spawn's routing for a child agent; the child's results take the last one before them. */
+interface Origin { at: string; pos: number; routing: Routing }
+/** In a split build a child's origin can be recorded in another part: the later of this part's last one and the other parts'
+ * last one before the row, in one pass's order. */
+const latestOrigin = (own: { routing: Routing; row: ModRecord } | undefined, row: ModRecord, agent: string, context: PartContext): Routing | undefined => {
+  context.read.add(`agent:${agent}`);
+  const list = context.children(agent), pos = context.position(row);
+  let lo = 0, hi = list.length;
+  while (lo < hi) { const mid = (lo + hi) >> 1, c = list[mid]!.at.localeCompare(row.at); if (c < 0 || c === 0 && list[mid]!.pos < pos) lo = mid + 1; else hi = mid; }
+  const other = list[lo - 1];
+  if (!other || !own) return other?.routing ?? own?.routing;
+  const c = own.row.at.localeCompare(other.at);
+  return c > 0 || c === 0 && context.position(own.row) > other.pos ? own.routing : other.routing;
+};
+
+/** Join decisions to responses only within the recorded session and execution identity. `exported` collects the child origins
+ * this part records, for the parts that read them. */
+const routedModRecords = (mods: ModRecord[], records: Rec[], context?: PartContext, exported?: Part['origins']): ModRecord[] => {
   const identity = (r: Rec, key: string): string | null => token(r[key]) ? JSON.stringify([r['session_id'] ?? 'legacy', r[key]]) : null;
   const owned = new Map<string, Rec>();
   for (const r of records) {
     const key = identity(r, 'tool_use_id');
     if (r['host'] !== 'codex' && r['phase'] === 'pre_result' && key && field(r, 'allocation')) owned.set(key, r);
   }
-  const turns = new Map<string, Rec>(), spawns = new Map<string, Rec>(), childSteps = new Map<string, Rec>(), children = new Map<string, NonNullable<OperationStep['routing']>>();
+  const turns = new Map<string, Rec>(), spawns = new Map<string, Rec>(), childSteps = new Map<string, Rec>(), children = new Map<string, { routing: Routing; row: ModRecord }>();
   return [...mods].sort((a, b) => a.at.localeCompare(b.at)).map(row => {
     if (row.component !== 'router') return row;
     const r = row.rec, event = r['event'], turn = identity(r, 'turn'), tool = identity(r, 'tool_use_id'), agent = identity(r, 'agent_id');
@@ -539,9 +559,9 @@ const routedModRecords = (mods: ModRecord[], records: Rec[]): ModRecord[] => {
     if (event === 'root' && turn && (field(r, 'reasons') || field(r, 'from'))) turns.set(turn, r);
     if (event === 'spawn' && tool) spawns.set(tool, r);
     if (event === 'child_route' && agent) childSteps.set(routerResponseKey(r), r);
-    if (['spawn_result', 'spawn_native_result'].includes(String(event)) && agent && routing) children.set(agent, routing);
+    if (['spawn_result', 'spawn_native_result'].includes(String(event)) && agent && routing) { children.set(agent, { routing, row }); exported?.push({ agent, row, routing }); }
     if (event === 'child_result' && agent) {
-      const origin = children.get(agent);
+      const origin = context ? latestOrigin(children.get(agent), row, agent, context) : children.get(agent)?.routing;
       if (origin && !childDecision) routing = { ...origin, scope: 'child' };
     }
     return routing ? { ...row, rec: { ...r, routing_decision: routing } } : row;
@@ -670,10 +690,30 @@ const firstSorted = <T>(items: T[], k: number, order: (a: T, b: T) => number): T
 /** Where one pass over the whole recording first inserts a run: records in order, then Router and Compact rows by time, then native Codex rows by time. */
 type Rank = { cls: 0 | 1 | 2; at: string; index: number };
 /** `until`: the first time an age test in it answers differently; it is the same output until then. */
-interface Part { runs: OperationRun[]; ranks: Rank[]; requests: string[]; managed: boolean; until: number }
+interface Part { runs: OperationRun[]; ranks: Rank[]; requests: string[]; managed: boolean; until: number; origins: Array<{ agent: string; row: ModRecord; routing: Routing }> }
 
-/** The executions of records that join nothing outside them (see `parts`). */
-const buildPart = (records: Rec[], mods: ModRecord[], now: Date): Part => {
+/** The session a record or row ends: [session key, time]. */
+const sessionEnd = (item: Rec | ModRecord, mod: boolean): [string, string] | null => {
+  if (mod) {
+    const row = item as ModRecord;
+    return row.component === 'router' && row.at && row.rec['event'] === 'session_end' && token(row.rec['session_id']) ? [JSON.stringify(['claude', row.rec['session_id']]), row.at] : null;
+  }
+  const r = item as Rec, at = iso(r['written_at']);
+  return r['host'] === 'codex' && token(r['session_id']) && at && r['phase'] === 'codex_event' && r['event'] === 'SessionEnd' ? [JSON.stringify(['codex', r['session_id']]), at] : null;
+};
+/** A split build hands each part the session ends recorded anywhere, and the native session ends and child origins recorded in
+ * other parts. `position` is an item's place in one pass's order of its kind; `read` collects the sessions and agents read. */
+interface PartContext { sessions: Ends; read: Set<string>; position: (item: Rec | ModRecord) => number; codexEnds: Rec[]; children: (agent: string) => Origin[] }
+
+/** The executions of records that join nothing outside them (see `sync`). */
+const buildPart = (records: Rec[], mods: ModRecord[], now: Date, context?: PartContext): Part => {
+  let sessions = context?.sessions;
+  if (!sessions) {
+    const own: Ends = sessions = new Map();
+    const note = (end: [string, string] | null): void => { if (end) own.set(end[0], [...own.get(end[0]) ?? [], { at: end[1], interrupted: false }]); };
+    for (const r of records) note(sessionEnd(r, false));
+    for (const row of mods) note(sessionEnd(row, true));
+  }
   records = allocatedTraceRecords(records);
   const codexDecisions = new Map<string, Rec>();
   const codexKey = (r: Rec): string | null => r['host'] === 'codex' && token(r['session_id']) && token(r['prompt_id']) ? JSON.stringify([r['session_id'], r['prompt_id'], r['scope'] === 'child' ? r['agent_id'] : null, r['scope'] === 'child' ? r['index'] ?? null : null]) : null;
@@ -691,7 +731,7 @@ const buildPart = (records: Rec[], mods: ModRecord[], now: Date): Part => {
     if (['codex_router_response', 'codex_model_failure'].includes(String(r['phase'])) && at && at >= (modelTerminals.get(key) ?? '')) modelTerminals.set(key, at);
     if (r['phase'] === 'codex_router_response' && at && at >= iso(responseBindings.get(key)?.['written_at'])) responseBindings.set(key, r);
   }
-  const live: Liveness = { now: now.getTime(), seen: new Map(), ends: new Map(), until: Infinity };
+  const live: Liveness = { now: now.getTime(), seen: new Map(), ends: new Map(), sessions, read: context?.read ?? new Set(), until: Infinity };
   const observe = (loop: string, at: string, end?: { key: string; interrupted: boolean }) => {
     if (at > (live.seen.get(loop) ?? '')) live.seen.set(loop, at);
     if (end) live.ends.set(end.key, [...live.ends.get(end.key) ?? [], { at, interrupted: end.interrupted }]);
@@ -699,14 +739,12 @@ const buildPart = (records: Rec[], mods: ModRecord[], now: Date): Part => {
   for (const r of records) {
     const at = iso(r['written_at']), event = r['phase'] === 'codex_event' ? r['event'] : null;
     if (r['host'] !== 'codex' || !token(r['session_id']) || !at) continue;
-    observe(codexLoop(r), at, (event === 'Stop' || event === 'Interrupt') && token(r['prompt_id']) ? { key: codexLoop(r), interrupted: event === 'Interrupt' }
-      : event === 'SessionEnd' ? { key: JSON.stringify(['codex', r['session_id']]), interrupted: false } : undefined);
+    observe(codexLoop(r), at, (event === 'Stop' || event === 'Interrupt') && token(r['prompt_id']) ? { key: codexLoop(r), interrupted: event === 'Interrupt' } : undefined);
   }
   for (const row of mods) if (row.component === 'router' && row.at) {
     const r = row.rec, loop = routerResponseKey(r, 'loop');
-    // Recorded Router rows may carry no session; an unidentified session end cannot end anything.
-    observe(loop, row.at, r['event'] === 'turn_end' && token(r['turn']) ? { key: loop, interrupted: r['reason'] === 'aborted' }
-      : r['event'] === 'session_end' && token(r['session_id']) ? { key: JSON.stringify(['claude', r['session_id']]), interrupted: false } : undefined);
+    // Recorded Router rows may carry no session; an unidentified session end cannot end anything (`sessionEnd`).
+    observe(loop, row.at, r['event'] === 'turn_end' && token(r['turn']) ? { key: loop, interrupted: r['reason'] === 'aborted' } : undefined);
   }
   records = records.map(r => {
     const key = modelRequestKey(r);
@@ -715,7 +753,8 @@ const buildPart = (records: Rec[], mods: ModRecord[], now: Date): Part => {
   });
   // routedModRecords visits rows in this stable time order.
   const order = mods.map((_, i) => i).sort((a, b) => mods[a]!.at.localeCompare(mods[b]!.at));
-  mods = routedModRecords(mods, records);
+  const origins: Part['origins'] = [];
+  mods = routedModRecords(mods, records, context, origins);
   const resultIds = new Set(records.flatMap((r) => token(r['request_id']) && token(r['phase']) ? [`${token(r['request_id'])}:${token(r['phase'])}`] : []));
   for (const r of records) if (r['phase'] === 'background_terminal') resultIds.add(`background:${token(r['session_id'])}:${token(r['execution_prompt_id']) ?? token(r['prompt_id'])}:${token(r['tool_use_id'])}`);
   for (const r of records) if (r['phase'] === 'codex_compact' && r['applied'] === true && token(r['run_id'])) resultIds.add(`codex_compact:${token(r['run_id'])}`);
@@ -773,7 +812,7 @@ const buildPart = (records: Rec[], mods: ModRecord[], now: Date): Part => {
     const title = ({ gate: '게이트 세션', router: 'Router 실행', compact: 'Compact 실행', evidence: 'Evidence 검색', codex: 'Codex 실행' } as const)[group.source];
     return { run: { id: id(key), ...(group.executionId ? { executionId: group.executionId } : {}), host: group.host, title, source: group.source, mode: group.mode, firstAt: steps[0]?.at ?? '', lastAt: steps.at(-1)?.at ?? '', state, steps }, rank: group.rank };
   });
-  const native = codexOperations(records, now, at => flipsAt(live, at));
+  const native = codexOperations(records, now, at => flipsAt(live, at), context?.codexEnds.length ? { ends: context.codexEnds, position: context.position } : undefined);
   const position = new Map<Rec, number>(native.length ? records.map((r, i) => [r, i]) : []);
   for (const run of native) separate.push({ run, rank: { cls: 2, at: run.firstAt, index: position.get(firstRow.get(run)!)! } });
   // Display the whole known turn rather than three unrelated Router/Gate/native cards.
@@ -801,60 +840,290 @@ const buildPart = (records: Rec[], mods: ModRecord[], now: Date): Part => {
     requests.add(`router:${routerDecisionKey(row.rec)}`);
   }
   const managed = records.some(r => r['host'] === 'codex' && (r['managed'] === true || traceFeature(String(r['phase'])) !== null && r['phase'] !== 'evidence_result' && !String(r['phase']).startsWith('evidence_')));
-  return { runs: [...executions.values()].map(e => e.run), ranks: [...executions.values()].map(e => e.rank), requests: [...requests], managed, until: live.until };
+  return { runs: [...executions.values()].map(e => e.run), ranks: [...executions.values()].map(e => e.rank), requests: [...requests], managed, until: live.until, origins };
 };
 
-// Keys fall back to these for a missing session, so records carrying them can meet any session-less record.
-const NO_SESSION = new Set(['unknown', 'legacy', 'null', 'undefined']);
-const joinKeys = new WeakMap<object, string[]>();
-/** Every value through which a key in buildPart relates an item to another: its session or the shared pool, its run group, and its request and run ids. */
-const joins = (item: object, rec: Rec, group: () => string): string[] => {
-  let keys = joinKeys.get(item);
-  if (!keys) {
-    const session = token(rec['session_id']);
-    keys = [session && !NO_SESSION.has(session) ? `session:${session}` : 'pool', `group:${group()}`,
-      ...['request_id', 'parent_request_id', 'invocation_id', 'run_id'].flatMap(k => typeof rec[k] === 'string' ? [`${k}:${rec[k]}`] : [])];
-    joinKeys.set(item, keys);
+/** One item of the recording: a trace record or a Router/Compact row. */
+type Item = Rec | ModRecord;
+/** Every value through which buildPart relates an item to another: its run, execution, request and run ids, its Router
+ * decision, response and turn keys, its Codex loop and native spans. Items that share none build apart (`sync`). A session or
+ * a child agent joins nothing by itself: its ends and its origins reach every part (`PartContext`). */
+const relations = (item: Item, mod: boolean): string[] => {
+  if (mod) {
+    const row = item as ModRecord, r = row.rec, keys = [`group:${modGroup(row)}`];
+    if (row.component !== 'router') return keys;
+    const session = r['session_id'] ?? 'legacy';
+    for (const [name, key] of [['rtool', 'tool_use_id'], ['rturn', 'turn']] as const) if (token(r[key])) keys.push(`${name}:${JSON.stringify([session, r[key]])}`);
+    keys.push(`rresp:${routerResponseKey(r)}`, `rresp:${routerResponseKey(r, null)}`, `rresp:${routerResponseKey(r, 'loop')}`, `rdec:${routerDecisionKey(r)}`);
+    return keys;
+  }
+  const r = item as Rec, phase = token(r['phase']), host = r['host'] === 'codex' ? 'codex' : 'claude', session = token(r['session_id']), keys: string[] = [];
+  if (phase && traceFeature(phase)) {
+    const group = gateGroup(r), prompt = token(r['execution_prompt_id']) ?? token(r['prompt_id']);
+    keys.push(`group:${host}:${group}`);
+    if (session && prompt && !group.startsWith('evidence:')) keys.push(`exec:execution:${host}:${session}:${prompt}`);
+  }
+  for (const name of ['request_id', 'run_id']) if (typeof r[name] === 'string') keys.push(`${name}:${r[name]}`);
+  if (typeof r['session_id'] === 'string' && typeof r['tool_use_id'] === 'string') keys.push(`alloc:${JSON.stringify([r['host'] ?? 'claude', r['session_id'], r['tool_use_id']])}`);
+  if (r['host'] !== 'codex' && phase === 'pre_result' && token(r['tool_use_id'])) keys.push(`rtool:${JSON.stringify([r['session_id'] ?? 'legacy', r['tool_use_id']])}`);
+  if (phase?.startsWith('background_')) keys.push(`bg:${session}:${token(r['execution_prompt_id']) ?? token(r['prompt_id'])}:${token(r['tool_use_id'])}`);
+  if (r['host'] === 'codex' && session || phase === 'codex_model_request') keys.push(`cloop:${codexLoop(r)}`);
+  if (codexRow(r)) {
+    const run = codexRunKey(r);
+    if (run) keys.push(`cgroup:${run}`);
+    if (run && !run.includes(':agent:') && !run.endsWith(':session')) keys.push(`exec:execution:${run}`);
+    for (const end of ['PostToolUse', 'SubagentStop', 'PostCompact', 'Stop', 'Interrupt']) { const span = codexSpanKey(r, end); if (span) keys.push(`span:${span}`); }
   }
   return keys;
 };
-let partCache = new Map<string, { records: Rec[]; mods: ModRecord[]; at: number; until: number; part: Part }>();
+
+/** `pos` is the item's index in its own list (records or rows): records keep their order across reads, so it moves with the
+ * others and the sorted lists below stay sorted. */
+interface Node { item: Item; mod: boolean; parent: Node | null; size: number; pos: number; stamp: number; group: Group | null }
+/** Items joined by their relations; `reads` names the session ends its build used. */
+interface Group { nodes: Node[]; built: Built | null; reads: string[]; alive: boolean }
+/** A run with where one pass would put it: `node` is its rank item, `ord` its place within its build. */
+interface Entry { run: OperationRun; cls: Rank['cls']; at: string; node: Node; built: Built; ord: number; failed: boolean; active: boolean }
+interface Ref { e: Entry; i: number; s: OperationStep }
+/** The last observation of an operation in one build, and its last success. */
+interface Observed { at: string; ok: boolean; ref: Ref; okAt: string }
+/** One group's build and what it adds to the view's totals. `regular`: every step time has one fixed format, so text and
+ * locale order agree and the totals below can be read from sorted lists. `seq` orders builds with the same newest step. */
+interface Built { group: Group; part: Part; seq: number; entries: Entry[]; maxAt: string; regular: boolean; features: Map<FeatureId, { count: number; maxAt: string }>;
+  durations: number[]; latest: Map<string, Ref>; obs: Map<string, Observed>; origins: Exported[]; lists: { nonLife: Ref[]; life: Ref[]; timed: Ref[] } | null }
+/** A child origin a build records; `sig` is what its readers see of it. */
+interface Exported { agent: string; at: string; node: Node; routing: Routing; sig: string }
+/** What one sync changes besides the builds: durations added and dropped, and each touched agent's origins as they were. */
+interface Pending { add: number[]; drop: number[]; origins: Map<string, string> }
+const REGULAR = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/;
+type SessionEnds = Map<string, Array<{ at: string; interrupted: boolean; item: Item }>>;
+const fresh = () => ({
+  nodes: new Map<Item, Node>(), owner: new Map<string, Node>(), stamp: 0, seq: 0, at: -Infinity,
+  // The nodes of the last records and rows in order, so a sync looks up only the items that changed between reads.
+  lists: [[], []] as Node[][],
+  ends: new Map() as SessionEnds, codexEnds: new Map<string, Rec[]>(), readers: new Map<string, Set<Group>>(), finite: new Set<Built>(),
+  runs: [] as Entry[], active: new Set<Entry>(), requests: new Map<string, number>(), managed: 0, irregular: 0,
+  featureCount: new Map<FeatureId, number>(), featureAts: new Map<FeatureId, string[]>(), newest: [] as Built[], durations: [] as number[],
+  latest: new Map<string, Ref[]>(), obsLast: new Map<string, Observed[]>(), obsOk: new Map<string, string[]>(), origins: new Map<string, Exported[]>(),
+});
+let split = fresh();
 let viewUntil = Infinity;
-/** The earliest time the last buildOperations output can change without a new record: a part's next age flip or a
+/** The earliest time the last buildOperations output can change without a new record: a build's next age flip or a
  * last-minute or today total moving on (`viewUntil`). */
 export const operationsStableUntil = (): number => {
   let next = viewUntil;
-  for (const entry of partCache.values()) if (entry.until < next) next = entry.until;
+  for (const b of split.finite) if (b.part.until < next) next = b.part.until;
   return next;
 };
-const sameItems = <T>(a: T[], b: T[]): boolean => a.length === b.length && a.every((v, i) => v === b[i]);
-/** Connected parts of the recording. A part with the same records is reused until one of its age tests flips, so a busy
- * history rebuilds only the sessions that received records. */
-const parts = (records: Rec[], mods: ModRecord[], now: Date): Array<{ part: Part; recordIndex: number[]; modIndex: number[] }> => {
-  const keys = [...records.map(r => joins(r, r, () => `${r['host'] === 'codex' ? 'codex' : 'claude'}:${gateGroup(r)}`)), ...mods.map(row => joins(row, row.rec, () => modGroup(row)))];
-  const parent = keys.map((_, i) => i);
-  const find = (i: number): number => { while (parent[i] !== i) i = parent[i] = parent[parent[i]!]!; return i; };
-  const owner = new Map<string, number>();
-  keys.forEach((list, i) => { for (const key of list) { const j = owner.get(key); if (j === undefined) owner.set(key, i); else parent[find(i)] = find(j); } });
-  const groups = new Map<number, { key: string; records: Rec[]; recordIndex: number[]; mods: ModRecord[]; modIndex: number[] }>();
-  keys.forEach((list, i) => {
-    const root = find(i); let group = groups.get(root);
-    if (!group) groups.set(root, group = { key: list[0]!, records: [], recordIndex: [], mods: [], modIndex: [] });
-    if (i < records.length) { group.records.push(records[i]!); group.recordIndex.push(i); } else { group.mods.push(mods[i - records.length]!); group.modIndex.push(i - records.length); }
+
+/** The index after the last item of `list` (sorted by `cmp`) that does not sort after `item`. */
+const upper = <T>(list: T[], item: T, cmp: (a: T, b: T) => number): number => {
+  let lo = 0, hi = list.length;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (cmp(list[mid]!, item) <= 0) lo = mid + 1; else hi = mid; }
+  return lo;
+};
+const insert = <T>(list: T[], item: T, cmp: (a: T, b: T) => number): void => { list.splice(upper(list, item, cmp), 0, item); };
+const remove = <T>(list: T[], item: T, cmp: (a: T, b: T) => number): void => {
+  let i = upper(list, item, cmp) - 1;
+  while (i >= 0 && list[i] !== item && cmp(list[i]!, item) === 0) i--;
+  if (list[i] !== item) i = list.indexOf(item);
+  if (i >= 0) list.splice(i, 1);
+};
+const listOf = <K, T>(map: Map<K, T[]>, key: K): T[] => { let list = map.get(key); if (!list) map.set(key, list = []); return list; };
+const byNumber = (a: number, b: number): number => a - b;
+const byText = (a: string, b: string): number => a < b ? -1 : a > b ? 1 : 0;
+
+/** One pass's run order: newest last step first, then where the pass first inserted the run (`Rank`). */
+const order = (a: Entry, b: Entry): number => b.run.lastAt.localeCompare(a.run.lastAt) || a.cls - b.cls || a.at.localeCompare(b.at) || a.node.pos - b.node.pos;
+const runOrder = (a: Entry, b: Entry): number => a.built === b.built ? a.ord - b.ord : order(a, b);
+/** The order of one pass's flat step list: runs in order, steps in run order. */
+const allOrder = (a: Ref, b: Ref): number => a.e === b.e ? a.i - b.i : runOrder(a.e, b.e);
+const newestFirst = (a: OperationStep, b: OperationStep): number => b.at.localeCompare(a.at) || b.id.localeCompare(a.id);
+// A stable sort of the flat list by these equals a sort by these and then `allOrder`.
+const newestRef = (a: Ref, b: Ref): number => newestFirst(a.s, b.s) || allOrder(a, b);
+const timedRef = (a: Ref, b: Ref): number => b.s.at.localeCompare(a.s.at) || allOrder(a, b);
+// One pass keeps the later of two observations at the same time.
+const lastFirst = (a: Observed, b: Observed): number => a.at === b.at ? allOrder(b.ref, a.ref) : a.at > b.at ? -1 : 1;
+// A total order: many builds without a step share an empty maxAt, and a removal must not scan them all.
+const byMaxAt = (a: Built, b: Built): number => b.maxAt.localeCompare(a.maxAt) || a.seq - b.seq;
+const byOrigin = (a: Exported, b: Exported): number => a.at.localeCompare(b.at) || a.node.pos - b.node.pos;
+const originsSig = (list: Exported[] | undefined): string => list?.map(o => o.sig).join('\n') ?? '';
+const timed = (s: OperationStep): boolean => s.lane === 'jev' && s.durationMs !== undefined;
+const lists = (b: Built): NonNullable<Built['lists']> => {
+  if (b.lists) return b.lists;
+  const nonLife: Ref[] = [], life: Ref[] = [], measured: Ref[] = [];
+  for (const e of b.entries) e.run.steps.forEach((s, i) => { const ref = { e, i, s }; (s.lifecycle ? life : nonLife).push(ref); if (timed(s)) measured.push(ref); });
+  return b.lists = { nonLife: nonLife.sort(newestRef), life: life.sort(newestRef), timed: measured.sort(timedRef) };
+};
+
+const summarize = (group: Group, part: Part, records: Node[], mods: Node[]): Built => {
+  const origins = part.origins.map(({ agent, row, routing }) => ({ agent, at: row.at, node: split.nodes.get(row)!, routing, sig: `${row.at}\t${JSON.stringify(routing)}` }));
+  const b: Built = { group, part, seq: ++split.seq, entries: [], maxAt: '', regular: true, features: new Map(), durations: [], latest: new Map(), obs: new Map(), origins, lists: null };
+  part.runs.forEach((run, i) => {
+    const rank = part.ranks[i]!;
+    b.entries.push({ run, cls: rank.cls, at: rank.at, node: (rank.cls === 1 ? mods : records)[rank.index]!, built: b, ord: 0, failed: run.steps.some(failed), active: run.steps.some(s => s.state === 'active') });
   });
-  const at = now.getTime(), next: typeof partCache = new Map();
-  const result = [...groups.values()].map(group => {
-    const cached = partCache.get(group.key);
-    let entry = cached && at >= cached.at && at < cached.until && sameItems(cached.records, group.records) && sameItems(cached.mods, group.mods) ? cached : undefined;
-    if (!entry) {
-      const part = buildPart(group.records, group.mods, now);
-      entry = { records: group.records, mods: group.mods, at, until: part.until, part };
+  b.entries.sort(order).forEach((e, ord) => { e.ord = ord; });
+  for (const e of b.entries) e.run.steps.forEach((s, i) => {
+    if (!REGULAR.test(s.at)) b.regular = false;
+    if (s.at > b.maxAt) b.maxAt = s.at;
+    if (!s.lifecycle) { const f = b.features.get(s.feature); if (!f) b.features.set(s.feature, { count: 1, maxAt: s.at }); else { f.count++; if (s.at > f.maxAt) f.maxAt = s.at; } }
+    const ref = { e, i, s };
+    if (timed(s)) b.durations.push(s.durationMs!);
+    if (s.lane === 'jev' && s.state !== 'active') { const key = `${e.run.host}:${s.feature}`, best = b.latest.get(key); if (!best || newestRef(ref, best) < 0) b.latest.set(key, ref); }
+    for (const [key, ok] of observations(e.run.host ?? 'claude', e.run.id, s)) {
+      const known = b.obs.get(key);
+      if (!known) { b.obs.set(key, { at: s.at, ok, ref, okAt: ok ? s.at : '' }); continue; }
+      if (s.at >= known.at) { known.at = s.at; known.ok = ok; known.ref = ref; }
+      if (ok && s.at > known.okAt) known.okAt = s.at;
     }
-    next.set(group.key, entry);
-    return { part: entry.part, recordIndex: group.recordIndex, modIndex: group.modIndex };
   });
-  partCache = next;
-  return result;
+  return b;
+};
+
+/** Adds a build to the view's totals, or takes it out. Durations change once per sync, and readers of a changed origin are
+ * built again after it (`sync`). */
+const account = (b: Built, add: boolean, pending: Pending): void => {
+  const s = split, sign = add ? 1 : -1, put = <T>(list: T[], item: T, cmp: (a: T, b: T) => number): void => { if (add) insert(list, item, cmp); else remove(list, item, cmp); };
+  for (const e of b.entries) { put(s.runs, e, order); if (e.active) { if (add) s.active.add(e); else s.active.delete(e); } }
+  for (const key of b.part.requests) { const count = (s.requests.get(key) ?? 0) + sign; if (count) s.requests.set(key, count); else s.requests.delete(key); }
+  if (b.part.managed) s.managed += sign;
+  if (!b.regular) s.irregular += sign;
+  for (const [f, { count, maxAt }] of b.features) { s.featureCount.set(f, (s.featureCount.get(f) ?? 0) + sign * count); put(listOf(s.featureAts, f), maxAt, byText); }
+  for (const ms of b.durations) (add ? pending.add : pending.drop).push(ms);
+  for (const o of b.origins) {
+    const list = listOf(s.origins, o.agent);
+    if (!pending.origins.has(o.agent)) pending.origins.set(o.agent, originsSig(list));
+    put(list, o, byOrigin);
+    if (!list.length) s.origins.delete(o.agent);
+  }
+  put(s.newest, b, byMaxAt);
+  for (const [key, ref] of b.latest) put(listOf(s.latest, key), ref, newestRef);
+  // A contract is checked only within its own execution, which one build holds whole.
+  for (const [key, o] of b.obs) if (!key.includes('\ncontract\n')) { put(listOf(s.obsLast, key), o, lastFirst); if (o.okAt) put(listOf(s.obsOk, key), o.okAt, (x, y) => byText(y, x)); }
+  if (b.part.until < Infinity) { if (add) s.finite.add(b); else s.finite.delete(b); }
+};
+
+const find = (node: Node): Node => { while (node.parent) node = node.parent = node.parent.parent ?? node.parent; return node; };
+const union = (a: Node, b: Node): void => {
+  let x = find(a), y = find(b);
+  if (x === y) return;
+  if (x.size < y.size) [x, y] = [y, x];
+  y.parent = x; x.size += y.size;
+};
+
+/** Brings the groups up to the recording: new items join the groups they relate to, a removed item dissolves its group, and
+ * groups whose items, read session ends or next age edge changed are built again. False when an item appears twice. */
+const sync = (records: Rec[], mods: ModRecord[], now: Date, retry = true): boolean => {
+  const t = now.getTime();
+  if (t < split.at) split = fresh();
+  const s = split, stamp = ++s.stamp, added: Node[] = [], dirty = new Set<Group>(), pending: Pending = { add: [], drop: [], origins: new Map() };
+  s.at = t;
+  let known = 0;
+  const walk = (items: Item[], mod: boolean): boolean => {
+    // New records land between a kept head and tail (another host's records follow), which keep their nodes.
+    const before = s.lists[+mod]!, m = before.length, n = items.length, nodes = new Array<Node>(n);
+    let head = 0, tail = 0;
+    while (head < n && head < m && items[head] === before[head]!.item) head++;
+    while (tail < n - head && tail < m - head && items[n - 1 - tail] === before[m - 1 - tail]!.item) tail++;
+    for (let pos = 0; pos < head; pos++) (nodes[pos] = before[pos]!).stamp = stamp;
+    for (let pos = n - tail; pos < n; pos++) { const node = nodes[pos] = before[pos - n + m]!; node.pos = pos; node.stamp = stamp; }
+    known += head + tail;
+    let last = head - 1;
+    for (let pos = head; pos < n - tail; pos++) {
+      const item = items[pos]!, node = s.nodes.get(item);
+      if (!node) { const created: Node = nodes[pos] = { item, mod, parent: null, size: 1, pos, stamp, group: null }; s.nodes.set(item, created); added.push(created); continue; }
+      // Records keep their relative order across reads; anything else starts over.
+      if (node.stamp === stamp || node.mod !== mod || node.pos <= last || node.pos >= m - tail) return false;
+      last = node.pos; node.pos = pos; node.stamp = stamp; known++; nodes[pos] = node;
+    }
+    s.lists[+mod] = nodes;
+    return true;
+  };
+  if (!walk(records, false) || !walk(mods, true)) { split = fresh(); return retry && sync(records, mods, now, false); }
+  const touch = (key: string): void => { for (const g of s.readers.get(key) ?? []) dirty.add(g); };
+  const unread = (g: Group): void => { for (const key of g.reads) { const set = s.readers.get(key); set?.delete(g); if (set?.size === 0) s.readers.delete(key); } g.reads = []; };
+  const drop = (g: Group): void => { if (g.built) account(g.built, false, pending); g.built = null; unread(g); };
+  const noteEnd = (node: Node, add: boolean): void => {
+    const end = sessionEnd(node.item, node.mod), r = node.item as Rec;
+    if (end) {
+      const list = listOf(s.ends, end[0]);
+      if (add) list.push({ at: end[1], interrupted: false, item: node.item }); else list.splice(list.findIndex(x => x.item === node.item) >>> 0, 1);
+      if (!list.length) s.ends.delete(end[0]);
+      touch(end[0]);
+    }
+    if (!node.mod && codexRow(r) && r['event'] === 'SessionEnd') {
+      const session = String(r['session_id']), list = listOf(s.codexEnds, session);
+      if (add) list.push(r); else list.splice(list.indexOf(r) >>> 0, 1);
+      if (!list.length) s.codexEnds.delete(session);
+      touch(`cx:${session}`);
+    }
+  };
+  const regroup: Node[] = [];
+  if (known + added.length < s.nodes.size) {
+    const gone = new Set<Group>();
+    for (const node of s.nodes.values()) if (node.stamp !== stamp) { s.nodes.delete(node.item); noteEnd(node, false); if (node.group) gone.add(node.group); }
+    for (const g of gone) {
+      drop(g); g.alive = false;
+      for (const node of g.nodes) {
+        for (const key of relations(node.item, node.mod)) if (s.owner.get(key)?.group === g) s.owner.delete(key);
+        if (node.stamp === stamp) { node.parent = null; node.size = 1; node.group = null; regroup.push(node); }
+      }
+    }
+  }
+  for (const node of added) noteEnd(node, true);
+  const olds = new Set<Group>(), touched = [...regroup, ...added];
+  for (const node of touched) for (const key of relations(node.item, node.mod)) {
+    const owner = s.owner.get(key);
+    if (!owner) { s.owner.set(key, node); continue; }
+    if (owner.group) olds.add(owner.group);
+    union(node, owner);
+  }
+  const joined = new Map<Node, Node[]>();
+  for (const g of olds) { drop(g); g.alive = false; const nodes = listOf(joined, find(g.nodes[0]!)); for (const node of g.nodes) nodes.push(node); }
+  for (const node of touched) listOf(joined, find(node)).push(node);
+  for (const nodes of joined.values()) {
+    const g: Group = { nodes: nodes.sort((a, b) => +a.mod - +b.mod || a.pos - b.pos), built: null, reads: [], alive: true };
+    for (const node of nodes) node.group = g;
+    dirty.add(g);
+  }
+  for (const b of s.finite) if (t >= b.part.until) dirty.add(b.group);
+  // An origin's routing depends only on its own group, so a second round finds no further change.
+  while (dirty.size) {
+    const round = [...dirty]; dirty.clear();
+    for (const g of round) if (g.alive) { drop(g); build(g, now); account(g.built!, true, pending); }
+    for (const [agent, before] of pending.origins) {
+      const after = originsSig(s.origins.get(agent));
+      if (after !== before) { touch(`agent:${agent}`); pending.origins.set(agent, after); }
+    }
+  }
+  // A duration list changes by what the builds added and dropped, net; a large change sorts it again.
+  const net = new Map<number, number>();
+  for (const ms of pending.add) net.set(ms, (net.get(ms) ?? 0) + 1);
+  for (const ms of pending.drop) net.set(ms, (net.get(ms) ?? 0) - 1);
+  let changes = 0;
+  for (const count of net.values()) changes += Math.abs(count);
+  if (changes > 256) s.durations = s.newest.flatMap(b => b.durations).sort(byNumber);
+  else for (const [ms, count] of net) for (let k = 0; k < Math.abs(count); k++) { if (count > 0) insert(s.durations, ms, byNumber); else remove(s.durations, ms, byNumber); }
+  return true;
+};
+
+const build = (g: Group, now: Date): void => {
+  const s = split, records: Node[] = [], mods: Node[] = [], sessions = new Set<string>();
+  for (const node of g.nodes) {
+    if (node.mod) { mods.push(node); continue; }
+    records.push(node);
+    if (codexRow(node.item as Rec)) sessions.add(String((node.item as Rec)['session_id']));
+  }
+  const ends: Rec[] = [];
+  for (const session of sessions) for (const r of s.codexEnds.get(session) ?? []) if (s.nodes.get(r)?.group !== g) ends.push(r);
+  const read = new Set<string>(), position = (item: Item): number => s.nodes.get(item)?.pos ?? -1;
+  // The group's own origins are out of the list while it builds (`drop`).
+  const children = (agent: string): Origin[] => s.origins.get(agent)?.map(o => ({ at: o.at, pos: o.node.pos, routing: o.routing })) ?? [];
+  const part = buildPart(records.map(n => n.item as Rec), mods.map(n => n.item as ModRecord), now, { sessions: s.ends, read, position, codexEnds: ends, children });
+  g.reads = [...read, ...[...sessions].map(session => `cx:${session}`)];
+  for (const key of g.reads) { let set = s.readers.get(key); if (!set) s.readers.set(key, set = new Set()); set.add(g); }
+  g.built = summarize(g, part, records, mods);
 };
 
 /** Request-scoped refusals: the call's own arguments or bounds. They show nothing about the service, its key or the connection. */
@@ -875,64 +1144,63 @@ const observations = (host: string, run: string, s: OperationStep): Array<[strin
   if ((s.state === 'done' || s.state === 'error') && !modelCheck(s)) seen.push([operationKey(host, run, s, null), s.state === 'done']);
   return seen;
 };
+type Known = { at: string; ok: boolean; okAt: string } | undefined;
+/** What later records of a failure's operation show now, from its last observation and last success. */
+const impact = (s: OperationStep, known: Known): NonNullable<OperationStep['impact']> => {
+  const last = known && known.at > s.at ? known : undefined;
+  // A refused contract is about that worker's result, never a service: another refusal of the task is not an ongoing incident.
+  return { now: s.cause && REQUEST_CAUSES.has(s.cause) ? 'request_only' : known && known.okAt > s.at ? 'later_ok' : last && s.issue !== 'contract' ? 'ongoing' : 'unknown',
+    lastAt: last?.at ?? s.at, lastState: last ? last.ok ? 'done' : 'error' : s.state };
+};
 const impacts = new WeakMap<OperationRun, { sig: string; run: OperationRun }>();
 /** Marks each failure with what later records of its operation on the same host show now, across sessions. The failure itself
  * stays as recorded. An unchanged run keeps its object, so a live patch skips it. */
+const marked = (run: OperationRun, known: (s: OperationStep) => Known): OperationRun => {
+  if (!run.steps.some(failed)) return run;
+  const steps = run.steps.map((s): OperationStep => failed(s) ? { ...s, impact: impact(s, known(s)) } : s);
+  const sig = JSON.stringify(steps.map(s => s.impact ?? null)), cached = impacts.get(run);
+  if (cached?.sig === sig) return cached.run;
+  const next = { ...run, steps, state: operationState(steps) };
+  impacts.set(run, { sig, run: next });
+  return next;
+};
 const withImpact = (runs: OperationRun[]): OperationRun[] => {
   // Per operation only its last observation and its last success matter: a failure compares its own time with them.
-  const seen = new Map<string, { last: { at: string; ok: boolean }; okAt: string }>();
+  const seen = new Map<string, NonNullable<Known>>();
   for (const run of runs) for (const s of run.steps) for (const [key, ok] of observations(run.host ?? 'claude', run.id, s)) {
     const known = seen.get(key);
-    if (!known) { seen.set(key, { last: { at: s.at, ok }, okAt: ok ? s.at : '' }); continue; }
-    if (s.at >= known.last.at) known.last = { at: s.at, ok };
+    if (!known) { seen.set(key, { at: s.at, ok, okAt: ok ? s.at : '' }); continue; }
+    if (s.at >= known.at) { known.at = s.at; known.ok = ok; }
     if (ok && s.at > known.okAt) known.okAt = s.at;
   }
-  return runs.map(run => {
-    if (!run.steps.some(failed)) return run;
-    const steps = run.steps.map((s): OperationStep => {
-      if (!failed(s)) return s;
-      const known = seen.get(operationKey(run.host ?? 'claude', run.id, s)), last = known && known.last.at > s.at ? known.last : undefined;
-      // A refused contract is about that worker's result, never a service: another refusal of the task is not an ongoing incident.
-      return { ...s, impact: { now: s.cause && REQUEST_CAUSES.has(s.cause) ? 'request_only' : known && known.okAt > s.at ? 'later_ok' : last && s.issue !== 'contract' ? 'ongoing' : 'unknown',
-        lastAt: last?.at ?? s.at, lastState: last ? last.ok ? 'done' : 'error' : s.state } };
-    });
-    const sig = JSON.stringify(steps.map(s => s.impact ?? null)), cached = impacts.get(run);
-    if (cached?.sig === sig) return cached.run;
-    const marked = { ...run, steps, state: operationState(steps) };
-    impacts.set(run, { sig, run: marked });
-    return marked;
-  });
+  return runs.map(run => marked(run, s => seen.get(operationKey(run.host ?? 'claude', run.id, s))));
 };
 
-/** `whole` builds the recording in one pass with no reuse: the reference the split build must equal. */
-export const buildOperations = (records: Rec[], mods: ModRecord[], now: Date, availability: { trace: boolean; host?: Host }, whole = false): OperationsView => {
-  // A native child skips routing on every model step; one row per step would bury the run list.
-  mods = mods.filter(m => !(m.component === 'router' && m.rec['event'] === 'child_route' && m.rec['skipped'] === 'native_child'));
-  const entries: Array<{ run: OperationRun } & Rank> = [];
-  const jevRequests = new Set<string>();
-  let managed = false;
-  for (const { part, recordIndex, modIndex } of whole ? [{ part: buildPart(records, mods, now), recordIndex: null, modIndex: null }] : parts(records, mods, now)) {
-    part.runs.forEach((run, i) => { const rank = part.ranks[i]!; entries.push({ run, ...rank, index: (rank.cls === 1 ? modIndex : recordIndex)?.[rank.index] ?? rank.index }); });
-    for (const key of part.requests) jevRequests.add(key);
-    managed ||= part.managed;
+const featureView = (f: { id: FeatureId; label: string }, count: number, lastAt: string | null, managed: boolean, availability: { trace: boolean; host?: Host }): FeatureView => {
+  if (availability.host === 'codex') {
+    const capability = (managed ? CODEX_CAPABILITIES : CODEX_PLUGIN_CAPABILITIES)[f.id];
+    return { ...f, capability, count, lastAt, state: capability.mode === 'unsupported' ? 'unsupported' : count ? 'observed' : availability.trace ? 'waiting' : 'unavailable' };
   }
-  const later = (a: { run: OperationRun }, b: { run: OperationRun }) => b.run.lastAt.localeCompare(a.run.lastAt);
-  const allRuns = withImpact(entries.sort(whole ? later : (a, b) => later(a, b) || a.cls - b.cls || a.at.localeCompare(b.at) || a.index - b.index).map(e => e.run));
+  return { ...f, count, lastAt, state: count ? 'observed' : availability.trace ? 'waiting' : 'unavailable' };
+};
+const addToday = (today: OperationsView['latency']['today'], s: OperationStep, host: Host | undefined): void => {
+  const sum = today[host ?? 'claude'] ??= { calls: 0, input: 0, costUsd: 0, unpriced: 0 };
+  sum.calls++; sum.input += s.receipt?.input ?? 0;
+  if (s.receipt?.costUsd != null) sum.costUsd += s.receipt.costUsd; else sum.unpriced++;
+};
+const midnight = (now: Date): number => { const next = new Date(now); next.setHours(24, 0, 0, 0); return next.getTime(); };
+
+/** One pass's view of runs in run order. `noteUntil` also notes when it next changes without a new record (`viewUntil`). */
+const viewOf = (sorted: OperationRun[], requests: number, managed: boolean, now: Date, availability: { trace: boolean; host?: Host }, noteUntil: boolean): OperationsView => {
+  const allRuns = withImpact(sorted);
   // A busy, older execution must remain visible even when newer completed turns fill the recent window.
   const recentIds = new Set(allRuns.slice(0, 200).map(run => run.id));
   const runs = allRuns.filter(run => recentIds.has(run.id) || run.steps.some(step => step.state === 'active'));
   const all = allRuns.flatMap((run) => run.steps.map((step) => ({ ...step, runId: run.id, runTitle: run.title, host: run.host })));
   const features = FEATURES.map((f): FeatureView => {
     const steps = all.filter((s) => s.feature === f.id && !s.lifecycle);
-    if (availability.host === 'codex') {
-      const capability = (managed ? CODEX_CAPABILITIES : CODEX_PLUGIN_CAPABILITIES)[f.id];
-      return { ...f, capability,
-        count: steps.length, lastAt: steps.length ? steps.map(s => s.at).sort().at(-1)! : null,
-        state: capability.mode === 'unsupported' ? 'unsupported' : steps.length ? 'observed' : availability.trace ? 'waiting' : 'unavailable' };
-    }
-    return { ...f, count: steps.length, lastAt: steps.length ? steps.map((s) => s.at).sort().at(-1)! : null, state: steps.length ? 'observed' : availability.trace ? 'waiting' : 'unavailable' };
+    return featureView(f, steps.length, steps.length ? steps.map((s) => s.at).sort().at(-1)! : null, managed, availability);
   });
-  const requests = jevRequests.size;
   const durations = all.filter((s) => s.lane === 'jev' && s.durationMs !== undefined).map((s) => s.durationMs!).sort((a, b) => a - b);
   const latest = all.filter((s) => s.lane === 'jev' && s.durationMs !== undefined).sort((a, b) => b.at.localeCompare(a.at))[0]?.durationMs ?? null;
   const percentile = (p: number): number | null => durations.length ? durations[Math.ceil(p * durations.length) - 1]! : null;
@@ -941,13 +1209,8 @@ export const buildOperations = (records: Rec[], mods: ModRecord[], now: Date, av
   const timed = all.filter((s) => s.lane === 'jev' && s.durationMs !== undefined).sort((a, b) => b.at.localeCompare(a.at));
   const recent = timed.filter((s, i) => i < 16 || Date.parse(s.at) >= sinceMs).slice(0, ACTIVITY_CAP).reverse().map((s) => ({ at: s.at, ms: s.durationMs! }));
   const today: OperationsView['latency']['today'] = {}, day = now.toDateString();
-  for (const s of all) if (s.lane === 'jev' && s.durationMs !== undefined && new Date(s.at).toDateString() === day) {
-    const sum = today[s.host ?? 'claude'] ??= { calls: 0, input: 0, costUsd: 0, unpriced: 0 };
-    sum.calls++; sum.input += s.receipt?.input ?? 0;
-    if (s.receipt?.costUsd != null) sum.costUsd += s.receipt.costUsd; else sum.unpriced++;
-  }
+  for (const s of all) if (s.lane === 'jev' && s.durationMs !== undefined && new Date(s.at).toDateString() === day) addToday(today, s, s.host);
   const latency = { measured: durations.length, p50: percentile(.5), p95: percentile(.95), fastest: durations[0] ?? null, latest, recent, today };
-  const newestFirst = (a: typeof all[number], b: typeof all[number]) => b.at.localeCompare(a.at) || b.id.localeCompare(a.id);
   // Tool and policy loops must not evict the most recent recorded Jev call for either host/feature.
   const latestJev = new Map<string, typeof all[number]>();
   for (const step of all.filter(s => s.lane === 'jev' && s.state !== 'active').sort(newestFirst)) {
@@ -959,13 +1222,86 @@ export const buildOperations = (records: Rec[], mods: ModRecord[], now: Date, av
   const feed = [...new Set([...newest,
     ...firstSorted(all.filter(s => !s.lifecycle && Date.parse(s.at) >= sinceMs), ACTIVITY_CAP, newestFirst),
     ...firstSorted(all.filter(s => s.lifecycle), 20, newestFirst), ...latestJev.values()])].sort(newestFirst);
-  if (!whole) {
+  if (noteUntil) {
     // Today's totals restart at local midnight. A step leaves the last-minute lists just past a minute after it, which
     // changes them only for a step past their newest 16 calls or 120 steps.
-    const midnight = new Date(now); midnight.setHours(24, 0, 0, 0); viewUntil = midnight.getTime();
+    viewUntil = midnight(now);
     const leaves = (s: { at: string }): void => { const left = Date.parse(s.at) + ACTIVITY_WINDOW_MS + 1; if (left > now.getTime() && left < viewUntil) viewUntil = left; };
     for (const s of timed.slice(16)) leaves(s);
     if (newest.length === 120) for (const s of all) if (!s.lifecycle && newestFirst(s, newest.at(-1)!) > 0) leaves(s);
   }
   return { runs, features, feed, active: runs.filter((r) => r.state === 'active').length, attention: runs.filter((r) => r.state === 'attention').length, requests, latency };
+};
+
+/** The first `k` steps of one kind by `cmp`, read from the builds with the newest steps until no older build can reach them. */
+const top = (kind: keyof NonNullable<Built['lists']>, k: number, cmp: (a: Ref, b: Ref) => number): Ref[] => {
+  const out: Ref[] = [];
+  for (const b of split.newest) {
+    if (out.length === k && b.maxAt < out[k - 1]!.s.at) break;
+    for (const ref of lists(b)[kind]) {
+      if (out.length === k && cmp(ref, out[k - 1]!) >= 0) break;
+      insert(out, ref, cmp);
+      if (out.length > k) out.pop();
+    }
+  }
+  return out;
+};
+/** Every step of one kind at or after `since`. */
+const since = (kind: keyof NonNullable<Built['lists']>, from: string): Ref[] => {
+  const out: Ref[] = [];
+  for (const b of split.newest) {
+    if (b.maxAt < from) break;
+    for (const ref of lists(b)[kind]) { if (ref.s.at < from) break; out.push(ref); }
+  }
+  return out;
+};
+
+/** The view `viewOf` draws from the same runs, read from the totals the builds keep instead of a pass over every step. */
+const splitView = (now: Date, availability: { trace: boolean; host?: Host }): OperationsView => {
+  const s = split, t = now.getTime();
+  if (s.irregular > 0) return viewOf(s.runs.map(e => e.run), s.requests.size, s.managed > 0, now, availability, true);
+  const shown = new Map<Entry, OperationRun>();
+  const known = (e: Entry) => (step: OperationStep): Known => {
+    const key = operationKey(e.run.host ?? 'claude', e.run.id, step);
+    if (key.includes('\ncontract\n')) return e.built.obs.get(key);
+    const last = s.obsLast.get(key)?.[0];
+    return last && { at: last.at, ok: last.ok, okAt: s.obsOk.get(key)?.[0] ?? '' };
+  };
+  const mark = (e: Entry): OperationRun => { let run = shown.get(e); if (!run) shown.set(e, run = marked(e.run, known(e))); return run; };
+  // A busy, older execution must remain visible even when newer completed turns fill the recent window.
+  const head = s.runs.slice(0, 200), cut = head[199];
+  const runs = [...head, ...cut ? [...s.active].filter(e => order(e, cut) > 0).sort(order) : []].map(mark);
+  const from = new Date(t - ACTIVITY_WINDOW_MS).toISOString();
+  const newest = top('nonLife', 120, newestRef), window = since('nonLife', from).sort(newestRef);
+  const latestJev = [...s.latest.values()].flatMap(list => list.slice(0, 1)).sort(newestRef);
+  const picked = new Set<OperationStep>(), refs: Ref[] = [];
+  for (const ref of [...newest, ...window.slice(0, ACTIVITY_CAP), ...top('life', 20, newestRef), ...latestJev]) if (!picked.has(ref.s)) { picked.add(ref.s); refs.push(ref); }
+  const feed = refs.sort((a, b) => newestFirst(a.s, b.s)).map(({ e, i }) => { const run = mark(e); return { ...run.steps[i]!, runId: run.id, runTitle: run.title, host: run.host }; });
+  const recentTimed = top('timed', 16, timedRef), first = new Set(recentTimed.map(ref => ref.s));
+  const timedRefs = [...recentTimed, ...since('timed', from).filter(ref => !first.has(ref.s))].sort(timedRef);
+  const recent = timedRefs.slice(0, ACTIVITY_CAP).reverse().map(({ s: step }) => ({ at: step.at, ms: step.durationMs! }));
+  const start = new Date(now); start.setHours(0, 0, 0, 0);
+  const today: OperationsView['latency']['today'] = {}, day = now.toDateString();
+  for (const { e, s: step } of since('timed', start.toISOString()).filter(ref => new Date(ref.s.at).toDateString() === day).sort(allOrder)) addToday(today, step, e.run.host);
+  const durations = s.durations, percentile = (p: number): number | null => durations.length ? durations[Math.ceil(p * durations.length) - 1]! : null;
+  const latency = { measured: durations.length, p50: percentile(.5), p95: percentile(.95), fastest: durations[0] ?? null, latest: recentTimed[0]?.s.durationMs ?? null, recent, today };
+  const features = FEATURES.map(f => featureView(f, s.featureCount.get(f.id) ?? 0, s.featureAts.get(f.id)?.at(-1) ?? null, s.managed > 0, availability));
+  viewUntil = midnight(now);
+  const leaves = (step: OperationStep): void => { const left = Date.parse(step.at) + ACTIVITY_WINDOW_MS + 1; if (left > t && left < viewUntil) viewUntil = left; };
+  for (const ref of timedRefs.slice(16)) leaves(ref.s);
+  if (newest.length === 120) for (const ref of window) if (newestFirst(ref.s, newest[119]!.s) > 0) leaves(ref.s);
+  return { runs, features, feed, active: runs.filter((r) => r.state === 'active').length, attention: runs.filter((r) => r.state === 'attention').length, requests: s.requests.size, latency };
+};
+
+/** `whole` builds the recording in one pass with no reuse: the reference the split build must equal. */
+export const buildOperations = (records: Rec[], mods: ModRecord[], now: Date, availability: { trace: boolean; host?: Host }, whole = false): OperationsView => {
+  // A native child skips routing on every model step; one row per step would bury the run list.
+  mods = mods.filter(m => !(m.component === 'router' && m.rec['event'] === 'child_route' && m.rec['skipped'] === 'native_child'));
+  if (whole || !sync(records, mods, now)) {
+    const part = buildPart(records, mods, now);
+    // An item listed twice cannot be split; the next rebuild builds the whole recording again.
+    if (!whole) viewUntil = now.getTime();
+    return viewOf([...part.runs].sort((a, b) => b.lastAt.localeCompare(a.lastAt)), part.requests.length, part.managed, now, availability, false);
+  }
+  return splitView(now, availability);
 };
