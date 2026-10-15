@@ -479,9 +479,11 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       const model = requestedModelFor(input.tool_input);
       const profile = OWNED_AGENT_PROFILES.find(p => p.name === (input.tool_input as AgentInput)['subagent_type']);
       const ownerState = input.session_id ? readJob(deps.env, input.session_id) : null;
-      const reserved = ownerState?.ok && !!own(ownerState.value?.current.active ?? {}, input.tool_use_id ?? '');
+      const reservation = ownerState?.ok ? own(ownerState.value?.current.active ?? {}, input.tool_use_id ?? '') : undefined;
+      // A retry of the same task is a fresh dispatch one role above the attempt that failed, never a transcript handoff.
+      const failed = reservation && reservation.attempt > 1 && ownerState?.ok ? ownerState.value?.current.receipts.filter(r => r.task_id === reservation.task_id && r.attempt === reservation.attempt - 1).at(-1) : undefined;
       if (model) {
-        allocationOffer = prepareDispatchAllocation(allocation, model, profile?.effort ?? null, !!reserved, config.routeConfidenceFloor);
+        allocationOffer = prepareDispatchAllocation(allocation, model, profile?.effort ?? null, !!reservation, config.routeConfidenceFloor, failed?.requested_model ?? undefined);
         if (allocationOffer) { sentRequest = { ...request, questions: { ...(request.questions as object), ...allocationOffer.questions } }; questionKeys = Object.keys(sentRequest.questions as object); }
       }
     }

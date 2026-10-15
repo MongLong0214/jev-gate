@@ -6,9 +6,10 @@ import { childStepContext } from '../../src/router-child-context.ts';
 import { choice, deferred, drain, fakeEngine, streamNext, type SentRequest, type Responder } from './fake-engine.ts';
 
 const OPUS = 'claude-opus-5-5', SONNET = 'claude-sonnet-5-5', HAIKU = 'claude-haiku-5-5';
+const OPTION: Record<string, string> = { [HAIKU]: 'mechanical', [SONNET]: 'routine', [OPUS]: 'complex' };
 const reply = (req: SentRequest, target: string, effort = 'low') => ({ status: 200, text: JSON.stringify({ model: JEV_MODEL,
   answers: Object.fromEntries(Object.entries(req.questions).map(([name, q]) => [name, q.type === 'choice'
-    ? choice(Object.keys(q.criteria), [name === 'model' ? target : name === 'control' ? 'task_clear' : 'ordinary', .99])
+    ? choice(Object.keys(q.criteria), [name === 'capability' ? OPTION[target]! : name === 'control' ? 'task_clear' : 'ordinary', .99])
     : { type: 'score', probabilities: Object.fromEntries((q.criteria as string[]).map((text, i) => [i, text.startsWith(effort === 'high' ? 'Strong reasoning' : 'Light reasoning') ? 1 : 0])) }])) }) });
 const step = (index: number, over: Partial<TurnStepEvent> = {}): TurnStepEvent => ({ agentId: 'child', turnId: 'child-turn', index, model: OPUS, effort: 'high', ...over });
 async function setup(options: Record<string, boolean> = {}, respond: Responder = req => reply(req, SONNET), prompt = 'Find the cause of the failing test and repair it; preserve the public API.') {
@@ -59,8 +60,8 @@ describe('native worker inference routing', () => {
   it('offers current 1M Haiku without inventing a smaller-window bound and excludes legacy Haiku', async () => {
     const { router, f } = await setup();
     await drain(router.turnStep(f.engine, step(1), streamNext<TurnStepEvent>().next));
-    expect(f.sent[0]?.questions.model?.criteria).toHaveProperty(HAIKU);
-    expect(f.sent[0]?.questions.model?.criteria).not.toHaveProperty('claude-haiku-4-5-20251001');
+    expect(f.logs.find(r => r.event === 'child_route')?.['selection']).toMatchObject({ roles: expect.arrayContaining([{ role: 'fast', option: 'mechanical', model: HAIKU }]) });
+    expect(JSON.stringify(f.logs)).not.toContain('claude-haiku-4-5');
     expect(f.logs.find(r => r.event === 'child_route')).toMatchObject({ excluded: { legacy_model: expect.any(Number) } });
   });
 

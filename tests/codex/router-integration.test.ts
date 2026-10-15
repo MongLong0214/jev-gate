@@ -15,7 +15,7 @@ const catalog = [
 const config = join(dir, 'policy.json');
 const saveConfig = (router: Obj = {}) => writeFileSync(config, JSON.stringify({ gate: { mode: 'off' }, router: { timeoutMs: 2000, ...router } }));
 const answers = (req: Obj, model: string, effort: string) => Object.fromEntries(Object.entries(req['questions'] as Record<string, {type:string;criteria:Record<string,string>|string[]}>).map(([k,q]) => {
-  const pick = k === 'model' ? model : k === 'control' ? 'task_clear' : 'ordinary';
+  const pick = k === 'model' ? model : k === 'capability' ? ({ 'gpt-6-luna': 'mechanical', 'gpt-6.1-sol': 'complex' } as Record<string, string>)[model]! : k === 'control' ? 'task_clear' : 'ordinary';
   return [k, q.type === 'choice' ? {type:'choice',choice:pick,confidence:1,probabilities:Object.fromEntries(Object.keys(q.criteria).map(v=>[v,v===pick?1:0]))} :
     {type:'score',probabilities:Object.fromEntries((q.criteria as string[]).map((v,i)=>[i,v.startsWith(effort === 'max' ? 'Maximum' : effort === 'low' ? 'Light' : 'Strong') ? 1 : 0]))}];
 }));

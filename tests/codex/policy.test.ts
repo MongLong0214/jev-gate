@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { codexObservation, type Obj } from '../../src/codex/source.js';
 import { catalogTierModels, loadCodexPolicy, runtimeCodexPolicy } from '../../src/codex/config.js';
-import { routeCodex } from '../../src/codex/router.js';
+import { codexCandidates, routeCodex, type CodexModel } from '../../src/codex/router.js';
+import { codexSuccessor } from '../../src/codex/catalog.js';
 import { CodexRpc } from '../../src/codex/rpc.js';
 import { CodexPolicy } from '../../src/codex/policy.js';
 import { readJob } from '../../src/job.js';
@@ -57,7 +58,7 @@ describe('Codex ordered routing and recorded application', () => {
     const questions = request['questions'] as Record<string, { type: string; criteria: Record<string, string> | string[] }>;
     return Object.fromEntries(Object.entries(questions).map(([name, q]) => {
       if (q.type === 'choice') {
-        const pick = name === 'control' ? control : name === 'model' ? model : 'ordinary';
+        const pick = name === 'control' ? control : name === 'model' || name === 'capability' ? model : 'ordinary';
         return [name, { type: 'choice', choice: pick, confidence: 1, probabilities: Object.fromEntries(Object.keys(q.criteria).map(k => [k, k === pick ? 1 : 0])) }];
       }
       const prefix: Record<string, string> = { none: 'No reasoning', minimal: 'A trivial', low: 'Light reasoning', medium: 'Ordinary reasoning', high: 'Strong reasoning', xhigh: 'Exceptional reasoning', max: 'Maximum sustained', ultra: 'Exhaustive host' };
@@ -113,6 +114,70 @@ describe('Codex ordered routing and recorded application', () => {
     const fetchImpl = vi.fn(async (_url: unknown, init?: RequestInit) => { const req = JSON.parse(String(init?.body)); expect(Object.keys(req.questions.model.criteria)).toContain(target); return response({ model: req.model, answers: answersFor(req, target, 'max') }); });
     expect(await routeCodex({ model: 'outside-role-mapping', effort: 'high', task: 'task', session: 's', prompt: 'p', catalog: native, config, env: { TYPESAFE_API_KEY: 'key' }, fetchImpl })).toEqual({ model: target, effort: 'max', effortEdit: { kind: 'set', value: 'max' } });
     expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+  // Descriptions as this account's catalog lists them (~/.codex/models_cache.json, 2026-10-15).
+  const levels = (n = 6) => ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'].slice(0, n).map(reasoningEffort => ({ reasoningEffort }));
+  const account: CodexModel[] = [
+    { model: 'gpt-6.1-sol', description: 'Latest workhorse model for coding and everyday work.', supportedReasoningEfforts: levels() },
+    { model: 'gpt-6-astra', description: 'Frontier intelligence for the most demanding work.', supportedReasoningEfforts: levels() },
+    { model: 'gpt-6-sol', description: 'Previous generation workhorse model.', supportedReasoningEfforts: levels() },
+    { model: 'gpt-6-luna', description: 'Fast and affordable model for easier tasks.', supportedReasoningEfforts: levels(5) },
+    { model: 'gpt-5.6-sol', description: 'Older generation workhorse model.', supportedReasoningEfforts: levels() },
+    { model: 'gpt-5.6-terra', description: 'Older balanced model for straightforward work.', supportedReasoningEfforts: levels() },
+    { model: 'gpt-5.6-luna', description: 'Older fast and efficient model.', supportedReasoningEfforts: levels(5) },
+    { model: 'gpt-daybreak-blue-latest', description: 'Latest frontier agentic coding model for broad defensive cybersecurity work.', supportedReasoningEfforts: levels() },
+    { model: 'codex-auto-review', description: 'Automatic approval review model for Codex.', hidden: true, supportedReasoningEfforts: levels(5) },
+  ];
+  // The same IDs without any older/previous wording, so only the version rule can find a successor.
+  const plain = account.map(m => ({ ...m, description: 'Coding model.' }));
+  it('finds the newest general successor by family and numeric version, and never for an ID outside the grammar', () => {
+    expect(codexSuccessor('gpt-6-sol', plain)).toBe('gpt-6.1-sol');
+    expect(codexSuccessor('gpt-5.6-sol', plain)).toBe('gpt-6.1-sol');
+    expect(codexSuccessor('gpt-5.6-luna', plain)).toBe('gpt-6-luna');
+    for (const id of ['gpt-6.1-sol', 'gpt-6-luna', 'gpt-5.6-terra', 'gpt-6-astra', 'gpt-daybreak-blue-latest', 'codex-auto-review', 'gpt-6-sol-2026-10-01', 'GPT-5-sol']) expect(codexSuccessor(id, plain)).toBeNull();
+    const versions = ['gpt-6.9-sol', 'gpt-6.10-sol', 'gpt-7-sol-latest', 'gpt-6-sol-mini'].map(model => ({ model, description: 'Coding model.', supportedReasoningEfforts: levels() }));
+    expect(codexSuccessor('gpt-6.9-sol', versions)).toBe('gpt-6.10-sol');
+    expect(codexSuccessor('gpt-6.10-sol', versions)).toBeNull();
+    expect(codexSuccessor('gpt-6.1-sol', [...plain, { ...plain[0]!, model: 'gpt-7-sol', hidden: true }])).toBeNull();
+  });
+  it('never offers or picks a superseded model, and counts it as excluded', async () => {
+    expect(codexCandidates(plain, true).map(c => c.id)).toEqual(['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-luna', 'gpt-5.6-terra', 'gpt-daybreak-blue-latest']);
+    // Superseded models listed first with current wording, so only the version rule keeps them out of the tiers.
+    const listedFirst = [{ ...account[2]!, description: account[0]!.description! }, { ...account[6]!, description: account[3]!.description! }, ...account];
+    expect(catalogTierModels('gpt-6-sol', listedFirst)).toEqual({ fast: 'gpt-6-luna', standard: 'gpt-6.1-sol', deep: 'gpt-6.1-sol', frontier: 'gpt-6-astra' });
+    const rows: Obj[] = [];
+    const fetchImpl = vi.fn(async (_url: unknown, init?: RequestInit) => { const req = JSON.parse(String(init?.body)); return response({ model: req.model, answers: answersFor(req, 'mechanical') }); });
+    expect(await routeCodex({ model: 'gpt-6.1-sol', effort: 'medium', task: 'Rename a symbol.', session: 's', prompt: 'p', catalog: account, config, env: { TYPESAFE_API_KEY: 'key' }, fetchImpl, trace: { write: (phase, row) => { rows.push({ phase, ...row }); return { ok: true, file: 'f' }; } } })).toEqual({ model: 'gpt-6-luna', effort: 'low', effortEdit: { kind: 'set', value: 'low' } });
+    expect(rows.at(-1)).toMatchObject({ excluded: { superseded: 3 }, selection: { roles: [{ model: 'gpt-6-luna' }, { model: 'gpt-6.1-sol' }] } });
+  });
+  const superseded = async (model: string, kind: string, extra: Partial<Parameters<typeof routeCodex>[0]> = {}) => {
+    const rows: Obj[] = [];
+    const fetchImpl = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      if (kind === 'failed') return new Response('', { status: 503 });
+      const req = JSON.parse(String(init?.body)); return response({ model: req.model, answers: answersFor(req, kind) });
+    });
+    const patch = await routeCodex({ model, effort: 'medium', task: 'Fix the cache bug.', session: 's', prompt: 'p', catalog: account, config, env: kind === 'key_missing' ? {} : { TYPESAFE_API_KEY: 'key' }, fetchImpl,
+      trace: { write: (phase, row) => { rows.push({ phase, ...row }); return { ok: true, file: 'f' }; } }, ...extra });
+    return { patch, rows, fetchImpl };
+  };
+  it.each([[undefined], [{ agentId: 'worker', step: 1, context: {} }]])('moves a superseded baseline to its successor with or without a Jev answer (child %o)', async child => {
+    const extra = child ? { child } : {};
+    const kept = await superseded('gpt-6-sol', 'complex', extra);
+    expect(kept.patch).toEqual({ model: 'gpt-6.1-sol', effort: 'low', effortEdit: { kind: 'set', value: 'low' } });
+    expect(kept.rows.at(-1)).toMatchObject({ scope: child ? 'child' : 'root', baseline_model: 'gpt-6-sol', superseded_baseline: { from: 'gpt-6-sol', to: 'gpt-6.1-sol' }, reasons: { model: 'superseded_baseline' } });
+    expect((await superseded('gpt-6-sol', 'mechanical', extra)).patch).toMatchObject({ model: 'gpt-6-luna' });
+    expect((await superseded('gpt-5.6-sol', 'failed', extra)).patch).toEqual({ model: 'gpt-6.1-sol' });
+    const missing = await superseded('gpt-6-sol', 'key_missing', extra);
+    expect(missing.patch).toEqual({ model: 'gpt-6.1-sol' }); expect(missing.fetchImpl).not.toHaveBeenCalled();
+    expect(missing.rows).toEqual([expect.objectContaining({ phase: 'codex_router_skipped', reason: 'key_missing', superseded_baseline: { from: 'gpt-6-sol', to: 'gpt-6.1-sol' } })]);
+  });
+  it('keeps a superseded baseline whose successor is not an allowed target for the same effort', async () => {
+    const astra = [...account, { ...account[1]!, model: 'gpt-5.6-astra' }];
+    expect((await superseded('gpt-5.6-astra', 'key_missing', { catalog: astra })).patch).toEqual({});
+    expect((await superseded('gpt-5.6-astra', 'key_missing', { catalog: astra, config: { ...config, router: { ...config.router, allowAstra: true } } })).patch).toEqual({ model: 'gpt-6-astra' });
+    expect((await superseded('gpt-5.6-luna', 'key_missing', { effort: 'ultra', catalog: account.map(m => m.model === 'gpt-5.6-luna' ? { ...m, supportedReasoningEfforts: levels() } : m) })).patch).toEqual({});
+    expect((await superseded('gpt-5.6-terra', 'key_missing')).patch).toEqual({});
+    expect((await superseded('gpt-6-sol', 'key_missing', { modelPinned: true })).patch).toEqual({});
   });
 });
 describe('native workspace authentication routing', () => {

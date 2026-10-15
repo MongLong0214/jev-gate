@@ -30,6 +30,26 @@ export const generalCodexModel = (m: CodexModel): boolean => !m.hidden &&
   !/cybersecurity|automatic.*review|specialist|\b(?:older|previous generation|legacy)\b/i.test(m.description ?? '') &&
   (!m.inputModalities || m.inputModalities.includes('text'));
 
+/** `gpt-<major>[.<minor>]-<family>`. Any other ID has no comparable version, so it is never superseded. */
+const codexVersion = (id: string): { family: string; version: [number, number] } | null => {
+  const m = /^gpt-(\d+)(?:\.(\d+))?-([a-z]+(?:-[a-z]+)*)$/.exec(id);
+  return m ? { family: m[3]!, version: [Number(m[1]), Number(m[2] ?? 0)] } : null;
+};
+/**
+ * The newest general model the catalog lists in the same family at a higher version, or null. A model with one is
+ * superseded and never a target. Only the catalog decides, so a new release needs no code change; a hidden or
+ * specialist entry supersedes nothing, so it cannot leave its family without a target.
+ */
+export const codexSuccessor = (id: string, catalog: readonly CodexModel[]): string | null => {
+  const own = codexVersion(id);
+  let best: { id: string; version: [number, number] } | null = null;
+  for (const m of own ? catalog : []) {
+    const other = codexVersion(m.model), than = best?.version ?? own!.version;
+    if (other?.family === own!.family && generalCodexModel(m) && (other.version[0] - than[0] || other.version[1] - than[1]) > 0) best = { id: m.model, version: other.version };
+  }
+  return best?.id ?? null;
+};
+
 /** Product roles from the account's descriptions, not inferred prices or a version performance ranking. */
 export const codexModelRole = (m: CodexModel): { rank: number; description: string } | undefined => {
   const text = m.description ?? '';

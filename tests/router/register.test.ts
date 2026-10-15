@@ -138,7 +138,7 @@ describe('register', () => {
     let offered=false;
     const fetch=host.$.http.fetch;
     host.$.http.fetch=async (url, init) => {
-      offered=init.body.includes('claude-fable-5-1');
+      offered=init.body.includes('"open_problem"');
       return fetch(url,init);
     };
     await spawnThrough(await registered({enabled:true,allowFable:!enabled}),host);
@@ -162,16 +162,16 @@ describe('register', () => {
     const offered: string[][] = [];
     host.$.http.fetch = async (_url, init) => {
       const req = JSON.parse(init.body);
-      offered.push(Object.keys(req.questions.model.criteria));
-      return { status: 200, text: JSON.stringify({ model: JEV_MODEL, answers: Object.fromEntries(Object.entries(req.questions).map(([name, q]) => [name, (q as { type: string }).type === 'choice' ? choice(Object.keys((q as { criteria: object }).criteria), [name === 'model' ? '__keep__' : name === 'control' ? 'task_clear' : 'ordinary', .99]) : { type: 'score', probabilities: { 0: 0, 1: 0, 2: 1 } }])) }) };
+      offered.push(Object.keys(req.questions.capability.criteria));
+      return { status: 200, text: JSON.stringify({ model: JEV_MODEL, answers: Object.fromEntries(Object.entries(req.questions).map(([name, q]) => [name, (q as { type: string }).type === 'choice' ? choice(Object.keys((q as { criteria: object }).criteria), [name === 'capability' ? 'mechanical' : name === 'control' ? 'task_clear' : 'ordinary', .99]) : { type: 'score', probabilities: { 0: 0, 1: 0, 2: 1 } }])) }) };
     };
     const hooks = await registered({ enabled: true, routeMainModel: false, routeMainEffort: false, routeSubagentEffort: false });
     let calls = 0;
     await hooks.get('agent.spawn')?.(host.$, { ...SPAWN, model: 'haiku' }, withSignal(async (e: { model?: string }) => { calls++; expect(e.model).toBe('haiku'); return { model: expected }; }));
     expect(calls).toBe(1);
     expect(offered).toHaveLength(1);
-    expect(offered[0]).not.toContain(expected);
-    expect(offered[0]?.includes('claude-haiku-5-5')).toBe(base === '2.1.293' && expected !== 'claude-haiku-5-5');
+    // The baseline serves its own role, so the resolved native Haiku is the fast role's one model.
+    expect(host.logs.join('\n')).toContain(`{"role":"fast","option":"mechanical","model":"${expected}"}`);
     expect(host.logs.join('\n')).not.toContain('"confirmation":"mismatch"');
   });
   it.each([
