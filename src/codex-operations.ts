@@ -29,6 +29,9 @@ export const codexSpanKey = (r: Rec, event: string): string | null => {
 
 /** The first row of each run, so runs built from separate parts can be put back in one pass's order. */
 export const firstRow = new WeakMap<OperationRun, Rec>();
+/** Each row's step with what it was made from: a long turn rebuilt for one new row makes only the steps whose pairing or age
+ * changed, not one per row of the turn. */
+const made = new WeakMap<Rec, { end: Rec | undefined; closing: Rec | undefined; stale: boolean; step: OperationStep }>();
 /** A native host row this view reads. */
 export const codexRow = (r: Rec): boolean => r['host'] === 'codex' && r['phase'] === 'codex_event' && !!token(r['session_id']) && !!at(r);
 /** The run a native row belongs to, or null when it shows no step. */
@@ -77,35 +80,14 @@ export const codexOperations = (records: Rec[], now: Date, flipsAt?: (at: number
     const event = token(r['event']) ?? '';
     const key = foreign.has(r) ? null : codexRunKey(r);
     if (!key) continue;
-    const ends = START_END[event];
     const end = paired.get(r);
     const closing = ended.get(r);
-    const isStart = !!ends;
-    const elapsed = Math.max(0, now.getTime() - Date.parse(at(r)));
-    if (isStart && !end && !closing) flipsAt?.(Date.parse(at(r)) + 600_001);
-    const failed = (v: Rec | undefined) => v?.['is_error'] === true || typeof v?.['exit_code'] === 'number' && v['exit_code'] !== 0;
-    const state = failed(r) || failed(end) ? 'error'
-      : event === 'Interrupt' || end?.['event'] === 'Interrupt' || !end && closing?.['event'] === 'Interrupt' ? 'interrupted'
-      : isStart && !end ? closing || elapsed > 600_000 ? 'unconfirmed' : 'active' : 'done';
-    const tool = token(r['tool_name']);
-    const detail = state === 'error' ? `호스트가 실패를 보고함${typeof (end ?? r)['exit_code'] === 'number' ? ` · 종료 코드 ${(end ?? r)['exit_code']}` : ' · 도구 오류'} · Jev 정책 오류와 별도`
-      : state === 'interrupted' ? '사용자 중단 관측 · 성공이나 기능 오류로 분류하지 않음'
-      : state === 'unconfirmed' ? closing ? '턴 또는 세션 종료 · 이 호출의 결과 이벤트는 미관측' : '결과 이벤트 미관측 · 실행 성공·실패를 판단할 수 없음'
-      : tool === 'spawn_agent' && event === 'PostToolUse' ? '에이전트 생성 응답 · 작업 완료 여부는 별도 관측'
-      : event === 'SubagentStop' ? '종료 훅 관측 · Jev 계약 수락 검사 없음'
-      : event === 'PreCompact' || event === 'PostCompact' ? r['managed'] === true ? 'Codex 압축 절차 · digest 설치는 별도 적용 기록에서 확인' : 'Codex 기본 압축 · 연결 세션에서 digest 적용 가능'
-      : [tool, token(r['agent_type']), token(r['model'])].filter(Boolean).join(' · ') || 'Codex 호스트 이벤트';
-    const measured = end ? Date.parse(at(end)) - Date.parse(at(r)) : undefined;
-    const step: OperationStep = {
-      id: hash(`${key}:${token(r['invocation_id']) ?? at(r)}:${event}`), at: at(r),
-      feature: event.includes('Compact') ? 'compact' : 'workers',
-      lifecycle: true, ...(state === 'error' && token(r['session_id']) ? { sessionId: token(r['session_id'])! } : {}),
-      state, lane: 'host', title: TITLE[event]!, summary: detail, ...(event === 'SubagentStop' && state === 'done' ? { outcome: 'host_ended' as const } : {}),
-      details: [...(state === 'unconfirmed' ? ['호스트 훅이 모든 도구 경로의 종료를 보장하지 않습니다. 원래 호스트에서 해당 도구 결과를 확인하세요.'] : []), ...(token(r['tool_use_id']) ? [`call: ${hash(String(r['tool_use_id']))}`] : [])],
-      ...(measured !== undefined && Number.isFinite(measured) && measured >= 0 ? { durationMs: measured } : {}),
-      ...(isStart ? { startedAt: at(r) } : {}),
-    };
-    const steps = groups.get(key) ?? []; steps.push(step); groups.set(key, steps);
+    const open = !!START_END[event] && !end && !closing;
+    if (open) flipsAt?.(Date.parse(at(r)) + 600_001);
+    const stale = open && now.getTime() - Date.parse(at(r)) > 600_000;
+    let kept = made.get(r);
+    if (!kept || kept.end !== end || kept.closing !== closing || kept.stale !== stale) made.set(r, kept = { end, closing, stale, step: stepOf(r, key, event, end, closing, stale) });
+    const steps = groups.get(key) ?? []; steps.push(kept.step); groups.set(key, steps);
     if (!firsts.has(key)) firsts.set(key, r);
   }
   return [...groups].map(([key, steps]) => {
@@ -118,4 +100,32 @@ export const codexOperations = (records: Rec[], now: Date, flipsAt?: (at: number
     firstRow.set(run, firsts.get(key)!);
     return run;
   });
+};
+
+/** A native row's step from its pairing: `end` is its result, `closing` the turn or session end after it, and `stale` marks an
+ * open start older than the bound. */
+const stepOf = (r: Rec, key: string, event: string, end: Rec | undefined, closing: Rec | undefined, stale: boolean): OperationStep => {
+  const isStart = !!START_END[event];
+  const failed = (v: Rec | undefined) => v?.['is_error'] === true || typeof v?.['exit_code'] === 'number' && v['exit_code'] !== 0;
+  const state = failed(r) || failed(end) ? 'error'
+    : event === 'Interrupt' || end?.['event'] === 'Interrupt' || !end && closing?.['event'] === 'Interrupt' ? 'interrupted'
+    : isStart && !end ? closing || stale ? 'unconfirmed' : 'active' : 'done';
+  const tool = token(r['tool_name']);
+  const detail = state === 'error' ? `호스트가 실패를 보고함${typeof (end ?? r)['exit_code'] === 'number' ? ` · 종료 코드 ${(end ?? r)['exit_code']}` : ' · 도구 오류'} · Jev 정책 오류와 별도`
+    : state === 'interrupted' ? '사용자 중단 관측 · 성공이나 기능 오류로 분류하지 않음'
+    : state === 'unconfirmed' ? closing ? '턴 또는 세션 종료 · 이 호출의 결과 이벤트는 미관측' : '결과 이벤트 미관측 · 실행 성공·실패를 판단할 수 없음'
+    : tool === 'spawn_agent' && event === 'PostToolUse' ? '에이전트 생성 응답 · 작업 완료 여부는 별도 관측'
+    : event === 'SubagentStop' ? '종료 훅 관측 · Jev 계약 수락 검사 없음'
+    : event === 'PreCompact' || event === 'PostCompact' ? r['managed'] === true ? 'Codex 압축 절차 · digest 설치는 별도 적용 기록에서 확인' : 'Codex 기본 압축 · 연결 세션에서 digest 적용 가능'
+    : [tool, token(r['agent_type']), token(r['model'])].filter(Boolean).join(' · ') || 'Codex 호스트 이벤트';
+  const measured = end ? Date.parse(at(end)) - Date.parse(at(r)) : undefined;
+  return {
+    id: hash(`${key}:${token(r['invocation_id']) ?? at(r)}:${event}`), at: at(r),
+    feature: event.includes('Compact') ? 'compact' : 'workers',
+    lifecycle: true, ...(state === 'error' && token(r['session_id']) ? { sessionId: token(r['session_id'])! } : {}),
+    state, lane: 'host', title: TITLE[event]!, summary: detail, ...(event === 'SubagentStop' && state === 'done' ? { outcome: 'host_ended' as const } : {}),
+    details: [...(state === 'unconfirmed' ? ['호스트 훅이 모든 도구 경로의 종료를 보장하지 않습니다. 원래 호스트에서 해당 도구 결과를 확인하세요.'] : []), ...(token(r['tool_use_id']) ? [`call: ${hash(String(r['tool_use_id']))}`] : [])],
+    ...(measured !== undefined && Number.isFinite(measured) && measured >= 0 ? { durationMs: measured } : {}),
+    ...(isStart ? { startedAt: at(r) } : {}),
+  };
 };

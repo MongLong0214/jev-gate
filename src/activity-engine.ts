@@ -11,7 +11,8 @@ import { operationsStableUntil, type OperationsView } from './operations.js';
 
 /** One rebuild. `key` advances only when content changed; `patch` turns the frame `base` into it. The whole frame is built
  * only when a viewer needs one (`full`), so a rebuild sends the changed part across the thread, not the history. Without new
- * records the frame stays the same until `until`, when a running step can turn unconfirmed. */
+ * records the frame stays the same until `until`, when a running step can turn unconfirmed. `ms` is the rebuild's own time,
+ * without reading the directories first: a cold read or a reconciliation pass says nothing about what the next record costs. */
 export interface LoadedActivity { key: string; base: string | null; patch: string | null; until: number; ms: number }
 
 /** Owns the readers and their caches. It runs on the activity thread, or in process when that thread is unavailable. */
@@ -30,8 +31,8 @@ export const activityHandler = (sources: DashboardSources) => {
   };
   return {
     async load(): Promise<LoadedActivity> {
-      const started = performance.now();
       for (const dir of dirs) await traceReader.prepare(dir);
+      const started = performance.now();
       // No record changed and no age or window edge passed: a rebuild would draw the same frame, so it is skipped.
       const reads = dirs.map(dir => traceReader.read(dir)), liveness = livenessStamp();
       if (last && Date.now() < last.loaded.until && liveness === last.liveness && reads.every((read, i) => read === last!.reads[i])) return { ...last.loaded, base: null, patch: null };

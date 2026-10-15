@@ -2,13 +2,21 @@ import { mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { loadActivity, type ActivitySnapshot } from '../src/activity.js';
 import { startDashboard, readVersions } from '../src/dashboard.js';
 import { DASHBOARD_PAGE } from '../src/dashboard-page.js';
 import { TraceDirectoryReader } from '../src/explain.js';
+import { memo } from '../src/memo.js';
 import { liveFrames } from './live-frames.js';
+
+// The records the last snapshot handed to the operations build.
+const built = vi.hoisted(() => ({ records: [] as Array<Record<string, unknown>> }));
+vi.mock('../src/operations.js', async (original) => {
+  const actual = await original<typeof import('../src/operations.js')>();
+  return { ...actual, buildOperations: (...args: Parameters<typeof actual.buildOperations>) => { built.records = args[0]; return actual.buildOperations(...args); } };
+});
 
 const dirs: string[] = [];
 const make = (): string => {
@@ -75,6 +83,26 @@ describe('loadActivity', () => {
     expect(same().credit.exhausted).toBe(true);
     rmSync(join(trace, 'r0.json')); reader.invalidate(trace, 'r0.json');
     expect(same().jevCalls).toBe(4);
+  });
+  it('hands a Mod record to the operations build as its row only, and still shows it', () => {
+    // As a record too, each Router record kept an empty build of its own: most of a long history's builds.
+    const trace = make();
+    write(trace, 'router.json', { phase: 'mod_router', session_id: 's', event: 'root', turn: 't', sent: true, assessment: 'ok', written_at: '2026-10-07T05:00:00.000Z' });
+    write(trace, 'gate.json', { phase: 'admission_result', session_id: 's', prompt_id: 'p', attempted: true, decision: { shape: 'direct' }, written_at: '2026-10-07T05:00:01.000Z' });
+    const s = loadActivity({ traceDir: trace, env: { HOME: make() } });
+    expect(built.records.map(r => r['phase'])).toEqual(['admission_result']);
+    expect(s.operations.runs.some(run => run.source === 'router')).toBe(true);
+    expect(s.jevCalls).toBe(2);
+  });
+  it('keeps across loads the memo results the last load used, and computes the others again', () => {
+    // Caches held every string the history ever had until a cap emptied them all at once.
+    const calls: string[] = [];
+    const upper = memo((v: string): string | null => { calls.push(v); return v === 'none' ? null : v.toUpperCase(); });
+    const load = () => loadActivity({ traceDir: null, env: { HOME: make() } });
+    upper('kept'); upper('dropped'); upper('none');
+    load(); upper('kept'); upper('none');
+    load(); upper('kept'); upper('none'); upper('dropped');
+    expect(calls).toEqual(['kept', 'dropped', 'none', 'dropped']);
   });
   it('shows denied dispatches and worktree lifecycle as policy and local events', () => {
     const trace = make();
@@ -397,8 +425,11 @@ it('updates all viewers from shared directory notifications and reattaches after
     expect(snapshot.traceFiles).toBe(1);
     expect(snapshot.operations.runs.some(r => r.steps.some(s => s.model?.selected === 'sonnet'))).toBe(true);
     writeFileSync(join(trace, 'second.json'), JSON.stringify({ phase: 'failure', session_id: 's2', written_at: new Date().toISOString() }));
-    await new Promise(resolve => setTimeout(resolve, 300));
-    snapshot = await (await fetch(`${server.url}api/snapshot`)).json() as ActivitySnapshot;
+    // The reattached watcher hears it: the next paced rebuild, at most a second after the last one began, shows it.
+    for (const deadline = Date.now() + 2500; snapshot.traceFiles !== 2 && Date.now() < deadline;) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+      snapshot = await (await fetch(`${server.url}api/snapshot`)).json() as ActivitySnapshot;
+    }
     expect(snapshot.traceFiles).toBe(2);
   } finally {
     for (const controller of controllers) controller.abort();

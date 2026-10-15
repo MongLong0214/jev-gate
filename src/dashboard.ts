@@ -32,10 +32,11 @@ export const pruneViewers = (viewers: Map<string, number>, now: number): void =>
     if (Number.isFinite(expires) && (expires <= now || leases > VIEWER_LEASES)) { viewers.delete(id); leases--; }
   }
 };
-/** The pause after a rebuild before records that arrived meanwhile start the next one. Three times the last rebuild keeps
- * the activity thread at most a quarter busy under a continuous stream; the one-second floor lets a burst of records share
- * one rebuild; the four-second ceiling keeps a new record on screen within about five seconds even after a slow cold read. */
-export const rebuildWait = (lastMs: number): number => Math.min(4000, Math.max(1000, 3 * lastMs));
+/** The least time from one rebuild's start to the next one's after new records. Four times the last rebuild keeps the
+ * activity thread at most a quarter busy under a continuous stream; the one-second floor lets a burst of records share one
+ * rebuild; the four-second ceiling bounds the wait after a slow one. Counting from the start, not the end, lets a record
+ * that arrives a second after the last rebuild began start its own at once. */
+export const rebuildWait = (lastMs: number): number => Math.min(4000, Math.max(1000, 4 * lastMs));
 
 export interface DashboardSources {
   host?: Host;
@@ -136,10 +137,10 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
     const directories = new Set([sources.traceDir, ...(sources.traceDirs?.map(source => source.dir) ?? [])].filter((dir): dir is string => !!dir).map(dir => join(dir, '.')));
     let loaded: LoadedActivity | null = null;
     let loading: Promise<void> | null = null;
-    let scannedAt = 0;
+    let startedAt = 0;
     let changed = false;
     let watchedAt = 0;
-    let timer: ReturnType<typeof setTimeout> | null = null;
+    let timer: ReturnType<typeof setTimeout> | null = null, due: ReturnType<typeof setTimeout> | null = null;
     let step: { base: string; key: string; patch: string } | null = null;
     let whole: { key: string; json: string } | null = null, wholeLoading: Promise<void> | null = null;
     const extras = (): string => `"version":${JSON.stringify(versions())},"recording":${JSON.stringify(recordingStatus(sources.env))},"dashboard":${JSON.stringify(dashboardStatus(sources.env))}`;
@@ -192,22 +193,21 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
       }
     };
     /** Rebuilds run on the activity thread, one at a time, and every caller shares the one in flight. A rebuild after new
-     * records waits `rebuildWait` after the previous one ended, so a stream of records cannot keep that thread busy. */
+     * records starts `rebuildWait` after the previous one started, so a stream of records cannot keep that thread busy. */
     const wait = (): number => rebuildWait(loaded?.ms ?? 0);
     const refresh = (): Promise<void> => {
       syncWatchers();
-      const elapsed = Date.now() - scannedAt;
-      if (!loading && (!scannedAt || changed && elapsed >= wait() || Date.now() >= (loaded?.until ?? 0) || elapsed >= 30_000)) {
-        changed = false; flush();
+      const elapsed = Date.now() - startedAt;
+      if (!loading && (!startedAt || changed && elapsed >= wait() || Date.now() >= (loaded?.until ?? 0) || elapsed >= 30_000)) {
+        startedAt = Date.now(); changed = false; flush();
         loading = engine.load().then(next => {
           if (next.patch && next.base) step = { base: next.base, key: next.key, patch: next.patch };
           loaded = next;
         }, () => { changed = true; /* The last snapshot stays; retry after the wait. */ })
-          .finally(() => {
-            scannedAt = Date.now(); loading = null; syncWatchers(true); broadcast();
-            // Records that arrived meanwhile start the next rebuild when its wait ends, not at a later tick.
-            if (changed) setTimeout(() => { if (!disposed) broadcast(); }, wait()).unref();
-          });
+          .finally(() => { loading = null; syncWatchers(true); broadcast(); });
+      } else if (!loading && changed && !due) {
+        // Waiting records start the next rebuild when its wait ends, not at a later tick.
+        due = setTimeout(() => { due = null; if (!disposed) broadcast(); }, wait() - elapsed); due.unref();
       }
       return loading ?? Promise.resolve();
     };
@@ -216,6 +216,7 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
     const dispose = (): void => {
       disposed = true; clearTimeout(openTimer);
       if (timer) clearTimeout(timer);
+      if (due) clearTimeout(due);
       clearInterval(scan);
       for (const { watcher } of watchers.values()) watcher.close();
       watchers.clear(); subscribers.clear(); viewers.clear();
@@ -276,7 +277,7 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
         if (!loaded || !subscribers.size) {
           await refresh();
           // Without a viewer nothing else catches up on new records, so the request waits out the rebuild pause once.
-          if (changed && loaded) { await new Promise(resolve => setTimeout(resolve, Math.max(0, scannedAt + wait() - Date.now()))); await refresh(); }
+          if (changed && loaded) { await new Promise(resolve => setTimeout(resolve, Math.max(0, startedAt + wait() - Date.now()))); await refresh(); }
         }
         await ensureWhole();
         const body = wholeFrame(extras());

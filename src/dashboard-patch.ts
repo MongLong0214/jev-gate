@@ -15,9 +15,11 @@ type FrameOperations = Omit<OperationsView, 'runs' | 'feed'> & { runs: FrameRun[
 /** What a frame carries: the snapshot fields the page draws. */
 export type FrameSnapshot = Omit<Partial<ActivitySnapshot>, 'operations'> & { operations: FrameOperations };
 const frameStep = <T extends OperationStep>({ details: _details, routing: _routing, sessionId: _session, agentId: _agent, ...shown }: T): Omit<T, DetailField> => shown;
-// An unchanged run keeps its object across rebuilds, and so does its frame run, so the diff still skips it by identity.
-const frameRuns = new WeakMap<OperationRun, FrameRun>();
-const frameRun = (run: OperationRun): FrameRun => { let out = frameRuns.get(run); if (!out) frameRuns.set(run, out = { ...run, steps: run.steps.map(frameStep) }); return out; };
+// An unchanged run keeps its object across rebuilds, and so does its frame run, so the diff still skips it by identity. A
+// changed run keeps the steps that did not change, and so do their frame steps, so the diff serializes only the new ones.
+const frameRuns = new WeakMap<OperationRun, FrameRun>(), frameSteps = new WeakMap<OperationStep, FrameStep>();
+const shownStep = (step: OperationStep): FrameStep => { let out = frameSteps.get(step); if (!out) frameSteps.set(step, out = frameStep(step)); return out; };
+const frameRun = (run: OperationRun): FrameRun => { let out = frameRuns.get(run); if (!out) frameRuns.set(run, out = { ...run, steps: run.steps.map(shownStep) }); return out; };
 export const frameOperations = (ops: OperationsView): FrameOperations => ({ ...ops, runs: ops.runs.map(frameRun), feed: ops.feed.map(frameStep) });
 export interface FrameMemo { key: string; top: Fields; ops: Fields; order: string[]; runs: Map<string, RunMemo>; feed: Map<string, string> }
 
@@ -27,9 +29,10 @@ const feedKey = (s: { runId: string; id: string }): string => `${s.runId}\n${s.i
 const same = (a: readonly string[], b: readonly string[]): boolean => a.length === b.length && a.every((v, i) => v === b[i]);
 
 const fields = (o: object): Fields => new Map(Object.entries(o).map(([k, value]) => [k, { value, json: JSON.stringify(value) }]));
-const memoRun = (run: FrameRun): RunMemo & { fields: Omit<FrameRun, 'steps'> } => {
+// A step at the same place as last time, and the same object, has the same text; new steps usually come last.
+const memoRun = (run: FrameRun, old: RunMemo | undefined): RunMemo & { fields: Omit<FrameRun, 'steps'> } => {
   const { steps, ...meta } = run, json = new Map<string, string>();
-  for (const step of steps) json.set(step.id, JSON.stringify(step));
+  steps.forEach((step, i) => json.set(step.id, (old?.run.steps[i] === step ? old.steps?.get(step.id) : undefined) ?? JSON.stringify(step)));
   return { run, fields: meta, meta: JSON.stringify(meta), steps: json.size === steps.length ? json : null };
 };
 
@@ -45,7 +48,7 @@ export const diffFrame = (prev: FrameMemo | null, snapshot: FrameSnapshot, nextK
   for (const run of runs) {
     const old = prev?.runs.get(run.id);
     if (old?.run === run) { memos.set(run.id, old); continue; }
-    const { fields: meta, ...memo } = memoRun(run); memos.set(run.id, memo);
+    const { fields: meta, ...memo } = memoRun(run, old); memos.set(run.id, memo);
     if (!old || !memo.steps || !old.steps) { runPatch[run.id] = { run }; continue; }
     const put: Record<string, unknown> = {};
     for (const step of run.steps) if (old.steps.get(step.id) !== memo.steps.get(step.id)) put[step.id] = step;
