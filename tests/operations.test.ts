@@ -461,7 +461,9 @@ it('counts child Jev steps separately, closes only the exact decision and binds 
 
 it('hides native child routing skips and labels the other child skips', () => {
   const make = (agent: string, skipped: string) => row('router', { session_id: 's1', turn: 't', agent_id: agent, scope: 'child', event: 'child_route', index: 1, sent: false, skipped }, at);
-  const feed = buildOperations([], [make('a', 'native_child'), make('b', 'child_unregistered'), make('c', 'child_stopped')], new Date(later), { trace: true }).feed;
+  const rows = [make('a', 'native_child'), make('b', 'child_unregistered'), make('c', 'child_stopped')], view = buildOperations([], rows, new Date(later), { trace: true });
+  expect(view).toEqual(buildOperations([], rows, new Date(later), { trace: true }, true));
+  const feed = view.feed;
   expect(feed.some(s => s.agentId === 'a')).toBe(false);
   expect(feed.find(s => s.agentId === 'b')?.summary).toBe('등록되지 않은 하위 실행 · 원래 설정 유지');
   expect(feed.find(s => s.agentId === 'c')?.summary).toBe('라우팅이 멈춘 하위 실행 · 원래 설정 유지');

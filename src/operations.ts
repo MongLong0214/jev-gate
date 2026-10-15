@@ -709,6 +709,9 @@ interface PartContext { sessions: Ends; read: Set<string>; position: (item: Rec 
 
 /** The executions of records that join nothing outside them (see `sync`). */
 const buildPart = (records: Rec[], mods: ModRecord[], now: Date, context?: PartContext): Part => {
+  // A native child skips routing on every model step; one row per step would bury the run list. Each part drops its own,
+  // so a rebuild does not pass over every row of the history for them.
+  mods = mods.filter(m => !(m.component === 'router' && m.rec['event'] === 'child_route' && m.rec['skipped'] === 'native_child'));
   let sessions = context?.sessions;
   if (!sessions) {
     const own: Ends = sessions = new Map();
@@ -1301,8 +1304,6 @@ const splitView = (now: Date, availability: { trace: boolean; host?: Host }): Op
 
 /** `whole` builds the recording in one pass with no reuse: the reference the split build must equal. */
 export const buildOperations = (records: Rec[], mods: ModRecord[], now: Date, availability: { trace: boolean; host?: Host }, whole = false): OperationsView => {
-  // A native child skips routing on every model step; one row per step would bury the run list.
-  mods = mods.filter(m => !(m.component === 'router' && m.rec['event'] === 'child_route' && m.rec['skipped'] === 'native_child'));
   if (whole || !sync(records, mods, now)) {
     const part = buildPart(records, mods, now);
     // An item listed twice cannot be split; the next rebuild builds the whole recording again.

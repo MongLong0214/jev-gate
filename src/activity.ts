@@ -508,7 +508,7 @@ const deriveRows = (records: Rec[], host: Host, only: Host | undefined, feed: bo
   for (let i = rows.records.length; i < records.length; i++) {
     const r = withHost(records[i]!, host), shown = r['host'] === 'codex' ? 'codex' : 'claude';
     if (only && shown !== only) continue;
-    rows.gate.push(r); rows.hosts.add(shown);
+    rows.hosts.add(shown);
     const phase = token(r['phase']);
     if (phase && ['mod_router', 'mod_compact', 'claude_router', 'claude_compact'].includes(phase)) {
       let row = modRows.get(r);
@@ -527,6 +527,8 @@ const deriveRows = (records: Rec[], host: Host, only: Host | undefined, feed: bo
       if (event) rows.routerEvents.push(event);
       continue;
     }
+    // A Mod record is read as its row only. Passed on as a record too, it showed nothing and kept an empty build of its own.
+    rows.gate.push(r);
     if (phase === 'admission_result') {
       if (r['attempted'] === true) rows.jevCalls++;
       const shape = token(sub(r, 'decision')?.['shape']);
