@@ -42,8 +42,10 @@ const isRec = (v: unknown): v is Rec => typeof v === 'object' && v !== null && !
 const clip = (s: string, n: number): string => (s.length <= n ? s : n <= CUT.length ? s.slice(0, n) : s.slice(0, n - CUT.length).replace(/[\uD800-\uDBFF]$/, '') + CUT);
 
 /** Where the summarizer's share and the restored share of the budget come from; their sum never passes the budget. */
+// A long session's narrative (decisions, constraints, open problems) lives only in the summary; a 4,000 cap measured fine
+// on a toy task but would cut a multi-hour session's state, so the share grows with the budget.
 export const shares = (budgetChars: number): { summary: number; restore: number } => {
-  const summary = Math.min(4000, Math.max(1000, Math.round(budgetChars / 10)));
+  const summary = Math.min(24000, Math.max(4000, Math.round(budgetChars * 0.3)));
   return { summary, restore: Math.min(RESTORE_CAP, budgetChars - summary) };
 };
 

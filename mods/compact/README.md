@@ -84,7 +84,7 @@ the same options as above (`compactEnabled`, `compactMode`, `compactBudgetChars`
 3. **`PostCompact`** records the summary's size against the budget. It cannot change the context (the host shows its
    output to the person only, and at `SessionStart` time the summary is not yet in the transcript), so it is measurement.
 
-**No double context.** The summarizer's share is `clamp(budget/10, 1000, 4000)` and the restore is at most
+**No double context.** The summarizer's share is `clamp(budget × 0.3, 4000, 24000)` (12,000 at the default budget) and the restore is at most
 `min(9000, budget - summary share)`, so summary plus restore stay within `compactBudgetChars`. The 9,000 cap is the host's:
 `SessionStart` additional context over about 10,000 characters is not inlined (12,000 became a saved file and a 2 KB
 preview in a test). The restore carries only what the summary is likely to lose and is cut with a `[…]` mark, never
@@ -118,7 +118,8 @@ The classic path's own cost per compaction: 278-473 ms for the Jev call and 308-
 is the shorter summary the summarizer writes; it is not a saving in tokens after compaction (they rose) or in cost (not
 measured to differ). A one-off 80-word steer in an earlier test made the model stop early, which is why the steering
 stays this size and asks for the content, not for terseness alone. Quality on long real sessions with a larger model has
-not been measured.
+not been measured. The table used the earlier summary share (4,000 characters at the default budget); the share is now
+12,000 there so a long session's decisions and constraints fit, and that setting has not been re-measured.
 
 **Not measured.** The function path never runs on a Team seat, so its marker was only exercised against a fake host;
 a manual `/compact` and a subagent compaction were not run live; and the rate at which the engine's summarizer follows the

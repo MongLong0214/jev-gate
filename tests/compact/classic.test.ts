@@ -180,6 +180,7 @@ describe('classic path: budget', () => {
       const { summary, restore } = shares(budget);
       expect(summary + restore).toBeLessThanOrEqual(budget);
       expect(restore).toBeLessThanOrEqual(RESTORE_CAP);
+      expect(summary).toBeGreaterThanOrEqual(4000);
     }
   });
 
