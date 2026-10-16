@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.8.23 — 2026-10-16 — A model mention is not a model lock
+
+- Stop reading a mention of a model as a model lock. "It still works on Opus for everything, check it" kept Opus because Jev answered `model_lock` at 0.62. The control criteria now say a lock is an instruction about how this work runs, and naming, asking about or complaining about a model or effort is not one; and a lock read below 0.8 counts toward a clear task (`weak_lock` on the record). Explicit locks ("use Opus for this", "don't switch models", "keep model and effort") still read 0.96–1.0 and still hold. The dev split gains 8 labelled requests that mention a model without pinning it. With `jev-1.13.0` the frozen held-out split stayed at 0% under-routed and 0 of 20 probes moved; exact was 96.9% against 98.4% before, and the two extra misses are task-clear readings, not locks.
+
 ## v0.8.22 — 2026-10-15 — Capability routing, Codex successors, classic Compact, dashboard limits
 
 - Ask Jev what capability the work needs instead of which model to use. When every eligible candidate has a documented role and the baseline is offered, the Router's root, child and spawn questions, Gate dispatch and Codex now ask one capability choice: `mechanical`, `routine`, `complex`, and `open_problem` only with a frontier candidate, plus `unclear`. Each option has what it covers, examples and what belongs to a neighbour, and names no model, role, effort or price. The batch also has one effort score per offered model. Code maps each role to one model (the baseline for its own role, else the role preference, else catalog order) and reads the answer in role order with the existing floors, control lock, downgrade risk guard, cache hold, pins and Astra/Fable rules. `unclear` keeps the native model and effort. Candidates without a documented role keep the v0.8.21 pair question unchanged. Records carry `policy: "role"` and the role → option → model map.
