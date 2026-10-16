@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.8.23 — 2026-10-16 — A model mention is not a model lock
 
 - Stop reading a mention of a model as a model lock. "It still works on Opus for everything, check it" kept Opus because Jev answered `model_lock` at 0.62. The control criteria now say a lock is an instruction about how this work runs, and naming, asking about or complaining about a model or effort is not one; and a lock read below 0.8 counts toward a clear task (`weak_lock` on the record). Explicit locks ("use Opus for this", "don't switch models", "keep model and effort") still read 0.96–1.0 and still hold. The dev split gains 8 labelled requests that mention a model without pinning it. With `jev-1.13.0` the frozen held-out split stayed at 0% under-routed and 0 of 20 probes moved; exact was 96.9% against 98.4% before, and the two extra misses are task-clear readings, not locks.
 
