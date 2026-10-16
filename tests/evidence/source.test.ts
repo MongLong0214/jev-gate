@@ -1,4 +1,6 @@
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -77,7 +79,21 @@ describe('inventory and access', () => {
     expect(everywhere).toContain('src-old/app.ts');
     expect(await grepFiles(root, ['src'], ['no such text anywhere'], false, 5000)).toEqual(new Set());
     expect(await grepFiles(root, ['src'], [SYMBOL.toUpperCase()], true, 5000)).toEqual(found);
-    expect(await grepFiles(root, [''], [SYMBOL], false, 1)).toBe('timeout');
+  });
+
+  it('says when Git ran out of time, whatever the speed of the machine', async () => {
+    const root = realpathSync(fixture());
+    // A git that always outlives the budget, so the timeout never depends on how fast this machine runs git.
+    const slow = mkdtempSync(join(tmpdir(), 'slow-git-'));
+    const real = execFileSync('which', ['git'], { encoding: 'utf8' }).trim();
+    writeFileSync(join(slow, 'git'), `#!/bin/sh\nsleep 5\nexec '${real}' "$@"\n`, { mode: 0o755 });
+    const path = process.env['PATH'];
+    process.env['PATH'] = `${slow}:${path}`;
+    try {
+      expect(await grepFiles(root, [''], [SYMBOL], false, 200)).toBe('timeout');
+    } finally {
+      process.env['PATH'] = path;
+    }
   });
 
   it('refuses traversal, roots outside the allowed ones, excluded roots and sources that escape', async () => {
