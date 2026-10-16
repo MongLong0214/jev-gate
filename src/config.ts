@@ -10,7 +10,7 @@ export const DEFAULT_CONFIG: ConfigV5 = {
   version: 5,
   mode: 'off',
   frontierEnabled: false,
-  jevModel: 'jev-1.13.0',
+  jevModel: 'jev-1.14.0',
   requestDeadlineMs: 3000,
   admissionConfidenceFloor: 0.8,
   routeConfidenceFloor: 0.8,
@@ -114,7 +114,7 @@ const FLOOR_KEYS = ['admissionConfidenceFloor', 'routeConfidenceFloor'] as const
 export const MIGRATION_SAMPLE = `{
   "version": 5,
   "mode": "off",
-  "jevModel": "jev-1.13.0",
+  "jevModel": "jev-1.14.0",
   "requestDeadlineMs": 3000,
   "admissionConfidenceFloor": 0.8,
   "routeConfidenceFloor": 0.8,

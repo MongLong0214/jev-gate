@@ -107,7 +107,11 @@ const withControls = (questions: Record<string, Question>, scope: OfferArgs['sco
       .replace('Prefer keeping a large cached root for short follow-ups whose isolated work can use a fresh worker.', 'Keep the original worker and its contract; this decision does not spawn another worker.')
       .replaceAll('current root', 'current worker');
   }
-  if (scope === 'spawn') for (const question of Object.values(questions)) question.instructions = question.instructions.replace('complete the ENTIRE requested outcome', 'complete this task reliably from the task text alone');
+  if (scope === 'spawn') {
+    for (const question of Object.values(questions)) question.instructions = question.instructions.replace('complete the ENTIRE requested outcome', 'complete this task reliably from the task text alone');
+    // A brief that runs `codex exec` with a named model read as explicit_lock .93 (2026-10-16 trace); 1 of 107 real briefs.
+    questions['control']!.instructions += ' An instruction about which model another tool, program or agent should use (for example running a CLI with a named model) is not a lock on this worker\'s model.';
+  }
   return questions;
 };
 
@@ -199,6 +203,44 @@ const orderedModel = (offer: PairOffer, base: RouteCandidate | undefined, p: Rec
   return walk(ranks.filter(r => r < from), offer.downgrade) ?? walk(ranks.filter(r => r > from).reverse(), offer.upgrade);
 };
 
+const readControl = (answers: Record<string, unknown>) => {
+  const read = validateChoice(answers['control'], Object.keys(CONTROLS));
+  // A lock is the user's explicit instruction, which Jev reads near-certain; a weaker lock reading is a mention of a model
+  // or effort, so its mass counts toward a clear task. ponytail: one floor fitted on 9 dev readings (locks .96-.99, mentions .62-.66).
+  const weakLock = read && LOCKS.includes(read.choice) && (read.probabilities[read.choice] ?? 0) < LOCK_FLOOR ? read.choice : null;
+  const control = read && weakLock
+    ? { ...read, choice: 'task_clear', probabilities: { ...read.probabilities, task_clear: ['task_clear', ...LOCKS].reduce((sum, k) => sum + (read.probabilities[k] ?? 0), 0) } }
+    : read;
+  return { control, weakLock };
+};
+
+/**
+ * A spawn's tools bound the role its capability answer selected. A child that can edit runs no role below standard; a
+ * child that cannot runs the cheapest offered role, but only on a confident, clear, ordinary answer that names mechanical
+ * or routine work. Neither moves above the baseline or the selected role, so complex, unclear, locked or consequential
+ * work keeps what the answer chose. Returns the bounded model and its reason, or null when the bound changes nothing.
+ */
+export const toolBound = (offer: PairOffer, raw: unknown, chosen: string, readOnly: boolean): { model: string; reason: string } | null => {
+  const { baselineCandidate: base, roles } = offer;
+  if (!roles || !offer.modelAsked || base?.rank === undefined) return null;
+  const current = offer.candidates.find(c => c.id === chosen)?.rank ?? base.rank;
+  const standard = roles.find(r => r.rank === 1);
+  if (!readOnly && current < 1 && chosen !== base.id) return { model: standard && standard.rank <= base.rank ? standard.model : base.id, reason: 'tool_editing_floor' };
+  const answers = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
+  const { control } = readControl(answers);
+  const risk = validateChoice(answers['action_risk'], ['ordinary', 'consequential', 'unclear']);
+  const q = offer.questions['capability'];
+  const capability = q?.type === 'choice' ? validateChoice(answers['capability'], Object.keys(q.criteria)) : null;
+  // The most capable option offered also stands for all work above it, so it never reads as light.
+  const lightOptions = ['mechanical', 'routine'].filter(o => o !== roles.at(-1)?.option);
+  const light = lightOptions.reduce((sum, o) => sum + (capability?.probabilities[o] ?? 0), 0);
+  if (!control || !['task_clear', 'effort_lock'].includes(control.choice) || (control.probabilities[control.choice] ?? 0) < offer.downgrade) return null;
+  if (!risk || risk.choice !== 'ordinary' || (risk.probabilities['ordinary'] ?? 0) < offer.downgrade) return null;
+  if (!capability || !lightOptions.includes(capability.choice) || light < offer.downgrade) return null;
+  const role = readOnly ? roles[0] : standard;
+  return role && role.rank < Math.min(current, base.rank) ? { model: role.model, reason: readOnly ? 'tool_read_only' : 'tool_editing' } : null;
+};
+
 /** Holding a model reuses ONLY that model's conditional effort answer from the same batch. */
 export const keepModelPair = (offer: PairOffer, raw: unknown): PairDecision => selectPair({ ...offer, modelAsked: false }, raw);
 
@@ -208,13 +250,7 @@ export const selectPair = (offer: PairOffer, raw: unknown): PairDecision => {
   const diagnostics: PairDecision['diagnostics'] = { direction: 'unknown', threshold: null, probability: null, effort_policy: 'keep', pair_valid: true, policy: offer.roles ? 'role' : 'pair',
     ...(offer.roles ? { roles: offer.roles.map(r => ({ role: ROLE_NAMES[r.rank]!, option: r.option, model: r.model })) } : {}) };
   const native = (): PairDecision => ({ patch: {}, reasons, diagnostics });
-  const read = validateChoice(answers['control'], Object.keys(CONTROLS));
-  // A lock is the user's explicit instruction, which Jev reads near-certain; a weaker lock reading is a mention of a model
-  // or effort, so its mass counts toward a clear task. ponytail: one floor fitted on 9 dev readings (locks .96-.99, mentions .62-.66).
-  const weakLock = read && LOCKS.includes(read.choice) && (read.probabilities[read.choice] ?? 0) < LOCK_FLOOR ? read.choice : null;
-  const control = read && weakLock
-    ? { ...read, choice: 'task_clear', probabilities: { ...read.probabilities, task_clear: ['task_clear', ...LOCKS].reduce((sum, k) => sum + (read.probabilities[k] ?? 0), 0) } }
-    : read;
+  const { control, weakLock } = readControl(answers);
   if (weakLock) diagnostics.weak_lock = weakLock;
   const floor = Math.max(offer.upgrade, offer.downgrade);
   // Preserve the same baseline, but report the evidence that actually prevented a move.

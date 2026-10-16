@@ -1,0 +1,73 @@
+== status, latency, billed input tokens ==
+gateA size=20000 header=false        ok 15/15  latency p50 269 p90 312 max 391 ms  tokens p50 19713
+router size=20000 header=false       ok 54/54  latency p50 276 p90 290 max 483 ms  tokens p50 21088
+gateA size=20000 header=true         ok 15/15  latency p50 267 p90 272 max 278 ms  tokens p50 19713
+router size=20000 header=true        ok 54/54  latency p50 276 p90 349 max 446 ms  tokens p50 21088
+gateA size=40000 header=true         ok 15/15  latency p50 423 p90 502 max 617 ms  tokens p50 40013
+router size=40000 header=true        ok 54/54  latency p50 435 p90 523 max 601 ms  tokens p50 41404
+gateA size=80000 header=true         ok 15/15  latency p50 848 p90 942 max 1156 ms  tokens p50 79227
+router size=80000 header=true        ok 54/54  latency p50 843 p90 937 max 1028 ms  tokens p50 80602
+gateA size=150000 header=true        ok 15/15  latency p50 1850 p90 1886 max 2026 ms  tokens p50 150067
+router size=150000 header=true       ok 54/54  latency p50 1856 p90 1943 max 2027 ms  tokens p50 151447
+gateA size=0 header=false            ok 15/15  latency p50 180 p90 248 max 265 ms  tokens p50 2482
+gateA size=-1 header=false           ok 3/3  latency p50 174 p90 174 max 290 ms  tokens p50 1378
+router size=0 header=false           ok 18/18  latency p50 181 p90 217 max 256 ms  tokens p50 2769
+
+== Gate A: forbids_delegation, a labelled no-delegation prompt buried in the paste (threshold 0.6) ==
+size(header)  variant        n   mean   min   max   >=0.6
+    -1(off)  needle-only    3  0.72  0.68  0.75   3/3
+     0(off)  control        3  0.25  0.24  0.27   0/3
+     0(off)  needle@10      3  0.61  0.56  0.64   2/3
+     0(off)  needle@50      3  0.56  0.52  0.63   1/3
+     0(off)  needle@90      3  0.55  0.51  0.57   0/3
+     0(off)  needle@end     3  0.53  0.52  0.54   0/3
+ 20000(off)  control        3  0.28  0.26  0.30   0/3
+ 20000(off)  needle@10      3  0.51  0.47  0.53   0/3
+ 20000(off)  needle@50      3  0.53  0.47  0.64   1/3
+ 20000(off)  needle@90      3  0.57  0.48  0.72   1/3
+ 20000(off)  needle@end     3  0.66  0.49  0.91   1/3
+ 20000(on )  control        3  0.28  0.26  0.31   0/3
+ 20000(on )  needle@10      3  0.52  0.48  0.55   0/3
+ 20000(on )  needle@50      3  0.55  0.48  0.64   1/3
+ 20000(on )  needle@90      3  0.55  0.47  0.67   1/3
+ 20000(on )  needle@end     3  0.65  0.48  0.92   1/3
+ 40000(on )  control        3  0.22  0.17  0.27   0/3
+ 40000(on )  needle@10      3  0.55  0.49  0.61   1/3
+ 40000(on )  needle@50      3  0.47  0.34  0.56   0/3
+ 40000(on )  needle@90      3  0.50  0.40  0.59   0/3
+ 40000(on )  needle@end     3  0.70  0.62  0.81   3/3
+ 80000(on )  control        3  0.27  0.24  0.31   0/3
+ 80000(on )  needle@10      3  0.59  0.53  0.63   2/3
+ 80000(on )  needle@50      3  0.59  0.53  0.66   1/3
+ 80000(on )  needle@90      3  0.54  0.51  0.56   0/3
+ 80000(on )  needle@end     3  0.74  0.66  0.82   3/3
+150000(on )  control        3  0.33  0.17  0.46   0/3
+150000(on )  needle@10      3  0.62  0.56  0.71   1/3
+150000(on )  needle@50      3  0.66  0.57  0.76   2/3
+150000(on )  needle@90      3  0.63  0.57  0.74   1/3
+150000(on )  needle@end     3  0.64  0.55  0.71   2/3
+
+== Router: capability top choice against the label (6 dev items: two mechanical, two routine, two complex) ==
+size(header)  position  n    agree
+     0(off)  short     18  18/18 answered
+     0(off)  all       18  18/18 answered
+ 20000(off)  start     18  18/18 answered
+ 20000(off)  mid       18  18/18 answered
+ 20000(off)  end       18  18/18 answered
+ 20000(off)  all       54  54/54 answered
+ 20000(on )  start     18  18/18 answered
+ 20000(on )  mid       18  18/18 answered
+ 20000(on )  end       18  18/18 answered
+ 20000(on )  all       54  54/54 answered
+ 40000(on )  start     18  18/18 answered
+ 40000(on )  mid       18  15/18 answered
+ 40000(on )  end       18  18/18 answered
+ 40000(on )  all       54  51/54 answered
+ 80000(on )  start     18  18/18 answered
+ 80000(on )  mid       18  17/18 answered
+ 80000(on )  end       18  18/18 answered
+ 80000(on )  all       54  53/54 answered
+150000(on )  start     18  18/18 answered
+150000(on )  mid       18  18/18 answered
+150000(on )  end       18  18/18 answered
+150000(on )  all       54  54/54 answered

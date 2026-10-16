@@ -63,6 +63,12 @@ describe('bench ab (#130)', () => {
     expect(d.pluginConfigs['jev-gate@jev-gate']!.options).toMatchObject({ gateMode: 'auto', compactEnabled: true, routerEnabled: true });
   });
 
+  it('measures a checkout under its inline key with the installed copy off, and adds a condition\'s host settings', () => {
+    const d = JSON.parse(conditionSettings('D', 'jev-gate@inline', { autoCompactWindow: 150000 })) as Record<string, unknown>;
+    expect(d).toMatchObject({ autoCompactWindow: 150000, enabledPlugins: { 'jev-gate@jev-gate': false }, pluginConfigs: { 'jev-gate@inline': { options: { routerEnabled: true } } } });
+    expect(JSON.parse(conditionSettings('A'))).not.toHaveProperty('enabledPlugins');
+  });
+
   it('strips the parent CLAUDE_*/JEV_GATE_* environment and sets only the mode', () => {
     const env = cleanEnv({ HOME: '/h', CLAUDE_CODE_FORK_SUBAGENT: '0', JEV_GATE_TRACE_DIR: '/t', PATH: '/bin' }, 'auto');
     expect(env).toEqual({ HOME: '/h', PATH: '/bin', JEV_GATE_MODE: 'auto', CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: '1' });
@@ -186,6 +192,14 @@ console.log(JSON.stringify({result:'SUCCESS', session_id:sid, total_cost_usd:0.0
       expect(rowOf(cell,inputs,transcript,join(out,'trace'))).toMatchObject({ ok:true,total_tokens:21 });
       const before = readFileSync(join(out,'plan.json'),'utf8'); run(args);
       expect(readFileSync(join(out,'plan.json'),'utf8')).toBe(before);
+      // A plan frozen with a plugin directory and host settings never resumes without them.
+      const frozen = join(dir, 'frozen'); const hostFile = join(dir, 'host.json');
+      writeFileSync(hostFile, JSON.stringify({ A: { env: { JEV_BENCH_MARK: '1' } } }));
+      const at = (o: string) => args.map(a => a === out ? o : a);
+      run([...at(frozen), '--plugin-dir', dir, '--host-settings', hostFile]);
+      expect(() => run(at(frozen))).toThrow(/different or unfrozen/);
+      expect(() => run([...at(frozen), '--plugin-dir', dir])).toThrow(/different or unfrozen/);
+      expect(() => run([...at(frozen), '--host-settings', hostFile])).toThrow(/different or unfrozen/);
       writeFileSync(tasks, JSON.stringify({ ...inputs, S: { prompt:'changed' } }));
       expect(() => run(args)).toThrow(/different or unfrozen/);
       // Report still uses frozen quality checks, even after the source file changes.

@@ -76,28 +76,29 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     const search=document.getElementById('search') as unknown as {clientWidth:number};if(search.clientWidth<100)out.push('search box too narrow: '+search.clientWidth);
     return out;
   });
-  // Records motion as it happens: dots leaving, rail pings, latency labels, node flashes and new call-log rows, each with its page time.
-  const record = (p: Page) => p.evaluate(() => {const log:Array<[string,number]>=[];(globalThis as unknown as {motion:typeof log}).motion=log;let lat:string|null|undefined=document.querySelector('.rail .lat')?.textContent;
+  // Records motion as it happens: dots leaving, rail pings, the response time a returning dot carries, node flashes and new
+  // call-log rows, each with its page time.
+  const record = (p: Page) => p.evaluate(() => {const log:Array<[string,number]>=[];(globalThis as unknown as {motion:typeof log}).motion=log;
     new MutationObserver(list=>{const t=performance.now(),flashed=new Set<unknown>();for(const m of list){const target=m.target as unknown as {classList:{contains(c:string):boolean};dataset:{feature?:string};textContent:string|null};
       if(m.type==='attributes'&&target.classList.contains('zap')&&!String(m.oldValue).includes('zap')&&!flashed.has(target)&&flashed.add(target))log.push(['zap:'+(target.dataset.feature||'run'),t]);
-      if(m.type!=='childList')continue;if(target.classList.contains('lat')&&target.textContent!==lat){lat=target.textContent;log.push(['lat:'+lat,t]);}
-      for(const n of m.addedNodes as unknown as Array<{classList?:{contains(c:string):boolean};tagName?:string;parentElement?:{classList:{contains(c:string):boolean}}|null}>){if(n.classList?.contains('trip'))log.push(['trip',t]);if(n.tagName==='B'&&n.parentElement?.classList.contains('ln'))log.push(['ping',t]);if(n.tagName==='TR'&&n.classList?.contains('in'))log.push(['row',t]);}}})
+      if(m.type!=='childList')continue;
+      for(const n of m.addedNodes as unknown as Array<{classList?:{contains(c:string):boolean};dataset?:{ms?:string};tagName?:string;parentElement?:{classList:{contains(c:string):boolean}}|null}>){if(n.classList?.contains('trip')){log.push(['trip',t]);if(n.dataset?.ms)log.push(['lat:'+n.dataset.ms,t]);}if(n.tagName==='B'&&n.parentElement?.classList.contains('ln'))log.push(['ping',t]);if(n.tagName==='LI'&&n.classList?.contains('in'))log.push(['row',t]);}}})
       .observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['class'],attributeOldValue:true});});
   const motion = (p: Page) => p.evaluate(() => (globalThis as unknown as {motion:Array<[string,number]>}).motion);
   const count = (log: Array<[string,number]>, kind: string) => log.filter(([k]) => k===kind).length;
 
   it('shows live version status without overflow in the actual browser', async () => {
     const home = mkdtempSync(join(tmpdir(), 'jev-dashboard-version-'));
-    const releaseFetch = (async () => new Response(JSON.stringify({ tag_name: 'v0.8.24', draft: false, prerelease: false, html_url: 'https://github.com/MongLong0214/jev-gate/releases/tag/v0.8.24' }))) as typeof fetch;
+    const releaseFetch = (async () => new Response(JSON.stringify({ tag_name: 'v0.8.25', draft: false, prerelease: false, html_url: 'https://github.com/MongLong0214/jev-gate/releases/tag/v0.8.25' }))) as typeof fetch;
     const local = await startDashboard(dashboardSources({ HOME: home, XDG_CONFIG_HOME: join(home, '.config'), XDG_STATE_HOME: join(home, '.local/state'), JEV_GATE_TRACE_DIR: join(home, 'claude-traces'), JEV_CODEX_TRACE_DIR: join(home, 'codex-traces') }), 0, { releaseFetch });
     try {
       for (const width of [1440, 390, 320]) {
         const p = await browser.newPage({ viewport: { width, height: 900 } });
         p.on('pageerror', e => errors.push(e.message));
         await p.goto(local.url);
-        await p.waitForFunction(() => document.getElementById('version-badge')?.textContent?.includes('0.8.24'));
+        await p.waitForFunction(() => document.getElementById('version-badge')?.textContent?.includes('0.8.25'));
         expect(await p.locator('#version-badge').getAttribute('data-state')).toBe('update');
-        expect(await p.locator('#version-badge').textContent()).toContain('0.8.23');
+        expect(await p.locator('#version-badge').textContent()).toContain('0.8.24');
         expect(await p.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
         await p.screenshot({ path: join(output, `version-${width}.png`), fullPage: true });
         await p.close();
@@ -127,7 +128,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     for(const width of [1440,768,390,320]) {
       const p=await page(width);await settle(p);
       expect(await p.locator('#k-active').textContent()).toBe('2');expect(await p.locator('#k-hosts').textContent()).toBe('Claude 1 · Codex 1');
-      expect(await p.locator('#k-p50').textContent()).toBe('92');expect(await p.locator('#k-p95').textContent()).toBe('p95 181ms · 표본 2');
+      expect(await p.locator('#k-p50').count()).toBe(0);expect(await p.locator('#j-p50').textContent()).toBe('92ms');expect(await p.locator('#j-p95').textContent()).toBe('181ms');
       expect(await p.locator('#k-today').textContent()).toBe('오늘 2회');expect(await p.locator('#k-last').textContent()).toMatch(/^마지막 응답 (\d\.\d초|\d+초) 전$/);
       expect(await p.locator('#comm i').count()).toBe(2);expect(await p.locator('#comm').getAttribute('aria-hidden')).toBe('true');
       expect(await p.locator('.stats').evaluate(e=>e.getBoundingClientRect().top)).toBeLessThan(260);
@@ -153,7 +154,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     const show = (records: Record<string, unknown>[]) => push(buildOperations(records, [], new Date(), { trace: true }).runs);
     show([request]);
     const p = await page();
-    expect(await p.locator('#k-active').textContent()).toBe('1');expect(await p.locator('#rd-state').textContent()).toBe('진행 중');
+    expect(await p.locator('#k-active').textContent()).toBe('1');expect(await p.locator('#runs .row[aria-pressed=true] .c-st').textContent()).toBe('진행 중');
     show([request, { ...response, request_id: 'another-request' }]);await settle(p);
     expect(await p.locator('#k-active').textContent()).toBe('1');
     show([request, response]);
@@ -189,8 +190,8 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
       const runs = s.operations.runs.filter(r => host === 'all' || r.host === host), count = (state: string) => String(runs.filter(r => r.state === state).length);
       if (host === 'all') expect(String(s.operations.attention)).toBe(count('attention'));
       expect(await p.locator('#k-att').textContent()).toBe(count('attention'));
-      expect(await p.locator('#state-filters [data-state=attention] em').textContent()).toBe(count('attention'));
-      expect(await p.locator('#state-filters [data-state=past_error] em').textContent()).toBe(count('past_error'));
+      // A count lives once, at the top; the state filters carry labels only.
+      expect(await p.locator('#state-filters em').count()).toBe(0);
       await p.locator('#state-filters [data-state=all]').click();
       for (const r of runs) expect(await p.locator(`#runs [data-run="${r.id}"] .c-st`).textContent()).toBe(label[r.state]);
       return s;
@@ -208,7 +209,9 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
       expect(await problems(p)).toEqual([]);
       await p.locator('.stats').screenshot({ path: join(output, '223-1440-dark-ko-top.png') });await p.locator('#run-detail').screenshot({ path: join(output, '223-1440-dark-ko-detail-current.png') });
       await p.locator('[data-state=past_error]').click();await p.locator(`#runs [data-run="${refused}"]`).click();
-      for (const fact of ['상태오류', '원인invalid_input · 요청 인자·범위 오류', '현재 영향이 요청만 실패 · 서비스 장애 아님', '세션codex-old-session']) expect(await detail()).toContain(fact);
+      // The open row already shows the state, so the detail does not repeat it.
+      for (const fact of ['원인invalid_input · 요청 인자·범위 오류', '현재 영향이 요청만 실패 · 서비스 장애 아님', '세션codex-old-session']) expect(await detail()).toContain(fact);
+      expect(await detail()).not.toContain('상태오류');expect(await p.locator('#trace [aria-expanded="true"] .sx-r').textContent()).toBe('오류');
       await p.locator('#run-detail').screenshot({ path: join(output, '223-1440-dark-ko-detail-past.png') });
       // A later success of the same Jev call on the same host arrives on the open stream; both outage records become past errors.
       await p.locator('[data-state=attention]').click();await p.locator(`#runs [data-run="${outage}"]`).click();
@@ -218,7 +221,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
       expect(s.operations.runs.find(r => r.id === outage)).toMatchObject({ state: 'past_error', steps: [{ cause: 'http_401', impact: { now: 'later_ok' } }] });
       expect(await p.locator('#k-diag').textContent()).toBe('실제 응답 모델 불일치 1건');
       await p.locator('[data-state=past_error]').click();expect(await p.locator('#runs .row').count()).toBe(3);await p.locator(`#runs [data-run="${outage}"]`).click();
-      expect(await detail()).toContain('현재 영향이후 같은 작업 정상 기록');expect(await detail()).toContain('상태오류');
+      expect(await detail()).toContain('현재 영향이후 같은 작업 정상 기록');expect(await detail()).not.toContain('상태오류');expect(await p.locator('#trace [aria-expanded="true"] .sx-r').textContent()).toBe('오류');
       await p.locator('[data-host=codex]').click();expect(await p.locator('#k-diag').textContent()).toBe('지난 오류 3건');await agree(p, 'codex');
       await p.locator('#language').click();expect(await p.locator('#k-diag').textContent()).toBe('3 past errors');await p.locator('#language').click();await p.close();
       const phone = await browser.newPage({ viewport: { width: 390, height: 844 } });phone.on('pageerror', e => errors.push(e.message));await phone.goto(local.url);
@@ -299,36 +302,67 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     await p.close();
   });
 
-  it('keeps the call log at eight rows of fixed height, holds it on demand and shows only recorded values', async () => {
+  it('keeps the call log at fourteen six-column rows of fixed height, pins a row on demand and shows only recorded values', async () => {
     const calls=[call('c1','router',120,{at:ago(1000)},{choice:'sonnet · high',threshold:0.6}),call('c2','admission',80,{executionPath:'direct'},{confidence:null,input:null,output:null,costUsd:null})];
     push([run('rc','claude',calls,{title:'호출 기록 실행'})]);const p=await page();await settle(p);
-    const cells=(i:number)=>p.locator(`#rc tr:nth-child(${i}) td`).allTextContents();
-    expect(await p.locator('#rc tr').count()).toBe(8);
-    expect((await cells(1)).slice(1)).toEqual(['호출 기록 실행','Gate A','실행 형태?','직접','–','80ms','–','–']);
-    expect((await cells(2)).slice(1)).toEqual(['호출 기록 실행','Router','이 턴 모델?','sonnet · high','0.87','120ms','1.2K → 40','≈$0.00120']);
-    const heights=()=>p.evaluate(()=>({rows:[...document.querySelectorAll('#rc tr')].map(e=>e.getBoundingClientRect().height),panel:document.querySelector('.jev')!.getBoundingClientRect().height,below:document.getElementById('run-detail')!.getBoundingClientRect().top+document.documentElement.scrollTop}));
+    const cells=(i:number)=>p.locator(`#rc li:nth-child(${i}) .rcr > span`).allTextContents();
+    expect(await p.locator('#rc li').count()).toBe(14);
+    expect((await cells(1)).slice(1)).toEqual(['Gate A','–','–','80ms','직접']);
+    expect((await cells(2)).slice(1)).toEqual(['Router','–','1,200','120ms','sonnet · high']);
+    const heights=()=>p.evaluate(()=>({rows:[...document.querySelectorAll('#rc li')].map(e=>e.getBoundingClientRect().height),panel:document.querySelector('.jv')!.getBoundingClientRect().height,below:document.getElementById('run-detail')!.getBoundingClientRect().top+document.documentElement.scrollTop}));
     const before=await heights();expect(new Set(before.rows).size).toBe(1);
     for(let i=0;i<9;i++)calls.push(call('more'+i,'compact',60+i,{at:ago((9-i)*10)}));push([run('rc','claude',calls,{title:'호출 기록 실행'})]);
-    await p.waitForFunction(()=>document.querySelector('#rc tr td:nth-child(7)')?.textContent==='68ms',undefined,{timeout:8000});
+    await p.waitForFunction(()=>document.querySelector('#rc li:first-child .rcr > span:nth-child(5)')?.textContent==='68ms',undefined,{timeout:8000});
     const after=await heights();expect(after.rows).toEqual(before.rows);expect(after.panel).toBe(before.panel);expect(after.below).toBe(before.below);
-    await p.locator('[data-rc=hold]').click();expect(await p.locator('[data-rc=hold]').getAttribute('aria-pressed')).toBe('true');const held=await cells(1);
+    await p.locator('#rc li:nth-child(2) button').click();expect(await p.locator('#rc li:nth-child(2) button').getAttribute('aria-pressed')).toBe('true');
+    expect(await p.locator('#basis-meta').textContent()).toContain('고정한 호출');expect(await p.locator('#follow').isVisible()).toBe(true);
     calls.push(call('late','evidence',77));push([run('rc','claude',calls,{title:'호출 기록 실행'})]);
-    await p.waitForFunction(()=>document.getElementById('rc-new')?.textContent==='+1 새 기록',undefined,{timeout:8000});expect(await cells(1)).toEqual(held);
-    await p.locator('[data-rc=live]').click();expect((await cells(1))[6]).toBe('77ms');expect(await p.locator('#rc-new').textContent()).toBe('');
-    expect(await p.locator('#rc').evaluate(e=>e.closest('table')!.querySelectorAll('th:not([scope=col])').length)).toBe(0);
+    await p.waitForFunction(()=>document.querySelector('#rc li:first-child .rcr > span:nth-child(5)')?.textContent==='77ms',undefined,{timeout:8000});
+    expect(await p.locator('#rc [aria-pressed=true]').getAttribute('data-call')).toBe('more7');expect(await heights()).toEqual(before);
+    await p.locator('#follow').click();expect(await p.locator('#rc [aria-pressed=true]').count()).toBe(0);expect(await p.locator('#basis-meta').textContent()).toContain('최신 호출을 따라갑니다');
     await p.close();
   });
+
+  // Layout shifts are buffered from navigation, so the first frame before any data counts as much as the live updates after it.
+  it('shifts nothing from the first frame through live calls, a new run on top, attention, credit, pinning and unpinning at five widths', async () => {
+    const failures:string[]=[];
+    for(const width of [1440,1024,768,390,320]){
+      const a=[call('s0','admission',63,{at:ago(9000),executionPath:'direct'},{choice:'direct'}),call('s1','router',91,{at:ago(7000)},{choice:'sonnet · medium',threshold:0.6}),step('s2','guard',{lane:'policy',summary:'허용',at:ago(6000)})];
+      const runs=[run('a','claude',a,{title:'Claude 실행',state:'active'}),run('b','codex',[call('b0','compact',220,{at:ago(20000)})],{title:'Codex 실행'})];push(runs);
+      const p=await browser.newPage({viewport:{width,height:900}});p.on('pageerror',e=>errors.push(e.message));
+      await p.addInitScript(()=>{type Shift={value:number;hadRecentInput:boolean;sources:Array<{node:{nodeName:string;id?:string;className?:unknown}|null}>};
+        const g=globalThis as unknown as {shifts:string[];PerformanceObserver:new(cb:(l:{getEntries():Shift[]})=>void)=>{observe(o:{type:string;buffered:boolean}):void}};g.shifts=[];
+        new g.PerformanceObserver(l=>{for(const e of l.getEntries())if(!e.hadRecentInput)g.shifts.push(e.value.toFixed(4)+' '+e.sources.map(s=>s.node?s.node.nodeName+(s.node.id?'#'+s.node.id:'')+(typeof s.node.className==='string'&&s.node.className?'.'+s.node.className:''):'?').join(', '));}).observe({type:'layout-shift',buffered:true});});
+      await p.goto(url);await p.waitForSelector('#pipeline .node');
+      for(let i=0;i<10;i++){
+        await wait(300);
+        if(i===3)runs.unshift(run('n','claude',[call('n0','admission',55,{},{choice:'orchestrated'})],{title:'새 실행 '+'x'.repeat(30),state:'active'}));
+        else if(i===6)runs[2]!.state='attention';
+        else if(i%3===2)a.push(step('w'+i,'workers',{state:'active',lane:'host'}));
+        else a.push(call('c'+i,(['router','compact','evidence'] as const)[i%3]!,40+i*37,{},{choice:i%3===0?'haiku · low':null,confidence:0.5+i/50,threshold:0.6}));
+        runs.find(r=>r.steps===a)!.lastAt=ago(0);push(runs.slice().sort((x,y)=>y.lastAt.localeCompare(x.lastAt)),i>=7?{credit:{exhausted:true}}:{});
+        if(i===4)await p.click('#rc li:nth-child(3) button');
+        if(i===8)await p.click('#follow');
+      }
+      await wait(1000);
+      const shifts=await p.evaluate(()=>(globalThis as unknown as {shifts:string[]}).shifts);if(shifts.length)failures.push(`${width}: ${shifts.join(' | ')}`);
+      // The run duration shows in exactly one place: the selected row's column, or the detail header where that column hides.
+      const dur=[await p.locator('#runs .row[aria-pressed=true] .c-du').isVisible(),await p.locator('#rd-meta .rd-du').isVisible()];if(dur.filter(Boolean).length!==1)failures.push(`${width}: duration shown ${dur}`);
+      await p.close();
+    }
+    expect(failures).toEqual([]);
+  },120_000);
 
   it('reports the Jev panel from recorded calls, colours failures and estimates cost from list prices', async () => {
     const calls=[call('j1','router',120,{at:ago(4000)},{choice:'sonnet · high'}),call('j2','admission',80,{at:ago(3000)},{model:'unknown-model',costUsd:null}),call('j3','evidence',300,{state:'error',at:ago(2000)},{status:402,code:'payment_required',model:null,input:null,output:null,costUsd:null,confidence:null}),call('j4','compact',90,{},{status:429,code:'rate_limited'})];
     push([run('j','claude',calls)],{credit:{exhausted:true}});
     for(const width of [1440,768,320]){
       const p=await page(width);await settle(p);
-      expect(await p.locator('#j-p50').textContent()).toBe('90');expect(await p.locator('#j-latest').textContent()).toBe('90ms');expect(await p.locator('#j-p95').textContent()).toBe('300ms');expect(await p.locator('#j-today').textContent()).toBe('4회');
-      expect(await p.locator('#j-cost').textContent()).toBe('≈ $0.00240');expect(await p.locator('#j-cost-note').textContent()).toContain('응답 2회는 제외');expect(await p.locator('#j-cost-note').textContent()).toContain('실제 차감 크레딧은 API가 알려주지 않습니다');
-      expect(await p.locator('#ct i.e').count()).toBe(1);expect(await p.locator('#ct i.w').count()).toBe(1);expect(await p.locator('#ct i').count()).toBe(4);
+      expect(await p.locator('#j-p50').textContent()).toBe('90ms');expect(await p.locator('#j-p95').textContent()).toBe('300ms');
+      expect(await p.locator('#j-cost').textContent()).toBe('≈ $0.00240');expect(await p.locator('#j-cost').getAttribute('title')).toContain('응답 2회는 제외');expect(await p.locator('#j-cost').getAttribute('title')).toContain('실제 차감 크레딧은 API가 알려주지 않습니다');
+      expect(await p.locator('#tl i.e').count()).toBe(1);expect(await p.locator('#tl i.w').count()).toBe(1);expect(await p.locator('#tl i').count()).toBe(4);
       expect(await p.locator('#credit').textContent()).toBe('크레딧 소진');
-      expect(await problems(p)).toEqual([]);await p.locator('.js').screenshot({path:join(output,`jev-panel-${width}.png`)});await p.close();
+      expect(await problems(p)).toEqual([]);await p.locator('.jv').screenshot({path:join(output,`jev-panel-${width}.png`)});await p.close();
     }
     push([run('j','claude',[call('u','router',70,{},{model:null,costUsd:null})])]);const p=await page();await settle(p);expect(await p.locator('#j-cost').textContent()).toBe('–');await p.close();
   });
@@ -350,7 +384,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     }
     expect(failures).toEqual([]);
     push([]);const p=await page();expect(await p.locator('#pipeline .node').count()).toBe(8);expect(await p.locator('.trip').count()).toBe(0);expect(await p.locator('#circuit-inspector .kv dd').first().textContent()).toBe('–');
-    expect(await p.locator('#runs li').allTextContents()).toEqual(['조건에 맞는 실행이 없습니다.']);expect(await p.locator('#rc tr').count()).toBe(8);expect(await problems(p)).toEqual([]);await p.close();
+    expect(await p.locator('#runs li').allTextContents()).toEqual(['조건에 맞는 실행이 없습니다.']);expect(await p.locator('#rc li').count()).toBe(14);expect(await problems(p)).toEqual([]);await p.close();
   },180_000);
 
   it('keeps the Router decision segments and the node footer still across 3 s of live updates', async () => {
@@ -382,9 +416,10 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     for(const feature of ['router','compact','evidence']){const at=(k:string)=>log.find(([x])=>x===k)![1];expect(at('zap:'+feature)).toBeGreaterThan(pings[0]!);}
     expect(log.findIndex(([k])=>k==='trip')).toBeLessThan(log.findIndex(([k])=>k==='ping'));
     expect(await p.locator('#comm i').count()).toBe(comm+3);expect(await p.locator('#pipeline .node[data-feature=guard] .strip i').count()).toBe(1);
-    expect(await p.locator('#rc tr:first-child td:nth-child(3)').textContent()).toBe('Evidence');expect(await p.locator('#runs [data-run=rt] .jc .n').textContent()).toBe('4');
+    expect(await p.locator('#rc li:first-child .rcr > span:nth-child(2)').textContent()).toBe('Evidence');expect(await p.locator('#runs [data-run=rt] .jc .n').textContent()).toBe('4');
     expect(await p.locator('#runs [data-run=rt] .md .rec em').last().textContent()).toBe('Evidence');
-    expect(await p.locator('.trip').count()).toBe(0);expect(await p.locator('.rail .lat').textContent()).toBe('70ms');
+    // A returning dot keeps its response time in view for a moment after it lands, then leaves.
+    await p.waitForFunction(()=>!document.querySelector('.trip'),undefined,{timeout:3000});expect(await p.locator('#rc li:first-child .rcr > span:nth-child(5)').textContent()).toBe('70ms');
     await p.locator('#pipeline').screenshot({path:join(output,'circuit-after-trips.png')});await p.close();
   });
 
@@ -395,16 +430,16 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     expect(await p.locator('#pipeline .node[data-feature=router] .strip i').first().evaluate(e=>getComputedStyle(e).animationPlayState)).toBe('paused');
     const frozen=[await ago0.textContent(),await p.locator('#k-last').textContent()];
     steps.push(call('m1','router',95,{},{choice:'haiku · low'}));push([run('m','claude',steps,{state:'active'})]);await wait(2200);
-    expect(await motion(p)).toEqual([]);expect(await p.locator('.rail .lat').textContent()).toBe('50ms');expect([await ago0.textContent(),await p.locator('#k-last').textContent()]).toEqual(frozen);
-    expect(await p.locator('#rc tr:first-child td:nth-child(7)').textContent()).toBe('50ms');
-    await p.locator('#pause').click();await p.waitForFunction(()=>document.querySelector('.rail .lat')?.textContent==='95ms');expect(count(await motion(p),'ping')).toBe(1);
+    expect(await motion(p)).toEqual([]);expect([await ago0.textContent(),await p.locator('#k-last').textContent()]).toEqual(frozen);
+    expect(await p.locator('#rc li:first-child .rcr > span:nth-child(5)').textContent()).toBe('50ms');
+    await p.locator('#pause').click();await p.waitForFunction(()=>document.querySelector('#rc li:first-child .rcr > span:nth-child(5)')?.textContent==='95ms');await p.waitForFunction(()=>!document.querySelector('.trip'),undefined,{timeout:3000});expect(count(await motion(p),'ping')).toBe(1);expect(count(await motion(p),'lat:95ms')).toBe(1);
     for(const client of clients)client.end();clients.clear();
     await p.waitForFunction(()=>document.getElementById('connection')!.classList.contains('warn'));expect(await p.locator('body').getAttribute('class')).toContain('still');
     const offline=await ago0.textContent();await wait(1200);expect(await ago0.textContent()).toBe(offline);
     await p.waitForFunction(()=>document.getElementById('connection')!.textContent==='실시간 연결',undefined,{timeout:10000});
     await p.emulateMedia({reducedMotion:'reduce'});const before=(await motion(p)).length;
     steps.push(call('m2','router',120,{},{choice:'opus · xhigh'}));push([run('m','claude',steps,{state:'active'})]);
-    await p.waitForFunction(()=>document.querySelector('.rail .lat')?.textContent==='120ms');expect((await motion(p)).slice(before).filter(([k])=>k==='trip'||k==='ping')).toEqual([]);
+    await p.waitForFunction(()=>document.querySelector('#rc li:first-child .rcr > span:nth-child(5)')?.textContent==='120ms');expect((await motion(p)).slice(before).filter(([k])=>k==='trip'||k==='ping')).toEqual([]);
     expect(await p.locator('#pipeline .node[data-feature=router] .dec b').textContent()).toBe('opusxhigh');
     expect(await p.locator('#comm i').first().evaluate(e=>getComputedStyle(e).animationName)).toBe('none');await p.close();
   });
@@ -464,9 +499,9 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
   it('separates errors, missing results and interruption; failed settings writes retain the saved state',async()=>{
     push([run('c','claude',[step('m','workers',{lane:'host',state:'error',summary:'actual model mismatch',model:{selected:'opus',observed:'sonnet',status:'mismatch',selectedEffort:null,observedEffort:null}})],{state:'attention'}),run('x','codex',[step('u','router',{state:'unconfirmed'})],{state:'unconfirmed'}),run('stop','codex',[step('stop','compact',{state:'interrupted'})],{state:'interrupted'})]);const p=await page();
     expect(await p.locator('#pipeline .node[data-feature=workers]').getAttribute('class')).toContain('err');expect(await p.locator('#k-diag').textContent()).toContain('실제 응답 모델 불일치 1건');
-    await p.locator('#pipeline .node[data-feature=workers]').click();expect(await p.locator('#circuit-inspector .kv dd').first().textContent()).toBe('오류');expect(await p.locator('#runs .row').count()).toBe(1);await p.locator('#pipeline .node[data-feature=workers]').click();
-    await p.locator('[data-state=unconfirmed]').click();expect(await p.locator('#runs .row').count()).toBe(1);expect(await p.locator('#rd-state').textContent()).toBe('결과 미관측');
-    await p.locator('[data-state=all]').click();await p.locator('#runs [data-run=stop]').click();expect(await p.locator('#rd-state').textContent()).toBe('사용자 중단');
+    await p.locator('#pipeline .node[data-feature=workers]').click();expect(await p.locator('#pipeline .node[data-feature=workers] .dec b').textContent()).toBe('오류');expect(await p.locator('#circuit-inspector .kv').textContent()).not.toContain('오류');expect(await p.locator('#runs .row').count()).toBe(1);await p.locator('#pipeline .node[data-feature=workers]').click();
+    await p.locator('[data-state=unconfirmed]').click();expect(await p.locator('#runs .row').count()).toBe(1);expect(await p.locator('#runs .row[aria-pressed=true] .c-st').textContent()).toBe('결과 미관측');
+    await p.locator('[data-state=all]').click();await p.locator('#runs [data-run=stop]').click();expect(await p.locator('#runs .row[aria-pressed=true] .c-st').textContent()).toBe('사용자 중단');
     await p.locator('#recording').click();await p.waitForFunction(()=>document.getElementById('notice')!.textContent!.includes('저장하지 못했습니다'));expect(await p.locator('#recording').getAttribute('aria-checked')).toBe('true');
     push([run('c','claude',[step('later','compact',{durationMs:39})])]);await settle(p);expect(await p.locator('#notice').textContent()).toContain('저장하지 못했습니다');
     await p.locator('#language').click();expect(await p.locator('html').getAttribute('lang')).toBe('en');await p.close();
@@ -476,7 +511,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     const steps=[call('p0','router',58,{},{choice:'sonnet · high'})];push([run('phone','codex',steps,{state:'active'})]);const p=await page(390,844);await settle(p);await record(p);
     expect(await p.locator('#pipeline svg.wires').evaluate(e=>getComputedStyle(e).display)).toBe('none');
     steps.push(call('p1','router',43,{},{choice:'haiku · low'}));push([run('phone','codex',steps,{state:'active'})]);
-    await p.waitForFunction(()=>document.querySelector('.rail .lat')?.textContent==='43ms');await p.waitForFunction(()=>document.querySelector('#pipeline .node[data-feature=router] .dec b')?.textContent==='haikulow');expect(count(await motion(p),'ping')).toBe(1);
+    await p.waitForFunction(()=>document.querySelector('#rc li:first-child .rcr > span:nth-child(5)')?.textContent==='43ms');await p.waitForFunction(()=>document.querySelector('#pipeline .node[data-feature=router] .dec b')?.textContent==='haikulow');expect(count(await motion(p),'ping')).toBe(1);
     await p.locator('#pipeline .node[data-feature=router]').click();expect(await p.locator('#circuit-inspector').evaluate(e=>e.getBoundingClientRect().top)).toBeLessThan(100);
     await p.screenshot({path:join(output,'mobile-stage-inspection.png')});
     await p.locator('#pipeline .node[data-feature=allocation]').focus();await p.keyboard.press('Enter');expect(await p.locator('#pipeline .node[data-feature=allocation]').getAttribute('aria-pressed')).toBe('true');
@@ -494,6 +529,6 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     await p.reload(); await p.waitForSelector('#pipeline .node');
     expect(await p.locator('html').getAttribute('lang')).toBe('en');
     expect(await p.locator('html').getAttribute('data-theme')).toBe('light');
-    expect(await p.locator('.stats .stat').count()).toBe(4); await p.close();
+    expect(await p.locator('.stats .stat').count()).toBe(3); await p.close();
   });
 });

@@ -4,7 +4,7 @@ import { normalizeUsage, usageCost, ModelCache, cacheState, observedTtl, switchC
 import { providerPrice } from '../src/provider-prices.js';
 import { delegationCost } from '../src/admission.js';
 import { claudeEffortCache, effortCacheHit } from '../src/claude-cache.js';
-import { routeCost } from '../src/route-cost.js';
+import { costHold, routeCost } from '../src/route-cost.js';
 import { observedDelegationPrices } from '../src/delegation-prices.js';
 
 const price = { source: 'fixture', revision: 'test-v1', input: 4, read: .2, write5m: 5, write1h: 8, output: 20 };
@@ -41,13 +41,21 @@ describe('observed usage and cost', () => {
     expect(observedTtl(normalizeUsage('claude', raw))).toBe(3_600_000);
     c.clear(); expect(c.get('B', 'one')).toBeNull();
   });
-  it('permits cheap output on input-neutral Haiku, holds short Sonnet and accounts for return scenarios', () => {
-    const common = { prefix: 100_000, baseline: price, baselineCache: 'warm' as const, targetCache: 'cold' as const, baselineWrite: 8, outputRange: [0, 1000] as const };
-    expect(switchCost({ ...common, target: { ...price, read: .01, output: .5 }, targetWrite: .2 }).hold).toBe(false);
-    expect(switchCost({ ...common, target: { ...price, output: 10 }, targetWrite: 4 }).hold).toBe(true);
+  it('permits cheap output on input-neutral Haiku, holds short Sonnet and bounds the return to the baseline', () => {
+    const common = { prefix: 100_000, targetHeld: 0, baseline: price, baselineCache: 'warm' as const, targetCache: 'cold' as const, baselineWrite: 8, outputRange: [0, 1000] as const, returns: true };
+    const haiku = { ...price, read: .01, output: .5 };
+    expect(switchCost({ ...common, target: haiku, targetWrite: .2 }).hold).toBe(false);
+    expect(switchCost({ ...common, target: { ...price, output: 10 }, targetWrite: 4 })).toMatchObject({ hold: true, reason: 'cost_hold' });
     expect(switchCost({ ...common, target: { ...price, output: 10 }, targetWrite: 4, outputRange: [40_000, 50_000] }).hold).toBe(false);
-    expect(switchCost({ ...common, target: price, targetWrite: 8, targetCache: 'unknown' }).reason).toBe('cost_unknown');
-    expect(switchCost({ ...common, target: { ...price, output: .5 }, targetWrite: .2, returnWriteRange: [.8, .8] }).hold).toBe(true);
+    // Unknown target state: what it held may be read or written.
+    expect(switchCost({ ...common, target: price, targetWrite: 8, targetCache: 'unknown', targetHeld: 100_000 })).toMatchObject({ hold: true, reason: 'cost_unknown_hold' });
+    // A cold baseline left cold is rewritten on return: staying is then worth its read, not its write.
+    expect(switchCost({ ...common, baselineCache: 'cold', target: haiku, targetWrite: 1, returns: false }).hold).toBe(false);
+    expect(switchCost({ ...common, baselineCache: 'cold', target: haiku, targetWrite: 1 }).hold).toBe(true);
+    // A warm target still writes what was added since its own request.
+    expect(switchCost({ ...common, targetCache: 'warm', target: { ...price, read: .1, output: 10 }, targetWrite: 4, targetHeld: 90_000 }).hold).toBe(true);
+    expect(switchCost({ ...common, targetCache: 'warm', target: { ...price, read: .1, output: 10 }, targetWrite: 4, targetHeld: 100_000 }).hold).toBe(false);
+    expect(switchCost({ ...common, target: null, targetWrite: .2 })).toMatchObject({ hold: true, reason: 'cost_unknown_hold', deltaUsd: null });
     expect(providerPrice('claude', 'claude-haiku-5-5', 100_001)?.write1h).toBe(1);
     expect(providerPrice('codex', 'gpt-6.1-sol', 300_000)?.output).toBe(15);
     expect(providerPrice('codex', 'gpt-6.1-sol', 1000, 'priority')).toBeNull();
@@ -68,14 +76,33 @@ describe('observed usage and cost', () => {
     expect(observed).toBeDefined();
     expect(delegationCost(25, 86700, { coordinatorTurns: 11, workerTokensPerCall: 40000, prices: observed! })).toMatchObject({ basis: 'tokens', savingUsd: null, components: { m1: expect.any(Number), m2: [.039, .041], m3: null, m4: null, m5: null } });
   });
-  it('holds an observed switch scenario and preserves genuinely unknown cache states', () => {
-    const c = new ModelCache();
-    c.observe({ model: 'claude-opus-5-5', epoch: 'one', at: 0, ttlMs: 3600000, input: 0, read: 99000, write: 1000, output: 100 });
-    expect(routeCost('claude', 'claude-opus-5-5', 'claude-sonnet-5-5', c, 'one', 1000).reason).toBe('cost_unknown');
-    c.observe({ model: 'claude-sonnet-5-5', epoch: 'one', at: 0, ttlMs: 3600000, input: 100000, read: 0, write: 0, output: 100 });
+  it('guards observed switches by exact price band, holds the unobserved and leaves effort and upgrades alone', () => {
+    const bounds = [300_000, 3_600_000] as const;
+    const opus = (read: number, at = 0) => ({ model: 'claude-opus-5-5', epoch: 'one', at, ttlMs: null, ttlBoundsMs: bounds, input: 10, read, write: 1000, output: 100 });
+    const c = new ModelCache(); c.observe(opus(50_000));
+    // Haiku's 1h write at or under 100k is Opus's read: input-neutral, so cheaper output decides. Sonnet writes dearer.
+    expect(routeCost('claude', 'claude-opus-5-5', 'claude-haiku-5-5', c, 'one', 1000)).toMatchObject({ hold: false, reason: 'cost_allows', evidence: { prefix_source: 'baseline' } });
     expect(routeCost('claude', 'claude-opus-5-5', 'claude-sonnet-5-5', c, 'one', 1000)).toMatchObject({ hold: true, reason: 'cost_hold', whole_session_cost: 'unknown' });
-    c.observe({ model: 'claude-opus-5-5', epoch: 'one', at: 0, ttlMs: null, input: 0, read: 99000, write: 1000, output: 100 });
-    expect(routeCost('claude', 'claude-opus-5-5', 'claude-sonnet-5-5', c, 'one', 1000).reason).toBe('cost_unknown');
+    expect(cacheState(c.get('claude-opus-5-5', 'one'), 299_999)).toBe('warm');
+    expect(cacheState(c.get('claude-opus-5-5', 'one'), 300_000)).toBe('unknown');
+    expect(cacheState(c.get('claude-opus-5-5', 'one'), 3_600_000)).toBe('cold');
+    expect(routeCost('claude', 'claude-opus-5-5', 'claude-haiku-5-5', c, 'one', 3_600_000)?.hold).toBe(false);
+    // Exactly at Haiku's 100k band edge the next request carries at least one token more: priced past the edge, so held.
+    const edge = new ModelCache(); edge.observe(opus(100_000 - 10 - 1000 - 100));
+    expect(routeCost('claude', 'claude-opus-5-5', 'claude-haiku-5-5', edge, 'one', 1000)).toMatchObject({ hold: true, reason: 'cost_hold' });
+    // One token under the edge, the request's own new input decides the band: two new tokens cross it.
+    const under = new ModelCache(); under.observe(opus(100_000 - 1 - 10 - 1000 - 100));
+    expect(routeCost('claude', 'claude-opus-5-5', 'claude-haiku-5-5', under, 'one', 1000)).toMatchObject({ hold: false, reason: 'cost_allows' });
+    expect(routeCost('claude', 'claude-opus-5-5', 'claude-haiku-5-5', under, 'one', 1000, 2)).toMatchObject({ hold: true, reason: 'cost_hold', inputs: { target: providerPrice('claude', 'claude-haiku-5-5', 100_001) } });
+    c.observe(opus(150_000)); // Over Haiku's 100k band its write is dearer than Opus's read.
+    expect(routeCost('claude', 'claude-opus-5-5', 'claude-haiku-5-5', c, 'one', 1000)).toMatchObject({ hold: true, reason: 'cost_hold' });
+    // Never observed in this context: any band, so held; a new context has no baseline to return to.
+    expect(routeCost('claude', 'claude-opus-5-5', 'claude-haiku-5-5', new ModelCache(), 'one', 1000)).toMatchObject({ hold: true, reason: 'cost_unknown_hold' });
+    expect(routeCost('claude', 'claude-opus-5-5', 'claude-sonnet-5-5', undefined, '', 1000)?.hold).toBe(false);
+    expect(routeCost('claude', 'claude-opus-5-5', 'claude-opus-5-5', c, 'one', 1000)).toBeNull();
+    expect(costHold(routeCost('claude', 'claude-sonnet-5-5', 'claude-opus-5-5', c, 'one', 1000), 1, 2)).toEqual({ hold: false, reason: 'upgrade_allowed' });
+    expect(costHold({ hold: true, reason: 'cost_hold' }, undefined, 0)).toEqual({ hold: true, reason: 'cost_hold' });
+    expect(costHold(null, 2, 0)).toEqual({ hold: false, reason: 'not_checked' });
   });
   it('keeps unknown, excluded and old-host cache capabilities conservative and restores the floor on an observed miss', () => {
     const capabilities = { host: '2.1.288', connection: 'api-key' as const, excluded: false, hipaa: false };

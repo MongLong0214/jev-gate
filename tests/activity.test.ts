@@ -124,7 +124,7 @@ describe('loadActivity', () => {
       prompt: 'SUPER_SECRET_PROMPT_TEXT',
       prompt_sha256: 'abc',
       http: { status: 200, duration_ms: 329 },
-      jev: { model: 'jev-1.13.0', usage: { input_tokens: 832, output_tokens: 105 } },
+      jev: { model: 'jev-1.14.0', usage: { input_tokens: 832, output_tokens: 105 } },
       decision: { shape: 'direct', reason: 'admission_not_worth' },
       estimate: { turns: 13.9, saving_tokens: -187992 },
     });
@@ -143,7 +143,7 @@ describe('loadActivity', () => {
     expect(snap.routerChanges).toBe(1);
     const gate = snap.events.find((e) => e.title === '게이트 A');
     expect(gate?.kind).toBe('asked');
-    expect(gate?.call).toContain('jev-1.13.0');
+    expect(gate?.call).toContain('jev-1.14.0');
     expect(gate?.call).toContain('832');
     expect(gate?.used).toContain('직접 처리');
     expect(gate?.used).toContain('측정된 절감이 아닙니다');
@@ -212,7 +212,7 @@ describe('loadActivity', () => {
       attempted: true,
       prompt: 'SUPER_SECRET_PROMPT_TEXT',
       http: { status: 200, duration_ms: 280 },
-      jev: { model: 'jev-1.13.0', usage: { input_tokens: 10, output_tokens: 4 } },
+      jev: { model: 'jev-1.14.0', usage: { input_tokens: 10, output_tokens: 4 } },
       decision: { shape: 'direct', reason: 'admission_not_worth' },
     });
     const shut = loadActivity({ traceDir: trace, env, now: new Date('2026-09-29T06:00:01.000Z') });
@@ -387,7 +387,7 @@ describe('dashboard server', () => {
         prompt_id: 'p-live',
         attempted: true,
         http: { status: 200, duration_ms: 280 },
-        jev: { model: 'jev-1.13.0', usage: { input_tokens: 10, output_tokens: 4 } },
+        jev: { model: 'jev-1.14.0', usage: { input_tokens: 10, output_tokens: 4 } },
         decision: { shape: 'direct', reason: 'admission_not_worth' },
       });
       let shut = working;

@@ -11,7 +11,7 @@
  * input prices relative to the baseline, an estimate that ignores token counts and effort.
  *
  * Usage:
- *   node dist/bench/router.js run    --split dev|test --out FILE [--concurrency 3] [--deadline-ms 30000] [--golden FILE]
+ *   node dist/bench/router.js run    --split dev|test|spawn --out FILE [--concurrency 3] [--deadline-ms 30000] [--golden FILE]
  *   node dist/bench/router.js report --out FILE
  */
 import { createHash } from 'node:crypto';
@@ -35,7 +35,7 @@ export const OPTIONS = ['mechanical', 'routine', 'complex', 'open_problem'] as c
 const ARMS = ['cheapest_first', 'capable_first', 'pair'] as const;
 type Arm = (typeof ARMS)[number];
 
-export interface Item { id: string; split: 'dev' | 'test'; label: string; effort: [string, string]; text: string; pair_of?: string; tags?: string[] }
+export interface Item { id: string; split: 'dev' | 'test' | 'spawn'; label: string; effort: [string, string]; text: string; pair_of?: string; tags?: string[] }
 export interface Route { model: string; rank: number; effort: string; reasons: { model: string; effort: string } }
 export interface ArmRecord { ok: boolean; code?: string; duration_ms: number; jev_model?: string | null; usage?: unknown; answers?: Record<string, unknown>; top?: string | null; ordered: Route; accept?: Route }
 export interface ItemRecord { id: string; split: string; label: string; effort_range: [string, string]; pair_of?: string; tags?: string[]; arms: Partial<Record<Arm, ArmRecord>> }
@@ -76,8 +76,10 @@ export const acceptDecision = (offer: PairOffer, answers: Record<string, unknown
   return selectPair(offer, { ...answers, capability: { type: 'choice', choice: pick, confidence: 1, probabilities: Object.fromEntries(Object.keys(q.criteria).map(k => [k, k === pick ? 1 : 0])) } });
 };
 
-const ask = async (offer: PairOffer, text: string, apiKey: string, deadlineMs: number, rules: boolean): Promise<ArmRecord> => {
-  const outcome = await callJev({ model: DEFAULT_CONFIG.jevModel, state: routingContext(text), questions: offer.questions }, { apiKey, deadlineMs });
+const ask = async (offer: PairOffer, text: string, apiKey: string, deadlineMs: number, rules: boolean, spawn = false): Promise<ArmRecord> => {
+  // A spawn brief is the child's contract, as the Router's spawnDecision sends it.
+  const state = routingContext(text); if (spawn) Object.assign(state.task, { source: 'child_contract' });
+  const outcome = await callJev({ model: DEFAULT_CONFIG.jevModel, state, questions: offer.questions }, { apiKey, deadlineMs });
   if (!outcome.ok || outcome.response.model !== DEFAULT_CONFIG.jevModel) {
     const native = routeOf(selectPair(offer, {}));
     return { ok: false, code: outcome.ok ? 'model_mismatch' : outcome.code, duration_ms: outcome.durationMs, ordered: native, ...(rules ? { accept: native } : {}) };
@@ -160,14 +162,14 @@ const readRecords = (file: string): ItemRecord[] => readFileSync(file, 'utf8').s
 
 const run = async (argv: string[]): Promise<void> => {
   const split = flag(argv, '--split'), out = flag(argv, '--out');
-  if ((split !== 'dev' && split !== 'test') || !out) throw new Error('run needs --split dev|test and --out FILE');
+  if ((split !== 'dev' && split !== 'test' && split !== 'spawn') || !out) throw new Error('run needs --split dev|test|spawn and --out FILE');
   if (existsSync(out)) throw new Error(`refusing to overwrite ${out}`);
   const golden = JSON.parse(readFileSync(resolve(flag(argv, '--golden') ?? defaultGolden()), 'utf8')) as { frozen_test_sha256: string; items: Item[] };
   if (split === 'test' && golden.frozen_test_sha256 !== testHash(golden.items)) throw new Error('the test split changed since it was frozen');
   const apiKey = resolveApiKey(process.env);
   if (!apiKey) throw new Error('no Jev API key');
   const deadlineMs = Number(flag(argv, '--deadline-ms') ?? 30000), concurrency = Number(flag(argv, '--concurrency') ?? 3);
-  const args = { baseline: { ...BASELINE }, candidates: candidates(), model: true, effort: true, upgrade: 0.8, downgrade: 0.6, scope: 'root' as const };
+  const args = { baseline: { ...BASELINE }, candidates: candidates(), model: true, effort: true, upgrade: 0.8, downgrade: 0.6, scope: split === 'spawn' ? 'spawn' as const : 'root' as const };
   const role = offerRoute(args), pair = offerPairs(args);
   if (!role?.roles || !pair) throw new Error('no role offer for the baseline');
   const offers: Record<Arm, PairOffer> = { cheapest_first: ordered(role, false), capable_first: ordered(role, true), pair };
@@ -178,7 +180,7 @@ const run = async (argv: string[]): Promise<void> => {
     for (let i = next++; i < items.length; i = next++) {
       const item = items[i]!;
       const record: ItemRecord = { id: item.id, split: item.split, label: item.label, effort_range: item.effort, ...(item.pair_of ? { pair_of: item.pair_of } : {}), ...(item.tags ? { tags: item.tags } : {}), arms: {} };
-      for (const arm of ARMS) record.arms[arm] = await ask(offers[arm], item.text, apiKey, deadlineMs, arm !== 'pair');
+      for (const arm of ARMS) record.arms[arm] = await ask(offers[arm], item.text, apiKey, deadlineMs, arm !== 'pair', split === 'spawn');
       appendFileSync(out, JSON.stringify(record) + '\n');
       records.push(record);
       process.stderr.write(`${records.length}/${items.length} ${item.id}\n`);
@@ -193,6 +195,6 @@ if (isMainModule()) {
   const argv = process.argv.slice(2);
   const main = argv[0] === 'run' ? run(argv.slice(1))
     : argv[0] === 'report' && flag(argv, '--out') ? Promise.resolve(void process.stdout.write(JSON.stringify(summarize(readRecords(flag(argv, '--out')!)), null, 2) + '\n'))
-    : Promise.resolve(void (process.stdout.write('usage: node dist/bench/router.js run --split dev|test --out FILE [--concurrency 3] [--deadline-ms 30000] [--golden FILE]\n       node dist/bench/router.js report --out FILE\n'), process.exitCode = 2));
+    : Promise.resolve(void (process.stdout.write('usage: node dist/bench/router.js run --split dev|test|spawn --out FILE [--concurrency 3] [--deadline-ms 30000] [--golden FILE]\n       node dist/bench/router.js report --out FILE\n'), process.exitCode = 2));
   main.catch((err: unknown) => { process.stderr.write(`bench router: ${err instanceof Error ? err.message : String(err)}\n`); process.exitCode = 1; });
 }

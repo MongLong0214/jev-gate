@@ -1,0 +1,14 @@
+model jev-1.14.0, 5 repeat(s), 30 calls, 185 candidates (185 judged, 0 unjudged)
+three-way exact 165/185 (89.2%)
+┌───────────────┬───────────┬──────────┬───────────────┐
+│ (index)       │ unrelated │ relevant │ needs_context │
+├───────────────┼───────────┼──────────┼───────────────┤
+│ unrelated     │ 105       │ 5        │               │
+│ relevant      │ 5         │ 40       │ 5             │
+│ needs_context │           │ 5        │ 20            │
+└───────────────┴───────────┴──────────┴───────────────┘
+relevant labelled: ordered first at the floor 24/50, folded 0 (this hides evidence)
+unrelated labelled: folded at the floor 90/110, ordered first 0
+mean confidence of the chosen label: correct 0.821, wrong 0.31
+request latency p50 183 ms, p90 229 ms; input tokens 91925
+selector reasons {"none":30}

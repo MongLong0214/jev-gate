@@ -37,7 +37,7 @@ const text = (p: ReturnType<typeof page>, id: string) => p.get(id).textContent ?
 const opened = (p: ReturnType<typeof page>) => p.w.document.querySelector('#trace .sd:not([hidden])')?.textContent ?? '';
 const rows = (p: ReturnType<typeof page>) => p.get('runs').querySelectorAll('button[data-run]');
 const node = (p: ReturnType<typeof page>, id: string) => p.w.document.querySelector(`#pipeline .node[data-feature="${id}"]`)! as HTMLElement;
-const filled = (p: ReturnType<typeof page>) => [...p.get('rc').querySelectorAll('tr')].filter(r => r.textContent);
+const filled = (p: ReturnType<typeof page>) => [...p.get('rc').querySelectorAll('li button')];
 
 describe('dashboard live interactions', () => {
   it('shows the running version and honest latest-release status only when a version is known, in both languages', () => {
@@ -86,13 +86,13 @@ describe('dashboard live interactions', () => {
     expect(node(p, 'workers').classList.contains('idle')).toBe(true); expect(node(p, 'workers').querySelector('.dec b')!.textContent).toBe('–');
     expect(node(p, 'admission').classList.contains('idle')).toBe(false);
     expect(p.w.document.querySelectorAll('.trip,.node.zap,.rail .ln b')).toHaveLength(0); expect(filled(p)).toHaveLength(1);
-    expect(text(p, 'k-p50')).toBe('70'); expect(text(p, 'j-latest')).toBe('70ms'); expect(p.get('rc').querySelectorAll('tr')).toHaveLength(8);
+    expect(p.get('k-p50')).toBeNull(); expect(text(p, 'j-p50')).toBe('70ms'); expect(p.get('rc').querySelectorAll('li')).toHaveLength(14);
   });
   it('recomputes host-filtered latency and treats a filter change as a static view, not new traffic', () => {
     const p = page(), s = snapshot([run('c', 'claude', [step('a', 'admission', 'jev', { durationMs: 70 })]), run('x', 'codex', [step('r', 'router', 'jev', { durationMs: 210 })])]);
     p.push(s); p.push(s); p.click('[data-host="codex"]');
     expect(text(p, 'runs')).toContain('codex execution'); expect(text(p, 'runs')).not.toContain('claude execution');
-    expect(text(p, 'k-p50')).toBe('210'); expect(text(p, 'k-p95')).toContain('표본 1');
+    expect(text(p, 'j-p50')).toBe('210ms'); expect(text(p, 'j-p95')).toBe('210ms');
     expect(filled(p)).toHaveLength(1); expect(p.w.document.querySelectorAll('.trip')).toHaveLength(0);
     expect(p.w.document.querySelector('[data-host="codex"]')?.getAttribute('aria-pressed')).toBe('true');
   });
@@ -122,8 +122,8 @@ describe('dashboard live interactions', () => {
   it('pauses updates without motion, resumes the pending snapshot and keeps mismatch explicit in the stage detail', () => {
     const p = page(); p.push(snapshot([run('one', 'claude', [step('a', 'admission', 'jev', { durationMs: 50 })])])); p.click('#pause');
     p.push(snapshot([run('one', 'claude', [step('m', 'workers', 'host', { model: { selected: 'opus', observed: 'claude-sonnet-5', status: 'mismatch', selectedEffort: 'high', observedEffort: null } }), step('b', 'allocation', 'jev', { durationMs: 90 })])]));
-    expect(text(p, 'j-latest')).toBe('50ms'); expect(p.w.document.querySelectorAll('.trip')).toHaveLength(0); expect(p.get('pause').getAttribute('aria-pressed')).toBe('true');
-    p.click('#pause'); expect(text(p, 'j-latest')).toBe('90ms');
+    expect(text(p, 'j-p95')).toBe('50ms'); expect(p.w.document.querySelectorAll('.trip')).toHaveLength(0); expect(p.get('pause').getAttribute('aria-pressed')).toBe('true');
+    p.click('#pause'); expect(text(p, 'j-p95')).toBe('90ms');
     expect(opened(p)).toContain('불일치'); expect(opened(p)).toContain('claude-sonnet-5');
     p.click('#language'); expect(opened(p)).toContain('Mismatch'); expect(p.w.document.documentElement.lang).toBe('en');
     p.click('#theme'); expect(p.w.document.documentElement.dataset.theme).toBe('light');
@@ -155,6 +155,8 @@ describe('dashboard live interactions', () => {
     p.click('[data-state="attention"]'); expect(text(p, 'runs')).not.toContain('claude execution'); expect(text(p, 'runs')).toContain('codex execution');
     p.click('[data-state="all"]'); p.click('.node[data-feature="admission"]'); p.click('#circuit-inspector [data-inspect-feature]');
     expect(text(p, 'runs')).toContain('claude execution'); expect(text(p, 'runs')).not.toContain('codex execution'); expect(text(p, 'rd-name')).toBe('claude execution');
+    // The detail header holds only what the selected row does not show: the start, and the duration where the row hides it.
+    expect([...p.get('rd-meta').querySelectorAll('dt')].map(e => e.textContent)).toEqual(['시작', '소요']); expect(p.get('rd-meta').lastElementChild!.className).toBe('rd-du'); expect(p.w.document.getElementById('rd-state')).toBeNull();
     p.click('.node[data-feature="admission"]'); expect(text(p, 'runs')).toContain('codex execution');
     const search = p.get('search') as unknown as { value: string; dispatchEvent(e: unknown): void }; search.value = 'codex'; search.dispatchEvent(new p.w.Event('input'));
     expect(text(p, 'runs')).toContain('codex execution'); expect(text(p, 'runs')).not.toContain('claude execution');
@@ -170,28 +172,48 @@ describe('dashboard live interactions', () => {
     p.click('[data-circuit-mode="run"]'); p.click('.node[data-feature="admission"]'); expect(rows(p)).toHaveLength(2);
   });
   it('shows Router as model and effort without confidence, other decisions with their recorded confidence', () => {
-    const rc = (choice: string, extra: object = {}) => ({ status: 200, code: null, model: 'jev-1.13.0', input: 1200, output: 40, costUsd: 0.0012, choice, confidence: .87, threshold: null, direction: null, ...extra });
+    const rc = (choice: string, extra: object = {}) => ({ status: 200, code: null, model: 'jev-1.14.0', input: 1200, output: 40, costUsd: 0.0012, choice, confidence: .87, threshold: null, direction: null, ...extra });
     const p = page(); p.push(snapshot([run('r', 'claude', [step('a', 'admission', 'jev', { durationMs: 90, receipt: rc('direct') }), step('m', 'router', 'jev', { durationMs: 120, receipt: rc('claude-sonnet-5 · high', { threshold: .6, direction: 'downgrade' }) })])]));
     const segs = (id: string) => [...node(p, id).querySelectorAll('.dec b span')].map(s => s.textContent);
     expect(segs('router')).toEqual(['sonnet', 'high']); expect(segs('admission')).toEqual(['직접', '0.87']);
-    p.click('.node[data-feature=router]'); expect(text(p, 'circuit-inspector')).toContain('확신 87% · 변경 기준 60%');
-    expect(text(p, 'rc')).toContain('1.2K → 40'); expect(text(p, 'rc')).toContain('≈$0.00120'); expect(text(p, 'rc')).toContain('0.87');
+    p.click('.node[data-feature=router]'); expect(text(p, 'circuit-inspector')).toContain('120ms'); expect(text(p, 'circuit-inspector')).not.toMatch(/87|60%|0\.6/);
+    // The log row carries input tokens; probability and threshold live once, in the decision basis panel.
+    expect(text(p, 'rc')).toContain('1,200'); expect(text(p, 'rc')).not.toContain('0.87'); expect(text(p, 'rc')).not.toContain('≈$');
+    expect(text(p, 'basis-meta')).toContain('최신 호출을 따라갑니다'); expect(text(p, 'basis-q')).toContain('0.87'); expect(p.get('basis-q').querySelector('b')).toBeNull();
+    p.click('#rc button[data-call=m]'); expect(text(p, 'basis-meta')).toContain('고정한 호출'); expect(text(p, 'basis-q')).toContain('sonnet');
+    expect(p.get('basis-q').querySelector('b')!.getAttribute('style')).toContain('left: 60%'); expect(p.get('basis-q').querySelector('i.d')!.getAttribute('style')).toContain('width: 87%');
   });
-  it('keeps eight call-log rows newest first and holds them with a count of new calls', async () => {
+  it('keeps fourteen six-column call-log rows newest first, pins a row and follows the latest again', async () => {
     const calls = (n: number) => Array.from({ length: n }, (_, i) => step('c' + i, 'router', 'jev', { durationMs: 100 + i, at: new Date(Date.parse(stamp) + i * 10).toISOString() }));
     const p = page(); p.push(snapshot([run('r', 'claude', calls(3))]));
-    expect(p.get('rc').querySelectorAll('tr')).toHaveLength(8); expect(filled(p)).toHaveLength(3); expect(filled(p)[0]!.textContent).toContain('102ms');
-    expect(filled(p)[0]!.querySelectorAll('td')[7]!.textContent).toBe('–');
-    p.click('[data-rc="hold"]'); p.push(snapshot([run('r', 'claude', calls(5))]));
-    await vi.waitFor(() => expect(text(p, 'rc-new')).toBe('+2 새 기록'), { timeout: 5000 }); expect(filled(p)).toHaveLength(3); expect(p.w.document.querySelector('[data-rc="hold"]')?.getAttribute('aria-pressed')).toBe('true');
-    p.click('[data-rc="live"]'); expect(filled(p)).toHaveLength(5); expect(filled(p)[0]!.textContent).toContain('104ms'); expect(text(p, 'rc-new')).toBe('');
+    expect(p.get('rc').querySelectorAll('li')).toHaveLength(14); expect(filled(p)).toHaveLength(3); expect(filled(p)[0]!.textContent).toContain('102ms');
+    expect(p.w.document.querySelectorAll('.rch > span')).toHaveLength(6); for (const b of filled(p)) expect(b.children).toHaveLength(6);
+    expect(filled(p)[0]!.children[3]!.textContent).toBe('–'); expect(p.get('follow').style.visibility).toBe('hidden');
+    p.click('#rc button[data-call=c1]'); expect(p.w.document.querySelector('#rc button[data-call=c1]')?.getAttribute('aria-pressed')).toBe('true');
+    expect(p.get('follow').style.visibility).toBe('visible');
+    p.push(snapshot([run('r', 'claude', calls(5))]));
+    await vi.waitFor(() => expect(filled(p)).toHaveLength(5), { timeout: 5000 }); expect(filled(p)[0]!.textContent).toContain('104ms');
+    expect(p.w.document.querySelector('#rc button[data-call=c1]')?.getAttribute('aria-pressed')).toBe('true'); expect(text(p, 'basis-meta')).toContain('고정한 호출');
+    p.click('#follow'); expect(p.w.document.querySelectorAll('#rc [aria-pressed=true]')).toHaveLength(0); expect(text(p, 'basis-meta')).toContain('최신 호출을 따라갑니다');
+  });
+  it('counts a request awaiting its response up in its own row, in the badge and on the timeline', async () => {
+    const at = new Date(Date.now() - 1500).toISOString();
+    const p = page(); p.push(snapshot([run('r', 'claude', [step('w', 'admission', 'jev', { state: 'active', at }), step('d', 'router', 'jev', { durationMs: 80, receipt: { status: 200, code: null, model: 'jev-1.14.0', input: 10, output: 1, costUsd: null, choice: 'claude-sonnet-5 · high', confidence: .9, threshold: .6, direction: null } })])]));
+    const wait = p.w.document.querySelector('#rc button[data-call=w]')!;
+    expect(wait.textContent).toContain('응답 대기'); expect(wait.querySelector('.run[data-since]')).not.toBeNull();
+    expect(p.w.document.querySelector('#pipeline .jb .v')?.textContent).toBe('1.14'); expect(p.w.document.querySelector('#pipeline .rail')?.classList.contains('wait')).toBe(true);
+    expect(p.get('tl').querySelectorAll('i')).toHaveLength(2); expect(p.get('tl').querySelectorAll('i.p')).toHaveLength(1);
+    const first = wait.querySelector('.run')!.textContent; await vi.waitFor(() => expect(wait.querySelector('.run')!.textContent).not.toBe(first), { timeout: 3000 });
   });
   it('estimates today cost from recorded tokens only and labels it as an estimate', () => {
     const p = page(), s = snapshot([run('r', 'claude', [step('c', 'router', 'jev', { durationMs: 100 })])]);
     p.push(s); expect(text(p, 'j-cost')).toBe('–');
     p.push({ ...s, operations: { ...s.operations, latency: { ...s.operations.latency, today: { claude: { calls: 3, input: 9000, costUsd: 0.0042, unpriced: 1 } } } } });
-    expect(text(p, 'j-cost')).toBe('≈ $0.00420'); expect(text(p, 'j-today')).toBe('3회'); expect(text(p, 'k-today')).toBe('오늘 3회');
-    expect(text(p, 'j-cost-note')).toContain('정가 추정'); expect(text(p, 'j-cost-note')).toContain('API가 알려주지 않습니다'); expect(text(p, 'j-cost-note')).toContain('1회는 제외');
+    const note = p.get('j-cost').title;
+    expect(text(p, 'j-cost')).toBe('≈ $0.00420'); expect(text(p, 'k-today')).toBe('오늘 3회');
+    expect(note).toContain('정가 추정'); expect(note).toContain('API가 알려주지 않습니다'); expect(note).toContain('1회는 제외');
+    // Both Jev versions stay priced so records written before an upgrade still cost out; one price, listed once.
+    expect(note).toContain('jev-1.13.0 · jev-1.14.0, 100만 토큰당 $0.042'); expect(note.match(/\$0\.042/g)).toHaveLength(1);
   });
   it('saves independent shared preferences and surfaces a failed write without changing its switch', async () => {
     const p = page();p.push(snapshot([]));const fetch=vi.fn().mockResolvedValueOnce({ ok:true, json:async()=>({enabled:false}) }).mockResolvedValueOnce({ok:false});Object.assign(p.w,{fetch});
@@ -266,6 +288,31 @@ it('renders typed decision probabilities once while retaining other decision evi
   expect(terms).toHaveLength(1); expect(opened(p)).not.toContain('control: task_clear'); expect(opened(p)).toContain('기존 모델 claude-opus-5-5');
 });
 
+it('shows a Jev response\'s questions once, in the decision basis panel, with twelve fixed slots, threshold ticks and its reason code', () => {
+  const q = (n: number) => Array.from({ length: n }, (_, i) => ({ question: i ? 'q' + i : 'model', value: 'v' + i, confidence: .7, probabilities: [{ label: 'v' + i, value: .7 }, { label: 'x', value: .3 }] }));
+  const rc = { status: 200, code: 'model_selected', model: 'jev-1.14.0', input: 300, output: 20, costUsd: null, choice: 'v0', confidence: .7, threshold: .65, direction: null };
+  const p = page(); p.push(snapshot([run('decision', 'claude', [step('few', 'admission', 'jev', { durationMs: 40, receipt: rc, judgements: q(2) }), step('many', 'admission', 'jev', { durationMs: 50, at: new Date(Date.parse(stamp) - 1000).toISOString(), receipt: rc, judgements: q(14) })])]));
+  const slots = () => [...p.get('basis-q').querySelectorAll('li')];
+  expect(slots()).toHaveLength(12); expect(slots().filter(l => l.textContent)).toHaveLength(2);
+  expect(p.get('basis-q').querySelectorAll('b')).toHaveLength(1); expect(slots()[0]!.textContent).toContain('model'); expect(slots()[0]!.textContent).toContain('0.70');
+  expect(text(p, 'basis-code')).toBe('model_selected');
+  p.click('#rc button[data-call=many]'); expect(slots()).toHaveLength(12); expect(slots()[11]!.textContent).toBe('외 3개'); expect(slots()[10]!.textContent).toContain('q10');
+  if (p.w.document.querySelector('#trace button[data-step=few]')?.getAttribute('aria-expanded') !== 'true') p.click('#trace button[data-step=few]');
+  expect(opened(p)).not.toContain('70%'); expect(opened(p)).toContain('판단 근거 패널에서 보기');
+  p.click('#trace .sd:not([hidden]) button[data-inspect-call]');
+  expect(p.w.document.querySelector('#rc button[data-call=few]')?.getAttribute('aria-pressed')).toBe('true'); expect(p.w.document.activeElement?.getAttribute('data-call')).toBe('few');
+  p.click('#language'); expect(text(p, 'basis-meta')).toContain('Pinned call');
+  p.click('#rc button[data-call=many]'); expect(slots()[11]!.textContent).toBe('+3 more');
+});
+
+it('names the reason under each circuit card and draws its recorded confidence as a bar', () => {
+  const rc = { status: 200, code: null, model: 'jev-1.14.0', input: 300, output: 20, costUsd: null, choice: 'direct', confidence: .82, threshold: null, direction: null };
+  const p = page(); p.push(snapshot([run('c', 'claude', [step('a', 'admission', 'jev', { durationMs: 40, receipt: rc }), step('pa', 'admission', 'policy', { summary: '직접 처리 · 확신 기준 충족' })])]));
+  expect(node(p, 'admission').querySelector('.nt')!.textContent).toBe('직접 처리 · 확신 기준 충족');
+  expect(node(p, 'admission').querySelector('.pb i')!.getAttribute('style')).toContain('width: 82%');
+  expect(node(p, 'router').querySelector('.nt')!.textContent).toBe(''); expect(node(p, 'router').querySelector('.pb i')!.getAttribute('style')).toContain('width: 0%');
+});
+
 it('makes connection loss explicit and freezes the displayed clock at disconnect', async () => {
   const p = page(); p.push(snapshot([run('r', 'claude', [step('r', 'router', 'jev', { state: 'active' })], { state: 'active', firstAt: new Date(Date.now() - 5000).toISOString() })]));
   const since = () => p.get('runs').querySelector('[data-since]')!.textContent;
@@ -283,7 +330,7 @@ it('preserves setting-save failures through incoming snapshots', async () => {
 
 it('shows a ten-thousand-step execution in a bounded timeline with one record list, drawn in the task after its frame', async () => {
   const p = page(), steps = Array.from({ length: 10001 }, (_, i) => step('cycle' + i, 'router', 'host', { summary: 'cycle ' + i })); p.push(snapshot([run('large', 'codex', steps)]));
-  expect(p.get('trace').children).toHaveLength(0);
+  expect(p.get('trace').querySelectorAll('[data-step]')).toHaveLength(0);
   await vi.waitFor(() => expect(p.get('trace').children).toHaveLength(100)); expect(p.get('trace').querySelectorAll('[aria-expanded="true"]')).toHaveLength(1);
   // A patch that arrives before that draw applies to the frame it follows and is drawn; the frame is not drawn over it later.
   const next = frames(), q = page(), large = run('large', 'codex', steps), streams = q.streams();
@@ -298,7 +345,7 @@ it('fills the first rows of a long list at once and the rest in later tasks, cou
   p.push(snapshot(many));
   const shown = () => [...rows(p)].map(b => b.textContent);
   expect(shown()).toHaveLength(45); expect(shown().filter(Boolean)).toHaveLength(20);
-  expect(p.w.document.querySelector('#state-filters [data-state="all"] em')!.textContent).toBe('45'); expect(text(p, 'run-count')).toContain('45');
+  expect(p.w.document.querySelector('#state-filters em')).toBeNull(); expect(text(p, 'run-count')).toContain('45');
   await vi.waitFor(() => expect(shown().every(Boolean)).toBe(true));
 });
 
@@ -307,13 +354,13 @@ it('draws one strip tick per record of the last minute, caps a burst of trips an
   const base = Date.now(), records = (n: number) => Array.from({ length: n }, (_, i) => step(`r${i}`, 'router', 'jev', { durationMs: 50 + i, at: new Date(base + i).toISOString() }));
   const p = page(); p.push(snapshot([run('r', 'claude', [old, ...records(3)])]));
   expect(node(p, 'router').querySelectorAll('.strip .tr i')).toHaveLength(3); expect(node(p, 'router').querySelector('.strip')!.getAttribute('aria-hidden')).toBe('true');
-  expect(p.get('ct').querySelectorAll('i')).toHaveLength(3); expect(filled(p)).toHaveLength(4);
+  expect(p.get('tl').querySelectorAll('i')).toHaveLength(3); expect(filled(p)).toHaveLength(4);
   const rate = /\/분|분당|최근 1분|처리량|per minute|\/min/;
   expect(p.w.document.body.textContent).not.toMatch(rate); p.click('#language'); expect(p.w.document.body.textContent).not.toMatch(rate);
   const burst = page(); burst.push(snapshot([run('r', 'claude', records(1))])); burst.push(snapshot([run('r', 'claude', records(1))]));
   burst.push(snapshot([run('r', 'claude', records(40))]));
   // The newest 24 wait for their trips; the older backlog shows at once.
-  expect(burst.get('rc').querySelector('tr')!.textContent).toContain('65ms');
+  expect(burst.get('rc').querySelector('button')!.textContent).toContain('65ms');
 });
 
 it('marks selection with a tint or a border colour only, never an inset or left accent bar', () => {
@@ -356,9 +403,10 @@ it('counts an active step live from its recorded start', async () => {
   const started = new Date(Date.now() - 5000).toISOString(), p = page();
   p.push(snapshot([run('r', 'claude', [step('m', 'router', 'host', { state: 'active', at: started, startedAt: started })], { state: 'active', firstAt: started })]));
   const du = () => p.get('trace').querySelector('[data-step="m"] .du2')!.textContent!;
-  expect(du()).toMatch(/^5\.\ds$/); expect(opened(p)).toMatch(/기록 사이 경과5\.\ds/);
+  // The row counts the stage live; its open detail does not repeat that count.
+  expect(du()).toMatch(/^5\.\ds$/); expect(opened(p)).not.toContain('기록 사이 경과');
   await new Promise(r => setTimeout(r, 1100));
-  expect(Number.parseFloat(du())).toBeGreaterThanOrEqual(6); expect(opened(p)).toMatch(/기록 사이 경과[6-9]\.\ds/);
+  expect(Number.parseFloat(du())).toBeGreaterThanOrEqual(6);
 });
 
 it('grows the bar of a running stage on the same tick as its duration', async () => {
@@ -402,10 +450,11 @@ it('counts only current failures at the top, keeps settled ones as past errors a
   const outage = (now: 'unknown' | 'later_ok') => run('outage', 'codex', [step('cfg', 'evidence', 'local', { at: day, state: 'error', issue: 'evidence', cause: 'unavailable_config', sessionId: 'cx-session-1', title: 'Evidence · 근거 결과', impact: { now, lastAt: now === 'unknown' ? day : stamp, lastState: now === 'unknown' ? 'error' : 'done' } })], { state: now === 'unknown' ? 'attention' : 'past_error', title: 'Evidence 검색', source: 'evidence', firstAt: day, lastAt: day });
   const refused = run('refused', 'codex', [step('bad', 'evidence', 'local', { at: day, state: 'error', issue: 'evidence', cause: 'invalid_input', sessionId: 'cx-session-2', title: 'Evidence · 근거 결과', impact: { now: 'request_only', lastAt: stamp, lastState: 'done' } })], { state: 'past_error', title: 'Evidence 검색', source: 'evidence', firstAt: day, lastAt: day });
   const mismatch = run('mismatch', 'claude', [step('m', 'router', 'host', { state: 'error', model: { selected: 'claude-opus-5-5', observed: 'claude-sonnet-5', status: 'mismatch', selectedEffort: null, observedEffort: null }, impact: { now: 'unknown', lastAt: stamp, lastState: 'error' } })], { state: 'attention', source: 'router' });
-  const p = page(), em = (state: string) => p.w.document.querySelector(`#state-filters [data-state="${state}"] em`)!.textContent;
+  // The filters carry labels only; a count lives once, at the top, and each row shows its own state.
+  const p = page(), shown = (cls: string) => p.get('runs').querySelectorAll('.c-st.' + cls).length;
   p.push(next(snapshot([mismatch, outage('unknown'), refused])));
   expect(text(p, 'k-att')).toBe('2'); expect(text(p, 'k-diag')).toBe('실제 응답 모델 불일치 1건 · Evidence 사용 불가·오류 1건');
-  expect([em('attention'), em('past_error')]).toEqual(['2', '1']);
+  expect([shown('er'), shown('past')]).toEqual([2, 1]); expect(p.w.document.querySelector('#state-filters em')).toBeNull();
   p.click('[data-run="outage"]');
   for (const fact of ['원인unavailable_config', '현재 영향현재 영향 미확인', '호스트Codex', '세션cx-session-1']) expect(opened(p)).toContain(fact);
   p.click('[data-run="refused"]');
@@ -413,13 +462,13 @@ it('counts only current failures at the top, keeps settled ones as past errors a
   // A later success arrives as a patch: the same row is redrawn as a past error and leaves the current count.
   p.patch(next(snapshot([mismatch, outage('later_ok'), refused])));
   expect(text(p, 'k-att')).toBe('1'); expect(text(p, 'k-diag')).toBe('실제 응답 모델 불일치 1건');
-  expect([em('attention'), em('past_error')]).toEqual(['1', '2']);
+  expect([shown('er'), shown('past')]).toEqual([1, 2]);
   expect(p.get('runs').querySelector('[data-run="outage"] .c-st')!.textContent).toBe('지난 오류');
-  p.click('[data-run="outage"]'); expect(opened(p)).toContain('현재 영향이후 같은 작업 정상 기록'); expect(opened(p)).toContain('상태오류');
+  p.click('[data-run="outage"]'); expect(opened(p)).toContain('현재 영향이후 같은 작업 정상 기록'); expect(opened(p)).not.toContain('상태오류'); expect(p.get('trace').querySelector('[aria-expanded="true"] .sx-r')!.textContent).toBe('오류');
   p.click('[data-host="codex"]');
   expect(text(p, 'k-att')).toBe('0'); expect(text(p, 'k-diag')).toBe('지난 오류 2건');
   p.click('[data-state="past_error"]'); expect(rows(p)).toHaveLength(2);
-  p.click('[data-host="claude"]'); expect(text(p, 'k-att')).toBe('1'); expect(em('past_error')).toBe('0');
+  p.click('[data-host="claude"]'); expect(text(p, 'k-att')).toBe('1'); expect(rows(p)).toHaveLength(0);
   p.click('#language'); p.click('[data-host="all"]'); p.click('[data-state="attention"]'); p.click('[data-run="mismatch"]');
   expect(text(p, 'k-diag')).toBe('Response model mismatch 1 recorded'); expect(opened(p)).toContain('Current impactCurrent impact unknown');
 });
@@ -443,7 +492,8 @@ it('shows a refused worker contract as its own failure through a later host end 
   expect(marks()).toContain('호스트 종료');
   for (const fact of ['single · 계약 미충족 · incomplete · 통과 보고 검사의 실행 미관측', '미관측 #1', '원인check_unobserved', '현재 영향현재 영향 미확인']) expect(opened(p)).toContain(fact);
   expect(text(p, 'trace')).not.toContain('transcript shows');
-  p.click('.node[data-feature=workers]'); expect(text(p, 'circuit-inspector')).toContain('계약 미충족');
+  // The inspector does not repeat the decision its selected card shows.
+  p.click('.node[data-feature=workers]'); expect(node(p, 'workers').querySelector('.dec b')!.textContent).toBe('계약 미충족'); expect(text(p, 'circuit-inspector')).not.toContain('계약 미충족');
   p.click('#language');
   expect(marks()).toContain('Contract not met'); expect(text(p, 'k-diag')).toBe('Worker contract not met 1 recorded');
   expect(opened(p)).toContain('Reported pass not seen in the worker transcript');

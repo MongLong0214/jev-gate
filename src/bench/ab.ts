@@ -17,7 +17,7 @@
  * condition; only turn 2 (`--resume`) is measured.
  *
  * Usage:
- *   node dist/bench/ab.js run    --tasks tasks.json --out DIR --model <id> [--reps 3] [--only S,M] [--conds A,B,C,D] [--timeout-ms 3600000]
+ *   node dist/bench/ab.js run    --tasks tasks.json --out DIR --model <id> [--reps 3] [--only S,M] [--conds A,B,C,D] [--timeout-ms 3600000] [--plugin-dir DIR] [--host-settings FILE]
  *   node dist/bench/ab.js report --out DIR [--trace DIR]
  */
 import { spawnSync } from 'node:child_process';
@@ -37,8 +37,14 @@ export const CONDITION_OPTIONS: Record<Condition, { options: Record<string, unkn
   D: { options: { gateMode: 'auto', compactEnabled: true, compactMode: 'active', routerEnabled: true }, mode: 'auto' },
 };
 
-export const conditionSettings = (cond: Condition, pluginKey = 'jev-gate@jev-gate'): string =>
-  JSON.stringify({ pluginConfigs: { [pluginKey]: { options: CONDITION_OPTIONS[cond].options } } });
+const INSTALLED_KEY = 'jev-gate@jev-gate', INLINE_KEY = 'jev-gate@inline';
+/**
+ * `host` adds top-level settings for this condition (e.g. `autoCompactWindow`), so a host setting is an arm of its own
+ * rather than whatever the owner's settings say. A checkout loaded by `--plugin-dir` is keyed `<name>@inline`; the
+ * installed copy is then disabled so its hooks do not run twice.
+ */
+export const conditionSettings = (cond: Condition, pluginKey = INSTALLED_KEY, host: Record<string, unknown> = {}): string =>
+  JSON.stringify({ ...host, ...(pluginKey === INLINE_KEY ? { enabledPlugins: { [INSTALLED_KEY]: false } } : {}), pluginConfigs: { [pluginKey]: { options: CONDITION_OPTIONS[cond].options } } });
 
 /**
  * Prompt-cache warming favours whichever condition runs first (#129 item 1: the same request cost 3x more as cache
@@ -124,6 +130,10 @@ interface RunOptions {
   conds: Condition[];
   timeoutMs: number;
   claude: string;
+  /** A built checkout to measure instead of the installed plugin. */
+  pluginDir: string | null;
+  /** Top-level host settings per condition, frozen into the plan. */
+  host: Partial<Record<Condition, Record<string, unknown>>>;
 }
 
 const flag = (argv: string[], name: string): string | undefined => {
@@ -148,7 +158,11 @@ export const parseRunArgs = (argv: string[]): RunOptions => {
   if (!conds.length || new Set(conds).size !== conds.length) throw new Error('--conds must be nonempty and distinct');
   for (const c of conds) if (!CONDITIONS.includes(c)) throw new Error(`unknown condition ${c}; use ${CONDITIONS.join('|')}`);
   const only = flag(argv, '--only')?.split(',') ?? null;
-  return { tasks: resolve(tasks), out: resolve(out), model, reps, only, conds, timeoutMs, claude: flag(argv, '--claude') ?? 'claude' };
+  const pluginDir = flag(argv, '--plugin-dir');
+  const hostFile = flag(argv, '--host-settings');
+  const host = hostFile ? readJson(resolve(hostFile)) : {};
+  if (!isRecord(host) || Object.entries(host).some(([c, v]) => !(conds as string[]).includes(c) || !isRecord(v) || 'pluginConfigs' in v || 'enabledPlugins' in v)) throw new Error('--host-settings must map run conditions to settings objects without pluginConfigs or enabledPlugins');
+  return { tasks: resolve(tasks), out: resolve(out), model, reps, only, conds, timeoutMs, claude: flag(argv, '--claude') ?? 'claude', pluginDir: pluginDir ? resolve(pluginDir) : null, host: host as RunOptions['host'] };
 };
 
 const git = (repo: string, args: string[]): void => {
@@ -184,8 +198,8 @@ export const runCell = (o: RunOptions, file: TasksFile, task: string, cond: Cond
   }
 
   const settings = join(o.out, 'settings', `${cond}.json`);
-  writeFileSync(settings, conditionSettings(cond));
-  const common = ['--model', o.model, '--settings', settings, '--output-format', 'json', '--dangerously-skip-permissions'];
+  writeFileSync(settings, conditionSettings(cond, o.pluginDir ? INLINE_KEY : INSTALLED_KEY, o.host[cond]));
+  const common = ['--model', o.model, '--settings', settings, ...(o.pluginDir ? ['--plugin-dir', o.pluginDir] : []), '--output-format', 'json', '--dangerously-skip-permissions'];
   const env = cleanEnv(process.env, CONDITION_OPTIONS[cond].mode);
   env['JEV_GATE_STATE_DIR'] = join(o.out, 'state', id);
   env['JEV_GATE_TRACE_DIR'] = join(o.out, 'trace');
@@ -246,9 +260,12 @@ export const run = (argv: string[]): void => {
   if (!tasks.length || tasks.some(k => !/^[A-Za-z0-9_-]+$/.test(k))) throw new Error('select at least one task; task names must be safe file names');
   mkdirSync(o.out, { recursive: true });
   const planPath = join(o.out, 'plan.json');
-  const identity = { tasks, conds: o.conds, reps: o.reps, model: o.model, tasks_file: o.tasks, inputs: file };
+  // Every field is always present, so a resume that drops --plugin-dir or --host-settings differs from its plan.
+  const identity = { tasks, conds: o.conds, reps: o.reps, model: o.model, tasks_file: o.tasks, inputs: file, plugin_dir: o.pluginDir, host: o.host };
   if (existsSync(planPath)) {
-    const old = readJson(planPath); if (!isRecord(old) || Object.entries(identity).some(([k, v]) => JSON.stringify(old[k]) !== JSON.stringify(v))) throw new Error('existing output belongs to different or unfrozen inputs; choose a new --out');
+    // A plan written before these fields were always kept left them out only when unset.
+    const read = readJson(planPath); const old: Record<string, unknown> | null = isRecord(read) ? { plugin_dir: null, host: {}, ...read } : null;
+    if (!old || Object.entries(identity).some(([k, v]) => JSON.stringify(old[k]) !== JSON.stringify(v))) throw new Error('existing output belongs to different or unfrozen inputs; choose a new --out');
   } else {
     if (readdirSync(o.out).length) throw new Error('new output must be empty');
     writeFileSync(planPath, JSON.stringify({ ...identity, started_at: new Date().toISOString() }, null, 1), { flag: 'wx' });
@@ -635,7 +652,7 @@ if (isMainModule()) {
     if (argv[0] === 'run') run(argv.slice(1));
     else if (argv[0] === 'report') report(argv.slice(1));
     else {
-      process.stdout.write('usage: node dist/bench/ab.js run --tasks tasks.json --out DIR --model <id> [--reps 3] [--only S,M] [--conds A,B,C,D] [--timeout-ms 3600000] [--claude claude]\n       node dist/bench/ab.js report --out DIR [--trace DIR]\n');
+      process.stdout.write('usage: node dist/bench/ab.js run --tasks tasks.json --out DIR --model <id> [--reps 3] [--only S,M] [--conds A,B,C,D] [--timeout-ms 3600000] [--plugin-dir DIR] [--host-settings FILE] [--claude claude]\n       node dist/bench/ab.js report --out DIR [--trace DIR]\n');
       process.exitCode = 2;
     }
   } catch (err) {

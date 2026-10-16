@@ -11,7 +11,7 @@ afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 const V5 = {
   version: 5,
   mode: 'auto',
-  jevModel: 'jev-1.13.0',
+  jevModel: 'jev-1.14.0',
   requestDeadlineMs: 3000,
   admissionConfidenceFloor: 0.8,
   routeConfidenceFloor: 0.8,

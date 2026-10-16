@@ -96,7 +96,9 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
       let modified = false;
       const nativeCompact = req.method === 'POST' && (path === '/responses/compact' || path === '/responses' && isCodexCompactRequest(obj(JSON.parse(decoded.toString('utf8')))?.['input'], marker));
       if (req.method === 'POST' && (path === '/responses' || path === '/responses/compact')) {
-        if ((!sessionId || !policy?.hooksReady(sessionId)) && !options.connection) { res.writeHead(412); res.end('Trust the installed Jev Gate hooks in Codex /hooks before starting a managed session.'); return; }
+        // Hook trust is the root's; a native child request is checked against the root it was sent for.
+        const trusted = sessionId ?? policy?.requestSession(undefined, req.headers['session-id']);
+        if ((!trusted || !policy?.hooksReady(trusted)) && !options.connection) { res.writeHead(412); res.end('Trust the installed Jev Gate hooks in Codex /hooks before starting a managed session.'); return; }
         if (sessionId && policy) {
           const parsed = obj(JSON.parse(decoded.toString('utf8'))) ?? {};
           if (path === '/responses' && !isCodexCompactRequest(parsed['input'], marker)) {

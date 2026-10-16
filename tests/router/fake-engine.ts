@@ -1,9 +1,10 @@
 import type { HttpReply } from '../../mods/router/hooks/client.ts';
 import { JEV_MODEL } from '../../mods/router/hooks/client.ts';
+import type { SymbolicEffort } from '../../mods/router/hooks/models.ts';
 import type { ModelTier } from '../../mods/router/hooks/policy.ts';
 import { TIER_LEVELS } from '../../mods/router/hooks/policy.ts';
 import { CAPABILITY } from '../../mods/router/hooks/selection.ts';
-import type { HostPins, RouterEngine } from '../../mods/router/hooks/router.ts';
+import type { HostPins, Router, RouterEngine } from '../../mods/router/hooks/router.ts';
 
 /** Shaped like a key and matching nothing real. */
 export const FAKE_KEY = 'sk-router-testonlynotakey';
@@ -189,4 +190,15 @@ export const drain = async <C, R>(gen: AsyncGenerator<C, R>): Promise<{ chunks: 
     if (r.done) return { chunks, result: r.value };
     chunks.push(r.value);
   }
+};
+
+/**
+ * One unassessed native turn answered by `model`, with real counts: that model then holds this conversation's prefix,
+ * which is what lets the switch cost guard allow a switch to it. Its records are dropped.
+ */
+export const warmRoot = async (router: Router, f: { engine: RouterEngine; logs: unknown[] }, model: string, effort?: SymbolicEffort): Promise<void> => {
+  router.turnStart({ turnId: 'warm', text: '' });
+  await drain(router.turnStep(f.engine, { turnId: 'warm', index: 0, model, ...(effort ? { effort } : {}) }, streamNext<{ model: string }>(undefined, { input_tokens: 900, output_tokens: 20, cache_read_input_tokens: 20_000, cache_creation_input_tokens: 1000 }).next));
+  router.turnComplete({ turnId: 'warm', reason: 'answer' });
+  f.logs.length = 0;
 };

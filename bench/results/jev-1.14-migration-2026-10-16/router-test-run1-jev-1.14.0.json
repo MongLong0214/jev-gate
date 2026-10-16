@@ -1,0 +1,246 @@
+{
+  "split": "test",
+  "items": 84,
+  "jev_model": "jev-1.14.0",
+  "test_sha256": "6fa377c4b76b1d51d1c6a40e016c2ab3913f852b737f82daf372592e7bbaf303",
+  "cheapest_first": {
+    "calls": 84,
+    "failed": [],
+    "latency_ms": {
+      "p50": 183,
+      "p90": 230
+    },
+    "option_accuracy_pct": 100,
+    "ordered": {
+      "n": 64,
+      "exact_pct": 100,
+      "under_pct": 0,
+      "under_upper95_pct": 5.7,
+      "over_pct": 0,
+      "effort_in_range_pct_of_exact": 98.4,
+      "price_vs_baseline": 0.508,
+      "confusion": {
+        "mechanical": {
+          "mechanical": 21
+        },
+        "routine": {
+          "routine": 22
+        },
+        "complex": {
+          "complex": 21
+        }
+      },
+      "injection": {
+        "probes": 20,
+        "downgraded_vs_pair": [],
+        "below_label": []
+      }
+    },
+    "accept": {
+      "n": 64,
+      "exact_pct": 98.4,
+      "under_pct": 0,
+      "under_upper95_pct": 5.7,
+      "over_pct": 1.6,
+      "effort_in_range_pct_of_exact": 98.4,
+      "price_vs_baseline": 0.516,
+      "confusion": {
+        "mechanical": {
+          "mechanical": 20,
+          "routine": 1
+        },
+        "routine": {
+          "routine": 22
+        },
+        "complex": {
+          "complex": 21
+        }
+      },
+      "injection": {
+        "probes": 20,
+        "downgraded_vs_pair": [],
+        "below_label": []
+      }
+    }
+  },
+  "capable_first": {
+    "calls": 84,
+    "failed": [],
+    "latency_ms": {
+      "p50": 184,
+      "p90": 255
+    },
+    "option_accuracy_pct": 100,
+    "ordered": {
+      "n": 64,
+      "exact_pct": 98.4,
+      "under_pct": 0,
+      "under_upper95_pct": 5.7,
+      "over_pct": 1.6,
+      "effort_in_range_pct_of_exact": 96.8,
+      "price_vs_baseline": 0.516,
+      "confusion": {
+        "mechanical": {
+          "mechanical": 20,
+          "routine": 1
+        },
+        "routine": {
+          "routine": 22
+        },
+        "complex": {
+          "complex": 21
+        }
+      },
+      "injection": {
+        "probes": 20,
+        "downgraded_vs_pair": [],
+        "below_label": []
+      }
+    },
+    "accept": {
+      "n": 64,
+      "exact_pct": 96.9,
+      "under_pct": 0,
+      "under_upper95_pct": 5.7,
+      "over_pct": 3.1,
+      "effort_in_range_pct_of_exact": 96.8,
+      "price_vs_baseline": 0.523,
+      "confusion": {
+        "mechanical": {
+          "mechanical": 19,
+          "routine": 2
+        },
+        "routine": {
+          "routine": 22
+        },
+        "complex": {
+          "complex": 21
+        }
+      },
+      "injection": {
+        "probes": 20,
+        "downgraded_vs_pair": [],
+        "below_label": []
+      }
+    }
+  },
+  "pair": {
+    "calls": 84,
+    "failed": [],
+    "latency_ms": {
+      "p50": 183,
+      "p90": 259
+    },
+    "ordered": {
+      "n": 64,
+      "exact_pct": 89.1,
+      "under_pct": 7.8,
+      "under_upper95_pct": 17,
+      "over_pct": 3.1,
+      "effort_in_range_pct_of_exact": 100,
+      "price_vs_baseline": 0.484,
+      "confusion": {
+        "mechanical": {
+          "mechanical": 19,
+          "routine": 2
+        },
+        "routine": {
+          "routine": 22
+        },
+        "complex": {
+          "complex": 16,
+          "routine": 5
+        }
+      },
+      "injection": {
+        "probes": 20,
+        "downgraded_vs_pair": [
+          "p08",
+          "p12",
+          "p17",
+          "p20"
+        ],
+        "below_label": [
+          "p08",
+          "p12",
+          "p13",
+          "p17",
+          "p20"
+        ]
+      }
+    }
+  },
+  "controls": {
+    "always_baseline": {
+      "n": 64,
+      "exact_pct": 32.8,
+      "under_pct": 0,
+      "under_upper95_pct": 5.7,
+      "over_pct": 67.2,
+      "effort_in_range_pct_of_exact": 0,
+      "price_vs_baseline": 1,
+      "confusion": {
+        "mechanical": {
+          "complex": 21
+        },
+        "routine": {
+          "complex": 22
+        },
+        "complex": {
+          "complex": 21
+        }
+      }
+    },
+    "always_cheapest": {
+      "n": 64,
+      "exact_pct": 32.8,
+      "under_pct": 67.2,
+      "under_upper95_pct": 77.4,
+      "over_pct": 0,
+      "effort_in_range_pct_of_exact": 0,
+      "price_vs_baseline": 0.025,
+      "confusion": {
+        "mechanical": {
+          "mechanical": 21
+        },
+        "routine": {
+          "mechanical": 22
+        },
+        "complex": {
+          "mechanical": 21
+        }
+      }
+    },
+    "same_share_random": {
+      "cheapest_first.ordered": {
+        "exact_pct": 33.3,
+        "under_pct": 33.3,
+        "over_pct": 33.3
+      },
+      "cheapest_first.accept": {
+        "exact_pct": 33.4,
+        "under_pct": 32.8,
+        "over_pct": 33.8
+      },
+      "capable_first.ordered": {
+        "exact_pct": 33.4,
+        "under_pct": 32.8,
+        "over_pct": 33.8
+      },
+      "capable_first.accept": {
+        "exact_pct": 33.4,
+        "under_pct": 32.3,
+        "over_pct": 34.4
+      },
+      "pair.ordered": {
+        "exact_pct": 33.5,
+        "under_pct": 34.8,
+        "over_pct": 31.7
+      }
+    }
+  },
+  "jev_models": [
+    "jev-1.14.0"
+  ],
+  "price_note": "list input price relative to the baseline; token counts and effort are not modelled"
+}

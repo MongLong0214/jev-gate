@@ -1,0 +1,8 @@
+m113 dev capable_first ordered reps=3 n=252 fail=0 exact=96.4% under=1.2% over=2.4% | effort in range 96.3% of exact; effort UNDER 6 (complex 6/96 exact complex = 6.3%), OVER 3
+  misses {"d-r16":["high","high","high"],"d-c21":["medium","medium","medium"],"d-c32":["medium","medium","medium"]}
+m113 dev cheapest_first ordered reps=3 n=252 fail=0 exact=95.2% under=1.2% over=3.6% | effort in range 97.1% of exact; effort UNDER 4 (complex 4/96 exact complex = 4.2%), OVER 3
+  misses {"d-r16":["high","high","high"],"d-c21":["medium","medium","medium"],"d-c32":["medium"]}
+m114 dev capable_first ordered reps=3 n=252 fail=0 exact=97.6% under=1.2% over=1.2% | effort in range 96.7% of exact; effort UNDER 5 (complex 5/96 exact complex = 5.2%), OVER 3
+  misses {"d-r16":["high","high","high"],"d-c21":["medium","medium"],"d-c32":["medium","medium","medium"]}
+m114 dev cheapest_first ordered reps=3 n=252 fail=0 exact=96.4% under=1.2% over=2.4% | effort in range 96.7% of exact; effort UNDER 5 (complex 5/96 exact complex = 5.2%), OVER 3
+  misses {"d-r16":["high","high","high"],"d-c21":["medium","medium"],"d-c32":["medium","medium","medium"]}

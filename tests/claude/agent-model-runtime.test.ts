@@ -14,8 +14,9 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude Gate B 
     { scope: 'worker', selected: '__keep__', actual: 'claude-haiku-5-5', effort: 'high', allowFable: false, admission: true },
     { scope: 'worker', selected: '__keep__', actual: 'claude-haiku-5-5', effort: 'high', allowFable: false, admission: true, documentation: true },
     { scope: 'worker', selected: '__keep__', actual: 'claude-haiku-5-5', effort: 'high', allowFable: false, admission: true, documentation: true, childSteps: [
-      { selected: 'claude-sonnet-5-5', actual: 'claude-sonnet-5-5', effort: 'low' },
-      { selected: 'claude-opus-5-5', actual: 'claude-opus-5-5', effort: 'medium' },
+      // A step chooses effort only: it stays on the model chosen at the spawn.
+      { selected: '__keep__', actual: 'claude-haiku-5-5', effort: 'low' },
+      { selected: '__keep__', actual: 'claude-haiku-5-5', effort: 'medium' },
     ] },
     { scope: 'worker', selected: 'claude-haiku-5-5', actual: 'claude-haiku-5-5', effort: 'medium', allowFable: false, adhoc: true },
     { scope: 'worker', selected: '__keep__', actual: 'claude-sonnet-5-5', effort: 'high', allowFable: false },
@@ -23,20 +24,23 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude Gate B 
     { scope: 'worker', selected: 'claude-opus-5-5', actual: 'claude-opus-5-5', effort: 'max', allowFable: false },
     { scope: 'worker', selected: 'claude-haiku-5-5', actual: 'claude-haiku-5-5', effort: 'medium', allowFable: false },
     { scope: 'worker', selected: 'claude-fable-5-1', actual: 'claude-fable-5-1', effort: 'max', allowFable: true },
-    { scope: 'root', selected: 'claude-sonnet-5-5', actual: 'claude-sonnet-5-5', effort: 'high', allowFable: false },
-    { scope: 'root', selected: 'claude-haiku-5-5', actual: 'claude-haiku-5-5', effort: 'medium', allowFable: false },
-    { scope: 'root', selected: 'claude-sonnet-5-5', actual: 'claude-sonnet-5-5', effort: 'high', allowFable: false, probability: .7 },
-    { scope: 'root', selected: 'claude-sonnet-5-5', actual: 'claude-sonnet-5-5', effort: 'high', allowFable: false, incoming: 'max', splitEffort: true },
-    { scope: 'root', selected: 'claude-haiku-4-5-20251001', actual: 'claude-opus-5-5', effort: 'high', allowFable: false },
+    // `actual` is the role Jev picks; `cost` is the switch cost guard's call on it, and a held switch runs on Opus. A
+    // session's first turn has no observed prefix, so its downgrade is held; a later Haiku move under 100k costs no more.
+    { scope: 'root', selected: 'claude-sonnet-5-5', actual: 'claude-sonnet-5-5', effort: 'high', allowFable: false, cost: 'cost_unknown_hold' },
+    { scope: 'root', selected: 'claude-haiku-5-5', actual: 'claude-haiku-5-5', effort: 'medium', allowFable: false, cost: 'cost_unknown_hold' },
+    { scope: 'root', selected: 'claude-sonnet-5-5', actual: 'claude-sonnet-5-5', effort: 'high', allowFable: false, probability: .7, cost: 'cost_unknown_hold' },
+    { scope: 'root', selected: 'claude-sonnet-5-5', actual: 'claude-sonnet-5-5', effort: 'high', allowFable: false, incoming: 'max', splitEffort: true, cost: 'cost_unknown_hold' },
+    { scope: 'root', selected: 'claude-haiku-4-5-20251001', actual: 'claude-opus-5-5', effort: 'high', allowFable: false, cost: 'not_checked' },
     { scope: 'root', selected: 'claude-sonnet-5-5', actual: 'claude-sonnet-5-5', effort: 'medium', allowFable: false, sequence: [
-      { selected: 'claude-sonnet-5-5', actual: 'claude-sonnet-5-5', effort: 'medium' },
-      { selected: 'claude-sonnet-5-5', actual: 'claude-sonnet-5-5', effort: 'medium' },
-      { selected: 'claude-opus-5-5', actual: 'claude-opus-5-5', effort: 'max' },
+      { selected: 'claude-sonnet-5-5', actual: 'claude-sonnet-5-5', effort: 'medium', cost: 'cost_unknown_hold' },
+      { selected: 'claude-sonnet-5-5', actual: 'claude-sonnet-5-5', effort: 'medium', cost: 'cost_hold' },
+      { selected: 'claude-opus-5-5', actual: 'claude-opus-5-5', effort: 'max', cost: 'not_checked' },
     ] },
     { scope: 'root', selected: 'claude-sonnet-5-5', actual: 'claude-sonnet-5-5', effort: 'medium', allowFable: false, sequence: [
-      { selected: 'claude-sonnet-5-5', actual: 'claude-sonnet-5-5', effort: 'medium' },
-      { selected: 'claude-haiku-5-5', actual: 'claude-haiku-5-5', effort: 'medium' },
-      { selected: 'claude-opus-5-5', actual: 'claude-opus-5-5', effort: 'max' },
+      { selected: 'claude-sonnet-5-5', actual: 'claude-sonnet-5-5', effort: 'medium', cost: 'cost_unknown_hold' },
+      { selected: 'claude-haiku-5-5', actual: 'claude-haiku-5-5', effort: 'medium', cost: 'cost_allows' },
+      // The host starts each turn back on its own model, so Opus needs no switch.
+      { selected: 'claude-opus-5-5', actual: 'claude-opus-5-5', effort: 'max', cost: 'not_checked' },
     ] },
   ])('sends the selected pair through the native $scope boundary: $selected', async scenario => {
     const temp = mkdtempSync('/tmp/jev-agent-model-runtime-'); const root = join(__dirname, '../..');
@@ -76,7 +80,7 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude Gate B 
       const chunks: Buffer[] = []; for await (const part of req) chunks.push(Buffer.from(part)); let raw = Buffer.concat(chunks); if (req.headers['content-encoding'] === 'gzip') raw = gunzipSync(raw);
       let body: Record<string, any>; try { body = JSON.parse(raw.toString()); } catch { res.end('{}'); return; }
       if (req.url === '/jev') {
-        if (body.questions.model || body.questions.capability) allocations.push(body);
+        if (body.questions.model || body.questions.capability || body.state?.execution?.scope === 'child') allocations.push(body);
         if (body.questions.bounded_tool_work) admissions.push(body);
         const selection = scenario.childSteps?.[allocations.length - 2] ?? scenario.sequence?.[allocations.length - 1] ?? scenario;
         const answers = Object.fromEntries(Object.entries(body.questions as Record<string, any>).map(([name, q]) => {
@@ -130,7 +134,7 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude Gate B 
       const traces = readdirSync(trace).filter(f => f.endsWith('.json')).map(f => JSON.parse(readFileSync(join(trace, f), 'utf8')));
       const diagnostic = JSON.stringify({ output, toolResults, workers: workerRequests.map(r => ({ model: r.model, effort: r.output_config?.effort, messageEfforts: ((r as any).messages ?? []).map((m: any) => ({ role: m.role, effort: m.effort, metadata: m.metadata, extra: Object.keys(m).filter(k => !['role','content'].includes(k)) })) })), traces: traces.filter(r => r.phase === 'mod_router' || r.phase === 'pre_result' || r.phase === 'admission_result' || r.phase.startsWith('background_')) });
       expect(code, diagnostic).toBe(0); expect(allocations, diagnostic).toHaveLength(scenario.childSteps ? 3 : scenario.sequence?.length ?? 1); expect(workerRequests, diagnostic).toHaveLength(scenario.documentation ? 3 : scenario.sequence ? 6 : scenario.scope === 'root' || scenario.admission ? 2 : 1);
-      for (const [i, request] of workerRequests.entries()) { const expected = scenario.childSteps?.[i - 1] ?? scenario.sequence?.[Math.floor(i / 2)] ?? scenario; expect(request.model, diagnostic).toBe(expected.actual); expect(request.output_config?.effort, diagnostic).toBe(expected.effort); }
+      for (const [i, request] of workerRequests.entries()) { const expected = scenario.childSteps?.[i - 1] ?? scenario.sequence?.[Math.floor(i / 2)] ?? scenario; expect(request.model, diagnostic).toBe('cost' in expected && String(expected.cost).endsWith('_hold') ? 'claude-opus-5-5' : expected.actual); expect(request.output_config?.effort, diagnostic).toBe(expected.effort); }
       if (scenario.admission) {
         expect(admissions, diagnostic).toHaveLength(1);
         if (scenario.documentation) {
@@ -146,7 +150,7 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude Gate B 
         expect(job.ok && job.value?.current.receipts, diagnostic).toEqual([expect.objectContaining({ verdict: 'accept' })]);
       }
       if (scenario.childSteps) {
-        for (const payload of allocations.slice(1)) { expect(JSON.stringify(payload), diagnostic).toContain('NEXT inference'); expect(JSON.stringify(payload), diagnostic).not.toContain('ENTIRE requested outcome'); }
+        for (const payload of allocations.slice(1)) { expect(Object.keys((payload as { questions: object }).questions), diagnostic).not.toContain('capability'); expect(Object.keys((payload as { questions: object }).questions), diagnostic).not.toContain('model'); expect(JSON.stringify(payload), diagnostic).toContain('NEXT inference'); expect(JSON.stringify(payload), diagnostic).not.toContain('ENTIRE requested outcome'); }
         expect(traces.filter(r => r.phase === 'mod_router' && r.event === 'child_route' && r.sent).length, diagnostic).toBe(2);
         expect(new Set(traces.filter(r => r.phase === 'mod_router' && r.event === 'child_result').map(r => r.agent_id)).size, diagnostic).toBe(1);
       }
@@ -161,6 +165,7 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude Gate B 
       if (scenario.scope === 'root') {
         const router = traces.filter(r => r.phase === 'mod_router');
         expect(router.filter(r => r.event === 'root'), diagnostic).toHaveLength(scenario.sequence?.length ?? 1);
+        expect(router.filter(r => r.event === 'root').sort((a, b) => a.written_at.localeCompare(b.written_at)).map(r => r.cost_reason), diagnostic).toEqual((scenario.sequence ?? [scenario]).map(s => s.cost));
         expect(router.filter(r => r.event === 'root_result').length, diagnostic).toBe(scenario.sequence ? 6 : 2);
         expect(new Set(router.filter(r => r.event === 'root').map(r => r.turn)).size, diagnostic).toBe(scenario.sequence?.length ?? 1);
         expect(new Set(router.map(r => r.session_id)).size, diagnostic).toBe(1);

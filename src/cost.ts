@@ -42,7 +42,9 @@ export const usageCost = (u: TokenUsage, p: PriceFacts | null): { usd: number | 
   else return unknown('write_ttl_unknown');
   return { usd: (u.input! * p.input + u.read! * p.read + writes + u.output! * p.output) / 1e6, basis: 'api_list_estimate', revision: p.revision, reason: null };
 };
-export interface CacheObservation { model: string; at: number; epoch: string; ttlMs: number | null; read: number | null; write: number | null; output: number | null; input?: number | null; effort?: string | null; ttlIsMinimum?: boolean }
+export interface CacheObservation { model: string; at: number; epoch: string; ttlMs: number | null; read: number | null; write: number | null; output: number | null; input?: number | null; effort?: string | null; ttlIsMinimum?: boolean;
+  /** The adapter's provider lifetimes when a response reports no TTL: certainly held before the first, certainly gone from the second. */
+  ttlBoundsMs?: readonly [number, number] }
 /** One small per-execution map, not a cache service or billing ledger. */
 export class ModelCache {
   private entries = new Map<string, CacheObservation>();
@@ -52,35 +54,64 @@ export class ModelCache {
     this.entries.delete(v.model); this.entries.set(v.model, v); while (this.entries.size > 16) this.entries.delete(this.entries.keys().next().value!);
   }
   get(model: string, epoch: string): CacheObservation | null { const v = this.entries.get(model); return v?.epoch === epoch ? v : null; }
+  /** The newest observation, whichever model answered it: it knows the conversation's prefix best. */
+  latest(epoch: string): CacheObservation | null { const v = [...this.entries.values()].at(-1); return v?.epoch === epoch ? v : null; }
   clear(): void { this.entries.clear(); }
 }
-export const cacheState = (v: CacheObservation | null, now: number): 'warm' | 'cold' | 'unknown' => !v ? 'unknown'
-  : v.read === 0 && v.write === 0 ? 'cold' : v.ttlMs === null || v.read === null || v.write === null || now < v.at ? 'unknown'
-  : now - v.at < v.ttlMs ? 'warm' : v.ttlIsMinimum ? 'unknown' : 'cold';
+/** An epoch starts with every model empty: a model not observed in it cannot hold this context's prefix. */
+export const cacheState = (v: CacheObservation | null, now: number): 'warm' | 'cold' | 'unknown' => {
+  if (!v || v.read === 0 && v.write === 0) return 'cold';
+  if (v.read === null || v.write === null || now < v.at) return 'unknown';
+  const [held, gone] = v.ttlMs === null ? v.ttlBoundsMs ?? [0, Infinity] : [v.ttlMs, v.ttlIsMinimum ? v.ttlBoundsMs?.[1] ?? Infinity : v.ttlMs];
+  return now - v.at < held ? 'warm' : now - v.at >= gone ? 'cold' : 'unknown';
+};
 // A mixed prefix is only proven reusable for its shortest observed lifetime.
 export const observedTtl = (u: TokenUsage): number | null => u.write5m !== null && u.write5m > 0 ? 300_000 : u.write1h !== null && u.write1h > 0 ? 3_600_000 : null;
+type Range = readonly [number, number];
 export interface SwitchCostInput {
-  prefix: number; baseline: PriceFacts | null; target: PriceFacts | null;
+  /** Tokens the switched request carries before its new content. Null: not observed, any size from zero. */
+  prefix: number | null;
+  /** Of the prefix, how many the target cached before; the rest it writes even when warm. */
+  targetHeld: number;
+  baseline: PriceFacts | null; target: PriceFacts | null;
   baselineCache: 'warm' | 'cold' | 'unknown'; targetCache: 'warm' | 'cold' | 'unknown';
-  baselineWrite: number | null; targetWrite: number | null;
-  outputRange: readonly [number, number] | null;
-  /** Return costs are scenarios, never accumulated as consumption. */
-  returnWriteRange?: readonly [number, number]; overheadRange?: readonly [number, number];
+  /** A range when the TTL the write gets is not known. */
+  baselineWrite: number | Range | null; targetWrite: number | Range | null;
+  /** Null: not observed, any size from zero. */
+  outputRange: Range | null;
+  /** The request after may go back to the baseline; false only for a new context with no baseline conversation. */
+  returns: boolean;
+  /** USD. */
+  overheadRange?: Range;
 }
-export const switchCost = (v: SwitchCostInput): { hold: boolean; reason: 'cost_hold' | 'cost_unknown' | 'cost_allows'; deltaUsd: [number, number] | null; inputs: SwitchCostInput } => {
-  const unknown = () => ({ hold: false, reason: 'cost_unknown' as const, deltaUsd: null, inputs: v });
-  const range = (r: readonly [number, number]) => r.every(n => Number.isFinite(n) && n >= 0) && r[0] <= r[1];
-  if (!v.baseline || !v.target || !v.outputRange || !range(v.outputRange) ||
-    v.returnWriteRange && !range(v.returnWriteRange) || v.overheadRange && !range(v.overheadRange) ||
-    v.baselineCache === 'unknown' || v.targetCache === 'unknown' || !Number.isSafeInteger(v.prefix) || v.prefix < 0) return unknown();
-  const from = v.baselineCache === 'warm' ? v.baseline.read : v.baselineWrite;
-  const to = v.targetCache === 'warm' ? v.target.read : v.targetWrite;
-  if (from === null || to === null || ![from, to, v.baseline.output, v.target.output].every(n => Number.isFinite(n) && n >= 0)) return unknown();
+/**
+ * The switch must cost no more than staying in every scenario its inputs allow; uncertainty keeps the original call.
+ * An unknown cache state may be warm or cold, so each side is bounded by its read and write rates.
+ */
+export const switchCost = (v: SwitchCostInput): { hold: boolean; reason: 'cost_hold' | 'cost_unknown_hold' | 'cost_allows'; deltaUsd: [number, number] | null; inputs: SwitchCostInput } => {
+  const unknown = { hold: true, reason: 'cost_unknown_hold' as const, deltaUsd: null, inputs: v };
+  const range = (r: Range) => Number.isFinite(r[0]) && r[0] >= 0 && r[1] >= r[0];
+  const rate = (r: number | Range | null): Range | null => typeof r === 'number' ? [r, r] : r;
+  const side = (p: PriceFacts, state: SwitchCostInput['baselineCache'], w: Range | null): Range | null =>
+    state === 'warm' ? [p.read, p.read] : !w ? null : state === 'cold' ? w : [Math.min(p.read, w[0]), Math.max(p.read, w[1])];
+  const bw = rate(v.baselineWrite), tw = rate(v.targetWrite);
+  if (!v.baseline || !v.target || [bw, tw, v.outputRange, v.overheadRange].some(r => r && !range(r)) ||
+    [v.prefix ?? 0, v.targetHeld].some(n => !Number.isSafeInteger(n) || n < 0)) return unknown;
+  // Returning to a baseline the switch left cold rewrites what staying would have written now and read then: per token
+  // a cold baseline is then worth its read rate, not its write. Warm, the baseline reads either way.
+  const from = side(v.baseline, v.returns && v.baselineCache === 'cold' ? 'unknown' : v.baselineCache, bw);
+  const to = side(v.target, v.targetCache, tw);
+  if (!from || !to || !tw || ![...from, ...to, ...tw, v.baseline.output, v.target.output].every(n => Number.isFinite(n) && n >= 0)) return unknown;
+  // Exact range products; an unobserved count spans zero to infinity, and zero tokens cost nothing at any rate.
+  const times = (x: Range, c: Range): Range => { const p = [x[0] * c[0], x[0] * c[1], x[1] * c[0], x[1] * c[1]].map(n => Number.isNaN(n) ? 0 : n); return [Math.min(...p), Math.max(...p)]; };
+  const count = (n: number): Range => v.prefix === null ? [0, Infinity] : [n, n];
+  const held = v.targetCache === 'cold' || v.prefix === null ? 0 : Math.min(v.targetHeld, v.prefix);
   const outputDelta = v.target.output - v.baseline.output;
-  const outputs = v.outputRange.map(n => n * outputDelta / 1e6);
-  const prefix = v.prefix * (to - from) / 1e6;
-  const returnWrite = v.returnWriteRange ?? [0, 0], overhead = v.overheadRange ?? [0, 0];
-  const deltaUsd: [number, number] = [prefix + Math.min(...outputs) + returnWrite[0] + overhead[0], prefix + Math.max(...outputs) + returnWrite[1] + overhead[1]];
-  const hold = deltaUsd[0] > 0;
-  return { hold, reason: hold ? 'cost_hold' : 'cost_allows', deltaUsd, inputs: v };
+  const terms = [times(count(held), [to[0] - from[1], to[1] - from[0]]).map(n => n / 1e6),
+    times(count((v.prefix ?? 0) - held), [tw[0] - from[1], tw[1] - from[0]]).map(n => n / 1e6),
+    times(v.outputRange ?? [0, Infinity], [outputDelta, outputDelta]).map(n => n / 1e6), v.overheadRange ?? [0, 0]];
+  const deltaUsd: [number, number] = [terms.reduce((s, t) => s + t[0]!, 0), terms.reduce((s, t) => s + t[1]!, 0)];
+  const hold = deltaUsd[1] > 0;
+  const unobserved = v.baselineCache === 'unknown' || v.targetCache === 'unknown' || v.prefix === null || !v.outputRange;
+  return { hold, reason: !hold ? 'cost_allows' : deltaUsd[0] <= 0 && unobserved ? 'cost_unknown_hold' : 'cost_hold', deltaUsd, inputs: v };
 };

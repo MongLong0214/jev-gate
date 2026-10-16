@@ -1,0 +1,59 @@
+site | mode | enc | n ok/total | wire B | p50 | p90 | mean | median diff vs plain [95% CI]
+gateA | fresh-seq | plain | 200/200 | 5761 | 208.4 | 301.7 | 235.1 | 
+gateA | fresh-seq | gzip | 200/200 | 2479 | 204.5 | 286.2 | 225.1 | -2.7 [-6.2, -0.8] (paired)
+gateA | fresh-seq | zstd | 200/200 | 2559 | 202.8 | 304.7 | 231.0 | -2.0 [-5.4, 0.8] (paired)
+gateA | reuse-seq | plain | 200/200 | 5761 | 177.3 | 224.4 | 194.9 | 
+gateA | reuse-seq | gzip | 200/200 | 2479 | 177.9 | 263.5 | 204.3 | -0.6 [-2.7, 0.6] (paired)
+gateA | reuse-seq | zstd | 200/200 | 2559 | 177.5 | 266.1 | 198.0 | 0.0 [-2.9, 2.3] (paired)
+gateA | par8 | plain | 200/200 | 5761 | 181.6 | 233.9 | 196.8 | 
+gateA | par8 | gzip | 200/200 | 2479 | 179.5 | 237.8 | 193.8 | -2.1 [-6.1, 1.0] (unpaired)
+gateA | par8 | zstd | 200/200 | 2559 | 180.9 | 254.1 | 194.6 | -0.8 [-6.2, 4.1] (unpaired)
+gateB | fresh-seq | plain | 200/200 | 3639 | 196.7 | 289.4 | 219.1 | 
+gateB | fresh-seq | gzip | 200/200 | 1380 | 197.6 | 288.6 | 222.4 | 2.5 [-1.5, 5.6] (paired)
+gateB | fresh-seq | zstd | 200/200 | 1424 | 196.7 | 285.7 | 218.1 | 0.0 [-2.8, 1.8] (paired)
+gateB | reuse-seq | plain | 200/200 | 3639 | 170.9 | 193.8 | 178.9 | 
+gateB | reuse-seq | gzip | 200/200 | 1380 | 169.2 | 191.9 | 176.8 | -2.1 [-4.2, 0.2] (paired)
+gateB | reuse-seq | zstd | 200/200 | 1424 | 169.4 | 193.4 | 175.3 | -0.9 [-5.8, 1.4] (paired)
+gateB | par8 | plain | 200/200 | 3639 | 176.0 | 204.0 | 184.6 | 
+gateB | par8 | gzip | 200/200 | 1380 | 172.5 | 198.6 | 179.7 | -3.5 [-6.6, 0.1] (unpaired)
+gateB | par8 | zstd | 200/200 | 1424 | 174.2 | 196.3 | 180.3 | -1.8 [-4.5, 1.5] (unpaired)
+router | fresh-seq | plain | 200/200 | 12041 | 210.4 | 299.3 | 232.4 | 
+router | fresh-seq | gzip | 200/200 | 2842 | 210.0 | 299.7 | 228.6 | -1.7 [-5.4, 1.3] (paired)
+router | fresh-seq | zstd | 200/200 | 2929 | 206.6 | 292.7 | 225.3 | -2.4 [-10.4, 0.4] (paired)
+router | reuse-seq | plain | 200/200 | 12041 | 181.7 | 250.5 | 201.3 | 
+router | reuse-seq | gzip | 200/200 | 2842 | 180.1 | 213.8 | 189.0 | -2.9 [-5.4, -1.6] (paired)
+router | reuse-seq | zstd | 200/200 | 2929 | 181.1 | 258.3 | 196.1 | -0.4 [-4.3, 2.8] (paired)
+router | par8 | plain | 200/200 | 12041 | 183.4 | 254.7 | 199.2 | 
+router | par8 | gzip | 200/200 | 2842 | 182.2 | 238.8 | 196.6 | -1.2 [-4.3, 1.8] (unpaired)
+router | par8 | zstd | 200/200 | 2929 | 184.3 | 252.0 | 198.1 | 0.9 [-2.1, 3.9] (unpaired)
+evidence | fresh-seq | plain | 200/200 | 10137 | 210.7 | 293.0 | 229.7 | 
+evidence | fresh-seq | gzip | 200/200 | 2129 | 205.2 | 285.8 | 223.6 | -2.2 [-5.9, 1.6] (paired)
+evidence | fresh-seq | zstd | 200/200 | 2128 | 207.4 | 282.3 | 222.8 | -2.0 [-6.2, 3.0] (paired)
+evidence | reuse-seq | plain | 200/200 | 10137 | 180.1 | 223.6 | 188.7 | 
+evidence | reuse-seq | gzip | 200/200 | 2129 | 178.8 | 205.7 | 189.6 | -2.5 [-3.4, -0.4] (paired)
+evidence | reuse-seq | zstd | 200/200 | 2128 | 180.0 | 221.0 | 191.3 | -1.5 [-2.4, 0.5] (paired)
+evidence | par8 | plain | 200/200 | 10137 | 184.3 | 238.7 | 193.3 | 
+evidence | par8 | gzip | 200/200 | 2129 | 181.0 | 220.8 | 191.0 | -3.2 [-5.2, -0.9] (unpaired)
+evidence | par8 | zstd | 200/200 | 2128 | 181.0 | 254.2 | 192.6 | -3.3 [-5.4, -0.5] (unpaired)
+compact | fresh-seq | plain | 200/200 | 6736 | 201.8 | 263.0 | 216.4 | 
+compact | fresh-seq | gzip | 200/200 | 1767 | 202.8 | 271.8 | 217.8 | -1.3 [-4.4, 1.1] (paired)
+compact | fresh-seq | zstd | 200/200 | 1802 | 200.4 | 275.4 | 217.4 | -0.4 [-3.6, 2.8] (paired)
+compact | reuse-seq | plain | 200/200 | 6736 | 178.5 | 208.2 | 186.6 | 
+compact | reuse-seq | gzip | 200/200 | 1767 | 177.0 | 208.7 | 188.9 | -1.1 [-2.3, 0.5] (paired)
+compact | reuse-seq | zstd | 200/200 | 1802 | 176.3 | 216.3 | 190.4 | -1.5 [-3.6, 0.1] (paired)
+compact | par8 | plain | 200/200 | 6736 | 175.0 | 189.9 | 181.7 | 
+compact | par8 | gzip | 200/200 | 1767 | 175.0 | 189.3 | 182.7 | 0.0 [-2.0, 1.6] (unpaired)
+compact | par8 | zstd | 200/200 | 1802 | 174.2 | 191.1 | 180.6 | -0.8 [-2.4, 1.2] (unpaired)
+gateA gzip compress ms p50 0.29 p90 0.57 max 1.9 n 600
+gateA zstd compress ms p50 0.18 p90 0.35 max 1.5 n 600
+gateB gzip compress ms p50 0.23 p90 0.55 max 66.2 n 600
+gateB zstd compress ms p50 0.14 p90 0.37 max 27.5 n 600
+router gzip compress ms p50 0.18 p90 0.34 max 3.7 n 600
+router zstd compress ms p50 0.10 p90 0.20 max 1.1 n 600
+evidence gzip compress ms p50 0.15 p90 0.24 max 2.6 n 600
+evidence zstd compress ms p50 0.09 p90 0.15 max 0.4 n 600
+compact gzip compress ms p50 0.14 p90 0.28 max 1.4 n 600
+compact zstd compress ms p50 0.08 p90 0.18 max 0.7 n 600
+pooled paired (sequential modes, all sites) gzip n 2000 median diff -1.62 ms mean -1.70 ms
+pooled paired (sequential modes, all sites) zstd n 2000 median diff -1.15 ms mean -1.75 ms
+non-ok rows 0 of 9000

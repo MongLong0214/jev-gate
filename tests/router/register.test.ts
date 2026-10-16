@@ -91,13 +91,13 @@ const SPAWN = {
   tool_use_id: 'toolu_1',
   prompt: 'List the files under src/ that import ./config.',
   description: 'list config imports',
-  subagentType: 'general-purpose',
+  subagentType: 'Explore',
   provider: { plugin: 'engine', tier: 'core' },
   parentModel: 'claude-opus-5-5',
   background: false,
   fork: false,
 };
-const OFFER = { agent: 'general-purpose', description: 'General agent', source: 'built-in', provider: { plugin: 'engine', tier: 'core' } };
+const OFFER = { agent: 'Explore', description: 'Explore agent', source: 'built-in', provider: { plugin: 'engine', tier: 'core' } };
 
 /** Offers the built-in, then spawns it; returns the model the engine was asked for. */
 const spawnThrough = async (hooks: Map<string, Hook>, host: ReturnType<typeof fakeHost>): Promise<string | undefined> => {
@@ -143,6 +143,29 @@ describe('register', () => {
     };
     await spawnThrough(await registered({enabled:true,allowFable:!enabled}),host);
     expect(offered).toBe(enabled);
+  });
+
+  it('reads a custom agent\'s model from the project file first, then the user agents directory, never for a plugin agent', async () => {
+    const run = async (subagentType: string, files: Record<string, string>) => {
+      const host = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY, CLAUDE_CONFIG_DIR: '/cfg' }, files });
+      Object.assign(host.$.session, { root: async () => '/proj' });
+      const read: string[] = [];
+      const exists = host.$.fs.exists;
+      host.$.fs.exists = async (path: string) => { read.push(path); return exists(path); };
+      let asked: string | undefined;
+      const hooks = await registered({ enabled: true, routeMainEffort: false, routeMainModel: false });
+      await hooks.get('agent.spawn')?.(host.$, { ...SPAWN, subagentType, provider: { plugin: 'user', tier: 'local' } }, withSignal(async (e: { model?: string }) => { asked = e.model; return { model: e.model ?? 'claude-opus-5-5' }; }));
+      // The model and the tools are each read from the same resolved file.
+      return { asked, read: [...new Set(read.filter(r => r.includes('/agents/')))], logs: host.logs.join('\n') };
+    };
+    const user = await run('guardian', { '/cfg/agents/guardian.md': '---\nname: guardian\nmodel: opus\ntools: Read, Grep\n---\nReview.\n' });
+    expect(user.read).toEqual(['/proj/.claude/agents/guardian.md', '/cfg/agents/guardian.md']);
+    expect(user.logs).toContain('"from":"claude-opus-5-5"');
+    expect(user.asked).toBe('claude-haiku-5-5');
+    const project = await run('guardian', { '/proj/.claude/agents/guardian.md': '---\nmodel: haiku\n---\n', '/cfg/agents/guardian.md': '---\nmodel: opus\n---\n' });
+    expect(project.read).toEqual(['/proj/.claude/agents/guardian.md']);
+    expect(project.logs).toContain('"from":"claude-haiku-5-5"');
+    expect((await run('someone:guardian', {})).read).toEqual([]);
   });
 
   it('routes a spawn through the host adapter with the environment key, sent only in the header', async () => {

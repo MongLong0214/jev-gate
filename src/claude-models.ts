@@ -124,3 +124,72 @@ export interface RootSwitch {
 /** Restricted automatic family, including known canonical versions; unrelated strings never match. */
 export const isFable = (id: string): boolean => factsOf(id)?.family === 'fable' || /^(?:anthropic\.)?claude-fable-\d+(?:-\d+)*(?:@\d{8})?(?:\[1m\])?$/.test(id);
 export const claudeTargetAllowed = (id: string, allowFable: boolean): boolean => factsOf(id)?.legacy !== true && (allowFable || !isFable(id));
+
+/**
+ * An agent file's `---` block as flat `key: value` fields, plus the items of any key written as a YAML block list
+ * (`tools:` then `- Read` lines; its field is empty). The Router Mod reads `model:` with it, so it stays dependency-free.
+ */
+export interface Frontmatter {
+  fields: Record<string, string>;
+  lists: Record<string, string[]>;
+  error: string | null;
+}
+
+export const parseFrontmatter = (text: string): Frontmatter => {
+  text = text.replaceAll('\r\n', '\n');
+  if (!text.startsWith('---\n')) return { fields: {}, lists: {}, error: 'no frontmatter on line 1' };
+  const delimiter = /^---[ \t]*$/m.exec(text.slice(4));
+  const end = delimiter ? delimiter.index + 3 : -1;
+  if (end < 0) return { fields: {}, lists: {}, error: 'unterminated frontmatter' };
+  const fields: Record<string, string> = {};
+  const lists: Record<string, string[]> = {};
+  let open: string | null = null;
+  for (const line of text.slice(4, end).split('\n')) {
+    const item = open !== null ? /^\s*-\s+(.*)$/.exec(line) : null;
+    // An unquoted item ends at ` #`; a quoted one is kept whole, with its quotes.
+    if (item && open !== null && item[1] !== undefined) { (lists[open] ??= []).push(/^("[^"]*"|'[^']*'|.*?)(?:\s+#.*)?$/.exec(item[1].trim())![1]!); continue; }
+    // A blank or comment line inside a block list does not end it.
+    if (open !== null && /^\s*(?:#.*)?$/.test(line)) continue;
+    const m = /^([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$/.exec(line);
+    open = null;
+    if (m && m[1] !== undefined && m[2] !== undefined) {
+      if (m[1] in fields) return { fields, lists, error: `duplicate frontmatter field: ${m[1]}` };
+      fields[m[1]] = m[2].trim();
+      if (fields[m[1]] === '') open = m[1];
+    }
+  }
+  return { fields, lists, error: null };
+};
+
+/** The `model:` an agent file declares: absent or `inherit` is 'inherit', unparsable is null. */
+export const frontmatterModel = (text: string): string | null => {
+  const { fields, error } = parseFrontmatter(text);
+  if (error) return null;
+  const model = fields['model']?.replace(/^(["'])(.*)\1$/, '$2').trim();
+  return model && model !== 'inherit' ? model : 'inherit';
+};
+
+/** The tools that change files. Bash can too (a shell or Python write), so it is read with them below. */
+const EDITING_TOOLS = ['Edit', 'Write', 'NotebookEdit', 'MultiEdit'];
+
+/**
+ * Whether an agent file's tools include an editing tool. Absent `tools` (or `*`) holds every tool; a `disallowedTools`
+ * entry withholds one only when it names the whole tool. Whole Bash edits; Bash only by a command pattern is not read
+ * here, so it is null, as is a list this reader cannot parse.
+ */
+export const frontmatterEdits = (text: string): boolean | null => {
+  const { fields, lists, error } = parseFrontmatter(text);
+  if (error) return null;
+  const list = (field: string): string[] | null | undefined => {
+    const v = fields[field];
+    if (v === undefined) return undefined;
+    const items = (v === '' ? lists[field] ?? [] : v.replace(/^\[(.*)\]$/, '$1').split(',')).map(t => t.trim().replace(/^(["'])(.*)\1$/, '$2')).filter(Boolean);
+    return items.length ? items : null;
+  };
+  const tools = list('tools'); const denied = list('disallowedTools');
+  if (tools === null || denied === null) return null;
+  const granted = (t: string): boolean => tools === undefined || tools.includes('*') || tools.some(x => x.replace(/\(.*\)$/, '') === t);
+  if (EDITING_TOOLS.some(t => granted(t) && !denied?.includes(t))) return true;
+  if (!granted('Bash') || denied?.includes('Bash')) return false;
+  return tools === undefined || tools.includes('*') || tools.includes('Bash') ? true : null;
+};

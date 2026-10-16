@@ -68,6 +68,12 @@ describe('decideWorkerRouteAtomic', () => {
     expect(d).toMatchObject({ action: 'patch', tier: 'fast', reason: null });
   });
 
+  it('decides the same on noul answers that carry fields it does not read', () => {
+    const plain = answers({ fully_specified: FACT_TRUE, interfaces_fixed: FACT_TRUE, checks_stated: FACT_TRUE });
+    const extra = Object.fromEntries(Object.entries(plain).map(([k, v]) => [k, { ...(v as object), confidence: 0.9, rationale: 'x' }]));
+    expect(decideWorkerRouteAtomic(extra, 'standard')).toEqual(decideWorkerRouteAtomic(plain, 'standard'));
+  });
+
   it('routes mechanical repetition down too, on the same evidence', () => {
     const d = decideWorkerRouteAtomic(answers({ repetitive: 0.9, interfaces_fixed: 0.8, checks_stated: 0.9 }), 'standard');
     expect(d.tier).toBe('fast');

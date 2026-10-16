@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 
-import { modelContextWindow, readHostCompactWindow, readHostWorktreeBaseRef } from '../src/host-window.js';
+import { measuredCompactPoint, modelContextWindow, readHostCompactWindow, readHostWorktreeBaseRef } from '../src/host-window.js';
 
 const tmp = mkdtempSync(join(tmpdir(), 'jev-host-window-'));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
@@ -379,5 +379,17 @@ describe('readHostWorktreeBaseRef: the project directory (#53 review)', () => {
     expect(unmatched.value).toBeNull();
     expect(unmatched.source).toMatch(/^unknown: the session moved/);
     expect(readHostWorktreeBaseRef(env, null, { managedDirs: [], cwd: project }).value).toBe('head');
+  });
+});
+
+describe('measuredCompactPoint', () => {
+  it('takes the median automatic preTokens of this project folder and the offset below the window', () => {
+    const home = dir(), cwd = '/work/app';
+    const boundary = (trigger: string, preTokens: number): string => JSON.stringify({ type: 'system', subtype: 'compact_boundary', compactMetadata: { trigger, preTokens } });
+    writeSettings(home, '.claude/projects/-work-app/a.jsonl', [boundary('auto', 268000), '{"type":"user"}', boundary('manual', 90000), boundary('auto', 267000), boundary('auto', 269000)].join('\n'));
+    writeSettings(home, '.claude/projects/-bench-x/b.jsonl', boundary('auto', 150000));
+    expect(measuredCompactPoint({ HOME: home }, cwd, 300000)).toEqual({ median: 268000, n: 3, offset: 32000 });
+    expect(measuredCompactPoint({ HOME: home }, '/elsewhere', null)).toEqual({ median: 268000, n: 4, offset: null });
+    expect(measuredCompactPoint({ HOME: dir() }, cwd, 300000)).toBeNull();
   });
 });

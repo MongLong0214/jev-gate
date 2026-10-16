@@ -68,8 +68,11 @@ no S or M cell was ever delegated (#135); the column exists so that gap is a num
 1. **Cache warming distorts cost between conditions.** The same request cost $1.24 as 61,924 cache-creation tokens when
    it ran first and $0.43 as 42,636 cache-read tokens when it ran next, with the plugin doing nothing in either. Rotation
    spreads this; it does not remove it. Compare `cache_create` and `cache_read` separately.
-2. **Condition A still has the host's own auto-compaction** (threshold 0.7 on a 300K window). C and D measure
-   "jev compact vs host compact", not "compact vs none".
+2. **Condition A still has the host's own auto-compaction**. C and D measure "jev compact vs host compact", not
+   "compact vs none". The point is the window minus a fixed offset, not a fraction of it: with `autoCompactWindow`
+   300000 the owner's sessions compacted at a median 268K `preTokens` (2026-10-16), and an `autoCompact.threshold` of
+   0.7 had no visible effect (it would have meant 210K). `doctor --verbose` prints the measured point and offset; a
+   cell's window is whatever `autoCompactWindow` its settings give, so set it explicitly per condition.
 3. **The two-turn design makes the task turn itself heavier**: the ~20K priming context is re-read from cache on every
    request. This is closer to a real session than a single turn, but single-turn and two-turn results must never be
    mixed in one table.

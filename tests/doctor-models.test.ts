@@ -4,7 +4,8 @@ import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { claudeCompatibility, claudeModelInventory, parseClaudeInventory } from '../src/doctor-models.js';
 import { codexCompatibility, codexModelInventory, type CodexInventory } from '../src/codex/doctor-models.js';
-import { claudeDoctor, parseFrontmatter } from '../src/cli.js';
+import { claudeDoctor } from '../src/cli.js';
+import { parseFrontmatter } from '../src/claude-models.js';
 import { codexDoctor } from '../src/codex/cli.js';
 import { storageIssue, moduleIssues, renderDoctor } from '../src/doctor.js';
 

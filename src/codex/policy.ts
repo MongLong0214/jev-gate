@@ -920,6 +920,8 @@ export class CodexPolicy {
         const parsed = obj(JSON.parse(metadata));
         const id = parsed?.['thread_id'] ?? parsed?.['session_id'];
         if (typeof id === 'string' && this.sessions.has(id)) return id;
+        // A native spawn_agent child carries the root's session-id; it never binds to root state.
+        if (parsed?.['thread_source'] === 'subagent' || typeof parsed?.['parent_thread_id'] === 'string' && parsed['parent_thread_id'] !== id) return null;
       } catch { /* No invented identity. */ }
     }
     return typeof affinity === 'string' && this.sessions.has(affinity) ? affinity : null;

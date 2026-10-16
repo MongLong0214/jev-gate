@@ -375,3 +375,38 @@ export const readHostWorktreeBaseRef = (env: Env, projectDir: string | null | un
   if (found === null) return { value: null, source: 'unset' };
   return 'ambiguous' in found ? { value: null, source: `unknown: ${found.ambiguous}` } : found;
 };
+
+/**
+ * Where the host really compacted: the median `preTokens` of automatic `compact_boundary` records in the newest main
+ * transcripts of this project's folder under `<config>/projects`, every folder when `cwd` has none (bench and scratch
+ * sessions set their own windows, so mixing them shifts the median). The host compacts a fixed offset below its window (300K compacted at 267-268.5K
+ * on the owner's 2.1.29x sessions, 2026-10-16), so a target compaction point needs `window = target + offset`.
+ */
+export const measuredCompactPoint = (env: Env, cwd: string | null, window: number | null, opts: { files?: number; maxBytes?: number } = {}): { median: number; n: number; offset: number | null } | null => {
+  const home = env['HOME'] && env['HOME'].length > 0 ? env['HOME'] : homedir();
+  const projects = join(env['CLAUDE_CONFIG_DIR'] && env['CLAUDE_CONFIG_DIR'].length > 0 ? env['CLAUDE_CONFIG_DIR'] : join(home, '.claude'), 'projects');
+  const files: { path: string; at: number; size: number }[] = [];
+  try {
+    const own = cwd ? cwd.replace(/[^a-zA-Z0-9]/g, '-') : null;
+    const all = readdirSync(projects);
+    for (const dir of own !== null && all.includes(own) ? [own] : all) {
+      try {
+        for (const f of readdirSync(join(projects, dir))) if (f.endsWith('.jsonl')) { const s = statSync(join(projects, dir, f)); files.push({ path: join(projects, dir, f), at: s.mtimeMs, size: s.size }); }
+      } catch { /* not a folder */ }
+    }
+  } catch { return null; }
+  const points: number[] = [];
+  for (const f of files.sort((a, b) => b.at - a.at).slice(0, opts.files ?? 100)) {
+    if (f.size > (opts.maxBytes ?? 64 * 1024 * 1024)) continue;
+    try {
+      for (const line of readFileSync(f.path, 'utf8').split('\n')) {
+        if (!line.includes('"compact_boundary"')) continue;
+        const m = (JSON.parse(line) as { compactMetadata?: { trigger?: unknown; preTokens?: unknown } }).compactMetadata;
+        if (m?.trigger === 'auto' && typeof m.preTokens === 'number' && m.preTokens > 0) points.push(m.preTokens);
+      }
+    } catch { /* unreadable or partly written */ }
+  }
+  if (!points.length) return null;
+  const median = points.sort((a, b) => a - b)[Math.floor(points.length / 2)]!;
+  return { median, n: points.length, offset: window === null ? null : window - median };
+};

@@ -6,7 +6,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { OWNED_AGENT_PROFILES } from '../src/agents.js';
 import { DEFAULT_CONFIG } from '../src/config.js';
-import { modelFamilyOf, modelsAgree, parseFrontmatter } from '../src/cli.js';
+import { modelFamilyOf, modelsAgree } from '../src/cli.js';
+import { frontmatterEdits, frontmatterModel, parseFrontmatter } from '../src/claude-models.js';
 
 const root = join(__dirname, '..');
 
@@ -23,7 +24,9 @@ describe('committed agents/*.md match OWNED_AGENT_PROFILES + DEFAULT_CONFIG.mode
       if (profile.effort === null) expect(fm.fields['effort']).toBeUndefined();
       else expect(fm.fields['effort']).toBe(profile.effort);
       expect(fm.fields['tools']).toBeUndefined();
-      expect(fm.fields['disallowedTools']).toBeUndefined();
+      expect(fm.fields['disallowedTools']).toBe(profile.disallowedTools.join(', '));
+      expect(fm.fields['omitClaudeMd']).toBe('true');
+      expect(fm.fields['skills']).toBeUndefined();
     });
   }
 
@@ -77,6 +80,46 @@ describe('parseFrontmatter', () => {
   it('errors when the frontmatter block is unterminated', () => {
     expect(parseFrontmatter('---\nname: x\nbody\n').error).toBe('unterminated frontmatter');
   });
+
+  it('reads an agent file\'s model: absent or inherit inherits, a broken block is unknown', () => {
+    expect(frontmatterModel('---\nname: x\nmodel: "sonnet"\n---\n')).toBe('sonnet');
+    expect(frontmatterModel('---\nname: x\n---\n')).toBe('inherit');
+    expect(frontmatterModel('---\nmodel: inherit\n---\n')).toBe('inherit');
+    expect(frontmatterModel('no block')).toBeNull();
+  });
+
+  it('reads whether an agent file\'s tools can edit', () => {
+    expect(frontmatterEdits('---\nname: x\n---\n')).toBe(true);
+    expect(frontmatterEdits('---\ntools: Read, Grep, Glob\n---\n')).toBe(false);
+    expect(frontmatterEdits('---\ntools: [Read, "Edit(src/**)"]\n---\n')).toBe(true);
+    expect(frontmatterEdits('---\ndisallowedTools: Edit, Write, NotebookEdit, MultiEdit, Bash\n---\n')).toBe(false);
+    expect(frontmatterEdits('---\ndisallowedTools: Edit(docs/**), Write, NotebookEdit\n---\n')).toBe(true);
+  });
+
+  it('reads Bash as a tool that can edit: whole Bash edits, Bash by command pattern is unknown', () => {
+    expect(frontmatterEdits('---\nmodel: opus\ntools: Read, Bash\n---\n')).toBe(true);
+    expect(frontmatterEdits('---\ntools: Read, Grep, Glob, Bash\n---\n')).toBe(true);
+    expect(frontmatterEdits('---\ndisallowedTools: Edit, Write, NotebookEdit, MultiEdit\n---\n')).toBe(true);
+    expect(frontmatterEdits('---\ntools: Read, Bash(git status)\n---\n')).toBeNull();
+  });
+
+  it('reads a YAML block list of tools, indented or not', () => {
+    expect(frontmatterEdits('---\ntools:\n  - Read\n  - Edit\nmodel: sonnet\n---\n')).toBe(true);
+    expect(frontmatterEdits('---\ntools:\n- Read\n- "Edit"\n---\n')).toBe(true);
+    expect(frontmatterEdits('---\ntools:\n  - Read\n  - Grep\n---\n')).toBe(false);
+    expect(frontmatterEdits('---\ntools:\n  - Read\ndisallowedTools:\n  - Bash\n---\n')).toBe(false);
+    expect(frontmatterEdits('---\ntools:\n---\n')).toBeNull();
+    expect(parseFrontmatter('---\ntools:\n  - Read\nmodel: opus\n---\n')).toMatchObject({ fields: { tools: '', model: 'opus' }, lists: { tools: ['Read'] }, error: null });
+  });
+
+  it('keeps a block list across comment and blank lines, and reads an item past its trailing comment', () => {
+    expect(frontmatterEdits('---\ntools:\n  - Read\n  # note\n  - Write\n---\n')).toBe(true);
+    expect(frontmatterEdits('---\ntools:\n  - Read\n\n  - Write\n---\n')).toBe(true);
+    expect(frontmatterEdits('---\ntools:\n  - Read\n  - "Write" # comment\n---\n')).toBe(true);
+    expect(frontmatterEdits('---\ntools:\n  - Read\n  - Write # comment\n---\n')).toBe(true);
+    expect(parseFrontmatter('---\ntools:\n  - Read # a\n  # b\n\n  - "Bash # c"\n  - \'Grep\' # d\nmodel: opus\n---\n'))
+      .toMatchObject({ fields: { tools: '', model: 'opus' }, lists: { tools: ['Read', '"Bash # c"', "'Grep'"] }, error: null });
+  });
 });
 
 // Exercise installed CLI behavior, including its exit status, against disposable complete plugin roots.
@@ -129,13 +172,15 @@ describe('doctor: checkModelAuthority (#48 P0-2)', () => {
     expect(stdout).toMatch(/\[fail\] agents\/worker-frontier\.md:.*model=haiku \(expected claude-fable-5-1\)/);
   });
 
-  it('FAIL: a packaged agent reintroduces a restrictive tool list', () => {
+  it('FAIL: a packaged agent reintroduces a restrictive tool list, or drifts from its withheld tools', () => {
     const original = readFileSync(join(root, 'agents', 'worker.md'), 'utf8');
-    const pluginRoot = preparePluginRoot({ file: 'worker.md', content: original.replace('background: false', 'background: false\ntools: Read, Bash\ndisallowedTools: Agent') });
-    const { status, stdout } = runDoctor(pluginRoot);
+    const mutated = original.replace(/^disallowedTools:.*$/m, 'tools: Read, Bash\ndisallowedTools: Agent').replace('omitClaudeMd: true\n', '');
+    expect(mutated).not.toBe(original);
+    const { status, stdout } = runDoctor(preparePluginRoot({ file: 'worker.md', content: mutated }));
     expect(status).toBe(1);
     expect(stdout).toContain('tools must be absent so host tools are inherited');
-    expect(stdout).toContain('disallowedTools must be absent so host tools are inherited');
+    expect(stdout).toContain('disallowedTools=Agent (expected Agent, SendMessage, Skill, Artifact, ArtifactComments, ArtifactData)');
+    expect(stdout).toContain('omitClaudeMd must be true');
   });
 
   it('FAIL: effective config models.frontier disagrees by family with installed frontmatter', () => {

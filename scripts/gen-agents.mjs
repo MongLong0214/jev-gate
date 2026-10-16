@@ -1,7 +1,8 @@
 // #48 P0-2: rewrites the `model:`/`effort:` frontmatter lines of the six owned `agents/*.md` files from the built
 // `OWNED_AGENT_PROFILES` table (src/agents.ts) and `DEFAULT_CONFIG.models` (src/config.ts) -- the same table doctor's
 // `checkModelAuthority` reads -- so the packaged frontmatter and that table cannot quietly drift apart.
-// The old tool restrictions are removed; every other frontmatter field and the whole body are left untouched.
+// It also writes each profile's `disallowedTools` and `omitClaudeMd: true` and removes any `tools` list, so host tools
+// and connected MCPs stay inherited; every other frontmatter field and the whole body are left untouched.
 // Usage: node scripts/gen-agents.mjs [--check]   (requires `npm run build` first: it reads dist/, not src/)
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -50,7 +51,8 @@ for (const profile of OWNED_AGENT_PROFILES) {
     // No existing effort line: insert one right after model, so field order stays the same as every hand-written file.
     nextHead = nextHead.replace(/^(model:.*)$/m, `$1\neffort: ${effort}`);
   }
-  nextHead = nextHead.replace(/\n(?:tools|disallowedTools):.*$/gm, '');
+  nextHead = nextHead.replace(/\n(?:tools|disallowedTools|omitClaudeMd):.*$/gm, '');
+  nextHead = nextHead.replace(/^(background:.*)$/m, `$1\ndisallowedTools: ${profile.disallowedTools.join(', ')}\nomitClaudeMd: true`);
 
   const next = nextHead + tail;
   if (next === text) continue;

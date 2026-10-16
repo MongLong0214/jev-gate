@@ -1,0 +1,14 @@
+model jev-1.13.0, 5 repeat(s), 40 requests (0 refused by the selector as invalid_answers), 240 planned candidates (240 with an answer in the reply)
+policy (kept against required, all planned candidates) 212/240 (88.3%): tp 45, fp 28, fn 0, tn 167
+raw answers, required-vs-not 212/240 (88.3%), including answers of a refused batch
+raw answers, four-way exact 205/240 (85.4%)
+┌───────────┬───────────┬─────────┬──────────┐
+│ (index)   │ unrelated │ related │ required │
+├───────────┼───────────┼─────────┼──────────┤
+│ unrelated │ 123       │ 2       │          │
+│ required  │           │         │ 45       │
+│ related   │ 5         │ 37      │ 28       │
+└───────────┴───────────┴─────────┴──────────┘
+mean confidence of the chosen label: correct 0.841, wrong 0.63
+request latency p50 184 ms, p90 265 ms; input tokens 87065
+selector reasons {"current_dependencies":40}

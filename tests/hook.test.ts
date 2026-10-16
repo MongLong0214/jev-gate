@@ -88,7 +88,7 @@ const fakeJev = (opts: FakeAnswers = {}): ReturnType<typeof vi.fn> =>
     if (questions.includes('upgrade_basis')) answers['upgrade_basis'] = choice(UPGRADE_BASES, opts.basis ?? 'no_specific_basis');
     if (questions.includes('planning_tier')) answers['planning_tier'] = choice(PLANNER_ROUTE_ANSWERS, opts.planning_tier ?? 'deep');
     if (opts.mistype !== undefined && isRecordValue(answers[opts.mistype])) answers[opts.mistype] = { ...(answers[opts.mistype] as object), type: 'choice' };
-    return new Response(JSON.stringify({ model: 'jev-1.13.0', answers, usage: { input_tokens: 10, output_tokens: 2 } }), { status: 200 });
+    return new Response(JSON.stringify({ model: 'jev-1.14.0', answers, usage: { input_tokens: 10, output_tokens: 2 } }), { status: 200 });
   });
 
 /** A Jev double that answers Gate A and then fails Gate B, so a dispatch reaches the preserve paths with a reason. */
@@ -2693,7 +2693,9 @@ describe('sources', () => {
     for (const f of files) {
       const text = readFileSync(join(__dirname, '..', 'agents', f), 'utf8');
       const body = text.slice(text.indexOf('\n---', 4) + 4);
-      expect(text, f).not.toMatch(/^tools:|^disallowedTools:/m);
+      // No `tools:` allowlist, so connected MCPs stay inherited; delegation is withheld instead.
+      expect(text, f).not.toMatch(/^tools:/m);
+      expect(text, f).toMatch(/^disallowedTools: Agent, SendMessage, /m);
       expect(text, f).toContain('background: false');
       if (f.startsWith('worker')) workerBodies.add(body);
       expect(body.match(/```json\n/g), f).toHaveLength(1);
@@ -3106,7 +3108,7 @@ describe('prior failure classification (A22)', () => {
         asked.push(keys);
         for (const k of keys) answers[k] = { type: 'noul', noul: k === 'prior_environment_failure' || k === 'prior_missing_information' ? 0.9 : 0.05 };
       }
-      return new Response(JSON.stringify({ model: 'jev-1.13.0', answers, usage: { input_tokens: 10, output_tokens: 2 } }), { status: 200 });
+      return new Response(JSON.stringify({ model: 'jev-1.14.0', answers, usage: { input_tokens: 10, output_tokens: 2 } }), { status: 200 });
     });
 
   it('asks what an earlier attempt reported only when there was one', async () => {
@@ -3308,7 +3310,7 @@ describe('plan interpretation (A23)', () => {
         const winner = verdict(k);
         answers[k] = { type: 'choice', choice: winner, probabilities: Object.fromEntries(CLAUSE_VERDICTS.map((v) => [v, v === winner ? 0.91 : 0.03])), confidence: 0.91 };
       }
-      return new Response(JSON.stringify({ model: 'jev-1.13.0', answers, usage: { input_tokens: 10, output_tokens: 2 } }), { status: 200 });
+      return new Response(JSON.stringify({ model: 'jev-1.14.0', answers, usage: { input_tokens: 10, output_tokens: 2 } }), { status: 200 });
     });
   };
 
@@ -3388,7 +3390,7 @@ describe('plan interpretation (A23)', () => {
       if (!Object.keys(body.questions).some((k) => /^c\d+$/.test(k))) return await (base as unknown as typeof fetch)(url, init);
       // The window this call opens is real: nothing holds the job lock across it.
       updateJob(env, 's1', (prev) => (prev === null ? null : { ...prev, current: { ...prev.current, active: {} } }));
-      return new Response(JSON.stringify({ model: 'jev-1.13.0', answers: { c0: { type: 'choice', choice: 'supported', probabilities: { supported: 0.9, contradicted: 0.04, omitted: 0.03, unknown: 0.03 }, confidence: 0.9 } }, usage: { input_tokens: 1, output_tokens: 1 } }), { status: 200 });
+      return new Response(JSON.stringify({ model: 'jev-1.14.0', answers: { c0: { type: 'choice', choice: 'supported', probabilities: { supported: 0.9, contradicted: 0.04, omitted: 0.03, unknown: 0.03 }, confidence: 0.9 } }, usage: { input_tokens: 1, output_tokens: 1 } }), { status: 200 });
     });
     await seedPlanned(env, PLAN_REPLY, fetchImpl);
     expect(state(env).current.plan).toBeNull();
