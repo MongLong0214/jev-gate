@@ -83,6 +83,18 @@ describe('capability selection', () => {
     expect(selectPair(o, answers(o, { mechanical: 1 }, 0, 'model_lock'))).toMatchObject({ patch: { effort: 'low' }, reasons: { model: 'control_lock', effort: 'selected' } });
     expect(keepModelPair(o, answers(o, { mechanical: 1 }, 0)).patch).toEqual({ effort: 'low', effortEdit: { kind: 'set', value: 'low' } });
   });
+  it('reads a lock below the lock floor as a mention: its mass joins a clear task and the model is routed', () => {
+    const o = offer();
+    const withControl = (p: Record<string, number>) => {
+      const probabilities = Object.fromEntries(['task_clear', 'model_lock', 'effort_lock', 'explicit_lock', 'needs_context', 'unclear'].map(k => [k, p[k] ?? 0]));
+      return { ...answers(o, { routine: 1 }, 0), control: { type: 'choice', choice: Object.entries(p).sort((a, b) => b[1] - a[1])[0]![0], confidence: 1, probabilities } };
+    };
+    const weak = selectPair(o, withControl({ task_clear: .34, model_lock: .62, needs_context: .04 }));
+    expect(weak.patch.model).toBe('claude-sonnet-5-5'); expect(weak.diagnostics.weak_lock).toBe('model_lock');
+    const held = selectPair(o, withControl({ task_clear: .03, model_lock: .97 }));
+    expect(held.patch.model).toBeUndefined(); expect(held.reasons.model).toBe('control_lock'); expect(held.diagnostics.weak_lock).toBeUndefined();
+    expect(selectPair(o, withControl({ task_clear: .25, explicit_lock: .75 })).diagnostics.weak_lock).toBe('explicit_lock');
+  });
   it('steps a retry one role above the failed attempt, and no further by itself', () => {
     const fromHaiku = offer(OPUS, 'high', { retryFrom: HAIKU });
     expect(selectPair(fromHaiku, answers(fromHaiku, { mechanical: 1 }))).toMatchObject({ patch: { model: SONNET }, reasons: { model: 'retry_step_up' } });
