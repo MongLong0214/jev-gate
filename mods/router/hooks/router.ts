@@ -1326,7 +1326,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       effort: config.routeSubagentEffort && !pins.mainEffort && !childHistoryFull,
       upgrade: config.minUpgradeConfidence, downgrade: config.minDowngradeConfidence });
     if (!offer) return !claudeTargetAllowed(baselineModel, allowFable) ? denied('restricted_baseline', 'Restricted automatic child disabled; continue in the main session.') : spawnSkip(engine, e, 'no_alternative');
-    const byTools = config.routeSpawnByTools && offer.modelAsked;
+    const byTools = offer.modelAsked;
     const toolClass = byTools ? await spawnToolClass(engine, e, live) : null;
     const state = routingContext(e.prompt); Object.assign(state.task, { description: e.description, subagent_type: e.subagentType, source: 'child_contract' });
     const result = await client.assess(engine, key.key, state, offer.questions, live, usage => log(engine, { event: 'late', scope: 'spawn', tool_use_id: e.tool_use_id, usage: loggable(usage) }));
@@ -1355,7 +1355,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     if (target && (nowPins.subagentModel || nowPins.aliasRemap && !engine.modelAliases || !claudeTargetAllowed(target, await within(frontierFor(engine), live)) || !claudeModelAllowed(target, nowAvailable, aliases))) { log(engine, { event: 'spawn_stop', tool_use_id: e.tool_use_id, requested: target, reason: nowPins.subagentModel ? 'subagent_model_pinned' : nowPins.aliasRemap && !engine.modelAliases ? 'alias_remapped' : 'target_not_allowed' }); return null; }
     log(engine, { event: 'spawn', scope: 'subagent', boundary: 'host_hook', tool_use_id: e.tool_use_id, type: typeLabel(e), from: baselineModel, assessment: 'ok', sent: true, jev_model: JEV_MODEL,
       usage: loggable(result.usage), explicit: explicit !== null, patch: selected.patch, cost, cost_reason: costReason, reasons: { ...selected.reasons, ...(bound ? { model: bound.reason } : {}), ...(hold ? { model: costReason } : {}), ...(toolHold ? { model: toolHold } : {}) },
-      ...(config.routeSpawnByTools ? { spawn_tool_class: toolClass } : {}), model_asked: offer.modelAsked, effort_asked: offer.effortQuestions.size > 0,
+      spawn_tool_class: toolClass, model_asked: offer.modelAsked, effort_asked: offer.effortQuestions.size > 0,
       discovered_count: MODEL_FACTS.length, eligible_count: candidates.length, offered_count: offer.candidates.length, catalog_complete: false, allow_fable: allowFable,
       selection: selected.diagnostics, answers: pairReceipt(offer, result.answers) });
     return { target, answers: {}, pair: { offer, raw: result.answers } };

@@ -13,8 +13,6 @@ export interface RouterConfig {
   routeSubagentModel: boolean;
   /** Route the model even when the Agent call names one: the caller's `model` is a default, not a requirement. */
   routeExplicitSpawnModel: boolean;
-  /** Bound a spawn's model by what its tools can do: a child that cannot edit may run the cheapest role, one that can edit no role below standard. */
-  routeSpawnByTools: boolean;
   /** Set each subagent's effort from its spawn's assessment, on every step of its loop. */
   routeSubagentEffort: boolean;
   routeMainEffort: boolean;
@@ -65,9 +63,6 @@ export const resolveConfig = (options: Options): ConfigResult => {
   if (routeSubagentModel === null) return { ok: false, field: 'routeSubagentModel' };
   const routeExplicitSpawnModel = bool('routeExplicitSpawnModel', true);
   if (routeExplicitSpawnModel === null) return { ok: false, field: 'routeExplicitSpawnModel' };
-  // Off until a quality smoke confirms read-only children on the cheapest role.
-  const routeSpawnByTools = bool('routeSpawnByTools', false);
-  if (routeSpawnByTools === null) return { ok: false, field: 'routeSpawnByTools' };
   const routeSubagentEffort = bool('routeSubagentEffort', true);
   if (routeSubagentEffort === null) return { ok: false, field: 'routeSubagentEffort' };
   const routeMainEffort = bool('routeMainEffort', true);
@@ -120,7 +115,6 @@ export const resolveConfig = (options: Options): ConfigResult => {
       allowFable,
       routeSubagentModel,
       routeExplicitSpawnModel,
-      routeSpawnByTools,
       routeSubagentEffort,
       routeMainEffort,
       routeMainModel,

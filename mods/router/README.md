@@ -144,7 +144,6 @@ The standalone names omit the `router` prefix where listed below. Existing names
 | `routeSubagentModel` | same | true | Automatic child model selection |
 | `routeSubagentEffort` | same | true | Child inference effort selection |
 | `routeExplicitSpawnModel` | same | true | Treat an ordinary Agent model argument as a routable default |
-| `routeSpawnByTools` | same | false | Bound a spawn by its tools: one without Edit/Write/NotebookEdit/Bash (Explore, Plan, or an agent file) may run the cheapest role on a clear, ordinary, unlocked `mechanical`/`routine` answer; one that can edit never runs below the standard role unless its own model is below it. Never above the native or declared model; an agent whose tools are unknown (unread, or Bash only by command pattern) keeps that model. Records `spawn_tool_class` and a `tool_*` model reason |
 | `routerAllowFable` | `allowFable` | false | Restricted automatic family opt-in |
 | `typesafeApiKey` | same | unset | Sensitive key; explicit value takes precedence |
 | `routerFastModel` / `routerStandardModel` / `routerDeepModel` | `fastModel` / `standardModel` / `deepModel` | haiku / sonnet / opus | Role preferences; do not limit all candidates |

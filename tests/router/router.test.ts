@@ -720,7 +720,7 @@ const spawn = (over: Partial<SpawnEvent> = {}): SpawnEvent => ({
   tool_use_id: 'tu1',
   prompt: 'List every file under src/ that imports from ./config and report the import lines.',
   description: 'find config imports',
-  subagentType: 'general-purpose',
+  subagentType: 'Explore',
   provider: { plugin: 'engine', tier: 'core' },
   parentModel: 'claude-opus-5-5',
   fork: false,
@@ -746,12 +746,12 @@ describe('spawn model', () => {
   it('routes an inheriting built-in with no model to a configured profile, calling next once', async () => {
     const router = createRouter(configOf(SPAWN_ONLY));
     const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['fast', 0.95] }) });
-    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    router.agentOffer(OFFER_BUILT_IN('Explore'));
     const n = spawnNext();
     const result = await router.agentSpawn(f.engine, spawn(), n.next);
     expect(n.calls).toEqual([{ ...spawn(), model: 'claude-haiku-5-5' }]);
     expect(result).toEqual({ model: 'claude-haiku-5-5' });
-    expect(f.sent[0]?.state).toMatchObject({ task: { text: spawn().prompt, description: spawn().description, subagent_type: 'general-purpose', source: 'child_contract', truncated: false } });
+    expect(f.sent[0]?.state).toMatchObject({ task: { text: spawn().prompt, description: spawn().description, subagent_type: 'Explore', source: 'child_contract', truncated: false } });
     expect(Object.keys(f.sent[0]?.questions ?? {})).toContain('capability');
   });
 
@@ -775,7 +775,7 @@ describe('spawn model', () => {
       const router = createRouter(configOf({ ...SPAWN_ONLY, routeSubagentEffort: false }));
       const f = fakeEngine({ ...opts, respond: answering({ ...CLEAR, tier: ['fast', 0.95] }) });
       if (offered) {
-        router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+        router.agentOffer(OFFER_BUILT_IN('Explore'));
         router.agentOffer(OFFER_BUILT_IN('Explore'));
         router.agentOffer(OFFER_BUILT_IN('code-reviewer'));
       }
@@ -801,15 +801,15 @@ describe('spawn model', () => {
     const router = createRouter(configOf(SPAWN_ONLY));
     const QUICK = 'List the files under src/.';
     const f = fakeEngine({
-      respond: (req) => answering({ ...CLEAR, tier: [(req.state as { task: { text: string } }).task.text === QUICK ? 'fast' : 'standard', 0.95] })(req),
+      respond: (req) => answering({ ...CLEAR, tier: [(req.state as { task: { text: string } }).task.text === QUICK ? 'fast' : 'deep', 0.95] })(req),
     });
-    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    router.agentOffer(OFFER_BUILT_IN('Explore'));
     const a = spawnNext();
     const b = spawnNext();
     await Promise.all([router.agentSpawn(f.engine, spawn({ prompt: QUICK }), a.next), router.agentSpawn(f.engine, spawn(), b.next)]);
     expect(f.sent).toHaveLength(2);
     expect(a.calls[0]?.model).toBe('claude-haiku-5-5');
-    expect(b.calls[0]?.model).toBe('claude-sonnet-5-5');
+    expect(b.calls[0]?.model).toBeUndefined();
   });
 
   it('lets an abandoned dispatch decide nothing for a later one, and records what its reply cost', async () => {
@@ -819,13 +819,13 @@ describe('spawn model', () => {
     const f = fakeEngine({ respond: (req) => (calls++ === 0 ? first.promise : answering({ ...CLEAR, tier: ['standard', 0.95] })(req)) });
     router.agentOffer(OFFER_BUILT_IN('general-purpose'));
     const abandoned = spawnNext();
-    const run = router.agentSpawn(f.engine, spawn(), abandoned.next);
+    const run = router.agentSpawn(f.engine, spawn({ subagentType: 'general-purpose' }), abandoned.next);
     await vi.waitFor(() => expect(f.sent).toHaveLength(1));
     abandoned.controller.abort();
     await expect(run).rejects.toThrow('abandoned');
 
     const again = spawnNext();
-    const pending = router.agentSpawn(f.engine, spawn(), again.next);
+    const pending = router.agentSpawn(f.engine, spawn({ subagentType: 'general-purpose' }), again.next);
     first.resolve(answering({ ...CLEAR, tier: ['fast', 0.95] })(f.sent[0]!) as HttpReply);
     await pending;
     expect(f.sent).toHaveLength(2);
@@ -836,7 +836,7 @@ describe('spawn model', () => {
   it('logs a denial and a resolved model outside the requested family, and changes neither', async () => {
     const router = createRouter(configOf(SPAWN_ONLY));
     const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['fast', 0.95] }) });
-    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    router.agentOffer(OFFER_BUILT_IN('Explore'));
     const denied = spawnNext(() => ({ deny: 'policy' }));
     expect(await router.agentSpawn(f.engine, spawn(), denied.next)).toEqual({ deny: 'policy' });
     const other = spawnNext(() => ({ model: 'claude-sonnet-5-5' }));
@@ -855,7 +855,7 @@ describe('spawn model', () => {
       const router = createRouter(configOf(SPAWN_ONLY));
       const reply = deferred<HttpReply>();
       const f = fakeEngine({ respond: () => reply.promise });
-      router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+      router.agentOffer(OFFER_BUILT_IN('Explore'));
       const n = spawnNext();
       const run = router.agentSpawn(f.engine, spawn(), n.next);
       await vi.waitFor(() => expect(f.sent).toHaveLength(1));
@@ -871,7 +871,7 @@ describe('spawn model', () => {
     const router = createRouter(configOf(SPAWN_ONLY));
     const reply = deferred<HttpReply>();
     const f = fakeEngine({ respond: () => reply.promise });
-    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    router.agentOffer(OFFER_BUILT_IN('Explore'));
     const n = spawnNext();
     const run = router.agentSpawn(f.engine, spawn(), n.next);
     await vi.waitFor(() => expect(f.sent).toHaveLength(1));
@@ -892,7 +892,7 @@ describe('spawn model', () => {
       const router = createRouter(configOf(SPAWN_ONLY));
       const reply = deferred<HttpReply>();
       const f = fakeEngine({ respond: () => reply.promise });
-      router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+      router.agentOffer(OFFER_BUILT_IN('Explore'));
       const gate = deferred<void>();
       if (during === 'first') f.allowed.wait = gate.promise;
       const n = spawnNext();
@@ -916,7 +916,7 @@ describe('spawn model', () => {
     for (let hops = 0; hops <= 12; hops++) {
       const router = createRouter(configOf(SPAWN_ONLY));
       const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['fast', 0.95] }) });
-      router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+      router.agentOffer(OFFER_BUILT_IN('Explore'));
       const n = spawnNext();
       let endedBeforeNext: boolean | null = null;
       const pins = f.engine.pins;
@@ -948,7 +948,7 @@ describe('spawn model', () => {
       reads++;
       return pins();
     };
-    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    router.agentOffer(OFFER_BUILT_IN('Explore'));
     for (const id of ['tu1', 'tu2', 'tu3']) {
       const n = spawnNext();
       const run = router.agentSpawn(f.engine, spawn({ tool_use_id: id }), n.next);
@@ -967,7 +967,7 @@ describe('spawn model', () => {
     g.engine.pins = () => new Promise(() => {});
     g.engine.hostBase = () => new Promise(() => {});
     g.engine.availableModels = () => new Promise(() => {});
-    bare.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    bare.agentOffer(OFFER_BUILT_IN('Explore'));
     const m = spawnNext();
     await bare.agentSpawn(g.engine, spawn(), m.next);
     expect(m.calls).toEqual([spawn()]);
@@ -996,11 +996,12 @@ describe('spawn model', () => {
   });
 
   describe('a custom agent\'s file model', () => {
-    const custom = (declared: string | null, over: Partial<SpawnEvent> = {}, tier = 'standard') => {
+    const custom = (declared: string | null, over: Partial<SpawnEvent> = {}, tier = 'standard', edits = true) => {
       const router = createRouter(configOf(SPAWN_ONLY));
       const f = fakeEngine({ respond: answering({ ...CLEAR, tier: [tier, 0.95], effort: ['high', 0.95] }) });
       const read: string[] = [];
       f.engine.agentModel = async type => { read.push(type); return declared; };
+      f.engine.agentEdits = async () => edits;
       return { router, f, read, e: spawn({ subagentType: 'guardian', provider: { plugin: 'user', tier: 'local' }, ...over }) };
     };
     it('asks about a frontmatter opus agent and can move it down', async () => {
@@ -1019,7 +1020,7 @@ describe('spawn model', () => {
       expect(JSON.stringify(f.sent[0]?.questions['capability'] ?? {})).not.toContain('complex');
     });
     it('reads inherit as the parent\'s model', async () => {
-      const { router, f, e } = custom('inherit', { parentModel: 'claude-sonnet-5-5' }, 'fast');
+      const { router, f, e } = custom('inherit', { parentModel: 'claude-sonnet-5-5' }, 'fast', false);
       const n = spawnNext();
       await router.agentSpawn(f.engine, e, n.next);
       expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn', from: 'claude-sonnet-5-5' }));
@@ -1045,10 +1046,10 @@ describe('spawn model', () => {
     });
   });
 
-  describe('routeSpawnByTools: a spawn\'s tools bound its model', () => {
+  describe('a spawn\'s tools bound its model', () => {
     type Picks = Parameters<typeof answering>[0];
-    const run = async (picks: Picks, e: SpawnEvent, on = true, file?: { model: string; edits: boolean | null }) => {
-      const router = createRouter(configOf({ ...SPAWN_ONLY, routeExplicitSpawnModel: true, routeSpawnByTools: on }));
+    const run = async (picks: Picks, e: SpawnEvent, file?: { model: string; edits: boolean | null }) => {
+      const router = createRouter(configOf({ ...SPAWN_ONLY, routeExplicitSpawnModel: true }));
       const f = fakeEngine({ respond: answering(picks) });
       if (file) { f.engine.agentModel = async () => file.model; f.engine.agentEdits = async () => file.edits; }
       router.agentOffer(OFFER_BUILT_IN(e.subagentType));
@@ -1065,12 +1066,12 @@ describe('spawn model', () => {
     });
 
     it('stops an editing agent at the standard role, even on a mechanical answer; a baseline below standard stays', async () => {
-      const { model, log } = await run({ ...CLEAR, tier: ['fast', 0.95] }, spawn({ model: 'opus' }));
+      const { model, log } = await run({ ...CLEAR, tier: ['fast', 0.95] }, spawn({ subagentType: 'general-purpose', model: 'opus' }));
       expect(model).toBe('claude-sonnet-5-5');
       expect(log).toMatchObject({ spawn_tool_class: 'editing', reasons: { model: 'tool_editing_floor' } });
       // The ceiling wins over the floor: an editing agent on Haiku is never lifted to the standard role.
-      expect((await run({ ...CLEAR, tier: ['fast', 0.95] }, spawn({ model: 'haiku' }))).model).toBe('haiku');
-      const lifted = await run({ ...CLEAR, tier: ['standard', 0.97] }, spawn({ model: 'haiku' }));
+      expect((await run({ ...CLEAR, tier: ['fast', 0.95] }, spawn({ subagentType: 'general-purpose', model: 'haiku' }))).model).toBe('haiku');
+      const lifted = await run({ ...CLEAR, tier: ['standard', 0.97] }, spawn({ subagentType: 'general-purpose', model: 'haiku' }));
       expect(lifted.model).toBe('haiku');
       expect(lifted.log).toMatchObject({ spawn_tool_class: 'editing', reasons: { model: 'tool_ceiling' } });
     });
@@ -1081,26 +1082,21 @@ describe('spawn model', () => {
         expect(model, subagentType).toBeUndefined();
         expect(log, subagentType).toMatchObject({ from: 'claude-sonnet-5-5', reasons: { model: 'tool_ceiling' } });
       }
-      // Off, the same answer lifts it.
-      expect((await run({ ...CLEAR, tier: ['deep', 0.97] }, spawn({ subagentType: 'Explore', parentModel: 'claude-sonnet-5-5' }), false)).model).toBe('claude-opus-5-5');
     });
 
-    it('passes an allowed move off a restricted baseline at or below its rank, as with the option off, and never one above it', async () => {
+    it('passes an allowed move off a restricted baseline at or below its rank, and never one above it', async () => {
       // A legacy Sonnet to the current one (same role), and a legacy Fable down to Sonnet.
-      for (const parentModel of ['claude-sonnet-5', 'claude-fable-5']) {
-        for (const on of [true, false]) expect((await run({ ...CLEAR, tier: ['standard', 0.97] }, spawn({ parentModel }), on)).model, `${parentModel} ${on}`).toBe('claude-sonnet-5-5');
-      }
-      expect((await run({ ...CLEAR, tier: ['deep', 0.97] }, spawn({ parentModel: 'claude-sonnet-5' }), false)).model).toBe('claude-opus-5-5');
-      const above = await run({ ...CLEAR, tier: ['deep', 0.97] }, spawn({ parentModel: 'claude-sonnet-5' }));
+      for (const parentModel of ['claude-sonnet-5', 'claude-fable-5']) expect((await run({ ...CLEAR, tier: ['standard', 0.97] }, spawn({ subagentType: 'general-purpose', parentModel }))).model, parentModel).toBe('claude-sonnet-5-5');
+      const above = await run({ ...CLEAR, tier: ['deep', 0.97] }, spawn({ subagentType: 'general-purpose', parentModel: 'claude-sonnet-5' }));
       expect(above.model).toBeUndefined();
     });
 
     it('keeps the baseline of an agent whose tools are unknown, in either direction', async () => {
       const custom = spawn({ subagentType: 'guardian', provider: { plugin: 'user', tier: 'local' } });
-      const down = await run({ ...CLEAR, tier: ['fast', 0.97] }, custom, true, { model: 'opus', edits: null });
+      const down = await run({ ...CLEAR, tier: ['fast', 0.97] }, custom, { model: 'opus', edits: null });
       expect(down.model).toBeUndefined();
       expect(down.log).toMatchObject({ spawn_tool_class: null, reasons: { model: 'tool_unknown' } });
-      const up = await run({ ...CLEAR, tier: ['deep', 0.97] }, spawn({ subagentType: 'guardian', provider: { plugin: 'user', tier: 'local' }, parentModel: 'claude-sonnet-5-5' }), true, { model: 'inherit', edits: null });
+      const up = await run({ ...CLEAR, tier: ['deep', 0.97] }, spawn({ subagentType: 'guardian', provider: { plugin: 'user', tier: 'local' }, parentModel: 'claude-sonnet-5-5' }), { model: 'inherit', edits: null });
       expect(up.model).toBeUndefined();
       expect(up.log).toMatchObject({ spawn_tool_class: null, reasons: { model: 'tool_unknown' } });
     });
@@ -1119,20 +1115,13 @@ describe('spawn model', () => {
       expect(log).toMatchObject({ spawn_tool_class: 'read_only', reasons: { model: 'control_lock' } });
     });
 
-    it('changes nothing when off', async () => {
-      const picks: Picks = { ...CLEAR, tier: ['standard', 0.95] };
-      expect((await run(picks, explore, true)).model).toBe('claude-haiku-5-5');
-      const off = await run(picks, explore, false);
-      expect(off.model).toBe('claude-sonnet-5-5');
-      expect(off.log).not.toHaveProperty('spawn_tool_class');
-    });
 
     it('moves a declared-opus read-only agent down, and never a declared model up', async () => {
       const guardian = spawn({ subagentType: 'guardian', provider: { plugin: 'user', tier: 'local' } });
-      expect((await run({ ...CLEAR, tier: ['standard', 0.95] }, guardian, true, { model: 'opus', edits: false })).model).toBe('claude-haiku-5-5');
+      expect((await run({ ...CLEAR, tier: ['standard', 0.95] }, guardian, { model: 'opus', edits: false })).model).toBe('claude-haiku-5-5');
       // Complex work on a declared Sonnet is never lifted, and an editing one stays on its file's model, not below.
-      expect((await run({ ...CLEAR, tier: ['deep', 0.95] }, guardian, true, { model: 'sonnet', edits: false })).model).toBeUndefined();
-      const editing = await run({ ...CLEAR, tier: ['fast', 0.95] }, guardian, true, { model: 'sonnet', edits: true });
+      expect((await run({ ...CLEAR, tier: ['deep', 0.95] }, guardian, { model: 'sonnet', edits: false })).model).toBeUndefined();
+      const editing = await run({ ...CLEAR, tier: ['fast', 0.95] }, guardian, { model: 'sonnet', edits: true });
       expect(editing.model).toBeUndefined();
       expect(editing.log).toMatchObject({ spawn_tool_class: 'editing', reasons: { model: 'tool_editing_floor' } });
     });
@@ -1141,7 +1130,7 @@ describe('spawn model', () => {
   it('records the model and agent a routed spawn resolved to', async () => {
     const router = createRouter(configOf(SPAWN_ONLY));
     const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['fast', 0.95] }) });
-    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    router.agentOffer(OFFER_BUILT_IN('Explore'));
     const n = spawnNext(() => ({ model: 'claude-haiku-5-5', agentId: 'a1' }));
     await router.agentSpawn(f.engine, spawn(), n.next);
     expect(f.logs).toContainEqual({ event: 'spawn_result', tool_use_id: 'tu1', requested: 'claude-haiku-5-5', observed: 'claude-haiku-5-5', agent_id: 'a1' });
@@ -1150,7 +1139,7 @@ describe('spawn model', () => {
   it('moves a spawn off a restricted parent model without a cost check: staying would be a denial', async () => {
     const router = createRouter(configOf(SPAWN_ONLY));
     const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['standard', 0.95] }) });
-    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    router.agentOffer(OFFER_BUILT_IN('Explore'));
     expect(await router.agentSpawn(f.engine, spawn({ parentModel: 'claude-sonnet-5' }), spawnNext().next)).toEqual({ model: 'claude-sonnet-5-5' });
     expect(f.logs.find(r => r.event === 'spawn')).toMatchObject({ cost: null, cost_reason: 'not_checked' });
   });
@@ -1159,7 +1148,7 @@ describe('spawn model', () => {
     const router = createRouter(configOf(SPAWN_ONLY));
     const reply = deferred<HttpReply>();
     const f = fakeEngine({ respond: () => reply.promise });
-    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    router.agentOffer(OFFER_BUILT_IN('Explore'));
     const n = spawnNext();
     const run = router.agentSpawn(f.engine, spawn(), n.next);
     await vi.waitFor(() => expect(f.sent).toHaveLength(1));
@@ -1177,7 +1166,7 @@ describe('spawn model', () => {
   it('routes on a later 2.1 release', async () => {
     const router = createRouter(configOf(SPAWN_ONLY));
     const f = fakeEngine({ hostBase: '2.1.293', respond: answering({ ...CLEAR, tier: ['fast', 0.95] }) });
-    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    router.agentOffer(OFFER_BUILT_IN('Explore'));
     const n = spawnNext();
     expect(await router.agentSpawn(f.engine, spawn(), n.next)).toEqual({ model: 'claude-haiku-5-5' });
   });
@@ -1185,7 +1174,7 @@ describe('spawn model', () => {
   it('reports a mismatched spawn without stopping subsequent independent work', async () => {
     const router = createRouter(configOf(SPAWN_ONLY));
     const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['fast', .95] }) });
-    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    router.agentOffer(OFFER_BUILT_IN('Explore'));
     await router.agentSpawn(f.engine, spawn(), spawnNext(() => ({ model: 'claude-opus-5-5' })).next);
     const next = spawnNext();
     await router.agentSpawn(f.engine, spawn({ tool_use_id: 'independent' }), next.next);
@@ -1200,7 +1189,7 @@ describe('spawn model', () => {
       const router = createRouter(configOf(SPAWN_ONLY));
       const held = deferred<HttpReply>();
       const f = fakeEngine({ respond: () => held.promise });
-      router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+      router.agentOffer(OFFER_BUILT_IN('Explore'));
       const run = router.agentSpawn(f.engine, spawn(), spawnNext(() => ({ model: 'claude-haiku-5-5' })).next);
       await vi.waitFor(() => expect(f.sent).toHaveLength(1));
       f.pins.subagentModel = true;
@@ -1214,12 +1203,12 @@ describe('spawn model', () => {
   it('does not suspend for a spawn a pin kept native, which runs on the pinned model', async () => {
     const router = createRouter(configOf(SPAWN_ONLY));
     const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['fast', 0.95] }), pins: { subagentModel: true } });
-    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    router.agentOffer(OFFER_BUILT_IN('Explore'));
     await router.agentSpawn(f.engine, spawn(), spawnNext(() => ({ model: 'claude-haiku-5-5' })).next);
     expect(f.logs.some(l => l['event'] === 'spawn_suspended')).toBe(false);
     expect(f.logs.find(l => l['event'] === 'spawn_native_result')).toMatchObject({ requested: null, observed: 'claude-haiku-5-5', confirmation: 'unobserved' });
     f.pins.subagentModel = false;
-    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    router.agentOffer(OFFER_BUILT_IN('Explore'));
     const n = spawnNext(() => ({ model: 'claude-haiku-5-5' }));
     await router.agentSpawn(f.engine, spawn({ tool_use_id: 'tu2' }), n.next);
     expect(n.calls).toEqual([spawn({ tool_use_id: 'tu2', model: 'claude-haiku-5-5' })]);
@@ -1257,7 +1246,7 @@ describe('child routing gap diagnostics (#219)', () => {
   it('exposes registration loss after session teardown without reusing the old child allocation', async () => {
     const router = createRouter(configOf(CHILD));
     const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', .95], effort: ['low', .95] }) });
-    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    router.agentOffer(OFFER_BUILT_IN('Explore'));
     await router.agentSpawn(f.engine, spawn(), spawnNext(() => ({ model: 'claude-opus-5-5', agentId: 'a1' })).next);
     const first = streamNext<TurnStepEvent>();
     await drain(router.turnStep(f.engine, childStep(), first.next));
@@ -1277,7 +1266,7 @@ describe('child routing gap diagnostics (#219)', () => {
   it('distinguishes a stopped registration from a missing one and tolerates a broken recorder', async () => {
     const router = createRouter(configOf(CHILD));
     const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', .95], effort: ['low', .95] }) });
-    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    router.agentOffer(OFFER_BUILT_IN('Explore'));
     await router.agentSpawn(f.engine, spawn(), spawnNext(() => ({ model: 'claude-opus-5-5', agentId: 'a1' })).next);
     const n = streamNext<TurnStepEvent>();
     await drain(router.turnStep(f.engine, childStep(), n.next));
@@ -1297,7 +1286,7 @@ describe('subagent effort and named models', () => {
   it("sets a subagent's effort from its spawn's one answer, on every step of its loop", async () => {
     const router = createRouter(configOf(CHILD));
     const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', 0.95], effort: ['low', 0.95] }) });
-    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    router.agentOffer(OFFER_BUILT_IN('Explore'));
     const s = spawnNext(() => ({ model: 'claude-opus-5-5', agentId: 'a1' }));
     await router.agentSpawn(f.engine, spawn(), s.next);
     // Deep work keeps Opus: the spawn is left on the model it inherits.
@@ -1322,7 +1311,7 @@ describe('subagent effort and named models', () => {
     const router = createRouter(configOf(CHILD));
     const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', 0.95], effort: ['high', 0.95] }) });
     f.engine.currentEffort = async () => 'high';
-    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    router.agentOffer(OFFER_BUILT_IN('Explore'));
     await router.agentSpawn(f.engine, spawn(), spawnNext(() => ({ model: 'claude-opus-5-5', agentId: 'a1' })).next);
     const record = f.logs.find((l) => l['event'] === 'spawn');
     expect(record).toMatchObject({ reasons: { effort: 'same_value' }, selection: expect.objectContaining({ effort_policy: 'ordered_move' }), answers: expect.objectContaining({ control: expect.anything(), capability: expect.anything() }) });
@@ -1358,7 +1347,7 @@ describe('subagent effort and named models', () => {
   it('routes mapped A while B is still spawning, and never revives completed native B from its late callback', async () => {
     const router = createRouter(configOf(CHILD));
     const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', 0.95], effort: ['medium', 0.95] }) });
-    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    router.agentOffer(OFFER_BUILT_IN('Explore'));
     await router.agentSpawn(f.engine, spawn(), spawnNext(() => ({ model: 'claude-opus-5-5', agentId: 'a1' })).next);
     const result = deferred<SpawnOutcome>();
     let started = false;
@@ -1380,7 +1369,7 @@ describe('subagent effort and named models', () => {
   it('starts an unmapped loop immediately and ignores a late spawn mapping', async () => {
     const router = createRouter(configOf(CHILD));
     const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', 0.95], effort: ['medium', 0.95] }) });
-    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    router.agentOffer(OFFER_BUILT_IN('Explore'));
     const started = deferred<SpawnOutcome>();
     let spawned = false;
     const s = spawnNext(() => ({ model: 'claude-opus-5-5', agentId: 'a1' }));
@@ -1412,7 +1401,7 @@ describe('subagent effort and named models', () => {
   it("leaves a loop native when its first step ran before the spawn's id arrived", async () => {
     const router = createRouter(configOf(CHILD));
     const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', 0.95], effort: ['medium', 0.95] }) });
-    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    router.agentOffer(OFFER_BUILT_IN('Explore'));
     const started = deferred<SpawnOutcome>();
     let spawned = false;
     const s = spawnNext(() => ({ model: 'claude-opus-5-5', agentId: 'a1' }));
@@ -1443,7 +1432,7 @@ describe('subagent effort and named models', () => {
   it('keeps concurrent child effort answers independent of another spawn response mismatch', async () => {
     const router = createRouter(configOf(CHILD));
     const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', .95], effort: ['low', .95] }) });
-    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    router.agentOffer(OFFER_BUILT_IN('Explore'));
     await router.agentSpawn(f.engine, spawn(), spawnNext(() => ({ model: 'claude-opus-5-5', agentId: 'a1' })).next);
     await router.agentSpawn(f.engine, spawn({ tool_use_id: 'other' }), spawnNext(() => ({ model: 'claude-sonnet-5-5', agentId: 'a2' })).next);
     const next = streamNext<TurnStepEvent>();
@@ -1455,7 +1444,7 @@ describe('subagent effort and named models', () => {
   it('leaves a loop native once a step arrives on another effort or model, or its patch is answered by another model', async () => {
     const router = createRouter(configOf(CHILD));
     const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', 0.95], effort: ['low', 0.95] }) });
-    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    router.agentOffer(OFFER_BUILT_IN('Explore'));
     await router.agentSpawn(f.engine, spawn(), spawnNext(() => ({ model: 'claude-opus-5-5', agentId: 'a1' })).next);
     await router.agentSpawn(f.engine, spawn({ tool_use_id: 'tu2' }), spawnNext(() => ({ model: 'claude-opus-5-5', agentId: 'a2' })).next);
     const n = streamNext<TurnStepEvent>();
@@ -1475,6 +1464,7 @@ describe('subagent effort and named models', () => {
   it("routes the model an Agent call names as a default, unless configured not to, and never a fork's", async () => {
     const router = createRouter(configOf(CHILD));
     const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['fast', 0.95], effort: ['low', 0.95] }) });
+    f.engine.agentEdits = async () => false;
     const s = spawnNext();
     await router.agentSpawn(f.engine, spawn({ model: 'opus', subagentType: 'my-reviewer' }), s.next);
     expect(s.calls).toEqual([spawn({ model: 'claude-haiku-5-5', subagentType: 'my-reviewer' })]);
@@ -1493,7 +1483,7 @@ describe('subagent effort and named models', () => {
 
   it("preserves a spawn when its contract needs missing context or explicitly locks it", async () => {
     const router = createRouter(configOf(CHILD));
-    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    router.agentOffer(OFFER_BUILT_IN('Explore'));
     const moved = fakeEngine({ respond: answering({ control: ['needs_context', 0.9], action_risk: ['ordinary', 0.97], tier: ['fast', 0.95] }) });
     const m = spawnNext();
     await router.agentSpawn(moved.engine, spawn(), m.next);
@@ -1767,7 +1757,7 @@ describe('lifecycle', () => {
     const reply = deferred<HttpReply>();
     const f = fakeEngine({ respond: () => reply.promise });
     router.turnStart({ turnId: 't1', text: TEXT });
-    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    router.agentOffer(OFFER_BUILT_IN('Explore'));
     const n = streamNext<TurnStepEvent>();
     const run = drain(router.turnStep(f.engine, step(), n.next));
     await vi.waitFor(() => expect(f.sent).toHaveLength(1));
@@ -1795,7 +1785,7 @@ describe('lifecycle', () => {
     expect((await drain(router.turnStep(engine, step(), n.next))).chunks).toEqual(['chunk']);
     expect(n.calls).toEqual([{ ...step(), model: 'claude-haiku-5-5', effort: 'low' }]);
 
-    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    router.agentOffer(OFFER_BUILT_IN('Explore'));
     const ok = spawnNext();
     expect(await router.agentSpawn(engine, spawn(), ok.next)).toEqual({ model: 'claude-haiku-5-5' });
     const failure = new Error('native spawn failed');
@@ -1818,16 +1808,16 @@ describe('lifecycle', () => {
 });
 
 describe('#42 and #43: handler cases the issues list', () => {
-  it('moves an inheriting built-in up from a verified lower baseline on the upgrade floor, below the downgrade floor', async () => {
+  it('never moves an inheriting built-in above its verified lower baseline, even on an upgrade answer past the upgrade floor', async () => {
     const router = createRouter(configOf(SPAWN_ONLY));
-    // 0.85 clears the upgrade floor (0.8) and not the downgrade floor (0.9), so only the upgrade floor can move it.
+    // 0.85 clears the upgrade floor (0.8); a spawn still never runs above the model it inherits.
     const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', 0.85] }) });
-    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    router.agentOffer(OFFER_BUILT_IN('Explore'));
     const n = spawnNext();
     const e = spawn({ parentModel: 'claude-haiku-5-5' });
     await router.agentSpawn(f.engine, e, n.next);
-    expect(n.calls).toEqual([{ ...e, model: 'claude-opus-5-5' }]);
-    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn', from: 'claude-haiku-5-5', patch: { model: 'claude-opus-5-5' } }));
+    expect(n.calls).toEqual([e]);
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn', from: 'claude-haiku-5-5', reasons: expect.objectContaining({ model: 'tool_ceiling' }) }));
   });
 
   it('forwards a spawn once, natively, when its assessment times out, and a late reply changes nothing', async () => {
@@ -1835,7 +1825,7 @@ describe('#42 and #43: handler cases the issues list', () => {
     const reply = deferred<HttpReply>();
     // The first assessment hangs; the next dispatch gets its own, which keeps the parent's model.
     const f = fakeEngine({ respond: (req) => (f.sent.length === 1 ? reply.promise : answering({ ...CLEAR, tier: ['deep', 0.95] })(req)) });
-    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    router.agentOffer(OFFER_BUILT_IN('Explore'));
     const n = spawnNext();
     const run = router.agentSpawn(f.engine, spawn(), n.next);
     await vi.waitFor(() => expect(f.sent).toHaveLength(1));
@@ -1859,7 +1849,7 @@ describe('#42 and #43: handler cases the issues list', () => {
     for (const e of [spawn({ prompt: `Call the API with ${secret} and list the results.` }), spawn({ description: `use ${secret}` })]) {
       const router = createRouter(configOf(SPAWN_ONLY));
       const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['fast', 0.95] }) });
-      router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+      router.agentOffer(OFFER_BUILT_IN('Explore'));
       const n = spawnNext();
       await router.agentSpawn(f.engine, e, n.next);
       expect(n.calls).toEqual([e]);
@@ -1943,7 +1933,7 @@ describe('#81: control correctness', () => {
     for (const [e, options] of cases) {
       const router = createRouter(configOf({ ...CHILD, ...options }));
       const f = fakeEngine({ respond: answering({ ...CLEAR, effort: ['low', 0.95] }) });
-      router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+      router.agentOffer(OFFER_BUILT_IN('Explore'));
       const s = spawnNext(() => ({ model: 'claude-haiku-5-5', agentId: 'a1' }));
       await router.agentSpawn(f.engine, e, s.next);
       expect(s.calls, JSON.stringify(e)).toEqual([e]);
@@ -1961,7 +1951,7 @@ describe('#81: control correctness', () => {
   it("keeps a subagent's answer to its own run: a later run under a new turn id goes native", async () => {
     const router = createRouter(configOf(CHILD));
     const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', 0.95], effort: ['low', 0.95] }) });
-    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    router.agentOffer(OFFER_BUILT_IN('Explore'));
     await router.agentSpawn(f.engine, spawn(), spawnNext(() => ({ model: 'claude-opus-5-5', agentId: 'a1' })).next);
     const n = streamNext<TurnStepEvent>();
     await drain(router.turnStep(f.engine, childStep(), n.next));
@@ -2000,7 +1990,7 @@ describe('#81: control correctness', () => {
 
     const spawns = createRouter(configOf(CHILD));
     const g = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', 0.95], effort: ['low', 0.95] }) });
-    spawns.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    spawns.agentOffer(OFFER_BUILT_IN('Explore'));
     await spawns.agentSpawn(g.engine, spawn(), spawnNext(() => ({ model: 'claude-opus-5-5', agentId: 'a1' })).next);
     const childBad = failing();
     await expect(drain(spawns.turnStep(g.engine, childStep(), childBad.next))).rejects.toThrow('overloaded');
@@ -2045,7 +2035,7 @@ describe('#81: control correctness', () => {
     expect(calls).toHaveLength(2);
 
     // A spawn's denial is returned as the host gave it.
-    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    router.agentOffer(OFFER_BUILT_IN('Explore'));
     const denial = { deny: 'policy' };
     const denied = spawnNext(() => denial);
     expect(await router.agentSpawn(f.engine, spawn(), denied.next)).toBe(denial);
@@ -2062,7 +2052,7 @@ describe('#81: control correctness', () => {
         return answering({ ...CLEAR, tier: ['deep', 0.95], effort: text === 'first' ? ['low', 0.95] : ['medium', 0.95] })(req);
       },
     });
-    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    router.agentOffer(OFFER_BUILT_IN('Explore'));
     const runA = router.agentSpawn(f.engine, spawn({ prompt: 'first' }), spawnNext(() => ({ model: 'claude-opus-5-5', agentId: 'a1' })).next);
     await vi.waitFor(() => expect(f.sent).toHaveLength(1));
     // The second spawn is answered and started while the first still waits on Jev.
@@ -2168,7 +2158,7 @@ describe('complete preparation budget and cache feasibility (#111)', () => {
           return new Promise(() => {});
         };
       else f.engine.availableModels = () => { reads++; return new Promise(() => {}); };
-      router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+      router.agentOffer(OFFER_BUILT_IN('Explore'));
       for (let i = 0; i < 5; i++) {
         const n = spawnNext();
         const e = spawn({ tool_use_id: `${stage}${i}` });
@@ -2284,7 +2274,7 @@ describe('bounded child history question feasibility (#140)', () => {
     router.agentOffer(OFFER_BUILT_IN('general-purpose'));
     saturate(router);
     const n = spawnNext(e => ({ model: e.model ?? 'claude-opus-5-5', agentId: 'new-child' }));
-    await router.agentSpawn(f.engine, spawn(), n.next);
+    await router.agentSpawn(f.engine, spawn({ subagentType: 'general-purpose' }), n.next);
     expect(f.sent).toHaveLength(1);
     expect(Object.keys(f.sent[0]!.questions)).toEqual(['capability', 'control', 'action_risk']);
     expect(n.calls[0]!.model).toBe('claude-sonnet-5-5');
@@ -2304,7 +2294,7 @@ describe('bounded child history question feasibility (#140)', () => {
     const f = fakeEngine({ respond: req => { saturate(router); return answering({ ...CLEAR, tier: ['standard', 0.95], effort: ['low', 0.95] })(req); } });
     router.agentOffer(OFFER_BUILT_IN('general-purpose'));
     const n = spawnNext(e => ({ model: e.model ?? 'claude-opus-5-5', agentId: 'a1' }));
-    await router.agentSpawn(f.engine, spawn(), n.next);
+    await router.agentSpawn(f.engine, spawn({ subagentType: 'general-purpose' }), n.next);
     expect(f.sent).toHaveLength(1); expect(n.calls[0]!.model).toBe('claude-sonnet-5-5');
     const stepNext = streamNext<TurnStepEvent>();
     await drain(router.turnStep(f.engine, childStep({ model: 'claude-haiku-5-5' }), stepNext.next));
@@ -2314,18 +2304,18 @@ describe('bounded child history question feasibility (#140)', () => {
   it('keeps old mappings and resets saturation only for a new session', async () => {
     const router = createRouter(configOf(CHILD));
     const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', 0.95], effort: ['low', 0.95] }) });
-    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    router.agentOffer(OFFER_BUILT_IN('Explore'));
     await router.agentSpawn(f.engine, spawn(), spawnNext(() => ({ model: 'claude-opus-5-5', agentId: 'a1' })).next);
     saturate(router);
     const n = streamNext<TurnStepEvent>(); await drain(router.turnStep(f.engine, childStep(), n.next));
     expect(n.calls[0]!.effort).toBe('low');
-    router.sessionEnd(); router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    router.sessionEnd(); router.agentOffer(OFFER_BUILT_IN('Explore'));
     await router.agentSpawn(f.engine, spawn(), spawnNext().next);
     expect(f.sent.at(-1)!.questions).toHaveProperty('effort_0');
   });
   it('keeps necessary pin checks but sends no question when the model is pinned', async () => {
     const router = createRouter(configOf(CHILD)); const f = fakeEngine({ pins: { subagentModel: true } });
-    router.agentOffer(OFFER_BUILT_IN('general-purpose')); saturate(router);
+    router.agentOffer(OFFER_BUILT_IN('Explore')); saturate(router);
     const n = spawnNext(); await router.agentSpawn(f.engine, spawn(), n.next);
     expect(f.sent).toHaveLength(0); expect(n.calls).toEqual([spawn()]);
   });
@@ -2338,7 +2328,7 @@ describe('bounded child history question feasibility (#140)', () => {
       return { ...response, text: JSON.stringify(body) };
     } });
     router.agentOffer(OFFER_BUILT_IN('general-purpose')); saturate(router);
-    const n = spawnNext(); await router.agentSpawn(f.engine, spawn(), n.next);
+    const n = spawnNext(); await router.agentSpawn(f.engine, spawn({ subagentType: 'general-purpose' }), n.next);
     expect(n.calls[0]!.model).toBe('claude-sonnet-5-5');
     expect(f.sent[0]!.questions).not.toHaveProperty('effort');
     expect(f.logs.find(l => l['event'] === 'spawn')?.['assessment']).toBe('ok');
@@ -2360,7 +2350,7 @@ describe('native spawn outcome observability', () => {
 
   it('records a denial without changing the input or spawning twice', async () => {
     const router = createRouter(configOf(NATIVE));
-    const f = fakeEngine(); router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    const f = fakeEngine(); router.agentOffer(OFFER_BUILT_IN('Explore'));
     const e = spawn({ model: 'claude-opus-5-5' }); const outcome: SpawnOutcome = { deny: 'native refusal' };
     const n = spawnNext(() => outcome);
     expect(await router.agentSpawn(f.engine, e, n.next)).toBe(outcome);
@@ -2399,7 +2389,7 @@ describe('native spawn outcome observability', () => {
 
   it('never holds the spawn result on a stalled pin read behind a mismatch', async () => {
     const router = createRouter(configOf(NATIVE));
-    const f = fakeEngine(); f.engine.pins = () => new Promise(() => {}); router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    const f = fakeEngine(); f.engine.pins = () => new Promise(() => {}); router.agentOffer(OFFER_BUILT_IN('Explore'));
     const run = router.agentSpawn(f.engine, spawn({ model: 'claude-opus-5-5' }), spawnNext(() => ({ model: 'claude-sonnet-5-5' })).next);
     await settle(); f.expire(); await run;
     expect(f.logs.find(r => r.event === 'spawn_native_result')).toMatchObject({ requested: null, observed: 'claude-sonnet-5-5', confirmation: 'unobserved' });
@@ -2407,7 +2397,7 @@ describe('native spawn outcome observability', () => {
 
   it('records a Router patch as a spawn result against the patched model, not as a native one', async () => {
     const router = createRouter(configOf(SPAWN_ONLY));
-    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['fast', 0.95] }) }); router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['fast', 0.95] }) }); router.agentOffer(OFFER_BUILT_IN('Explore'));
     await router.agentSpawn(f.engine, spawn(), spawnNext(() => ({ model: 'claude-sonnet-5-5' })).next);
     expect(f.logs.some(r => r.event === 'spawn_native_result')).toBe(false);
     expect(f.logs.find(r => r.event === 'spawn_result')).toMatchObject({ requested: 'claude-haiku-5-5', observed: 'claude-sonnet-5-5', reason: 'model_mismatch' });
@@ -2501,7 +2491,7 @@ describe('root baseline across a resume', () => {
   it("starts a main-loop subagent on the native model while the main loop is the drift; a subagent's own child keeps its parent", async () => {
     const resumed = processOf(DRIFTED(), KEEP, undefined, { routeSubagentModel: true });
     await turn(resumed, 't1', 'claude-haiku-5-5', 'medium', 40);
-    resumed.router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    resumed.router.agentOffer(OFFER_BUILT_IN('Explore'));
     const main = spawnNext();
     await resumed.router.agentSpawn(resumed.f.engine, spawn({ parentModel: 'claude-haiku-5-5' }), main.next);
     expect(main.calls.map(c => [c.model, c.parentModel])).toEqual([['claude-opus-5-5', 'claude-haiku-5-5']]);
@@ -2655,7 +2645,7 @@ describe('root baseline across a resume', () => {
     expect(await turn(resumed, 't1', 'claude-haiku-5-5', 'medium', 40)).toEqual([[native, 'xhigh'], [native, 'xhigh']]);
     if (native === 'claude-opus-5-5') resumed.f.allowed.models = ['claude-haiku-5-5'];
     spawning = true;
-    resumed.router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    resumed.router.agentOffer(OFFER_BUILT_IN('Explore'));
     const main = spawnNext();
     await resumed.router.agentSpawn(resumed.f.engine, spawn({ parentModel: 'claude-haiku-5-5' }), main.next);
     expect(main.calls).toHaveLength(1);

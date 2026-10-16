@@ -32,12 +32,6 @@
       "type": "boolean",
       "default": true
     },
-    "routeSpawnByTools": {
-      "title": "Bound subagent models by tools",
-      "description": "On a clear, ordinary, unlocked routine or mechanical answer, run a subagent that cannot edit (no Edit, Write, NotebookEdit or Bash) on the cheapest role and one that can edit on the standard role, never below it unless its own model is; never above its native or declared model, and one whose tools are unknown keeps that model. Off until verified.",
-      "type": "boolean",
-      "default": false
-    },
     "routeSubagentEffort": {
       "title": "Route subagent effort",
       "description": "Set each subagent's reasoning effort from its task, on every request its loop makes.",

@@ -17,7 +17,6 @@ describe('resolveConfig', () => {
       allowFable: false,
       routeSubagentModel: true,
       routeExplicitSpawnModel: true,
-      routeSpawnByTools: false,
       routeSubagentEffort: true,
       routeMainEffort: true,
       routeMainModel: true,

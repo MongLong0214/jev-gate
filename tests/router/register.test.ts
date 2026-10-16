@@ -91,13 +91,13 @@ const SPAWN = {
   tool_use_id: 'toolu_1',
   prompt: 'List the files under src/ that import ./config.',
   description: 'list config imports',
-  subagentType: 'general-purpose',
+  subagentType: 'Explore',
   provider: { plugin: 'engine', tier: 'core' },
   parentModel: 'claude-opus-5-5',
   background: false,
   fork: false,
 };
-const OFFER = { agent: 'general-purpose', description: 'General agent', source: 'built-in', provider: { plugin: 'engine', tier: 'core' } };
+const OFFER = { agent: 'Explore', description: 'Explore agent', source: 'built-in', provider: { plugin: 'engine', tier: 'core' } };
 
 /** Offers the built-in, then spawns it; returns the model the engine was asked for. */
 const spawnThrough = async (hooks: Map<string, Hook>, host: ReturnType<typeof fakeHost>): Promise<string | undefined> => {
@@ -155,9 +155,10 @@ describe('register', () => {
       let asked: string | undefined;
       const hooks = await registered({ enabled: true, routeMainEffort: false, routeMainModel: false });
       await hooks.get('agent.spawn')?.(host.$, { ...SPAWN, subagentType, provider: { plugin: 'user', tier: 'local' } }, withSignal(async (e: { model?: string }) => { asked = e.model; return { model: e.model ?? 'claude-opus-5-5' }; }));
-      return { asked, read: read.filter(r => r.includes('/agents/')), logs: host.logs.join('\n') };
+      // The model and the tools are each read from the same resolved file.
+      return { asked, read: [...new Set(read.filter(r => r.includes('/agents/')))], logs: host.logs.join('\n') };
     };
-    const user = await run('guardian', { '/cfg/agents/guardian.md': '---\nname: guardian\nmodel: opus\n---\nReview.\n' });
+    const user = await run('guardian', { '/cfg/agents/guardian.md': '---\nname: guardian\nmodel: opus\ntools: Read, Grep\n---\nReview.\n' });
     expect(user.read).toEqual(['/proj/.claude/agents/guardian.md', '/cfg/agents/guardian.md']);
     expect(user.logs).toContain('"from":"claude-opus-5-5"');
     expect(user.asked).toBe('claude-haiku-5-5');
