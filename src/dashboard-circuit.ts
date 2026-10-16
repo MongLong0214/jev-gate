@@ -1,28 +1,32 @@
 /** The circuit is one persistent DOM. Values change in place, so a live update never moves the layout; one recorded Jev response is one round trip on the rail. */
 export const CIRCUIT_CSS = `
-.circuit{position:relative;padding:14px 16px 16px}.grp{font-size:12px;color:var(--faint);margin:2px 0 8px}.cells8{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
-.node{position:relative;z-index:1;border:1px solid var(--line);border-radius:8px;padding:11px 12px 0;background:var(--bg);display:flex;flex-direction:column;gap:4px;min-height:132px;min-width:0;overflow:hidden;text-align:left;font:inherit;color:inherit;cursor:pointer;appearance:none;transition:background .5s,border-color .2s}
+.circuit{position:relative;padding:14px 16px 16px}.grp{height:18px;line-height:18px;font-size:12px;color:var(--faint);margin:2px 0 8px}.cells8{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.node{position:relative;z-index:1;border:1px solid var(--line);border-radius:8px;padding:11px 12px 0;background:var(--bg);display:flex;flex-direction:column;gap:4px;height:132px;min-width:0;overflow:hidden;text-align:left;font:inherit;color:inherit;cursor:pointer;appearance:none;transition:background .5s,border-color .2s}
 .node:hover{border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}.node.sel{border-color:var(--accent)}.node.zap{background:color-mix(in srgb,var(--accent) 16%,var(--bg));transition:none}
-.node .t{font-size:13px;font-weight:600;display:flex;align-items:center;gap:6px;white-space:nowrap}.node .t i{width:6px;height:6px;border-radius:50%;background:var(--faint);flex:none}.node.live .t i{background:var(--accent)}.node.err .t i{background:var(--err)}
-.node .d{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.node .d b{font-weight:500;color:var(--ink);font-variant-numeric:tabular-nums;transition:color .8s}.node.idle .d b{color:var(--faint)}.node .dec.flash b{color:var(--accent);transition:none}
-.node .dec b span{display:inline-block;margin-right:.45em}.node .dec b span:last-child{margin-right:0}.node[data-feature=router] .dec .s0{min-width:3.3em}.node[data-feature=router] .dec .s1{min-width:3.9em}
-.node{container-type:inline-size}@container (max-width:150px){.node .dec b{display:block}}
-.node .foot{margin-top:auto;display:flex;align-items:center;gap:6px;font-size:11px;color:var(--faint)}.node .ago{margin-left:auto;min-width:44px;text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
-.strip{position:relative;display:block;height:14px;margin:6px -12px 0;border-top:1px solid var(--line);overflow:hidden}.strip .tr{position:absolute;inset:0}
+.node .t{height:18px;font-size:13px;font-weight:600;display:flex;align-items:center;gap:6px;white-space:nowrap}.node .t i{width:6px;height:6px;border-radius:50%;background:var(--faint);flex:none}.node.live .t i{background:var(--accent)}.node.err .t i{background:var(--err)}
+.node .d{height:16px;line-height:16px;font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.node .d b{font-weight:500;color:var(--ink);font-variant-numeric:tabular-nums;transition:color .8s}.node.idle .d b{color:var(--faint)}.node .dec.flash b{color:var(--accent);transition:none}
+.node .dec b span{display:inline-block;margin-right:.45em}.node .dec b span:last-child{margin-right:0}/* A value followed by its confidence or effort keeps a fixed width, so the second part never moves. */
+.node .dec .s0:not(:last-child){width:4.7em;overflow:hidden;text-overflow:ellipsis;vertical-align:top}.node[data-feature=router] .dec .s0:not(:last-child){width:3.4em}.node[data-feature=router] .dec .s1{min-width:3.9em}
+/* A narrow card drops the question label before the value rather than wrapping, so every card keeps its height. */
+.node{container-type:inline-size}@container (max-width:180px){.node .dec .dl{display:none}}
+/* One fixed line each for the recorded reason and the decision's probability, empty but present when unrecorded. */
+.node .nt{height:15px;line-height:15px;font-size:11px;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.node .pb{display:block;flex:none;height:2px;background:var(--line);border-radius:1px}.node .pb i{display:block;height:100%;background:var(--accent);border-radius:1px;transition:width .12s ease-out}
+.node .foot{margin-top:auto;height:14px;display:flex;align-items:center;gap:6px;font-size:11px;color:var(--faint)}.node .ago{margin-left:auto;width:64px;overflow:hidden;text-overflow:ellipsis;text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.strip{position:relative;display:block;height:14px;margin:2px -12px 0;border-top:1px solid var(--line);overflow:hidden}.strip .tr{position:absolute;inset:0}
 .strip i{position:absolute;bottom:3px;width:1.5px;height:7px;background:var(--accent);border-radius:1px;animation:slide 60s linear forwards}.node.idle .strip i{background:var(--faint)}
 @keyframes slide{from{left:100%}to{left:0}}@keyframes tw{0%,100%{opacity:1}50%{opacity:.25}}
-.rail{position:relative;z-index:1;display:flex;align-items:center;gap:10px;margin:14px 0}.rail .nm{font-size:12px;font-weight:600;color:var(--accent)}.rail .ln{flex:1;height:2px;background:linear-gradient(90deg,var(--rail2),var(--rail) 50%,var(--rail2));border-radius:2px;position:relative}
-.rail .lat{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;min-width:52px;text-align:right}.rail .ln b{position:absolute;top:-3px;width:8px;height:8px;margin-left:-4px;border-radius:50%;background:var(--accent);animation:ping .6s ease-out forwards}
+.rail{position:relative;z-index:1;height:24px;margin:14px 0}.rail .ln{position:absolute;left:0;right:0;top:12px;height:1px;background:var(--spark)}
+.jb{position:absolute;z-index:1;left:0;top:0;width:92px;height:24px;display:flex;align-items:center;gap:6px;padding:0 8px;border:1px solid var(--spark);border-radius:6px;background:var(--paper);font-size:12px;font-weight:600;white-space:nowrap;transition:border-color .15s}.jb i{width:6px;height:6px;border-radius:50%;background:var(--faint);flex:none;transition:background .15s}.jb .v{font-weight:400;color:var(--faint);font-variant-numeric:tabular-nums}.rail.wait .jb{border-color:var(--accent)}.rail.wait .jb i{background:var(--accent)}
+.rail .ln b{position:absolute;top:-4px;width:8px;height:8px;margin-left:-4px;border-radius:50%;background:var(--accent);animation:ping .6s ease-out forwards}
 @keyframes ping{from{box-shadow:0 0 0 0 color-mix(in srgb,var(--accent) 60%,transparent);opacity:1}to{box-shadow:0 0 0 10px transparent;opacity:0}}
 svg.wires{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible}svg.wires line{stroke:var(--line);stroke-width:1}
-/* Ambient flow only: a soft band and dashed wires that carry no record, never a dot like a Jev call. */
-.rail .ln:after{content:"";position:absolute;inset:-2px 0;border-radius:3px;filter:blur(1.5px);background:linear-gradient(90deg,transparent 44%,color-mix(in srgb,var(--accent) 35%,transparent) 48%,var(--accent) 50%,transparent 51%) no-repeat;background-size:300% 100%;animation:sweep 2.4s linear infinite}
-svg.wires line{stroke:var(--spark);stroke-dasharray:2 6;animation:flow 1.6s linear infinite}@keyframes sweep{from{background-position:100% 0}to{background-position:0 0}}@keyframes flow{to{stroke-dashoffset:-16}}
-.still .rail .ln:after{animation:none;opacity:0}.still svg.wires line{animation:none}
-.trip{position:absolute;z-index:2;width:6px;height:6px;margin:-3px 0 0 -3px;border-radius:50%;background:var(--accent);pointer-events:none}
-.insp .b{padding:14px 16px;display:flex;flex-direction:column;gap:12px}.insp-tags{display:flex;gap:8px;align-items:center}.insp-tags time{margin-left:auto;color:var(--faint)}.insp-desc{font-weight:500}
-.kv{display:grid;grid-template-columns:78px minmax(0,1fr);gap:8px 10px;font-size:13px;margin:0}.kv dt{color:var(--faint)}.kv dd{margin:0;min-width:0;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
-.insp details summary{cursor:pointer;color:var(--muted);font-size:13px}.insp details p{color:var(--faint);font-size:13px;margin:8px 0 0}.link{appearance:none;border:0;background:none;padding:0;text-align:left;font:inherit;font-size:13px;color:var(--accent);cursor:pointer}
+/* Wires carry no record; only a Jev call moves, as a dot. */
+svg.wires line{stroke:var(--spark);stroke-dasharray:2 6}
+.trip{position:absolute;z-index:2;width:6px;height:6px;margin:-3px 0 0 -3px;border-radius:50%;background:var(--accent);pointer-events:none}.trip:after{content:attr(data-ms);position:absolute;left:3px;bottom:9px;transform:translateX(-50%);font-size:10px;line-height:12px;color:var(--accent);white-space:nowrap;font-variant-numeric:tabular-nums}.trip.end{background:none}
+.insp .b{padding:14px 16px;display:flex;flex-direction:column;gap:12px}/* Every inspector line is one fixed line, recorded or not, so a new record never changes its height. */
+.insp-tags{display:flex;gap:8px;align-items:center;height:20px}
+.kv{display:grid;grid-template-columns:78px minmax(0,1fr);gap:8px 10px;font-size:13px;margin:0}.kv dt{color:var(--faint)}.kv dd{margin:0;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
+.insp details summary{cursor:pointer;color:var(--muted);font-size:13px}.insp details p{color:var(--faint);font-size:13px;margin:8px 0 0}.link{appearance:none;border:0;background:none;padding:0;max-width:100%;text-align:left;font:inherit;font-size:13px;color:var(--accent);cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 @media(max-width:640px){svg.wires,.trip{display:none}.cells8{grid-template-columns:repeat(2,minmax(0,1fr))}}
 `;
 
@@ -46,7 +50,7 @@ const motion=()=>!paused&&!$('connection').classList.contains('warn')&&!matchMed
 const modelName=v=>{const m=String(v||'').match(/(haiku|sonnet|opus|fable)|^gpt-[0-9.]+-([a-z]+)$/);return m?m[1]||m[2]:String(v||'').replace(/^claude-/,'')};
 const fmt=t=>{const s=Math.floor(t/1000);return !Number.isFinite(t)?'–':s<2?label('방금','now'):s<60?label(s+'초 전',s+'s ago'):s<3600?label(Math.floor(s/60)+'분 전',Math.floor(s/60)+'m ago'):label(Math.floor(s/3600)+'시간 전',Math.floor(s/3600)+'h ago')};
 const pct=v=>Math.round(v*100)+'%';
-const confRest=rc=>pct(rc.confidence)+(rc.threshold==null?'':' · '+label('변경 기준 ','change threshold ')+pct(rc.threshold)),confText=rc=>rc?.confidence==null?'–':label('확신 ','Confidence ')+confRest(rc);
+
 // #232: a worker result names its contract verdict; only an accept receipt reads as accepted, and a host end is not one.
 const OUTCOME={accepted:['계약 수락','Contract accepted'],rejected:['계약 미충족','Contract not met'],unknown:['판정 미확인','Verdict unknown'],host_ended:['호스트 종료','Host ended']};
 function decisionText(s){if(!s)return '–';if(s.outcome)return label(...OUTCOME[s.outcome]);const c=s.receipt?.choice;
@@ -62,8 +66,10 @@ function setSeg(box,value){const parts=String(value).replace(/ (\\d\\.\\d+)$/,' 
 function ticks(box,records,windowMs,make){const ref=frozenAt??Date.now(),keep=new Set(),still=!motion();if(!box._ids){box._ids=new Set();box.addEventListener('animationend',e=>{if(e.animationName==='slide')e.target.remove()})}
   for(const s of records){const age=Math.max(0,ref-Date.parse(s.at));if(!(age<windowMs))continue;keep.add(s.id);const left=(100-100*age/windowMs).toFixed(2)+'%';if(box._ids.has(s.id)){if(still){const i=box.querySelector('[data-id="'+s.id+'"]');if(i)i.style.left=left}continue}const i=el('i');i.dataset.id=s.id;make?.(i,s);i.style.left=left;i.style.animationDelay=-(age/1000)+'s'+(make?',0s':'');box.append(i)}
   for(const i of [...box.children])if(!keep.has(i.dataset.id))i.remove();box._ids=keep}
-function resetTicks(){for(const box of document.querySelectorAll('.strip .tr,#comm,#ct')){box.replaceChildren();if(box._ids)box._ids=new Set()}}
-function cancelMotion(){for(const t of timers)clearTimeout(t);timers.clear();held.clear();for(const d of document.querySelectorAll('.trip,.rail .ln b'))d.remove()}
+function resetTicks(){for(const box of document.querySelectorAll('.strip .tr,#comm')){box.replaceChildren();if(box._ids)box._ids=new Set()}tl0=null}
+function cancelMotion(){for(const t of timers)clearTimeout(t);timers.clear();held.clear();for(const d of document.querySelectorAll('.trip,.rail .ln b'))d.remove();railWait=0;railMark()}
+// The Jev badge marks a response being awaited: a recorded request without its response, or a dot waiting on the rail.
+let railWait=0,railPend=0;const railMark=()=>$('pipeline').querySelector('.rail')?.classList.toggle('wait',railWait>0||railPend>0),onRail=d=>{railWait=Math.max(0,railWait+d);railMark()};
 const later=(f,ms)=>{const t=setTimeout(()=>{timers.delete(t);f()},ms);timers.add(t)};
 // Every record that is new since the last frame lands on its own, lifecycle, policy and host records included. A frame's records
 // play back across the frame interval by their recorded times and at least a few frames apart, so a burst is a flow.
@@ -77,41 +83,46 @@ function arrivals(ops){const scope=hostFilter+':'+circuitMode+':'+(circuitMode==
 function arrive(s){held.delete(s.runId+' '+s.id);if(data&&motion())land(s)}
 function launch(s){const C=$('pipeline'),b=C.querySelector('[data-feature="'+s.feature+'"]'),ln=C.querySelector('.ln');if(!isCall(s)||!b||!ln||!motion()||(circuitMode==='run'&&s.runId!==selectedRun)){arrive(s);return}
   const c=C.getBoundingClientRect(),l=ln.getBoundingClientRect(),n=b.getBoundingClientRect(),x=n.left+n.width/2-c.left,y=l.top+1-c.top,ny=n.top<l.top?n.bottom-c.top:n.top-c.top;
-  const dot=(y0,y1,done)=>{const d=el('i','trip');d.style.left=x+'px';d.style.top=y0+'px';C.append(d);if(!d.animate||matchMedia('(max-width:640px)').matches){later(()=>{d.remove();done()},120);return}d.animate([{top:y0+'px'},{top:y1+'px'}],{duration:120,easing:'ease-out'}).onfinish=()=>{d.remove();if(motion())done();else arrive(s)}};
-  dot(ny,y,()=>{const p=el('b');p.style.left=(x-(l.left-c.left))+'px';ln.append(p);p.addEventListener('animationend',()=>p.remove());C.querySelector('.lat').textContent=ms(s.durationMs);later(()=>dot(y,ny,()=>arrive(s)),Math.max(30,s.durationMs/5))})}
+  // The returning dot carries its response time and leaves it in view a moment after it lands.
+  // A dot moves by transform only and stays where it landed, so it never takes part in layout.
+  const dot=(y0,y1,done,lab)=>{const d=el('i','trip');if(lab)d.dataset.ms=lab;d.style.left=x+'px';d.style.top=y0+'px';C.append(d);const end=()=>{if(!lab)d.remove();else{d.classList.add('end');later(()=>d.remove(),700)}};if(!d.animate||matchMedia('(max-width:640px)').matches){later(()=>{end();done()},120);return}d.animate([{transform:'none'},{transform:'translateY('+(y1-y0)+'px)'}],{duration:120,easing:'ease-out',fill:'forwards'}).onfinish=()=>{end();if(motion())done();else arrive(s)}};
+  dot(ny,y,()=>{const p=el('b');p.style.left=(x-(l.left-c.left))+'px';ln.append(p);p.addEventListener('animationend',()=>p.remove());onRail(1);later(()=>{onRail(-1);dot(y,ny,()=>arrive(s),ms(s.durationMs))},Math.max(30,s.durationMs/5))})}
 function wires(){const C=$('pipeline'),svgEl=C.querySelector('svg.wires'),ln=C.querySelector('.ln');if(!svgEl||!ln)return;const c=C.getBoundingClientRect(),l=ln.getBoundingClientRect(),y=l.top+1-c.top;svgEl.replaceChildren();
   for(const n of C.querySelectorAll('.node')){const b=n.getBoundingClientRect(),x=b.left+b.width/2-c.left;svgEl.append(svg('line',{x1:x,x2:x,y1:b.top<l.top?b.bottom-c.top:b.top-c.top,y2:y}))}}
-function buildCircuit(root){const wire=svg('svg',{class:'wires','aria-hidden':'true'}),node=id=>{const b=el('button','node idle');b.type='button';b.dataset.feature=id;b.setAttribute('aria-controls','circuit-inspector');const t=el('span','t');const dot=el('i');dot.setAttribute('aria-hidden','true');t.append(dot,el('span','nm'));const dec=el('span','d dec');dec.append(el('span','dl'),document.createTextNode(' '),el('b'));const foot=el('span','foot');foot.append(el('span','ago'));const strip=el('span','strip');strip.setAttribute('aria-hidden','true');strip.append(el('span','tr'));b.append(t,el('span','d ds'),dec,foot,strip);return b};
-  const cells=ids=>{const g=el('div','cells8');for(const id of ids)g.append(node(id));return g};const rail=el('div','rail');const ln=el('div','ln');ln.setAttribute('aria-hidden','true');rail.append(el('span','nm','Jev'),ln,el('span','lat','–'));
-  root.append(wire,el('div','grp gate-grp'),cells(CIRCUIT.slice(0,4)),rail,el('div','grp mod-grp'),cells(CIRCUIT.slice(4)));if(typeof ResizeObserver!=='undefined')new ResizeObserver(()=>requestAnimationFrame(wires)).observe(root)}
+function buildCircuit(root){const wire=svg('svg',{class:'wires','aria-hidden':'true'}),node=id=>{const b=el('button','node idle');b.type='button';b.dataset.feature=id;b.setAttribute('aria-controls','circuit-inspector');const t=el('span','t');const dot=el('i');dot.setAttribute('aria-hidden','true');t.append(dot,el('span','nm',featureInfo[id][0]));const dec=el('span','d dec'),v=el('b');setSeg(v,'–');dec.append(el('span','dl',label(...NODE[id][1])),document.createTextNode(' '),v);const foot=el('span','foot');foot.append(el('span','ago'));const strip=el('span','strip');strip.setAttribute('aria-hidden','true');strip.append(el('span','tr'));const pb=el('span','pb');pb.setAttribute('aria-hidden','true');pb.append(el('i'));b.append(t,el('span','d ds',label(...NODE[id][0])),dec,el('span','nt'),pb,foot,strip);return b};
+  const cells=ids=>{const g=el('div','cells8');for(const id of ids)g.append(node(id));return g};const rail=el('div','rail'),ln=el('div','ln'),jb=el('span','jb');ln.setAttribute('aria-hidden','true');jb.setAttribute('aria-hidden','true');jb.append(el('i'),'Jev',el('span','v'));rail.append(ln,jb);
+  root.append(wire,el('div','grp gate-grp',label('Gate 단계','Gate stages')),cells(CIRCUIT.slice(0,4)),rail,el('div','grp mod-grp',label('독립 기능','Independent features')),cells(CIRCUIT.slice(4)));if(typeof ResizeObserver!=='undefined')new ResizeObserver(()=>requestAnimationFrame(wires)).observe(root)}
 // Recorded steps of the last window that have landed; a lifecycle record moves a strip even though it is no decision.
 const recent=(ops,win,ok)=>{const ref=frozenAt??Date.now(),out=[];for(const r of ops.runs)if(ref-Date.parse(r.lastAt)<win)for(const s of r.steps)if(ok(s,r)&&!isHeld(r.id,s.id)&&ref-Date.parse(s.at)<win)out.push(s);return out};
 const strip=(ops,id)=>ticks($('pipeline').querySelector('[data-feature="'+id+'"] .strip .tr'),recent(ops,ACTIVITY_MS,(s,r)=>s.feature===id&&(circuitMode==='live'||r.id===selectedRun)),ACTIVITY_MS);
-function paint(b,last,f,ref){const age=last?ref-Date.parse(last.at):Infinity;b._last=last;setSeg(b.querySelector('.dec b'),last?valueText(last):'–');
+function paint(b,last,f,ref,run){const age=last?ref-Date.parse(last.at):Infinity,x=last&&run?loaded(run.id,last):last,c=x?.receipt?.confidence;b._last=last;setSeg(b.querySelector('.dec b'),last?valueText(last):'–');
+  put(b.querySelector('.nt'),x?note(x,run):'');b.querySelector('.pb i').style.width=c==null?'0%':pct(c);
   const ago=b.querySelector('.ago');ago.dataset.at=last?.at||'';ago.dataset.none=last?'':f?.state==='unsupported'?label('미지원','Unsupported'):f?.state==='unavailable'?label('기록원 없음','No source'):'–';
   b.classList.toggle('live',age<ACTIVITY_MS);b.classList.toggle('idle',!(age<ACTIVITY_MS));b.classList.toggle('err',last?.state==='error'||last?.model?.status==='mismatch')}
-function pipeline(ops,calls){const root=$('pipeline');if(!root.querySelector('.node'))buildCircuit(root);
+function pipeline(ops,calls,pend){const root=$('pipeline');if(!root.querySelector('.node'))buildCircuit(root);
   root.querySelector('.gate-grp').textContent=label('Gate 단계','Gate stages');root.querySelector('.mod-grp').textContent=label('독립 기능','Independent features');
   for(const b of $('circuit-mode').querySelectorAll('button'))b.setAttribute('aria-pressed',String(b.dataset.circuitMode===circuitMode));
-  const ref=frozenAt??Date.now(),last={};for(const r of ops.runs)if(circuitMode==='live'||r.id===selectedRun)for(const s of r.steps)if(!s.lifecycle&&NODE[s.feature]&&!isHeld(r.id,s.id)&&!(last[s.feature]?.at>=s.at))last[s.feature]=s;
+  const ref=frozenAt??Date.now(),last={},runOf={};for(const r of ops.runs)if(circuitMode==='live'||r.id===selectedRun)for(const s of r.steps)if(!s.lifecycle&&NODE[s.feature]&&!isHeld(r.id,s.id)&&!(last[s.feature]?.at>=s.at)){last[s.feature]=s;runOf[s.feature]=r}
   if(!circuitFeature)circuitFeature=CIRCUIT.reduce((a,id)=>last[id]&&!(last[a]?.at>=last[id].at)?id:a,null)||'admission';
   for(const id of CIRCUIT){const b=root.querySelector('[data-feature="'+id+'"]');
-    b.querySelector('.nm').textContent=tr(featureInfo[id][0]);b.querySelector('.ds').textContent=label(...NODE[id][0]);b.querySelector('.dl').textContent=label(...NODE[id][1]);paint(b,last[id],ops.features.find(f=>f.id===id),ref);
+    b.querySelector('.nm').textContent=tr(featureInfo[id][0]);b.querySelector('.ds').textContent=label(...NODE[id][0]);b.querySelector('.dl').textContent=label(...NODE[id][1]);paint(b,last[id],ops.features.find(f=>f.id===id),ref,runOf[id]);
     b.classList.toggle('sel',circuitFeature===id);b.setAttribute('aria-pressed',String(circuitFeature===id));strip(ops,id)}
-  // While a trip is in flight its ping owns the latency label, so a redraw never steps it back to an older call.
-  const latest=calls.find(s=>circuitMode==='live'||s.runId===selectedRun);if(!held.size)root.querySelector('.lat').textContent=latest?ms(latest.durationMs):'–';
+  // The badge names the Jev version the latest response recorded; with no recorded version it reads Jev alone.
+  const mine=s=>circuitMode==='live'||s.runId===selectedRun,v=calls.find(s=>mine(s)&&s.receipt?.model)?.receipt.model.match(/^jev-([0-9]+\\.[0-9]+)/);put(root.querySelector('.jb .v'),v?v[1]:'');railPend=pend.filter(mine).length;railMark();
   circuitInspector(ops,last[circuitFeature])}
 // A landed record flashes its node and strip; it becomes the node's value only when it is a decision newer than the shown one.
 function landNode(ops,s){const b=$('pipeline').querySelector('[data-feature="'+s.feature+'"]');if(!b||circuitMode==='run'&&s.runId!==selectedRun)return;
-  if(!s.lifecycle&&!(b._last?.at>s.at)){paint(b,s,ops.features.find(f=>f.id===s.feature),frozenAt??Date.now());if(circuitFeature===s.feature)circuitInspector(ops,s)}strip(ops,s.feature);
+  if(!s.lifecycle&&!(b._last?.at>s.at)){paint(b,s,ops.features.find(f=>f.id===s.feature),frozenAt??Date.now(),ops.runs.find(r=>r.id===s.runId));if(circuitFeature===s.feature)circuitInspector(ops,s)}strip(ops,s.feature);
   const d=b.querySelector('.dec');b.classList.add('zap');d.classList.add('flash');setTimeout(()=>b.classList.remove('zap'),160);requestAnimationFrame(()=>requestAnimationFrame(()=>d.classList.remove('flash')))}
 // The inspector is rebuilt only when its stage, its record or the language changes, so an open help panel stays put.
 function circuitInspector(ops,last){const root=$('circuit-inspector'),id=circuitFeature||'admission',key=[id,last,lang];if(root._key?.every((v,k)=>v===key[k]))return;root._key=key;
   const guide=GUIDE[id],i=lang==='en'?1:0,open=root.querySelector('details')?.open,run=last?ops.runs.find(r=>r.steps.some(s=>s.id===last.id)):null;root.replaceChildren();
   const head=el('div','ch');head.append(el('h2','',tr(featureInfo[id][0])),el('span','hint',label('단계 상세','Stage details')));const body=el('div','b');
-  if(last){const tags=el('div','insp-tags');if(run?.host)tags.append(el('span','tag '+(run.host==='codex'?'cx':'cl'),run.host==='codex'?'Codex':'Claude'));tags.append(el('span','tag '+({done:'ok',active:'run',error:'er'}[last.state]||'wa'),tr(state[last.state])),el('time','mono',time(last.at)));body.append(tags)}
-  body.append(el('div','insp-desc',label(...NODE[id][0])));const kv=el('dl','kv');const row=(k,v,cls)=>{const d=el('dd',cls||'',v);kv.append(el('dt','',k),d);return d};
-  row(label('판정','Decision'),last?decisionText(last):'–');row(label('신뢰도','Confidence'),confText(last?.receipt));const age=row(label('갱신','Updated'),last?'':'–','ago');age.dataset.at=last?.at||'';age.dataset.none='–';row(label('Jev 응답','Jev response'),last?.durationMs!==undefined&&last.lane==='jev'?ms(last.durationMs):'–');body.append(kv);
+  const tags=el('div','insp-tags');if(run?.host)tags.append(el('span','tag '+(run.host==='codex'?'cx':'cl'),run.host==='codex'?'Codex':'Claude'));body.append(tags);
+  const kv=el('dl','kv');const row=(k,v,cls)=>{const d=el('dd',cls||'',v);kv.append(el('dt','',k),d);return d};
+  // The selected card already shows its question, decision, confidence, state and age, and the decision basis panel holds the
+  // probability and threshold; the inspector adds only the host and the response time.
+  row(label('Jev 응답','Jev response'),last?.durationMs!==undefined&&last.lane==='jev'?ms(last.durationMs):'–');body.append(kv);
   const help=el('details');help.append(el('summary','',label('이 단계가 하는 일','How this stage works')),el('p','',guide.what[i]+' '+guide.jev[i]));help.open=!!open;body.append(help);
   const go=el('button','link',last?label('이 실행의 판단 근거와 시간축 보기 ↗','Inspect this execution and its evidence ↗'):label('이 기능의 실행 기록 보기 ↗','Show executions for this feature ↗'));go.type='button';go.dataset.inspectFeature=id;if(run)go.dataset.inspectRun=run.id;if(last)go.dataset.inspectStep=last.id;body.append(go);root.append(head,body)}
 window.addEventListener('resize',()=>requestAnimationFrame(wires));

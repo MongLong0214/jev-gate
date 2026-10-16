@@ -4,8 +4,8 @@ import { routingContext, type RoutingCache } from '../../mods/router/hooks/conte
 import { looksSecret } from '../../mods/router/hooks/secret.ts';
 import { MAX_REQUEST_TOKENS, estimateTokens } from '../../mods/router/hooks/client.ts';
 import { callJev } from '../jev.js';
-import { routeCost } from '../route-cost.js';
-import type { ModelCache } from '../cost.js';
+import { costHold, routeCost } from '../route-cost.js';
+import { ModelCache } from '../cost.js';
 import type { Env } from '../config.js';
 import type { TraceWriter } from '../trace.js';
 import type { CodexPolicyConfig } from './config.js';
@@ -77,14 +77,14 @@ export const routeCodex = async (args: {
   const out = await callJev(request, { apiKey: env['TYPESAFE_API_KEY'], deadlineMs: config.router.timeoutMs, ...(signal ? { signal } : {}), ...(args.fetchImpl ? { fetchImpl: args.fetchImpl } : {}) });
   const decision = out.ok && out.response.model === config.gate.jevModel && !signal?.aborted ? selectPair(offer, out.response.answers) : { patch: {} as PairPatch, reasons: { model: 'not_asked', effort: 'not_asked' }, diagnostics: null };
   if (moved && !decision.patch.model) { decision.patch = { ...decision.patch, model: moved }; decision.reasons.model = 'superseded_baseline'; }
-  const cost = decision.patch.model && decision.patch.model !== moved ? routeCost('codex', model, decision.patch.model, args.modelCache, args.epoch ?? '', Date.now()) : null;
-  const baseRank = offer.baselineCandidate?.rank, targetRank = offer.candidates.find(c => c.id === decision.patch.model)?.rank;
-  const hold = cost?.hold && baseRank !== undefined && targetRank !== undefined && targetRank < baseRank;
-  if (hold && out.ok) { decision.patch = { ...keepModelPair(offer, out.response.answers).patch, ...native }; decision.reasons.model = 'cost_hold'; }
+  // A thread not yet observed still has a conversation the next turn may return to.
+  const cost = decision.patch.model && decision.patch.model !== moved ? routeCost('codex', model, decision.patch.model, args.modelCache ?? new ModelCache(), args.epoch ?? '', Date.now(), args.child ? 1 : estimateTokens(args.task)) : null;
+  const { hold, reason: costReason } = costHold(cost, offer.baselineCandidate?.rank, offer.candidates.find(c => c.id === decision.patch.model)?.rank);
+  if (hold && out.ok) { decision.patch = { ...keepModelPair(offer, out.response.answers).patch, ...native }; decision.reasons.model = costReason; }
   write('codex_router_result', { ...diagnostic, attempted: true, duration_ms: out.durationMs, ok: out.ok,
     reason: out.ok ? signal?.aborted ? 'aborted' : out.response.model !== config.gate.jevModel ? 'model_mismatch' : null : out.code,
     http: { duration_ms: out.durationMs, code: out.ok ? 'ok' : out.code }, jev: out.ok ? { model: out.response.model, usage: out.response.usage } : null,
     selected_model: decision.patch.model ?? args.model, selected_effort: decision.patch.effort ?? (decision.patch.effortEdit?.kind === 'omit' ? null : args.effort), effort_edit: decision.patch.effortEdit ?? { kind: 'keep' },
-    cost, reasons: decision.reasons, selection: decision.diagnostics, answers: out.ok ? pairReceipt(offer, out.response.answers) : {}, ...(out.ok ? { usage: out.response.usage, returned_model: out.response.model } : {}), applied: false });
+    cost, cost_reason: costReason, reasons: decision.reasons, selection: decision.diagnostics, answers: out.ok ? pairReceipt(offer, out.response.answers) : {}, ...(out.ok ? { usage: out.response.usage, returned_model: out.response.model } : {}), applied: false });
   return decision.patch;
 };

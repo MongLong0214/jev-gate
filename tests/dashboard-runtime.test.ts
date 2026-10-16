@@ -28,7 +28,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_E2E'] !== '1')('packaged automatic da
       const first=readPrivateJson(runtime)!;expect(first['url']).toMatch(/^http:\/\/127\.0\.0\.1:/);
       await vi.waitFor(()=>expect(existsSync(opened)).toBe(true));expect(readFileSync(opened,'utf8').trim().split('\n')).toHaveLength(1);
       expect(await ensureDashboard(join(temp,'codex'),env)).toBe(true);expect(readPrivateJson(runtime)?.['token']).toBe(first['token']);
-      const page=await fetch(String(first['url']));expect(page.status).toBe(200);expect(await page.text()).toContain('now-strip');
+      const page=await fetch(String(first['url']));expect(page.status).toBe(200);expect(await page.text()).toContain('id="pipeline"');
       expect(readFileSync(opened,'utf8').trim().split('\n')).toHaveLength(1);
       writePrivateJson(runtime, { ...first, version: '0.0.0' });
       expect(await ensureDashboard(join(temp,'legacy'),env)).toBe(true);

@@ -31,7 +31,7 @@ const fakeJev = (answers: (ids: string[]) => Record<string, string>): { transpor
       fetch: async (_url, init) => {
         calls.push(init.body);
         const questions = JSON.parse(init.body).questions as Record<string, unknown>;
-        return { status: 200, text: JSON.stringify({ choices: Object.fromEntries(Object.entries(answers(Object.keys(questions))).map(([k, v]) => [k, { choice: v }])), model: 'jev-1.13.0', usage: { input_tokens: 1, output_tokens: 1 } }) };
+        return { status: 200, text: JSON.stringify({ choices: Object.fromEntries(Object.entries(answers(Object.keys(questions))).map(([k, v]) => [k, { choice: v }])), model: 'jev-1.14.0', usage: { input_tokens: 1, output_tokens: 1 } }) };
       },
     },
   };

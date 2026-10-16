@@ -190,7 +190,7 @@ describe('bounds', () => {
       headers.push(new Headers(init.headers).get('authorization')!);
       const body = JSON.parse(String(init.body)) as { questions: Record<string, unknown> };
       expect(String(init.body)).not.toContain('fake-newly-entered-key');
-      return new Response(JSON.stringify({ model: 'jev-1.13.0', answers: Object.fromEntries(Object.keys(body.questions).map(id => [id, { type: 'choice', choice: 'relevant', confidence: .91, probabilities: { relevant: .91, unrelated: .05, needs_context: .04 } }])) }));
+      return new Response(JSON.stringify({ model: 'jev-1.14.0', answers: Object.fromEntries(Object.keys(body.questions).map(id => [id, { type: 'choice', choice: 'relevant', confidence: .91, probabilities: { relevant: .91, unrelated: .05, needs_context: .04 } }])) }));
     });
     const svc = createEvidenceService(await config(root, { remote: true }), { apiKey: null, getApiKey: () => key, fetchImpl: fetchImpl as unknown as typeof fetch });
     expect(await run(svc, { goal: 'widget' })).toMatchObject({ backend: 'local', reasonCodes: ['missing_key'] });
@@ -244,7 +244,7 @@ describe('lexical input', () => {
       requests.push(JSON.parse(String(init.body)) as { state: { goal: string; constraints: string[] } });
       const body = JSON.parse(String(init.body)) as { questions: Record<string, unknown> };
       return new Response(JSON.stringify({
-        model: 'jev-1.13.0',
+        model: 'jev-1.14.0',
         answers: Object.fromEntries(Object.keys(body.questions).map((id) => [id, { type: 'choice', choice: 'relevant', probabilities: { relevant: 0.91, unrelated: 0.05, needs_context: 0.04 }, confidence: 0.91 }])),
         usage: { input_tokens: 1, output_tokens: 1 },
       }), { status: 200 });
@@ -420,7 +420,7 @@ describe('search endings', () => {
     const fetchImpl = vi.fn(async (_url: string, init: RequestInit) => {
       const body = JSON.parse(String(init.body)) as { questions: Record<string, unknown> };
       const answers = Object.fromEntries(Object.keys(body.questions).map((id) => [id, { type: 'choice', choice: 'relevant', probabilities: { relevant: 0.91, unrelated: 0.05, needs_context: 0.04 }, confidence: 0.91 }]));
-      return new Response(JSON.stringify({ model: 'jev-1.13.0', answers, usage: { input_tokens: 1, output_tokens: 1 } }), { status: 200 });
+      return new Response(JSON.stringify({ model: 'jev-1.14.0', answers, usage: { input_tokens: 1, output_tokens: 1 } }), { status: 200 });
     });
     const cache = createJudgementCache(() => 1);
     const reads: string[] = [];

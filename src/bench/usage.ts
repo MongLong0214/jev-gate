@@ -100,6 +100,7 @@ export const familyCosts = (usage: ModelUsage): Partial<Record<Family, number | 
 /** Jev list price frozen with model, date and primary source (#10 §7). Unknown models price as null, never zero. */
 export const JEV_PRICING: Record<string, { usdPerInputMtok: number; source: string; checked: string }> = {
   'jev-1.13.0': { usdPerInputMtok: 0.042, source: 'https://docs.typesafe.ai/models.md', checked: '2026-09-17' },
+  'jev-1.14.0': { usdPerInputMtok: 0.042, source: 'https://docs.typesafe.ai/models.md', checked: '2026-10-16' },
 };
 
 export const estimateJevCostUsd = (model: string | null, inputTokens: number | null): number | null => {

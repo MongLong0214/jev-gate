@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { buildAdmissionRequest } from '../src/admission.js';
 import { DEFAULT_CONFIG } from '../src/config.js';
-import { callJev, JEV_ENDPOINT, MAX_REQUEST_BYTES, PLANNER_TIER_PROFILES, TIER_PROFILES, topChoices, validateChoice } from '../src/jev.js';
+import { callJev, JEV_ENDPOINT, MAX_REQUEST_BYTES, PLANNER_TIER_PROFILES, TIER_PROFILES, topChoices, validateChoice, validateScore } from '../src/jev.js';
 import { ROUTE_ANSWERS, TIERS, type RouteAnswer } from '../src/types.js';
 
 const KEY = 'ts-secret-key-123';
@@ -25,15 +25,18 @@ describe('callJev', () => {
       expect(init.redirect).toBe('error');
       expect((init.headers as Record<string, string>)['authorization']).toBe(`Bearer ${KEY}`);
       expect(String(init.body)).not.toContain(KEY);
-      return new Response(JSON.stringify({ model: 'jev-1.13.0', answers: { execution: {} }, usage: { input_tokens: 5, output_tokens: 1 } }), { status: 200 });
+      return new Response(JSON.stringify({ model: 'jev-1.14.0', answers: { execution: {} }, usage: { input_tokens: 5, output_tokens: 1 } }), { status: 200 });
     });
     const r = await callJev(request, { ...deps, fetchImpl: fetchImpl as unknown as typeof fetch });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
-    expect(r).toMatchObject({ ok: true, status: 200, response: { model: 'jev-1.13.0', usage: { input_tokens: 5 } } });
+    expect(r).toMatchObject({ ok: true, status: 200, response: { model: 'jev-1.14.0', usage: { input_tokens: 5 } } });
   });
 
   it.each([
+    [400, 'http_400'],
     [401, 'http_401'],
+    [413, 'http_413'],
+    [415, 'http_415'],
     [422, 'http_422'],
     [429, 'http_429'],
     [529, 'http_529'],
@@ -42,6 +45,31 @@ describe('callJev', () => {
     const fetchImpl = vi.fn(async () => new Response('{}', { status }));
     expect(await callJev(request, { ...deps, fetchImpl: fetchImpl as unknown as typeof fetch })).toMatchObject({ ok: false, code });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('names a 400 over the context length from the error body observed 2026-10-16', async () => {
+    const body = JSON.stringify({ detail: { error_type: 'max_tokens_exceeded' } });
+    const fetchImpl = vi.fn(async () => new Response(body, { status: 400 }));
+    expect(await callJev(request, { ...deps, fetchImpl: fetchImpl as unknown as typeof fetch })).toMatchObject({ ok: false, code: 'context_exceeded', status: 400 });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const other = async () => new Response(JSON.stringify({ detail: { error_type: 'api_usage_error' } }), { status: 400 });
+    expect(await callJev(request, { ...deps, fetchImpl: other as unknown as typeof fetch })).toMatchObject({ ok: false, code: 'http_400' });
+  });
+
+  it('keeps a plain 400 when the error body is oversized, not JSON, or never finishes', async () => {
+    const named = JSON.stringify({ detail: { error_type: 'max_tokens_exceeded' } });
+    const oversized = `${' '.repeat(8 * 1024)}${named}`;
+    const code = async (make: () => Response, deadlineMs = 1000): Promise<string> => {
+      const r = await callJev(request, { ...deps, deadlineMs, fetchImpl: (async () => make()) as unknown as typeof fetch });
+      return r.ok ? 'ok' : r.code;
+    };
+    expect(await code(() => new Response(oversized, { status: 400 }))).toBe('http_400');
+    expect(await code(() => new Response('<html>bad request</html>', { status: 400 }))).toBe('http_400');
+    expect(await code(() => new Response(null, { status: 400 }))).toBe('http_400');
+    const stalled = (): Response => new Response(new ReadableStream({ start: (c) => c.enqueue(new TextEncoder().encode('{"detail":')) }), { status: 400 });
+    const started = Date.now();
+    expect(await code(stalled, 60)).toBe('http_400');
+    expect(Date.now() - started).toBeLessThan(1000);
   });
 
   it('reports timeout, network failure, invalid body and an oversized request', async () => {
@@ -121,21 +149,21 @@ describe('tier profiles', () => {
 
 describe('usage and response boundaries (JGL-02)', () => {
   const post = async (body: string | Buffer, status = 200): Promise<Awaited<ReturnType<typeof callJev>>> =>
-    await callJev({ model: 'jev-1.13.0', state: {}, questions: {} }, { apiKey: 'k', deadlineMs: 1000, fetchImpl: async () => new Response(body, { status }) });
+    await callJev({ model: 'jev-1.14.0', state: {}, questions: {} }, { apiKey: 'k', deadlineMs: 1000, fetchImpl: async () => new Response(body, { status }) });
 
   it('rejects fractional, negative and unsafe counters as unknown rather than reading them as values', async () => {
-    const r = await post(JSON.stringify({ model: 'jev-1.13.0', answers: {}, usage: { input_tokens: 10.5, output_tokens: -1 } }));
+    const r = await post(JSON.stringify({ model: 'jev-1.14.0', answers: {}, usage: { input_tokens: 10.5, output_tokens: -1 } }));
     expect(r.ok && r.response.usage).toEqual({ input_tokens: null, output_tokens: null });
-    const big = await post(JSON.stringify({ model: 'jev-1.13.0', answers: {}, usage: { input_tokens: Number.MAX_SAFE_INTEGER + 2, output_tokens: 3 } }));
+    const big = await post(JSON.stringify({ model: 'jev-1.14.0', answers: {}, usage: { input_tokens: Number.MAX_SAFE_INTEGER + 2, output_tokens: 3 } }));
     expect(big.ok && big.response.usage).toEqual({ input_tokens: null, output_tokens: 3 });
   });
 
   it('keeps usage that parsed independently of answers it cannot use', async () => {
-    const r = await post(JSON.stringify({ model: 'jev-1.13.0', usage: { input_tokens: 40, output_tokens: 5 }, answers: 'not an object' }));
+    const r = await post(JSON.stringify({ model: 'jev-1.14.0', usage: { input_tokens: 40, output_tokens: 5 }, answers: 'not an object' }));
     expect(r.ok).toBe(false);
     expect(r.ok === false && r.code).toBe('response_invalid');
     expect(r.ok === false && r.usage).toEqual({ input_tokens: 40, output_tokens: 5 });
-    expect(r.ok === false && r.model).toBe('jev-1.13.0');
+    expect(r.ok === false && r.model).toBe('jev-1.14.0');
   });
 
   it('rejects invalid UTF-8 instead of repairing it into source', async () => {
@@ -144,8 +172,22 @@ describe('usage and response boundaries (JGL-02)', () => {
     expect(r.ok === false && r.code).toBe('response_invalid');
   });
 
+  it('reads past fields it does not use, on the response, the usage counters and an answer', async () => {
+    const answer = { ...choice('deep'), legend: { deep: 'a tier' }, rationale: 'a field a later Jev version may add' };
+    const r = await post(JSON.stringify({ model: 'jev-1.14.0', request_id: 'r-1', notes: [], answers: { route: answer }, usage: { input_tokens: 3, output_tokens: 1, cached_input_tokens: 2 } }));
+    expect(r.ok && r.response.usage).toEqual({ input_tokens: 3, output_tokens: 1 });
+    expect(r.ok && validateChoice(r.response.answers['route'], ROUTE_ANSWERS)).toMatchObject({ choice: 'deep', confidence: 0.9 });
+  });
+
   it('reports a missing model as null so a caller cannot read an unknown model as the pinned one', async () => {
     const r = await post(JSON.stringify({ answers: {}, usage: { input_tokens: 1, output_tokens: 1 } }));
     expect(r.ok && r.response.model).toBeNull();
+  });
+});
+
+describe('validateScore', () => {
+  it('accepts the documented legend and confidence beside the distribution', () => {
+    const answer = { type: 'score', score: 1.05, legend: { 0: 'a', 1: 'b', 2: 'c', 3: 'd', 4: 'e' }, probabilities: { 0: 0, 1: 0.95, 2: 0.05, 3: 0, 4: 0 }, confidence: 0.92 };
+    expect(validateScore(answer)).toMatchObject({ score: 1.05, confidence: 0.92 });
   });
 });

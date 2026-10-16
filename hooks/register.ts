@@ -17,6 +17,7 @@ export const OPTION_NAMES = {
     allowFable: 'routerAllowFable',
     routeSubagentModel: 'routeSubagentModel',
     routeExplicitSpawnModel: 'routeExplicitSpawnModel',
+    routeSpawnByTools: 'routeSpawnByTools',
     routeSubagentEffort: 'routeSubagentEffort',
     routeMainEffort: 'routeMainEffort',
     routeMainModel: 'routeMainModel',

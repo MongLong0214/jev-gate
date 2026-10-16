@@ -153,6 +153,12 @@ describe('decideAdmissionAtomic', () => {
     });
   });
 
+  it('decides the same on answers that carry fields it does not read, such as a legend', () => {
+    const plain = answers({ bounded_tool_work: 0.9 });
+    const extra = Object.fromEntries(Object.entries(plain).map(([k, v]) => [k, { ...(v as object), legend: { 0: 'a' }, rationale: 'x' }]));
+    expect(decideAdmissionAtomic(extra, DEEP, FLOOR, MODEL)).toEqual(decideAdmissionAtomic(plain, DEEP, FLOOR, MODEL));
+  });
+
   it('prices the same request differently at different depths', () => {
     // 39 turns pays at 406K but not at 55K, where the coordinator's own 11 turns are most of what it would remove.
     expect(decideAdmissionAtomic(answers({ tool_calls: 3.5 }), DEEP, FLOOR, MODEL).shape).toBe('orchestrated');

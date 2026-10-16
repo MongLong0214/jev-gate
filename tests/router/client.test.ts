@@ -58,6 +58,7 @@ describe('the one request', () => {
     const cases: Array<[number, string]> = [
       [400, 'rejected_input'],
       [413, 'rejected_input'],
+      [415, 'rejected_input'],
       [422, 'rejected_input'],
       [429, 'rate_limited'],
       [529, 'overloaded'],
@@ -69,6 +70,12 @@ describe('the one request', () => {
       expect(res).toMatchObject({ ok: false, reason, sent: true, usage: { input_tokens: 5, output_tokens: null } });
       expect(x.fetch).toHaveBeenCalledTimes(1);
     }
+  });
+
+  it('names a 400 over the context length from the error body observed 2026-10-16', async () => {
+    const x = transport(() => ({ status: 400, text: JSON.stringify({ detail: { error_type: 'max_tokens_exceeded' } }) }));
+    expect(await createClient({ timeoutMs: 800 }).assess(x.t, FAKE_KEY, STATE, QUESTIONS)).toMatchObject({ ok: false, reason: 'context_exceeded', sent: true });
+    expect(x.fetch).toHaveBeenCalledTimes(1);
   });
 
   it('refuses a reply that is not a usable assessment', async () => {

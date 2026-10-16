@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { DEFAULT_CONFIG } from '../config.js';
 import type { GateV5, JevPhaseUsage, Plan, RouterRootStep, RouterSpawnResult, RouterV5, WorkerTierRecord } from './run.js';
 import { addUsage, estimateJevCostUsd, familyCosts, familyTokens, money, safeSum, totalTokens, type ModelUsage } from './usage.js';
 
@@ -298,7 +299,7 @@ export const toRowView = (p: PlannedCell, c: Record<string, unknown> | null): Ro
   const legacyKnownCost =
     legacyCost ??
     (legacyKnownTokens !== null && legacyKnownTokens > 0
-      ? (estimateJevCostUsd(typeof gate['jev_model'] === 'string' ? gate['jev_model'] : 'jev-1.13.0', legacyKnownTokens) ?? 0)
+      ? (estimateJevCostUsd(typeof gate['jev_model'] === 'string' ? gate['jev_model'] : DEFAULT_CONFIG.jevModel, legacyKnownTokens) ?? 0)
       : 0);
   const init = c && isRecord(c['init']) ? c['init'] : null;
   const pluginExpected = c ? c['plugin_expected'] : null;

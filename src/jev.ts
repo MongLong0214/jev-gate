@@ -81,9 +81,14 @@ export interface JevCallDeps {
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
+/** Enough for Jev's error body (`{"detail":{"error_type":...}}`); a longer one is not read. */
+const MAX_ERROR_BYTES = 4 * 1024;
+
 const statusToCode = (status: number): HttpCode => {
   if (status === 401) return 'http_401';
   if (status === 402) return 'http_402';
+  if (status === 413) return 'http_413';
+  if (status === 415) return 'http_415';
   if (status === 422) return 'http_422';
   if (status === 429) return 'http_429';
   if (status === 529) return 'http_529';
@@ -167,6 +172,18 @@ export const callJev = async <S, Q>(request: JevRequest<S, Q>, deps: JevCallDeps
       redirect: 'error',
       signal: controller.signal,
     });
+    if (res.status === 400) {
+      // Only the error type is read, under the same deadline; any other or unreadable body stays a plain 400.
+      const read = await readCapped(res, MAX_ERROR_BYTES, controller.signal).catch(() => null);
+      let detail: unknown;
+      try {
+        detail = read !== null && read !== 'invalid_utf8' ? (JSON.parse(read.text) as Record<string, unknown>)['detail'] : undefined;
+      } catch {
+        detail = undefined;
+      }
+      const code = isRecord(detail) && detail['error_type'] === 'max_tokens_exceeded' ? 'context_exceeded' : 'http_400';
+      return { ok: false, code, status: 400, durationMs: elapsed(), requestBytes };
+    }
     if (res.status !== 200) {
       await res.body?.cancel().catch(() => undefined);
       return { ok: false, code: statusToCode(res.status), status: res.status, durationMs: elapsed(), requestBytes };

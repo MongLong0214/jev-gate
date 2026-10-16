@@ -18,9 +18,15 @@ export interface OwnedAgentProfile {
   tier: Tier;
   /** `null` means the profile inherits the session's effort rather than declaring its own frontmatter line. */
   effort: string | null;
+  /**
+   * Host tools withheld in frontmatter. `tools` stays absent so connected MCPs are still inherited; withholding Skill
+   * drops the skills listing, and Artifact its large definition. Every profile also sets `omitClaudeMd: true`: its
+   * contract carries what it needs.
+   */
+  disallowedTools: readonly string[];
 }
 
-/** Effort is the only per-agent fact not already in OWNED_AGENTS. Tools inherit from the host. */
+/** Effort is the only per-agent fact not already in OWNED_AGENTS. */
 const EFFORT: Record<string, string | null> = {
   'jev-gate:worker-fast': 'low',
   'jev-gate:worker': null,
@@ -30,9 +36,13 @@ const EFFORT: Record<string, string | null> = {
   'jev-gate:planner-frontier': 'xhigh',
 };
 
+const WORKER_DISALLOWED = ['Agent', 'SendMessage', 'Skill', 'Artifact', 'ArtifactComments', 'ArtifactData'];
+/** A planner reads and plans; it never implements. */
+const DISALLOWED: Record<OwnedRole, readonly string[]> = { worker: WORKER_DISALLOWED, planner: [...WORKER_DISALLOWED, 'Edit', 'Write', 'NotebookEdit'] };
+
 /** The six tiered profiles. */
 export const OWNED_AGENT_PROFILES: readonly OwnedAgentProfile[] = OWNED_AGENT_NAMES.map((name) => {
   const owned = OWNED_AGENTS[name];
   if (!owned || !(name in EFFORT)) throw new Error(`agents.ts: OWNED_AGENTS and EFFORT must agree on ${name}`);
-  return { name, file: `${name.slice('jev-gate:'.length)}.md`, role: owned.role, tier: owned.tier, effort: EFFORT[name] ?? null };
+  return { name, file: `${name.slice('jev-gate:'.length)}.md`, role: owned.role, tier: owned.tier, effort: EFFORT[name] ?? null, disallowedTools: DISALLOWED[owned.role] };
 });

@@ -8,9 +8,12 @@ import { installedKeyPath, parseInstalledKey } from './key.ts';
 import { frontierConfigPath, parseFrontierRouting } from '../../../src/frontier-routing.ts';
 import { createRecorder } from './recording.ts';
 import { childStepContext } from '../../../src/router-child-context.ts';
-import { currentClaudeModel, factsOf } from './models.ts';
+import { currentClaudeModel, factsOf, frontmatterEdits, frontmatterModel } from './models.ts';
 
 const set = (v: string | undefined): boolean => v !== undefined && v.trim() !== '';
+/** Each session's root record lives under this prefix in the plugin's store, so a resume finds its native pair. */
+const ROOT_KEY = 'router-root:';
+const MAX_ROOT_RECORDS = 200;
 
 const installedKey = async ($: EngineInterface): Promise<string | undefined> => {
   const existing = await $.env.get('TYPESAFE_API_KEY');
@@ -24,6 +27,24 @@ const installedKey = async ($: EngineInterface): Promise<string | undefined> => 
   } catch { return undefined; }
 };
 
+
+/** The file a custom agent type runs from, or null when there is none or it cannot be read. */
+const agentFile = async ($: EngineInterface, type: string): Promise<string | null> => {
+  // A plugin's agent (`plugin:name`) is defined by its plugin, never by a file under these directories.
+  if (!/^[\w-]+$/.test(type)) return null;
+  const [root, configDir, home] = await Promise.all([$.session.root(), $.env.get('CLAUDE_CONFIG_DIR'), $.env.get('HOME')]);
+  const user = configDir?.trim() ? configDir : home ? `${home}/.claude` : undefined;
+  // The project's definition wins over the user's of the same name, as the host loads them.
+  for (const dir of [`${root}/.claude/agents`, ...(user ? [`${user}/agents`] : [])]) {
+    const path = `${dir}/${type}.md`;
+    try {
+      if (!await $.fs.exists(path)) continue;
+      const stat = await $.fs.stat(path);
+      return stat.kind === 'file' && stat.size <= 256 * 1024 ? await $.fs.read(path) : null;
+    } catch { return null; }
+  }
+  return null;
+};
 
 // The native validator follows $ only within this file; the shared recorder receives plain callbacks.
 const recorderOf = ($: EngineInterface) => createRecorder({
@@ -95,6 +116,19 @@ const engineOf = ($: EngineInterface, log: RouterEngine['log']): RouterEngine =>
     const value = override?.trim() ? override : (await $.settings.read())['effortLevel'];
     return typeof value === 'number' || ['low', 'medium', 'high', 'xhigh', 'max'].includes(String(value)) ? value as 'low' | 'medium' | 'high' | 'xhigh' | 'max' | number : undefined;
   },
+  hostModel: async () => {
+    const env = await $.env.get('ANTHROPIC_MODEL');
+    const value = env?.trim() ? env : (await $.settings.read())['model'];
+    return typeof value === 'string' && value.trim() ? value : undefined;
+  },
+  loadRoot: async () => $.store.get(`${ROOT_KEY}${await $.session.id()}`),
+  sessionId: () => $.session.id(),
+  saveRoot: async (record, sessionId) => {
+    await $.store.set(`${ROOT_KEY}${sessionId}`, record);
+    // Keys keep insertion order: the oldest sessions' records go first.
+    const keys = (await $.store.keys()).filter(k => k.startsWith(ROOT_KEY));
+    for (const k of keys.slice(0, Math.max(0, keys.length - MAX_ROOT_RECORDS))) await $.store.delete(k);
+  },
   modelAliases: async () => {
     const [opus, sonnet, haiku, fable, bedrock, vertex, foundry, mantle, version] = await Promise.all([
       $.env.get('ANTHROPIC_DEFAULT_OPUS_MODEL'), $.env.get('ANTHROPIC_DEFAULT_SONNET_MODEL'), $.env.get('ANTHROPIC_DEFAULT_HAIKU_MODEL'),
@@ -120,6 +154,9 @@ const engineOf = ($: EngineInterface, log: RouterEngine['log']): RouterEngine =>
     if (!out || typeof out !== 'object') throw new Error('dispatch policy unavailable');
     return out;
   },
+  agentModel: async type => { const text = await agentFile($, type); return text === null ? null : frontmatterModel(text); },
+  agentEdits: async type => { const text = await agentFile($, type); return text === null ? null : frontmatterEdits(text); },
+  resumes: async name => (await $.agent.list()).some(a => a.name === name || a.id === name),
   hostBase: async () => (await $.session.version()).base,
   childContext: async agentId => {
     const rows = await $.session.messages({ agentId });

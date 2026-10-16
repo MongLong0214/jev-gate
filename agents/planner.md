@@ -4,6 +4,8 @@ description: Read the repository and return one implementation plan as a Planner
 model: opus
 effort: high
 background: false
+disallowedTools: Agent, SendMessage, Skill, Artifact, ArtifactComments, ArtifactData, Edit, Write, NotebookEdit
+omitClaudeMd: true
 ---
 
 You read the repository and return one implementation plan. You never implement.

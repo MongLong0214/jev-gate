@@ -74,7 +74,7 @@ describe('requests', () => {
     const sent = fake.requests.flatMap((q) => q.state.candidates);
     expect(sent.map((c) => c.path)).toEqual(Array.from({ length: 16 }, (_, i) => widget(i + 1)));
     for (const q of fake.requests) {
-      expect(q.model).toBe('jev-1.13.0');
+      expect(q.model).toBe('jev-1.14.0');
       expect(q.state).toMatchObject({ goal: 'widget handler', constraints: ['only the handler'] });
       expect(q.state.candidates.map((c) => c.id)).toEqual(['c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'c8']);
       expect(Object.keys(q.questions)).toEqual(q.state.candidates.map((c) => c.id));
@@ -122,6 +122,14 @@ describe('ordering and folding', () => {
     [widget(5)]: choice('unrelated', 0.85),
     [widget(6)]: choice('relevant', 0.7),
   };
+
+  it('reads a judgement that carries fields it does not use, so a later Jev version cannot void the batch', async () => {
+    const fake = jev((c) => ({ ...(answers[c.path] as object), legend: { relevant: 'x' }, rationale: 'a field a later Jev version may add' }));
+    const svc = await remote(widgets(6), { fetchImpl: fake.fetchImpl });
+    const located = (await svc.run({ goal: 'widget' }, live())).result;
+    expect(paths(located)).toEqual([widget(2), widget(4), widget(3), widget(5), widget(6), widget(1)]);
+    expect(located).toMatchObject({ backend: 'jev', coverage: { unjudgedOnPage: 0 } });
+  });
 
   it('orders relevant, uncertain, unrelated with local order kept; locate folds only the clear unrelated, audit folds nothing', async () => {
     const fake = jev((c) => answers[c.path]);

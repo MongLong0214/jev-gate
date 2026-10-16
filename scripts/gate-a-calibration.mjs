@@ -9,7 +9,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..');
 
 const DEADLINE_MS = 4000;
-// Matches JEV_PRICING['jev-1.13.0'] in src/bench/usage.ts; kept as a local literal, this script does not import bench/.
+// Matches JEV_PRICING['jev-1.14.0'] in src/bench/usage.ts; kept as a local literal, this script does not import bench/.
 const USD_PER_INPUT_MTOK = 0.042;
 const LABELS = ['direct', 'orchestrated', 'needs_context', 'abstain'];
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;

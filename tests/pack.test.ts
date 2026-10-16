@@ -109,7 +109,8 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     expect(spawnSync('unzip', ['-q', join(outDir, archive!), '-d', dest], { encoding: 'utf8' }).status).toBe(0);
     for (const agent of agents) {
       const definition = readFileSync(join(dest, agent), 'utf8');
-      expect(definition, agent).not.toMatch(/^tools:|^disallowedTools:/m);
+      expect(definition, agent).not.toMatch(/^tools:/m);
+      expect(definition, agent).toMatch(/^omitClaudeMd: true$/m);
     }
     expectInstallDocs(dest);
     const env = { PATH: process.env['PATH'] ?? '', HOME: join(tmp, 'home'), JEV_GATE_MODE: 'auto' };

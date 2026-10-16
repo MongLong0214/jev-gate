@@ -48,7 +48,7 @@ const trace = (phase, body) => {
   const record = { session_id: sid, prompt_id: promptId, caller: { agent_id: null, agent_type: null }, tool_use_id: null, mode, ...rest, invocation_id: id, phase, version: 5, written_at };
   writeFileSync(join(traceDir, `${phase}-${id}.json`), JSON.stringify(record, null, 2));
 };
-const jevBody = (inputTokens) => ({ model: 'jev-1.13.0', usage: { input_tokens: inputTokens, output_tokens: 12 }, response_bytes: 800 });
+const jevBody = (inputTokens) => ({ model: 'jev-1.14.0', usage: { input_tokens: inputTokens, output_tokens: 12 }, response_bytes: 800 });
 // T7: the hook mints one request id per gate call and writes it into both the intent and the result record.
 const rid = () => `req_${randomUUID()}`;
 const choice = (value, confidence) => ({ type: 'choice', choice: value, probabilities: { [value]: confidence }, confidence });

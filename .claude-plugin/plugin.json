@@ -1,6 +1,6 @@
 {
   "name": "jev-gate",
-  "version": "0.8.23",
+  "version": "0.8.24",
   "description": "Jev Gate in one plugin: the orchestration gate, the extractive compactor, the Jev effort and model router and the jev_evidence tool. Every part is on by default; each has its own on/off option.",
   "author": {
     "name": "MongLong0214",
@@ -79,6 +79,12 @@
       "description": "Also choose the model when the Agent call names one (model: \"opus\"): the name is treated as a default.",
       "type": "boolean",
       "default": true
+    },
+    "routeSpawnByTools": {
+      "title": "Router: Bound subagent models by tools",
+      "description": "On a clear, ordinary, unlocked routine or mechanical answer, run a subagent that cannot edit (no Edit, Write, NotebookEdit or Bash) on the cheapest role and one that can edit on the standard role, never below it unless its own model is; never above its native or declared model, and one whose tools are unknown keeps that model. Off until verified.",
+      "type": "boolean",
+      "default": false
     },
     "routeSubagentEffort": {
       "title": "Router: Route subagent effort",

@@ -6,14 +6,15 @@ import { looksSecret } from './secret.ts';
  * summarising: an input that does not fit is skipped whole.
  */
 export const JEV_ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
-export const JEV_MODEL = 'jev-1.13.0';
+export const JEV_MODEL = 'jev-1.14.0';
 /** The existing serialized-request cap, questions and JSON escaping included. */
 export const MAX_REQUEST_BYTES = 128 * 1024;
 /**
  * The provider bounds tokens, not bytes: 64K in total and 32K for state plus the longest question. This is the
  * calibrated estimate and cap measured 2026-09-21 (src/outbound-text.ts keeps the same estimate): ASCII at 1.5 characters per token, every other character a
  * whole token, 25,000 on the whole serialized request. It over-counts prose and is not a tokenizer; a request it lets
- * through can still be refused, and that refusal is kept as `rejected_input`, not retried.
+ * through can still be refused, and that refusal is kept as `rejected_input` (`context_exceeded` when Jev names its
+ * context length), not retried.
  */
 export const MAX_REQUEST_TOKENS = 25_000;
 /** The host has already buffered the body as text; this only refuses to parse an unreasonable one. */
@@ -56,6 +57,7 @@ export type ClientReason =
   | 'timeout'
   | 'network'
   | 'rejected_input'
+  | 'context_exceeded'
   | 'unauthorized'
   | 'payment_required'
   | 'rate_limited'
@@ -93,8 +95,9 @@ const stringsIn = (v: unknown, out: string[] = []): string[] => {
   return out;
 };
 
-const reasonForStatus = (status: number): ClientReason => {
-  if (status === 400 || status === 413 || status === 422) return 'rejected_input';
+const reasonForStatus = (status: number, body: unknown): ClientReason => {
+  if (status === 400 && isRecord(body) && isRecord(body['detail']) && body['detail']['error_type'] === 'max_tokens_exceeded') return 'context_exceeded';
+  if (status === 400 || status === 413 || status === 415 || status === 422) return 'rejected_input';
   if (status === 401) return 'unauthorized';
   if (status === 402) return 'payment_required';
   if (status === 429) return 'rate_limited';
@@ -133,7 +136,7 @@ export const createClient = (opts: ClientOptions): JevClient => {
     const body = parseBody(reply.text);
     const usage = parseUsage(body);
     if (reply.status !== 200) {
-      const reason = reasonForStatus(reply.status);
+      const reason = reasonForStatus(reply.status, body);
       if (reason === 'unauthorized' || reason === 'payment_required') refused = true;
       return { ok: false, reason, usage, requestBytes, sent: true };
     }

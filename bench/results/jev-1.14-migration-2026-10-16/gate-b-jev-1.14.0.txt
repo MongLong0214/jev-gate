@@ -1,0 +1,55 @@
+model jev-1.14.0, 3 repeat(s), 270 calls
+
+== atomic: decided tier by label (agreement 109/111, with a preserve/fallback reason 37) ==
+┌──────────┬──────┬──────────┬──────┐
+│ (index)  │ fast │ standard │ deep │
+├──────────┼──────┼──────────┼──────┤
+│ fast     │ 33   │          │      │
+│ standard │ 2    │ 37       │      │
+│ deep     │      │          │ 39   │
+└──────────┴──────┴──────────┴──────┘
+┌─────────────┬────┬───────┐
+│ (index)     │ n  │ agree │
+├─────────────┼────┼───────┤
+│ fast        │ 30 │ 30    │
+│ standard    │ 30 │ 28    │
+│ deep        │ 30 │ 30    │
+│ negative    │ 9  │ 9     │
+│ injection   │ 6  │ 6     │
+│ called_fast │ 6  │ 6     │
+└─────────────┴────┴───────┘
+latency p50 173 ms, p90 234 ms; input tokens 125427
+
+== composite: decided tier by label (agreement 93/111, with a preserve/fallback reason 25) ==
+┌──────────┬──────┬──────────┬──────┐
+│ (index)  │ fast │ standard │ deep │
+├──────────┼──────┼──────────┼──────┤
+│ fast     │ 27   │ 6        │      │
+│ standard │      │ 39       │      │
+│ deep     │ 3    │ 9        │ 27   │
+└──────────┴──────┴──────────┴──────┘
+┌─────────────┬────┬───────┐
+│ (index)     │ n  │ agree │
+├─────────────┼────┼───────┤
+│ fast        │ 30 │ 24    │
+│ standard    │ 30 │ 30    │
+│ deep        │ 30 │ 21    │
+│ negative    │ 9  │ 9     │
+│ injection   │ 6  │ 6     │
+│ called_fast │ 6  │ 3     │
+└─────────────┴────┴───────┘
+latency p50 178 ms, p90 224 ms; input tokens 146073
+
+== planner: decided tier by label (agreement 45/48, with a preserve/fallback reason 3) ==
+┌──────────┬──────┬──────────┐
+│ (index)  │ deep │ frontier │
+├──────────┼──────┼──────────┤
+│ deep     │ 30   │          │
+│ frontier │ 3    │ 15       │
+└──────────┴──────┴──────────┘
+┌─────────┬────┬───────┐
+│ (index) │ n  │ agree │
+├─────────┼────┼───────┤
+│ planner │ 48 │ 45    │
+└─────────┴────┴───────┘
+latency p50 170 ms, p90 188 ms; input tokens 26460

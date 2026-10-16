@@ -149,4 +149,4 @@ export const LIMITS = {
 export const RELEVANT_FLOOR = 0.8;
 export const UNRELATED_FLOOR = 0.9;
 
-export const EVIDENCE_MODEL = 'jev-1.13.0';
+export const EVIDENCE_MODEL = 'jev-1.14.0';

@@ -16,14 +16,14 @@ import { ensureDashboard, serveAutomaticDashboard } from './dashboard-launch.js'
 import { dashboardPreferenceCommand } from './dashboard-settings.js';
 import { recordingCommand, recordingStatus } from './recording.js';
 import { explainDir } from './explain.js';
-import { HOST_WINDOW_MAX, readHostCompactWindow, readHostWorktreeBaseRef, readManagedSetting, readSettingsEnvVar, STANDARD_CONTEXT_WINDOW } from './host-window.js';
+import { HOST_WINDOW_MAX, HOST_WINDOW_MIN, measuredCompactPoint, readHostCompactWindow, readHostWorktreeBaseRef, readManagedSetting, readSettingsEnvVar, STANDARD_CONTEXT_WINDOW } from './host-window.js';
 import { jobsDir } from './job.js';
 import { LIVENESS_WINDOW, livenessPath, readLiveness } from './liveness.js';
 import { OWNED_AGENTS, type Mode, type Tier } from './types.js';
 import { doctorChecks, finishDoctor, renderDoctor, readableFile, storageIssue, moduleIssues, dashboardDiagnostic, versionDiagnostic, type DoctorReport } from './doctor.js';
 import { checkRelease, unknownRelease, packageVersion } from './release-info.js';
 import { claudeModelInventory, claudeCompatibility, compatibilityChecks } from './doctor-models.js';
-import { type SymbolicEffort } from './claude-models.js';
+import { parseFrontmatter, type SymbolicEffort } from './claude-models.js';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -33,24 +33,6 @@ export const runCommand = (cmd: string, args: string[], env: NodeJS.ProcessEnv =
   return { status: r.status, signal: r.signal ?? null, stdout: r.stdout ?? '', error: r.error ? ((r.error as NodeJS.ErrnoException).code ?? 'spawn_error') : null };
 };
 
-interface Frontmatter {
-  fields: Record<string, string>;
-  error: string | null;
-}
-
-export const parseFrontmatter = (text: string): Frontmatter => {
-  text = text.replaceAll('\r\n', '\n');
-  if (!text.startsWith('---\n')) return { fields: {}, error: 'no frontmatter on line 1' };
-  const delimiter = /^---[ \t]*$/m.exec(text.slice(4));
-  const end = delimiter ? delimiter.index + 3 : -1;
-  if (end < 0) return { fields: {}, error: 'unterminated frontmatter' };
-  const fields: Record<string, string> = {};
-  for (const line of text.slice(4, end).split('\n')) {
-    const m = /^([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$/.exec(line);
-    if (m && m[1] !== undefined && m[2] !== undefined) { if (m[1] in fields) return { fields, error: `duplicate frontmatter field: ${m[1]}` }; fields[m[1]] = m[2].trim(); }
-  }
-  return { fields, error: null };
-};
 
 
 /**
@@ -58,8 +40,8 @@ export const parseFrontmatter = (text: string): Frontmatter => {
  * `model` read off `DEFAULT_CONFIG.models[tier]` -- the same table `gen-agents.mjs` writes frontmatter from -- so
  * this expectation and the packaged frontmatter can only agree or both be visibly wrong, never quietly disagree.
  */
-const AGENT_EXPECTATIONS: Record<string, { model: string; effort: string | null }> = Object.fromEntries(
-  OWNED_AGENT_PROFILES.map((p) => [p.file, { model: DEFAULT_CONFIG.models[p.tier], effort: p.effort }]),
+const AGENT_EXPECTATIONS: Record<string, { model: string; effort: string | null; disallowedTools: string }> = Object.fromEntries(
+  OWNED_AGENT_PROFILES.map((p) => [p.file, { model: DEFAULT_CONFIG.models[p.tier], effort: p.effort, disallowedTools: p.disallowedTools.join(', ') }]),
 );
 
 /** haiku|sonnet|opus|fable, case-insensitive substring match; `null` when the string names none of them. */
@@ -163,9 +145,10 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
       if (exp.effort === null && 'effort' in fm.fields) problems.push(`effort=${String(fm.fields['effort'])} (this profile inherits the session effort)`);
       if ('tools' in fm.fields) problems.push('tools must be absent so host tools are inherited');
       if (fm.fields['background'] !== 'false') problems.push('background must be false');
-      if ('disallowedTools' in fm.fields) problems.push('disallowedTools must be absent so host tools are inherited');
+      if (fm.fields['disallowedTools'] !== exp.disallowedTools) problems.push(`disallowedTools=${fm.fields['disallowedTools'] ?? 'missing'} (expected ${exp.disallowedTools})`);
+      if (fm.fields['omitClaudeMd'] !== 'true') problems.push('omitClaudeMd must be true');
       for (const ignored of ['permissionMode', 'hooks', 'mcpServers']) if (ignored in fm.fields) problems.push(`${ignored} is ignored for plugin agents`);
-      say(problems.length ? 'fail' : 'ok', `agents/${file}: jev-gate:${name} model=${exp.model} effort=${exp.effort ?? 'inherited'} tools=host inherited${problems.length ? ` — ${problems.join('; ')}` : ''}`);
+      say(problems.length ? 'fail' : 'ok', `agents/${file}: jev-gate:${name} model=${exp.model} effort=${exp.effort ?? 'inherited'} tools=host inherited less ${exp.disallowedTools}${problems.length ? ` — ${problems.join('; ')}` : ''}`);
     }
     say('info', 'Worker profiles declare requested model and effort; actual provider model and effort remain unknown until recorded responses confirm them.');
     return installedModels;
@@ -217,6 +200,8 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
     const window = readHostCompactWindow(env, cwd);
     const { floor, source: floorSource } = effectiveDepthFloor(c, window.tokens);
     say('info', `host compaction window: ${window.tokens === null ? `unknown (${window.source})` : `${window.tokens} tokens (${window.source})`}; a launch's --autocompact or --settings flag, MDM policy and server-managed settings are not visible to a hook and can override this`);
+    const point = measuredCompactPoint(env, cwd, window.tokens);
+    if (point) say('info', `measured compaction point: median preTokens ${point.median} over ${point.n} automatic compactions in the newest transcripts${point.offset === null ? '' : `, ${point.offset} below the window`}; to compact at a target T, set autoCompactWindow = T + that offset (host minimum ${HOST_WINDOW_MIN})`);
     if (floor === 0) {
       say('info', 'effective depth floor is 0: Gate A can assess every eligible prompt; Jev and the admission policy still decide whether delegation applies');
     } else if (window.tokens !== null && floor >= window.tokens) {

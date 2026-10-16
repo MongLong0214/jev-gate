@@ -1,0 +1,13 @@
+model jev-1.14.0, 5 repeat(s), 40 requests, 240 candidate answers (240 usable)
+required-vs-not agreement 220/240 (91.7%): tp 45, fp 20, fn 0, tn 175
+four-way exact 215/240 (89.6%)
+┌───────────┬───────────┬─────────┬──────────┐
+│ (index)   │ unrelated │ related │ required │
+├───────────┼───────────┼─────────┼──────────┤
+│ unrelated │ 120       │ 5       │          │
+│ required  │           │         │ 45       │
+│ related   │           │ 50      │ 20       │
+└───────────┴───────────┴─────────┴──────────┘
+mean confidence of the chosen label: correct 0.819, wrong 0.542
+request latency p50 179 ms, p90 243 ms; input tokens 87065
+selector reasons {"current_dependencies":34,"recency_kept":5,"invalid_answers":1}

@@ -147,7 +147,7 @@ describe('inventory and access', () => {
     const fetchImpl = vi.fn(async (_url: string, init: RequestInit) => {
       const body = JSON.parse(String(init.body)) as { questions: Record<string, unknown> };
       return new Response(JSON.stringify({
-        model: 'jev-1.13.0',
+        model: 'jev-1.14.0',
         answers: Object.fromEntries(Object.keys(body.questions).map((id) => [id, { type: 'choice', choice: 'relevant', probabilities: { relevant: 0.9, unrelated: 0.05, needs_context: 0.05 }, confidence: 0.9 }])),
         usage: { input_tokens: 1, output_tokens: 1 },
       }), { status: 200 });

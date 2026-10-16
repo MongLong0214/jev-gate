@@ -35,7 +35,7 @@
 <p align="center">
   <a href="#read-the-live-dashboard"><picture>
     <source media="(prefers-color-scheme: dark)" srcset="./assets/readme/dashboard-dark.svg">
-    <img src="./assets/readme/dashboard.svg" width="100%" alt="Jev Gate dashboard with sample data: header KPIs, an eight-node execution circuit on a Jev rail, the execution list, the Jev call log, Jev response time with a list-price cost estimate, and one execution's detail">
+    <img src="./assets/readme/dashboard.svg" width="100%" alt="Jev Gate dashboard with sample data: header KPIs, an eight-node execution circuit with a Jev 1.14 rail, the execution list, the Jev call log with its 30-second response timeline and decision basis, and one execution's detail">
   </picture></a>
 </p>
 
@@ -139,7 +139,7 @@ Claude sends native completion notifications. Codex's coordinator can query `jev
 
 ### Understand model routing
 
-The model picker establishes the baseline. Router reassesses each new root task; selecting Sonnet once does not lock future tasks to Sonnet. Jev judges the capability the work needs (mechanical, routine, complex, or an open problem when Fable/Astra is enabled) and the effort each candidate model would need; code maps that to one model per role and moves only when the probability clears the configured floors. The README for Router lists [every model and effort combination and when each is chosen](mods/router/README.md#how-a-move-is-decided). A Gate retry is served at least one role above the attempt that failed. Claude workers with a known native identity receive a fresh assessment before each inference after spawn, including inference following tool results. Codex reuses the current task assessment. Gate B owns the initial allocation for Jev workers; eligible ordinary agents use Router.
+The model picker establishes the baseline. Router reassesses each new root task; selecting Sonnet once does not lock future tasks to Sonnet. Jev judges the capability the work needs (mechanical, routine, complex, or an open problem when Fable/Astra is enabled) and the effort each candidate model would need; code maps that to one model per role and moves only when the probability clears the configured floors. The README for Router lists [every model and effort combination and when each is chosen](mods/router/README.md#how-a-move-is-decided). A Gate retry is served at least one role above the attempt that failed. Claude workers with a known native identity receive a fresh effort assessment before each inference after spawn, including inference following tool results; their model is chosen once, at the spawn. Codex reuses the current task assessment. Gate B owns the initial allocation for Jev workers; eligible ordinary agents use Router.
 
 Simple lookup and mechanical worker tasks prefer current Haiku in Claude or current account-listed Luna in Codex. New automatic targets exclude previous generations. Haiku 5.5 requires Claude Code 2.1.293 or later and supports effort; `xhigh`/`max` depend on thinking mode, so hooks offer its universally valid `low`/`medium`/`high` levels. Native host pins and account availability remain authoritative.
 

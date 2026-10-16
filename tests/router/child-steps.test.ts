@@ -12,6 +12,8 @@ const reply = (req: SentRequest, target: string, effort = 'low') => ({ status: 2
     ? choice(Object.keys(q.criteria), [name === 'capability' ? OPTION[target]! : name === 'control' ? 'task_clear' : 'ordinary', .99])
     : { type: 'score', probabilities: Object.fromEntries((q.criteria as string[]).map((text, i) => [i, text.startsWith(effort === 'high' ? 'Strong reasoning' : 'Light reasoning') ? 1 : 0])) }])) }) });
 const step = (index: number, over: Partial<TurnStepEvent> = {}): TurnStepEvent => ({ agentId: 'child', turnId: 'child-turn', index, model: OPUS, effort: 'high', ...over });
+/** What a step reports: the switch cost guard reads the subagent's prefix from it. */
+const COUNTS = { input_tokens: 900, output_tokens: 20, cache_read_input_tokens: 20_000, cache_creation_input_tokens: 1000 };
 async function setup(options: Record<string, boolean> = {}, respond: Responder = req => reply(req, SONNET), prompt = 'Find the cause of the failing test and repair it; preserve the public API.') {
   const resolved = resolveConfig({ enabled: true, routeMainModel: false, routeMainEffort: false, allowFable: false, ...options });
   if (!resolved.ok) throw Error(resolved.field);
@@ -22,7 +24,7 @@ async function setup(options: Record<string, boolean> = {}, respond: Responder =
   f.engine.dispatchPair = async () => ({ model: OPUS, effort_edit: { kind: 'set', value: 'high' } });
   const next = Object.assign(async (e: { model?: string }) => ({ agentId: 'child', model: e.model ?? OPUS }), { signal: new AbortController().signal });
   await router.agentSpawn(f.engine, { tool_use_id: 'spawn', prompt, description: 'repair test', subagentType: 'jev-gate:worker', provider: { plugin: 'jev-gate', tier: 'plugin' }, parentModel: OPUS, fork: false }, next);
-  const first = streamNext<TurnStepEvent>();
+  const first = streamNext<TurnStepEvent>(undefined, COUNTS);
   await drain(router.turnStep(f.engine, step(0), first.next));
   return { router, f, first };
 }
@@ -39,37 +41,24 @@ describe('native worker inference routing', () => {
     await turn(1, 'high', 0); expect(await turn(2, 'low', 10000)).toBe('low'); await turn(3, 'high', 0);
     expect(f.logs).toContainEqual(expect.objectContaining({ event: 'effort_cache', scope: 'child', index: 3, hit: false, floor_restored: true }));
     expect(await turn(4, 'low', 0)).toBe('high');
-    f.clock.ms += 55 * 60_000 + 1; expect(await turn(5, 'low', 0)).toBe('low');
+    f.clock.ms += 60 * 60_000; expect(await turn(5, 'low', 0)).toBe('low');
   });
-  it('keeps the initial Gate B batch, then reassesses each inference and observes the actual model', async () => {
+  it('keeps the initial Gate B batch, then reassesses each inference\'s effort on the spawned model', async () => {
     let phase = 0;
-    const { router, f, first } = await setup({}, req => reply(req, ++phase === 1 ? SONNET : OPUS, phase === 1 ? 'low' : 'high'));
+    const { router, f, first } = await setup({}, req => reply(req, ++phase === 1 ? HAIKU : OPUS, phase === 1 ? 'low' : 'high'));
     expect(f.sent).toHaveLength(0);
     expect(first.calls[0]?.model).toBe(OPUS);
-    const a = streamNext<TurnStepEvent>(); await drain(router.turnStep(f.engine, step(1), a.next));
-    expect(a.calls).toEqual([step(1, { model: SONNET, effort: 'low' })]);
-    const b = streamNext<TurnStepEvent>(); await drain(router.turnStep(f.engine, step(2, { model: SONNET, effort: 'low' }), b.next));
+    const a = streamNext<TurnStepEvent>(undefined, COUNTS); await drain(router.turnStep(f.engine, step(1), a.next));
+    expect(a.calls).toEqual([step(1, { effort: 'low' })]);
+    const b = streamNext<TurnStepEvent>(); await drain(router.turnStep(f.engine, step(2, { effort: 'low' }), b.next));
     expect(b.calls).toEqual([step(2)]);
     expect(f.sent).toHaveLength(2);
+    expect(f.sent.every(r => !('capability' in r.questions) && !('model' in r.questions))).toBe(true);
     expect(f.logs.filter(r => r.event === 'child_route')).toHaveLength(2);
+    expect(f.logs.find(r => r.event === 'child_route')).toMatchObject({ model_asked: false, effort_asked: true });
     expect(f.logs.filter(r => r.event === 'child_result').at(-1)).toMatchObject({ requested: OPUS, observed: OPUS, confirmation: 'confirmed', observed_effort: 'unknown' });
     expect(JSON.stringify(f.logs)).not.toContain('preserve the public API');
     expect(f.sent[0]?.state).toMatchObject({ task: { source: 'child_contract' }, execution: { scope: 'child', step_index: 1, cache: { cross_model_reuse_proven: false } } });
-  });
-
-  it('offers current 1M Haiku without inventing a smaller-window bound and excludes legacy Haiku', async () => {
-    const { router, f } = await setup();
-    await drain(router.turnStep(f.engine, step(1), streamNext<TurnStepEvent>().next));
-    expect(f.logs.find(r => r.event === 'child_route')?.['selection']).toMatchObject({ roles: expect.arrayContaining([{ role: 'fast', option: 'mechanical', model: HAIKU }]) });
-    expect(JSON.stringify(f.logs)).not.toContain('claude-haiku-4-5');
-    expect(f.logs.find(r => r.event === 'child_route')).toMatchObject({ excluded: { legacy_model: expect.any(Number) } });
-  });
-
-  it('sends current Haiku with its selected supported effort', async () => {
-    const { router, f } = await setup({}, req => reply(req, HAIKU));
-    f.engine.currentContextBound = async (turnId, index) => ({ turnId, index, inputUpperBound: 20_000, compatible: true });
-    const n = streamNext<TurnStepEvent>(); await drain(router.turnStep(f.engine, step(1), n.next));
-    expect(n.calls).toEqual([{ agentId: 'child', turnId: 'child-turn', index: 1, model: HAIKU, effort: 'low' }]);
   });
 
   it.each(['failure', 'invalid', 'no_context'] as const)('keeps native on %s and reassesses a later step', async mode => {
@@ -89,6 +78,13 @@ describe('native worker inference routing', () => {
     expect(JSON.stringify(f.logs)).not.toContain('sk-private-testsecret');
   });
 
+  it('never moves a step off the spawned model, so the subagent\'s cache is never re-read on another', async () => {
+    const { router, f } = await setup({}, req => reply(req, HAIKU));
+    f.engine.currentContextBound = async (turnId, index) => ({ turnId, index, inputUpperBound: 20_000, compatible: true });
+    const n = streamNext<TurnStepEvent>(undefined, COUNTS); await drain(router.turnStep(f.engine, step(1), n.next));
+    expect(n.calls).toEqual([step(1, { effort: 'low' })]);
+  });
+
   it('shares an assessment for simultaneous delivery of the exact same child step', async () => {
     const wait = deferred<ReturnType<typeof reply>>();
     let request: SentRequest | undefined;
@@ -96,8 +92,8 @@ describe('native worker inference routing', () => {
     const a = streamNext<TurnStepEvent>(), b = streamNext<TurnStepEvent>();
     const pa = drain(router.turnStep(f.engine, step(1), a.next)), pb = drain(router.turnStep(f.engine, step(1), b.next));
     await new Promise(resolve => setTimeout(resolve, 0));
-    expect(f.sent).toHaveLength(1); wait.resolve(reply(request!, SONNET));
-    await Promise.all([pa, pb]); expect(a.calls[0]?.model).toBe(SONNET); expect(b.calls[0]?.model).toBe(SONNET);
+    expect(f.sent).toHaveLength(1); wait.resolve(reply(request!, HAIKU));
+    await Promise.all([pa, pb]); expect(a.calls).toEqual([step(1, { effort: 'low' })]); expect(b.calls).toEqual([step(1, { effort: 'low' })]);
   });
 
   it.each(['model', 'effort'] as const)('preserves a %s pin independently', async dimension => {
@@ -126,12 +122,12 @@ describe('native worker inference routing', () => {
 
   it('continues the timed-out request once and assesses the next inference again', async () => {
     const wait = deferred<ReturnType<typeof reply>>(); let calls = 0;
-    const { router, f } = await setup({}, req => ++calls === 1 ? wait.promise : reply(req, SONNET));
-    const n = streamNext<TurnStepEvent>(), running = drain(router.turnStep(f.engine, step(1), n.next));
+    const { router, f } = await setup({}, req => ++calls === 1 ? wait.promise : reply(req, HAIKU));
+    const n = streamNext<TurnStepEvent>(undefined, COUNTS), running = drain(router.turnStep(f.engine, step(1), n.next));
     await new Promise(resolve => setTimeout(resolve, 0)); f.expire(); await running;
     expect(n.calls).toEqual([step(1)]);
     const later = streamNext<TurnStepEvent>(); await drain(router.turnStep(f.engine, step(2), later.next));
-    expect(f.sent).toHaveLength(2); expect(later.calls[0]?.model).toBe(SONNET);
+    expect(f.sent).toHaveLength(2); expect(later.calls).toEqual([step(2, { effort: 'low' })]);
   });
 
   it('does not resend or reapply a patched inference after a native stream failure', async () => {

@@ -600,14 +600,20 @@ it('gives a Compact selection and its result written in the same millisecond the
 it('attaches the receipt of an answered Claude Router or Compact call, and never to a request, a skip or an unsent call (#225)', () => {
   const now = new Date('2026-09-29T06:10:00.000Z'), usage = { input: 1200, output: 30 };
   const steps = (rows: ModRecord[]) => buildOperations([], rows, now, { trace: true }).runs.flatMap(r => r.steps);
-  const answered = steps([row('router', { session_id: 's', event: 'root', turn: 't1', sent: true, assessment: 'ok', duration_ms: 240, usage, jev_model: 'jev-1.13.0' })]).find(s => s.lane === 'jev')!;
-  expect(answered.receipt).toMatchObject({ model: 'jev-1.13.0', input: 1200, output: 30 });
+  const answered = steps([row('router', { session_id: 's', event: 'root', turn: 't1', sent: true, assessment: 'ok', duration_ms: 240, usage, jev_model: 'jev-1.14.0' })]).find(s => s.lane === 'jev')!;
+  expect(answered.receipt).toMatchObject({ model: 'jev-1.14.0', input: 1200, output: 30 });
   expect(answered.receipt?.costUsd).toBeGreaterThan(0);
   // Records written before the model was recorded keep their receipt, and stay unpriced.
   const older = steps([row('router', { session_id: 's', event: 'root', turn: 't2', sent: true, assessment: 'ok', duration_ms: 240, usage })]).find(s => s.lane === 'jev')!;
   expect(older.receipt).toMatchObject({ model: null, input: 1200, costUsd: null });
-  const compact = steps([row('compact', { event: 'compact', session_id: 's', run_id: 'c', stage: 'jev', jev_sent: true, jev_ms: 180, usage: { input_tokens: 900, output_tokens: 12 }, jev_model: 'jev-1.13.0', selection: 'current_dependencies' })]).find(s => s.lane === 'jev')!;
-  expect(compact.receipt).toMatchObject({ model: 'jev-1.13.0', input: 900, output: 12 });
+  const compact = steps([row('compact', { event: 'compact', session_id: 's', run_id: 'c', stage: 'jev', jev_sent: true, jev_ms: 180, usage: { input_tokens: 900, output_tokens: 12 }, jev_model: 'jev-1.14.0', selection: 'current_dependencies' })]).find(s => s.lane === 'jev')!;
+  expect(compact.receipt).toMatchObject({ model: 'jev-1.14.0', input: 900, output: 12 });
+  // A 400 that names the context length is its own reason (not the generic refusal), and neither shows as a raw code.
+  for (const [selection, label] of [['context_exceeded', '컨텍스트 길이 초과'], ['rejected_input', '입력을 거절']] as const) {
+    const refused = steps([row('compact', { event: 'compact', session_id: 's', run_id: selection, stage: 'jev', jev_sent: true, jev_ms: 90, selection })]).find(s => s.lane === 'jev')!;
+    expect(refused.summary).toContain(label);
+    expect(refused.summary).not.toContain(selection);
+  }
   const none = steps([
     row('router', { session_id: 's', event: 'request', turn: 't3', sent: true }),
     row('router', { session_id: 's', event: 'root', turn: 't4', sent: false, assessment: 'no_key', duration_ms: 1 }),

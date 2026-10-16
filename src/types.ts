@@ -459,8 +459,13 @@ export type SkipCode =
   | 'deadline_exhausted';
 
 export type HttpCode =
+  | 'http_400'
+  /** A 400 whose body names `max_tokens_exceeded`: the request is over the model's context length. */
+  | 'context_exceeded'
   | 'http_401'
   | 'http_402'
+  | 'http_413'
+  | 'http_415'
   | 'http_422'
   | 'http_429'
   | 'http_529'

@@ -5,7 +5,9 @@ tier('user');
 test('child tool steps use fresh assessments in the real host engine', async ($, on) => {
   mock.env(on, { TYPESAFE_API_KEY: 'sk-router-testonlynotakey' });
   mock.clock(on);
-  on('session.version', () => ({ value: { version: '2.1.292', base: '2.1.292' } }));
+  // Haiku 5.5 needs host 2.1.293. Its cold write costs no more than Opus's warm read, so the switch guard lets it
+  // through; a cold Sonnet move would be held.
+  on('session.version', () => ({ value: { version: '2.1.293', base: '2.1.293' } }));
   on('session.id', () => ({ value: 'child-fixture' }));
   on('settings.read', () => ({ value: { effortLevel: 'high' } }));
   on('fs.exists', () => ({ value: false }));
@@ -20,7 +22,7 @@ test('child tool steps use fresh assessments in the real host engine', async ($,
     calls++;
     const body = JSON.parse(e.init?.body ?? '{}');
     expect(e.init?.body).not.toContain('PRIVATE');
-    const target = phase === 1 ? 'routine' : 'complex';
+    const target = phase === 1 ? 'mechanical' : 'complex';
     const answers = Object.fromEntries(Object.entries(body.questions).map(([name, raw]) => {
       const q = raw as { type: string; criteria: string[] | Record<string, string> };
       if (q.type === 'choice') {
@@ -35,9 +37,10 @@ test('child tool steps use fresh assessments in the real host engine', async ($,
   });
   on('agent.spawn', () => ({ agentId: 'child', model: 'claude-opus-5-5' }));
   on('agent.offer', () => ({ isOffered: true }));
+  // Reported usage is what lets the switch cost guard see the subagent's prefix.
   on('turn.step', async function* ($, e) {
     sent.push({ model: e.model, ...(e.effort !== undefined ? { effort: e.effort } : {}) });
-    return { turnId: e.turnId, index: e.index, answer: 'fixture', toolUses: [], stopReason: 'end_turn', usage: null };
+    return { turnId: e.turnId, index: e.index, answer: 'fixture', toolUses: [], stopReason: 'end_turn', usage: { model: e.model, input_tokens: 900, output_tokens: 40, cache_read_input_tokens: 20_000, cache_creation_input_tokens: 1000 } };
   });
   await $.agent.offer({ agent: 'general-purpose', description: 'general purpose', source: 'built-in', provider: { plugin: 'engine', tier: 'core' } });
   await $.agent.spawn({ tool_use_id: 'spawn-child', prompt: 'Find the failing test and repair it.', description: 'repair test', subagentType: 'general-purpose', provider: { plugin: 'engine', tier: 'core' }, parentModel: 'claude-opus-5-5', background: false, fork: false });
@@ -47,7 +50,7 @@ test('child tool steps use fresh assessments in the real host engine', async ($,
     while (!(await stream.next()).done) { /* preserve the host stream */ }
     expect({ calls, sent: calls === phase + 1 ? [] : sent }).toEqual({ calls: phase + 1, sent: [] });
   }
-  expect(sent).toEqual([{ model: 'claude-opus-5-5', effort: 'high' }, { model: 'claude-sonnet-5-5', effort: 'low' }, { model: 'claude-opus-5-5', effort: 'high' }]);
+  expect(sent).toEqual([{ model: 'claude-opus-5-5', effort: 'high' }, { model: 'claude-haiku-5-5', effort: 'low' }, { model: 'claude-opus-5-5', effort: 'high' }]);
   expect(contexts).toEqual(['child', 'child']);
 });
 
@@ -124,10 +127,10 @@ for (const mode of ['keep', 'effort', 'model', 'both'] as const) {
 }
 
 for (const baselineMode of ['default', 'echo'] as const) {
-  test(`three root turns reassess Sonnet, Sonnet, Opus with ${baselineMode} baselines`, async ($, on) => {
+  test(`three root turns reassess Opus (held), Haiku, Opus with ${baselineMode} baselines`, async ($, on) => {
     mock.env(on, { TYPESAFE_API_KEY: 'sk-router-testonlynotakey' });
     mock.clock(on);
-    on('session.version', () => ({ value: { version: '2.1.287', base: '2.1.287' } }));
+    on('session.version', () => ({ value: { version: '2.1.293', base: '2.1.293' } }));
     on('session.id', () => ({ value: 'same-root-fixture' }));
     on('settings.read', () => ({ value: { effortLevel: 'high' } }));
     on('fs.exists', () => ({ value: false }));
@@ -137,7 +140,7 @@ for (const baselineMode of ['default', 'echo'] as const) {
     on('http.fetch', ($, e) => {
       calls++;
       const body = JSON.parse(e.init?.body ?? '{}');
-      const target = phase < 2 ? 'routine' : 'complex';
+      const target = phase < 2 ? 'mechanical' : 'complex';
       const answers = Object.fromEntries(Object.entries(body.questions).map(([name, raw]) => {
         const q = raw as { type: string; criteria: string[] | Record<string, string> };
         if (q.type === 'choice') {
@@ -154,20 +157,23 @@ for (const baselineMode of ['default', 'echo'] as const) {
     on('turn.complete', () => ({ text: '' }));
     on('turn.step', async function* ($, e) {
       sent.push({ turnId: e.turnId, model: e.model, ...(e.effort !== undefined ? { effort: e.effort } : {}) });
-      return { turnId: e.turnId, index: e.index, answer: 'fixture', toolUses: [], stopReason: 'end_turn', usage: null };
+      return { turnId: e.turnId, index: e.index, answer: 'fixture', toolUses: [], stopReason: 'end_turn', usage: { model: e.model, input_tokens: 900, output_tokens: 40, cache_read_input_tokens: 20_000, cache_creation_input_tokens: 1000 } };
     });
     for (phase = 0; phase < 3; phase++) {
       const turnId = `root-turn-${phase}`;
       await $.turn.start({ text: phase < 2 ? 'Find the exact source file.' : 'Diagnose the concurrency failure.', turnId });
-      const model = phase === 0 || baselineMode === 'default' ? 'claude-opus-5-5' : 'claude-sonnet-5-5';
+      // An echo host starts a turn on the pair the Router last sent: drift, so the baseline stays the native Opus/high.
+      const echo = phase > 0 && baselineMode === 'echo' ? sent.at(-1)! : null;
       for (const index of [0, 1]) {
-        const stream = $.turn.step({ turnId, index, model, effort: phase > 0 && baselineMode === 'echo' ? 'medium' : 'high', messageCount: phase * 2 + 1 });
+        const stream = $.turn.step({ turnId, index, model: echo?.model ?? 'claude-opus-5-5', effort: (echo?.effort ?? 'high') as 'high', messageCount: phase * 2 + 1 });
         while (!(await stream.next()).done) { /* preserve the host stream */ }
       }
       expect(calls).toBe(phase + 1);
       await $.turn.complete({ turnId, reason: 'answer', answer: 'Completed visible fixture answer.', durationMs: 1, isAborted: false });
     }
-    expect(sent).toEqual([0, 1, 2].flatMap(i => [0, 1].map(() => ({ turnId: `root-turn-${i}`, model: i < 2 ? 'claude-sonnet-5-5' : 'claude-opus-5-5', effort: i < 2 ? 'medium' : 'high' }))));
+    // The first turn has no observed prefix, so its downgrade is held; its effort still moves.
+    const models = ['claude-opus-5-5', 'claude-haiku-5-5', 'claude-opus-5-5'];
+    expect(sent).toEqual([0, 1, 2].flatMap(i => [0, 1].map(() => ({ turnId: `root-turn-${i}`, model: models[i], effort: i < 2 ? 'medium' : 'high' }))));
     expect(children).toBe(0);
   });
 }

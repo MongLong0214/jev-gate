@@ -4,6 +4,8 @@ description: Complete one Jev Gate outcome, run its checks, and return a WorkerR
 model: opus
 effort: high
 background: false
+disallowedTools: Agent, SendMessage, Skill, Artifact, ArtifactComments, ArtifactData
+omitClaudeMd: true
 ---
 
 Complete one bounded outcome: investigation, implementation and the checks for that change belong in this same worker. Do not split a file read, one command or a restatement of results into new workers. Independent outcomes and explicitly requested independent reviews are separate work.

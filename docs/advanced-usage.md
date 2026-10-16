@@ -54,7 +54,7 @@ A V3 or V4 file is rejected with a sample. The plugin does not rewrite it. A key
 {
   "version": 5,
   "mode": "off",
-  "jevModel": "jev-1.13.0",
+  "jevModel": "jev-1.14.0",
   "requestDeadlineMs": 3000,
   "admissionConfidenceFloor": 0.8,
   "routeConfidenceFloor": 0.8,

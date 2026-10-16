@@ -37,7 +37,7 @@ const ranCleanly = (cell: CellRecord): CellRecord => {
   });
   return cell;
 };
-const jevOk = (tokens: number): Record<string, unknown> => ({ http: { status: 200, code: null, duration_ms: 10, request_bytes: 100 }, jev: { model: 'jev-1.13.0', usage: { input_tokens: tokens, output_tokens: 2 }, response_bytes: 50 } });
+const jevOk = (tokens: number): Record<string, unknown> => ({ http: { status: 200, code: null, duration_ms: 10, request_bytes: 100 }, jev: { model: 'jev-1.14.0', usage: { input_tokens: tokens, output_tokens: 2 }, response_bytes: 50 } });
 /** One Gate B call: the intent, the decision that came back, and the child the host actually resolved. */
 const workerCall = (id: string, calledTier: string, decision: Record<string, unknown> | null, observed: string | null): Array<Record<string, unknown>> => [
   { phase: 'pre_intent', request_id: `q-${id}`, tool_use_id: id, role: 'worker', called_tier: calledTier, request_bytes: 100, written_at: iso(1) },
@@ -206,7 +206,7 @@ describe('R10: several admissions and late traces join to the right request', ()
     const cell = ranCleanly(cellFor('jev_hierarchy'));
     const dir = traceDir('r10-survive', [
       { phase: 'admission_intent', request_id: 'a', request_bytes: 10, written_at: iso(0) },
-      { phase: 'admission_result', request_id: 'a', attempted: true, http: { status: 500, code: 'http_error', duration_ms: 9, request_bytes: 10 }, jev: { model: 'jev-1.13.0', usage: { input_tokens: 40, output_tokens: 0 }, response_bytes: 0 }, decision: { shape: 'direct', decided: false, reason: 'http_error' }, written_at: iso(1) },
+      { phase: 'admission_result', request_id: 'a', attempted: true, http: { status: 500, code: 'http_error', duration_ms: 9, request_bytes: 10 }, jev: { model: 'jev-1.14.0', usage: { input_tokens: 40, output_tokens: 0 }, response_bytes: 0 }, decision: { shape: 'direct', decided: false, reason: 'http_error' }, written_at: iso(1) },
       // A paid allocation whose Agent call never reached the stream, plus an intent that never got its result.
       { phase: 'pre_result', request_id: 'b', tool_use_id: 'trace_only', role: 'worker', called_tier: 'standard', attempted: true, ...jevOk(25), decision: { action: 'patch', tier: 'standard', reason: null }, written_at: iso(2) },
       { phase: 'pre_intent', request_id: 'c', tool_use_id: 'no_result', role: 'worker', called_tier: 'fast', request_bytes: 10, written_at: iso(3) },
@@ -372,7 +372,7 @@ describe('L6: the legacy producer reaches the final report, once', () => {
   it('keeps the known legacy spend in the row subtotal when the legacy total is incomplete', () => {
     const cell = JSON.parse(JSON.stringify(ranCleanly(cellFor('jev_hierarchy')))) as Record<string, unknown>;
     // Chosen so the known input prices at 0.125 USD to within a rounding of the list price.
-    cell['gate'] = { ...(cell['gate'] as Record<string, unknown>), jev_cost_usd: null, jev_input_tokens: null, jev_input_tokens_known: 2_976_190, jev_model: 'jev-1.13.0' };
+    cell['gate'] = { ...(cell['gate'] as Record<string, unknown>), jev_cost_usd: null, jev_input_tokens: null, jev_input_tokens_known: 2_976_190, jev_model: 'jev-1.14.0' };
     const row = toRowView(planned, cell);
     expect(row.jev_cost_usd).toBeNull();
     expect(row.jev_cost_by_producer.legacy).toBeNull();

@@ -47,6 +47,16 @@ describe('bounded current-task compaction dependency selection', () => {
     expect(result.model).toBe(reason === 'invalid_answers' ? JEV_MODEL : null);
     expect(fetch.mock.calls.length).toBeLessThanOrEqual(1);
   });
+  it('reads answers that carry fields it does not use, so a later Jev version cannot void the batch', async () => {
+    const s = setup();
+    const fetch = vi.fn(async (_url: string, init: { body: string }) => {
+      const reply = dependencyReply(init.body);
+      const body = JSON.parse(reply.text);
+      for (const a of Object.values<Record<string, unknown>>(body.answers)) Object.assign(a, { legend: { required: 'x' }, rationale: 'a field a later Jev version may add' });
+      return { status: 200, text: JSON.stringify({ ...body, request_id: 'r-1' }) };
+    });
+    expect(await createCompactSelector(1000)(s.messages, s.baseline, 'key', { fetch, sleep })).toMatchObject({ reason: 'current_dependencies', priorities: [{ message: 5, tool: 0 }] });
+  });
   it('withholds full secret-bearing and interrupted evidence before excerpting', () => {
     const s = setup(); const m = s.messages[5]!; const u = m.toolUses[0]!;
     s.messages[5] = { ...m, toolUses: [{ ...u, text: 'x'.repeat(1400) + '\nAuthorization: Bearer sk_live_abcdefghijklmnopqrstuv' }] };

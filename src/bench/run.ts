@@ -1214,7 +1214,7 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
     if (unmatched > 0) known = false;
     if (!known) jevKnownAll = false;
     into.tokens = known ? into.tokens_known : null;
-    into.cost_usd = into.tokens === null ? null : into.tokens === 0 ? 0 : estimateJevCostUsd(g.jev_model ?? 'jev-1.13.0', into.tokens);
+    into.cost_usd = into.tokens === null ? null : into.tokens === 0 ? 0 : estimateJevCostUsd(g.jev_model ?? DEFAULT_CONFIG.jevModel, into.tokens);
   };
 
   // ---- Gate A
@@ -1436,11 +1436,11 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
   } else {
     g.jev_input_tokens = jevKnownAll && g.attempt_unknown === 0 && g.missing_pre_records === 0 && !cell.timed_out && !cell.cancelled ? g.jev_input_tokens_known : null;
   }
-  g.jev_cost_usd = g.jev_input_tokens === null ? null : g.jev_input_tokens === 0 ? 0 : estimateJevCostUsd(g.jev_model ?? 'jev-1.13.0', g.jev_input_tokens);
+  g.jev_cost_usd = g.jev_input_tokens === null ? null : g.jev_input_tokens === 0 ? 0 : estimateJevCostUsd(g.jev_model ?? DEFAULT_CONFIG.jevModel, g.jev_input_tokens);
 };
 
 /** The Jev model the Router calls (mods/router/hooks/client.ts JEV_MODEL) -- fixed, never per-record. */
-const ROUTER_JEV_MODEL = 'jev-1.13.0';
+const ROUTER_JEV_MODEL = 'jev-1.14.0';
 
 /**
  * #45: reads a cell's `mod_router-*.json` trace records (the Router's recorder writes one per decision) and folds them
