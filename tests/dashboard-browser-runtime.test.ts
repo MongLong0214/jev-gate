@@ -463,6 +463,17 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     await p.close();
   });
 
+  // #261: the inspector showed one line, and '–' for Router and Compact, whose Jev call a host or local record follows.
+  it('shows the stage Jev call facts in the inspector when a host record follows the call',async()=>{
+    const c=call('ic','router',226,{at:ago(2000)},{choice:'opus · xhigh',model:'jev-1.14.0',input:3394,output:203,costUsd:0.000142548,confidence:0.91,threshold:0.6});
+    push([run('i','claude',[c,step('ih','router',{lane:'host',summary:'Model confirmed'})])]);const p=await page();await settle(p);
+    await p.locator('#pipeline .node[data-feature=router]').click();const text=await p.locator('#circuit-inspector').textContent();
+    for(const x of ['3.4K → 203','≈$0.00014','226ms','jev-1.14.0'])expect(text).toContain(x);
+    // The card shows the decision and the basis panel its probability; the inspector repeats neither.
+    expect(text).not.toMatch(/Model confirmed|opus · xhigh|91%|60%/);
+    expect(await problems(p)).toEqual([]);await p.close();
+  });
+
   it('never renders an empty run item and marks the selected run with a tint only',async()=>{
     push([run('a','claude',[call('ea','admission',60)]),run('b','codex',[call('eb','router',70)],{state:'attention'})]);const p=await page();await settle(p);
     const tint=(sel:string)=>p.locator(sel).evaluate(e=>getComputedStyle(e).backgroundColor);
