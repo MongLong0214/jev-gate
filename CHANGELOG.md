@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.8.26 — 2026-10-19 — Dashboard stage details, resumed cache restore diagnostics
+
+- Show the stage's newest Jev call in the dashboard's stage details (#261). The panel read its one Jev line from the feature's newest stage, but Router and Compact record a host or local stage after the call, so the line was always `–`. It now reads the newest Jev-lane stage of the feature and draws its latency, tokens, estimated cost and Jev model; the card and the decision basis panel keep the decision and its probability.
+- Record why a resumed request restored no root cache (#263). A resumed conversation whose first root turn restored nothing left no trace of the reason, so a lost store record could not be told from a compaction. The turn now logs `cache_restore_skipped` with `no_record`, `no_cache` or `shorter_request` and both message counts. The cause of the one missed restore seen in the 2026-10-19 bench is not yet known.
+
 ## v0.8.25 — 2026-10-19 — Resumed root cache, resumed baseline, trace retention
 
 - Keep the root's cache observations across a resume (#258). They lived in process memory only, so a session that runs one process per turn (`claude -p --resume`, the A/B bench) judged every root switch with no prefix and held it as `cost_unknown_hold`: on 2026-10-19 the bench's D cells held all 13 root decisions, every first turn of a process with `prefix: null` while the same process had seen a warm 110k Opus prefix 25 seconds before. The plugin store now saves the observations of the last root response with the session's record (one write per root response) and the next process restores them on its first root turn, judged by their own age and TTL as before; a request shorter than the saved one, a compaction or rewind since, restores nothing. The record shows `cache_restored`. The switch cost guard itself is unchanged: it still prices only the next request and the one after it, so on a long warm session a downgrade is now held as a measured `cost_hold` instead of an unknown, and root model moves stay rare there. Changing that is a cost-policy change and needs its own bench.

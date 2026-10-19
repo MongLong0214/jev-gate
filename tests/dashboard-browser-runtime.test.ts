@@ -98,7 +98,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
         await p.goto(local.url);
         await p.waitForFunction(() => document.getElementById('version-badge')?.textContent?.includes('0.8.26'));
         expect(await p.locator('#version-badge').getAttribute('data-state')).toBe('update');
-        expect(await p.locator('#version-badge').textContent()).toContain('0.8.25');
+        expect(await p.locator('#version-badge').textContent()).toContain('0.8.26');
         expect(await p.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
         await p.screenshot({ path: join(output, `version-${width}.png`), fullPage: true });
         await p.close();
