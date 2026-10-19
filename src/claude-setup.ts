@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -11,6 +12,19 @@ export const claudeConfigDir = (env: Env): string => {
   return path;
 };
 export const claudeTraceDir = (env: Env): string => env['JEV_GATE_TRACE_DIR'] ?? join(env['XDG_STATE_HOME'] || join(env['HOME'] || homedir(), '.local', 'state'), 'jev-gate', 'claude', 'traces');
+/**
+ * #257: trace retention used to start only with the evidence server, so a session whose server never connected left
+ * every record in place. SessionStart starts it here in a detached child, so the hook neither waits for the scan nor
+ * fails with it; the child returns at once unless the `.retention` stamp is a day old (`pruneTraceDir`). Never throws.
+ */
+export const spawnTracePrune = (dir: string): void => {
+  try {
+    const script = 'const [u, d] = process.argv.slice(1); await (await import(u)).pruneTraceDir(d);';
+    const child = spawn(process.execPath, ['--input-type=module', '-e', script, new URL('./trace.js', import.meta.url).href, dir], { stdio: 'ignore', detached: true });
+    child.on('error', () => undefined);
+    child.unref();
+  } catch { /* Housekeeping only. */ }
+};
 export const claudeDefaults = (env: Env): Record<string, string> => ({
   CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: '1',
   CLAUDE_CODE_FORK_SUBAGENT: '0',

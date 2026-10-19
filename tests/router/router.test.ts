@@ -2468,6 +2468,22 @@ describe('root baseline across a resume', () => {
     expect(await turn(resumed, 't1', 'claude-haiku-5-5', 'medium', 40)).toEqual([['claude-opus-5-5', effort], ['claude-opus-5-5', effort]]);
   });
 
+  // #258: a resumed process judged its first downgrade with no prefix, so the guard held it as cost_unknown_hold.
+  it.each([
+    ['restores the last process cache observation for a resumed request', 40, 'cost_allows', 'claude-haiku-5-5'],
+    ['restores nothing for a request shorter than the observed one (a compaction since)', 2, 'cost_unknown_hold', 'claude-opus-5-5'],
+  ] as const)('%s', async (_, messageCount, reason, model) => {
+    const store = new Map<string, unknown>();
+    const first = processOf(store, KEEP);
+    await turn(first, 't1', 'claude-opus-5-5', 'xhigh', 3);
+    expect(store.get('session')).toMatchObject({ cache: { messages: 5, seen: [expect.objectContaining({ model: 'claude-opus-5-5', read: 20_000 })] } });
+    first.router.sessionEnd();
+    const resumed = processOf(store, answering({ ...CLEAR, tier: ['fast', 0.99], effort: ['low', 0.99] }));
+    expect((await turn(resumed, 't2', 'claude-opus-5-5', 'xhigh', messageCount))[0]?.[0]).toBe(model);
+    expect(resumed.f.logs.find(l => l.event === 'root')).toMatchObject({ cost_reason: reason, proposed_patch: expect.objectContaining({ model: 'claude-haiku-5-5' }) });
+    expect(resumed.f.logs.some(l => l.event === 'cache_restored')).toBe(reason === 'cost_allows');
+  });
+
   it('never restores over an environment pin', async () => {
     const resumed = processOf(DRIFTED(), KEEP);
     Object.assign(resumed.f.pins, { mainModel: true, mainEffort: true });
@@ -2501,11 +2517,19 @@ describe('root baseline across a resume', () => {
     expect(nested.calls[0]?.model).toBeUndefined();
   });
 
-  it("takes the turn's own model when a session has no record, and the host's settings only when the turn names none", async () => {
-    // Settings name Sonnet; the resumed turn arrives on Opus. Nothing proves that Opus is a drift.
-    const resumed = processOf(new Map(), FAIL, { model: 'sonnet', effort: 'xhigh' });
-    expect(await turn(resumed, 't1', 'claude-opus-5-5', 'high', 40)).toEqual([['claude-opus-5-5', 'high'], ['claude-opus-5-5', 'high']]);
-    expect(resumed.f.logs.filter(l => l.event === 'root')).toEqual([expect.objectContaining({ baseline_source: 'turn.step', from: { model: 'claude-opus-5-5', effort: 'high' } })]);
+  it("takes a new conversation's own model when a session has no record, and the host's settings for one under way", async () => {
+    // Settings name Sonnet; a new conversation starts on Opus: that is the person's own choice.
+    const fresh = processOf(new Map(), FAIL, { model: 'sonnet', effort: 'xhigh' });
+    expect(await turn(fresh, 't1', 'claude-opus-5-5', 'high', 1)).toEqual([['claude-opus-5-5', 'high'], ['claude-opus-5-5', 'high']]);
+    expect(fresh.f.logs.filter(l => l.event === 'root')).toEqual([expect.objectContaining({ baseline_source: 'turn.step', from: { model: 'claude-opus-5-5', effort: 'high' } })]);
+    // #259: a conversation under way with no record (one from before it was kept) may have resumed on the Router's own
+    // last pair, as a 0.8.23 session last routed to Sonnet resumed there under 0.8.24 and stayed: the settings model is native.
+    const resumed = processOf(new Map(), FAIL, { model: 'opus', effort: 'xhigh' });
+    await turn(resumed, 't1', 'claude-sonnet-5-5', 'xhigh', 40);
+    expect(resumed.f.logs.filter(l => l.event === 'root')).toEqual([expect.objectContaining({ baseline_source: 'host_environment', from: { model: 'claude-opus-5-5', effort: 'xhigh' } })]);
+    const same = processOf(new Map(), FAIL, { model: 'sonnet', effort: 'xhigh' });
+    await turn(same, 't1', 'claude-sonnet-5-5', 'xhigh', 40);
+    expect(same.f.logs.filter(l => l.event === 'root')).toEqual([expect.objectContaining({ baseline_source: 'turn.step' })]);
     const unnamed = processOf(new Map(), KEEP, { model: 'opus', effort: 'xhigh' });
     expect(await turn(unnamed, 't1', '', 'medium', 40)).toEqual([['claude-opus-5-5', 'xhigh'], ['claude-opus-5-5', 'xhigh']]);
     expect(unnamed.f.logs.filter(l => l.event === 'root')).toEqual([expect.objectContaining({ baseline_source: 'host_environment', from: { model: 'claude-opus-5-5', effort: 'xhigh' } })]);

@@ -122,7 +122,7 @@ type NextLike<E, R> = ((e: E) => Promise<R>) & { readonly signal: AbortSignal };
  */
 export const VERIFIED_HOST = '2.1.282';
 /** Identifies this loaded hook source, independently of a manifest updated on disk. */
-export const ROUTER_HOOK_VERSION = '0.8.24';
+export const ROUTER_HOOK_VERSION = '0.8.25';
 
 /**
  * Later 2.1 releases are accepted too. Pinned to one release, spawn routing went native after every host update: the
@@ -290,7 +290,12 @@ export interface RootPair { model: string; effort: SymbolicEffort | number | nul
  * of that request. A resumed session's main loop is the model of its last answer, which may be the Router's own patch:
  * that pair is drift, never the session's baseline.
  */
-export interface RootRecord { native: RootPair; routed: RootPair | null; drift: RootPair | null; origin: 'turn.step' | 'host_environment' }
+export interface RootRecord { native: RootPair; routed: RootPair | null; drift: RootPair | null; origin: 'turn.step' | 'host_environment'; cache?: RootCache }
+/**
+ * The root's cache observations as the last response left them, and that request's message count: a later process of
+ * the session restores them only for a request no shorter, so a compaction or rewind since (#258) restores nothing.
+ */
+export interface RootCache { messages: number; seen: CacheObservation[] }
 
 const sameId = (a: string, b: string): boolean => cacheId(a) === cacheId(b);
 export const parseRootRecord = (v: unknown): RootRecord | null => {
@@ -299,6 +304,14 @@ export const parseRootRecord = (v: unknown): RootRecord | null => {
   const r = v as RootRecord | null;
   return r && typeof r === 'object' && pair(r.native) && (r.routed === null || pair(r.routed)) && (r.drift === null || pair(r.drift)) &&
     (r.origin === 'turn.step' || r.origin === 'host_environment') ? { native: r.native, routed: r.routed, drift: r.drift, origin: r.origin } : null;
+};
+const wholeOrNull = (n: unknown): n is number | null => n === null || typeof n === 'number' && Number.isSafeInteger(n) && n >= 0;
+const parseRootCache = (v: unknown): RootCache | null => {
+  const c = (v as { cache?: RootCache } | null)?.cache;
+  const seen = (o: CacheObservation): boolean => !!o && typeof o === 'object' && typeof o.model === 'string' && typeof o.at === 'number' && Number.isFinite(o.at) &&
+    [o.ttlMs, o.read, o.write, o.output, o.input ?? null].every(wholeOrNull) && (o.effort == null || isSymbolicEffort(o.effort)) &&
+    (o.ttlIsMinimum === undefined || typeof o.ttlIsMinimum === 'boolean') && (o.ttlBoundsMs === undefined || Array.isArray(o.ttlBoundsMs) && o.ttlBoundsMs.length === 2 && o.ttlBoundsMs.every(n => n !== null && wholeOrNull(n)));
+  return c && typeof c === 'object' && typeof c.messages === 'number' && wholeOrNull(c.messages) && Array.isArray(c.seen) && c.seen.length <= 16 && c.seen.every(seen) ? { messages: c.messages, seen: c.seen } : null;
 };
 
 /**
@@ -443,6 +456,8 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
   const openings = new Map<string, Promise<Prepared | null>>();
   let rootSaving: Promise<void> = Promise.resolve();
   let rootSaved = '';
+  /** Saved with the record; null when the last observation's request had no message count, or after a reset. */
+  let rootCache: RootCache | null = null;
   /** The host's settings model as last read against the root record. */
   let rootHostModel: string | undefined;
   const turnTexts = bounded<string, string>(MAX_TURNS);
@@ -693,29 +708,35 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
   };
 
   /**
-   * The session's stored record, read once per session. Without one (a new session, a resume from before this record,
-   * or a store that lost it) nothing proves a drift: the turn's own model is native, and the host's environment and
-   * settings stand in only when the turn names none. A stored drift the host's environment or settings name is the
-   * person's choice. Null starts from the turn's pair.
+   * The session's stored record, read once per session. Without one, a new conversation's own model is native. A
+   * conversation already under way (a resume from before this record, or a store that lost it) may have resumed on
+   * the Router's last pair, so the host's environment and settings model is native when it names another model, as it
+   * is when the turn names none. A stored drift the host's environment or settings name is the person's choice. Null
+   * starts from the turn's pair.
    */
-  const rootRecordAtStart = async (engine: RouterEngine, incoming: RootPair, signal: AbortSignal): Promise<{ record: RootRecord | null; saved: string; hostModel: string | undefined }> => {
+  const rootRecordAtStart = async (engine: RouterEngine, incoming: RootPair, signal: AbortSignal, underWay = false): Promise<{ record: RootRecord | null; saved: string; hostModel: string | undefined; cache: RootCache | null }> => {
     let saved = '';
     let hostModel: string | undefined;
+    let cache: RootCache | null = null;
     const record = async (): Promise<RootRecord | null> => {
-      const stored = parseRootRecord(await within(engine.loadRoot?.() ?? Promise.resolve(undefined), signal));
-      if (stored) saved = JSON.stringify(stored);
-      if (!stored && incoming.model.trim() || !engine.hostModel) return stored;
+      const raw = await within(engine.loadRoot?.() ?? Promise.resolve(undefined), signal);
+      const stored = parseRootRecord(raw);
+      cache = parseRootCache(raw);
+      if (stored) saved = JSON.stringify(cache ? { ...stored, cache } : stored);
+      // A conversation under way may resume on the Router's own last pair (a session from before this record keeps none,
+      // #259); only a new conversation's pair is surely the person's.
+      if (!stored && incoming.model.trim() && !underWay || !engine.hostModel) return stored;
       const written = hostModel = await within(engine.hostModel(), signal);
       const model = written ? resolveClaudeModel(written, await within(aliasesOf(engine), signal)) : null;
       if (stored) return model && sameId(model, incoming.model) ? { ...stored, native: incoming, drift: null, origin: 'turn.step' } : stored;
-      if (!model) return null;
+      if (!model || sameId(model, incoming.model)) return null;
       const effort = engine.currentEffort ? await within(engine.currentEffort().catch(() => undefined), signal) : undefined;
       return { native: { model, effort: effort ?? null }, routed: null, drift: incoming, origin: 'host_environment' };
     };
     try {
-      return { record: await record(), saved, hostModel };
+      return { record: await record(), saved, hostModel, cache };
     } catch {
-      return { record: null, saved, hostModel };
+      return { record: null, saved, hostModel, cache: null };
     }
   };
   /**
@@ -723,7 +744,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
    * read as the save is queued: one that runs after the session changed is dropped, never written under the next one.
    */
   const saveRoot = (engine: RouterEngine): void => {
-    const record = rootRecord;
+    const record = rootRecord && (rootCache ? { ...rootRecord, cache: rootCache } : rootRecord);
     if (!record || !engine.saveRoot || !engine.sessionId || JSON.stringify(record) === rootSaved) return;
     rootSaved = JSON.stringify(record);
     const queuedIn = engine.sessionId();
@@ -778,10 +799,16 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     const resumed = !rootLoaded;
     if (resumed) {
       rootLoaded = true;
-      const start = await rootRecordAtStart(engine, incoming, signal);
+      const start = await rootRecordAtStart(engine, incoming, signal, (e.messageCount ?? 0) > 1);
       // A newer root turn or session began while the read waited: it owns the record now, and this turn stays native.
       if (signal.aborted || generation !== rootGeneration) return null;
       rootRecord = start.record; rootSaved = start.saved; rootHostModel = start.hostModel;
+      // A new process of this conversation starts with the cache the last one observed, judged by its own clock and TTL.
+      if (start.cache && (e.messageCount ?? 0) >= start.cache.messages) {
+        for (const v of start.cache.seen) rootCaches.observe({ ...v, epoch: String(cacheEpoch) });
+        rootCache = start.cache;
+        log(engine, { event: 'cache_restored', scope: 'root', turn: e.turnId, models: start.cache.seen.map(v => v.model), messages: start.cache.messages });
+      }
     }
     rootRecord = nextRootRecord(rootRecord, incoming, resumed);
     // The drift was read against the host's settings model; once that changes, or it cannot be read, the native pair
@@ -1049,7 +1076,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
 
   const contextReset = (agentId?: string): void => {
     if (agentId) { const c = children.get(agentId); if (c) { c.controller.abort(); c.controller = new AbortController(); delete c.cache; delete c.step; delete c.cacheEffort; c.cachePreserved = false; } }
-    else { cacheEpoch++; rootCaches.clear(); lastRoot = null; for (const t of turns.values()) { t.stopped = true; t.controller.abort(); } }
+    else { cacheEpoch++; rootCaches.clear(); rootCache = null; lastRoot = null; for (const t of turns.values()) { t.stopped = true; t.controller.abort(); } }
   };
   const noteMessages = (engine: RouterEngine, e: TurnStepEvent): void => {
     if (typeof e.messageCount !== 'number') return;
@@ -1174,7 +1201,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       const seen = typeof result?.usage?.model === 'string' ? result.usage.model : null;
       // A resume restores the main loop to the model of the last answer.
       const routed: RootPair = { model: seen !== null && !answeredBy(asked, seen) ? seen : asked, effort: sent ?? null };
-      if (rootRecord && (rootRecord.routed?.model !== routed.model || rootRecord.routed.effort !== routed.effort)) { rootRecord = { ...rootRecord, routed }; saveRoot(engine); }
+      if (rootRecord && (rootRecord.routed?.model !== routed.model || rootRecord.routed.effort !== routed.effort)) rootRecord = { ...rootRecord, routed };
       if (seen === null || !answeredBy(asked, seen)) rootCaches.observe(cacheSeen(asked, seen, result?.usage, String(cacheEpoch), startedAt));
       // Only a response the asked model gave wrote the cache a later turn on that model reads.
       if (seen !== null && answeredBy(asked, seen)) {
@@ -1192,6 +1219,9 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
         lastRoot = { at: engine.now(), model: asked, effort: isSymbolicEffort(sent) ? sent : null,
           cache: { model: asked, ageMs: 0, epoch: String(cacheEpoch), ttlMs: observedTtl(normalizeUsage('claude', result?.usage)), output: normalizeUsage('claude', result?.usage).output, input: counts?.['input_tokens'] ?? null, read: counts?.['cache_read_input_tokens'] ?? null, write: counts?.['cache_creation_input_tokens'] ?? null } };
       }
+      // ponytail: one store write per root response; save at turn end if store writes ever show in step latency.
+      rootCache = e.messageCount !== undefined ? { messages: e.messageCount, seen: rootCaches.list(String(cacheEpoch)) } : null;
+      saveRoot(engine);
     }
     return result;
   }
@@ -1526,7 +1556,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       childHistoryFull = false;
       lastReply = null; currentRootTurn = null; recentRequests.length = 0; notices.clear(); messageCounts.clear(); announced.clear();
       lastRoot = null; rootCaches.clear(); preservedEffortModels.clear(); missedEffortModels.clear(); cacheEpoch++;
-      lastIncoming = null; rootLoaded = false; rootGeneration++; openings.clear(); rootRecord = null; rootSaved = ''; rootHostModel = undefined;
+      lastIncoming = null; rootLoaded = false; rootGeneration++; openings.clear(); rootRecord = null; rootSaved = ''; rootCache = null; rootHostModel = undefined;
       keyWait = null;
       versionWait = null;
       pinReads.clear();

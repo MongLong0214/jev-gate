@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -2633,6 +2633,19 @@ describe('dist/hook.js (process)', () => {
     expect(exec('{not json', { JEV_GATE_MODE: 'auto' })).toMatchObject({ status: 0, stdout: '', stderr: 'jev-gate: stdin_invalid_json\n' });
     const big = exec('{"hook_event_name":"PreToolUse","prompt":"' + 'y'.repeat(300 * 1024) + '"}', { JEV_GATE_MODE: 'auto' });
     expect(big).toMatchObject({ status: 0, stdout: '', stderr: 'jev-gate: stdin_too_large\n' });
+  });
+
+  // #257: retention ran only when the evidence server started, so a session without it kept every record.
+  it('prunes trace records older than the retention window at SessionStart, without the evidence server', async () => {
+    const traces = mkdtempSync(join(tmp, 'proc-traces-'));
+    const old = join(traces, 'post-00000000-0000-4000-8000-000000000000.json'), fresh = join(traces, 'post-11111111-1111-4111-8111-111111111111.json');
+    writeFileSync(old, '{}'); writeFileSync(fresh, '{}');
+    const past = (Date.now() - 4 * 86_400_000) / 1000;
+    utimesSync(old, past, past);
+    expect(exec({ hook_event_name: 'SessionStart', session_id: 's1' }, { JEV_GATE_MODE: 'auto', JEV_GATE_TRACE_DIR: traces }).status).toBe(0);
+    await vi.waitFor(() => expect(existsSync(old)).toBe(false), { timeout: 10_000, interval: 50 });
+    expect(existsSync(fresh)).toBe(true);
+    expect(existsSync(join(traces, '.retention'))).toBe(true);
   });
 
   it('registers one command per event, PreToolUse without a matcher and Stop present', () => {
