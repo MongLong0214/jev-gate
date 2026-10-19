@@ -2482,6 +2482,9 @@ describe('root baseline across a resume', () => {
     expect((await turn(resumed, 't2', 'claude-opus-5-5', 'xhigh', messageCount))[0]?.[0]).toBe(model);
     expect(resumed.f.logs.find(l => l.event === 'root')).toMatchObject({ cost_reason: reason, proposed_patch: expect.objectContaining({ model: 'claude-haiku-5-5' }) });
     expect(resumed.f.logs.some(l => l.event === 'cache_restored')).toBe(reason === 'cost_allows');
+    // #263: a skipped restore names its cause and both counts.
+    expect(resumed.f.logs.find(l => l.event === 'cache_restore_skipped')).toEqual(reason === 'cost_allows' ? undefined
+      : expect.objectContaining({ reason: 'shorter_request', request_messages: messageCount, stored_messages: 5 }));
   });
 
   it('never restores over an environment pin', async () => {

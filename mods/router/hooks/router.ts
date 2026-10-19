@@ -808,6 +808,9 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
         for (const v of start.cache.seen) rootCaches.observe({ ...v, epoch: String(cacheEpoch) });
         rootCache = start.cache;
         log(engine, { event: 'cache_restored', scope: 'root', turn: e.turnId, models: start.cache.seen.map(v => v.model), messages: start.cache.messages });
+      } else if ((e.messageCount ?? 0) > 1) {
+        // #263: a resumed conversation that restores nothing says why, with both counts, so a lost record is told from a compaction.
+        log(engine, { event: 'cache_restore_skipped', scope: 'root', turn: e.turnId, reason: !start.record ? 'no_record' : !start.cache ? 'no_cache' : 'shorter_request', request_messages: e.messageCount, stored_messages: start.cache?.messages ?? null });
       }
     }
     rootRecord = nextRootRecord(rootRecord, incoming, resumed);
