@@ -107,11 +107,19 @@ describe('observed usage and cost', () => {
   it('prices a root switch over a turn: the cache write is paid once and every later request saves (#271)', () => {
     const o = new ModelCache();
     o.observe({ model: 'claude-opus-5-5', at: 0, epoch: 'e', ttlMs: 3_600_000, read: 148_000, write: 1000, input: 1000, output: 1500 });
-    expect(routeCost('claude', 'claude-opus-5-5', 'claude-haiku-5-5', o, 'e', 1000, 10)).toMatchObject({ hold: true, reason: 'cost_hold', scope: 'next_request_scenario' });
-    expect(routeCost('claude', 'claude-opus-5-5', 'claude-haiku-5-5', o, 'e', 1000, 10, TURN_HORIZON)).toMatchObject({ hold: false, reason: 'cost_allows', scope: 'turn_horizon', horizon: 5 });
+    expect(routeCost('claude', 'claude-opus-5-5', 'claude-haiku-5-5', o, 'e', 1000, 10)).toMatchObject({ hold: true, reason: 'cost_hold', scope: 'next_request_scenario',
+      output_basis: 'scenario_zero_to_previous_output', inputs: { outputRange: [0, 1500] } });
+    expect(routeCost('claude', 'claude-opus-5-5', 'claude-haiku-5-5', o, 'e', 1000, 10, TURN_HORIZON)).toMatchObject({ hold: false, reason: 'cost_allows', scope: 'turn_horizon', horizon: 5,
+      output_basis: 'previous_output', inputs: { outputRange: [1500, 1500] } });
     // Sonnet's write is half Opus's, its read half too: at 150k it repays only after about 20 requests.
     expect(routeCost('claude', 'claude-opus-5-5', 'claude-sonnet-5-5', o, 'e', 1000, 10, TURN_HORIZON)).toMatchObject({ hold: true, reason: 'cost_hold' });
     expect(routeCost('claude', 'claude-opus-5-5', 'claude-sonnet-5-5', o, 'e', 1000, 10, 25)).toMatchObject({ hold: false });
+    // Codex keeps the one-request price: a warm sol move to luna with output it may not repeat stays held (#271).
+    const x = new ModelCache();
+    x.observe({ model: 'gpt-6.1-sol', at: 0, epoch: 'e', ttlMs: 1_800_000, read: 97_000, write: 1000, input: 1000, output: 1000 });
+    expect(routeCost('codex', 'gpt-6.1-sol', 'gpt-6-luna', x, 'e', 1000)).toMatchObject({ hold: true, inputs: { outputRange: [0, 1000] } });
+    const v = { prefix: 0, targetHeld: 0, baseline: providerPrice('claude', 'claude-opus-5-5', 1)!, target: providerPrice('claude', 'claude-haiku-5-5', 1)!, baselineCache: 'warm' as const, targetCache: 'warm' as const, baselineWrite: 8, targetWrite: 1, outputRange: [0, 0] as [number, number], returns: true };
+    for (const horizon of [Infinity, 0, 1.5]) expect(switchCost({ ...v, horizon })).toMatchObject({ hold: true, reason: 'cost_unknown_hold' });
     // A horizon never turns an unknown into an allowance.
     expect(routeCost('claude', 'claude-opus-5-5', 'claude-haiku-5-5', new ModelCache(), 'e', 1000, 10, TURN_HORIZON)).toMatchObject({ hold: true, reason: 'cost_unknown_hold' });
   });

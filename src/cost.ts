@@ -100,7 +100,7 @@ export const switchCost = (v: SwitchCostInput): { hold: boolean; reason: 'cost_h
     state === 'warm' ? [p.read, p.read] : !w ? null : state === 'cold' ? w : [Math.min(p.read, w[0]), Math.max(p.read, w[1])];
   const bw = rate(v.baselineWrite), tw = rate(v.targetWrite);
   if (!v.baseline || !v.target || [bw, tw, v.outputRange, v.overheadRange].some(r => r && !range(r)) ||
-    [v.prefix ?? 0, v.targetHeld].some(n => !Number.isSafeInteger(n) || n < 0)) return unknown;
+    [v.prefix ?? 0, v.targetHeld].some(n => !Number.isSafeInteger(n) || n < 0) || v.horizon !== undefined && !(Number.isSafeInteger(v.horizon) && v.horizon >= 1)) return unknown;
   // Returning to a baseline the switch left cold rewrites what staying would have written now and read then: per token
   // a cold baseline is then worth its read rate, not its write. Warm, the baseline reads either way.
   const from = side(v.baseline, v.returns && v.baselineCache === 'cold' ? 'unknown' : v.baselineCache, bw);
