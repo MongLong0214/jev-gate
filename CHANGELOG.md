@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.8.29 — 2026-10-19 — A livelier Jev traffic strip, Router docs on max
+
+- The dashboard's Jev traffic strip covers 2 minutes instead of 30 seconds and runs on a ruler that scrolls at the ticks' speed while the stream is live; pausing, a lost connection or reduced motion stop it. Jev calls arrive about once a minute in bursts: over the last 3 hours a 30-second strip was empty 76% of the time, a 2-minute one 44%. No tick is drawn without a recorded call.
+- The Router README said Opus and Fable could be moved to `max`. Router never offers `max` (since v0.3.0): a native `max` is kept or lowered. The docs now say so; behavior is unchanged.
+
 ## v0.8.28 — 2026-10-19 — Root model switches priced over a turn
 
 - Price a main-session model switch over the requests a turn runs instead of the next request alone (#271). A switch rewrites the conversation's prompt cache once and saves the read and output price difference on every request after it, but the cost guard compared that one write with one request's saving, so it held every downgrade of a warm conversation: from v0.8.24 to v0.8.27 Jev proposed a cheaper main model 42 times (Haiku 25, Sonnet 17) and none moved. A root switch is now priced over 5 requests (`TURN_HORIZON`, the p90 of requests per root turn over 698 turns, 2026-10-16 to 10-19), each producing the newest request's output; a spawn is still priced on its first. At a 150k Opus prefix Haiku repays its write within the turn and moves, Sonnet takes about 20 requests and stays held (at a 1.5k-token last output; a longer one moves sooner, a shorter one holds Haiku too). Codex and spawns keep the one-request price and its zero-to-previous output scenario. An unobserved prefix, cache state or price still holds, and an effort change is unchanged.

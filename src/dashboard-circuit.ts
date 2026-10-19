@@ -14,7 +14,7 @@ export const CIRCUIT_CSS = `
 .node .foot{margin-top:auto;height:14px;display:flex;align-items:center;gap:6px;font-size:11px;color:var(--faint)}.node .ago{margin-left:auto;width:64px;overflow:hidden;text-overflow:ellipsis;text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 .strip{position:relative;display:block;height:14px;margin:2px -12px 0;border-top:1px solid var(--line);overflow:hidden}.strip .tr{position:absolute;inset:0}
 .strip i{position:absolute;bottom:3px;width:1.5px;height:7px;background:var(--accent);border-radius:1px;animation:slide 60s linear forwards}.node.idle .strip i{background:var(--faint)}
-@keyframes slide{from{left:100%}to{left:0}}@keyframes tw{0%,100%{opacity:1}50%{opacity:.25}}
+@keyframes slide{from{left:100%}to{left:0}}@keyframes grid{to{background-position:-22px 100%}}@keyframes tw{0%,100%{opacity:1}50%{opacity:.25}}
 .rail{position:relative;z-index:1;height:24px;margin:14px 0}.rail .ln{position:absolute;left:0;right:0;top:12px;height:1px;background:var(--spark)}
 .jb{position:absolute;z-index:1;left:0;top:0;width:92px;height:24px;display:flex;align-items:center;gap:6px;padding:0 8px;border:1px solid var(--spark);border-radius:6px;background:var(--paper);font-size:12px;font-weight:600;white-space:nowrap;transition:border-color .15s}.jb i{width:6px;height:6px;border-radius:50%;background:var(--faint);flex:none;transition:background .15s}.jb .v{font-weight:400;color:var(--faint);font-variant-numeric:tabular-nums}.rail.wait .jb{border-color:var(--accent)}.rail.wait .jb i{background:var(--accent)}
 .rail .ln b{position:absolute;top:-4px;width:8px;height:8px;margin-left:-4px;border-radius:50%;background:var(--accent);animation:ping .6s ease-out forwards}
@@ -40,7 +40,8 @@ const NODE={admission:[['실행 형태','Execution path'],['형태','Path'],['�
 const isCall=s=>s.lane==='jev'&&s.durationMs!==undefined&&!s.lifecycle;
 // Jev traffic is every recorded Jev request and response; only a response is a call.
 const isJev=s=>s.lane==='jev'&&!s.lifecycle;
-const ACTIVITY_MS=60000,COMM_MS=30000,MAX_TRIPS=24;
+// Jev calls arrive about once a minute in bursts: a 30-second window was empty 76% of the time, 2 minutes 44%.
+const ACTIVITY_MS=60000,COMM_MS=120000,MAX_TRIPS=24;
 // A held record waits for its arrival to play; it maps to its run so a row knows when it must redraw.
 // Step ids repeat across runs in real traces, so a hold is keyed by run and step.
 const isHeld=(runId,id)=>held.has(runId+' '+id);
