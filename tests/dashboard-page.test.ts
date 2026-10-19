@@ -196,13 +196,12 @@ describe('dashboard live interactions', () => {
     expect(p.w.document.querySelector('#rc button[data-call=c1]')?.getAttribute('aria-pressed')).toBe('true'); expect(text(p, 'basis-meta')).toContain('고정한 호출');
     p.click('#follow'); expect(p.w.document.querySelectorAll('#rc [aria-pressed=true]')).toHaveLength(0); expect(text(p, 'basis-meta')).toContain('최신 호출을 따라갑니다');
   });
-  it('counts a request awaiting its response up in its own row, in the badge and on the timeline', async () => {
+  it('counts a request awaiting its response up in its own row and in the badge', async () => {
     const at = new Date(Date.now() - 1500).toISOString();
     const p = page(); p.push(snapshot([run('r', 'claude', [step('w', 'admission', 'jev', { state: 'active', at }), step('d', 'router', 'jev', { durationMs: 80, receipt: { status: 200, code: null, model: 'jev-1.14.0', input: 10, output: 1, costUsd: null, choice: 'claude-sonnet-5 · high', confidence: .9, threshold: .6, direction: null } })])]));
     const wait = p.w.document.querySelector('#rc button[data-call=w]')!;
     expect(wait.textContent).toContain('응답 대기'); expect(wait.querySelector('.run[data-since]')).not.toBeNull();
     expect(p.w.document.querySelector('#pipeline .jb .v')?.textContent).toBe('1.14'); expect(p.w.document.querySelector('#pipeline .rail')?.classList.contains('wait')).toBe(true);
-    expect(p.get('tl').querySelectorAll('i')).toHaveLength(2); expect(p.get('tl').querySelectorAll('i.p')).toHaveLength(1);
     const first = wait.querySelector('.run')!.textContent; await vi.waitFor(() => expect(wait.querySelector('.run')!.textContent).not.toBe(first), { timeout: 3000 });
   });
   it('estimates today cost from recorded tokens only and labels it as an estimate', () => {
@@ -294,7 +293,7 @@ it('shows a Jev response\'s questions once, in the decision basis panel, with tw
   const p = page(); p.push(snapshot([run('decision', 'claude', [step('few', 'admission', 'jev', { durationMs: 40, receipt: rc, judgements: q(2) }), step('many', 'admission', 'jev', { durationMs: 50, at: new Date(Date.parse(stamp) - 1000).toISOString(), receipt: rc, judgements: q(14) })])]));
   const slots = () => [...p.get('basis-q').querySelectorAll('li')];
   expect(slots()).toHaveLength(12); expect(slots().filter(l => l.textContent)).toHaveLength(2);
-  expect(p.get('basis-q').querySelectorAll('b')).toHaveLength(1); expect(slots()[0]!.textContent).toContain('model'); expect(slots()[0]!.textContent).toContain('0.70');
+  expect(p.get('basis-q').querySelectorAll('b')).toHaveLength(1); expect(slots()[0]!.textContent).toContain('모델'); expect(slots()[0]!.textContent).toContain('0.70');
   expect(text(p, 'basis-code')).toBe('model_selected');
   p.click('#rc button[data-call=many]'); expect(slots()).toHaveLength(12); expect(slots()[11]!.textContent).toBe('외 3개'); expect(slots()[10]!.textContent).toContain('q10');
   if (p.w.document.querySelector('#trace button[data-step=few]')?.getAttribute('aria-expanded') !== 'true') p.click('#trace button[data-step=few]');
@@ -303,6 +302,39 @@ it('shows a Jev response\'s questions once, in the decision basis panel, with tw
   expect(p.w.document.querySelector('#rc button[data-call=few]')?.getAttribute('aria-pressed')).toBe('true'); expect(p.w.document.activeElement?.getAttribute('data-call')).toBe('few');
   p.click('#language'); expect(text(p, 'basis-meta')).toContain('Pinned call');
   p.click('#rc button[data-call=many]'); expect(slots()[11]!.textContent).toBe('+3 more');
+});
+
+it('reads a Gate decision as one stage with plain-word basis, call scope, reason and next stage (#269)', () => {
+  const rc = { status: 200, code: null, model: 'jev-1.14.0', input: 300, output: 20, costUsd: null, choice: 'direct', confidence: .81, threshold: null, direction: null };
+  const next = new Date(Date.parse(stamp) + 1000).toISOString();
+  const p = page(); p.push(snapshot([run('g', 'claude', [
+    step('a', 'admission', 'jev', { title: 'Gate A · Jev 응답', durationMs: 40, receipt: rc, judgements: [
+      { question: 'need_worker', value: '참 확률 19%', confidence: null, probabilities: [{ label: '참', value: .19 }, { label: '거짓', value: .81 }] },
+      { question: 'effort_2', value: 'high', confidence: .6, probabilities: [{ label: 'high', value: .6 }, { label: 'low', value: .4 }] }] }),
+    step('pa', 'admission', 'policy', { title: 'Gate A · 판정', summary: '직접 처리 · 확신 기준 충족' }),
+    step('w', 'workers', 'host', { at: next, title: '워커 · 실행', summary: '완료' }),
+  ], { firstAt: new Date(Date.parse(stamp) - 7_260_000).toISOString() })]));
+  const slots = [...p.get('basis-q').querySelectorAll('li')].map(l => l.textContent ?? '');
+  expect(slots[0]).toContain('거짓'); expect(slots[0]).toContain('0.81'); expect(slots[0]).not.toContain('참 확률');
+  expect(slots[1]).toContain('추론 강도 3');
+  expect(filled(p).find(b => b.getAttribute('data-call') === 'a')?.textContent).toContain('사용자 요청');
+  // The response and its policy are one stage, named by the policy.
+  const stages = [...p.get('trace').querySelectorAll('button[data-step]')];
+  expect(stages.map(b => b.getAttribute('data-step'))).toEqual(['a', 'w']); expect(stages[0]!.textContent).toContain('Gate A · 판정');
+  expect(text(p, 'rd-meta')).toContain('2시간 1분');
+  p.click('.node[data-feature=admission]');
+  // The card already names the reason, so the inspector does not repeat it.
+  expect(node(p, 'admission').querySelector('.nt')!.textContent).toBe('직접 처리 · 확신 기준 충족'); expect(text(p, 'circuit-inspector')).not.toContain('확신 기준 충족'); expect(text(p, 'circuit-inspector')).toContain('워커 · 실행');
+  p.click('#language'); expect(text(p, 'rd-meta')).toContain('2h 1m');
+});
+
+it('folds consecutive identical settled records into one stage with their count and span (#269)', () => {
+  const t = (s: number) => new Date(Date.parse(stamp) + s * 1000).toISOString();
+  const check = (i: number, extra: Partial<OperationStep> = {}) => step('c' + i, 'router', 'local', { at: t(i), title: 'Router · 루트 응답 모델 확인', summary: '일치', ...extra });
+  const p = page(); p.push(snapshot([run('r', 'claude', [check(0), check(1), check(2), check(3, { summary: '불일치', state: 'error' })])]));
+  const stages = [...p.get('trace').querySelectorAll('button[data-step]')];
+  expect(stages.map(b => b.getAttribute('data-step'))).toEqual(['c2', 'c3']); expect(stages[0]!.textContent).toContain('×3'); expect(stages[1]!.textContent).not.toContain('×');
+  p.click('#trace button[data-step=c2]'); expect(opened(p)).toContain('반복 기록'); expect(opened(p)).toContain('3건');
 });
 
 it('names the reason under each circuit card and draws its recorded confidence as a bar', () => {
@@ -354,7 +386,7 @@ it('draws one strip tick per record of the last minute, caps a burst of trips an
   const base = Date.now(), records = (n: number) => Array.from({ length: n }, (_, i) => step(`r${i}`, 'router', 'jev', { durationMs: 50 + i, at: new Date(base + i).toISOString() }));
   const p = page(); p.push(snapshot([run('r', 'claude', [old, ...records(3)])]));
   expect(node(p, 'router').querySelectorAll('.strip .tr i')).toHaveLength(3); expect(node(p, 'router').querySelector('.strip')!.getAttribute('aria-hidden')).toBe('true');
-  expect(p.get('tl').querySelectorAll('i')).toHaveLength(3); expect(filled(p)).toHaveLength(4);
+  expect(filled(p)).toHaveLength(4);
   const rate = /\/분|분당|최근 1분|처리량|per minute|\/min/;
   expect(p.w.document.body.textContent).not.toMatch(rate); p.click('#language'); expect(p.w.document.body.textContent).not.toMatch(rate);
   const burst = page(); burst.push(snapshot([run('r', 'claude', records(1))])); burst.push(snapshot([run('r', 'claude', records(1))]));
@@ -419,20 +451,22 @@ it('grows the bar of a running stage on the same tick as its duration', async ()
   expect(width('d')).toBeLessThan(settled);
 });
 
-it('fetches the detail fields a frame leaves out for the opened stage only, and keeps them while that stage is unchanged', async () => {
+it('fetches the detail fields a frame leaves out for the opened stage and the inspected card only, and keeps them while that stage is unchanged', async () => {
   const next = frames(), p = page();
   const full = step('s2', 'router', 'host', { details: ['baseline gpt-6.1-sol · xhigh'], sessionId: 'cx-9', routing: { scope: 'root', baseline: 'gpt-6.1-sol', modelReason: 'same_value', effortReason: 'same_value' } });
-  const fetch = vi.fn(async (url: string) => ({ ok: true, json: async () => url.endsWith('s2') ? full : { ...step('s1', 'router', 'host'), details: ['first stage evidence'] } }));
+  const fetch = vi.fn(async (url: string) => ({ ok: true, json: async () => url.endsWith('s2') ? full : { ...step('s1', 'router', 'host', { summary: 'First result' }), details: ['first stage evidence'] } }));
   Object.assign(p.w, { fetch });
-  const { details: _details, sessionId: _session, routing: _routing, ...slim } = full, { details: _first, ...first } = step('s1', 'router', 'host');
+  const { details: _details, sessionId: _session, routing: _routing, ...slim } = full, { details: _first, ...first } = step('s1', 'router', 'host', { summary: 'First result' });
   const frame = (more: OperationRun[] = []) => snapshot([run('r/1', 'codex', [first, slim] as OperationStep[]), ...more]);
   p.push(next(frame()));
-  expect(opened(p)).toContain('결과Recorded result'); expect(opened(p)).not.toContain('라우팅 대상'); expect(fetch.mock.calls.map(c => c[0])).toEqual(['/api/step?run=r%2F1&step=s2']);
+  expect(opened(p)).toContain('결과Recorded result'); expect(opened(p)).not.toContain('라우팅 대상');
+  // The inspector reads its card's stage (s1, the first of the latest records) and the run detail its opened stage.
+  expect(fetch.mock.calls.map(c => c[0])).toEqual(['/api/step?run=r%2F1&step=s1', '/api/step?run=r%2F1&step=s2']);
   await vi.waitFor(() => expect(opened(p)).toContain('라우팅 대상메인 턴')); expect(opened(p)).toContain('baseline gpt-6.1-sol · xhigh');
   p.patch(next(frame([run('other', 'claude', [step('g', 'guard', 'policy')])])));
-  expect(opened(p)).toContain('baseline gpt-6.1-sol · xhigh'); expect(fetch).toHaveBeenCalledTimes(1);
+  expect(opened(p)).toContain('baseline gpt-6.1-sol · xhigh'); expect(fetch).toHaveBeenCalledTimes(2);
   p.click('[data-step="s1"]'); await vi.waitFor(() => expect(opened(p)).toContain('first stage evidence'));
-  expect(fetch.mock.calls.map(c => c[0])).toEqual(['/api/step?run=r%2F1&step=s2', '/api/step?run=r%2F1&step=s1']);
+  expect(fetch).toHaveBeenCalledTimes(2);
 });
 
 it('lands a recorded host step on its node, strip and run row without a Jev round trip', async () => {
@@ -449,7 +483,9 @@ it('counts only current failures at the top, keeps settled ones as past errors a
   const day = new Date(Date.now() - 86_400_000).toISOString(), next = frames();
   const outage = (now: 'unknown' | 'later_ok') => run('outage', 'codex', [step('cfg', 'evidence', 'local', { at: day, state: 'error', issue: 'evidence', cause: 'unavailable_config', sessionId: 'cx-session-1', title: 'Evidence · 근거 결과', impact: { now, lastAt: now === 'unknown' ? day : stamp, lastState: now === 'unknown' ? 'error' : 'done' } })], { state: now === 'unknown' ? 'attention' : 'past_error', title: 'Evidence 검색', source: 'evidence', firstAt: day, lastAt: day });
   const refused = run('refused', 'codex', [step('bad', 'evidence', 'local', { at: day, state: 'error', issue: 'evidence', cause: 'invalid_input', sessionId: 'cx-session-2', title: 'Evidence · 근거 결과', impact: { now: 'request_only', lastAt: stamp, lastState: 'done' } })], { state: 'past_error', title: 'Evidence 검색', source: 'evidence', firstAt: day, lastAt: day });
-  const mismatch = run('mismatch', 'claude', [step('m', 'router', 'host', { state: 'error', model: { selected: 'claude-opus-5-5', observed: 'claude-sonnet-5', status: 'mismatch', selectedEffort: null, observedEffort: null }, impact: { now: 'unknown', lastAt: stamp, lastState: 'error' } })], { state: 'attention', source: 'router' });
+  // #269: two mismatches in one run are one execution to check, so the diagnosis counts it once.
+  const wrong = (id: string) => step(id, 'router', 'host', { state: 'error', model: { selected: 'claude-opus-5-5', observed: 'claude-sonnet-5', status: 'mismatch', selectedEffort: null, observedEffort: null }, impact: { now: 'unknown', lastAt: stamp, lastState: 'error' } });
+  const mismatch = run('mismatch', 'claude', [wrong('m'), wrong('m2')], { state: 'attention', source: 'router' });
   // The filters carry labels only; a count lives once, at the top, and each row shows its own state.
   const p = page(), shown = (cls: string) => p.get('runs').querySelectorAll('.c-st.' + cls).length;
   p.push(next(snapshot([mismatch, outage('unknown'), refused])));

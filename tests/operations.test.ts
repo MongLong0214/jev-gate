@@ -146,6 +146,19 @@ describe('operations display model', () => {
     expect(view.feed.find(s => s.model)?.state).toBe('error');
   });
 
+  it('compares a Router-routed spawn with the model Router sent, not the caller argument (#268)', () => {
+    const post = { ...base, phase: 'post', tool_use_id: 'tu', subagent_type: 'general-purpose', requested_model: 'sonnet', resolved_model: 'claude-opus-5-5' };
+    const routed = [row('router', { session_id: 's1', event: 'spawn', tool_use_id: 'tu', from: 'claude-sonnet-5-5', sent: true, assessment: 'ok', patch: { model: 'claude-opus-5-5' }, reasons: { model: 'selected' } }),
+      row('router', { session_id: 's1', event: 'spawn_result', tool_use_id: 'tu', requested: 'claude-opus-5-5', observed: 'claude-opus-5-5' })];
+    const view = buildOperations([post], routed, new Date(later), { trace: true });
+    const worker = view.feed.find(s => s.callId === 'tu' && s.feature === 'workers' && s.model)!;
+    expect(worker.model).toMatchObject({ selected: 'claude-opus-5-5', observed: 'claude-opus-5-5', status: 'confirmed' });
+    expect(worker.details.join(' ')).toContain('요청 모델 sonnet · Router 변경 claude-opus-5-5 · 실행 모델 claude-opus-5-5');
+    expect(view.attention).toBe(0);
+    // Without the Router record the caller argument stays the selection, and a different execution model is a mismatch.
+    expect(buildOperations([post], [], new Date(later), { trace: true }).attention).toBe(1);
+  });
+
   it('uses root_result applied.model as the selected model and keeps missing response evidence unknown', () => {
     const mods = [row('router', { event: 'root_result', turn: 'r', applied: { model: 'sonnet', effort: 'low' }, observed: 'claude-sonnet-5' })];
     const view = buildOperations([], mods, new Date(later), { trace: true });
@@ -177,11 +190,25 @@ describe('operations display model', () => {
     expect(response.judgements?.[0]).toMatchObject({ question: 'need_worker', value: '참 확률 81%' });
     expect(response.judgements?.[0]?.probabilities?.[0]).toEqual({ label: '참', value: 0.81 });
     expect(response.judgements?.[0]?.probabilities?.[1]?.value).toBeCloseTo(0.19);
-    expect(steps.find((s) => s.lane === 'policy' && s.feature === 'admission')?.summary).toContain('orchestrated');
+    expect(steps.find((s) => s.lane === 'policy' && s.feature === 'admission')?.summary).toBe('위임 이득 충분');
     expect(steps.find((s) => s.lane === 'policy' && s.feature === 'admission')?.details.join(' ')).toContain('빠른 워커 우선 정책');
     expect(steps.find((s) => s.lane === 'policy' && s.feature === 'admission')?.details.join(' ')).toContain('-245,000');
     expect(steps.find((s) => s.feature === 'guard')?.state).toBe('done');
     expect(view.latency).toMatchObject({ measured: 1, p50: 247, p95: 247 });
+  });
+
+  it('names a Router decision by the setting it sent or kept and carries its typed answers as judgements (#269)', () => {
+    const answers = { effort_2: { probabilities: { low: 0.2, high: 0.7, xhigh: 0.1 }, confidence: 0.6 } };
+    const view = buildOperations([], [
+      row('router', { event: 'root', turn: 'a', sent: true, jev_ms: 210, from: { model: 'claude-opus-5-5', effort: 'xhigh' }, patch: { effort: 'high' }, answers }),
+      row('router', { event: 'root', turn: 'b', sent: true, jev_ms: 190, from: { model: 'claude-opus-5-5', effort: 'high' }, patch: { effort: 'high' }, answers }, later),
+    ], new Date(later), { trace: true });
+    const steps = view.runs.flatMap(r => r.steps).filter(s => s.feature === 'router');
+    expect(steps.map(s => s.summary)).toEqual(expect.arrayContaining(['설정 변경 · high', '기존 설정 유지']));
+    const judged = steps.find(s => s.judgements)!;
+    expect(judged.judgements?.[0]).toMatchObject({ question: 'effort_2', value: 'high', confidence: 0.6 });
+    // Typed answers replace the legacy flat text lines.
+    expect(judged.details.join(' ')).not.toContain('effort_2');
   });
 });
 
@@ -193,7 +220,7 @@ it.each(['claude', 'codex'])('renders the final Gate B selection and keeps real 
   const view = buildOperations([pre, result], [], new Date(at), { trace: true });
   const steps = view.runs.flatMap(r => r.steps);
   expect(steps.some(s => s.model?.status === 'mismatch')).toBe(false);
-  expect(steps.find(s => s.lane === 'policy')?.summary).toContain(selected);
+  expect(steps.find(s => s.lane === 'policy')?.summary).toBe('최종 배정');
   expect(steps.find(s => s.model?.status === 'confirmed')?.model).toMatchObject({ selected, observed: selected });
   expect(steps.find(s => s.model?.status === 'unobserved')?.model).toMatchObject({ selected, observed: null, selectedEffort: 'high' });
   const mismatch = buildOperations([pre, { ...result, resolved_model: 'claude-opus-5-5' }], [], new Date(at), { trace: true });
@@ -217,8 +244,8 @@ it('identifies Gate-owned spawn and child decisions using recorded tool and agen
   const response = { event: 'child_result', session_id: base.session_id, agent_id: 'child', turn: 'ct', requested: 'claude-sonnet-5-5', observed: 'claude-sonnet-5-5' };
   const view = buildOperations([gate], [row('router', spawn), { ...row('router', response), at: later }], new Date(later), { trace: true });
   const steps = view.runs.flatMap(r => r.steps);
-  expect(steps.find(s => s.title.endsWith('spawn_result'))?.routing).toMatchObject({ scope: 'owned', modelReason: 'gate_allocated' });
-  expect(steps.find(s => s.title.endsWith('child_result'))?.routing).toMatchObject({ scope: 'child', modelReason: 'gate_allocated' });
+  expect(steps.find(s => s.title === 'Router · Agent 응답 모델 확인')?.routing).toMatchObject({ scope: 'owned', modelReason: 'gate_allocated' });
+  expect(steps.find(s => s.title === 'Router · 하위 단계 응답 모델 확인')?.routing).toMatchObject({ scope: 'child', modelReason: 'gate_allocated' });
 });
 
 
@@ -395,7 +422,7 @@ describe('unanswered model requests (#212)', () => {
     const usage = { input: 1200, output: 340, cache_read: 9000, cache_creation: 0 };
     const view = buildOperations([], [row('router', { ...child, index: 2, event: 'model_request' }, minute(-1)), row('router', { ...child, index: 2, event: 'child_result', observed: 'claude-sonnet-5-5', usage }, minute(-1)), request, row('router', { ...child, event: 'request', sent: true }, minute(-2))], new Date('2026-10-12T03:13:00.000Z'), { trace: true });
     expect(view.active).toBe(0); expect(view.requests).toBe(1);
-    expect(view.runs.flatMap(r => r.steps).find(s => s.title === 'Router · child_result')?.details).toContain('입력 1,200 · 출력 340 · cache read 9,000 · cache write 0');
+    expect(view.runs.flatMap(r => r.steps).find(s => s.title === 'Router · 하위 단계 응답 모델 확인')?.details).toContain('입력 1,200 · 출력 340 · cache read 9,000 · cache write 0');
     expect(view.runs.flatMap(r => r.steps).filter(s => s.title === '모델 · 응답 대기').map(s => s.state).sort()).toEqual(['done', 'unconfirmed']);
   });
 });
@@ -462,9 +489,9 @@ it('counts child Jev steps separately, closes only the exact decision and binds 
     make('request', 2, { sent: true }, '2026-09-29T06:00:02.000Z')];
   const view = buildOperations([], records, new Date('2026-09-29T06:00:03.000Z'), { trace: true });
   expect(view.requests).toBe(2);
-  const requests = view.feed.filter(s => s.title === 'Router · request');
+  const requests = view.feed.filter(s => s.title === 'Router · Jev 요청');
   expect(requests.map(s => s.state).sort()).toEqual(['active', 'done']);
-  expect(view.feed.find(s => s.title === 'Router · child_result')).toMatchObject({ agentId: 'worker', routing: { scope: 'child', modelReason: 'selected', effortReason: 'selected' } });
+  expect(view.feed.find(s => s.title === 'Router · 하위 단계 응답 모델 확인')).toMatchObject({ agentId: 'worker', routing: { scope: 'child', modelReason: 'selected', effortReason: 'selected' } });
   expect(view.feed.find(s => s.title === '모델 · 응답 대기')?.model?.selected).toBe('claude-sonnet-5-5');
 });
 
@@ -542,7 +569,7 @@ it('rebuilds a child response when its spawn in another turn gains or loses a Ga
   const reason = (records: Record<string, unknown>[]) => {
     const view = buildOperations(records, mods, now, avail);
     expect(view).toEqual(buildOperations(records, mods, now, avail, true));
-    return view.runs.flatMap(r => r.steps).find(s => s.title.endsWith('child_result'))?.routing?.modelReason;
+    return view.runs.flatMap(r => r.steps).find(s => s.title === 'Router · 하위 단계 응답 모델 확인')?.routing?.modelReason;
   };
   expect(reason([])).not.toBe('gate_allocated');
   expect(reason([gate])).toBe('gate_allocated');

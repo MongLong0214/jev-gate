@@ -394,7 +394,7 @@ describe('dashboard server', () => {
       const untilDone = Date.now() + 2500;
       while (!shut.operations.feed.some((step) => step.executionPath === 'direct') && Date.now() < untilDone) shut = await pull();
       expect(shut.operations.feed.some((step) => step.state === 'active')).toBe(false);
-      expect(shut.operations.feed.find((step) => step.executionPath)).toMatchObject({ executionPath: 'direct', summary: 'direct · admission_not_worth' });
+      expect(shut.operations.feed.find((step) => step.executionPath)).toMatchObject({ executionPath: 'direct', summary: '위임 이득 부족' });
     } finally {
       await reader.cancel();
       await server.close();
