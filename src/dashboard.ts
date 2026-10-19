@@ -277,7 +277,8 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
         if (!loaded || !subscribers.size) {
           await refresh();
           // Without a viewer nothing else catches up on new records, so the request waits out the rebuild pause once.
-          if (changed && loaded) { await new Promise(resolve => setTimeout(resolve, Math.max(0, startedAt + wait() - Date.now()))); await refresh(); }
+          // A timer can wake a millisecond before Date.now() reaches its delay, and the refresh then skipped the rebuild (#266).
+          if (changed && loaded) { for (const at = startedAt + wait(); Date.now() < at;) await new Promise(resolve => setTimeout(resolve, at - Date.now())); await refresh(); }
         }
         await ensureWhole();
         const body = wholeFrame(extras());
