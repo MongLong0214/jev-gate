@@ -85,10 +85,12 @@ export interface SwitchCostInput {
   returns: boolean;
   /** USD. */
   overheadRange?: Range;
+  /** Requests the target serves before a return, the switched one included; each later one reads the prefix on both sides. */
+  horizon?: number;
 }
 /**
- * The switch must cost no more than staying in every scenario its inputs allow; uncertainty keeps the original call.
- * An unknown cache state may be warm or cold, so each side is bounded by its read and write rates.
+ * Over its horizon the switch must cost no more than staying in every scenario its inputs allow; uncertainty keeps the
+ * original call. An unknown cache state may be warm or cold, so each side is bounded by its read and write rates.
  */
 export const switchCost = (v: SwitchCostInput): { hold: boolean; reason: 'cost_hold' | 'cost_unknown_hold' | 'cost_allows'; deltaUsd: [number, number] | null; inputs: SwitchCostInput } => {
   const unknown = { hold: true, reason: 'cost_unknown_hold' as const, deltaUsd: null, inputs: v };
@@ -98,7 +100,7 @@ export const switchCost = (v: SwitchCostInput): { hold: boolean; reason: 'cost_h
     state === 'warm' ? [p.read, p.read] : !w ? null : state === 'cold' ? w : [Math.min(p.read, w[0]), Math.max(p.read, w[1])];
   const bw = rate(v.baselineWrite), tw = rate(v.targetWrite);
   if (!v.baseline || !v.target || [bw, tw, v.outputRange, v.overheadRange].some(r => r && !range(r)) ||
-    [v.prefix ?? 0, v.targetHeld].some(n => !Number.isSafeInteger(n) || n < 0)) return unknown;
+    [v.prefix ?? 0, v.targetHeld].some(n => !Number.isSafeInteger(n) || n < 0) || v.horizon !== undefined && !(Number.isSafeInteger(v.horizon) && v.horizon >= 1)) return unknown;
   // Returning to a baseline the switch left cold rewrites what staying would have written now and read then: per token
   // a cold baseline is then worth its read rate, not its write. Warm, the baseline reads either way.
   const from = side(v.baseline, v.returns && v.baselineCache === 'cold' ? 'unknown' : v.baselineCache, bw);
@@ -112,6 +114,10 @@ export const switchCost = (v: SwitchCostInput): { hold: boolean; reason: 'cost_h
   const terms = [times(count(held), [to[0] - from[1], to[1] - from[0]]).map(n => n / 1e6),
     times(count((v.prefix ?? 0) - held), [tw[0] - from[1], tw[1] - from[0]]).map(n => n / 1e6),
     times(v.outputRange ?? [0, Infinity], [outputDelta, outputDelta]).map(n => n / 1e6), v.overheadRange ?? [0, 0]];
+  // The cache write is paid once; every later request on the target saves the read and output price difference.
+  const later = Math.max(1, v.horizon ?? 1) - 1;
+  if (later) terms.push(times(count(v.prefix ?? 0), [v.target.read - v.baseline.read, v.target.read - v.baseline.read]).map(n => n * later / 1e6),
+    times(v.outputRange ?? [0, Infinity], [outputDelta, outputDelta]).map(n => n * later / 1e6));
   const deltaUsd: [number, number] = [terms.reduce((s, t) => s + t[0]!, 0), terms.reduce((s, t) => s + t[1]!, 0)];
   const hold = deltaUsd[1] > 0;
   const unobserved = v.baselineCache === 'unknown' || v.targetCache === 'unknown' || v.prefix === null || !v.outputRange;

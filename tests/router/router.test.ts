@@ -53,8 +53,8 @@ describe('root window compatibility at the current request', () => {
       const model = phase === 0 || mode.endsWith('default') ? 'claude-opus-5-5' : echoed[phase - 1]!;
       const e = { turnId, index: 0, model, effort: phase === 0 || mode.endsWith('default') ? 'high' as const : 'low' as const };
       router.turnStart({ turnId, text: phase === 0 ? 'Find the exact helper file.' : phase === 1 ? 'Find the exact caller file.' : 'Continue: diagnose the concurrency failure and fix it without changing the API.' });
-      // From the person's warm Sonnet, a downgrade to a cold Haiku is held for cache cost.
-      const expected = { ...e, model: mode === 'conditional_haiku_echo' && phase === 1 ? 'claude-sonnet-5-5' : targets[phase]!, effort: phase < 2 ? 'low' : 'high' };
+      // From the person's warm Sonnet, a cold Haiku repays its cache write within a turn's requests (#271).
+      const expected = { ...e, model: targets[phase]!, effort: phase < 2 ? 'low' : 'high' };
       echoed.push(expected.model);
       const first = streamNext<TurnStepEvent>(undefined, counts);
       await drain(router.turnStep(f.engine, e, first.next));
@@ -68,7 +68,7 @@ describe('root window compatibility at the current request', () => {
     expect(f.logs.filter(l => l.event === 'root').map(l => l.turn)).toEqual(['turn-0', 'turn-1', 'turn-2']);
     const roots = f.logs.filter(l => l.event === 'root');
     if (mode === 'conditional_haiku_default') expect(roots[1]).toMatchObject({ from: { model: 'claude-opus-5-5' }, cost_reason: 'cost_allows', cost: { evidence: { target: 'not_observed_in_epoch' } } });
-    if (mode === 'conditional_haiku_echo') expect(roots[1]).toMatchObject({ from: { model: 'claude-sonnet-5-5' }, cost_reason: 'cost_hold' });
+    if (mode === 'conditional_haiku_echo') expect(roots[1]).toMatchObject({ from: { model: 'claude-sonnet-5-5' }, cost_reason: 'cost_allows', cost: { horizon: 5, scope: 'turn_horizon' } });
     for (const [i, r] of roots.entries()) expect(r).toMatchObject({ baseline_source: 'turn.step', from: i > 0 && mode.endsWith('echo') ? { model: echoed[i - 1], effort: 'low' } : { model: 'claude-opus-5-5', effort: 'high' } });
     // Opus never answered, so no default turn's baseline holds an observed cache; the echoed Sonnet's is warm.
     if (mode.endsWith('default')) expect(f.sent[1]?.state).not.toHaveProperty('execution');

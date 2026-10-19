@@ -14,7 +14,7 @@ import { claudeTargetAllowed, currentClaudeModel } from './models.ts';
 import type { ChildStepContext } from '../../../src/router-child-context.ts';
 import { normalizeUsage, usageCost, observedTtl, ModelCache, type CacheObservation } from '../../../src/cost.ts';
 import { providerPrice } from '../../../src/provider-prices.ts';
-import { costHold, routeCost } from '../../../src/route-cost.ts';
+import { costHold, routeCost, TURN_HORIZON } from '../../../src/route-cost.ts';
 import { claudeEffortCache, effortCacheHit, type ClaudeCacheCapability } from '../../../src/claude-cache.ts';
 
 /**
@@ -124,7 +124,7 @@ type NextLike<E, R> = ((e: E) => Promise<R>) & { readonly signal: AbortSignal };
  */
 export const VERIFIED_HOST = '2.1.282';
 /** Identifies this loaded hook source, independently of a manifest updated on disk. */
-export const ROUTER_HOOK_VERSION = '0.8.27';
+export const ROUTER_HOOK_VERSION = '0.8.28';
 
 /**
  * Later 2.1 releases are accepted too. Pinned to one release, spawn routing went native after every host update: the
@@ -636,7 +636,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       const result = await client.assess(engine, key.key, routingContext(text, context ?? undefined, recentRequests.slice(0, -1), cache), offer.questions, live,
         usage => log(engine, { event: 'late', scope: 'root', turn: turnId, usage: loggable(usage) }), () => log(engine, { event: 'request', scope: 'root', turn: turnId, sent: true }));
       const decision = result.ok ? selectPair(offer, result.answers) : { patch: {} as RoutingPatch, reasons: { model: 'not_asked', effort: 'not_asked' }, diagnostics: null };
-      const cost = decision.patch.model ? routeCost('claude', id, cacheId(decision.patch.model), rootCaches, String(cacheEpoch), engine.now(), estimateTokens(text)) : null;
+      const cost = decision.patch.model ? routeCost('claude', id, cacheId(decision.patch.model), rootCaches, String(cacheEpoch), engine.now(), estimateTokens(text), TURN_HORIZON) : null;
       const { hold, reason: costReason } = costHold(cost, offer.baselineCandidate?.rank, offer.candidates.find(c => c.id === decision.patch.model)?.rank);
       const chosen = hold && result.ok ? keepModelPair(offer, result.answers).patch : decision.patch;
       const capability = engine.cacheCapability ? await within(engine.cacheCapability().catch(() => undefined), live) : undefined;
