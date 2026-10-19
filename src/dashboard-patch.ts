@@ -6,15 +6,15 @@ import type { OperationRun, OperationStep, OperationsView } from './operations.j
  * whole history. Keys advance only when content changes, so an unchanged rebuild sends nothing. */
 interface RunMemo { run: FrameRun; meta: string; steps: Map<string, string> | null }
 type Fields = Map<string, { value: unknown; json: string | undefined }>;
-/** Step fields only an opened stage detail shows. Frames leave them out, about half of a long history's bytes; the page
- * fetches them for the one opened stage from `/api/step`. A step without `details` is such a frame step. */
-type DetailField = 'details' | 'routing' | 'sessionId' | 'agentId';
+/** Step fields only an opened stage detail or a decision basis shows. Frames leave them out, about half of a long history's
+ * bytes; the page fetches them for the one opened stage and the shown calls from `/api/step`. A step without `details` is such a frame step. */
+type DetailField = 'details' | 'routing' | 'sessionId' | 'agentId' | 'judgements';
 export type FrameStep = Omit<OperationStep, DetailField>;
 export type FrameRun = Omit<OperationRun, 'steps'> & { steps: FrameStep[] };
 type FrameOperations = Omit<OperationsView, 'runs' | 'feed'> & { runs: FrameRun[]; feed: Array<FrameStep & { runId: string; runTitle: string; host?: OperationRun['host'] }> };
 /** What a frame carries: the snapshot fields the page draws. */
 export type FrameSnapshot = Omit<Partial<ActivitySnapshot>, 'operations'> & { operations: FrameOperations };
-const frameStep = <T extends OperationStep>({ details: _details, routing: _routing, sessionId: _session, agentId: _agent, ...shown }: T): Omit<T, DetailField> => shown;
+const frameStep = <T extends OperationStep>({ details: _details, routing: _routing, sessionId: _session, agentId: _agent, judgements: _judgements, ...shown }: T): Omit<T, DetailField> => shown;
 // An unchanged run keeps its object across rebuilds, and so does its frame run, so the diff still skips it by identity. A
 // changed run keeps the steps that did not change, and so do their frame steps, so the diff serializes only the new ones.
 const frameRuns = new WeakMap<OperationRun, FrameRun>(), frameSteps = new WeakMap<OperationStep, FrameStep>();

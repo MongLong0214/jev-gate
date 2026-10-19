@@ -25,7 +25,7 @@ svg.wires line{stroke:var(--spark);stroke-dasharray:2 6}
 .trip{position:absolute;z-index:2;width:6px;height:6px;margin:-3px 0 0 -3px;border-radius:50%;background:var(--accent);pointer-events:none}.trip:after{content:attr(data-ms);position:absolute;left:3px;bottom:9px;transform:translateX(-50%);font-size:10px;line-height:12px;color:var(--accent);white-space:nowrap;font-variant-numeric:tabular-nums}.trip.end{background:none}
 .insp .b{padding:14px 16px;display:flex;flex-direction:column;gap:12px}/* Every inspector line is one fixed line, recorded or not, so a new record never changes its height. */
 .insp-tags{display:flex;gap:8px;align-items:center;height:20px}
-.kv{display:grid;grid-template-columns:78px minmax(0,1fr);gap:8px 10px;font-size:13px;margin:0}.kv dt{color:var(--faint)}.kv dd{margin:0;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
+.kv{display:grid;grid-template-columns:88px minmax(0,1fr);gap:8px 10px;font-size:13px;margin:0}.kv dt{color:var(--faint)}.kv dd{margin:0;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}.kv dd.w2{height:3em;white-space:normal;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow-wrap:anywhere;word-break:keep-all}
 .insp details summary{cursor:pointer;color:var(--muted);font-size:13px}.insp details p{color:var(--faint);font-size:13px;margin:8px 0 0}.link{appearance:none;border:0;background:none;padding:0;max-width:100%;text-align:left;font:inherit;font-size:13px;color:var(--accent);cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 @media(max-width:640px){svg.wires,.trip{display:none}.cells8{grid-template-columns:repeat(2,minmax(0,1fr))}}
 `;
@@ -66,7 +66,7 @@ function setSeg(box,value){const parts=String(value).replace(/ (\\d\\.\\d+)$/,' 
 function ticks(box,records,windowMs,make){const ref=frozenAt??Date.now(),keep=new Set(),still=!motion();if(!box._ids){box._ids=new Set();box.addEventListener('animationend',e=>{if(e.animationName==='slide')e.target.remove()})}
   for(const s of records){const age=Math.max(0,ref-Date.parse(s.at));if(!(age<windowMs))continue;keep.add(s.id);const left=(100-100*age/windowMs).toFixed(2)+'%';if(box._ids.has(s.id)){if(still){const i=box.querySelector('[data-id="'+s.id+'"]');if(i)i.style.left=left}continue}const i=el('i');i.dataset.id=s.id;make?.(i,s);i.style.left=left;i.style.animationDelay=-(age/1000)+'s'+(make?',0s':'');box.append(i)}
   for(const i of [...box.children])if(!keep.has(i.dataset.id))i.remove();box._ids=keep}
-function resetTicks(){for(const box of document.querySelectorAll('.strip .tr,#comm')){box.replaceChildren();if(box._ids)box._ids=new Set()}tl0=null}
+function resetTicks(){for(const box of document.querySelectorAll('.strip .tr,#comm')){box.replaceChildren();if(box._ids)box._ids=new Set()}}
 function cancelMotion(){for(const t of timers)clearTimeout(t);timers.clear();held.clear();for(const d of document.querySelectorAll('.trip,.rail .ln b'))d.remove();railWait=0;railMark()}
 // The Jev badge marks a response being awaited: a recorded request without its response, or a dot waiting on the rail.
 let railWait=0,railPend=0;const railMark=()=>$('pipeline').querySelector('.rail')?.classList.toggle('wait',railWait>0||railPend>0),onRail=d=>{railWait=Math.max(0,railWait+d);railMark()};
@@ -114,17 +114,29 @@ function pipeline(ops,calls,pend){const root=$('pipeline');if(!root.querySelecto
 function landNode(ops,s){const b=$('pipeline').querySelector('[data-feature="'+s.feature+'"]');if(!b||circuitMode==='run'&&s.runId!==selectedRun)return;
   if(!s.lifecycle&&!(b._last?.at>s.at)){paint(b,s,ops.features.find(f=>f.id===s.feature),frozenAt??Date.now(),ops.runs.find(r=>r.id===s.runId));if(circuitFeature===s.feature)circuitInspector(ops,s)}strip(ops,s.feature);
   const d=b.querySelector('.dec');b.classList.add('zap');d.classList.add('flash');setTimeout(()=>b.classList.remove('zap'),160);requestAnimationFrame(()=>requestAnimationFrame(()=>d.classList.remove('flash')))}
-// The inspector is rebuilt only when its stage, its record or the language changes, so an open help panel stays put.
-function circuitInspector(ops,last){const root=$('circuit-inspector'),id=circuitFeature||'admission',key=[id,last,lang];if(root._key?.every((v,k)=>v===key[k]))return;root._key=key;
-  const guide=GUIDE[id],i=lang==='en'?1:0,open=root.querySelector('details')?.open,run=last?ops.runs.find(r=>r.steps.some(s=>s.id===last.id)):null;root.replaceChildren();
+// The inspector says in full what the card can only begin: why the decision was made, its effect, what followed in its run and,
+// for a failure, its cause and current impact. A part the card already shows as the decision is left out.
+const drop=(s,v)=>{const d=decisionText(s);return String(v||'').split(' · ').filter(p=>p&&p!==d).join(' · ')};
+function reasonOf(s,r){const g=s.routing;if(g){const from=g.baseline&&modelName(g.baseline);return [from&&s.receipt?.choice&&!decisionText(s).startsWith(from)&&label(from+'에서 변경','Changed from '+from),why(g)].filter(Boolean).join(' · ')}return drop(s,tr((policyOf(s,r)||s).summary||''))}
+function effectOf(s,reason){const m=s.model;if(m&&!reason.includes('일치')&&!/match/i.test(reason))return m.status==='confirmed'?label('선택과 실제 응답 일치','Selection matches the response'):m.status==='mismatch'?label('실제 응답 ','Responded with ')+m.observed:s.state==='active'?label('응답 대기','Awaiting response'):label('실제 응답 미관측','Response unobserved');
+  if(s.graph?.length)return s.graph.length+label('개 작업 · 필수 검사 ',' tasks · required checks ')+s.graph.reduce((a,t)=>a+t.checks,0);return ''}
+// The next record of the same run, its decision recorded with it aside.
+const nextOf=(s,r)=>{if(!r)return null;const p=policyOf(s,r);return r.steps.slice(r.steps.indexOf(s)+1).find(x=>x!==p&&!x.lifecycle&&!isHeld(r.id,x.id))||null};
+// The inspector is rebuilt only when its stage, its record, its fetched detail or the language changes, so an open help panel stays put.
+function circuitInspector(ops,last){const root=$('circuit-inspector'),id=circuitFeature||'admission',run=last?ops.runs.find(r=>last.runId?r.id===last.runId:r.steps.includes(last)):null,step=run?.steps.find(s=>s.id===last.id)||last,x=run?detailed(run,step):step,key=[id,last,lang,x];if(root._key?.every((v,k)=>v===key[k]))return;root._key=key;
+  const guide=GUIDE[id],i=lang==='en'?1:0,open=root.querySelector('details')?.open;root.replaceChildren();
   const head=el('div','ch');head.append(el('h2','',tr(featureInfo[id][0])),el('span','hint',label('단계 상세','Stage details')));const body=el('div','b');
   const tags=el('div','insp-tags');if(run?.host)tags.append(el('span','tag '+(run.host==='codex'?'cx':'cl'),run.host==='codex'?'Codex':'Claude'));body.append(tags);
   const kv=el('dl','kv');const row=(k,v,cls)=>{const d=el('dd',cls||'',v);kv.append(el('dt','',k),d);return d};
-  // The selected card shows the decision, its confidence and age, and the decision basis panel holds the probability and
+  // The selected card shows the decision, its reason line, its confidence and age, and the decision basis panel holds the probability and
   // threshold; the inspector adds what neither shows. #261: those facts come from the stage's newest Jev call, which a host
   // or local record may follow (a Router root_result, a Compact pass). Every line is drawn, recorded or not.
   let call=null;if(ops)for(const r of ops.runs)if(circuitMode==='live'||r.id===selectedRun)for(const s of r.steps)if(s.lane==='jev'&&s.feature===id&&!s.lifecycle&&!isHeld(r.id,s.id)&&!(call?.at>=s.at))call=s;
-  const rc=call?.receipt,none='–';
+  const rc=call?.receipt,none='–',why=x?reasonOf(x,run):'',card=x?note(x,run).split(' · '):[],reason=why.split(' · ').filter(p=>p&&!card.includes(p)).join(' · ');
+  row(label('실행','Run'),run?[tr(run.title),tr(state[run.state]),time(run.firstAt)].join(' · '):none);
+  row(label('이유','Reason'),reason||none,'w2').title=reason;row(label('결과','Effect'),x&&effectOf(x,why)||none);
+  const after=x&&nextOf(step,run);row(label('다음 단계','Next stage'),after?tr(after.title)+' · '+decisionText(after):none);
+  row(label('원인','Cause'),x&&failedStep(x)?[x.cause||label(...ISSUES[issueKind(x)]),label(...IMPACT[x.impact?.now||'unknown'])].join(' · '):none);
   row(label('Jev 응답','Jev response'),call?.durationMs!==undefined?ms(call.durationMs):none);
   row(label('토큰','Tokens'),rc&&(rc.input!=null||rc.output!=null)?kTokens(rc.input)+' → '+kTokens(rc.output):none);
   row(label('추정 비용','Est. cost'),rc?.costUsd!=null?usd(rc.costUsd):none);row(label('Jev 모델','Jev model'),rc?.model||none);body.append(kv);

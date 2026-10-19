@@ -89,16 +89,16 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
 
   it('shows live version status without overflow in the actual browser', async () => {
     const home = mkdtempSync(join(tmpdir(), 'jev-dashboard-version-'));
-    const releaseFetch = (async () => new Response(JSON.stringify({ tag_name: 'v0.8.27', draft: false, prerelease: false, html_url: 'https://github.com/MongLong0214/jev-gate/releases/tag/v0.8.27' }))) as typeof fetch;
+    const releaseFetch = (async () => new Response(JSON.stringify({ tag_name: 'v99.0.0', draft: false, prerelease: false, html_url: 'https://github.com/MongLong0214/jev-gate/releases/tag/v99.0.0' }))) as typeof fetch;
     const local = await startDashboard(dashboardSources({ HOME: home, XDG_CONFIG_HOME: join(home, '.config'), XDG_STATE_HOME: join(home, '.local/state'), JEV_GATE_TRACE_DIR: join(home, 'claude-traces'), JEV_CODEX_TRACE_DIR: join(home, 'codex-traces') }), 0, { releaseFetch });
     try {
       for (const width of [1440, 390, 320]) {
         const p = await browser.newPage({ viewport: { width, height: 900 } });
         p.on('pageerror', e => errors.push(e.message));
         await p.goto(local.url);
-        await p.waitForFunction(() => document.getElementById('version-badge')?.textContent?.includes('0.8.27'));
+        await p.waitForFunction(() => document.getElementById('version-badge')?.textContent?.includes('99.0.0'));
         expect(await p.locator('#version-badge').getAttribute('data-state')).toBe('update');
-        expect(await p.locator('#version-badge').textContent()).toContain('0.8.26');
+        expect(await p.locator('#version-badge').textContent()).toContain('0.8.27');
         expect(await p.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
         await p.screenshot({ path: join(output, `version-${width}.png`), fullPage: true });
         await p.close();
@@ -307,7 +307,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     push([run('rc','claude',calls,{title:'호출 기록 실행'})]);const p=await page();await settle(p);
     const cells=(i:number)=>p.locator(`#rc li:nth-child(${i}) .rcr > span`).allTextContents();
     expect(await p.locator('#rc li').count()).toBe(14);
-    expect((await cells(1)).slice(1)).toEqual(['Gate A','–','–','80ms','직접']);
+    expect((await cells(1)).slice(1)).toEqual(['Gate A','사용자 요청','–','80ms','직접']);
     expect((await cells(2)).slice(1)).toEqual(['Router','–','1,200','120ms','sonnet · high']);
     const heights=()=>p.evaluate(()=>({rows:[...document.querySelectorAll('#rc li')].map(e=>e.getBoundingClientRect().height),panel:document.querySelector('.jv')!.getBoundingClientRect().height,below:document.getElementById('run-detail')!.getBoundingClientRect().top+document.documentElement.scrollTop}));
     const before=await heights();expect(new Set(before.rows).size).toBe(1);
@@ -360,7 +360,6 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
       const p=await page(width);await settle(p);
       expect(await p.locator('#j-p50').textContent()).toBe('90ms');expect(await p.locator('#j-p95').textContent()).toBe('300ms');
       expect(await p.locator('#j-cost').textContent()).toBe('≈ $0.00240');expect(await p.locator('#j-cost').getAttribute('title')).toContain('응답 2회는 제외');expect(await p.locator('#j-cost').getAttribute('title')).toContain('실제 차감 크레딧은 API가 알려주지 않습니다');
-      expect(await p.locator('#tl i.e').count()).toBe(1);expect(await p.locator('#tl i.w').count()).toBe(1);expect(await p.locator('#tl i').count()).toBe(4);
       expect(await p.locator('#credit').textContent()).toBe('크레딧 소진');
       expect(await problems(p)).toEqual([]);await p.locator('.jv').screenshot({path:join(output,`jev-panel-${width}.png`)});await p.close();
     }
@@ -492,7 +491,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
 
   it('opens one stage at a time in the run detail and keeps its scroll and keyboard focus', async () => {
     const model = { selected: 'gpt-6-luna', observed: null, status: 'unobserved' as const, selectedEffort: 'low', observedEffort: null };
-    push([run('inspection', 'codex', Array.from({length:80}, (_, i) => step('stage-'+i, 'router', {lane:'host',model})))]);
+    push([run('inspection', 'codex', Array.from({length:80}, (_, i) => step('stage-'+i, 'router', {lane:'host',model,summary:'Recorded result '+i})))]);
     const p = await page();
     const row = p.locator('[data-step="stage-60"]');
     await row.focus();
