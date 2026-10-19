@@ -1012,6 +1012,15 @@ describe('spawn model', () => {
       expect(n.calls).toEqual([{ ...e, model: 'claude-sonnet-5-5' }]);
       expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn', from: 'claude-opus-5-5', model_asked: true }));
     });
+    it('times a spawn\'s Jev call, answered or failed, so the dashboard counts it (#267)', async () => {
+      const { router, f, e } = custom('opus');
+      await router.agentSpawn(f.engine, e, spawnNext().next);
+      const failed = custom('opus');
+      failed.f.engine.fetch = async () => { throw new Error('offline'); };
+      await failed.router.agentSpawn(failed.f.engine, failed.e, spawnNext().next);
+      for (const logs of [f.logs, failed.f.logs]) expect(logs).toContainEqual(expect.objectContaining({ event: 'spawn', hook_version: ROUTER_HOOK_VERSION, duration_ms: expect.any(Number) }));
+      expect(failed.f.logs).toContainEqual(expect.objectContaining({ event: 'spawn', assessment: expect.not.stringMatching(/^ok$/) }));
+    });
     it('never moves a frontmatter haiku agent up, whatever the answer', async () => {
       const { router, f, e } = custom('haiku', {}, 'deep');
       const n = spawnNext();

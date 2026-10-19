@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.8.27 — 2026-10-19 — Spawn routing in the dashboard's Jev totals
+
+- Count the Jev call that routes a subagent in the dashboard (#267). The spawn record carried its tokens and Jev model but no `duration_ms`, which the dashboard reads as a Jev call's measured response, so those calls were missing from today's calls, tokens, cost and latency (4 calls and 12,925 input tokens on 2026-10-19). The spawn record now carries `duration_ms` and `hook_version` as root and child records do.
+
 ## v0.8.26 — 2026-10-19 — Dashboard stage details, resumed cache after notifications, new session model
 
 - Show the stage's newest Jev call in the dashboard's stage details (#261). The panel read its one Jev line from the feature's newest stage, but Router and Compact record a host or local stage after the call, so the line was always `–`. It now reads the newest Jev-lane stage of the feature and draws its latency, tokens, estimated cost and Jev model; the card and the decision basis panel keep the decision and its probability.
