@@ -2487,6 +2487,27 @@ describe('root baseline across a resume', () => {
       : expect.objectContaining({ reason: 'shorter_request', request_messages: messageCount, stored_messages: 5 }));
   });
 
+  // #263: after two task notifications the last request carried 44 messages and the resumed one 39, so the count read the
+  // resume as a compaction; the host transcript was 11 at the save and 12 resumed.
+  it.each([
+    ['restores across a resume whose request is shorter than the saved one while the transcript is not', 12, true],
+    ['restores nothing for a transcript shorter than the saved one (a compaction since)', 3, false],
+  ] as const)('%s', async (_, resumedLength, restored) => {
+    const store = new Map<string, unknown>();
+    const first = processOf(store, KEEP);
+    first.f.engine.transcript = async () => ({ length: 11, answered: true });
+    await turn(first, 't1', 'claude-opus-5-5', 'xhigh', 42);
+    await settle();
+    expect(store.get('session')).toMatchObject({ cache: { messages: 44, transcript: 11 } });
+    first.router.sessionEnd();
+    const resumed = processOf(store, answering({ ...CLEAR, tier: ['fast', 0.99], effort: ['low', 0.99] }));
+    resumed.f.engine.transcript = async () => ({ length: resumedLength, answered: true });
+    await turn(resumed, 't2', 'claude-opus-5-5', 'xhigh', 39);
+    expect(resumed.f.logs.some(l => l.event === 'cache_restored')).toBe(restored);
+    expect(resumed.f.logs.find(l => l.event === 'cache_restore_skipped')).toEqual(restored ? undefined
+      : expect.objectContaining({ reason: 'shorter_request', request_messages: 39, stored_messages: 44, transcript: 3, stored_transcript: 11 }));
+  });
+
   it('never restores over an environment pin', async () => {
     const resumed = processOf(DRIFTED(), KEEP);
     Object.assign(resumed.f.pins, { mainModel: true, mainEffort: true });
@@ -2536,6 +2557,25 @@ describe('root baseline across a resume', () => {
     const unnamed = processOf(new Map(), KEEP, { model: 'opus', effort: 'xhigh' });
     expect(await turn(unnamed, 't1', '', 'medium', 40)).toEqual([['claude-opus-5-5', 'xhigh'], ['claude-opus-5-5', 'xhigh']]);
     expect(unnamed.f.logs.filter(l => l.event === 'root')).toEqual([expect.objectContaining({ baseline_source: 'host_environment', from: { model: 'claude-opus-5-5', effort: 'xhigh' } })]);
+  });
+
+  // #263: the host's first request of a new session carries its context messages (17 on 2.1.303), so the count read it as a
+  // conversation under way and ran a new `--model opus` session on the settings model. A prior assistant message decides.
+  it.each([
+    ['a new session whose first request carries the host context', false, 'claude-opus-5-5', 'turn.step'],
+    ['a resumed session with no record', true, 'claude-sonnet-5-5', 'host_environment'],
+  ] as const)('reads %s by its prior assistant message, not its message count', async (_, answered, model, source) => {
+    const s = processOf(new Map(), FAIL, { model: 'sonnet', effort: 'high' });
+    s.f.engine.transcript = async () => ({ length: answered ? 12 : 1, answered });
+    expect((await turn(s, 't1', 'claude-opus-5-5', 'high', 17))[0]?.[0]).toBe(model);
+    expect(s.f.logs.find(l => l.event === 'root')).toMatchObject({ baseline_source: source });
+    expect(s.f.logs.find(l => l.event === 'cache_restore_skipped')).toEqual(answered ? expect.objectContaining({ reason: 'no_record', request_messages: 17, stored_messages: null, transcript: 12 }) : undefined);
+  });
+
+  it('reads a failed assistant-message read as a new conversation', async () => {
+    const s = processOf(new Map(), FAIL, { model: 'sonnet', effort: 'high' });
+    s.f.engine.transcript = async () => { throw new Error('unreadable'); };
+    expect((await turn(s, 't1', 'claude-opus-5-5', 'high', 17))[0]?.[0]).toBe('claude-opus-5-5');
   });
 
   it("honours a person's /model to the Router's last model later in the session", async () => {

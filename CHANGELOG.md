@@ -1,9 +1,10 @@
 # Changelog
 
-## v0.8.26 — 2026-10-19 — Dashboard stage details, resumed cache restore diagnostics
+## v0.8.26 — 2026-10-19 — Dashboard stage details, resumed cache after notifications, new session model
 
 - Show the stage's newest Jev call in the dashboard's stage details (#261). The panel read its one Jev line from the feature's newest stage, but Router and Compact record a host or local stage after the call, so the line was always `–`. It now reads the newest Jev-lane stage of the feature and draws its latency, tokens, estimated cost and Jev model; the card and the decision basis panel keep the decision and its probability.
-- Record why a resumed request restored no root cache (#263). A resumed conversation whose first root turn restored nothing left no trace of the reason, so a lost store record could not be told from a compaction. The turn now logs `cache_restore_skipped` with `no_record`, `no_cache` or `shorter_request` and both message counts. The cause of the one missed restore seen in the 2026-10-19 bench is not yet known.
+- Restore the root cache after a process that ended on task notification turns (#263). The saved observation carried the request's message count, which a task notification's request inflates in memory: after two notifications the last request carried 44 messages and the resumed one 39, so the resume read as a compaction and its first switch held as `cost_unknown_hold` (3 of 32 resumes in the 2026-10-19 bench, every one after two notification turns). The save now keeps the host transcript's length, 11 there and 12 resumed, and a resume compares that. A resume that restores nothing logs `cache_restore_skipped` with its reason (`no_record`, `no_cache`, `shorter_request`) and both counts.
+- Keep a new session's own model when settings name another (#265). A conversation counted as under way when its first request carried more than one message, but the host's first request of a new session carries its own context messages (17 on 2.1.303), so a new `--model opus` session with Sonnet in settings ran on Sonnet. A conversation is now under way when its transcript already holds an assistant message; a failed read leaves the person's pair. Since v0.8.25.
 
 ## v0.8.25 — 2026-10-19 — Resumed root cache, resumed baseline, trace retention
 
