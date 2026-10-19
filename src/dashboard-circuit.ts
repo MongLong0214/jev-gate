@@ -120,9 +120,14 @@ function circuitInspector(ops,last){const root=$('circuit-inspector'),id=circuit
   const head=el('div','ch');head.append(el('h2','',tr(featureInfo[id][0])),el('span','hint',label('단계 상세','Stage details')));const body=el('div','b');
   const tags=el('div','insp-tags');if(run?.host)tags.append(el('span','tag '+(run.host==='codex'?'cx':'cl'),run.host==='codex'?'Codex':'Claude'));body.append(tags);
   const kv=el('dl','kv');const row=(k,v,cls)=>{const d=el('dd',cls||'',v);kv.append(el('dt','',k),d);return d};
-  // The selected card already shows its question, decision, confidence, state and age, and the decision basis panel holds the
-  // probability and threshold; the inspector adds only the host and the response time.
-  row(label('Jev 응답','Jev response'),last?.durationMs!==undefined&&last.lane==='jev'?ms(last.durationMs):'–');body.append(kv);
+  // The selected card shows the decision, its confidence and age, and the decision basis panel holds the probability and
+  // threshold; the inspector adds what neither shows. #261: those facts come from the stage's newest Jev call, which a host
+  // or local record may follow (a Router root_result, a Compact pass). Every line is drawn, recorded or not.
+  let call=null;if(ops)for(const r of ops.runs)if(circuitMode==='live'||r.id===selectedRun)for(const s of r.steps)if(s.lane==='jev'&&s.feature===id&&!s.lifecycle&&!isHeld(r.id,s.id)&&!(call?.at>=s.at))call=s;
+  const rc=call?.receipt,none='–';
+  row(label('Jev 응답','Jev response'),call?.durationMs!==undefined?ms(call.durationMs):none);
+  row(label('토큰','Tokens'),rc&&(rc.input!=null||rc.output!=null)?kTokens(rc.input)+' → '+kTokens(rc.output):none);
+  row(label('추정 비용','Est. cost'),rc?.costUsd!=null?usd(rc.costUsd):none);row(label('Jev 모델','Jev model'),rc?.model||none);body.append(kv);
   const help=el('details');help.append(el('summary','',label('이 단계가 하는 일','How this stage works')),el('p','',guide.what[i]+' '+guide.jev[i]));help.open=!!open;body.append(help);
   const go=el('button','link',last?label('이 실행의 판단 근거와 시간축 보기 ↗','Inspect this execution and its evidence ↗'):label('이 기능의 실행 기록 보기 ↗','Show executions for this feature ↗'));go.type='button';go.dataset.inspectFeature=id;if(run)go.dataset.inspectRun=run.id;if(last)go.dataset.inspectStep=last.id;body.append(go);root.append(head,body)}
 window.addEventListener('resize',()=>requestAnimationFrame(wires));

@@ -121,6 +121,7 @@ const engineOf = ($: EngineInterface, log: RouterEngine['log']): RouterEngine =>
     const value = env?.trim() ? env : (await $.settings.read())['model'];
     return typeof value === 'string' && value.trim() ? value : undefined;
   },
+  transcript: async () => { const rows = await $.session.messages(); return { length: rows.length, answered: rows.some(m => m.role === 'assistant') }; },
   loadRoot: async () => $.store.get(`${ROOT_KEY}${await $.session.id()}`),
   sessionId: () => $.session.id(),
   saveRoot: async (record, sessionId) => {

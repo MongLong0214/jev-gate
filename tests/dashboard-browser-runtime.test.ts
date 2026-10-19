@@ -89,16 +89,16 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
 
   it('shows live version status without overflow in the actual browser', async () => {
     const home = mkdtempSync(join(tmpdir(), 'jev-dashboard-version-'));
-    const releaseFetch = (async () => new Response(JSON.stringify({ tag_name: 'v0.8.26', draft: false, prerelease: false, html_url: 'https://github.com/MongLong0214/jev-gate/releases/tag/v0.8.26' }))) as typeof fetch;
+    const releaseFetch = (async () => new Response(JSON.stringify({ tag_name: 'v0.8.27', draft: false, prerelease: false, html_url: 'https://github.com/MongLong0214/jev-gate/releases/tag/v0.8.27' }))) as typeof fetch;
     const local = await startDashboard(dashboardSources({ HOME: home, XDG_CONFIG_HOME: join(home, '.config'), XDG_STATE_HOME: join(home, '.local/state'), JEV_GATE_TRACE_DIR: join(home, 'claude-traces'), JEV_CODEX_TRACE_DIR: join(home, 'codex-traces') }), 0, { releaseFetch });
     try {
       for (const width of [1440, 390, 320]) {
         const p = await browser.newPage({ viewport: { width, height: 900 } });
         p.on('pageerror', e => errors.push(e.message));
         await p.goto(local.url);
-        await p.waitForFunction(() => document.getElementById('version-badge')?.textContent?.includes('0.8.26'));
+        await p.waitForFunction(() => document.getElementById('version-badge')?.textContent?.includes('0.8.27'));
         expect(await p.locator('#version-badge').getAttribute('data-state')).toBe('update');
-        expect(await p.locator('#version-badge').textContent()).toContain('0.8.25');
+        expect(await p.locator('#version-badge').textContent()).toContain('0.8.26');
         expect(await p.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
         await p.screenshot({ path: join(output, `version-${width}.png`), fullPage: true });
         await p.close();
@@ -461,6 +461,17 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     expect(await p.locator('#runs [data-run=c]').evaluate(e=>e===document.activeElement)).toBe(true);
     await p.locator('[data-circuit-mode=live]').click();await node('evidence').click();await p.locator('#circuit-inspector button[data-inspect-feature]').click();expect(await p.locator('#search').evaluate(e=>e===document.activeElement)).toBe(true);
     await p.close();
+  });
+
+  // #261: the inspector showed one line, and '–' for Router and Compact, whose Jev call a host or local record follows.
+  it('shows the stage Jev call facts in the inspector when a host record follows the call',async()=>{
+    const c=call('ic','router',226,{at:ago(2000)},{choice:'opus · xhigh',model:'jev-1.14.0',input:3394,output:203,costUsd:0.000142548,confidence:0.91,threshold:0.6});
+    push([run('i','claude',[c,step('ih','router',{lane:'host',summary:'Model confirmed'})])]);const p=await page();await settle(p);
+    await p.locator('#pipeline .node[data-feature=router]').click();const text=await p.locator('#circuit-inspector').textContent();
+    for(const x of ['3.4K → 203','≈$0.00014','226ms','jev-1.14.0'])expect(text).toContain(x);
+    // The card shows the decision and the basis panel its probability; the inspector repeats neither.
+    expect(text).not.toMatch(/Model confirmed|opus · xhigh|91%|60%/);
+    expect(await problems(p)).toEqual([]);await p.close();
   });
 
   it('never renders an empty run item and marks the selected run with a tint only',async()=>{

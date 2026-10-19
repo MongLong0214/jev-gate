@@ -43,6 +43,8 @@ export interface RouterEngine extends Transport {
   currentEffort?: () => Promise<SymbolicEffort | number | undefined>;
   /** The main loop model the host's environment or settings name, as written; never the session's live model. */
   hostModel?: () => Promise<string | undefined>;
+  /** The main transcript's length and whether it already holds an assistant message (a resumed or continued conversation, never a new one's first request). */
+  transcript?: () => Promise<{ length: number; answered: boolean }>;
   /** This session's root record, kept across a resume. */
   loadRoot?: () => Promise<unknown>;
   /** The host's live session id: a queued save keeps the one it was queued in, and writes only under it. */
@@ -122,7 +124,7 @@ type NextLike<E, R> = ((e: E) => Promise<R>) & { readonly signal: AbortSignal };
  */
 export const VERIFIED_HOST = '2.1.282';
 /** Identifies this loaded hook source, independently of a manifest updated on disk. */
-export const ROUTER_HOOK_VERSION = '0.8.25';
+export const ROUTER_HOOK_VERSION = '0.8.26';
 
 /**
  * Later 2.1 releases are accepted too. Pinned to one release, spawn routing went native after every host update: the
@@ -295,7 +297,9 @@ export interface RootRecord { native: RootPair; routed: RootPair | null; drift: 
  * The root's cache observations as the last response left them, and that request's message count: a later process of
  * the session restores them only for a request no shorter, so a compaction or rewind since (#258) restores nothing.
  */
-export interface RootCache { messages: number; seen: CacheObservation[] }
+/** `transcript` is the host transcript's length at the save (#263): unlike the request's message count it is the same in
+ * memory and after a resume. A record saved before it was kept compares the request's count. */
+export interface RootCache { messages: number; seen: CacheObservation[]; transcript?: number }
 
 const sameId = (a: string, b: string): boolean => cacheId(a) === cacheId(b);
 export const parseRootRecord = (v: unknown): RootRecord | null => {
@@ -311,7 +315,7 @@ const parseRootCache = (v: unknown): RootCache | null => {
   const seen = (o: CacheObservation): boolean => !!o && typeof o === 'object' && typeof o.model === 'string' && typeof o.at === 'number' && Number.isFinite(o.at) &&
     [o.ttlMs, o.read, o.write, o.output, o.input ?? null].every(wholeOrNull) && (o.effort == null || isSymbolicEffort(o.effort)) &&
     (o.ttlIsMinimum === undefined || typeof o.ttlIsMinimum === 'boolean') && (o.ttlBoundsMs === undefined || Array.isArray(o.ttlBoundsMs) && o.ttlBoundsMs.length === 2 && o.ttlBoundsMs.every(n => n !== null && wholeOrNull(n)));
-  return c && typeof c === 'object' && typeof c.messages === 'number' && wholeOrNull(c.messages) && Array.isArray(c.seen) && c.seen.length <= 16 && c.seen.every(seen) ? { messages: c.messages, seen: c.seen } : null;
+  return c && typeof c === 'object' && typeof c.messages === 'number' && wholeOrNull(c.messages) && Array.isArray(c.seen) && c.seen.length <= 16 && c.seen.every(seen) ? { messages: c.messages, seen: c.seen, ...(Number.isSafeInteger(c.transcript) && c.transcript! >= 0 ? { transcript: c.transcript } : {}) } : null;
 };
 
 /**
@@ -750,7 +754,10 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     const queuedIn = engine.sessionId();
     rootSaving = rootSaving.then(async () => {
       const id = await queuedIn;
-      if (id === await engine.sessionId!()) await engine.saveRoot!(record, id);
+      if (id !== await engine.sessionId!()) return;
+      // Read at the save, off the step's path; a failed read saves the request's count alone.
+      const length = record.cache && engine.transcript ? (await engine.transcript().catch(() => null))?.length : undefined;
+      await engine.saveRoot!(length === undefined || !record.cache ? record : { ...record, cache: { ...record.cache, transcript: length } }, id);
     }).catch(() => undefined);
   };
   /** Whether a native model to restore may still be sent, by the checks every target passes. */
@@ -799,15 +806,26 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     const resumed = !rootLoaded;
     if (resumed) {
       rootLoaded = true;
-      const start = await rootRecordAtStart(engine, incoming, signal, (e.messageCount ?? 0) > 1);
+      // #263: a new session's first request already carries the host's context messages (17 on 2.1.303), so the count
+      // cannot tell it from a resume; a prior assistant message can. A failed read is a new conversation: its pair stands.
+      const read = engine.transcript ? await within(engine.transcript().catch(() => null), signal) : null;
+      const underWay = engine.transcript ? read?.answered === true : (e.messageCount ?? 0) > 1;
+      const start = await rootRecordAtStart(engine, incoming, signal, underWay);
       // A newer root turn or session began while the read waited: it owns the record now, and this turn stays native.
       if (signal.aborted || generation !== rootGeneration) return null;
       rootRecord = start.record; rootSaved = start.saved; rootHostModel = start.hostModel;
       // A new process of this conversation starts with the cache the last one observed, judged by its own clock and TTL.
-      if (start.cache && (e.messageCount ?? 0) >= start.cache.messages) {
+      // A request shorter than the saved one is a compaction or rewind since. A task notification's request carries
+      // messages a resumed transcript does not rebuild (44 in memory, 39 resumed after two, #263), so the transcript's
+      // length decides wherever both were read.
+      const longEnough = start.cache && (start.cache.transcript !== undefined && read ? read.length >= start.cache.transcript : (e.messageCount ?? 0) >= start.cache.messages);
+      if (start.cache && longEnough) {
         for (const v of start.cache.seen) rootCaches.observe({ ...v, epoch: String(cacheEpoch) });
         rootCache = start.cache;
         log(engine, { event: 'cache_restored', scope: 'root', turn: e.turnId, models: start.cache.seen.map(v => v.model), messages: start.cache.messages });
+      } else if (underWay) {
+        // #263: a resumed conversation that restores nothing says why, with both counts, so a lost record is told from a compaction.
+        log(engine, { event: 'cache_restore_skipped', scope: 'root', turn: e.turnId, reason: !start.saved ? 'no_record' : !start.cache ? 'no_cache' : 'shorter_request', request_messages: e.messageCount, stored_messages: start.cache?.messages ?? null, transcript: read?.length ?? null, stored_transcript: start.cache?.transcript ?? null });
       }
     }
     rootRecord = nextRootRecord(rootRecord, incoming, resumed);
