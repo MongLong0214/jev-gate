@@ -4,7 +4,7 @@ import { normalizeUsage, usageCost, ModelCache, cacheState, observedTtl, switchC
 import { providerPrice } from '../src/provider-prices.js';
 import { delegationCost } from '../src/admission.js';
 import { claudeEffortCache, effortCacheHit } from '../src/claude-cache.js';
-import { costHold, routeCost } from '../src/route-cost.js';
+import { costHold, routeCost, TURN_HORIZON } from '../src/route-cost.js';
 import { observedDelegationPrices } from '../src/delegation-prices.js';
 
 const price = { source: 'fixture', revision: 'test-v1', input: 4, read: .2, write5m: 5, write1h: 8, output: 20 };
@@ -103,6 +103,17 @@ describe('observed usage and cost', () => {
     expect(costHold(routeCost('claude', 'claude-sonnet-5-5', 'claude-opus-5-5', c, 'one', 1000), 1, 2)).toEqual({ hold: false, reason: 'upgrade_allowed' });
     expect(costHold({ hold: true, reason: 'cost_hold' }, undefined, 0)).toEqual({ hold: true, reason: 'cost_hold' });
     expect(costHold(null, 2, 0)).toEqual({ hold: false, reason: 'not_checked' });
+  });
+  it('prices a root switch over a turn: the cache write is paid once and every later request saves (#271)', () => {
+    const o = new ModelCache();
+    o.observe({ model: 'claude-opus-5-5', at: 0, epoch: 'e', ttlMs: 3_600_000, read: 148_000, write: 1000, input: 1000, output: 1500 });
+    expect(routeCost('claude', 'claude-opus-5-5', 'claude-haiku-5-5', o, 'e', 1000, 10)).toMatchObject({ hold: true, reason: 'cost_hold', scope: 'next_request_scenario' });
+    expect(routeCost('claude', 'claude-opus-5-5', 'claude-haiku-5-5', o, 'e', 1000, 10, TURN_HORIZON)).toMatchObject({ hold: false, reason: 'cost_allows', scope: 'turn_horizon', horizon: 5 });
+    // Sonnet's write is half Opus's, its read half too: at 150k it repays only after about 20 requests.
+    expect(routeCost('claude', 'claude-opus-5-5', 'claude-sonnet-5-5', o, 'e', 1000, 10, TURN_HORIZON)).toMatchObject({ hold: true, reason: 'cost_hold' });
+    expect(routeCost('claude', 'claude-opus-5-5', 'claude-sonnet-5-5', o, 'e', 1000, 10, 25)).toMatchObject({ hold: false });
+    // A horizon never turns an unknown into an allowance.
+    expect(routeCost('claude', 'claude-opus-5-5', 'claude-haiku-5-5', new ModelCache(), 'e', 1000, 10, TURN_HORIZON)).toMatchObject({ hold: true, reason: 'cost_unknown_hold' });
   });
   it('keeps unknown, excluded and old-host cache capabilities conservative and restores the floor on an observed miss', () => {
     const capabilities = { host: '2.1.288', connection: 'api-key' as const, excluded: false, hipaa: false };

@@ -25,7 +25,8 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude Gate B 
     { scope: 'worker', selected: 'claude-haiku-5-5', actual: 'claude-haiku-5-5', effort: 'medium', allowFable: false },
     { scope: 'worker', selected: 'claude-fable-5-1', actual: 'claude-fable-5-1', effort: 'max', allowFable: true },
     // `actual` is the role Jev picks; `cost` is the switch cost guard's call on it, and a held switch runs on Opus. A
-    // session's first turn has no observed prefix, so its downgrade is held; a later Haiku move under 100k costs no more.
+    // session's first turn has no observed prefix, so its downgrade is held; a later move over this tiny prefix repays its
+    // cache write within a turn's requests (#271).
     { scope: 'root', selected: 'claude-sonnet-5-5', actual: 'claude-sonnet-5-5', effort: 'high', allowFable: false, cost: 'cost_unknown_hold' },
     { scope: 'root', selected: 'claude-haiku-5-5', actual: 'claude-haiku-5-5', effort: 'medium', allowFable: false, cost: 'cost_unknown_hold' },
     { scope: 'root', selected: 'claude-sonnet-5-5', actual: 'claude-sonnet-5-5', effort: 'high', allowFable: false, probability: .7, cost: 'cost_unknown_hold' },
@@ -33,7 +34,7 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude Gate B 
     { scope: 'root', selected: 'claude-haiku-4-5-20251001', actual: 'claude-opus-5-5', effort: 'high', allowFable: false, cost: 'not_checked' },
     { scope: 'root', selected: 'claude-sonnet-5-5', actual: 'claude-sonnet-5-5', effort: 'medium', allowFable: false, sequence: [
       { selected: 'claude-sonnet-5-5', actual: 'claude-sonnet-5-5', effort: 'medium', cost: 'cost_unknown_hold' },
-      { selected: 'claude-sonnet-5-5', actual: 'claude-sonnet-5-5', effort: 'medium', cost: 'cost_hold' },
+      { selected: 'claude-sonnet-5-5', actual: 'claude-sonnet-5-5', effort: 'medium', cost: 'cost_allows' },
       { selected: 'claude-opus-5-5', actual: 'claude-opus-5-5', effort: 'max', cost: 'not_checked' },
     ] },
     { scope: 'root', selected: 'claude-sonnet-5-5', actual: 'claude-sonnet-5-5', effort: 'medium', allowFable: false, sequence: [
