@@ -56,6 +56,8 @@ export class ModelCache {
   get(model: string, epoch: string): CacheObservation | null { const v = this.entries.get(model); return v?.epoch === epoch ? v : null; }
   /** The newest observation, whichever model answered it: it knows the conversation's prefix best. */
   latest(epoch: string): CacheObservation | null { const v = [...this.entries.values()].at(-1); return v?.epoch === epoch ? v : null; }
+  /** This epoch's observations, oldest first: what a later process of the same conversation can restore. */
+  list(epoch: string): CacheObservation[] { return [...this.entries.values()].filter(v => v.epoch === epoch); }
   clear(): void { this.entries.clear(); }
 }
 /** An epoch starts with every model empty: a model not observed in it cannot hold this context's prefix. */

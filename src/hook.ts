@@ -2221,7 +2221,7 @@ const isMainModule = (): boolean => {
  */
 export const main = async (): Promise<void> => {
   const { withApiKey } = await import('./credentials.js');
-  const { claudeTraceDir, claudeSetupNotice, integratedClaudePlugin } = await import('./claude-setup.js');
+  const { claudeTraceDir, claudeSetupNotice, integratedClaudePlugin, spawnTracePrune } = await import('./claude-setup.js');
   const read = await readAll(process.stdin);
   if ('code' in read) { process.stderr.write(`jev-gate: ${read.code}\n`); process.exitCode = 0; return; }
   const input = parseInput(read.text);
@@ -2234,6 +2234,7 @@ export const main = async (): Promise<void> => {
     process.exitCode = 0;
     return;
   }
+  if (!('code' in input) && input.hook_event_name === 'SessionStart' && env['JEV_GATE_TRACE_DIR']) spawnTracePrune(env['JEV_GATE_TRACE_DIR']);
   if (notice) process.stdout.write(renderSystemMessage(notice) + '\n');
   else if (result.stdout !== null) process.stdout.write(result.stdout + '\n');
   if (result.code) process.stderr.write(`jev-gate: ${result.code}\n`);
