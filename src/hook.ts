@@ -4,7 +4,7 @@ import { prepareDispatchAllocation, selectedDispatchPair, type DispatchAllocatio
 import { OWNED_AGENT_PROFILES } from './agents.js';
 import type { PairOffer, PairPatch } from './router-selection.js';
 import { integratedClaudePlugin } from './claude-setup.js';
-import { claudeTerminal, dispatchMarker, isNativeTaskNotification } from './claude-background.js';
+import { claudeTerminal, dispatchMarker, taskNoticeVerdict, type NoticeBasis } from './claude-background.js';
 import { hasWorktreeHead } from './worktree.js';
 import { observedDelegationPrices } from './delegation-prices.js';
 import { createHash, randomUUID } from 'node:crypto';
@@ -544,8 +544,11 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
   };
 
   /** Read once: both the background path and Gate A ask it, and an older payload pays a transcript scan for it. */
-  let taskNotice: boolean | undefined;
-  const isTaskNotice = (): boolean => taskNotice ??= isNativeTaskNotification(input);
+  let taskNotice: { notice: boolean; basis: NoticeBasis } | undefined;
+  const isTaskNotice = (): boolean => (taskNotice ??= taskNoticeVerdict(input)).notice;
+  /** #281: every Gate A record says whether the prompt was taken as a person's and why, so notice inflow is countable. */
+  const humanInput = (): { human_input: { verdict: 'human' | 'task_notification'; basis: NoticeBasis } } =>
+    ({ human_input: { verdict: isTaskNotice() ? 'task_notification' : 'human', basis: taskNotice!.basis } });
 
   const interactivePrompt = (): HookResult | null => {
     if (caller.agent_id || caller.agent_type || !input.session_id || !input.prompt_id) return null;
@@ -743,7 +746,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     // A host-authored completion notice is not a person's request: asking Gate A about it would spend two calls on
     // machine text, and a new generation would push the job it reports on into history.
     if (isTaskNotice()) {
-      trace?.write('admission_result', { ...base, attempted: false, known_not_sent: true, decision: { shape: 'direct', decided: false, reason: 'task_notification', changed_default: false } });
+      trace?.write('admission_result', { ...base, ...humanInput(), attempted: false, known_not_sent: true, decision: { shape: 'direct', decided: false, reason: 'task_notification', changed_default: false } });
       return skip('task_notification');
     }
 
@@ -766,9 +769,11 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
      * nothing left to overwrite. Until it is written back the generation is direct, which guards nothing.
      */
     let superseded = false;
+    let generationId: string | undefined;
     const registered = updateJob(deps.env, sessionId, (prev) => {
       const change = newGeneration(prev, sessionId, promptId, 'direct');
       superseded = change.superseded;
+      generationId = change.state.current.generation_id;
       return forced ? { ...change.state, current: { ...change.state.current, forced: true as const } } : change.state;
     });
     // Without durable state there is no guard and no plan, so the turn falls back to native behavior.
@@ -776,7 +781,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     const currentAdmission = (): boolean => {
       if (deps.signal?.aborted) return false;
       const state = readJob(deps.env, sessionId);
-      return state.ok && state.value?.current.prompt_id === promptId;
+      return state.ok && state.value?.current.generation_id === generationId;
     };
     const nowIso = (): string => new Date().toISOString();
 
@@ -912,7 +917,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
           request,
           'admission_intent',
           'admission_result',
-          { prompt_len: prompt.length, prompt_sha256: sha256(prompt), ...depthFacts, ...floorFacts, ...facts },
+          { prompt_len: prompt.length, prompt_sha256: sha256(prompt), ...humanInput(), ...depthFacts, ...floorFacts, ...facts },
           Object.keys(request.questions),
           (outcome) => {
             if (!outcome.ok) return { forced: false, decision: { shape: 'direct', decided: false, reason: outcome.code, changed_default: false } };
@@ -954,18 +959,16 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         const needsContext = 'outcome' in gate && gate.outcome.ok && admitted !== null && (admitted as AdmissionDecision).reason === 'admission_needs_context';
         if (needsContext && admissionDeadline - Date.now() < MIN_NETWORK_MS) {
           gate = { blocked: 'deadline_exhausted' };
-          trace?.write('admission_result', { ...base, attempted: false, known_not_sent: true, retry_skipped: true, skip_code: 'deadline_exhausted' });
+          trace?.write('admission_result', { ...base, ...humanInput(), attempted: false, known_not_sent: true, retry_skipped: true, skip_code: 'deadline_exhausted' });
         } else if (needsContext) {
           const recent = deps.host ? [...(deps.host.recentRequests?.() ?? [])] : readRecentPrompts(input.transcript_path, prompt);
           if (!currentAdmission()) return skip(deps.signal?.aborted ? 'aborted' : 'generation_changed');
-          if (recent.length > 0) {
-            const contextual = withRecentPrompts(prompt, recent);
-            if (Buffer.byteLength(contextual, 'utf8') <= REQUEST_MAX_BYTES && Buffer.byteLength(composeSingleWorkerPrompt('', contextual, true), 'utf8') <= MAX_COMPOSED_BYTES) {
-              gate = await askGateA(contextual, { context_turns: recent.length });
-              if (!currentAdmission()) return skip(deps.signal?.aborted ? 'aborted' : 'generation_changed');
-              dispatchRequest = contextual;
-            }
-          }
+          const contextual = withRecentPrompts(prompt, recent);
+          if (recent.length > 0 && Buffer.byteLength(contextual, 'utf8') <= REQUEST_MAX_BYTES && Buffer.byteLength(composeSingleWorkerPrompt('', contextual, true), 'utf8') <= MAX_COMPOSED_BYTES) {
+            gate = await askGateA(contextual, { context_turns: recent.length });
+            if (!currentAdmission()) return skip(deps.signal?.aborted ? 'aborted' : 'generation_changed');
+            dispatchRequest = contextual;
+          } else trace?.write('admission_result', { ...base, ...humanInput(), attempted: false, known_not_sent: true, retry_skipped: true, skip_code: recent.length > 0 ? 'context_too_large' : 'no_recent_prompts' });
         }
         // #48 P2: `'outcome' in gate` is the one place that tells whether a Gate A request was actually attempted --
         // `'blocked' in gate` means callGate itself declined to send it (bad request, byte cap, etc).
@@ -995,7 +998,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     if (executed === null) return emitContext('UserPromptSubmit', renderDirectGuidance(mode), 'admission_shape_unknown');
     let stale = false;
     const applied = updateJob(deps.env, sessionId, (prev) => {
-      if (!prev || prev.current.prompt_id !== promptId || deps.signal?.aborted || Date.now() >= hookDeadline) {
+      if (!prev || prev.current.generation_id !== generationId || deps.signal?.aborted || Date.now() >= hookDeadline) {
         stale = true;
         return null;
       }

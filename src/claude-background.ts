@@ -1,23 +1,31 @@
 import { closeSync, constants, fstatSync, lstatSync, openSync, readSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
+import { humanInputText } from './recent-prompts.js';
 import { subagentTranscriptPath } from './verify.js';
 import type { HookInput } from './types.js';
 
 export const dispatchMarker = (token: string): string => `\n\n[JEV_DISPATCH token=${token}]`;
 
+/** #281: why a prompt was or was not taken as a native notice. Gate A records it, so notice inflow can be counted. */
+export type NoticeBasis = 'not_notice' | 'source' | 'transcript_row' | 'host_queue' | 'unproven';
+
 /** Suppress host-authored notice turns; this never establishes worker termination. */
-export const isNativeTaskNotification = (input: HookInput): boolean => {
-  if (input.source !== undefined && input.source !== 'system' || !input.session_id || !input.prompt_id || !input.transcript_path || !/^\s*<task-notification>/.test(input.prompt ?? '')) return false;
+export const taskNoticeVerdict = (input: HookInput): { notice: boolean; basis: NoticeBasis } => {
+  const human = (basis: NoticeBasis) => ({ notice: false, basis });
+  if (!input.session_id || !input.prompt_id || !input.transcript_path || !/^\s*<task-notification>/.test(input.prompt ?? '')) return human('not_notice');
+  if (input.source !== undefined && input.source !== 'system') return human('source');
   // The documented author field is available before transcript flush. Require the whole machine envelope.
-  if (input.source === 'system' && /^\s*<task-notification>[\s\S]*<\/task-notification>\s*$/.test(input.prompt ?? '')) return true;
+  if (input.source === 'system' && /^\s*<task-notification>[\s\S]*<\/task-notification>\s*$/.test(input.prompt ?? '')) return { notice: true, basis: 'source' };
   // Older payloads lack source: only exact identity plus native transcript provenance can establish it.
   let fd: number | undefined;
   try {
     fd = openSync(input.transcript_path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-    const st = fstatSync(fd); if (!st.isFile()) return false;
-    const offset = Math.max(0, st.size - 1024 * 1024), buffer = Buffer.alloc(st.size - offset);
+    const st = fstatSync(fd); if (!st.isFile()) return human('unproven');
+    // #281: a launch receipt sat up to 6.1 MiB before its notice (p90 2.3 MiB, 2026-10-17..20); 8 MiB parses in ~17 ms.
+    const offset = Math.max(0, st.size - 8 * 1024 * 1024), buffer = Buffer.alloc(st.size - offset);
     readSync(fd, buffer, 0, buffer.length, offset);
-    const rows = buffer.toString().split('\n').flatMap(line => { try { const row: unknown = JSON.parse(line); return row && typeof row === 'object' && !Array.isArray(row) ? [row as Record<string, unknown>] : []; } catch { return []; } });
+    // Every row read below is a user or queue row; the rest of a long session is skipped before parsing.
+    const rows = buffer.toString().split('\n').flatMap(line => { if (!line.includes('"user"') && !line.includes('"queue-operation"')) return []; try { const row: unknown = JSON.parse(line); return row && typeof row === 'object' && !Array.isArray(row) ? [row as Record<string, unknown>] : []; } catch { return []; } });
     const textOf = (row: Record<string, unknown>): string | null => {
       const content = (row['message'] as { content?: unknown } | undefined)?.content;
       return typeof content === 'string' ? content : Array.isArray(content) && content.every(c => c?.type === 'text' && typeof c.text === 'string') ? content.map(c => c.text).join('\n') : null;
@@ -26,28 +34,32 @@ export const isNativeTaskNotification = (input: HookInput): boolean => {
         const origin = row['origin'] as { kind?: unknown; producer?: unknown } | undefined;
         if (row['type'] !== 'user' || row['sessionId'] !== input.session_id || row['promptSource'] !== 'system' || row['turnOrigin'] !== 'task_notification' || origin?.kind !== 'task-notification' || origin.producer !== 'session-task' || row['promptId'] !== input.prompt_id && row['uuid'] !== input.prompt_id) return false;
         return textOf(row) === input.prompt;
-    })) return true;
-    // Native 2.1.293 can run the notice hook before flushing its user row, reusing the
-    // preceding human turn's ID and omitting source. Authenticate the host queue against
-    // that different human turn AND the structured native launch receipt, never XML alone.
-    if (!/^\s*<task-notification>[\s\S]*<\/task-notification>\s*$/.test(input.prompt ?? '')) return false;
-    const field = (name: string): string | null => { const matches = [...(input.prompt ?? '').matchAll(new RegExp(`<${name}>([^<>]+)</${name}>`, 'g'))]; return matches.length === 1 ? matches[0]![1]! : null; };
-    const agent = field('task-id'), tool = field('tool-use-id'), output = field('output-file'), status = field('status');
-    if (!agent || !tool || !output || !/^[\w-]{1,160}$/.test(agent) || !/^[\w-]{1,160}$/.test(tool) || !['completed', 'failed', 'killed'].includes(status ?? '')) return false;
-    const humanIndex = rows.findLastIndex(row => row['type'] === 'user' && row['sessionId'] === input.session_id && row['isSidechain'] !== true && textOf(row) !== null);
-    const human = rows[humanIndex];
-    if (!human || human['promptId'] !== input.prompt_id || !['user', 'sdk'].includes(String(human['promptSource'])) || textOf(human) === input.prompt) return false;
+    })) return { notice: true, basis: 'transcript_row' };
+    // The host runs the notice hook before flushing its user row, and 2.1.30x payloads omit source (#281: all 237
+    // notices that reached Gate A on 2026-10-17..20). The notice may reuse the running turn's ID or carry a fresh one.
+    // Authenticate the host queue after the last human turn AND the launch receipt of the task it reports on, never XML alone.
+    if (!/^\s*<task-notification>[\s\S]*<\/task-notification>\s*$/.test(input.prompt ?? '')) return human('unproven');
+    const fields = (name: string): string[] => [...(input.prompt ?? '').matchAll(new RegExp(`<${name}>([^<>]+)</${name}>`, 'g'))].map(m => m[1]!);
+    // Agent and background Bash notices name the launching tool call and output file; Monitor events name only the task.
+    const tasks = fields('task-id'), tools = fields('tool-use-id'), outputs = fields('output-file');
+    if (tasks.length !== 1 || tools.length > 1 || outputs.length > 1 || ![...tasks, ...tools].every(id => /^[\w-]{1,160}$/.test(id))) return human('unproven');
+    // Its own row is flushed only after this hook, so a row that already carries the text is a copy of a delivered notice.
+    if (rows.some(row => row['type'] === 'user' && row['sessionId'] === input.session_id && textOf(row) === input.prompt)) return human('unproven');
+    // A long autonomous turn can push the last human turn out of the tail; the queue record is then after it by construction.
+    const humanIndex = rows.findLastIndex(row => row['sessionId'] === input.session_id && humanInputText(row) !== null);
     const queuedIndex = rows.findLastIndex(row => row['type'] === 'queue-operation' && row['operation'] === 'enqueue' && row['sessionId'] === input.session_id && row['content'] === input.prompt);
-    const queued = rows[queuedIndex];
-    if (!queued || queuedIndex <= humanIndex || typeof queued['timestamp'] !== 'string' || typeof human['timestamp'] !== 'string' || !Number.isFinite(Date.parse(queued['timestamp'])) || !Number.isFinite(Date.parse(human['timestamp'])) || Date.parse(queued['timestamp']) < Date.parse(human['timestamp'])) return false;
+    const at = (row: Record<string, unknown> | undefined): number => typeof row?.['timestamp'] === 'string' ? Date.parse(row['timestamp']) : NaN;
+    if (queuedIndex <= humanIndex || !Number.isFinite(at(rows[queuedIndex])) || humanIndex >= 0 && !(at(rows[humanIndex]) <= at(rows[queuedIndex]))) return human('unproven');
     return rows.slice(0, queuedIndex).some(row => {
       const result = row['toolUseResult'] as Record<string, unknown> | undefined;
       const content = (row['message'] as { content?: unknown } | undefined)?.content;
-      return row['type'] === 'user' && row['sessionId'] === input.session_id && row['isSidechain'] !== true && result?.['status'] === 'async_launched' && result['agentId'] === agent && result['outputFile'] === output && Array.isArray(content) && content.some(c => c?.type === 'tool_result' && c.tool_use_id === tool);
-    });
-  } catch { return false; }
+      return row['type'] === 'user' && row['sessionId'] === input.session_id && row['isSidechain'] !== true && !!result && [result['agentId'], result['backgroundTaskId'], result['taskId']].includes(tasks[0]) &&
+        (result['outputFile'] === undefined || result['outputFile'] === outputs[0]) && Array.isArray(content) && content.some(c => c?.type === 'tool_result' && (tools.length === 0 || c.tool_use_id === tools[0]));
+    }) ? { notice: true, basis: 'host_queue' } : human('unproven');
+  } catch { return human('unproven'); }
   finally { if (fd !== undefined) closeSync(fd); }
 };
+export const isNativeTaskNotification = (input: HookInput): boolean => taskNoticeVerdict(input).notice;
 
 /** Native terminal evidence, never a launch receipt or a string taken from a newer root prompt. */
 export const claudeTerminal = (input: HookInput, nativeNotification = false): { token: string | null; text: string; model: string | null; completed: boolean } | null => {

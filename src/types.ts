@@ -383,6 +383,8 @@ export interface JobAttempts {
 /** One generation = one (session_id, prompt_id) pair (A2). A new prompt supersedes the previous one into history. */
 export interface JobGeneration {
   prompt_id: string | null;
+  /** #284: the host reuses a prompt_id for queued prompts and notices, so a late answer is matched to this, not to it. Absent in older state. */
+  generation_id?: string;
   /**
    * A17: the admitted request, verbatim. A plan is a paraphrase of it, and the worker is told the user's own words
    * outrank the contract -- which is only true if they reach the worker at all. Null when the turn carried none, or

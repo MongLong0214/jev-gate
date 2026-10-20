@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
@@ -206,6 +206,7 @@ export const updateJob = (
 
 export const emptyGeneration = (promptId: string | null, shape: ExecutionShape, now = new Date()): JobGeneration => ({
   prompt_id: promptId,
+  generation_id: randomUUID(),
   request: null,
   created_at: now.toISOString(),
   shape,
