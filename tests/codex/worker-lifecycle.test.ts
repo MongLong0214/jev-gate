@@ -370,6 +370,45 @@ describe('Codex write scope from native tool targets (#234)', () => {
       expect(await f.blocked('Bash', { command }), command).toBe(true);
     }
   });
+  describe('ROUND1-ESCAPE-1 Git configuration callbacks', () => {
+    const keys = ['GIT_CONFIG_PARAMETERS', 'GIT_CONFIG_COUNT', 'GIT_EXTERNAL_DIFF'] as const;
+    const cleanEnv = () => {
+      for (const key of keys) {
+        const old = process.env[key];
+        cleanups.push(() => { if (old === undefined) delete process.env[key]; else process.env[key] = old; });
+        delete process.env[key];
+      }
+    };
+    it.each([
+      `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=diff.external GIT_CONFIG_VALUE_0='printf FILTER_EXECUTED' git diff --no-index -- a b`,
+      `GIT_EXTERNAL_DIFF='printf FILTER_EXECUTED' git diff --no-index -- a b`,
+      'GIT_CONFIG_GLOBAL=callbacks.config git diff --no-index -- a b',
+      `GIT_CONFIG_PARAMETERS="'diff.external=printf FILTER_EXECUTED'" git diff --no-index -- a b`,
+      'ARBITRARY=1 git diff --no-index -- a b',
+      'ARBITRARY= git status --short',
+      `git -c diff.external='printf FILTER_EXECUTED' diff --no-index -- a b`,
+      `git -cdiff.external='printf FILTER_EXECUTED' diff --no-index -- a b`,
+      'git --config-env=diff.external=CALLBACK diff --no-index -- a b',
+      'git --config-env diff.external=CALLBACK diff --no-index -- a b',
+      'git -c color.ui=false status --short',
+    ])('blocks unknown targets from an unrelated directory: %s', async command => {
+      cleanEnv(); const f = await scoped();
+      expect(await f.blocked('exec_command', { cmd: command, workdir: f.other }, f.other)).toBe(true);
+      expect(await f.blocked('Bash', { command: `cd ${f.other} && ${command}` })).toBe(true);
+    });
+    it.each(keys.flatMap(key => ['', key === 'GIT_CONFIG_COUNT' ? '1' : 'callback'].map(value => [key, value] as const)))('blocks inherited %s=%s including empty presence', async (key, value) => {
+      cleanEnv(); const f = await scoped(); process.env[key] = value;
+      for (const command of ['git diff --no-index -- a b', 'git status --short']) {
+        expect(await f.blocked('exec_command', { cmd: command, workdir: f.other }, f.other), command).toBe(true);
+        expect(await f.blocked('Bash', { command }), command).toBe(true);
+      }
+    });
+    it.each(['git diff --no-index -- a b', 'git status --short'])('allows clean-env plain reads: %s', async command => {
+      cleanEnv(); const f = await scoped();
+      expect(await f.hook('Bash', { command })).toEqual({});
+      expect(await f.hook('exec_command', { cmd: command, workdir: f.other }, f.other)).toEqual({});
+    });
+  });
   it('confines an unknown shell command by its reported workdir, a leading absolute cd or the session cwd, and the paths it names', async () => {
     const f = await scoped();
     expect(await f.hook('exec_command', { cmd: 'npx vitest run tests/a.test.ts', workdir: f.other })).toEqual({});

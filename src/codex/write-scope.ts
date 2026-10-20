@@ -70,6 +70,16 @@ const operands = (args: string[]): string[] => {
   const i = args.findIndex(a => a === '--' || !/^-./.test(a));
   return i < 0 ? [] : args.slice(args[i] === '--' ? i + 1 : i);
 };
+/** Configuration can run callbacks with targets unrelated to any argument or working directory. */
+const configuredGit = (words: Word[]): boolean => {
+  const argv = words.map(w => w.text);
+  let i = 0;
+  while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(argv[i] ?? '')) i++;
+  // ponytail: repository config files written earlier can also enable callbacks; inspecting them is outside this classifier's scope.
+  return /(?:^|\/)git$/.test(argv[i] ?? '') && (i > 0
+    || argv.slice(i + 1).some(a => /^-c|^--config-env(?:=|$)/.test(a))
+    || ['GIT_CONFIG_PARAMETERS', 'GIT_CONFIG_COUNT', 'GIT_EXTERNAL_DIFF'].some(key => process.env[key] !== undefined));
+};
 const readOnlyArgv = ([command, ...args]: string[]): boolean => {
   if (READ_ONLY.has(command ?? '')) return true;
   // A lone --version on a program found by name, as in `node --version`. Short -v/-V can start an interpreter (python -v, bash -v).
@@ -107,7 +117,7 @@ const readOnlyArgv = ([command, ...args]: string[]): boolean => {
 /** Every pipeline stage is listed, nothing expands, and output goes only to the terminal, /dev/null or another descriptor. */
 export const readOnlyCommand = (command: string): boolean => {
   const segments = parse(command);
-  return !!segments?.length && segments.every(s => !s.dynamic && s.next !== '&' && s.words.length > 0 && !s.words.some(w => w.dynamic)
+  return !!segments?.length && segments.every(s => !configuredGit(s.words) && !s.dynamic && s.next !== '&' && s.words.length > 0 && !s.words.some(w => w.dynamic)
     && s.redirects.every(({ op, target: t }) => !t.dynamic && (op === '<' || op === '>&' && /^\d+$/.test(t.text) || /^(?:>|>>|&>)$/.test(op) && t.text === '/dev/null'))
     && readOnlyArgv(s.words.map(w => w.text)));
 };
@@ -122,7 +132,7 @@ const at = (base: string, path: string): string => isAbsolute(path) ? path : `${
  */
 const shellTargets = (base: string | null, command: unknown): string[] => {
   const segments = typeof command === 'string' ? parse(command) : null;
-  if (!segments) return ['/'];
+  if (!segments || segments.some(s => configuredGit(s.words))) return ['/'];
   let i = 0;
   for (; i < segments.length; i++) {
     const { words: [cd, dir, ...extra], redirects, next, dynamic } = segments[i]!;
