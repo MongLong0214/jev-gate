@@ -307,11 +307,11 @@ describe('atomic context and distribution support', () => {
     expect(JSON.stringify(a)).toBe(before);
   });
   it.each([
-    ['self_contained', 0.8, 'orchestrated'],
-    ['self_contained', 0.79, 'direct'],
-    ['needs_context', 0.95, 'direct'],
-    ['unclear', 0.95, 'direct'],
-  ] as const)('requires unique self-contained support, without a separate confidence floor: %s %s', (pick, p, shape) => {
+    ['self_contained', 0.8, 'orchestrated', null],
+    ['self_contained', 0.79, 'direct', 'admission_context_low_confidence'],
+    ['needs_context', 0.95, 'direct', 'admission_needs_context'],
+    ['unclear', 0.95, 'direct', 'admission_context_unclear'],
+  ] as const)('requires unique self-contained support, without a separate confidence floor: %s %s', (pick, p, shape, reason) => {
     const labels = ['self_contained', 'needs_context', 'unclear'];
     const task_context = {
       type: 'choice',
@@ -319,7 +319,7 @@ describe('atomic context and distribution support', () => {
       confidence: 0,
       probabilities: Object.fromEntries(labels.map((k) => [k, k === pick ? p : (1 - p) / 2])),
     };
-    expect(decide({ ...answers(), task_context }).shape).toBe(shape);
+    expect(decide({ ...answers(), task_context })).toMatchObject({ shape, reason });
   });
   it('keeps an earlier explicit veto even when later answers are invalid', () => {
     expect(decide({ ...answers({ forbids_delegation: 0.6 }), task_context: null, tool_calls: null })).toMatchObject({

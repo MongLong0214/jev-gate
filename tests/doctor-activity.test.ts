@@ -72,10 +72,10 @@ describe('activity: gate_a', () => {
 describe('activity: gate_b', () => {
   const route = (tier: string): Rec => rec('pre_result', { role: 'worker', called_tier: 'standard', decision: { tier } });
   it('warns at 5 worker decisions that changed no called tier', () => {
-    expect(check(run(times(5, () => route('standard'))), 'gate_b')).toMatchObject({ level: 'warn', message: 'gate_b: 5 routing decisions, 0 changed the called tier' });
+    expect(check(run(times(5, () => route('standard'))), 'gate_b')).toMatchObject({ level: 'warn', message: 'gate_b: 5 routing decisions, 0 changed the called tier; reasons none 5' });
   });
   it('counts a worker decision that changed the called tier', () => {
-    expect(check(run([...times(4, () => route('standard')), route('fast')]), 'gate_b')).toMatchObject({ level: 'ok', message: 'gate_b: 5 routing decisions, 1 changed the called tier' });
+    expect(check(run([...times(4, () => route('standard')), route('fast')]), 'gate_b')).toMatchObject({ level: 'ok', message: 'gate_b: 5 routing decisions, 1 changed the called tier; reasons none 5' });
   });
   it('does not count an absent baseline as a tier change', () => {
     expect(check(run([rec('pre_result', { role: 'worker', decision: { tier: 'deep' } })]), 'gate_b').message).toContain('0 changed the called tier');
@@ -300,5 +300,21 @@ describe('activity: failures', () => {
   });
   it('is ok without failure records', () => {
     expect(level([rec('admission_result')], 'failures')).toBe('ok');
+  });
+});
+
+describe('Gate cleanup reason fixtures', () => {
+  it.each(['admission_needs_context', 'admission_context_unclear', 'admission_context_low_confidence', 'route_not_fast'])('displays %s', reason => {
+    const gateB = reason === 'route_not_fast';
+    const c = check(run([rec(gateB ? 'pre_result' : 'admission_result', { role: 'worker', decision: { shape: 'direct', tier: 'standard', reason } })]), gateB ? 'gate_b' : 'gate_a');
+    expect(c.message).toContain(reason + ' 1');
+  });
+  it.each(['worker_check_duplicate', 'worker_check_failed', 'worker_check_not_run', 'worker_checks_missing', 'worker_checks_unverified', 'worker_no_result', 'worker_failed', 'worker_cancelled'])('displays worker reason %s', reason => {
+    const c = check(run([rec('post', { subagent_type: 'jev-gate:worker', verdict: 'incomplete', verdict_reason: reason })]), 'worker');
+    expect(c.message).toContain(reason);
+  });
+  it('counts native cancellation separately from failure', () => {
+    const c = check(run([rec('background_terminal', { status: 'cancelled', verdict_reason: 'worker_cancelled' })]), 'background');
+    expect(c.level).toBe('ok'); expect(c.message).toContain('cancelled 1'); expect(c.message).toContain('worker_cancelled');
   });
 });

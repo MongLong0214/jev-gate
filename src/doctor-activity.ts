@@ -79,11 +79,11 @@ export const activityChecks = (input: ActivityInput): ActivityCheck[] => {
   const ring = input.liveness?.recent ?? [], ringCalls = ring.filter(e => e.attempted).length, never = ring.length >= LIVENESS_WINDOW && ringCalls === 0;
   const gateAFail = calls.length >= 20 && errors.length / calls.length > 0.1, gateAIdle = calls.length >= 50 && orchestrated === 0;
   say(gateAFail ? 'fail' : gateAIdle || never ? 'warn' : admissions.length ? 'ok' : 'info',
-    `gate_a: ${admissions.length} decisions, ${calls.length} Jev calls, ${orchestrated} orchestrated; errors ${errors.length} (${rate(errors.length, calls.length)}${errors.length ? `: ${tally(errors)}` : ''}); latency p50 ${percentile(latency, 0.5) ?? '-'} ms / p90 ${percentile(latency, 0.9) ?? '-'} ms; liveness ${ringCalls}/${ring.length} recent auto-mode decisions called Jev`,
+    `gate_a: ${admissions.length} decisions, ${calls.length} Jev calls, ${orchestrated} orchestrated; errors ${errors.length} (${rate(errors.length, calls.length)}${errors.length ? `: ${tally(errors)}` : ''}); latency p50 ${percentile(latency, 0.5) ?? '-'} ms / p90 ${percentile(latency, 0.9) ?? '-'} ms; reasons ${tally(admissions.map(r => str(sub(r, 'decision')['reason']) ?? 'none'))}; liveness ${ringCalls}/${ring.length} recent auto-mode decisions called Jev`,
     gateAFail ? 'Check Jev reachability and the API key; failed calls keep every prompt direct.' : never ? 'Gate A never calls Jev: check mode=auto, the effective depth floor and the API key in configuration.' : 'Gate A pays a Jev call and its latency on every prompt but orchestrated nothing; review the admission policy, or set Gate mode off.');
 
   const routes = phase('pre_result').filter(r => r['role'] === 'worker'), retiered = routes.filter(r => str(r['called_tier']) && str(sub(r, 'decision')['tier']) && sub(r, 'decision')['tier'] !== r['called_tier']).length;
-  say(routes.length >= 5 && !retiered ? 'warn' : routes.length ? 'ok' : 'info', `gate_b: ${routes.length} routing decisions, ${retiered} changed the called tier`,
+  say(routes.length >= 5 && !retiered ? 'warn' : routes.length ? 'ok' : 'info', `gate_b: ${routes.length} routing decisions, ${retiered} changed the called tier; reasons ${tally(routes.map(r => str(sub(r, 'decision')['reason']) ?? 'none'))}`,
     'Gate B calls Jev on every owned dispatch and changed no tier; review the routing policy.');
 
   const posts = phase('post'), owned = posts.filter(r => OWNED_AGENT_NAMES.includes(str(r['subagent_type']) ?? '') && str(r['verdict']));
@@ -94,8 +94,8 @@ export const activityChecks = (input: ActivityInput): ActivityCheck[] => {
     'Open the named workers in the dashboard; an unverified or unchecked result was not proven done.');
 
   const terminals = phase('background_terminal'), failed = terminals.filter(r => r['status'] === 'failed').length;
-  say(failed ? 'warn' : terminals.length ? 'ok' : 'info', `background: ${terminals.length} background workers ended${terminals.length ? ` (${tally(terminals.map(r => String(r['status'])))})` : ''}`,
-    'Open the failed background workers in the dashboard; a stopped task is also recorded as failed.');
+  say(failed ? 'warn' : terminals.length ? 'ok' : 'info', `background: ${terminals.length} background workers ended${terminals.length ? ` (${tally(terminals.map(r => String(r['status'])))}; reasons ${tally(terminals.map(r => str(r['verdict_reason']) ?? 'none'))})` : ''}`,
+    'Open the failed background workers in the dashboard; user-stopped tasks are recorded as cancelled.');
 
   const results = router('root_result', 'child_result'), compared = results.filter(r => familyOf(r['requested']) && familyOf(r['observed']));
   const mismatched = compared.filter(r => familyOf(r['requested']) !== familyOf(r['observed']));
@@ -205,7 +205,7 @@ export const activityChecks = (input: ActivityInput): ActivityCheck[] => {
     stale ? 'No Codex root routing was recorded: sessions started before the current connection keep the old provider; restart them (exit and resume), then rerun doctor.' : 'No Codex root routing was recorded; start a fresh Codex session so the installed plugin reconnects, then rerun doctor.');
 
   const failures = phase('failure');
-  say(failures.length ? 'warn' : 'ok', `failures: ${failures.length} failure records${failures.length ? ` (${tally(failures.map(r => str(r['failure_category']) ?? 'uncategorized'))})` : ''}`,
+  say(failures.length ? 'warn' : 'ok', `failures: ${failures.length} failure records${failures.length ? ` (${tally(failures.map(r => str(r['failure_category']) ?? str(r['verdict_reason']) ?? 'uncategorized'))})` : ''}`,
     'Open the failures in the dashboard; each names the stage that failed.');
 
   return out;

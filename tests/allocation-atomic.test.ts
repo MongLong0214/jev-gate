@@ -81,7 +81,16 @@ describe('decideWorkerRouteAtomic', () => {
 
   it('keeps standard when nothing would catch a mistake, however mechanical the work is', () => {
     const d = decideWorkerRouteAtomic(answers({ repetitive: 0.95, interfaces_fixed: 0.9, checks_stated: 0.2 }), 'standard');
-    expect(d).toMatchObject({ action: 'preserve', tier: 'standard', reason: 'route_low_confidence' });
+    expect(d).toMatchObject({ action: 'preserve', tier: 'standard', reason: 'route_not_fast' });
+  });
+
+  it.each([
+    [0.4, 'route_not_fast'], [0.41, 'route_low_confidence'], [0.59, 'route_low_confidence'], [0.6, null],
+  ] as const)('distinguishes negative and uncertain fast requirements at %s', (checks_stated, reason) => {
+    expect(decideWorkerRouteAtomic(answers({ fully_specified: .9, interfaces_fixed: .9, checks_stated }), 'standard').reason).toBe(reason);
+  });
+  it('names confident negative evidence on both cheap-work alternatives', () => {
+    expect(decideWorkerRouteAtomic(answers({ fully_specified: .1, repetitive: .1, interfaces_fixed: .9, checks_stated: .9 }), 'standard')).toMatchObject({ action: 'preserve', reason: 'route_not_fast' });
   });
 
   it.each([['unresolved_interaction'], ['prior_reasoning_failure']])('upgrades to deep only on %s, the evidence UPGRADE_BASES names', (key) => {
@@ -130,7 +139,7 @@ describe('decideWorkerRouteAtomic', () => {
   it('does not turn an unused malformed conjunct into a route error', () => {
     const a = answers({ fully_specified: 0.9, interfaces_fixed: 0.2 });
     delete a['checks_stated'];
-    expect(decideWorkerRouteAtomic(a, 'deep')).toMatchObject({ action: 'preserve', tier: 'deep', reason: 'route_low_confidence' });
+    expect(decideWorkerRouteAtomic(a, 'deep')).toMatchObject({ action: 'preserve', tier: 'deep', reason: 'route_not_fast' });
   });
 
   it.each([

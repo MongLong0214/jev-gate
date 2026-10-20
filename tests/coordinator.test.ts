@@ -2,9 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   singleRules,
-  DIRECT_MODE_SENTENCE,
   GUIDANCE_HEADER,
-  renderDirectGuidance,
   renderDispatchDeny,
   renderRouteNote,
   renderSingleRouteNote,
@@ -14,14 +12,6 @@ import {
 } from '../src/coordinator.js';
 
 describe('guidance', () => {
-  it('renders direct guidance per mode without any orchestration rule', () => {
-    const auto = renderDirectGuidance('auto');
-    expect(auto).toContain(GUIDANCE_HEADER);
-    expect(auto).toContain(DIRECT_MODE_SENTENCE.auto);
-    expect(auto).not.toContain('you coordinate');
-    expect(renderDirectGuidance('native')).toContain(DIRECT_MODE_SENTENCE.native);
-  });
-
   it('renders the single-worker rules with the admission line only in auto', () => {
     const auto = renderSingleGuidance({ mode: 'auto', confidence: 0.91, superseded: false });
     for (const rule of singleRules()) expect(auto).toContain(rule);
@@ -41,8 +31,6 @@ describe('guidance', () => {
     for (const text of [
       renderSingleGuidance({ mode: 'auto', confidence: 0.9, superseded: true }),
       renderSingleGuidance({ mode: 'native', confidence: null, superseded: false }),
-      renderDirectGuidance('auto'),
-      renderDirectGuidance('native', true),
     ]) {
       expect(text).not.toMatch(/planner|JEV_TASK|root guard|guard denies|denies root/i);
     }

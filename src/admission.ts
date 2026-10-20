@@ -279,12 +279,10 @@ export const decideAdmissionAtomic = (
   if (forbid >= FACT_TRUE) return fallback('admission_forbids_delegation');
   const context = validateChoice(answers['task_context'], TASK_CONTEXT_CHOICES);
   if (!context) return fallback('admission_invalid');
-  if (
-    context.choice !== 'self_contained' ||
-    topChoices(context).length !== 1 ||
-    context.probabilities.self_contained < ADMISSION_CONTEXT_SUPPORT
-  )
-    return fallback('admission_needs_context');
+  if (topChoices(context).length !== 1) return fallback('admission_tie');
+  if (context.choice === 'needs_context') return fallback('admission_needs_context');
+  if (context.choice === 'unclear') return fallback('admission_context_unclear');
+  if (context.probabilities.self_contained < ADMISSION_CONTEXT_SUPPORT) return fallback('admission_context_low_confidence');
   const calls = validateScore(answers['tool_calls']);
   if (!calls) return fallback('admission_invalid');
   const turns = estimatedTurns(calls.score);

@@ -108,6 +108,10 @@ Gate, Router, Compact, recording, and automatic dashboard opening default to **o
 
 Default Gate settings run one worker per admitted request with a depth floor of 0. Native permissions remain authoritative. Missing keys, invalid judgments, timeouts, or unavailable host facts preserve the native call.
 
+Gate A asks once about the current request. `needs_context`, unclear context, and insufficient self-contained support have distinct reasons and stay direct; earlier prompts are not sent for a second judgment. Direct admission adds no model context. Orchestration guidance is added only to admitted jobs. Gate B distinguishes a confident failure to meet fast-tier requirements from uncertainty.
+
+A worker result requires every reported check exactly once as `pass`, with its execution confirmed after the last observed change. Changed files with zero reported checks, failed or unrun checks, duplicates, and unverified passes are not accepted. The single-worker path has no planner check contract: these checks establish command execution, not complete requirement coverage. Reservations with no native execution identity are released with a missing-result reason at the next prompt or Stop. Native background executions remain reserved until their end is observed; a successful native TaskStop records `cancelled`.
+
 Enabled does not mean every prompt delegates, routes, or compacts. The first Claude prompt may lack context usage for Gate admission. Simple bounded work can use a fast worker; broad or unclear tasks may remain direct. Jev probabilities are policy inputs, not measured success rates. No general speed, cost, or token saving is guaranteed.
 
 Set the shared frontier switch in the ordinary config (merge this field into an existing file):

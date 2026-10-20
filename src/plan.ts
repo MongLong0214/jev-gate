@@ -192,11 +192,16 @@ export interface DeterministicResult {
 export const SINGLE_TASK_ID = 'single';
 
 /**
- * A19: a dispatch carries no contract, so there is nothing for code to check the reply against: the verdict is the
- * worker's own report, which the hook then compares with the commands its transcript shows it ran (src/verify.ts).
+ * A19: a dispatch carries no contract, so requirement coverage cannot be checked against a planner checklist. Every
+ * reported check must pass exactly once; changed files require checks. The hook verifies actual runs (src/verify.ts).
  */
 export const reportedSingleVerdict = (reply: WorkerReply): DeterministicResult => {
   if (reply.status !== 'done') return { verdict: 'incomplete', reason: `worker reported status ${reply.status}` };
   if (reply.blockers.length > 0) return { verdict: 'incomplete', reason: 'worker reported blockers with status done' };
+  const ids = reply.checks.map(c => c.check_id);
+  if (new Set(ids).size !== ids.length) return { verdict: 'incomplete', reason: 'worker_check_duplicate' };
+  if (reply.checks.some(c => c.result === 'fail')) return { verdict: 'incomplete', reason: 'worker_check_failed' };
+  if (reply.checks.some(c => c.result === 'not_run')) return { verdict: 'incomplete', reason: 'worker_check_not_run' };
+  if (reply.changed_files.length > 0 && reply.checks.length === 0) return { verdict: 'incomplete', reason: 'worker_checks_missing' };
   return { verdict: 'accept', reason: null };
 };

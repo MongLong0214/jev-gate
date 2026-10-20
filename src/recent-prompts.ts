@@ -3,10 +3,7 @@ import { constants, closeSync, fstatSync, openSync, readSync } from 'node:fs';
 import { looksSecret } from './outbound-text.js';
 
 /**
- * #115: the last few things the user typed, read from the host transcript for one purpose -- when Gate A answers
- * `needs_context` on a short follow-up ("e2e 해봐"), the earlier turns are the context, and one re-ask with them is
- * what lets a long task that arrived as a follow-up sentence ever be delegated. Owner decision 2026-09-30: sending
- * these prior user turns to TypeSafe is allowed.
+ * Recent human input shared by Compact and Router. Gate A classifies only the current request.
  *
  * Bounded like `depth.ts`: one tail read, never the whole file. Only records the user typed count (`humanInputText`);
  * a turn that looks like a secret is dropped, not redacted, so no partial credential leaves the machine.
@@ -41,8 +38,8 @@ export const isHostNoticeRow = (row: unknown): boolean =>
   isRecord(row) && row['type'] === 'user' && row['promptSource'] === 'system' && isRecord(row['origin']) && row['origin']['kind'] === 'task-notification';
 
 /**
- * #281: the one test for "a person typed this transcript row", shared by Gate A's notice check, its `needs_context`
- * re-ask and Compact's current task. Host-authored turns say so in the row: a task notification or a scheduled fire
+ * #281: the one test for "a person typed this transcript row", shared by Gate A's notice detection and Compact's
+ * current task. Host-authored turns say so in the row: a task notification or a scheduled fire
  * (`promptSource: "system"`, a non-human `origin`), a compact summary, meta and sidechain rows. Queued commands the host
  * delivers mid-turn are `attachment` and `queue-operation` rows, never `type: "user"`. The text is never read for this.
  */
@@ -111,7 +108,3 @@ export const selectRecentPrompts = (requests: readonly string[], max = RECENT_PR
   .filter(t => t.trim().length > 0 && !looksSecret(t) && !COMMAND_RECORD.test(t.trim()) && !INTERRUPTION.test(t.trim()))
   .slice(-max)
   .map(t => t.length > RECENT_PROMPT_MAX_CHARS ? `${t.slice(0, RECENT_PROMPT_MAX_CHARS).replace(/[\uD800-\uDBFF]$/, '')} […]` : t);
-
-/** The request text Gate A is re-asked with: earlier turns as data, the current request last and marked as such. */
-export const withRecentPrompts = (prompt: string, recent: readonly string[]): string =>
-  ['Earlier requests from this session, oldest first (context only; the current request is what is being classified):', ...recent.map((t, i) => `${i + 1}. ${t}`), '', 'Current request:', prompt].join('\n');
