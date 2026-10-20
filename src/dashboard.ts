@@ -349,8 +349,10 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
       if (req.method === 'GET' && (path === '/' || path === '/index.html')) {
         // A reload may close its stream before the replacement page has started its script.
         loadingUntil = Date.now() + 10_000;
+        // The version badge's text sets its width, so it is in the first frame rather than arriving after it.
+        await releases.refresh();
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-security-policy': "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'" });
-        res.end(PAGE);
+        res.end(PAGE.replace('/*JEV_VERSION*/null', JSON.stringify(versions()).replace(/</g, '\\u003c')));
         return;
       }
       res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });

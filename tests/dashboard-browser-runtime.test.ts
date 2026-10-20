@@ -24,13 +24,15 @@ const receipt = (extra: Partial<JevReceipt> = {}): JevReceipt => ({ status: 200,
 // One measured Jev response with its receipt; the page shows it as one call everywhere.
 const call = (id: string, feature: OperationStep['feature'], durationMs: number, extra: Partial<OperationStep> = {}, rc: Partial<JevReceipt> = {}): OperationStep => step(id, feature, { durationMs, receipt: receipt(rc), ...extra });
 const run = (id: string, host: 'claude' | 'codex', steps: OperationStep[], extra: Partial<OperationRun> = {}): OperationRun => ({ id, host, title: `${host} execution ${id}`, source: 'gate', mode: 'auto', firstAt: steps[0]?.at ?? ago(0), lastAt: steps.at(-1)?.at ?? ago(0), state: 'done', steps, ...extra });
+// As the dashboard server sends it: in the page and in every snapshot.
+const VERSION = { running: '0.8.31', installed: '0.8.31', release: { latest: '0.8.31' } };
 function snapshot(runs: OperationRun[]) {
   const feed = runs.flatMap(r => r.steps.map(s => ({ ...s, host: r.host ?? 'claude', runId: r.id, runTitle: r.title }))).sort((a,b) => b.at.localeCompare(a.at));
   const ids = ['admission','allocation','planning','workers','guard','router','compact','evidence'] as const;
   const measured = feed.filter(s => s.lane==='jev' && s.durationMs!==undefined), values = measured.map(s => s.durationMs!).sort((a,b) => a-b), pct = (p: number) => values.length ? values[Math.ceil(values.length*p)-1]! : null;
   const today: Record<string, { calls: number; input: number; costUsd: number; unpriced: number }> = {};
   for (const s of measured) { const t = today[s.host] ??= { calls:0, input:0, costUsd:0, unpriced:0 }; t.calls++; t.input += s.receipt?.input ?? 0; if (s.receipt?.costUsd != null) t.costUsd += s.receipt.costUsd; else t.unpriced++; }
-  return { at:ago(0), host:'mixed', unreadable:0, recording:{enabled:true}, dashboard:{enabled:true}, operations:{runs,feed,active:runs.filter(r=>r.state==='active').length,attention:runs.filter(r=>r.state==='attention').length,requests:measured.length,
+  return { at:ago(0), host:'mixed', unreadable:0, version:VERSION, recording:{enabled:true}, dashboard:{enabled:true}, operations:{runs,feed,active:runs.filter(r=>r.state==='active').length,attention:runs.filter(r=>r.state==='attention').length,requests:measured.length,
     features:ids.map(id=>({id,label:id,source:'trace',count:feed.filter(s=>!s.lifecycle&&s.feature===id).length,lastAt:feed.find(s=>!s.lifecycle&&s.feature===id)?.at??null,state:feed.some(s=>!s.lifecycle&&s.feature===id)?'observed':'waiting'})),
     latency:{measured:values.length,p50:pct(.5),p95:pct(.95),fastest:values[0]??null,latest:measured[0]?.durationMs??null,recent:measured.map(s=>({at:s.at,ms:s.durationMs!})).reverse(),today}} };
 }
@@ -43,7 +45,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
   const server = createServer((req,res) => {
     if(req.url?.split('?')[0]==='/api/live'){res.writeHead(200,{'content-type':'text/event-stream','cache-control':'no-cache'});res.write(`data: ${JSON.stringify(current)}\n\n`);clients.add(res);req.on('close',()=>clients.delete(res));return;}
     if(req.method==='POST'){res.writeHead(503);res.end('{}');return;}
-    res.writeHead(200,{'content-type':'text/html'});res.end(DASHBOARD_PAGE);
+    res.writeHead(200,{'content-type':'text/html'});res.end(DASHBOARD_PAGE.replace('/*JEV_VERSION*/null',JSON.stringify(VERSION)));
   });
   const push = (runs: OperationRun[], extra: { credit?: { exhausted: boolean } } = {}) => {current={...snapshot(runs),...extra};for(const res of clients)res.write(`data: ${JSON.stringify(current)}\n\n`);};
   const page = async (width=1440,height=900) => {const p=await browser.newPage({viewport:{width,height}});p.on('pageerror',e=>errors.push(e.message));await p.goto(url);await p.waitForSelector('#pipeline .node');return p;};
@@ -96,9 +98,10 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
         const p = await browser.newPage({ viewport: { width, height: 900 } });
         p.on('pageerror', e => errors.push(e.message));
         await p.goto(local.url);
-        await p.waitForFunction(() => document.getElementById('version-badge')?.textContent?.includes('99.0.0'));
+        // The server puts the version in the page, so the badge has its text, and its width, without waiting for /api/version.
+        expect(await p.locator('#version-badge').textContent()).toContain('99.0.0');
         expect(await p.locator('#version-badge').getAttribute('data-state')).toBe('update');
-        expect(await p.locator('#version-badge').textContent()).toContain('0.8.30');
+        expect(await p.locator('#version-badge').textContent()).toContain('0.8.31');
         expect(await p.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
         await p.screenshot({ path: join(output, `version-${width}.png`), fullPage: true });
         await p.close();
