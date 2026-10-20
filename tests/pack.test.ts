@@ -91,7 +91,7 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     const archive = readdirSync(outDir).find((f) => /^jev-gate-.*\.zip$/.test(f));
     expect(archive).toBeDefined();
     const list = spawnSync('unzip', ['-Z1', join(outDir, archive!)], { encoding: 'utf8' }).stdout.trim().split('\n');
-    const agents = ['worker-fast', 'worker', 'worker-deep', 'worker-frontier', 'planner', 'planner-frontier'].map((a) => `agents/${a}.md`);
+    const agents = ['worker-fast', 'worker', 'worker-deep', 'worker-frontier'].map((a) => `agents/${a}.md`);
     for (const must of ['dist/entry.js', 'dist/hook.js', 'dist/compact-hook.js', 'dist/jev.js', 'dist/brief.js', 'dist/cli.js', 'dist/job.js', 'dist/plan.js', 'hooks/hooks.json', ...agents, '.claude-plugin/plugin.json', ...INSTALL_DOCS]) expect(list, must).toContain(must);
     expect(list.filter((f) => f.startsWith('agents/'))).toEqual([...agents].sort());
     expect(list.some((f) => f.startsWith('src/') && !/^src\/(?:cost|provider-prices(?:-data)?|route-cost|claude-cache|frontier-routing|router-(?:answers|selection|context|child-context|secret)|claude-(?:models|candidates))\.ts$/.test(f) || f.includes('/tests/') || f.startsWith('tests/') || f.startsWith('node_modules/') || f.startsWith('bench/') && f !== 'bench/ab/tasks.example.json' || f === 'HANDOFF.md' || f.includes('.env') && !f.endsWith('.env.example'))).toBe(false);

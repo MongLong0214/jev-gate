@@ -1,6 +1,6 @@
 /** The circuit is one persistent DOM. Values change in place, so a live update never moves the layout; one recorded Jev response is one round trip on the rail. */
 export const CIRCUIT_CSS = `
-.circuit{position:relative;padding:14px 16px 16px}.grp{height:18px;line-height:18px;font-size:12px;color:var(--faint);margin:2px 0 8px}.cells8{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.circuit{position:relative;padding:14px 16px 16px}.grp{height:18px;line-height:18px;font-size:12px;color:var(--faint);margin:2px 0 8px}.cells8{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
 .node{position:relative;z-index:1;border:1px solid var(--line);border-radius:8px;padding:11px 12px 0;background:var(--bg);display:flex;flex-direction:column;gap:4px;height:132px;min-width:0;overflow:hidden;text-align:left;font:inherit;color:inherit;cursor:pointer;appearance:none;transition:background .5s,border-color .2s}
 .node:hover{border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}.node.sel{border-color:var(--accent)}.node.zap{background:color-mix(in srgb,var(--accent) 16%,var(--bg));transition:none}
 .node .t{height:18px;font-size:13px;font-weight:600;display:flex;align-items:center;gap:6px;white-space:nowrap}.node .t i{width:6px;height:6px;border-radius:50%;background:var(--faint);flex:none}.node.live .t i{background:var(--accent)}.node.err .t i{background:var(--err)}
@@ -34,8 +34,8 @@ svg.wires line{stroke:var(--spark);stroke-dasharray:2 6}
 export const CIRCUIT_SCRIPT = `
 // The feature filter uses the steps the circuit shows, so a node that is waiting on a response never filters to an empty list.
 const circuitStep=s=>!s.lifecycle||s.title==='모델 · 응답 대기'||s.title==='모델 · 요청 실패';
-const CIRCUIT=['admission','allocation','planning','workers','guard','router','compact','evidence'];
-const NODE={admission:[['실행 형태','Execution path'],['형태','Path'],['실행 형태?','Execution path?']],allocation:[['등급 배정','Tier allocation'],['등급','Tier'],['등급?','Tier?']],planning:[['의존성 계획','Dependency plan'],['단계','Steps'],['단계 계획?','Plan steps?']],workers:[['수락 검사','Acceptance check'],['수락','Accept'],['수락?','Accept?']],guard:[['루트 도구 가드','Root tool guard'],['도구','Tool'],['도구 허용?','Allow tool?']],router:[['모델과 effort','Model and effort'],['모델','Model'],['이 턴 모델?','Model for this turn?']],compact:[['요약 대체','Summary replacement'],['유지','Kept'],['이 청크 유지?','Keep these chunks?']],evidence:[['근거 판정','Evidence judgment'],['근거','Evidence'],['근거 충분?','Evidence relevant?']]};
+const CIRCUIT=['admission','allocation','workers','router','compact','evidence'];
+const NODE={admission:[['실행 형태','Execution path'],['형태','Path'],['실행 형태?','Execution path?']],allocation:[['등급 배정','Tier allocation'],['등급','Tier'],['등급?','Tier?']],workers:[['수락 검사','Acceptance check'],['수락','Accept'],['수락?','Accept?']],router:[['모델과 effort','Model and effort'],['모델','Model'],['이 턴 모델?','Model for this turn?']],compact:[['요약 대체','Summary replacement'],['유지','Kept'],['이 청크 유지?','Keep these chunks?']],evidence:[['근거 판정','Evidence judgment'],['근거','Evidence'],['근거 충분?','Evidence relevant?']]};
 // A Jev call is a measured response record; intents, policy follow-ups and host events are not calls.
 const isCall=s=>s.lane==='jev'&&s.durationMs!==undefined&&!s.lifecycle;
 // Jev traffic is every recorded Jev request and response; only a response is a call.
@@ -57,8 +57,6 @@ const OUTCOME={accepted:['계약 수락','Contract accepted'],rejected:['계약 
 function decisionText(s){if(!s)return '–';if(s.outcome)return label(...OUTCOME[s.outcome]);const c=s.receipt?.choice;
   if(s.feature==='router'){const m=c||(s.model?[s.model.observed||s.model.selected,s.model.observedEffort||s.model.selectedEffort].filter(Boolean).join(' · '):'');return m?m.split(' · ').map((v,i)=>i?v:modelName(v)).join(' · '):tr(state[s.state])}
   const path=s.executionPath||(s.feature==='admission'?c:null);if(path==='direct')return label('직접','Direct');if(path==='orchestrated')return label('위임','Delegate');
-  if(s.feature==='planning'&&s.graph?.length)return s.graph.length+label('단계',' steps');
-  if(s.feature==='guard')return s.state==='error'?tr(state.error):String(s.summary).includes('거절')?label('거절','Denied'):label('허용','Allowed');
   if(c)return s.feature==='allocation'&&/(haiku|sonnet|opus|fable)/.test(c)?modelName(c):choiceName('',c);return tr(state[s.state])}
 // The node and the run list show the decision with its recorded confidence; Router shows model and effort only.
 const valueText=s=>{const v=decisionText(s),c=s?.receipt?.confidence;return s&&s.feature!=='router'&&c!=null?v+' '+c.toFixed(2):v};
@@ -92,7 +90,7 @@ function wires(){const C=$('pipeline'),svgEl=C.querySelector('svg.wires'),ln=C.q
   for(const n of C.querySelectorAll('.node')){const b=n.getBoundingClientRect(),x=b.left+b.width/2-c.left;svgEl.append(svg('line',{x1:x,x2:x,y1:b.top<l.top?b.bottom-c.top:b.top-c.top,y2:y}))}}
 function buildCircuit(root){const wire=svg('svg',{class:'wires','aria-hidden':'true'}),node=id=>{const b=el('button','node idle');b.type='button';b.dataset.feature=id;b.setAttribute('aria-controls','circuit-inspector');const t=el('span','t');const dot=el('i');dot.setAttribute('aria-hidden','true');t.append(dot,el('span','nm',featureInfo[id][0]));const dec=el('span','d dec'),v=el('b');setSeg(v,'–');dec.append(el('span','dl',label(...NODE[id][1])),document.createTextNode(' '),v);const foot=el('span','foot');foot.append(el('span','ago'));const strip=el('span','strip');strip.setAttribute('aria-hidden','true');strip.append(el('span','tr'));const pb=el('span','pb');pb.setAttribute('aria-hidden','true');pb.append(el('i'));b.append(t,el('span','d ds',label(...NODE[id][0])),dec,el('span','nt'),pb,foot,strip);return b};
   const cells=ids=>{const g=el('div','cells8');for(const id of ids)g.append(node(id));return g};const rail=el('div','rail'),ln=el('div','ln'),jb=el('span','jb');ln.setAttribute('aria-hidden','true');jb.setAttribute('aria-hidden','true');jb.append(el('i'),'Jev',el('span','v'));rail.append(ln,jb);
-  root.append(wire,el('div','grp gate-grp',label('Gate 단계','Gate stages')),cells(CIRCUIT.slice(0,4)),rail,el('div','grp mod-grp',label('독립 기능','Independent features')),cells(CIRCUIT.slice(4)));if(typeof ResizeObserver!=='undefined')new ResizeObserver(()=>requestAnimationFrame(wires)).observe(root)}
+  root.append(wire,el('div','grp gate-grp',label('Gate 단계','Gate stages')),cells(CIRCUIT.slice(0,3)),rail,el('div','grp mod-grp',label('독립 기능','Independent features')),cells(CIRCUIT.slice(3)));if(typeof ResizeObserver!=='undefined')new ResizeObserver(()=>requestAnimationFrame(wires)).observe(root)}
 // Recorded steps of the last window that have landed; a lifecycle record moves a strip even though it is no decision.
 const recent=(ops,win,ok)=>{const ref=frozenAt??Date.now(),out=[];for(const r of ops.runs)if(ref-Date.parse(r.lastAt)<win)for(const s of r.steps)if(ok(s,r)&&!isHeld(r.id,s.id)&&ref-Date.parse(s.at)<win)out.push(s);return out};
 const strip=(ops,id)=>ticks($('pipeline').querySelector('[data-feature="'+id+'"] .strip .tr'),recent(ops,ACTIVITY_MS,(s,r)=>s.feature===id&&(circuitMode==='live'||r.id===selectedRun)),ACTIVITY_MS);
@@ -120,7 +118,7 @@ function landNode(ops,s){const b=$('pipeline').querySelector('[data-feature="'+s
 const drop=(s,v)=>{const d=decisionText(s);return String(v||'').split(' · ').filter(p=>p&&p!==d).join(' · ')};
 function reasonOf(s,r){const g=s.routing;if(g){const from=g.baseline&&modelName(g.baseline);return [from&&s.receipt?.choice&&!decisionText(s).startsWith(from)&&label(from+'에서 변경','Changed from '+from),why(g)].filter(Boolean).join(' · ')}return drop(s,tr((policyOf(s,r)||s).summary||''))}
 function effectOf(s,reason){const m=s.model;if(m&&!reason.includes('일치')&&!/match/i.test(reason))return m.status==='confirmed'?label('선택과 실제 응답 일치','Selection matches the response'):m.status==='mismatch'?label('실제 응답 ','Responded with ')+m.observed:s.state==='active'?label('응답 대기','Awaiting response'):label('실제 응답 미관측','Response unobserved');
-  if(s.graph?.length)return s.graph.length+label('개 작업 · 필수 검사 ',' tasks · required checks ')+s.graph.reduce((a,t)=>a+t.checks,0);return ''}
+  return ''}
 // The next record of the same run, its decision recorded with it aside.
 const nextOf=(s,r)=>{if(!r)return null;const p=policyOf(s,r);return r.steps.slice(r.steps.indexOf(s)+1).find(x=>x!==p&&!x.lifecycle&&!isHeld(r.id,x.id))||null};
 // The inspector is rebuilt only when its stage, its record, its fetched detail or the language changes, so an open help panel stays put.

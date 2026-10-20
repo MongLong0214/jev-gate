@@ -109,7 +109,7 @@ describe('doctor: effective depth floor (#48 P0-1)', () => {
   it('prints delegationDepthFraction alongside the raw config summary', () => {
     const stdout = doctor({});
     expect(stdout).toMatch(/delegationDepthFloor=0 delegationDepthFraction=0\.6/);
-    expect(stdout).toMatch(/admittedShape=auto delegationCoordinatorTurns=11 delegationWorkerTokensPerCall=40000 guardAllowMcp=true verifyWorkerChecks=true/);
+    expect(stdout).toMatch(/delegationCoordinatorTurns=11 delegationWorkerTokensPerCall=40000 verifyWorkerChecks=true$/m);
   });
 });
 
@@ -168,7 +168,7 @@ describe('doctor: mentions all seven lifecycle hooks', () => {
 });
 
 describe('doctor: worker isolation base (#48 P1-2 review)', () => {
-  const isolated = (): string => configFile({ version: 5, mode: 'auto', maxParallelWorkers: 2, workerIsolation: 'worktree', guardAllowTools: ['Bash'] });
+  const isolated = (): string => configFile({ version: 5, mode: 'auto', workerIsolation: 'worktree' });
   const configDir = (settings: unknown): string => {
     const dir = mktemp();
     writeFileSync(join(dir, 'settings.json'), JSON.stringify(settings));

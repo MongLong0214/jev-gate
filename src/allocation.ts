@@ -1,9 +1,9 @@
 import type { JevRequest } from './jev.js';
-import { PLANNER_TIER_PROFILES, TIER_PROFILES, topChoices, validateChoice } from './jev.js';
+import { TIER_PROFILES, topChoices, validateChoice } from './jev.js';
 import type { PriorAttemptSummary } from './plan.js';
 import { redactRoutingTargets, redactTaskRoutingTargets } from './plan.js';
-import type { ChoiceAnswer, ConfigV5, PlannedTask, PlannerRouteAnswer, PlannerTier, PreserveReason, RouteAnswer, Tier, UpgradeBasis } from './types.js';
-import { PLANNER_ROUTE_ANSWERS, ROUTE_ANSWERS, UPGRADE_BASES, UPGRADE_BASES_SUFFICIENT } from './types.js';
+import type { ChoiceAnswer, ConfigV5, PlannedTask, PreserveReason, RouteAnswer, Tier, UpgradeBasis } from './types.js';
+import { ROUTE_ANSWERS, UPGRADE_BASES, UPGRADE_BASES_SUFFICIENT } from './types.js';
 
 export const ROUTE_QUESTION = {
   type: 'choice' as const,
@@ -32,21 +32,10 @@ export const UPGRADE_BASIS_QUESTION = {
   } satisfies Record<UpgradeBasis, string>,
 };
 
-export const PLANNER_TIER_QUESTION = {
-  type: 'choice' as const,
-  instructions:
-    'Choose the planning tier for this planning task. deep is the default for establishing an implementation plan using recognizable interfaces, constraints and engineering approaches. Choose frontier only when unusually consequential, interacting and unresolved architectural or domain constraints must be resolved before safe implementation can be specified. Do not equate file count, the word architecture, or a request to build a game with a need for the frontier tier. Choose abstain when the text does not establish which tier is warranted.',
-  criteria: {
-    deep: PLANNER_TIER_PROFILES.deep,
-    frontier: PLANNER_TIER_PROFILES.frontier,
-    abstain: 'The text does not establish which planning tier is warranted.',
-  } satisfies Record<PlannerRouteAnswer, string>,
-};
-
 /**
- * The composed prompt the worker receives is `original_prompt` + the canonical block + the route note, and that block is
- * built from `task`, `global_constraints` and `predecessor_results`. Sending the fields instead of the composed text gives
- * Jev exactly the same information once, rather than twice against MAX_REQUEST_BYTES.
+ * The worker receives `original_prompt`, the request and the route note. `task` is an empty contract named after the
+ * dispatch; `global_constraints`, `predecessor_results` and `prior_attempt` are always empty since the planner was
+ * removed (#289), and are still sent so the state Gate B reads keeps its shape.
  */
 export interface WorkerRouteState {
   role: 'worker';
@@ -86,11 +75,9 @@ export const buildWorkerRouteRequest = (
     role: 'worker',
     default_tier: 'standard',
     called_tier: calledTier,
-    // #33/A18: the gate reads the plan with tier and model names removed, so planner text cannot read as a route
-    // request here. `ROUTE_QUESTION` already says to ignore such text; removing the word does not depend on the model
-    // obeying that instruction. It is removed at this boundary rather than at parse time because the same words are
-    // ordinary engineering English in a contract ("serialize must deep-copy the state"), and rejecting them there
-    // rejected whole plans.
+    // #33/A18: the gate reads the task with tier and model names removed, so its text cannot read as a route request
+    // here. `ROUTE_QUESTION` already says to ignore such text; removing the word does not depend on the model obeying
+    // that instruction.
     task: redactTaskRoutingTargets(task, Object.values(config.models)),
     global_constraints: globalConstraints.map((c) => redactRoutingTargets(c, Object.values(config.models))),
     predecessor_results: predecessorResults,
@@ -100,21 +87,6 @@ export const buildWorkerRouteRequest = (
     tier_profiles: TIER_PROFILES,
   },
   questions: { route: ROUTE_QUESTION, upgrade_basis: UPGRADE_BASIS_QUESTION },
-});
-
-export interface PlannerRouteState {
-  role: 'planner';
-  default_tier: PlannerTier;
-  request: string;
-  tier_profiles: Record<PlannerTier, string>;
-}
-
-export type PlannerRouteRequest = JevRequest<PlannerRouteState, { planning_tier: typeof PLANNER_TIER_QUESTION }>;
-
-export const buildPlannerRouteRequest = (composed: string, config: ConfigV5): PlannerRouteRequest => ({
-  model: config.jevModel,
-  state: { role: 'planner', default_tier: config.plannerDefaultTier, request: composed, tier_profiles: PLANNER_TIER_PROFILES },
-  questions: { planning_tier: PLANNER_TIER_QUESTION },
 });
 
 export interface WorkerRouteDecision {
@@ -145,24 +117,6 @@ export const decideWorkerRoute = (answers: Record<string, unknown>, floor: numbe
     if (basis.confidence < floor) return preserve('basis_low_confidence');
   }
   return { action: 'patch', tier, reason: null, route, basis };
-};
-
-export interface PlannerRouteDecision {
-  action: 'patch' | 'preserve';
-  tier: PlannerTier;
-  reason: PreserveReason | null;
-  answer: ChoiceAnswer<PlannerRouteAnswer> | null;
-}
-
-/** A5: the configured default tier is the fallback everywhere, and the patch is explicit so the observed model is deterministic. */
-export const decidePlannerRoute = (answers: Record<string, unknown>, floor: number, defaultTier: PlannerTier): PlannerRouteDecision => {
-  const answer = validateChoice(answers['planning_tier'], PLANNER_ROUTE_ANSWERS);
-  const fallback = (reason: PreserveReason): PlannerRouteDecision => ({ action: 'patch', tier: defaultTier, reason, answer });
-  if (!answer) return fallback('route_invalid');
-  if (topChoices(answer).length !== 1) return fallback('route_tie');
-  if (answer.choice === 'abstain') return fallback('route_abstain');
-  if (answer.confidence < floor) return fallback('route_low_confidence');
-  return { action: 'patch', tier: answer.choice, reason: null, answer };
 };
 
 // ---------------------------------------------------------------------------------------------------------------

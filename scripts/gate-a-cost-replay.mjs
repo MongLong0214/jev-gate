@@ -74,10 +74,8 @@ const ask = async (row) => {
     len: row.text.length,
     answers: a,
     tool_calls: a.tool_calls?.score ?? null,
-    size: a.size?.score ?? null,
     external_tools: a.external_tools?.noul ?? null,
     forbids_delegation: a.forbids_delegation?.noul ?? null,
-    parallel_outcomes: a.parallel_outcomes?.noul ?? null,
   });
 };
 // Four at a time: the Jev budget is per call, and the order of answers does not matter.
@@ -180,7 +178,6 @@ const summary = {
   shape: {
     external_tools_true: scored.filter((x) => (x.external_tools ?? 0) >= 0.6).length,
     forbids_delegation_true: scored.filter((x) => (x.forbids_delegation ?? 0) >= 0.6).length,
-    auto_hierarchy: scored.filter((x) => admission.shapeRecommendation(x.answers).admitted_shape === 'hierarchy').length,
   },
   rows: judged.map(({ answers, ...x }) => x),
   cal_rows: cal.map(({ answers, ...x }) => x),

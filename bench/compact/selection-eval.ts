@@ -77,12 +77,12 @@ const SCENARIOS: Scenario[] = [
   },
   {
     id: 'sample-config',
-    task: 'Change the sample config that doctor prints so plannerDefaultTier is standard instead of deep.',
+    task: 'Change the sample config that doctor prints so workerIsolation is none instead of worktree.',
     candidates: [
       { file: 'src/config.ts', anchor: 'export const MIGRATION_SAMPLE', lines: 12, label: 'required' },
       { file: 'src/trace.ts', anchor: 'export const TRACE_RETENTION_MS', lines: 1, label: 'unrelated' },
       { file: 'src/jev.ts', anchor: 'const statusToCode', lines: 10, label: 'unrelated' },
-      { file: 'src/config.ts', anchor: "plannerDefaultTier: 'deep'", lines: 1, label: 'related' },
+      { file: 'src/config.ts', anchor: "workerIsolation: 'worktree'", lines: 1, label: 'related' },
       { file: 'src/dashboard-page.ts', anchor: 'const PRICES', lines: 2, label: 'unrelated' },
       { file: 'scripts/pack.mjs', anchor: 'const ROUTER_SHARED', lines: 2, label: 'unrelated' },
     ],

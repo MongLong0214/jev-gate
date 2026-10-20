@@ -1,6 +1,5 @@
 import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readFileSync, type Stats } from 'node:fs';
 import { lstat, open, type FileHandle } from 'node:fs/promises';
-import { sameModel } from './claude-models.js';
 import { dirname, join } from 'node:path';
 
 /**
@@ -43,12 +42,6 @@ export const allocatedTraceRecords = (records: Rec[]): Rec[] => {
   return records.map(r => {
     const identity = key(r), model = identity ? models.get(identity) : undefined;
     if (!model) return r;
-    const planner = sub(r, 'planner_model');
-    if (planner) {
-      const observed = str(planner['observed']);
-      const agreement = !observed ? 'unverified' : (r['host'] === 'codex' ? model === observed : sameModel(model, observed)) ? 'match' : 'mismatch';
-      return { ...r, planner_model: { ...planner, requested: model, agreement } };
-    }
     return r['phase'] === 'post' || r['phase'] === 'failure' || r['phase'] === 'background_launch' ? { ...r, requested_model: model } : r;
   });
 };
@@ -271,8 +264,7 @@ const admissionLine = (r: Rec): string => {
 
 const dispatchLine = (r: Rec, post: Rec | null): string => {
   const d = sub(r, 'decision');
-  const role = str(r['role']) ?? 'worker';
-  const who = role === 'planner' ? 'planner' : `task ${str(r['task_id']) ?? '?'}`;
+  const who = `task ${str(r['task_id']) ?? '?'}`;
   const attempt = num(r['attempt']);
   const called = str(r['called_tier']) ?? str(r['default_tier']) ?? '?';
   const action = d ? (str(d['action']) ?? '?') : '?';
@@ -289,8 +281,8 @@ const dispatchLine = (r: Rec, post: Rec | null): string => {
     : action === 'preserve' ? `preserve ${tier} (the model the coordinator called)` : `${action} ${tier}${model ? ` (${model})` : ' (model not recorded)'}`;
   /**
    * Asked and ran are separate facts, and the alias the config names is not the id the host reports, so a bare string
-   * comparison would call every patch a disagreement. The requested id appearing inside the resolved one is the same
-   * test the hook applies to the planner; anything else is reported as the two strings rather than as a verdict.
+   * comparison would call every patch a disagreement. The requested id appearing inside the resolved one is a
+   * match; anything else is reported as the two strings rather than as a verdict.
    */
   const observed = ranOn(post);
   const ran =
@@ -304,16 +296,9 @@ const dispatchLine = (r: Rec, post: Rec | null): string => {
   return `dispatch ${who}${attempt === null ? '' : ` attempt ${attempt}`}  called ${called} → ${target}  ${jevCall(r)}${because(reason)}${ran}`;
 };
 
-/**
- * The model the host resolved for a dispatch. A worker's result carries it verbatim from the tool response; a
- * planner's arrives in the plan record instead, because that is the phase its reply is parsed in.
- */
+/** The model the host resolved for a dispatch, carried verbatim from the worker's tool response. */
 const ranOn = (result: Rec | null): string | null => {
   if (result === null) return null;
-  if (str(result['phase']) === 'plan') {
-    const pm = sub(result, 'planner_model');
-    return pm ? str(pm['observed']) : null;
-  }
   const tr = sub(result, 'tool_response');
   return tr ? str(tr['resolvedModel']) : null;
 };
@@ -353,47 +338,6 @@ const resultLine = (r: Rec): string => {
   return `result   task ${str(r['task_id']) ?? '?'}${attempt === null ? '' : ` attempt ${attempt}`}  worker-reported ${verdict}${work ? `  (${work})` : ''}${verified}${because(reason)}`;
 };
 
-const planLine = (r: Rec): string => {
-  const status = str(r['status']) ?? '?';
-  const outcome = str(r['outcome']);
-  const rev = num(r['rev']);
-  const tasks = num(r['tasks']);
-  // The hook already settled this comparison when it wrote the record, so its own word is reported rather than redone.
-  const pm = sub(r, 'planner_model');
-  const agreement = pm ? str(pm['agreement']) : null;
-  const observed = pm ? str(pm['observed']) : null;
-  const requested = pm ? str(pm['requested']) : null;
-  const model =
-    observed === null
-      ? ''
-      : agreement === 'match'
-        ? `  planner ran on ${observed}`
-        : `  planner ran on ${observed}, asked for ${requested ?? 'an unrecorded model'} (${agreement ?? 'no agreement recorded'})`;
-  const failed = r['replan_failed'] === true ? '  replan failed' : '';
-  return `plan     ${status}${outcome ? ` → ${outcome}` : ''}${rev === null ? '' : ` rev ${rev}`}${tasks === null ? '' : `, ${tasks} task(s)`}${model}${failed}${interpretationLine(r)}`;
-};
-
-/**
- * A23: only the verdicts a reader would act on are named. `supported` is the expected answer for every clause a
- * planner derived honestly, so printing it would bury the one clause that disagrees under eleven that do not.
- */
-const interpretationLine = (r: Rec): string => {
-  const i = sub(r, 'interpretation');
-  if (i === null || !Array.isArray(i['clauses'])) return '';
-  const clauses = i['clauses'].filter(isRecord);
-  const named = (verdict: string): string[] => clauses.filter((c) => c['verdict'] === verdict).map((c) => str(c['id']) ?? '?');
-  const contradicted = named('contradicted');
-  const omitted = named('omitted');
-  const unasked = num(i['unasked']) ?? 0;
-  const parts = [
-    contradicted.length ? `${contradicted.length} clause(s) read as contradicting the request (${contradicted.join(', ')})` : '',
-    omitted.length ? `${omitted.length} the request does not mention (${omitted.join(', ')})` : '',
-    unasked > 0 ? `${unasked} not asked about` : '',
-  ].filter(Boolean);
-  // A plan with nothing to report still says the comparison happened, so a silent line is not read as no call.
-  return parts.length === 0 ? '\n  plan checked against the request: nothing flagged' : `\n  plan checked against the request: ${parts.join('; ')}`;
-};
-
 const lineFor = (r: Rec, posts: Map<string, Rec>): string | null => {
   switch (str(r['phase'])) {
     case 'admission_result':
@@ -402,8 +346,6 @@ const lineFor = (r: Rec, posts: Map<string, Rec>): string | null => {
       return dispatchLine(r, posts.get(str(r['tool_use_id']) ?? '') ?? null);
     case 'post':
       return resultLine(r);
-    case 'plan':
-      return planLine(r);
     case 'failure': {
       const ms = num(r['duration_ms']);
       const subagent = str(r['subagent_type']);
@@ -415,11 +357,6 @@ const lineFor = (r: Rec, posts: Map<string, Rec>): string | null => {
       return `background stalled: no active worker; policy delivered, Gate A resumes after this turn (${str(r['reason']) ?? 'unknown'})`;
     case 'background_policy_delivery':
       return `background policy delivered: no active worker; next human prompt resumes Gate A (${str(r['reason']) ?? 'unknown'})`;
-    case 'guard': {
-      if (r['allow'] !== false) return null;
-      const denials = num(r['denials']);
-      return `denied   ${str(r['tool_name']) ?? 'tool'}${denials === null ? '' : `  (${denials} so far this generation)`}${r['stopped'] === true ? '  job stopped' : ''}`;
-    }
     default:
       // Intent records pair with a result that is rendered instead, so they are not lines of their own.
       return null;
@@ -455,7 +392,7 @@ export const explainRecords = (read: TraceRead): string[] => {
     const posts = new Map<string, Rec>();
     for (const r of records) {
       const phase = str(r['phase']);
-      if ((phase !== 'post' && phase !== 'plan') || r['matched'] === false) continue;
+      if (phase !== 'post' || r['matched'] === false) continue;
       const id = str(r['tool_use_id']);
       if (id !== null) posts.set(id, r);
     }

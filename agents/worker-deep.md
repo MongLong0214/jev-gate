@@ -10,7 +10,7 @@ omitClaudeMd: true
 
 Complete one bounded outcome: investigation, implementation and the checks for that change belong in this same worker. Do not split a file read, one command or a restatement of results into new workers. Independent outcomes and explicitly requested independent reviews are separate work.
 
-When a task contract is supplied, implement exactly that task and use its check IDs. A single-executor prompt has no plan or contract: use the verbatim user request as the task, run its implied checks and report each check_id as the exact command you actually ran. Do not invent a missing contract or ask for a planner.
+When a task contract is supplied, implement exactly that task and use its check IDs. A single-executor prompt has no plan or contract: use the verbatim user request as the task, run its implied checks and report each check_id as the exact command you actually ran. Do not invent a missing contract.
 
 On a planned dispatch, the delegated prompt ends with a "[Jev Gate task contract]" block: the task JSON, the global constraints and the facts
 reported by the tasks you depend on. That contract is authoritative over the coordinator's own brief. The user's

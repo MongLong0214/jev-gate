@@ -2,9 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import {
   checkEligibility,
-  DENIALS_BEFORE_STOP,
-  GUARD_ALLOW_TOOLS,
-  guardDecision,
   MAX_OUTPUT_BYTES,
   MAX_PROMPT_BYTES,
   patchAgentInput,
@@ -14,7 +11,7 @@ import {
 import { DEFAULT_CONFIG } from '../src/config.js';
 import type { ConfigV5, HookInput } from '../src/types.js';
 
-const config: ConfigV5 = { ...DEFAULT_CONFIG, mode: 'auto', guardAllowTools: [] };
+const config: ConfigV5 = { ...DEFAULT_CONFIG, mode: 'auto' };
 const env = { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' };
 const hook = (input: Record<string, unknown> = {}, top: Record<string, unknown> = {}): HookInput => ({
   hook_event_name: 'PreToolUse',
@@ -32,8 +29,6 @@ describe('checkEligibility', () => {
       ['jev-gate:worker', { role: 'worker', tier: 'standard' }],
       ['jev-gate:worker-deep', { role: 'worker', tier: 'deep' }],
       ['jev-gate:worker-frontier', { role: 'worker', tier: 'frontier' }],
-      ['jev-gate:planner', { role: 'planner', tier: 'deep' }],
-      ['jev-gate:planner-frontier', { role: 'planner', tier: 'frontier' }],
     ] as const) {
       expect(checkEligibility(hook({ subagent_type: agent }), env, config), agent).toMatchObject({ eligible: true, ...expected, pinned: false });
     }
@@ -53,6 +48,8 @@ describe('checkEligibility', () => {
   it.each([
     ['mode off', hook(), {}, { ...config, mode: 'off' as const }, 'mode_off'],
     ['another agent', hook({ subagent_type: 'Explore' }), env, config, 'role_not_owned'],
+    // #289: the removed planner profiles are no longer owned roles.
+    ['a removed planner profile', hook({ subagent_type: 'jev-gate:planner' }), env, config, 'role_not_owned'],
     ['a child caller', hook({}, { agent_id: 'child' }), env, config, 'child_caller'],
     ['a custom agent session', hook({}, { agent_type: 'custom' }), env, config, 'custom_agent_session'],
     ['an invalid background value', hook({ run_in_background: 'invalid' }), env, config, 'not_foreground'],
@@ -65,32 +62,6 @@ describe('checkEligibility', () => {
     ['a missing tool_use_id', hook({}, { tool_use_id: undefined }), env, config, 'missing_ids'],
   ])('rejects %s', (_name, input, e, c, code) => {
     expect(checkEligibility(input, e, c)).toEqual({ eligible: false, code });
-  });
-});
-
-describe('guardDecision', () => {
-  it('allows every native root tool under the installed default without approving native permissions', () => {
-    for (const name of ['Edit', 'Bash', 'UnknownFutureTool', 'mcp__service__action', 'Agent']) expect(guardDecision(name, { subagent_type: 'Explore' }, DEFAULT_CONFIG)).toEqual({ allow: true });
-  });
-  it('allows the read-only and bookkeeping tools, owned agents and configured extras', () => {
-    for (const tool of GUARD_ALLOW_TOOLS) expect(guardDecision(tool, {}, config), tool).toEqual({ allow: true });
-    expect(guardDecision('Agent', { subagent_type: 'jev-gate:worker-deep' }, config)).toEqual({ allow: true });
-    expect(guardDecision('mcp__docs__search', {}, { ...config, guardAllowTools: ['mcp__docs__search'] })).toEqual({ allow: true });
-  });
-
-  it('declines writing tools, non-owned agents and unknown tools', () => {
-    for (const tool of ['Edit', 'MultiEdit', 'Write', 'NotebookEdit', 'Bash', 'PowerShell', 'Skill', 'SendMessage', 'Workflow', 'mcp_unknown'])
-      expect(guardDecision(tool, {}, config), tool).toEqual({ allow: false });
-    // The root guard policy does not constrain child tools.
-    expect(guardDecision('mcp__unknown__do', {}, config)).toEqual({ allow: true });
-    expect(guardDecision('ToolSearch', {}, config)).toEqual({ allow: true });
-    expect(guardDecision('mcp__unknown__do', {}, { ...config, guardAllowMcp: false })).toEqual({ allow: false });
-    expect(guardDecision('ToolSearch', {}, { ...config, guardAllowMcp: false })).toEqual({ allow: false });
-    // #77: the evidence tool under the name 2.1.283 registers it with, the same way.
-    expect(guardDecision('mcp__plugin_jev-gate_evidence__jev_evidence', {}, config)).toEqual({ allow: true });
-    expect(guardDecision('mcp__plugin_jev-gate_evidence__jev_evidence', {}, { ...config, guardAllowMcp: false })).toEqual({ allow: false });
-    expect(guardDecision('Agent', { subagent_type: 'Explore' }, config)).toEqual({ allow: false });
-    expect(guardDecision('Agent', {}, config)).toEqual({ allow: false });
   });
 });
 
@@ -110,15 +81,13 @@ describe('patchAgentInput', () => {
 });
 
 describe('rendering', () => {
-  it('emits updatedInput, a deny, and a deny with continue:false once the denial budget is spent', () => {
+  it('emits updatedInput and a deny, never a turn stop', () => {
     const update = JSON.parse(renderPreToolUseOutput({ kind: 'update', updatedInput: { prompt: 'p' } }) ?? '{}') as Record<string, Record<string, unknown>>;
     expect(update['hookSpecificOutput']).toEqual({ hookEventName: 'PreToolUse', updatedInput: { prompt: 'p' } });
-    const deny = JSON.parse(renderPreToolUseOutput({ kind: 'deny', reason: 'no', stopReason: null }) ?? '{}') as Record<string, unknown>;
+    const deny = JSON.parse(renderPreToolUseOutput({ kind: 'deny', reason: 'no' }) ?? '{}') as Record<string, unknown>;
     expect(deny['hookSpecificOutput']).toMatchObject({ permissionDecision: 'deny', permissionDecisionReason: 'no' });
     expect(deny).not.toHaveProperty('continue');
-    const stopped = JSON.parse(renderPreToolUseOutput({ kind: 'deny', reason: 'no', stopReason: 'stop now' }) ?? '{}') as Record<string, unknown>;
-    expect(stopped).toMatchObject({ continue: false, stopReason: 'stop now' });
-    expect(DENIALS_BEFORE_STOP).toBe(12);
+    expect(deny).not.toHaveProperty('stopReason');
   });
 
   it('returns null instead of an oversized envelope', () => {

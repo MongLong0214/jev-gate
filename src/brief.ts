@@ -6,37 +6,8 @@ import { OWNED_AGENTS } from './types.js';
 /** Local resource bounds. Not provider or host token limits; over-limit input is preserved, never truncated. */
 export const MAX_PROMPT_BYTES = 64 * 1024;
 export const MAX_OUTPUT_BYTES = 512 * 1024;
-/**
- * A6/A7: the guard denies root mutation tools, and a job that keeps probing them instead of dispatching is stopped.
- * Observed on the host (v5-host-1, 2026-09-18): a coordinator probes two or three unavailable tools before its first
- * planner call, so a budget of 3 killed otherwise healthy jobs. The budget bounds a loop, not a few early probes.
- */
-export const DENIALS_BEFORE_STOP = 12;
-
 /** Agent-call fields whose execution semantics make automatic reallocation unsafe: resume/follow-up, team, fork, isolation. */
 export const EXECUTION_CONTROL_KEYS = ['resume', 'agentId', 'agent_id', 'name', 'team_name', 'isolation', 'fork'] as const;
-
-/**
- * A6 (replaces the V4/D4 deny-list): during orchestration the root may use these read-only and bookkeeping tools plus the
- * owned agents and anything the user added to config `guardAllowTools`. Everything else is declined as unsupported.
- */
-export const GUARD_ALLOW_TOOLS: readonly string[] = [
-  'Read',
-  'Grep',
-  'Glob',
-  'LS',
-  'WebFetch',
-  'WebSearch',
-  'AskUserQuestion',
-  'TodoWrite',
-  'TaskCreate',
-  'TaskUpdate',
-  'TaskGet',
-  'TaskList',
-  'TaskOutput',
-  'TaskStop',
-  'ListAgents',
-];
 
 export type AgentInput = Record<string, unknown>;
 
@@ -65,9 +36,8 @@ export const foregroundDispatchPossible = (env: Env): boolean =>
 
 /**
  * Why no owned Agent call this session makes could reach a worker, or null when one could. A subagent model override
- * is refused by checkEligibility just as a background-only call is, so an orchestrated job is locked out either way:
- * its guard refuses the main session's edits while every brief is declined. Both are fixed at launch, so admission,
- * the forced arm and the SessionStart notice all read this one answer.
+ * is refused by checkEligibility just as a background-only call is, so an orchestrated job could not dispatch either
+ * way. Both are fixed at launch, so admission, the forced arm and the SessionStart notice all read this one answer.
  */
 export const dispatchBlocker = (env: Env): 'background_only' | 'subagent_model_override' | null => {
   if (!foregroundDispatchPossible(env)) return 'background_only';
@@ -117,28 +87,10 @@ export const checkEligibility = (hook: HookInput, env: Env, config: ConfigV5): E
   };
 };
 
-/** The guard never returns `allow`: a permitted call produces no output at all, so native permissions still apply. */
-export const guardDecision = (toolName: string, toolInput: unknown, config: ConfigV5): { allow: boolean } => {
-  if (config.guardAllowTools.includes('*')) return { allow: true };
-  if (toolName === 'Agent') {
-    const subagent = isRecord(toolInput) ? toolInput['subagent_type'] : undefined;
-    return { allow: typeof subagent === 'string' && subagent in OWNED_AGENTS };
-  }
-  // This is the root guard only. A child inherits the host's tools and is skipped before this decision.
-  return { allow: GUARD_ALLOW_TOOLS.includes(toolName) || config.guardAllowTools.includes(toolName) || (config.guardAllowMcp && (toolName === 'ToolSearch' || toolName.startsWith('mcp__'))) };
-};
-
 export interface AgentPatch {
   subagent_type?: string;
   model?: string;
   prompt?: string;
-  /**
-   * #48 P1-2: only a WORKER dispatch the hook patches carries this, and only under `workerIsolation: "worktree"`.
-   * `EXECUTION_CONTROL_KEYS` above still rejects a CALLER-supplied `isolation` at eligibility time -- this field is
-   * the hook adding the key itself, afterward, on the patch it was already going to emit; it is never added on a
-   * `preserve()` path, since that path emits no output and the call proceeds completely unpatched.
-   */
-  isolation?: 'worktree';
 }
 
 /** New object; only the named fields differ, and the original prompt stays an exact prefix of a patched prompt. */
@@ -146,7 +98,6 @@ export const patchAgentInput = (original: AgentInput, patch: AgentPatch): AgentI
   const out: AgentInput = { ...original };
   if (patch.subagent_type !== undefined) out['subagent_type'] = patch.subagent_type;
   if (patch.model !== undefined) out['model'] = patch.model;
-  if (patch.isolation !== undefined) out['isolation'] = patch.isolation;
   if (patch.prompt !== undefined) {
     if (!patch.prompt.startsWith(String(original['prompt'] ?? ''))) throw new Error('patched prompt must keep the original as an exact prefix');
     out['prompt'] = patch.prompt;
@@ -156,17 +107,14 @@ export const patchAgentInput = (original: AgentInput, patch: AgentPatch): AgentI
 
 export type PreToolUseOutput =
   | { kind: 'update'; updatedInput: AgentInput }
-  | { kind: 'deny'; reason: string; stopReason: string | null };
+  | { kind: 'deny'; reason: string };
 
 /** The one JSON object a PreToolUse decision emits. Returns null when the serialized envelope exceeds the local bound. */
 export const renderPreToolUseOutput = (out: PreToolUseOutput): string | null => {
   const envelope =
     out.kind === 'update'
       ? { hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput: out.updatedInput } }
-      : {
-          hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: out.reason },
-          ...(out.stopReason === null ? {} : { continue: false, stopReason: out.stopReason }),
-        };
+      : { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: out.reason } };
   const text = JSON.stringify(envelope);
   return Buffer.byteLength(text, 'utf8') > MAX_OUTPUT_BYTES ? null : text;
 };

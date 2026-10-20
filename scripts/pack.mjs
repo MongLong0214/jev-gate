@@ -35,7 +35,7 @@ const positional = args.filter((_, i) => !consumed.has(i));
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
 const outDir = resolve(positional[0] ?? join(root, 'dist-pack'));
 
-const LEGACY_AGENTS = ['worker-fast', 'worker', 'worker-deep', 'worker-frontier', 'planner', 'planner-frontier'];
+const LEGACY_AGENTS = ['worker-fast', 'worker', 'worker-deep', 'worker-frontier'];
 // Doctor requires every one of these files.
 const agents = LEGACY_AGENTS;
 

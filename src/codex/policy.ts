@@ -51,7 +51,7 @@ interface Session {
   role?: string; parent?: string; done?: (turn: Obj) => void; route?: PairPatch; routePending?: Promise<void>; routeDeadline?: number; routeConfig?: string;
   previousReply?: string; completedReply?: string; turnReply?: string; lastSubmitted?: CodexSubmission;
   starting?: { prompt: string; controller: AbortController };
-  external?: boolean; task?: string; routed?: string; stop?: string;
+  external?: boolean; task?: string; routed?: string;
   wire?: unknown[];
   wirePending?: boolean;
   requests?: string[];
@@ -199,7 +199,7 @@ export class CodexPolicy {
       session.turn = session.prompt; session.task = input['prompt']; session.eligible = true;
       if (session.completedReply) session.previousReply = session.completedReply; else delete session.previousReply;
       delete session.routePending; delete session.routeDeadline;
-      delete session.stop; delete session.routed; delete session.route;
+      delete session.routed; delete session.route;
     }
     if (event === 'Interrupt' || event === 'SessionEnd') {
       session.controller?.abort(); await this.interruptChildren(session, event === 'SessionEnd');
@@ -212,7 +212,7 @@ export class CodexPolicy {
   }
 
   /** Selection is made once from the actual submitted prompt; every original Responses field is preserved. */
-  async externalRequest(id: string, request: Obj, signal: AbortSignal): Promise<{ request: Obj; stop?: string }> {
+  async externalRequest(id: string, request: Obj, signal: AbortSignal): Promise<{ request: Obj }> {
     const session = this.sessions.get(id);
     if (requestedUpdateEffort(request).present) {
       this.trace?.write('codex_router_skipped', { host: 'codex', session_id: id, prompt_id: session?.prompt ?? null, reason: 'configuration_update_native_history', known_not_sent: true, effective_effort: 'unknown' });
@@ -220,7 +220,6 @@ export class CodexPolicy {
     }
     if (session?.role && session.dispatch) return this.workerRequest(session, request, signal);
     if (!session?.external || !session.prompt || !session.task || !this.hooked.has(id)) return { request };
-    if (session.stop) return { request, stop: session.stop };
     const requestPrompt = session.prompt;
     session.requestKind = 'root_response';
     const requestController = session.controller;
@@ -570,9 +569,7 @@ export class CodexPolicy {
     if (session.role) {
       if (event === 'PreToolUse') {
         const name = String(input['tool_name']);
-        if (/^(Agent|spawn_agent|send_input|SendMessage|jev_agent)$/.test(name)) return deny('Jev owned workers and planners cannot create or coordinate child agents.');
-        if (OWNED_AGENTS[session.role]?.role === 'planner' && /^(apply_patch|Edit|Write)$/.test(name)) return deny('The Jev planner is read-only. Return a plan; do not implement.');
-        if (OWNED_AGENTS[session.role]?.role === 'planner' && !String(obj(session.settings['activePermissionProfile'])?.['id'] ?? '').startsWith(':') && name === 'Bash') return deny('A planner under a custom permission profile cannot run shell commands. Use read-only source or Evidence tools; the parent permission profile remains in force.');
+        if (/^(Agent|spawn_agent|send_input|SendMessage|jev_agent)$/.test(name)) return deny('Jev owned workers cannot create or coordinate child agents.');
       }
       return {};
     }
@@ -593,18 +590,6 @@ export class CodexPolicy {
     if (result.kind === 'patch') return {}; // Only jev_agent consumes input replacements.
     const specific = obj(output['hookSpecificOutput']);
     if (specific && typeof specific['additionalContext'] === 'string') specific['additionalContext'] = codexGuidance(specific['additionalContext']);
-    // A native deny does not end the whole turn. Translate the shared exhausted-denial budget to the official
-    // interruption API instead of silently removing the stop instruction or approving a tool.
-    if (event === 'PreToolUse') {
-      if (output['continue'] === false && session.turn) {
-        if (session.external) session.stop = String(output['stopReason'] ?? 'Jev Gate stopped the turn after its denial budget was exhausted. No completion is claimed.');
-        else {
-          session.controller?.abort();
-          void this.rpc.request('turn/interrupt', { threadId: session.id, turnId: session.turn }).catch(() => undefined);
-        }
-      }
-      delete output['continue']; delete output['stopReason'];
-    }
     return output;
   }
   private async interruptChildren(parent: Session, includeBackground = false): Promise<void> {
@@ -671,8 +656,7 @@ export class CodexPolicy {
     let failed = PREFLIGHT;
     const t0 = Date.now();
     try {
-      const planner = profile?.role === 'planner';
-      const captured = parent.external ? capturedPermissions(p['nativeMeta'], planner) : null;
+      const captured = parent.external ? capturedPermissions(p['nativeMeta']) : null;
       if (parent.external && !captured) throw new Error('parent permissions unavailable');
       if (applied['isolation'] === 'worktree') {
         const root = parent.external ? join(cwd, '.jev-gate-worktrees') : join(stateRoot(this.env), 'jev-gate', 'worktrees');
@@ -702,7 +686,7 @@ export class CodexPolicy {
       failed = { category: 'native_start_rejected', stage: 'thread_start', not_executed: true };
       const child = await this.rpc.request('thread/start', { model, modelProvider: parent.settings['modelProvider'], cwd, ephemeral: true,
         approvalPolicy: parent.settings['approvalPolicy'], approvalsReviewer: parent.settings['approvalsReviewer'],
-        ...(captured ? { permissions: captured.permissions } : planner && !customPermissions ? { sandbox: 'read-only' } : typeof permissions === 'string' ? { permissions } : { sandbox: sandbox?.['type'] === 'dangerFullAccess' ? 'danger-full-access' : sandbox?.['type'] === 'readOnly' ? 'read-only' : 'workspace-write' }),
+        ...(captured ? { permissions: captured.permissions } : typeof permissions === 'string' ? { permissions } : { sandbox: sandbox?.['type'] === 'dangerFullAccess' ? 'danger-full-access' : sandbox?.['type'] === 'readOnly' ? 'read-only' : 'workspace-write' }),
         developerInstructions: this.profiles[role], config: { 'features.multi_agent': false, ...captured?.config, ...hooks }, dynamicTools: [] });
       await this.response(child, 'thread/start', {});
       worker = this.sessions.get(String(obj(child['thread'])?.['id'])) ?? null;
@@ -739,7 +723,7 @@ export class CodexPolicy {
         try {
           const turn = await this.rpc.request('turn/start', { threadId: worker.id, input: [{ type: 'text', text: String(applied['prompt']), text_elements: [] }], model,
             ...(effort ? { effort } : {}),
-            ...(sandbox && !planner && !customPermissions && (typeof permissions !== 'string' || worktree) ? { sandboxPolicy: worktree && sandbox['type'] === 'workspaceWrite' ? { ...sandbox, writableRoots: [cwd] } : sandbox } : {}) });
+            ...(sandbox && !customPermissions && (typeof permissions !== 'string' || worktree) ? { sandboxPolicy: worktree && sandbox['type'] === 'workspaceWrite' ? { ...sandbox, writableRoots: [cwd] } : sandbox } : {}) });
           if (!worker.terminal) { worker.turn = String(obj(turn['turn'])?.['id'] ?? worker.turn ?? ''); this.persistWorkerTurn(worker); }
         } catch (error) {
           if (error instanceof RpcRequestError && !error.attempted && !worker.turn && !dispatch.ended) { dispatch.attempted = false; throw error; }
@@ -826,7 +810,7 @@ export class CodexPolicy {
       } else await this.failure(d.parent, d.prompt, d.tool, d.input, failure, failure.category, d.startedAt);
       const state = readJob(this.env, d.parent.id);
       const gen = state.ok && state.value ? [state.value.current, ...state.value.history].find(g => g.prompt_id === d.prompt) : null;
-      const committed = gen && (gen.receipts.some(r => r.tool_use_id === d.tool) || OWNED_AGENTS[String(d.input['subagent_type'])]?.role === 'planner' && guidance.length > 0);
+      const committed = gen?.receipts.some(r => r.tool_use_id === d.tool);
       if (!gen || own(gen.active, d.tool) || !committed) return `${failure ? failureHead(failure) : 'Worker terminal observed'}; settlement pending. Internal execution identity: ${worker.id}. Reservation and files remain protected. Retry jev_agent with action=status and agent_id=${worker.id} without restarting execution.`;
       d.output = !failure
         ? `${final?.['text'] ?? 'No worker final output.'}\n\n${guidance}${d.worktree ? `\nWorker worktree: ${d.worktree.path}\nBranch: ${d.worktree.branch}\nSnapshot baseline: ${d.worktree.baseline}. Apply only the diff from this baseline to the worker branch in the root; this result does not integrate it.` : ''}`

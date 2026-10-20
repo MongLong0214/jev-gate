@@ -19,7 +19,7 @@ await build({
   platform: 'node',
   format: 'esm',
   target: 'node22',
-  define: { __JEV_HOOK_AUTORUN__: 'false', __JEV_AGENT_INSTRUCTIONS__: JSON.stringify(Object.fromEntries(['planner', 'planner-frontier', 'worker-fast', 'worker', 'worker-deep', 'worker-frontier'].map(name => [
+  define: { __JEV_HOOK_AUTORUN__: 'false', __JEV_AGENT_INSTRUCTIONS__: JSON.stringify(Object.fromEntries(['worker-fast', 'worker', 'worker-deep', 'worker-frontier'].map(name => [
     `jev-gate:${name}`, readFileSync(join(root, 'agents', `${name}.md`), 'utf8').replace(/^---\n[\s\S]*?\n---\n/, ''),
   ]))) },
   banner: { js: "import { createRequire as __jevCreateRequire } from 'node:module'; const require = __jevCreateRequire(import.meta.url);" },

@@ -146,7 +146,7 @@ const EXPLORE_FAMILIES = new Set(['haiku', 'sonnet', 'opus']);
 const READ_ONLY_BUILT_INS = new Set(['Plan', 'Explore']);
 /**
  * A jev-gate dispatch: Gate B already chose its model and effort (the tier's agent profile), so routing it again here
- * overrode the gate's answer with a second one. Its planner and workers are the plugin's own agents, and a worker the
+ * overrode the gate's answer with a second one. Its workers are the plugin's own agents, and a worker the
  * gate patched carries its route note.
  */
 const GATE_ROUTE_NOTE = /\[Jev Gate route note\] Tier: (?:fast|standard|deep|frontier)\./;

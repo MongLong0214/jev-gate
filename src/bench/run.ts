@@ -6,7 +6,6 @@ import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 
 import { isSubscriptionOAuth, parseAuthStatus, subagentModelOverride, AUTH_CONFLICT_ENV, type CommandResult } from '../auth.js';
-import { DENIALS_BEFORE_STOP } from '../brief.js';
 import { DEFAULT_CONFIG, loadConfig } from '../config.js';
 import { OWNED_AGENTS, type ConfigV5, type Tier } from '../types.js';
 import { gradeDir, type Grade } from './checker.js';
@@ -1266,7 +1265,8 @@ export const ingestTraces = (cell: CellRecord, traceDir: string, models: Record<
   const denied = phase('guard').filter((r) => r['allow'] === false);
   g.guard_denials = denied.length;
   // The hook records the stop it actually applied; older records without the field fall back to the denial count.
-  g.continue_false = denied.filter((r) => (typeof r['stopped'] === 'boolean' ? r['stopped'] : (num(r['denials']) ?? 0) >= DENIALS_BEFORE_STOP - 1)).length;
+  // #289: the guard that stopped a turn after 12 denials is gone; old traces are still read with its threshold.
+  g.continue_false = denied.filter((r) => (typeof r['stopped'] === 'boolean' ? r['stopped'] : (num(r['denials']) ?? 0) >= 12 - 1)).length;
   const stops = phase('stop');
   g.outcome = str(lastByTime(stops)?.['outcome'] ?? null);
 

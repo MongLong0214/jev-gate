@@ -30,10 +30,12 @@ describe('Codex ordered routing and recorded application', () => {
     const models = { fast: 'account-fast', standard: 'account-workhorse', deep: 'account-workhorse', frontier: 'account-frontier' };
     expect(catalogTierModels('account-workhorse', available)).toEqual(models);
     const p = loadCodexPolicy({ JEV_CODEX_CONFIG: join(tmp, 'policy.json'), JEV_CODEX_MODEL: 'account-workhorse' }, available);
-    expect(p.gate).toMatchObject({ models, maxParallelWorkers: 16, workerIsolation: 'worktree', guardAllowTools: ['*'], delegationDepthFloor: 0, planInterpretation: true });
+    expect(p.gate).toMatchObject({ models, workerIsolation: 'worktree', delegationDepthFloor: 0 });
+    expect(p.gate).not.toHaveProperty('maxParallelWorkers');
     expect(p.router.model).toBe(true); expect(p.compact.manual).toBe(true);
     const serial = join(tmp, 'serial-policy.json'); writeFileSync(serial, JSON.stringify({ gate: { maxParallelWorkers: 1, guardAllowTools: [] } }));
-    expect(loadCodexPolicy({ JEV_CODEX_CONFIG: serial }).gate.workerIsolation).toBe('none');
+    // #289: a deployed file that still sets the removed keys loads, and they are dropped unread.
+    expect(loadCodexPolicy({ JEV_CODEX_CONFIG: serial }).gate).not.toHaveProperty('guardAllowTools');
     const override = join(tmp, 'explicit-models.json'); writeFileSync(override, JSON.stringify({ gate: { models: { fast: 'owner-model' } } }));
     expect(loadCodexPolicy({ JEV_CODEX_CONFIG: override, JEV_CODEX_MODEL: 'account-workhorse' }, available).gate.models).toEqual({ ...models, fast: 'owner-model' });
   });

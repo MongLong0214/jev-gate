@@ -1,11 +1,11 @@
 import { OWNED_AGENT_NAMES } from '../types.js';
 declare const __JEV_AGENT_INSTRUCTIONS__: Record<string, string>;
-/** Build embeds the existing six agent instructions. No second copy of the execution contracts. */
+/** Build embeds the existing four agent instructions. No second copy of the execution contracts. */
 export const CODEX_PROFILES: Record<string, string> = typeof __JEV_AGENT_INSTRUCTIONS__ === 'undefined' ? {} : __JEV_AGENT_INSTRUCTIONS__;
 
 export const AGENT_TOOL = {
   type: 'function', name: 'jev_agent',
-  description: 'Start a Jev planner or contracted worker in a fresh native Codex thread. Background execution is the default: return immediately and answer new user messages while it works. Use action=status with agent_id to collect the observed result without waiting, or action=cancel for explicit user cancellation. Completion is accepted only by the original contract. Use the exact current profile and marker. Native permissions still apply.',
+  description: 'Start a Jev worker in a fresh native Codex thread. Background execution is the default: return immediately and answer new user messages while it works. Use action=status with agent_id to collect the observed result without waiting, or action=cancel for explicit user cancellation. Completion is accepted only by the original contract. Use the exact current profile. Native permissions still apply.',
   inputSchema: {
     type: 'object', properties: {
       subagent_type: { type: 'string', enum: [...OWNED_AGENT_NAMES] },

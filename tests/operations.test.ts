@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import { buildOperations, operationsStableUntil, type ModRecord } from '../src/operations.js';
-import { deterministicVerdict, parseWorkerReply, reportedSingleVerdict } from '../src/plan.js';
+import { parseWorkerReply, reportedSingleVerdict } from '../src/plan.js';
 import { refusalReason } from '../src/verify.js';
-import type { PlannedTask, WorkerReply } from '../src/types.js';
+import type { WorkerReply } from '../src/types.js';
 
 const at = '2026-09-29T06:00:00.000Z';
 const later = '2026-09-29T06:00:01.000Z';
@@ -72,10 +72,10 @@ describe('operations display model', () => {
     const gate = buildOperations([{ ...base, phase: 'admission_result', attempted: true, http: { code: 'deadline', duration_ms: 500 }, decision: { shape: 'direct' } }], [], new Date(later), { trace: true });
     expect(gate.feed.find(s => s.lane === 'jev')?.state).toBe('error');
   });
-  it('does not present a direct turn ending or a planner dispatch as observed worker execution', () => {
+  it('does not present a direct turn ending or a legacy planner dispatch as observed worker execution (#289)', () => {
     const view = buildOperations([{ ...base, phase: 'stop', outcome: 'completed' }, { ...base, phase: 'dispatch', role: 'planner' }], [], new Date(later), { trace: true, host: 'codex' });
     expect(view.features.find(f => f.id === 'workers')).toMatchObject({ count: 0, state: 'waiting' });
-    expect(view.features.find(f => f.id === 'planning')).toMatchObject({ count: 1, state: 'observed' });
+    expect(view.features.map(f => f.id)).not.toContain('planning');
     expect(view.feed.some(s => s.title === '턴 종료' && s.lifecycle === true)).toBe(true);
   });
   it('exposes the applied admission path even when a Jev result or a local fallback owns it', () => {
@@ -92,9 +92,7 @@ describe('operations display model', () => {
       { ...base, phase: 'admission_result', request_id: 'a1', attempted: true, decision: { shape: 'orchestrated', reason: 'selected' }, jev: { usage: { input_tokens: 10, output_tokens: 2 } } },
       { ...base, phase: 'pre_intent', request_id: 'b1' },
       { ...base, phase: 'pre_result', request_id: 'b1', attempted: true, decision: { action: 'preserve', tier: 'standard' } },
-      { ...base, phase: 'plan', status: 'accepted', tasks: 2, graph: [{ id: 't1', depends_on: [], required_checks: 1 }, { id: 't2', depends_on: ['t1'], required_checks: 2 }] },
       { ...base, phase: 'dispatch', role: 'worker', task_id: 't1', requested_tier: 'standard', requested_model: 'sonnet' },
-      { ...base, phase: 'guard', tool_name: 'Read', allow: false, denials: 1 },
       { ...base, phase: 'post', task_id: 't1', verdict: 'accept', requested_model: 'sonnet', resolved_model: 'claude-sonnet-5', reported_checks: { pass: 1, fail: 0, not_run: 0 } },
       { written_at: at, phase: 'evidence_start', request_id: 'e1', kind: 'search', mode: 'locate' },
       { written_at: at, phase: 'evidence_jev_intent', request_id: 'e1:1', parent_request_id: 'e1', candidates: 4 },
@@ -108,14 +106,11 @@ describe('operations display model', () => {
       row('compact', { event: 'compact', run_id: 'c1', applied: true, digestChars: 100 }, later),
     ];
     const view = buildOperations(records, mods, new Date('2026-09-29T06:00:02.000Z'), { trace: true });
-    expect(view.features.map((f) => f.id)).toEqual(['admission', 'allocation', 'planning', 'workers', 'guard', 'router', 'compact', 'evidence']);
+    expect(view.features.map((f) => f.id)).toEqual(['admission', 'allocation', 'workers', 'router', 'compact', 'evidence']);
     expect(view.features.every((f) => f.state === 'observed')).toBe(true);
     expect(view.requests).toBe(4);
     expect(view.runs.map((r) => r.source).sort()).toEqual(['compact', 'evidence', 'gate', 'router']);
     const gate = view.runs.find((r) => r.source === 'gate')!;
-    expect(gate.steps.find((s) => s.feature === 'planning')?.graph).toEqual([
-      { id: 't1', dependsOn: [], checks: 1 }, { id: 't2', dependsOn: ['t1'], checks: 2 },
-    ]);
     expect(gate.steps.find((s) => s.title.includes('워커 결과'))?.details.join(' ')).toContain('claude-sonnet-5');
     expect(JSON.stringify(view)).not.toContain('PRIVATE_PROMPT');
     expect(JSON.stringify(view)).not.toContain('sk-private-value');
@@ -165,7 +160,7 @@ describe('operations display model', () => {
     expect(view.feed[0]?.model).toMatchObject({ selected: 'sonnet', observed: 'claude-sonnet-5', status: 'confirmed', selectedEffort: 'low' });
   });
 
-  it.each(['codex_event', 'guard'])('keeps a Jev judgment visible after a busy %s loop and correlates the known turn', phase => {
+  it.each(['codex_event'])('keeps a Jev judgment visible after a busy %s loop and correlates the known turn', phase => {
     const records: Array<Record<string, unknown>> = [
       { ...base, host: 'codex', phase: 'admission_result', request_id: 'a', attempted: true, decision: { shape: 'direct' } },
       ...Array.from({ length: 200 }, (_, i) => ({ ...base, written_at: later, host: 'codex', phase, event: 'PostToolUse', allow: true, tool_use_id: `c${i}`, invocation_id: `i${i}` })),
@@ -176,13 +171,12 @@ describe('operations display model', () => {
     expect(view.feed.some(s => s.lane === 'jev')).toBe(true);
   });
 
-  it('separates measured Jev response, typed answer and code policy without treating a guard denial as an error', () => {
+  it('separates measured Jev response, typed answer and code policy', () => {
     const records = [
       { ...base, phase: 'admission_intent', request_id: 'typed' },
       { ...base, written_at: later, phase: 'admission_result', request_id: 'typed', attempted: true,
         http: { duration_ms: 247 }, answers: { need_worker: { noul: 0.81, confidence: 0.72 } },
         decision: { shape: 'orchestrated' }, policy_basis: 'bounded_tool_worker', estimate: { saving_tokens: -245000, cost_support: 0 } },
-      { ...base, written_at: later, phase: 'guard', tool_name: 'Bash', allow: false, denials: 1 },
     ];
     const view = buildOperations(records, [], new Date(later), { trace: true });
     const steps = view.runs[0]!.steps;
@@ -193,7 +187,6 @@ describe('operations display model', () => {
     expect(steps.find((s) => s.lane === 'policy' && s.feature === 'admission')?.summary).toBe('위임 이득 충분');
     expect(steps.find((s) => s.lane === 'policy' && s.feature === 'admission')?.details.join(' ')).toContain('빠른 워커 우선 정책');
     expect(steps.find((s) => s.lane === 'policy' && s.feature === 'admission')?.details.join(' ')).toContain('-245,000');
-    expect(steps.find((s) => s.feature === 'guard')?.state).toBe('done');
     expect(view.latency).toMatchObject({ measured: 1, p50: 247, p95: 247 });
   });
 
@@ -773,7 +766,6 @@ describe('worker contract outcomes (#232)', () => {
   });
 
   it.each(['claude', 'codex'] as const)('classifies each engine reason into a closed label and never passes the reason text or a reply on (%s)', host => {
-    const task: PlannedTask = { id: 't1', outcome: 'o', depends_on: [], context: '', constraints: [], deliverables: [], replan_if: [], contract_hash: 'h', checks: [{ id: 'unit', description: 'd', required: true, command: 'npm test' }] };
     const reply = (over: Partial<WorkerReply>): WorkerReply => ({ status: 'done', summary: 'PRIVATE_SUMMARY', changed_files: [], interfaces: [], checks: [], blockers: [], ...over });
     const invalid = parseWorkerReply('{"status":"PRIVATE_REPLY_TEXT"}');
     const cases: Array<[string, string | null, string, string]> = [
@@ -783,10 +775,11 @@ describe('worker contract outcomes (#232)', () => {
       ['incomplete', refusalReason(verification({ stale: ['#1'] }) as never), 'check_stale', '변경 전 통과 #1'],
       ['incomplete', reportedSingleVerdict(reply({ status: 'blocked', checks: [{ check_id: 'npm test -- PRIVATE_COMMAND', result: 'fail', note: '' }] })).reason, 'worker_blocked', ''],
       ['incomplete', reportedSingleVerdict(reply({ blockers: ['PRIVATE_BLOCKER'] })).reason, 'worker_blocked', ''],
-      ['replan', deterministicVerdict(task, reply({ status: 'replan' })).reason, 'worker_blocked', ''],
-      ['incomplete', deterministicVerdict(task, reply({})).reason, 'check_report', ''],
-      ['rework', deterministicVerdict(task, reply({ checks: [{ check_id: 'unit', result: 'fail', note: 'PRIVATE_NOTE' }] })).reason, 'check_report', ''],
-      ['incomplete', deterministicVerdict(task, reply({ checks: [{ check_id: 'other', result: 'pass', note: '' }] })).reason, 'check_report', ''],
+      // #289: the reasons a planned-task verdict wrote, as legacy traces still carry them.
+      ['replan', 'worker reported status replan', 'worker_blocked', ''],
+      ['incomplete', 'required check unit was not reported', 'check_report', ''],
+      ['rework', 'required check unit reported fail', 'check_report', ''],
+      ['incomplete', 'unknown check id other', 'check_report', ''],
       ['incomplete', 'the worker changed files but reported no passing check it ran', 'check_report', ''],
       ['invalid', invalid.ok ? null : invalid.error, 'invalid_reply', ''],
       ['invalid', 'the task is no longer in the current plan', 'superseded', ''],
