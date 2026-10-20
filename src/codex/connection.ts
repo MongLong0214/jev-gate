@@ -83,16 +83,19 @@ export const restoreConnection = async (rpc: CodexRpc, env: Env): Promise<void> 
 
 /** Closed, so a trace or tool result names why the helper did not answer without carrying its exception text. */
 export type ConnectionFailure = 'state_missing' | 'unreachable' | 'http_error' | 'timeout' | 'aborted' | 'invalid_reply';
-const stopped = (e: unknown, other: ConnectionFailure): ConnectionFailure => (e as Error | null)?.name === 'TimeoutError' ? 'timeout' : (e as Error | null)?.name === 'AbortError' ? 'aborted' : other;
+// The caller's signal decides cancellation: the MCP SDK aborts with a string reason, which fetch throws as is, without a name.
+const stopped = (e: unknown, other: ConnectionFailure, signal?: AbortSignal): ConnectionFailure =>
+  (e as Error | null)?.name === 'TimeoutError' || (signal?.reason as Error | null)?.name === 'TimeoutError' ? 'timeout'
+    : signal?.aborted || (e as Error | null)?.name === 'AbortError' ? 'aborted' : other;
 type HelperReply = { ok: true; value: Obj } | { ok: false; reason: ConnectionFailure };
 /** One POST to a local helper (the automatic connection or the managed bridge). */
 export const helperRequest = async (url: string, token: string, input: Obj, signal?: AbortSignal): Promise<HelperReply> => {
   let response: Response;
   try { response = await fetch(url, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify(input), ...(signal ? { signal } : {}) }); }
-  catch (e) { return { ok: false, reason: stopped(e, 'unreachable') }; }
+  catch (e) { return { ok: false, reason: stopped(e, 'unreachable', signal) }; }
   if (!response.ok) return { ok: false, reason: 'http_error' };
   try { const value = obj(await response.json()); return value ? { ok: true, value } : { ok: false, reason: 'invalid_reply' }; }
-  catch (e) { return { ok: false, reason: stopped(e, 'invalid_reply') }; }
+  catch (e) { return { ok: false, reason: stopped(e, 'invalid_reply', signal) }; }
 };
 export const connectionRequest = async (env: Env, path: '/hook' | '/agent', input: Obj, signal?: AbortSignal): Promise<HelperReply> => {
   const state = read(env); if (!state) return { ok: false, reason: 'state_missing' };

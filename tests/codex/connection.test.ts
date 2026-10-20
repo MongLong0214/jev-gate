@@ -4,12 +4,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { installConnection, restoreConnection, type Connection } from '../../src/codex/connection.js';
+import { helperRequest, installConnection, restoreConnection, type Connection } from '../../src/codex/connection.js';
 import { runCodexHook } from '../../src/codex/hook.js';
 import { startCodexSession } from '../../src/codex/launch.js';
 import { DISPATCH_FAILED } from '../../src/codex/policy.js';
 import { CODEX_SANDBOX_META } from '../../src/codex/workspace.js';
-import { connectionDispatch } from '../../src/evidence/server.js';
+import { connectionDispatch, createServer as createMcpServer } from '../../src/evidence/server.js';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { openTraceDir } from '../../src/trace.js';
 import type { CodexRpc } from '../../src/codex/rpc.js';
 import type { Obj } from '../../src/codex/source.js';
@@ -108,6 +110,40 @@ describe('connection failures are named, not collapsed (#287)', () => {
     expect(rows.map(r => r['connection_failure']).sort()).toEqual(['aborted', 'http_error', 'state_missing', 'timeout', 'unreachable']);
     for (const row of rows) expect(row).toMatchObject({ host: 'codex', phase: 'failure', tool_name: 'jev_agent', error_first_line: `connection_${String(row['connection_failure'])}` });
     expect(JSON.stringify(rows)).not.toContain('/secret/path');
+  });
+  it('records a jev_agent call the MCP client cancels as aborted, though the SDK aborts with a string reason (#287)', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'jev-connect-cancel-')); temps.push(home);
+    const env = { CODEX_HOME: home, HOME: home }; const trace = join(home, 'trace');
+    const opened = openTraceDir(trace, env); if (!opened.ok) throw new Error(opened.error);
+    let received!: () => void; const arrived = new Promise<void>(r => { received = r; });
+    const hanging = createServer(req => { req.resume(); received(); }); await new Promise<void>(r => hanging.listen(0, '127.0.0.1', r));
+    owner(home, (hanging.address() as { port: number }).port);
+    let observedSignal: AbortSignal | undefined;
+    const dispatch = connectionDispatch(env, opened.writer);
+    const server = createMcpServer({ ok: false, reason: 'unavailable_config', origin: 'session', detail: 'waiting' }, { apiKey: null, host: 'codex', callerEnv: env, dispatch: (args, meta, signal) => { observedSignal = signal; return dispatch(args, meta, signal); } });
+    const [a, b] = InMemoryTransport.createLinkedPair(); await server.connect(a);
+    const client = new Client({ name: 'cancel-test', version: '0' }); await client.connect(b);
+    try {
+      const cancel = new AbortController();
+      const call = client.callTool({ name: 'jev_agent', arguments: {}, _meta: meta(home) }, undefined, { signal: cancel.signal });
+      await arrived; cancel.abort();
+      await expect(call).rejects.toThrow();
+      await vi.waitFor(() => expect(failures(trace).map(r => r['connection_failure'])).toEqual(['aborted']));
+      expect(observedSignal?.aborted).toBe(true); expect(typeof observedSignal?.reason).toBe('string');
+    } finally { await client.close(); await server.close(); hanging.closeAllConnections(); await new Promise<void>(r => hanging.close(() => r())); }
+  });
+  it.each(['aborted', 'timeout'] as const)('classifies %s while reading a helper response body from the signal (#287)', async reason => {
+    const hanging = await helper(res => { res.writeHead(200, { 'content-type': 'application/json' }); res.write('{'); });
+    const cancel = new AbortController();
+    let reading!: () => void; const started = new Promise<void>(r => { reading = r; });
+    const json = Response.prototype.json;
+    const spy = vi.spyOn(Response.prototype, 'json').mockImplementation(function (this: Response) { reading(); return json.call(this); });
+    try {
+      const call = helperRequest(`http://127.0.0.1:${(hanging.address() as { port: number }).port}`, 'test', {}, cancel.signal);
+      await started;
+      cancel.abort(reason === 'timeout' ? new DOMException('deadline', 'TimeoutError') : 'MCP caller cancelled');
+      await expect(call).resolves.toEqual({ ok: false, reason });
+    } finally { spy.mockRestore(); hanging.closeAllConnections(); await new Promise<void>(r => hanging.close(() => r())); }
   });
   it('answers an /agent call whose dispatch throws with fixed text instead of a bare 502', async () => {
     const root = mkdtempSync(join(tmpdir(), 'jev-connect-agent-')); temps.push(root);

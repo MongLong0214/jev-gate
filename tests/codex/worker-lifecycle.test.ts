@@ -352,6 +352,24 @@ describe('Codex write scope from native tool targets (#234)', () => {
       expect(await f.blocked('Bash', { command }), command).toBe(true);
     }
   });
+  it('blocks the git read options that run configured filters, textconv, external diff or gpg, prefixes included (#287)', async () => {
+    const f = await scoped();
+    for (const command of ['git cat-file -p HEAD:package.json', 'git diff --no-ext-diff --no-textconv', 'git log --format=%H -1', 'git show --stat HEAD',
+      'git log --no-show-signature --no-textconv -p', 'git show --no-ext-diff --no-textconv HEAD', 'git blame --no-textconv a',
+      'git status --short', 'git rev-parse HEAD', 'git ls-files', 'git merge-base HEAD main', 'git describe HEAD',
+      'git branch --show-current', 'git remote get-url origin', 'git config --get user.name']) {
+      expect(await f.hook('Bash', { command }), command).toEqual({});
+    }
+    for (const command of ['git cat-file --filters --path=package.json HEAD:package.json', 'git cat-file --textconv HEAD:package.json', 'git cat-file --textc HEAD:a', 'git cat-file --text HEAD:a',
+      'git cat-file --filt --path=a HEAD:a', 'git cat-file --batch --filters', 'git diff --ext-diff', 'git diff --textconv', 'git log -p --ext-diff', 'git show --textconv HEAD',
+      'git -C . blame --textconv a', 'git log --show-signature -1', 'git log --format=%G? -1', 'git show --pretty=format:%GS HEAD',
+      'git diff --no-no-textconv', 'git diff --no-no-ext-diff', 'git log --no-no-textc -p', 'git show --no-no-ext HEAD',
+      'git cat-file --no-no-filt --path=a HEAD:a', 'git log --no-no-show-signature -1', 'git diff --textconv=true',
+      'git diff --ext', 'git log -p --textc', 'git show --ext-diff HEAD', 'git grep --textconv pattern', 'git grep --textc pattern',
+      'git grep --ext-diff pattern', 'git grep --no-no-textconv pattern']) {
+      expect(await f.blocked('Bash', { command }), command).toBe(true);
+    }
+  });
   it('confines an unknown shell command by its reported workdir, a leading absolute cd or the session cwd, and the paths it names', async () => {
     const f = await scoped();
     expect(await f.hook('exec_command', { cmd: 'npx vitest run tests/a.test.ts', workdir: f.other })).toEqual({});

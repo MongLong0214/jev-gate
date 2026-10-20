@@ -90,7 +90,13 @@ const readOnlyArgv = ([command, ...args]: string[]): boolean => {
   let i = 0;
   for (; ; i++) { if (args[i] === '-C') i++; else if (args[i] !== '--no-pager' && args[i] !== '-P') break; }
   const [sub, ...rest] = args.slice(i);
-  if (args.some(a => a.startsWith('--output'))) return false;
+  // Filters, textconv and external diff run configured programs, as signature checks run gpg (`%G` formats too). cat-file takes
+  // any unique prefix (`--textc`); Git also accepts double negation (`--no-no-textconv`) to enable an option. Single `--no-` stays.
+  if (args.some(a => {
+    const option = a.split('=')[0]!.replace(/^--(?:no-no-)+/, '--');
+    return a.startsWith('--output') || a.includes('%G')
+      || /^--[^=]/.test(option) && ['--filters', '--textconv', '--ext-diff', '--show-signature'].some(o => o.startsWith(option));
+  })) return false;
   if (/^(?:status|diff|log|show|rev-parse|ls-files|blame|cat-file|merge-base|describe)$/.test(sub ?? '')) return true;
   if (sub === 'branch') return rest.length === 1 && rest[0] === '--show-current';
   if (sub === 'remote') return rest.length === 1 && /^(?:-v|--verbose)$/.test(rest[0]!) || rest[0] === 'get-url';
