@@ -82,6 +82,8 @@ export interface RouterEngine extends Transport {
 export interface TurnStartEvent {
   text: string;
   turnId: string;
+  /** A subagent's run, which raises its own turn.start since 2.1.300 (#283); absent on the main loop. */
+  agentId?: string;
 }
 export interface TurnStepEvent {
   turnId: string;
@@ -120,6 +122,8 @@ export interface SpawnEvent {
   parentAgentId?: string;
   fork: boolean;
   name?: string;
+  /** Set when SendMessage resumes an agent, the one it resumes; the host ignores a model set on it (2.1.304). */
+  resume?: { agentId: string };
 }
 export type SpawnOutcome = { model: string; agentId?: string; deny?: undefined } | { deny: string; model?: undefined };
 
@@ -360,6 +364,8 @@ interface TurnRouting {
   patch: RoutingPatch;
   /** The whole turn is native from here on: skipped, diverged or retired. */
   stopped: boolean;
+  /** #283: why a stop nothing recorded as it happened (a context reset) left the turn native; its next step records it. */
+  stopReason?: string;
   modelStopped: boolean;
   effortStopped: boolean;
   /** The effort the conversation's cached prefix was last sent at, while that cache is still warm; null when cold. */
@@ -600,9 +606,13 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
 
   // ---------------------------------------------------------------------------------------------- root
 
-  const retire = (turnId: string): void => {
+  /** #283: a routed turn retired before its last step, with why, until a step of it records that. */
+  const released = bounded<string, string>(MAX_TURNS);
+  const retire = (turnId: string, reason: string): void => {
     const t = turns.get(turnId);
     if (t) {
+      const why = t.stopped ? t.stopReason : reason;
+      if (why !== undefined && Object.keys(t.patch).length) released.put(turnId, why);
       t.stopped = true;
       t.controller.abort();
       turns.delete(turnId);
@@ -1118,7 +1128,18 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
 
   const contextReset = (agentId?: string): void => {
     if (agentId) { const c = children.get(agentId); if (c) { c.controller.abort(); c.controller = new AbortController(); delete c.cache; delete c.step; delete c.cacheEffort; c.cachePreserved = false; } }
-    else { cacheEpoch++; rootCaches.clear(); rootCache = null; lastRoot = null; for (const t of turns.values()) { t.stopped = true; t.controller.abort(); } }
+    else { cacheEpoch++; rootCaches.clear(); rootCache = null; lastRoot = null; for (const t of turns.values()) { if (!t.stopped) t.stopReason = 'context_reset'; t.stopped = true; t.controller.abort(); } }
+  };
+  /**
+   * #283: a step of a routed turn that goes out native says why, once, when no record said so as the turn stopped: a
+   * context reset, a retired turn, or a preparation that failed.
+   */
+  const unrouted = (engine: RouterEngine, e: TurnStepEvent, failed: boolean): void => {
+    const t = turns.get(e.turnId);
+    const reason = !t ? released.get(e.turnId) : Object.keys(t.patch).length ? t.stopReason ?? (failed && !t.stopped ? 'internal_error' : undefined) : undefined;
+    if (reason === undefined) return;
+    if (t) delete t.stopReason; else released.delete(e.turnId);
+    log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason });
   };
   const noteMessages = (engine: RouterEngine, e: TurnStepEvent): void => {
     if (typeof e.messageCount !== 'number') return;
@@ -1143,10 +1164,12 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     const deadline = known?.pending ? known.deadline : startedAt + config.timeoutMs;
     const wait = budget(engine, deadline, own, next.signal, ...(known ? [known.controller.signal] : []));
     let prepared: Prepared | null = null;
+    let failed = false;
     try {
       prepared = await prepareStep(engine, e, wait.signal, deadline);
     } catch {
       prepared = null;
+      failed = true;
     }
     const drift = e.agentId === undefined && rootEnabled ? turns.get(e.turnId) : undefined;
     const restorable = !!drift && drift.baselineSource !== 'turn.step' && await nativeAllowed(engine, drift.baseline.model, wait.signal).catch(() => false);
@@ -1164,11 +1187,9 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     // Checked here, in the handler, rather than where the patch was made: nothing is awaited between this and next, so
     // a session that ended or a turn retired or stopped while the step was prepared gives it no patch.
     let patch = prepared?.patch ?? null;
-    if (prepared?.turn && (own.aborted || prepared.turn.stopped || turns.get(e.turnId) !== prepared.turn)) {
-      patch = null;
-      log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: own.aborted ? 'session_ended' : 'turn_stopped' });
-    }
+    if (prepared?.turn && (own.aborted || prepared.turn.stopped || turns.get(e.turnId) !== prepared.turn)) patch = null;
     if (e.agentId === undefined && rootEnabled) patch = restoreNative(e, patch, restorable);
+    if (e.agentId === undefined && rootEnabled && patch === null) unrouted(engine, e, failed);
     if (prepared?.child && (own.aborted || prepared.child.stopped)) {
       patch = null;
       log(engine, { event: 'child_stop', agent_id: e.agentId ?? null, index: e.index, reason: own.aborted ? 'session_ended' : 'child_stopped' });
@@ -1378,8 +1399,6 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     const inheritance = declared ? null : builtIn;
     if (inheritance && (inheritance === 'baseline_unknown' || !config.routeSubagentEffort || childHistoryFull)) return spawnSkip(engine, e, inheritance);
     if (explicit && !config.routeExplicitSpawnModel && !config.routeSubagentEffort) return spawnSkip(engine, e, 'explicit_model');
-    // A resumed subagent continues its own conversation: another model or effort would re-read all of it uncached.
-    if (e.name && engine.resumes && await within(engine.resumes(e.name).catch(() => true), live)) return spawnSkip(engine, e, 'resumed');
     const key = await keyFor(engine, live); if (key === ABORTED) throw ENDED;
     if (!('key' in key)) {
       const aliases = await within(aliasesOf(engine), live);
@@ -1469,6 +1488,16 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     const deadline = startedAt + config.timeoutMs;
     const own = session.signal;
     const wait = budget(engine, deadline, own, next.signal);
+    // A resumed subagent continues its own conversation, on the model it ran (#290): another model or effort would re-read
+    // all of it uncached. It is no new spawn, so it goes out as called, with no assignment, native model or child. The host
+    // names the resume on the event; an agent that already finished is in no list, so a name alone misses it. An unread
+    // name, including a timed-out lookup, stays native too; cancellation is checked before next.
+    if (e.resume || e.name && engine.resumes && await within(engine.resumes(e.name).catch(() => true), wait.signal).catch(() => true)) {
+      wait.dispose();
+      if (next.signal.aborted || own.aborted) throw new Error('jev-router: spawn dispatch abandoned before next');
+      spawnSkip(engine, e, 'resumed');
+      return next(e);
+    }
     // A main-loop spawn inherits the main loop's model, which a drift left on the Router's own: it inherits the native one.
     const native = !e.parentAgentId && !e.fork && rootRecord?.drift && sameId(e.parentModel, rootRecord.drift.model) && !sameId(e.parentModel, rootRecord.native.model) ? rootRecord.native.model : null;
     const ev: E = native ? { ...e, parentModel: native } : e;
@@ -1576,9 +1605,10 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     spawnEnabled,
     stepEnabled,
     turnStart: <E extends TurnStartEvent>(e: E): void => {
-      if (!rootEnabled) return;
+      // A subagent's run is no root turn: it never retires the root's, whose next step would go out native (#283).
+      if (!rootEnabled || e.agentId !== undefined) return;
       rootGeneration++;
-      if (currentRootTurn !== null && currentRootTurn !== e.turnId) retire(currentRootTurn);
+      if (currentRootTurn !== null && currentRootTurn !== e.turnId) retire(currentRootTurn, 'next_turn');
       currentRootTurn = e.turnId;
       // A background completion notice continues the person's last request; it is routed as that request and is never
       // sent or remembered as one.
@@ -1592,7 +1622,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       if (engine) log(engine, { event: 'turn_end', turn: e.turnId, agent_id: e.agentId ?? null, scope: e.agentId === undefined ? 'root' : 'child', reason: e.reason ?? null });
       if (e.agentId === undefined) {
         if (currentRootTurn === e.turnId) { lastReply = e.reason === 'answer' && e.answer?.trim() && !looksSecret(e.answer) ? e.answer : null; currentRootTurn = null; }
-        retire(e.turnId);
+        retire(e.turnId, 'turn_end');
       }
       else {
         const c = children.get(e.agentId);
@@ -1609,7 +1639,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       if (engine && stepEnabled) log(engine, { event: 'session_end' });
       session.abort();
       session = new AbortController();
-      for (const id of [...turns.keys()]) retire(id);
+      for (const id of [...turns.keys()]) retire(id, 'session_ended');
       turnTexts.clear();
       offers.clear();
       for (const c of children.values()) c.controller.abort();
