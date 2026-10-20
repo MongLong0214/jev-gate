@@ -76,33 +76,86 @@ const gitArgs = (args: string[]): string[] => {
   for (; ; i++) { if (args[i] === '-C') i++; else if (args[i] !== '--no-pager' && args[i] !== '-P') break; }
   return args.slice(i);
 };
+type GitReadOptions = { flags: string; values?: string; optional?: string; short?: string; shortValues?: string; shortOptional?: Record<string, RegExp>; count?: boolean };
+const gitDiffOptions: GitReadOptions = {
+  flags: '--no-textconv --no-ext-diff --no-show-signature --patch --no-patch --raw --patch-with-raw --patch-with-stat --numstat --shortstat --summary --compact-summary --name-only --name-status --check --exit-code --quiet --binary --full-index --no-color --no-prefix --no-renames --minimal --patience --histogram --ignore-all-space --ignore-space-change --ignore-space-at-eol --ignore-cr-at-eol --ignore-blank-lines --no-index --cached --staged --reverse',
+  values: '--unified --inter-hunk-context --src-prefix --dst-prefix --line-prefix --diff-algorithm --anchored --word-diff-regex --ignore-matching-lines --diff-filter --stat-width --stat-name-width --stat-count',
+  optional: '--stat --color --color-moved --color-moved-ws --word-diff --find-renames --find-copies --relative --abbrev',
+  short: 'pustzRwbB', shortValues: 'UGSO', shortOptional: { M: /^(?:\d+%?)?$/, C: /^(?:\d+%?)?$/ },
+};
+// Exact option names and their arity, shared by classification and unknown-target handling. Never accept Git's
+// unique prefixes or arbitrary short clusters: an unlisted option may write a file or launch a program.
+const GIT_READ_OPTIONS: Record<string, GitReadOptions> = {
+  status: { flags: '--short --branch --show-stash --long --verbose --null --no-renames --no-ahead-behind --ahead-behind', optional: '--porcelain --untracked-files --ignored --ignore-submodules --column --find-renames', short: 'sbvz', shortOptional: { u: /^(?:no|normal|all)?$/ } },
+  diff: gitDiffOptions,
+  log: { ...gitDiffOptions,
+    flags: `${gitDiffOptions.flags} --oneline --graph --all --no-merges --merges --first-parent --reverse --date-order --author-date-order --topo-order --follow --walk-reflogs --no-walk --do-walk --no-decorate --left-right --cherry-pick --cherry-mark --boundary --simplify-by-decoration --full-history`,
+    values: `${gitDiffOptions.values} --max-count --skip --since --until --after --before --author --committer --grep --grep-reflog --date --encoding`,
+    optional: `${gitDiffOptions.optional} --format --pretty --decorate --branches --tags --remotes --glob --no-walk`,
+    short: `${gitDiffOptions.short}i`, shortValues: `${gitDiffOptions.shortValues}n`, count: true },
+  show: { ...gitDiffOptions,
+    flags: `${gitDiffOptions.flags} --oneline --no-decorate --decorate --no-notes --notes`,
+    values: `${gitDiffOptions.values} --date --encoding`, optional: `${gitDiffOptions.optional} --format --pretty --decorate --notes`, count: true },
+  'rev-parse': { flags: '--verify --quiet --sq --not --revs-only --no-revs --flags --no-flags --symbolic --symbolic-full-name --all --show-toplevel --show-prefix --show-cdup --absolute-git-dir --git-dir --git-common-dir --is-inside-git-dir --is-inside-work-tree --is-bare-repository --show-superproject-working-tree --end-of-options', values: '--git-path --resolve-git-dir --prefix --path-format --output-object-format', optional: '--short --abbrev-ref --show-object-format --branches --tags --remotes --glob', short: 'q' },
+  'ls-files': { flags: '--cached --deleted --modified --others --ignored --stage --unmerged --killed --directory --no-empty-directory --exclude-standard --error-unmatch --full-name --recurse-submodules --deduplicate --debug --eol --sparse --null', values: '--exclude --exclude-from --exclude-per-directory --format', short: 'zcdmoisuktvf', shortValues: 'xX' },
+  blame: { flags: '--no-textconv --root --show-stats --show-name --show-number --show-email --line-porcelain --porcelain --incremental', values: '--contents --date --ignore-rev --ignore-revs-file', optional: '--abbrev', short: 'bclfnpswet', shortValues: 'L', shortOptional: { M: /^\d*$/, C: /^\d*$/ } },
+  grep: { flags: '--no-textconv --cached --no-index --untracked --no-exclude-standard --exclude-standard --recurse-submodules --invert-match --ignore-case --word-regexp --line-regexp --fixed-strings --basic-regexp --extended-regexp --perl-regexp --line-number --column --no-column --with-filename --no-filename --full-name --name-only --files-with-matches --files-without-match --null --count --no-color --break --heading --only-matching --quiet --all-match --and --or --not', values: '--max-depth --threads --before-context --after-context --context --max-count --regexp --file', optional: '--color', short: 'ivwFGEPlLzchnHoq', shortValues: 'efABCm' },
+  'cat-file': { flags: '--batch-all-objects --unordered --buffer --follow-symlinks --allow-unknown-type --use-mailmap --no-use-mailmap', optional: '--batch --batch-check', short: 'tpsezZ' },
+  'merge-base': { flags: '--all --octopus --independent --is-ancestor --fork-point', short: 'a' },
+  describe: { flags: '--all --tags --contains --exact-match --long --always --first-parent --debug', values: '--abbrev --candidates --match --exclude', optional: '--dirty --broken' },
+  remote: { flags: '--push --all' },
+  config: { flags: '--local --global --system --worktree --includes --no-includes --show-origin --show-scope --name-only --null --all --regexp --fixed-value', values: '--file --blob --type --default --value', short: 'z', shortValues: 'f' },
+};
+const readOnlyGit = (argv: string[]): boolean => {
+  const [sub, ...rest] = gitArgs(argv);
+  if (sub === '--version') return rest.length === 0;
+  if (sub === 'branch') return rest.length === 1 && rest[0] === '--show-current';
+  if (sub === 'remote') {
+    if (rest.length === 1 && /^(?:-v|--verbose)$/.test(rest[0]!)) return true;
+    if (rest.shift() !== 'get-url') return false;
+  }
+  if (sub === 'config' && !/^(?:--get|--get-all|--get-regexp|--list|-l|get|list)$/.test(rest.shift() ?? '')) return false;
+  if (!sub || !Object.hasOwn(GIT_READ_OPTIONS, sub)) return false;
+  const spec = GIT_READ_OPTIONS[sub]!;
+  // Keep the existing callback guard: only leading, valueless disabling switches prove the callbacks are off.
+  const firstOperand = rest.findIndex(a => !/^--no-(?:textconv|ext-diff|show-signature)$/.test(a));
+  const disabled = firstOperand < 0 ? rest : rest.slice(0, firstOperand);
+  if (/^(?:diff|log|show)$/.test(sub!) && (!disabled.includes('--no-textconv') || !disabled.includes('--no-ext-diff'))) return false;
+  if (/^(?:blame|grep)$/.test(sub!) && !disabled.includes('--no-textconv')) return false;
+  if (rest.some(a => a.includes('%G'))) return false;
+  for (let i = 0; i < rest.length; i++) {
+    const arg = rest[i]!;
+    if (arg === '--') break;
+    if (arg === '-' || !arg.startsWith('-')) continue;
+    if (arg.startsWith('--')) {
+      const equal = arg.indexOf('='); const name = equal < 0 ? arg : arg.slice(0, equal);
+      if (spec.values?.split(' ').includes(name)) {
+        if (equal < 0 && (!rest[i + 1] || rest[++i]!.startsWith('-'))) return false;
+      } else if (!spec.optional?.split(' ').includes(name) && !(equal < 0 && spec.flags.split(' ').includes(name))) return false;
+    } else {
+      if (spec.count && /^-\d+$/.test(arg)) continue;
+      for (let n = 1; n < arg.length; n++) {
+        const letter = arg[n]!;
+        const optional = spec.shortOptional?.[letter];
+        if (optional) { if (!optional.test(arg.slice(n + 1))) return false; break; }
+        if (spec.shortValues?.includes(letter)) {
+          if (n + 1 === arg.length && (!rest[i + 1] || rest[++i]!.startsWith('-'))) return false;
+          break;
+        }
+        if (!spec.short?.includes(letter)) return false;
+      }
+    }
+  }
+  return true;
+};
 /** Configuration can run callbacks with targets unrelated to any argument or working directory. */
 const configuredGit = (words: Word[]): boolean => {
   const argv = words.map(w => w.text);
   let i = 0;
   while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(argv[i] ?? '')) i++;
   if (!/(?:^|\/)git$/.test(argv[i] ?? '')) return false;
-  if (i > 0
-    || argv.slice(i + 1).some(a => /^-c|^--config-env(?:=|$)/.test(a))
-    || ['GIT_CONFIG_PARAMETERS', 'GIT_CONFIG_COUNT', 'GIT_EXTERNAL_DIFF'].some(key => process.env[key] !== undefined)) return true;
-  const [sub, ...rest] = gitArgs(argv.slice(i + 1));
-  if (sub?.startsWith('-') && sub !== '--version') return true;
-  const end = rest.indexOf('--');
-  const args = end < 0 ? rest : rest.slice(0, end);
-  // Only leading, valueless switches prove disabling: a later spelling can be another option's operand.
-  const firstOperand = args.findIndex(a => !/^--no-(?:textconv|ext-diff|show-signature)$/.test(a));
-  const disabled = firstOperand < 0 ? args : args.slice(0, firstOperand);
-  // Repository config and attributes need no command-line opt-in for diff/log/show/blame callbacks. The same
-  // authority feeds readOnlyCommand and shellTargets, so a callback's unknown target is never confined to cwd.
-  if (/^(?:diff|log|show)$/.test(sub ?? '') && (!disabled.includes('--no-textconv') || !disabled.includes('--no-ext-diff'))) return true;
-  if (/^(?:blame|grep)$/.test(sub ?? '') && !disabled.includes('--no-textconv')) return true;
-  // Filters, textconv and external diff run configured programs, as signature checks run gpg (%G formats too).
-  // Git accepts unique prefixes and double negation (--no-no-textconv enables textconv).
-  return args.some(a => {
-    const option = a.split('=')[0]!.replace(/^--(?:no-no-)+/, '--');
-    return a.includes('%G') || /^--[^=]/.test(option)
-      && ['--filters', '--textconv', '--ext-diff', '--show-signature'].some(o => o.startsWith(option));
-  });
+  return i > 0 || ['GIT_CONFIG_PARAMETERS', 'GIT_CONFIG_COUNT', 'GIT_EXTERNAL_DIFF'].some(key => process.env[key] !== undefined)
+    || !readOnlyGit(argv.slice(i + 1));
 };
 const readOnlyArgv = ([command, ...args]: string[]): boolean => {
   if (READ_ONLY.has(command ?? '')) return true;
@@ -121,13 +174,7 @@ const readOnlyArgv = ([command, ...args]: string[]): boolean => {
   if (command === 'printf') return args[0] !== '-v';
   if (command === 'date') return args.every(a => /^(?:\+.*|-u|--utc|-R|-I\w*|--iso-8601(?:=\w+)?|--rfc-3339=\w+)$/.test(a));
   if (command !== 'git') return false;
-  const [sub, ...rest] = gitArgs(args);
-  if (args.some(a => a.startsWith('--output'))) return false;
-  if (/^(?:status|diff|log|show|rev-parse|ls-files|blame|grep|cat-file|merge-base|describe)$/.test(sub ?? '')) return true;
-  if (sub === 'branch') return rest.length === 1 && rest[0] === '--show-current';
-  if (sub === 'remote') return rest.length === 1 && /^(?:-v|--verbose)$/.test(rest[0]!) || rest[0] === 'get-url';
-  // Git refuses a second action, so a read action rules out every write.
-  return sub === 'config' && /^(?:--get|--get-all|--get-regexp|--list|-l|get|list)$/.test(rest[0] ?? '');
+  return readOnlyGit(args);
 };
 
 /** Every pipeline stage is listed, nothing expands, and output goes only to the terminal, /dev/null or another descriptor. */
