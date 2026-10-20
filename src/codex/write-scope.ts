@@ -49,16 +49,44 @@ const parse = (src: string): Segment[] | null => {
 };
 
 // Closed list: each entry only reads files or host state. Anything else, including an unlisted option that writes, is not read-only.
-const READ_ONLY = new Set(['cat', 'cd', 'grep', 'head', 'ls', 'ps', 'pwd', 'tail', 'wc']);
+const READ_ONLY = new Set(['[', 'basename', 'cat', 'cd', 'cut', 'diff', 'dirname', 'echo', 'grep', 'head', 'jq', 'ls', 'nl', 'ps', 'pwd', 'realpath', 'stat', 'tail', 'test', 'tr', 'true', 'wc', 'which']);
+/** `sed -n` whose every script only prints line addresses (`1,80p`, `10p;20,30p`, `$p`); any other option or command writes or executes. */
+const printOnlySed = (args: string[]): boolean => {
+  let quiet = false; const scripts: string[] = []; const files: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (/^(?:-n|--quiet|--silent)$/.test(args[i]!)) quiet = true;
+    else if (args[i] === '-e' && i + 1 < args.length) scripts.push(args[++i]!);
+    else if (args[i]!.startsWith('-')) return false;
+    else files.push(args[i]!);
+  }
+  if (!scripts.length && files.length) scripts.push(files.shift()!);
+  return quiet && scripts.length > 0 && scripts.every(s => s.split(/[;\n]/).every(c => /^\s*(?:\d+|\$)(?:,(?:\d+|\$))?p\s*$/.test(c)));
+};
 const readOnlyArgv = ([command, ...args]: string[]): boolean => {
   if (READ_ONLY.has(command ?? '')) return true;
+  // A lone version flag on a program found by name, as in `node --version`.
+  if (command && !command.includes('/') && args.length === 1 && /^(?:--version|-v|-V)$/.test(args[0]!)) return true;
   if (command === 'rg') return !args.some(a => /^--pre(?:=|$)/.test(a));
   if (command === 'find') return !args.some(a => /^-(?:delete|exec|execdir|ok|okdir|fls|fprint|fprint0|fprintf)$/.test(a));
   if (command === 'gh') return /^(?:issue|pr)$/.test(args[0] ?? '') && /^(?:view|list|status|diff|checks)$/.test(args[1] ?? '');
+  if (command === 'sed') return printOnlySed(args);
+  if (command === 'command') return /^-[vV]$/.test(args[0] ?? '') && args.length > 1;
+  if (command === 'file') return !args.some(a => a === '--compile' || /^-[^-]*C/.test(a));
+  // An output file (`-o`), a temporary directory (`-T`) or a compressor program; a second uniq operand is its output file.
+  if (command === 'sort') return !args.some(a => /^--(?:output|temporary-directory|compress-program)(?:=|$)|^-[^-]*[oT]/.test(a));
+  if (command === 'uniq') return args.filter(a => !a.startsWith('-')).length <= 1;
+  if (command === 'printf') return args[0] !== '-v';
+  if (command === 'date') return args.every(a => /^(?:\+.*|-u|--utc|-R|-I\w*|--iso-8601(?:=\w+)?|--rfc-3339=\w+)$/.test(a));
   if (command !== 'git') return false;
   let i = 0;
   for (; ; i++) { if (args[i] === '-C') i++; else if (args[i] !== '--no-pager' && args[i] !== '-P') break; }
-  return /^(?:status|diff|log|show)$/.test(args[i] ?? '') && !args.some(a => a.startsWith('--output'));
+  const [sub, ...rest] = args.slice(i);
+  if (args.some(a => a.startsWith('--output'))) return false;
+  if (/^(?:status|diff|log|show|rev-parse|ls-files|blame|cat-file|merge-base|describe)$/.test(sub ?? '')) return true;
+  if (sub === 'branch') return rest.length === 1 && rest[0] === '--show-current';
+  if (sub === 'remote') return rest.length === 1 && /^(?:-v|--verbose)$/.test(rest[0]!) || rest[0] === 'get-url';
+  // Git refuses a second action, so a read action rules out every write.
+  return sub === 'config' && /^(?:--get|--get-all|--get-regexp|--list|-l|get|list)$/.test(rest[0] ?? '');
 };
 
 /** Every pipeline stage is listed, nothing expands, and output goes only to the terminal, /dev/null or another descriptor. */

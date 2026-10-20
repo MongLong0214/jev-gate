@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { capturedPermissions } from '../../src/codex/permissions.js';
 import { CODEX_SANDBOX_META } from '../../src/codex/workspace.js';
@@ -18,9 +21,21 @@ describe('native caller permission inheritance', () => {
     expect(capturedPermissions(meta({ type: 'disabled' }), false)?.permissions).toBe(':danger-full-access');
     expect(capturedPermissions(meta({ type: 'disabled' }), true)?.permissions).toBe(':read-only');
   });
-  it('refuses optional grants and unknown workspace expressions rather than expanding them', () => {
-    expect(capturedPermissions(meta(profile([{ ...entry('/tmp/a', 'write'), missing_path_behavior: 'skip' }])), false)).toBeNull();
+  it('refuses optional grants it cannot check and unknown workspace expressions rather than expanding them', () => {
+    expect(capturedPermissions(meta(profile([{ path: { type: 'special', value: { kind: 'tmpdir' } }, access: 'write', missing_path_behavior: 'skip' }])), false)).toBeNull();
+    expect(capturedPermissions(meta(profile([{ ...entry('/tmp/a', 'write'), missing_path_behavior: 'ask' }])), false)).toBeNull();
     expect(capturedPermissions(meta(profile([{ path: { type: 'special', value: { kind: 'project_roots', subpath: '../escape' } }, access: 'write' }])), false)).toBeNull();
     expect(capturedPermissions(meta(profile([{ ...entry('/tmp/secret', 'deny'), missing_path_behavior: 'skip' }])), false)?.config).toMatchObject({ 'permissions.jev-captured': { filesystem: { '/tmp/secret': 'deny' } } });
+  });
+  it('applies a skipped grant only where its path exists, as Codex 0.162.1 sends it for protected metadata under a writable root (#287)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'jev-skip-'));
+    try {
+      mkdirSync(join(root, '.git')); mkdirSync(join(root, '.codex'));
+      // Real shape: {"path":{"type":"path","path":"<root>/.git"},"access":"read","missing_path_behavior":"skip"}; .agents and .aws are absent here.
+      const skip = (name: string) => ({ path: { type: 'path', path: join(root, name) }, access: 'read', missing_path_behavior: 'skip' });
+      const p = profile([entry('/', 'read'), entry(root, 'write'), skip('.git'), skip('.agents'), skip('.codex'), skip('.aws'), { ...entry(join(root, '.env'), 'none'), missing_path_behavior: 'skip' }]);
+      expect(capturedPermissions(meta(p), false)?.config).toEqual({ 'permissions.jev-captured': { filesystem: { '/': 'read', [root]: 'write', [join(root, '.git')]: 'read', [join(root, '.codex')]: 'read', [join(root, '.env')]: 'deny' }, network: { enabled: false } } });
+      expect(capturedPermissions(meta(p), true)?.config).toMatchObject({ 'permissions.jev-captured': { filesystem: { [root]: 'read', [join(root, '.git')]: 'read' } } });
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });

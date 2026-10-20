@@ -1,8 +1,14 @@
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
+import { createServer, type Server } from 'node:http';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { installConnection, restoreConnection, type Connection } from '../../src/codex/connection.js';
+import { startCodexSession } from '../../src/codex/launch.js';
+import { DISPATCH_FAILED } from '../../src/codex/policy.js';
+import { CODEX_SANDBOX_META } from '../../src/codex/workspace.js';
+import { connectionDispatch } from '../../src/evidence/server.js';
+import { openTraceDir } from '../../src/trace.js';
 import type { CodexRpc } from '../../src/codex/rpc.js';
 import type { Obj } from '../../src/codex/source.js';
 
@@ -60,5 +66,54 @@ describe('automatic connection ownership and recovery', () => {
     const f = fixture(); const outside = mkdtempSync(join(tmpdir(), 'jev-connect-outside-')); temps.push(outside);
     mkdirSync(join(f.home, 'jev-gate'), { mode: 0o700 }); symlinkSync(outside, join(f.home, 'jev-gate/connection'));
     await expect(installConnection(f.rpc, f.connection(), f.env)).rejects.toThrow(); expect(f.requests).toHaveLength(0);
+  });
+});
+describe('connection failures are named, not collapsed (#287)', () => {
+  const helper = async (answer: (res: import('node:http').ServerResponse) => void): Promise<Server> => {
+    const server = createServer((req, res) => { req.resume(); req.on('end', () => answer(res)); });
+    await new Promise<void>(r => server.listen(0, '127.0.0.1', r)); return server;
+  };
+  const owner = (home: string, port: number) => {
+    mkdirSync(join(home, 'jev-gate/connection'), { recursive: true, mode: 0o700 });
+    writeFileSync(join(home, 'jev-gate/connection/owner.json'), JSON.stringify({ version: 1, pid: process.pid, port, token: 'a'.repeat(64), marker: 'm', root: home, original: {}, installed: {} }), { mode: 0o600 });
+  };
+  const meta = (home: string) => ({ [CODEX_SANDBOX_META]: { sandboxCwd: home }, threadId: 'root-thread' });
+  it('returns and records the closed reason a dispatch did not reach the helper, and passes a real answer through', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'jev-connect-fail-')); temps.push(home);
+    const env = { CODEX_HOME: home, HOME: home }; const trace = join(home, 'trace');
+    const opened = openTraceDir(trace, env); if (!opened.ok) throw new Error(opened.error);
+    const dispatch = connectionDispatch(env, opened.writer);
+    const results: string[] = [];
+    results.push(await dispatch({}, meta(home), new AbortController().signal));
+    const failing = await helper(res => { res.writeHead(502); res.end('Error: /secret/path'); }); owner(home, (failing.address() as { port: number }).port);
+    results.push(await dispatch({}, meta(home), new AbortController().signal));
+    const hanging = await helper(() => undefined); owner(home, (hanging.address() as { port: number }).port);
+    results.push(await dispatch({}, meta(home), AbortSignal.timeout(100)));
+    const aborted = new AbortController(); aborted.abort();
+    results.push(await dispatch({}, meta(home), aborted.signal));
+    const port = (failing.address() as { port: number }).port;
+    await new Promise<void>(r => failing.close(() => r())); hanging.closeAllConnections(); await new Promise<void>(r => hanging.close(() => r()));
+    owner(home, port);
+    results.push(await dispatch({}, meta(home), new AbortController().signal));
+    const answering = await helper(res => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ output: 'Worker started in the background.' })); });
+    owner(home, (answering.address() as { port: number }).port);
+    results.push(await dispatch({}, meta(home), new AbortController().signal));
+    await new Promise<void>(r => answering.close(() => r()));
+    expect(results).toEqual([...['state_missing', 'http_error', 'timeout', 'aborted', 'unreachable'].map(r => `Native connection unavailable or interrupted (${r}). No completion is claimed.`), 'Worker started in the background.']);
+    const rows = readdirSync(trace).filter(f => f.startsWith('failure-')).map(f => JSON.parse(readFileSync(join(trace, f), 'utf8')) as Obj);
+    expect(rows.map(r => r['connection_failure']).sort()).toEqual(['aborted', 'http_error', 'state_missing', 'timeout', 'unreachable']);
+    for (const row of rows) expect(row).toMatchObject({ host: 'codex', phase: 'failure', tool_name: 'jev_agent', error_first_line: `connection_${String(row['connection_failure'])}` });
+    expect(JSON.stringify(rows)).not.toContain('/secret/path');
+  });
+  it('answers an /agent call whose dispatch throws with fixed text instead of a bare 502', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'jev-connect-agent-')); temps.push(root);
+    writeFileSync(join(root, 'codex'), `#!${process.execPath}\nimport {createInterface} from 'node:readline';createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);if(m.id!==undefined)process.stdout.write(JSON.stringify({id:m.id,result:m.method==='model/list'?{data:[],nextCursor:null}:{}})+'\\n');});\n`, { mode: 0o755 });
+    writeFileSync(join(root, 'policy.json'), '{}');
+    const session = await startCodexSession({ cwd: root, env: { HOME: root, PATH: root, JEV_CODEX_CONFIG: join(root, 'policy.json'), JEV_GATE_STATE_DIR: join(root, 'state'), JEV_CODEX_TRACE_DIR: join(root, 'trace') }, connection: { token: 't'.repeat(64), marker: 'compact-marker', port: 0 } });
+    try {
+      vi.spyOn(session.policy, 'dispatch').mockRejectedValue(new Error('EACCES /secret/path'));
+      const response = await fetch(session.url.replace('ws:', 'http:') + '/agent', { method: 'POST', headers: { authorization: `Bearer ${'t'.repeat(64)}`, 'content-type': 'application/json' }, body: JSON.stringify({ arguments: {}, meta: {} }) });
+      expect(response.status).toBe(200); expect(await response.json()).toEqual({ output: DISPATCH_FAILED });
+    } finally { vi.restoreAllMocks(); await session.close(); }
   });
 });

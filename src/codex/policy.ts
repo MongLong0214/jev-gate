@@ -72,7 +72,11 @@ const deny = (reason: string): Obj => ({ hookSpecificOutput: { hookEventName: 'P
 const safeGitEnv = (env: Env): Env => Object.fromEntries(Object.entries(env).filter(([k]) => !k.startsWith('GIT_')));
 // Fixed text per closed category: the original exception can carry paths, prompts or host payloads.
 const FAILURE_ADVICE: Record<CodexFailure['category'], string> = {
-  preflight_conflict: 'Its dispatch preconditions changed, or another managed worker still holds this write scope. Retry after that worker settles, or continue in the main session.',
+  preflight_conflict: 'Another managed worker still holds this write scope. Retry after that worker settles, or continue in the main session.',
+  permissions_unavailable: 'Its parent permission profile could not be carried to a worker unchanged. Continue in the main session; native permissions are unchanged.',
+  worktree_unavailable: 'Its isolated worktree could not be created. Continue in the main session, or retry after checking the repository.',
+  allocation_unavailable: 'Its allocated model or effort is no longer available. Retry the dispatch, or continue in the main session.',
+  cancelled: 'The dispatch was cancelled before the worker started.',
   reservation_unavailable: 'Job state could not record its execution reservation. Retry the dispatch, or continue in the main session.',
   native_start_rejected: 'Codex did not start the worker. Retry the dispatch, or continue in the main session.',
   native_failed_turn: 'Codex reported the worker turn as failed. Inspect its files before retrying.',
@@ -80,7 +84,9 @@ const FAILURE_ADVICE: Record<CodexFailure['category'], string> = {
   termination_unconfirmed: 'Its reservation, files and write-scope protection remain active. No replacement execution is claimed.',
 };
 const failureHead = (f: CodexFailure): string => `Worker ${f.not_executed ? 'not started' : f.category === 'termination_unconfirmed' ? 'termination unconfirmed' : 'did not complete'}: ${f.category} at ${f.stage}`;
-const PREFLIGHT: CodexFailure = { category: 'preflight_conflict', stage: 'preflight', not_executed: true };
+const preflight = (category: CodexFailure['category']): CodexFailure => ({ category, stage: 'preflight', not_executed: true });
+/** Fixed: a thrown dispatch can carry paths, prompts or host payloads. */
+export const DISPATCH_FAILED = 'Jev dispatch failed or was interrupted. No completion is claimed. Continue in the main session or inspect the current job.';
 
 /** A Codex execution adapter over the existing Gate state machine. No policy decisions are delegated to prose. */
 export class CodexPolicy {
@@ -114,7 +120,7 @@ export class CodexPolicy {
       const p = obj(m['params'])!;
       let output: string;
       try { output = await this.agent(p); }
-      catch { output = 'Jev dispatch failed or was interrupted. No completion is claimed. Continue in the main session or inspect the current job.'; }
+      catch { output = DISPATCH_FAILED; }
       try { rpc.send({ id: m['id'], result: { contentItems: [{ type: 'inputText', text: output }], success: true } }); }
       catch { /* A closed local transport cannot deliver output and does not prove remote termination. */ }
       return true;
@@ -437,7 +443,7 @@ export class CodexPolicy {
       const tools = Array.isArray(params['dynamicTools']) ? params['dynamicTools'] : [];
       if (tools.some(t => obj(t)?.['name'] === 'jev_agent')) throw new Error('jev_agent already registered');
       const instructions = typeof params['developerInstructions'] === 'string' ? params['developerInstructions'] + '\n\n' : '';
-      this.rpc.forward({ ...message, params: { ...params, config: { ...(obj(params['config']) ?? {}), ...hookConfig }, dynamicTools: [...tools, AGENT_TOOL], developerInstructions: instructions + 'Jev Gate supplies automatic policy guidance in UserPromptSubmit. When it asks for an Agent dispatch, call jev_agent with that exact owned profile and marker. Do not substitute native spawn_agent or implement an admitted contract in the root. Jev failures keep native execution available. Native permissions and user constraints remain authoritative.' } }); return;
+      this.rpc.forward({ ...message, params: { ...params, config: { ...(obj(params['config']) ?? {}), ...hookConfig }, dynamicTools: [...tools, AGENT_TOOL], developerInstructions: instructions + 'If Jev Gate guidance asks for an Agent dispatch, call jev_agent with that owned profile as subagent_type and prompt starting with its [JEV_TASK ...] marker. Do not substitute native spawn_agent or implement an admitted contract in the root. Jev failures keep native execution available. Native permissions and user constraints remain authoritative.' } }); return;
     }
     const session = this.sessions.get(String(params['threadId']));
     if (session && method === 'turn/interrupt') { session.controller?.abort(); await this.interruptChildren(session); }
@@ -551,7 +557,7 @@ export class CodexPolicy {
     const event = input['hook_event_name'];
     await this.retrySettlements();
     if (!session.role) await this.settleOrphans(session);
-    if (!session.role && event === 'PreToolUse' && this.writeConflict(String(input['cwd'] ?? session.settings['cwd']), String(input['tool_name']), obj(input['tool_input']) ?? {})) return deny('A managed Codex worker in this write scope has not completed terminal settlement. Read/status commands (git status/diff/log/show, rg, grep, ls, cat, head, tail, wc, find, ps, gh issue/pr view/list) and writes whose every target lies outside its scope remain available. Hooks do not report exec workdir, so start a shell command elsewhere with `cd <absolute dir> &&` and name its paths without variables.');
+    if (!session.role && event === 'PreToolUse' && this.writeConflict(String(input['cwd'] ?? session.settings['cwd']), String(input['tool_name']), obj(input['tool_input']) ?? {})) return deny('A managed Codex worker in this write scope has not completed terminal settlement. Read/status commands (git status/diff/log/show/blame/rev-parse/ls-files and other git reads, rg, grep, find, ls, cat, nl, head, tail, `sed -n` line prints, wc, sort, uniq, cut, tr, jq, diff, stat, ps, which, `command -v`, a lone --version, gh issue/pr view/list) and writes whose every target lies outside its scope remain available. Hooks do not report exec workdir, so start a shell command elsewhere with `cd <absolute dir> &&` and name its paths without variables.');
     if (event === 'PreCompact') { session.compactAllowed = session.policy.compact.enabled && (input['trigger'] === 'auto' || input['trigger'] === 'manual' && session.policy.compact.manual); return {}; }
     if (event === 'PreToolUse' && input['tool_name'] === 'Bash' && typeof input['tool_use_id'] === 'string' && typeof obj(input['tool_input'])?.['command'] === 'string') {
       session.commands.set(input['tool_use_id'], String(obj(input['tool_input'])!['command']));
@@ -645,7 +651,7 @@ export class CodexPolicy {
       return worker.dispatch.ended ? this.settleWorker(worker) : worker.dispatch.unconfirmed ?? 'The original worker is still running. No terminal result or acceptance is available. Answer the user here; do not wait synchronously or duplicate its work.';
     }
     if (!session || session.role || session.eligible === false || this.env['JEV_CODEX_ENABLED'] === '0' || !session.prompt || !session.controller || session.controller.signal.aborted || !original) return 'No active root Jev job.';
-    if (typeof original['subagent_type'] !== 'string' || !this.profiles[original['subagent_type']] || typeof original['prompt'] !== 'string' || original['run_in_background'] !== undefined && typeof original['run_in_background'] !== 'boolean' || Object.keys(original).some(k => !['subagent_type', 'prompt', 'description', 'model', 'run_in_background'].includes(k))) return 'Invalid owned Agent input. Use the exact current Jev profile and marker.';
+    if (typeof original['subagent_type'] !== 'string' || !this.profiles[original['subagent_type']] || typeof original['prompt'] !== 'string' || original['run_in_background'] !== undefined && typeof original['run_in_background'] !== 'boolean' || Object.keys(original).some(k => !['subagent_type', 'prompt', 'description', 'model', 'run_in_background'].includes(k))) return `Invalid owned Agent input. Pass subagent_type (one of ${Object.keys(this.profiles).join(', ')}) and prompt (the task, starting unchanged with any [JEV_TASK ...] marker); optional: description, model, run_in_background. action is only status|cancel with agent_id.`;
     const background = original['run_in_background'] !== false;
     const parentSignal = session.controller.signal;
     const parent: Session = { ...session, settings: { ...session.settings }, controller: null };
@@ -658,23 +664,24 @@ export class CodexPolicy {
     const dispatchConfig = JSON.stringify(runtimeCodexPolicy({ ...this.env, JEV_CODEX_MODEL: parent.requestModel ?? parent.baseline.model }, this.catalog).router);
     const pre = await this.hook(parent, { hook_event_name: 'PreToolUse', session_id: parent.id, prompt_id: promptId, tool_name: 'Agent', tool_use_id: toolId, tool_input: input, cwd: String(parent.settings['cwd']) }, parentSignal);
     if (pre.kind === 'deny') return codexGuidance(String(obj(obj(JSON.parse(pre.stdout))?.['hookSpecificOutput'])?.['permissionDecisionReason'] ?? 'Dispatch denied'));
-    if (parentSignal.aborted || session.prompt !== conversationPrompt) { await this.failure(parent, promptId, toolId, input, PREFLIGHT, 'dispatch_cancelled'); return 'Dispatch cancelled; no worker started.'; }
+    if (parentSignal.aborted || session.prompt !== conversationPrompt) { await this.failure(parent, promptId, toolId, input, preflight('cancelled'), 'dispatch_cancelled'); return 'Dispatch cancelled; no worker started.'; }
     const updated = pre.kind === 'patch' ? obj(obj(JSON.parse(pre.stdout))?.['hookSpecificOutput'])?.['updatedInput'] : input;
     const applied = obj(updated); if (!applied) return 'Dispatch input unavailable.';
     const role = String(applied['subagent_type']); const profile = OWNED_AGENTS[role];
     const model = typeof applied['model'] === 'string' ? applied['model'] : parent.policy.gate.models[profile?.tier ?? 'standard'];
-    if (!this.catalog.some(m => m.model === model)) { await this.failure(parent, promptId, toolId, applied, PREFLIGHT, 'requested_model_unavailable'); return 'The requested worker model is absent from Codex model/list. Native execution remains available; configure accessible tier models.'; }
+    if (!this.catalog.some(m => m.model === model)) { await this.failure(parent, promptId, toolId, applied, preflight('allocation_unavailable'), 'requested_model_unavailable'); return 'The requested worker model is absent from Codex model/list. Native execution remains available; configure accessible tier models.'; }
     let cwd = String(parent.settings['cwd']); let worktree: WorkerWorktree | null = null;
     let worker: Session | null = null;
     let dispatch: WorkerDispatch | undefined;
     // The stage in progress when anything below throws; the exception itself is never reported.
-    let failed = PREFLIGHT;
+    let failed = preflight('permissions_unavailable');
     const t0 = Date.now();
     try {
       const planner = profile?.role === 'planner';
       const captured = parent.external ? capturedPermissions(p['nativeMeta'], planner) : null;
       if (parent.external && !captured) throw new Error('parent permissions unavailable');
       if (applied['isolation'] === 'worktree') {
+        failed = preflight('worktree_unavailable');
         const root = parent.external ? join(cwd, '.jev-gate-worktrees') : join(stateRoot(this.env), 'jev-gate', 'worktrees');
         if (!parent.external) mkdirSync(root, { recursive: true, mode: 0o700 });
         if (parent.external) {
@@ -687,7 +694,9 @@ export class CodexPolicy {
       const sandbox = obj(parent.settings['sandboxPolicy']);
       const permissions = obj(parent.settings['activePermissionProfile'])?.['id'];
       const customPermissions = typeof permissions === 'string' && !permissions.startsWith(':');
+      failed = preflight('permissions_unavailable');
       if (parent.external ? !captured : typeof permissions !== 'string' && !['dangerFullAccess', 'readOnly', 'workspaceWrite'].includes(String(sandbox?.['type']))) throw new Error('parent permissions unavailable');
+      failed = preflight('allocation_unavailable');
       const currentPolicy = runtimeCodexPolicy({ ...this.env, JEV_CODEX_MODEL: parent.requestModel ?? parent.baseline.model }, this.catalog);
       if (this.catalogEpoch !== dispatchEpoch || JSON.stringify(currentPolicy.router) !== dispatchConfig || !codexTargetAllowed(model, currentPolicy.router.allowAstra) || !this.catalog.some(m => m.model === model && generalCodexModel(m))) {
         updateJob(this.env, parent.id, prev => {
@@ -698,8 +707,8 @@ export class CodexPolicy {
         });
         throw new Error('automatic child unavailable');
       }
-      const hooks = await this.hookConfig(cwd);
       failed = { category: 'native_start_rejected', stage: 'thread_start', not_executed: true };
+      const hooks = await this.hookConfig(cwd);
       const child = await this.rpc.request('thread/start', { model, modelProvider: parent.settings['modelProvider'], cwd, ephemeral: true,
         approvalPolicy: parent.settings['approvalPolicy'], approvalsReviewer: parent.settings['approvalsReviewer'],
         ...(captured ? { permissions: captured.permissions } : planner && !customPermissions ? { sandbox: 'read-only' } : typeof permissions === 'string' ? { permissions } : { sandbox: sandbox?.['type'] === 'dangerFullAccess' ? 'danger-full-access' : sandbox?.['type'] === 'readOnly' ? 'read-only' : 'workspace-write' }),
@@ -711,8 +720,9 @@ export class CodexPolicy {
       const terminal = new Promise<Obj>(resolve => { worker!.done = resolve; });
       dispatch = { parent, prompt: promptId, tool: toolId, input: { ...applied }, signal: background ? new AbortController().signal : parentSignal, worktree, startedAt: t0, attempted: false, background };
       worker.dispatch = dispatch;
-      failed = PREFLIGHT;
+      failed = preflight('cancelled');
       if (parentSignal.aborted || session.prompt !== conversationPrompt) throw new Error('cancelled');
+      failed = preflight('allocation_unavailable');
       const pairState = readJob(this.env, parent.id);
       const pair = pairState.ok ? own(pairState.value?.current.active ?? {}, toolId)?.allocation_pair : null;
       const desired = pair?.effort_edit.kind === 'set' ? pair.effort_edit.value : OWNED_AGENT_PROFILES.find(p => p.name === role)?.effort ?? parent.requestEffort ?? parent.settings['effort'];

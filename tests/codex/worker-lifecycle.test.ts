@@ -6,6 +6,7 @@ import { basename, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CodexRpc, RpcRequestError } from '../../src/codex/rpc.js';
 import { CodexPolicy } from '../../src/codex/policy.js';
+import { AGENT_TOOL } from '../../src/codex/profiles.js';
 import { readJob, updateJob, newGeneration, cleanupJobs, jobPath } from '../../src/job.js';
 import { buildOperations } from '../../src/operations.js';
 import type { Obj } from '../../src/codex/source.js';
@@ -229,6 +230,15 @@ describe('Codex dispatch failure reason (#233)', () => {
       expect(f.sent.some(m => m['method'] === 'turn/start')).toBe(false); expect(f.job().current.active).toEqual({});
     }
   });
+  it('reports a parent permission profile it cannot carry as its own category, not as a write-scope conflict (#287)', async () => {
+    const f = await setup('normal'); f.parent.external = true; await f.launch();
+    const result = JSON.stringify(f.returned());
+    expect(result).toContain('Worker not started: permissions_unavailable at preflight.'); expect(result).not.toMatch(/write scope|preflight_conflict/);
+    expect(f.sent.some(m => m['method'] === 'thread/start' || m['method'] === 'turn/start')).toBe(false);
+    const rows = f.traces('failure'); expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ error_first_line: 'permissions_unavailable', failure_category: 'permissions_unavailable', failure_stage: 'preflight', not_executed: true });
+    expect(feed(rows)[0]).toMatchObject({ state: 'error', summary: '부모 권한 전달 불가 · jev-gate:worker' });
+  });
   it('records a background start that was never sent as not started, not as an interrupted worker', async () => {
     const f = await setup('turn-unsent'); await f.launch(true);
     expect(JSON.stringify(f.returned())).toContain('Worker not started: native_start_rejected at turn_start.');
@@ -314,6 +324,22 @@ describe('Codex write scope from native tool targets (#234)', () => {
     }
     for (const command of ['rg foo $(cat list)', 'rg foo `cat list`', 'rg foo > hits.txt', 'git status; touch src/x', 'find . -name x -delete', 'find . -exec rm {} ;',
       'git diff --output=change.diff', 'ps aux | tee ps.txt', 'gh pr merge 1', 'git -c core.pager=sh log', 'rg --pre ./run.sh foo', 'rg "foo', 'echo "$PATH"']) {
+      expect(await f.blocked('Bash', { command }), command).toBe(true);
+    }
+  });
+  it('keeps the read commands Codex workers ran during a settlement available and their writing forms blocked (#287)', async () => {
+    const f = await scoped();
+    for (const command of ['nl -ba src/file.ts', `sed -n '1,80p' src/file.ts`, `sed -n -e '10p;20,30p' -e '$p' a b`, `rg -n foo src | nl -ba | sed -n '1,40p'`, 'command -v codex', 'command -V node',
+      'which node', 'node --version', 'npm -v', 'python3 -V', 'git rev-parse --show-toplevel', 'git ls-files src', 'git branch --show-current', 'git blame -L 1,9 src/a.ts',
+      'git cat-file -p HEAD', 'git merge-base HEAD origin/main', 'git describe --tags', 'git remote -v', 'git remote get-url origin', 'git config --get user.name',
+      'sort -u a', 'uniq -c a', 'cut -d: -f1 a', 'tr a-z A-Z < a', 'stat a', 'file a', 'diff a b', 'jq .x a.json', 'basename a/b', 'dirname a/b', 'realpath a',
+      'echo ok', `printf '%s\\n' a`, 'true', 'test -f a', '[ -d src ]', 'date +%s', 'date -u']) {
+      expect(await f.hook('Bash', { command }), command).toEqual({});
+    }
+    for (const command of ['sed -i s/a/b/ src/file.ts', `sed -n '1,80p' -i src/file.ts`, 'sed --in-place -n 1p a', `sed -n 'w out' a`, `sed -n '1w out' a`, `sed -n '1e touch x' a`,
+      `sed -n -f script.sed a`, `sed '1,80p' a`, 'sort -o out a', 'sort --output=out a', 'sort -no out a', 'uniq a b', 'date -s 2026-01-01', 'date 0101000026', 'printf -v x y',
+      'nl a > out', 'echo x >> src/file.ts', 'jq . a > b', 'command node x.js', 'node --version extra', './run.sh --version', 'file -C -m magic', 'git branch -D main', 'git branch new',
+      'git remote add x y', 'git config user.name x', 'git config --unset user.name', 'awk 1 a', 'xargs rm', 'env', 'tee out', `cd ${f.root} && node script.mjs`]) {
       expect(await f.blocked('Bash', { command }), command).toBe(true);
     }
   });
@@ -403,5 +429,19 @@ describe('Codex reservation across a host restart (#239)', () => {
     expect(JSON.stringify(f.sent.find(m => m['id'] === 'cancel'))).toContain('explicit user cancellation');
     expect(f.job().current.active).toEqual({}); expect(f.job().current.receipts).toHaveLength(1);
     expect(JSON.stringify(await write(f))).not.toContain('deny');
+  });
+});
+describe('Codex owned dispatch input guidance (#287)', () => {
+  it('names the real jev_agent fields in the tool, the session instructions and the refusal, so a retry can succeed', async () => {
+    const f = await setup('normal');
+    await f.rpc.onRequest({ id: 'wrong', method: 'item/tool/call', params: { threadId: 'parent', callId: 'wrong', tool: 'jev_agent', arguments: { action: 'start', profile: 'jev-gate:worker-fast', marker: '[JEV_TASK rev=1 id=a attempt=1]', task: 'Investigate' } } });
+    const refusal = JSON.stringify(f.sent.find(m => m['id'] === 'wrong'));
+    for (const text of ['subagent_type (one of jev-gate:worker, jev-gate:planner)', 'prompt (', '[JEV_TASK', 'status|cancel with agent_id']) expect(refusal).toContain(text);
+    expect(f.sent.some(m => m['method'] === 'thread/start')).toBe(false);
+    await f.policy.client({ id: 'root', method: 'thread/start', params: { cwd: f.root } });
+    const instructions = String((f.sent.find(m => m['method'] === 'thread/start')?.['params'] as Obj | undefined)?.['developerInstructions']);
+    for (const text of [AGENT_TOOL.description, instructions]) {
+      expect(text).toMatch(/\bsubagent_type\b/); expect(text).toMatch(/\bprompt\b/); expect(text).toContain('[JEV_TASK'); expect(text).not.toMatch(/profile and marker/);
+    }
   });
 });

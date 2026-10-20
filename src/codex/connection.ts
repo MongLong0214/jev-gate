@@ -80,13 +80,19 @@ export const restoreConnection = async (rpc: CodexRpc, env: Env): Promise<void> 
   if (edits.length) await rpc.request('config/batchWrite', { filePath: user.path, expectedVersion: user.version, reloadUserConfig: false, edits });
 };
 
-export const connectionRequest = async (env: Env, path: '/hook' | '/agent', input: Obj, signal?: AbortSignal): Promise<Obj | null> => {
-  const state = read(env); if (!state) return null;
+/** Closed, so a trace or tool result names why the helper did not answer without carrying its exception text. */
+export type ConnectionFailure = 'state_missing' | 'unreachable' | 'http_error' | 'timeout' | 'aborted' | 'invalid_reply';
+const stopped = (e: unknown, other: ConnectionFailure): ConnectionFailure => (e as Error | null)?.name === 'TimeoutError' ? 'timeout' : (e as Error | null)?.name === 'AbortError' ? 'aborted' : other;
+export const connectionRequest = async (env: Env, path: '/hook' | '/agent', input: Obj, signal?: AbortSignal): Promise<{ ok: true; value: Obj } | { ok: false; reason: ConnectionFailure }> => {
+  const state = read(env); if (!state) return { ok: false, reason: 'state_missing' };
+  let response: Response;
   try {
     await provision(state, env);
-    const response = await fetch(`http://127.0.0.1:${state.port}${path}`, { method: 'POST', headers: { authorization: `Bearer ${state.token}`, 'content-type': 'application/json' }, body: JSON.stringify(input), ...(signal ? { signal } : {}) });
-    return response.ok ? obj(await response.json()) : null;
-  } catch { return null; }
+    response = await fetch(`http://127.0.0.1:${state.port}${path}`, { method: 'POST', headers: { authorization: `Bearer ${state.token}`, 'content-type': 'application/json' }, body: JSON.stringify(input), ...(signal ? { signal } : {}) });
+  } catch (e) { return { ok: false, reason: stopped(e, 'unreachable') }; }
+  if (!response.ok) return { ok: false, reason: 'http_error' };
+  try { const value = obj(await response.json()); return value ? { ok: true, value } : { ok: false, reason: 'invalid_reply' }; }
+  catch (e) { return { ok: false, reason: stopped(e, 'invalid_reply') }; }
 };
 const healthy = async (state: Connection): Promise<boolean> => {
   try {

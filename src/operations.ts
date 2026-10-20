@@ -224,7 +224,8 @@ const compactSelectionReason = (value: unknown): string | null => ({
 } as Record<string, string>)[String(value)] ?? token(value);
 /** #233: the closed Codex dispatch failure category, never the raw error. */
 const codexFailureReason = (r: Rec): string | null => ({
-  preflight_conflict: '실행 전 점검 충돌', reservation_unavailable: '실행 예약 기록 불가', native_start_rejected: 'Codex 워커 시작 거부',
+  preflight_conflict: '실행 전 점검 충돌', permissions_unavailable: '부모 권한 전달 불가', worktree_unavailable: 'Worktree 생성 불가', allocation_unavailable: '배정 모델·effort 사용 불가',
+  cancelled: '시작 전 취소', reservation_unavailable: '실행 예약 기록 불가', native_start_rejected: 'Codex 워커 시작 거부',
   native_failed_turn: 'Codex 워커 턴 실패', interrupted: '워커 중단', termination_unconfirmed: '워커 종료 미확인 · 예약 유지',
 } as Record<string, string>)[String(r['failure_category'])] ?? null;
 /** #232: the closed category of a refused or unreached verdict and its label. The recorded reason is free text that can quote a
@@ -457,7 +458,7 @@ const traceStep = (r: Rec, resultIds: Set<string>, intents: Map<string, string>,
   } else if (phase === 'failure') {
     lane = 'host'; summary = text(codexFailureReason(r) ?? '호스트 호출 실패', token(r['subagent_type']));
     if (r['not_executed'] === true) details.push('워커 미실행 · 완료 주장 없음');
-    if (r['failure_category'] === 'interrupted') state = 'interrupted';
+    if (r['failure_category'] === 'interrupted' || r['failure_category'] === 'cancelled') state = 'interrupted';
     if (r['failure_category'] === 'termination_unconfirmed') state = 'unconfirmed';
     details.push(text(`요청 모델 ${token(r['requested_model']) ?? '미기록'}`, token(r['routed_model']) && `Router 변경 ${token(r['routed_model'])}`, `실행 모델 ${token(r['resolved_model']) ?? '미관측'}`));
   }

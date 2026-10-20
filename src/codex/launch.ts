@@ -8,7 +8,7 @@ import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
 import { CodexRpc } from './rpc.js';
-import { CodexPolicy } from './policy.js';
+import { CodexPolicy, DISPATCH_FAILED } from './policy.js';
 import { obj } from './source.js';
 import { runtimeCodexPolicy } from './config.js';
 import { selectCodexCompact, isCodexCompactRequest, compactResponse } from './compact.js';
@@ -72,7 +72,7 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
         if (!equal(req.headers.authorization, `Bearer ${token}`)) { res.writeHead(401); res.end(); return; }
         const input = obj(JSON.parse((await body(req, 2 * 1024 * 1024)).toString('utf8')));
         res.once('close', () => { if (!res.writableEnded && input) policy?.cancelCaller(input['meta']); });
-        const output = input && policy ? await policy.dispatch(input['arguments'], input['meta']) : 'Native connection unavailable. No worker was started.';
+        const output = input && policy ? await policy.dispatch(input['arguments'], input['meta']).catch(() => DISPATCH_FAILED) : 'Native connection unavailable. No worker was started.';
         res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ output })); return;
       }
       if (req.url === '/hook' && req.method === 'POST') {
