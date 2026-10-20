@@ -13,9 +13,9 @@
 
 | 경로 | 층 | 역할 |
 | --- | --- | --- |
-| `src/types.ts` | 코어 | tier(fast/standard/deep/frontier), 4개 owned worker 매핑, ConfigV5(`workerIsolation` 포함), PlannedTask(Gate B 입력)/WorkerReply, JobState, 닫힌 코드 유니온 |
+| `src/types.ts` | 코어 | tier(fast/standard/deep/frontier), 4개 owned worker 매핑, ConfigV5, PlannedTask(Gate B 입력)/WorkerReply, JobState, 닫힌 코드 유니온 |
 | `src/agents.ts` | 코어 | `OWNED_AGENT_PROFILES`(#48): file/role/tier/effort/tools 단일 테이블. `model`은 없음 -- `DEFAULT_CONFIG.models[tier]`를 읽는다. doctor·`gen-agents.mjs`가 이 테이블 하나를 읽는다 |
-| `src/config.ts` | 코어 | ConfigV5(version 5, 기본 off). `models.frontier` 기본값 opus(#48, 과거 fable). `workerIsolation`: 부재=`none`. #289로 삭제된 planner·가드 키(`IGNORED_KEYS`)는 오류 없이 무시하고 doctor가 info로 알린다. V3·V4 레이아웃은 거부 + 마이그레이션 샘플 |
+| `src/config.ts` | 코어 | ConfigV5(version 5, 기본 off). `models.frontier` 기본값 opus(#48, 과거 fable). #289로 삭제된 planner·가드·`workerIsolation` 키(`IGNORED_KEYS`)는 오류 없이 무시하고 doctor가 info로 알린다. V3·V4 레이아웃은 거부 + 마이그레이션 샘플 |
 | `src/jev.ts` | 코어 | 고정 endpoint POST 1회, headers+body 단일 deadline, retry 0, Choice 엄격 검증, tier 설명 텍스트 |
 | `src/recent-prompts.ts` | 어댑터 | (#115) Gate A가 `needs_context`를 내면 transcript 꼬리에서 사용자가 직접 입력한 최근 3턴(tool_result·meta·sidechain·커맨드 제외, 비밀정보 의심 턴은 드롭)을 읽어 현재 프롬프트와 함께 1회 재판정. 두 번째 admission_result에 `context_turns` 기록 |
 | `src/admission.ts` | 코어 | Gate A 질문과 판정(direct/orchestrated/needs_context/abstain, floor 미달은 direct 보존) |

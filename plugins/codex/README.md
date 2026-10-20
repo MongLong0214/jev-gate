@@ -50,7 +50,7 @@ The older `node <plugin>/dist/cli.mjs codex` managed terminal remains available 
 | Compact | Prioritizes current-task dependencies with a bounded Jev batch, then produces the shared extractive digest; Codex installs it through its own state machine; unsupported extraction falls back to native compaction |
 | Evidence | Same local search, Jev judgments, pagination, cache and exact source read-back as Claude Code |
 
-Native permissions remain authoritative for root and workers. Owned workers inherit the calling tool’s captured native filesystem grants and denies. An unrepresentable permission snapshot refuses dispatch instead of guessing broader access. Workers cannot create another coordinator. Worktree isolation creates a separate branch and leaves it for inspection and integration; it does not silently merge changes.
+Native permissions remain authoritative for root and workers. Owned workers inherit the calling tool’s captured native filesystem grants and denies. An unrepresentable permission snapshot refuses dispatch instead of guessing broader access. Workers cannot create another coordinator. Workers run in the caller's working directory.
 
 The defaults run one worker per admitted request with no depth floor. Code acceptance is followed by root integration and reporting.
 
@@ -70,7 +70,7 @@ Use `JEV_CODEX_CONFIG=/absolute/codex.json`, otherwise `~/.config/jev-gate/codex
 }
 ```
 
-`gate` accepts the shared V5 options, including depth floors, budgets, checks and `workerIsolation`. Without a model mapping, the adapter selects accessible tiers from live `model/list` descriptions. Explicit `models` entries override only those tiers. Main model and effort routing are both enabled by default. Router has the same directional probability thresholds (upgrade 0.8, downgrade 0.6). `JEV_GATE_MODE` overrides the Gate mode only; `gate.mode: "off"` does not disable Router or Compact. A `gate.mode` or `JEV_GATE_MODE` other than `off|native|auto` turns off the Gate only; Router and Compact keep their own settings, and `doctor` reports the value.
+`gate` accepts the shared V5 options, including depth floors, budgets and checks. Without a model mapping, the adapter selects accessible tiers from live `model/list` descriptions. Explicit `models` entries override only those tiers. Main model and effort routing are both enabled by default. Router has the same directional probability thresholds (upgrade 0.8, downgrade 0.6). `JEV_GATE_MODE` overrides the Gate mode only; `gate.mode: "off"` does not disable Router or Compact. A `gate.mode` or `JEV_GATE_MODE` other than `off|native|auto` turns off the Gate only; Router and Compact keep their own settings, and `doctor` reports the value.
 
 ### Current Codex models and efforts
 

@@ -345,37 +345,6 @@ export const readHostCompactWindow = (env: Env, cwd: string | null | undefined, 
   return { tokens: clamped, source };
 };
 
-export type WorktreeBaseRef = 'fresh' | 'head';
-export type WorktreeBaseRefResult = { value: WorktreeBaseRef; source: string } | { value: null; source: string };
-
-const pickBaseRef: SettingsPick<WorktreeBaseRef> = (settings) => {
-  const worktree = settings['worktree'];
-  if (!isRecord(worktree)) return null;
-  const ref = worktree['baseRef'];
-  return ref === 'fresh' || ref === 'head' ? ref : null;
-};
-
-/**
- * #48 P1-2 review: the ref a subagent's `isolation: "worktree"` branches from. Claude Code 2.1.283's settings schema
- * describes `worktree.baseRef` as applying to "--worktree, EnterWorktree, and agent isolation": `"fresh"`, the
- * default, branches from origin/<default-branch>; `"head"` from the session's local HEAD. Unset reads as `null`, which
- * the host treats as "fresh". Read through the same scopes as the window, with the same blind spots (`--settings`,
- * MDM, server-managed settings).
- */
-export const readHostWorktreeBaseRef = (env: Env, projectDir: string | null | undefined, opts: Pick<HostWindowOptions, 'managedDirs' | 'transcriptPath'> & { cwd?: string | null } = {}): WorktreeBaseRefResult => {
-  // #53 review: project scopes live in the session's directory. A hook's own `cwd` moves with `cd`, so reading them
-  // from it alone could miss a "fresh" at the real project root and fall through to a user-level "head"; without
-  // CLAUDE_PROJECT_DIR (or a caller that knows the directory, like doctor) the answer is unknown rather than guessed.
-  // Once the `cwd` has moved away from it, the directory is chosen as for the window (`settingsDirCandidates`).
-  const envDir = env['CLAUDE_PROJECT_DIR'];
-  const dir = typeof envDir === 'string' && envDir.length > 0 ? envDir : projectDir;
-  if (typeof dir !== 'string' || dir.length === 0) return { value: null, source: 'project dir unknown' };
-  const where = settingsDirCandidates({ ...env, CLAUDE_PROJECT_DIR: dir }, opts.cwd ?? null, opts.transcriptPath ?? null);
-  const found = readSettingsChain(env, where, opts.managedDirs ?? defaultManagedDirs(), pickBaseRef);
-  if (found === null) return { value: null, source: 'unset' };
-  return 'ambiguous' in found ? { value: null, source: `unknown: ${found.ambiguous}` } : found;
-};
-
 /**
  * Where the host really compacted: the median `preTokens` of automatic `compact_boundary` records in the newest main
  * transcripts of this project's folder under `<config>/projects`, every folder when `cwd` has none (bench and scratch

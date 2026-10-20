@@ -46,8 +46,8 @@ export const dispatchBlocker = (env: Env): 'background_only' | 'subagent_model_o
 };
 
 /**
- * V4 §4 conditions kept for V5. A caller pin is reported rather than fatal: a pinned call still receives the canonical
- * task contract (A5), it just keeps its model. Every other failing condition is a documented no-op with HTTP 0.
+ * V4 §4 conditions kept for V5. A caller pin is reported rather than fatal: a pinned call still receives the composed
+ * prompt (A5), it just keeps its model. Every other failing condition is a documented no-op with HTTP 0.
  */
 export const checkEligibility = (hook: HookInput, env: Env, config: ConfigV5): Eligibility => {
   if (config.mode === 'off') return { eligible: false, code: 'mode_off' };

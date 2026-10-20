@@ -47,6 +47,8 @@ describe('parseWorkerReply', () => {
 
   it.each([
     ['a bad status', fence({ status: 'finished' }), 'status must be'],
+    // #289: nothing acts on a replan any more, so an old reply that asks for one is an unknown status.
+    ['a replan status', fence({ status: 'replan' }), 'status must be done|blocked (got a string of 6 bytes)'],
     ['a bad result', fence({ status: 'done', checks: [{ check_id: 'c1', result: 'green' }] }), 'result must be pass|fail|not_run'],
     ['an empty check_id', fence({ status: 'done', checks: [{ check_id: '', result: 'pass' }] }), 'check_id must be a non-empty string'],
     ['a check_id that is not a string', fence({ status: 'done', checks: [{ check_id: 7, result: 'pass' }] }), 'must be a string'],
@@ -130,7 +132,6 @@ describe('reportedSingleVerdict (A19)', () => {
 
   it.each([
     ['status blocked', reply({ status: 'blocked' }), 'status blocked'],
-    ['status replan', reply({ status: 'replan' }), 'status replan'],
     ['blockers with status done', reply({ blockers: ['db missing'] }), 'blockers with status done'],
   ])('reports incomplete for %s', (_name, value, reason) => {
     const verdict = reportedSingleVerdict(value);

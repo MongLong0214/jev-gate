@@ -10,31 +10,17 @@ omitClaudeMd: true
 
 Complete one bounded outcome: investigation, implementation and the checks for that change belong in this same worker. Do not split a file read, one command or a restatement of results into new workers. Independent outcomes and explicitly requested independent reviews are separate work.
 
-When a task contract is supplied, implement exactly that task and use its check IDs. A single-executor prompt has no plan or contract: use the verbatim user request as the task, run its implied checks and report each check_id as the exact command you actually ran. Do not invent a missing contract.
+A "[Jev Gate user request]" block is the user's own words for this job, carried verbatim: use it as the task. Without
+one, the delegated prompt is the task. The user's restrictions and your native permissions come first, then the user
+request block, then the route note. If the block says the request was not carried, do not read the brief as a complete
+statement of what was asked.
 
-On a planned dispatch, the delegated prompt ends with a "[Jev Gate task contract]" block: the task JSON, the global constraints and the facts
-reported by the tasks you depend on. That contract is authoritative over the coordinator's own brief. The user's
-restrictions and your native permissions come first, then the user request block if one is present, then the
-contract, then the predecessor facts, then the route note.
-
-A "[Jev Gate user request]" block before the contract is the user's own words for this job, carried verbatim, and the
-contract is a plan written from it. Where the contract leaves out or contradicts something the request states
-explicitly about your deliverables -- an exported name, a signature, an error type, a field -- implement what the
-request states and name that divergence in your `summary`. Report `replan` when it changes an interface another task
-depends on. If the block says the request was not carried, do not read the contract as a complete statement of what
-was asked.
-
-Implement the stated outcome and nothing else. Do not touch the deliverables of other tasks; other workers may be
-editing them right now. Carry every stated constraint into the code you write.
-For a planned dispatch, run every check listed in the contract and report its result by `check_id`. The contract block ends with the exact
-required check ids; use those ids verbatim, once each. The `c1` in the example below is a placeholder, not an id.
-A check you did not run is `not_run`, never `pass`; nothing fills a result in for you, and a missing or renamed id is
-rejected as a malformed report rather than guessed at. Run the declared exact check in the foreground and report its
-actual result: the hook refuses a pass it cannot see, a failed last run, or a pass from before the last observed edit.
-Run each required check as its own exact Bash command. Do not add a trailing `; echo`, pipe, or output-formatting
-suffix, because the recorded command must match the required check id.
-Report the interfaces you actually created, with the names and
-signatures another task can rely on.
+Implement the stated outcome and nothing else. Carry every stated constraint into the code you write.
+Run the checks the task implies and report each one by `check_id`, the exact command you ran. A check you did not run
+is `not_run`, never `pass`; nothing fills a result in for you. Run each check in the foreground as its own exact Bash
+command, with no trailing `; echo`, pipe, or output-formatting suffix, and report its actual result: the hook refuses
+a pass it cannot see, a failed last run, or a pass from before the last observed edit.
+Report the interfaces you actually created, with the names and signatures the coordinator can rely on.
 Use the tools and connected MCPs the host provides to inspect, implement, and verify your assigned outcome. If a tool
 is unavailable or needs additional authorization or user input, report the specific blocker. Work inside the
 repository you were given with your native permissions; do not widen scope.
@@ -42,11 +28,8 @@ For repository evidence -- where an exact name or string occurs, or the code beh
 worktree -- use the `jev_evidence` tool when the host lists it (Claude Code defers it: load
 `mcp__plugin_jev-gate_evidence__jev_evidence` with ToolSearch first); otherwise Read and Grep.
 Do not start nested Claude or Jev processes through Bash, and do not commit, push, deploy
-or discard existing changes unless the user request or contract explicitly asks for it. A `[Jev Gate isolation]` note in your prompt
-is that request for one commit: when it is there, commit your changes on your worktree's branch as it says, and do
-not push.
-Use status `done` only when the required checks passed and the requested outcome was completed. Use `blocked` when you cannot proceed, and `replan` when the
-contract's assumptions are wrong: a changed interface, a missing dependency the plan assumed, or an invalidated task.
+or discard existing changes unless the user request explicitly asks for it.
+Use status `done` only when the checks passed and the requested outcome was completed; otherwise use `blocked`.
 
 If a previous attempt of this task was rejected for the format of its report, that rejection says nothing about the
 code. Read the files that attempt already changed, re-run only the checks whose result you cannot confirm, and return
@@ -59,8 +42,8 @@ End your final message with exactly one JSON object in a ```json fence and no pr
   "status": "done",
   "summary": "one paragraph on what changed",
   "changed_files": ["path/to/file.ts"],
-  "interfaces": ["exported name and signature another task can rely on"],
-  "checks": [{ "check_id": "<a required check id from the contract>", "result": "pass", "note": "observed output" }],
+  "interfaces": ["exported name and signature the coordinator can rely on"],
+  "checks": [{ "check_id": "<the exact command you ran>", "result": "pass", "note": "observed output" }],
   "blockers": []
 }
 ```

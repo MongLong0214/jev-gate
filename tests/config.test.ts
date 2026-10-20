@@ -16,7 +16,6 @@ const V5 = {
   admissionConfidenceFloor: 0.8,
   routeConfidenceFloor: 0.8,
   models: { fast: 'haiku', standard: 'sonnet', deep: 'opus', frontier: 'fable' },
-  workerIsolation: 'worktree',
 };
 
 const write = (name: string, value: unknown): string => {
@@ -76,11 +75,11 @@ describe('validateConfig', () => {
     }
     expect(MIGRATION_SAMPLE).not.toContain('resultConfidenceFloor');
     expect(DEFAULT_CONFIG).not.toHaveProperty('resultConfidenceFloor');
-    // #289: a deployed file that still sets a removed planner or guard key loads, whatever its value, and drops it.
-    const removed = { plannerDefaultTier: 'standard', maxParallelWorkers: 0, guardAllowTools: ['rm -rf'], guardAllowMcp: 'yes', maxTasksPerPlan: 65, admittedShape: 'hierarchy', planInterpretation: null };
+    // #289: a deployed file that still sets a removed planner, guard or isolation key loads, whatever its value, and drops it.
+    const removed = { plannerDefaultTier: 'standard', maxParallelWorkers: 0, guardAllowTools: ['rm -rf'], guardAllowMcp: 'yes', maxTasksPerPlan: 65, admittedShape: 'hierarchy', planInterpretation: null, workerIsolation: 'branch' };
     expect(Object.keys(removed).every((k) => IGNORED_KEYS.has(k))).toBe(true);
     const legacy = validateConfig({ ...V5, ...removed });
-    expect(legacy).toMatchObject({ ok: true, config: { workerIsolation: 'worktree' } });
+    expect(legacy).toMatchObject({ ok: true, config: { mode: 'auto' } });
     if (legacy.ok) for (const k of Object.keys(removed)) expect(legacy.config).not.toHaveProperty(k);
     for (const k of Object.keys(removed)) expect(MIGRATION_SAMPLE).not.toContain(k);
   });
@@ -102,7 +101,7 @@ describe('validateConfig', () => {
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.error).toContain('"version": 5');
-    expect(r.error).toContain('workerIsolation');
+    expect(r.error).toContain('"models"');
   });
 
   it.each([
@@ -139,19 +138,6 @@ describe('validateConfig', () => {
     if (!r.ok) expect(r.error).toContain(message);
   });
 
-  describe('workerIsolation (#48 P1-2)', () => {
-    it('defaults to worktree when absent and honors an explicit none', () => {
-      expect(validateConfig({ version: 5 })).toMatchObject({ ok: true, config: { workerIsolation: 'worktree' } });
-      expect(validateConfig({ version: 5, workerIsolation: 'none' })).toMatchObject({ ok: true, config: { workerIsolation: 'none' } });
-    });
-
-    it('rejects an unrecognized value', () => {
-      const r = validateConfig({ version: 5, workerIsolation: 'branch' });
-      expect(r).toMatchObject({ ok: false, error: expect.stringContaining('workerIsolation must be') });
-    });
-
-  });
-
   it('keeps the V5 defaults in the migration sample', () => {
     const sample = JSON.parse(MIGRATION_SAMPLE) as Record<string, unknown>;
     const validated = validateConfig(sample);
@@ -169,10 +155,10 @@ describe('loadConfig', () => {
   });
 
   it('reads a file, lets JEV_GATE_MODE override only the mode, and reports a missing explicit path', () => {
-    const p = write('c.json', { ...V5, mode: 'native', workerIsolation: 'none' });
+    const p = write('c.json', { ...V5, mode: 'native' });
     const loaded = loadConfig({ JEV_GATE_CONFIG: p });
-    expect(loaded).toMatchObject({ ok: true, config: { mode: 'native', workerIsolation: 'none' } });
-    expect(loadConfig({ JEV_GATE_CONFIG: p, JEV_GATE_MODE: 'auto' })).toMatchObject({ ok: true, config: { mode: 'auto', workerIsolation: 'none' } });
+    expect(loaded).toMatchObject({ ok: true, config: { mode: 'native' } });
+    expect(loadConfig({ JEV_GATE_CONFIG: p, JEV_GATE_MODE: 'auto' })).toMatchObject({ ok: true, config: { mode: 'auto' } });
     expect(loadConfig({ JEV_GATE_CONFIG: join(tmp, 'missing.json') })).toMatchObject({ ok: false, error: 'JEV_GATE_CONFIG points to a missing file' });
     expect(loadConfig({ JEV_GATE_CONFIG: write('bad.json', '{nope') })).toMatchObject({ ok: false, error: 'config is not valid JSON' });
     expect(loadConfig({ JEV_GATE_MODE: 'enrich' })).toMatchObject({ ok: false, source: 'env' });

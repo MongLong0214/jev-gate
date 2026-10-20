@@ -4,7 +4,6 @@ import { OWNED_AGENT_PROFILES } from './agents.js';
 import type { PairOffer, PairPatch } from './router-selection.js';
 import { integratedClaudePlugin } from './claude-setup.js';
 import { claudeTerminal, dispatchMarker, isNativeTaskNotification } from './claude-background.js';
-import { hasWorktreeHead } from './worktree.js';
 import { observedDelegationPrices } from './delegation-prices.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { realpathSync } from 'node:fs';
@@ -41,7 +40,7 @@ import {
   type Eligibility,
 } from './brief.js';
 import { DEFAULT_CONFIG, effectiveDepthFloor, hookDefaultMode, loadConfig, NATIVE_HOOK_TIMEOUT_MS, type Env } from './config.js';
-import { readHostCompactWindow, readHostWorktreeBaseRef } from './host-window.js';
+import { readHostCompactWindow } from './host-window.js';
 import { readSessionDepth, type DepthReading } from './depth.js';
 import { readRecentPrompts, withRecentPrompts } from './recent-prompts.js';
 import { looksSecret } from './outbound-text.js';
@@ -268,7 +267,7 @@ const requestedModelFrom = (toolInput: unknown, models = DEFAULT_CONFIG.models):
 const isSlashCommand = (prompt: string): boolean => prompt.trimStart().startsWith('/');
 
 /** The worst-case route note: every tier name is short, so one bound covers whichever tier is chosen. */
-const ROUTE_NOTE_MAX_BYTES = Math.max(...TIERS.map((t) => Buffer.byteLength(renderRouteNote(t), 'utf8')));
+const ROUTE_NOTE_MAX_BYTES = Math.max(...TIERS.flatMap((t) => [renderRouteNote(t), renderSingleRouteNote(t)].map((n) => Buffer.byteLength(n, 'utf8'))));
 
 /** L7: below this, a provider call cannot plausibly finish, so it is not started. */
 const MIN_NETWORK_MS = 250;
@@ -293,16 +292,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
   const loaded = deps.host ? { ok: true as const, config: deps.host.config, source: 'host' } : loadConfig(deps.env, undefined, hookDefaultMode(deps.env));
   if (!loaded.ok) return isAgentPre ? preserve('config_invalid') : skip('config_invalid');
   if (loaded.config.mode === 'off') return isAgentPre ? preserve('mode_off') : skip('mode_off');
-  /**
-   * #48 P1-2 review: a worker under `isolation: "worktree"` starts from the host's `worktree.baseRef`, whose default
-   * ("fresh") is origin/<default-branch> rather than this branch, so a worker would build on a revision missing the
-   * task's inputs. Only "head" is this checkout's revision; any other reading, unset included, runs as
-   * workerIsolation "none" rather than dispatching onto the wrong base.
-   */
-  const baseRef = loaded.config.workerIsolation === 'worktree' ? deps.host ? { value: 'head', source: 'codex_head' } : integratedClaudePlugin(deps.env) ? { value: 'head', source: 'jev_snapshot' } : readHostWorktreeBaseRef(deps.env, null, { cwd: input.cwd ?? null, transcriptPath: input.transcript_path ?? null }) : null;
-  const snapshotHost = !!deps.host || integratedClaudePlugin(deps.env);
-  const unavailableWorktree = baseRef !== null && (baseRef.value !== 'head' || snapshotHost && !!input.cwd && !hasWorktreeHead(input.cwd, deps.env));
-  const config: ConfigV5 = unavailableWorktree ? { ...loaded.config, workerIsolation: 'none' } : loaded.config;
+  const config: ConfigV5 = loaded.config;
   const requestedModelFor = (tool: unknown): string | null => requestedModelFrom(tool, deps.host ? config.models : DEFAULT_CONFIG.models);
   const allocation = deps.allocation ?? (!deps.host ? claudeAllocation(deps.env) : undefined);
   const allocationActive = !!allocation && (!!deps.allocation || integratedClaudePlugin(deps.env));
@@ -326,8 +316,6 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     caller,
     tool_use_id: input.tool_use_id ?? null,
     mode: rawMode,
-    // Only under a configured worktree isolation, so a record says which isolation this call actually ran with and why.
-    ...(baseRef !== null ? { worker_isolation: config.workerIsolation, worktree_base_ref: baseRef.value, worktree_base_ref_source: baseRef.source } : {}),
   };
   const apiKey = deps.env['TYPESAFE_API_KEY'];
 
@@ -1039,15 +1027,8 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       carried = 'omitted';
       composed = composeSingleWorkerPrompt(eligibility.prompt, carried);
     }
-    // The note cannot point at a contract on a shape that has none, and the ad-hoc shape keeps the contract wording.
+    // Only the single shape carries a request block for the note to rank.
     const note = (tier: Tier): string => (carriedRequest === null ? renderRouteNote(tier) : renderSingleRouteNote(tier));
-    /**
-     * #53 review: an ad-hoc or single-executor dispatch is never isolated. Isolation is the write boundary between
-     * parallel planned workers, and this path runs one worker with no plan; its coordinator is never told to merge a
-     * branch back, so an isolated worker's accepted edits would stay on a branch rather than in this checkout. Keeping
-     * the isolation and adding a merge note to the single guidance was the other fix; one worker has no sibling to
-     * collide with, so this path drops the isolation instead of adding a merge step it gains nothing from.
-     */
     const emitWorkerPatch = (patch: Parameters<typeof patchAgentInput>[1], code: ErrorCode | null): HookResult => emitPatch(eligibility.input, patch, code);
     /** A preserve leaves the model exactly as the coordinator called it. That is all it leaves alone. */
     const preserveAdhoc = (code: ErrorCode | null, tier: Tier = eligibility.tier): HookResult =>

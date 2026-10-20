@@ -1,9 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 
-import type { AdmissionQuestionShape, ConfigV5, Mode, RouteQuestionShape, Tier, WorkerIsolation } from './types.js';
+import type { AdmissionQuestionShape, ConfigV5, Mode, RouteQuestionShape, Tier } from './types.js';
 import { costModelFloor, delegationModel } from './admission.js';
-import { MODES, ROUTE_QUESTION_SHAPES, TIERS, WORKER_ISOLATIONS } from './types.js';
+import { MODES, ROUTE_QUESTION_SHAPES, TIERS } from './types.js';
 import { frontierConfigPath } from './frontier-routing.js';
 
 export const DEFAULT_CONFIG: ConfigV5 = {
@@ -16,7 +16,6 @@ export const DEFAULT_CONFIG: ConfigV5 = {
   routeConfidenceFloor: 0.8,
   // The owner requested all routing tiers enabled, including the known frontier profile.
   models: { fast: 'haiku', standard: 'sonnet', deep: 'opus', frontier: 'claude-fable-5-1' },
-  workerIsolation: 'worktree',
   // Atomic since 0.4.0: the composite question's 0.8 confidence floor never cleared in real use (0.78, 0.35), so Gate B
   // was asked and then ignored. The atomic path composes read-off facts in code with no floor, so its tier is applied.
   routeQuestionShape: 'atomic',
@@ -73,7 +72,6 @@ const V5_KEYS = new Set<string>([
   'admissionConfidenceFloor',
   'routeConfidenceFloor',
   'models',
-  'workerIsolation',
   'routeQuestionShape',
   'delegationDepthFloor',
   'delegationDepthFraction',
@@ -85,7 +83,7 @@ const V5_KEYS = new Set<string>([
 const LEGACY_MARKERS = ['uncertainTier', 'opusModel', 'frontierModel', 'confidenceFloor'];
 /**
  * Withdrawn keys a deployed file may still set, so it loads and they are dropped unread; remove at the next config
- * version. #213: the Gate C floor. #289: the planner and the root tool guard.
+ * version. #213: the Gate C floor. #289: the planner, the root tool guard and worker isolation.
  */
 export const IGNORED_KEYS: ReadonlySet<string> = new Set([
   'resultConfidenceFloor',
@@ -96,6 +94,7 @@ export const IGNORED_KEYS: ReadonlySet<string> = new Set([
   'maxTasksPerPlan',
   'admittedShape',
   'planInterpretation',
+  'workerIsolation',
 ]);
 const FLOOR_KEYS = ['admissionConfidenceFloor', 'routeConfidenceFloor'] as const;
 
@@ -106,8 +105,7 @@ export const MIGRATION_SAMPLE = `{
   "requestDeadlineMs": 3000,
   "admissionConfidenceFloor": 0.8,
   "routeConfidenceFloor": 0.8,
-  "models": { "fast": "haiku", "standard": "sonnet", "deep": "opus", "frontier": "claude-fable-5-1" },
-  "workerIsolation": "worktree"
+  "models": { "fast": "haiku", "standard": "sonnet", "deep": "opus", "frontier": "claude-fable-5-1" }
 }`;
 
 export type Env = Record<string, string | undefined>;
@@ -198,11 +196,6 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
     if (typeof c[key] !== 'boolean') return { ok: false, error: `${key} must be a boolean` };
   }
 
-  // Absent inherits worktree isolation.
-  const isolation = 'workerIsolation' in c ? c['workerIsolation'] : 'none';
-  if (typeof isolation !== 'string' || !WORKER_ISOLATIONS.includes(isolation as WorkerIsolation)) {
-    return { ok: false, error: `workerIsolation must be one of ${WORKER_ISOLATIONS.join(', ')}` };
-  }
   return {
     ok: true,
     config: {
@@ -214,7 +207,6 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
       admissionConfidenceFloor: floors['admissionConfidenceFloor'] as number,
       routeConfidenceFloor: floors['routeConfidenceFloor'] as number,
       models,
-      workerIsolation: isolation as WorkerIsolation,
       routeQuestionShape: shape as RouteQuestionShape,
       delegationDepthFloor: floor,
       delegationDepthFraction: fraction,

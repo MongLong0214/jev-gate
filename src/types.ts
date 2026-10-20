@@ -11,9 +11,6 @@ export type RouteQuestionShape = 'composite' | 'atomic';
 export type AdmissionQuestionShape = RouteQuestionShape;
 export const ROUTE_QUESTION_SHAPES: readonly RouteQuestionShape[] = ['composite', 'atomic'];
 
-export type WorkerIsolation = 'none' | 'worktree';
-export const WORKER_ISOLATIONS: readonly WorkerIsolation[] = ['none', 'worktree'];
-
 export type AdmissionAnswer = 'direct' | 'orchestrated' | 'needs_context' | 'abstain';
 export type RouteAnswer = Tier | 'abstain';
 export type UpgradeBasis = 'unresolved_contract_reasoning' | 'observed_reasoning_failure' | 'no_specific_basis' | 'unknown';
@@ -56,8 +53,6 @@ export interface ConfigV5 {
   admissionConfidenceFloor: number;
   routeConfidenceFloor: number;
   models: Record<Tier, string>;
-  /** #48 P1-2: absent means `none`, like the other optional keys. */
-  workerIsolation: WorkerIsolation;
   /**
    * How Gate B asks. `composite` is the shipped five-way choice; `atomic` fans the same judgement out into read-off
    * questions and composes them in code. Optional in a config file and defaulted to `composite`, so a deployed file
@@ -180,7 +175,7 @@ export interface WorkerCheckResult {
 }
 
 export interface WorkerReply {
-  status: 'done' | 'blocked' | 'replan';
+  status: 'done' | 'blocked';
   summary: string;
   changed_files: string[];
   interfaces: string[];

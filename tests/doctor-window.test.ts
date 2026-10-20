@@ -167,29 +167,11 @@ describe('doctor: mentions all seven lifecycle hooks', () => {
   });
 });
 
-describe('doctor: worker isolation base (#48 P1-2 review)', () => {
-  const isolated = (): string => configFile({ version: 5, mode: 'auto', workerIsolation: 'worktree' });
-  const configDir = (settings: unknown): string => {
-    const dir = mktemp();
-    writeFileSync(join(dir, 'settings.json'), JSON.stringify(settings));
-    return dir;
-  };
-
-  it('reports automatic snapshot isolation without a host base ref', () => {
-    const stdout = doctor({ JEV_GATE_CONFIG: isolated(), CLAUDE_CONFIG_DIR: mktemp() });
-    expect(stdout).toMatch(/\[info\] workerIsolation=worktree: the installed WorktreeCreate hook snapshots current working files/);
-  });
-
-  it('uses the integrated snapshot hook even when native baseRef is fresh', () => {
-    const dir = configDir({ worktree: { baseRef: 'fresh' } });
-    const stdout = doctor({ JEV_GATE_CONFIG: isolated(), CLAUDE_CONFIG_DIR: dir });
-    expect(stdout).toContain('No manual baseRef setting is needed');
-  });
-
-  it('reports snapshot isolation with native baseRef head', () => {
-    const stdout = doctor({ JEV_GATE_CONFIG: isolated(), CLAUDE_CONFIG_DIR: configDir({ worktree: { baseRef: 'head' } }) });
-    expect(stdout).toContain('root HEAD and index are preserved');
-    expect(stdout).not.toMatch(/is not in effect/);
+describe('doctor: withdrawn config keys', () => {
+  it('names a withdrawn key as loaded and unread, without saying which change withdrew it', () => {
+    const stdout = doctor({ JEV_GATE_CONFIG: configFile({ version: 5, mode: 'auto', resultConfidenceFloor: 0.8, workerIsolation: 'worktree' }) });
+    expect(stdout).toMatch(/\[info\] config .*: resultConfidenceFloor, workerIsolation are withdrawn keys: loaded, never read, and safe to delete/);
+    expect(stdout).not.toContain('#289');
   });
 });
 

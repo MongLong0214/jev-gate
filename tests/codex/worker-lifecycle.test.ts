@@ -13,7 +13,7 @@ const cleanups: (() => void)[] = [];
 afterEach(() => { cleanups.splice(0).forEach(f => f()); vi.restoreAllMocks(); });
 const setup = async (scenario = 'uncertain', started = true) => {
   const root = mkdtempSync(join(tmpdir(), 'jev-worker-')); const config = join(root, 'config.json');
-  writeFileSync(config, JSON.stringify({ gate: { mode: scenario === 'adhoc' ? 'auto' : 'native', workerIsolation: 'none', models: { fast: 'gpt-6.1-sol', standard: 'gpt-6.1-sol', deep: 'gpt-6.1-sol', frontier: 'gpt-6.1-sol' } }, router: { enabled: false } }));
+  writeFileSync(config, JSON.stringify({ gate: { mode: scenario === 'adhoc' ? 'auto' : 'native', models: { fast: 'gpt-6.1-sol', standard: 'gpt-6.1-sol', deep: 'gpt-6.1-sol', frontier: 'gpt-6.1-sol' } }, router: { enabled: false } }));
   const input = new PassThrough(); const output = new PassThrough();
   const rpc = new CodexRpc(input, output); const sent: Obj[] = [];
   const reply = (id: unknown, result: Obj) => input.write(JSON.stringify({ id, result }) + '\n');

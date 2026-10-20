@@ -21,7 +21,7 @@ export interface OwnedAgentProfile {
   /**
    * Host tools withheld in frontmatter. `tools` stays absent so connected MCPs are still inherited; withholding Skill
    * drops the skills listing, and Artifact its large definition. Every profile also sets `omitClaudeMd: true`: its
-   * contract carries what it needs.
+   * prompt carries what it needs.
    */
   disallowedTools: readonly string[];
 }

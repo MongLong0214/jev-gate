@@ -33,7 +33,7 @@ export const BACKGROUND_GUIDANCE = 'Owned executions run in the background by de
 export const singleRules = (preferFastWorker = false): string[] => [
   'You do not implement this request yourself; you coordinate.',
   BACKGROUND_GUIDANCE,
-  `Dispatch this request once, whole, to ${preferFastWorker ? 'jev-gate:worker-fast' : 'jev-gate:worker'}. There is no plan for this request: splitting the work across several workers is not what this shape does.`,
+  `Dispatch this request once, whole, to ${preferFastWorker ? 'jev-gate:worker-fast' : 'jev-gate:worker'}. Do not split it across several workers.`,
   DISPATCH_FIRST_SENTENCE,
   'Your brief does not have to restate the request: the hook appends the user\'s own request verbatim, and the worker is told it is the task.',
   'Never pass a model argument to an owned agent call.',
@@ -68,16 +68,12 @@ export const renderDirectGuidance = (mode: RoutingMode, delegationForbidden = fa
   'The user explicitly prohibited delegation. Complete this request in the main conversation without a worker. Keep the original restrictions and native permissions authoritative.',
 ] : DIRECT_GUIDANCE), DIRECT_MODE_SENTENCE[mode]].join('\n');
 
-/** A12: the precedence an ad-hoc worker must apply when the sources disagree. */
-export const PRECEDENCE_SENTENCE =
-  'Precedence: the user restrictions and your native permissions first, then the "[Jev Gate user request]" block if one is above, then the task contract, then the predecessor facts reported by earlier workers, then this note.';
-
-/** A19: the same note without the contract, because a single-executor dispatch has none to be authoritative. */
+/** A12/A19: the precedence a worker must apply when the sources disagree. The single shape carries the request block. */
 export const renderSingleRouteNote = (tier: Tier): string =>
   `\n\n[Jev Gate route note] Tier: ${tier}. Precedence: the user restrictions and your native permissions first, then the "[Jev Gate user request]" block above, then this note.`;
 
 export const renderRouteNote = (tier: Tier): string =>
-  `\n\n[Jev Gate route note] Tier: ${tier}. The task contract above is authoritative for this task's boundary. ${PRECEDENCE_SENTENCE}`;
+  `\n\n[Jev Gate route note] Tier: ${tier}. Precedence: the user restrictions and your native permissions first, then this note.`;
 
 const DISPATCH_DENY_TEXT: Record<DenyReason, string> = {
   dispatch_ineligible:

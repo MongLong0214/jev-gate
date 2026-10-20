@@ -16,7 +16,7 @@ import { ensureDashboard, serveAutomaticDashboard } from './dashboard-launch.js'
 import { dashboardPreferenceCommand } from './dashboard-settings.js';
 import { recordingCommand, recordingStatus } from './recording.js';
 import { explainDir } from './explain.js';
-import { HOST_WINDOW_MAX, HOST_WINDOW_MIN, measuredCompactPoint, readHostCompactWindow, readHostWorktreeBaseRef, readManagedSetting, readSettingsEnvVar, STANDARD_CONTEXT_WINDOW } from './host-window.js';
+import { HOST_WINDOW_MAX, HOST_WINDOW_MIN, measuredCompactPoint, readHostCompactWindow, readManagedSetting, readSettingsEnvVar, STANDARD_CONTEXT_WINDOW } from './host-window.js';
 import { jobsDir } from './job.js';
 import { LIVENESS_WINDOW, livenessPath, readLiveness } from './liveness.js';
 import { OWNED_AGENTS, type Mode, type Tier } from './types.js';
@@ -185,7 +185,7 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
     const c = loaded.config;
     let ignored: string[] = [];
     try { const raw: unknown = JSON.parse(readFileSync(loaded.source, 'utf8')); if (isRecord(raw)) ignored = Object.keys(raw).filter((k) => IGNORED_KEYS.has(k)); } catch { /* defaults or env: no file */ }
-    if (ignored.length) say('info', `config ${loaded.source}: ${ignored.join(', ')} ${ignored.length === 1 ? 'is' : 'are'} no longer read and ignored (#289 removed the planner and the root tool guard); delete to silence this`);
+    if (ignored.length) say('info', `config ${loaded.source}: ${ignored.join(', ')} ${ignored.length === 1 ? 'is a withdrawn key' : 'are withdrawn keys'}: loaded, never read, and safe to delete`);
     say('ok', `config ${loaded.source}: mode=${c.mode} jevModel=${c.jevModel} deadline=${c.requestDeadlineMs}ms floors={admission:${c.admissionConfidenceFloor},route:${c.routeConfidenceFloor}} models=${JSON.stringify(c.models)} routeQuestionShape=${c.routeQuestionShape} admissionQuestionShape=${c.admissionQuestionShape} delegationDepthFloor=${c.delegationDepthFloor === null ? 'null (derived)' : c.delegationDepthFloor} delegationDepthFraction=${c.delegationDepthFraction} delegationCoordinatorTurns=${c.delegationCoordinatorTurns} delegationWorkerTokensPerCall=${c.delegationWorkerTokensPerCall} verifyWorkerChecks=${c.verifyWorkerChecks}`);
     if (c.admissionQuestionShape === 'atomic') {
       say(
@@ -238,16 +238,6 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
     if (c.mode === 'auto') say('info', 'mode=auto: admission and allocation gates send the request, the planned task and summaries of earlier worker replies to TypeSafe (may include source excerpts and prior constraints)');
     say('info', `job state directory: ${jobsDir(env)} (0700, one 0600 file per session, removed after 7 days)`);
     if (env['JEV_GATE_EXPERIMENT_ADMISSION'] === 'orchestrated') say('warn', `JEV_GATE_EXPERIMENT_ADMISSION=orchestrated is set: every prompt starts an orchestrated job in ${c.mode} mode without a Gate A request (recorded as forced/admission_forced); allocation is unaffected`);
-    if (c.workerIsolation === 'worktree') {
-      let snapshot = false;
-      try { snapshot = JSON.stringify(JSON.parse(readFileSync(join(root, 'hooks', 'hooks.json'), 'utf8'))?.hooks?.WorktreeCreate).includes('/dist/worktree-cli.js'); } catch { /* Standalone/legacy adapters retain the native baseRef behavior. */ }
-      if (snapshot) say('info', 'workerIsolation=worktree: the installed WorktreeCreate hook snapshots current working files with a private index; root HEAD and index are preserved. No manual baseRef setting is needed');
-      else {
-      const baseRef = readHostWorktreeBaseRef(env, cwd);
-      if (baseRef.value === 'head') say('info', `workerIsolation=worktree with worktree.baseRef="head" (${baseRef.source}): the hook does not patch isolation onto any dispatch since the planner was removed (#289), so workers share the caller's working tree`);
-      else say('warn', `workerIsolation=worktree is not in effect: host worktree.baseRef is ${baseRef.value === null ? (baseRef.source === 'unset' ? 'unset' : `unknown (${baseRef.source})`) : `"${baseRef.value}" (${baseRef.source})`}, so an isolated worker would start from origin/<default-branch> instead of this branch. The hook runs such turns as workerIsolation=none; set "worktree": {"baseRef": "head"} in Claude Code settings to use it`);
-      }
-    } else say('info', `workerIsolation=${c.workerIsolation}: workers share the caller's working tree`);
   };
 
   const checkClaude = (): string | null => {

@@ -18,7 +18,7 @@ Option names and defaults for Compact, the Router, and Evidence stay in their ow
 
 An admitted turn dispatches the request once to a worker; Gate A calls it orchestrated. The root is told to coordinate until terminal acceptance with no active work, and its own tool calls are not judged. Then the root can do remaining checks, integration and reporting under its native permissions. Reuse the observed checks for the same state; new edits, merges and explicitly requested independent reviews still need their own checks. Command success does not prove all requirements were met. A direct admission does not start a job.
 
-The planner and the root tool guard were removed in #289. A config file that still names `plannerDefaultTier`, `maxParallelWorkers`, `guardAllowTools`, `guardAllowMcp`, `maxTasksPerPlan`, `admittedShape` or `planInterpretation` loads; those keys are ignored and doctor lists them. Worker profiles inherit the connected tools the host provides.
+The planner, the root tool guard and worker isolation were removed in #289. A config file that still names `plannerDefaultTier`, `maxParallelWorkers`, `guardAllowTools`, `guardAllowMcp`, `maxTasksPerPlan`, `admittedShape`, `planInterpretation` or `workerIsolation` loads; those keys are ignored and doctor lists them. Worker profiles inherit the connected tools the host provides.
 
 Acceptance is not a Jev call. A worker accept is an observed passing run of each declared check after the last observed Edit, Write, MultiEdit, or NotebookEdit in that worker's transcript. It does not certify an edit made inside Bash, by another editor, or by another process, and it does not certify that the check was the right one or that the current files are fully certified. The comparison is on by default (`verifyWorkerChecks`).
 
@@ -58,7 +58,6 @@ A V3 or V4 file is rejected with a sample. The plugin does not rewrite it. A key
   "requestDeadlineMs": 3000,
   "admissionConfidenceFloor": 0.8,
   "routeConfidenceFloor": 0.8,
-  "workerIsolation": "worktree",
   "delegationDepthFloor": 0,
   "delegationDepthFraction": 0.6,
   "admissionQuestionShape": "atomic",
@@ -99,7 +98,7 @@ A background job keeps its original prompt identity and contracts across subsequ
 
 Codex `jev_agent` defaults to background execution. `action: "status", agent_id: "<returned identity>"` collects its result without waiting; `action: "cancel"` requests explicit cancellation. Native worker `turn/completed` owns terminal settlement. Main interruption leaves background work running; ending the native session requests child interruption. Connection loss preserves unconfirmed reservations and file protection. A reservation records the app-server process that runs its worker; once that process has exited, for example after a host restart, the next hook event or `status` of its session settles it as interrupted and its file protection ends. While that process still runs elsewhere, protection stays and `status` says so. A reservation from before 0.8.20 has no recorded process: it stays protected until the user explicitly cancels it with `action: "cancel"`. Advanced callers can explicitly request `run_in_background: false` for a synchronous execution.
 
-`workerIsolation` defaults to `worktree`. No Gate dispatch carries `isolation: "worktree"` since the planner was removed (#289): the single worker stays in the root. The integrated Claude plugin uses its `WorktreeCreate` hook, and Codex creates the same snapshot inside the captured native permission scope. Each snapshot includes staged, unstaged and untracked working files and excludes ignored files. A private Git index leaves the root HEAD, index and files intact. Record the worker's initial HEAD as its snapshot baseline; after checks, commit worker changes and apply only `git diff --binary <baseline> <worker-branch>` with `git apply` in the root. Conflicting root changes require resolution; do not merge the snapshot commit. Explicit native worktree settings are preserved; the integrated snapshot hook selects its own baseline.
+Gate dispatches every worker in the caller's working tree. The integrated Claude plugin's `WorktreeCreate` hook still creates any worktree the host asks for (`--worktree`, `EnterWorktree`, or an Agent call with `isolation: "worktree"`) as a snapshot: staged, unstaged and untracked working files, not ignored files, under a private Git index that leaves the root HEAD, index and files intact. To bring changes back, apply only `git diff --binary <baseline> <branch>` with `git apply` in the root, where the baseline is the worktree's initial HEAD; do not merge the snapshot commit.
 
 ## What Gate sends
 

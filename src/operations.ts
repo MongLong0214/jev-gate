@@ -408,7 +408,6 @@ const traceStep = (r: Rec, resultIds: Set<string>, intents: Map<string, string>,
     lane = 'host';
     summary = text(token(r['role']), token(r['task_id']), compactSelectionReason(r['selection']), `요청 등급 ${token(r['requested_tier']) ?? '?'}`);
     details.push(text(`호출 모델 ${token(r['requested_model']) ?? '미기록'}`, r['pinned'] === true ? '모델 고정' : null));
-    if (token(r['worker_isolation'])) details.push(`워커 격리 ${token(r['worker_isolation'])}`);
   } else if (phase === 'post') {
     lane = 'host';
     // #232: only an accept receipt accepts a contract, and a refused one fails that worker's result. A row with no verdict is the host's own outcome.

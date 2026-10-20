@@ -97,7 +97,7 @@ const stdinOf = (value: unknown): AsyncIterable<Uint8Array> =>
   })();
 
 type Env = Record<string, string | undefined>;
-const SERIAL_POLICY = { workerIsolation: 'none', delegationDepthFloor: null };
+const SERIAL_POLICY = { delegationDepthFloor: null };
 const gateConfig = join(tmp, 'gate-default.json');
 writeFileSync(gateConfig, JSON.stringify({ version: 5, mode: 'auto', ...SERIAL_POLICY }));
 const makeEnv = (over: Env = {}): Env => ({
@@ -124,16 +124,6 @@ const compositeGateBEnv = (over: Env = {}): Env => {
   const cfg = join(tmp, `composite-gate-b-${(compositeSeq += 1)}.json`);
   writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', ...SERIAL_POLICY, routeQuestionShape: 'composite' }));
   return makeEnv({ JEV_GATE_CONFIG: cfg, ...over });
-};
-
-/**
- * #48 P1-2 review: worktree isolation holds only when the host branches worker worktrees from HEAD, so the user
- * settings these envs point at say `worktree.baseRef: "head"`; without it the hook runs the turn serially.
- */
-const headBaseRefConfigDir = (baseRef: unknown = 'head'): string => {
-  const dir = mkdtempSync(join(tmp, 'claude-config-'));
-  writeFileSync(join(dir, 'settings.json'), JSON.stringify({ worktree: { baseRef } }));
-  return dir;
 };
 
 const run = (env: Env, event: unknown, fetchImpl?: unknown, extra: Partial<HookDeps> = {}): Promise<HookResult> =>
@@ -835,7 +825,7 @@ describe('single executor (A19)', () => {
     expect(prompt).toContain('Do what the request asks.');
     expect(prompt).toContain('[Jev Gate user request]');
     expect(prompt).toContain('Build a settings page, migrate the store and wire the two together.');
-    expect(prompt).toContain('It is the task: there is no plan and no task contract for this dispatch.');
+    expect(prompt).toContain('It is the task. Implement what it asks,');
     expect(prompt).not.toContain('[Jev Gate task contract]');
     expect(prompt).toContain('[Jev Gate route note]');
     // The route note cannot point at a contract that does not exist.
@@ -1011,7 +1001,7 @@ describe('single executor (A19)', () => {
     expect(prompt).toContain('Do what the request asks.');
     expect(prompt).toContain('[Jev Gate user request]');
     expect(prompt).toContain('Build a settings page, migrate the store and wire the two together.');
-    expect(prompt).toContain('It is the task: there is no plan and no task contract for this dispatch.');
+    expect(prompt).toContain('It is the task. Implement what it asks,');
   });
 
   /**
@@ -1055,7 +1045,7 @@ describe('single executor (A19)', () => {
     expect(prompt).toContain('Do what the request asks.');
     expect(prompt).toContain('[Jev Gate user request]');
     expect(prompt).toContain('Build a settings page, migrate the store and wire the two together.');
-    expect(prompt).toContain('It is the task: there is no plan and no task contract for this dispatch.');
+    expect(prompt).toContain('It is the task. Implement what it asks,');
   });
 
   it('preserves the called profile when Jev abstains, and still carries the request', async () => {
@@ -1114,20 +1104,6 @@ describe('single executor (A19)', () => {
     expect(r).toMatchObject({ kind: 'deny', code: 'stale_generation' });
   });
 
-});
-
-describe('worker isolation (#48 P1-2)', () => {
-  it('#53 review: does not isolate a single-executor worker dispatch, which nothing tells the coordinator to merge', async () => {
-    const cfg = join(tmp, `single-isolated-${Math.random().toString(36).slice(2)}.json`);
-    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', ...SERIAL_POLICY, workerIsolation: 'worktree' }));
-    const env = makeEnv({ JEV_GATE_CONFIG: cfg, CLAUDE_CONFIG_DIR: headBaseRefConfigDir(), CLAUDE_PROJECT_DIR: mkdtempSync(join(tmp, 'project-')) });
-    const fetchImpl = fakeJev({ execution: 'orchestrated' });
-    await run(env, promptEvent(), fetchImpl);
-    const r = await run(env, preEvent('Agent', agentInput({ prompt: 'Do what the request asks.' })), fetchImpl);
-    expect(r.kind).toBe('patch');
-    expect(updatedInput(r)).not.toHaveProperty('isolation');
-    expect(String(updatedInput(r)['prompt'])).not.toContain('[Jev Gate isolation]');
-  });
 });
 
 describe('worker check verification (0.4.0)', () => {
@@ -1969,7 +1945,7 @@ it.each([
   'Find all parseRecord declarations and callers in src/ and return file paths and line numbers. Do not edit.',
   'PR 본문 지금 코드에 맞게 고쳐줘',
 ])('admits one shallow bounded outcome to the fast worker using one Gate A batch and preserves the full request: %s', async prompt => {
-  const cfg = join(tmp, 'bounded-tool.json'); writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', delegationDepthFloor: 0, workerIsolation: 'none' }));
+  const cfg = join(tmp, 'bounded-tool.json'); writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', delegationDepthFloor: 0 }));
   const env = makeEnv({ JEV_GATE_CONFIG: cfg });
   const fetchImpl = fakeJev({ toolCalls: 1, boundedToolWork: .99 });
   const result = await run(env, promptEvent({ prompt, transcript_path: transcriptAt(1000) }), fetchImpl);

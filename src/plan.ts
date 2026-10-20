@@ -7,13 +7,11 @@ export const MAX_FIELD_BYTES = 8 * 1024;
 /** A17: the user's own request, carried to the worker verbatim. */
 export const REQUEST_HEADER = '[Jev Gate user request]';
 export const REQUEST_OMITTED =
-  'The request was not carried: it did not fit the size bound. Ask the coordinator for it rather than reading the contract as a complete statement of what was asked.';
+  'The request was not carried: it did not fit the size bound. Ask the coordinator for it rather than reading the brief as a complete statement of what was asked.';
 
-/**
- * A19: a single-executor dispatch has no contract, so the request is not outranking one -- it is the whole task.
- */
+/** A19: the request is the whole task of a single-executor dispatch. */
 export const REQUEST_ONLY_NOTE =
-  "The block above is the user's own request for this job, carried verbatim. It is the task: there is no plan and no task contract for this dispatch. Implement what it asks, run the checks it implies, and report separately anything you could not do. Give each check's check_id as the exact command you ran: the hook compares every reported pass with that command's last run in your own transcript. If you change files, report at least one check you ran; a change with no passing check is not accepted.";
+  "The block above is the user's own request for this job, carried verbatim. It is the task. Implement what it asks, run the checks it implies, and report separately anything you could not do. Give each check's check_id as the exact command you ran: the hook compares every reported pass with that command's last run in your own transcript. If you change files, report at least one check you ran; a change with no passing check is not accepted.";
 
 export const composeSingleWorkerPrompt = (coordinatorBrief: string, request: string | 'omitted' | null, required = false, sameAdmittedSource = false): string =>
   [coordinatorBrief, ...(request === null ? [] : ['', REQUEST_HEADER, sameAdmittedSource && request === coordinatorBrief ? 'The coordinator brief above is the admitted user request, carried verbatim.' : request === 'omitted' && !required ? REQUEST_OMITTED : request, REQUEST_ONLY_NOTE])].join('\n');
@@ -140,7 +138,8 @@ export const parseWorkerReply = (text: string): ParseResult<WorkerReply> => {
   }
   if (!isRecord(parsed)) return { ok: false, error: 'the final JSON value is not an object' };
   const status = parsed['status'];
-  if (status !== 'done' && status !== 'blocked' && status !== 'replan') return { ok: false, error: `status must be done|blocked|replan (got ${describeValue(status)})` };
+  // #289: `replan` asked the removed planner for a new plan; it now reads like any other status this parser does not know.
+  if (status !== 'done' && status !== 'blocked') return { ok: false, error: `status must be done|blocked (got ${describeValue(status)})` };
   const summary = strField(parsed['summary'] ?? '', 'summary');
   if (!summary.ok) return summary;
   const changed = strArray(parsed['changed_files'] ?? [], 'changed_files');

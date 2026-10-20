@@ -9,7 +9,6 @@ await build({
     hook: join(root, 'src/codex/hook.ts'),
     server: join(root, 'src/evidence/server.ts'),
     cli: join(root, 'src/codex/cli.ts'),
-    worktree: join(root, 'src/worktree-cli.ts'),
     // The dashboard rebuilds history on this thread; the CLI bundle starts it from its own directory.
     'activity-worker': join(root, 'src/activity-worker.ts'),
   },

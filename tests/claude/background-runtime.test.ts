@@ -20,7 +20,7 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('responsive installed Cla
     const manifestPath = join(plugin, '.claude-plugin/plugin.json'); const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')); manifest.userConfig.routerEnabled.default = false; writeFileSync(manifestPath, JSON.stringify(manifest));
     writeFileSync(join(home, '.claude/settings.json'), JSON.stringify({ env: { CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '0' } }));
     const mode = functions ? 'auto' : 'native';
-    const cfg = join(temp, 'config.json'); writeFileSync(cfg, JSON.stringify({ version: 5, mode, workerIsolation: 'none' }));
+    const cfg = join(temp, 'config.json'); writeFileSync(cfg, JSON.stringify({ version: 5, mode }));
     const env: NodeJS.ProcessEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(CLAUDE_|ANTHROPIC_|TYPESAFE_|JEV_|XDG_)/.test(name)));
     Object.assign(env, { HOME: home, CLAUDE_CONFIG_DIR: join(home, '.claude'), JEV_GATE_CONFIG: cfg, JEV_GATE_STATE_DIR: join(temp, 'state'), JEV_GATE_MODE: mode, JEV_GATE_EXPERIMENT_ADMISSION: 'orchestrated', JEV_GATE_ONBOARDING: '0', JEV_DASHBOARD_NO_OPEN: '1', CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: functions ? '1' : '0' });
     if (functions) saveApiKey(env, 'fake-local-background-jev-key');

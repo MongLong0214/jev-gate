@@ -196,7 +196,7 @@ The key is stored in `~/.config/jev-gate/auth/credentials.json` (0700 directory/
 
 When enabled and eligible, these inputs can leave the machine:
 
-- **Gate:** the request, composed task contracts, or predecessor summaries. A needs-context retry can include recent user turns.
+- **Gate:** the request and each eligible worker dispatch's prompt. A needs-context retry can include recent user turns.
 - **Router:** the task text and routing/cache facts used for its judgment.
 - **Compact:** the current task and a bounded set of older successful-result excerpts. Sensitive candidates are filtered before sending. Mandatory preservation and final size limits remain local.
 - **Evidence:** semantic goals, constraints, and candidate source windows. Exact-symbol queries and verified read-back do not call Jev.

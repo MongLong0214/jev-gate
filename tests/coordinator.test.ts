@@ -4,10 +4,10 @@ import {
   singleRules,
   DIRECT_MODE_SENTENCE,
   GUIDANCE_HEADER,
-  PRECEDENCE_SENTENCE,
   renderDirectGuidance,
   renderDispatchDeny,
   renderRouteNote,
+  renderSingleRouteNote,
   renderSingleGuidance,
   renderSingleResult,
   SUPERSEDED_SENTENCE,
@@ -53,9 +53,10 @@ describe('fixed reasons', () => {
   it('states the precedence in the route note and keeps the deny reasons actionable', () => {
     const note = renderRouteNote('deep');
     expect(note).toContain('Tier: deep');
-    expect(note).toContain(PRECEDENCE_SENTENCE);
-    // A17: the request block outranks the contract it was planned into, so the note's ordering names it.
-    expect(PRECEDENCE_SENTENCE.indexOf('[Jev Gate user request]')).toBeLessThan(PRECEDENCE_SENTENCE.indexOf('task contract'));
+    expect(note).toContain('Precedence: the user restrictions and your native permissions first, then this note.');
+    // #289: no dispatch carries a contract or predecessor facts, so neither note names them.
+    for (const n of [note, renderSingleRouteNote('deep')]) expect(n).not.toMatch(/contract|predecessor/);
+    expect(renderSingleRouteNote('deep')).toContain('then the "[Jev Gate user request]" block above, then this note.');
     expect(note.startsWith('\n\n')).toBe(true);
     // T1/T2: the refusals say what actually happened, and never that a live writer was replaced.
     expect(renderDispatchDeny('task_active')).toContain('never observed to stop');

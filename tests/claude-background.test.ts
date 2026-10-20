@@ -11,7 +11,7 @@ afterEach(() => roots.splice(0).forEach(p => rmSync(p, { recursive: true, force:
 const fixture = async (direct = false) => {
   const root = mkdtempSync('/tmp/jev-bg-unit-'); roots.push(root);
   const cfg = join(root, 'config.json');
-  writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'native', workerIsolation: 'none' }));
+  writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'native' }));
   const env = { HOME: root, JEV_GATE_CONFIG: cfg, JEV_GATE_STATE_DIR: join(root, 'state'), CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '0', JEV_GATE_EXPERIMENT_ADMISSION: 'orchestrated' };
   const parent = join(root, 's.jsonl'); writeFileSync(parent, '');
   const run = (event: Record<string, unknown>, fetchImpl?: typeof fetch) => runHook({ env, ...(fetchImpl ? { fetchImpl } : {}), stdin: (async function* () { yield JSON.stringify({ session_id: 's', transcript_path: parent, ...event }); })() });
@@ -123,7 +123,7 @@ describe('responsive native background contracts', () => {
     await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'notice', prompt: '<task-notification>completed</task-notification>' });
     const trace = join(f.root, 'trace'); Object.assign(f.env, { TYPESAFE_API_KEY: 'fixture-key', JEV_GATE_TRACE_DIR: trace });
     delete (f.env as Record<string, string>)['JEV_GATE_EXPERIMENT_ADMISSION'];
-    writeFileSync(f.cfg, JSON.stringify({ version: 5, mode: 'auto', delegationDepthFloor: 0, workerIsolation: 'none' }));
+    writeFileSync(f.cfg, JSON.stringify({ version: 5, mode: 'auto', delegationDepthFloor: 0 }));
     writeFileSync(f.parent, JSON.stringify({ type: 'assistant', message: { model: 'claude-opus-5-5', usage: { input_tokens: 100000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } }) + '\n');
     let calls = 0;
     const fetchImpl: typeof fetch = async (_url, init) => {
@@ -266,7 +266,7 @@ describe('Gate A and host task notifications', () => {
   it('never asks Gate A about a native notice and leaves the current generation in force', async () => {
     const root = mkdtempSync('/tmp/jev-bg-notice-'); roots.push(root);
     const cfg = join(root, 'config.json'); const trace = join(root, 'trace'); const parent = join(root, 's.jsonl');
-    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', delegationDepthFloor: 0, workerIsolation: 'none' }));
+    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', delegationDepthFloor: 0 }));
     writeFileSync(parent, JSON.stringify({ type: 'assistant', message: { model: 'claude-opus-5-5', usage: { input_tokens: 100000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } }) + '\n');
     const env = { HOME: root, JEV_GATE_CONFIG: cfg, JEV_GATE_STATE_DIR: join(root, 'state'), JEV_GATE_TRACE_DIR: trace, TYPESAFE_API_KEY: 'fixture-key', CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '0' };
     let calls = 0;

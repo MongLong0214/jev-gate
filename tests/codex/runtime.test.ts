@@ -163,7 +163,6 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
     writeFileSync(policyFile, JSON.stringify({
       gate: { mode: scenario.startsWith('compact') || routing ? 'off' : 'auto',
         ...(scenario === 'direct-lookup' ? { delegationDepthFloor: 999999 } : {}),
-        workerIsolation: 'none',
         ...(scenario === 'routing-model-luna' ? { models: { fast: 'gpt-6-luna', standard: 'gpt-6-luna', deep: 'gpt-6.1-sol', frontier: 'gpt-6-astra' } } : {}) },
       router: { model: rootPair || ['routing-model-luna', 'routing-auto-model'].includes(scenario), ...(scenario === 'routing-auto-model' ? { allowAstra: true } : {}) },
       compact: { manual: scenario === 'compact-manual' || semantic, ...(semantic ? { budgetChars: 8000 } : {}) },
