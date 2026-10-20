@@ -47,18 +47,37 @@ export const SECRET_PATTERNS: readonly RegExp[] = [
 // Keys may be bare or quoted in JSON, YAML, shell and code. Capture the complete value before screening it so a
 // prefix of a placeholder or a function call cannot be mistaken for a credential.
 const ASSIGNMENT_VALUE = String.raw`(?:"([^"\r\n]*)"|'([^'\r\n]*)'|\x60([^\x60\r\n]*)\x60|([A-Za-z0-9_%+./~:=@!-]+))`;
-const CREDENTIAL_KEYS = String.raw`authorization|auth|api[_-]?key|access[_-]?key|secret[_-]?key|private[_-]?key|(?:access|refresh|id)[_-]?token|client[_-]?secret|password|passwd|pwd|secret|token|credentials?|aws_access_key_id|aws_secret_access_key|aws_session_token`;
+const CREDENTIAL_KEYS = String.raw`authorization|auth|api[_.-]?key|access[_.-]?key|secret[_.-]?key|private[_.-]?key|(?:access|refresh|id)[_.-]?token|client[_.-]?secret|password|passwd|pwd|secret|token|credentials?|aws[_.-]?access[_.-]?key[_.-]?id|aws[_.-]?secret[_.-]?access[_.-]?key|aws[_.-]?session[_.-]?token`;
 const CREDENTIAL_KEY = new RegExp(String.raw`^(?:${CREDENTIAL_KEYS})$`, 'i');
 const GENERIC_CREDENTIAL_KEY = /^(?:authorization|auth|pwd|secret|token|credentials?)$/i;
-// Shell/.env assignments may prefix the key with an application name (`DB_PASSWORD`), at the start of a line.
-const CREDENTIAL_ASSIGNMENT = new RegExp(String.raw`(?:\b|^[ \t]*(?:export[ \t]+)?[A-Z_][A-Z0-9_]*_)(${CREDENTIAL_KEYS})\b["'\x60]?\s*(?:=>|[:=])\s*` + ASSIGNMENT_VALUE, 'gim');
-const COOKIE_ASSIGNMENT = new RegExp(String.raw`(?:^|[^\w.-])(sessionid|session|sid|connect\.sid|PHPSESSID|JSESSIONID|_session|[\w.-]*(?:auth(?:entication)?|token)(?:[_.-][\w.-]*|cookie|token|session)?)["'\x60]?\s*(?:=>|[:=])\s*` + ASSIGNMENT_VALUE, 'gi');
+// Read the whole key wherever it occurs, then classify its terminal credential word at a segment boundary. The
+// case-sensitive boundaries also cover camelCase, PascalCase and acronym prefixes without splitting the credential
+// word itself (whose spelling is case-insensitive). Try the longest suffix first so clientSecret stays strong.
+const credentialKey = (key: string): string | undefined => {
+  for (const boundary of key.matchAll(/(?:^|[_.-]|(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z]))/g)) {
+    const suffix = key.slice(boundary.index! + boundary[0].length);
+    if (CREDENTIAL_KEY.test(suffix)) return suffix;
+  }
+  return undefined;
+};
+const CREDENTIAL_ASSIGNMENT = new RegExp(String.raw`(?:^|[^\w.-])([\w.-]+)["'\x60]?\s*(?:=>|[:=])\s*` + ASSIGNMENT_VALUE, 'g');
+const CLI_CREDENTIAL_ASSIGNMENT = new RegExp(String.raw`(?:^|[^\w.-])--([\w.-]+)(?:\s*=\s*|[ \t]+)` + ASSIGNMENT_VALUE, 'g');
+// Cookie-specific suffixes remain supported; arbitrary trailing segments (token_count, auth_options) are not keys.
+const COOKIE_ASSIGNMENT = new RegExp(String.raw`(?:^|[^\w.-])(sessionid|session|sid|connect\.sid|PHPSESSID|JSESSIONID|_session|[\w.-]*(?:auth(?:entication)?|token)(?:[_.-]?(?:cookie|token|session))?)["'\x60]?\s*(?:=>|[:=])\s*` + ASSIGNMENT_VALUE, 'gi');
 const NETRC_PASSWORD = new RegExp(String.raw`^[ \t]*(password)[ \t]+` + ASSIGNMENT_VALUE + String.raw`[ \t]*\r?$`, 'gim');
 
 const literalAssignment = (text: string, pattern: RegExp, minLength = 1): boolean => {
-  for (const match of text.matchAll(pattern)) {
+  const assignments = new RegExp(pattern);
+  let match: RegExpExecArray | null;
+  while ((match = assignments.exec(text))) {
+    const key = credentialKey(match[1]!);
+    if ((pattern === CREDENTIAL_ASSIGNMENT || pattern === CLI_CREDENTIAL_ASSIGNMENT) && !key) {
+      // An unrelated key's quoted value may itself contain a credential assignment. Do not skip its contents.
+      assignments.lastIndex = match.index + 1;
+      continue;
+    }
     // Credential keys own their thresholds; the broader cookie-name pattern must not bypass them.
-    if (pattern === COOKIE_ASSIGNMENT && CREDENTIAL_KEY.test(match[1]!)) continue;
+    if (pattern === COOKIE_ASSIGNMENT && key) continue;
     const value = (match[2] ?? match[3] ?? match[4] ?? match[5] ?? '').trim();
     // Like the header and URL screens, names/templates are not literal credentials. Empty and fully masked values
     // carry no credential; xxx and changeme are conventional placeholders too, even when they reach the session-cookie length threshold.
@@ -68,7 +87,7 @@ const literalAssignment = (text: string, pattern: RegExp, minLength = 1): boolea
     const quoted = match[5] === undefined;
     const hasDigit = /\d/.test(value);
     const identifier = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/.test(value);
-    const generic = pattern === COOKIE_ASSIGNMENT || GENERIC_CREDENTIAL_KEY.test(match[1]!);
+    const generic = pattern === COOKIE_ASSIGNMENT || GENERIC_CREDENTIAL_KEY.test(key ?? match[1]!);
     // Dotted paths always name another value. Strong keys permit alphabetic literals, excluding primitive/type
     // names; generic keys and session cookies still exclude digit-free identifiers such as tokenValue.
     const reference = identifier && (value.includes('.') || (generic ? !hasDigit
@@ -88,6 +107,7 @@ const literalAssignment = (text: string, pattern: RegExp, minLength = 1): boolea
 
 export const looksSecret = (text: string): boolean => SECRET_PATTERNS.some((re) => re.test(text))
   || literalAssignment(text, CREDENTIAL_ASSIGNMENT)
+  || literalAssignment(text, CLI_CREDENTIAL_ASSIGNMENT)
   || literalAssignment(text, COOKIE_ASSIGNMENT, 8)
   || literalAssignment(text, NETRC_PASSWORD);
 

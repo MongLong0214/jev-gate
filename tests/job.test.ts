@@ -49,6 +49,7 @@ describe('updateJob', () => {
   it.each([
     { label: 'cookie', canary: 'sessionid=canary123' },
     { label: 'JSON', canary: '{"password":"canary-pw-123","api_key":"canary-key-456"}' },
+    { label: 'I1 prefixed JSON password', canary: '{"DB_PASSWORD":"review-only-password"}' },
   ])('C4/F1: projects legacy current/history receipts and rebuilds raw background context on read and rewrite ($label)', ({ canary }) => {
     const env = freshEnv(), original = seed(env);
     const receipt = { task_id: 'single', contract_hash: '', rev: 0, attempt: 1, tool_use_id: 'call', provenance: 'worker_reported',
@@ -64,7 +65,7 @@ describe('updateJob', () => {
     const rewritten = updateJob(env, 's1', prev => prev);
     expect(rewritten.ok).toBe(true);
     for (const value of [JSON.stringify(read), readFileSync(jobPath(env, 's1'), 'utf8')]) {
-      for (const sentinel of [canary, 'canary-pw-123', 'canary-key-456']) expect(value).not.toContain(sentinel);
+      for (const sentinel of [canary, 'canary-pw-123', 'canary-key-456', 'review-only-password']) expect(value).not.toContain(sentinel);
     }
     expect(JSON.stringify(read)).toContain('#1');
   });
