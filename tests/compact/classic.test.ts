@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { RESTORE_CAP, askedPath, buildRestore, buildSteering, classicConfig, runClassicCompact, shares, transcriptMessages, heldRecords } from '../../src/claude-compact.ts';
 import type { Transport } from '../../mods/router/hooks/client.ts';
+import { activityChecks } from '../../src/doctor-activity.js';
+import { loadActivity } from '../../src/activity.js';
 import { sessionFacts } from '../../src/bench/ab.js';
 
 const loss = vi.hoisted(() => ({ on: false }));
@@ -375,4 +377,18 @@ describe('classic path: wiring', () => {
     expect(ours.sort()).toEqual(['PostCompact:*', 'PreCompact:*', 'SessionStart:compact']);
     expect(statSync(new URL('../../scripts/build-claude-compact.mjs', import.meta.url)).isFile()).toBe(true);
   });
+});
+
+
+it.each(['active', 'shadow', 'overBudget'] as const)('D4: real classic Compact %s records preserve lifecycle and budget facts', async kind => {
+  const configured = { ...env, CLAUDE_PLUGIN_OPTION_COMPACTMODE: kind === 'shadow' ? 'shadow' : 'active', CLAUDE_PLUGIN_OPTION_COMPACTBUDGETCHARS: '8000' };
+  await runClassicCompact(input('PreCompact', { trigger: 'auto' }), configured);
+  await runClassicCompact(input('SessionStart', { source: 'compact' }), configured);
+  await runClassicCompact(input('PostCompact', { compact_summary: 'x'.repeat(kind === 'overBudget' ? 8000 : 100) }), configured);
+  const records = traces();
+  const facts = activityChecks({ traces: { claude: { records, unreadable: 0 } }, now: Date.now(), installed: null, recording: true, keyPresent: false, codexOwner: null, liveness: null }).find(c => c.feature === 'compact')!;
+  expect(facts.metrics).toMatchObject({ fired: 1, applied: kind === 'shadow' ? 0 : 1, restored: kind === 'shadow' ? 0 : 1, regression: kind === 'overBudget' ? 1 : 0, budget: 8000 });
+  const dashboard = loadActivity({ traceDir: env['JEV_GATE_TRACE_DIR']!, env: configured });
+  expect(dashboard.activity24h.claude.find(c => c.feature === 'compact')?.metrics).toEqual(facts.metrics);
+  expect(dashboard.operations.feed.find(s => s.feature === 'compact' && s.summary.includes('압축 완료'))?.state).toBe(kind === 'overBudget' ? 'error' : 'done');
 });

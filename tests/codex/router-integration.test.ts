@@ -3,6 +3,8 @@ import { mkdtempSync, writeFileSync, rmSync, readdirSync, readFileSync } from 'n
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
+import { activityChecks } from '../../src/doctor-activity.js';
+import { loadActivity } from '../../src/activity.js';
 import { CodexRpc } from '../../src/codex/rpc.js';
 import { CodexPolicy } from '../../src/codex/policy.js';
 import type { Obj } from '../../src/codex/source.js';
@@ -338,4 +340,32 @@ it('a confirmed manual settings change during managed assessment wins in both na
   await f.rpc.onResponse({},'thread/settings/update',{threadId:'root',model:'fixture-C',effort:'low'});release();await run;
   expect(f.forward).toHaveBeenCalledOnce();expect(f.forward.mock.calls[0]![0]).toMatchObject({params:{model:'fixture-C',effort:'low',collaborationMode:{settings:{model:'fixture-C',reasoning_effort:'low'}}}});
   expect(f.fetchImpl).toHaveBeenCalledOnce();f.rpc.close();
+});
+
+
+it.each(['failure', 'missing', 'partial', 'invalid', 'complete', 'mismatch', 'child'] as const)('D4: Codex real %s provider records reach activity', async kind => {
+  const trace = join(dir, 'trace');
+  let before = new Set<string>(); try { before = new Set(readdirSync(trace)); } catch { /* first producer */ }
+  const child = kind === 'child' ? await ownedFixture() : null;
+  const f = child ?? await fixture(true, 'fixture-B', 'low');
+  try {
+    const id = child?.child.id ?? 'root';
+    const source = child?.next ?? f.request;
+    const selected = (await f.policy.externalRequest(id, source, new AbortController().signal)).request;
+    const submitted = f.policy.observeRequest(id, selected)!;
+    if (kind === 'failure') f.policy.observeRequestFailure(id, submitted);
+    else if (kind !== 'missing') f.policy.observeUsage(id, { id: 'response-canary', model: kind === 'mismatch' ? 'another-model' : submitted.model,
+      usage: { input_tokens: 20, ...(kind !== 'partial' ? { output_tokens: kind === 'invalid' ? -1 : 10 } : {}), input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } } }, submitted);
+    const records = readdirSync(trace).filter(file => !before.has(file)).map(file => JSON.parse(readFileSync(join(trace, file), 'utf8')) as Obj);
+    const checks = activityChecks({ traces: { codex: { records, unreadable: 0 } }, now: Date.now(), installed: null, recording: true, keyPresent: true, codexOwner: null, liveness: null });
+    const cost = checks.find(c => c.message.startsWith('router_cost:'))!;
+    expect(cost.metrics).toMatchObject({ fired: 1, applied: 1, effect: null });
+    expect(cost.message).toContain(['failure', 'missing', 'partial', 'invalid'].includes(kind) ? '1 requests with incomplete usage; 1 sessions excluded' : '0 requests with incomplete usage');
+    if (kind !== 'failure' && kind !== 'missing') expect(checks.find(c => c.message.startsWith('router_applied:'))).toMatchObject({ level: kind === 'mismatch' ? 'fail' : 'ok', message: expect.stringContaining('1 routed requests with an observed model') });
+    if (kind === 'child') expect(checks.find(c => c.message.startsWith('child_effect:'))?.message).toContain('1 child steps sent to Jev, 1 changed the effort');
+    const isolated = mkdtempSync(join(dir, 'activity-'));
+    records.forEach((r, i) => writeFileSync(join(isolated, `r${i}.json`), JSON.stringify(r)));
+    const dashboard = loadActivity({ traceDir: isolated, host: 'codex', env: { HOME: join(isolated, 'home'), XDG_CONFIG_HOME: join(isolated, 'config') } });
+    expect(dashboard.activity24h.codex.find(c => c.feature === 'router')?.metrics).toEqual(cost.metrics);
+  } finally { f.policy.close(); f.rpc.close(); }
 });

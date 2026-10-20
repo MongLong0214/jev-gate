@@ -142,13 +142,13 @@ describe('activity: gate_a', () => {
 describe('activity: gate_b', () => {
   const route = (tier: string): Rec => rec('pre_result', { role: 'worker', called_tier: 'standard', decision: { tier } });
   it('warns at 5 worker decisions that changed no called tier', () => {
-    expect(check(run(times(5, () => route('standard'))), 'gate_b')).toMatchObject({ level: 'warn', message: 'gate_b: 5 routing decisions, 0 changed the called tier; reasons none 5' });
+    expect(check(run(times(5, () => route('standard'))), 'gate_b')).toMatchObject({ level: 'warn', message: 'gate_b: 5 routing decisions, 0 changed the called model, effort or tier; reasons none 5' });
   });
-  it('counts a worker decision that changed the called tier', () => {
-    expect(check(run([...times(4, () => route('standard')), route('fast')]), 'gate_b')).toMatchObject({ level: 'ok', message: 'gate_b: 5 routing decisions, 1 changed the called tier; reasons none 5' });
+  it('counts a worker decision that changed the called model, effort or tier', () => {
+    expect(check(run([...times(4, () => route('standard')), route('fast')]), 'gate_b')).toMatchObject({ level: 'ok', message: 'gate_b: 5 routing decisions, 1 changed the called model, effort or tier; reasons none 5' });
   });
   it('does not count an absent baseline as a tier change', () => {
-    expect(check(run([rec('pre_result', { role: 'worker', decision: { tier: 'deep' } })]), 'gate_b').message).toContain('0 changed the called tier');
+    expect(check(run([rec('pre_result', { role: 'worker', decision: { tier: 'deep' } })]), 'gate_b').message).toContain('0 changed the called model, effort or tier');
   });
 });
 
@@ -222,7 +222,7 @@ describe('activity: router_cost', () => {
     delete (returning['usage'] as Rec)[counter];
     const c = check(run(rows), 'router_cost');
     expect(c).toMatchObject({ level: 'warn', message: expect.stringContaining('unknown/untracked') });
-    expect(c.message).toContain('1 root requests with incomplete usage; 1 sessions excluded');
+    expect(c.message).toContain('1 requests with incomplete usage; 1 sessions excluded');
     expect(c.message).not.toContain('net ');
     expect(c.metrics?.effect).toBeNull();
   });

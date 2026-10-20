@@ -55,7 +55,7 @@ export const activityStableUntil = (records: Rec[], now: number): number => {
   for (const r of records) {
     const time = at(r), boundary = time > now ? time : time + DAY_MS;
     if (boundary > now) next = Math.min(next, boundary);
-    if ((r['phase'] === 'mod_compact' || r['phase'] === 'claude_compact') && r['stage'] === 'pre' && !('deferred' in r)) {
+    if ((r['phase'] === 'mod_compact' || r['phase'] === 'claude_compact') && (r['stage'] === 'pre' || r['stage'] === 'started' && r['path'] !== 'classic') && !('deferred' in r)) {
       const settled = time + COMPACT_GRACE_MS + 1;
       if (settled > now) next = Math.min(next, settled);
     }
@@ -110,7 +110,7 @@ export const activityChecks = (input: ActivityInput): ActivityCheck[] => {
 
   const admissions = phase('admission_result'), calls = admissions.filter(r => r['attempted'] === true);
   const orchestrated = admissions.filter(r => sub(r, 'decision')['shape'] === 'orchestrated').length;
-  const errorOf = (r: Rec): string | null => sub(r, 'decision')['reason'] === 'admission_invalid' || sub(r, 'http')['code'] === 'response_invalid' ? 'invalid' : sub(r, 'http')['code'] === 'timeout' ? 'timeout' : str(sub(r, 'http')['code']) ? 'http' : null;
+  const errorOf = (r: Rec): string | null => ['admission_invalid', 'route_invalid'].includes(String(sub(r, 'decision')['reason'])) || sub(r, 'http')['code'] === 'response_invalid' ? 'invalid' : sub(r, 'http')['code'] === 'timeout' ? 'timeout' : str(sub(r, 'http')['code']) ? 'http' : null;
   const errors = calls.map(errorOf).filter((e): e is string => e !== null);
   const latency = calls.map(r => num(sub(r, 'http')['duration_ms'])).filter((n): n is number => n !== null).sort((a, b) => a - b);
   const ring = input.liveness?.recent ?? [], ringCalls = ring.filter(e => e.attempted).length, never = ring.length >= LIVENESS_WINDOW && ringCalls === 0;
@@ -120,16 +120,24 @@ export const activityChecks = (input: ActivityInput): ActivityCheck[] => {
     gateAFail ? 'Check Jev reachability and the API key; failed calls keep every prompt direct.' : never ? 'Gate A never calls Jev: check mode=auto, the effective depth floor and the API key in configuration.' : 'Gate A pays a Jev call and its latency on every prompt but orchestrated nothing; review the admission policy, or set Gate mode off.',
     'admission', { fired: admissions.length, applied: orchestrated, effect: null, regression: errors.length });
 
-  const routes = phase('pre_result').filter(r => ['worker', 'single_worker'].includes(String(r['role']))), retiered = routes.filter(r => str(r['called_tier']) && str(sub(r, 'decision')['tier']) && sub(r, 'decision')['tier'] !== r['called_tier']).length;
-  say(routes.length >= 5 && !retiered ? 'warn' : routes.length ? 'ok' : 'info', `gate_b: ${routes.length} routing decisions, ${retiered} changed the called tier; reasons ${tally(routes.map(r => str(sub(r, 'decision')['reason']) ?? 'none'))}`,
-    'Gate B calls Jev on every owned dispatch and changed no tier; review the routing policy.', 'allocation', { fired: routes.length, applied: retiered, effect: null, regression: routes.filter(r => errorOf(r)).length });
+  const routes = phase('pre_result').filter(r => ['worker', 'single_worker'].includes(String(r['role']))), reallocated = routes.filter(r => {
+    // The host's actual pair allocation overrides the legacy tier decision in the same batch.
+    if (isRecord(r['allocation'])) {
+      const pair = sub(r, 'allocation'), edit = sub(pair, 'effort_edit');
+      return str(pair['baseline_model']) && str(pair['selected_model']) && pair['selected_model'] !== pair['baseline_model'] ||
+        'baseline_effort' in pair && (edit['kind'] === 'set' && str(edit['value']) && edit['value'] !== pair['baseline_effort'] || edit['kind'] === 'omit' && pair['baseline_effort'] !== null);
+    }
+    return str(r['called_tier']) && str(sub(r, 'decision')['tier']) && sub(r, 'decision')['tier'] !== r['called_tier'];
+  }).length;
+  say(routes.length >= 5 && !reallocated ? 'warn' : routes.length ? 'ok' : 'info', `gate_b: ${routes.length} routing decisions, ${reallocated} changed the called model, effort or tier; reasons ${tally(routes.map(r => str(sub(r, 'decision')['reason']) ?? 'none'))}`,
+    'Gate B calls Jev on every owned dispatch and changed no model, effort or tier; review the routing policy.', 'allocation', { fired: routes.length, applied: reallocated, effect: null, regression: routes.filter(r => errorOf(r)).length });
 
   const posts = phase('post'), owned = posts.filter(r => OWNED_AGENT_NAMES.includes(str(r['subagent_type']) ?? '') && str(r['verdict']));
   const unchecked = owned.filter(r => r['verdict'] === 'accept' && Object.values(sub(r, 'reported_checks')).every(n => n === 0)).length;
   const rejected = owned.filter(r => r['verdict'] !== 'accept');
   const workerKey = (r: Rec): string => [r['session_id'], r['tool_use_id'] ?? r['task_id']].join(':');
   const dispatched = phase('dispatch').filter(r => ['worker', 'single_worker'].includes(String(r['role'])));
-  const workerEnds = [...posts, ...phase('failure'), ...phase('background_terminal')];
+  const workerEnds = [...posts, ...phase('failure').filter(r => r['release_unconfirmed'] !== true), ...phase('background_terminal')];
   const dispatchedKeys = new Set(dispatched.map(workerKey)), endedAt = new Map<string, number>();
   for (const r of workerEnds) endedAt.set(workerKey(r), Math.max(endedAt.get(workerKey(r)) ?? -Infinity, at(r)));
   const pending = dispatched.filter(r => (endedAt.get(workerKey(r)) ?? -Infinity) < at(r)).length;
@@ -144,14 +152,16 @@ export const activityChecks = (input: ActivityInput): ActivityCheck[] => {
   say(failed ? 'warn' : terminals.length ? 'ok' : 'info', `background: ${terminals.length} background workers ended${terminals.length ? ` (${tally(terminals.map(r => ['completed', 'failed', 'cancelled', 'interrupted'].includes(String(r['status'])) ? String(r['status']) : 'unknown'))}; reasons ${tally(terminals.map(r => verdictReason('', r['verdict_reason'])?.[0] ?? 'none'))})` : ''}`,
     'Open the failed background workers in the dashboard; user-stopped tasks are recorded as cancelled.');
 
-  const routerRecords = rs.filter(r => isRouter(r) || r['phase'] === 'codex_router_result' || r['phase'] === 'codex_route_applied' || r['phase'] === 'post');
+  const routerRecords = rs.filter(r => isRouter(r) || String(r['phase']).startsWith('codex_router_') || r['phase'] === 'codex_route_applied' || r['phase'] === 'codex_model_request' || r['phase'] === 'codex_model_failure' || r['phase'] === 'post');
   const routerKey = [input.traces.claude ? 'claude' : '', input.traces.codex ? 'codex' : ''].join(':'), cachedRouter = routerChecks.get(routerKey);
   if (cachedRouter && cachedRouter.records.length === routerRecords.length && routerRecords.every((r, i) => r === cachedRouter.records[i])) out.push(...cachedRouter.checks);
   else {
     const firstRouter = out.length;
-    const results = router('root_result', 'child_result'), compared = results.filter(r => familyOf(r['requested']) && familyOf(r['observed']));
+    const results = router('root_result', 'child_result', 'spawn_result', 'spawn_native_result'), compared = results.filter(r => familyOf(r['requested']) && familyOf(r['observed']));
+    const codexObserved = phase('codex_router_response').filter(r => str(r['selected_model']) && str(r['observed_model']));
+    const codexMismatch = codexObserved.filter(r => r['selected_model'] !== r['observed_model']);
     const mismatched = compared.filter(r => familyOf(r['requested']) !== familyOf(r['observed']));
-    say(mismatched.length ? 'fail' : compared.length ? 'ok' : 'info', `router_applied: ${compared.length} routed requests with an observed model, ${mismatched.length} answered by another model family${mismatched.length ? ` (${tally(mismatched.map(r => `${familyOf(r['requested'])}->${familyOf(r['observed'])}`))})` : ''}`,
+    say(mismatched.length || codexMismatch.length ? 'fail' : compared.length + codexObserved.length ? 'ok' : 'info', `router_applied: ${compared.length + codexObserved.length} routed requests with an observed model, ${mismatched.length + codexMismatch.length} answered by another model family${mismatched.length ? ` (${tally(mismatched.map(r => `${familyOf(r['requested'])}->${familyOf(r['observed'])}`))})` : ''}`,
       'The host answered with a model the Router did not request; check the model restrictions and the host version.');
 
     // A root turn's routing ends only with a recorded reason; a later unrouted step without one is the #279 mid-turn release.
@@ -183,7 +193,28 @@ export const activityChecks = (input: ActivityInput): ActivityCheck[] => {
       return coverage === 'partial' || coverage === 'invalid' ? { ...t, coverage } : t;
     };
     // ACT-USAGE-01: a missing return can hide a loss after a saving. Exclude the entire session, never fill counters with zero.
-    const incomplete = new Map([...sessions].map(([id, rows]) => [id, rows.filter(r => usage(r).coverage !== 'complete').length] as const).filter(([, n]) => n));
+    const incomplete = new Map<string, number>();
+    // Function/classic Router identify a provider step by session, turn, index and agent (no provider request id).
+    // Keep multiplicity: one successful retry must not cover two sends or erase an explicit failure.
+    const providerKey = (r: Rec): string => step(r, 'index', 'agent_id');
+    const providerSteps = new Map<string, Rec[]>();
+    for (const r of router('model_request', 'model_failure', 'root_result', 'child_result')) group(providerSteps, providerKey({ ...r, agent_id: str(r['agent_id']) }), r);
+    for (const rows of providerSteps.values()) {
+      const requests = rows.filter(r => r['event'] === 'model_request').length, failures = rows.filter(r => r['event'] === 'model_failure').length;
+      const results = rows.filter(r => r['event'] === 'root_result' || r['event'] === 'child_result');
+      const missing = Math.max(failures, requests - results.length, 0) + results.filter(r => usage(r).coverage !== 'complete').length;
+      if (missing) { const id = String(rows[0]!['session_id']); incomplete.set(id, (incomplete.get(id) ?? 0) + missing); }
+    }
+    // Codex uses a distinct request_id for every provider send, shared by its response/failure (not the Jev id).
+    const codexSteps = new Map<string, Rec[]>();
+    for (const r of [...phase('codex_model_request'), ...phase('codex_model_failure'), ...phase('codex_router_response')]) group(codexSteps, JSON.stringify([r['session_id'], r['request_id'] ?? r['invocation_id']]), r);
+    for (const rows of codexSteps.values()) {
+      const results = rows.filter(r => r['phase'] === 'codex_router_response');
+      const complete = results.length === 1 && str(results[0]!['request_id']) !== null && sub(results[0]!, 'usage')['coverage'] === 'complete';
+      if (!complete || rows.some(r => r['phase'] === 'codex_model_failure')) {
+        const id = `codex:${String(rows[0]!['session_id'])}`; incomplete.set(id, (incomplete.get(id) ?? 0) + 1);
+      }
+    }
     const unknownUsage = [...incomplete.values()].reduce((sum, n) => sum + n, 0);
     const unknownEvidence = new Set<string>();
     let spend = 0, saved = 0, rewrite = 0, switched = 0, switches = 0, jev = 0;
@@ -240,14 +271,22 @@ export const activityChecks = (input: ActivityInput): ActivityCheck[] => {
       const priced = rows.filter(r => r['event'] !== 'request').map(r => estimateJevCostUsd(str(r['jev_model']) ?? str(rows.find(n => str(n['jev_model']))?.['jev_model']), tokenCount(sub(r, 'usage')['input']))).filter((n): n is number => n !== null);
       if (!priced.length) unknownJev++; else jev += priced.at(-1)!;
     }
+    const codexJev = new Map<string, Rec[]>();
+    for (const r of [...phase('codex_router_intent'), ...phase('codex_router_result')]) group(codexJev, JSON.stringify([r['session_id'], r['request_id'] ?? r['invocation_id']]), r);
+    let codexJevCost = 0;
+    for (const rows of codexJev.values()) {
+      const result = rows.find(r => r['phase'] === 'codex_router_result'), receipt = result && sub(result, 'jev');
+      const cost = receipt && estimateJevCostUsd(str(receipt['model']), tokenCount(sub(receipt, 'usage')['input_tokens']));
+      if (cost == null) unknownJev++; else codexJevCost += cost;
+    }
     // Submission counts include effort-only and child patches; cost is the same priced root estimate as doctor's line.
     const claudeApplied = router('prepared').filter(r => r['routed'] === true).length;
     const codexApplied = phase('codex_route_applied').filter(r => r['applied'] === true);
     const net = saved - rewrite - jev, unknown = unknownUsage > 0 || unknownEvidence.size > 0 || unknownJev > 0;
     say(unknown ? 'warn' : !switched ? sessions.size ? 'ok' : 'info' : net < 0 ? 'fail' : 'ok',
-      unknown ? `router_cost: unknown/untracked -- ${unknownUsage} root requests with incomplete usage; ${incomplete.size} sessions excluded from savings and losses; ${unknownEvidence.size} sessions missing TTL, price or prefix evidence; ${unknownJev} Jev calls without recorded cost` : !switched ? `router_cost: no routed root model switch among ${router('root_result').length} root requests; Jev cost $${jev.toFixed(4)}` : `router_cost: ${switched} routed root requests off their turn's baseline model over ${switches} switches; net ${usd(net)} at observed TTL write prices, actual prefix growth, minus Jev $${jev.toFixed(4)} (${rate(net, spend)} of root spend $${spend.toFixed(2)}); list-price estimate, not A/B`,
+      (unknown ? `router_cost: unknown/untracked -- ${unknownUsage} requests with incomplete usage; ${incomplete.size} sessions excluded from savings and losses; ${unknownEvidence.size} sessions missing TTL, price or prefix evidence; ${unknownJev} Jev calls without recorded cost` : !switched ? `router_cost: no routed root model switch among ${router('root_result').length} root requests; Jev cost $${jev.toFixed(4)}` : `router_cost: ${switched} routed root requests off their turn's baseline model over ${switches} switches; net ${usd(net)} at observed TTL write prices, actual prefix growth, minus Jev $${jev.toFixed(4)} (${rate(net, spend)} of root spend $${spend.toFixed(2)}); list-price estimate, not A/B`) + (codexSteps.size ? `; ${codexSteps.size} Codex provider requests tracked, Jev cost $${codexJevCost.toFixed(4)}; Codex switching savings not estimated` : ''),
       unknown ? 'Record complete usage, TTL splits, adjacent request prefixes and Jev usage before judging root model switching costs.' : net < 0 ? 'Root model switching cost more than it saved at the observed TTL; report it with this line before relying on root model routing.' : 'This comparison uses observed counters at list prices; it does not measure a causal routing benefit.', 'router',
-      { fired: new Set([...routerEvents.values()].flatMap(rows => rows.filter(r => r['sent'] === true).map(routerDecisionKey))).size + phase('codex_router_result').length, applied: claudeApplied + codexApplied.length, effect: !unknown && switched ? net : null, regression: mismatched.length + released.length + (!unknown && switched && net < 0 ? 1 : 0) });
+      { fired: new Set([...routerEvents.values()].flatMap(rows => rows.filter(r => r['sent'] === true).map(routerDecisionKey))).size + codexJev.size, applied: claudeApplied + codexApplied.length, effect: !unknown && switched ? net : null, regression: mismatched.length + codexMismatch.length + released.length + (!unknown && switched && net < 0 ? 1 : 0) });
 
     const routedSpawns = new Set(rs.filter(r => isRouter(r) && String(r['event']).startsWith('spawn')).map(r => str(r['tool_use_id'])).filter(Boolean));
     const unrouted = posts.filter(r => !str(sub(r, 'caller')['agent_id']) && !OWNED_AGENT_NAMES.includes(str(r['subagent_type']) ?? '') && !routedSpawns.has(str(r['tool_use_id'])));
@@ -256,33 +295,53 @@ export const activityChecks = (input: ActivityInput): ActivityCheck[] => {
     say(unrouted.length || children.size ? 'warn' : posts.length || router('child_route').length ? 'ok' : 'info', `spawn_coverage: ${unrouted.length} root Agent calls with neither a Router spawn record nor a Gate-owned type${unrouted.length ? ` (${tally(unrouted.map(r => String(r['subagent_type'])))})` : ''}; ${children.size} unregistered children ran ${unregistered.length} unrouted steps`,
       'These subagents (e.g. forked skills) ran on the native model and effort outside routing; update Jev Gate once spawn coverage ships.');
 
-    const sent = router('child_route').filter(r => r['sent'] === true), moved = sent.filter(r => str(sub(r, 'patch')['effort']) && sub(r, 'patch')['effort'] !== sub(r, 'from')['effort']).length;
+    const sent = [...router('child_route').filter(r => r['sent'] === true), ...phase('codex_router_result').filter(r => r['scope'] === 'child' && r['attempted'] === true).map(r => ({ ...r, from: { effort: r['baseline_effort'] }, patch: { effort: r['selected_effort'] } }))], moved = sent.filter(r => str(sub(r, 'patch')['effort']) && sub(r, 'patch')['effort'] !== sub(r, 'from')['effort']).length;
     say(sent.length >= 50 && moved / sent.length < 0.05 ? 'warn' : sent.length ? 'ok' : 'info', `child_effect: ${sent.length} child steps sent to Jev, ${moved} changed the effort (${rate(moved, sent.length)})`,
       'Each child step pays a Jev call and its latency for almost no change; review per-step child routing.');
     routerChecks.set(routerKey, { records: routerRecords, checks: out.slice(firstRouter) });
   }
 
   if (input.traces.claude) {
-    // Each compaction is its own session's records from its pre up to that session's next pre; a restore or post elsewhere is not its.
-    const compacts = byHost.claude.filter(r => ['mod_compact', 'claude_compact'].includes(String(r['phase']))), started: Rec[] = [], missing: Rec[] = [], unrestored: Rec[] = [];
-    for (const [i, r] of compacts.entries()) {
+    // Classic restore/post have no run_id: bind them to the session's pre. Function records share run_id
+    // and finish with applied (not post); their complete replacement needs no separate restore callback.
+    const compacts = byHost.claude.filter(r => ['mod_compact', 'claude_compact'].includes(String(r['phase'])));
+    const classic = compacts.filter(r => r['path'] === 'classic' || ['pre', 'restore', 'post'].includes(String(r['stage'])));
+    const started: Rec[] = [], missing: Rec[] = [], unrestored: Rec[] = [];
+    for (const [i, r] of classic.entries()) {
       if (r['stage'] !== 'pre' || 'deferred' in r) continue;
       started.push(r);
-      const later = compacts.slice(i + 1).filter(n => n['session_id'] === r['session_id']), end = later.findIndex(n => n['stage'] === 'pre' && !('deferred' in n));
+      const later = classic.slice(i + 1).filter(n => n['session_id'] === r['session_id']), end = later.findIndex(n => n['stage'] === 'pre' && !('deferred' in n));
       const own = end < 0 ? later : later.slice(0, end), posted = own.some(n => n['stage'] === 'post'), settled = posted || end >= 0 || input.now - at(r) > COMPACT_GRACE_MS;
       if (settled && !posted) missing.push(r);
       if (settled && r['mode'] !== 'shadow' && !own.some(n => n['stage'] === 'restore')) unrestored.push(r);
     }
-    const restores = compacts.filter(r => r['stage'] === 'restore').length, posted = compacts.filter(r => r['stage'] === 'post').length;
-    const skipped = input.keyPresent ? started.filter(r => r['selection'] === 'disabled').length : 0, invalid = compacts.filter(r => r['stage'] === 'jev' && r['selection'] === 'invalid_answers').length;
-    const selections = tally(compacts.filter(r => r['stage'] === 'pre').flatMap(r => str(r['selection']) ? [str(r['selection'])!] : []));
+    const runs = new Map<string, Rec[]>();
+    for (const r of compacts.filter(r => !classic.includes(r))) group(runs, JSON.stringify([r['session_id'], r['run_id'] ?? r['invocation_id']]), r);
+    let functionFired = 0, functionApplied = 0, functionFailed = 0;
+    for (const rows of runs.values()) {
+      const start = rows.find(r => r['stage'] === 'started');
+      if (!start) continue; // deferrals and precompute skips are not compaction runs
+      functionFired++;
+      const terminal = rows.find(r => typeof r['applied'] === 'boolean');
+      if (terminal?.['applied'] === true) functionApplied++;
+      if (terminal ? terminal['coreError'] === true || terminal['fallback'] === 'error' : input.now - at(start) > COMPACT_GRACE_MS) functionFailed++;
+    }
+    const restores = classic.filter(r => r['stage'] === 'restore').length, posts = classic.filter(r => r['stage'] === 'post'), posted = posts.length;
+    const skipped = input.keyPresent ? started.filter(r => r['selection'] === 'disabled').length : 0, invalid = compacts.filter(r => r['stage'] === 'jev' && ['invalid_answers', 'error'].includes(String(r['selection']))).length;
+    const overBudget = compacts.filter(r => r['within_budget'] === false || r['applied'] === true && num(r['budget']) !== null && (num(r['digestChars']) ?? 0) + (num(r['tailChars']) ?? 0) > Number(r['budget'])).length;
+    const selections = tally(compacts.filter(r => r['stage'] === 'pre' || r['stage'] === 'jev' && r['path'] !== 'classic').flatMap(r => str(r['selection']) ? [str(r['selection'])!] : []));
     const sessionsOf = (rows: Rec[]): string => [...new Set(rows.map(r => short(r['session_id'])))].join(', ');
-    say(missing.length ? 'fail' : skipped || invalid || unrestored.length ? 'warn' : started.length ? 'ok' : 'info',
-      `compact: ${started.length} pre / ${restores} restore / ${posted} post${missing.length ? `; ${missing.length} pre without post (sessions ${sessionsOf(missing)})` : ''}${unrestored.length ? `; ${unrestored.length} without restore (sessions ${sessionsOf(unrestored)})` : ''}; Jev recorded disabled with a key present ${skipped}; invalid_answers ${invalid}${selections ? `; selections ${selections}` : ''}`,
-      missing.length ? 'A compaction started but its PostCompact never recorded; check /hooks for the PostCompact entry and the host log.' : 'Some compactions ran without a restore or Jev selection; check the key and the classic hooks in /hooks.', 'compact',
-      { fired: started.length, applied: posted, effect: null, regression: missing.length + unrestored.length + invalid, restored: restores,
-        budgetUsed: (() => { const last = compacts.filter(r => r['stage'] === 'post').at(-1); const summary = last && num(last['summary_chars']), restored = last && num(last['restored_chars']); return summary != null && restored != null ? summary + restored : null; })(),
-        budget: num(compacts.filter(r => r['stage'] === 'post').at(-1)?.['budget']) });
+    const last = compacts.filter(r => r['stage'] === 'post' || typeof r['applied'] === 'boolean').at(-1);
+    const used = last && typeof last['applied'] === 'boolean' ? num(last['digestChars']) !== null && num(last['tailChars']) !== null ? Number(last['digestChars']) + Number(last['tailChars']) : null
+      : last && num(last['summary_chars']) !== null && num(last['restored_chars']) !== null ? Number(last['summary_chars']) + Number(last['restored_chars']) : null;
+    say(missing.length ? 'fail' : skipped || invalid || unrestored.length || functionFailed || overBudget ? 'warn' : started.length + functionFired ? 'ok' : 'info',
+      `compact: ${started.length} pre / ${restores} restore / ${posted} post${missing.length ? `; ${missing.length} pre without post (sessions ${sessionsOf(missing)})` : ''}${unrestored.length ? `; ${unrestored.length} without restore (sessions ${sessionsOf(unrestored)})` : ''}; Function ${functionFired} started / ${functionApplied} applied / ${functionFailed} failed; Jev recorded disabled with a key present ${skipped}; invalid_answers ${invalid}; over budget ${overBudget}${selections ? `; selections ${selections}` : ''}`,
+      missing.length ? 'A compaction started but its PostCompact never recorded; check /hooks for the PostCompact entry and the host log.' : 'Some compactions failed, exceeded budget or ran without a restore or Jev selection; check the Compact records.', 'compact',
+      { fired: started.length + functionFired, applied: posts.filter(r => {
+        const pre = [...started].reverse().find(n => n['session_id'] === r['session_id'] && at(n) <= at(r));
+        return !!pre && pre['mode'] !== 'shadow';
+      }).length + functionApplied, effect: null, regression: missing.length + unrestored.length + invalid + functionFailed + overBudget, restored: restores,
+        budgetUsed: used ?? null, budget: num(last?.['budget']) });
   }
 
   // A session reads its provider when it starts, so one started before the current connection was written keeps the old

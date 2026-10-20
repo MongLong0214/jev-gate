@@ -27,6 +27,11 @@ export const SECRET_PATTERNS: readonly RegExp[] = [
   // A password in a URL's userinfo (`postgres://user:secret@host`), percent-encoded or not (`%40secret`). A
   // placeholder is a name: `${PASS}`, `<pass>`, `{pass}`, `%PASS%`, and a `%` that starts no escape (`%s`, `%(pw)s`).
   /\b[a-z][a-z0-9+.-]{1,15}:\/\/[^\s/?#@:"'`]{1,64}:(?![$<{]|%(?![0-9A-Fa-f]{2})|%[A-Za-z_]\w*%@)[^\s/?#@"'`]{1,128}@/i,
+  // Cookie headers and curl's inline cookie argument carry credentials even when the cookie name is unfamiliar.
+  /\b(?:set-cookie|cookie)\s*:\s*["'`]?[A-Za-z0-9_.-]+\s*=\s*["'`]?[A-Za-z0-9_%+./~=-]+/i,
+  /(?:^|\s)(?:--cookie(?:=|\s+)|-b\s*)["'`]?[A-Za-z0-9_.-]+\s*=\s*["'`]?[A-Za-z0-9_%+./~=-]+/i,
+  // A bare session/auth cookie needs an assignment and a non-trivial literal value; prose and placeholders stay local names.
+  /(?:^|[^\w.-])(?:sessionid|session|sid|connect\.sid|PHPSESSID|JSESSIONID|_session|[\w.-]*(?:auth(?:entication)?|token)(?:[_.-][\w.-]*|cookie|token|session)?)["'`]?\s*[:=]\s*["'`]?[A-Za-z0-9_%+./~:=@!-]{8,}/i,
   // A bearer token outside a header line, whatever its prefix. The digit keeps "bearer" in prose from matching.
   /\b[Bb]earer\s+(?=[A-Za-z0-9_\-.~+/]*\d)[A-Za-z0-9_\-.~+/]{16,}/,
 ];

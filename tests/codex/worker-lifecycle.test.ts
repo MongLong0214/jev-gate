@@ -12,6 +12,7 @@ import { readOnlyCommand, writeTargets } from '../../src/codex/write-scope.js';
 import { readJob, updateJob, newGeneration, cleanupJobs, jobPath } from '../../src/job.js';
 import { buildOperations } from '../../src/operations.js';
 import { loadActivity } from '../../src/activity.js';
+import { activityChecks } from '../../src/doctor-activity.js';
 import { explainRecords, readTraceRecords } from '../../src/explain.js';
 import type { Obj } from '../../src/codex/source.js';
 const cleanups: (() => void)[] = [];
@@ -76,7 +77,7 @@ const setup = async (scenario = 'uncertain', started = true, workerIsolation?: '
 };
 describe('Codex status collection and deny tracing (#293)', () => {
   it('C1: delivers one functional projection for foreground, status and background replay without check text', async () => {
-    const command = 'printf sessionid=canary123', note = 'sessionid=canary123_note';
+    const command = 'printf checksum=canary123', note = 'checksum=canary123_note';
     expect(looksSecret(command)).toBe(false); expect(looksSecret(note)).toBe(false);
     const secret = 'Bearer synthetic-functional-123456789';
     // First prove the whole report misses the screen; a separate variant checks per-field redaction.
@@ -101,7 +102,7 @@ describe('Codex status collection and deny tracing (#293)', () => {
         const replay = await f.policy.nativeHook({ hook_event_name: 'UserPromptSubmit', session_id: 'parent', prompt: 'Continue reviewing.' });
         const disk = readFileSync(jobPath(f.stateEnv, 'parent'), 'utf8') + readdirSync(join(f.root, 'trace')).filter(name => name.endsWith('.json')).map(name => readFileSync(join(f.root, 'trace', name), 'utf8')).join('\n');
         for (const value of [delivery, disk, ...(background ? [JSON.stringify(replay)] : [])]) {
-          expect(value).not.toContain('sessionid=canary123'); expect(value).not.toContain(secret);
+          expect(value).not.toContain('checksum=canary123'); expect(value).not.toContain(secret);
         }
         for (const value of [delivery, ...(background ? [f.job().current.background_context!, JSON.stringify(replay)] : [])]) {
           for (const functional of ['Agent result ready for integration', 'src/result.ts', 'result(): void', 'Integration remains']) expect(value).toContain(functional);
@@ -498,6 +499,11 @@ describe('Codex dispatch failure reason (#233)', () => {
     expect(f.job().current.active['dispatch']?.codex_execution?.thread_id).toBe('worker'); expect(f.job().current.receipts).toHaveLength(0);
     const rows = f.traces('failure');
     expect(rows).toHaveLength(1); expect(rows[0]).toMatchObject({ failure_category: 'termination_unconfirmed', not_executed: false, release_unconfirmed: true });
+    const records = readTraceRecords(join(f.root, 'trace')).records;
+    const checks = activityChecks({ traces: { codex: { records, unreadable: 0 } }, now: Date.now(), installed: null, recording: true, keyPresent: false, codexOwner: null, liveness: null });
+    expect(checks.find(c => c.feature === 'workers')?.metrics).toMatchObject({ fired: 1, pending: 1 });
+    const dashboard = loadActivity({ traceDir: join(f.root, 'trace'), host: 'codex', env: { HOME: f.root, XDG_CONFIG_HOME: join(f.root, 'config') } });
+    expect(dashboard.activity24h.codex.find(c => c.feature === 'workers')?.metrics?.pending).toBe(1);
     expect(feed(rows)[0]).toMatchObject({ state: 'unconfirmed', summary: '워커 종료 미확인 · 예약 유지 · jev-gate:worker' });
     expect(await f.status('s1')).toContain('Worker termination unconfirmed: termination_unconfirmed at turn_start.');
     expect(f.job().current.active['dispatch']).toBeDefined();
@@ -778,4 +784,23 @@ describe('Codex owned dispatch input guidance (#287)', () => {
     expect(readme).toContain('one admission judgment uses the current request once');
     expect(readme).not.toContain('A needs-context retry can include recent user turns');
   });
+});
+
+
+it.each([false, true])('D4: real Codex Gate/worker records reach activity (background=%s)', async background => {
+  const f = await setup('normal');
+  const launch = f.launch(background);
+  await vi.waitFor(() => expect(f.started()).toBe(true));
+  if (background) await launch;
+  f.terminal('completed', JSON.stringify({ status: 'done', summary: 'Inspection complete', changed_files: [], checks: [] }));
+  await launch;
+  await vi.waitFor(() => expect(f.job().current.receipts).toHaveLength(1));
+  const records = readTraceRecords(join(f.root, 'trace')).records;
+  const checks = activityChecks({ traces: { codex: { records, unreadable: 0 } }, now: Date.now(), installed: null, recording: true, keyPresent: false, codexOwner: null, liveness: null });
+  expect(checks.find(c => c.feature === 'admission')?.metrics).toMatchObject({ fired: 1, applied: 1 });
+  expect(checks.find(c => c.feature === 'allocation')?.metrics).toMatchObject({ fired: 0 });
+  expect(checks.find(c => c.feature === 'workers')?.metrics).toMatchObject({ fired: 1, pending: 0, accepted: 1, rejected: 0 });
+  expect(checks.find(c => c.message.startsWith('background:'))?.message).toContain(`${background ? 1 : 0} background workers ended`);
+  const dashboard = loadActivity({ traceDir: join(f.root, 'trace'), host: 'codex', env: { HOME: f.root, XDG_CONFIG_HOME: join(f.root, 'config') } });
+  for (const feature of ['admission', 'allocation', 'workers']) expect(dashboard.activity24h.codex.find(c => c.feature === feature)?.metrics).toEqual(checks.find(c => c.feature === feature)?.metrics);
 });

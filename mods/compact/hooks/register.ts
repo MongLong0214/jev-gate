@@ -68,7 +68,7 @@ export const registerCompact = (on: On, config: CompactConfig, observer?: { cont
     await recorder.flush();
     const runId = `${Date.now()}-${++sequence}`;
     const log = (fields: Record<string, unknown>): void =>
-      quietly(() => recorder.log(`jev-compact ${JSON.stringify({ event: 'compact', run_id: runId, mode: config.mode, trigger: e.trigger, subagent: e.agentId !== undefined, ...fields })}`));
+      quietly(() => recorder.log(`jev-compact ${JSON.stringify({ event: 'compact', run_id: runId, mode: config.mode, budget: config.budgetChars, trigger: e.trigger, subagent: e.agentId !== undefined, ...fields })}`));
     // `precompute` asks the engine's summarizer ahead of the compaction that comes. Where active answers that one itself,
     // the summary would be paid for and dropped, so none is computed (below, once the digest can be built).
     const handled = e.trigger === 'auto' || (e.trigger === 'manual' && config.manual) || (e.trigger === 'precompute' && config.mode === 'active');
@@ -114,8 +114,7 @@ export const registerCompact = (on: On, config: CompactConfig, observer?: { cont
           const selection = await select(e.messages, outcome.result, key,
             { fetch: (url, init) => $.http.fetch(url, init), sleep: (ms, signal) => $.clock.sleep(ms, { signal }) }, next.signal);
           log({ stage: 'jev', jev_sent: selection.sent, jev_ms: selection.durationMs, jev_model: selection.model, usage: selection.usage, candidates: selection.candidates, available: selection.available, dependencies: selection.priorities.length, selection: selection.reason });
-          if (next.signal?.aborted) return forward(e);
-          if (selection.priorities.length) {
+          if (!next.signal?.aborted && selection.priorities.length) {
             const enhanced = buildDigest(e.messages, { budgetChars: config.budgetChars, priorityResults: selection.priorities });
             if (enhanced.ok) outcome = enhanced;
           }
@@ -124,8 +123,7 @@ export const registerCompact = (on: On, config: CompactConfig, observer?: { cont
           log({ stage: 'jev', selection: 'error', jev_sent: null });
         }
       }
-      if (next.signal?.aborted) return forward(e);
-      if (config.mode === 'active' && outcome.ok) answer = assemble(e.messages, outcome.result);
+      if (!next.signal?.aborted && config.mode === 'active' && outcome.ok) answer = assemble(e.messages, outcome.result);
     } catch {
       outcome = null;
     }

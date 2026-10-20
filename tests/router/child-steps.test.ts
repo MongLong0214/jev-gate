@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { resolveConfig } from '../../mods/router/hooks/config.ts';
 import { JEV_MODEL } from '../../mods/router/hooks/client.ts';
 import { createRouter, type TurnStepEvent } from '../../mods/router/hooks/router.ts';
+import { activityChecks } from '../../src/doctor-activity.js';
+import { createRecorder } from '../../mods/router/hooks/recording.ts';
 import { childStepContext } from '../../src/router-child-context.ts';
 import { choice, deferred, drain, fakeEngine, streamNext, type SentRequest, type Responder } from './fake-engine.ts';
 
@@ -146,4 +148,21 @@ describe('native worker inference routing', () => {
     expect(context.tools).toEqual([{ name: 'Read', state: 'done' }, { name: 'Bash', state: 'error' }]);
     expect(JSON.stringify(context)).not.toMatch(/PRIVATE|SECRET|SOURCE|OUTPUT|private/);
   });
+});
+
+
+it('D4: real Claude child continuation records reach activity', async () => {
+  const { router, f } = await setup();
+  const records: Array<Record<string, unknown>> = [];
+  const recorder = createRecorder({
+    paths: async () => ({ home: '/synthetic', state: '/synthetic', config: '/synthetic', trace: '/synthetic', session: 'producer-child' }),
+    stat: async () => ({ isLink: false, kind: 'dir', size: 0 }), exists: async () => false, read: async () => '',
+    write: async (_path, text) => { records.push(JSON.parse(text)); }, wait: () => new Promise<void>(() => undefined),
+  });
+  f.engine.log = recorder.log;
+  await drain(router.turnStep(f.engine, step(1), streamNext<TurnStepEvent>(undefined, COUNTS).next));
+  await recorder.flush();
+  const checks = activityChecks({ traces: { claude: { records, unreadable: 0 } }, now: Date.now(), installed: null, recording: true, keyPresent: true, codexOwner: null, liveness: null });
+  expect(checks.find(c => c.message.startsWith('child_effect:'))?.message).toContain('1 child steps sent to Jev, 1 changed the effort');
+  expect(checks.find(c => c.message.startsWith('router_applied:'))?.message).toContain('1 routed requests with an observed model');
 });
