@@ -70,15 +70,39 @@ const operands = (args: string[]): string[] => {
   const i = args.findIndex(a => a === '--' || !/^-./.test(a));
   return i < 0 ? [] : args.slice(args[i] === '--' ? i + 1 : i);
 };
+/** Git global options accepted by the read allowlist; unknown forms remain unclassified. */
+const gitArgs = (args: string[]): string[] => {
+  let i = 0;
+  for (; ; i++) { if (args[i] === '-C') i++; else if (args[i] !== '--no-pager' && args[i] !== '-P') break; }
+  return args.slice(i);
+};
 /** Configuration can run callbacks with targets unrelated to any argument or working directory. */
 const configuredGit = (words: Word[]): boolean => {
   const argv = words.map(w => w.text);
   let i = 0;
   while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(argv[i] ?? '')) i++;
-  // ponytail: repository config files written earlier can also enable callbacks; inspecting them is outside this classifier's scope.
-  return /(?:^|\/)git$/.test(argv[i] ?? '') && (i > 0
+  if (!/(?:^|\/)git$/.test(argv[i] ?? '')) return false;
+  if (i > 0
     || argv.slice(i + 1).some(a => /^-c|^--config-env(?:=|$)/.test(a))
-    || ['GIT_CONFIG_PARAMETERS', 'GIT_CONFIG_COUNT', 'GIT_EXTERNAL_DIFF'].some(key => process.env[key] !== undefined));
+    || ['GIT_CONFIG_PARAMETERS', 'GIT_CONFIG_COUNT', 'GIT_EXTERNAL_DIFF'].some(key => process.env[key] !== undefined)) return true;
+  const [sub, ...rest] = gitArgs(argv.slice(i + 1));
+  if (sub?.startsWith('-') && sub !== '--version') return true;
+  const end = rest.indexOf('--');
+  const args = end < 0 ? rest : rest.slice(0, end);
+  // Only leading, valueless switches prove disabling: a later spelling can be another option's operand.
+  const firstOperand = args.findIndex(a => !/^--no-(?:textconv|ext-diff|show-signature)$/.test(a));
+  const disabled = firstOperand < 0 ? args : args.slice(0, firstOperand);
+  // Repository config and attributes need no command-line opt-in for diff/log/show/blame callbacks. The same
+  // authority feeds readOnlyCommand and shellTargets, so a callback's unknown target is never confined to cwd.
+  if (/^(?:diff|log|show)$/.test(sub ?? '') && (!disabled.includes('--no-textconv') || !disabled.includes('--no-ext-diff'))) return true;
+  if (/^(?:blame|grep)$/.test(sub ?? '') && !disabled.includes('--no-textconv')) return true;
+  // Filters, textconv and external diff run configured programs, as signature checks run gpg (%G formats too).
+  // Git accepts unique prefixes and double negation (--no-no-textconv enables textconv).
+  return args.some(a => {
+    const option = a.split('=')[0]!.replace(/^--(?:no-no-)+/, '--');
+    return a.includes('%G') || /^--[^=]/.test(option)
+      && ['--filters', '--textconv', '--ext-diff', '--show-signature'].some(o => o.startsWith(option));
+  });
 };
 const readOnlyArgv = ([command, ...args]: string[]): boolean => {
   if (READ_ONLY.has(command ?? '')) return true;
@@ -97,17 +121,9 @@ const readOnlyArgv = ([command, ...args]: string[]): boolean => {
   if (command === 'printf') return args[0] !== '-v';
   if (command === 'date') return args.every(a => /^(?:\+.*|-u|--utc|-R|-I\w*|--iso-8601(?:=\w+)?|--rfc-3339=\w+)$/.test(a));
   if (command !== 'git') return false;
-  let i = 0;
-  for (; ; i++) { if (args[i] === '-C') i++; else if (args[i] !== '--no-pager' && args[i] !== '-P') break; }
-  const [sub, ...rest] = args.slice(i);
-  // Filters, textconv and external diff run configured programs, as signature checks run gpg (`%G` formats too). cat-file takes
-  // any unique prefix (`--textc`); Git also accepts double negation (`--no-no-textconv`) to enable an option. Single `--no-` stays.
-  if (args.some(a => {
-    const option = a.split('=')[0]!.replace(/^--(?:no-no-)+/, '--');
-    return a.startsWith('--output') || a.includes('%G')
-      || /^--[^=]/.test(option) && ['--filters', '--textconv', '--ext-diff', '--show-signature'].some(o => o.startsWith(option));
-  })) return false;
-  if (/^(?:status|diff|log|show|rev-parse|ls-files|blame|cat-file|merge-base|describe)$/.test(sub ?? '')) return true;
+  const [sub, ...rest] = gitArgs(args);
+  if (args.some(a => a.startsWith('--output'))) return false;
+  if (/^(?:status|diff|log|show|rev-parse|ls-files|blame|grep|cat-file|merge-base|describe)$/.test(sub ?? '')) return true;
   if (sub === 'branch') return rest.length === 1 && rest[0] === '--show-current';
   if (sub === 'remote') return rest.length === 1 && /^(?:-v|--verbose)$/.test(rest[0]!) || rest[0] === 'get-url';
   // Git refuses a second action, so a read action rules out every write.

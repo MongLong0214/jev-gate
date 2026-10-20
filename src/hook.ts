@@ -1321,7 +1321,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         attempt,
         tool_use_id: toolUseId,
         provenance: 'worker_reported',
-        reply: parsed && parsed.ok ? parsed.value : null,
+        reply: parsed && parsed.ok ? { ...parsed.value, checks: parsed.value.checks.map((c, i) => ({ ...c, check_id: `#${i + 1}` })) } : null,
         verdict: finalVerdict,
         verdict_reason: reason,
         observed_model: observedModel(input.tool_response),

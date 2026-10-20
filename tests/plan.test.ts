@@ -69,6 +69,27 @@ describe('parseWorkerReply', () => {
       expect(worker.error).not.toContain(hostile);
     }
   });
+
+  it.each([
+    ['result', { result: 'green' }],
+    ['note type', { note: { text: 'untrusted' } }],
+    ['note bound', { note: 'x'.repeat(8193) }],
+    ['id type', { check_id: 7 }],
+    ['id bound', { check_id: 'x'.repeat(8193) }],
+    ['empty id', { check_id: '' }],
+    ['check shape', null],
+  ])('names malformed %s by check position without echoing the command (R1)', (_name, over) => {
+    const sentinel = 'REVIEW_COMMAND_SENTINEL';
+    const parsed = parseWorkerReply(fence({ status: 'done', checks: [
+      { check_id: 'npm test', result: 'pass' },
+      over === null ? null : { check_id: `echo ${sentinel}`, result: 'pass', ...over },
+    ] }));
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.error).toContain('check #2:');
+      expect(parsed.error).not.toContain(sentinel);
+    }
+  });
 });
 
 describe('routing targets (#33/A18)', () => {

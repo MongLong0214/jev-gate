@@ -62,7 +62,7 @@ Jev Gate fixes the allocation, not the work. **Jev judges each turn; code applie
 
 ## How it works
 
-1. **Gate** reads a new request and decides: answer directly, hand it to one background worker, or plan worker tasks with contracts and checks.
+1. **Gate** reads a new request and decides whether to answer directly or hand the whole request to one background worker.
 2. **Router** picks the model and effort for the main turn and for each eligible agent, from the candidates your host actually supports. Your explicit pins always win.
 3. **Compact** (Claude Code) replaces stale context with an extractive digest that keeps what the current task needs. Codex keeps its native compaction.
 4. **The dashboard** records each judgment, request and observed result, live.
@@ -187,7 +187,7 @@ The key is stored in `~/.config/jev-gate/auth/credentials.json` (0700 directory/
 
 When enabled and eligible, these inputs can leave the machine:
 
-- **Gate:** the request and each eligible worker dispatch's prompt. A needs-context retry can include recent user turns.
+- **Gate:** one admission judgment uses the current request once; each eligible worker dispatch sends its task prompt. Earlier user turns are not retried or added to admission.
 - **Router:** the task text and routing/cache facts used for its judgment.
 - **Compact:** the current task and a bounded set of older successful-result excerpts. Sensitive candidates are filtered before sending. Mandatory preservation and final size limits remain local.
 
