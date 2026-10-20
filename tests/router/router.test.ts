@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { HttpReply } from '../../mods/router/hooks/client.ts';
@@ -7,6 +10,8 @@ import type { SymbolicEffort } from '../../mods/router/hooks/models.ts';
 import { offerableEfforts, TIER_LEVELS } from '../../mods/router/hooks/policy.ts';
 import type { RootRecord, SpawnEvent, SpawnOutcome, TurnStepEvent } from '../../mods/router/hooks/router.ts';
 import { cachePatch, createRouter, hostSupported, ROUTER_HOOK_VERSION, VERIFIED_HOST } from '../../mods/router/hooks/router.ts';
+import { sessionFacts } from '../../src/bench/ab.js';
+import { estimateJevCostUsd } from '../../src/bench/usage.js';
 import type { Responder } from './fake-engine.ts';
 import { answering, choice, CLEAR, deferred, drain, FAKE_KEY, fakeEngine, streamNext, warmRoot } from './fake-engine.ts';
 
@@ -864,6 +869,11 @@ describe('spawn model', () => {
       await run;
       expect(n.calls, reason).toEqual([spawn()]);
       expect(f.logs, reason).toContainEqual({ event: 'spawn_stop', tool_use_id: 'tu1', reason, requested: 'claude-haiku-5-5' });
+      // The request was sent and answered: its receipt survives the stop, so the bench prices it rather than reading 0.
+      const dir = mkdtempSync(join(tmpdir(), 'router-receipt-'));
+      f.logs.forEach((r, i) => writeFileSync(join(dir, `${i}.json`), JSON.stringify({ ...r, phase: 'mod_router', session_id: 's', invocation_id: String(i) })));
+      expect(sessionFacts(dir, 's'), reason).toMatchObject({ jevRequests: 1, jevInput: 900, jevCost: estimateJevCostUsd(JEV_MODEL, 900) });
+      rmSync(dir, { recursive: true });
     }
   });
 
