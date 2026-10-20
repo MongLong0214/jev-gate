@@ -73,46 +73,6 @@ describe('explain (2026-09-20)', () => {
     expect(out).toContain('ran claude-sonnet-5, which is not the opus it asked for');
   });
 
-  it('names only the plan clauses a reader would act on', () => {
-    const out = render([
-      base('plan', 1, {
-        tool_use_id: 'toolu_p',
-        status: 'completed',
-        outcome: 'ready',
-        rev: 1,
-        tasks: 3,
-        interpretation: {
-          clauses: [
-            { id: 'c0', verdict: 'supported' },
-            { id: 'c1', verdict: 'contradicted' },
-            { id: 'c2', verdict: 'omitted' },
-            { id: 'c3', verdict: 'unknown' },
-          ],
-          unasked: 2,
-          applied: false,
-        },
-      }),
-    ]);
-    expect(out).toContain('1 clause(s) read as contradicting the request (c1)');
-    expect(out).toContain('1 the request does not mention (c2)');
-    expect(out).toContain('2 not asked about');
-    // `supported` is the expected answer, and an `unknown` asks for nothing; printing either buries the one clause
-    // that disagrees under the ones that do not.
-    expect(out).not.toContain('c0');
-    expect(out).not.toContain('c3');
-  });
-
-  it('says the comparison happened even when it flagged nothing', () => {
-    const out = render([base('plan', 1, { status: 'completed', outcome: 'ready', rev: 1, tasks: 1, interpretation: { clauses: [{ id: 'c0', verdict: 'supported' }], unasked: 0, applied: false } })]);
-    expect(out).toContain('plan checked against the request: nothing flagged');
-  });
-
-  it('says nothing about a plan recorded before the comparison existed', () => {
-    const out = render([base('plan', 1, { status: 'completed', outcome: 'ready', rev: 1, tasks: 1 })]);
-    // A record with no `interpretation` is a plan nothing checked, which is not the same claim as one checked clean.
-    expect(out).not.toContain('plan checked against the request');
-  });
-
   it('leaves a dispatch with no result unanswered rather than borrowing another dispatch result', () => {
     const out = render([
       dispatch(1, 'toolu_a', { decision: { action: 'patch', tier: 'deep', reason: null, changed_default: true, model: 'opus' } }),
@@ -130,22 +90,6 @@ describe('explain (2026-09-20)', () => {
     expect(out).toContain('preserve standard (the model the coordinator called)');
     expect(out).toContain('ran claude-sonnet-5');
     expect(out).not.toContain('which is not the');
-  });
-
-  it('reads a planner observed model out of the plan record, which is where its reply is parsed', () => {
-    const out = render([
-      base('pre_result', 1, { role: 'planner', default_tier: 'deep', attempted: true, tool_use_id: 'toolu_p', http: { status: 200, code: null, duration_ms: 653, request_bytes: 700 }, decision: { action: 'patch', tier: 'deep', reason: null, changed_default: false, model: 'opus' } }),
-      base('plan', 2, { tool_use_id: 'toolu_p', status: 'completed', outcome: 'ready', rev: 1, tasks: 3, planner_model: { requested: 'opus', observed: 'claude-opus-5[1m]', agreement: 'match' } }),
-    ]);
-    expect(out).toContain('dispatch planner');
-    expect(out).toContain('ran claude-opus-5[1m]');
-    expect(out).toContain('plan     completed');
-    expect(out).toContain('rev 1, 3 task(s)');
-  });
-
-  it('reports a planner that did not run on the model it was given', () => {
-    const out = render([base('plan', 1, { tool_use_id: 'toolu_p', status: 'completed', outcome: 'ready', rev: 1, tasks: 1, planner_model: { requested: 'opus', observed: 'claude-sonnet-5', agreement: 'mismatch' } })]);
-    expect(out).toContain('asked for opus (mismatch)');
   });
 
   it('a record written before the model field existed says so rather than guessing one from the tier', () => {
@@ -252,13 +196,11 @@ describe('final host allocation diagnostics', () => {
     const records = [dispatch(1, 'tool', { host, allocation: { selected_model: selected, effort_edit: { kind: 'set', value: 'high' } }, decision: { tier: 'deep', model: 'opus', action: 'patch' } }),
       base('post', 2, { host, tool_use_id: 'tool', requested_model: 'opus', resolved_model: selected }),
       base('failure', 3, { host, tool_use_id: 'tool', requested_model: 'opus' }),
-      base('plan', 4, { host, tool_use_id: 'tool', planner_model: { requested: 'opus', observed: selected, agreement: 'mismatch' } }),
-      base('post', 5, { host, session_id: 'other', tool_use_id: 'tool', requested_model: 'opus' })];
+      base('post', 4, { host, session_id: 'other', tool_use_id: 'tool', requested_model: 'opus' })];
     const joined = allocatedTraceRecords(records);
     expect(joined[1]?.requested_model).toBe(selected);
     expect(joined[2]?.requested_model).toBe(selected);
-    expect(joined[3]?.planner_model).toEqual({ requested: selected, observed: selected, agreement: 'match' });
-    expect(joined[4]?.requested_model).toBe('opus');
+    expect(joined[3]?.requested_model).toBe('opus');
     expect(records[1]?.requested_model).toBe('opus');
     const out = render(records);
     expect(out).toContain(`selected ${selected} / high`);

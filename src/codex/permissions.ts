@@ -5,18 +5,16 @@ import { CODEX_SANDBOX_META, codexCallerWorkspace } from './workspace.js';
 import { obj, type Obj } from './source.js';
 
 /** Round-trip the native MCP permission snapshot into a named native profile, never a guessed sandbox mode. */
-export const capturedPermissions = (meta: unknown, planner: boolean): { cwd: string; config: Obj; permissions: string } | null => {
+export const capturedPermissions = (meta: unknown): { cwd: string; config: Obj; permissions: string } | null => {
   const caller = codexCallerWorkspace(meta);
   const profile = obj(obj(obj(meta)?.[CODEX_SANDBOX_META])?.['permissionProfile']);
   if (!caller || !profile || Object.keys(profile).some(k => !['type', 'network', 'file_system'].includes(k)) || !['managed', 'disabled'].includes(String(profile['type']))) return null;
-  if (profile['type'] === 'disabled') return planner
-    ? { cwd: caller.cwd, permissions: ':read-only', config: {} }
-    : { cwd: caller.cwd, permissions: ':danger-full-access', config: {} };
+  if (profile['type'] === 'disabled') return { cwd: caller.cwd, permissions: ':danger-full-access', config: {} };
   if (!['enabled', 'restricted'].includes(String(profile['network']))) return null;
   const fs = obj(profile['file_system']);
   if (!fs || !['restricted', 'unrestricted'].includes(String(fs['type']))) return null;
   const filesystem: Obj = Object.create(null) as Obj;
-  if (fs['type'] === 'unrestricted') filesystem[':root'] = planner ? 'read' : 'write';
+  if (fs['type'] === 'unrestricted') filesystem[':root'] = 'write';
   else {
     if (!Array.isArray(fs['entries']) || fs['entries'].length > 2048) return null;
     for (const value of fs['entries']) {
@@ -25,7 +23,7 @@ export const capturedPermissions = (meta: unknown, planner: boolean): { cwd: str
       if (entry['missing_path_behavior'] !== undefined && entry['missing_path_behavior'] !== 'skip') return null;
       // A skipped grant applies only while its path exists, as natively; it is never widened into an unconditional grant. A skipped denial stays unconditional.
       const optional = entry['missing_path_behavior'] === 'skip' && ['read', 'write'].includes(String(entry['access']));
-      const access = entry['access'] === 'none' ? 'deny' : planner && entry['access'] === 'write' ? 'read' : entry['access'];
+      const access = entry['access'] === 'none' ? 'deny' : entry['access'];
       let key: string; let subpath: string | undefined;
       if (path['type'] === 'path' && typeof path['path'] === 'string') {
         try { key = path['path'].startsWith('file:') ? fileURLToPath(path['path']) : path['path']; } catch { return null; }
@@ -56,5 +54,5 @@ export const capturedPermissions = (meta: unknown, planner: boolean): { cwd: str
       filesystem['glob_scan_max_depth'] = fs['glob_scan_max_depth'];
     }
   }
-  return { cwd: caller.cwd, permissions: 'jev-captured', config: { 'permissions.jev-captured': { filesystem, network: { enabled: !planner && profile['network'] === 'enabled' } } } };
+  return { cwd: caller.cwd, permissions: 'jev-captured', config: { 'permissions.jev-captured': { filesystem, network: { enabled: profile['network'] === 'enabled' } } } };
 };

@@ -12,8 +12,6 @@ export const LOCK_DEADLINE_MS = 300;
 export const LOCK_POLL_MS = 10;
 export const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 export const ACTIVE_GRACE_MS = 24 * 60 * 60 * 1000;
-export const MAX_PLANNER_ATTEMPTS = 2;
-export const MAX_REPLANS = 2;
 export const MAX_TASK_ATTEMPTS = 2;
 export const MAX_HISTORY = 8;
 /** A new execution or terminal policy must be delivered before the idle generation can close. */
@@ -176,7 +174,7 @@ export const readJob = (env: Env, sessionId: string): JobResult<JobState | null>
 /**
  * Read-modify-write under the lock; the lock is never held across an HTTP call. A null return leaves the file untouched.
  * An unreadable file reaches `fn` as null, so an orchestration turn can recover it, unless `refuseUnreadable` is set.
- * Refusing it for every writer was rejected: the orchestration guard is required to recover a corrupt state.
+ * Refusing it for every writer was rejected: a new prompt's generation is what recovers a corrupt state.
  */
 export const updateJob = (
   env: Env,
@@ -209,14 +207,9 @@ export const emptyGeneration = (promptId: string | null, shape: ExecutionShape, 
   request: null,
   created_at: now.toISOString(),
   shape,
-  phase: 'admitted',
-  planner_tier: null,
-  planner_model: null,
-  plan: null,
   active: emptyMap(),
   receipts: [],
-  denials: 0,
-  attempts: { planner: 0, replans: 0, tasks: emptyMap() },
+  attempts: { tasks: emptyMap() },
   outcome: null,
 });
 
@@ -231,7 +224,7 @@ export const newGeneration = (prev: JobState | null, sessionId: string, promptId
   const current = emptyGeneration(promptId, shape, now);
   if (!prev) return { state: { version: 5, session_id: sessionId, updated_at: now.toISOString(), current, history: [] }, superseded: false };
   const old = prev.current;
-  const unfinished = old.outcome === null && (Object.keys(old.active).length > 0 || old.phase === 'planning' || old.phase === 'planned');
+  const unfinished = old.outcome === null && Object.keys(old.active).length > 0;
   const retired: JobGeneration = {
     ...old,
     outcome: old.outcome ?? 'superseded',
@@ -273,7 +266,7 @@ export const hostExited = (r: Reservation): boolean => r.codex_execution?.host_p
 export interface ReservationInput {
   role: OwnedRole;
   taskId: string | null;
-  /** A4/T1: the contract hash the dispatch is made under; `null` for a planner, `''` where there is no contract. */
+  /** A4/T1: the contract hash the dispatch is made under; `''` where there is no contract. */
   contractHash: string | null;
   rev: number | null;
   tier: Tier | null;
@@ -305,38 +298,16 @@ export const release = (gen: JobGeneration, toolUseId: string): JobGeneration =>
 
 export const activeWorkers = (gen: JobGeneration): Reservation[] => Object.values(gen.active).filter((r) => r.role === 'worker');
 
-/**
- * T1/T2: the tasks a writer is running right now. Deleting a reservation is not observing a termination, so this is
- * the only thing that says a task is in flight; a task in it has no settled result, whatever its last receipt says.
- */
-export const activeTaskIds = (gen: JobGeneration): Set<string> =>
-  new Set(activeWorkers(gen).flatMap((r) => (r.task_id === null ? [] : [r.task_id])));
-
-export const activePlanners = (gen: JobGeneration): Reservation[] => Object.values(gen.active).filter((r) => r.role === 'planner');
-
-export const activeDeliverables = (gen: JobGeneration, exceptTaskId: string | null): string[] =>
-  activeWorkers(gen)
-    .filter((r) => r.task_id !== exceptTaskId)
-    .flatMap((r) => r.deliverables);
-
-export type BoundKind = 'planner' | 'replan' | 'task';
-
-/** A7: per-job bounds. Beyond them dispatch is denied with a terminal explanation instead of looping. */
-export const boundExhausted = (gen: JobGeneration, kind: BoundKind, taskId: string | null): boolean => {
-  if (kind === 'planner') return gen.attempts.planner >= MAX_PLANNER_ATTEMPTS;
-  if (kind === 'replan') return gen.attempts.replans >= MAX_REPLANS;
-  const id = taskId ?? '';
-  // At most one evidence-format-only single dispatch is free. The attempt number stays monotonic so receipts and
-  // markers remain unambiguous, while the paid attempt cap still bounds the job.
-  const waiver = gen.execution === 'single' && gen.receipts.some((r) => r.task_id === id && r.evidence_format_only === true) ? 1 : 0;
-  return (own(gen.attempts.tasks, id) ?? 0) >= MAX_TASK_ATTEMPTS + waiver;
+/** A7: the per-job task bound. Beyond it dispatch is denied with a terminal explanation instead of looping. */
+export const boundExhausted = (gen: JobGeneration, taskId: string): boolean => {
+  // At most one evidence-format-only single dispatch is free. The attempt number stays monotonic so receipts
+  // remain unambiguous, while the paid attempt cap still bounds the job.
+  const waiver = gen.execution === 'single' && gen.receipts.some((r) => r.task_id === taskId && r.evidence_format_only === true) ? 1 : 0;
+  return (own(gen.attempts.tasks, taskId) ?? 0) >= MAX_TASK_ATTEMPTS + waiver;
 };
 
-export const countAttempt = (gen: JobGeneration, kind: BoundKind, taskId: string | null): JobGeneration => {
-  if (kind === 'planner') return { ...gen, attempts: { ...gen.attempts, planner: gen.attempts.planner + 1 } };
-  if (kind === 'replan') return { ...gen, attempts: { ...gen.attempts, replans: gen.attempts.replans + 1 } };
-  const id = taskId ?? '';
-  const tasks = Object.assign(emptyMap<number>(), gen.attempts.tasks, { [id]: (own(gen.attempts.tasks, id) ?? 0) + 1 });
+export const countAttempt = (gen: JobGeneration, taskId: string): JobGeneration => {
+  const tasks = Object.assign(emptyMap<number>(), gen.attempts.tasks, { [taskId]: (own(gen.attempts.tasks, taskId) ?? 0) + 1 });
   return { ...gen, attempts: { ...gen.attempts, tasks } };
 };
 

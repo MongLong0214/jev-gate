@@ -1,4 +1,4 @@
-import type { ChoiceAnswer, HttpCode, JevUsage, PlannerTier, Tier } from './types.js';
+import type { ChoiceAnswer, HttpCode, JevUsage, Tier } from './types.js';
 
 export const JEV_ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
 export const MAX_REQUEST_BYTES = 128 * 1024;
@@ -34,11 +34,6 @@ export const TIER_PROFILES: Record<Tier, string> = {
   standard: 'Bounded implementation or investigation under established contracts, including substantial mechanical changes and tests.',
   deep: 'Concrete unresolved interacting constraints or an observed reasoning failure beyond ordinary cross-file work.',
   frontier: 'Exceptional unresolved foundational constraints or a documented unresolved reasoning problem.',
-};
-
-export const PLANNER_TIER_PROFILES: Record<PlannerTier, string> = {
-  deep: 'Establish an implementation plan using recognizable interfaces, constraints and engineering approaches.',
-  frontier: 'Resolve unusually consequential, interacting and unresolved architectural or domain constraints before implementation can be specified.',
 };
 
 /** Every gate builds this shape; the client is indifferent to which questions a gate asks. */

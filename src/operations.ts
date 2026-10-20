@@ -8,7 +8,7 @@ import { CODEX_CAPABILITIES, CODEX_PLUGIN_CAPABILITIES, type HostCapability, typ
 
 /** A display model made only from named metadata fields. Raw prompts and source text never leave here. */
 type Rec = Record<string, unknown>;
-export type FeatureId = 'admission' | 'allocation' | 'planning' | 'workers' | 'guard' | 'router' | 'compact';
+export type FeatureId = 'admission' | 'allocation' | 'workers' | 'router' | 'compact';
 export type StepState = 'active' | 'done' | 'skipped' | 'error' | 'unconfirmed' | 'interrupted';
 export type StepLane = 'jev' | 'policy' | 'host' | 'local';
 
@@ -50,7 +50,6 @@ export interface OperationStep {
   /** Native host spans store their explicit start; other records are end-stamped measurements. */
   startedAt?: string;
   judgements?: Array<{ question: string; value: string; confidence: number | null; probabilities: Array<{ label: string; value: number }> }>;
-  graph?: Array<{ id: string; dependsOn: string[]; checks: number }>;
   /** The recorded exchange behind one measured Jev response. Every absent value stays null; cost is a list-price estimate, never a billed amount. */
   receipt?: JevReceipt;
 }
@@ -99,9 +98,7 @@ export interface ModRecord { at: string; component: 'router' | 'compact'; rec: R
 const FEATURES: Array<{ id: FeatureId; label: string }> = [
   { id: 'admission', label: 'Gate A · 실행 형태' },
   { id: 'allocation', label: 'Gate B · 등급 배정' },
-  { id: 'planning', label: '계획 · 의존성' },
   { id: 'workers', label: '워커 · 수락 검사' },
-  { id: 'guard', label: '루트 도구 가드' },
   { id: 'router', label: 'Router · 모델과 effort' },
   { id: 'compact', label: 'Compact · 요약 대체' },
 ];
@@ -195,9 +192,7 @@ const traceFeature = (phase: string): FeatureId | null => {
   if (phase === 'codex_model_request' || phase === 'codex_model_failure' || phase === 'codex_router_intent' || phase === 'codex_router_result' || phase === 'codex_router_skipped' || phase === 'codex_route_applied' || phase === 'codex_router_response') return 'router';
   if (phase.startsWith('admission_')) return 'admission';
   if (phase.startsWith('pre_')) return 'allocation';
-  if (phase.startsWith('interpretation_') || phase === 'plan') return 'planning';
   if (phase.startsWith('background_') || phase.startsWith('worktree_') || phase === 'dispatch_denied' || phase === 'dispatch' || phase === 'post' || phase === 'failure' || phase === 'stop') return 'workers';
-  if (phase === 'guard') return 'guard';
   return null;
 };
 const traceTitle = (phase: string, r: Rec): string => ({
@@ -205,10 +200,9 @@ const traceTitle = (phase: string, r: Rec): string => ({
   codex_router_intent: 'Router · Jev 요청', codex_router_result: 'Router · 턴 설정 결정', codex_router_skipped: 'Router · Jev 호출 생략', codex_router_response: 'Router · Codex 응답 관측', codex_route_applied: 'Router · Codex 요청 전송',
   admission_intent: 'Gate A · Jev 요청', admission_result: 'Gate A · 실행 형태',
   pre_intent: 'Gate B · Jev 요청', pre_result: 'Gate B · 등급 결정',
-  interpretation_intent: '계획 해석 · Jev 요청', interpretation_result: '계획 해석 · 자문',
-  plan: '플래너 결과 · 작업 그래프', dispatch: token(r['role']) === 'planner' ? '플래너 호출' : '워커 호출',
+  dispatch: '워커 호출',
   background_dispatch: '백그라운드 실행 준비', background_launch: '백그라운드 워커 실행', background_conversation: '메인 대화 계속', background_terminal: '백그라운드 워커 종료', background_policy_delivery: '종료 정책 전달',
-  worktree_start: 'Worktree · 생성 시작', worktree_result: 'Worktree · 생성 결과', dispatch_denied: 'Agent 호출 거절', post: '워커 결과 · 수락 판정', failure: '호스트 호출 실패', stop: '턴 종료', guard: '루트 도구 가드',
+  worktree_start: 'Worktree · 생성 시작', worktree_result: 'Worktree · 생성 결과', dispatch_denied: 'Agent 호출 거절', post: '워커 결과 · 수락 판정', failure: '호스트 호출 실패', stop: '턴 종료',
 } as Record<string, string>)[phase] ?? phase;
 
 const compactSelectionReason = (value: unknown): string | null => ({
@@ -297,7 +291,8 @@ const ROUTER_EVENT: Record<string, string> = {
 const traceStep = (r: Rec, resultIds: Set<string>, intents: Map<string, string>, modelTerminals: Map<string, string>, live: Liveness): OperationStep | null => {
   const phase = token(r['phase']);
   if (!phase) return null;
-  const feature = phase === 'dispatch' && r['role'] === 'planner' ? 'planning' : traceFeature(phase);
+  // #289: a legacy planner dispatch is not worker execution, and its feature is gone like the plan and guard records.
+  const feature = phase === 'dispatch' && r['role'] === 'planner' ? null : traceFeature(phase);
   if (!feature) return null;
   const at = iso(r['written_at']);
   if (!at) return null;
@@ -315,7 +310,6 @@ const traceStep = (r: Rec, resultIds: Set<string>, intents: Map<string, string>,
   let issue: OperationStep['issue'];
   let summary = '';
   let lane: StepLane = 'policy';
-  let graph: OperationStep['graph'];
   let outcome: OperationStep['outcome'], refusal: [string, string] | null = null;
   if (isIntent) {
     lane = phase.endsWith('_start') ? 'local' : 'jev';
@@ -371,19 +365,6 @@ const traceStep = (r: Rec, resultIds: Set<string>, intents: Map<string, string>,
   } else if (phase === 'codex_router_response') {
     lane = 'host'; summary = text('Codex 응답 관측', token(r['observed_model']) ?? '모델 미확인', r['observed_effort'] === 'unknown' ? 'effort 미확인' : token(r['observed_effort']));
     details.push('응답이 보고한 값만 표시');
-  } else if (phase === 'plan') {
-    lane = 'host';
-    summary = text(token(r['status']), token(r['outcome']), `작업 ${n(number(r['tasks']))}개`, number(r['chain_depth']) === null ? null : `의존 깊이 ${n(number(r['chain_depth']))}`);
-    graph = Array.isArray(r['graph']) ? r['graph'].slice(0, 16).flatMap((raw) => {
-      const task = rec(raw); const taskId = token(task?.['id']);
-      return task && taskId ? [{ id: taskId, dependsOn: list(task['depends_on']), checks: number(task['required_checks']) ?? 0 }] : [];
-    }) : undefined;
-    if (graph?.length) details.push(`의존 그래프 ${graph.length}개 작업`);
-    const capabilities = list(r['main_session_capabilities']);
-    if (capabilities.length) details.push(`메인 세션에 남긴 기능: ${capabilities.join(', ')}`);
-    const planner = field(r, 'planner_model');
-    if (planner) details.push(text(`요청 모델 ${token(planner['requested']) ?? '?'}`, `실행 모델 ${token(planner['observed']) ?? '?'}`, token(planner['agreement'])));
-    if (token(r['worker_isolation'])) details.push(`워커 격리 ${token(r['worker_isolation'])}`);
   } else if (phase.startsWith('background_')) {
     lane = phase === 'background_dispatch' || phase === 'background_conversation' || phase === 'background_policy_delivery' ? 'policy' : 'host';
     const closed = resultIds.has(`background:${token(r['session_id'])}:${token(r['execution_prompt_id']) ?? token(r['prompt_id'])}:${token(r['tool_use_id'])}`);
@@ -394,13 +375,12 @@ const traceStep = (r: Rec, resultIds: Set<string>, intents: Map<string, string>,
     if (phase === 'background_terminal') { summary = token(r['status']) === 'completed' ? '호스트에서 실제 종료 확인 · 계약 수락은 별도 검사' : codexFailureReason(r) ?? '호스트에서 중단·실패 확인 · 성공 수락 없음'; state = token(r['status']) === 'completed' ? 'done' : r['not_executed'] === true ? 'error' : 'interrupted'; if (state === 'done') outcome = 'host_ended'; if (r['not_executed'] === true) details.push('워커 미실행 · 완료 주장 없음'); if (r['orphaned'] === true) details.push('이전 작업 결과 · 현재 계획 미진행'); }
   } else if (phase === 'dispatch_denied') {
     lane = 'policy'; state = 'skipped';
-    summary = ({ workers_active: '기존 워커 종료 대기 · 재계획 거절', planner_active: '기존 플래너 실행 중 · 중복 호출 거절' } as Record<string, string>)[String(r['reason'])] ?? text('호출 거절', token(r['reason']));
+    summary = text('호출 거절', token(r['reason']));
     details.push(text(token(r['tool_name']), token(r['reason'])), '이 호출은 실행되지 않았습니다');
   } else if (phase === 'dispatch') {
     lane = 'host';
     summary = text(token(r['role']), token(r['task_id']), compactSelectionReason(r['selection']), `요청 등급 ${token(r['requested_tier']) ?? '?'}`);
-    details.push(text(`호출 모델 ${token(r['requested_model']) ?? '미기록'}`, r['pinned'] === true ? '모델 고정' : null, list(r['depends_on']).length ? `선행 작업 ${list(r['depends_on']).join(', ')}` : null));
-    if (token(r['worker_isolation'])) details.push(`워커 격리 ${token(r['worker_isolation'])}`);
+    details.push(text(`호출 모델 ${token(r['requested_model']) ?? '미기록'}`, r['pinned'] === true ? '모델 고정' : null));
   } else if (phase === 'post') {
     lane = 'host';
     // #232: only an accept receipt accepts a contract, and a refused one fails that worker's result. A row with no verdict is the host's own outcome.
@@ -415,16 +395,9 @@ const traceStep = (r: Rec, resultIds: Set<string>, intents: Map<string, string>,
     if (checks) details.push(text(`worker 보고 pass ${n(number(checks['pass']))}`, `fail ${n(number(checks['fail']))}`, `미실행 ${n(number(checks['not_run']))}`));
     const verification = field(r, 'verification');
     if (verification) details.push(text(`실행 기록 ${token(verification['transcript']) ?? '미확인'}`, ...([['contradicted', '모순'], ['unobserved', '미관측'], ['stale', '변경 전 통과']] as const).map(([k, name]) => { const ids = checkIds(verification[k]); return ids && `${name} ${ids}`; })));
-    if (list(r['ready_task_ids']).length) details.push(`다음 실행 가능: ${list(r['ready_task_ids']).join(', ')}`);
-    if (r['plan_complete'] === true) details.push('계획의 모든 작업 수락');
     if (r['evidence_format_only'] === true) details.push('검사 명령 형식만 불일치 · 한 번의 무료 재검증 가능');
-    if (r['root_fallback'] === true) details.push(r['root_fallback_reason'] === 'accepted' ? '종료된 작업 수락 · 루트에서 남은 확인 가능 · 전체 요구사항 검증과는 다름' : r['root_fallback_reason'] === 'delivery_failed' ? '필수 원문 전달 불가 · 루트 복귀' : '단일 워커 시도 상한 · 루트 도구 가드 해제');
+    if (r['root_fallback'] === true) details.push(r['root_fallback_reason'] === 'accepted' ? '종료된 작업 수락 · 루트에서 남은 확인 가능 · 전체 요구사항 검증과는 다름' : r['root_fallback_reason'] === 'delivery_failed' ? '필수 원문 전달 불가 · 루트 복귀' : '단일 워커 시도 상한 · 루트 복귀');
     if (r['orphaned'] === true) details.push('이전 세대의 늦은 결과 · 현재 계획 미진행');
-  } else if (phase === 'guard') {
-    lane = 'policy';
-    summary = text(token(r['tool_name']) ?? '도구', r['allow'] === false ? '거절' : '가드 통과', r['stopped'] === true ? '예산 소진 · 턴 중단' : null);
-    details.push(`누적 거절 ${n(number(r['denials']))}회`);
-    if (r['reason'] === 'admission_delivery_failed') details.push(r['root_fallback'] === true ? '필수 원문 전달 불가 · 워커 미실행 · 루트에서 계속 진행' : '필수 원문 전달 불가 · 루트 복귀 저장 실패');
   } else if (phase === 'stop') {
     lane = 'host'; summary = text('턴 종료', token(r['outcome']));
   } else if (phase === 'failure') {
@@ -441,7 +414,6 @@ const traceStep = (r: Rec, resultIds: Set<string>, intents: Map<string, string>,
   const model = phase === 'codex_router_response' ? modelObservation(r['selected_model'], r['observed_model'], r['selected_effort'], r['observed_effort'], undefined, 'submitted_effort' in r ? { value: r['submitted_effort'], source: 'provider_request' } : undefined)
     : phase === 'codex_route_applied' ? modelObservation(r['selected_model'], r['observed_model'], r['selected_effort'], r['observed_effort'], undefined, 'submitted_effort' in r ? { value: r['submitted_effort'], source: 'provider_request' } : undefined)
     : phase === 'pre_result' && field(r, 'allocation') ? modelObservation(field(r, 'allocation')?.['selected_model'], null, field(field(r, 'allocation'), 'effort_edit')?.['value'])
-    : phase === 'plan' && field(r, 'planner_model') ? modelObservation(field(r, 'planner_model')?.['requested'], field(r, 'planner_model')?.['observed'])
     : phase === 'post' || phase === 'failure' || phase === 'background_launch' ? modelObservation(r['routed_model'] ?? r['requested_model'], r['resolved_model']) : undefined;
   if (model && phase === 'codex_route_applied' && r['request_kind'] === 'root_response' && typeof r['applied'] === 'boolean') model.requestApplied = r['applied'];
   const routing: OperationStep['routing'] = phase.startsWith('codex_router_') || phase === 'codex_route_applied' ? { scope: r['scope'] === 'child' ? 'child' : 'root', baseline: token(r['baseline_model']), modelReason: token(field(r, 'reasons')?.['model']), effortReason: token(field(r, 'reasons')?.['effort']) } : phase === 'pre_result' && field(r, 'allocation') ? { scope: 'owned', baseline: token(field(r, 'allocation')?.['baseline_model']), modelReason: 'gate_allocated', effortReason: 'gate_allocated' } : undefined;
@@ -508,7 +480,7 @@ const traceStep = (r: Rec, resultIds: Set<string>, intents: Map<string, string>,
     ...(elapsed !== null && elapsed >= 0 ? { elapsedMs: elapsed } : {}),
     ...(phase === 'codex_model_request' && state === 'active' ? { startedAt: at } : {}),
     ...(phase.endsWith('_result') && judgements(r) ? { judgements: judgements(r)! } : {}),
-    ...(graph ? { graph } : {}), ...(receipt ? { receipt } : {}) };
+    ...(receipt ? { receipt } : {}) };
 };
 
 type Routing = NonNullable<OperationStep['routing']>;

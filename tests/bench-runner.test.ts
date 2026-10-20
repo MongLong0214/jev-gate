@@ -436,11 +436,9 @@ describe('historical runs recorded under the earlier policy', () => {
 
 describe('R11: the frozen configuration is the one the child reads', () => {
   const PARENT: ConfigV5['models'] = { fast: 'sonnet', standard: 'sonnet', deep: 'opus', frontier: 'fable' };
-  const writeConfig = (path: string, models: ConfigV5['models'], cap: number): void => {
+  const writeConfig = (path: string, models: ConfigV5['models'], turns: number): void => {
     mkdirSync(join(path, '..'), { recursive: true });
-    // #48 P1-2: a cap above 1 now requires workerIsolation: "worktree", which itself requires Bash in guardAllowTools.
-    const isolation = cap > 1 ? { workerIsolation: 'worktree' as const, guardAllowTools: ['Bash'] } : {};
-    writeFileSync(path, JSON.stringify({ version: 5, mode: 'auto', models, maxParallelWorkers: cap, requestDeadlineMs: 2500, ...isolation }, null, 2));
+    writeFileSync(path, JSON.stringify({ version: 5, mode: 'auto', models, delegationCoordinatorTurns: turns, requestDeadlineMs: 2500 }, null, 2));
   };
 
   it('plan, execution and accounting agree, and mid-run edits to either source do not reach later cells', () => {
@@ -464,7 +462,7 @@ describe('R11: the frozen configuration is the one the child reads', () => {
     const frozen = JSON.parse(readFileSync(frozenPath, 'utf8')) as ConfigV5;
     expect(plan.effective_config_source).toBe(parentPath);
     expect(plan.effective_config).toEqual(frozen);
-    expect(frozen).toMatchObject({ version: 5, models: PARENT, maxParallelWorkers: 2, requestDeadlineMs: 2500 });
+    expect(frozen).toMatchObject({ version: 5, models: PARENT, delegationCoordinatorTurns: 2, requestDeadlineMs: 2500 });
     expect(JSON.stringify(frozen)).not.toMatch(/test-key/);
 
     // Both sources were rewritten while the run was in flight.

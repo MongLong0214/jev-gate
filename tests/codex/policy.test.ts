@@ -10,7 +10,7 @@ import { codexSuccessor } from '../../src/codex/catalog.js';
 import { CodexRpc } from '../../src/codex/rpc.js';
 import { CodexPolicy } from '../../src/codex/policy.js';
 import { readJob } from '../../src/job.js';
-import { localResponse, nativeLaunchOptions, nativeWorkspaceUpstream } from '../../src/codex/launch.js';
+import { nativeLaunchOptions, nativeWorkspaceUpstream } from '../../src/codex/launch.js';
 import { buildOperations } from '../../src/operations.js';
 const tmp = mkdtempSync(join(tmpdir(), 'jev-codex-policy-'));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
@@ -29,10 +29,13 @@ describe('Codex ordered routing and recorded application', () => {
     const models = { fast: 'account-fast', standard: 'account-workhorse', deep: 'account-workhorse', frontier: 'account-frontier' };
     expect(catalogTierModels('account-workhorse', available)).toEqual(models);
     const p = loadCodexPolicy({ JEV_CODEX_CONFIG: join(tmp, 'policy.json'), JEV_CODEX_MODEL: 'account-workhorse' }, available);
-    expect(p.gate).toMatchObject({ models, maxParallelWorkers: 16, workerIsolation: 'worktree', guardAllowTools: ['*'], delegationDepthFloor: 0, planInterpretation: true });
+    expect(p.gate).toMatchObject({ models, delegationDepthFloor: 0 });
+    expect(p.gate).not.toHaveProperty('maxParallelWorkers');
     expect(p.router.model).toBe(true);
-    const serial = join(tmp, 'serial-policy.json'); writeFileSync(serial, JSON.stringify({ gate: { maxParallelWorkers: 1, guardAllowTools: [] } }));
-    expect(loadCodexPolicy({ JEV_CODEX_CONFIG: serial }).gate.workerIsolation).toBe('none');
+    const serial = join(tmp, 'serial-policy.json'); writeFileSync(serial, JSON.stringify({ gate: { maxParallelWorkers: 1, guardAllowTools: [], workerIsolation: 'worktree' } }));
+    // #289: a deployed file that still sets the removed keys loads, and they are dropped unread.
+    const old = loadCodexPolicy({ JEV_CODEX_CONFIG: serial }).gate;
+    expect(old).not.toHaveProperty('guardAllowTools'); expect(old).not.toHaveProperty('workerIsolation');
     const override = join(tmp, 'explicit-models.json'); writeFileSync(override, JSON.stringify({ gate: { models: { fast: 'owner-model' } } }));
     expect(loadCodexPolicy({ JEV_CODEX_CONFIG: override, JEV_CODEX_MODEL: 'account-workhorse' }, available).gate.models).toEqual({ ...models, fast: 'owner-model' });
   });
@@ -205,12 +208,6 @@ describe('native check evidence', () => {
     const commands = new Map([['c1', 'vitest run'], ['c2', 'vitest run']]);
     const observation = codexObservation([{ id: 'c1', type: 'commandExecution', command: "/bin/zsh -c 'vitest run'", status: 'failed', exitCode: 1 }, { id: 'w', type: 'fileChange', status: 'inProgress' }, { id: 'c2', type: 'commandExecution', command: "/bin/zsh -c 'vitest run; true'", status: 'completed', exitCode: 0 }], false, commands);
     expect(observation).toMatchObject({ truncated: true, openWrite: true, lastWrite: 1, runs: [{ command: 'vitest run', status: 'failed' }, { command: "/bin/zsh -c 'vitest run; true'", status: 'passed' }] });
-  });
-});
-describe('local stop response', () => {
-  it('is a valid native response with complete usage fields', () => {
-    const events = localResponse('Jev Gate stopped the turn.').split('\n').filter(l => l.startsWith('data: ')).map(l => JSON.parse(l.slice(6)));
-    expect(events.at(-1).response.usage).toMatchObject({ input_tokens: 0, output_tokens: 0, total_tokens: 0 });
   });
 });
 describe('native transport authority', () => {

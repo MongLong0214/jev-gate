@@ -43,18 +43,16 @@ The older `node <plugin>/dist/cli.mjs codex` managed terminal remains available 
 
 | Feature | Automatic connected session |
 | --- | --- |
-| Gate A | Reads observed native context usage; Jev judges context, cost support and bounded tool work; code chooses direct, one fast worker or planned delegation and enforces the depth floor |
+| Gate A | Reads observed native context usage; Jev judges context, cost support and bounded tool work; code chooses direct or one worker and enforces the depth floor |
 | Gate B | Adds actual model/effort candidates to the existing Gate B batch; rechecks eligibility before owned dispatch |
-| Planning | Only on the planned path: runs the existing read-only planner instructions in a native Codex thread and validates the returned task graph |
 | Workers / acceptance | Runs real native Codex workers in the background by default; compares reports with observed command exits and edits. Acceptance is owned by code on both hosts. |
-| Root guard | Enforces the shared root allowlist while a job is admitted; never returns an allow decision |
 | Router | Uses a nominal actual-ID model choice and candidate-local ordered effort scores; routes the original root request and separates selection, submission and actual response observation |
 
-Native permissions remain authoritative for root and workers. Owned workers inherit the calling tool’s captured native filesystem grants and denies. Planners narrow those grants to reads and disable network. An unrepresentable permission snapshot refuses dispatch instead of guessing broader access. Workers cannot create another coordinator. Worktree isolation creates a separate branch and leaves it for inspection and integration; it does not silently merge changes.
+Native permissions remain authoritative for root and workers. Owned workers inherit the calling tool’s captured native filesystem grants and denies. An unrepresentable permission snapshot refuses dispatch instead of guessing broader access. Workers cannot create another coordinator. Workers run in the caller's working directory.
 
-The defaults enable up to 16 snapshot worktree workers, up to 64 planned tasks, no depth floor, and plan interpretation. Jev chooses single or planned delegation from the request. Each planned worker sees staged, unstaged and untracked working files; ignored files stay excluded. Code acceptance is followed by root integration and reporting. Apply only the diff from each returned snapshot baseline to the worker branch; the snapshot commit itself is not a root commit.
+The defaults run one worker per admitted request with no depth floor. Code acceptance is followed by root integration and reporting.
 
-A complete bounded lookup or mechanical edit can use one account-listed Luna worker without a planner even when the older delegation-cost estimate is negative. This preference shares Gate A's existing Jev request and respects missing context, explicit no-delegation, shape and depth constraints. Workers handle whole outcomes, not each individual file read; the main integrates the result.
+A complete bounded lookup or mechanical edit can use one account-listed Luna worker even when the older delegation-cost estimate is negative. This preference shares Gate A's existing Jev request and respects missing context, explicit no-delegation, shape and depth constraints. Workers handle whole outcomes, not each individual file read; the main integrates the result.
 
 Missing source, unknown checks and a worker's self-reported pass never become observed success. Check verification sees native command exits and file-change events; shell-based edits and external editor writes are not established by those events.
 
@@ -69,7 +67,7 @@ Use `JEV_CODEX_CONFIG=/absolute/codex.json`, otherwise `~/.config/jev-gate/codex
 }
 ```
 
-`gate` accepts the shared V5 options, including depth floors, budgets, checks and `workerIsolation`. Without a model mapping, the adapter selects accessible tiers from live `model/list` descriptions. Explicit `models` entries override only those tiers. Main model and effort routing are both enabled by default. Router has the same directional probability thresholds (upgrade 0.8, downgrade 0.6). `JEV_GATE_MODE` overrides the Gate mode only; `gate.mode: "off"` does not disable the Router. A `gate.mode` or `JEV_GATE_MODE` other than `off|native|auto` turns off the Gate only; the Router keeps its own settings, and `doctor` reports the value. A `compact` section left from an earlier version is ignored.
+`gate` accepts the shared V5 options, including depth floors, budgets and checks. Without a model mapping, the adapter selects accessible tiers from live `model/list` descriptions. Explicit `models` entries override only those tiers. Main model and effort routing are both enabled by default. Router has the same directional probability thresholds (upgrade 0.8, downgrade 0.6). `JEV_GATE_MODE` overrides the Gate mode only; `gate.mode: "off"` does not disable the Router. A `gate.mode` or `JEV_GATE_MODE` other than `off|native|auto` turns off the Gate only; the Router keeps its own settings, and `doctor` reports the value. A `compact` section left from an earlier version is ignored.
 
 ### Current Codex models and efforts
 
@@ -141,7 +139,7 @@ claude plugin validate . --strict
 JEV_CODEX_E2E=1 npx vitest run tests/codex/runtime.test.ts tests/codex/connection-runtime.test.ts
 ```
 
-Ordinary tests use fake HTTP/CLI and no credentials. The native runtime suite installs a uniquely named disposable plugin and drives **real Codex processes** with a scripted local Responses provider. It verifies guarded root calls, workers, failed-check rejection, an actual file edit invalidating an earlier check followed by a successful recheck, plan dependencies, cancellation, denial budgets, read-only permissions, planned-worker worktrees, unrouted native compaction, GPT-6/6.1 and Terra model/effort application, and dashboard records; the temporary installation is removed afterwards. The ordinary-native connection test additionally verifies no launcher/workspace export, crash recovery, concurrent sessions, actual Gate worker checks, an unrouted native compaction, removal of an earlier version's compaction marker and restoration of owner settings. This establishes those execution paths, not every future host version or measured product savings.
+Ordinary tests use fake HTTP/CLI and no credentials. The native runtime suite installs a uniquely named disposable plugin and drives **real Codex processes** with a scripted local Responses provider. It verifies unguarded root calls, workers, failed-check rejection, an actual file edit invalidating an earlier check followed by a successful recheck, cancellation, read-only permissions, unrouted native compaction, GPT-6/6.1 and Terra model/effort application, and dashboard records; the temporary installation is removed afterwards. The ordinary-native connection test additionally verifies no launcher/workspace export, crash recovery, concurrent sessions, actual Gate worker checks, an unrouted native compaction, removal of an earlier version's compaction marker and restoration of owner settings. This establishes those execution paths, not every future host version or measured product savings.
 
 The design was checked against the [official App Server](https://developers.openai.com/codex/app-server), [native hooks](https://learn.chatgpt.com/docs/hooks), [CaMe's native terminal connection](https://github.com/IlBig/CaMe), [jev-router's native Responses integration](https://github.com/gargpratyush/jev-router), and [jev-use](https://github.com/shitianfang/jev-use). These are architectural references, not a copied alternate execution engine. The [0.158.0 loader](https://github.com/openai/codex/blob/main/codex-rs/core-plugins/src/loader.rs) uses the compatibility manifest and `.mcp.json`; root portable manifests currently omit plugin hooks.
 

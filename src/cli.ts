@@ -10,13 +10,13 @@ import { claudeConfigDir, claudeTraceDir } from './claude-setup.js';
 import { AUTH_CONFLICT_ENV, isSubscriptionOAuth, parseAuthStatus, subagentModelOverride, type CommandResult } from './auth.js';
 import { OWNED_AGENT_PROFILES } from './agents.js';
 import { foregroundDispatchPossible } from './brief.js';
-import { DEFAULT_CONFIG, effectiveDepthFloor, LEGACY_DEPTH_FLOOR, loadConfig, MIGRATION_SAMPLE, NATIVE_HOOK_TIMEOUT_MS, type ConfigResult } from './config.js';
+import { DEFAULT_CONFIG, effectiveDepthFloor, IGNORED_KEYS, LEGACY_DEPTH_FLOOR, loadConfig, MIGRATION_SAMPLE, NATIVE_HOOK_TIMEOUT_MS, type ConfigResult } from './config.js';
 import { startDashboard, dashboardSources } from './dashboard.js';
 import { ensureDashboard, serveAutomaticDashboard } from './dashboard-launch.js';
 import { dashboardPreferenceCommand } from './dashboard-settings.js';
 import { recordingCommand, recordingStatus } from './recording.js';
 import { explainDir } from './explain.js';
-import { HOST_WINDOW_MAX, HOST_WINDOW_MIN, measuredCompactPoint, readHostCompactWindow, readHostWorktreeBaseRef, readManagedSetting, readSettingsEnvVar, STANDARD_CONTEXT_WINDOW } from './host-window.js';
+import { HOST_WINDOW_MAX, HOST_WINDOW_MIN, measuredCompactPoint, readHostCompactWindow, readManagedSetting, readSettingsEnvVar, STANDARD_CONTEXT_WINDOW } from './host-window.js';
 import { jobsDir } from './job.js';
 import { LIVENESS_WINDOW, livenessPath, readLiveness } from './liveness.js';
 import { OWNED_AGENTS, type Mode, type Tier } from './types.js';
@@ -36,7 +36,7 @@ export const runCommand = (cmd: string, args: string[], env: NodeJS.ProcessEnv =
 
 
 /**
- * #48 P0-2: derived, not hand-copied. The six owned rows come from `OWNED_AGENT_PROFILES` (src/agents.ts) with
+ * #48 P0-2: derived, not hand-copied. The four owned rows come from `OWNED_AGENT_PROFILES` (src/agents.ts) with
  * `model` read off `DEFAULT_CONFIG.models[tier]` -- the same table `gen-agents.mjs` writes frontmatter from -- so
  * this expectation and the packaged frontmatter can only agree or both be visibly wrong, never quietly disagree.
  */
@@ -92,7 +92,8 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
       const issues = moduleIssues(root, 'hooks/register.ts');
       say(issues.length ? 'fail' : 'ok', `Function Hooks module dependencies: ${issues.length ? issues.join('; ') : 'packaged entry and relative imports readable'}`);
       const table = isRecord(hooks) && isRecord(hooks['hooks']) ? hooks['hooks'] : {};
-      // V5: PreToolUse guards every root tool, so it is registered once with no matcher; Stop records the terminal
+      // V5: PreToolUse is registered once with no matcher, because any root tool call also reconciles finished
+      // background workers; Stop records the terminal
       // outcome. SessionStart (#48 P2) is the liveness warning -- also no matcher, and registered unconditionally the
       // same as the others.
       // The classic Compact hooks (PreCompact, SessionStart on source compact, PostCompact) are a second entry point,
@@ -102,7 +103,7 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
         ['PreToolUse', null, 'entry'],
         ['PostToolUse', '^(Agent|TaskStop)$', 'entry'],
         ['PostToolUseFailure', '^Agent$', 'entry'],
-        ['SubagentStop', '^jev-gate:(?:worker(?:-fast|-deep|-frontier)?|planner(?:-frontier)?)$', 'entry'],
+        ['SubagentStop', '^jev-gate:worker(?:-fast|-deep|-frontier)?$', 'entry'],
         ['Stop', null, 'entry'],
         ['SessionStart', null, 'entry'],
         ['PreCompact', null, 'compact-hook'],
@@ -125,7 +126,7 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
     const agentsDir = join(root, 'agents');
     let files: string[] = []; try { files = readdirSync(agentsDir).filter((f) => f.endsWith('.md')); } catch { say('fail', 'agents/ is missing or unreadable'); }
     const extra = files.filter((f) => !(f in AGENT_EXPECTATIONS));
-    if (extra.length) say('warn', `agents/ contains extra definitions (${extra.join(', ')}); only the six owned profiles are V5 roles`);
+    if (extra.length) say('warn', `agents/ contains extra definitions (${extra.join(', ')}); only the four owned profiles are V5 roles`);
     for (const [file, exp] of Object.entries(AGENT_EXPECTATIONS)) {
       const p = join(agentsDir, file);
       if (!existsSync(p)) continue;
@@ -181,7 +182,10 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
       return;
     }
     const c = loaded.config;
-    say('ok', `config ${loaded.source}: mode=${c.mode} jevModel=${c.jevModel} deadline=${c.requestDeadlineMs}ms floors={admission:${c.admissionConfidenceFloor},route:${c.routeConfidenceFloor}} plannerDefaultTier=${c.plannerDefaultTier} models=${JSON.stringify(c.models)} maxParallelWorkers=${c.maxParallelWorkers} guardAllowTools=${JSON.stringify(c.guardAllowTools)} routeQuestionShape=${c.routeQuestionShape} admissionQuestionShape=${c.admissionQuestionShape} delegationDepthFloor=${c.delegationDepthFloor === null ? 'null (derived)' : c.delegationDepthFloor} delegationDepthFraction=${c.delegationDepthFraction} maxTasksPerPlan=${c.maxTasksPerPlan} admittedShape=${c.admittedShape} delegationCoordinatorTurns=${c.delegationCoordinatorTurns} delegationWorkerTokensPerCall=${c.delegationWorkerTokensPerCall} guardAllowMcp=${c.guardAllowMcp} verifyWorkerChecks=${c.verifyWorkerChecks}`);
+    let ignored: string[] = [];
+    try { const raw: unknown = JSON.parse(readFileSync(loaded.source, 'utf8')); if (isRecord(raw)) ignored = Object.keys(raw).filter((k) => IGNORED_KEYS.has(k)); } catch { /* defaults or env: no file */ }
+    if (ignored.length) say('info', `config ${loaded.source}: ${ignored.join(', ')} ${ignored.length === 1 ? 'is a withdrawn key' : 'are withdrawn keys'}: loaded, never read, and safe to delete`);
+    say('ok', `config ${loaded.source}: mode=${c.mode} jevModel=${c.jevModel} deadline=${c.requestDeadlineMs}ms floors={admission:${c.admissionConfidenceFloor},route:${c.routeConfidenceFloor}} models=${JSON.stringify(c.models)} routeQuestionShape=${c.routeQuestionShape} admissionQuestionShape=${c.admissionQuestionShape} delegationDepthFloor=${c.delegationDepthFloor === null ? 'null (derived)' : c.delegationDepthFloor} delegationDepthFraction=${c.delegationDepthFraction} delegationCoordinatorTurns=${c.delegationCoordinatorTurns} delegationWorkerTokensPerCall=${c.delegationWorkerTokensPerCall} verifyWorkerChecks=${c.verifyWorkerChecks}`);
     if (c.admissionQuestionShape === 'atomic') {
       say(
         'info',
@@ -189,7 +193,7 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
       );
     }
     if (c.routeQuestionShape === 'atomic') say('info', 'atomic Gate B: six core facts; yes >= 0.6, no <= 0.4; uncertain answers preserve the called profile; fast requires all cheap-work evidence; specific difficulty upgrades only fast/standard to deep');
-    if (c.admissionQuestionShape === 'atomic') say('info', `atomic admission execution: ${c.admittedShape === 'auto' && c.maxParallelWorkers === 1 ? 'single (no planner)' : c.admittedShape}; ${c.admittedShape === 'auto' && c.maxParallelWorkers > 1 ? 5 : 3} questions in one batch; selected execution is recorded before application`);
+    if (c.admissionQuestionShape === 'atomic') say('info', 'atomic admission execution: single; 4 questions in one batch; selected execution is recorded before application');
     /**
      * #48 P0-1: doctor resolves the same host window and effective floor the hook resolves on the auto path
      * (`effectiveDepthFloor` in src/config.ts), so what is printed here is the number that would actually gate the
@@ -229,20 +233,10 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
       // per-hook-event process spawn -- that cost is the plugin being registered at all, and only disabling it removes it.
       say('warn', 'mode=off still starts a node process for every matched hook event (hooks.json registration is unconditional): to remove that cost too, disable the plugin with `claude plugin disable jev-gate@<marketplace>`');
     }
-    if (c.mode === 'native') say('info', 'mode=native: guidance + owned profiles + job state and guard when orchestration starts, no Jev request');
+    if (c.mode === 'native') say('info', 'mode=native: guidance + owned profiles + job state when orchestration starts, no Jev request');
     if (c.mode === 'auto') say('info', 'mode=auto: admission and allocation gates send the request, the planned task and summaries of earlier worker replies to TypeSafe (may include source excerpts and prior constraints)');
     say('info', `job state directory: ${jobsDir(env)} (0700, one 0600 file per session, removed after 7 days)`);
     if (env['JEV_GATE_EXPERIMENT_ADMISSION'] === 'orchestrated') say('warn', `JEV_GATE_EXPERIMENT_ADMISSION=orchestrated is set: every prompt starts an orchestrated job in ${c.mode} mode without a Gate A request (recorded as forced/admission_forced); allocation is unaffected`);
-    if (c.workerIsolation === 'worktree') {
-      let snapshot = false;
-      try { snapshot = JSON.stringify(JSON.parse(readFileSync(join(root, 'hooks', 'hooks.json'), 'utf8'))?.hooks?.WorktreeCreate).includes('/dist/worktree-cli.js'); } catch { /* Standalone/legacy adapters retain the native baseRef behavior. */ }
-      if (snapshot) say('info', 'workerIsolation=worktree: the installed WorktreeCreate hook snapshots current working files with a private index; root HEAD and index are preserved. No manual baseRef setting is needed');
-      else {
-      const baseRef = readHostWorktreeBaseRef(env, cwd);
-      if (baseRef.value === 'head') say('info', `workerIsolation=worktree with worktree.baseRef="head" (${baseRef.source}): every planned worker dispatch the hook patches also carries isolation: "worktree" (an ad-hoc or single-executor dispatch never does); whether the host actually gives that worker its own git worktree for a patched call is not yet observed`);
-      else say('warn', `workerIsolation=worktree is not in effect: host worktree.baseRef is ${baseRef.value === null ? (baseRef.source === 'unset' ? 'unset' : `unknown (${baseRef.source})`) : `"${baseRef.value}" (${baseRef.source})`}, so an isolated worker would start from origin/<default-branch> instead of this branch. The hook runs such turns as workerIsolation=none with one worker at a time; set "worktree": {"baseRef": "head"} in Claude Code settings to use it`);
-      }
-    } else say('info', `workerIsolation=${c.workerIsolation}: workers share the caller's working tree; maxParallelWorkers stays 1 under this setting`);
   };
 
   const checkClaude = (): string | null => {

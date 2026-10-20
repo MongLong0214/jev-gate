@@ -192,7 +192,7 @@ const gateEvent = (r: Rec): ActivityEvent | null => {
     const tier = decision ? token(decision['tier']) : null;
     const model = decision ? token(decision['model']) : null;
     const called = token(r['called_tier']);
-    const role = token(r['role']) === 'planner' ? '플래너' : `작업 ${token(r['task_id']) ?? '?'}`;
+    const role = `작업 ${token(r['task_id']) ?? '?'}`;
     const why = decision ? reasonText(decision['reason']) : null;
     let used: string;
     const allocation = sub(r, 'allocation');
@@ -206,20 +206,7 @@ const gateEvent = (r: Rec): ActivityEvent | null => {
     else if (action === 'patch') used = `${role}: ${tier ?? '?'} 등급으로 호출합니다${model ? ` (${model})` : ''}`;
     else used = `${role}: ${action ?? '결정 없음'} ${tier ?? ''}`.trim();
     if (why) used = `${used}. ${why}`;
-    return { at, kind: call.kind, title: token(r['role']) === 'planner' ? '플래너 등급' : '워커 등급', call: call.call, used };
-  }
-  if (phase === 'plan') {
-    const outcome = token(r['outcome']);
-    const tasks = num(r['tasks']);
-    const pm = sub(r, 'planner_model');
-    const observed = pm ? token(pm['observed']) : null;
-    return {
-      at,
-      kind: 'follow',
-      title: '계획',
-      call: 'Jev 호출이 아닙니다. 플래너가 끝난 뒤의 기록입니다',
-      used: `계획 ${token(r['status']) ?? '?'}${outcome ? ` → ${outcome}` : ''}${tasks === null ? '' : `, 작업 ${tasks}개`}${observed ? `. 플래너 모델 ${observed}` : ''}`,
-    };
+    return { at, kind: call.kind, title: '워커 등급', call: call.call, used };
   }
   if (phase === 'post') {
     const verdict = token(r['verdict']) ?? '판정 없음';
@@ -244,9 +231,6 @@ const gateEvent = (r: Rec): ActivityEvent | null => {
   if (phase === 'failure') {
     const line = token(r['error_first_line']);
     return { at, kind: 'follow', title: '실패', call: 'Jev 호출이 아닙니다', used: line ? `호스트가 실패를 보고했습니다 (${line})` : '호스트가 실패를 보고했습니다' };
-  }
-  if (phase === 'guard' && r['allow'] === false) {
-    return { at, kind: 'follow', title: '도구 거절', call: 'Jev 호출이 아닙니다', used: `${token(r['tool_name']) ?? '도구'} 호출을 거절했습니다` };
   }
   return null;
 };
@@ -356,7 +340,7 @@ const turnKey = (r: Rec): string => {
 const phaseTitle = (r: Rec): string => {
   const phase = token(r['phase']);
   if (phase === 'admission_intent' || phase === 'admission_result') return '게이트 A';
-  if (phase === 'pre_intent' || phase === 'pre_result') return token(r['role']) === 'planner' ? '플래너 등급' : '워커 등급';
+  if (phase === 'pre_intent' || phase === 'pre_result') return '워커 등급';
   if (phase?.startsWith('interpretation')) return '계획 해석';
   return phase ?? '기록';
 };

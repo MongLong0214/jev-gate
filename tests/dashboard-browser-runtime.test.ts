@@ -28,7 +28,7 @@ const run = (id: string, host: 'claude' | 'codex', steps: OperationStep[], extra
 const VERSION = { running: '0.8.31', installed: '0.8.31', release: { latest: '0.8.31' } };
 function snapshot(runs: OperationRun[]) {
   const feed = runs.flatMap(r => r.steps.map(s => ({ ...s, host: r.host ?? 'claude', runId: r.id, runTitle: r.title }))).sort((a,b) => b.at.localeCompare(a.at));
-  const ids = ['admission','allocation','planning','workers','guard','router','compact'] as const;
+  const ids = ['admission','allocation','workers','router','compact'] as const;
   const measured = feed.filter(s => s.lane==='jev' && s.durationMs!==undefined), values = measured.map(s => s.durationMs!).sort((a,b) => a-b), pct = (p: number) => values.length ? values[Math.ceil(values.length*p)-1]! : null;
   const today: Record<string, { calls: number; input: number; costUsd: number; unpriced: number }> = {};
   for (const s of measured) { const t = today[s.host] ??= { calls:0, input:0, costUsd:0, unpriced:0 }; t.calls++; t.input += s.receipt?.input ?? 0; if (s.receipt?.costUsd != null) t.costUsd += s.receipt.costUsd; else t.unpriced++; }
@@ -66,7 +66,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     if(/\/분|최근 1분|분당|처리량|\/min|per minute|throughput/i.test((document.body as unknown as {innerText:string}).innerText))out.push('rate text');
     for(const li of document.querySelectorAll('#runs li'))if(!li.textContent?.trim()||li.classList.contains('empty')&&li.querySelector('.sel'))out.push('empty run item');
     for(const b of document.querySelectorAll('#runs .row'))if(!b.querySelector('.nm b')?.textContent?.trim())out.push('run row without a title');
-    const nodes=[...document.querySelectorAll('#pipeline .node')].map(e=>e.getBoundingClientRect());if(nodes.length!==7)out.push('node count '+nodes.length);
+    const nodes=[...document.querySelectorAll('#pipeline .node')].map(e=>e.getBoundingClientRect());if(nodes.length!==5)out.push('node count '+nodes.length);
     nodes.forEach((a,i)=>{if(a.width<120)out.push('narrow node');if(a.left<0||a.right>innerWidth+1)out.push('offscreen node');for(const b of nodes.slice(i+1))if(a.left<b.right&&a.right>b.left&&a.top<b.bottom&&a.bottom>b.top)out.push('overlapping nodes');});
     for(const e of document.querySelectorAll('#pipeline .node :is(.t,.dec)')){const box=e as unknown as {scrollWidth:number;clientWidth:number};if(box.scrollWidth>box.clientWidth+1)out.push('clipped node text: '+e.textContent);}
     for(const l of document.querySelectorAll('#pipeline svg.wires line')){const r=l.getBoundingClientRect();if(!r.height)continue;if(nodes.some(n=>r.left>n.left+1&&r.left<n.right-1&&r.top<n.bottom-1&&r.bottom>n.top+1))out.push('wire crosses a node');}
@@ -347,7 +347,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
   it('shifts nothing from the first frame through live calls, a new run on top, attention, credit, pinning and unpinning at five widths', async () => {
     const failures:string[]=[];
     for(const width of [1440,1024,768,390,320]){
-      const a=[call('s0','admission',63,{at:ago(9000),executionPath:'direct'},{choice:'direct'}),call('s1','router',91,{at:ago(7000)},{choice:'sonnet · medium',threshold:0.6}),step('s2','guard',{lane:'policy',summary:'허용',at:ago(6000)})];
+      const a=[call('s0','admission',63,{at:ago(9000),executionPath:'direct'},{choice:'direct'}),call('s1','router',91,{at:ago(7000)},{choice:'sonnet · medium',threshold:0.6}),step('s2','workers',{lane:'policy',summary:'허용',at:ago(6000)})];
       const runs=[run('a','claude',a,{title:'Claude 실행',state:'active'}),run('b','codex',[call('b0','compact',220,{at:ago(20000)})],{title:'Codex 실행'})];push(runs);
       const p=await browser.newPage({viewport:{width,height:900}});p.on('pageerror',e=>errors.push(e.message));
       await p.addInitScript(()=>{type Shift={value:number;hadRecentInput:boolean;sources:Array<{node:{nodeName:string;id?:string;className?:unknown}|null}>};
@@ -389,7 +389,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
   it('renders empty and long mixed-host data in 28 viewport/theme/language states without overflow, overlap, character wrapping, rate text or accent bars',async()=>{
     const long='long '.repeat(60);
     push([run('c','claude',[call('a','admission',63,{executionPath:'direct'}),call('b','allocation',88,{},{choice:'claude-sonnet-5'}),step('w','workers',{lane:'host',summary:long,model:{selected:'claude-opus-5-5',observed:'claude-sonnet-5',status:'mismatch',selectedEffort:null,observedEffort:null}}),call('r','router',91,{},{choice:'sonnet · medium',threshold:0.6,direction:'downgrade'})],{title:'Claude '+long,state:'active'}),
-      run('x','codex',[call('xr','router',140,{},{choice:'gpt-6.1-sol · minimal'}),step('g','guard',{lane:'policy',summary:'허용'}),call('e','allocation',70,{summary:'<img src=x onerror="alert(1)">'},{status:402,code:'payment_required',costUsd:null}),call('k','compact',220)],{title:'Codex '+long,state:'attention'}),
+      run('x','codex',[call('xr','router',140,{},{choice:'gpt-6.1-sol · minimal'}),step('g','workers',{lane:'policy',summary:'허용'}),call('e','allocation',70,{summary:'<img src=x onerror="alert(1)">'},{status:402,code:'payment_required',costUsd:null}),call('k','compact',220)],{title:'Codex '+long,state:'attention'}),
       run('u','claude',[call('ur','router',80)],{title:'Router 실행',state:'unconfirmed'})]);
     const failures:string[]=[];
     for(const [width,height] of [[1920,1080],[1440,900],[1280,800],[1024,768],[768,1024],[390,844],[320,740]] as const){
@@ -402,7 +402,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
       expect(await p.locator('img').count()).toBe(0);await p.close();
     }
     expect(failures).toEqual([]);
-    push([]);const p=await page();expect(await p.locator('#pipeline .node').count()).toBe(7);expect(await p.locator('.trip').count()).toBe(0);expect(await p.locator('#circuit-inspector .kv dd').first().textContent()).toBe('–');
+    push([]);const p=await page();expect(await p.locator('#pipeline .node').count()).toBe(5);expect(await p.locator('.trip').count()).toBe(0);expect(await p.locator('#circuit-inspector .kv dd').first().textContent()).toBe('–');
     expect(await p.locator('#runs li').allTextContents()).toEqual(['조건에 맞는 실행이 없습니다.']);expect(await p.locator('#rc li').count()).toBe(14);expect(await problems(p)).toEqual([]);await p.close();
   },180_000);
 
@@ -426,15 +426,15 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
   it('plays one round trip per recorded Jev call, staggers a frame across its interval and gives other records a flash and a tick only', async () => {
     const steps=[call('rt0','admission',60)];push([run('rt','claude',steps,{state:'active'})]);const p=await page();await settle(p);await record(p);
     const comm=await p.locator('#comm i').count();await wait(1000);
-    steps.push(call('rt1','router',90,{at:ago(600)},{choice:'haiku · low'}),step('pol','guard',{lane:'policy',at:ago(450),summary:'허용'}),call('rt2','compact',110,{at:ago(300)}),call('rt3','allocation',70));push([run('rt','claude',steps,{state:'active'})]);
-    await p.waitForSelector('.trip',{state:'attached'});push([run('rt','claude',steps,{state:'active'}),run('other','codex',[step('o','planning',{lane:'host'})])]);
+    steps.push(call('rt1','router',90,{at:ago(600)},{choice:'haiku · low'}),step('pol','workers',{lane:'policy',at:ago(450),summary:'허용'}),call('rt2','compact',110,{at:ago(300)}),call('rt3','allocation',70));push([run('rt','claude',steps,{state:'active'})]);
+    await p.waitForSelector('.trip',{state:'attached'});push([run('rt','claude',steps,{state:'active'}),run('other','codex',[step('o','admission',{lane:'host'})])]);
     await vi.waitFor(async()=>expect(count(await motion(p),'row')).toBe(3),{timeout:8000});await settle(p);const log=await motion(p);
     expect(count(log,'trip')).toBe(6);expect(count(log,'ping')).toBe(3);expect(log.filter(([k])=>k.startsWith('lat:')).map(([k])=>k)).toEqual(['lat:90ms','lat:110ms','lat:70ms']);
-    expect(log.filter(([k])=>k.startsWith('zap:')&&k!=='zap:run').map(([k])=>k).sort()).toEqual(['zap:allocation','zap:compact','zap:guard','zap:planning','zap:router']);
+    expect(log.filter(([k])=>k.startsWith('zap:')&&k!=='zap:run').map(([k])=>k).sort()).toEqual(['zap:admission','zap:allocation','zap:compact','zap:router','zap:workers']);
     const pings=log.filter(([k])=>k==='ping').map(([,t])=>t);expect(pings[2]!-pings[0]!).toBeGreaterThan(300);
     for(const feature of ['router','compact','allocation']){const at=(k:string)=>log.find(([x])=>x===k)![1];expect(at('zap:'+feature)).toBeGreaterThan(pings[0]!);}
     expect(log.findIndex(([k])=>k==='trip')).toBeLessThan(log.findIndex(([k])=>k==='ping'));
-    expect(await p.locator('#comm i').count()).toBe(comm+3);expect(await p.locator('#pipeline .node[data-feature=guard] .strip i').count()).toBe(1);
+    expect(await p.locator('#comm i').count()).toBe(comm+3);expect(await p.locator('#pipeline .node[data-feature=workers] .strip i').count()).toBe(1);
     expect(await p.locator('#rc li:first-child .rcr > span:nth-child(2)').textContent()).toBe('Gate B');expect(await p.locator('#runs [data-run=rt] .jc .n').textContent()).toBe('4');
     expect(await p.locator('#runs [data-run=rt] .md .rec em').last().textContent()).toBe('Gate B');
     // A returning dot keeps its response time in view for a moment after it lands, then leaves.

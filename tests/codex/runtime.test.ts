@@ -85,7 +85,7 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
     installed = true;
   }, 60_000);
 
-  it.each(['bounded-lookup', 'direct-lookup', 'background', 'single', 'failed', 'permission-boundary', 'edit-after-check', 'worktree', 'hierarchy', 'cancelled', 'budget', 'routing-gpt-6.1-sol', 'routing-gpt-6-astra', 'routing-gpt-6-sol', 'routing-gpt-6-luna', 'routing-gpt-5.6-terra', 'routing-model-luna', 'routing-auto-model', 'routing-root-keep', 'routing-root-effort', 'routing-root-model', 'routing-root-both'])('runs automatic native Codex policies: %s', async scenario => {
+  it.each(['bounded-lookup', 'direct-lookup', 'background', 'single', 'failed', 'permission-boundary', 'edit-after-check', 'cancelled', 'routing-gpt-6.1-sol', 'routing-gpt-6-astra', 'routing-gpt-6-sol', 'routing-gpt-6-luna', 'routing-gpt-5.6-terra', 'routing-model-luna', 'routing-auto-model', 'routing-root-keep', 'routing-root-effort', 'routing-root-model', 'routing-root-both'])('runs automatic native Codex policies: %s', async scenario => {
     const routing = scenario.startsWith('routing-');
     const rootPair = scenario.startsWith('routing-root-');
     const baselineEffort = rootPair ? 'high' : 'medium';
@@ -105,7 +105,7 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
       const index=requests.length;
       const final=(text:string):Rec=>({id:`msg_${index}`,type:'message',role:'assistant',phase:'final_answer',content:[{type:'output_text',text,annotations:[]}]});
       const fn=(name:string,args:Rec):Rec=>requestFunctions(request).some(t=>t['name']===name) ? {id:`fc_${index}`,type:'function_call',call_id:`call_${index}`,name,arguments:JSON.stringify(name==='jev_agent' && scenario!=='background'?{...args,run_in_background:false}:args)} : {id:`fc_${index}`,type:'custom_tool_call',call_id:`call_${index}`,name:'exec',input:`const result = await tools.${name}(${JSON.stringify(name==='jev_agent' && scenario!=='background'?{...args,run_in_background:false}:args)}); text(result);`};
-      let item = index===2 ? fn('exec_command',{cmd:'touch guard-must-not-exist',login:false}) : index===3 ? fn('jev_agent',{subagent_type:'jev-gate:worker',prompt:'Investigate the fixture and run vitest run.'}) : index===4 ? fn('exec_command',{cmd:'vitest run',login:false,max_output_tokens:8000}) : index===5 ? final('```json\n'+JSON.stringify({status:'done',summary:'Fixture checked',changed_files:[],interfaces:[],checks:[{check_id:'vitest run',result:'pass',note:'actual run'}],blockers:[]})+'\n```') : final('managed native complete');
+      let item = index===2 ? fn('exec_command',{cmd:'echo rootToolUnguarded',login:false}) : index===3 ? fn('jev_agent',{subagent_type:'jev-gate:worker',prompt:'Investigate the fixture and run vitest run.'}) : index===4 ? fn('exec_command',{cmd:'vitest run',login:false,max_output_tokens:8000}) : index===5 ? final('```json\n'+JSON.stringify({status:'done',summary:'Fixture checked',changed_files:[],interfaces:[],checks:[{check_id:'vitest run',result:'pass',note:'actual run'}],blockers:[]})+'\n```') : final('managed native complete');
       const report=(check:string):string=>'```json\n'+JSON.stringify({status:'done',summary:'Fixture checked',changed_files:[],interfaces:[],checks:[{check_id:check,result:'pass',note:'actual run'}],blockers:[]})+'\n```';
       if (scenario === 'bounded-lookup') {
         if (index === 3) item = fn('jev_agent', { subagent_type: 'jev-gate:worker-fast', prompt: 'Find runtimeNeedle in source.ts and return its exact line. Run rg -n runtimeNeedle source.ts.' });
@@ -125,7 +125,7 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
           else item = final(report('vitest run'));
         } else {
           backgroundRootRequests++;
-          item = backgroundRootRequests === 2 ? fn('exec_command', { cmd: 'touch guard-must-not-exist', login: false })
+          item = backgroundRootRequests === 2 ? fn('exec_command', { cmd: 'echo rootToolUnguarded', login: false })
             : backgroundRootRequests === 3 ? fn('jev_agent', { subagent_type: 'jev-gate:worker', prompt: 'JEV_BG_NATIVE_WORKER Investigate the fixture and run vitest run.' })
             : backgroundRootRequests === 6 ? fn('jev_agent', { action: 'status', agent_id: backgroundWorkerId })
             : final(backgroundRootRequests === 5 ? 'The main answered the new question while the worker is still active.' : 'managed native complete');
@@ -147,17 +147,6 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
       }
       if(scenario==='cancelled' && index===4) item=fn('exec_command',{cmd:'sleep 30',login:false,yield_time_ms:1000});
       if(scenario==='cancelled' && index>=5) { res.writeHead(200,{'content-type':'text/event-stream'}); res.flushHeaders(); return; }
-      if(scenario==='budget' && index>=2) item=fn('exec_command',{cmd:'touch guard-must-not-exist',login:false});
-      if(scenario==='hierarchy'||scenario==='worktree') {
-        const task=(id:string,deps:string[])=>({id,outcome:'Check the fixture',depends_on:deps,deliverables:['source.ts'],constraints:[],checks:[{id:'c1',description:'Check fixture',required:true,command:'vitest run'}]});
-        const plan={status:'ready',goal:'Check two dependent outcomes',constraints:[],tasks:[task('t1',[]),task('t2',['t1'])]};
-        if(index===3) item=fn('jev_agent',{subagent_type:'jev-gate:planner',prompt:'Plan the two fixture outcomes.'});
-        else if(index===4) item=final('```json\n'+JSON.stringify(plan)+'\n```');
-        else if(index===5 || index===9) item=fn('jev_agent',{subagent_type:'jev-gate:worker',prompt:'[JEV_TASK rev=1 id=t2]\nCheck t2.'});
-        else if(index===6) item=fn('jev_agent',{subagent_type:'jev-gate:worker',prompt:'[JEV_TASK rev=1 id=t1]\nCheck t1.'});
-        else if(index===7 || index===10) item=fn('exec_command',{cmd:'vitest run',login:false,max_output_tokens:8000});
-        else if(index===8 || index===11) item=final(report('c1'));
-      }
       const response = { id: `resp_${requests.length}`, status: 'completed', output: [item], usage: { input_tokens: scenario === 'bounded-lookup' ? 10 : 150000, output_tokens: 1, total_tokens: scenario === 'bounded-lookup' ? 11 : 150001 } };
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       for (const event of [{ type: 'response.created', response: { ...response, status: 'in_progress', output: [] } }, { type: 'response.output_item.done', output_index: 0, item }, { type: 'response.completed', response }]) res.write(`data: ${JSON.stringify(event)}\n\n`);
@@ -165,21 +154,14 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
     });
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
     const config = [...isolation, 'features.plugins=true', 'features.hooks=true', `model=${JSON.stringify(baselineModel)}`, `model_reasoning_effort=${JSON.stringify(baselineEffort)}`, 'model_context_window=1000000', 'model_auto_compact_token_limit=900000', `marketplaces.${market}.source_type="local"`, `marketplaces.${market}.source=${JSON.stringify(plugin)}`, `plugins.jev-gate@${market}.enabled=true`, 'shell_environment_policy.inherit="all"'];
-    if(scenario==='worktree') {
-      expect(spawnSync('git',['add','source.ts'],{cwd:workspace}).status).toBe(0);
-      expect(spawnSync('git',['-c','user.name=Jev fixture','-c','user.email=fixture@example.invalid','commit','-qm','Fixture'],{cwd:workspace}).status).toBe(0);
-    }
-    // Serial and restrictive scenarios explicitly select that policy; worktree and automatic-model cases exercise the new defaults.
     const policyFile = join(tmp, `policy ${scenario}.json`);
     writeFileSync(policyFile, JSON.stringify({
       gate: { mode: routing ? 'off' : 'auto',
         ...(scenario === 'direct-lookup' ? { delegationDepthFloor: 999999 } : {}),
-        admittedShape: scenario === 'hierarchy' || scenario === 'worktree' ? 'hierarchy' : 'auto',
-        ...(scenario === 'worktree' ? {} : { workerIsolation: 'none', maxParallelWorkers: 1, guardAllowTools: [], planInterpretation: false }),
         ...(scenario === 'routing-model-luna' ? { models: { fast: 'gpt-6-luna', standard: 'gpt-6-luna', deep: 'gpt-6.1-sol', frontier: 'gpt-6-astra' } } : {}) },
       router: { model: rootPair || ['routing-model-luna', 'routing-auto-model'].includes(scenario), ...(scenario === 'routing-auto-model' ? { allowAstra: true } : {}) },
     }));
-    const profiles=Object.fromEntries(['planner','planner-frontier','worker-fast','worker','worker-deep','worker-frontier'].map(n=>[`jev-gate:${n}`,readFileSync(join(root,'agents',n+'.md'),'utf8').replace(/^---[\s\S]*?---\s*/, '')]));
+    const profiles=Object.fromEntries(['worker-fast','worker','worker-deep','worker-frontier'].map(n=>[`jev-gate:${n}`,readFileSync(join(root,'agents',n+'.md'),'utf8').replace(/^---[\s\S]*?---\s*/, '')]));
     const session = await startCodexSession({ cwd: workspace, env: { ...runtimeEnv, PATH:`${join(workspace,'.bin')}:${process.env['PATH'] ?? ''}`, JEV_CODEX_CONFIG:policyFile, JEV_CODEX_TRACE_DIR: trace, JEV_GATE_STATE_DIR: join(tmp, `managed ${scenario} state`), JEV_CODEX_UPSTREAM: `http://127.0.0.1:${(server.address() as {port:number}).port}/v1`, TYPESAFE_API_KEY: 'fixture-key' }, serverArgs: config.flatMap(c => ['-c', c]), bypassHookTrust: true, nativeAuth: false, profiles,
       fetchImpl: (async (_url, init) => {
         const parsed=JSON.parse(String(init?.body)); const q = parsed.questions;
@@ -292,16 +274,11 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
         expect(requests.length).toBe(10);
         return;
       }
-      if(scenario==='budget') {
-        expect(requests.length,JSON.stringify(all)).toBe(13);
-        expect(all.some(r=>r['phase']==='guard' && r['stopped']===true)).toBe(true);
-        expect(existsSync(join(workspace,'guard-must-not-exist'))).toBe(false);
-        expect(messages.slice(before).some(m=>m['method']==='turn/completed' && ((m['params'] as Rec)['turn'] as Rec)['status']==='interrupted')).toBe(true);
-        return;
-      }
-      expect(requests.length,JSON.stringify({all,turns:messages.slice(before).filter(m=>m['method']==='turn/completed')})).toBe(scenario==='hierarchy'||scenario==='worktree'?12:6);
-      expect(existsSync(join(workspace,'guard-must-not-exist'))).toBe(false);
-      if(scenario!=='worktree') expect(JSON.stringify(requests[2]!['input'])).toContain('denied');
+      expect(requests.length,JSON.stringify({all,turns:messages.slice(before).filter(m=>m['method']==='turn/completed')})).toBe(6);
+      // #289: no root tool guard, so the root's own call runs and its output comes back unchanged.
+      const rootOutput = JSON.stringify((requests[2]!['input'] as Rec[]).filter(i => String(i['type']).endsWith('_output')));
+      expect(rootOutput).toContain('rootToolUnguarded');
+      expect(rootOutput).not.toContain('denied');
       if (scenario === 'bounded-lookup') {
         expect(requests[3]!['model']).toBe('gpt-6-luna');
         expect(JSON.stringify(requests[4]!['input'])).toContain('1:export const runtimeNeedle = 42;');
@@ -311,18 +288,8 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
         expect(all.some(r => r['phase'] === 'admission_result' && r['policy_basis'] === 'bounded_tool_worker' && ((r['estimate'] as Rec)['saving_tokens'] as number) < 0)).toBe(true);
       }
       if(scenario==='permission-boundary') expect(existsSync(join(workspace,'worker-must-not-exist'))).toBe(false);
-      if(scenario==='worktree') {
-        expect(JSON.stringify(requests[6]!['input'])).toContain('worktrees/jev-worker-');
-        expect(all.some(r=>r['phase']==='post' && r['verdict']==='accept'),JSON.stringify(all)).toBe(true);
-      }
       expect(all.some(r=>r['phase']==='admission_result' && (r['decision'] as Rec)?.['shape']==='orchestrated'),JSON.stringify(all)).toBe(true);
       expect(all.some(r=>r['phase']==='post' && r['verdict']===(['failed','permission-boundary'].includes(scenario)?'incomplete':'accept')),JSON.stringify(all.filter(r=>r['phase']==='post'))).toBe(true);
-      if(scenario==='hierarchy'||scenario==='worktree') {
-        expect(all.filter(r=>r['phase']==='dispatch' && r['role']==='worker').length).toBe(2);
-        expect(all.some(r=>r['phase']==='post' && r['plan_complete']===true),JSON.stringify(all)).toBe(true);
-        await vi.waitFor(() => expect(session.policy.sessions.size).toBe(1), { timeout: 3000 });
-        expect(JSON.stringify(requests[6]!['input'])).toContain('[Jev Gate task contract]');
-      }
     } finally { releaseBackground(); socket.terminate(); await session.close(); server.closeAllConnections(); await new Promise<void>(r=>server.close(()=>r())); }
   }, 60000);
 

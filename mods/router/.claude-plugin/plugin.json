@@ -107,7 +107,7 @@
     "allowFable": {
       "type": "boolean",
       "title": "Router: Allow automatic Fable selection",
-      "description": "Opt in to new automatic Fable model targets, including owned planners and workers. A manually selected root remains usable when off.",
+      "description": "Opt in to new automatic Fable model targets, including owned workers. A manually selected root remains usable when off.",
       "default": false
     }
   }

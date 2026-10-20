@@ -99,14 +99,14 @@ Both hosts share one private key and dashboard. Installing from source is for de
 
 | Feature | Behavior | Jev usage |
 | --- | --- | --- |
-| Gate | Chooses direct execution, one background worker, or a plan with worker tasks. Code checks contracts and passing checks. | Eligible admission and allocation judgments; optional plan interpretation |
+| Gate | Chooses direct execution or one background worker. Code accepts only observed passing checks. | Eligible admission and allocation judgments |
 | Router | Selects model and effort from supported candidates for the root or eligible agents. Explicit pins are respected. | Root turns are assessed once; mapped Claude workers are assessed again at each inference after spawn |
 | Compact | Claude Code only. Builds an extractive digest plus recent context. Jev prioritizes older successful results needed for the current task within the existing size budget. | One bounded candidate batch by default; timeout/invalid output keeps local selection |
 | Dashboard | Shows both hosts' recorded judgments, requests, and outcomes live. | Reads local metadata; makes no Jev requests |
 
 Gate, Router, Compact, recording, and automatic dashboard opening default to **on**. Automatic Astra/Fable targets default to off; enable both hosts with `frontierEnabled: true` in `~/.config/jev-gate/config.json`; manually selecting a root model does not enable automatic restricted children. [Router options](mods/router/README.md).
 
-Default Gate settings permit native tools (`guardAllowTools: ["*"]`), up to 16 isolated workers, 64 planned tasks, a depth floor of 0, and plan interpretation. Worktree snapshots include current working files. Native permissions remain authoritative. Missing keys, invalid judgments, timeouts, or unavailable host facts preserve the native call.
+Default Gate settings run one worker per admitted request with a depth floor of 0. Native permissions remain authoritative. Missing keys, invalid judgments, timeouts, or unavailable host facts preserve the native call.
 
 Enabled does not mean every prompt delegates, routes, or compacts. The first Claude prompt may lack context usage for Gate admission. Simple bounded work can use a fast worker; broad or unclear tasks may remain direct. Jev probabilities are policy inputs, not measured success rates. No general speed, cost, or token saving is guaranteed.
 
@@ -120,7 +120,7 @@ Set the shared frontier switch in the ordinary config (merge this field into an 
 
 ## Keep talking while workers run
 
-Owned workers and planners dispatch in the background by default. New messages steer the main conversation without replacing the original job or its contracts. A launch receipt is separate from completion and contract acceptance.
+Owned workers dispatch in the background by default. New messages steer the main conversation without replacing the original job or its contracts. A launch receipt is separate from completion and contract acceptance.
 
 Claude sends native completion notifications. Codex's coordinator can query `jev_agent` with `action: "status"` or explicitly cancel with `action: "cancel"` and the returned `agent_id`. Interrupting the main turn does not cancel an already running background worker. If Claude is busy with a foreground tool, use its native **Send now** shortcut; ordinary Enter may queue a message. [Background and host details](docs/advanced-usage.md).
 
@@ -138,7 +138,7 @@ Every PR runs the `models` CI job against the official Claude model/effort docum
 
 The plugin opens **one shared local browser dashboard** automatically. Starting another Claude or Codex session reuses it instead of opening duplicate tabs. Select **Claude + Codex**, **Claude Code**, or **Codex** to inspect each host.
 
-A seven-node circuit (Gate A, Gate B, plan, workers, tool guard, Router, Compact; the Codex filter hides Compact, which runs on Claude Code only) hangs off a Jev rail. Every new record flashes its node, the node's 60-second strip and its execution row in recorded order, including policy, host and lifecycle records; measured Jev responses travel the rail and set the latency readout. The **Jev traffic** bar covers the last 30 seconds: requests as short ticks, responses at their latency. Between records a soft sweep runs along the rail and the node wires flow to show the view is live; neither carries a record. The execution list, the Jev call log (one row per call) and the execution detail change in the same frame. Pause, disconnected streams and reduced-motion preferences stop all movement and keep the numbers. All layouts fit without horizontal page scrolling.
+A five-node circuit (Gate A, Gate B, workers, Router, Compact; the Codex filter hides Compact, which runs on Claude Code only) hangs off a Jev rail. Every new record flashes its node, the node's 60-second strip and its execution row in recorded order, including policy, host and lifecycle records; measured Jev responses travel the rail and set the latency readout. The **Jev traffic** bar covers the last 30 seconds: requests as short ticks, responses at their latency. Between records a soft sweep runs along the rail and the node wires flow to show the view is live; neither carries a record. The execution list, the Jev call log (one row per call) and the execution detail change in the same frame. Pause, disconnected streams and reduced-motion preferences stop all movement and keep the numbers. All layouts fit without horizontal page scrolling.
 
 1. Start a task in your normal coding session.
 2. Read the **Execution circuit** at the top. Select a node to see its latest decision, confidence and Jev response time in **Stage details**; it also filters the execution list to that feature, and selecting it again shows all.
@@ -183,7 +183,7 @@ The key is stored in `~/.config/jev-gate/auth/credentials.json` (0700 directory/
 
 When enabled and eligible, these inputs can leave the machine:
 
-- **Gate:** the request, composed task contracts, or predecessor summaries. A needs-context retry can include recent user turns.
+- **Gate:** the request and each eligible worker dispatch's prompt. A needs-context retry can include recent user turns.
 - **Router:** the task text and routing/cache facts used for its judgment.
 - **Compact:** the current task and a bounded set of older successful-result excerpts. Sensitive candidates are filtered before sending. Mandatory preservation and final size limits remain local.
 

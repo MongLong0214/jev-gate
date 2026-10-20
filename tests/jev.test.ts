@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { buildAdmissionRequest } from '../src/admission.js';
 import { DEFAULT_CONFIG } from '../src/config.js';
-import { callJev, JEV_ENDPOINT, MAX_REQUEST_BYTES, PLANNER_TIER_PROFILES, TIER_PROFILES, topChoices, validateChoice, validateScore } from '../src/jev.js';
+import { callJev, JEV_ENDPOINT, MAX_REQUEST_BYTES, TIER_PROFILES, topChoices, validateChoice, validateScore } from '../src/jev.js';
 import { ROUTE_ANSWERS, TIERS, type RouteAnswer } from '../src/types.js';
 
 const KEY = 'ts-secret-key-123';
@@ -141,7 +141,7 @@ describe('validateChoice', () => {
 
 describe('tier profiles', () => {
   it('describe capability without naming a vendor or model', () => {
-    const text = [...Object.values(TIER_PROFILES), ...Object.values(PLANNER_TIER_PROFILES)].join(' ').toLowerCase();
+    const text = Object.values(TIER_PROFILES).join(' ').toLowerCase();
     for (const vendor of ['haiku', 'sonnet', 'opus', 'fable', 'claude', 'gpt', 'anthropic', 'openai']) expect(text).not.toContain(vendor);
     expect(Object.keys(TIER_PROFILES)).toEqual([...TIERS]);
   });

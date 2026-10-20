@@ -21,7 +21,7 @@ export interface OwnedAgentProfile {
   /**
    * Host tools withheld in frontmatter. `tools` stays absent so connected MCPs are still inherited; withholding Skill
    * drops the skills listing, and Artifact its large definition. Every profile also sets `omitClaudeMd: true`: its
-   * contract carries what it needs.
+   * prompt carries what it needs.
    */
   disallowedTools: readonly string[];
 }
@@ -32,15 +32,12 @@ const EFFORT: Record<string, string | null> = {
   'jev-gate:worker': null,
   'jev-gate:worker-deep': 'high',
   'jev-gate:worker-frontier': 'xhigh',
-  'jev-gate:planner': 'high',
-  'jev-gate:planner-frontier': 'xhigh',
 };
 
 const WORKER_DISALLOWED = ['Agent', 'SendMessage', 'Skill', 'Artifact', 'ArtifactComments', 'ArtifactData'];
-/** A planner reads and plans; it never implements. */
-const DISALLOWED: Record<OwnedRole, readonly string[]> = { worker: WORKER_DISALLOWED, planner: [...WORKER_DISALLOWED, 'Edit', 'Write', 'NotebookEdit'] };
+const DISALLOWED: Record<OwnedRole, readonly string[]> = { worker: WORKER_DISALLOWED };
 
-/** The six tiered profiles. */
+/** The four tiered profiles. */
 export const OWNED_AGENT_PROFILES: readonly OwnedAgentProfile[] = OWNED_AGENT_NAMES.map((name) => {
   const owned = OWNED_AGENTS[name];
   if (!owned || !(name in EFFORT)) throw new Error(`agents.ts: OWNED_AGENTS and EFFORT must agree on ${name}`);

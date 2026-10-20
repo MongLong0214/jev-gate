@@ -56,7 +56,6 @@ const main = async () => {
   const alloc = await load('dist/allocation.js');
   const { callJev } = await load('dist/jev.js');
   const { DEFAULT_CONFIG } = await load('dist/config.js');
-  const { contractHash } = await load('dist/plan.js');
   const config = { ...DEFAULT_CONFIG, ...(args.model ? { jevModel: args.model } : {}) };
   const floor = config.routeConfidenceFloor;
   const set = JSON.parse(readFileSync(resolve(ROOT, args.set), 'utf8'));
@@ -65,11 +64,8 @@ const main = async () => {
     const base = {
       id: 't1', outcome: it.outcome, depends_on: [], context: it.context, constraints: it.constraints, deliverables: it.deliverables,
       checks: it.checks.map((c) => ({ ...c, required: true })), replan_if: [],
-      ...(it.spec ? { spec: { data_shapes: [], ...it.spec } } : {}),
-      ...(it.fully_specified !== undefined ? { fully_specified: it.fully_specified } : {}),
-      ...(it.uncertainty ? { uncertainty: it.uncertainty } : {}),
     };
-    return { ...base, contract_hash: contractHash(base) };
+    return { ...base, contract_hash: '' };
   };
   const prior = (p) => (p ? { attempt: p.attempt, verdict: p.verdict, verdict_reason: p.verdict_reason, status: p.status, summary: p.summary, blockers: p.blockers, failed_checks: p.failed_checks, observed_model_confirmed: true, provenance: 'host_observed' } : null);
 
@@ -92,22 +88,11 @@ const main = async () => {
         });
       }
     }
-    for (const it of set.planner) {
-      jobs.push(async () => {
-        const o = await callJev(alloc.buildPlannerRouteRequest(it.request, config), { apiKey, deadlineMs: DEADLINE_MS });
-        const row = { rep, kind: 'planner', shape: 'planner', id: it.id, group: 'planner', label: it.label, called: config.plannerDefaultTier, decided: config.plannerDefaultTier, action: 'patch', reason: o.ok ? null : o.code, confidence: null, input_tokens: o.ok ? o.response.usage.input_tokens : (o.usage?.input_tokens ?? null), duration_ms: o.durationMs };
-        if (o.ok) {
-          const d = alloc.decidePlannerRoute(o.response.answers, floor, config.plannerDefaultTier);
-          row.decided = d.tier; row.reason = d.reason; row.confidence = d.answer ? d.answer.confidence : null;
-        }
-        return row;
-      });
-    }
   }
   const rows = await pool(jobs, CONCURRENCY);
 
   process.stdout.write(`model ${config.jevModel}, ${args.repeats} repeat(s), ${rows.length} calls\n`);
-  for (const shape of ['atomic', 'composite', 'planner']) {
+  for (const shape of ['atomic', 'composite']) {
     const mine = rows.filter((r) => r.shape === shape);
     const table = {};
     for (const r of mine) {

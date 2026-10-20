@@ -8,29 +8,20 @@ import { isNativeTaskNotification } from '../src/claude-background.js';
 
 const roots: string[] = [];
 afterEach(() => roots.splice(0).forEach(p => rmSync(p, { recursive: true, force: true })));
-const fixture = async (direct = false, hierarchy = false) => {
+const fixture = async (direct = false) => {
   const root = mkdtempSync('/tmp/jev-bg-unit-'); roots.push(root);
   const cfg = join(root, 'config.json');
-  writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'native', admittedShape: hierarchy ? 'hierarchy' : 'single', workerIsolation: 'none', maxParallelWorkers: 1, guardAllowTools: [] }));
+  writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'native' }));
   const env = { HOME: root, JEV_GATE_CONFIG: cfg, JEV_GATE_STATE_DIR: join(root, 'state'), CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '0', JEV_GATE_EXPERIMENT_ADMISSION: 'orchestrated' };
   const parent = join(root, 's.jsonl'); writeFileSync(parent, '');
   const run = (event: Record<string, unknown>, fetchImpl?: typeof fetch) => runHook({ env, ...(fetchImpl ? { fetchImpl } : {}), stdin: (async function* () { yield JSON.stringify({ session_id: 's', transcript_path: parent, ...event }); })() });
   await run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'original', prompt: 'Implement the original request.' });
   if (direct) updateJob(env, 's', prev => newGeneration(prev, 's', 'original', 'direct').state);
-  const plan = { status: 'ready', goal: 'Original request', chain_depth: 2, assumptions: [], constraints: [], tasks: ['t1', 't2', 't3'].map(id => ({ id, outcome: `Deliver ${id}`, depends_on: id === 't3' ? ['t1'] : [], context: '', constraints: [], deliverables: [`${id}.ts`], checks: [{ id: 'check', description: 'Required fixture check', required: true, command: null }], replan_if: ['The declared interface is absent.'] })) };
-  if (hierarchy) {
-    const planner = { subagent_type: 'jev-gate:planner', prompt: 'Plan the original request.', description: 'plan', model: 'opus', run_in_background: false };
-    expect((await run({ hook_event_name: 'PreToolUse', prompt_id: 'original', tool_name: 'Agent', tool_use_id: 'plan', tool_input: planner })).kind).toBe('patch');
-    const accepted = await run({ hook_event_name: 'PostToolUse', prompt_id: 'original', tool_name: 'Agent', tool_use_id: 'plan', tool_input: planner, tool_response: { status: 'completed', content: [{ type: 'text', text: JSON.stringify(plan) }] } });
-    expect(accepted.kind).toBe('context');
-    const state = readJob(env, 's');
-    expect(state.ok && state.value?.current.phase, JSON.stringify(accepted)).toBe('planned');
-  }
-  const pre = await run({ hook_event_name: 'PreToolUse', prompt_id: 'original', tool_name: 'Agent', tool_use_id: 'dispatch', tool_input: { subagent_type: 'jev-gate:worker', prompt: hierarchy ? '[JEV_TASK rev=1 id=t1]\nDo the original work.' : 'Do the original work.', description: 'work', model: 'sonnet', run_in_background: false } });
+  const pre = await run({ hook_event_name: 'PreToolUse', prompt_id: 'original', tool_name: 'Agent', tool_use_id: 'dispatch', tool_input: { subagent_type: 'jev-gate:worker', prompt: 'Do the original work.', description: 'work', model: 'sonnet', run_in_background: false } });
   expect(pre.kind, JSON.stringify(pre)).toBe('patch');
   const input = JSON.parse(pre.stdout!).hookSpecificOutput.updatedInput;
   const path = join(root, 's', 'subagents', 'agent-worker.jsonl'); mkdirSync(join(root, 's', 'subagents'), { recursive: true });
-  const report = JSON.stringify({ status: hierarchy ? 'replan' : 'done', summary: hierarchy ? 'The declared interface is absent.' : 'original result', changed_files: [], interfaces: [], checks: [], blockers: [] });
+  const report = JSON.stringify({ status: 'done', summary: 'original result', changed_files: [], interfaces: [], checks: [], blockers: [] });
   const transcript = (error = false) => writeFileSync(path, [
     { type: 'user', agentId: 'worker', sessionId: 's', message: { content: input.prompt } },
     { type: 'assistant', agentId: 'worker', sessionId: 's', isApiErrorMessage: error, message: { model: 'claude-sonnet-5', stop_reason: 'end_turn', content: [{ type: 'text', text: report }] } },
@@ -92,31 +83,6 @@ describe('responsive native background contracts', () => {
     expect(stopped?.outcome).toBe(accepted ? 'completed' : 'incomplete');
     if (!accepted) expect(stopped?.closed_reason).toBe('no_active_execution_after_policy_delivery');
   });
-  it('permits replanning in the idle delivery turn and retains the revision and attempt bounds', async () => {
-    const f = await fixture(false, true); await f.launch(); f.transcript(); await f.terminal();
-    expect(f.job().current.active).toEqual({}); expect(f.job().current.receipts.at(-1)?.verdict).toBe('replan');
-    await f.run({ hook_event_name: 'Stop', prompt_id: 'original' });
-    expect(f.job().current.outcome).toBeNull();
-    expect((await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'delivery', prompt: 'Continue with the violated assumption.' })).stdout).toContain('policy result');
-    const planner = { subagent_type: 'jev-gate:planner', prompt: 'Replan: the declared interface is absent.', description: 'replan', model: 'opus', run_in_background: false };
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      const result = await f.run({ hook_event_name: 'PreToolUse', prompt_id: 'delivery', tool_name: 'Agent', tool_use_id: `replan-${attempt}`, tool_input: planner });
-      expect(result.kind, JSON.stringify(result)).toBe('patch'); expect(f.job().current.background_delivery).toBeUndefined();
-      const agent = `planner-${attempt}`;
-      const patched = JSON.parse(result.stdout!).hookSpecificOutput.updatedInput;
-      await f.run({ hook_event_name: 'PostToolUse', prompt_id: 'delivery', tool_name: 'Agent', tool_use_id: `replan-${attempt}`, tool_input: patched, tool_response: { status: 'async_launched', isAsync: true, agentId: agent } });
-      const path = join(f.root, 's', 'subagents', `agent-${agent}.jsonl`);
-      const reply = JSON.stringify({ status: 'blocked', reason: 'No replacement interface exists.', findings: [] });
-      writeFileSync(path, [
-        { type: 'user', agentId: agent, sessionId: 's', message: { content: patched.prompt } },
-        { type: 'assistant', agentId: agent, sessionId: 's', message: { model: 'claude-opus-5-5', stop_reason: 'end_turn', content: [{ type: 'text', text: reply }] } },
-      ].map(row => JSON.stringify(row)).join('\n') + '\n');
-      await f.run({ hook_event_name: 'SubagentStop', prompt_id: 'delivery', agent_id: agent, agent_type: 'jev-gate:planner', agent_transcript_path: path, last_assistant_message: reply });
-      expect(f.job().current.attempts).toMatchObject({ planner: 1, replans: attempt });
-      expect(f.job().current.plan?.rev).toBe(1);
-    }
-    expect(await f.run({ hook_event_name: 'PreToolUse', prompt_id: 'delivery', tool_name: 'Agent', tool_use_id: 'replan-3', tool_input: planner })).toMatchObject({ kind: 'deny', code: 'bounds_exhausted' });
-  });
   it.each(['system', undefined] as const)('delivers an idle incomplete policy once, closes on Stop, and admits unrelated prompts (source=%s)', async source => {
     const f = await fixture(); await f.launch(); f.transcript(true); await f.terminal();
     await f.run({ hook_event_name: 'Stop', prompt_id: 'original' });
@@ -157,7 +123,7 @@ describe('responsive native background contracts', () => {
     await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'notice', prompt: '<task-notification>completed</task-notification>' });
     const trace = join(f.root, 'trace'); Object.assign(f.env, { TYPESAFE_API_KEY: 'fixture-key', JEV_GATE_TRACE_DIR: trace });
     delete (f.env as Record<string, string>)['JEV_GATE_EXPERIMENT_ADMISSION'];
-    writeFileSync(f.cfg, JSON.stringify({ version: 5, mode: 'auto', delegationDepthFloor: 0, admittedShape: 'single', workerIsolation: 'none', maxParallelWorkers: 1 }));
+    writeFileSync(f.cfg, JSON.stringify({ version: 5, mode: 'auto', delegationDepthFloor: 0 }));
     writeFileSync(f.parent, JSON.stringify({ type: 'assistant', message: { model: 'claude-opus-5-5', usage: { input_tokens: 100000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } }) + '\n');
     let calls = 0;
     const fetchImpl: typeof fetch = async (_url, init) => {
@@ -300,7 +266,7 @@ describe('Gate A and host task notifications', () => {
   it('never asks Gate A about a native notice and leaves the current generation in force', async () => {
     const root = mkdtempSync('/tmp/jev-bg-notice-'); roots.push(root);
     const cfg = join(root, 'config.json'); const trace = join(root, 'trace'); const parent = join(root, 's.jsonl');
-    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', delegationDepthFloor: 0, admittedShape: 'single', workerIsolation: 'none', maxParallelWorkers: 1 }));
+    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', delegationDepthFloor: 0 }));
     writeFileSync(parent, JSON.stringify({ type: 'assistant', message: { model: 'claude-opus-5-5', usage: { input_tokens: 100000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } }) + '\n');
     const env = { HOME: root, JEV_GATE_CONFIG: cfg, JEV_GATE_STATE_DIR: join(root, 'state'), JEV_GATE_TRACE_DIR: trace, TYPESAFE_API_KEY: 'fixture-key', CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '0' };
     let calls = 0;

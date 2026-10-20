@@ -5,13 +5,6 @@ import { join, relative, resolve } from 'node:path';
 
 export interface WorkerWorktree { path: string; branch: string; baseline: string }
 
-export const hasWorktreeHead = (cwd: string, env: NodeJS.ProcessEnv): boolean => {
-  const r = spawnSync('git', ['rev-parse', '--verify', 'HEAD'], { cwd,
-    env: Object.fromEntries(Object.entries(env).filter(([key]) => !key.startsWith('GIT_'))),
-    encoding: 'utf8', timeout: 1000 });
-  return r.status === 0;
-};
-
 /** Capture working files with a private index; never change the caller's HEAD, index or files. */
 export const createWorkerWorktree = (cwd: string, root: string, env: NodeJS.ProcessEnv = process.env, snapshot = true): WorkerWorktree => {
   const cleanEnv = Object.fromEntries(Object.entries(env).filter(([key]) => !key.startsWith('GIT_')));

@@ -22,18 +22,6 @@ export const nativeWorkspaceUpstream = (result: unknown, accountId: string): { o
   return { origin: origin.origin, override: String(routing['accountRoutingOverride']) };
 };
 
-/** A valid local Responses stream, consumed by Codex's own turn state machine. No encrypted item is invented. */
-export const localResponse = (text: string): string => {
-  const id = `jev-local-${crypto.randomUUID()}`;
-  const item: Obj = { type: 'message', id: `${id}-message`, role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text, annotations: [] }] };
-  return [
-    { type: 'response.created', response: { id, status: 'in_progress', output: [] } },
-    { type: 'response.output_item.added', output_index: 0, item: { ...item, content: [] } },
-    { type: 'response.output_text.delta', item_id: item['id'], output_index: 0, content_index: 0, delta: text },
-    { type: 'response.output_item.done', output_index: 0, item },
-    { type: 'response.completed', response: { id, status: 'completed', output: [item], usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0, input_tokens_details: { cached_tokens: 0 }, output_tokens_details: { reasoning_tokens: 0 } } } },
-  ].map(e => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join('');
-};
 /** The host's own label on its compaction request (`/responses` for local compaction). Router never rewrites it. */
 const compactionRequest = (metadata: unknown): boolean => {
   try { return typeof metadata === 'string' && obj(JSON.parse(metadata))?.['request_kind'] === 'compaction'; } catch { return false; }
@@ -113,7 +101,6 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
           if (path === '/responses' && !nativeCompact) {
             const cancelled = new AbortController(); res.once('close', () => { if (!res.writableEnded) cancelled.abort(); });
             const selected = await policy.externalRequest(sessionId, parsed, cancelled.signal, req.headers['originator']);
-            if (selected.stop) { res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' }); res.end(localResponse(selected.stop)); return; }
             payload = Buffer.from(JSON.stringify(selected.request)); modified = true;
           }
         }

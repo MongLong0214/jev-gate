@@ -14,7 +14,7 @@ const cleanups: (() => void)[] = [];
 afterEach(() => { cleanups.splice(0).forEach(f => f()); vi.restoreAllMocks(); });
 const setup = async (scenario = 'uncertain', started = true) => {
   const root = mkdtempSync(join(tmpdir(), 'jev-worker-')); const config = join(root, 'config.json');
-  writeFileSync(config, JSON.stringify({ gate: { mode: scenario === 'adhoc' ? 'auto' : 'native', admittedShape: scenario === 'planner' ? 'hierarchy' : 'single', maxParallelWorkers: 1, workerIsolation: 'none', guardAllowTools: ['*'], models: { fast: 'gpt-6.1-sol', standard: 'gpt-6.1-sol', deep: 'gpt-6.1-sol', frontier: 'gpt-6.1-sol' } }, router: { enabled: false } }));
+  writeFileSync(config, JSON.stringify({ gate: { mode: scenario === 'adhoc' ? 'auto' : 'native', models: { fast: 'gpt-6.1-sol', standard: 'gpt-6.1-sol', deep: 'gpt-6.1-sol', frontier: 'gpt-6.1-sol' } }, router: { enabled: false } }));
   const input = new PassThrough(); const output = new PassThrough();
   const rpc = new CodexRpc(input, output); const sent: Obj[] = [];
   const reply = (id: unknown, result: Obj) => input.write(JSON.stringify({ id, result }) + '\n');
@@ -22,7 +22,7 @@ const setup = async (scenario = 'uncertain', started = true) => {
   let start: Obj | undefined;
   const env = { HOME: root, JEV_CODEX_CONFIG: config, JEV_CODEX_TRACE_DIR: join(root, 'trace'), JEV_GATE_STATE_DIR: join(root, 'state'), ...(scenario !== 'adhoc' ? { JEV_GATE_EXPERIMENT_ADMISSION: 'orchestrated' } : {}) };
   const stateEnv = { JEV_GATE_STATE_DIR: join(env.JEV_GATE_STATE_DIR, 'codex') };
-  const policy = new CodexPolicy(rpc, env, undefined, { 'jev-gate:worker': 'Return a result', 'jev-gate:planner': 'Return a plan' }, true);
+  const policy = new CodexPolicy(rpc, env, undefined, { 'jev-gate:worker': 'Return a result' }, true);
   const nativeRequest = rpc.request.bind(rpc);
   vi.spyOn(rpc, 'request').mockImplementation((m, p, timeout) => scenario === 'turn-unsent' && m === 'turn/start' ? Promise.reject(new RpcRequestError('unavailable', false)) : nativeRequest(m, p, m === 'turn/start' ? 15 : timeout));
   const lock = () => { const path = jobPath(stateEnv, 'parent'); mkdirSync(`${path}.lock`); writeFileSync(join(`${path}.lock`, 'owner'), String(process.pid)); return () => rmSync(`${path}.lock`, { recursive: true }); };
@@ -42,7 +42,7 @@ const setup = async (scenario = 'uncertain', started = true) => {
         if (scenario === 'pre-failure') input.write(JSON.stringify({ id: m['id'], error: { code: -1 } }) + '\n');
         else reply(m['id'], { model: 'gpt-6.1-sol', cwd: root, sandbox: { type: 'dangerFullAccess' }, thread: { id: 'worker' } });
       }
-      if (m['method'] === 'turn/start') { start = m; if (started) notify('turn/started', { threadId: 'worker', turn: { id: 'turn-w' } }); if (['normal', 'planner', 'adhoc'].includes(scenario)) reply(m['id'], { turn: { id: 'turn-w' } }); }
+      if (m['method'] === 'turn/start') { start = m; if (started) notify('turn/started', { threadId: 'worker', turn: { id: 'turn-w' } }); if (['normal', 'adhoc'].includes(scenario)) reply(m['id'], { turn: { id: 'turn-w' } }); }
       if (m['method'] === 'thread/read') reply(m['id'], { thread: { id: 'worker', turns: [] } });
       if (m['method'] === 'turn/interrupt' || m['method'] === 'thread/archive') reply(m['id'], {});
     }
@@ -52,7 +52,7 @@ const setup = async (scenario = 'uncertain', started = true) => {
   const parent = policy.sessions.get('parent')!; parent.prompt = 'p'; parent.controller = new AbortController(); parent.tokens = 500000;
   await policy.nativeHook({ hook_event_name: 'UserPromptSubmit', session_id: 'parent', prompt: 'Investigate and return a result' });
   cleanups.push(() => { rpc.close(); input.destroy(); output.destroy(); rmSync(root, { recursive: true, force: true }); });
-  const launch = (background = false) => rpc.onRequest({ id: 'call', method: 'item/tool/call', params: { threadId: 'parent', callId: 'dispatch', tool: 'jev_agent', arguments: { run_in_background: background, subagent_type: scenario === 'planner' ? 'jev-gate:planner' : 'jev-gate:worker', prompt: 'Investigate and return a result' } } });
+  const launch = (background = false) => rpc.onRequest({ id: 'call', method: 'item/tool/call', params: { threadId: 'parent', callId: 'dispatch', tool: 'jev_agent', arguments: { run_in_background: background, subagent_type: 'jev-gate:worker', prompt: 'Investigate and return a result' } } });
   const terminal = (status = 'completed', text = 'worker observation kept') => {
     notify('item/completed', { threadId: 'worker', item: { id: 'final', type: 'agentMessage', phase: 'final_answer', text } });
     notify('turn/completed', { threadId: 'worker', turn: { id: 'turn-w', status } });
@@ -97,15 +97,6 @@ describe('Codex genuine terminal settlement (#139)', () => {
     await f.rpc.onRequest({ id: 'status', method: 'item/tool/call', params: { threadId: 'parent', tool: 'jev_agent', arguments: { action: 'status', agent_id: 'worker' } } });
     expect(JSON.stringify(f.sent.find(m => m['id'] === 'status'))).toContain('original result');
     f.terminal(); expect(f.job().current.receipts).toHaveLength(1);
-  });
-  it('collects a committed background planner result without requiring a worker receipt', async () => {
-    const f = await setup('planner'); await f.launch(true);
-    f.terminal('completed', JSON.stringify({ status: 'ready', goal: 'Original goal', constraints: [], tasks: [{ id: 't1', outcome: 'Implement the goal', depends_on: [], deliverables: ['src/file'], constraints: [], checks: [{ id: 'c1', description: 'Check the outcome', required: true, command: 'vitest run' }] }] }));
-    await vi.waitFor(() => expect(f.policy.sessions.has('worker')).toBe(false));
-    expect(f.job().current.phase).toBe('planned'); expect(f.job().current.plan?.tasks[0]?.id).toBe('t1'); expect(f.job().current.active).toEqual({});
-    expect(f.job().current.background_context).toContain('rev=1');
-    await f.rpc.onRequest({ id: 'status', method: 'item/tool/call', params: { threadId: 'parent', tool: 'jev_agent', arguments: { action: 'status', agent_id: 'worker' } } });
-    expect(JSON.stringify(f.sent.find(m => m['id'] === 'status'))).toContain('Original goal');
   });
   it('keeps cancellation ACK protected until the owned worker actually ends', async () => {
     const f = await setup('normal'); await f.launch(true);
@@ -474,7 +465,7 @@ describe('Codex owned dispatch input guidance (#287)', () => {
     const f = await setup('normal');
     await f.rpc.onRequest({ id: 'wrong', method: 'item/tool/call', params: { threadId: 'parent', callId: 'wrong', tool: 'jev_agent', arguments: { action: 'start', profile: 'jev-gate:worker-fast', marker: '[JEV_TASK rev=1 id=a attempt=1]', task: 'Investigate' } } });
     const refusal = JSON.stringify(f.sent.find(m => m['id'] === 'wrong'));
-    for (const text of ['subagent_type (one of jev-gate:worker, jev-gate:planner)', 'prompt (', '[JEV_TASK', 'status|cancel with agent_id']) expect(refusal).toContain(text);
+    for (const text of ['subagent_type (one of jev-gate:worker)', 'prompt (', '[JEV_TASK', 'status|cancel with agent_id']) expect(refusal).toContain(text);
     expect(f.sent.some(m => m['method'] === 'thread/start')).toBe(false);
     await f.policy.client({ id: 'root', method: 'thread/start', params: { cwd: f.root } });
     const instructions = String((f.sent.find(m => m['method'] === 'thread/start')?.['params'] as Obj | undefined)?.['developerInstructions']);

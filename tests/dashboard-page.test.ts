@@ -12,7 +12,7 @@ const step = (id: string, feature: OperationStep['feature'], lane: OperationStep
 const run = (id: string, host: 'claude' | 'codex', steps: OperationStep[], extra: Partial<OperationRun> = {}): OperationRun => ({ id, host, title: `${host} execution`, source: 'gate', mode: 'auto', firstAt: stamp, lastAt: stamp, state: 'done', steps, ...extra });
 const snapshot = (runs: OperationRun[]) => {
   const all = runs.flatMap(r => r.steps.map(s => ({ ...s, host: r.host, runId: r.id, runTitle: r.title })));
-  const ids = ['admission', 'allocation', 'planning', 'workers', 'guard', 'router', 'compact'] as const;
+  const ids = ['admission', 'allocation', 'workers', 'router', 'compact'] as const;
   const values = all.filter(s => s.lane === 'jev' && s.durationMs !== undefined).map(s => ({ at: s.at, ms: s.durationMs! }));
   // The frame key replaced the operations signature; Omit keeps this fixture valid with or without the field.
   const operations: OperationsView = { runs, feed: all.slice().reverse(), active: 0, attention: 0, requests: values.length,
@@ -80,9 +80,9 @@ describe('dashboard live interactions', () => {
     expect(opened(p)).toContain('후보 8/16 · 필수 근거 3'); expect(text(p, 'trace')).not.toContain('호스트 훅에서 결과 이벤트가 빠진');
     p.click('.node[data-feature=compact]'); expect(text(p, 'circuit-inspector')).toContain('220ms');
   });
-  it('renders all seven real feature states and never invents traffic on first load', () => {
+  it('renders all five real feature states and never invents traffic on first load', () => {
     const p = page(); p.push(snapshot([run('c', 'claude', [step('a', 'admission', 'jev', { durationMs: 70 })]), run('x', 'codex', [step('l', 'workers', 'host', { lifecycle: true })])]));
-    expect(p.w.document.querySelectorAll('#pipeline .node')).toHaveLength(7);
+    expect(p.w.document.querySelectorAll('#pipeline .node')).toHaveLength(5);
     expect(node(p, 'workers').classList.contains('idle')).toBe(true); expect(node(p, 'workers').querySelector('.dec b')!.textContent).toBe('–');
     expect(node(p, 'admission').classList.contains('idle')).toBe(false);
     expect(p.w.document.querySelectorAll('.trip,.node.zap,.rail .ln b')).toHaveLength(0); expect(filled(p)).toHaveLength(1);
@@ -97,7 +97,7 @@ describe('dashboard live interactions', () => {
     expect(p.w.document.querySelector('[data-host="codex"]')?.getAttribute('aria-pressed')).toBe('true');
   });
   it('searches feature names, exposes filter state and never leaves an empty highlighted run', () => {
-    const p = page(); p.push(snapshot([run('searchable', 'claude', [step('allocation', 'allocation', 'jev')]), run('other', 'codex', [step('g', 'guard', 'policy')])]));
+    const p = page(); p.push(snapshot([run('searchable', 'claude', [step('allocation', 'allocation', 'jev')]), run('other', 'codex', [step('g', 'workers', 'policy')])]));
     const search = p.get('search') as unknown as { value: string; dispatchEvent(e: unknown): void }; search.value = 'Gate B'; search.dispatchEvent(new p.w.Event('input'));
     expect(rows(p)).toHaveLength(1); expect(text(p, 'runs')).toContain('claude execution');
     p.click('[data-state=unconfirmed]'); expect(p.w.document.querySelector('[data-state=unconfirmed]')?.getAttribute('aria-pressed')).toBe('true');
@@ -367,7 +367,7 @@ it('shows a ten-thousand-step execution in a bounded timeline with one record li
   await vi.waitFor(() => expect(p.get('trace').children).toHaveLength(100)); expect(p.get('trace').querySelectorAll('[aria-expanded="true"]')).toHaveLength(1);
   // A patch that arrives before that draw applies to the frame it follows and is drawn; the frame is not drawn over it later.
   const next = frames(), q = page(), large = run('large', 'codex', steps), streams = q.streams();
-  q.push(next(snapshot([large]))); q.patch(next(snapshot([large, run('small', 'claude', [step('g', 'guard', 'policy')])])));
+  q.push(next(snapshot([large]))); q.patch(next(snapshot([large, run('small', 'claude', [step('g', 'workers', 'policy')])])));
   expect(rows(q)).toHaveLength(2);
   await new Promise(resolve => setTimeout(resolve, 50));
   expect(rows(q)).toHaveLength(2); expect(q.streams()).toBe(streams);
@@ -410,7 +410,7 @@ const frames = () => {
 };
 
 it('applies live patches to the frame it holds, to the pending frame while paused, and reconnects on a gap', async () => {
-  const next = frames(), a = step('a', 'admission', 'jev', { durationMs: 60 }), other = run('other', 'codex', [step('g', 'guard', 'policy')]);
+  const next = frames(), a = step('a', 'admission', 'jev', { durationMs: 60 }), other = run('other', 'codex', [step('g', 'workers', 'policy')]);
   const p = page(); p.push(next(snapshot([run('one', 'claude', [a]), other])));
   p.patch(next(snapshot([run('one', 'claude', [a, step('b', 'allocation', 'jev', { durationMs: 80, at: new Date().toISOString() })]), other])));
   await vi.waitFor(() => expect(filled(p)).toHaveLength(2), { timeout: 5000 });
@@ -424,7 +424,7 @@ it('applies live patches to the frame it holds, to the pending frame while pause
 });
 
 it('keeps the row of an unchanged run as the same element when a patch changes another run', () => {
-  const next = frames(), other = run('other', 'codex', [step('g', 'guard', 'policy')]);
+  const next = frames(), other = run('other', 'codex', [step('g', 'workers', 'policy')]);
   const p = page(); p.push(next(snapshot([run('one', 'claude', [step('a', 'admission', 'jev', { durationMs: 60 })]), other])));
   const kept = p.get('runs').querySelector('[data-run="other"] .c-st'), changed = p.get('runs').querySelector('[data-run="one"] .c-st');
   p.patch(next(snapshot([run('one', 'claude', [step('a', 'admission', 'jev', { durationMs: 60 }), step('b', 'allocation', 'jev', { durationMs: 80 })], { state: 'active' }), other])));
@@ -464,7 +464,7 @@ it('fetches the detail fields a frame leaves out for the opened stage and the in
   // The inspector reads its card's stage (s1, the first of the latest records) and the run detail its opened stage.
   expect(fetch.mock.calls.map(c => c[0])).toEqual(['/api/step?run=r%2F1&step=s1', '/api/step?run=r%2F1&step=s2']);
   await vi.waitFor(() => expect(opened(p)).toContain('라우팅 대상메인 턴')); expect(opened(p)).toContain('baseline gpt-6.1-sol · xhigh');
-  p.patch(next(frame([run('other', 'claude', [step('g', 'guard', 'policy')])])));
+  p.patch(next(frame([run('other', 'claude', [step('g', 'workers', 'policy')])])));
   expect(opened(p)).toContain('baseline gpt-6.1-sol · xhigh'); expect(fetch).toHaveBeenCalledTimes(2);
   p.click('[data-step="s1"]'); await vi.waitFor(() => expect(opened(p)).toContain('first stage evidence'));
   expect(fetch).toHaveBeenCalledTimes(2);
