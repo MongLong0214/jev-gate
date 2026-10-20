@@ -1470,19 +1470,25 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
 
   const agentSpawn = async <E extends SpawnEvent, R extends SpawnOutcome>(engine: RouterEngine, e: E, next: NextLike<E, R>): Promise<R> => {
     const startedAt = engine.now();
-    const deadline = startedAt + config.timeoutMs;
     const own = session.signal;
-    const wait = budget(engine, deadline, own, next.signal);
     // A resumed subagent continues its own conversation, on the model it ran (#290): another model or effort would re-read
     // all of it uncached. It is no new spawn, so it goes out as called, with no assignment, native model or child. The host
     // names the resume on the event; an agent that already finished is in no list, so a name alone misses it. An unread
-    // name, including a timed-out lookup, stays native too; cancellation is checked before next.
-    if (e.resume || e.name && engine.resumes && await within(engine.resumes(e.name).catch(() => true), wait.signal).catch(() => true)) {
-      wait.dispose();
+    // name is not a confirmed resume. Bound that lookup separately so an error or timeout still reaches dispatch policy.
+    let resumed = !!e.resume;
+    if (!resumed && e.name && engine.resumes) {
+      const lookup = budget(engine, startedAt + config.timeoutMs, own, next.signal);
+      try { resumed = await within(engine.resumes(e.name), lookup.signal); }
+      catch { resumed = false; }
+      finally { lookup.dispose(); }
+    }
+    if (resumed) {
       if (next.signal.aborted || own.aborted) throw new Error('jev-router: spawn dispatch abandoned before next');
       spawnSkip(engine, e, 'resumed');
       return next(e);
     }
+    const deadline = engine.now() + config.timeoutMs;
+    const wait = budget(engine, deadline, own, next.signal);
     // A main-loop spawn inherits the main loop's model, which a drift left on the Router's own: it inherits the native one.
     const native = !e.parentAgentId && !e.fork && rootRecord?.drift && sameId(e.parentModel, rootRecord.drift.model) && !sameId(e.parentModel, rootRecord.native.model) ? rootRecord.native.model : null;
     const ev: E = native ? { ...e, parentModel: native } : e;
