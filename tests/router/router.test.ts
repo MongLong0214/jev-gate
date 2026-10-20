@@ -1166,34 +1166,47 @@ describe('spawn model', () => {
       expect(n.calls).toEqual([e]);
       expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn', from: 'claude-opus-5-5', model_asked: false }));
     });
-    it('sends nothing for a SendMessage resumption, and asks no model when resumption cannot be read', async () => {
-      for (const resumes of [async () => true, async () => { throw new Error('list unavailable'); }]) {
-        const { router, f, e } = custom('opus', { name: 'aaabb33b14b57a515' });
-        f.engine.resumes = resumes;
-        const n = spawnNext();
-        await router.agentSpawn(f.engine, e, n.next);
-        expect(n.calls).toEqual([e]);
-        expect(f.sent).toHaveLength(0);
-        expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn', skipped: 'resumed' }));
-      }
+    it('sends nothing for a confirmed SendMessage resumption', async () => {
+      const { router, f, e } = custom('opus', { name: 'aaabb33b14b57a515' });
+      f.engine.resumes = async () => true;
+      const n = spawnNext();
+      await router.agentSpawn(f.engine, e, n.next);
+      expect(n.calls).toEqual([e]);
+      expect(f.sent).toHaveLength(0);
+      expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn', skipped: 'resumed' }));
     });
-    it('leaves a named Gate worker native when its resumption lookup times out', async () => {
+    it('routes a named custom agent normally when its resumption lookup fails', async () => {
+      const { router, f, e } = custom('opus', { name: 'reviewer' });
+      f.engine.resumes = async () => { throw new Error('list unavailable'); };
+      const n = spawnNext();
+      await router.agentSpawn(f.engine, e, n.next);
+      expect(n.calls).toEqual([{ ...e, model: 'claude-sonnet-5-5' }]);
+      expect(f.sent).toHaveLength(1);
+      expect(f.logs).not.toContainEqual(expect.objectContaining({ skipped: 'resumed' }));
+    });
+    it.each(['error', 'timeout'] as const)('returns dispatch policy denial for a new named Gate worker after resumption lookup %s', async failure => {
       const { router, f, e } = custom('inherit', { name: 'reviewer', subagentType: 'jev-gate:worker', provider: { plugin: 'jev-gate', tier: 'plugin' } });
       const pending = deferred<boolean>();
       const pairs: string[] = [];
-      f.engine.resumes = () => pending.promise;
-      f.engine.dispatchPair = async id => { pairs.push(id); return { model: 'claude-sonnet-5-5' }; };
+      f.engine.resumes = failure === 'timeout' ? () => pending.promise : async () => { throw new Error('list unavailable'); };
+      const deny = 'Dispatch ownership denied; no child started.';
+      f.engine.dispatchPair = async id => { pairs.push(id); return { deny }; };
       const n = spawnNext();
       const run = router.agentSpawn(f.engine, e, n.next);
-      await settle();
-      f.expire();
-      await run;
+      if (failure === 'timeout') {
+        await settle();
+        f.clock.ms += configOf(SPAWN_ONLY).timeoutMs;
+        f.expire();
+      }
+      expect(await run).toEqual({ deny });
       pending.resolve(true);
       await settle();
-      expect(n.calls).toEqual([e]);
-      expect(pairs).toEqual([]);
+      expect(e.resume).toBeUndefined();
+      expect(n.calls).toEqual([]);
+      expect(pairs).toEqual(['tu1']);
       expect(f.sent).toHaveLength(0);
-      expect(f.logs).toEqual([{ event: 'spawn', tool_use_id: 'tu1', type: 'jev-gate:worker', skipped: 'resumed' }]);
+      expect(f.logs).toContainEqual({ event: 'spawn_denied', tool_use_id: 'tu1', type: 'jev-gate:worker', reason: 'policy_denied' });
+      expect(f.logs).not.toContainEqual(expect.objectContaining({ skipped: 'resumed' }));
     });
     it.each(['session', 'dispatch'] as const)('never forwards a resumption after its %s ends', async end => {
       const { router, f, e } = custom('inherit', { name: 'reviewer' });
