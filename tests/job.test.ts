@@ -47,6 +47,7 @@ describe('paths', () => {
 
 describe('updateJob', () => {
   it.each([
+    { label: 'J1 literal interpolation marker', canary: "password='s3cure${literal}'" },
     { label: 'cookie', canary: 'sessionid=canary123' },
     { label: 'JSON', canary: '{"password":"canary-pw-123","api_key":"canary-key-456"}' },
     { label: 'I1 prefixed JSON password', canary: '{"DB_PASSWORD":"review-only-password"}' },
