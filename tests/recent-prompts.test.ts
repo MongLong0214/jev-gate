@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
-import { readCurrentTaskPrompts, readRecentPrompts, RECENT_PROMPT_MAX_CHARS } from '../src/recent-prompts.js';
+import { humanInputText, readCurrentTaskPrompts, RECENT_PROMPT_MAX_CHARS, selectRecentPrompts } from '../src/recent-prompts.js';
 
 vi.mock('node:fs', async original => {
   const fs = await original<typeof import('node:fs')>();
@@ -19,71 +19,38 @@ const write = (lines: unknown[]): string => {
 };
 const user = (content: unknown, extra: Record<string, unknown> = {}): unknown => ({ type: 'user', message: { role: 'user', content }, ...extra });
 
-describe('readRecentPrompts', () => {
-  it('returns the last three typed prompts, oldest first, without the current one', () => {
-    const p = write([user('one'), user('two'), { type: 'assistant', message: { usage: { input_tokens: 1 } } }, user('three'), user('four'), user('e2e 해봐')]);
-    expect(readRecentPrompts(p, 'e2e 해봐')).toEqual(['two', 'three', 'four']);
-    expect(readRecentPrompts(p, 'not appended yet')).toEqual(['three', 'four', 'e2e 해봐']);
-  });
-
-  it('skips tool results, meta, sidechain, commands and interruptions', () => {
-    const p = write([
-      user('real'),
-      user([{ type: 'tool_result', tool_use_id: 'x', content: 'out' }]),
-      user('host said', { isMeta: true }),
-      user('subagent', { isSidechain: true }),
-      user('<command-name>/model</command-name>'),
-      user('<local-command-stdout>ok</local-command-stdout>'),
-      user('[Request interrupted by user]'),
-      user([{ type: 'text', text: 'blocks ' }, { type: 'text', text: 'joined' }]),
-      user([{ type: 'text', text: 'with image' }, { type: 'image' }]),
-      'not json',
-    ]);
-    expect(readRecentPrompts(p, 'now')).toEqual(['real', 'blocks \njoined']);
-  });
-
-  it('#281: keeps what a person typed and skips host notices, compact summaries and scheduled turns by their row, not their text', () => {
-    const notice = '<task-notification>\n<task-id>b6w41xrqn</task-id>\n<status>completed</status>\n</task-notification>';
-    const p = write([
-      user('typed', { promptSource: 'typed', turnOrigin: 'human', origin: { kind: 'human' } }),
-      user('queued while busy', { promptSource: 'queued', turnOrigin: 'human', origin: { kind: 'human' } }),
-      user('accepted suggestion', { promptSource: 'suggestion_accepted', turnOrigin: 'human' }),
-      user('from -p', { promptSource: 'sdk', turnOrigin: 'sdk' }),
-      user(`pasted ${notice}`, { promptSource: 'typed', turnOrigin: 'human', origin: { kind: 'human' } }),
-      // 2.1.30x, 2.1.27x (no producer, no turnOrigin) and transcript-only queue variants of a native notice.
-      user(notice, { promptSource: 'system', turnOrigin: 'task_notification', origin: { kind: 'task-notification', producer: 'session-task' } }),
+describe('shared human input classification and selection', () => {
+  it('keeps human rows and excludes host notices, summaries, commands, meta, sidechain and non-text blocks', () => {
+    const notice = '<task-notification><task-id>task1</task-id></task-notification>';
+    expect(humanInputText(user('typed', { promptSource: 'typed', origin: { kind: 'human' } }))).toBe('typed');
+    expect(humanInputText(user('queued', { promptSource: 'queued' }))).toBe('queued');
+    expect(humanInputText(user('accepted suggestion', { promptSource: 'suggestion_accepted', turnOrigin: 'human' }))).toBe('accepted suggestion');
+    expect(humanInputText(user('from -p', { promptSource: 'sdk', turnOrigin: 'sdk' }))).toBe('from -p');
+    expect(humanInputText(user(`quoted ${notice}`, { promptSource: 'typed', origin: { kind: 'human' } }))).toBe(`quoted ${notice}`);
+    for (const row of [
       user(notice, { promptSource: 'system', origin: { kind: 'task-notification' } }),
+      user(notice, { promptSource: 'system', turnOrigin: 'task_notification', origin: { kind: 'task-notification', producer: 'session-task' } }),
       user(notice, { promptSource: 'system', origin: { kind: 'task-notification', producer: 'session-task', runId: 'r' }, queueTranscriptOnly: true }),
-      user('This session is being continued from a previous conversation.', { isCompactSummary: true, isVisibleInTranscriptOnly: true, turnOrigin: 'human' }),
-      user('scheduled fire', { promptSource: 'system', turnOrigin: 'scheduled', isMeta: true }),
-      user('peer message', { origin: { kind: 'peer' } }),
+      user('summary', { isCompactSummary: true }), user('meta', { isMeta: true }), user('sidechain', { isSidechain: true }),
+      user('<command-name>/model</command-name>'), user('[Request interrupted by user]'),
+      user([{ type: 'tool_result', content: 'out' }]), user([{ type: 'text', text: 'with image' }, { type: 'image' }]),
+      user('scheduled', { promptSource: 'system' }), user('peer', { origin: { kind: 'peer' } }),
       { type: 'attachment', attachment: { type: 'queued_command', commandMode: 'task-notification', prompt: notice } },
       { type: 'queue-operation', operation: 'enqueue', content: notice },
-    ]);
-    expect(readRecentPrompts(p, 'now', 10)).toEqual(['typed', 'queued while busy', 'accepted suggestion', 'from -p', `pasted ${notice}`]);
+    ]) expect(humanInputText(row)).toBeNull();
+    expect(humanInputText(user([{ type: 'text', text: 'blocks ' }, { type: 'text', text: 'joined' }]))).toBe('blocks \njoined');
   });
 
-  it('drops a turn that looks like a secret instead of redacting it, and truncates long turns', () => {
+  it('filters secrets and host commands, keeps the latest bounded requests and clips long input', () => {
     const long = 'x'.repeat(RECENT_PROMPT_MAX_CHARS + 50);
-    const p = write([user('password = correct-horse-battery-staple-0000'), user(long)]);
-    const out = readRecentPrompts(p, 'now');
-    expect(out).toHaveLength(1);
-    expect(out[0]).toHaveLength(RECENT_PROMPT_MAX_CHARS + ' […]'.length);
+    const selected = selectRecentPrompts(['old', 'password = correct-horse-battery-staple-0000', '<local-command-stdout>hidden</local-command-stdout>', 'two', long, '  ']);
+    expect(selected).toEqual(['old', 'two', `${'x'.repeat(RECENT_PROMPT_MAX_CHARS)} […]`]);
+    expect(selectRecentPrompts(['a', 'b', 'c', 'd'], 2)).toEqual(['c', 'd']);
   });
-
-  it('is empty for a missing, empty or unnamed transcript', () => {
-    expect(readRecentPrompts(join(tmp, 'gone.jsonl'), 'x')).toEqual([]);
-    const target = write([user('private')]); const link = join(tmp, 'symlink.jsonl'); symlinkSync(target, link);
-    expect(readRecentPrompts(link, 'x')).toEqual([]);
-    expect(readRecentPrompts(tmp, 'x')).toEqual([]);
-    expect(readRecentPrompts(null, 'x')).toEqual([]);
-    expect(readRecentPrompts(write([{ type: 'assistant', message: {} }]), 'x')).toEqual([]);
-  });
-
 });
 
 describe('readCurrentTaskPrompts (classic Compact)', () => {
-  it('reads back in bounded chunks, rejoins a split human row and UTF-8 character, and leaves Gate A tail-only', () => {
+  it('reads back in bounded chunks and rejoins a split human row and UTF-8 character', () => {
     const task = '현재 작업을 보존해줘';
     const row = JSON.stringify(user(task)) + '\n';
     const split = Buffer.byteLength(row.slice(0, row.indexOf(task))) + 1;
@@ -94,7 +61,6 @@ describe('readCurrentTaskPrompts (classic Compact)', () => {
     vi.mocked(readSync).mockClear();
     expect(readCurrentTaskPrompts(p)).toEqual([task]);
     expect(vi.mocked(readSync).mock.calls.map(c => Array.from(c)[3])).toEqual([2 * 1024 * 1024, split]);
-    expect(readRecentPrompts(p, '')).toEqual([]);
   });
 
   it('stops at the first chunk with a human task and applies shared secret filtering and clipping', () => {

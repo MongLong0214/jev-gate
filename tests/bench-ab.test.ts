@@ -19,6 +19,16 @@ const completeRecording = (dir: string, sid: string): void => {
 };
 
 describe('bench ab (#130)', () => {
+  it.each([['a', 'z'], ['z', 'a']])('uses the latest Router decision by write time, regardless of file order (%s, %s)', (latest, older) => {
+    const dir = mkdtempSync(join(tmpdir(), 'ab-route-order-'));
+    try {
+      const save = (name: string, value: object) => writeFileSync(join(dir, `${name}.json`), JSON.stringify({ session_id: 'sid', phase: 'mod_router', turn: 'task-turn', ...value }));
+      save(latest, { event: 'root', written_at: '2026-10-20T00:00:02.000Z', patch: { model: 'latest-model' } });
+      save(older, { event: 'root', written_at: '2026-10-20T00:00:01.000Z', patch: { model: 'older-model' } });
+      save('result', { event: 'root_result', written_at: '2026-10-20T00:00:03.000Z', request_id: 'task-request', confirmation: 'confirmed', observed: 'latest-model' });
+      expect([...sessionFacts(dir, 'sid').routed]).toEqual([['task-request', 'latest-model']]);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
   it('requires each non-pinned task response to have its own exact route confirmation', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ab-route-')), trace = join(dir, 'trace'); mkdirSync(trace);
     const model = 'claude-haiku-5-5', transcript = join(dir, 'sid.jsonl');
