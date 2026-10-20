@@ -3,6 +3,7 @@ import { factsOf, sameModel } from './claude-models.js';
 import { codexConnectionOwnerPath } from './codex-paths.js';
 import type { Env } from './config.js';
 import { readPrivateJson } from './credentials.js';
+import { normalizeUsage, usageCost, type TokenUsage } from './cost.js';
 import { dashboardSources } from './dashboard.js';
 import { ownerAlive } from './dashboard-launch.js';
 import type { DoctorLevel } from './doctor.js';
@@ -132,19 +133,32 @@ export const activityChecks = (input: ActivityInput): ActivityCheck[] => {
   const routedSteps = new Set(router('prepared').filter(r => r['routed'] === true && r['scope'] === 'root' && !str(r['agent_id'])).map(r => step(r, 'index')));
   const decisions = new Map(router('root').filter(r => str(sub(r, 'patch')['model'])).map(r => [step(r), r]));
   const sessions = new Map<string, Rec[]>();
-  for (const r of router('root_result')) if (isRecord(r['usage'])) group(sessions, String(r['session_id']), r);
+  for (const r of router('root_result')) group(sessions, String(r['session_id']), r);
+  const usage = (r: Rec): TokenUsage => {
+    const u = sub(r, 'usage'), t = normalizeUsage('claude', { input_tokens: u['input'], cache_read_input_tokens: u['cache_read'], cache_creation_input_tokens: u['cache_creation'], output_tokens: u['output'] });
+    const coverage = sub(r, 'accounting')['coverage'];
+    return coverage === 'partial' || coverage === 'invalid' ? { ...t, coverage } : t;
+  };
+  // Missing return usage can hide a rewrite after a known saving. Exclude that session's whole comparison,
+  // rather than crediting the earlier switch while silently dropping its unknown cost.
+  const incomplete = new Map([...sessions].map(([id, rows]) => [id, rows.filter(r => usage(r).coverage !== 'complete').length] as const).filter(([, n]) => n));
+  const unknown = [...incomplete.values()].reduce((sum, n) => sum + n, 0);
   const net = (ttl: 'write5m' | 'write1h') => {
     const reach = ttl === 'write5m' ? 5 * 60_000 : 60 * 60_000;
     let spend = 0, saved = 0, rewrite = 0, switched = 0, switches = 0;
-    for (const rows of sessions.values()) {
+    for (const [id, rows] of sessions) {
+      if (incomplete.has(id)) continue;
       // `back` is the baseline family the previous request switched away from, while that request was a switch.
       let prev: string | null = null, back: string | null = null, prevAt = NaN;
       for (const r of rows) {
         const warm = at(r) - prevAt <= reach;
         prevAt = at(r);
-        const model = str(r['observed']), family = familyOf(model), u = sub(r, 'usage');
-        const t = { input: num(u['input']) ?? 0, read: num(u['cache_read']) ?? 0, write: num(u['cache_creation']) ?? 0, output: num(u['output']) ?? 0 };
-        const price = (m: string | null, v: typeof t) => { const p = m ? providerPrice('claude', m, v.input + v.read + v.write) : null, w = p?.write ?? p?.[ttl]; return p && w !== undefined ? { p, w, usd: (v.input * p.input + v.read * p.read + v.write * w + v.output * p.output) / 1e6 } : null; };
+        const model = str(r['observed']), family = familyOf(model), t = usage(r);
+        const price = (m: string | null, v: TokenUsage) => {
+          const p = m ? providerPrice('claude', m, v.input! + v.read! + v.write!) : null, w = p?.write ?? p?.[ttl];
+          const cost = usageCost(v, p && w !== undefined ? { ...p, write: w } : null);
+          return p && w !== undefined && cost.usd !== null ? { p, w, usd: cost.usd } : null;
+        };
         const actual = family === 'opus' || family === 'sonnet' || family === 'haiku' ? price(model, t) : null;
         if (!actual) { prev = back = null; continue; }
         spend += actual.usd;
@@ -153,11 +167,11 @@ export const activityChecks = (input: ActivityInput): ActivityCheck[] => {
         const from = applied ? str(sub(decision, 'from')['model']) : null, fromFamily = familyOf(from);
         if (fromFamily && fromFamily !== family) {
           switched++; if (prev !== family) switches++;
-          const counter = price(from, prev === fromFamily && warm ? { ...t, read: t.read + Math.max(0, t.write - NEW_CONTENT), write: Math.min(t.write, NEW_CONTENT) } : t);
+          const counter = price(from, prev === fromFamily && warm ? { ...t, read: t.read! + Math.max(0, t.write! - NEW_CONTENT), write: Math.min(t.write!, NEW_CONTENT) } : t);
           if (counter) saved += counter.usd - actual.usd;
           back = fromFamily;
         } else {
-          if (back === family && warm) rewrite += Math.max(0, t.write - NEW_CONTENT) * (actual.w - actual.p.read) / 1e6;
+          if (back === family && warm) rewrite += Math.max(0, t.write! - NEW_CONTENT) * (actual.w - actual.p.read) / 1e6;
           back = null;
         }
         prev = family;
@@ -166,9 +180,9 @@ export const activityChecks = (input: ActivityInput): ActivityCheck[] => {
     return { spend, net: saved - rewrite, switched, switches };
   };
   const short5 = net('write5m'), long1 = net('write1h');
-  say(!short5.switched ? sessions.size ? 'ok' : 'info' : short5.net < 0 && long1.net < 0 ? 'fail' : short5.net < 0 !== long1.net < 0 ? 'warn' : 'ok',
-    !short5.switched ? `router_cost: no routed root model switch among ${router('root_result').length} root requests` : `router_cost: ${short5.switched} routed root requests off their turn's baseline model over ${short5.switches} switches; net ${usd(short5.net)} at 5m / ${usd(long1.net)} at 1h write prices (${rate(short5.net, short5.spend)} / ${rate(long1.net, long1.spend)} of root spend $${short5.spend.toFixed(2)} / $${long1.spend.toFixed(2)})`,
-    short5.net < 0 && long1.net < 0 ? 'Root model switching cost more than it saved at either cache TTL; report it with this line before relying on root model routing.' : 'The sign depends on the cache TTL the host used; the records do not say which.');
+  say(unknown ? 'warn' : !short5.switched ? sessions.size ? 'ok' : 'info' : short5.net < 0 && long1.net < 0 ? 'fail' : short5.net < 0 !== long1.net < 0 ? 'warn' : 'ok',
+    unknown ? `router_cost: unknown/untracked -- ${unknown} root requests with incomplete usage; ${incomplete.size} sessions excluded from savings and losses` : !short5.switched ? `router_cost: no routed root model switch among ${router('root_result').length} root requests` : `router_cost: ${short5.switched} routed root requests off their turn's baseline model over ${short5.switches} switches; net ${usd(short5.net)} at 5m / ${usd(long1.net)} at 1h write prices (${rate(short5.net, short5.spend)} / ${rate(long1.net, long1.spend)} of root spend $${short5.spend.toFixed(2)} / $${long1.spend.toFixed(2)})`,
+    unknown ? 'Usage counters or accounting coverage are incomplete; record complete usage before judging root model switching costs.' : short5.net < 0 && long1.net < 0 ? 'Root model switching cost more than it saved at either cache TTL; report it with this line before relying on root model routing.' : 'The sign depends on the cache TTL the host used; the records do not say which.');
 
   const routedSpawns = new Set(rs.filter(r => r['phase'] === 'mod_router' && String(r['event']).startsWith('spawn')).map(r => str(r['tool_use_id'])).filter(Boolean));
   const unrouted = posts.filter(r => !str(sub(r, 'caller')['agent_id']) && !str(r['subagent_type'])?.startsWith('jev-gate:') && !routedSpawns.has(str(r['tool_use_id'])));
