@@ -43,7 +43,7 @@ const fixture = async (direct = false, hierarchy = false) => {
 };
 
 describe('responsive native background contracts', () => {
-  it('absorbs a queued native cancellation before transcript flush with a reused human prompt ID', async () => {
+  it('absorbs a native cancellation notice by its host row, never by the queue record a person\'s input gets too', async () => {
     const f = await fixture(); await f.launch();
     updateJob(f.env, 's', prev => prev ? { ...prev, current: { ...prev.current, active: {}, outcome: 'incomplete' } } : null);
     const prompt = '<task-notification>\n<task-id>worker</task-id>\n<tool-use-id>dispatch</tool-use-id>\n<output-file>/tmp/worker.output</output-file>\n<status>killed</status>\n</task-notification>';
@@ -54,21 +54,15 @@ describe('responsive native background contracts', () => {
     ];
     const input = { hook_event_name: 'UserPromptSubmit', session_id: 's', transcript_path: f.parent, prompt_id: 'cancel-turn', prompt };
     writeFileSync(f.parent, rows.map(r => JSON.stringify(r)).join('\n') + '\n');
-    expect(isNativeTaskNotification(input)).toBe(true);
-    await f.run(input); expect(f.job().current.prompt_id).toBe('original');
-    // User/Sdk provenance, a copy of a delivered notice, a copied user message, or unbound queue data cannot authenticate XML.
-    for (const source of ['user', 'sdk'] as const) expect(isNativeTaskNotification({ ...input, source })).toBe(false);
-    writeFileSync(f.parent, [...rows, { type: 'user', sessionId: 's', promptId: 'cancel-turn', promptSource: 'system', message: { content: prompt } }].map(r => JSON.stringify(r)).join('\n') + '\n');
-    expect(isNativeTaskNotification({ ...input, prompt_id: 'new-human' })).toBe(false);
-    for (const variant of [
-      [rows[0], { ...rows[1], message: { content: prompt } }, rows[2]],
-      [rows[0], rows[1], { ...rows[2], sessionId: 'other' }],
-      [{ ...rows[0], toolUseResult: { status: 'async_launched', agentId: 'another', outputFile: '/tmp/worker.output' } }, rows[1], rows[2]],
-      [{ ...rows[0], message: { content: [{ type: 'tool_result', tool_use_id: 'another' }] } }, rows[1], rows[2]],
-      [{ ...rows[0], toolUseResult: { status: 'async_launched', agentId: 'worker', outputFile: '/tmp/another.output' } }, rows[1], rows[2]],
-      [rows[0], rows[1]],
-      [rows[0], rows[2], rows[1]],
-    ]) { writeFileSync(f.parent, variant.map(r => JSON.stringify(r)).join('\n') + '\n'); expect(isNativeTaskNotification(input)).toBe(false); }
+    // Before the notice's own row, either author's input has this queue record: mid-turn with the running turn's ID, idle with a fresh one.
+    for (const prompt_id of ['cancel-turn', 'idle-turn']) expect(isNativeTaskNotification({ ...input, prompt_id })).toBe(false);
+    const notice = { ...input, prompt_id: 'notice-turn' };
+    writeFileSync(f.parent, [...rows, { type: 'user', sessionId: 's', promptId: 'notice-turn', promptSource: 'system', turnOrigin: 'task_notification', origin: { kind: 'task-notification', producer: 'session-task' }, message: { content: prompt } }].map(r => JSON.stringify(r)).join('\n') + '\n');
+    expect(isNativeTaskNotification(notice)).toBe(true);
+    await f.run(notice); expect(f.job().current.prompt_id).toBe('original');
+    // User/Sdk provenance, or a copy of the delivered notice under another prompt, cannot authenticate XML.
+    for (const source of ['user', 'sdk'] as const) expect(isNativeTaskNotification({ ...notice, source })).toBe(false);
+    expect(isNativeTaskNotification({ ...notice, prompt_id: 'new-human' })).toBe(false);
     await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'human-after-cancel', prompt: 'Add a README section.' });
     expect(f.job().current.prompt_id).toBe('human-after-cancel');
   });
@@ -343,7 +337,8 @@ describe('Gate A and host task notifications', () => {
   });
   /**
    * #281: shapes from real 2.1.30x sessions, contents replaced. The payload carries no `source`, and the notice's own
-   * row is flushed only after the hook; its prompt ID is either the running turn's or a fresh one.
+   * row is flushed only after the hook. Until then a person's queued input looks the same: the same enqueue record and
+   * the same prompt ID, the running turn's mid-turn and a fresh one when idle (2.1.304, fake-API probe, all three shapes).
    */
   const human = { type: 'user', sessionId: 's', promptId: 'human', promptSource: 'typed', turnOrigin: 'human', origin: { kind: 'human' }, timestamp: '2026-10-19T03:00:00.000Z', message: { content: 'Watch the build and fix what breaks.' } };
   const receipt = (tool: string, toolUseResult: Record<string, unknown>) => ({ type: 'user', sessionId: 's', timestamp: '2026-10-19T03:00:05.000Z', toolUseResult, message: { content: [{ type: 'tool_result', tool_use_id: tool, content: 'launched' }] } });
@@ -352,33 +347,27 @@ describe('Gate A and host task notifications', () => {
     bash: { prompt: '<task-notification>\n<task-id>b6w41xrqn</task-id>\n<tool-use-id>toolu_bash</tool-use-id>\n<output-file>/tmp/tasks/b6w41xrqn.output</output-file>\n<status>completed</status>\n<summary>Background command "npm test" completed (exit code 0)</summary>\n</task-notification>', launch: receipt('toolu_bash', { backgroundTaskId: 'b6w41xrqn', stdout: '', stderr: '', interrupted: false, isImage: false, noOutputExpected: false }) },
     agent: { prompt: '<task-notification>\n<task-id>a1b2c3d4e5f6</task-id>\n<tool-use-id>toolu_agent</tool-use-id>\n<output-file>/tmp/tasks/a1b2c3d4e5f6.output</output-file>\n<status>completed</status>\n<summary>Agent "Review" completed</summary>\n<note>Read the output file.</note>\n<result>\nreviewed\n</result>\n<usage><subagent_tokens>10</subagent_tokens><tool_uses>1</tool_uses><duration_ms>5</duration_ms></usage>\n</task-notification>', launch: receipt('toolu_agent', { status: 'async_launched', agentId: 'a1b2c3d4e5f6', outputFile: '/tmp/tasks/a1b2c3d4e5f6.output', isAsync: true }) },
   };
-  it.each(Object.keys(shapes).flatMap(shape => ['human', 'fresh'].map(promptId => [shape, promptId] as const)))('never asks Gate A about a real %s notice before or after its row is written (prompt ID %s)', async (shape, promptId) => {
+  const enqueue = (prompt: string) => ({ type: 'queue-operation', operation: 'enqueue', sessionId: 's', timestamp: '2026-10-19T03:01:00.000Z', content: prompt });
+  it.each(Object.keys(shapes))('never asks Gate A about a real %s notice once the host has written its row', async shape => {
     const g = gateSession(); const { prompt, launch } = shapes[shape as keyof typeof shapes];
     await g.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'human', prompt: human.message.content });
     const asked = g.calls; expect(asked).toBeGreaterThan(0);
-    const enqueue = { type: 'queue-operation', operation: 'enqueue', sessionId: 's', timestamp: '2026-10-19T03:01:00.000Z', content: prompt };
-    g.transcript([human, launch, enqueue]);
-    expect(await g.run({ hook_event_name: 'UserPromptSubmit', prompt_id: promptId, prompt })).toMatchObject({ stdout: null });
-    // The host writes the notice's own row after the hook; a re-delivered hook then finds it there.
-    g.transcript([human, launch, enqueue, { type: 'user', sessionId: 's', promptId, promptSource: 'system', turnOrigin: 'task_notification', origin: { kind: 'task-notification', producer: 'session-task' }, timestamp: '2026-10-19T03:01:00.100Z', message: { content: prompt } }]);
-    expect(await g.run({ hook_event_name: 'UserPromptSubmit', prompt_id: promptId, prompt })).toMatchObject({ stdout: null });
+    g.transcript([human, launch, enqueue(prompt), { type: 'user', sessionId: 's', promptId: 'notice', promptSource: 'system', turnOrigin: 'task_notification', origin: { kind: 'task-notification', producer: 'session-task' }, timestamp: '2026-10-19T03:01:00.100Z', message: { content: prompt } }]);
+    expect(await g.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'notice', prompt })).toMatchObject({ stdout: null });
     expect(g.calls).toBe(asked);
     const job = readJob(g.env, 's'); expect(job.ok && job.value?.current.prompt_id).toBe('human');
-    expect(g.admissions(promptId).filter(r => r.decision?.reason === 'task_notification').map(r => r.human_input.basis).sort()).toEqual(['host_queue', 'transcript_row']);
+    expect(g.admissions('notice').map(r => r.human_input)).toEqual([{ verdict: 'task_notification', basis: 'transcript_row' }]);
   });
-  it.each([
-    ['no host queue record', (prompt: string) => [human, shapes.bash.launch]],
-    ['no launch receipt', (prompt: string) => [human, { type: 'queue-operation', operation: 'enqueue', sessionId: 's', timestamp: '2026-10-19T03:01:00.000Z', content: prompt }]],
-    ['a receipt for another task', (prompt: string) => [human, receipt('toolu_bash', { backgroundTaskId: 'another' }), { type: 'queue-operation', operation: 'enqueue', sessionId: 's', timestamp: '2026-10-19T03:01:00.000Z', content: prompt }]],
-    // Queued while the session was busy after a later turn of theirs: the queue record is the person's, not the host's.
-    ['the queue while busy after a later turn', (prompt: string) => [human, shapes.bash.launch, { ...human, promptId: 'later', promptSource: 'queued', timestamp: '2026-10-19T03:00:30.000Z', message: { content: 'Also check the lint output.' } }, { type: 'queue-operation', operation: 'enqueue', sessionId: 's', timestamp: '2026-10-19T03:01:00.000Z', content: prompt }]],
-  ] as const)('asks Gate A about notice XML a person sent with %s, and records why', async (_case, rows) => {
-    const g = gateSession(); const { prompt } = shapes.bash;
-    g.transcript(rows(prompt));
-    await g.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'pasted', prompt });
-    expect(g.calls).toBeGreaterThan(0);
-    const job = readJob(g.env, 's'); expect(job.ok && job.value?.current.prompt_id).toBe('pasted');
-    expect(g.admissions('pasted').filter(r => r.attempted).map(r => r.human_input)).toEqual(expect.arrayContaining([{ verdict: 'human', basis: 'unproven' }]));
+  // The person spoke before the launch, or so long ago that their turn left the tail; the paste is queued after the
+  // launch receipt and not yet written. Mid-turn it carries the running turn's ID, idle a fresh one.
+  it.each(Object.keys(shapes).flatMap(shape => ['human before the launch', 'no human turn in the tail'].flatMap(tail => ['reused', 'fresh'].map(id => [shape, tail, id] as const))))('asks Gate A about %s notice XML a person queued with %s and a %s prompt ID, and records why', async (shape, tail, id) => {
+    const g = gateSession(); const { prompt, launch } = shapes[shape as keyof typeof shapes];
+    await g.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'human', prompt: human.message.content });
+    const asked = g.calls; const promptId = id === 'reused' ? 'human' : 'pasted';
+    g.transcript([...(tail === 'human before the launch' ? [human] : []), launch, enqueue(prompt)]);
+    await g.run({ hook_event_name: 'UserPromptSubmit', prompt_id: promptId, prompt });
+    expect(g.calls).toBeGreaterThan(asked);
+    expect(g.admissions(promptId).filter(r => r.attempted).map(r => r.human_input)).toEqual(expect.arrayContaining([{ verdict: 'human', basis: 'unproven' }]));
   });
   it('takes a 2.1.2x notice row without turnOrigin or producer as a notice in Gate A and Compact alike', async () => {
     const g = gateSession(); const { prompt } = shapes.bash;

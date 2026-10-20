@@ -1,13 +1,13 @@
 import { closeSync, constants, fstatSync, lstatSync, openSync, readSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { humanInputText, isHostNoticeRow } from './recent-prompts.js';
+import { isHostNoticeRow } from './recent-prompts.js';
 import { subagentTranscriptPath } from './verify.js';
 import type { HookInput } from './types.js';
 
 export const dispatchMarker = (token: string): string => `\n\n[JEV_DISPATCH token=${token}]`;
 
 /** #281: why a prompt was or was not taken as a native notice. Gate A records it, so notice inflow can be counted. */
-export type NoticeBasis = 'not_notice' | 'source' | 'transcript_row' | 'host_queue' | 'unproven';
+export type NoticeBasis = 'not_notice' | 'source' | 'transcript_row' | 'unproven';
 
 /** Suppress host-authored notice turns; this never establishes worker termination. */
 export const taskNoticeVerdict = (input: HookInput): { notice: boolean; basis: NoticeBasis } => {
@@ -16,47 +16,22 @@ export const taskNoticeVerdict = (input: HookInput): { notice: boolean; basis: N
   if (input.source !== undefined && input.source !== 'system') return human('source');
   // The documented author field is available before transcript flush. Require the whole machine envelope.
   if (input.source === 'system' && /^\s*<task-notification>[\s\S]*<\/task-notification>\s*$/.test(input.prompt ?? '')) return { notice: true, basis: 'source' };
-  // Older payloads lack source: only exact identity plus native transcript provenance can establish it.
+  // Older payloads lack source: only the host's own notice row, under this prompt's identity, can establish it.
+  // #281 review: before that row is flushed nothing names the author. On 2.1.304 a person's input queued mid-turn gets
+  // the running turn's prompt ID and the same enqueue record as a notice, and idle input of either author a fresh ID
+  // (fake-API probe, Monitor/Bash/Agent). Such a prompt stays a person's, so Gate A is asked rather than skipped.
   let fd: number | undefined;
   try {
     fd = openSync(input.transcript_path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     const st = fstatSync(fd); if (!st.isFile()) return human('unproven');
-    // #281: a launch receipt sat up to 6.1 MiB before its notice (p90 2.3 MiB, 2026-10-17..20); 8 MiB parses in ~17 ms.
-    const offset = Math.max(0, st.size - 8 * 1024 * 1024), buffer = Buffer.alloc(st.size - offset);
+    const offset = Math.max(0, st.size - 1024 * 1024), buffer = Buffer.alloc(st.size - offset);
     readSync(fd, buffer, 0, buffer.length, offset);
-    // Every row read below is a user or queue row; the rest of a long session is skipped before parsing.
-    const rows = buffer.toString().split('\n').flatMap(line => { if (!line.includes('"user"') && !line.includes('"queue-operation"')) return []; try { const row: unknown = JSON.parse(line); return row && typeof row === 'object' && !Array.isArray(row) ? [row as Record<string, unknown>] : []; } catch { return []; } });
+    const rows = buffer.toString().split('\n').flatMap(line => { if (!line.includes('"user"')) return []; try { const row: unknown = JSON.parse(line); return row && typeof row === 'object' && !Array.isArray(row) ? [row as Record<string, unknown>] : []; } catch { return []; } });
     const textOf = (row: Record<string, unknown>): string | null => {
       const content = (row['message'] as { content?: unknown } | undefined)?.content;
       return typeof content === 'string' ? content : Array.isArray(content) && content.every(c => c?.type === 'text' && typeof c.text === 'string') ? content.map(c => c.text).join('\n') : null;
     };
-    if (rows.some(row => isHostNoticeRow(row) && row['sessionId'] === input.session_id && (row['promptId'] === input.prompt_id || row['uuid'] === input.prompt_id) && textOf(row) === input.prompt)) return { notice: true, basis: 'transcript_row' };
-    // The host runs the notice hook before flushing its user row, and 2.1.30x payloads omit source (#281: all 237
-    // notices that reached Gate A on 2026-10-17..20). The notice may reuse the running turn's ID or carry a fresh one.
-    // Authenticate the host queue after the last human turn AND the launch receipt of the task it reports on, never XML alone.
-    if (!/^\s*<task-notification>[\s\S]*<\/task-notification>\s*$/.test(input.prompt ?? '')) return human('unproven');
-    const fields = (name: string): string[] => [...(input.prompt ?? '').matchAll(new RegExp(`<${name}>([^<>]+)</${name}>`, 'g'))].map(m => m[1]!);
-    // Agent and background Bash notices name the launching tool call and output file; Monitor events name only the task.
-    const tasks = fields('task-id'), tools = fields('tool-use-id'), outputs = fields('output-file');
-    if (tasks.length !== 1 || tools.length > 1 || outputs.length > 1 || ![...tasks, ...tools].every(id => /^[\w-]{1,160}$/.test(id))) return human('unproven');
-    // Its own row is flushed only after this hook, so a row that already carries the text is a copy of a delivered notice.
-    if (rows.some(row => row['type'] === 'user' && row['sessionId'] === input.session_id && textOf(row) === input.prompt)) return human('unproven');
-    // A long autonomous turn can push the last human turn out of the tail; the queue record is then after it by construction.
-    const humanIndex = rows.findLastIndex(row => row['sessionId'] === input.session_id && humanInputText(row) !== null);
-    const queuedIndex = rows.findLastIndex(row => row['type'] === 'queue-operation' && row['operation'] === 'enqueue' && row['sessionId'] === input.session_id && row['content'] === input.prompt);
-    const at = (row: Record<string, unknown> | undefined): number => typeof row?.['timestamp'] === 'string' ? Date.parse(row['timestamp']) : NaN;
-    if (queuedIndex <= humanIndex || !Number.isFinite(at(rows[queuedIndex])) || humanIndex >= 0 && !(at(rows[humanIndex]) <= at(rows[queuedIndex]))) return human('unproven');
-    const receiptIndex = rows.slice(0, queuedIndex).findLastIndex(row => {
-      const result = row['toolUseResult'] as Record<string, unknown> | undefined;
-      const content = (row['message'] as { content?: unknown } | undefined)?.content;
-      return row['type'] === 'user' && row['sessionId'] === input.session_id && row['isSidechain'] !== true && !!result && [result['agentId'], result['backgroundTaskId'], result['taskId']].includes(tasks[0]) &&
-        (result['outputFile'] === undefined || result['outputFile'] === outputs[0]) && Array.isArray(content) && content.some(c => c?.type === 'tool_result' && (tools.length === 0 || c.tool_use_id === tools[0]));
-    });
-    // A person who spoke after the launch may have queued this text: their own prompt carries a fresh ID, while the
-    // host reuses that person's turn ID for a notice it delivers in it. 74 of 244 real notices (2026-10-17..20) still
-    // reach Gate A this way; without the ID, 128 would.
-    if (receiptIndex < 0 || humanIndex > receiptIndex && rows[humanIndex]!['promptId'] !== input.prompt_id) return human('unproven');
-    return { notice: true, basis: 'host_queue' };
+    return rows.some(row => isHostNoticeRow(row) && row['sessionId'] === input.session_id && (row['promptId'] === input.prompt_id || row['uuid'] === input.prompt_id) && textOf(row) === input.prompt) ? { notice: true, basis: 'transcript_row' } : human('unproven');
   } catch { return human('unproven'); }
   finally { if (fd !== undefined) closeSync(fd); }
 };
