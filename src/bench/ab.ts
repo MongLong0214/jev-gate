@@ -21,7 +21,7 @@
  *   node dist/bench/ab.js report --out DIR [--trace DIR]
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -91,9 +91,14 @@ export interface CellResult {
   /**
    * The cell's trace can be complete: Jev recording was on before the first turn and after the last, its switch file
    * (or, absent, the nearest folder that would hold it) was not written in between, no trace write the cell began was
-   * left unfinished, and no turn was killed by the timeout. Absent in results written before it.
+   * left unfinished or marked lost, every launch has positive recording completion, the trace directory still took a
+   * write after the last turn, and no turn was killed by the timeout. The reader rechecks receipts against transcripts.
+   * Absent in results written before it, including
+   * those with the earlier `recording` field, whose proof could not see a write lost before its file was made.
    */
-  recording?: boolean;
+  trace_complete?: boolean;
+  /** Version 1 requires positive recorder completion, including empty recordings. Older booleans are insufficient. */
+  recording_version?: 1;
   started_at: string;
   prime_wall_s: number;
   wall_s: number;
@@ -147,9 +152,14 @@ const recordingSnapshot = (env: NodeJS.ProcessEnv, traceDir: string): { on: bool
   } catch { /* An unusable configuration directory leaves recording off (recordingStatus). */ }
   return { on: recordingStatus(env).enabled, stamp, names: new Set(readdirSync(traceDir)) };
 };
-/** A failed or killed trace write leaves its `.tmp` (src/trace.ts) or a record that does not parse. */
+/** A failed or killed trace write leaves its `.tmp` (src/trace.ts), a `.failed` loss marker or a record that does not parse. */
 const unfinishedWrite = (traceDir: string, before: Set<string>, after: Set<string>): boolean =>
-  [...after].some(name => !before.has(name) && (name.endsWith('.tmp') || name.endsWith('.json') && !isRecord(readJson(join(traceDir, name)))));
+  [...after].some(name => !before.has(name) && (name.endsWith('.tmp') || name.endsWith('.failed') || name.endsWith('.json') && !isRecord(readJson(join(traceDir, name)))));
+/** A directory that refuses a write now (full, read-only) may have refused the cell's loss markers as well. */
+const writable = (traceDir: string): boolean => {
+  const probe = join(traceDir, `.ab-probe-${crypto.randomUUID()}`);
+  try { writeFileSync(probe, ''); rmSync(probe); return true; } catch { return false; }
+};
 
 interface RunOptions {
   tasks: string;
@@ -268,8 +278,9 @@ export const runCell = (o: RunOptions, file: TasksFile, task: string, cond: Cond
   const timedOut = prime.signal === 'SIGKILL' || work.signal === 'SIGKILL' || followups.some(f => f.timed_out);
   const recordingAfter = recordingSnapshot(env, env['JEV_GATE_TRACE_DIR']);
   // A killed turn can lose a record it had queued without leaving anything behind.
-  const recording = recordingBefore.on && recordingAfter.on && recordingBefore.stamp === recordingAfter.stamp && !timedOut
-    && !unfinishedWrite(env['JEV_GATE_TRACE_DIR'], recordingBefore.names, recordingAfter.names);
+  const traceComplete = recordingBefore.on && recordingAfter.on && recordingBefore.stamp === recordingAfter.stamp && !timedOut
+    && !unfinishedWrite(env['JEV_GATE_TRACE_DIR'], recordingBefore.names, recordingAfter.names) && writable(env['JEV_GATE_TRACE_DIR'])
+    && (cond === 'A' || recordingComplete(env['JEV_GATE_TRACE_DIR'], sid, cond, 2 + followups.length));
 
   let checkRc: number | null = null;
   if (spec.check) {
@@ -280,7 +291,7 @@ export const runCell = (o: RunOptions, file: TasksFile, task: string, cond: Cond
 
   const raw = readJson(join(R, `${id}.raw.json`));
   const result: CellResult = {
-    id, task, cond, rep, sid, cwd, model: o.model, host_version: hostVersion, recording, started_at: startedAt,
+    id, task, cond, rep, sid, cwd, model: o.model, host_version: hostVersion, trace_complete: traceComplete, recording_version: 1, started_at: startedAt,
     prime_wall_s: Math.round((t0 - p0) / 1000), wall_s: Math.round((t1 - t0) / 1000),
     prime_rc: prime.status, rc: work.status, timed_out: timedOut, check_rc: checkRc,
     prime: summarize(readJson(join(R, `${id}.prime.json`))), harness: finalSummary, followups,
@@ -375,8 +386,11 @@ const extraUsage = (lines: TranscriptLine[]): { write5m: number | null; write1h:
     thinking: sum(u => isRecord(u['output_tokens_details']) ? u['output_tokens_details']['thinking_tokens'] : undefined) };
 };
 
-/** Jev cost is each call's list estimate from its own recorded model and input; any call missing either leaves it unknown. */
-export const sessionFacts = (traceDir: string, sid: string): { routed: Map<string, string>; jevInput: number | null; jevOutput: number | null; jevRequests: number; jevCost: number | null } => {
+/**
+ * Jev cost is each call's list estimate from its own recorded model and input; any call missing either leaves it unknown.
+ * Completeness is checked separately against positive completion receipts, never inferred from an empty directory.
+ */
+export const sessionFacts = (traceDir: string, sid: string): { routed: Map<string, string>; jevInput: number | null; jevOutput: number | null; jevRequests: number; jevCost: number | null; marked: boolean } => {
   const routed = new Map<string, string>(); let jevInput: number | null = 0, jevOutput: number | null = 0, jevRequests = 0, jevCost: number | null = 0;
   const calls = new Map<string, { input: number | null; output: number | null; model: string | null }>();
   const records = (existsSync(traceDir) ? readdirSync(traceDir) : []).map(file => readJson(join(traceDir, file))).filter((r): r is Record<string, unknown> => isRecord(r) && r['session_id'] === sid);
@@ -391,7 +405,7 @@ export const sessionFacts = (traceDir: string, sid: string): { routed: Map<strin
     if (!hook && !router && !compact) continue;
     const binding = hook ? `gate:${String(r['request_id'])}` : router && typeof r['tool_use_id'] === 'string' ? `spawn:${r['tool_use_id']}`
       : router && typeof r['turn'] === 'string' ? JSON.stringify(['router', r['scope'], r['turn'], r['agent_id'] ?? null, r['index'] ?? null])
-      : `record:${String(r['invocation_id'])}`;
+      : compact && typeof r['run_id'] === 'string' ? `compact:${r['run_id']}` : `record:${String(r['invocation_id'])}`;
     const u = hook && isRecord(r['jev']) ? r['jev']['usage'] : r['usage'];
     const count = (k: string) => isRecord(u) && typeof u[k] === 'number' && Number.isSafeInteger(u[k]) && Number(u[k]) >= 0 ? Number(u[k]) : null;
     const input = count(router ? 'input' : 'input_tokens'), output = count(router ? 'output' : 'output_tokens');
@@ -414,7 +428,39 @@ export const sessionFacts = (traceDir: string, sid: string): { routed: Map<strin
     const cost = estimateJevCostUsd(model, input);
     jevCost = jevCost !== null && cost !== null ? jevCost + cost : null;
   }
-  return { routed, jevInput, jevOutput, jevRequests, jevCost };
+  return { routed, jevInput, jevOutput, jevRequests, jevCost, marked: records.length > 0 && records.every(r => typeof r['recording_id'] === 'string') };
+};
+
+/** Every producer must finish, with exactly the records it says it wrote. No receipt also covers failure to initialize. */
+export const recordingComplete = (traceDir: string, sid: string, cond: Condition, launches: number,
+  tools: Array<{ id: string; name: string }> = [], compacts = 0): boolean => {
+  try {
+    const names = new Set(readdirSync(traceDir));
+    // A late loss cannot be hidden by an earlier serialized trace_complete:true. Unbound losses are conservative.
+    if (unfinishedWrite(traceDir, new Set(), names)) return false;
+    const records = [...names].map(name => readJson(join(traceDir, name))).filter((r): r is Record<string, unknown> => isRecord(r) && r['session_id'] === sid);
+    const receipts = records.filter(r => r['phase'] === 'mod_recording' || r['phase'] === 'recording_complete');
+    const ids = new Set(receipts.map(r => r['recording_id']));
+    if (!receipts.length || ids.size !== receipts.length || records.some(r => !ids.has(r['recording_id']))) return false;
+    for (const r of receipts) {
+      if (typeof r['recording_id'] !== 'string' || r['complete'] !== true || r['internal_error'] === true || !Number.isSafeInteger(r['written']) || Number(r['written']) < 0 || r['attempted'] !== r['written']) return false;
+      if (records.filter(other => other !== r && other['recording_id'] === r['recording_id']).length !== r['written']) return false;
+    }
+    // Function Hooks live for one CLI launch. Router and Compact share this receipt, even when no Jev call was needed.
+    if (receipts.filter(r => r['phase'] === 'mod_recording').length !== launches) return false;
+    const gate = receipts.filter(r => r['producer'] === 'gate' && isRecord(r['caller']) && !r['caller']['agent_id']);
+    if (cond === 'B' || cond === 'D') {
+      for (const event of ['SessionStart', 'UserPromptSubmit', 'Stop']) if (gate.filter(r => r['hook_event_name'] === event).length < launches) return false;
+      for (const tool of tools) {
+        if (!gate.some(r => r['hook_event_name'] === 'PreToolUse' && r['tool_use_id'] === tool.id)) return false;
+        if (tool.name === 'Agent' && !gate.some(r => ['PostToolUse', 'PostToolUseFailure'].includes(String(r['hook_event_name'])) && r['tool_use_id'] === tool.id)) return false;
+      }
+    }
+    // A native compaction whose Function Hook did not answer needs the classic command-hook receipt.
+    const functionCompacts = records.filter(r => r['phase'] === 'mod_compact' && r['applied'] === true).length;
+    if (compacts > functionCompacts + receipts.filter(r => r['producer'] === 'classic' && r['hook_event_name'] === 'PreCompact').length) return false;
+    return true;
+  } catch { return false; }
 };
 
 /** Distinct models and efforts the assistant lines ran with, in first-seen order; `-` when the field is absent. */
@@ -519,14 +565,16 @@ export const rowOf = (r: CellResult, file: TasksFile | null, transcript: string 
   const admissions = traceAdmissions(traceDir, r.sid);
   // Read before the transcript: a cell's Jev bill does not depend on finding its transcript.
   const facts = sessionFacts(traceDir, r.sid);
-  // A trace directory exists before recording is checked (src/trace.ts), so it proves nothing: an absent receipt is no
-  // request only when recording was on around the cell. A runs everything off; anything else unproven is unknown.
-  const recorded = r.recording === true && existsSync(traceDir);
+  const all = transcript === null ? [] : readJsonl(transcript);
+  const tools = all.flatMap(e => e.type === 'assistant' && Array.isArray(e.message?.content) ? e.message.content.flatMap(b =>
+    isRecord(b) && b['type'] === 'tool_use' && typeof b['id'] === 'string' ? [{ id: b['id'], name: String(b['name']) }] : []) : []);
+  const nativeCompacts = all.filter(e => e.type === 'system' && (e as TranscriptLine & { subtype?: string }).subtype === 'compact_boundary').length;
+  const recorded = r.recording_version === 1 && r.trace_complete === true && facts.marked
+    && recordingComplete(traceDir, r.sid, r.cond, 2 + (r.followups?.length ?? 0), tools, nativeCompacts);
   const jev = (v: number | null): number | null => recorded ? v : r.cond === 'A' && !facts.jevRequests ? 0 : null;
   const base: Row = { id: r.id, task: r.task, cond: r.cond, rep: r.rep, ok: okSoFar, solved: okSoFar, wall_s: r.wall_s, cost: r.harness.cost_usd, prime_cost: r.prime.cost_usd, jev_requests: facts.jevRequests,
     jev_cost: jev(facts.jevCost), host_version: r.host_version ?? null, prime_tools: null, model: '-', model_mismatch: false, prime_effort: '-', effort: '-', gate_turns: admissions.gateTurns.join(',') || '-', total_tokens: 0, cache_create: 0, cache_read: 0, output: 0, requests: 0, tools: 0, subs: 0, compacts: 0, shapes: admissions.shapes.join(',') };
   if (transcript === null) return { ...base, ok: false, missing: true, total_tokens: null };
-  const all = readJsonl(transcript);
   const userIdx = all.flatMap((e, i) => {
     const c = e.message?.content;
     const text = typeof c === 'string' ? c : Array.isArray(c) && c.length > 0 && c.every(b => isRecord(b) && b['type'] === 'text' && typeof b['text'] === 'string') ? c.map(b => (b as { text: string }).text).join('\n') : null;
@@ -746,7 +794,7 @@ export const report = (argv: string[]): void => {
   console.table(rows.map((r) => ({ ...r, shapes: r.shapes || '-' })));
   console.log('== session cost (host prime + task + Jev list estimate), cost ratio and planned-pair wins; task tokens are auxiliary ==');
   console.table(grid(rows, tasks, conds, reps));
-  console.log('Cost pairs include every planned repetition; unknown or failed cells are not wins. A cell with a Jev request whose model or input is unknown, or whose recording was not on throughout, has an unknown cost. Token paired-sign is auxiliary, not a cost-saving verdict.');
+  console.log('Cost pairs include every planned repetition; unknown or failed cells are not wins. A cell with a Jev request whose model or input is unknown, or whose trace was not proven complete (trace_complete), has an unknown cost. Token paired-sign is auxiliary, not a cost-saving verdict.');
   console.log('== per condition over every planned cell (failed included): solved tasks, bill per solved task, tasks vs A, net-saving concentration ==');
   console.table(summary(rows, tasks, conds, reps));
   console.log('solved = every turn rc 0 without a timeout, the checker exited 0 when the task has one, and the result pattern matched. cost/solved is unknown when any planned cell\'s bill is.');

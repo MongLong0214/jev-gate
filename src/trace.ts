@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { constants, lstatSync, mkdirSync, openSync, closeSync, writeSync, renameSync, fsyncSync, futimesSync } from 'node:fs';
-import { lstat, readdir, unlink } from 'node:fs/promises';
+import { constants, lstatSync, mkdirSync, openSync, closeSync, writeSync, renameSync, rmdirSync, fsyncSync, futimesSync } from 'node:fs';
+import { lstat, readdir, rmdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Env } from './config.js';
 import { recordingStatus } from './recording.js';
@@ -17,6 +17,7 @@ import { recordingStatus } from './recording.js';
 export type TracePhase =
   | 'mod_router'
   | 'mod_compact'
+  | 'recording_complete'
   | 'codex_router_intent'
   | 'codex_router_result'
   | 'codex_router_skipped'
@@ -63,6 +64,7 @@ export type TracePhase =
  */
 export interface TraceWriter {
   write(phase: TracePhase, body: Record<string, unknown>): { ok: true; file: string } | { ok: false; error: string };
+  finish?(body: Record<string, unknown>): void;
 }
 
 const isSymlink = (p: string): boolean => {
@@ -81,25 +83,53 @@ export const openTraceDir = (dir: string, env: Env = process.env): { ok: true; w
   } catch (err) {
     return { ok: false, error: (err as NodeJS.ErrnoException).code ?? 'mkdir_failed' };
   }
+  const recordingId = randomUUID();
+  let attempted = 0, written = 0, failed = false;
   const writer: TraceWriter = {
     write(phase, body) {
-      if (!recordingStatus(env).enabled) return { ok: false, error: 'recording_disabled' };
       const id = randomUUID();
+      const receipt = phase === 'recording_complete';
+      if (!receipt) attempted++;
+      const marker = join(dir, `.${phase}-${id}.failed`);
+      // A record lost while recording is on leaves `.<phase>-<uuid>.failed` beside the records, so a reader that needs
+      // every record (src/bench/ab.ts) sees the loss. A directory needs no file descriptor, so it outlasts EMFILE.
+      const lost = (error: string): { ok: false; error: string } => {
+        failed = true;
+        try { mkdirSync(marker, { mode: 0o700 }); } catch { /* A missing completion receipt also leaves the run unproven. */ }
+        return { ok: false, error };
+      };
+      const status = recordingStatus(env);
+      if (!status.enabled) {
+        failed = true;
+        return status.error ? lost(status.error) : { ok: false, error: 'recording_disabled' };
+      }
       const finalPath = join(dir, `${phase}-${id}.json`);
       const tmpPath = join(dir, `.${phase}-${id}.tmp`);
       try {
+        // Establish the incomplete write before opening a file, including when the process has no descriptors left.
+        mkdirSync(marker, { mode: 0o700 });
         const fd = openSync(tmpPath, 'wx', 0o600);
         try {
-          writeSync(fd, JSON.stringify({ ...body, invocation_id: id, phase, version: 5, written_at: new Date().toISOString() }, null, 2));
+          const data = Buffer.from(JSON.stringify({ ...body, invocation_id: id, recording_id: recordingId, phase, version: 5, loss_marker: true, written_at: new Date().toISOString() }, null, 2));
+          for (let offset = 0; offset < data.length;) {
+            const count = writeSync(fd, data, offset, data.length - offset);
+            if (count <= 0) throw new Error('short_write');
+            offset += count;
+          }
           fsyncSync(fd);
         } finally {
           closeSync(fd);
         }
         renameSync(tmpPath, finalPath);
+        rmdirSync(marker);
+        if (!receipt) written++;
         return { ok: true, file: finalPath };
       } catch (err) {
-        return { ok: false, error: (err as NodeJS.ErrnoException).code ?? 'write_failed' };
+        return lost((err as NodeJS.ErrnoException).code ?? 'write_failed');
       }
+    },
+    finish(body) {
+      writer.write('recording_complete', { ...body, complete: !failed && attempted === written, attempted, written });
     },
   };
   return { ok: true, writer };
@@ -107,13 +137,14 @@ export const openTraceDir = (dir: string, env: Env = process.env): { ok: true; w
 
 const DAY_MS = 86_400_000;
 export const TRACE_RETENTION_MS = 3 * DAY_MS;
-/** Only names this writer and the mods produce: `<phase>-<uuid>.json` and an abandoned `.<phase>-<uuid>.tmp`. */
-const OWN_TRACE = /^(?:[a-z][a-z_]*-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json|\.[a-z][a-z_]*-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.tmp)$/;
+/** Only names this writer and the mods produce: `<phase>-<uuid>.json`, an abandoned `.<phase>-<uuid>.tmp` and a loss marker `.<phase>-<uuid>.failed`. */
+const OWN_TRACE = /^(?:[a-z][a-z_]*-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json|\.[a-z][a-z_]*-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(?:tmp|failed))$/;
 
 /**
  * Deletes this tool's trace files older than 3 days, directly in `dir`. At most once a day per directory across
  * processes: the `.retention` stamp's mtime is the last run. Records are written once, so mtime is their write time;
- * the file names carry no time. Symlinks, subdirectories and other names are never touched. Never throws.
+ * the file names carry no time. Symlinks, other names and subdirectories other than an empty loss marker are never
+ * touched. Never throws.
  */
 export const pruneTraceDir = async (dir: string, now = Date.now()): Promise<number> => {
   let removed = 0;
@@ -133,7 +164,10 @@ export const pruneTraceDir = async (dir: string, now = Date.now()): Promise<numb
       const path = join(dir, name);
       try {
         const stat = await lstat(path);
-        if (stat.isFile() && now - stat.mtimeMs > TRACE_RETENTION_MS) { await unlink(path); removed++; }
+        if (now - stat.mtimeMs <= TRACE_RETENTION_MS) continue;
+        // This writer's loss marker is an empty directory; the Mods' is a file.
+        if (stat.isFile()) { await unlink(path); removed++; }
+        else if (stat.isDirectory() && name.endsWith('.failed')) { await rmdir(path); removed++; }
       } catch { /* Removed meanwhile, or not ours to remove. */ }
     }
   } catch { /* Retention is housekeeping; it never fails its caller. */ }

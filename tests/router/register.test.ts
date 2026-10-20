@@ -8,6 +8,7 @@ import { JEV_MODEL } from '../../mods/router/hooks/client.ts';
 import { dispatchMarker } from '../../src/claude-background.js';
 import { newGeneration, readJob, reserve, updateJob } from '../../src/job.js';
 import { OWNED_AGENTS } from '../../src/types.js';
+import { rowOf, type CellResult } from '../../src/bench/ab.js';
 import { answering, CLEAR, choice, drain, FAKE_KEY, score } from './fake-engine.ts';
 
 /**
@@ -44,7 +45,7 @@ const fakeHost = (world: World = {}) => {
       },
       write: async (_path: string, text: string) => {
         // The Mod's records reach the trace as files; each one is read back as the line the Mod emitted.
-        const { host: _host, session_id: _session, phase, version: _version, invocation_id: _id, written_at: _at, ...fields } = JSON.parse(text) as Record<string, unknown>;
+        const { host: _host, session_id: _session, phase, version: _version, invocation_id: _id, written_at: _at, recording_id: _recording, loss_marker: _marker, ...fields } = JSON.parse(text) as Record<string, unknown>;
         logs.push(`jev-${String(phase).slice(4)} ${JSON.stringify(fields)}`);
       },
       stat: async (path: string) => {
@@ -115,6 +116,27 @@ const spawnThrough = async (hooks: Map<string, Hook>, host: ReturnType<typeof fa
 };
 
 describe('register', () => {
+  it('keeps a confirmed fake Jev send unknown when every record write fails before any file exists', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'jev-router-loss-'));
+    try {
+      const host = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY, JEV_GATE_TRACE_DIR: dir } });
+      const stat = host.$.fs.stat;
+      host.$.fs.stat = async path => path === dir ? { kind: 'dir', isLink: false, size: 0 } : stat(path);
+      host.$.fs.write = async () => { throw new Error('EMFILE'); };
+      const hooks = await registered({ enabled: true });
+      await spawnThrough(hooks, host);
+      expect(host.requests).toHaveLength(1); expect(host.logs).toEqual([]);
+      const cell = { cond: 'D', sid: 'session', recording_version: 1, trace_complete: true, prime: {}, harness: {} } as CellResult;
+      expect(rowOf(cell, null, null, dir).jev_cost).toBeNull();
+      const receipts: Record<string, unknown>[] = [];
+      host.$.fs.write = async (path, text) => { receipts.push(JSON.parse(text)); writeFileSync(path, text); };
+      await hooks.get('session.end')!(host.$, {}, async () => ({}));
+      const receipt = receipts.find(r => r['phase'] === 'mod_recording')!;
+      expect(receipt).toMatchObject({ complete: false });
+      expect(Number(receipt['attempted'])).toBeGreaterThan(Number(receipt['written']));
+      expect(rowOf(cell, null, null, dir).jev_cost).toBeNull();
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
   it('registers nothing when off, or when every switch is off', async () => {
     expect([...(await registered({ enabled: false })).keys()]).toEqual([]);
     expect([...(await registered({ enabled: true, routeSubagentModel: false, routeSubagentEffort: false, routeMainEffort: false, routeMainModel: false })).keys()]).toEqual([]);

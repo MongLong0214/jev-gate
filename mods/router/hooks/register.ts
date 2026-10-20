@@ -6,7 +6,7 @@ import type { HostPins, RouterEngine } from './router.ts';
 import { createRouter } from './router.ts';
 import { installedKeyPath, parseInstalledKey } from './key.ts';
 import { frontierConfigPath, parseFrontierRouting } from '../../../src/frontier-routing.ts';
-import { createRecorder } from './recording.ts';
+import { createRecorder, createRecordingState, type RecordingState } from './recording.ts';
 import { childStepContext } from '../../../src/router-child-context.ts';
 import { currentClaudeModel, factsOf, frontmatterEdits, frontmatterModel } from './models.ts';
 
@@ -49,7 +49,7 @@ const agentFile = async ($: EngineInterface, type: string): Promise<string | nul
 };
 
 // The native validator follows $ only within this file; the shared recorder receives plain callbacks.
-const recorderOf = ($: EngineInterface) => createRecorder({
+const recorderOf = ($: EngineInterface, state: RecordingState) => createRecorder({
   paths: async () => {
     const [home, state, config, trace, session] = await Promise.all([
       $.env.get('HOME'), $.env.get('XDG_STATE_HOME'), $.env.get('XDG_CONFIG_HOME'), $.env.get('JEV_GATE_TRACE_DIR'), $.session.id(),
@@ -59,7 +59,7 @@ const recorderOf = ($: EngineInterface) => createRecorder({
   stat: path => $.fs.stat(path), exists: path => $.fs.exists(path), read: path => $.fs.read(path),
   write: (path, text) => $.fs.write(path, text),
   wait: (ms, signal) => $.clock.sleep(ms, { signal }),
-});
+}, state);
 
 /**
  * The host's `$` as the Router's engine. `$.env.get` takes literal names only (validate lists what a module reads),
@@ -201,7 +201,8 @@ export const register: Register = (on, options) => {
 
 /** The hooks for a resolved config; the combined jev-gate module (hooks/register.ts) calls this directly. */
 export interface ContextObserver { contextChanged?: (agentId?: string) => void }
-export const registerRouter = (on: On, config: RouterConfig, ownedDispatch = false, observer?: ContextObserver): void => {
+export const registerRouter = (on: On, config: RouterConfig, ownedDispatch = false, observer?: ContextObserver, recording = createRecordingState()): void => {
+  if (anyRouting(config) && !config.logDecisions) recording.failed = true;
   const router = createRouter(config, undefined, ownedDispatch);
   if (observer) observer.contextChanged = router.contextChanged;
   if (!ownedDispatch && !anyRouting(config)) return;
@@ -214,7 +215,7 @@ export const registerRouter = (on: On, config: RouterConfig, ownedDispatch = fal
   }
   if (router.stepEnabled) {
     on('turn.complete', async ($, e, next) => {
-      const recorder = recorderOf($);
+      const recorder = recorderOf($, recording);
       quietly(() => router.turnComplete(e, { log: recorder.log }));
       try { return await next(e); }
       finally { await recorder.flush(); }
@@ -223,7 +224,7 @@ export const registerRouter = (on: On, config: RouterConfig, ownedDispatch = fal
   // Root turns and subagent loops both step here.
   if (router.stepEnabled) {
     on('turn.step', async function* ($, e, next) {
-      const recorder = recorderOf($);
+      const recorder = recorderOf($, recording);
       try { return yield* router.turnStep(engineOf($, recorder.log), e, next); }
       finally { await recorder.flush(); }
     });
@@ -234,16 +235,16 @@ export const registerRouter = (on: On, config: RouterConfig, ownedDispatch = fal
       return next(e);
     });
     on('agent.spawn', async ($, e, next) => {
-      const recorder = recorderOf($);
+      const recorder = recorderOf($, recording);
       try { return await router.agentSpawn(engineOf($, recorder.log), e, next); }
       finally { await recorder.flush(); }
     });
   }
   on('session.end', async ($, e, next) => {
-    const recorder = recorderOf($);
+    const recorder = recorderOf($, recording);
     quietly(() => router.sessionEnd({ log: recorder.log }));
     try { return await next(e); }
-    finally { await recorder.flush(); }
+    finally { await recorder.finish(); }
   });
 
 };

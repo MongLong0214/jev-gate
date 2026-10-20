@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -7,6 +7,16 @@ import { setRecording } from '../src/recording.js';
 import { CONDITIONS, cleanEnv, conditionSettings, grid, median, parseRunArgs, rotate, rowOf, usageOf, run, report, sessionFacts, summary, type CellResult, type Row } from '../src/bench/ab.js';
 
 const row = (over: Partial<Row>): Row => ({ id: 'S-A-1', task: 'S', cond: 'A', rep: 1, ok: true, solved: true, wall_s: 10, cost: 1, prime_cost: 1, jev_requests: 0, jev_cost: 0, prime_tools: 30, model: 'm', model_mismatch: false, prime_effort: 'xhigh', effort: 'xhigh', gate_turns: '-', total_tokens: 100, cache_create: 10, cache_read: 80, output: 10, requests: 3, tools: 5, subs: 0, compacts: 0, shapes: '', ...over });
+
+const completeRecording = (dir: string, sid: string): void => {
+  const files = readdirSync(dir);
+  for (const name of files) writeFileSync(join(dir, name), JSON.stringify({ ...JSON.parse(readFileSync(join(dir, name), 'utf8')), recording_id: 'mod-0' }));
+  for (let launch = 0; launch < 2; launch++) {
+    const save = (id: string, fields: object) => writeFileSync(join(dir, `${id}.json`), JSON.stringify({ session_id: sid, recording_id: id, complete: true, attempted: 0, written: 0, ...fields }));
+    save(`mod-${launch}`, { phase: 'mod_recording', attempted: launch === 0 ? files.length : 0, written: launch === 0 ? files.length : 0 });
+    for (const event of ['SessionStart', 'UserPromptSubmit', 'Stop']) save(`${event}-${launch}`, { phase: 'recording_complete', producer: 'gate', hook_event_name: event, caller: { agent_id: null } });
+  }
+};
 
 describe('bench ab (#130)', () => {
   it('requires each non-pinned task response to have its own exact route confirmation', () => {
@@ -91,7 +101,7 @@ describe('bench ab (#130)', () => {
     const mixed = [a, row({ id: 'S-C-1', cond: 'C', cost: 0.5 }), row({ id: 'S-C-2', cond: 'C', rep: 2, cost: 0.5, jev_cost: null })];
     expect(grid(mixed, ['S'], ['A', 'C'], 2)[1]).toMatchObject({ cost: '-', jev_cost: '-', 'cost/A': '-', cost_pairs: '1/2 lower cost; 1/2 observed' });
   });
-  it('counts no Jev request as 0 only when the cell proves recording was on, never from a directory alone', () => {
+  it('requires positive completion and rejects older recording:true results and late write failures', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ab-notrace-')), transcript = join(dir, 'sid.jsonl'), missing = join(dir, 'trace'), empty = join(dir, 'empty');
     mkdirSync(empty);
     const usage = { input_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1 };
@@ -99,7 +109,7 @@ describe('bench ab (#130)', () => {
       { type: 'user', message: { content: 'prime' } }, { type: 'assistant', message: { id: 'p', model: 'm', usage } },
       { type: 'user', message: { content: 'task' } }, { type: 'assistant', message: { id: 't', model: 'm', usage } },
     ].map(v => JSON.stringify(v)).join('\n'));
-    const cell: CellResult = { id: 'S-B-1', task: 'S', cond: 'B', rep: 1, sid: 'sid', cwd: dir, model: 'm', recording: true, started_at: '', prime_wall_s: 1, wall_s: 2, prime_rc: 0, rc: 0, timed_out: false, check_rc: null, prime: {}, harness: { cost_usd: 0.5 }, result_head: 'ok' };
+    const cell: CellResult = { id: 'S-B-1', task: 'S', cond: 'B', rep: 1, sid: 'sid', cwd: dir, model: 'm', recording_version: 1, trace_complete: true, started_at: '', prime_wall_s: 1, wall_s: 2, prime_rc: 0, rc: 0, timed_out: false, check_rc: null, prime: {}, harness: { cost_usd: 0.5 }, result_head: 'ok' };
     const a = row({ cost: 1 });
     // Every cell was given a trace directory: none at report time is a recording failure, not a Jev bill of 0.
     const lost = rowOf(cell, null, transcript, missing);
@@ -108,18 +118,32 @@ describe('bench ab (#130)', () => {
     expect(summary([a, lost], ['S'], ['A', 'B'], 1)[1]).toMatchObject({ cost: '-', 'cost/solved': '-' });
     // A runs everything off and may never create the directory.
     expect(rowOf({ ...cell, id: 'S-A-1', cond: 'A' }, null, transcript, missing).jev_cost).toBe(0);
-    // A directory exists before recording is checked (src/trace.ts): with recording off, or a result from before the
-    // check, an empty one is no proof that no Jev request was made.
-    const { recording: _, ...earlier } = cell;
-    for (const unproven of [rowOf({ ...cell, recording: false }, null, transcript, empty), rowOf(earlier, null, transcript, empty)]) {
+    // A directory exists before recording is checked (src/trace.ts): with the trace unproven, or a result from before
+    // the check, an empty one is no proof that no Jev request was made. A result serialized with the earlier
+    // `recording: true` could not see a write lost before its file was made, so it is no proof either.
+    const { trace_complete: _, ...earlier } = cell;
+    const replayed = JSON.parse(JSON.stringify({ ...earlier, recording: true })) as CellResult;
+    for (const unproven of [rowOf({ ...cell, trace_complete: false }, null, transcript, empty), rowOf(earlier, null, transcript, empty), rowOf(replayed, null, transcript, empty)]) {
       expect(unproven).toMatchObject({ jev_requests: 0, jev_cost: null, jev_input: null });
       expect(grid([a, unproven], ['S'], ['A', 'B'], 1)[1]).toMatchObject({ cost: '-', 'cost/A': '-', cost_pairs: '0/1 lower cost; 0/1 observed' });
       expect(summary([a, unproven], ['S'], ['A', 'B'], 1)[1]).toMatchObject({ cost: '-', 'cost/solved': '-', 'tasks lower/higher': '0/0 of 1', top_share: '-' });
     }
+    // A record from a recorder that cannot mark a lost write (no `loss_marker`) leaves its losses invisible.
+    writeFileSync(join(empty, 'old.json'), JSON.stringify({ phase: 'mod_router', event: 'root', turn: 't', skipped: 'no_alternative', session_id: 'sid' }));
+    expect(rowOf(cell, null, transcript, empty)).toMatchObject({ jev_requests: 0, jev_cost: null });
+    writeFileSync(join(empty, 'old.json'), JSON.stringify({ phase: 'mod_router', event: 'root', turn: 't', skipped: 'no_alternative', session_id: 'sid', loss_marker: true }));
+    expect(rowOf(cell, null, transcript, empty).jev_cost).toBeNull();
+    completeRecording(empty, 'sid');
     const none = rowOf(cell, null, transcript, empty);
     expect(none).toMatchObject({ jev_requests: 0, jev_cost: 0, jev_input: 0 });
     expect(grid([a, none], ['S'], ['A', 'B'], 1)[1]).toMatchObject({ cost: '0.500', cost_pairs: '1/1 lower cost; 1/1 observed' });
     expect(summary([a, none], ['S'], ['A', 'B'], 1)[1]).toMatchObject({ cost: '0.500', 'cost/solved': '0.500' });
+    // Even healthy new trace files cannot upgrade the meaning of an older serialized result.
+    expect(rowOf(replayed, null, transcript, empty).jev_cost).toBeNull();
+    const { recording_version: _version, ...withoutVersion } = cell;
+    expect(rowOf(withoutVersion, null, transcript, empty).jev_cost).toBeNull();
+    mkdirSync(join(empty, '.pre_intent-0f8fad5b-d9cb-469f-a165-70867728950e.failed'));
+    expect(rowOf(cell, null, transcript, empty).jev_cost).toBeNull();
     rmSync(dir, { recursive: true });
   });
   it('divides every planned cell\'s bill by the solved count and shows how concentrated the saving is', () => {
@@ -258,7 +282,7 @@ describe('bench ab (#130)', () => {
     try {
       const cli = join(dir, 'fake-claude.mjs');
       writeFileSync(cli, `#!/usr/bin/env node
-import { mkdirSync, appendFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, appendFileSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 const args = process.argv.slice(2);
@@ -268,10 +292,20 @@ const prime = args.includes('--session-id');
 const sid = flag(prime ? '--session-id' : '--resume');
 if (!process.env.JEV_GATE_STATE_DIR || !process.env.JEV_GATE_TRACE_DIR || process.env.CLAUDE_CODE_ENABLE_FUNCTION_HOOKS !== '1') process.exit(3);
 const root = join(process.env.HOME, '.claude', 'projects', 'fixture'); mkdirSync(root, { recursive: true });
-// Recording turned off and back on during the turn, in place; or a trace write left unfinished.
+// Recording turned off and back on during the turn, in place; a trace write left unfinished; a write that failed
+// before its file existed, marked as src/trace.ts marks it; or a trace directory that no longer takes a write.
 const switchFile = join(process.env.HOME, '.config', 'jev-gate', 'auth', 'recording.json');
-if (process.env.AB_FAKE_ACT === 'toggle') for (const enabled of [false, true]) writeFileSync(switchFile, JSON.stringify({ version: 1, enabled }));
-if (process.env.AB_FAKE_ACT === 'lose') writeFileSync(join(process.env.JEV_GATE_TRACE_DIR, '.mod_router-' + randomUUID() + '.tmp'), '{"ev');
+const act = process.env.AB_FAKE_ACT, trace = process.env.JEV_GATE_TRACE_DIR;
+if (act === 'toggle') for (const enabled of [false, true]) writeFileSync(switchFile, JSON.stringify({ version: 1, enabled }));
+if (act === 'lose') writeFileSync(join(trace, '.mod_router-' + randomUUID() + '.tmp'), '{"ev');
+if (act === 'emfile') mkdirSync(join(trace, '.admission_intent-' + randomUUID() + '.failed'));
+if (act === 'readonly') chmodSync(trace, 0o500);
+// Each fake CLI launch supplies the same positive completion protocol as the native hooks.
+const save = fields => writeFileSync(join(trace, randomUUID()+'.json'), JSON.stringify({ session_id:sid, recording_id:randomUUID(), complete:true, attempted:0, written:0, ...fields }));
+if (act !== 'readonly' && act !== 'missing') {
+  save({phase:'mod_recording'});
+  if (process.env.JEV_GATE_MODE !== 'off') for (const hook_event_name of ['SessionStart','UserPromptSubmit','Stop']) save({phase:'recording_complete',producer:'gate',hook_event_name,caller:{agent_id:null}});
+}
 for (const record of [{ type:'user', timestamp:new Date().toISOString(), message:{content:flag('-p')} }, { type:'assistant', timestamp:new Date().toISOString(), message:{id:prime?'p':flag('-p'), model:flag('--model'), usage:{input_tokens:5,output_tokens:2,cache_read_input_tokens:0,cache_creation_input_tokens:0},content:[]} }]) appendFileSync(join(root,sid+'.jsonl'),JSON.stringify(record)+'\\n');
 console.log(JSON.stringify({result:'SUCCESS', session_id:sid, total_cost_usd:0.01}));
 `);
@@ -284,23 +318,23 @@ console.log(JSON.stringify({result:'SUCCESS', session_id:sid, total_cost_usd:0.0
       setRecording({ HOME: dir }, false);
       run(args);
       const off = JSON.parse(readFileSync(join(out,'results','S-B-1.json'),'utf8')) as CellResult;
-      expect(off.recording).toBe(false);
+      expect(off.trace_complete).toBe(false);
       expect(rowOf(off,inputs,join(dir,'.claude','projects','fixture',off.sid+'.jsonl'),join(out,'trace'))).toMatchObject({ jev_requests:0, jev_cost:null });
       setRecording({ HOME: dir }, true);
       rmSync(join(out,'results'),{recursive:true});
       run(args);
       const cell = JSON.parse(readFileSync(join(out,'results','S-A-1.json'),'utf8')) as CellResult;
-      expect(cell).toMatchObject({ rc:0, prime_rc:0, check_rc:0, host_version:'9.9.9 (Claude Code)', recording:true });
+      expect(cell).toMatchObject({ rc:0, prime_rc:0, check_rc:0, host_version:'9.9.9 (Claude Code)', trace_complete:true });
       const on = JSON.parse(readFileSync(join(out,'results','S-B-1.json'),'utf8')) as CellResult;
       expect(rowOf(on,inputs,join(dir,'.claude','projects','fixture',on.sid+'.jsonl'),join(out,'trace'))).toMatchObject({ jev_requests:0, jev_cost:0 });
-      // On before and after is not on throughout: a toggle and its undo during the cell, or a write it left unfinished,
-      // leaves the cell unproven and its Jev cost unknown.
-      for (const act of ['toggle', 'lose']) {
+      // On before and after is not on throughout: a toggle and its undo during the cell, a write it left unfinished or
+      // lost before its file existed, or a directory that refuses writes leaves the cell unproven and its Jev cost unknown.
+      for (const act of ['toggle', 'lose', 'emfile', 'readonly', 'missing']) {
         process.env['AB_FAKE_ACT'] = act;
         rmSync(join(out,'results'),{recursive:true});
-        try { run(args); } finally { delete process.env['AB_FAKE_ACT']; }
+        try { run(args); } finally { delete process.env['AB_FAKE_ACT']; chmodSync(join(out,'trace'),0o700); }
         const unproven = JSON.parse(readFileSync(join(out,'results','S-B-1.json'),'utf8')) as CellResult;
-        expect(unproven.recording, act).toBe(false);
+        expect(unproven.trace_complete, act).toBe(false);
         expect(rowOf(unproven,inputs,join(dir,'.claude','projects','fixture',unproven.sid+'.jsonl'),join(out,'trace')), act).toMatchObject({ jev_requests:0, jev_cost:null });
       }
       const transcript = join(dir,'.claude','projects','fixture',cell.sid+'.jsonl');

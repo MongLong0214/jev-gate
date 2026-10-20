@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { resolveCompactConfig } from '../../mods/compact/hooks/config.ts';
+import { rowOf, type CellResult } from '../../src/bench/ab.js';
 
 /**
  * register.ts types itself against the host's `claude-code` declarations, which this Node typecheck does not load, so
@@ -28,7 +32,7 @@ const hostWith = (write: (path: string, text: string) => Promise<void>) => ({
 });
 const $ = hostWith(async (path, text) => {
   if (path.endsWith('.asked')) { marks.push(path); return; }
-  const { host: _host, session_id: _session, phase, version: _version, invocation_id: _id, written_at: _at, ...fields } = JSON.parse(text) as Record<string, unknown>;
+  const { host: _host, session_id: _session, phase, version: _version, invocation_id: _id, written_at: _at, recording_id: _recording, loss_marker: _marker, ...fields } = JSON.parse(text) as Record<string, unknown>;
   logs.push(`jev-${String(phase).slice(4)} ${JSON.stringify(fields)}`);
 });
 
@@ -64,6 +68,23 @@ describe('resolveCompactConfig', () => {
 });
 
 describe('register', () => {
+  it('keeps a confirmed fake Jev send unknown after record loss and a post-send native exception', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'jev-compact-loss-'));
+    try {
+      const hooks = await hooksFor({ enabled: true, jevEnabled: true, mode: 'shadow' });
+      const host = hostWith(async () => { throw new Error('EMFILE'); }); let sends = 0;
+      host.env.get = async name => ({ HOME: dir, JEV_GATE_TRACE_DIR: dir, TYPESAFE_API_KEY: 'k'.repeat(16) } as Record<string, string>)[name];
+      const engine = { ...host, http: { fetch: async () => { sends++; return { status: 200, text: JSON.stringify({ model: 'jev-1.14.0', answers: {}, usage: { input_tokens: 100, output_tokens: 1 } }) }; } } };
+      await expect(hooks.get('session.compact')!(engine, { trigger: 'auto', messages: conversation() }, async () => { throw new Error('engine failed after selection'); })).rejects.toThrow('engine failed after selection');
+      expect(sends).toBe(1); expect(readdirSync(dir)).toEqual([]);
+      const receipts: Record<string, unknown>[] = [];
+      host.fs.write = async (path, text) => { receipts.push(JSON.parse(text)); writeFileSync(path, text); };
+      await hooks.get('session.end')!(engine, {}, async () => ({}));
+      expect(receipts).toMatchObject([{ complete: false }]);
+      const cell = { cond: 'C', sid: 's', recording_version: 1, trace_complete: true, prime: {}, harness: {} } as CellResult;
+      expect(rowOf(cell, null, null, dir).jev_cost).toBeNull();
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
   it('leaves the marker the plugin\'s command hook reads, for every compaction it is asked about and defers', async () => {
     const hook = (await hooksFor({ enabled: true, mode: 'shadow' })).get('session.compact')!;
     marks.length = 0;
