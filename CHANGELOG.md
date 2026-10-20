@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.8.30 — 2026-10-20 — Root switches within the cache's reach
+
+- Price a root model switch by whether the cache it reads is still in reach, and return to the baseline before its cache leaves reach (#274). A request reads an earlier cache entry only from at most 20 blocks back, but the cost guard read a model's cache as warm for its whole TTL. Over 100 returns to a model within 55 minutes in three transcripts (2026-10-16 to 10-19), every return with at most 5 requests between read its cache (47 of 47), 4 of 6 with 6, 1 of 6 with 7, none of 41 with 8 or more. On 2026-10-19 a Haiku move was priced as reading 99,448 cached tokens after 18 Opus requests and read 30,040 (estimated −$0.128 to −$0.118, about −$0.088 to −$0.052 by the recorded usage); in a v0.8.22 session the return to Opus after 11 Haiku requests read 29,836 and wrote 123,451. Root requests are now numbered: a target last answering more than 5 requests back is priced as an unknown cache, 8 or more as cold, and a switch serves at most 5 requests counted from the baseline's last one, after which the turn runs on its native pair (`root_stop`, `baseline_reach`); a turn with none left keeps the baseline. Codex and spawns are unchanged. The dashboard names `cost_unknown_hold` and `baseline_reach`.
+- The installed-host model dispatch test now sends every routed pair through the real Claude host and checks the model and effort of each API request: root Opus low, medium, high, xhigh and max, Sonnet and Haiku low, medium and high, and workers on Sonnet low and medium and Opus low, medium and xhigh besides the pairs it already covered (23 cases).
+
 ## v0.8.29 — 2026-10-19 — A livelier Jev traffic strip, Router docs on max
 
 - The dashboard's Jev traffic strip covers 2 minutes instead of 30 seconds and runs on a ruler that scrolls at the ticks' speed while the stream is live; pausing, a lost connection or reduced motion stop it. Jev calls arrive about once a minute in bursts: over the last 3 hours a 30-second strip was empty 76% of the time, a 2-minute one 44%. No tick is drawn without a recorded call.

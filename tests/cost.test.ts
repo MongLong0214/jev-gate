@@ -4,7 +4,7 @@ import { normalizeUsage, usageCost, ModelCache, cacheState, observedTtl, switchC
 import { providerPrice } from '../src/provider-prices.js';
 import { delegationCost } from '../src/admission.js';
 import { claudeEffortCache, effortCacheHit } from '../src/claude-cache.js';
-import { costHold, routeCost, TURN_HORIZON } from '../src/route-cost.js';
+import { CACHE_GONE, CACHE_REACH, costHold, routeCost, TURN_HORIZON } from '../src/route-cost.js';
 import { observedDelegationPrices } from '../src/delegation-prices.js';
 
 const price = { source: 'fixture', revision: 'test-v1', input: 4, read: .2, write5m: 5, write1h: 8, output: 20 };
@@ -122,6 +122,21 @@ describe('observed usage and cost', () => {
     for (const horizon of [Infinity, 0, 1.5]) expect(switchCost({ ...v, horizon })).toMatchObject({ hold: true, reason: 'cost_unknown_hold' });
     // A horizon never turns an unknown into an allowance.
     expect(routeCost('claude', 'claude-opus-5-5', 'claude-haiku-5-5', new ModelCache(), 'e', 1000, 10, TURN_HORIZON)).toMatchObject({ hold: true, reason: 'cost_unknown_hold' });
+  });
+  it('reads a target cache live by its TTL as warm only within reach of its last request (#274)', () => {
+    // 55b329 at 08:50:55Z: Haiku answered 18 requests before, live by its TTL, and the switch read 30,040 of 99,448.
+    const at = (since: number | undefined) => {
+      const c = new ModelCache();
+      c.observe({ model: 'claude-haiku-5-5', at: 0, epoch: 'e', ttlMs: 3_600_000, read: 99_000, write: 448, input: 2, output: 700, ...(since === undefined ? {} : { seq: 1 }) });
+      c.observe({ model: 'claude-opus-5-5', at: 0, epoch: 'e', ttlMs: 3_600_000, read: 123_000, write: 1859, input: 2, output: 558, ...(since === undefined ? {} : { seq: 1 + since }) });
+      return routeCost('claude', 'claude-opus-5-5', 'claude-haiku-5-5', c, 'e', 1000, 10, TURN_HORIZON);
+    };
+    expect(at(undefined)?.inputs.targetCache).toBe('warm');
+    expect(at(CACHE_REACH)).toMatchObject({ inputs: { targetCache: 'warm' }, evidence: { target: { requests_since: 5 } } });
+    expect(at(CACHE_REACH + 1)?.inputs.targetCache).toBe('unknown');
+    expect(at(CACHE_GONE - 1)?.inputs.targetCache).toBe('unknown');
+    expect(at(CACHE_GONE)?.inputs.targetCache).toBe('cold');
+    expect(at(18)?.deltaUsd![1]).toBeGreaterThan(at(1)!.deltaUsd![1]);
   });
   it('keeps unknown, excluded and old-host cache capabilities conservative and restores the floor on an observed miss', () => {
     const capabilities = { host: '2.1.288', connection: 'api-key' as const, excluded: false, hipaa: false };

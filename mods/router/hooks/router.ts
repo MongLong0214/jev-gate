@@ -14,7 +14,7 @@ import { claudeTargetAllowed, currentClaudeModel } from './models.ts';
 import type { ChildStepContext } from '../../../src/router-child-context.ts';
 import { normalizeUsage, usageCost, observedTtl, ModelCache, type CacheObservation } from '../../../src/cost.ts';
 import { providerPrice } from '../../../src/provider-prices.ts';
-import { costHold, routeCost, TURN_HORIZON } from '../../../src/route-cost.ts';
+import { CACHE_REACH, costHold, routeCost, TURN_HORIZON } from '../../../src/route-cost.ts';
 import { claudeEffortCache, effortCacheHit, type ClaudeCacheCapability } from '../../../src/claude-cache.ts';
 
 /**
@@ -124,7 +124,7 @@ type NextLike<E, R> = ((e: E) => Promise<R>) & { readonly signal: AbortSignal };
  */
 export const VERIFIED_HOST = '2.1.282';
 /** Identifies this loaded hook source, independently of a manifest updated on disk. */
-export const ROUTER_HOOK_VERSION = '0.8.29';
+export const ROUTER_HOOK_VERSION = '0.8.30';
 
 /**
  * Later 2.1 releases are accepted too. Pinned to one release, spawn routing went native after every host update: the
@@ -314,7 +314,8 @@ const parseRootCache = (v: unknown): RootCache | null => {
   const c = (v as { cache?: RootCache } | null)?.cache;
   const seen = (o: CacheObservation): boolean => !!o && typeof o === 'object' && typeof o.model === 'string' && typeof o.at === 'number' && Number.isFinite(o.at) &&
     [o.ttlMs, o.read, o.write, o.output, o.input ?? null].every(wholeOrNull) && (o.effort == null || isSymbolicEffort(o.effort)) &&
-    (o.ttlIsMinimum === undefined || typeof o.ttlIsMinimum === 'boolean') && (o.ttlBoundsMs === undefined || Array.isArray(o.ttlBoundsMs) && o.ttlBoundsMs.length === 2 && o.ttlBoundsMs.every(n => n !== null && wholeOrNull(n)));
+    (o.ttlIsMinimum === undefined || typeof o.ttlIsMinimum === 'boolean') && (o.ttlBoundsMs === undefined || Array.isArray(o.ttlBoundsMs) && o.ttlBoundsMs.length === 2 && o.ttlBoundsMs.every(n => n !== null && wholeOrNull(n))) &&
+    (o.seq === undefined || o.seq !== null && wholeOrNull(o.seq));
   return c && typeof c === 'object' && typeof c.messages === 'number' && wholeOrNull(c.messages) && Array.isArray(c.seen) && c.seen.length <= 16 && c.seen.every(seen) ? { messages: c.messages, seen: c.seen, ...(Number.isSafeInteger(c.transcript) && c.transcript! >= 0 ? { transcript: c.transcript } : {}) } : null;
 };
 
@@ -358,6 +359,8 @@ interface TurnRouting {
    * change the person made by hand shows only there, so this turn keeps its effort as if pinned (#81).
    */
   effortChanged: boolean;
+  /** #274: the request number the baseline last answered; a model switch ends while a return can still reach its cache. */
+  baselineSeq?: number | undefined;
 }
 
 /** Initial allocation and the exact native loop's subsequent inference decisions. */
@@ -439,6 +442,8 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
   let lastRoot: { at: number; model: string; effort: SymbolicEffort | null; cache: RoutingCache } | null = null;
   /** The effort the last root turn arrived with, before any patch; null before the session's first turn. */
   const rootCaches = new ModelCache();
+  /** Root requests answered in this conversation, across processes: each cache observation's `seq`. */
+  let rootSeq = 0;
   const preservedEffortModels = new Set<string>();
   const missedEffortModels = new Set<string>();
   let cacheEpoch = 0;
@@ -636,8 +641,11 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       const result = await client.assess(engine, key.key, routingContext(text, context ?? undefined, recentRequests.slice(0, -1), cache), offer.questions, live,
         usage => log(engine, { event: 'late', scope: 'root', turn: turnId, usage: loggable(usage) }), () => log(engine, { event: 'request', scope: 'root', turn: turnId, sent: true }));
       const decision = result.ok ? selectPair(offer, result.answers) : { patch: {} as RoutingPatch, reasons: { model: 'not_asked', effort: 'not_asked' }, diagnostics: null };
-      const cost = decision.patch.model ? routeCost('claude', id, cacheId(decision.patch.model), rootCaches, String(cacheEpoch), engine.now(), estimateTokens(text), TURN_HORIZON) : null;
-      const { hold, reason: costReason } = costHold(cost, offer.baselineCandidate?.rank, offer.candidates.find(c => c.id === decision.patch.model)?.rank);
+      // #274: a switch serves only the requests after which a return still reaches the baseline's cache.
+      t.baselineSeq = observedCache?.seq;
+      const room = TURN_HORIZON - (t.baselineSeq === undefined ? 0 : rootSeq - t.baselineSeq);
+      const cost = decision.patch.model && room >= 1 ? routeCost('claude', id, cacheId(decision.patch.model), rootCaches, String(cacheEpoch), engine.now(), estimateTokens(text), Math.min(room, CACHE_REACH)) : null;
+      const { hold, reason: costReason } = decision.patch.model && room < 1 ? { hold: true, reason: 'baseline_reach' } : costHold(cost, offer.baselineCandidate?.rank, offer.candidates.find(c => c.id === decision.patch.model)?.rank);
       const chosen = hold && result.ok ? keepModelPair(offer, result.answers).patch : decision.patch;
       const capability = engine.cacheCapability ? await within(engine.cacheCapability().catch(() => undefined), live) : undefined;
       const capabilityReason = capability ? claudeEffortCache(offer.baseline.model, capability) : 'capability_unknown';
@@ -677,6 +685,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     if (pins.mainModel && !t.modelStopped) { t.modelStopped = true; log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: 'model_pinned' }); }
     if (pins.mainEffort && !t.effortStopped) { t.effortStopped = true; log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: 'effort_pinned' }); }
     let model = t.modelStopped ? undefined : t.patch.model;
+    if (model && t.baselineSeq !== undefined && rootSeq - t.baselineSeq >= CACHE_REACH) { model = undefined; t.modelStopped = true; log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: 'baseline_reach' }); }
     if (model && (!claudeTargetAllowed(model, allowFable) || !claudeModelAllowed(model, available, aliases))) { model = undefined; t.modelStopped = true; log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: 'model_not_allowed' }); }
     // An effort selected conditionally for B can never be reused on A after B was suppressed.
     if (t.patch.model && !model) return null;
@@ -820,7 +829,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       // length decides wherever both were read.
       const longEnough = start.cache && (start.cache.transcript !== undefined && read ? read.length >= start.cache.transcript : (e.messageCount ?? 0) >= start.cache.messages);
       if (start.cache && longEnough) {
-        for (const v of start.cache.seen) rootCaches.observe({ ...v, epoch: String(cacheEpoch) });
+        for (const v of start.cache.seen) { rootCaches.observe({ ...v, epoch: String(cacheEpoch) }); rootSeq = Math.max(rootSeq, v.seq ?? 0); }
         rootCache = start.cache;
         log(engine, { event: 'cache_restored', scope: 'root', turn: e.turnId, models: start.cache.seen.map(v => v.model), messages: start.cache.messages });
       } else if (underWay) {
@@ -1220,7 +1229,8 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       // A resume restores the main loop to the model of the last answer.
       const routed: RootPair = { model: seen !== null && !answeredBy(asked, seen) ? seen : asked, effort: sent ?? null };
       if (rootRecord && (rootRecord.routed?.model !== routed.model || rootRecord.routed.effort !== routed.effort)) rootRecord = { ...rootRecord, routed };
-      if (seen === null || !answeredBy(asked, seen)) rootCaches.observe(cacheSeen(asked, seen, result?.usage, String(cacheEpoch), startedAt));
+      const seq = ++rootSeq;
+      if (seen === null || !answeredBy(asked, seen)) rootCaches.observe({ ...cacheSeen(asked, seen, result?.usage, String(cacheEpoch), startedAt), seq });
       // Only a response the asked model gave wrote the cache a later turn on that model reads.
       if (seen !== null && answeredBy(asked, seen)) {
         const id = cacheId(asked);
@@ -1233,7 +1243,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
           log(engine, { event: 'effort_cache', scope: 'root', turn: e.turnId, index: e.index, model: id, hit, floor_restored: hit === false, ttl_known: previous.ttlMs !== null, miss_cause: 'unknown' });
         }
         const counts = countsOf(result?.usage);
-        rootCaches.observe({ ...cacheSeen(asked, seen, result?.usage, String(cacheEpoch), startedAt), effort: isSymbolicEffort(sent) ? sent : null });
+        rootCaches.observe({ ...cacheSeen(asked, seen, result?.usage, String(cacheEpoch), startedAt), effort: isSymbolicEffort(sent) ? sent : null, seq });
         lastRoot = { at: engine.now(), model: asked, effort: isSymbolicEffort(sent) ? sent : null,
           cache: { model: asked, ageMs: 0, epoch: String(cacheEpoch), ttlMs: observedTtl(normalizeUsage('claude', result?.usage)), output: normalizeUsage('claude', result?.usage).output, input: counts?.['input_tokens'] ?? null, read: counts?.['cache_read_input_tokens'] ?? null, write: counts?.['cache_creation_input_tokens'] ?? null } };
       }
