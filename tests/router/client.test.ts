@@ -54,6 +54,19 @@ describe('the one request', () => {
     expect(x.fetch).not.toHaveBeenCalled();
   });
 
+  it('F1 false-positive fix: routes fetch credentials options and token budgets but refuses a literal password', async () => {
+    const client = createClient({ timeoutMs: 800 });
+    const x = transport(() => GOOD);
+    const state = { task: { text: "Use fetch(url, { credentials: 'include' }); max token: 4000" } };
+    expect(await client.assess(x.t, FAKE_KEY, state, QUESTIONS)).toMatchObject({ ok: true });
+    expect(x.fetch).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(x.fetch.mock.calls[0]![1].body).state).toEqual(state);
+    expect(await client.assess(x.t, FAKE_KEY, { task: { text: '"password":"canary-pw-123"' } }, QUESTIONS)).toMatchObject({
+      ok: false, reason: 'input_secret', sent: false, requestBytes: null,
+    });
+    expect(x.fetch).toHaveBeenCalledTimes(1);
+  });
+
   it('maps statuses to closed reasons, keeps the usage a refusal reports, and never retries', async () => {
     const cases: Array<[number, string]> = [
       [400, 'rejected_input'],

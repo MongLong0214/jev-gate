@@ -112,6 +112,29 @@ describe('Codex status collection and deny tracing (#293)', () => {
     }
   });
 
+  it.each([false, true])('F1: removes JSON credentials from Codex foreground, status and background replay (background=%s)', async background => {
+    const text = '{"password":"canary-pw-123","api_key":"canary-key-456"}';
+    const f = await setup('normal'); const launch = f.launch(background);
+    await vi.waitFor(() => expect(f.started()).toBe(true)); if (background) await launch;
+    f.terminal('completed', JSON.stringify({ status: 'blocked', summary: text, blockers: [text, 'Needs integration'], interfaces: ['integrate(): void'], checks: [] }));
+    await launch;
+    await vi.waitFor(() => expect(f.job().current.receipts).toHaveLength(1));
+    expect(f.job().current.receipts[0]?.reply).toMatchObject({ status: 'blocked', blockers: ['Needs integration'], interfaces: ['integrate(): void'] });
+    expect(f.job().current.receipts[0]?.reply).not.toHaveProperty('summary');
+    const status = await f.status('json-credential-status');
+    const disk = readFileSync(jobPath(f.stateEnv, 'parent'), 'utf8');
+    const persisted = JSON.parse(disk);
+    f.parent.prompt = 'next';
+    const replay = await f.policy.nativeHook({ hook_event_name: 'UserPromptSubmit', session_id: 'parent', prompt: 'Continue reviewing.' });
+    for (const output of [JSON.stringify(persisted.current.receipts[0]), disk, JSON.stringify(f.job()), JSON.stringify(f.returned()), status,
+      ...(background ? [f.job().current.background_context!] : []), JSON.stringify(replay)]) {
+      for (const canary of ['canary-pw-123', 'canary-key-456']) expect(output).not.toContain(canary);
+    }
+    expect(status).toContain('Needs integration');
+    if (background) expect(JSON.stringify(replay)).toContain('Needs integration');
+    else expect(JSON.stringify(f.returned())).toContain('Needs integration');
+  });
+
   it('C2: delivers the isolation commit request and blocks uncommitted worktree edits instead of an empty diff', async () => {
     const f = await setup('normal', true, 'worktree'); await f.launch(true);
     const child = f.sent.find(m => m['method'] === 'thread/start')!['params'] as Obj;

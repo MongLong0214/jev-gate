@@ -11,12 +11,14 @@
 export const SECRET_PATTERNS: readonly RegExp[] = [
   /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
   /\bsk-[A-Za-z0-9_-]{16,}/,
-  /\bgh[pousr]_[A-Za-z0-9]{20,}/,
-  /\bAKIA[0-9A-Z]{16}\b/,
+  /\b(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{20,}/,
+  /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/,
   /\bxox[baprs]-[A-Za-z0-9-]{10,}/,
   /\bey[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/,
-  // A quoted value, or a long unbroken token. `password = readPassword();` is a call, not a credential.
-  /\b(?:authorization|api[_-]?key|access[_-]?token|client[_-]?secret|password|passwd)\b\s*[:=]\s*(?:["'`][^"'`\s]{12,}["'`]|[A-Za-z0-9_\-./+=]{16,})/i,
+  /\b(?:sk|rk)_live_[A-Za-z0-9]{16,}/,
+  /\bAIza[A-Za-z0-9_-]{35}\b/,
+  /\bnpm_[A-Za-z0-9]{36,}\b/,
+  /\beyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/,
   // `Authorization: Bearer <value>` in any header syntax -- `: `, `=`, an object key, a subscript assignment, a call
   // argument -- so up to eight punctuation characters sit between the word and the scheme. Any literal value counts,
   // however short (`Basic dTpw` is a whole credential), including one reached through a constant template expression
@@ -36,13 +38,51 @@ export const SECRET_PATTERNS: readonly RegExp[] = [
   // Cookie headers and curl's inline cookie argument carry credentials even when the cookie name is unfamiliar.
   /\b(?:set-cookie|cookie)\s*:\s*["'`]?[A-Za-z0-9_.-]+\s*=\s*["'`]?[A-Za-z0-9_%+./~=-]+/i,
   /(?:^|\s)(?:--cookie(?:=|\s+)|-b\s*)["'`]?[A-Za-z0-9_.-]+\s*=\s*["'`]?[A-Za-z0-9_%+./~=-]+/i,
-  // A bare session/auth cookie needs an assignment and a non-trivial literal value; prose and placeholders stay local names.
-  /(?:^|[^\w.-])(?:sessionid|session|sid|connect\.sid|PHPSESSID|JSESSIONID|_session|[\w.-]*(?:auth(?:entication)?|token)(?:[_.-][\w.-]*|cookie|token|session)?)["'`]?\s*[:=]\s*["'`]?[A-Za-z0-9_%+./~:=@!-]{8,}/i,
   // A bearer token outside a header line, whatever its prefix. The digit keeps "bearer" in prose from matching.
   /\b[Bb]earer\s+(?=[A-Za-z0-9_\-.~+/]*\d)[A-Za-z0-9_\-.~+/]{16,}/,
 ];
 
-export const looksSecret = (text: string): boolean => SECRET_PATTERNS.some((re) => re.test(text));
+// Keys may be bare or quoted in JSON, YAML, shell and code. Capture the complete value before screening it so a
+// prefix of a placeholder or a function call cannot be mistaken for a credential.
+const ASSIGNMENT_VALUE = String.raw`(?:"([^"\r\n]*)"|'([^'\r\n]*)'|\x60([^\x60\r\n]*)\x60|([A-Za-z0-9_%+./~:=@!-]+))`;
+const CREDENTIAL_KEYS = String.raw`authorization|auth|api[_-]?key|access[_-]?key|secret[_-]?key|private[_-]?key|(?:access|refresh|id)[_-]?token|client[_-]?secret|password|passwd|pwd|secret|token|credentials?|aws_access_key_id|aws_secret_access_key|aws_session_token`;
+const CREDENTIAL_KEY = new RegExp(String.raw`^(?:${CREDENTIAL_KEYS})$`, 'i');
+const GENERIC_CREDENTIAL_KEY = /^(?:authorization|auth|pwd|secret|token|credentials?)$/i;
+const CREDENTIAL_ASSIGNMENT = new RegExp(String.raw`\b(${CREDENTIAL_KEYS})\b["'\x60]?\s*(?:=>|[:=])\s*` + ASSIGNMENT_VALUE, 'gi');
+const COOKIE_ASSIGNMENT = new RegExp(String.raw`(?:^|[^\w.-])(sessionid|session|sid|connect\.sid|PHPSESSID|JSESSIONID|_session|[\w.-]*(?:auth(?:entication)?|token)(?:[_.-][\w.-]*|cookie|token|session)?)["'\x60]?\s*(?:=>|[:=])\s*` + ASSIGNMENT_VALUE, 'gi');
+const NETRC_PASSWORD = new RegExp(String.raw`^[ \t]*(password)[ \t]+` + ASSIGNMENT_VALUE + String.raw`[ \t]*\r?$`, 'gim');
+
+const literalAssignment = (text: string, pattern: RegExp, minLength = 1): boolean => {
+  for (const match of text.matchAll(pattern)) {
+    // Credential keys own their thresholds; the broader cookie-name pattern must not bypass them.
+    if (pattern === COOKIE_ASSIGNMENT && CREDENTIAL_KEY.test(match[1]!)) continue;
+    const value = (match[2] ?? match[3] ?? match[4] ?? match[5] ?? '').trim();
+    // Like the header and URL screens, names/templates are not literal credentials. Empty and fully masked values
+    // carry no credential; xxx and changeme are conventional placeholders too, even when they reach the session-cookie length threshold.
+    if (value.length < minLength || /^(?:[$<{]|%(?![0-9A-Fa-f]{2}))|^\*+$|^x+$|^changeme$/i.test(value) || /%[A-Za-z_]\w*%$/.test(value) || value.includes('${')) continue;
+    // The header patterns above own schemes, including their placeholder, concatenation and whitespace rules.
+    if (/^authorization$/i.test(match[1]!) && /^(?:bearer|basic|token)(?:\s|$)/i.test(value)) continue;
+    const quoted = match[5] === undefined;
+    const hasDigit = /\d/.test(value);
+    const identifier = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/.test(value);
+    // Digit-bearing literals such as canary123 remain eligible; dotted paths always name another value.
+    const reference = identifier && (!hasDigit || value.includes('.'));
+    if (!quoted && (reference || /^[~/]/.test(value)
+      || /^\s*(?:[.(\[]|\?\.)/.test(text.slice(match.index! + match[0].length)))) continue;
+    // Bare session cookies retain D1's eight-character threshold, excluding names even when quoted.
+    if (pattern === COOKIE_ASSIGNMENT) { if (!reference) return true; continue; }
+    // Only strong keys make a short quoted literal sufficient. Generic keys and every unquoted value need shape.
+    if (quoted && !GENERIC_CREDENTIAL_KEY.test(match[1]!)) return true;
+    if ((value.length >= 8 && hasDigit)
+      || (value.length >= 16 && /^[A-Za-z0-9_%+./~:=@!-]+$/.test(value) && !identifier)) return true;
+  }
+  return false;
+};
+
+export const looksSecret = (text: string): boolean => SECRET_PATTERNS.some((re) => re.test(text))
+  || literalAssignment(text, CREDENTIAL_ASSIGNMENT)
+  || literalAssignment(text, COOKIE_ASSIGNMENT, 8)
+  || literalAssignment(text, NETRC_PASSWORD);
 
 /**
  * The provider's limit is a TOKEN limit, and a byte cap is not proof of it. Calibrated against the live API on

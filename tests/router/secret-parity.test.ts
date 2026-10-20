@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 import { looksSecret as routerLooksSecret, SECRET_PATTERNS as ROUTER } from '../../mods/router/hooks/secret.ts';
@@ -8,6 +9,14 @@ import { looksSecret as sourceLooksSecret, SECRET_PATTERNS as SOURCE } from '../
  * copy that drifts screens one feature's outbound text differently from the other's; this keeps them identical.
  */
 describe('credential screen parity', () => {
+  it('F1: mirrors the complete assignment screen as well as the prefix patterns', () => {
+    const source = readFileSync(new URL('../../src/outbound-text.ts', import.meta.url), 'utf8');
+    const router = readFileSync(new URL('../../src/router-secret.ts', import.meta.url), 'utf8');
+    expect(router.slice(router.indexOf('export const SECRET_PATTERNS')).trim()).toBe(
+      source.slice(source.indexOf('export const SECRET_PATTERNS'), source.indexOf('\n/**\n * The provider')).trim(),
+    );
+  });
+
   it('holds the same patterns, in the same order, with the same flags', () => {
     expect(ROUTER.map(String)).toEqual(SOURCE.map(String));
   });
@@ -26,6 +35,24 @@ describe('credential screen parity', () => {
   it.each(['the session ended', 'cookie banner', 'sid', 'author: documentation', 'tokenization: analysis123', 'session=short', 'cookie: banner', 'curl --cookie cookies.txt host', 'sessionid=$SESSION'])('keeps ordinary cookie prose and names: %s', text => {
     expect(sourceLooksSecret(text)).toBe(false);
     expect(routerLooksSecret(text)).toBe(false);
+  });
+
+  it.each([
+    { text: '{"password":"canary-pw-123","api_key":"canary-key-456"}', secret: true },
+    { text: "'api_key' => 'canary-key-456'", secret: true },
+    { text: '`password`: `canary-pw-123`', secret: true },
+    { text: 'aws_secret_access_key=canary-secret-123', secret: true },
+    { text: 'password canary-pw-123', secret: true },
+    ...['github_pat_', 'sk_live_', 'rk_live_'].map(prefix => ({ text: prefix + 'a1'.repeat(20), secret: true })),
+    { text: 'AIza' + 'a'.repeat(35), secret: true },
+    { text: 'npm_' + 'a1'.repeat(18), secret: true },
+    { text: 'eyJhbGciOiJIUzI1NiJ9.e30.c3ludGhldGlj', secret: true },
+    ...['password reset flow', 'the token budget', 'token: number', 'apiKey?: string', 'secret sauce',
+      '{"password":""}', '{"password":"<redacted>"}', '{"token":"changeme"}',
+      'password=***', 'password=xxx', 'password=${PASSWORD}', 'api_key=$API_KEY'].map(text => ({ text, secret: false })),
+  ])('F1: screens new formats and placeholders identically: $text', ({ text, secret }) => {
+    expect(sourceLooksSecret(text)).toBe(secret);
+    expect(routerLooksSecret(text)).toBe(secret);
   });
 
   it('answers the same on the forms both screen and both pass', () => {
