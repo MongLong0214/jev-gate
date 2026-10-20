@@ -15,22 +15,6 @@ export const SECRET_PATTERNS: readonly RegExp[] = [
   /\bAIza[A-Za-z0-9_-]{35}\b/,
   /\bnpm_[A-Za-z0-9]{36,}\b/,
   /\beyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/,
-  // `Authorization: Bearer <value>` in any header syntax -- `: `, `=`, an object key, a subscript assignment, a call
-  // argument -- so up to eight punctuation characters sit between the word and the scheme. Any literal value counts,
-  // however short (`Basic dTpw` is a whole credential), including one reached through a constant template expression
-  // (`${'dTpw'}`) or a literal concatenation (`'Basic ' + 'dTpw'`). A name or a placeholder does not (`$TOKEN`,
-  // `${token}`, `'Bearer ' + token`, `<token>`, `{{token}}`, `%TOKEN%`): none starts with a token character or a quote.
-  // Prose that puts a word there ("Authorization: Bearer header") is screened too. One line break may sit in that
-  // punctuation, because a call's arguments are often wrapped (`headers.set("Authorization",\n  "Basic dTpw")`), and
-  // whitespace does not count toward the eight: indentation and column alignment run far wider, so each gap has its
-  // own bound of 64. Whitespace and punctuation are disjoint classes, so the repetition cannot backtrack. `[ \t]` was
-  // rejected for the gaps: the class it replaces matched a no-break space, and `Authorization:\u00a0Basic` must screen.
-  /\bauthorization\b(?:[^\S\n]{0,64}[^\w\s]){0,8}[^\S\n]{0,64}(?:\n(?:[^\S\n]{0,64}[^\w\s]){0,8}[^\S\n]{0,64})?(?:bearer|basic|token)\s+(?:["'`]\s*\+\s*["'`]|\$\{\s*["'`])?[A-Za-z0-9_\-.~+/]+/i,
-  // A Basic credential encoded at run time from a literal `user:password`; a template with a `${...}` in it is names.
-  /\b(?:btoa|Buffer\.from)\(\s*["'`][^"'`\n:${]{0,256}:[^"'`\n${]{1,256}["'`]/,
-  // A password in a URL's userinfo (`postgres://user:secret@host`), percent-encoded or not (`%40secret`). A
-  // placeholder is a name: `${PASS}`, `<pass>`, `{pass}`, `%PASS%`, and a `%` that starts no escape (`%s`, `%(pw)s`).
-  /\b[a-z][a-z0-9+.-]{1,15}:\/\/[^\s/?#@:"'`]{1,64}:(?![$<{]|%(?![0-9A-Fa-f]{2})|%[A-Za-z_]\w*%@)[^\s/?#@"'`]{1,128}@/i,
   // Cookie headers and curl's inline cookie argument carry credentials even when the cookie name is unfamiliar.
   /\b(?:set-cookie|cookie)\s*:\s*["'`]?[A-Za-z0-9_.-]+\s*=\s*["'`]?[A-Za-z0-9_%+./~=-]+/i,
   /(?:^|\s)(?:--cookie(?:=|\s+)|-b\s*)["'`]?[A-Za-z0-9_.-]+\s*=\s*["'`]?[A-Za-z0-9_%+./~=-]+/i,
@@ -38,9 +22,25 @@ export const SECRET_PATTERNS: readonly RegExp[] = [
   /\b[Bb]earer\s+(?=[A-Za-z0-9_\-.~+/]*\d)[A-Za-z0-9_\-.~+/]{16,}/,
 ];
 
-// Keys may be bare or quoted in JSON, YAML, shell and code. Capture the complete value before screening it so a
-// prefix of a placeholder or a function call cannot be mistaken for a credential.
-const ASSIGNMENT_VALUE = String.raw`(?:"([^"\r\n]*)"|'([^'\r\n]*)'|\x60([^\x60\r\n]*)\x60|([A-Za-z0-9_%+./~:=@!-]+))`;
+// Capture references and their literal neighbours together, including complete call/member/subscript suffixes.
+// Recognising one token is never grounds for discarding the rest of a value.
+const TEMPLATE_VALUE = String.raw`\$\{[^{}\r\n]*\}|\{\{[^{}\r\n]*\}\}|\{[^{}\r\n]*\}|<[^<>\r\n]*>`;
+const BARE_VALUE = String.raw`(?:${TEMPLATE_VALUE}|\$(?!\{)|[A-Za-z0-9_%+./~:=@!?*-]|[ \t]*(?:\([^()\r\n]*\)|\[[^\[\]\r\n]*\])|[ \t]+(?:\?\.|\.)[ \t]*[A-Za-z_$][\w$]*)+`;
+const ASSIGNMENT_VALUE = String.raw`(?:"([^"\r\n]*)"|'([^'\r\n]*)'|\x60([^\x60\r\n]*)\x60|(${BARE_VALUE}))`;
+
+// Only whole masks are placeholders. In mixed values remove complete reference tokens and judge the literal
+// remainder with the caller's existing thresholds. Separators between names (${USER}:${PASS}) carry no credential.
+const literalRemainder = (value: string): string => {
+  if (/^(?:\*+|x+|changeme)$/i.test(value)) return '';
+  const expanded = value.replace(/\$\{\s*(["'`])([^"'`\r\n]*)\1\s*\}/g, '$2');
+  const literal = expanded
+    .replace(/\$\{[A-Za-z_]\w*(?::-[^{}\r\n]*)?\}|\$[A-Za-z_]\w*|%[A-Za-z_]\w*%|<[^<>\r\n]*>|\{\{[^{}\r\n]*\}\}|(?<!\$)\{[^{}\r\n]*\}|\[[A-Za-z_]\w*\]|%\([A-Za-z_]\w*\)[a-z]|%(?![0-9A-Fa-f]{2})[a-z]/gi, '')
+    .trim();
+  return literal !== expanded.trim() && /^[\s:;,/|+=._@-]*$/.test(literal) ? '' : literal;
+};
+const IDENTIFIER = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/;
+const COMPUTED_REFERENCE = /^[A-Za-z_$][\w$]*(?:(?:[ \t]*(?:\?\.|\.)[ \t]*[A-Za-z_$][\w$]*)|[ \t]*\([^()\r\n]*\)|[ \t]*\[[^\[\]\r\n]*\])+$/;
+const PATH_REFERENCE = /^(?:~\/|\/)[\w./~-]*$/;
 const CREDENTIAL_KEYS = String.raw`authorization|auth|api[_.-]?key|access[_.-]?key|secret[_.-]?key|private[_.-]?key|(?:access|refresh|id)[_.-]?token|client[_.-]?secret|password|passwd|pwd|secret|token|credentials?|aws[_.-]?access[_.-]?key[_.-]?id|aws[_.-]?secret[_.-]?access[_.-]?key|aws[_.-]?session[_.-]?token`;
 const CREDENTIAL_KEY = new RegExp(String.raw`^(?:${CREDENTIAL_KEYS})$`, 'i');
 const GENERIC_CREDENTIAL_KEY = /^(?:authorization|auth|pwd|secret|token|credentials?)$/i;
@@ -54,10 +54,11 @@ const credentialKey = (key: string): string | undefined => {
   }
   return undefined;
 };
-const CREDENTIAL_ASSIGNMENT = new RegExp(String.raw`(?:^|[^\w.-])([\w.-]+)["'\x60]?\s*(?:=>|[:=])\s*` + ASSIGNMENT_VALUE, 'g');
+// A shell default (${PASSWORD:-default}) contains a colon, but its parameter name is not an assignment key.
+const CREDENTIAL_ASSIGNMENT = new RegExp(String.raw`(?:^|[^\w.-])(?<!\$\{)([\w.-]+)["'\x60]?\s*(?:=>|[:=])\s*` + ASSIGNMENT_VALUE, 'g');
 const CLI_CREDENTIAL_ASSIGNMENT = new RegExp(String.raw`(?:^|[^\w.-])--([\w.-]+)(?:\s*=\s*|[ \t]+)` + ASSIGNMENT_VALUE, 'g');
 // Cookie-specific suffixes remain supported; arbitrary trailing segments (token_count, auth_options) are not keys.
-const COOKIE_ASSIGNMENT = new RegExp(String.raw`(?:^|[^\w.-])(sessionid|session|sid|connect\.sid|PHPSESSID|JSESSIONID|_session|[\w.-]*(?:auth(?:entication)?|token)(?:[_.-]?(?:cookie|token|session))?)["'\x60]?\s*(?:=>|[:=])\s*` + ASSIGNMENT_VALUE, 'gi');
+const COOKIE_ASSIGNMENT = new RegExp(String.raw`(?:^|[^\w.-])(?<!\$\{)(sessionid|session|sid|connect\.sid|PHPSESSID|JSESSIONID|_session|[\w.-]*(?:auth(?:entication)?|token)(?:[_.-]?(?:cookie|token|session))?)["'\x60]?\s*(?:=>|[:=])\s*` + ASSIGNMENT_VALUE, 'gi');
 const NETRC_PASSWORD = new RegExp(String.raw`^[ \t]*(password)[ \t]+` + ASSIGNMENT_VALUE + String.raw`[ \t]*\r?$`, 'gim');
 
 const literalAssignment = (text: string, pattern: RegExp, minLength = 1): boolean => {
@@ -72,22 +73,20 @@ const literalAssignment = (text: string, pattern: RegExp, minLength = 1): boolea
     }
     // Credential keys own their thresholds; the broader cookie-name pattern must not bypass them.
     if (pattern === COOKIE_ASSIGNMENT && key) continue;
-    const value = (match[2] ?? match[3] ?? match[4] ?? match[5] ?? '').trim();
-    // Like the header and URL screens, names/templates are not literal credentials. Empty and fully masked values
-    // carry no credential; xxx and changeme are conventional placeholders too, even when they reach the session-cookie length threshold.
-    if (value.length < minLength || /^(?:[$<{]|%(?![0-9A-Fa-f]{2}))|^\*+$|^x+$|^changeme$/i.test(value) || /%[A-Za-z_]\w*%$/.test(value) || value.includes('${')) continue;
-    // The header patterns above own schemes, including their placeholder, concatenation and whitespace rules.
-    if (/^authorization$/i.test(match[1]!) && /^(?:bearer|basic|token)(?:\s|$)/i.test(value)) continue;
+    const raw = (match[2] ?? match[3] ?? match[4] ?? match[5] ?? '').trim();
+    const value = literalRemainder(raw);
+    if (value.length < minLength) continue;
+    // The header screen owns schemes, including their placeholder and concatenation rules.
+    if (/^authorization$/i.test(match[1]!) && /^(?:bearer|basic|token)(?:\s|$)/i.test(raw)) continue;
     const quoted = match[5] === undefined;
     const hasDigit = /\d/.test(value);
-    const identifier = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/.test(value);
+    const identifier = IDENTIFIER.test(value);
     const generic = pattern === COOKIE_ASSIGNMENT || GENERIC_CREDENTIAL_KEY.test(key ?? match[1]!);
     // Dotted paths always name another value. Strong keys permit alphabetic literals, excluding primitive/type
     // names; generic keys and session cookies still exclude digit-free identifiers such as tokenValue.
     const reference = identifier && (value.includes('.') || (generic ? !hasDigit
       : /^(?:string|number|bigint|boolean|symbol|object|undefined|null|any|unknown|never|void)$/i.test(value)));
-    if (!quoted && (reference || /^[~/]/.test(value)
-      || /^\s*(?:[.(\[]|\?\.)/.test(text.slice(match.index! + match[0].length)))) continue;
+    if (!quoted && (reference || PATH_REFERENCE.test(raw) || COMPUTED_REFERENCE.test(raw))) continue;
     // Bare session cookies retain D1's eight-character threshold, excluding names even when quoted.
     if (pattern === COOKIE_ASSIGNMENT) { if (!reference) return true; continue; }
     // Strong keys accept any quoted literal, or an unquoted literal of at least eight characters. Generic keys
@@ -99,7 +98,50 @@ const literalAssignment = (text: string, pattern: RegExp, minLength = 1): boolea
   return false;
 };
 
+// Keep the existing header punctuation/whitespace bounds; inspect whole operands after the scheme. A quoted
+// concatenation operand is literal, an unquoted name/call is a reference, and later literal operands still count.
+const AUTHORIZATION_SCHEME = /\bauthorization\b(?:[^\S\n]{0,64}[^\w\s]){0,8}[^\S\n]{0,64}(?:\n(?:[^\S\n]{0,64}[^\w\s]){0,8}[^\S\n]{0,64})?(?:bearer|basic|token)\s+/gi;
+const HEADER_VALUE = new RegExp('^' + ASSIGNMENT_VALUE);
+const HEADER_OPERAND_PART = new RegExp(TEMPLATE_VALUE + String.raw`|\([^()\r\n]*\)|\[[^\[\]\r\n]*\]|\+`, 'g');
+const literalAuthorization = (text: string): boolean => {
+  for (const match of text.matchAll(AUTHORIZATION_SCHEME)) {
+    let rest = text.slice(match.index! + match[0].length);
+    let concatenation = /^["'`]\s*\+\s*/.exec(rest);
+    let operand = Boolean(concatenation);
+    if (concatenation) rest = rest.slice(concatenation[0].length);
+    let value: RegExpExecArray | null;
+    while ((value = HEADER_VALUE.exec(rest))) {
+      const raw = value[1] ?? value[2] ?? value[3] ?? value[4] ?? '';
+      const end = operand && value[4] !== undefined
+        ? [...raw.matchAll(HEADER_OPERAND_PART)].find(part => part[0] === '+')?.index ?? raw.length : raw.length;
+      const part = raw.slice(0, end);
+      if (!(operand && value[4] !== undefined && (IDENTIFIER.test(part) || COMPUTED_REFERENCE.test(part))) && literalRemainder(part)) return true;
+      rest = rest.slice(end < raw.length ? end : value[0].length);
+      concatenation = /^(?:["'`])?\s*\+\s*/.exec(rest);
+      if (!concatenation) break;
+      operand = true;
+      rest = rest.slice(concatenation[0].length);
+    }
+  }
+  return false;
+};
+// URL passwords and Basic inputs use the same placeholder policy; a reference in one part cannot hide a literal
+// password in another. Percent escapes remain literal, while whole printf slots (%s, %(pw)s) remain references.
+const URL_PASSWORD = /\b[a-z][a-z0-9+.-]{1,15}:\/\/[^\s/?#@:"'`]{1,64}:([^\s/?#@"'`]{1,128})@/gi;
+const BASIC_INPUT = /\b(?:btoa|Buffer\.from)\(\s*(?:"([^"\r\n]*)"|'([^'\r\n]*)'|`([^`\r\n]*)`)/g;
+const literalPassword = (text: string): boolean => {
+  for (const match of text.matchAll(URL_PASSWORD)) if (literalRemainder(match[1]!)) return true;
+  for (const match of text.matchAll(BASIC_INPUT)) {
+    const value = match[1] ?? match[2] ?? match[3] ?? '';
+    const colon = [...value.matchAll(new RegExp(TEMPLATE_VALUE + '|:', 'g'))].find(part => part[0] === ':')?.index ?? -1;
+    if (colon >= 0 && literalRemainder(value.slice(colon + 1))) return true;
+  }
+  return false;
+};
+
 export const looksSecret = (text: string): boolean => SECRET_PATTERNS.some((re) => re.test(text))
+  || literalAuthorization(text)
+  || literalPassword(text)
   || literalAssignment(text, CREDENTIAL_ASSIGNMENT)
   || literalAssignment(text, CLI_CREDENTIAL_ASSIGNMENT)
   || literalAssignment(text, COOKIE_ASSIGNMENT, 8)

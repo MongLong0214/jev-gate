@@ -114,12 +114,13 @@ describe('Codex status collection and deny tracing (#293)', () => {
 
   it.each([false, true].flatMap(background => [
     { label: 'bare Jev key', text: 'jv_live_' + '0123456789abcdef'.repeat(4), canaries: ['jv_live_' + '0123456789abcdef'.repeat(4)] },
+    { label: 'J1 literal interpolation marker', text: "password='s3cure${literal}'", canaries: ['s3cure${literal}'] },
     { label: 'JSON password only', text: '{"password":"canary-pw-123"}', canaries: ['canary-pw-123'] },
     { label: 'I1 prefixed JSON password', text: '{"DB_PASSWORD":"review-only-password"}', canaries: ['review-only-password'] },
     { label: 'JSON', text: '{"password":"canary-pw-123","api_key":"canary-key-456"}', canaries: ['canary-pw-123', 'canary-key-456'] },
     ...['PASSWORD=CorrectHorseBatteryStaple', 'api_key=abcdefghijklmnopqrstuvwxyz', 'password=abcdefghijklmnop',
       'export API_KEY=abcdefghijklmnopqrstuv', 'DB_PASSWORD=Sup3rSecretValue'].map(text => ({ label: text, text, canaries: [text.split('=')[1]!] })),
-  ].map(test => ({ ...test, background }))))('H1/F1/G1/I1: removes credentials from Codex foreground, status and background replay ($label, background=$background)', async ({ background, text, canaries }) => {
+  ].map(test => ({ ...test, background }))))('H1/F1/G1/I1/J1: removes credentials from Codex foreground, status and background replay ($label, background=$background)', async ({ background, text, canaries }) => {
     expect(text).not.toMatch(/bearer/i);
     const f = await setup('normal'); const launch = f.launch(background);
     await vi.waitFor(() => expect(f.started()).toBe(true)); if (background) await launch;

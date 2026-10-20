@@ -41,7 +41,98 @@ const ASSIGNMENT_CONTEXTS = [
   { context: 'quoted prose assignment', render: (key: string, value: string) => `note='Observed ${key}=${value} during review.'` },
 ];
 
+// Each exclusion has a whole-value negative and a value with literal material beside the same shape.
+// Already anchored masks/thresholds are preservation cases; the partial reference/path/call cases reproduce J1.
+const PLACEHOLDER_VALUES = [
+  { branch: 'empty', whole: '', partial: 's3cure123' },
+  { branch: 'dollar name prefix', whole: '$PASSWORD', partial: '$uperS3cret!' },
+  { branch: 'dollar brace infix', whole: '${PASSWORD}', partial: 's3cure${literal}' },
+  { branch: 'dollar default prefix', whole: '${PASSWORD:-default}', partial: '${PASSWORD:-default}s3cure123' },
+  { branch: 'percent name suffix', whole: '%PASSWORD%', partial: 's3cure%HOME%' },
+  { branch: 'angle prefix', whole: '<redacted>', partial: '<a1b2c3d4e5f6>x' },
+  { branch: 'double brace prefix', whole: '{{password}}', partial: '{{password}}s3cure123' },
+  { branch: 'single brace prefix', whole: '{password}', partial: '{s3cret}pass' },
+  { branch: 'bracket word prefix', whole: '[REDACTED]', partial: '[REDACTED]s3cure123' },
+  { branch: 'all stars prefix', whole: '***', partial: '***s3cure123' },
+  { branch: 'all x suffix', whole: 'xxxxxxxxxxxxxxxx', partial: 's3cure123xxxxxxxxxxxxxxxx' },
+  { branch: 'changeme prefix', whole: 'changeme', partial: 'changemes3cure123' },
+  { branch: 'printf slot prefix', whole: '%s', partial: '%ss3cure123' },
+  { branch: 'named printf slot prefix', whole: '%(pw)s', partial: '%(pw)ss3cure123' },
+  { branch: 'separator-only references', whole: '${USER}:${PASS}', partial: '${USER}:s3cure123${PASS}' },
+];
+const EXCLUSION_CASES = [
+  ...PLACEHOLDER_VALUES.flatMap(row => [
+    { ...row, context: 'assignment', render: (value: string) => `password="${value}"` },
+    { ...row, context: 'header', render: (value: string) => `Authorization: Basic ${value}` },
+    { ...row, context: 'URL', render: (value: string) => `postgres://u:${value}@host/app` },
+  ]),
+  ...[
+    { branch: 'absolute path', whole: '/tmp/canary123', partial: '/tmp/canary123!' },
+    { branch: 'home path', whole: '~/canary123', partial: '~s3cure123' },
+    { branch: 'call suffix', whole: 'readPassword()', partial: 'canary-123()' },
+    { branch: 'call followed by literal', whole: 'readPassword ()', partial: 'readPassword()s3cure123' },
+    { branch: 'member suffix', whole: 'Namespace1.password', partial: 'canary-123 .value' },
+    { branch: 'subscript suffix', whole: 'readPassword[index]', partial: 'canary-123[index]' },
+    { branch: 'optional member suffix', whole: 'readPassword?.value', partial: 'canary-123?.value' },
+    { branch: 'strong primitive', whole: 'undefined', partial: 'undefined123' },
+  ].map(row => ({ ...row, context: 'unquoted assignment', render: (value: string) => `password=${value}` })),
+  { branch: 'generic identifier', whole: 'tokenValue', partial: 'tokenValue123', context: 'generic assignment', render: (value: string) => `token=${value}` },
+  { branch: 'cookie identifier', whole: 'tokenValue', partial: 'tokenValue123', context: 'cookie assignment', render: (value: string) => `sessionid="${value}"` },
+  { branch: 'cookie minimum', whole: 'abc-def', partial: 'abc-def123', context: 'cookie assignment', render: (value: string) => `sessionid=${value}` },
+  { branch: 'strong unquoted minimum', whole: 'abcdefg', partial: 'abcdefg123', context: 'unquoted assignment', render: (value: string) => `password=${value}` },
+  { branch: 'generic digit minimum', whole: 'canary1', partial: 'canary123', context: 'generic assignment', render: (value: string) => `token=${value}` },
+  { branch: 'generic nondigit minimum', whole: 'abc-defg', partial: 'abc-defghijklmno', context: 'generic assignment', render: (value: string) => `token=${value}` },
+  { branch: 'concatenated name', whole: 'token', partial: "token + 's3cure123'", context: 'header concatenation', render: (value: string) => `headers: { Authorization: 'Basic ' + ${value} }` },
+  { branch: 'adjacent concatenated names', whole: 'token+other', partial: "token+other+'s3cure123'", context: 'header concatenation', render: (value: string) => `headers: { Authorization: 'Basic '+${value} }` },
+  { branch: 'concatenated quoted template', whole: "'${TOKEN}'", partial: "'${TOKEN}s3cure123'", context: 'header concatenation', render: (value: string) => `headers: { Authorization: 'Basic ' + ${value} }` },
+  { branch: 'unrelated key rescan', whole: 'ordinary note', partial: "password='s3cure${literal}'", context: 'nested assignment', render: (value: string) => `note="${value}"` },
+  { branch: 'cookie key ownership', whole: 'include', partial: 'canary123', context: 'generic assignment', render: (value: string) => `auth="${value}"` },
+  ...['btoa', 'Buffer.from'].map(call => ({ branch: 'Basic template password', whole: '${USER}:${PASS}', partial: '${USER}:s3cure${PASS}', context: call, render: (value: string) => `${call}(\`${value}\`)` })),
+].flatMap(({ render, ...row }) => [
+  { ...row, form: 'whole negative', text: render(row.whole), secret: false },
+  { ...row, form: 'partial positive', text: render(row.partial), secret: true },
+]);
+
 describe.each([['core', looksSecret], ['router', routerLooksSecret]] as const)('outbound text — %s credential screen', (_screen, looksSecret) => {
+  it.each(EXCLUSION_CASES)('J1 exclusion: $context / $branch / $form', ({ text, secret }) => {
+    expect(looksSecret(text), text).toBe(secret);
+  });
+
+  it.each(['${DB_USER}:${DB_PASS}', '${DB_USER:-user}:${DB_PASS:-default}', '$HOST:$PORT', '$HOST.$PORT', '<user>:<password>', '<user>@<password>', '{{user}}:{password}', '[USER]:[PASSWORD]'])(
+    'J1: keeps separator-only reference combinations: %s', value => {
+      for (const quote of ['', "'", '"', '`']) expect(looksSecret(`password=${quote}${value}${quote}`)).toBe(false);
+      expect(looksSecret(`Authorization: Basic ${value}`)).toBe(false);
+      expect(looksSecret(`postgres://u:${value}@host/app`)).toBe(false);
+      expect(looksSecret(`btoa(\`${value}\`)`)).toBe(false);
+    },
+  );
+
+  it.each([':', '.', '_', '/', '+', '=', '@', '!', '***s3cure123', 's3cure123xxx', 'changemes3cure123'])(
+    'J1: preserves quoted strong literals that are not whole placeholders: %s', value => {
+      expect(looksSecret(`password="${value}"`)).toBe(true);
+    },
+  );
+
+  it.each([
+    { value: '${PASSWORD}a', generic: false, strongBare: false },
+    { value: '${PASSWORD}abcdefgh', generic: false, strongBare: true },
+    { value: '${PASSWORD}1234567', generic: false, strongBare: false },
+    { value: '${PASSWORD}12345678', generic: true, strongBare: true },
+  ])('J1: applies thresholds to the literal remainder, not the reference length: $value', ({ value, generic, strongBare }) => {
+    expect(looksSecret(`password="${value}"`)).toBe(true);
+    expect(looksSecret(`password=${value}`)).toBe(strongBare);
+    expect(looksSecret(`token="${value}"`)).toBe(generic);
+    expect(looksSecret(`token=${value}`)).toBe(generic);
+    expect(looksSecret(`sessionid=${value}`)).toBe(generic);
+  });
+
+  it.each(['password=', '--password ', 'password '])('J1: shares complete-value screening with CLI and netrc: %s', prefix => {
+    for (const quote of ['', "'", '"', '`']) {
+      expect(looksSecret(prefix + quote + '${PASSWORD}' + quote)).toBe(false);
+      expect(looksSecret(prefix + quote + '${PASSWORD}s3cure123' + quote)).toBe(true);
+    }
+  });
+
   it.each(KEY_SPELLINGS.flatMap(spelling => ASSIGNMENT_CONTEXTS.map(context => ({ ...spelling, ...context }))))(
     'I1 key-name matrix: $spelling / $context', ({ key, render }) => {
       for (const { word, strong } of CREDENTIAL_WORDS) for (const quote of ['', "'", '"', '`']) {
@@ -214,6 +305,9 @@ describe.each([['core', looksSecret], ['router', routerLooksSecret]] as const)('
     'secretary: Jane Doe 2026',
     '--password-file ./pw.txt',
     '--api-key-env API_KEY',
+    'const { password } = req.body;',
+    'user.password = await hash(input.password)',
+    'type Config = { apiKey?: string; token: number }',
   ])('F1 false-positive fix: keeps ordinary prose and references: %s', text => {
     expect(looksSecret(text)).toBe(false);
   });
