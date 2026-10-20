@@ -479,7 +479,9 @@ export const rowOf = (r: CellResult, file: TasksFile | null, transcript: string 
   const admissions = traceAdmissions(traceDir, r.sid);
   // Read before the transcript: a cell's Jev bill does not depend on finding its transcript.
   const facts = sessionFacts(traceDir, r.sid);
-  const base: Row = { id: r.id, task: r.task, cond: r.cond, rep: r.rep, ok: okSoFar, solved: okSoFar, wall_s: r.wall_s, cost: r.harness.cost_usd, prime_cost: r.prime.cost_usd, jev_requests: facts.jevRequests, jev_cost: facts.jevRequests ? facts.jevCost : r.cond === 'A' ? 0 : null, host_version: r.host_version ?? null, prime_tools: null, model: '-', model_mismatch: false, prime_effort: '-', effort: '-', gate_turns: admissions.gateTurns.join(',') || '-', total_tokens: 0, cache_create: 0, cache_read: 0, output: 0, requests: 0, tools: 0, subs: 0, compacts: 0, shapes: admissions.shapes.join(',') };
+  const base: Row = { id: r.id, task: r.task, cond: r.cond, rep: r.rep, ok: okSoFar, solved: okSoFar, wall_s: r.wall_s, cost: r.harness.cost_usd, prime_cost: r.prime.cost_usd, jev_requests: facts.jevRequests,
+    // Every cell is given the trace directory; outside A (all off) none at report time is a recording failure, not no Jev.
+    jev_cost: facts.jevRequests ? facts.jevCost : r.cond === 'A' || existsSync(traceDir) ? 0 : null, host_version: r.host_version ?? null, prime_tools: null, model: '-', model_mismatch: false, prime_effort: '-', effort: '-', gate_turns: admissions.gateTurns.join(',') || '-', total_tokens: 0, cache_create: 0, cache_read: 0, output: 0, requests: 0, tools: 0, subs: 0, compacts: 0, shapes: admissions.shapes.join(',') };
   if (transcript === null) return { ...base, ok: false, missing: true, total_tokens: null };
   const all = readJsonl(transcript);
   const userIdx = all.flatMap((e, i) => {
@@ -573,11 +575,9 @@ export interface GridRow {
   paired?: string;
 }
 
-/** The Jev part of a cell's bill: none without a Jev request, unknown when any request's model or input is unknown. */
-const jevBill = (r: Row): number | null => (r.jev_requests ? money(r.jev_cost) : 0);
-/** Host session bill plus the Jev list estimate, as the published jevgrep accounting counts it; every cost verdict reads this. */
+/** Host session bill plus the Jev list estimate (`rowOf`'s `jev_cost`), as the published jevgrep accounting counts it; every cost verdict reads this. */
 export const totalCost = (r: Row): number | null => {
-  const host = money(r.cost), jev = jevBill(r);
+  const host = money(r.cost), jev = money(r.jev_cost);
   return host === null || jev === null ? null : host + jev;
 };
 const known = (values: Array<number | null>): number[] => values.filter((v): v is number => v !== null);
@@ -602,7 +602,7 @@ export const grid = (rows: Row[], tasks: string[], conds: readonly Condition[] =
       }
       const T = median(g.map((r) => r.total_tokens));
       const C = median(known(g.map(totalCost)));
-      const J = median(known(g.map(jevBill)));
+      const J = median(known(g.map(r => money(r.jev_cost))));
       const count = plannedReps ?? Math.max(...rows.filter(r => r.task === task).map(r => r.rep));
       const costRatios = cond === 'A' ? [] : Array.from({ length: count }, (_, i) => {
         const a = A.find(r => r.rep === i + 1), c = g.find(r => r.rep === i + 1);

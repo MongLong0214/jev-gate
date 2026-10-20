@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 import { CONDITIONS, cleanEnv, conditionSettings, grid, median, parseRunArgs, rotate, rowOf, usageOf, run, report, sessionFacts, summary, type CellResult, type Row } from '../src/bench/ab.js';
 
-const row = (over: Partial<Row>): Row => ({ id: 'S-A-1', task: 'S', cond: 'A', rep: 1, ok: true, solved: true, wall_s: 10, cost: 1, prime_cost: 1, prime_tools: 30, model: 'm', model_mismatch: false, prime_effort: 'xhigh', effort: 'xhigh', gate_turns: '-', total_tokens: 100, cache_create: 10, cache_read: 80, output: 10, requests: 3, tools: 5, subs: 0, compacts: 0, shapes: '', ...over });
+const row = (over: Partial<Row>): Row => ({ id: 'S-A-1', task: 'S', cond: 'A', rep: 1, ok: true, solved: true, wall_s: 10, cost: 1, prime_cost: 1, jev_requests: 0, jev_cost: 0, prime_tools: 30, model: 'm', model_mismatch: false, prime_effort: 'xhigh', effort: 'xhigh', gate_turns: '-', total_tokens: 100, cache_create: 10, cache_read: 80, output: 10, requests: 3, tools: 5, subs: 0, compacts: 0, shapes: '', ...over });
 
 describe('bench ab (#130)', () => {
   it('requires each non-pinned task response to have its own exact route confirmation', () => {
@@ -66,8 +66,30 @@ describe('bench ab (#130)', () => {
     expect(grid([a, priced], ['S'], ['A', 'B'], 1)[1]).toMatchObject({ cost: '1.100', jev_cost: '0.2000', 'cost/A': '1.10', cost_pairs: '0/1 lower cost; 1/1 observed' });
     const unpriced = row({ id: 'S-B-1', cond: 'B', cost: 0.5, jev_requests: 2, jev_cost: null });
     expect(grid([a, unpriced], ['S'], ['A', 'B'], 1)[1]).toMatchObject({ cost: '-', 'cost/A': '-', cost_pairs: '0/1 lower cost; 0/1 observed', cost_ratios: [null] });
-    // No Jev request adds no Jev cost, whatever the row could not establish about it.
-    expect(grid([a, row({ id: 'S-C-1', cond: 'C', cost: 0.5, jev_requests: 0, jev_cost: null })], ['S'], ['A', 'C'], 1)[1]).toMatchObject({ cost: '0.500', jev_cost: '0.0000' });
+    expect(grid([a, row({ id: 'S-C-1', cond: 'C', cost: 0.5 })], ['S'], ['A', 'C'], 1)[1]).toMatchObject({ cost: '0.500', jev_cost: '0.0000' });
+  });
+  it('treats a missing trace directory as unrecorded Jev cost outside A, and an empty one as no Jev request', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ab-notrace-')), transcript = join(dir, 'sid.jsonl'), missing = join(dir, 'trace'), empty = join(dir, 'empty');
+    mkdirSync(empty);
+    const usage = { input_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1 };
+    writeFileSync(transcript, [
+      { type: 'user', message: { content: 'prime' } }, { type: 'assistant', message: { id: 'p', model: 'm', usage } },
+      { type: 'user', message: { content: 'task' } }, { type: 'assistant', message: { id: 't', model: 'm', usage } },
+    ].map(v => JSON.stringify(v)).join('\n'));
+    const cell: CellResult = { id: 'S-B-1', task: 'S', cond: 'B', rep: 1, sid: 'sid', cwd: dir, model: 'm', started_at: '', prime_wall_s: 1, wall_s: 2, prime_rc: 0, rc: 0, timed_out: false, check_rc: null, prime: {}, harness: { cost_usd: 0.5 }, result_head: 'ok' };
+    const a = row({ cost: 1 });
+    // Every cell was given a trace directory: none at report time is a recording failure, not a Jev bill of 0.
+    const lost = rowOf(cell, null, transcript, missing);
+    expect(lost).toMatchObject({ ok: true, jev_requests: 0, jev_cost: null });
+    expect(grid([a, lost], ['S'], ['A', 'B'], 1)[1]).toMatchObject({ cost: '-', cost_pairs: '0/1 lower cost; 0/1 observed' });
+    expect(summary([a, lost], ['S'], ['A', 'B'], 1)[1]).toMatchObject({ cost: '-', 'cost/solved': '-' });
+    // A runs everything off and may never create the directory.
+    expect(rowOf({ ...cell, id: 'S-A-1', cond: 'A' }, null, transcript, missing).jev_cost).toBe(0);
+    const none = rowOf(cell, null, transcript, empty);
+    expect(none).toMatchObject({ jev_requests: 0, jev_cost: 0 });
+    expect(grid([a, none], ['S'], ['A', 'B'], 1)[1]).toMatchObject({ cost: '0.500', cost_pairs: '1/1 lower cost; 1/1 observed' });
+    expect(summary([a, none], ['S'], ['A', 'B'], 1)[1]).toMatchObject({ cost: '0.500', 'cost/solved': '0.500' });
+    rmSync(dir, { recursive: true });
   });
   it('divides every planned cell\'s bill by the solved count and shows how concentrated the saving is', () => {
     const rows = [
