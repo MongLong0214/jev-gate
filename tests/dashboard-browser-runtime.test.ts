@@ -141,6 +141,17 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     }
   });
 
+  it('draws no Compact card or inspector in the Codex view and keeps Claude Compact (#292)', async () => {
+    push([run('cl','claude',[call('cl-compact','compact',80)]),run('cx','codex',[call('cx-router','router',90)])]);
+    const p=await page();await settle(p);
+    const card=p.locator('[data-feature="compact"]'),shown=async()=>card.evaluate(n=>getComputedStyle(n).display!=='none');
+    expect(await shown()).toBe(true);
+    await card.click();expect(await p.locator('#circuit-inspector').textContent()).toContain('Compact');
+    await p.locator('[data-host="codex"]').click();expect(await shown()).toBe(false);expect(await p.locator('#circuit-inspector').textContent()).not.toContain('Compact');
+    await p.locator('[data-host="claude"]').click();expect(await shown()).toBe(true);
+    await p.close();
+  });
+
   it('counts running executions from runs rather than the recent feed and scopes them by host', async () => {
     push([run('old-active','codex',[step('old-tool','workers',{lifecycle:true,lane:'host',state:'active',startedAt:ago(0)})],{state:'active'}),run('new','claude',[call('new-output','compact',80)])]);
     current.operations.feed=current.operations.feed.filter(event=>event.id!=='old-tool');

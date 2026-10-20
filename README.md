@@ -13,7 +13,7 @@
 [![Codex](https://img.shields.io/badge/Codex-plugin-10A37F)](#codex)
 [![Node 22+](https://img.shields.io/badge/node-22%2B-3FB950)](package.json)
 
-**Jev-assisted model routing, delegation, evidence search and context compaction for Claude Code and native Codex.**
+**Jev-assisted model routing, delegation, and evidence search for Claude Code and native Codex, plus context compaction for Claude Code.**
 
 [Install](#install) · [Results](#results) · [How it works](#how-it-works) · [Dashboard](#read-the-live-dashboard) · [Data and privacy](#settings-and-data) · [Troubleshoot](#update-and-troubleshoot)
 
@@ -151,7 +151,7 @@ Every PR runs the `models` CI job against the official Claude model/effort docum
 
 The plugin opens **one shared local browser dashboard** automatically. Starting another Claude or Codex session reuses it instead of opening duplicate tabs. Select **Claude + Codex**, **Claude Code**, or **Codex** to inspect each host.
 
-An eight-node circuit (Gate A, Gate B, plan, workers, tool guard, Router, Compact, Evidence) hangs off a Jev rail. Every new record flashes its node, the node's 60-second strip and its execution row in recorded order, including policy, host and lifecycle records; measured Jev responses travel the rail and set the latency readout. The **Jev traffic** bar covers the last 30 seconds: requests as short ticks, responses at their latency. Between records a soft sweep runs along the rail and the node wires flow to show the view is live; neither carries a record. The execution list, the Jev call log (one row per call) and the execution detail change in the same frame. Pause, disconnected streams and reduced-motion preferences stop all movement and keep the numbers. All layouts fit without horizontal page scrolling.
+An eight-node circuit (Gate A, Gate B, plan, workers, tool guard, Router, Compact, Evidence; the Codex filter hides Compact, which runs on Claude Code only) hangs off a Jev rail. Every new record flashes its node, the node's 60-second strip and its execution row in recorded order, including policy, host and lifecycle records; measured Jev responses travel the rail and set the latency readout. The **Jev traffic** bar covers the last 30 seconds: requests as short ticks, responses at their latency. Between records a soft sweep runs along the rail and the node wires flow to show the view is live; neither carries a record. The execution list, the Jev call log (one row per call) and the execution detail change in the same frame. Pause, disconnected streams and reduced-motion preferences stop all movement and keep the numbers. All layouts fit without horizontal page scrolling.
 
 1. Start a task in your normal coding session.
 2. Read the **Execution circuit** at the top. Select a node to see its latest decision, confidence and Jev response time in **Stage details**; it also filters the execution list to that feature, and selecting it again shows all.
@@ -172,7 +172,7 @@ An eight-node circuit (Gate A, Gate B, plan, workers, tool guard, Router, Compac
 
 A refused worker contract is an error labelled **Contract not met**, with a closed reason and the check ids (`#n`) it concerns, never the raw reply. A later host end appears as its own **Host ended** row and does not mark the run done.
 
-**Router · Request preparation** means pre-request checks finished. It is neither a new Jev judgment nor a completed model response. The dashboard distinguishes **selected model/effort**, **host dispatch or API request**, and **observed response**. The model card follows the selected timeline stage and names its record/time. A selection or submitted request alone cannot prove which model answered. Missing response effort stays unknown. A native Codex Compact summary request is recorded separately from root Router requests; its different effort is not a root routing failure. Older records without request purpose remain unconfirmed.
+**Router · Request preparation** means pre-request checks finished. It is neither a new Jev judgment nor a completed model response. The dashboard distinguishes **selected model/effort**, **host dispatch or API request**, and **observed response**. The model card follows the selected timeline stage and names its record/time. A selection or submitted request alone cannot prove which model answered. Missing response effort stays unknown. A native Codex compaction summary request is the host's own and is recorded separately from root Router requests; its different effort is not a root routing failure. Jev Compact runs on Claude Code only. Older records without request purpose remain unconfirmed.
 
 Circuit lines show possible paths. Flashes and rail lights mark recorded events; the ambient sweep and flowing wires carry none. Response charts use measured Jev latency; motion is not a speed claim. Pause freezes the view; workers keep running. Reconnecting means the browser's event stream will retry. The latest 200 executions are listed; filters recompute displayed measurements and exclude earlier steps outside the range.
 
