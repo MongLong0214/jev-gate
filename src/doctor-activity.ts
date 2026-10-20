@@ -1,5 +1,5 @@
 import { existsSync, statSync } from 'node:fs';
-import { factsOf } from './claude-models.js';
+import { factsOf, sameModel } from './claude-models.js';
 import { codexConnectionOwnerPath } from './codex-paths.js';
 import type { Env } from './config.js';
 import { readPrivateJson } from './credentials.js';
@@ -81,7 +81,8 @@ export const activityChecks = (input: ActivityInput): ActivityCheck[] => {
     `gate_a: ${admissions.length} decisions, ${calls.length} Jev calls, ${orchestrated} orchestrated; errors ${errors.length} (${rate(errors.length, calls.length)}${errors.length ? `: ${tally(errors)}` : ''}); latency p50 ${percentile(latency, 0.5) ?? '-'} ms / p90 ${percentile(latency, 0.9) ?? '-'} ms; liveness ${ringCalls}/${ring.length} recent auto-mode decisions called Jev`,
     gateAFail ? 'Check Jev reachability and the API key; failed calls keep every prompt direct.' : never ? 'Gate A never calls Jev: check mode=auto, the effective depth floor and the API key in configuration.' : 'Gate A pays a Jev call and its latency on every prompt but orchestrated nothing; review the admission policy, or set Gate mode off.');
 
-  const routes = phase('pre_result'), retiered = routes.filter(r => str(sub(r, 'decision')['tier']) && sub(r, 'decision')['tier'] !== r['called_tier']).length;
+  // A worker decision records the tier it was called with, a planner decision the configured default it starts from.
+  const routes = phase('pre_result'), retiered = routes.filter(r => str(r['called_tier'] ?? r['default_tier']) && str(sub(r, 'decision')['tier']) && sub(r, 'decision')['tier'] !== (r['called_tier'] ?? r['default_tier'])).length;
   say(routes.length >= 5 && !retiered ? 'warn' : routes.length ? 'ok' : 'info', `gate_b: ${routes.length} routing decisions, ${retiered} changed the called tier`,
     'Gate B calls Jev on every owned dispatch and changed no tier; review the routing policy.');
 
@@ -123,16 +124,21 @@ export const activityChecks = (input: ActivityInput): ActivityCheck[] => {
   say(released.length ? 'fail' : patched ? 'ok' : 'info', `router_released: ${released.length} of ${patched} patched root turns went unrouted mid-turn with no root_stop, context_reset or turn_end record${released.length ? ` (turns ${released.map(short).join(', ')})` : ''}`,
     'The rest of these turns ran on the native model and effort; update Jev Gate once a fix ships and rerun doctor.');
 
-  // Each non-Opus root request against Opus reading what the switch wrote; minus the Opus rewrite on the way back.
-  // Unswitched Opus would have read that prefix only while its cache was still alive, so a gap past the TTL costs the switch nothing.
+  // A switch is a root request the Router patched (its `prepared` step routed) onto another family than its turn's
+  // recorded baseline, priced against that baseline reading what the switch wrote; minus the baseline's rewrite on the
+  // way back. Unrelated native requests neither save nor cost the Router anything.
+  // The baseline would have read that prefix only while its cache was still alive, so a gap past the TTL costs the switch nothing.
+  const step = (r: Rec, ...more: string[]): string => [r['session_id'], r['turn'], ...more.map(k => r[k])].map(String).join(':');
+  const routedSteps = new Set(router('prepared').filter(r => r['routed'] === true && r['scope'] === 'root' && !str(r['agent_id'])).map(r => step(r, 'index')));
+  const decisions = new Map(router('root').filter(r => str(sub(r, 'patch')['model'])).map(r => [step(r), r]));
   const sessions = new Map<string, Rec[]>();
   for (const r of router('root_result')) if (isRecord(r['usage'])) group(sessions, String(r['session_id']), r);
-  const anyOpus = router('root_result').map(r => str(r['observed'])).find(m => familyOf(m) === 'opus') ?? null;
   const net = (ttl: 'write5m' | 'write1h') => {
     const reach = ttl === 'write5m' ? 5 * 60_000 : 60 * 60_000;
     let spend = 0, saved = 0, rewrite = 0, switched = 0, switches = 0;
     for (const rows of sessions.values()) {
-      let prev: string | null = null, opus = anyOpus, prevAt = NaN;
+      // `back` is the baseline family the previous request switched away from, while that request was a switch.
+      let prev: string | null = null, back: string | null = null, prevAt = NaN;
       for (const r of rows) {
         const warm = at(r) - prevAt <= reach;
         prevAt = at(r);
@@ -140,13 +146,19 @@ export const activityChecks = (input: ActivityInput): ActivityCheck[] => {
         const t = { input: num(u['input']) ?? 0, read: num(u['cache_read']) ?? 0, write: num(u['cache_creation']) ?? 0, output: num(u['output']) ?? 0 };
         const price = (m: string | null, v: typeof t) => { const p = m ? providerPrice('claude', m, v.input + v.read + v.write) : null, w = p?.write ?? p?.[ttl]; return p && w !== undefined ? { p, w, usd: (v.input * p.input + v.read * p.read + v.write * w + v.output * p.output) / 1e6 } : null; };
         const actual = family === 'opus' || family === 'sonnet' || family === 'haiku' ? price(model, t) : null;
-        if (!actual) { prev = null; continue; }
+        if (!actual) { prev = back = null; continue; }
         spend += actual.usd;
-        if (family === 'opus') { if (prev && prev !== 'opus' && warm) rewrite += Math.max(0, t.write - NEW_CONTENT) * (actual.w - actual.p.read) / 1e6; opus = model; }
-        else {
+        const decision = routedSteps.has(step(r, 'index')) ? decisions.get(step(r)) ?? {} : {}, target = str(sub(decision, 'patch')['model']);
+        const applied = target && model && sameModel(target, str(r['requested']) ?? '') && sameModel(target, str(sub(r, 'applied')['model']) ?? '') && sameModel(target, model);
+        const from = applied ? str(sub(decision, 'from')['model']) : null, fromFamily = familyOf(from);
+        if (fromFamily && fromFamily !== family) {
           switched++; if (prev !== family) switches++;
-          const counter = price(opus, prev === 'opus' && warm ? { ...t, read: t.read + Math.max(0, t.write - NEW_CONTENT), write: Math.min(t.write, NEW_CONTENT) } : t);
+          const counter = price(from, prev === fromFamily && warm ? { ...t, read: t.read + Math.max(0, t.write - NEW_CONTENT), write: Math.min(t.write, NEW_CONTENT) } : t);
           if (counter) saved += counter.usd - actual.usd;
+          back = fromFamily;
+        } else {
+          if (back === family && warm) rewrite += Math.max(0, t.write - NEW_CONTENT) * (actual.w - actual.p.read) / 1e6;
+          back = null;
         }
         prev = family;
       }
@@ -155,7 +167,7 @@ export const activityChecks = (input: ActivityInput): ActivityCheck[] => {
   };
   const short5 = net('write5m'), long1 = net('write1h');
   say(!short5.switched ? sessions.size ? 'ok' : 'info' : short5.net < 0 && long1.net < 0 ? 'fail' : short5.net < 0 !== long1.net < 0 ? 'warn' : 'ok',
-    !short5.switched ? `router_cost: no root model switch among ${router('root_result').length} root requests` : `router_cost: ${short5.switched} non-Opus root requests over ${short5.switches} switches; net ${usd(short5.net)} at 5m / ${usd(long1.net)} at 1h write prices (${rate(short5.net, short5.spend)} / ${rate(long1.net, long1.spend)} of root spend $${short5.spend.toFixed(2)} / $${long1.spend.toFixed(2)})`,
+    !short5.switched ? `router_cost: no routed root model switch among ${router('root_result').length} root requests` : `router_cost: ${short5.switched} routed root requests off their turn's baseline model over ${short5.switches} switches; net ${usd(short5.net)} at 5m / ${usd(long1.net)} at 1h write prices (${rate(short5.net, short5.spend)} / ${rate(long1.net, long1.spend)} of root spend $${short5.spend.toFixed(2)} / $${long1.spend.toFixed(2)})`,
     short5.net < 0 && long1.net < 0 ? 'Root model switching cost more than it saved at either cache TTL; report it with this line before relying on root model routing.' : 'The sign depends on the cache TTL the host used; the records do not say which.');
 
   const routedSpawns = new Set(rs.filter(r => r['phase'] === 'mod_router' && String(r['event']).startsWith('spawn')).map(r => str(r['tool_use_id'])).filter(Boolean));
@@ -169,30 +181,34 @@ export const activityChecks = (input: ActivityInput): ActivityCheck[] => {
   say(sent.length >= 50 && moved / sent.length < 0.05 ? 'warn' : sent.length ? 'ok' : 'info', `child_effect: ${sent.length} child steps sent to Jev, ${moved} changed the effort (${rate(moved, sent.length)})`,
     'Each child step pays a Jev call and its latency for almost no change; review per-step child routing.');
 
-  const compacts = phase('mod_compact'), started: Rec[] = [], missing: Rec[] = [];
+  // Each compaction is its own session's records from its pre up to that session's next pre; a restore or post elsewhere is not its.
+  const compacts = phase('mod_compact'), started: Rec[] = [], missing: Rec[] = [], unrestored: Rec[] = [];
   for (const [i, r] of compacts.entries()) {
     if (r['stage'] !== 'pre' || 'deferred' in r) continue;
     started.push(r);
-    const next = compacts.slice(i + 1).find(n => n['session_id'] === r['session_id'] && (n['stage'] === 'post' || n['stage'] === 'pre' && !('deferred' in n)));
-    if (next?.['stage'] !== 'post' && (next || input.now - at(r) > COMPACT_GRACE_MS)) missing.push(r);
+    const later = compacts.slice(i + 1).filter(n => n['session_id'] === r['session_id']), end = later.findIndex(n => n['stage'] === 'pre' && !('deferred' in n));
+    const own = end < 0 ? later : later.slice(0, end), posted = own.some(n => n['stage'] === 'post'), settled = posted || end >= 0 || input.now - at(r) > COMPACT_GRACE_MS;
+    if (settled && !posted) missing.push(r);
+    if (settled && r['mode'] !== 'shadow' && !own.some(n => n['stage'] === 'restore')) unrestored.push(r);
   }
   const restores = compacts.filter(r => r['stage'] === 'restore').length, posted = compacts.filter(r => r['stage'] === 'post').length;
   const skipped = input.keyPresent ? started.filter(r => r['selection'] === 'disabled').length : 0, invalid = compacts.filter(r => r['stage'] === 'jev' && r['selection'] === 'invalid_answers').length;
-  const unrestored = started.filter(r => r['mode'] !== 'shadow' && input.now - at(r) > COMPACT_GRACE_MS).length - restores;
-  say(missing.length ? 'fail' : skipped || invalid || unrestored > 0 ? 'warn' : started.length ? 'ok' : 'info',
-    `compact: ${started.length} pre / ${restores} restore / ${posted} post${missing.length ? `; ${missing.length} pre without post (sessions ${[...new Set(missing.map(r => short(r['session_id'])))].join(', ')})` : ''}; Jev recorded disabled with a key present ${skipped}; invalid_answers ${invalid}`,
+  const sessionsOf = (rows: Rec[]): string => [...new Set(rows.map(r => short(r['session_id'])))].join(', ');
+  say(missing.length ? 'fail' : skipped || invalid || unrestored.length ? 'warn' : started.length ? 'ok' : 'info',
+    `compact: ${started.length} pre / ${restores} restore / ${posted} post${missing.length ? `; ${missing.length} pre without post (sessions ${sessionsOf(missing)})` : ''}${unrestored.length ? `; ${unrestored.length} without restore (sessions ${sessionsOf(unrestored)})` : ''}; Jev recorded disabled with a key present ${skipped}; invalid_answers ${invalid}`,
     missing.length ? 'A compaction started but its PostCompact never recorded; check /hooks for the PostCompact entry and the host log.' : 'Some compactions ran without a restore or Jev selection; check the key and the classic hooks in /hooks.');
 
-  // A session reads its provider when it starts, so one started before the current connection was written (including the
-  // launch that wrote it) cannot use it; judge only sessions started after.
-  const owner = input.codexOwner, since = owner?.since ?? 0, codexEvent = (event: string) => byHost.codex.filter(r => r['phase'] === 'codex_event' && r['event'] === event);
-  const startedSince = new Set(codexEvent('SessionStart').filter(r => at(r) >= since).map(r => r['session_id']));
-  const prompted = new Set(codexEvent('UserPromptSubmit').map(r => r['session_id']).filter(id => startedSince.has(id)));
+  // A session reads its provider when it starts, so one started before the current connection was written keeps the old
+  // provider until restarted. That explains a silent session; it does not make it routed, so every prompted session counts.
+  const owner = input.codexOwner, isEvent = (r: Rec, event: string): boolean => r['phase'] === 'codex_event' && r['event'] === event;
+  const prompted = new Set(byHost.codex.filter(r => isEvent(r, 'UserPromptSubmit')).map(r => r['session_id']));
   const routedSessions = new Set(byHost.codex.filter(r => String(r['phase']).startsWith('codex_router_') || r['phase'] === 'codex_route_applied').map(r => r['session_id']));
-  const silent = [...prompted].filter(id => !routedSessions.has(id)).length, broken = !!owner && (!owner.rootExists || !owner.pidAlive);
-  say(broken || silent ? 'fail' : owner || prompted.size ? 'ok' : 'info',
-    `codex_connection: ${owner ? `owner root ${owner.root} ${owner.rootExists ? 'present' : 'missing'}, pid ${owner.pidAlive ? 'alive' : 'not running'}, written ${new Date(owner.since).toISOString()}` : 'no connection owner record'}; ${prompted.size} Codex sessions started and prompted since, ${silent} with no codex_router record`,
-    'Codex root routing is off without notice; start a fresh Codex session so the installed plugin reconnects, then rerun doctor.');
+  const silent = [...prompted].filter(id => !routedSessions.has(id)), broken = !!owner && (!owner.rootExists || !owner.pidAlive);
+  // Starts are looked up past the 24 h window: a long-lived session started long before it.
+  const stale = owner ? silent.filter(id => (input.traces.codex?.records ?? []).some(r => isEvent(r, 'SessionStart') && r['session_id'] === id && at(r) < owner.since)).length : 0;
+  say(broken || silent.length ? 'fail' : owner || prompted.size ? 'ok' : 'info',
+    `codex_connection: ${owner ? `owner root ${owner.root} ${owner.rootExists ? 'present' : 'missing'}, pid ${owner.pidAlive ? 'alive' : 'not running'}, written ${new Date(owner.since).toISOString()}` : 'no connection owner record'}; ${prompted.size} Codex sessions prompted in the last 24 h, ${silent.length} with no codex_router record${stale ? ` (${stale} started before the connection was written)` : ''}`,
+    stale ? 'Codex root routing is off without notice: sessions started before the current connection keep the old provider; restart them (exit and resume), then rerun doctor.' : 'Codex root routing is off without notice; start a fresh Codex session so the installed plugin reconnects, then rerun doctor.');
 
   const failures = phase('failure');
   say(failures.length ? 'warn' : 'ok', `failures: ${failures.length} failure records${failures.length ? ` (${tally(failures.map(r => str(r['failure_category']) ?? 'uncategorized'))})` : ''}`,
