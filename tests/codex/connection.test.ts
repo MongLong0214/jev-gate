@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -23,7 +23,7 @@ const fixture = (config: Obj = { model: 'gpt-6.1-sol', model_reasoning_effort: '
     }
     return {};
   } } as unknown as CodexRpc;
-  const connection = (): Connection => ({ version: 1, pid: process.pid, port: 12345, token: 'a'.repeat(64), marker: 'owned compact prompt', root: home, original: {}, installed: {} });
+  const connection = (): Connection => ({ version: 1, pid: process.pid, port: 12345, token: 'a'.repeat(64), root: home, original: {}, installed: {} });
   return { env, config, rpc, connection, requests, home };
 };
 describe('automatic connection ownership and recovery', () => {
@@ -51,10 +51,30 @@ describe('automatic connection ownership and recovery', () => {
   });
   it('refuses reconnecting over owner edits but can restore remaining owned keys', async () => {
     const f = fixture(); await installConnection(f.rpc, f.connection(), f.env);
-    f.config['compact_prompt'] = 'owner edit';
+    f.config['model_provider'] = 'openai';
     await expect(installConnection(f.rpc, f.connection(), f.env)).rejects.toThrow();
     await restoreConnection(f.rpc, f.env);
-    expect(f.config['model_provider']).toBeUndefined(); expect(f.config['compact_prompt']).toBe('owner edit');
+    expect(f.config['model_provider']).toBe('openai'); expect((f.config['model_providers'] as Obj)['jev-gate-native']).toBeUndefined();
+  });
+  // #292: versions with Codex Compact wrote this exact compact_prompt and recorded the owner's value before it.
+  const legacy = `[jev-gate compact ${'ab'.repeat(24)}] Produce a factual compaction summary of the preceding conversation.`;
+  it('returns an earlier version\'s compact_prompt marker to the owner\'s value from before it', async () => {
+    const f = fixture({ compact_prompt: 'owner prompt' }); await installConnection(f.rpc, f.connection(), f.env);
+    const owner = join(f.home, 'jev-gate/connection/owner.json'); const state = JSON.parse(readFileSync(owner, 'utf8')) as Connection;
+    writeFileSync(owner, JSON.stringify({ ...state, marker: legacy, original: { ...state.original, compact_prompt: 'owner prompt' }, installed: { ...state.installed, compact_prompt: legacy } }));
+    f.config['compact_prompt'] = legacy;
+    await installConnection(f.rpc, f.connection(), f.env);
+    expect(f.config).toMatchObject({ compact_prompt: 'owner prompt', model_provider: 'jev-gate-native' });
+    await restoreConnection(f.rpc, f.env);
+    expect(f.config['compact_prompt']).toBe('owner prompt'); expect(f.config['model_provider']).toBeUndefined();
+  });
+  it('removes a leftover marker without recovery state and never touches a compact_prompt the owner wrote', async () => {
+    const f = fixture({ compact_prompt: legacy }); await installConnection(f.rpc, f.connection(), f.env);
+    expect(f.config['compact_prompt']).toBeUndefined();
+    const owned = `${legacy} Keep file paths.`;
+    const g = fixture({ compact_prompt: owned }); await installConnection(g.rpc, g.connection(), g.env);
+    expect(g.config['compact_prompt']).toBe(owned);
+    expect(g.requests.flatMap(r => r['edits'] as Obj[]).some(e => e['keyPath'] === 'compact_prompt')).toBe(false);
   });
   it('refuses symlinked connection state directories before editing native configuration', async () => {
     const f = fixture(); const outside = mkdtempSync(join(tmpdir(), 'jev-connect-outside-')); temps.push(outside);

@@ -194,7 +194,6 @@ const callDetails = (r: Rec): string[] => {
 
 const traceFeature = (phase: string): FeatureId | null => {
   if (phase === 'codex_model_request' || phase === 'codex_model_failure' || phase === 'codex_router_intent' || phase === 'codex_router_result' || phase === 'codex_router_skipped' || phase === 'codex_route_applied' || phase === 'codex_router_response') return 'router';
-  if (phase === 'codex_compact') return 'compact';
   if (phase.startsWith('admission_')) return 'admission';
   if (phase.startsWith('pre_')) return 'allocation';
   if (phase.startsWith('interpretation_') || phase === 'plan') return 'planning';
@@ -205,7 +204,7 @@ const traceFeature = (phase: string): FeatureId | null => {
 };
 const traceTitle = (phase: string, r: Rec): string => ({
   codex_model_request: '모델 · 응답 대기', codex_model_failure: '모델 · 요청 실패',
-  codex_router_intent: 'Router · Jev 요청', codex_router_result: 'Router · 턴 설정 결정', codex_router_skipped: 'Router · Jev 호출 생략', codex_router_response: 'Router · Codex 응답 관측', codex_route_applied: 'Router · Codex 요청 전송', codex_compact: 'Compact · Codex digest',
+  codex_router_intent: 'Router · Jev 요청', codex_router_result: 'Router · 턴 설정 결정', codex_router_skipped: 'Router · Jev 호출 생략', codex_router_response: 'Router · Codex 응답 관측', codex_route_applied: 'Router · Codex 요청 전송',
   admission_intent: 'Gate A · Jev 요청', admission_result: 'Gate A · 실행 형태',
   pre_intent: 'Gate B · Jev 요청', pre_result: 'Gate B · 등급 결정',
   interpretation_intent: '계획 해석 · Jev 요청', interpretation_result: '계획 해석 · 자문',
@@ -309,11 +308,9 @@ const traceStep = (r: Rec, resultIds: Set<string>, intents: Map<string, string>,
   const isIntent = phase.endsWith('_intent') || phase === 'evidence_start' || phase === 'worktree_start';
   const expected = phase.endsWith('_start') ? phase.replace(/_start$/, '_result') : phase.replace(/_intent$/, '_result');
   const hasResult = requestId !== null && resultIds.has(`${requestId}:${expected}`);
-  const compactWaiting = phase === 'codex_compact' && r['stage'] === 'selected' && !resultIds.has(`codex_compact:${token(r['run_id'])}`);
   const http = field(r, 'http');
   const failedAssessment = r['attempted'] === true && token(http?.['code']) !== null && http?.['code'] !== 'ok';
-  let state: StepState = compactWaiting ? young(live, at) ? 'active' : 'unconfirmed'
-    : isIntent ? hasResult ? 'done' : young(live, at) ? 'active' : 'unconfirmed'
+  let state: StepState = isIntent ? hasResult ? 'done' : young(live, at) ? 'active' : 'unconfirmed'
     : r['known_not_sent'] === true || r['attempted'] === false ? 'skipped'
       : r['is_error'] === true || r['ok'] === false || failedAssessment || phase === 'failure' ? 'error' : 'done';
   const details: string[] = [];
@@ -376,19 +373,6 @@ const traceStep = (r: Rec, resultIds: Set<string>, intents: Map<string, string>,
   } else if (phase === 'codex_router_response') {
     lane = 'host'; summary = text('Codex 응답 관측', token(r['observed_model']) ?? '모델 미확인', r['observed_effort'] === 'unknown' ? 'effort 미확인' : token(r['observed_effort']));
     details.push('응답이 보고한 값만 표시');
-  } else if (phase === 'codex_compact') {
-    lane = r['applied'] === true ? 'host' : r['jev_sent'] === true ? 'jev' : 'local';
-    summary = r['stage'] === 'deferred' ? text('호스트 압축으로 넘김', compactSelectionReason(r['fallback'])) : r['applied'] === true ? '추출형 digest 설치 확인 · 요약 모델 호출 대체' : '추출형 digest 생성 · 호스트 설치 대기';
-    if (r['stage'] === 'deferred') state = 'skipped';
-    if ('jev_sent' in r) details.push(text(r['jev_sent'] === true ? 'Jev 작업 의존 근거 선택' : r['jev_sent'] === false ? 'Jev 전송 없음' : 'Jev 전송 여부 미확인', compactSelectionReason(r['selection']), `후보 ${n(number(r['candidates']))}/${n(number(r['available']))}`, `필수 근거 ${n(number(r['dependencies']))}`));
-    if (r['jev_sent'] === true) details.push(compactUsage(r));
-    details.push(text(`압축 전 ${n(number(r['before_bytes']))}B`, `digest ${n(number(r['after_bytes']))}B`, '바이트 크기 · 측정된 토큰 절감 아님'));
-    if (r['stage'] === 'native_submitted') {
-      lane = 'host'; state = 'unconfirmed';
-      summary = text('호스트 요약 모델에 압축 요청 전송', token(r['submitted_model']), token(r['submitted_effort']));
-      details.length = 0;
-      details.push('Compact 전용 요청 · 일반 실행 Router 선택과 비교하지 않음', '요약 응답·호스트 설치 미관측');
-    }
   } else if (phase === 'evidence_result') {
     lane = 'local';
     summary = text(token(r['status']), token(r['backend']), `근거 ${n(number(r['items']))}건`, `Jev 호출 ${n(number(r['remote_calls']))}건`, `캐시 ${n(number(r['cache_hits']))}건`);
@@ -462,7 +446,7 @@ const traceStep = (r: Rec, resultIds: Set<string>, intents: Map<string, string>,
     details.push(text(`요청 모델 ${token(r['requested_model']) ?? '미기록'}`, token(r['routed_model']) && `Router 변경 ${token(r['routed_model'])}`, `실행 모델 ${token(r['resolved_model']) ?? '미관측'}`));
   }
   const measured = number(http?.['duration_ms']);
-  const duration = measured !== null && measured >= 0 ? measured : phase === 'evidence_result' ? number(r['duration_ms']) : phase === 'codex_compact' && lane === 'jev' ? number(r['jev_ms']) : null;
+  const duration = measured !== null && measured >= 0 ? measured : phase === 'evidence_result' ? number(r['duration_ms']) : null;
   const sentAt = requestId && phase.endsWith('_result') ? intents.get(`${requestId}:${phase.replace(/_result$/, '_intent')}`) : undefined;
   const elapsed = sentAt ? Date.parse(at) - Date.parse(sentAt) : null;
   const model = phase === 'codex_router_response' ? modelObservation(r['selected_model'], r['observed_model'], r['selected_effort'], r['observed_effort'], undefined, 'submitted_effort' in r ? { value: r['submitted_effort'], source: 'provider_request' } : undefined)
@@ -522,7 +506,7 @@ const traceStep = (r: Rec, resultIds: Set<string>, intents: Map<string, string>,
   const cause = state !== 'error' ? null : phase === 'post' ? refusal?.[0] ?? null : phase === 'evidence_result' ? list(r['reason_codes'])[0] ?? null : token(http?.['code']) ?? token(r['reason']);
   const decided = field(r, 'decision'), selection = field(r, 'selection'), answered = judgements(r)?.find(j => j.confidence !== null);
   const receipt = lane === 'jev' && duration !== null && duration >= 0 && !isIntent ? jevReceipt(number(http?.['status']), token(http?.['code']), token(field(r, 'jev')?.['model']), field(field(r, 'jev'), 'usage') ?? field(r, 'usage'),
-    phase === 'codex_router_result' ? text(token(r['selected_model']), token(r['selected_effort'])) || null : phase === 'codex_compact' ? number(r['dependencies']) === null ? null : `${n(number(r['dependencies']))} / ${n(number(r['candidates']))}` : token(decided?.['shape']) ?? token(field(r, 'allocation')?.['selected_model']) ?? token(decided?.['tier']) ?? token(decided?.['action']),
+    phase === 'codex_router_result' ? text(token(r['selected_model']), token(r['selected_effort'])) || null : token(decided?.['shape']) ?? token(field(r, 'allocation')?.['selected_model']) ?? token(decided?.['tier']) ?? token(decided?.['action']),
     routing?.probability ?? answered?.confidence ?? null, routing?.threshold ?? null, token(selection?.['direction'])) : undefined;
   return { id: id(ownId), at, feature, state, lane, ...(token(r['session_id']) ? { sessionId: token(r['session_id'])! } : {}), ...(token(r['agent_id']) ? { agentId: token(r['agent_id'])! } : {}), ...(token(r['tool_use_id']) ? { callId: token(r['tool_use_id'])! } : {}), title: traceTitle(phase, r), summary, details: details.filter(Boolean), ...(routing ? { routing } : {}), ...(model ? { model } : {}),
     ...(issue ? { issue } : {}), ...(cause ? { cause } : {}),
@@ -693,7 +677,6 @@ const gateGroup = (r: Rec): string => {
   const phase = token(r['phase']) ?? '';
   if (phase.startsWith('evidence_')) return `evidence:${token(r['parent_request_id']) ?? token(r['request_id']) ?? token(r['invocation_id']) ?? 'unknown'}`;
   if (phase.startsWith('codex_router_') || phase.startsWith('codex_model_') || phase === 'codex_route_applied') return `router:${token(r['session_id']) ?? 'unknown'}:${token(r['prompt_id']) ?? 'unknown'}`;
-  if (phase === 'codex_compact') return `compact:${token(r['session_id']) ?? 'unknown'}:${token(r['run_id']) ?? 'unknown'}`;
   return `gate:${token(r['session_id']) ?? 'unknown'}:${token(r['execution_prompt_id']) ?? token(r['prompt_id']) ?? 'unknown'}`;
 };
 const modGroup = (row: ModRecord): string => row.component === 'router'
@@ -797,7 +780,6 @@ const buildPart = (records: Rec[], mods: ModRecord[], now: Date, context?: PartC
   mods = routedModRecords(mods, records, context, origins);
   const resultIds = new Set(records.flatMap((r) => token(r['request_id']) && token(r['phase']) ? [`${token(r['request_id'])}:${token(r['phase'])}`] : []));
   for (const r of records) if (r['phase'] === 'background_terminal') resultIds.add(`background:${token(r['session_id'])}:${token(r['execution_prompt_id']) ?? token(r['prompt_id'])}:${token(r['tool_use_id'])}`);
-  for (const r of records) if (r['phase'] === 'codex_compact' && r['applied'] === true && token(r['run_id'])) resultIds.add(`codex_compact:${token(r['run_id'])}`);
   const intents = new Map(records.flatMap((r): Array<[string, string]> => {
     const phase = token(r['phase']); if (!phase?.endsWith('_intent')) return [];
     const requestId = token(r['request_id']); const at = iso(r['written_at']);
@@ -869,7 +851,6 @@ const buildPart = (records: Rec[], mods: ModRecord[], now: Date, context?: PartC
   const requests = new Set<string>();
   for (const r of records) {
     const phase = token(r['phase']) ?? '';
-    if (phase === 'codex_compact' && r['jev_sent'] === true) { requests.add(`compact:codex:${token(r['session_id'])}:${token(r['run_id'])}`); continue; }
     if (!['admission_intent', 'pre_intent', 'interpretation_intent', 'evidence_jev_intent', 'codex_router_intent'].includes(phase)
       && !(r['attempted'] === true && ['admission_result', 'pre_result', 'interpretation_result', 'evidence_jev_result', 'codex_router_result'].includes(phase))) continue;
     const kind = phase.replace(/_(intent|result)$/, '');
@@ -913,7 +894,7 @@ const relations = (item: Item, mod: boolean): string[] => {
     const run = codexRunKey(r);
     if (run) keys.push(`cgroup:${run}`);
     if (run && !run.includes(':agent:') && !run.endsWith(':session')) keys.push(`exec:execution:${run}`);
-    for (const end of ['PostToolUse', 'SubagentStop', 'PostCompact', 'Stop', 'Interrupt']) { const span = codexSpanKey(r, end); if (span) keys.push(`span:${span}`); }
+    for (const end of ['PostToolUse', 'SubagentStop', 'Stop', 'Interrupt']) { const span = codexSpanKey(r, end); if (span) keys.push(`span:${span}`); }
   }
   return keys;
 };

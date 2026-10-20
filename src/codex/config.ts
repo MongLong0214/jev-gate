@@ -10,7 +10,6 @@ import { codexSuccessor, generalCodexModel } from './catalog.js';
 export interface CodexPolicyConfig {
   gate: ConfigV5;
   router: { enabled: boolean; model: boolean; effort: boolean; allowAstra: boolean; minUpgradeConfidence: number; minDowngradeConfidence: number; timeoutMs: number };
-  compact: { enabled: boolean; manual: boolean; budgetChars: number; jevEnabled?: boolean; jevTimeoutMs?: number };
 }
 export const catalogTierModels = (baseline: string, catalog: readonly CodexModel[]): Record<Tier, string> => {
   // Use this account's model descriptions, never invented IDs or hidden specialist/review models.
@@ -22,12 +21,13 @@ export const catalogTierModels = (baseline: string, catalog: readonly CodexModel
   return { fast: pick(/fast|efficient|affordable|easier|lightweight/i, standard), standard, deep,
     frontier: pick(/frontier|most demanding|most intelligent/i, deep) };
 };
-/** `gateOffOnInvalid`: a Gate value that does not validate turns only the Gate off, so Router and Compact keep their own settings. */
+/** `gateOffOnInvalid`: a Gate value that does not validate turns only the Gate off, so the Router keeps its own settings. */
 export const loadCodexPolicy = (env: Env, catalog: readonly CodexModel[] = [], gateOffOnInvalid = false): CodexPolicyConfig => {
   let raw: Record<string, unknown> = {};
   const path = env['JEV_CODEX_CONFIG'] ?? join(env['XDG_CONFIG_HOME'] ?? join(env['HOME'] || homedir(), '.config'), 'jev-gate', 'codex.json');
   try { raw = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>; }
   catch (e) { if (env['JEV_CODEX_CONFIG'] || (e as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('invalid Codex policy config'); }
+  // A `compact` section from versions with Codex Compact is accepted and never read.
   if (!raw || typeof raw !== 'object' || Array.isArray(raw) || Object.keys(raw).some(k => !['gate', 'router', 'compact'].includes(k))) throw new Error('invalid Codex policy config');
   const gateRaw = raw['gate'] ?? {};
   if (!gateRaw || typeof gateRaw !== 'object' || Array.isArray(gateRaw)) throw new Error('invalid Codex gate config');
@@ -47,10 +47,8 @@ export const loadCodexPolicy = (env: Env, catalog: readonly CodexModel[] = [], g
   };
   const router = section('router', { enabled: true, model: true, effort: true, allowAstra: false, minUpgradeConfidence: 0.8, minDowngradeConfidence: 0.6, timeoutMs: 800 }) as unknown as CodexPolicyConfig['router'];
   router.allowAstra = frontierRoutingEnabled(env, router.allowAstra);
-  const compact = section('compact', { enabled: true, manual: true, budgetChars: 40000, jevEnabled: true, jevTimeoutMs: 1000 }) as unknown as CodexPolicyConfig['compact'];
-  if (![router.minUpgradeConfidence, router.minDowngradeConfidence].every(n => Number.isFinite(n) && n > .5 && n <= 1) || !Number.isInteger(router.timeoutMs) || router.timeoutMs < 50 || router.timeoutMs > 3500 || !Number.isInteger(compact.budgetChars) || compact.budgetChars < 8000 || compact.budgetChars > 400000) throw new Error('invalid Codex policy bounds');
-  if (!Number.isInteger(compact.jevTimeoutMs) || compact.jevTimeoutMs! < 50 || compact.jevTimeoutMs! > 3500) throw new Error('invalid Codex compact deadline');
-  return { gate: checked.config, router, compact };
+  if (![router.minUpgradeConfidence, router.minDowngradeConfidence].every(n => Number.isFinite(n) && n > .5 && n <= 1) || !Number.isInteger(router.timeoutMs) || router.timeoutMs < 50 || router.timeoutMs > 3500) throw new Error('invalid Codex policy bounds');
+  return { gate: checked.config, router };
 };
 
 /** A Gate value that does not validate turns off only the Gate. Any other runtime failure preserves the owner's root and disables every new policy dispatch. Doctor still reports the loader error. */
@@ -60,6 +58,6 @@ export const runtimeCodexPolicy = (env: Env, catalog: readonly CodexModel[] = []
     const model = env['JEV_CODEX_MODEL'] ?? 'native-session-model';
     const checked = validateConfig({ version: 5, mode: 'off', models: { fast: model, standard: model, deep: model, frontier: model } });
     if (!checked.ok) throw new Error('native baseline unavailable');
-    return { gate: checked.config, router: { enabled: false, model: false, effort: false, allowAstra: false, minUpgradeConfidence: .8, minDowngradeConfidence: .6, timeoutMs: 800 }, compact: { enabled: false, manual: false, budgetChars: 40000 } };
+    return { gate: checked.config, router: { enabled: false, model: false, effort: false, allowAstra: false, minUpgradeConfidence: .8, minDowngradeConfidence: .6, timeoutMs: 800 } };
   }
 };

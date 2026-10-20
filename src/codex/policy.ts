@@ -1,4 +1,3 @@
-import { resolveApiKey } from '../credentials.js';
 import { randomUUID, createHash } from 'node:crypto';
 import { join, isAbsolute, resolve } from 'node:path';
 import { mkdirSync, realpathSync } from 'node:fs';
@@ -47,7 +46,7 @@ interface Session {
   commands: Map<string, string>;
   requestModel?: string; requestEffort?: string;
   requestKind?: 'root_response' | 'child_response';
-  compactAllowed?: boolean; eligible?: boolean; terminal?: boolean;
+  eligible?: boolean; terminal?: boolean;
   role?: string; parent?: string; done?: (turn: Obj) => void; route?: PairPatch; routePending?: Promise<void>; routeDeadline?: number; routeConfig?: string;
   previousReply?: string; completedReply?: string; turnReply?: string; lastSubmitted?: CodexSubmission;
   starting?: { prompt: string; controller: AbortController };
@@ -57,7 +56,6 @@ interface Session {
   requests?: string[];
   recentRequests?: string[];
   dispatch?: WorkerDispatch;
-  lastCompactSummary?: string;
   cache?: RoutingCache & { at: number };
   modelCache?: ModelCache;
   stepRoutes?: Map<string, { index: number; model: string; effort: string | null; patch: PairPatch; config?: string; catalogEpoch?: number; settingsEpoch?: number; pending?: Promise<void> }>;
@@ -93,7 +91,6 @@ export class CodexPolicy {
   private trace: TraceWriter | undefined;
   private env: Env;
   private hooked = new Set<string>();
-  private compactPending = new Map<string, { summary: string; run: string; before: number; after: number }>();
   private backgroundResults = new Map<string, { parent: string; output: string }>();
   private settlingOrphans = new Set<string>();
   /** #239: the app-server process that runs this policy's workers, recorded so a later process can tell they ended with it. */
@@ -203,7 +200,7 @@ export class CodexPolicy {
     }
     if (event === 'Interrupt' || event === 'SessionEnd') {
       session.controller?.abort(); await this.interruptChildren(session, event === 'SessionEnd');
-      if (event === 'SessionEnd') { this.sessions.delete(id); this.hooked.delete(id); this.compactPending.delete(id); }
+      if (event === 'SessionEnd') { this.sessions.delete(id); this.hooked.delete(id); }
       return {};
     }
     const result = await this.nativeHook(input, signal);
@@ -552,19 +549,8 @@ export class CodexPolicy {
     await this.retrySettlements();
     if (!session.role) await this.settleOrphans(session);
     if (!session.role && event === 'PreToolUse' && this.writeConflict(String(input['cwd'] ?? session.settings['cwd']), String(input['tool_name']), obj(input['tool_input']) ?? {})) return deny('A managed Codex worker in this write scope has not completed terminal settlement. Read/status commands (git status/diff/log/show, rg, grep, ls, cat, head, tail, wc, find, ps, gh issue/pr view/list) and writes whose every target lies outside its scope remain available. Hooks do not report exec workdir, so start a shell command elsewhere with `cd <absolute dir> &&` and name its paths without variables.');
-    if (event === 'PreCompact') { session.compactAllowed = session.policy.compact.enabled && (input['trigger'] === 'auto' || input['trigger'] === 'manual' && session.policy.compact.manual); return {}; }
     if (event === 'PreToolUse' && input['tool_name'] === 'Bash' && typeof input['tool_use_id'] === 'string' && typeof obj(input['tool_input'])?.['command'] === 'string') {
       session.commands.set(input['tool_use_id'], String(obj(input['tool_input'])!['command']));
-    }
-    if (event === 'PostCompact') {
-      const compact = this.compactPending.get(session.id);
-      if (compact) {
-        this.compactPending.delete(session.id);
-        session.lastCompactSummary = compact.summary;
-        session.items = [{ type: 'jevCompact', id: compact.run, text: compact.summary }]; session.complete = true; session.epoch = compact.run;
-        this.trace?.write('codex_compact', { host: 'codex', session_id: session.id, run_id: compact.run, stage: 'installed', applied: true, before_bytes: compact.before, after_bytes: compact.after, summarizer_request: false });
-      }
-      return {};
     }
     if (this.env['JEV_CODEX_ENABLED'] === '0') return {};
     if (session.role) {
@@ -620,7 +606,7 @@ export class CodexPolicy {
     const hooks = Array.isArray(listed['data']) ? listed['data'].flatMap(e => Array.isArray(obj(e)?.['hooks']) ? obj(e)!['hooks'] as Obj[] : []) : [];
     const jev = hooks.filter(h => h['source'] === 'plugin' && String(h['pluginId']).startsWith('jev-gate@') && h['enabled'] === true && obj(inherited[String(h['key'])])?.['enabled'] !== false);
     if (new Set(jev.map(h => h['pluginId'])).size > 1) throw new Error('Enable only one Jev Gate installation in Codex /plugins before connecting.');
-    for (const event of ['sessionStart', 'userPromptSubmit', 'preToolUse', 'postToolUse', 'preCompact', 'postCompact', 'stop']) {
+    for (const event of ['sessionStart', 'userPromptSubmit', 'preToolUse', 'postToolUse', 'stop']) {
       if (jev.filter(h => h['eventName'] === event && (this.bypassHookTrust || ['trusted', 'managed'].includes(String(h['trustStatus'])))).length !== 1) {
         throw new Error('Trust and enable the installed Jev Gate hooks in native Codex /hooks, then restart this session.');
       }
@@ -887,7 +873,7 @@ export class CodexPolicy {
   }
   private async cleanupWorker(worker: Session): Promise<void> {
     // Observations remain accessible until receipt/state commit, above.
-    this.sessions.delete(worker.id); this.hooked.delete(worker.id); this.compactPending.delete(worker.id);
+    this.sessions.delete(worker.id); this.hooked.delete(worker.id);
     try { await this.rpc.request('thread/archive', { threadId: worker.id }, 1000); } catch { /* Files are preserved. */ }
   }
   private writeConflict(cwd: string, tool: string, input: Obj, deliverables?: string[]): boolean {
@@ -912,7 +898,6 @@ export class CodexPolicy {
       error_first_line: f.category, is_interrupt: false, duration_ms: Date.now() - d.startedAt, failure_category: f.category, failure_stage: stage, not_executed: false, release_unconfirmed: true });
     return d.unconfirmed = `${failureHead(f)}. Internal execution identity: ${worker.id}. ${FAILURE_ADVICE[f.category]} No completion or acceptance is claimed. Use jev_agent with action=status and agent_id=${worker.id} to collect its outcome without restarting execution.`;
   }
-  selectedCompact(session: string, summary: string, run: string, before: number, after: number): void { this.compactPending.set(session, { summary, run, before, after }); }
   hooksReady(session: string): boolean { return this.env['JEV_CODEX_ENABLED'] === '0' || this.hooked.has(session); }
   requestSession(metadata: unknown, affinity: unknown): string | null {
     if (typeof metadata === 'string') {
@@ -956,8 +941,5 @@ export class CodexPolicy {
       reason: 'request_applied', applied: request['model'] === selectedModel && (route.effortEdit?.kind === 'omit' ? effort === undefined : !route.effort || effort === selectedEffort || nativeUltra) });
     return submitted;
   }
-  compactKey(): string | undefined { return resolveApiKey(this.env); }
-  previousCompact(session: string): string | undefined { return this.sessions.get(session)?.lastCompactSummary; }
-  canCompact(session: string): boolean { return this.sessions.get(session)?.compactAllowed === true; }
   close(): void { for (const s of this.sessions.values()) { s.controller?.abort(); s.done?.({localClose:true}); } }
 }

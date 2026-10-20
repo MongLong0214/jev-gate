@@ -75,7 +75,7 @@ Jev Gate fixes the allocation, not the work. **Jev judges each turn; code applie
 
 1. **Gate** reads a new request and decides: answer directly, hand it to one background worker, or plan worker tasks with contracts and checks.
 2. **Router** picks the model and effort for the main turn and for each eligible agent, from the candidates your host actually supports. Your explicit pins always win.
-3. **Compact** replaces stale context with an extractive digest that keeps what the current task needs.
+3. **Compact** (Claude Code) replaces stale context with an extractive digest that keeps what the current task needs. Codex keeps its native compaction.
 4. **Evidence** answers code questions with verified source windows instead of bulk file reads.
 5. **The dashboard** records each judgment, request and observed result, live.
 
@@ -113,7 +113,7 @@ Both hosts share one private key and dashboard. Installing from source is for de
 | --- | --- | --- |
 | Gate | Chooses direct execution, one background worker, or a plan with worker tasks. Code checks contracts and passing checks. | Eligible admission and allocation judgments; optional plan interpretation |
 | Router | Selects model and effort from supported candidates for the root or eligible agents. Explicit pins are respected. | Root turns are assessed once; mapped Claude workers are assessed again at each inference after spawn |
-| Compact | Builds an extractive digest plus recent context. Jev prioritizes older successful results needed for the current task within the existing size budget. | One bounded candidate batch by default; timeout/invalid output keeps local selection |
+| Compact | Claude Code only. Builds an extractive digest plus recent context. Jev prioritizes older successful results needed for the current task within the existing size budget. | One bounded candidate batch by default; timeout/invalid output keeps local selection |
 | Evidence | Returns verified source windows, paths, lines, hashes, and a continuation cursor. Searches the whole worktree by narrowing to matching files first; credential-like windows are returned as references only. | Semantic candidates; exact symbols and read-back stay local |
 | Dashboard | Shows both hosts' recorded judgments, requests, and outcomes live. | Reads local metadata; makes no Jev requests |
 
@@ -190,7 +190,7 @@ Preferences live under `~/.config/jev-gate` (`$XDG_CONFIG_HOME` supported). No p
 
 Configure Claude options under `/plugin` → jev-gate → configure. Plugin options belong in **user settings**; project `pluginConfigs` are ignored by the host. Optional Codex settings are documented in the [Codex README](plugins/codex/README.md). You do not need either settings file for ordinary use.
 
-Compact's Jev selection defaults to on with a 1,000ms deadline. Claude options are `compactJevEnabled` and `compactJevTimeoutMs`; Codex uses `compact.jevEnabled` and `compact.jevTimeoutMs`. Disable Jev selection to keep local Compact, or disable Compact entirely. [Compact options and fallback rules](mods/compact/README.md).
+Compact's Jev selection defaults to on with a 1,000ms deadline. Its Claude options are `compactJevEnabled` and `compactJevTimeoutMs`. Disable Jev selection to keep local Compact, or disable Compact entirely. [Compact options and fallback rules](mods/compact/README.md).
 
 The key is stored in `~/.config/jev-gate/auth/credentials.json` (0700 directory/0600 file), shared by both hosts. Explicit environment/plugin keys take precedence. Saving validates format, not account validity or quota. TypeSafe billing is separate from Claude/Codex billing.
 

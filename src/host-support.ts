@@ -15,11 +15,11 @@ export const CODEX_CAPABILITIES: Record<FeatureId, HostCapability> = {
   workers: { mode: 'active', ko: '실제 Codex 워커를 실행하고 관측된 검사 결과와 계약을 대조해 수락합니다.', en: 'Runs native Codex workers and verifies observed checks against their contracts.' },
   guard: { mode: 'active', ko: '위임 중 루트 도구를 허용 목록으로 제한합니다. Codex 권한을 승인하거나 확장하지 않습니다.', en: 'Restricts root tools during delegation using the shared allowlist. Never grants or expands native permissions.' },
   router: { mode: 'active', ko: '계정의 실제 모델·effort 목록과 Jev 확률로 턴 설정을 선택합니다. 전송한 설정과 응답이 확인한 모델·effort를 구분합니다.', en: 'Selects turn settings using the live account catalog and Jev probabilities. Submitted settings and response-confirmed model or effort are distinct.' },
-  compact: { mode: 'active', ko: '자동 압축 시 추출형 digest를 Codex 자체 압축 절차로 설치합니다. 미디어·불명확한 문맥은 기본 압축을 사용합니다.', en: 'Installs an extractive digest through native automatic compaction. Media and opaque context use native compaction.' },
+  compact: { mode: 'unsupported', ko: 'Codex에서는 Jev Compact를 쓰지 않습니다. Codex 자체 압축이 그대로 동작합니다.', en: 'Jev Compact does not run on Codex. Native Codex compaction runs unchanged.' },
   evidence: { mode: 'active', ko: '동일한 Evidence MCP를 사용합니다. 로컬 검색과 Jev 판정, 페이지·캐시·근거 읽기를 지원합니다.', en: 'Uses the same Evidence MCP: local search, Jev judgments, pagination, cache and evidence reads.' },
 };
 export const CODEX_PLUGIN_CAPABILITIES: Record<FeatureId, HostCapability> = Object.fromEntries(Object.entries(CODEX_CAPABILITIES).map(([id, capability]) => [id,
-  id === 'evidence' ? capability : ['workers', 'compact'].includes(id)
+  ['evidence', 'compact'].includes(id) ? capability : id === 'workers'
     ? { mode: 'observe', ko: '호스트 이벤트를 관측합니다. 자동 연결 후 새 네이티브 세션의 실제 정책 적용 기록을 기다립니다.', en: 'Observes host events. After automatic connection, a fresh native session records actual policy application.' }
     : { mode: 'connect', ko: '플러그인이 일반 Codex를 자동 연결합니다. 실제 정책 요청 기록이 들어오면 적용 상태를 표시합니다.', en: 'The plugin connects ordinary Codex automatically. Actual policy request records establish application.' },
 ])) as Record<FeatureId, HostCapability>;

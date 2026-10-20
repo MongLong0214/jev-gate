@@ -29,7 +29,7 @@ const setup = async (scenario = 'uncertain', started = true) => {
   output.on('data', b => {
     for (const line of String(b).trim().split('\n')) {
       const m = JSON.parse(line) as Obj; sent.push(m);
-      if (m['method'] === 'hooks/list') reply(m['id'], { data: [{ hooks: ['sessionStart','userPromptSubmit','preToolUse','postToolUse','preCompact','postCompact','stop'].map(eventName => ({ eventName, key: eventName, source: 'plugin', pluginId: 'jev-gate@fixture', enabled: true })) }] });
+      if (m['method'] === 'hooks/list') reply(m['id'], { data: [{ hooks: ['sessionStart','userPromptSubmit','preToolUse','postToolUse','stop'].map(eventName => ({ eventName, key: eventName, source: 'plugin', pluginId: 'jev-gate@fixture', enabled: true })) }] });
       if (m['method'] === 'config/read') reply(m['id'], { config: {} });
       if (m['method'] === 'thread/start') {
         if (scenario === 'reservation-lock') unlock = lock();
