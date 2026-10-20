@@ -146,6 +146,69 @@ describe('register', () => {
     expect(parse().map((x) => x['deferred'])).toEqual(['subagent', 'trigger']);
   });
 
+  describe('precompute then auto', () => {
+    const parse = () => logs.map((l) => JSON.parse(l.replace(/^jev-compact /, '')) as Record<string, unknown>);
+    const turn = (text: string) => ({ role: 'user', text, toolUses: [] });
+    const say = (text: string) => ({ role: 'assistant', text, toolUses: [] });
+    const call = (text: string, result: string, id: string) => [
+      { role: 'assistant', text, toolUses: [{ tool: 'Read', input: { file_path: `/w/${id}` }, text: result, tool_use_id: id }] },
+      { role: 'user', text: '', toolUses: [], toolResults: [{ tool_use_id: id, text: result, isError: false }] },
+    ];
+    const work = (k: number) => Array.from({ length: k }, (_, i) => call(`s${i}`, 'y'.repeat(2000), `w${i}`)).flat();
+    const pending = { role: 'assistant', text: 'Starting the build.', toolUses: [{ tool: 'Bash', input: { command: 'make' }, tool_use_id: 'pa' }] };
+    const ghost = { role: 'user', text: '', toolUses: [], toolResults: [{ tool_use_id: 'gone', text: 'z', isError: false }] };
+    const fallbacks: Array<[string, number, unknown[]]> = [
+      ['mandatory_overflow', 40000, [turn('a'.repeat(45000)), say('b'.repeat(90000)), turn('continue'), say('done')]],
+      ['tail_too_large', 20000, [turn('Read the log.'), ...work(40), ...call('Reading the log.', 'x'.repeat(50000), 'big')]],
+      ['opaque_result', 30000, [turn('Look at the page.'), ...work(30), ...call('Taking a screenshot.', '', 'shot')]],
+      ['no_relief', 20000, [turn('Read the log.'), say('Reading.'), turn('ok'), ...call('Reading the log.', 'x'.repeat(30000), 'log')]],
+      ['unpaired_result', 8000, [turn('x'), ...work(20), say('hm'), ghost]],
+      ['pending_call', 8000, [turn('Build it.'), ...work(2), pending, ...work(40)]],
+      ['nothing_to_compact', 40000, [turn('hi')]],
+    ];
+
+    it.each(fallbacks)('%s: the engine precomputes, and the auto compaction that follows goes to the engine too', async (reason, budgetChars, messages) => {
+      const hook = (await hooksFor({ enabled: true, mode: 'active', budgetChars })).get('session.compact')!;
+      const { next, calls } = nextSpy();
+      logs.length = 0;
+      const pre = { trigger: 'precompute', messages };
+      const auto = { trigger: 'auto', messages };
+      expect(await hook($, pre, next)).toBe(CORE);
+      expect(await hook($, auto, next)).toBe(CORE);
+      expect(calls).toEqual([pre, auto]);
+      expect(parse().filter((x) => x['stage'] !== 'started').map((x) => [x['trigger'], x['fallback'], x['skipped']])).toEqual([['precompute', reason, undefined], ['auto', reason, undefined]]);
+    });
+
+    it('a transcript whose digest builds: precompute is skipped and the auto compaction is answered locally, so the engine is never asked', async () => {
+      const hook = (await hooksFor({ enabled: true, mode: 'active' })).get('session.compact')!;
+      const { next, calls } = nextSpy();
+      logs.length = 0;
+      expect(await hook($, { trigger: 'precompute', messages: conversation() }, next)).toEqual({ skip: expect.any(String) });
+      expect(await hook($, { trigger: 'auto', messages: conversation() }, next)).toEqual({ messages: expect.any(Array) });
+      expect(calls).toEqual([]);
+      expect(parse().filter((x) => x['stage'] !== 'started').map((x) => [x['trigger'], x['skipped'], x['applied']])).toEqual([['precompute', 'precompute', undefined], ['auto', undefined, true]]);
+    });
+
+    it('a transcript that changed between the two: the auto compaction is judged on its own and the engine takes it when no digest builds', async () => {
+      const hook = (await hooksFor({ enabled: true, mode: 'active' })).get('session.compact')!;
+      const { next, calls } = nextSpy();
+      expect(await hook($, { trigger: 'precompute', messages: conversation() }, next)).toEqual({ skip: expect.any(String) });
+      const later = { trigger: 'auto', messages: [turn('hi')] };
+      expect(await hook($, later, next)).toBe(CORE);
+      expect(calls).toEqual([later]);
+    });
+
+    it('a transcript the local check cannot read: precompute stays the engine\'s', async () => {
+      const hook = (await hooksFor({ enabled: true, mode: 'active' })).get('session.compact')!;
+      const { next, calls } = nextSpy();
+      logs.length = 0;
+      const pre = { trigger: 'precompute', messages: [null] };
+      expect(await hook($, pre, next)).toBe(CORE);
+      expect(calls).toEqual([pre]);
+      expect(parse().at(-1)).toMatchObject({ trigger: 'precompute', fallback: 'error' });
+    });
+  });
+
   it('when the engine refuses a compaction it was handed, the line is still written and the refusal passes up', async () => {
     const hook = (await hooksFor({ enabled: true, mode: 'active', compactManual: false })).get('session.compact')!;
     const huge = [

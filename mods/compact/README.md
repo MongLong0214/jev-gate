@@ -61,9 +61,11 @@ This is optional and nobody is expected to have it. Do not set `prependPlugins` 
 `cc-plugin-sec-default@builtin` in it: that removes the organization's own protection, not only jev-gate's restriction.
 
 In `active` mode the host's ahead-of-time compaction (`precompute`, its summarizer run early so a later compaction can
-reuse the result) is skipped wherever this module answers the compaction that follows: that summary would cost a request
-and then be dropped or used in the digest's place. In shadow, and for a subagent when `compactSubagents` is off, it stays the
-engine's.
+reuse the result) is skipped wherever this module answers the compaction that follows and can build its digest from the
+conversation as it is then: that summary would cost a request and then be dropped. Where it cannot (a fallback below), in
+shadow, and for a subagent when `compactSubagents` is off, the precompute stays the engine's. The compaction itself is judged
+again when it comes; if the conversation has changed and no digest can be built, the engine compacts it without the
+precomputed summary.
 
 An option it cannot use turns it off. Every compaction it is asked about records
 metadata in the local trace: why it deferred to the engine, or the sizes, the fallback reason, and in shadow the

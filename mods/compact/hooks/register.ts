@@ -65,7 +65,7 @@ export const registerCompact = (on: On, config: CompactConfig, observer?: { cont
     const log = (fields: Record<string, unknown>): void =>
       quietly(() => recorder.log(`jev-compact ${JSON.stringify({ event: 'compact', run_id: runId, mode: config.mode, trigger: e.trigger, subagent: e.agentId !== undefined, ...fields })}`));
     // `precompute` asks the engine's summarizer ahead of the compaction that comes. Where active answers that one itself,
-    // the summary would be paid for and dropped, or consumed in the digest's place, so none is computed.
+    // the summary would be paid for and dropped, so none is computed (below, once the digest can be built).
     const handled = e.trigger === 'auto' || (e.trigger === 'manual' && config.manual) || (e.trigger === 'precompute' && config.mode === 'active');
     const deferred = !handled ? 'trigger' : e.agentId !== undefined && !config.subagents ? 'subagent' : e.trigger === 'manual' && e.instructions ? 'instructions' : null;
     if (deferred) {
@@ -73,6 +73,20 @@ export const registerCompact = (on: On, config: CompactConfig, observer?: { cont
       return forward(e);
     }
     if (e.trigger === 'precompute') {
+      // Skip only where the local check the auto path starts with (no Jev call) builds a digest from this transcript now;
+      // on a fallback or an error the engine's precompute runs as before. The compaction that follows is judged again on its own.
+      let fallback: string | null = null;
+      try {
+        const local = buildDigest(e.messages, { budgetChars: config.budgetChars });
+        if (local.ok) assemble(e.messages, local.result);
+        else fallback = local.reason;
+      } catch {
+        fallback = 'error';
+      }
+      if (fallback) {
+        log({ applied: false, messages: e.messages.length, fallback });
+        return forward(e);
+      }
       log({ skipped: 'precompute' });
       return { skip: 'jev-gate compact answers the compaction that comes' };
     }
