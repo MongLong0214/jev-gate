@@ -105,7 +105,7 @@ function pipeline(ops,calls,pend){const root=$('pipeline');if(!root.querySelecto
   for(const b of $('circuit-mode').querySelectorAll('button'))b.setAttribute('aria-pressed',String(b.dataset.circuitMode===circuitMode));
   const ref=frozenAt??Date.now(),last={},runOf={};for(const r of ops.runs)if(circuitMode==='live'||r.id===selectedRun)for(const s of r.steps)if(!s.lifecycle&&NODE[s.feature]&&!isHeld(r.id,s.id)&&!(last[s.feature]?.at>=s.at)){last[s.feature]=s;runOf[s.feature]=r}
   // A feature the scoped host does not run (Jev Compact on Codex) has no card, and no inspector, in that view.
-  const off=id=>ops.features.find(f=>f.id===id)?.state==='unsupported';for(const id of CIRCUIT)root.querySelector('[data-feature="'+id+'"]').hidden=off(id);if(off(circuitFeature))circuitFeature=null;
+  const off=id=>ops.features.find(f=>f.id===id)?.state==='unsupported',changed=CIRCUIT.some(id=>root.querySelector('[data-feature="'+id+'"]').hidden!==off(id));for(const id of CIRCUIT)root.querySelector('[data-feature="'+id+'"]').hidden=off(id);if(changed)requestAnimationFrame(wires);if(off(circuitFeature))circuitFeature=null;
   if(!circuitFeature)circuitFeature=CIRCUIT.reduce((a,id)=>last[id]&&!off(id)&&!(last[a]?.at>=last[id].at)?id:a,null)||'admission';
   for(const id of CIRCUIT){const b=root.querySelector('[data-feature="'+id+'"]');
     b.querySelector('.nm').textContent=tr(featureInfo[id][0]);b.querySelector('.ds').textContent=label(...NODE[id][0]);b.querySelector('.dl').textContent=label(...NODE[id][1]);paint(b,last[id],ops.features.find(f=>f.id===id),ref,runOf[id]);
