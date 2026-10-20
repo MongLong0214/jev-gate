@@ -56,7 +56,9 @@ beforeEach(() => {
 });
 afterEach(() => { loss.on = false; rmSync(dir, { recursive: true, force: true }); });
 
-const traces = (): Rec[] => files('trace').filter((n) => n.startsWith('mod_compact-')).map((n) => JSON.parse(readFileSync(join(dir, 'trace', n), 'utf8')) as Rec);
+// Trace files are named by a random id, so order comes from each record's write time.
+const traces = (): Rec[] => files('trace').filter((n) => n.startsWith('mod_compact-')).map((n) => JSON.parse(readFileSync(join(dir, 'trace', n), 'utf8')) as Rec)
+  .sort((a, b) => String(a['written_at']).localeCompare(String(b['written_at'])));
 
 describe('classic path: which path runs', () => {
   it('binds pre-send intent and completion to a fake send whose receipt is lost, even if restore persistence then fails', async () => {
@@ -171,7 +173,7 @@ describe('classic path: restore', () => {
     expect(await runClassicCompact(input('PreCompact', { trigger: 'auto' }), env)).toBeNull();
     expect(await runClassicCompact(input('SessionStart', { source: 'compact' }), env)).toBeNull();
     expect(files('state/jev-gate/compact')).toEqual([]);
-    expect(traces().at(-1)).toMatchObject({ deferred: 'nothing_to_restore', selection: 'no_current_task' });
+    expect(traces().filter((r) => 'deferred' in r).at(-1)).toMatchObject({ deferred: 'nothing_to_restore', selection: 'no_current_task' });
   });
 
   it.each(['SessionStart', 'PostCompact'])('a sidechain %s cannot consume or clear the parent restore', async event => {
