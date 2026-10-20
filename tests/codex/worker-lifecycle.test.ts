@@ -121,9 +121,10 @@ describe('Codex status collection and deny tracing (#293)', () => {
     { label: 'JSON password only', text: '{"password":"canary-pw-123"}', canaries: ['canary-pw-123'] },
     { label: 'I1 prefixed JSON password', text: '{"DB_PASSWORD":"review-only-password"}', canaries: ['review-only-password'] },
     { label: 'JSON', text: '{"password":"canary-pw-123","api_key":"canary-key-456"}', canaries: ['canary-pw-123', 'canary-key-456'] },
-    ...['PASSWORD=CorrectHorseBatteryStaple', 'api_key=abcdefghijklmnopqrstuvwxyz', 'password=abcdefghijklmnop',
+    ...['PASSWORD=correct.horse.battery.staple', 'access_token=ya29.a0AfH6SMBsynthetic1234567890',
+      'PASSWORD=CorrectHorseBatteryStaple', 'api_key=abcdefghijklmnopqrstuvwxyz', 'password=abcdefghijklmnop',
       'export API_KEY=abcdefghijklmnopqrstuv', 'DB_PASSWORD=Sup3rSecretValue'].map(text => ({ label: text, text, canaries: [text.split('=')[1]!] })),
-  ].map(test => ({ ...test, background }))))('H1/F1/G1/I1/J1/K1/K2: removes credentials from Codex foreground, status and background replay ($label, background=$background)', async ({ background, text, canaries }) => {
+  ].map(test => ({ ...test, background }))))('H1/F1/G1/I1/J1/K1/K2/L1: removes credentials from Codex foreground, status and background replay ($label, background=$background)', async ({ background, text, canaries }) => {
     const f = await setup('normal'); const launch = f.launch(background);
     await vi.waitFor(() => expect(f.started()).toBe(true)); if (background) await launch;
     f.terminal('completed', JSON.stringify({ status: 'blocked', summary: text, changed_files: ['src/result.ts', text], blockers: [text, 'Needs integration'], interfaces: ['integrate(): void', text], checks: [] }));

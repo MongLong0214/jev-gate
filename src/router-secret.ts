@@ -13,6 +13,7 @@ export const SECRET_PATTERNS: readonly RegExp[] = [
   /\bey[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/,
   /\b(?:sk|rk)_live_[A-Za-z0-9]{16,}/,
   /\bAIza[A-Za-z0-9_-]{35}\b/,
+  /\bya29\.[A-Za-z0-9_-]{16,}/,
   /\bnpm_[A-Za-z0-9]{36,}\b/,
   /\beyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/,
   // A bearer token outside a header line, whatever its prefix. The digit keeps "bearer" in prose from matching.
@@ -63,6 +64,15 @@ const literalRemainder = (value: string): string => {
   return literal !== expanded.trim() && /^[\s:;,/|+=._@-]*$/.test(literal) ? '' : literal;
 };
 const IDENTIFIER = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/;
+const CODE_ROOT = /^(?:process|this|self|cls|config|conf|settings|env|os|req|request|res|response|ctx|context|options|opts|args|argv|params|input|data|body|props|state|user|session|window|globalThis|import|module|exports|app|client|secrets|vars|inputs|matrix|github|decoded|payload|claims|token|credentials|creds|auth|keys|cfg)$/;
+// Existing references include Namespace1.password and process.env.API_TOKEN123. Four consecutive digits are
+// token-like; isolated/small numeric suffixes remain identifiers. Require complete camelCase/PascalCase words
+// (readPassword, Namespace1), with at most a three-digit suffix, rather than a transition inside random bytes.
+const dottedReference = (value: string): boolean => {
+  if (/\d{4}/.test(value)) return false;
+  const segments = value.split('.');
+  return CODE_ROOT.test(segments[0]!) || segments.some(segment => /^(?:[a-z]+(?:[A-Z][a-z]+)+|[A-Z][a-z]+(?:[A-Z][a-z]+)*)(?:\d{1,3})?$/.test(segment));
+};
 const COMPUTED_REFERENCE = /^[A-Za-z_$][\w$]*(?:(?:[ \t]*(?:\?\.|\.)[ \t]*[A-Za-z_$][\w$]*)|[ \t]*\([^()\r\n]*\)|[ \t]*\[[^\[\]\r\n]*\])+$/;
 const PATH_REFERENCE = /^(?:~\/|\/)[\w./~-]*$/;
 const CREDENTIAL_KEYS = String.raw`authorization|auth|api[_.-]?key|access[_.-]?key|account[_.-]?key|secret[_.-]?key|private[_.-]?key|(?:access|refresh|id)[_.-]?token|client[_.-]?secret|password|passwd|pwd|secret|token|credentials?|cookie|set[_.-]?cookie|aws[_.-]?access[_.-]?key[_.-]?id|aws[_.-]?secret[_.-]?access[_.-]?key|aws[_.-]?session[_.-]?token`;
@@ -126,19 +136,25 @@ const literalAssignment = (text: string, pattern: RegExp, minLength = 1): boolea
     const quoted = captures[3] === undefined;
     const hasDigit = /\d/.test(value);
     const identifier = IDENTIFIER.test(value);
+    const dotted = identifier && value.includes('.');
     const generic = pattern === COOKIE_ASSIGNMENT || GENERIC_CREDENTIAL_KEY.test(key ?? match[1]!);
-    // Dotted paths always name another value. Strong keys permit alphabetic literals, excluding primitive/type
-    // names; generic keys and session cookies still exclude digit-free identifiers such as tokenValue.
-    const reference = identifier && (value.includes('.') || (generic ? !hasDigit
+    // Dots alone do not make a literal a reference. Strong keys permit alphabetic literals, excluding primitive
+    // types; generic keys and session cookies still exclude digit-free names such as tokenValue.
+    const reference = identifier && (dotted ? dottedReference(value) : (generic ? !hasDigit
       : /^(?:string|number|bigint|boolean|symbol|object|undefined|null|any|unknown|never|void)$/i.test(value)));
-    if (!quoted && (reference || PATH_REFERENCE.test(raw) || COMPUTED_REFERENCE.test(raw))) continue;
+    // Plain dotted identifiers were decided above; the computed matcher also accepts member-only paths.
+    if (!quoted && (reference || PATH_REFERENCE.test(raw) || (!IDENTIFIER.test(raw) && COMPUTED_REFERENCE.test(raw)))) continue;
     // Bare session cookies retain D1's eight-character threshold, excluding names even when quoted.
     if (pattern === COOKIE_ASSIGNMENT) { if (!reference) return true; continue; }
     // Strong keys accept any quoted literal, or an unquoted literal of at least eight characters. Generic keys
     // retain their value-shape thresholds, including quoted options such as credentials: 'include'.
     if (!generic && (quoted || value.length >= 8)) return true;
+    // The 0.8.31 screen accepted quoted Authorization literals from twelve characters. Preserve that floor for
+    // non-identifiers, while retaining the documented generic-key identifier exclusions.
+    if (quoted && /^authorization$/i.test(key ?? '') && value.length >= 12 && !/\s/.test(raw)
+      && (!IDENTIFIER.test(raw) || (dotted && !reference))) return true;
     if ((value.length >= 8 && hasDigit)
-      || (value.length >= 16 && /^[A-Za-z0-9_%+./~:=@!-]+$/.test(value) && !identifier)) return true;
+      || (value.length >= 16 && /^[A-Za-z0-9_%+./~:=@!-]+$/.test(value) && (!identifier || (dotted && !reference)))) return true;
   }
   return false;
 };

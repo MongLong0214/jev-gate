@@ -81,9 +81,10 @@ describe('responsive native background contracts', () => {
     { label: 'JSON password only', text: '{"password":"canary-pw-123"}', canaries: ['canary-pw-123'] },
     { label: 'I1 prefixed JSON password', text: '{"DB_PASSWORD":"review-only-password"}', canaries: ['review-only-password'] },
     { label: 'JSON', text: '{"password":"canary-pw-123","api_key":"canary-key-456"}', canaries: ['canary-pw-123', 'canary-key-456'] },
-    ...['PASSWORD=CorrectHorseBatteryStaple', 'api_key=abcdefghijklmnopqrstuvwxyz', 'password=abcdefghijklmnop',
+    ...['PASSWORD=correct.horse.battery.staple', 'access_token=ya29.a0AfH6SMBsynthetic1234567890',
+      'PASSWORD=CorrectHorseBatteryStaple', 'api_key=abcdefghijklmnopqrstuvwxyz', 'password=abcdefghijklmnop',
       'export API_KEY=abcdefghijklmnopqrstuv', 'DB_PASSWORD=Sup3rSecretValue'].map(text => ({ label: text, text, canaries: [text.split('=')[1]!] })),
-  ].map(test => ({ ...test, direct }))))('H1/F1/G1/I1/J1/K1/K2: removes credentials from Claude settlement and replay ($label, direct=$direct)', async ({ direct, text, canaries }) => {
+  ].map(test => ({ ...test, direct }))))('H1/F1/G1/I1/J1/K1/K2/L1: removes credentials from Claude settlement and replay ($label, direct=$direct)', async ({ direct, text, canaries }) => {
     const fields = { status: 'blocked', summary: text, changed_files: ['src/result.ts', text], blockers: [text, 'Needs integration'], interfaces: ['integrate(): void', text] };
     const f = await fixture(direct, fields); await f.launch(); f.transcript();
     const terminal = await f.terminal();

@@ -3,43 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { estimateTokens, looksSecret } from '../src/outbound-text.js';
 import { looksSecret as routerLooksSecret } from '../src/router-secret.js';
 
-const CREDENTIAL_WORDS = [
-  ...['password', 'passwd', 'api_key', 'access_key', 'secret_key', 'private_key', 'client_secret',
-    'access_token', 'refresh_token', 'id_token', 'aws_access_key_id', 'aws_secret_access_key', 'aws_session_token']
-    .map(word => ({ word, strong: true })),
-  ...['token', 'auth', 'authorization', 'secret', 'credential', 'credentials', 'pwd'].map(word => ({ word, strong: false })),
-];
-const KEY_SPELLINGS = [
-  { spelling: 'bare', key: (word: string) => word },
-  { spelling: 'prefixed snake', key: (word: string) => `review_app_${word}` },
-  { spelling: 'SCREAMING', key: (word: string) => `REVIEW_APP_${word.toUpperCase()}` },
-  { spelling: 'kebab', key: (word: string) => `review-app-${word.replaceAll('_', '-')}` },
-  { spelling: 'dot', key: (word: string) => `review.app.${word.replaceAll('_', '.')}` },
-  { spelling: 'camelCase', key: (word: string) => 'reviewApp' + word.split('_').map(part => part[0]!.toUpperCase() + part.slice(1)).join('') },
-  { spelling: 'PascalCase', key: (word: string) => 'ReviewApp' + word.split('_').map(part => part[0]!.toUpperCase() + part.slice(1)).join('') },
-  { spelling: 'mixed case', key: (word: string) => 'rEvIeW_' + word.split('').map((ch, i) => i % 2 ? ch.toUpperCase() : ch).join('') },
-];
-const ASSIGNMENT_CONTEXTS = [
-  { context: 'quoted object compact', render: (key: string, value: string) => `{"${key}":${value}}` },
-  { context: 'quoted object spaced', render: (key: string, value: string) => `{ "${key}" \t : \t ${value} }` },
-  { context: 'YAML', render: (key: string, value: string) => `${key}: ${value}` },
-  { context: 'env', render: (key: string, value: string) => `${key}=${value}` },
-  { context: 'export', render: (key: string, value: string) => `export ${key}=${value}` },
-  { context: 'header', render: (key: string, value: string) => `X-${key}: ${value}` },
-  { context: 'query first', render: (key: string, value: string) => `https://example.test/?${key}=${value}&page=1` },
-  { context: 'query later', render: (key: string, value: string) => `https://example.test/?page=1&${key}=${value}` },
-  { context: 'TOML', render: (key: string, value: string) => `${key} = ${value}` },
-  { context: 'kwargs', render: (key: string, value: string) => `connect(${key}=${value})` },
-  { context: 'object literal', render: (key: string, value: string) => `{ ${key}: ${value} }` },
-  { context: 'CLI space', render: (key: string, value: string) => `client --${key} ${value}` },
-  { context: 'CLI equals', render: (key: string, value: string) => `client --${key}=${value}` },
-  { context: 'CLI at start', render: (key: string, value: string) => `--${key} ${value} --verbose` },
-  { context: 'prose start', render: (key: string, value: string) => `${key}: ${value}; then continue.` },
-  { context: 'prose middle', render: (key: string, value: string) => `Observed ${key}=${value}; continue.` },
-  { context: 'prose end', render: (key: string, value: string) => `Observed ${key}: ${value}` },
-  { context: 'inline quoted JSON', render: (key: string, value: string) => `Observed {"${key}":${value}} during review.` },
-  { context: 'quoted prose assignment', render: (key: string, value: string) => `note='Observed ${key}=${value} during review.'` },
-];
+import { ASSIGNMENT_CONTEXTS, CREDENTIAL_WORDS, KEY_SPELLINGS } from './fixtures/credential-corpus.js';
 
 // Each exclusion has a whole-value negative and a value with literal material beside the same shape.
 // Already anchored masks/thresholds are preservation cases; the partial reference/path/call cases reproduce J1.
@@ -164,7 +128,7 @@ const CREDENTIAL_FORMAT_CORPUS = [
   }))),
   ...[
     ...['sk-', 'sk-ant-', 'ghp_', 'gho_', 'ghu_', 'ghs_', 'ghr_', 'github_pat_', 'xoxa-', 'xoxb-', 'xoxp-', 'xoxr-', 'xoxs-',
-      'npm_', 'sk_live_', 'rk_live_', 'jv_live_'].map(prefix => ({ name: prefix, value: prefix + 'a1'.repeat(20) })),
+      'npm_', 'sk_live_', 'rk_live_', 'jv_live_', 'ya29.'].map(prefix => ({ name: prefix, value: prefix + 'a1'.repeat(20) })),
     ...['AKIA', 'ASIA'].map(prefix => ({ name: prefix, value: prefix + 'A1'.repeat(8) })),
     { name: 'AIza', value: 'AIza' + 'a'.repeat(35) },
     { name: 'JWT', value: 'eyJhbGciOiJIUzI1NiJ9.e30.c3ludGhldGlj' },
@@ -190,6 +154,8 @@ const CREDENTIAL_FORMAT_CORPUS = [
     { label: `${operator} / ${context.syntax} / literal beside references`, render: (value: string) => context.render(`\${PREFIX}${value}\${SUFFIX}`) },
   ].map(row => ({ ...row, group: 'shell-defaults' })))),
   ...[
+    { label: 'L1 dotted password', value: 'correct.horse.battery.staple', render: (value: string) => `PASSWORD=${value}` },
+    { label: 'L1 OAuth access token', value: 'ya29.a0AfH6SMBsynthetic1234567890', render: (value: string) => `access_token=${value}` },
     { label: 'K1 quoted JSON Cookie', value: 'a1b2c3d4e5f6g7h8', render: (value: string) => `{"Cookie":"custom_login=${value}"}` },
     { label: 'K2 quoted password default', value: 'hunter2', render: (value: string) => `password="\${PASSWORD:-${value}}"` },
     { label: 'K2 Bearer default', value: 'abc123def456ghi789', render: (value: string) => `Authorization: Bearer \${TOKEN:-${value}}` },
@@ -204,6 +170,8 @@ const CREDENTIAL_FORMAT_CASES = CREDENTIAL_FORMAT_CORPUS.flatMap(row => [
 
 // Synthetic, approximately 100 KB cases cover overlapping keys, failed suffixes and each connection format.
 const PERFORMANCE_CASES = [
+  { label: 'dotted literal', text: 'password=' + 'ordinary.'.repeat(11_111) + 'value', secret: true },
+  { label: 'dotted failed camelCase', text: 'password=unrecognised.' + 'aA'.repeat(50_000) + '_', secret: true },
   { label: 'assignment chain', text: 'a='.repeat(50_000), secret: false },
   { label: 'URL userinfo', text: 'https://' + 'u:'.repeat(50_000) + '@h', secret: false },
   { label: 'key suffixes', text: 'password_'.repeat(11_111) + '=x', secret: false },
@@ -255,6 +223,28 @@ describe.each([['core', looksSecret], ['router', routerLooksSecret]] as const)('
   it.each(CREDENTIAL_FORMAT_CASES)('credential-format corpus | $group | $label | $variant', ({ text, secret }) => {
     expect(looksSecret(text)).toBe(secret);
   });
+
+  it.each([
+    ...['correct.horse.battery.staple', 'unrecognised.lowercase.path', 'UPPER.CASE.LITERAL',
+      'process.env.secret1234', 'Namespace1234.password', 'library.readPassword1234', 'process.1234.value',
+      'process.abc1234def', 'ya29.QkSzXDbKjobkPTn'].map(value => ({ value, secret: true })),
+    ...['process.env.API_TOKEN', 'decoded.sub', 'Namespace1.password', 'library.readPassword', 'Library.password',
+      'process.env.API_TOKEN123', 'library.readPassword123'].map(value => ({ value, secret: false })),
+  ])('L1: distinguishes whole dotted code references from literals: $value', ({ value, secret }) => {
+    for (const key of ['password', 'access_token', 'token', 'sessionid']) expect(looksSecret(`${key}=${value}`), key).toBe(secret);
+    // Quoted strong-key values remain literals even when the text names a code reference.
+    for (const quote of ['"', "'", '`']) expect(looksSecret(`password=${quote}${value}${quote}`)).toBe(true);
+  });
+
+  it.each([0, 15, 16, 64])('L1: requires at least sixteen OAuth suffix characters (length=%s)', length => {
+    expect(looksSecret('Observed ya29.' + 'a'.repeat(length) + ' during review.')).toBe(length >= 16);
+  });
+
+  it.each(['synthetic-re', 'readPassword()', 'correct.corr', 'ya29.QkSzXDbKjobkPTn'])(
+    'L1 differential: retains quoted Authorization literals from twelve characters: %s', value => {
+      for (const quote of ['"', "'", '`']) expect(looksSecret(`authorization=${quote}${value}${quote}`)).toBe(true);
+    },
+  );
 
   it.each([':-', '-', ':=', '=', ':?', ':+'])('K2: applies the existing key thresholds to %s operator text', operator => {
     const reference = (value: string) => `\${PASSWORD${operator}${value}}`;
