@@ -104,7 +104,7 @@ export const claudeTerminal = (input: HookInput, nativeNotification = false): { 
     if (!nativeNotification && (typeof input.last_assistant_message !== 'string' || text !== input.last_assistant_message)) return null;
     let notification: 'completed' | 'failed' | null = null;
     if (nativeNotification) {
-      // A user's copied XML is never terminal evidence. Require the native host's origin metadata,
+      // A user's copied XML is never terminal evidence. Share the notice classifier's host-row predicate,
       // exact session and agent, and a notification after the final child row.
       const rootFd = openSync(input.transcript_path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
       try {
@@ -112,8 +112,7 @@ export const claudeTerminal = (input: HookInput, nativeNotification = false): { 
         const offset = Math.max(0, root.size - 1024 * 1024), buffer = Buffer.alloc(root.size - offset);
         readSync(rootFd, buffer, 0, buffer.length, offset);
         for (const row of rows(buffer.toString()).reverse()) {
-          const origin = row['origin'] as { kind?: unknown; producer?: unknown } | undefined;
-          if (row['type'] !== 'user' || row['sessionId'] !== input.session_id || row['promptSource'] !== 'system' || row['turnOrigin'] !== 'task_notification' || origin?.kind !== 'task-notification' || origin.producer !== 'session-task') continue;
+          if (!isHostNoticeRow(row) || row['sessionId'] !== input.session_id) continue;
           const content = (row['message'] as { content?: unknown } | undefined)?.content;
           const body = typeof content === 'string' ? content : Array.isArray(content) ? content.filter(c => c?.type === 'text').map(c => c.text ?? '').join('\n') : '';
           if (!body.startsWith('<task-notification>') || !body.includes(`<task-id>${input.agent_id}</task-id>`)) continue;

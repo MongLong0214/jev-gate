@@ -5,6 +5,14 @@ import { looksSecret as routerLooksSecret } from '../src/router-secret.js';
 
 describe.each([['core', looksSecret], ['router', routerLooksSecret]] as const)('outbound text — %s credential screen', (_screen, looksSecret) => {
   it.each([
+    'jv_live_' + '0123456789abcdef'.repeat(4),
+    'jv_live_canary', 'JV_LIVE_canary', 'prefix_jv_live_canary',
+  ])('H1: screens bare Jev keys including embedded and mixed-case prefixes: %s', text => {
+    expect(text).not.toMatch(/bearer/i);
+    expect(looksSecret(text)).toBe(true);
+  });
+
+  it.each([
     'password', 'passwd', 'pwd', 'secret', 'client_secret', 'client-secret', 'clientSecret',
     'api_key', 'apikey', 'api-key', 'access_key', 'secret_key', 'private_key', 'token',
     'access_token', 'refresh_token', 'id_token', 'auth', 'authorization', 'credential', 'credentials',

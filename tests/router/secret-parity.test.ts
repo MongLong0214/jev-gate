@@ -38,6 +38,9 @@ describe('credential screen parity', () => {
   });
 
   it.each([
+    ...['jv_live_' + '0123456789abcdef'.repeat(4), 'JV_LIVE_canary', 'prefix_jv_live_canary']
+      .map(text => ({ text, secret: true })),
+    { text: '{"password":"canary-pw-123"}', secret: true },
     { text: '{"password":"canary-pw-123","api_key":"canary-key-456"}', secret: true },
     { text: "'api_key' => 'canary-key-456'", secret: true },
     { text: '`password`: `canary-pw-123`', secret: true },

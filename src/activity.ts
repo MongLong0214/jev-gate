@@ -118,6 +118,7 @@ const sub = (r: Rec, k: string): Rec | null => (isRecord(r[k]) ? r[k] : null);
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
 /** A recorded token. Spaces and long text stay out, so a prompt cannot ride along in a reason field. */
+// Metadata identifiers reject even truncated/embedded sk- fragments. Prose screening keeps prefix mentions and task-id usable.
 const safeToken = memo((v: string): string | null => TOKEN.test(v) && !looksSecret(v) && !v.toLowerCase().includes('sk-') ? v : null);
 const token = (v: unknown): string | null => typeof v === 'string' ? safeToken(v) : null;
 

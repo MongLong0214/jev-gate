@@ -108,7 +108,8 @@ const TOKEN = /^[A-Za-z0-9_.:/+@-]{1,80}(?:\[[A-Za-z0-9_-]{1,16}\])?$/;
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
 const rec = (v: unknown): Rec | null => typeof v === 'object' && v !== null && !Array.isArray(v) ? v as Rec : null;
 const field = (r: Rec | null, key: string): Rec | null => r ? rec(r[key]) : null;
-const safeToken = memo((v: string): string | null => TOKEN.test(v) && !looksSecret(v) && !v.toLowerCase().includes('sk-') && !v.toLowerCase().includes('jv_live_') ? v : null);
+// Metadata identifiers reject even truncated/embedded sk- fragments. Prose screening keeps prefix mentions and task-id usable.
+const safeToken = memo((v: string): string | null => TOKEN.test(v) && !looksSecret(v) && !v.toLowerCase().includes('sk-') ? v : null);
 const token = (v: unknown): string | null => typeof v === 'string' ? safeToken(v) : null;
 const number = (v: unknown): number | null => typeof v === 'number' && Number.isFinite(v) ? v : null;
 const iso = (v: unknown): string => typeof v === 'string' && ISO.test(v) ? v : '';

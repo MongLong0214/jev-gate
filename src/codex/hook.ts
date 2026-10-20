@@ -4,11 +4,13 @@ import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { codexTraceDir } from '../codex-paths.js';
 import { openTraceDir, type TraceWriter } from '../trace.js';
+import { looksSecret } from '../outbound-text.js';
 import { PROVIDER, connectionOwner, connectionRequest, ensureConnection, helperRequest, recordConnectionFailure, type ConnectionFailure } from './connection.js';
 
 type Rec = Record<string, unknown>;
 const record = (v: unknown): Rec | null => v !== null && typeof v === 'object' && !Array.isArray(v) ? v as Rec : null;
-const token = (v: unknown): string | null => typeof v === 'string' && /^[A-Za-z0-9_.:/+@-]{1,160}$/.test(v) && !/(sk-|jv_live_)/i.test(v) ? v : null;
+// Metadata identifiers reject even truncated/embedded sk- fragments. Prose screening keeps prefix mentions and task-id usable.
+const token = (v: unknown): string | null => typeof v === 'string' && /^[A-Za-z0-9_.:/+@-]{1,160}$/.test(v) && !looksSecret(v) && !v.toLowerCase().includes('sk-') ? v : null;
 const EVENTS = new Set(['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'SubagentStart', 'SubagentStop', 'Stop', 'Interrupt']);
 const LIMIT = 2 * 1024 * 1024;
 
