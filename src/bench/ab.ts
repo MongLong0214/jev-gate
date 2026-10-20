@@ -26,6 +26,8 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { estimateJevCostUsd, money } from './usage.js';
+
 export const CONDITIONS = ['A', 'B', 'C', 'D'] as const;
 export type Condition = (typeof CONDITIONS)[number];
 
@@ -83,6 +85,8 @@ export interface CellResult {
   cwd: string;
   /** The model both turns were pinned to with `--model` (#133); the report checks the transcript against it. */
   model?: string | undefined;
+  /** `claude --version` right before the cell ran; null when it did not answer. Absent in results written before it. */
+  host_version?: string | null;
   started_at: string;
   prime_wall_s: number;
   wall_s: number;
@@ -208,8 +212,10 @@ export const runCell = (o: RunOptions, file: TasksFile, task: string, cond: Cond
     // #121: a real timeout, from node itself; `timeout`/`gtimeout` are not on macOS.
     spawnSync(o.claude, args, { cwd, env, encoding: 'utf8', timeout: o.timeoutMs, killSignal: 'SIGKILL', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
 
+  const version = claude(['--version']);
+  const hostVersion = version.status === 0 ? String(version.stdout ?? '').trim() || null : null;
   const startedAt = new Date().toISOString();
-  process.stdout.write(`run ${id} sid=${sid} cwd=${cwd} started=${startedAt}\n`);
+  process.stdout.write(`run ${id} sid=${sid} cwd=${cwd} host=${String(hostVersion)} started=${startedAt}\n`);
   const p0 = Date.now();
   const prime = claude(['-p', file._prime, '--session-id', sid, ...common]);
   writeFileSync(join(R, `${id}.prime.json`), String(prime.stdout ?? ''));
@@ -241,7 +247,7 @@ export const runCell = (o: RunOptions, file: TasksFile, task: string, cond: Cond
 
   const raw = readJson(join(R, `${id}.raw.json`));
   const result: CellResult = {
-    id, task, cond, rep, sid, cwd, model: o.model, started_at: startedAt,
+    id, task, cond, rep, sid, cwd, model: o.model, host_version: hostVersion, started_at: startedAt,
     prime_wall_s: Math.round((t0 - p0) / 1000), wall_s: Math.round((t1 - t0) / 1000),
     prime_rc: prime.status, rc: work.status, timed_out: timedOut, check_rc: checkRc,
     prime: summarize(readJson(join(R, `${id}.prime.json`))), harness: finalSummary, followups,
@@ -336,9 +342,10 @@ const extraUsage = (lines: TranscriptLine[]): { write5m: number | null; write1h:
     thinking: sum(u => isRecord(u['output_tokens_details']) ? u['output_tokens_details']['thinking_tokens'] : undefined) };
 };
 
-export const sessionFacts = (traceDir: string, sid: string): { routed: Map<string, string>; jevInput: number | null; jevOutput: number | null; jevRequests: number } => {
-  const routed = new Map<string, string>(); let jevInput: number | null = 0, jevOutput: number | null = 0, jevRequests = 0;
-  const calls = new Map<string, { input: number | null; output: number | null }>();
+/** Jev cost is each call's list estimate from its own recorded model and input; any call missing either leaves it unknown. */
+export const sessionFacts = (traceDir: string, sid: string): { routed: Map<string, string>; jevInput: number | null; jevOutput: number | null; jevRequests: number; jevCost: number | null } => {
+  const routed = new Map<string, string>(); let jevInput: number | null = 0, jevOutput: number | null = 0, jevRequests = 0, jevCost: number | null = 0;
+  const calls = new Map<string, { input: number | null; output: number | null; model: string | null }>();
   const records = (existsSync(traceDir) ? readdirSync(traceDir) : []).map(file => readJson(join(traceDir, file))).filter((r): r is Record<string, unknown> => isRecord(r) && r['session_id'] === sid);
   const decisions = new Map(records.filter(r => r['phase'] === 'mod_router' && r['event'] === 'root' && isRecord(r['patch']) && typeof r['patch']['model'] === 'string').map(r => [r['turn'], (r['patch'] as Record<string, unknown>)['model']]));
   for (const r of records) {
@@ -353,16 +360,21 @@ export const sessionFacts = (traceDir: string, sid: string): { routed: Map<strin
     const u = hook && isRecord(r['jev']) ? r['jev']['usage'] : r['usage'];
     const count = (k: string) => isRecord(u) && typeof u[k] === 'number' && Number.isSafeInteger(u[k]) && Number(u[k]) >= 0 ? Number(u[k]) : null;
     const input = count(router ? 'input' : 'input_tokens'), output = count(router ? 'output' : 'output_tokens');
+    // Gate results carry `jev.model`, Router and Compact records `jev_model`; intents and late replies carry none.
+    const recorded = hook && isRecord(r['jev']) ? r['jev']['model'] : r['jev_model'];
+    const model = typeof recorded === 'string' ? recorded : null;
     const previous = calls.get(binding);
     // Intent/result and a late response are one call only when their native binding agrees.
-    calls.set(binding, { input: input ?? previous?.input ?? null, output: output ?? previous?.output ?? null });
+    calls.set(binding, { input: input ?? previous?.input ?? null, output: output ?? previous?.output ?? null, model: model ?? previous?.model ?? null });
   }
   jevRequests = calls.size;
-  for (const { input, output } of calls.values()) {
+  for (const { input, output, model } of calls.values()) {
     jevInput = jevInput !== null && input !== null ? jevInput + input : null;
     jevOutput = jevOutput !== null && output !== null ? jevOutput + output : null;
+    const cost = estimateJevCostUsd(model, input);
+    jevCost = jevCost !== null && cost !== null ? jevCost + cost : null;
   }
-  return { routed, jevInput, jevOutput, jevRequests };
+  return { routed, jevInput, jevOutput, jevRequests, jevCost };
 };
 
 /** Distinct models and efforts the assistant lines ran with, in first-seen order; `-` when the field is absent. */
@@ -421,6 +433,8 @@ export interface Row {
   cond: Condition;
   rep: number;
   ok: boolean;
+  /** The task's own gate: every turn ran to rc 0 without a timeout, the checker exited 0 when set, the result pattern matched. */
+  solved: boolean;
   wall_s: number;
   cost: number | undefined;
   prime_cost: number | undefined;
@@ -434,6 +448,7 @@ export interface Row {
   jev_output?: number | null;
   jev_requests?: number;
   jev_cost?: number | null;
+  host_version?: string | null;
   /** #123: how many tool calls the priming turn actually made, so "read 30 files" is checked, not assumed. */
   prime_tools: number | null;
   /** #133: models the task turn ran on, from the transcript; more than one or a different one than pinned is a mismatch. */
@@ -462,7 +477,9 @@ export const rowOf = (r: CellResult, file: TasksFile | null, transcript: string 
   const pattern = spec?.resultPattern ? new RegExp(spec.resultPattern, 'i') : null;
   const okSoFar = !r.timed_out && r.prime_rc === 0 && r.rc === 0 && (r.followups ?? []).every(f => f.rc === 0 && !f.timed_out) && (r.followups?.length ?? 0) === (spec?.followups?.length ?? 0) && (spec?.check ? r.check_rc === 0 : r.check_rc === null || r.check_rc === 0) && (pattern === null || pattern.test(r.result_head));
   const admissions = traceAdmissions(traceDir, r.sid);
-  const base: Row = { id: r.id, task: r.task, cond: r.cond, rep: r.rep, ok: okSoFar, wall_s: r.wall_s, cost: r.harness.cost_usd, prime_cost: r.prime.cost_usd, prime_tools: null, model: '-', model_mismatch: false, prime_effort: '-', effort: '-', gate_turns: admissions.gateTurns.join(',') || '-', total_tokens: 0, cache_create: 0, cache_read: 0, output: 0, requests: 0, tools: 0, subs: 0, compacts: 0, shapes: admissions.shapes.join(',') };
+  // Read before the transcript: a cell's Jev bill does not depend on finding its transcript.
+  const facts = sessionFacts(traceDir, r.sid);
+  const base: Row = { id: r.id, task: r.task, cond: r.cond, rep: r.rep, ok: okSoFar, solved: okSoFar, wall_s: r.wall_s, cost: r.harness.cost_usd, prime_cost: r.prime.cost_usd, jev_requests: facts.jevRequests, jev_cost: facts.jevRequests ? facts.jevCost : r.cond === 'A' ? 0 : null, host_version: r.host_version ?? null, prime_tools: null, model: '-', model_mismatch: false, prime_effort: '-', effort: '-', gate_turns: admissions.gateTurns.join(',') || '-', total_tokens: 0, cache_create: 0, cache_read: 0, output: 0, requests: 0, tools: 0, subs: 0, compacts: 0, shapes: admissions.shapes.join(',') };
   if (transcript === null) return { ...base, ok: false, missing: true, total_tokens: null };
   const all = readJsonl(transcript);
   const userIdx = all.flatMap((e, i) => {
@@ -479,7 +496,6 @@ export const rowOf = (r: CellResult, file: TasksFile | null, transcript: string 
   const mu = usageOf(main);
   const seen = observedOf(main);
   // A pinned model that the transcript contradicts, or a task turn that ran on more than one model, is not this cell.
-  const facts = sessionFacts(traceDir, r.sid);
   const modelMismatch = seen.models.length === 0 || main.some(e => e.type === 'assistant' && typeof e.message?.model === 'string' && r.model !== undefined && e.message.model !== r.model &&
     !(r.cond === 'D' && typeof e.requestId === 'string' && facts.routed.get(e.requestId) === e.message.model));
   const nativeLines = [...main];
@@ -510,8 +526,7 @@ export const rowOf = (r: CellResult, file: TasksFile | null, transcript: string 
     session_tokens: primeUsage.complete && primeSubs.complete && mu.complete && su.complete ? primeSubs.input + primeSubs.cache_create + primeSubs.cache_read + primeSubs.output + primeUsage.input + primeUsage.cache_create + primeUsage.cache_read + primeUsage.output + mu.input + mu.cache_create + mu.cache_read + mu.output + su.input + su.cache_create + su.cache_read + su.output : null,
     input: mu.complete && su.complete ? mu.input + su.input : null,
     cache_write_5m: extra.write5m, cache_write_1h: extra.write1h, thinking: extra.thinking,
-    jev_input: r.cond === 'A' ? 0 : facts.jevRequests ? facts.jevInput : null, jev_output: r.cond === 'A' ? 0 : facts.jevRequests ? facts.jevOutput : null,
-    jev_requests: facts.jevRequests, jev_cost: r.cond === 'A' ? 0 : null,
+    jev_input: facts.jevRequests ? facts.jevInput : r.cond === 'A' ? 0 : null, jev_output: facts.jevRequests ? facts.jevOutput : r.cond === 'A' ? 0 : null,
     ok: okSoFar && !modelMismatch && mu.complete && su.complete,
     prime_tools: taskStart > 0 ? primeUsage.tools : null,
     model: seen.models.join(',') || '-',
@@ -542,6 +557,8 @@ export interface GridRow {
   'tok/A'?: string;
   wall_s?: number | null;
   cost?: string;
+  /** Median Jev list estimate inside `cost`; a cell without a Jev request adds none. */
+  jev_cost?: string;
   'cost/A'?: string;
   cost_pairs?: string;
   cost_ratios?: Array<number | null>;
@@ -556,6 +573,15 @@ export interface GridRow {
   paired?: string;
 }
 
+/** The Jev part of a cell's bill: none without a Jev request, unknown when any request's model or input is unknown. */
+const jevBill = (r: Row): number | null => (r.jev_requests ? money(r.jev_cost) : 0);
+/** Host session bill plus the Jev list estimate, as the published jevgrep accounting counts it; every cost verdict reads this. */
+export const totalCost = (r: Row): number | null => {
+  const host = money(r.cost), jev = jevBill(r);
+  return host === null || jev === null ? null : host + jev;
+};
+const known = (values: Array<number | null>): number[] => values.filter((v): v is number => v !== null);
+
 /**
  * Median per task x condition over ok rows, ratio to A, and the paired-sign verdict: a condition counts as an effect
  * on a task only when, for every repetition where both it and A are ok, its token total is below A's.
@@ -566,7 +592,7 @@ export const grid = (rows: Row[], tasks: string[], conds: readonly Condition[] =
     const measured = (r: Row): r is Row & { total_tokens: number } => r.ok && typeof r.total_tokens === 'number' && Number.isFinite(r.total_tokens) && r.total_tokens >= 0;
     const A = rows.filter((r) => r.task === task && r.cond === 'A').filter(measured);
     const bT = median(A.map((r) => r.total_tokens));
-    const bC = median(A.map(r => r.cost ?? NaN).filter(Number.isFinite));
+    const bC = median(known(A.map(totalCost)));
     for (const cond of conds) {
       const g = rows.filter((r) => r.task === task && r.cond === cond).filter(measured);
       if (!g.length) {
@@ -575,17 +601,19 @@ export const grid = (rows: Row[], tasks: string[], conds: readonly Condition[] =
         continue;
       }
       const T = median(g.map((r) => r.total_tokens));
-      const C = median(g.map((r) => r.cost ?? NaN).filter((x) => Number.isFinite(x)));
+      const C = median(known(g.map(totalCost)));
+      const J = median(known(g.map(jevBill)));
       const count = plannedReps ?? Math.max(...rows.filter(r => r.task === task).map(r => r.rep));
       const costRatios = cond === 'A' ? [] : Array.from({ length: count }, (_, i) => {
         const a = A.find(r => r.rep === i + 1), c = g.find(r => r.rep === i + 1);
-        return a?.cost !== undefined && a.cost > 0 && Number.isFinite(a.cost) && c?.cost !== undefined && c.cost >= 0 && Number.isFinite(c.cost) ? c.cost / a.cost : null;
+        const ac = a ? totalCost(a) : null, cc = c ? totalCost(c) : null;
+        return ac !== null && ac > 0 && cc !== null ? cc / ac : null;
       });
       const pairs = g.flatMap(r => { const a = A.find(a => a.rep === r.rep); return a ? [[r, a] as const] : []; });
       const below = pairs.filter(([r, a]) => r.total_tokens < a.total_tokens).length;
       const paired = cond === 'A' ? '-' : pairs.length === 0 ? 'no pair' : `${below}/${pairs.length} below A${below === pairs.length && pairs.length >= 3 && pairs.length === (plannedReps ?? Math.max(...rows.filter(r => r.task === task).map(r => r.rep))) ? ' → effect' : ''}`;
       out.push({
-        task, cond, n: g.length, cost: C === null ? '-' : C.toFixed(3), 'cost/A': bC && C !== null ? (C / bC).toFixed(2) : '-',
+        task, cond, n: g.length, cost: C === null ? '-' : C.toFixed(3), jev_cost: J === null ? '-' : J.toFixed(4), 'cost/A': bC && C !== null ? (C / bC).toFixed(2) : '-',
         cost_pairs: cond === 'A' ? '-' : `${costRatios.filter(r => r !== null && r < 1).length}/${count} lower cost; ${costRatios.filter(r => r !== null).length}/${count} observed`, cost_ratios: costRatios,
         session_tokens: median(g.map(r => r.session_tokens ?? NaN).filter(Number.isFinite)),
         tokens: T, 'tok/A': bT && T !== null ? (T / bT).toFixed(2) : '-', wall_s: median(g.map((r) => r.wall_s)),
@@ -596,6 +624,52 @@ export const grid = (rows: Row[], tasks: string[], conds: readonly Condition[] =
     }
   }
   return out;
+};
+
+export interface ConditionSummary {
+  cond: Condition;
+  cells: number;
+  /** Cells whose task gate passed (`Row.solved`); measurement validity is judged separately by `ok`. */
+  solved: number;
+  /** Bill of every planned cell, failed ones included; unknown when any cell's bill is. */
+  cost: string;
+  'cost/solved': string;
+  /** Tasks whose median cell bill (failed cells included) is below / above A's; a task unknown on either side is in neither. */
+  'tasks lower/higher'?: string;
+  /** Share of the net saving against A carried by the task that saved most; above 1 when other tasks cost more. */
+  top_share?: string;
+  top_task?: string;
+}
+
+/**
+ * Per condition over every planned cell, as jevgrep reports it: tasks solved, the whole bill per solved task, how many
+ * tasks moved below or above A, and how much of the net saving one task carries. Cells of a task fewer than planned
+ * leave that task unknown.
+ */
+export const summary = (rows: Row[], tasks: string[], conds: readonly Condition[] = CONDITIONS, plannedReps?: number): ConditionSummary[] => {
+  const bills = (task: string, cond: Condition): number[] | null => {
+    const cells = rows.filter(r => r.task === task && r.cond === cond).map(totalCost);
+    return cells.length && (plannedReps === undefined || cells.length === plannedReps) && cells.every(c => c !== null) ? known(cells) : null;
+  };
+  const sum = (values: number[]): number => values.reduce((a, b) => a + b, 0);
+  const A = tasks.map(t => bills(t, 'A'));
+  return conds.map(cond => {
+    const cells = rows.filter(r => r.cond === cond && tasks.includes(r.task));
+    const per = tasks.map(t => bills(t, cond));
+    const total = per.every(p => p !== null) ? sum(per.flatMap(p => p ?? [])) : null;
+    const solved = cells.filter(r => r.solved).length;
+    const head: ConditionSummary = { cond, cells: cells.length, solved, cost: total === null ? '-' : total.toFixed(3), 'cost/solved': total !== null && solved ? (total / solved).toFixed(3) : '-' };
+    if (cond === 'A') return head;
+    let lower = 0, higher = 0;
+    per.forEach((p, i) => {
+      const c = p ? median(p) : null, base = A[i], a = base ? median(base) : null;
+      if (c !== null && a !== null) { if (c < a) lower++; else if (c > a) higher++; }
+    });
+    const savings = per.map((p, i) => (p && A[i] ? sum(A[i]) - sum(p) : null));
+    const net = savings.every(v => v !== null) ? sum(known(savings)) : null;
+    const top = net !== null && net > 0 ? savings.reduce<number>((best, v, i) => ((v ?? -Infinity) > (savings[best] ?? -Infinity) ? i : best), 0) : -1;
+    return { ...head, 'tasks lower/higher': `${lower}/${higher} of ${tasks.length}`, top_share: top < 0 ? '-' : ((savings[top] ?? 0) / (net ?? 1)).toFixed(2), top_task: top < 0 ? '-' : tasks[top] ?? '-' };
+  });
 };
 
 export const report = (argv: string[]): void => {
@@ -617,6 +691,7 @@ export const report = (argv: string[]): void => {
   const conds = Array.isArray(plan['conds']) ? plan['conds'] as Condition[] : [];
   const reps = typeof plan['reps'] === 'number' ? plan['reps'] : undefined;
   const resultCount = rows.length;
+  const versions = [...new Set(rows.map(r => r.host_version ?? 'unknown'))];
   if (reps !== undefined) for (const task of tasks) for (const cond of conds) for (let rep = 1; rep <= reps; rep++) {
     if (rows.some(r => r.task === task && r.cond === cond && r.rep === rep)) continue;
     rows.push(rowOf({ id: `${task}-${cond}-${rep}`, task, cond, rep, sid: '', cwd: '', started_at: '', prime_wall_s: 0, wall_s: 0,
@@ -624,9 +699,15 @@ export const report = (argv: string[]): void => {
   }
   console.log('\n== cells (ok=false and timed_out are excluded from medians; missing = transcript not found) ==');
   console.table(rows.map((r) => ({ ...r, shapes: r.shapes || '-' })));
-  console.log('== session cost (prime + task), cost ratio and planned-pair wins; task tokens are auxiliary ==');
+  console.log('== session cost (host prime + task + Jev list estimate), cost ratio and planned-pair wins; task tokens are auxiliary ==');
   console.table(grid(rows, tasks, conds, reps));
-  console.log('Cost pairs include every planned repetition; unknown or failed cells are not wins. Token paired-sign is auxiliary, not a cost-saving verdict.');
+  console.log('Cost pairs include every planned repetition; unknown or failed cells are not wins. A cell with a Jev request whose model or input is unknown has an unknown cost. Token paired-sign is auxiliary, not a cost-saving verdict.');
+  console.log('== per condition over every planned cell (failed included): solved tasks, bill per solved task, tasks vs A, net-saving concentration ==');
+  console.table(summary(rows, tasks, conds, reps));
+  console.log('solved = every turn rc 0 without a timeout, the checker exited 0 when the task has one, and the result pattern matched. cost/solved is unknown when any planned cell\'s bill is.');
+  console.log('A top_share near or above 1 means one task carries the net saving: read it as that task\'s saving, not a general one, and check tasks lower/higher.');
+  console.log(`Results hold for headless \`claude -p\` runs on host ${versions.join(', ')}; 2.1.302+ forks subagents by default in -p/SDK, so do not generalize them to interactive use.`);
+  if (versions.length > 1) console.log(`WARNING: cells ran on different host versions (${versions.join(', ')}); a difference between conditions may be the host's, not the plugin's.`);
   console.log('A lower effort next to a saving means less work was done, not the same work for less (#132). gate_turns vs tools shows how far Gate A\'s estimate was from the measured tool calls (#135).');
   const mismatched = rows.filter((r) => r.model_mismatch);
   if (mismatched.length) console.log(`${mismatched.length} cell(s) have non-pinned models without an exact request-bound route confirmation and are excluded: ${mismatched.map((r) => `${r.id}=${r.model}`).join(', ')} (#133). A hook without request identity cannot establish this binding.`);

@@ -3,9 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import { CONDITIONS, cleanEnv, conditionSettings, grid, median, parseRunArgs, rotate, rowOf, usageOf, run, report, sessionFacts, type CellResult, type Row } from '../src/bench/ab.js';
+import { CONDITIONS, cleanEnv, conditionSettings, grid, median, parseRunArgs, rotate, rowOf, usageOf, run, report, sessionFacts, summary, type CellResult, type Row } from '../src/bench/ab.js';
 
-const row = (over: Partial<Row>): Row => ({ id: 'S-A-1', task: 'S', cond: 'A', rep: 1, ok: true, wall_s: 10, cost: 1, prime_cost: 1, prime_tools: 30, model: 'm', model_mismatch: false, prime_effort: 'xhigh', effort: 'xhigh', gate_turns: '-', total_tokens: 100, cache_create: 10, cache_read: 80, output: 10, requests: 3, tools: 5, subs: 0, compacts: 0, shapes: '', ...over });
+const row = (over: Partial<Row>): Row => ({ id: 'S-A-1', task: 'S', cond: 'A', rep: 1, ok: true, solved: true, wall_s: 10, cost: 1, prime_cost: 1, prime_tools: 30, model: 'm', model_mismatch: false, prime_effort: 'xhigh', effort: 'xhigh', gate_turns: '-', total_tokens: 100, cache_create: 10, cache_read: 80, output: 10, requests: 3, tools: 5, subs: 0, compacts: 0, shapes: '', ...over });
 
 describe('bench ab (#130)', () => {
   it('requires each non-pinned task response to have its own exact route confirmation', () => {
@@ -34,20 +34,56 @@ describe('bench ab (#130)', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ab-jev-'));
     const records = [
       { phase: 'admission_intent', request_id: 'gate' },
-      { phase: 'admission_result', request_id: 'gate', attempted: true, jev: { usage: { input_tokens: 30, output_tokens: 10 } } },
+      { phase: 'admission_result', request_id: 'gate', attempted: true, jev: { model: 'jev-1.14.0', usage: { input_tokens: 30, output_tokens: 10 } } },
       { phase: 'mod_router', event: 'request', scope: 'root', turn: 't', sent: true },
-      { phase: 'mod_router', event: 'root', scope: 'root', turn: 't', sent: true, usage: { input: 40, output: 20 } },
+      { phase: 'mod_router', event: 'root', scope: 'root', turn: 't', sent: true, jev_model: 'jev-1.14.0', usage: { input: 40, output: 20 } },
+      { phase: 'mod_compact', stage: 'jev', jev_sent: true, jev_model: 'jev-1.14.0', invocation_id: 'c', usage: { input_tokens: 30, output_tokens: 0 } },
     ];
     records.forEach((r, i) => writeFileSync(join(dir, `${i}.json`), JSON.stringify({ ...r, session_id: 'sid' })));
-    expect(sessionFacts(dir, 'sid')).toMatchObject({ jevRequests: 2, jevInput: 70, jevOutput: 30 });
+    expect(sessionFacts(dir, 'sid')).toMatchObject({ jevRequests: 3, jevInput: 100, jevOutput: 30 });
+    // Each call is priced by its own recorded model: 100 input tokens at $0.042/Mtok.
+    expect(sessionFacts(dir, 'sid').jevCost).toBeCloseTo(100 * 0.042 / 1e6, 12);
+    // A late reply carries usage but no model; its call stays priced by the model its decision recorded.
+    writeFileSync(join(dir, 'late.json'), JSON.stringify({ phase: 'mod_router', event: 'late', scope: 'root', turn: 't', session_id: 'sid' }));
+    expect(sessionFacts(dir, 'sid').jevCost).toBeCloseTo(100 * 0.042 / 1e6, 12);
+    // A call whose model is unknown leaves the whole Jev cost unknown, not partly summed.
+    writeFileSync(join(dir, 'unpriced.json'), JSON.stringify({ phase: 'mod_router', event: 'spawn', tool_use_id: 'u', sent: true, jev_model: null, usage: { input: 5, output: 1 }, session_id: 'sid' }));
+    expect(sessionFacts(dir, 'sid')).toMatchObject({ jevRequests: 4, jevInput: 105, jevCost: null });
+    rmSync(join(dir, 'unpriced.json'));
     writeFileSync(join(dir, 'lost.json'), JSON.stringify({ phase: 'pre_intent', request_id: 'lost', session_id: 'sid' }));
-    expect(sessionFacts(dir, 'sid')).toMatchObject({ jevRequests: 3, jevInput: null, jevOutput: null });
+    expect(sessionFacts(dir, 'sid')).toMatchObject({ jevRequests: 4, jevInput: null, jevOutput: null, jevCost: null });
     rmSync(dir, { recursive: true });
   });
   it('keeps session cost distinct from token savings and includes unobserved planned pairs', () => {
     const rows = [row({ cost: 1, total_tokens: 100 }), row({ id: 'S-D-1', cond: 'D', cost: 2, total_tokens: 50 })];
     expect(grid(rows, ['S'], ['A', 'D'], 5)[1]).toMatchObject({ 'cost/A': '2.00', 'tok/A': '0.50', cost_pairs: '0/5 lower cost; 1/5 observed', cost_ratios: [2, null, null, null, null] });
     expect(grid(rows, ['S'], ['B'], 5)[0]).toMatchObject({ n: 0, cost_pairs: '0/5 lower cost; 0/5 observed', cost_ratios: [null, null, null, null, null] });
+  });
+  it('judges cost as host plus Jev, and a cell whose Jev requests are unpriced has no cost', () => {
+    const a = row({ cost: 1 });
+    // A host bill below A's is no saving once Gate A's Jev calls are added.
+    const priced = row({ id: 'S-B-1', cond: 'B', cost: 0.9, jev_requests: 2, jev_cost: 0.2 });
+    expect(grid([a, priced], ['S'], ['A', 'B'], 1)[1]).toMatchObject({ cost: '1.100', jev_cost: '0.2000', 'cost/A': '1.10', cost_pairs: '0/1 lower cost; 1/1 observed' });
+    const unpriced = row({ id: 'S-B-1', cond: 'B', cost: 0.5, jev_requests: 2, jev_cost: null });
+    expect(grid([a, unpriced], ['S'], ['A', 'B'], 1)[1]).toMatchObject({ cost: '-', 'cost/A': '-', cost_pairs: '0/1 lower cost; 0/1 observed', cost_ratios: [null] });
+    // No Jev request adds no Jev cost, whatever the row could not establish about it.
+    expect(grid([a, row({ id: 'S-C-1', cond: 'C', cost: 0.5, jev_requests: 0, jev_cost: null })], ['S'], ['A', 'C'], 1)[1]).toMatchObject({ cost: '0.500', jev_cost: '0.0000' });
+  });
+  it('divides every planned cell\'s bill by the solved count and shows how concentrated the saving is', () => {
+    const rows = [
+      row({ id: 'S-A-1', cost: 1 }), row({ id: 'S-A-2', rep: 2, cost: 1 }), row({ id: 'M-A-1', task: 'M', cost: 1 }), row({ id: 'M-A-2', task: 'M', rep: 2, cost: 1 }),
+      // A failed cell is not solved, but its bill stays in the numerator.
+      row({ id: 'S-B-1', cond: 'B', cost: 0.1 }), row({ id: 'S-B-2', cond: 'B', rep: 2, cost: 0.1, ok: false, solved: false }),
+      row({ id: 'M-B-1', task: 'M', cond: 'B', cost: 1.2 }), row({ id: 'M-B-2', task: 'M', cond: 'B', rep: 2, cost: 1.2 }),
+    ];
+    const [a, b] = summary(rows, ['S', 'M'], ['A', 'B'], 2);
+    expect(a).toEqual({ cond: 'A', cells: 4, solved: 4, cost: '4.000', 'cost/solved': '1.000' });
+    // S saves 1.8, M loses 0.4: one task carries more than the whole net saving of 1.4.
+    expect(b).toEqual({ cond: 'B', cells: 4, solved: 3, cost: '2.600', 'cost/solved': '0.867', 'tasks lower/higher': '1/1 of 2', top_share: '1.29', top_task: 'S' });
+    // One unpriced cell or one cell fewer than planned leaves the bill unknown, not smaller.
+    const unpriced = rows.map(r => r.id === 'M-B-2' ? { ...r, jev_requests: 1, jev_cost: null } : r);
+    expect(summary(unpriced, ['S', 'M'], ['A', 'B'], 2)[1]).toMatchObject({ cost: '-', 'cost/solved': '-', 'tasks lower/higher': '1/0 of 2', top_share: '-' });
+    expect(summary(rows.filter(r => r.id !== 'S-B-2'), ['S', 'M'], ['A', 'B'], 2)[1]).toMatchObject({ solved: 3, cost: '-', 'cost/solved': '-' });
   });
   it('rotates the condition order one position per repetition (#129 cache warming)', () => {
     expect(rotate(CONDITIONS, 1)).toEqual(['A', 'B', 'C', 'D']);
@@ -173,6 +209,7 @@ import { mkdirSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 const args = process.argv.slice(2);
 const flag = n => args[args.indexOf(n)+1];
+if (args[0] === '--version') { console.log('9.9.9 (Claude Code)'); process.exit(0); }
 const prime = args.includes('--session-id');
 const sid = flag(prime ? '--session-id' : '--resume');
 if (!process.env.JEV_GATE_STATE_DIR || !process.env.JEV_GATE_TRACE_DIR || process.env.CLAUDE_CODE_ENABLE_FUNCTION_HOOKS !== '1') process.exit(3);
@@ -187,7 +224,7 @@ console.log(JSON.stringify({result:'SUCCESS', session_id:sid, total_cost_usd:0.0
       const args = ['--tasks',tasks,'--out',out,'--model','fake-model','--conds','A,B','--reps','1','--claude',cli];
       run(args);
       const cell = JSON.parse(readFileSync(join(out,'results','S-A-1.json'),'utf8')) as CellResult;
-      expect(cell).toMatchObject({ rc:0, prime_rc:0, check_rc:0 });
+      expect(cell).toMatchObject({ rc:0, prime_rc:0, check_rc:0, host_version:'9.9.9 (Claude Code)' });
       const transcript = join(dir,'.claude','projects','fixture',cell.sid+'.jsonl');
       expect(rowOf(cell,inputs,transcript,join(out,'trace'))).toMatchObject({ ok:true,total_tokens:21 });
       const before = readFileSync(join(out,'plan.json'),'utf8'); run(args);
