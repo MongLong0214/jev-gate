@@ -7,6 +7,7 @@ import { startCodexSession } from './launch.js';
 import { obj, type Obj } from './source.js';
 import type { Env } from '../config.js';
 import type { CodexRpc } from './rpc.js';
+import type { TraceWriter } from '../trace.js';
 import { resolveApiKey, withApiKey } from '../credentials.js';
 
 export const PROVIDER = 'jev-gate-native';
@@ -80,14 +81,30 @@ export const restoreConnection = async (rpc: CodexRpc, env: Env): Promise<void> 
   if (edits.length) await rpc.request('config/batchWrite', { filePath: user.path, expectedVersion: user.version, reloadUserConfig: false, edits });
 };
 
-export const connectionRequest = async (env: Env, path: '/hook' | '/agent', input: Obj, signal?: AbortSignal): Promise<Obj | null> => {
-  const state = read(env); if (!state) return null;
-  try {
-    await provision(state, env);
-    const response = await fetch(`http://127.0.0.1:${state.port}${path}`, { method: 'POST', headers: { authorization: `Bearer ${state.token}`, 'content-type': 'application/json' }, body: JSON.stringify(input), ...(signal ? { signal } : {}) });
-    return response.ok ? obj(await response.json()) : null;
-  } catch { return null; }
+/** Closed, so a trace or tool result names why the helper did not answer without carrying its exception text. */
+export type ConnectionFailure = 'state_missing' | 'unreachable' | 'http_error' | 'timeout' | 'aborted' | 'invalid_reply';
+// The caller's signal decides cancellation: the MCP SDK aborts with a string reason, which fetch throws as is, without a name.
+const stopped = (e: unknown, other: ConnectionFailure, signal?: AbortSignal): ConnectionFailure =>
+  (e as Error | null)?.name === 'TimeoutError' || (signal?.reason as Error | null)?.name === 'TimeoutError' ? 'timeout'
+    : signal?.aborted || (e as Error | null)?.name === 'AbortError' ? 'aborted' : other;
+type HelperReply = { ok: true; value: Obj } | { ok: false; reason: ConnectionFailure };
+/** One POST to a local helper (the automatic connection or the managed bridge). */
+export const helperRequest = async (url: string, token: string, input: Obj, signal?: AbortSignal): Promise<HelperReply> => {
+  let response: Response;
+  try { response = await fetch(url, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify(input), ...(signal ? { signal } : {}) }); }
+  catch (e) { return { ok: false, reason: stopped(e, 'unreachable', signal) }; }
+  if (!response.ok) return { ok: false, reason: 'http_error' };
+  try { const value = obj(await response.json()); return value ? { ok: true, value } : { ok: false, reason: 'invalid_reply' }; }
+  catch (e) { return { ok: false, reason: stopped(e, 'invalid_reply', signal) }; }
 };
+export const connectionRequest = async (env: Env, path: '/hook' | '/agent', input: Obj, signal?: AbortSignal): Promise<HelperReply> => {
+  const state = read(env); if (!state) return { ok: false, reason: 'state_missing' };
+  try { await provision(state, env); } catch (e) { return { ok: false, reason: stopped(e, 'unreachable') }; }
+  return helperRequest(`http://127.0.0.1:${state.port}${path}`, state.token, input, signal);
+};
+/** #287: every unanswered helper call leaves one failure row named by its closed reason, never by its exception or reply body. */
+export const recordConnectionFailure = (trace: TraceWriter | undefined, reason: ConnectionFailure, fields: Obj): boolean =>
+  trace?.write('failure', { host: 'codex', ...fields, error_first_line: `connection_${reason}`, connection_failure: reason }).ok === true;
 const healthy = async (state: Connection): Promise<boolean> => {
   try {
     const response = await fetch(`http://127.0.0.1:${state.port}/health`, { headers: { authorization: `Bearer ${state.token}` }, signal: AbortSignal.timeout(250) });

@@ -184,8 +184,8 @@ export interface JevUsage {
  * #233: why an owned Codex dispatch ended without completion, and where. Closed, so no raw error text, prompt or
  * command reaches a trace or a tool result. `not_executed` is definite non-execution evidence, never a terminal.
  */
-export type CodexFailureCategory = 'preflight_conflict' | 'reservation_unavailable' | 'native_start_rejected' | 'native_failed_turn' | 'interrupted' | 'termination_unconfirmed';
-export const CODEX_FAILURE_CATEGORIES: readonly CodexFailureCategory[] = ['preflight_conflict', 'reservation_unavailable', 'native_start_rejected', 'native_failed_turn', 'interrupted', 'termination_unconfirmed'];
+export type CodexFailureCategory = 'preflight_conflict' | 'permissions_unavailable' | 'worktree_unavailable' | 'allocation_unavailable' | 'cancelled' | 'reservation_unavailable' | 'native_start_rejected' | 'native_failed_turn' | 'interrupted' | 'termination_unconfirmed';
+export const CODEX_FAILURE_CATEGORIES: readonly CodexFailureCategory[] = ['preflight_conflict', 'permissions_unavailable', 'worktree_unavailable', 'allocation_unavailable', 'cancelled', 'reservation_unavailable', 'native_start_rejected', 'native_failed_turn', 'interrupted', 'termination_unconfirmed'];
 export type CodexFailureStage = 'preflight' | 'reservation' | 'thread_start' | 'turn_start' | 'turn';
 export const CODEX_FAILURE_STAGES: readonly CodexFailureStage[] = ['preflight', 'reservation', 'thread_start', 'turn_start', 'turn'];
 export interface CodexFailure { category: CodexFailureCategory; stage: CodexFailureStage; not_executed: boolean }

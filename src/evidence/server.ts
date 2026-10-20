@@ -13,8 +13,9 @@ import { loadConfig, type ConfigLoad } from './source.js';
 import { LIMITS, MODES, type EvidenceConfig } from './types.js';
 import { CODEX_SANDBOX_META, codexCallerWorkspace } from '../codex/workspace.js';
 import { AGENT_TOOL } from '../codex/profiles.js';
-import { connectionRequest, ensureConnection } from '../codex/connection.js';
+import { connectionRequest, ensureConnection, recordConnectionFailure } from '../codex/connection.js';
 import { dirname } from 'node:path';
+import type { Env } from '../config.js';
 import { resolveApiKey, saveApiKey } from '../credentials.js';
 import { claudeSetupMessage, claudeTraceDir, integratedClaudePlugin, prepareClaude } from '../claude-setup.js';
 import { startOnboarding } from '../onboarding.js';
@@ -182,6 +183,15 @@ export const createServer = (load: ConfigLoad, deps: EvidenceServiceDeps & { tra
   return server;
 };
 
+/** #287: an `/agent` call the local helper did not answer is returned and recorded by its closed reason, never its exception. */
+export const connectionDispatch = (env: Env, trace?: TraceWriter) => async (arguments_: unknown, meta: unknown, signal: AbortSignal): Promise<string> => {
+  const result = await connectionRequest(env, '/agent', { arguments: arguments_, meta }, signal);
+  if (result.ok && typeof result.value['output'] === 'string') return result.value['output'];
+  const reason = result.ok ? 'invalid_reply' : result.reason; const session = codexCallerWorkspace(meta)?.session;
+  recordConnectionFailure(trace, reason, { ...(session ? { session_id: session } : {}), tool_name: 'jev_agent' });
+  return `Native connection unavailable or interrupted (${reason}). No completion is claimed.`;
+};
+
 /** Names and states only: never a source, a prompt, a provider body or the key. */
 export const doctorLines = (load: ConfigLoad, env: Readonly<Record<string, string | undefined>>, entry: string): string[] => [
   `server: ${entry}`,
@@ -228,10 +238,7 @@ const main = async (): Promise<void> => {
   if (installed) void ensureDashboard(root, env);
   const automaticConnection = codex && env['JEV_CODEX_AUTO_CONNECT'] !== '0' && env['JEV_CODEX_ENABLED'] !== '0' && !env['JEV_CODEX_BRIDGE_URL'];
   if (automaticConnection) await ensureConnection(root, env);
-  const server = createServer(load, { apiKey: resolveApiKey(env) || null, getApiKey: () => resolveApiKey(env) || null, ...(opened?.ok ? { trace: opened.writer } : {}), ...(codex ? { host: 'codex' as const, callerEnv: env } : {}), ...(automaticConnection ? { dispatch: async (arguments_: unknown, meta: unknown, signal: AbortSignal) => {
-    const result = await connectionRequest(env, '/agent', { arguments: arguments_, meta }, signal);
-    return typeof result?.['output'] === 'string' ? result['output'] : 'Native connection unavailable or interrupted. No completion is claimed.';
-  } } : {}) });
+  const server = createServer(load, { apiKey: resolveApiKey(env) || null, getApiKey: () => resolveApiKey(env) || null, ...(opened?.ok ? { trace: opened.writer } : {}), ...(codex ? { host: 'codex' as const, callerEnv: env } : {}), ...(automaticConnection ? { dispatch: connectionDispatch(env, opened?.ok ? opened.writer : undefined) } : {}) });
   let maintaining = false; let nextAttempt = 0;
   const supervisor = automaticConnection ? setInterval(() => {
     if (maintaining || Date.now() < nextAttempt) return;

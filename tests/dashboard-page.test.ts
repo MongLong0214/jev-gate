@@ -142,7 +142,8 @@ describe('dashboard live interactions', () => {
     expect(all).not.toMatch(/[가-힣]/); expect(all).toContain('Selected and observed models match');
     expect(all).toContain('Decision evidence'); expect(all).toContain('gpt-6.1-sol');
   });
-  it.each([['실행 전 점검 충돌', 'Preflight conflict'], ['실행 예약 기록 불가', 'Reservation unavailable'], ['Codex 워커 시작 거부', 'Codex worker start rejected'], ['Codex 워커 턴 실패', 'Codex worker turn failed'], ['워커 중단', 'Worker interrupted'], ['워커 종료 미확인 · 예약 유지', 'Worker termination unconfirmed · reservation kept']])('translates the Codex dispatch failure reason %s (#233)', (ko, en) => {
+  it.each([['실행 전 점검 충돌', 'Preflight conflict'], ['실행 예약 기록 불가', 'Reservation unavailable'], ['Codex 워커 시작 거부', 'Codex worker start rejected'], ['Codex 워커 턴 실패', 'Codex worker turn failed'], ['워커 중단', 'Worker interrupted'], ['워커 종료 미확인 · 예약 유지', 'Worker termination unconfirmed · reservation kept'],
+    ['부모 권한 전달 불가', 'Parent permissions unavailable'], ['Worktree 생성 불가', 'Worktree unavailable'], ['배정 모델·effort 사용 불가', 'Allocated model or effort unavailable'], ['시작 전 취소', 'Cancelled before start']])('translates the Codex dispatch failure reason %s (#233, #287)', (ko, en) => {
     const p = page(); p.push(snapshot([run('failed', 'codex', [step('f', 'workers', 'host', { title: '호스트 호출 실패', state: 'error', summary: `${ko} · jev-gate:worker`, details: ['워커 미실행 · 완료 주장 없음'] })], { title: 'Codex 실행' })]));
     p.click('#language'); p.click('.node[data-feature=workers]');
     const all = ['trace', 'circuit-inspector'].map(id => text(p, id)).join(' ');

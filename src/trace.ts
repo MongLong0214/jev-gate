@@ -107,8 +107,9 @@ export const openTraceDir = (dir: string, env: Env = process.env): { ok: true; w
 
 const DAY_MS = 86_400_000;
 export const TRACE_RETENTION_MS = 3 * DAY_MS;
-/** Only names this writer and the mods produce: `<phase>-<uuid>.json` and an abandoned `.<phase>-<uuid>.tmp`. */
-const OWN_TRACE = /^(?:[a-z][a-z_]*-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json|\.[a-z][a-z_]*-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.tmp)$/;
+/** Only names this writer and the mods produce: `<phase>-<uuid>.json`, an abandoned `.<phase>-<uuid>.tmp` and the Codex hook's
+ * once-per-session connection failure marker `connection_failed-<hash>.seen` (#287), which goes with its row. */
+const OWN_TRACE = /^(?:[a-z][a-z_]*-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json|\.[a-z][a-z_]*-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.tmp|connection_failed-[0-9a-f]{32}\.seen)$/;
 
 /**
  * Deletes this tool's trace files older than 3 days, directly in `dir`. At most once a day per directory across

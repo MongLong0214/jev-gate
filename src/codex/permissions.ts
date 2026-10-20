@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { isAbsolute } from 'node:path';
 import { CODEX_SANDBOX_META, codexCallerWorkspace } from './workspace.js';
@@ -21,14 +22,17 @@ export const capturedPermissions = (meta: unknown, planner: boolean): { cwd: str
     for (const value of fs['entries']) {
       const entry = obj(value); const path = obj(entry?.['path']);
       if (!entry || !path || !['read', 'write', 'deny', 'none'].includes(String(entry['access']))) return null;
-      // Optional missing entries cannot be safely widened into an unconditional grant.
-      if (entry['missing_path_behavior'] !== undefined && !(entry['missing_path_behavior'] === 'skip' && ['deny', 'none'].includes(String(entry['access'])))) return null;
+      if (entry['missing_path_behavior'] !== undefined && entry['missing_path_behavior'] !== 'skip') return null;
+      // A skipped grant applies only while its path exists, as natively; it is never widened into an unconditional grant. A skipped denial stays unconditional.
+      const optional = entry['missing_path_behavior'] === 'skip' && ['read', 'write'].includes(String(entry['access']));
       const access = entry['access'] === 'none' ? 'deny' : planner && entry['access'] === 'write' ? 'read' : entry['access'];
       let key: string; let subpath: string | undefined;
       if (path['type'] === 'path' && typeof path['path'] === 'string') {
         try { key = path['path'].startsWith('file:') ? fileURLToPath(path['path']) : path['path']; } catch { return null; }
         if (!isAbsolute(key) || key.includes('\0')) return null;
-      } else if (path['type'] === 'glob_pattern' && typeof path['pattern'] === 'string' && isAbsolute(path['pattern'])) key = path['pattern'];
+        if (optional && !existsSync(key)) continue;
+      } else if (optional) return null;
+      else if (path['type'] === 'glob_pattern' && typeof path['pattern'] === 'string' && isAbsolute(path['pattern'])) key = path['pattern'];
       else if (path['type'] === 'special') {
         const special = obj(path['value']); const kind = special?.['kind'];
         if (!['root', 'minimal', 'project_roots', 'tmpdir', 'slash_tmp'].includes(String(kind))) return null;

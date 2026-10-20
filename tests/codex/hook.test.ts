@@ -71,7 +71,7 @@ describe('native Codex hook', () => {
       const result = await executeCodexHook({ stdin: stdin({ hook_event_name: 'SessionStart', session_id: 'session', source, model: 'native-model', cwd: dir(), transcript_path: transcript, permission_mode: 'default' }), env: { JEV_CODEX_TRACE_DIR: path, CODEX_HOME: dir() } });
       if (notice) expect(result['systemMessage']).toContain(notice); else expect(result).not.toHaveProperty('systemMessage');
       expect(JSON.stringify(result)).toContain('native Codex plugin');
-      const event = readdirSync(path).map(f => JSON.parse(readFileSync(join(path, f), 'utf8')) as Record<string, unknown>).find(r => r['phase'] === 'codex_event');
+      const event = readdirSync(path).filter(f => f.startsWith('codex_event-')).map(f => JSON.parse(readFileSync(join(path, f), 'utf8')) as Record<string, unknown>).find(r => r['phase'] === 'codex_event');
       if (provider === 'openai' && source === 'startup') expect(event).toMatchObject({ event: 'SessionStart', routed: false, model_provider: 'openai' });
       else expect(event).not.toHaveProperty('routed');
       expect(JSON.stringify(event)).not.toContain('PRIVATE_INSTRUCTIONS');
@@ -97,7 +97,7 @@ describe('native Codex hook', () => {
       const result = await executeCodexHook({ stdin: stdin({ hook_event_name: 'SessionStart', session_id: 'session', source: 'startup', model: 'native-model', cwd: dir(), transcript_path: transcript ? file : null, permission_mode: 'default' }), env: { JEV_CODEX_TRACE_DIR: path, CODEX_HOME: home } });
       expect(result['systemMessage']).toContain(notice);
       expect(String(result['systemMessage'])).not.toContain('"unknown"');
-      const event = readdirSync(path).map(f => JSON.parse(readFileSync(join(path, f), 'utf8')) as Record<string, unknown>).find(r => r['phase'] === 'codex_event');
+      const event = readdirSync(path).filter(f => f.startsWith('codex_event-')).map(f => JSON.parse(readFileSync(join(path, f), 'utf8')) as Record<string, unknown>).find(r => r['phase'] === 'codex_event');
       expect(event).toMatchObject({ event: 'SessionStart', routed, model_provider: null });
       expect(JSON.stringify([result, event])).not.toContain(token);
     } finally { request.mockRestore(); }
@@ -112,7 +112,7 @@ describe('native Codex hook', () => {
     try {
       const result = await executeCodexHook({ stdin: stdin({ hook_event_name: 'SessionStart', session_id: 'session', source: 'startup', model: 'native-model', cwd: dir(), transcript_path: null, permission_mode: 'default' }), env: { JEV_CODEX_TRACE_DIR: path, CODEX_HOME: home } });
       expect(String(result['systemMessage'])).toContain('is unknown');
-      const event = readdirSync(path).map(f => JSON.parse(readFileSync(join(path, f), 'utf8')) as Record<string, unknown>).find(r => r['phase'] === 'codex_event');
+      const event = readdirSync(path).filter(f => f.startsWith('codex_event-')).map(f => JSON.parse(readFileSync(join(path, f), 'utf8')) as Record<string, unknown>).find(r => r['phase'] === 'codex_event');
       expect(event).toMatchObject({ event: 'SessionStart', routed: 'unknown' });
     } finally { request.mockRestore(); }
   });

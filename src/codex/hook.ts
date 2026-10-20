@@ -1,9 +1,10 @@
-import { closeSync, openSync, readSync, realpathSync } from 'node:fs';
-import { dirname, isAbsolute } from 'node:path';
+import { createHash } from 'node:crypto';
+import { closeSync, openSync, readSync, realpathSync, rmSync } from 'node:fs';
+import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { codexTraceDir } from '../codex-paths.js';
 import { openTraceDir, type TraceWriter } from '../trace.js';
-import { PROVIDER, connectionOwner, connectionRequest, ensureConnection } from './connection.js';
+import { PROVIDER, connectionOwner, connectionRequest, ensureConnection, helperRequest, recordConnectionFailure, type ConnectionFailure } from './connection.js';
 
 type Rec = Record<string, unknown>;
 const record = (v: unknown): Rec | null => v !== null && typeof v === 'object' && !Array.isArray(v) ? v as Rec : null;
@@ -67,6 +68,17 @@ export const handleCodexEvent = (input: Rec, env: CodexHookDeps['env'], trace?: 
   return {};
 };
 
+/**
+ * #287: a hook records a connection failure once per (session, reason), so a session that stays disconnected adds no row per event.
+ * Like the compact Mod's `compact_asked-<session>.asked`, the claim is a marker beside the records, created exclusively across hook
+ * processes and removed by trace retention with its row; a row that could not be written gives its claim back.
+ */
+const recordOnce = (dir: string, trace: TraceWriter, reason: ConnectionFailure, fields: { session_id: string | null } & Rec): void => {
+  const marker = join(dir, `connection_failed-${createHash('sha256').update(`${fields.session_id ?? ''}\0${reason}`, 'utf8').digest('hex').slice(0, 32)}.seen`);
+  try { closeSync(openSync(marker, 'wx', 0o600)); } catch (e) { if ((e as NodeJS.ErrnoException).code === 'EEXIST') return; }
+  if (!recordConnectionFailure(trace, reason, fields)) rmSync(marker, { force: true });
+};
+
 export const runCodexHook = async (deps: CodexHookDeps): Promise<Rec> => {
   try {
     if (deps.env['JEV_CODEX_ENABLED'] === '0') return {};
@@ -91,26 +103,26 @@ export const runCodexHook = async (deps: CodexHookDeps): Promise<Rec> => {
       : owner === 'absent' ? { routed: false, model_provider: null } : owner ? { routed: 'unknown', model_provider: null } : undefined;
     const opened = (deps.openTrace ?? openTraceDir)(codexTraceDir(deps.env), deps.env);
     const recorded = handleCodexEvent(input, deps.env, opened.ok ? opened.writer : undefined, routing);
-    if (!bridge || !secret) {
+    // The user sees these; the model does not. `codex exec` keeps its model and effort, so it needs no notice.
+    const notice = routing?.routed === false ? { systemMessage: `Jev Gate: this session started ${routing.model_provider ? `on model provider ${JSON.stringify(routing.model_provider)} ` : ''}without the Jev Gate connection, so Router and Compact do not apply to it. Start a new session once the connection is ready.` }
+      : routing ? { systemMessage: 'Jev Gate: Codex reported no usable start metadata for this session, so whether Router and Compact apply to it is unknown. Run doctor, then start a new session once the connection is ready.' }
+      : started && started['originator'] !== 'codex_exec' ? { systemMessage: 'Jev Gate: Router may change the model and effort of this interactive session, including a model given with -m/--model; Codex reports no signal that separates it from config defaults. codex exec keeps its model and effort.' } : {};
+    const automatic = !bridge || !secret;
+    if (automatic) {
       if (deps.env['JEV_CODEX_AUTO_CONNECT'] === '0') return recorded;
       if (input['hook_event_name'] === 'SessionStart' && typeof input['model'] === 'string' && typeof input['cwd'] === 'string') await ensureConnection(dirname(dirname(fileURLToPath(import.meta.url))), deps.env);
-      const policy = await connectionRequest(deps.env, '/hook', input, AbortSignal.timeout(4200));
-      // The user sees these; the model does not. `codex exec` keeps its model and effort, so it needs no notice.
-      const notice = routing?.routed === false ? { systemMessage: `Jev Gate: this session started ${routing.model_provider ? `on model provider ${JSON.stringify(routing.model_provider)} ` : ''}without the Jev Gate connection, so Router and Compact do not apply to it. Start a new session once the connection is ready.` }
-        : routing ? { systemMessage: 'Jev Gate: Codex reported no usable start metadata for this session, so whether Router and Compact apply to it is unknown. Run doctor, then start a new session once the connection is ready.' }
-        : started && started['originator'] !== 'codex_exec' ? { systemMessage: 'Jev Gate: Router may change the model and effort of this interactive session, including a model given with -m/--model; Codex reports no signal that separates it from config defaults. codex exec keeps its model and effort.' } : {};
-      if (policy && Object.keys(policy).length) return { ...policy, ...notice };
-      if (input['hook_event_name'] === 'SessionStart' && policy) return { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: 'Jev Gate native hooks and jev_agent dispatch are available. Follow the current Gate guidance and use jev_agent for owned dispatches. Router and Compact apply only when actual model requests pass through the local connection; a host already running before installation retains its previous provider until restarted. Native permissions and user constraints remain authoritative. Do not claim unobserved policies ran.' }, ...notice };
+    } else {
+      const url = new URL(bridge);
+      if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1') return recorded;
+    }
+    const reply = automatic ? await connectionRequest(deps.env, '/hook', input, AbortSignal.timeout(4200)) : await helperRequest(new URL('/hook', bridge).href, secret, input, AbortSignal.timeout(4200));
+    if (!reply.ok) {
+      if (opened.ok) recordOnce(codexTraceDir(deps.env), opened.writer, reply.reason, { session_id: token(input['session_id']), event: token(input['hook_event_name']), tool_name: token(input['tool_name']) });
       return { ...recorded, ...notice };
     }
-    const url = new URL(bridge);
-    if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1') return recorded;
-    try {
-      const response = await fetch(new URL('/hook', url), { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${secret}` }, body: JSON.stringify(input), signal: AbortSignal.timeout(4200) });
-      if (!response.ok) return recorded;
-      const policy = record(await response.json());
-      return policy && Object.keys(policy).length ? policy : recorded;
-    } catch { return recorded; }
+    if (Object.keys(reply.value).length) return { ...reply.value, ...notice };
+    if (automatic && input['hook_event_name'] === 'SessionStart') return { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: 'Jev Gate native hooks and jev_agent dispatch are available. Follow the current Gate guidance and use jev_agent for owned dispatches. Router and Compact apply only when actual model requests pass through the local connection; a host already running before installation retains its previous provider until restarted. Native permissions and user constraints remain authoritative. Do not claim unobserved policies ran.' }, ...notice };
+    return { ...recorded, ...notice };
   } catch {
     // Hook failures preserve native behavior. No exception messages containing input reach stdout/stderr.
     return {};
