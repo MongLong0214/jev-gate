@@ -10,6 +10,9 @@ import type { SymbolicEffort } from '../../mods/router/hooks/models.ts';
 import { offerableEfforts, TIER_LEVELS } from '../../mods/router/hooks/policy.ts';
 import type { HostPins, RootRecord, SpawnEvent, SpawnOutcome, TurnStepEvent } from '../../mods/router/hooks/router.ts';
 import { cachePatch, createRouter, hostSupported, ROUTER_HOOK_VERSION, VERIFIED_HOST } from '../../mods/router/hooks/router.ts';
+import { createRecorder } from '../../mods/router/hooks/recording.ts';
+import { activityChecks } from '../../src/doctor-activity.js';
+import { loadActivity } from '../../src/activity.js';
 import { sessionFacts } from '../../src/bench/ab.js';
 import { buildOperations } from '../../src/operations.js';
 import { normalizeUsage } from '../../src/cost.ts';
@@ -897,6 +900,9 @@ describe('spawn model', () => {
     expect(await router.agentSpawn(f.engine, spawn({ tool_use_id: 'tu2' }), other.next)).toEqual({ model: 'claude-sonnet-5-5' });
     expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn_result', denied: true }));
     expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn_result', reason: 'model_mismatch', requested: 'claude-haiku-5-5', observed: 'claude-sonnet-5-5' }));
+    const records = f.logs.map(r => ({ ...r, phase: 'mod_router', session_id: 'spawn-mismatch', written_at: new Date().toISOString() }));
+    const checks = activityChecks({ traces: { claude: { records, unreadable: 0 } }, now: Date.now(), installed: null, recording: true, keyPresent: true, codexOwner: null, liveness: null });
+    expect(checks.find(c => c.message.startsWith('router_applied:'))).toMatchObject({ level: 'fail', message: expect.stringContaining('1 answered by another model family') });
   });
 
   it('stays native when a pin or the allowlist changes while Jev answers', async () => {
@@ -3142,4 +3148,78 @@ describe('root baseline across a resume', () => {
     expect(resumed.f.sent).toHaveLength(sent);
     expect(resumed.f.logs).toContainEqual(expect.objectContaining({ event: 'child_route', agent_id: 'a986b732adfdb860c', skipped: 'child_unregistered' }));
   });
+});
+
+
+describe('Router producer activity accounting', () => {
+  it.each(['failure', 'missing', 'partial', 'invalid', 'complete'] as const)('D2: real provider records keep %s usage honest in doctor and dashboard', async kind => {
+    const dir = mkdtempSync(join(tmpdir(), 'router-activity-'));
+    try {
+      const records: Array<Record<string, unknown>> = [];
+      const recorder = createRecorder({
+        paths: async () => ({ home: dir, state: dir, config: dir, trace: dir, session: 'producer-session' }),
+        stat: async () => ({ isLink: false, kind: 'dir', size: 0 }), exists: async () => false, read: async () => '',
+        write: async (path, text) => { writeFileSync(path, text); records.push(JSON.parse(text)); },
+        wait: () => new Promise<void>(() => undefined),
+      });
+      const router = createRouter(configOf(MODEL_ONLY));
+      const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['standard', .99] }) });
+      f.engine.currentContextBound = async (turnId, index) => ({ turnId, index, inputUpperBound: 20_000, compatible: true });
+      f.engine.currentEffort = async () => undefined;
+      await warmRoot(router, f, 'claude-sonnet-5-5', 'high');
+      f.engine.log = recorder.log;
+      router.turnStart({ turnId: 'producer-turn', text: TEXT });
+      const counts = { input_tokens: 0, output_tokens: 2000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+      await drain(router.turnStep(f.engine, step({ turnId: 'producer-turn' }), streamNext<TurnStepEvent>(undefined, counts).next));
+      await recorder.flush();
+      expect(records.find(r => r['event'] === 'root')).toMatchObject({ patch: { model: 'claude-sonnet-5-5' } });
+      const good = activityChecks({ traces: { claude: { records: [...records], unreadable: 0 } }, now: Date.now(), installed: null, recording: true, keyPresent: true, codexOwner: null, liveness: null }).find(c => c.message.startsWith('router_cost:'))!;
+      expect(good.metrics?.effect).toBeGreaterThan(0);
+      if (kind === 'failure' || kind === 'missing') {
+        const next = Object.assign(async function* (_e: TurnStepEvent): AsyncGenerator<string, { usage: null }> { throw new Error('synthetic provider failure'); }, { signal: new AbortController().signal });
+        await expect(drain(router.turnStep(f.engine, step({ turnId: 'producer-turn', index: 1 }), next))).rejects.toThrow('synthetic provider failure');
+        await recorder.flush();
+      } else if (kind !== 'complete') {
+        const broken: Record<string, unknown> = { ...counts };
+        if (kind === 'partial') delete broken['output_tokens']; else broken['output_tokens'] = -1;
+        await drain(router.turnStep(f.engine, step({ turnId: 'producer-turn', index: 1 }), streamNext<TurnStepEvent>(undefined, broken).next));
+        await recorder.flush();
+      }
+      // A missing failure file exercises the independent intent-without-return path, using the producer's send.
+      const kept = kind === 'missing' ? records.filter(r => r['event'] !== 'model_failure') : records;
+      if (kind === 'missing') {
+        const { readdirSync, readFileSync, unlinkSync } = await import('node:fs');
+        for (const file of readdirSync(dir)) if (JSON.parse(readFileSync(join(dir, file), 'utf8'))['event'] === 'model_failure') unlinkSync(join(dir, file));
+      }
+      const cost = activityChecks({ traces: { claude: { records: kept, unreadable: 0 } }, now: Date.now(), installed: null, recording: true, keyPresent: true, codexOwner: null, liveness: null }).find(c => c.message.startsWith('router_cost:'))!;
+      const dashboard = loadActivity({ traceDir: dir, env: { HOME: join(dir, 'home'), XDG_CONFIG_HOME: join(dir, 'config') } }).activity24h.claude.find(c => c.feature === 'router')!;
+      expect(dashboard.metrics).toEqual(cost.metrics);
+      if (kind === 'complete') expect(cost.metrics?.effect).toBeGreaterThan(0);
+      else {
+        expect(cost).toMatchObject({ level: 'warn', message: expect.stringContaining('1 sessions excluded'), metrics: { effect: null } });
+        expect(cost.message).not.toContain('net ');
+      }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
+
+it('D4: real Claude child and spawn records reach activity', async () => {
+  const router = createRouter(configOf(CHILD));
+  const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', .95], effort: ['low', .95] }) });
+  const records: Array<Record<string, unknown>> = [];
+  const recorder = createRecorder({
+    paths: async () => ({ home: '/synthetic', state: '/synthetic', config: '/synthetic', trace: '/synthetic', session: 'producer-child' }),
+    stat: async () => ({ isLink: false, kind: 'dir', size: 0 }), exists: async () => false, read: async () => '',
+    write: async (_path, text) => { records.push(JSON.parse(text)); }, wait: () => new Promise<void>(() => undefined),
+  });
+  f.engine.log = recorder.log;
+  router.agentOffer(OFFER_BUILT_IN('Explore'));
+  await router.agentSpawn(f.engine, spawn(), spawnNext(() => ({ model: 'claude-opus-5-5', agentId: 'a1' })).next);
+  await drain(router.turnStep(f.engine, childStep(), streamNext<TurnStepEvent>().next));
+  await recorder.flush();
+  const checks = activityChecks({ traces: { claude: { records, unreadable: 0 } }, now: Date.now(), installed: null, recording: true, keyPresent: true, codexOwner: null, liveness: null });
+  // The first child step reuses the spawn allocation; it makes no child Jev call.
+  expect(checks.find(c => c.message.startsWith('child_effect:'))?.message).toContain('0 child steps sent to Jev');
+  expect(checks.find(c => c.message.startsWith('router_applied:'))?.message).toContain('2 routed requests with an observed model');
 });

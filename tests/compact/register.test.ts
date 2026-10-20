@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { resolveCompactConfig } from '../../mods/compact/hooks/config.ts';
+import { activityChecks, activityStableUntil } from '../../src/doctor-activity.js';
+import { loadActivity } from '../../src/activity.js';
 import { rowOf, type CellResult } from '../../src/bench/ab.js';
 
 /**
@@ -291,4 +293,41 @@ describe('optional Jev failure does not discard the local digest', () => {
     const event = { trigger: 'auto', messages: conversation() };
     expect(await hook($, event, next)).toBe(CORE); expect(calls).toEqual([event]);
   });
+});
+
+
+it.each(['active', 'shadow', 'fallback', 'coreError', 'cancelled'] as const)('D3: real Function Compact %s records reach doctor and dashboard', async kind => {
+  const dir = mkdtempSync(join(tmpdir(), 'compact-activity-'));
+  try {
+    const records: Array<Record<string, unknown>> = [];
+    const host = hostWith(async (path, text) => {
+      if (!path.endsWith('.json')) return;
+      const { basename } = await import('node:path');
+      writeFileSync(join(dir, basename(path)), text); records.push(JSON.parse(text));
+    });
+    const hook = (await hooksFor({ enabled: true, mode: kind === 'shadow' ? 'shadow' : 'active', budgetChars: 40000 })).get('session.compact')!;
+    const next = kind === 'coreError' ? async () => { throw new Error('synthetic core failure'); } : nextSpy().next;
+    if (kind === 'cancelled') { const controller = new AbortController(); controller.abort(); Object.assign(next, { signal: controller.signal }); }
+    const messages = kind === 'fallback' || kind === 'coreError' ? [{ role: 'user', text: 'hi', toolUses: [] }] : conversation();
+    const run = Promise.resolve(hook(host, { trigger: 'auto', messages }, next));
+    if (kind === 'coreError') await expect(run).rejects.toThrow('synthetic core failure'); else await run;
+    const facts = activityChecks({ traces: { claude: { records, unreadable: 0 } }, now: Date.now(), installed: null, recording: true, keyPresent: false, codexOwner: null, liveness: null }).find(c => c.feature === 'compact')!;
+    const applied = kind === 'active' ? 1 : 0, regression = kind === 'coreError' ? 1 : 0;
+    expect(facts.metrics).toMatchObject({ fired: 1, applied, restored: 0, regression, budget: 40000 });
+    if (kind === 'cancelled') expect(activityChecks({ traces: { claude: { records, unreadable: 0 } }, now: Date.now() + 600001, installed: null, recording: true, keyPresent: false, codexOwner: null, liveness: null }).find(c => c.feature === 'compact')?.metrics).toMatchObject({ fired: 1, applied: 0, regression: 0 });
+    if (kind === 'active') {
+      const started = records.filter(r => r['stage'] === 'started');
+      const at = Date.parse(String(started[0]!['written_at']));
+      const pending = (now: number) => activityChecks({ traces: { claude: { records: started, unreadable: 0 } }, now, installed: null, recording: true, keyPresent: false, codexOwner: null, liveness: null }).find(c => c.feature === 'compact')!;
+      expect(pending(at).metrics).toMatchObject({ fired: 1, applied: 0, regression: 0 });
+      expect(pending(at + 600001).metrics).toMatchObject({ fired: 1, applied: 0, regression: 1 });
+      expect(activityStableUntil(started, at)).toBe(at + 600001);
+    }
+    if (applied) {
+      const terminal = records.find(r => r['applied'] === true)!;
+      expect(facts.metrics).toMatchObject({ budget: 40000, budgetUsed: Number(terminal['digestChars']) + Number(terminal['tailChars']) });
+    }
+    const dashboard = loadActivity({ traceDir: dir, env: { HOME: join(dir, 'home'), XDG_CONFIG_HOME: join(dir, 'config') } });
+    expect(dashboard.activity24h.claude.find(c => c.feature === 'compact')?.metrics).toEqual(facts.metrics);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

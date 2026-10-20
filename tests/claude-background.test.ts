@@ -1,6 +1,8 @@
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { activityChecks } from '../src/doctor-activity.js';
+import { loadActivity } from '../src/activity.js';
 import { runHook } from '../src/hook.js';
 import { jobPath, MAX_HISTORY, newGeneration, readJob, updateJob } from '../src/job.js';
 import { claudeDefaults, prepareClaude } from '../src/claude-setup.js';
@@ -603,4 +605,14 @@ describe('Gate A and host task notifications', () => {
     expect([null, 'veto', 'no-depth', 'no-key'].flatMap(id => g.admissions(id)).map(r => [r.decision.reason, r.human_input])).toEqual(
       ['prompt_id_absent', 'admission_forbids_delegation', 'depth_unknown', 'key_missing'].map(reason => [reason, verdict]));
   });
+});
+
+
+it('D4: real background launch and terminal records settle worker activity', async () => {
+  const f = await fixture(); await f.launch(); f.transcript(); await f.terminal();
+  const records = readdirSync(join(f.root, 'trace')).filter(file => file.endsWith('.json')).map(file => JSON.parse(readFileSync(join(f.root, 'trace', file), 'utf8')));
+  const checks = activityChecks({ traces: { claude: { records, unreadable: 0 } }, now: Date.now(), installed: null, recording: true, keyPresent: false, codexOwner: null, liveness: null });
+  expect(checks.find(c => c.message.startsWith('background:'))?.message).toContain('1 background workers ended');
+  expect(checks.find(c => c.feature === 'workers')?.metrics).toMatchObject({ fired: 1, pending: 0, accepted: 1 });
+  expect(loadActivity({ traceDir: f.env.JEV_GATE_TRACE_DIR, env: f.env }).activity24h.claude.find(c => c.feature === 'workers')?.metrics).toEqual(checks.find(c => c.feature === 'workers')?.metrics);
 });

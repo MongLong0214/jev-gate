@@ -12,6 +12,22 @@ describe('credential screen parity', () => {
     expect(ROUTER.map(String)).toEqual(SOURCE.map(String));
   });
 
+  it.each([
+    'Cookie: preference=canary123', 'Set-Cookie: preference=canary123; HttpOnly',
+    'connect.sid=s:canary123', 'authentication=canary123', 'authToken=canary123',
+    'curl --cookie sessionid=canary123 host', 'curl --cookie="other=canary123" host',
+    "curl -b 'other=canary123' host", 'curl -bother=canary123 host',
+    ...['sessionid', 'session', 'sid', 'connect.sid', 'PHPSESSID', 'JSESSIONID', '_session', 'auth_cookie', 'access_token'].map(name => `${name}=canary123`),
+  ])('detects cookie credentials in both screens: %s', text => {
+    expect(sourceLooksSecret(text)).toBe(true);
+    expect(routerLooksSecret(text)).toBe(true);
+  });
+
+  it.each(['the session ended', 'cookie banner', 'sid', 'author: documentation', 'tokenization: analysis123', 'session=short', 'cookie: banner', 'curl --cookie cookies.txt host', 'sessionid=$SESSION'])('keeps ordinary cookie prose and names: %s', text => {
+    expect(sourceLooksSecret(text)).toBe(false);
+    expect(routerLooksSecret(text)).toBe(false);
+  });
+
   it('answers the same on the forms both screen and both pass', () => {
     const samples = [
       'curl -H "Authorization: Basic dTpw" host',

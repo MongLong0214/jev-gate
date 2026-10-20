@@ -12,6 +12,7 @@ import { composeSingleWorkerPrompt, MAX_COMPOSED_BYTES } from '../src/plan.js';
 import { ADMISSION_ANSWERS, ROUTE_ANSWERS, UPGRADE_BASES, type JobState, type WorkerReply } from '../src/types.js';
 import { costModelFloor, delegationModel } from '../src/admission.js';
 import { explainRecords, readTraceRecords } from '../src/explain.js';
+import { activityChecks } from '../src/doctor-activity.js';
 import { loadActivity } from '../src/activity.js';
 import { DEFAULT_CONFIG } from '../src/config.js';
 
@@ -1158,6 +1159,16 @@ describe('worker check verification (0.4.0)', () => {
   };
   const ACCEPTED = 'The worker reported done with no blockers';
 
+  it.each(['summary', 'blockers'])('D1: drops cookie-bearing %s from persisted receipts and coordinator delivery', async field => {
+    const env = makeEnv(); await dispatched(env);
+    const canary = 'sessionid=canary123', text = `curl --cookie ${canary}`;
+    const reply = workerReply(field === 'summary' ? { summary: text } : { status: 'blocked', blockers: [text] });
+    const post = await run(env, postWith(reply, workerTranscript([{ command: 'npm test', failed: false }])));
+    const receipt = state(env).current.receipts[0];
+    expect(receipt?.reply).toBeDefined();
+    for (const output of [JSON.stringify(receipt), readFileSync(jobPath(env, 's1'), 'utf8'), context(post)]) expect(output).not.toContain(canary);
+  });
+
   it('B3: persists only positional check facts, never report prose or observed output', async () => {
     const dir = join(tmp, 'trace-private-report');
     const env = makeEnv({ JEV_GATE_TRACE_DIR: dir }); await dispatched(env);
@@ -2014,24 +2025,30 @@ describe('atomic required request delivery and root handoff (#108/#111)', () => 
 });
 
 describe('full candidate pair in the existing Gate B batch', () => {
-  it('applies the sixth model/max to a worker without an extra Jev call', async () => {
-    const env = makeEnv();
-    await run(env, promptEvent(), fakeJev());
-    const base = fakeJev();
+  it.each((['claude', 'codex'] as const).flatMap(host => (['model', 'effort', 'keep'] as const).map(kind => [host, kind] as const)))('D4: full candidate Gate B %s %s changes reach activity', async (host, kind) => {
+    const trace = mkdtempSync(join(tmp, 'pair-activity-')), env = makeEnv({ JEV_GATE_TRACE_DIR: trace });
+    const extra: Partial<HookDeps> = host === 'codex' ? { host: { id: 'codex', config: { ...DEFAULT_CONFIG, mode: 'auto' },
+      depth: () => ({ ok: true, tokens: 500000, model: 'fixture-model', modelSwitched: false, bytesRead: 0, durationMs: 0 }), compactWindow: 200000, observation: () => null } } : {};
+    await run(env, promptEvent(), fakeJev(), extra);
+    const base = fakeJev({ route: kind === 'keep' ? 'fast' : 'standard' });
     const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
       const req = JSON.parse(String(init.body));
-      expect(Object.keys(req.questions.model.criteria)).toContain('fixture-F');
+      expect(Object.keys(req.questions.model.criteria)).toContain(kind === 'model' ? 'fixture-F' : '__keep__');
       const old = await (base as unknown as typeof fetch)(url, init); const body = await old.json() as {answers:Record<string,unknown>};
       for (const [name, q] of Object.entries(req.questions) as Array<[string, {type:string;criteria:Record<string,string>|string[]}]>) {
-        if (name === 'model' || name === 'control' || name === 'action_risk') body.answers[name] = choice(Object.keys(q.criteria), name === 'model' ? 'fixture-F' : name === 'control' ? 'task_clear' : 'ordinary', 1);
+        if (name === 'model' || name === 'control' || name === 'action_risk') body.answers[name] = choice(Object.keys(q.criteria), name === 'model' ? kind === 'model' ? 'fixture-F' : '__keep__' : name === 'control' ? kind === 'keep' ? 'explicit_lock' : 'task_clear' : 'ordinary', 1);
         if (name.startsWith('effort_')) body.answers[name] = {type:'score', probabilities:Object.fromEntries((q.criteria as string[]).map((v,i)=>[i,v.startsWith('Maximum')?1:0]))};
       }
       return new Response(JSON.stringify(body));
     });
-    const allocation = { candidates: () => ['A','B','C','D','E','F'].map(n=>({id:`fixture-${n}`,description:'fixture coding model',efforts:['high','max'],omitEffort:false})), allowed: (model:string)=>model.startsWith('fixture-') || model === 'opus', toolModel: () => 'opus' };
-    const result = await run(env, preEvent('Agent',agentInput()), fetchImpl, {allocation});
+    const allocation = { candidates: () => ['A','B','C','D','E','F'].map(n=>({id:`fixture-${n}`,description:'fixture coding model',efforts:['high','max'],omitEffort:true})), allowed: (model:string)=>model.startsWith('fixture-') || model === 'opus', toolModel: () => 'opus', ...(kind !== 'model' ? { canonical: () => 'fixture-F' } : {}) };
+    const result = await run(env, preEvent('Agent',agentInput()), fetchImpl, {...extra, allocation});
     expect(result.kind).toBe('patch'); expect(updatedInput(result).model).toBe('opus'); expect(fetchImpl).toHaveBeenCalledOnce();
-    expect(state(env).current.active['toolu_1']?.allocation_pair).toEqual({model:'fixture-F',effort_edit:{kind:'set',value:'max'}});
+    expect(state(env).current.active['toolu_1']?.allocation_pair).toEqual({model:'fixture-F',effort_edit: kind === 'keep' ? {kind:'keep'} : {kind:'set',value:'max'}});
+    const records = readTraceRecords(trace).records;
+    const checks = activityChecks({ traces: { [host]: { records, unreadable: 0 } }, now: Date.now(), installed: null, recording: true, keyPresent: true, codexOwner: null, liveness: null });
+    expect(checks.find(c => c.feature === 'allocation')?.metrics).toMatchObject({ fired: 1, applied: kind === 'keep' ? 0 : 1, regression: 0 });
+    expect(loadActivity({ traceDir: trace, host, env }).activity24h[host].find(c => c.feature === 'allocation')?.metrics).toEqual(checks.find(c => c.feature === 'allocation')?.metrics);
   });
   it('dispatches a retry one role above the model its failed attempt recorded, in the same batch', async () => {
     const env = makeEnv();
@@ -2109,4 +2126,39 @@ describe('failure privacy', () => {
     expect.soft(read.records.find(r => r['phase'] === 'failure')).toMatchObject({ verdict_reason: 'worker_failed' });
     for (const output of [JSON.stringify(read), explainRecords(read).join('\n'), JSON.stringify(loadActivity({ traceDir: dir, env }))]) expect.soft(output).not.toContain(sentinel);
   });
+});
+
+
+it.each(['claude', 'codex'] as const)('D4: real %s Gate A/B and worker records agree with dashboard activity', async host => {
+  const trace = join(tmp, `producer-activity-${host}`);
+  const env = makeEnv({ JEV_GATE_TRACE_DIR: trace });
+  const fetchImpl = fakeJev({ execution: 'orchestrated', route: 'fast' });
+  const extra: Partial<HookDeps> = host === 'codex' ? { host: { id: 'codex', config: { ...DEFAULT_CONFIG, mode: 'auto' },
+    depth: () => ({ ok: true, tokens: 500000, model: 'fixture-model', modelSwitched: false, bytesRead: 0, durationMs: 0 }), compactWindow: 200000, observation: () => null } } : {};
+  await run(env, promptEvent(), fetchImpl, extra);
+  await run(env, preEvent('Agent', agentInput({ prompt: 'Do what the request asks.' })), fetchImpl, extra);
+  await run(env, workerPost('toolu_1', workerReply({ checks: host === 'codex' ? [] : [{ check_id: 'npm test', result: 'pass', note: 'Passed' }] })), fetchImpl, extra);
+  const records = readTraceRecords(trace).records;
+  const checks = activityChecks({ traces: { [host]: { records, unreadable: 0 } }, now: Date.now(), installed: null, recording: true, keyPresent: true, codexOwner: null, liveness: null });
+  expect(checks.find(c => c.feature === 'admission')?.metrics).toMatchObject({ fired: 1, applied: 1 });
+  expect(checks.find(c => c.feature === 'allocation')?.metrics).toMatchObject({ fired: 1, applied: 1 });
+  expect(checks.find(c => c.feature === 'workers')?.metrics).toMatchObject({ fired: 1, pending: 0, accepted: host === 'codex' ? 0 : 1, rejected: host === 'codex' ? 1 : 0 });
+  const dashboard = loadActivity({ traceDir: trace, host, env });
+  for (const feature of ['admission', 'allocation', 'workers']) expect(dashboard.activity24h[host].find(c => c.feature === feature)?.metrics).toEqual(checks.find(c => c.feature === feature)?.metrics);
+});
+
+
+it.each(['claude', 'codex'] as const)('D4: real %s invalid Gate B answers count as regressions', async host => {
+  const trace = join(tmp, `invalid-allocation-activity-${host}`), env = makeEnv({ JEV_GATE_TRACE_DIR: trace });
+  const fetchImpl = fakeJev({ mistype: 'unresolved_interaction' });
+  const extra: Partial<HookDeps> = host === 'codex' ? { host: { id: 'codex', config: { ...DEFAULT_CONFIG, mode: 'auto' },
+    depth: () => ({ ok: true, tokens: 500000, model: 'fixture-model', modelSwitched: false, bytesRead: 0, durationMs: 0 }), compactWindow: 200000, observation: () => null } } : {};
+  await run(env, promptEvent(), fetchImpl, extra);
+  await run(env, preEvent('Agent', agentInput()), fetchImpl, extra);
+  const records = readTraceRecords(trace).records;
+  expect(records.find(r => r['phase'] === 'pre_result')?.['decision']).toMatchObject({ reason: 'route_invalid' });
+  const checks = activityChecks({ traces: { [host]: { records, unreadable: 0 } }, now: Date.now(), installed: null, recording: true, keyPresent: true, codexOwner: null, liveness: null });
+  expect(checks.find(c => c.feature === 'allocation')?.metrics).toMatchObject({ fired: 1, applied: 0, regression: 1 });
+  const dashboard = loadActivity({ traceDir: trace, host, env });
+  expect(dashboard.activity24h[host].find(c => c.feature === 'allocation')?.metrics).toEqual(checks.find(c => c.feature === 'allocation')?.metrics);
 });

@@ -495,9 +495,15 @@ const routedModRecords = (mods: ModRecord[], records: Rec[], context?: PartConte
     const key = identity(r, 'tool_use_id');
     if (r['host'] !== 'codex' && r['phase'] === 'pre_result' && key && field(r, 'allocation')) owned.set(key, r);
   }
+  const classicCompacts = new Map<string, Rec>();
   const turns = new Map<string, Rec>(), spawns = new Map<string, Rec>(), childSteps = new Map<string, Rec>(), children = new Map<string, { routing: Routing; row: ModRecord }>();
   return [...mods].sort((a, b) => a.at.localeCompare(b.at)).map(row => {
-    if (row.component !== 'router') return row;
+    if (row.component !== 'router') {
+      const r = row.rec, session = String(r['session_id'] ?? 'legacy');
+      if (r['stage'] === 'pre' && !r['deferred']) classicCompacts.set(session, r);
+      const start = classicCompacts.get(session);
+      return start && ['restore', 'post'].includes(String(r['stage'])) ? { ...row, rec: { ...r, run_id: r['run_id'] ?? start['run_id'], mode: r['mode'] ?? start['mode'] } } : row;
+    }
     const r = row.rec, event = r['event'], turn = identity(r, 'turn'), tool = identity(r, 'tool_use_id'), agent = identity(r, 'agent_id');
     let routing: OperationStep['routing'];
     const gate = tool ? owned.get(tool) : undefined;
@@ -540,7 +546,7 @@ const modStep = (row: ModRecord, closed: Set<string>, responses: Map<string, str
   const key = row.component === 'router' ? routerDecisionKey(r) : `${token(r['session_id']) ?? 'legacy'}:${runId ?? ''}`;
   const started = (row.component === 'router' && event === 'request') || r['stage'] === 'started';
   const failedAssessment = row.component === 'router' && r['sent'] === true && token(r['assessment']) !== null && r['assessment'] !== 'ok';
-  let state: StepState = started && !closed.has(`${row.component}:${key}`) ? young(live, row.at) ? 'active' : 'unconfirmed' : failedAssessment || r['confirmation'] === 'mismatch' || r['reason'] === 'model_mismatch' || r['coreError'] === true ? 'error' : r['confirmation'] === 'unobserved' ? 'unconfirmed' : r['skipped'] || r['deferred'] || r['disabled'] ? 'skipped' : 'done';
+  let state: StepState = started && !closed.has(`${row.component}:${key}`) ? young(live, row.at) ? 'active' : 'unconfirmed' : failedAssessment || r['confirmation'] === 'mismatch' || r['reason'] === 'model_mismatch' || r['coreError'] === true || r['within_budget'] === false ? 'error' : r['confirmation'] === 'unobserved' ? 'unconfirmed' : r['skipped'] || r['deferred'] || r['disabled'] ? 'skipped' : 'done';
   const details: string[] = [];
   let summary = '';
   let lane: StepLane = 'local';
@@ -589,7 +595,8 @@ const modStep = (row: ModRecord, closed: Set<string>, responses: Map<string, str
       if (r['jev_sent'] === true) details.push(compactUsage(r));
       if (number(r['dependencies']) !== null) choice = `${n(number(r['dependencies']))} / ${n(number(r['candidates']))}`;
       details.push(text(`후보 ${n(number(r['candidates']))}/${n(number(r['available']))}`, `필수 근거 ${n(number(r['dependencies']))}`, number(r['jev_ms']) === null ? null : `${n(number(r['jev_ms']))}ms`));
-    } else summary = started ? '대화 압축 시작' : r['deferred'] ? text('호스트 압축으로 넘김', token(r['deferred'])) : r['skipped'] ? text('호스트 사전 요약 생략 · 이 시점 대화로 로컬 digest 구성 가능', token(r['skipped'])) : r['applied'] === true ? '로컬 digest 적용 · 요약 모델 호출 대체' : text('호스트 압축 사용', token(r['fallback']), r['coreSkip'] === true ? '호스트 건너뜀' : null);
+    } else summary = r['stage'] === 'pre' ? r['guided'] === true ? '호스트 요약 지침 적용' : '호스트 압축 준비' : r['stage'] === 'restore' ? '보존 문맥 복원' : r['stage'] === 'post' ? '호스트 압축 완료 · 예산 관측' : started ? '대화 압축 시작' : r['deferred'] ? text('호스트 압축으로 넘김', token(r['deferred'])) : r['skipped'] ? text('호스트 사전 요약 생략 · 이 시점 대화로 로컬 digest 구성 가능', token(r['skipped'])) : r['applied'] === true ? '로컬 digest 적용 · 요약 모델 호출 대체' : text('호스트 압축 사용', token(r['fallback']), r['coreSkip'] === true ? '호스트 건너뜀' : null);
+    if (['restore', 'post'].includes(String(r['stage']))) details.push(text(number(r['summary_chars']) === null ? null : `summary ${n(number(r['summary_chars']))}자`, number(r['restore_chars'] ?? r['restored_chars']) === null ? null : `restore ${n(number(r['restore_chars'] ?? r['restored_chars']))}자`, number(r['budget']) === null ? null : `budget ${n(number(r['budget']))}자`));
     if (r['stage'] !== 'jev' && r['selection']) details.push(text('Jev 선별', compactSelectionReason(r['selection'])));
     details.push(text(`모드 ${token(r['mode']) ?? '?'}`, `트리거 ${token(r['trigger']) ?? '?'}`, r['subagent'] === true ? '서브에이전트' : '루트', `메시지 ${n(number(r['messages']))}개`));
     details.push(text(number(r['digestChars']) === null ? null : `digest ${n(number(r['digestChars']))}자`, number(r['tailChars']) === null ? null : `tail ${n(number(r['tailChars']))}자`, number(r['buildMs']) === null ? null : `빌드 ${n(number(r['buildMs']))}ms`));
@@ -737,7 +744,7 @@ const buildPart = (records: Rec[], mods: ModRecord[], now: Date, context?: PartC
     const own = row.component === 'router' ? token(row.rec['turn']) ?? token(row.rec['tool_use_id']) : token(row.rec['run_id']);
     if (!own) return [];
     const key = row.component === 'router' ? routerDecisionKey(row.rec) : `${token(row.rec['session_id']) ?? 'legacy'}:${own}`;
-    return row.component === 'router' ? ['root', 'spawn', 'spawn_stop', 'spawn_denied', 'child_route'].includes(String(row.rec['event'])) ? [`router:${key}`] : [] : row.rec['stage'] === 'started' ? [] : [`${row.component}:${key}`];
+    return row.component === 'router' ? ['root', 'spawn', 'spawn_stop', 'spawn_denied', 'child_route'].includes(String(row.rec['event'])) ? [`router:${key}`] : [] : row.rec['stage'] === 'post' || typeof row.rec['applied'] === 'boolean' ? [`${row.component}:${key}`] : [];
   }));
   const responses = new Map<string, string>();
   for (const row of mods) if (['root_result', 'child_result', 'spawn_result', 'spawn_native_result', 'model_failure'].includes(String(row.rec['event']))) {
