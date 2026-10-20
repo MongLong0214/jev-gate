@@ -50,6 +50,9 @@ export interface RouterEngine extends Transport {
   /** The host's live session id: a queued save keeps the one it was queued in, and writes only under it. */
   sessionId?: () => Promise<string>;
   saveRoot?: (record: RootRecord, sessionId: string) => Promise<void>;
+  /** #277: the models whose last root effort change, in any session, read the cache. */
+  effortCacheHits?: () => Promise<readonly string[]>;
+  saveEffortCache?: (model: string, hit: boolean) => Promise<void>;
   /** Optional current complete-request bound. A /context estimate is never this evidence. */
   currentContextBound?: (turnId: string, index: number) => Promise<{ turnId: string; index: number; inputUpperBound: number; compatible: boolean } | undefined>;
   /** Exact native child conversation, reduced to tool names and outcome labels by the host adapter. */
@@ -446,6 +449,8 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
   let rootSeq = 0;
   const preservedEffortModels = new Set<string>();
   const missedEffortModels = new Set<string>();
+  /** #277: models an earlier session saw keep the cache across an effort change; none is ever observed while the floor holds. */
+  const storedEffortHits = new Set<string>();
   let cacheEpoch = 0;
   /**
    * The message count each loop last sent. Claude Code 2.1.299+ passes session.compact over for a plugin a person
@@ -649,7 +654,8 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       const chosen = hold && result.ok ? keepModelPair(offer, result.answers).patch : decision.patch;
       const capability = engine.cacheCapability ? await within(engine.cacheCapability().catch(() => undefined), live) : undefined;
       const capabilityReason = capability ? claudeEffortCache(offer.baseline.model, capability) : 'capability_unknown';
-      const preserves = !missedEffortModels.has(id) && (preservedEffortModels.has(id) || capabilityReason === 'supported');
+      const earlier = capabilityReason !== 'excluded' && storedEffortHits.has(id) && !preservedEffortModels.has(id) && capabilityReason !== 'supported';
+      const preserves = !missedEffortModels.has(id) && (preservedEffortModels.has(id) || capabilityReason === 'supported' || earlier);
       const cached = cachePatch(t.baseline, preserves ? null : t.warmEffort, chosen as RoutingPatch);
       if (!live.aborted && !t.stopped) t.patch = cached.patch;
       if (!Object.keys(t.patch).length) t.stopped = true;
@@ -661,7 +667,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
         model_not_asked: offer.modelAsked ? null : pins.mainModel ? 'model_pinned' : !config.routeMainModel ? 'routing_off' : 'no_alternative',
         effort_not_asked: offer.effortQuestions.size ? null : effortNotAsked,
         excluded: { ...excluded, effort_incompatible: candidates.length - offer.candidates.length }, candidates: offer.candidates.slice(0, 16).map(c => c.id), host_version: hostBase ?? null,
-        proposed_patch: decision.patch, patch: t.patch, cost, cost_reason: costReason, effort_cache: preserves ? 'cache_preserved' : missedEffortModels.has(id) ? 'observed_miss_floor_restored' : capabilityReason,
+        proposed_patch: decision.patch, patch: t.patch, cost, cost_reason: costReason, effort_cache: preserves ? 'cache_preserved' : missedEffortModels.has(id) ? 'observed_miss_floor_restored' : capabilityReason, ...(preserves && earlier ? { effort_cache_basis: 'earlier_session' } : {}),
         cache_ttl_ms: observedCache?.ttlMs ?? null, cache_floor_expiry_basis: observedCache?.ttlMs != null ? 'observed_ttl' : 'unknown_ttl_upper_bound', ...(cached.held ? { held_for_cache: cached.held } : {}),
         reasons: { ...decision.reasons, ...(hold ? { model: costReason } : {}), ...(cached.held ? { effort: 'cache_preserved' } : {}) },
         selection: decision.diagnostics, answers: result.ok ? pairReceipt(offer, result.answers) : null });
@@ -820,9 +826,11 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       const read = engine.transcript ? await within(engine.transcript().catch(() => null), signal) : null;
       const underWay = engine.transcript ? read?.answered === true : (e.messageCount ?? 0) > 1;
       const start = await rootRecordAtStart(engine, incoming, signal, underWay);
+      const hits = engine.effortCacheHits ? await within(engine.effortCacheHits().catch(() => []), signal) : [];
       // A newer root turn or session began while the read waited: it owns the record now, and this turn stays native.
       if (signal.aborted || generation !== rootGeneration) return null;
       rootRecord = start.record; rootSaved = start.saved; rootHostModel = start.hostModel;
+      for (const id of hits) storedEffortHits.add(id);
       // A new process of this conversation starts with the cache the last one observed, judged by its own clock and TTL.
       // A request shorter than the saved one is a compaction or rewind since. A task notification's request carries
       // messages a resumed transcript does not rebuild (44 in memory, 39 resumed after two, #263), so the transcript's
@@ -1236,10 +1244,12 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
         const id = cacheId(asked);
         const previous = rootCaches.get(id, String(cacheEpoch));
         const nextUsage = normalizeUsage('claude', result?.usage);
-        if (previous && previous.effort !== (sent ?? null) && floorLive(previous, engine.now())) {
+        // #277: only a request right after this model's own tells an effort change; after another model's, its cache may be out of reach.
+        if (previous && previous.seq === seq - 1 && previous.effort !== (sent ?? null) && floorLive(previous, engine.now())) {
           const hit = effortCacheHit(previous, nextUsage);
           if (hit === true && !missedEffortModels.has(id)) preservedEffortModels.add(id);
-          if (hit === false) { missedEffortModels.add(id); preservedEffortModels.delete(id); }
+          if (hit === false) { missedEffortModels.add(id); preservedEffortModels.delete(id); storedEffortHits.delete(id); }
+          if (hit !== null) void engine.saveEffortCache?.(id, hit).catch(() => undefined);
           log(engine, { event: 'effort_cache', scope: 'root', turn: e.turnId, index: e.index, model: id, hit, floor_restored: hit === false, ttl_known: previous.ttlMs !== null, miss_cause: 'unknown' });
         }
         const counts = countsOf(result?.usage);
@@ -1586,7 +1596,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       nativeChildren.clear();
       childHistoryFull = false;
       lastReply = null; currentRootTurn = null; recentRequests.length = 0; notices.clear(); messageCounts.clear(); announced.clear();
-      lastRoot = null; rootCaches.clear(); preservedEffortModels.clear(); missedEffortModels.clear(); cacheEpoch++;
+      lastRoot = null; rootCaches.clear(); preservedEffortModels.clear(); missedEffortModels.clear(); storedEffortHits.clear(); cacheEpoch++;
       lastIncoming = null; rootLoaded = false; rootGeneration++; openings.clear(); rootRecord = null; rootSaved = ''; rootCache = null; rootHostModel = undefined;
       keyWait = null;
       versionWait = null;

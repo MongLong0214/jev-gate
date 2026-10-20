@@ -1592,6 +1592,54 @@ describe('root effort and the prompt cache', () => {
     expect(await turn('after-miss', 'low', 0)).toBe('high');
     expect(f.sent.at(-1)?.state).toMatchObject({ execution: { cache: { cache_write_tokens: 10000 } } });
   });
+  it('starts a session from an earlier session\'s observed effort-change hit, and a miss ends it (#277)', async () => {
+    const stored = new Map<string, boolean>(); let wanted = 'high';
+    const session = () => {
+      const router = createRouter(configOf(EFFORT_ONLY));
+      const f = fakeEngine({ respond: req => answering({ ...CLEAR, effort: [wanted, .99] })(req) });
+      f.engine.cacheCapability = async () => ({ host: '2.1.304', connection: 'bearer', excluded: false, hipaa: null });
+      f.engine.effortCacheHits = async () => [...stored].filter(([, hit]) => hit).map(([id]) => id);
+      f.engine.saveEffortCache = async (id, hit) => { stored.set(id, hit); };
+      const turn = async (id: string, effort: string, read: number) => {
+        wanted = effort; router.turnStart({ turnId: id, text: TEXT });
+        const n = streamNext<TurnStepEvent>(undefined, { input_tokens: 2, output_tokens: 2, cache_read_input_tokens: read, cache_creation_input_tokens: 10000 });
+        await drain(router.turnStep(f.engine, step({ turnId: id, effort: 'xhigh' }), n.next)); router.turnComplete({ turnId: id }); return n.calls[0]?.effort;
+      };
+      return { f, turn };
+    };
+    const first = session();
+    await first.turn('warm', 'high', 0);
+    expect(await first.turn('held', 'low', 10000)).toBe('high');
+    expect(stored.size).toBe(0);
+    expect(await first.turn('rise', 'xhigh', 20000)).toBe('xhigh');
+    expect(stored.get('claude-opus-5-5')).toBe(true);
+    const second = session();
+    await second.turn('warm', 'high', 0);
+    expect(await second.turn('lower', 'low', 10000)).toBe('low');
+    expect(second.f.logs).toContainEqual(expect.objectContaining({ event: 'root', turn: 'lower', effort_cache: 'cache_preserved', effort_cache_basis: 'earlier_session' }));
+    await second.turn('miss', 'medium', 0);
+    expect(stored.get('claude-opus-5-5')).toBe(false);
+    expect(await second.turn('after-miss', 'low', 0)).toBe('medium');
+    const third = session();
+    await third.turn('warm', 'high', 0);
+    expect(await third.turn('held', 'low', 10000)).toBe('high');
+  });
+  it('judges an effort change only on a request right after the same model\'s own (#277)', async () => {
+    const router = createRouter(configOf(EFFORT_ONLY)); let wanted = 'medium';
+    const f = fakeEngine({ respond: req => answering({ ...CLEAR, effort: [wanted, .99] })(req) });
+    const saved: boolean[] = []; f.engine.saveEffortCache = async (_id, hit) => { saved.push(hit); };
+    const turn = async (id: string, model: string, effort: string, read: number) => {
+      wanted = effort; router.turnStart({ turnId: id, text: TEXT });
+      const n = streamNext<TurnStepEvent>(undefined, { input_tokens: 2, output_tokens: 2, cache_read_input_tokens: read, cache_creation_input_tokens: 10000 });
+      await drain(router.turnStep(f.engine, step({ turnId: id, effort: 'xhigh', model }), n.next)); router.turnComplete({ turnId: id }); return n.calls[0]?.effort;
+    };
+    await turn('opus', 'claude-opus-5-5', 'medium', 0);
+    await turn('sonnet', 'claude-sonnet-5-5', 'medium', 0);
+    // Back on Opus after another model's request: its cache may be out of reach, whatever the effort.
+    expect(await turn('back', 'claude-opus-5-5', 'high', 0)).toBe('high');
+    expect(f.logs.filter(l => l.event === 'effort_cache')).toEqual([]);
+    expect(saved).toEqual([]);
+  });
   it('bounds the legacy floor when native usage does not expose TTL, without claiming a known cache expiry', async () => {
     const router = createRouter(configOf(EFFORT_ONLY)); let wanted = 'high';
     const f = fakeEngine({ respond: req => answering({ ...CLEAR, effort: [wanted, .99] })(req) });
